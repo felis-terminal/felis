@@ -1,0 +1,1076 @@
+{
+  "$defs": {
+    "AttachmentObject": {
+      "properties": {
+        "attached_at": {
+          "description": "RFC 3339, UTC.",
+          "type": "string"
+        },
+        "id": {
+          "description": "A decimal **string**: the id is a `u64` counter, and a bare JSON\nnumber past 2^53−1 silently rounds in common consumers.\n`--attachment` accepts the same spelling.",
+          "pattern": "^[0-9]+$",
+          "type": "string"
+        },
+        "input_owner": {
+          "description": "Unconditional, unlike the optionals elsewhere: an omitted key\nwould read as \"this daemon does not report it\".",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "attached_at",
+        "input_owner"
+      ],
+      "type": "object"
+    },
+    "BuildIdentity": {
+      "description": "Semver, exact source revision, and dirty status.\n\nThe canonical round-tripping form is `<version> (<revision>[-dirty])`.\n[`BuildIdentity::human`] provides an abbreviated non-round-tripping form.",
+      "properties": {
+        "dirty": {
+          "description": "The working tree had uncommitted tracked changes when this was\nbuilt, so `revision` names its parent, not its source.",
+          "type": "boolean"
+        },
+        "revision": {
+          "description": "Full lowercase-hex git revision, or [`UNKNOWN_REVISION`].",
+          "type": "string"
+        },
+        "version": {
+          "description": "Cargo package semver, e.g. `0.1.0`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "version",
+        "revision",
+        "dirty"
+      ],
+      "type": "object"
+    },
+    "CaptureRow": {
+      "properties": {
+        "ansi": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "row": {
+          "description": "The region's own coordinate space: scrollback negative (`-1` the\nyoungest), live rows their grid index, mark ranges from 0.",
+          "format": "int64",
+          "maximum": 9223372036854775807,
+          "minimum": -9223372036854775808,
+          "type": "integer",
+          "x-bound-exceeds-f64-precision": true
+        },
+        "soft_wrap_continued": {
+          "type": "boolean"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "row",
+        "text",
+        "soft_wrap_continued"
+      ],
+      "type": "object"
+    },
+    "CheckObject": {
+      "properties": {
+        "check": {
+          "description": "The check's stable token (`daemon`, `daemon-sibling`, `config`,\n`terminfo`, `gpu`, `clipboard`, `remote_helper`).",
+          "type": "string"
+        },
+        "detail": {
+          "type": "string"
+        },
+        "status": {
+          "description": "`ok`, `warn`, `fail`, or `skipped`; the last is neither a pass\nnor a problem.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "check",
+        "status",
+        "detail"
+      ],
+      "type": "object"
+    },
+    "CheckResult": {
+      "properties": {
+        "client": {
+          "type": "string"
+        },
+        "diagnostics": {
+          "description": "Always present, empty for a clean file.",
+          "items": {
+            "$ref": "#/$defs/DiagnosticObject"
+          },
+          "type": "array"
+        },
+        "errors": {
+          "format": "uint64",
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": "integer",
+          "x-bound-exceeds-f64-precision": true
+        },
+        "exists": {
+          "type": "boolean"
+        },
+        "path": {
+          "type": "string"
+        },
+        "warnings": {
+          "format": "uint64",
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": "integer",
+          "x-bound-exceeds-f64-precision": true
+        }
+      },
+      "required": [
+        "path",
+        "exists",
+        "client",
+        "errors",
+        "warnings",
+        "diagnostics"
+      ],
+      "type": "object"
+    },
+    "ConfigPathResult": {
+      "properties": {
+        "exists": {
+          "description": "The path is reported either way.",
+          "type": "boolean"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "exists"
+      ],
+      "type": "object"
+    },
+    "DaemonStatusResult": {
+      "description": "The session count is not a field of its own: it is the `sessions`\nrow's `total_used`, and two spellings of one number can disagree.",
+      "properties": {
+        "draining": {
+          "description": "The daemon refuses creates and exits after its last session.",
+          "type": "boolean"
+        },
+        "protocol": {
+          "$ref": "#/$defs/ProtocolVersion"
+        },
+        "resources": {
+          "description": "The order is presentation, not contract; a consumer keys on\n`resource`.",
+          "items": {
+            "$ref": "#/$defs/ResourceObject"
+          },
+          "type": "array"
+        },
+        "version": {
+          "type": "string"
+        },
+        "worker_threads": {
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "version",
+        "protocol",
+        "worker_threads",
+        "draining",
+        "resources"
+      ],
+      "type": "object"
+    },
+    "DaemonStopResult": {
+      "description": "`daemon stop`'s answer. The mode rides beside the outcome so a\nreader can tell a stop that destroyed sessions from one that found\nnone.",
+      "properties": {
+        "mode": {
+          "description": "`if_empty`, `force`, or `when_empty`: what was asked for, not\nwhat the daemon decided.",
+          "type": "string"
+        },
+        "outcome": {
+          "description": "`stopping`, `refused`, or `draining`.",
+          "type": "string"
+        },
+        "sessions": {
+          "description": "Sessions the outcome speaks about: those still held on\n`draining`, `0` on `stopping`.",
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "outcome",
+        "mode",
+        "sessions"
+      ],
+      "type": "object"
+    },
+    "DiagnosticObject": {
+      "properties": {
+        "key": {
+          "description": "The dotted key path **as written in the document**, so a typo\ninside an overlay reads `client.<id>.<path>`. Absent for a\ndiagnostic about the file rather than a key.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "description": "The category token: `io`, `parse`, `unknown_key`, `value`,\n`missing_file`.",
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "severity": {
+          "description": "`error` or `warning`; only the first moves the exit code.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "severity",
+        "kind",
+        "message"
+      ],
+      "type": "object"
+    },
+    "DoctorResult": {
+      "properties": {
+        "checks": {
+          "items": {
+            "$ref": "#/$defs/CheckObject"
+          },
+          "type": "array"
+        },
+        "failed": {
+          "format": "uint64",
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": "integer",
+          "x-bound-exceeds-f64-precision": true
+        },
+        "warned": {
+          "format": "uint64",
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": "integer",
+          "x-bound-exceeds-f64-precision": true
+        }
+      },
+      "required": [
+        "failed",
+        "warned",
+        "checks"
+      ],
+      "type": "object"
+    },
+    "EffectiveConfigResult": {
+      "description": "The config sits under its own key rather than flattened, so `v` and\nthe provenance cannot collide with a config section name.",
+      "properties": {
+        "client": {
+          "type": "string"
+        },
+        "config": true,
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "client",
+        "config"
+      ],
+      "type": "object"
+    },
+    "ErrorKind": {
+      "description": "An additive failure vocabulary; `x-known-values` lists this epoch's tokens.",
+      "type": "string",
+      "x-known-values": [
+        "usage",
+        "no_match",
+        "ambiguous",
+        "timeout",
+        "no_input_owner",
+        "no_such_attachment",
+        "not_queued",
+        "session_ended",
+        "malformed_request",
+        "invalid_request",
+        "at_capacity",
+        "unsupported",
+        "daemon_unreachable",
+        "daemon_lost",
+        "refused",
+        "protocol",
+        "canceled",
+        "input_failed",
+        "output_failed",
+        "internal"
+      ]
+    },
+    "LastNotificationObject": {
+      "properties": {
+        "age_seconds": {
+          "format": "uint64",
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": "integer",
+          "x-bound-exceeds-f64-precision": true
+        },
+        "body": {
+          "type": "string"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "urgency": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "body",
+        "urgency",
+        "age_seconds"
+      ],
+      "type": "object"
+    },
+    "ListResult": {
+      "description": "`sessions list`'s whole answer. The roster is bounded and arrives in\none frame, so it is a point result: a stream framing would promise a\nsource that can grow or arrive incrementally, and this one cannot\n(docs/explanation/architecture/control-surfaces.md).",
+      "properties": {
+        "sessions": {
+          "description": "Always present, empty for an empty roster.",
+          "items": {
+            "$ref": "#/$defs/SessionObject"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "sessions"
+      ],
+      "type": "object"
+    },
+    "MachineError": {
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/ErrorKind"
+        },
+        "message": {
+          "type": "string"
+        },
+        "sessions": {
+          "description": "Sessions the daemon still holds, on `daemon stop`'s refusal\nalone: the count is what the caller decides between `--force`\nand `--when-empty` on, and re-reading it out of the message\nwould make prose a parse target.",
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "message"
+      ],
+      "type": "object"
+    },
+    "NotificationObject": {
+      "properties": {
+        "attached": {
+          "type": "boolean"
+        },
+        "body": {
+          "type": "string"
+        },
+        "cwd": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "notification_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "session_id": {
+          "pattern": "^[0-9a-f]{32}$",
+          "type": "string"
+        },
+        "session_title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {
+          "description": "Explicitly `null` rather than omitted, here and below: this\nobject is the whole of what a subscriber learns about an event.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "urgency": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "session_id",
+        "title",
+        "body",
+        "urgency",
+        "notification_id",
+        "session_title",
+        "cwd",
+        "attached"
+      ],
+      "type": "object"
+    },
+    "ProtocolVersion": {
+      "properties": {
+        "major": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "minor": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "major",
+        "minor"
+      ],
+      "type": "object"
+    },
+    "ResourceObject": {
+      "description": "Each number names its own denominator, so a consumer never has to\ninfer one: `total_used` belongs with `global_limit`,\n`max_subject_used` with `per_subject_limit`, and the two pairs are\nnever mixed.",
+      "properties": {
+        "global_limit": {
+          "description": "Absent where felis budgets no daemon-wide aggregate.",
+          "format": "uint64",
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "x-bound-exceeds-f64-precision": true
+        },
+        "max_subject_used": {
+          "description": "Absent (not null) on a `daemon`-scope row, whose only subject is\n`total_used`.",
+          "format": "uint64",
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "x-bound-exceeds-f64-precision": true
+        },
+        "per_subject_limit": {
+          "description": "Absent on a `daemon`-scope row and where felis admits a subject\nwithout a ceiling.",
+          "format": "uint64",
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "x-bound-exceeds-f64-precision": true
+        },
+        "resource": {
+          "description": "The stable row key, never a display label.",
+          "type": "string"
+        },
+        "scope": {
+          "description": "`daemon`, `session`, or `subscriber`: what one subject is.",
+          "type": "string"
+        },
+        "total_used": {
+          "description": "Summed over every subject. Present on every row.",
+          "format": "uint64",
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": "integer",
+          "x-bound-exceeds-f64-precision": true
+        },
+        "unit": {
+          "description": "`count` or `bytes`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "resource",
+        "unit",
+        "scope",
+        "total_used"
+      ],
+      "type": "object"
+    },
+    "RetargetResult": {
+      "properties": {
+        "from": {
+          "pattern": "^[0-9a-f]{32}$",
+          "type": "string"
+        },
+        "queued": {
+          "description": "Subscriber outboxes that took the push. As with `switch`, exit 0\nclaims admission alone; the re-dial onto the target carrier runs\nafterwards, out of this invocation's sight.",
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "from",
+        "queued"
+      ],
+      "type": "object"
+    },
+    "SearchMatch": {
+      "description": "`col_spans` are per-row highlight segments: a match crossing a\nsoft-wrap edge emits one per touched row, so they are not 1:1 with\n`byte_spans`.",
+      "properties": {
+        "byte_spans": {
+          "items": {
+            "items": {
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 2,
+            "minItems": 2,
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "col_spans": {
+          "items": {
+            "items": {
+              "format": "int64",
+              "maximum": 9223372036854775807,
+              "minimum": -9223372036854775808,
+              "type": "integer",
+              "x-bound-exceeds-f64-precision": true
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "line_index": {
+          "format": "int64",
+          "maximum": 9223372036854775807,
+          "minimum": -9223372036854775808,
+          "type": "integer",
+          "x-bound-exceeds-f64-precision": true
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "line_index",
+        "text",
+        "byte_spans",
+        "col_spans"
+      ],
+      "type": "object"
+    },
+    "SessionObject": {
+      "description": "The body of a `sessions list` item and a `sessions info` result\nalike, and what `felis bridge` wraps.",
+      "properties": {
+        "attachments": {
+          "description": "Always present, like `tags`: a picker's `.attachments[]` must be\niterable on a parked session too.",
+          "items": {
+            "$ref": "#/$defs/AttachmentObject"
+          },
+          "type": "array"
+        },
+        "cols": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "cwd": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "exited": {
+          "type": "boolean"
+        },
+        "foreground": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "pattern": "^[0-9a-f]{32}$",
+          "type": "string"
+        },
+        "idle_seconds": {
+          "format": "uint64",
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "x-bound-exceeds-f64-precision": true
+        },
+        "last_exit_code": {
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "last_notification": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LastNotificationObject"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "rows": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "short_id": {
+          "type": "string"
+        },
+        "tags": {
+          "description": "Always present, empty for an untagged session, so a `jq` picker\ncan rely on `.tags` being iterable.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "short_id",
+        "rows",
+        "cols",
+        "tags",
+        "attachments"
+      ],
+      "type": "object"
+    },
+    "SessionRef": {
+      "properties": {
+        "exit_code": {
+          "description": "`send --wait`'s observed mark code. Absent for a bare\n`OSC 133 ; D`, and on the verbs that never wait.",
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "id": {
+          "pattern": "^[0-9a-f]{32}$",
+          "type": "string"
+        },
+        "was_attached": {
+          "description": "`evict`'s flag; absent on other verbs.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "SwitchResult": {
+      "properties": {
+        "from": {
+          "pattern": "^[0-9a-f]{32}$",
+          "type": "string"
+        },
+        "queued": {
+          "description": "Subscriber outboxes that **took** the push, never the windows\nthat finished attaching. Exit 0 claims admission and nothing\nmore: a queued switch can still fail to land, and no field here\nor later will say so.",
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "to": {
+          "pattern": "^[0-9a-f]{32}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "from",
+        "to",
+        "queued"
+      ],
+      "type": "object"
+    },
+    "TagResult": {
+      "properties": {
+        "id": {
+          "pattern": "^[0-9a-f]{32}$",
+          "type": "string"
+        },
+        "tags": {
+          "description": "Sorted by the daemon and always present, matching `list` / `info`.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "tags"
+      ],
+      "type": "object"
+    },
+    "VersionResult": {
+      "properties": {
+        "cli": {
+          "$ref": "#/$defs/BuildIdentity"
+        },
+        "client": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BuildIdentity"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "client_status": {
+          "description": "`ok`, `unavailable` (no such binary), or `unrecognized` (it ran\nbut did not print a canonical identity line).",
+          "type": "string"
+        },
+        "daemon": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BuildIdentity"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "daemon_status": {
+          "description": "`ok`, `not_running`, `at_capacity`, `incompatible`, or `untyped`\n(a daemon whose `Welcome` carried no identity).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "cli",
+        "client",
+        "client_status",
+        "daemon",
+        "daemon_status"
+      ],
+      "type": "object"
+    },
+    "end_terminal": {
+      "allOf": [
+        {
+          "properties": {
+            "v": {
+              "const": 1,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "v"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "count": {
+              "format": "uint64",
+              "maximum": 18446744073709551615,
+              "minimum": 0,
+              "type": "integer",
+              "x-bound-exceeds-f64-precision": true
+            },
+            "event": {
+              "const": "end"
+            },
+            "exit_code": {
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "count",
+            "event"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "error_body": {
+      "properties": {
+        "error": {
+          "$ref": "#/$defs/MachineError"
+        }
+      },
+      "required": [
+        "error"
+      ],
+      "type": "object"
+    },
+    "error_terminal": {
+      "allOf": [
+        {
+          "properties": {
+            "v": {
+              "const": 1,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "v"
+          ],
+          "type": "object"
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/error_body"
+            },
+            {
+              "properties": {
+                "event": {
+                  "const": "error"
+                }
+              },
+              "required": [
+                "event"
+              ],
+              "type": "object"
+            }
+          ]
+        }
+      ]
+    },
+    "lag_event": {
+      "allOf": [
+        {
+          "properties": {
+            "v": {
+              "const": 1,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "v"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "dropped": {
+              "format": "uint64",
+              "maximum": 18446744073709551615,
+              "minimum": 0,
+              "type": "integer",
+              "x-bound-exceeds-f64-precision": true
+            },
+            "event": {
+              "const": "lag"
+            }
+          },
+          "required": [
+            "dropped",
+            "event"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "point_body": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ListResult"
+        },
+        {
+          "$ref": "#/$defs/SessionObject"
+        },
+        {
+          "$ref": "#/$defs/SessionRef"
+        },
+        {
+          "$ref": "#/$defs/TagResult"
+        },
+        {
+          "$ref": "#/$defs/SwitchResult"
+        },
+        {
+          "$ref": "#/$defs/RetargetResult"
+        },
+        {
+          "$ref": "#/$defs/DaemonStatusResult"
+        },
+        {
+          "$ref": "#/$defs/DaemonStopResult"
+        },
+        {
+          "$ref": "#/$defs/ConfigPathResult"
+        },
+        {
+          "$ref": "#/$defs/CheckResult"
+        },
+        {
+          "$ref": "#/$defs/EffectiveConfigResult"
+        },
+        {
+          "$ref": "#/$defs/DoctorResult"
+        },
+        {
+          "$ref": "#/$defs/VersionResult"
+        }
+      ]
+    },
+    "point_error": {
+      "allOf": [
+        {
+          "properties": {
+            "v": {
+              "const": 1,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "v"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/error_body"
+        }
+      ]
+    },
+    "point_result": {
+      "allOf": [
+        {
+          "properties": {
+            "v": {
+              "const": 1,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "v"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/point_body"
+        }
+      ]
+    },
+    "stream_item": {
+      "allOf": [
+        {
+          "properties": {
+            "v": {
+              "const": 1,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "v"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/stream_item_body"
+        }
+      ]
+    },
+    "stream_item_body": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CaptureRow"
+        },
+        {
+          "$ref": "#/$defs/SearchMatch"
+        },
+        {
+          "$ref": "#/$defs/NotificationObject"
+        }
+      ]
+    }
+  },
+  "$id": "https://raw.githubusercontent.com/felis-terminal/felis/main/crates/felis-cli/schemas/felis-cli-v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "anyOf": [
+    {
+      "$ref": "#/$defs/point_result"
+    },
+    {
+      "$ref": "#/$defs/point_error"
+    },
+    {
+      "$ref": "#/$defs/stream_item"
+    },
+    {
+      "$ref": "#/$defs/lag_event"
+    },
+    {
+      "$ref": "#/$defs/end_terminal"
+    },
+    {
+      "$ref": "#/$defs/error_terminal"
+    }
+  ],
+  "description": "Every object `--format json` or `--format jsonl` may write. The object classes are the `$defs` named `point_result`, `point_error`, `stream_item`, `lag_event`, `end_terminal` and `error_terminal`; payload objects stay open, because a field may be added within an epoch.",
+  "title": "felis CLI machine output (v1)"
+}

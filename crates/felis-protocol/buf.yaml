@@ -1,0 +1,10 @@
+version: v2
+modules:
+  - path: proto
+lint:
+  # Flat layout over nested felis/v1/ tree for a single schema.
+  except:
+    - PACKAGE_DIRECTORY_MATCH
+breaking:
+  use:
+    - WIRE_JSON

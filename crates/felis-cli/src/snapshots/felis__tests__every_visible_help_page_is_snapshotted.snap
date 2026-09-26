@@ -1,0 +1,716 @@
+---
+source: crates/felis-cli/src/tests.rs
+expression: pages
+---
+$ felis --help
+felis: a terminal whose sessions outlive their windows.
+
+Opens a window on a fresh session, attaches to an existing session, or drives the daemon headlessly via `sessions` and `notifications`.
+
+Usage: felis [OPTIONS] [-- <CMD>...] [COMMAND]
+
+Commands:
+  sessions       List, drive, and inspect sessions without opening a window
+  notifications  Stream desktop notifications from sessions
+  config         Inspect the config file felis reads without dialing a daemon
+  doctor         Check every layer felis needs and diagnose failures
+  version        Compare this build against the GUI client and running daemon
+  daemon         Inspect the daemon behind sessions
+  attach         Open a window attached to an existing session
+  window         Act on the window this command runs in
+  ssh            Re-point this window at the daemon on another host, over SSH
+  frontend       Launch an alternate frontend: `felis frontend <name> …` execs `felis-<name>` with the remaining arguments verbatim
+  bridge         Speak JSON lines on stdin/stdout for a non-Rust client
+  completions    Print a shell completion script to stdout
+  help           Print this message or the help of the given subcommand(s)
+
+Arguments:
+  [CMD]...
+          Run this program in the new window instead of the default `$SHELL` (`xterm -e`).
+          
+          Arguments after `--` are taken literally as argv. Ignored with a subcommand.
+
+Options:
+  -V, --version
+          Print this binary's own build and exit.
+          
+          Self-report only: no subprocess, no daemon, no network, so it refuses the globals rather than ignore them; `felis version` compares all three builds.
+
+      --host <user@host>
+          Connect to a remote daemon over SSH (`ssh <host> felis-daemon relay`), for window launches and headless verbs alike. Only `sessions spawn` and window launches start a cold daemon there; the read and drive verbs exit 2 instead, `version` and `doctor` report it as not running, and completion never dials
+
+      --ssh-arg <TOKEN>
+          Extra token passed verbatim to `ssh` before the destination (repeatable).
+          
+          felis passes tokens directly without interpretation; only `ssh` parses them. Requires `--host`.
+
+      --socket <PATH>
+          Use this daemon socket instead of the default per-user path.
+          
+          Allows multiple daemons to coexist under one user. Mutually exclusive with `--host`.
+
+      --config <PATH>
+          Read this `config.toml` instead of the platform default.
+          
+          The selected file must exist. Applies to window launches, `config`, and `doctor`; other verbs refuse it.
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+$ felis sessions --help
+List, drive, and inspect sessions without opening a window.
+
+Every verb talks to the daemon directly and exits; `--format json`/`jsonl` is the stable scripting surface. See `felis sessions help <verb>`.
+
+Usage: felis sessions <COMMAND>
+
+Commands:
+  list     List sessions, one line each. `--format json` emits one object holding the whole roster
+  info     Print one session's details: id, size, idle age, title, cwd, tags
+  send     Type text into a session, window attached or not
+  kill     Terminate a session and remove it from the daemon
+  evict    Evict every window attached to a session; the session lives on
+  capture  Print a session's screen as plain text
+  spawn    Create a detached session and print its id
+  switch   Point one window attached to a session at another session
+  search   Search a session's scrollback and screen
+  tag      Add and remove labels, for pickers and scripts to filter on
+  help     Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help
+          Print help (see a summary with '-h')
+
+$ felis sessions list --help
+List sessions, one line each. `--format json` emits one object holding the whole roster
+
+Usage: felis sessions list [OPTIONS]
+
+Options:
+      --format <FORMAT>
+          Output framing: `human` (default) or `json`: one object on stdout, with a failure as one error object on stderr
+          
+          [default: human]
+          [possible values: human, json]
+
+      --tag <TAG>
+          Show only sessions carrying at least one of the given tags (repeatable; the match is "any of"). Tags are set with `sessions tag` or `spawn --tag`
+
+  -h, --help
+          Print help
+
+$ felis sessions info --help
+Print one session's details: id, size, idle age, title, cwd, tags
+
+Usage: felis sessions info [OPTIONS] <ID-OR-PREFIX>
+
+Arguments:
+  <ID-OR-PREFIX>
+          Hex id or any unique prefix; optional `0x` strip
+
+Options:
+      --format <FORMAT>
+          Output framing: `human` (default) or `json`: one object on stdout, with a failure as one error object on stderr
+          
+          [default: human]
+          [possible values: human, json]
+
+  -h, --help
+          Print help
+
+$ felis sessions send --help
+Type text into a session, window attached or not.
+
+Pasted into the session (bracketed paste if requested); `--raw` sends bytes untouched. CLI input lands alongside GUI keystrokes.
+
+Usage: felis sessions send [OPTIONS] <ID-OR-PREFIX> [TEXT]
+
+Arguments:
+  <ID-OR-PREFIX>
+          Hex id or any unique prefix
+
+  [TEXT]
+          Literal text to send. `-` reads from stdin
+
+Options:
+      --raw
+          Send the bytes untouched, without bracketed-paste quoting. Use when injecting control bytes or escape sequences that must not be quoted as paste data
+
+      --wait
+          Block until the next command completes and print its exit code: decimal on stdout, `-` for bare `OSC 133 ; D`.
+          
+          Subscription starts before input injection. With no text or keys, watches an existing command. Needs OSC 133 shell integration.
+
+      --timeout <SECS>
+          With `--wait`: give up after this many seconds (exit 1). Without it, wait indefinitely.
+          
+          `0` is a deadline already past: the wait gives up at once.
+
+      --format <FORMAT>
+          Output framing: `human` (default) or `json`: one object on stdout, with a failure as one error object on stderr
+          
+          [default: human]
+          [possible values: human, json]
+
+      --key <CHORD>
+          Press a named key after the text: `--key up`, `--key enter`, `--key ctrl+c` (repeatable, pressed in order).
+          
+          Keys are encoded against current keyboard modes; hand-written `--raw` escapes send the wrong bytes to mode-switched programs.
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+$ felis sessions kill --help
+Terminate a session and remove it from the daemon.
+
+`--format json` emits `{"id":"<hex>"}` with the resolved full id; an unknown or ambiguous prefix is a typed error object on stderr with exit 1, never a result.
+
+Usage: felis sessions kill [OPTIONS] <ID-OR-PREFIX>
+
+Arguments:
+  <ID-OR-PREFIX>
+          Hex id or any unique prefix
+
+Options:
+      --format <FORMAT>
+          Output framing: `human` (default) or `json`: one object on stdout, with a failure as one error object on stderr
+          
+          [default: human]
+          [possible values: human, json]
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+$ felis sessions evict --help
+Evict every window attached to a session; the session lives on.
+
+Returns to the detached pool. Exits 0 whether a window was attached or not, 1 for no such session. Named `evict` because `detach` is the one-window key action.
+
+Usage: felis sessions evict [OPTIONS] <ID-OR-PREFIX>
+
+Arguments:
+  <ID-OR-PREFIX>
+          Hex id or any unique prefix
+
+Options:
+      --format <FORMAT>
+          Output framing: `human` (default) or `json`: one object on stdout, with a failure as one error object on stderr
+          
+          [default: human]
+          [possible values: human, json]
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+$ felis sessions capture --help
+Print a session's screen as plain text.
+
+Soft-wrapped rows are stitched back into one logical line. `--format jsonl` emits one unstitched object per row (`text`, `row`, `soft_wrap_continued`) followed by the stream terminal.
+
+Usage: felis sessions capture [OPTIONS] <ID-OR-PREFIX>
+
+Arguments:
+  <ID-OR-PREFIX>
+          Hex id or any unique prefix
+
+Options:
+      --format <FORMAT>
+          Output framing: `human` (default) or `jsonl`: one JSON object per line on stdout, ending in exactly one terminal object
+          
+          [default: human]
+          [possible values: human, jsonl]
+
+      --ansi
+          Reproduce each cell's color and style as inline escapes
+
+      --source <SOURCE>
+          Region to capture: `visible` (default), `scrollback`, `command-output` / `last-command` (the last OSC 133 command's ranges; their `--format jsonl` rows count from 0 within the region)
+          
+          [default: visible]
+          [possible values: visible, scrollback, command-output, last-command]
+
+      --lines <N>
+          Print only the last N rows of the selected source (the tail an agent polling a session wants). A filter, not a renumbering: `--format jsonl` row indices keep untrimmed capture values
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+$ felis sessions spawn --help
+Create a detached session and print its id.
+
+The one sessions verb that starts a daemon when none is running, on the host it dials, `--host` included. Bare `spawn` runs the shell a new window would; `-- <cmd> [args...]` runs another.
+
+Usage: felis sessions spawn [OPTIONS] [-- <CMD>...]
+
+Arguments:
+  [CMD]...
+          Program + args. Empty: use the daemon's default shell
+
+Options:
+      --cwd <PATH>
+          Set working directory for the child
+
+      --env <KEY=VAL>
+          Environment overrides: `KEY=VAL`. May be repeated. Applied last, over the daemon's inherited-then-sanitized env and its identity stamps; `FELIS_SESSION_ID` is rejected
+
+      --rows <N>
+          Initial geometry, rows. Must be given with `--cols`; neither means the daemon's default grid
+
+      --cols <N>
+          Initial geometry, cols. Must be given with `--rows`
+
+      --tag <TAG>
+          Label the session at creation (repeatable). These are the same labels `sessions tag` adds, but already set when the session first becomes listable, so a `list --tag` filter can never catch it untagged
+
+      --format <FORMAT>
+          Output framing: `human` (default) or `json`: one object on stdout, with a failure as one error object on stderr
+          
+          [default: human]
+          [possible values: human, json]
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+$ felis sessions switch --help
+Point one window attached to a session at another session.
+
+The by-id counterpart of the in-window switch keybinding. Moves one window (defaults to this one under `$FELIS_SESSION_ID`).
+
+Usage: felis sessions switch [OPTIONS] <ID-OR-PREFIX>
+
+Arguments:
+  <ID-OR-PREFIX>
+          Session to switch to: hex id or any unique prefix
+
+Options:
+      --from <ID-OR-PREFIX>
+          Session whose attached window should move. Defaults to `$FELIS_SESSION_ID` (the session this command runs in)
+
+      --attachment <ID>
+          Move this attachment specifically, instead of the session's last window input owner. Ids come from `sessions list` / `sessions info` with `--format json`; an id that has since detached is an error, never a redirect to another window
+
+      --format <FORMAT>
+          Output framing: `human` (default) or `json`: one object on stdout, with a failure as one error object on stderr
+          
+          [default: human]
+          [possible values: human, json]
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+$ felis sessions search --help
+Search a session's scrollback and screen.
+
+Matches stream grep-style as `<line>:<text>` (line -1 is newest scrollback row). Substring match by default, `--regex` for regex.
+
+Usage: felis sessions search [OPTIONS] <ID-OR-PREFIX> <PATTERN>
+
+Arguments:
+  <ID-OR-PREFIX>
+          Hex id or any unique prefix
+
+  <PATTERN>
+          Pattern to look for. Substring by default; with `--regex` the daemon's `regex` crate parses it
+
+Options:
+      --regex
+          Treat the pattern as a regex
+
+      --case-insensitive
+          Case-insensitive match
+
+      --format <FORMAT>
+          Output framing: `human` (default) or `jsonl`: one JSON object per line on stdout, ending in exactly one terminal object
+          
+          [default: human]
+          [possible values: human, jsonl]
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+$ felis sessions tag --help
+Add and remove labels, for pickers and scripts to filter on.
+
+Positional TAGs are added; `--remove <TAG>` removes. Both may appear in one call for atomic relabeling. Re-adding an existing tag or removing an absent one is a no-op.
+
+Usage: felis sessions tag [OPTIONS] <ID-OR-PREFIX> [TAG]...
+
+Arguments:
+  <ID-OR-PREFIX>
+          Hex id or any unique prefix
+
+  [TAG]...
+          Labels to add
+
+Options:
+      --remove <TAG>
+          Label to remove (repeatable)
+
+      --format <FORMAT>
+          Output framing: `human` (default) or `json`: one object on stdout, with a failure as one error object on stderr
+          
+          [default: human]
+          [possible values: human, json]
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+$ felis notifications --help
+Stream desktop notifications from sessions.
+
+Relays OSC 9 / 99 / 777 notifications; felis draws no popups itself. Pipe into an external notifier (`notify-send`, `terminal-notifier`).
+
+Usage: felis notifications <COMMAND>
+
+Commands:
+  subscribe  Stream desktop notifications (OSC 9 / 99 / 777) until interrupted
+  help       Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help
+          Print help (see a summary with '-h')
+
+$ felis notifications subscribe --help
+Stream desktop notifications (OSC 9 / 99 / 777) until interrupted.
+
+Streams every session's notifications by default. felis draws no popup; pipe output into an external notifier (`notify-send`, `terminal-notifier`).
+
+Usage: felis notifications subscribe [OPTIONS]
+
+Options:
+      --session <ID-OR-PREFIX>
+          Only relay notifications from this session (hex id or any unique prefix)
+
+      --once
+          Print the first (matching) notification and exit 0: the notification-side `sessions send --wait`, for TUI programs that emit no OSC 133 marks. Exits 1 if the stream ends first
+
+      --timeout <SECS>
+          Give up after this many seconds without a (matching) notification and exit 1. Requires `--once`: an endless subscribe has no timeout.
+          
+          `0` is a deadline already past: the wait gives up at once.
+
+      --format <FORMAT>
+          Output framing: `human` (default) or `jsonl`: one JSON object per line on stdout, ending in exactly one terminal object
+          
+          [default: human]
+          [possible values: human, jsonl]
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+$ felis config --help
+Inspect the config file felis reads without dialing a daemon.
+
+`path` prints the file location, `check` validates diagnostics, and `show-effective` prints the merged configuration.
+
+Usage: felis config <COMMAND>
+
+Commands:
+  path            Print where felis looks for `config.toml`
+  check           Validate the config file and print every problem it has
+  show-effective  Print the configuration felis would actually use: defaults filled in and the selected client's overlay folded in
+  help            Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help
+          Print help (see a summary with '-h')
+
+$ felis config path --help
+Print where felis looks for `config.toml`.
+
+The path is reported whether or not the file exists: a first-time user has none, and "where would it go" is the question they are asking.
+
+Usage: felis config path [OPTIONS]
+
+Options:
+      --format <FORMAT>
+          Output framing: `human` (default) or `json`: one object on stdout, with a failure as one error object on stderr
+          
+          [default: human]
+          [possible values: human, json]
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+$ felis config check --help
+Validate the config file and print every problem it has.
+
+Reports all errors and warnings rather than stopping at the first. Exits 0 when clean or warnings only, 1 when any error is present. A missing default file exits 0; a missing `--config` file is an error.
+
+Usage: felis config check [OPTIONS]
+
+Options:
+      --client <ID>
+          Which `[client.<id>]` overlay to fold in. Defaults to the GUI client id.
+          
+          Other `[client.*]` sections are untouched and not checked because their schema may differ.
+          
+          [default: felis]
+
+      --format <FORMAT>
+          Output framing: `human` (default) or `json`: one object on stdout, with a failure as one error object on stderr
+          
+          [default: human]
+          [possible values: human, json]
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+$ felis config show-effective --help
+Print the configuration felis would actually use: defaults filled in and the selected client's overlay folded in.
+
+The human framing is TOML, the format you wrote it in, so what you read is what you would edit.
+
+Usage: felis config show-effective [OPTIONS]
+
+Options:
+      --client <ID>
+          Which `[client.<id>]` overlay to fold in. Defaults to the GUI client id.
+          
+          Other `[client.*]` sections are untouched and not checked because their schema may differ.
+          
+          [default: felis]
+
+      --format <FORMAT>
+          Output framing: `human` (default) or `json`: one object on stdout, with a failure as one error object on stderr
+          
+          [default: human]
+          [possible values: human, json]
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+$ felis doctor --help
+Check every layer felis needs and diagnose failures.
+
+Inspects daemon, config, terminfo, GPU, clipboard, and SSH. Exits 1 on failures; unreachable daemons are findings, not exit 2.
+
+Usage: felis doctor [OPTIONS]
+
+Options:
+      --format <FORMAT>
+          Output framing: `human` (default) or `json`: one object on stdout, with a failure as one error object on stderr
+          
+          [default: human]
+          [possible values: human, json]
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+$ felis version --help
+Compare this build against the GUI client and running daemon.
+
+Reports three rows (`cli`, `client`, `daemon`) with build identities. Informational only; does not enforce version matching.
+
+Usage: felis version [OPTIONS]
+
+Options:
+      --format <FORMAT>
+          Output framing: `human` (default) or `json`: one object on stdout, with a failure as one error object on stderr
+          
+          [default: human]
+          [possible values: human, json]
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+$ felis daemon --help
+Inspect the daemon behind sessions.
+
+Reports build, wire version, and resource usage against ceilings. Never starts a daemon.
+
+Usage: felis daemon <COMMAND>
+
+Commands:
+  status  Report the running daemon: build, wire version, and accounted resources
+  stop    Stop the running daemon over IPC
+  help    Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help
+          Print help (see a summary with '-h')
+
+$ felis daemon status --help
+Report the running daemon: build, wire version, and accounted resources.
+
+Surfaces observed usage against admission limits. Never starts a daemon: exits 2 if none is running.
+
+Usage: felis daemon status [OPTIONS]
+
+Options:
+      --format <FORMAT>
+          Output framing: `human` (default) or `json`: one object on stdout, with a failure as one error object on stderr
+          
+          [default: human]
+          [possible values: human, json]
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+$ felis daemon stop --help
+Stop the running daemon over IPC.
+
+Refuses while sessions remain, reporting how many; `--force` destroys them and `--when-empty` waits them out. Never starts a daemon.
+
+Usage: felis daemon stop [OPTIONS]
+
+Options:
+      --force
+          Destroy every session, then stop
+
+      --when-empty
+          Refuse new sessions and stop once the last one ends
+
+      --format <FORMAT>
+          Output framing: `human` (default) or `json`: one object on stdout, with a failure as one error object on stderr
+          
+          [default: human]
+          [possible values: human, json]
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+$ felis attach --help
+Open a window attached to an existing session.
+
+Bare `felis` is the create-new counterpart. The globals reach the window and belong before the verb (`felis --config work.toml attach <id>`); see `felis --help`.
+
+Usage: felis attach <ID-OR-PREFIX>
+
+Arguments:
+  <ID-OR-PREFIX>
+          Hex id or any unique prefix
+
+Options:
+  -h, --help
+          Print help (see a summary with '-h')
+
+$ felis window --help
+Act on the window this command runs in.
+
+The object is the window, not the session behind it: `retarget` re-points it at another daemon. Run from inside a felis window; outside one there is nothing to act on.
+
+Usage: felis window <COMMAND>
+
+Commands:
+  retarget  Re-point this window at a daemon on this machine
+  help      Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help
+          Print help (see a summary with '-h')
+
+$ felis window retarget --help
+Re-point this window at a daemon on this machine.
+
+Bare, it re-dials the default local daemon: the way back from `felis ssh`. A SOCKET path names a second local daemon.
+
+Usage: felis window retarget [OPTIONS] [SOCKET] [-- <CMD>...]
+
+Arguments:
+  [SOCKET]
+          Socket of the local daemon to re-dial. Absent: the default local daemon
+
+  [CMD]...
+          Program + args for the fresh target session, in the trailing slot the front door spells the same way. Refused with `--session`, which attaches to what is already running
+
+Options:
+      --attachment <ID>
+          Move this attachment specifically, instead of the session's last window input owner. Ids come from `sessions list` / `sessions info` with `--format json`; an id that has since detached is an error, never a redirect to another window
+
+      --session <TARGET-PREFIX>
+          Attach to this session on the *target* daemon (hex id or unique prefix, resolved after dialing) instead of creating a fresh one. Mutually exclusive with a `-- <cmd>` override
+
+      --from <PREFIX>
+          Move a different window: the session whose window should re-dial (hex id or prefix). Defaults to `$FELIS_SESSION_ID` (the window this command runs in)
+
+      --format <FORMAT>
+          Output framing: `human` (default) or `json`: one object on stdout, with a failure as one error object on stderr
+          
+          [default: human]
+          [possible values: human, json]
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+$ felis ssh --help
+Re-point this window at the daemon on another host, over SSH.
+
+The window re-dials the destination and lands there; closing it leaves the remote session running. `felis --host <dest>` is the other verb: it opens a new window on that host instead.
+
+Usage: felis ssh [OPTIONS] <user@host> [-- <CMD>...]
+
+Arguments:
+  <user@host>
+          Any destination `ssh` accepts: `user@host`, an `~/.ssh/config` alias, or an `ssh://user@host:port` URI, passed verbatim
+
+  [CMD]...
+          Program + args for the fresh target session, in the trailing slot the front door spells the same way. Refused with `--session`, which attaches to what is already running
+
+Options:
+      --ssh-arg <TOKEN>
+          Extra token passed verbatim to `ssh` before the destination (repeatable): `--ssh-arg=-p --ssh-arg=2222`. Handy for an ad-hoc VM not worth an `~/.ssh/config` entry; felis never interprets the tokens
+
+      --attachment <ID>
+          Move this attachment specifically, instead of the session's last window input owner. Ids come from `sessions list` / `sessions info` with `--format json`; an id that has since detached is an error, never a redirect to another window
+
+      --session <TARGET-PREFIX>
+          Attach to this session on the *target* daemon (hex id or unique prefix, resolved after dialing) instead of creating a fresh one. Mutually exclusive with a `-- <cmd>` override
+
+      --from <PREFIX>
+          Move a different window: the session whose window should re-dial (hex id or prefix). Defaults to `$FELIS_SESSION_ID` (the window this command runs in)
+
+      --format <FORMAT>
+          Output framing: `human` (default) or `json`: one object on stdout, with a failure as one error object on stderr
+          
+          [default: human]
+          [possible values: human, json]
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+$ felis frontend --help
+Launch an alternate frontend: `felis frontend <name> …` execs `felis-<name>` with the remaining arguments verbatim.
+
+No global reaches it: `--config` and the carrier before the name are refused; write them after it instead (see `felis --help`).
+
+Usage: felis frontend <NAME> [ARGS]...
+
+Arguments:
+  <NAME>
+          Frontend name: `felis frontend tui` execs `felis-tui`
+
+  [ARGS]...
+          Arguments handed to the frontend verbatim, flags included
+
+Options:
+  -h, --help
+          Print help (see a summary with '-h')
+
+$ felis bridge --help
+Speak JSON lines on stdin/stdout for a non-Rust client.
+
+Persistent stdio bridge relaying JSONL requests and replies to the daemon. Stderr carries log lines only, never protocol. Exits if daemon is unreachable.
+
+Usage: felis bridge
+
+Options:
+  -h, --help
+          Print help (see a summary with '-h')
+
+$ felis completions --help
+Print a shell completion script to stdout.
+
+Supports bash, elvish, fish, powershell, and zsh. The fish and zsh scripts also complete session IDs dynamically against running daemons.
+
+Usage: felis completions <SHELL>
+
+Arguments:
+  <SHELL>
+          Target shell
+          
+          [possible values: bash, elvish, fish, powershell, zsh]
+
+Options:
+  -h, --help
+          Print help (see a summary with '-h')

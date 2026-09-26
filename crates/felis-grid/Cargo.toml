@@ -1,0 +1,61 @@
+[package]
+name = "felis-grid"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "felis grid model: cells, cursor, scrollback, image store, damage tracker"
+
+[features]
+# Off by default so daemon and GUI client avoid linking serde_json.
+json = ["dep:serde_json"]
+# Renders the published `felis-json` v1 schema; default-off so the
+# shipped binaries stay schemars-free.
+schema = ["json", "dep:schemars"]
+
+[dependencies]
+felis-protocol = { workspace = true }
+bytes = { workspace = true }
+felis-vt = { workspace = true }
+regex = { workspace = true }
+bitflags = { workspace = true }
+foldhash = { workspace = true }
+indexmap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true, optional = true }
+schemars = { workspace = true, optional = true }
+thiserror = { workspace = true }
+unicode-width = { workspace = true }
+simdutf8 = { workspace = true }
+
+[dev-dependencies]
+boon = { workspace = true }
+proptest = { workspace = true }
+insta = { workspace = true }
+criterion = { workspace = true }
+serde_json = { workspace = true }
+
+[[bench]]
+name = "damage_merge"
+harness = false
+
+[[bench]]
+name = "scroll_region"
+harness = false
+
+[[bench]]
+name = "unicode_throughput"
+harness = false
+
+[[bench]]
+name = "ascii_throughput"
+harness = false
+
+[[bench]]
+name = "csi_dispatch"
+harness = false
+
+[lints]
+workspace = true

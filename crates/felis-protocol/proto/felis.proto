@@ -1,0 +1,2606 @@
+syntax = "proto3";
+
+package felis.v1;
+
+import "google/protobuf/descriptor.proto";
+import "google/protobuf/timestamp.proto";
+
+// Protocol Buffers schema for the felis terminal emulator's IPC.
+//
+// This file is the single machine-readable authority for the wire: the
+// 10 message families, their supporting structs/enums, and the frame
+// kinds that select them. A family whose arms travel one way is one
+// wrapper, `<Family>Msg`; a family with arms in both directions is two,
+// `<Family>ToDaemonMsg` and `<Family>ToClientMsg`, under the one frame
+// kind, so no wrapper can carry an arm the wrong way.
+// `crates/felis-protocol/src/messages.rs` holds the Rust *domain* types
+// the workspace programs against (validated constructors over the same
+// shapes, not a second contract), and `convert/` is the validator
+// between them, checking what the schema cannot state (a required oneof,
+// an enum with no `UNSPECIFIED` counterpart, an integer that must
+// narrow). Where the two could disagree the schema wins, and the tests
+// that read this file (`the_protocol_version_matches_the_schema`,
+// `every_message_kind_matches_the_schema_enum`) are what keeps them from
+// drifting apart quietly. Field numbers inside each family's `oneof` are
+// frozen as declared here for the life of a protocol major, and a
+// two-wrapper family numbers its arms once across both wrappers: a body
+// decoded as the wrong half then names no arm, rather than a different
+// one. A new arm takes the next free number in its family, whatever its
+// Rust variant order. A number the release baseline (the newest
+// published final release) carries is `reserved` on retirement and
+// never recycled, so a released peer's bytes can never be read as a new
+// field; a number retired while no baseline exists is free again, since
+// the `base:` acknowledgment that permits its retirement already
+// requires both sides to be rebuilt together (docs/explanation/architecture/ipc.md "Schema evolution:
+// major, minor, feature flag").
+//
+// Versioning happens in the frozen preface, not in this schema. Before
+// any frame, a client sends 8 bytes: magic "FLIS" (0x46 0x4C 0x49 0x53),
+// protocol major (uint16), protocol minor (uint16). The daemon answers
+// with 10: magic, a status word (0 = accept, 1 = refuse, anything
+// else = refuse for a reason this peer cannot name), and two words whose
+// meaning the status picks (accept: agreed major + daemon minor; refuse:
+// the supported major range, min then max). An accept echoes the major
+// the client offered, and a client closes on an accept naming any other
+// major before it reads a frame. Every preface integer is
+// big-endian, unlike the little-endian frame header. A major names
+// *this* schema; a minor names an additive revision of it, and the
+// effective minor, min(client, daemon), is what a sender may use.
+//
+// The constants this schema is authoritative for, in the exact form
+// `felis-protocol/src/preface.rs` parses out of this file (its
+// `the_protocol_version_matches_the_schema` test reads the two lines
+// below and asserts the Rust values equal them, so editing one here
+// without the other fails the build; prose-check: ignore):
+//   PROTOCOL_MAJOR = 1
+//   PROTOCOL_MINOR = 0
+//
+// Kind or arm: a frame kind is a *surface*, so a message addressing a
+// surface no existing kind owns earns a kind, as does one whose
+// refusal must land before its body is decoded. Another request,
+// reply, or item shape on a surface that already exists is a new
+// `oneof` arm of that family, whatever correlation class it needs.
+// `Ops::Status` is an arm, `Search` is a kind
+// (docs/explanation/architecture/ipc.md "Kind or arm?").
+//
+// Because the arm is the routing unit, every arm below carries an
+// `(felis.v1.arm)` field option stating its whole row of the routing
+// table, in this exact form:
+//
+//   [(felis.v1.arm) = {
+//     direction: <DIRECTION_TO_DAEMON | DIRECTION_TO_CLIENT>
+//     correlation: <CORRELATION_*>
+//     modes: <MODE_*>      // repeated, in WINDOW, OPS, OBSERVER order
+//     phases: <PHASE_*>    // repeated, in ladder order
+//     since: <minor>       // omitted where it is 0
+//   }]
+//
+// where direction is the one way the arm may travel (the direction its
+// wrapper travels, restated so the row stands alone); correlation is
+// the envelope it demands; modes names the connection modes on which
+// the arm is legal, receive side; phases names the connection states
+// it may arrive in, where `setup` is a welcomed connection that has
+// not yet said what it is for, `attached` one subscribed to a session,
+// and `observing` one serving a notification stream; and since is the
+// protocol minor that introduced the arm, written only where it is not
+// 0: this major's base schema is minor 0, which is the proto3 default
+// and absent from the descriptor whether or not it is spelled, so an
+// addition is the one place a `since` appears. The `ArmRouting`
+// message below names the vocabulary. A peer
+// that cannot read Rust reads these options out of the descriptor this
+// file compiles to (`buf build`, or protoc reflection), with no comment
+// to parse; the Rust side asserts them against its own table
+// (`the_schema_declares_the_same_arm_table`), so an arm added here
+// without an option, or with the wrong one, fails the build. Options
+// are invisible to `buf breaking`, so that test, not the compat gate,
+// is what catches a routing edit.
+//
+// Naming: a message that is a `oneof` arm of a family wrapper is named
+// `<Family><Variant>` (the family being the wrapper minus `Msg`,
+// `ToDaemonMsg`, or `ToClientMsg`), since proto has one flat package
+// scope and a bare `Region` or `Event` would squat it. Shared vocabulary (anything two families reference, or that
+// appears as a field type rather than an arm) keeps its bare name.
+//
+// Correlation rides *inside* the body, never in the frame header: field
+// **100** of every wrapper is reserved wire-wide for the `Correlation`
+// envelope, set on the families that carry requests, replies, and
+// stream items and `reserved` on the ones that do not. The slot is uniform so a reader can lift the envelope off any body with
+// one field number and no per-family table, which is what lets the
+// shared connection driver validate correlation for every family in one
+// place. It is an optional message field: absent costs zero bytes, so
+// the un-correlated connection-scoped pushes (Grid / Image / Push /
+// Input) are byte-for-byte what they were before correlation existed.
+//
+// The `felis.v1` package is a schema-namespace major, and it moves only
+// when a daemon has to hold two schemas at once: a deprecation window
+// serves the prior and the new major side by side, which needs both
+// message sets in one binary: exactly what a `felis.v2` package
+// provides. It does not track `PROTOCOL_MAJOR` bump for bump: before
+// the compatibility freeze the dev wire carries no promise and breaks
+// ride major 1 unbumped, so the package moves only with a post-freeze
+// major whose deprecation window needs both message sets. Minor growth
+// stays inside the package either way.
+//
+// Type-mapping notes that recur below:
+//   * Session ids are Rust `u128`; proto3 has no 128-bit integer, so they
+//     travel as `bytes` (16 bytes, big-endian). Inlined rather than
+//     wrapped in a message: the wrapper would buy nothing a field
+//     comment does not, and would cost a nested allocation per id.
+//   * `RowPayload` is opaque cell bytes → `bytes` (the inner row codec's
+//     output; `docs/reference/row-codec.md` is the authority for the
+//     interior of that one field; see `RowEntry.packed_cells`).
+//   * `u8`/`u16`/`u32` → `uint32`; `u64` → `uint64`. Deliberately-signed
+//     ints use zigzag (`sint32`/`sint64`).
+//   * bitflags (`InputMods: u8`, `KittyKbdFlags: u8`) carry raw bits in
+//     a `uint32`; see `messages.rs` / `kitty_keyboard.rs` for the bits.
+
+// ---------------------------------------------------------------------------
+// FrameKind (the frame header's `kind` word, from lib.rs)
+// ---------------------------------------------------------------------------
+
+// Discriminator in the frame header's little-endian kind word. Never a
+// field type; kind 0 is CONN because wire values are frozen for major 1.
+// buf:lint:ignore ENUM_ZERO_VALUE_SUFFIX
+enum FrameKind {
+  // The connection handshake (ConnToDaemonMsg, ConnToClientMsg).
+  FRAME_KIND_CONN = 0;
+  // Client -> daemon: keys, paste, mouse, resize, focus.
+  FRAME_KIND_INPUT = 1;
+  // Daemon -> client: cell diffs, cursor, OSC events.
+  FRAME_KIND_GRID = 2;
+  // Daemon -> client: image bytes + placement (Kitty graphics).
+  FRAME_KIND_IMAGE = 3;
+  // This connection's session lifecycle (SessionToDaemonMsg,
+  // SessionToClientMsg).
+  FRAME_KIND_SESSION = 4;
+  // Request/reply ops on named other sessions (OpsToDaemonMsg,
+  // OpsToClientMsg).
+  FRAME_KIND_OPS = 5;
+  // Region-export family (RegionToDaemonMsg, RegionToClientMsg).
+  FRAME_KIND_REGION = 6;
+  // Notification observer connections (NotifyToDaemonMsg,
+  // NotifyToClientMsg).
+  FRAME_KIND_NOTIFY = 7;
+  // Daemon -> client pushes (PushMsg).
+  FRAME_KIND_PUSH = 8;
+  // Scrollback search conversation on the attached connection
+  // (SearchToDaemonMsg, SearchToClientMsg).
+  FRAME_KIND_SEARCH = 9;
+}
+
+// ---------------------------------------------------------------------------
+// ArmRouting (the `(felis.v1.arm)` field option every oneof arm carries)
+// ---------------------------------------------------------------------------
+
+// One row of the arm-routing table, carried as a field option on the
+// arm it describes so the descriptor holds the routing contract.
+// Never a wire message: nothing sends an ArmRouting, and the generated
+// Rust type it produces is unused by the workspace.
+message ArmRouting {
+  // The one way an arm may travel. The receiver rejects an arm that
+  // arrived the wrong way.
+  enum Direction {
+    DIRECTION_UNSPECIFIED = 0;
+    DIRECTION_TO_DAEMON = 1;
+    DIRECTION_TO_CLIENT = 2;
+  }
+
+  // Which half of a request/reply pair or a stream the arm is; the
+  // envelope each demands is field 100 of the family wrapper.
+  enum Correlation {
+    CORRELATION_UNSPECIFIED = 0;
+    CORRELATION_UNCORRELATED = 1;
+    CORRELATION_REQUEST_OPENER = 2;
+    CORRELATION_REQUEST_REPLY = 3;
+    CORRELATION_STREAM_OPENER = 4;
+    CORRELATION_STREAM_ITEM = 5;
+  }
+
+  // A connection mode, as `ConnHello.mode` names it. Spelled again
+  // here rather than reusing `ConnectionMode`: that enum is wire
+  // vocabulary whose values a major may renumber, and a routing row
+  // is not a message field.
+  enum Mode {
+    MODE_UNSPECIFIED = 0;
+    MODE_WINDOW = 1;
+    MODE_OPS = 2;
+    MODE_OBSERVER = 3;
+  }
+
+  // A connection state that carries frames. The preface carries none,
+  // so it has no token here.
+  enum Phase {
+    PHASE_UNSPECIFIED = 0;
+    PHASE_HANDSHAKE = 1;
+    PHASE_SETUP = 2;
+    PHASE_ATTACHED = 3;
+    PHASE_OBSERVING = 4;
+  }
+
+  Direction direction = 1;
+  Correlation correlation = 2;
+  // In MODE_WINDOW, MODE_OPS, MODE_OBSERVER order.
+  repeated Mode modes = 3;
+  // In ladder order: handshake, setup, attached, observing.
+  repeated Phase phases = 4;
+  // The protocol minor that introduced the arm; 0 for this major's
+  // base schema, and then absent from the descriptor as a proto3
+  // default.
+  uint32 since = 5;
+}
+
+// 50001 sits in protobuf's private extension range (50000-99999), which
+// no registry hands out: the number is application-private, not felis's
+// anywhere but here. A consumer co-compiling this schema with another
+// that also extends FieldOptions at 50001 keeps the two in separate
+// descriptor pools, or renumbers its own copy.
+extend google.protobuf.FieldOptions {
+  ArmRouting arm = 50001;
+}
+
+// ---------------------------------------------------------------------------
+// ConnectionMode, RefusalReason, AttachFailure, CreateFailure (from
+// caps.rs and the messages/ modules)
+// ---------------------------------------------------------------------------
+
+// Protobuf binary is the only encoding a frame body ever carries, so no
+// per-connection encoding is negotiated and none is named here. A
+// non-Rust client reaches the daemon through the CLI's stdio bridge.
+
+// Connection purpose stated in ConnHello for routing and output shaping.
+// The daemon admits only arms matching the mode's `modes=` list. The
+// peer states its own mode, so this is routing, never authorization
+// (which requires credentials a peer cannot mint for itself).
+enum ConnectionMode {
+  CONNECTION_MODE_UNSPECIFIED = 0;
+  // Interactive window: attaches and streams one session; the only mode
+  // the daemon pushes Reattach / SessionExited / RetargetHost to.
+  CONNECTION_MODE_WINDOW = 1;
+  // Scripted operator (the felis sessions verbs): the whole Ops family,
+  // plus an attach where a verb drives or reads a session.
+  CONNECTION_MODE_OPS = 2;
+  // Notification observer: the Notify family and nothing else. Its
+  // --session filter rides Subscribe.session_prefix, so it needs no
+  // roster query of its own.
+  CONNECTION_MODE_OBSERVER = 3;
+}
+
+// Why a daemon refused a connection (ConnRefused). Version and encoding
+// skew never reach this enum: the preface settles the protocol major
+// before a frame is written, and protobuf is the only encoding.
+enum RefusalReason {
+  REFUSAL_REASON_UNSPECIFIED = 0;
+  // The frame's family is one the peer's connection mode does not admit.
+  REFUSAL_REASON_ROLE = 1;
+  // The daemon is already serving max_connections and admitted no
+  // further one. Retryable once a connection frees: nothing about the
+  // peer or its request was wrong.
+  REFUSAL_REASON_AT_CAPACITY = 2;
+  // ConnHello named a ConnectionMode this daemon does not define: the
+  // peer is newer. Not retryable against this daemon.
+  REFUSAL_REASON_UNKNOWN_MODE = 3;
+}
+
+// Why a stream ended badly (ConnError). A closed set rather than a bare
+// string: the client picks its remedy from the reason (retry a
+// narrowed request, back off until a stream frees up, give up), and
+// `detail` only says which value provoked it.
+enum StreamErrorReason {
+  STREAM_ERROR_REASON_UNSPECIFIED = 0;
+  // The request itself was malformed or unservable as asked (an empty
+  // search needle, a regex that does not compile). Re-issuing the same
+  // request fails the same way.
+  STREAM_ERROR_REASON_INVALID_REQUEST = 1;
+  // The connection already holds the maximum outstanding streams the
+  // daemon serves it. The refused stream is the only casualty: the
+  // connection stays usable, and the request is worth retrying once an
+  // earlier stream terminates.
+  STREAM_ERROR_REASON_TOO_MANY_STREAMS = 2;
+  // The subject went away mid-flight: the session ended, or the daemon
+  // is shutting down. Nothing about the request was wrong.
+  STREAM_ERROR_REASON_UNAVAILABLE = 3;
+  // The daemon abandoned the stream on its own fault (a row-encode
+  // failure shipped a truncated burst).
+  STREAM_ERROR_REASON_INTERNAL = 4;
+}
+
+// Why the attach half failed: a SessionAttach, or the attach that
+// follows a SessionCreate's spawn. Every value names a session that
+// already exists, so an OpsSpawn, which subscribes to nothing, has no
+// use for this enum.
+enum AttachFailure {
+  ATTACH_FAILURE_UNSPECIFIED = 0;
+  // No pooled session holds the requested id.
+  ATTACH_FAILURE_UNKNOWN_SESSION = 1;
+  // The session's owner task ended before the subscription landed.
+  ATTACH_FAILURE_SESSION_ENDING = 2;
+  // A live-only SessionAttach named an exited shell. Distinct from
+  // ATTACH_FAILURE_UNKNOWN_SESSION (session is pooled) and
+  // ATTACH_FAILURE_SESSION_ENDING (task is running).
+  ATTACH_FAILURE_SESSION_EXITED = 3;
+  // A SessionAttach named an id_prefix matching no pooled session.
+  // Distinct from ATTACH_FAILURE_UNKNOWN_SESSION, which answers a full
+  // id: the remedy is a different prefix, not a longer one.
+  ATTACH_FAILURE_NO_MATCH = 4;
+  // A SessionAttach named an id_prefix matching more than one pooled
+  // session; the count rides in `detail`.
+  ATTACH_FAILURE_AMBIGUOUS = 5;
+}
+
+// Why the daemon refused the spawn half of a SessionCreate or an
+// OpsSpawn. Nothing here names a session the caller asked for: the
+// request is about one that does not exist yet.
+enum CreateFailure {
+  CREATE_FAILURE_UNSPECIFIED = 0;
+  // The create could not start its program.
+  CREATE_FAILURE_SPAWN_FAILED = 1;
+  // The create named a geometry outside the supported bounds
+  // (REQ-605a).
+  CREATE_FAILURE_GEOMETRY_OUT_OF_RANGE = 2;
+  // The create arrived while at the configured session limit. Nothing
+  // was executed, so it is not CREATE_FAILURE_SPAWN_FAILED; the remedy
+  // is reaping a session.
+  CREATE_FAILURE_SESSION_LIMIT_REACHED = 3;
+  // The create arrived while the daemon was draining toward exit. The
+  // request is fine and no other daemon state is: the remedy is another
+  // daemon, never a retry here.
+  CREATE_FAILURE_DAEMON_DRAINING = 4;
+}
+
+// ---------------------------------------------------------------------------
+// Shared data-free enums (proto3 enums; value names are enum-prefixed
+// because proto enum values share the package scope)
+// ---------------------------------------------------------------------------
+
+// Desktop-notification urgency (OSC 99 u=0/1/2). The Rust default is
+// Normal, which is not the first variant, so a distinct UNSPECIFIED=0
+// sentinel keeps an unset field from silently reading as Low.
+enum Urgency {
+  URGENCY_UNSPECIFIED = 0;
+  URGENCY_LOW = 1;
+  URGENCY_NORMAL = 2;
+  URGENCY_CRITICAL = 3;
+}
+
+// Direction of a GridScrolled shift.
+enum ScrollDirection {
+  SCROLL_DIRECTION_UNSPECIFIED = 0;
+  SCROLL_DIRECTION_UP = 1;
+  SCROLL_DIRECTION_DOWN = 2;
+}
+
+// Semantic-prompt boundary kind (OSC 133 A/B/C/D).
+enum PromptKind {
+  PROMPT_KIND_UNSPECIFIED = 0;
+  PROMPT_KIND_PROMPT_START = 1;
+  PROMPT_KIND_INPUT_START = 2;
+  PROMPT_KIND_OUTPUT_START = 3;
+  PROMPT_KIND_COMMAND_END = 4;
+}
+
+// Which theme channel an OSC 10/11/12 (or 110/111/112) targets.
+enum ThemeChannel {
+  THEME_CHANNEL_UNSPECIFIED = 0;
+  THEME_CHANNEL_FOREGROUND = 1;
+  THEME_CHANNEL_BACKGROUND = 2;
+  THEME_CHANNEL_CURSOR = 3;
+}
+
+// Cursor block shape, set by DECSCUSR.
+enum CursorStyle {
+  CURSOR_STYLE_UNSPECIFIED = 0;
+  CURSOR_STYLE_BLOCK = 1;
+  CURSOR_STYLE_UNDERLINE = 2;
+  CURSOR_STYLE_BAR = 3;
+}
+
+// Mouse-event reporting level (?1000 / ?1002 / ?1003).
+enum MouseProtocol {
+  MOUSE_PROTOCOL_UNSPECIFIED = 0;
+  MOUSE_PROTOCOL_OFF = 1;
+  MOUSE_PROTOCOL_BUTTON_EVENTS = 2;
+  MOUSE_PROTOCOL_BUTTON_AND_DRAG = 3;
+  MOUSE_PROTOCOL_ANY_MOTION = 4;
+}
+
+// xterm modifyOtherKeys level (CSI > 4 ; Pv m).
+enum ModifyOtherKeys {
+  MODIFY_OTHER_KEYS_UNSPECIFIED = 0;
+  MODIFY_OTHER_KEYS_OFF = 1;
+  MODIFY_OTHER_KEYS_LEVEL1 = 2;
+  MODIFY_OTHER_KEYS_LEVEL2 = 3;
+}
+
+// Decoded pixel format (Kitty f=24 / f=32).
+enum ImageFormat {
+  IMAGE_FORMAT_UNSPECIFIED = 0;
+  IMAGE_FORMAT_RGB24 = 1;
+  IMAGE_FORMAT_RGBA32 = 2;
+}
+
+// What happened to the mouse during an event.
+enum MouseAction {
+  MOUSE_ACTION_UNSPECIFIED = 0;
+  MOUSE_ACTION_PRESS = 1;
+  MOUSE_ACTION_RELEASE = 2;
+  MOUSE_ACTION_DRAG = 3;
+  MOUSE_ACTION_MOTION = 4;
+}
+
+// Region of the buffer a RegionRequest serializes.
+enum RegionSource {
+  REGION_SOURCE_UNSPECIFIED = 0;
+  REGION_SOURCE_SCROLLBACK = 1;
+  REGION_SOURCE_VISIBLE = 2;
+  REGION_SOURCE_COMMAND_OUTPUT = 3;
+  REGION_SOURCE_LAST_COMMAND = 4;
+}
+
+// Direction for an InputJumpPrompt.
+enum PromptJump {
+  PROMPT_JUMP_UNSPECIFIED = 0;
+  PROMPT_JUMP_PREVIOUS = 1;
+  PROMPT_JUMP_NEXT = 2;
+}
+
+// A named key felis bridges, F-keys excepted: an F-key is KeyId.function,
+// which carries its index.
+enum NamedKey {
+  NAMED_KEY_UNSPECIFIED = 0;
+  NAMED_KEY_ENTER = 1;
+  NAMED_KEY_TAB = 2;
+  NAMED_KEY_ESCAPE = 3;
+  NAMED_KEY_SPACE = 4;
+  NAMED_KEY_BACKSPACE = 5;
+  NAMED_KEY_INSERT = 6;
+  NAMED_KEY_DELETE = 7;
+  NAMED_KEY_HOME = 8;
+  NAMED_KEY_END = 9;
+  NAMED_KEY_PAGE_UP = 10;
+  NAMED_KEY_PAGE_DOWN = 11;
+  NAMED_KEY_ARROW_UP = 12;
+  NAMED_KEY_ARROW_DOWN = 13;
+  NAMED_KEY_ARROW_LEFT = 14;
+  NAMED_KEY_ARROW_RIGHT = 15;
+}
+
+// Where on the keyboard the key sits. Only NUMPAD changes the encoding
+// (DECKPAM).
+enum KeyLocation {
+  KEY_LOCATION_UNSPECIFIED = 0;
+  KEY_LOCATION_STANDARD = 1;
+  KEY_LOCATION_LEFT = 2;
+  KEY_LOCATION_RIGHT = 3;
+  KEY_LOCATION_NUMPAD = 4;
+}
+
+// Press, auto-repeat, or release: the Kitty keyboard protocol's event
+// types 1 / 2 / 3. Every other encoding treats a repeat as a press.
+enum KeyEventKind {
+  KEY_EVENT_KIND_UNSPECIFIED = 0;
+  KEY_EVENT_KIND_PRESS = 1;
+  KEY_EVENT_KIND_REPEAT = 2;
+  KEY_EVENT_KIND_RELEASE = 3;
+}
+
+// What made a GridAttention fire: a BEL, or a desktop notification.
+enum AttentionSource {
+  ATTENTION_SOURCE_UNSPECIFIED = 0;
+  ATTENTION_SOURCE_BELL = 1;
+  ATTENTION_SOURCE_NOTIFICATION = 2;
+}
+
+// ---------------------------------------------------------------------------
+// Shared data-carrying enums (modeled as messages with a oneof, since a
+// proto enum cannot carry a payload)
+// ---------------------------------------------------------------------------
+
+// Mouse button reported by the client. Every variant is data-free, but
+// the set is a oneof rather than a proto enum so it keeps one shape with
+// the other data-carrying enums here and needs no UNSPECIFIED sentinel.
+message MouseButton {
+  oneof button {
+    MouseLeft left = 1;
+    MouseMiddle middle = 2;
+    MouseRight right = 3;
+    MouseWheelUp wheel_up = 4;
+    MouseWheelDown wheel_down = 5;
+    MouseWheelLeft wheel_left = 6;
+    MouseWheelRight wheel_right = 7;
+    // The xterm "high buttons" 8..11 (thumb side buttons).
+    MouseButton8 button8 = 8;
+    MouseButton9 button9 = 9;
+    MouseButton10 button10 = 10;
+    MouseButton11 button11 = 11;
+  }
+}
+message MouseLeft {}
+message MouseMiddle {}
+message MouseRight {}
+message MouseWheelUp {}
+message MouseWheelDown {}
+message MouseWheelLeft {}
+message MouseWheelRight {}
+message MouseButton8 {}
+message MouseButton9 {}
+message MouseButton10 {}
+message MouseButton11 {}
+
+// The logical key a keystroke resolved to.
+message KeyId {
+  oneof key {
+    NamedKey named = 1;
+    // NamedKey::F index, 1..=35; out of range is a decode refusal.
+    uint32 function = 2;
+    // The key's own character, at most MAX_KEY_CHARACTER_BYTES of UTF-8.
+    string character = 3;
+    // A dead key or bare modifier: no encoding of its own, so the
+    // daemon falls through to InputKeyEvent.text.
+    KeyOther other = 4;
+  }
+}
+message KeyOther {}
+
+// ---------------------------------------------------------------------------
+// Shared tuple/small helper messages (proto3 has no tuple type)
+// ---------------------------------------------------------------------------
+
+// (u8, u8, u8) sRGB triple.
+message Rgb {
+  uint32 r = 1;
+  uint32 g = 2;
+  uint32 b = 3;
+}
+
+// (u16, RowPayload) entry in a GridRowDelta.
+message RowEntry {
+  uint32 row = 1;
+  // One row's cells, encoded by the felis row codec.
+  // `docs/reference/row-codec.md` specifies the interior wire format.
+  // Kept opaque so cell layout changes evolve without touching protobuf.
+  bytes packed_cells = 2;
+}
+
+// (u32, u32) half-open byte range in a SearchMatch.
+message ByteSpan {
+  uint32 start = 1;
+  uint32 end = 2;
+}
+
+// (i64, u16, u16) paintable highlight segment in a SearchMatch:
+// (row line_index, col_start, col_end).
+message ColSpan {
+  // Row index; negative rows live in scrollback (REQ-608).
+  sint64 line_index = 1;
+  uint32 col_start = 2;
+  uint32 col_end = 3;
+}
+
+// (String, String) environment pair in SpawnArgs.env: user-typed CLI
+// text, so `string` (UTF-8) is the honest type.
+message EnvPair {
+  string key = 1;
+  string value = 2;
+}
+
+// Native-representation (bytes, bytes) pair in SpawnArgs.env_base (raw
+// bytes on Unix, little-endian uint16 code units on Windows). Inherited
+// OS state is not guaranteed UTF-8; REQ-912 requires preserving non-UTF-8
+// entries like paths without silent drops (see EnvBase).
+message EnvBytesPair {
+  bytes key = 1;
+  bytes value = 2;
+}
+
+// Captured environment snapshot for SpawnArgs.env_base. Wrapped in a
+// message so presence is distinguishable on the wire from an omitted
+// base. Bounded by MAX_ENV_BASE_ENTRIES entries and MAX_ENV_BASE_BYTES
+// total bytes (docs/reference/ipc.md).
+message EnvBase {
+  repeated EnvBytesPair entries = 1;
+}
+
+// ---------------------------------------------------------------------------
+// Correlation envelope
+// ---------------------------------------------------------------------------
+
+// Ties a frame to its request or stream (field 100 on family wrappers).
+// Both ID sequences are client-allocated, monotonic from 1, and never
+// reused. A oneof rather than two independent scalars prevents ambiguous
+// frames where both or neither ID would be set.
+message Correlation {
+  oneof id {
+    // Request/reply: the reply echoes the request's value.
+    uint64 request_id = 1;
+    // Streamed reply: the opening request carries it, every item
+    // repeats it, and exactly one ConnEnd / ConnError closes it.
+    uint64 stream_id = 2;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Shared structs
+// ---------------------------------------------------------------------------
+
+// Grid geometry: rows x cols, plus the window's pixel dimensions where
+// the producer knows them (0 = unknown; a cell pixel size is
+// pixel/cells, the TIOCGWINSZ convention). Bounds are REQ-605a, pixel 0
+// stays legal, and which other zeros a field admits is a property of
+// the carrying field: docs/reference/ipc.md "Message families" tables it.
+message GridDims {
+  uint32 rows = 1;
+  uint32 cols = 2;
+  uint32 pixel_w = 3;
+  uint32 pixel_h = 4;
+}
+
+// Sub-region of an image, in image pixels (Kitty x/y/w/h).
+message SourceRect {
+  uint32 x = 1;
+  uint32 y = 2;
+  uint32 width = 3;
+  uint32 height = 4;
+}
+
+// Typed spawn parameters, shared by SessionCreate and OpsSpawn.
+//
+// command, args, and cwd are UTF-8, unlike env_base, which is bytes. A
+// client refuses a native value that is not valid UTF-8 before the wire
+// rather than substituting U+FFFD (REQ-105b).
+message SpawnArgs {
+  // Program to exec. Empty → default ($SHELL). UTF-8.
+  string command = 1;
+  // Argv after the program (excludes the program name). UTF-8.
+  repeated string args = 2;
+  // Working directory. Empty → inherit the daemon's cwd. UTF-8.
+  string cwd = 3;
+  // Extra env pairs, applied last: over the resolved base and over
+  // the daemon's identity stamps (REQ-912).
+  repeated EnvPair env = 4;
+  // Initial geometry. Absent asks for the daemon default (24x80);
+  // present must name rows and cols inside the REQ-605a bounds
+  // (1..=2048, so 0 is refused rather than defaulted), or the create is
+  // refused with ATTACH_FAILURE_GEOMETRY_OUT_OF_RANGE. Only the pixel
+  // axes keep 0 = unknown.
+  optional GridDims dims = 5;
+  // Opaque labels applied at creation (as OpsTag would afterwards).
+  repeated string tags = 6;
+  // Replaces child base environment (no overlay). Injected only when
+  // the carrier to the target daemon is a local socket, since over an
+  // SSH stdio relay the dialer environment names the wrong host.
+  // Absent falls back to relay snapshot or daemon birth env.
+  optional EnvBase env_base = 7;
+}
+
+// Knobs on a SearchQuery request.
+message SearchOptions {
+  // True: treat the query as a regex. False: plain substring.
+  bool regex = 1;
+  bool case_insensitive = 2;
+}
+
+// A decoded desktop notification's shared core.
+message Notification {
+  optional string title = 1;
+  string body = 2;
+  Urgency urgency = 3;
+}
+
+// A session's most recent decoded desktop notification.
+message SessionNotification {
+  Notification notification = 1;
+  // Seconds since the notification arrived, stamped at list-build time.
+  uint64 age_seconds = 2;
+}
+
+// One row in the daemon's session list (OpsListed).
+message SessionInfo {
+  // Daemon-assigned session id (u128 → 16 bytes, big-endian).
+  bytes id = 1;
+  GridDims dims = 2;
+  // Most recent OSC 0/2 window title, if any.
+  optional string title = 3;
+  // Most recent OSC 7 cwd, if any.
+  optional string cwd = 4;
+  // Seconds since the last detach, evaluated at list-build time.
+  // Absent while the session is attached; `0` is a session detached for
+  // under a second, not an attached one.
+  optional uint64 idle_seconds = 5;
+  // Opaque user-supplied labels (OpsTag). Empty when untagged.
+  repeated string tags = 6;
+  // Most recent decoded desktop notification, if any.
+  SessionNotification last_notification = 7;
+  // Foreground program comm, if resolvable.
+  optional string foreground = 8;
+  // Shell exited; session lingers in the post-exit grace. Exit-driven
+  // switches must skip it (attaching blocks the reap forever).
+  bool exited = 9;
+  // Exit code of the most recent completed command (youngest retained
+  // OSC 133 D mark), if any.
+  optional uint32 last_exit_code = 10;
+  // The session's live window attachments, oldest first. Empty for a
+  // parked session and for one only scripted Ops readers are on: an Ops
+  // attach has no window, so it is not addressable as a switch target.
+  repeated Attachment attachments = 11;
+  // Daemon-assigned creation sequence: monotonic across the daemon's
+  // lifetime, stamped once and never reused or reassigned; reaps leave
+  // gaps. It orders the switch ring, which random ids cannot. 1-based,
+  // and `0` is refused at decode: every row carries one.
+  uint64 sequence = 12;
+}
+
+// One live window attachment of a session, as OpsListed reports it.
+message Attachment {
+  // Daemon-lifetime attachment id: allocated per window attach, unique
+  // across every session the daemon holds, never reused. It names *this
+  // window*, which is why it rides the roster rather than the child
+  // environment: a PTY environment is fixed at spawn and shared by
+  // every mirror and every later re-attach.
+  uint64 id = 1;
+  // When the attach landed, on the daemon's clock. Absolute where the
+  // roster's other stamps are ages: the daemon owns the clock this is
+  // measured against, and a cross-host reader cannot re-derive an attach
+  // instant from its own. Typed rather than formatted, so the range is
+  // the type's and not a convention a reader has to parse.
+  google.protobuf.Timestamp attached_at = 2;
+  // This attachment is the session's last window input owner: the
+  // target a default-scope OpsSwitch resolves to. Exactly one
+  // attachment reports true, or none while the marker is clear.
+  bool input_owner = 3;
+}
+
+// ---------------------------------------------------------------------------
+// Conn (MessageKind::Conn, kind 0): the connection handshake
+// ---------------------------------------------------------------------------
+
+// Stream socket EOF is the liveness signal; no keepalive arm is needed.
+// Stream-lifecycle messages live in Conn as the control channel rather
+// than per-family, allowing the shared connection driver to enforce
+// exactly one terminal per stream uniformly.
+
+// Field 100 is the wire-wide `Correlation` slot, unused here: the
+// handshake arms predate any stream, and cancel/terminal name their
+// subject *inline*: a terminal whose stream_id went missing is
+// malformed, and an optional envelope field cannot say "required on
+// this arm".
+message ConnToDaemonMsg {
+  reserved 100;
+  oneof msg {
+    ConnHello hello = 1 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_DAEMON
+      correlation: CORRELATION_UNCORRELATED
+      modes: MODE_WINDOW
+      modes: MODE_OPS
+      modes: MODE_OBSERVER
+      phases: PHASE_HANDSHAKE
+    }];
+    ConnCancel cancel = 4 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_DAEMON
+      correlation: CORRELATION_UNCORRELATED
+      modes: MODE_WINDOW
+      modes: MODE_OPS
+      modes: MODE_OBSERVER
+      phases: PHASE_SETUP
+      phases: PHASE_ATTACHED
+      phases: PHASE_OBSERVING
+    }];
+  }
+}
+
+message ConnToClientMsg {
+  reserved 100;
+  oneof msg {
+    ConnWelcome welcome = 2 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_CLIENT
+      correlation: CORRELATION_UNCORRELATED
+      modes: MODE_WINDOW
+      modes: MODE_OPS
+      modes: MODE_OBSERVER
+      phases: PHASE_HANDSHAKE
+    }];
+    ConnRefused refused = 3 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_CLIENT
+      correlation: CORRELATION_UNCORRELATED
+      modes: MODE_WINDOW
+      modes: MODE_OPS
+      modes: MODE_OBSERVER
+      phases: PHASE_HANDSHAKE
+      phases: PHASE_SETUP
+      phases: PHASE_ATTACHED
+      phases: PHASE_OBSERVING
+    }];
+    ConnEnd end = 5 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_CLIENT
+      correlation: CORRELATION_UNCORRELATED
+      modes: MODE_WINDOW
+      modes: MODE_OPS
+      modes: MODE_OBSERVER
+      phases: PHASE_SETUP
+      phases: PHASE_ATTACHED
+      phases: PHASE_OBSERVING
+    }];
+    ConnError error = 6 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_CLIENT
+      correlation: CORRELATION_UNCORRELATED
+      modes: MODE_WINDOW
+      modes: MODE_OPS
+      modes: MODE_OBSERVER
+      phases: PHASE_SETUP
+      phases: PHASE_ATTACHED
+      phases: PHASE_OBSERVING
+    }];
+  }
+}
+
+// Client → daemon. First message on a new connection, the application
+// half of the handshake. The preface settled the version; what remains
+// is `mode`, which a daemon that cannot read it refuses with
+// REFUSAL_REASON_UNKNOWN_MODE.
+message ConnHello {
+  // What this connection is for. No body encoding: protobuf is the only
+  // one a frame ever carries.
+  ConnectionMode mode = 1;
+  // Demand-driven grid frame pacing optimization (client sends
+  // InputNextGridFrame per vsync; daemon emits coalesced diffs). Other
+  // features ship unconditionally: scroll directives and dimension
+  // announcements are cheap to honor, so a bitmap gates nothing real.
+  bool pull_paced = 2;
+}
+
+// Daemon → client. Reply to ConnHello. It echoes nothing back: version
+// selection is the preface's, and a Hello answered with this one named
+// a mode the daemon defines.
+message ConnWelcome {
+  // The daemon's build, typed: semver, full revision, dirty flag.
+  // Purely informational; the version gate is the preface, never this.
+  BuildIdentity identity = 1;
+}
+
+// Which build a felis process is. Canonical rendering
+// `<version> (<revision>[-dirty])` (docs/reference/workspace.md
+// "Versioning"); every process reads and writes that one form.
+message BuildIdentity {
+  // Cargo package semver, e.g. `0.1.0`.
+  string version = 1;
+  // Full lowercase-hex git revision, or `unknown` when the build had no
+  // git state (a tarball, or a Nix build without `gitHash`).
+  string revision = 2;
+  // The tracked working tree had uncommitted changes, so `revision`
+  // names the parent of what was compiled, not its source.
+  bool dirty = 3;
+}
+
+// Daemon → client. Refuses the connection, sent in place of ConnWelcome
+// (or, for a mode violation, in place of the answer the peer asked for);
+// the daemon then closes.
+message ConnRefused {
+  RefusalReason reason = 1;
+  // Human-readable specifics for logs and display. Never parsed.
+  string detail = 2;
+}
+
+// Client → daemon. Stop producing items for `stream_id`.
+// Races terminal in both directions: client accepts items until terminal
+// arrives, and daemon treats cancel of an already-terminated stream as
+// an idempotent no-op (the sender could not know terminal was in flight).
+// A stream never opened is treated as corruption.
+message ConnCancel {
+  uint64 stream_id = 1;
+}
+
+// Daemon → client. The stream produced everything it is going to.
+// Exactly one ConnEnd *or* ConnError per stream; an item or a second
+// terminal after it is corruption.
+message ConnEnd {
+  uint64 stream_id = 1;
+  // Items that preceded this terminator. 0 is normal (no hits, an empty
+  // region); the terminal is what says the stream ended cleanly.
+  uint32 count = 2;
+}
+
+// Daemon → client. The request failed, or the stream ended badly. Also
+// a stream's one terminal when it ends this way.
+message ConnError {
+  // Every typed error names its subject: a request that produced no
+  // reply, or a stream that produced no clean end. REQUIRED: an error
+  // no one can attribute is worse than none.
+  oneof subject {
+    uint64 request_id = 1;
+    uint64 stream_id = 2;
+  }
+  StreamErrorReason reason = 3;
+  // Human-readable specifics (the regex parse error, the stream cap).
+  // Never parsed.
+  string detail = 4;
+}
+
+// ---------------------------------------------------------------------------
+// InputMsg (MessageKind::Input, kind 1): client → daemon
+// ---------------------------------------------------------------------------
+
+message InputMsg {
+  // Un-correlated: keystrokes are connection-scoped pushes with no
+  // reply to match and no stream to close. Field 100 stays the
+  // envelope's wire-wide slot, reserved so nothing else claims it.
+  reserved 100;
+  oneof msg {
+    // KeyBytes(Vec<u8>): already-encoded keystroke bytes.
+    bytes key_bytes = 1 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_DAEMON
+      correlation: CORRELATION_UNCORRELATED
+      modes: MODE_WINDOW
+      modes: MODE_OPS
+      phases: PHASE_ATTACHED
+    }];
+    // Paste(Vec<u8>): bracketed-paste payload.
+    bytes paste = 2 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_DAEMON
+      correlation: CORRELATION_UNCORRELATED
+      modes: MODE_WINDOW
+      modes: MODE_OPS
+      phases: PHASE_ATTACHED
+    }];
+    InputMouseEvent mouse = 3 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_DAEMON
+      correlation: CORRELATION_UNCORRELATED
+      modes: MODE_WINDOW
+      modes: MODE_OPS
+      phases: PHASE_ATTACHED
+    }];
+    InputResize resize = 4 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_DAEMON
+      correlation: CORRELATION_UNCORRELATED
+      modes: MODE_WINDOW
+      modes: MODE_OPS
+      phases: PHASE_ATTACHED
+    }];
+    InputFocusChange focus_change = 5 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_DAEMON
+      correlation: CORRELATION_UNCORRELATED
+      modes: MODE_WINDOW
+      modes: MODE_OPS
+      phases: PHASE_ATTACHED
+    }];
+    InputColorScheme color_scheme = 6 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_DAEMON
+      correlation: CORRELATION_UNCORRELATED
+      modes: MODE_WINDOW
+      modes: MODE_OPS
+      phases: PHASE_ATTACHED
+    }];
+    InputViewport viewport = 7 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_DAEMON
+      correlation: CORRELATION_UNCORRELATED
+      modes: MODE_WINDOW
+      modes: MODE_OPS
+      phases: PHASE_ATTACHED
+    }];
+    InputJumpPrompt jump_prompt = 8 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_DAEMON
+      correlation: CORRELATION_UNCORRELATED
+      modes: MODE_WINDOW
+      modes: MODE_OPS
+      phases: PHASE_ATTACHED
+    }];
+    InputNextGridFrame next_grid_frame = 9 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_DAEMON
+      correlation: CORRELATION_UNCORRELATED
+      modes: MODE_WINDOW
+      modes: MODE_OPS
+      phases: PHASE_ATTACHED
+    }];
+    // Key(KeyEvent): a physical key event the daemon encodes against
+    // the keyboard modes it owns.
+    InputKeyEvent key = 10 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_DAEMON
+      correlation: CORRELATION_UNCORRELATED
+      modes: MODE_WINDOW
+      modes: MODE_OPS
+      phases: PHASE_ATTACHED
+    }];
+  }
+}
+
+// A single mouse event.
+message InputMouseEvent {
+  // Unset when action is MOUSE_ACTION_MOTION (no button involved).
+  MouseButton button = 1;
+  MouseAction action = 2;
+  // InputMods bitflags (u8): raw bits; see messages.rs (SHIFT/ALT/CTRL).
+  uint32 mods = 3;
+  // Cell column, 1-based.
+  uint32 x = 4;
+  // Cell row, 1-based.
+  uint32 y = 5;
+  // Pixel column within the text area, 1-based (?1016 SGR-pixels).
+  uint32 px = 6;
+  // Pixel row within the text area, 1-based.
+  uint32 py = 7;
+}
+
+// One physical key event. The client resolves the logical key and its
+// keymap bindings; the daemon owns the mode-dependent byte encoding.
+message InputKeyEvent {
+  KeyId key = 1;
+  // The text the OS composed for this keystroke, at most
+  // MAX_KEY_TEXT_BYTES of UTF-8. Optional because an empty composition
+  // is not an absent one.
+  optional string text = 2;
+  // KeyMods bitflags (u8): raw bits; see messages.rs
+  // (CTRL/SHIFT/ALT/SUPER). Wider than InputMods by SUPER.
+  uint32 mods = 3;
+  KeyEventKind kind = 4;
+  KeyLocation location = 5;
+}
+
+// Window resize: drives SIGWINCH. Carries GridDims rather than loose
+// row/col/pixel fields: GridDims is the one geometry vocabulary.
+message InputResize {
+  // Clamped into the REQ-605a bounds on receipt; never refused.
+  GridDims dims = 1;
+}
+
+// Window-focus change.
+message InputFocusChange {
+  bool focused = 1;
+}
+
+// OS color-scheme report. true = dark, false = light.
+message InputColorScheme {
+  bool dark = 1;
+}
+
+// Scrollback viewport request.
+message InputViewport {
+  // Scrollback rows to lift the visible window by; 0 tracks live bottom.
+  uint32 lines_from_bottom = 1;
+}
+
+// Prompt-jump request.
+message InputJumpPrompt {
+  PromptJump direction = 1;
+}
+
+// Demand-driven frame request. Empty: an echoed grid-frame seq would
+// have nothing daemon-side to compare against, since the daemon keeps no
+// count of the frames it emitted.
+message InputNextGridFrame {}
+
+// ---------------------------------------------------------------------------
+// GridMsg (MessageKind::Grid, kind 2): daemon → client
+// ---------------------------------------------------------------------------
+
+message GridMsg {
+  // Un-correlated, and the hot path: a row delta is a connection-scoped
+  // push, and the rehydrate burst is one too (it answers the attach,
+  // not a request id). Reserving the slot rather than setting it is
+  // what keeps a RowDelta byte-for-byte what it was.
+  reserved 100;
+  oneof msg {
+    GridRehydrateBegin rehydrate_begin = 1 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_CLIENT
+      correlation: CORRELATION_UNCORRELATED
+      modes: MODE_WINDOW
+      modes: MODE_OPS
+      phases: PHASE_ATTACHED
+    }];
+    GridRehydrateEnd rehydrate_end = 2 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_CLIENT
+      correlation: CORRELATION_UNCORRELATED
+      modes: MODE_WINDOW
+      modes: MODE_OPS
+      phases: PHASE_ATTACHED
+    }];
+    GridRowDelta row_delta = 3 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_CLIENT
+      correlation: CORRELATION_UNCORRELATED
+      modes: MODE_WINDOW
+      modes: MODE_OPS
+      phases: PHASE_ATTACHED
+    }];
+    GridScrolled scrolled = 4 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_CLIENT
+      correlation: CORRELATION_UNCORRELATED
+      modes: MODE_WINDOW
+      modes: MODE_OPS
+      phases: PHASE_ATTACHED
+    }];
+    GridCluster cluster = 5 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_CLIENT
+      correlation: CORRELATION_UNCORRELATED
+      modes: MODE_WINDOW
+      modes: MODE_OPS
+      phases: PHASE_ATTACHED
+    }];
+    GridHyperlink hyperlink = 6 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_CLIENT
+      correlation: CORRELATION_UNCORRELATED
+      modes: MODE_WINDOW
+      modes: MODE_OPS
+      phases: PHASE_ATTACHED
+    }];
+    GridCursorState cursor_state = 7 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_CLIENT
+      correlation: CORRELATION_UNCORRELATED
+      modes: MODE_WINDOW
+      modes: MODE_OPS
+      phases: PHASE_ATTACHED
+    }];
+    GridViewportState viewport_state = 8 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_CLIENT
+      correlation: CORRELATION_UNCORRELATED
+      modes: MODE_WINDOW
+      modes: MODE_OPS
+      phases: PHASE_ATTACHED
+    }];
+    GridSize size = 9 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_CLIENT
+      correlation: CORRELATION_UNCORRELATED
+      modes: MODE_WINDOW
+      modes: MODE_OPS
+      phases: PHASE_ATTACHED
+    }];
+    GridTitle title = 10 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_CLIENT
+      correlation: CORRELATION_UNCORRELATED
+      modes: MODE_WINDOW
+      modes: MODE_OPS
+      phases: PHASE_ATTACHED
+    }];
+    GridCwd cwd = 11 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_CLIENT
+      correlation: CORRELATION_UNCORRELATED
+      modes: MODE_WINDOW
+      modes: MODE_OPS
+      phases: PHASE_ATTACHED
+    }];
+    GridPromptMark prompt_mark = 12 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_CLIENT
+      correlation: CORRELATION_UNCORRELATED
+      modes: MODE_WINDOW
+      modes: MODE_OPS
+      phases: PHASE_ATTACHED
+    }];
+    GridThemeColor theme_color = 13 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_CLIENT
+      correlation: CORRELATION_UNCORRELATED
+      modes: MODE_WINDOW
+      modes: MODE_OPS
+      phases: PHASE_ATTACHED
+    }];
+    GridPointerShape pointer_shape = 14 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_CLIENT
+      correlation: CORRELATION_UNCORRELATED
+      modes: MODE_WINDOW
+      modes: MODE_OPS
+      phases: PHASE_ATTACHED
+    }];
+    GridKittyKbdFlags kitty_kbd_flags = 15 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_CLIENT
+      correlation: CORRELATION_UNCORRELATED
+      modes: MODE_WINDOW
+      modes: MODE_OPS
+      phases: PHASE_ATTACHED
+    }];
+    GridModeFlags mode_flags = 16 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_CLIENT
+      correlation: CORRELATION_UNCORRELATED
+      modes: MODE_WINDOW
+      modes: MODE_OPS
+      phases: PHASE_ATTACHED
+    }];
+    GridAttention attention = 17 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_CLIENT
+      correlation: CORRELATION_UNCORRELATED
+      modes: MODE_WINDOW
+      modes: MODE_OPS
+      phases: PHASE_ATTACHED
+    }];
+    GridClipboardSet clipboard_set = 18 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_CLIENT
+      correlation: CORRELATION_UNCORRELATED
+      modes: MODE_WINDOW
+      modes: MODE_OPS
+      phases: PHASE_ATTACHED
+    }];
+    GridPaletteColor palette_color = 19 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_CLIENT
+      correlation: CORRELATION_UNCORRELATED
+      modes: MODE_WINDOW
+      modes: MODE_OPS
+      phases: PHASE_ATTACHED
+    }];
+    GridPaletteResetAll palette_reset_all = 20 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_CLIENT
+      correlation: CORRELATION_UNCORRELATED
+      modes: MODE_WINDOW
+      modes: MODE_OPS
+      phases: PHASE_ATTACHED
+    }];
+    GridCycleEnd cycle_end = 21 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_CLIENT
+      correlation: CORRELATION_UNCORRELATED
+      modes: MODE_WINDOW
+      modes: MODE_OPS
+      phases: PHASE_ATTACHED
+    }];
+  }
+}
+
+// End of one pull-paced compose cycle: every message composed for that
+// pull precedes it. Empty: the cycle it closes is the one the ordered
+// stream just delivered, and a client keeps one pull outstanding, so
+// there is nothing to correlate against.
+message GridCycleEnd {}
+
+// Start of a fresh-attach rehydration.
+message GridRehydrateBegin {}
+
+// End of the rehydration burst.
+message GridRehydrateEnd {}
+
+// One cycle's worth of dirty-row cell data. A single dirty row is a
+// one-entry batch.
+message GridRowDelta {
+  repeated RowEntry rows = 1;
+}
+
+// Scroll directive for a region of the grid.
+message GridScrolled {
+  uint32 region_top = 1;
+  uint32 region_bottom = 2;
+  uint32 n_rows = 3;
+  ScrollDirection direction = 4;
+}
+
+// Grapheme-cluster registry entry. Every entry a row references is
+// shipped before that row: the daemon sends an entry when a RowDelta
+// it is about to emit names it, so the ids arrive in reference order
+// (permuted, with holes a later message fills) rather than as a dense
+// table ahead of the first row.
+message GridCluster {
+  // 1-based id matching a Grapheme::Cluster handle.
+  uint32 id = 1;
+  string text = 2;
+}
+
+// Hyperlink registry entry (OSC 8). Ordered like GridCluster: every
+// entry a row references is shipped before that row.
+message GridHyperlink {
+  // 1-based id matching Cell.link (u16 on the daemon side).
+  uint32 id = 1;
+  // OSC 8 id= parameter, if supplied.
+  optional string anchor = 2;
+  string uri = 3;
+}
+
+// Cursor update.
+message GridCursorState {
+  uint32 row = 1;
+  uint32 col = 2;
+  bool visible = 3;
+  CursorStyle style = 4;
+  bool blink = 5;
+}
+
+// Scrollback-viewport mirror.
+message GridViewportState {
+  uint32 lines_from_bottom = 1;
+  // Total composable rows = retained scrollback + live row count.
+  uint32 max = 2;
+}
+
+// Authoritative grid dimensions changed mid-stream.
+message GridSize {
+  GridDims dims = 1;
+}
+
+// Window-title update (OSC 0/2).
+message GridTitle {
+  string value = 1;
+}
+
+// Working-directory update (OSC 7).
+message GridCwd {
+  string value = 1;
+}
+
+// Shell semantic-prompt boundary (OSC 133).
+message GridPromptMark {
+  // Absolute line the mark fired on.
+  uint64 line = 1;
+  PromptKind kind = 2;
+  // Some(code) for OSC 133 ; D ; <code>; unset otherwise.
+  optional uint32 exit_code = 3;
+}
+
+// Theme override (OSC 10/11/12 set, 110/111/112 reset).
+message GridThemeColor {
+  ThemeChannel channel = 1;
+  // Explicit rather than "absent rgb means reset": a truncated or
+  // malformed set must fail the decode, not read as a reset.
+  oneof action {
+    Rgb set = 2;
+    ThemeReset reset = 3;
+  }
+}
+
+// The reset arm of GridThemeColor.action.
+message ThemeReset {}
+
+// One indexed-palette slot changed: OSC 4 set or OSC 104 per-index
+// reset.
+message GridPaletteColor {
+  // Palette index, 0..=255. Wider values are rejected on decode.
+  uint32 index = 1;
+  // Explicit rather than "absent rgb means reset": a truncated or
+  // malformed set must fail the decode, not read as a reset.
+  oneof action {
+    Rgb set = 2;
+    PaletteReset reset = 3;
+  }
+}
+
+// The reset arm of GridPaletteColor.action.
+message PaletteReset {}
+
+// Bare OSC 104: every index back to its xterm-256 baseline. Distinct
+// from a per-index reset: the receiver drops the whole override layer
+// without being told which indices were in it. Does not touch the
+// OSC 10/11/12 channels.
+message GridPaletteResetAll {}
+
+// Mouse-pointer shape request (OSC 22).
+message GridPointerShape {
+  // CSS cursor keyword; unset resets to the default arrow.
+  optional string name = 1;
+}
+
+// Active Kitty keyboard flag bitmap.
+message GridKittyKbdFlags {
+  // u8 bitmap; 0 means the legacy encoding is active.
+  uint32 flags = 1;
+}
+
+// Mode-bit mirror.
+message GridModeFlags {
+  bool bracketed_paste = 1;
+  bool alt_screen = 2;
+  MouseProtocol mouse_protocol = 3;
+  bool application_cursor = 4;
+  ModifyOtherKeys modify_other_keys = 5;
+  bool application_keypad = 6;
+  // ?9001 win32-input-mode: client emits win32-input key records so a
+  // Windows daemon's ConPTY can rebuild faithful INPUT_RECORDs.
+  bool win32_input_mode = 7;
+  // ?5 DECSCNM: renderer XORs this with each cell's SGR 7 and swaps the
+  // effective fg/bg, plus the frame's default-background fill.
+  bool reverse_video = 8;
+}
+
+// The session asked for the user's attention (BEL or desktop notification).
+message GridAttention {
+  AttentionSource source = 1;
+}
+
+// OSC 52 clipboard write.
+message GridClipboardSet {
+  // ClipboardSelection bitmap of OS targets (u8 bits: c=1, p=2).
+  uint32 selection = 1;
+  bytes data = 2;
+}
+
+// ---------------------------------------------------------------------------
+// ImageMsg (MessageKind::Image, kind 3): daemon → client
+// (ImageId / PlacementId are bare u32, not u128; no bytes mapping here.)
+// ---------------------------------------------------------------------------
+
+message ImageMsg {
+  // Un-correlated connection-scoped push, like GridMsg.
+  reserved 100;
+  oneof msg {
+    ImageHeader header = 1 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_CLIENT
+      correlation: CORRELATION_UNCORRELATED
+      modes: MODE_WINDOW
+      modes: MODE_OPS
+      phases: PHASE_ATTACHED
+    }];
+    ImageChunk chunk = 2 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_CLIENT
+      correlation: CORRELATION_UNCORRELATED
+      modes: MODE_WINDOW
+      modes: MODE_OPS
+      phases: PHASE_ATTACHED
+    }];
+    ImageComplete complete = 3 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_CLIENT
+      correlation: CORRELATION_UNCORRELATED
+      modes: MODE_WINDOW
+      modes: MODE_OPS
+      phases: PHASE_ATTACHED
+    }];
+    ImageDelete delete = 4 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_CLIENT
+      correlation: CORRELATION_UNCORRELATED
+      modes: MODE_WINDOW
+      modes: MODE_OPS
+      phases: PHASE_ATTACHED
+    }];
+    ImagePlacement placement = 5 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_CLIENT
+      correlation: CORRELATION_UNCORRELATED
+      modes: MODE_WINDOW
+      modes: MODE_OPS
+      phases: PHASE_ATTACHED
+    }];
+    ImagePlacementRemoved placement_removed = 6 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_CLIENT
+      correlation: CORRELATION_UNCORRELATED
+      modes: MODE_WINDOW
+      modes: MODE_OPS
+      phases: PHASE_ATTACHED
+    }];
+    ImageVirtualPlacement virtual_placement = 7 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_CLIENT
+      correlation: CORRELATION_UNCORRELATED
+      modes: MODE_WINDOW
+      modes: MODE_OPS
+      phases: PHASE_ATTACHED
+    }];
+    ImageShowFrame show_frame = 8 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_CLIENT
+      correlation: CORRELATION_UNCORRELATED
+      modes: MODE_WINDOW
+      modes: MODE_OPS
+      phases: PHASE_ATTACHED
+    }];
+    ImagePlacementsShifted placements_shifted = 9 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_CLIENT
+      correlation: CORRELATION_UNCORRELATED
+      modes: MODE_WINDOW
+      modes: MODE_OPS
+      phases: PHASE_ATTACHED
+    }];
+  }
+}
+
+// Opens a transfer and says what its bytes become. Exactly one target
+// arm is set; an unset oneof is malformed. The transfer that follows
+// is Header -> Chunk* -> Complete, and no other transfer may open
+// until it closes.
+message ImageHeader {
+  // ImageId (Kitty i=), bare u32.
+  uint32 id = 1;
+  oneof target {
+    ImageNew image = 2;
+    ImageFrame frame = 3;
+  }
+}
+
+// A fresh image under this id: it replaces whatever the id held,
+// animation frames included. The byte count of every buffer this image
+// ever carries is width * height * bytes_per_pixel(format).
+message ImageNew {
+  uint32 width = 1;
+  uint32 height = 2;
+  ImageFormat format = 3;
+}
+
+// One frame of an image already transferred, in Kitty's 1-based
+// numbering: 1 is the root frame, N in 2..=frames+1 edits frame N or
+// appends when N is one past the last. 0 and anything further ahead
+// are malformed. Geometry is inherited and cannot be restated.
+message ImageFrame {
+  uint32 number = 1;
+}
+
+// Pixel bytes appended to the open transfer, in order. `id` must name
+// the open transfer's image.
+message ImageChunk {
+  uint32 id = 1;
+  bytes bytes = 2;
+}
+
+// The open transfer delivered every byte it announced. A Complete
+// whose chunks fell short of that count is malformed.
+message ImageComplete {
+  uint32 id = 1;
+}
+
+// Drop an image and any placements referencing it.
+message ImageDelete {
+  uint32 id = 1;
+}
+
+// New / updated placement record.
+message ImagePlacement {
+  uint32 image_id = 1;
+  // PlacementId (p=); unset = the image's default placement.
+  optional uint32 placement_id = 2;
+  // 1-based anchor row; <= 0 anchors in scrollback (i32).
+  sint32 anchor_row = 3;
+  uint32 anchor_col = 4;
+  uint32 cols = 5;
+  uint32 rows = 6;
+  // Source-rectangle within the image, when set.
+  SourceRect source = 7;
+  // Z-index from z= (i32).
+  sint32 z_index = 8;
+}
+
+// Remove one placement.
+message ImagePlacementRemoved {
+  uint32 image_id = 1;
+  // Unset matches the default placement.
+  optional uint32 placement_id = 2;
+}
+
+// A Kitty Unicode-placeholder virtual placement (U=1).
+message ImageVirtualPlacement {
+  uint32 image_id = 1;
+  uint32 cols = 2;
+  uint32 rows = 3;
+  // Z-index from z= (i32).
+  sint32 z_index = 4;
+}
+
+// Display frame `number` of image id now, in the same 1-based
+// numbering ImageFrame uses.
+message ImageShowFrame {
+  uint32 id = 1;
+  uint32 number = 2;
+}
+
+// Every placement's anchor shifted up by `lines`.
+message ImagePlacementsShifted {
+  uint32 lines = 1;
+}
+
+// ---------------------------------------------------------------------------
+// Session (MessageKind::Session, kind 4): this connection's session
+// ---------------------------------------------------------------------------
+
+// The fence pair is the one arm pair that uses the `Correlation` slot:
+// a caller may put several barriers on one connection, so each reply
+// names the fence it answers. Attach and Create happen once per
+// connection, in the attach phase the driver already sequences, so
+// their acks answer without an id.
+
+message SessionToDaemonMsg {
+  oneof msg {
+    SessionAttach attach = 1 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_DAEMON
+      correlation: CORRELATION_UNCORRELATED
+      modes: MODE_WINDOW
+      modes: MODE_OPS
+      phases: PHASE_SETUP
+    }];
+    SessionCreate create = 2 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_DAEMON
+      correlation: CORRELATION_UNCORRELATED
+      modes: MODE_WINDOW
+      modes: MODE_OPS
+      phases: PHASE_SETUP
+    }];
+    SessionDetach detach = 3 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_DAEMON
+      correlation: CORRELATION_UNCORRELATED
+      modes: MODE_WINDOW
+      modes: MODE_OPS
+      phases: PHASE_ATTACHED
+    }];
+    SessionConfigureTheme configure_theme = 4 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_DAEMON
+      correlation: CORRELATION_UNCORRELATED
+      modes: MODE_WINDOW
+      modes: MODE_OPS
+      phases: PHASE_ATTACHED
+    }];
+    SessionInputFence input_fence = 8 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_DAEMON
+      correlation: CORRELATION_REQUEST_OPENER
+      modes: MODE_WINDOW
+      modes: MODE_OPS
+      phases: PHASE_ATTACHED
+    }];
+  }
+  Correlation correlation = 100;
+}
+
+message SessionToClientMsg {
+  oneof msg {
+    SessionAttached attached = 5 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_CLIENT
+      correlation: CORRELATION_UNCORRELATED
+      modes: MODE_WINDOW
+      modes: MODE_OPS
+      phases: PHASE_SETUP
+    }];
+    SessionAttachFailed attach_failed = 6 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_CLIENT
+      correlation: CORRELATION_UNCORRELATED
+      modes: MODE_WINDOW
+      modes: MODE_OPS
+      phases: PHASE_SETUP
+    }];
+    SessionCreated created = 7 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_CLIENT
+      correlation: CORRELATION_UNCORRELATED
+      modes: MODE_WINDOW
+      modes: MODE_OPS
+      phases: PHASE_SETUP
+    }];
+    SessionInputAccepted input_accepted = 9 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_CLIENT
+      correlation: CORRELATION_REQUEST_REPLY
+      modes: MODE_WINDOW
+      modes: MODE_OPS
+      phases: PHASE_ATTACHED
+    }];
+  }
+  Correlation correlation = 100;
+}
+
+// Client → daemon. Attach to the named idle session. REQUIRED: an
+// unset `target` is malformed and is refused at decode.
+message SessionAttach {
+  // Which session to land on. A union rather than sibling fields, so
+  // neither "both" nor "neither" is something a sender built from the
+  // schema can produce.
+  oneof target {
+    // Session id (u128 → 16 bytes, big-endian).
+    bytes id = 1;
+    // Lowercase hex session-id prefix (1-32 digits), resolved in the
+    // same step that takes the session handle, so nothing slips
+    // between the resolution and the attach.
+    string id_prefix = 3;
+  }
+  // Refuse this attach if the session's shell has already exited: the
+  // form every *system-selected* landing uses, checked inside the
+  // session actor so the answer cannot race the exit. A deliberate
+  // attach leaves it false and may land on a corpse (`ipc.md`
+  // "Session (kind = 4)").
+  bool live_only = 2;
+}
+
+// Client → daemon. Create a new session and attach this connection to
+// it in one step, answered by SessionCreated. The atomicity is the
+// point: between a create's ack and a follow-up attach the pool would
+// show a session whose creator was never told its id. A spawn that
+// wants no window is OpsSpawn.
+message SessionCreate {
+  SpawnArgs args = 1;
+}
+
+// Client → daemon. The window is closing; the session lives on.
+message SessionDetach {}
+
+// Client → daemon. Report the client's configured theme colors. Each
+// channel is present when set, absent to leave the renderer/xterm default.
+message SessionConfigureTheme {
+  // Configured default foreground (OSC 10).
+  Rgb fg = 1;
+  // Configured default background (OSC 11).
+  Rgb bg = 2;
+  // Configured cursor color (OSC 12).
+  Rgb cursor = 3;
+}
+
+// Daemon → client. A SessionAttach landed; the rehydrate burst follows.
+// The full SessionInfo rather than a bare id + dims pair, so no client
+// pads a placeholder roster row out of the ack.
+message SessionAttached {
+  SessionInfo info = 1;
+}
+
+// Daemon → client. A SessionCreate landed: the session exists and this
+// connection is already subscribed, so the rehydrate burst follows
+// exactly as after SessionAttached.
+message SessionCreated {
+  SessionInfo info = 1;
+}
+
+// Client → daemon. Barrier over this connection's earlier InputMsg
+// frames, answered by SessionInputAccepted on the fence's request id.
+message SessionInputFence {}
+
+// Daemon → client. Every Input frame before the fence is processed and
+// the bytes key_bytes, paste, key and mouse encoded to are admitted and
+// queued to the PTY writer. The reports the other arms generate (DECSET
+// 1004 focus, 2031 color scheme, 2048 resize) are unreserved writes
+// attempted ahead of this reply; `ipc.md` "Session (kind = 4)" rules.
+message SessionInputAccepted {}
+
+// Daemon → client. Attach or create refused. The arm names which half
+// refused, so a SessionCreate's spawn refusal and the attach race that
+// can follow a successful spawn are never one vocabulary.
+message SessionAttachFailed {
+  oneof reason {
+    AttachFailure attach = 1;
+    CreateFailure create = 2;
+  }
+  // Human-readable specifics (the exec error behind a SPAWN_FAILED).
+  // Empty for the reasons that carry no dynamic value. Never parsed.
+  string detail = 3;
+}
+
+// ---------------------------------------------------------------------------
+// Ops (MessageKind::Ops, kind 5): request/reply ops on named
+// other sessions. Several may be in flight on one connection; the
+// request_id in each reply's envelope is what pairs them.
+// ---------------------------------------------------------------------------
+
+// Every Ops verb is a request whose reply echoes the request_id,
+// which lets several requests be in flight on one connection
+// instead of one verb per connection.
+
+message OpsToDaemonMsg {
+  oneof msg {
+    OpsList list = 1 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_DAEMON
+      correlation: CORRELATION_REQUEST_OPENER
+      modes: MODE_WINDOW
+      modes: MODE_OPS
+      phases: PHASE_SETUP
+      phases: PHASE_ATTACHED
+    }];
+    OpsDestroy destroy = 3 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_DAEMON
+      correlation: CORRELATION_REQUEST_OPENER
+      modes: MODE_OPS
+      phases: PHASE_SETUP
+      phases: PHASE_ATTACHED
+    }];
+    OpsForceDetach force_detach = 5 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_DAEMON
+      correlation: CORRELATION_REQUEST_OPENER
+      modes: MODE_OPS
+      phases: PHASE_SETUP
+      phases: PHASE_ATTACHED
+    }];
+    OpsSwitch switch = 7 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_DAEMON
+      correlation: CORRELATION_REQUEST_OPENER
+      modes: MODE_OPS
+      phases: PHASE_SETUP
+      phases: PHASE_ATTACHED
+    }];
+    OpsTag tag = 9 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_DAEMON
+      correlation: CORRELATION_REQUEST_OPENER
+      modes: MODE_OPS
+      phases: PHASE_SETUP
+      phases: PHASE_ATTACHED
+    }];
+    OpsStatus status = 11 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_DAEMON
+      correlation: CORRELATION_REQUEST_OPENER
+      modes: MODE_WINDOW
+      modes: MODE_OPS
+      phases: PHASE_SETUP
+      phases: PHASE_ATTACHED
+    }];
+    OpsSpawn spawn = 13 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_DAEMON
+      correlation: CORRELATION_REQUEST_OPENER
+      modes: MODE_OPS
+      phases: PHASE_SETUP
+      phases: PHASE_ATTACHED
+    }];
+    // Setup only: the reply is the last frame its connection writes,
+    // and only that phase writes one inline.
+    OpsStop stop = 15 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_DAEMON
+      correlation: CORRELATION_REQUEST_OPENER
+      modes: MODE_OPS
+      phases: PHASE_SETUP
+    }];
+    OpsInfo info = 17 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_DAEMON
+      correlation: CORRELATION_REQUEST_OPENER
+      modes: MODE_WINDOW
+      modes: MODE_OPS
+      phases: PHASE_SETUP
+      phases: PHASE_ATTACHED
+    }];
+  }
+  Correlation correlation = 100;
+}
+
+message OpsToClientMsg {
+  oneof msg {
+    OpsListed listed = 2 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_CLIENT
+      correlation: CORRELATION_REQUEST_REPLY
+      modes: MODE_WINDOW
+      modes: MODE_OPS
+      phases: PHASE_SETUP
+      phases: PHASE_ATTACHED
+    }];
+    OpsDestroyed destroyed = 4 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_CLIENT
+      correlation: CORRELATION_REQUEST_REPLY
+      modes: MODE_OPS
+      phases: PHASE_SETUP
+      phases: PHASE_ATTACHED
+    }];
+    OpsDetached detached = 6 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_CLIENT
+      correlation: CORRELATION_REQUEST_REPLY
+      modes: MODE_OPS
+      phases: PHASE_SETUP
+      phases: PHASE_ATTACHED
+    }];
+    OpsSwitched switched = 8 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_CLIENT
+      correlation: CORRELATION_REQUEST_REPLY
+      modes: MODE_OPS
+      phases: PHASE_SETUP
+      phases: PHASE_ATTACHED
+    }];
+    OpsTagsUpdated tags_updated = 10 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_CLIENT
+      correlation: CORRELATION_REQUEST_REPLY
+      modes: MODE_OPS
+      phases: PHASE_SETUP
+      phases: PHASE_ATTACHED
+    }];
+    OpsStatusReply status_reply = 12 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_CLIENT
+      correlation: CORRELATION_REQUEST_REPLY
+      modes: MODE_WINDOW
+      modes: MODE_OPS
+      phases: PHASE_SETUP
+      phases: PHASE_ATTACHED
+    }];
+    OpsSpawned spawned = 14 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_CLIENT
+      correlation: CORRELATION_REQUEST_REPLY
+      modes: MODE_OPS
+      phases: PHASE_SETUP
+      phases: PHASE_ATTACHED
+    }];
+    OpsStopReply stop_reply = 16 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_CLIENT
+      correlation: CORRELATION_REQUEST_REPLY
+      modes: MODE_OPS
+      phases: PHASE_SETUP
+    }];
+    OpsInfoReply info_reply = 18 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_CLIENT
+      correlation: CORRELATION_REQUEST_REPLY
+      modes: MODE_WINDOW
+      modes: MODE_OPS
+      phases: PHASE_SETUP
+      phases: PHASE_ATTACHED
+    }];
+  }
+  Correlation correlation = 100;
+}
+
+// Client → daemon. Create a session this connection does not attach
+// to. Here rather than in the Session family so several spawns can be in
+// flight on one connection, each reply attributed by its request_id.
+message OpsSpawn {
+  SpawnArgs args = 1;
+}
+
+// Daemon → client. Reply to OpsSpawn. A refusal is an arm of the
+// outcome, as ResolvedId is for the prefix verbs: the connection is
+// fine, the request is not.
+message OpsSpawned {
+  oneof outcome {
+    SessionInfo ok = 1;
+    SpawnRefused refused = 2;
+  }
+}
+
+// The refusal half of OpsSpawned. An OpsSpawn subscribes to nothing,
+// so its whole vocabulary is the spawn half's and the type says so.
+message SpawnRefused {
+  CreateFailure reason = 1;
+  string detail = 2;
+}
+
+// Client → daemon. One session's roster row, by prefix. Separate from
+// OpsList so `sessions info` owes no roster round trip for either the
+// row or its short id.
+message OpsInfo {
+  // Lowercase hex session-id prefix (1-32 digits), resolved against
+  // the pool daemon-side.
+  string id_prefix = 1;
+}
+
+// Daemon → client. Reply to OpsInfo. A closed outcome union in the
+// OpsSpawned style: only the successful arm carries session data, so a
+// failed resolution cannot be read as an empty row.
+message OpsInfoReply {
+  oneof outcome {
+    OpsInfoFound found = 1;
+    OpsInfoNoMatch no_match = 2;
+    OpsInfoAmbiguous ambiguous = 3;
+  }
+}
+
+// The successful half of OpsInfoReply.
+message OpsInfoFound {
+  // The same row OpsListed carries.
+  SessionInfo session = 1;
+  // The display prefix, shortened against the whole pool at reply
+  // time: checked against the authoritative roster, so it is never a
+  // prefix the daemon would go on to refuse.
+  string short_id = 2;
+}
+
+// The prefix matched no pooled session.
+message OpsInfoNoMatch {}
+
+// The prefix matched more than one pooled session.
+message OpsInfoAmbiguous {
+  // How many, so the caller can ask for a longer prefix.
+  uint32 matches = 1;
+}
+
+// Client → daemon. Request the daemon's current session roster.
+message OpsList {}
+
+// Daemon → client. Reply to OpsList.
+message OpsListed {
+  repeated SessionInfo sessions = 1;
+}
+
+// Client → daemon. Remove the named session from the pool.
+message OpsDestroy {
+  // Lowercase hex session-id prefix (1-32 digits), resolved against
+  // the pool daemon-side, never a full id the client pre-resolved
+  // against its own OpsList round-trip.
+  string id_prefix = 1;
+}
+
+// Daemon → client. Reply to OpsDestroy.
+message OpsDestroyed {
+  // The prefix resolution: Ok carries the destroyed session's full id.
+  ResolvedId resolved = 1;
+}
+
+// Client → daemon. Force-detach the client attached to the named session.
+message OpsForceDetach {
+  string id_prefix = 1;
+}
+
+// Daemon → client. Reply to OpsForceDetach.
+message OpsDetached {
+  ResolvedId resolved = 1;
+  bool was_attached = 2;
+}
+
+// Client → daemon. Ask subscribers of `from` to move to `target`.
+message OpsSwitch {
+  string from_prefix = 1;
+  SwitchTarget target = 2;
+  // Which of `from`'s window attachments the push reaches. Required:
+  // an UNSET scope is malformed and is refused at decode.
+  SwitchScope scope = 3;
+}
+
+// Which of an OpsSwitch's window attachments receive the push. A closed
+// set: resolution and enqueue happen in one step inside the session, so
+// there is no state between "which windows" and "pushed".
+message SwitchScope {
+  oneof scope {
+    // The session's last window input owner, else the sole attached
+    // window; neither resolves to SwitchNoInputOwner.
+    SwitchScopeDefault default = 1;
+    // One attachment, by its Attachment.id. A stale id is refused at
+    // resolve time (SwitchDenied.no_such_attachment), never redirected.
+    uint64 attachment = 2;
+  }
+}
+message SwitchScopeDefault {}
+
+// Where the subscribers of an OpsSwitch's `from` should go. Data-carrying
+// on both arms, so a oneof: a session-id prefix on this daemon, or a
+// carrier descriptor for a session on another one (window retarget).
+message SwitchTarget {
+  oneof target {
+    // Session prefix: a session on this daemon, resolved like every
+    // other id_prefix.
+    string session = 1;
+    RetargetTarget carrier = 2;
+  }
+}
+
+// How the daemon resolved a request's session-id prefix. A oneof so
+// the failure shapes stay typed: the CLI renders the remedy from the
+// arm, not from prose.
+message ResolvedId {
+  oneof result {
+    // Exactly one pooled session matches; its full id (16 bytes,
+    // big-endian).
+    bytes ok = 1;
+    // No pooled session matches.
+    ResolvedNoMatch no_match = 2;
+    // More than one pooled session matches; the count, so the caller
+    // can say how many and ask for a longer prefix.
+    uint32 ambiguous = 3;
+  }
+}
+message ResolvedNoMatch {}
+
+// SSH-stdio carrier coordinates for a RetargetTarget.
+message SshEndpoint {
+  // Passed verbatim to `ssh` (`user@host`, an `~/.ssh/config` alias, or
+  // an `ssh://user@host:port` URI). felis never parses it; `ssh` resolves
+  // it against the *client's* config.
+  string destination = 1;
+  // Argument tokens spliced between `ssh` and the destination, verbatim
+  // and uninterpreted (`-p`, `2222`, `-oProxyCommand=…`). felis models no
+  // part of `ssh`'s grammar; a shadow parser is the thing this avoids.
+  repeated string ssh_args = 2;
+}
+
+// Where a window re-dials when `window retarget` moves it off its daemon.
+// Opaque to the daemon; client owns carriers and resolves it. Two nested
+// unions prevent nonsensical combinations (such as an SSH destination
+// beside a local socket path).
+message RetargetTarget {
+  // How to reach the target daemon. REQUIRED: an unset carrier is
+  // malformed and is refused at decode.
+  oneof carrier {
+    // An explicit local socket path (`window retarget <socket>`).
+    string local_endpoint = 1;
+    // An SSH-stdio carrier (`felis ssh <destination>`).
+    SshEndpoint ssh = 2;
+    // The client's own default socket (the carrier-less
+    // `felis window retarget` case).
+    RetargetLocal default_local = 5;
+  }
+  // What to do once the dial lands. REQUIRED: "attach to nothing" and
+  // "create nothing" are both non-behaviors, so an unset landing is a
+  // malformed frame.
+  oneof landing {
+    // Attach to a session on the *target* daemon, named by a hex-id
+    // prefix the client resolves against that daemon's roster after
+    // dialing. A prefix, not a resolved id: the sending daemon cannot
+    // resolve another daemon's namespace.
+    string attach = 3;
+    // Create a fresh session on the target daemon (`ssh host`'s "new
+    // shell", with the verb's own trailing `<cmd>` override filling in
+    // the program).
+    SpawnArgs create = 4;
+  }
+}
+
+// The default-local arm of RetargetTarget.carrier: the client's own
+// default socket, which the sending daemon cannot name for it.
+message RetargetLocal {}
+
+// Daemon → client. Reply to OpsSwitch.
+message OpsSwitched {
+  // Resolution of the request's from_prefix.
+  ResolvedId from = 1;
+  // Resolution of a SwitchTarget.session prefix; unset for a carrier
+  // switch, whose target has no id in this daemon's namespace.
+  ResolvedId to = 2;
+  // Subscribers of `from` whose outbox took the push. Queue admission
+  // is the whole promise: the daemon queued the frame, and the landing
+  // happens on a connection of its own that this reply cannot await.
+  uint32 queued = 3;
+  // Why nothing was pushed, when the scope resolved to no window at
+  // all. Unset whenever the scope did resolve: a push the window did
+  // not take is a `queued` of zero, not a denial.
+  SwitchDenied denied = 4;
+}
+
+// Why an OpsSwitch resolved to no target. Resolve-time only: once a push
+// is enqueued the sole promise is OpsSwitched.queued.
+message SwitchDenied {
+  oneof reason {
+    // Default scope with a clear input-owner marker and either no
+    // attached window or more than one, so no window is *the* one the
+    // user meant.
+    SwitchNoInputOwner no_input_owner = 1;
+    // The requested Attachment.id is not attached to this session any
+    // more (or never was); the id that was asked for.
+    uint64 no_such_attachment = 2;
+  }
+}
+message SwitchNoInputOwner {}
+
+// Client → daemon. Add and/or remove opaque labels on the named session.
+message OpsTag {
+  string id_prefix = 1;
+  repeated string add = 2;
+  repeated string remove = 3;
+}
+
+// Daemon → client. Reply to OpsTag.
+message OpsTagsUpdated {
+  ResolvedId resolved = 1;
+  // Full tag set after the add/remove, sorted and deduplicated.
+  // Unchanged (the pre-request set) when denied is set.
+  repeated string tags = 2;
+  // Set when the delta was refused whole for breaching a tag cap
+  // (MAX_SESSION_TAGS / MAX_TAG_BYTES); nothing was applied.
+  optional string denied = 3;
+}
+
+// Client → daemon. Ask this daemon to exit. The mode is a oneof rather
+// than a pair of booleans so no request can name two postures at once.
+message OpsStop {
+  // REQUIRED: an unset mode is malformed and is refused at decode.
+  oneof mode {
+    // Stop only if the daemon admits nothing: no session and no
+    // in-flight create.
+    StopIfEmpty if_empty = 1;
+    // Destroy every session, then stop.
+    StopForce force = 2;
+    // Refuse new creates and stop once the last session ends.
+    StopWhenEmpty when_empty = 3;
+  }
+}
+
+message StopIfEmpty {}
+message StopForce {}
+message StopWhenEmpty {}
+
+// Daemon → client. Reply to OpsStop, written before the daemon acts on
+// it: a client that reads the outcome is what makes the stop observable.
+message OpsStopReply {
+  oneof outcome {
+    // The daemon is going down; this connection is the last thing it
+    // answers.
+    StopStopping stopping = 1;
+    // A default stop found sessions and did nothing to them.
+    StopRefused refused = 2;
+    // The daemon is draining: new creates are refused and it exits
+    // after the last session. A second stop while draining answers
+    // this again.
+    StopDraining draining = 3;
+  }
+}
+
+message StopStopping {}
+
+message StopRefused {
+  // Sessions admitted at the decision: registered plus the creates
+  // in flight, the same number the RESOURCE_KIND_SESSIONS row reports.
+  uint32 sessions = 1;
+}
+
+message StopDraining {
+  uint32 sessions = 1;
+}
+
+// Client → daemon. Ask what this daemon is and what it is holding.
+message OpsStatus {}
+
+// Daemon → client. Reply to OpsStatus: live resource-admission
+// accounting. Build and wire identity are the handshake's, established
+// on every connection by `ConnWelcome.identity` and the preface accept.
+// There is no session count field: it is the RESOURCE_KIND_SESSIONS
+// row's `total_used`, so the two cannot disagree.
+message OpsStatusReply {
+  // One row per accounted resource, in the daemon's order; a consumer
+  // keys on `resource`, never on position.
+  repeated ResourceReport resources = 1;
+  // Worker threads in the daemon's async runtime. Identity, not a
+  // resource row: the runtime is built at a fixed size, so there is no
+  // usage to observe against it; a row would report the same number twice.
+  uint32 worker_threads = 2;
+  // The daemon is draining: it refuses creates and exits after the last
+  // session.
+  bool draining = 3;
+}
+
+// One accounted resource: what the daemon is holding, against the
+// ceilings it admits under. Every field whose meaning depends on the
+// scope lives in the scope arm, so no ratio a reader forms crosses
+// scopes.
+message ResourceReport {
+  ResourceKind resource = 1;
+  ResourceUnit unit = 2;
+  // Summed over every subject, at reply-build time.
+  uint64 total_used = 3;
+  // What one subject is, and the numbers that only that answer makes
+  // meaningful. An UNSET scope is malformed and is refused at decode.
+  oneof scope {
+    DaemonScope daemon = 4;
+    SubjectScope subject = 5;
+  }
+}
+
+// The daemon is the only subject: `total_used` is the whole
+// observation, and a per-subject number would repeat it.
+message DaemonScope {
+  // The ceiling `total_used` is charged against.
+  Limit global_limit = 1;
+}
+
+// Each session or subscriber is a subject charged separately.
+message SubjectScope {
+  SubjectKind subject = 1;
+  // The deepest single subject: the one that reaches
+  // `per_subject_limit` first.
+  uint64 max_subject_used = 2;
+  // The ceiling each subject is charged separately.
+  Limit per_subject_limit = 3;
+  // The ceiling `total_used` is charged against.
+  Limit global_limit = 4;
+}
+
+// A ceiling, or the statement that there is none. A bound of `0` is a
+// resource nothing may hold, which is not what an absent ceiling means,
+// so the two are separate arms rather than a sentinel. An UNSET limit
+// is malformed and is refused at decode.
+message Limit {
+  oneof limit {
+    uint64 bounded = 1;
+    Unlimited unlimited = 2;
+  }
+}
+
+message Unlimited {}
+
+// The resources the daemon admits against a ceiling. Closed: `felis
+// daemon status` renders a documented row per value, so a value a
+// consumer cannot name is a row it cannot read.
+enum ResourceKind {
+  RESOURCE_KIND_UNSPECIFIED = 0;
+  // Session slots admitted: sessions in the pool plus the reservations
+  // in-flight creates hold.
+  RESOURCE_KIND_SESSIONS = 1;
+  // Decoded Kitty-graphics bytes in the per-session image stores.
+  RESOURCE_KIND_IMAGE_STORE_BYTES = 2;
+  // Kitty transmissions past their head chunk and short of their
+  // terminator; at most one per session.
+  RESOURCE_KIND_IN_FLIGHT_DECODES = 3;
+  // Bytes those partial transmissions hold.
+  RESOURCE_KIND_IN_FLIGHT_DECODE_BYTES = 4;
+  // Live subscriber outboxes, in queued-but-unwritten bytes.
+  RESOURCE_KIND_SUBSCRIBER_QUEUE_BYTES = 5;
+  // Connections the daemon is serving, against max_connections. The
+  // ceiling every other per-connection resource multiplies against.
+  RESOURCE_KIND_CONNECTIONS = 6;
+  // Unwritten client-to-child input bytes the daemon is holding, against
+  // the per-session input budget.
+  RESOURCE_KIND_PTY_INPUT_BYTES = 7;
+}
+
+// What a ResourceReport's numbers are counted in.
+enum ResourceUnit {
+  RESOURCE_UNIT_UNSPECIFIED = 0;
+  RESOURCE_UNIT_COUNT = 1;
+  RESOURCE_UNIT_BYTES = 2;
+}
+
+// What a SubjectScope's numbers are counted per. The daemon is not a
+// value here: it is the other scope arm, where there is no per-subject
+// number to count.
+enum SubjectKind {
+  SUBJECT_KIND_UNSPECIFIED = 0;
+  // Each session is a subject, charged its own `per_subject_limit`.
+  SUBJECT_KIND_SESSION = 1;
+  // Each subscriber is a subject; the deepest one is evicted first.
+  SUBJECT_KIND_SUBSCRIBER = 2;
+}
+
+// ---------------------------------------------------------------------------
+// Region (MessageKind::Region, kind 6): region-export family
+// ---------------------------------------------------------------------------
+
+// Request/Reply correlate by request_id; Rows opens a stream whose
+// Row and RowsDone items carry its stream_id.
+
+message RegionToDaemonMsg {
+  oneof msg {
+    RegionRequest request = 1 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_DAEMON
+      correlation: CORRELATION_REQUEST_OPENER
+      modes: MODE_WINDOW
+      modes: MODE_OPS
+      phases: PHASE_ATTACHED
+    }];
+    RegionRows rows = 3 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_DAEMON
+      correlation: CORRELATION_STREAM_OPENER
+      modes: MODE_WINDOW
+      modes: MODE_OPS
+      phases: PHASE_ATTACHED
+    }];
+  }
+  Correlation correlation = 100;
+}
+
+message RegionToClientMsg {
+  oneof msg {
+    RegionReply reply = 2 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_CLIENT
+      correlation: CORRELATION_REQUEST_REPLY
+      modes: MODE_WINDOW
+      modes: MODE_OPS
+      phases: PHASE_ATTACHED
+    }];
+    RegionRow row = 4 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_CLIENT
+      correlation: CORRELATION_STREAM_ITEM
+      modes: MODE_WINDOW
+      modes: MODE_OPS
+      phases: PHASE_ATTACHED
+    }];
+    RegionRowsDone rows_done = 5 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_CLIENT
+      correlation: CORRELATION_STREAM_ITEM
+      modes: MODE_WINDOW
+      modes: MODE_OPS
+      phases: PHASE_ATTACHED
+    }];
+  }
+  Correlation correlation = 100;
+}
+
+// Client → daemon. Serialize a region of the attached session's buffer.
+// The sink never travels: the requester routes the reply on its own host.
+message RegionRequest {
+  RegionSource source = 1;
+  // Reconstruct SGR color/style (true) or plain text (false).
+  bool ansi = 2;
+}
+
+// Daemon → client. The serialized region.
+message RegionReply {
+  // Empty means the region was absent or empty.
+  bytes data = 1;
+  // Unset for a region with no viewport anchor (the OSC 133 sources).
+  optional RegionPosition position = 2;
+  // Exit code of the youngest OSC 133 D mark, if it carried one.
+  optional uint32 exit_code = 3;
+}
+
+// Client → daemon. Serialize the same region a RegionRequest names, but
+// reply row by row (RegionRow … RegionRowsDone) instead of as one
+// stitched blob: the structural read behind `felis sessions capture`.
+message RegionRows {
+  RegionSource source = 1;
+  // Also carry each row's SGR reconstruction (RegionRow.ansi); the
+  // plain text always ships.
+  bool ansi = 2;
+  // Emit only the youngest max_rows rows (still oldest-first); unset
+  // emits the whole region.
+  optional uint32 max_rows = 3;
+}
+
+// Daemon → client. One region row (reply to RegionRows), oldest-first.
+message RegionRow {
+  // Index in the region's own coordinate space: scrollback rows are
+  // negative (-1 the youngest retained row), live grid rows 0..rows,
+  // mark-range rows 0-based from the range's first row. A max_rows
+  // tail keeps the untrimmed indices.
+  sint32 row = 1;
+  // Plain text, trailing blanks trimmed.
+  string text = 2;
+  // The row with reconstructed SGR runs, when the request set ansi.
+  optional string ansi = 3;
+  // Ties this row to the one above as a single logical line.
+  bool soft_wrap_continued = 4;
+}
+
+// Daemon → client. The last item of a RegionRows stream, after the last
+// RegionRow. It is an item, not the terminator: the stream's one
+// terminal is the shared ConnEnd / ConnError, and this still ships
+// because the exit code is region data a family-agnostic terminal has
+// no business carrying.
+message RegionRowsDone {
+  // Exit code of the range-closing OSC 133 D mark (mark-range sources).
+  optional uint32 exit_code = 1;
+}
+
+// The user's place inside a serialized region: 1-based, in the region's
+// stitched logical-line space.
+message RegionPosition {
+  uint32 top_line = 1;
+  uint32 cursor_line = 2;
+  uint32 cursor_column = 3;
+}
+
+// ---------------------------------------------------------------------------
+// Notify (MessageKind::Notify, kind 7): notification observer
+// ---------------------------------------------------------------------------
+
+// Subscribe opens a stream; Subscribed, Event, and Lagged are items.
+// The observer stream is endless by intent, but terminates via
+// ConnEnd/ConnError: consumers distinguish daemon shutdown from no
+// events fired yet, rather than reading it from a bare EOF.
+
+message NotifyToDaemonMsg {
+  oneof msg {
+    NotifySubscribe subscribe = 1 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_DAEMON
+      correlation: CORRELATION_STREAM_OPENER
+      modes: MODE_OBSERVER
+      phases: PHASE_SETUP
+    }];
+  }
+  Correlation correlation = 100;
+}
+
+message NotifyToClientMsg {
+  oneof msg {
+    NotifyEvent event = 2 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_CLIENT
+      correlation: CORRELATION_STREAM_ITEM
+      modes: MODE_OBSERVER
+      phases: PHASE_OBSERVING
+    }];
+    NotifySubscribed subscribed = 3 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_CLIENT
+      correlation: CORRELATION_STREAM_ITEM
+      modes: MODE_OBSERVER
+      phases: PHASE_OBSERVING
+    }];
+    NotifyLagged lagged = 4 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_CLIENT
+      correlation: CORRELATION_STREAM_ITEM
+      modes: MODE_OBSERVER
+      phases: PHASE_OBSERVING
+    }];
+  }
+  Correlation correlation = 100;
+}
+
+// Client → daemon. Turn this connection into a notification observer.
+message NotifySubscribe {
+  // Only relay notifications from the session this prefix resolves
+  // to. The daemon resolves it; an observer never needs the roster.
+  optional string session_prefix = 1;
+}
+
+// Daemon → observer. Acknowledges NotifySubscribe before the event
+// stream: carries the filter resolution so a bad prefix surfaces as a
+// typed reply, never a bare close.
+message NotifySubscribed {
+  // Unset when the subscribe carried no session_prefix.
+  ResolvedId filter = 1;
+}
+
+// Daemon → observer. The observer fell behind the shared notification
+// ring; `missed` events were dropped before it caught up.
+message NotifyLagged {
+  uint64 missed = 1;
+}
+
+// Daemon → observer. One decoded desktop notification.
+message NotifyEvent {
+  // Session the notification fired on (u128 → 16 bytes, big-endian).
+  bytes session_id = 1;
+  Notification notification = 2;
+  // Producer's OSC 99 i= identifier, if any.
+  optional string notify_id = 3;
+  // The session's window title (OSC 0/2).
+  optional string session_title = 4;
+  // The session's working directory (OSC 7), if known.
+  optional string cwd = 5;
+  // Whether a GUI client is live on this session.
+  bool attached = 6;
+}
+
+// ---------------------------------------------------------------------------
+// PushMsg (MessageKind::Push, kind 8): daemon→client
+// ---------------------------------------------------------------------------
+
+message PushMsg {
+  // Un-correlated: the daemon originates these, so there is no client
+  // request id to echo.
+  reserved 100;
+  oneof msg {
+    PushEvicted evicted = 1 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_CLIENT
+      correlation: CORRELATION_UNCORRELATED
+      modes: MODE_WINDOW
+      modes: MODE_OPS
+      phases: PHASE_ATTACHED
+    }];
+    PushReattach reattach = 2 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_CLIENT
+      correlation: CORRELATION_UNCORRELATED
+      modes: MODE_WINDOW
+      phases: PHASE_ATTACHED
+    }];
+    PushSessionExited session_exited = 3 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_CLIENT
+      correlation: CORRELATION_UNCORRELATED
+      modes: MODE_WINDOW
+      phases: PHASE_ATTACHED
+    }];
+    PushRetargetHost retarget_host = 4 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_CLIENT
+      correlation: CORRELATION_UNCORRELATED
+      modes: MODE_WINDOW
+      phases: PHASE_ATTACHED
+    }];
+  }
+}
+
+// Daemon → client. The session this client was streaming was taken away.
+message PushEvicted {
+  // Free-text reason (not stable for parsing).
+  string reason = 1;
+}
+
+// Daemon → client. Re-attach to the named session (relay of OpsSwitch).
+message PushReattach {
+  bytes id = 1;
+}
+
+// Daemon → client. The session's shell exited cleanly (PTY EOF).
+message PushSessionExited {
+  bytes id = 1;
+}
+
+// Daemon → client. Re-dial a different daemon (relay of OpsSwitch
+// with retarget set: the window retarget verb).
+message PushRetargetHost {
+  RetargetTarget target = 1;
+}
+
+// ---------------------------------------------------------------------------
+// Search (MessageKind::Search, kind 9): attached. The REQ-607 search
+// conversation; every arm of it is legal on the same modes, so a mode
+// refuses this conversation whole.
+// ---------------------------------------------------------------------------
+
+// Query opens a stream; each Match carries its stream_id.
+
+// The terminator is not an arm here: a search stream ends in the shared
+// ConnEnd / ConnError like every other stream, so the driver has one
+// terminal to enforce instead of one per family. A running walk is
+// stopped with ConnCancel.
+message SearchToDaemonMsg {
+  oneof msg {
+    SearchQuery query = 1 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_DAEMON
+      correlation: CORRELATION_STREAM_OPENER
+      modes: MODE_WINDOW
+      modes: MODE_OPS
+      phases: PHASE_ATTACHED
+    }];
+  }
+  Correlation correlation = 100;
+}
+
+message SearchToClientMsg {
+  oneof msg {
+    SearchMatch match = 2 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_CLIENT
+      correlation: CORRELATION_STREAM_ITEM
+      modes: MODE_WINDOW
+      modes: MODE_OPS
+      phases: PHASE_ATTACHED
+    }];
+  }
+  Correlation correlation = 100;
+}
+
+// Scrollback / live-grid text search request.
+message SearchQuery {
+  // Literal substring, or a regex when options.regex is set.
+  string query = 1;
+  SearchOptions options = 2;
+}
+
+// One logical line of the active search returning a hit.
+message SearchMatch {
+  // Row index of the logical line's topmost row; negative = scrollback.
+  sint64 line_index = 1;
+  string text = 2;
+  // Half-open byte ranges into text where matches fired.
+  repeated ByteSpan byte_spans = 3;
+  // Paintable highlight segments (not 1:1 with byte_spans).
+  repeated ColSpan col_spans = 4;
+}
+
+// No family declares a stream terminator of its own. ConnEnd /
+// ConnError on the control family close every stream, naming the
+// stream_id they end, so the driver enforces one terminal per stream
+// in one place rather than once per family.

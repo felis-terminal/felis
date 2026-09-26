@@ -1,0 +1,117 @@
+name: pr
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Forgejo ignores GitHub's `permissions: id-token: write` (forgejo/forgejo#10481).
+enable-openid-connect: true
+
+# Superseding a PR commit cancels its runs; main's runs never cancel, since
+# publication is gated per revision on that revision's own jobs.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  flake-check:
+    name: nix flake check
+    runs-on: x86_64-linux
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: nix flake check --print-build-logs
+
+  build:
+    name: cargo build / clippy / test / deny
+    runs-on: x86_64-linux
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.forgejo/actions/cargo-env
+      - run: nix develop -c just lint
+      - run: nix develop -c just test
+      - run: nix develop -c just deny
+      - name: felis-client-core's portable core still builds for wasm32
+        run: nix develop -c just check-portable
+      # Here rather than beside each tool's own job: the release gate runs
+      # only on tags and the bench orchestrators only on bench-relevant
+      # paths, so a PR that broke either would surface far from its cause.
+      - run: nix develop -c just selftest
+      - uses: ./.forgejo/actions/cargo-env/done
+        if: always()
+
+  proto-compat:
+    # Not covered by flake-check's buf-breaking hook: nix flake check evaluates a
+    # store copy without .git, so comparing two revisions requires a full clone.
+    name: wire schema is compatible with the base
+    runs-on: x86_64-linux
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: buf breaking against the selected base
+        env:
+          PROTO_COMPAT_PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PROTO_COMPAT_PUSH_BEFORE: ${{ github.event.before }}
+        run: nix develop -c python3 tools/proto/compat.py
+
+  linux-smoke:
+    name: frontend smoke (x86_64-linux)
+    runs-on: x86_64-linux
+    timeout-minutes: 45
+    env:
+      # A per-run socket directory prevents concurrent runs on the shared runner filesystem from connecting to or killing each other's daemon. The daemon creates it 0700, which a socket parent must be.
+      SMOKE_SOCKET_DIR: felis-smoke-${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.forgejo/actions/cargo-env
+      # A PR drives the debug binaries the build job's target directory already
+      # holds: `nix build .#felis` recompiles every workspace crate in release
+      # on each commit, since the stamped revision is a derivation input.
+      - name: build the debug binaries the smoke drives
+        if: github.event_name == 'pull_request'
+        run: |
+          nix develop -c cargo build --locked -p felis-daemon -p felis-client -p felis-cli
+          # Copied out because cargo's lock ends with the build: a concurrent
+          # job could relink the shared target directory under a running smoke,
+          # which would then pass on another revision's binaries.
+          bin="${RUNNER_TEMP:-/tmp}/$SMOKE_SOCKET_DIR-bin"
+          mkdir -p "$bin"
+          cp "$CARGO_TARGET_DIR"/debug/{felis,felis-client,felis-daemon} "$bin"/
+          echo "SMOKE_BIN_DIR=$bin" >> "$GITHUB_ENV"
+      - name: build the package the smoke drives
+        if: github.event_name != 'pull_request'
+        run: |
+          nix build .#felis --print-build-logs
+          echo "SMOKE_BIN_DIR=$PWD/result/bin" >> "$GITHUB_ENV"
+      # At build time rather than behind the smoke: a revision the cache
+      # lacks still builds to the same store path on a user's machine, so
+      # holding the push back gates nothing (docs/explanation/testing.md
+      # "The cache is a substituter; the release is the claim").
+      - uses: ./.forgejo/actions/niks3-push
+        if: github.event_name == 'push'
+      # --no-link so `result` stays the package the smoke drives. A tag
+      # is where the archive is exercised; here it only has to assemble,
+      # which is what a new runtime dependency breaks.
+      - name: the relocatable archive still assembles
+        if: github.event_name != 'pull_request'
+        run: nix build .#felis-dist --no-link --print-build-logs
+      - name: renderer pixel tests on lavapipe
+        run: nix develop -c just test-gpu
+      - name: run the smoke
+        env:
+          FELIS_SMOKE_MARKER: felis-smoke-${{ github.run_id }}
+          FELIS_SMOKE_TIMEOUT_MS: "60000"
+        # cat rather than a shell: marker reaches the screen via tty echo without depending on host shell configuration.
+        run: nix develop .#smoke -c xvfb-run -a "$SMOKE_BIN_DIR/felis-client" --socket "${RUNNER_TEMP:-/tmp}/$SMOKE_SOCKET_DIR/daemon.sock" -- cat
+      - name: stop the smoke's daemon
+        if: always()
+        run: |
+          pkill -f "felis-daemon serve --socket ${RUNNER_TEMP:-/tmp}/$SMOKE_SOCKET_DIR/daemon.sock" || true
+          rm -rf "${RUNNER_TEMP:-/tmp}/$SMOKE_SOCKET_DIR-bin"
+      - uses: ./.forgejo/actions/cargo-env/done
+        if: always()

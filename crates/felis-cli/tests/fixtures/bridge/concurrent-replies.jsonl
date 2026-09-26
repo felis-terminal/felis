@@ -1,0 +1,6 @@
+{"dir":"in","id":"list","op":"sessions.list","params":{},"v":1}
+{"dir":"in","id":"info","op":"sessions.info","params":{"session":"{session}"},"v":1}
+{"dir":"in","id":"cancel","op":"cancel","params":{"target":"nothing-in-flight"},"v":1}
+{"dir":"out","id":"cancel","result":{"canceled":false},"v":1}
+{"dir":"out","id":"list","result":{"sessions":[{"attachments":[],"cols":80,"foreground":"<foreground>","id":"<session>","idle_seconds":"<idle_seconds>","rows":24,"short_id":"<short_id>","tags":[]}]},"v":1}
+{"dir":"out","id":"info","result":{"attachments":[],"cols":80,"foreground":"<foreground>","id":"<session>","idle_seconds":"<idle_seconds>","rows":24,"short_id":"<short_id>","tags":[]},"v":1}

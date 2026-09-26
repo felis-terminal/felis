@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc cfe91c8b542926162b0cede46ddb2678bbc7124e432c3d636cee17a5d50f096c # shrinks to rounds = [([Attributes { fg: Default, bg: Default, underline_color: Default, flags: AttrFlags(BOLD), underline_style: Single }, Attributes { fg: Default, bg: Default, underline_color: Default, flags: AttrFlags(FAINT), underline_style: Single }, Attributes { fg: Default, bg: Default, underline_color: Default, flags: AttrFlags(ISO_PROTECTED), underline_style: Single }], [false, false, false, true])]

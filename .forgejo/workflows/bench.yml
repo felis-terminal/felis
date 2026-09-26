@@ -1,0 +1,103 @@
+name: bench
+
+on:
+  pull_request:
+    branches: [main]
+    # Excludes the crates the gated benches cannot link rather than listing
+    # the ones they do: a new dependency of felis-daemon or felis-client-core
+    # then still runs the gate instead of silently skipping it.
+    paths:
+      - '**'
+      - '!docs/**'
+      - '!**/*.md'
+      - '!crates/felis-shaping/**'
+      - '!crates/felis-render-wgpu/**'
+      - '!crates/felis-client/**'
+      - '!crates/felis-cli/**'
+      - '!tests/**'
+      - '!nix/**'
+      - '!skills/**'
+      - '!.agents/**'
+      - '!tools/**'
+      - '!.forgejo/**'
+      - 'tools/bench/**'
+      - '.forgejo/workflows/bench.yml'
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+# Superseding a PR commit cancels its runs; main's runs never cancel, since
+# publication is gated per revision on that revision's own jobs.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  regression-gate:
+    name: Criterion regression gate
+    runs-on: x86_64-linux
+    if: github.event_name == 'pull_request'
+    timeout-minutes: 45
+    env:
+      THRESHOLD: '0.15'
+      ALLOWLIST: ''
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: ./.forgejo/actions/cargo-env
+
+      # The target dir persists across jobs on the runner, and the gate walks every
+      # `change/estimates.json` under it: a leftover from an earlier run of another
+      # bench would be judged as this PR's regression.
+      - name: discard earlier Criterion results
+        run: rm -rf "$CARGO_TARGET_DIR/criterion"
+
+      # Re-benches the base commit in-job: Forgejo caches are per-runner, so baselines
+      # cannot be shared across runners.
+      - name: bench base SHA
+        # Runs the PR's orchestrator script so fixes to the benchmark harness can pass the gate.
+        run: |
+          base_sha="${{ github.event.pull_request.base.sha }}"
+          if [ -z "$base_sha" ]; then
+            base_sha=$(git rev-parse HEAD~1)
+          fi
+          echo "Benchmarking base: $base_sha"
+          git checkout "$base_sha"
+          git checkout "${{ github.sha }}" -- tools/bench/criterion.py
+          nix develop -c python3 tools/bench/criterion.py run --quick \
+            --save-baseline ci-base \
+            --filter daemon_side --filter multi_cycle \
+            end_to_end_throughput
+
+      - name: bench PR HEAD against base
+        run: |
+          git checkout "${{ github.sha }}"
+          nix develop -c python3 tools/bench/criterion.py run --quick \
+            --baseline ci-base \
+            --filter daemon_side --filter multi_cycle \
+            end_to_end_throughput
+
+      - name: regression gate
+        run: nix develop -c python3 tools/bench/criterion.py gate
+      - uses: ./.forgejo/actions/cargo-env/done
+        if: always()
+
+  nightly-snapshot:
+    name: Criterion full-suite snapshot
+    runs-on: x86_64-linux
+    if: github.event_name != 'pull_request'
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.forgejo/actions/cargo-env
+
+      - name: bench every Criterion target
+        run: |
+          nix develop -c python3 tools/bench/criterion.py run --quick \
+            --json-out bench-results.json \
+            --markdown-out "${GITHUB_STEP_SUMMARY:-bench-summary.md}"
+          echo '::: bench-results.json'
+          cat bench-results.json
+      - uses: ./.forgejo/actions/cargo-env/done
+        if: always()

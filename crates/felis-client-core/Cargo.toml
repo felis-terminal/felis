@@ -1,0 +1,74 @@
+[package]
+name = "felis-client-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "felis headless client: shadow screen, action enum, IPC client connector, OS-clipboard trait, shared config"
+
+[features]
+default = ["native"]
+# Split into a feature so crate compiles for wasm32 with default-features = false without pulling tokio.
+native = ["dep:tokio", "dep:felis-transport", "dep:directories"]
+# Default-off so shipping binaries stay schemars-free; enabled for schema sync test.
+schema = ["dep:schemars", "felis-protocol/schema"]
+
+[dependencies]
+felis-protocol = { workspace = true }
+felis-grid = { workspace = true }
+felis-transport = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_ignored = { workspace = true }
+schemars = { workspace = true, optional = true }
+bitflags = { workspace = true }
+toml = { workspace = true }
+directories = { workspace = true, optional = true }
+
+[target.'cfg(unix)'.dependencies]
+rustix = { workspace = true }
+
+[dev-dependencies]
+felis-transport = { workspace = true, features = ["test-util"] }
+tokio = { workspace = true, features = [
+  "macros",
+  "rt-multi-thread",
+  "io-util",
+  "time",
+  "test-util",
+] }
+tempfile = { workspace = true }
+felis-daemon = { path = "../felis-daemon" }
+felis-pty = { workspace = true }
+felis-vt = { workspace = true }
+insta = { workspace = true }
+proptest = { workspace = true }
+criterion = { workspace = true }
+serde_json = { workspace = true }
+# Heap accounting for `tests/hostile_claims.rs`: the property under
+# test is that a tiny frame allocates nothing proportional to what it
+# claims, which only an allocator can witness. Test-only, and it needs
+# no `unsafe` here — the `#[global_allocator]` is dhat's own type.
+dhat = { workspace = true }
+# The same test hand-builds wire messages: a hostile frame is defined by
+# what it says on the wire, so it has to be encoded there rather than
+# round-tripped from a domain value the checks already admitted.
+prost = { workspace = true }
+
+[target.'cfg(unix)'.dev-dependencies]
+rustix = { workspace = true }
+
+[[bench]]
+name = "end_to_end_throughput"
+harness = false
+
+[[bench]]
+name = "client_consume"
+harness = false
+
+[lints]
+workspace = true

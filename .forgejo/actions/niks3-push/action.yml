@@ -1,0 +1,39 @@
+name: niks3-push
+description: >-
+  Push an already built installable's store path to the niks3 binary cache,
+  authenticating with the job's Forgejo OIDC token. The workflow must set
+  `enable-openid-connect: true`. An explicit push rather than niks3-action:
+  the action's post-build hook and scan miss store paths already present
+  before the step started.
+
+inputs:
+  installable:
+    description: the flake installable whose store path is pushed; it must already be built
+    default: .#felis
+  server:
+    description: the niks3 server
+    default: https://niks3.natsukium.com
+
+runs:
+  using: composite
+  steps:
+    - name: push the package to the binary cache
+      shell: bash
+      env:
+        NIKS3_SERVER_URL: ${{ inputs.server }}
+        INSTALLABLE: ${{ inputs.installable }}
+      run: |
+        audience=$(nix develop .#publish -c sh -c 'curl -fsS "$NIKS3_SERVER_URL/api/cache-config?issuer=$FORGEJO_SERVER_URL/api/actions" | jq -r .oidc_audience')
+        script="${RUNNER_TEMP:-/tmp}/oidc-token.sh"
+        cat > "$script" <<'EOF'
+        #!/bin/sh
+        set -eu
+        sep='?'
+        case "$ACTIONS_ID_TOKEN_REQUEST_URL" in *\?*) sep='&' ;; esac
+        curl -fsS -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+          "$ACTIONS_ID_TOKEN_REQUEST_URL${sep}audience=$NIKS3_AUDIENCE" \
+          | jq -c '{token: .value}'
+        EOF
+        chmod 700 "$script"
+        NIKS3_AUDIENCE="$audience" nix develop .#publish -c \
+          niks3 push --auth-token-script "$script" "$(nix path-info "$INSTALLABLE")"

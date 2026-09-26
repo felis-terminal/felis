@@ -1,0 +1,54 @@
+[package]
+name = "felis-transport"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "felis IPC transport: framing, local carrier (Unix socket / Windows named pipe), peer-identity verification, SSH stdio"
+
+[features]
+# The unchecked frame write, for tests and benches that must produce a
+# body no domain message can. Never enabled by a production dependency.
+test-util = []
+
+[dependencies]
+felis-protocol = { workspace = true }
+bytes = { workspace = true }
+tokio = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+directories = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+rustix = { workspace = true }
+
+# libc for getpeereid(3) on BSDs/macOS: rustix does not wrap it and pulling nix adds unnecessary build overhead.
+# Target list must match build.rs felis_getpeereid cfg.
+[target.'cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos", target_os = "watchos", target_os = "freebsd", target_os = "dragonfly", target_os = "netbsd", target_os = "openbsd"))'.dependencies]
+libc = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = [
+  "test-util",
+  "rt-multi-thread",
+  "macros",
+] }
+tempfile = { workspace = true }
+criterion = { workspace = true }
+proptest = { workspace = true }
+
+[[bench]]
+name = "socket_write"
+harness = false
+# Measures the raw frame write, which is behind the authorization
+# boundary in every other build.
+required-features = ["test-util"]
+
+[lints]
+workspace = true

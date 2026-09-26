@@ -1,0 +1,58 @@
+name: fuzz
+
+on:
+  pull_request:
+    branches: [main]
+    # Excludes the crates the fuzz targets cannot link rather than listing
+    # the ones they do, so a new dependency still runs the smoke.
+    paths: &fuzz-paths
+      - '**'
+      - '!docs/**'
+      - '!**/*.md'
+      - '!crates/felis-shaping/**'
+      - '!crates/felis-render-wgpu/**'
+      - '!crates/felis-client/**'
+      - '!crates/felis-cli/**'
+      - '!crates/felis-daemon/**'
+      - '!crates/felis-pty/**'
+      - '!tests/**'
+      - '!nix/**'
+      - '!skills/**'
+      - '!.agents/**'
+      - '!tools/**'
+      - '!.forgejo/**'
+      - '.forgejo/workflows/fuzz.yml'
+  push:
+    branches: [main]
+    paths: *fuzz-paths
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+# Superseding a PR commit cancels its runs; main's runs never cancel, since
+# publication is gated per revision on that revision's own jobs.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  smoke:
+    name: cargo fuzz smoke (per target)
+    runs-on: x86_64-linux
+    if: github.event_name != 'schedule'
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: smoke every target (seed corpus + 10k runs each)
+        # Shares libFuzzer flags with local runs via justfile to prevent divergence.
+        run: nix develop -c just fuzz-smoke
+
+  nightly:
+    name: cargo fuzz nightly long-run
+    runs-on: x86_64-linux
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: long-run + minify each target
+        run: nix develop -c just fuzz-long

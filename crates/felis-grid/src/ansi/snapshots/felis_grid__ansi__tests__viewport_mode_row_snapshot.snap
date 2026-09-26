@@ -1,0 +1,5 @@
+---
+source: crates/felis-grid/src/ansi/tests.rs
+expression: out
+---
+a\e[38;5;23mb\e[0m\e]8;id=a1;https://example.com\e\c\e]8;;\e\·····

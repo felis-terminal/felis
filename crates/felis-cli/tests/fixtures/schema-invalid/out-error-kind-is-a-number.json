@@ -1,0 +1,17 @@
+{
+  "against": "point_error",
+  "instance": {
+    "v": 1,
+    "error": {
+      "kind": 7,
+      "message": "nope"
+    }
+  },
+  "repaired": {
+    "v": 1,
+    "error": {
+      "kind": "no_match",
+      "message": "nope"
+    }
+  }
+}

@@ -1,0 +1,5 @@
+# Forces LF on Windows checkouts to protect byte-exact tests; text=auto over -text catches accidental CRLF commits.
+* text=auto eol=lf
+
+# Fixtures lack NUL bytes, so git's text heuristic would erroneously renormalize CR bytes in escape sequences.
+*.bin -text

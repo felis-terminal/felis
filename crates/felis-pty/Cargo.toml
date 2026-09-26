@@ -1,0 +1,31 @@
+[package]
+name = "felis-pty"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "Self-hosted async PTY layer (openpty on Unix, ConPTY on Windows)"
+
+[dependencies]
+tokio = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+rustix = { workspace = true, features = ["termios"] }
+
+# libc for tcgetpgrp: rustix's wrapper asserts pgid > 0, failing on a dead session leader.
+[target.'cfg(unix)'.dependencies]
+rustix = { workspace = true, features = ["event"] }
+libc = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "io-util", "time"] }
+felis-vt = { workspace = true }
+felis-grid = { workspace = true }
+
+[lints]
+workspace = true

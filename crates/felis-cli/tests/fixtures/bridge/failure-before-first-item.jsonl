@@ -1,0 +1,2 @@
+{"dir":"in","id":"cap","op":"sessions.capture","params":{"session":"ffffffffffffffffffffffffffffffff"},"v":1}
+{"dir":"out","error":{"kind":"no_match","message":"<message>"},"event":"error","id":"cap","v":1}

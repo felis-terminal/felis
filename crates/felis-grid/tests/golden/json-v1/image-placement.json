@@ -1,0 +1,20 @@
+{
+  "felis_json": 1,
+  "kind": "image",
+  "msg": {
+    "anchor_col": 4,
+    "anchor_row": -1,
+    "cols": 10,
+    "image_id": 9,
+    "placement_id": 2,
+    "rows": 5,
+    "source": {
+      "height": 32,
+      "width": 64,
+      "x": 0,
+      "y": 0
+    },
+    "type": "placement",
+    "z_index": -3
+  }
+}

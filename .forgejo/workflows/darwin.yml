@@ -1,0 +1,68 @@
+# Builds aarch64-darwin and pushes it to the cache, the one supported target
+# whose evidence is maintainer use rather than a CI smoke
+# (docs/explanation/testing.md "Maintainer use, for `aarch64-darwin`"). It is its
+# own file so a darwin smoke, once it lands, joins the aarch64-darwin runner's chain here.
+name: darwin
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Forgejo ignores GitHub's `permissions: id-token: write` (forgejo/forgejo#10481).
+enable-openid-connect: true
+
+# Superseding a PR commit cancels its runs; main's runs never cancel, since
+# publication is gated per revision on that revision's own jobs.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  changes:
+    # On this chain's own runner, not x86_64-linux: that runner takes one job at a
+    # time, so a filter queued there held the chain behind every other
+    # workflow while this runner sat idle.
+    name: detect relevant changes
+    runs-on: aarch64-darwin
+    timeout-minutes: 5
+    outputs:
+      relevant: ${{ steps.filter.outputs.relevant }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4
+        id: filter
+        with:
+          predicate-quantifier: 'some-with-excludes'
+          filters: |
+            relevant:
+              - '**'
+              - '!docs/**'
+              - '!**/*.md'
+              - '!*.md'
+
+  darwin-build:
+    name: build felis (aarch64-darwin)
+    runs-on: aarch64-darwin
+    needs: [changes]
+    if: needs.changes.outputs.relevant == 'true'
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # felis-dist too, so a bundler that cannot relocate or re-sign the
+      # app fails here rather than on the tag that would have shipped it.
+      - run: nix build .#felis .#felis-dist --print-build-logs
+      - uses: ./.forgejo/actions/niks3-push
+        if: github.event_name == 'push'
+
+  darwin-noop:
+    name: darwin docs-only no-op
+    runs-on: aarch64-darwin
+    needs: [changes]
+    if: needs.changes.outputs.relevant == 'false'
+    timeout-minutes: 5
+    steps:
+      - run: echo "docs-only change, skipping Darwin checks"

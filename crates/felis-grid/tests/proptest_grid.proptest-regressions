@@ -1,0 +1,15 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc d9f4d40f28fb44989f0e834b4e7ffd6723ea6684a3ad9a52cfec85e3e42d9964 # shrinks to rows = 1, cols = 1, bytes = [32]
+cc a8b617438963c509662aaaf1469a414fb6784e553d73e8dd95a942b42c626371 # shrinks to rows = 1, cols = 1, bytes = [227, 137, 144]
+cc 8ed3b0658f5757af094ff86a63e5d94b1c3dc8aede1b96023fc37c30f08298d9 # shrinks to rows = 1, cols = 1, new_rows = 1, new_cols = 1, bytes = [227, 129, 129]
+cc 2f91eb47dda47ccd60a563fde30c4972f4f22b817ecc13674ac8e529d75d9ebc # shrinks to rows = 1, cols = 1, bytes = [227, 128, 128]
+cc 9454fad9b367b3fdde9197c378c2305077878ca232248c3363753136bda34192 # shrinks to rows = 1, cols = 1, bytes = [227, 128, 128]
+cc 7d4dc453c2ac06990a55cd39114b9f6c92ba904d99c054b4762bece3f5fc789d # shrinks to rows = 1, cols = 1, bytes = [227, 128, 128]
+cc 18898a545c90efad8253f8b5df9f8063ca46ce455abd0c8515eb2eb51bc61416 # shrinks to scale = 2, text = [32, 32, 32, 32, 32, 32, 32, 32, 32]
+cc 898cac76dd6dd262349fa292b5e9ea076c5cbe444b32684dd62ce73e8f16720e # shrinks to rows = 5, cols = 5, alt_cols = 2, bytes = [65, 65, 10, 65]
+cc dc016543d2f28d39d60745598ff65d604d64b0813703ea3e22fd62cba7c41972 # shrinks to rows = 1, cols = 3, wider_extra = 0, taller_extra = 1, bytes = [32, 32, 32, 32, 32, 0, 32, 27, 0, 48, 128]

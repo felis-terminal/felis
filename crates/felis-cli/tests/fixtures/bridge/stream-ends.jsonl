@@ -1,0 +1,5 @@
+{"dir":"in","id":"cap","op":"sessions.capture","params":{"lines":3,"session":"{session}"},"v":1}
+{"dir":"out","id":"cap","item":{"ansi":"<ansi>","row":21,"soft_wrap_continued":false,"text":"<text>"},"v":1}
+{"dir":"out","id":"cap","item":{"ansi":"<ansi>","row":22,"soft_wrap_continued":false,"text":"<text>"},"v":1}
+{"dir":"out","id":"cap","item":{"ansi":"<ansi>","row":23,"soft_wrap_continued":false,"text":"<text>"},"v":1}
+{"count":3,"dir":"out","event":"end","id":"cap","v":1}

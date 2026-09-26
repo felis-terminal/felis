@@ -1,0 +1,30 @@
+---
+source: crates/felis-grid/tests/ref_recordings.rs
+expression: render(&grid)
+---
+size: 24 rows x 80 cols
+cursor: row 0 col 0 visible true
+||
+||
+||
+||
+||
+||
+||
+||
+||
+||
+||
+||
+||
+||
+||
+||
+||
+||
+||
+||
+||
+||
+||
+||

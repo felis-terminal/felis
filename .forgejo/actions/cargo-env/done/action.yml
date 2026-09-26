@@ -1,0 +1,16 @@
+name: cargo-env/done
+description: >-
+  Release this job's claim on the build directory cargo-env parked: the last
+  step of every job that uses cargo-env, under `if: always()`.
+
+runs:
+  using: composite
+  steps:
+    - if: runner.os != 'Windows'
+      shell: bash
+      run: node "${{ github.action_path }}/../guard.mjs" done
+    - if: runner.os == 'Windows'
+      shell: powershell
+      run: |
+        node "${{ github.action_path }}\..\guard.mjs" done
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

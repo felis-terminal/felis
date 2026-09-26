@@ -1,0 +1,829 @@
+{
+  "$defs": {
+    "AttachmentId": {
+      "description": "An attachment id as a request spells it: the roster's decimal\nrendering, not a JSON number.",
+      "pattern": "^[0-9]+$",
+      "type": "string"
+    },
+    "CancelParams": {
+      "additionalProperties": false,
+      "properties": {
+        "target": {
+          "$ref": "#/$defs/RequestId"
+        }
+      },
+      "required": [
+        "target"
+      ],
+      "type": "object"
+    },
+    "NotificationsSubscribeParams": {
+      "additionalProperties": false,
+      "properties": {
+        "session": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Prefix"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "Prefix": {
+      "description": "A session prefix parameter, as opposed to a published id.",
+      "pattern": "^(0[xX])?[0-9a-fA-F]{1,32}$",
+      "type": "string"
+    },
+    "RegionSource": {
+      "enum": [
+        "visible",
+        "scrollback",
+        "command-output",
+        "last-command"
+      ],
+      "type": "string"
+    },
+    "RequestId": {
+      "description": "At most 128 UTF-8 bytes when a string; `maxLength` is the code-point bound that byte limit implies, not the limit itself.",
+      "oneOf": [
+        {
+          "maxLength": 128,
+          "type": "string",
+          "x-max-utf8-bytes": 128
+        },
+        {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        }
+      ]
+    },
+    "SessionsCaptureParams": {
+      "additionalProperties": false,
+      "properties": {
+        "ansi": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "lines": {
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "session": {
+          "$ref": "#/$defs/Prefix"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RegionSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "session"
+      ],
+      "type": "object"
+    },
+    "SessionsEvictParams": {
+      "additionalProperties": false,
+      "properties": {
+        "session": {
+          "$ref": "#/$defs/Prefix"
+        }
+      },
+      "required": [
+        "session"
+      ],
+      "type": "object"
+    },
+    "SessionsInfoParams": {
+      "additionalProperties": false,
+      "properties": {
+        "session": {
+          "$ref": "#/$defs/Prefix"
+        }
+      },
+      "required": [
+        "session"
+      ],
+      "type": "object"
+    },
+    "SessionsKillParams": {
+      "additionalProperties": false,
+      "properties": {
+        "session": {
+          "$ref": "#/$defs/Prefix"
+        }
+      },
+      "required": [
+        "session"
+      ],
+      "type": "object"
+    },
+    "SessionsListParams": {
+      "additionalProperties": false,
+      "properties": {
+        "tags": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "SessionsSearchParams": {
+      "additionalProperties": false,
+      "properties": {
+        "case_insensitive": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "pattern": {
+          "type": "string"
+        },
+        "regex": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "session": {
+          "$ref": "#/$defs/Prefix"
+        }
+      },
+      "required": [
+        "session",
+        "pattern"
+      ],
+      "type": "object"
+    },
+    "SessionsSendParams": {
+      "additionalProperties": false,
+      "properties": {
+        "raw": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "session": {
+          "$ref": "#/$defs/Prefix"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "session",
+        "text"
+      ],
+      "type": "object"
+    },
+    "SessionsSpawnParams": {
+      "additionalProperties": false,
+      "description": "`spawn_dims`: a create names its whole grid or none of it.",
+      "oneOf": [
+        {
+          "properties": {
+            "cols": {
+              "type": "null"
+            },
+            "rows": {
+              "type": "null"
+            }
+          }
+        },
+        {
+          "properties": {
+            "cols": {
+              "type": "integer"
+            },
+            "rows": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "rows",
+            "cols"
+          ]
+        }
+      ],
+      "properties": {
+        "cmd": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "cols": {
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "cwd": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "env": {
+          "items": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 2,
+            "minItems": 2,
+            "type": "array"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "rows": {
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "tags": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "SessionsSwitchParams": {
+      "additionalProperties": false,
+      "properties": {
+        "attachment": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AttachmentId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "from": {
+          "$ref": "#/$defs/Prefix"
+        },
+        "to": {
+          "$ref": "#/$defs/Prefix"
+        }
+      },
+      "required": [
+        "to",
+        "from"
+      ],
+      "type": "object"
+    },
+    "SessionsTagParams": {
+      "additionalProperties": false,
+      "properties": {
+        "add": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "remove": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "session": {
+          "$ref": "#/$defs/Prefix"
+        }
+      },
+      "required": [
+        "session"
+      ],
+      "type": "object"
+    },
+    "end_terminal": {
+      "allOf": [
+        {
+          "properties": {
+            "v": {
+              "const": 1,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "v"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/RequestId"
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "count": {
+              "format": "uint64",
+              "maximum": 18446744073709551615,
+              "minimum": 0,
+              "type": "integer",
+              "x-bound-exceeds-f64-precision": true
+            },
+            "event": {
+              "const": "end"
+            },
+            "exit_code": {
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "count",
+            "event"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "error": {
+      "allOf": [
+        {
+          "properties": {
+            "v": {
+              "const": 1,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "v"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/RequestId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "https://raw.githubusercontent.com/felis-terminal/felis/main/crates/felis-cli/schemas/felis-cli-v1.schema.json#/$defs/error_body"
+        }
+      ]
+    },
+    "error_terminal": {
+      "allOf": [
+        {
+          "properties": {
+            "v": {
+              "const": 1,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "v"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/RequestId"
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "https://raw.githubusercontent.com/felis-terminal/felis/main/crates/felis-cli/schemas/felis-cli-v1.schema.json#/$defs/error_body"
+            },
+            {
+              "properties": {
+                "event": {
+                  "const": "error"
+                }
+              },
+              "required": [
+                "event"
+              ],
+              "type": "object"
+            }
+          ]
+        }
+      ]
+    },
+    "item": {
+      "allOf": [
+        {
+          "properties": {
+            "v": {
+              "const": 1,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "v"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/RequestId"
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "item": {
+              "$ref": "https://raw.githubusercontent.com/felis-terminal/felis/main/crates/felis-cli/schemas/felis-cli-v1.schema.json#/$defs/stream_item_body"
+            }
+          },
+          "required": [
+            "item"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "lag_event": {
+      "allOf": [
+        {
+          "properties": {
+            "v": {
+              "const": 1,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "v"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/RequestId"
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "dropped": {
+              "format": "uint64",
+              "maximum": 18446744073709551615,
+              "minimum": 0,
+              "type": "integer",
+              "x-bound-exceeds-f64-precision": true
+            },
+            "event": {
+              "const": "lag"
+            }
+          },
+          "required": [
+            "dropped",
+            "event"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "reply": {
+      "allOf": [
+        {
+          "properties": {
+            "v": {
+              "const": 1,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "v"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/RequestId"
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "result": {
+              "anyOf": [
+                {
+                  "$ref": "https://raw.githubusercontent.com/felis-terminal/felis/main/crates/felis-cli/schemas/felis-cli-v1.schema.json#/$defs/point_body"
+                },
+                {
+                  "properties": {
+                    "canceled": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "canceled"
+                  ],
+                  "type": "object"
+                }
+              ]
+            }
+          },
+          "required": [
+            "result"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "request": {
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "properties": {
+            "op": {
+              "const": "sessions.list"
+            },
+            "params": {
+              "$ref": "#/$defs/SessionsListParams"
+            }
+          },
+          "type": "object"
+        },
+        {
+          "properties": {
+            "op": {
+              "const": "sessions.info"
+            },
+            "params": {
+              "$ref": "#/$defs/SessionsInfoParams"
+            }
+          },
+          "required": [
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "op": {
+              "const": "sessions.spawn"
+            },
+            "params": {
+              "$ref": "#/$defs/SessionsSpawnParams"
+            }
+          },
+          "type": "object"
+        },
+        {
+          "properties": {
+            "op": {
+              "const": "sessions.send"
+            },
+            "params": {
+              "$ref": "#/$defs/SessionsSendParams"
+            }
+          },
+          "required": [
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "op": {
+              "const": "sessions.kill"
+            },
+            "params": {
+              "$ref": "#/$defs/SessionsKillParams"
+            }
+          },
+          "required": [
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "op": {
+              "const": "sessions.evict"
+            },
+            "params": {
+              "$ref": "#/$defs/SessionsEvictParams"
+            }
+          },
+          "required": [
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "op": {
+              "const": "sessions.switch"
+            },
+            "params": {
+              "$ref": "#/$defs/SessionsSwitchParams"
+            }
+          },
+          "required": [
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "op": {
+              "const": "sessions.tag"
+            },
+            "params": {
+              "$ref": "#/$defs/SessionsTagParams"
+            }
+          },
+          "required": [
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "op": {
+              "const": "sessions.capture"
+            },
+            "params": {
+              "$ref": "#/$defs/SessionsCaptureParams"
+            }
+          },
+          "required": [
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "op": {
+              "const": "sessions.search"
+            },
+            "params": {
+              "$ref": "#/$defs/SessionsSearchParams"
+            }
+          },
+          "required": [
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "op": {
+              "const": "notifications.subscribe"
+            },
+            "params": {
+              "$ref": "#/$defs/NotificationsSubscribeParams"
+            }
+          },
+          "type": "object"
+        },
+        {
+          "properties": {
+            "op": {
+              "const": "cancel"
+            },
+            "params": {
+              "$ref": "#/$defs/CancelParams"
+            }
+          },
+          "required": [
+            "params"
+          ],
+          "type": "object"
+        }
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/RequestId"
+        },
+        "op": {
+          "type": "string"
+        },
+        "params": {
+          "type": "object"
+        },
+        "v": {
+          "const": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "v",
+        "id",
+        "op"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://raw.githubusercontent.com/felis-terminal/felis/main/crates/felis-cli/schemas/felis-bridge-v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "anyOf": [
+    {
+      "$ref": "#/$defs/reply"
+    },
+    {
+      "$ref": "#/$defs/item"
+    },
+    {
+      "$ref": "#/$defs/error"
+    },
+    {
+      "$ref": "#/$defs/lag_event"
+    },
+    {
+      "$ref": "#/$defs/end_terminal"
+    },
+    {
+      "$ref": "#/$defs/error_terminal"
+    }
+  ],
+  "description": "`$defs/request` validates one stdin line; the remaining `$defs` are the six shapes stdout may carry, each echoing the request `id`. A request is closed: an unknown top-level key or operation parameter is refused as `malformed_request`.",
+  "title": "felis bridge stdio protocol (v1)"
+}

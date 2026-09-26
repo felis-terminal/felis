@@ -1,0 +1,255 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "tests"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+# 1.88 over 1.85 edition floor: felis-grid uses let-chains stabilized in 1.88.
+rust-version = "1.88"
+license = "Apache-2.0"
+repository = "https://github.com/felis-terminal/felis"
+# Kept off crates.io until first stable release.
+publish = false
+
+[workspace.dependencies]
+# Internal — path deps for the in-repo split.
+felis-protocol = { path = "crates/felis-protocol" }
+felis-vt = { path = "crates/felis-vt" }
+felis-grid = { path = "crates/felis-grid" }
+felis-pty = { path = "crates/felis-pty" }
+felis-transport = { path = "crates/felis-transport" }
+felis-client-core = { path = "crates/felis-client-core" }
+felis-shaping = { path = "crates/felis-shaping" }
+felis-render-wgpu = { path = "crates/felis-render-wgpu" }
+
+# External — version-pinned in one place via workspace inheritance.
+tokio = { version = "1", features = [
+  "rt-multi-thread",
+  "net",
+  "io-util",
+  "io-std",
+  "macros",
+  "signal",
+  "sync",
+  "time",
+  "process",
+] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+parking_lot = "0.12"
+# Behind default-off schema feature so shipping binaries and felis-protocol stay schemars-free.
+schemars = "1"
+# Test-only: validates machine output against the published schema bundle.
+boon = "0.6"
+toml = "1.0"
+# serde_ignored over deny_unknown_fields: warns on typos without rejecting configs containing newer keys.
+serde_ignored = "0.1"
+postcard = { version = "1", default-features = false, features = ["use-std"] }
+# protobuf wire encoding for the IPC envelope — the only encoding the
+# daemon wire speaks. The committed generated types
+# (felis-protocol/src/generated) derive on `prost`. The codegen toolchain
+# (buf + protoc-gen-prost) lives in the dev shell, never in the crate
+# build graph, so purity stays `prost` + its light deps.
+prost = "0.14"
+# The well-known types the schema imports (google.protobuf.Timestamp).
+# Pure prost plus std, so felis-protocol keeps its no-tokio / no-OS rule.
+prost-types = "0.14"
+# Refcounted byte buffers for the bulk IPC payloads (image chunks). Already
+# in the graph via prost and tokio, and runtime-free, so felis-protocol may
+# depend on it without breaking its no-tokio / no-OS purity rule. `serde`
+# because the payload rides the serde-derived message types; a `Bytes`
+# serializes as the same byte string a `Vec<u8>` does.
+bytes = { version = "1", features = ["serde"] }
+bitflags = { version = "2", features = ["serde"] }
+# indexmap over HashMap+VecDeque: unifies entry lookup and eviction order without resync drift.
+indexmap = { version = "2", features = ["serde"] }
+# foldhash over default SipHash: style-intern index is non-adversarial and SipHash dominates parse time.
+foldhash = "0.2"
+thiserror = "2"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+clap = { version = "4", features = ["derive"] }
+clap_complete = "4"
+clap_mangen = "0.3"
+unicode-width = "0.2"
+# simdutf8 over std::str::from_utf8: the std validator is scalar and cost a quarter of the CJK parse.
+simdutf8 = "0.1"
+swash = "0.2"
+zeno = "0.3"
+fontdb = { version = "0.24", default-features = false, features = [
+  "fontconfig",
+  # memmap over fs::read: avoids reading ~230 MB of emoji/CJK fonts onto heap during startup metadata scan.
+  "memmap",
+] }
+# `felis-shaping` mmaps the *kept* fallback faces too (fontdb stores
+# them as `Source::File`, so without this they would be `fs::read` onto
+# the heap — ~190 MB live for the emoji + CJK faces). The map call is
+# `unsafe`, relaxed in `felis-shaping` (docs/explanation/rendering/text-shaping.md
+# "Font loading"). Same version
+# fontdb already pulls in, so no duplicate.
+memmap2 = "0.9"
+wgpu = "30"
+winit = "0.30"
+# default-features = false avoids dragging in the image crate with TIFF/JPEG decoders for text-only clipboard.
+arboard = { version = "3.6.1", default-features = false }
+# OS-native background blur (felis-client, macOS/Windows only).
+window-vibrancy = "0.8"
+# Pinned to objc2 0.6 to match window-vibrancy 0.7 and avoid duplicate objc2 runtime stacks.
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = [
+  "std",
+  "objc2-quartz-core",
+  "NSResponder",
+  "NSView",
+  "NSWindow",
+] }
+objc2-quartz-core = { version = "0.3", default-features = false, features = [
+  "std",
+  # CGFloat-typed property setters (zPosition, cornerRadius) are gated
+  # behind the objc2-core-foundation bridge feature.
+  "objc2-core-foundation",
+  "CALayer",
+  "CAMetalLayer",
+] }
+# Only for iterating `CALayer::sublayers`' NSArray — the array methods
+# live in objc2-foundation and quartz-core's transitive dep enables a
+# minimal feature set without the enumerator.
+objc2-foundation = { version = "0.3", default-features = false, features = [
+  "std",
+  "NSArray",
+  "NSEnumerator",
+] }
+# Only for the daemon's `LANG` fill: the current region's language and
+# country codes (felis-daemon, macOS only).
+objc2-core-foundation = { version = "0.3", default-features = false, features = [
+  "std",
+  "CFLocale",
+  "CFString",
+] }
+bytemuck = { version = "1", features = ["derive"] }
+regex = "1"
+miniz_oxide = { version = "0.9", default-features = false, features = [
+  "with-alloc",
+] }
+# Direct png crate over image front-end: Kitty protocol only supports PNG/raw, avoiding extra decoders in supply chain.
+png = "0.18"
+# mm/param: Apple shm fds reject pread, requiring mmap from page-aligned offsets.
+rustix = { version = "1", features = [
+  "fs",
+  "mm",
+  "net",
+  "param",
+  "process",
+  "shm",
+  "system",
+  # pty/termios: thread-safe posix_openpt wrappers; openpty(3) races on macOS static ptsname buffer.
+  "pty",
+  "termios",
+] }
+# libc over libproc/wrapper crates: avoids pulling bindgen/libclang for isolated calls; already in graph via tokio.
+libc = "0.2"
+windows-sys = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_Security_Authorization",
+  # CoInitializeEx on thread running ShellExecuteW: URL shell extensions may require initialized COM apartment.
+  "Win32_System_Com",
+  "Win32_System_Console",
+  "Win32_System_Memory",
+  "Win32_System_Pipes",
+  "Win32_System_Threading",
+  # Direct ShellExecuteW over an opener crate keeps Win32 surface on one dependency.
+  "Win32_UI_Shell",
+  "Win32_UI_WindowsAndMessaging",
+] }
+raw-window-handle = "0.6"
+directories = "6"
+# getrandom over rand: only consumer needs a 16-byte fill, avoiding rand's dependency graph.
+getrandom = "0.4"
+
+proptest = "1"
+insta = { version = "1", features = ["yaml"] }
+tempfile = "3"
+criterion = { version = "0.8", default-features = false }
+
+# Diagnostics — startup heap profiler. Wired behind the binaries'
+# `dhat-heap` feature only: it swaps the global allocator and records
+# a backtrace per allocation, far too costly for a normal run, so it
+# must never compile into a default build. It is also a dev-dependency
+# of `felis-client-core`, where a heap ceiling is the only way to state
+# what a limits test is actually asserting — that refusing a claim did
+# not first allocate against it. The on-exit `dhat-heap.json`
+# opens in the DHAT viewer
+# (https://nnethercote.github.io/dh_view/dh_view.html) as an
+# allocation-site flamegraph — this is the "framegraph" surface for
+# *heap* bytes. GPU / mmap'd driver memory is invisible to it (it only
+# sees the Rust global allocator); the `felis::mem` RSS milestones
+# below cover the total-process figure.
+dhat = "0.3"
+memory-stats = "1"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+# Registered so #[cfg(kani)] proof modules do not trip unexpected_cfgs.
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)'] }
+let_underscore_drop = "warn"
+unreachable_pub = "warn"
+unused_qualifications = "warn"
+unused_lifetimes = "warn"
+unused_macro_rules = "warn"
+single_use_lifetimes = "warn"
+trivial_casts = "warn"
+trivial_numeric_casts = "warn"
+unused_extern_crates = "warn"
+rust_2018_idioms = { level = "warn", priority = -1 }
+future_incompatible = { level = "warn", priority = -1 }
+nonstandard_style = { level = "warn", priority = -1 }
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+cargo = { level = "warn", priority = -1 }
+
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+cast_precision_loss = "allow"
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
+cast_lossless = "allow"
+similar_names = "allow"
+too_many_lines = "allow"
+must_use_candidate = "allow"
+# Kitty graphics dispatch threads split &mut borrows that cannot be bundled without borrow re-splitting.
+too_many_arguments = "allow"
+multiple_crate_versions = "allow"
+cargo_common_metadata = "allow"
+
+# Conflicts with unreachable_pub: we require pub(crate) on crate-internal items.
+redundant_pub_crate = "allow"
+significant_drop_tightening = "allow"
+option_if_let_else = "allow"
+
+doc_overindented_list_items = "allow"
+too_long_first_doc_paragraph = "allow"
+
+dbg_macro = "warn"
+print_stdout = "warn"
+print_stderr = "warn"
+unwrap_used = "warn"
+expect_used = "warn"
+todo = "warn"
+unimplemented = "warn"
+mod_module_files = "warn"
+
+[workspace.lints.rustdoc]
+broken_intra_doc_links = "warn"
+private_intra_doc_links = "warn"
+missing_crate_level_docs = "warn"
+
+# Faster mutants builds: same codegen as test, without debuginfo link cost.
+[profile.mutants]
+inherits = "test"
+debug = 0

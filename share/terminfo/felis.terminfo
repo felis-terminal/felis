@@ -1,0 +1,65 @@
+# terminfo source for felis — TERM=xterm-felis
+#
+# Install:   tic -x -o ~/.terminfo share/terminfo/felis.terminfo
+# Verify:    infocmp -x xterm-felis
+#
+# This entry is `use=xterm-256color` plus ONLY the capabilities felis
+# was verified to implement (see docs/reference/terminal-identity.md). It
+# deliberately omits the
+# DCS-form `Sync` capability: felis implements synchronized output via
+# the DECSET form (CSI ? 2026 h/l) only, so advertising the DCS form
+# would make tmux drive an unimplemented path. Likewise it does not
+# fabricate kitty-namespaced state — felis answers protocol queries
+# truthfully instead.
+#
+# Capability provenance (felis-vt / felis-grid, audited 2026-05-29):
+#   Tc / setrgbf / setrgbb  — truecolor, colon-form RGB sub-parameters
+#   Smulx / Setulc          — styled underlines + underline color
+#   smxx / rmxx             — strikethrough (SGR 9 / 29)
+#   BE / BD                 — bracketed paste (?2004)
+#   XF / fe / fd / kxIN/kxOUT — focus events (?1004)
+#   Ss / Se                 — DECSCUSR cursor shapes
+#   Cs / Cr                 — set / reset cursor color (OSC 12 / 112)
+#   fullkbd                 — Kitty keyboard protocol
+#
+# The cancellations below drop xterm-256color inheritances felis does
+# not implement: SCS is parsed but no-op (REQ-211), so acsc / smacs /
+# rmacs — and `sgr`, whose %p9 arm switches into it — would make
+# ncurses draw boxes as literal `qqlk`; and `xr` / `rv` claim xterm's
+# XTVERSION and DA2 version replies, which felis answers as itself.
+#
+# `pairs#0x7fff` is not cosmetic: a number above 32767 makes ncurses
+# 6.1+ tic emit the 32-bit binary format (magic 0o1036), which the
+# ncurses 6.0 shipped in macOS cannot read at all — every system
+# tput / vim / less inside felis then reports an unknown terminal.
+# That same reader caps an entry at 4096 bytes, which the compiled
+# entry must stay under (the Nix build asserts both).
+
+xterm-felis|felis terminal emulator,
+	Tc,
+	acsc@,
+	pairs#0x7fff,
+	rmacs@,
+	rv@,
+	sgr@,
+	smacs@,
+	xr@,
+	XF,
+	fullkbd,
+	BD=\E[?2004l,
+	BE=\E[?2004h,
+	Cr=\E]112\007,
+	Cs=\E]12;%p1%s\007,
+	Se=\E[2 q,
+	Setulc=\E[58\:2\:%p1%{65536}%/%d\:%p1%{256}%/%{255}%&%d\:%p1%{255}%&%dm,
+	Smulx=\E[4\:%p1%dm,
+	Ss=\E[%p1%d q,
+	fd=\E[?1004l,
+	fe=\E[?1004h,
+	kxIN=\E[I,
+	kxOUT=\E[O,
+	rmxx=\E[29m,
+	setrgbb=\E[48\:2\:%p1%d\:%p2%d\:%p3%dm,
+	setrgbf=\E[38\:2\:%p1%d\:%p2%d\:%p3%dm,
+	smxx=\E[9m,
+	use=xterm-256color,

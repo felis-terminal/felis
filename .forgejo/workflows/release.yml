@@ -1,0 +1,463 @@
+# The Windows chain below repeats `windows.yml`'s `windows-test`, `windows-smoke`
+# (its `main` release-build path) and `windows-package` step for step: a tag may
+# point at a revision that never had a green `main` run, and Forgejo Actions has
+# neither `workflow_call` nor a composite action that can carry these jobs'
+# `runs-on` and step-level `timeout-minutes`. Changes to either copy belong in both.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+# Forgejo ignores GitHub's `permissions: id-token: write` (forgejo/forgejo#10481).
+enable-openid-connect: true
+
+# One release at a time, never cancelled: two tag runs overlapping would
+# race on the same release page and the same cache push, and abandoning
+# a run mid-publication would leave a release whose assets are partial.
+concurrency:
+  group: felis-release
+  cancel-in-progress: false
+
+jobs:
+  verify-tag:
+    name: the tag names this exact revision
+    runs-on: x86_64-linux
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        # Annotated-tag inspection needs the tag object and the commit
+        # it points at, neither of which a depth-1 checkout carries.
+        with:
+          fetch-depth: 0
+      - name: the gate tells a good tag from a bad one (self-test)
+        run: nix develop -c python3 tools/release/verify.py --self-test
+      - name: the tag is annotated, clean, and agrees with the manifests
+        run: nix develop -c python3 tools/release/verify.py "$GITHUB_REF_NAME" "$GITHUB_SHA"
+
+  flake-check:
+    name: nix flake check
+    runs-on: x86_64-linux
+    needs: [verify-tag]
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: nix flake check --print-build-logs
+
+  build:
+    name: cargo build / clippy / test / deny
+    runs-on: x86_64-linux
+    needs: [verify-tag]
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.forgejo/actions/cargo-env
+      - run: nix develop -c just lint
+      - run: nix develop -c just test
+      - run: nix develop -c just deny
+      - name: felis-client-core's portable core still builds for wasm32
+        run: nix develop -c just check-portable
+      - uses: ./.forgejo/actions/cargo-env/done
+        if: always()
+
+  proto-compat:
+    # The tag path of the gate: compare with the newest published final
+    # release, not with history. A tag can be pushed at any commit, so
+    # a green run on main is not evidence about this one.
+    name: wire schema is compatible with the newest release
+    runs-on: x86_64-linux
+    needs: [verify-tag]
+    timeout-minutes: 45
+    env:
+      # Reading the release listing needs no credential while the
+      # repository is public; the run's own token keeps the gate working
+      # rather than failing closed if that ever changes.
+      FORGEJO_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: the gate tells additive from breaking (self-test)
+        run: nix develop -c python3 tools/proto/compat.py --self-test
+      - name: buf breaking against the newest release
+        run: nix develop -c python3 tools/proto/compat.py
+
+  linux-smoke:
+    name: frontend smoke (x86_64-linux)
+    runs-on: x86_64-linux
+    needs: [verify-tag]
+    timeout-minutes: 45
+    env:
+      # A per-run socket directory: concurrent runs share the runner's
+      # filesystem, and would otherwise connect to or kill each other's
+      # daemon. The daemon creates it 0700, which a socket parent must be.
+      SMOKE_SOCKET_DIR: felis-release-smoke-${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - run: nix build .#felis --print-build-logs
+      - name: the built binary reports the tag's own revision
+        run: |
+          ./result/bin/felis version --format json > "${RUNNER_TEMP:-/tmp}/version.json"
+          nix develop -c python3 tools/release/verify.py --identity \
+            "$GITHUB_REF_NAME" "$GITHUB_SHA" "${RUNNER_TEMP:-/tmp}/version.json"
+      - uses: ./.forgejo/actions/niks3-push
+      - name: run the smoke
+        env:
+          FELIS_SMOKE_MARKER: felis-release-smoke-${{ github.run_id }}
+          FELIS_SMOKE_TIMEOUT_MS: "60000"
+        # cat rather than a shell: the marker reaches the screen via
+        # tty echo, with no dependency on host shell configuration.
+        run: nix develop .#smoke -c xvfb-run -a ./result/bin/felis-client --socket "${RUNNER_TEMP:-/tmp}/$SMOKE_SOCKET_DIR/daemon.sock" -- cat
+      - name: stop the smoke's daemon
+        if: always()
+        run: pkill -f "felis-daemon serve --socket ${RUNNER_TEMP:-/tmp}/$SMOKE_SOCKET_DIR/daemon.sock" || true
+
+  linux-package:
+    # The archive a host without Nix unpacks and runs. `needs` on
+    # linux-smoke is ordering only: the marker flow runs again below, on
+    # the archive's own client, inside a foreign container.
+    name: package felis (x86_64-linux)
+    runs-on: x86_64-linux
+    needs: [verify-tag, linux-smoke]
+    timeout-minutes: 90
+    env:
+      DIST_ROOT: ${{ github.workspace }}/dist
+      TRIPLE: x86_64-linux
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - run: nix build .#felis-dist --print-build-logs
+      - name: unpack the archive the way a user would
+        run: |
+          rm -rf "$DIST_ROOT"
+          mkdir -p "$DIST_ROOT"
+          # Out of the store and writable: the smoke mounts the tree and
+          # the upload needs a file the action can read as itself.
+          cp --no-preserve=mode "result/felis-$TRIPLE.tar.gz" "$DIST_ROOT/"
+          tar -xzf "$DIST_ROOT/felis-$TRIPLE.tar.gz" -C "$DIST_ROOT"
+      - name: the unpacked tree carries what a host needs, and names no store path
+        run: nix develop -c bash tools/release/linux-archive-manifest.sh "$DIST_ROOT/felis-$TRIPLE"
+      - name: the archive runs on a host that has no Nix
+        env:
+          FELIS_SMOKE_MARKER: felis-release-package-${{ github.run_id }}
+          FELIS_SMOKE_TIMEOUT_MS: "60000"
+        timeout-minutes: 30
+        run: |
+          ctx="$DIST_ROOT/smoke"
+          mkdir -p "$ctx"
+          # The `xkbcli` dispatcher finds its helpers by a compiled-in
+          # store path, so the container gets the helper itself. It is
+          # the smoke's, not the archive's.
+          felis=$(nix build .#felis --no-link --print-out-paths)
+          xkb=$(nix path-info -r "$felis" | grep -m1 -- '-libxkbcommon-')
+          cp "$xkb/libexec/xkbcommon/xkbcli-compile-compose" "$ctx/"
+          chmod +w "$ctx/xkbcli-compile-compose"
+          cp tools/release/linux-archive-smoke.sh "$ctx/smoke.sh"
+          # The client from the flake's nixpkgs: the runner's service
+          # PATH carries no docker, only the socket its user may open.
+          nix shell --inputs-from . nixpkgs#docker-client -c docker run --rm \
+            -v "$DIST_ROOT/felis-$TRIPLE:/opt/felis:ro" \
+            -v "$ctx:/opt/smoke:ro" \
+            -e FELIS_SMOKE_MARKER -e FELIS_SMOKE_TIMEOUT_MS \
+            ubuntu:24.04 sh /opt/smoke/smoke.sh
+      - name: the archive's own binary reports the tag's revision
+        run: |
+          version_json="${RUNNER_TEMP:-/tmp}/dist-version.json"
+          "$DIST_ROOT/felis-$TRIPLE/bin/felis" version --format json > "$version_json"
+          nix develop -c python3 tools/release/verify.py --identity \
+            "$GITHUB_REF_NAME" "$GITHUB_SHA" "$version_json"
+      # Forgejo fork rather than upstream actions/upload-artifact: upstream rejects non-github.com runners.
+      - uses: https://code.forgejo.org/forgejo/upload-artifact@cb8afe72b42edc798abfb8fcb556cf660d894245 # v5 (upstream v4 API, GHES check disabled)
+        with:
+          name: felis-x86_64-linux
+          path: dist/felis-x86_64-linux.tar.gz
+          retention-days: 14
+
+  darwin-package:
+    name: package felis (aarch64-darwin)
+    runs-on: aarch64-darwin
+    needs: [verify-tag]
+    timeout-minutes: 90
+    env:
+      DIST_ROOT: ${{ github.workspace }}/dist
+      TRIPLE: aarch64-darwin
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - run: nix build .#felis --print-build-logs
+      - name: the built binary reports the tag's own revision
+        run: |
+          ./result/bin/felis version --format json > "${RUNNER_TEMP:-/tmp}/version.json"
+          nix develop -c python3 tools/release/verify.py --identity \
+            "$GITHUB_REF_NAME" "$GITHUB_SHA" "${RUNNER_TEMP:-/tmp}/version.json"
+      - uses: ./.forgejo/actions/niks3-push
+      - run: nix build .#felis-dist --print-build-logs
+      - name: unpack the archive the way a user would
+        run: |
+          rm -rf "$DIST_ROOT"
+          mkdir -p "$DIST_ROOT"
+          # Out of the store and writable: codesign reads the bundle and
+          # the upload needs a file the action can read as itself.
+          cp "result/felis-$TRIPLE.tar.gz" "$DIST_ROOT/"
+          chmod u+w "$DIST_ROOT/felis-$TRIPLE.tar.gz"
+          tar -xzf "$DIST_ROOT/felis-$TRIPLE.tar.gz" -C "$DIST_ROOT"
+      - name: the unpacked tree carries what a host needs, and sends dyld nowhere near /nix
+        # otool from the flake's own nixpkgs: the runner has no Xcode
+        # Command Line Tools, so /usr/bin/otool may not exist. bash from
+        # there too: the script reads `mapfile`, and the `bash` on the
+        # runner's own PATH is the 3.2 macOS still ships.
+        run: |
+          nix shell --inputs-from . nixpkgs#cctools nixpkgs#bash -c \
+            bash tools/release/macos-archive-manifest.sh "$DIST_ROOT/felis-$TRIPLE"
+      - name: the signature Apple's own tool sees is intact
+        # /usr/bin/codesign is part of the base OS, and it is the
+        # independent check of what rcodesign wrote in the derivation.
+        run: /usr/bin/codesign --verify --strict --deep "$DIST_ROOT/felis-$TRIPLE/felis.app"
+      - name: the archive runs on the runner
+        timeout-minutes: 10
+        # Deliberately not under `nix develop`: the dev shell exports
+        # DYLD_FALLBACK_LIBRARY_PATH, which could resolve a dylib the
+        # bundle failed to carry.
+        run: sh tools/release/macos-archive-smoke.sh "$DIST_ROOT/felis-$TRIPLE" "${RUNNER_TEMP:-/tmp}"
+      - name: the archive's own binaries report the tag's revision
+        # --bundled-client: a client that fails to launch is reported as
+        # `unavailable` while `felis version` still exits 0.
+        run: |
+          version_json="${RUNNER_TEMP:-/tmp}/dist-version.json"
+          "$DIST_ROOT/felis-$TRIPLE/bin/felis" version --format json > "$version_json"
+          nix develop -c python3 tools/release/verify.py --identity --bundled-client \
+            "$GITHUB_REF_NAME" "$GITHUB_SHA" "$version_json"
+      # Forgejo fork rather than upstream actions/upload-artifact: upstream rejects non-github.com runners.
+      - uses: https://code.forgejo.org/forgejo/upload-artifact@cb8afe72b42edc798abfb8fcb556cf660d894245 # v5 (upstream v4 API, GHES check disabled)
+        with:
+          name: felis-aarch64-darwin
+          path: dist/felis-aarch64-darwin.tar.gz
+          retention-days: 14
+
+  windows-test:
+    # cargo-nextest from its prebuilt archive rather than `cargo install`: the
+    # runner has no Nix to supply it, and a cold compile per run costs minutes
+    # where the download costs seconds.
+    name: cargo nextest (Windows)
+    runs-on: x86_64-windows
+    needs: [verify-tag]
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.forgejo/actions/cargo-env
+      - name: rustc satisfies the workspace MSRV
+        shell: powershell
+        run: |
+          $floor = (Select-String -Path Cargo.toml -Pattern '^rust-version\s*=\s*"([\d.]+)"').Matches[0].Groups[1].Value
+          $raw = rustc --version
+          if ($raw -notmatch 'rustc (\d+\.\d+\.\d+)') {
+            throw "could not read a version out of rustc --version: $raw"
+          }
+          $have = [version]$matches[1]
+          if ($have -lt [version]$floor) {
+            throw "this runner's rustc $have is below the workspace MSRV $floor; install a newer MSVC toolchain"
+          }
+          Write-Host "rustc $have satisfies the $floor floor"
+      - name: install cargo-nextest
+        shell: powershell
+        run: |
+          $zip = Join-Path $env:RUNNER_TEMP "nextest.zip"
+          Invoke-WebRequest -Uri https://get.nexte.st/latest/windows -OutFile $zip
+          $bin = if ($env:CARGO_HOME) { Join-Path $env:CARGO_HOME "bin" } else { Join-Path $env:USERPROFILE ".cargo\bin" }
+          Expand-Archive -Path $zip -DestinationPath $bin -Force
+          Remove-Item $zip
+          cargo nextest --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: compile the test binaries
+        shell: powershell
+        # $ErrorActionPreference = 'stop' does not cover native commands in PowerShell, so check $LASTEXITCODE explicitly.
+        run: |
+          cargo nextest run --workspace --locked --no-run
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        timeout-minutes: 60
+      - name: cargo nextest run
+        shell: powershell
+        run: |
+          cargo nextest run --workspace --locked --no-fail-fast
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        timeout-minutes: 20
+      - uses: ./.forgejo/actions/cargo-env/done
+        if: always()
+
+  windows-smoke:
+    name: frontend smoke (Windows)
+    runs-on: x86_64-windows
+    needs: [verify-tag, windows-test]
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.forgejo/actions/cargo-env
+      - name: build the binaries the smoke drives
+        shell: powershell
+        run: |
+          cargo build --release --locked -p felis-daemon -p felis-client -p felis-cli
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # Copied out because cargo's lock ends with the build: a concurrent
+          # job could relink the shared target directory under a running smoke,
+          # which would then pass on another revision's binaries.
+          $bin = Join-Path $(if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { $env:TEMP }) "felis-smoke-bin-${{ github.run_id }}"
+          New-Item -ItemType Directory -Force -Path $bin | Out-Null
+          foreach ($exe in @("felis.exe", "felis-client.exe", "felis-daemon.exe")) {
+            Copy-Item (Join-Path "$env:CARGO_TARGET_DIR\release" $exe) $bin
+          }
+          "SMOKE_BIN_DIR=$bin" | Add-Content -Path $env:GITHUB_ENV
+        timeout-minutes: 60
+      - name: run the smoke
+        shell: powershell
+        timeout-minutes: 15
+        env:
+          FELIS_SMOKE_MARKER: felis-smoke-${{ github.run_id }}
+          FELIS_SMOKE_TIMEOUT_MS: "60000"
+        run: |
+          # Windows Error Reporting suspends a faulting process while collecting a dump, wedging the runner on panic.
+          reg add "HKLM\SOFTWARE\Microsoft\Windows\Windows Error Reporting" /v Disabled /t REG_DWORD /d 1 /f | Out-Null
+          reg add "HKLM\SOFTWARE\Microsoft\Windows\Windows Error Reporting" /v DontShowUI /t REG_DWORD /d 1 /f | Out-Null
+          $pipe = "\\.\pipe\felis-smoke-${{ github.run_id }}"
+          # File redirection prevents runner pipes from being inherited by the autospawned daemon, which would hang the step.
+          $run = Start-Process -FilePath "$env:SMOKE_BIN_DIR\felis-client.exe" `
+            -ArgumentList "--socket", $pipe, "--", "cmd.exe" `
+            -RedirectStandardOutput smoke-out.txt `
+            -RedirectStandardError smoke-err.txt `
+            -PassThru -NoNewWindow
+          # Start-Process -Wait waits for descendants too; the autospawned daemon outlives the client by design.
+          $timed_out = -not $run.WaitForExit(180000)
+          if ($timed_out) {
+            Stop-Process -Id $run.Id -Force -ErrorAction SilentlyContinue
+          }
+          # Kill the daemon in-step: inherited open runner handles prevent the step from ending even with stdio redirected.
+          Get-Process -Name felis-daemon -ErrorAction SilentlyContinue | Stop-Process -Force
+          Get-Content smoke-out.txt, smoke-err.txt -ErrorAction SilentlyContinue
+          if ($timed_out) {
+            Write-Host "the smoke never exited; its own watchdog should have ended it"
+            exit 3
+          }
+          exit $run.ExitCode
+      - name: stop the smoke's daemon
+        if: always()
+        shell: powershell
+        # Under $ErrorActionPreference = 'stop', taskkill stderr fails the step when no process exists; use Stop-Process.
+        run: Get-Process -Name felis-daemon -ErrorAction SilentlyContinue | Stop-Process -Force
+      - uses: ./.forgejo/actions/cargo-env/done
+        if: always()
+
+  windows-package:
+    name: package felis (x86_64-pc-windows-msvc)
+    runs-on: x86_64-windows
+    needs: [verify-tag, windows-test, windows-smoke]
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.forgejo/actions/cargo-env
+      - name: build the release binaries
+        shell: powershell
+        run: |
+          cargo build --release --locked -p felis-daemon -p felis-client -p felis-cli
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        timeout-minutes: 60
+      - name: assemble the zip
+        shell: powershell
+        run: |
+          $stage = "dist\felis-x86_64-pc-windows-msvc"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item "$env:CARGO_TARGET_DIR\release\felis.exe"        $stage
+          Copy-Item "$env:CARGO_TARGET_DIR\release\felis-client.exe" $stage
+          Copy-Item "$env:CARGO_TARGET_DIR\release\felis-daemon.exe" $stage
+          Copy-Item README.md                                          $stage
+          Copy-Item LICENSE                                            $stage
+          Compress-Archive -Path "$stage\*" -DestinationPath dist\felis-x86_64-pc-windows-msvc.zip -Force
+      # Forgejo fork rather than upstream actions/upload-artifact: upstream rejects non-github.com runners.
+      - uses: https://code.forgejo.org/forgejo/upload-artifact@cb8afe72b42edc798abfb8fcb556cf660d894245 # v5 (upstream v4 API, GHES check disabled)
+        with:
+          name: felis-x86_64-pc-windows-msvc
+          path: dist/felis-x86_64-pc-windows-msvc.zip
+          retention-days: 14
+      - uses: ./.forgejo/actions/cargo-env/done
+        if: always()
+
+  release:
+    name: publish the release page
+    runs-on: x86_64-linux
+    needs: [flake-check, build, proto-compat, linux-smoke, linux-package, darwin-package, windows-package]
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - run: nix build .#felis --print-build-logs
+      # Forgejo fork rather than upstream actions/download-artifact: upstream rejects non-github.com runners.
+      - uses: https://code.forgejo.org/forgejo/download-artifact@1314311ddb542af343a82d478ac786ceada4143a # v5 (upstream v4 API, GHES check disabled)
+        with:
+          name: felis-x86_64-linux
+          path: artifacts
+      - uses: https://code.forgejo.org/forgejo/download-artifact@1314311ddb542af343a82d478ac786ceada4143a # v5 (upstream v4 API, GHES check disabled)
+        with:
+          name: felis-aarch64-darwin
+          path: artifacts
+      - uses: https://code.forgejo.org/forgejo/download-artifact@1314311ddb542af343a82d478ac786ceada4143a # v5 (upstream v4 API, GHES check disabled)
+        with:
+          name: felis-x86_64-pc-windows-msvc
+          path: artifacts
+      - name: the built binary reports the tag's own revision
+        run: |
+          version_json="${RUNNER_TEMP:-/tmp}/version.json"
+          ./result/bin/felis version --format json > "$version_json"
+          nix develop -c python3 tools/release/verify.py --identity \
+            "$GITHUB_REF_NAME" "$GITHUB_SHA" "$version_json"
+      - name: assemble the release notes
+        run: |
+          # A candidate has no dated section of its own; its entries are
+          # still accruing under Unreleased, which is what it rehearses.
+          case "$GITHUB_REF_NAME" in
+            *-*) section="## [Unreleased]" ;;
+            *) section="## [${GITHUB_REF_NAME#v}]" ;;
+          esac
+          changes=$(awk -v want="$section" '
+            index($0, want) == 1 { on = 1; next }
+            on && /^## \[/ { exit }
+            on && !/^\[[^]]+\]: / { print }
+          ' CHANGELOG.md | sed '/./,$!d')
+          public=felis-terminal/felis
+          {
+            sed -e "s|@TAG@|$GITHUB_REF_NAME|g" -e "s|@SHA@|$GITHUB_SHA|g" -e "s|@REPO@|$public|g" <<'EOF'
+          felis @TAG@, built from `@SHA@`.
+
+          ## Downloads
+
+          - **Linux (x86_64):** `felis-x86_64-linux.tar.gz`. Unpack it anywhere and run `bin/felis`.
+          - **macOS (Apple silicon):** `felis-aarch64-darwin.tar.gz`. Before the first run, clear the quarantine flag: `xattr -dr com.apple.quarantine <directory>`. Then run `bin/felis` or open `felis.app`.
+          - **Windows (x86_64):** `felis-x86_64-pc-windows-msvc.zip`. Unpack its three executables into one directory on your `PATH` and run `felis.exe`.
+          - **Nix:** `nix run github:@REPO@/@TAG@`. The flake offers prebuilt binaries from `https://nix-cache.natsukium.com`.
+
+          Step-by-step instructions are in [install.md](https://github.com/@REPO@/blob/@TAG@/docs/how-to/install.md).
+
+          These three platforms are supported. ARM64 Linux (`aarch64-linux`) builds from source through the flake but is not supported.
+
+          `felis.proto` and `felis-config.schema.json` are the IPC wire schema and the config schema of this build, for tools that talk to felis or validate its config.
+          EOF
+            if [ -n "$(printf '%s' "$changes" | tr -d '[:space:]')" ]; then
+              printf '\n## Changes\n\n%s\n' "$changes"
+            fi
+          } > release-notes.md
+          cat release-notes.md
+      - name: the release publisher behaves (self-test)
+        run: nix develop .#publish -c python3 tools/release/publish.py --self-test
+      - name: create the release and attach its assets
+        env:
+          RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          nix develop .#publish -c python3 tools/release/publish.py release \
+            "$GITHUB_REF_NAME" release-notes.md \
+            artifacts/felis-x86_64-linux.tar.gz \
+            artifacts/felis-aarch64-darwin.tar.gz \
+            artifacts/felis-x86_64-pc-windows-msvc.zip \
+            crates/felis-client-core/felis-config.schema.json \
+            crates/felis-protocol/proto/felis.proto

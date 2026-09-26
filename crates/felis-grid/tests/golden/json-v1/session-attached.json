@@ -1,0 +1,37 @@
+{
+  "felis_json": 1,
+  "kind": "session",
+  "msg": {
+    "info": {
+      "attachments": [
+        {
+          "attached_at": {
+            "unix_nanos": 500,
+            "unix_secs": 1700000000
+          },
+          "id": 7,
+          "input_owner": true
+        }
+      ],
+      "cwd": "file://localhost/tmp",
+      "dims": {
+        "cols": 80,
+        "pixel_h": 0,
+        "pixel_w": 0,
+        "rows": 24
+      },
+      "exited": false,
+      "foreground": "claude",
+      "id": "0123456789abcdef0123456789abcdef",
+      "idle_seconds": 12,
+      "last_exit_code": 0,
+      "last_notification": null,
+      "sequence": 3,
+      "tags": [
+        "work"
+      ],
+      "title": "zsh"
+    },
+    "type": "attached"
+  }
+}

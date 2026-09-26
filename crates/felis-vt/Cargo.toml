@@ -1,0 +1,26 @@
+[package]
+name = "felis-vt"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "felis VT parser: Williams DFA, UTF-8 buffering, Kitty graphics/keyboard/text-sizing dispatch"
+
+[dependencies]
+felis-protocol = { workspace = true }
+miniz_oxide = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+miniz_oxide = { workspace = true }
+criterion = { workspace = true }
+insta = { workspace = true }
+
+[[bench]]
+name = "parser_throughput"
+harness = false
+
+[lints]
+workspace = true

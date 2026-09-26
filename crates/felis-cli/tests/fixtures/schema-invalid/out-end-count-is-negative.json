@@ -1,0 +1,13 @@
+{
+  "against": "end_terminal",
+  "instance": {
+    "v": 1,
+    "event": "end",
+    "count": -1
+  },
+  "repaired": {
+    "v": 1,
+    "event": "end",
+    "count": 1
+  }
+}

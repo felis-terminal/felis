@@ -1,0 +1,11 @@
+version: v2
+clean: true
+plugins:
+  - local: protoc-gen-prost
+    out: src/generated
+    opt:
+      # WHY-NOT compile_well_known_types: the well-known types would be
+      # generated into this tree as a second copy of what prost-types
+      # already publishes, and no consumer could name ours.
+      # Uses Bytes for ImageChunk.bytes to alias frame memory without copying; other fields stay Vec to avoid refcount overhead.
+      - bytes=.felis.v1.ImageChunk.bytes

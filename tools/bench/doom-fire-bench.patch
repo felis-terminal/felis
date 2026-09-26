@@ -1,0 +1,96 @@
+SPDX-License-Identifier: GPL-3.0-or-later
+
+Teach DOOM-fire-zig to run unattended and report its own frame rate.
+
+This file, alone in the repository, is not Apache-2.0: a patch carries
+the upstream lines it modifies, so it is a derivative of DOOM-fire-zig
+and inherits that project's license. Nothing here reaches a felis
+binary — nix applies it to the upstream source at build time and the
+result is a separate program the bench shell runs — so the exception
+stops at this file. See the note under "License" in README.md.
+
+Applied by `devshell.nix` to the pinned upstream checkout (GPL-3.0-or-later,
+github.com/const-void/DOOM-fire-zig). Upstream is a demo: it blocks on
+a keystroke before the fire starts, runs until Ctrl-C, and paints the
+frame rate on screen, where the only reader is a human. The cross-
+terminal suite needs a fixed-length run whose result it can parse, so
+`DOOM_BENCH_SECS` adds one — and nothing else. The fire itself, the
+frame it emits and the rate it computes are untouched, which is what
+keeps the number comparable with the one upstream shows a human.
+
+The report goes to stderr because stdout *is* the workload: a line
+printed there would be more bytes for the terminal under test to draw.
+
+--- a/src/main.zig
++++ b/src/main.zig
+@@ -760,8 +760,9 @@
+     defer freeBuf();
+
+     //when there is an ez way to poll for key stroke...do that.  for now, ctrl+c!
+-    const ok = true;
+-    while (ok) {
++    // Deadline taken after initBuf so it starts where t_start does.
++    bench_deadline = std.time.milliTimestamp() + bench_secs * 1000;
++    while (benchRunning()) {
+
+         //update fire buf
+         doFire_x = 0;
+@@ -831,6 +832,37 @@
+ }
+
+ ///////////////////////////////////
++// bench mode (felis cross-terminal suite)
++///////////////////////////////////
++
++// DOOM_BENCH_SECS turns the demo into an unattended, fixed-length run
++// that reports its own frame rate. Upstream only ever draws the rate on
++// screen and never exits, so a harness comparing terminals can neither
++// read the number nor end the run.
++var bench_secs: i64 = 0;
++var bench_deadline: i64 = 0;
++
++pub fn initBench() void {
++    if (builtin.os.tag == .windows) return;
++    const raw = std.posix.getenv("DOOM_BENCH_SECS") orelse return;
++    bench_secs = std.fmt.parseInt(i64, raw, 10) catch 0;
++}
++
++pub fn benchRunning() bool {
++    return bench_secs == 0 or std.time.milliTimestamp() < bench_deadline;
++}
++
++// stderr, not stdout: stdout is the fire itself, so anything printed
++// there is just more payload on the screen being measured.
++pub fn reportBench() void {
++    if (bench_secs == 0) return;
++    std.io.getStdErr().writer().print(
++        "doom-fire frames {d} secs {d:.3} fps {d:.3} bytes_avg {d}\n",
++        .{ bs_frame_tic, t_dur, fps, bs_sz_avg },
++    ) catch {};
++}
++
++///////////////////////////////////
+ // main
+ ///////////////////////////////////
+
+@@ -838,12 +870,18 @@
+     stdout = std.io.getStdOut().writer();
+     stdin = std.io.getStdIn().reader();
+
++    initBench();
+     try initTerm();
+     defer complete() catch {};
+
+-    try checkTermSz();
+-    try showTermCap();
++    // The size check and the capability demo both block on a keystroke,
++    // and the harness pins the grid itself.
++    if (bench_secs == 0) {
++        try checkTermSz();
++        try showTermCap();
++    }
+     try showDoomFire();
++    reportBench();
+ }
+
+ // -- NOTE -- Keep the below aligned w/Microsoft Windows (MS WIN) specification

@@ -1,0 +1,24 @@
+# nextest over plain cargo test to match workspace test runner.
+test_tool = "nextest"
+
+# Builds under the mutants profile (Cargo.toml): same codegen as test,
+# without the debuginfo link cost on every per-mutant rebuild.
+profile = "mutants"
+
+# Parallelism stays out of this file: the config schema rejects `jobs`,
+# so `just mutants` defaults CARGO_MUTANTS_JOBS=4 instead.
+# Enables the structural JSON row view and its feature-gated tests in wire.rs.
+additional_cargo_args = ["--features", "felis-grid/json"]
+
+# Restricted to boundary logic: excludes async daemon, GPU renderer, and OS crates with poor signal-to-cost ratio.
+examine_globs = [
+  "crates/felis-grid/**",
+  "crates/felis-vt/**",
+  "crates/felis-protocol/**",
+]
+
+# cargo-mutants ignores cfgs and mutates cfg(kani) dead code, which nextest never runs.
+exclude_re = ["kani_proofs"]
+
+# Excludes committed prost codegen to avoid equivalent mutants on generated code.
+exclude_globs = ["crates/felis-protocol/src/generated/**"]

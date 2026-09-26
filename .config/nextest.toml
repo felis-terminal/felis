@@ -1,0 +1,10 @@
+# Serializes clipboard tests across separate nextest processes where in-memory mutexes cannot protect OS selections.
+[test-groups]
+real-clipboard = { max-threads = 1 }
+
+[[profile.default.overrides]]
+filter = 'package(felis-client) & test(/os_clipboard::tests::/)'
+test-group = 'real-clipboard'
+
+[profile.default]
+slow-timeout = { period = "60s", terminate-after = 3 }

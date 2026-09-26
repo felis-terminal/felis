@@ -1,0 +1,72 @@
+name: cargo-env
+description: >-
+  Point cargo at a persistent build directory outside the workspace; the job
+  releases it with cargo-env/done. The rebuild policy is
+  docs/reference/testing.md "Persistent build directory".
+
+runs:
+  using: composite
+  steps:
+    # Persistent directory rather than actions/cache: the runner host's
+    # systemd DynamicUser symlink breaks tar manifest path resolution.
+    - name: park the build directory where the checkout cannot delete it
+      if: runner.os != 'Windows'
+      shell: bash
+      run: |
+        root="$HOME/.cache/forgejo-ci/${{ github.repository }}"
+        mkdir -p "$root"
+        toolchain="$(nix develop -c rustc -vV | sed -n '/^rustc /,$p')"
+        runner="$(cat /proc/sys/kernel/random/boot_id) $PPID $(cut -d' ' -f22 "/proc/$PPID/stat") $(cat "/proc/$PPID/comm")"
+        CARGO_ENV_ROOT="$root" CARGO_ENV_TOOLCHAIN="$toolchain" CARGO_ENV_RUNNER="$runner" \
+          flock "$root/lock" node "${{ github.action_path }}/guard.mjs" start
+
+    # D: is the Windows guest's state disk, the only one that outlives the
+    # reset of its system disk; $HOME there rides the disk that does not.
+    - name: park the build directory on the disk that survives the guest reset
+      if: runner.os == 'Windows'
+      shell: powershell
+      run: |
+        $root = "D:\forgejo-ci\${{ github.repository }}".Replace("/", "\")
+        New-Item -ItemType Directory -Force -Path $root | Out-Null
+        # Full debuginfo made each test binary's PDB 25-50 MB and filled D:;
+        # line tables still resolve a backtrace frame to file:line, which
+        # debug = 0 would not.
+        $env:CARGO_PROFILE_DEV_DEBUG = "line-tables-only"
+        "CARGO_PROFILE_DEV_DEBUG=$env:CARGO_PROFILE_DEV_DEBUG" | Add-Content -Path $env:GITHUB_ENV
+        $env:CARGO_ENV_TOOLCHAIN = rustc -vV | Out-String
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        $shell = Get-CimInstance Win32_Process -Filter "ProcessId=$PID"
+        $runner = Get-CimInstance Win32_Process -Filter "ProcessId=$($shell.ParentProcessId)"
+        $env:CARGO_ENV_RUNNER = "$($runner.ProcessId) $($runner.CreationDate.ToFileTimeUtc()) $($runner.Name)"
+        $env:CARGO_ENV_ROOT = $root
+        # Dropping the cache beats letting D: fill: the same disk carries the
+        # cargo registry and the runner's own credential.
+        $env:CARGO_ENV_MIN_FREE_BYTES = 8GB
+        $lock = $null
+        for ($i = 0; $null -eq $lock; $i++) {
+          try { $lock = [IO.File]::Open("$root\lock", "OpenOrCreate", "ReadWrite", "None") }
+          catch { if ($i -ge 900) { throw }; Start-Sleep -Seconds 2 }
+        }
+        try {
+          node "${{ github.action_path }}\guard.mjs" start
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        } finally { $lock.Close() }
+
+    # Every freshly linked test binary is scanned on its first execution, and
+    # a debug build of this workspace produces dozens of them: cargo-nextest's
+    # listing pass spent three minutes there. The guest resets its system disk
+    # on every start, taking the exclusion list with it, so this cannot be a
+    # setting held on the runner.
+    - name: exempt the build directories from the on-access scanner
+      if: runner.os == 'Windows'
+      shell: powershell
+      run: |
+        # Tamper protection can refuse the call; a slower run beats a failed one.
+        try { Write-Host "already exempt: $((Get-MpPreference).ExclusionPath -join ', ')" }
+        catch { Write-Host "nothing to query: $($_.Exception.Message)" }
+        foreach ($path in @($env:CARGO_TARGET_DIR, $env:CARGO_HOME, $env:RUSTUP_HOME, $env:GITHUB_WORKSPACE)) {
+          if ($path) {
+            try { Add-MpPreference -ExclusionPath $path -ErrorAction Stop; Write-Host "exempted $path" }
+            catch { Write-Host "could not exempt ${path}: $($_.Exception.Message)" }
+          }
+        }

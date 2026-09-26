@@ -1,0 +1,83 @@
+[advisories]
+yanked = "deny"
+# Scoped to workspace: transitive unmaintained deps cannot be updated from this repository.
+unmaintained = "workspace"
+
+[licenses]
+# Strict allowlist over blanket OSI approval so new license categories require explicit review.
+allow = [
+  "Apache-2.0",
+  "MIT",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "BSL-1.0",
+  "ISC",
+  "Unicode-3.0",
+  "Zlib",
+  # MPL-2.0 copyleft is file-scoped and does not extend to the consuming binary.
+  "MPL-2.0",
+  "CC0-1.0",
+]
+
+[bans]
+wildcards = "deny"
+# Required because workspace-inheritance dependencies read as wildcards in member manifests.
+allow-wildcard-paths = true
+# Runtime evaluators are intentionally excluded; extension is IPC-based.
+deny = [
+  # Lua bindings and runtimes.
+  "mlua",
+  "rlua",
+  "hlua",
+  "lua",
+  "lua-src",
+  "lua52-sys",
+  "lua53-sys",
+  "lua54-sys",
+  "luajit-src",
+  "luajit-sys",
+  "tealr",
+  # Python bindings and runtimes.
+  "pyo3",
+  "pyo3-build-config",
+  "pyo3-ffi",
+  "cpython",
+  "rust-cpython",
+  "rustpython-vm",
+  "rustpython-compiler",
+  # Wasm runtimes.
+  "wasmtime",
+  "wasmer",
+  "wasmer-runtime",
+  "wasmer-runtime-core",
+  "wasmi",
+  "wasm3",
+  "wapc",
+  "wasmer-vm",
+  "wasmtime-runtime",
+  "wasmtime-cranelift",
+  # JavaScript and ECMAScript engines.
+  "deno_core",
+  "deno_runtime",
+  "rusty_v8",
+  "v8",
+  "quickjs",
+  "rquickjs",
+  "rquickjs-core",
+  "boa_engine",
+  "boa_interpreter",
+  # Other embedded scripting languages.
+  "rhai",
+  "rhai_codegen",
+  "gluon",
+  "steel-core",
+  "steel-language-server",
+  "ketos",
+  "dyon",
+  "tcl",
+  "duktape",
+  "duktape-sys",
+  # Generic dynamic-evaluation surfaces.
+  "evalexpr",
+  "fasteval",
+]

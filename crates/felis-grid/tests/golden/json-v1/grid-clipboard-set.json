@@ -1,0 +1,18 @@
+{
+  "felis_json": 1,
+  "kind": "grid",
+  "msg": {
+    "type": "clipboard_set",
+    "write": {
+      "data": [
+        99,
+        111,
+        112,
+        105,
+        101,
+        100
+      ],
+      "selection": 3
+    }
+  }
+}

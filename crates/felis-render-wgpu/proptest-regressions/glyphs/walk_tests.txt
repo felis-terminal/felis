@@ -1,0 +1,9 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc a6f1b5dd5af8667330185592c99ffe4e119271c3715894dfbb66c6bc43919dab # shrinks to ops = [WriteRow(0, [32], 0), Reconnect], features = ["liga"], atlas_side = 4096
+cc 0f211345d05169ae7e969c540ae46f4f01bbeae7a6e1c079e65db37d48765d55 # shrinks to ops = [SetCluster(5, 2, 0), SetChar(5, 0, '!', 0)], features = [], atlas_side = 4096
+cc 7af585cedb5c746c9b0f71168e4e855722ee2498ba51b696fa51f91281b06f99 # shrinks to ops = [Resize(9, 16), WriteRow(0, [35, 32, 42, 65, 60, 61, 32, 66, 37, 58, 43, 72], 0), SetChar(0, 0, '─', 0), WriteRow(0, [62, 100, 74, 54, 47, 75, 48], 0), WriteRow(0, [67, 82, 50, 34, 45, 107, 76], 0), WriteRow(0, [109, 42, 37, 64, 48, 60, 54, 61, 65, 47, 66, 67, 82, 35, 49], 1), Overlay(['À', 'Õ', 'À', 'Ì', 'Á', 'Ã', 'Ñ', 'Ô', 'Ü', 'ù', 'è', 'ä', 'ó', 'Ó', 'É', 'ÿ'])], features = [], atlas_side = 71

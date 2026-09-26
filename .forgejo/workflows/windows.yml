@@ -1,0 +1,221 @@
+name: windows
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Superseding a PR commit cancels its runs; main's runs never cancel, since
+# publication is gated per revision on that revision's own jobs.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  changes:
+    # On this chain's own runner, not x86_64-linux: that runner takes one job at a
+    # time, so a filter queued there held the chain behind every other
+    # workflow while this runner sat idle.
+    name: detect relevant changes
+    runs-on: x86_64-windows
+    timeout-minutes: 5
+    outputs:
+      relevant: ${{ steps.filter.outputs.relevant }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4
+        id: filter
+        with:
+          predicate-quantifier: 'some-with-excludes'
+          filters: |
+            relevant:
+              - '**'
+              - '!docs/**'
+              - '!**/*.md'
+              - '!*.md'
+
+  windows-cross:
+    # Cross-lints on the x86_64-linux runner so Linux PRs learn about cfg(windows) build breaks
+    # without waiting for a Windows host, and because windows-test runs tests rather than clippy.
+    # Not gated on `changes`: that filter runs on the Windows runner, so
+    # waiting for it would queue this x86_64-linux job behind Windows work.
+    name: cargo clippy (Windows cross)
+    runs-on: x86_64-linux
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.forgejo/actions/cargo-env
+      - run: nix develop -c just check-windows
+      - uses: ./.forgejo/actions/cargo-env/done
+        if: always()
+
+  windows-test:
+    # cargo-nextest from its prebuilt archive rather than `cargo install`: the
+    # runner has no Nix to supply it, and a cold compile per run costs minutes
+    # where the download costs seconds.
+    # Not continue-on-error: Forgejo Actions silently ignores job-level
+    # continue-on-error, and step-level reports success to downstream jobs.
+    name: cargo nextest (Windows)
+    runs-on: x86_64-windows
+    needs: [changes]
+    if: needs.changes.outputs.relevant == 'true'
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.forgejo/actions/cargo-env
+      - name: rustc satisfies the workspace MSRV
+        shell: powershell
+        run: |
+          $floor = (Select-String -Path Cargo.toml -Pattern '^rust-version\s*=\s*"([\d.]+)"').Matches[0].Groups[1].Value
+          $raw = rustc --version
+          if ($raw -notmatch 'rustc (\d+\.\d+\.\d+)') {
+            throw "could not read a version out of rustc --version: $raw"
+          }
+          $have = [version]$matches[1]
+          if ($have -lt [version]$floor) {
+            throw "this runner's rustc $have is below the workspace MSRV $floor; install a newer MSVC toolchain"
+          }
+          Write-Host "rustc $have satisfies the $floor floor"
+      - name: install cargo-nextest
+        shell: powershell
+        run: |
+          $zip = Join-Path $env:RUNNER_TEMP "nextest.zip"
+          Invoke-WebRequest -Uri https://get.nexte.st/latest/windows -OutFile $zip
+          $bin = if ($env:CARGO_HOME) { Join-Path $env:CARGO_HOME "bin" } else { Join-Path $env:USERPROFILE ".cargo\bin" }
+          Expand-Archive -Path $zip -DestinationPath $bin -Force
+          Remove-Item $zip
+          cargo nextest --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: compile the test binaries
+        shell: powershell
+        # $ErrorActionPreference = 'stop' does not cover native commands in PowerShell, so check $LASTEXITCODE explicitly.
+        run: |
+          cargo nextest run --workspace --locked --no-run
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        timeout-minutes: 60
+      - name: cargo nextest run
+        shell: powershell
+        run: |
+          cargo nextest run --workspace --locked --no-fail-fast
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        timeout-minutes: 20
+      - uses: ./.forgejo/actions/cargo-env/done
+        if: always()
+
+  windows-smoke:
+    name: frontend smoke (Windows)
+    runs-on: x86_64-windows
+    needs: [changes, windows-test]
+    if: needs.changes.outputs.relevant == 'true'
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.forgejo/actions/cargo-env
+      # A PR drives the debug binaries windows-test left in the target
+      # directory; a release build would be a second full compile per commit.
+      # main keeps the release build, the binaries windows-package ships.
+      - name: build the binaries the smoke drives
+        shell: powershell
+        run: |
+          if ("${{ github.event_name }}" -eq "pull_request") {
+            cargo build --locked -p felis-daemon -p felis-client -p felis-cli
+            $build = "debug"
+          } else {
+            cargo build --release --locked -p felis-daemon -p felis-client -p felis-cli
+            $build = "release"
+          }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # Copied out because cargo's lock ends with the build: a concurrent
+          # job could relink the shared target directory under a running smoke,
+          # which would then pass on another revision's binaries.
+          $bin = Join-Path $(if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { $env:TEMP }) "felis-smoke-bin-${{ github.run_id }}"
+          New-Item -ItemType Directory -Force -Path $bin | Out-Null
+          foreach ($exe in @("felis.exe", "felis-client.exe", "felis-daemon.exe")) {
+            Copy-Item (Join-Path "$env:CARGO_TARGET_DIR\$build" $exe) $bin
+          }
+          "SMOKE_BIN_DIR=$bin" | Add-Content -Path $env:GITHUB_ENV
+        timeout-minutes: 60
+      - name: run the smoke
+        shell: powershell
+        timeout-minutes: 15
+        env:
+          FELIS_SMOKE_MARKER: felis-smoke-${{ github.run_id }}
+          FELIS_SMOKE_TIMEOUT_MS: "60000"
+        run: |
+          # Windows Error Reporting suspends a faulting process while collecting a dump, wedging the runner on panic.
+          reg add "HKLM\SOFTWARE\Microsoft\Windows\Windows Error Reporting" /v Disabled /t REG_DWORD /d 1 /f | Out-Null
+          reg add "HKLM\SOFTWARE\Microsoft\Windows\Windows Error Reporting" /v DontShowUI /t REG_DWORD /d 1 /f | Out-Null
+          $pipe = "\\.\pipe\felis-smoke-${{ github.run_id }}"
+          # File redirection prevents runner pipes from being inherited by the autospawned daemon, which would hang the step.
+          $run = Start-Process -FilePath "$env:SMOKE_BIN_DIR\felis-client.exe" `
+            -ArgumentList "--socket", $pipe, "--", "cmd.exe" `
+            -RedirectStandardOutput smoke-out.txt `
+            -RedirectStandardError smoke-err.txt `
+            -PassThru -NoNewWindow
+          # Start-Process -Wait waits for descendants too; the autospawned daemon outlives the client by design.
+          $timed_out = -not $run.WaitForExit(180000)
+          if ($timed_out) {
+            Stop-Process -Id $run.Id -Force -ErrorAction SilentlyContinue
+          }
+          # Kill the daemon in-step: inherited open runner handles prevent the step from ending even with stdio redirected.
+          Get-Process -Name felis-daemon -ErrorAction SilentlyContinue | Stop-Process -Force
+          Get-Content smoke-out.txt, smoke-err.txt -ErrorAction SilentlyContinue
+          if ($timed_out) {
+            Write-Host "the smoke never exited; its own watchdog should have ended it"
+            exit 3
+          }
+          exit $run.ExitCode
+      - name: stop the smoke's daemon
+        if: always()
+        shell: powershell
+        # Under $ErrorActionPreference = 'stop', taskkill stderr fails the step when no process exists; use Stop-Process.
+        run: Get-Process -Name felis-daemon -ErrorAction SilentlyContinue | Stop-Process -Force
+      - uses: ./.forgejo/actions/cargo-env/done
+        if: always()
+
+  windows-package:
+    name: package felis (x86_64-pc-windows-msvc)
+    runs-on: x86_64-windows
+    needs: [changes, windows-test, windows-smoke]
+    if: github.event_name == 'push' && needs.changes.outputs.relevant == 'true'
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.forgejo/actions/cargo-env
+      - name: build the release binaries
+        shell: powershell
+        run: |
+          cargo build --release --locked -p felis-daemon -p felis-client -p felis-cli
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        timeout-minutes: 60
+      - name: assemble the zip
+        shell: powershell
+        run: |
+          $stage = "dist\felis-x86_64-pc-windows-msvc"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item "$env:CARGO_TARGET_DIR\release\felis.exe"        $stage
+          Copy-Item "$env:CARGO_TARGET_DIR\release\felis-client.exe" $stage
+          Copy-Item "$env:CARGO_TARGET_DIR\release\felis-daemon.exe" $stage
+          Copy-Item README.md                                          $stage
+          Copy-Item LICENSE                                            $stage
+          Compress-Archive -Path "$stage\*" -DestinationPath dist\felis-x86_64-pc-windows-msvc.zip -Force
+      # Forgejo fork rather than upstream actions/upload-artifact: upstream rejects non-github.com runners.
+      - uses: https://code.forgejo.org/forgejo/upload-artifact@cb8afe72b42edc798abfb8fcb556cf660d894245 # v5 (upstream v4 API, GHES check disabled)
+        with:
+          name: felis-x86_64-pc-windows-msvc
+          path: dist/felis-x86_64-pc-windows-msvc.zip
+          retention-days: 14
+      - uses: ./.forgejo/actions/cargo-env/done
+        if: always()
+
+  windows-noop:
+    name: windows docs-only no-op
+    runs-on: x86_64-windows
+    needs: [changes]
+    if: needs.changes.outputs.relevant == 'false'
+    timeout-minutes: 5
+    steps:
+      - run: echo "docs-only change, skipping Windows checks"

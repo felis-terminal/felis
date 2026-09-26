@@ -1,0 +1,31 @@
+{
+  "against": "SessionObject",
+  "instance": {
+    "id": "0123456789abcdef0123456789abcdef",
+    "short_id": "0123abcd",
+    "rows": 24,
+    "cols": 80,
+    "tags": [],
+    "attachments": [
+      {
+        "id": 7,
+        "attached_at": "2026-09-01T08:15:00Z",
+        "input_owner": true
+      }
+    ]
+  },
+  "repaired": {
+    "id": "0123456789abcdef0123456789abcdef",
+    "short_id": "0123abcd",
+    "rows": 24,
+    "cols": 80,
+    "tags": [],
+    "attachments": [
+      {
+        "id": "7",
+        "attached_at": "2026-09-01T08:15:00Z",
+        "input_owner": true
+      }
+    ]
+  }
+}

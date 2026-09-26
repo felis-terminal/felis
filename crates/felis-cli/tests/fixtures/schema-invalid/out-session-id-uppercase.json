@@ -1,0 +1,19 @@
+{
+  "against": "SessionObject",
+  "instance": {
+    "id": "0123456789ABCDEF0123456789ABCDEF",
+    "short_id": "0123abcd",
+    "rows": 24,
+    "cols": 80,
+    "tags": [],
+    "attachments": []
+  },
+  "repaired": {
+    "id": "0123456789abcdef0123456789abcdef",
+    "short_id": "0123abcd",
+    "rows": 24,
+    "cols": 80,
+    "tags": [],
+    "attachments": []
+  }
+}

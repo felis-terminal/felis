@@ -1,0 +1,95 @@
+{
+  "felis_json": 1,
+  "kind": "grid",
+  "msg": {
+    "rows": [
+      {
+        "cells": {
+          "attr_runs": [
+            {
+              "attrs": {
+                "bg": {
+                  "type": "default"
+                },
+                "fg": {
+                  "type": "default"
+                },
+                "flags": 0,
+                "underline_color": {
+                  "type": "default"
+                },
+                "underline_style": "single"
+              },
+              "len": 2,
+              "link": null
+            }
+          ],
+          "encoding": "rle",
+          "graphemes": [
+            {
+              "byte": 104,
+              "type": "ascii"
+            },
+            {
+              "byte": 105,
+              "type": "ascii"
+            }
+          ],
+          "sized_cells": [],
+          "soft_wrap_continued": false
+        },
+        "row": 0
+      },
+      {
+        "cells": {
+          "attr_runs": [
+            {
+              "attrs": {
+                "bg": {
+                  "type": "default"
+                },
+                "fg": {
+                  "type": "default"
+                },
+                "flags": 0,
+                "underline_color": {
+                  "type": "default"
+                },
+                "underline_style": "single"
+              },
+              "len": 5,
+              "link": null
+            }
+          ],
+          "encoding": "rle",
+          "graphemes": [
+            {
+              "byte": 102,
+              "type": "ascii"
+            },
+            {
+              "byte": 101,
+              "type": "ascii"
+            },
+            {
+              "byte": 108,
+              "type": "ascii"
+            },
+            {
+              "byte": 105,
+              "type": "ascii"
+            },
+            {
+              "byte": 115,
+              "type": "ascii"
+            }
+          ],
+          "sized_cells": [],
+          "soft_wrap_continued": false
+        },
+        "row": 3
+      }
+    ],
+    "type": "row_delta"
+  }
+}

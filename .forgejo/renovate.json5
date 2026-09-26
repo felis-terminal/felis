@@ -1,0 +1,24 @@
+{
+  $schema: "https://docs.renovatebot.com/renovate-schema.json",
+  extends: ["config:best-practices"],
+  timezone: "Asia/Tokyo",
+  minimumReleaseAge: "3 days",
+  semanticCommits: "disabled",
+  commitMessagePrefix: "deps:",
+  lockFileMaintenance: {
+    enabled: true,
+    schedule: ["before 3:00am on monday"],
+  },
+  automerge: true,
+  automergeStrategy: "squash",
+  prConcurrentLimit: 5,
+  packageRules: [
+    {
+      matchUpdateTypes: ["major"],
+      automerge: false,
+    },
+  ],
+  nix: {
+    enabled: true,
+  },
+}

@@ -1,0 +1,20 @@
+[package]
+name = "felis-workspace-tests"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "Guards on workspace-wide invariants: documented source references"
+
+# Outside `crates/` and carrying no lib or bin: these tests assert properties of
+# the workspace itself, so they belong to no crate's extraction set. The targets
+# are listed explicitly because the sources sit at the package root rather than
+# in the `tests/` subdirectory cargo auto-discovers.
+[[test]]
+name = "doc_source_references"
+path = "doc_source_references.rs"
+
+[lints]
+workspace = true

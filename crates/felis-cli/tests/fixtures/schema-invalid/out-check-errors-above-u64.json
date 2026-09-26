@@ -1,0 +1,19 @@
+{
+  "against": "CheckResult",
+  "instance": {
+    "path": "/home/u/.config/felis/config.toml",
+    "exists": true,
+    "client": "felis 0.1.0",
+    "errors": 18446744073709555712,
+    "warnings": 0,
+    "diagnostics": []
+  },
+  "repaired": {
+    "path": "/home/u/.config/felis/config.toml",
+    "exists": true,
+    "client": "felis 0.1.0",
+    "errors": 18446744073709551615,
+    "warnings": 0,
+    "diagnostics": []
+  }
+}

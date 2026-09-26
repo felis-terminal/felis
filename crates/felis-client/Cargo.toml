@@ -1,0 +1,57 @@
+[package]
+name = "felis-client"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "felis native client: winit event loop, OS clipboard, font picker, wgpu renderer"
+
+[[bin]]
+name = "felis-client"
+path = "src/main.rs"
+
+[features]
+# Routes arboard through wl-clipboard-rs for wlr_data_control_v1; off by default to avoid Linux-only deps on macOS/Windows.
+wayland-clipboard = ["arboard/wayland-data-control"]
+
+# Swaps global allocator to profile allocation sites via DHAT.
+dhat-heap = ["dep:dhat"]
+
+[dependencies]
+felis-protocol = { workspace = true }
+felis-grid = { workspace = true }
+felis-transport = { workspace = true }
+felis-client-core = { workspace = true }
+felis-render-wgpu = { workspace = true }
+winit = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+clap = { workspace = true }
+anyhow = { workspace = true }
+arboard = { workspace = true }
+memory-stats = { workspace = true }
+serde_json = { workspace = true }
+dhat = { workspace = true, optional = true }
+
+# Application-driven window blur for macOS/Windows; Linux blur is compositor-owned.
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+window-vibrancy = { workspace = true }
+
+# ShellExecuteW passes URL as an inert parameter, avoiding cmd.exe metacharacter re-parsing.
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { workspace = true }
+
+# Raises Metal layer above vibrancy backdrop and re-clips rounded corners lost on transparent macOS windows.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = { workspace = true }
+objc2-app-kit = { workspace = true }
+objc2-quartz-core = { workspace = true }
+objc2-foundation = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+
+[lints]
+workspace = true

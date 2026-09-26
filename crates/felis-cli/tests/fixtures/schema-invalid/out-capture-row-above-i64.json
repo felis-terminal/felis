@@ -1,0 +1,13 @@
+{
+  "against": "CaptureRow",
+  "instance": {
+    "row": 9223372036854777856,
+    "text": "hi",
+    "soft_wrap_continued": false
+  },
+  "repaired": {
+    "row": 9223372036854775807,
+    "text": "hi",
+    "soft_wrap_continued": false
+  }
+}

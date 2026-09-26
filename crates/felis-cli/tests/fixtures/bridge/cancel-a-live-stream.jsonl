@@ -1,0 +1,4 @@
+{"dir":"in","id":"sub","op":"notifications.subscribe","params":{},"v":1}
+{"dir":"in","id":"stop","op":"cancel","params":{"target":"sub"},"v":1}
+{"dir":"out","id":"stop","result":{"canceled":true},"v":1}
+{"count":0,"dir":"out","event":"end","id":"sub","v":1}

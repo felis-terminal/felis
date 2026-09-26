@@ -1,0 +1,36 @@
+[package]
+name = "felis-shaping"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "felis text shaper: swash + font fallback + shape cache"
+
+[features]
+# Named testing over test-support because clippy::redundant_feature_names rejects the -support suffix.
+testing = []
+
+[dependencies]
+swash = { workspace = true }
+zeno = { workspace = true }
+fontdb = { workspace = true }
+memmap2 = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+criterion = { workspace = true }
+proptest = { workspace = true }
+
+[[bench]]
+name = "shape_cache"
+harness = false
+
+[[bench]]
+name = "shape_run"
+harness = false
+
+[lints]
+workspace = true

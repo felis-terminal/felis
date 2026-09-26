@@ -1,0 +1,20 @@
+[package]
+name = "wl-latency"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+memmap2 = "0.9"
+rustix = { version = "1", features = ["event"] }
+serde_json = "1"
+tempfile = "3"
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client"] }
+wayland-protocols-misc = { version = "0.3", features = ["client"] }
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
+
+[profile.release]
+debug = false
+
+[workspace]

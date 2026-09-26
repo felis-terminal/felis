@@ -1,0 +1,53 @@
+[package]
+name = "felis-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "felis headless front-door: CLI verbs (sessions, notifications, completions) and the frontend launcher"
+
+[[bin]]
+name = "felis"
+path = "src/main.rs"
+
+[features]
+# Default-off so the shipped binary stays schemars-free; enabled for the
+# machine-surface schema sync test.
+schema = ["dep:schemars", "felis-protocol/schema"]
+
+[dependencies]
+felis-protocol = { workspace = true }
+felis-grid = { workspace = true }
+felis-transport = { workspace = true }
+felis-client-core = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+clap = { workspace = true }
+clap_complete = { workspace = true }
+clap_mangen = { workspace = true }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+schemars = { workspace = true, optional = true }
+
+[dev-dependencies]
+felis-daemon = { path = "../felis-daemon" }
+felis-transport = { workspace = true, features = ["test-util"] }
+felis-pty = { workspace = true }
+insta = { workspace = true }
+tempfile = { workspace = true }
+boon = { workspace = true }
+proptest = { workspace = true }
+tokio = { workspace = true, features = [
+  "rt-multi-thread",
+  "macros",
+  "process",
+  "io-util",
+  "time",
+] }
+
+[lints]
+workspace = true

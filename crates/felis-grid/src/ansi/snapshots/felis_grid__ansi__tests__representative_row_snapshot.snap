@@ -1,0 +1,5 @@
+---
+source: crates/felis-grid/src/serialize/tests.rs
+expression: readable
+---
+\e[1ma\e[0;2mb\e[0;3mc\e[0;5md\e[0;7me\e[0;8mf\e[0;9mg\e[0;53mh\e[0;1;3;7mi\e[0;4mj\e[0;21mk\e[0;4:3ml\e[0;4:4mm\e[0;4:5mn\e[0;33mo\e[0;94mp\e[0;38;5;200mq\e[0;45mr\e[0;106ms\e[0;48;5;231mt\e[0;38;2;18;52;86;48;2;120;154;188mu\e[0;4:3;58;5;9mv\e[0;4;58;2;1;2;3mw\e[0m

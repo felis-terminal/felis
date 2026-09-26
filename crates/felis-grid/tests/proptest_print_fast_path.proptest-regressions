@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc d57ca3b0785cdb4b03f48752d4b88bf7663d7fa67ca91f21626cac7502f8d2e2 # shrinks to cols = 2, bytes = [27, 91, 48, 75, 27, 91, 48, 75, 32, 32, 32, 32, 32, 32, 10, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 27, 91, 49, 59, 49, 72, 27, 91, 49, 59, 49, 72, 27, 91, 49, 59, 50, 72, 32, 32, 32, 32, 32, 32, 32, 32, 240, 159, 135, 175, 239, 188, 161, 226, 128, 141, 195, 169, 195, 169, 240, 159, 143, 187], chunk = 12
+cc 24785cb2e9c536596d981509b905b3c59f16fb3d7dfb2e3a36b19c2aaf7240a3 # shrinks to cols = 8, bytes = [9, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 195, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 228, 184, 173, 226, 128, 141, 9, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 27, 91, 49, 59, 55, 72, 195, 169], chunk = 1

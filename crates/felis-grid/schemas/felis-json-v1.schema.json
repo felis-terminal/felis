@@ -1,0 +1,3193 @@
+{
+  "$defs": {
+    "AttachFailureJson": {
+      "description": "Why the daemon refused an attach or a create.",
+      "enum": [
+        "unknown_session",
+        "session_ending",
+        "spawn_failed",
+        "geometry_out_of_range",
+        "session_exited",
+        "session_limit_reached",
+        "daemon_draining",
+        "no_match",
+        "ambiguous"
+      ],
+      "type": "string"
+    },
+    "AttachTargetJson": {
+      "description": "Which session an attach names.",
+      "oneOf": [
+        {
+          "properties": {
+            "id": {
+              "pattern": "^[0-9a-f]{32}$",
+              "type": "string"
+            },
+            "target": {
+              "const": "id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "target",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Lowercase hex prefix, 1–32 digits, resolved daemon-side.",
+          "properties": {
+            "prefix": {
+              "type": "string"
+            },
+            "target": {
+              "const": "prefix",
+              "type": "string"
+            }
+          },
+          "required": [
+            "target",
+            "prefix"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "AttachmentJson": {
+      "description": "One live window attachment.",
+      "properties": {
+        "attached_at": {
+          "$ref": "#/$defs/TimestampJson"
+        },
+        "id": {
+          "format": "uint64",
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": "integer",
+          "x-bound-exceeds-f64-precision": true
+        },
+        "input_owner": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "attached_at",
+        "input_owner"
+      ],
+      "type": "object"
+    },
+    "AttentionSourceJson": {
+      "enum": [
+        "bell",
+        "notification"
+      ],
+      "type": "string"
+    },
+    "AttrRunJson": {
+      "description": "One pen applied to `len` consecutive columns.",
+      "properties": {
+        "attrs": {
+          "$ref": "#/$defs/AttributesJson"
+        },
+        "len": {
+          "description": "Columns covered; `0` covers nothing and is not a run.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "link": {
+          "description": "1-based handle into the hyperlink registry `GridMsg::Hyperlink`\npopulates; `null` for an unlinked run.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "len",
+        "attrs"
+      ],
+      "type": "object"
+    },
+    "AttributesJson": {
+      "description": "One pen. `flags` is a bitmap, bit 0 bold through bit 10\nISO-protected (`docs/reference/row-codec.md` \"Attribute runs\").",
+      "properties": {
+        "bg": {
+          "$ref": "#/$defs/ColorJson"
+        },
+        "fg": {
+          "$ref": "#/$defs/ColorJson"
+        },
+        "flags": {
+          "format": "uint16",
+          "maximum": 2047,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "underline_color": {
+          "$ref": "#/$defs/ColorJson",
+          "description": "`SGR 58`; `default` means \"follow the foreground\"."
+        },
+        "underline_style": {
+          "$ref": "#/$defs/UnderlineStyleJson",
+          "description": "Meaningful only while the underline flag is set."
+        }
+      },
+      "required": [
+        "fg",
+        "bg",
+        "underline_color",
+        "flags",
+        "underline_style"
+      ],
+      "type": "object"
+    },
+    "BuildIdentityJson": {
+      "description": "The build a daemon reports.",
+      "properties": {
+        "dirty": {
+          "type": "boolean"
+        },
+        "revision": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "version",
+        "revision",
+        "dirty"
+      ],
+      "type": "object"
+    },
+    "ClipboardWriteJson": {
+      "description": "One `OSC 52` write request.",
+      "properties": {
+        "data": {
+          "description": "Decoded bytes, post-base64.",
+          "items": {
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "selection": {
+          "description": "Bit 0 is the clipboard, bit 1 X11 PRIMARY\n(`docs/reference/ipc.md`).",
+          "format": "uint8",
+          "maximum": 3,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "selection",
+        "data"
+      ],
+      "type": "object"
+    },
+    "ColorJson": {
+      "oneOf": [
+        {
+          "description": "The renderer's configured default for this channel.",
+          "properties": {
+            "type": {
+              "const": "default",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "xterm-256 palette slot.",
+          "properties": {
+            "index": {
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "indexed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "index"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "b": {
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "g": {
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "r": {
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "rgb",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "r",
+            "g",
+            "b"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ConnJson": {
+      "description": "Connection-family frames in their v1 form.",
+      "oneOf": [
+        {
+          "properties": {
+            "mode": {
+              "$ref": "#/$defs/ConnectionModeJson"
+            },
+            "pull_paced": {
+              "type": "boolean"
+            },
+            "type": {
+              "const": "hello",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "mode",
+            "pull_paced"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "identity": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/BuildIdentityJson"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": {
+              "const": "welcome",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "detail": {
+              "type": "string"
+            },
+            "reason": {
+              "$ref": "#/$defs/RefusalReasonJson"
+            },
+            "type": {
+              "const": "refused",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "reason",
+            "detail"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "stream_id": {
+              "format": "uint64",
+              "maximum": 18446744073709551615,
+              "minimum": 1,
+              "type": "integer",
+              "x-bound-exceeds-f64-precision": true
+            },
+            "type": {
+              "const": "cancel",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "stream_id"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "count": {
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "stream_id": {
+              "format": "uint64",
+              "maximum": 18446744073709551615,
+              "minimum": 1,
+              "type": "integer",
+              "x-bound-exceeds-f64-precision": true
+            },
+            "type": {
+              "const": "end",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "stream_id",
+            "count"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "detail": {
+              "type": "string"
+            },
+            "reason": {
+              "$ref": "#/$defs/StreamErrorReasonJson"
+            },
+            "subject": {
+              "$ref": "#/$defs/SubjectJson"
+            },
+            "type": {
+              "const": "error",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "subject",
+            "reason",
+            "detail"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ConnectionModeJson": {
+      "description": "What a connection is allowed to say.",
+      "enum": [
+        "window",
+        "ops",
+        "observer"
+      ],
+      "type": "string"
+    },
+    "CursorStyleJson": {
+      "description": "`DECSCUSR` shape.",
+      "enum": [
+        "block",
+        "underline",
+        "bar"
+      ],
+      "type": "string"
+    },
+    "EnvBytesJson": {
+      "description": "One entry of a child's base environment, as raw platform bytes.",
+      "properties": {
+        "name": {
+          "items": {
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "value": {
+          "items": {
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "value"
+      ],
+      "type": "object"
+    },
+    "EnvPairJson": {
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "value"
+      ],
+      "type": "object"
+    },
+    "GraphemeJson": {
+      "description": "What one column holds.",
+      "oneOf": [
+        {
+          "description": "Never written to; renders as a blank.",
+          "properties": {
+            "type": {
+              "const": "empty",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "7-bit printable ASCII.",
+          "properties": {
+            "byte": {
+              "format": "uint8",
+              "maximum": 126,
+              "minimum": 32,
+              "type": "integer"
+            },
+            "type": {
+              "const": "ascii",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "byte"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "ch": {
+              "maxLength": 1,
+              "minLength": 1,
+              "type": "string"
+            },
+            "type": {
+              "const": "char",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "ch"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "1-based handle into the cluster registry `GridMsg::Cluster`\npopulates.",
+          "properties": {
+            "id": {
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "type": {
+              "const": "cluster",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Right half of a double-wide glyph in the previous column.",
+          "properties": {
+            "type": {
+              "const": "spacer",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Continuation column of an OSC 66 sized run.",
+          "properties": {
+            "type": {
+              "const": "sized_spacer",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "GridDimsJson": {
+      "description": "Authoritative grid geometry (`felis_protocol::messages::GridDims`).",
+      "properties": {
+        "cols": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "pixel_h": {
+          "description": "`0` means unknown.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "pixel_w": {
+          "description": "`0` means unknown, the `TIOCGWINSZ` convention.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "rows": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "rows",
+        "cols",
+        "pixel_w",
+        "pixel_h"
+      ],
+      "type": "object"
+    },
+    "GridJson": {
+      "description": "Grid-family frames in their v1 form.",
+      "oneOf": [
+        {
+          "properties": {
+            "type": {
+              "const": "rehydrate_begin",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "rehydrate_end",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "rows": {
+              "items": {
+                "$ref": "#/$defs/RowJson"
+              },
+              "type": "array"
+            },
+            "type": {
+              "const": "row_delta",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "rows"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "direction": {
+              "$ref": "#/$defs/ScrollDirectionJson"
+            },
+            "n_rows": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "region_bottom": {
+              "description": "Inclusive.",
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "region_top": {
+              "description": "Inclusive.",
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "scrolled",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "region_top",
+            "region_bottom",
+            "n_rows",
+            "direction"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "description": "1-based; `0` is reserved.",
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "const": "cluster",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "text"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "anchor": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "id": {
+              "description": "1-based; `0` is reserved.",
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "hyperlink",
+              "type": "string"
+            },
+            "uri": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "uri"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "blink": {
+              "type": "boolean"
+            },
+            "col": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "row": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "style": {
+              "$ref": "#/$defs/CursorStyleJson"
+            },
+            "type": {
+              "const": "cursor_state",
+              "type": "string"
+            },
+            "visible": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "type",
+            "row",
+            "col",
+            "visible",
+            "style",
+            "blink"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "lines_from_bottom": {
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "max": {
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "viewport_state",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "lines_from_bottom",
+            "max"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "dims": {
+              "$ref": "#/$defs/GridDimsJson"
+            },
+            "type": {
+              "const": "size",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "dims"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "title",
+              "type": "string"
+            },
+            "value": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "cwd",
+              "type": "string"
+            },
+            "value": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "exit_code": {
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "kind": {
+              "$ref": "#/$defs/PromptKindJson"
+            },
+            "line": {
+              "format": "uint64",
+              "maximum": 18446744073709551615,
+              "minimum": 0,
+              "type": "integer",
+              "x-bound-exceeds-f64-precision": true
+            },
+            "type": {
+              "const": "prompt_mark",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "line",
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "action": {
+              "$ref": "#/$defs/ThemeActionJson"
+            },
+            "channel": {
+              "$ref": "#/$defs/ThemeChannelJson"
+            },
+            "type": {
+              "const": "theme_color",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "channel",
+            "action"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "action": {
+              "$ref": "#/$defs/PaletteActionJson"
+            },
+            "index": {
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "palette_color",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "index",
+            "action"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "palette_reset_all",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "name": {
+              "description": "CSS cursor keyword, `null` to reset.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "const": "pointer_shape",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "flags": {
+              "description": "The Kitty progressive-enhancement bitmap\n(`docs/reference/protocols/kitty-keyboard.md`).",
+              "format": "uint8",
+              "maximum": 31,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "kitty_kbd_flags",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "flags"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "alt_screen": {
+              "type": "boolean"
+            },
+            "application_cursor": {
+              "type": "boolean"
+            },
+            "application_keypad": {
+              "type": "boolean"
+            },
+            "bracketed_paste": {
+              "type": "boolean"
+            },
+            "modify_other_keys": {
+              "$ref": "#/$defs/ModifyOtherKeysJson"
+            },
+            "mouse_protocol": {
+              "$ref": "#/$defs/MouseProtocolJson"
+            },
+            "reverse_video": {
+              "type": "boolean"
+            },
+            "type": {
+              "const": "mode_flags",
+              "type": "string"
+            },
+            "win32_input_mode": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "type",
+            "bracketed_paste",
+            "alt_screen",
+            "mouse_protocol",
+            "application_cursor",
+            "modify_other_keys",
+            "application_keypad",
+            "win32_input_mode",
+            "reverse_video"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "source": {
+              "$ref": "#/$defs/AttentionSourceJson"
+            },
+            "type": {
+              "const": "attention",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "source"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "clipboard_set",
+              "type": "string"
+            },
+            "write": {
+              "$ref": "#/$defs/ClipboardWriteJson"
+            }
+          },
+          "required": [
+            "type",
+            "write"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "cycle_end",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "HAlignJson": {
+      "enum": [
+        "left",
+        "right",
+        "center"
+      ],
+      "type": "string"
+    },
+    "ImageFormatJson": {
+      "description": "Decoded pixel format (Kitty `f=`).",
+      "enum": [
+        "rgb24",
+        "rgba32"
+      ],
+      "type": "string"
+    },
+    "ImageJson": {
+      "description": "Image-family frames in their v1 form.",
+      "oneOf": [
+        {
+          "properties": {
+            "id": {
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "target": {
+              "$ref": "#/$defs/ImageTargetJson"
+            },
+            "type": {
+              "const": "header",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "target"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "bytes": {
+              "items": {
+                "format": "uint8",
+                "maximum": 255,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            "id": {
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "chunk",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "bytes"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "complete",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "delete",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "anchor_col": {
+              "description": "1-based.",
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "anchor_row": {
+              "description": "1-based; `<= 0` anchors in the scrollback.",
+              "format": "int32",
+              "maximum": 2147483647,
+              "minimum": -2147483648,
+              "type": "integer"
+            },
+            "cols": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "image_id": {
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "placement_id": {
+              "description": "`null` is the image's default placement.",
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "rows": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "source": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SourceRectJson"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": {
+              "const": "placement",
+              "type": "string"
+            },
+            "z_index": {
+              "format": "int32",
+              "maximum": 2147483647,
+              "minimum": -2147483648,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "type",
+            "image_id",
+            "anchor_row",
+            "anchor_col",
+            "cols",
+            "rows",
+            "z_index"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "image_id": {
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "placement_id": {
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "type": {
+              "const": "placement_removed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "image_id"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "cols": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "image_id": {
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "rows": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "virtual_placement",
+              "type": "string"
+            },
+            "z_index": {
+              "format": "int32",
+              "maximum": 2147483647,
+              "minimum": -2147483648,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "type",
+            "image_id",
+            "cols",
+            "rows",
+            "z_index"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "number": {
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "type": {
+              "const": "show_frame",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "number"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "lines": {
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "placements_shifted",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "lines"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ImageTargetJson": {
+      "description": "What an [`ImageJson::Header`] opens a transfer for.",
+      "oneOf": [
+        {
+          "properties": {
+            "format": {
+              "$ref": "#/$defs/ImageFormatJson"
+            },
+            "height": {
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "target": {
+              "const": "new",
+              "type": "string"
+            },
+            "width": {
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "target",
+            "width",
+            "height",
+            "format"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Kitty's 1-based frame numbering; `0` is not a frame.",
+          "properties": {
+            "number": {
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "target": {
+              "const": "frame",
+              "type": "string"
+            }
+          },
+          "required": [
+            "target",
+            "number"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "InputJson": {
+      "description": "Input-family frames in their v1 form.",
+      "oneOf": [
+        {
+          "properties": {
+            "bytes": {
+              "items": {
+                "format": "uint8",
+                "maximum": 255,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            "type": {
+              "const": "key_bytes",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "bytes"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "bytes": {
+              "items": {
+                "format": "uint8",
+                "maximum": 255,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            "type": {
+              "const": "paste",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "bytes"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "event": {
+              "$ref": "#/$defs/MouseEventJson"
+            },
+            "type": {
+              "const": "mouse",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "event"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "dims": {
+              "$ref": "#/$defs/RequestedDimsJson"
+            },
+            "type": {
+              "const": "resize",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "dims"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "focused": {
+              "type": "boolean"
+            },
+            "type": {
+              "const": "focus_change",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "focused"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "dark": {
+              "type": "boolean"
+            },
+            "type": {
+              "const": "color_scheme",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "dark"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "lines_from_bottom": {
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "viewport",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "lines_from_bottom"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "direction": {
+              "$ref": "#/$defs/PromptJumpJson"
+            },
+            "type": {
+              "const": "jump_prompt",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "direction"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "next_grid_frame",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "event": {
+              "$ref": "#/$defs/KeyEventJson"
+            },
+            "type": {
+              "const": "key",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "event"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "KeyEventJson": {
+      "properties": {
+        "key": {
+          "$ref": "#/$defs/KeyJson"
+        },
+        "kind": {
+          "$ref": "#/$defs/KeyEventKindJson"
+        },
+        "location": {
+          "$ref": "#/$defs/KeyLocationJson"
+        },
+        "mods": {
+          "description": "Bits 0–3: ctrl, shift, alt, super\n(`docs/reference/ipc.md` \"Input (kind = 1)\").",
+          "format": "uint8",
+          "maximum": 15,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "text": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "key",
+        "mods",
+        "kind",
+        "location"
+      ],
+      "type": "object"
+    },
+    "KeyEventKindJson": {
+      "enum": [
+        "press",
+        "repeat",
+        "release"
+      ],
+      "type": "string"
+    },
+    "KeyJson": {
+      "description": "The logical key a keystroke resolved to.",
+      "oneOf": [
+        {
+          "properties": {
+            "key": {
+              "const": "named",
+              "type": "string"
+            },
+            "named": {
+              "$ref": "#/$defs/NamedKeyJson"
+            }
+          },
+          "required": [
+            "key",
+            "named"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "key": {
+              "const": "character",
+              "type": "string"
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "key",
+            "text"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A dead key or a bare modifier: no encoding of its own.",
+          "properties": {
+            "key": {
+              "const": "other",
+              "type": "string"
+            }
+          },
+          "required": [
+            "key"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "KeyLocationJson": {
+      "enum": [
+        "standard",
+        "left",
+        "right",
+        "numpad"
+      ],
+      "type": "string"
+    },
+    "ModifyOtherKeysJson": {
+      "description": "xterm `modifyOtherKeys` level.",
+      "enum": [
+        "off",
+        "level1",
+        "level2"
+      ],
+      "type": "string"
+    },
+    "MouseActionJson": {
+      "enum": [
+        "press",
+        "release",
+        "drag",
+        "motion"
+      ],
+      "type": "string"
+    },
+    "MouseButtonJson": {
+      "enum": [
+        "left",
+        "middle",
+        "right",
+        "wheel_up",
+        "wheel_down",
+        "wheel_left",
+        "wheel_right",
+        "button8",
+        "button9",
+        "button10",
+        "button11"
+      ],
+      "type": "string"
+    },
+    "MouseEventJson": {
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/MouseActionJson"
+        },
+        "button": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MouseButtonJson"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "`null` for a bare motion."
+        },
+        "mods": {
+          "description": "Bits 0–2: shift, alt, ctrl. xterm has no Super bit.",
+          "format": "uint8",
+          "maximum": 7,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "px": {
+          "description": "Pixel column in the text area, 1-based.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "py": {
+          "description": "Pixel row in the text area, 1-based.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "x": {
+          "description": "Cell column, 1-based.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "y": {
+          "description": "Cell row, 1-based.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "action",
+        "mods",
+        "x",
+        "y",
+        "px",
+        "py"
+      ],
+      "type": "object"
+    },
+    "MouseProtocolJson": {
+      "enum": [
+        "off",
+        "button_events",
+        "button_and_drag",
+        "any_motion"
+      ],
+      "type": "string"
+    },
+    "NamedKeyJson": {
+      "description": "The named keys felis bridges.",
+      "oneOf": [
+        {
+          "properties": {
+            "name": {
+              "const": "enter",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "name": {
+              "const": "tab",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "name": {
+              "const": "escape",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "name": {
+              "const": "space",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "name": {
+              "const": "backspace",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "name": {
+              "const": "insert",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "name": {
+              "const": "delete",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "name": {
+              "const": "home",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "name": {
+              "const": "end",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "name": {
+              "const": "page_up",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "name": {
+              "const": "page_down",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "name": {
+              "const": "arrow_up",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "name": {
+              "const": "arrow_down",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "name": {
+              "const": "arrow_left",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "name": {
+              "const": "arrow_right",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Function-key index, `1..=35`.",
+          "properties": {
+            "index": {
+              "format": "uint8",
+              "maximum": 35,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "name": {
+              "const": "f",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "index"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "NotificationJson": {
+      "properties": {
+        "body": {
+          "type": "string"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "urgency": {
+          "$ref": "#/$defs/UrgencyJson"
+        }
+      },
+      "required": [
+        "body",
+        "urgency"
+      ],
+      "type": "object"
+    },
+    "PaletteActionJson": {
+      "description": "What a [`GridJson::PaletteColor`] does to its slot.",
+      "oneOf": [
+        {
+          "properties": {
+            "action": {
+              "const": "set",
+              "type": "string"
+            },
+            "rgb": {
+              "$ref": "#/$defs/RgbJson"
+            }
+          },
+          "required": [
+            "action",
+            "rgb"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "action": {
+              "const": "reset",
+              "type": "string"
+            }
+          },
+          "required": [
+            "action"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "PromptJumpJson": {
+      "enum": [
+        "previous",
+        "next"
+      ],
+      "type": "string"
+    },
+    "PromptKindJson": {
+      "description": "`OSC 133` boundary kind.",
+      "enum": [
+        "prompt_start",
+        "input_start",
+        "output_start",
+        "command_end"
+      ],
+      "type": "string"
+    },
+    "RefusalReasonJson": {
+      "description": "Why a daemon refused a connection.",
+      "enum": [
+        "role",
+        "at_capacity",
+        "unknown_mode"
+      ],
+      "type": "string"
+    },
+    "RequestedDimsJson": {
+      "description": "Geometry a client asks for, before the daemon admits it.",
+      "properties": {
+        "cols": {
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "pixel_h": {
+          "description": "`0` means unknown.",
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "pixel_w": {
+          "description": "`0` means unknown.",
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "rows": {
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "rows",
+        "cols",
+        "pixel_w",
+        "pixel_h"
+      ],
+      "type": "object"
+    },
+    "RgbJson": {
+      "description": "A 24-bit color, as an object rather than the domain tuple.",
+      "properties": {
+        "b": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "g": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "r": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "r",
+        "g",
+        "b"
+      ],
+      "type": "object"
+    },
+    "RowCellsJson": {
+      "description": "A row's cells. One encoding today: attribute runs over a flat\ngrapheme list, which is what the packed row stores.",
+      "oneOf": [
+        {
+          "properties": {
+            "attr_runs": {
+              "description": "Consecutive runs covering every grapheme exactly once.",
+              "items": {
+                "$ref": "#/$defs/AttrRunJson"
+              },
+              "maxItems": 2048,
+              "type": "array"
+            },
+            "encoding": {
+              "const": "rle",
+              "type": "string"
+            },
+            "graphemes": {
+              "description": "One entry per column, left to right.",
+              "items": {
+                "$ref": "#/$defs/GraphemeJson"
+              },
+              "maxItems": 2048,
+              "type": "array"
+            },
+            "sized_cells": {
+              "items": {
+                "$ref": "#/$defs/SizedCellJson"
+              },
+              "maxItems": 2048,
+              "type": "array"
+            },
+            "soft_wrap_continued": {
+              "description": "The row continues into the next one without a newline.",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "encoding",
+            "graphemes",
+            "attr_runs",
+            "sized_cells",
+            "soft_wrap_continued"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "RowJson": {
+      "description": "One dirty row of a [`GridJson::RowDelta`]. The cells ride the\nrow codec's structural form (`docs/reference/row-codec.md`),\nnever the packed bytes the socket carries.",
+      "properties": {
+        "cells": {
+          "$ref": "#/$defs/RowCellsJson"
+        },
+        "row": {
+          "description": "Zero-based.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "row",
+        "cells"
+      ],
+      "type": "object"
+    },
+    "ScrollDirectionJson": {
+      "enum": [
+        "up",
+        "down"
+      ],
+      "type": "string"
+    },
+    "SessionInfoJson": {
+      "description": "One roster row.",
+      "properties": {
+        "attachments": {
+          "items": {
+            "$ref": "#/$defs/AttachmentJson"
+          },
+          "type": "array"
+        },
+        "cwd": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "dims": {
+          "$ref": "#/$defs/GridDimsJson"
+        },
+        "exited": {
+          "type": "boolean"
+        },
+        "foreground": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "description": "The full 32-digit lowercase hex rendering.",
+          "pattern": "^[0-9a-f]{32}$",
+          "type": "string"
+        },
+        "idle_seconds": {
+          "format": "uint64",
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "x-bound-exceeds-f64-precision": true
+        },
+        "last_exit_code": {
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "last_notification": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionNotificationJson"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sequence": {
+          "description": "Creation sequence, minted by the daemon; never `0`.",
+          "format": "uint64",
+          "maximum": 18446744073709551615,
+          "minimum": 1,
+          "type": "integer",
+          "x-bound-exceeds-f64-precision": true
+        },
+        "tags": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "dims",
+        "tags",
+        "exited",
+        "attachments",
+        "sequence"
+      ],
+      "type": "object"
+    },
+    "SessionJson": {
+      "description": "Session-family frames in their v1 form.",
+      "oneOf": [
+        {
+          "properties": {
+            "live_only": {
+              "type": "boolean"
+            },
+            "target": {
+              "$ref": "#/$defs/AttachTargetJson"
+            },
+            "type": {
+              "const": "attach",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "target",
+            "live_only"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "args": {
+              "$ref": "#/$defs/SpawnArgsJson"
+            },
+            "type": {
+              "const": "create",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "args"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "detach",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "bg": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/RgbJson"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "cursor": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/RgbJson"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "fg": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/RgbJson"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": {
+              "const": "configure_theme",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "info": {
+              "$ref": "#/$defs/SessionInfoJson"
+            },
+            "type": {
+              "const": "attached",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "info"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "detail": {
+              "type": "string"
+            },
+            "reason": {
+              "$ref": "#/$defs/AttachFailureJson"
+            },
+            "type": {
+              "const": "attach_failed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "reason",
+            "detail"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "info": {
+              "$ref": "#/$defs/SessionInfoJson"
+            },
+            "type": {
+              "const": "created",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "info"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "SessionNotificationJson": {
+      "properties": {
+        "age_seconds": {
+          "format": "uint64",
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": "integer",
+          "x-bound-exceeds-f64-precision": true
+        },
+        "notification": {
+          "$ref": "#/$defs/NotificationJson"
+        }
+      },
+      "required": [
+        "notification",
+        "age_seconds"
+      ],
+      "type": "object"
+    },
+    "SizedCellJson": {
+      "description": "The sizing that applies to one column of this row.",
+      "properties": {
+        "col": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "sizing": {
+          "$ref": "#/$defs/SizingJson"
+        }
+      },
+      "required": [
+        "col",
+        "sizing"
+      ],
+      "type": "object"
+    },
+    "SizingJson": {
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "frac_den": {
+                "const": 1
+              }
+            },
+            "required": [
+              "frac_den"
+            ]
+          },
+          "then": {
+            "properties": {
+              "frac_num": {
+                "maximum": 0
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "frac_den": {
+                "const": 2
+              }
+            },
+            "required": [
+              "frac_den"
+            ]
+          },
+          "then": {
+            "properties": {
+              "frac_num": {
+                "maximum": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "frac_den": {
+                "const": 3
+              }
+            },
+            "required": [
+              "frac_den"
+            ]
+          },
+          "then": {
+            "properties": {
+              "frac_num": {
+                "maximum": 2
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "frac_den": {
+                "const": 4
+              }
+            },
+            "required": [
+              "frac_den"
+            ]
+          },
+          "then": {
+            "properties": {
+              "frac_num": {
+                "maximum": 3
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "frac_den": {
+                "const": 5
+              }
+            },
+            "required": [
+              "frac_den"
+            ]
+          },
+          "then": {
+            "properties": {
+              "frac_num": {
+                "maximum": 4
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "frac_den": {
+                "const": 6
+              }
+            },
+            "required": [
+              "frac_den"
+            ]
+          },
+          "then": {
+            "properties": {
+              "frac_num": {
+                "maximum": 5
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "frac_den": {
+                "const": 7
+              }
+            },
+            "required": [
+              "frac_den"
+            ]
+          },
+          "then": {
+            "properties": {
+              "frac_num": {
+                "maximum": 6
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "frac_den": {
+                "const": 8
+              }
+            },
+            "required": [
+              "frac_den"
+            ]
+          },
+          "then": {
+            "properties": {
+              "frac_num": {
+                "maximum": 7
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "frac_den": {
+                "const": 9
+              }
+            },
+            "required": [
+              "frac_den"
+            ]
+          },
+          "then": {
+            "properties": {
+              "frac_num": {
+                "maximum": 8
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "frac_den": {
+                "const": 10
+              }
+            },
+            "required": [
+              "frac_den"
+            ]
+          },
+          "then": {
+            "properties": {
+              "frac_num": {
+                "maximum": 9
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "frac_den": {
+                "const": 11
+              }
+            },
+            "required": [
+              "frac_den"
+            ]
+          },
+          "then": {
+            "properties": {
+              "frac_num": {
+                "maximum": 10
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "frac_den": {
+                "const": 12
+              }
+            },
+            "required": [
+              "frac_den"
+            ]
+          },
+          "then": {
+            "properties": {
+              "frac_num": {
+                "maximum": 11
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "frac_den": {
+                "const": 13
+              }
+            },
+            "required": [
+              "frac_den"
+            ]
+          },
+          "then": {
+            "properties": {
+              "frac_num": {
+                "maximum": 12
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "frac_den": {
+                "const": 14
+              }
+            },
+            "required": [
+              "frac_den"
+            ]
+          },
+          "then": {
+            "properties": {
+              "frac_num": {
+                "maximum": 13
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "frac_den": {
+                "const": 15
+              }
+            },
+            "required": [
+              "frac_den"
+            ]
+          },
+          "then": {
+            "properties": {
+              "frac_num": {
+                "maximum": 14
+              }
+            }
+          }
+        }
+      ],
+      "description": "One run's OSC 66 sizing parameters.",
+      "properties": {
+        "cell_width": {
+          "description": "`w`, 0..=7; `0` derives the width from the text.",
+          "format": "uint8",
+          "maximum": 7,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "frac_den": {
+          "description": "`d`, 0..=15; `0` means no fractional component.",
+          "format": "uint8",
+          "maximum": 15,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "frac_num": {
+          "description": "`n`, 0..=15 and below `frac_den` whenever that is non-zero.",
+          "format": "uint8",
+          "maximum": 15,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "halign": {
+          "$ref": "#/$defs/HAlignJson"
+        },
+        "scale": {
+          "description": "`s`, 1..=7.",
+          "format": "uint8",
+          "maximum": 7,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "valign": {
+          "$ref": "#/$defs/VAlignJson"
+        }
+      },
+      "required": [
+        "scale",
+        "cell_width",
+        "frac_num",
+        "frac_den",
+        "valign",
+        "halign"
+      ],
+      "type": "object"
+    },
+    "SourceRectJson": {
+      "description": "Sub-region of an image, in image pixels.",
+      "properties": {
+        "height": {
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "width": {
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "x": {
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "y": {
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "x",
+        "y",
+        "width",
+        "height"
+      ],
+      "type": "object"
+    },
+    "SpawnArgsJson": {
+      "properties": {
+        "args": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "command": {
+          "description": "Empty means the daemon's default (`$SHELL`).",
+          "type": "string"
+        },
+        "cwd": {
+          "description": "Empty means the daemon's cwd.",
+          "type": "string"
+        },
+        "dims": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RequestedDimsJson"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "`null` asks for the daemon default geometry."
+        },
+        "env": {
+          "items": {
+            "$ref": "#/$defs/EnvPairJson"
+          },
+          "type": "array"
+        },
+        "env_base": {
+          "items": {
+            "$ref": "#/$defs/EnvBytesJson"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "tags": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "command",
+        "args",
+        "cwd",
+        "env",
+        "tags"
+      ],
+      "type": "object"
+    },
+    "StreamErrorReasonJson": {
+      "description": "Why a request or a stream failed.",
+      "enum": [
+        "invalid_request",
+        "too_many_streams",
+        "unavailable",
+        "internal"
+      ],
+      "type": "string"
+    },
+    "SubjectJson": {
+      "description": "What a [`ConnJson::Error`] is about.",
+      "oneOf": [
+        {
+          "description": "Correlation ids start at 1, so `0` names nothing.",
+          "properties": {
+            "id": {
+              "format": "uint64",
+              "maximum": 18446744073709551615,
+              "minimum": 1,
+              "type": "integer",
+              "x-bound-exceeds-f64-precision": true
+            },
+            "subject": {
+              "const": "request",
+              "type": "string"
+            }
+          },
+          "required": [
+            "subject",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "format": "uint64",
+              "maximum": 18446744073709551615,
+              "minimum": 1,
+              "type": "integer",
+              "x-bound-exceeds-f64-precision": true
+            },
+            "subject": {
+              "const": "stream",
+              "type": "string"
+            }
+          },
+          "required": [
+            "subject",
+            "id"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ThemeActionJson": {
+      "description": "What a [`GridJson::ThemeColor`] does to its channel.",
+      "oneOf": [
+        {
+          "properties": {
+            "action": {
+              "const": "set",
+              "type": "string"
+            },
+            "rgb": {
+              "$ref": "#/$defs/RgbJson"
+            }
+          },
+          "required": [
+            "action",
+            "rgb"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "action": {
+              "const": "reset",
+              "type": "string"
+            }
+          },
+          "required": [
+            "action"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ThemeChannelJson": {
+      "enum": [
+        "foreground",
+        "background",
+        "cursor"
+      ],
+      "type": "string"
+    },
+    "TimestampJson": {
+      "description": "An instant on the daemon's clock, as seconds and nanoseconds\nsince the Unix epoch.",
+      "properties": {
+        "unix_nanos": {
+          "format": "uint32",
+          "maximum": 999999999,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "unix_secs": {
+          "format": "uint64",
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": "integer",
+          "x-bound-exceeds-f64-precision": true
+        }
+      },
+      "required": [
+        "unix_secs",
+        "unix_nanos"
+      ],
+      "type": "object"
+    },
+    "UnderlineStyleJson": {
+      "enum": [
+        "single",
+        "double",
+        "curly",
+        "dotted",
+        "dashed"
+      ],
+      "type": "string"
+    },
+    "UrgencyJson": {
+      "description": "Desktop-notification urgency.",
+      "enum": [
+        "low",
+        "normal",
+        "critical"
+      ],
+      "type": "string"
+    },
+    "VAlignJson": {
+      "enum": [
+        "top",
+        "bottom",
+        "center"
+      ],
+      "type": "string"
+    }
+  },
+  "$id": "https://raw.githubusercontent.com/felis-terminal/felis/main/crates/felis-grid/schemas/felis-json-v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "One daemon frame body in its felis-json v1 form. A reader selects its branch on `kind` after checking `felis_json`, and ignores any property this document does not name: within the epoch a writer may add an optional field.",
+  "oneOf": [
+    {
+      "properties": {
+        "felis_json": {
+          "const": 1
+        },
+        "kind": {
+          "const": "grid"
+        },
+        "msg": {
+          "$ref": "#/$defs/GridJson"
+        }
+      },
+      "required": [
+        "felis_json",
+        "kind",
+        "msg"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "felis_json": {
+          "const": 1
+        },
+        "kind": {
+          "const": "image"
+        },
+        "msg": {
+          "$ref": "#/$defs/ImageJson"
+        }
+      },
+      "required": [
+        "felis_json",
+        "kind",
+        "msg"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "felis_json": {
+          "const": 1
+        },
+        "kind": {
+          "const": "conn"
+        },
+        "msg": {
+          "$ref": "#/$defs/ConnJson"
+        }
+      },
+      "required": [
+        "felis_json",
+        "kind",
+        "msg"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "felis_json": {
+          "const": 1
+        },
+        "kind": {
+          "const": "session"
+        },
+        "msg": {
+          "$ref": "#/$defs/SessionJson"
+        }
+      },
+      "required": [
+        "felis_json",
+        "kind",
+        "msg"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "felis_json": {
+          "const": 1
+        },
+        "kind": {
+          "const": "input"
+        },
+        "msg": {
+          "$ref": "#/$defs/InputJson"
+        }
+      },
+      "required": [
+        "felis_json",
+        "kind",
+        "msg"
+      ],
+      "type": "object"
+    }
+  ],
+  "title": "felis-json v1"
+}

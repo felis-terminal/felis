@@ -1,0 +1,89 @@
+[package]
+name = "felis-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+rust-version = "1.85"
+
+# Separate workspace prevents nightly libFuzzer flags from propagating to main workspace.
+[workspace]
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+felis-vt = { path = "../crates/felis-vt" }
+felis-grid = { path = "../crates/felis-grid" }
+felis-protocol = { path = "../crates/felis-protocol" }
+felis-client-core = { path = "../crates/felis-client-core" }
+
+[[bin]]
+name = "vt_parser"
+path = "fuzz_targets/vt_parser.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ipc_frame"
+path = "fuzz_targets/ipc_frame.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ipc_body"
+path = "fuzz_targets/ipc_body.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "row_codec"
+path = "fuzz_targets/row_codec.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "grid_dispatch"
+path = "fuzz_targets/grid_dispatch.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "kitty_graphics"
+path = "fuzz_targets/kitty_graphics.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "kitty_text_sizing"
+path = "fuzz_targets/kitty_text_sizing.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "sync_output"
+path = "fuzz_targets/sync_output.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "scrollback_search"
+path = "fuzz_targets/scrollback_search.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "chord_parser"
+path = "fuzz_targets/chord_parser.rs"
+test = false
+doc = false
+bench = false

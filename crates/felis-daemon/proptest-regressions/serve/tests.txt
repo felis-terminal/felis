@@ -1,0 +1,9 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 62336a9ee9d92b02982dc258422138fb191b9f5e45bfc51fce8fdaadb8cf3504 # shrinks to rows = 5, cols = 5, steps = [Feed([27, 91, 55, 109]), Feed([27, 77]), Feed([27, 91, 50, 59, 49, 72, 27, 68, 13, 10]), Cycle([false, true]), Feed([13, 10, 13, 10])]
+cc 75fde65051d33aa31b9c4aefc304aaa585488a5c8f71ede8c0c431d78a823932 # shrinks to rows = 2, cols = 2, steps = [Resize(3, 5), Feed([97]), Feed([97, 97]), Feed([97, 97, 97, 97, 97, 97, 97, 97]), Cycle([false, true]), Feed([27, 68, 27, 91, 63, 54, 104, 98]), Cycle([false, false])]
+cc 335fa9fbc988dd5d192f30b6c25c74e9514fae1984c5e7f10c2ad82a4efa2644 # shrinks to rows = 5, cols = 2, steps = [Feed([27, 91, 63, 52, 49, 104]), Feed([97]), Feed([27, 91, 63, 49, 48, 52, 57, 104]), Cycle([false, true]), Feed([97, 97, 9])]

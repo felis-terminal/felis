@@ -1,0 +1,31 @@
+# The only GitHub workflow: releases are built and gated on Forgejo
+# (.forgejo/workflows/release.yml), and this republishes the finished Forgejo
+# release on the mirror once the push mirror delivers the tag.
+name: release-mirror
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-mirror-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    # The Forgejo release gate takes hours; the script's own deadline expires first.
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: python3 tools/release/mirror.py --self-test
+      - run: python3 tools/release/mirror.py "$GITHUB_REF_NAME"
+        env:
+          MIRROR_SOURCE: https://git.natsukium.com/api/v1/repos/felis-terminal/felis
+          MIRROR_TIMEOUT: "18000"
+          GH_TOKEN: ${{ github.token }}

@@ -1,0 +1,19 @@
+{
+  "felis_json": 1,
+  "kind": "input",
+  "msg": {
+    "event": {
+      "key": {
+        "key": "named",
+        "named": {
+          "name": "enter"
+        }
+      },
+      "kind": "press",
+      "location": "standard",
+      "mods": 3,
+      "text": "\r"
+    },
+    "type": "key"
+  }
+}

@@ -1,0 +1,21 @@
+# Catches drift in #[cfg(kani)] proof harnesses, which do not compile under regular test or clippy.
+name: kani
+
+on:
+  schedule:
+    - cron: '0 4 * * 1'
+  workflow_dispatch:
+
+# No PR trigger to supersede here; the group serializes a manual dispatch
+# against the weekly cron so two four-hour proof runs cannot overlap.
+concurrency:
+  group: ${{ github.workflow }}
+
+jobs:
+  proofs:
+    name: cargo kani (vt + protocol + grid + client-core kernels)
+    runs-on: x86_64-linux
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: nix develop -c just kani

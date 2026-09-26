@@ -1,0 +1,9 @@
+{
+  "felis_json": 1,
+  "kind": "session",
+  "msg": {
+    "detail": "the daemon is draining toward exit",
+    "reason": "daemon_draining",
+    "type": "attach_failed"
+  }
+}

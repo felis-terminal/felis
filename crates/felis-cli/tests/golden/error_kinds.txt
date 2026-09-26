@@ -1,0 +1,67 @@
+# Rendered by felis-cli's `error_surface_matches_the_golden` test.
+# The frozen CLI error-kind surface.
+
+[kind -> exit]
+usage                2
+no_match             1
+ambiguous            1
+timeout              1
+no_input_owner       1
+no_such_attachment   1
+not_queued           1
+session_ended        1
+malformed_request    2
+invalid_request      1
+at_capacity          1
+unsupported          2
+daemon_unreachable   2
+daemon_lost          2
+refused              1
+protocol             2
+canceled             2
+input_failed         2
+output_failed        2
+internal             2
+
+[StreamErrorReason -> kind]
+InvalidRequest       invalid_request
+TooManyStreams       at_capacity
+Unavailable          refused
+Internal             internal
+
+[AttachFailure -> kind]
+UnknownSession       invalid_request
+SessionEnding        invalid_request
+SessionExited        invalid_request
+NoMatch              no_match
+Ambiguous            ambiguous
+
+[CreateFailure -> kind]
+SpawnFailed          invalid_request
+GeometryOutOfRange   invalid_request
+SessionLimitReached  at_capacity
+DaemonDraining       invalid_request
+
+[RefusalReason -> kind]
+Role                 daemon_unreachable
+AtCapacity           at_capacity
+UnknownMode          daemon_unreachable
+
+[ConnectError -> kind]
+AttachFailed(UnknownSession)       invalid_request
+AttachFailed(NoMatch)              no_match
+AttachFailed(Ambiguous)            ambiguous
+CreateFailed(SpawnFailed)          invalid_request
+CreateFailed(SessionLimitReached)  at_capacity
+Refused(Role)                      daemon_unreachable
+Refused(AtCapacity)                at_capacity
+InvalidSessionPrefix               invalid_request
+MinorTooOld                        unsupported
+EofBeforeWelcome                   daemon_lost
+EofMidAttach                       daemon_lost
+Connect                            daemon_lost
+NotWelcome                         protocol
+NotSessionAttached                 protocol
+InadmissibleRefusal                protocol
+Abandoned                          protocol
+StreamRefused                      protocol

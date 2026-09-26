@@ -1,0 +1,1092 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "felis configuration",
+  "description": "One client's view of the felis `config.toml`: defaults filled in and\nits `[client.<id>]` overlay folded in. Every key is optional:\nomitted keys keep built-in defaults, unknown keys are reported and ignored.",
+  "type": "object",
+  "properties": {
+    "client": {
+      "description": "Per-client overlays: `[client.<name>]` is deep-merged over the top level.\nSections for other clients are carried untouched (never validated, never\nwarned about) so one file can serve clients whose schemas differ.",
+      "type": "object",
+      "properties": {
+        "felis": {
+          "$ref": "#"
+        }
+      },
+      "additionalProperties": true,
+      "default": {}
+    },
+    "clipboard": {
+      "description": "Clipboard policy (OS-clipboard backend on/off, OSC 52 to\nsystem gate).",
+      "$ref": "#/$defs/ClipboardConfig",
+      "default": {
+        "osc_52": "mirror",
+        "use_os_clipboard": true
+      }
+    },
+    "cursor": {
+      "description": "Cursor color and blink behavior.",
+      "$ref": "#/$defs/CursorConfig",
+      "default": {
+        "blink": "program",
+        "blink_interval_ms": 530,
+        "color": null
+      }
+    },
+    "font": {
+      "description": "Font selection (family, size).",
+      "$ref": "#/$defs/FontConfig",
+      "default": {
+        "bold": {},
+        "bold_italic": {},
+        "fallback": [],
+        "family": null,
+        "features": [],
+        "italic": {},
+        "size_px": null
+      }
+    },
+    "keymap": {
+      "description": "User overrides to the default keymap. Each key is a chord\nstring (`\"ctrl+shift+f\"`); each value is a typed binding\nvalue. See docs/reference/keybindings.md for the grammar and merge semantics.",
+      "$ref": "#/$defs/KeymapConfig",
+      "default": {}
+    },
+    "mouse": {
+      "description": "Mouse / wheel behavior (scroll speed).",
+      "$ref": "#/$defs/MouseConfig",
+      "default": {
+        "scroll_multiplier": 3.0
+      }
+    },
+    "shader": {
+      "description": "Post-process shader selection.",
+      "$ref": "#/$defs/ShaderConfig",
+      "default": {
+        "animate": "never",
+        "post": null
+      }
+    },
+    "theme": {
+      "description": "Default foreground / background and the 16-color palette.",
+      "$ref": "#/$defs/ThemeConfig",
+      "default": {
+        "background": null,
+        "foreground": null,
+        "palette": {
+          "black": null,
+          "blue": null,
+          "bright_black": null,
+          "bright_blue": null,
+          "bright_cyan": null,
+          "bright_green": null,
+          "bright_magenta": null,
+          "bright_red": null,
+          "bright_white": null,
+          "bright_yellow": null,
+          "cyan": null,
+          "green": null,
+          "indexed": {},
+          "magenta": null,
+          "red": null,
+          "white": null,
+          "yellow": null
+        }
+      }
+    },
+    "window": {
+      "description": "Window-level settings (title prefix, …).",
+      "$ref": "#/$defs/WindowConfig",
+      "default": {
+        "backdrop": "none",
+        "decorations": true,
+        "opacity": 1.0,
+        "title_prefix": null
+      }
+    }
+  },
+  "$comment": "Deliberately non-strict at the section level: neither this object nor any config section closes with `additionalProperties: false`, because the document is shared with other clients and an unrecognized section key warns at load time rather than failing it. Nested typed values, such as a `keymap` binding's fields, are still validated by shape and do close. For the same reason `client` validates only the `felis` section; every other client's section is inert and unvalidated. An `enum` here lists the tokens this build understands, so an editor flags a newer file's token while the runtime keeps the document loading, degrading a field with a default or dropping the one keymap binding. The runtime parser, not this schema, is the authority.",
+  "$defs": {
+    "Backdrop": {
+      "description": "The OS-native backdrop behind the window (`window.backdrop`).\n`blur` hosts an `NSVisualEffectView` on macOS; the rest are the DWM\nsystem backdrops (`DWMWA_SYSTEMBACKDROP_TYPE`) on Windows.",
+      "oneOf": [
+        {
+          "description": "No backdrop: the window frame is opaque (the default).",
+          "type": "string",
+          "const": "none"
+        },
+        {
+          "description": "macOS: the `NSVisualEffectView` frosted backdrop. Needs\n`opacity < 1.0` to show through.",
+          "type": "string",
+          "const": "blur"
+        },
+        {
+          "description": "Windows: acrylic (`DWMSBT_TRANSIENTWINDOW`), a heavier\ntranslucent blur.",
+          "type": "string",
+          "const": "acrylic"
+        },
+        {
+          "description": "Windows: mica (`DWMSBT_MAINWINDOW`), the Win11 desktop-tinted\nmaterial.",
+          "type": "string",
+          "const": "mica"
+        },
+        {
+          "description": "Windows: tabbed (`DWMSBT_TABBEDWINDOW`), the Mica variant tuned\nfor tabbed title bars.",
+          "type": "string",
+          "const": "tabbed"
+        }
+      ]
+    },
+    "BindingValue": {
+      "description": "One `[keymap]` binding value, discriminated by its `kind` field.\n\n`unbind` removes the default binding for that chord.\nSee docs/reference/keybindings.md for every binding kind and its fields.",
+      "oneOf": [
+        {
+          "description": "Remove the default binding for this chord (config-layer only).",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "unbind"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "Send a literal text sequence to the PTY.",
+          "type": "object",
+          "properties": {
+            "escapes": {
+              "description": "Backslash-escape mode. Default `c_style`; `none` sends the\nbackslashes as payload.",
+              "$ref": "#/$defs/Escapes",
+              "default": "c_style"
+            },
+            "kind": {
+              "type": "string",
+              "const": "send_string"
+            },
+            "text": {
+              "description": "Text to send. Backslash handling per `escapes`.",
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "text"
+          ]
+        },
+        {
+          "description": "Paste from a clipboard surface.",
+          "type": "object",
+          "properties": {
+            "from": {
+              "description": "Clipboard surface to read from.",
+              "$ref": "#/$defs/ClipboardScope"
+            },
+            "kind": {
+              "type": "string",
+              "const": "paste"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "from"
+          ]
+        },
+        {
+          "description": "Copy selection to a clipboard surface.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "copy"
+            },
+            "what": {
+              "description": "Clipboard surface to write to.",
+              "$ref": "#/$defs/ClipboardScope"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "what"
+          ]
+        },
+        {
+          "description": "Reload the client config.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "reload"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "Detach from the current session and close the window.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "detach"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "Step the font size.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "font_size"
+            },
+            "step": {
+              "description": "Larger, smaller, or back to the configured size.",
+              "$ref": "#/$defs/FontSizeStep"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "step"
+          ]
+        },
+        {
+          "description": "Scrollback navigation.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "scroll"
+            },
+            "step": {
+              "description": "Direction / magnitude.",
+              "$ref": "#/$defs/ScrollStep"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "step"
+          ]
+        },
+        {
+          "description": "Jump the viewport to a neighboring shell prompt (needs\n`OSC 133` shell integration).",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "scroll_to_prompt"
+            },
+            "to": {
+              "description": "Which way to jump.",
+              "$ref": "#/$defs/PromptJump"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "to"
+          ]
+        },
+        {
+          "description": "Toggle native fullscreen.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "toggle_fullscreen"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "Re-attach this client to a neighboring session in the daemon's\norder.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "switch_session"
+            },
+            "to": {
+              "description": "Which way to move in the daemon's session list.",
+              "$ref": "#/$defs/SwitchDirection"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "to"
+          ]
+        },
+        {
+          "description": "Tear down the attached session: the keybind equivalent of\n`felis sessions kill`. Destructive; the client asks for\nconfirmation before sending.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "kill_session"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "Open the scrollback search overlay.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "open_scrollback_search"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "Create a new session on the daemon and switch to it in-window\n(tab-like), distinct from the CLI's detached\n`felis sessions spawn`.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "new_session"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "Pipe a region of the terminal buffer somewhere. `target` picks\nthe sink and carries whatever that sink needs: see\n[`PipeSink`].",
+          "type": "object",
+          "properties": {
+            "ansi": {
+              "description": "Reconstruct SGR color/style (`true`) or emit plain text\n(`false`, default). Omit for hint pickers, editors, and tools\nthat expect plain text. Set `true` for color-rendering pagers\nor `fzf --ansi`. Mirrors `felis sessions capture --ansi`.",
+              "type": "boolean",
+              "default": false
+            },
+            "kind": {
+              "type": "string",
+              "const": "pipe"
+            },
+            "source": {
+              "description": "Region of the buffer to pipe.",
+              "$ref": "#/$defs/PipeRegionSource"
+            },
+            "target": {
+              "description": "Which sink receives the region, plus its payload. Omitted →\nthe default pager.",
+              "$ref": "#/$defs/PipeSink"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "source"
+          ]
+        },
+        {
+          "description": "Launch an external command in a transient session sized to the\nlive grid, with no piped region (for tools that supply their own data).\nRuns with `FELIS_ORIGIN_SESSION_ID`, `FELIS_HOST`, and `FELIS_CWD`\nexported, in the focused session's `OSC 7` directory when that\nnames a directory on this machine.",
+          "type": "object",
+          "properties": {
+            "command": {
+              "description": "Argv for the external command: a required, non-empty list\nof strings, never a shell string (wrap a pipeline in your\nown script).",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "kind": {
+              "type": "string",
+              "const": "run"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "command"
+          ]
+        }
+      ]
+    },
+    "BuiltinShader": {
+      "description": "The shaders felis ships (`shader.post = { builtin = \"…\" }`). Each\nis an ordinary shader on the contract in\ndocs/reference/shaders.md; there is no privileged path.",
+      "oneOf": [
+        {
+          "description": "The cursor trail.",
+          "type": "string",
+          "const": "trail"
+        }
+      ]
+    },
+    "ClipboardConfig": {
+      "description": "Clipboard backend selection and OSC 52 security gate.\n\nUses the OS clipboard for user-initiated paste while keeping OSC 52\nwrites off it by default. Set `osc_52 = \"system\"` for full integration.",
+      "type": "object",
+      "properties": {
+        "osc_52": {
+          "description": "Where an OSC 52 set request from the running program lands.",
+          "$ref": "#/$defs/Osc52Policy",
+          "default": "mirror"
+        },
+        "use_os_clipboard": {
+          "description": "When true (default), paste (Ctrl+Shift+V) reads from the OS\nclipboard. When false, felis falls back to an in-process\nclipboard (useful for headless or sandboxed setups where the\nOS clipboard is unreachable).",
+          "type": "boolean",
+          "default": true
+        }
+      }
+    },
+    "ClipboardScope": {
+      "description": "Where a paste / copy reads from / writes to.",
+      "oneOf": [
+        {
+          "description": "OS clipboard (the Cmd/Ctrl-C/V buffer).",
+          "type": "string",
+          "const": "system"
+        },
+        {
+          "description": "X11 PRIMARY selection. Falls back to System on platforms\nwithout a primary selection.",
+          "type": "string",
+          "const": "primary"
+        }
+      ]
+    },
+    "CursorBlinkMode": {
+      "description": "Cursor blink policy (`cursor.blink`).",
+      "oneOf": [
+        {
+          "description": "Blink only when the program asks (`DECSCUSR` odd-`Ps`). Default.",
+          "type": "string",
+          "const": "program"
+        },
+        {
+          "description": "Never blink, whatever the program requests.",
+          "type": "string",
+          "const": "never"
+        },
+        {
+          "description": "Always blink, even for a program-requested steady cursor.",
+          "type": "string",
+          "const": "always"
+        }
+      ]
+    },
+    "CursorConfig": {
+      "description": "`[cursor]` section: everything the user controls about the cursor:\nits color and its blink animation. The *shape* is the running\nprogram's (`DECSCUSR`), and a runtime `OSC 12` overrides the\nconfigured color for as long as the session sets it.",
+      "type": "object",
+      "properties": {
+        "blink": {
+          "description": "When the cursor blinks. Default `program` blinks only when the\nrunning program requests it via `DECSCUSR` (xterm / kitty\nbehavior; the default cursor requests blink). `never` is the\nreduced-motion / accessibility lever; `always` forces blink even\nfor a program-requested steady cursor.",
+          "$ref": "#/$defs/CursorBlinkMode",
+          "default": "program"
+        },
+        "blink_interval_ms": {
+          "description": "Half-period of the blink, in milliseconds (how long the cursor\nstays shown, then hidden). The default 530 ms is xterm's\nhistorical value. Very small values are raised to a safe floor.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 530,
+          "minimum": 0
+        },
+        "color": {
+          "description": "`#rrggbb` for the cursor block. Missing ⇒ reverse-video cursor\n(theme-agnostic, always visible).",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        }
+      }
+    },
+    "Escapes": {
+      "description": "Backslash-escape mode for a `send_string` binding's `text`.",
+      "oneOf": [
+        {
+          "description": "`text` is sent byte-for-byte.",
+          "type": "string",
+          "const": "none"
+        },
+        {
+          "description": "Recognize `\\n`, `\\r`, `\\t`, `\\\\`, `\\0`, `\\xNN`, `\\e`. Any\nother backslash sequence is a config error caught at parse\ntime, not silently passed through.",
+          "type": "string",
+          "const": "c_style"
+        }
+      ]
+    },
+    "FontConfig": {
+      "description": "Font selection.",
+      "type": "object",
+      "properties": {
+        "bold": {
+          "description": "`[font.bold]`: the face for bold cells (kitty's `bold_font`).\nA missing table (or a missing `family` within it) derives the\nbold face from `font.family` at bold weight.",
+          "$ref": "#/$defs/FontStyleConfig",
+          "default": {}
+        },
+        "bold_italic": {
+          "description": "`[font.bold_italic]`: the face for bold+italic cells (kitty's\n`bold_italic_font`).",
+          "$ref": "#/$defs/FontStyleConfig",
+          "default": {}
+        },
+        "fallback": {
+          "description": "Explicit per-grapheme fallback chain, appended in declared order\n(missing families warn and are skipped). Empty (default) runs the\nCJK / symbol / emoji / Nerd Font auto-discovery instead, never on\ntop. Each entry is `{ family = \"...\", features = [...] }`, where an\nomitted `features` inherits `font.features` (docs/reference/config.md).",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/FontStyleConfig"
+          }
+        },
+        "family": {
+          "description": "Font family name (e.g. `\"JetBrains Mono\"`). Omitted ⇒ the\nsystem monospace font.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "features": {
+          "description": "OpenType feature tags applied to the primary face and inherited by\nfallback fonts. Use a 4-char tag to enable (`\"calt\"`) or leading `-`\nto disable (`\"-clig\"`). Empty by default (features off).",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "italic": {
+          "description": "`[font.italic]`: the face for italic cells (kitty's\n`italic_font`).",
+          "$ref": "#/$defs/FontStyleConfig",
+          "default": {}
+        },
+        "size_px": {
+          "description": "Font size in logical pixels: the client multiplies it by the\nwindow's display scale, so one value holds across a high-DPI and\na standard-DPI monitor. Positive values clamp into `[4.0, 72.0]`\n(the Ctrl+Wheel zoom band) with a warning; non-positive,\nnon-finite, and omitted values use the built-in default.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "float",
+          "default": null
+        }
+      }
+    },
+    "FontSizeStep": {
+      "description": "Font-size steps for a `font_size` binding.",
+      "oneOf": [
+        {
+          "description": "One config-defined step larger.",
+          "type": "string",
+          "const": "increase"
+        },
+        {
+          "description": "One config-defined step smaller.",
+          "type": "string",
+          "const": "decrease"
+        },
+        {
+          "description": "Back to the configured size.",
+          "type": "string",
+          "const": "reset"
+        }
+      ]
+    },
+    "FontStyleConfig": {
+      "description": "One font-face table: a per-style override or fallback entry.\n\nIf a style's named family has no matching face installed, the primary face\nis reused; felis does not synthesize fake bold or oblique\n(docs/explanation/rendering/text-shaping.md).",
+      "type": "object",
+      "properties": {
+        "family": {
+          "description": "Family override. Omitted ⇒ derived from the base `font.family`\nat this style's weight/slant.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "features": {
+          "description": "Feature override. Omitted ⇒ inherits the base `font.features`;\nan explicit `[]` opts out of every feature for this style; a\nnon-empty list replaces the base list.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "KeymapConfig": {
+      "description": "`[keymap]` section: chord string (`\"ctrl+shift+f\"`) → binding\ntable. Entries are validated one by one: a malformed entry is\nreported and skipped rather than aborting the whole block. See\ndocs/reference/keybindings.md for the chord grammar and merge\nsemantics.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/BindingValue"
+      }
+    },
+    "MouseConfig": {
+      "description": "`[mouse]` section: wheel scroll speed.",
+      "type": "object",
+      "properties": {
+        "scroll_multiplier": {
+          "description": "Lines scrolled per wheel notch. The default 3 matches alacritty\n(`scrolling.multiplier`) and kitty (`wheel_scroll_multiplier`),\nand applies only to notch-based wheels: touchpad smooth\nscrolling is already velocity-scaled by the OS. Clamped to\n`[0.1, 100.0]` with a warning; `nan` uses the default.",
+          "type": "number",
+          "format": "double",
+          "default": 3.0
+        }
+      }
+    },
+    "Osc52Policy": {
+      "description": "Where an OSC 52 set request from the running program lands\n(`clipboard.osc_52`).",
+      "oneOf": [
+        {
+          "description": "The write lands in felis's own mirror and stops there; the system\nclipboard is untouched. felis still answers OSC 52 queries from\nthe mirror, so a program that writes and then reads sees its own\nvalue. Default.",
+          "type": "string",
+          "const": "mirror"
+        },
+        {
+          "description": "The write propagates to the system clipboard.",
+          "type": "string",
+          "const": "system"
+        }
+      ]
+    },
+    "PaletteConfig": {
+      "description": "Per-slot overrides for the 256-color palette.\n\nThe 16 base ANSI slots are named fields; extended indices `16..=255`\nlive in `indexed`. Missing slots keep the xterm baseline color.",
+      "type": "object",
+      "properties": {
+        "black": {
+          "description": "ANSI slot 0.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "blue": {
+          "description": "ANSI slot 4.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "bright_black": {
+          "description": "ANSI slot 8.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "bright_blue": {
+          "description": "ANSI slot 12.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "bright_cyan": {
+          "description": "ANSI slot 14.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "bright_green": {
+          "description": "ANSI slot 10.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "bright_magenta": {
+          "description": "ANSI slot 13.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "bright_red": {
+          "description": "ANSI slot 9.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "bright_white": {
+          "description": "ANSI slot 15.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "bright_yellow": {
+          "description": "ANSI slot 11.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "cyan": {
+          "description": "ANSI slot 6.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "green": {
+          "description": "ANSI slot 2.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "indexed": {
+          "description": "Overrides for the extended 256-color indices `16..=255` (the\n6×6×6 cube and grayscale ramp), which programs reach through\n`SGR 38;5;<n>` / `48;5;<n>`. Slots `0..=15` belong to the named\nfields above; any other key is dropped with a warning. Keys are\nstrings: TOML has no others, so `16` and `\"16\"` are one key.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {}
+        },
+        "magenta": {
+          "description": "ANSI slot 5.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "red": {
+          "description": "ANSI slot 1.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "white": {
+          "description": "ANSI slot 7.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "yellow": {
+          "description": "ANSI slot 3.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        }
+      }
+    },
+    "PipeRegionSource": {
+      "description": "Region of the terminal buffer a `pipe` binding serializes (its\n`source` field).",
+      "oneOf": [
+        {
+          "description": "Entire retained scrollback plus the live screen.",
+          "type": "string",
+          "const": "scrollback"
+        },
+        {
+          "description": "The current viewport only (what is on screen now).",
+          "type": "string",
+          "const": "visible"
+        },
+        {
+          "description": "The active selection in this window.",
+          "type": "string",
+          "const": "selection"
+        },
+        {
+          "description": "The last command's output: the most recent `OSC 133 C → D` range.",
+          "type": "string",
+          "const": "command_output"
+        },
+        {
+          "description": "The last command line plus its output: the most recent\n`OSC 133 B → D` range.",
+          "type": "string",
+          "const": "last_command"
+        }
+      ]
+    },
+    "PipeSink": {
+      "description": "Which sink a `pipe` binding sends the region to (`target` field).\nUses `target = \"clipboard\"` for payload-free sinks and\n`target = { command = [\"bat\"] }` or `target = { file = \"/tmp/x\" }`.",
+      "oneOf": [
+        {
+          "description": "Spawn this argv (resolved on the client's host) with the region.\nA list of strings, never a shell string; wrap a pipeline in your\nown script. Empty → the default pager (`$PAGER`, else `less -R`),\nwhich is also what omitting `target` selects.",
+          "type": "object",
+          "properties": {
+            "command": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "command"
+          ]
+        },
+        {
+          "description": "Load the region onto the client clipboard.",
+          "type": "string",
+          "const": "clipboard"
+        },
+        {
+          "description": "Write the region to this path, resolved against the\n`config.toml` that names it like every other file-valued key.",
+          "type": "object",
+          "properties": {
+            "file": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "file"
+          ]
+        },
+        {
+          "description": "Write the region to a client-chosen temp file whose path is\nlogged.",
+          "type": "string",
+          "const": "temp_file"
+        },
+        {
+          "description": "Feed the region back into the session as bracketed paste.",
+          "type": "string",
+          "const": "paste"
+        }
+      ]
+    },
+    "PostShader": {
+      "description": "What `shader.post` names: a shader felis ships, or a file.",
+      "oneOf": [
+        {
+          "description": "A shader felis carries in the binary.",
+          "type": "object",
+          "properties": {
+            "builtin": {
+              "$ref": "#/$defs/BuiltinShader"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "builtin"
+          ]
+        },
+        {
+          "description": "A WGSL file at this path. A leading `~/` expands and an absolute\npath is taken as written; a relative path resolves against the\ndirectory holding the `config.toml` that named it.",
+          "type": "object",
+          "properties": {
+            "file": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "file"
+          ]
+        }
+      ]
+    },
+    "PromptJump": {
+      "description": "Direction for an [`InputMsg::JumpPrompt`].",
+      "oneOf": [
+        {
+          "description": "The nearest prompt above the current viewport top.",
+          "type": "string",
+          "const": "previous"
+        },
+        {
+          "description": "The nearest prompt below the current viewport top.",
+          "type": "string",
+          "const": "next"
+        }
+      ]
+    },
+    "ScrollStep": {
+      "description": "Scrollback navigation steps.",
+      "oneOf": [
+        {
+          "description": "One row up.",
+          "type": "string",
+          "const": "line_up"
+        },
+        {
+          "description": "One row down.",
+          "type": "string",
+          "const": "line_down"
+        },
+        {
+          "description": "Half a screen up (kitty's `scroll_half_page`: a whole screen\nleaves no overlapping row to reorient against).",
+          "type": "string",
+          "const": "half_page_up"
+        },
+        {
+          "description": "Half a screen down.",
+          "type": "string",
+          "const": "half_page_down"
+        },
+        {
+          "description": "Top of scrollback.",
+          "type": "string",
+          "const": "home"
+        },
+        {
+          "description": "Bottom of scrollback (live view).",
+          "type": "string",
+          "const": "end"
+        }
+      ]
+    },
+    "ShaderAnimation": {
+      "description": "Redraw policy for a loaded post-process shader (`shader.animate`).",
+      "oneOf": [
+        {
+          "description": "No dedicated clock: frames happen for the usual reasons (input,\nprogram output, cursor moves), and the shader animates only\nthrough the uniforms felis eases for it. Default, and the only\nvalue that keeps idle CPU at zero.",
+          "type": "string",
+          "const": "never"
+        },
+        {
+          "description": "Redraw continuously while the window holds focus, for a shader\nthat animates purely off `time_s` and would otherwise stand\nstill. There is deliberately no variant that animates unfocused\nwindows: a background window must never burn CPU.",
+          "type": "string",
+          "const": "focused"
+        }
+      ]
+    },
+    "ShaderConfig": {
+      "description": "`[shader]` section: an optional WGSL post-process pass applied to\nthe rendered frame. Clients that draw no pixels ignore this\nsection.",
+      "type": "object",
+      "properties": {
+        "animate": {
+          "description": "Whether the shader gets frames of its own. Default `never`:\nfelis draws when something changed, and the shader sees those\nframes. `focused` adds a continuous redraw clock for effects\nthat animate off `time_s` and have no other way to advance.",
+          "$ref": "#/$defs/ShaderAnimation",
+          "default": "never"
+        },
+        "post": {
+          "description": "Post-process shader, absent by default (no extra pass).\n`{ builtin = \"trail\" }` selects a shader felis ships;\n`{ file = \"…\" }` a WGSL file of your own. felis never scans a\ndirectory: what runs is what the config named.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PostShader"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      }
+    },
+    "SwitchDirection": {
+      "oneOf": [
+        {
+          "description": "Previous session in the daemon's order.",
+          "type": "string",
+          "const": "previous"
+        },
+        {
+          "description": "Next session in the daemon's order.",
+          "type": "string",
+          "const": "next"
+        }
+      ]
+    },
+    "ThemeConfig": {
+      "description": "Default foreground / background colors.\n\nEvery hex string field here is `#rrggbb`. A malformed value logs a\nwarning and falls back to its default; the rest of the theme is unaffected.",
+      "type": "object",
+      "properties": {
+        "background": {
+          "description": "`#rrggbb` for the default background.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "foreground": {
+          "description": "`#rrggbb` for the default foreground.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "palette": {
+          "description": "Per-slot overrides for the SGR 16-color palette.",
+          "$ref": "#/$defs/PaletteConfig",
+          "default": {
+            "black": null,
+            "blue": null,
+            "bright_black": null,
+            "bright_blue": null,
+            "bright_cyan": null,
+            "bright_green": null,
+            "bright_magenta": null,
+            "bright_red": null,
+            "bright_white": null,
+            "bright_yellow": null,
+            "cyan": null,
+            "green": null,
+            "indexed": {},
+            "magenta": null,
+            "red": null,
+            "white": null,
+            "yellow": null
+          }
+        }
+      }
+    },
+    "WindowConfig": {
+      "description": "Window-level settings.\n\nConfigures window decorations, background opacity, backdrops,\nand an optional title prefix attached to the shell's dynamic title.",
+      "type": "object",
+      "properties": {
+        "backdrop": {
+          "description": "OS-native backdrop hosted behind the window (`none` by default).\n\n`blur` (macOS) requires `opacity < 1.0`. DWM backdrops (Windows) style\nthe title bar regardless of opacity. On Linux, blur belongs to the\ncompositor. Unsupported backdrops log a note and leave the window plain.",
+          "$ref": "#/$defs/Backdrop",
+          "default": "none"
+        },
+        "decorations": {
+          "description": "Whether the OS-drawn window chrome (title bar, borders, system buttons)\nis shown. `true` (default) keeps native decorations; `false` strips them.\nOn macOS the window keeps its rounded corners and shadow. The terminal\npaints no replacement chrome.",
+          "type": "boolean",
+          "default": true
+        },
+        "opacity": {
+          "description": "Background opacity in `0.0..=1.0` (`1.0` default).\n\nOnly the default background bleeds through; explicit cell backgrounds\nstay solid. Decided once at startup: changing between opaque and\ntranslucent requires a restart. Clamped to `0.0..=1.0`.",
+          "type": "number",
+          "format": "float",
+          "default": 1.0
+        },
+        "title_prefix": {
+          "description": "Optional prefix glued in front of the dynamic shell title.\nFormat: `\"<prefix> <title>\"`. Empty or missing means no prefix;\nthe title is whatever the shell sets.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "felis_json": 1,
+  "kind": "conn",
+  "msg": {
+    "identity": {
+      "dirty": false,
+      "revision": "e3abf80e3abf80e3abf80e3abf80e3abf80e3abf",
+      "version": "0.1.0"
+    },
+    "type": "welcome"
+  }
+}

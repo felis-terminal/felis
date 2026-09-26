@@ -1,0 +1,62 @@
+[package]
+name = "felis-daemon"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "felis daemon: session pool, IPC server, signal handling"
+
+[lib]
+name = "felis_daemon"
+path = "src/lib.rs"
+
+[[bin]]
+name = "felis-daemon"
+path = "src/main.rs"
+
+[dependencies]
+felis-protocol = { workspace = true }
+bytes = { workspace = true }
+felis-vt = { workspace = true }
+felis-grid = { workspace = true }
+felis-pty = { workspace = true }
+felis-transport = { workspace = true }
+tokio = { workspace = true }
+parking_lot = { workspace = true }
+tracing = { workspace = true }
+clap = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+getrandom = { workspace = true }
+png = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+rustix = { workspace = true }
+
+# macOS lacks /proc, requiring proc_pidpath to resolve process names.
+# objc2-core-foundation reads the current region for the `LANG` fill.
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = { workspace = true }
+objc2-core-foundation = { workspace = true }
+
+[dev-dependencies]
+felis-transport = { workspace = true, features = ["test-util"] }
+# `test-util` for the paused clock: the handshake deadlines are seconds
+# long, and a test that waited them out in real time would be the
+# slowest in the suite.
+tokio = { workspace = true, features = [
+  "macros",
+  "rt-multi-thread",
+  "io-util",
+  "time",
+  "test-util",
+] }
+tempfile = { workspace = true }
+miniz_oxide = { workspace = true }
+felis-client-core = { workspace = true }
+proptest = { workspace = true }
+
+[lints]
+workspace = true
