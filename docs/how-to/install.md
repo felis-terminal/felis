@@ -4,13 +4,14 @@ sidebar:
   order: 1
 ---
 
-Install felis, its `xterm-felis` terminfo entry, and its shell completions, from the Nix flake, through home-manager, or
-from source.
+Install felis, its `xterm-felis` terminfo entry, and its shell completions, from the Nix flake, through home-manager,
+through Homebrew, or from source.
 
 **Prerequisites:** the [Nix package manager](https://nixos.org/download) with flakes enabled for the flake,
-home-manager, and source-build paths; the source build takes its toolchain from the same flake. The Linux and macOS
-archives and the Windows artifact need no Nix, and a native Windows build needs only a Rust toolchain. Nothing else:
-felis needs no background service to configure, since the daemon starts on first use.
+home-manager, and source-build paths; the source build takes its toolchain from the same flake. The Homebrew path needs
+[Homebrew](https://brew.sh). The Linux and macOS archives and the Windows artifact need no Nix, and a native Windows
+build needs only a Rust toolchain. Nothing else: felis needs no background service to configure, since the daemon starts
+on first use.
 
 ## Install from the flake
 
@@ -73,6 +74,33 @@ drive felis's palette and font from the active base16 or base24 scheme and the w
 `stylix.opacity.terminal`. Stylix has no backdrop knob, so set `programs.felis.settings.window.backdrop` yourself
 alongside a translucent opacity (`"blur"` on macOS, one of the DWM materials on Windows); see `window.backdrop` in
 [the configuration reference](../reference/config.md) for supported values.
+
+## Homebrew
+
+On Apple silicon with macOS 15 or later, and on x86_64 Linux, the felis tap installs a prebuilt bottle:
+
+```sh
+brew install felis-terminal/tap/felis
+```
+
+The formula puts `felis` on your `PATH` and installs the `xterm-felis` entry under `share/terminfo`, shell completions
+for bash, zsh and fish, and the `felis(1)` man pages. Where no bottle applies, as on an earlier macOS, Homebrew builds
+the formula from source. Of the platforms Homebrew runs on, felis supports only these two
+([workspace.md](../reference/workspace.md) "Build and platform matrix").
+
+`felis` adds the formula's terminfo directory to `TERMINFO_DIRS` for the sessions it starts. A window opened from Finder
+does not pass through it, so for those point ncurses at the entry from your shell's startup file:
+
+```sh
+export TERMINFO_DIRS="$(brew --prefix felis)/share/terminfo:"
+```
+
+On macOS the formula also builds `felis.app` inside its prefix. Link it into `/Applications` to open felis from Finder
+or the Dock:
+
+```sh
+ln -sf "$(brew --prefix felis)/felis.app" /Applications/felis.app
+```
 
 ## Build from source
 
