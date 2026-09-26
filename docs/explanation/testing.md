@@ -251,15 +251,16 @@ page.
 
 ### Maintainer use, for `aarch64-darwin`
 
-One target carries the claim on a weaker class of evidence. `aarch64-darwin` has no runtime gate: `darwin.yml` builds
-it, `nix/package.nix` sets `doCheck = false` there, and no suite or smoke runs on the `aarch64-darwin` runner. What
-stands in is the maintainer's daily use of that build on the platform's own hardware, across the revisions that reach
-`main`. That witnesses the whole stack a smoke would drive, over hours rather than one scripted minute: the Metal
+One target carries the claim on a weaker class of evidence. `aarch64-darwin` has no window gate: `darwin.yml` builds it
+and runs the release archive's headless checks (its manifest, its signature, and sessions spawned through the bundle),
+but `nix/package.nix` sets `doCheck = false` there, and no suite or frontend smoke runs on the `aarch64-darwin` runner.
+What stands in is the maintainer's daily use of that build on the platform's own hardware, across the revisions that
+reach `main`. That witnesses the whole stack a smoke would drive, over hours rather than one scripted minute: the Metal
 surface on a real GPU, the window server, the PTY, the input path.
 
 What it does not witness is everything a machine would re-check. No frame is compared against an expected one, no CI run
 reproduces the result, and the suite does not run on the target at all, so a regression only Cargo tests would catch
 reaches the cache. The evidence is also one person's report about the revisions that person happened to run, and a
 reader of a green run log cannot find it. The cache push runs in `darwin-build` after the build succeeds, so the cache
-never carries a path whose build failed. _Revisit if_ the darwin smoke lands, which retires this class of evidence and
-makes the row read like `x86_64-linux`'s.
+never carries a path whose build failed. _Revisit if_ a darwin frontend smoke lands, which retires this class of
+evidence and makes the row read like `x86_64-linux`'s.
