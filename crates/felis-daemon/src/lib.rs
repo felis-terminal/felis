@@ -29,6 +29,7 @@ pub mod parse_sink;
 pub mod pool;
 pub mod relay;
 pub mod serve;
+pub(crate) mod terminfo;
 pub use pool::{DEFAULT_COLS, DEFAULT_ROWS, SessionId, SessionMeta, SessionPool};
 pub use serve::{ServeError, serve_unix};
 
