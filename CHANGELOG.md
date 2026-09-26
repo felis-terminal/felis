@@ -10,6 +10,8 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-09-27
+
 ### Added
 
 - **Platform**: a Homebrew tap installs felis with prebuilt bottles on macOS (Apple silicon) and Linux (x86_64):
@@ -25,5 +27,6 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 
 Initial release.
 
-[unreleased]: https://github.com/felis-terminal/felis/compare/v0.1.0...HEAD
+[unreleased]: https://github.com/felis-terminal/felis/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/felis-terminal/felis/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/felis-terminal/felis/releases/tag/v0.1.0
