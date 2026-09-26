@@ -350,6 +350,12 @@ assets, by the same draft-then-publish sequence. It never gates or builds anythi
 publishes leaves GitHub without one. A rerun deletes an unfinished GitHub draft for the tag, and it leaves a published
 GitHub release that already carries every asset alone.
 
+Once the GitHub release exists, the workflow's `homebrew` job runs `tools/release/homebrew.py`
+(`just release-homebrew-test` is its self-test). For a tag without a prerelease suffix it opens a pull request on
+`felis-terminal/homebrew-tap` that moves the formula to the tag's source archive. The pull request is a draft, which the
+tap does not publish on its own, when `nix/package.nix`, `nix/make-macos-app.sh`, `nix/compile-terminfo.sh` or `share/`
+changed since the previous final tag.
+
 [non-goals.md](../explanation/non-goals.md) "Cross-platform constraints" states: "Where a feature is not uniformly
 implementable across macOS, Linux, and Windows, it is omitted rather than gated."
 

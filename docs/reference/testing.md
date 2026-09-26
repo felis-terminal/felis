@@ -469,7 +469,8 @@ normal `just check` needs.
 
 CI runs on Forgejo Actions (<https://forgejo.org/docs/latest/user/actions/>) with configuration under
 `.forgejo/workflows/`. The one workflow under `.github/workflows/`, `release-mirror.yml`, gates nothing: it copies a
-published Forgejo release to the GitHub mirror ([workspace.md](workspace.md) "Release gate").
+published Forgejo release to the GitHub mirror and opens the Homebrew tap's version bump ([workspace.md](workspace.md)
+"Release gate").
 
 ### Workflows
 
