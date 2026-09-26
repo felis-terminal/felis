@@ -28,10 +28,15 @@
 # /Applications, handed to another machine). Symlinks into a build dir
 # or the Nix store would dangle the moment the bundle moves.
 #
+# Why --terminfo lands inside the bundle: the daemon finds the compiled
+# `xterm-felis` entry beside its own executable and hands it to its PTY
+# children, and a window opened from Finder passes through no launcher
+# that could point ncurses anywhere else.
+#
 # Usage:
 #   make-macos-app.sh [--client PATH] [--daemon PATH] [--cli PATH]
-#                             [--version VER] [--out DIR]
-#                             [--name NAME] [--identifier ID]
+#                             [--terminfo DIR] [--version VER]
+#                             [--out DIR] [--name NAME] [--identifier ID]
 #
 # Defaults target a standalone `cargo build --release`: it reads the
 # binaries from target/release and the version from the client crate's
@@ -47,6 +52,7 @@ identifier="com.natsukium.felis"
 client=""
 daemon=""
 cli=""
+terminfo=""
 version=""
 out=""
 
@@ -55,6 +61,7 @@ while [ $# -gt 0 ]; do
   --client) client="$2"; shift 2 ;;
   --daemon) daemon="$2"; shift 2 ;;
   --cli) cli="$2"; shift 2 ;;
+  --terminfo) terminfo="$2"; shift 2 ;;
   --version) version="$2"; shift 2 ;;
   --out) out="$2"; shift 2 ;;
   --name) name="$2"; shift 2 ;;
@@ -96,6 +103,10 @@ for bin in "$client" "$daemon" ${cli:+"$cli"}; do
     exit 1
   fi
 done
+if [ -n "$terminfo" ] && [ ! -d "$terminfo" ]; then
+  echo "make-macos-app: terminfo directory not found: $terminfo" >&2
+  exit 1
+fi
 
 app="$out/$name.app"
 macos="$app/Contents/MacOS"
@@ -109,6 +120,9 @@ install -m 0755 "$client" "$macos/$executable"
 install -m 0755 "$daemon" "$macos/felis-daemon"
 if [ -n "$cli" ]; then
   install -m 0755 "$cli" "$macos/felis"
+fi
+if [ -n "$terminfo" ]; then
+  cp -RL "$terminfo" "$resources/terminfo"
 fi
 
 # NSHighResolutionCapable is mandatory: without it AppKit hands winit a

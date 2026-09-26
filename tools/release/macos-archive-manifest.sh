@@ -36,10 +36,12 @@ done
 # tic files the entry under a directory named for the first character
 # of the terminal name, as the letter (x/) or its hex code (78/)
 # depending on the ncurses build, so the entry is located, not assumed.
-if [ -z "$(find "$tree/share/terminfo" -type f -name xterm-felis 2>/dev/null)" ]; then
-  echo "the archive is missing the xterm-felis terminfo entry under share/terminfo" >&2
-  exit 1
-fi
+for dir in share/terminfo felis.app/Contents/Resources/terminfo; do
+  if [ -z "$(find "$tree/$dir" -type f -name xterm-felis 2>/dev/null)" ]; then
+    echo "the archive is missing the xterm-felis terminfo entry under $dir" >&2
+    exit 1
+  fi
+done
 
 # The bundle launches felis-client, not the CLI that sits beside it.
 if ! grep -q '<string>felis-client</string>' "$app/Contents/Info.plist"; then

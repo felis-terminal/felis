@@ -120,6 +120,7 @@ craneLib.buildPackage (
         --client "$out/bin/felis-client" \
         --daemon "$out/bin/felis-daemon" \
         --cli "$out/bin/felis" \
+        --terminfo "$out/share/terminfo" \
         --version "$version" \
         --out "$out/Applications"
     '';
