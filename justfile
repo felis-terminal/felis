@@ -180,7 +180,7 @@ docs-links:
 
 # Hermetic self-tests of every Python tool under tools/ (pr.yml's build job runs this).
 [group('lint')]
-selftest: prose-check-selftest proto-compat-test release-check-test release-mirror-test bench-selftest bench-vs-selftest
+selftest: prose-check-selftest proto-compat-test release-check-test release-mirror-test release-homebrew-test bench-selftest bench-vs-selftest
 
 # Run full check suite: fmt-check + lint + portable core + prose + skills + test + docs links + deny + proto-compat + tool self-tests.
 [group('lint')]
@@ -207,6 +207,11 @@ release-publish-test:
 [group('release')]
 release-mirror-test:
     python3 tools/release/mirror.py --self-test
+
+# Self-test the Homebrew tap bump against a throwaway repo and a local fake GitHub.
+[group('release')]
+release-homebrew-test:
+    python3 tools/release/homebrew.py --self-test
 
 # ── Bench (mirrors bench.yml; tools/bench/criterion.py is the entry point) ──
 # Runs through orchestrator rather than bare cargo bench so flags match CI baselines.

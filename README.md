@@ -52,10 +52,10 @@ nix run github:felis-terminal/felis
 A window opens on a fresh session, and the shell inside it keeps running once you close the window. Reattach with
 `felis attach`.
 
-The [install guide](docs/how-to/install.md) covers the profile, Home Manager, standalone release archives (Linux, macOS,
-Windows), and from-source paths. [Your first session](docs/tutorials/first-session.md) walks the close-and-reattach
-loop, and [tmux workflows without tmux](docs/how-to/tmux-workflows-without-tmux.md) maps everyday tmux patterns to
-felis.
+The [install guide](docs/how-to/install.md) covers the profile, Home Manager, Homebrew, standalone release archives
+(Linux, macOS, Windows), and from-source paths. [Your first session](docs/tutorials/first-session.md) walks the
+close-and-reattach loop, and [tmux workflows without tmux](docs/how-to/tmux-workflows-without-tmux.md) maps everyday
+tmux patterns to felis.
 
 ## Working with your tools
 

@@ -1,6 +1,7 @@
 # The only GitHub workflow: releases are built and gated on Forgejo
 # (.forgejo/workflows/release.yml), and this republishes the finished Forgejo
-# release on the mirror once the push mirror delivers the tag.
+# release on the mirror once the push mirror delivers the tag, then asks the
+# Homebrew tap to follow it.
 name: release-mirror
 
 on:
@@ -29,3 +30,22 @@ jobs:
           MIRROR_SOURCE: https://git.natsukium.com/api/v1/repos/felis-terminal/felis
           MIRROR_TIMEOUT: "18000"
           GH_TOKEN: ${{ github.token }}
+
+  homebrew:
+    needs: mirror
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The packaging diff reaches back to the previous release tag.
+          fetch-depth: 0
+          persist-credentials: false
+      - run: python3 tools/release/homebrew.py --self-test
+      - run: python3 tools/release/homebrew.py "$GITHUB_REF_NAME"
+        env:
+          HOMEBREW_TAP: felis-terminal/homebrew-tap
+          # github.token cannot write to another repository, and a pull request
+          # it opened would start no workflow there.
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}

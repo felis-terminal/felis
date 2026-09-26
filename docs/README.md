@@ -29,8 +29,8 @@ Learning-oriented, hands-on. Start here.
 
 Task-oriented; one goal per page.
 
-- [Install](how-to/install.md) — the Nix flake package, the home-manager module (and its Stylix hook), the Linux, macOS
-  and Windows release archives, a from-source build, and the terminfo entry.
+- [Install](how-to/install.md) — the Nix flake package, the home-manager module (and its Stylix hook), the Homebrew tap,
+  the Linux, macOS and Windows release archives, a from-source build, and the terminfo entry.
 - [Update felis](how-to/update-felis.md) — install a new version, then restart the daemon onto it; the restart ends the
   running sessions.
 - [Do your tmux workflows without tmux](how-to/tmux-workflows-without-tmux.md) — the everyday tmux operations without a

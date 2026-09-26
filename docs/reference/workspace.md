@@ -337,9 +337,9 @@ the job instead, since publication is the one step the workflow cannot take back
 | `felis-config.schema.json`         | the config keys that build accepts                                                                                                                                                         |
 | `felis.proto`                      | the wire schema that build speaks                                                                                                                                                          |
 
-The release body says how to install each asset and through Nix, pointing at the GitHub repository, names the three
-supported targets, says `aarch64-linux` is not supported, and ends with the version's CHANGELOG section when that
-section has entries. A tag with a prerelease suffix publishes with `prerelease: true`.
+The release body says how to install each asset and through Nix, and for a final tag through Homebrew, pointing at the
+GitHub repository, names the three supported targets, says `aarch64-linux` is not supported, and ends with the version's
+CHANGELOG section when that section has entries. A tag with a prerelease suffix publishes with `prerelease: true`.
 
 The GitHub repository is the public face and a push mirror of Forgejo, and a push mirror carries refs but not release
 pages. `.github/workflows/release-mirror.yml`, the one GitHub workflow, fires when the mirror delivers a `v*` tag and
@@ -349,6 +349,12 @@ asset, checks its size against the Forgejo listing, and cuts the GitHub release 
 assets, by the same draft-then-publish sequence. It never gates or builds anything: a tag whose Forgejo release never
 publishes leaves GitHub without one. A rerun deletes an unfinished GitHub draft for the tag, and it leaves a published
 GitHub release that already carries every asset alone.
+
+Once the GitHub release exists, the workflow's `homebrew` job runs `tools/release/homebrew.py`
+(`just release-homebrew-test` is its self-test). For a tag without a prerelease suffix it opens a pull request on
+`felis-terminal/homebrew-tap` that moves the formula to the tag's source archive. The pull request is a draft, which the
+tap does not publish on its own, when `nix/package.nix`, `nix/make-macos-app.sh`, `nix/compile-terminfo.sh` or `share/`
+changed since the previous final tag.
 
 [non-goals.md](../explanation/non-goals.md) "Cross-platform constraints" states: "Where a feature is not uniformly
 implementable across macOS, Linux, and Windows, it is omitted rather than gated."

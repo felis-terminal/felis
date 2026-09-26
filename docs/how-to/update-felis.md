@@ -25,6 +25,12 @@ nix flake update felis   # in your home-manager / NixOS flake
 home-manager switch      # or nixos-rebuild switch
 ```
 
+With Homebrew, upgrade the formula:
+
+```sh
+brew upgrade felis
+```
+
 From the Linux or macOS archive, drain and stop the daemon first (the next two sections), then unpack the new tarball
 into a directory of its own and point your `PATH` at it:
 
