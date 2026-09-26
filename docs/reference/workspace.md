@@ -158,9 +158,9 @@ burning a number.
 
 The **crate** version is Cargo's, and it carries no wire information. It is declared once, as
 `[workspace.package] version` in the root `Cargo.toml`, and every member inherits it with `version.workspace = true`, so
-all members sit at `0.1.0` and float together with the project by construction; none is published, so nothing resolves
-them and no consumer can read a promise out of them. A wire-schema change is recorded where a peer can act on it
-(`PROTOCOL_MINOR` and the minor ledger in [ipc.md](ipc.md) "The minor ledger", one row per addition), and
+all members sit at one version and float together with the project by construction; none is published, so nothing
+resolves them and no consumer can read a promise out of them. A wire-schema change is recorded where a peer can act on
+it (`PROTOCOL_MINOR` and the minor ledger in [ipc.md](ipc.md) "The minor ledger", one row per addition), and
 `felis-protocol`'s crate version is not bumped alongside it ([implementation.md](../explanation/implementation.md) "Why
 the crate version carries no wire information").
 
