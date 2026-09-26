@@ -79,9 +79,14 @@ Design rationale for capability selection is documented in
 The compiled entry adheres to macOS ncurses 6.0 constraints: compiled size must remain under 4096 bytes and color pairs
 are bounded by `pairs#0x7fff` (validated by `nix/compile-terminfo.sh`).
 
-The Nix package and the Linux and macOS release archives install the compiled entry under `share/terminfo`. The
-archives' `bin/` launchers prepend that directory to `TERMINFO_DIRS`, keeping any existing value and, when the variable
-was unset, a trailing empty element that stands for the host's default directories; sessions inherit the export.
+The Nix package and the Linux and macOS release archives install the compiled entry under `share/terminfo`, and
+`felis.app` carries a copy under `Contents/Resources/terminfo`. On Unix the daemon prepends the directory shipped with
+its own executable to every session's `TERMINFO_DIRS`: the bundle's `Contents/Resources/terminfo` on macOS, else the
+install prefix's `share/terminfo`, with symlinks to the executable resolved first. It keeps any existing value,
+including one the spawn request sets, and, when the variable was unset, appends a trailing empty element that stands for
+the host's default directories. A directory already listed is not added again, and a daemon whose tree ships no entry (a
+`cargo build`, a distribution package that installs into the system database) leaves the variable alone. The archives'
+`bin/` launchers prepend the same directory for the commands they run themselves, which is how `felis doctor` finds it.
 
 On systems where `xterm-felis` is not yet installed in the system terminfo database
 (`tic -x share/terminfo/felis.terminfo`), applications may fail terminfo lookups. Users can fall back to standard

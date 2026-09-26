@@ -79,9 +79,11 @@ in
       default = true;
       description = ''
         Add the package's compiled terminfo to `TERMINFO_DIRS` in the
-        session environment so ncurses apps run inside felis recognize
-        `TERM=xterm-felis`. The trailing empty entry preserves the
-        compiled-in default search path (system + `~/.terminfo`).
+        session environment, so programs outside felis sessions (a tmux
+        server started elsewhere, `felis doctor`) recognize
+        `TERM=xterm-felis`; the daemon hands the entry to its own sessions
+        regardless. The trailing empty entry preserves the compiled-in
+        default search path (system + `~/.terminfo`).
       '';
     };
 

@@ -329,13 +329,13 @@ moment it exists, so an upload that failed halfway would otherwise leave a publi
 trace. A rerun deletes an unfinished draft for the tag and cuts it again; a tag whose release is already published stops
 the job instead, since publication is the one step the workflow cannot take back. The five files:
 
-| Asset                              | What it pins                                                                                                                                                                               |
-| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `felis-x86_64-linux.tar.gz`        | the three binaries, the loader and libraries they need, terminfo, a desktop entry, completions, man pages, the README and the license, relocated to run on a host without Nix              |
-| `felis-aarch64-darwin.tar.gz`      | `felis.app` with the client, the daemon and the CLI inside it, a `bin/felis` launcher, terminfo, completions, man pages, the README and the license, ad-hoc signed and free of store paths |
-| `felis-x86_64-pc-windows-msvc.zip` | `felis.exe`, `felis-client.exe`, `felis-daemon.exe`, the README and the license, built from the tag's revision                                                                             |
-| `felis-config.schema.json`         | the config keys that build accepts                                                                                                                                                         |
-| `felis.proto`                      | the wire schema that build speaks                                                                                                                                                          |
+| Asset                              | What it pins                                                                                                                                                                                         |
+| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `felis-x86_64-linux.tar.gz`        | the three binaries, the loader and libraries they need, terminfo, a desktop entry, completions, man pages, the README and the license, relocated to run on a host without Nix                        |
+| `felis-aarch64-darwin.tar.gz`      | `felis.app` with the client, the daemon, the CLI and terminfo inside it, a `bin/felis` launcher, terminfo, completions, man pages, the README and the license, ad-hoc signed and free of store paths |
+| `felis-x86_64-pc-windows-msvc.zip` | `felis.exe`, `felis-client.exe`, `felis-daemon.exe`, the README and the license, built from the tag's revision                                                                                       |
+| `felis-config.schema.json`         | the config keys that build accepts                                                                                                                                                                   |
+| `felis.proto`                      | the wire schema that build speaks                                                                                                                                                                    |
 
 The release body says how to install each asset and through Nix, and for a final tag through Homebrew, pointing at the
 GitHub repository, names the three supported targets, says `aarch64-linux` is not supported, and ends with the version's

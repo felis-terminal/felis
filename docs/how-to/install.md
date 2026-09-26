@@ -40,8 +40,10 @@ glow ~/.nix-profile/share/doc/felis/
 ## home-manager
 
 The flake exposes a home-manager module that installs the package, writes `config.toml` from Nix, and points
-`TERMINFO_DIRS` at the compiled terminfo so ncurses apps inside felis recognize `TERM=xterm-felis`. `installTerminfo`
-(default `true`) governs that last entry; set it `false` if you manage your terminfo tree yourself.
+`TERMINFO_DIRS` in your session environment at the compiled terminfo. Sessions felis starts find the entry without it;
+the export is for programs that read `TERM=xterm-felis` outside them, such as a `tmux` server started elsewhere, and for
+`felis doctor`. `installTerminfo` (default `true`) governs that export; set it `false` if you manage your terminfo tree
+yourself.
 
 ```nix
 {
@@ -88,8 +90,10 @@ for bash, zsh and fish, and the `felis(1)` man pages. Where no bottle applies, a
 the formula from source. Of the platforms Homebrew runs on, felis supports only these two
 ([workspace.md](../reference/workspace.md) "Build and platform matrix").
 
-`felis` adds the formula's terminfo directory to `TERMINFO_DIRS` for the sessions it starts. A window opened from Finder
-does not pass through it, so for those point ncurses at the entry from your shell's startup file:
+On macOS the daemon hands every session the entry bundled in `felis.app`, so programs in those sessions recognize
+`TERM=xterm-felis` whether the window was opened from Finder or through `felis`; on Linux, `felis` adds the formula's
+terminfo directory to `TERMINFO_DIRS` for the sessions it starts. A program that reads the entry outside those sessions,
+such as a `tmux` server started elsewhere, needs it on its own search path:
 
 ```sh
 export TERMINFO_DIRS="$(brew --prefix felis)/share/terminfo:"
@@ -173,9 +177,9 @@ Three things come from the host:
   the archive's glibc 2.42, which works as long as they were linked against 2.42 or older. Every current distribution
   release is; a host newer than the archive is the case to watch, and the fix is a newer archive.
 
-The compiled `xterm-felis` entry is at `share/terminfo`, and the launchers in `bin/` add that directory to
-`TERMINFO_DIRS`, so programs in the sessions felis starts recognize `TERM=xterm-felis` with no setup. Only a program
-that reads the entry outside those sessions, such as a `tmux` server started elsewhere, needs a copy in your own tree:
+The compiled `xterm-felis` entry is at `share/terminfo`, and the daemon adds that directory to `TERMINFO_DIRS` for every
+session it starts, so programs in those sessions recognize `TERM=xterm-felis` with no setup. Only a program that reads
+the entry outside those sessions, such as a `tmux` server started elsewhere, needs a copy in your own tree:
 
 ```sh
 cp -r ~/.local/opt/felis-x86_64-linux/share/terminfo/. ~/.terminfo/
@@ -220,13 +224,12 @@ Move the tree whole and keep it together: `bin/felis` runs the CLI inside `felis
 and the daemon it spawns. The app carries every library it loads from outside the system, so it needs no Nix
 installation.
 
-The compiled `xterm-felis` entry is at `share/terminfo`. `bin/felis` adds that directory to `TERMINFO_DIRS`, so the
-sessions it starts need no setup; a window opened from Finder does not pass through it. For those, either point ncurses
-at the entry from your shell's startup file, or copy it into your own tree once:
+The compiled `xterm-felis` entry is at `share/terminfo`, and `felis.app` carries a copy that the daemon adds to
+`TERMINFO_DIRS` for every session it starts, so programs in those sessions recognize `TERM=xterm-felis` with no setup,
+whether the window was opened from Finder or through `bin/felis`. Only a program that reads the entry outside those
+sessions, such as a `tmux` server started elsewhere, needs a copy in your own tree:
 
 ```sh
-export TERMINFO_DIRS="$HOME/Applications/felis/share/terminfo:"
-# or, once:
 cp -r ~/Applications/felis/share/terminfo/. ~/.terminfo/
 ```
 

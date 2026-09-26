@@ -64,6 +64,20 @@ _Revisit when_ macOS ships ncurses 6.1 or newer: the `pairs` pin, the size ceili
 can all go, and the entry can inherit whatever its base offers. The cancellations stay regardless: they are about what
 felis implements, not about what its readers can parse.
 
+## Why the daemon hands sessions the entry
+
+The process that stamps `TERM=xterm-felis` is the one that has to make it resolvable, so the daemon adds the entry
+shipped beside its own executable to each session's `TERMINFO_DIRS`
+([the reference twin](../../reference/terminal-identity.md#the-terminfo-entry) states the lookup). Two alternatives are
+rejected:
+
+- **Export it from the archive launchers alone.** A macOS window opened from Finder runs the bundle's client directly
+  and passes through no launcher, and the daemon it autospawns keeps serving every later window on the same socket, so
+  one such launch leaves each session after it with an unresolvable `TERM`. The launchers still export it for the
+  commands they run in-process, `felis doctor` among them.
+- **Add it in the client.** Sessions are also created by `felis sessions spawn` and any other IPC client, and a daemon
+  started by one install serves the clients of another; only the daemon sees every spawn.
+
 ## Why the escape hatch is an environment variable
 
 The escape-hatch variables are read from the spawn's resolved environment (the base environment a create carries, else
