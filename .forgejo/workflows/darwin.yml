@@ -1,7 +1,7 @@
 # Builds aarch64-darwin and pushes it to the cache, the one supported target
-# whose evidence is maintainer use rather than a CI smoke
+# whose window evidence is maintainer use rather than a frontend smoke
 # (docs/explanation/testing.md "Maintainer use, for `aarch64-darwin`"). It is its
-# own file so a darwin smoke, once it lands, joins the aarch64-darwin runner's chain here.
+# own file so a darwin frontend smoke, once it lands, joins the aarch64-darwin runner's chain here.
 name: darwin
 
 on:
@@ -50,6 +50,9 @@ jobs:
     needs: [changes]
     if: needs.changes.outputs.relevant == 'true'
     timeout-minutes: 45
+    env:
+      DIST_ROOT: ${{ github.workspace }}/dist
+      TRIPLE: aarch64-darwin
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # felis-dist too, so a bundler that cannot relocate or re-sign the
@@ -57,6 +60,22 @@ jobs:
       - run: nix build .#felis .#felis-dist --print-build-logs
       - uses: ./.forgejo/actions/niks3-push
         if: github.event_name == 'push'
+      # The tag's archive checks, run on every revision: the bundle's
+      # layout and its sessions' environment break without a build error.
+      - name: unpack the archive the way a user would
+        run: |
+          rm -rf "$DIST_ROOT"
+          mkdir -p "$DIST_ROOT"
+          tar -xzf "$(nix build .#felis-dist --no-link --print-out-paths)/felis-$TRIPLE.tar.gz" -C "$DIST_ROOT"
+      - name: the unpacked tree carries what a host needs, and sends dyld nowhere near /nix
+        run: |
+          nix shell --inputs-from . nixpkgs#cctools nixpkgs#bash -c \
+            bash tools/release/macos-archive-manifest.sh "$DIST_ROOT/felis-$TRIPLE"
+      - name: the signature Apple's own tool sees is intact
+        run: /usr/bin/codesign --verify --strict --deep "$DIST_ROOT/felis-$TRIPLE/felis.app"
+      - name: the archive runs on the runner
+        timeout-minutes: 10
+        run: sh tools/release/macos-archive-smoke.sh "$DIST_ROOT/felis-$TRIPLE" "${RUNNER_TEMP:-/tmp}"
 
   darwin-noop:
     name: darwin docs-only no-op

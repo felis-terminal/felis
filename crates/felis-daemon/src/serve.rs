@@ -2423,7 +2423,14 @@ fn command_from_args(
         }
         cmd
     };
-    apply_spawn_posture(&mut cmd, session_id, cwd, env, &args.env);
+    apply_spawn_posture(
+        &mut cmd,
+        session_id,
+        cwd,
+        env,
+        &args.env,
+        crate::terminfo::shipped_dir(),
+    );
     cmd
 }
 
@@ -2437,6 +2444,7 @@ fn apply_spawn_posture(
     cwd: Option<&Path>,
     resolved: &ResolvedEnv,
     env: &[(String, String)],
+    shipped_terminfo: Option<&Path>,
 ) {
     if let Some(dir) = cwd {
         cmd.cwd(dir);
@@ -2456,6 +2464,11 @@ fn apply_spawn_posture(
     );
     for (k, v) in env {
         cmd.env(k, v);
+    }
+    // After the caller's pairs, so a `TERMINFO_DIRS` among them still
+    // resolves the `TERM` stamped above.
+    if let Some(dir) = shipped_terminfo {
+        crate::terminfo::list_in(cmd, dir);
     }
 }
 

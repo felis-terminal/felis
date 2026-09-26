@@ -15,6 +15,12 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 - **Platform**: a Homebrew tap installs felis with prebuilt bottles on macOS (Apple silicon) and Linux (x86_64):
   `brew install felis-terminal/tap/felis`.
 
+### Fixed
+
+- Sessions recognize `TERM=xterm-felis` in a macOS window opened from Finder, or any launch that bypasses `bin/felis`:
+  `felis.app` carries the terminfo entry, and on Unix the daemon prepends the entry shipped beside it (the bundle's, or
+  the install prefix's `share/terminfo`) to every session's `TERMINFO_DIRS`.
+
 ## [0.1.0] - 2026-09-26
 
 Initial release.

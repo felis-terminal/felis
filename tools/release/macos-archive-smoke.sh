@@ -35,12 +35,22 @@ run_dir=$(mktemp -d "${2:-${TMPDIR:-/tmp}}/felis-arc.XXXXXX")
 # insists on (crates/felis-transport/src/unix.rs); a directory this
 # script created would carry the inherited umask and be refused.
 sock="$run_dir/run/daemon.sock"
+bare_sock="$run_dir/bare/daemon.sock"
 
 cleanup() {
   "$tree/bin/felis" --socket "$sock" daemon stop --force >/dev/null 2>&1 || true
+  "$tree/bin/felis" --socket "$bare_sock" daemon stop --force >/dev/null 2>&1 || true
   rm -rf "$run_dir"
 }
 trap cleanup EXIT
+
+await_file() {
+  i=0
+  while [ ! -s "$1" ] && [ "$i" -lt 100 ]; do
+    i=$((i + 1))
+    sleep 0.2
+  done
+}
 
 echo "== the bundled client resolves its libraries and runs"
 "$app/Contents/MacOS/felis-client" --version
@@ -73,11 +83,7 @@ ln -s felis-abs "$run_dir/links/felis"
 "$run_dir/links/felis" --socket "$sock" sessions spawn -- sh -c \
   '/usr/bin/tput colors >"$1.tmp" 2>&1; echo "status=$?" >>"$1.tmp"; mv "$1.tmp" "$1"' \
   sh "$run_dir/colors.out"
-i=0
-while [ ! -s "$run_dir/colors.out" ] && [ "$i" -lt 100 ]; do
-  i=$((i + 1))
-  sleep 0.2
-done
+await_file "$run_dir/colors.out"
 if [ "$(cat "$run_dir/colors.out" 2>/dev/null)" != "$(printf '256\nstatus=0')" ]; then
   echo "tput colors under TERM=xterm-felis said: $(cat "$run_dir/colors.out" 2>/dev/null)" >&2
   exit 1
@@ -85,3 +91,20 @@ fi
 
 # --force: a plain stop refuses while an exited session sits in its reap grace.
 "$tree/bin/felis" --socket "$sock" daemon stop --force
+
+echo "== a daemon started from the bundle alone hands sessions its terminfo"
+# What a window opened from Finder does: no launcher, so nothing on the
+# way points ncurses at the entry. HOME and TERMINFO are cleared too, so
+# neither ~/.terminfo nor an inherited entry can stand in for the
+# daemon's own.
+mkdir -p "$run_dir/home"
+env -u TERMINFO_DIRS -u TERMINFO HOME="$run_dir/home" \
+  "$app/Contents/MacOS/felis" --socket "$bare_sock" sessions spawn -- sh -c \
+  '{ printf "%s\n" "${TERMINFO_DIRS-}"; /usr/bin/tput colors 2>&1; echo "status=$?"; } >"$1.tmp"; mv "$1.tmp" "$1"' \
+  sh "$run_dir/bare.out"
+await_file "$run_dir/bare.out"
+if [ "$(cat "$run_dir/bare.out" 2>/dev/null)" != "$(printf '%s\n256\nstatus=0' "$app/Contents/Resources/terminfo:")" ]; then
+  echo "a bundle-only session saw TERMINFO_DIRS, then tput colors, as: $(cat "$run_dir/bare.out" 2>/dev/null)" >&2
+  exit 1
+fi
+"$tree/bin/felis" --socket "$bare_sock" daemon stop --force

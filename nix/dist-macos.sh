@@ -111,12 +111,15 @@ frameworks="$app/Contents/Frameworks"
 
 version_arg=()
 [ -n "$version" ] && version_arg=(--version "$version")
+terminfo_arg=()
+[ -n "$share" ] && [ -d "$share/terminfo" ] && terminfo_arg=(--terminfo "$share/terminfo")
 bash "$make_app" \
   --client "$client" \
   --daemon "$daemon" \
   --cli "$cli" \
   --out "$out" \
-  ${version_arg[@]+"${version_arg[@]}"} >/dev/null
+  ${version_arg[@]+"${version_arg[@]}"} \
+  ${terminfo_arg[@]+"${terminfo_arg[@]}"} >/dev/null
 chmod -R u+w "$app"
 
 is_macho() {
@@ -208,7 +211,10 @@ done
 rcodesign sign "$app" >/dev/null
 
 # The symlink loop and the TERMINFO_DIRS export are the Linux
-# launcher's, for the reasons nix/dist-linux.sh gives.
+# launcher's, for the reasons nix/dist-linux.sh gives. The export names
+# the bundle's copy rather than share/terminfo because the daemon adds
+# that same directory to its sessions, and one path dedupes where two
+# would not.
 cat >"$out/bin/felis" <<'EOF'
 #!/bin/sh
 self=$0
@@ -225,8 +231,8 @@ done
 # list shows.
 root=$(cd "$(dirname "$self")/.." && pwd -P)
 case ":${TERMINFO_DIRS-}:" in
-*":$root/share/terminfo:"*) ;;
-*) export TERMINFO_DIRS="$root/share/terminfo:${TERMINFO_DIRS-}" ;;
+*":$root/felis.app/Contents/Resources/terminfo:"*) ;;
+*) export TERMINFO_DIRS="$root/felis.app/Contents/Resources/terminfo:${TERMINFO_DIRS-}" ;;
 esac
 exec "$root/felis.app/Contents/MacOS/felis" "$@"
 EOF

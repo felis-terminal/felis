@@ -4205,6 +4205,26 @@ fn spawn_args_command_inherits_daemon_env_with_user_overrides_last() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn the_shipped_terminfo_leads_a_terminfo_dirs_the_spawn_request_sets() {
+    let mut cmd = Command::new("true");
+    apply_spawn_posture(
+        &mut cmd,
+        1,
+        None,
+        &ResolvedEnv::birth(),
+        &[("TERMINFO_DIRS".to_owned(), "/caller/terminfo".to_owned())],
+        Some(Path::new("/opt/felis/share/terminfo")),
+    );
+    assert_eq!(
+        cmd.get_envs()
+            .find(|(key, _)| *key == "TERMINFO_DIRS")
+            .map(|(_, value)| value.to_os_string()),
+        Some(OsString::from("/opt/felis/share/terminfo:/caller/terminfo")),
+    );
+}
+
 /// `FELIS_SESSION_ID` or a denylisted key in `SpawnArgs.env` is refused
 /// with the key in the reason (REQ-912).
 #[test]

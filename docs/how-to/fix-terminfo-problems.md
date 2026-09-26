@@ -15,11 +15,16 @@ Programs under felis read `TERM=xterm-felis`, so a host with no `xterm-felis` en
 Run `felis doctor` to see whether this host has the entry and which file path it found (see
 [cli.md](../reference/cli.md#doctor)). An obsolete copy in `~/.terminfo` can shadow the packaged entry.
 
-The Nix package bundles the compiled terminfo entry, and so do the Linux and macOS archives, whose `bin/` launchers add
-it to `TERMINFO_DIRS` for every session they start. On a system built from source, or a remote host reached over SSH,
-compile the entry with `tic` as shown in [Install](install.md#build-from-source). Because `~/.terminfo` takes precedence
-over `TERMINFO_DIRS`, an entry compiled there by hand shadows later updates to the packaged one, so leave that directory
-alone on a system where Nix manages felis.
+The Nix package bundles the compiled terminfo entry, and so do the Linux and macOS archives; the daemon adds the copy
+shipped beside it to `TERMINFO_DIRS` for every session it starts. When `felis doctor` finds the entry but a session
+reports an unknown terminal, run `echo $TERMINFO_DIRS` in that session. If it does not name the felis tree you
+installed, the session belongs to a daemon from another install or an older build: stop it with `felis daemon stop` and
+open a new window. If it does, the first line of `infocmp xterm-felis` names the file that answers, which is how a stale
+copy under `TERMINFO` or `~/.terminfo` shows itself; an error instead means no directory in the search holds an entry
+that reader can parse. On a system built from source, or a remote host reached over SSH, compile the entry with `tic` as
+shown in [Install](install.md#build-from-source). Because `~/.terminfo` takes precedence over `TERMINFO_DIRS`, an entry
+compiled there by hand shadows later updates to the packaged one, so leave that directory alone on a system where Nix
+manages felis.
 
 If you cannot install terminfo entries on a remote system, configure the daemon to advertise a compatible generic
 terminal identifier:
