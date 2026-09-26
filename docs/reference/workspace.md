@@ -337,9 +337,9 @@ the job instead, since publication is the one step the workflow cannot take back
 | `felis-config.schema.json`         | the config keys that build accepts                                                                                                                                                         |
 | `felis.proto`                      | the wire schema that build speaks                                                                                                                                                          |
 
-The release body says how to install each asset and through Nix, pointing at the GitHub repository, names the three
-supported targets, says `aarch64-linux` is not supported, and ends with the version's CHANGELOG section when that
-section has entries. A tag with a prerelease suffix publishes with `prerelease: true`.
+The release body says how to install each asset and through Nix, and for a final tag through Homebrew, pointing at the
+GitHub repository, names the three supported targets, says `aarch64-linux` is not supported, and ends with the version's
+CHANGELOG section when that section has entries. A tag with a prerelease suffix publishes with `prerelease: true`.
 
 The GitHub repository is the public face and a push mirror of Forgejo, and a push mirror carries refs but not release
 pages. `.github/workflows/release-mirror.yml`, the one GitHub workflow, fires when the mirror delivers a `v*` tag and

@@ -417,8 +417,16 @@ jobs:
           # A candidate has no dated section of its own; its entries are
           # still accruing under Unreleased, which is what it rehearses.
           case "$GITHUB_REF_NAME" in
-            *-*) section="## [Unreleased]" ;;
-            *) section="## [${GITHUB_REF_NAME#v}]" ;;
+            *-*)
+              section="## [Unreleased]"
+              # The tap follows final releases only.
+              homebrew='/@HOMEBREW@/d'
+              ;;
+            *)
+              section="## [${GITHUB_REF_NAME#v}]"
+              # shellcheck disable=SC2016 # the backticks are Markdown
+              homebrew='s|@HOMEBREW@|- **Homebrew (macOS Apple silicon, Linux x86_64):** `brew install felis-terminal/tap/felis`.|'
+              ;;
           esac
           changes=$(awk -v want="$section" '
             index($0, want) == 1 { on = 1; next }
@@ -427,7 +435,7 @@ jobs:
           ' CHANGELOG.md | sed '/./,$!d')
           public=felis-terminal/felis
           {
-            sed -e "s|@TAG@|$GITHUB_REF_NAME|g" -e "s|@SHA@|$GITHUB_SHA|g" -e "s|@REPO@|$public|g" <<'EOF'
+            sed -e "s|@TAG@|$GITHUB_REF_NAME|g" -e "s|@SHA@|$GITHUB_SHA|g" -e "s|@REPO@|$public|g" -e "$homebrew" <<'EOF'
           felis @TAG@, built from `@SHA@`.
 
           ## Downloads
@@ -436,6 +444,7 @@ jobs:
           - **macOS (Apple silicon):** `felis-aarch64-darwin.tar.gz`. Before the first run, clear the quarantine flag: `xattr -dr com.apple.quarantine <directory>`. Then run `bin/felis` or open `felis.app`.
           - **Windows (x86_64):** `felis-x86_64-pc-windows-msvc.zip`. Unpack its three executables into one directory on your `PATH` and run `felis.exe`.
           - **Nix:** `nix run github:@REPO@/@TAG@`. The flake offers prebuilt binaries from `https://nix-cache.natsukium.com`.
+          @HOMEBREW@
 
           Step-by-step instructions are in [install.md](https://github.com/@REPO@/blob/@TAG@/docs/how-to/install.md).
 
