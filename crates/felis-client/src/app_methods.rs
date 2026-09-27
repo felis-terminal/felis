@@ -1429,7 +1429,8 @@ impl App {
 
     /// The keystroke itself, for the daemon to encode against the
     /// keyboard modes it owns. Viewport snapping matches
-    /// [`Self::ferry_key_bytes`].
+    /// [`Self::ferry_key_bytes`] for the events
+    /// [`crate::input::snaps_to_live`] admits.
     pub(crate) fn ferry_key(&self, event: felis_protocol::messages::KeyEvent) {
         // Composed text past the per-key cap is an IME commit wearing a
         // keystroke's clothes; admission would refuse it, so it takes
@@ -1444,7 +1445,9 @@ impl App {
             }
             return;
         }
-        self.snap_to_live();
+        if crate::input::snaps_to_live(&event) {
+            self.snap_to_live();
+        }
         self.send_input(&InputMsg::Key(event));
     }
 
