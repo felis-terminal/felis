@@ -549,40 +549,33 @@ where
             Some(registered),
         ),
     };
-    // The write first, the publish after it. The rollback is safe only
-    // while the row is nobody else's, and the write is the one step here
-    // that can block for as long as the peer chooses: publishing before
-    // it would expose a session another connection could list, attach to
-    // or destroy inside the window the rollback tears down.
-    match writer.send(&ack).await {
-        Err(err) => {
-            if let Some(mut registered) = registered {
-                registered.roll_back().await;
-            }
-            return Err(err.into());
-        }
-        Ok(()) => {
-            if let Some(registered) = registered {
-                registered.publish().await;
-                let _kept = registered.keep();
-            }
-        }
+    // Published before the write, so the id is nameable by the time any
+    // peer can read it. Publishing after it would refuse a re-attach that
+    // outruns the publish; a lost ack leaves the session listed and
+    // detached instead, as a lost `Spawn` reply does.
+    if let Some(registered) = registered {
+        registered.publish().await;
+        let _kept = registered.keep();
     }
-
-    let result = pump_subscriber(
-        &mut reader,
-        &mut writer,
-        &mut driver,
-        &attached,
-        &mut out_rx,
-        CreateCtx {
-            pool: &pool,
-            caps: &caps,
-            factory: &factory,
-            relay_env: relay_env.as_deref(),
-        },
-    )
-    .await;
+    let result = match writer.send(&ack).await {
+        Ok(()) => {
+            pump_subscriber(
+                &mut reader,
+                &mut writer,
+                &mut driver,
+                &attached,
+                &mut out_rx,
+                CreateCtx {
+                    pool: &pool,
+                    caps: &caps,
+                    factory: &factory,
+                    relay_env: relay_env.as_deref(),
+                },
+            )
+            .await
+        }
+        Err(err) => Err(err.into()),
+    };
     debug!(id = ?attached.id, "session detaching");
     // Best-effort: on eviction or session end the task already dropped
     // this subscriber.
@@ -801,9 +794,8 @@ impl AttachedSub {
 enum Ack {
     Attached,
     Created {
-        /// Still armed: the id reaches its creator only in the ack, so a
-        /// write that fails before the publish must unwind the
-        /// registration.
+        /// Still armed: nothing can name the row until the caller
+        /// publishes it just before the ack.
         registered: Registered,
     },
 }
@@ -907,10 +899,8 @@ const ROLLBACK_TIMEOUT: Duration = session_task::CHILD_TEARDOWN_BUDGET
     .expect("the teardown budget is seconds, not an overflow away");
 
 impl Registered {
-    /// Make the pool row nameable, once the message carrying the id has
-    /// been written. Not before it: the row stays this create's alone
-    /// for exactly as long as the rollback may still tear it down, so a
-    /// peer that reads the ack can beat the publish by that moment.
+    /// Make the pool row nameable. Past this the row is shared, so a
+    /// caller that publishes must [`Self::keep`] rather than roll back.
     async fn publish(&self) {
         self.pool.lock().await.publish(self.id);
     }
