@@ -10,6 +10,11 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 
 ## [Unreleased]
 
+### Fixed
+
+- Pressing a bare modifier (Ctrl, Shift, Alt, Cmd) or releasing a key no longer returns a scrolled-back view to the live
+  screen, so Cmd+C copies a selection made in scrollback.
+
 ## [0.1.1] - 2026-09-27
 
 ### Added

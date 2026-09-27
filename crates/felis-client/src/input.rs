@@ -37,6 +37,14 @@ pub(crate) const fn event_kind(state: ElementState, repeat: bool) -> KeyEventKin
     }
 }
 
+/// Whether forwarding `event` returns a scrolled-back viewport to the
+/// live grid. A release, or a textless [`Key::Other`] (a bare modifier,
+/// a dead key), would otherwise yank the view away mid-selection: Cmd
+/// alone snaps before Cmd+C can copy.
+pub(crate) fn snaps_to_live(event: &KeyEvent) -> bool {
+    event.kind != KeyEventKind::Release && (event.key != Key::Other || event.text.is_some())
+}
+
 /// Unrecognized named keys and every non-character key (dead keys, bare
 /// modifiers, media keys) collapse to [`Key::Other`], which the daemon
 /// routes to the `text` passthrough.
@@ -114,5 +122,54 @@ mod tests {
         assert_eq!(event.text.as_deref(), Some("a"));
         assert!(event.mods.control_key());
         assert_eq!(event.location, KeyLocation::Numpad);
+    }
+
+    fn event(key: &WinitKey, text: Option<&str>, kind: KeyEventKind) -> KeyEvent {
+        key_event(
+            key,
+            text,
+            ModifiersState::empty(),
+            kind,
+            WinitKeyLocation::Standard,
+        )
+    }
+
+    #[test]
+    fn a_pressed_or_repeated_key_snaps_to_live() {
+        let a = WinitKey::Character("a".into());
+        let enter = WinitKey::Named(WinitNamedKey::Enter);
+        assert!(snaps_to_live(&event(&a, Some("a"), KeyEventKind::Press)));
+        assert!(snaps_to_live(&event(&a, Some("a"), KeyEventKind::Repeat)));
+        assert!(snaps_to_live(&event(&enter, None, KeyEventKind::Press)));
+    }
+
+    #[test]
+    fn a_bare_modifier_does_not_snap_to_live() {
+        for modifier in [
+            WinitNamedKey::Shift,
+            WinitNamedKey::Control,
+            WinitNamedKey::Alt,
+            WinitNamedKey::Super,
+            WinitNamedKey::Meta,
+        ] {
+            let key = WinitKey::Named(modifier);
+            assert!(
+                !snaps_to_live(&event(&key, None, KeyEventKind::Press)),
+                "{modifier:?} press"
+            );
+        }
+    }
+
+    #[test]
+    fn a_release_does_not_snap_to_live() {
+        let a = WinitKey::Character("a".into());
+        assert!(!snaps_to_live(&event(&a, Some("a"), KeyEventKind::Release)));
+    }
+
+    #[test]
+    fn a_dead_key_snaps_to_live_only_once_it_composes_text() {
+        let dead = WinitKey::Dead(Some('´'));
+        assert!(!snaps_to_live(&event(&dead, None, KeyEventKind::Press)));
+        assert!(snaps_to_live(&event(&dead, Some("é"), KeyEventKind::Press)));
     }
 }
