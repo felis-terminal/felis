@@ -4959,8 +4959,9 @@ async fn concurrent_ops_spawns_are_attributed_by_request_id() {
     assert_eq!(pool.lock().await.len(), 2);
 }
 
-/// The create ack means "attached", so the rehydrate burst follows it
-/// with no `Attach` in between.
+/// The create ack means "attached" and "nameable": the rehydrate burst
+/// follows it with no `Attach` in between, and any connection can
+/// already look the session up by id.
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_create_is_attached_when_its_ack_is_written() {
@@ -4979,20 +4980,13 @@ async fn a_create_is_attached_when_its_ack_is_written() {
     hello_welcome(&mut reader, &mut writer, false).await;
     let id = create_and_attach(&mut reader, &mut writer).await;
 
-    // Polled, not read once: the daemon publishes the row just after it
-    // writes the ack, so a reader holding the ack can be that moment
-    // early (`Registered::publish`).
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    let subscribers = loop {
-        if let Some(handle) = pool.lock().await.get(SessionId(id)) {
-            break handle.meta_snapshot().subscribers;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "the acked session never became nameable"
-        );
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    };
+    let subscribers = pool
+        .lock()
+        .await
+        .get(SessionId(id))
+        .expect("an acked session must already be nameable")
+        .meta_snapshot()
+        .subscribers;
     assert_eq!(subscribers, 1, "the create ack must mean attached");
     expect_row_containing(&mut reader, "hello-felis").await;
 }
@@ -5105,13 +5099,13 @@ async fn rolls_back_a_create_and_reaps(body: String, pid_file: &Path) {
     assert!(!pid_alive(pid), "the child must be gone, not orphaned");
 }
 
-/// The publish waits for the ack to be written, so a peer that stops
-/// reading cannot reach a session the rollback may still tear down. The
+/// A peer holding the ack can hand its id to another connection at once,
+/// so the row must answer lookups before the ack can be read. The
 /// carrier here is a byte or two wide, so the ack cannot complete until
 /// this test reads it.
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_create_publishes_nothing_until_its_ack_is_written() {
+async fn a_create_is_nameable_before_its_ack_is_read() {
     let pool = Arc::new(Mutex::new(SessionPool::new()));
 
     let (client_to_daemon_w, daemon_read) = tokio::io::duplex(64 * 1024);
@@ -5140,45 +5134,34 @@ async fn a_create_publishes_nothing_until_its_ack_is_written() {
     )
     .await;
 
-    // The registration is the daemon's first observable step; from it
-    // until the ack is read the row must answer nothing.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    loop {
-        {
-            let guard = pool.lock().await;
-            assert_eq!(guard.ids().count(), 0, "resolvable before its own ack");
-            assert!(
-                guard.roster_by_recency().is_empty(),
-                "listable before its own ack"
-            );
-            if guard.len() == 1 {
-                break;
-            }
+    let id = loop {
+        let listed = pool.lock().await.ids().next();
+        if let Some(id) = listed {
+            break id;
         }
         assert!(
             tokio::time::Instant::now() < deadline,
-            "the create never reached the pool"
+            "the create never became nameable while its ack was unread"
         );
         tokio::time::sleep(Duration::from_millis(10)).await;
-    }
+    };
 
     let ack = reader.next_frame().await.unwrap().expect("created");
     match codec::decode::<SessionToClientMsg>(&ack.body).unwrap() {
-        SessionToClientMsg::Created { .. } => {}
+        SessionToClientMsg::Created { info } => assert_eq!(SessionId(info.id), id),
         other => panic!("expected SessionToClientMsg::Created, got {other:?}"),
-    }
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    while pool.lock().await.ids().count() != 1 {
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "the acked session never became reachable"
-        );
-        tokio::time::sleep(Duration::from_millis(10)).await;
     }
 
     drop(writer);
     drop(reader);
-    let _served = tokio::time::timeout(Duration::from_secs(10), server).await;
+    // A hangup that lands mid-rehydrate may end the connection with a
+    // broken pipe, so only its ending is asserted.
+    let served = tokio::time::timeout(Duration::from_secs(10), server).await;
+    shut_down_and_reap(&pool, id).await;
+    let _hangup = served
+        .expect("the connection must end once its peer hangs up")
+        .expect("handle_stream must not panic");
 }
 
 /// A creation still in flight appears in the status row: reading `0`
@@ -5223,11 +5206,11 @@ async fn daemon_status_counts_a_creation_still_in_flight() {
     drop(registered.keep());
 }
 
-/// The ack is the only place a create's id is delivered, so a write
-/// that never lands unwinds the registration.
+/// A create is published before its ack, so an ack that never lands
+/// leaves the session detached and listed, as a lost `Spawned` does.
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_create_whose_ack_cannot_be_written_leaves_no_session() {
+async fn a_create_whose_ack_cannot_be_written_leaves_a_detached_session() {
     let pool = Arc::new(Mutex::new(SessionPool::new()));
 
     let (client_to_daemon_w, daemon_read) = tokio::io::duplex(64 * 1024);
@@ -5239,7 +5222,7 @@ async fn a_create_whose_ack_cannot_be_written_leaves_no_session() {
             daemon_write,
             DaemonCaps::default(),
             server_pool,
-            shell_factory("sleep 30"),
+            shell_factory("read _x"),
         )
         .await
     });
@@ -5262,11 +5245,47 @@ async fn a_create_whose_ack_cannot_be_written_leaves_no_session() {
         .expect("the connection must end once its ack cannot be written")
         .expect("handle_stream must not panic");
     assert!(served.is_err(), "the failed ack write ends the connection");
-    assert_eq!(
-        pool.lock().await.len(),
-        0,
-        "an undeliverable ack must leave no session in the pool"
-    );
+    let listed = pool.lock().await.ids().next();
+    let id = listed.expect("an undeliverable ack must leave the session listed");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let subscribers = pool
+            .lock()
+            .await
+            .get(id)
+            .expect("still listed")
+            .meta_snapshot()
+            .subscribers;
+        if subscribers == 0 {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the connection whose ack failed must not stay subscribed"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    shut_down_and_reap(&pool, id).await;
+}
+
+/// Returns once the session task has left the pool and its child is
+/// reaped: `quiescent` stays false until the teardown guard drops.
+#[cfg(unix)]
+async fn shut_down_and_reap(pool: &Arc<Mutex<SessionPool>>, id: SessionId) {
+    let handle = pool.lock().await.handle_cloned(id).expect("listed");
+    handle
+        .cmd
+        .send(SessionCmd::Shutdown)
+        .await
+        .expect("the session task is still running");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while !pool.lock().await.quiescent() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the session was never reaped"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
 }
 
 /// The shell writes its pid before `exec`ing the long sleep, so the

@@ -170,22 +170,22 @@ _and_ attaches the requesting connection; `OpsToDaemonMsg::Spawn` creates one no
 
 `Create` is one message rather than a create followed by an attach because the two-step form has a window in which the
 session exists, is registered, is listable, and has no attacher. Anything that goes wrong in that window (the client
-dies, the ack fails to write) leaves a live shell whose id nobody was ever told. It cannot be attached (no one knows its
+dies, the attach is refused) leaves a live shell whose id nobody was ever told. It cannot be attached (no one knows its
 id), cannot be found by the user who asked for it, and still holds a session slot. Folding the attach into the create
-closes it: the id is delivered only in the attached state, so a `Create` that fails at any point has left nothing
-behind, and the daemon rolls the registration back (pool entry removed, session shut down, child reaped) before it
-writes the refusal.
+closes it: the id is delivered only in the attached state, so a `Create` whose subscribe fails has left nothing behind,
+and the daemon rolls the registration back (pool entry removed, session shut down, child reaped) before it writes the
+refusal.
 
 The fold alone would only shrink the window, not close it: the pool row is written by the spawn, before the subscribe
-and the ack that carry the id out. So the row is _held_ until the ack has been written: registered, counted against the
-session cap, and answering no lookup. Nothing else can list it, resolve a prefix to it, attach to it or destroy it in
-the meantime, which is what makes the rollback safe, the session it tears down being nobody else's.
+that can still fail. So the row is _held_ until the subscribe has landed: registered, counted against the session cap,
+and answering no lookup. Nothing else can list it, resolve a prefix to it, attach to it or destroy it in the meantime,
+which is what makes the rollback safe, the session it tears down being nobody else's.
 
-The publication is therefore the step _after_ the ack rather than before it, since the ack is the one step in the
-sequence that a peer which has stopped reading can stall for as long as it likes. The cost of that order is a peer which
-reads its own ack and then asks a second, already-open connection for the roster: it can arrive in the moment before the
-publish and not find the session it was just handed. A create is the only place the daemon pays it, and it buys a
-rollback that can never reach a session another connection has.
+The publication comes just before the ack is written, not after it. Published after, the ack would reach a peer that can
+name the id on another connection (a window re-attaching after transport loss, or a script handed the id) before the row
+answers lookups, and that peer would be refused a session it was just given. Published before, the ack is past the point
+of rollback: an ack that fails to write leaves a detached session the roster shows, exactly as a lost `Spawned` reply
+does, and the same session a client that dies just after reading its ack leaves.
 
 The headless spawn rides `Ops` for attribution. The attach and create arms of `Session` are uncorrelated by design: a
 connection attaches once, so its ack needs no request id. That is exactly wrong for a spawn, which is a pool operation a

@@ -932,9 +932,10 @@ GUI window and `felis sessions spawn` both create sessions. In wire-tag order:
 
 - `Created { info: SessionInfo }`: daemon → client, the `Create` ack. The connection is already subscribed when it
   arrives, so the rehydrate burst follows exactly as after `Attached`; `info.dims` is the real spawn geometry after the
-  `SpawnArgs` defaults resolved. A create that fails _after_ the session was registered, the subscribe having failed to
-  land, is rolled back before the refusal is written: the pool entry is removed, the session is shut down, and the
-  daemon waits for the child to be reaped
+  `SpawnArgs` defaults resolved. The session answers lookups by id and prefix on every connection before `Created` is
+  written, and an ack that fails to write leaves it detached rather than rolled back. A create that fails _after_ the
+  session was registered, the subscribe having failed to land, is rolled back before the refusal is written: the pool
+  entry is removed, the session is shut down, and the daemon waits for the child to be reaped
   ([the IPC design explanation](../explanation/architecture/ipc.md#creating-a-session)).
 - `InputFence {}`: client → daemon, while attached. A barrier over this connection's earlier `Input` frames, answered
   with `InputAccepted` on the fence's own `request_id`.

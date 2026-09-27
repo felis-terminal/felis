@@ -459,8 +459,8 @@ pub enum ReserveRefusal {
 
 /// Visibility of a registered session in by-name operations.
 ///
-/// [`Listing::Held`] keeps newly spawned sessions unnameable until the
-/// creating client receives the id and publishes it via [`SessionPool::publish`].
+/// [`Listing::Held`] keeps newly spawned sessions unnameable until their
+/// creator publishes them via [`SessionPool::publish`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Listing {
     /// Reachable as soon as it is registered.
