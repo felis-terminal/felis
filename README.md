@@ -68,7 +68,7 @@ tmux patterns to felis.
 
 ## Status and compatibility
 
-felis is at 0.1.0, an early release distributed as a Nix flake and as an archive attached to the release for each
+felis is at 0.x, an early release distributed as a Nix flake and as an archive attached to the release for each
 supported target. The CLI and IPC are versioned, but expect edges.
 
 Three targets are supported: `x86_64-linux` and `aarch64-darwin` are published to the project's binary cache and also
