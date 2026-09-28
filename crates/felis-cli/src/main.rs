@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 
 use std::ffi::OsString;
+use std::fmt::Write as _;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, anyhow};
@@ -66,9 +67,8 @@ pub(crate) fn build_runtime() -> Result<tokio::runtime::Runtime> {
         .context("build tokio runtime")
 }
 
-/// Owns the unqualified launch; alternate frontends live behind
-/// `felis frontend <name>` (docs/reference/cli.md
-/// "Alternate frontends: `felis frontend <name>`").
+/// Owns the unqualified launch; any other `felis-<name>` is reached as
+/// `felis <name>` (docs/reference/cli.md "External commands").
 const DEFAULT_FRONTEND_BIN: &str = "felis-client";
 
 /// `None` launches the default frontend (docs/reference/ipc.md "CLI
@@ -164,23 +164,6 @@ enum Cmd {
         #[command(flatten)]
         flags: cli_sessions::RetargetFlags,
     },
-    /// Launch an alternate frontend: `felis frontend <name> …` execs
-    /// `felis-<name>` with the remaining arguments verbatim.
-    ///
-    /// No global reaches it: `--config` and the carrier before the name
-    /// are refused; write them after it instead (see `felis --help`).
-    Frontend {
-        /// Frontend name: `felis frontend tui` execs `felis-tui`.
-        #[arg(value_name = "NAME", value_parser = validate_frontend_name)]
-        name: String,
-        /// Arguments handed to the frontend verbatim, flags included.
-        #[arg(
-            trailing_var_arg = true,
-            allow_hyphen_values = true,
-            value_name = "ARGS"
-        )]
-        args: Vec<OsString>,
-    },
     /// Speak JSON lines on stdin/stdout for a non-Rust client.
     ///
     /// Persistent stdio bridge relaying JSONL requests and replies to the daemon.
@@ -231,28 +214,22 @@ enum WindowOp {
 }
 
 /// A separator or a leading dash would turn the `felis-<name>` exec
-/// into "run this path" or "pass this flag".
-fn validate_frontend_name(name: &str) -> Result<String, String> {
-    if name.is_empty() {
-        return Err("frontend name is empty".to_owned());
-    }
-    if name.starts_with('-')
-        || name
+/// into "run this path" or "pass this flag"; such a word is an unknown
+/// verb, never a lookup.
+fn external_name(word: &std::ffi::OsStr) -> Option<&str> {
+    let name = word.to_str()?;
+    let valid = !name.is_empty()
+        && !name.starts_with('-')
+        && !name
             .chars()
-            .any(|c| std::path::is_separator(c) || c == '.' || c.is_whitespace())
-    {
-        return Err(format!(
-            "`{name}` is not a frontend name: `felis frontend <name>` execs `felis-<name>`, \
-             so the name carries no path"
-        ));
-    }
-    Ok(name.to_owned())
+            .any(|c| std::path::is_separator(c) || c == '.' || c.is_whitespace());
+    valid.then_some(name)
 }
 
 /// felis: a terminal whose sessions outlive their windows.
 ///
-/// Opens a window on a fresh session, attaches to an existing session,
-/// or drives the daemon headlessly via `sessions` and `notifications`.
+/// Opens or attaches a window, or drives the daemon headlessly via
+/// `sessions` and `notifications`; `felis <name> …` runs `felis-<name>`.
 #[derive(Debug, Parser)]
 #[command(name = "felis")]
 struct Cli {
@@ -264,8 +241,8 @@ struct Cli {
     #[arg(short = 'V', long)]
     version: bool,
     /// Subcommand. When a headless verb, dispatches to the typed IPC
-    /// path and exits; when a frontend-launch verb (`attach`, an
-    /// external frontend) or absent, execs a frontend binary.
+    /// path and exits; when `attach` or absent, execs the GUI frontend;
+    /// any other word execs `felis-<word>`.
     #[command(subcommand)]
     cmd: Option<Cmd>,
     /// Connect to a remote daemon over SSH (`ssh <host> felis-daemon
@@ -366,7 +343,11 @@ fn verb_runtime(out: &cli_output::Reporter) -> tokio::runtime::Runtime {
 }
 
 fn main() -> Result<()> {
-    let mut cli = Cli::parse();
+    let argv: Vec<OsString> = std::env::args_os().collect();
+    if let Some(external) = external_command(&argv) {
+        return Err(run_external(&external));
+    }
+    let mut cli = Cli::parse_from(argv);
 
     // Handled here, not by clap's `ArgAction::Version`: that action
     // short-circuits at the flag and would exit 0 on `felis --version
@@ -541,11 +522,6 @@ fn main() -> Result<()> {
             cli_mangen::generate(&dir).context("write man pages")?;
             std::process::exit(0);
         }
-        Some(Cmd::Frontend { name, args }) => {
-            let mut forwarded = Vec::with_capacity(args.len());
-            forwarded.extend(args.iter().cloned());
-            Err(exec_frontend(&format!("felis-{name}"), &forwarded))
-        }
         Some(Cmd::Attach { id }) => {
             require_selected_config(&config_source);
             let mut args = global_passthrough(&cli, &config_source);
@@ -684,9 +660,6 @@ fn verb_reading_no_config(cmd: Option<&Cmd>) -> Option<String> {
         Cmd::Completions { .. } => "felis completions",
         Cmd::CompleteSessions => "felis __complete-sessions",
         Cmd::Mangen { .. } => "felis __mangen",
-        // Like the carrier globals: `felis` does not know how
-        // `felis-<name>` spells its own config flag.
-        Cmd::Frontend { name, .. } => return Some(format!("felis frontend {name}")),
     };
     Some(verb.to_owned())
 }
@@ -712,11 +685,6 @@ fn verb_refusing_carrier(cmd: Option<&Cmd>) -> Option<(String, &'static str)> {
             "these verbs dial nothing — they read this machine's config.toml, which is the \
              client's file and not any daemon's. Drop the flag; to inspect a remote machine's \
              config, run `felis config` there.",
-        ),
-        Cmd::Frontend { name, .. } => (
-            format!("felis frontend {name}"),
-            "an external frontend dials its own daemon by its own flags, which `felis` does not \
-             know. Put them after the frontend name instead.",
         ),
         // Two hosts on one line and no way to tell which is which:
         // `felis --host a ssh b`.
@@ -789,27 +757,216 @@ fn global_passthrough(cli: &Cli, config_source: &ConfigSource) -> Vec<OsString> 
     args
 }
 
-/// Resolution is `current_exe()` sibling first, then PATH
-/// (docs/reference/cli.md "Alternate frontends: `felis frontend <name>`")
-/// so a packaged front door reaches the frontend shipped alongside it
-/// before any ambient build. On success this never returns; the returned
-/// error is always a launch failure.
+/// An argv that names a `felis-<name>` rather than a built-in verb.
+#[derive(Debug, PartialEq, Eq)]
+struct External {
+    word: OsString,
+    args: Vec<OsString>,
+    /// The global options written before the word, which never reach it.
+    globals_before: Vec<String>,
+}
+
+/// Decided before clap sees the line: the `[-- <CMD>...]` positional
+/// would otherwise claim every bare word as an unexpected argument, and
+/// clap's external-subcommand catch-all never runs while a positional
+/// is left. `felis help <name> …` for a name clap does not own becomes
+/// `felis-<name> … --help`.
+fn external_command(argv: &[OsString]) -> Option<External> {
+    let cmd = Cli::command();
+    let mut globals_before = Vec::new();
+    let mut rest = argv.iter().skip(1);
+    while let Some(token) = rest.next() {
+        let text = token.to_str()?;
+        if text == "--" {
+            return None;
+        }
+        if let Some(flag) = text.strip_prefix("--") {
+            let (long, inline_value) = flag
+                .split_once('=')
+                .map_or((flag, false), |(l, _)| (l, true));
+            let arg = cmd.get_arguments().find(|a| a.get_long() == Some(long))?;
+            // `--help` and `--version` answer on their own terms.
+            if !arg.get_action().takes_values() {
+                return None;
+            }
+            if !inline_value {
+                let value = rest.next()?.to_str()?;
+                // Clap's own rule: such a line is malformed, and clap
+                // says how.
+                if value.starts_with('-') && !arg.is_allow_hyphen_values_set() {
+                    return None;
+                }
+            }
+            globals_before.push(format!("--{long}"));
+            continue;
+        }
+        if text.starts_with('-') {
+            return None;
+        }
+        let help = text == "help";
+        let word = if help { rest.next()? } else { token };
+        // clap adds `help` only when it builds the command, so the
+        // unbuilt tree cannot answer for it.
+        if word
+            .to_str()
+            .is_some_and(|w| w == "help" || cmd.find_subcommand(w).is_some())
+        {
+            return None;
+        }
+        let mut args: Vec<OsString> = rest.cloned().collect();
+        if help {
+            args.push("--help".into());
+        }
+        return Some(External {
+            word: word.clone(),
+            args,
+            globals_before,
+        });
+    }
+    None
+}
+
+fn run_external(external: &External) -> anyhow::Error {
+    let name = external.word.to_string_lossy();
+    if !external.globals_before.is_empty() {
+        std::process::exit(cli_output::Reporter::point(cli_output::Format::Human).fail(
+            cli_output::ErrorKind::Usage,
+            format!(
+                "felis {name}: global options before the command name ({}) never reach \
+                 `felis-{name}`, which reads its own flags. Put them after the command name \
+                 instead.",
+                external.globals_before.join("/")
+            ),
+        ));
+    }
+    exec_external(&external.word, &external.args)
+}
+
+/// Existence is decided here, by lookup, and never by the exec's
+/// errno: a script whose shebang interpreter is missing also fails
+/// with `ENOENT`, and must read as a broken install, not a typo.
+/// `EACCES` alone moves on to the next candidate, as `execvp` does: the
+/// mode bits cannot say whether this process may run the file.
+fn exec_external(word: &std::ffi::OsStr, args: &[OsString]) -> anyhow::Error {
+    let candidates = external_name(word)
+        .map(|name| find_external(&format!("felis-{name}")))
+        .unwrap_or_default();
+    let mut denied = None;
+    for program in candidates {
+        let err = exec_program(program.as_os_str(), args);
+        if err.kind() != std::io::ErrorKind::PermissionDenied {
+            return anyhow::Error::new(err).context(format!("exec {}", program.display()));
+        }
+        denied.get_or_insert((program, err));
+    }
+    let Some((program, err)) = denied else {
+        unknown_verb(word);
+    };
+    anyhow::Error::new(err).context(format!("exec {}", program.display()))
+}
+
+/// Clap's unknown-subcommand error and exit `2`, with the tip clap
+/// itself would give had the lookup not taken the word first.
+fn unknown_verb(word: &std::ffi::OsStr) -> ! {
+    let mut message = format!("unrecognized subcommand '{}'", word.to_string_lossy());
+    if let Some(name) = external_name(word) {
+        let _ = write!(message, ": no `felis-{name}` beside felis or on PATH");
+    }
+    if let Some(similar) = similar_verb(&word.to_string_lossy()) {
+        let _ = write!(
+            message,
+            "\n\n  tip: a similar subcommand exists: '{similar}'"
+        );
+    }
+    Cli::command()
+        .error(clap::error::ErrorKind::InvalidSubcommand, message)
+        .exit()
+}
+
+/// Clap's own threshold for its "similar subcommand" tip.
+fn similar_verb(word: &str) -> Option<String> {
+    Cli::command()
+        .get_subcommands()
+        .filter(|sc| !sc.is_hide_set())
+        .map(|sc| sc.get_name().to_owned())
+        .chain(std::iter::once("help".to_owned()))
+        .map(|name| (strsim::jaro(word, &name), name))
+        .filter(|(score, _)| *score > 0.7)
+        .max_by(|a, b| a.0.total_cmp(&b.0))
+        .map(|(_, name)| name)
+}
+
+/// The `felis` binary's own directory first, then `PATH`: a packaged
+/// front door reaches the commands shipped alongside it before any
+/// ambient build (docs/reference/cli.md "External commands").
+fn find_external(bin_stem: &str) -> Vec<PathBuf> {
+    let own_dir = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(PathBuf::from));
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    find_external_in(
+        bin_stem,
+        own_dir.into_iter().chain(std::env::split_paths(&path)),
+    )
+}
+
+fn find_external_in(bin_stem: &str, dirs: impl IntoIterator<Item = PathBuf>) -> Vec<PathBuf> {
+    let name = format!("{bin_stem}{}", std::env::consts::EXE_SUFFIX);
+    dirs.into_iter()
+        .map(|dir| dir.join(&name))
+        .filter(|p| is_executable(p))
+        .collect()
+}
+
+#[cfg(unix)]
+fn is_executable(path: &std::path::Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    path.metadata()
+        .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+}
+
+#[cfg(not(unix))]
+fn is_executable(path: &std::path::Path) -> bool {
+    path.is_file()
+}
+
+/// Resolution is `current_exe()` sibling first, then PATH, so a
+/// packaged front door reaches the frontend shipped alongside it before
+/// any ambient build. On success this never returns; the returned error
+/// is always a launch failure.
 fn exec_frontend(bin_stem: &str, args: &[OsString]) -> anyhow::Error {
-    let program = frontend_program(bin_stem);
-    let mut cmd = std::process::Command::new(&program);
+    wrap_exec_err(bin_stem, exec_program(&frontend_program(bin_stem), args))
+}
+
+/// A missing default GUI frontend means "this is the headless build".
+fn wrap_exec_err(bin_stem: &str, err: std::io::Error) -> anyhow::Error {
+    if err.kind() == std::io::ErrorKind::NotFound {
+        anyhow!(
+            "the felis GUI frontend ({bin_stem}) is not installed.\n\
+             This looks like the headless build — install the desktop package to \
+             launch a window, or use `felis sessions …` for scripted access."
+        )
+    } else {
+        anyhow::Error::new(err).context(format!("exec {bin_stem}"))
+    }
+}
+
+/// Never returns on success.
+fn exec_program(program: &std::ffi::OsStr, args: &[OsString]) -> std::io::Error {
+    let mut cmd = std::process::Command::new(program);
     cmd.args(args);
 
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
-        wrap_exec_err(bin_stem, cmd.exec())
+        cmd.exec()
     }
     #[cfg(not(unix))]
     {
-        // No `exec` off Unix: propagate the frontend's exit code.
+        // No `exec` off Unix: propagate the child's exit code.
         match cmd.status() {
             Ok(status) => std::process::exit(status.code().unwrap_or(1)),
-            Err(err) => wrap_exec_err(bin_stem, err),
+            Err(err) => err,
         }
     }
 }
@@ -821,28 +978,6 @@ fn frontend_program(bin_stem: &str) -> OsString {
         .and_then(|exe| exe.parent().map(|dir| dir.join(&name)))
         .filter(|sibling| sibling.is_file())
         .map_or_else(|| OsString::from(&name), Into::into)
-}
-
-/// A missing default GUI frontend means "this is the headless build";
-/// a missing external frontend means "no such frontend / typo".
-fn wrap_exec_err(bin_stem: &str, err: std::io::Error) -> anyhow::Error {
-    if err.kind() == std::io::ErrorKind::NotFound {
-        if bin_stem == DEFAULT_FRONTEND_BIN {
-            anyhow!(
-                "the felis GUI frontend ({bin_stem}) is not installed.\n\
-                 This looks like the headless build — install the desktop package to \
-                 launch a window, or use `felis sessions …` for scripted access."
-            )
-        } else {
-            anyhow!(
-                "unknown felis frontend: no `{bin_stem}` beside felis or on PATH.\n\
-                 `felis frontend <name> …` execs `felis-<name>`; install it or check the \
-                 spelling."
-            )
-        }
-    } else {
-        anyhow::Error::new(err).context(format!("exec {bin_stem}"))
-    }
 }
 
 /// One session-list line: `<short-id>  <rows>x<cols>  <age>  [title]  [cwd]`.

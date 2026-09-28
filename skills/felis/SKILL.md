@@ -248,14 +248,14 @@ Each is documented in `docs/reference/cli.md` under the named section; none is n
   opens a new window there instead, and before a headless verb the same flag names the daemon that verb dials.
 - **`pipe` / `run` keymap chords** and their `FELIS_ORIGIN_SESSION_ID` / `FELIS_HOST` / `FELIS_CWD` environment:
   user-authored scripts fired from a window's `[keymap]` (`docs/reference/keybindings.md`, "Unbound by default").
-- **`felis doctor`, `felis config check`, `felis frontend`**: GUI and config diagnostics for a human at the desk
-  ("Doctor", "Config verbs", "Alternate frontends"). The one exception worth reaching for: when a roster looks empty
-  where you expected sessions, `felis doctor --format json` on that host carries a `daemon-sibling` row when this
-  shell's `$FELIS_SOCKET` names an endpoint other than the default; the row says what the default holds, and when a
-  felis daemon answers there its `detail` names the path to pass to `felis --socket <path> sessions list`. `doctor`,
-  `config check`, and `config show-effective` are Point-diagnostic verbs: exit `1` means the document or a check
-  reported diagnostics. `doctor` and `config check` still write their result object; `config show-effective` writes an
-  `invalid_request` error object instead.
+- **`felis doctor`, `felis config check`**: GUI and config diagnostics for a human at the desk ("Doctor", "Config
+  verbs"). The one exception worth reaching for: when a roster looks empty where you expected sessions,
+  `felis doctor --format json` on that host carries a `daemon-sibling` row when this shell's `$FELIS_SOCKET` names an
+  endpoint other than the default; the row says what the default holds, and when a felis daemon answers there its
+  `detail` names the path to pass to `felis --socket <path> sessions list`. `doctor`, `config check`, and
+  `config show-effective` are Point-diagnostic verbs: exit `1` means the document or a check reported diagnostics.
+  `doctor` and `config check` still write their result object; `config show-effective` writes an `invalid_request` error
+  object instead.
 
 ## What felis deliberately does not do
 

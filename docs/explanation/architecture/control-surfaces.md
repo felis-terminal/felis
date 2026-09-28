@@ -814,16 +814,13 @@ Within the shared ops, three differences are policy and are frozen with their re
 
 _Revisit if_ a bridge client needs an operator verb it cannot reach by running the point verb beside it.
 
-#### Alternate frontends live behind `felis frontend <name>`
+#### Any unknown first word runs `felis-<word>`
 
-Alternate frontends live behind `felis frontend <name>`, not behind any unknown token. `felis frontend tui …` execs
-`felis-tui`. The implicit form (cargo's external-subcommand model, where any unrecognized first word becomes
-`felis-<word>`) is rejected: it makes every typo an exec. `felis session list` (singular) would run whatever `$PATH`
-answers to as `felis-session`, or report a missing binary, instead of naming the real mistake, and felis's verb list is
-small enough that near-misses are the common failure. The explicit namespace costs one word in a launch command that is
-typed rarely and usually wrapped in a desktop entry.
-
-_Revisit:_ none; the safety argument does not weaken with more frontends.
+`felis tui` runs `felis-tui`, git's and cargo's external-subcommand model. The commands it reaches are not only
+frontends: session pickers and killers built on `felis sessions` are the same kind of tool, so a namespace word such as
+`felis frontend <name>` would either name one kind or be too vague to name any. The cost is that a typo can reach an
+exec, but only of a `felis-<typo>` someone installed: a word that finds nothing is a usage error naming the built-in
+verb it resembles, so `felis session list` still points at `sessions`.
 
 ### Switching and moving a window
 

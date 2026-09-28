@@ -34,7 +34,7 @@ error, exit `2`).
 | `config path` / `check` / `show-effective`                                 | read       | refused                 | refused    | refused                 |
 | `doctor`                                                                   | read       | dials                   | dials      | dials                   |
 | `felis ssh`, `window retarget`                                             | refused    | refused                 | refused    | refused                 |
-| `frontend <name>`                                                          | refused    | refused                 | refused    | refused                 |
+| `<name>` (external command)                                                | refused    | refused                 | refused    | refused                 |
 | `completions <shell>`, `__mangen <dir>`                                    | refused    | refused                 | refused    | refused                 |
 | `__complete-sessions`                                                      | refused    | no candidates, exit `0` | dials      | no candidates, exit `0` |
 | `--version`                                                                | refused    | refused                 | refused    | refused                 |
@@ -87,7 +87,7 @@ Classification by verb:
 | Point            | `sessions list`, `sessions info`, `sessions spawn`, `sessions send`, `sessions kill`, `sessions evict`, `sessions tag`, `sessions switch`, `felis ssh`, `window retarget`, `daemon status`, `daemon stop`, `config path`, `version` |
 | Point-diagnostic | `config check`, `config show-effective`, `doctor`                                                                                                                                                                                   |
 | Stream           | `sessions capture`, `sessions search`, `notifications subscribe`                                                                                                                                                                    |
-| Exempt           | `felis`, `felis attach`, `felis frontend`, `felis completions`, `felis bridge`                                                                                                                                                      |
+| Exempt           | `felis`, `felis attach`, `felis completions`, `felis bridge`, `felis <name>`                                                                                                                                                        |
 
 A verb with no row in this table has no `--format` flag. `felis bridge` streams exactly the operations whose verb is a
 Stream here.
@@ -466,12 +466,11 @@ that is the default. When the default cannot be resolved, the `daemon` row carri
 
 Top-level invocations that launch the GUI client:
 
-| Form                        | Action                                                    |
-| --------------------------- | --------------------------------------------------------- |
-| `felis`                     | Create a new session and launch a window attached to it.  |
-| `felis attach <id>`         | Open a window attached to an existing session.            |
-| `felis -- <cmd...>`         | Open a window running `<cmd>` in a persistent session.    |
-| `felis frontend <name> ...` | Launch an alternate frontend executable (`felis-<name>`). |
+| Form                | Action                                                   |
+| ------------------- | -------------------------------------------------------- |
+| `felis`             | Create a new session and launch a window attached to it. |
+| `felis attach <id>` | Open a window attached to an existing session.           |
+| `felis -- <cmd...>` | Open a window running `<cmd>` in a persistent session.   |
 
 `felis -- <cmd>` creates a standard persistent session; closing the window does not terminate the process. For a
 detached command without a window, use `felis sessions spawn -- <cmd>`.
@@ -519,13 +518,25 @@ Destination descriptors are bounded at 64 KiB (REQ-105a). Exit codes: `0` once t
 and not once it has landed ("Result objects"), `1` if window not found or descriptor over limit, `2` on invalid
 arguments or unreachable daemon.
 
-## Alternate frontends: `felis frontend <name>`
+## External commands: `felis <name>`
 
-Executes `felis-<name>` found beside the `felis` binary or on `$PATH`, forwarding all remaining arguments verbatim.
+A first word that names no built-in verb runs `felis-<name>`, forwarding all remaining arguments verbatim:
+`felis tui attach 1a2b` runs `felis-tui attach 1a2b`. Built-in verbs always win, so a `felis-<name>` whose name a
+built-in verb takes is reachable only by its own name. An external command reads terminal state through this CLI or
+[ipc.md](ipc.md) like any other client; `felis` only launches it.
 
-Global carrier flags (`--host`, `--socket`, `--ssh-arg`) are refused before the frontend name: each frontend manages its
-own connection flags. `--config` is refused there for the same reason: `felis` does not know how `felis-<name>` spells
-it. Write it after the name, in the frontend's own spelling: `felis frontend tui --config ./work.toml`.
+- **Lookup**: the directory holding the `felis` binary first, then each `$PATH` entry in order; the first executable
+  regular file named `felis-<name>` wins. On Windows only `felis-<name>.exe` is eligible. A name holding a path
+  separator, a `.`, whitespace, or a leading `-` is never looked up.
+- **Not found**: a usage error, exit `2`, naming the built-in verb the word resembles when there is one
+  (`felis session list` suggests `sessions`).
+- **Found but not launched**: when the exec of the resolved file fails (a missing script interpreter, say), the error
+  names that path and exits `1`. On success the process is replaced on Unix; on Windows `felis` waits and exits with the
+  child's code.
+- **Help**: `felis help <name> [<args>...]` runs `felis-<name> [<args>...] --help`.
+- **Globals**: `--config`, `--host`, `--socket`, and `--ssh-arg` before the name are refused (exit `2`): `felis` does
+  not know how `felis-<name>` spells them. Write them after the name, in the command's own spelling:
+  `felis tui --config ./work.toml`.
 
 ## Carrier and connection lifetime
 
@@ -627,7 +638,7 @@ to session automation: the `sessions.*` ops, `notifications.subscribe`, and `can
 and a bridge client reaches them by running the point verb with `--format json`:
 
 - operator verbs: `daemon status`, `daemon stop`, `config path|check|show-effective`, `doctor`, `version`;
-- window launches: bare `felis`, `attach`, `frontend <name>`, `ssh`, `window retarget`;
+- window launches: bare `felis`, `attach`, `ssh`, `window retarget`;
 - shell plumbing: `completions <shell>`, `__mangen`, `__complete-sessions`.
 
 The stdio contract:

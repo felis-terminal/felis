@@ -5,7 +5,7 @@ expression: pages
 $ felis --help
 felis: a terminal whose sessions outlive their windows.
 
-Opens a window on a fresh session, attaches to an existing session, or drives the daemon headlessly via `sessions` and `notifications`.
+Opens or attaches a window, or drives the daemon headlessly via `sessions` and `notifications`; `felis <name> …` runs `felis-<name>`.
 
 Usage: felis [OPTIONS] [-- <CMD>...] [COMMAND]
 
@@ -19,7 +19,6 @@ Commands:
   attach         Open a window attached to an existing session
   window         Act on the window this command runs in
   ssh            Re-point this window at the daemon on another host, over SSH
-  frontend       Launch an alternate frontend: `felis frontend <name> …` execs `felis-<name>` with the remaining arguments verbatim
   bridge         Speak JSON lines on stdin/stdout for a non-Rust client
   completions    Print a shell completion script to stdout
   help           Print this message or the help of the given subcommand(s)
@@ -666,24 +665,6 @@ Options:
           [default: human]
           [possible values: human, json]
 
-  -h, --help
-          Print help (see a summary with '-h')
-
-$ felis frontend --help
-Launch an alternate frontend: `felis frontend <name> …` execs `felis-<name>` with the remaining arguments verbatim.
-
-No global reaches it: `--config` and the carrier before the name are refused; write them after it instead (see `felis --help`).
-
-Usage: felis frontend <NAME> [ARGS]...
-
-Arguments:
-  <NAME>
-          Frontend name: `felis frontend tui` execs `felis-tui`
-
-  [ARGS]...
-          Arguments handed to the frontend verbatim, flags included
-
-Options:
   -h, --help
           Print help (see a summary with '-h')
 
