@@ -262,19 +262,18 @@ fn the_exempt_verbs_carry_no_format_flag() {
         );
     }
 
-    // `felis frontend` forwards `--format` to the frontend untouched
-    // rather than refusing it.
-    let parsed = Cli::try_parse_from(["felis", "frontend", "tui", "--format", "json"])
-        .expect("a frontend's own flags parse as its trailing argv");
-    let Some(Cmd::Frontend { name, args }) = parsed.cmd else {
-        panic!("`felis frontend tui …` parses as the frontend launch");
-    };
-    assert_eq!(name, "tui");
+    // An external command gets `--format` untouched rather than refused.
+    let external = external_command(&argv(&["felis", "tui", "--format", "json"]))
+        .expect("an unknown word is an external command");
     assert_eq!(
-        args,
-        ["--format", "json"],
+        external.args,
+        argv(&["--format", "json"]),
         "the flag is forwarded verbatim, not consumed"
     );
+}
+
+fn argv(words: &[&str]) -> Vec<OsString> {
+    words.iter().map(OsString::from).collect()
 }
 
 #[test]
@@ -285,16 +284,10 @@ fn the_removed_trace_perf_flag_is_an_unknown_argument() {
     let err = Cli::try_parse_from(["felis", "--trace-perf", "sessions", "list"])
         .expect_err("--trace-perf with a verb must be rejected");
     assert_eq!(err.kind(), clap::error::ErrorKind::UnknownArgument);
-    // The flag remains valid when forwarded opaquely after `frontend <name>`.
-    let cli = Cli::try_parse_from(["felis", "frontend", "tui", "--trace-perf"])
-        .expect("frontend's own --trace-perf forwards opaquely");
-    match cli.cmd {
-        Some(Cmd::Frontend { name, args }) => {
-            assert_eq!(name, "tui");
-            assert_eq!(args, vec![OsString::from("--trace-perf")]);
-        }
-        other => panic!("expected Cmd::Frontend, got {other:?}"),
-    }
+    // The flag remains valid when forwarded opaquely after an external name.
+    let external = external_command(&argv(&["felis", "tui", "--trace-perf"]))
+        .expect("an external command's own --trace-perf forwards opaquely");
+    assert_eq!(external.args, argv(&["--trace-perf"]));
 }
 
 #[test]
@@ -421,50 +414,100 @@ fn cli_attach_is_a_top_level_verb() {
 }
 
 #[test]
-fn the_frontend_verb_passes_its_arguments_through_verbatim() {
-    let cli = Cli::try_parse_from(["felis", "frontend", "tui", "attach", "1a2b", "--fullscreen"])
-        .expect("parses felis frontend tui …");
-    match cli.cmd {
-        Some(Cmd::Frontend { name, args }) => {
-            assert_eq!(name, "tui");
-            assert_eq!(
-                args,
-                vec![
-                    OsString::from("attach"),
-                    OsString::from("1a2b"),
-                    OsString::from("--fullscreen"),
-                ],
-            );
-        }
-        other => panic!("expected Cmd::Frontend, got {other:?}"),
+fn an_external_command_gets_its_arguments_verbatim() {
+    assert_eq!(
+        external_command(&argv(&["felis", "tui", "attach", "1a2b", "--fullscreen"])),
+        Some(External {
+            word: "tui".into(),
+            args: argv(&["attach", "1a2b", "--fullscreen"]),
+            globals_before: vec![],
+        }),
+    );
+}
+
+#[test]
+fn a_built_in_verb_or_a_flag_line_is_never_an_external_command() {
+    for line in [
+        &["felis"][..],
+        &["felis", "sessions", "list"],
+        &["felis", "help"],
+        &["felis", "help", "sessions"],
+        &["felis", "help", "help"],
+        &["felis", "--", "htop"],
+        &["felis", "--config", "c.toml", "--", "htop"],
+        &["felis", "--help", "tui"],
+        &["felis", "-V", "tui"],
+        &["felis", "--fullscreen", "tui"],
+        &["felis", "--config", "--help", "tui"],
+        &["felis", "--host", "h", "--ssh-arg", "-p", "tui"],
+    ] {
+        assert_eq!(external_command(&argv(line)), None, "{line:?}");
     }
 }
 
 #[test]
-fn an_unknown_leading_token_is_an_error_not_a_frontend_exec() {
-    for argv in [
-        &["felis", "ls"][..],
-        &["felis", "session", "list"],
-        &["felis", "tui", "attach", "1a2b"],
-    ] {
-        assert!(
-            Cli::try_parse_from(argv).is_err(),
-            "{argv:?} must be a usage error, not an exec",
-        );
-    }
+fn help_for_an_external_command_forwards_to_its_own_help() {
+    let external = external_command(&argv(&["felis", "help", "tui", "attach"]))
+        .expect("`help <external>` is an external command");
+    assert_eq!(external.word, "tui");
+    assert_eq!(external.args, argv(&["attach", "--help"]));
+}
+
+#[test]
+fn globals_before_an_external_command_are_recorded_for_the_refusal() {
+    let external = external_command(&argv(&[
+        "felis",
+        "--config=c.toml",
+        "--host",
+        "h",
+        "--ssh-arg=-p",
+        "tui",
+    ]))
+    .expect("globals before the word still reach the lookup");
+    assert_eq!(external.word, "tui");
+    assert_eq!(external.globals_before, ["--config", "--host", "--ssh-arg"]);
 }
 
 /// A separator would turn the sibling / `$PATH` lookup of `felis-<name>`
 /// into "run this file".
 #[test]
-fn a_frontend_name_with_a_path_is_rejected() {
-    for name in ["../evil", "/usr/bin/evil", "a/b", "./x"] {
-        assert!(
-            Cli::try_parse_from(["felis", "frontend", name]).is_err(),
-            "{name:?} must not parse as a frontend name",
-        );
+fn an_external_name_with_a_path_or_a_dash_is_not_looked_up() {
+    for name in ["../evil", "/usr/bin/evil", "a/b", "./x", "-x", "", "a b"] {
+        assert_eq!(external_name(name.as_ref()), None, "{name:?}");
     }
-    Cli::try_parse_from(["felis", "frontend", "tui"]).expect("a bare name parses");
+    assert_eq!(external_name("tui".as_ref()), Some("tui"));
+}
+
+#[test]
+fn a_misspelled_verb_is_offered_the_built_in_it_resembles() {
+    assert_eq!(similar_verb("session").as_deref(), Some("sessions"));
+    assert_eq!(similar_verb("zzz"), None);
+}
+
+#[cfg(unix)]
+#[test]
+fn the_lookup_lists_executable_candidates_in_directory_order() {
+    use std::os::unix::fs::PermissionsExt;
+    let dirs: Vec<_> = (0..3).map(|_| tempfile::tempdir().unwrap()).collect();
+    let place = |dir: &tempfile::TempDir, mode: u32| {
+        let path = dir.path().join("felis-tui");
+        std::fs::write(&path, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
+        path
+    };
+    place(&dirs[0], 0o644);
+    let first = place(&dirs[1], 0o755);
+    let second = place(&dirs[2], 0o755);
+    let order = dirs.iter().map(|d| d.path().to_path_buf());
+    assert_eq!(
+        find_external_in("felis-tui", order.clone()),
+        [first, second],
+        "a non-executable file is skipped, and directory order is kept",
+    );
+    assert_eq!(
+        find_external_in("felis-absent", order),
+        Vec::<PathBuf>::new()
+    );
 }
 
 #[test]
@@ -572,7 +615,6 @@ fn config_selection_is_a_root_flag_the_non_readers_refuse() {
         (vec!["felis", "version"], "felis version"),
         (vec!["felis", "bridge"], "felis bridge"),
         (vec!["felis", "completions", "fish"], "felis completions"),
-        (vec!["felis", "frontend", "tui"], "felis frontend tui"),
     ] {
         let cli = Cli::try_parse_from(&argv).unwrap();
         let named = verb_reading_no_config(cli.cmd.as_ref())
@@ -614,11 +656,7 @@ fn expected_globals(cmd: Option<&Cmd>) -> (Global, Global) {
             | Cmd::Bridge,
         ) => (Refused, Dialed),
         Some(
-            Cmd::Window { .. }
-            | Cmd::Ssh { .. }
-            | Cmd::Frontend { .. }
-            | Cmd::Completions { .. }
-            | Cmd::Mangen { .. },
+            Cmd::Window { .. } | Cmd::Ssh { .. } | Cmd::Completions { .. } | Cmd::Mangen { .. },
         ) => (Refused, Refused),
         Some(Cmd::CompleteSessions) => (Refused, NoCandidates),
     }
@@ -649,7 +687,6 @@ fn every_verb_form_places_every_global_flag() {
         &["felis", "completions", "fish"],
         &["felis", "__complete-sessions"],
         &["felis", "__mangen", "man"],
-        &["felis", "frontend", "tui"],
     ] {
         let cli = Cli::try_parse_from(argv).unwrap_or_else(|e| panic!("{argv:?}: {e}"));
         let (config, carrier) = expected_globals(cli.cmd.as_ref());
@@ -757,23 +794,18 @@ fn the_version_flag_refuses_every_global() {
 }
 
 /// The globals are declared on the root only, so a subcommand's own
-/// `--help` lists none of them: the two window-launch verbs say where
-/// they go instead of leaving the reader to guess.
+/// `--help` lists none of them: the window-launch verb says where they
+/// go instead of leaving the reader to guess.
 #[test]
-fn the_launch_verbs_help_says_where_the_globals_go() {
-    for (verb, expected) in [
-        ("attach", "belong before the verb"),
-        ("frontend", "No global reaches it"),
-    ] {
-        let help = <Cli as clap::CommandFactory>::command()
-            .find_subcommand_mut(verb)
-            .unwrap_or_else(|| panic!("{verb} is a subcommand"))
-            .render_long_help()
-            .to_string();
-        assert!(help.contains(expected), "{verb} --help: {help}");
-        assert!(help.contains("--config"), "{verb} --help: {help}");
-        assert!(help.contains("felis --help"), "{verb} --help: {help}");
-    }
+fn the_launch_verb_help_says_where_the_globals_go() {
+    let help = <Cli as clap::CommandFactory>::command()
+        .find_subcommand_mut("attach")
+        .expect("attach is a subcommand")
+        .render_long_help()
+        .to_string();
+    assert!(help.contains("belong before the verb"), "{help}");
+    assert!(help.contains("--config"), "{help}");
+    assert!(help.contains("felis --help"), "{help}");
 }
 
 /// `--help` lists the possible values of the finite options.
@@ -852,17 +884,6 @@ fn wrap_exec_err_explains_a_missing_default_frontend_as_a_headless_build() {
     let msg = format!("{err}");
     assert!(msg.contains("headless build"), "got: {msg}");
     assert!(msg.contains(DEFAULT_FRONTEND_BIN), "got: {msg}");
-}
-
-#[test]
-fn wrap_exec_err_flags_a_missing_external_frontend_as_unknown() {
-    let err = wrap_exec_err(
-        "felis-tui",
-        std::io::Error::from(std::io::ErrorKind::NotFound),
-    );
-    let msg = format!("{err}");
-    assert!(msg.contains("unknown felis frontend"), "got: {msg}");
-    assert!(msg.contains("felis-tui"), "got: {msg}");
 }
 
 #[test]
@@ -1195,22 +1216,15 @@ mod argv_matrix {
         );
     }
 
-    /// `frontend <name>` is the one place a token felis does not know
-    /// crosses the surface; every other unknown leading token is a
-    /// usage error rather than an exec of something on `$PATH`.
+    /// Clap alone never reaches an exec: an unknown leading token is
+    /// a usage error to it, and only `external_command`, which runs
+    /// first, turns it into a `felis-<name>` lookup.
     #[test]
-    fn no_verb_but_frontend_passes_an_unknown_token_through() {
+    fn clap_refuses_an_unknown_leading_token() {
         use clap::error::ErrorKind::UnknownArgument;
 
-        for (argv, outcome) in [
-            (&["felis", "htop"][..], Outcome::Usage(UnknownArgument)),
-            (&["felis", "--fullscreen"], Outcome::Usage(UnknownArgument)),
-            (
-                &["felis", "frontend", "tui", "--fullscreen"],
-                Outcome::Parses,
-            ),
-        ] {
-            check(argv, outcome);
+        for argv in [&["felis", "htop"][..], &["felis", "--fullscreen"]] {
+            check(argv, Outcome::Usage(UnknownArgument));
         }
     }
 
