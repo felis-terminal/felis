@@ -170,6 +170,14 @@ impl Font {
         self.font_ref().charmap().map(c) != 0
     }
 
+    /// `None` when the face does not map `c`.
+    #[must_use]
+    pub fn advance_px(&self, c: char, px: f32) -> Option<f32> {
+        let face = self.font_ref();
+        let glyph_id = face.charmap().map(c);
+        (glyph_id != 0).then(|| face.glyph_metrics(&[]).scale(px).advance_width(glyph_id))
+    }
+
     #[must_use]
     pub const fn has_color_glyphs(&self) -> bool {
         self.color
@@ -358,6 +366,17 @@ impl FontStack {
     #[must_use]
     pub fn new(primary: Arc<Font>) -> Self {
         Self::with_primary_features(primary, Vec::new())
+    }
+
+    /// Auto-discovery over the pinned `$FELIS_TEST_FONT_DIR` set alone,
+    /// so a fallback-dependent test sees the same faces on every host.
+    #[cfg(any(test, feature = "testing"))]
+    #[must_use]
+    pub fn try_pinned_test_stack() -> Option<Self> {
+        let dir = std::env::var_os("FELIS_TEST_FONT_DIR")?;
+        let mut db = Database::new();
+        db.load_fonts_dir(std::path::PathBuf::from(dir));
+        Self::auto_discover_in(&db, None, &[], &[], &StyleFaces::default()).ok()
     }
 
     #[must_use]
@@ -890,6 +909,12 @@ impl SizingKey {
     #[must_use]
     pub const fn font_id(self) -> usize {
         ((self.0 >> 26) & 0x3F) as usize
+    }
+
+    /// The OSC 66 `w` field; `0` is auto.
+    #[must_use]
+    pub const fn cell_width(self) -> u8 {
+        ((self.0 >> 16) & 0xF) as u8
     }
 
     #[must_use]

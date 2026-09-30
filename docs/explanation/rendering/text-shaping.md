@@ -265,6 +265,18 @@ Rejected:
   advance: hinted from FreeType, unhinted from CoreText. felis reads the same unhinted swash advance on both, so the
   split would encode a difference felis does not have.
 
+A glyph whose advance overruns the cells it is placed in (a `※` the CJK fallback face draws full-width in its one cell)
+rasterizes smaller and is centred in its block. The advance decides whether a glyph is fitted: an italic overhang or a
+hinted stem's extra column is ink past the advance on a glyph drawn for one cell, and fitting on the ink box, as kitty
+does ([`freetype.c`](https://github.com/kovidgoyal/kitty/blob/master/kitty/freetype.c) `render_bitmap`), would shrink
+ordinary text. The ink decides how far: a full-width face pads its ink with side bearings, and shrinking the whole
+advance into the cell leaves the glyph visibly smaller than in kitty or WezTerm. Centring trades the baseline for
+balance; nearly every fitted glyph is a symbol, CJK punctuation or an emoji, where a glyph shrunk toward the baseline
+sits low in its cell.
+
+Rejected: **clip to the cell box.** It keeps the neighbor clean but cuts the glyph, and it would also cut the rounding
+overlap above.
+
 Ascent and descent ceil **separately** rather than the cell height rounding their sum: that puts the baseline itself on
 a pixel boundary and gives each half whole rows, so a glyph reaching the full ascent keeps its top row. Rounding the sum
 leaves the baseline a fraction of a pixel high and clips that row. This is fcft's rule, which foot inherits

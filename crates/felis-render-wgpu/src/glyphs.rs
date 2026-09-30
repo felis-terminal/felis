@@ -9,8 +9,8 @@ use std::{
 
 use felis_grid::{Grapheme, ScreenBuffer};
 use felis_shaping::{
-    CellMetrics, FontStack, FontStyle, GlyphBitmap, GlyphId, GlyphPixels, ShapeCache, ShapedGlyph,
-    Shaper, SizingKey,
+    CellMetrics, Font, FontStack, FontStyle, GlyphBitmap, GlyphId, GlyphPixels, ShapeCache,
+    ShapedGlyph, Shaper, SizingKey,
 };
 use foldhash::fast::RandomState;
 use wgpu::{BindGroup, BindGroupLayout, Device, Texture, TextureFormat, TextureViewDescriptor};
@@ -245,14 +245,61 @@ impl GlyphIndex {
             return true;
         }
         let font = self.stack.resolve(glyph, sizing.style()).clone();
-        let effective_px = (self.font_size_physical_px * scale).round() as u32;
-        let bitmap = self
-            .shape
-            .get_or_insert_sized(&font, glyph, effective_px, sizing)
-            .clone();
+        let bitmap = if let Some(bitmap) = self.fitted_bitmap(&font, glyph, cell_height, sizing) {
+            bitmap
+        } else {
+            let px = (self.font_size_physical_px * scale).round() as u32;
+            self.shape
+                .get_or_insert_sized(&font, glyph, px, sizing)
+                .clone()
+        };
         let slot = self.allocate(bitmap);
         self.insert_slot(key, slot);
         true
+    }
+
+    /// `None` keeps the glyph's own size and bearings. The block matches
+    /// `push_char_cell`'s: `w` (or the char's own width) cells at the
+    /// integer scale `s`, whatever the fractional glyph scale.
+    fn fitted_bitmap(
+        &mut self,
+        font: &Font,
+        glyph: char,
+        cell_height: u32,
+        sizing: SizingKey,
+    ) -> Option<GlyphBitmap> {
+        let glyph_scale = sizing.effective_scale();
+        let base_px = self.font_size_physical_px * glyph_scale;
+        let layout_scale = f32::from(sizing.scale().max(1));
+        let cells = match sizing.cell_width() {
+            0 => felis_grid::char_cell_width(glyph).max(1),
+            w => w,
+        };
+        let block_w = (self.metrics.width * u32::from(cells)) as f32 * layout_scale;
+        let block_h = cell_height as f32 * layout_scale;
+        // The cell width rounds the primary advance, so a primary glyph
+        // overruns its block by up to half a pixel per unit of `s`.
+        if font.advance_px(glyph, base_px)? <= block_w + layout_scale {
+            return None;
+        }
+        let ink = self
+            .shape
+            .get_or_insert_sized(font, glyph, base_px.round() as u32, sizing);
+        if ink.is_blank() {
+            return None;
+        }
+        let ratio = (block_w / ink.width() as f32)
+            .min(block_h / ink.height() as f32)
+            .min(1.0);
+        let px = (base_px * ratio).floor().max(1.0) as u32;
+        let mut bitmap = self
+            .shape
+            .get_or_insert_sized(font, glyph, px, sizing)
+            .clone();
+        bitmap.left = ((block_w - bitmap.width() as f32) / 2.0).round() as i32;
+        let ascent = self.metrics.ascent as f32 * glyph_scale;
+        bitmap.top = (ascent - (block_h - bitmap.height() as f32) / 2.0).round() as i32;
+        Some(bitmap)
     }
 
     /// Glyph ids are face-relative: [`SizingKey::font_id`] names the
@@ -1583,6 +1630,126 @@ mod tests {
             "2× bitmap height ({}) must exceed default ({})",
             large.size_px[1],
             mid.size_px[1],
+        );
+    }
+
+    #[test]
+    fn primary_face_ascii_is_never_fitted_at_any_osc66_scale() {
+        let font = Arc::new(Font::load_test_font_or_default().expect("a monospace font"));
+        for px in [13.0, 18.67, 24.0, 29.33] {
+            let mut idx = GlyphIndex::new(FontStack::new(font.clone()), px, nz(512));
+            let h = idx.cell_metrics().height;
+            for s in 1..=7 {
+                let sk = SizingKey::new(s, 0, 0, 0, 0, 0);
+                for c in '!'..='~' {
+                    assert!(
+                        idx.fitted_bitmap(&font, c, h, sk).is_none(),
+                        "{c:?} at {px} px, s={s}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Width-1 chars the pinned emoji and symbol faces draw wider than a
+    /// Monaspace cell.
+    const OVERWIDE: [char; 6] = [
+        '\u{263A}',
+        '\u{2764}',
+        '\u{2654}',
+        '\u{26F5}',
+        '\u{2B50}',
+        '\u{1F30D}',
+    ];
+
+    /// The ink fills the block along its binding axis and is centred on
+    /// both, so a fitted glyph reads as large as the cell allows.
+    #[test]
+    fn a_fallback_glyph_wider_than_its_cell_fills_and_centres_in_it() {
+        let Some(stack) = FontStack::try_pinned_test_stack() else {
+            eprintln!("FELIS_TEST_FONT_DIR unset; skipping");
+            return;
+        };
+        let mut idx = GlyphIndex::new(stack, 18.0, nz(1024));
+        let m = idx.cell_metrics();
+        let (cw, ch, ascent) = (i64::from(m.width), i64::from(m.height), i64::from(m.ascent));
+        let mut fitted = 0;
+        for c in OVERWIDE
+            .into_iter()
+            .filter(|&c| felis_grid::char_cell_width(c) == 1)
+        {
+            let font = idx.stack().resolve(c, FontStyle::REGULAR).clone();
+            let Some(bitmap) = idx.fitted_bitmap(&font, c, m.height, SizingKey::default()) else {
+                continue;
+            };
+            fitted += 1;
+            let (w, h) = (i64::from(bitmap.width()), i64::from(bitmap.height()));
+            let (left, top) = (i64::from(bitmap.left), i64::from(bitmap.top));
+            let right = cw - left - w;
+            let (above, below) = (ascent - top, ch - (ascent - top) - h);
+            assert!(
+                left >= 0 && right >= -1,
+                "{c:?} inside the cell: left {left}, right {right}"
+            );
+            assert!(
+                above >= -1 && below >= -1,
+                "{c:?} inside the cell: above {above}, below {below}"
+            );
+            assert!(
+                (left - right).abs() <= 1,
+                "{c:?} centred: left {left}, right {right}"
+            );
+            assert!(
+                (above - below).abs() <= 1,
+                "{c:?} centred: above {above}, below {below}"
+            );
+            assert!(
+                w >= cw - 2 || h >= ch - 2,
+                "{c:?} fills an axis: {w}x{h} in {cw}x{ch}"
+            );
+        }
+        assert!(
+            fitted > 0,
+            "no candidate overruns its cell in the pinned set"
+        );
+    }
+
+    /// An OSC 66 block is `w` (or the char's width) cells at the integer
+    /// `s`, so a glyph between one and two cells wide fits `w=2` and a
+    /// halved glyph in an `s=2` block, and is fitted only for `w=1`.
+    #[test]
+    fn osc66_width_and_fractional_scale_set_the_fitted_block() {
+        let Some(stack) = FontStack::try_pinned_test_stack() else {
+            eprintln!("FELIS_TEST_FONT_DIR unset; skipping");
+            return;
+        };
+        let px = 18.0;
+        let mut idx = GlyphIndex::new(stack, px, nz(1024));
+        let m = idx.cell_metrics();
+        let cw = m.width as f32;
+        let (c, font) = OVERWIDE
+            .into_iter()
+            .filter(|&c| felis_grid::char_cell_width(c) == 1)
+            .map(|c| (c, idx.stack().resolve(c, FontStyle::REGULAR).clone()))
+            .find(|(c, font)| {
+                font.advance_px(*c, px)
+                    .is_some_and(|a| a > cw + 1.0 && a < 2.0 * cw)
+            })
+            .expect("the pinned set has a width-1 glyph between one and two cells wide");
+        let w1 = SizingKey::new(1, 1, 0, 0, 0, 0);
+        let w2 = SizingKey::new(1, 2, 0, 0, 0, 0);
+        let half_in_s2 = SizingKey::new(2, 0, 1, 2, 0, 0);
+        assert!(
+            idx.fitted_bitmap(&font, c, m.height, w1).is_some(),
+            "w=1 fits {c:?}"
+        );
+        assert!(
+            idx.fitted_bitmap(&font, c, m.height, w2).is_none(),
+            "w=2 holds {c:?}"
+        );
+        assert!(
+            idx.fitted_bitmap(&font, c, m.height, half_in_s2).is_none(),
+            "s=2 n=1 d=2 holds {c:?}"
         );
     }
 
