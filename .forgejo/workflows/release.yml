@@ -394,15 +394,15 @@ jobs:
           fetch-depth: 0
       - run: nix build .#felis --print-build-logs
       # Forgejo fork rather than upstream actions/download-artifact: upstream rejects non-github.com runners.
-      - uses: https://code.forgejo.org/forgejo/download-artifact@1314311ddb542af343a82d478ac786ceada4143a # v5 (upstream v4 API, GHES check disabled)
+      - uses: https://code.forgejo.org/forgejo/download-artifact@769f970437aa3291b13f35dc23fc87967d7fb19f # v7 (upstream v4 API, GHES check disabled)
         with:
           name: felis-x86_64-linux
           path: artifacts
-      - uses: https://code.forgejo.org/forgejo/download-artifact@1314311ddb542af343a82d478ac786ceada4143a # v5 (upstream v4 API, GHES check disabled)
+      - uses: https://code.forgejo.org/forgejo/download-artifact@769f970437aa3291b13f35dc23fc87967d7fb19f # v7 (upstream v4 API, GHES check disabled)
         with:
           name: felis-aarch64-darwin
           path: artifacts
-      - uses: https://code.forgejo.org/forgejo/download-artifact@1314311ddb542af343a82d478ac786ceada4143a # v5 (upstream v4 API, GHES check disabled)
+      - uses: https://code.forgejo.org/forgejo/download-artifact@769f970437aa3291b13f35dc23fc87967d7fb19f # v7 (upstream v4 API, GHES check disabled)
         with:
           name: felis-x86_64-pc-windows-msvc
           path: artifacts
