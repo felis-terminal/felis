@@ -18,6 +18,9 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 
 ### Fixed
 
+- A glyph that a fallback face draws wider than its cells (an East Asian Ambiguous `※` from a CJK font, or a
+  text-presentation emoji such as `☺` from the color-emoji font) is shrunk to fit and centred in its cell, instead of
+  overlapping the next character.
 - Pressing a bare modifier (Ctrl, Shift, Alt, Cmd) or releasing a key no longer returns a scrolled-back view to the live
   screen, so Cmd+C copies a selection made in scrollback.
 
