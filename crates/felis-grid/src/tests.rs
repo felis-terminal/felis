@@ -2282,3 +2282,24 @@ fn a_bidi_override_refused_by_a_full_table_still_breaks_the_join() {
     assert_eq!(g.cell(0, 2).unwrap().grapheme, Grapheme::Char('\u{1F4BB}'));
     assert_eq!(g.cursor().col, 5);
 }
+
+#[test]
+fn char_span_covers_a_wide_character_from_either_half() {
+    let mut g = Grid::new(1, 6);
+    let mut p = Parser::new();
+    drive(&mut p, &mut g, "a字b".as_bytes());
+    let s = g.screen();
+    assert_eq!(s.char_span(0, 0), (0, 0), "narrow");
+    assert_eq!(s.char_span(0, 1), (1, 2), "lead");
+    assert_eq!(s.char_span(0, 2), (1, 2), "spacer");
+    assert_eq!(s.char_span(0, 3), (3, 3), "narrow after the pair");
+    assert_eq!(s.char_span(0, 5), (5, 5), "blank last column");
+}
+
+#[test]
+fn char_span_is_one_column_for_an_emoji_that_could_not_widen_at_the_edge() {
+    let mut g = Grid::new(1, 3);
+    let mut p = Parser::new();
+    drive(&mut p, &mut g, "ab❤\u{FE0F}".as_bytes());
+    assert_eq!(g.screen().char_span(0, 2), (2, 2));
+}

@@ -309,6 +309,10 @@ mod tests {
         fn glyph_id_slot(&self, _: GlyphId, _: u32, _: SizingKey) -> Option<GlyphSlot> {
             None
         }
+
+        fn overlay_cluster(&self, _: &str) -> Option<&[crate::glyphs::ClusterGlyph]> {
+            None
+        }
     }
 
     /// Row and column bounds exceed the grid so out-of-range writes and
@@ -319,6 +323,8 @@ mod tests {
         WriteRow(u16, Vec<u8>, u8, bool),
         /// Row, col, byte, style.
         SetCell(u16, u16, u8, u8),
+        /// Row, col, style: a wide character and its Spacer.
+        SetWide(u16, u16, u8),
         /// Top, bottom, count, up.
         Scroll(u16, u16, u16, bool),
         Resize(u16, u16),
@@ -346,6 +352,7 @@ mod tests {
         prop_oneof![
             6 => (0u16..12, text, 0u8..6, any::<bool>()).prop_map(|(r, t, s, l)| Op::WriteRow(r, t, s, l)),
             6 => (0u16..12, 0u16..20, 0x20u8..0x7f, 0u8..6).prop_map(|(r, c, b, s)| Op::SetCell(r, c, b, s)),
+            3 => (0u16..12, 0u16..20, 0u8..6).prop_map(|(r, c, s)| Op::SetWide(r, c, s)),
             2 => (0u16..12, 0u16..12, 1u16..4, any::<bool>()).prop_map(|(t, b, n, u)| Op::Scroll(t, b, n, u)),
             1 => (1u16..12, 1u16..20).prop_map(|(r, c)| Op::Resize(r, c)),
             6 => (0u16..12, 0u16..20, any::<bool>(), 0u8..3).prop_map(|(r, c, v, s)| Op::Cursor(r, c, v, s)),
@@ -446,6 +453,19 @@ mod tests {
                         ..Cell::default()
                     };
                     self.screen.set_cell(row, col, cell);
+                }
+                Op::SetWide(row, col, style) => {
+                    let style = self.screen.style_table_mut().intern(attrs(style));
+                    for (col, grapheme) in
+                        [(col, Grapheme::Char('字')), (col + 1, Grapheme::Spacer)]
+                    {
+                        let cell = Cell {
+                            grapheme,
+                            style,
+                            ..Cell::default()
+                        };
+                        self.screen.set_cell(row, col, cell);
+                    }
                 }
                 Op::Scroll(top, bottom, n, up) => {
                     let dir = [ScrollDirection::Down, ScrollDirection::Up][usize::from(up)];

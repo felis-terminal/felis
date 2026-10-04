@@ -209,6 +209,7 @@ mod sgr;
 mod sink;
 mod style_table;
 mod table_gc;
+mod text_cells;
 mod text_sizing;
 mod uax29;
 pub mod wire;
@@ -240,6 +241,7 @@ pub use search::{SearchCursor, SearchHit, SearchOptions, SearchQuery, SearchQuer
 pub use sgr::{AttrFlags, Attributes, Color, UnderlineStyle};
 pub use style_table::{StyleId, StyleTable};
 pub use table_gc::{Sweepable, TableGc};
+pub use text_cells::{TextCells, text_cells};
 pub use wire::{DecodedRow, RowCodecError, RowEncode, decode_row, encode_row};
 use xtgettcap::{ascii_to_hex, hex_to_ascii, xtgettcap_value};
 

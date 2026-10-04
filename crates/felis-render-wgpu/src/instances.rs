@@ -207,6 +207,10 @@ pub trait AtlasView {
         cell_height_px: u32,
         sizing: SizingKey,
     ) -> Option<GlyphSlot>;
+
+    /// The shaped glyphs of a multi-scalar overlay cluster, `None` until
+    /// the overlay's text was populated.
+    fn overlay_cluster(&self, text: &str) -> Option<&[crate::glyphs::ClusterGlyph]>;
 }
 
 /// Mirrors the enum-to-u8 mapping `felis-vt`'s parser enforces.
@@ -276,8 +280,16 @@ pub struct PreeditSpan {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct CursorPaint {
+    /// The row and first column of the character under the cursor.
     pub(crate) cell: Option<(u16, u16)>,
+    last_col: u16,
     style: CursorStyle,
+}
+
+impl CursorPaint {
+    fn covers(&self, row: u16, col: u16) -> bool {
+        matches!(self.cell, Some((r, first)) if r == row && (first..=self.last_col).contains(&col))
+    }
 }
 
 struct CellRef<'a> {
@@ -431,13 +443,19 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
         for c in 0..self.screen.cols() {
             // Same two-pass occlusion limit: a cell emitted under the
             // composition overlay draws through it in the fg pass.
-            if let Some(span) = self.preedit
-                && r == span.row
-                && c >= span.col_start
-                && c < span.col_end
-            {
-                continue;
-            }
+            let glyph_under_preedit = match self.preedit {
+                Some(span) if r == span.row => {
+                    if c >= span.col_start && c < span.col_end {
+                        continue;
+                    }
+                    // The lead of a wide character half under the overlay
+                    // keeps its background but not its glyph, which inks
+                    // across both halves.
+                    let (first, last) = self.screen.char_span(r, c);
+                    last >= span.col_start && first < span.col_end
+                }
+                _ => false,
+            };
             // Straight off the shadow's screen: the shadow has no
             // scrollback ring, so when viewport > 0 the daemon ships
             // composed RowDeltas against composed-view rows. Composing
@@ -455,7 +473,7 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
             // CONCEAL (SGR 8). SECURITY: this must gate every fg push.
             // The bg / cursor / selection / decoration instances above
             // stay (a concealed cell reads as a space).
-            if at.attrs.flags.contains(AttrFlags::CONCEAL) {
+            if at.attrs.flags.contains(AttrFlags::CONCEAL) || glyph_under_preedit {
                 continue;
             }
             // Shape-frame lookup precedes char-path decoding so a
@@ -483,9 +501,11 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
     fn resolve_cursor(&self) -> CursorPaint {
         let cursor = self.screen.cursor();
         let in_bounds = cursor.row < self.screen.rows() && cursor.col < self.screen.cols();
+        let (first, last) = self.screen.char_span(cursor.row, cursor.col);
         CursorPaint {
             cell: (cursor.visible && in_bounds && self.cursor_visible && self.viewport == 0)
-                .then_some((cursor.row, cursor.col)),
+                .then_some((cursor.row, first)),
+            last_col: last,
             style: self.screen.cursor_style(),
         }
     }
@@ -494,7 +514,16 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
     /// chrome pass and the per-cell slicing of a shaped quad alike, so
     /// the precedence chain has one spelling.
     fn resolve_cell_colors(&self, at: &CellRef<'_>) -> CellColors {
-        let is_bidi = cell_contains_bidi_override(at.cell.grapheme, self.screen);
+        // A wide character is painted as one: its Spacer takes the
+        // lead's bidi warning, and the cursor or a selection on either
+        // half covers both.
+        let is_bidi = match at.cell.grapheme {
+            Grapheme::Spacer if at.col > 0 => self
+                .screen
+                .cell(at.row, at.col - 1)
+                .is_some_and(|lead| cell_contains_bidi_override(lead.grapheme, self.screen)),
+            g => cell_contains_bidi_override(g, self.screen),
+        };
         let (mut fg, mut bg) = resolve_pair(
             at.attrs.fg,
             at.attrs.bg,
@@ -504,8 +533,8 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
         );
         // Pushed after the cell's bg quad so it draws over the bg but
         // under the glyph.
-        let mut cursor_marker = if self.cursor.cell == Some((at.row, at.col)) {
-            self.apply_cursor_style(self.origin(at), &mut fg, &mut bg)
+        let mut cursor_marker = if self.cursor.covers(at.row, at.col) {
+            self.apply_cursor_style(at, &mut fg, &mut bg)
         } else {
             None
         };
@@ -516,7 +545,7 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
             fg = BIDI_MARKER_FG;
             // The marker would obstruct the warning.
             cursor_marker = None;
-        } else if selection_contains(self.selection, at.row, at.col) {
+        } else if self.selection_covers(at) {
             bg = SELECTION_BG;
         }
         // After cursor / bidi / selection so it dims the effective fg,
@@ -532,6 +561,15 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
             is_bidi,
             faint,
         }
+    }
+
+    fn selection_covers(&self, at: &CellRef<'_>) -> bool {
+        if self.selection.is_none() {
+            return false;
+        }
+        let (first, last) = self.screen.char_span(at.row, at.col);
+        selection_contains(self.selection, at.row, first)
+            || selection_contains(self.selection, at.row, last)
     }
 
     fn push_cell_chrome(&self, out: &mut InstanceBuffers, at: &CellRef<'_>) -> [f32; 4] {
@@ -560,8 +598,7 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
         // underline yields its slot to the link underline and the cursor
         // marker.
         if !colors.is_bidi {
-            let suppress_underline =
-                at.cell.link.is_some() || self.cursor.cell == Some((at.row, at.col));
+            let suppress_underline = at.cell.link.is_some() || self.cursor.covers(at.row, at.col);
             self.push_cell_decorations(&mut out.deco, at, &colors, suppress_underline);
         }
         colors.fg
@@ -569,10 +606,11 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
 
     fn apply_cursor_style(
         &self,
-        origin: [f32; 2],
+        at: &CellRef<'_>,
         fg_color: &mut [f32; 4],
         bg_color: &mut [f32; 4],
     ) -> Option<BgInstance> {
+        let origin = self.origin(at);
         let original_bg = *bg_color;
         let cursor_color = self.theme.cursor.unwrap_or(*fg_color);
         match self.cursor.style {
@@ -592,6 +630,7 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
                 size_px: [self.cw, CURSOR_MARKER_PX],
                 color: cursor_color,
             }),
+            CursorStyle::Bar if self.cursor.cell.is_some_and(|(_, first)| first != at.col) => None,
             CursorStyle::Bar => Some(BgInstance {
                 origin_px: origin,
                 size_px: [CURSOR_MARKER_PX, self.ch],
@@ -632,35 +671,21 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
             scaled_ascent,
         );
         let origin = self.origin(at);
-        let mut pen = 0.0f32;
-        for cg in glyphs {
-            let key = base_sizing.with_font_id(cg.font_id as usize);
-            if let Some(slot) = self
-                .atlas
-                .glyph_id_slot(cg.glyph_id, self.metrics.height, key)
-            {
-                // `slot.offset_px` already comes from the scaled raster, so
-                // it is not re-scaled. `mul_add(scale, base)` keeps the
-                // default path (`scale == 1`) byte-identical to `b + x`.
-                let x_base = origin[0] + block_shift[0] + pen;
-                let gx = cg.x_offset_px.mul_add(glyph_scale, x_base) + slot.offset_px[0] as f32;
-                // swash reports GPOS y in font space (y-up); screen space
-                // is y-down.
-                let y_base = origin[1] + block_shift[1] + scaled_ascent - slot.offset_px[1] as f32;
-                let gy = cg.y_offset_px.mul_add(-glyph_scale, y_base);
-                out.fg.push(FgInstance {
-                    origin_px: [gx, gy],
-                    size_px: [slot.size_px[0] as f32, slot.size_px[1] as f32],
-                    uv_min: slot.uv_min,
-                    uv_max: slot.uv_max,
-                    is_color: if slot.is_color { 1.0 } else { 0.0 },
-                    _pad: [0.0; 3],
-                    color: fg_color,
-                });
-            }
-            // Advance on a miss too, so later glyphs keep their pen.
-            pen = cg.advance_px.mul_add(glyph_scale, pen);
-        }
+        push_cluster_glyphs(
+            self.atlas,
+            self.metrics.height,
+            ClusterPen {
+                glyphs,
+                base_sizing,
+                glyph_scale,
+                origin: [
+                    origin[0] + block_shift[0],
+                    origin[1] + block_shift[1] + scaled_ascent,
+                ],
+                color: fg_color,
+            },
+            &mut out.fg,
+        );
     }
 
     /// Top/Left needs no shift: the early-out keeps default-sized
@@ -1095,29 +1120,21 @@ fn cell_contains_bidi_override(grapheme: Grapheme, screen: &ScreenBuffer) -> boo
 /// `extend_preedit_instances` so the skipped span matches the painted
 /// span (`preedit_span_matches_painted_extent` pins the two).
 pub fn preedit_covered_cols(overlay: &PreeditOverlay, grid_cols: u16) -> Option<PreeditSpan> {
-    if overlay.text.is_empty() {
-        return None;
-    }
     let (row, start) = overlay.anchor;
-    let mut col = start;
-    for c in overlay.text.chars() {
-        if col >= grid_cols {
-            break;
-        }
-        let width_cells = char_cell_width(c).max(1);
-        let span_cells = u16::from(width_cells).min(grid_cols - col);
-        col = col.saturating_add(span_cells);
-    }
-    (col > start).then_some(PreeditSpan {
+    let col = overlay_cells(&overlay.text, start, grid_cols)
+        .last()?
+        .col_end();
+    Some(PreeditSpan {
         row,
         col_start: start,
         col_end: col,
     })
 }
 
-/// Stops at the row's right edge: pre-edit panels stay on one line in
-/// every platform IME. Cells whose glyph misses the atlas still get bg
-/// + underline; `populate_chars` arms the next frame.
+/// Stops before the first cluster that does not fit the row: pre-edit
+/// panels stay on one line in every platform IME. Cells whose glyph
+/// misses the atlas still get bg + underline; the renderer primes the
+/// overlay text for the next frame.
 pub fn extend_preedit_instances<A: AtlasView>(
     overlay: &PreeditOverlay,
     metrics: CellMetrics,
@@ -1126,38 +1143,25 @@ pub fn extend_preedit_instances<A: AtlasView>(
     atlas: &A,
     out: &mut InstanceBuffers,
 ) {
-    if overlay.text.is_empty() {
-        return;
-    }
-    let (row, mut col) = overlay.anchor;
+    let (row, start) = overlay.anchor;
     if row >= grid_rows {
         return;
     }
     let cw = metrics.width as f32;
     let ch = metrics.height as f32;
-    let ascent = f32::from(u16::try_from(metrics.ascent).unwrap_or(u16::MAX));
     // Mozc / fcitx / iBus surface an active segment on multi-segment
     // compositions.
     let active_range = overlay.cursor.filter(|(s, e)| e > s);
-    let mut byte_offset = 0usize;
-    for c in overlay.text.chars() {
-        let width_cells = char_cell_width(c).max(1);
-        if col >= grid_cols {
-            break;
-        }
-        let span_cells = u16::from(width_cells).min(grid_cols - col);
-        let origin = [f32::from(col) * cw, f32::from(row) * ch];
-        let span_px = [cw * f32::from(span_cells), ch];
-        let char_byte_len = c.len_utf8();
-        let underline_px = if active_range.is_some_and(|(s, e)| {
-            let char_start = byte_offset;
-            let char_end = byte_offset + char_byte_len;
-            char_start < e && char_end > s
-        }) {
-            PREEDIT_ACTIVE_UNDERLINE_PX
-        } else {
-            PREEDIT_UNDERLINE_PX
-        };
+    let first_glyph = out.fg.len();
+    for cell in overlay_cells(&overlay.text, start, grid_cols) {
+        let origin = [f32::from(cell.col) * cw, f32::from(row) * ch];
+        let span_px = [cw * f32::from(cell.width), ch];
+        let underline_px =
+            if active_range.is_some_and(|(s, e)| cell.bytes.start < e && cell.bytes.end > s) {
+                PREEDIT_ACTIVE_UNDERLINE_PX
+            } else {
+                PREEDIT_UNDERLINE_PX
+            };
         out.bg.push(BgInstance {
             origin_px: origin,
             size_px: span_px,
@@ -1168,24 +1172,147 @@ pub fn extend_preedit_instances<A: AtlasView>(
             size_px: [span_px[0], underline_px],
             color: theme_default_fg(),
         });
-        byte_offset += char_byte_len;
-        // Pre-edit has no OSC 66 surface, so the default sizing key.
-        if let Some(slot) = atlas.slot(c, metrics.height, SizingKey::default()) {
-            let draw_origin = [
+        push_overlay_glyphs(
+            atlas,
+            metrics,
+            &overlay.text[cell.bytes],
+            origin,
+            &mut out.fg,
+        );
+    }
+    clip_fg_right_of(&mut out.fg, first_glyph, f32::from(grid_cols) * cw);
+}
+
+/// One cell of overlay text placed on the grid.
+struct OverlayCell {
+    bytes: std::ops::Range<usize>,
+    col: u16,
+    /// Columns drawn: the cluster's width, or fewer when the row's right
+    /// edge clips it.
+    width: u8,
+    clipped: bool,
+}
+
+impl OverlayCell {
+    fn col_end(&self) -> u16 {
+        self.col + u16::from(self.width)
+    }
+}
+
+/// Lays `text` out from `start` the way the grid would print it. A wide
+/// cluster reaching past `grid_cols` is clipped to the columns left and
+/// ends the walk: shown in part rather than wrapped, which would lie
+/// about where the committed text lands, or dropped.
+fn overlay_cells(text: &str, start: u16, grid_cols: u16) -> impl Iterator<Item = OverlayCell> {
+    let mut col = start;
+    felis_grid::text_cells(text).map_while(move |(bytes, natural)| {
+        let left = grid_cols.checked_sub(col).filter(|&left| left > 0)?;
+        let width = u8::try_from(left).map_or(natural, |left| natural.min(left));
+        let cell = OverlayCell {
+            bytes,
+            col,
+            width,
+            clipped: width < natural,
+        };
+        col = if cell.clipped {
+            grid_cols
+        } else {
+            cell.col_end()
+        };
+        Some(cell)
+    })
+}
+
+/// Pre-edit and the bars have no OSC 66 surface, so every glyph takes
+/// the default sizing key. A cluster draws its shaped glyphs, or its
+/// base char before the renderer has shaped it.
+fn push_overlay_glyphs<A: AtlasView>(
+    atlas: &A,
+    metrics: CellMetrics,
+    cluster: &str,
+    origin: [f32; 2],
+    out: &mut Vec<FgInstance>,
+) {
+    let ascent = f32::from(u16::try_from(metrics.ascent).unwrap_or(u16::MAX));
+    let mut chars = cluster.chars();
+    let Some(base) = chars.next() else {
+        return;
+    };
+    if chars.next().is_some()
+        && let Some(glyphs) = atlas.overlay_cluster(cluster).filter(|g| !g.is_empty())
+    {
+        push_cluster_glyphs(
+            atlas,
+            metrics.height,
+            ClusterPen {
+                glyphs,
+                base_sizing: SizingKey::default(),
+                glyph_scale: 1.0,
+                origin: [origin[0], origin[1] + ascent],
+                color: theme_default_fg(),
+            },
+            out,
+        );
+        return;
+    }
+    if let Some(slot) = atlas.slot(base, metrics.height, SizingKey::default()) {
+        out.push(FgInstance {
+            origin_px: [
                 origin[0] + slot.offset_px[0] as f32,
                 origin[1] + ascent - slot.offset_px[1] as f32,
-            ];
-            out.fg.push(FgInstance {
-                origin_px: draw_origin,
+            ],
+            size_px: [slot.size_px[0] as f32, slot.size_px[1] as f32],
+            uv_min: slot.uv_min,
+            uv_max: slot.uv_max,
+            is_color: if slot.is_color { 1.0 } else { 0.0 },
+            _pad: [0.0; 3],
+            color: theme_default_fg(),
+        });
+    }
+}
+
+/// A shaped cluster's glyphs and where its pen starts: `origin` is the
+/// left edge on the baseline.
+#[derive(Clone, Copy)]
+struct ClusterPen<'g> {
+    glyphs: &'g [crate::glyphs::ClusterGlyph],
+    base_sizing: SizingKey,
+    glyph_scale: f32,
+    origin: [f32; 2],
+    color: [f32; 4],
+}
+
+fn push_cluster_glyphs<A: AtlasView>(
+    atlas: &A,
+    cell_height: u32,
+    pen: ClusterPen<'_>,
+    out: &mut Vec<FgInstance>,
+) {
+    let mut x = 0.0f32;
+    for cg in pen.glyphs {
+        let key = pen.base_sizing.with_font_id(cg.font_id as usize);
+        if let Some(slot) = atlas.glyph_id_slot(cg.glyph_id, cell_height, key) {
+            // `slot.offset_px` already comes from the scaled raster, so
+            // it is not re-scaled. `mul_add(scale, base)` keeps the
+            // default path (`scale == 1`) byte-identical to `b + x`.
+            let x_base = pen.origin[0] + x;
+            let gx = cg.x_offset_px.mul_add(pen.glyph_scale, x_base) + slot.offset_px[0] as f32;
+            // swash reports GPOS y in font space (y-up); screen space
+            // is y-down.
+            let y_base = pen.origin[1] - slot.offset_px[1] as f32;
+            let gy = cg.y_offset_px.mul_add(-pen.glyph_scale, y_base);
+            out.push(FgInstance {
+                origin_px: [gx, gy],
                 size_px: [slot.size_px[0] as f32, slot.size_px[1] as f32],
                 uv_min: slot.uv_min,
                 uv_max: slot.uv_max,
                 is_color: if slot.is_color { 1.0 } else { 0.0 },
                 _pad: [0.0; 3],
-                color: theme_default_fg(),
+                color: pen.color,
             });
         }
-        col = col.saturating_add(span_cells);
+        // Advance on a miss too, so later glyphs keep their pen.
+        x = cg.advance_px.mul_add(pen.glyph_scale, x);
     }
 }
 
@@ -1323,35 +1450,51 @@ pub fn extend_link_preview_instances<A: AtlasView>(
 /// runs (`docs/reference/protocols/kitty-text-sizing.md`), sharing the foreground pass with chrome.
 pub fn clip_cell_instances_above(out: &mut InstanceBuffers, max_y: f32) {
     out.bg.retain_mut(|quad| {
-        clip_height_above(quad.origin_px[1], &mut quad.size_px[1], max_y).is_some()
+        clip_extent_at(quad.origin_px[1], &mut quad.size_px[1], max_y).is_some()
     });
     out.fg.retain_mut(|quad| {
-        let Some(kept) = clip_height_above(quad.origin_px[1], &mut quad.size_px[1], max_y) else {
+        let Some(kept) = clip_extent_at(quad.origin_px[1], &mut quad.size_px[1], max_y) else {
             return false;
         };
         quad.uv_max[1] = (quad.uv_max[1] - quad.uv_min[1]).mul_add(kept, quad.uv_min[1]);
         true
     });
     out.deco.retain_mut(|quad| {
-        clip_height_above(quad.origin_px[1], &mut quad.size_px[1], max_y).is_some()
+        clip_extent_at(quad.origin_px[1], &mut quad.size_px[1], max_y).is_some()
     });
 }
 
-/// Shrinks `height` so the quad ends at `max_y`, reporting the fraction
-/// of it that survived, or `None` when nothing does.
-fn clip_height_above(origin_y: f32, height: &mut f32, max_y: f32) -> Option<f32> {
-    if *height <= 0.0 {
+/// Cuts the glyph quads from `from` on at `max_x`, the window's right
+/// edge, so overlay text never draws past it.
+fn clip_fg_right_of(quads: &mut Vec<FgInstance>, from: usize, max_x: f32) {
+    let mut i = from;
+    while i < quads.len() {
+        let quad = &mut quads[i];
+        let Some(kept) = clip_extent_at(quad.origin_px[0], &mut quad.size_px[0], max_x) else {
+            quads.remove(i);
+            continue;
+        };
+        quad.uv_max[0] = (quad.uv_max[0] - quad.uv_min[0]).mul_add(kept, quad.uv_min[0]);
+        i += 1;
+    }
+}
+
+/// Shrinks `extent`, along one axis, so the quad ends at `max`,
+/// reporting the fraction of it that survived, or `None` when nothing
+/// does.
+fn clip_extent_at(origin: f32, extent: &mut f32, max: f32) -> Option<f32> {
+    if *extent <= 0.0 {
         return None;
     }
-    if origin_y + *height <= max_y {
+    if origin + *extent <= max {
         return Some(1.0);
     }
-    let visible = max_y - origin_y;
+    let visible = max - origin;
     if visible <= 0.0 {
         return None;
     }
-    let kept = visible / *height;
-    *height = visible;
+    let kept = visible / *extent;
+    *extent = visible;
     Some(kept)
 }
 
@@ -1362,7 +1505,7 @@ fn clip_height_above(origin_y: f32, height: &mut f32, max_y: f32) -> Option<f32>
 /// the tail is simply not sampled.
 #[must_use]
 pub fn clip_img_quad_above(mut quad: ImgInstance, max_y: f32) -> Option<ImgInstance> {
-    let kept = clip_height_above(quad.origin_px[1], &mut quad.size_px[1], max_y)?;
+    let kept = clip_extent_at(quad.origin_px[1], &mut quad.size_px[1], max_y)?;
     quad.uv_max[1] = (quad.uv_max[1] - quad.uv_min[1]).mul_add(kept, quad.uv_min[1]);
     Some(quad)
 }
@@ -1378,28 +1521,17 @@ pub const BAR_ELLIPSIS: char = '…';
 /// Measured in cells rather than chars to handle wide glyphs, ensuring the ellipsis occupies
 /// a full cell rather than half of a two-cell character.
 fn fit_bar_text_to_cells(text: &str, cols: u16) -> Cow<'_, str> {
-    let budget = u32::from(cols);
-    let mut width: u32 = 0;
-    for c in text.chars() {
-        width += u32::from(char_cell_width(c).max(1));
-        if width > budget {
-            break;
-        }
-    }
-    if width <= budget {
+    let width: u32 = felis_grid::text_cells(text)
+        .map(|(_, w)| u32::from(w))
+        .sum();
+    if width <= u32::from(cols) {
         return Cow::Borrowed(text);
     }
-    let head_budget = budget.saturating_sub(1);
-    let mut used: u32 = 0;
-    let mut head = String::new();
-    for c in text.chars() {
-        let w = u32::from(char_cell_width(c).max(1));
-        if used + w > head_budget {
-            break;
-        }
-        head.push(c);
-        used += w;
-    }
+    let head_end = overlay_cells(text, 0, cols.saturating_sub(1))
+        .take_while(|cell| !cell.clipped)
+        .last()
+        .map_or(0, |cell| cell.bytes.end);
+    let mut head = text[..head_end].to_owned();
     head.push(BAR_ELLIPSIS);
     Cow::Owned(head)
 }
@@ -1490,7 +1622,6 @@ fn push_bottom_bar<A: AtlasView>(
 ) {
     let cw = metrics.width as f32;
     let ch = metrics.height as f32;
-    let ascent = f32::from(u16::try_from(metrics.ascent).unwrap_or(u16::MAX));
     let bar_row = grid_rows - 1;
     let bar_origin_y = f32::from(bar_row) * ch;
     out.bg.push(BgInstance {
@@ -1499,33 +1630,14 @@ fn push_bottom_bar<A: AtlasView>(
         color: bar_bg,
     });
 
-    let mut col: u16 = 0;
-    for c in label.chars() {
-        if col >= grid_cols {
-            break;
-        }
-        let width_cells = char_cell_width(c).max(1);
-        let span_cells = u16::from(width_cells).min(grid_cols - col);
-        // Whitespace advances the column without an fg emission, like
-        // the cell pass's atlas-miss handling.
-        if let Some(slot) = atlas.slot(c, metrics.height, SizingKey::default()) {
-            let origin_x = f32::from(col) * cw;
-            let draw_origin = [
-                origin_x + slot.offset_px[0] as f32,
-                bar_origin_y + ascent - slot.offset_px[1] as f32,
-            ];
-            out.fg.push(FgInstance {
-                origin_px: draw_origin,
-                size_px: [slot.size_px[0] as f32, slot.size_px[1] as f32],
-                uv_min: slot.uv_min,
-                uv_max: slot.uv_max,
-                is_color: if slot.is_color { 1.0 } else { 0.0 },
-                _pad: [0.0; 3],
-                color: theme_default_fg(),
-            });
-        }
-        col = col.saturating_add(span_cells);
+    // Whitespace advances the column without an fg emission, like the
+    // cell pass's atlas-miss handling.
+    let first_glyph = out.fg.len();
+    for cell in overlay_cells(label, 0, grid_cols) {
+        let origin = [f32::from(cell.col) * cw, bar_origin_y];
+        push_overlay_glyphs(atlas, metrics, &label[cell.bytes], origin, &mut out.fg);
     }
+    clip_fg_right_of(&mut out.fg, first_glyph, f32::from(grid_cols) * cw);
 }
 
 /// The XOR makes `?5` compose with SGR 7 the way every modern terminal
@@ -1604,6 +1716,7 @@ mod tests {
     struct MockAtlas {
         map: HashMap<char, GlyphSlot>,
         gid_map: HashMap<felis_shaping::GlyphId, GlyphSlot>,
+        clusters: HashMap<String, Vec<crate::glyphs::ClusterGlyph>>,
     }
 
     impl MockAtlas {
@@ -1615,6 +1728,7 @@ mod tests {
             Self {
                 map,
                 gid_map: HashMap::new(),
+                clusters: HashMap::new(),
             }
         }
     }
@@ -1631,6 +1745,10 @@ mod tests {
             _sizing: SizingKey,
         ) -> Option<GlyphSlot> {
             self.gid_map.get(&glyph_id).copied()
+        }
+
+        fn overlay_cluster(&self, text: &str) -> Option<&[crate::glyphs::ClusterGlyph]> {
+            self.clusters.get(text).map(Vec::as_slice)
         }
     }
 
@@ -2170,6 +2288,7 @@ mod tests {
         let atlas = MockAtlas {
             map: atlas_map,
             gid_map: HashMap::new(),
+            clusters: HashMap::new(),
         };
         let g = drive(1, 2, b"AB");
         let buffers = build_instances(g.screen(), metrics(), &Theme::default(), &atlas);
@@ -3084,6 +3203,7 @@ mod tests {
         let atlas = MockAtlas {
             map: HashMap::new(),
             gid_map: HashMap::new(),
+            clusters: HashMap::new(),
         };
         extend_preedit_instances(&overlay, metrics(), 1, 5, &atlas, &mut out);
         assert_eq!(out.bg.len(), 2, "bg + underline survive an atlas miss");
@@ -3748,9 +3868,8 @@ mod tests {
             cols in 1u16..40,
         ) {
             let fitted = fit_bar_text_to_cells(&text, cols);
-            let width: u32 = fitted
-                .chars()
-                .map(|c| u32::from(char_cell_width(c).max(1)))
+            let width: u32 = felis_grid::text_cells(&fitted)
+                .map(|(_, w)| u32::from(w))
                 .sum();
             proptest::prop_assert!(
                 width <= u32::from(cols),
@@ -3791,6 +3910,274 @@ mod tests {
                     proptest::prop_assert!(clipped.uv_max[1] >= quad.uv_min[1]);
                 }
             }
+        }
+    }
+
+    /// The per-cell background quads, without the cursor or link markers
+    /// pushed between them.
+    fn cell_bgs(buffers: &InstanceBuffers) -> Vec<[f32; 4]> {
+        let m = metrics();
+        buffers
+            .bg
+            .iter()
+            .filter(|b| b.size_px == [m.width as f32, m.height as f32])
+            .map(|b| b.color)
+            .collect()
+    }
+
+    fn fg_in_col(buffers: &InstanceBuffers, col: u16) -> Option<&FgInstance> {
+        let cw = metrics().width as f32;
+        let left = f32::from(col) * cw;
+        buffers
+            .fg
+            .iter()
+            .find(|q| q.origin_px[0] >= left && q.origin_px[0] < left + cw)
+    }
+
+    fn build_with_selection(screen: &ScreenBuffer, range: SelectionRange) -> InstanceBuffers {
+        let theme = Theme::default();
+        let atlas = MockAtlas::full(slot());
+        let mut buffers = InstanceBuffers::default();
+        CellPainter::new(
+            screen,
+            metrics(),
+            &ResolvedTheme::new(&theme),
+            &atlas,
+            &crate::glyphs::ShapeFrame::empty(),
+        )
+        .with_cursor_visible(true)
+        .with_selection(Some(range))
+        .with_viewport(0, u32::from(screen.rows()))
+        .extend_instances(&mut buffers);
+        buffers
+    }
+
+    #[test]
+    fn block_cursor_on_a_wide_character_covers_both_halves() {
+        let theme = Theme::default();
+        let mut atlas = MockAtlas::full(slot());
+        atlas.map.insert('字', slot());
+        // Addressed onto the lead, then onto the Spacer.
+        for to_col in [b"\x1b[2G", b"\x1b[3G"] {
+            let g = drive(1, 6, &["a字b".as_bytes(), to_col].concat());
+            let buffers = build_instances(g.screen(), metrics(), &theme, &atlas);
+            let bgs = cell_bgs(&buffers);
+            assert_eq!(bgs[0], theme.bg);
+            assert_eq!(bgs[1], theme.fg, "lead under the cursor");
+            assert_eq!(bgs[2], theme.fg, "Spacer under the cursor");
+            assert_eq!(bgs[3], theme.bg);
+            let glyph = fg_in_col(&buffers, 1).expect("字 draws");
+            assert_eq!(glyph.color, theme.bg, "the glyph takes the swapped fg");
+        }
+    }
+
+    #[test]
+    fn underline_cursor_on_a_wide_character_spans_both_halves() {
+        let g = drive(1, 6, "\x1b[4 qa字b\x1b[3G".as_bytes());
+        let atlas = MockAtlas::full(slot());
+        let buffers = build_instances(g.screen(), metrics(), &Theme::default(), &atlas);
+        let cw = metrics().width as f32;
+        let xs: Vec<f32> = buffers
+            .bg
+            .iter()
+            .filter(|b| b.size_px == [cw, CURSOR_MARKER_PX])
+            .map(|b| b.origin_px[0])
+            .collect();
+        assert_eq!(xs, [cw, 2.0 * cw]);
+    }
+
+    #[test]
+    fn bar_cursor_on_a_wide_character_sits_at_its_left_edge() {
+        let g = drive(1, 6, "\x1b[6 qa字b\x1b[3G".as_bytes());
+        let atlas = MockAtlas::full(slot());
+        let buffers = build_instances(g.screen(), metrics(), &Theme::default(), &atlas);
+        let xs: Vec<f32> = buffers
+            .bg
+            .iter()
+            .filter(|b| b.size_px[0] == CURSOR_MARKER_PX)
+            .map(|b| b.origin_px[0])
+            .collect();
+        assert_eq!(xs, [metrics().width as f32]);
+    }
+
+    #[test]
+    fn a_selection_touching_either_half_highlights_the_whole_character() {
+        let g = drive(1, 6, "\x1b[?25la字b".as_bytes());
+        let theme = Theme::default();
+        let ends_on_lead = build_with_selection(
+            g.screen(),
+            SelectionRange {
+                start: (0, 0),
+                end: (0, 1),
+                rectangle: false,
+            },
+        );
+        assert_eq!(
+            cell_bgs(&ends_on_lead)[..4],
+            [SELECTION_BG, SELECTION_BG, SELECTION_BG, theme.bg]
+        );
+        let starts_on_spacer = build_with_selection(
+            g.screen(),
+            SelectionRange {
+                start: (0, 2),
+                end: (0, 3),
+                rectangle: false,
+            },
+        );
+        assert_eq!(
+            cell_bgs(&starts_on_spacer)[..5],
+            [theme.bg, SELECTION_BG, SELECTION_BG, SELECTION_BG, theme.bg]
+        );
+    }
+
+    #[test]
+    fn a_rectangle_selection_widens_per_row_to_the_characters_it_touches() {
+        let g = drive(2, 4, "\x1b[?25la字b\r\n字cd".as_bytes());
+        let theme = Theme::default();
+        let buffers = build_with_selection(
+            g.screen(),
+            SelectionRange {
+                start: (0, 1),
+                end: (1, 1),
+                rectangle: true,
+            },
+        );
+        let bgs = cell_bgs(&buffers);
+        assert_eq!(bgs[..4], [theme.bg, SELECTION_BG, SELECTION_BG, theme.bg]);
+        assert_eq!(bgs[4..], [SELECTION_BG, SELECTION_BG, theme.bg, theme.bg]);
+    }
+
+    #[test]
+    fn a_wide_cluster_carrying_a_bidi_override_is_marked_on_both_halves() {
+        let g = drive(1, 6, "\x1b[?25la字\u{202E}b".as_bytes());
+        let atlas = MockAtlas::full(slot());
+        let buffers = build_instances(g.screen(), metrics(), &Theme::default(), &atlas);
+        let bgs = cell_bgs(&buffers);
+        assert_eq!(bgs[1], BIDI_MARKER_BG);
+        assert_eq!(bgs[2], BIDI_MARKER_BG);
+        assert_ne!(bgs[3], BIDI_MARKER_BG);
+    }
+
+    #[test]
+    fn a_preedit_over_the_spacer_hides_the_lead_glyph_but_keeps_its_background() {
+        let g = drive(1, 6, "\x1b[?25la\x1b[41m字\x1b[mb".as_bytes());
+        let theme = Theme::default();
+        let atlas = MockAtlas::full(slot());
+        let mut buffers = InstanceBuffers::default();
+        CellPainter::new(
+            g.screen(),
+            metrics(),
+            &ResolvedTheme::new(&theme),
+            &atlas,
+            &crate::glyphs::ShapeFrame::empty(),
+        )
+        .with_cursor_visible(true)
+        .with_viewport(0, u32::from(g.rows()))
+        .with_preedit(Some(PreeditSpan {
+            row: 0,
+            col_start: 2,
+            col_end: 4,
+        }))
+        .extend_instances(&mut buffers);
+        assert!(fg_in_col(&buffers, 0).is_some(), "a draws");
+        assert!(
+            fg_in_col(&buffers, 1).is_none(),
+            "字 would ink under the overlay"
+        );
+        let cw = metrics().width as f32;
+        assert!(
+            buffers
+                .bg
+                .iter()
+                .any(|b| b.origin_px[0] == cw && b.size_px[0] == cw && b.color != theme.bg),
+            "the lead keeps its red background"
+        );
+    }
+
+    fn preedit(text: &str, col: u16) -> PreeditOverlay {
+        PreeditOverlay {
+            anchor: (0, col),
+            text: text.to_owned(),
+            cursor: None,
+        }
+    }
+
+    #[test]
+    fn preedit_gives_a_cluster_the_cells_the_grid_gives_it() {
+        for (text, cells) in [
+            ("e\u{301}x", 2),
+            ("❤\u{FE0F}", 2),
+            ("👍🏻", 2),
+            ("🇯🇵", 2),
+            ("a字", 3),
+        ] {
+            let span = preedit_covered_cols(&preedit(text, 1), 20).expect("non-empty");
+            assert_eq!(span.col_end - span.col_start, cells, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn preedit_draws_a_cluster_with_its_shaped_glyphs() {
+        let mut atlas = MockAtlas::full(slot());
+        for (id, flag) in [(1, "🇯🇵"), (2, "🇯🇲")] {
+            atlas.clusters.insert(
+                flag.to_owned(),
+                vec![crate::glyphs::ClusterGlyph {
+                    glyph_id: id,
+                    font_id: 0,
+                    advance_px: 16.0,
+                    x_offset_px: 0.0,
+                    y_offset_px: 0.0,
+                }],
+            );
+            atlas.gid_map.insert(
+                id,
+                GlyphSlot {
+                    uv_min: [f32::from(id) / 10.0, 0.0],
+                    ..slot()
+                },
+            );
+        }
+        let uv_of = |text: &str| {
+            let mut out = InstanceBuffers::default();
+            extend_preedit_instances(&preedit(text, 0), metrics(), 1, 10, &atlas, &mut out);
+            assert_eq!(out.fg.len(), 1, "{text:?} draws one shaped glyph");
+            out.fg[0].uv_min
+        };
+        assert_ne!(uv_of("🇯🇵"), uv_of("🇯🇲"));
+    }
+
+    #[test]
+    fn overlay_glyphs_never_draw_past_the_right_edge() {
+        let mut atlas = MockAtlas::full(slot());
+        let wide = GlyphSlot {
+            size_px: [14, 10],
+            ..slot()
+        };
+        atlas.map.insert('字', wide);
+        let cols = 5;
+        let edge = f32::from(cols) * metrics().width as f32;
+        let mut out = InstanceBuffers::default();
+        extend_preedit_instances(&preedit("ab字", 2), metrics(), 1, cols, &atlas, &mut out);
+        extend_search_instances(
+            &SearchOverlay {
+                label: "abcd字".to_owned(),
+                visible_hits: Vec::new(),
+            },
+            metrics(),
+            2,
+            cols,
+            true,
+            &atlas,
+            &mut out,
+        );
+        assert_eq!(
+            out.fg.len(),
+            3 + 5,
+            "each clipped 字 keeps its visible half"
+        );
+        for q in &out.fg {
+            assert!(q.origin_px[0] + q.size_px[0] <= edge, "{q:?}");
         }
     }
 }

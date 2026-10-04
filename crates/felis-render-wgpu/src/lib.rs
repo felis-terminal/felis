@@ -918,17 +918,15 @@ impl Renderer {
     /// the cell pass paints for `style`, so a bar or underline cursor
     /// trails its own thin shape.
     #[must_use]
-    pub fn cursor_rect_uv(&self, row: u16, col: u16, style: CursorStyle) -> [f32; 4] {
-        let metrics = self.glyphs.cell_metrics();
-        let (cw, ch) = (metrics.width as f32, metrics.height as f32);
+    pub fn cursor_rect_uv(&self, screen: &ScreenBuffer, row: u16, col: u16) -> [f32; 4] {
+        let [x, y, w, h] = cursor_rect_px(
+            self.glyphs.cell_metrics(),
+            self.content_origin_px,
+            row,
+            screen.char_span(row, col),
+            screen.cursor_style(),
+        );
         let (vw, vh) = (self.width as f32, self.height as f32);
-        let x = f32::from(col).mul_add(cw, self.content_origin_px[0]);
-        let y = f32::from(row).mul_add(ch, self.content_origin_px[1]);
-        let (x, y, w, h) = match style {
-            CursorStyle::Block => (x, y, cw, ch),
-            CursorStyle::Underline => (x, y + ch - CURSOR_MARKER_PX, cw, CURSOR_MARKER_PX),
-            CursorStyle::Bar => (x, y, CURSOR_MARKER_PX, ch),
-        };
         [x / vw, y / vh, w / vw, h / vh]
     }
 
@@ -1264,24 +1262,24 @@ impl Renderer {
     /// including [`BAR_ELLIPSIS`], which the preview bar synthesizes at
     /// paint time and no overlay's own text carries.
     fn populate_overlay_glyphs(&mut self) {
-        let mut chars: Vec<char> = Vec::new();
-        if let Some(o) = self.preedit.as_ref() {
-            chars.extend(o.text.chars());
+        let texts = [
+            self.preedit.as_ref().map(|o| o.text.as_str()),
+            self.search.as_ref().map(|o| o.label.as_str()),
+            self.confirm.as_ref().map(|o| o.label.as_str()),
+            self.link_preview.as_ref().map(|o| o.text.as_str()),
+        ];
+        self.glyphs.trim_overlay_clusters();
+        for text in texts.into_iter().flatten().filter(|t| !t.is_empty()) {
+            self.glyphs
+                .populate_overlay_text(text, &mut self.shaper, &mut self.uploader);
         }
-        if let Some(o) = self.search.as_ref() {
-            chars.extend(o.label.chars());
-        }
-        if let Some(o) = self.confirm.as_ref() {
-            chars.extend(o.label.chars());
-        }
-        if let Some(o) = self.link_preview.as_ref()
-            && !o.text.is_empty()
+        if self
+            .link_preview
+            .as_ref()
+            .is_some_and(|o| !o.text.is_empty())
         {
-            chars.extend(o.text.chars());
-            chars.push(BAR_ELLIPSIS);
-        }
-        if !chars.is_empty() {
-            self.glyphs.populate_chars(chars, &mut self.uploader);
+            self.glyphs
+                .populate_chars([BAR_ELLIPSIS], &mut self.uploader);
         }
     }
 
@@ -2184,6 +2182,26 @@ fn build_pipeline(
     })
 }
 
+/// `(x, y, width, height)` in pixels of the cursor the cell pass paints
+/// over the columns `span` covers.
+fn cursor_rect_px(
+    metrics: CellMetrics,
+    origin_px: [f32; 2],
+    row: u16,
+    (first, last): (u16, u16),
+    style: CursorStyle,
+) -> [f32; 4] {
+    let (cw, ch) = (metrics.width as f32, metrics.height as f32);
+    let x = f32::from(first).mul_add(cw, origin_px[0]);
+    let y = f32::from(row).mul_add(ch, origin_px[1]);
+    let w = f32::from(last - first + 1) * cw;
+    match style {
+        CursorStyle::Block => [x, y, w, ch],
+        CursorStyle::Underline => [x, y + ch - CURSOR_MARKER_PX, w, CURSOR_MARKER_PX],
+        CursorStyle::Bar => [x, y, CURSOR_MARKER_PX, ch],
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::float_cmp)]
@@ -2191,6 +2209,28 @@ mod tests {
     use crate::palette::{XTERM_PALETTE, srgb_to_linear_rgba};
 
     use super::*;
+
+    #[test]
+    fn cursor_rect_spans_both_columns_of_a_wide_character() {
+        let metrics = CellMetrics {
+            width: 10,
+            height: 20,
+            ascent: 16,
+        };
+        let span = (3, 4);
+        assert_eq!(
+            cursor_rect_px(metrics, [5.0, 0.0], 1, span, CursorStyle::Block),
+            [35.0, 20.0, 20.0, 20.0]
+        );
+        assert_eq!(
+            cursor_rect_px(metrics, [5.0, 0.0], 1, span, CursorStyle::Underline),
+            [35.0, 40.0 - CURSOR_MARKER_PX, 20.0, CURSOR_MARKER_PX]
+        );
+        assert_eq!(
+            cursor_rect_px(metrics, [5.0, 0.0], 1, span, CursorStyle::Bar),
+            [35.0, 20.0, CURSOR_MARKER_PX, 20.0]
+        );
+    }
 
     /// REQ-705 / REQ-1005: sides are `min(ceiling, adapter max 2D)`; a
     /// downlevel (2048) adapter clamps the image sheet and leaves the

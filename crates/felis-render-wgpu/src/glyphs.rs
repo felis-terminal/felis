@@ -89,6 +89,10 @@ pub struct GlyphIndex {
     /// Text and style suffice as keys because font, size, and features are fixed.
     /// Avoids Swash cluster-analysis and GSUB costs on every frame.
     shaped_runs: [HashMap<String, Vec<ShapedGlyph>>; 4],
+    /// Overlay clusters (pre-edit, bar labels) shaped like a grid cluster
+    /// cell. Lives here so a font, size or feature reload drops it with
+    /// the faces its glyph ids belong to.
+    overlay_clusters: HashMap<String, Vec<ClusterGlyph>>,
     pending: Vec<PendingUpload>,
     primed: HashSet<(char, SizingKey), RandomState>,
     /// Set when a whole-atlas reset fires mid-walk: the slots the walk
@@ -126,6 +130,7 @@ impl GlyphIndex {
             blank_slots: 0,
             placed_slots: 0,
             shaped_runs: std::array::from_fn(|_| HashMap::new()),
+            overlay_clusters: HashMap::new(),
             pending: Vec::new(),
             primed: HashSet::default(),
             atlas_reset_during_walk: false,
@@ -323,6 +328,53 @@ impl GlyphIndex {
         let slot = self.allocate(bitmap);
         self.insert_slot(key, slot);
         true
+    }
+
+    /// Overlay text is typed by the user, not streamed by a producer, so
+    /// a frame holds a handful of clusters at most.
+    const OVERLAY_CLUSTER_MAX: usize = 256;
+
+    /// Bounds the overlay shapes between frames, never during one: the
+    /// frame paints every cluster it primed.
+    pub(crate) fn trim_overlay_clusters(&mut self) {
+        if self.overlay_clusters.len() > Self::OVERLAY_CLUSTER_MAX {
+            self.overlay_clusters.clear();
+        }
+    }
+
+    /// Shapes `text`, one multi-scalar cluster of overlay text, as
+    /// `composite_cluster` shapes a cluster cell, and primes its glyphs.
+    pub(crate) fn ensure_overlay_cluster(&mut self, shaper: &mut Shaper, text: &str) {
+        if !self.overlay_clusters.contains_key(text) {
+            let shaping = shaper.shape_cluster(
+                &self.stack,
+                self.font_size_physical_px,
+                FontStyle::REGULAR,
+                text,
+            );
+            let font_id = u8::try_from(shaping.font_id.min(0x3F)).unwrap_or(0x3F);
+            let glyphs = shaping
+                .glyphs
+                .iter()
+                .map(|g| ClusterGlyph {
+                    glyph_id: g.glyph_id,
+                    font_id,
+                    advance_px: g.advance_px,
+                    x_offset_px: g.x_offset_px,
+                    y_offset_px: g.y_offset_px,
+                })
+                .collect();
+            self.overlay_clusters.insert(text.to_owned(), glyphs);
+        }
+        let cell_height = self.metrics.height;
+        let primes: Vec<(GlyphId, u8)> = self.overlay_clusters[text]
+            .iter()
+            .map(|g| (g.glyph_id, g.font_id))
+            .collect();
+        for (glyph_id, font_id) in primes {
+            let key = SizingKey::default().with_font_id(usize::from(font_id));
+            self.ensure_glyph_id(glyph_id, cell_height, key);
+        }
     }
 
     /// Dropping a `None` entry cannot change a frame: [`AtlasView`]
@@ -681,6 +733,10 @@ impl AtlasView for GlyphIndex {
     ) -> Option<GlyphSlot> {
         self.lookup(SlotKey::Glyph(glyph_id), cell_height_px, sizing)
     }
+
+    fn overlay_cluster(&self, text: &str) -> Option<&[ClusterGlyph]> {
+        self.overlay_clusters.get(text).map(Vec::as_slice)
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -974,6 +1030,32 @@ impl GlyphCache {
         self.flush_pending_uploads(uploader);
     }
 
+    /// For overlay text laid out by [`felis_grid::text_cells`]: a lone
+    /// scalar is primed as a char, a cluster is shaped.
+    pub(crate) fn trim_overlay_clusters(&mut self) {
+        self.index.trim_overlay_clusters();
+    }
+
+    pub(crate) fn populate_overlay_text(
+        &mut self,
+        text: &str,
+        shaper: &mut Shaper,
+        uploader: &mut TextureUploader,
+    ) {
+        let cell_height = self.index.cell_metrics().height;
+        for (range, _) in felis_grid::text_cells(text) {
+            let cluster = &text[range];
+            let mut chars = cluster.chars();
+            match (chars.next(), chars.next()) {
+                (Some(c), None) => {
+                    self.index.ensure(c, cell_height, SizingKey::default());
+                }
+                _ => self.index.ensure_overlay_cluster(shaper, cluster),
+            }
+        }
+        self.flush_pending_uploads(uploader);
+    }
+
     fn flush_pending_uploads(&mut self, uploader: &mut TextureUploader) {
         for upload in self.index.drain_pending() {
             let (texture, layout, bytes_per_row) = match &upload.pixels {
@@ -1245,6 +1327,10 @@ impl AtlasView for GlyphCache {
     ) -> Option<GlyphSlot> {
         self.index.glyph_id_slot(glyph_id, cell_height_px, sizing)
     }
+
+    fn overlay_cluster(&self, text: &str) -> Option<&[ClusterGlyph]> {
+        self.index.overlay_cluster(text)
+    }
 }
 
 #[cfg(test)]
@@ -1267,6 +1353,46 @@ mod tests {
         FontStack::new(Arc::new(
             Font::load_default().expect("system monospace font"),
         ))
+    }
+
+    #[test]
+    fn an_overlay_cluster_is_shaped_and_its_glyphs_primed() {
+        let mut idx = GlyphIndex::new(stack(), 14.0, nz(256));
+        let mut shaper = Shaper::new();
+        assert!(idx.overlay_cluster("e\u{301}").is_none());
+        idx.ensure_overlay_cluster(&mut shaper, "e\u{301}");
+        let glyphs = idx.overlay_cluster("e\u{301}").expect("shaped").to_vec();
+        assert_ne!(glyphs.len(), 0);
+        let h = idx.cell_metrics().height;
+        let base = &glyphs[0];
+        let key = SizingKey::default().with_font_id(usize::from(base.font_id));
+        assert!(
+            idx.glyph_id_slot(base.glyph_id, h, key).is_some(),
+            "base primed"
+        );
+    }
+
+    #[test]
+    fn overlay_shapes_survive_the_frame_that_primed_them() {
+        let mut idx = GlyphIndex::new(stack(), 14.0, nz(256));
+        let mut shaper = Shaper::new();
+        let clusters: Vec<String> = ('a'..='z')
+            .flat_map(|base| ('\u{300}'..='\u{30F}').map(move |mark| format!("{base}{mark}")))
+            .take(GlyphIndex::OVERLAY_CLUSTER_MAX + 50)
+            .collect();
+        idx.trim_overlay_clusters();
+        for cluster in &clusters {
+            idx.ensure_overlay_cluster(&mut shaper, cluster);
+        }
+        assert!(
+            clusters.iter().all(|c| idx.overlay_cluster(c).is_some()),
+            "a label past the bound keeps every cluster for the frame it paints"
+        );
+        idx.trim_overlay_clusters();
+        assert!(
+            idx.overlay_cluster(&clusters[0]).is_none(),
+            "bounded between frames"
+        );
     }
 
     #[test]

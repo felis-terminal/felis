@@ -95,7 +95,8 @@ single image pipeline, since they differ in when they are drawn and in nothing t
 argument for the tiers themselves, and for the atlases they sample, is in "Prior art and alternatives considered" below.
 
 There is no separate cursor pipeline: the cursor and the selection are background-layer instances, since both are
-rectangles behind text and a pipeline of their own would buy a draw call.
+rectangles behind text and a pipeline of their own would buy a draw call. Both cover a wide character's two cells
+together, from either half, or the glyph drawn across them would be half on the highlight and half off it.
 
 The cell tiers hold one fixed-size slot per grid row, so a frame writes only the byte ranges of the rows it rebuilt,
 except while the rows are packed because the slots would not fit ([damage-tracking.md](damage-tracking.md) "Client
@@ -578,10 +579,12 @@ run-shape memo are position-independent and survive a reset, so the second walk 
 It happens at most once: a second reset in one frame means the screen's distinct glyphs exceed the whole sheet, which no
 number of resets fixes, so the frame keeps its blanks, logs once, and requests a repaint.
 
-Overlay text (a chrome bar's label, the link preview and its clipping mark, the pre-edit) is primed after the grid walk,
-since a walk that resets the sheet would otherwise drop the overlay's slots and leave the bar's label absent for the
-frame. That ordering makes the overlay the one thing that can overflow _after_ the grid has its slots, so the reported
-reset is read once more after priming and drives the same bounded second walk.
+Overlay text (a chrome bar's label, the link preview and its clipping mark, the pre-edit) is laid out in the cells the
+grid would print it in, and a multi-codepoint cluster in it is shaped the way a cluster cell is, so a flag or a skin
+tone draws as itself rather than as its first codepoint. It is primed after the grid walk, since a walk that resets the
+sheet would otherwise drop the overlay's slots and leave the bar's label absent for the frame. That ordering makes the
+overlay the one thing that can overflow _after_ the grid has its slots, so the reported reset is read once more after
+priming and drives the same bounded second walk.
 
 _Revisit if_ CJK-heavy sessions show the sheets churning.
 

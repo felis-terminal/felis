@@ -195,8 +195,9 @@ The client allows IME on every window and drives it through winit 0.30, so the b
 | Linux X11     | XIM                                         |
 | Windows       | IMM32 (`Imm*`), when `SM_IMMENABLED` is set |
 
-A composition renders as an underline-styled overlay on the active row and shifts the cursor to its extent. Only the
-commit reaches the daemon, as raw UTF-8 bytes rather than key events, so no keyboard-mode encoding applies; pre-edit
+A composition renders as an underline-styled overlay on the active row, taking the cells the committed text will take,
+and shifts the cursor to its extent. A wide character that reaches past the row's right edge is cut at the edge. Only
+the commit reaches the daemon, as raw UTF-8 bytes rather than key events, so no keyboard-mode encoding applies; pre-edit
 text never crosses the wire, so the daemon's cursor stays put while a candidate is chosen.
 
 ## Mouse

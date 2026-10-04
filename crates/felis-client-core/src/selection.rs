@@ -122,6 +122,9 @@ impl Selection {
                 }
                 SelectionMode::Rectangle => (sc, ec),
             };
+            // The lead holds a wide character's text, so a range that
+            // starts on its Spacer reaches back for it.
+            let (row_start, _) = screen.char_span(row, row_start);
             let mut line = String::new();
             let mut written_len = 0;
             for col in row_start..=row_end {
@@ -310,6 +313,25 @@ mod tests {
         let mut s = Selection::new(at(0, 0));
         s.extend(at(0, 0));
         assert_eq!(s.extract_text(g.screen()), "h");
+    }
+
+    #[test]
+    fn extract_text_starting_on_a_spacer_copies_the_whole_character() {
+        let g = grid_with(1, 6, "a字b".as_bytes());
+        let mut s = Selection::new(at(0, 2));
+        s.extend(at(0, 3));
+        assert_eq!(s.extract_text(g.screen()), "字b");
+    }
+
+    #[test]
+    fn extract_text_rectangle_reaches_back_per_row_for_a_spacer_start() {
+        let g = grid_with(2, 4, "a字b\r\n字cd".as_bytes());
+        let mut s = Selection::new_rectangle(at(0, 1));
+        s.extend(at(1, 1));
+        assert_eq!(s.extract_text(g.screen()), "字\n字");
+        let mut s = Selection::new_rectangle(at(0, 2));
+        s.extend(at(1, 2));
+        assert_eq!(s.extract_text(g.screen()), "字\nc");
     }
 
     #[test]
