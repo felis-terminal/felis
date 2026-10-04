@@ -198,8 +198,12 @@ fn resolved(frame: &ShapeFrame) -> Vec<(ShapedCell, Vec<ClusterGlyph>)> {
         .cells()
         .iter()
         .map(|&cell| match cell {
-            ShapedCell::Cluster { start, len } => (
-                ShapedCell::Cluster { start: 0, len },
+            ShapedCell::Cluster { start, len, fit_px } => (
+                ShapedCell::Cluster {
+                    start: 0,
+                    len,
+                    fit_px,
+                },
                 frame.cluster_slice(start, len).to_vec(),
             ),
             cell => (cell, Vec::new()),

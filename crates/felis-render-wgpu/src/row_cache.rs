@@ -310,6 +310,16 @@ mod tests {
             None
         }
 
+        fn fitted_glyph_id_slot(
+            &self,
+            _: GlyphId,
+            _: u16,
+            _: u32,
+            _: SizingKey,
+        ) -> Option<GlyphSlot> {
+            None
+        }
+
         fn overlay_cluster(&self, _: &str) -> Option<&[crate::glyphs::ClusterGlyph]> {
             None
         }

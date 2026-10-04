@@ -319,6 +319,15 @@ One consequence is worth stating because it constrains the atlas: a composited c
 one face, a base from the primary and a mark from a fallback that covers it. The resolved face is therefore part of the
 cache key ("Cache" above), or a fallback mark and a primary base that happen to share a raw glyph id would collide.
 
+**A cluster wider than its cells shrinks to fit them.** The font, not the grid, decides how wide a cluster draws, and
+the two disagree whenever the face cannot join what the grid joined: a regional-indicator pair with no flag glyph, a ZWJ
+sequence the face does not ligate, or a skin-tone modifier on a base that takes none each draw as two full emoji in two
+cells. The grid can also give a cluster fewer cells than its glyph wants, as when it refuses a VS16 widen at the last
+column. Such a cluster fits by the single-glyph rule above: its summed advance decides whether it is fitted, its union
+ink decides how far it shrinks, and it is centred in its block. All its glyphs shrink by one factor, so a mark stays on
+its base. The block is the cells the grid gave the cluster (or OSC 66 `w`), never its base character's width, which
+undercounts a widened `❤️` and overcounts a refused one.
+
 **Sized clusters composite at scale.** A cluster carrying an OSC 66 scale rasterizes at the scaled size and scales its
 pen advances and positioning offsets by the same factor, so the marks track the scaled base rather than drifting off it.
 
@@ -327,7 +336,8 @@ ink box**, every resolved glyph's bitmap box at its baseline placement, so a mar
 whole cluster inside the block edge. Aligning only the base glyph's box is the cheaper alternative, by one atlas probe
 per glyph, and it lets a wide mark overflow the block by exactly the amount it extends past its base. Top/Left, the OSC
 66 default, takes an early-out rather than the ink formula, which is what keeps default-sized output identical to the
-path that never looks at alignment at all.
+path that never looks at alignment at all. A fitted cluster is the exception: Top/Left centres it, as a fitted glyph is
+centred.
 
 ## What happens on font change
 
@@ -348,11 +358,12 @@ speed-over-correctness choice felis's principles reject. felis uses swash: pure 
 coverage sufficient for the scripts a terminal sees, and it rasterizes too, so one crate covers both shaping and
 rendering. A rustybuzz fallback for swash's complex-script gaps is unnecessary and is not wired.
 
-**Ligatures: shape, then validate.** A general shaper does not know about cells. felis shapes a run once and checks that
-the glyph advances match `n_graphemes × cell_width`; if a ligature would overflow its cell budget it falls back to
-per-cell glyphs. Kitty and WezTerm do the same. Pre-restricting the shaper's input is hard to get right, and never
-shaping at all (Alacritty) gives up ligatures; the validation step is cheap because cost is dominated by cache hit rate,
-not shaping calls.
+**Ligatures: shape, then validate.** A general shaper does not know about cells. felis shapes a run once and checks each
+ligature's advances against `n_graphemes × cell_width`; a ligature that would overflow its cell budget falls back to
+per-cell glyphs. The budget allows a pixel per cell, because the cell width is the primary advance rounded to a pixel.
+Kitty and WezTerm do the same. Pre-restricting the shaper's input is hard to get right, and never shaping at all
+(Alacritty) gives up ligatures; the validation step is cheap because cost is dominated by cache hit rate, not shaping
+calls.
 
 **Font fallback: built from the OS, not a per-script table.** Kitty makes the per-script chain configurable; WezTerm and
 iTerm2 defer to the platform font API. felis keeps the font config to one flat chain: the user's chosen primary, then OS
