@@ -259,7 +259,7 @@ fn viewport_row_sized_cells_map_live_and_scrollback_band() {
 
 /// Kitty spec: any write into a multi-cell character erases the whole
 /// character. The struck cell is a spanned cell off the primary, so
-/// `find_sized_primary` must walk both up and left.
+/// `sized_block_at` must walk both up and left.
 #[test]
 fn printing_over_a_foreign_sized_run_erases_the_whole_block() {
     let mut p = Parser::new();
@@ -276,7 +276,7 @@ fn printing_over_a_foreign_sized_run_erases_the_whole_block() {
     assert_eq!(g.cell(1, 4).unwrap().grapheme, Grapheme::Ascii(b'X'));
 }
 
-/// `find_sized_primary` must walk to the real top-left, not assume
+/// `sized_block_at` must walk to the real top-left, not assume
 /// (0,0); a wrong primary leaves the block partly sized.
 #[test]
 fn sized_run_not_anchored_at_origin_is_fully_located_and_erased() {

@@ -14,3 +14,6 @@ cc 18898a545c90efad8253f8b5df9f8063ca46ce455abd0c8515eb2eb51bc61416 # shrinks to
 cc 898cac76dd6dd262349fa292b5e9ea076c5cbe444b32684dd62ce73e8f16720e # shrinks to rows = 5, cols = 5, alt_cols = 2, bytes = [65, 65, 10, 65]
 cc dc016543d2f28d39d60745598ff65d604d64b0813703ea3e22fd62cba7c41972 # shrinks to rows = 1, cols = 3, wider_extra = 0, taller_extra = 1, bytes = [32, 32, 32, 32, 32, 0, 32, 27, 0, 48, 128]
 cc c23adcea9b67f9011113ec1cdd312c249997ae08a24f80ff0d08ea2f8e0d17d0 # shrinks to cols = 7, ops = ["❤\u{fe0f}", "e\u{301}", "e\u{301}", "❤\u{fe0f}", "\u{1b}[1;3;1;5${"]
+cc 5061fcc2542c061c2c6761ca566eb3cb8109ebc1c5fd7709bed4a5d7b71e9c9c # shrinks to cols = 5, steps = [Bytes("\u{1b}[?1049h"), Bytes("\u{1b}[1;3H"), Bytes("e\u{301}"), Bytes("❤\u{fe0f}"), Bytes("❤\u{fe0f}"), Bytes("\u{1b}[0\"q"), Bytes("\u{1b}]66;w=2;A\u{7}"), Bytes("\u{1b}[2S"), Bytes("\u{1b}9")]
+cc 9fce65488c065c162fd2071f71b8f070231b388b8095efc19d5a6345372f2108 # shrinks to cols = 5, steps = [Bytes("\u{1b}[2;3H"), Bytes("❤\u{fe0f}"), Bytes("\u{1b}[2L"), Bytes("e\u{301}"), Bytes("1\u{fe0f}\u{20e3}"), Bytes("\u{1b}[?1J"), Bytes("\u{1b}[1;1H")]
+cc d73ab633a5b5c10d6e364d1c718468da7745a682b487d3472442a004f97092a5 # shrinks to cols = 4, steps = [Bytes("字"), Resize(7), Bytes("\u{1b}[2 A"), Bytes("\u{1b}[3@"), Bytes("\u{1b}[1P"), Bytes("\u{1b}[1'}")]

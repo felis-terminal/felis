@@ -22,6 +22,11 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
   character instead of losing neighboring text: a shell prompt that redraws an unchanged emoji keeps it, and ECH,
   DECERA, DECFRA, DECSEL, DECSED and OSC 66 no longer leave half a glyph behind (for a plain wide `字` too). REP after a
   cluster repeats the whole cluster instead of its base character.
+- Inserting or deleting characters or columns (ICH, DCH, insert mode, SL/SR, DECIC/DECDC, DECBI/DECFI), scrolling inside
+  left/right margins, DECCRA, and shrinking the alternate screen no longer split a wide character into an orphaned half
+  that the next edit misplaces, and an emoji that asks for two cells at the right margin no longer spills past it.
+  Resizing no longer shifts a line right after an emoji that could not widen, and DECSED, SR and DECBI/DECFI no longer
+  reveal text a scroll had already removed.
 - A glyph that a fallback face draws wider than its cells (an East Asian Ambiguous `※` from a CJK font, or a
   text-presentation emoji such as `☺` from the color-emoji font) is shrunk to fit and centred in its cell, instead of
   overlapping the next character.
