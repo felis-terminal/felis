@@ -972,6 +972,7 @@ dependencies = [
  "serde_json",
  "simdutf8",
  "thiserror 2.0.21",
+ "unicode-segmentation",
  "unicode-width",
 ]
 

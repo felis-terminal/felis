@@ -30,6 +30,9 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 - A glyph that a fallback face draws wider than its cells (an East Asian Ambiguous `※` from a CJK font, or a
   text-presentation emoji such as `☺` from the color-emoji font) is shrunk to fit and centred in its cell, instead of
   overlapping the next character.
+- A zero-width joiner between characters that are not both emoji (`👩‍字`, `क‍ख‍ग`, `x‍👍`) no longer collapses them
+  into one two-cell glyph: they take the cells the application counts (4, 3 and 3), so the rest of the line stays where
+  the application put it.
 - Querying grapheme cluster mode (`CSI ? 2027 $ p`) reports it permanently set (`3`) rather than set (`1`), so an
   application can tell that turning it off has no effect.
 - Pressing a bare modifier (Ctrl, Shift, Alt, Cmd) or releasing a key no longer returns a scrolled-back view to the live

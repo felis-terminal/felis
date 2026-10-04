@@ -210,6 +210,7 @@ mod sink;
 mod style_table;
 mod table_gc;
 mod text_sizing;
+mod uax29;
 pub mod wire;
 mod xtgettcap;
 
@@ -1748,7 +1749,7 @@ impl Grid {
         if rows == self.screen.rows && cols == self.screen.cols {
             return;
         }
-        self.pending_bidi = editing::PendingBidi::default();
+        self.pending_bidi.discard();
         // Read before the screen moves: an implicit full-screen region
         // must re-track the new edges, and the test is against the old
         // geometry. Otherwise a 24→82 grow leaves the bottom margin at
@@ -1819,7 +1820,7 @@ impl Grid {
             self.resize(rows, cols);
             return None;
         }
-        self.pending_bidi = editing::PendingBidi::default();
+        self.pending_bidi.discard();
 
         // Read before any field changes; see `resize`.
         let was_full_vertical =

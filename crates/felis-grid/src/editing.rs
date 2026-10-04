@@ -8,12 +8,28 @@ use super::{
     known_modifiable_dec_mode, permanently_reset_ansi, permanently_reset_dec_mode,
     permanently_set_dec_mode, xtgettcap_value,
 };
+use crate::uax29::{is_extended_pictographic, is_grapheme_extend};
 
 /// Fitzpatrick modifiers (U+1F3FB..=U+1F3FF) are UAX#29 Extend, yet
 /// unicode-width reports them as width-2, so the width-0 fold gate
 /// misses them.
 pub(crate) const fn is_emoji_modifier(c: char) -> bool {
     matches!(c, '\u{1F3FB}'..='\u{1F3FF}')
+}
+
+/// GB11's left side, `\p{ExtPict} Extend* ZWJ`. The fold admits any
+/// zero-width scalar, ZWSP among them, which UAX#29 treats as a break,
+/// so the walk reads Extend itself. A bidi override in the text is one
+/// held pending from before the base, since one arriving after it
+/// blocks the join through `PendingBidi::after_base`, so it is skipped.
+fn ends_in_pictographic_joiner(cluster: &str) -> bool {
+    let Some(rest) = cluster.strip_suffix('\u{200D}') else {
+        return false;
+    };
+    rest.chars()
+        .rev()
+        .find(|&c| !(is_grapheme_extend(c) || crate::bidi::is_override(c)))
+        .is_some_and(is_extended_pictographic)
 }
 
 /// Regional indicators (U+1F1E6..=U+1F1FF) pair into a flag (UAX#29
@@ -30,6 +46,11 @@ pub(crate) const fn is_regional_indicator(c: char) -> bool {
 pub(crate) struct PendingBidi {
     chars: [char; Self::CAP],
     len: u8,
+    /// Set when an override arrives after the base, folded or not. In
+    /// input order it is a UAX#29 break (GB4/GB5) ahead of any ZWJ, but
+    /// folded it looks the same as one held here until the base, which
+    /// is no break. Only a new base clears it.
+    pub(crate) after_base: bool,
 }
 
 impl PendingBidi {
@@ -37,6 +58,15 @@ impl PendingBidi {
 
     pub(crate) const fn is_empty(&self) -> bool {
         self.len == 0
+    }
+
+    /// Keeps `after_base`: a control that drops the queue leaves the
+    /// break between the base and a later joiner in place.
+    pub(crate) fn discard(&mut self) {
+        *self = Self {
+            after_base: self.after_base,
+            ..Self::default()
+        };
     }
 
     fn push(&mut self, c: char) {
@@ -258,8 +288,15 @@ impl Grid {
         if let Grapheme::Char(c) = g
             && self.extends_previous_grapheme(c, width, zwj_armed)
         {
-            if !self.append_combining_mark(c) && crate::bidi::is_override(c) {
-                self.pending_bidi.push(c);
+            if crate::bidi::is_override(c) {
+                // Set even when the fold is refused: the override still
+                // came between the base and any later joiner.
+                self.pending_bidi.after_base = true;
+                if !self.append_combining_mark(c) {
+                    self.pending_bidi.push(c);
+                }
+            } else {
+                self.append_combining_mark(c);
             }
             return false;
         }
@@ -383,6 +420,7 @@ impl Grid {
             self.screen.cursor.col.saturating_add(u16::from(width)),
         );
         self.screen.damage.mark(self.screen.cursor.row.into());
+        self.pending_bidi.after_base = false;
         if !self.pending_bidi.is_empty() {
             let pending = std::mem::take(&mut self.pending_bidi);
             self.extend_cluster(idx, pending.as_slice());
@@ -497,14 +535,13 @@ impl Grid {
     }
 
     /// Four UAX#29 cases fold: a zero-width mark (GB9), an emoji
-    /// modifier (Extend yet width-2, GB9), the pictographic base after
-    /// a ZWJ (GB11), and the second regional indicator of a flag
-    /// (GB12/GB13). The GB11 arm is gated to a width-2 emoji owner and
-    /// to non-ASCII so a stray ZWJ never swallows ordinary text.
+    /// modifier (Extend yet width-2, GB9), a pictographic after a
+    /// pictographic and ZWJ (GB11), and the second regional indicator
+    /// of a flag (GB12/GB13).
     fn extends_previous_grapheme(&self, c: char, width: u8, zwj_armed: bool) -> bool {
         width == 0
             || is_emoji_modifier(c)
-            || (zwj_armed && !c.is_ascii() && self.zwj_continues_into_prev())
+            || (zwj_armed && self.zwj_continues_into_prev(c))
             || (is_regional_indicator(c) && self.prev_is_lone_regional_indicator())
     }
 
@@ -611,7 +648,10 @@ impl Grid {
     /// valid target as long as the trailing cell is Spacer or Empty for
     /// `widen_cluster_if_needed` to claim, so the fold never clips a
     /// two-cell glyph or clobbers content to its right.
-    fn zwj_continues_into_prev(&self) -> bool {
+    fn zwj_continues_into_prev(&self, c: char) -> bool {
+        if !is_extended_pictographic(c) || self.pending_bidi.after_base {
+            return false;
+        }
         let Some((row, owner_col)) = self.combining_owner() else {
             return false;
         };
@@ -622,7 +662,7 @@ impl Grid {
         if self
             .screen
             .cluster_str(id)
-            .is_none_or(|s| !s.ends_with('\u{200D}'))
+            .is_none_or(|s| !ends_in_pictographic_joiner(s))
         {
             return false;
         }
