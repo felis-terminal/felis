@@ -46,16 +46,28 @@ costs one byte and no table lookup at all.
 
 felis runs no upstream grapheme segmenter. The parser decodes UTF-8 and hands the grid one Unicode scalar at a time
 (`Grapheme::Char(c)`); the grid folds each scalar onto the previous cell's cluster when UAX#29 puts the two in one
-grapheme. That incremental fold is what grapheme-cluster mode (DECSET `?2027`, always reported set, REQ-602) promises a
-running program: the cursor advances by grapheme cluster, not by scalar.
+grapheme. That incremental fold is what grapheme-cluster mode (DECSET `?2027`, reported permanently set, REQ-602)
+promises a running program: the cursor advances by grapheme cluster, not by scalar.
 
 Folding is decided per scalar against UAX#29, and the reason it is not simply "width 0 extends the previous cell" is
 that the width table disagrees with the segmentation rules in both directions. An emoji skin-tone modifier is GB9 Extend
 but scores width 2; the pictographic base after a ZWJ (GB11) and the second regional indicator of a flag (GB12/GB13) are
-ordinary wide scalars that must still fold. Each is recognized explicitly, and the ZWJ continuation is gated to a
-non-ASCII follower with a free trailing cell so a stray ZWJ can neither swallow ordinary text nor overrun its base's
-footprint. The continuation reaches only the next scalar printed: a control that moves the cursor (BS, HT, LF, VT, FF,
-CR) ends it, while BEL, which leaves the cursor at the joiner, does not.
+ordinary wide scalars that must still fold. Each is recognized explicitly.
+
+After a ZWJ, the next scalar joins only when both sides are pictographs, as GB11 requires: `👩‍💻` and `❤️‍🔥` become one
+cluster, while `字` after `👩‍` or `ख` after `क‍` starts cells of its own, the same count an application summing
+per-scalar widths reaches. Only UAX#29 Extend scalars (a skin tone, a variation selector) may sit between the pictograph
+and the joiner; width 0 is not the test, because a ZWSP or a bidi override there breaks the join. The exception is an
+override held from before the base (see below), which in input order came first. The joined glyph also needs a free
+trailing cell, so it never overruns its base's footprint. The continuation reaches only the next scalar printed: a
+control that moves the cursor (BS, HT, LF, VT, FF, CR) ends it, while BEL, which leaves the cursor at the joiner, does
+not.
+
+felis does not fold GB9c, the Indic conjunct (`क्ख`). Each consonant keeps its own cell, so the cursor agrees with
+applications that sum per-scalar widths, at the cost of the client shaping the consonants apart rather than as one
+conjunct. Folding would need a width for the whole conjunct, and none fits: a chain such as `स्त्र` is three columns to
+`wcswidth`, past the two-cell cluster cap, and the terminals that fold disagree (Ghostty, Windows Terminal and WezTerm
+cap it at 2, Kitty uses 1). Revisit if a width convention for conjuncts settles across terminals.
 
 A bidi override is the one zero-width scalar that outlives a missing owner. At column 0 or after an empty cell the grid
 holds it and folds it into the next character printed, after that character's own scalar, and a regional indicator

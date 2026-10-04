@@ -6,7 +6,7 @@ use super::{
     ModifyOtherKeys, MouseEncoding, MouseProtocol, PromptMark, PtyEffect, SPECIAL_COLOR_COUNT,
     Sink, ThemeChannel, parse_osc_133, sanitize_osc_str,
 };
-use crate::editing::{PendingBidi, blank_cells, is_emoji_modifier, is_regional_indicator};
+use crate::editing::{blank_cells, is_emoji_modifier, is_regional_indicator};
 use felis_vt::{osc_number, split_osc_first};
 use std::sync::LazyLock;
 
@@ -258,7 +258,7 @@ impl Sink for Grid {
             self.zwj_pending = false;
         }
         if byte != 0x07 {
-            self.pending_bidi = PendingBidi::default();
+            self.pending_bidi.discard();
         }
         match byte {
             // Multiple BELs in a chunk coalesce into one
@@ -303,7 +303,7 @@ impl Sink for Grid {
         // SGR alone keeps it: a highlighter colors the text right after
         // the override.
         if !(intermediates.is_empty() && final_byte == b'm') {
-            self.pending_bidi = PendingBidi::default();
+            self.pending_bidi.discard();
         }
         // REQ-903 exceed → discard: `ignore` marks a sequence that
         // overran `MAX_PARAMS` / `MAX_INTERMEDIATES`; acting on the
@@ -589,7 +589,7 @@ impl Sink for Grid {
         self.last_printed = None;
         // ST closes the OSC that keeps an override pending.
         if !(intermediates.is_empty() && final_byte == b'\\') {
-            self.pending_bidi = PendingBidi::default();
+            self.pending_bidi.discard();
         }
         match (intermediates, final_byte) {
             (&[], b'D') => self.line_feed(), // IND
@@ -660,7 +660,7 @@ impl Sink for Grid {
 
     fn dcs_hook(&mut self, _params: &[u16], intermediates: &[u8], ignore: bool, final_byte: u8) {
         self.last_printed = None;
-        self.pending_bidi = PendingBidi::default();
+        self.pending_bidi.discard();
         // REQ-903 exceed → discard: an overflowed DCS opener leaves
         // `self.dcs` at `None`, so body and terminator are no-ops.
         if ignore {
@@ -779,7 +779,7 @@ impl Sink for Grid {
 
     fn apc_dispatch(&mut self, body: &[u8]) {
         // A Kitty graphics placement can move the cursor.
-        self.pending_bidi = PendingBidi::default();
+        self.pending_bidi.discard();
         // Grid acts as relay (`docs/reference/protocols/kitty-graphics.md`);
         // drop and BEL past cap. Cursor is captured immediately because
         // trailing escapes like DECRC/CUP can move it before daemon drains APC.
@@ -1035,6 +1035,7 @@ impl Grid {
                 .occ_bump_phys(phys, u16::try_from(col).unwrap_or(u16::MAX));
             self.screen.damage.mark(usize::from(row));
             self.last_printed = Some(grapheme_for_char(last));
+            self.pending_bidi.after_base = false;
             // Not `grapheme_width`: a deferred char may fold into the glyph
             // just written, and a wrap armed for its standalone width would
             // move its owner out from under it.

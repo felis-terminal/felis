@@ -5,54 +5,13 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use std::fmt::Write as _;
-
-use felis_grid::{Grapheme, Grid, row_text_trim};
-use unicode_width::UnicodeWidthChar;
+use felis_grid::Grid;
 
 mod common;
-use common::{drive, write_cursor};
-
-/// `_` is a `Spacer`, `·` an `Empty`; a zero-width scalar inside a
-/// cluster is spelled `\u{…}` so a dropped selector shows. Cells past
-/// a row's watermark read blank, as every reader sees them.
-fn render(grid: &Grid) -> String {
-    let mut out = String::new();
-    write_cursor(&mut out, grid);
-    for r in 0..grid.rows() {
-        let row = grid.row_content(r).unwrap();
-        let cells: Vec<String> = (0..grid.cols())
-            .map(|c| cell_token(grid, grid.cell(r, c).unwrap().grapheme))
-            .collect();
-        writeln!(out, "cells: {}", cells.join("|")).unwrap();
-        writeln!(out, "text: {:?}", row_text_trim(row, grid.cluster_table())).unwrap();
-    }
-    out
-}
-
-fn cell_token(grid: &Grid, g: Grapheme) -> String {
-    match g {
-        Grapheme::Empty => "·".into(),
-        Grapheme::Spacer => "_".into(),
-        Grapheme::SizedSpacer => "#".into(),
-        Grapheme::Ascii(b) => char::from(b).into(),
-        Grapheme::Char(c) => spell(c),
-        Grapheme::Cluster(id) => grid
-            .cluster_str(id)
-            .map_or_else(|| "?".into(), |s| s.chars().map(spell).collect()),
-    }
-}
-
-fn spell(c: char) -> String {
-    if c.width() == Some(0) || c == '\u{200D}' {
-        format!("\\u{{{:x}}}", u32::from(c))
-    } else {
-        c.into()
-    }
-}
+use common::{drive, render_roles};
 
 fn snap(cols: u16, bytes: &str) -> String {
-    render(&drive(1, cols, bytes.as_bytes()))
+    render_roles(&drive(1, cols, bytes.as_bytes()))
 }
 
 #[test]
@@ -272,7 +231,7 @@ fn an_osc_66_block_over_a_clusters_left_half_blanks_its_spacer() {
 }
 
 fn snap_rows(rows: u16, cols: u16, bytes: &str) -> String {
-    render(&drive(rows, cols, bytes.as_bytes()))
+    render_roles(&drive(rows, cols, bytes.as_bytes()))
 }
 
 #[test]
@@ -447,7 +406,7 @@ fn deccra_whose_destination_edges_cut_pairs_erases_them() {
 fn an_alt_screen_resize_that_cuts_a_pair_erases_it() {
     let mut grid = drive(1, 8, "\x1b[?1049habc字".as_bytes());
     grid.resize(1, 4);
-    insta::assert_snapshot!(render(&grid), @r#"
+    insta::assert_snapshot!(render_roles(&grid), @r#"
     cursor: row=0 col=3 visible=1 pending_wrap=0
     cells: a|b|c|·
     text: "abc"
@@ -467,7 +426,7 @@ fn a_vs16_at_the_right_margin_stays_narrow() {
 fn reflow_keeps_a_refused_widen_in_one_cell() {
     let mut grid = drive(1, 8, "❤b\r\x1b[C\u{fe0f}".as_bytes());
     grid.reflow(1, 6);
-    insta::assert_snapshot!(render(&grid), @r#"
+    insta::assert_snapshot!(render_roles(&grid), @r#"
     cursor: row=0 col=1 visible=1 pending_wrap=0
     cells: ❤\u{fe0f}|b|·|·|·|·
     text: "❤\u{fe0f}b"
@@ -620,7 +579,7 @@ fn a_saved_alt_screen_resize_that_cuts_a_sized_block_drops_its_sizing() {
     parser.advance(&mut grid, b"\x1b[?47h\x1b[1;4H\x1b]66;w=2;A\x07\x1b[?47l");
     grid.resize(1, 4);
     parser.advance(&mut grid, b"\x1b[?47h");
-    insta::assert_snapshot!(render(&grid), @r#"
+    insta::assert_snapshot!(render_roles(&grid), @r#"
     cursor: row=0 col=3 visible=1 pending_wrap=0
     cells: ·|·|·|A
     text: "   A"
@@ -632,7 +591,7 @@ fn a_saved_alt_screen_resize_that_cuts_a_sized_block_drops_its_sizing() {
 fn an_alt_screen_resize_that_cuts_a_sized_wide_scalar_erases_it() {
     let mut grid = drive(1, 8, "\x1b[?1049h\x1b[1;4H\x1b]66;w=3;字\x07".as_bytes());
     grid.resize(1, 4);
-    insta::assert_snapshot!(render(&grid), @r#"
+    insta::assert_snapshot!(render_roles(&grid), @r#"
     cursor: row=0 col=3 visible=1 pending_wrap=0
     cells: ·|·|·|·
     text: ""
@@ -650,7 +609,7 @@ fn a_saved_alt_screen_resize_that_cuts_a_sized_wide_scalar_erases_it() {
     );
     grid.resize(1, 4);
     parser.advance(&mut grid, b"\x1b[?47h");
-    insta::assert_snapshot!(render(&grid), @r#"
+    insta::assert_snapshot!(render_roles(&grid), @r#"
     cursor: row=0 col=3 visible=1 pending_wrap=0
     cells: ·|·|·|·
     text: ""
@@ -671,7 +630,7 @@ fn dch_on_the_spacer_of_a_sized_wide_scalar_narrower_than_its_glyph_erases_it() 
 fn an_alt_screen_resize_that_cuts_a_sized_wide_scalar_narrower_than_its_glyph_erases_it() {
     let mut grid = drive(1, 8, "\x1b[?1049h\x1b[1;4H\x1b]66;w=1;字\x07".as_bytes());
     grid.resize(1, 4);
-    insta::assert_snapshot!(render(&grid), @r#"
+    insta::assert_snapshot!(render_roles(&grid), @r#"
     cursor: row=0 col=3 visible=1 pending_wrap=0
     cells: ·|·|·|·
     text: ""

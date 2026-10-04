@@ -1080,19 +1080,19 @@ fn decdsr_locator_replies_with_no_locator_attached() {
     assert_eq!(std::str::from_utf8(&responses[2]).unwrap(), "\x1b[?57;0n");
 }
 
-/// Mode 2027 always reports set; DECRESET does not move it.
+/// Mode 2027 reports permanently set; DECRESET does not move it.
 #[test]
-fn decrqm_dec_mode_2027_always_reports_set() {
+fn decrqm_dec_mode_2027_reports_permanently_set() {
     let mut g = Grid::new(4, 8);
     let mut p = Parser::new();
     drive(&mut p, &mut g, b"\x1b[?2027$p");
     let initial = responses(&mut g);
-    assert_eq!(std::str::from_utf8(&initial[0]).unwrap(), "\x1b[?2027;1$y");
+    assert_eq!(std::str::from_utf8(&initial[0]).unwrap(), "\x1b[?2027;3$y");
     drive(&mut p, &mut g, b"\x1b[?2027l\x1b[?2027$p");
     let after_reset = responses(&mut g);
     assert_eq!(
         std::str::from_utf8(&after_reset[0]).unwrap(),
-        "\x1b[?2027;1$y"
+        "\x1b[?2027;3$y"
     );
 }
 

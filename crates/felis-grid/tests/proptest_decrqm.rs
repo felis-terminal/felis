@@ -7,6 +7,7 @@
 
 use felis_grid::{
     Grid, KNOWN_MODIFIABLE_DEC_MODES, PERMANENTLY_RESET_ANSI_MODES, PERMANENTLY_RESET_DEC_MODES,
+    PERMANENTLY_SET_DEC_MODES,
 };
 use felis_vt::Parser;
 use proptest::prelude::*;
@@ -152,5 +153,23 @@ proptest! {
         prop_assert!(private);
         prop_assert_eq!(m, mode);
         prop_assert_eq!(ps, 4);
+    }
+
+    #[test]
+    fn permanently_set_dec_modes_always_report_ps3(
+        idx in 0usize..PERMANENTLY_SET_DEC_MODES.len(),
+        writes in proptest::collection::vec(any::<bool>(), 0..6),
+    ) {
+        let mode = PERMANENTLY_SET_DEC_MODES[idx];
+        let mut cmd = Vec::new();
+        for set in &writes {
+            cmd.extend_from_slice(format!("\x1b[?{mode}{}", if *set { 'h' } else { 'l' }).as_bytes());
+        }
+        cmd.extend_from_slice(format!("\x1b[?{mode}$p").as_bytes());
+        let (_g, responses) = drive(&cmd);
+        let (private, m, ps) = parse_decrqm_reply(&responses[0]).unwrap();
+        prop_assert!(private);
+        prop_assert_eq!(m, mode);
+        prop_assert_eq!(ps, 3);
     }
 }

@@ -3,7 +3,9 @@
 
 use std::fmt::Write as _;
 
-use felis_grid::{AttrFlags, Attributes, Color, Grapheme, Grid, PtyEffect, ScrollOp};
+use felis_grid::{
+    AttrFlags, Attributes, Color, Grapheme, Grid, PtyEffect, ScrollOp, row_text_trim,
+};
 use felis_vt::Parser;
 
 pub(crate) fn drive(rows: u16, cols: u16, bytes: &[u8]) -> Grid {
@@ -144,4 +146,42 @@ pub(crate) fn styled_cell_lines(grid: &Grid) -> Vec<String> {
 pub(crate) fn write_dirty_rows(out: &mut String, grid: &Grid) {
     let dirty: Vec<_> = grid.damage().dirty_rows().collect();
     writeln!(out, "dirty_rows: {dirty:?}").unwrap();
+}
+
+/// `_` is a `Spacer`, `·` an `Empty`; a zero-width scalar inside a
+/// cluster is spelled `\u{…}` so a dropped selector shows. Cells past
+/// a row's watermark read blank, as every reader sees them.
+pub(crate) fn render_roles(grid: &Grid) -> String {
+    let mut out = String::new();
+    write_cursor(&mut out, grid);
+    for r in 0..grid.rows() {
+        let row = grid.row_content(r).unwrap();
+        let cells: Vec<String> = (0..grid.cols())
+            .map(|c| role_token(grid, grid.cell(r, c).unwrap().grapheme))
+            .collect();
+        writeln!(out, "cells: {}", cells.join("|")).unwrap();
+        writeln!(out, "text: {:?}", row_text_trim(row, grid.cluster_table())).unwrap();
+    }
+    out
+}
+
+fn role_token(grid: &Grid, g: Grapheme) -> String {
+    match g {
+        Grapheme::Empty => "·".into(),
+        Grapheme::Spacer => "_".into(),
+        Grapheme::SizedSpacer => "#".into(),
+        Grapheme::Ascii(b) => char::from(b).into(),
+        Grapheme::Char(c) => spell(c),
+        Grapheme::Cluster(id) => grid
+            .cluster_str(id)
+            .map_or_else(|| "?".into(), |s| s.chars().map(spell).collect()),
+    }
+}
+
+fn spell(c: char) -> String {
+    if unicode_width::UnicodeWidthChar::width(c) == Some(0) || c == '\u{200D}' {
+        format!("\\u{{{:x}}}", u32::from(c))
+    } else {
+        c.into()
+    }
 }

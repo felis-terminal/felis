@@ -696,7 +696,7 @@ fn zwj_family_emoji_chains_into_one_cluster() {
 
 #[test]
 fn stray_zwj_does_not_swallow_following_ascii() {
-    // The non-ASCII guard stops a lone ZWJ from absorbing ordinary text.
+    // GB11 joins only a pictographic, so a ZWJ never absorbs ordinary text.
     let mut p = Parser::new();
     let mut g = Grid::new(1, 8);
     drive(&mut p, &mut g, "\u{1F469}\u{200D}X".as_bytes());
@@ -2258,4 +2258,27 @@ fn a_row_written_over_a_vacated_row_lands_even_when_it_matches_the_rotated_out_r
         screen.cell(3, 0).map(|c| c.grapheme),
         Some(Grapheme::Ascii(b'y')),
     );
+}
+
+/// The table is full but already holds `👩‍` and `👩‍💻`, so the joiner
+/// and the pictograph fold while the override between them is refused.
+#[test]
+fn a_bidi_override_refused_by_a_full_table_still_breaks_the_join() {
+    let mut g = Grid::new(1, 8);
+    g.intern_cluster("\u{1F469}\u{200D}");
+    g.intern_cluster("\u{1F469}\u{200D}\u{1F4BB}");
+    for i in 0..CLUSTER_TABLE_CAP {
+        if g.intern_cluster(&format!("a{i}")).is_none() {
+            break;
+        }
+    }
+    let mut p = Parser::new();
+    drive(
+        &mut p,
+        &mut g,
+        "\u{1F469}\u{202E}\u{200D}\u{1F4BB}x".as_bytes(),
+    );
+    assert_eq!(cell_text(&g, 0, 0), "\u{1F469}\u{200D}");
+    assert_eq!(g.cell(0, 2).unwrap().grapheme, Grapheme::Char('\u{1F4BB}'));
+    assert_eq!(g.cursor().col, 5);
 }

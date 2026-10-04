@@ -210,6 +210,7 @@ mod sink;
 mod style_table;
 mod table_gc;
 mod text_sizing;
+mod uax29;
 pub mod wire;
 mod xtgettcap;
 
@@ -222,8 +223,12 @@ pub use damage::Damage;
 pub use link_table::{LINK_TABLE_BYTE_CAP, LinkTable, LinkText};
 pub use modes::{
     KNOWN_MODIFIABLE_DEC_MODES, PERMANENTLY_RESET_ANSI_MODES, PERMANENTLY_RESET_DEC_MODES,
+    PERMANENTLY_SET_DEC_MODES,
 };
-use modes::{known_modifiable_dec_mode, permanently_reset_ansi, permanently_reset_dec_mode};
+use modes::{
+    known_modifiable_dec_mode, permanently_reset_ansi, permanently_reset_dec_mode,
+    permanently_set_dec_mode,
+};
 pub use mouse::encode_mouse;
 use osc_color::{format_osc_color_response, parse_x_color};
 use osc52::{format_osc_52_response, parse_osc_52_selection};
@@ -1744,7 +1749,7 @@ impl Grid {
         if rows == self.screen.rows && cols == self.screen.cols {
             return;
         }
-        self.pending_bidi = editing::PendingBidi::default();
+        self.pending_bidi.discard();
         // Read before the screen moves: an implicit full-screen region
         // must re-track the new edges, and the test is against the old
         // geometry. Otherwise a 24→82 grow leaves the bottom margin at
@@ -1815,7 +1820,7 @@ impl Grid {
             self.resize(rows, cols);
             return None;
         }
-        self.pending_bidi = editing::PendingBidi::default();
+        self.pending_bidi.discard();
 
         // Read before any field changes; see `resize`.
         let was_full_vertical =
