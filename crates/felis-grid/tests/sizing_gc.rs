@@ -56,8 +56,8 @@ fn gc_reclaims_repainted_sizing_entries_and_preserves_live_cells() {
     );
 }
 
-/// `find_sized_primary` tells adjacent multi-cell characters apart by
-/// handle, so equal sizings must stay on distinct handles.
+/// A handle names one run, and `sized_block_at` scans only the cells
+/// carrying it, so equal sizings must stay on distinct handles.
 #[test]
 fn gc_keeps_adjacent_equal_sizings_on_distinct_handles() {
     let mut parser = Parser::default();

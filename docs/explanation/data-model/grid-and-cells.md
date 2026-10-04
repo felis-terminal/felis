@@ -69,7 +69,8 @@ written at its narrow width before the selector arrived. After every fold `widen
 cluster's unicode-width against that reserved footprint: a base that grew to two cells claims a trailing `Spacer`, and
 when the cursor still parks immediately after the base, advances it past the now-two-cell glyph. A selector arriving
 after a cursor move widens the glyph in place without dragging the cursor, matching the rule that a combining mark does
-not move the cursor.
+not move the cursor. When the trailing cell is occupied, off-screen or past the DECSLRM right margin, the glyph stays
+one cell wide, and a reflow keeps it at that one cell rather than shifting the rest of its line.
 
 The grid decides cluster boundaries and cell footprint; it stays font-blind. Which face paints the cluster (a monochrome
 dingbat or the color-emoji glyph) is a client-side shaping decision, covered in

@@ -497,9 +497,8 @@ proptest! {
     }
 }
 
-/// Writes, erases, and repeats that land on either half of a wide pair.
-/// The cell-moving editors (ICH, DCH, IRM, SL/SR, DECCRA, resize) are
-/// left out: they do not keep this invariant yet.
+/// Writes, erases, repeats and cell moves that land on either half of a
+/// wide pair, with and without DECSLRM margins and the alternate screen.
 fn pair_editing_op() -> impl Strategy<Value = String> {
     let text = prop::sample::select(vec![
         "❤\u{fe0f}",
@@ -534,25 +533,77 @@ fn pair_editing_op() -> impl Strategy<Value = String> {
         1 => (1u16..=3, 1u16..=10, 0u16..=2, 0u16..=3).prop_map(|(t, l, h, w)| {
             format!("\x1b[42;{t};{l};{};{}$x", t + h, l + w)
         }),
-        1 => (1u16..=3).prop_map(|w| format!("\x1b]66;w={w};A\x07")),
+        1 => (1u16..=3, prop::sample::select(vec!["A", "字"]))
+            .prop_map(|(w, t)| format!("\x1b]66;w={w};{t}\x07")),
         1 => (1u16..=3).prop_map(|n| format!("\x1b[{n}b")),
+        1 => (1u16..=3).prop_map(|n| format!("\x1b[{n}@")),
+        1 => (1u16..=3).prop_map(|n| format!("\x1b[{n}P")),
+        1 => prop::sample::select(vec!["\x1b[4h", "\x1b[4l"]).prop_map(str::to_owned),
+        1 => (1u16..=3).prop_map(|n| format!("\x1b[{n} @")),
+        1 => (1u16..=3).prop_map(|n| format!("\x1b[{n} A")),
+        1 => (1u16..=3).prop_map(|n| format!("\x1b[{n}'}}")),
+        1 => (1u16..=3).prop_map(|n| format!("\x1b[{n}'~")),
+        1 => prop::sample::select(vec!["\x1b6", "\x1b9"]).prop_map(str::to_owned),
+        1 => prop::sample::select(vec!["\x1b[?69h", "\x1b[?69l"]).prop_map(str::to_owned),
+        1 => (1u16..=10, 0u16..=6).prop_map(|(l, w)| format!("\x1b[{l};{}s", l + w)),
+        1 => (1u16..=2, 0u16..=4).prop_map(|(n, op)| {
+            format!("\x1b[{n}{}", ["L", "M", "S", "T", "r"][usize::from(op)])
+        }),
+        1 => (1u16..=3, 1u16..=10, 0u16..=2, 0u16..=3, 1u16..=3, 1u16..=10).prop_map(
+            |(t, l, h, w, dt, dl)| format!("\x1b[{t};{l};{};{};1;{dt};{dl}$v", t + h, l + w)
+        ),
+        1 => prop::sample::select(vec!["\x1b[?1049h", "\x1b[?1049l"]).prop_map(str::to_owned),
+    ]
+}
+
+/// A byte chunk, or a resize as the daemon applies it: a reflow on the
+/// primary screen, a truncating resize on the alternate one.
+#[derive(Clone, Debug)]
+enum PairStep {
+    Bytes(String),
+    Resize(u16),
+}
+
+fn pair_step() -> impl Strategy<Value = PairStep> {
+    prop_oneof![
+        12 => pair_editing_op().prop_map(PairStep::Bytes),
+        1 => (2u16..=10).prop_map(PairStep::Resize),
     ]
 }
 
 proptest! {
     /// A `Spacer` is only ever the right half of a two-cell glyph, so the
-    /// cell to its left must hold one; otherwise a write or erase split
-    /// the pair and left text the renderer and the copy path disagree on.
+    /// cell to its left must hold one; and a wide scalar is always
+    /// printed with its `Spacer` (only a cluster whose widen was refused
+    /// sits alone). Otherwise an edit split the pair and left text the
+    /// renderer and the copy path disagree on.
     #[test]
-    fn every_spacer_sits_right_of_a_two_cell_glyph(
+    fn every_wide_pair_stays_whole(
         cols in 4u16..=10,
-        ops in proptest::collection::vec(pair_editing_op(), 0..40),
+        steps in proptest::collection::vec(pair_step(), 0..40),
     ) {
         use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
-        let grid = drive(3, cols, ops.concat().as_bytes());
+        let mut grid = Grid::new(3, cols);
+        let mut parser = Parser::new();
+        for step in &steps {
+            match step {
+                PairStep::Bytes(bytes) => parser.advance(&mut grid, bytes.as_bytes()),
+                PairStep::Resize(c) if grid.on_alternate_screen() => grid.resize(3, *c),
+                PairStep::Resize(c) => {
+                    grid.reflow(3, *c);
+                }
+            }
+        }
         for r in 0..grid.rows() {
             for c in 0..grid.cols() {
-                if grid.cell(r, c).unwrap().grapheme != Grapheme::Spacer {
+                let g = grid.cell(r, c).unwrap().grapheme;
+                if let Grapheme::Char(ch) = g
+                    && ch.width() == Some(2)
+                {
+                    let right = (c + 1 < grid.cols()).then(|| grid.cell(r, c + 1).unwrap().grapheme);
+                    prop_assert_eq!(right, Some(Grapheme::Spacer), "wide {:?} at ({}, {}) has no Spacer after {:?}", ch, r, c, steps);
+                }
+                if g != Grapheme::Spacer {
                     continue;
                 }
                 let left = (c > 0).then(|| grid.cell(r, c - 1).unwrap().grapheme);
@@ -561,7 +612,7 @@ proptest! {
                     Some(Grapheme::Cluster(id)) => grid.cluster_str(id).map_or(0, |s| s.width().min(2)),
                     _ => 0,
                 };
-                prop_assert_eq!(left_width, 2, "orphan Spacer at ({}, {}) after {:?}", r, c, ops);
+                prop_assert_eq!(left_width, 2, "orphan Spacer at ({}, {}) after {:?}", r, c, steps);
             }
         }
     }

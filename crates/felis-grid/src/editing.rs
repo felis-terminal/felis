@@ -309,7 +309,11 @@ impl Grid {
             let cursor = usize::from(self.screen.cursor.col);
             let n = usize::from(width);
             if cursor + n <= right_edge && cursor + n < right_edge {
-                self.materialize_row_tail(self.screen.cursor.row);
+                let row = self.screen.cursor.row;
+                self.materialize_row_tail(row);
+                for seam in [cursor, right_edge - n, right_edge] {
+                    self.erase_pair_across(row, seam);
+                }
                 let src_start = row_start + cursor;
                 let src_end = row_start + right_edge - n;
                 let dst_start = row_start + cursor + n;
@@ -524,8 +528,9 @@ impl Grid {
 
     /// A base placed at width 1 (❤, a keycap digit) becomes width 2
     /// once a variation selector / keycap mark joins it. No-op when the
-    /// trailing cell is occupied or off-screen: a retroactive widen
-    /// must neither clobber real content nor overflow the row.
+    /// trailing cell is occupied, off-screen or past the right margin: a
+    /// retroactive widen must neither clobber real content nor overflow
+    /// the row.
     fn widen_cluster_if_needed(&mut self, row: u16, owner_col: u16) {
         let owner_idx = self.screen.idx(row, owner_col);
         if self
@@ -536,13 +541,21 @@ impl Grid {
             return;
         }
         let next_col = owner_col + 1;
-        if next_col >= self.screen.cols {
+        if next_col >= self.screen.cols
+            || (self.left_right_margin_mode && owner_col == self.margins.right)
+        {
+            return;
+        }
+        // Through `cell`, which reads a recycled row's stale tenant as
+        // the blank it is.
+        if self
+            .screen
+            .cell(row, next_col)
+            .is_some_and(|c| !matches!(c.grapheme, Grapheme::Empty))
+        {
             return;
         }
         let next_idx = self.screen.idx(row, next_col);
-        if !matches!(self.screen.cells[next_idx].grapheme, Grapheme::Empty) {
-            return;
-        }
         let owner = self.screen.cells[owner_idx];
         self.screen.cells[next_idx] = Cell {
             grapheme: Grapheme::Spacer,
@@ -651,8 +664,7 @@ impl Grid {
         blank_cells(&mut self.screen.cells[base + occ..base + col]);
     }
 
-    /// The cell-shifting editors (`ICH`/`DCH`/`DECIC`/`DECDC` and the
-    /// sub-rectangle scrolls) `copy_within` spans that can reach past
+    /// The cell-shifting editors copy spans that can reach past
     /// the watermark, where a recycled scroll row left undefined bytes;
     /// materializing the tail first keeps them from shifting a stale
     /// line into view.
@@ -692,17 +704,44 @@ impl Grid {
         (from, to)
     }
 
-    /// Blank cells `[from, to)`, widening by one cell on each side when
-    /// a wide-glyph half straddles the boundary, so an erase never
-    /// leaves an orphan owner or Spacer.
+    /// Erases the pair, or the OSC 66 run, straddling the boundary
+    /// between `col - 1` and `col`. A cell move runs this on each
+    /// boundary it cuts first: a repair after the move could not tell a
+    /// cut owner from a cluster whose widen was refused.
+    pub(crate) fn erase_pair_across(&mut self, row: u16, col: usize) {
+        let cols = usize::from(self.screen.cols);
+        let phys = self.screen.phys_row(row);
+        let occ = usize::from(self.screen.occupancy[phys]).min(cols);
+        if col == 0 || col >= occ {
+            return;
+        }
+        let idx = phys * cols + col;
+        let cell = self.screen.cells[idx];
+        if cell.sizing.is_some() {
+            if let Some(block) = self.sized_block_at(row, u16::try_from(col).unwrap_or(u16::MAX))
+                && usize::from(block.left) < col
+            {
+                self.clear_sized_block(block);
+            }
+        } else if matches!(cell.grapheme, Grapheme::Spacer) {
+            self.screen.cells[idx - 1] = Cell::default();
+            self.screen.cells[idx] = Cell::default();
+            self.screen.damage.mark(row.into());
+        }
+    }
+
+    /// Blank the cells `[from, to)` a shift vacated, exactly: the shift
+    /// erased the pairs its seams cut, and the stale copies it left in
+    /// the span would send a pair probe after a live cell.
     pub(crate) fn range_blank(&mut self, row: u16, from: usize, to: usize) {
         self.range_blank_inner(row, from, to, false);
     }
 
-    /// Skips `ISO_PROTECTED` (SPA / EPA) cells only: DEC-protected
-    /// cells (DECSCA) still blank, matching xterm's "regular erase
-    /// respects only ECMA protection" (esctest's
-    /// `test_ED_respectsISOProtection` et al.).
+    /// Widens `[from, to)` so it splits no pair, and skips
+    /// `ISO_PROTECTED` (SPA / EPA) cells only: DEC-protected cells
+    /// (DECSCA) still blank, matching xterm's "regular erase respects
+    /// only ECMA protection" (esctest's `test_ED_respectsISOProtection`
+    /// et al.).
     pub(crate) fn range_blank_iso(&mut self, row: u16, from: usize, to: usize) {
         self.range_blank_inner(row, from, to, true);
     }
@@ -712,16 +751,18 @@ impl Grid {
         row: u16,
         mut from: usize,
         mut to: usize,
-        iso_aware: bool,
+        erase: bool,
     ) {
-        let iso_aware = iso_aware && self.screen.style_table.has_iso_protected();
+        let iso_aware = erase && self.screen.style_table.has_iso_protected();
         let row_start = self.screen.idx(row, 0);
         let row_end = row_start + usize::from(self.screen.cols);
         from = from.max(row_start).min(row_end);
         to = to.max(from).min(row_end);
-        let (from_col, to_col) = self.pair_aligned_span(row, from - row_start, to - row_start);
-        from = row_start + from_col;
-        to = row_start + to_col;
+        if erase {
+            let (from_col, to_col) = self.pair_aligned_span(row, from - row_start, to - row_start);
+            from = row_start + from_col;
+            to = row_start + to_col;
+        }
         let blank = Cell {
             grapheme: Grapheme::Empty,
             style: self.pen_style,
@@ -935,6 +976,8 @@ impl Grid {
         // watermark; materialize so no stale tail moves inside the band.
         for r in top..=bottom {
             self.materialize_row_tail(r);
+            self.erase_pair_across(r, usize::from(left));
+            self.erase_pair_across(r, usize::from(right_incl) + 1);
         }
         let blank = self.selective_blank_with_pen_bg();
         match direction {
@@ -1662,9 +1705,13 @@ impl Grid {
         if cursor < left || cursor > right_inclusive {
             return;
         }
-        self.materialize_row_tail(self.screen.cursor.row);
+        let row = self.screen.cursor.row;
+        self.materialize_row_tail(row);
         let edge = right_inclusive + 1;
         let n = n.min(edge - cursor);
+        for seam in [cursor, cursor + n, edge] {
+            self.erase_pair_across(row, seam);
+        }
         let src_start = row_start + cursor + n;
         let src_end = row_start + edge;
         let dst_start = row_start + cursor;
@@ -1691,9 +1738,13 @@ impl Grid {
         if cursor < left || cursor > right_inclusive {
             return;
         }
-        self.materialize_row_tail(self.screen.cursor.row);
+        let row = self.screen.cursor.row;
+        self.materialize_row_tail(row);
         let edge = right_inclusive + 1;
         let n = n.min(edge - cursor);
+        for seam in [cursor, edge - n, edge] {
+            self.erase_pair_across(row, seam);
+        }
         let src_start = row_start + cursor;
         let src_end = row_start + edge - n;
         let dst_start = row_start + cursor + n;
@@ -1732,9 +1783,6 @@ impl Grid {
         self.scroll_region_horizontal(n, HDir::Right);
     }
 
-    /// Only a rightward shift bumps the occupancy watermark: a
-    /// leftward shift can only uncover cells at or before the prior
-    /// watermark.
     fn scroll_region_horizontal(&mut self, n: u16, dir: HDir) {
         let n = n.max(1);
         let cols = usize::from(self.screen.cols);
@@ -1742,6 +1790,14 @@ impl Grid {
         for r in self.margins.top..=self.margins.bottom {
             let row_start = self.screen.idx(r, 0);
             if n < cols {
+                self.materialize_row_tail(r);
+                self.erase_pair_across(
+                    r,
+                    match dir {
+                        HDir::Left => n,
+                        HDir::Right => cols - n,
+                    },
+                );
                 match dir {
                     HDir::Left => {
                         let src_start = row_start + n;
@@ -1753,7 +1809,6 @@ impl Grid {
                         let src_end = row_start + cols - n;
                         let dst_start = row_start + n;
                         copy_within_cells(&mut self.screen.cells, src_start..src_end, dst_start);
-                        self.screen.occ_bump_row(r, self.screen.cols);
                     }
                 }
             }
@@ -2079,6 +2134,11 @@ impl Grid {
         let rows = usize::from(self.screen.rows);
         let cur_row = usize::from(self.screen.cursor.row);
         let cur_col = usize::from(self.screen.cursor.col);
+        // The watermark is raised to `cols` on every row below, so no
+        // stale tail may survive under it.
+        for r in 0..self.screen.rows {
+            self.materialize_row_tail(r);
+        }
         let (tail_start, _) = self.pair_aligned_span(self.screen.cursor.row, cur_col, cols);
         let (_, head_end) = self.pair_aligned_span(self.screen.cursor.row, 0, cur_col + 1);
         let blank = self.selective_blank();
@@ -2326,14 +2386,47 @@ impl Grid {
         }
         // Snapshot the source so a self-overlapping copy doesn't smear.
         let mut snapshot = Vec::with_capacity(usize::from(copy_rows) * usize::from(copy_cols));
+        let src_end = src.left + copy_cols;
         for r in src.top..src.top + copy_rows {
-            for c in src.left..src.left + copy_cols {
+            let row_at = snapshot.len();
+            for c in src.left..src_end {
                 let idx = self.screen.idx(r, c);
-                snapshot.push(self.screen.cells[idx]);
+                let cell = self.screen.cells[idx];
+                let cut = cell.sizing.is_some()
+                    && !self
+                        .sized_block_at(r, c)
+                        .is_some_and(|b| b.within(src.top, src.left, copy_rows, copy_cols));
+                snapshot.push(if cut { Cell::default() } else { cell });
+            }
+            // A pair the source edge cuts is not copied as a half.
+            if matches!(snapshot[row_at].grapheme, Grapheme::Spacer) {
+                snapshot[row_at] = Cell::default();
+            }
+            if src_end < self.screen.cols
+                && matches!(
+                    self.screen.cells[self.screen.idx(r, src_end)].grapheme,
+                    Grapheme::Spacer
+                )
+                && let Some(last) = snapshot.last_mut()
+            {
+                *last = Cell::default();
+            }
+        }
+        if self.screen.has_sized_cells {
+            for r in dest_top..dest_top + copy_rows {
+                for c in dest_left..dest_left + copy_cols {
+                    if let Some(block) = self.sized_block_at(r, c)
+                        && !block.within(dest_top, dest_left, copy_rows, copy_cols)
+                    {
+                        self.clear_sized_block(block);
+                    }
+                }
             }
         }
         let mut snap_iter = snapshot.into_iter();
         for r in dest_top..dest_top + copy_rows {
+            self.erase_pair_across(r, usize::from(dest_left));
+            self.erase_pair_across(r, usize::from(dest_right) + 1);
             for c in dest_left..dest_left + copy_cols {
                 let idx = self.screen.idx(r, c);
                 #[expect(
@@ -2469,8 +2562,16 @@ impl Grid {
         let region_bottom = self.margins.bottom;
         let blank = self.selective_blank_with_pen_bg();
         let n = n.min(edge - cur_col);
+        let (cur, edge_u, n_u) = (usize::from(cur_col), usize::from(edge), usize::from(n));
+        let seams = match dir {
+            HDir::Right => [cur, edge_u - n_u, edge_u],
+            HDir::Left => [cur, cur + n_u, edge_u],
+        };
         for r in region_top..=region_bottom {
             self.materialize_row_tail(r);
+            for seam in seams {
+                self.erase_pair_across(r, seam);
+            }
             match dir {
                 HDir::Right => {
                     for c in (cur_col + n..edge).rev() {
@@ -2523,7 +2624,16 @@ impl Grid {
         };
         if in_col_band && in_row_band && at_margin {
             let blank = self.selective_blank_with_pen_bg();
+            let (l, r_incl) = (usize::from(left), usize::from(right));
+            let seams = match dir {
+                HDir::Left => [l, l + 1, r_incl + 1],
+                HDir::Right => [l, r_incl, r_incl + 1],
+            };
             for r in self.margins.top..=self.margins.bottom {
+                self.materialize_row_tail(r);
+                for seam in seams {
+                    self.erase_pair_across(r, seam);
+                }
                 match dir {
                     HDir::Left => {
                         for c in left..right {

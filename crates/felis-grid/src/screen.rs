@@ -287,17 +287,35 @@ impl ScreenBuffer {
     /// Drop sized runs whose block does not fit at the primary
     /// after a resize; the trim leaves such primaries in place.
     pub(crate) fn discard_unfit_sized_runs(&mut self) {
-        let mut to_drop: Vec<(u16, u16, u16, u16)> = Vec::new();
-        for r in 0..self.rows {
-            for c in 0..self.cols {
-                let idx = self.idx(r, c);
-                let Some(handle) = self.cells[idx].sizing else {
+        let mut cells = std::mem::take(&mut self.cells);
+        let dropped = self
+            .discard_unfit_sized_runs_in(&mut cells, self.rows, self.cols, |r, c| self.idx(r, c));
+        self.cells = cells;
+        for row in dropped {
+            self.damage.mark(usize::from(row));
+        }
+    }
+
+    /// Returns the primaries' rows. Shared by the live screen and the
+    /// saved alternate one, whose rows `idx` lays out differently.
+    fn discard_unfit_sized_runs_in(
+        &self,
+        cells: &mut [Cell],
+        rows: u16,
+        cols: u16,
+        idx: impl Fn(u16, u16) -> usize,
+    ) -> Vec<u16> {
+        let mut to_drop: Vec<(u16, u16, u16, u16, u16)> = Vec::new();
+        for r in 0..rows {
+            for c in 0..cols {
+                let i = idx(r, c);
+                let Some(handle) = cells[i].sizing else {
                     continue;
                 };
                 // Spacers follow their primary; the drop sweep below
                 // cleans them.
                 if matches!(
-                    self.cells[idx].grapheme,
+                    cells[i].grapheme,
                     Grapheme::SizedSpacer | Grapheme::Spacer | Grapheme::Empty
                 ) {
                     continue;
@@ -305,32 +323,41 @@ impl ScreenBuffer {
                 let Some(sizing) = self.sizing_table.get(handle.get() as usize - 1) else {
                     continue;
                 };
-                let (scale, block_w) = self.sizing_block_extent(*sizing, self.cells[idx].grapheme);
-                if r.saturating_add(scale) > self.rows || c.saturating_add(block_w) > self.cols {
-                    to_drop.push((r, c, scale, block_w));
+                let (scale, block_w) = self.sizing_block_extent(*sizing, cells[i].grapheme);
+                let natural_w = u16::from(self.grapheme_width(cells[i].grapheme).max(1));
+                if r.saturating_add(scale) > rows || c.saturating_add(block_w.max(natural_w)) > cols
+                {
+                    to_drop.push((r, c, scale, block_w, natural_w));
                 }
             }
         }
-        for (pr, pc, scale, block_w) in to_drop {
+        let mut dropped = Vec::with_capacity(to_drop.len());
+        for (pr, pc, scale, block_w, natural_w) in to_drop {
             for dr in 0..scale {
                 for dc in 0..block_w {
                     let r = pr.saturating_add(dr);
                     let c = pc.saturating_add(dc);
-                    if r >= self.rows || c >= self.cols {
+                    if r >= rows || c >= cols {
                         continue;
                     }
-                    let idx = self.idx(r, c);
-                    self.cells[idx].sizing = None;
+                    let i = idx(r, c);
+                    cells[i].sizing = None;
                     // The primary keeps its grapheme (only the run's
                     // sizing is dropped), and wide-glyph `Spacer`
                     // partners stay so the natural-width pair survives.
-                    if matches!(self.cells[idx].grapheme, Grapheme::SizedSpacer) {
-                        self.cells[idx].grapheme = Grapheme::Empty;
+                    if matches!(cells[i].grapheme, Grapheme::SizedSpacer) {
+                        cells[i].grapheme = Grapheme::Empty;
                     }
                 }
             }
-            self.damage.mark(usize::from(pr));
+            // A pair the new edge cut cannot survive at its natural
+            // width either.
+            if pc.saturating_add(natural_w) > cols {
+                cells[idx(pr, pc)] = Cell::default();
+            }
+            dropped.push(pr);
         }
+        dropped
     }
 
     /// `Spacer` is `0`: the right half is already accounted for by its
@@ -1091,8 +1118,13 @@ impl ScreenBuffer {
         self.geometry_gen = self.geometry_gen.wrapping_add(1);
         // `saved_primary` is left alone: trim/pad is the wrong operator
         // for the primary; `leave_alternate` re-wraps it.
-        if let Some(saved) = self.saved_alternate.as_mut() {
-            crate::resize_saved_screen(saved, rows, cols);
+        if let Some(mut saved) = self.saved_alternate.take() {
+            crate::resize_saved_screen(&mut saved, rows, cols);
+            let saved_cols = usize::from(saved.cols);
+            self.discard_unfit_sized_runs_in(&mut saved.cells, saved.rows, saved.cols, |r, c| {
+                usize::from(r) * saved_cols + usize::from(c)
+            });
+            self.saved_alternate = Some(saved);
         }
         self.damage.resize(rows.into());
         self.damage.mark_all();

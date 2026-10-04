@@ -26,7 +26,10 @@ document [vt-compliance.md](../../explanation/protocols/vt-compliance.md).
 - Erase in display: ED (`CSI J`), 0 / 1 / 2 / 3, where 3 clears scrollback.
 - Two-cell glyphs: an erase whose edge falls on one half of a two-cell glyph (ECH, EL, ED, DECSEL, DECSED, DECERA,
   DECSERA) widens to take the whole glyph, and a print, DECFRA, or OSC 66 block that overwrites one half blanks the
-  other. This holds for a single wide scalar (`字`) and for a cluster (`❤️`, `👩‍💻`, `🇯🇵`) alike.
+  other. An operation that moves cells (ICH, DCH, an IRM insert, SL, SR, DECIC, DECDC, DECBI, DECFI, a scroll inside
+  DECSLRM margins, DECCRA, an alternate-screen resize) blanks a glyph its edge or a margin cuts, and keeps its count of
+  moved cells; an OSC 66 character cut this way is blanked whole, and DECCRA copies one only when its source holds all
+  of it. This holds for a single wide scalar (`字`) and for a cluster (`❤️`, `👩‍💻`, `🇯🇵`) alike.
 - Selective erase: DECSCA (`CSI Ps " q`) marks the pen protected (`1`) or unprotected (`0` / `2`); DECSEL (`CSI ? Ps K`)
   and DECSED (`CSI ? Ps J`) take the same `Ps` vocabulary as EL and ED but leave protected cells standing. SPA / EPA
   (`ESC V` / `ESC W`) set and clear a second, ISO protection bit: DECSEL and DECSED honor both bits, DECSERA only the

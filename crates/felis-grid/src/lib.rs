@@ -2061,19 +2061,15 @@ impl Grid {
         row_starts.push(0);
         while i < run.len() {
             let cell = run[i];
-            let w = self.screen.grapheme_width(cell.grapheme);
-            if w == 2 {
+            let has_spacer = i + 1 < run.len() && matches!(run[i + 1].grapheme, Grapheme::Spacer);
+            // A width-2 cluster whose widen was refused sat in one cell
+            // and keeps one, or the rest of its line would shift right.
+            if has_spacer && self.screen.grapheme_width(cell.grapheme) == 2 {
                 // A 1-column grid cannot host a wide glyph; drop it
                 // (with its spacer) rather than loop forever, matching
                 // `put_grapheme`.
                 if cols_usize < 2 {
-                    let skip =
-                        if i + 1 < run.len() && matches!(run[i + 1].grapheme, Grapheme::Spacer) {
-                            2
-                        } else {
-                            1
-                        };
-                    i += skip;
+                    i += 2;
                     continue;
                 }
                 if cur.len() + 2 > cols_usize {
@@ -2084,26 +2080,12 @@ impl Grid {
                 if cursor_target == Some(i) {
                     cursor_pos = Some((rows_pushed, cur.len()));
                 }
-                let (spacer, adv) =
-                    if i + 1 < run.len() && matches!(run[i + 1].grapheme, Grapheme::Spacer) {
-                        (run[i + 1], 2)
-                    } else {
-                        (
-                            Cell {
-                                grapheme: Grapheme::Spacer,
-                                style: cell.style,
-                                link: cell.link,
-                                sizing: cell.sizing,
-                            },
-                            1,
-                        )
-                    };
-                if adv == 2 && cursor_target == Some(i + 1) {
+                if cursor_target == Some(i + 1) {
                     cursor_pos = Some((rows_pushed, cur.len() + 1));
                 }
                 cur.push(cell);
-                cur.push(spacer);
-                i += adv;
+                cur.push(run[i + 1]);
+                i += 2;
             } else {
                 if cur.len() + 1 > cols_usize {
                     pad_and_push(&mut cur, cols_usize, out_rows, out_continued, &mut first);
@@ -2543,6 +2525,15 @@ fn trim_cells(
             let src_idx = usize::from(r) * usize::from(src_cols) + usize::from(c);
             let dst_idx = usize::from(r) * usize::from(dst_cols) + usize::from(c);
             dst[dst_idx] = src[src_idx];
+        }
+        if live == dst_cols && dst_cols < occ.min(src_cols) {
+            let cut = usize::from(r) * usize::from(src_cols) + usize::from(dst_cols);
+            // The discard sweep after the resize takes a sized pair,
+            // block and all.
+            if matches!(src[cut].grapheme, Grapheme::Spacer) && src[cut].sizing.is_none() {
+                dst[usize::from(r) * usize::from(dst_cols) + usize::from(dst_cols) - 1] =
+                    Cell::default();
+            }
         }
     }
     dst
