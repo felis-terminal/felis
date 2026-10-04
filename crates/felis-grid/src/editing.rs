@@ -439,8 +439,14 @@ impl Grid {
         let Some((row, owner_col)) = self.combining_owner() else {
             return false;
         };
-        if !self.extend_cluster(self.screen.idx(row, owner_col), &[mark]) {
+        let owner_idx = self.screen.idx(row, owner_col);
+        if !self.extend_cluster(owner_idx, &[mark]) {
             return false;
+        }
+        // Any cursor move clears the anchor, so a live one is the
+        // cell just extended: REP must repeat the whole cluster.
+        if self.last_printed.is_some() {
+            self.last_printed = Some(self.screen.cells[owner_idx].grapheme);
         }
         // unicode-width reports base + VS16 (❤️) or a keycap
         // sequence (1️⃣) as 2 cells, but the base was placed narrow
@@ -615,7 +621,7 @@ impl Grid {
 
     /// `row_base` is pre-resolved so `put_grapheme`'s two probes and
     /// its cell writes share one `row_lookup` round trip.
-    fn evict_wide_partner_at(&mut self, row: u16, row_base: usize, col: usize) {
+    pub(crate) fn evict_wide_partner_at(&mut self, row: u16, row_base: usize, col: usize) {
         let cols = usize::from(self.screen.cols);
         if col >= cols {
             return;
@@ -623,13 +629,10 @@ impl Grid {
         let idx = row_base + col;
         let needs_left_evict =
             matches!(self.screen.cells[idx].grapheme, Grapheme::Spacer) && col > 0;
-        let needs_right_evict =
-            matches!(self.screen.cells[idx].grapheme, Grapheme::Char(_)) && col + 1 < cols;
         if needs_left_evict {
             self.screen.cells[idx - 1] = Cell::default();
             self.screen.damage.mark(row.into());
-        } else if needs_right_evict
-            && matches!(self.screen.cells[idx + 1].grapheme, Grapheme::Spacer)
+        } else if col + 1 < cols && matches!(self.screen.cells[idx + 1].grapheme, Grapheme::Spacer)
         {
             self.screen.cells[idx + 1] = Cell::default();
             self.screen.damage.mark(row.into());
@@ -664,9 +667,34 @@ impl Grid {
         }
     }
 
+    /// Widens `[from, to)` so it splits no wide pair. Past the watermark a
+    /// recycled row's stale `Spacer` would pull in a live cell, so only
+    /// cells below it are probed. A pair shares one protection state, so
+    /// a protected-cell check over the result keeps or erases it whole.
+    pub(crate) fn pair_aligned_span(&self, row: u16, from: usize, to: usize) -> (usize, usize) {
+        let cols = usize::from(self.screen.cols);
+        let phys = self.screen.phys_row(row);
+        let occ = usize::from(self.screen.occupancy[phys]).min(cols);
+        let base = phys * cols;
+        let is_spacer =
+            |col: usize| matches!(self.screen.cells[base + col].grapheme, Grapheme::Spacer);
+        let mut from = from.min(cols);
+        let mut to = to.clamp(from, cols);
+        if from == to {
+            return (from, to);
+        }
+        if from > 0 && from < occ && is_spacer(from) {
+            from -= 1;
+        }
+        if to < occ && is_spacer(to) {
+            to += 1;
+        }
+        (from, to)
+    }
+
     /// Blank cells `[from, to)`, widening by one cell on each side when
     /// a wide-glyph half straddles the boundary, so an erase never
-    /// leaves an orphan Char or Spacer.
+    /// leaves an orphan owner or Spacer.
     pub(crate) fn range_blank(&mut self, row: u16, from: usize, to: usize) {
         self.range_blank_inner(row, from, to, false);
     }
@@ -691,16 +719,9 @@ impl Grid {
         let row_end = row_start + usize::from(self.screen.cols);
         from = from.max(row_start).min(row_end);
         to = to.max(from).min(row_end);
-        if from > row_start && matches!(self.screen.cells[from].grapheme, Grapheme::Spacer) {
-            from -= 1;
-        }
-        if to > from
-            && to < row_end
-            && matches!(self.screen.cells[to - 1].grapheme, Grapheme::Char(_))
-            && matches!(self.screen.cells[to].grapheme, Grapheme::Spacer)
-        {
-            to += 1;
-        }
+        let (from_col, to_col) = self.pair_aligned_span(row, from - row_start, to - row_start);
+        from = row_start + from_col;
+        to = row_start + to_col;
         let blank = Cell {
             grapheme: Grapheme::Empty,
             style: self.pen_style,
@@ -2031,6 +2052,7 @@ impl Grid {
             2 => (0, cols),
             _ => return,
         };
+        let (from, to) = self.pair_aligned_span(row, from, to);
         let blank = self.selective_blank();
         let protect = AttrFlags::PROTECTED | AttrFlags::ISO_PROTECTED;
         for col in from..to {
@@ -2057,6 +2079,8 @@ impl Grid {
         let rows = usize::from(self.screen.rows);
         let cur_row = usize::from(self.screen.cursor.row);
         let cur_col = usize::from(self.screen.cursor.col);
+        let (tail_start, _) = self.pair_aligned_span(self.screen.cursor.row, cur_col, cols);
+        let (_, head_end) = self.pair_aligned_span(self.screen.cursor.row, 0, cur_col + 1);
         let blank = self.selective_blank();
         let protect = AttrFlags::PROTECTED | AttrFlags::ISO_PROTECTED;
         let styles = &self.screen.style_table;
@@ -2075,7 +2099,7 @@ impl Grid {
                 // is rotation-agnostic.)
                 let cur_base = self.screen.phys_row_at(cur_row) * cols;
                 erase_range(
-                    cur_base + cur_col,
+                    cur_base + tail_start,
                     cur_base + cols,
                     &mut self.screen.cells,
                     &blank,
@@ -2093,7 +2117,7 @@ impl Grid {
                 let cur_base = self.screen.phys_row_at(cur_row) * cols;
                 erase_range(
                     cur_base,
-                    cur_base + cur_col + 1,
+                    cur_base + head_end,
                     &mut self.screen.cells,
                     &blank,
                 );
@@ -2188,10 +2212,10 @@ impl Grid {
             return;
         };
         for r in rect.top..=rect.bottom {
-            for c in rect.left..=rect.right {
-                let idx = self.screen.idx(r, c);
-                self.screen.cells[idx] = Cell::default();
-            }
+            let (from, to) =
+                self.pair_aligned_span(r, usize::from(rect.left), usize::from(rect.right) + 1);
+            let row_start = self.screen.idx(r, 0);
+            blank_cells(&mut self.screen.cells[row_start + from..row_start + to]);
             self.screen.damage.mark(usize::from(r));
         }
     }
@@ -2206,8 +2230,10 @@ impl Grid {
         for r in rect.top..=rect.bottom {
             // Reads and re-watermarks past existing occupancy, so materialize first.
             self.materialize_row_tail(r);
-            for c in rect.left..=rect.right {
-                let idx = self.screen.idx(r, c);
+            let (from, to) =
+                self.pair_aligned_span(r, usize::from(rect.left), usize::from(rect.right) + 1);
+            let row_start = self.screen.idx(r, 0);
+            for idx in row_start + from..row_start + to {
                 if !self
                     .screen
                     .style_table
@@ -2246,6 +2272,9 @@ impl Grid {
             // otherwise leave `[occ..left)` stale inside the new live
             // extent.
             self.materialize_row_tail(r);
+            let row_base = self.screen.idx(r, 0);
+            self.evict_wide_partner_at(r, row_base, usize::from(rect.left));
+            self.evict_wide_partner_at(r, row_base, usize::from(rect.right));
             for c in rect.left..=rect.right {
                 let idx = self.screen.idx(r, c);
                 self.screen.cells[idx] = Cell {

@@ -157,9 +157,15 @@ impl Grid {
                     // seat past a recycled row's stale tail.
                     let phys = self.screen.phys_row(r);
                     let occ = usize::from(self.screen.occupancy[phys]);
+                    let base = phys * usize::from(self.screen.cols);
                     if usize::from(c) > occ {
-                        let base = phys * usize::from(self.screen.cols);
                         self.screen.cells[base + occ..base + usize::from(c)].fill(Cell::default());
+                    } else if usize::from(c) < occ {
+                        // Left to right, so a pair inside the block loses
+                        // its Spacer to the owner's probe before the
+                        // Spacer's own probe could reach back into the
+                        // block's stamped cells.
+                        self.evict_wide_partner_at(r, base, usize::from(c));
                     }
                     let idx = self.screen.idx(r, c);
                     self.screen.cells[idx] = Cell {

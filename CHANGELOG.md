@@ -18,6 +18,10 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 
 ### Fixed
 
+- Writing over or erasing one half of a multi-codepoint wide character (`❄️`, `🇯🇵`, `👩‍💻`, a keycap) removes the whole
+  character instead of losing neighboring text: a shell prompt that redraws an unchanged emoji keeps it, and ECH,
+  DECERA, DECFRA, DECSEL, DECSED and OSC 66 no longer leave half a glyph behind (for a plain wide `字` too). REP after a
+  cluster repeats the whole cluster instead of its base character.
 - A glyph that a fallback face draws wider than its cells (an East Asian Ambiguous `※` from a CJK font, or a
   text-presentation emoji such as `☺` from the color-emoji font) is shrunk to fit and centred in its cell, instead of
   overlapping the next character.

@@ -2,7 +2,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use felis_grid::{Cell, Grid, ScrollDirection, Sizing, SizingHandle};
+use felis_grid::{Cell, Grapheme, Grid, ScrollDirection, Sizing, SizingHandle};
 use felis_vt::Parser;
 use proptest::prelude::*;
 
@@ -66,7 +66,7 @@ fn replay_events_onto_shadow(daemon: &mut Grid, mut shadow: Vec<Cell>) -> Vec<Ce
     shadow
 }
 
-fn reflow_visible_snapshot(g: &Grid) -> (Vec<felis_grid::Grapheme>, Vec<bool>) {
+fn reflow_visible_snapshot(g: &Grid) -> (Vec<Grapheme>, Vec<bool>) {
     let mut cells = Vec::new();
     let mut wraps = Vec::new();
     for r in 0..g.rows() {
@@ -494,5 +494,75 @@ proptest! {
         }
         prop_assert!(grid.cell(new_rows - 1, new_cols - 1).is_some());
         prop_assert!(grid.cell(new_rows, 0).is_none());
+    }
+}
+
+/// Writes, erases, and repeats that land on either half of a wide pair.
+/// The cell-moving editors (ICH, DCH, IRM, SL/SR, DECCRA, resize) are
+/// left out: they do not keep this invariant yet.
+fn pair_editing_op() -> impl Strategy<Value = String> {
+    let text = prop::sample::select(vec![
+        "❤\u{fe0f}",
+        "🇯🇵",
+        "👩\u{200d}💻",
+        "字",
+        "1\u{fe0f}\u{20e3}",
+        "e\u{301}",
+        "❄",
+        "\u{fe0f}",
+        "x",
+        "XY",
+        "é",
+        "\r",
+    ])
+    .prop_map(str::to_owned);
+    prop_oneof![
+        3 => text,
+        1 => (1u16..=3, 1u16..=10).prop_map(|(r, c)| format!("\x1b[{r};{c}H")),
+        1 => (0u16..=3).prop_map(|n| format!("\x1b[{n}X")),
+        1 => (0u16..=2).prop_map(|n| format!("\x1b[{n}K")),
+        1 => (0u16..=2).prop_map(|n| format!("\x1b[{n}J")),
+        1 => (0u16..=2).prop_map(|n| format!("\x1b[?{n}K")),
+        1 => (0u16..=2).prop_map(|n| format!("\x1b[?{n}J")),
+        1 => (0u16..=1).prop_map(|n| format!("\x1b[{n}\"q")),
+        1 => (1u16..=3, 1u16..=10, 0u16..=2, 0u16..=3).prop_map(|(t, l, h, w)| {
+            format!("\x1b[{t};{l};{};{}$z", t + h, l + w)
+        }),
+        1 => (1u16..=3, 1u16..=10, 0u16..=2, 0u16..=3).prop_map(|(t, l, h, w)| {
+            format!("\x1b[{t};{l};{};{}${{", t + h, l + w)
+        }),
+        1 => (1u16..=3, 1u16..=10, 0u16..=2, 0u16..=3).prop_map(|(t, l, h, w)| {
+            format!("\x1b[42;{t};{l};{};{}$x", t + h, l + w)
+        }),
+        1 => (1u16..=3).prop_map(|w| format!("\x1b]66;w={w};A\x07")),
+        1 => (1u16..=3).prop_map(|n| format!("\x1b[{n}b")),
+    ]
+}
+
+proptest! {
+    /// A `Spacer` is only ever the right half of a two-cell glyph, so the
+    /// cell to its left must hold one; otherwise a write or erase split
+    /// the pair and left text the renderer and the copy path disagree on.
+    #[test]
+    fn every_spacer_sits_right_of_a_two_cell_glyph(
+        cols in 4u16..=10,
+        ops in proptest::collection::vec(pair_editing_op(), 0..40),
+    ) {
+        use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+        let grid = drive(3, cols, ops.concat().as_bytes());
+        for r in 0..grid.rows() {
+            for c in 0..grid.cols() {
+                if grid.cell(r, c).unwrap().grapheme != Grapheme::Spacer {
+                    continue;
+                }
+                let left = (c > 0).then(|| grid.cell(r, c - 1).unwrap().grapheme);
+                let left_width = match left {
+                    Some(Grapheme::Char(ch)) => ch.width().unwrap_or(0),
+                    Some(Grapheme::Cluster(id)) => grid.cluster_str(id).map_or(0, |s| s.width().min(2)),
+                    _ => 0,
+                };
+                prop_assert_eq!(left_width, 2, "orphan Spacer at ({}, {}) after {:?}", r, c, ops);
+            }
+        }
     }
 }

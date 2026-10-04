@@ -19,11 +19,14 @@ document [vt-compliance.md](../../explanation/protocols/vt-compliance.md).
 - CUU / CUD clamp at the active scroll margins per VT220 §5.7. The xterm cursor aliases HPA (``CSI ` ``), HPR (`CSI a`),
   VPR (`CSI e`), CHT (`CSI Pn I`), CBT (`CSI Pn Z`) are recognized; CHT clamps forward tabs to the right margin, and CBT
   deliberately ignores the left margin, matching xterm (`test_CBT_*` in esctest).
-- Repeat: REP (`CSI Pn b`) reprints the last graphic character `Pn` times. The anchor is cleared by any non-print
-  dispatch, so REP after a control sequence is a no-op.
+- Repeat: REP (`CSI Pn b`) reprints the last printed grapheme `Pn` times, a cluster whole (`❤️`, `🇯🇵`) rather than its
+  base scalar. The anchor is cleared by any non-print dispatch, so REP after a control sequence is a no-op.
 - Back / forward index: DECBI (`ESC 6`), DECFI (`ESC 9`). At the left or right margin they scroll the region
   horizontally instead of moving the cursor.
 - Erase in display: ED (`CSI J`), 0 / 1 / 2 / 3, where 3 clears scrollback.
+- Two-cell glyphs: an erase whose edge falls on one half of a two-cell glyph (ECH, EL, ED, DECSEL, DECSED, DECERA,
+  DECSERA) widens to take the whole glyph, and a print, DECFRA, or OSC 66 block that overwrites one half blanks the
+  other. This holds for a single wide scalar (`字`) and for a cluster (`❤️`, `👩‍💻`, `🇯🇵`) alike.
 - Selective erase: DECSCA (`CSI Ps " q`) marks the pen protected (`1`) or unprotected (`0` / `2`); DECSEL (`CSI ? Ps K`)
   and DECSED (`CSI ? Ps J`) take the same `Ps` vocabulary as EL and ED but leave protected cells standing. SPA / EPA
   (`ESC V` / `ESC W`) set and clear a second, ISO protection bit: DECSEL and DECSED honor both bits, DECSERA only the

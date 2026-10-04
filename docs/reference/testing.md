@@ -189,6 +189,8 @@ Categories covered:
 - **Kitty graphics**: command combinations listed in [protocols/kitty-graphics.md](protocols/kitty-graphics.md).
 - **Reflow scenarios**: pre- and post-resize states for wrapped lines, sized-text spans, and image placements.
 - **Rehydration**: pre-detach and post-attach grid and image state.
+- **Two-cell glyph edits**: `crates/felis-grid/tests/snapshot_wide_pairs.rs` renders each cell's role, so a write,
+  erase, or repeat that splits a wide scalar or cluster shows as an orphaned half.
 - **Recorded PTY replays**: `crates/felis-grid/tests/ref_recordings.rs` replays
   `crates/felis-grid/tests/ref/<scenario>/` (`recording.bin` + `size.json`).
 - **CLI help pages**: `crates/felis-cli/src/tests.rs` renders every visible help page into

@@ -69,31 +69,20 @@ pub(crate) fn table_width(table: &[u8; 0x4000], c: char) -> usize {
     }
 }
 
-/// Past the pre-write watermark `occ` the row holds a recycled slot's
-/// stale tenant, not live cells, so only `[start..occ)` probes for a wide
-/// partner to evict: a stale `Spacer` would otherwise blank the cell this
-/// run just wrote to its left.
+/// Only the run's two edges can split a wide pair; a pair inside it is
+/// overwritten whole. Past the pre-write watermark `occ` the row holds a
+/// recycled slot's stale tenant, so an edge there is not probed: a stale
+/// `Spacer` at `start` would otherwise blank the live cell to its left.
 #[inline]
 fn store_ascii_run(row: &mut [Cell], start: usize, occ: usize, bytes: &[u8], pen: Cell) {
-    let cols = row.len();
-    let live_end = occ.clamp(start, start + bytes.len());
-    let (live, fresh) = bytes.split_at(live_end - start);
-    for (col, &b) in (start..live_end).zip(live) {
-        match row[col].grapheme {
-            Grapheme::Spacer if col > 0 => row[col - 1] = Cell::default(),
-            Grapheme::Char(_)
-                if col + 1 < cols && matches!(row[col + 1].grapheme, Grapheme::Spacer) =>
-            {
-                row[col + 1] = Cell::default();
-            }
-            _ => {}
-        }
-        row[col] = Cell {
-            grapheme: Grapheme::Ascii(b),
-            ..pen
-        };
+    let end = start + bytes.len();
+    if start > 0 && start < occ && matches!(row[start].grapheme, Grapheme::Spacer) {
+        row[start - 1] = Cell::default();
     }
-    for (dst, &b) in row[live_end..live_end + fresh.len()].iter_mut().zip(fresh) {
+    if end < occ && matches!(row[end].grapheme, Grapheme::Spacer) {
+        row[end] = Cell::default();
+    }
+    for (dst, &b) in row[start..end].iter_mut().zip(bytes) {
         *dst = Cell {
             grapheme: Grapheme::Ascii(b),
             ..pen
