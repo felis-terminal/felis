@@ -36,7 +36,7 @@ fn cell_input() -> impl Strategy<Value = (char, Vec<char>)> {
 
 proptest! {
     /// Pins: a shadow driven in the daemon's emission order (Cluster
-    /// messages, then RowDeltas) ends cell-for-cell identical to the
+    /// messages, then `RowDeltas`) ends cell-for-cell identical to the
     /// daemon grid, with every cluster handle resolving to the same text.
     #[test]
     fn shadow_mirrors_daemon_clusters(
