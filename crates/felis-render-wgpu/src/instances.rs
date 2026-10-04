@@ -208,6 +208,16 @@ pub trait AtlasView {
         sizing: SizingKey,
     ) -> Option<GlyphSlot>;
 
+    /// The slot of a cluster glyph shrunk to `px` to fit its cells;
+    /// see [`crate::glyphs::ShapedCell::Cluster`].
+    fn fitted_glyph_id_slot(
+        &self,
+        glyph_id: felis_shaping::GlyphId,
+        px: u16,
+        cell_height_px: u32,
+        sizing: SizingKey,
+    ) -> Option<GlyphSlot>;
+
     /// The shaped glyphs of a multi-scalar overlay cluster, `None` until
     /// the overlay's text was populated.
     fn overlay_cluster(&self, text: &str) -> Option<&[crate::glyphs::ClusterGlyph]>;
@@ -482,8 +492,8 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
             if matches!(shaped, crate::glyphs::ShapedCell::Trailing) {
                 continue;
             }
-            if let crate::glyphs::ShapedCell::Cluster { start, len } = shaped {
-                self.push_cluster_cell(out, &at, fg_color, start, len);
+            if let crate::glyphs::ShapedCell::Cluster { start, len, fit_px } = shaped {
+                self.push_cluster_cell(out, &at, fg_color, (start, len), fit_px);
                 continue;
             }
             self.push_char_cell(out, &at, fg_color, shaped);
@@ -647,8 +657,8 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
         out: &mut InstanceBuffers,
         at: &CellRef<'_>,
         fg_color: [f32; 4],
-        start: u32,
-        len: u16,
+        (start, len): (u32, u16),
+        fit_px: u16,
     ) {
         // `shape_clusters` primed each glyph with the sized key, so
         // emission rebuilds the same key and scales pen / GPOS by the
@@ -661,106 +671,74 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
         let base_sizing = sizing_key_from(sizing).with_style(font_style_of(at.attrs.flags));
         let glyph_scale = sizing_glyph_scale(sizing);
         let scaled_ascent = self.ascent * glyph_scale;
-        let glyphs = self.shape_frame.cluster_slice(start, len);
-        let block_shift = self.cluster_block_shift(
-            at.cell,
-            glyphs,
-            sizing,
+        let pen = ClusterPen {
+            glyphs: self.shape_frame.cluster_slice(start, len),
             base_sizing,
+            fit_px,
             glyph_scale,
-            scaled_ascent,
-        );
+            origin: [0.0, scaled_ascent],
+            color: fg_color,
+        };
+        let block_shift = self.cluster_block_shift(at, pen, sizing);
         let origin = self.origin(at);
         push_cluster_glyphs(
             self.atlas,
             self.metrics.height,
             ClusterPen {
-                glyphs,
-                base_sizing,
-                glyph_scale,
                 origin: [
                     origin[0] + block_shift[0],
                     origin[1] + block_shift[1] + scaled_ascent,
                 ],
-                color: fg_color,
+                ..pen
             },
             &mut out.fg,
         );
     }
 
-    /// Top/Left needs no shift: the early-out keeps default-sized
-    /// output byte-identical rather than relying on the ink formula's
-    /// float reduction. The other alignments align the cluster's union
-    /// ink box, so a mark extending past its base keeps the whole
-    /// cluster inside the block.
+    /// Top/Left needs no shift: the early-out keeps default-sized output
+    /// byte-identical rather than relying on the ink formula's float
+    /// reduction. The other alignments align the union ink box, so a mark
+    /// past its base stays inside the block. Top/Left centres a fitted
+    /// cluster, as `fitted_bitmap` centres a fitted char.
     fn cluster_block_shift(
         &self,
-        cell: &Cell,
-        glyphs: &[crate::glyphs::ClusterGlyph],
+        at: &CellRef<'_>,
+        pen: ClusterPen<'_>,
         sizing: Sizing,
-        base_sizing: SizingKey,
-        glyph_scale: f32,
-        scaled_ascent: f32,
     ) -> [f32; 2] {
-        if matches!(sizing.halign(), HAlign::Left) && matches!(sizing.valign(), VAlign::Top) {
+        let fitted = pen.fit_px > 0;
+        if !fitted
+            && matches!(sizing.halign(), HAlign::Left)
+            && matches!(sizing.valign(), VAlign::Top)
+        {
             return [0.0, 0.0];
         }
-        // Ink box in the cluster-local frame, replicating the emit loop's
-        // placement. A missing slot contributes only its advance.
-        let mut pen = 0.0f32;
-        let mut ink: Option<[f32; 4]> = None;
-        for cg in glyphs {
-            let key = base_sizing.with_font_id(cg.font_id as usize);
-            if let Some(slot) = self
-                .atlas
-                .glyph_id_slot(cg.glyph_id, self.metrics.height, key)
-            {
-                let x0 = cg.x_offset_px.mul_add(glyph_scale, pen) + slot.offset_px[0] as f32;
-                let y0 = cg
-                    .y_offset_px
-                    .mul_add(-glyph_scale, scaled_ascent - slot.offset_px[1] as f32);
-                let x1 = x0 + slot.size_px[0] as f32;
-                let y1 = y0 + slot.size_px[1] as f32;
-                ink = Some(match ink {
-                    None => [x0, y0, x1, y1],
-                    Some([ix0, iy0, ix1, iy1]) => {
-                        [ix0.min(x0), iy0.min(y0), ix1.max(x1), iy1.max(y1)]
-                    }
-                });
-            }
-            pen = cg.advance_px.mul_add(glyph_scale, pen);
-        }
-        match ink {
-            None => [0.0, 0.0],
-            Some([ink_x0, ink_y0, ink_x1, ink_y1]) => {
-                let ink_w = ink_x1 - ink_x0;
-                let ink_h = ink_y1 - ink_y0;
-                let layout_scale = sizing_scale_for_layout(sizing);
-                // `w == 0` falls back to the base char's natural cell width.
-                let base_char = match &cell.grapheme {
-                    Grapheme::Cluster(id) => crate::glyphs::cluster_base_char(self.screen, *id),
-                    _ => None,
-                };
-                let override_w = if sizing.cell_width() > 0 {
-                    f32::from(sizing.cell_width())
-                } else {
-                    f32::from(base_char.map_or(1, |c| char_cell_width(c).max(1)))
-                };
-                let block_w = self.cw * override_w * layout_scale;
-                let block_h = self.ch * layout_scale;
-                let shift_x = match sizing.halign() {
-                    HAlign::Left => 0.0,
-                    HAlign::Right => block_w - ink_x1,
-                    HAlign::Center => (block_w - ink_w) / 2.0 - ink_x0,
-                };
-                let shift_y = match sizing.valign() {
-                    VAlign::Top => 0.0,
-                    VAlign::Bottom => block_h - ink_y1,
-                    VAlign::Center => (block_h - ink_h) / 2.0 - ink_y0,
-                };
-                [shift_x, shift_y]
-            }
-        }
+        let Some([ink_x0, ink_y0, ink_x1, ink_y1]) =
+            cluster_ink_box(self.atlas, self.metrics.height, pen)
+        else {
+            return [0.0, 0.0];
+        };
+        let ink_w = ink_x1 - ink_x0;
+        let ink_h = ink_y1 - ink_y0;
+        let layout_scale = sizing_scale_for_layout(sizing);
+        let block_w =
+            self.cw * f32::from(cluster_block_cols(self.screen, at.row, at.col)) * layout_scale;
+        let block_h = self.ch * layout_scale;
+        let centre_x = (block_w - ink_w) / 2.0 - ink_x0;
+        let centre_y = (block_h - ink_h) / 2.0 - ink_y0;
+        let shift_x = match sizing.halign() {
+            HAlign::Left if fitted => centre_x,
+            HAlign::Left => 0.0,
+            HAlign::Right => block_w - ink_x1,
+            HAlign::Center => centre_x,
+        };
+        let shift_y = match sizing.valign() {
+            VAlign::Top if fitted => centre_y,
+            VAlign::Top => 0.0,
+            VAlign::Bottom => block_h - ink_y1,
+            VAlign::Center => centre_y,
+        };
+        [shift_x, shift_y]
     }
 
     fn push_char_cell(
@@ -1247,6 +1225,7 @@ fn push_overlay_glyphs<A: AtlasView>(
             ClusterPen {
                 glyphs,
                 base_sizing: SizingKey::default(),
+                fit_px: 0,
                 glyph_scale: 1.0,
                 origin: [origin[0], origin[1] + ascent],
                 color: theme_default_fg(),
@@ -1272,14 +1251,67 @@ fn push_overlay_glyphs<A: AtlasView>(
 }
 
 /// A shaped cluster's glyphs and where its pen starts: `origin` is the
-/// left edge on the baseline.
+/// left edge on the baseline. A non-zero `fit_px` reads the glyphs'
+/// fitted slots.
 #[derive(Clone, Copy)]
 struct ClusterPen<'g> {
     glyphs: &'g [crate::glyphs::ClusterGlyph],
     base_sizing: SizingKey,
+    fit_px: u16,
     glyph_scale: f32,
     origin: [f32; 2],
     color: [f32; 4],
+}
+
+/// Each placed glyph's slot and top-left corner; a glyph with no slot
+/// still advances the pen, so later glyphs keep their place.
+fn cluster_glyph_quads<'g, A: AtlasView>(
+    atlas: &'g A,
+    cell_height: u32,
+    pen: ClusterPen<'g>,
+) -> impl Iterator<Item = (GlyphSlot, [f32; 2])> + 'g {
+    pen.glyphs
+        .iter()
+        .scan(0.0f32, move |x, cg| {
+            let key = pen.base_sizing.with_font_id(cg.font_id as usize);
+            let slot = match pen.fit_px {
+                0 => atlas.glyph_id_slot(cg.glyph_id, cell_height, key),
+                px => atlas.fitted_glyph_id_slot(cg.glyph_id, px, cell_height, key),
+            };
+            let quad = slot.map(|slot| {
+                // `slot.offset_px` already comes from the scaled raster, so
+                // it is not re-scaled. `mul_add(scale, base)` keeps the
+                // default path (`scale == 1`) byte-identical to `b + x`.
+                let x_base = pen.origin[0] + *x;
+                let gx = cg.x_offset_px.mul_add(pen.glyph_scale, x_base) + slot.offset_px[0] as f32;
+                // swash reports GPOS y in font space (y-up); screen space
+                // is y-down.
+                let y_base = pen.origin[1] - slot.offset_px[1] as f32;
+                let gy = cg.y_offset_px.mul_add(-pen.glyph_scale, y_base);
+                (slot, [gx, gy])
+            });
+            *x = cg.advance_px.mul_add(pen.glyph_scale, *x);
+            Some(quad)
+        })
+        .flatten()
+}
+
+/// The union of the placed glyphs' ink as `[x0, y0, x1, y1]`.
+fn cluster_ink_box<A: AtlasView>(
+    atlas: &A,
+    cell_height: u32,
+    pen: ClusterPen<'_>,
+) -> Option<[f32; 4]> {
+    cluster_glyph_quads(atlas, cell_height, pen)
+        .map(|(slot, [x0, y0])| {
+            [
+                x0,
+                y0,
+                x0 + slot.size_px[0] as f32,
+                y0 + slot.size_px[1] as f32,
+            ]
+        })
+        .reduce(|[a, b, c, d], [x0, y0, x1, y1]| [a.min(x0), b.min(y0), c.max(x1), d.max(y1)])
 }
 
 fn push_cluster_glyphs<A: AtlasView>(
@@ -1288,31 +1320,28 @@ fn push_cluster_glyphs<A: AtlasView>(
     pen: ClusterPen<'_>,
     out: &mut Vec<FgInstance>,
 ) {
-    let mut x = 0.0f32;
-    for cg in pen.glyphs {
-        let key = pen.base_sizing.with_font_id(cg.font_id as usize);
-        if let Some(slot) = atlas.glyph_id_slot(cg.glyph_id, cell_height, key) {
-            // `slot.offset_px` already comes from the scaled raster, so
-            // it is not re-scaled. `mul_add(scale, base)` keeps the
-            // default path (`scale == 1`) byte-identical to `b + x`.
-            let x_base = pen.origin[0] + x;
-            let gx = cg.x_offset_px.mul_add(pen.glyph_scale, x_base) + slot.offset_px[0] as f32;
-            // swash reports GPOS y in font space (y-up); screen space
-            // is y-down.
-            let y_base = pen.origin[1] - slot.offset_px[1] as f32;
-            let gy = cg.y_offset_px.mul_add(-pen.glyph_scale, y_base);
-            out.push(FgInstance {
-                origin_px: [gx, gy],
-                size_px: [slot.size_px[0] as f32, slot.size_px[1] as f32],
-                uv_min: slot.uv_min,
-                uv_max: slot.uv_max,
-                is_color: if slot.is_color { 1.0 } else { 0.0 },
-                _pad: [0.0; 3],
-                color: pen.color,
-            });
+    out.extend(
+        cluster_glyph_quads(atlas, cell_height, pen).map(|(slot, origin_px)| FgInstance {
+            origin_px,
+            size_px: [slot.size_px[0] as f32, slot.size_px[1] as f32],
+            uv_min: slot.uv_min,
+            uv_max: slot.uv_max,
+            is_color: if slot.is_color { 1.0 } else { 0.0 },
+            _pad: [0.0; 3],
+            color: pen.color,
+        }),
+    );
+}
+
+/// The columns a cluster's block spans before the OSC 66 scale: `w`,
+/// else the grid's span, so a VS16 widen the grid refused gets one.
+pub(crate) fn cluster_block_cols(screen: &ScreenBuffer, row: u16, col: u16) -> u16 {
+    match screen.cell_sizing(row, col).map_or(0, |s| s.cell_width()) {
+        0 => {
+            let (first, last) = screen.char_span(row, col);
+            last - first + 1
         }
-        // Advance on a miss too, so later glyphs keep their pen.
-        x = cg.advance_px.mul_add(pen.glyph_scale, x);
+        w => u16::from(w),
     }
 }
 
@@ -1716,6 +1745,7 @@ mod tests {
     struct MockAtlas {
         map: HashMap<char, GlyphSlot>,
         gid_map: HashMap<felis_shaping::GlyphId, GlyphSlot>,
+        fitted_map: HashMap<(felis_shaping::GlyphId, u16), GlyphSlot>,
         clusters: HashMap<String, Vec<crate::glyphs::ClusterGlyph>>,
     }
 
@@ -1728,6 +1758,7 @@ mod tests {
             Self {
                 map,
                 gid_map: HashMap::new(),
+                fitted_map: HashMap::new(),
                 clusters: HashMap::new(),
             }
         }
@@ -1745,6 +1776,16 @@ mod tests {
             _sizing: SizingKey,
         ) -> Option<GlyphSlot> {
             self.gid_map.get(&glyph_id).copied()
+        }
+
+        fn fitted_glyph_id_slot(
+            &self,
+            glyph_id: felis_shaping::GlyphId,
+            px: u16,
+            _cell_height_px: u32,
+            _sizing: SizingKey,
+        ) -> Option<GlyphSlot> {
+            self.fitted_map.get(&(glyph_id, px)).copied()
         }
 
         fn overlay_cluster(&self, text: &str) -> Option<&[crate::glyphs::ClusterGlyph]> {
@@ -2039,7 +2080,11 @@ mod tests {
         atlas.gid_map.insert(200, slot());
         let frame = ShapeFrame::from_cluster_cells(
             vec![
-                ShapedCell::Cluster { start: 0, len: 2 },
+                ShapedCell::Cluster {
+                    start: 0,
+                    len: 2,
+                    fit_px: 0,
+                },
                 ShapedCell::None,
                 ShapedCell::None,
                 ShapedCell::None,
@@ -2102,7 +2147,11 @@ mod tests {
             },
         ];
         let mut cells = vec![ShapedCell::None; 8];
-        cells[0] = ShapedCell::Cluster { start: 0, len: 2 };
+        cells[0] = ShapedCell::Cluster {
+            start: 0,
+            len: 2,
+            fit_px: 0,
+        };
         let frame = ShapeFrame::from_cluster_cells(cells, 4, glyphs);
         let buffers = build_shaped(g.screen(), &atlas, &frame);
         assert_eq!(buffers.fg.len(), 2, "one instance per cluster glyph");
@@ -2154,7 +2203,11 @@ mod tests {
             },
         ];
         let mut cells = vec![ShapedCell::None; 4];
-        cells[0] = ShapedCell::Cluster { start: 0, len: 2 };
+        cells[0] = ShapedCell::Cluster {
+            start: 0,
+            len: 2,
+            fit_px: 0,
+        };
         let frame = ShapeFrame::from_cluster_cells(cells, 4, glyphs);
         let buffers = build_shaped(g.screen(), &atlas, &frame);
         assert_eq!(buffers.fg.len(), 2, "one instance per cluster glyph");
@@ -2167,6 +2220,108 @@ mod tests {
             [6.0, 4.0],
             "the mark's ink ends flush with the block's right/bottom edges",
         );
+    }
+
+    /// The block is the grid's span, not the base char's width: VS16
+    /// widens a width-1 heart to two cells unless the last column
+    /// refuses it, and OSC 66 `w` overrides both; `s` scales the block
+    /// after.
+    #[test]
+    fn a_cluster_block_spans_the_cells_the_grid_gives_it() {
+        let cols = |bytes: &[u8], col| {
+            let g = drive(2, 8, bytes);
+            assert!(!matches!(
+                g.screen().cell(0, col).map(|c| c.grapheme),
+                Some(Grapheme::Empty)
+            ));
+            cluster_block_cols(g.screen(), 0, col)
+        };
+        assert_eq!(cols("\u{2764}\u{FE0F}".as_bytes(), 0), 2, "widened");
+        assert_eq!(cols("\x1b[8G\u{2764}\u{FE0F}".as_bytes(), 7), 1, "refused");
+        assert_eq!(
+            cols("\x1b]66;w=3;e\u{301}\x07".as_bytes(), 0),
+            3,
+            "OSC 66 w"
+        );
+        // OSC 66 stamps the block per scalar, so VS16 finds the cell it
+        // would widen into already a `SizedSpacer`; a wide base keeps
+        // its natural `Spacer`.
+        assert_eq!(
+            cols("\x1b]66;s=2;\u{2764}\u{FE0F}\x07".as_bytes(), 0),
+            1,
+            "sized, refused"
+        );
+        assert_eq!(
+            cols("\x1b]66;s=2;\u{5B57}\u{301}\x07".as_bytes(), 0),
+            2,
+            "sized, wide base"
+        );
+    }
+
+    /// A centred cluster centres in the two cells a widened VS16 heart
+    /// takes, where its width-1 base would centre it in one.
+    #[test]
+    fn a_centred_cluster_centres_in_its_grid_span() {
+        use crate::glyphs::{ClusterGlyph, ShapeFrame, ShapedCell};
+        let g = drive(1, 4, "\x1b]66;h=2;\u{2764}\u{FE0F}\x07".as_bytes());
+        assert_eq!(g.screen().char_span(0, 0), (0, 1), "the grid widened it");
+        let mut atlas = MockAtlas::full(slot());
+        atlas.gid_map.insert(100, slot());
+        let glyph = ClusterGlyph {
+            glyph_id: 100,
+            font_id: 0,
+            advance_px: 8.0,
+            x_offset_px: 0.0,
+            y_offset_px: 0.0,
+        };
+        let mut cells = vec![ShapedCell::None; 4];
+        cells[0] = ShapedCell::Cluster {
+            start: 0,
+            len: 1,
+            fit_px: 0,
+        };
+        let frame = ShapeFrame::from_cluster_cells(cells, 4, vec![glyph]);
+        let buffers = build_shaped(g.screen(), &atlas, &frame);
+        // Ink 6 px wide from x = 1: (16 − 6) / 2 − 1 = 4, plus the bearing.
+        assert_eq!(buffers.fg[0].origin_px[0], 5.0);
+    }
+
+    /// A fitted cluster reads the slots rasterized at its fitted size,
+    /// never the native ones, and Top/Left centres its ink in the block
+    /// as a fitted char's bitmap is centred.
+    #[test]
+    fn a_fitted_cluster_draws_its_fitted_slots_centred() {
+        use crate::glyphs::{ClusterGlyph, ShapeFrame, ShapedCell};
+        let g = drive(1, 4, b"x");
+        let mut atlas = MockAtlas::full(slot());
+        atlas.gid_map.insert(100, slot());
+        atlas.fitted_map.insert(
+            (100, 9),
+            GlyphSlot {
+                size_px: [4, 6],
+                offset_px: [3, 9],
+                ..slot()
+            },
+        );
+        let glyph = ClusterGlyph {
+            glyph_id: 100,
+            font_id: 0,
+            advance_px: 8.0,
+            x_offset_px: 0.0,
+            y_offset_px: 0.0,
+        };
+        let mut cells = vec![ShapedCell::None; 4];
+        cells[0] = ShapedCell::Cluster {
+            start: 0,
+            len: 1,
+            fit_px: 9,
+        };
+        let frame = ShapeFrame::from_cluster_cells(cells, 4, vec![glyph]);
+        let buffers = build_shaped(g.screen(), &atlas, &frame);
+        assert_eq!(buffers.fg.len(), 1);
+        assert_eq!(buffers.fg[0].size_px, [4.0, 6.0], "the fitted slot");
+        // An 8×16 cell centres a 4×6 ink at (2, 5).
+        assert_eq!(buffers.fg[0].origin_px, [2.0, 5.0]);
     }
 
     /// A single-glyph cluster places identically to the equivalent
@@ -2184,7 +2339,11 @@ mod tests {
         cluster_atlas.gid_map.insert(100, slot());
         let frame = ShapeFrame::from_cluster_cells(
             vec![
-                ShapedCell::Cluster { start: 0, len: 1 },
+                ShapedCell::Cluster {
+                    start: 0,
+                    len: 1,
+                    fit_px: 0,
+                },
                 ShapedCell::None,
                 ShapedCell::None,
                 ShapedCell::None,
@@ -2288,6 +2447,7 @@ mod tests {
         let atlas = MockAtlas {
             map: atlas_map,
             gid_map: HashMap::new(),
+            fitted_map: HashMap::new(),
             clusters: HashMap::new(),
         };
         let g = drive(1, 2, b"AB");
@@ -3203,6 +3363,7 @@ mod tests {
         let atlas = MockAtlas {
             map: HashMap::new(),
             gid_map: HashMap::new(),
+            fitted_map: HashMap::new(),
             clusters: HashMap::new(),
         };
         extend_preedit_instances(&overlay, metrics(), 1, 5, &atlas, &mut out);
