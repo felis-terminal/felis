@@ -35,6 +35,12 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
   the application put it.
 - Querying grapheme cluster mode (`CSI ? 2027 $ p`) reports it permanently set (`3`) rather than set (`1`), so an
   application can tell that turning it off has no effect.
+- The cursor, a selection, and the bidi-override warning cover both cells of a wide character (`字`, `あ`, an emoji),
+  from either half: a block cursor no longer hides the right half of the glyph, and a drag that ends or starts on a wide
+  character highlights and copies all of it. The cursor trail of a post-process shader follows the same shape.
+- The IME pre-edit, the search and confirmation bars, and the link preview give a combining mark or an emoji sequence
+  the cells the terminal gives it (`é` typed as `e` + U+0301 takes one cell, `❤️` and `🇯🇵` two), draw a flag or a skin
+  tone as itself, and no longer draw a wide character past the window's right edge.
 - Pressing a bare modifier (Ctrl, Shift, Alt, Cmd) or releasing a key no longer returns a scrolled-back view to the live
   screen, so Cmd+C copies a selection made in scrollback.
 

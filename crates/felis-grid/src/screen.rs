@@ -213,6 +213,23 @@ impl ScreenBuffer {
         Some(&self.cells[self.idx(row, col)])
     }
 
+    /// The first and last column of the character drawn at `(row, col)`:
+    /// a wide character's lead and its `Spacer`, reached from either half.
+    #[must_use]
+    pub fn char_span(&self, row: u16, col: u16) -> (u16, u16) {
+        let is_spacer = |c: u16| {
+            self.cell(row, c)
+                .is_some_and(|cell| matches!(cell.grapheme, Grapheme::Spacer))
+        };
+        if col > 0 && is_spacer(col) {
+            (col - 1, col)
+        } else if is_spacer(col.saturating_add(1)) {
+            (col, col + 1)
+        } else {
+            (col, col)
+        }
+    }
+
     /// `viewport` rows of retained scrollback lift the view: visible row
     /// `r < viewport` sources from scrollback index
     /// `scrollback().len() - viewport + r`, the rest from live row

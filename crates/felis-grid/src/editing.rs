@@ -22,7 +22,7 @@ pub(crate) const fn is_emoji_modifier(c: char) -> bool {
 /// so the walk reads Extend itself. A bidi override in the text is one
 /// held pending from before the base, since one arriving after it
 /// blocks the join through `PendingBidi::after_base`, so it is skipped.
-fn ends_in_pictographic_joiner(cluster: &str) -> bool {
+pub(crate) fn ends_in_pictographic_joiner(cluster: &str) -> bool {
     let Some(rest) = cluster.strip_suffix('\u{200D}') else {
         return false;
     };

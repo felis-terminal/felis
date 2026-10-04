@@ -291,7 +291,7 @@ impl App {
             && self.shadow.viewport() == 0
             && cursor.row < grid.rows()
             && cursor.col < grid.cols())
-        .then(|| renderer.cursor_rect_uv(cursor.row, cursor.col, grid.cursor_style()));
+        .then(|| renderer.cursor_rect_uv(grid, cursor.row, cursor.col));
         let (width, height) = renderer.size();
         let metrics = renderer.cell_metrics();
         let repaint = self.cursor_trail.update(

@@ -465,6 +465,8 @@ no selection state crosses the wire.
   ([row-codec.md](../reference/row-codec.md)) onto the client's shadow screen, so the gesture stitches the same rows
   daemon-side search stitches ([scrollback](data-model/scrollback.md) "Soft wrap"). Copying a selection that crosses a
   soft-wrap edge joins the rows without a `\n`: it pastes back as the one line the program printed.
+- A wide character is selected as a whole: a range that reaches either of its two cells highlights and copies all of it,
+  in linear and rectangle mode alike, so what is highlighted is what is copied.
 - Word class is fixed, not configurable: alphanumeric characters or `_` (Unicode `is_alphanumeric()`) form a word run,
   whitespace is its own run, everything else is per-cell punctuation (`crates/felis-client-core/src/selection.rs`).
 - Rectangle selection has two gestures deliberately, because each covers the other's dead spot: Alt+drag is the macOS
@@ -587,8 +589,9 @@ second chrome row, not a re-ranking of this one.
 
 ### A target too wide for the row is clipped
 
-A target too wide for the row is clipped to the columns available and marked with `…`. Clipping is measured in display
-cells, so a two-cell glyph is never split across the row's edge.
+A target too wide for the row is clipped to the columns available and marked with `…`. Clipping is measured in the cells
+the terminal would print the text in (a combining mark or an emoji sequence shares its base's cell), so a two-cell glyph
+is never split across the row's edge.
 
 Scrolling or wrapping the target to fit is rejected: wrapping costs a second row the WM's window sizing did not grant,
 and a bar that animates under the pointer is unreadable at exactly the moment the user is comparing it against the link
