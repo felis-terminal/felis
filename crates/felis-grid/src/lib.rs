@@ -222,8 +222,12 @@ pub use damage::Damage;
 pub use link_table::{LINK_TABLE_BYTE_CAP, LinkTable, LinkText};
 pub use modes::{
     KNOWN_MODIFIABLE_DEC_MODES, PERMANENTLY_RESET_ANSI_MODES, PERMANENTLY_RESET_DEC_MODES,
+    PERMANENTLY_SET_DEC_MODES,
 };
-use modes::{known_modifiable_dec_mode, permanently_reset_ansi, permanently_reset_dec_mode};
+use modes::{
+    known_modifiable_dec_mode, permanently_reset_ansi, permanently_reset_dec_mode,
+    permanently_set_dec_mode,
+};
 pub use mouse::encode_mouse;
 use osc_color::{format_osc_color_response, parse_x_color};
 use osc52::{format_osc_52_response, parse_osc_52_selection};

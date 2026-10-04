@@ -46,8 +46,8 @@ costs one byte and no table lookup at all.
 
 felis runs no upstream grapheme segmenter. The parser decodes UTF-8 and hands the grid one Unicode scalar at a time
 (`Grapheme::Char(c)`); the grid folds each scalar onto the previous cell's cluster when UAX#29 puts the two in one
-grapheme. That incremental fold is what grapheme-cluster mode (DECSET `?2027`, always reported set, REQ-602) promises a
-running program: the cursor advances by grapheme cluster, not by scalar.
+grapheme. That incremental fold is what grapheme-cluster mode (DECSET `?2027`, reported permanently set, REQ-602)
+promises a running program: the cursor advances by grapheme cluster, not by scalar.
 
 Folding is decided per scalar against UAX#29, and the reason it is not simply "width 0 extends the previous cell" is
 that the width table disagrees with the segmentation rules in both directions. An emoji skin-tone modifier is GB9 Extend

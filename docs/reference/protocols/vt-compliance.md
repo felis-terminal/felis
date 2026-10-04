@@ -235,18 +235,18 @@ The rectangle checksum query, DECRQCRA, shares this bounds model; its reply is s
   arithmetic is xterm's `do_dec_check_sum`: each cell subtracts its codepoint (an empty cell counts as a space), and its
   attributes subtract bold 1, underline 2, reverse 4, blink 8, conceal 32. The result is truncated to 16 bits and
   written as four uppercase hex digits. An inverted rectangle checksums as `0000`.
-- DECRQM (`CSI [?] Pn $ p`): `Ps=1` set, `2` reset, `4` permanently reset, `0` unknown. Modes whose state is canonical
-  report it live: DECCKM, DECSCNM, DECOM, DECAWM, DECTCEM, alt-screen (`?1049`), bracketed paste, focus, synchronized
-  output, DECLRMM (`?69`), the split reverse-wrap bits (`?45` / `?1045`), more fix (`?41`), color-scheme notify
-  (`?2031`), in-band resize notify (`?2048`), and IRM and LNM (the two ANSI modes with an implementation). Grapheme
-  cluster mode (`?2027`) always reports set. Mouse modes and DECCOLM (`?3`) are soft-tracked: after a DECSET / DECRST
-  they report the written state (DECCOLM as modifiable, since the column-count change is deferred). Modes xterm treats
-  as permanently reset (DECARM among them) report `4`. The modes xterm treats as modifiable but felis does not implement
-  (`?3`, `?4`, `?18`, `?19`, `?34`, `?35`, `?36`, `?42`, `?57`, `?66`, `?67`) report `2` before any write and their
-  written state after. Every remaining DEC mode reports `0` until a DECSET / DECRST writes it, and its written state
-  thereafter. Below DECSCL level 3 the whole sequence is unrecognized and nothing is sent. Every remaining ANSI mode
-  (KAM and SRM among them) reports `0` unconditionally: felis accepts the SM/RM write and drops it, so there is no state
-  to echo and it does not invent one.
+- DECRQM (`CSI [?] Pn $ p`): `Ps=1` set, `2` reset, `3` permanently set, `4` permanently reset, `0` unknown. Modes whose
+  state is canonical report it live: DECCKM, DECSCNM, DECOM, DECAWM, DECTCEM, alt-screen (`?1049`), bracketed paste,
+  focus, synchronized output, DECLRMM (`?69`), the split reverse-wrap bits (`?45` / `?1045`), more fix (`?41`),
+  color-scheme notify (`?2031`), in-band resize notify (`?2048`), and IRM and LNM (the two ANSI modes with an
+  implementation). Grapheme cluster mode (`?2027`) reports permanently set (`3`). Mouse modes and DECCOLM (`?3`) are
+  soft-tracked: after a DECSET / DECRST they report the written state (DECCOLM as modifiable, since the column-count
+  change is deferred). Modes xterm treats as permanently reset (DECARM among them) report `4`. The modes xterm treats as
+  modifiable but felis does not implement (`?3`, `?4`, `?18`, `?19`, `?34`, `?35`, `?36`, `?42`, `?57`, `?66`, `?67`)
+  report `2` before any write and their written state after. Every remaining DEC mode reports `0` until a DECSET /
+  DECRST writes it, and its written state thereafter. Below DECSCL level 3 the whole sequence is unrecognized and
+  nothing is sent. Every remaining ANSI mode (KAM and SRM among them) reports `0` unconditionally: felis accepts the
+  SM/RM write and drops it, so there is no state to echo and it does not invent one.
 - DECREQTPARM (`CSI Ps x`): VT100 legacy. `Ps=0` replies `\e[2;1;1;120;120;1;0x` (unsolicited); `Ps=1` replies the same
   with `sol=3` (solicited).
 - Window-size query (`CSI 18 t`, `CSI 19 t`): replies `CSI 8 ; <rows> ; <cols> t` and `CSI 9 ; <rows> ; <cols> t`, in

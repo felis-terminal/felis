@@ -5,7 +5,8 @@ use super::{
     MouseEncoding, MouseProtocol, PtyEffect, SavedCursor, ScrollDirection, ScrollOp, Sink, StyleId,
     SyncOutput, TITLE_STACK_LIMIT, UnderlineStyle, ascii_to_hex, copy_within_cells,
     default_tab_stops, encode_sgr_color, encode_sgr_underline_color, hex_to_ascii,
-    known_modifiable_dec_mode, permanently_reset_ansi, permanently_reset_dec_mode, xtgettcap_value,
+    known_modifiable_dec_mode, permanently_reset_ansi, permanently_reset_dec_mode,
+    permanently_set_dec_mode, xtgettcap_value,
 };
 
 /// Fitzpatrick modifiers (U+1F3FB..=U+1F3FF) are UAX#29 Extend, yet
@@ -2816,12 +2817,14 @@ impl Grid {
     }
 
     /// `DECRQM` mode status report (Ps: 0 unknown, 1 set, 2 reset, 3 perm-set, 4 perm-reset).
-    /// Priority: functional modes, permanently reset set (Ps=4), DEC soft-state map (default 2),
+    /// Priority: permanently set (Ps=3), functional modes, permanently reset set (Ps=4), DEC soft-state map (default 2),
     /// else 0. ANSI modes other than IRM and LNM report 0.
     pub(crate) fn decrqm(&mut self, mode: u16, private: bool) {
         let report = |state: bool| if state { 1u8 } else { 2u8 };
         let ps: u8 = if private {
-            if let Some(state) = self.functional_dec_mode_state(mode) {
+            if permanently_set_dec_mode(mode) {
+                3
+            } else if let Some(state) = self.functional_dec_mode_state(mode) {
                 report(state)
             } else if permanently_reset_dec_mode(mode) {
                 // xterm reports these as Ps=4. esctest's DECRQM tests

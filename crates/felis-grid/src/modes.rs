@@ -51,6 +51,10 @@ pub const PERMANENTLY_RESET_DEC_MODES: &[u16] = &[
     81, // DECKPM: keypad mode
 ];
 
+pub const PERMANENTLY_SET_DEC_MODES: &[u16] = &[
+    2027, // grapheme cluster mode (REQ-602)
+];
+
 const fn table_has(table: &[u16], mode: u16) -> bool {
     let mut i = 0;
     while i < table.len() {
@@ -68,6 +72,10 @@ pub(crate) const fn permanently_reset_ansi(mode: u16) -> bool {
 
 pub(crate) const fn known_modifiable_dec_mode(mode: u16) -> bool {
     table_has(KNOWN_MODIFIABLE_DEC_MODES, mode)
+}
+
+pub(crate) const fn permanently_set_dec_mode(mode: u16) -> bool {
+    table_has(PERMANENTLY_SET_DEC_MODES, mode)
 }
 
 pub(crate) const fn permanently_reset_dec_mode(mode: u16) -> bool {
