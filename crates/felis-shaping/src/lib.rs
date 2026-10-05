@@ -21,6 +21,10 @@ use swash::{
 use thiserror::Error;
 use tracing::warn;
 
+mod presentation;
+
+use presentation::is_emoji_presentation;
+
 #[derive(Debug, Error)]
 pub enum ShapingError {
     #[error("no monospace font installed")]
@@ -603,16 +607,7 @@ impl FontStack {
     /// caller always has a face to rasterize (the `.notdef` box).
     #[must_use]
     pub fn resolve(&self, c: char, style: FontStyle) -> &Arc<Font> {
-        let styled = &self.styled_primaries[style.index()];
-        if styled.has_glyph(c) {
-            return styled;
-        }
-        for font in &self.fonts[1..] {
-            if font.has_glyph(c) {
-                return font;
-            }
-        }
-        styled
+        self.font_at(self.resolve_styled_index(c, style), style)
     }
 
     #[must_use]
@@ -647,13 +642,24 @@ impl FontStack {
         0
     }
 
-    /// Unlike [`Self::resolve_index`], honors `style`: `0` when the
-    /// styled primary covers `c`. Atlas keys must use this one, or a bold
-    /// cluster whose base only the regular primary covers is shaped
-    /// against a fallback yet keyed to the primary, rasterizing the
-    /// wrong glyph.
+    /// Honors `style`, unlike [`Self::resolve_index`]: atlas keys must use
+    /// this one, or a bold cluster whose base only the regular primary
+    /// covers is keyed to the wrong face. An emoji-presentation scalar
+    /// takes the first color face covering it, ahead of the primary;
+    /// first coverage decides only when none does.
     #[must_use]
     pub fn resolve_styled_index(&self, c: char, style: FontStyle) -> usize {
+        if is_emoji_presentation(c)
+            && let Some(index) = self.resolve_color_index(c, style)
+        {
+            return index;
+        }
+        self.first_cover_styled_index(c, style)
+    }
+
+    /// The first face covering `c`, presentation aside: the styled
+    /// primary, then the chain in order, then `0` for `.notdef`.
+    fn first_cover_styled_index(&self, c: char, style: FontStyle) -> usize {
         if self.styled_primaries[style.index()].has_glyph(c) {
             return 0;
         }
@@ -1223,11 +1229,10 @@ impl Shaper {
         out
     }
 
-    /// Shape one grapheme cluster against a single face.
-    ///
-    /// Resolves against the base scalar face, but anchors ZWJ sequences and
-    /// VS16 selectors on the color emoji face so sequences can ligate into
-    /// single color glyphs.
+    /// Shape one grapheme cluster against a single face: the base's, except
+    /// that a VS15 right after the base asks for its text face, and a ZWJ
+    /// sequence or a VS16 anchors on the color emoji face so it can ligate
+    /// into one color glyph.
     pub fn shape_cluster(
         &mut self,
         stack: &FontStack,
@@ -1241,7 +1246,9 @@ impl Shaper {
                 glyphs: Vec::new(),
             };
         };
-        let font_id = if let Some(anchor) = text.chars().find(|&c| is_emoji_face_anchor(c)) {
+        let font_id = if text.chars().nth(1) == Some('\u{FE0E}') {
+            stack.first_cover_styled_index(base, style)
+        } else if let Some(anchor) = text.chars().find(|&c| is_emoji_face_anchor(c)) {
             stack.resolve_styled_index(anchor, style)
         } else if text.contains('\u{FE0F}') {
             stack
@@ -1415,8 +1422,8 @@ mod tests {
     #[test]
     fn emoji_zwj_with_text_default_base_shapes_against_emoji_face() {
         let stack = stack();
-        let heart_face = stack.resolve_index('\u{2764}');
-        let emoji_face = stack.resolve_index('\u{1F525}');
+        let heart_face = stack.resolve_styled_index('\u{2764}', FontStyle::REGULAR);
+        let emoji_face = stack.resolve_styled_index('\u{1F525}', FontStyle::REGULAR);
         if heart_face == emoji_face {
             eprintln!("host lacks a distinct emoji face for U+1F525; skipping face-anchor test");
             return;
@@ -2418,5 +2425,128 @@ mod tests {
             Arc::ptr_eq(stack2.styled_primary(bold), &regular),
             "a missing bold override falls back to the regular face",
         );
+    }
+
+    /// The pinned set with `fallbacks` as an explicit `font.fallback`
+    /// list, or the discovered chain when it is empty.
+    fn pinned_stack(fallbacks: &[&str]) -> Option<FontStack> {
+        let dir = std::env::var_os("FELIS_TEST_FONT_DIR")?;
+        let mut db = Database::new();
+        db.load_fonts_dir(std::path::PathBuf::from(dir));
+        let specs: Vec<FaceSpec> = fallbacks.iter().map(|f| FaceSpec::named(*f)).collect();
+        FontStack::auto_discover_in(&db, None, &[], &specs, &StyleFaces::default()).ok()
+    }
+
+    const EMOJI_DEFAULT: [char; 8] = ['⭐', '⚡', '☕', '⌚', '⛔', '☔', '♿', '🀄'];
+
+    /// The symbol faces sit before the emoji face, so a mono face covers
+    /// some of these first; each still resolves to the color face.
+    #[test]
+    fn an_emoji_presentation_scalar_resolves_to_the_color_face() {
+        let Some(stack) = pinned_stack(&[]) else {
+            eprintln!("FELIS_TEST_FONT_DIR unset; skipping");
+            return;
+        };
+        let style = FontStyle::REGULAR;
+        let overridden = EMOJI_DEFAULT
+            .into_iter()
+            .filter(|&c| {
+                !stack
+                    .font_at(stack.first_cover_styled_index(c, style), style)
+                    .has_color_glyphs()
+            })
+            .count();
+        assert!(
+            overridden > 0,
+            "no mono face in the pinned set covers one of them"
+        );
+        for c in EMOJI_DEFAULT {
+            assert!(stack.resolve(c, style).has_color_glyphs(), "{c:?}");
+            assert!(
+                stack
+                    .font_at(stack.resolve_styled_index(c, style), style)
+                    .has_color_glyphs(),
+                "{c:?}"
+            );
+        }
+    }
+
+    /// Text-default symbols keep the first face covering them, which the
+    /// chain's symbol-before-emoji order makes a mono one.
+    #[test]
+    fn a_text_presentation_symbol_keeps_its_first_covering_face() {
+        let Some(stack) = pinned_stack(&[]) else {
+            eprintln!("FELIS_TEST_FONT_DIR unset; skipping");
+            return;
+        };
+        let style = FontStyle::REGULAR;
+        for c in ['⏸', '✳', '❤', '☺', '⏭'] {
+            assert_eq!(
+                stack.resolve_styled_index(c, style),
+                stack.first_cover_styled_index(c, style),
+                "{c:?}"
+            );
+        }
+    }
+
+    /// An explicit `font.fallback` list orders everything but the default
+    /// emoji: a mono face listed first does not take `⭐`, and with no
+    /// color face listed the first covering face still draws it.
+    #[test]
+    fn an_explicit_fallback_order_yields_to_emoji_presentation() {
+        let style = FontStyle::REGULAR;
+        let Some(with_emoji) = pinned_stack(&[
+            "Noto Sans Symbols 2",
+            "Noto Sans Symbols",
+            "Noto Color Emoji",
+        ]) else {
+            eprintln!("FELIS_TEST_FONT_DIR unset; skipping");
+            return;
+        };
+        let mono = with_emoji.first_cover_styled_index('⭐', style);
+        assert!(
+            !with_emoji.font_at(mono, style).has_color_glyphs(),
+            "a mono face lists ⭐ first"
+        );
+        assert!(with_emoji.resolve('⭐', style).has_color_glyphs());
+        let mono_only = pinned_stack(&["Noto Sans Symbols 2"]).expect("pinned set");
+        assert_eq!(mono_only.resolve_styled_index('⭐', style), mono);
+    }
+
+    /// A VS15 asks for the text face, a VS16 for the color face.
+    #[test]
+    fn a_variation_selector_picks_the_star_face() {
+        let Some(stack) = pinned_stack(&[]) else {
+            eprintln!("FELIS_TEST_FONT_DIR unset; skipping");
+            return;
+        };
+        let style = FontStyle::REGULAR;
+        let mut shaper = Shaper::new();
+        let text = shaper.shape_cluster(&stack, 18.0, style, "\u{2B50}\u{FE0E}");
+        assert_eq!(text.font_id, stack.first_cover_styled_index('⭐', style));
+        assert!(!stack.font_at(text.font_id, style).has_color_glyphs());
+        let emoji = shaper.shape_cluster(&stack, 18.0, style, "\u{2B50}\u{FE0F}");
+        assert!(stack.font_at(emoji.font_id, style).has_color_glyphs());
+    }
+
+    /// The astral anchor would otherwise put `🀄︎` on the color face; the
+    /// VS15 right after the base wins over it.
+    #[test]
+    fn a_vs15_keeps_an_astral_emoji_on_its_text_face() {
+        let Some(stack) = pinned_stack(&[]) else {
+            eprintln!("FELIS_TEST_FONT_DIR unset; skipping");
+            return;
+        };
+        let style = FontStyle::REGULAR;
+        let mono = stack.first_cover_styled_index('🀄', style);
+        assert!(
+            !stack.font_at(mono, style).has_color_glyphs(),
+            "a mono face covers 🀄 first"
+        );
+        let mut shaper = Shaper::new();
+        let text = shaper.shape_cluster(&stack, 18.0, style, "\u{1F004}\u{FE0E}");
+        assert_eq!(text.font_id, mono);
+        let emoji = shaper.shape_cluster(&stack, 18.0, style, "\u{1F004}\u{FE0F}");
+        assert!(stack.font_at(emoji.font_id, style).has_color_glyphs());
     }
 }

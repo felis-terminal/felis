@@ -2303,3 +2303,18 @@ fn char_span_is_one_column_for_an_emoji_that_could_not_widen_at_the_edge() {
     drive(&mut p, &mut g, "ab❤\u{FE0F}".as_bytes());
     assert_eq!(g.screen().char_span(0, 2), (2, 2));
 }
+
+#[test]
+fn a_vs15_after_a_wide_emoji_folds_into_one_wide_cluster() {
+    // The renderer picks a text face for the cluster from the VS15, so
+    // the selector must reach it inside the cluster, not as a lone cell.
+    let mut p = Parser::new();
+    let mut g = Grid::new(1, 8);
+    drive(&mut p, &mut g, "\u{2B50}\u{FE0E}x".as_bytes());
+    let Grapheme::Cluster(id) = g.cell(0, 0).unwrap().grapheme else {
+        panic!("cell 0,0 should hold the star and its selector");
+    };
+    assert_eq!(g.cluster_str(id), Some("\u{2B50}\u{FE0E}"));
+    assert_eq!(g.cell(0, 1).unwrap().grapheme, Grapheme::Spacer);
+    assert_eq!(g.cell(0, 2).unwrap().grapheme, Grapheme::Ascii(b'x'));
+}

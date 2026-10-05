@@ -2012,6 +2012,23 @@ mod tests {
         );
     }
 
+    /// A star the symbol faces cover is still drawn in color, as an
+    /// emoji-presentation scalar.
+    #[test]
+    fn an_emoji_presentation_char_rasterizes_in_color() {
+        let Some(stack) = FontStack::try_pinned_test_stack() else {
+            eprintln!("FELIS_TEST_FONT_DIR unset; skipping");
+            return;
+        };
+        let mut idx = GlyphIndex::new(stack, 18.0, nz(1024));
+        let h = idx.cell_metrics().height;
+        idx.ensure('\u{2B50}', h, SizingKey::default());
+        let slot = idx
+            .slot('\u{2B50}', h, SizingKey::default())
+            .expect("a star slot");
+        assert!(slot.is_color);
+    }
+
     /// A one-row grid fed `bytes`, walked and painted against the pinned
     /// set; `None` when `FELIS_TEST_FONT_DIR` is unset.
     struct Painted {

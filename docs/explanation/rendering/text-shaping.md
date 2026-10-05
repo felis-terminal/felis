@@ -81,8 +81,10 @@ face would not do: the styled faces and the fallback walk would then differ from
 
 An explicit `font.fallback` list in `config.toml` (keys and grammar in the
 [config reference](../../reference/config.md)) replaces auto-discovery outright: felis appends each entry in declared
-order and skips the discovery walk, so the declared order _is_ the resolution order. A missing family is skipped with a
-warning rather than failing the chain: a config written on one machine degrades gracefully on another that lacks a face.
+order and skips the discovery walk, so the declared order _is_ the resolution order, except for an emoji-presentation
+character, which takes the first color face covering it, the primary included (see below). A missing family is skipped
+with a warning rather than failing the chain: a config written on one machine degrades gracefully on another that lacks
+a face.
 
 The **symbol group sits before the emoji group, and appends every installed family rather than the first**. Both
 deviations are deliberate.
@@ -101,21 +103,35 @@ is a complete substitute, symbol coverage is fragmented: on macOS the asterisk d
 `⏸`/`⏹`/`⏺` live only in STIX Two Math, so stopping at the first match would leave half the glyphs falling through to
 color.
 
-This list-ordering is presentation-*un*aware and governs only _bare_ symbols; cluster resolution overrides it in
-`Shaper::shape_cluster`, which is where emoji presentation is decided. Resolving `❤` (U+2764, a Zapf Dingbat) on its own
-picks the mono face: correct for a plain `❤`, wrong the moment VS16 or a ZWJ join asks for the color emoji.
+The list order decides only for text-presentation characters. The other half of Unicode's default, an emoji-presentation
+character (`Emoji_Presentation=Yes`: `⭐`, `⚡`, `☕`, `⌚`, `🀄`), takes `FontStack::resolve_color_index` first: the
+first face, the primary included, that both covers it and carries color glyphs (`Font::has_color_glyphs`, a `COLR` or
+color-bitmap check cached at load). First coverage decides only when no color face covers it. Without this, a symbol
+face that also covers `⭐` draws it as a small mono star in its two cells. kitty does the same: `font_for_cell` in
+[`fonts.c`](https://github.com/kovidgoyal/kitty/blob/master/kitty/fonts.c) skips the main font for an emoji-presentation
+cell and falls back preferring color. The default presentation is a property of the character alone, so single-codepoint
+`resolve` decides it from a table of the property (Unicode 17.0.0 `emoji-data.txt`, the version the grid's widths come
+from).
 
-Two cluster signals restore it: an emoji ZWJ / modifier sequence anchors its face on the first astral emoji scalar
-(`is_emoji_face_anchor`, U+1F000..=U+1FAFF) so `❤️‍🔥` resolves off the fire, and a standalone VS16 sequence (a bare `❤️`,
-a keycap) routes through `FontStack::resolve_color_index`, the first chain face that both covers the base and carries
-color glyphs (`Font::has_color_glyphs`, a `COLR` or color-bitmap check cached at load). A VS16-less dingbat (`⏸`, a
-plain `❤`) has neither signal and stays mono. Presentation-aware resolution lives in the cluster path rather than in
-single-codepoint `resolve` because that is where the surrounding codepoints (VS16, the astral scalar) are visible.
+Rejected: **keep first coverage and center the glyph in its two cells.** It fixes the left-aligned star but leaves it
+monochrome where the application asked for an emoji, unlike kitty and WezTerm. It also turns color on or off depending
+on which symbol fonts a host happens to install.
 
-The stack is queried per codepoint: `resolve(c)` returns the first font whose charmap covers `c`, falling back to the
-primary (which then renders its `.notdef` box) when nothing covers it. A cell whose character the primary face does not
-cover is therefore never inside a ligature run: the run scan stops at it, and it is shaped alone against the face
-`resolve` picked.
+A presentation that depends on the codepoints around a character is decided in `Shaper::shape_cluster`, where they are
+visible. Resolving `❤` (U+2764, text by default and a Zapf Dingbat) on its own picks the mono face: correct for a plain
+`❤`, wrong the moment VS16 or a ZWJ join asks for the color emoji.
+
+Three cluster signals override the default, checked in this order. A VS15 directly after the base (`⭐︎`, `🀄︎`) asks for
+text, so the base takes the first face covering it even when it defaults to emoji; that is mono only when a mono face
+covers it. Otherwise an emoji ZWJ / modifier sequence anchors its face on the first astral emoji scalar
+(`is_emoji_face_anchor`, U+1F000..=U+1FAFF) so `❤️‍🔥` resolves off the fire. Failing both, a VS16 anywhere in the cluster
+(a bare `❤️`, a keycap) routes the base through `resolve_color_index`. A VS16-less dingbat (`⏸`, a plain `❤`) has no
+signal and stays mono.
+
+The stack is queried per codepoint: `resolve(c)` returns the first font whose charmap covers `c` (the first color one
+for an emoji-presentation character), falling back to the primary (which then renders its `.notdef` box) when nothing
+covers it. A cell whose character the primary face does not cover is therefore never inside a ligature run: the run scan
+stops at it, and it is shaped alone against the face `resolve` picked.
 
 Holding the whole eager chain open is cheap even when several fallback faces are large, because font bytes are
 memory-mapped, not heap-copied (next section). The symbol group's all-installed rule adds at most a handful of faces (≤3
@@ -128,8 +144,9 @@ codepoints nothing covers, which the shape cache amortizes after the first miss.
 
 Bold and italic cells render in **separate font faces**, the felis analogue of kitty's `bold_font` / `italic_font` /
 `bold_italic_font`. The `FontStack` holds four styled primaries indexed by a 2-bit `FontStyle` (regular, bold, italic,
-bold-italic); `resolve(c, style)` picks the styled primary that covers `c`, then walks the **shared** codepoint fallback
-chain. A cell's `AttrFlags::BOLD` / `ITALIC` map to the `FontStyle`, and `resolve` is asked for that style.
+bold-italic); `resolve(c, style)` picks the styled primary that covers `c` (a color one for an emoji-presentation `c`),
+then walks the **shared** codepoint fallback chain. A cell's `AttrFlags::BOLD` / `ITALIC` map to the `FontStyle`, and
+`resolve` is asked for that style.
 
 **Config shape: nested tables, not four flat keys.** The face is configured with `[font.bold]` / `[font.italic]` /
 `[font.bold_italic]` sub-tables (config reference), each carrying its own optional `family` and `features`. The nested
