@@ -5071,6 +5071,20 @@ mod tests {
         assert_eq!(mirror_rows(&shadow_b), grid, "the second mirror");
     }
 
+    /// RIS wipes every placement, the primary screen's stash included.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn ris_on_the_alternate_screen_drops_the_saved_primary_placements() {
+        let mut task = SessionTask::for_tests(session_with("read _x"));
+        write_to_grid(&task, b"\x1b_Ga=T,f=24,s=1,v=1,c=2,r=1,q=2;AAAA\x1b\\");
+        task.drain_effects().expect("effects drain");
+        assert_eq!(task.session.placements.len(), 1);
+
+        write_to_grid(&task, b"\x1b[?1049h\x1bc");
+        task.drain_effects().expect("effects drain");
+        assert!(task.session.saved_primary_placements.is_none());
+        assert!(task.session.placements.is_empty());
+    }
+
     /// A scroll between the fan-out and the composition leaves the
     /// partial replay carrying post-scroll cells; the directive drained
     /// afterwards would shift them a second time.

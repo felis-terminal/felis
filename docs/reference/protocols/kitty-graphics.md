@@ -82,8 +82,8 @@ Image data is retained until:
 Detaching a client evicts nothing. Rehydrating an attached session re-transmits the images the store still holds.
 
 Placements are automatically evicted when their cells are cleared: placements without `C=1` are dropped on `ED` or `EL`
-line erasures, and `RIS` or `DECSTR` resets clear all placements. The daemon sends `PlacementRemoved` to attached
-clients to drop corresponding textures.
+line erasures, and `RIS` or `DECSTR` resets clear all placements except `U=1` extents, which kitty keeps too. The daemon
+sends `PlacementRemoved` to attached clients to drop corresponding textures.
 
 Primary and alternate screens maintain isolated placement contexts. Switching to alternate screen (`?1049h`) stashes
 primary placements; switching back (`?1049l`) restores them and frees alternate placements.

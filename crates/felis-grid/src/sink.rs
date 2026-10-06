@@ -664,6 +664,7 @@ impl Sink for Grid {
                     bottom: rows.saturating_sub(1),
                     force: true,
                 }));
+                self.pty_effects.push(PtyEffect::HardReset);
             }
             (&[b'#'], b'8') => self.decaln(),
             _ => {}

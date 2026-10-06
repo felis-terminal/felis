@@ -105,6 +105,8 @@ fn replay_effects(
             PtyEffect::AltScreenScrolled(n) => {
                 shift_placements(session, n, 0);
             }
+            // Saved placements hold no image refcount (released on the switch).
+            PtyEffect::HardReset => session.saved_primary_placements = None,
             // Parked for `session_task::fan_out_grid_state`, the only consumer
             // that knows each shadow's damage.
             PtyEffect::Scrolled {

@@ -163,6 +163,9 @@ pub enum PtyEffect {
     /// Rows a full-screen scroll on the alternate screen dropped off its
     /// top: placements move up with the text and leave with it.
     AltScreenScrolled(u32),
+    /// RIS, after the forced erase that clears the live placements: the
+    /// primary screen saved while on the alternate one goes too.
+    HardReset,
     /// A whole-row shift of a band (docs/reference/ipc.md `Scrolled`),
     /// with the grid's damage already moved along with the rows.
     /// `geometry_gen` names the grid generation; `first_seq..=last_seq`
