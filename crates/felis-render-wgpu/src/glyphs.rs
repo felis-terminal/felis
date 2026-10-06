@@ -2149,10 +2149,15 @@ mod tests {
     }
 
     /// Clusters whose advance stays within their cells keep the native
-    /// path: a ligated flag, a widened VS16 emoji, a combining mark.
+    /// path: a ligated flag, a widened VS16 emoji, a keycap, a combining mark.
     #[test]
     fn a_cluster_within_its_cells_is_not_fitted() {
-        for text in ["\u{1F1EF}\u{1F1F5}", "\u{2764}\u{FE0F}", "e\u{301}"] {
+        for text in [
+            "\u{1F1EF}\u{1F1F5}",
+            "\u{2764}\u{FE0F}",
+            "#\u{FE0F}\u{20E3}",
+            "e\u{301}",
+        ] {
             let Some(p) = paint_pinned(text.as_bytes(), 4) else {
                 eprintln!("FELIS_TEST_FONT_DIR unset; skipping");
                 return;
