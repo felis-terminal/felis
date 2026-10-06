@@ -39,6 +39,35 @@ pub(crate) const fn is_regional_indicator(c: char) -> bool {
     matches!(c, '\u{1F1E6}'..='\u{1F1FF}')
 }
 
+/// A flag's first half: one indicator, plus any bidi overrides held
+/// pending from before it.
+pub(crate) fn is_lone_regional_indicator(cluster: &str) -> bool {
+    let mut chars = cluster.chars();
+    chars.next().is_some_and(is_regional_indicator) && chars.all(crate::bidi::is_override)
+}
+
+/// Whether `c` joins the cluster before it rather than starting one.
+/// Four UAX#29 cases fold: a zero-width mark (GB9), an emoji modifier
+/// (Extend yet width-2, GB9), a pictographic after a pictographic and
+/// ZWJ (GB11), and the second regional indicator of a flag (GB12/GB13).
+/// The print path and OSC 66 differ only in where the owner lives.
+pub(crate) fn continues_cluster(
+    c: char,
+    width: u8,
+    zwj_armed: bool,
+    after_base: bool,
+    owner_takes_zwj_pictographic: impl FnOnce() -> bool,
+    owner_is_lone_regional_indicator: impl FnOnce() -> bool,
+) -> bool {
+    width == 0
+        || is_emoji_modifier(c)
+        || (zwj_armed
+            && !after_base
+            && is_extended_pictographic(c)
+            && owner_takes_zwj_pictographic())
+        || (is_regional_indicator(c) && owner_is_lone_regional_indicator())
+}
+
 /// Bidi overrides that found no cell to fold backward into, waiting for
 /// the next character printed (REQ-909). One override is enough for the
 /// marker, so the queue is short; past it more overrides are dropped.
@@ -69,14 +98,14 @@ impl PendingBidi {
         };
     }
 
-    fn push(&mut self, c: char) {
+    pub(crate) fn push(&mut self, c: char) {
         if let Some(slot) = self.chars.get_mut(usize::from(self.len)) {
             *slot = c;
             self.len += 1;
         }
     }
 
-    fn as_slice(&self) -> &[char] {
+    pub(crate) fn as_slice(&self) -> &[char] {
         &self.chars[..usize::from(self.len)]
     }
 }
@@ -334,43 +363,7 @@ impl Grid {
         // only has to clean up partners the shift orphaned at the row
         // edges.
         if self.insert_mode {
-            let cols = usize::from(self.screen.cols);
-            // Under DECLRMM the shift truncates at the right margin
-            // (esctest's `test_SM_IRM_TruncatesAtRightMargin`).
-            let right_edge =
-                if self.left_right_margin_mode && self.screen.cursor.col <= self.margins.right {
-                    usize::from(self.margins.right) + 1
-                } else {
-                    cols
-                };
-            let row_start = self.screen.idx(self.screen.cursor.row, 0);
-            let cursor = usize::from(self.screen.cursor.col);
-            let n = usize::from(width);
-            if cursor + n <= right_edge && cursor + n < right_edge {
-                let row = self.screen.cursor.row;
-                self.materialize_row_tail(row);
-                self.erase_multirow_blocks_on(
-                    row,
-                    self.screen.cursor.col,
-                    u16::try_from(right_edge).unwrap_or(u16::MAX),
-                );
-                for seam in [cursor, right_edge - n, right_edge] {
-                    self.erase_pair_across(row, seam);
-                }
-                let src_start = row_start + cursor;
-                let src_end = row_start + right_edge - n;
-                let dst_start = row_start + cursor + n;
-                if src_start < src_end {
-                    copy_within_cells(&mut self.screen.cells, src_start..src_end, dst_start);
-                    self.screen.occ_bump_phys(
-                        row_start / cols,
-                        u16::try_from(right_edge).unwrap_or(u16::MAX),
-                    );
-                }
-                // A copy of the moved cell stays under the cursor; probed
-                // as a sized primary, it would erase the moved original.
-                self.range_blank(row, row_start + cursor, row_start + cursor + n);
-            }
+            self.insert_mode_shift(self.screen.cursor.row, usize::from(width));
         }
         // Erase any foreign sized run before printing: Kitty text-sizing spec
         // requires erasing the entire character if any of its cells are modified.
@@ -491,6 +484,10 @@ impl Grid {
             return false;
         };
         let owner_idx = self.screen.idx(row, owner_col);
+        let sized = self.screen.cells[owner_idx].sizing.is_some();
+        if sized && self.mark_resizes_sized_block(owner_idx, mark) {
+            return false;
+        }
         if !self.extend_cluster(owner_idx, &[mark]) {
             return false;
         }
@@ -501,12 +498,81 @@ impl Grid {
         }
         // unicode-width reports base + VS16 (❤️) or a keycap
         // sequence (1️⃣) as 2 cells, but the base was placed narrow
-        // before the selector arrived.
-        self.widen_cluster_if_needed(row, owner_col);
+        // before the selector arrived. A sized cell's block was fixed
+        // when it was placed, as kitty leaves a multicell cell on VS16.
+        if !sized {
+            self.widen_cluster_if_needed(row, owner_col);
+        }
         if mark == '\u{200D}' {
             self.zwj_pending = true;
         }
         true
+    }
+
+    /// Insert mode's shift of `n` blank cells at the cursor column on
+    /// `row`, bounded by the edge a print wraps at.
+    pub(crate) fn insert_mode_shift(&mut self, row: u16, n: usize) {
+        let cols = usize::from(self.screen.cols);
+        // Under DECLRMM the shift truncates at the right margin
+        // (esctest's `test_SM_IRM_TruncatesAtRightMargin`).
+        let right_edge =
+            if self.left_right_margin_mode && self.screen.cursor.col <= self.margins.right {
+                usize::from(self.margins.right) + 1
+            } else {
+                cols
+            };
+        let row_start = self.screen.idx(row, 0);
+        let cursor = usize::from(self.screen.cursor.col);
+        if cursor + n <= right_edge && cursor + n < right_edge {
+            self.materialize_row_tail(row);
+            self.erase_multirow_blocks_on(
+                row,
+                self.screen.cursor.col,
+                u16::try_from(right_edge).unwrap_or(u16::MAX),
+            );
+            for seam in [cursor, right_edge - n, right_edge] {
+                self.erase_pair_across(row, seam);
+            }
+            let src_start = row_start + cursor;
+            let src_end = row_start + right_edge - n;
+            let dst_start = row_start + cursor + n;
+            if src_start < src_end {
+                copy_within_cells(&mut self.screen.cells, src_start..src_end, dst_start);
+                self.screen.occ_bump_phys(
+                    row_start / cols,
+                    u16::try_from(right_edge).unwrap_or(u16::MAX),
+                );
+            }
+            // A copy of the moved cell stays under the cursor; probed
+            // as a sized primary, it would erase the moved original.
+            self.range_blank(row, row_start + cursor, row_start + cursor + n);
+        }
+    }
+
+    /// A `w=0` block is measured from its glyph, so a mark that would
+    /// change the glyph's width would resize a block already stamped.
+    fn mark_resizes_sized_block(&self, idx: usize, mark: char) -> bool {
+        use unicode_width::UnicodeWidthStr;
+        let cell = self.screen.cells[idx];
+        let Some(sizing) = cell
+            .sizing
+            .and_then(|h| self.screen.sizing_table.get(h.get() as usize - 1))
+        else {
+            return false;
+        };
+        if sizing.cell_width() > 0 {
+            return false;
+        }
+        let mut text = String::new();
+        match cell.grapheme {
+            Grapheme::Ascii(b) => text.push(char::from(b)),
+            Grapheme::Char(c) => text.push(c),
+            Grapheme::Cluster(id) => text.push_str(self.screen.cluster_str(id).unwrap_or("")),
+            Grapheme::Empty | Grapheme::Spacer | Grapheme::SizedSpacer => return false,
+        }
+        text.push(mark);
+        let before = self.screen.grapheme_width(cell.grapheme).max(1);
+        text.width().clamp(1, 2) != usize::from(before)
     }
 
     /// Appends `marks` to the text of the cell at `idx`, which must be on
@@ -542,15 +608,15 @@ impl Grid {
         true
     }
 
-    /// Four UAX#29 cases fold: a zero-width mark (GB9), an emoji
-    /// modifier (Extend yet width-2, GB9), a pictographic after a
-    /// pictographic and ZWJ (GB11), and the second regional indicator
-    /// of a flag (GB12/GB13).
     fn extends_previous_grapheme(&self, c: char, width: u8, zwj_armed: bool) -> bool {
-        width == 0
-            || is_emoji_modifier(c)
-            || (zwj_armed && self.zwj_continues_into_prev(c))
-            || (is_regional_indicator(c) && self.prev_is_lone_regional_indicator())
+        continues_cluster(
+            c,
+            width,
+            zwj_armed,
+            self.pending_bidi.after_base,
+            || self.zwj_continues_into_prev(c),
+            || self.prev_is_lone_regional_indicator(),
+        )
     }
 
     /// A folded pair is a `Cluster`, not a bare `Char`, so a third
@@ -563,11 +629,10 @@ impl Grid {
         };
         match self.screen.cells[self.screen.idx(row, owner_col)].grapheme {
             Grapheme::Char(c) => is_regional_indicator(c),
-            Grapheme::Cluster(id) => self.screen.cluster_str(id).is_some_and(|s| {
-                let mut chars = s.chars();
-                chars.next().is_some_and(is_regional_indicator)
-                    && chars.all(crate::bidi::is_override)
-            }),
+            Grapheme::Cluster(id) => self
+                .screen
+                .cluster_str(id)
+                .is_some_and(is_lone_regional_indicator),
             _ => false,
         }
     }
@@ -643,10 +708,15 @@ impl Grid {
             return None;
         }
         let idx = self.screen.idx(row, col);
-        let owner_col = if matches!(self.screen.cells[idx].grapheme, Grapheme::Spacer) && col > 0 {
-            col - 1
-        } else {
-            col
+        let owner_col = match self.screen.cells[idx].grapheme {
+            Grapheme::Spacer if col > 0 => col - 1,
+            // As kitty's `add_combining_char` walks back to a multicell
+            // character's origin; a lower row has nothing to join.
+            Grapheme::SizedSpacer => {
+                let block = self.sized_block_at(row, col).filter(|b| b.top == row)?;
+                block.left
+            }
+            _ => col,
         };
         Some((row, owner_col))
     }
@@ -673,6 +743,10 @@ impl Grid {
             .is_none_or(|s| !ends_in_pictographic_joiner(s))
         {
             return false;
+        }
+        let owner_idx = self.screen.idx(row, owner_col);
+        if self.screen.cells[owner_idx].sizing.is_some() {
+            return !self.mark_resizes_sized_block(owner_idx, c);
         }
         owner_col + 1 < self.screen.cols
             && matches!(

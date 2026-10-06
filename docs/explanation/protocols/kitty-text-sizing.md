@@ -51,6 +51,22 @@ called from `screen_insert_characters`, `screen_delete_characters`, `screen_inse
 below): there is no position the application chose. The one exception is a scroll into scrollback: the rows that leave
 keep their part of the character, so its text survives in history, and only the rows left on screen are cleared.
 
+## Placement
+
+A sized character is placed the way kitty places it
+([`screen.c`](https://github.com/kovidgoyal/kitty/blob/master/kitty/screen.c) `handle_fixed_width_multicell_command` and
+`move_cursor_past_multicell`): the block is moved until it fits whole. It wraps or is pushed back from the right edge,
+steps past the lower rows of a taller character, and scrolls the region when it is too tall for the rows left. Only a
+block larger than the screen or the scroll region is discarded. Clipping the block at the edge was rejected: the primary
+draws over its whole footprint, so a clipped block draws over cells the grid does not give it, and the next line
+overwrites its lower rows. Discarding the whole run when it is wider than the screen was rejected too: REQ-406 names a
+character, and a run of characters that each fit is what producers write for a wide heading.
+
+felis departs from kitty in two places. kitty treats a run with an explicit `w` as one block holding the whole text;
+felis gives each cluster its own `w · s` block, because one block holding several clusters needs a primary that the
+renderer shapes as a run. _Revisit if_ a producer relies on kitty's whole-run block. And kitty has no left/right
+margins: felis uses the edges a printed character uses, so sized and plain text wrap at the same column.
+
 ## How felis stores it
 
 Per-cell sizing rides _inline_ in the `Cell`, not in a side-table. Each cell holds `sizing: Option<SizingHandle>`, a
@@ -84,15 +100,17 @@ touching what the handle means.
 
 ## Interaction with reflow
 
-When a resize changes the column count, a sized run either survives in place or is discarded whole:
+When a resize changes the grid's size, each sized character either survives in place or loses its sizing:
 
-1. If the run's cell block still fits at the new width, its cells ride the resize unchanged and it re-lays in place.
-2. Otherwise the run is discarded, and the producer re-emits it on the new geometry, consistent with REQ-406's
-   discard-rather-than-partial rule.
+1. If the character's block still fits, its cells ride the resize unchanged and it re-lays in place.
+2. Otherwise its sizing is dropped, consistent with REQ-406's discard-rather-than-partial rule. Its text stays at its
+   natural width when that fits on the new grid, and is removed when it does not; the producer re-emits it on the new
+   geometry.
 
 There is no partial re-fit: a run is never broken at a boundary with the trailing portion re-wrapped, because neither
 `Grid::resize` nor `Grid::reflow` retains the run's source text on the grid, and re-fitting a sub-run would need it.
 This is why the reflow path ([scrollback.md](../data-model/scrollback.md) "Prior art and alternatives considered")
 discards a multi-cell run that a re-wrap splits across a new wrap boundary rather than laying its tail out one cell at a
 time. The rules are deterministic so that resize-then-restore returns to the original layout while every run still fits
-at the intermediate width (REQ-407); a run discarded along the way stays gone until the producer re-emits it.
+at the intermediate width (REQ-407); a character that lost its sizing along the way stays unsized until the producer
+re-emits it.

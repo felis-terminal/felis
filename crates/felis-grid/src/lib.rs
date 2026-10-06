@@ -2559,27 +2559,6 @@ pub fn char_cell_width(c: char) -> u8 {
     c.width().unwrap_or(0) as u8
 }
 
-/// REQ-406 fit check for an OSC 66 run's scaled bounding box
-/// (`protocols/kitty-text-sizing.md`). Fitting means the run could
-/// fit somewhere in the grid, not necessarily at the cursor.
-fn sized_run_fits(sizing: Sizing, text: &str, rows: u16, cols: u16) -> bool {
-    let scale = u32::from(sizing.scale().max(1));
-    // Only a bidi override is known to take no block: another zero-width
-    // scalar can widen its base (VS16, a keycap), and counting it as a
-    // column keeps the check an upper bound.
-    let placed = text.chars().filter(|&c| !bidi::is_override(c));
-    let per_char_w = if sizing.cell_width() == 0 {
-        placed
-            .map(|c| u32::from(char_cell_width(c).max(1)))
-            .sum::<u32>()
-    } else {
-        u32::from(sizing.cell_width()) * u32::try_from(placed.count()).unwrap_or(u32::MAX)
-    };
-    let footprint_w = per_char_w.saturating_mul(scale);
-    let footprint_h = scale;
-    footprint_w <= u32::from(cols) && footprint_h <= u32::from(rows)
-}
-
 impl Grid {}
 
 /// xterm defines `id` as the only standard key; unknown keys are

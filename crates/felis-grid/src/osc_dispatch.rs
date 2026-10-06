@@ -1,13 +1,13 @@
 //! OSC dispatch handlers: OSC 8, 66, 4/5/10-12, 52, 9/777/99, and 22.
 
 use super::{
-    Cell, ClipboardSelection, ClipboardWrite, Grapheme, Grid, NonZeroU16, NonZeroU32,
-    SPECIAL_COLOR_COUNT, ThemeChannel, char_cell_width, default_dynamic_color,
-    default_palette_color, default_special_color, format_osc_52_response,
-    format_osc_color_response, osc8_scheme_allowed, parse_osc_8_id, parse_osc_52_selection,
-    parse_palette_index, parse_x_color, sanitize_osc_str, sized_run_fits,
+    ClipboardSelection, ClipboardWrite, ClusterText, Grapheme, Grid, NonZeroU16, NonZeroU32,
+    SPECIAL_COLOR_COUNT, ThemeChannel, default_dynamic_color, default_palette_color,
+    default_special_color, format_osc_52_response, format_osc_color_response, osc8_scheme_allowed,
+    parse_osc_8_id, parse_osc_52_selection, parse_palette_index, parse_x_color, sanitize_osc_str,
     special_slot_from_osc4_alias, special_slot_from_osc5,
 };
+use crate::editing::{continues_cluster, ends_in_pictographic_joiner, is_lone_regional_indicator};
 use felis_vt::{split_osc, split_osc_first};
 
 const POINTER_SHAPE_MAX_LEN: usize = 32;
@@ -82,9 +82,9 @@ impl Grid {
     }
 
     /// `OSC 66 ; <metadata> ; <text>`, Kitty text sizing. Skips
-    /// silently on a rejected envelope, a full registry, non-UTF-8
-    /// text, or a run whose scaled box exceeds the grid (REQ-406:
-    /// nothing rather than a clipped run the producer cannot rely on).
+    /// silently on a rejected envelope, a full registry, or non-UTF-8
+    /// text. Each grapheme cluster is its own sized character, placed
+    /// by `place_sized_cluster`.
     pub(crate) fn dispatch_osc_66(&mut self, body: &[u8]) {
         let Some(run) = felis_vt::kitty_text_sizing::parse(body) else {
             return;
@@ -92,106 +92,51 @@ impl Grid {
         let Ok(text) = std::str::from_utf8(run.text) else {
             return;
         };
-        // An empty run skips the fit check (the spec is silent) but
-        // still gets its registry entry.
-        if !text.is_empty() && !sized_run_fits(run.sizing, text, self.screen.rows, self.screen.cols)
-        {
-            return;
-        }
         let Some(handle) = self.screen.install_sizing(run.sizing) else {
             return;
         };
-        let scale_u16 = u16::from(run.sizing.scale().max(1));
-        let cell_width_override = u16::from(run.sizing.cell_width());
-        self.current_sizing_handle = Some(handle);
-        for ch in text.chars() {
-            let natural_w = u16::from(char_cell_width(ch).max(1));
-            let override_w = if cell_width_override > 0 {
-                cell_width_override
-            } else {
-                natural_w
-            };
-            let block_w = override_w.saturating_mul(scale_u16);
-
-            // `put_grapheme` knows nothing about `w`; the block loop
-            // below stamps the columns past the natural footprint.
-            let placed = if let Some(b) = ch.is_ascii().then_some(ch as u8)
-                && (0x20..=0x7E).contains(&b)
-            {
-                self.put_grapheme(Grapheme::Ascii(b))
-            } else {
-                self.put_grapheme(Grapheme::Char(ch))
-            };
-            // A scalar that folded, waits as a bidi override, or was
-            // dropped owns no block, and must not move the cursor.
-            if !placed {
+        let mut cluster = String::new();
+        let mut zwj_armed = false;
+        let mut after_base = self.pending_bidi.after_base;
+        for c in text.chars() {
+            let width = self.screen.grapheme_width(Grapheme::Char(c));
+            let armed = std::mem::take(&mut zwj_armed);
+            let continues = continues_cluster(
+                c,
+                width,
+                armed,
+                after_base,
+                || ends_in_pictographic_joiner(&cluster),
+                || is_lone_regional_indicator(&cluster),
+            );
+            if !continues {
+                if !cluster.is_empty() {
+                    let _ = self.place_sized_cluster(&cluster, run.sizing, handle);
+                }
+                cluster.clear();
+                cluster.push(c);
+                cluster.extend(self.pending_bidi.as_slice());
+                self.pending_bidi.discard();
+                after_base = false;
                 continue;
             }
-
-            // With `pending_wrap` set the cursor parked on the last
-            // column of the footprint instead of advancing past it.
-            let prim_row = self.screen.cursor.row;
-            let prim_col = if self.screen.cursor.pending_wrap {
-                self.screen
-                    .cursor
-                    .col
-                    .saturating_sub(natural_w.saturating_sub(1))
-            } else {
-                self.screen.cursor.col.saturating_sub(natural_w)
-            };
-
-            // Every cell of the block outside the natural footprint
-            // must short-circuit the renderer's fg pass.
-            for dr in 0..scale_u16 {
-                for dc in 0..block_w {
-                    if dr == 0 && dc < natural_w {
-                        continue;
-                    }
-                    let r = prim_row.saturating_add(dr);
-                    let c = prim_col.saturating_add(dc);
-                    if r >= self.screen.rows || c >= self.screen.cols {
-                        continue;
-                    }
-                    // A lower row of the block can start left of its own
-                    // watermark; the gap is blanked so the spacer does not
-                    // seat past a recycled row's stale tail.
-                    let phys = self.screen.phys_row(r);
-                    let occ = usize::from(self.screen.occupancy[phys]);
-                    let base = phys * usize::from(self.screen.cols);
-                    if usize::from(c) > occ {
-                        self.screen.cells[base + occ..base + usize::from(c)].fill(Cell::default());
-                    } else if usize::from(c) < occ {
-                        self.clear_foreign_sized_run(r, c);
-                        // Left to right, so a pair inside the block loses
-                        // its Spacer to the owner's probe before the
-                        // Spacer's own probe could reach back into the
-                        // block's stamped cells.
-                        self.evict_wide_partner_at(r, base, usize::from(c));
-                    }
-                    let idx = self.screen.idx(r, c);
-                    self.screen.cells[idx] = Cell {
-                        grapheme: Grapheme::SizedSpacer,
-                        style: self.pen_style,
-                        link: self.current_link,
-                        sizing: Some(handle),
-                    };
-                    self.screen.has_sized_cells = true;
-                    self.screen.occ_bump_idx(idx);
-                    self.screen.damage.mark(usize::from(r));
-                }
+            let is_override = crate::bidi::is_override(c);
+            if is_override {
+                after_base = true;
             }
-
-            let next_col = prim_col.saturating_add(block_w);
-            if next_col >= self.screen.cols {
-                self.screen.cursor.col = self.screen.cols.saturating_sub(1);
-                self.screen.cursor.pending_wrap = true;
-            } else {
-                self.screen.cursor.col = next_col;
-                self.screen.cursor.pending_wrap = false;
+            // A payload never extends a cell written before it.
+            let fits = !cluster.is_empty() && cluster.len() + c.len_utf8() <= ClusterText::CAP;
+            if fits {
+                cluster.push(c);
+                zwj_armed = c == '\u{200D}';
+            } else if is_override {
+                self.pending_bidi.push(c);
             }
-            self.screen.cursor.row = prim_row;
         }
-        self.current_sizing_handle = None;
+        if !cluster.is_empty() && self.place_sized_cluster(&cluster, run.sizing, handle) {
+            self.zwj_pending = zwj_armed;
+        }
+        self.pending_bidi.after_base = after_base;
     }
 
     /// `OSC 10 / 11 / 12` with xterm's multi-spec form: `code` selects

@@ -8,7 +8,7 @@ use super::{Cell, Grapheme, Grid, Sizing, SizingHandle, ViewportRow};
 /// primary at `(top, left)`.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct SizedBlock {
-    top: u16,
+    pub(crate) top: u16,
     pub(crate) left: u16,
     rows: u16,
     cols: u16,
@@ -51,10 +51,7 @@ impl Grid {
             let Some(primary) = ours(top, left).filter(|c| !continues(c.grapheme)) else {
                 continue;
             };
-            let (rows, block_w) = self.screen.sizing_block_extent(sizing, primary.grapheme);
-            // A `w` narrower than the glyph still prints its `Spacer`.
-            let natural_w = u16::from(self.screen.grapheme_width(primary.grapheme).max(1));
-            let cols = block_w.max(natural_w);
+            let (rows, cols) = self.screen.sizing_block_extent(sizing, primary.grapheme);
             if u32::from(top) + u32::from(rows) > u32::from(row)
                 && u32::from(left) + u32::from(cols) > u32::from(col)
             {
@@ -195,6 +192,210 @@ impl Grid {
             return;
         }
         self.clear_sized_run_at(r, c);
+    }
+
+    /// Places one OSC 66 cluster as a `w·s` × `s` block, the way kitty's
+    /// `handle_fixed_width_multicell_command` does: a block larger than
+    /// the screen or the scroll region is dropped (REQ-406), anything
+    /// else is moved, wrapped or scrolled until it fits whole. `false`
+    /// when the block is discarded.
+    pub(crate) fn place_sized_cluster(
+        &mut self,
+        text: &str,
+        sizing: Sizing,
+        handle: SizingHandle,
+    ) -> bool {
+        let g = self.sized_cluster_grapheme(text);
+        let (scale, block_w) = self.screen.sizing_block_extent(sizing, g);
+        let region_h = self.margins.bottom - self.margins.top + 1;
+        if block_w > self.screen.cols || scale > region_h {
+            return false;
+        }
+        self.fit_sized_block(scale, block_w);
+        if self.insert_mode {
+            let row = self.screen.cursor.row;
+            for r in row..row + scale {
+                self.insert_mode_shift(r, usize::from(block_w));
+            }
+        }
+        self.stamp_sized_block(g, scale, block_w, handle);
+        true
+    }
+
+    fn sized_cluster_grapheme(&mut self, text: &str) -> Grapheme {
+        let mut chars = text.chars();
+        let Some(base) = chars.next() else {
+            return Grapheme::Empty;
+        };
+        if chars.next().is_none() {
+            return match u8::try_from(base) {
+                Ok(b) if (0x20..=0x7E).contains(&b) => Grapheme::Ascii(b),
+                _ => Grapheme::Char(base),
+            };
+        }
+        self.intern_cluster(text)
+            .map_or(Grapheme::Char(base), Grapheme::Cluster)
+    }
+
+    /// Moves the cursor to the block's primary: scroll or step up until
+    /// `scale` rows fit, then take the first span on the row that holds
+    /// no lower row of another block, wrapping under DECAWM.
+    fn fit_sized_block(&mut self, scale: u16, block_w: u16) {
+        let wrap_allowed = self.autowrap && block_w <= self.sized_wrap_band();
+        let mut stalled = false;
+        let mut wraps: u32 = 0;
+        loop {
+            self.fit_sized_rows(scale);
+            let wrap_ok = wrap_allowed && wraps <= u32::from(self.screen.rows);
+            if std::mem::take(&mut self.screen.cursor.pending_wrap) && wrap_ok {
+                if !self.sized_wrap(&mut stalled) {
+                    break;
+                }
+                wraps += 1;
+                continue;
+            }
+            let right = self.print_right_edge_for_cursor();
+            if let Some(col) = self.free_sized_span(self.screen.cursor.col, block_w, right) {
+                self.screen.cursor.col = col;
+                return;
+            }
+            if !wrap_ok || !self.sized_wrap(&mut stalled) {
+                break;
+            }
+            wraps += 1;
+        }
+        let right = self.print_right_edge_for_cursor();
+        self.screen.cursor.col = (right + 1).saturating_sub(block_w);
+    }
+
+    /// The columns a wrapped block can use: from the wrap's left edge to
+    /// the right margin, or the screen edge without DECLRMM.
+    const fn sized_wrap_band(&self) -> u16 {
+        let right = if self.left_right_margin_mode {
+            self.margins.right
+        } else {
+            self.screen.cols.saturating_sub(1)
+        };
+        (right + 1).saturating_sub(self.print_left_edge_for_wrap())
+    }
+
+    /// `false`, without wrapping, when a wrap already left the cursor on
+    /// its row and this one would too: below the scroll region on the
+    /// last row, or outside the DECLRMM band, a line feed neither moves
+    /// nor scrolls.
+    fn sized_wrap(&mut self, stalled: &mut bool) -> bool {
+        let row = self.screen.cursor.row;
+        let progresses = if row == self.margins.bottom {
+            !self.cursor_outside_left_right()
+        } else {
+            row + 1 < self.screen.rows
+        };
+        if progresses {
+            self.line_feed();
+            self.screen.set_soft_wrap(self.screen.cursor.row, true);
+        } else if std::mem::replace(stalled, true) {
+            return false;
+        }
+        self.screen.cursor.col = self.print_left_edge_for_wrap();
+        self.screen.cursor.pending_wrap = false;
+        true
+    }
+
+    fn fit_sized_rows(&mut self, scale: u16) {
+        let row = self.screen.cursor.row;
+        if row <= self.margins.bottom {
+            let available = self.margins.bottom - row + 1;
+            if scale > available {
+                let n = scale - available;
+                self.scroll_region_up(n);
+                self.screen.cursor.row = row - n;
+            }
+        } else {
+            let available = self.screen.rows - row;
+            if scale > available {
+                self.screen.cursor.row = row - (scale - available);
+            }
+        }
+    }
+
+    fn free_sized_span(&self, from: u16, block_w: u16, right: u16) -> Option<u16> {
+        let row = self.screen.cursor.row;
+        let mut col = from;
+        while u32::from(col) + u32::from(block_w) <= u32::from(right) + 1 {
+            match (col..col + block_w)
+                .rev()
+                .find(|&c| self.holds_lower_block_row(row, c))
+            {
+                None => return Some(col),
+                Some(blocked) => col = blocked + 1,
+            }
+        }
+        None
+    }
+
+    fn holds_lower_block_row(&self, row: u16, col: u16) -> bool {
+        self.screen.has_sized_cells
+            && self
+                .screen
+                .cell(row, col)
+                .is_some_and(|c| c.sizing.is_some())
+            && self.sized_block_at(row, col).is_some_and(|b| b.top < row)
+    }
+
+    /// Erases every sized character and wide pair the block overlaps,
+    /// whatever run it came from, then writes the block at the cursor.
+    fn stamp_sized_block(&mut self, g: Grapheme, scale: u16, block_w: u16, handle: SizingHandle) {
+        let top = self.screen.cursor.row;
+        let left = self.screen.cursor.col;
+        let bottom = top + scale;
+        let right = left + block_w;
+        let natural_w = u16::from(self.screen.grapheme_width(g).max(1));
+        for r in top..bottom {
+            if self.screen.has_sized_cells {
+                let occ = self.screen.occupancy[self.screen.phys_row(r)];
+                for c in left..right.min(occ) {
+                    if self.screen.cells[self.screen.idx(r, c)].sizing.is_some() {
+                        self.clear_sized_run_at(r, c);
+                    }
+                }
+            }
+            self.erase_pair_across(r, usize::from(left));
+            self.erase_pair_across(r, usize::from(right));
+        }
+        for r in top..bottom {
+            let phys = self.screen.phys_row(r);
+            let base = phys * usize::from(self.screen.cols);
+            if usize::from(left) > usize::from(self.screen.occupancy[phys]) {
+                self.fill_leading_gap(phys, usize::from(left));
+            }
+            for c in left..right {
+                let grapheme = if r == top && c == left {
+                    g
+                } else if r == top && c == left + 1 && natural_w == 2 {
+                    Grapheme::Spacer
+                } else {
+                    Grapheme::SizedSpacer
+                };
+                self.screen.cells[base + usize::from(c)] = Cell {
+                    grapheme,
+                    style: self.pen_style,
+                    link: self.current_link,
+                    sizing: Some(handle),
+                };
+            }
+            self.screen.occ_bump_phys(phys, right);
+            self.screen.damage.mark(usize::from(r));
+        }
+        self.screen.has_sized_cells = true;
+        self.last_printed = Some(g);
+        self.zwj_pending = false;
+        let edge = self.print_right_edge_for_cursor();
+        if right > edge {
+            self.screen.cursor.col = edge;
+            self.screen.cursor.pending_wrap = true;
+        } else {
+            self.screen.cursor.col = right;
+        }
     }
 
     /// Scrollback rows read as unsized: exposing scrolled-out sizings is

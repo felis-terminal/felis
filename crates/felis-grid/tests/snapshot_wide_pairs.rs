@@ -618,22 +618,22 @@ fn a_saved_alt_screen_resize_that_cuts_a_sized_wide_scalar_erases_it() {
 }
 
 #[test]
-fn dch_on_the_spacer_of_a_sized_wide_scalar_narrower_than_its_glyph_erases_it() {
+fn dch_beside_a_sized_wide_scalar_narrower_than_its_glyph_leaves_it() {
     insta::assert_snapshot!(snap(8, "\x1b]66;w=1;字\x07\x1b[1;4Hz\x1b[1;2H\x1b[P"), @r#"
     cursor: row=0 col=1 visible=1 pending_wrap=0
-    cells: ·|·|z|·|·|·|·|·
-    text: "  z"
+    cells: 字|·|z|·|·|·|·|·
+    text: "字 z"
     "#);
 }
 
 #[test]
-fn an_alt_screen_resize_that_cuts_a_sized_wide_scalar_narrower_than_its_glyph_erases_it() {
+fn an_alt_screen_resize_keeps_a_sized_wide_scalar_whose_one_column_block_still_fits() {
     let mut grid = drive(1, 8, "\x1b[?1049h\x1b[1;4H\x1b]66;w=1;字\x07".as_bytes());
     grid.resize(1, 4);
     insta::assert_snapshot!(render_roles(&grid), @r#"
     cursor: row=0 col=3 visible=1 pending_wrap=0
-    cells: ·|·|·|·
-    text: ""
+    cells: ·|·|·|字
+    text: "   字"
     "#);
-    assert_eq!(grid.sized_cell_count(), 0);
+    assert_eq!(grid.sized_cell_count(), 1);
 }

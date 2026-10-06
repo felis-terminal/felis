@@ -300,11 +300,10 @@ fn osc_66_stamps_both_halves_of_a_wide_glyph() {
 }
 
 #[test]
-fn osc_66_discards_run_whose_scaled_bounding_box_overflows_screen() {
-    // REQ-406: a run that cannot fit is a whole no-op.
+fn osc_66_discards_each_character_taller_than_the_screen() {
     let g = drive(1, 8, b"\x1b]66;s=7;ABCDE\x07");
     insta::assert_snapshot!(render_sizings(&g), @r#"
-    registry: 0 entries
+    registry: 1 entries
     sized cells: 0
     row 0: "        " sizings="........"
     "#);

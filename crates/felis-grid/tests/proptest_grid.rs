@@ -599,6 +599,9 @@ proptest! {
                 let g = grid.cell(r, c).unwrap().grapheme;
                 if let Grapheme::Char(ch) = g
                     && ch.width() == Some(2)
+                    && !grid.cell_sizing(r, c).is_some_and(|s| {
+                        s.cell_width() > 0 && u16::from(s.cell_width()) * u16::from(s.scale().max(1)) < 2
+                    })
                 {
                     let right = (c + 1 < grid.cols()).then(|| grid.cell(r, c + 1).unwrap().grapheme);
                     prop_assert_eq!(right, Some(Grapheme::Spacer), "wide {:?} at ({}, {}) has no Spacer after {:?}", ch, r, c, steps);

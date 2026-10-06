@@ -342,8 +342,7 @@ impl ScreenBuffer {
                 };
                 let (scale, block_w) = self.sizing_block_extent(*sizing, cells[i].grapheme);
                 let natural_w = u16::from(self.grapheme_width(cells[i].grapheme).max(1));
-                if r.saturating_add(scale) > rows || c.saturating_add(block_w.max(natural_w)) > cols
-                {
+                if r.saturating_add(scale) > rows || c.saturating_add(block_w) > cols {
                     to_drop.push((r, c, scale, block_w, natural_w));
                 }
             }
@@ -367,9 +366,9 @@ impl ScreenBuffer {
                     }
                 }
             }
-            // A pair the new edge cut cannot survive at its natural
-            // width either.
-            if pc.saturating_add(natural_w) > cols {
+            // The pair cannot outlive its block: a glyph wider than its
+            // block has no `Spacer`, and one the new edge cut has no room.
+            if natural_w > block_w || pc.saturating_add(natural_w) > cols {
                 cells[idx(pr, pc)] = Cell::default();
             }
             dropped.push(pr);

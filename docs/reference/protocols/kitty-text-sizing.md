@@ -31,8 +31,8 @@ OSC 66 ; metadata ; text ST
 | `v` | 0–2   | 0       | vertical alignment: 0 top, 1 bottom, 2 centered   |
 | `h` | 0–2   | 0       | horizontal alignment: 0 left, 1 right, 2 centered |
 
-The cell footprint occupied by a run is `(w · s) × s` cells (`w = 0` derives from grapheme widths). Rendered glyph size
-is `s × n/d` of base font size when fractional scaling is active (`d > 0`), otherwise `s`. Because the parser enforces
+Each character of a run occupies `(w · s) × s` cells (`w = 0` derives from its grapheme width). Rendered glyph size is
+`s × n/d` of base font size when fractional scaling is active (`d > 0`), otherwise `s`. Because the parser enforces
 `d > n`, fractional factors are strictly less than 1 and only scale downward (e.g. `n=1:d=2` yields 0.5×; see
 [kitty-text-sizing.md](../../explanation/protocols/kitty-text-sizing.md)). `text` is the run to render.
 
@@ -40,6 +40,27 @@ Each `OSC 66` defines a self-contained run; no persistent sizing mode is maintai
 `CSI Pn:...:Pn t` sequence is not supported ([support-matrix.md](support-matrix.md#kitty-text-sizing-osc-66)). Size
 transitions are instantaneous: a run is drawn at its size on the next frame, and felis interpolates nothing from the
 size the cells carried before.
+
+## Placing a sized character
+
+Each grapheme cluster of `text` is one sized character with its own block: `w · s` columns wide (`w = 0` takes the
+cluster's own width) and `s` rows tall. An explicit `w` sizes each cluster, not the run as a whole.
+
+- A character wider than the screen or taller than the scroll region is discarded; the rest of the run is still placed
+  (REQ-406).
+- The right edge is the one a printed character uses: the right margin when left/right margins are set and the cursor is
+  not past it, otherwise the last column. With autowrap on, a character that does not fit before the right edge wraps to
+  the next line, as printed text does, and so does one that would land on the lower rows of a taller character. With
+  autowrap off, or when the character is wider than the margins, it is placed against the right edge, and erases what it
+  lands on.
+- A character taller than the rows left in the scroll region scrolls the region up by the difference (into scrollback
+  when the region starts at the top of the primary screen). Below the scroll region the cursor moves up instead.
+- In insert mode the block's width is inserted on every row the block covers.
+- A `w` narrower than the glyph squeezes the glyph into the block.
+- A combining mark at the start of `text` is dropped, never joined to a character written before the run. A bidi
+  override joins the character before it, or the next one printed when there is none, as in printed text.
+- A mark printed after the run joins its last character without widening its block; with `w = 0`, a mark that would
+  change the character's width (VS16 after `❤`) is dropped instead.
 
 ## Editing over a sized character
 
@@ -61,5 +82,7 @@ Each character of a run owns its own block of cells; the rules below apply per c
   `s` itself.
 - Effective glyph scale range: `[0, 7]`. `n=0` with `d > 0` yields an exactly zero-size glyph, which the parser accepts.
 - Maximum cell-width override `w`: 7 (REQ-402).
-- Grid bounds: A run whose cell footprint exceeds terminal dimensions is discarded outright (REQ-406); partial clamping
-  is not performed.
+- Grid bounds: a character whose block is wider than the screen or taller than the scroll region is discarded (REQ-406);
+  a block is never clipped at the screen edge.
+- Resize: a character whose block does not fit the new size loses its sizing; its text stays at its natural width when
+  that fits, and is removed when it does not (REQ-407).

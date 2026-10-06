@@ -45,6 +45,12 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
   deleting lines through it: it is erased whole, as kitty does. A scroll that pushes its upper rows into scrollback
   keeps them there. Writing over its lower rows also erases it whole, and printing in insert mode in front of a sized
   character no longer erases part of it.
+- A text-sizing (OSC 66) character near the bottom or right edge is moved onto the screen whole, as kitty does, instead
+  of being cut off at the edge and overwritten by the next line: it wraps or scrolls the region up to fit, steps past
+  the lower rows of a taller character, and in insert mode shifts every row it covers. A run wider than the screen is no
+  longer dropped whole when each of its characters fits; only a character too big for the screen or the scroll region is
+  dropped. A combining mark or VS16 in the run stays with its character, and a `w` narrower than the glyph no longer
+  leaves the glyph's right half outside the block.
 - A zero-width joiner between characters that are not both emoji (`👩‍字`, `क‍ख‍ग`, `x‍👍`) no longer collapses them
   into one two-cell glyph: they take the cells the application counts (4, 3 and 3), so the rest of the line stays where
   the application put it.

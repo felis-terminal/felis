@@ -240,7 +240,7 @@ Detail: [kitty-text-sizing.md](kitty-text-sizing.md).
 | multi-cell width (`w`) / height (`s ≥ 2`)       | ✅                                                                                 |
 | fractional sub-cell shrink (`s × n/d`)          | ✅                                                                                 |
 | vertical / horizontal alignment                 | ✅                                                                                 |
-| run exceeding screen dims                       | ✅ discarded (REQ-406)                                                             |
+| character exceeding screen or region dims       | ✅ discarded per character; others moved to fit (REQ-406)                          |
 | resize-then-restore round-trip                  | ✅ deterministic while every run fits the intermediate width (REQ-407)             |
 | legacy `CSI Pn:…:Pn t` sizing form              | 🚫 (OSC 66 only)                                                                   |
 
