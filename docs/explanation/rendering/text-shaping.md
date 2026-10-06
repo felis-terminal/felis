@@ -128,6 +128,12 @@ covers it. Otherwise an emoji ZWJ / modifier sequence anchors its face on the fi
 (a bare `❤️`, a keycap) routes the base through `resolve_color_index`. A VS16-less dingbat (`⏸`, a plain `❤`) has no
 signal and stays mono.
 
+Once the face is chosen, the cluster is shaped without the variation selectors that face does not map. swash 0.2.10
+never looks a selector up in the cmap's variation-sequence subtable, and it drops VS15/VS16 only after an emoji base;
+after a base such as `#` the VS16 is shaped as a `.notdef` with a full advance, which splits the keycap ligature into
+three glyphs. Dropping it loses nothing: the presentation it asked for is already the face, and the variant it might
+name is never looked up. A selector the face maps directly is kept. Revisit if swash starts mapping variation sequences.
+
 The stack is queried per codepoint: `resolve(c)` returns the first font whose charmap covers `c` (the first color one
 for an emoji-presentation character), falling back to the primary (which then renders its `.notdef` box) when nothing
 covers it. A cell whose character the primary face does not cover is therefore never inside a ligature run: the run scan

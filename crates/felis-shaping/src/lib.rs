@@ -8,7 +8,7 @@
 // (docs/explanation/rendering/text-shaping.md "Font loading").
 #![allow(unsafe_code)]
 
-use std::{collections::HashMap, sync::Arc};
+use std::{borrow::Cow, collections::HashMap, sync::Arc};
 
 use fontdb::{Database, Family, Query};
 pub use swash::GlyphId;
@@ -344,6 +344,27 @@ pub const EMOJI_FALLBACK_FAMILIES: &[&str] = &[
 /// color face, while stopping below U+20000 so astral CJK never anchors emoji.
 const fn is_emoji_face_anchor(c: char) -> bool {
     matches!(c, '\u{1F000}'..='\u{1FAFF}')
+}
+
+const fn is_variation_selector(c: char) -> bool {
+    matches!(c, '\u{FE00}'..='\u{FE0F}' | '\u{E0100}'..='\u{E01EF}')
+}
+
+/// swash 0.2.10 never looks a selector up in cmap 14 (`map_variant` has no
+/// caller), so one the face does not map shapes as a `.notdef` that splits
+/// ligatures such as the keycap. The face already honored the presentation;
+/// revisit once swash maps variants.
+fn without_unmapped_selectors(text: &str, maps: impl Fn(char) -> bool) -> Cow<'_, str> {
+    let dropped = |i: usize, c: char| i > 0 && is_variation_selector(c) && !maps(c);
+    if !text.char_indices().any(|(i, c)| dropped(i, c)) {
+        return Cow::Borrowed(text);
+    }
+    Cow::Owned(
+        text.char_indices()
+            .filter(|&(i, c)| !dropped(i, c))
+            .map(|(_, c)| c)
+            .collect(),
+    )
 }
 
 /// Monochrome symbol and dingbat faces, appended before emoji fallbacks.
@@ -1259,7 +1280,8 @@ impl Shaper {
         };
         let font = stack.font_at(font_id, style).clone();
         let features = stack.features_for(font_id, style);
-        let glyphs = self.shape_run(&font, px, features, text);
+        let shaped_text = without_unmapped_selectors(text, |c| font.has_glyph(c));
+        let glyphs = self.shape_run(&font, px, features, &shaped_text);
         ClusterShaping { font_id, glyphs }
     }
 }
@@ -2548,5 +2570,79 @@ mod tests {
         assert_eq!(text.font_id, mono);
         let emoji = shaper.shape_cluster(&stack, 18.0, style, "\u{1F004}\u{FE0F}");
         assert!(stack.font_at(emoji.font_id, style).has_color_glyphs());
+    }
+
+    /// The keycap ligature needs `#` and U+20E3 adjacent; a VS16 left
+    /// between them shapes as `.notdef` and splits it into three glyphs.
+    #[test]
+    fn a_keycap_with_vs16_shapes_to_the_one_keycap_glyph() {
+        let Some(stack) = pinned_stack(&[]) else {
+            eprintln!("FELIS_TEST_FONT_DIR unset; skipping");
+            return;
+        };
+        let style = FontStyle::REGULAR;
+        let mut shaper = Shaper::new();
+        for base in ['#', '1', '*'] {
+            let cluster =
+                shaper.shape_cluster(&stack, 18.0, style, &format!("{base}\u{FE0F}\u{20E3}"));
+            let face = stack.font_at(cluster.font_id, style);
+            assert!(
+                face.has_color_glyphs(),
+                "{base}: the keycap resolves to the color face"
+            );
+            let bare = shaper.shape_run(
+                face,
+                18.0,
+                stack.features_for(cluster.font_id, style),
+                &format!("{base}\u{20E3}"),
+            );
+            assert_eq!(bare.len(), 1, "{base}: the face ligates the bare keycap");
+            let ids: Vec<_> = cluster.glyphs.iter().map(|g| g.glyph_id).collect();
+            assert_eq!(
+                ids,
+                [bare[0].glyph_id],
+                "{base}: the VS16 keycap draws the same glyph"
+            );
+        }
+    }
+
+    #[test]
+    fn only_an_unmapped_selector_after_the_base_is_dropped() {
+        let unmapped: fn(char) -> bool = |_| false;
+        let cases = [
+            ("a keycap VS16", "#\u{FE0F}\u{20E3}", unmapped, "#\u{20E3}"),
+            (
+                "an ideographic variation selector",
+                "葛\u{E0100}",
+                unmapped,
+                "葛",
+            ),
+            (
+                "a standardized variation selector",
+                "≩\u{FE00}",
+                unmapped,
+                "≩",
+            ),
+            (
+                "a selector the face maps",
+                "#\u{FE0F}\u{20E3}",
+                |c| c == '\u{FE0F}',
+                "#\u{FE0F}\u{20E3}",
+            ),
+            (
+                "a lone selector as the base",
+                "\u{FE0F}",
+                unmapped,
+                "\u{FE0F}",
+            ),
+            ("text without selectors", "क्ष", unmapped, "क्ष"),
+        ];
+        for (case, text, maps, expected) in cases {
+            assert_eq!(without_unmapped_selectors(text, maps), expected, "{case}");
+        }
+        assert!(matches!(
+            without_unmapped_selectors("e\u{301}", unmapped),
+            Cow::Borrowed(_)
+        ));
     }
 }
