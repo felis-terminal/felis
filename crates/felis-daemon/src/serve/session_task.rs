@@ -2486,11 +2486,6 @@ impl SessionTask {
     /// Announced to every subscriber, the requester included: its
     /// client treats a same-dims resize as a no-op.
     fn apply_size(&mut self, size: PtySize) {
-        #[cfg(all(test, unix))]
-        self.pty_steps.push(PtyStep::Resize);
-        if let Err(err) = self.session.resizer.resize(size) {
-            warn!(?err, "pty resize failed");
-        }
         // Floor division matches how producers derive cell size from
         // TIOCGWINSZ.
         self.session.cell_pixel_w = size.pixel_width.checked_div(size.cols).unwrap_or(0);
@@ -2543,6 +2538,16 @@ impl SessionTask {
         let composed = self.compose_all(&mut core);
         let meta = self.read_meta_facts(&core);
         drop(core);
+        // SIGWINCH only once the grid has its new geometry: a repaint
+        // parsed before the reflow would be re-wrapped, or blanked with
+        // the prompt it replaces. Not under the core lock: ConPTY's resize
+        // can block on its output pipe, which drains only through the
+        // parser that lock serializes.
+        #[cfg(all(test, unix))]
+        self.pty_steps.push(PtyStep::Resize);
+        if let Err(err) = self.session.resizer.resize(size) {
+            warn!(?err, "pty resize failed");
+        }
         self.apply_meta(meta);
         self.broadcast(|_sub| {
             vec![OutEvent::Grid(GridMsg::Size {
