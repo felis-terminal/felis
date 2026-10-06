@@ -161,6 +161,7 @@ impl Grid {
                     if usize::from(c) > occ {
                         self.screen.cells[base + occ..base + usize::from(c)].fill(Cell::default());
                     } else if usize::from(c) < occ {
+                        self.clear_foreign_sized_run(r, c);
                         // Left to right, so a pair inside the block loses
                         // its Spacer to the owner's probe before the
                         // Spacer's own probe could reach back into the

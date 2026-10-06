@@ -22,6 +22,10 @@ impl SizedBlock {
             && self.top as u32 + self.rows as u32 <= top as u32 + rows as u32
             && self.left as u32 + self.cols as u32 <= left as u32 + cols as u32
     }
+
+    fn same_as(&self, other: &Self) -> bool {
+        self.top == other.top && self.left == other.left && self.handle == other.handle
+    }
 }
 
 impl Grid {
@@ -70,9 +74,13 @@ impl Grid {
     /// own sizing on its own write, so only cells still carrying the
     /// handle are cleared.
     pub(crate) fn clear_sized_block(&mut self, block: SizedBlock) {
+        self.clear_sized_block_from(block, block.top);
+    }
+
+    fn clear_sized_block_from(&mut self, block: SizedBlock, first_row: u16) {
         let last_row = block.top.saturating_add(block.rows).min(self.screen.rows);
         let last_col = block.left.saturating_add(block.cols).min(self.screen.cols);
-        for r in block.top..last_row {
+        for r in first_row.max(block.top)..last_row {
             for c in block.left..last_col {
                 let idx = self.screen.idx(r, c);
                 if self.screen.cells[idx].sizing == Some(block.handle) {
@@ -80,6 +88,85 @@ impl Grid {
                 }
             }
             self.screen.damage.mark(usize::from(r));
+        }
+    }
+
+    /// Distinct multi-row blocks with a cell inside the watermark of
+    /// `row` × `[left, right)` that `keep` accepts.
+    fn multirow_blocks_on(
+        &self,
+        row: u16,
+        left: u16,
+        right: u16,
+        keep: impl Fn(&SizedBlock) -> bool,
+    ) -> Vec<SizedBlock> {
+        let mut out: Vec<SizedBlock> = Vec::new();
+        if !self.screen.has_sized_cells || row >= self.screen.rows {
+            return out;
+        }
+        let phys = self.screen.phys_row(row);
+        let end = right.min(self.screen.occupancy[phys]).min(self.screen.cols);
+        if left >= end {
+            return out;
+        }
+        let base = phys * usize::from(self.screen.cols);
+        let cells = &self.screen.cells[base + usize::from(left)..base + usize::from(end)];
+        for (col, cell) in (left..end).zip(cells) {
+            if cell.sizing.is_some()
+                && let Some(block) = self.sized_block_at(row, col)
+                && block.rows > 1
+                && keep(&block)
+                && !out.iter().any(|b| b.same_as(&block))
+            {
+                out.push(block);
+            }
+        }
+        out
+    }
+
+    /// A row-local shift (ICH, DCH, IRM) moves one row of a multi-row
+    /// block and not the others, so it erases every one it reaches
+    /// first, as kitty's `nuke_multiline_char_intersecting_with` does.
+    pub(crate) fn erase_multirow_blocks_on(&mut self, row: u16, left: u16, right: u16) {
+        if !self.screen.has_sized_cells {
+            return;
+        }
+        for block in self.multirow_blocks_on(row, left, right, |_| true) {
+            self.clear_sized_block(block);
+        }
+    }
+
+    /// Erases each multi-row block in `[left, right)` that a band move
+    /// splits at the boundary above one of `seams`. A block whose
+    /// primary is among the first `departing` rows, which go to
+    /// history, keeps those rows there and loses only its live ones.
+    pub(crate) fn erase_blocks_across_row_seams(
+        &mut self,
+        seams: &[u16],
+        left: u16,
+        right: u16,
+        departing: u16,
+    ) {
+        if !self.screen.has_sized_cells {
+            return;
+        }
+        let mut cut: Vec<SizedBlock> = Vec::new();
+        for &seam in seams {
+            if seam == 0 {
+                continue;
+            }
+            for block in self.multirow_blocks_on(seam, left, right, |b| b.top < seam) {
+                if !cut.iter().any(|b| b.same_as(&block)) {
+                    cut.push(block);
+                }
+            }
+        }
+        for block in cut {
+            if block.top < departing {
+                self.clear_sized_block_from(block, departing);
+            } else {
+                self.clear_sized_block(block);
+            }
         }
     }
 

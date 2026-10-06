@@ -42,6 +42,15 @@ cursor "into" a spanned region jumps to the primary.
 This mirrors how wide East Asian glyphs are handled in conventional terminals (one primary cell, one continuation cell).
 Sized text generalizes that idea to arbitrary M×N spans.
 
+A sized character taller than one row is only meaningful whole: its primary draws over the full footprint. A cell move
+that carries some of its rows and not others would leave the primary drawing over cells that now hold other text, or
+leave rows with no primary at all. felis therefore erases such a character before the move, as kitty does
+([`screen.c`](https://github.com/kovidgoyal/kitty/blob/master/kitty/screen.c) `nuke_multiline_char_intersecting_with`,
+called from `screen_insert_characters`, `screen_delete_characters`, `screen_insert_lines` and
+`screen_delete_lines_impl`). Re-fitting the character elsewhere was rejected for the reason reflow rejects it (see
+below): there is no position the application chose. The one exception is a scroll into scrollback: the rows that leave
+keep their part of the character, so its text survives in history, and only the rows left on screen are cleared.
+
 ## How felis stores it
 
 Per-cell sizing rides _inline_ in the `Cell`, not in a side-table. Each cell holds `sizing: Option<SizingHandle>`, a

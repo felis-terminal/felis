@@ -349,6 +349,11 @@ impl Grid {
             if cursor + n <= right_edge && cursor + n < right_edge {
                 let row = self.screen.cursor.row;
                 self.materialize_row_tail(row);
+                self.erase_multirow_blocks_on(
+                    row,
+                    self.screen.cursor.col,
+                    u16::try_from(right_edge).unwrap_or(u16::MAX),
+                );
                 for seam in [cursor, right_edge - n, right_edge] {
                     self.erase_pair_across(row, seam);
                 }
@@ -362,6 +367,9 @@ impl Grid {
                         u16::try_from(right_edge).unwrap_or(u16::MAX),
                     );
                 }
+                // A copy of the moved cell stays under the cursor; probed
+                // as a sized primary, it would erase the moved original.
+                self.range_blank(row, row_start + cursor, row_start + cursor + n);
             }
         }
         // Erase any foreign sized run before printing: Kitty text-sizing spec
@@ -928,6 +936,17 @@ impl Grid {
         let n = usize::from(n).min(region_height);
         let to_scrollback = self.margins.top == 0 && self.screen.saved_primary.is_none();
         let full_screen = region_top == 0 && region_bottom + 1 == usize::from(self.screen.rows);
+        let n_u16 = u16::try_from(n).unwrap_or(u16::MAX);
+        self.erase_blocks_across_row_seams(
+            &[
+                self.margins.top,
+                self.margins.top + n_u16,
+                self.margins.bottom + 1,
+            ],
+            0,
+            self.screen.cols,
+            if to_scrollback { n_u16 } else { 0 },
+        );
         let blank = Cell {
             grapheme: Grapheme::Empty,
             style: self.pen_style,
@@ -978,6 +997,17 @@ impl Grid {
         let region_bottom = usize::from(self.margins.bottom);
         let region_height = region_bottom - region_top + 1;
         let n = usize::from(n).min(region_height);
+        let n_u16 = u16::try_from(n).unwrap_or(u16::MAX);
+        self.erase_blocks_across_row_seams(
+            &[
+                self.margins.top,
+                self.margins.bottom + 1 - n_u16,
+                self.margins.bottom + 1,
+            ],
+            0,
+            self.screen.cols,
+            0,
+        );
         let blank = Cell {
             grapheme: Grapheme::Empty,
             style: self.pen_style,
@@ -1013,6 +1043,11 @@ impl Grid {
         }
         let region_height = bottom - top + 1;
         let n = n_rows.min(region_height);
+        let inner_seam = match direction {
+            ScrollDirection::Up => top + n,
+            ScrollDirection::Down => bottom + 1 - n,
+        };
+        self.erase_blocks_across_row_seams(&[top, inner_seam, bottom + 1], left, right_incl + 1, 0);
         // The band copy reads source cells that can lie past a row's
         // watermark; materialize so no stale tail moves inside the band.
         for r in top..=bottom {
@@ -1664,6 +1699,17 @@ impl Grid {
         let band_bottom = usize::from(self.margins.bottom);
         let band_height = band_bottom - band_top + 1;
         let n = usize::from(n).min(band_height);
+        let n_u16 = u16::try_from(n).unwrap_or(u16::MAX);
+        self.erase_blocks_across_row_seams(
+            &[
+                self.screen.cursor.row,
+                self.margins.bottom + 1 - n_u16,
+                self.margins.bottom + 1,
+            ],
+            0,
+            self.screen.cols,
+            0,
+        );
         let blank = Cell {
             grapheme: Grapheme::Empty,
             style: self.pen_style,
@@ -1713,6 +1759,17 @@ impl Grid {
         let band_bottom = usize::from(self.margins.bottom);
         let band_height = band_bottom - band_top + 1;
         let n = usize::from(n).min(band_height);
+        let n_u16 = u16::try_from(n).unwrap_or(u16::MAX);
+        self.erase_blocks_across_row_seams(
+            &[
+                self.screen.cursor.row,
+                self.screen.cursor.row + n_u16,
+                self.margins.bottom + 1,
+            ],
+            0,
+            self.screen.cols,
+            0,
+        );
         let blank = Cell {
             grapheme: Grapheme::Empty,
             style: self.pen_style,
@@ -1750,6 +1807,11 @@ impl Grid {
         self.materialize_row_tail(row);
         let edge = right_inclusive + 1;
         let n = n.min(edge - cursor);
+        self.erase_multirow_blocks_on(
+            row,
+            self.screen.cursor.col,
+            u16::try_from(edge).unwrap_or(u16::MAX),
+        );
         for seam in [cursor, cursor + n, edge] {
             self.erase_pair_across(row, seam);
         }
@@ -1783,6 +1845,11 @@ impl Grid {
         self.materialize_row_tail(row);
         let edge = right_inclusive + 1;
         let n = n.min(edge - cursor);
+        self.erase_multirow_blocks_on(
+            row,
+            self.screen.cursor.col,
+            u16::try_from(edge).unwrap_or(u16::MAX),
+        );
         for seam in [cursor, edge - n, edge] {
             self.erase_pair_across(row, seam);
         }
@@ -1828,9 +1895,16 @@ impl Grid {
         let n = n.max(1);
         let cols = usize::from(self.screen.cols);
         let n = usize::from(n).min(cols);
-        for r in self.margins.top..=self.margins.bottom {
-            let row_start = self.screen.idx(r, 0);
-            if n < cols {
+        self.erase_blocks_across_row_seams(
+            &[self.margins.top, self.margins.bottom + 1],
+            0,
+            self.screen.cols,
+            0,
+        );
+        // Every seam is cut before any row moves: a moved row of a
+        // multi-row block would otherwise straddle the next row's seam.
+        if n < cols {
+            for r in self.margins.top..=self.margins.bottom {
                 self.materialize_row_tail(r);
                 self.erase_pair_across(
                     r,
@@ -1839,6 +1913,11 @@ impl Grid {
                         HDir::Right => cols - n,
                     },
                 );
+            }
+        }
+        for r in self.margins.top..=self.margins.bottom {
+            let row_start = self.screen.idx(r, 0);
+            if n < cols {
                 match dir {
                     HDir::Left => {
                         let src_start = row_start + n;
@@ -2608,11 +2687,14 @@ impl Grid {
             HDir::Right => [cur, edge_u - n_u, edge_u],
             HDir::Left => [cur, cur + n_u, edge_u],
         };
+        self.erase_blocks_across_row_seams(&[region_top, region_bottom + 1], cur_col, edge, 0);
         for r in region_top..=region_bottom {
             self.materialize_row_tail(r);
             for seam in seams {
                 self.erase_pair_across(r, seam);
             }
+        }
+        for r in region_top..=region_bottom {
             match dir {
                 HDir::Right => {
                     for c in (cur_col + n..edge).rev() {
@@ -2670,11 +2752,19 @@ impl Grid {
                 HDir::Left => [l, l + 1, r_incl + 1],
                 HDir::Right => [l, r_incl, r_incl + 1],
             };
+            self.erase_blocks_across_row_seams(
+                &[self.margins.top, self.margins.bottom + 1],
+                left,
+                right + 1,
+                0,
+            );
             for r in self.margins.top..=self.margins.bottom {
                 self.materialize_row_tail(r);
                 for seam in seams {
                     self.erase_pair_across(r, seam);
                 }
+            }
+            for r in self.margins.top..=self.margins.bottom {
                 match dir {
                     HDir::Left => {
                         for c in left..right {

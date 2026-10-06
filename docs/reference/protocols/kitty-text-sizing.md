@@ -41,6 +41,19 @@ Each `OSC 66` defines a self-contained run; no persistent sizing mode is maintai
 transitions are instantaneous: a run is drawn at its size on the next frame, and felis interpolates nothing from the
 size the cells carried before.
 
+## Editing over a sized character
+
+Each character of a run owns its own block of cells; the rules below apply per character, so editing one character of
+`OSC 66 ; s=2 ; AB ST` leaves the other intact.
+
+- Writing into any cell of a character's block erases the whole block, including rows the write does not reach.
+- A cell move that would split a block taller than one row between its rows erases the block first: inserting or
+  deleting characters on one of its rows (ICH, DCH, insert mode), shifting columns in a scroll region whose top or
+  bottom margin crosses it (DECIC, DECDC, SL, SR, DECBI, DECFI), and scrolling or inserting or deleting lines at a seam
+  inside it (SU, SD, LF, RI, IL, DL, with or without left/right margins).
+- A scroll that pushes a block's upper rows into scrollback keeps them there and clears the rows left on screen.
+- A block that a move carries in full moves intact.
+
 ## Limits
 
 - Maximum integer scale `s`: 7 (REQ-401).
