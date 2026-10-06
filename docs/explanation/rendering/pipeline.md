@@ -129,7 +129,8 @@ high-contrast edge crosses a half-texel boundary. It is invisible on flat color 
 vertical because a producer lands the height on a cell multiple but not the width.
 
 The renderer detects "the box is exactly `ceil(native)`" and collapses to native pixels, matching kitty's "natural size
-in pixels"; the last partial cell shows a few px of background, as kitty's does. An explicit `c=`/`r=` asking for a
+in pixels"; the last partial cell shows a few px of background, as kitty's does. The daemon re-resolves the count on
+every cell-size change, as kitty does, so a font-size change keeps the collapse. An explicit `c=`/`r=` asking for a
 _different_ box is scaled to fill it, since there the producer has said what it wants.
 
 Box-drawing and block-element glyphs (U+2500–U+259F) take the opposite treatment for the same reason: they are

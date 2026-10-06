@@ -79,6 +79,10 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
   under it: the cursor moves to the image's last row, right of it, and an image placed near the bottom scrolls the
   screen instead of overlapping the rows above. On the alternate screen, images scroll with the text. A
   Unicode-placeholder put (`a=p,U=1`) no longer draws a stray copy of the image at the cursor.
+- A Kitty graphics image placed without `c=`/`r=` keeps its pixel size when the cell size changes (font zoom, a config
+  font change, a scale-factor change) instead of being stretched or squashed into its old cell box, and an image placed
+  before the window reported its size no longer keeps an extent of one cell per pixel. With a source rectangle (`x`,
+  `y`, `w`, `h`), the extent and the cursor move follow the rectangle instead of the whole image.
 
 ## [0.1.1] - 2026-09-27
 

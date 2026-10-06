@@ -350,7 +350,8 @@ pub struct ApcCtx<'a> {
     /// `t=s` segment names to unlink at session teardown (see
     /// [`ShmDeferral`]).
     pub shm: &'a mut ShmDeferral,
-    /// `0` selects `resolve_natural_cells`' single-cell fallback.
+    /// `0` (no client size yet) resolves an auto extent with a 1 px
+    /// cell; see [`felis_grid::images::effective_extent`].
     pub cell_pixel_w: u16,
     pub cell_pixel_h: u16,
     /// Where `a=T` anchors, 0-based `(row, col)`. Production pins the
@@ -526,16 +527,7 @@ pub fn apply_screen_switch(
                 *placements = saved;
                 for p in placements.iter() {
                     images.retain(p.image_id);
-                    events.push(ImageEvent::Placement {
-                        image_id: p.image_id,
-                        placement_id: p.placement_id,
-                        anchor_row: p.anchor.row,
-                        anchor_col: p.anchor.col,
-                        cols: p.cols,
-                        rows: p.rows,
-                        source: p.source,
-                        z_index: p.z_index,
-                    });
+                    events.push(placement_event(p));
                 }
                 // `free_image` purges only the live table, so an LRU
                 // eviction during the alt-screen stay can leave a stashed
@@ -555,6 +547,35 @@ pub fn apply_screen_switch(
     }
 }
 
+const fn placement_event(p: &Placement) -> ImageEvent {
+    ImageEvent::Placement {
+        image_id: p.image_id,
+        placement_id: p.placement_id,
+        anchor_row: p.anchor.row,
+        anchor_col: p.anchor.col,
+        cols: p.cols,
+        rows: p.rows,
+        source: p.source,
+        z_index: p.z_index,
+    }
+}
+
+/// A cell-size change re-resolves every auto extent, on both screens
+/// (kitty's `screen_rescale_images`). The stashed primary screen emits
+/// nothing: it is re-stated in full when restored.
+pub fn rescale_placements(
+    images: &felis_grid::images::ImageStore,
+    placements: &mut felis_grid::images::Placements,
+    saved_primary_placements: Option<&mut felis_grid::images::Placements>,
+    events: &mut Vec<ImageEvent>,
+    cell_px: (u16, u16),
+) {
+    placements.rescale(images, cell_px, |p| events.push(placement_event(p)));
+    if let Some(saved) = saved_primary_placements {
+        saved.rescale(images, cell_px, |_| {});
+    }
+}
+
 /// Replay every placement anchor through a reflow's row map (REQ-604).
 /// Survivors are re-stated in full: a re-wrap moves each anchor by its
 /// own delta, so the uniform `PlacementsShifted` cannot carry it.
@@ -570,18 +591,7 @@ pub fn apply_reflow_remap(
         return;
     }
     let evicted = placements.remap_rows(|row| remap.remap_row(row));
-    for p in placements.iter() {
-        events.push(ImageEvent::Placement {
-            image_id: p.image_id,
-            placement_id: p.placement_id,
-            anchor_row: p.anchor.row,
-            anchor_col: p.anchor.col,
-            cols: p.cols,
-            rows: p.rows,
-            source: p.source,
-            z_index: p.z_index,
-        });
-    }
+    events.extend(placements.iter().map(placement_event));
     for p in evicted {
         images.release(p.image_id);
         events.push(ImageEvent::PlacementRemoved {
@@ -1251,13 +1261,14 @@ fn upsert_placement(
     // dimensions are in scope: `advance_cursor_after_image_placement`
     // short-circuits on `(0, 0)`, leaving the cursor at the anchor row
     // so the next prompt prints under the image (the pixcat burn-in).
-    let (cols, rows) = resolve_natural_cells(
-        images,
-        image_id,
-        req_cols,
-        req_rows,
-        cell_pixel_w,
-        cell_pixel_h,
+    let source_px = images
+        .get(image_id)
+        .and_then(|entry| felis_grid::images::clip_source(entry.width, entry.height, source))
+        .map_or((0, 0), |r| (r.width, r.height));
+    let (cols, rows) = felis_grid::images::effective_extent(
+        (req_cols, req_rows),
+        source_px,
+        (cell_pixel_w, cell_pixel_h),
     );
     let anchor = CellPos {
         // 1-based `CellPos`. The i32 widening is the scrollback-anchor
@@ -1278,6 +1289,8 @@ fn upsert_placement(
         anchor,
         cols,
         rows,
+        requested_cols: req_cols,
+        requested_rows: req_rows,
         source,
         z_index,
         no_cursor_move,
@@ -1302,41 +1315,6 @@ fn upsert_placement(
     // architecture").
     grid.advance_cursor_after_image_placement(rows, cols, no_cursor_move);
     ActionOutcome::Ok
-}
-
-/// Falls back to a single cell when the cell pixel dimensions are not
-/// yet known (no client attached, or the resize arrived after the
-/// placement), so the cursor keeps moving instead of burning in at the
-/// anchor.
-fn resolve_natural_cells(
-    images: &felis_grid::images::ImageStore,
-    image_id: ImageId,
-    req_cols: u16,
-    req_rows: u16,
-    cell_pixel_w: u16,
-    cell_pixel_h: u16,
-) -> (u16, u16) {
-    if req_cols != 0 && req_rows != 0 {
-        return (req_cols, req_rows);
-    }
-    let Some(entry) = images.get(image_id) else {
-        return (req_cols.max(1), req_rows.max(1));
-    };
-    let cw = u32::from(cell_pixel_w.max(1));
-    let ch = u32::from(cell_pixel_h.max(1));
-    let natural_cols = entry.width.div_ceil(cw);
-    let natural_rows = entry.height.div_ceil(ch);
-    let resolved_cols = if req_cols == 0 {
-        u16::try_from(natural_cols).unwrap_or(u16::MAX)
-    } else {
-        req_cols
-    };
-    let resolved_rows = if req_rows == 0 {
-        u16::try_from(natural_rows).unwrap_or(u16::MAX)
-    } else {
-        req_rows
-    };
-    (resolved_cols.max(1), resolved_rows.max(1))
 }
 
 /// All four or none: a partial spec collapses to the whole image per

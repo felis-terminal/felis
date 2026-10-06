@@ -1017,6 +1017,8 @@ fn seeded_placement(
         },
         cols,
         rows,
+        requested_cols: cols,
+        requested_rows: rows,
         source: None,
         z_index: z,
         no_cursor_move,
@@ -2016,6 +2018,47 @@ fn natural_sizing_resolves_cells_from_image_pixels_and_advances_cursor() {
     );
     let p = placements.iter().next().expect("placement recorded");
     assert_eq!((p.cols, p.rows), (4, 1));
+}
+
+#[test]
+fn natural_sizing_resolves_from_the_source_rectangle() {
+    let (mut grid, mut images, mut placements) = handler_state();
+    let payload = b64(&vec![0u8; 32 * 16 * 4]);
+    let cmd = complete(
+        &[
+            (b'a', b"T".as_slice()),
+            (b'i', b"42".as_slice()),
+            (b'f', b"32".as_slice()),
+            (b's', b"32".as_slice()),
+            (b'v', b"16".as_slice()),
+            (b'x', b"20".as_slice()),
+            (b'y', b"0".as_slice()),
+            (b'w', b"30".as_slice()),
+            (b'h', b"16".as_slice()),
+        ],
+        &payload,
+    );
+    handle_complete(
+        &mut ApcCtx {
+            grid: &mut grid,
+            images: &mut images,
+            placements: &mut placements,
+            events: &mut Vec::new(),
+            shm: &mut ShmDeferral::default(),
+            cell_pixel_w: 8,
+            cell_pixel_h: 16,
+            anchor_cursor: None,
+        },
+        &cmd,
+    )
+    .unwrap();
+    let p = placements.iter().next().expect("placement recorded");
+    assert_eq!(
+        (p.cols, p.rows),
+        (2, 1),
+        "the 12 px the rectangle keeps inside the image, not the image's 32 px",
+    );
+    assert_eq!(grid.cursor().col, 2);
 }
 
 #[test]

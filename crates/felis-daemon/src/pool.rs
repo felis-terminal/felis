@@ -142,9 +142,9 @@ pub struct Session {
     /// scroll before an `a=T` shifts a placement the same burst creates).
     pub scroll_ops: Vec<crate::serve::streaming::QueuedScroll>,
     /// Cell pixel size from `InputMsg::Resize`; the graphics dispatcher
-    /// resolves natural-sized placements (`c=0 r=0`) with it so the cursor
-    /// advances past the image. Zero before any client attaches, when the
-    /// dispatcher falls back to a single-cell advance.
+    /// resolves auto placement extents (`c=0` / `r=0`) with it so the
+    /// cursor advances past the image. Zero before any client attaches
+    /// (see [`felis_grid::images::effective_extent`]).
     pub cell_pixel_w: u16,
     /// See [`Session::cell_pixel_w`].
     pub cell_pixel_h: u16,

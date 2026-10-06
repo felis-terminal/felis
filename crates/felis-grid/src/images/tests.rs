@@ -239,6 +239,8 @@ fn placement(image: u32, placement: Option<u32>, z: i32) -> Placement {
         anchor: CellPos { row: 1, col: 1 },
         cols: 0,
         rows: 0,
+        requested_cols: 0,
+        requested_rows: 0,
         source: None,
         z_index: z,
         no_cursor_move: false,
@@ -581,6 +583,8 @@ fn placement_box(
         },
         cols,
         rows,
+        requested_cols: cols,
+        requested_rows: rows,
         source: None,
         z_index: z,
         no_cursor_move: false,
@@ -1372,4 +1376,102 @@ fn ris_keeps_the_graphics_commands_queued_before_it() {
     let mut g = Grid::new(8, 16);
     drive(&mut p, &mut g, b"\x1b_Ga=t,i=1;AAAA\x1b\\\x1bc");
     assert_eq!(apc_bodies(&mut g).len(), 1);
+}
+
+#[test]
+fn effective_extent_resolves_each_auto_axis_from_the_cell_size() {
+    let src = (30, 40);
+    assert_eq!(effective_extent((0, 0), src, (10, 20)), (3, 2));
+    assert_eq!(effective_extent((0, 0), src, (8, 16)), (4, 3));
+    assert_eq!(effective_extent((7, 0), src, (8, 16)), (7, 3));
+    assert_eq!(effective_extent((0, 9), src, (8, 16)), (4, 9));
+    assert_eq!(effective_extent((7, 9), src, (8, 16)), (7, 9));
+}
+
+#[test]
+fn effective_extent_counts_an_unknown_cell_size_as_one_pixel() {
+    assert_eq!(effective_extent((0, 0), (30, 40), (0, 16)), (30, 3));
+    assert_eq!(effective_extent((0, 0), (0, 0), (8, 16)), (1, 1));
+}
+
+#[test]
+fn clip_source_keeps_the_part_of_the_rectangle_inside_the_image() {
+    let rect = |x, y, width, height| SourceRect {
+        x,
+        y,
+        width,
+        height,
+    };
+    assert_eq!(clip_source(32, 16, None), Some(rect(0, 0, 32, 16)));
+    assert_eq!(
+        clip_source(32, 16, Some(rect(4, 2, 8, 8))),
+        Some(rect(4, 2, 8, 8))
+    );
+    assert_eq!(
+        clip_source(32, 16, Some(rect(20, 10, 30, 30))),
+        Some(rect(20, 10, 12, 6))
+    );
+    assert_eq!(clip_source(32, 16, Some(rect(40, 0, 8, 8))), None);
+    assert_eq!(clip_source(0, 0, None), None);
+}
+
+fn store_with_30x40(id: u32) -> ImageStore {
+    let mut store = ImageStore::new(1 << 20);
+    store
+        .insert(
+            ImageId(id),
+            ImageEntry::new(30, 40, ImageFormat::Rgb24, vec![0u8; 30 * 40 * 3]),
+        )
+        .unwrap();
+    store
+}
+
+fn requested(image: u32, pid: u32, cols: u16, rows: u16, resolved: (u16, u16)) -> Placement {
+    Placement {
+        cols: resolved.0,
+        rows: resolved.1,
+        requested_cols: cols,
+        requested_rows: rows,
+        ..placement(image, Some(pid), 0)
+    }
+}
+
+#[test]
+fn rescale_re_resolves_only_auto_axes_and_reports_the_changed_placements() {
+    let store = store_with_30x40(1);
+    let mut t = Placements::new();
+    t.upsert(requested(1, 1, 0, 0, (3, 2)));
+    t.upsert(requested(1, 2, 5, 5, (5, 5)));
+    t.upsert(requested(1, 3, 0, 2, (3, 2)));
+    let mut changed = Vec::new();
+    t.rescale(&store, (8, 16), |p| changed.push(p.placement_id));
+    let extents: Vec<_> = t.iter().map(|p| (p.cols, p.rows)).collect();
+    assert_eq!(extents, [(4, 3), (5, 5), (4, 2)]);
+    assert_eq!(
+        changed,
+        [Some(PlacementId(1)), Some(PlacementId(3))],
+        "the explicit placement did not move",
+    );
+}
+
+#[test]
+fn rescale_keeps_an_axis_whose_cell_size_is_unknown() {
+    let store = store_with_30x40(1);
+    let mut t = Placements::new();
+    t.upsert(requested(1, 1, 0, 0, (3, 2)));
+    t.rescale(&store, (0, 16), |_| {});
+    let p = t.iter().next().unwrap();
+    assert_eq!((p.cols, p.rows), (3, 3));
+}
+
+#[test]
+fn rescale_leaves_a_placement_whose_image_is_gone() {
+    let store = store_with_30x40(1);
+    let mut t = Placements::new();
+    t.upsert(requested(2, 1, 0, 0, (3, 2)));
+    let mut changed = 0;
+    t.rescale(&store, (8, 16), |_| changed += 1);
+    assert_eq!(changed, 0);
+    let p = t.iter().next().unwrap();
+    assert_eq!((p.cols, p.rows), (3, 2));
 }

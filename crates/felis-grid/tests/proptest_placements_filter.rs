@@ -32,6 +32,8 @@ fn placement_strategy() -> impl Strategy<Value = Placement> {
                 },
                 cols,
                 rows,
+                requested_cols: cols,
+                requested_rows: rows,
                 source: None,
                 z_index: z,
                 no_cursor_move,

@@ -625,6 +625,55 @@ impl ImageStore {
     }
 }
 
+/// The part of an image a placement draws: `source` clipped to the
+/// image, else the whole image. `None` when nothing is left to draw.
+#[must_use]
+pub fn clip_source(
+    image_width: u32,
+    image_height: u32,
+    source: Option<SourceRect>,
+) -> Option<SourceRect> {
+    let (x, y, width, height) = match source {
+        Some(r) if r.width > 0 && r.height > 0 => (r.x, r.y, r.width, r.height),
+        _ => (0, 0, image_width, image_height),
+    };
+    let x = x.min(image_width);
+    let y = y.min(image_height);
+    let width = width.min(image_width - x);
+    let height = height.min(image_height - y);
+    (width > 0 && height > 0).then_some(SourceRect {
+        x,
+        y,
+        width,
+        height,
+    })
+}
+
+/// Resolves each auto (zero) axis of a `c=` / `r=` request to
+/// `ceil(source_px / cell_px)`, independently. An unknown (zero) cell
+/// size counts as 1 px, so the extent, and the cursor advance past it,
+/// cover the image at any real cell size; the first real size shrinks
+/// it.
+#[must_use]
+pub fn effective_extent(
+    requested: (u16, u16),
+    source_px: (u32, u32),
+    cell_px: (u16, u16),
+) -> (u16, u16) {
+    let axis = |requested: u16, px: u32, cell: u16| {
+        if requested != 0 {
+            return requested;
+        }
+        u16::try_from(px.div_ceil(u32::from(cell.max(1))))
+            .unwrap_or(u16::MAX)
+            .max(1)
+    };
+    (
+        axis(requested.0, source_px.0, cell_px.0),
+        axis(requested.1, source_px.1, cell_px.1),
+    )
+}
+
 /// 1-based cell coordinate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CellPos {
@@ -649,10 +698,14 @@ pub struct Placement {
     /// `image_id`.
     pub placement_id: Option<PlacementId>,
     pub anchor: CellPos,
-    /// Zero is "natural": the dispatcher resolves it from image and
-    /// cell pixel size and stores the result.
+    /// The effective extent every geometry query uses: the request with
+    /// its auto axes resolved by [`effective_extent`].
     pub cols: u16,
     pub rows: u16,
+    /// `c=` / `r=` as sent; zero is auto, re-resolved by
+    /// [`Placements::rescale`] when the cell size changes.
+    pub requested_cols: u16,
+    pub requested_rows: u16,
     /// `None` paints the whole image scaled to `cols × rows`.
     pub source: Option<SourceRect>,
     /// Negative renders behind text. The renderer sorts by this; the
@@ -892,6 +945,39 @@ impl Placements {
             }
         }
         removed
+    }
+
+    /// Re-resolves the auto axes of every placement at `cell_px`, as
+    /// kitty's `grman_rescale` does; `on_change` sees each placement
+    /// whose extent moved. A placement whose image is gone is left as
+    /// is, and so is an axis whose cell size is unknown (zero): the 1 px
+    /// rule would grow the extent over text already printed past it.
+    pub fn rescale(
+        &mut self,
+        images: &ImageStore,
+        cell_px: (u16, u16),
+        mut on_change: impl FnMut(&Placement),
+    ) {
+        for p in &mut self.entries {
+            if p.requested_cols != 0 && p.requested_rows != 0 {
+                continue;
+            }
+            let Some(entry) = images.get(p.image_id) else {
+                continue;
+            };
+            let source_px = clip_source(entry.width, entry.height, p.source)
+                .map_or((0, 0), |r| (r.width, r.height));
+            let resolved =
+                effective_extent((p.requested_cols, p.requested_rows), source_px, cell_px);
+            let extent = (
+                if cell_px.0 == 0 { p.cols } else { resolved.0 },
+                if cell_px.1 == 0 { p.rows } else { resolved.1 },
+            );
+            if extent != (p.cols, p.rows) {
+                (p.cols, p.rows) = extent;
+                on_change(p);
+            }
+        }
     }
 
     /// Rewrite every anchor row through `remap`, for

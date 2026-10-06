@@ -111,7 +111,10 @@ include `a=t/T/p/q`, `a=d` (basic and extended deletion), and `a=a/f/c` animatio
 ### Placement parameters
 
 - `x`, `y`, `w`, `h`: Pixel sub-region of source image.
-- `c`, `r`: Target width and height in terminal cells.
+- `c`, `r`: Target width and height in terminal cells. An omitted (or zero) axis is the source size in pixels (the `x`,
+  `y`, `w`, `h` region when all four are given, clipped to the image) over the cell size, rounded up. Like kitty, felis
+  re-resolves it whenever the cell size changes (font size, scale factor), so a naturally sized image keeps its pixel
+  size. Until a client has reported a cell size, one pixel counts as one cell.
 - `z`: Z-index stacking order (negative behind text, positive above).
 - `C=1`: Prevent cursor motion after placement. Without it the cursor lands as in kitty: on the placed cell box's last
   row, one column right of it. A column past the right edge wraps to column 0 one row further down; a row past the
@@ -131,8 +134,9 @@ Clients render placeholder cells with corresponding image regions matching direc
 
 A `U=1` transmission (`a=T`) or put (`a=p`) anchors nothing at the cursor and leaves it in place; it records placement
 extents (`c=`, `r=`, `z=`) in the session's placement table (keyed by image ID). Rehydration replays recorded extents to
-preserve placeholders across reattachments. Extents persist until their backing image is freed, and transfer across
-screen buffer transitions (`?1049h`/`?1049l`).
+preserve placeholders across reattachments. An omitted `c=` or `r=` resolves when the client draws, with its own cell
+size. Extents persist until their backing image is freed, and transfer across screen buffer transitions
+(`?1049h`/`?1049l`).
 
 ## Animation
 
