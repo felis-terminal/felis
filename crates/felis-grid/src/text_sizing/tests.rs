@@ -352,7 +352,7 @@ fn combining_mark_in_a_scaled_run_does_not_move_the_cursor() {
 }
 
 #[test]
-fn sized_run_fits_without_counting_a_bidi_override() {
+fn a_leading_bidi_override_in_a_sized_run_takes_no_column() {
     let mut p = Parser::new();
     let mut g = Grid::new(1, 2);
     drive(&mut p, &mut g, "\x1b]66;;\u{202E}AB\x07".as_bytes());
@@ -364,13 +364,13 @@ fn sized_run_fits_without_counting_a_bidi_override() {
 }
 
 #[test]
-fn sized_run_widened_by_a_selector_past_the_grid_is_discarded() {
+fn a_sized_run_wider_than_the_grid_places_each_character() {
     let mut p = Parser::new();
     let mut g = Grid::new(1, 2);
     drive(&mut p, &mut g, "\x1b]66;;\u{2764}\u{FE0F}A\x07".as_bytes());
-    assert_eq!(g.cell(0, 0).unwrap().grapheme, Grapheme::Empty);
-    assert_eq!(g.cursor().col, 0);
-    assert_eq!(g.scrollback().len(), 0);
+    assert_eq!(g.scrollback().len(), 1);
+    assert_eq!(g.cell(0, 0).unwrap().grapheme, Grapheme::Ascii(b'A'));
+    assert_eq!(g.cursor().col, 1);
 }
 
 /// A printed run that lands on any cell of a sized block erases the
@@ -439,11 +439,15 @@ fn assert_blocks_whole(g: &Grid, case: &str) {
             let block = g
                 .sized_block_at(r, c)
                 .unwrap_or_else(|| panic!("{case}: ({r},{c}) carries a handle with no primary"));
-            // A block written within its height of the bottom is clipped
-            // there on write; a move must not tear what remains.
-            for br in block.top..(block.top + block.rows).min(g.screen.rows) {
+            assert!(
+                block.top + block.rows <= g.screen.rows && block.left + block.cols <= g.screen.cols,
+                "{case}: block at ({},{}) runs off the grid",
+                block.top,
+                block.left
+            );
+            for br in block.top..block.top + block.rows {
                 let live = g.screen.occupancy[g.screen.phys_row(br)];
-                for bc in block.left..(block.left + block.cols).min(g.screen.cols) {
+                for bc in block.left..block.left + block.cols {
                     assert!(
                         bc < live
                             && g.screen.cell(br, bc).and_then(|cell| cell.sizing)
@@ -664,41 +668,40 @@ fn arb_move() -> impl proptest::strategy::Strategy<Value = Vec<u8>> {
         (1u8..7, 1u8..7).prop_map(|(l, w)| format!("\x1b[?69h\x1b[{l};{}s", l + w).into_bytes()),
         prop_oneof![Just(b"\x1b[?69l".to_vec()), Just(b"\x1b[r".to_vec())],
         prop_oneof![Just(b"\x1b[?1049h".to_vec()), Just(b"\x1b[?1049l".to_vec())],
+        prop_oneof![Just(b"\x1b[?7h".to_vec()), Just(b"\x1b[?7l".to_vec())],
     ]
 }
 
 #[derive(Clone, Debug)]
 enum Op {
-    /// An OSC 66 `A` at `s` scale and `w` width.
-    Sized(u16, u16),
+    /// An OSC 66 run at `s` scale and `w` width.
+    Sized(u16, u16, &'static str),
     Move(Vec<u8>),
 }
 
 fn arb_op() -> impl proptest::strategy::Strategy<Value = Op> {
     use proptest::prelude::*;
     prop_oneof![
-        (1u16..4, 0u16..3).prop_map(|(s, w)| Op::Sized(s, w)),
+        (
+            1u16..4,
+            0u16..3,
+            prop::sample::select(&["A", "AB", "\u{5B57}", "e\u{301}", "\u{202E}A"][..]),
+        )
+            .prop_map(|(s, w, text)| Op::Sized(s, w, text)),
         arb_move().prop_map(Op::Move),
     ]
 }
 
 proptest::proptest! {
-    /// No sequence of cell moves leaves part of a block behind. A write
-    /// that does not fit at the cursor is skipped: it is clipped at the
-    /// grid edge before any move runs.
+    /// No sequence of writes and cell moves leaves part of a block
+    /// behind or a block running off the grid.
     #[test]
     fn no_cell_move_leaves_part_of_a_block(ops in proptest::collection::vec(arb_op(), 1..40)) {
         let mut p = Parser::new();
         let mut g = Grid::new(6, 12);
         for op in &ops {
             let bytes = match op {
-                Op::Sized(s, w) => {
-                    let cursor = g.screen.cursor;
-                    if cursor.row + s > g.screen.rows || cursor.col + s * (*w).max(1) > g.screen.cols {
-                        continue;
-                    }
-                    format!("\x1b]66;s={s}:w={w};A\x07").into_bytes()
-                }
+                Op::Sized(s, w, text) => format!("\x1b]66;s={s}:w={w};{text}\x07").into_bytes(),
                 Op::Move(bytes) => bytes.clone(),
             };
             drive(&mut p, &mut g, &bytes);
@@ -733,4 +736,379 @@ fn an_irm_print_before_a_sized_run_shifts_it_whole() {
     assert_blocks_whole(&g, "IRM print");
     assert_eq!(primary(&g), Some((0, 1)));
     assert_eq!(g.screen.cell(0, 0).unwrap().grapheme, Grapheme::Ascii(b'x'));
+}
+
+/// Every block on the grid as `(top, left, rows, cols)`, top to bottom.
+fn blocks(g: &Grid) -> Vec<(u16, u16, u16, u16)> {
+    let mut out = Vec::new();
+    for r in 0..g.screen.rows {
+        let occ = g.screen.occupancy[g.screen.phys_row(r)];
+        for c in 0..occ {
+            if let Some(b) = g.sized_block_at(r, c)
+                && (b.top, b.left) == (r, c)
+            {
+                out.push((b.top, b.left, b.rows, b.cols));
+            }
+        }
+    }
+    out
+}
+
+fn run(rows: u16, cols: u16, bytes: &str) -> Grid {
+    let mut p = Parser::new();
+    let mut g = Grid::new(rows, cols);
+    drive(&mut p, &mut g, bytes.as_bytes());
+    assert_blocks_whole(&g, bytes);
+    g
+}
+
+/// `(case, grid rows, grid cols, input, blocks, history rows)`.
+type FitCase = (
+    &'static str,
+    u16,
+    u16,
+    &'static str,
+    &'static [(u16, u16, u16, u16)],
+    usize,
+);
+
+#[test]
+fn a_sized_character_is_moved_whole_onto_the_screen() {
+    let cases: &[FitCase] = &[
+        (
+            "near the bottom scrolls into history",
+            6,
+            12,
+            "\x1b[5;1H\x1b]66;s=3;A\x07",
+            &[(3, 0, 3, 3)],
+            1,
+        ),
+        (
+            "the alternate screen scrolls without history",
+            6,
+            12,
+            "\x1b[?1049h\x1b[5;1H\x1b]66;s=3;A\x07",
+            &[(3, 0, 3, 3)],
+            0,
+        ),
+        (
+            "inside a scroll region scrolls the region",
+            6,
+            12,
+            "\x1b[2;5r\x1b[4;1H\x1b]66;s=3;A\x07",
+            &[(2, 0, 3, 3)],
+            0,
+        ),
+        (
+            "below the scroll region steps up",
+            6,
+            12,
+            "\x1b[1;3r\x1b[6;1H\x1b]66;s=3;A\x07",
+            &[(3, 0, 3, 3)],
+            0,
+        ),
+        (
+            "near the right edge wraps",
+            6,
+            12,
+            "\x1b[1;8H\x1b]66;s=3:w=2;A\x07",
+            &[(1, 0, 3, 6)],
+            0,
+        ),
+        (
+            "near the right edge without autowrap stops at it",
+            6,
+            12,
+            "\x1b[?7l\x1b[1;8H\x1b]66;s=3:w=2;A\x07",
+            &[(0, 6, 3, 6)],
+            0,
+        ),
+        (
+            "past the lower rows of a tall neighbor",
+            14,
+            12,
+            "\x1b]66;s=7;AB\x07",
+            &[(0, 0, 7, 7), (7, 0, 7, 7)],
+            0,
+        ),
+        (
+            "past a tall neighbor near the bottom, scrolling it away",
+            10,
+            12,
+            "\x1b]66;s=7;AB\x07",
+            &[(3, 0, 7, 7)],
+            1,
+        ),
+        (
+            "a character too big is dropped alone",
+            2,
+            3,
+            "\x1b]66;s=2;\u{5B57}A\x07",
+            &[(0, 0, 2, 2)],
+            0,
+        ),
+        (
+            "an explicit width sizes each character",
+            1,
+            8,
+            "\x1b]66;w=2;AB\x07",
+            &[(0, 0, 1, 2), (0, 2, 1, 2)],
+            0,
+        ),
+        (
+            "a later character over an earlier one without autowrap",
+            1,
+            3,
+            "\x1b[?7l\x1b]66;w=2;AB\x07",
+            &[(0, 1, 1, 2)],
+            0,
+        ),
+        (
+            "a wide glyph squeezed into one column at the last column",
+            1,
+            4,
+            "\x1b[1;4H\x1b]66;w=1;\u{5B57}\x07",
+            &[(0, 3, 1, 1)],
+            0,
+        ),
+        (
+            "a wrap that cannot leave the last row takes its left edge",
+            4,
+            4,
+            "\x1b[1;2r\x1b[4;4H\x1b]66;w=2;A\x07",
+            &[(3, 0, 1, 2)],
+            0,
+        ),
+    ];
+    for &(case, rows, cols, input, want, history) in cases {
+        let g = run(rows, cols, input);
+        assert_eq!(blocks(&g), want, "{case}");
+        assert_eq!(g.scrollback().len(), history, "{case}");
+    }
+}
+
+#[test]
+fn a_scroll_region_fit_leaves_the_rows_outside_it_alone() {
+    let g = run(6, 12, "top\x1b[6;1Hbot\x1b[2;5r\x1b[4;1H\x1b]66;s=3;A\x07");
+    assert_eq!(g.screen.cell(0, 0).unwrap().grapheme, Grapheme::Ascii(b't'));
+    assert_eq!(g.screen.cell(5, 0).unwrap().grapheme, Grapheme::Ascii(b'b'));
+}
+
+#[test]
+fn a_sized_character_at_the_right_margin_wraps_the_next_one() {
+    let mut p = Parser::new();
+    let mut g = Grid::new(2, 12);
+    drive(&mut p, &mut g, b"\x1b[?69h\x1b[1;8s\x1b]66;w=4;AB\x07");
+    assert_eq!((g.cursor().row, g.cursor().col), (0, 7));
+    assert!(g.cursor().pending_wrap);
+    drive(&mut p, &mut g, b"\x1b]66;w=4;C\x07");
+    assert_eq!(blocks(&g), [(0, 0, 1, 4), (0, 4, 1, 4), (1, 0, 1, 4)]);
+}
+
+#[test]
+fn a_sized_character_wider_than_the_margins_is_placed_not_dropped() {
+    let g = run(2, 12, "\x1b[?69h\x1b[1;8s\x1b]66;s=2:w=5;A\x07");
+    assert_eq!(blocks(&g), [(0, 0, 2, 10)]);
+}
+
+#[test]
+fn a_run_reaching_the_right_edge_wraps_its_next_character() {
+    let g = run(2, 4, "\x1b]66;;ABCDE\x07");
+    assert_eq!(g.screen.cell(0, 3).unwrap().grapheme, Grapheme::Ascii(b'D'));
+    assert_eq!(g.screen.cell(1, 0).unwrap().grapheme, Grapheme::Ascii(b'E'));
+}
+
+#[test]
+fn a_row_of_lower_rows_falls_back_to_the_right_edge() {
+    let mut p = Parser::new();
+    let mut g = Grid::new(4, 4);
+    drive(
+        &mut p,
+        &mut g,
+        b"\x1b[1;2r\x1b[3;1H\x1b]66;s=2:w=1;A\x07\x1b[3;3H\x1b]66;s=2:w=1;B\x07",
+    );
+    assert_eq!(blocks(&g), [(2, 0, 2, 2), (2, 2, 2, 2)]);
+    drive(&mut p, &mut g, b"\x1b[4;1H\x1b]66;;C\x07");
+    assert_blocks_whole(&g, "C over B's lower row");
+    assert_eq!(blocks(&g), [(2, 0, 2, 2), (3, 3, 1, 1)]);
+}
+
+#[test]
+fn a_cluster_at_the_edge_is_placed_once() {
+    let g = run(2, 4, "\x1b[1;4H\x1b]66;;e\u{301}\x07");
+    let Grapheme::Cluster(id) = g.screen.cell(0, 3).unwrap().grapheme else {
+        panic!("e and its accent should share one cell");
+    };
+    assert_eq!(g.cluster_str(id), Some("e\u{301}"));
+    let g = run(2, 4, "\x1b[1;4H\x1b]66;;\u{2764}\u{FE0F}\x07");
+    assert_eq!(blocks(&g), [(1, 0, 1, 2)]);
+}
+
+#[test]
+fn a_leading_mark_in_a_sized_run_is_dropped() {
+    let g = run(1, 4, "\x1b]66;;\u{301}A\x07");
+    assert_eq!(g.screen.cell(0, 0).unwrap().grapheme, Grapheme::Ascii(b'A'));
+    assert_eq!(g.cursor().col, 1);
+}
+
+fn cluster_at(g: &Grid, row: u16, col: u16) -> Option<&str> {
+    match g.screen.cell(row, col)?.grapheme {
+        Grapheme::Cluster(id) => g.cluster_str(id),
+        _ => None,
+    }
+}
+
+#[test]
+fn a_bidi_override_in_a_sized_run_stays_with_the_character_before_it() {
+    let g = run(1, 4, "\x1b]66;;A\u{202E}B\x07");
+    assert_eq!(cluster_at(&g, 0, 0), Some("A\u{202E}"));
+    assert_eq!(g.screen.cell(0, 1).unwrap().grapheme, Grapheme::Ascii(b'B'));
+
+    let g = run(1, 4, "\x1b]66;;A\u{202E}\u{200D}\u{1F525}\x07");
+    assert_eq!(cluster_at(&g, 0, 0), Some("A\u{202E}\u{200D}"));
+    assert_eq!(
+        g.screen.cell(0, 1).unwrap().grapheme,
+        Grapheme::Char('\u{1F525}')
+    );
+}
+
+#[test]
+fn a_bidi_override_with_nothing_to_join_waits_for_the_next_print() {
+    let g = run(1, 4, "\x1b]66;;\u{202E}\x07B");
+    assert_eq!(cluster_at(&g, 0, 0), Some("B\u{202E}"));
+}
+
+#[test]
+fn a_bidi_override_past_the_cluster_cap_goes_to_the_next_character() {
+    let input = format!("\x1b]66;;e{}\u{202E}B\x07", "\u{301}".repeat(63));
+    let g = run(1, 4, &input);
+    assert_eq!(cluster_at(&g, 0, 1), Some("B\u{202E}"));
+}
+
+#[test]
+fn irm_shifts_every_row_a_sized_character_lands_on() {
+    let g = run(2, 8, "\x1b[2;1Hxy\x1b[1;1H\x1b[4h\x1b]66;s=2;A\x07");
+    assert_eq!(blocks(&g), [(0, 0, 2, 2)]);
+    assert_eq!(g.screen.cell(1, 2).unwrap().grapheme, Grapheme::Ascii(b'x'));
+    assert_eq!(g.screen.cell(1, 3).unwrap().grapheme, Grapheme::Ascii(b'y'));
+}
+
+#[test]
+fn a_printed_selector_does_not_widen_a_sized_character() {
+    let g = run(1, 4, "\x1b]66;w=1;\u{2764}\x07\u{FE0F}");
+    assert_eq!(cluster_at(&g, 0, 0), Some("\u{2764}\u{FE0F}"));
+    assert_eq!(g.screen.cell(0, 1).unwrap().grapheme, Grapheme::Empty);
+    assert_eq!(blocks(&g), [(0, 0, 1, 1)]);
+
+    let g = run(1, 4, "\x1b]66;;\u{2764}\x07\u{FE0F}");
+    assert_eq!(
+        g.screen.cell(0, 0).unwrap().grapheme,
+        Grapheme::Char('\u{2764}')
+    );
+    assert_eq!(blocks(&g), [(0, 0, 1, 1)]);
+}
+
+#[test]
+fn a_resize_that_cuts_a_sized_wide_character_keeps_a_valid_pair() {
+    let mut g = run(2, 4, "\x1b[?1049h\x1b]66;s=2:w=1;\u{5B57}\x07");
+    g.resize(1, 4);
+    assert_eq!(
+        g.screen.cell(0, 0).unwrap().grapheme,
+        Grapheme::Char('\u{5B57}')
+    );
+    assert_eq!(g.screen.cell(0, 1).unwrap().grapheme, Grapheme::Spacer);
+    assert_eq!(g.sized_cell_count(), 0);
+
+    let mut g = run(2, 6, "\x1b[?1049h\x1b[1;5H\x1b]66;s=2:w=1;\u{5B57}\x07");
+    g.resize(2, 5);
+    assert_eq!(g.screen.cell(0, 4).unwrap().grapheme, Grapheme::Empty);
+    assert_eq!(g.sized_cell_count(), 0);
+}
+
+#[test]
+fn a_resize_drops_only_the_characters_that_no_longer_fit() {
+    let mut g = run(1, 8, "\x1b[?1049h\x1b]66;w=2;AB\x07");
+    g.resize(1, 3);
+    assert_eq!(blocks(&g), [(0, 0, 1, 2)]);
+    assert_eq!(g.screen.cell(0, 2).unwrap().grapheme, Grapheme::Ascii(b'B'));
+    assert_eq!(g.screen.cell(0, 2).unwrap().sizing, None);
+}
+
+#[test]
+fn irm_outside_the_margins_shifts_to_the_edge_a_print_would() {
+    let left = run(
+        1,
+        12,
+        "0123456789\x1b[?69h\x1b[3;8s\x1b[1;1H\x1b[4h\x1b]66;w=2;A\x07",
+    );
+    assert_eq!(blocks(&left), [(0, 0, 1, 2)]);
+    assert_eq!(
+        left.screen.cell(0, 2).unwrap().grapheme,
+        Grapheme::Ascii(b'0')
+    );
+    assert_eq!(
+        left.screen.cell(0, 7).unwrap().grapheme,
+        Grapheme::Ascii(b'5')
+    );
+    assert_eq!(
+        left.screen.cell(0, 8).unwrap().grapheme,
+        Grapheme::Ascii(b'8')
+    );
+
+    let right = run(
+        1,
+        12,
+        "0123456789\x1b[?69h\x1b[3;8s\x1b[1;10H\x1b[4h\x1b]66;w=2;A\x07",
+    );
+    assert_eq!(blocks(&right), [(0, 9, 1, 2)]);
+    assert_eq!(
+        right.screen.cell(0, 11).unwrap().grapheme,
+        Grapheme::Ascii(b'9')
+    );
+}
+
+#[test]
+fn an_empty_sized_run_keeps_an_override_between_a_base_and_a_joiner() {
+    let plain = run(1, 8, "\u{1F44D}\u{202E}\u{200D}\u{1F525}");
+    let across = run(1, 8, "\u{1F44D}\u{202E}\x1b]66;;\x07\u{200D}\u{1F525}");
+    assert_eq!(
+        across.screen.cell(0, 2).unwrap().grapheme,
+        Grapheme::Char('\u{1F525}')
+    );
+    for c in 0..4 {
+        assert_eq!(
+            across.screen.cell(0, c).unwrap().grapheme,
+            plain.screen.cell(0, c).unwrap().grapheme
+        );
+    }
+}
+
+#[test]
+fn a_mark_printed_after_a_multi_column_sized_character_joins_it() {
+    for input in ["\x1b]66;s=2;e\x07\u{301}", "\x1b]66;w=2;e\x07\u{301}"] {
+        let g = run(2, 8, input);
+        assert_eq!(cluster_at(&g, 0, 0), Some("e\u{301}"), "{input:?}");
+        assert_eq!(g.cursor().col, 2, "{input:?}");
+    }
+}
+
+#[test]
+fn a_zwj_sequence_continues_across_the_end_of_a_sized_run() {
+    let g = run(1, 8, "\x1b]66;w=2;\u{2764}\x07\u{200D}\u{1F525}");
+    assert_eq!(cluster_at(&g, 0, 0), Some("\u{2764}\u{200D}\u{1F525}"));
+    assert_eq!(g.cursor().col, 2);
+
+    let g = run(1, 8, "\x1b]66;w=2;\u{1F469}\u{200D}\x07\u{1F4BB}");
+    assert_eq!(cluster_at(&g, 0, 0), Some("\u{1F469}\u{200D}\u{1F4BB}"));
+    assert_eq!(g.cursor().col, 2);
+}
+
+#[test]
+fn a_zwj_sequence_that_would_widen_a_sized_character_prints_beside_it() {
+    let g = run(1, 8, "\x1b]66;;\u{2764}\x07\u{200D}\u{1F525}");
+    assert_eq!(cluster_at(&g, 0, 0), Some("\u{2764}\u{200D}"));
+    assert_eq!(
+        g.screen.cell(0, 1).unwrap().grapheme,
+        Grapheme::Char('\u{1F525}')
+    );
 }

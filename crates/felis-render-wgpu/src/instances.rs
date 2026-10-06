@@ -2223,9 +2223,9 @@ mod tests {
     }
 
     /// The block is the grid's span, not the base char's width: VS16
-    /// widens a width-1 heart to two cells unless the last column
-    /// refuses it, and OSC 66 `w` overrides both; `s` scales the block
-    /// after.
+    /// widens a width-1 heart to two cells unless the last column or an
+    /// OSC 66 block placed before it refuses it, and OSC 66 `w`
+    /// overrides both; `s` scales the block after.
     #[test]
     fn a_cluster_block_spans_the_cells_the_grid_gives_it() {
         let cols = |bytes: &[u8], col| {
@@ -2243,13 +2243,15 @@ mod tests {
             3,
             "OSC 66 w"
         );
-        // OSC 66 stamps the block per scalar, so VS16 finds the cell it
-        // would widen into already a `SizedSpacer`; a wide base keeps
-        // its natural `Spacer`.
         assert_eq!(
             cols("\x1b]66;s=2;\u{2764}\u{FE0F}\x07".as_bytes(), 0),
+            2,
+            "sized, VS16 in the run"
+        );
+        assert_eq!(
+            cols("\x1b]66;s=2;\u{2764}\x07\u{FE0F}".as_bytes(), 0),
             1,
-            "sized, refused"
+            "sized, VS16 printed after"
         );
         assert_eq!(
             cols("\x1b]66;s=2;\u{5B57}\u{301}\x07".as_bytes(), 0),
