@@ -747,15 +747,12 @@ fn apc_overflow_signals_bell_so_truncation_is_audible() {
 }
 
 #[test]
-fn advance_cursor_after_image_placement_moves_by_rows_and_cols() {
-    // docs/reference/protocols/kitty-graphics.md "Placement parameters":
-    // the cursor lands at (row + rows, col + cols).
+fn advance_cursor_after_image_placement_lands_right_of_the_last_row() {
     let mut g = Grid::new(8, 16);
     g.screen.cursor.row = 1;
     g.screen.cursor.col = 2;
     g.advance_cursor_after_image_placement(2, 3, false);
-    assert_eq!(g.screen.cursor.row, 3);
-    assert_eq!(g.screen.cursor.col, 5);
+    assert_eq!((g.screen.cursor.row, g.screen.cursor.col), (2, 5));
     assert!(!g.screen.cursor.pending_wrap);
 }
 
@@ -772,24 +769,71 @@ fn advance_cursor_after_image_placement_respects_no_cursor_move() {
 }
 
 #[test]
-fn advance_cursor_after_image_placement_wraps_past_right_margin() {
-    // Col 14 + 5 cols in a 16-wide grid wraps to the next line.
+fn advance_cursor_after_image_placement_wraps_at_the_right_edge() {
     let mut g = Grid::new(8, 16);
     g.screen.cursor.row = 1;
     g.screen.cursor.col = 14;
-    g.advance_cursor_after_image_placement(0, 5, false);
-    assert_eq!(g.screen.cursor.col, 0, "past-edge wraps to col 0");
-    assert!(g.screen.cursor.row > 1, "next-line wrap moved cursor down");
+    g.advance_cursor_after_image_placement(1, 2, false);
+    assert_eq!((g.screen.cursor.row, g.screen.cursor.col), (2, 0));
+}
+
+fn top_text(g: &Grid) -> String {
+    row_text_trim(g.row_content(0).unwrap(), g.cluster_table())
 }
 
 #[test]
-fn advance_cursor_after_image_placement_clamps_past_bottom() {
-    // Clamps instead of scrolling (see the method's doc).
+fn advance_cursor_after_image_placement_scrolls_past_the_bottom() {
+    let mut p = Parser::new();
     let mut g = Grid::new(4, 8);
-    g.screen.cursor.row = 2;
+    drive(&mut p, &mut g, b"one\r\ntwo\r\nthree");
     g.screen.cursor.col = 0;
-    g.advance_cursor_after_image_placement(10, 1, false);
-    assert_eq!(g.screen.cursor.row, 3, "clamped to last row");
+    g.advance_cursor_after_image_placement(4, 2, false);
+    assert_eq!((g.screen.cursor.row, g.screen.cursor.col), (3, 2));
+    assert_eq!(top_text(&g), "three", "two rows scrolled off the top");
+}
+
+#[test]
+fn advance_cursor_after_image_placement_wrap_on_the_bottom_row_scrolls_one() {
+    let mut p = Parser::new();
+    let mut g = Grid::new(4, 8);
+    drive(&mut p, &mut g, b"one\r\ntwo\r\n\r\n");
+    g.screen.cursor.col = 4;
+    g.advance_cursor_after_image_placement(1, 4, false);
+    assert_eq!((g.screen.cursor.row, g.screen.cursor.col), (3, 0));
+    assert_eq!(top_text(&g), "two");
+}
+
+#[test]
+fn advance_cursor_after_image_placement_under_decom_stays_in_the_region() {
+    let mut p = Parser::new();
+    let mut g = Grid::new(8, 8);
+    // Region rows 1..=3; the image's last row (3) is inside it, the wrap
+    // pushes one past, the region scrolls and the cursor stays on row 3.
+    drive(&mut p, &mut g, b"\x1b[2;4r\x1b[?6h\x1b[2;5H");
+    g.advance_cursor_after_image_placement(2, 4, false);
+    assert_eq!((g.screen.cursor.row, g.screen.cursor.col), (3, 0));
+}
+
+#[test]
+fn advance_cursor_after_image_placement_without_decom_may_leave_the_region() {
+    let mut p = Parser::new();
+    let mut g = Grid::new(8, 8);
+    // As above with origin mode off: the region still scrolls, but the
+    // wrapped cursor keeps row 4, below the region.
+    drive(&mut p, &mut g, b"\x1b[2;4r\x1b[3;5H");
+    g.advance_cursor_after_image_placement(2, 4, false);
+    assert_eq!((g.screen.cursor.row, g.screen.cursor.col), (4, 0));
+}
+
+#[test]
+fn advance_cursor_after_image_placement_leaving_the_region_clamps_to_the_screen() {
+    let mut p = Parser::new();
+    let mut g = Grid::new(8, 8);
+    // Region rows 1..=3; the image's last row (5) is below it: the region
+    // scrolls by two, the cursor keeps row 5.
+    drive(&mut p, &mut g, b"\x1b[2;4r\x1b[3;1H");
+    g.advance_cursor_after_image_placement(4, 2, false);
+    assert_eq!((g.screen.cursor.row, g.screen.cursor.col), (5, 2));
 }
 
 #[test]
@@ -1234,4 +1278,98 @@ fn the_budget_charges_per_entry_overhead_not_only_pixels() {
         assert!(store.retain(ImageId(id)));
     }
     assert!(store.insert(ImageId(4), entry(4)).is_err());
+}
+
+/// Feeds each body as one APC through `advance_until_yield` and reports
+/// whether the parse stopped on it.
+fn yields(g: &mut Grid, bodies: &[&str]) -> Vec<bool> {
+    let mut p = Parser::new();
+    bodies
+        .iter()
+        .map(|body| {
+            let bytes = format!("\x1b_{body}\x1b\\");
+            p.advance_until_yield(g, bytes.as_bytes()).is_some()
+        })
+        .collect()
+}
+
+#[test]
+fn parse_yields_after_a_cursor_moving_placement_only() {
+    let cases: &[(&[&str], &[bool])] = &[
+        (&["Ga=T,f=24,s=1,v=1;AAAA"], &[true]),
+        (&["Ga=p,i=1"], &[true]),
+        (&["Ga=t,f=24,s=1,v=1;AAAA"], &[false]),
+        (&["Ga=q,f=24,s=1,v=1;AAAA"], &[false]),
+        (&["Ga=T,C=1,f=24,s=1,v=1;AAAA"], &[false]),
+        (&["Ga=T,U=1,f=24,s=1,v=1;AAAA"], &[false]),
+        // A repeated key reads its last value, as the dispatcher does.
+        (&["Ga=t,a=T,f=24,s=1,v=1;AAAA"], &[true]),
+        (&["Ga=T,a=t,f=24,s=1,v=1;AAAA"], &[false]),
+        (&["Ga=T,C=1,C=0,f=24,s=1,v=1;AAAA"], &[true]),
+        (
+            &["Ga=T,f=24,s=1,v=1,m=1;AA", "Gm=1;AA", "Gm=0;"],
+            &[false, false, true],
+        ),
+        // `m=` means nothing to file-backed media: each chunk is whole.
+        (&["Ga=T,t=f,m=1;L3RtcA=="], &[true]),
+        (&["Ga=T,t=s,m=1;L3NobQ=="], &[true]),
+        // A file-backed command abandons an open direct stream.
+        (
+            &["Ga=T,m=1;AA", "Ga=t,t=f;L3RtcA==", "Gm=0;AA"],
+            &[false, false, false],
+        ),
+    ];
+    for (bodies, want) in cases {
+        let mut g = Grid::new(8, 16);
+        assert_eq!(yields(&mut g, bodies), *want, "{bodies:?}");
+    }
+}
+
+#[test]
+fn parse_does_not_yield_on_a_placement_the_outbox_dropped() {
+    let mut g = Grid::new(8, 16);
+    let fill: Vec<&str> = std::iter::repeat_n("Ga=t,i=1;AAAA", APC_OUTBOX_CAP).collect();
+    yields(&mut g, &fill);
+    assert_eq!(yields(&mut g, &["Ga=p,i=1"]), [false]);
+    assert!(g.take_bell_pending(), "the drop rings the bell");
+    drop(g.take_pty_effects());
+    assert_eq!(yields(&mut g, &["Ga=p,i=1"]), [true]);
+}
+
+fn alt_scrolls(g: &mut Grid) -> Vec<u32> {
+    g.take_pty_effects()
+        .into_iter()
+        .filter_map(|e| match e {
+            PtyEffect::AltScreenScrolled(n) => Some(n),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn alt_screen_full_scroll_reports_the_rows_it_dropped() {
+    let mut p = Parser::new();
+    let mut g = Grid::new(4, 8);
+    drive(&mut p, &mut g, b"\x1b[?1049h\x1b[4;1H\n\n");
+    assert_eq!(alt_scrolls(&mut g), [1, 1]);
+}
+
+#[test]
+fn alt_screen_region_scroll_and_primary_scroll_report_nothing() {
+    let mut p = Parser::new();
+    let mut g = Grid::new(4, 8);
+    drive(&mut p, &mut g, b"\x1b[4;1H\n");
+    assert!(alt_scrolls(&mut g).is_empty(), "primary");
+    drive(&mut p, &mut g, b"\x1b[?1049h\x1b[2;3r\x1b[3;1H\n");
+    assert!(alt_scrolls(&mut g).is_empty(), "partial region");
+}
+
+#[test]
+fn ris_keeps_the_graphics_commands_queued_before_it() {
+    // The tracker already counted the transmit; dropping it here would
+    // leave the daemon's reassembler a step behind the grid's.
+    let mut p = Parser::new();
+    let mut g = Grid::new(8, 16);
+    drive(&mut p, &mut g, b"\x1b_Ga=t,i=1;AAAA\x1b\\\x1bc");
+    assert_eq!(apc_bodies(&mut g).len(), 1);
 }

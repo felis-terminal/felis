@@ -64,6 +64,9 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
   tone as itself, and no longer draw a wide character past the window's right edge.
 - Pressing a bare modifier (Ctrl, Shift, Alt, Cmd) or releasing a key no longer returns a scrolled-back view to the live
   screen, so Cmd+C copies a selection made in scrollback.
+- Text printed right after a Kitty graphics image in the same write lands beside the image, as in kitty, instead of
+  under it: the cursor moves to the image's last row, right of it, and an image placed near the bottom scrolls the
+  screen instead of overlapping the rows above. On the alternate screen, images scroll with the text.
 
 ## [0.1.1] - 2026-09-27
 

@@ -30,8 +30,18 @@ side-effect queue, carrying the raw bytes plus the cursor position at delivery t
 `Parser::advance` burst would otherwise move the cursor away from the placement anchor before the daemon drains. This
 mirrors the dirty-flag posture the grid already uses for OSC titles / cwd / theme overrides: the daemon polls after
 every `advance`; the grid stays passive. Chunk reassembly (`m=1`) also runs at the daemon
-(`Session.graphics_reassembler`, capped at 64 MiB per [`security-model.md`](../security-model.md)); from the grid's
-perspective every APC body is independent.
+(`Session.graphics_reassembler`, capped at 64 MiB per [`security-model.md`](../security-model.md)); the grid keeps only
+the payload-free half of that state machine, enough to know when a body completes a command.
+
+That knowledge serves one rule: kitty moves the cursor after a placement inside the parse, so text written after the
+image in the same write prints beside it, not under it. The daemon dispatches after the parse, so when a body completes
+an `a=T` or `a=p` without `C=1` or `U=1`, `Parser::advance_until_yield` stops right after it and the PTY reader waits
+until the session task has drained the queue, cursor move included, before parsing the rest. The wait has no timeout: a
+timed-out wait is a misplaced line under load, which is the bug itself; liveness comes from the session task releasing
+the reader for good when it exits. Two cheaper shapes are rejected. Moving the cursor in the grid at delivery time needs
+the cell box, and with `c`/`r` omitted that box comes from the decoded image's pixel size and the client's cell size,
+both daemon-side. Running the dispatcher under the parse lock puts the PNG decoder and the 64 MiB reassembly on the
+reader thread's critical section for every APC, not just the placements that move the cursor.
 
 Because the dispatcher's entry holds `&mut Session`, it reaches the image store, the placement table, the response
 writer, and `&mut session.grid` through one borrow root: no callback ping-pong, no interior mutability. A
@@ -72,9 +82,9 @@ one that eventually disagrees with it, and a budget that has drifted off what it
 
 Revisit if: a second dispatcher consumer appears (a CLI debug tool or headless renderer would justify extracting a
 `felis-image` crate, with the daemon as a thin caller); a real producer routinely hits the 64-body APC queue cap (move
-to a per-body channel); or the decoder moves to an isolated worker process per
-[`security-model.md`](../security-model.md)'s open question (the outbox pattern already accommodates that: the daemon
-forwards bodies instead of decoding inline).
+to a per-body channel); placement-heavy output shows the per-placement pause in throughput (batch the drain handshake);
+or the decoder moves to an isolated worker process per [`security-model.md`](../security-model.md)'s open question (the
+outbox pattern already accommodates that: the daemon forwards bodies instead of decoding inline).
 
 ## Error replies on malformed input
 

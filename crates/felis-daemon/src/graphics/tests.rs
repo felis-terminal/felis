@@ -1940,8 +1940,8 @@ fn transmit_and_display_advances_cursor_by_cells() {
     let cur = grid.cursor();
     assert_eq!(
         (cur.row, cur.col),
-        (2, 4),
-        "cursor must advance by (r=2 rows, c=4 cols) from origin",
+        (1, 4),
+        "cursor lands right of the image on its last row (r=2, c=4)",
     );
 }
 
@@ -2011,7 +2011,7 @@ fn natural_sizing_resolves_cells_from_image_pixels_and_advances_cursor() {
     let cur = grid.cursor();
     assert_eq!(
         (cur.row, cur.col),
-        (1, 4),
+        (0, 4),
         "natural sizing must advance cursor past the resolved cell box",
     );
     let p = placements.iter().next().expect("placement recorded");

@@ -1336,6 +1336,7 @@ fn pty_effects_drain_in_byte_stream_order() {
             PtyEffect::Apc(_) => "apc",
             PtyEffect::Erased(_) => "erased",
             PtyEffect::ScrolledIntoScrollback(_) => "scrolled",
+            PtyEffect::AltScreenScrolled(_) => "alt_scrolled",
             PtyEffect::Scrolled { .. } => "scroll_op",
             PtyEffect::ScreenSwitch(_) => "switch",
             PtyEffect::PrimaryReflowed(_) => "reflowed",

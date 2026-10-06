@@ -1047,6 +1047,11 @@ impl Grid {
         } else {
             self.screen
                 .rotate_region(region_top, region_bottom, n, ScrollDirection::Up, &blank);
+            if full_screen {
+                self.pty_effects.push(PtyEffect::AltScreenScrolled(
+                    u32::try_from(n).unwrap_or(u32::MAX),
+                ));
+            }
         }
         self.queue_band_scroll(
             self.margins.top,

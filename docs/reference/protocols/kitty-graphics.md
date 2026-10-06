@@ -113,9 +113,11 @@ include `a=t/T/p/q`, `a=d` (basic and extended deletion), and `a=a/f/c` animatio
 - `x`, `y`, `w`, `h`: Pixel sub-region of source image.
 - `c`, `r`: Target width and height in terminal cells.
 - `z`: Z-index stacking order (negative behind text, positive above).
-- `C=1`: Prevent cursor motion after placement. Without it the cursor lands at (row + rows, col + cols) of the placed
-  cell box; a column past the right edge wraps to column 0 one row further down, out-of-grid coordinates clamp to the
-  last row and column rather than scrolling, and a zero-sized box moves nothing.
+- `C=1`: Prevent cursor motion after placement. Without it the cursor lands as in kitty: on the placed cell box's last
+  row, one column right of it. A column past the right edge wraps to column 0 one row further down; a row past the
+  bottom margin scrolls the scrolling region up by the overshoot. The cursor then stays inside the region if origin mode
+  (DECOM) is set and the box's last row was inside it, and inside the screen otherwise. A zero-sized box moves nothing.
+  Text written after the placement, even in the same write, prints at the moved cursor.
 - `q`: Quiet mode (suppress response acknowledgments).
 - `i`, `I`, `p`: Image and placement identifiers.
 

@@ -26,7 +26,41 @@ pub(crate) fn drain_effects(
     session: &mut crate::pool::Session,
     core: &mut crate::pool::ParseCore,
 ) -> Result<(), ConnError> {
-    let effects = core.grid.take_pty_effects();
+    // The replay's one grid mutation, the cursor advance past an image,
+    // can scroll and queue effects of its own; they replay in this drain,
+    // and anything a later pass would still queue waits for the next.
+    for _ in 0..3 {
+        let effects = core.grid.take_pty_effects();
+        if effects.is_empty() {
+            break;
+        }
+        replay_effects(session, core, effects)?;
+    }
+    Ok(())
+}
+
+fn shift_placements(session: &mut crate::pool::Session, n: u32, retain: u32) {
+    let had_placements = !session.placements.is_empty();
+    let evicted = session.placements.shift_up(n, retain);
+    if had_placements {
+        session
+            .image_events
+            .push(ImageEvent::PlacementsShifted { lines: n });
+    }
+    for p in evicted {
+        session.images.release(p.image_id);
+        session.image_events.push(ImageEvent::PlacementRemoved {
+            image_id: p.image_id,
+            placement_id: p.placement_id,
+        });
+    }
+}
+
+fn replay_effects(
+    session: &mut crate::pool::Session,
+    core: &mut crate::pool::ParseCore,
+    effects: Vec<PtyEffect>,
+) -> Result<(), ConnError> {
     // Replay in byte-stream order so interleaved effects within a burst do not
     // invert. Query responses flow even with zero subscribers so programs do not hang.
     for effect in effects {
@@ -64,20 +98,12 @@ pub(crate) fn drain_effects(
             // past the retention horizon evict.
             PtyEffect::ScrolledIntoScrollback(n) => {
                 let retain = u32::try_from(core.grid.scrollback().len()).unwrap_or(u32::MAX);
-                let had_placements = !session.placements.is_empty();
-                let evicted = session.placements.shift_up(n, retain);
-                if had_placements {
-                    session
-                        .image_events
-                        .push(ImageEvent::PlacementsShifted { lines: n });
-                }
-                for p in evicted {
-                    session.images.release(p.image_id);
-                    session.image_events.push(ImageEvent::PlacementRemoved {
-                        image_id: p.image_id,
-                        placement_id: p.placement_id,
-                    });
-                }
+                shift_placements(session, n, retain);
+            }
+            // The alternate screen keeps no history, so a placement that
+            // leaves its top leaves for good.
+            PtyEffect::AltScreenScrolled(n) => {
+                shift_placements(session, n, 0);
             }
             // Parked for `session_task::fan_out_grid_state`, the only consumer
             // that knows each shadow's damage.

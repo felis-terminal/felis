@@ -160,6 +160,9 @@ pub enum PtyEffect {
     /// Rows the primary screen pushed into scrollback. Adjacent scrolls
     /// coalesce into one entry.
     ScrolledIntoScrollback(u32),
+    /// Rows a full-screen scroll on the alternate screen dropped off its
+    /// top: placements move up with the text and leave with it.
+    AltScreenScrolled(u32),
     /// A whole-row shift of a band (docs/reference/ipc.md `Scrolled`),
     /// with the grid's damage already moved along with the rows.
     /// `geometry_gen` names the grid generation; `first_seq..=last_seq`
@@ -498,6 +501,12 @@ pub struct Grid {
     /// overrides from the next print, so the marker cannot land on a
     /// character somewhere else.
     pending_bidi: editing::PendingBidi,
+    /// Mirrors the daemon's graphics reassembler over the APC bodies
+    /// this grid admits, so it knows which body completes a command.
+    graphics_tracker: felis_vt::kitty_graphics::ReassemblyTracker,
+    /// Set by an admitted APC that completes a cursor-moving placement;
+    /// taken by [`felis_vt::Sink::take_yield`].
+    apc_yield: bool,
     /// `ESC =` / `ESC >` DECKPAM / DECKPNM, mirrored via [`ModeSnapshot`].
     application_keypad: bool,
     /// `?9001` win32-input-mode, requested by `ConPTY` on startup and by
@@ -876,6 +885,8 @@ impl Grid {
             last_printed: None,
             zwj_pending: false,
             pending_bidi: editing::PendingBidi::default(),
+            graphics_tracker: felis_vt::kitty_graphics::ReassemblyTracker::new(),
+            apc_yield: false,
             dcs: None,
             title: None,
             icon_name: None,
@@ -1684,10 +1695,9 @@ impl Grid {
         self.reflow(target_rows, target_cols)
     }
 
-    /// Advance cursor after a Kitty image placement unless `no_cursor_move` is set.
-    ///
-    /// Zero on an axis means no movement; out-of-grid coordinates clamp
-    /// rather than scrolling the screen.
+    /// Moves the cursor past a Kitty image placement as kitty's
+    /// `screen_handle_graphics_command` does; the rule is the kitty-graphics
+    /// reference, "Placement parameters". Zero on an axis moves nothing.
     pub fn advance_cursor_after_image_placement(
         &mut self,
         rows: u16,
@@ -1697,23 +1707,26 @@ impl Grid {
         if no_cursor_move || (rows == 0 && cols == 0) {
             return;
         }
-        let last_row = self.screen.rows.saturating_sub(1);
-        let last_col = self.screen.cols.saturating_sub(1);
-        let advanced_col = self.screen.cursor.col.saturating_add(cols);
-        let (new_row, new_col) = if advanced_col > last_col {
-            (
-                self.screen
-                    .cursor
-                    .row
-                    .saturating_add(rows)
-                    .saturating_add(1),
-                0,
-            )
+        let mut row = u32::from(self.screen.cursor.row) + u32::from(rows.saturating_sub(1));
+        let mut col = u32::from(self.screen.cursor.col) + u32::from(cols);
+        let top = u32::from(self.margins.top);
+        let bottom = u32::from(self.margins.bottom);
+        let clamp_to_region = self.origin_mode && (top..=bottom).contains(&row);
+        if col >= u32::from(self.screen.cols) {
+            col = 0;
+            row += 1;
+        }
+        if row > bottom {
+            self.scroll_region_up(u16::try_from(row - bottom).unwrap_or(u16::MAX));
+        }
+        let (min_row, max_row) = if clamp_to_region {
+            (top, bottom)
         } else {
-            (self.screen.cursor.row.saturating_add(rows), advanced_col)
+            (0, u32::from(self.screen.rows.saturating_sub(1)))
         };
-        self.screen.cursor.row = new_row.min(last_row);
-        self.screen.cursor.col = new_col.min(last_col);
+        let last_col = self.screen.cols.saturating_sub(1);
+        self.screen.cursor.row = u16::try_from(row.clamp(min_row, max_row)).unwrap_or(u16::MAX);
+        self.screen.cursor.col = u16::try_from(col).unwrap_or(u16::MAX).min(last_col);
         self.screen.cursor.pending_wrap = false;
     }
 
