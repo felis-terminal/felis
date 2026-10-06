@@ -169,7 +169,14 @@ The rectangle checksum query, DECRQCRA, shares this bounds model; its reply is s
   unknown-but-valid keyword to the arrow. The stack is daemon-side bookkeeping: only the live top ships, so there is no
   wire change.
 - `OSC 133`: semantic prompt markers (A / B / C / D), used by jump-to-prompt features in shells; felis stores them on
-  the grid for client use.
+  the grid for client use. Marks sent on the primary screen also drive a resize: once a `C` has arrived, a
+  primary-screen resize while the cursor sits in a prompt (an `A` or `B` since the youngest `C` or `D`) blanks that
+  prompt before the re-wrap, from the row of the youngest `A` without `k=s` down to the bottom, drops the Kitty image
+  placements anchored there, and leaves the repaint to the shell. An `A` that arrives away from column 0 shares its row
+  with earlier output, and one that arrives while a command runs (after a `C` and before its `D`) comes from a program
+  the command started; for either the resize blanks nothing. The youngest `A` without `k=s` sets how much: `redraw=last`
+  blanks only the cursor's row, `redraw=0` blanks nothing, and an `A` without the option (or with `redraw=1`) restores
+  the full blank.
 - `OSC 9 / 99 / 777`: desktop-notification families (iTerm2, kitty, rxvt-unicode). felis decodes them into typed events
   and relays them on its notification surface; it never draws a popup or links an OS backend. A first parameter that is
   a single ASCII digit followed by further parameters is ConEmu's subcommand family, not a message: it is consumed

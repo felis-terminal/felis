@@ -771,16 +771,23 @@ impl Sink for Grid {
                         }
                     }
                     133 => {
-                        let Some((kind, exit_code)) = parse_osc_133(text) else {
+                        let Some(mark) = parse_osc_133(text) else {
                             return;
                         };
+                        if !self.screen.on_alternate_screen() {
+                            let ordinal = self.prompt_marks_pruned
+                                + u64::try_from(self.prompt_marks.len()).unwrap_or(u64::MAX);
+                            let at_column_0 =
+                                self.screen.cursor.col == 0 && !self.screen.cursor.pending_wrap;
+                            self.shell_prompt.observe(&mark, ordinal, at_column_0);
+                        }
                         // The absolute line, not the screen row: the mark
                         // must stay resolvable after the content scrolls
                         // off (docs/explanation/data-model/scrollback.md).
                         self.prompt_marks.push(PromptMark {
                             line: self.scrollback_total_pushed + u64::from(self.screen.cursor.row),
-                            kind,
-                            exit_code,
+                            kind: mark.kind,
+                            exit_code: mark.exit_code,
                         });
                     }
                     _ => unreachable!("outer match already narrowed to this code set"),
