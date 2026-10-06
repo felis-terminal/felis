@@ -426,3 +426,311 @@ fn text_right_after_a_sized_block_leaves_it_alone() {
     assert_eq!(g.row_sized_cells(0).len(), 2);
     assert_eq!(g.screen.cell(0, 2).unwrap().grapheme, Grapheme::Ascii(b'x'));
 }
+
+/// Every live cell carrying a sizing handle belongs to a block that is
+/// on the grid in full: each footprint cell is live and carries it.
+fn assert_blocks_whole(g: &Grid, case: &str) {
+    for r in 0..g.screen.rows {
+        let occ = g.screen.occupancy[g.screen.phys_row(r)];
+        for c in 0..occ {
+            if g.screen.cell(r, c).and_then(|cell| cell.sizing).is_none() {
+                continue;
+            }
+            let block = g
+                .sized_block_at(r, c)
+                .unwrap_or_else(|| panic!("{case}: ({r},{c}) carries a handle with no primary"));
+            // A block written within its height of the bottom is clipped
+            // there on write; a move must not tear what remains.
+            for br in block.top..(block.top + block.rows).min(g.screen.rows) {
+                let live = g.screen.occupancy[g.screen.phys_row(br)];
+                for bc in block.left..(block.left + block.cols).min(g.screen.cols) {
+                    assert!(
+                        bc < live
+                            && g.screen.cell(br, bc).and_then(|cell| cell.sizing)
+                                == Some(block.handle),
+                        "{case}: block at ({},{}) lost ({br},{bc})",
+                        block.top,
+                        block.left
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// The primary of the first block, or `None` once it is gone.
+fn primary(g: &Grid) -> Option<(u16, u16)> {
+    (0..g.screen.rows).find_map(|r| {
+        let occ = g.screen.occupancy[g.screen.phys_row(r)];
+        (0..occ).find_map(|c| g.sized_block_at(r, c).map(|b| (b.top, b.left)))
+    })
+}
+
+/// `(case, cursor before the write, op, primary afterwards)`.
+type MoveCase = (
+    &'static str,
+    &'static [u8],
+    &'static [u8],
+    Option<(u16, u16)>,
+);
+
+/// A 2×2 `A` at `at` on a 4×10 grid, then `op`: a move whose seam
+/// crosses the block erases it whole, one that carries all of it moves
+/// it whole, and either way no half survives.
+#[test]
+fn a_cell_move_keeps_or_erases_a_multi_row_block_whole() {
+    let origin: &[u8] = b"\x1b[1;1H";
+    let row1: &[u8] = b"\x1b[2;1H";
+    let cases: [MoveCase; 18] = [
+        ("ICH on its top row", origin, b"\x1b[1;1H\x1b[@", None),
+        ("ICH on its bottom row", origin, b"\x1b[2;1H\x1b[@", None),
+        (
+            "IRM print on its top row",
+            origin,
+            b"\x1b[4h\x1b[1;1Hx",
+            None,
+        ),
+        ("DCH right of it", origin, b"\x1b[1;5H\x1b[P", Some((0, 0))),
+        ("DCH left of it", b"\x1b[1;4H", b"\x1b[1;1H\x1b[P", None),
+        (
+            "SL, its left edge on the seam",
+            b"\x1b[1;2H",
+            b"\x1b[ @",
+            Some((0, 0)),
+        ),
+        (
+            "DECIC, region top cuts it",
+            origin,
+            b"\x1b[2;3r\x1b[2;1H\x1b['}",
+            None,
+        ),
+        (
+            "DECIC, region holds it",
+            row1,
+            b"\x1b[2;3r\x1b[2;1H\x1b['}",
+            Some((1, 1)),
+        ),
+        ("SR, region top cuts it", origin, b"\x1b[2;3r\x1b[ A", None),
+        (
+            "SR, region holds it",
+            row1,
+            b"\x1b[2;3r\x1b[ A",
+            Some((1, 1)),
+        ),
+        (
+            "DECBI, region top cuts it",
+            origin,
+            b"\x1b[?69h\x1b[2;3r\x1b[2;1H\x1b6",
+            None,
+        ),
+        ("SU, region top cuts it", origin, b"\x1b[2;3r\x1b[S", None),
+        ("SU, inner seam cuts it", row1, b"\x1b[2;4r\x1b[S", None),
+        ("SD, region top cuts it", origin, b"\x1b[2;3r\x1b[T", None),
+        (
+            "RI at the region top",
+            origin,
+            b"\x1b[2;3r\x1b[2;1H\x1bM",
+            None,
+        ),
+        ("IL below its top row", origin, b"\x1b[2;1H\x1b[L", None),
+        ("DL below its top row", origin, b"\x1b[2;1H\x1b[M", None),
+        (
+            "subrect SU, region top cuts it",
+            origin,
+            b"\x1b[?69h\x1b[1;5s\x1b[2;3r\x1b[S",
+            None,
+        ),
+    ];
+    for (case, at, op, expected) in cases {
+        let mut p = Parser::new();
+        let mut g = Grid::new(4, 10);
+        drive(&mut p, &mut g, at);
+        drive(&mut p, &mut g, b"\x1b]66;s=2;A\x07");
+        drive(&mut p, &mut g, op);
+        assert_blocks_whole(&g, case);
+        assert_eq!(primary(&g), expected, "{case}");
+    }
+}
+
+#[test]
+fn a_full_screen_scroll_moves_a_multi_row_block_whole() {
+    let mut p = Parser::new();
+    let mut g = Grid::new(4, 10);
+    drive(&mut p, &mut g, b"\x1b]66;s=2;A\x07\x1b[T");
+    assert_blocks_whole(&g, "SD");
+    assert_eq!(primary(&g), Some((1, 0)));
+}
+
+/// The rule is for blocks taller than a row: a single-row `w=2` run
+/// shifts like any wide character.
+#[test]
+fn ich_still_shifts_a_single_row_sized_run() {
+    let mut p = Parser::new();
+    let mut g = Grid::new(4, 10);
+    drive(&mut p, &mut g, b"\x1b]66;w=2;A\x07\x1b[1;1H\x1b[@");
+    assert_blocks_whole(&g, "ICH");
+    assert_eq!(primary(&g), Some((0, 1)));
+}
+
+/// Text either side of an erased block, on both of its rows, stays.
+#[test]
+fn erasing_a_block_spares_its_neighbors() {
+    let mut p = Parser::new();
+    let mut g = Grid::new(4, 10);
+    drive(
+        &mut p,
+        &mut g,
+        b"\x1b]66;s=2;A\x07xy\x1b[2;3Hz\x1b[1;1H\x1b[@",
+    );
+    assert_eq!(primary(&g), None);
+    let ch = |r, c| g.screen.cell(r, c).unwrap().grapheme;
+    assert_eq!(ch(0, 3), Grapheme::Ascii(b'x'));
+    assert_eq!(ch(0, 4), Grapheme::Ascii(b'y'));
+    assert_eq!(ch(1, 2), Grapheme::Ascii(b'z'));
+}
+
+/// Rows pushed into history keep their part of a block, so its text
+/// survives there; the rows left live lose theirs.
+#[test]
+fn a_scroll_into_history_keeps_the_departing_part_of_a_block() {
+    let row1: &[u8] = b"\x1b[2;1H";
+    let origin: &[u8] = b"\x1b[1;1H";
+    let cases: [(&str, &[u8], &[u8]); 5] = [
+        ("LF at the bottom", origin, b"\x1b[4;1H\n"),
+        ("SU 1", origin, b"\x1b[S"),
+        (
+            "top-anchored partial region",
+            origin,
+            b"\x1b[1;3r\x1b[3;1H\n",
+        ),
+        ("SU 2 with the block lower", row1, b"\x1b[2S"),
+        (
+            "history and bottom seams at once",
+            row1,
+            b"\x1b[1;3r\x1b[2S",
+        ),
+    ];
+    for (case, at, op) in cases {
+        let mut p = Parser::new();
+        let mut g = Grid::new(4, 10);
+        drive(&mut p, &mut g, at);
+        let scale: &[u8] = if case.starts_with("history and bottom") {
+            b"\x1b]66;s=3;A\x07"
+        } else {
+            b"\x1b]66;s=2;A\x07"
+        };
+        drive(&mut p, &mut g, scale);
+        drive(&mut p, &mut g, b"\x1b[4;10Hz");
+        drive(&mut p, &mut g, op);
+        assert_blocks_whole(&g, case);
+        assert_eq!(primary(&g), None, "{case}");
+        assert_eq!(
+            g.cell_at_viewport(1, 0, 0).unwrap().grapheme,
+            Grapheme::Ascii(b'A'),
+            "{case}: the youngest history row holds the primary"
+        );
+    }
+}
+
+#[test]
+fn a_scroll_on_the_alternate_screen_erases_a_cut_block() {
+    let mut p = Parser::new();
+    let mut g = Grid::new(4, 10);
+    drive(&mut p, &mut g, b"\x1b[?1049h\x1b]66;s=2;A\x07\x1b[S");
+    assert_blocks_whole(&g, "alternate SU");
+    assert_eq!(primary(&g), None);
+}
+
+fn arb_move() -> impl proptest::strategy::Strategy<Value = Vec<u8>> {
+    use proptest::prelude::*;
+    let n = 1u8..4;
+    prop_oneof![
+        (1u8..7, 1u8..13).prop_map(|(r, c)| format!("\x1b[{r};{c}H").into_bytes()),
+        Just(b"x".to_vec()),
+        n.clone().prop_map(|n| format!("\x1b[{n}@").into_bytes()),
+        n.clone().prop_map(|n| format!("\x1b[{n}P").into_bytes()),
+        prop_oneof![Just(b"\x1b[4h".to_vec()), Just(b"\x1b[4l".to_vec())],
+        n.clone().prop_map(|n| format!("\x1b[{n}'}}").into_bytes()),
+        n.clone().prop_map(|n| format!("\x1b[{n}'~").into_bytes()),
+        n.clone().prop_map(|n| format!("\x1b[{n} @").into_bytes()),
+        n.clone().prop_map(|n| format!("\x1b[{n} A").into_bytes()),
+        n.clone().prop_map(|n| format!("\x1b[{n}S").into_bytes()),
+        n.clone().prop_map(|n| format!("\x1b[{n}T").into_bytes()),
+        n.clone().prop_map(|n| format!("\x1b[{n}L").into_bytes()),
+        n.prop_map(|n| format!("\x1b[{n}M").into_bytes()),
+        prop_oneof![Just(b"\n".to_vec()), Just(b"\x1bM".to_vec())],
+        prop_oneof![Just(b"\x1b6".to_vec()), Just(b"\x1b9".to_vec())],
+        (1u8..7, 1u8..7).prop_map(|(t, b)| format!("\x1b[{t};{}r", t + b).into_bytes()),
+        (1u8..7, 1u8..7).prop_map(|(l, w)| format!("\x1b[?69h\x1b[{l};{}s", l + w).into_bytes()),
+        prop_oneof![Just(b"\x1b[?69l".to_vec()), Just(b"\x1b[r".to_vec())],
+        prop_oneof![Just(b"\x1b[?1049h".to_vec()), Just(b"\x1b[?1049l".to_vec())],
+    ]
+}
+
+#[derive(Clone, Debug)]
+enum Op {
+    /// An OSC 66 `A` at `s` scale and `w` width.
+    Sized(u16, u16),
+    Move(Vec<u8>),
+}
+
+fn arb_op() -> impl proptest::strategy::Strategy<Value = Op> {
+    use proptest::prelude::*;
+    prop_oneof![
+        (1u16..4, 0u16..3).prop_map(|(s, w)| Op::Sized(s, w)),
+        arb_move().prop_map(Op::Move),
+    ]
+}
+
+proptest::proptest! {
+    /// No sequence of cell moves leaves part of a block behind. A write
+    /// that does not fit at the cursor is skipped: it is clipped at the
+    /// grid edge before any move runs.
+    #[test]
+    fn no_cell_move_leaves_part_of_a_block(ops in proptest::collection::vec(arb_op(), 1..40)) {
+        let mut p = Parser::new();
+        let mut g = Grid::new(6, 12);
+        for op in &ops {
+            let bytes = match op {
+                Op::Sized(s, w) => {
+                    let cursor = g.screen.cursor;
+                    if cursor.row + s > g.screen.rows || cursor.col + s * (*w).max(1) > g.screen.cols {
+                        continue;
+                    }
+                    format!("\x1b]66;s={s}:w={w};A\x07").into_bytes()
+                }
+                Op::Move(bytes) => bytes.clone(),
+            };
+            drive(&mut p, &mut g, &bytes);
+            assert_blocks_whole(&g, &format!("{:?}", String::from_utf8_lossy(&bytes)));
+        }
+    }
+}
+
+/// A write whose lower rows land on another block erases that block
+/// whole, not only the cells it covers.
+#[test]
+fn a_write_over_a_blocks_lower_row_erases_it_whole() {
+    let mut p = Parser::new();
+    let mut g = Grid::new(6, 12);
+    drive(
+        &mut p,
+        &mut g,
+        b"\x1b[2;1H\x1b]66;s=2;A\x07\x1b[1;1H\x1b]66;s=2;B\x07",
+    );
+    assert_blocks_whole(&g, "B over A's top row");
+    assert_eq!(primary(&g), Some((0, 0)));
+    assert_eq!(g.screen.cell(2, 0).and_then(|c| c.sizing), None);
+}
+
+/// IRM leaves no copy of the shifted cell under the cursor for the
+/// print to mistake for a sized character.
+#[test]
+fn an_irm_print_before_a_sized_run_shifts_it_whole() {
+    let mut p = Parser::new();
+    let mut g = Grid::new(4, 10);
+    drive(&mut p, &mut g, b"\x1b]66;w=2;A\x07\x1b[4h\x1b[1;1Hx");
+    assert_blocks_whole(&g, "IRM print");
+    assert_eq!(primary(&g), Some((0, 1)));
+    assert_eq!(g.screen.cell(0, 0).unwrap().grapheme, Grapheme::Ascii(b'x'));
+}

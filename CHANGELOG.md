@@ -40,6 +40,11 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 - A keycap emoji (`#️⃣`, `1️⃣`) is drawn as one full-size keycap instead of a tiny `#` beside an empty keycap.
 - Printing no longer slows down by up to eight times for the rest of the session once a text-sizing (OSC 66) character
   has been written.
+- A text-sizing (OSC 66) character taller than one row is no longer torn apart by inserting or deleting characters on
+  one of its rows, by insert mode, by column shifts or scrolls in a region whose margin crosses it, or by inserting or
+  deleting lines through it: it is erased whole, as kitty does. A scroll that pushes its upper rows into scrollback
+  keeps them there. Writing over its lower rows also erases it whole, and printing in insert mode in front of a sized
+  character no longer erases part of it.
 - A zero-width joiner between characters that are not both emoji (`👩‍字`, `क‍ख‍ग`, `x‍👍`) no longer collapses them
   into one two-cell glyph: they take the cells the application counts (4, 3 and 3), so the rest of the line stays where
   the application put it.
