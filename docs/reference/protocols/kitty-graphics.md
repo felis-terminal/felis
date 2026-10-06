@@ -129,9 +129,10 @@ cell. The uppercase pair carries a source offset for `a=c` frame composition, wh
 The Unicode-placeholder method (`U=1`) is supported. The daemon decodes diacritic-encoded row, column, and image IDs.
 Clients render placeholder cells with corresponding image regions matching direct placement z-index rules.
 
-A `U=1` transmission records placement extents (`c=`, `r=`, `z=`) in the session's placement table (keyed by image ID).
-Rehydration replays recorded extents to preserve placeholders across reattachments. Extents persist until their backing
-image is freed, and transfer across screen buffer transitions (`?1049h`/`?1049l`).
+A `U=1` transmission (`a=T`) or put (`a=p`) anchors nothing at the cursor and leaves it in place; it records placement
+extents (`c=`, `r=`, `z=`) in the session's placement table (keyed by image ID). Rehydration replays recorded extents to
+preserve placeholders across reattachments. Extents persist until their backing image is freed, and transfer across
+screen buffer transitions (`?1049h`/`?1049l`).
 
 ## Animation
 

@@ -66,7 +66,8 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
   screen, so Cmd+C copies a selection made in scrollback.
 - Text printed right after a Kitty graphics image in the same write lands beside the image, as in kitty, instead of
   under it: the cursor moves to the image's last row, right of it, and an image placed near the bottom scrolls the
-  screen instead of overlapping the rows above. On the alternate screen, images scroll with the text.
+  screen instead of overlapping the rows above. On the alternate screen, images scroll with the text. A
+  Unicode-placeholder put (`a=p,U=1`) no longer draws a stray copy of the image at the cursor.
 
 ## [0.1.1] - 2026-09-27
 

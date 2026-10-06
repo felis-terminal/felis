@@ -865,30 +865,8 @@ fn handle_transmit_and_display(
         Ok(id) => id,
         Err(outcome) => return outcome,
     };
-    // `U=1`: the producer paints `U+10EEEE` placeholder cells wherever
-    // it wants tiles (presenterm, tmux-compatible producers); anchoring
-    // at the cursor would paint a stray copy.
     if control_u32(complete, b'U') == Some(1) {
-        let cols = control_u16(complete, b'c').unwrap_or(0);
-        let rows = control_u16(complete, b'r').unwrap_or(0);
-        let z_index = control_i32(complete, b'z').unwrap_or(0);
-        // Virtual placements are not pinned: producers churn image ids across
-        // renders without removal messages, so refcount 0 lets the LRU evict
-        // them while `free_image` drops the extent with the image.
-        placements.upsert_virtual(felis_grid::images::VirtualPlacement {
-            image_id: id,
-            cols,
-            rows,
-            z_index,
-        });
-        events.push(ImageEvent::VirtualPlacement {
-            image_id: id,
-            cols,
-            rows,
-            z_index,
-        });
-        refs.image_id = Some(id.0);
-        return ActionOutcome::Ok;
+        return upsert_virtual_placement(placements, events, id, complete, refs);
     }
     upsert_placement(
         grid,
@@ -922,6 +900,9 @@ fn handle_display_existing(
     if images.get(id).is_none() {
         return ActionOutcome::error(ErrorCode::NotFound, "image not in store");
     }
+    if control_u32(complete, b'U') == Some(1) {
+        return upsert_virtual_placement(placements, events, id, complete, refs);
+    }
     upsert_placement(
         grid,
         images,
@@ -934,6 +915,39 @@ fn handle_display_existing(
         cell_pixel_h,
         anchor_cursor,
     )
+}
+
+/// `U=1`, for `a=T` and `a=p` alike (kitty's `handle_put_command`): the
+/// producer paints `U+10EEEE` placeholder cells wherever it wants tiles
+/// (presenterm, tmux-compatible producers), so nothing anchors at the
+/// cursor and the cursor stays.
+fn upsert_virtual_placement(
+    placements: &mut felis_grid::images::Placements,
+    events: &mut Vec<ImageEvent>,
+    id: ImageId,
+    complete: &CompleteCommand,
+    refs: &mut ResponseRefs,
+) -> ActionOutcome {
+    let cols = control_u16(complete, b'c').unwrap_or(0);
+    let rows = control_u16(complete, b'r').unwrap_or(0);
+    let z_index = control_i32(complete, b'z').unwrap_or(0);
+    // Virtual placements are not pinned: producers churn image ids across
+    // renders without removal messages, so refcount 0 lets the LRU evict
+    // them while `free_image` drops the extent with the image.
+    placements.upsert_virtual(felis_grid::images::VirtualPlacement {
+        image_id: id,
+        cols,
+        rows,
+        z_index,
+    });
+    events.push(ImageEvent::VirtualPlacement {
+        image_id: id,
+        cols,
+        rows,
+        z_index,
+    });
+    refs.image_id = Some(id.0);
+    ActionOutcome::Ok
 }
 
 fn handle_delete(
