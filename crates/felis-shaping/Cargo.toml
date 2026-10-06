@@ -23,6 +23,7 @@ tracing = { workspace = true }
 [dev-dependencies]
 criterion = { workspace = true }
 proptest = { workspace = true }
+unicode-width = { workspace = true }
 
 [[bench]]
 name = "shape_cache"

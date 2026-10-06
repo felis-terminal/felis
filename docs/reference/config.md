@@ -84,6 +84,8 @@ size_px = 14
 # Nerd Font; a group with nothing installed contributes no face.
 # Non-empty: the declared entries are the whole chain, in order,
 # and auto-discovery does not run on top of them.
+# A character that defaults to emoji (⭐, ☕) takes the first color
+# face that covers it, wherever it is in the chain.
 # Omitting features inherits from primary; features = [] disables.
 fallback = [
     { family = "Noto Sans CJK JP", features = ["palt"] },

@@ -34,6 +34,9 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
   same way: a regional-indicator pair with no flag (`🇦🇦`), a ZWJ sequence the font does not join, a skin tone on a base
   that takes none (`😀🏻`), a `※` with a combining mark, or a `❤️` left in one cell at the last column.
 - With `font.features` set, a ligature wider than the characters it replaces is drawn as those characters instead.
+- A character that Unicode displays as an emoji by default (`⭐`, `⚡`, `☕`, `⌚`, `🀄`) is drawn in color from the
+  emoji font, even when a symbol font earlier in the fallback chain, an explicit `font.fallback` list or the primary
+  font also covers it; it was drawn as a small monochrome symbol. Adding VS15 (`⭐︎`) still asks for the text form.
 - A zero-width joiner between characters that are not both emoji (`👩‍字`, `क‍ख‍ग`, `x‍👍`) no longer collapses them
   into one two-cell glyph: they take the cells the application counts (4, 3 and 3), so the rest of the line stays where
   the application put it.
