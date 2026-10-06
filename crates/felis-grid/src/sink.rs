@@ -647,18 +647,24 @@ impl Sink for Grid {
             }
             (&[], b'c') => {
                 // RIS. Kitty graphics spec: a hard reset wipes every
-                // placement, `C=1` included. `Self::new` clobbers
-                // `pty_effects`, so the forced range is pushed after it.
+                // placement, `C=1` included. Effects queued before it still
+                // reach the daemon (kitty acted on them inline), which keeps
+                // `graphics_tracker` in step with the daemon's reassembler.
                 let rows = self.screen.rows;
                 let cols = self.screen.cols;
                 let term_name = self.term_name.take();
+                let graphics_tracker = std::mem::take(&mut self.graphics_tracker);
+                let pty_effects = std::mem::take(&mut self.pty_effects);
                 *self = Self::new(rows, cols);
                 self.term_name = term_name;
+                self.graphics_tracker = graphics_tracker;
+                self.pty_effects = pty_effects;
                 self.pty_effects.push(PtyEffect::Erased(ErasedRange {
                     top: 0,
                     bottom: rows.saturating_sub(1),
                     force: true,
                 }));
+                self.pty_effects.push(PtyEffect::HardReset);
             }
             (&[b'#'], b'8') => self.decaln(),
             _ => {}
@@ -795,7 +801,17 @@ impl Sink for Grid {
             .push_apc(body, self.screen.cursor.row, self.screen.cursor.col)
         {
             self.bell_pending = true;
+            return;
         }
+        self.apc_yield = self.completes_cursor_moving_placement(body);
+    }
+
+    /// The daemon moves the cursor past a placement only once it has
+    /// dispatched the APC, so the parse stops there until it has
+    /// (`docs/explanation/protocols/kitty-graphics.md` "Dispatcher
+    /// architecture").
+    fn take_yield(&mut self) -> bool {
+        std::mem::take(&mut self.apc_yield)
     }
 
     fn apc_overflow(&mut self) {
@@ -1144,5 +1160,27 @@ impl Grid {
             .any(|c| c.sizing.is_some())
             || (start > 0 && splits(start) && sized(start - 1))
             || (splits(end) && sized(end))
+    }
+}
+
+impl Grid {
+    /// kitty moves the cursor after `a=T` / `a=p` unless `C=1` or `U=1`
+    /// (`graphics.c` `handle_put_command`).
+    fn completes_cursor_moving_placement(&mut self, body: &[u8]) -> bool {
+        use felis_vt::kitty_graphics::{Step, parse};
+        let Some(cmd) = parse(body) else {
+            return false;
+        };
+        let Step::Done { controls, .. } = self.graphics_tracker.step(&cmd) else {
+            return false;
+        };
+        let get = |key: u8| {
+            controls
+                .iter()
+                .rev()
+                .find(|(k, _)| *k == key)
+                .map(|(_, v)| v.as_slice())
+        };
+        matches!(get(b'a'), Some(b"T" | b"p")) && get(b'C') != Some(b"1") && get(b'U') != Some(b"1")
     }
 }

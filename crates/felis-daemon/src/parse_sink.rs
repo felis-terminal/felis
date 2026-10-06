@@ -71,6 +71,18 @@ pub struct ParseSignals {
     /// Attached subscriber count, mirrored by the session task; a stale
     /// read costs at most one mis-paced chunk.
     subs: AtomicUsize,
+    /// The sink's stop after a cursor-moving image placement
+    /// (`Parser::advance_until_yield`) until the task has dispatched it.
+    gate: parking_lot::Mutex<YieldGate>,
+    gate_cv: parking_lot::Condvar,
+    drain_notify: Notify,
+}
+
+#[derive(Default)]
+struct YieldGate {
+    requested: u64,
+    drained: u64,
+    closed: bool,
 }
 
 impl ParseSignals {
@@ -80,6 +92,9 @@ impl ParseSignals {
             dirty: AtomicBool::new(false),
             notify: Notify::new(),
             subs: AtomicUsize::new(0),
+            gate: parking_lot::Mutex::new(YieldGate::default()),
+            gate_cv: parking_lot::Condvar::new(),
+            drain_notify: Notify::new(),
         }
     }
 
@@ -99,6 +114,49 @@ impl ParseSignals {
     /// [`Self::clear_dirty`]. Cancel-safe in `select!`.
     pub async fn parsed(&self) {
         self.notify.notified().await;
+    }
+
+    /// Blocks the sink until the task has drained every effect queued
+    /// before this call, or the task is gone. Never called holding the
+    /// core lock: the drain takes it.
+    pub fn wait_for_drain(&self) {
+        let mut gate = self.gate.lock();
+        if gate.closed {
+            return;
+        }
+        gate.requested += 1;
+        let target = gate.requested;
+        self.drain_notify.notify_one();
+        while gate.drained < target && !gate.closed {
+            self.gate_cv.wait(&mut gate);
+        }
+    }
+
+    /// Resolves when the sink waits in [`Self::wait_for_drain`].
+    /// Cancel-safe in `select!`.
+    pub async fn drain_requested(&self) {
+        self.drain_notify.notified().await;
+    }
+
+    /// Read **before** `take_pty_effects` and handed to
+    /// [`Self::publish_drained`] after: every wait counted here had queued
+    /// its effects before it was counted.
+    pub fn drain_generation(&self) -> u64 {
+        self.gate.lock().requested
+    }
+
+    pub fn publish_drained(&self, generation: u64) {
+        let mut gate = self.gate.lock();
+        if generation > gate.drained {
+            gate.drained = generation;
+            self.gate_cv.notify_all();
+        }
+    }
+
+    /// Releases a waiting sink for good: no task will drain again.
+    pub fn close(&self) {
+        self.gate.lock().closed = true;
+        self.gate_cv.notify_all();
     }
 
     pub fn set_attached_subs(&self, n: usize) {
@@ -137,13 +195,22 @@ pub fn build_sink(
         } else {
             pacer = None;
         }
-        {
-            let mut guard = core.lock();
-            let core = &mut *guard;
-            core.parser.advance(&mut core.grid, chunk);
-            core.maybe_gc_tables();
+        let mut rest = chunk;
+        loop {
+            let stopped = {
+                let mut guard = core.lock();
+                let core = &mut *guard;
+                let stopped = core.parser.advance_until_yield(&mut core.grid, rest);
+                core.maybe_gc_tables();
+                stopped
+            };
+            signals.mark_dirty();
+            let Some(consumed) = stopped else {
+                break;
+            };
+            signals.wait_for_drain();
+            rest = &rest[consumed..];
         }
-        signals.mark_dirty();
     })
 }
 
@@ -263,6 +330,62 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(1), signals.parsed())
             .await
             .expect("a mark after clear_dirty must notify again");
+    }
+
+    #[test]
+    fn a_waiting_sink_is_released_by_the_drain_that_follows_its_request() {
+        let signals = Arc::new(ParseSignals::new());
+        let before = signals.drain_generation();
+        let waiter = std::thread::spawn({
+            let signals = Arc::clone(&signals);
+            move || signals.wait_for_drain()
+        });
+        while signals.drain_generation() == before {
+            std::thread::yield_now();
+        }
+        signals.publish_drained(before);
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(!waiter.is_finished(), "a drain begun before the request");
+        signals.publish_drained(signals.drain_generation());
+        waiter.join().unwrap();
+    }
+
+    #[test]
+    fn close_releases_a_waiting_sink_and_every_later_wait() {
+        let signals = Arc::new(ParseSignals::new());
+        let waiter = std::thread::spawn({
+            let signals = Arc::clone(&signals);
+            move || signals.wait_for_drain()
+        });
+        while signals.drain_generation() == 0 {
+            std::thread::yield_now();
+        }
+        signals.close();
+        waiter.join().unwrap();
+        signals.wait_for_drain();
+    }
+
+    /// A chunked placement stops the parse once, after its last chunk,
+    /// and the bytes after it parse once the task has drained.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn sink_pauses_once_per_chunked_placement_until_drained() {
+        let core = test_core();
+        let signals = Arc::new(ParseSignals::new());
+        let mut sink = build_sink(Arc::clone(&core), Arc::clone(&signals));
+        let feeder = std::thread::spawn(move || {
+            sink(b"\x1b_Ga=T,f=24,s=1,v=1,c=2,r=1,m=1;AA\x1b\\\x1b_Gm=1;AA\x1b\\");
+            sink(b"\x1b_Gm=0;\x1b\\done");
+        });
+        tokio::time::timeout(Duration::from_secs(5), signals.drain_requested())
+            .await
+            .expect("the last chunk must request a drain");
+        assert!(!top_row_text(&core).contains("done"), "parse stopped");
+        signals.publish_drained(signals.drain_generation());
+        tokio::task::spawn_blocking(move || feeder.join().unwrap())
+            .await
+            .unwrap();
+        assert_eq!(signals.drain_generation(), 1, "one pause for the stream");
+        assert!(top_row_text(&core).contains("done"));
     }
 
     /// End-to-end sink contract: bytes fed to the sink land in the

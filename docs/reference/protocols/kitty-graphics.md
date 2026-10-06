@@ -82,8 +82,8 @@ Image data is retained until:
 Detaching a client evicts nothing. Rehydrating an attached session re-transmits the images the store still holds.
 
 Placements are automatically evicted when their cells are cleared: placements without `C=1` are dropped on `ED` or `EL`
-line erasures, and `RIS` or `DECSTR` resets clear all placements. The daemon sends `PlacementRemoved` to attached
-clients to drop corresponding textures.
+line erasures, and `RIS` or `DECSTR` resets clear all placements except `U=1` extents, which kitty keeps too. The daemon
+sends `PlacementRemoved` to attached clients to drop corresponding textures.
 
 Primary and alternate screens maintain isolated placement contexts. Switching to alternate screen (`?1049h`) stashes
 primary placements; switching back (`?1049l`) restores them and frees alternate placements.
@@ -113,9 +113,11 @@ include `a=t/T/p/q`, `a=d` (basic and extended deletion), and `a=a/f/c` animatio
 - `x`, `y`, `w`, `h`: Pixel sub-region of source image.
 - `c`, `r`: Target width and height in terminal cells.
 - `z`: Z-index stacking order (negative behind text, positive above).
-- `C=1`: Prevent cursor motion after placement. Without it the cursor lands at (row + rows, col + cols) of the placed
-  cell box; a column past the right edge wraps to column 0 one row further down, out-of-grid coordinates clamp to the
-  last row and column rather than scrolling, and a zero-sized box moves nothing.
+- `C=1`: Prevent cursor motion after placement. Without it the cursor lands as in kitty: on the placed cell box's last
+  row, one column right of it. A column past the right edge wraps to column 0 one row further down; a row past the
+  bottom margin scrolls the scrolling region up by the overshoot. The cursor then stays inside the region if origin mode
+  (DECOM) is set and the box's last row was inside it, and inside the screen otherwise. A zero-sized box moves nothing.
+  Text written after the placement, even in the same write, prints at the moved cursor.
 - `q`: Quiet mode (suppress response acknowledgments).
 - `i`, `I`, `p`: Image and placement identifiers.
 
@@ -127,9 +129,10 @@ cell. The uppercase pair carries a source offset for `a=c` frame composition, wh
 The Unicode-placeholder method (`U=1`) is supported. The daemon decodes diacritic-encoded row, column, and image IDs.
 Clients render placeholder cells with corresponding image regions matching direct placement z-index rules.
 
-A `U=1` transmission records placement extents (`c=`, `r=`, `z=`) in the session's placement table (keyed by image ID).
-Rehydration replays recorded extents to preserve placeholders across reattachments. Extents persist until their backing
-image is freed, and transfer across screen buffer transitions (`?1049h`/`?1049l`).
+A `U=1` transmission (`a=T`) or put (`a=p`) anchors nothing at the cursor and leaves it in place; it records placement
+extents (`c=`, `r=`, `z=`) in the session's placement table (keyed by image ID). Rehydration replays recorded extents to
+preserve placeholders across reattachments. Extents persist until their backing image is freed, and transfer across
+screen buffer transitions (`?1049h`/`?1049l`).
 
 ## Animation
 

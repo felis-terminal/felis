@@ -29,6 +29,20 @@ impl Parser {
     /// per LF.
     #[inline]
     pub fn advance<S: Sink>(&mut self, sink: &mut S, bytes: &[u8]) {
+        self.run::<S, false>(sink, bytes);
+    }
+
+    /// [`Self::advance`] that stops right after the byte ending an APC for
+    /// which [`Sink::take_yield`] returns `true`, returning the bytes
+    /// consumed (`None`: all parsed). Resuming with the rest is the same
+    /// as a chunk split there.
+    #[inline]
+    pub fn advance_until_yield<S: Sink>(&mut self, sink: &mut S, bytes: &[u8]) -> Option<usize> {
+        self.run::<S, true>(sink, bytes)
+    }
+
+    #[inline]
+    fn run<S: Sink, const YIELD: bool>(&mut self, sink: &mut S, bytes: &[u8]) -> Option<usize> {
         let mut rest = bytes;
         while let Some((&first, tail)) = rest.split_first() {
             'bulk: {
@@ -72,10 +86,15 @@ impl Parser {
                     rest = &tail[end..];
                     break 'bulk;
                 }
+                let ends_apc = YIELD && matches!(self.state, State::SosPmApcString);
                 self.advance_byte(sink, first);
                 rest = tail;
+                if ends_apc && !matches!(self.state, State::SosPmApcString) && sink.take_yield() {
+                    return Some(bytes.len() - rest.len());
+                }
             }
         }
+        None
     }
 
     pub fn advance_byte<S: Sink>(&mut self, sink: &mut S, byte: u8) {

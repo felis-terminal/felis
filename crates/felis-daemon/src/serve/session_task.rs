@@ -805,6 +805,14 @@ fn resize_notify_key(grid: &felis_grid::Grid) -> Option<(u32, (u16, u16))> {
         .then(|| (grid.resize_notify_epoch(), (grid.rows(), grid.cols())))
 }
 
+struct SinkRelease(Arc<crate::parse_sink::ParseSignals>);
+
+impl Drop for SinkRelease {
+    fn drop(&mut self) {
+        self.0.close();
+    }
+}
+
 /// Coalescing window for the parsed-effect drain.
 ///
 /// Re-locking `ParseCore` on every dirty edge ping-pongs the lock and collapses
@@ -812,6 +820,9 @@ fn resize_notify_key(grid: &felis_grid::Grid) -> Option<(u32, (u16, u16))> {
 const DRAIN_COALESCE: Duration = Duration::from_millis(4);
 
 async fn run_session(mut t: SessionTask, mut cmd_rx: mpsc::Receiver<SessionCmd>) {
+    // Every way out, an unwinding panic included, releases a sink
+    // waiting in `wait_for_drain`.
+    let _release_sink = SinkRelease(Arc::clone(&t.session.signals));
     let mut eof_buf = [0u8; 16];
     let mut drain_tick = tokio::time::interval(t.policy.drain_interval);
     let mut last_drain = tokio::time::Instant::now();
@@ -834,10 +845,20 @@ async fn run_session(mut t: SessionTask, mut cmd_rx: mpsc::Receiver<SessionCmd>)
         // one-chunk-stale read only mis-paces ~1 KiB.
         t.session.signals.set_attached_subs(t.subs.len());
         tokio::select! {
-            // Commands first: under pull pacing they carry the
+            biased;
+            // Ahead of commands: the sink is blocked until this drain
+            // dispatches the image placement it stopped after.
+            () = t.session.signals.drain_requested() => {
+                let drained = t.drain_and_fan();
+                last_drain = tokio::time::Instant::now();
+                if let Err(err) = drained {
+                    warn!(?err, "session task: PTY pipeline error");
+                    break EndReason::PtyError;
+                }
+            }
+            // Commands next: under pull pacing they carry the
             // per-vsync pulls, which a sustained PTY burst must not
             // starve.
-            biased;
             cmd = cmd_rx.recv() => {
                 match cmd {
                     None => break EndReason::PoolDropped,
@@ -1643,7 +1664,10 @@ impl SessionTask {
         // re-notify, or its effects strand until the next unrelated
         // wake.
         self.session.signals.clear_dirty();
-        self.drive_cycle()
+        let generation = self.session.signals.drain_generation();
+        let drained = self.drive_cycle();
+        self.session.signals.publish_drained(generation);
+        drained
     }
 
     /// The drain's error is returned after the cycle ships rather than
@@ -5045,6 +5069,20 @@ mod tests {
         let grid = grid_rows(&task);
         assert_eq!(mirror_rows(&shadow_a), grid, "the first mirror");
         assert_eq!(mirror_rows(&shadow_b), grid, "the second mirror");
+    }
+
+    /// RIS wipes every placement, the primary screen's stash included.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn ris_on_the_alternate_screen_drops_the_saved_primary_placements() {
+        let mut task = SessionTask::for_tests(session_with("read _x"));
+        write_to_grid(&task, b"\x1b_Ga=T,f=24,s=1,v=1,c=2,r=1,q=2;AAAA\x1b\\");
+        task.drain_effects().expect("effects drain");
+        assert_eq!(task.session.placements.len(), 1);
+
+        write_to_grid(&task, b"\x1b[?1049h\x1bc");
+        task.drain_effects().expect("effects drain");
+        assert!(task.session.saved_primary_placements.is_none());
+        assert!(task.session.placements.is_empty());
     }
 
     /// A scroll between the fan-out and the composition leaves the

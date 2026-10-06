@@ -229,6 +229,27 @@ fn unicode_placeholder_transmit_emits_virtual_placement_not_a_cursor_placement()
     assert_eq!((recorded[0].cols, recorded[0].rows), (4, 2));
 }
 
+/// kitty treats `a=p,U=1` like `a=T,U=1` (`graphics.c`
+/// `handle_put_command`): a virtual placement, and the cursor stays.
+#[test]
+fn unicode_placeholder_put_of_a_stored_image_is_virtual_and_keeps_the_cursor() {
+    let mut s = State::new();
+    s.dispatch(&body("Ga=t,i=12,f=32,s=1,v=1", &tiny_rgba_payload()))
+        .unwrap();
+    s.drain_events();
+    s.dispatch(&body("Ga=p,U=1,i=12,c=4,r=2", b"")).unwrap();
+    let events = s.drain_events();
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, ImageMsg::VirtualPlacement { .. })),
+        "got {events:?}"
+    );
+    assert_eq!(s.placements.len(), 0, "no anchored placement recorded");
+    let cur = s.grid.cursor();
+    assert_eq!((cur.row, cur.col), (0, 0));
+}
+
 #[test]
 fn virtual_extent_dies_with_its_image() {
     // A virtual placement has no `PlacementRemoved` of its own; a

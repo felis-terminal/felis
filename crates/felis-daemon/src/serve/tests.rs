@@ -459,6 +459,45 @@ async fn streams_pty_output_through_the_grid_to_the_wire() {
     expect_row_containing(&mut reader, "hello-felis").await;
 }
 
+/// Text written after a placement in the same write lands where kitty
+/// moved the cursor: right of the image, on its last row.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn text_after_a_placement_in_one_write_lands_right_of_the_image() {
+    let tmp = private_dir();
+    let path = tmp.path().join("daemon.sock");
+    let pool = Arc::new(Mutex::new(SessionPool::new()));
+    let factory = shell_factory(
+        "printf 'top\\n\\033_Ga=T,f=24,s=1,v=1,c=2,r=2;AAAA\\033\\\\AFTER'; sleep 0.5",
+    );
+    spawn_daemon(&path, pool, factory).await;
+    let (read_half, write_half) = connect(&path).await.unwrap();
+    let (mut reader, mut writer) = framed(read_half, write_half).await;
+    hello_welcome(&mut reader, &mut writer, false).await;
+    create_and_attach(&mut reader, &mut writer).await;
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    let (row, col) = loop {
+        assert!(tokio::time::Instant::now() < deadline, "AFTER never landed");
+        let frame = tokio::time::timeout(Duration::from_secs(5), reader.next_frame())
+            .await
+            .expect("read timed out")
+            .unwrap()
+            .expect("frame");
+        if frame.kind != MessageKind::Grid.as_u16() {
+            continue;
+        }
+        if let GridMsg::RowDelta { rows } = codec::decode::<GridMsg>(&frame.body).unwrap()
+            && let Some(hit) = rows
+                .iter()
+                .find_map(|(i, body)| row_text(&body.0).find("AFTER").map(|c| (*i, c)))
+        {
+            break hit;
+        }
+    };
+    assert_eq!((row, col), (2, 2));
+}
+
 /// The refusal is preface bytes, not a frame: it must be readable by a peer
 /// that shares no schema with this daemon (`docs/reference/ipc.md`
 /// "Versioning").

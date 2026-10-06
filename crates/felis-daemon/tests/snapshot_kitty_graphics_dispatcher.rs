@@ -88,8 +88,8 @@ fn action_uppercase_t_transmits_and_records_placement_and_advances_cursor() {
     let cur = s.grid.cursor();
     assert_eq!(
         (cur.row, cur.col),
-        (2, 2),
-        "cursor advances by (r=2, c=2) from origin",
+        (1, 2),
+        "cursor lands right of the image on its last row (r=2, c=2)",
     );
 }
 
