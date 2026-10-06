@@ -38,6 +38,8 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
   emoji font, even when a symbol font earlier in the fallback chain, an explicit `font.fallback` list or the primary
   font also covers it; it was drawn as a small monochrome symbol. Adding VS15 (`⭐︎`) still asks for the text form.
 - A keycap emoji (`#️⃣`, `1️⃣`) is drawn as one full-size keycap instead of a tiny `#` beside an empty keycap.
+- Printing no longer slows down by up to eight times for the rest of the session once a text-sizing (OSC 66) character
+  has been written.
 - A zero-width joiner between characters that are not both emoji (`👩‍字`, `क‍ख‍ग`, `x‍👍`) no longer collapses them
   into one two-cell glyph: they take the cells the application counts (4, 3 and 3), so the rest of the line stays where
   the application put it.
