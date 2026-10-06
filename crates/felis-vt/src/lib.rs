@@ -126,6 +126,11 @@ pub trait Sink {
     fn apc_dispatch(&mut self, body: &[u8]) {}
     /// Same coalescing contract as [`Sink::osc_overflow`].
     fn apc_overflow(&mut self) {}
+    /// Asked once after each APC dispatch by
+    /// [`Parser::advance_until_yield`]; `true` stops the parse there.
+    fn take_yield(&mut self) -> bool {
+        false
+    }
 }
 
 #[derive(Clone, PartialEq, Eq)]

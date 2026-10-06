@@ -222,32 +222,48 @@ fn owned_controls_without_m(cmd: &Command<'_>) -> Vec<(u8, Vec<u8>)> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct InProgress {
+struct OpenStream {
     head_controls: Vec<(u8, Vec<u8>)>,
-    payload: Vec<u8>,
+    buffered: usize,
 }
 
+/// What one body does to a chunked transmission.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Step {
+    /// `continued` is `false` when this body starts a new command.
+    Pending {
+        continued: bool,
+    },
+    Done {
+        controls: Vec<(u8, Vec<u8>)>,
+        continued: bool,
+    },
+    Overflow {
+        controls: Vec<(u8, Vec<u8>)>,
+    },
+}
+
+/// The chunked-transmission state machine without the payload: which body
+/// completes a command, with which head controls. [`Reassembler`] runs on
+/// it, and so can a consumer that must agree with the reassembler about
+/// where commands end without buffering their bytes.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub struct Reassembler {
-    in_progress: Option<InProgress>,
+pub struct ReassemblyTracker {
+    open: Option<OpenStream>,
 }
 
-impl Reassembler {
+impl ReassemblyTracker {
     #[must_use]
     pub const fn new() -> Self {
-        Self { in_progress: None }
+        Self { open: None }
     }
 
-    /// Parked payload bytes of the open transmission, or `None` between
-    /// transmissions. The daemon's resource accounting reads this:
-    /// `felis daemon status` is the only place a never-terminated `m=1`
-    /// stream is visible.
     #[must_use]
-    pub fn in_flight_bytes(&self) -> Option<usize> {
-        self.in_progress.as_ref().map(|s| s.payload.len())
+    pub const fn is_open(&self) -> bool {
+        self.open.is_some()
     }
 
-    pub fn feed(&mut self, cmd: &Command<'_>) -> Outcome {
+    pub fn step(&mut self, cmd: &Command<'_>) -> Step {
         // kitty consults `g->more` only in the `t=d` arm of `load_image_data`
         // (graphics.c), so `m=` is meaningless for file-backed media. mpv's
         // `--vo-kitty-use-shm` sends `t=s,…,m=1` every frame with no
@@ -261,37 +277,95 @@ impl Reassembler {
         // Reject before mutating state so an overflow leaves the buffer
         // fresh. A first-chunk overflow has no stored head, so the offending
         // chunk's own controls stand in.
-        let buffered = self.in_progress.as_ref().map_or(0, |s| s.payload.len());
+        let buffered = self.open.as_ref().map_or(0, |s| s.buffered);
         if buffered.saturating_add(cmd.payload.len()) > REASSEMBLY_BUFFER_LIMIT {
             let controls = self
-                .in_progress
+                .open
                 .take()
                 .map_or_else(|| owned_controls_without_m(cmd), |s| s.head_controls);
-            return Outcome::Overflow { controls };
+            return Step::Overflow { controls };
         }
-        let state = match self.in_progress.take() {
+        let continued = self.open.is_some();
+        let state = match self.open.take() {
             // Continuation chunk: the spec says to ignore controls except `m`.
             Some(mut state) => {
-                state.payload.extend_from_slice(cmd.payload);
+                state.buffered += cmd.payload.len();
                 state
             }
-            None => InProgress {
+            None => OpenStream {
                 head_controls: owned_controls_without_m(cmd),
-                payload: cmd.payload.to_vec(),
+                buffered: cmd.payload.len(),
             },
         };
         if more {
-            self.in_progress = Some(state);
-            return Outcome::Pending;
+            self.open = Some(state);
+            return Step::Pending { continued };
         }
-        Outcome::Done(CompleteCommand {
+        Step::Done {
             controls: state.head_controls,
-            payload: state.payload,
-        })
+            continued,
+        }
     }
 
     pub fn reset(&mut self) {
-        self.in_progress = None;
+        self.open = None;
+    }
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Reassembler {
+    tracker: ReassemblyTracker,
+    payload: Vec<u8>,
+}
+
+impl Reassembler {
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            tracker: ReassemblyTracker::new(),
+            payload: Vec::new(),
+        }
+    }
+
+    /// Parked payload bytes of the open transmission, or `None` between
+    /// transmissions. The daemon's resource accounting reads this:
+    /// `felis daemon status` is the only place a never-terminated `m=1`
+    /// stream is visible.
+    #[must_use]
+    pub fn in_flight_bytes(&self) -> Option<usize> {
+        self.tracker.is_open().then_some(self.payload.len())
+    }
+
+    pub fn feed(&mut self, cmd: &Command<'_>) -> Outcome {
+        match self.tracker.step(cmd) {
+            Step::Overflow { controls } => {
+                self.payload = Vec::new();
+                Outcome::Overflow { controls }
+            }
+            Step::Pending { continued } => {
+                if !continued {
+                    self.payload.clear();
+                }
+                self.payload.extend_from_slice(cmd.payload);
+                Outcome::Pending
+            }
+            Step::Done {
+                controls,
+                continued,
+            } => {
+                let mut payload = std::mem::take(&mut self.payload);
+                if !continued {
+                    payload.clear();
+                }
+                payload.extend_from_slice(cmd.payload);
+                Outcome::Done(CompleteCommand { controls, payload })
+            }
+        }
+    }
+
+    pub fn reset(&mut self) {
+        self.tracker.reset();
+        self.payload = Vec::new();
     }
 }
 
