@@ -100,6 +100,8 @@ craneLib.buildPackage (
 
     postInstall = ''
       bash ${./compile-terminfo.sh} share/terminfo/felis.terminfo "$out/share/terminfo"
+      install -Dm644 share/felis/shell-integration/felis.zsh \
+        "$out/share/felis/shell-integration/felis.zsh"
     ''
     + lib.optionalString (stdenv.buildPlatform.canExecute stdenv.hostPlatform) ''
       installShellCompletion --cmd felis \

@@ -10,6 +10,12 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 
 ## [Unreleased]
 
+### Added
+
+- `share/felis/shell-integration/felis.zsh`: sourced from `.zshrc`, it makes zsh emit `OSC 133` prompt marks with exit
+  codes and `OSC 7` directory reports, which `sessions send --wait`, `last_exit_code`, `scroll_to_prompt` and
+  `capture --source command-output` read. See the "Mark shell prompts" how-to.
+
 ### Changed
 
 - **CLI**: `felis <name> …` runs `felis-<name>` (beside `felis`, then on `$PATH`) for any word that is not a built-in

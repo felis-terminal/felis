@@ -97,9 +97,9 @@ felis sessions send "$ID" --key down --key down --key enter
 
 #    Run-and-check: --wait blocks until the command's OSC 133 D mark and
 #    prints its exit code. Race-free (the subscription starts before the
-#    input). Needs a shell with OSC 133 integration (fish/zsh/bash
-#    integrations emit it); always pass --timeout so a mark-less session
-#    cannot hang you. CLI exits 0 once seen, 1 on timeout/session end.
+#    input). Needs a shell that emits OSC 133 (zsh: source the shipped
+#    share/felis/shell-integration/felis.zsh); always pass --timeout so a
+#    mark-less session cannot hang you. CLI exits 0 once seen, 1 on timeout/session end.
 felis sessions send "$ID" 'nix build .#foo' --key enter --wait --timeout 600
 #    (--format json gives {"v":1,"id":…,"exit_code":N})
 felis sessions capture "$ID" --source command-output --format jsonl

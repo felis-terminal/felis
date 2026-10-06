@@ -248,6 +248,13 @@ Windows binaries ship as a release asset:
 For a build newer than the last release, the `windows` workflow uploads the same zip as a run artifact for each passing
 commit on `main`. Alternatively, build from source on Windows with `cargo build --release`.
 
+## Mark zsh prompts
+
+The Nix package and the Linux and macOS archives ship `share/felis/shell-integration/felis.zsh`. zsh does not mark its
+commands and their exit codes on its own, so zsh users should source the script from `~/.zshrc`; without it,
+`felis sessions send --wait` never returns and a resize can leave copies of a full-width prompt line behind.
+[Mark shell prompts](mark-shell-prompts.md) gives the line to add.
+
 ## Installing a specific release
 
 To install a specific release version, specify the tag in the flake reference:

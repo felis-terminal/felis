@@ -37,6 +37,8 @@ Task-oriented; one goal per page.
   multiplexer: sessions via the daemon, layout via your WM.
 - [Get notified when a job finishes](how-to/enable-notifications.md) — emit a notification from a long command and pop
   it on your desktop.
+- [Mark shell prompts](how-to/mark-shell-prompts.md) — make zsh report prompts, exit codes and its working directory, so
+  `send --wait`, prompt jumps and command-output capture work.
 - [Attach a session over SSH](how-to/attach-over-ssh.md) — open and drive a remote machine's session that survives
   disconnects.
 - [Search and capture scrollback](how-to/search-and-capture-scrollback.md) — grep your day's history, snapshot a session
