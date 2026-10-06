@@ -36,6 +36,10 @@ fi
 package and the release archives. From a source checkout, source `share/felis/shell-integration/felis.zsh` in the
 checkout instead.
 
+With the home-manager module, set `programs.felis.enableZshIntegration = true;` instead. It adds the `source` line after
+the generated `.zshrc`'s default-order setup, where home-manager's prompt-theme modules load; a theme you initialize at
+a later `lib.mkOrder` can drop the marks, so load it earlier.
+
 The script adds its marks to `PS1` before every prompt, so a theme that rebuilds `PS1` each time keeps them as long as
 the theme's hook runs first, which loading the theme earlier in `~/.zshrc` arranges. On zsh 5.10 it switches off zsh's
 own marks and directory reports and sends its own, since those carry no exit code and garble non-ASCII paths. The
