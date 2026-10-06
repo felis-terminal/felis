@@ -1963,6 +1963,212 @@ fn reflow_remaps_prompt_mark_to_its_logical_line_start() {
     assert_eq!(g.locate_line(mark_line), MarkLocation::Screen(0));
 }
 
+fn screen_ascii(g: &Grid) -> Vec<String> {
+    (0..g.rows())
+        .map(|r| {
+            let line: String = (0..g.cols())
+                .map(|c| match g.cell(r, c).map(|cell| cell.grapheme) {
+                    Some(Grapheme::Ascii(b)) => char::from(b),
+                    _ => ' ',
+                })
+                .collect();
+            line.trim_end().to_owned()
+        })
+        .collect()
+}
+
+/// What zsh does on SIGWINCH: climb the rows its prompt took at the old
+/// width (here one above the cursor), erase below, repaint.
+const ZSH_REPAINT_AT_6: &[u8] = b"\x1b[1A\r\x1b[J\x1b]133;A\x07------\r\n% ";
+
+/// One finished command, so the shell has shown it marks command starts.
+const PRIOR_COMMAND: &[u8] = b"\x1b]133;C\x07out\r\n\x1b]133;D;0\x07";
+
+fn grid_after(bytes: &[&[u8]]) -> (Parser, Grid) {
+    let mut p = Parser::new();
+    let mut g = Grid::new(6, 10);
+    for b in bytes {
+        drive(&mut p, &mut g, b);
+    }
+    (p, g)
+}
+
+#[test]
+fn reflow_blanks_the_prompt_the_shell_repaints() {
+    let (mut p, mut g) = grid_after(&[PRIOR_COMMAND, b"\x1b]133;A\x07----------\r\n% "]);
+
+    g.reflow(6, 6);
+    drive(&mut p, &mut g, ZSH_REPAINT_AT_6);
+
+    assert_eq!(screen_ascii(&g), ["out", "------", "%", "", "", ""]);
+}
+
+#[test]
+fn reflow_rewraps_the_prompt_under_redraw_0() {
+    let (_, mut g) = grid_after(&[PRIOR_COMMAND, b"\x1b]133;A;redraw=0\x07----------\r\n% "]);
+
+    g.reflow(6, 6);
+
+    assert_eq!(screen_ascii(&g), ["out", "------", "----", "%", "", ""]);
+}
+
+#[test]
+fn reflow_keeps_the_redraw_0_of_a_prompt_with_a_continuation_line() {
+    let (_, mut g) = grid_after(&[
+        PRIOR_COMMAND,
+        b"\x1b]133;A;redraw=0\x07----------\r\n\x1b]133;A;k=s\x07% ",
+    ]);
+
+    g.reflow(6, 6);
+
+    assert_eq!(screen_ascii(&g), ["out", "------", "----", "%", "", ""]);
+}
+
+#[test]
+fn reflow_blanks_only_the_cursor_line_under_redraw_last() {
+    let (_, mut g) = grid_after(&[PRIOR_COMMAND, b"\x1b]133;A;redraw=last\x07----------\r\n% "]);
+
+    g.reflow(6, 6);
+
+    assert_eq!(screen_ascii(&g), ["out", "------", "----", "", "", ""]);
+    assert_eq!((g.cursor().row, g.cursor().col), (3, 2));
+}
+
+#[test]
+fn reflow_keeps_command_output_once_the_command_started() {
+    let (_, mut g) = grid_after(&[b"\x1b]133;A\x07$ \x1b]133;B\x07ls\r\n\x1b]133;C\x07abcdefghij"]);
+
+    g.reflow(6, 6);
+
+    assert_eq!(screen_ascii(&g), ["$ ls", "abcdef", "ghij", "", "", ""]);
+}
+
+/// Without `C`, a running command's output is indistinguishable from
+/// the prompt it was typed at.
+#[test]
+fn reflow_keeps_output_from_a_shell_that_never_marks_command_starts() {
+    let (_, mut g) = grid_after(&[b"\x1b]133;A\x07$ \x1b]133;B\x07ls\r\nabcdefghij"]);
+
+    g.reflow(6, 6);
+
+    assert_eq!(screen_ascii(&g), ["$ ls", "abcdef", "ghij", "", "", ""]);
+}
+
+/// A `k=s` continuation must not become the clear's start, or the
+/// prompt's first line is re-wrapped and left behind.
+#[test]
+fn reflow_blanks_from_the_primary_prompt_not_a_continuation() {
+    let (_, mut g) = grid_after(&[
+        PRIOR_COMMAND,
+        b"\x1b]133;A\x07----------\r\n\x1b]133;A;k=s\x07% ",
+    ]);
+
+    g.reflow(6, 6);
+
+    assert_eq!(screen_ascii(&g), ["out", "", "", "", "", ""]);
+    assert_eq!((g.cursor().row, g.cursor().col), (2, 2));
+}
+
+/// `unsetopt prompt_cr prompt_sp; printf foo` leaves the next prompt on
+/// `foo`'s row, which the shell will not repaint.
+#[test]
+fn reflow_keeps_output_on_the_row_a_prompt_starts_mid_line() {
+    let (_, mut g) = grid_after(&[
+        PRIOR_COMMAND,
+        b"\x1b]133;C\x07foo\x1b]133;D;0\x07\x1b]133;A\x07% ",
+    ]);
+
+    g.reflow(6, 6);
+
+    assert_eq!(screen_ascii(&g), ["out", "foo%", "", "", "", ""]);
+}
+
+/// A shell inside a TUI marks prompts on the alternate screen; they say
+/// nothing about the primary screen's prompt.
+#[test]
+fn reflow_ignores_prompt_marks_from_the_alternate_screen() {
+    let (mut p, mut g) = grid_after(&[
+        PRIOR_COMMAND,
+        b"\x1b]133;A\x07$ \x1b]133;B\x07tui\r\n\x1b]133;C\x07\x1b[?1049h",
+        b"\x1b]133;A\x07inner\x1b]133;B\x07",
+    ]);
+
+    g.reflow(6, 6);
+    drive(&mut p, &mut g, b"\x1b[?1049l");
+
+    assert_eq!(screen_ascii(&g), ["out", "$ tui", "", "", "", ""]);
+}
+
+/// bash under `redraw=last` repaints only the line its cursor is on;
+/// the rows below are its to keep.
+#[test]
+fn reflow_keeps_rows_below_the_cursor_under_redraw_last() {
+    let (_, mut g) = grid_after(&[
+        PRIOR_COMMAND,
+        b"\x1b]133;A;redraw=last\x07$ \r\nbelowbelow\x1b[2;3H",
+    ]);
+
+    let remap = g.reflow(6, 6).expect("geometry changed");
+
+    assert_eq!(screen_ascii(&g), ["out", "", "belowb", "elow", "", ""]);
+    assert_eq!((g.cursor().row, g.cursor().col), (1, 2));
+    assert_eq!(remap.remap_row(2), None, "the cursor's row");
+    assert_eq!(
+        remap.remap_row(3),
+        Some(3),
+        "the row below keeps its anchor"
+    );
+}
+
+/// A prompt that arrives while a marked command still runs belongs to
+/// what the command started, which may not mark its own commands.
+#[test]
+fn reflow_keeps_output_under_a_prompt_from_inside_a_running_command() {
+    let (_, mut g) = grid_after(&[
+        PRIOR_COMMAND,
+        b"\x1b]133;A\x07$ \x1b]133;B\x07bash\r\n\x1b]133;C\x07",
+        b"\x1b]133;A\x07# \x1b]133;B\x07ls\r\nabcdefghij",
+    ]);
+
+    g.reflow(6, 6);
+
+    assert_eq!(
+        screen_ascii(&g),
+        ["out", "$ bash", "# ls", "abcdef", "ghij", ""]
+    );
+}
+
+/// Once a nested shell marks its own command, its next prompt is
+/// blanked like any other.
+#[test]
+fn reflow_blanks_a_nested_prompt_once_it_ended_a_marked_command() {
+    let (mut p, mut g) = grid_after(&[
+        b"\x1b]133;A\x07$ \x1b]133;B\x07zsh\r\n\x1b]133;C\x07",
+        b"\x1b]133;A\x07# \x1b]133;B\x07true\r\n\x1b]133;C\x07\x1b]133;D;0\x07",
+        b"\x1b]133;A\x07----------\r\n% ",
+    ]);
+
+    g.reflow(6, 6);
+    drive(&mut p, &mut g, ZSH_REPAINT_AT_6);
+
+    assert_eq!(screen_ascii(&g), ["$ zsh", "# true", "------", "%", "", ""]);
+}
+
+#[test]
+fn reflow_remap_drops_anchors_on_a_blanked_prompt() {
+    let (_, mut g) = grid_after(&[PRIOR_COMMAND, b"\x1b]133;A\x07----------\r\n% "]);
+
+    let remap = g.reflow(6, 6).expect("geometry changed");
+
+    assert_eq!(
+        remap.remap_row(1),
+        Some(1),
+        "the output row keeps its anchor"
+    );
+    assert_eq!(remap.remap_row(2), None, "the prompt's first row");
+    assert_eq!(remap.remap_row(3), None, "the cursor's row");
+}
+
 #[test]
 fn reflow_never_splits_a_wide_glyph() {
     let mut p = Parser::new();

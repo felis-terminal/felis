@@ -239,7 +239,7 @@ EOF
 chmod 0755 "$out/bin/felis"
 
 if [ -n "$share" ]; then
-  for tree in terminfo bash-completion zsh fish man; do
+  for tree in terminfo felis bash-completion zsh fish man; do
     [ -d "$share/$tree" ] || continue
     cp -RL "$share/$tree" "$out/share/$tree"
   done

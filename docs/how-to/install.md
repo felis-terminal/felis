@@ -68,6 +68,10 @@ yourself.
 }
 ```
 
+For zsh, `enableZshIntegration` sources the prompt-marking script from the generated `.zshrc`, after the default-order
+setup where prompt themes load; it defaults to `home.shell.enableZshIntegration`. See
+[Mark shell prompts](mark-shell-prompts.md) for what the marks enable.
+
 The module can also run a notification subscriber as a user service; see
 [Get notified when a job finishes](enable-notifications.md).
 
@@ -247,6 +251,14 @@ Windows binaries ship as a release asset:
 
 For a build newer than the last release, the `windows` workflow uploads the same zip as a run artifact for each passing
 commit on `main`. Alternatively, build from source on Windows with `cargo build --release`.
+
+## Mark zsh prompts
+
+The Nix package and the Linux and macOS archives ship `share/felis/shell-integration/felis.zsh`. zsh does not mark its
+commands and their exit codes on its own, so zsh users should source the script from `~/.zshrc`; without it,
+`felis sessions send --wait` never returns and a resize can leave copies of a full-width prompt line behind.
+[Mark shell prompts](mark-shell-prompts.md) gives the line to add; home-manager users set
+`programs.felis.enableZshIntegration` instead.
 
 ## Installing a specific release
 

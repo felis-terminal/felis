@@ -324,16 +324,19 @@ new column count; a hard-wrapped line (one that ended in an explicit LF) stays a
 `O(rows × cols)` at resize, an acceptable cost. `reflow` is the daemon's primary-screen resize entry point;
 `ScreenBuffer::resize` (trim and pad) is the operator for the shadow and the alternate screen.
 
-Three decisions fix the reflow's edges:
+Five decisions fix the reflow's edges:
 
 - **Cursor and marks ride their logical line (D1).** Reflow preserves the cursor's _logical_ position: column K of
   logical line N lands wherever that column falls at the new width, not at a fixed physical row. Each prompt mark is
   remapped onto the new first physical row of the logical line it sat on, and a mark whose line evicts is pruned.
-  Anchoring to the physical row instead would scatter the cursor and every mark on any width change. Kitty
-  direct-placement anchors ride the same mapping: `reflow` returns a `ReflowRemap` and the daemon replays each anchor
-  through it (REQ-604; see [grid-and-cells.md](grid-and-cells.md) "Image references"); a resize deferred under the alt
-  screen (D4) delivers the remap at stream position via `PtyEffect::PrimaryReflowed`, after the screen switch restores
-  the saved primary placements.
+  Anchoring to the physical row instead would scatter the cursor and every mark on any width change. A prompt blanked
+  for the shell to repaint (D5) is the exception: blanked whole, it leaves the cursor at its column and its row offset
+  from the prompt's first row, which is where the shell's repaint starts from; under `redraw=last` only the cursor's row
+  is blanked, and the cursor keeps its column on it. Kitty direct-placement anchors ride the same mapping: `reflow`
+  returns a `ReflowRemap` and the daemon replays each anchor through it (REQ-604; see
+  [grid-and-cells.md](grid-and-cells.md) "Image references"); a resize deferred under the alt screen (D4) delivers the
+  remap at stream position via `PtyEffect::PrimaryReflowed`, after the screen switch restores the saved primary
+  placements.
 - **The round-trip is exact only without eviction (D2).** `W → W' → W` restores the original layout only while no
   scrollback eviction occurs. Narrowing produces more physical rows, and once the ring is at `cap` the oldest rows evict
   first (as in Kitty), so a narrow-then-widen that overflowed the ring cannot resurrect the evicted head. This is the
@@ -349,6 +352,19 @@ Three decisions fix the reflow's edges:
   lockstep would drop every retained row. Because the snapshot's width outlives the live grid's, reads that route into
   it (the scrollback a search or a capture sees while the TUI is up) resolve rows through the snapshot's own width. A
   burst of resizes under the alt screen costs one re-wrap, not one per resize.
+- **The prompt the shell repaints is blanked, not re-wrapped (D5).** On SIGWINCH zsh climbs back the rows it drew its
+  prompt on and repaints from there. A re-wrap changes that row count, so a prompt line that filled the drawn width (the
+  p10k and starship separator style) survives as a stale copy on every resize. Kitty
+  (`prevent_current_prompt_from_rewrapping` in `kitty/screen.c`) and Ghostty (`clearPromptForRedraw` in
+  `src/terminal/Screen.zig`) blank the prompt instead, and felis follows them, with the same `redraw` opt-out. Only an
+  `OSC 133` prompt qualifies: finding an unmarked prompt means guessing at shell content
+  ([non-goals.md](../non-goals.md) "Heuristic prompt or command detection"). A shell that marks prompts but never sends
+  `C` does not qualify either: its running command's output still sits under the youngest `A`, and the blank would erase
+  output nothing repaints. For the same reason a prompt that appears while a marked command runs (a nested shell, or one
+  the marking shell `exec`ed) is left alone until that shell ends a marked command itself. What stays out of reach is
+  output a background job writes while the shell waits at its prompt: no mark separates it from the echo of the line
+  being typed, so the blank takes it too, as it does in kitty and Ghostty. _Revisit if_ a widely used shell marks its
+  prompt but neither repaints it on SIGWINCH nor emits `redraw=0`.
 
 A multi-cell sized run (OSC 66) that the re-wrap cannot fit is discarded, and the producer re-emits it on the new
 geometry: the same keep-or-discard rule `resize` already applies (REQ-406/REQ-407), not a re-fit in place. The rewrap

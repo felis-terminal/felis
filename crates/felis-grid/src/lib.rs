@@ -91,6 +91,75 @@ pub struct PromptMark {
     pub exit_code: Option<u32>,
 }
 
+/// The `redraw` option of the latest `OSC 133 ; A`, a kitty extension:
+/// how much of the prompt the shell repaints after a resize.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PromptRedraw {
+    Full,
+    /// `redraw=last` (Ghostty): bash repaints only the cursor's line.
+    LastLine,
+    /// `redraw=0`.
+    Never,
+}
+
+/// What the primary screen's `OSC 133` marks say about the prompt a
+/// resize may blank. Marks sent on the alternate screen belong to a
+/// program inside a TUI and never reach it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ShellPrompt {
+    /// Set by the first `C`. A shell that marks prompts but never
+    /// command starts leaves a running command's output looking like
+    /// part of the prompt.
+    marks_commands: bool,
+    /// Between a `C` and the next `D`. An `A` then comes from a program
+    /// the command runs (a nested shell, or one `exec` replaced the
+    /// marking shell with), which may not mark its own commands.
+    command_open: bool,
+    /// Between an `A` or `B` and the next `C` or `D`.
+    at_prompt: bool,
+    redraw: PromptRedraw,
+    /// Absolute ordinal (see [`Grid::prompt_marks_pruned`]) of the
+    /// youngest `A` that is not `k=s`, when it fired at column 0: a
+    /// prompt sharing its first row with output that lacked a final
+    /// newline cannot be blanked without erasing that output.
+    start: Option<u64>,
+}
+
+impl ShellPrompt {
+    const fn new() -> Self {
+        Self {
+            marks_commands: false,
+            command_open: false,
+            at_prompt: false,
+            redraw: PromptRedraw::Full,
+            start: None,
+        }
+    }
+
+    fn observe(&mut self, mark: &Osc133, ordinal: u64, at_column_0: bool) {
+        match mark.kind {
+            PromptKind::PromptStart if !mark.secondary => {
+                // Every prompt re-declares the option, as in kitty, so a
+                // `redraw=0` shell exec'ing into another shell leaves no
+                // opt-out behind. A `k=s` line inherits its prompt's.
+                self.redraw = mark.redraw.unwrap_or(PromptRedraw::Full);
+                self.start = (at_column_0 && !self.command_open).then_some(ordinal);
+                self.at_prompt = true;
+            }
+            PromptKind::PromptStart | PromptKind::InputStart => self.at_prompt = true,
+            PromptKind::OutputStart => {
+                self.marks_commands = true;
+                self.command_open = true;
+                self.at_prompt = false;
+            }
+            PromptKind::CommandEnd => {
+                self.command_open = false;
+                self.at_prompt = false;
+            }
+        }
+    }
+}
+
 /// Where an absolute prompt-mark line currently sits
 /// (docs/explanation/data-model/scrollback.md).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -566,6 +635,7 @@ pub struct Grid {
     /// life: the absolute ordinal of `prompt_marks[i]` is
     /// `prompt_marks_pruned + i`. Saturating.
     prompt_marks_pruned: u64,
+    shell_prompt: ShellPrompt,
     /// Cumulative rows ever pushed into scrollback: the absolute-line
     /// origin for [`PromptMark`] (docs/explanation/data-model/scrollback.md).
     /// Never drained (contrast [`Self::scrolled_into_scrollback`]).
@@ -908,6 +978,7 @@ impl Grid {
             os_dark: None,
             prompt_marks: Vec::new(),
             prompt_marks_pruned: 0,
+            shell_prompt: ShellPrompt::new(),
             scrollback_total_pushed: 0,
             xterm_save_slots: HashMap::new(),
             dec_sace: 0,
@@ -1856,12 +1927,20 @@ impl Grid {
 
         let old_rows = self.screen.rows;
         let old_cols = self.screen.cols;
+        let old_cursor_col = self.screen.cursor.col;
+        // Re-wrapping a prompt the shell is about to repaint leaves a
+        // stale copy: zsh climbs back by the row count it drew, which a
+        // re-wrap changes. Kitty and Ghostty blank it the same way.
+        let blank = self.prompt_redraw_rows();
         // Trailing blank live rows are screen padding, not history:
         // reflowing them would anchor blank rows to the bottom and
         // shove real content (and the prompt) into scrollback. Keep
         // every row up to the last non-blank one and the cursor's row.
         let mut live_extent = usize::from(self.screen.cursor.row) + 1;
         for r in (0..old_rows).rev() {
+            if blank.as_ref().is_some_and(|b| b.contains(&r)) {
+                continue;
+            }
             let row = self.screen.row_content(r).unwrap_or(&[]);
             if row.iter().any(|c| *c != Cell::default()) {
                 live_extent = live_extent.max(usize::from(r) + 1);
@@ -1877,6 +1956,14 @@ impl Grid {
             .take(sb_len + live_extent)
             .enumerate()
         {
+            let screen_row = i.checked_sub(sb_len).and_then(|r| u16::try_from(r).ok());
+            if screen_row.is_some_and(|r| blank.as_ref().is_some_and(|b| b.contains(&r))) {
+                combined.push(vec![Cell::default(); old_cols_usize]);
+                continued.push(false);
+                continue;
+            }
+            let blank_end = blank.as_ref().map(|b| b.end);
+            let cont = cont && (blank_end.is_none() || screen_row != blank_end);
             let mut row = cells.to_vec();
             if i < sb_len {
                 // Pad history rows back to full width: the walk clips
@@ -1992,6 +2079,9 @@ impl Grid {
         self.screen.cursor.col = u16::try_from(cursor_phys.1)
             .unwrap_or(cols - 1)
             .min(cols - 1);
+        if blank.is_some() {
+            self.screen.cursor.col = old_cursor_col.min(cols - 1);
+        }
         self.screen.cursor.pending_wrap = false;
 
         // Remap prompt marks onto their logical line's new first
@@ -2020,6 +2110,28 @@ impl Grid {
             new_total: total_new,
             new_sb_len: self.screen.scrollback().len(),
             new_row_of_old,
+            cleared: blank.map(|b| sb_len + usize::from(b.start)..sb_len + usize::from(b.end)),
+        })
+    }
+
+    /// The screen rows a resize blanks: from the first row of the prompt
+    /// the cursor sits in to the bottom (only the cursor's row under
+    /// `redraw=last`), or `None` outside a prompt or when the shell opted
+    /// out.
+    fn prompt_redraw_rows(&self) -> Option<std::ops::Range<u16>> {
+        let prompt = &self.shell_prompt;
+        if !prompt.marks_commands || !prompt.at_prompt || prompt.redraw == PromptRedraw::Never {
+            return None;
+        }
+        let idx = usize::try_from(prompt.start?.checked_sub(self.prompt_marks_pruned)?).ok()?;
+        let cursor_row = self.screen.cursor.row;
+        let start_row = match self.locate_line(self.prompt_marks.get(idx)?.line) {
+            MarkLocation::Screen(row) if row <= cursor_row => row,
+            _ => return None,
+        };
+        Some(match prompt.redraw {
+            PromptRedraw::LastLine => cursor_row..cursor_row + 1,
+            _ => start_row..self.screen.rows,
         })
     }
 
@@ -2501,6 +2613,9 @@ pub struct ReflowRemap {
     /// Pre-reflow combined row index → post-reflow physical row of
     /// that row's first cell.
     new_row_of_old: Vec<usize>,
+    /// Pre-reflow combined rows of a prompt blanked for the shell to
+    /// repaint; anchors there go with the prompt.
+    cleared: Option<std::ops::Range<usize>>,
 }
 
 impl ReflowRemap {
@@ -2510,6 +2625,9 @@ impl ReflowRemap {
     pub fn remap_row(&self, old_row: i32) -> Option<i32> {
         let old_sb = i64::try_from(self.old_sb_len).unwrap_or(i64::MAX);
         let j = usize::try_from(i64::from(old_row) + old_sb - 1).ok()?;
+        if self.cleared.as_ref().is_some_and(|c| c.contains(&j)) {
+            return None;
+        }
         // Rows below the pre-reflow content extent are screen padding
         // that reflow regenerates; an anchor there keeps its distance
         // below the last content row.
@@ -2683,7 +2801,17 @@ pub const fn default_special_color() -> (u8, u8, u8) {
     (0, 0, 0)
 }
 
-fn parse_osc_133(text: &str) -> Option<(PromptKind, Option<u32>)> {
+struct Osc133 {
+    kind: PromptKind,
+    /// `D ; <code>` only.
+    exit_code: Option<u32>,
+    /// `A` only; `None` when the option is absent or unrecognized.
+    redraw: Option<PromptRedraw>,
+    /// `A ; k=s`: a continuation line, not the prompt's first.
+    secondary: bool,
+}
+
+fn parse_osc_133(text: &str) -> Option<Osc133> {
     let mut parts = text.split(';');
     let kind_letter = parts.next()?;
     let kind = match kind_letter.chars().next()? {
@@ -2693,12 +2821,30 @@ fn parse_osc_133(text: &str) -> Option<(PromptKind, Option<u32>)> {
         'D' => PromptKind::CommandEnd,
         _ => return None,
     };
-    let exit_code = if matches!(kind, PromptKind::CommandEnd) {
-        parts.next().and_then(|s| s.parse::<u32>().ok())
-    } else {
-        None
+    let mut parsed = Osc133 {
+        kind,
+        exit_code: None,
+        redraw: None,
+        secondary: false,
     };
-    Some((kind, exit_code))
+    match kind {
+        PromptKind::CommandEnd => {
+            parsed.exit_code = parts.next().and_then(|s| s.parse::<u32>().ok());
+        }
+        PromptKind::PromptStart => {
+            for opt in parts {
+                match opt.split_once('=') {
+                    Some(("redraw", "0")) => parsed.redraw = Some(PromptRedraw::Never),
+                    Some(("redraw", "1")) => parsed.redraw = Some(PromptRedraw::Full),
+                    Some(("redraw", "last")) => parsed.redraw = Some(PromptRedraw::LastLine),
+                    Some(("k", "s")) => parsed.secondary = true,
+                    _ => {}
+                }
+            }
+        }
+        _ => {}
+    }
+    Some(parsed)
 }
 
 /// Per `docs/explanation/security-model.md` "OSC 8 hyperlinks and OSC 7

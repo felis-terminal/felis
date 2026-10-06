@@ -207,7 +207,7 @@ if [ ${#absolute[@]} -gt 0 ]; then
 fi
 
 if [ -n "$share" ]; then
-  for tree in terminfo applications bash-completion zsh fish man; do
+  for tree in terminfo felis applications bash-completion zsh fish man; do
     [ -d "$share/$tree" ] || continue
     cp -RL "$share/$tree" "$out/share/$tree"
   done

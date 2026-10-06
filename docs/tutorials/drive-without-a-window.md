@@ -51,8 +51,9 @@ The command returns immediately; the work now runs inside the session. Give it a
 sleep 4
 ```
 
-A real script does not guess with `sleep`: with OSC 133 shell integration, `send … --key enter --wait` blocks until the
-command finishes and prints its exit code (see the [CLI reference](../reference/cli.md)).
+A real script does not guess with `sleep`: with OSC 133 prompt marks
+([Mark shell prompts](../how-to/mark-shell-prompts.md)), `send … --key enter --wait` blocks until the command finishes
+and prints its exit code (see the [CLI reference](../reference/cli.md)).
 
 ## Step 4: Read its output, still no window
 

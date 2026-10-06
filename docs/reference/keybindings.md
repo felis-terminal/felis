@@ -86,8 +86,8 @@ binding, a value outside the vocabulary below, or a missing required field drops
 backslash sequence, and a trailing backslash, drop the binding with a warning. `escapes = "none"` sends `text`
 byte-for-byte.
 
-`scroll_to_prompt` needs `OSC 133` shell integration and is a no-op while an alternate-screen application holds the
-screen.
+`scroll_to_prompt` needs `OSC 133` prompt marks ([Mark shell prompts](../how-to/mark-shell-prompts.md)) and is a no-op
+while an alternate-screen application holds the screen.
 
 `ansi = true` retains ANSI SGR styling for tools that render escapes (`less -R`, `bat`, `fzf --ansi`); the default plain
 text is what parsers and hint pickers want.

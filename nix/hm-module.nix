@@ -87,6 +87,15 @@ in
       '';
     };
 
+    enableZshIntegration = lib.hm.shell.mkZshIntegrationOption {
+      inherit config;
+      extraDescription = ''
+        Sources the package's zsh script, which marks prompts and commands
+        with `OSC 133` and reports the working directory with `OSC 7`. See
+        {file}`docs/how-to/mark-shell-prompts.md` for what the marks enable.
+      '';
+    };
+
     settings = lib.mkOption {
       type = tomlFormat.type;
       default = { };
@@ -204,6 +213,13 @@ in
       home.sessionVariables = lib.mkIf cfg.installTerminfo {
         TERMINFO_DIRS = "${cfg.package}/share/terminfo:";
       };
+
+      # After the default order, where prompt themes rebuild `PS1`: the script's marks must wrap the theme's prompt.
+      programs.zsh.initContent = lib.mkIf cfg.enableZshIntegration (
+        lib.mkOrder 1500 ''
+          source ${cfg.package}/share/felis/shell-integration/felis.zsh
+        ''
+      );
     })
 
     (lib.mkIf (ncfg.enable && pkgs.stdenv.hostPlatform.isDarwin) {

@@ -10,6 +10,14 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 
 ## [Unreleased]
 
+### Added
+
+- `share/felis/shell-integration/felis.zsh`: sourced from `.zshrc`, it makes zsh emit `OSC 133` prompt marks with exit
+  codes and `OSC 7` directory reports, which `sessions send --wait`, `last_exit_code`, `scroll_to_prompt` and
+  `capture --source command-output` read. See the "Mark shell prompts" how-to.
+- **home-manager**: `programs.felis.enableZshIntegration` sources that script from the generated `.zshrc`; it defaults
+  to `home.shell.enableZshIntegration`.
+
 ### Changed
 
 - **CLI**: `felis <name> …` runs `felis-<name>` (beside `felis`, then on `$PATH`) for any word that is not a built-in
@@ -18,6 +26,9 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 
 ### Fixed
 
+- Resizing the window while a shell waits at an `OSC 133` prompt no longer leaves a stale copy of the prompt's first
+  line on every resize (zsh or fish with a prompt line that fills the width). felis blanks the prompt and lets the shell
+  repaint it, as kitty and Ghostty do; a shell that does not repaint opts out with `OSC 133;A;redraw=0`.
 - Writing over or erasing one half of a multi-codepoint wide character (`❄️`, `🇯🇵`, `👩‍💻`, a keycap) removes the whole
   character instead of losing neighboring text: a shell prompt that redraws an unchanged emoji keeps it, and ECH,
   DECERA, DECFRA, DECSEL, DECSED and OSC 66 no longer leave half a glyph behind (for a plain wide `字` too). REP after a
