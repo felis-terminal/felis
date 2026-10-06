@@ -127,11 +127,11 @@ impl Sink for Grid {
             return;
         }
         // Each of these modes mutates state the tight loop does not
-        // model; `has_sized_cells` is the conservative gate for an OSC 66
-        // overprint, which must erase the whole run.
+        // model. An overprint of a sized cell is checked per chunk below:
+        // `has_sized_cells` never clears, so gating on it here would keep
+        // every later print off this loop after one OSC 66 write.
         if self.left_right_margin_mode
             || self.insert_mode
-            || self.screen.has_sized_cells
             || self.current_sizing_handle.is_some()
             || !self.autowrap
         {
@@ -179,6 +179,13 @@ impl Sink for Grid {
             let take = (bytes.len() - i).min(room);
             let chunk_end = i + take;
             let occ = usize::from(self.screen.occupancy[row_base / cols]);
+            if self.screen.has_sized_cells && self.overprints_sized(row_base, start_col, take, occ)
+            {
+                for &b in &bytes[i..] {
+                    self.print(b);
+                }
+                return;
+            }
             store_ascii_run(
                 &mut self.screen.cells[row_base..row_base + cols],
                 start_col,
@@ -960,10 +967,11 @@ impl Grid {
     fn print_wide_str(&mut self, s: &str) {
         let cols = usize::from(self.screen.cols);
         // Same gate as `print_str`; a 1-col grid cannot host a wide glyph.
+        // No sized-cell check: this loop writes only at the watermark,
+        // and every cell of a live block lies below its row's.
         if cols < 2
             || self.left_right_margin_mode
             || self.insert_mode
-            || self.screen.has_sized_cells
             || self.current_sizing_handle.is_some()
             || !self.autowrap
         {
@@ -1085,6 +1093,13 @@ impl Grid {
             let take = (bytes.len() - i).min(room);
             let chunk_end = i + take;
             let occ = usize::from(self.screen.occupancy[row_base / cols]);
+            if self.screen.has_sized_cells && self.overprints_sized(row_base, start_col, take, occ)
+            {
+                for &b in &bytes[i..] {
+                    self.print(b);
+                }
+                return;
+            }
             store_ascii_run(
                 &mut self.screen.cells[row_base..row_base + cols],
                 start_col,
@@ -1109,5 +1124,25 @@ impl Grid {
         if let Some(b) = last_byte {
             self.last_printed = Some(Grapheme::Ascii(b));
         }
+    }
+}
+
+impl Grid {
+    /// Whether `store_ascii_run` of `take` bytes at `start` would touch an
+    /// OSC 66 cell, which must erase its whole block through
+    /// `put_grapheme`: one it overwrites, or the owner or `Spacer` of a
+    /// pair it splits at either end.
+    #[cold]
+    #[inline(never)]
+    fn overprints_sized(&self, row_base: usize, start: usize, take: usize, occ: usize) -> bool {
+        let row = &self.screen.cells[row_base..row_base + usize::from(self.screen.cols)];
+        let end = start + take;
+        let splits = |col: usize| col < occ && matches!(row[col].grapheme, Grapheme::Spacer);
+        let sized = |col: usize| row[col].sizing.is_some();
+        row[start..end.min(occ).max(start)]
+            .iter()
+            .any(|c| c.sizing.is_some())
+            || (start > 0 && splits(start) && sized(start - 1))
+            || (splits(end) && sized(end))
     }
 }

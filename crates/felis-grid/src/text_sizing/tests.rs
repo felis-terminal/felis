@@ -372,3 +372,57 @@ fn sized_run_widened_by_a_selector_past_the_grid_is_discarded() {
     assert_eq!(g.cursor().col, 0);
     assert_eq!(g.scrollback().len(), 0);
 }
+
+/// A printed run that lands on any cell of a sized block erases the
+/// whole block, whichever print loop carries it.
+#[test]
+fn printing_a_run_over_a_sized_block_erases_it_whole() {
+    for (case, bytes) in [
+        (
+            "ASCII over its second column",
+            &b"\x1b]66;s=2;A\x07\x1b[1;2Hxy"[..],
+        ),
+        ("ASCII over its lower row", b"\x1b]66;s=2;A\x07\x1b[2;1Hxy"),
+        (
+            "ASCII wrapping onto its row",
+            b"\x1b[2;1H\x1b]66;s=2;A\x07\x1b[1;9Hxyz",
+        ),
+        (
+            "CJK over its lower row",
+            "\x1b]66;s=2;A\x07\x1b[2;1H字字".as_bytes(),
+        ),
+    ] {
+        let mut p = Parser::new();
+        let mut g = Grid::new(4, 10);
+        drive(&mut p, &mut g, bytes);
+        assert!(
+            (0..4).all(|r| g.row_sized_cells(r).is_empty()),
+            "{case}: no cell keeps the block's handle"
+        );
+    }
+}
+
+/// After one OSC 66 run, text printed past it still lands normally.
+#[test]
+fn text_after_a_sized_block_prints_beside_it() {
+    let mut p = Parser::new();
+    let mut g = Grid::new(4, 10);
+    drive(&mut p, &mut g, "\x1b]66;s=2;A\x07xy字".as_bytes());
+    assert_eq!(g.row_sized_cells(0).len(), 2);
+    assert_eq!(g.row_sized_cells(1).len(), 2);
+    assert_eq!(g.screen.cell(0, 2).unwrap().grapheme, Grapheme::Ascii(b'x'));
+    assert_eq!(g.screen.cell(0, 3).unwrap().grapheme, Grapheme::Ascii(b'y'));
+    assert_eq!(g.screen.cell(0, 4).unwrap().grapheme, Grapheme::Char('字'));
+    assert_eq!(g.screen.cell(0, 5).unwrap().grapheme, Grapheme::Spacer);
+}
+
+/// Text that starts right after a sized block does not touch it: the
+/// block keeps its cells and the text lands beside it.
+#[test]
+fn text_right_after_a_sized_block_leaves_it_alone() {
+    let mut p = Parser::new();
+    let mut g = Grid::new(4, 10);
+    drive(&mut p, &mut g, b"\x1b]66;s=2;A\x07xyz");
+    assert_eq!(g.row_sized_cells(0).len(), 2);
+    assert_eq!(g.screen.cell(0, 2).unwrap().grapheme, Grapheme::Ascii(b'x'));
+}
