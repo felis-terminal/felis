@@ -99,6 +99,15 @@ impl Font {
         Self::load_with(db, Family::Name(family))
     }
 
+    /// [`Self::try_load_with`] moved to the regular weight, the position
+    /// every fallback face draws at.
+    fn try_load_regular(db: &Database, family: &str) -> Result<Self, ShapingError> {
+        let font = Self::try_load_with(db, family)?;
+        Ok(font
+            .at_style(fontdb::Weight::NORMAL.0, false)
+            .unwrap_or(font))
+    }
+
     /// Load the pinned OpenType-feature probe font from `$FELIS_TEST_FONT_DIR`.
     ///
     /// Not a system-font probe: probing skips silently on hosts without a
@@ -712,7 +721,7 @@ impl FontStack {
                     warn!("font.fallback entry names no family; skipping");
                     continue;
                 };
-                if let Ok(font) = Font::try_load_with(db, family) {
+                if let Ok(font) = Font::try_load_regular(db, family) {
                     let features = spec
                         .features
                         .as_deref()
@@ -940,7 +949,7 @@ fn append_first_installed(
     inherited_features: &[String],
 ) -> FontStack {
     for &name in candidates {
-        if let Ok(font) = Font::try_load_with(db, name) {
+        if let Ok(font) = Font::try_load_regular(db, name) {
             return stack.with_fallback_features(Arc::new(font), inherited_features.to_vec());
         }
     }
@@ -954,7 +963,7 @@ fn append_all_installed(
     inherited_features: &[String],
 ) -> FontStack {
     for &name in candidates {
-        if let Ok(font) = Font::try_load_with(db, name) {
+        if let Ok(font) = Font::try_load_regular(db, name) {
             stack = stack.with_fallback_features(Arc::new(font), inherited_features.to_vec());
         }
     }
@@ -2107,6 +2116,37 @@ mod tests {
         assert!(
             default_ink < regular_ink && regular_ink < bold_ink,
             "ink must grow ExtraLight < Regular < Bold: {default_ink} {regular_ink} {bold_ink}",
+        );
+    }
+
+    /// The variable face defaults to `ExtraLight`, so a fallback loaded at
+    /// its default instance draws thinner than the primary beside it.
+    #[test]
+    fn variable_fallback_draws_at_the_regular_weight() {
+        let Some(mut files) = test_font_files() else {
+            eprintln!("FELIS_TEST_FONT_DIR unset; skipping");
+            return;
+        };
+        let dir = std::path::PathBuf::from(std::env::var_os("FELIS_TEST_FONT_DIR").unwrap());
+        files.push(dir.join("truetype/Monaspace Neon Var.ttf"));
+        let stack = FontStack::discover_in_files(
+            &files,
+            Some(TEST_FONT_FAMILY),
+            &[],
+            &[FaceSpec::named("Monaspace Neon Var")],
+            &StyleFaces::default(),
+        )
+        .expect("the pinned faces load");
+        let fallback = stack.font_at(1, FontStyle::REGULAR);
+        let wght = fallback
+            .font_ref()
+            .variations()
+            .position(|v| v.tag() == WGHT)
+            .expect("the face has wght");
+        assert_eq!(
+            fallback.coords.get(wght),
+            Some(&design_value(fallback, WGHT, 400.0)),
+            "the fallback sits at wght 400",
         );
     }
 
