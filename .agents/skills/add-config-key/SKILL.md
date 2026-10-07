@@ -76,6 +76,6 @@ docstring enumerates the top-level sections (`[font]`, `[theme]`, …); adding a
   from the test config, or the comparison silently tests something other than what the config says.
 - The user's real config is often a read-only home-manager symlink; for experiments name a copy with
   `felis --config <absolute path>`, which touches no environment. A scratch `$HOME` / `$XDG_CONFIG_HOME` leaks into the
-  auto-spawned daemon; see `felis-macos-gui-debug`.
+  auto-spawned daemon; see `isolated-daemon`.
 - The client watches and hot-reloads the config file (`crates/felis-client-core/src/config_watcher.rs`). A new key that
   must not hot-apply needs an explicit decision, not an accident.

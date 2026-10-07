@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Drive felis unattended to observe REAL producer traffic (yazi,
-# presenterm, timg, hand-rolled Kitty escapes) on the Linux/Wayland box,
+# presenterm, timg, hand-rolled Kitty escapes) on Linux or macOS,
 # capturing both the client's and a foreground daemon's logs.
 #
 # Usage:
@@ -15,6 +15,7 @@
 #   RUST_LOG   (default info,felis=debug,felis_daemon=debug)
 #   LOG        log file (default /tmp/felis.log)
 set -u
+. "$(dirname "${BASH_SOURCE[0]}")/../../isolated-daemon/scripts/isolated-daemon.sh"
 
 FELIS_BIN="${FELIS_BIN:-./target/release/felis}"
 FELIS_DAEMON_BIN="${FELIS_DAEMON_BIN:-./target/release/felis-daemon}"
@@ -23,12 +24,10 @@ LOG="${LOG:-/tmp/felis.log}"
 CMD="${1:?usage: drive.sh '<command>' [hold_seconds]}"
 HOLD="${2:-6}"
 
-# Unique socket so the window attaches to the daemon this script starts.
-# Reusing one connects to a stale daemon — no fresh logs. A dedicated
-# directory: bind requires a 0700 parent this uid owns, so a socket
-# straight under /tmp is refused.
-SOCKDIR="$(mktemp -d "${TMPDIR:-/tmp}/felis-dbg.XXXXXX")"
-SOCK="$SOCKDIR/felis_dbg_$$.sock"
+# Reusing a socket connects to a stale daemon: no fresh logs.
+felis_dbg_socket felis-dbg || exit 1
+SOCKDIR="$FELIS_DBG_DIR"
+SOCK="$FELIS_DBG_SOCK"
 WRAP="$(mktemp)"
 
 # The wrapper IS the PTY shell: let the window map, run the producer,
@@ -42,20 +41,11 @@ WRAP="$(mktemp)"
 chmod +x "$WRAP"
 
 FP=
-DP=
 cleanup() {
-  # The client goes first: one that outlives its daemon reconnects, and
-  # the reconnect autospawns a replacement on the same socket.
   if [ -n "$FP" ] && kill "$FP" 2>/dev/null; then
     wait "$FP" 2>/dev/null
   fi
-  [ -n "$DP" ] && kill "$DP" 2>/dev/null
-  # Kill the daemon by pid filtered on the FULL socket path. Never
-  # `pkill -f <socket>` — it matches this script's own argv (exit 144) —
-  # and never a basename match, which also matches the user's real daemon.
-  for p in $(pgrep -x felis-daemon); do
-    tr '\0' '\n' < "/proc/$p/cmdline" 2>/dev/null | grep -qxF -- "$SOCK" && kill "$p"
-  done
+  felis_dbg_stop "$SOCK"
   rm -rf "$WRAP" "$SOCKDIR"
 }
 trap cleanup EXIT
@@ -66,15 +56,7 @@ trap cleanup EXIT
 # An inherited NOTIFY_SOCKET makes `serve` report readiness to a
 # manager that is not there, and exit right after its bind when that fails.
 RUST_LOG="$RUST_LOG" SHELL="$WRAP" env -u NOTIFY_SOCKET "$FELIS_DAEMON_BIN" serve --socket "$SOCK" >>"$LOG" 2>&1 &
-DP=$!
-# A client that dials a missing socket autospawns a second daemon.
-for _ in $(seq 100); do
-  [ -S "$SOCK" ] && break
-  kill -0 "$DP" 2>/dev/null || break
-  sleep 0.05
-done
-sleep 0.2
-if [ ! -S "$SOCK" ] || ! kill -0 "$DP" 2>/dev/null; then
+if ! felis_dbg_wait "$SOCK" $!; then
   echo "the daemon is not serving $SOCK; see $LOG"
   exit 1
 fi

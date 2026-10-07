@@ -22,6 +22,7 @@
 #   * The session shell comes from the client's environment, not the
 #     daemon's, so SHELL goes on the client.
 set -u
+. "$(dirname "${BASH_SOURCE[0]}")/../../isolated-daemon/scripts/isolated-daemon.sh"
 
 FELIS_BIN="${FELIS_BIN:-./target/release/felis}"
 FELIS_DAEMON_BIN="${FELIS_DAEMON_BIN:-$(dirname "$FELIS_BIN")/felis-daemon}"
@@ -29,8 +30,9 @@ OUT="${OUT:-/tmp/felis_prof.json.gz}"
 BENCH="${1:-unicode}"
 SECS="${2:-16}"
 
-SOCKDIR="$(mktemp -d "${TMPDIR:-/tmp}/felis-prof.XXXXXX")"
-SOCK="$SOCKDIR/felis_prof_$$.sock"
+felis_dbg_socket felis-prof || exit 1
+SOCKDIR="$FELIS_DBG_DIR"
+SOCK="$FELIS_DBG_SOCK"
 WRAP="$(mktemp)"
 
 CLIENT_LOG="${OUT%.json.gz}.client.log"
@@ -47,25 +49,15 @@ STARTED="$SOCKDIR/bench.started"
 } > "$WRAP"
 chmod +x "$WRAP"
 
-# Match the FULL socket path, never its basename: the user's real daemon
-# also ends in a `.sock`, and a basename match has already SIGTERMed it in
-# the field.
 ours_alive() {
-  for p in $(pgrep -x felis-daemon); do
-    tr '\0' '\n' < "/proc/$p/cmdline" 2>/dev/null | grep -qxF -- "$SOCK" && return 0
-  done
-  return 1
+  [ -n "$(felis_dbg_pids "$SOCK" felis-daemon)" ]
 }
 
 stop_ours() {
-  "$FELIS_BIN" --socket "$SOCK" daemon stop --force >/dev/null 2>&1
-  for p in $(pgrep -x felis-daemon); do
-    tr '\0' '\n' < "/proc/$p/cmdline" 2>/dev/null | grep -qxF -- "$SOCK" && kill "$p"
-  done
+  felis_dbg_stop "$SOCK" "$FELIS_BIN"
 }
 
-# The client goes first: one that outlives its daemon reconnects, and
-# the reconnect autospawns a replacement outside samply on the same socket.
+# A client that outlives the daemon autospawns a replacement outside samply.
 CLIENT=
 stop_client() {
   if [ -n "$CLIENT" ] && kill -0 "$CLIENT" 2>/dev/null; then
@@ -94,15 +86,7 @@ RUST_LOG=warn env -u NOTIFY_SOCKET \
   -- "$FELIS_DAEMON_BIN" serve --socket "$SOCK" >/tmp/samply.log 2>&1 &
 SAMPLY=$!
 
-# A client that dials before the bind would autospawn a second daemon
-# outside samply.
-for _ in $(seq 100); do
-  [ -S "$SOCK" ] && break
-  kill -0 "$SAMPLY" 2>/dev/null || break
-  sleep 0.05
-done
-sleep 0.2
-if [ ! -S "$SOCK" ] || ! ours_alive; then
+if ! felis_dbg_wait "$SOCK" "$SAMPLY" || ! ours_alive; then
   echo "the daemon is not serving $SOCK; check /tmp/samply.log (paranoid<=1 set?)"
   tail -3 /tmp/samply.log
   exit 1

@@ -59,10 +59,10 @@ pre-commit hook. Special shells: `.#msrv` (stable check at the `Cargo.toml` `rus
 
 Run it locally: `cargo build` first, since `cargo run -p felis-client` builds only the client and the client auto-spawns
 the `felis-daemon` binary beside it in `target/debug` (falling back to `PATH`); `felis sessions spawn/send/capture` (see
-the `felis` skill) drives a session headlessly; `FELIS_STARTUP_EXIT_MS=<n>` makes the GUI client exit on its own for
-automated runs. An auto-spawned daemon's stderr goes to `/dev/null` (or the journal when systemd starts it); its log
-lines are teed to `daemon.log` (`docs/reference/cli.md` "Log files"; `RUST_LOG` respected, default
-`info,felis_daemon=debug`).
+the `felis` skill) drives a session headlessly, against a private daemon from the `isolated-daemon` skill whenever the
+run must not touch the user's sessions; `FELIS_STARTUP_EXIT_MS=<n>` makes the GUI client exit on its own for automated
+runs. An auto-spawned daemon's stderr goes to `/dev/null` (or the journal when systemd starts it); its log lines are
+teed to `daemon.log` (`docs/reference/cli.md` "Log files"; `RUST_LOG` respected, default `info,felis_daemon=debug`).
 
 ## 4. Implement and verify
 
