@@ -18,6 +18,7 @@ use tokio::{
 };
 
 mod command;
+mod quiesce;
 #[cfg(unix)]
 mod unix;
 #[cfg(unix)]
@@ -28,6 +29,7 @@ mod windows;
 use windows as platform;
 
 pub use command::{Command, Size, env_bytes, env_from_bytes};
+pub use quiesce::{Parked, Quiescer};
 
 /// Pending-byte ceiling for the reader ⇄ parser handoff: the reader
 /// parks once this many unparsed bytes are buffered. A flood amortizes
@@ -67,9 +69,17 @@ pub struct PtySession {
     writer: PtyWriter,
     master: platform::Master,
     child: platform::Child,
+    quiescer: Quiescer,
 }
 
 impl PtySession {
+    /// The handle that parks this session's threads, taken before
+    /// [`split`](Self::split) consumes the session.
+    #[must_use]
+    pub fn quiescer(&self) -> Quiescer {
+        self.quiescer.clone()
+    }
+
     #[must_use]
     pub fn split(self) -> (PtyReader, PtyWriter, ChildHandle, Resizer) {
         let Self {
@@ -77,6 +87,7 @@ impl PtySession {
             writer,
             master,
             child,
+            quiescer: _,
         } = self;
         (
             reader,
@@ -135,6 +146,13 @@ impl ChildHandle {
         let mut guard = self.child.lock().map_err(poison)?;
         guard.try_wait()
     }
+
+    /// The child's pid, which an in-place upgrade's dump carries.
+    #[cfg(unix)]
+    pub fn process_id(&self) -> io::Result<Option<i32>> {
+        let guard = self.child.lock().map_err(poison)?;
+        Ok(guard.process_id())
+    }
 }
 
 pub struct Resizer {
@@ -153,6 +171,13 @@ impl Resizer {
     #[must_use]
     pub fn foreground_pgrp(&self) -> Option<i32> {
         self.master.foreground_pgrp()
+    }
+
+    /// The PTY master, which an in-place upgrade carries across `execve`.
+    #[cfg(unix)]
+    #[must_use]
+    pub fn master_fd(&self) -> std::os::fd::BorrowedFd<'_> {
+        self.master.as_fd()
     }
 }
 
@@ -482,24 +507,57 @@ pub type ByteSink = Box<dyn FnMut(&[u8]) + Send>;
 #[allow(clippy::needless_pass_by_value)]
 pub fn spawn(command: Command, size: Size, sink: ByteSink) -> Result<PtySession, PtyError> {
     let (master, child) = platform::open_and_spawn(&command, size)?;
-    let (reader, writer) = spawn_io_threads(&master, sink)?;
+    session_over(master, child, sink)
+}
+
+/// Resumes a session whose PTY master and child this process already
+/// holds: an in-place upgrade's successor adopting what `execve`
+/// carried over. `exit_status` is the raw wait status of a child the
+/// predecessor already reaped, so its pid is never signaled or waited
+/// on again.
+#[cfg(unix)]
+pub fn adopt(
+    master: std::os::fd::OwnedFd,
+    pid: i32,
+    exit_status: Option<i32>,
+    sink: ByteSink,
+) -> Result<PtySession, PtyError> {
+    use std::os::unix::process::ExitStatusExt;
+    let master = platform::adopt_master(master)
+        .map_err(|e| PtyError::OpenPty(format!("adopt master: {e}")))?;
+    let child = platform::Child::adopted(pid, exit_status.map(std::process::ExitStatus::from_raw))
+        .map_err(|e| PtyError::Spawn(format!("adopt child: {e}")))?;
+    session_over(master, child, sink)
+}
+
+fn session_over(
+    master: platform::Master,
+    child: platform::Child,
+    sink: ByteSink,
+) -> Result<PtySession, PtyError> {
+    let (reader, writer, quiescer) = spawn_io_threads(&master, sink)?;
     Ok(PtySession {
         reader,
         writer,
         master,
         child,
+        quiescer,
     })
 }
 
 fn spawn_io_threads(
     master: &platform::Master,
     sink: ByteSink,
-) -> Result<(PtyReader, PtyWriter), PtyError> {
+) -> Result<(PtyReader, PtyWriter, Quiescer), PtyError> {
+    let quiesce = Arc::new(
+        quiesce::QuiesceShared::new()
+            .map_err(|e| PtyError::OpenPty(format!("quiesce wake pipe: {e}")))?,
+    );
     let mut sync_reader = master
-        .clone_reader()
+        .clone_reader(&quiesce)
         .map_err(|e| PtyError::OpenPty(format!("clone reader: {e}")))?;
     let sync_writer = master
-        .clone_writer()
+        .clone_writer(&quiesce)
         .map_err(|e| PtyError::OpenPty(format!("clone writer: {e}")))?;
 
     let lifecycle = Arc::new(Mutex::new(LifecycleState {
@@ -529,26 +587,52 @@ fn spawn_io_threads(
         })?;
 
     let reader_lifecycle = Arc::clone(&lifecycle);
+    let reader_sink = Arc::clone(&sink_shared);
+    let reader_quiesce = Arc::clone(&quiesce);
     let reader_handle = thread::Builder::new()
         .name("felis-pty-reader".into())
-        .spawn(move || pump_reads(&mut sync_reader, &reader_lifecycle, &sink_shared))
+        .spawn(move || {
+            pump_reads(
+                &mut sync_reader,
+                &reader_lifecycle,
+                &reader_sink,
+                &reader_quiesce,
+            );
+        })
         .map_err(|source| PtyError::ThreadSpawn {
             thread: "reader",
             source,
         })?;
 
+    let writer = spawn_writer_with(sync_writer, Arc::clone(&quiesce))?;
+    let quiescer = Quiescer {
+        shared: quiesce,
+        sink: sink_shared,
+        writer: Arc::clone(&writer.state),
+    };
     Ok((
         PtyReader {
             lifecycle,
             _reader_thread: reader_handle,
         },
-        spawn_writer(sync_writer)?,
+        writer,
+        quiescer,
     ))
 }
 
 /// The writer half over any blocking sink, so the byte gauge can be
 /// exercised against a sink the test controls rather than a child.
-fn spawn_writer<W: Write + Send + 'static>(mut sync_writer: W) -> Result<PtyWriter, PtyError> {
+#[cfg(test)]
+fn spawn_writer<W: Write + Send + 'static>(sync_writer: W) -> Result<PtyWriter, PtyError> {
+    let quiesce = quiesce::QuiesceShared::new()
+        .map_err(|e| PtyError::OpenPty(format!("quiesce wake pipe: {e}")))?;
+    spawn_writer_with(sync_writer, Arc::new(quiesce))
+}
+
+fn spawn_writer_with<W: Write + Send + 'static>(
+    mut sync_writer: W,
+    quiesce: Arc<quiesce::QuiesceShared>,
+) -> Result<PtyWriter, PtyError> {
     let (write_tx, mut write_rx): (UnboundedSender<WriteItem>, UnboundedReceiver<WriteItem>) =
         mpsc::unbounded_channel();
     // Unbounded in count on purpose: the byte gauge in `WriterState` is
@@ -567,13 +651,55 @@ fn spawn_writer<W: Write + Send + 'static>(mut sync_writer: W) -> Result<PtyWrit
     let writer_thread = thread::Builder::new()
         .name("felis-pty-writer".into())
         .spawn(move || {
-            // One `write_all` per received buffer preserves message
-            // boundaries on the input side (paste bursts, mode-set
-            // sequences).
-            while let Some(item) = write_rx.blocking_recv() {
+            // Items received while parked, the first one possibly
+            // part-written: `(item, bytes of it already written)`.
+            let mut held: std::collections::VecDeque<(WriteItem, usize)> =
+                std::collections::VecDeque::new();
+            loop {
+                let (item, mut done) = match held.pop_front() {
+                    Some(entry) => entry,
+                    None => match write_rx.blocking_recv() {
+                        Some(item) => (item, 0),
+                        None => break,
+                    },
+                };
                 let len = item.buf.len() as u64;
                 let unreserved = item.reservation.is_none();
-                let outcome = sync_writer.write_all(&item.buf);
+                // One item written to completion before the next
+                // preserves message boundaries on the input side (paste
+                // bursts, mode-set sequences); a park may split one.
+                let outcome = loop {
+                    if done == item.buf.len() {
+                        break Some(Ok(()));
+                    }
+                    if quiesce.requested() {
+                        break None;
+                    }
+                    match sync_writer.write(&item.buf[done..]) {
+                        Ok(0) => break Some(Err(io::Error::from(io::ErrorKind::WriteZero))),
+                        Ok(n) => done += n,
+                        Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
+                        Err(err) => break Some(Err(err)),
+                    }
+                };
+                let Some(outcome) = outcome else {
+                    held.push_front((item, done));
+                    quiesce.writer_checkpoint(|| {
+                        while let Ok(next) = write_rx.try_recv() {
+                            held.push_back((next, 0));
+                        }
+                        let unwritten = held
+                            .iter()
+                            .flat_map(|(held_item, from)| held_item.buf[*from..].iter().copied())
+                            .collect();
+                        let total = held
+                            .iter()
+                            .map(|(held_item, _)| held_item.buf.len() as u64)
+                            .sum();
+                        (unwritten, total)
+                    });
+                    continue;
+                };
                 let failed = outcome.is_err();
                 // Released only here: an admission budget that freed at
                 // enqueue would bound nothing.
@@ -635,9 +761,11 @@ fn pump_reads<R: Read>(
     reader: &mut R,
     lifecycle: &Mutex<LifecycleState>,
     sink_shared: &SinkShared,
+    quiesce: &quiesce::QuiesceShared,
 ) {
     let mut buf = vec![0u8; READ_BUFFER_SIZE];
     let outcome = loop {
+        quiesce.reader_checkpoint();
         match reader.read(&mut buf) {
             Ok(0) => break Ok(()),
             Ok(n) => {
@@ -1502,5 +1630,161 @@ mod tests {
         let mut buf = [0u8; 8];
         assert!(reader.read(&mut buf).await.is_err(), "error first");
         assert_eq!(reader.read(&mut buf).await.expect("clean EOF"), 0);
+    }
+
+    #[cfg(unix)]
+    fn cat() -> Command {
+        Command::new("cat")
+    }
+
+    /// A child that reads no input, in raw mode so the tty queues input
+    /// instead of discarding past a canonical line limit.
+    #[cfg(unix)]
+    fn raw_non_reader() -> Command {
+        let mut cmd = Command::new("/bin/sh");
+        cmd.args(["-c", "stty raw -echo; printf ready; exec sleep 1000"]);
+        cmd
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn park_completes_on_an_idle_session_and_resume_keeps_it_working() {
+        let (collected, sink) = collector();
+        let session = spawn(cat(), small_size(), sink).expect("spawn");
+        let quiescer = session.quiescer();
+        let (_reader, mut writer, child, _resizer) = session.split();
+
+        let parked = quiescer
+            .park(Duration::from_secs(2))
+            .expect("park an idle session");
+        assert_eq!(parked, Parked::default(), "an idle session holds no input");
+        quiescer.resume().expect("resume");
+
+        tokio::io::AsyncWriteExt::write_all(&mut writer, b"after-resume\n")
+            .await
+            .expect("write");
+        assert!(
+            sink_until(&collected, "after-resume")
+                .await
+                .contains("after-resume")
+        );
+        child.kill().expect("kill");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn park_hands_back_input_a_non_reading_child_has_not_taken() {
+        let (collected, sink) = collector();
+        let session = spawn(raw_non_reader(), small_size(), sink).expect("spawn");
+        let quiescer = session.quiescer();
+        let (_reader, writer, child, _resizer) = session.split();
+        assert!(sink_until(&collected, "ready").await.contains("ready"));
+
+        let payload: Vec<u8> = (0..64 * 1024).map(|i| b'a' + (i % 26) as u8).collect();
+        assert!(
+            writer
+                .write_owned(payload.clone(), None)
+                .expect("queue")
+                .queued()
+        );
+        // The tty queue fills well short of 64 KiB, leaving the writer
+        // blocked on a child that never reads.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert!(writer.pending_bytes() > 0, "the writer is blocked");
+
+        let parked = quiescer
+            .park(Duration::from_secs(2))
+            .expect("park a blocked writer");
+        assert_ne!(parked.unwritten, Vec::<u8>::new());
+        assert!(
+            parked.unwritten.len() < payload.len(),
+            "the tty took a prefix"
+        );
+        assert!(
+            payload.ends_with(&parked.unwritten),
+            "the unwritten bytes are exactly the payload's untaken tail",
+        );
+
+        let more = b"queued while parked".to_vec();
+        assert!(
+            writer
+                .write_owned(more.clone(), None)
+                .expect("queue")
+                .queued()
+        );
+        let again = quiescer.park(Duration::from_secs(2)).expect("park again");
+        assert_eq!(
+            again.unwritten,
+            [parked.unwritten.as_slice(), more.as_slice()].concat(),
+            "input queued while parked is handed back after what was already held",
+        );
+
+        quiescer.resume().expect("resume");
+        child.kill().expect("kill");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_adopted_session_reaches_the_same_child_through_the_same_master() {
+        let (_collected, sink) = collector();
+        let session = spawn(cat(), small_size(), sink).expect("spawn");
+        let quiescer = session.quiescer();
+        let (_reader, _writer, child, resizer) = session.split();
+        quiescer.park(Duration::from_secs(2)).expect("park");
+
+        let master = resizer
+            .master_fd()
+            .try_clone_to_owned()
+            .expect("dup master");
+        let pid = child.process_id().expect("pid").expect("live child");
+        let (adopted_collected, adopted_sink) = collector();
+        let adopted = adopt(master, pid, None, adopted_sink).expect("adopt");
+        let (_reader, mut writer, adopted_child, _resizer) = adopted.split();
+
+        tokio::io::AsyncWriteExt::write_all(&mut writer, b"through-adoption\n")
+            .await
+            .expect("write");
+        assert!(
+            sink_until(&adopted_collected, "through-adoption")
+                .await
+                .contains("through-adoption")
+        );
+        assert!(
+            adopted_child.kill().expect("kill"),
+            "the adopted child is live"
+        );
+        assert!(
+            wait_for_exit(&adopted_child).await,
+            "the adopted child is reaped by pid"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_adopted_child_already_reaped_is_never_signaled() {
+        let (_collected, sink) = collector();
+        let session = spawn(cat(), small_size(), sink).expect("spawn");
+        let (_reader, _writer, child, resizer) = session.split();
+        let master = resizer
+            .master_fd()
+            .try_clone_to_owned()
+            .expect("dup master");
+
+        // This test process's own pid: a signal sent to it would end the test run.
+        let own_pid = i32::try_from(std::process::id()).expect("pid fits i32");
+        let (_adopted_collected, adopted_sink) = collector();
+        let adopted = adopt(master, own_pid, Some(0), adopted_sink).expect("adopt");
+        let (_reader, _writer, adopted_child, _resizer) = adopted.split();
+
+        assert!(
+            !adopted_child.hangup().expect("hangup"),
+            "nothing is sent to a reaped pid"
+        );
+        assert!(
+            !adopted_child.kill().expect("kill"),
+            "nothing is sent to a reaped pid"
+        );
+        assert!(adopted_child.try_wait().expect("try_wait").is_some());
+        child.kill().expect("kill");
     }
 }

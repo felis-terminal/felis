@@ -4,12 +4,13 @@
 use std::{
     fs::File,
     io::{self, Read},
-    os::fd::{AsRawFd, OwnedFd},
-    os::unix::process::CommandExt,
-    process::Stdio,
+    os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd},
+    os::unix::process::{CommandExt, ExitStatusExt},
+    process::{ExitStatus, Stdio},
+    sync::Arc,
 };
 
-use crate::{Command, PtyError, Size};
+use crate::{Command, PtyError, Size, quiesce::QuiesceShared};
 
 impl From<Size> for rustix::termios::Winsize {
     fn from(size: Size) -> Self {
@@ -35,16 +36,26 @@ impl Master {
     /// The dup shares the master's open file description, so the
     /// `O_NONBLOCK` set here lands on every clone; [`MasterWriter`]
     /// exists to absorb it.
-    pub(crate) fn clone_reader(&self) -> io::Result<MasterReader> {
+    pub(crate) fn clone_reader(&self, quiesce: &Arc<QuiesceShared>) -> io::Result<MasterReader> {
         let fd = self.fd.try_clone()?;
         let flags = rustix::fs::fcntl_getfl(&fd).map_err(io::Error::from)?;
         rustix::fs::fcntl_setfl(&fd, flags | rustix::fs::OFlags::NONBLOCK)
             .map_err(io::Error::from)?;
-        Ok(MasterReader(File::from(fd)))
+        Ok(MasterReader {
+            file: File::from(fd),
+            quiesce: Arc::clone(quiesce),
+        })
     }
 
-    pub(crate) fn clone_writer(&self) -> io::Result<MasterWriter> {
-        Ok(MasterWriter(File::from(self.fd.try_clone()?)))
+    pub(crate) fn clone_writer(&self, quiesce: &Arc<QuiesceShared>) -> io::Result<MasterWriter> {
+        Ok(MasterWriter {
+            file: File::from(self.fd.try_clone()?),
+            quiesce: Arc::clone(quiesce),
+        })
+    }
+
+    pub(crate) fn as_fd(&self) -> BorrowedFd<'_> {
+        self.fd.as_fd()
     }
 
     pub(crate) fn resize(&self, size: Size) -> io::Result<()> {
@@ -80,18 +91,30 @@ const READ_SPIN_WINDOW: std::time::Duration = std::time::Duration::ZERO;
 ///
 /// Why not parse on another thread: lockstep, not parse CPU, owns the
 /// drain (`.agents/skills/perf-trace/references/cost-maps.md`).
-pub(crate) struct MasterReader(File);
+pub(crate) struct MasterReader {
+    file: File,
+    quiesce: Arc<QuiesceShared>,
+}
+
+/// Returned by a blocked read or write that a park request woke: the
+/// thread goes back to its park point instead of waiting on the child.
+fn park_requested() -> io::Error {
+    io::Error::from(io::ErrorKind::Interrupted)
+}
 
 impl Read for MasterReader {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         let mut spin_deadline = None;
         loop {
-            match self.0.read(buf) {
+            match self.file.read(buf) {
                 Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
+                    if self.quiesce.requested() {
+                        return Err(park_requested());
+                    }
                     let now = std::time::Instant::now();
                     let deadline = *spin_deadline.get_or_insert_with(|| now + READ_SPIN_WINDOW);
                     if now >= deadline {
-                        wait_for(&self.0, rustix::event::PollFlags::IN)?;
+                        wait_for(&self.file, rustix::event::PollFlags::IN, &self.quiesce)?;
                         spin_deadline = None;
                     } else {
                         // Keep the retries hot: each read(2) is what
@@ -114,14 +137,20 @@ impl Read for MasterReader {
 /// description ([`Master::clone_reader`]): a full input queue (a large
 /// paste against a stopped child) surfaces as `WouldBlock`, and this
 /// parks in `poll(2)` instead of erroring the writer's `write_all`.
-pub(crate) struct MasterWriter(File);
+pub(crate) struct MasterWriter {
+    file: File,
+    quiesce: Arc<QuiesceShared>,
+}
 
 impl io::Write for MasterWriter {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         loop {
-            match self.0.write(buf) {
+            match self.file.write(buf) {
                 Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
-                    wait_for(&self.0, rustix::event::PollFlags::OUT)?;
+                    if self.quiesce.requested() {
+                        return Err(park_requested());
+                    }
+                    wait_for(&self.file, rustix::event::PollFlags::OUT, &self.quiesce)?;
                 }
                 other => return other,
             }
@@ -129,26 +158,116 @@ impl io::Write for MasterWriter {
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        self.0.flush()
+        self.file.flush()
     }
 }
 
 /// `POLLHUP`/`POLLERR` arrive regardless of `events`; the follow-up
-/// read/write surfaces the actual condition.
-fn wait_for(file: &File, events: rustix::event::PollFlags) -> io::Result<()> {
-    let mut fds = [rustix::event::PollFd::new(file, events)];
+/// read/write surfaces the actual condition. A park request wakes the
+/// wait through the session's wake pipe.
+fn wait_for(
+    file: &File,
+    events: rustix::event::PollFlags,
+    quiesce: &QuiesceShared,
+) -> io::Result<()> {
+    let mut fds = [
+        rustix::event::PollFd::new(file, events),
+        rustix::event::PollFd::from_borrowed_fd(quiesce.wake_fd(), rustix::event::PollFlags::IN),
+    ];
     rustix::event::poll(&mut fds, None).map_err(io::Error::from)?;
     Ok(())
 }
 
-pub(crate) struct Child(std::process::Child);
+/// The self-pipe a park request writes to, so a reader or writer parked
+/// in `poll(2)` on an idle or stopped child returns to its park point.
+pub(crate) struct WakePipe {
+    read: OwnedFd,
+    write: OwnedFd,
+}
+
+impl WakePipe {
+    #[cfg(target_os = "linux")]
+    pub(crate) fn new() -> io::Result<Self> {
+        let (read, write) = rustix::pipe::pipe_with(
+            rustix::pipe::PipeFlags::CLOEXEC | rustix::pipe::PipeFlags::NONBLOCK,
+        )
+        .map_err(io::Error::from)?;
+        Ok(Self { read, write })
+    }
+
+    /// macOS has no `pipe2`, so the flags land by `fcntl`, as the PTY
+    /// master's close-on-exec does in [`open_pair`].
+    #[cfg(not(target_os = "linux"))]
+    pub(crate) fn new() -> io::Result<Self> {
+        let (read, write) = rustix::pipe::pipe().map_err(io::Error::from)?;
+        for end in [&read, &write] {
+            rustix::io::fcntl_setfd(end, rustix::io::FdFlags::CLOEXEC)?;
+            let flags = rustix::fs::fcntl_getfl(end)?;
+            rustix::fs::fcntl_setfl(end, flags | rustix::fs::OFlags::NONBLOCK)?;
+        }
+        Ok(Self { read, write })
+    }
+
+    pub(crate) fn read_end(&self) -> BorrowedFd<'_> {
+        self.read.as_fd()
+    }
+
+    pub(crate) fn signal(&self) -> io::Result<()> {
+        loop {
+            match rustix::io::write(&self.write, &[1]) {
+                // A full pipe is already readable, which is all a waiter needs.
+                Ok(_) | Err(rustix::io::Errno::AGAIN) => return Ok(()),
+                Err(rustix::io::Errno::INTR) => {}
+                Err(err) => return Err(err.into()),
+            }
+        }
+    }
+
+    pub(crate) fn drain(&self) -> io::Result<()> {
+        let mut buf = [0u8; 64];
+        loop {
+            match rustix::io::read(&self.read, &mut buf) {
+                Ok(0) | Err(rustix::io::Errno::AGAIN) => return Ok(()),
+                Ok(_) | Err(rustix::io::Errno::INTR) => {}
+                Err(err) => return Err(err.into()),
+            }
+        }
+    }
+}
+
+pub(crate) enum Child {
+    Spawned(std::process::Child),
+    /// A child this process did not spawn but is the parent of: the
+    /// daemon after an in-place upgrade's `execve`, which keeps the pid
+    /// and so keeps every session child its own.
+    Adopted {
+        pid: rustix::process::Pid,
+        status: Option<ExitStatus>,
+    },
+}
 
 impl Child {
+    pub(crate) fn adopted(pid: i32, status: Option<ExitStatus>) -> io::Result<Self> {
+        let pid = rustix::process::Pid::from_raw(pid)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "pid must be positive"))?;
+        Ok(Self::Adopted { pid, status })
+    }
+
     /// Send `SIGHUP` to the child's process group (the session leader).
     ///
     /// Notifies both the shell and any active foreground job when the
     /// terminal closes. `ESRCH` maps to `Ok(())` if the child already exited.
     pub(crate) fn hangup(&self) -> io::Result<()> {
+        // A reaped pid, and so its process group, may be someone else's by now.
+        if matches!(
+            self,
+            Self::Adopted {
+                status: Some(_),
+                ..
+            }
+        ) {
+            return Ok(());
+        }
         let Some(pid) = self.process_id().and_then(rustix::process::Pid::from_raw) else {
             return Ok(());
         };
@@ -161,19 +280,57 @@ impl Child {
     /// std reports `InvalidInput` once the child has been reaped;
     /// callers treat that as already dead.
     pub(crate) fn kill(&mut self) -> io::Result<()> {
-        match self.0.kill() {
-            Err(err) if err.kind() == io::ErrorKind::InvalidInput => Ok(()),
-            other => other,
+        match self {
+            Self::Spawned(child) => match child.kill() {
+                Err(err) if err.kind() == io::ErrorKind::InvalidInput => Ok(()),
+                other => other,
+            },
+            // A reaped pid may be someone else's by now.
+            Self::Adopted {
+                status: Some(_), ..
+            } => Ok(()),
+            Self::Adopted { pid, status: None } => {
+                match rustix::process::kill_process(*pid, rustix::process::Signal::KILL) {
+                    Err(rustix::io::Errno::SRCH) => Ok(()),
+                    other => other.map_err(io::Error::from),
+                }
+            }
         }
     }
 
-    pub(crate) fn try_wait(&mut self) -> io::Result<Option<std::process::ExitStatus>> {
-        self.0.try_wait()
+    pub(crate) fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
+        match self {
+            Self::Spawned(child) => child.try_wait(),
+            Self::Adopted {
+                status: Some(status),
+                ..
+            } => Ok(Some(*status)),
+            Self::Adopted { pid, status } => {
+                let reaped =
+                    rustix::process::waitpid(Some(*pid), rustix::process::WaitOptions::NOHANG)
+                        .map_err(io::Error::from)?;
+                if let Some((_, wait)) = reaped {
+                    *status = Some(ExitStatus::from_raw(wait.as_raw()));
+                }
+                Ok(*status)
+            }
+        }
     }
 
-    fn process_id(&self) -> Option<i32> {
-        i32::try_from(self.0.id()).ok()
+    pub(crate) fn process_id(&self) -> Option<i32> {
+        match self {
+            Self::Spawned(child) => i32::try_from(child.id()).ok(),
+            Self::Adopted { pid, .. } => Some(pid.as_raw_nonzero().get()),
+        }
     }
+}
+
+/// Wraps a PTY master this process holds but did not open here: one an
+/// in-place upgrade's `execve` carried over. Close-on-exec is set again
+/// on adoption.
+pub(crate) fn adopt_master(fd: OwnedFd) -> io::Result<Master> {
+    rustix::io::fcntl_setfd(&fd, rustix::io::FdFlags::CLOEXEC).map_err(io::Error::from)?;
+    Ok(Master { fd })
 }
 
 /// Allocate the PTY pair `(master, slave)` with winsize and CLOEXEC applied.
@@ -265,13 +422,25 @@ pub(crate) fn open_and_spawn(command: &Command, size: Size) -> Result<(Master, C
     let child = cmd.spawn().map_err(|e| PtyError::Spawn(e.to_string()))?;
     drop(cmd);
 
-    Ok((Master { fd: master }, Child(child)))
+    Ok((Master { fd: master }, Child::Spawned(child)))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use rustix::io::{FdFlags, fcntl_getfd};
+
+    /// The platform layer refuses on its own, not only behind
+    /// `ChildHandle`'s liveness check: this test process's pid stands in
+    /// for a reused one, so a signal sent here would end the run.
+    #[test]
+    fn a_reaped_adopted_child_is_neither_hung_up_nor_killed() {
+        let own_pid = i32::try_from(std::process::id()).unwrap();
+        let mut child = Child::adopted(own_pid, Some(ExitStatus::from_raw(0))).unwrap();
+        child.hangup().unwrap();
+        child.kill().unwrap();
+        assert!(child.try_wait().unwrap().is_some());
+    }
 
     /// Both ends carry `FD_CLOEXEC` (REQ-912;
     /// `docs/reference/security-audits.md`
