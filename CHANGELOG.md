@@ -10,6 +10,14 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-10-07
+
+Mostly fixes. Wide characters, emoji sequences and keycaps keep their cells through edits, resizes and font fallback;
+text-sizing (OSC 66) characters stay whole at the screen edges and under line and column edits; Kitty graphics place the
+cursor beside an image and keep a naturally sized image at its pixel size across font zoom; and variation sequences such
+as `葛󠄀` draw their variant glyph. Also new: zsh shell integration, and `felis <name>` running external `felis-<name>`
+commands in place of `felis frontend <name>`.
+
 ### Added
 
 - `share/felis/shell-integration/felis.zsh`: sourced from `.zshrc`, it makes zsh emit `OSC 133` prompt marks with exit
@@ -42,7 +50,7 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
   Resizing no longer shifts a line right after an emoji that could not widen, and DECSED, SR and DECBI/DECFI no longer
   reveal text a scroll had already removed.
 - A glyph that a fallback face draws wider than its cells (an East Asian Ambiguous `※` from a CJK font, or a
-  text-presentation emoji such as `☺` from the color-emoji font) is shrunk to fit and centred in its cell, instead of
+  text-presentation emoji such as `☺` from the color-emoji font) is shrunk to fit and centered in its cell, instead of
   overlapping the next character.
 - An emoji sequence or a character with a mark that the font draws wider than its cells is shrunk to fit them in the
   same way: a regional-indicator pair with no flag (`🇦🇦`), a ZWJ sequence the font does not join, a skin tone on a base
@@ -104,6 +112,7 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 
 Initial release.
 
-[unreleased]: https://github.com/felis-terminal/felis/compare/v0.1.1...HEAD
+[unreleased]: https://github.com/felis-terminal/felis/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/felis-terminal/felis/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/felis-terminal/felis/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/felis-terminal/felis/releases/tag/v0.1.0
