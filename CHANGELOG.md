@@ -26,9 +26,9 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 
 ### Fixed
 
-- An ideographic or standardized variation sequence (`葛󠄀`, U+845B U+E0100) draws the variant glyph the chosen font
-  defines for it instead of the base character's default glyph. The font is still chosen by the base character, so a
-  font without the variant keeps its default glyph.
+- A variation sequence such as `葛󠄀` (U+845B U+E0100) draws its variant glyph when the font that draws the base
+  character defines one (Noto Sans CJK JP and HackGen do; Moralerspace does not). felis does not switch to another font
+  for the sequence, so with a font that lacks the variant the default glyph stays.
 - Resizing the window while a shell waits at an `OSC 133` prompt no longer leaves a stale copy of the prompt's first
   line on every resize (zsh or fish with a prompt line that fills the width). felis blanks the prompt and lets the shell
   repaint it, as kitty and Ghostty do; a shell that does not repaint opts out with `OSC 133;A;redraw=0`.

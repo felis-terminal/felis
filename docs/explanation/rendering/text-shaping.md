@@ -131,21 +131,17 @@ signal and stays mono.
 Once the face is chosen, the cluster is shaped without the variation selectors that face does not map. swash 0.2.10
 never looks a selector up in the cmap's variation-sequence subtable (format 14), and it drops VS15/VS16 only after an
 emoji base; after a base such as `#` the VS16 is shaped as a `.notdef` with a full advance, which splits the keycap
-ligature into three glyphs. A selector the face maps directly is kept. The variant a selector names is applied after
-shaping instead: when the selector directly follows the base and the face's format 14 subtable names a glyph for the
-pair, that glyph replaces the base's default glyph, so `葛󠄀` (U+845B U+E0100) draws Noto Sans CJK JP's variant form. A
-cluster that also carries a combining mark keeps the default glyph, because the mark was positioned against it. Revisit
-if swash starts mapping variation sequences.
+ligature into three glyphs. A selector the face maps directly is kept. Dropping a selector does not lose the variant it
+names: felis looks the pair up in the face's format 14 subtable itself and draws that glyph in place of the base's
+default one. A cluster that also carries a combining mark keeps the default glyph, because swash positioned the mark
+against it. Revisit if swash starts mapping variation sequences.
 
-The face is chosen by the base alone; a variation sequence never moves a cluster to another face. Rejected: **prefer a
-fallback face whose format 14 subtable has the sequence.** A primary that covers `葛` without a format 14 subtable
-(Moralerspace, for one) then draws the default glyph, and switching faces would draw the variant, but at the cost of a
-second face's design and metrics inside one line of text and a subtable lookup in every face for every selector cluster.
-No peer chooses faces by sequence. WezTerm (`wezterm-font/src/shaper/harfbuzz.rs`) and foot (fcft `font_for_grapheme`)
-hand the selector to HarfBuzz on the face they picked. kitty (`has_cell_text` in
-[`fonts.c`](https://github.com/kovidgoyal/kitty/blob/master/kitty/fonts.c)) skips U+FE00..U+FE0F but checks an
-ideographic selector against each face's ordinary cmap, Ghostty (`src/font/shaper/run.zig`) does the same for every
-selector except VS15 and VS16, and Alacritty draws the base alone. Revisit if a peer starts choosing faces by variation
+So whether `葛󠄀` (U+845B U+E0100) draws its variant depends on the face that covers `葛`: a variation sequence never
+moves a cluster to another face. A primary that covers `葛` without variant data (Moralerspace, for one) draws the
+default glyph even when a CJK fallback has the variant. Rejected: **prefer a fallback face that defines the sequence.**
+It would draw that one character in a second face's design and metrics, inside text the primary draws. None of WezTerm,
+foot, kitty, Ghostty, or Alacritty consults a face's variation-sequence data when choosing it; WezTerm and foot let
+HarfBuzz apply the sequence on the face picked for the base. Revisit if a peer starts choosing faces by variation
 sequence.
 
 The stack is queried per codepoint: `resolve(c)` returns the first font whose charmap covers `c` (the first color one
