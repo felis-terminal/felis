@@ -80,7 +80,7 @@ unicode-segmentation = "1.13"
 simdutf8 = "0.1"
 swash = "0.2"
 # The version swash 0.2 pulls in, so no duplicate.
-skrifa = { version = "0.44", default-features = false, features = ["std"] }
+skrifa = { version = "0.48", default-features = false, features = ["std"] }
 zeno = "0.3"
 fontdb = { version = "0.24", default-features = false, features = [
   "fontconfig",
