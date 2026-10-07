@@ -15,7 +15,7 @@ use std::{
 use bytemuck::cast_slice;
 use felis_grid::{
     ScreenBuffer,
-    images::{ClientPlacement, VirtualPlacement},
+    images::{ClientPlacement, VirtualPlacement, clip_source},
 };
 use felis_protocol::{
     ImageId,
@@ -1885,22 +1885,12 @@ fn quad_for_placement(
     ch: f32,
     viewport: u32,
 ) -> Option<ImgInstance> {
-    if slot.width == 0 || slot.height == 0 {
-        return None;
-    }
-    let (sx, sy, sw, sh) = match p.source {
-        Some(r) if r.width > 0 && r.height > 0 => (r.x, r.y, r.width, r.height),
-        _ => (0u32, 0u32, slot.width, slot.height),
-    };
-    // Clip so a producer that mis-specifies x+w or y+h does not draw
-    // past the slot.
-    let sx = sx.min(slot.width);
-    let sy = sy.min(slot.height);
-    let sw = sw.min(slot.width.saturating_sub(sx));
-    let sh = sh.min(slot.height.saturating_sub(sy));
-    if sw == 0 || sh == 0 {
-        return None;
-    }
+    let SourceRect {
+        x: sx,
+        y: sy,
+        width: sw,
+        height: sh,
+    } = clip_source(slot.width, slot.height, p.source)?;
     let cols = if p.cols == 0 {
         ((sw + (cw.max(1.0) as u32).saturating_sub(1)) / cw.max(1.0) as u32).max(1) as u16
     } else {

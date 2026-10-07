@@ -2488,8 +2488,12 @@ impl SessionTask {
     fn apply_size(&mut self, size: PtySize) {
         // Floor division matches how producers derive cell size from
         // TIOCGWINSZ.
-        self.session.cell_pixel_w = size.pixel_width.checked_div(size.cols).unwrap_or(0);
-        self.session.cell_pixel_h = size.pixel_height.checked_div(size.rows).unwrap_or(0);
+        let cell_px = (
+            size.pixel_width.checked_div(size.cols).unwrap_or(0),
+            size.pixel_height.checked_div(size.rows).unwrap_or(0),
+        );
+        let cell_px_changed = cell_px != (self.session.cell_pixel_w, self.session.cell_pixel_h);
+        (self.session.cell_pixel_w, self.session.cell_pixel_h) = cell_px;
         {
             // `refresh_meta` samples the grid, which holds no pixels.
             let mut meta = self
@@ -2520,6 +2524,17 @@ impl SessionTask {
         // marked every row dirty, which is the replay that replaces them.
         for sub in &mut self.subs {
             sub.stream.retire_scrolls(size.rows);
+        }
+        // Before the remap, whose full re-statement then carries the
+        // new extents.
+        if cell_px_changed {
+            crate::graphics::rescale_placements(
+                &self.session.images,
+                &mut self.session.placements,
+                self.session.saved_primary_placements.as_mut(),
+                &mut self.session.image_events,
+                cell_px,
+            );
         }
         // Not `PlacementsShifted`: each anchor moves by its own delta
         // under a reflow, so survivors are re-stated in full (REQ-604).
@@ -2559,6 +2574,9 @@ impl SessionTask {
                 },
             })]
         });
+        // Otherwise only a PTY drive or a grid cycle ships the rescale's
+        // and the remap's re-statements, and an idle shell has neither.
+        self.push_image_events();
         // After the announcement, so the replay follows the dimensions
         // it is composed at. Every subscriber, not just the requester:
         // an idle mirror's pull is armed and nothing else would answer
@@ -5088,6 +5106,167 @@ mod tests {
         task.drain_effects().expect("effects drain");
         assert!(task.session.saved_primary_placements.is_none());
         assert!(task.session.placements.is_empty());
+    }
+
+    /// The task's grid size, at `cell_px` per cell.
+    fn sized_cells(task: &SessionTask, cell_px: (u16, u16)) -> PtySize {
+        let (rows, cols) = {
+            let core = task.session.lock_core();
+            (core.grid.rows(), core.grid.cols())
+        };
+        PtySize {
+            rows,
+            cols,
+            pixel_width: cols * cell_px.0,
+            pixel_height: rows * cell_px.1,
+        }
+    }
+
+    /// A 30×40 px RGB image, placed with `extra` keys.
+    fn place_30x40(task: &SessionTask, id: u32, extra: &str) {
+        let payload = "AAAA".repeat(30 * 40);
+        let apc = format!("\x1b_Ga=T,f=24,s=30,v=40,i={id},q=2{extra};{payload}\x1b\\");
+        write_to_grid(task, apc.as_bytes());
+    }
+
+    fn placement_extent(placements: &felis_grid::images::Placements, id: u32) -> (u16, u16) {
+        let p = placements
+            .for_image(felis_protocol::ImageId(id))
+            .next()
+            .expect("placement recorded");
+        (p.cols, p.rows)
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_cell_size_change_re_resolves_a_natural_extent_and_ships_it_while_idle() {
+        let mut task = SessionTask::for_tests(session_with("read _x"));
+        let (_sub, mut rx) = attach_sub(&mut task, false);
+        task.apply_size(sized_cells(&task, (10, 20)));
+        place_30x40(&task, 1, "");
+        place_30x40(&task, 2, ",c=5,r=5");
+        task.drain_effects().expect("effects drain");
+        assert_eq!(placement_extent(&task.session.placements, 1), (3, 2));
+        drain_events(&mut rx);
+
+        task.apply_size(sized_cells(&task, (8, 16)));
+        assert_eq!(placement_extent(&task.session.placements, 1), (4, 3));
+        assert_eq!(
+            placement_extent(&task.session.placements, 2),
+            (5, 5),
+            "an explicit c=/r= is not re-resolved",
+        );
+        assert!(
+            drain_events(&mut rx).iter().any(|ev| matches!(
+                ev,
+                OutEvent::Image(ImageMsg::Placement {
+                    image_id: felis_protocol::ImageId(1),
+                    cols: 4,
+                    rows: 3,
+                    ..
+                })
+            )),
+            "the resize itself ships the new extent, with no PTY output to carry it",
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_resize_without_pixel_dimensions_keeps_a_natural_extent() {
+        let mut task = SessionTask::for_tests(session_with("read _x"));
+        task.apply_size(sized_cells(&task, (10, 20)));
+        place_30x40(&task, 1, "");
+        task.drain_effects().expect("effects drain");
+
+        task.apply_size(sized_cells(&task, (0, 0)));
+        assert_eq!(
+            placement_extent(&task.session.placements, 1),
+            (3, 2),
+            "the 1 px rule would grow the image over text printed past it",
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_re_put_with_an_explicit_size_is_not_re_resolved() {
+        let mut task = SessionTask::for_tests(session_with("read _x"));
+        task.apply_size(sized_cells(&task, (10, 20)));
+        place_30x40(&task, 1, "");
+        write_to_grid(&task, b"\x1b_Ga=p,i=1,c=5,r=5,q=2\x1b\\");
+        task.drain_effects().expect("effects drain");
+        assert_eq!(placement_extent(&task.session.placements, 1), (5, 5));
+
+        task.apply_size(sized_cells(&task, (8, 16)));
+        assert_eq!(placement_extent(&task.session.placements, 1), (5, 5));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_cell_width_reported_late_re_resolves_only_the_width() {
+        let mut task = SessionTask::for_tests(session_with("read _x"));
+        let (_sub, mut rx) = attach_sub(&mut task, false);
+        task.apply_size(sized_cells(&task, (0, 20)));
+        place_30x40(&task, 1, ",r=4");
+        task.drain_effects().expect("effects drain");
+        assert_eq!(placement_extent(&task.session.placements, 1), (30, 4));
+        drain_events(&mut rx);
+
+        task.apply_size(sized_cells(&task, (8, 20)));
+        assert_eq!(placement_extent(&task.session.placements, 1), (4, 4));
+        assert!(
+            drain_events(&mut rx).iter().any(|ev| matches!(
+                ev,
+                OutEvent::Image(ImageMsg::Placement {
+                    image_id: felis_protocol::ImageId(1),
+                    cols: 4,
+                    rows: 4,
+                    ..
+                })
+            )),
+            "the new width is shipped",
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_first_cell_size_shrinks_an_extent_placed_without_one() {
+        let mut task = SessionTask::for_tests(session_with("read _x"));
+        place_30x40(&task, 1, "");
+        task.drain_effects().expect("effects drain");
+        assert_eq!(placement_extent(&task.session.placements, 1), (30, 40));
+
+        task.apply_size(sized_cells(&task, (10, 20)));
+        assert_eq!(placement_extent(&task.session.placements, 1), (3, 2));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_saved_primary_screen_follows_a_cell_size_change_on_the_alternate_one() {
+        let mut task = SessionTask::for_tests(session_with("read _x"));
+        let (_sub, mut rx) = attach_sub(&mut task, false);
+        task.apply_size(sized_cells(&task, (10, 20)));
+        place_30x40(&task, 1, "");
+        write_to_grid(&task, b"\x1b[?1049h");
+        task.drain_effects().expect("effects drain");
+
+        task.apply_size(sized_cells(&task, (8, 16)));
+        let saved = task
+            .session
+            .saved_primary_placements
+            .as_ref()
+            .expect("primary placements stashed");
+        assert_eq!(placement_extent(saved, 1), (4, 3));
+
+        drain_events(&mut rx);
+        write_to_grid(&task, b"\x1b[?1049l");
+        task.drain_and_fan().expect("effects drain");
+        task.ship_all();
+        assert!(
+            drain_events(&mut rx).iter().any(|ev| matches!(
+                ev,
+                OutEvent::Image(ImageMsg::Placement {
+                    image_id: felis_protocol::ImageId(1),
+                    cols: 4,
+                    rows: 3,
+                    ..
+                })
+            )),
+            "leaving the alternate screen re-states the rescaled extent",
+        );
     }
 
     /// A scroll between the fan-out and the composition leaves the
