@@ -65,12 +65,10 @@ type.
 
 ## Recording design decisions & editing docs
 
-There is no separate decision-record layer: a design decision is recorded inline in the owning explanation doc
-(rationale, rejected alternatives, "Revisit if …"), with upstream sources cited; the reference twin states only the
-resulting facts. Most decisions earn no record: the gate is doc-cascade's "Default to no record", and a why that fails
-it lives in the commit body only. History belongs to `git log` (plus a `CHANGELOG.md` entry when the change is
-user-affecting: CLI, config, keybindings, wire, defaults), never to the docs. For lint/toolchain/dev-env decisions the
-record is the Nix/Cargo config itself (`flake.nix`, `dev/`, `Cargo.toml`, `clippy.toml`) and its comments.
+A design decision is recorded inline in the owning explanation doc, and most decisions earn no record at all: a why that
+fails doc-cascade's "Default to no record" gate lives in the commit body. History belongs to `git log` (plus a
+`CHANGELOG.md` entry for a user-affecting change), never to the docs. For lint/toolchain/dev-env decisions the record is
+the Nix/Cargo config itself (`flake.nix`, `dev/`, `Cargo.toml`, `clippy.toml`) and its comments.
 
 A change to one doc usually cascades into several across quadrants and the non-doc mirrors. The full procedure (quadrant
 choice, the twin rule, decision-recording requirements, and the grep sweep to run before declaring done) is the
@@ -85,16 +83,14 @@ choice, the twin rule, decision-recording requirements, and the grep sweep to ru
 - **Don't widen scope to please an unstated user.** Principle 1: add only what earns its place. We want users who
   already know they don't want feature X, not users who might want feature X some day.
 - **Don't introduce heuristics on shell content** (URL detection, content-type sniffing, smart quoting). Principle 4.
-- **Don't force-push `main`.** Issue and feature branches may be rebased, squashed, and pushed with `--force-with-lease`
-  freely.
 
 ## Workflow expectations
 
 `CONTRIBUTING.md` "Workflow" is the contract. The rules an agent must hold without opening it:
 
-- `main` is protected; direct pushes are disabled. All changes go through feature branches and pull requests.
+- `main` is protected; direct pushes (force-pushes included) are disabled. All changes go through feature branches and
+  pull requests; a feature branch may be rebased, squashed, and pushed with `--force-with-lease` freely.
 - The repo uses **Forgejo Actions** for CI, not GitHub Actions. Be careful when touching workflow files.
-- Before claiming a doc change "consistent," grep for the changed term across `docs/`.
 - Agent worktrees go under `.claude/worktrees/` inside the repo (it is git-excluded); a worktree outside the repo makes
   every cargo/git call prompt for permission.
 
