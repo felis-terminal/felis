@@ -178,6 +178,18 @@ fn wait_for(
     Ok(())
 }
 
+/// Held exclusively across every child spawn, and shared across each
+/// descriptor's creation where close-on-exec cannot be set atomically:
+/// a spawn in that window would leak the descriptor into a shell.
+static FORK_GUARD: std::sync::RwLock<()> = std::sync::RwLock::new(());
+
+#[cfg_attr(target_os = "linux", allow(dead_code))]
+fn creating_descriptors() -> std::sync::RwLockReadGuard<'static, ()> {
+    FORK_GUARD
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 /// The self-pipe a park request writes to, so a reader or writer parked
 /// in `poll(2)` on an idle or stopped child returns to its park point.
 pub(crate) struct WakePipe {
@@ -199,6 +211,7 @@ impl WakePipe {
     /// master's close-on-exec does in [`open_pair`].
     #[cfg(not(target_os = "linux"))]
     pub(crate) fn new() -> io::Result<Self> {
+        let _creating = creating_descriptors();
         let (read, write) = rustix::pipe::pipe().map_err(io::Error::from)?;
         for end in [&read, &write] {
             rustix::io::fcntl_setfd(end, rustix::io::FdFlags::CLOEXEC)?;
@@ -352,8 +365,14 @@ fn open_pair(size: Size) -> Result<(OwnedFd, OwnedFd), PtyError> {
 
     let err =
         |what: &'static str| move |e: rustix::io::Errno| PtyError::OpenPty(format!("{what}: {e}"));
-    // No CLOEXEC at openpt: macOS `posix_openpt` rejects flags beyond
-    // RDWR|NOCTTY, so the flag lands via fcntl below instead.
+    #[cfg(target_os = "linux")]
+    let master = openpt(OpenptFlags::RDWR | OpenptFlags::NOCTTY | OpenptFlags::CLOEXEC)
+        .map_err(err("openpt"))?;
+    // macOS `posix_openpt` rejects flags beyond RDWR|NOCTTY, so the flag
+    // lands by fcntl, under the fork guard until it has.
+    #[cfg(not(target_os = "linux"))]
+    let creating = creating_descriptors();
+    #[cfg(not(target_os = "linux"))]
     let master = openpt(OpenptFlags::RDWR | OpenptFlags::NOCTTY).map_err(err("openpt"))?;
     grantpt(&master).map_err(err("grantpt"))?;
     unlockpt(&master).map_err(err("unlockpt"))?;
@@ -370,6 +389,8 @@ fn open_pair(size: Size) -> Result<(OwnedFd, OwnedFd), PtyError> {
     // audit (standing)"). The slave still reaches this child because
     // `Stdio` dup2s it onto fds 0-2, which clears the flag on the copies.
     rustix::io::fcntl_setfd(&master, rustix::io::FdFlags::CLOEXEC).map_err(err("set cloexec"))?;
+    #[cfg(not(target_os = "linux"))]
+    drop(creating);
     rustix::termios::tcsetwinsize(&slave, size.into()).map_err(err("set winsize"))?;
     Ok((master, slave))
 }
@@ -419,7 +440,11 @@ pub(crate) fn open_and_spawn(command: &Command, size: Size) -> Result<(Master, C
         });
     }
 
+    let spawning = FORK_GUARD
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let child = cmd.spawn().map_err(|e| PtyError::Spawn(e.to_string()))?;
+    drop(spawning);
     drop(cmd);
 
     Ok((Master { fd: master }, Child::Spawned(child)))
@@ -429,6 +454,44 @@ pub(crate) fn open_and_spawn(command: &Command, size: Size) -> Result<(Master, C
 mod tests {
     use super::*;
     use rustix::io::{FdFlags, fcntl_getfd};
+
+    fn closes_on_exec(fd: BorrowedFd<'_>) -> bool {
+        fcntl_getfd(fd).unwrap().contains(FdFlags::CLOEXEC)
+    }
+
+    #[test]
+    fn the_master_and_the_wake_pipe_never_reach_a_spawned_child() {
+        let (master, slave) = open_pair(Size {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .unwrap();
+        assert!(closes_on_exec(master.as_fd()), "master");
+        assert!(closes_on_exec(slave.as_fd()), "slave");
+        let wake = WakePipe::new().unwrap();
+        assert!(closes_on_exec(wake.read.as_fd()), "wake read end");
+        assert!(closes_on_exec(wake.write.as_fd()), "wake write end");
+    }
+
+    /// A spawn waits out a descriptor still being created, and a creation
+    /// waits out a spawn, so neither sees the other half done.
+    #[test]
+    fn a_spawn_excludes_descriptor_creation() {
+        let creating = creating_descriptors();
+        assert!(
+            FORK_GUARD.try_write().is_err(),
+            "a spawn waits for the creation"
+        );
+        drop(creating);
+        let spawning = FORK_GUARD.write().unwrap();
+        assert!(
+            FORK_GUARD.try_read().is_err(),
+            "a creation waits for the spawn"
+        );
+        drop(spawning);
+    }
 
     /// The platform layer refuses on its own, not only behind
     /// `ChildHandle`'s liveness check: this test process's pid stands in
