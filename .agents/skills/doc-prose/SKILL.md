@@ -1,14 +1,12 @@
 ---
 name: doc-prose
 description: >-
-  Prose norms for writing or revising any felis documentation page: paragraph-level argument structure, rigor rules (no
-  unearned hedging or unearned certainty), reader-load management, rhetoric restraint, and the filler judgments `just
-  prose-check` cannot make. Use whenever drafting, rewriting, or reviewing sentences under docs/ (doc-cascade owns the
-  structural checklist: quadrant, reference/explanation separation, sweep, and the decision-record gate; this skill owns
-  the sentences). Also owns the code-comment norms (§9): load it when writing or reviewing Rust comments and doc
-  comments. Default to no comment; only why-nots with a non-obvious failure and invariants the code cannot show survive,
-  at most five lines, never history or what the code already shows. Also use when asked to "polish", "tighten", or "make
-  this read less like an LLM wrote it".
+  Prose norms for writing or revising any felis documentation page and for writing or reviewing Rust comments and doc
+  comments: paragraph-level argument structure, rigor, reader load, rhetoric restraint, the filler judgments `just
+  prose-check` cannot make, and when a code comment earns its place. Use whenever drafting, rewriting, or reviewing
+  sentences under docs/ or comments in code, or when asked to "polish", "tighten", or "make this read less like an LLM
+  wrote it". doc-cascade owns the structural checklist (quadrant, reference/explanation split, sweep, decision-record
+  gate); this skill owns the sentences.
 allowed-tools: Read Grep Edit Write
 ---
 
