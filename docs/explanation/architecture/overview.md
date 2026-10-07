@@ -121,7 +121,8 @@ command would start ("Where an auto-spawned daemon lands" below); the running da
 replaced, so it cannot name its successor. Over `--host` that path belongs to the wrong machine, so a remote upgrade
 runs the remote host's own `felis` through `ssh`. Nothing starts an upgrade implicitly: a newer client connecting to an
 older daemon is ordinary minor skew, and quiescing every session on a connect is not a side effect a client earns.
-`felis doctor` reports a running daemon older than the installed one, and the user decides when to upgrade.
+`felis doctor` reports a running daemon built from other than the installed binary, and the user decides when to
+upgrade.
 
 Connected clients see one transport loss. The listen socket stays open across the exec, so a re-dial during the gap
 waits in the kernel's accept queue instead of finding a cold socket and spawning a rival daemon, and the successor

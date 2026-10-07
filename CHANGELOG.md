@@ -20,6 +20,8 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 - **Wire**: protocol minor 1 adds `Ops::Upgrade` and `Ops::UpgradeReply`, with the closed refusal enum `UpgradeRefusal`.
   A client refuses to send `Upgrade` to a minor-0 daemon, so `felis daemon upgrade` against an older daemon exits `2`
   with `unsupported`.
+- **CLI**: `felis doctor` notes on the `daemon` row when the running daemon is a build other than the installed
+  `felis-daemon`, naming the installed one.
 
 ## [0.1.4] - 2026-10-09
 

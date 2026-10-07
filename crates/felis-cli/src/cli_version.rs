@@ -121,7 +121,7 @@ fn client_row(client_program: impl FnOnce() -> OsString) -> Row {
 
 /// clap prefixes the canonical line with the binary's own name; the
 /// rest is exactly what [`BuildIdentity`]'s `FromStr` accepts.
-fn identity_from_version_line(text: &str) -> Option<BuildIdentity> {
+pub(crate) fn identity_from_version_line(text: &str) -> Option<BuildIdentity> {
     let line = text.lines().next()?;
     let (_name, identity) = line.trim().split_once(' ')?;
     identity.parse().ok()

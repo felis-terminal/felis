@@ -85,7 +85,17 @@ pub(crate) fn run(
         .as_ref()
         .filter(|(source, _)| *source == SocketSource::Default)
         .map(|(_, path)| path.as_path());
-    let (mut daemon, primary) = runtime.block_on(daemon_check(&target.target, bounded));
+    let mut running = None;
+    let (mut daemon, primary) =
+        runtime.block_on(daemon_check_reading(&target.target, bounded, &mut running));
+    // The installed binary is this machine's, so only a local daemon is
+    // compared with it.
+    if local.is_some()
+        && let Some(running) = &running
+        && let Some(note) = installed_skew(running, installed_daemon_identity().as_ref())
+    {
+        daemon.detail = format!("{}; {note}", daemon.detail);
+    }
     let endpoints = local
         .as_ref()
         .map_or_else(EndpointReport::default, |(source, path)| {
@@ -123,6 +133,29 @@ pub(crate) fn run(
         print_checks(&checks);
     }
     i32::from(failed > 0)
+}
+
+fn installed_daemon_identity() -> Option<BuildIdentity> {
+    let out = Command::new(felis_client_core::installed_daemon()?)
+        .arg("--version")
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    crate::cli_version::identity_from_version_line(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// A running daemon built other than the installed `felis-daemon` stays
+/// so until an upgrade replaces it
+/// (`docs/explanation/architecture/overview.md` "In-place upgrade").
+fn installed_skew(running: &BuildIdentity, installed: Option<&BuildIdentity>) -> Option<String> {
+    let installed = installed.filter(|installed| *installed != running)?;
+    Some(format!(
+        "the installed felis-daemon is {}: `felis daemon upgrade` switches to it and keeps every \
+         session",
+        installed.human()
+    ))
 }
 
 fn print_checks(checks: &[Check]) {
@@ -186,7 +219,18 @@ impl Primary {
 /// The read-side dial: `doctor` must never start the daemon it is
 /// reporting on. The outcome travels beside the row, because the
 /// sibling row's wording turns on what this dial could establish.
+#[cfg(all(test, unix))]
 async fn daemon_check(target: &Reconnector, bounded: Option<&Path>) -> (Check, Primary) {
+    daemon_check_reading(target, bounded, &mut None).await
+}
+
+/// [`daemon_check`], also handing out the build a daemon that answered
+/// reported.
+async fn daemon_check_reading(
+    target: &Reconnector,
+    bounded: Option<&Path>,
+    running: &mut Option<BuildIdentity>,
+) -> (Check, Primary) {
     let dialed = match bounded {
         Some(resolved) => match dial_bounded(
             target.carrier.clone(),
@@ -220,25 +264,28 @@ async fn daemon_check(target: &Reconnector, bounded: Option<&Path>) -> (Check, P
         None => crate::conn::dial(target, REMOTE_SPAWN).await,
     };
     match dialed {
-        Ok(conn) => (
-            Check::new(
-                "daemon",
-                Status::Ok,
-                // The *negotiated* minor, said so: labeling min(this build,
-                // the daemon's) as "wire" would let a reader diagnosing a
-                // skew read this build's own ceiling as the daemon's.
-                format!(
-                    "running, build {}, negotiated wire {}.{} (`felis daemon status` reports the \
+        Ok(conn) => {
+            running.clone_from(&conn.daemon_identity);
+            (
+                Check::new(
+                    "daemon",
+                    Status::Ok,
+                    // The *negotiated* minor, said so: labeling min(this build,
+                    // the daemon's) as "wire" would let a reader diagnosing a
+                    // skew read this build's own ceiling as the daemon's.
+                    format!(
+                        "running, build {}, negotiated wire {}.{} (`felis daemon status` reports the \
                      daemon's own)",
-                    conn.daemon_identity
-                        .as_ref()
-                        .map_or_else(|| "unreported".to_owned(), BuildIdentity::human),
-                    felis_protocol::preface::PROTOCOL_MAJOR,
-                    conn.effective_minor,
+                        conn.daemon_identity
+                            .as_ref()
+                            .map_or_else(|| "unreported".to_owned(), BuildIdentity::human),
+                        felis_protocol::preface::PROTOCOL_MAJOR,
+                        conn.effective_minor,
+                    ),
                 ),
-            ),
-            Primary::Live,
-        ),
+                Primary::Live,
+            )
+        }
         // A major-skewed daemon *did* answer; folding it into "not
         // running" would hide the one condition no retry can fix.
         Err(ConnectError::MajorMismatch {
@@ -788,6 +835,28 @@ fn private_dir() -> tempfile::TempDir {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn identity(version: &str, revision: char) -> BuildIdentity {
+        BuildIdentity::from_build_env(version, &revision.to_string().repeat(40))
+    }
+
+    #[test]
+    fn a_daemon_on_the_installed_build_draws_no_note() {
+        let running = identity("0.2.0", 'a');
+        assert_eq!(installed_skew(&running, Some(&running.clone())), None);
+        assert_eq!(
+            installed_skew(&running, None),
+            None,
+            "no installed binary to compare"
+        );
+    }
+
+    #[test]
+    fn a_daemon_on_another_build_names_the_installed_one() {
+        let note =
+            installed_skew(&identity("0.1.2", 'a'), Some(&identity("0.2.0", 'b'))).expect("a note");
+        assert!(note.contains("0.2.0 (bbbbbbbbbbbb)"), "{note}");
+    }
 
     /// The status tokens are the machine contract.
     #[test]

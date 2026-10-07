@@ -503,6 +503,10 @@ phase it caught. `--socket`, a `$FELIS_SOCKET` stamp, `--host`, and Windows targ
 single "not running" rendering. On every target, a daemon that answers with a preface status this build does not know,
 or with a refusal of any reason, reports "running, but …".
 
+On the local Unix carrier, a daemon that answers with a build other than the installed `felis-daemon` (the one
+`felis daemon upgrade` would switch to) keeps its `ok` status, and the row names the installed build and
+`felis daemon upgrade` as the remedy. A missing or unreadable installed binary adds nothing.
+
 On the local Unix carrier, a `daemon` row that reports "not running" after a refused connect says what is at the
 endpoint. A socket inode there is what a stopped daemon leaves behind, so the row reads "not running (stale socket,
 replaced on the next start)"; a directory, a symlink, or a regular file keeps the generic wording and names what was
