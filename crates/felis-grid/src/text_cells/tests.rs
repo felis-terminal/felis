@@ -2,7 +2,8 @@ use felis_vt::Parser;
 use proptest::prelude::*;
 
 use super::text_cells;
-use crate::{Grapheme, Grid, push_cell_text};
+use crate::editing::is_emoji_modifier;
+use crate::{Grapheme, Grid, char_cell_width, push_cell_text};
 
 fn laid_out(text: &str) -> Vec<(&str, u8)> {
     text_cells(text).map(|(r, w)| (&text[r], w)).collect()
@@ -40,6 +41,25 @@ fn clusters_take_the_cells_the_grid_gives_them() {
     assert_eq!(laid_out("1\u{FE0F}\u{20E3}"), [("1\u{FE0F}\u{20E3}", 2)]);
 }
 
+/// A bidi override folded after the base still lets a flag pair but
+/// breaks a ZWJ sequence, on the print path and in the layout alike.
+#[test]
+fn an_override_after_the_base_folds_as_printing_does() {
+    let cases: [(&str, &[(&str, u8)]); 2] = [
+        ("🇯\u{202E}🇵", &[("🇯\u{202E}🇵", 2)]),
+        (
+            "👩\u{202E}\u{200D}💻",
+            &[("👩\u{202E}\u{200D}", 2), ("💻", 2)],
+        ),
+    ];
+    for (text, cells) in cases {
+        assert_eq!(laid_out(text), cells, "{text:?}");
+        let printed = printed(text);
+        let printed: Vec<(&str, u8)> = printed.iter().map(|(s, w)| (s.as_str(), *w)).collect();
+        assert_eq!(printed, cells, "{text:?}");
+    }
+}
+
 /// The grid has no cell to fold a leading extender into and drops it;
 /// an overlay keeps it visible.
 #[test]
@@ -61,7 +81,7 @@ fn a_cluster_keeps_growing_past_the_grid_cap() {
 
 const ALPHABET: &[char] = &[
     'a', 'Z', ' ', '1', '字', 'あ', 'क', '\u{301}', '\u{94D}', '\u{FE0F}', '\u{200D}', '\u{20E3}',
-    '👍', '👩', '💻', '🔥', '❤', '🏻', '🏽', '🇯', '🇵',
+    '👍', '👩', '💻', '🔥', '❤', '🏻', '🏽', '🇯', '🇵', '\u{202E}',
 ];
 
 proptest! {
@@ -70,7 +90,7 @@ proptest! {
     fn layout_matches_printing(
         chars in proptest::collection::vec(proptest::sample::select(ALPHABET), 1..24)
             .prop_filter("starts with a base", |cs| {
-                super::char_width(cs[0]) > 0 && !super::is_emoji_modifier(cs[0])
+                char_cell_width(cs[0]) > 0 && !is_emoji_modifier(cs[0])
             }),
     ) {
         let text: String = chars.into_iter().collect();
