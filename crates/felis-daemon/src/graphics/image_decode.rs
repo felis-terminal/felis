@@ -625,9 +625,9 @@ fn decode_png(bytes: &[u8]) -> Result<ImageEntry, DecodeError> {
 /// frames exactly).
 fn widen<const N: usize>(buf: &[u8], px: impl Fn([u8; N]) -> [u8; 4]) -> Vec<u8> {
     let (chunks, _) = buf.as_chunks::<N>();
-    let mut out = Vec::with_capacity(chunks.len() * 4);
-    for &chunk in chunks {
-        out.extend_from_slice(&px(chunk));
+    let mut out = vec![0; chunks.len() * 4];
+    for (d, &s) in out.as_chunks_mut::<4>().0.iter_mut().zip(chunks) {
+        *d = px(s);
     }
     out
 }
