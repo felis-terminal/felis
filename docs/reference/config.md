@@ -100,7 +100,8 @@ fallback = [
 # Default: [] (programming ligatures off).
 features = ["calt", "liga"]
 
-# Per-style face overrides. Derived from font.family when omitted.
+# Per-style face overrides for the primary. Derived from font.family
+# when omitted. Fallback entries take each style from their own family.
 [font.bold]
 family = "JetBrainsMono Nerd Font"
 

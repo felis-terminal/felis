@@ -23,7 +23,7 @@ use swash::{
     zeno::Format,
 };
 use thiserror::Error;
-use tracing::warn;
+use tracing::{debug, warn};
 
 mod presentation;
 
@@ -99,13 +99,28 @@ impl Font {
         Self::load_with(db, Family::Name(family))
     }
 
-    /// [`Self::try_load_with`] moved to the regular weight, the position
-    /// every fallback face draws at.
-    fn try_load_regular(db: &Database, family: &str) -> Result<Self, ShapingError> {
-        let font = Self::try_load_with(db, family)?;
-        Ok(font
-            .at_style(fontdb::Weight::NORMAL.0, false)
-            .unwrap_or(font))
+    /// Whether `self` maps every codepoint `regular` maps. A view moved
+    /// along its own axes, or a sibling file with a byte-identical cmap
+    /// (Noto Sans CJK's static weights), passes without walking 65k
+    /// codepoints.
+    fn covers_all_of(&self, regular: &Self) -> bool {
+        if Arc::ptr_eq(&self.bytes, &regular.bytes) && self.offset == regular.offset {
+            return true;
+        }
+        let cmap = swash::tag_from_bytes(b"cmap");
+        if let Some(own) = self.font_ref().table(cmap)
+            && regular.font_ref().table(cmap) == Some(own)
+        {
+            return true;
+        }
+        let own = self.font_ref().charmap();
+        let mut covers = true;
+        regular.font_ref().charmap().enumerate(|cp, glyph| {
+            if covers && glyph != 0 && own.map(cp) == 0 {
+                covers = false;
+            }
+        });
+        covers
     }
 
     /// Load the pinned OpenType-feature probe font from `$FELIS_TEST_FONT_DIR`.
@@ -479,8 +494,104 @@ impl Default for StyleFaces<'_> {
 pub struct FontStack {
     fonts: Vec<Arc<Font>>,
     features: Vec<Vec<String>>,
-    styled_primaries: [Arc<Font>; 4],
+    /// One chain per [`FontStyle::index`], indexed like `fonts`: `[0]` is
+    /// the styled primary, `[i]` entry `i`'s view at that style. A
+    /// fallback's view covers every codepoint its regular entry does, so
+    /// the entry is chosen on `fonts` and only the drawn face varies.
+    chains: [Vec<Arc<Font>>; 4],
     styled_features: [Vec<String>; 4],
+}
+
+/// The bold, italic and bold-italic slots with the weight and slant each
+/// is queried at.
+const STYLE_VARIANTS: [(FontStyle, fontdb::Weight, fontdb::Style); 3] = [
+    (
+        FontStyle {
+            bold: true,
+            italic: false,
+        },
+        fontdb::Weight::BOLD,
+        fontdb::Style::Normal,
+    ),
+    (
+        FontStyle {
+            bold: false,
+            italic: true,
+        },
+        fontdb::Weight::NORMAL,
+        fontdb::Style::Italic,
+    ),
+    (
+        FontStyle {
+            bold: true,
+            italic: true,
+        },
+        fontdb::Weight::BOLD,
+        fontdb::Style::Italic,
+    ),
+];
+
+/// Faces one family's styles resolved to, so two styles landing on the
+/// same file and axis position share one `Arc`.
+struct StyleViews<'a> {
+    db: &'a Database,
+    /// `None` for a face that failed to load.
+    by_id: HashMap<fontdb::ID, Option<Arc<Font>>>,
+    views: HashMap<(fontdb::ID, Vec<NormalizedCoord>), Arc<Font>>,
+    regular: Arc<Font>,
+}
+
+impl<'a> StyleViews<'a> {
+    fn new(db: &'a Database, regular_id: fontdb::ID, regular: &Arc<Font>) -> Self {
+        Self {
+            db,
+            by_id: HashMap::from([(regular_id, Some(regular.clone()))]),
+            views: HashMap::from([((regular_id, regular.coords.clone()), regular.clone())]),
+            regular: regular.clone(),
+        }
+    }
+
+    /// `family` at `weight` and `slant`; `None` when no face matches.
+    fn resolve(
+        &mut self,
+        family: Family<'_>,
+        weight: fontdb::Weight,
+        slant: fontdb::Style,
+    ) -> Option<Arc<Font>> {
+        let id = self.db.query(&Query {
+            families: &[family],
+            weight,
+            style: slant,
+            ..Query::default()
+        })?;
+        let loaded = self
+            .by_id
+            .entry(id)
+            .or_insert_with(|| match Font::load_face_id(self.db, id) {
+                Ok(font) => Some(Arc::new(font)),
+                Err(e) => {
+                    warn!(error = %e, "styled font face failed to load; using regular");
+                    None
+                }
+            })
+            .clone();
+        let Some(face) = loaded else {
+            return Some(self.regular.clone());
+        };
+        let italic = slant == fontdb::Style::Italic
+            && self
+                .db
+                .face(id)
+                .is_some_and(|f| f.style == fontdb::Style::Normal);
+        Some(match face.at_style(weight.0, italic) {
+            Some(view) => self
+                .views
+                .entry((id, view.coords.clone()))
+                .or_insert_with(|| Arc::new(view))
+                .clone(),
+            None => face,
+        })
+    }
 }
 
 /// First installed wins. JP before SC/KR/TC is a locale choice, not a
@@ -600,20 +711,29 @@ impl FontStack {
 
     #[must_use]
     pub fn with_primary_features(primary: Arc<Font>, features: Vec<String>) -> Self {
-        let styled_primaries = std::array::from_fn(|_| primary.clone());
+        let chains = std::array::from_fn(|_| vec![primary.clone()]);
         let styled_features = std::array::from_fn(|_| features.clone());
         Self {
             fonts: vec![primary],
             features: vec![features],
-            styled_primaries,
+            chains,
             styled_features,
         }
     }
 
+    /// Appends `font` as one face drawn in every style.
     #[must_use]
-    pub fn with_fallback_features(mut self, font: Arc<Font>, features: Vec<String>) -> Self {
-        self.fonts.push(font);
+    pub fn with_fallback_features(self, font: Arc<Font>, features: Vec<String>) -> Self {
+        let views = [font.clone(), font.clone(), font.clone(), font];
+        self.with_fallback_views(views, features)
+    }
+
+    fn with_fallback_views(mut self, views: [Arc<Font>; 4], features: Vec<String>) -> Self {
+        self.fonts.push(views[FontStyle::REGULAR.index()].clone());
         self.features.push(features);
+        for (chain, view) in self.chains.iter_mut().zip(views) {
+            chain.push(view);
+        }
         debug_assert_eq!(self.fonts.len(), self.features.len());
         self
     }
@@ -721,12 +841,12 @@ impl FontStack {
                     warn!("font.fallback entry names no family; skipping");
                     continue;
                 };
-                if let Ok(font) = Font::try_load_regular(db, family) {
-                    let features = spec
-                        .features
-                        .as_deref()
-                        .map_or_else(|| primary_features.to_vec(), <[String]>::to_vec);
-                    stack = stack.with_fallback_features(Arc::new(font), features);
+                let features = spec
+                    .features
+                    .as_deref()
+                    .map_or_else(|| primary_features.to_vec(), <[String]>::to_vec);
+                if let Ok(views) = fallback_views(db, family) {
+                    stack = stack.with_fallback_views(views, features);
                 } else {
                     warn!(family, "font.fallback entry not installed; skipping");
                 }
@@ -744,80 +864,21 @@ impl FontStack {
         base_features: &[String],
         styles: &StyleFaces<'_>,
     ) {
-        let mut by_id: HashMap<fontdb::ID, Arc<Font>> = HashMap::new();
-        by_id.insert(regular_id, regular.clone());
-        let mut views: HashMap<(fontdb::ID, Vec<NormalizedCoord>), Arc<Font>> = HashMap::new();
-        views.insert((regular_id, regular.coords.clone()), regular.clone());
-        let variants = [
-            (
-                FontStyle {
-                    bold: true,
-                    italic: false,
-                },
-                styles.bold,
-                fontdb::Weight::BOLD,
-                fontdb::Style::Normal,
-            ),
-            (
-                FontStyle {
-                    bold: false,
-                    italic: true,
-                },
-                styles.italic,
-                fontdb::Weight::NORMAL,
-                fontdb::Style::Italic,
-            ),
-            (
-                FontStyle {
-                    bold: true,
-                    italic: true,
-                },
-                styles.bold_italic,
-                fontdb::Weight::BOLD,
-                fontdb::Style::Italic,
-            ),
-        ];
-        for (style, over, weight, slant) in variants {
+        let mut resolver = StyleViews::new(db, regular_id, regular);
+        let overrides = [styles.bold, styles.italic, styles.bold_italic];
+        for ((style, weight, slant), over) in STYLE_VARIANTS.into_iter().zip(overrides) {
             let idx = style.index();
             let family = over.family.as_deref().map_or(base_family, Family::Name);
             self.styled_features[idx] = over
                 .features
                 .as_deref()
                 .map_or_else(|| base_features.to_vec(), <[String]>::to_vec);
-            let matched = db.query(&Query {
-                families: &[family],
-                weight,
-                style: slant,
-                ..Query::default()
-            });
-            self.styled_primaries[idx] = if let Some(id) = matched {
-                let face = by_id
-                    .entry(id)
-                    .or_insert_with(|| match Font::load_face_id(db, id) {
-                        Ok(font) => Arc::new(font),
-                        Err(e) => {
-                            warn!(error = %e, "styled font face failed to load; using regular");
-                            regular.clone()
-                        }
-                    })
-                    .clone();
-                let italic = slant == fontdb::Style::Italic
-                    && db
-                        .face(id)
-                        .is_some_and(|f| f.style == fontdb::Style::Normal);
-                match face.at_style(weight.0, italic) {
-                    Some(view) => views
-                        .entry((id, view.coords.clone()))
-                        .or_insert_with(|| Arc::new(view))
-                        .clone(),
-                    None => face,
-                }
-            } else {
+            self.chains[idx][0] = resolver.resolve(family, weight, slant).unwrap_or_else(|| {
                 if over.family.is_some() {
                     warn!("styled font family not installed; using regular");
                 }
                 regular.clone()
-            };
+            });
         }
     }
 
@@ -827,13 +888,13 @@ impl FontStack {
     }
 
     #[must_use]
-    pub const fn styled_primary(&self, style: FontStyle) -> &Arc<Font> {
-        &self.styled_primaries[style.index()]
+    pub fn styled_primary(&self, style: FontStyle) -> &Arc<Font> {
+        &self.chains[style.index()][0]
     }
 
     #[must_use]
     pub fn primary_covers(&self, c: char, style: FontStyle) -> bool {
-        self.styled_primaries[style.index()].has_glyph(c)
+        self.chains[style.index()][0].has_glyph(c)
     }
 
     /// Falls back to the styled primary when nothing covers `c`, so the
@@ -893,7 +954,7 @@ impl FontStack {
     /// The first face covering `c`, presentation aside: the styled
     /// primary, then the chain in order, then `0` for `.notdef`.
     fn first_cover_styled_index(&self, c: char, style: FontStyle) -> usize {
-        if self.styled_primaries[style.index()].has_glyph(c) {
+        if self.chains[style.index()][0].has_glyph(c) {
             return 0;
         }
         for (i, font) in self.fonts.iter().enumerate().skip(1) {
@@ -910,7 +971,7 @@ impl FontStack {
     /// (U+2764 lives in Zapf Dingbats).
     #[must_use]
     pub fn resolve_color_index(&self, c: char, style: FontStyle) -> Option<usize> {
-        let styled = &self.styled_primaries[style.index()];
+        let styled = &self.chains[style.index()][0];
         if styled.has_glyph(c) && styled.has_color_glyphs() {
             return Some(0);
         }
@@ -926,12 +987,8 @@ impl FontStack {
     /// [`SizingKey::with_font_id`] saturation bucket) falls back to it.
     #[must_use]
     pub fn font_at(&self, index: usize, style: FontStyle) -> &Arc<Font> {
-        if index == 0 {
-            return &self.styled_primaries[style.index()];
-        }
-        self.fonts
-            .get(index)
-            .unwrap_or_else(|| &self.styled_primaries[style.index()])
+        let chain = &self.chains[style.index()];
+        chain.get(index).unwrap_or(&chain[0])
     }
 
     /// Always `false`; exists for clippy's `len_without_is_empty`.
@@ -942,6 +999,51 @@ impl FontStack {
     }
 }
 
+/// `family` as a fallback entry, one face per [`FontStyle::index`], each
+/// drawn from the family's own face for that style. A color face, or a
+/// style whose face would drop a codepoint the regular one covers, draws
+/// the regular face.
+fn fallback_views(db: &Database, family: &str) -> Result<[Arc<Font>; 4], ShapingError> {
+    let id = query_family(db, family).ok_or(ShapingError::NoFont)?;
+    let loaded = Font::load_face_id(db, id)?;
+    let regular = Arc::new(
+        loaded
+            .at_style(fontdb::Weight::NORMAL.0, false)
+            .unwrap_or(loaded),
+    );
+    let mut views = std::array::from_fn(|_| regular.clone());
+    if regular.has_color_glyphs() {
+        return Ok(views);
+    }
+    let mut resolver = StyleViews::new(db, id, &regular);
+    for (style, weight, slant) in STYLE_VARIANTS {
+        if let Some(view) = resolver.resolve(Family::Name(family), weight, slant) {
+            views[style.index()] = covering_or_regular(view, &regular, family, style);
+        }
+    }
+    Ok(views)
+}
+
+/// `view` when it maps every codepoint `regular` does, else `regular`: the
+/// fallback entry is chosen on regular coverage, so a styled face missing
+/// one of those codepoints would draw `.notdef` in its place.
+fn covering_or_regular(
+    view: Arc<Font>,
+    regular: &Arc<Font>,
+    family: &str,
+    style: FontStyle,
+) -> Arc<Font> {
+    if view.covers_all_of(regular) {
+        return view;
+    }
+    debug!(
+        family,
+        ?style,
+        "styled fallback face covers less than regular; using regular"
+    );
+    regular.clone()
+}
+
 fn append_first_installed(
     stack: FontStack,
     db: &Database,
@@ -949,8 +1051,8 @@ fn append_first_installed(
     inherited_features: &[String],
 ) -> FontStack {
     for &name in candidates {
-        if let Ok(font) = Font::try_load_regular(db, name) {
-            return stack.with_fallback_features(Arc::new(font), inherited_features.to_vec());
+        if let Ok(views) = fallback_views(db, name) {
+            return stack.with_fallback_views(views, inherited_features.to_vec());
         }
     }
     stack
@@ -963,8 +1065,8 @@ fn append_all_installed(
     inherited_features: &[String],
 ) -> FontStack {
     for &name in candidates {
-        if let Ok(font) = Font::try_load_regular(db, name) {
-            stack = stack.with_fallback_features(Arc::new(font), inherited_features.to_vec());
+        if let Ok(views) = fallback_views(db, name) {
+            stack = stack.with_fallback_views(views, inherited_features.to_vec());
         }
     }
     stack
@@ -2265,6 +2367,181 @@ mod tests {
         assert!(Arc::ptr_eq(face(true, false), face(true, true)));
         assert!(Arc::ptr_eq(face(false, false), face(false, true)));
         assert!(!Arc::ptr_eq(face(false, false), face(true, false)));
+    }
+
+    /// The pinned faces named by path under `$FELIS_TEST_FONT_DIR`.
+    fn pinned_files(names: &[&str]) -> Option<Vec<std::path::PathBuf>> {
+        let Some(dir) = std::env::var_os("FELIS_TEST_FONT_DIR") else {
+            eprintln!("FELIS_TEST_FONT_DIR unset; skipping");
+            return None;
+        };
+        let dir = std::path::PathBuf::from(dir);
+        Some(names.iter().map(|name| dir.join(name)).collect())
+    }
+
+    const MONASPACE_NEON_STATIC: [&str; 4] = [
+        "opentype/MonaspaceNeon-Regular.otf",
+        "opentype/MonaspaceNeon-Bold.otf",
+        "opentype/MonaspaceNeon-Italic.otf",
+        "opentype/MonaspaceNeon-BoldItalic.otf",
+    ];
+
+    fn ink(font: &Font, c: char) -> u64 {
+        rasterize(&mut ScaleContext::new(), font, c, 32.0)
+            .pixels()
+            .as_bytes()
+            .iter()
+            .map(|&p| u64::from(p))
+            .sum()
+    }
+
+    const BOLD: FontStyle = FontStyle {
+        bold: true,
+        italic: false,
+    };
+    const ITALIC: FontStyle = FontStyle {
+        bold: false,
+        italic: true,
+    };
+    const BOLD_ITALIC: FontStyle = FontStyle {
+        bold: true,
+        italic: true,
+    };
+
+    /// The pinned CJK subset varies `wght` only and has no italic.
+    #[test]
+    fn variable_fallback_draws_bold_cells_bold() {
+        let mut names = MONASPACE_NEON_STATIC.to_vec();
+        names.push("NotoSansCJKjp-Kuzu.otf");
+        let Some(files) = pinned_files(&names) else {
+            return;
+        };
+        let stack = FontStack::discover_in_files(
+            &files,
+            Some(TEST_FONT_FAMILY),
+            &[],
+            &[FaceSpec::named("Noto Sans CJK JP")],
+            &StyleFaces::default(),
+        )
+        .expect("the pinned faces load");
+        assert_eq!(stack.resolve_styled_index('葛', BOLD), 1);
+        let regular = stack.font_at(1, FontStyle::REGULAR);
+        let bold = stack.font_at(1, BOLD);
+        assert_eq!(bold.coords, [design_value(bold, WGHT, 700.0)]);
+        assert!(ink(regular, '葛') < ink(bold, '葛'));
+        assert!(
+            Arc::ptr_eq(stack.font_at(1, ITALIC), regular),
+            "no italic is synthesized"
+        );
+        assert!(Arc::ptr_eq(stack.font_at(1, BOLD_ITALIC), bold));
+        assert!(
+            Arc::ptr_eq(stack.font_at(2, BOLD), stack.styled_primary(BOLD)),
+            "an index past the chain is the styled primary"
+        );
+    }
+
+    #[test]
+    fn static_fallback_draws_each_style_from_its_own_file() {
+        let mut names = MONASPACE_NEON_STATIC.to_vec();
+        names.push("NotoSansCJKjp-Kuzu.otf");
+        let Some(files) = pinned_files(&names) else {
+            return;
+        };
+        let stack = FontStack::discover_in_files(
+            &files,
+            Some("Noto Sans CJK JP"),
+            &[],
+            &[FaceSpec::named(TEST_FONT_FAMILY)],
+            &StyleFaces::default(),
+        )
+        .expect("the pinned faces load");
+        let faces = [FontStyle::REGULAR, BOLD, ITALIC, BOLD_ITALIC].map(|s| stack.font_at(1, s));
+        for (i, a) in faces.iter().enumerate() {
+            assert!(a.coords.is_empty(), "static faces take no axis settings");
+            for b in &faces[i + 1..] {
+                assert!(!Arc::ptr_eq(a, b), "every style has its own file");
+            }
+        }
+        assert!(ink(faces[0], 'M') < ink(faces[1], 'M'));
+    }
+
+    #[test]
+    fn color_fallback_draws_the_same_face_in_every_style() {
+        let Some(files) = pinned_files(&[MONASPACE_NEON_STATIC[0], "NotoColorEmoji.ttf"]) else {
+            return;
+        };
+        let stack = FontStack::discover_in_files(
+            &files,
+            Some(TEST_FONT_FAMILY),
+            &[],
+            &[FaceSpec::named("Noto Color Emoji")],
+            &StyleFaces::default(),
+        )
+        .expect("the pinned faces load");
+        let regular = stack.font_at(1, FontStyle::REGULAR);
+        assert!(regular.has_color_glyphs());
+        for style in [BOLD, ITALIC, BOLD_ITALIC] {
+            assert!(Arc::ptr_eq(stack.font_at(1, style), regular));
+        }
+    }
+
+    fn load_pinned(name: &str) -> Option<Arc<Font>> {
+        let files = pinned_files(&[name])?;
+        let mut db = Database::new();
+        db.load_font_file(&files[0]).expect("the pinned face reads");
+        let id = db.faces().next().expect("the file has a face").id;
+        Some(Arc::new(
+            Font::load_face_id(&db, id).expect("the face loads"),
+        ))
+    }
+
+    #[test]
+    fn coverage_check_rejects_a_face_missing_a_regular_codepoint() {
+        let (Some(latin), Some(cjk)) = (
+            load_pinned(MONASPACE_NEON_STATIC[0]),
+            load_pinned("NotoSansCJKjp-Kuzu.otf"),
+        ) else {
+            return;
+        };
+        assert!(!latin.covers_all_of(&cjk));
+        assert!(!cjk.covers_all_of(&latin));
+        let bold = cjk.at_style(700, false).expect("the subset varies wght");
+        assert!(bold.covers_all_of(&cjk), "a moved view shares the cmap");
+        assert!(Arc::ptr_eq(
+            &covering_or_regular(latin, &cjk, "Noto Sans CJK JP", BOLD),
+            &cjk
+        ));
+    }
+
+    #[test]
+    fn coverage_check_accepts_a_sibling_file_with_the_same_cmap() {
+        let (Some(regular), Some(bold)) = (
+            load_pinned(MONASPACE_NEON_STATIC[0]),
+            load_pinned(MONASPACE_NEON_STATIC[1]),
+        ) else {
+            return;
+        };
+        assert!(bold.covers_all_of(&regular));
+    }
+
+    /// Entry 1's bold view covers `A` and its regular does not; a bold `A`
+    /// still goes to entry 2, as a regular one does.
+    #[test]
+    fn a_styled_view_covering_more_does_not_take_a_later_entrys_glyph() {
+        let (Some(emoji), Some(latin), Some(cjk)) = (
+            load_pinned("NotoColorEmoji.ttf"),
+            load_pinned(MONASPACE_NEON_STATIC[0]),
+            load_pinned("NotoSansCJKjp-Kuzu.otf"),
+        ) else {
+            return;
+        };
+        assert!(!emoji.has_glyph('A') && !cjk.has_glyph('A'));
+        let wider_bold = [cjk.clone(), latin.clone(), cjk, latin.clone()];
+        let stack = FontStack::new(emoji)
+            .with_fallback_views(wider_bold, Vec::new())
+            .with_fallback_features(latin, Vec::new());
+        assert_eq!(stack.resolve_styled_index('A', FontStyle::REGULAR), 2);
+        assert_eq!(stack.resolve_styled_index('A', BOLD), 2);
     }
 
     fn axis(tag: [u8; 4], default: f32) -> AxisInfo {
