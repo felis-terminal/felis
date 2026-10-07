@@ -121,6 +121,26 @@ struct WalkKey {
     shaped: bool,
 }
 
+/// The pixel box an overwide glyph or cluster is shrunk into.
+#[derive(Debug, Clone, Copy)]
+struct FitBlock {
+    w: f32,
+    h: f32,
+    slack: f32,
+}
+
+impl FitBlock {
+    /// The cell width rounds the primary advance, so a primary glyph
+    /// overruns its block by up to half a pixel per unit of `s`.
+    fn holds(self, advance: f32) -> bool {
+        advance <= self.w + self.slack
+    }
+
+    fn ratio(self, ink_w: f32, ink_h: f32) -> f32 {
+        (self.w / ink_w).min(self.h / ink_h).min(1.0)
+    }
+}
+
 impl GlyphIndex {
     #[must_use]
     pub fn new(stack: FontStack, font_size_physical_px: f32, atlas_side: NonZeroU32) -> Self {
@@ -283,16 +303,12 @@ impl GlyphIndex {
     ) -> Option<GlyphBitmap> {
         let glyph_scale = sizing.effective_scale();
         let base_px = self.font_size_physical_px * glyph_scale;
-        let layout_scale = f32::from(sizing.scale().max(1));
         let cells = match sizing.cell_width() {
             0 => felis_grid::char_cell_width(glyph).max(1),
             w => w,
         };
-        let block_w = (self.metrics.width * u32::from(cells)) as f32 * layout_scale;
-        let block_h = cell_height as f32 * layout_scale;
-        // The cell width rounds the primary advance, so a primary glyph
-        // overruns its block by up to half a pixel per unit of `s`.
-        if font.advance_px(glyph, base_px)? <= block_w + layout_scale {
+        let block = self.fit_block(cells.into(), cell_height, sizing);
+        if block.holds(font.advance_px(glyph, base_px)?) {
             return None;
         }
         let ink = self
@@ -301,18 +317,27 @@ impl GlyphIndex {
         if ink.is_blank() {
             return None;
         }
-        let ratio = (block_w / ink.width() as f32)
-            .min(block_h / ink.height() as f32)
-            .min(1.0);
+        let ratio = block.ratio(ink.width() as f32, ink.height() as f32);
         let px = (base_px * ratio).floor().max(1.0) as u32;
         let mut bitmap = self
             .shape
             .get_or_insert_sized(font, glyph, px, sizing)
             .clone();
-        bitmap.left = ((block_w - bitmap.width() as f32) / 2.0).round() as i32;
+        bitmap.left = ((block.w - bitmap.width() as f32) / 2.0).round() as i32;
         let ascent = self.metrics.ascent as f32 * glyph_scale;
-        bitmap.top = (ascent - (block_h - bitmap.height() as f32) / 2.0).round() as i32;
+        bitmap.top = (ascent - (block.h - bitmap.height() as f32) / 2.0).round() as i32;
         Some(bitmap)
+    }
+
+    /// `cells` cells at the integer scale `s`, whatever the fractional
+    /// glyph scale.
+    fn fit_block(&self, cells: u16, cell_height: u32, sizing: SizingKey) -> FitBlock {
+        let layout_scale = f32::from(sizing.scale().max(1));
+        FitBlock {
+            w: (self.metrics.width * u32::from(cells)) as f32 * layout_scale,
+            h: cell_height as f32 * layout_scale,
+            slack: layout_scale,
+        }
     }
 
     /// Glyph ids are face-relative: [`SizingKey::font_id`] names the
@@ -325,17 +350,8 @@ impl GlyphIndex {
         cell_height: u32,
         sizing: SizingKey,
     ) -> bool {
-        let key = (SlotKey::Glyph(glyph_id), cell_height, sizing);
-        if self.slots.contains_key(&key) {
-            return false;
-        }
-        let font = self.stack.font_at(sizing.font_id(), sizing.style()).clone();
-        let scale = sizing.effective_scale();
-        let effective_px = self.font_size_physical_px * scale;
-        let bitmap = self.shape.rasterize_glyph_id(&font, glyph_id, effective_px);
-        let slot = self.allocate(bitmap);
-        self.insert_slot(key, slot);
-        true
+        let px = self.font_size_physical_px * sizing.effective_scale();
+        self.ensure_glyph_slot(SlotKey::Glyph(glyph_id), glyph_id, px, cell_height, sizing)
     }
 
     /// [`Self::ensure_glyph_id`] at `px`, the size [`Self::cluster_fit_px`]
@@ -347,14 +363,24 @@ impl GlyphIndex {
         cell_height: u32,
         sizing: SizingKey,
     ) -> bool {
-        let key = (SlotKey::FittedGlyph(glyph_id, px), cell_height, sizing);
+        let key = SlotKey::FittedGlyph(glyph_id, px);
+        self.ensure_glyph_slot(key, glyph_id, f32::from(px), cell_height, sizing)
+    }
+
+    fn ensure_glyph_slot(
+        &mut self,
+        slot_key: SlotKey,
+        glyph_id: GlyphId,
+        px: f32,
+        cell_height: u32,
+        sizing: SizingKey,
+    ) -> bool {
+        let key = (slot_key, cell_height, sizing);
         if self.slots.contains_key(&key) {
             return false;
         }
         let font = self.stack.font_at(sizing.font_id(), sizing.style()).clone();
-        let bitmap = self
-            .shape
-            .rasterize_glyph_id(&font, glyph_id, f32::from(px));
+        let bitmap = self.shape.rasterize_glyph_id(&font, glyph_id, px);
         let slot = self.allocate(bitmap);
         self.insert_slot(key, slot);
         true
@@ -366,8 +392,8 @@ impl GlyphIndex {
 
     /// The pixel size at which the cluster's ink fits a block of `cols`
     /// cells, or `None` when its advance stays inside the block. The
-    /// trigger, the slack and the ratio are `fitted_bitmap`'s, so a
-    /// one-glyph cluster fits exactly as its bare char does.
+    /// block is `fitted_bitmap`'s, so a one-glyph cluster fits exactly
+    /// as its bare char does.
     fn cluster_fit_px(
         &mut self,
         text: &str,
@@ -376,11 +402,9 @@ impl GlyphIndex {
         sizing: SizingKey,
     ) -> Option<u16> {
         let glyph_scale = sizing.effective_scale();
-        let layout_scale = f32::from(sizing.scale().max(1));
-        let block_w = (self.metrics.width * u32::from(cols)) as f32 * layout_scale;
-        let block_h = self.metrics.height as f32 * layout_scale;
+        let block = self.fit_block(cols, self.metrics.height, sizing);
         let advance: f32 = glyphs.iter().map(|g| g.advance_px).sum::<f32>() * glyph_scale;
-        if advance <= block_w + layout_scale {
+        if block.holds(advance) {
             return None;
         }
         let key = (text.to_owned(), cols, sizing);
@@ -407,8 +431,7 @@ impl GlyphIndex {
         }
         // A blank cluster has nothing to fit; 0 records that.
         let px = ink.map_or(0, |[x0, y0, x1, y1]| {
-            let ratio = (block_w / (x1 - x0)).min(block_h / (y1 - y0)).min(1.0);
-            (effective_px * ratio)
+            (effective_px * block.ratio(x1 - x0, y1 - y0))
                 .floor()
                 .clamp(1.0, f32::from(u16::MAX)) as u16
         });
