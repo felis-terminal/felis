@@ -5,10 +5,15 @@ use std::str;
 
 /// Held state is at most three continuation bytes.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "state-dump",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(default)
+)]
 pub struct Decoder {
     buf: [u8; 4],
-    len: usize,
-    needed: u8,
+    pub(crate) len: usize,
+    pub(crate) needed: u8,
 }
 
 impl Decoder {

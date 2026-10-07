@@ -8,8 +8,9 @@ use std::path::Path;
 use std::process::{Child, Command as StdCommand};
 use std::time::Duration;
 
-use felis_client_core::{Offer, connect};
+use felis_client_core::{AttachIntent, Offer, ShadowScreen, connect};
 use felis_protocol::messages::{SpawnArgs, UpgradeOutcome};
+use felis_protocol::{MessageKind, codec, messages::GridMsg};
 use tempfile::TempDir;
 
 mod common;
@@ -109,6 +110,89 @@ async fn an_upgrade_keeps_the_daemon_pid_and_the_running_session() {
     );
     let before = lines(&ticks);
     wait_for_more_lines(&ticks, before).await;
+}
+
+/// Grid frames from an attach until the rehydrate burst ends, mirrored
+/// the way a window mirrors them.
+async fn rehydrated_screen(socket: &Path, id: u128) -> ShadowScreen {
+    let mut conn = connect(socket, Offer::window(false)).await.unwrap();
+    let info = conn.attach(id, AttachIntent::Deliberate).await.unwrap();
+    let mut shadow = ShadowScreen::new(info.dims.rows, info.dims.cols);
+    let mut began = false;
+    let read = async {
+        while let Some(frame) = conn.next_frame().await.unwrap() {
+            if frame.kind != MessageKind::Grid.as_u16() {
+                continue;
+            }
+            let msg = codec::decode::<GridMsg>(&frame.body).unwrap();
+            began |= matches!(msg, GridMsg::RehydrateBegin);
+            let ended = matches!(msg, GridMsg::RehydrateEnd);
+            shadow.apply(&msg).unwrap();
+            if began && ended {
+                return;
+            }
+        }
+        panic!("the attach closed before its rehydrate ended");
+    };
+    tokio::time::timeout(Duration::from_secs(10), read)
+        .await
+        .expect("the rehydrate burst ends");
+    shadow
+}
+
+/// What the session printed before the upgrade is on its screen after
+/// it, and so is what the program set: the successor restores the grid
+/// rather than starting it blank.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_upgrade_keeps_the_screen_a_session_drew() {
+    let tmp = private_dir();
+    let socket = tmp.path().join("daemon.sock");
+    let _daemon = spawn_real_daemon(tmp.path(), &socket);
+    common::wait_connectable(&socket).await;
+
+    let mut conn = connect(&socket, Offer::ops()).await.unwrap();
+    let info = conn
+        .spawn_session(SpawnArgs {
+            command: "/bin/sh".to_owned(),
+            args: vec![
+                "-c".to_owned(),
+                "printf 'drawn before the upgrade\\r\\n\\033[1mbold\\033]2;kept-title\\007'; \
+                 exec sleep 600"
+                    .to_owned(),
+            ],
+            ..SpawnArgs::default()
+        })
+        .await
+        .unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let sessions = conn.list_sessions().await.unwrap();
+        if sessions[0].title.as_deref() == Some("kept-title") {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the session never drew"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    let mut conn = connect(&socket, Offer::ops()).await.unwrap();
+    let outcome = conn.daemon_upgrade(common::daemon_bin()).await.unwrap();
+    assert_eq!(outcome, UpgradeOutcome::Upgrading);
+    drop(conn);
+    common::wait_connectable(&socket).await;
+
+    let shadow = rehydrated_screen(&socket, info.id).await;
+    assert!(
+        common::shadow_contains(&shadow, "drawn before the upgrade"),
+        "{:?}",
+        common::shadow_rows(&shadow)
+    );
+    assert_eq!(shadow.title(), Some("kept-title"));
+    let mut after = connect(&socket, Offer::ops()).await.unwrap();
+    let sessions = after.list_sessions().await.unwrap();
+    assert_eq!(sessions[0].title.as_deref(), Some("kept-title"));
 }
 
 /// A successor that cannot answer the probe refuses the upgrade, and

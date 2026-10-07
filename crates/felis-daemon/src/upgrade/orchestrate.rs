@@ -10,14 +10,14 @@ use std::{
 
 use felis_pty::{Parked, Quiescer};
 use tokio::{
-    sync::{Mutex, oneshot},
+    sync::{Mutex, mpsc, oneshot},
     task::JoinHandle,
 };
 use tracing::{info, warn};
 
 use super::{
     Refusal, UpgradeState, carrier,
-    dump::{ChildDump, DUMP_VERSION, Dump, SessionDump, format_session_id},
+    dump::{ChildDump, DUMP_VERSION, Dump, SessionDump, SessionState, format_session_id},
     probe,
 };
 use crate::{
@@ -52,6 +52,8 @@ struct Undo {
     /// A park still running on the blocking pool: it outlives a
     /// cancelled upgrade and must be resumed once it ends.
     pending: Option<(Quiescer, JoinHandle<std::io::Result<Parked>>)>,
+    /// Session tasks holding their drains since the settle.
+    held: Vec<mpsc::Sender<SessionCmd>>,
     armed: bool,
 }
 
@@ -62,6 +64,7 @@ impl Undo {
             state: Arc::clone(state),
             parked: Vec::new(),
             pending: None,
+            held: Vec::new(),
             armed: true,
         }
     }
@@ -77,6 +80,18 @@ impl Undo {
         for quiescer in self.parked.drain(..) {
             if let Err(err) = quiescer.resume() {
                 warn!(?err, "upgrade refused: resuming a session failed");
+            }
+        }
+        for cmd in self.held.drain(..) {
+            match cmd.try_send(SessionCmd::Resume) {
+                Err(mpsc::error::TrySendError::Full(_)) => {
+                    if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+                        drop(runtime.spawn(async move {
+                            let _sent = cmd.send(SessionCmd::Resume).await;
+                        }));
+                    }
+                }
+                Ok(()) | Err(mpsc::error::TrySendError::Closed(_)) => {}
             }
         }
     }
@@ -197,18 +212,32 @@ async fn quiesce_and_dump(
     listen_fd: RawFd,
     undo: &mut Undo,
 ) -> Result<(Dump, Vec<OwnedFd>), Refusal> {
-    wait_in_flight(pool).await?;
-    let (handles, next_sequence, next_attachment_id) = {
-        let guard = pool.lock().await;
-        (
-            guard.all_handles(),
-            guard.peek_sequence(),
-            guard.attachment_ids().peek(),
-        )
+    // Settling runs commands queued before the barrier, which can start
+    // a teardown or finish a spawn, so the set is taken again until
+    // settling changes nothing.
+    let mut settled = std::collections::HashSet::new();
+    let (handles, next_sequence, next_attachment_id) = loop {
+        wait_in_flight(pool).await?;
+        let (handles, next_sequence, next_attachment_id) = {
+            let guard = pool.lock().await;
+            (
+                guard.all_handles(),
+                guard.peek_sequence(),
+                guard.attachment_ids().peek(),
+            )
+        };
+        let mut changed = false;
+        for (id, handle) in &handles {
+            if settled.insert(*id) {
+                changed = true;
+                undo.held.push(handle.cmd.clone());
+                settle(handle).await?;
+            }
+        }
+        if !changed && pool.lock().await.in_flight() == 0 {
+            break (handles, next_sequence, next_attachment_id);
+        }
     };
-    for (_, handle) in &handles {
-        settle(handle).await?;
-    }
     let mut sessions = Vec::with_capacity(handles.len());
     let mut masters = Vec::with_capacity(handles.len());
     for (id, handle) in handles {
@@ -236,13 +265,10 @@ async fn quiesce_and_dump(
             .master_fd()
             .try_clone_to_owned()
             .map_err(|err| Refusal::ProbeFailed(format!("duplicate a PTY master: {err}")))?;
-        sessions.push(session_dump(
-            id.0,
-            &handle,
-            &parts,
-            master.as_raw_fd(),
-            parked.unwritten,
-        )?);
+        let state = capture(&handle).await?;
+        let mut dumped = session_dump(id.0, &handle, &parts, master.as_raw_fd(), parked.unwritten)?;
+        dumped.state = state;
+        sessions.push(dumped);
         masters.push(master);
     }
     Ok((
@@ -251,6 +277,7 @@ async fn quiesce_and_dump(
             listen_fd,
             next_sequence,
             next_attachment_id,
+            anim_clock_ms: crate::graphics::anim_now_ms(),
             sessions,
         },
         masters,
@@ -293,6 +320,21 @@ async fn settle(handle: &SessionHandle) -> Result<(), Refusal> {
         .map_err(|_elapsed| Refusal::Timeout("a session did not settle its queue".into()))
 }
 
+/// `None` for a session task that already ended: its screen is gone
+/// with it, and the successor shows the session blank.
+async fn capture(handle: &SessionHandle) -> Result<Option<Box<SessionState>>, Refusal> {
+    let capture = async {
+        let (reply, state) = oneshot::channel();
+        if handle.cmd.send(SessionCmd::Capture(reply)).await.is_err() {
+            return None;
+        }
+        state.await.ok()
+    };
+    tokio::time::timeout(BARRIER_TIMEOUT, capture)
+        .await
+        .map_err(|_elapsed| Refusal::Timeout("a session did not hand over its state".into()))
+}
+
 fn session_dump(
     id: u128,
     handle: &SessionHandle,
@@ -327,6 +369,7 @@ fn session_dump(
         cwd: meta.cwd,
         tags: meta.tags.into_iter().collect(),
         exited: meta.exited || exit_status.is_some(),
+        state: None,
     })
 }
 

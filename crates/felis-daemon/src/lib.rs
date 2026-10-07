@@ -187,17 +187,17 @@ impl SpawnedPty {
     }
 
     /// Resumes a session an in-place upgrade carried across `execve`: the
-    /// PTY master and the child are already this process's. The grid
-    /// starts at `rows` x `cols`.
+    /// PTY master and the child are already this process's, and `core`
+    /// is the terminal state the predecessor left, installed before the
+    /// parse thread reads a byte.
     #[cfg(unix)]
     pub fn adopt(
         master: std::os::fd::OwnedFd,
         pid: i32,
         exit_status: Option<i32>,
-        rows: u16,
-        cols: u16,
+        core: ParseCore,
     ) -> Result<Self, SessionError> {
-        let core = Arc::new(parking_lot::Mutex::new(ParseCore::new(rows, cols)));
+        let core = Arc::new(parking_lot::Mutex::new(core));
         let signals = Arc::new(ParseSignals::new());
         let sink = parse_sink::build_sink(Arc::clone(&core), Arc::clone(&signals));
         let session = felis_pty::adopt(master, pid, exit_status, sink)?;

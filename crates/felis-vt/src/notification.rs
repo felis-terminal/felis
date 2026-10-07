@@ -12,6 +12,11 @@ pub use felis_protocol::messages::Urgency;
 /// `title` is `None` for the bare OSC 9 form. `id` is the producer's
 /// OSC 99 `i=` token, opaque and echoed back so a multiplexer can correlate.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[cfg_attr(
+    feature = "state-dump",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(default)
+)]
 pub struct Notification {
     pub title: Option<String>,
     /// May be empty (a title-only OSC 99).

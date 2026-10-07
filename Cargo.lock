@@ -1070,6 +1070,8 @@ dependencies = [
  "insta",
  "miniz_oxide 0.9.1",
  "proptest",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

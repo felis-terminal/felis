@@ -117,6 +117,32 @@ impl PtyEffectQueue {
         self.apc_len += 1;
         true
     }
+
+    #[cfg(feature = "state-dump")]
+    pub(crate) fn effects(&self) -> &[PtyEffect] {
+        &self.effects
+    }
+}
+
+#[cfg(feature = "state-dump")]
+impl serde::Serialize for PtyEffectQueue {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.effects.serialize(serializer)
+    }
+}
+
+/// The APC count is the queue's own, so it is recounted rather than
+/// carried.
+#[cfg(feature = "state-dump")]
+impl<'de> serde::Deserialize<'de> for PtyEffectQueue {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let effects = Vec::<PtyEffect>::deserialize(deserializer)?;
+        let apc_len = effects
+            .iter()
+            .filter(|effect| matches!(effect, PtyEffect::Apc(_)))
+            .count();
+        Ok(Self { effects, apc_len })
+    }
 }
 
 #[cfg(test)]

@@ -29,6 +29,11 @@ const _: () = {
 /// [`Self::maybe_sweep`] only where no handle into either table is held
 /// across the call.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "state-dump",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(default)
+)]
 pub struct TableGc {
     style_threshold: usize,
     sizing_threshold: usize,

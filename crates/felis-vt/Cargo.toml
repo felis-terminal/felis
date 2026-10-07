@@ -8,11 +8,18 @@ repository.workspace = true
 publish.workspace = true
 description = "felis VT parser: Williams DFA, UTF-8 buffering, Kitty graphics/keyboard/text-sizing dispatch"
 
+[features]
+# Serde for the state an in-place daemon upgrade carries across exec;
+# only the daemon enables it.
+state-dump = ["dep:serde"]
+
 [dependencies]
 felis-protocol = { workspace = true }
 miniz_oxide = { workspace = true }
+serde = { workspace = true, optional = true }
 
 [dev-dependencies]
+serde_json = { workspace = true }
 proptest = { workspace = true }
 miniz_oxide = { workspace = true }
 criterion = { workspace = true }

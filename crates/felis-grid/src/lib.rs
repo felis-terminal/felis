@@ -80,6 +80,7 @@ impl std::fmt::Display for ClusterText {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "state-dump", derive(Serialize, Deserialize))]
 pub struct PromptMark {
     /// Absolute line the mark fired on: `scrollback_total_pushed +
     /// cursor.row` at OSC 133 time. Survives scrolling and resize where
@@ -94,6 +95,7 @@ pub struct PromptMark {
 /// The `redraw` option of the latest `OSC 133 ; A`, a kitty extension:
 /// how much of the prompt the shell repaints after a resize.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "state-dump", derive(Serialize, Deserialize))]
 enum PromptRedraw {
     Full,
     /// `redraw=last` (Ghostty): bash repaints only the cursor's line.
@@ -106,6 +108,7 @@ enum PromptRedraw {
 /// resize may blank. Marks sent on the alternate screen belong to a
 /// program inside a TUI and never reach it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "state-dump", derive(Serialize, Deserialize), serde(default))]
 struct ShellPrompt {
     /// Set by the first `C`. A shell that marks prompts but never
     /// command starts leaves a running command's output looking like
@@ -177,6 +180,7 @@ pub enum MarkLocation {
 /// auto-deletion rule for placements without `C=1`); `force` (RIS /
 /// DECSTR) wipes even `C=1` placements.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "state-dump", derive(Serialize, Deserialize))]
 pub struct ErasedRange {
     /// First erased row (inclusive).
     pub top: u16,
@@ -188,6 +192,7 @@ pub struct ErasedRange {
 /// One scroll-region shift recorded on the grid for
 /// docs/reference/ipc.md scroll-aware emission.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "state-dump", derive(Serialize, Deserialize))]
 pub struct ScrollOp {
     /// First row of the scrolled region (inclusive).
     pub region_top: u16,
@@ -204,6 +209,7 @@ pub struct ScrollOp {
 /// Kitty graphics placement table on it (placements are per-screen, as
 /// in Kitty). A redundant `?1049h`/`?1049l` queues nothing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "state-dump", derive(Serialize, Deserialize))]
 pub enum ScreenSwitch {
     /// `?1049h`.
     EnteredAlternate,
@@ -216,6 +222,7 @@ pub enum ScreenSwitch {
 /// Kept in a single queue because draining kind-by-kind inverts event order
 /// within PTY bursts, breaking producer sequencing expectations.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "state-dump", derive(Serialize, Deserialize))]
 pub enum PtyEffect {
     /// Host-bound reply bytes the daemon writes to the PTY.
     Response(Vec<u8>),
@@ -282,6 +289,8 @@ mod screen;
 pub mod search;
 mod sgr;
 mod sink;
+#[cfg(feature = "state-dump")]
+pub mod state;
 mod style_table;
 mod table_gc;
 mod text_cells;
@@ -410,6 +419,7 @@ pub enum Grapheme {
 /// column sets it and the next print wraps before drawing, any explicit
 /// cursor movement clears it.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "state-dump", derive(Serialize, Deserialize), serde(default))]
 pub struct Cursor {
     /// Zero-based row.
     pub row: u16,
@@ -435,6 +445,7 @@ impl Cursor {
 /// `test_SaveRestoreCursor_ResetsOriginMode`). `Default` is a fresh
 /// terminal so a `DECRC` after `DECSTR` returns to the upper-left.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "state-dump", derive(Serialize, Deserialize), serde(default))]
 struct SavedCursor {
     cursor: Cursor,
     pen: Attributes,
@@ -462,6 +473,7 @@ pub struct ViewportRowView<'a> {
 /// pair is DECSTBM; the horizontal pair is DECSLRM, consulted only while
 /// DECLRMM (`?69`) is set.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "state-dump", derive(Serialize, Deserialize), serde(default))]
 struct Margins {
     /// DECSTBM top margin (0-based, inclusive). Default `0`. Rows
     /// Rows scrolled off the top reach scrollback only when `top == 0`
@@ -487,6 +499,7 @@ impl Margins {
 
 /// Kitty keyboard progressive-enhancement protocol state.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "state-dump", derive(Serialize, Deserialize), serde(default))]
 struct KittyKbd {
     /// Top entry is the active flag bitmap; empty means legacy encoding.
     /// Pushes past [`KITTY_KBD_STACK_LIMIT`] evict the bottom entry per
@@ -516,10 +529,16 @@ pub(crate) enum SyncOutput {
 /// Implements [`Sink`] so the VT parser can drive it directly.
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "state-dump",
+    derive(Serialize, Deserialize),
+    serde(default = "Grid::dump_default")
+)]
 pub struct Grid {
     /// Exactly the surface the wire mirrors into an attached window
     /// ([`ScreenBuffer`]); everything else on `Grid` is parser state no
     /// client receives.
+    #[cfg_attr(feature = "state-dump", serde(with = "state::screen"))]
     screen: ScreenBuffer,
     /// S7C1T / S8C1T: responses use 8-bit C1 bytes when set.
     c1_8bit: bool,
@@ -543,6 +562,7 @@ pub struct Grid {
     /// `?1004`; the daemon forwards focus changes while set.
     focus_reporting: bool,
     /// `?2026` (BSU/ESU); see [`SyncOutput`].
+    #[cfg_attr(feature = "state-dump", serde(with = "state::sync_output"))]
     sync_output: SyncOutput,
     margins: Margins,
     /// DECOM (`?6`). Preserved across DECSC / DECRC; reset by DECSTR / RIS.
@@ -746,8 +766,10 @@ pub struct Grid {
     /// queries answer from here, not the OS clipboard, so a program
     /// cannot read data the user did not put there via OSC 52 (tmux's
     /// `set-clipboard external` model).
+    #[cfg_attr(feature = "state-dump", serde(with = "felis_vt::state::opt_b64"))]
     clipboard_cache_clipboard: Option<Vec<u8>>,
     /// Same for the primary selection (`p`).
+    #[cfg_attr(feature = "state-dump", serde(with = "felis_vt::state::opt_b64"))]
     clipboard_cache_primary: Option<Vec<u8>>,
     /// Held here so a multi-byte sequence keeps state across `print`
     /// calls.
@@ -788,6 +810,7 @@ const NOTIFY_REASSEMBLY_BYTES: usize = 64 * 1024;
 /// accumulate separately because a producer interleaves `p=title` /
 /// `p=body` chunks under one `i=`.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "state-dump", derive(Serialize, Deserialize), serde(default))]
 pub(crate) struct PartialNotification {
     pub title: String,
     pub body: String,
@@ -800,7 +823,9 @@ pub(crate) struct PartialNotification {
 /// Anchors placements at this captured position rather than the live cursor,
 /// since producers may restore cursor position (DECRC) before APC drainage.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "state-dump", derive(Serialize, Deserialize))]
 pub struct ApcBody {
+    #[cfg_attr(feature = "state-dump", serde(with = "felis_vt::state::b64"))]
     pub body: Vec<u8>,
     /// Cursor row (0-based) when the parser delivered the body.
     pub cursor_row: u16,
@@ -824,12 +849,15 @@ const SPECIAL_COLOR_OSC4_OFFSET: u16 = 256;
 const DA1_REPLY: &[u8] = b"\x1b[?64;1;2;6;9;15;16;17;18;21;22;28;29c";
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "state-dump", derive(Serialize, Deserialize), serde(default))]
 struct DcsState {
     kind: DcsKind,
+    #[cfg_attr(feature = "state-dump", serde(with = "felis_vt::state::b64"))]
     body: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "state-dump", derive(Serialize, Deserialize))]
 enum DcsKind {
     /// A DCS shape felis does not service; the body still counts
     /// toward the cap.
@@ -910,6 +938,7 @@ pub struct PaletteEntry {
 
 /// Mouse-event encoding selected via `?1006` / `?1016`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "state-dump", derive(Serialize, Deserialize))]
 pub enum MouseEncoding {
     /// `\e[M Cb Cx Cy`, each byte biased by `0x20`; fragile beyond
     /// column 223.
@@ -2733,6 +2762,7 @@ fn pad_and_push(
 /// [`images::CellPos`]) and live daemon-side; the placement owner
 /// replays each anchor through [`Self::remap_row`].
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "state-dump", derive(Serialize, Deserialize))]
 pub struct ReflowRemap {
     /// Scrollback length before the reflow: converts a signed anchor
     /// row into an index over the pre-reflow combined surface.

@@ -17,7 +17,9 @@ pub use felis_protocol::{
 /// `width × height` image before it reaches the store
 /// (`docs/reference/protocols/kitty-graphics.md` "Animation").
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "state-dump", derive(serde::Serialize, serde::Deserialize))]
 pub struct Frame {
+    #[cfg_attr(feature = "state-dump", serde(with = "crate::state::shared_b64"))]
     /// `pixels.len()` must equal `width * height * bytes_per_pixel(format)`
     /// for the owning entry.
     pub pixels: Bytes,
@@ -37,6 +39,7 @@ impl Frame {
 /// Playback state (`a=a` `s=`). A still is never advanced regardless
 /// of mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "state-dump", derive(serde::Serialize, serde::Deserialize))]
 pub enum AnimationMode {
     /// `s=1`.
     Stopped,
@@ -48,6 +51,7 @@ pub enum AnimationMode {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "state-dump", derive(serde::Serialize, serde::Deserialize))]
 pub struct ImageEntry {
     pub width: u32,
     pub height: u32,
@@ -326,8 +330,10 @@ pub enum InsertError {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "state-dump", derive(serde::Serialize, serde::Deserialize))]
 pub struct ImageStore {
     /// Insertion order is the eviction order, front first.
+    #[cfg_attr(feature = "state-dump", serde(with = "crate::state::image_entries"))]
     entries: IndexMap<ImageId, ImageEntry>,
     bytes_total: usize,
     bytes_cap: usize,
@@ -627,6 +633,41 @@ impl ImageStore {
     }
 }
 
+#[cfg(feature = "state-dump")]
+impl ImageStore {
+    /// Rejects a restored store no sequence of commands could build.
+    ///
+    /// # Errors
+    /// The first inconsistency found.
+    pub fn check_restored(&self) -> Result<(), crate::state::StateError> {
+        for (id, entry) in &self.entries {
+            let expected = (entry.width as usize)
+                .checked_mul(entry.height as usize)
+                .and_then(|px| px.checked_mul(entry.format.bytes_per_pixel()));
+            let frames_ok = !entry.frames.is_empty()
+                && entry.frames.len() <= MAX_IMAGE_FRAMES
+                && entry.current < entry.frames.len()
+                && entry
+                    .frames
+                    .iter()
+                    .all(|frame| Some(frame.pixels.len()) == expected);
+            if !frames_ok {
+                return Err(crate::state::StateError(format!(
+                    "frames of image {}",
+                    id.0
+                )));
+            }
+        }
+        let charged: usize = self.entries.values().map(ImageEntry::byte_len).sum();
+        if charged != self.bytes_total || charged > self.bytes_cap {
+            return Err(crate::state::StateError(
+                "image store byte total".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// The part of an image a placement draws: `source` clipped to the
 /// image, else the whole image. `None` when nothing is left to draw.
 #[must_use]
@@ -654,6 +695,7 @@ pub fn clip_source(
 /// One axis of a placement's cell extent, never zero: every geometry
 /// query reads [`Self::cells`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "state-dump", derive(serde::Serialize, serde::Deserialize))]
 pub enum Extent {
     /// `c=` / `r=` as sent.
     Requested(NonZeroU16),
@@ -705,6 +747,7 @@ fn natural_cells(source_px: u32, cell_px: u16) -> NonZeroU16 {
 
 /// 1-based cell coordinate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "state-dump", derive(serde::Serialize, serde::Deserialize))]
 pub struct CellPos {
     /// 1-based live row, signed because an anchor keeps its coordinate
     /// as its text scrolls into history: row `1` is the top live row,
@@ -719,6 +762,7 @@ pub struct CellPos {
 /// placements live in the cell grid and do not appear here.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[allow(clippy::struct_field_names)]
+#[cfg_attr(feature = "state-dump", derive(serde::Serialize, serde::Deserialize))]
 pub struct Placement {
     /// Must already exist in the [`ImageStore`]: the dispatcher inserts
     /// before recording the placement.
@@ -800,6 +844,7 @@ pub struct ClientPlacement {
 /// cell extent only, since its screen position is wherever the producer
 /// paints the `U+10EEEE` cells.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "state-dump", derive(serde::Serialize, serde::Deserialize))]
 pub struct VirtualPlacement {
     pub image_id: ImageId,
     /// Total cells the whole image spans.
@@ -811,6 +856,11 @@ pub struct VirtualPlacement {
 /// Side-table of [`Placement`]s keyed by `(image_id, placement_id)`.
 /// Insertion order is the renderer's tiebreaker among equal z-indices.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "state-dump",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(default)
+)]
 pub struct Placements {
     entries: Vec<Placement>,
     /// At most one per image id. Kept apart from `entries`: their

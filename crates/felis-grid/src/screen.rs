@@ -89,7 +89,7 @@ pub struct ScreenBuffer {
     /// which only de-opts the fast path; reading false while a viewport
     /// cell carries a handle lets a print shear its block, so only the
     /// methods that write or wipe cells move it.
-    has_sized_cells: bool,
+    pub(crate) has_sized_cells: bool,
     /// Bumped on every geometry change, and carried by every
     /// [`PtyEffect::Scrolled`](crate::PtyEffect): a consumer that ships
     /// a directive one generation late would shift rows the resize has

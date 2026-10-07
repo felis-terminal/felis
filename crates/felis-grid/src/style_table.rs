@@ -34,6 +34,7 @@ impl core::hash::Hash for PenKey {
 /// cell size, and a truecolor session can hold more than 65 535 live
 /// pens between compactions.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(feature = "state-dump", derive(serde::Serialize, serde::Deserialize))]
 pub struct StyleId(u32);
 
 impl StyleId {
@@ -206,6 +207,31 @@ impl StyleTable {
         self.entries = new_entries;
         self.recent.fill(RecentSlot::default());
         Some(remap)
+    }
+
+    #[cfg(feature = "state-dump")]
+    pub(crate) fn entries(&self) -> &[Attributes] {
+        &self.entries
+    }
+
+    /// Rebuilds a table whose ids are the positions in `entries`. `None`
+    /// when slot 0 is not the default pen or a pen appears twice, either
+    /// of which would break id equality matching pen equality.
+    #[cfg(feature = "state-dump")]
+    pub(crate) fn from_entries(entries: &[Attributes]) -> Option<Self> {
+        let (first, rest) = entries.split_first()?;
+        if *first != Attributes::default() {
+            return None;
+        }
+        let mut table = Self::new();
+        for attrs in rest {
+            let before = table.len();
+            let _id = table.intern(*attrs);
+            if table.len() != before + 1 {
+                return None;
+            }
+        }
+        Some(table)
     }
 }
 
