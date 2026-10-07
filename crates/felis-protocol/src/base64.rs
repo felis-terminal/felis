@@ -3,64 +3,70 @@
 //! Accepts optional RFC 4648 §3.2 unpadded tails because kitten emits
 //! unpadded payloads. Whitespace is stripped for column-wrapped input.
 
+use std::borrow::Cow;
+
 /// Decodes standard-alphabet base64 bytes, allowing optional padding and whitespace.
 ///
 /// Returns `None` on invalid bytes, misplaced padding, or a 1-char tail.
 /// Empty input yields an empty vector for zero-payload keepalives.
 #[must_use]
 pub fn decode(input: &[u8]) -> Option<Vec<u8>> {
-    let bytes: Vec<u8> = input
-        .iter()
-        .copied()
-        .filter(|b| !b.is_ascii_whitespace())
-        .collect();
+    let bytes: Cow<'_, [u8]> = if input.iter().any(u8::is_ascii_whitespace) {
+        Cow::Owned(
+            input
+                .iter()
+                .copied()
+                .filter(|b| !b.is_ascii_whitespace())
+                .collect(),
+        )
+    } else {
+        Cow::Borrowed(input)
+    };
     if bytes.is_empty() {
         return Some(Vec::new());
     }
-    let mut out = Vec::with_capacity(bytes.len() * 3 / 4);
-    let (chunks, rem) = bytes.as_chunks::<4>();
-    let mut padded = false;
-    for chunk in chunks {
-        if padded {
-            return None;
-        }
-        let d0 = decode_char(chunk[0])?;
-        let d1 = decode_char(chunk[1])?;
+    // Only the last group may carry padding or be short, so every group
+    // before it decodes to exactly three bytes.
+    let tail_len = match bytes.len() % 4 {
+        0 => 4,
+        r => r,
+    };
+    let (body, tail) = bytes.split_at(bytes.len() - tail_len);
+    let groups = body.as_chunks::<4>().0;
+    let mut out = vec![0u8; groups.len() * 3 + 3];
+    let mut invalid = 0u8;
+    for (o, g) in out.as_chunks_mut::<3>().0.iter_mut().zip(groups) {
+        let s = g.map(|c| SEXTET[c as usize]);
+        invalid |= s[0] | s[1] | s[2] | s[3];
         // Every `|` here ORs disjoint bit ranges, so the `| -> ^`
         // mutants cargo-mutants reports on this codec are equivalent.
-        out.push((d0 << 2) | (d1 >> 4));
-        if chunk[2] == b'=' {
-            if chunk[3] != b'=' {
-                return None;
-            }
-            padded = true;
-            continue;
-        }
-        let d2 = decode_char(chunk[2])?;
-        out.push(((d1 & 0x0F) << 4) | (d2 >> 2));
-        if chunk[3] == b'=' {
-            padded = true;
-            continue;
-        }
-        let d3 = decode_char(chunk[3])?;
-        out.push(((d2 & 0x03) << 6) | d3);
+        let n = (u32::from(s[0]) << 18)
+            | (u32::from(s[1]) << 12)
+            | (u32::from(s[2]) << 6)
+            | u32::from(s[3]);
+        *o = [(n >> 16) as u8, (n >> 8) as u8, n as u8];
     }
-    match rem.len() {
-        0 => {}
-        2 | 3 => {
-            if padded {
-                return None;
-            }
-            let d0 = decode_char(rem[0])?;
-            let d1 = decode_char(rem[1])?;
-            out.push((d0 << 2) | (d1 >> 4));
-            if rem.len() == 3 {
-                let d2 = decode_char(rem[2])?;
-                out.push(((d1 & 0x0F) << 4) | (d2 >> 2));
-            }
-        }
-        _ => return None,
+    if invalid & INVALID != 0 {
+        return None;
     }
+    let data = match tail {
+        [a, b, b'=', b'='] | [a, b] => &[*a, *b][..],
+        [a, b, c, b'='] | [a, b, c] => &[*a, *b, *c][..],
+        [_] => return None,
+        _ => tail,
+    };
+    let mut n = 0u32;
+    for &c in data {
+        let s = SEXTET[c as usize];
+        if s & INVALID != 0 {
+            return None;
+        }
+        n = (n << 6) | u32::from(s);
+    }
+    n <<= 6 * (4 - data.len());
+    let len = groups.len() * 3 + data.len() - 1;
+    out[groups.len() * 3..].copy_from_slice(&[(n >> 16) as u8, (n >> 8) as u8, n as u8]);
+    out.truncate(len);
     Some(out)
 }
 
@@ -87,6 +93,21 @@ pub fn encode_into(input: &[u8], out: &mut Vec<u8>) {
         }
     }
 }
+
+const INVALID: u8 = 0x80;
+
+/// [`decode_char`] as a table, with [`INVALID`] for every rejected byte.
+const SEXTET: [u8; 256] = {
+    let mut table = [INVALID; 256];
+    let mut c = 0;
+    while c < 256 {
+        if let Some(v) = decode_char(c as u8) {
+            table[c] = v;
+        }
+        c += 1;
+    }
+    table
+};
 
 const fn decode_char(c: u8) -> Option<u8> {
     match c {
