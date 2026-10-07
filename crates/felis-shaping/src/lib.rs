@@ -17,7 +17,7 @@ use skrifa::raw::{
 };
 pub use swash::GlyphId;
 use swash::{
-    FontRef, Setting,
+    FontRef, NormalizedCoord, Setting,
     scale::{Render, ScaleContext, Source, StrikeWith, image::Content},
     shape::{Direction, ShapeContext},
     zeno::Format,
@@ -82,6 +82,10 @@ pub struct Font {
     /// the GSUB/GPOS tables every pass (21% of `shape_run` time).
     key: swash::CacheKey,
     color: bool,
+    /// Variation-axis position, one entry per axis; empty for a static
+    /// face. Every scaler, shaper and metrics call must pass it, or a
+    /// variable face draws its default instance whatever weight was asked.
+    coords: Vec<NormalizedCoord>,
 }
 
 impl Font {
@@ -170,6 +174,28 @@ impl Font {
             offset,
             key: swash::CacheKey::new(),
             color,
+            coords: Vec::new(),
+        })
+    }
+
+    /// The same face at `weight` on its `wght` axis (clamped to the
+    /// axis range), sharing the font bytes; `None` for a face without
+    /// one. fontdb lists a variable file once, at its default instance,
+    /// so a bold query against it returns that instance unchanged.
+    #[must_use]
+    pub fn at_weight(&self, weight: u16) -> Option<Self> {
+        let wght = swash::tag_from_bytes(b"wght");
+        let variations = self.font_ref().variations();
+        variations.find_by_tag(wght)?;
+        let coords = variations
+            .normalized_coords([(wght, f32::from(weight))])
+            .collect();
+        Some(Self {
+            bytes: self.bytes.clone(),
+            offset: self.offset,
+            key: swash::CacheKey::new(),
+            color: self.color,
+            coords,
         })
     }
 
@@ -183,7 +209,11 @@ impl Font {
     pub fn advance_px(&self, c: char, px: f32) -> Option<f32> {
         let face = self.font_ref();
         let glyph_id = face.charmap().map(c);
-        (glyph_id != 0).then(|| face.glyph_metrics(&[]).scale(px).advance_width(glyph_id))
+        (glyph_id != 0).then(|| {
+            face.glyph_metrics(&self.coords)
+                .scale(px)
+                .advance_width(glyph_id)
+        })
     }
 
     /// The glyph the face's cmap format 14 subtable names for `base`
@@ -221,10 +251,12 @@ impl Font {
     #[must_use]
     pub fn cell_metrics(&self, px: f32) -> CellMetrics {
         let face = self.font_ref();
-        let metrics = face.metrics(&[]).scale(px);
+        let metrics = face.metrics(&self.coords).scale(px);
         let glyph_id = face.charmap().map('M');
         let width = if glyph_id != 0 {
-            face.glyph_metrics(&[]).scale(px).advance_width(glyph_id)
+            face.glyph_metrics(&self.coords)
+                .scale(px)
+                .advance_width(glyph_id)
         } else {
             px * 0.6
         };
@@ -414,7 +446,7 @@ fn substitute_variant(font: &Font, px: f32, text: &str, glyphs: &mut [ShapedGlyp
     let Some(variant) = font.variant_glyph(base, selector) else {
         return;
     };
-    let metrics = face.glyph_metrics(&[]).scale(px);
+    let metrics = face.glyph_metrics(&font.coords).scale(px);
     glyph.advance_px += metrics.advance_width(variant) - metrics.advance_width(nominal);
     glyph.glyph_id = variant;
 }
@@ -553,7 +585,8 @@ impl FontStack {
             None => query_default_monospace(db)?,
         };
         let base_family = Family::Name(&base_family);
-        let regular = Arc::new(Font::load_face_id(db, regular_id)?);
+        let loaded = Font::load_face_id(db, regular_id)?;
+        let regular = Arc::new(loaded.at_weight(fontdb::Weight::NORMAL.0).unwrap_or(loaded));
         let mut stack = Self::with_primary_features(regular.clone(), primary_features.to_vec());
         stack.load_styled(
             db,
@@ -642,7 +675,7 @@ impl FontStack {
                 ..Query::default()
             });
             self.styled_primaries[idx] = if let Some(id) = matched {
-                by_id
+                let face = by_id
                     .entry(id)
                     .or_insert_with(|| match Font::load_face_id(db, id) {
                         Ok(font) => Arc::new(font),
@@ -651,7 +684,14 @@ impl FontStack {
                             regular.clone()
                         }
                     })
-                    .clone()
+                    .clone();
+                match face.at_weight(weight.0) {
+                    Some(view) if id == regular_id && view.coords == regular.coords => {
+                        regular.clone()
+                    }
+                    Some(view) => Arc::new(view),
+                    None => face,
+                }
             } else {
                 if over.family.is_some() {
                     warn!("styled font family not installed; using regular");
@@ -1138,7 +1178,12 @@ fn rasterize_with(ctx: &mut ScaleContext, font: &Font, glyph_id: GlyphId, px: f3
     // Unhinted on macOS: CoreText never grid-fits, so a hinted raster
     // sits beside every native window with stems snapped a pixel off.
     let hint = cfg!(not(target_os = "macos"));
-    let mut scaler = ctx.builder(face).size(px).hint(hint).build();
+    let mut scaler = ctx
+        .builder(face)
+        .size(px)
+        .hint(hint)
+        .normalized_coords(&font.coords)
+        .build();
     let image = Render::new(&[
         Source::ColorOutline(0),
         Source::ColorBitmap(StrikeWith::BestFit),
@@ -1280,6 +1325,7 @@ impl Shaper {
             .size(px)
             .direction(Direction::LeftToRight)
             .features(parsed.iter().copied())
+            .normalized_coords(&font.coords)
             .build();
         shaper.add_str(text);
         let mut out = Vec::new();
@@ -1908,6 +1954,59 @@ mod tests {
             dims(pinned.cell_metrics(14.0))
         );
         assert_eq!(stack.len(), 1);
+    }
+
+    /// The pinned variable face defaults to `ExtraLight`, so a stack that
+    /// draws its default instance renders regular and bold alike, too thin.
+    #[test]
+    fn variable_face_draws_regular_and_bold_at_their_weights() {
+        let Some(dir) = std::env::var_os("FELIS_TEST_FONT_DIR") else {
+            eprintln!("FELIS_TEST_FONT_DIR unset; skipping");
+            return;
+        };
+        let file = std::path::Path::new(&dir).join("truetype/Monaspace Neon Var.ttf");
+        let family = "Monaspace Neon Var";
+        let stack = FontStack::discover_in_files(
+            std::slice::from_ref(&file),
+            Some(family),
+            &[],
+            &[],
+            &StyleFaces::default(),
+        )
+        .expect("the variable face loads");
+        let mut db = Database::new();
+        db.load_font_file(&file).expect("the variable face reads");
+        let default_instance = Font::try_load_with(&db, family).expect("the variable face loads");
+        let ink = |font: &Font| {
+            let bitmap = rasterize(&mut ScaleContext::new(), font, 'M', 32.0);
+            bitmap
+                .pixels()
+                .as_bytes()
+                .iter()
+                .map(|&p| u64::from(p))
+                .sum::<u64>()
+        };
+        let bold = FontStyle {
+            bold: true,
+            italic: false,
+        };
+        let default_ink = ink(&default_instance);
+        let regular_ink = ink(stack.styled_primary(FontStyle::REGULAR));
+        let bold_ink = ink(stack.styled_primary(bold));
+        assert!(
+            Arc::ptr_eq(
+                stack.styled_primary(FontStyle::REGULAR),
+                stack.styled_primary(FontStyle {
+                    bold: false,
+                    italic: true,
+                }),
+            ),
+            "an italic that lands on the regular view reuses it",
+        );
+        assert!(
+            default_ink < regular_ink && regular_ink < bold_ink,
+            "ink must grow ExtraLight < Regular < Bold: {default_ink} {regular_ink} {bold_ink}",
+        );
     }
 
     #[test]

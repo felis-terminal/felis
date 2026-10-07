@@ -423,10 +423,12 @@ smaller and the cache key simpler.
 
 **Hinting, variable, and color fonts.** Hinting is off on macOS, where CoreText renders every native window unhinted,
 and on everywhere else; fontconfig's hinting preference is not consulted. Bold / italic select a separate styled face
-per [Per-style faces](#per-style-faces). For a variable font that ships one file, fontdb's weight/slant query lands the
-right named instance (weight 400 / 700) of that file, so the styled primary and the regular primary can be two views of
-one variable face. Color fonts (COLR/CPAL, sbix, CBDT, all supported by swash) rasterize into RGBA atlas slots; the cell
-shader samples RGBA instead of R8.
+per [Per-style faces](#per-style-faces). fontdb lists a variable font file once, at its default instance, so its weight
+query returns that file whatever weight was asked; felis then sets the face's `wght` axis to 400 for regular and 700 for
+bold, and the styled primary and the regular primary become two views of one variable face. Only `wght` is driven: a
+variable face with a `slnt` or `ital` axis but no separate italic file draws italic cells upright, as a family without
+an italic face does. Color fonts (COLR/CPAL, sbix, CBDT, all supported by swash) rasterize into RGBA atlas slots; the
+cell shader samples RGBA instead of R8.
 
 **Bidi: not performed.** felis runs no UAX#9 reordering across the cell grid (a non-goal: the grid is linear visual
 order), and the shaper is fixed left-to-right inside a run as well ("Shaping unit: the ligature run" above), so RTL text
