@@ -23,7 +23,7 @@ directories = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
-rustix = { workspace = true }
+rustix = { workspace = true, features = ["pipe"] }
 
 # libc for getpeereid(3) on BSDs/macOS: rustix does not wrap it and pulling nix adds unnecessary build overhead.
 # Target list must match build.rs felis_getpeereid cfg.

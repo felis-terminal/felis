@@ -62,6 +62,30 @@ impl Listener {
         })
     }
 
+    /// A listening socket this process already holds, carried across an
+    /// in-place upgrade's `execve`. Nothing is probed, unlinked, or bound:
+    /// the endpoint's socket is this one, and it never stopped listening.
+    pub(crate) fn adopt(fd: std::os::fd::OwnedFd, endpoint: &Endpoint) -> io::Result<Self> {
+        let std_listener = std::os::unix::net::UnixListener::from(fd);
+        let local = std_listener.local_addr()?;
+        if local.as_pathname() != Some(endpoint.path()) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "inherited listener is not bound to the endpoint",
+            ));
+        }
+        std_listener.set_nonblocking(true)?;
+        Ok(Self {
+            inner: UnixListener::from_std(std_listener)?,
+            path: endpoint.path().to_path_buf(),
+            expected_uid: geteuid(),
+        })
+    }
+
+    pub(crate) fn as_fd(&self) -> std::os::fd::BorrowedFd<'_> {
+        self.inner.as_fd()
+    }
+
     pub(crate) async fn accept(&self) -> Result<UnixStream, AcceptError> {
         let (stream, _addr) = self.inner.accept().await?;
         match verify_peer_uid(&stream, self.expected_uid) {

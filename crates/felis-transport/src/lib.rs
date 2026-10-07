@@ -4,13 +4,16 @@
 //! The OS-specific local carrier stays behind the [`local`] facade
 //! exposing `local::{ReadHalf, WriteHalf}`.
 
-// `deny`, not `forbid`: `peer::peer_uid` opts back in with a fn-scoped
-// allow for `getpeereid(3)`, which `forbid` would reject.
+// `deny`, not `forbid`: `peer::peer_uid` (`getpeereid(3)`) and
+// `inherit::take_inherited` opt back in with fn-scoped allows, which
+// `forbid` would reject.
 #![cfg_attr(all(not(test), not(windows)), deny(unsafe_code))]
 #![cfg_attr(windows, allow(unsafe_code))]
 
 pub mod driver;
 pub mod framing;
+#[cfg(unix)]
+pub mod inherit;
 pub mod local;
 pub mod logging;
 pub mod peer;
