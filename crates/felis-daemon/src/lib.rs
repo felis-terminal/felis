@@ -30,6 +30,7 @@ pub mod pool;
 pub mod relay;
 pub mod serve;
 pub(crate) mod terminfo;
+pub mod upgrade;
 pub use pool::{DEFAULT_COLS, DEFAULT_ROWS, SessionId, SessionMeta, SessionPool};
 pub use serve::{ServeError, serve_unix};
 
@@ -144,6 +145,8 @@ pub struct SpawnedPty {
     pub resizer: Resizer,
     pub core: Arc<parking_lot::Mutex<ParseCore>>,
     pub signals: Arc<ParseSignals>,
+    /// Parks the PTY threads for an in-place upgrade.
+    pub quiescer: felis_pty::Quiescer,
 }
 
 impl SpawnedPty {
@@ -180,15 +183,43 @@ impl SpawnedPty {
         let signals = Arc::new(ParseSignals::new());
         let sink = parse_sink::build_sink(Arc::clone(&core), Arc::clone(&signals));
         let session = felis_pty::spawn(command, DEFAULT_SIZE, sink)?;
+        Ok(Self::from_session(session, core, signals))
+    }
+
+    /// Resumes a session an in-place upgrade carried across `execve`: the
+    /// PTY master and the child are already this process's. The grid
+    /// starts at `rows` x `cols`.
+    #[cfg(unix)]
+    pub fn adopt(
+        master: std::os::fd::OwnedFd,
+        pid: i32,
+        exit_status: Option<i32>,
+        rows: u16,
+        cols: u16,
+    ) -> Result<Self, SessionError> {
+        let core = Arc::new(parking_lot::Mutex::new(ParseCore::new(rows, cols)));
+        let signals = Arc::new(ParseSignals::new());
+        let sink = parse_sink::build_sink(Arc::clone(&core), Arc::clone(&signals));
+        let session = felis_pty::adopt(master, pid, exit_status, sink)?;
+        Ok(Self::from_session(session, core, signals))
+    }
+
+    fn from_session(
+        session: felis_pty::PtySession,
+        core: Arc<parking_lot::Mutex<ParseCore>>,
+        signals: Arc<ParseSignals>,
+    ) -> Self {
+        let quiescer = session.quiescer();
         let (reader, writer, child, resizer) = session.split();
-        Ok(Self {
+        Self {
             reader,
             writer,
             child,
             resizer,
             core,
             signals,
-        })
+            quiescer,
+        }
     }
 }
 

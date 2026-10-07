@@ -25,7 +25,6 @@ use felis_protocol::{
         PushMsg, RefusalReason, RegionToDaemonMsg, RequestId, ResolvedId, SearchToDaemonMsg,
         SessionInfo, SessionToClientMsg, SessionToDaemonMsg, SpawnOutcome, StopMode, StopOutcome,
         StreamErrorReason, StreamId, Subject, SwitchScope, SwitchTarget, ThemeChannel,
-        UpgradeOutcome, UpgradeRefusal,
     },
     preface::{self, CarrierBlock, ClientPreface, DaemonAccept, DaemonRefuse},
 };
@@ -279,6 +278,8 @@ pub struct DaemonCaps {
     pub handshake: HandshakeDeadlines,
     /// Fired by `Ops::Stop` to end the accept loop.
     pub shutdown: Arc<Shutdown>,
+    /// The in-place upgrade's barrier and the listening socket it carries.
+    pub upgrade: Arc<crate::upgrade::UpgradeState>,
 }
 
 /// The daemon's own exit signal: one sender for the process, watched by
@@ -321,6 +322,7 @@ impl Default for DaemonCaps {
             admission: ConnectionAdmission::new(crate::pool::MAX_CONNECTIONS),
             handshake: HandshakeDeadlines::default(),
             shutdown: Shutdown::new(),
+            upgrade: crate::upgrade::UpgradeState::new(),
         }
     }
 }
@@ -388,16 +390,7 @@ pub async fn serve_unix_with_factory(
     factory: SessionFactory,
 ) -> Result<(), ServeError> {
     let endpoint = endpoint.into();
-    // A relative endpoint cannot derive a usable agent path; startup is
-    // the only moment an operator can act on it.
-    let mut exit = caps.shutdown.watch();
-    let caps = DaemonCaps {
-        agent: crate::agent::AgentLink::for_endpoint(&endpoint)
-            .map_err(ServeError::Endpoint)?
-            .map(Arc::new),
-        endpoint: Some(endpoint_env(&endpoint)),
-        ..caps
-    };
+    let caps = with_endpoint(&endpoint, caps)?;
     let server = Listener::bind(&endpoint)?;
     // After the bind, which refuses an endpoint a live daemon still
     // serves: only then is a link at the derived path certainly a dead
@@ -412,12 +405,69 @@ pub async fn serve_unix_with_factory(
     #[cfg(target_os = "linux")]
     crate::notify::notify_ready(std::env::var_os(crate::NOTIFY_SOCKET_ENV).as_deref())
         .map_err(ServeError::Io)?;
+    accept_loop(server, endpoint, caps, pool, factory).await
+}
+
+/// Serves the listening socket a predecessor carried across an in-place
+/// upgrade. The predecessor already cleared stale links and told the
+/// service manager it was ready, and the socket path is still its.
+#[cfg(unix)]
+pub async fn serve_resumed(
+    server: Listener,
+    endpoint: Endpoint,
+    caps: DaemonCaps,
+    pool: Arc<Mutex<SessionPool>>,
+    factory: SessionFactory,
+) -> Result<(), ServeError> {
+    let caps = with_endpoint(&endpoint, caps)?;
+    info!(endpoint = %endpoint, "felis-daemon resumed after an upgrade");
+    accept_loop(server, endpoint, caps, pool, factory).await
+}
+
+fn with_endpoint(endpoint: &Endpoint, caps: DaemonCaps) -> Result<DaemonCaps, ServeError> {
+    // A relative endpoint cannot derive a usable agent path; startup is
+    // the only moment an operator can act on it.
+    Ok(DaemonCaps {
+        agent: crate::agent::AgentLink::for_endpoint(endpoint)
+            .map_err(ServeError::Endpoint)?
+            .map(Arc::new),
+        endpoint: Some(endpoint_env(endpoint)),
+        ..caps
+    })
+}
+
+async fn accept_loop(
+    server: Listener,
+    endpoint: Endpoint,
+    caps: DaemonCaps,
+    pool: Arc<Mutex<SessionPool>>,
+    factory: SessionFactory,
+) -> Result<(), ServeError> {
+    let mut exit = caps.shutdown.watch();
+    #[cfg(unix)]
+    if let Err(err) = caps
+        .upgrade
+        .set_listener(server.as_fd(), endpoint.path().to_path_buf())
+    {
+        warn!(
+            ?err,
+            "the listening socket cannot be kept for an in-place upgrade"
+        );
+    }
     loop {
+        if caps.upgrade.gate.is_closed() {
+            tokio::select! {
+                biased;
+                _ = exit.changed() => break,
+                () = caps.upgrade.gate.wait_open() => {}
+            }
+        }
         // `biased` so a fired stop wins a ready accept: the daemon that
         // answered the stop must not admit one more connection first.
         let accepted = tokio::select! {
             biased;
             _ = exit.changed() => break,
+            () = caps.upgrade.gate.wait_closed() => continue,
             accepted = server.accept() => accepted,
         };
         match accepted {
@@ -455,6 +505,8 @@ pub async fn serve_unix_with_factory(
             }
         }
     }
+    #[cfg(unix)]
+    caps.upgrade.clear_listener();
     info!(endpoint = %endpoint, "felis-daemon stopping");
     // Nothing unlinks the path, here or in `Drop` (REQ-009d): an
     // unlink would race a replacement daemon that rebound the same
@@ -1012,6 +1064,11 @@ async fn create_session(
              start one on another daemon"
                 .to_owned(),
         ),
+        ReserveRefusal::Upgrading => (
+            CreateFailure::SpawnFailed,
+            "the daemon is switching to a new binary; create the session again in a moment"
+                .to_owned(),
+        ),
     })?;
     // Before the spawn: the child env carries `FELIS_SESSION_ID`, and
     // env is fixed at exec.
@@ -1092,6 +1149,9 @@ async fn wait_for_attach<R: tokio::io::AsyncRead + Unpin, W: tokio::io::AsyncWri
         let Some(frame) = next else {
             return Ok(None);
         };
+        // Held through the frame: whatever it attaches, creates or stops
+        // lands before an upgrade's barrier closes, or after it reopens.
+        let dispatching = caps.upgrade.gate.dispatch().await;
         let classified = match driver.classify(&frame) {
             Ok(classified) => classified,
             // The driver's kind-level mode gate fires before any arm-level one
@@ -1247,6 +1307,11 @@ async fn wait_for_attach<R: tokio::io::AsyncRead + Unpin, W: tokio::io::AsyncWri
                 // Every verb replies and the connection lives on; the
                 // request id the driver validated tells the replies apart.
                 let correlation = Correlation::request(delivered.request());
+                if let OpsToDaemonMsg::Upgrade { successor } = &delivered.msg {
+                    drop(dispatching);
+                    upgrade_connection(writer, correlation, successor, pool, caps).await?;
+                    continue;
+                }
                 let ctx = CreateCtx {
                     pool,
                     caps,
@@ -1330,6 +1395,9 @@ async fn wait_for_attach<R: tokio::io::AsyncRead + Unpin, W: tokio::io::AsyncWri
                                 return Ok(None);
                             }
                         };
+                        // The observer runs until the subscriber leaves; an
+                        // upgrade ends it at the exec instead of waiting.
+                        drop(dispatching);
                         let sent = run_notification_observer(
                             reader, writer, driver, stream, only, &mut rx,
                         )
@@ -1556,8 +1624,10 @@ async fn ops_reply(ctx: CreateCtx<'_>, msg: OpsToDaemonMsg) -> OpsToClientMsg {
         OpsToDaemonMsg::Stop { mode } => OpsToClientMsg::StopReply {
             outcome: stop_daemon(pool, caps, mode).await,
         },
-        OpsToDaemonMsg::Upgrade { successor } => OpsToClientMsg::UpgradeReply {
-            outcome: upgrade_requested(&successor),
+        // Answered by `upgrade_connection`: the exec must follow the reply
+        // on the requesting connection.
+        OpsToDaemonMsg::Upgrade { .. } => OpsToClientMsg::UpgradeReply {
+            outcome: crate::upgrade::refused(&crate::upgrade::Refusal::Busy),
         },
         OpsToDaemonMsg::Spawn { args } => {
             let outcome = match create_session(ctx, args).await {
@@ -1634,11 +1704,54 @@ async fn stop_daemon(
     }
 }
 
-/// Answer an `Ops::Upgrade` (`docs/reference/cli.md` "Daemon upgrade").
-pub(crate) fn upgrade_requested(_successor: &str) -> UpgradeOutcome {
-    UpgradeOutcome::Refused {
-        reason: UpgradeRefusal::Unsupported,
-        detail: "in-place upgrade is not implemented in this daemon".to_owned(),
+/// Answers an `Ops::Upgrade` (`docs/reference/cli.md` "Daemon upgrade"):
+/// `Upgrading` goes out before the exec, which closes this connection
+/// with every other.
+async fn upgrade_connection<W>(
+    writer: &mut FrameWriter<W>,
+    correlation: Correlation,
+    successor: &str,
+    pool: &Arc<Mutex<SessionPool>>,
+    caps: &DaemonCaps,
+) -> Result<(), ConnError>
+where
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    #[cfg(unix)]
+    {
+        let prepared = crate::upgrade::prepare(PathBuf::from(successor), pool, &caps.upgrade).await;
+        let prepared = match prepared {
+            Ok(prepared) => prepared,
+            Err(refusal) => {
+                warn!(%refusal, "upgrade refused");
+                let reply = OpsToClientMsg::UpgradeReply {
+                    outcome: crate::upgrade::refused(&refusal),
+                };
+                writer.send_correlated(&reply, correlation).await?;
+                return Ok(());
+            }
+        };
+        let reply = OpsToClientMsg::UpgradeReply {
+            outcome: felis_protocol::messages::UpgradeOutcome::Upgrading,
+        };
+        if let Err(err) = writer.send_correlated(&reply, correlation).await {
+            prepared.abandon().await;
+            return Err(err.into());
+        }
+        let refusal = prepared.exec().await;
+        error!(%refusal, "upgrade: the exec failed after it was announced; serving on");
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (successor, pool, caps);
+        let reply = OpsToClientMsg::UpgradeReply {
+            outcome: crate::upgrade::refused(&crate::upgrade::Refusal::Unsupported(
+                "this platform drains and restarts instead".to_owned(),
+            )),
+        };
+        writer.send_correlated(&reply, correlation).await?;
+        Ok(())
     }
 }
 
@@ -2106,6 +2219,7 @@ async fn pump_inbound<R: tokio::io::AsyncRead + Unpin>(
     retired: &mut mpsc::UnboundedReceiver<StreamId>,
 ) -> Result<(), ConnError> {
     while let Some(frame) = reader.next_frame().await? {
+        ctx.caps.upgrade.gate.wait_open().await;
         while let Ok(stream) = retired.try_recv() {
             let _freed = driver.retire_stream(stream);
         }
@@ -2139,16 +2253,20 @@ async fn pump_inbound<R: tokio::io::AsyncRead + Unpin>(
                     };
                     *reservation = Some(Box::new(permit));
                 }
+                let dispatching = ctx.caps.upgrade.gate.dispatch().await;
                 // The session task ended (destroy / reap): input has nowhere to go.
                 if attached.cmd.send(cmd).await.is_err() {
                     return Ok(());
                 }
+                drop(dispatching);
             }
             Route::Ops { msg, correlation } => {
+                let dispatching = ctx.caps.upgrade.gate.dispatch().await;
                 let ev = OutEvent::Ops {
                     msg: Box::new(ops_reply(ctx, *msg).await),
                     correlation,
                 };
+                drop(dispatching);
                 if !attached.queue(ev) {
                     return Ok(());
                 }

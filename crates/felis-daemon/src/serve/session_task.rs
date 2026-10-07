@@ -352,6 +352,10 @@ pub enum SessionCmd {
         reply: oneshot::Sender<PushOutcome>,
     },
     Shutdown,
+    /// Answered once every command queued ahead of it has run: an
+    /// in-place upgrade's barrier, so input a connection handed over
+    /// before the barrier reaches the PTY writer before it parks.
+    Settle(oneshot::Sender<()>),
 }
 
 /// Two shapes, not a count with a sentinel: an `Accepted(0)` is a real
@@ -442,6 +446,60 @@ pub struct SessionLifecycle {
 #[allow(clippy::too_many_arguments)]
 pub async fn spawn_owned(
     pool: &Arc<Mutex<SessionPool>>,
+    session: Session,
+    policy: IdlePolicy,
+    id: SessionId,
+    pixel_w: u16,
+    pixel_h: u16,
+    tags: Vec<String>,
+    slot: Option<SessionSlot>,
+    listing: Listing,
+) -> SessionLifecycle {
+    spawn_task(
+        pool, session, policy, id, pixel_w, pixel_h, tags, slot, listing, None,
+    )
+    .await
+}
+
+/// What a session carried across an in-place upgrade keeps of its
+/// registration, so the successor lists it where its predecessor did.
+pub struct Restored {
+    pub sequence: std::num::NonZeroU64,
+    pub title: Option<String>,
+    pub cwd: Option<String>,
+    pub exited: bool,
+}
+
+/// Registers a session an in-place upgrade carried over, under its own
+/// id and sequence, listed at once: whoever created it is gone.
+pub async fn spawn_restored(
+    pool: &Arc<Mutex<SessionPool>>,
+    session: Session,
+    policy: IdlePolicy,
+    id: SessionId,
+    pixel_w: u16,
+    pixel_h: u16,
+    tags: Vec<String>,
+    restored: Restored,
+) -> SessionLifecycle {
+    spawn_task(
+        pool,
+        session,
+        policy,
+        id,
+        pixel_w,
+        pixel_h,
+        tags,
+        None,
+        Listing::Public,
+        Some(restored),
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn spawn_task(
+    pool: &Arc<Mutex<SessionPool>>,
     mut session: Session,
     policy: IdlePolicy,
     id: SessionId,
@@ -450,6 +508,7 @@ pub async fn spawn_owned(
     tags: Vec<String>,
     slot: Option<SessionSlot>,
     listing: Listing,
+    restored: Option<Restored>,
 ) -> SessionLifecycle {
     let (cmd_tx, cmd_rx) = mpsc::channel(CMD_CHANNEL_CAPACITY);
     // One lock hold, so the epochs describe exactly the strings seeded
@@ -473,7 +532,15 @@ pub async fn spawn_owned(
     // published: a session must never be listable without the sequence
     // that places it in the ring.
     let mut guard = pool.lock().await;
-    let sequence = guard.next_sequence();
+    let (sequence, title, cwd, exited) = match restored {
+        Some(restored) => (
+            restored.sequence,
+            title.or(restored.title),
+            cwd.or(restored.cwd),
+            restored.exited,
+        ),
+        None => (guard.next_sequence(), title, cwd, false),
+    };
     let meta = Arc::new(StdMutex::new(SessionMeta {
         rows,
         cols,
@@ -485,7 +552,7 @@ pub async fn spawn_owned(
         subscribers: 0,
         tags: tags.into_iter().collect(),
         last_notification: None,
-        exited: false,
+        exited,
         // A restored grid may already carry a D mark.
         last_exit_code: session.lock_core().grid.last_command_exit(),
         attachments: Vec::new(),
@@ -499,6 +566,10 @@ pub async fn spawn_owned(
                 input_budget: Arc::clone(&input_budget),
                 meta: Arc::clone(&meta),
                 resizer: Some(Arc::clone(&session.resizer)),
+                upgrade: Some(crate::pool::UpgradeParts {
+                    quiescer: session.quiescer.clone(),
+                    child: Arc::clone(&session.child),
+                }),
             },
             slot,
             listing,
@@ -532,7 +603,7 @@ pub async fn spawn_owned(
         input_owner: None,
         attachments_dirty: false,
         pty_eof: false,
-        child_exited: false,
+        child_exited: exited,
         row_cache: streaming::RowEncodeCache::default(),
         reported_focus: false,
         focus_dirty: false,
@@ -1195,6 +1266,10 @@ impl SessionTask {
                 None
             }
             SessionCmd::Shutdown => Some(EndReason::Destroyed),
+            SessionCmd::Settle(done) => {
+                let _settled = done.send(());
+                None
+            }
         }
     }
 
@@ -6159,6 +6234,7 @@ mod tests {
             cmd,
             input_budget: crate::pool::new_input_budget(),
             resizer: None,
+            upgrade: None,
             meta: Arc::new(StdMutex::new(SessionMeta {
                 rows: crate::DEFAULT_ROWS,
                 cols: crate::DEFAULT_COLS,
@@ -6325,6 +6401,7 @@ mod tests {
             cmd,
             input_budget: crate::pool::new_input_budget(),
             resizer: None,
+            upgrade: None,
             meta: Arc::new(StdMutex::new(SessionMeta {
                 rows: crate::DEFAULT_ROWS,
                 cols: crate::DEFAULT_COLS,

@@ -47,6 +47,25 @@ enum Cmd {
         /// when `RUST_LOG` is unset; otherwise `RUST_LOG` wins.
         #[arg(long)]
         trace_perf: bool,
+        /// The descriptor of the dump an in-place upgrade carried
+        /// across `execve`; set only by the predecessor daemon.
+        #[cfg(unix)]
+        #[arg(long, hide = true)]
+        resume_fd: Option<i32>,
+    },
+    /// Asked by a running daemon before an in-place upgrade: whether
+    /// this binary can take over. Answers by exit code.
+    #[cfg(unix)]
+    #[command(hide = true)]
+    UpgradeProbe {
+        #[arg(long)]
+        dump_version: u32,
+        /// The protocol majors the running daemon serves, `MIN-MAX`.
+        #[arg(long, value_parser = parse_majors)]
+        majors: (u16, u16),
+        /// Read the dump from stdin and validate it.
+        #[arg(long)]
+        check_dump: bool,
     },
     /// Bridge stdin/stdout to the persistent per-UID daemon (the cross-host SSH
     /// relay: `ssh user@host felis-daemon relay`).
@@ -79,7 +98,12 @@ fn build_runtime() -> Result<tokio::runtime::Runtime> {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.cmd {
-        Cmd::Serve { socket, trace_perf } => {
+        Cmd::Serve {
+            socket,
+            trace_perf,
+            #[cfg(unix)]
+            resume_fd,
+        } => {
             // Only `serve` tees into the log file: a relay teeing into the same
             // file would race the serving daemon's rotation.
             logging::init(
@@ -87,8 +111,22 @@ fn main() -> Result<()> {
                 Some("daemon.log"),
                 log_filter_directive(trace_perf),
             );
+            #[cfg(unix)]
+            if let Some(resume_fd) = resume_fd {
+                return build_runtime()?.block_on(run_resumed(socket, resume_fd));
+            }
             build_runtime()?.block_on(run_serve_unix(socket))
         }
+        #[cfg(unix)]
+        Cmd::UpgradeProbe {
+            dump_version,
+            majors,
+            check_dump,
+        } => std::process::exit(felis_daemon::upgrade::probe::answer(
+            dump_version,
+            majors,
+            check_dump,
+        )),
         Cmd::Relay { socket, no_spawn } => {
             logging::init(Console::Stderr, None, log_filter_directive(false));
             let socket = socket_or_default(socket)?;
@@ -110,7 +148,50 @@ async fn run_serve_unix(socket_override: Option<PathBuf>) -> Result<()> {
     let socket = socket_or_default(socket_override)?;
     info!(path = %socket.display(), "starting felis-daemon");
     let pool = Arc::new(Mutex::new(SessionPool::new()));
-    match serve_unix(&socket, DaemonCaps::default(), pool).await {
+    serve_outcome(serve_unix(&socket, daemon_caps(), pool).await)
+}
+
+#[cfg(unix)]
+async fn run_resumed(socket_override: Option<PathBuf>, resume_fd: i32) -> Result<()> {
+    let socket = socket_or_default(socket_override)?;
+    info!(path = %socket.display(), "felis-daemon taking over after an upgrade");
+    let pool = Arc::new(Mutex::new(SessionPool::new()));
+    let caps = daemon_caps();
+    let listener = felis_daemon::upgrade::restore::restore(resume_fd, &socket, &pool, caps.idle)
+        .await
+        .context("restore after an in-place upgrade")?;
+    serve_outcome(
+        felis_daemon::serve::serve_resumed(
+            listener,
+            felis_transport::Endpoint::unix(socket),
+            caps,
+            pool,
+            felis_daemon::serve::default_session_factory(),
+        )
+        .await,
+    )
+}
+
+fn daemon_caps() -> DaemonCaps {
+    DaemonCaps {
+        upgrade: felis_daemon::upgrade::UpgradeState::replaceable(),
+        ..DaemonCaps::default()
+    }
+}
+
+#[cfg(unix)]
+fn parse_majors(text: &str) -> Result<(u16, u16), String> {
+    let (min, max) = text.split_once('-').ok_or("expected MIN-MAX")?;
+    let min = min.parse().map_err(|err| format!("{err}"))?;
+    let max = max.parse().map_err(|err| format!("{err}"))?;
+    if min > max {
+        return Err("MIN exceeds MAX".to_owned());
+    }
+    Ok((min, max))
+}
+
+fn serve_outcome(outcome: Result<(), ServeError>) -> Result<()> {
+    match outcome {
         Ok(()) => Ok(()),
         Err(ServeError::Bind(e)) => Err(anyhow::Error::new(e).context("bind daemon socket")),
         Err(ServeError::Accept(e)) => Err(anyhow::Error::new(e).context("accept connection")),
@@ -140,15 +221,15 @@ mod tests {
     fn cli_parses_trace_perf_flag() {
         let cli = Cli::try_parse_from(["felis-daemon", "serve", "--trace-perf"])
             .expect("parses with --trace-perf");
-        match cli.cmd {
-            Cmd::Serve { trace_perf, .. } => assert!(trace_perf),
-            other @ Cmd::Relay { .. } => panic!("expected Serve, got {other:?}"),
-        }
+        let Cmd::Serve { trace_perf, .. } = cli.cmd else {
+            panic!("expected Serve, got {:?}", cli.cmd);
+        };
+        assert!(trace_perf);
         let default = Cli::try_parse_from(["felis-daemon", "serve"]).expect("parses bare serve");
-        match default.cmd {
-            Cmd::Serve { trace_perf, .. } => assert!(!trace_perf),
-            other @ Cmd::Relay { .. } => panic!("expected Serve, got {other:?}"),
-        }
+        let Cmd::Serve { trace_perf, .. } = default.cmd else {
+            panic!("expected Serve, got {:?}", default.cmd);
+        };
+        assert!(!trace_perf);
     }
 
     /// `log_filter_directive(true)` widens hot-path targets to trace

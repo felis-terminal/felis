@@ -7488,7 +7488,7 @@ async fn a_refused_upgrade_is_answered_and_leaves_the_daemon_serving() {
         .expect("an Upgrade reply");
     match codec::decode::<OpsToClientMsg>(&frame.body).unwrap() {
         OpsToClientMsg::UpgradeReply {
-            outcome: UpgradeOutcome::Refused { .. },
+            outcome: felis_protocol::messages::UpgradeOutcome::Refused { .. },
         } => {}
         other => panic!("expected a refused UpgradeReply, got {other:?}"),
     }
