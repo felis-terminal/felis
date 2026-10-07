@@ -81,6 +81,8 @@ teed to `daemon.log` (`docs/reference/cli.md` "Log files"; `RUST_LOG` respected,
   - bridge conversations or felis-json frames changed → `just golden`.
   - `felis.proto` changed → `just proto` (the pre-commit hook fails on a stale generated copy); see the `extend-ipc`
     skill.
+  - Unicode version bumped → change the UCD pin in `dev/flake-module.nix` together with `unicode-width`, then
+    `just unicode-tables` (the pre-commit hook fails on a stale table; a test fails when the two versions differ).
 - Nontrivial behavior changes: drive the real binary once (step 3), not just the tests.
 
 ## 5. Docs and commit

@@ -1,4 +1,4 @@
-use super::{is_extended_pictographic, is_grapheme_extend};
+use super::{is_extended_pictographic, is_grapheme_extend, tables};
 use unicode_segmentation::UnicodeSegmentation;
 
 fn one_grapheme(s: &str) -> bool {
@@ -7,6 +7,11 @@ fn one_grapheme(s: &str) -> bool {
 
 fn scalars() -> impl Iterator<Item = char> {
     (0..=0x10_FFFFu32).filter_map(char::from_u32)
+}
+
+#[test]
+fn tables_share_the_unicode_version_of_unicode_width() {
+    assert_eq!(tables::UNICODE_VERSION, unicode_width::UNICODE_VERSION);
 }
 
 #[test]
