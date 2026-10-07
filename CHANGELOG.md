@@ -10,6 +10,11 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 
 ## [Unreleased]
 
+### Fixed
+
+- A variable font (one file with a `wght` axis, such as JetBrains Mono's `JetBrainsMono[wght].ttf`) draws bold cells at
+  bold weight and regular cells at regular weight; both used to draw the file's default instance.
+
 ## [0.1.2] - 2026-10-07
 
 Mostly fixes. Wide characters, emoji sequences and keycaps keep their cells through edits, resizes and font fallback;
