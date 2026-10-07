@@ -161,8 +161,8 @@ codepoints nothing covers, which the shape cache amortizes after the first miss.
 Bold and italic cells render in **separate font faces**, the felis analogue of kitty's `bold_font` / `italic_font` /
 `bold_italic_font`. The `FontStack` holds four styled primaries indexed by a 2-bit `FontStyle` (regular, bold, italic,
 bold-italic); `resolve(c, style)` picks the styled primary that covers `c` (a color one for an emoji-presentation `c`),
-then walks the **shared** codepoint fallback chain. A cell's `AttrFlags::BOLD` / `ITALIC` map to the `FontStyle`, and
-`resolve` is asked for that style.
+then walks the fallback chain, drawing the entry it lands on in that style. A cell's `AttrFlags::BOLD` / `ITALIC` map to
+the `FontStyle`, and `resolve` is asked for that style.
 
 **Config shape: nested tables, not four flat keys.** The face is configured with `[font.bold]` / `[font.italic]` /
 `[font.bold_italic]` sub-tables (config reference), each carrying its own optional `family` and `features`. The nested
@@ -203,13 +203,26 @@ font did not name, and the shear those terminals fall back to is synthesis, reje
 
 _Revisit if_ a font users report ships its italic only as STAT labels, with no named italic instance.
 
-**Shared fallback, shared metrics.** The CJK / emoji / symbol / Nerd fallback chain is _not_ styled: one face per entry
-serves all four styles, and a per-script styled cascade (kitty's configurable per-script chains) is out of scope for
-felis's one-flat-chain model. A variable fallback with a `wght` axis is set to 400 like the regular primary (a static
-one keeps its installed weight), because its default instance can be anywhere on the axis: Noto Sans CJK's variable file
-defaults to Thin. Cell metrics also come from the _regular_ primary only (the four faces must share an advance width or
-the monospace grid would break), so only codepoint coverage and the rasterized outline differ per style, never the cell
-box.
+**One fallback chain, styled per entry.** Each fallback entry is drawn in the cell's style from its own family, resolved
+the way the primary's styled faces are: a separate bold or italic file, else the variable file moved along its axes,
+else the entry's regular face (no synthesis). The regular face of a variable entry is set to `wght` 400 like the regular
+primary, because its default instance can be anywhere on the axis: Noto Sans CJK's variable file defaults to Thin. Color
+faces draw the same face in every style; emoji families ship no bold.
+
+Which entry draws a character is decided on the regular chain, and the style only picks that entry's face: an explicitly
+ordered `font.fallback` then lands on the same family in every style, even where some entry's bold file covers more than
+its regular one. For that choice to be safe, a styled face is kept only if it maps every codepoint its regular face maps
+(a variable entry's styled views share its cmap); a family whose bold file covers less draws that style regular, the
+outcome for a family with no bold at all. Rejected: **draw a styled-face miss from the regular face under a second
+handle**, which keeps bold for the glyphs such a family does cover but needs a second id space in the 6-bit sizing-key
+font id and a fourth case in every resolver, for a family shape not seen in practice. A per-script styled cascade
+(kitty's configurable per-script chains) stays out of scope for felis's one-flat-chain model.
+
+_Revisit if_ a real fallback family's styled face fails the coverage check, so a style users expect draws regular.
+
+**Shared metrics.** Cell metrics also come from the _regular_ primary only (the four faces must share an advance width
+or the monospace grid would break), so only codepoint coverage and the rasterized outline differ per style, never the
+cell box.
 
 Style rides the sizing key like every other axis that makes two lookups of one glyph differ (see "Cache" above), so
 `GlyphIndex::ensure` recovers the styled face from the key alone.
