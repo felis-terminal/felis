@@ -7,13 +7,9 @@ description:
   unattended, discarding the focus-warmup sample, decomposing cost with criterion micro-benches (pure dispatch vs decode
   vs full grid), capturing a samply profile of the daemon despite paranoid/mlock/attach/hand-off gotchas, and
   symbolicating raw addresses with jq + addr2line.
-license: same as the felis repository
 compatibility:
   Linux + Wayland (niri) or macOS host with felis built; needs kitten (kitty), samply, jq, addr2line (Linux) / python3
   (macOS). samply on Linux needs kernel.perf_event_paranoid <= 1.
-metadata:
-  author: felis
-  version: "2.0"
 allowed-tools:
   Bash(./target/release/felis:*) Bash(.agents/skills/perf-trace/scripts/*) Bash(python3 tools/bench/*) Bash(samply:*)
   Bash(jq:*) Bash(addr2line:*) Bash(cargo bench:*) Bash(cargo nextest:*) Bash(just bench:*) Bash(kitten:*) Bash(nix

@@ -7,13 +7,9 @@ description:
   without a human at the keyboard. Covers the $SHELL-wrapper launch trick, the log lines that are the reliable signal,
   and the focus/screenshot gotchas on Linux (niri) and macOS. For throughput benchmarking/profiling instead, see the
   perf-trace skill.
-license: same as the felis repository
 compatibility:
   Linux + Wayland (niri) or macOS host with felis built. Screenshots and pixel probes on macOS are the
   felis-macos-gui-debug skill.
-metadata:
-  author: felis
-  version: "1.0"
 allowed-tools:
   Bash(./target/release/felis:*) Bash(.agents/skills/producer-traffic-debug/scripts/*) Bash(pgrep:*) Bash(grep:*)
   Bash(niri:*) Read

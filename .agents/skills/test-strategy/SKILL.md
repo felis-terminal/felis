@@ -7,13 +7,9 @@ description:
   fuzz, when adding or running a Kani proof, or when reviewing whether a function is over- or under-tested. Covers the
   kernel-selection heuristic, the `#[cfg(kani)]` recipe, `just kani`, and — just as important — what NOT to verify with
   each tool.
-license: same as the felis repository
 compatibility:
   Kani layer is x86_64-linux only (see dev/packages/kani.nix, the packaging record). proptest / fuzz / insta run
   everywhere the dev shell does.
-metadata:
-  author: felis
-  version: "1.0"
 allowed-tools:
   Read Edit Bash(just kani:*) Bash(just test:*) Bash(just fuzz:*) Bash(cargo nextest:*) Bash(cargo kani:*) Bash(git
   log:*) Grep
