@@ -179,17 +179,43 @@ impl Font {
     }
 
     /// The same face at `weight` on its `wght` axis (clamped to the
-    /// axis range), sharing the font bytes; `None` for a face without
-    /// one. fontdb lists a variable file once, at its default instance,
-    /// so a bold query against it returns that instance unchanged.
+    /// axis range) and, when `italic`, at the [`italic_position`] of its
+    /// `ital`/`slnt` axes, sharing the font bytes; `None` when neither
+    /// applies. fontdb lists a variable file once, at its default
+    /// instance, so a bold or italic query returns that instance as is.
     #[must_use]
-    pub fn at_weight(&self, weight: u16) -> Option<Self> {
-        let wght = swash::tag_from_bytes(b"wght");
-        let variations = self.font_ref().variations();
-        variations.find_by_tag(wght)?;
-        let coords = variations
-            .normalized_coords([(wght, f32::from(weight))])
+    pub fn at_style(&self, weight: u16, italic: bool) -> Option<Self> {
+        let face = self.font_ref();
+        let variations = face.variations();
+        let axes: Vec<AxisInfo> = variations
+            .map(|v| AxisInfo {
+                tag: v.tag(),
+                default: v.default_value(),
+            })
             .collect();
+        let target = f32::from(weight);
+        let mut settings = Vec::new();
+        if axes.iter().any(|a| a.tag == WGHT) {
+            settings.push((WGHT, target));
+        }
+        if italic {
+            let instances: Vec<InstanceInfo> = face
+                .instances()
+                .map(|i| InstanceInfo {
+                    name: i
+                        .name(Some("en"))
+                        .or_else(|| i.name(None))
+                        .map(|n| n.to_string())
+                        .unwrap_or_default(),
+                    values: i.values().collect(),
+                })
+                .collect();
+            settings.extend(italic_position(target, &axes, &instances));
+        }
+        if settings.is_empty() {
+            return None;
+        }
+        let coords = variations.normalized_coords(settings).collect();
         Some(Self {
             bytes: self.bytes.clone(),
             offset: self.offset,
@@ -262,6 +288,81 @@ impl Font {
         };
         CellMetrics::from_scaled(width, metrics.ascent, metrics.descent, metrics.leading)
     }
+}
+
+const WGHT: swash::Tag = swash::tag_from_bytes(b"wght");
+const ITAL: swash::Tag = swash::tag_from_bytes(b"ital");
+const SLNT: swash::Tag = swash::tag_from_bytes(b"slnt");
+
+struct AxisInfo {
+    tag: swash::Tag,
+    default: f32,
+}
+
+struct InstanceInfo {
+    name: String,
+    /// Design-space values in fvar axis order.
+    values: Vec<f32>,
+}
+
+/// The `ital`/`slnt` settings for an italic view of an upright variable
+/// face: the italic named instance nearest `target_wght` among those
+/// whose other axes sit at their defaults, else `ital` = 1, else none.
+/// STAT is not read (docs/explanation/rendering/text-shaping.md
+/// "Per-style faces").
+fn italic_position(
+    target_wght: f32,
+    axes: &[AxisInfo],
+    instances: &[InstanceInfo],
+) -> Vec<(swash::Tag, f32)> {
+    let is_italic_axis = |tag| tag == ITAL || tag == SLNT;
+    if !axes.iter().any(|a| is_italic_axis(a.tag)) {
+        return Vec::new();
+    }
+    let wght = axes.iter().position(|a| a.tag == WGHT);
+    let distance = |inst: &InstanceInfo| wght.map_or(0.0, |w| (inst.values[w] - target_wght).abs());
+    let nearest = instances
+        .iter()
+        .filter(|inst| inst.values.len() == axes.len() && has_italic_token(&inst.name))
+        .filter(|inst| {
+            axes.iter().zip(&inst.values).all(|(a, v)| {
+                a.tag == WGHT || is_italic_axis(a.tag) || v.to_bits() == a.default.to_bits()
+            })
+        })
+        .min_by(|a, b| distance(a).total_cmp(&distance(b)));
+    if let Some(inst) = nearest {
+        return axes
+            .iter()
+            .zip(&inst.values)
+            .filter(|(a, _)| is_italic_axis(a.tag))
+            .map(|(a, v)| (a.tag, *v))
+            .collect();
+    }
+    if axes.iter().any(|a| a.tag == ITAL) {
+        return vec![(ITAL, 1.0)];
+    }
+    Vec::new()
+}
+
+/// Splits on spaces, `-`, `_` and lowercase-to-uppercase boundaries, so
+/// `BoldItalic` matches and `Italicized` does not.
+fn has_italic_token(name: &str) -> bool {
+    let mut tokens = Vec::new();
+    for word in name.split([' ', '-', '_']) {
+        let mut start = 0;
+        let mut prev_lower = false;
+        for (i, c) in word.char_indices() {
+            if prev_lower && c.is_uppercase() {
+                tokens.push(&word[start..i]);
+                start = i;
+            }
+            prev_lower = c.is_lowercase();
+        }
+        tokens.push(&word[start..]);
+    }
+    tokens
+        .iter()
+        .any(|t| t.eq_ignore_ascii_case("italic") || t.eq_ignore_ascii_case("oblique"))
 }
 
 /// Rescans every installed font (~300 ms on a large system); share one
@@ -586,7 +687,11 @@ impl FontStack {
         };
         let base_family = Family::Name(&base_family);
         let loaded = Font::load_face_id(db, regular_id)?;
-        let regular = Arc::new(loaded.at_weight(fontdb::Weight::NORMAL.0).unwrap_or(loaded));
+        let regular = Arc::new(
+            loaded
+                .at_style(fontdb::Weight::NORMAL.0, false)
+                .unwrap_or(loaded),
+        );
         let mut stack = Self::with_primary_features(regular.clone(), primary_features.to_vec());
         stack.load_styled(
             db,
@@ -632,6 +737,8 @@ impl FontStack {
     ) {
         let mut by_id: HashMap<fontdb::ID, Arc<Font>> = HashMap::new();
         by_id.insert(regular_id, regular.clone());
+        let mut views: HashMap<(fontdb::ID, Vec<NormalizedCoord>), Arc<Font>> = HashMap::new();
+        views.insert((regular_id, regular.coords.clone()), regular.clone());
         let variants = [
             (
                 FontStyle {
@@ -685,11 +792,15 @@ impl FontStack {
                         }
                     })
                     .clone();
-                match face.at_weight(weight.0) {
-                    Some(view) if id == regular_id && view.coords == regular.coords => {
-                        regular.clone()
-                    }
-                    Some(view) => Arc::new(view),
+                let italic = slant == fontdb::Style::Italic
+                    && db
+                        .face(id)
+                        .is_some_and(|f| f.style == fontdb::Style::Normal);
+                match face.at_style(weight.0, italic) {
+                    Some(view) => views
+                        .entry((id, view.coords.clone()))
+                        .or_insert_with(|| Arc::new(view))
+                        .clone(),
                     None => face,
                 }
             } else {
@@ -1994,19 +2105,254 @@ mod tests {
         let regular_ink = ink(stack.styled_primary(FontStyle::REGULAR));
         let bold_ink = ink(stack.styled_primary(bold));
         assert!(
-            Arc::ptr_eq(
-                stack.styled_primary(FontStyle::REGULAR),
-                stack.styled_primary(FontStyle {
-                    bold: false,
-                    italic: true,
-                }),
-            ),
-            "an italic that lands on the regular view reuses it",
-        );
-        assert!(
             default_ink < regular_ink && regular_ink < bold_ink,
             "ink must grow ExtraLight < Regular < Bold: {default_ink} {regular_ink} {bold_ink}",
         );
+    }
+
+    fn pinned_variable_stack(styles: &StyleFaces<'_>) -> Option<(FontStack, std::path::PathBuf)> {
+        let Some(dir) = std::env::var_os("FELIS_TEST_FONT_DIR") else {
+            eprintln!("FELIS_TEST_FONT_DIR unset; skipping");
+            return None;
+        };
+        let dir = std::path::PathBuf::from(dir);
+        let files = [
+            dir.join("truetype/Monaspace Neon Var.ttf"),
+            dir.join("opentype/MonaspaceNeon-Italic.otf"),
+        ];
+        let stack =
+            FontStack::discover_in_files(&files, Some("Monaspace Neon Var"), &[], &[], styles)
+                .expect("the pinned faces load");
+        Some((stack, files[0].clone()))
+    }
+
+    fn design_value(font: &Font, tag: swash::Tag, value: f32) -> NormalizedCoord {
+        font.font_ref()
+            .variations()
+            .find_by_tag(tag)
+            .expect("the face has the axis")
+            .normalize(value)
+    }
+
+    /// Monaspace Neon Var ships no italic file: its "Italic" and "Bold
+    /// Italic" named instances sit at `slnt` -11 on the upright file.
+    #[test]
+    fn variable_face_draws_italic_at_its_named_italic_slant() {
+        let Some((stack, _)) = pinned_variable_stack(&StyleFaces::default()) else {
+            return;
+        };
+        let regular = stack.styled_primary(FontStyle::REGULAR);
+        let italic = stack.styled_primary(FontStyle {
+            bold: false,
+            italic: true,
+        });
+        let bold_italic = stack.styled_primary(FontStyle {
+            bold: true,
+            italic: true,
+        });
+        let slanted = design_value(regular, SLNT, -11.0);
+        let slnt_at = |font: &Font| {
+            let index = font
+                .font_ref()
+                .variations()
+                .position(|v| v.tag() == SLNT)
+                .expect("the face has slnt");
+            font.coords[index]
+        };
+        assert_eq!(slnt_at(regular), 0);
+        assert_eq!(slnt_at(italic), slanted);
+        assert_eq!(slnt_at(bold_italic), slanted);
+        assert_eq!(
+            bold_italic.coords[0],
+            design_value(regular, WGHT, 700.0),
+            "bold italic keeps the bold weight",
+        );
+        let ink = |font: &Font| {
+            rasterize(&mut ScaleContext::new(), font, 'M', 32.0)
+                .pixels()
+                .as_bytes()
+                .to_vec()
+        };
+        assert_ne!(ink(regular), ink(italic));
+    }
+
+    #[test]
+    fn separate_italic_file_keeps_its_own_design() {
+        let italic_family = FaceSpec::named("Monaspace Neon");
+        let styles = StyleFaces {
+            italic: &italic_family,
+            ..StyleFaces::default()
+        };
+        let Some((stack, _)) = pinned_variable_stack(&styles) else {
+            return;
+        };
+        let italic = stack.styled_primary(FontStyle {
+            bold: false,
+            italic: true,
+        });
+        assert!(
+            italic.coords.is_empty(),
+            "a static italic face takes no axis settings"
+        );
+        assert!(!Arc::ptr_eq(
+            italic,
+            stack.styled_primary(FontStyle::REGULAR)
+        ));
+    }
+
+    /// The pinned CJK subset varies `wght` only, so bold italic lands on
+    /// the bold view and italic on the regular one.
+    #[test]
+    fn styles_at_the_same_position_share_one_face() {
+        let Some(dir) = std::env::var_os("FELIS_TEST_FONT_DIR") else {
+            eprintln!("FELIS_TEST_FONT_DIR unset; skipping");
+            return;
+        };
+        let file = std::path::Path::new(&dir).join("NotoSansCJKjp-Kuzu.otf");
+        let stack = FontStack::discover_in_files(
+            std::slice::from_ref(&file),
+            Some("Noto Sans CJK JP"),
+            &[],
+            &[],
+            &StyleFaces::default(),
+        )
+        .expect("the pinned CJK subset loads");
+        let face = |bold, italic| stack.styled_primary(FontStyle { bold, italic });
+        assert!(
+            !face(false, false).coords.is_empty(),
+            "the face is variable"
+        );
+        assert!(Arc::ptr_eq(face(true, false), face(true, true)));
+        assert!(Arc::ptr_eq(face(false, false), face(false, true)));
+        assert!(!Arc::ptr_eq(face(false, false), face(true, false)));
+    }
+
+    fn axis(tag: [u8; 4], default: f32) -> AxisInfo {
+        AxisInfo {
+            tag: swash::tag_from_bytes(&tag),
+            default,
+        }
+    }
+
+    fn instance(name: &str, values: &[f32]) -> InstanceInfo {
+        InstanceInfo {
+            name: name.to_owned(),
+            values: values.to_vec(),
+        }
+    }
+
+    #[test]
+    fn italic_position_takes_both_italic_axes_from_one_instance() {
+        let axes = [
+            axis(*b"wght", 400.0),
+            axis(*b"ital", 0.0),
+            axis(*b"slnt", 0.0),
+        ];
+        let instances = [
+            instance("Regular", &[400.0, 0.0, 0.0]),
+            instance("Italic", &[400.0, 1.0, -8.0]),
+        ];
+        assert_eq!(
+            italic_position(400.0, &axes, &instances),
+            [(ITAL, 1.0), (SLNT, -8.0)]
+        );
+    }
+
+    #[test]
+    fn italic_position_picks_the_instance_nearest_the_target_weight() {
+        let axes = [axis(*b"wght", 400.0), axis(*b"slnt", 0.0)];
+        let instances = [
+            instance("Light Italic", &[300.0, -9.0]),
+            instance("BoldItalic", &[700.0, -12.0]),
+            instance("Italic", &[400.0, -10.0]),
+        ];
+        assert_eq!(italic_position(400.0, &axes, &instances), [(SLNT, -10.0)]);
+        assert_eq!(italic_position(700.0, &axes, &instances), [(SLNT, -12.0)]);
+    }
+
+    #[test]
+    fn italic_position_breaks_a_weight_tie_by_fvar_order() {
+        let axes = [axis(*b"wght", 400.0), axis(*b"slnt", 0.0)];
+        let instances = [
+            instance("Light Italic", &[300.0, -9.0]),
+            instance("Medium Italic", &[500.0, -11.0]),
+        ];
+        assert_eq!(italic_position(400.0, &axes, &instances), [(SLNT, -9.0)]);
+    }
+
+    #[test]
+    fn italic_position_without_a_weight_axis_takes_the_first_italic_instance() {
+        let axes = [axis(*b"slnt", 0.0)];
+        let instances = [
+            instance("Oblique", &[-10.0]),
+            instance("Extra-Oblique", &[-15.0]),
+        ];
+        assert_eq!(italic_position(400.0, &axes, &instances), [(SLNT, -10.0)]);
+    }
+
+    #[test]
+    fn italic_position_ignores_italics_at_another_width() {
+        let axes = [
+            axis(*b"wght", 400.0),
+            axis(*b"wdth", 100.0),
+            axis(*b"slnt", 0.0),
+        ];
+        let instances = [
+            instance("SemiWide Italic", &[400.0, 112.5, -14.0]),
+            instance("Italic", &[400.0, 100.0, -11.0]),
+        ];
+        assert_eq!(italic_position(400.0, &axes, &instances), [(SLNT, -11.0)]);
+        let wide_only = [instance("Wide Italic", &[400.0, 125.0, -11.0])];
+        assert_eq!(italic_position(400.0, &axes, &wide_only), Vec::new());
+    }
+
+    #[test]
+    fn italic_position_falls_back_to_ital_one() {
+        let axes = [
+            axis(*b"wght", 400.0),
+            axis(*b"ital", 0.0),
+            axis(*b"slnt", 0.0),
+        ];
+        assert_eq!(
+            italic_position(400.0, &axes, &[instance("Regular", &[400.0, 0.0, 0.0])]),
+            [(ITAL, 1.0)]
+        );
+    }
+
+    #[test]
+    fn italic_position_leaves_a_bare_slnt_axis_upright() {
+        let axes = [axis(*b"wght", 400.0), axis(*b"slnt", 0.0)];
+        let instances = [
+            instance("Regular", &[400.0, 0.0]),
+            instance("Italicized", &[400.0, -10.0]),
+        ];
+        assert_eq!(italic_position(400.0, &axes, &instances), Vec::new());
+    }
+
+    #[test]
+    fn italic_position_is_empty_without_an_italic_axis() {
+        let axes = [axis(*b"wght", 400.0)];
+        assert_eq!(
+            italic_position(400.0, &axes, &[instance("Italic", &[400.0])]),
+            Vec::new()
+        );
+    }
+
+    #[test]
+    fn italic_token_splits_joined_and_separated_style_names() {
+        for name in [
+            "Italic",
+            "Bold Italic",
+            "BoldItalic",
+            "Bold-Italic",
+            "Light_Oblique",
+            "ITALIC",
+        ] {
+            assert!(has_italic_token(name), "{name}");
+        }
+        for name in ["Regular", "Italicized", "Obliquity", "Bold"] {
+            assert!(!has_italic_token(name), "{name}");
+        }
     }
 
     #[test]
