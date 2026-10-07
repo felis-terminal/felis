@@ -1,4 +1,4 @@
-//! Criterion benchmark: `image_atlas::write_rgba` (per-frame RGB to RGBA
+//! Criterion benchmark: `image_atlas::rgba_pixels` (per-frame RGB to RGBA
 //! expansion) against a naive push-per-byte baseline.
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
@@ -7,7 +7,7 @@ use std::hint::black_box;
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use felis_protocol::messages::ImageFormat;
-use felis_render_wgpu::image_atlas::write_rgba;
+use felis_render_wgpu::image_atlas::rgba_pixels;
 
 const RESOLUTIONS: &[(u32, u32)] = &[(1920, 1080), (2560, 1440)];
 
@@ -40,10 +40,9 @@ fn rgb_to_rgba(c: &mut Criterion) {
         group.throughput(Throughput::Bytes((w as u64) * (h as u64) * 4));
 
         let mut scratch = Vec::new();
-        group.bench_with_input(BenchmarkId::new("write_rgba", &label), &src, |b, src| {
+        group.bench_with_input(BenchmarkId::new("rgba_pixels", &label), &src, |b, src| {
             b.iter(|| {
-                write_rgba(ImageFormat::Rgb24, w, h, black_box(src), &mut scratch);
-                black_box(scratch.len());
+                black_box(rgba_pixels(ImageFormat::Rgb24, w, h, black_box(src), &mut scratch).len())
             });
         });
 

@@ -310,7 +310,7 @@ and the nightly snapshot.
 | `shape_run`             | `felis-shaping`     | `Shaper::shape_run` with a warm shaper against a fresh one per iteration.                   |
 | `atlas`                 | `felis-render-wgpu` | `GlyphIndex::ensure` on an atlas hit against a miss.                                        |
 | `shape_memo`            | `felis-render-wgpu` | `GlyphIndex::shape_run_cached` on a memo hit against the miss that runs `shape_run`.        |
-| `video_frame`           | `felis-render-wgpu` | `image_atlas::write_rgba` per-frame RGB-to-RGBA expansion.                                  |
+| `video_frame`           | `felis-render-wgpu` | `image_atlas::rgba_pixels` per-frame RGB-to-RGBA expansion.                                 |
 
 `socket_write` declares `required-features = ["test-util"]` because the raw frame write sits behind the authorization
 boundary in every other build; the orchestrator reads the requirement from the manifest and passes the feature.

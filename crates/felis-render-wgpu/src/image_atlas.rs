@@ -233,7 +233,6 @@ impl ImageAtlas {
         let atlas_w = self.index.atlas_side();
         let origin_x = (slot.uv_min[0] * atlas_w as f32).round() as u32;
         let origin_y = (slot.uv_min[1] * atlas_w as f32).round() as u32;
-        write_rgba(format, width, height, pixels, &mut self.upload_scratch);
         self.ensure_gpu(device);
         let Some(gpu) = self.gpu.as_ref() else {
             // `ensure_gpu` always populates `self.gpu`; skipping the upload
@@ -246,7 +245,7 @@ impl ImageAtlas {
             TexelLayout::Rgba8,
             [origin_x, origin_y],
             [width, height],
-            &self.upload_scratch,
+            rgba_pixels(format, width, height, pixels, &mut self.upload_scratch),
             width * 4,
         );
         Some(slot)
@@ -259,28 +258,32 @@ impl ImageAtlas {
     }
 }
 
-/// Expands `Rgb24` to `Rgba32` with `α = 0xFF`, copying `Rgba32` directly into reused `dst`.
+/// `src` as `Rgba32`: `Rgb24` expands into `scratch` with `α = 0xFF`, and `Rgba32` is
+/// borrowed as is.
 ///
 /// Uses fixed-stride chunks to vectorize. A payload shorter than `width * height * 3` leaves
 /// the tail zero-filled so truncated frames show black instead of panicking.
-pub fn write_rgba(format: ImageFormat, width: u32, height: u32, src: &[u8], dst: &mut Vec<u8>) {
+pub fn rgba_pixels<'a>(
+    format: ImageFormat,
+    width: u32,
+    height: u32,
+    src: &'a [u8],
+    scratch: &'a mut Vec<u8>,
+) -> &'a [u8] {
     const RGB: usize = ImageFormat::Rgb24.bytes_per_pixel();
     const RGBA: usize = ImageFormat::Rgba32.bytes_per_pixel();
 
-    let pixel_count = (width as usize) * (height as usize);
     match format {
-        ImageFormat::Rgba32 => {
-            dst.clear();
-            dst.extend_from_slice(src);
-        }
+        ImageFormat::Rgba32 => src,
         ImageFormat::Rgb24 => {
-            dst.clear();
-            dst.resize(pixel_count * RGBA, 0);
+            let pixel_count = (width as usize) * (height as usize);
+            scratch.clear();
+            scratch.resize(pixel_count * RGBA, 0);
             for (s, d) in src
                 .as_chunks::<RGB>()
                 .0
                 .iter()
-                .zip(dst.as_chunks_mut::<RGBA>().0)
+                .zip(scratch.as_chunks_mut::<RGBA>().0)
                 .take(pixel_count)
             {
                 d[0] = s[0];
@@ -288,6 +291,7 @@ pub fn write_rgba(format: ImageFormat, width: u32, height: u32, src: &[u8], dst:
                 d[2] = s[2];
                 d[3] = 0xFF;
             }
+            scratch
         }
     }
 }
@@ -441,19 +445,23 @@ mod tests {
 
     proptest! {
         #[test]
-        fn write_rgba_expands_rgb_and_passes_rgba_through(
+        fn rgba_pixels_expands_rgb_and_passes_rgba_through(
             width in 0u32..8,
             height in 0u32..8,
             src in prop::collection::vec(any::<u8>(), 0..96),
             dirty in prop::collection::vec(any::<u8>(), 0..96),
         ) {
-            let mut out = dirty;
-            write_rgba(ImageFormat::Rgba32, width, height, &src, &mut out);
-            prop_assert_eq!(&out, &src);
+            let mut scratch = dirty;
+            prop_assert_eq!(
+                rgba_pixels(ImageFormat::Rgba32, width, height, &src, &mut scratch),
+                &src[..]
+            );
 
-            let mut out = vec![0xAAu8; 7];
-            write_rgba(ImageFormat::Rgb24, width, height, &src, &mut out);
-            prop_assert_eq!(out, expand_rgb(width, height, &src));
+            let mut scratch = vec![0xAAu8; 7];
+            prop_assert_eq!(
+                rgba_pixels(ImageFormat::Rgb24, width, height, &src, &mut scratch),
+                &expand_rgb(width, height, &src)[..]
+            );
         }
     }
 }
