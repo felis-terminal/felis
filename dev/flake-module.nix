@@ -77,6 +77,15 @@
               ${../share/terminfo/felis.terminfo} $out/share/terminfo
           '';
 
+      # The version unicode-width encodes: tools/unicode/gen_tables.py derives
+      # the property tables unicode-width does not expose from it, and a
+      # skew between the two draws an emoji in one cell.
+      ucd = pkgs.fetchzip {
+        url = "https://www.unicode.org/Public/17.0.0/ucd/UCD.zip";
+        stripRoot = false;
+        hash = "sha256-k2OFy8xPvn+Bboyr1EsmZNeVDOglvk2kSZ+H17YaX60=";
+      };
+
       # Noto Sans Mono is excluded so Family::Monospace resolves to Monaspace in shaping tests.
       # Pinned font set prevents tests from skipping silently on machines lacking ligature or emoji fonts.
       # The CJK face is subset to 葛 because the full collection is 32 MB; the subset keeps its cmap 14 entries.
@@ -330,6 +339,18 @@
             files = "^(\\.agents/skills|skills)/.*/SKILL\\.md$";
             pass_filenames = true;
           };
+          unicode-tables = {
+            enable = true;
+            name = "unicode tables";
+            description = "regenerate the Unicode property tables; fails when the committed copy is stale (`just unicode-tables`)";
+            entry = toString (
+              pkgs.writeShellScript "felis-unicode-tables" ''
+                exec ${pkgs.python3}/bin/python3 tools/unicode/gen_tables.py ${ucd}
+              ''
+            );
+            files = "^(dev/flake-module\\.nix|tools/unicode/gen_tables\\.py|crates/felis-grid/src/uax29/tables\\.rs|crates/felis-shaping/src/presentation/tables\\.rs)$";
+            pass_filenames = false;
+          };
           prose-check-self-test = {
             enable = true;
             name = "prose check self-test";
@@ -359,6 +380,7 @@
             export TERMINFO_DIRS=${felisTerminfo}/share/terminfo''${TERMINFO_DIRS:+:$TERMINFO_DIRS}
             # Shaping tests skip when unset so builds outside Nix stay green.
             export FELIS_TEST_FONT_DIR=${testFonts}/share/fonts
+            export FELIS_UCD_DIR=${ucd}
             ${pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isDarwin ''
               # Bundled LLVM tools link @rpath/libLLVM.dylib which fails to resolve during cargo release strip.
               export DYLD_FALLBACK_LIBRARY_PATH=${rustToolchain}/lib''${DYLD_FALLBACK_LIBRARY_PATH:+:$DYLD_FALLBACK_LIBRARY_PATH}

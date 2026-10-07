@@ -19,6 +19,10 @@ itself or when a recipe mentions the direct form.
 - `tools/prose_check.py` is the mechanical half of the felis prose norms, behind `just prose-check` and the
   `prose-check` pre-commit hook: dashes, history narration, and filler phrases on the added lines of a diff.
   `--self-test` is its fixture suite.
+- `tools/unicode/gen_tables.py` generates the Unicode property tables unicode-width does not expose
+  (`crates/felis-grid/src/uax29/tables.rs`, `crates/felis-shaping/src/presentation/tables.rs`) from the UCD the dev
+  shell pins, behind `just unicode-tables` and its pre-commit hook. A Unicode bump changes that pin and unicode-width
+  together; the cross-checks in the crates' tests catch a skew.
 - `tools/bench/criterion.py` drives Criterion runs for `just bench*` and the performance CI gate.
 - `tools/bench/crossterm.py` orchestrates cross-terminal measurements: it resolves the field, records provenance, runs
   suites, and writes the report.

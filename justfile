@@ -130,6 +130,12 @@ proto-compat base="":
 proto-compat-test:
     python3 tools/proto/compat.py --self-test
 
+# Regenerate the Unicode property tables from the pinned UCD (dev shell).
+# The unicode-tables pre-commit hook runs this and fails on a stale committed copy.
+[group('lint')]
+unicode-tables:
+    python3 tools/unicode/gen_tables.py "$FELIS_UCD_DIR"
+
 # Mechanical prose norms on the added lines of a range (the pre-commit hook
 # runs the same script over the staged diff).
 [group('lint')]
