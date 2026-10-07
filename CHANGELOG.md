@@ -14,6 +14,8 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 
 - A variable font (one file with a `wght` axis, such as JetBrains Mono's `JetBrainsMono[wght].ttf`) draws bold cells at
   bold weight and regular cells at regular weight; both used to draw the file's default instance.
+- A variable font whose italic is a slant axis rather than a separate file (such as `Monaspace Neon Var.ttf`) draws
+  italic cells at the italic position the font names; they used to draw upright.
 
 ## [0.1.2] - 2026-10-07
 

@@ -174,15 +174,34 @@ variants automatically, matching the first-run expectation set by every other te
 
 **Missing styled face: reuse regular, never synthesize.** felis does **not** synthesize fake-bold (outline emboldening)
 or fake-italic (a shear transform) when a family ships no real styled face. fontdb's matcher returns the closest face
-(the regular one) for a family without a Bold; felis dedups that by fontdb face id and reuses the _same_ `Arc<Font>`, so
-the missing style costs no extra bytes and draws the regular glyph. This mirrors the fallback policy elsewhere (a
-missing `font.fallback` family is skipped, not substituted): the config is a description of intent that degrades
-gracefully across machines, and a user who wants bold to stand out installs a bold face rather than accepting a
-mechanically-smeared approximation.
+(the regular one) for a family without a Bold; felis dedups faces by fontdb face id and variation coordinates and reuses
+the _same_ `Arc<Font>`, so the missing style costs no extra bytes and draws the regular glyph. This mirrors the fallback
+policy elsewhere (a missing `font.fallback` family is skipped, not substituted): the config is a description of intent
+that degrades gracefully across machines, and a user who wants bold to stand out installs a bold face rather than
+accepting a mechanically-smeared approximation.
 
 _Revisit if_ users ask for synthesized styles for faces that genuinely lack them: the hook is a synthesis pass (zeno
 emboldening + a shear in the scaler) gated behind an opt-in config, layered on top of this face-selection path without
 disturbing it.
+
+**Variable fonts: a position the font names, never an angle felis picks.** fontdb lists a variable font file once, at
+its default instance, so a weight or slant query returns that instance unchanged. felis sets the styled view itself:
+`wght` to 400 for regular and 700 for bold, and, for an italic style whose matched file is upright, the `ital`/`slnt`
+axes to the font's own italic position. That position comes from an fvar named instance whose subfamily name has an
+"Italic" or "Oblique" token (`BoldItalic` counts), restricted to instances whose other axes (`wdth`, `opsz`) are at the
+defaults felis draws and taken nearest the target weight; both italic axes come from that one instance. A face with an
+`ital` axis but no such instance gets `ital` = 1, its registered meaning. Otherwise the italic draws upright, as a
+family without an italic face does. A separate italic file wins over an upright file's axes. Driving these axes is not
+synthesis: the instance is a design the font ships.
+
+Named instances were chosen over the STAT table's axis labels, which kitty reads per axis. STAT names each axis's values
+separately, so building a position from it leaves felis to combine `ital` with `slnt`, choose among weight-specific
+combined records, and skip labels on axes the fvar does not vary; each is a way to land on a position the font never
+declared. A named instance is a complete position, and it is also what WezTerm reads directly and what fontconfig
+enumerates for Ghostty, foot and Alacritty. A fixed slant angle was rejected because felis would pick a design value the
+font did not name, and the shear those terminals fall back to is synthesis, rejected above.
+
+_Revisit if_ a font users report ships its italic only as STAT labels, with no named italic instance.
 
 **Shared fallback, shared metrics.** The CJK / emoji / symbol / Nerd fallback chain is _not_ styled: those faces ship
 one weight each, and a per-script styled cascade (kitty's configurable per-script chains) is out of scope for felis's
@@ -423,12 +442,9 @@ smaller and the cache key simpler.
 
 **Hinting, variable, and color fonts.** Hinting is off on macOS, where CoreText renders every native window unhinted,
 and on everywhere else; fontconfig's hinting preference is not consulted. Bold / italic select a separate styled face
-per [Per-style faces](#per-style-faces). fontdb lists a variable font file once, at its default instance, so its weight
-query returns that file whatever weight was asked; felis then sets the face's `wght` axis to 400 for regular and 700 for
-bold, and the styled primary and the regular primary become two views of one variable face. Only `wght` is driven: a
-variable face with a `slnt` or `ital` axis but no separate italic file draws italic cells upright, as a family without
-an italic face does. Color fonts (COLR/CPAL, sbix, CBDT, all supported by swash) rasterize into RGBA atlas slots; the
-cell shader samples RGBA instead of R8.
+per [Per-style faces](#per-style-faces), which also covers how a variable face's weight and italic axes are set, so the
+styled primaries can be several views of one variable file. Color fonts (COLR/CPAL, sbix, CBDT, all supported by swash)
+rasterize into RGBA atlas slots; the cell shader samples RGBA instead of R8.
 
 **Bidi: not performed.** felis runs no UAX#9 reordering across the cell grid (a non-goal: the grid is linear visual
 order), and the shaper is fixed left-to-right inside a run as well ("Shaping unit: the ligature run" above), so RTL text
