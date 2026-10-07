@@ -1,12 +1,9 @@
 #!/usr/bin/env bash
 # Capture a samply CPU profile of felis on macOS, driving one of three
 # workloads inside the profiled window. Differences from the Linux
-# samply-profile.sh: no perf_event_paranoid gate, socket in a dedicated
-# $TMPDIR subdir (Listener::bind refuses any parent that is not a 0700
-# directory you own, /tmp and the $TMPDIR root included), ps-based cleanup
-# (no /proc), and --unstable-presymbolicate for a .syms.json sidecar
-# (addr2line cannot read Mach-O) — read the pair with prof-top.py or
-# prof-flame.py.
+# samply-profile.sh: no perf_event_paranoid gate, and
+# --unstable-presymbolicate for a .syms.json sidecar (addr2line cannot read
+# Mach-O) — read the pair with prof-top.py or prof-flame.py.
 #
 # Usage:
 #   samply-macos.sh kitten [benchmark] [secs]    # default: csi 16
@@ -23,6 +20,7 @@
 # in the flamegraph the SGR categories still separate from the
 # print/scroll ones by their CSI-dispatch frames.
 set -u
+. "$(dirname "${BASH_SOURCE[0]}")/../../isolated-daemon/scripts/isolated-daemon.sh"
 
 FELIS_BIN="${FELIS_BIN:-./target/release/felis}"
 OUT="${OUT:-/tmp/felis_prof.json.gz}"
@@ -71,8 +69,9 @@ tb)
   ;;
 esac
 
-SOCKDIR="$(mktemp -d "${TMPDIR:-/tmp}/felis-prof.XXXXXX")"
-SOCK="$SOCKDIR/felis_prof_$$.sock"
+felis_dbg_socket felis-prof || exit 1
+SOCKDIR="$FELIS_DBG_DIR"
+SOCK="$FELIS_DBG_SOCK"
 WRAP="$(mktemp)"
 
 {
@@ -82,15 +81,8 @@ WRAP="$(mktemp)"
 } > "$WRAP"
 chmod +x "$WRAP"
 
-# Every process is matched on the FULL socket path: `pkill -x felis-client`
-# / `pkill -x felis` end every felis window and CLI on the machine, and a
-# basename match would reach the user's real daemon (hence the per-run
-# socket name above, not `daemon.sock`).
 kill_ours() {
-  "$FELIS_BIN" --socket "$SOCK" daemon stop --force >/dev/null 2>&1
-  for p in $(pgrep -x felis-daemon) $(pgrep -x felis-client); do
-    /bin/ps -o command= -p "$p" 2>/dev/null | tr ' ' '\n' | grep -qxF -- "$SOCK" && kill "$p"
-  done
+  felis_dbg_stop "$SOCK" "$FELIS_BIN"
 }
 cleanup() {
   kill_ours

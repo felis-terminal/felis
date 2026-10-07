@@ -8,6 +8,7 @@
 #
 # Usage: flood-ab-macos.sh <payload-file> [reps]
 set -u
+. "$(dirname "${BASH_SOURCE[0]}")/../../isolated-daemon/scripts/isolated-daemon.sh"
 
 FELIS_BIN="${FELIS_BIN:-./target/release/felis}"
 PAYLOAD="${1:?usage: flood-ab-macos.sh <payload-file> [reps]}"
@@ -18,8 +19,9 @@ mkdir -p "$RESULTS"
 [ -r "$PAYLOAD" ] || { echo "payload not readable: $PAYLOAD" >&2; exit 1; }
 [ -x "$FELIS_BIN" ] || { echo "felis not built: $FELIS_BIN" >&2; exit 1; }
 
-SOCKDIR="$(mktemp -d "${TMPDIR:-/tmp}/felis-ab.XXXXXX")"
-SOCK="$SOCKDIR/felis_ab_$$.sock"
+felis_dbg_socket felis-ab || exit 1
+SOCKDIR="$FELIS_DBG_DIR"
+SOCK="$FELIS_DBG_SOCK"
 WRAP="$(mktemp)"
 
 {
@@ -40,11 +42,7 @@ chmod +x "$WRAP"
 
 cleanup() {
   [ -n "${FP:-}" ] && kill "$FP" 2>/dev/null
-  # Full socket path, fixed string: the per-run name above plus this match
-  # is what keeps the sweep off the user's own daemon.
-  for p in $(pgrep -x felis-daemon); do
-    /bin/ps -o command= -p "$p" 2>/dev/null | tr ' ' '\n' | grep -qxF -- "$SOCK" && kill "$p"
-  done
+  felis_dbg_stop "$SOCK"
   rm -rf "$WRAP" "$SOCKDIR"
 }
 trap cleanup EXIT

@@ -7,13 +7,9 @@ description:
   unattended, discarding the focus-warmup sample, decomposing cost with criterion micro-benches (pure dispatch vs decode
   vs full grid), capturing a samply profile of the daemon despite paranoid/mlock/attach/hand-off gotchas, and
   symbolicating raw addresses with jq + addr2line.
-license: same as the felis repository
 compatibility:
   Linux + Wayland (niri) or macOS host with felis built; needs kitten (kitty), samply, jq, addr2line (Linux) / python3
   (macOS). samply on Linux needs kernel.perf_event_paranoid <= 1.
-metadata:
-  author: felis
-  version: "2.0"
 allowed-tools:
   Bash(./target/release/felis:*) Bash(.agents/skills/perf-trace/scripts/*) Bash(python3 tools/bench/*) Bash(samply:*)
   Bash(jq:*) Bash(addr2line:*) Bash(cargo bench:*) Bash(cargo nextest:*) Bash(just bench:*) Bash(kitten:*) Bash(nix
@@ -123,9 +119,8 @@ echo 1 | sudo tee /proc/sys/kernel/perf_event_paranoid   # once per boot
 
 The scripts exist because the profiler fights you: samply needs `perf_event_paranoid <= 1`; attach mode (`--pid`) dies
 on the mlock limit, so the profiled process must be launched under samply. On Linux `samply-profile.sh` launches
-`felis-daemon serve --socket` under samply and points the client at that socket, with `SHELL` on the client, since the
-session shell comes from the client's environment: launching the client instead misses the daemon on a desktop with a
-systemd user manager, where autospawn hands it to `systemd-run` outside samply's process tree. The saved JSON has raw
+`felis-daemon serve --socket` under samply and points the client at that socket; an auto-spawned daemon would land
+outside samply's process tree (the `isolated-daemon` skill's "Start the daemon yourself"). The saved JSON has raw
 `0x...` frames, which `symbolize.sh` resolves with addr2line against the non-stripped binary.
 
 To profile an arbitrary byte shape instead of kitten's streams, put it in a file and use
@@ -154,9 +149,6 @@ The workflow is identical; the plumbing differs. Measurement goes through the sa
 goes through `samply-macos.sh <workload>` (`kitten <bench>` / `flood <payload>` / `tb`), with `flood-ab-macos.sh` as the
 end-to-end A/B:
 
-- **Socket**: no `$XDG_RUNTIME_DIR`; bind under a dedicated `$TMPDIR` subdir (`mktemp -d`, which is `0700`), because
-  `Listener::bind` refuses any parent that is not a `0700` directory you own, `$TMPDIR` root included.
-- **Cleanup**: no `/proc`; match the daemon to the socket with `ps -o command= -p "$pid" | grep -qF -- "$SOCK"`.
 - **samply**: no paranoid/mlock gates. It occasionally dies with `couldn't create root TaskProfiler … InvalidAddress`;
   re-run.
 - **Symbolication**: addr2line doesn't do Mach-O. The scripts pass `--unstable-presymbolicate` for a `.syms.json`
@@ -178,17 +170,5 @@ actually receives (ONLCR: `\r\n`); both mismatches silently measure a different 
 
 ## Cleanup (every run)
 
-Daemons detach and persist. Stop yours over the wire and sweep **by pid filtered on the full socket path**, never
-`pkill -f <socket>` (that pattern matches your own shell's command line and kills it) and never `pkill -x felis`
-(collateral: every unrelated `felis sessions stream` on the host):
-
-```sh
-felis --socket "$SOCK" daemon stop --force
-for p in $(pgrep -x felis-daemon); do
-  tr '\0' '\n' < /proc/$p/cmdline 2>/dev/null | grep -qxF -- "$SOCK" && kill $p
-done
-```
-
-Match one whole argument, not `basename "$SOCK"` and not a substring: the user's real daemon carries a `.sock` argument
-too, and a bare `grep -F` would also match `$SOCK.bak`. Give the isolated socket a per-run name (`felis_prof_$$.sock`)
-so the match cannot collide. The bundled scripts do this on exit.
+Daemons detach and persist. The bundled scripts run on a private daemon and tear it down on exit through the
+`isolated-daemon` skill's helper; a run you start by hand uses the same helper, never a `pkill`.

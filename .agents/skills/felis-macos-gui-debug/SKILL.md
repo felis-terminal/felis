@@ -7,9 +7,10 @@ description:
   an isolated daemon so none of it touches the user's sessions. Use for blur/opacity/corner/glyph rendering bugs, for
   selection / mouse-reporting behavior, and for driving any [keymap] chord (pipe, run, session switches) on macOS; for
   producer-traffic/log debugging use producer-traffic-debug, for throughput use perf-trace.
+compatibility: macOS with felis built; synthesized input may need an Accessibility grant for the calling terminal.
 allowed-tools:
-  Bash(./target/release/felis:*) Bash(./target/release/felis-daemon:*) Bash(osascript:*) Bash(screencapture:*)
-  Bash(swift:*) Bash(pgrep:*) Bash(ps:*) Bash(grep:*) Bash(kill:*) Read Write
+  Bash(.agents/skills/isolated-daemon/scripts/*) Bash(./target/release/felis:*) Bash(./target/release/felis-daemon:*)
+  Bash(osascript:*) Bash(screencapture:*) Bash(swift:*) Bash(pgrep:*) Bash(ps:*) Bash(grep:*) Bash(kill:*) Read Write
 ---
 
 # macOS GUI debugging for felis
@@ -25,8 +26,11 @@ session the chord would have spawned and asserts on what the child received, wit
 
 ## Launch → window id → capture
 
+Every run starts on a private daemon (the `isolated-daemon` skill), never the user's:
+
 ```sh
-./target/release/felis >/tmp/felis.log 2>&1 & sleep 4
+eval "$(.agents/skills/isolated-daemon/scripts/isolated-daemon.sh start)"   # sets SOCK and LOG
+./target/release/felis --socket "$SOCK" >/tmp/felis.log 2>&1 & sleep 4
 WID=$(osascript -l JavaScript -e '
 ObjC.import("CoreGraphics");
 const list = ObjC.castRefToObject($.CGWindowListCopyWindowInfo($.kCGWindowListOptionOnScreenOnly, $.kCGNullWindowID));
@@ -134,8 +138,8 @@ function run(argv) {
   crossings the client needs to promote a click into a drag.
 - To read what the program actually received, give the session a `SHELL` wrapper (set on the client invocation) that
   puts the tty in raw mode, enables reporting, and logs bytes:
-  `stty raw -echo; printf '\033[?1002h\033[?1006h'; exec cat -uv > /tmp/felis-dbg/mouse-in.log`. Without `stty raw` the
-  tty stays canonical and no escape byte ever reaches the reader.
+  `stty raw -echo; printf '\033[?1002h\033[?1006h'; exec cat -uv > /tmp/felis-mouse-in.log`. Without `stty raw` the tty
+  stays canonical and no escape byte ever reaches the reader.
 - Stray `^[[<64…67;…M` wheel reports appear in that log from real trackpad / WM activity: read the button-0
   press/release pair, not the line count.
 
@@ -155,63 +159,25 @@ To prove the _opposite_ (that the animation terminates and the window returns to
 `0.0` across several seconds is the idle-zero check. `ps -o time=` / `utime=` need an entitlement on current macOS and
 fail; `pcpu` does not.
 
-## Config experiments without touching the real config
+## Config experiments
 
-The config path is `~/Library/Application Support/felis/config.toml` (usually a read-only home-manager symlink). Name
-another file for one run with `--config`:
+The config path is `~/Library/Application Support/felis/config.toml`. Run a modified copy through `--config`, as the
+`isolated-daemon` skill describes:
 
 ```sh
 sed -e 's/^opacity = .*/opacity = 0.6/' \
   "$HOME/Library/Application Support/felis/config.toml" \
   > /tmp/felis-dbg-config.toml
-./target/release/felis --config /tmp/felis-dbg-config.toml 2>/dev/null &
+./target/release/felis --socket "$SOCK" --config /tmp/felis-dbg-config.toml 2>/dev/null &
 ```
 
-A relative path is resolved against the directory you run it from, and the absolute form is what reaches the window the
-launch opens.
+An experiment that needs its own `SHELL` wrapper sets it on the client:
+`env SHELL=/path/to/probe.sh ./target/release/felis --socket "$SOCK"`.
 
-Do **not** reach for a scratch `$HOME` instead. That pollutes the auto-spawned `felis-daemon` (shells become
-zsh-without-rc, fish config vanishes), and the only cure is killing the shared per-uid daemon, which takes the user's
-persistent shells with it. `--config` touches no environment, so there is nothing to clean up.
+## Teardown and host quirks
 
-Full isolation from the user's sessions (required whenever the experiment needs its own `SHELL` wrapper) is a daemon you
-start yourself, with the client pointed at it:
-
-```sh
-mkdir -m 700 -p /tmp/felis-dbg
-./target/release/felis-daemon serve \
-  --socket /tmp/felis-dbg/daemon.sock >/tmp/felis-dbg/daemon.log 2>&1 &
-env SHELL=/tmp/felis-dbg/probe.sh ./target/release/felis --socket /tmp/felis-dbg/daemon.sock \
-  >/tmp/felis-dbg/client.log 2>&1 &
-```
-
-`SHELL` goes on the client, not the daemon: a local session's shell comes from the environment the client sends, and the
-daemon's own `SHELL` is only the fallback.
-
-`Listener::bind` refuses any parent that is not a `0700` directory you own, so bind in a dedicated short subdir created
-`0700` (or let the daemon create it): `/tmp` and the `$TMPDIR` root are refused by name, a `0755` subdir is refused for
-its mode, and a long path (the agent scratchpad) fails `SUN_LEN`. All three appear only in the daemon log, never on the
-client's stderr.
-
-## Process hygiene
-
-- Tear the probe run down socket-scoped, never by process name. `pkill -x felis` / `pkill -x felis-daemon` end the
-  user's own windows and sessions, and `pkill -f "target/release/felis"` matches `felis-daemon`'s path as well:
-
-  ```sh
-  SOCK=/tmp/felis-dbg/daemon.sock
-  ./target/release/felis --socket "$SOCK" daemon stop --force
-  for p in $(pgrep -x felis-daemon) $(pgrep -x felis-client); do
-    /bin/ps -o command= -p "$p" | grep -qF -- "$SOCK" && kill "$p"
-  done
-  ```
-
-  Match the whole path with `grep -qF`, not `basename "$SOCK"`: the user's real daemon carries a `.sock` argument too.
-
-- Comparing against an older commit: `git worktree add /tmp/felis-pre <rev>` +
-  `CARGO_TARGET_DIR=/tmp/felis-pre-target cargo build --bin felis --bin felis-client --bin felis-daemon` (the front door
-  execs a sibling `felis-client`, and autospawn prefers a sibling `felis-daemon` over `PATH`); strip keys the comparison
-  build does not know from the test config (the add-config-key skill's gotcha), or the comparison silently tests the
-  default font/theme.
+- End every run with `isolated-daemon.sh stop "$SOCK"`; the skill explains why a `pkill` by name or pattern is never the
+  teardown.
+- Comparing against an older commit: the `isolated-daemon` skill's "Comparing against an older commit".
 - Multi-display layouts make `screencapture -x -R` fail with "could not create image from rect"; capture per display
   (`-D 1`) or stick to window captures.
