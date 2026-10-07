@@ -1032,6 +1032,7 @@ dependencies = [
  "fontdb",
  "memmap2",
  "proptest",
+ "skrifa",
  "swash",
  "thiserror 2.0.21",
  "tracing",

@@ -79,13 +79,18 @@
 
       # Noto Sans Mono is excluded so Family::Monospace resolves to Monaspace in shaping tests.
       # Pinned font set prevents tests from skipping silently on machines lacking ligature or emoji fonts.
-      testFonts = pkgs.runCommand "felis-test-fonts" { } ''
-        mkdir -p $out/share/fonts
-        cp -r ${pkgs.monaspace}/share/fonts/. $out/share/fonts/
-        cp ${pkgs.noto-fonts}/share/fonts/noto/NotoSansSymbols.ttf $out/share/fonts/
-        cp ${pkgs.noto-fonts}/share/fonts/noto/NotoSansSymbols2-Regular.otf $out/share/fonts/
-        cp ${pkgs.noto-fonts-color-emoji}/share/fonts/noto/NotoColorEmoji.ttf $out/share/fonts/
-      '';
+      # The CJK face is subset to 葛 because the full collection is 32 MB; the subset keeps its cmap 14 entries.
+      testFonts =
+        pkgs.runCommand "felis-test-fonts" { nativeBuildInputs = [ pkgs.python3Packages.fonttools ]; }
+          ''
+            mkdir -p $out/share/fonts
+            cp -r ${pkgs.monaspace}/share/fonts/. $out/share/fonts/
+            cp ${pkgs.noto-fonts}/share/fonts/noto/NotoSansSymbols.ttf $out/share/fonts/
+            cp ${pkgs.noto-fonts}/share/fonts/noto/NotoSansSymbols2-Regular.otf $out/share/fonts/
+            cp ${pkgs.noto-fonts-color-emoji}/share/fonts/noto/NotoColorEmoji.ttf $out/share/fonts/
+            pyftsubset ${pkgs.noto-fonts-cjk-sans}/share/fonts/opentype/noto-cjk/NotoSansCJK-VF.otf.ttc \
+              --font-number=0 --unicodes=U+845B,U+E0100-E0101 --output-file=$out/share/fonts/NotoSansCJKjp-Kuzu.otf
+          '';
 
       kani = pkgs.callPackage ./packages/kani.nix { };
 

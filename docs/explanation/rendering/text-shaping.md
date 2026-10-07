@@ -129,10 +129,24 @@ covers it. Otherwise an emoji ZWJ / modifier sequence anchors its face on the fi
 signal and stays mono.
 
 Once the face is chosen, the cluster is shaped without the variation selectors that face does not map. swash 0.2.10
-never looks a selector up in the cmap's variation-sequence subtable, and it drops VS15/VS16 only after an emoji base;
-after a base such as `#` the VS16 is shaped as a `.notdef` with a full advance, which splits the keycap ligature into
-three glyphs. Dropping it loses nothing: the presentation it asked for is already the face, and the variant it might
-name is never looked up. A selector the face maps directly is kept. Revisit if swash starts mapping variation sequences.
+never looks a selector up in the cmap's variation-sequence subtable (format 14), and it drops VS15/VS16 only after an
+emoji base; after a base such as `#` the VS16 is shaped as a `.notdef` with a full advance, which splits the keycap
+ligature into three glyphs. A selector the face maps directly is kept. The variant a selector names is applied after
+shaping instead: when the selector directly follows the base and the face's format 14 subtable names a glyph for the
+pair, that glyph replaces the base's default glyph, so `葛󠄀` (U+845B U+E0100) draws Noto Sans CJK JP's variant form. A
+cluster that also carries a combining mark keeps the default glyph, because the mark was positioned against it. Revisit
+if swash starts mapping variation sequences.
+
+The face is chosen by the base alone; a variation sequence never moves a cluster to another face. Rejected: **prefer a
+fallback face whose format 14 subtable has the sequence.** A primary that covers `葛` without a format 14 subtable
+(Moralerspace, for one) then draws the default glyph, and switching faces would draw the variant, but at the cost of a
+second face's design and metrics inside one line of text and a subtable lookup in every face for every selector cluster.
+No peer chooses faces by sequence. WezTerm (`wezterm-font/src/shaper/harfbuzz.rs`) and foot (fcft `font_for_grapheme`)
+hand the selector to HarfBuzz on the face they picked. kitty (`has_cell_text` in
+[`fonts.c`](https://github.com/kovidgoyal/kitty/blob/master/kitty/fonts.c)) skips U+FE00..U+FE0F but checks an
+ideographic selector against each face's ordinary cmap, Ghostty (`src/font/shaper/run.zig`) does the same for every
+selector except VS15 and VS16, and Alacritty draws the base alone. Revisit if a peer starts choosing faces by variation
+sequence.
 
 The stack is queried per codepoint: `resolve(c)` returns the first font whose charmap covers `c` (the first color one
 for an emoji-presentation character), falling back to the primary (which then renders its `.notdef` box) when nothing

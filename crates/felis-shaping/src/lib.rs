@@ -11,6 +11,10 @@
 use std::{borrow::Cow, collections::HashMap, sync::Arc};
 
 use fontdb::{Database, Family, Query};
+use skrifa::raw::{
+    FontData, FontRead,
+    tables::cmap::{Cmap, CmapSubtable, MapVariant},
+};
 pub use swash::GlyphId;
 use swash::{
     FontRef, Setting,
@@ -180,6 +184,25 @@ impl Font {
         let face = self.font_ref();
         let glyph_id = face.charmap().map(c);
         (glyph_id != 0).then(|| face.glyph_metrics(&[]).scale(px).advance_width(glyph_id))
+    }
+
+    /// The glyph the face's cmap format 14 subtable names for `base`
+    /// followed by `selector`; `None` when the face has no entry or the
+    /// entry keeps the base's default glyph.
+    #[must_use]
+    pub fn variant_glyph(&self, base: char, selector: char) -> Option<GlyphId> {
+        let table = self.font_ref().table(swash::tag_from_bytes(b"cmap"))?;
+        let cmap = Cmap::read(FontData::new(table)).ok()?;
+        let variants = cmap.encoding_records().iter().find_map(|record| {
+            match record.subtable(cmap.offset_data()).ok()? {
+                CmapSubtable::Format14(variants) => Some(variants),
+                _ => None,
+            }
+        })?;
+        match variants.map_variant(base, selector)? {
+            MapVariant::Variant(glyph) => GlyphId::try_from(glyph.to_u32()).ok(),
+            MapVariant::UseDefault => None,
+        }
     }
 
     #[must_use]
@@ -365,6 +388,35 @@ fn without_unmapped_selectors(text: &str, maps: impl Fn(char) -> bool) -> Cow<'_
             .map(|(_, c)| c)
             .collect(),
     )
+}
+
+/// swash 0.2.10 shapes the base to its default glyph, so the variant the
+/// face names for the base and the selector right after it replaces that
+/// glyph. Only a cluster that shaped to the base's glyph alone is
+/// rewritten: a mark's GPOS offset was computed against the default
+/// glyph, and a base that GSUB turned into another glyph keeps it.
+fn substitute_variant(font: &Font, px: f32, text: &str, glyphs: &mut [ShapedGlyph]) {
+    let mut chars = text.chars();
+    let (Some(base), Some(selector)) = (chars.next(), chars.next()) else {
+        return;
+    };
+    if !is_variation_selector(selector) {
+        return;
+    }
+    let face = font.font_ref();
+    let nominal = face.charmap().map(base);
+    let [glyph] = glyphs else {
+        return;
+    };
+    if glyph.glyph_id != nominal {
+        return;
+    }
+    let Some(variant) = font.variant_glyph(base, selector) else {
+        return;
+    };
+    let metrics = face.glyph_metrics(&[]).scale(px);
+    glyph.advance_px += metrics.advance_width(variant) - metrics.advance_width(nominal);
+    glyph.glyph_id = variant;
 }
 
 /// Monochrome symbol and dingbat faces, appended before emoji fallbacks.
@@ -1281,7 +1333,8 @@ impl Shaper {
         let font = stack.font_at(font_id, style).clone();
         let features = stack.features_for(font_id, style);
         let shaped_text = without_unmapped_selectors(text, |c| font.has_glyph(c));
-        let glyphs = self.shape_run(&font, px, features, &shaped_text);
+        let mut glyphs = self.shape_run(&font, px, features, &shaped_text);
+        substitute_variant(&font, px, text, &mut glyphs);
         ClusterShaping { font_id, glyphs }
     }
 }
@@ -2604,6 +2657,44 @@ mod tests {
                 "{base}: the VS16 keycap draws the same glyph"
             );
         }
+    }
+
+    /// Noto Sans CJK JP names a variant for `葛` + U+E0100, keeps the
+    /// default for U+E0101, and has no entry for U+E0102.
+    #[test]
+    fn an_ideographic_variation_sequence_shapes_to_the_face_variant() {
+        let Some(stack) = pinned_stack(&[]) else {
+            eprintln!("FELIS_TEST_FONT_DIR unset; skipping");
+            return;
+        };
+        let style = FontStyle::REGULAR;
+        let mut shaper = Shaper::new();
+        let plain = shaper.shape_cluster(&stack, 18.0, style, "葛");
+        assert_ne!(plain.font_id, 0, "the CJK fallback covers 葛");
+        let glyph_ids = |cluster: &ClusterShaping| -> Vec<GlyphId> {
+            cluster.glyphs.iter().map(|g| g.glyph_id).collect()
+        };
+        let cases = [
+            ("a variant entry", '\u{E0100}', false),
+            ("a default entry", '\u{E0101}', true),
+            ("no entry", '\u{E0102}', true),
+        ];
+        for (case, selector, keeps_default) in cases {
+            let sequence = shaper.shape_cluster(&stack, 18.0, style, &format!("葛{selector}"));
+            assert_eq!(sequence.font_id, plain.font_id, "{case}");
+            assert_eq!(sequence.glyphs.len(), 1, "{case}");
+            assert_eq!(
+                glyph_ids(&sequence) == glyph_ids(&plain),
+                keeps_default,
+                "{case}"
+            );
+        }
+        let marked = shaper.shape_cluster(&stack, 18.0, style, "葛\u{E0100}\u{0301}");
+        assert_eq!(
+            marked.glyphs.first().map(|g| g.glyph_id),
+            plain.glyphs.first().map(|g| g.glyph_id),
+            "a mark positioned against the default glyph keeps it"
+        );
     }
 
     #[test]
