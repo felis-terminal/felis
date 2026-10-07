@@ -2187,3 +2187,41 @@ async fn a_wrong_direction_session_arm_ends_the_connection() {
         "expected a direction violation, got {err:?}"
     );
 }
+
+/// A daemon whose effective minor predates the upgrade arm is refused
+/// before a byte leaves: sent, the arm would cost the connection rather
+/// than earn a reply.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_upgrade_against_a_minor_zero_daemon_is_refused_without_sending() {
+    use tokio::io::AsyncReadExt as _;
+
+    let (client_side, mut daemon_side) = tokio::io::duplex(4096);
+    let (read, write) = tokio::io::split(client_side);
+    let mut conn = Connection::from_halves(
+        FrameReader::new(read),
+        FrameWriter::baseline(write),
+        ConnectionMode::Ops,
+    );
+    assert_eq!(conn.effective_minor, 0);
+
+    let refused = tokio::time::timeout(
+        Duration::from_secs(5),
+        conn.daemon_upgrade("/usr/bin/felis-daemon".to_owned()),
+    )
+    .await
+    .expect("the gate answers without a round trip");
+    match refused {
+        Err(ConnectError::MinorTooOld {
+            needs, effective, ..
+        }) => assert_eq!((needs, effective), (1, 0)),
+        other => panic!("expected MinorTooOld, got {other:?}"),
+    }
+
+    drop(conn);
+    let mut sent = Vec::new();
+    daemon_side
+        .read_to_end(&mut sent)
+        .await
+        .expect("read the daemon side");
+    assert!(sent.is_empty(), "nothing reached the daemon: {sent:?}");
+}

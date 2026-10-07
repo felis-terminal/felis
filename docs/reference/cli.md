@@ -31,6 +31,7 @@ error, exit `2`).
 | -------------------------------------------------------------------------- | ---------- | ----------------------- | ---------- | ----------------------- |
 | Window launch: bare `felis`, `felis -- <cmd>`, `attach`                    | forwarded  | forwarded               | forwarded  | forwarded               |
 | Headless verbs: `sessions`, `notifications`, `daemon`, `version`, `bridge` | refused    | dials                   | dials      | dials                   |
+| `daemon upgrade`                                                           | refused    | runs remote `felis`     | dials      | forwarded to `ssh`      |
 | `config path` / `check` / `show-effective`                                 | read       | refused                 | refused    | refused                 |
 | `doctor`                                                                   | read       | dials                   | dials      | dials                   |
 | `felis ssh`, `window retarget`                                             | refused    | refused                 | refused    | refused                 |
@@ -40,8 +41,10 @@ error, exit `2`).
 | `--version`                                                                | refused    | refused                 | refused    | refused                 |
 
 `doctor` dials, so `--host` makes its daemon row report the remote daemon; every other row still describes this machine.
-`felis ssh` and `window retarget` carry their own destination in place of the global carrier flags.
-`__complete-sessions` runs once per `<TAB>` and never runs `ssh` (see "Other verbs").
+`daemon upgrade` names a binary on the daemon's own machine as its successor, so over `--host` it runs that host's
+`felis daemon upgrade` instead of dialing (see "Daemon upgrade"). `felis ssh` and `window retarget` carry their own
+destination in place of the global carrier flags. `__complete-sessions` runs once per `<TAB>` and never runs `ssh` (see
+"Other verbs").
 
 `--ssh-arg` requires `--host`: on its own it is a usage error (exit `2`) on every verb form, so its column describes
 only the cells `--host` already selects.
@@ -82,12 +85,12 @@ The `--format` flag selects machine-readable framing on supported verbs:
 
 Classification by verb:
 
-| Class            | Verbs                                                                                                                                                                                                                               |
-| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Point            | `sessions list`, `sessions info`, `sessions spawn`, `sessions send`, `sessions kill`, `sessions evict`, `sessions tag`, `sessions switch`, `felis ssh`, `window retarget`, `daemon status`, `daemon stop`, `config path`, `version` |
-| Point-diagnostic | `config check`, `config show-effective`, `doctor`                                                                                                                                                                                   |
-| Stream           | `sessions capture`, `sessions search`, `notifications subscribe`                                                                                                                                                                    |
-| Exempt           | `felis`, `felis attach`, `felis completions`, `felis bridge`, `felis <name>`                                                                                                                                                        |
+| Class            | Verbs                                                                                                                                                                                                                                                 |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Point            | `sessions list`, `sessions info`, `sessions spawn`, `sessions send`, `sessions kill`, `sessions evict`, `sessions tag`, `sessions switch`, `felis ssh`, `window retarget`, `daemon status`, `daemon stop`, `daemon upgrade`, `config path`, `version` |
+| Point-diagnostic | `config check`, `config show-effective`, `doctor`                                                                                                                                                                                                     |
+| Stream           | `sessions capture`, `sessions search`, `notifications subscribe`                                                                                                                                                                                      |
+| Exempt           | `felis`, `felis attach`, `felis completions`, `felis bridge`, `felis <name>`                                                                                                                                                                          |
 
 A verb with no row in this table has no `--format` flag. `felis bridge` streams exactly the operations whose verb is a
 Stream here.
@@ -320,7 +323,7 @@ are reported as errors. `--client <id>` selects a specific client overlay (defau
 
 ```
 version:  0.1.0 (e3abf80c9d21)
-wire:     1.0
+wire:     1.1
 workers:  8
 draining: no
 connections             3  /  1024 per daemon
@@ -335,7 +338,7 @@ pty_input_bytes         total 0 B  ·  max session 0 B  /  16 MiB per session
 JSON output (`--format json`) yields:
 
 ```json
-{"v":1,"version":"...","protocol":{"major":1,"minor":0},"worker_threads":N,"draining":false,"resources":[...]}
+{"v":1,"version":"...","protocol":{"major":1,"minor":1},"worker_threads":N,"draining":false,"resources":[...]}
 ```
 
 ### Accounted resources
@@ -408,6 +411,57 @@ refused with `invalid_request`, whose message names the draining daemon (the wir
 
 Exit codes: `0` when the daemon is stopping or draining; `1` when the default mode is refused; `2` if unreachable or too
 old to answer, in which case that daemon's own generation of instructions applies.
+
+## Daemon upgrade
+
+`felis daemon upgrade` replaces the running daemon's binary while the daemon keeps every session: the daemon execs a
+successor binary in place, and connected windows see one transport loss and re-attach. It never starts a daemon.
+
+```
+felis daemon upgrade [--format human|json]
+```
+
+The successor is the `felis-daemon` a spawn from this `felis` would start ("Auto-spawning"): the one beside the `felis`
+binary, else the first on `PATH`, sent as an absolute path. With neither present the verb refuses with `invalid_request`
+before dialing. The path names a file on the daemon's machine, so with `--host` the verb runs
+`ssh [--ssh-arg …] <host> felis daemon upgrade --format <format>` instead, and the remote host's `felis` resolves the
+successor installed there. Its output and its exit code `0`, `1`, or `2` pass through unchanged, with one exception:
+under `--format json`, a remote exit `2` that wrote no error object comes from a remote `felis` too old to have the
+verb, and is reported as an `unsupported` error, exit `2`. An `ssh` that cannot start, or a remote command that ends any
+other way (no `felis` on the remote `PATH`, a lost connection), is a `daemon_unreachable` error, exit `2`.
+
+An upgrade the daemon accepts reports the successor it execs:
+
+```json
+{ "v": 1, "outcome": "upgrading", "successor": "/usr/bin/felis-daemon" }
+```
+
+The human line is `the daemon is switching to <path>`. The reply is written just before the exec, so exit `0` means the
+daemon accepted the upgrade and began it; whether the successor then restores every session is not observable from this
+invocation.
+
+A refused upgrade leaves the daemon serving every session as before. It is an error object of kind `refused` carrying a
+`reason` key, the daemon's own reason:
+
+```json
+{ "v": 1, "error": { "kind": "refused", "message": "...", "reason": "dump_version" } }
+```
+
+| `reason`         | Meaning                                                                        |
+| ---------------- | ------------------------------------------------------------------------------ |
+| `unsupported`    | This platform has no in-place upgrade (Windows).                               |
+| `dump_version`   | The successor cannot read the running daemon's session state.                  |
+| `protocol_major` | The successor does not serve the protocol major of a connected client.         |
+| `timeout`        | A step before the exec ran out of time.                                        |
+| `probe_failed`   | The successor rejected the running daemon's session state, or the exec failed. |
+| `busy`           | An upgrade is already running.                                                 |
+| `draining`       | The daemon is draining after `felis daemon stop --when-empty`.                 |
+
+Every refusal has the same remedy, which the message names: drain and restart with `felis daemon stop --when-empty`,
+then start a new daemon once the last session has ended.
+
+Exit codes: `0` when the daemon is upgrading; `1` when it refused; `2` if unreachable, or if the daemon or the remote
+`felis` predates the upgrade request (`unsupported`, whose remedy is the same drain-and-restart).
 
 ## Doctor
 
@@ -571,11 +625,12 @@ SSH the non-spawning forms dial `felis-daemon relay --no-spawn`, which reports "
 starting one; the spawning forms dial `relay` without that flag and let it apply the local spawn-then-retry policy on
 the remote side.
 
-| Form                                                                                                                                                                                                  | Local socket            | `--host`                                    |
-| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------- | ------------------------------------------- |
-| `sessions spawn`, window launches (bare `felis`, `felis attach`, `felis -- <cmd>`)                                                                                                                    | starts a daemon         | the relay starts one                        |
-| Read and drive verbs (`list`, `info`, `capture`, `search`, `send`, `kill`, `evict`, `tag`, `switch`, the retargets' source dial), `notifications subscribe`, `daemon status` / `stop`, `felis bridge` | unreachable, exit `2`   | `relay --no-spawn`, then exit `2`           |
-| `version`, `doctor`                                                                                                                                                                                   | reported as not running | `relay --no-spawn`, reported as not running |
+| Form                                                                                                                                                                                                  | Local socket            | `--host`                                                  |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------- | --------------------------------------------------------- |
+| `sessions spawn`, window launches (bare `felis`, `felis attach`, `felis -- <cmd>`)                                                                                                                    | starts a daemon         | the relay starts one                                      |
+| Read and drive verbs (`list`, `info`, `capture`, `search`, `send`, `kill`, `evict`, `tag`, `switch`, the retargets' source dial), `notifications subscribe`, `daemon status` / `stop`, `felis bridge` | unreachable, exit `2`   | `relay --no-spawn`, then exit `2`                         |
+| `daemon upgrade`                                                                                                                                                                                      | unreachable, exit `2`   | the remote `felis daemon upgrade`, which never starts one |
+| `version`, `doctor`                                                                                                                                                                                   | reported as not running | `relay --no-spawn`, reported as not running               |
 
 A **cold socket** is a connect that failed with `ENOENT` or `ECONNREFUSED` (`ERROR_FILE_NOT_FOUND` for an absent Windows
 pipe, which reports as not-found). Only that licenses a spawn, on the local dial, the systemd hand-off and the relay
@@ -637,7 +692,8 @@ Persistent JSON-lines helper on stdio for editors and non-Rust clients speaking 
 to session automation: the `sessions.*` ops, `notifications.subscribe`, and `cancel`. Three verb groups are CLI-only,
 and a bridge client reaches them by running the point verb with `--format json`:
 
-- operator verbs: `daemon status`, `daemon stop`, `config path|check|show-effective`, `doctor`, `version`;
+- operator verbs: `daemon status`, `daemon stop`, `daemon upgrade`, `config path|check|show-effective`, `doctor`,
+  `version`;
 - window launches: bare `felis`, `attach`, `ssh`, `window retarget`;
 - shell plumbing: `completions <shell>`, `__mangen`, `__complete-sessions`.
 

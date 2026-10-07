@@ -25,6 +25,7 @@ use felis_protocol::{
         PushMsg, RefusalReason, RegionToDaemonMsg, RequestId, ResolvedId, SearchToDaemonMsg,
         SessionInfo, SessionToClientMsg, SessionToDaemonMsg, SpawnOutcome, StopMode, StopOutcome,
         StreamErrorReason, StreamId, Subject, SwitchScope, SwitchTarget, ThemeChannel,
+        UpgradeOutcome, UpgradeRefusal,
     },
     preface::{self, CarrierBlock, ClientPreface, DaemonAccept, DaemonRefuse},
 };
@@ -1555,6 +1556,9 @@ async fn ops_reply(ctx: CreateCtx<'_>, msg: OpsToDaemonMsg) -> OpsToClientMsg {
         OpsToDaemonMsg::Stop { mode } => OpsToClientMsg::StopReply {
             outcome: stop_daemon(pool, caps, mode).await,
         },
+        OpsToDaemonMsg::Upgrade { successor } => OpsToClientMsg::UpgradeReply {
+            outcome: upgrade_requested(&successor),
+        },
         OpsToDaemonMsg::Spawn { args } => {
             let outcome = match create_session(ctx, args).await {
                 // Nothing here subscribes, so the row is published at
@@ -1627,6 +1631,14 @@ async fn stop_daemon(
             drain_to_empty(pool, true).await;
             StopOutcome::Stopping
         }
+    }
+}
+
+/// Answer an `Ops::Upgrade` (`docs/reference/cli.md` "Daemon upgrade").
+pub(crate) fn upgrade_requested(_successor: &str) -> UpgradeOutcome {
+    UpgradeOutcome::Refused {
+        reason: UpgradeRefusal::Unsupported,
+        detail: "in-place upgrade is not implemented in this daemon".to_owned(),
     }
 }
 

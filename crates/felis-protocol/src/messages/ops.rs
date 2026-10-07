@@ -155,6 +155,14 @@ pub enum OpsToDaemonMsg {
         /// daemon-side.
         id_prefix: String,
     },
+    /// Replied by [`OpsToClientMsg::UpgradeReply`]. Backs `felis
+    /// daemon upgrade` (`docs/reference/cli.md` "Daemon upgrade").
+    Upgrade {
+        /// Absolute path of the `felis-daemon` binary to exec. The
+        /// requester names it because the running daemon's own
+        /// executable is the one being replaced.
+        successor: String,
+    },
 }
 
 /// The daemon's half of the ops family: one reply per
@@ -231,6 +239,12 @@ pub enum OpsToClientMsg {
     InfoReply {
         outcome: InfoOutcome,
     },
+    /// Written before the daemon acts on the request, as
+    /// [`Self::StopReply`] is: after [`UpgradeOutcome::Upgrading`] the
+    /// connection closes with the exec.
+    UpgradeReply {
+        outcome: UpgradeOutcome,
+    },
 }
 
 /// What an [`OpsToDaemonMsg::Stop`] asks for. A closed set rather than a pair of
@@ -262,6 +276,42 @@ pub enum StopOutcome {
     /// The daemon refuses creates and exits after the last session. A
     /// second stop while draining answers this again.
     Draining { sessions: u32 },
+}
+
+/// How an [`OpsToDaemonMsg::Upgrade`] was answered.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum UpgradeOutcome {
+    /// The daemon is about to exec the successor; this connection
+    /// closes with it.
+    Upgrading,
+    /// Nothing was handed over: the daemon keeps serving as before.
+    Refused {
+        reason: UpgradeRefusal,
+        /// Human-readable specifics. Never parsed.
+        detail: String,
+    },
+}
+
+/// Why an [`OpsToDaemonMsg::Upgrade`] was refused. Every reason leaves
+/// the daemon serving, so the remedy is the same for each:
+/// drain-and-restart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum UpgradeRefusal {
+    /// This platform has no in-place upgrade.
+    Unsupported,
+    /// The successor cannot read this daemon's dump version.
+    DumpVersion,
+    /// The successor does not serve a connected client's protocol
+    /// major.
+    ProtocolMajor,
+    /// A step before the exec ran out of time.
+    Timeout,
+    /// The successor rejected the dump's contents, or the exec failed.
+    ProbeFailed,
+    /// An upgrade is already running.
+    Busy,
+    /// The daemon is draining toward stop.
+    Draining,
 }
 
 /// How an [`OpsToDaemonMsg::Info`] resolved.
@@ -458,6 +508,15 @@ impl Directed for OpsToDaemonMsg {
             Direction::ToDaemon,
             CorrelationClass::RequestOpener,
         ),
+        // Setup only, for the reason `Ops::Stop` is: the reply is the
+        // last frame before the exec closes the connection.
+        mutation(
+            "Ops::Upgrade",
+            Direction::ToDaemon,
+            CorrelationClass::RequestOpener,
+        )
+        .phases(PhaseSet::SETUP)
+        .since(1),
     ];
 
     fn arm_index(&self) -> usize {
@@ -471,6 +530,7 @@ impl Directed for OpsToDaemonMsg {
             Self::Spawn { .. } => 6,
             Self::Stop { .. } => 7,
             Self::Info { .. } => 8,
+            Self::Upgrade { .. } => 9,
         }
     }
 }
@@ -523,6 +583,13 @@ impl Directed for OpsToClientMsg {
             Direction::ToClient,
             CorrelationClass::RequestReply,
         ),
+        mutation(
+            "Ops::UpgradeReply",
+            Direction::ToClient,
+            CorrelationClass::RequestReply,
+        )
+        .phases(PhaseSet::SETUP)
+        .since(1),
     ];
 
     fn arm_index(&self) -> usize {
@@ -536,6 +603,7 @@ impl Directed for OpsToClientMsg {
             Self::Spawned { .. } => 6,
             Self::StopReply { .. } => 7,
             Self::InfoReply { .. } => 8,
+            Self::UpgradeReply { .. } => 9,
         }
     }
 }
@@ -731,6 +799,9 @@ pub(crate) mod tests {
             OpsToDaemonMsg::Info {
                 id_prefix: "cafe".into(),
             },
+            OpsToDaemonMsg::Upgrade {
+                successor: "/nix/store/x-felis/bin/felis-daemon".into(),
+            },
         ]
     }
 
@@ -891,6 +962,22 @@ pub(crate) mod tests {
             },
             OpsToClientMsg::InfoReply {
                 outcome: InfoOutcome::Ambiguous { matches: 4 },
+            },
+            OpsToClientMsg::UpgradeReply {
+                outcome: UpgradeOutcome::Upgrading,
+            },
+            OpsToClientMsg::UpgradeReply {
+                outcome: UpgradeOutcome::Refused {
+                    reason: UpgradeRefusal::DumpVersion,
+                    detail: "the successor reads dump versions 3 through 4; this daemon writes 2"
+                        .into(),
+                },
+            },
+            OpsToClientMsg::UpgradeReply {
+                outcome: UpgradeOutcome::Refused {
+                    reason: UpgradeRefusal::Unsupported,
+                    detail: String::new(),
+                },
             },
         ]
     }

@@ -8,7 +8,7 @@ use crate::caps::ConnectionMode;
 use crate::messages::{
     AttachFailure, AttachRefusal, ConnToClientMsg, ConnToDaemonMsg, CreateFailure, GridMsg,
     OpsToClientMsg, OpsToDaemonMsg, PushMsg, RefusalReason, ResourceKind, SessionToClientMsg,
-    SessionToDaemonMsg, SpawnArgs,
+    SessionToDaemonMsg, SpawnArgs, UpgradeRefusal,
 };
 use crate::row::RowPayload;
 
@@ -219,6 +219,21 @@ impl ResourceKind {
     }
 }
 
+impl UpgradeRefusal {
+    #[must_use]
+    pub const fn since_minor(self) -> u16 {
+        match self {
+            Self::Unsupported
+            | Self::DumpVersion
+            | Self::ProtocolMajor
+            | Self::Timeout
+            | Self::ProbeFailed
+            | Self::Busy
+            | Self::Draining => 1,
+        }
+    }
+}
+
 impl MinorGated for SpawnArgs {
     fn requires(&self) -> Requires {
         field_requires(self, SPAWN_ARGS_FIELDS)
@@ -306,6 +321,9 @@ impl MinorGated for OpsToClientMsg {
                     arm.max(Requires::new(reason.since_minor(), "CreateFailure"))
                 }
             },
+            Self::UpgradeReply {
+                outcome: crate::messages::UpgradeOutcome::Refused { reason, .. },
+            } => arm.max(Requires::new(reason.since_minor(), "UpgradeRefusal")),
             _ => arm,
         }
     }
@@ -420,6 +438,44 @@ mod tests {
         assert_eq!(future.what, "Future::Arm");
         assert_eq!(Requires::BASE.max(future), future);
         assert_eq!(gated_fields(), Vec::new());
+    }
+
+    /// Both halves of the upgrade pair, every refusal included, cost
+    /// minor 1: a daemon never answers a minor-0 peer with a reply that
+    /// peer cannot decode.
+    #[test]
+    fn the_upgrade_pair_costs_minor_one() {
+        use crate::messages::UpgradeOutcome;
+
+        let request = OpsToDaemonMsg::Upgrade {
+            successor: "/usr/bin/felis-daemon".into(),
+        };
+        assert_eq!(request.requires().minor, 1);
+        assert_eq!(
+            OpsToClientMsg::UpgradeReply {
+                outcome: UpgradeOutcome::Upgrading,
+            }
+            .requires()
+            .minor,
+            1
+        );
+        for reason in [
+            UpgradeRefusal::Unsupported,
+            UpgradeRefusal::DumpVersion,
+            UpgradeRefusal::ProtocolMajor,
+            UpgradeRefusal::Timeout,
+            UpgradeRefusal::ProbeFailed,
+            UpgradeRefusal::Busy,
+            UpgradeRefusal::Draining,
+        ] {
+            let reply = OpsToClientMsg::UpgradeReply {
+                outcome: UpgradeOutcome::Refused {
+                    reason,
+                    detail: String::new(),
+                },
+            };
+            assert_eq!(reply.requires().minor, 1, "{reason:?}");
+        }
     }
 
     /// A `Hello` costs the minor that defined the mode it names, so a
@@ -591,11 +647,42 @@ mod tests {
                 ResourceKind::PtyInputBytes.since_minor(),
             ),
         });
+        let upgrade = schema_values::<v1::UpgradeRefusal>().map(|value| match value {
+            v1::UpgradeRefusal::Unspecified => unreachable!("the walk starts past UNSPECIFIED"),
+            v1::UpgradeRefusal::Unsupported => (
+                "UpgradeRefusal::UNSUPPORTED",
+                UpgradeRefusal::Unsupported.since_minor(),
+            ),
+            v1::UpgradeRefusal::DumpVersion => (
+                "UpgradeRefusal::DUMP_VERSION",
+                UpgradeRefusal::DumpVersion.since_minor(),
+            ),
+            v1::UpgradeRefusal::ProtocolMajor => (
+                "UpgradeRefusal::PROTOCOL_MAJOR",
+                UpgradeRefusal::ProtocolMajor.since_minor(),
+            ),
+            v1::UpgradeRefusal::Timeout => (
+                "UpgradeRefusal::TIMEOUT",
+                UpgradeRefusal::Timeout.since_minor(),
+            ),
+            v1::UpgradeRefusal::ProbeFailed => (
+                "UpgradeRefusal::PROBE_FAILED",
+                UpgradeRefusal::ProbeFailed.since_minor(),
+            ),
+            v1::UpgradeRefusal::Busy => {
+                ("UpgradeRefusal::BUSY", UpgradeRefusal::Busy.since_minor())
+            }
+            v1::UpgradeRefusal::Draining => (
+                "UpgradeRefusal::DRAINING",
+                UpgradeRefusal::Draining.since_minor(),
+            ),
+        });
         attach
             .chain(create)
             .chain(refusal)
             .chain(mode)
             .chain(resource)
+            .chain(upgrade)
             .collect()
     }
 
