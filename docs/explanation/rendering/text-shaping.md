@@ -203,11 +203,13 @@ font did not name, and the shear those terminals fall back to is synthesis, reje
 
 _Revisit if_ a font users report ships its italic only as STAT labels, with no named italic instance.
 
-**Shared fallback, shared metrics.** The CJK / emoji / symbol / Nerd fallback chain is _not_ styled: those faces ship
-one weight each, and a per-script styled cascade (kitty's configurable per-script chains) is out of scope for felis's
-one-flat-chain model. Cell metrics also come from the _regular_ primary only (the four faces must share an advance width
-or the monospace grid would break), so only codepoint coverage and the rasterized outline differ per style, never the
-cell box.
+**Shared fallback, shared metrics.** The CJK / emoji / symbol / Nerd fallback chain is _not_ styled: one face per entry
+serves all four styles, and a per-script styled cascade (kitty's configurable per-script chains) is out of scope for
+felis's one-flat-chain model. A variable fallback with a `wght` axis is set to 400 like the regular primary (a static
+one keeps its installed weight), because its default instance can be anywhere on the axis: Noto Sans CJK's variable file
+defaults to Thin. Cell metrics also come from the _regular_ primary only (the four faces must share an advance width or
+the monospace grid would break), so only codepoint coverage and the rasterized outline differ per style, never the cell
+box.
 
 Style rides the sizing key like every other axis that makes two lookups of one glyph differ (see "Cache" above), so
 `GlyphIndex::ensure` recovers the styled face from the key alone.
