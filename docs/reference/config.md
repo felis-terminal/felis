@@ -86,6 +86,9 @@ size_px = 14
 # and auto-discovery does not run on top of them.
 # A character that defaults to emoji (⭐, ☕) takes the first color
 # face that covers it, wherever it is in the chain.
+# A variation sequence (葛󠄀) draws the variant glyph only when the
+# face that covers its base character defines one; it never selects
+# another face.
 # Omitting features inherits from primary; features = [] disables.
 fallback = [
     { family = "Noto Sans CJK JP", features = ["palt"] },
