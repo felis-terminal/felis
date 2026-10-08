@@ -225,6 +225,20 @@ refusing to report. So it borrows `config check`'s grep shape instead (`1` when 
 checklist on stdout either way), and the daemon row carries the condition as prose. A missing daemon is not even a
 failed row: no daemon is the normal state before the first window.
 
+#### The bug report is a `doctor` subcommand
+
+`felis doctor report` prints the checklist plus the environment a maintainer needs to reproduce a report. Two other
+shapes reach for the same output. A `--format markdown` value would be a third format word, and the format words are
+frozen for the contract epoch ([cli.md](../../reference/cli.md#the-envelope)); `--format` also selects how one result is
+framed, never what is collected, while the report collects more than the checklist does (a font resolution costs a
+system font scan that bare `doctor` must not pay). A `--report` flag on `doctor` would give one verb form two result
+shapes and two exit-code meanings. The report needs its own of each: it is a Point verb that exits `0` with failing
+rows, because a broken install is exactly what its user came to report, while `doctor` exits `1` for the same rows so a
+script can branch on health.
+
+_Revisit if_ a second document-shaped output appears for another verb: that would make a human document format a
+cross-verb concept, which `--format` could then carry.
+
 ## Stopping the daemon
 
 Stopping the daemon is a control verb rather than a signal, because a signal cannot do the two things this operation

@@ -8,12 +8,14 @@
     reason = "this module renders the human framing of a report"
 )]
 
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use felis_client_core::config::GUI_CLIENT_ID;
-use felis_client_core::doctor::{DOCTOR_PROBE_FLAG, PROBE_VERSION, ProbeReport};
+use felis_client_core::doctor::{
+    DOCTOR_PROBE_FLAG, DOCTOR_REPORT_PROBE_FLAG, PROBE_VERSION, ProbeReport,
+};
 use felis_client_core::local_socket::SocketSource;
 use felis_client_core::{
     BoundedDialError, ConfigSource, ConnectError, EffectiveConfig, Reconnector, RemoteSpawn,
@@ -23,7 +25,8 @@ use felis_client_core::{
 use felis_protocol::BuildIdentity;
 use felis_transport::preface::{PROBE_DEADLINE, ProbeOutcome, connect_error_is_absent, probe};
 
-use crate::cli_output::{CheckObject, DoctorResult, PointFormat, Reporter};
+use crate::cli_output::{CheckObject, DoctorReportResult, DoctorResult, PointFormat, Reporter};
+use crate::cli_report::{self, HomeCollapse};
 use crate::conn::Resolved;
 
 /// The terminfo entry the daemon stamps into every session. Spelled
@@ -70,6 +73,27 @@ impl Check {
     }
 }
 
+#[derive(Debug, clap::Subcommand)]
+pub(crate) enum DoctorOp {
+    /// Print the checklist and this machine's environment as Markdown
+    /// to paste into a bug report.
+    ///
+    /// Run it from the affected window and review it before posting;
+    /// exits 0 whenever the report is written, failing checks included.
+    Report {
+        #[command(flatten)]
+        output: PointFormat,
+    },
+}
+
+impl DoctorOp {
+    pub(crate) const fn format(&self) -> crate::cli_output::Format {
+        match self {
+            Self::Report { output } => output.format,
+        }
+    }
+}
+
 /// Grep-shaped like `config check`: `1` means "something here is
 /// broken", and the report is on stdout either way.
 pub(crate) fn run(
@@ -80,6 +104,100 @@ pub(crate) fn run(
     client_program: impl FnOnce() -> OsString,
 ) -> i32 {
     let out = Reporter::point(output.format);
+    let gathered = gather(runtime, target, config_source, || {
+        run_probe(&client_program(), DOCTOR_PROBE_FLAG.as_ref())
+    });
+    let checks = gathered.checks;
+    let failed = count(&checks, Status::Fail);
+    let warned = count(&checks, Status::Warn);
+
+    if out.machine() {
+        out.result(&DoctorResult {
+            failed,
+            warned,
+            checks: check_objects(&checks),
+        });
+    } else {
+        print_checks(&checks);
+    }
+    i32::from(failed > 0)
+}
+
+/// Exits `0` whenever the report is written: a failing check is what a
+/// reporter came to report, not a failure of the verb.
+pub(crate) fn run_report(
+    runtime: &tokio::runtime::Runtime,
+    output: &PointFormat,
+    target: &Resolved,
+    config_source: &ConfigSource,
+    client_program: impl FnOnce() -> OsString,
+) -> i32 {
+    let out = Reporter::point(output.format);
+    let mut fonts_note = None;
+    let gathered = gather(runtime, target, config_source, || {
+        let (probe, note) = run_report_probe(&client_program(), config_source);
+        fonts_note = note;
+        probe
+    });
+    let home = HomeCollapse::discover();
+    let daemon_detail = gathered
+        .checks
+        .first()
+        .map_or_else(String::new, |row| home.apply(&row.detail));
+    let environment = cli_report::environment(
+        &cli_report::Inputs {
+            probe: &gathered.probe,
+            fonts_note: fonts_note.as_deref(),
+            daemon: gathered.daemon.as_ref(),
+            config_source,
+        },
+        &cli_report::process_env,
+    );
+    let result = home.redact(DoctorReportResult {
+        failed: count(&gathered.checks, Status::Fail),
+        warned: count(&gathered.checks, Status::Warn),
+        checks: check_objects(&gathered.checks),
+        environment,
+    });
+    let result = match result {
+        Ok(result) => result,
+        Err(err) => return out.fail(crate::cli_output::ErrorKind::Internal, err),
+    };
+    if out.machine() {
+        out.result(&result);
+    } else {
+        print!("{}", cli_report::markdown(&result, &daemon_detail));
+    }
+    0
+}
+
+fn count(checks: &[Check], status: Status) -> u64 {
+    checks.iter().filter(|c| c.status == status).count() as u64
+}
+
+fn check_objects(checks: &[Check]) -> Vec<CheckObject> {
+    checks
+        .iter()
+        .map(|c| CheckObject {
+            check: c.name.to_owned(),
+            status: c.status.token().to_owned(),
+            detail: c.detail.clone(),
+        })
+        .collect()
+}
+
+struct Gathered {
+    checks: Vec<Check>,
+    daemon: Option<BuildIdentity>,
+    probe: Result<ProbeReport, String>,
+}
+
+fn gather(
+    runtime: &tokio::runtime::Runtime,
+    target: &Resolved,
+    config_source: &ConfigSource,
+    probe: impl FnOnce() -> Result<ProbeReport, String>,
+) -> Gathered {
     let local = local_endpoint(target);
     let bounded = local
         .as_ref()
@@ -108,31 +226,16 @@ pub(crate) fn run(
     checks.extend(endpoints.rows);
     checks.push(config_check(config_source));
     checks.push(terminfo_check());
-    let (gpu, clipboard) = probe_checks(client_program);
+    let probe = probe();
+    let (gpu, clipboard) = probe_rows(&probe);
     checks.push(gpu);
     checks.push(clipboard);
     checks.push(remote_helper_check());
-
-    let failed = checks.iter().filter(|c| c.status == Status::Fail).count();
-    let warned = checks.iter().filter(|c| c.status == Status::Warn).count();
-
-    if out.machine() {
-        out.result(&DoctorResult {
-            failed: failed as u64,
-            warned: warned as u64,
-            checks: checks
-                .iter()
-                .map(|c| CheckObject {
-                    check: c.name.to_owned(),
-                    status: c.status.token().to_owned(),
-                    detail: c.detail.clone(),
-                })
-                .collect(),
-        });
-    } else {
-        print_checks(&checks);
+    Gathered {
+        checks,
+        daemon: running,
+        probe,
     }
-    i32::from(failed > 0)
 }
 
 fn installed_daemon_identity() -> Option<BuildIdentity> {
@@ -694,13 +797,13 @@ fn terminfo_entry(name: &str) -> Option<PathBuf> {
 /// A missing frontend is [`Status::Skipped`], not a failure: a headless
 /// install has no GUI binary by design, and telling that user their GPU
 /// is broken would send them after a problem they do not have.
-fn probe_checks(client_program: impl FnOnce() -> OsString) -> (Check, Check) {
-    let report = match run_probe(client_program) {
+fn probe_rows(probe: &Result<ProbeReport, String>) -> (Check, Check) {
+    let report = match probe {
         Ok(report) => report,
         Err(reason) => {
             return (
                 Check::new("gpu", Status::Skipped, reason.clone()),
-                Check::new("clipboard", Status::Skipped, reason),
+                Check::new("clipboard", Status::Skipped, reason.clone()),
             );
         }
     };
@@ -766,40 +869,80 @@ fn driver_suffix(gpu: &felis_client_core::doctor::GpuProbe) -> String {
 
 /// The `Err` string is a checklist detail, not a diagnostic: nothing
 /// here aborts the run.
-fn run_probe(client_program: impl FnOnce() -> OsString) -> Result<ProbeReport, String> {
-    let program = client_program();
-    let output = Command::new(&program)
-        .arg(DOCTOR_PROBE_FLAG)
-        .output()
-        .map_err(|err| {
-            format!(
-                "the felis GUI frontend ({}) could not be run: {err}",
-                program.to_string_lossy()
-            )
-        })?;
+fn run_probe(program: &OsStr, flag: &OsStr) -> Result<ProbeReport, String> {
+    run_probe_classified(program, flag).map_err(|failure| failure.message)
+}
+
+struct ProbeFailure {
+    /// clap's refusal of an argument this frontend does not know: exit
+    /// `2` naming it on stderr.
+    unknown_flag: bool,
+    message: String,
+}
+
+fn run_probe_classified(program: &OsStr, flag: &OsStr) -> Result<ProbeReport, ProbeFailure> {
+    let failed = |message: String| ProbeFailure {
+        unknown_flag: false,
+        message,
+    };
+    let output = Command::new(program).arg(flag).output().map_err(|err| {
+        failed(format!(
+            "the felis GUI frontend ({}) could not be run: {err}",
+            program.to_string_lossy()
+        ))
+    })?;
     if !output.status.success() {
-        // An older frontend that does not know the flag lands here
-        // (clap exits 2 on an unknown argument).
-        return Err(format!(
-            "the felis GUI frontend exited {} for {DOCTOR_PROBE_FLAG}; \
-             it may predate this check",
-            output.status
-        ));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(ProbeFailure {
+            unknown_flag: output.status.code() == Some(2) && stderr.contains("unexpected argument"),
+            message: format!(
+                "the felis GUI frontend exited {} for {}; it may predate this check",
+                output.status,
+                flag.to_string_lossy(),
+            ),
+        });
     }
     let text = String::from_utf8_lossy(&output.stdout);
     let report: ProbeReport = serde_json::from_str(text.trim())
-        .map_err(|err| format!("the frontend's probe report did not parse: {err}"))?;
+        .map_err(|err| failed(format!("the frontend's probe report did not parse: {err}")))?;
     if report.v != PROBE_VERSION {
         // Refuse rather than read fields out of an unknown epoch: a
         // mismatched pair on `$PATH` is the install to report, not to
         // quietly reinterpret.
-        return Err(format!(
+        return Err(failed(format!(
             "the frontend speaks probe version {} and this build reads {PROBE_VERSION}; \
              the two binaries are from different releases",
             report.v
-        ));
+        )));
     }
     Ok(report)
+}
+
+/// Whatever stops the font probe, the plain one is asked next so the
+/// `gpu` and `clipboard` rows do not regress; the note says why the
+/// report then carries no fonts.
+fn run_report_probe(
+    program: &OsStr,
+    config: &ConfigSource,
+) -> (Result<ProbeReport, String>, Option<String>) {
+    let mut flag = OsString::from(DOCTOR_REPORT_PROBE_FLAG);
+    if let ConfigSource::Explicit(path) = config {
+        flag.push("=");
+        flag.push(path);
+    }
+    let failure = match run_probe_classified(program, &flag) {
+        Ok(report) => return (Ok(report), None),
+        Err(failure) => failure,
+    };
+    let plain = run_probe(program, DOCTOR_PROBE_FLAG.as_ref());
+    let note = plain.is_ok().then(|| {
+        if failure.unknown_flag {
+            "this felis-client predates the font probe".to_owned()
+        } else {
+            failure.message
+        }
+    });
+    (plain, note)
 }
 
 /// A warning, never a failure: a purely local felis never invokes
@@ -877,11 +1020,95 @@ mod tests {
         assert_eq!(Status::Skipped.token(), "skipped");
     }
 
+    /// A stand-in frontend: `script` is the body of a `sh` program that
+    /// sees the probe flag as `$1`.
+    #[cfg(unix)]
+    fn fake_frontend(dir: &Path, script: &str) -> OsString {
+        use std::os::unix::fs::PermissionsExt as _;
+        let path = dir.join("felis-client");
+        std::fs::write(&path, format!("#!/bin/sh\n{script}\n")).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        path.into_os_string()
+    }
+
+    #[cfg(unix)]
+    const PLAIN_REPORT: &str = r#"{"v":1,"client_version":"0.1.0","gpu":{"available":true},"clipboard":{"available":true}}"#;
+
+    /// An older frontend refuses the font probe the way clap refuses
+    /// any unknown flag; the plain probe still fills the `gpu` and
+    /// `clipboard` rows.
+    #[cfg(unix)]
+    #[test]
+    fn a_frontend_that_predates_the_font_probe_still_answers_the_plain_one() {
+        let dir = private_dir();
+        let program = fake_frontend(
+            dir.path(),
+            &format!(
+                "[ \"$1\" = --doctor-probe ] || {{ echo \"error: unexpected argument '$1' found\" >&2; exit 2; }}\necho '{PLAIN_REPORT}'"
+            ),
+        );
+        let (probe, note) = run_report_probe(&program, &ConfigSource::Default);
+        let report = probe.unwrap();
+        assert_eq!(report.fonts, None);
+        assert!(note.unwrap().contains("predates"));
+        let (gpu, clipboard) = probe_rows(&Ok(report));
+        assert_eq!(gpu.status, Status::Ok);
+        assert_eq!(clipboard.status, Status::Ok);
+    }
+
+    /// A current frontend whose font probe fails keeps that failure as
+    /// the reason, rather than being blamed on its age.
+    #[cfg(unix)]
+    #[test]
+    fn a_failing_font_probe_keeps_its_own_reason() {
+        let dir = private_dir();
+        let program = fake_frontend(
+            dir.path(),
+            &format!("[ \"$1\" = --doctor-probe ] || exit 101\necho '{PLAIN_REPORT}'"),
+        );
+        let (probe, note) = run_report_probe(&program, &ConfigSource::Default);
+        assert!(probe.is_ok());
+        let note = note.unwrap();
+        assert!(!note.contains("predates the font probe"), "{note}");
+        assert!(note.contains("101"), "{note}");
+    }
+
+    /// The selected config reaches the frontend as the flag's value, so
+    /// fonts resolve against the file the rest of the report read.
+    #[cfg(unix)]
+    #[test]
+    fn the_font_probe_names_the_selected_config() {
+        let dir = private_dir();
+        let config = dir.path().join("work.toml");
+        let program = fake_frontend(
+            dir.path(),
+            &format!(
+                "[ \"$1\" = --doctor-report-probe={} ] || exit 2\necho '{}'",
+                config.display(),
+                PLAIN_REPORT.replace(
+                    r#""clipboard":{"available":true}"#,
+                    r#""clipboard":{"available":true},"fonts":{"error":"no font"}"#
+                ),
+            ),
+        );
+        let (probe, note) = run_report_probe(&program, &ConfigSource::Explicit(config));
+        assert_eq!(note, None);
+        assert_eq!(
+            probe.unwrap().fonts,
+            Some(felis_client_core::doctor::FontsProbe::Failed {
+                error: "no font".to_owned()
+            })
+        );
+    }
+
     /// A headless install has no GUI binary: both probe rows come back
     /// `skipped`, and the run does not panic on the missing child.
     #[test]
     fn an_absent_frontend_skips_both_probe_rows() {
-        let (gpu, clipboard) = probe_checks(|| OsString::from("felis-client-that-is-not-there"));
+        let (gpu, clipboard) = probe_rows(&run_probe(
+            "felis-client-that-is-not-there".as_ref(),
+            DOCTOR_PROBE_FLAG.as_ref(),
+        ));
         assert_eq!(gpu.status, Status::Skipped);
         assert_eq!(clipboard.status, Status::Skipped);
         assert!(gpu.detail.contains("could not be run"), "{}", gpu.detail);

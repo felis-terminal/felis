@@ -33,7 +33,7 @@ error, exit `2`).
 | Headless verbs: `sessions`, `notifications`, `daemon`, `version`, `bridge` | refused    | dials                   | dials      | dials                   |
 | `daemon upgrade`                                                           | refused    | runs remote `felis`     | dials      | forwarded to `ssh`      |
 | `config path` / `check` / `show-effective`                                 | read       | refused                 | refused    | refused                 |
-| `doctor`                                                                   | read       | dials                   | dials      | dials                   |
+| `doctor`, `doctor report`                                                  | read       | dials                   | dials      | dials                   |
 | `felis ssh`, `window retarget`                                             | refused    | refused                 | refused    | refused                 |
 | `<name>` (external command)                                                | refused    | refused                 | refused    | refused                 |
 | `completions <shell>`, `__mangen <dir>`                                    | refused    | refused                 | refused    | refused                 |
@@ -41,10 +41,11 @@ error, exit `2`).
 | `--version`                                                                | refused    | refused                 | refused    | refused                 |
 
 `doctor` dials, so `--host` makes its daemon row report the remote daemon; every other row still describes this machine.
-`daemon upgrade` names a binary on the daemon's own machine as its successor, so over `--host` it runs that host's
-`felis daemon upgrade` instead of dialing (see "Daemon upgrade"). `felis ssh` and `window retarget` carry their own
-destination in place of the global carrier flags. `__complete-sessions` runs once per `<TAB>` and never runs `ssh` (see
-"Other verbs").
+`doctor report` follows the same rule: `--host` changes only the daemon row and the daemon build, and the environment
+section always describes this machine. `daemon upgrade` names a binary on the daemon's own machine as its successor, so
+over `--host` it runs that host's `felis daemon upgrade` instead of dialing (see "Daemon upgrade"). `felis ssh` and
+`window retarget` carry their own destination in place of the global carrier flags. `__complete-sessions` runs once per
+`<TAB>` and never runs `ssh` (see "Other verbs").
 
 `--ssh-arg` requires `--host`: on its own it is a usage error (exit `2`) on every verb form, so its column describes
 only the cells `--host` already selects.
@@ -85,12 +86,12 @@ The `--format` flag selects machine-readable framing on supported verbs:
 
 Classification by verb:
 
-| Class            | Verbs                                                                                                                                                                                                                                                 |
-| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Point            | `sessions list`, `sessions info`, `sessions spawn`, `sessions send`, `sessions kill`, `sessions evict`, `sessions tag`, `sessions switch`, `felis ssh`, `window retarget`, `daemon status`, `daemon stop`, `daemon upgrade`, `config path`, `version` |
-| Point-diagnostic | `config check`, `config show-effective`, `doctor`                                                                                                                                                                                                     |
-| Stream           | `sessions capture`, `sessions search`, `notifications subscribe`                                                                                                                                                                                      |
-| Exempt           | `felis`, `felis attach`, `felis completions`, `felis bridge`, `felis <name>`                                                                                                                                                                          |
+| Class            | Verbs                                                                                                                                                                                                                                                                  |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Point            | `sessions list`, `sessions info`, `sessions spawn`, `sessions send`, `sessions kill`, `sessions evict`, `sessions tag`, `sessions switch`, `felis ssh`, `window retarget`, `daemon status`, `daemon stop`, `daemon upgrade`, `config path`, `version`, `doctor report` |
+| Point-diagnostic | `config check`, `config show-effective`, `doctor`                                                                                                                                                                                                                      |
+| Stream           | `sessions capture`, `sessions search`, `notifications subscribe`                                                                                                                                                                                                       |
+| Exempt           | `felis`, `felis attach`, `felis completions`, `felis bridge`, `felis <name>`                                                                                                                                                                                           |
 
 A verb with no row in this table has no `--format` flag. `felis bridge` streams exactly the operations whose verb is a
 Stream here.
@@ -519,6 +520,56 @@ default that is cold, that cannot be dialed, or that answered as something other
 saying which. The `daemon` row gains a note that this shell keeps targeting the stamped endpoint unless run with
 `env -u FELIS_SOCKET` or `--socket <the default>`. An explicit `--socket` gets no sibling row, and neither does a target
 that is the default. When the default cannot be resolved, the `daemon` row carries the reason and nothing is probed.
+
+### Doctor report
+
+`felis doctor report` prints the doctor checklist together with this machine's environment, as a Markdown document to
+paste into a bug report. Run it from the affected felis window: the shell line describes the shell it runs in. Bare
+`felis doctor` is unaffected. Each form takes its own `--format`, so `felis doctor --format json report` is a usage
+error (exit `2`).
+
+The document has six sections: the builds, the system, the resolved fonts, the config keys that differ from the defaults
+(as a TOML fragment in `config.toml`'s layout, inside a collapsed `<details>` block), the checks, and the log paths.
+JSON output (`--format json`) carries the same content:
+
+```json
+{"v":1,"failed":N,"warned":N,"checks":[...],"environment":{"builds":{...},"binary":"...","os":{...},"display":{...},
+ "gpu":{...},"locale":{...},"shell":{...},"fonts":{...},"config":{...},"logs":[...]}}
+```
+
+| `environment` key | Source                                                                                                                                                                                                                                                                          |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `builds`          | `cli`: this binary. `client`: the frontend probe, `null` when it could not run. `daemon`: the identity the daemon row's dial received, `null` when none answered (the `daemon` check says why).                                                                                 |
+| `binary`          | This `felis` binary's path, which tells a Nix store, Homebrew, or source install apart.                                                                                                                                                                                         |
+| `os`              | `family` and `arch` from the build target. `release`: `PRETTY_NAME` from `/etc/os-release` on Linux, `sw_vers -productVersion` on macOS. `kernel`: `/proc/sys/kernel/osrelease` on Linux, `uname -r` on macOS. Both are `null` elsewhere.                                       |
+| `display`         | The values of `XDG_SESSION_TYPE` and `XDG_CURRENT_DESKTOP`; whether `WAYLAND_DISPLAY` and `DISPLAY` are set (`wayland`, `x11`), never their values.                                                                                                                             |
+| `gpu`             | The frontend probe's adapter, with `driver_info`, the driver version string where the backend reports one. `null` when the probe could not run.                                                                                                                                 |
+| `locale`          | The values of `LANG`, `LC_ALL`, `LC_CTYPE`.                                                                                                                                                                                                                                     |
+| `shell`           | `inside_felis`: whether `FELIS_SESSION_ID` is set ([terminal-identity.md](terminal-identity.md)). The values of `TERM`, `TERM_PROGRAM`, `TERM_PROGRAM_VERSION`, `COLORTERM`, as this shell sees them. `ssh`: whether `SSH_CONNECTION` is set, never its value.                  |
+| `fonts`           | The faces a window would resolve from the same config: `regular`, `bold`, `italic`, `bold_italic`, and `fallbacks` in chain order, each the face's full name; a variation-axis view adds the position it draws at, as `(wght=700, slnt=-11)`. Otherwise `unavailable` says why. |
+| `config`          | `path`; `state`: `absent` (no file, defaults apply), `applied`, or `invalid` (errors, defaults apply, `diff` is empty); `diff`: the keys whose values differ from the defaults, nested as in `config.toml`.                                                                     |
+| `logs`            | `daemon.log` and `client.log` under the log directory ("Log files"), with whether each exists. Their contents are not included.                                                                                                                                                 |
+
+Only the variables named above have their values reported. Before either rendering is built, the report redacts:
+
+- the home directory, at a path boundary in every string of the report, which reads `~`. `$HOME` and the platform's home
+  lookup are both collapsed, since the config and log paths come from the latter;
+- the `[client.*]` tables, which are never in the diff (the `felis` overlay is already merged into it);
+- a `[keymap]` entry the loader drops (a malformed chord, or a binding that does not match its kind's shape), which is
+  left out of the diff;
+- the `text` of a `send_string` binding, the `command` of a `run` binding, and a `pipe` binding's `target` when it is a
+  command or a file, each of which reads `<redacted>`; the chord, the kind, and every other field stay.
+
+The report reads no hostname, username, session title, or terminal content on its own. One can still reach it inside a
+check's detail (an error passed on from a `--host` dial, for one) or a configured path outside the home directory, such
+as a `font.files` entry.
+
+The fonts come from the frontend: `doctor report` runs `felis-client --doctor-report-probe[=<config path>]`, the probe
+`doctor` runs plus a font resolution. When that probe fails, a frontend that predates the flag included, the plain probe
+is asked instead, so the `gpu` and `clipboard` rows still fill and `fonts.unavailable` names the reason.
+
+`doctor report` is a Point verb, not Point-diagnostic: it exits `0` whenever the report was written, failing checks
+included, and `2` for a usage error or a failure before the verb body.
 
 ## Window launches
 

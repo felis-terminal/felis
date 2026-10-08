@@ -18,7 +18,7 @@ use felis_protocol::messages::{
     AttachFailure, CreateFailure, RefusalReason, SessionInfo, StreamErrorReason,
 };
 use felis_protocol::session_prefix::{SHORT_SESSION_PREFIX_MIN, short_session_prefix};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// Versions the CLI output contract, never the daemon wire: a wire
 /// minor must be invisible here, or a consumer would re-negotiate for
@@ -903,7 +903,146 @@ pub(crate) struct DoctorResult {
     pub(crate) checks: Vec<CheckObject>,
 }
 
-#[derive(Debug, Serialize)]
+/// `felis doctor report`: the checklist plus the environment, with every
+/// path under `$HOME` already shown as `~`.
+#[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub(crate) struct DoctorReportResult {
+    pub(crate) failed: u64,
+    pub(crate) warned: u64,
+    pub(crate) checks: Vec<CheckObject>,
+    pub(crate) environment: EnvironmentObject,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub(crate) struct EnvironmentObject {
+    pub(crate) builds: BuildsObject,
+    /// This `felis` binary's path: tells a Nix store, Homebrew, or a
+    /// source build apart.
+    pub(crate) binary: Option<String>,
+    pub(crate) os: OsObject,
+    pub(crate) display: DisplayObject,
+    /// `null` when the GUI frontend could not be probed.
+    pub(crate) gpu: Option<GpuObject>,
+    pub(crate) locale: LocaleObject,
+    pub(crate) shell: ShellObject,
+    pub(crate) fonts: FontsObject,
+    pub(crate) config: ConfigObject,
+    pub(crate) logs: Vec<LogObject>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub(crate) struct BuildsObject {
+    pub(crate) cli: String,
+    /// `null` when the GUI frontend could not be probed.
+    pub(crate) client: Option<String>,
+    /// `null` when no daemon answered with an identity; the `daemon`
+    /// check says why.
+    pub(crate) daemon: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub(crate) struct OsObject {
+    /// `std::env::consts::OS`: `linux`, `macos`, `windows`, …
+    pub(crate) family: String,
+    pub(crate) arch: String,
+    /// The distribution or product version, where this platform names
+    /// one.
+    pub(crate) release: Option<String>,
+    pub(crate) kernel: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub(crate) struct DisplayObject {
+    /// `XDG_SESSION_TYPE`.
+    pub(crate) session_type: Option<String>,
+    /// `XDG_CURRENT_DESKTOP`.
+    pub(crate) desktop: Option<String>,
+    /// Whether `WAYLAND_DISPLAY` is set; its value is not reported.
+    pub(crate) wayland: bool,
+    /// Whether `DISPLAY` is set; its value is not reported.
+    pub(crate) x11: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub(crate) struct GpuObject {
+    pub(crate) available: bool,
+    pub(crate) name: Option<String>,
+    pub(crate) backend: Option<String>,
+    pub(crate) device_type: Option<String>,
+    pub(crate) driver: Option<String>,
+    pub(crate) driver_info: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub(crate) struct LocaleObject {
+    pub(crate) lang: Option<String>,
+    pub(crate) lc_all: Option<String>,
+    pub(crate) lc_ctype: Option<String>,
+}
+
+/// The shell `felis doctor report` ran in, which is the affected
+/// session's only when `inside_felis` is true.
+#[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub(crate) struct ShellObject {
+    /// Whether `FELIS_SESSION_ID` is set: the daemon stamps it into every
+    /// session it spawns.
+    pub(crate) inside_felis: bool,
+    pub(crate) term: Option<String>,
+    pub(crate) term_program: Option<String>,
+    pub(crate) term_program_version: Option<String>,
+    pub(crate) colorterm: Option<String>,
+    /// Whether `SSH_CONNECTION` is set; its value is not reported.
+    pub(crate) ssh: bool,
+}
+
+/// The faces a window would draw with. Exactly one of the face fields
+/// and `unavailable` is set.
+#[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub(crate) struct FontsObject {
+    pub(crate) regular: Option<String>,
+    pub(crate) bold: Option<String>,
+    pub(crate) italic: Option<String>,
+    pub(crate) bold_italic: Option<String>,
+    pub(crate) fallbacks: Vec<String>,
+    /// Why no stack is reported: the frontend could not be probed,
+    /// predates the font probe, or resolved no font.
+    pub(crate) unavailable: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub(crate) struct ConfigObject {
+    /// `null` when felis found no home directory to look in.
+    pub(crate) path: Option<String>,
+    /// `absent` (no file; the defaults apply), `applied`, or `invalid`
+    /// (the file has errors and the defaults apply instead).
+    pub(crate) state: String,
+    /// The keys whose values differ from the defaults, nested as in
+    /// `config.toml`. `[client.*]` is never included, and the arguments
+    /// of `send_string`, `run`, and command or file `pipe` bindings read
+    /// `<redacted>`.
+    pub(crate) diff: serde_json::Value,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub(crate) struct LogObject {
+    /// `daemon.log` or `client.log`.
+    pub(crate) name: String,
+    pub(crate) path: String,
+    pub(crate) present: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub(crate) struct CheckObject {
     /// The check's stable token (`daemon`, `daemon-sibling`, `config`,

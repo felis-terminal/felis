@@ -24,6 +24,7 @@ mod cli_doctor;
 mod cli_mangen;
 mod cli_notifications;
 mod cli_output;
+mod cli_report;
 #[cfg(all(test, feature = "schema"))]
 mod cli_schema;
 mod cli_sessions;
@@ -103,7 +104,11 @@ enum Cmd {
     ///
     /// Inspects daemon, config, terminfo, GPU, clipboard, and SSH.
     /// Exits 1 on failures; unreachable daemons are findings, not exit 2.
+    /// `doctor report` adds the environment for a bug report.
+    #[command(args_conflicts_with_subcommands = true)]
     Doctor {
+        #[command(subcommand)]
+        op: Option<cli_doctor::DoctorOp>,
         #[command(flatten)]
         output: cli_output::PointFormat,
     },
@@ -308,7 +313,10 @@ const fn verb_reporter(cmd: Option<&Cmd>) -> cli_output::Reporter {
         Some(Cmd::Notifications { op }) => Reporter::stream(op.format()),
         Some(Cmd::Config { op }) => Reporter::point(op.format()),
         Some(Cmd::Daemon { op }) => Reporter::point(op.format()),
-        Some(Cmd::Doctor { output } | Cmd::Version { output }) => Reporter::point(output.format),
+        Some(Cmd::Doctor { op: Some(op), .. }) => Reporter::point(op.format()),
+        Some(Cmd::Doctor { output, .. } | Cmd::Version { output }) => {
+            Reporter::point(output.format)
+        }
         Some(
             Cmd::Window {
                 op: WindowOp::Retarget { flags, .. },
@@ -421,7 +429,7 @@ fn main() -> Result<()> {
         Some(Cmd::Config { op }) => {
             std::process::exit(cli_config::run(op, &config_source));
         }
-        Some(Cmd::Doctor { output }) => {
+        Some(Cmd::Doctor { op, output }) => {
             // Unlike the config verbs, `doctor` dials, so `--host` makes
             // its daemon row report the daemon over there; every other
             // row still describes *this* machine (docs/reference/cli.md
@@ -432,9 +440,13 @@ fn main() -> Result<()> {
                 dial_resolved(&cli, dials),
             );
             let runtime = verb_runtime(&out);
-            let code = cli_doctor::run(&runtime, &output, &target, &config_source, || {
-                frontend_program(DEFAULT_FRONTEND_BIN)
-            });
+            let frontend = || frontend_program(DEFAULT_FRONTEND_BIN);
+            let code = match op {
+                None => cli_doctor::run(&runtime, &output, &target, &config_source, frontend),
+                Some(cli_doctor::DoctorOp::Report { output }) => {
+                    cli_doctor::run_report(&runtime, &output, &target, &config_source, frontend)
+                }
+            };
             std::process::exit(code);
         }
         Some(Cmd::Version { output }) => {

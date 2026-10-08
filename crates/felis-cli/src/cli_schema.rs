@@ -11,8 +11,8 @@ use serde_json::{Map, Value, json};
 use crate::cli_bridge::{DaemonOp, Operation};
 use crate::cli_output::{
     CaptureRow, CheckResult, ConfigPathResult, DaemonStatusResult, DaemonStopResult,
-    DaemonUpgradeResult, DoctorResult, EffectiveConfigResult, ListResult, MachineError,
-    SURFACE_VERSION, SearchMatch, SessionObject, SessionRef, SwitchResult, TagResult,
+    DaemonUpgradeResult, DoctorReportResult, DoctorResult, EffectiveConfigResult, ListResult,
+    MachineError, SURFACE_VERSION, SearchMatch, SessionObject, SessionRef, SwitchResult, TagResult,
 };
 use crate::cli_version::VersionResult;
 
@@ -325,6 +325,7 @@ fn cli_document() -> Value {
             .subschema_for::<EffectiveConfigResult>()
             .to_value(),
         generator.subschema_for::<DoctorResult>().to_value(),
+        generator.subschema_for::<DoctorReportResult>().to_value(),
         generator.subschema_for::<VersionResult<'_>>().to_value(),
     ];
     let item_bodies = vec![

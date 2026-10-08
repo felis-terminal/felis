@@ -263,7 +263,8 @@ Each is documented in `docs/reference/cli.md` under the named section; none is n
   `detail` names the path to pass to `felis --socket <path> sessions list`. `doctor`, `config check`, and
   `config show-effective` are Point-diagnostic verbs: exit `1` means the document or a check reported diagnostics.
   `doctor` and `config check` still write their result object; `config show-effective` writes an `invalid_request` error
-  object instead.
+  object instead. `felis doctor report` prints the same checklist plus the environment a bug report needs; it is a Point
+  verb and exits `0` with failing rows ("Doctor report").
 
 ## What felis deliberately does not do
 

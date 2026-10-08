@@ -46,6 +46,33 @@
       ],
       "type": "object"
     },
+    "BuildsObject": {
+      "properties": {
+        "cli": {
+          "type": "string"
+        },
+        "client": {
+          "description": "`null` when the GUI frontend could not be probed.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "daemon": {
+          "description": "`null` when no daemon answered with an identity; the `daemon`\ncheck says why.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "cli",
+        "client",
+        "daemon"
+      ],
+      "type": "object"
+    },
     "CaptureRow": {
       "properties": {
         "ansi": {
@@ -137,6 +164,30 @@
         "errors",
         "warnings",
         "diagnostics"
+      ],
+      "type": "object"
+    },
+    "ConfigObject": {
+      "properties": {
+        "diff": {
+          "description": "The keys whose values differ from the defaults, nested as in\n`config.toml`. `[client.*]` is never included, and the arguments\nof `send_string`, `run`, and command or file `pipe` bindings read\n`<redacted>`."
+        },
+        "path": {
+          "description": "`null` when felis found no home directory to look in.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "state": {
+          "description": "`absent` (no file; the defaults apply), `applied`, or `invalid`\n(the file has errors and the defaults apply instead).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "state",
+        "diff"
       ],
       "type": "object"
     },
@@ -264,6 +315,74 @@
       ],
       "type": "object"
     },
+    "DisplayObject": {
+      "properties": {
+        "desktop": {
+          "description": "`XDG_CURRENT_DESKTOP`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "session_type": {
+          "description": "`XDG_SESSION_TYPE`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "wayland": {
+          "description": "Whether `WAYLAND_DISPLAY` is set; its value is not reported.",
+          "type": "boolean"
+        },
+        "x11": {
+          "description": "Whether `DISPLAY` is set; its value is not reported.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "session_type",
+        "desktop",
+        "wayland",
+        "x11"
+      ],
+      "type": "object"
+    },
+    "DoctorReportResult": {
+      "description": "`felis doctor report`: the checklist plus the environment, with every\npath under `$HOME` already shown as `~`.",
+      "properties": {
+        "checks": {
+          "items": {
+            "$ref": "#/$defs/CheckObject"
+          },
+          "type": "array"
+        },
+        "environment": {
+          "$ref": "#/$defs/EnvironmentObject"
+        },
+        "failed": {
+          "format": "uint64",
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": "integer",
+          "x-bound-exceeds-f64-precision": true
+        },
+        "warned": {
+          "format": "uint64",
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": "integer",
+          "x-bound-exceeds-f64-precision": true
+        }
+      },
+      "required": [
+        "failed",
+        "warned",
+        "checks",
+        "environment"
+      ],
+      "type": "object"
+    },
     "DoctorResult": {
       "properties": {
         "checks": {
@@ -312,6 +431,68 @@
       ],
       "type": "object"
     },
+    "EnvironmentObject": {
+      "properties": {
+        "binary": {
+          "description": "This `felis` binary's path: tells a Nix store, Homebrew, or a\nsource build apart.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "builds": {
+          "$ref": "#/$defs/BuildsObject"
+        },
+        "config": {
+          "$ref": "#/$defs/ConfigObject"
+        },
+        "display": {
+          "$ref": "#/$defs/DisplayObject"
+        },
+        "fonts": {
+          "$ref": "#/$defs/FontsObject"
+        },
+        "gpu": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GpuObject"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "`null` when the GUI frontend could not be probed."
+        },
+        "locale": {
+          "$ref": "#/$defs/LocaleObject"
+        },
+        "logs": {
+          "items": {
+            "$ref": "#/$defs/LogObject"
+          },
+          "type": "array"
+        },
+        "os": {
+          "$ref": "#/$defs/OsObject"
+        },
+        "shell": {
+          "$ref": "#/$defs/ShellObject"
+        }
+      },
+      "required": [
+        "builds",
+        "binary",
+        "os",
+        "display",
+        "gpu",
+        "locale",
+        "shell",
+        "fonts",
+        "config",
+        "logs"
+      ],
+      "type": "object"
+    },
     "ErrorKind": {
       "description": "An additive failure vocabulary; `x-known-values` lists this epoch's tokens.",
       "type": "string",
@@ -337,6 +518,103 @@
         "output_failed",
         "internal"
       ]
+    },
+    "FontsObject": {
+      "description": "The faces a window would draw with. Exactly one of the face fields\nand `unavailable` is set.",
+      "properties": {
+        "bold": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "bold_italic": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fallbacks": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "italic": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "regular": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "unavailable": {
+          "description": "Why no stack is reported: the frontend could not be probed,\npredates the font probe, or resolved no font.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "regular",
+        "bold",
+        "italic",
+        "bold_italic",
+        "fallbacks",
+        "unavailable"
+      ],
+      "type": "object"
+    },
+    "GpuObject": {
+      "properties": {
+        "available": {
+          "type": "boolean"
+        },
+        "backend": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "device_type": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "driver": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "driver_info": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "available",
+        "name",
+        "backend",
+        "device_type",
+        "driver",
+        "driver_info"
+      ],
+      "type": "object"
     },
     "LastNotificationObject": {
       "properties": {
@@ -380,6 +658,54 @@
       },
       "required": [
         "sessions"
+      ],
+      "type": "object"
+    },
+    "LocaleObject": {
+      "properties": {
+        "lang": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lc_all": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lc_ctype": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "lang",
+        "lc_all",
+        "lc_ctype"
+      ],
+      "type": "object"
+    },
+    "LogObject": {
+      "properties": {
+        "name": {
+          "description": "`daemon.log` or `client.log`.",
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "present": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "path",
+        "present"
       ],
       "type": "object"
     },
@@ -465,6 +791,37 @@
         "session_title",
         "cwd",
         "attached"
+      ],
+      "type": "object"
+    },
+    "OsObject": {
+      "properties": {
+        "arch": {
+          "type": "string"
+        },
+        "family": {
+          "description": "`std::env::consts::OS`: `linux`, `macos`, `windows`, …",
+          "type": "string"
+        },
+        "kernel": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "release": {
+          "description": "The distribution or product version, where this platform names\none.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "family",
+        "arch",
+        "release",
+        "kernel"
       ],
       "type": "object"
     },
@@ -751,6 +1108,52 @@
       ],
       "type": "object"
     },
+    "ShellObject": {
+      "description": "The shell `felis doctor report` ran in, which is the affected\nsession's only when `inside_felis` is true.",
+      "properties": {
+        "colorterm": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "inside_felis": {
+          "description": "Whether `FELIS_SESSION_ID` is set: the daemon stamps it into every\nsession it spawns.",
+          "type": "boolean"
+        },
+        "ssh": {
+          "description": "Whether `SSH_CONNECTION` is set; its value is not reported.",
+          "type": "boolean"
+        },
+        "term": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "term_program": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "term_program_version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "inside_felis",
+        "term",
+        "term_program",
+        "term_program_version",
+        "colorterm",
+        "ssh"
+      ],
+      "type": "object"
+    },
     "SwitchResult": {
       "properties": {
         "from": {
@@ -1000,6 +1403,9 @@
         },
         {
           "$ref": "#/$defs/DoctorResult"
+        },
+        {
+          "$ref": "#/$defs/DoctorReportResult"
         },
         {
           "$ref": "#/$defs/VersionResult"

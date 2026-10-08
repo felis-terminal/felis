@@ -482,9 +482,31 @@ Options:
 $ felis doctor --help
 Check every layer felis needs and diagnose failures.
 
-Inspects daemon, config, terminfo, GPU, clipboard, and SSH. Exits 1 on failures; unreachable daemons are findings, not exit 2.
+Inspects daemon, config, terminfo, GPU, clipboard, and SSH. Exits 1 on failures; unreachable daemons are findings, not exit 2. `doctor report` adds the environment for a bug report.
 
 Usage: felis doctor [OPTIONS]
+       felis doctor <COMMAND>
+
+Commands:
+  report  Print the checklist and this machine's environment as Markdown to paste into a bug report
+  help    Print this message or the help of the given subcommand(s)
+
+Options:
+      --format <FORMAT>
+          Output framing: `human` (default) or `json`: one object on stdout, with a failure as one error object on stderr
+          
+          [default: human]
+          [possible values: human, json]
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+$ felis doctor report --help
+Print the checklist and this machine's environment as Markdown to paste into a bug report.
+
+Run it from the affected window and review it before posting; exits 0 whenever the report is written, failing checks included.
+
+Usage: felis doctor report [OPTIONS]
 
 Options:
       --format <FORMAT>
