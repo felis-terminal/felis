@@ -22,6 +22,7 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
   with `unsupported`.
 - **CLI**: `felis doctor` notes on the `daemon` row when the running daemon is a build other than the installed
   `felis-daemon`, naming the installed one.
+- **CLI**: `felis doctor`'s `gpu` row names the driver version where the backend reports one.
 
 ### Fixed
 

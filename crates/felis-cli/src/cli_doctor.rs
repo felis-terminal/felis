@@ -717,12 +717,7 @@ fn probe_checks(client_program: impl FnOnce() -> OsString) -> (Check, Check) {
                 report.gpu.name.as_deref().unwrap_or("adapter"),
                 report.gpu.backend.as_deref().unwrap_or("unknown"),
                 report.gpu.device_type.as_deref().unwrap_or("unknown"),
-                report
-                    .gpu
-                    .driver
-                    .as_deref()
-                    .filter(|d| !d.is_empty())
-                    .map_or_else(String::new, |d| format!(", driver {d}")),
+                driver_suffix(&report.gpu),
             ) + if software {
                 " — a software rasterizer: felis renders, slowly"
             } else {
@@ -752,6 +747,21 @@ fn probe_checks(client_program: impl FnOnce() -> OsString) -> (Check, Check) {
         )
     };
     (gpu, clipboard)
+}
+
+fn driver_suffix(gpu: &felis_client_core::doctor::GpuProbe) -> String {
+    let driver = [&gpu.driver, &gpu.driver_info]
+        .into_iter()
+        .flatten()
+        .filter(|part| !part.is_empty())
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .join(" ");
+    if driver.is_empty() {
+        driver
+    } else {
+        format!(", driver {driver}")
+    }
 }
 
 /// The `Err` string is a checklist detail, not a diagnostic: nothing

@@ -27,7 +27,7 @@ use felis_client_core::{
     config,
     config::{Backdrop, BuiltinShader, GUI_CLIENT_ID, PostShaderChoice, compose_window_title},
     config_watcher, cursor_blink, cursor_trail, dial_and_land, dial_and_land_within,
-    doctor::{ClipboardProbe, GpuProbe, PROBE_VERSION, ProbeReport},
+    doctor::{ClipboardProbe, FontsProbe, GpuProbe, PROBE_VERSION, ProbeReport},
     launch_args,
     outgoing::{OutgoingFrame, OutgoingFull, OutgoingQueue},
     pipe::StagedRegion,
@@ -350,6 +350,22 @@ struct Cli {
     /// linking them into the CLI binary directly.
     #[arg(long, hide = true, exclusive = true)]
     doctor_probe: bool,
+    /// `--doctor-probe` plus the font stack a window would resolve, for
+    /// `felis doctor report`. The optional value is the absolute
+    /// `config.toml` to resolve against; absent means the default one.
+    #[expect(
+        clippy::option_option,
+        reason = "clap's shape for a flag whose value is optional: absent, bare, or with a path"
+    )]
+    #[arg(
+        long,
+        hide = true,
+        exclusive = true,
+        value_name = "PATH",
+        num_args = 0..=1,
+        require_equals = true
+    )]
+    doctor_report_probe: Option<Option<PathBuf>>,
 }
 
 const fn log_filter_directive(trace_perf: bool) -> &'static str {
@@ -366,10 +382,14 @@ fn main() -> Result<ExitCode> {
     let _dhat = dhat::Profiler::new_heap();
 
     let cli = Cli::parse();
+    // Before `logging::init`: the console sink is stdout, and a log line
+    // on the channel carrying the JSON would corrupt the report.
     if cli.doctor_probe {
-        // Before `logging::init`: the console sink is stdout, and a log
-        // line on the channel carrying the JSON would corrupt the report.
-        return run_doctor_probe().map(|()| ExitCode::SUCCESS);
+        return run_doctor_probe(None).map(|()| ExitCode::SUCCESS);
+    }
+    if let Some(config) = cli.doctor_report_probe {
+        let source = config.map_or(ConfigSource::Default, ConfigSource::Explicit);
+        return run_doctor_probe(Some(&source)).map(|()| ExitCode::SUCCESS);
     }
     // Tee logs into a per-user file: a `.app` launch inherits `/dev/null`
     // for stdout/stderr, so console-only logging records nothing when a
@@ -450,7 +470,7 @@ fn main() -> Result<ExitCode> {
 /// disabling clipboard does not report hardware unavailability. Neither
 /// check is fatal: failures produce structured reports for the caller to
 /// merge instead of guessing from exit codes.
-fn run_doctor_probe() -> Result<()> {
+fn run_doctor_probe(fonts_from: Option<&ConfigSource>) -> Result<()> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -463,6 +483,7 @@ fn run_doctor_probe() -> Result<()> {
             backend: Some(found.backend),
             device_type: Some(found.device_type),
             driver: Some(found.driver),
+            driver_info: Some(found.driver_info).filter(|info| !info.is_empty()),
         });
     let clipboard = match os_clipboard::OsClipboard::new(false) {
         Ok(_) => ClipboardProbe {
@@ -479,6 +500,7 @@ fn run_doctor_probe() -> Result<()> {
         client_version: FELIS_VERSION.to_owned(),
         gpu,
         clipboard,
+        fonts: fonts_from.map(probe_fonts),
     };
     let text = serde_json::to_string(&report).context("serialize probe report")?;
     #[expect(
@@ -489,6 +511,25 @@ fn run_doctor_probe() -> Result<()> {
         println!("{text}");
     }
     Ok(())
+}
+
+fn probe_fonts(source: &ConfigSource) -> FontsProbe {
+    let cfg = config::EffectiveConfig::load_from_source(source, GUI_CLIENT_ID);
+    match felis_render_wgpu::describe_fonts(&renderer_config_from(&cfg)) {
+        Ok(found) => {
+            let [regular, bold, italic, bold_italic] = found.primary;
+            FontsProbe::Resolved {
+                regular,
+                bold,
+                italic,
+                bold_italic,
+                fallbacks: found.fallbacks,
+            }
+        }
+        Err(err) => FontsProbe::Failed {
+            error: err.to_string(),
+        },
+    }
 }
 
 /// Session listing lives on felis-cli's `cli_sessions::cmd_list` and
