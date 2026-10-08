@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/*", "tests"]
 
 [workspace.package]
-version = "0.1.2"
+version = "0.1.3"
 edition = "2024"
 # 1.88 over 1.85 edition floor: felis-grid uses let-chains stabilized in 1.88.
 rust-version = "1.88"

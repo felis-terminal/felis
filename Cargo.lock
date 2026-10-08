@@ -844,7 +844,7 @@ dependencies = [
 
 [[package]]
 name = "felis-cli"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "boon",
@@ -871,7 +871,7 @@ dependencies = [
 
 [[package]]
 name = "felis-client"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "arboard",
@@ -898,7 +898,7 @@ dependencies = [
 
 [[package]]
 name = "felis-client-core"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "bitflags 2.13.2",
  "criterion",
@@ -927,7 +927,7 @@ dependencies = [
 
 [[package]]
 name = "felis-daemon"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "bytes",
@@ -954,7 +954,7 @@ dependencies = [
 
 [[package]]
 name = "felis-grid"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "bitflags 2.13.2",
  "boon",
@@ -978,7 +978,7 @@ dependencies = [
 
 [[package]]
 name = "felis-protocol"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "bitflags 2.13.2",
  "bytes",
@@ -994,7 +994,7 @@ dependencies = [
 
 [[package]]
 name = "felis-pty"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "felis-grid",
  "felis-vt",
@@ -1008,7 +1008,7 @@ dependencies = [
 
 [[package]]
 name = "felis-render-wgpu"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "bytemuck",
  "criterion",
@@ -1026,7 +1026,7 @@ dependencies = [
 
 [[package]]
 name = "felis-shaping"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "criterion",
  "fontdb",
@@ -1042,7 +1042,7 @@ dependencies = [
 
 [[package]]
 name = "felis-transport"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "bytes",
  "criterion",
@@ -1061,7 +1061,7 @@ dependencies = [
 
 [[package]]
 name = "felis-vt"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "criterion",
  "felis-protocol",
@@ -1072,7 +1072,7 @@ dependencies = [
 
 [[package]]
 name = "felis-workspace-tests"
-version = "0.1.2"
+version = "0.1.3"
 
 [[package]]
 name = "find-msvc-tools"
