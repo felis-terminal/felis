@@ -1,7 +1,7 @@
 //! The face-discovery seam: everything `FontStack` asks of the host's font
 //! set, so the stack never names a discovery library's types.
 
-use std::{hash::Hash, path::PathBuf};
+use std::{collections::HashMap, hash::Hash, path::PathBuf};
 
 use fontdb::{Database, Family, Query};
 
@@ -22,6 +22,40 @@ pub(crate) trait FaceProvider {
     fn default_monospace(&self) -> Result<(Self::Id, String), ShapingError>;
 
     fn resolve_face(&self, id: Self::Id) -> Option<ResolvedFace>;
+
+    /// The family a styled lookup of `id`'s bold or italic face names.
+    fn family_of(&self, _id: Self::Id) -> Option<String> {
+        None
+    }
+
+    /// The host's fallback ranked for `requested` (whose config rules may
+    /// name fallbacks the matched family's name does not), the primary's
+    /// own face included; `None` makes the stack discover fallbacks by
+    /// family. What loading showed (`loaded`) overrides the provider.
+    fn fallback_cascade(
+        &self,
+        _requested: &str,
+        _loaded: &HashMap<Self::Id, LoadedAs>,
+    ) -> Option<Vec<CascadeFace<Self::Id>>> {
+        None
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum LoadedAs {
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "no shipped provider ranks a cascade yet")
+    )]
+    Color(bool),
+    /// The loader cannot parse it, so it must not take coverage from a
+    /// face ranked after it.
+    Unusable,
+}
+
+pub(crate) struct CascadeFace<Id> {
+    pub id: Id,
+    pub color: bool,
 }
 
 pub(crate) struct ResolvedFace {

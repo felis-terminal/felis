@@ -286,6 +286,7 @@ Diagnostics surface at two stages:
 | `font.family` unavailable                                | Falls back to system monospace with warning.                       | window |
 | No monospace face installed                              | Window fails to open with `no monospace font installed`.           | window |
 | `font.fallback` entry missing                            | Skips missing entry; remainder of chain applies.                   | window |
+| `font.fallback` longer than 62 entries                   | Keeps the first 62 with warning.                                   | window |
 | `font.fallback` entry malformed                          | Skips entry with warning; remainder of chain applies.              | load   |
 | Font style sub-table omitted                             | Derived from `font.family` at matching weight and slant.           | window |
 | Color value malformed                                    | Keeps default color and logs warning.                              | window |

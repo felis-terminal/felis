@@ -29,7 +29,7 @@ mod provider;
 
 use presentation::is_emoji_presentation;
 pub use provider::MONOSPACE_FALLBACK_FAMILIES;
-use provider::{BOLD_WEIGHT, FaceProvider, FaceSource, REGULAR_WEIGHT, system_db};
+use provider::{BOLD_WEIGHT, FaceProvider, FaceSource, LoadedAs, REGULAR_WEIGHT, system_db};
 
 #[derive(Debug, Error)]
 pub enum ShapingError {
@@ -531,6 +531,10 @@ pub struct FontStack {
     /// the entry is chosen on `fonts` and only the drawn face varies.
     chains: [Vec<Arc<Font>>; 4],
     styled_features: [Vec<String>; 4],
+    /// The fallbacks are the host's ranked cascade rather than a declared
+    /// or discovered-by-family order, so a text-presentation scalar takes
+    /// a mono face before an earlier-ranked color one.
+    mono_first: bool,
 }
 
 /// The bold, italic and bold-italic slots with the weight and slant each
@@ -735,6 +739,7 @@ impl FontStack {
             features: vec![features],
             chains,
             styled_features,
+            mono_first: false,
         }
     }
 
@@ -817,19 +822,19 @@ impl FontStack {
         explicit_fallbacks: &[FaceSpec],
         styles: &StyleFaces<'_>,
     ) -> Result<Self, ShapingError> {
-        let (regular_id, base_family) = match primary_family {
-            Some(name) => {
-                if let Some(id) = db.find_face(name, REGULAR_WEIGHT, false) {
-                    (id, name.to_owned())
-                } else {
-                    warn!(
-                        family = name,
-                        "font family not found; falling back to monospace"
-                    );
-                    db.default_monospace()?
-                }
+        let found = primary_family
+            .and_then(|name| Some((db.find_face(name, REGULAR_WEIGHT, false)?, name)));
+        let (regular_id, base_family, requested) = if let Some((id, name)) = found {
+            (id, name.to_owned(), name)
+        } else {
+            if let Some(name) = primary_family {
+                warn!(
+                    family = name,
+                    "font family not found; falling back to monospace"
+                );
             }
-            None => db.default_monospace()?,
+            let (id, family) = db.default_monospace()?;
+            (id, family, "monospace")
         };
         let loaded = Font::load_face_id(db, regular_id)?;
         let regular = Arc::new(loaded.into_regular_view());
@@ -842,7 +847,11 @@ impl FontStack {
             primary_features,
             styles,
         );
-        if explicit_fallbacks.is_empty() {
+        if explicit_fallbacks.is_empty()
+            && let Some(cascaded) = append_cascade(&stack, db, requested, primary_features)
+        {
+            stack = cascaded;
+        } else if explicit_fallbacks.is_empty() {
             stack = append_first_installed(stack, db, CJK_FALLBACK_FAMILIES, primary_features);
             stack = append_all_installed(stack, db, SYMBOL_FALLBACK_FAMILIES, primary_features);
             stack = append_first_installed(stack, db, EMOJI_FALLBACK_FAMILIES, primary_features);
@@ -857,6 +866,13 @@ impl FontStack {
                     .features
                     .as_deref()
                     .map_or_else(|| primary_features.to_vec(), <[String]>::to_vec);
+                if stack.fonts.len() > MAX_FALLBACKS {
+                    warn!(
+                        family,
+                        "font.fallback lists more than {MAX_FALLBACKS} faces; dropping the rest"
+                    );
+                    break;
+                }
                 if let Ok(views) = fallback_views(db, family) {
                     stack = stack.with_fallback_views(views, features);
                 } else {
@@ -963,18 +979,29 @@ impl FontStack {
         self.first_cover_styled_index(c, style)
     }
 
-    /// The first face covering `c`, presentation aside: the styled
-    /// primary, then the chain in order, then `0` for `.notdef`.
+    /// The face drawing `c` in text presentation: the styled primary, then
+    /// the chain in order, except that a `mono_first` stack takes a mono
+    /// face before any color one, the primary included; `0` for `.notdef`.
     fn first_cover_styled_index(&self, c: char, style: FontStyle) -> usize {
-        if self.chains[style.index()][0].has_glyph(c) {
+        let primary = &self.chains[style.index()][0];
+        let primary_covers = primary.has_glyph(c);
+        if primary_covers && !(self.mono_first && primary.has_color_glyphs()) {
             return 0;
         }
-        for (i, font) in self.fonts.iter().enumerate().skip(1) {
-            if font.has_glyph(c) {
-                return i;
-            }
+        let fallbacks = || self.fonts.iter().enumerate().skip(1);
+        let mono = self
+            .mono_first
+            .then(|| fallbacks().find(|(_, f)| !f.has_color_glyphs() && f.has_glyph(c)))
+            .flatten();
+        if let Some((i, _)) = mono {
+            return i;
         }
-        0
+        if primary_covers {
+            return 0;
+        }
+        fallbacks()
+            .find(|(_, f)| f.has_glyph(c))
+            .map_or(0, |(i, _)| i)
     }
 
     /// First face that covers `c` *and* carries color glyphs, `None`
@@ -1034,6 +1061,14 @@ fn fallback_views<P: FaceProvider>(db: &P, family: &str) -> Result<[Arc<Font>; 4
     let id = db
         .find_face(family, REGULAR_WEIGHT, false)
         .ok_or(ShapingError::NoFont)?;
+    fallback_views_of(db, id, family)
+}
+
+fn fallback_views_of<P: FaceProvider>(
+    db: &P,
+    id: P::Id,
+    family: &str,
+) -> Result<[Arc<Font>; 4], ShapingError> {
     let loaded = Font::load_face_id(db, id)?;
     let regular = Arc::new(loaded.into_regular_view());
     let mut views = std::array::from_fn(|_| regular.clone());
@@ -1067,6 +1102,67 @@ fn covering_or_regular(
         "styled fallback face covers less than regular; using regular"
     );
     regular.clone()
+}
+
+/// Face ids are six bits wide in [`SizingKey`]: id 0 is the primary and
+/// 0x3F doubles as the saturation bucket.
+const MAX_FALLBACKS: usize = 0x3E;
+
+/// The stack with the provider's ranked cascade appended, or `None` when
+/// it has none. The cascade is recomputed until every face it keeps has
+/// loaded as the class it was kept for: a face that fails to load or
+/// contradicts its reported color capability changes which later faces
+/// add coverage. Each face is loaded once, so the loop ends.
+fn append_cascade<P: FaceProvider>(
+    stack: &FontStack,
+    db: &P,
+    requested: &str,
+    features: &[String],
+) -> Option<FontStack> {
+    let mut verdicts = HashMap::new();
+    let mut loaded: HashMap<P::Id, [Arc<Font>; 4]> = HashMap::new();
+    let cascade = loop {
+        let cascade = db.fallback_cascade(requested, &verdicts)?;
+        let mut changed = false;
+        for face in cascade.iter().take(MAX_FALLBACKS) {
+            if verdicts.contains_key(&face.id) {
+                continue;
+            }
+            let family = db.family_of(face.id).unwrap_or_default();
+            let verdict = match fallback_views_of(db, face.id, &family) {
+                Ok(views) => {
+                    let color = views[0].has_color_glyphs();
+                    loaded.insert(face.id, views);
+                    changed |= color != face.color;
+                    LoadedAs::Color(color)
+                }
+                Err(e) => {
+                    warn!(family, error = %e, "fallback face failed to load");
+                    changed = true;
+                    LoadedAs::Unusable
+                }
+            };
+            verdicts.insert(face.id, verdict);
+        }
+        if !changed {
+            break cascade;
+        }
+    };
+    let mut cascaded = stack.clone();
+    cascaded.mono_first = true;
+    let dropped = cascade.len().saturating_sub(MAX_FALLBACKS);
+    for face in cascade.iter().take(MAX_FALLBACKS) {
+        if let Some(views) = loaded.remove(&face.id) {
+            cascaded = cascaded.with_fallback_views(views, features.to_vec());
+        }
+    }
+    if dropped > 0 {
+        debug!(
+            dropped,
+            "fallback cascade has more than {MAX_FALLBACKS} faces; dropping the least preferred"
+        );
+    }
+    Some(cascaded)
 }
 
 fn append_first_installed<P: FaceProvider>(
@@ -1638,6 +1734,7 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
+    use crate::provider::ResolvedFace;
 
     fn font() -> Font {
         Font::load_default().expect("load font")
@@ -2507,6 +2604,148 @@ mod tests {
         assert_eq!(axis_coord(&bold, *b"wdth"), width);
         assert!(axis_coord(&bold, *b"wght") > axis_coord(&semiwide, *b"wght"));
         assert!(default.at_instance(10_000).is_none());
+    }
+
+    /// One fallback a [`ScriptedProvider`] ranks.
+    struct ScriptedFace {
+        /// `None` stands for a file no font parser reads.
+        bytes: Option<FontBytes>,
+        reported_color: bool,
+        /// Pruned while this earlier face is kept in the same class, as a
+        /// face adding no coverage is.
+        shadowed_by: Option<usize>,
+    }
+
+    /// Ranks `fallbacks` (ids 1..) after `primary` (id 0) the way a
+    /// coverage-pruning provider would, honoring what loading showed.
+    struct ScriptedProvider {
+        primary: FontBytes,
+        fallbacks: Vec<ScriptedFace>,
+    }
+
+    impl FaceProvider for ScriptedProvider {
+        type Id = usize;
+
+        fn find_face(&self, _: &str, _: u16, _: bool) -> Option<usize> {
+            Some(0)
+        }
+
+        fn default_monospace(&self) -> Result<(usize, String), ShapingError> {
+            Ok((0, "primary".to_owned()))
+        }
+
+        fn resolve_face(&self, id: usize) -> Option<ResolvedFace> {
+            let bytes = match id {
+                0 => self.primary.clone(),
+                n => self.fallbacks[n - 1]
+                    .bytes
+                    .clone()
+                    .unwrap_or_else(|| Arc::new(vec![0_u8; 64])),
+            };
+            Some(ResolvedFace {
+                source: FaceSource::Shared(bytes),
+                index: 0,
+                instance: None,
+                slanted: false,
+            })
+        }
+
+        fn fallback_cascade(
+            &self,
+            _: &str,
+            loaded: &HashMap<usize, LoadedAs>,
+        ) -> Option<Vec<provider::CascadeFace<usize>>> {
+            let mut kept: Vec<provider::CascadeFace<usize>> = Vec::new();
+            for (i, face) in self.fallbacks.iter().enumerate() {
+                let id = i + 1;
+                let color = match loaded.get(&id) {
+                    Some(LoadedAs::Unusable) => continue,
+                    Some(LoadedAs::Color(color)) => *color,
+                    None => face.reported_color,
+                };
+                let shadowed = face
+                    .shadowed_by
+                    .is_some_and(|by| kept.iter().any(|k| k.id == by && k.color == color));
+                if !shadowed {
+                    kept.push(provider::CascadeFace { id, color });
+                }
+            }
+            Some(kept)
+        }
+    }
+
+    fn scripted_stack(fallbacks: Vec<ScriptedFace>) -> FontStack {
+        FontStack::auto_discover_in(
+            &ScriptedProvider {
+                primary: pinned_bytes("opentype/MonaspaceNeon-Regular.otf")
+                    .expect("callers check the pinned set first"),
+                fallbacks,
+            },
+            None,
+            &[],
+            &[],
+            &StyleFaces::default(),
+        )
+        .expect("the primary loads")
+    }
+
+    fn pinned_bytes(name: &str) -> Option<FontBytes> {
+        let files = pinned_files(&[name])?;
+        Some(Arc::new(
+            std::fs::read(&files[0]).expect("the pinned face reads"),
+        ))
+    }
+
+    #[test]
+    fn a_fallback_that_fails_to_load_yields_its_coverage_to_the_next() {
+        let Some(symbols) = pinned_bytes("NotoSansSymbols2-Regular.otf") else {
+            return;
+        };
+        let stack = scripted_stack(vec![
+            ScriptedFace {
+                bytes: None,
+                reported_color: false,
+                shadowed_by: None,
+            },
+            ScriptedFace {
+                bytes: Some(symbols),
+                reported_color: false,
+                shadowed_by: Some(1),
+            },
+        ]);
+        assert_eq!(stack.len(), 2);
+        assert_ne!(
+            stack.resolve_styled_index('\u{2702}', FontStyle::REGULAR),
+            0
+        );
+    }
+
+    /// The emoji face is reported mono, so it first shadows the mono
+    /// symbol face; once it loads as color, the symbol face stops being
+    /// shadowed and joins the chain.
+    #[test]
+    fn a_fallback_reported_mono_but_loaded_color_stops_shadowing_mono_faces() {
+        let (Some(emoji), Some(symbols)) = (
+            pinned_bytes("NotoColorEmoji.ttf"),
+            pinned_bytes("NotoSansSymbols2-Regular.otf"),
+        ) else {
+            return;
+        };
+        let stack = scripted_stack(vec![
+            ScriptedFace {
+                bytes: Some(emoji),
+                reported_color: false,
+                shadowed_by: None,
+            },
+            ScriptedFace {
+                bytes: Some(symbols),
+                reported_color: false,
+                shadowed_by: Some(1),
+            },
+        ]);
+        assert_eq!(stack.len(), 3);
+        let text = stack.resolve_styled_index('\u{2702}', FontStyle::REGULAR);
+        assert!(!stack.font_at(text, FontStyle::REGULAR).has_color_glyphs());
     }
 
     const MONASPACE_NEON_STATIC: [&str; 4] = [

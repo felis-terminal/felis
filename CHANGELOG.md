@@ -47,6 +47,10 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
   `EBADF`), bad base64 or zlib data is `EINVAL` (was `EBADF`), and raw pixel data shorter than `s=`×`v=` is `ENODATA`
   (was `EINVAL`).
 
+### Changed
+
+- A `font.fallback` list longer than 62 entries keeps the first 62, with a warning.
+
 ### Fixed
 
 - A `felis bridge` stream canceled by a `cancel` op or by closing stdin no longer ends with a clean `end` whose `count`
