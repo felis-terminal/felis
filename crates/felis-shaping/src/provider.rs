@@ -27,6 +27,9 @@ pub(crate) trait FaceProvider {
 pub(crate) struct ResolvedFace {
     pub source: FaceSource,
     pub index: u32,
+    /// Zero-based named instance in `fvar` order the face is drawn at;
+    /// `None` loads the file's default position.
+    pub instance: Option<usize>,
     /// The face itself is italic or oblique, so an italic query needs no
     /// axis move to reach it.
     pub slanted: bool,
@@ -115,6 +118,7 @@ impl FaceProvider for Database {
         Some(ResolvedFace {
             source,
             index: face.index,
+            instance: None,
             slanted: face.style != fontdb::Style::Normal,
         })
     }

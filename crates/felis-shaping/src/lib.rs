@@ -160,7 +160,7 @@ impl Font {
 
     fn load_face_id<P: FaceProvider>(provider: &P, id: P::Id) -> Result<Self, ShapingError> {
         let face = provider.resolve_face(id).ok_or(ShapingError::NoFont)?;
-        let face_index = face.index;
+        let (face_index, instance) = (face.index, face.instance);
         let bytes: FontBytes = match face.source {
             FaceSource::Shared(bytes) => bytes,
             // fontdb exposes a persistent mmap only behind its `unsafe`
@@ -192,21 +192,60 @@ impl Font {
             let color = font_ref.color_palettes().len() != 0 || font_ref.color_strikes().len() != 0;
             (font_ref.offset, color)
         };
-        Ok(Self {
+        let font = Self {
             bytes,
             offset,
             key: swash::CacheKey::new(),
             color,
             coords: Vec::new(),
             position: Vec::new(),
+        };
+        Ok(match instance {
+            Some(index) => font.at_instance(index).ok_or_else(|| {
+                ShapingError::BadFont(format!("named instance {index} not in the face"))
+            })?,
+            None => font,
         })
+    }
+
+    /// The face at named instance `index` (zero-based, in `fvar` order);
+    /// `None` when the face has no such instance.
+    fn at_instance(&self, index: usize) -> Option<Self> {
+        let face = self.font_ref();
+        let variations = face.variations();
+        let values: Vec<f32> = face.instances().nth(index)?.values().collect();
+        let settings: Vec<(swash::Tag, f32)> = variations.map(|v| v.tag()).zip(values).collect();
+        let coords = variations
+            .normalized_coords(settings.iter().copied())
+            .collect();
+        Some(self.with_coords(coords, settings))
+    }
+
+    /// The regular view a stack draws: a face loaded at a named instance
+    /// stays there, any other variable face moves to `wght` 400.
+    fn into_regular_view(self) -> Self {
+        if !self.coords.is_empty() {
+            return self;
+        }
+        self.at_style(REGULAR_WEIGHT, false).unwrap_or(self)
+    }
+
+    fn with_coords(&self, coords: Vec<NormalizedCoord>, position: Vec<(swash::Tag, f32)>) -> Self {
+        Self {
+            bytes: self.bytes.clone(),
+            offset: self.offset,
+            key: swash::CacheKey::new(),
+            color: self.color,
+            coords,
+            position,
+        }
     }
 
     /// The same face at `weight` on its `wght` axis (clamped to the
     /// axis range) and, when `italic`, at the [`italic_position`] of its
     /// `ital`/`slnt` axes, sharing the font bytes; `None` when neither
-    /// applies. fontdb lists a variable file once, at its default
-    /// instance, so a bold or italic query returns that instance as is.
+    /// applies. Axes neither setting names keep `self`'s position, so a
+    /// face loaded at a named instance keeps its width or optical size.
     #[must_use]
     pub fn at_style(&self, weight: u16, italic: bool) -> Option<Self> {
         let face = self.font_ref();
@@ -239,24 +278,25 @@ impl Font {
         if settings.is_empty() {
             return None;
         }
-        let position = settings
-            .iter()
-            .map(|&(tag, value)| {
-                let value = variations.find_by_tag(tag).map_or(value, |axis| {
-                    value.clamp(axis.min_value(), axis.max_value())
-                });
-                (tag, value)
-            })
+        let mut position = self.position.clone();
+        for &(tag, value) in &settings {
+            let value = variations.find_by_tag(tag).map_or(value, |axis| {
+                value.clamp(axis.min_value(), axis.max_value())
+            });
+            match position.iter_mut().find(|(t, _)| *t == tag) {
+                Some(entry) => entry.1 = value,
+                None => position.push((tag, value)),
+            }
+        }
+        let mut coords: Vec<NormalizedCoord> = variations
+            .normalized_coords(settings.iter().copied())
             .collect();
-        let coords = variations.normalized_coords(settings).collect();
-        Some(Self {
-            bytes: self.bytes.clone(),
-            offset: self.offset,
-            key: swash::CacheKey::new(),
-            color: self.color,
-            coords,
-            position,
-        })
+        for ((coord, axis), base) in coords.iter_mut().zip(&axes).zip(&self.coords) {
+            if !settings.iter().any(|(tag, _)| *tag == axis.tag) {
+                *coord = *base;
+            }
+        }
+        Some(self.with_coords(coords, position))
     }
 
     #[must_use]
@@ -792,7 +832,7 @@ impl FontStack {
             None => db.default_monospace()?,
         };
         let loaded = Font::load_face_id(db, regular_id)?;
-        let regular = Arc::new(loaded.at_style(REGULAR_WEIGHT, false).unwrap_or(loaded));
+        let regular = Arc::new(loaded.into_regular_view());
         let mut stack = Self::with_primary_features(regular.clone(), primary_features.to_vec());
         stack.load_styled(
             db,
@@ -995,7 +1035,7 @@ fn fallback_views<P: FaceProvider>(db: &P, family: &str) -> Result<[Arc<Font>; 4
         .find_face(family, REGULAR_WEIGHT, false)
         .ok_or(ShapingError::NoFont)?;
     let loaded = Font::load_face_id(db, id)?;
-    let regular = Arc::new(loaded.at_style(REGULAR_WEIGHT, false).unwrap_or(loaded));
+    let regular = Arc::new(loaded.into_regular_view());
     let mut views = std::array::from_fn(|_| regular.clone());
     if regular.has_color_glyphs() {
         return Ok(views);
@@ -2426,6 +2466,47 @@ mod tests {
         };
         let dir = std::path::PathBuf::from(dir);
         Some(names.iter().map(|name| dir.join(name)).collect())
+    }
+
+    fn axis_coord(font: &Font, tag: [u8; 4]) -> NormalizedCoord {
+        let tag = swash::tag_from_bytes(&tag);
+        let index = font
+            .font_ref()
+            .variations()
+            .position(|v| v.tag() == tag)
+            .expect("the face has the axis");
+        font.coords[index]
+    }
+
+    /// `instances().nth(16)` of the pinned variable face is `SemiWide
+    /// Regular`: its `wdth` sits off the default while `wght` is 400.
+    #[test]
+    fn a_named_instance_keeps_its_width_through_regular_and_bold_views() {
+        let Some(files) = pinned_files(&["truetype/Monaspace Neon Var.ttf"]) else {
+            return;
+        };
+        let mut db = Database::new();
+        db.load_font_file(&files[0])
+            .expect("the variable face reads");
+        let default = Font::try_load_with(&db, "Monaspace Neon Var").expect("the face loads");
+        let name = default
+            .font_ref()
+            .instances()
+            .nth(16)
+            .and_then(|i| i.name(Some("en")).map(|n| n.to_string()));
+        assert_eq!(name.as_deref(), Some("SemiWide Regular"));
+
+        let semiwide = default
+            .at_instance(16)
+            .expect("the instance exists")
+            .into_regular_view();
+        let width = axis_coord(&semiwide, *b"wdth");
+        assert_ne!(width, 0, "SemiWide must sit off the default width");
+
+        let bold = semiwide.at_style(BOLD_WEIGHT, false).expect("wght moves");
+        assert_eq!(axis_coord(&bold, *b"wdth"), width);
+        assert!(axis_coord(&bold, *b"wght") > axis_coord(&semiwide, *b"wght"));
+        assert!(default.at_instance(10_000).is_none());
     }
 
     const MONASPACE_NEON_STATIC: [&str; 4] = [
