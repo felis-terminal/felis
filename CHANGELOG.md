@@ -10,6 +10,12 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-10-08
+
+Font fixes. Variable fonts draw bold and italic cells at the weight and slant each style asks for, and fallback glyphs
+(CJK, symbols) follow a cell's bold or italic face; a variable fallback font such as Noto Sans CJK no longer draws at
+Thin.
+
 ### Fixed
 
 - A variable font (one file with a `wght` axis, such as JetBrains Mono's `JetBrainsMono[wght].ttf`) draws bold cells at
@@ -123,7 +129,8 @@ commands in place of `felis frontend <name>`.
 
 Initial release.
 
-[unreleased]: https://github.com/felis-terminal/felis/compare/v0.1.2...HEAD
+[unreleased]: https://github.com/felis-terminal/felis/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/felis-terminal/felis/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/felis-terminal/felis/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/felis-terminal/felis/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/felis-terminal/felis/releases/tag/v0.1.0
