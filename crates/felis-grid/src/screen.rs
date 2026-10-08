@@ -380,17 +380,17 @@ impl ScreenBuffer {
     /// owning wide cell. An unresolvable cluster handle falls back to
     /// width 1 so the cell still advances the cursor.
     pub(crate) fn grapheme_width(&self, g: Grapheme) -> u8 {
-        use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+        use crate::width::{bmp_widths, char_cell_width, cluster_cell_width, table_width};
         match g {
             Grapheme::Empty | Grapheme::Spacer | Grapheme::SizedSpacer => 0,
             Grapheme::Ascii(_) => 1,
             // A deferred `0` covers the fold set, whose standalone width
             // unicode-width still decides.
-            Grapheme::Char(c) => match crate::sink::table_width(crate::sink::bmp_widths(), c) {
-                0 => c.width().unwrap_or(0) as u8,
+            Grapheme::Char(c) => match table_width(bmp_widths(), c) {
+                0 => char_cell_width(c),
                 w => w as u8,
             },
-            Grapheme::Cluster(id) => self.cluster_str(id).map_or(1, |s| s.width().min(2) as u8),
+            Grapheme::Cluster(id) => self.cluster_str(id).map_or(1, cluster_cell_width),
         }
     }
 

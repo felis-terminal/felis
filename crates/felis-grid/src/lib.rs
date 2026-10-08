@@ -287,6 +287,7 @@ mod table_gc;
 mod text_cells;
 mod text_sizing;
 mod uax29;
+mod width;
 pub mod wire;
 mod xtgettcap;
 
@@ -317,6 +318,7 @@ pub use sgr::{AttrFlags, Attributes, Color, UnderlineStyle};
 pub use style_table::{StyleId, StyleTable};
 pub use table_gc::{Sweepable, TableGc};
 pub use text_cells::{TextCells, text_cells};
+pub use width::char_cell_width;
 pub use wire::{DecodedRow, RowCodecError, RowEncode, decode_row, encode_row};
 use xtgettcap::{ascii_to_hex, hex_to_ascii, xtgettcap_value};
 
@@ -2683,17 +2685,6 @@ fn trim_cells(
 fn copy_within_cells(cells: &mut [Cell], src: std::ops::Range<usize>, dst_start: usize) {
     cells.copy_within(src, dst_start);
 }
-
-/// Public so callers outside this crate (the renderer's pre-edit
-/// overlay) reuse the same tables: `felis-grid` is the single source
-/// of truth for cell widths.
-#[must_use]
-pub fn char_cell_width(c: char) -> u8 {
-    use unicode_width::UnicodeWidthChar;
-    c.width().unwrap_or(0) as u8
-}
-
-impl Grid {}
 
 /// xterm defines `id` as the only standard key; unknown keys are
 /// ignored.
