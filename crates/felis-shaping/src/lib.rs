@@ -10,7 +10,6 @@
 
 use std::{borrow::Cow, collections::HashMap, sync::Arc};
 
-use fontdb::{Database, Family, Query};
 use skrifa::raw::{
     FontData, FontRead,
     tables::cmap::{Cmap, CmapSubtable, MapVariant},
@@ -26,8 +25,11 @@ use thiserror::Error;
 use tracing::{debug, warn};
 
 mod presentation;
+mod provider;
 
 use presentation::is_emoji_presentation;
+pub use provider::MONOSPACE_FALLBACK_FAMILIES;
+use provider::{BOLD_WEIGHT, FaceProvider, FaceSource, REGULAR_WEIGHT, system_db};
 
 #[derive(Debug, Error)]
 pub enum ShapingError {
@@ -91,12 +93,15 @@ pub struct Font {
 impl Font {
     pub fn load_default() -> Result<Self, ShapingError> {
         let db = system_db();
-        let (id, _) = query_default_monospace(&db)?;
+        let (id, _) = db.default_monospace()?;
         Self::load_face_id(&db, id)
     }
 
-    pub fn try_load_with(db: &Database, family: &str) -> Result<Self, ShapingError> {
-        Self::load_with(db, Family::Name(family))
+    fn try_load_with<P: FaceProvider>(provider: &P, family: &str) -> Result<Self, ShapingError> {
+        let id = provider
+            .find_face(family, REGULAR_WEIGHT, false)
+            .ok_or(ShapingError::NoFont)?;
+        Self::load_face_id(provider, id)
     }
 
     /// Whether `self` maps every codepoint `regular` maps. A view moved
@@ -130,7 +135,7 @@ impl Font {
     #[must_use]
     pub fn try_load_test_font() -> Option<Self> {
         let dir = std::path::PathBuf::from(std::env::var_os("FELIS_TEST_FONT_DIR")?);
-        let mut db = Database::new();
+        let mut db = fontdb::Database::new();
         db.load_fonts_dir(&dir);
         let font = Self::try_load_with(&db, TEST_FONT_FAMILY).unwrap_or_else(|_| {
             panic!(
@@ -149,30 +154,20 @@ impl Font {
         Self::try_load_test_font().map_or_else(Self::load_default, Ok)
     }
 
-    fn load_with(db: &Database, family: Family<'_>) -> Result<Self, ShapingError> {
-        let id = db
-            .query(&Query {
-                families: &[family],
-                ..Query::default()
-            })
-            .ok_or(ShapingError::NoFont)?;
-        Self::load_face_id(db, id)
-    }
-
-    fn load_face_id(db: &Database, id: fontdb::ID) -> Result<Self, ShapingError> {
-        let face = db.face(id).ok_or(ShapingError::NoFont)?;
-        let (source, face_index) = (face.source.clone(), face.index);
-        let bytes: FontBytes = match source {
-            fontdb::Source::Binary(bytes) | fontdb::Source::SharedFile(_, bytes) => bytes,
+    fn load_face_id<P: FaceProvider>(provider: &P, id: P::Id) -> Result<Self, ShapingError> {
+        let face = provider.resolve_face(id).ok_or(ShapingError::NoFont)?;
+        let face_index = face.index;
+        let bytes: FontBytes = match face.source {
+            FaceSource::Shared(bytes) => bytes,
             // fontdb exposes a persistent mmap only behind its `unsafe`
             // `make_shared_face_data`, so map the file here: reading it
             // into a `Vec` turns a 183 MB emoji face into dirty heap
             // instead of reclaimable page cache
             // (docs/explanation/rendering/text-shaping.md "Font loading").
-            fontdb::Source::File(path) => {
+            FaceSource::File(path) => {
                 let file = std::fs::File::open(&path)
                     .map_err(|e| ShapingError::BadFont(format!("open {}: {e}", path.display())))?;
-                // SAFETY: `path` is a fontdb-discovered face under a
+                // SAFETY: `path` is a provider-discovered face under a
                 // system font root: root-owned, read-only, not mutated
                 // for the process lifetime
                 // (docs/reference/security-audits.md "`O_CLOEXEC` +
@@ -389,62 +384,6 @@ fn has_italic_token(name: &str) -> bool {
         .any(|t| t.eq_ignore_ascii_case("italic") || t.eq_ignore_ascii_case("oblique"))
 }
 
-/// Rescans every installed font (~300 ms on a large system); share one
-/// across probes.
-fn system_db() -> Database {
-    let mut db = Database::new();
-    db.load_system_fonts();
-    db
-}
-
-/// Tried in order when the `monospace` generic names nothing installed.
-pub const MONOSPACE_FALLBACK_FAMILIES: &[&str] = &[
-    "DejaVu Sans Mono",
-    "Liberation Mono",
-    "Noto Sans Mono",
-    "Ubuntu Mono",
-    "Menlo",
-    "Consolas",
-];
-
-fn query_family(db: &Database, name: &str) -> Option<fontdb::ID> {
-    db.query(&Query {
-        families: &[Family::Name(name)],
-        ..Query::default()
-    })
-}
-
-/// Resolves the default face and the family its styled faces derive from.
-///
-/// fontdb keeps only the first `prefer` entry of the last `monospace` alias
-/// it parses, so on Debian the generic names `FreeMono` (69-unifont.conf)
-/// even when only `DejaVu Sans Mono` is installed.
-fn query_default_monospace(db: &Database) -> Result<(fontdb::ID, String), ShapingError> {
-    let generic = db.family_name(&Family::Monospace);
-    if let Some(id) = query_family(db, generic) {
-        return Ok((id, generic.to_owned()));
-    }
-    let resolve = |name: &str| query_family(db, name).map(|id| (id, name.to_owned()));
-    let found = MONOSPACE_FALLBACK_FAMILIES
-        .iter()
-        .find_map(|name| resolve(name))
-        .or_else(|| {
-            db.faces()
-                .filter(|face| face.monospaced)
-                .filter_map(|face| face.families.first().map(|(name, _)| name.as_str()))
-                .min()
-                .and_then(resolve)
-        });
-    if let Some((_, family)) = &found {
-        tracing::info!(
-            generic,
-            family = family.as_str(),
-            "monospace generic not installed; using a fallback family"
-        );
-    }
-    found.ok_or(ShapingError::NoFont)
-}
-
 /// A resolved `font.fallback` entry or styled font table.
 ///
 /// `None` inherits: `family` derives from base `font.family` at the target
@@ -504,47 +443,47 @@ pub struct FontStack {
 
 /// The bold, italic and bold-italic slots with the weight and slant each
 /// is queried at.
-const STYLE_VARIANTS: [(FontStyle, fontdb::Weight, fontdb::Style); 3] = [
+const STYLE_VARIANTS: [(FontStyle, u16, bool); 3] = [
     (
         FontStyle {
             bold: true,
             italic: false,
         },
-        fontdb::Weight::BOLD,
-        fontdb::Style::Normal,
+        BOLD_WEIGHT,
+        false,
     ),
     (
         FontStyle {
             bold: false,
             italic: true,
         },
-        fontdb::Weight::NORMAL,
-        fontdb::Style::Italic,
+        REGULAR_WEIGHT,
+        true,
     ),
     (
         FontStyle {
             bold: true,
             italic: true,
         },
-        fontdb::Weight::BOLD,
-        fontdb::Style::Italic,
+        BOLD_WEIGHT,
+        true,
     ),
 ];
 
 /// Faces one family's styles resolved to, so two styles landing on the
 /// same file and axis position share one `Arc`.
-struct StyleViews<'a> {
-    db: &'a Database,
+struct StyleViews<'a, P: FaceProvider> {
+    provider: &'a P,
     /// `None` for a face that failed to load.
-    by_id: HashMap<fontdb::ID, Option<Arc<Font>>>,
-    views: HashMap<(fontdb::ID, Vec<NormalizedCoord>), Arc<Font>>,
+    by_id: HashMap<P::Id, Option<Arc<Font>>>,
+    views: HashMap<(P::Id, Vec<NormalizedCoord>), Arc<Font>>,
     regular: Arc<Font>,
 }
 
-impl<'a> StyleViews<'a> {
-    fn new(db: &'a Database, regular_id: fontdb::ID, regular: &Arc<Font>) -> Self {
+impl<'a, P: FaceProvider> StyleViews<'a, P> {
+    fn new(provider: &'a P, regular_id: P::Id, regular: &Arc<Font>) -> Self {
         Self {
-            db,
+            provider,
             by_id: HashMap::from([(regular_id, Some(regular.clone()))]),
             views: HashMap::from([((regular_id, regular.coords.clone()), regular.clone())]),
             regular: regular.clone(),
@@ -552,22 +491,12 @@ impl<'a> StyleViews<'a> {
     }
 
     /// `family` at `weight` and `slant`; `None` when no face matches.
-    fn resolve(
-        &mut self,
-        family: Family<'_>,
-        weight: fontdb::Weight,
-        slant: fontdb::Style,
-    ) -> Option<Arc<Font>> {
-        let id = self.db.query(&Query {
-            families: &[family],
-            weight,
-            style: slant,
-            ..Query::default()
-        })?;
+    fn resolve(&mut self, family: &str, weight: u16, italic: bool) -> Option<Arc<Font>> {
+        let id = self.provider.find_face(family, weight, italic)?;
         let loaded = self
             .by_id
             .entry(id)
-            .or_insert_with(|| match Font::load_face_id(self.db, id) {
+            .or_insert_with(|| match Font::load_face_id(self.provider, id) {
                 Ok(font) => Some(Arc::new(font)),
                 Err(e) => {
                     warn!(error = %e, "styled font face failed to load; using regular");
@@ -578,12 +507,8 @@ impl<'a> StyleViews<'a> {
         let Some(face) = loaded else {
             return Some(self.regular.clone());
         };
-        let italic = slant == fontdb::Style::Italic
-            && self
-                .db
-                .face(id)
-                .is_some_and(|f| f.style == fontdb::Style::Normal);
-        Some(match face.at_style(weight.0, italic) {
+        let italic = italic && self.provider.resolve_face(id).is_some_and(|f| !f.slanted);
+        Some(match face.at_style(weight, italic) {
             Some(view) => self
                 .views
                 .entry((id, view.coords.clone()))
@@ -704,7 +629,7 @@ impl FontStack {
     #[must_use]
     pub fn try_pinned_test_stack() -> Option<Self> {
         let dir = std::env::var_os("FELIS_TEST_FONT_DIR")?;
-        let mut db = Database::new();
+        let mut db = fontdb::Database::new();
         db.load_fonts_dir(std::path::PathBuf::from(dir));
         Self::auto_discover_in(&db, None, &[], &[], &StyleFaces::default()).ok()
     }
@@ -770,7 +695,7 @@ impl FontStack {
         explicit_fallbacks: &[FaceSpec],
         styles: &StyleFaces<'_>,
     ) -> Result<Self, ShapingError> {
-        let mut db = Database::new();
+        let mut db = fontdb::Database::new();
         for path in files {
             let err = |detail: String| ShapingError::FontPath {
                 path: path.clone(),
@@ -793,8 +718,8 @@ impl FontStack {
         )
     }
 
-    fn auto_discover_in(
-        db: &Database,
+    fn auto_discover_in<P: FaceProvider>(
+        db: &P,
         primary_family: Option<&str>,
         primary_features: &[String],
         explicit_fallbacks: &[FaceSpec],
@@ -802,31 +727,26 @@ impl FontStack {
     ) -> Result<Self, ShapingError> {
         let (regular_id, base_family) = match primary_family {
             Some(name) => {
-                if let Some(id) = query_family(db, name) {
+                if let Some(id) = db.find_face(name, REGULAR_WEIGHT, false) {
                     (id, name.to_owned())
                 } else {
                     warn!(
                         family = name,
                         "font family not found; falling back to monospace"
                     );
-                    query_default_monospace(db)?
+                    db.default_monospace()?
                 }
             }
-            None => query_default_monospace(db)?,
+            None => db.default_monospace()?,
         };
-        let base_family = Family::Name(&base_family);
         let loaded = Font::load_face_id(db, regular_id)?;
-        let regular = Arc::new(
-            loaded
-                .at_style(fontdb::Weight::NORMAL.0, false)
-                .unwrap_or(loaded),
-        );
+        let regular = Arc::new(loaded.at_style(REGULAR_WEIGHT, false).unwrap_or(loaded));
         let mut stack = Self::with_primary_features(regular.clone(), primary_features.to_vec());
         stack.load_styled(
             db,
             regular_id,
             &regular,
-            base_family,
+            &base_family,
             primary_features,
             styles,
         );
@@ -855,25 +775,25 @@ impl FontStack {
         Ok(stack)
     }
 
-    fn load_styled(
+    fn load_styled<P: FaceProvider>(
         &mut self,
-        db: &Database,
-        regular_id: fontdb::ID,
+        db: &P,
+        regular_id: P::Id,
         regular: &Arc<Font>,
-        base_family: Family<'_>,
+        base_family: &str,
         base_features: &[String],
         styles: &StyleFaces<'_>,
     ) {
         let mut resolver = StyleViews::new(db, regular_id, regular);
         let overrides = [styles.bold, styles.italic, styles.bold_italic];
-        for ((style, weight, slant), over) in STYLE_VARIANTS.into_iter().zip(overrides) {
+        for ((style, weight, italic), over) in STYLE_VARIANTS.into_iter().zip(overrides) {
             let idx = style.index();
-            let family = over.family.as_deref().map_or(base_family, Family::Name);
+            let family = over.family.as_deref().unwrap_or(base_family);
             self.styled_features[idx] = over
                 .features
                 .as_deref()
                 .map_or_else(|| base_features.to_vec(), <[String]>::to_vec);
-            self.chains[idx][0] = resolver.resolve(family, weight, slant).unwrap_or_else(|| {
+            self.chains[idx][0] = resolver.resolve(family, weight, italic).unwrap_or_else(|| {
                 if over.family.is_some() {
                     warn!("styled font family not installed; using regular");
                 }
@@ -1003,21 +923,19 @@ impl FontStack {
 /// drawn from the family's own face for that style. A color face, or a
 /// style whose face would drop a codepoint the regular one covers, draws
 /// the regular face.
-fn fallback_views(db: &Database, family: &str) -> Result<[Arc<Font>; 4], ShapingError> {
-    let id = query_family(db, family).ok_or(ShapingError::NoFont)?;
+fn fallback_views<P: FaceProvider>(db: &P, family: &str) -> Result<[Arc<Font>; 4], ShapingError> {
+    let id = db
+        .find_face(family, REGULAR_WEIGHT, false)
+        .ok_or(ShapingError::NoFont)?;
     let loaded = Font::load_face_id(db, id)?;
-    let regular = Arc::new(
-        loaded
-            .at_style(fontdb::Weight::NORMAL.0, false)
-            .unwrap_or(loaded),
-    );
+    let regular = Arc::new(loaded.at_style(REGULAR_WEIGHT, false).unwrap_or(loaded));
     let mut views = std::array::from_fn(|_| regular.clone());
     if regular.has_color_glyphs() {
         return Ok(views);
     }
     let mut resolver = StyleViews::new(db, id, &regular);
-    for (style, weight, slant) in STYLE_VARIANTS {
-        if let Some(view) = resolver.resolve(Family::Name(family), weight, slant) {
+    for (style, weight, italic) in STYLE_VARIANTS {
+        if let Some(view) = resolver.resolve(family, weight, italic) {
             views[style.index()] = covering_or_regular(view, &regular, family, style);
         }
     }
@@ -1044,9 +962,9 @@ fn covering_or_regular(
     regular.clone()
 }
 
-fn append_first_installed(
+fn append_first_installed<P: FaceProvider>(
     stack: FontStack,
-    db: &Database,
+    db: &P,
     candidates: &[&str],
     inherited_features: &[String],
 ) -> FontStack {
@@ -1058,9 +976,9 @@ fn append_first_installed(
     stack
 }
 
-fn append_all_installed(
+fn append_all_installed<P: FaceProvider>(
     mut stack: FontStack,
-    db: &Database,
+    db: &P,
     candidates: &[&str],
     inherited_features: &[String],
 ) -> FontStack {
@@ -1609,6 +1527,7 @@ impl Shaper {
 
 #[cfg(test)]
 mod tests {
+    use fontdb::Database;
     use proptest::prelude::*;
 
     use super::*;
@@ -1992,7 +1911,9 @@ mod tests {
         db.load_fonts_dir(std::path::PathBuf::from(dir));
         db.set_monospace_family("FreeMono");
 
-        let (id, family) = query_default_monospace(&db).expect("a fixed-pitch face is installed");
+        let (id, family) = db
+            .default_monospace()
+            .expect("a fixed-pitch face is installed");
         let face = db.face(id).expect("resolved id names a face");
         assert!(face.monospaced);
         assert_eq!(face.families[0].0, family);
@@ -3152,12 +3073,9 @@ mod tests {
         };
         let mut db = Database::new();
         db.load_fonts_dir(std::path::PathBuf::from(dir));
-        let base = Family::Name(TEST_FONT_FAMILY);
+        let base = TEST_FONT_FAMILY;
         let regular_id = db
-            .query(&Query {
-                families: &[base],
-                ..Query::default()
-            })
+            .find_face(base, REGULAR_WEIGHT, false)
             .expect("regular Monaspace Neon must resolve");
         let regular = Arc::new(Font::load_face_id(&db, regular_id).expect("load regular face"));
         let bold = FontStyle {
@@ -3201,12 +3119,9 @@ mod tests {
         };
         let mut db = Database::new();
         db.load_fonts_dir(std::path::PathBuf::from(dir));
-        let base = Family::Name(TEST_FONT_FAMILY);
+        let base = TEST_FONT_FAMILY;
         let regular_id = db
-            .query(&Query {
-                families: &[base],
-                ..Query::default()
-            })
+            .find_face(base, REGULAR_WEIGHT, false)
             .expect("regular Monaspace Neon must resolve");
         let regular = Arc::new(Font::load_face_id(&db, regular_id).expect("load regular face"));
 
