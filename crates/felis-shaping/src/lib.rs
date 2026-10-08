@@ -3,9 +3,10 @@
 //! Output is a [`GlyphBitmap`] (coverage or RGBA pixels plus placement);
 //! conversion to a GPU texture happens in `felis-render-wgpu`.
 
-// Relaxes the workspace `unsafe_code = "deny"` for the single
-// `Mmap::map` in `Font::load_face_id`
-// (docs/explanation/rendering/text-shaping.md "Font loading").
+// Relaxes the workspace `unsafe_code = "deny"` for the `Mmap::map` in
+// `Font::load_face_id` and the libfontconfig calls in
+// `provider::fontconfig` (docs/explanation/rendering/text-shaping.md
+// "Font loading").
 #![allow(unsafe_code)]
 
 use std::{borrow::Cow, collections::HashMap, sync::Arc};
@@ -29,7 +30,9 @@ mod provider;
 
 use presentation::is_emoji_presentation;
 pub use provider::MONOSPACE_FALLBACK_FAMILIES;
-use provider::{BOLD_WEIGHT, FaceProvider, FaceSource, LoadedAs, REGULAR_WEIGHT, system_db};
+#[cfg(any(not(target_os = "linux"), test))]
+use provider::system_db;
+use provider::{BOLD_WEIGHT, FaceProvider, FaceSource, LoadedAs, REGULAR_WEIGHT};
 
 #[derive(Debug, Error)]
 pub enum ShapingError {
@@ -37,6 +40,8 @@ pub enum ShapingError {
     NoFont,
     #[error("parse font face: {0}")]
     BadFont(String),
+    #[error("fontconfig: {0}")]
+    Fontconfig(String),
     #[error("load font {}: {detail}", path.display())]
     FontPath {
         path: std::path::PathBuf,
@@ -96,9 +101,9 @@ pub struct Font {
 
 impl Font {
     pub fn load_default() -> Result<Self, ShapingError> {
-        let db = system_db();
-        let (id, _) = db.default_monospace()?;
-        Self::load_face_id(&db, id)
+        let provider = system_provider()?;
+        let (id, _) = provider.default_monospace()?;
+        Self::load_face_id(&provider, id)
     }
 
     fn try_load_with<P: FaceProvider>(provider: &P, family: &str) -> Result<Self, ShapingError> {
@@ -470,6 +475,22 @@ fn has_italic_token(name: &str) -> bool {
         .any(|t| t.eq_ignore_ascii_case("italic") || t.eq_ignore_ascii_case("oblique"))
 }
 
+/// The host's font set: fontconfig on Linux, where it is the configuration
+/// users edit, and fontdb's scan elsewhere.
+#[cfg(target_os = "linux")]
+fn system_provider() -> Result<provider::fontconfig::Fontconfig, ShapingError> {
+    provider::fontconfig::Fontconfig::system()
+}
+
+#[cfg(not(target_os = "linux"))]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "one signature with the Linux provider, which can fail to load"
+)]
+fn system_provider() -> Result<fontdb::Database, ShapingError> {
+    Ok(system_db())
+}
+
 /// A resolved `font.fallback` entry or styled font table.
 ///
 /// `None` inherits: `family` derives from base `font.family` at the target
@@ -570,6 +591,9 @@ const STYLE_VARIANTS: [(FontStyle, u16, bool); 3] = [
 /// same file and axis position share one `Arc`.
 struct StyleViews<'a, P: FaceProvider> {
     provider: &'a P,
+    /// Set for a fallback, whose styles are looked up among its own
+    /// family's faces rather than by name.
+    sibling_of: Option<P::Id>,
     /// `None` for a face that failed to load.
     by_id: HashMap<P::Id, Option<Arc<Font>>>,
     views: HashMap<(P::Id, Vec<NormalizedCoord>), Arc<Font>>,
@@ -580,6 +604,7 @@ impl<'a, P: FaceProvider> StyleViews<'a, P> {
     fn new(provider: &'a P, regular_id: P::Id, regular: &Arc<Font>) -> Self {
         Self {
             provider,
+            sibling_of: None,
             by_id: HashMap::from([(regular_id, Some(regular.clone()))]),
             views: HashMap::from([((regular_id, regular.coords.clone()), regular.clone())]),
             regular: regular.clone(),
@@ -588,7 +613,10 @@ impl<'a, P: FaceProvider> StyleViews<'a, P> {
 
     /// `family` at `weight` and `slant`; `None` when no face matches.
     fn resolve(&mut self, family: &str, weight: u16, italic: bool) -> Option<Arc<Font>> {
-        let id = self.provider.find_face(family, weight, italic)?;
+        let id = match self.sibling_of {
+            Some(of) => self.provider.find_sibling(of, family, weight, italic),
+            None => self.provider.find_face(family, weight, italic),
+        }?;
         let loaded = self
             .by_id
             .entry(id)
@@ -772,7 +800,7 @@ impl FontStack {
         styles: &StyleFaces<'_>,
     ) -> Result<Self, ShapingError> {
         Self::auto_discover_in(
-            &system_db(),
+            &system_provider()?,
             primary_family,
             primary_features,
             explicit_fallbacks,
@@ -1075,7 +1103,10 @@ fn fallback_views_of<P: FaceProvider>(
     if regular.has_color_glyphs() {
         return Ok(views);
     }
-    let mut resolver = StyleViews::new(db, id, &regular);
+    let mut resolver = StyleViews {
+        sibling_of: Some(id),
+        ..StyleViews::new(db, id, &regular)
+    };
     for (style, weight, italic) in STYLE_VARIANTS {
         if let Some(view) = resolver.resolve(family, weight, italic) {
             views[style.index()] = covering_or_regular(view, &regular, family, style);

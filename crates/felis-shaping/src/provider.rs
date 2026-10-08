@@ -7,6 +7,9 @@ use fontdb::{Database, Family, Query};
 
 use crate::{FontBytes, ShapingError};
 
+#[cfg(any(target_os = "linux", all(test, unix)))]
+pub(crate) mod fontconfig;
+
 pub(crate) const REGULAR_WEIGHT: u16 = 400;
 pub(crate) const BOLD_WEIGHT: u16 = 700;
 
@@ -16,6 +19,18 @@ pub(crate) trait FaceProvider {
     /// The face of `family` closest to `weight` and `italic`; `None` when
     /// no face of that family is installed.
     fn find_face(&self, family: &str, weight: u16, italic: bool) -> Option<Self::Id>;
+
+    /// The face of `family`, which `id` was found under, closest to
+    /// `weight` and `italic`.
+    fn find_sibling(
+        &self,
+        _id: Self::Id,
+        family: &str,
+        weight: u16,
+        italic: bool,
+    ) -> Option<Self::Id> {
+        self.find_face(family, weight, italic)
+    }
 
     /// The face drawn when `font.family` is unset or names nothing, and
     /// the family name its styled faces derive from.
@@ -44,8 +59,8 @@ pub(crate) trait FaceProvider {
 #[derive(Clone, Copy)]
 pub(crate) enum LoadedAs {
     #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "no shipped provider ranks a cascade yet")
+        not(any(target_os = "linux", test)),
+        expect(dead_code, reason = "only the Linux fontconfig provider reads it")
     )]
     Color(bool),
     /// The loader cannot parse it, so it must not take coverage from a
@@ -87,6 +102,7 @@ pub const MONOSPACE_FALLBACK_FAMILIES: &[&str] = &[
 
 /// Rescans every installed font (~300 ms on a large system); share one
 /// across probes.
+#[cfg(any(not(target_os = "linux"), test))]
 pub(crate) fn system_db() -> Database {
     let mut db = Database::new();
     db.load_system_fonts();

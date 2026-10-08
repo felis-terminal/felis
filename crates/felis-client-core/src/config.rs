@@ -608,9 +608,9 @@ pub struct FontConfig {
     /// non-finite, and omitted values use the built-in default.
     pub size_px: Option<f32>,
     /// Explicit per-grapheme fallback chain, appended in declared order
-    /// (missing families warn and are skipped). Empty (default) runs the
-    /// CJK / symbol / emoji / Nerd Font auto-discovery instead, never on
-    /// top. Each entry is `{ family = "...", features = [...] }`, where an
+    /// (missing families warn and are skipped). Empty (default) takes the
+    /// host's fallback instead, never on top: fontconfig's on Linux, a CJK
+    /// / symbol / emoji / Nerd Font discovery elsewhere. Each entry is `{ family = "...", features = [...] }`, where an
     /// omitted `features` inherits `font.features` (docs/reference/config.md).
     #[serde(deserialize_with = "deserialize_fallback_chain")]
     pub fallback: Vec<FontStyleConfig>,

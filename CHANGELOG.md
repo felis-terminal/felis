@@ -49,6 +49,11 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 
 ### Changed
 
+- On Linux, fonts are chosen by the host's fontconfig: the default face is `fc-match monospace`, `font.family` and the
+  `[font.bold]`/`[font.italic]` families resolve through it (so `fonts.conf` aliases apply), and with `font.fallback`
+  unset the fallback order is fontconfig's ranked list for the primary, following its prefer lists, per-language rules
+  and rejected fonts and the locale's language. A text-presentation symbol takes a monochrome face before an
+  earlier-ranked color one. felis now needs `libfontconfig.so.1` on the host (`libfontconfig1` on Debian and Ubuntu).
 - A `font.fallback` list longer than 62 entries keeps the first 62, with a warning.
 
 ### Fixed
