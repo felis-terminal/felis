@@ -773,7 +773,10 @@ impl Sink for Grid {
             self.bell_pending = true;
             return;
         }
-        self.apc_yield = self.completes_cursor_moving_placement(body);
+        // Yield rather than drop past the cap: a producer placing an
+        // image cell by cell sends hundreds of bodies in one write.
+        self.apc_yield =
+            self.completes_cursor_moving_placement(body) || self.pty_effects.apc_budget_spent();
     }
 
     /// The daemon moves the cursor past a placement only once it has

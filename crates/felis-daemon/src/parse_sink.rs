@@ -388,6 +388,40 @@ mod tests {
         assert!(top_row_text(&core).contains("done"));
     }
 
+    /// A burst past the APC queue's cap stops the parse each time the
+    /// queue fills and arrives whole across the task's drains.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn sink_pauses_at_a_full_apc_queue_and_loses_no_body() {
+        let core = test_core();
+        let signals = Arc::new(ParseSignals::new());
+        let mut sink = build_sink(Arc::clone(&core), Arc::clone(&signals));
+        let sent = felis_grid::APC_OUTBOX_CAP * 3;
+        let burst = b"\x1b_Ga=p,i=1,C=1\x1b\\".repeat(sent);
+        let feeder = std::thread::spawn(move || sink(&burst));
+        let take_apcs = || {
+            core.lock()
+                .grid
+                .take_pty_effects()
+                .into_iter()
+                .filter(|e| matches!(e, felis_grid::PtyEffect::Apc(_)))
+                .count()
+        };
+        let mut received = 0;
+        while !feeder.is_finished() {
+            let requested =
+                tokio::time::timeout(Duration::from_millis(100), signals.drain_requested()).await;
+            if requested.is_ok() {
+                let generation = signals.drain_generation();
+                received += take_apcs();
+                signals.publish_drained(generation);
+            }
+        }
+        feeder.join().unwrap();
+        received += take_apcs();
+        assert_eq!(received, sent);
+        assert!(!core.lock().grid.take_bell_pending(), "nothing was dropped");
+    }
+
     /// End-to-end sink contract: bytes fed to the sink land in the
     /// shared grid and flip the dirty signal.
     #[tokio::test]
