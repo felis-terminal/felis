@@ -1,6 +1,7 @@
 use crate::test_support::{apc_bodies, drive};
 use crate::*;
 use felis_vt::Parser;
+use proptest::prelude::*;
 
 use super::*;
 
@@ -1334,23 +1335,57 @@ fn parse_does_not_yield_on_a_placement_the_outbox_dropped() {
     assert_eq!(yields(&mut g, &["Ga=p,i=1"]), [true]);
 }
 
-#[test]
-fn parse_yields_when_the_outbox_fills_so_a_flood_of_placements_survives() {
-    let mut p = Parser::new();
-    let mut g = Grid::new(8, 16);
-    let mut bytes = Vec::new();
-    for _ in 0..APC_OUTBOX_CAP * 3 {
-        bytes.extend_from_slice(b"\x1b_Ga=p,i=1,p=2,C=1\x1b\\");
+fn apc_body() -> impl Strategy<Value = Vec<u8>> {
+    const PREFIX: &str = "Ga=t,i=1,m=1;";
+    let largest = felis_vt::APC_BUFFER_LIMIT - PREFIX.len();
+    let payload = prop_oneof![
+        0..64usize,
+        (128 * 1024 - 64usize)..=(128 * 1024),
+        (largest - 2)..=largest,
+        0usize..=largest,
+    ];
+    prop_oneof![
+        payload.prop_map(|n| format!("{PREFIX}{}", "A".repeat(n)).into_bytes()),
+        Just(b"Ga=p,i=1,C=1".to_vec()),
+        Just(b"Ga=p,i=1".to_vec()),
+    ]
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(64))]
+
+    /// A parse that yields whenever the grid asks, read in arbitrary
+    /// chunks, hands the daemon every APC body whole and in order: a
+    /// flood of per-cell placements (yazi) and bodies as large as
+    /// kitty's own client sends (128 KiB chunks) alike.
+    #[test]
+    fn a_yielding_parse_delivers_every_apc_body_intact(
+        bodies in proptest::collection::vec(apc_body(), 0..80),
+        cuts in proptest::collection::vec(any::<prop::sample::Index>(), 0..8),
+    ) {
+        let mut stream = Vec::new();
+        for body in &bodies {
+            stream.extend_from_slice(b"\x1b_");
+            stream.extend_from_slice(body);
+            stream.extend_from_slice(b"\x1b\\");
+        }
+        let mut cuts: Vec<usize> = cuts.iter().map(|i| i.index(stream.len() + 1)).collect();
+        cuts.extend([0, stream.len()]);
+        cuts.sort_unstable();
+        let mut p = Parser::new();
+        let mut g = Grid::new(8, 16);
+        let mut delivered = Vec::new();
+        for read in cuts.windows(2) {
+            let mut rest = &stream[read[0]..read[1]];
+            while let Some(consumed) = p.advance_until_yield(&mut g, rest) {
+                delivered.extend(apc_bodies(&mut g).into_iter().map(|apc| apc.body));
+                rest = &rest[consumed..];
+            }
+        }
+        delivered.extend(apc_bodies(&mut g).into_iter().map(|apc| apc.body));
+        prop_assert!(delivered == bodies, "{} of {} bodies delivered intact", delivered.len(), bodies.len());
+        prop_assert!(!g.take_bell_pending(), "nothing was truncated or dropped");
     }
-    let mut rest = bytes.as_slice();
-    let mut drained = 0;
-    while let Some(consumed) = p.advance_until_yield(&mut g, rest) {
-        drained += apc_bodies(&mut g).len();
-        rest = &rest[consumed..];
-    }
-    drained += apc_bodies(&mut g).len();
-    assert_eq!(drained, APC_OUTBOX_CAP * 3);
-    assert!(!g.take_bell_pending(), "nothing was dropped");
 }
 
 fn alt_scrolls(g: &mut Grid) -> Vec<u32> {

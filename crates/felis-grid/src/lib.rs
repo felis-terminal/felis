@@ -319,7 +319,7 @@ pub use mouse::encode_mouse;
 use osc_color::{format_osc_color_response, parse_x_color};
 use osc52::{format_osc_52_response, parse_osc_52_selection};
 pub use placeholder_resolve::PlaceholderCell;
-pub use pty_effects::{APC_OUTBOX_CAP, PtyEffectQueue};
+pub use pty_effects::{APC_OUTBOX_BYTES, APC_OUTBOX_CAP, PtyEffectQueue};
 use screen::SavedScreen;
 pub use screen::ScreenBuffer;
 pub use search::{SearchCursor, SearchHit, SearchOptions, SearchQuery, SearchQueryError, row_text};

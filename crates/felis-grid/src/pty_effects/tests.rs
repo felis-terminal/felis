@@ -1,3 +1,5 @@
+use proptest::prelude::*;
+
 use super::*;
 use crate::{ErasedRange, ScreenSwitch};
 
@@ -119,4 +121,68 @@ fn a_scroll_after_another_kind_starts_its_own_entry() {
     let effects = queue.take();
     assert_eq!(effects.len(), 2);
     assert_eq!(effects[1], PtyEffect::ScrolledIntoScrollback(4));
+}
+
+#[derive(Debug, Clone)]
+enum Op {
+    PushApc(usize),
+    PushApcEffect(usize),
+    Take,
+}
+
+fn body_len() -> impl Strategy<Value = usize> {
+    let limit = felis_vt::APC_BUFFER_LIMIT;
+    prop_oneof![0..64usize, (limit - 1024)..=limit, 0usize..=limit]
+}
+
+fn op() -> impl Strategy<Value = Op> {
+    prop_oneof![
+        4 => body_len().prop_map(Op::PushApc),
+        2 => body_len().prop_map(Op::PushApcEffect),
+        1 => Just(Op::Take),
+    ]
+}
+
+proptest! {
+    /// Whatever mix of body sizes and drains: the queue never holds more
+    /// than its count and byte caps, a refused body changes nothing, and
+    /// a queue not reporting itself spent admits a body of any size, so
+    /// a parse that yields on `apc_budget_spent` never has one refused.
+    #[test]
+    fn the_apc_budget_bounds_the_queue_and_never_refuses_before_it_reports_spent(
+        ops in proptest::collection::vec(op(), 0..60),
+    ) {
+        let buf = vec![b'x'; felis_vt::APC_BUFFER_LIMIT];
+        let mut queue = PtyEffectQueue::default();
+        let mut held: Vec<usize> = Vec::new();
+        for op in ops {
+            let spent = queue.apc_budget_spent();
+            let (len, admitted) = match op {
+                Op::Take => {
+                    let taken = queue.take();
+                    prop_assert_eq!(taken.len(), held.len());
+                    held.clear();
+                    prop_assert!(!queue.apc_budget_spent(), "a drain refills the budget");
+                    continue;
+                }
+                Op::PushApc(len) => (len, queue.push_apc(&buf[..len], 0, 0)),
+                Op::PushApcEffect(len) => (
+                    len,
+                    queue.push(PtyEffect::Apc(ApcBody {
+                        body: buf[..len].to_vec(),
+                        cursor_row: 0,
+                        cursor_col: 0,
+                    })),
+                ),
+            };
+            if !spent {
+                prop_assert!(admitted, "a {len}-byte body refused before the queue reported spent");
+            }
+            if admitted {
+                held.push(len);
+            }
+            prop_assert!(held.len() <= APC_OUTBOX_CAP);
+            prop_assert!(held.iter().sum::<usize>() <= APC_OUTBOX_BYTES);
+        }
+    }
 }
