@@ -620,3 +620,202 @@ proptest! {
         }
     }
 }
+
+/// One edit replayed on both grids, or a wide glyph that the narrow grid
+/// receives as two stand-in letters.
+#[derive(Clone, Debug)]
+enum SubstitutionStep {
+    Bytes(&'static str),
+    Owned(String),
+    Wide,
+}
+
+fn substitution_step() -> impl Strategy<Value = SubstitutionStep> {
+    use SubstitutionStep::{Bytes, Owned, Wide};
+    let fixed = prop::sample::select(vec![
+        "0",
+        "1",
+        "\r",
+        "\x08",
+        "\x1b[C",
+        "\x1b[4h",
+        "\x1b[4l",
+        "\x1b[0\"q",
+        "\x1b[1\"q",
+        "\x1b6",
+        "\x1b9",
+        "\x1b[?69h",
+        "\x1b[?69l",
+        "\x1b[?1049h",
+        "\x1b[?1049l",
+        "\x1b[?7h",
+        "\x1b[?7l",
+        "\x1b[?6h",
+        "\x1b[?6l",
+        "\x1b[41m",
+        "\x1b[m",
+        "\x1b7",
+        "\x1b8",
+        "\t",
+        "\x1bV",
+        "\x1bW",
+    ])
+    .prop_map(Bytes);
+    prop_oneof![
+        4 => Just(Wide),
+        3 => fixed,
+        1 => (1u16..=3, 1u16..=10).prop_map(|(r, c)| Owned(format!("\x1b[{r};{c}H"))),
+        1 => (0u16..=3).prop_map(|n| Owned(format!("\x1b[{n}X"))),
+        1 => (0u16..=2, prop::sample::select(vec!["K", "J", "?K", "?J"]))
+            .prop_map(|(n, f)| Owned(format!("\x1b[{}{n}{}", &f[..f.len() - 1], &f[f.len() - 1..]))),
+        1 => (1u16..=3, 1u16..=10, 0u16..=2, 0u16..=3, prop::sample::select(vec!["$z", "${", "$x"]))
+            .prop_map(|(t, l, h, w, f)| {
+                let fill = if f == "$x" { "48;" } else { "" };
+                Owned(format!("\x1b[{fill}{t};{l};{};{}{f}", t + h, l + w))
+            }),
+        2 => (1u16..=3, prop::sample::select(vec!["@", "P", " @", " A", "'}", "'~"]))
+            .prop_map(|(n, f)| Owned(format!("\x1b[{n}{f}"))),
+        1 => (1u16..=10, 0u16..=6).prop_map(|(l, w)| Owned(format!("\x1b[{l};{}s", l + w))),
+        1 => (1u16..=2, prop::sample::select(vec!["L", "M", "S", "T", "r"]))
+            .prop_map(|(n, f)| Owned(format!("\x1b[{n}{f}"))),
+    ]
+}
+
+/// Renders the wide grid one character per cell: `_` for a `Spacer`, `.`
+/// for a blank.
+fn wide_view(grid: &Grid) -> Vec<String> {
+    (0..grid.rows())
+        .map(|r| {
+            (0..grid.cols())
+                .map(|c| match grid.cell(r, c).unwrap().grapheme {
+                    Grapheme::Empty | Grapheme::Ascii(b' ') => '.',
+                    Grapheme::Spacer => '_',
+                    Grapheme::Ascii(b) => char::from(b),
+                    Grapheme::Char(ch) => ch,
+                    g => panic!("unexpected {g:?}"),
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// Glyph `k` prints as `字`-like U+4E00+k on the wide grid and as the
+/// stand-ins `A+k` (left) and `a+k` (right) on the narrow one.
+fn stand_in(k: u8) -> (char, char, char) {
+    (
+        char::from_u32(0x4E00 + u32::from(k)).unwrap(),
+        char::from(b'A' + k),
+        char::from(b'a' + k),
+    )
+}
+
+/// The narrow grid seen as the wide one: a stand-in pair still side by
+/// side becomes its glyph and `Spacer`, and a stand-in whose pair was ever
+/// split becomes a blank.
+fn narrow_view_as_wide(grid: &Grid, split: &[bool]) -> Vec<String> {
+    (0..grid.rows())
+        .map(|r| {
+            (0..grid.cols())
+                .map(|c| match grid.cell(r, c).unwrap().grapheme {
+                    Grapheme::Empty | Grapheme::Ascii(b' ') => '.',
+                    Grapheme::Ascii(b @ b'A'..=b'Z') => {
+                        let k = b - b'A';
+                        if split[usize::from(k)] {
+                            '.'
+                        } else {
+                            stand_in(k).0
+                        }
+                    }
+                    Grapheme::Ascii(b @ b'a'..=b'z') => {
+                        if split[usize::from(b - b'a')] {
+                            '.'
+                        } else {
+                            '_'
+                        }
+                    }
+                    Grapheme::Ascii(b) => char::from(b),
+                    g => panic!("unexpected {g:?}"),
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// Marks every stand-in pair whose halves sit apart on the narrow grid.
+/// A pair absent from the active screen is not split: it may sit on the
+/// other one.
+fn mark_split_pairs(grid: &Grid, split: &mut [bool]) {
+    let at = |r: u16, c: u16| match grid.cell(r, c).map(|cell| cell.grapheme) {
+        Some(Grapheme::Ascii(b)) => Some(b),
+        _ => None,
+    };
+    for r in 0..grid.rows() {
+        for c in 0..grid.cols() {
+            match at(r, c) {
+                Some(b @ b'A'..=b'Z') if at(r, c + 1) != Some(b.to_ascii_lowercase()) => {
+                    split[usize::from(b - b'A')] = true;
+                }
+                Some(b @ b'a'..=b'z') if c == 0 || at(r, c - 1) != Some(b.to_ascii_uppercase()) => {
+                    split[usize::from(b - b'a')] = true;
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+proptest! {
+    /// A wide glyph edits as two narrow cells erased together once an edit
+    /// splits them: the same edits over two stand-in letters, reading every
+    /// pair ever split as blank, give the wide grid cell for cell. A glyph
+    /// prints only where its stand-ins land side by side; at a margin it
+    /// moves whole where they would part.
+    #[test]
+    fn a_wide_glyph_edits_as_two_cells_erased_together_once_split(
+        cols in 4u16..=10,
+        steps in proptest::collection::vec(substitution_step(), 0..40),
+    ) {
+        let mut wide = (Grid::new(3, cols), Parser::new());
+        let mut narrow = (Grid::new(3, cols), Parser::new());
+        let mut printed = 0u8;
+        let mut split = [false; 26];
+        for (i, step) in steps.iter().enumerate() {
+            match step {
+                SubstitutionStep::Bytes(b) => {
+                    wide.1.advance(&mut wide.0, b.as_bytes());
+                    narrow.1.advance(&mut narrow.0, b.as_bytes());
+                }
+                SubstitutionStep::Owned(b) => {
+                    wide.1.advance(&mut wide.0, b.as_bytes());
+                    narrow.1.advance(&mut narrow.0, b.as_bytes());
+                }
+                SubstitutionStep::Wide => {
+                    if printed == 26 {
+                        continue;
+                    }
+                    let (glyph, left, right) = stand_in(printed);
+                    let before = (wide.clone(), narrow.clone());
+                    wide.1.advance(&mut wide.0, glyph.to_string().as_bytes());
+                    narrow.1.advance(&mut narrow.0, format!("{left}{right}").as_bytes());
+                    let mut fresh = split;
+                    mark_split_pairs(&narrow.0, &mut fresh);
+                    if fresh[usize::from(printed)] {
+                        (wide, narrow) = before;
+                        continue;
+                    }
+                    printed += 1;
+                }
+            }
+            mark_split_pairs(&narrow.0, &mut split);
+            prop_assert_eq!(
+                wide_view(&wide.0),
+                narrow_view_as_wide(&narrow.0, &split),
+                "after step {} of {:?}",
+                i,
+                steps
+            );
+            let (w, n) = (wide.0.cursor(), narrow.0.cursor());
+            prop_assert_eq!((w.row, w.col, w.pending_wrap), (n.row, n.col, n.pending_wrap));
+        }
+    }
+}

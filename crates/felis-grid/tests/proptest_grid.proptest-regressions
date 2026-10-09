@@ -19,3 +19,6 @@ cc 9fce65488c065c162fd2071f71b8f070231b388b8095efc19d5a6345372f2108 # shrinks to
 cc d73ab633a5b5c10d6e364d1c718468da7745a682b487d3472442a004f97092a5 # shrinks to cols = 4, steps = [Bytes("字"), Resize(7), Bytes("\u{1b}[2 A"), Bytes("\u{1b}[3@"), Bytes("\u{1b}[1P"), Bytes("\u{1b}[1'}")]
 cc 02df263a96667a45f2e2bca54ceab07b6ef3e33e626c2f691b59d010c6599b01 # shrinks to cols = 4, steps = [Bytes("\u{1b}]66;w=1;字\u{7}")]
 cc 07ecb7fdc7bf329a73fa5fb1104104d52a01f4c7092be0a7d7131b6d1209a511 # shrinks to cols = 4, steps = [Bytes("\u{1b}]66;w=1;字\u{7}"), Bytes("\u{fe0f}"), Bytes("\u{1b}[1 @")]
+cc 7b620afac278a742acc289b7c1d4c5ce8d9f2282e40fad2bfb633e35234a9ecc # shrinks to cols = 4, steps = [Wide, Owned("\u{1b}[1M"), Owned("\u{1b}[1M"), Owned("\u{1b}[2;2H"), Owned("\u{1b}[?0K")]
+cc f22ecbe3cd90aecf00f6010a5e75a3450aec67cd149ea775f6ce62451fe086d3 # shrinks to cols = 4, steps = [Owned("\u{1b}[0X"), Wide, Wide, Wide, Owned("\u{1b}[2T"), Owned("\u{1b}[1;2H"), Bytes("\u{1b}[1\"q"), Owned("\u{1b}[0X")]
+cc 2ae9da38111f2a66ffddebfaf7f1f736de383b3a8dd205d58c5ef9f7784ae22b # shrinks to cols = 5, steps = [Owned("\u{1b}[1S"), Owned("\u{1b}[1M"), Bytes("\u{1b}9"), Wide, Bytes("\u{1b}V"), Wide, Owned("\u{1b}[1S"), Owned("\u{1b}[0X")]
