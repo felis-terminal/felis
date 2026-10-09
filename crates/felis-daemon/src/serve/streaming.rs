@@ -1087,8 +1087,8 @@ pub(crate) fn compose_image_rehydrate(
             placement_id: p.placement_id,
             anchor_row: p.anchor.row,
             anchor_col: p.anchor.col,
-            cols: p.cols,
-            rows: p.rows,
+            cols: p.extent().0,
+            rows: p.extent().1,
             source: p.source,
             z_index: p.z_index,
         }));

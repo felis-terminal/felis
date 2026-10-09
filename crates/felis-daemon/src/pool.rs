@@ -144,7 +144,7 @@ pub struct Session {
     /// Cell pixel size from `InputMsg::Resize`; the graphics dispatcher
     /// resolves auto placement extents (`c=0` / `r=0`) with it so the
     /// cursor advances past the image. Zero before any client attaches
-    /// (see [`felis_grid::images::effective_extent`]).
+    /// (see [`felis_grid::images::Extent::resolve`]).
     pub cell_pixel_w: u16,
     /// See [`Session::cell_pixel_w`].
     pub cell_pixel_h: u16,

@@ -9,7 +9,8 @@ use std::num::NonZeroU32;
 
 use bytes::Bytes;
 use felis_grid::images::{
-    CellPos, Evicted, Frame, FrameError, ImageEntry, ImageId, InsertError, Placement, PlacementId,
+    CellPos, Evicted, Extent, Frame, FrameError, ImageEntry, ImageId, InsertError, Placement,
+    PlacementId,
 };
 use felis_grid::{ApcBody, ScreenSwitch};
 use felis_protocol::messages::{ImageFormat, ImageMsg, ImageTarget, MAX_IMAGE_CHUNK_PAYLOAD};
@@ -346,7 +347,7 @@ pub struct ApcCtx<'a> {
     /// [`ShmDeferral`]).
     pub shm: &'a mut ShmDeferral,
     /// `0` (no client size yet) resolves an auto extent with a 1 px
-    /// cell; see [`felis_grid::images::effective_extent`].
+    /// cell; see [`felis_grid::images::Extent::resolve`].
     pub cell_pixel_w: u16,
     pub cell_pixel_h: u16,
     /// Where `a=T` anchors, 0-based `(row, col)`. Production pins the
@@ -548,8 +549,8 @@ const fn placement_event(p: &Placement) -> ImageEvent {
         placement_id: p.placement_id,
         anchor_row: p.anchor.row,
         anchor_col: p.anchor.col,
-        cols: p.cols,
-        rows: p.rows,
+        cols: p.extent().0,
+        rows: p.extent().1,
         source: p.source,
         z_index: p.z_index,
     }
@@ -1253,18 +1254,15 @@ fn upsert_placement(
     let quiet = quiet_level(complete);
     let source = source_rect(complete);
     // Natural sizing (`c=0` / `r=0`) resolves now, while the image
-    // dimensions are in scope: `advance_cursor_after_image_placement`
-    // short-circuits on `(0, 0)`, leaving the cursor at the anchor row
-    // so the next prompt prints under the image (the pixcat burn-in).
+    // dimensions are in scope: the cursor advance needs the extent, and
+    // a cursor left at the anchor row prints the next prompt under the
+    // image (the pixcat burn-in).
     let source_px = images
         .get(image_id)
         .and_then(|entry| felis_grid::images::clip_source(entry.width, entry.height, source))
         .map_or((0, 0), |r| (r.width, r.height));
-    let (cols, rows) = felis_grid::images::effective_extent(
-        (req_cols, req_rows),
-        source_px,
-        (cell_pixel_w, cell_pixel_h),
-    );
+    let cols = Extent::resolve(req_cols, source_px.0, cell_pixel_w);
+    let rows = Extent::resolve(req_rows, source_px.1, cell_pixel_h);
     let anchor = CellPos {
         // 1-based `CellPos`. The i32 widening is the scrollback-anchor
         // space (docs/reference/protocols/kitty-graphics.md
@@ -1284,8 +1282,6 @@ fn upsert_placement(
         anchor,
         cols,
         rows,
-        requested_cols: req_cols,
-        requested_rows: req_rows,
         source,
         z_index,
         no_cursor_move,
@@ -1300,15 +1296,15 @@ fn upsert_placement(
         placement_id,
         anchor_row: anchor.row,
         anchor_col: anchor.col,
-        cols,
-        rows,
+        cols: cols.cells().get(),
+        rows: rows.cells().get(),
         source,
         z_index,
     });
     // The only Grid mutation the dispatcher makes
     // (docs/explanation/protocols/kitty-graphics.md "Dispatcher
     // architecture").
-    grid.advance_cursor_after_image_placement(rows, cols, no_cursor_move);
+    grid.advance_cursor_after_image_placement(rows.cells(), cols.cells(), no_cursor_move);
     ActionOutcome::Ok
 }
 

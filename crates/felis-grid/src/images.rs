@@ -2,6 +2,8 @@
 //! pixel buffers under a per-session byte cap
 //! (`docs/explanation/security-model.md` "Kitty graphics").
 
+use std::num::NonZeroU16;
+
 use bytes::Bytes;
 use indexmap::IndexMap;
 
@@ -649,29 +651,56 @@ pub fn clip_source(
     })
 }
 
-/// Resolves each auto (zero) axis of a `c=` / `r=` request to
-/// `ceil(source_px / cell_px)`, independently. An unknown (zero) cell
-/// size counts as 1 px, so the extent, and the cursor advance past it,
-/// cover the image at any real cell size; the first real size shrinks
-/// it.
-#[must_use]
-pub fn effective_extent(
-    requested: (u16, u16),
-    source_px: (u32, u32),
-    cell_px: (u16, u16),
-) -> (u16, u16) {
-    let axis = |requested: u16, px: u32, cell: u16| {
-        if requested != 0 {
-            return requested;
+/// One axis of a placement's cell extent, never zero: every geometry
+/// query reads [`Self::cells`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Extent {
+    /// `c=` / `r=` as sent.
+    Requested(NonZeroU16),
+    /// Omitted or zero `c=` / `r=`: `ceil(source_px / cell_px)`,
+    /// re-resolved by [`Placements::rescale`] when the cell size changes.
+    Natural(NonZeroU16),
+}
+
+impl Extent {
+    /// A zero `requested` is auto. An unknown (zero) cell size counts as
+    /// 1 px, so the extent, and the cursor advance past it, cover the
+    /// image at any real cell size; the first real size shrinks it.
+    #[must_use]
+    pub fn resolve(requested: u16, source_px: u32, cell_px: u16) -> Self {
+        NonZeroU16::new(requested).map_or_else(
+            || Self::Natural(natural_cells(source_px, cell_px)),
+            Self::Requested,
+        )
+    }
+
+    #[must_use]
+    pub const fn cells(self) -> NonZeroU16 {
+        match self {
+            Self::Requested(n) | Self::Natural(n) => n,
         }
-        u16::try_from(px.div_ceil(u32::from(cell.max(1))))
-            .unwrap_or(u16::MAX)
-            .max(1)
-    };
-    (
-        axis(requested.0, source_px.0, cell_px.0),
-        axis(requested.1, source_px.1, cell_px.1),
-    )
+    }
+
+    /// Re-resolves a natural axis at `cell_px` and reports whether it
+    /// moved. An unknown (zero) cell size keeps the axis: the 1 px rule
+    /// would grow the extent over text already printed past it.
+    fn rescale(&mut self, source_px: u32, cell_px: u16) -> bool {
+        let Self::Natural(n) = self else {
+            return false;
+        };
+        if cell_px == 0 {
+            return false;
+        }
+        let resolved = natural_cells(source_px, cell_px);
+        let moved = *n != resolved;
+        *n = resolved;
+        moved
+    }
+}
+
+fn natural_cells(source_px: u32, cell_px: u16) -> NonZeroU16 {
+    let cells = u16::try_from(source_px.div_ceil(u32::from(cell_px.max(1)))).unwrap_or(u16::MAX);
+    NonZeroU16::new(cells).unwrap_or(NonZeroU16::MIN)
 }
 
 /// 1-based cell coordinate.
@@ -698,14 +727,8 @@ pub struct Placement {
     /// `image_id`.
     pub placement_id: Option<PlacementId>,
     pub anchor: CellPos,
-    /// The effective extent every geometry query uses: the request with
-    /// its auto axes resolved by [`effective_extent`].
-    pub cols: u16,
-    pub rows: u16,
-    /// `c=` / `r=` as sent; zero is auto, re-resolved by
-    /// [`Placements::rescale`] when the cell size changes.
-    pub requested_cols: u16,
-    pub requested_rows: u16,
+    pub cols: Extent,
+    pub rows: Extent,
     /// `None` paints the whole image scaled to `cols × rows`.
     pub source: Option<SourceRect>,
     /// Negative renders behind text. The renderer sorts by this; the
@@ -718,32 +741,31 @@ pub struct Placement {
 }
 
 impl Placement {
+    /// `(cols, rows)` in cells.
+    #[must_use]
+    pub const fn extent(&self) -> (u16, u16) {
+        (self.cols.cells().get(), self.rows.cells().get())
+    }
+
     #[must_use]
     pub const fn contains_cell(&self, row_1based: u16, col_1based: u16) -> bool {
         self.contains_row(row_1based) && self.contains_col(col_1based)
     }
 
-    /// Empty placements never intersect. The query row is a live
-    /// coordinate; a placement anchored in scrollback matches the live
-    /// rows its body still covers.
+    /// The query row is a live coordinate; a placement anchored in
+    /// scrollback matches the live rows its body still covers.
     #[must_use]
     pub const fn contains_row(&self, row_1based: u16) -> bool {
-        if self.rows == 0 {
-            return false;
-        }
         let top = self.anchor.row;
-        let bottom = top.saturating_add(self.rows as i32 - 1);
+        let bottom = top.saturating_add(self.rows.cells().get() as i32 - 1);
         let row = row_1based as i32;
         row >= top && row <= bottom
     }
 
     #[must_use]
     pub const fn contains_col(&self, col_1based: u16) -> bool {
-        if self.cols == 0 {
-            return false;
-        }
         let left = self.anchor.col;
-        let right = left.saturating_add(self.cols.saturating_sub(1));
+        let right = left.saturating_add(self.cols.cells().get() - 1);
         col_1based >= left && col_1based <= right
     }
 }
@@ -915,7 +937,7 @@ impl Placements {
                     return false;
                 }
                 let p_top = p.anchor.row - 1;
-                let p_bottom = p_top.saturating_add(i32::from(p.rows.saturating_sub(1)));
+                let p_bottom = p_top.saturating_add(i32::from(p.rows.cells().get() - 1));
                 p_top <= i32::from(erase_bottom) && i32::from(erase_top) <= p_bottom
             });
         self.entries = kept;
@@ -947,11 +969,10 @@ impl Placements {
         removed
     }
 
-    /// Re-resolves the auto axes of every placement at `cell_px`, as
+    /// Re-resolves the natural axes of every placement at `cell_px`, as
     /// kitty's `grman_rescale` does; `on_change` sees each placement
     /// whose extent moved. A placement whose image is gone is left as
-    /// is, and so is an axis whose cell size is unknown (zero): the 1 px
-    /// rule would grow the extent over text already printed past it.
+    /// is.
     pub fn rescale(
         &mut self,
         images: &ImageStore,
@@ -959,22 +980,14 @@ impl Placements {
         mut on_change: impl FnMut(&Placement),
     ) {
         for p in &mut self.entries {
-            if p.requested_cols != 0 && p.requested_rows != 0 {
-                continue;
-            }
             let Some(entry) = images.get(p.image_id) else {
                 continue;
             };
             let source_px = clip_source(entry.width, entry.height, p.source)
                 .map_or((0, 0), |r| (r.width, r.height));
-            let resolved =
-                effective_extent((p.requested_cols, p.requested_rows), source_px, cell_px);
-            let extent = (
-                if cell_px.0 == 0 { p.cols } else { resolved.0 },
-                if cell_px.1 == 0 { p.rows } else { resolved.1 },
-            );
-            if extent != (p.cols, p.rows) {
-                (p.cols, p.rows) = extent;
+            let cols_moved = p.cols.rescale(source_px.0, cell_px.0);
+            let rows_moved = p.rows.rescale(source_px.1, cell_px.1);
+            if cols_moved || rows_moved {
                 on_change(p);
             }
         }

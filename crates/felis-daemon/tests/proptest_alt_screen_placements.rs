@@ -121,7 +121,7 @@ fn refcount_sum(images: &ImageStore) -> u32 {
         .sum()
 }
 
-fn placement_keys(p: &Placements) -> Vec<(u32, Option<u32>, i32, u16, u16, u16, i32, bool)> {
+fn placement_keys(p: &Placements) -> Vec<(u32, Option<u32>, i32, u16, (u16, u16), i32, bool)> {
     let mut v: Vec<_> = p
         .iter()
         .map(|p| {
@@ -130,8 +130,7 @@ fn placement_keys(p: &Placements) -> Vec<(u32, Option<u32>, i32, u16, u16, u16, 
                 p.placement_id.map(|id| id.0),
                 p.anchor.row,
                 p.anchor.col,
-                p.cols,
-                p.rows,
+                p.extent(),
                 p.z_index,
                 p.no_cursor_move,
             )

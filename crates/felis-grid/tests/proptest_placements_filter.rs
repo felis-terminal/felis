@@ -6,7 +6,9 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use felis_grid::images::{CellPos, ImageId, Placement, PlacementId, Placements};
+use std::num::NonZeroU16;
+
+use felis_grid::images::{CellPos, Extent, ImageId, Placement, PlacementId, Placements};
 use proptest::prelude::*;
 
 /// Bounds keep `anchor + extent` inside `u16` so the helpers' saturating
@@ -17,8 +19,8 @@ fn placement_strategy() -> impl Strategy<Value = Placement> {
         prop::option::of(0u32..8),
         1u16..200,
         1u16..200,
-        1u16..20,
-        1u16..20,
+        (1u16..20).prop_map(|n| NonZeroU16::new(n).unwrap()),
+        (1u16..20).prop_map(|n| NonZeroU16::new(n).unwrap()),
         -8i32..=8,
         any::<bool>(),
     )
@@ -30,10 +32,8 @@ fn placement_strategy() -> impl Strategy<Value = Placement> {
                     row: i32::from(row),
                     col,
                 },
-                cols,
-                rows,
-                requested_cols: cols,
-                requested_rows: rows,
+                cols: Extent::Requested(cols),
+                rows: Extent::Requested(rows),
                 source: None,
                 z_index: z,
                 no_cursor_move,
@@ -110,7 +110,8 @@ proptest! {
         row_offset in 0u16..20,
         col_offset in 0u16..20,
     ) {
-        prop_assume!(row_offset < p.rows && col_offset < p.cols);
+        let (cols, rows) = p.extent();
+        prop_assume!(row_offset < rows && col_offset < cols);
         let row = u16::try_from(p.anchor.row).unwrap() + row_offset;
         let col = p.anchor.col + col_offset;
         prop_assert!(p.contains_cell(row, col));
@@ -121,13 +122,14 @@ proptest! {
         p in placement_strategy(),
         delta in 1u16..50,
     ) {
-        let below = p.anchor.row + i32::from(p.rows) + i32::from(delta);
+        let (cols, rows) = p.extent();
+        let below = p.anchor.row + i32::from(rows) + i32::from(delta);
         prop_assert!(!p.contains_row(u16::try_from(below).unwrap()));
         if p.anchor.row > i32::from(delta) {
             let above = p.anchor.row - i32::from(delta);
             prop_assert!(!p.contains_row(u16::try_from(above).unwrap()));
         }
-        let right = p.anchor.col.saturating_add(p.cols).saturating_add(delta);
+        let right = p.anchor.col.saturating_add(cols).saturating_add(delta);
         prop_assert!(!p.contains_col(right));
         if p.anchor.col > delta {
             let left = p.anchor.col - delta;

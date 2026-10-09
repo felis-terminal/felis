@@ -5175,7 +5175,7 @@ mod tests {
             .for_image(felis_protocol::ImageId(id))
             .next()
             .expect("placement recorded");
-        (p.cols, p.rows)
+        p.extent()
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
