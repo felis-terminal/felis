@@ -5071,8 +5071,7 @@ async fn a_create_in_flight_is_unnameable_until_it_publishes() {
         assert_eq!(guard.len(), 1, "but it holds a session slot");
     }
 
-    registered.publish().await;
-    drop(registered.keep());
+    drop(registered.publish().await);
     let guard = pool.lock().await;
     assert!(guard.handle_cloned(id).is_some());
     assert_eq!(guard.roster_by_recency().len(), 1);

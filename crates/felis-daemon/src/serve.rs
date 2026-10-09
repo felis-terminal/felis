@@ -554,8 +554,7 @@ where
     // outruns the publish; a lost ack leaves the session listed and
     // detached instead, as a lost `Spawn` reply does.
     if let Some(registered) = registered {
-        registered.publish().await;
-        let _kept = registered.keep();
+        let _kept = registered.publish().await;
     }
     let result = match writer.send(&ack).await {
         Ok(()) => {
@@ -899,10 +898,11 @@ const ROLLBACK_TIMEOUT: Duration = session_task::CHILD_TEARDOWN_BUDGET
     .expect("the teardown budget is seconds, not an overflow away");
 
 impl Registered {
-    /// Make the pool row nameable. Past this the row is shared, so a
-    /// caller that publishes must [`Self::keep`] rather than roll back.
-    async fn publish(&self) {
+    /// Make the pool row nameable and hand the session over: past this
+    /// the row is shared, so there is nothing left to roll back.
+    async fn publish(self) -> mpsc::Sender<SessionCmd> {
         self.pool.lock().await.publish(self.id);
+        self.keep()
     }
 
     /// Hand the session over to the caller that delivered its id.
@@ -1561,8 +1561,7 @@ async fn ops_reply(ctx: CreateCtx<'_>, msg: OpsToDaemonMsg) -> OpsToClientMsg {
                 // once: a lost reply leaves the session listed rather
                 // than rolled back.
                 Ok((registered, info)) => {
-                    registered.publish().await;
-                    let _kept = registered.keep();
+                    let _kept = registered.publish().await;
                     SpawnOutcome::Ok {
                         info: Box::new(info),
                     }
