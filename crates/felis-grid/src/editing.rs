@@ -552,7 +552,6 @@ impl Grid {
     /// A `w=0` block is measured from its glyph, so a mark that would
     /// change the glyph's width would resize a block already stamped.
     fn mark_resizes_sized_block(&self, idx: usize, mark: char) -> bool {
-        use unicode_width::UnicodeWidthStr;
         let cell = self.screen.cells[idx];
         let Some(sizing) = cell
             .sizing
@@ -572,7 +571,7 @@ impl Grid {
         }
         text.push(mark);
         let before = self.screen.grapheme_width(cell.grapheme).max(1);
-        text.width().clamp(1, 2) != usize::from(before)
+        crate::width::cluster_cell_width(&text).max(1) != before
     }
 
     /// Appends `marks` to the text of the cell at `idx`, which must be on

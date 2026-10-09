@@ -593,7 +593,7 @@ impl App {
         self.keymap = Keymap::default_for_platform()
             .with_overrides(cfg.keymap.compile(cfg.source_dir.as_deref()));
         self.redraw.request();
-        info!(font_changed, "config reloaded via Ctrl+Shift+R");
+        info!(font_changed, "config reloaded");
     }
 
     pub(crate) fn paste_from_clipboard(&mut self) {

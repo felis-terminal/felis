@@ -1352,9 +1352,9 @@ const fn theme_default_fg() -> [f32; 4] {
 }
 
 /// Appended after the cell pass so highlights and bar paint on top.
-/// Atlas misses in the label are skipped; `Renderer::set_search_overlay`
-/// arms its chars before the next frame. Highlights on the bar row are
-/// still emitted but covered by the bar.
+/// Atlas misses in the label are skipped; `Renderer::render` primes the
+/// label before building instances. Highlights on the bar row are still
+/// emitted but covered by the bar.
 pub fn extend_search_instances<A: AtlasView>(
     overlay: &SearchOverlay,
     metrics: CellMetrics,
@@ -3613,8 +3613,8 @@ mod tests {
         let overlay = LinkPreviewOverlay {
             text: "https://example.com/very/long/path".to_owned(),
         };
-        // `Renderer::set_link_preview_overlay` populates the ellipsis
-        // alongside the text, so the atlas answers for it here too.
+        // `Renderer::render` primes the ellipsis alongside the text, so
+        // the atlas answers for it here too.
         let mut atlas = MockAtlas::full(slot());
         atlas.map.insert(BAR_ELLIPSIS, slot());
         extend_link_preview_instances(&overlay, metrics(), 3, 10, &atlas, &mut out);

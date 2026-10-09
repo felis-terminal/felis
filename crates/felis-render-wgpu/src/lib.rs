@@ -1002,7 +1002,7 @@ impl Renderer {
         let font_size_physical_px = size_physical_px.unwrap_or(DEFAULT_FONT_SIZE_PHYSICAL_PX);
         self.glyphs.reload_font(stack, font_size_physical_px);
         self.font_features = features.to_vec();
-        self.repopulate_preedit_after_atlas_reset();
+        self.cells.invalidate();
         Ok(self.glyphs.cell_metrics())
     }
 
@@ -1011,7 +1011,7 @@ impl Renderer {
     /// frame budget and stutters while the chord is held.
     pub fn reload_font_size(&mut self, size_physical_px: f32) -> CellMetrics {
         self.glyphs.reload_font_size(size_physical_px);
-        self.repopulate_preedit_after_atlas_reset();
+        self.cells.invalidate();
         self.glyphs.cell_metrics()
     }
 
@@ -1022,18 +1022,7 @@ impl Renderer {
         // `calt` must not resolve after `calt` is turned off).
         self.glyphs
             .reload_font_size(self.glyphs.font_size_physical_px());
-        self.repopulate_preedit_after_atlas_reset();
-    }
-
-    /// `render` only walks the screen, so after an atlas reset the
-    /// pre-edit overlay's chars would vanish until the next IME event
-    /// refreshes them.
-    fn repopulate_preedit_after_atlas_reset(&mut self) {
         self.cells.invalidate();
-        if let Some(overlay) = &self.preedit {
-            self.glyphs
-                .populate_chars(overlay.text.chars(), &mut self.uploader);
-        }
     }
 
     #[must_use]
@@ -1076,14 +1065,7 @@ impl Renderer {
     }
 
     pub fn set_preedit(&mut self, overlay: Option<PreeditOverlay>) {
-        match overlay {
-            Some(o) if !o.text.is_empty() => {
-                self.glyphs
-                    .populate_chars(o.text.chars(), &mut self.uploader);
-                self.preedit = Some(o);
-            }
-            _ => self.preedit = None,
-        }
+        self.preedit = overlay.filter(|o| !o.text.is_empty());
     }
 
     /// Read by the client to resolve the bottom-row precedence at click
@@ -1096,48 +1078,15 @@ impl Renderer {
     }
 
     pub fn set_search_overlay(&mut self, overlay: Option<SearchOverlay>) {
-        match overlay {
-            Some(o) => {
-                if !o.label.is_empty() {
-                    self.glyphs
-                        .populate_chars(o.label.chars(), &mut self.uploader);
-                }
-                self.search = Some(o);
-            }
-            None => self.search = None,
-        }
+        self.search = overlay;
     }
 
     pub fn set_confirm_overlay(&mut self, overlay: Option<ConfirmOverlay>) {
-        match overlay {
-            Some(o) => {
-                if !o.label.is_empty() {
-                    self.glyphs
-                        .populate_chars(o.label.chars(), &mut self.uploader);
-                }
-                self.confirm = Some(o);
-            }
-            None => self.confirm = None,
-        }
+        self.confirm = overlay;
     }
 
     pub fn set_link_preview_overlay(&mut self, overlay: Option<LinkPreviewOverlay>) {
-        match overlay {
-            Some(o) => {
-                if !o.text.is_empty() {
-                    // The ellipsis too: a window narrower than the target
-                    // makes the bar synthesize one at paint time, and a
-                    // glyph the atlas never received is skipped without a
-                    // trace, leaving a clipped target looking whole.
-                    self.glyphs.populate_chars(
-                        o.text.chars().chain(std::iter::once(BAR_ELLIPSIS)),
-                        &mut self.uploader,
-                    );
-                }
-                self.link_preview = Some(o);
-            }
-            None => self.link_preview = None,
-        }
+        self.link_preview = overlay;
     }
 
     /// Submits one frame following `docs/reference/protocols/kitty-graphics.md` "Z-ordering".

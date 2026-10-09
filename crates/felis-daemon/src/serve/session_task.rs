@@ -10,7 +10,8 @@ use std::sync::{
 use std::time::{Duration, Instant, SystemTime};
 
 use felis_protocol::messages::{
-    AttentionSource, KeyEvent, MAX_REGION_REPLY_BYTES, RegionPosition, RegionSource, ThemeChannel,
+    AttentionSource, KeyEvent, MAX_REGION_REPLY_BYTES, RegionPosition, RegionSource, RequestedDims,
+    ThemeChannel,
 };
 use felis_protocol::{
     ConnectionMode,
@@ -1055,6 +1056,21 @@ pub(crate) async fn end_child(child: &ChildHandle) {
 
 /// The keyboard modes come off the same locked core the mouse encoding
 /// reads, so a mode the child set is in effect for the very next key.
+/// Keys are encoded daemon-side so the bytes follow the modes this daemon
+/// has already parsed rather than the ones the client's last grid frame
+/// carried (docs/explanation/input.md "Keyboard").
+fn encode_input(core: &ParseCore, msg: &InputMsg) -> Option<Vec<u8>> {
+    match msg {
+        InputMsg::Mouse(event) => felis_grid::encode_mouse(
+            *event,
+            core.grid.mouse_protocol(),
+            core.grid.mouse_encoding(),
+        ),
+        InputMsg::Key(event) => encode_key(core, event),
+        _ => None,
+    }
+}
+
 fn encode_key(core: &ParseCore, event: &KeyEvent) -> Option<Vec<u8>> {
     let modes = core.grid.mode_snapshot();
     key_encode::encode(
@@ -1999,16 +2015,9 @@ impl SessionTask {
         // Promoted before dispatch so new winsize applies before bytes reach shell.
         let promotes = match &msg {
             InputMsg::KeyBytes(_) | InputMsg::Paste(_) => true,
-            InputMsg::Mouse(event) => {
-                let core = self.session.lock_core();
-                felis_grid::encode_mouse(
-                    *event,
-                    core.grid.mouse_protocol(),
-                    core.grid.mouse_encoding(),
-                )
-                .is_some()
+            InputMsg::Mouse(_) | InputMsg::Key(_) => {
+                encode_input(&self.session.lock_core(), &msg).is_some()
             }
-            InputMsg::Key(event) => encode_key(&self.session.lock_core(), event).is_some(),
             _ => false,
         };
         if promotes {
@@ -2057,62 +2066,8 @@ impl SessionTask {
                 }
             }
             InputMsg::Resize { dims } => {
-                // Clamp, never refuse (REQ-605a); only the clamped tuple
-                // is stored, so no surface can report a geometry the
-                // session never had.
-                let dims = dims.clamp();
-                let size = PtySize {
-                    rows: dims.rows,
-                    cols: dims.cols,
-                    pixel_width: dims.pixel_w,
-                    pixel_height: dims.pixel_h,
-                };
-                self.subs[i].desired_size = Some(size);
-                if self.active_sub.is_none() || self.active_sub == Some(sub_id) {
-                    // Pairs with the client's `reflow` debug line.
-                    debug!(
-                        rows = dims.rows,
-                        cols = dims.cols,
-                        pixel_w = dims.pixel_w,
-                        pixel_h = dims.pixel_h,
-                        "applying InputMsg::Resize to pty"
-                    );
-                    self.apply_size(size);
-                } else {
-                    // The mirror's shadow already resized optimistically
-                    // client-side; the authoritative dims plus a full
-                    // replay let it letterbox the difference.
-                    debug!(
-                        rows = dims.rows,
-                        cols = dims.cols,
-                        "resize ignored — another subscriber owns the PTY size"
-                    );
-                    let (cur_rows, cur_cols) = {
-                        let core = self.session.lock_core();
-                        (core.grid.rows(), core.grid.cols())
-                    };
-                    let (pixel_w, pixel_h) = {
-                        let meta = self
-                            .meta
-                            .lock()
-                            .unwrap_or_else(std::sync::PoisonError::into_inner);
-                        (meta.pixel_w, meta.pixel_h)
-                    };
-                    if !self.push_to(
-                        sub_id,
-                        i,
-                        OutEvent::Grid(GridMsg::Size {
-                            dims: GridDims {
-                                rows: cur_rows,
-                                cols: cur_cols,
-                                pixel_w,
-                                pixel_h,
-                            },
-                        }),
-                    ) {
-                        return None;
-                    }
-                    self.subs[i].stream.damage.mark_all();
+                if !self.apply_resize_input(sub_id, i, dims) {
+                    return None;
                 }
             }
             InputMsg::FocusChange { focused } => {
@@ -2127,20 +2082,17 @@ impl SessionTask {
                     return Some(reason);
                 }
             }
-            InputMsg::Mouse(event) => {
-                let bytes = {
-                    let core = session.lock_core();
-                    felis_grid::encode_mouse(
-                        event,
-                        core.grid.mouse_protocol(),
-                        core.grid.mouse_encoding(),
-                    )
-                };
-                // The reservation covers `MAX_MOUSE_REPORT_BYTES`
-                // whatever the active encoding produced, so the write is
-                // admitted rather than dropped; an event the protocol
-                // filters out releases it here instead.
-                if let Some(bytes) = bytes
+            InputMsg::Mouse(_) | InputMsg::Key(_) => {
+                // Encoded again rather than reusing the promote check's
+                // bytes: promotion can SIGWINCH the child or send it a
+                // resize report, and its answer may change the modes
+                // these bytes must follow.
+                let encoded = encode_input(&session.lock_core(), &msg);
+                // The reservation covers `MAX_MOUSE_REPORT_BYTES` /
+                // `MAX_KEY_REPORT_BYTES` whatever the active mode produced,
+                // so the write is admitted rather than dropped; an event
+                // with no encoding releases it here instead.
+                if let Some(bytes) = encoded
                     && let Some(reason) = pty_write_outcome(streaming::write_pty_reserved(
                         &session.writer,
                         bytes,
@@ -2167,25 +2119,6 @@ impl SessionTask {
                 if let Some(target) = target {
                     stream.diff.viewport = target;
                     stream.damage.mark_all();
-                }
-            }
-            InputMsg::Key(event) => {
-                // Encoded here, not client-side, so the bytes follow the
-                // modes this daemon has already parsed rather than the
-                // ones the client's last grid frame carried
-                // (docs/explanation/input.md "Keyboard").
-                let bytes = encode_key(&session.lock_core(), &event);
-                // The reservation covers `MAX_KEY_REPORT_BYTES` whatever
-                // the active mode produced; a key with no encoding under
-                // it releases the reservation here instead.
-                if let Some(bytes) = bytes
-                    && let Some(reason) = pty_write_outcome(streaming::write_pty_reserved(
-                        &session.writer,
-                        bytes,
-                        reservation,
-                    ))
-                {
-                    return Some(reason);
                 }
             }
             InputMsg::NextGridFrame => {
@@ -2481,6 +2414,69 @@ impl SessionTask {
             );
             self.apply_size(size);
         }
+    }
+
+    /// `false` when the refused requester's notice could not be queued
+    /// and the subscriber was dropped.
+    fn apply_resize_input(&mut self, sub_id: SubscriberId, i: usize, dims: RequestedDims) -> bool {
+        // Clamp, never refuse (REQ-605a); only the clamped tuple
+        // is stored, so no surface can report a geometry the
+        // session never had.
+        let dims = dims.clamp();
+        let size = PtySize {
+            rows: dims.rows,
+            cols: dims.cols,
+            pixel_width: dims.pixel_w,
+            pixel_height: dims.pixel_h,
+        };
+        self.subs[i].desired_size = Some(size);
+        if self.active_sub.is_none() || self.active_sub == Some(sub_id) {
+            // Pairs with the client's `reflow` debug line.
+            debug!(
+                rows = dims.rows,
+                cols = dims.cols,
+                pixel_w = dims.pixel_w,
+                pixel_h = dims.pixel_h,
+                "applying InputMsg::Resize to pty"
+            );
+            self.apply_size(size);
+        } else {
+            // The mirror's shadow already resized optimistically
+            // client-side; the authoritative dims plus a full
+            // replay let it letterbox the difference.
+            debug!(
+                rows = dims.rows,
+                cols = dims.cols,
+                "resize ignored — another subscriber owns the PTY size"
+            );
+            let (cur_rows, cur_cols) = {
+                let core = self.session.lock_core();
+                (core.grid.rows(), core.grid.cols())
+            };
+            let (pixel_w, pixel_h) = {
+                let meta = self
+                    .meta
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                (meta.pixel_w, meta.pixel_h)
+            };
+            if !self.push_to(
+                sub_id,
+                i,
+                OutEvent::Grid(GridMsg::Size {
+                    dims: GridDims {
+                        rows: cur_rows,
+                        cols: cur_cols,
+                        pixel_w,
+                        pixel_h,
+                    },
+                }),
+            ) {
+                return false;
+            }
+            self.subs[i].stream.damage.mark_all();
+        }
+        true
     }
 
     /// Announced to every subscriber, the requester included: its
@@ -5481,6 +5477,34 @@ mod tests {
             task.active_sub,
             Some(sub_a),
             "hover must not steal the PTY size while no mouse protocol is active",
+        );
+    }
+
+    /// A key release from a mirror does not transfer size ownership while
+    /// the running program has not asked for release events.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_unreported_key_release_does_not_transfer_ownership() {
+        let mut task = SessionTask::for_tests(session_with("read _x"));
+        let (sub_a, _rx_a) = attach_sub(&mut task, false);
+        let (sub_b, _rx_b) = attach_sub(&mut task, false);
+
+        task.handle_input(sub_a, InputMsg::KeyBytes(b"a".to_vec()));
+        assert_eq!(task.active_sub, Some(sub_a));
+
+        task.handle_input(
+            sub_b,
+            InputMsg::Key(KeyEvent {
+                key: felis_protocol::messages::Key::Character("b".into()),
+                text: None,
+                mods: felis_protocol::messages::KeyMods::empty(),
+                kind: KeyEventKind::Release,
+                location: felis_protocol::messages::KeyLocation::Standard,
+            }),
+        );
+        assert_eq!(
+            task.active_sub,
+            Some(sub_a),
+            "a release that encodes to no bytes must not steal the PTY size",
         );
     }
 

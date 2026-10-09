@@ -3,10 +3,8 @@
 
 use std::ops::Range;
 
-use unicode_width::UnicodeWidthStr;
-
-use crate::char_cell_width;
 use crate::editing::{continues_cluster, ends_in_pictographic_joiner, is_lone_regional_indicator};
+use crate::width::{char_cell_width, cluster_cell_width};
 
 /// Splits `text` into the cells the grid prints it as: one cell's byte
 /// range and width (1 or 2) per item. Unlike printing, a leading
@@ -53,7 +51,7 @@ impl Iterator for TextCells<'_> {
         let width = if cluster.len() == base.len_utf8() {
             char_cell_width(base)
         } else {
-            cluster.width().min(2) as u8
+            cluster_cell_width(cluster)
         };
         Some((start..end, width.max(1)))
     }
