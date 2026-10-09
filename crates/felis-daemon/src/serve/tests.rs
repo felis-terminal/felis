@@ -7068,12 +7068,21 @@ async fn a_peer_that_hangs_up_while_parked_gives_its_connection_back() {
     let tmp = private_dir();
     let path = tmp.path().join("daemon.sock");
     let pool = Arc::new(Mutex::new(SessionPool::new()));
-    spawn_daemon(&path, pool, shell_factory("stty raw -echo; sleep 30")).await;
+    spawn_daemon(
+        &path,
+        pool,
+        shell_factory("stty raw -echo; printf raw-ready; sleep 30"),
+    )
+    .await;
 
     let (typist_r, typist_w) = connect(&path).await.unwrap();
     let (mut typist_reader, mut typist_writer) = framed(typist_r, typist_w).await;
     hello_welcome(&mut typist_reader, &mut typist_writer, false).await;
     let _id = create_and_attach(&mut typist_reader, &mut typist_writer).await;
+    // A paste that beats `stty raw` meets canonical mode, where macOS
+    // discards input past `MAX_INPUT` and the write completes, so the
+    // budget drains instead of filling.
+    expect_row_containing(&mut typist_reader, "raw-ready").await;
     let drain =
         tokio::spawn(
             async move { while let Ok(Some(_frame)) = typist_reader.next_frame().await {} },
