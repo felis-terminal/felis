@@ -108,6 +108,8 @@ fn atom() -> impl Strategy<Value = Vec<u8>> {
         1 => (0u8..=2).prop_map(|n| csi(&format!("{n}K"))),
         1 => prop_oneof![Just("0m"), Just("1m"), Just("41m"), Just("7m")].prop_map(csi),
         1 => (1u8..=4).prop_map(|n| csi(&format!("{n}b"))),
+        2 => (1u8..=3, 0u8..=2, proptest::sample::select(&["A", "字", "e\u{301}", "xy"][..]))
+            .prop_map(|(s, w, text)| format!("\x1b]66;s={s}:w={w};{text}\x07").into_bytes()),
         1 => prop_oneof![
             Just("?1049h"),
             Just("?1049l"),
