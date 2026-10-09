@@ -10,6 +10,12 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 
 ## [Unreleased]
 
+### Fixed
+
+- Resizing the window no longer leaves broken pieces of OSC 66 multi-row text on screen. A narrowing that re-wraps a
+  scaled run draws its text at natural size, and a block whose top row scrolls into history leaves no lower half behind;
+  both used to leave stray half-blocks.
+
 ## [0.1.3] - 2026-10-08
 
 Font fixes. Variable fonts draw bold and italic cells at the weight and slant each style asks for, and fallback glyphs

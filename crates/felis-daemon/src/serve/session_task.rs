@@ -542,6 +542,8 @@ pub async fn spawn_owned(
         reported_resize: None,
         #[cfg(all(test, unix))]
         pty_steps: Vec::new(),
+        #[cfg(all(test, unix))]
+        pty_resized_over: Vec::new(),
         meta_title_epoch: title_epoch,
         meta_cwd_epoch: cwd_epoch,
         pending_chunks: std::collections::VecDeque::new(),
@@ -742,6 +744,9 @@ struct SessionTask {
     /// can see the order.
     #[cfg(all(test, unix))]
     pty_steps: Vec<PtyStep>,
+    /// Test-only: the grid's geometry as each PTY resize goes out.
+    #[cfg(all(test, unix))]
+    pty_resized_over: Vec<(u16, u16)>,
     /// An in-task queue rather than a self-addressed `SessionCmd`: the
     /// command channel is bounded, so a producer re-queueing through it
     /// could block while holding the only thread that drains it.
@@ -2555,7 +2560,12 @@ impl SessionTask {
         // can block on its output pipe, which drains only through the
         // parser that lock serializes.
         #[cfg(all(test, unix))]
-        self.pty_steps.push(PtyStep::Resize);
+        {
+            self.pty_steps.push(PtyStep::Resize);
+            let core = self.session.lock_core();
+            self.pty_resized_over
+                .push((core.grid.rows(), core.grid.cols()));
+        }
         if let Err(err) = self.session.resizer.resize(size) {
             warn!(?err, "pty resize failed");
         }
@@ -2668,6 +2678,7 @@ impl SessionTask {
             resize_notify_dirty: false,
             reported_resize: None,
             pty_steps: Vec::new(),
+            pty_resized_over: Vec::new(),
             pending_chunks: std::collections::VecDeque::new(),
             meta_title_epoch: 0,
             meta_cwd_epoch: 0,
@@ -3746,6 +3757,18 @@ mod tests {
             2,
             "each set answers, even at an unchanged geometry: {seen:?}",
         );
+    }
+
+    /// The shell's repaint after SIGWINCH must meet the new grid, so the
+    /// PTY resizes only once the grid has reflowed to it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_pty_resizes_after_the_grid_takes_the_new_geometry() {
+        let mut task = SessionTask::for_tests(session_with("read _x"));
+        let (sub, _rx) = attach_sub(&mut task, false);
+        assert!(resize_to(&mut task, sub, 30, 120).is_none());
+        write_to_grid(&task, b"\x1b[?1049h");
+        assert!(resize_to(&mut task, sub, 20, 60).is_none());
+        assert_eq!(task.pty_resized_over, [(30, 120), (20, 60)]);
     }
 
     /// A resize triggered by size-ownership transfer reports before the
@@ -5090,18 +5113,40 @@ mod tests {
         assert_eq!(mirror_rows(&shadow_b), grid, "the second mirror");
     }
 
-    /// RIS wipes every placement, the primary screen's stash included.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn ris_on_the_alternate_screen_drops_the_saved_primary_placements() {
-        let mut task = SessionTask::for_tests(session_with("read _x"));
-        write_to_grid(&task, b"\x1b_Ga=T,f=24,s=1,v=1,c=2,r=1,q=2;AAAA\x1b\\");
-        task.drain_effects().expect("effects drain");
-        assert_eq!(task.session.placements.len(), 1);
+    const RIS: &[u8] = b"\x1bc";
+    const SWITCH_PLACE_RIS: &[&[u8]] = &[
+        b"\x1b[?1049h",
+        b"\x1b[?1049l",
+        b"\x1b_Ga=T,f=24,s=1,v=1,c=2,r=1,q=2;AAAA\x1b\\",
+        RIS,
+    ];
 
-        write_to_grid(&task, b"\x1b[?1049h\x1bc");
-        task.drain_effects().expect("effects drain");
-        assert!(task.session.saved_primary_placements.is_none());
-        assert!(task.session.placements.is_empty());
+    proptest! {
+        /// The primary screen's stash exists exactly while the alternate
+        /// screen is up, whatever mix of switches, placements and RIS the
+        /// effects carry; RIS also leaves no placement behind.
+        #[test]
+        fn the_saved_primary_placements_exist_iff_on_the_alternate_screen(
+            ops in prop::collection::vec(prop::sample::select(SWITCH_PLACE_RIS), 1..16),
+            per_drain in 1usize..4,
+        ) {
+            let rt = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .enable_all()
+                .build()
+                .expect("runtime");
+            let _guard = rt.enter();
+            let mut task = SessionTask::for_tests(session_with("read _x"));
+            for burst in ops.chunks(per_drain) {
+                write_to_grid(&task, &burst.concat());
+                task.drain_effects().expect("effects drain");
+                let on_alt = task.session.lock_core().grid.on_alternate_screen();
+                prop_assert_eq!(task.session.saved_primary_placements.is_some(), on_alt, "{:?}", burst);
+                if burst.last() == Some(&RIS) {
+                    prop_assert!(task.session.placements.is_empty(), "RIS leaves a placement");
+                }
+            }
+        }
     }
 
     /// The task's grid size, at `cell_px` per cell.

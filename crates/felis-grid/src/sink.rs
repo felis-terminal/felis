@@ -1132,23 +1132,14 @@ impl Grid {
 }
 
 impl Grid {
-    /// kitty moves the cursor after `a=T` / `a=p` unless `C=1` or `U=1`
-    /// (`graphics.c` `handle_put_command`).
     fn completes_cursor_moving_placement(&mut self, body: &[u8]) -> bool {
-        use felis_vt::kitty_graphics::{Step, parse};
+        use felis_vt::kitty_graphics::{Step, moves_cursor, parse};
         let Some(cmd) = parse(body) else {
             return false;
         };
         let Step::Done { controls, .. } = self.graphics_tracker.step(&cmd) else {
             return false;
         };
-        let get = |key: u8| {
-            controls
-                .iter()
-                .rev()
-                .find(|(k, _)| *k == key)
-                .map(|(_, v)| v.as_slice())
-        };
-        matches!(get(b'a'), Some(b"T" | b"p")) && get(b'C') != Some(b"1") && get(b'U') != Some(b"1")
+        moves_cursor(&controls)
     }
 }

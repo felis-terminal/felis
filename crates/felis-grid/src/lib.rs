@@ -2012,13 +2012,17 @@ impl Grid {
         let mut new_line_start: Vec<usize> = Vec::with_capacity(spans.len());
         let mut new_row_of_old: Vec<usize> = Vec::with_capacity(combined.len());
         let mut row_starts: Vec<usize> = Vec::new();
+        let mut dropped: Vec<usize> = Vec::new();
         let mut cursor_phys = (0usize, 0usize);
+        let blocks = self.whole_sized_blocks(&combined);
+        let mut landing = Landing::default();
         for (li, &(start, end)) in spans.iter().enumerate() {
             new_line_start.push(out_rows.len());
             let run = self.stitch_logical_line(&combined, start, end);
             let line_first = out_rows.len();
             let target = (li == cursor_line).then_some(cursor_run_index);
             row_starts.clear();
+            dropped.clear();
             if let Some((lr, lc)) = self.rewrap_run(
                 &run,
                 cols,
@@ -2026,6 +2030,7 @@ impl Grid {
                 &mut out_continued,
                 target,
                 &mut row_starts,
+                &mut dropped,
             ) {
                 cursor_phys = (line_first + lr, lc);
             }
@@ -2033,12 +2038,38 @@ impl Grid {
             for k in start..=end {
                 let within = row_starts.partition_point(|&s| s <= off).saturating_sub(1);
                 new_row_of_old.push(line_first + within);
-                off += if k < end {
+                let len = if k < end {
                     self.nontail_contribution(&combined[k], &combined[k + 1])
                         .len()
                 } else {
                     combined[k].len()
                 };
+                landing.rows.push(LandedRow { line: li, off, len });
+                off += len;
+            }
+            landing.lines.push(LandedLine {
+                first_row: line_first,
+                row_starts: row_starts.clone(),
+                dropped: dropped.clone(),
+            });
+        }
+        // A multi-row block's rows are separate lines, so a re-wrap can
+        // move one row and not the next (REQ-407). Sizing survives only
+        // where the whole footprint moved as one; checking the handles
+        // afterwards cannot tell, because a run shares one handle and a
+        // sheared character can land on its neighbour's lower half.
+        for &(k, c, scale, block_w) in &blocks {
+            let cells = (0..scale).flat_map(|dr| (0..block_w).map(move |dc| (k + dr, c + dc)));
+            let primary = landing.at(k, c);
+            let moved_whole = primary.is_some_and(|(pr, pc)| {
+                cells
+                    .clone()
+                    .all(|(ok, oc)| landing.at(ok, oc) == Some((pr + ok - k, pc + oc - c)))
+            });
+            if !moved_whole {
+                for (r, c) in cells.filter_map(|(ok, oc)| landing.at(ok, oc)) {
+                    self.drop_cell_sizing(&mut out_rows[r], c);
+                }
             }
         }
         let total_new = out_rows.len();
@@ -2137,6 +2168,62 @@ impl Grid {
         })
     }
 
+    /// Every sized block whose footprint is whole in `combined`, as
+    /// `(row, col, scale, block_w)`. A partial one (the part a scroll
+    /// left in history) has nothing to keep whole.
+    fn whole_sized_blocks(&self, combined: &[Vec<Cell>]) -> Vec<(usize, usize, usize, usize)> {
+        let continues = |g: Grapheme| matches!(g, Grapheme::SizedSpacer | Grapheme::Spacer);
+        let mut blocks = Vec::new();
+        for (k, row) in combined.iter().enumerate() {
+            for (c, cell) in row.iter().enumerate() {
+                let Some(handle) = cell.sizing else { continue };
+                if continues(cell.grapheme) || matches!(cell.grapheme, Grapheme::Empty) {
+                    continue;
+                }
+                let Some(&sizing) = self.screen.sizing_by_handle(handle) else {
+                    continue;
+                };
+                let (scale, block_w) = self.screen.sizing_block_extent(sizing, cell.grapheme);
+                let (scale, block_w) = (usize::from(scale), usize::from(block_w));
+                let whole = (0..scale)
+                    .flat_map(|dr| (0..block_w).map(move |dc| (k + dr, c + dc)))
+                    .skip(1)
+                    .all(|(r, c)| {
+                        combined
+                            .get(r)
+                            .and_then(|row| row.get(c))
+                            .is_some_and(|cell| {
+                                cell.sizing == Some(handle) && continues(cell.grapheme)
+                            })
+                    });
+                if whole {
+                    blocks.push((k, c, scale, block_w));
+                }
+            }
+        }
+        blocks
+    }
+
+    /// Text stays at its natural width; a wide glyph that lost its
+    /// `Spacer` to a narrower block has no pair left and goes.
+    fn drop_cell_sizing(&self, row: &mut [Cell], c: usize) {
+        if row[c].sizing.take().is_none() {
+            return;
+        }
+        match row[c].grapheme {
+            Grapheme::SizedSpacer => row[c].grapheme = Grapheme::Empty,
+            Grapheme::Spacer => {}
+            g if self.screen.grapheme_width(g) == 2
+                && !row
+                    .get(c + 1)
+                    .is_some_and(|n| matches!(n.grapheme, Grapheme::Spacer)) =>
+            {
+                row[c] = Cell::default();
+            }
+            _ => {}
+        }
+    }
+
     /// A continuation row contributes every cell except the unfillable
     /// slot a wide-glyph wrap leaves at the right edge, dropped so that
     /// glyph re-flows onto its own boundary. That slot is the only
@@ -2178,8 +2265,7 @@ impl Grid {
     /// Always emits at least one row so a blank logical line survives.
     /// A width-2 glyph never straddles the wrap boundary: the row is
     /// flushed with the unfillable slot blank, matching the VT sink's
-    /// autowrap. `row_starts` receives the run index each emitted row
-    /// begins at (first always `0`).
+    /// autowrap. `row_starts` and `dropped` are indices into `run`.
     fn rewrap_run(
         &self,
         run: &[Cell],
@@ -2188,6 +2274,7 @@ impl Grid {
         out_continued: &mut Vec<bool>,
         cursor_target: Option<usize>,
         row_starts: &mut Vec<usize>,
+        dropped: &mut Vec<usize>,
     ) -> Option<(usize, usize)> {
         let cols_usize = usize::from(cols);
         let mut cur: Vec<Cell> = Vec::with_capacity(cols_usize);
@@ -2206,6 +2293,7 @@ impl Grid {
                 // (with its spacer) rather than loop forever, matching
                 // `put_grapheme`.
                 if cols_usize < 2 {
+                    dropped.push(i);
                     i += 2;
                     continue;
                 }
@@ -2580,6 +2668,50 @@ fn trim_soft_wrap(src: &[bool], dst_rows: u16) -> Box<[bool]> {
     let keep = src.len().min(dst.len());
     dst[..keep].copy_from_slice(&src[..keep]);
     dst
+}
+
+/// Where a reflow put each pre-reflow cell.
+#[derive(Default)]
+struct Landing {
+    rows: Vec<LandedRow>,
+    lines: Vec<LandedLine>,
+}
+
+struct LandedRow {
+    line: usize,
+    off: usize,
+    len: usize,
+}
+
+struct LandedLine {
+    first_row: usize,
+    row_starts: Vec<usize>,
+    dropped: Vec<usize>,
+}
+
+impl Landing {
+    /// `None` for a cell the re-wrap dropped.
+    fn at(&self, row: usize, col: usize) -> Option<(usize, usize)> {
+        let &LandedRow { line, off, len } = self.rows.get(row)?;
+        if col >= len {
+            return None;
+        }
+        let LandedLine {
+            first_row: first,
+            row_starts: starts,
+            dropped,
+        } = &self.lines[line];
+        let i = off + col;
+        if dropped.iter().any(|&d| d == i || d + 1 == i) {
+            return None;
+        }
+        let within = starts.partition_point(|&s| s <= i).checked_sub(1)?;
+        let skipped = dropped
+            .iter()
+            .filter(|&&d| (starts[within]..i).contains(&d))
+            .count();
+        Some((first + within, i - starts[within] - 2 * skipped))
+    }
 }
 
 fn pad_and_push(

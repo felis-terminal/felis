@@ -301,8 +301,8 @@ impl ScreenBuffer {
         self.cursor_style
     }
 
-    /// Drop sized runs whose block does not fit at the primary
-    /// after a resize; the trim leaves such primaries in place.
+    /// Drop sized runs whose block a resize cut or sheared; the trim
+    /// leaves such primaries in place.
     pub(crate) fn discard_unfit_sized_runs(&mut self) {
         let mut cells = std::mem::take(&mut self.cells);
         let dropped = self
@@ -313,7 +313,7 @@ impl ScreenBuffer {
         }
     }
 
-    /// Returns the primaries' rows. Shared by the live screen and the
+    /// Returns the rows it changed. Shared by the live screen and the
     /// saved alternate one, whose rows `idx` lays out differently.
     fn discard_unfit_sized_runs_in(
         &self,
@@ -322,19 +322,16 @@ impl ScreenBuffer {
         cols: u16,
         idx: impl Fn(u16, u16) -> usize,
     ) -> Vec<u16> {
-        let mut to_drop: Vec<(u16, u16, u16, u16, u16)> = Vec::new();
+        let continues = |g: Grapheme| matches!(g, Grapheme::SizedSpacer | Grapheme::Spacer);
+        let mut covered = vec![false; usize::from(rows) * usize::from(cols)];
+        let mut to_drop: Vec<(u16, u16, u16)> = Vec::new();
         for r in 0..rows {
             for c in 0..cols {
                 let i = idx(r, c);
                 let Some(handle) = cells[i].sizing else {
                     continue;
                 };
-                // Spacers follow their primary; the drop sweep below
-                // cleans them.
-                if matches!(
-                    cells[i].grapheme,
-                    Grapheme::SizedSpacer | Grapheme::Spacer | Grapheme::Empty
-                ) {
+                if continues(cells[i].grapheme) || matches!(cells[i].grapheme, Grapheme::Empty) {
                     continue;
                 }
                 let Some(sizing) = self.sizing_table.get(handle.get() as usize - 1) else {
@@ -342,38 +339,64 @@ impl ScreenBuffer {
                 };
                 let (scale, block_w) = self.sizing_block_extent(*sizing, cells[i].grapheme);
                 let natural_w = u16::from(self.grapheme_width(cells[i].grapheme).max(1));
-                if r.saturating_add(scale) > rows || c.saturating_add(block_w) > cols {
-                    to_drop.push((r, c, scale, block_w, natural_w));
+                let footprint = (0..scale)
+                    .flat_map(|dr| (0..block_w).map(move |dc| (r + dr, c + dc)))
+                    .skip(1);
+                let fits = r.saturating_add(scale) <= rows && c.saturating_add(block_w) <= cols;
+                if fits
+                    && footprint.clone().all(|(fr, fc)| {
+                        let cell = cells[idx(fr, fc)];
+                        cell.sizing == Some(handle) && continues(cell.grapheme)
+                    })
+                {
+                    covered[usize::from(r) * usize::from(cols) + usize::from(c)] = true;
+                    for (fr, fc) in footprint {
+                        covered[usize::from(fr) * usize::from(cols) + usize::from(fc)] = true;
+                    }
+                } else {
+                    to_drop.push((r, c, natural_w));
                 }
             }
         }
-        let mut dropped = Vec::with_capacity(to_drop.len());
-        for (pr, pc, scale, block_w, natural_w) in to_drop {
-            for dr in 0..scale {
-                for dc in 0..block_w {
-                    let r = pr.saturating_add(dr);
-                    let c = pc.saturating_add(dc);
-                    if r >= rows || c >= cols {
-                        continue;
+        let mut changed = Vec::new();
+        for (pr, pc, natural_w) in to_drop {
+            let i = idx(pr, pc);
+            cells[i].sizing = None;
+            // The primary keeps its grapheme (only the run's sizing is
+            // dropped) when its natural-width pair still has its
+            // `Spacer`; a glyph wider than its block has none, and one
+            // the new edge cut has no room.
+            if natural_w == 2 {
+                let partner = (pc + 1 < cols).then(|| idx(pr, pc + 1));
+                match partner {
+                    Some(j) if matches!(cells[j].grapheme, Grapheme::Spacer) => {
+                        cells[j].sizing = None;
                     }
-                    let i = idx(r, c);
-                    cells[i].sizing = None;
-                    // The primary keeps its grapheme (only the run's
-                    // sizing is dropped), and wide-glyph `Spacer`
-                    // partners stay so the natural-width pair survives.
-                    if matches!(cells[i].grapheme, Grapheme::SizedSpacer) {
-                        cells[i].grapheme = Grapheme::Empty;
-                    }
+                    _ => cells[i] = Cell::default(),
                 }
             }
-            // The pair cannot outlive its block: a glyph wider than its
-            // block has no `Spacer`, and one the new edge cut has no room.
-            if natural_w > block_w || pc.saturating_add(natural_w) > cols {
-                cells[idx(pr, pc)] = Cell::default();
-            }
-            dropped.push(pr);
+            changed.push(pr);
         }
-        dropped
+        // A continuation no kept block covers lost its primary to the
+        // drop above, to history, or to a re-wrap that moved it.
+        for r in 0..rows {
+            for c in 0..cols {
+                let i = idx(r, c);
+                if cells[i].sizing.is_none()
+                    || !continues(cells[i].grapheme)
+                    || covered[usize::from(r) * usize::from(cols) + usize::from(c)]
+                {
+                    continue;
+                }
+                cells[i] = Cell {
+                    grapheme: Grapheme::Empty,
+                    sizing: None,
+                    ..cells[i]
+                };
+                changed.push(r);
+            }
+        }
+        changed
     }
 
     /// `Spacer` is `0`: the right half is already accounted for by its
