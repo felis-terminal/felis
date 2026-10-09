@@ -252,9 +252,14 @@ fn owned_controls_without_m(cmd: &Command<'_>) -> Vec<(u8, Vec<u8>)> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct OpenStream {
+#[cfg_attr(
+    feature = "state-dump",
+    derive(serde::Serialize, serde::Deserialize, Default),
+    serde(default)
+)]
+pub(crate) struct OpenStream {
     head_controls: Vec<(u8, Vec<u8>)>,
-    buffered: usize,
+    pub(crate) buffered: usize,
 }
 
 /// What one body does to a chunked transmission.
@@ -278,8 +283,13 @@ pub enum Step {
 /// it, and so can a consumer that must agree with the reassembler about
 /// where commands end without buffering their bytes.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "state-dump",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(default)
+)]
 pub struct ReassemblyTracker {
-    open: Option<OpenStream>,
+    pub(crate) open: Option<OpenStream>,
 }
 
 impl ReassemblyTracker {
@@ -343,9 +353,15 @@ impl ReassemblyTracker {
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "state-dump",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(default)
+)]
 pub struct Reassembler {
-    tracker: ReassemblyTracker,
-    payload: Vec<u8>,
+    pub(crate) tracker: ReassemblyTracker,
+    #[cfg_attr(feature = "state-dump", serde(with = "crate::state::b64"))]
+    pub(crate) payload: Vec<u8>,
 }
 
 impl Reassembler {

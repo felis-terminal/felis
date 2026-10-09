@@ -1846,6 +1846,7 @@ where
         resizer,
         core,
         signals,
+        quiescer,
     } = outer;
     let mut session = Session {
         core,
@@ -1863,6 +1864,7 @@ where
         child: std::sync::Arc::new(child),
         resizer: std::sync::Arc::new(resizer),
         shm_segments: ShmDeferral::default(),
+        quiescer,
     };
     let bodies = prep(&mut session);
     let cursor = session.lock_core().grid.cursor();

@@ -205,6 +205,20 @@ impl Listener {
         backend::Listener::bind(endpoint).map(Self)
     }
 
+    /// Wraps the listening socket an in-place upgrade's `execve` carried
+    /// over, without the probe-unlink-bind `bind` runs.
+    #[cfg(unix)]
+    pub fn adopt(fd: std::os::fd::OwnedFd, endpoint: &Endpoint) -> io::Result<Self> {
+        backend::Listener::adopt(fd, endpoint).map(Self)
+    }
+
+    /// The listening socket, which an in-place upgrade carries across `execve`.
+    #[cfg(unix)]
+    #[must_use]
+    pub fn as_fd(&self) -> std::os::fd::BorrowedFd<'_> {
+        self.0.as_fd()
+    }
+
     /// The peer-identity check runs before this returns; a mismatch
     /// closes the connection and surfaces [`AcceptError::Peer`].
     pub async fn accept(&self) -> Result<ServerStream, AcceptError> {
@@ -260,6 +274,40 @@ mod tests {
         assert_eq!(&reply, b"pong");
 
         server_task.await.unwrap();
+    }
+
+    /// The adopted socket is the same listening socket, so a dial that
+    /// queued while nobody accepted is served by the adopter.
+    #[tokio::test]
+    async fn an_adopted_listener_serves_a_dial_queued_before_adoption() {
+        let tmp = private_dir();
+        let path = tmp.path().join("adopt.sock");
+        let endpoint = Endpoint::unix(path.clone());
+        let original = Listener::bind(&endpoint).unwrap();
+        let carried = original.as_fd().try_clone_to_owned().unwrap();
+        drop(original);
+
+        let (mut rx, mut tx) = connect(path.as_path()).await.unwrap();
+        tx.write_all(b"ping").await.unwrap();
+
+        let adopted = Listener::adopt(carried, &endpoint).unwrap();
+        let stream = adopted.accept().await.unwrap();
+        let (mut srx, mut stx) = server_split(stream);
+        let mut buf = [0u8; 4];
+        srx.read_exact(&mut buf).await.unwrap();
+        assert_eq!(&buf, b"ping");
+        stx.write_all(b"pong").await.unwrap();
+        rx.read_exact(&mut buf).await.unwrap();
+        assert_eq!(&buf, b"pong");
+    }
+
+    #[tokio::test]
+    async fn adoption_refuses_a_socket_bound_to_another_endpoint() {
+        let tmp = private_dir();
+        let listener = Listener::bind(&Endpoint::unix(tmp.path().join("a.sock"))).unwrap();
+        let carried = listener.as_fd().try_clone_to_owned().unwrap();
+        let other = Endpoint::unix(tmp.path().join("b.sock"));
+        assert!(Listener::adopt(carried, &other).is_err());
     }
 
     #[tokio::test]

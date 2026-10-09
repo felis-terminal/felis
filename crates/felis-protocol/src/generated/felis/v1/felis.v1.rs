@@ -1444,7 +1444,7 @@ pub mod session_attach_failed {
 pub struct OpsToDaemonMsg {
     #[prost(message, optional, tag="100")]
     pub correlation: ::core::option::Option<Correlation>,
-    #[prost(oneof="ops_to_daemon_msg::Msg", tags="1, 3, 5, 7, 9, 11, 13, 15, 17")]
+    #[prost(oneof="ops_to_daemon_msg::Msg", tags="1, 3, 5, 7, 9, 11, 13, 15, 17, 19")]
     pub msg: ::core::option::Option<ops_to_daemon_msg::Msg>,
 }
 /// Nested message and enum types in `OpsToDaemonMsg`.
@@ -1471,13 +1471,17 @@ pub mod ops_to_daemon_msg {
         Stop(super::OpsStop),
         #[prost(message, tag="17")]
         Info(super::OpsInfo),
+        /// Setup only, as OpsStop is: the reply is the last frame before
+        /// the exec closes the connection.
+        #[prost(message, tag="19")]
+        Upgrade(super::OpsUpgrade),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct OpsToClientMsg {
     #[prost(message, optional, tag="100")]
     pub correlation: ::core::option::Option<Correlation>,
-    #[prost(oneof="ops_to_client_msg::Msg", tags="2, 4, 6, 8, 10, 12, 14, 16, 18")]
+    #[prost(oneof="ops_to_client_msg::Msg", tags="2, 4, 6, 8, 10, 12, 14, 16, 18, 20")]
     pub msg: ::core::option::Option<ops_to_client_msg::Msg>,
 }
 /// Nested message and enum types in `OpsToClientMsg`.
@@ -1502,6 +1506,8 @@ pub mod ops_to_client_msg {
         StopReply(super::OpsStopReply),
         #[prost(message, tag="18")]
         InfoReply(super::OpsInfoReply),
+        #[prost(message, tag="20")]
+        UpgradeReply(super::OpsUpgradeReply),
     }
 }
 /// Client → daemon. Create a session this connection does not attach
@@ -1930,6 +1936,49 @@ pub struct StopRefused {
 pub struct StopDraining {
     #[prost(uint32, tag="1")]
     pub sessions: u32,
+}
+/// Client → daemon. Replace this daemon's binary in place, keeping every
+/// session: the daemon execs the successor and hands it the sessions.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct OpsUpgrade {
+    /// Absolute path of the felis-daemon binary to exec. The requester
+    /// names it because the running daemon's own executable is the one
+    /// being replaced.
+    #[prost(string, tag="1")]
+    pub successor: ::prost::alloc::string::String,
+}
+/// Daemon → client. Reply to OpsUpgrade, written before the daemon acts
+/// on it, as OpsStopReply is.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct OpsUpgradeReply {
+    /// REQUIRED: an unset outcome is malformed and is refused at decode.
+    #[prost(oneof="ops_upgrade_reply::Outcome", tags="1, 2")]
+    pub outcome: ::core::option::Option<ops_upgrade_reply::Outcome>,
+}
+/// Nested message and enum types in `OpsUpgradeReply`.
+pub mod ops_upgrade_reply {
+    /// REQUIRED: an unset outcome is malformed and is refused at decode.
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Outcome {
+        /// The daemon is about to exec the successor; this connection
+        /// closes with it.
+        #[prost(message, tag="1")]
+        Upgrading(super::UpgradeUpgrading),
+        /// Nothing was handed over: the daemon keeps serving as before.
+        #[prost(message, tag="2")]
+        Refused(super::UpgradeRefused),
+    }
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct UpgradeUpgrading {
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct UpgradeRefused {
+    #[prost(enumeration="UpgradeRefusal", tag="1")]
+    pub reason: i32,
+    /// Human-readable specifics. Never parsed.
+    #[prost(string, tag="2")]
+    pub detail: ::prost::alloc::string::String,
 }
 /// Client → daemon. Ask what this daemon is and what it is holding.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
@@ -2406,7 +2455,7 @@ pub struct SearchMatch {
 // below and asserts the Rust values equal them, so editing one here
 // without the other fails the build; prose-check: ignore):
 //    PROTOCOL_MAJOR = 1
-//    PROTOCOL_MINOR = 0
+//    PROTOCOL_MINOR = 1
 //
 // Kind or arm: a frame kind is a *surface*, so a message addressing a
 // surface no existing kind owns earns a kind, as does one whose
@@ -3340,6 +3389,59 @@ impl AttentionSource {
             "ATTENTION_SOURCE_UNSPECIFIED" => Some(Self::Unspecified),
             "ATTENTION_SOURCE_BELL" => Some(Self::Bell),
             "ATTENTION_SOURCE_NOTIFICATION" => Some(Self::Notification),
+            _ => None,
+        }
+    }
+}
+/// Why an upgrade was refused. Every value leaves the daemon serving,
+/// so the remedy is the same for each: drain and restart.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum UpgradeRefusal {
+    Unspecified = 0,
+    /// This platform has no in-place upgrade.
+    Unsupported = 1,
+    /// The successor cannot read this daemon's dump version.
+    DumpVersion = 2,
+    /// The successor does not serve a connected client's protocol major.
+    ProtocolMajor = 3,
+    /// A step before the exec ran out of time.
+    Timeout = 4,
+    /// The successor rejected the dump's contents, or the exec failed.
+    ProbeFailed = 5,
+    /// An upgrade is already running.
+    Busy = 6,
+    /// The daemon is draining toward stop.
+    Draining = 7,
+}
+impl UpgradeRefusal {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "UPGRADE_REFUSAL_UNSPECIFIED",
+            Self::Unsupported => "UPGRADE_REFUSAL_UNSUPPORTED",
+            Self::DumpVersion => "UPGRADE_REFUSAL_DUMP_VERSION",
+            Self::ProtocolMajor => "UPGRADE_REFUSAL_PROTOCOL_MAJOR",
+            Self::Timeout => "UPGRADE_REFUSAL_TIMEOUT",
+            Self::ProbeFailed => "UPGRADE_REFUSAL_PROBE_FAILED",
+            Self::Busy => "UPGRADE_REFUSAL_BUSY",
+            Self::Draining => "UPGRADE_REFUSAL_DRAINING",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "UPGRADE_REFUSAL_UNSPECIFIED" => Some(Self::Unspecified),
+            "UPGRADE_REFUSAL_UNSUPPORTED" => Some(Self::Unsupported),
+            "UPGRADE_REFUSAL_DUMP_VERSION" => Some(Self::DumpVersion),
+            "UPGRADE_REFUSAL_PROTOCOL_MAJOR" => Some(Self::ProtocolMajor),
+            "UPGRADE_REFUSAL_TIMEOUT" => Some(Self::Timeout),
+            "UPGRADE_REFUSAL_PROBE_FAILED" => Some(Self::ProbeFailed),
+            "UPGRADE_REFUSAL_BUSY" => Some(Self::Busy),
+            "UPGRADE_REFUSAL_DRAINING" => Some(Self::Draining),
             _ => None,
         }
     }

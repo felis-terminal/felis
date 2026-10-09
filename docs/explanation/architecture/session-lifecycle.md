@@ -549,11 +549,13 @@ says a window is offline.
 
 Only the SSH carrier can really answer. Over `--host` the relay dies with the connection while the session survives on
 the remote daemon, so retrying the same id reaches that daemon: the endpoint is derived from the uid alone and lives
-until the remote host reboots, so nothing between two attaches moves it. On the local socket a close is the daemon's own
-death, and the daemon holds the PTY masters, so the session died with it. The first attempt still auto-spawns a
+until the remote host reboots, so nothing between two attaches moves it. On the local socket a close is either an
+in-place upgrade or the daemon's own death. An upgrade keeps the listen socket open across its exec, so the first
+attempt waits in the accept queue and re-attaches the same session on the successor ([overview.md](overview.md)
+"In-place upgrade"). A death took the PTY masters, and the session with them. The first attempt still auto-spawns a
 replacement daemon, exactly as a window launch does, because that is what turns a dead socket into an answer: the fresh
 daemon has never heard of the session, the attach comes back `UnknownSession`, and the ladder stops there. One ladder
-serves both carriers because the local case terminates itself on the first attempt.
+serves both carriers because the local case settles on the first attempt either way.
 
 A verdict that the session is gone hands the window to the exit ladder above, since the shell ending is the same fact
 whether the window heard it from `SessionExited` or from a re-dial. The other two endings, the daemon refusing the
@@ -1018,13 +1020,14 @@ Revisit if:
 
 ## When the daemon ends
 
-A daemon restart ends every session: the stop closes the PTY masters, which hangs up the child shells, and all RAM-only
-state drops with the process. The update procedure that carries the drain, and the in-place upgrade that would avoid it,
-are in [overview.md](overview.md) "Daemon process lifecycle". A crash loses the same session state without ending every
-session _process_: the crashing daemon's fds close, so the kernel hangs up each terminal and an ordinary shell exits,
-but a child that ignores or traps `SIGHUP` survives it, reparented to init, still holding its terminal, listed by no
-daemon. The controlled path closes exactly that hole with the `SIGKILL` behind the grace ("Destruction" above), and the
-crash path cannot: the process that knew the pids is the one that just died.
+A daemon stop ends every session: the stop closes the PTY masters, which hangs up the child shells, and all RAM-only
+state drops with the process. An in-place upgrade is not an end: the process, its PTY masters, and the session state
+carry over to the successor binary ([overview.md](overview.md) "In-place upgrade"); where it is unavailable, the update
+procedure is the drain and stop ("Daemon process lifecycle" there). A crash loses the same session state without ending
+every session _process_: the crashing daemon's fds close, so the kernel hangs up each terminal and an ordinary shell
+exits, but a child that ignores or traps `SIGHUP` survives it, reparented to init, still holding its terminal, listed by
+no daemon. The controlled path closes exactly that hole with the `SIGKILL` behind the grace ("Destruction" above), and
+the crash path cannot: the process that knew the pids is the one that just died.
 
 ### Session-task panics
 

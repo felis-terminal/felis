@@ -53,7 +53,7 @@ import "google/protobuf/timestamp.proto";
 // below and asserts the Rust values equal them, so editing one here
 // without the other fails the build; prose-check: ignore):
 //   PROTOCOL_MAJOR = 1
-//   PROTOCOL_MINOR = 0
+//   PROTOCOL_MINOR = 1
 //
 // Kind or arm: a frame kind is a *surface*, so a message addressing a
 // surface no existing kind owns earns a kind, as does one whose
@@ -1804,6 +1804,15 @@ message OpsToDaemonMsg {
       phases: PHASE_SETUP
       phases: PHASE_ATTACHED
     }];
+    // Setup only, as OpsStop is: the reply is the last frame before
+    // the exec closes the connection.
+    OpsUpgrade upgrade = 19 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_DAEMON
+      correlation: CORRELATION_REQUEST_OPENER
+      modes: MODE_OPS
+      phases: PHASE_SETUP
+      since: 1
+    }];
   }
   Correlation correlation = 100;
 }
@@ -1874,6 +1883,13 @@ message OpsToClientMsg {
       modes: MODE_OPS
       phases: PHASE_SETUP
       phases: PHASE_ATTACHED
+    }];
+    OpsUpgradeReply upgrade_reply = 20 [(felis.v1.arm) = {
+      direction: DIRECTION_TO_CLIENT
+      correlation: CORRELATION_REQUEST_REPLY
+      modes: MODE_OPS
+      phases: PHASE_SETUP
+      since: 1
     }];
   }
   Correlation correlation = 100;
@@ -2171,6 +2187,56 @@ message StopRefused {
 
 message StopDraining {
   uint32 sessions = 1;
+}
+
+// Client → daemon. Replace this daemon's binary in place, keeping every
+// session: the daemon execs the successor and hands it the sessions.
+message OpsUpgrade {
+  // Absolute path of the felis-daemon binary to exec. The requester
+  // names it because the running daemon's own executable is the one
+  // being replaced.
+  string successor = 1;
+}
+
+// Daemon → client. Reply to OpsUpgrade, written before the daemon acts
+// on it, as OpsStopReply is.
+message OpsUpgradeReply {
+  // REQUIRED: an unset outcome is malformed and is refused at decode.
+  oneof outcome {
+    // The daemon is about to exec the successor; this connection
+    // closes with it.
+    UpgradeUpgrading upgrading = 1;
+    // Nothing was handed over: the daemon keeps serving as before.
+    UpgradeRefused refused = 2;
+  }
+}
+
+message UpgradeUpgrading {}
+
+message UpgradeRefused {
+  UpgradeRefusal reason = 1;
+  // Human-readable specifics. Never parsed.
+  string detail = 2;
+}
+
+// Why an upgrade was refused. Every value leaves the daemon serving,
+// so the remedy is the same for each: drain and restart.
+enum UpgradeRefusal {
+  UPGRADE_REFUSAL_UNSPECIFIED = 0;
+  // This platform has no in-place upgrade.
+  UPGRADE_REFUSAL_UNSUPPORTED = 1;
+  // The successor cannot read this daemon's dump version.
+  UPGRADE_REFUSAL_DUMP_VERSION = 2;
+  // The successor does not serve a connected client's protocol major.
+  UPGRADE_REFUSAL_PROTOCOL_MAJOR = 3;
+  // A step before the exec ran out of time.
+  UPGRADE_REFUSAL_TIMEOUT = 4;
+  // The successor rejected the dump's contents, or the exec failed.
+  UPGRADE_REFUSAL_PROBE_FAILED = 5;
+  // An upgrade is already running.
+  UPGRADE_REFUSAL_BUSY = 6;
+  // The daemon is draining toward stop.
+  UPGRADE_REFUSAL_DRAINING = 7;
 }
 
 // Client → daemon. Ask what this daemon is and what it is holding.

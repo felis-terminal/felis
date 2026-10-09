@@ -82,11 +82,17 @@ impl Drop for Master {
 }
 
 impl Master {
-    pub(crate) fn clone_reader(&self) -> io::Result<MasterReader> {
+    pub(crate) fn clone_reader(
+        &self,
+        _quiesce: &std::sync::Arc<crate::quiesce::QuiesceShared>,
+    ) -> io::Result<MasterReader> {
         Ok(MasterReader(File::from(self.output.try_clone()?)))
     }
 
-    pub(crate) fn clone_writer(&self) -> io::Result<File> {
+    pub(crate) fn clone_writer(
+        &self,
+        _quiesce: &std::sync::Arc<crate::quiesce::QuiesceShared>,
+    ) -> io::Result<File> {
         Ok(File::from(self.input.try_clone()?))
     }
 
@@ -425,6 +431,10 @@ mod tests {
     #![allow(clippy::cast_possible_wrap)]
 
     use super::{append_quoted, env_block, hresult_error, open_and_spawn};
+
+    fn test_quiesce() -> Arc<crate::quiesce::QuiesceShared> {
+        Arc::new(crate::quiesce::QuiesceShared::new().expect("quiesce state"))
+    }
     use crate::{Command, Size};
     use std::ffi::OsStr;
     use std::io::Read;
@@ -458,7 +468,9 @@ mod tests {
         )
         .expect("CreatePseudoConsole + CreateProcessW must spawn cmd.exe");
 
-        let mut reader = master.clone_reader().expect("clone the master read end");
+        let mut reader = master
+            .clone_reader(&test_quiesce())
+            .expect("clone the master read end");
         let collected = Arc::new(Mutex::new(Vec::<u8>::new()));
         let sink = Arc::clone(&collected);
         // Detached: the read is released only when `master` drops
@@ -608,7 +620,9 @@ mod tests {
         )
         .expect("spawn the fixture onto a pseudoconsole");
 
-        let mut reader = master.clone_reader().expect("clone the master read end");
+        let mut reader = master
+            .clone_reader(&test_quiesce())
+            .expect("clone the master read end");
         let collected = Arc::new(Mutex::new(Vec::<u8>::new()));
         let sink = Arc::clone(&collected);
         // Detached for the same reason as in the spawn test above.
@@ -646,7 +660,9 @@ mod tests {
         }
 
         // Ctrl+F24 (LEFT_CTRL_PRESSED) press then release, scan code 0x76.
-        let mut writer = master.clone_writer().expect("clone the master write end");
+        let mut writer = master
+            .clone_writer(&test_quiesce())
+            .expect("clone the master write end");
         writer
             .write_all(b"\x1b[135;118;0;1;8;1_\x1b[135;118;0;0;8;1_")
             .expect("write the key records");

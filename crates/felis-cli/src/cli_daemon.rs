@@ -1,24 +1,27 @@
 //! `felis daemon status` (what the running daemon is, and what it is
-//! holding against its admission ceilings) and `felis daemon stop`,
-//! the portable way to end it.
+//! holding against its admission ceilings), `felis daemon stop`, the
+//! portable way to end it, and `felis daemon upgrade`, which replaces
+//! its binary while it keeps every session.
 
 #![expect(
     clippy::print_stdout,
     reason = "this module renders the human framing of a report"
 )]
 
+use std::path::{Path, PathBuf};
+
 use anyhow::Result;
 use clap::Subcommand;
-use felis_client_core::{Connection, DaemonStatus, Reconnector};
+use felis_client_core::{Carrier, ConnectError, Connection, DaemonStatus, Reconnector};
 use felis_protocol::messages::{
     Limit, ReportScope, ResourceKind, ResourceReport, ResourceUnit, StopMode, StopOutcome,
-    SubjectKind,
+    SubjectKind, UpgradeOutcome, UpgradeRefusal,
 };
 use tokio::io::{AsyncRead, AsyncWrite};
 
 use crate::cli_output::{
-    DaemonStatusResult, DaemonStopResult, ErrorKind, Format, PointFormat, ProtocolVersion,
-    Reporter, ResourceObject,
+    DaemonStatusResult, DaemonStopResult, DaemonUpgradeResult, ErrorKind, Format, PointFormat,
+    ProtocolVersion, Reporter, ResourceObject,
 };
 use crate::conn::Dial;
 
@@ -47,18 +50,30 @@ pub(crate) enum DaemonOp {
         #[command(flatten)]
         output: PointFormat,
     },
+    /// Replace the running daemon's binary, keeping every session.
+    ///
+    /// The daemon execs the `felis-daemon` installed beside this
+    /// `felis`. A refusal leaves it serving as before; the fallback is
+    /// `felis daemon stop --when-empty`. Never starts a daemon.
+    Upgrade {
+        #[command(flatten)]
+        output: PointFormat,
+    },
 }
 
 impl DaemonOp {
     pub(crate) const fn format(&self) -> Format {
         match self {
-            Self::Status { output } | Self::Stop { output, .. } => output.format,
+            Self::Status { output } | Self::Stop { output, .. } | Self::Upgrade { output } => {
+                output.format
+            }
         }
     }
 }
 
-/// Never autospawn: both verbs speak about a daemon that is running,
-/// and starting one in order to stop it is the clearest case of it.
+/// Never autospawn: every verb speaks about a daemon that is running,
+/// and starting one in order to stop or replace it is the clearest
+/// case of it.
 pub(crate) const DIAL: Dial = Dial::Ops;
 
 pub(crate) fn run(
@@ -67,8 +82,26 @@ pub(crate) fn run(
     target: &Reconnector,
 ) -> Result<i32> {
     let format = op.format();
+    if let (
+        DaemonOp::Upgrade { .. },
+        Carrier::Ssh {
+            destination,
+            ssh_args,
+        },
+    ) = (&op, &target.carrier)
+    {
+        return Ok(upgrade_remotely(destination, ssh_args, format));
+    }
     runtime.block_on(async move {
         let out = Reporter::point(format);
+        let successor = match op {
+            DaemonOp::Upgrade { .. } => match successor_path(felis_client_core::installed_daemon())
+            {
+                Ok(successor) => Some(successor),
+                Err((kind, message)) => return Ok(out.fail(kind, message)),
+            },
+            DaemonOp::Status { .. } | DaemonOp::Stop { .. } => None,
+        };
         let conn = match DIAL.open(target, &out).await {
             Ok(conn) => conn,
             Err(code) => return Ok(code),
@@ -78,6 +111,9 @@ pub(crate) fn run(
             DaemonOp::Stop {
                 force, when_empty, ..
             } => cmd_stop(conn, &out, stop_mode(force, when_empty)).await,
+            DaemonOp::Upgrade { .. } => {
+                cmd_upgrade(conn, &out, successor.unwrap_or_default()).await
+            }
         }
     })
 }
@@ -161,6 +197,206 @@ const fn stop_result(mode: StopMode, outcome: StopOutcome) -> DaemonStopResult {
             StopOutcome::Stopping => 0,
             StopOutcome::Refused { sessions } | StopOutcome::Draining { sessions } => sessions,
         },
+    }
+}
+
+/// The remote host's own `felis` resolves the successor installed
+/// there and reports in the same shapes, so its output and exit code
+/// pass through (`docs/explanation/architecture/overview.md`
+/// "In-place upgrade").
+fn upgrade_remotely(destination: &str, ssh_args: &[String], format: Format) -> i32 {
+    let out = Reporter::point(format);
+    let output = match remote_upgrade_command(destination, ssh_args, format)
+        .stdin(std::process::Stdio::inherit())
+        .output()
+    {
+        Ok(output) => output,
+        Err(err) => {
+            return out.fail(
+                ErrorKind::DaemonUnreachable,
+                format!("daemon upgrade: cannot run ssh: {err}"),
+            );
+        }
+    };
+    let code = output.status.code();
+    match code {
+        Some(2) if out.machine() && !carries_error_object(&output.stderr) => out.fail(
+            ErrorKind::Unsupported,
+            format!(
+                "daemon upgrade: the felis on {destination} has no `daemon upgrade` ({}); \
+                 update felis there, or drain and restart its daemon with \
+                 `felis daemon stop --when-empty`",
+                first_line(&output.stderr)
+            ),
+        ),
+        Some(code @ 0..=2) => {
+            use std::io::Write as _;
+            // A closed local pipe leaves nobody to report to.
+            drop(std::io::stdout().write_all(&output.stdout));
+            drop(std::io::stderr().write_all(&output.stderr));
+            code
+        }
+        other => out.fail(
+            ErrorKind::DaemonUnreachable,
+            format!(
+                "daemon upgrade: `felis daemon upgrade` did not run on {destination} over ssh \
+                 ({})",
+                other.map_or_else(
+                    || "killed by a signal".to_owned(),
+                    |code| format!("exit {code}")
+                )
+            ),
+        ),
+    }
+}
+
+/// A remote felis that answered writes its failure as one error object;
+/// a felis older than the verb exits `2` from its argument parser with
+/// prose instead.
+fn carries_error_object(stderr: &[u8]) -> bool {
+    String::from_utf8_lossy(stderr).lines().any(|line| {
+        serde_json::from_str::<serde_json::Value>(line)
+            .is_ok_and(|value| value.get("error").is_some_and(serde_json::Value::is_object))
+    })
+}
+
+fn first_line(stderr: &[u8]) -> String {
+    String::from_utf8_lossy(stderr)
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("no output")
+        .to_owned()
+}
+
+/// `ssh_args` are spliced verbatim, as the relay carrier splices them.
+fn remote_upgrade_command(
+    destination: &str,
+    ssh_args: &[String],
+    format: Format,
+) -> std::process::Command {
+    let mut cmd = std::process::Command::new("ssh");
+    cmd.args(ssh_args)
+        .arg(destination)
+        .args(["felis", "daemon", "upgrade", "--format"])
+        .arg(match format {
+            Format::Human => "human",
+            Format::Json => "json",
+            Format::Jsonl => "jsonl",
+        });
+    cmd
+}
+
+fn successor_path(found: Option<PathBuf>) -> Result<String, (ErrorKind, String)> {
+    let Some(found) = found else {
+        return Err((
+            ErrorKind::InvalidRequest,
+            "daemon upgrade: no felis-daemon beside this felis or on PATH to upgrade to".to_owned(),
+        ));
+    };
+    let absolute = std::path::absolute(&found).map_err(|err| {
+        (
+            ErrorKind::InvalidRequest,
+            format!(
+                "daemon upgrade: cannot make {} absolute: {err}",
+                found.display()
+            ),
+        )
+    })?;
+    path_text(&absolute)
+}
+
+fn path_text(path: &Path) -> Result<String, (ErrorKind, String)> {
+    path.to_str().map(str::to_owned).ok_or_else(|| {
+        (
+            ErrorKind::InvalidRequest,
+            format!(
+                "daemon upgrade: the successor path {} is not UTF-8, which the wire cannot carry",
+                path.display()
+            ),
+        )
+    })
+}
+
+async fn cmd_upgrade<R, W>(
+    mut conn: Connection<R, W>,
+    out: &Reporter,
+    successor: String,
+) -> Result<i32>
+where
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
+    let outcome = match conn.daemon_upgrade(successor.clone()).await {
+        Ok(outcome) => outcome,
+        Err(err @ ConnectError::MinorTooOld { .. }) => {
+            return Ok(out.fail(
+                ErrorKind::Unsupported,
+                format!("{err}\n{}", drain_and_restart()),
+            ));
+        }
+        Err(err) => return Ok(out.fail(ErrorKind::from_connect_error(&err), err)),
+    };
+    match outcome {
+        UpgradeOutcome::Upgrading => {
+            if out.machine() {
+                out.result(&DaemonUpgradeResult {
+                    outcome: "upgrading",
+                    successor,
+                });
+            } else {
+                println!("the daemon is switching to {successor}");
+            }
+            Ok(0)
+        }
+        UpgradeOutcome::Refused { reason, detail } => {
+            let message = upgrade_refusal_message(reason, &detail);
+            Ok(if out.machine() {
+                out.fail_upgrade_refusal(refusal_token(reason), message)
+            } else {
+                out.fail(ErrorKind::Refused, message)
+            })
+        }
+    }
+}
+
+const fn drain_and_restart() -> &'static str {
+    "the daemon keeps serving; to replace it, drain and restart: `felis daemon stop --when-empty`, \
+     then start a new daemon once the last session has ended"
+}
+
+fn upgrade_refusal_message(reason: UpgradeRefusal, detail: &str) -> String {
+    let why = match reason {
+        UpgradeRefusal::Unsupported => "this platform has no in-place upgrade",
+        UpgradeRefusal::DumpVersion => "the new daemon cannot read this daemon's session state",
+        UpgradeRefusal::ProtocolMajor => {
+            "the new daemon does not speak the protocol a connected client uses"
+        }
+        UpgradeRefusal::Timeout => "a step before the switch ran out of time",
+        UpgradeRefusal::ProbeFailed => "the new daemon rejected this daemon's session state",
+        UpgradeRefusal::Busy => "an upgrade is already running",
+        UpgradeRefusal::Draining => "the daemon is draining toward stop",
+    };
+    let detail = if detail.is_empty() {
+        String::new()
+    } else {
+        format!(" ({detail})")
+    };
+    format!(
+        "the daemon was not upgraded: {why}{detail}\n{}",
+        drain_and_restart()
+    )
+}
+
+const fn refusal_token(reason: UpgradeRefusal) -> &'static str {
+    match reason {
+        UpgradeRefusal::Unsupported => "unsupported",
+        UpgradeRefusal::DumpVersion => "dump_version",
+        UpgradeRefusal::ProtocolMajor => "protocol_major",
+        UpgradeRefusal::Timeout => "timeout",
+        UpgradeRefusal::ProbeFailed => "probe_failed",
+        UpgradeRefusal::Busy => "busy",
+        UpgradeRefusal::Draining => "draining",
     }
 }
 
@@ -381,6 +617,97 @@ mod tests {
         assert!(
             stop_message(StopMode::IfEmpty, StopOutcome::Stopping).contains("held no session"),
             "and states that a default stop found nothing to destroy"
+        );
+    }
+
+    /// The tokens are the machine contract; a wire-enum rename must not
+    /// retype one.
+    #[test]
+    fn every_upgrade_refusal_has_its_documented_token() {
+        for (reason, token) in [
+            (UpgradeRefusal::Unsupported, "unsupported"),
+            (UpgradeRefusal::DumpVersion, "dump_version"),
+            (UpgradeRefusal::ProtocolMajor, "protocol_major"),
+            (UpgradeRefusal::Timeout, "timeout"),
+            (UpgradeRefusal::ProbeFailed, "probe_failed"),
+            (UpgradeRefusal::Busy, "busy"),
+            (UpgradeRefusal::Draining, "draining"),
+        ] {
+            assert_eq!(refusal_token(reason), token);
+        }
+    }
+
+    /// Every refusal names drain-and-restart, the remedy that works
+    /// whatever the reason was.
+    #[test]
+    fn an_upgrade_refusal_names_the_drain_and_restart_remedy() {
+        let message = upgrade_refusal_message(UpgradeRefusal::Busy, "");
+        assert!(
+            message.contains("an upgrade is already running"),
+            "{message}"
+        );
+        assert!(
+            message.contains("felis daemon stop --when-empty"),
+            "{message}"
+        );
+        let message = upgrade_refusal_message(UpgradeRefusal::DumpVersion, "reads 3, got 2");
+        assert!(message.contains("(reads 3, got 2)"), "{message}");
+    }
+
+    /// The successor travels as an absolute path: the daemon execs it
+    /// from its own working directory, not the caller's.
+    #[test]
+    fn the_successor_is_made_absolute() {
+        let relative = successor_path(Some(PathBuf::from("bin/felis-daemon"))).unwrap();
+        assert!(Path::new(&relative).is_absolute(), "{relative}");
+        assert!(
+            Path::new(&relative).ends_with("bin/felis-daemon"),
+            "{relative}"
+        );
+        let (kind, _) = successor_path(None).unwrap_err();
+        assert_eq!(kind, ErrorKind::InvalidRequest);
+    }
+
+    /// Over `--host` the remote host's own `felis` runs the upgrade, with
+    /// the caller's ssh arguments and output format.
+    #[test]
+    fn an_upgrade_over_ssh_runs_the_remote_felis() {
+        let ssh_args = ["-p".to_owned(), "2222".to_owned()];
+        let cmd = remote_upgrade_command("user@devbox", &ssh_args, Format::Json);
+        assert_eq!(cmd.get_program(), "ssh");
+        let args: Vec<_> = cmd
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            args,
+            [
+                "-p",
+                "2222",
+                "user@devbox",
+                "felis",
+                "daemon",
+                "upgrade",
+                "--format",
+                "json"
+            ]
+        );
+    }
+
+    /// Only a remote felis that knows the verb writes an error object, so
+    /// its absence on exit `2` is what marks a remote felis too old.
+    #[test]
+    fn a_remote_exit_2_is_an_answer_only_with_an_error_object() {
+        assert!(carries_error_object(
+            b"{\"v\":1,\"error\":{\"kind\":\"daemon_unreachable\",\"message\":\"m\"}}\n"
+        ));
+        assert!(!carries_error_object(
+            b"error: unrecognized subcommand 'upgrade'\n\nUsage: felis daemon <COMMAND>\n"
+        ));
+        assert!(!carries_error_object(b""));
+        assert_eq!(
+            first_line(b"\nerror: unrecognized subcommand 'upgrade'\n\nUsage: x\n"),
+            "error: unrecognized subcommand 'upgrade'"
         );
     }
 

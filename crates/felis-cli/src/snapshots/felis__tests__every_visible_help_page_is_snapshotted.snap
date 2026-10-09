@@ -521,9 +521,10 @@ Reports build, wire version, and resource usage against ceilings. Never starts a
 Usage: felis daemon <COMMAND>
 
 Commands:
-  status  Report the running daemon: build, wire version, and accounted resources
-  stop    Stop the running daemon over IPC
-  help    Print this message or the help of the given subcommand(s)
+  status   Report the running daemon: build, wire version, and accounted resources
+  stop     Stop the running daemon over IPC
+  upgrade  Replace the running daemon's binary, keeping every session
+  help     Print this message or the help of the given subcommand(s)
 
 Options:
   -h, --help
@@ -560,6 +561,23 @@ Options:
       --when-empty
           Refuse new sessions and stop once the last one ends
 
+      --format <FORMAT>
+          Output framing: `human` (default) or `json`: one object on stdout, with a failure as one error object on stderr
+          
+          [default: human]
+          [possible values: human, json]
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+$ felis daemon upgrade --help
+Replace the running daemon's binary, keeping every session.
+
+The daemon execs the `felis-daemon` installed beside this `felis`. A refusal leaves it serving as before; the fallback is `felis daemon stop --when-empty`. Never starts a daemon.
+
+Usage: felis daemon upgrade [OPTIONS]
+
+Options:
       --format <FORMAT>
           Output framing: `human` (default) or `json`: one object on stdout, with a failure as one error object on stderr
           

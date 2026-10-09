@@ -7447,6 +7447,63 @@ async fn a_default_stop_refuses_while_a_session_remains_and_preserves_it() {
     serving.abort();
 }
 
+/// A refused upgrade is answered on the connection that asked, which
+/// stays open, and the daemon keeps serving every session it held.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_refused_upgrade_is_answered_and_leaves_the_daemon_serving() {
+    let tmp = private_dir();
+    let path = tmp.path().join("daemon.sock");
+    let pool = Arc::new(Mutex::new(SessionPool::new()));
+    let serving = spawn_daemon_watching(
+        &path,
+        pool.clone(),
+        shell_factory("sleep 30"),
+        DaemonCaps::default(),
+    )
+    .await;
+
+    let (read_half, write_half) = connect(&path).await.unwrap();
+    let (mut reader, mut writer) = framed(read_half, write_half).await;
+    hello_welcome(&mut reader, &mut writer, false).await;
+    create_and_attach(&mut reader, &mut writer).await;
+
+    let (mut ops_reader, mut ops_writer) = ops_connection!(&path);
+    send_request(
+        &mut ops_writer,
+        &OpsToDaemonMsg::Upgrade {
+            successor: tmp
+                .path()
+                .join("no-such-felis-daemon")
+                .display()
+                .to_string(),
+        },
+        1,
+    )
+    .await;
+    let frame = ops_reader
+        .next_frame()
+        .await
+        .unwrap()
+        .expect("an Upgrade reply");
+    match codec::decode::<OpsToClientMsg>(&frame.body).unwrap() {
+        OpsToClientMsg::UpgradeReply {
+            outcome: felis_protocol::messages::UpgradeOutcome::Refused { .. },
+        } => {}
+        other => panic!("expected a refused UpgradeReply, got {other:?}"),
+    }
+    assert_eq!(pool.lock().await.len(), 1, "the refusal touched no session");
+
+    send_request(&mut ops_writer, &OpsToDaemonMsg::List, 2).await;
+    ops_reader
+        .next_frame()
+        .await
+        .unwrap()
+        .expect("the asking connection is still answered");
+    assert!(!serving.is_finished());
+    serving.abort();
+}
+
 /// `--force` destroys every session, and the process it was asked to
 /// stop actually goes: the accept loop returns and the socket path is
 /// cleared.

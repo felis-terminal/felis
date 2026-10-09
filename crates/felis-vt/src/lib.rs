@@ -20,6 +20,8 @@ pub mod bidi;
 pub mod kitty_graphics;
 pub mod kitty_text_sizing;
 pub mod notification;
+#[cfg(feature = "state-dump")]
+pub mod state;
 pub mod utf8;
 
 mod machine;
@@ -52,6 +54,7 @@ const _: () = assert!(APC_BUFFER_LIMIT > 4096 && OSC_BUFFER_LIMIT > 4096);
 
 /// Williams DFA states plus DCS / OSC sub-states.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "state-dump", derive(serde::Serialize, serde::Deserialize))]
 pub enum State {
     Ground,
     Escape,
@@ -134,6 +137,11 @@ pub trait Sink {
 }
 
 #[derive(Clone, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "state-dump",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(default)
+)]
 pub struct Parser {
     state: State,
     params: Params,
@@ -145,6 +153,7 @@ pub struct Parser {
 
 /// APC is the only flavor the parser dispatches; SOS / PM are discarded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "state-dump", derive(serde::Serialize, serde::Deserialize))]
 enum SosPmApcKind {
     Sos,
     Pm,
@@ -260,6 +269,11 @@ const fn string_special_mask(x: u64) -> u64 {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "state-dump",
+    derive(serde::Serialize, serde::Deserialize, Default),
+    serde(default)
+)]
 struct Params {
     values: [u16; MAX_PARAMS],
     len: usize,
@@ -382,6 +396,11 @@ impl Params {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "state-dump",
+    derive(serde::Serialize, serde::Deserialize, Default),
+    serde(default)
+)]
 struct Intermediates {
     bytes: [u8; MAX_INTERMEDIATES],
     len: usize,

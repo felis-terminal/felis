@@ -701,13 +701,13 @@ subject by id and need no family context, so they live here once instead of once
 A connection's phase is how far it has progressed **and** what it has become; it is the `phases` column of the arm
 table, and both ends run the same ladder in the shared driver.
 
-| Phase       | The connection is                             | Admits                                                                                                                                                       |
-| ----------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `Preface`   | exchanging version bytes                      | no frame at all                                                                                                                                              |
-| `Handshake` | between `Hello` and `Welcome`                 | `Conn::Hello` / `Conn::Welcome`                                                                                                                              |
-| `Setup`     | welcomed, and has not yet said what it is for | the `Session` openers and their acks, every `Ops` verb, `Notify::Subscribe`                                                                                  |
-| `Attached`  | subscribed to a session                       | `Session::Detach` / `ConfigureTheme` / `InputFence` / `InputAccepted`, `Input`, `Grid`, `Image`, `Push`, `Region`, `Search`, and every `Ops` verb but `Stop` |
-| `Observing` | serving a notification stream                 | `Notify::Subscribed` / `Event` / `Lagged`                                                                                                                    |
+| Phase       | The connection is                             | Admits                                                                                                                                                                     |
+| ----------- | --------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Preface`   | exchanging version bytes                      | no frame at all                                                                                                                                                            |
+| `Handshake` | between `Hello` and `Welcome`                 | `Conn::Hello` / `Conn::Welcome`                                                                                                                                            |
+| `Setup`     | welcomed, and has not yet said what it is for | the `Session` openers and their acks, every `Ops` verb, `Notify::Subscribe`                                                                                                |
+| `Attached`  | subscribed to a session                       | `Session::Detach` / `ConfigureTheme` / `InputFence` / `InputAccepted`, `Input`, `Grid`, `Image`, `Push`, `Region`, `Search`, and every `Ops` verb but `Stop` and `Upgrade` |
+| `Observing` | serving a notification stream                 | `Notify::Subscribed` / `Event` / `Lagged`                                                                                                                                  |
 
 `Conn::Refused` is legal in every phase, and `Conn::Cancel` / `End` / `Error` in every phase a stream can be live in
 (`Setup`, `Attached`, `Observing`): they are stream control, not session traffic.
@@ -744,17 +744,17 @@ where a family's arms disagree the row names the arms, not the kind, which `Ops`
 The `is sent` rows underneath are a different fact: what the daemon _chooses_ to write to a subscriber, which is
 narrower than what the mode admits on receipt, and which the daemon may narrow further without a wire break.
 
-| Admitted message                                                                               | `Window` | `Ops` | `Observer` |
-| ---------------------------------------------------------------------------------------------- | -------- | ----- | ---------- |
-| `Conn` handshake and stream lifecycle (every arm)                                              | ✅       | ✅    | ✅         |
-| `Ops::List` / `Ops::Listed` (roster query)                                                     | ✅       | ✅    | ❌         |
-| `Ops::Info` / `Ops::InfoReply` (one session's row by prefix)                                   | ✅       | ✅    | ❌         |
-| `Ops::Status` / `Ops::StatusReply` (daemon report)                                             | ✅       | ✅    | ❌         |
-| `Ops` mutations and their replies (`Spawn`, `Destroy`, `ForceDetach`, `Switch`, `Tag`, `Stop`) | ❌       | ✅    | ❌         |
-| `Input`, `Grid`, `Image`, `Session`, `Region`, `Search` (every arm)                            | ✅       | ✅    | ❌         |
-| `Push::Evicted`                                                                                | ✅       | ✅    | ❌         |
-| `Push::Reattach` / `SessionExited` / `RetargetHost`                                            | ✅       | ❌    | ❌         |
-| `Notify` (every arm)                                                                           | ❌       | ❌    | ✅         |
+| Admitted message                                                                                          | `Window` | `Ops` | `Observer` |
+| --------------------------------------------------------------------------------------------------------- | -------- | ----- | ---------- |
+| `Conn` handshake and stream lifecycle (every arm)                                                         | ✅       | ✅    | ✅         |
+| `Ops::List` / `Ops::Listed` (roster query)                                                                | ✅       | ✅    | ❌         |
+| `Ops::Info` / `Ops::InfoReply` (one session's row by prefix)                                              | ✅       | ✅    | ❌         |
+| `Ops::Status` / `Ops::StatusReply` (daemon report)                                                        | ✅       | ✅    | ❌         |
+| `Ops` mutations and their replies (`Spawn`, `Destroy`, `ForceDetach`, `Switch`, `Tag`, `Stop`, `Upgrade`) | ❌       | ✅    | ❌         |
+| `Input`, `Grid`, `Image`, `Session`, `Region`, `Search` (every arm)                                       | ✅       | ✅    | ❌         |
+| `Push::Evicted`                                                                                           | ✅       | ✅    | ❌         |
+| `Push::Reattach` / `SessionExited` / `RetargetHost`                                                       | ✅       | ❌    | ❌         |
+| `Notify` (every arm)                                                                                      | ❌       | ❌    | ✅         |
 
 | Sent payload                                               | `Window` | `Ops` | `Observer` |
 | ---------------------------------------------------------- | -------- | ----- | ---------- |
@@ -1080,6 +1080,31 @@ order:
   reply is written before the shutdown fires, so the caller reads the outcome of a stop that then happens; the teardown
   a mode owes runs first, which is why a `Force` reply arrives only once every child is reaped. Unlike the rest of the
   family this pair is admitted in the setup phase alone: the reply is the last frame its connection writes.
+
+- `Upgrade { successor }` / `UpgradeReply { outcome: UpgradeOutcome }` (`Ops` mode only, setup phase alone, since minor
+  1): ask this daemon to replace its own binary in place while it keeps every session; backs `felis daemon upgrade`.
+  `successor` is the absolute path of the `felis-daemon` binary the daemon execs, named by the requester because the
+  running daemon's own executable is the one being replaced. `UpgradeOutcome` is a two-arm union, and an unset oneof is
+  refused at decode:
+  - `Upgrading`: written just before the daemon execs the successor. The connection then closes with the exec, so this
+    is the last frame it carries.
+  - `Refused { reason: UpgradeRefusal, detail }`: nothing was handed over, and the daemon keeps serving every session
+    and connection as before. `detail` is human-readable and never parsed.
+
+  `UpgradeRefusal` is a closed enum, and every value has the same remedy, drain-and-restart:
+
+  | Value            | Meaning                                                                |
+  | ---------------- | ---------------------------------------------------------------------- |
+  | `UNSUPPORTED`    | This platform has no in-place upgrade (Windows).                       |
+  | `DUMP_VERSION`   | The successor cannot read this daemon's dump version.                  |
+  | `PROTOCOL_MAJOR` | The successor does not serve the protocol major of a connected client. |
+  | `TIMEOUT`        | A step before the exec ran out of time.                                |
+  | `PROBE_FAILED`   | The successor rejected the dump's contents, or the exec failed.        |
+  | `BUSY`           | An upgrade is already running.                                         |
+  | `DRAINING`       | The daemon is draining toward stop (`Stop` above).                     |
+
+  The pair is a minor-1 addition ("The minor ledger" below): a client refuses before sending `Upgrade` to a daemon whose
+  effective minor is `0`, and a daemon never writes `UpgradeReply` on such a connection.
 
 ### Region (kind = 6)
 
@@ -1787,9 +1812,10 @@ whose identifier is missing from its row fails the build with the name it expect
 names that no arm, field or enum value declares at that minor fails it too. Only those three shapes read as an addition,
 so a row is free to name a bare type, a variant of an inner enum, or a command line beside them.
 
-| Minor | Addition                                                                                                                                                                                                                   | Older peer                                        |
-| ----- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
-| 0     | The base schema of protocol major 1: the ten frame kinds, every family in "Message families" above, every arm, field, closed-enum value and connection mode they carry, the correlation envelope, and row-codec version 1. | — (no peer speaks an earlier minor of this major) |
+| Minor | Addition                                                                                                                                                                                                                                                                                                                                                               | Older peer                                                                                                                                                                                                                                                                     |
+| ----- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 0     | The base schema of protocol major 1: the ten frame kinds, every family in "Message families" above, every arm, field, closed-enum value and connection mode they carry, the correlation envelope, and row-codec version 1.                                                                                                                                             | — (no peer speaks an earlier minor of this major)                                                                                                                                                                                                                              |
+| 1     | The in-place upgrade request `Ops::Upgrade` and its reply `Ops::UpgradeReply`, whose refusal reason is the closed enum `UpgradeRefusal` with values `UpgradeRefusal::UNSUPPORTED`, `UpgradeRefusal::DUMP_VERSION`, `UpgradeRefusal::PROTOCOL_MAJOR`, `UpgradeRefusal::TIMEOUT`, `UpgradeRefusal::PROBE_FAILED`, `UpgradeRefusal::BUSY` and `UpgradeRefusal::DRAINING`. | A minor-0 daemon is never sent `Upgrade`: the client refuses before sending, and `felis daemon upgrade` exits `2` with `unsupported`, leaving drain-and-restart as the way to replace that daemon. A minor-0 client cannot send `Upgrade`, so it is never sent `UpgradeReply`. |
 
 A schema change that is not additive carries no row: no "older peer" cell could state a true degradation for it. Before
 the compatibility freeze such a change rides the pre-release rule instead, acknowledged for the wire gate in

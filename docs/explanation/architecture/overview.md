@@ -44,26 +44,112 @@ closing the window leaves the session and its PTY running for the next attach
 
 ## Daemon process lifecycle
 
-The daemon is replaced, never upgraded in place: the procedure is drain the sessions, then restart
+On Linux and macOS the daemon is upgraded in place: every session keeps its shell and its state while the daemon process
+switches to the newly installed binary. On Windows it is replaced: the procedure is drain the sessions, then restart
 ([update-felis](../../how-to/update-felis.md); the stop postures that carry the drain are argued in
-[control-surfaces.md](control-surfaces.md) "Stopping the daemon"). Most skew never reaches it. A new daemon and an old
-client settle on the lower of the two minors ([ipc.md](../../reference/ipc.md) "Versioning"), so a restart is needed for
-a daemon-_binary_ change and nothing else; across a protocol **major**, drain with the existing client before switching
-binaries, since a major bump's side-by-side decoders live in the daemon and that client is the one that can still reach
-the sessions it needs to close.
+[control-surfaces.md](control-surfaces.md) "Stopping the daemon"). Most skew needs neither. A new daemon and an old
+client settle on the lower of the two minors ([ipc.md](../../reference/ipc.md) "Versioning"), so only a daemon-_binary_
+change calls for an upgrade or a restart. Across a protocol **major** the successor must still serve the major every
+connected client speaks, which a major bump's side-by-side decoders provide; an upgrade whose successor misses any one
+of them refuses, and the drain with the existing client remains the path.
 
-A session-preserving in-place upgrade (quiesce every session, dump its structured state, re-exec the successor binary
-over the same listen fd and PTY masters) is rejected. It carries a private versioned dump schema, a second
-compatibility-bearing serialization surface beside the wire, plus an fd-inheritance hygiene protocol (CLOEXEC re-arming,
-stranded-PTY reclaim manifests) that every future change to the grid, image store, or parser state has to keep
-byte-compatible or knowingly break. That standing tax buys an operation users need rarely, and never on the platforms
-(Windows) where it cannot exist at all; kill-and-respawn is the one update model that works everywhere and costs nothing
-to maintain.
+### In-place upgrade
 
-Old-daemon-serves-until-empty (a socket handoff, or a broker in front of both daemons) is deferred for a smaller version
-of the same reason: it needs a cross-platform handoff design nothing yet pays for.
+The daemon binary changes in most releases, because the grid, the parser, and the PTY handling all live in it. Under
+drain-and-restart each of those releases ends every session, and the sessions that cost the most to lose are the
+long-lived ones the daemon exists to keep (principle 3).
 
-_Revisit if_ long-lived sessions become precious enough in practice that losing them on update is a reported pain.
+So the upgrade crosses `execve` rather than a process boundary. The daemon keeps its PID, which keeps every shell its
+child (reaping still works) and keeps the systemd user unit's main process unchanged. Three things pass through the
+exec: the listen socket and each PTY master as inherited file descriptors, and the session state as a structured dump in
+an anonymous memory file. The successor restores the grid, scrollback, images, and parser state directly from the dump
+and never re-derives them by feeding synthetic escape sequences through its own parser ([design.md](../design.md)
+"Correct by construction, not by replay"); it sets close-on-exec again on each descriptor as it adopts it.
+
+The upgrade is an operation the user runs on purpose, rarely, and while nothing else is happening, and the design is
+drawn along that line. A hazard the user can avoid by not working while it runs is accepted and stated in the update
+procedure rather than engineered away: input typed during the upgrade, a script blocked on `send --wait` or a
+notification stream, and an install replacing the successor binary while the upgrade runs. Each of those is visible to
+the user who causes it. A hazard that holds no matter what the user does is designed out, because nobody could see it
+coming: a session that cannot reach a stopping point, a descriptor leaking into a shell, a signal reaching a process
+felis does not own.
+
+The steps before the exec run in a fixed order:
+
+1. **Barrier.** The daemon stops reading client connections and stops admitting spawns, then waits until every spawn it
+   already admitted has registered or failed, since an admitted spawn forks after admission. From here the daemon forks
+   nothing but the probe in step 4. A frame a client sends past the barrier is lost with its connection at the exec.
+2. **Quiesce.** Each session parks where nothing it owns is moving: the PTY reader at the top of its loop, the parse
+   thread once it has consumed what was read, the writer between two writes. The quiesce wakes the two waits a session
+   spends most of its life in, the reader's poll on an idle PTY and the writer's write to a child that is not reading,
+   instead of waiting them out. An idle shell and a job stopped with its input queued are the ordinary state of an
+   unattended daemon, so a quiesce that waited on either would fail exactly when the user follows the procedure. Output
+   the child writes meanwhile waits in the kernel's PTY buffer and reaches the successor.
+3. **Dump.** The dump carries the input the writer has not yet written, from the byte its last write ended at, and the
+   parser's state as it stands, since a child can stop mid-escape-sequence and stay there.
+4. **Probe.** The daemon runs the successor binary as a child that is handed the dump and nothing else, reads all of it,
+   and adopts nothing. The listen socket and the PTY masters are still close-on-exec, so the probe inherits neither. A
+   refusal unparks the sessions and reopens the connections.
+5. **Exec.** Only now does close-on-exec come off exactly the listen socket, the masters, and the dump: the probe has
+   exited and nothing else forks, so no child can inherit a master. An `execve` that returns an error leaves the
+   predecessor running, and it restores close-on-exec and refuses the way the probe does.
+
+Every step before the exec is bounded in time, and one that runs out refuses the way the probe does.
+
+The dump answers the objection that sinks most in-place upgrades: a second serialization surface that every change to
+the grid, the image store, or the parser state must keep compatible. Its promise is deliberately narrower than the
+wire's. It is read only by the immediate successor (old to new, never back), never written to disk, and never exposed
+over IPC. Fields are tagged and an absent field takes its default, so adding state, the usual change, costs no dump
+work. A change the successor cannot read from its predecessor bumps the dump version instead of growing a conversion
+shim, and the upgrade then refuses before anything stops: before the barrier, the successor is asked whether it reads
+the running daemon's dump version, and a refusal leaves the running daemon serving with drain-and-restart as the remedy.
+The probe in step 4 then checks the contents of a dump whose version is already known to be readable. A breaking state
+change therefore costs one release of drain-and-restart, not a permanent compatibility layer.
+
+`execve` cannot be undone, which is why the probe runs before it. But the probe proves the dump readable, not the
+restore successful, so a successor can still fail after the exec, and re-executing the predecessor cannot be the answer:
+a package manager may already have removed its files. The successor therefore reads the dump's child table before
+anything else: the pid and process group of every session, and whether the predecessor has already reaped that child. On
+a failure it cannot recover from, it ends each session whose child is unreaped the way a destroyed one ends
+([session-lifecycle.md](session-lifecycle.md) "Destruction"): hang up, wait out the grace, `SIGKILL`, reap. An unreaped
+child is still its own across the exec, so its pid cannot have been reused and the signal and the reap reach it; a
+reaped child's pid may belong to anyone by now, so it is never signaled. The failure costs the sessions without leaving
+a shell that ignores `SIGHUP` orphaned on a terminal no daemon lists.
+
+The upgrade execs the `felis-daemon` installed beside the `felis` that asks for it, the same binary a spawn from that
+command would start ("Where an auto-spawned daemon lands" below); the running daemon's own executable is the one being
+replaced, so it cannot name its successor. Over `--host` that path belongs to the wrong machine, so a remote upgrade
+runs the remote host's own `felis` through `ssh`. Nothing starts an upgrade implicitly: a newer client connecting to an
+older daemon is ordinary minor skew, and quiescing every session on a connect is not a side effect a client earns.
+`felis doctor` reports a running daemon built from other than the installed binary, and the user decides when to
+upgrade.
+
+Connected clients see one transport loss. The listen socket stays open across the exec, so a re-dial during the gap
+waits in the kernel's accept queue instead of finding a cold socket and spawning a rival daemon, and the successor
+restores the session registry before it accepts, so a window re-attaching its session never reads `UnknownSession`
+([session-lifecycle.md](session-lifecycle.md) "Transport loss"). A stream client gets no such continuation:
+`send --wait` waits for a command-end mark that is streamed live and never replayed
+([control-surfaces.md](control-surfaces.md) "Waiting is `send --wait`"), so it reports the session ended, and a
+notification stream ends. Telling those clients the close was an upgrade would take a new announcement on the wire and a
+new outcome in every stream verb, to cover a case the update procedure already tells the user to avoid.
+
+Windows has no exec to survive. A ConPTY pseudoconsole belongs to the process that created it, no supported API hands it
+to another process, and closing it ends the console's children; so Windows keeps drain-and-restart for now. That is a
+gap felis means to close, not a line it draws: an update that keeps the sessions is the same intent on every platform
+([non-goals.md](../non-goals.md) "Cross-platform constraints"). The one route known today is a long-lived process that
+holds the pseudoconsoles in front of the daemon, so that the daemon can be replaced while the consoles live on; it is a
+third process with its own lifetime and protocol, and nothing in this design pays for it yet.
+
+Running each upgrade as a new daemon generation on its own endpoint, with its predecessor serving its sessions until
+they end, is rejected. It needs no dump, but it leaves exactly the long-lived sessions on the predecessor's binary for
+as long as they live: the same user sees a fixed bug in one window and not in the next, every roster and session verb
+has to span generations, and the predecessor never retires. It gives up the property an upgrade exists to deliver, that
+every session runs the installed daemon.
+
+Carrying the dump on the attach wire is rejected too. The rehydrate burst is a lossless picture of the visible screen,
+not of the session: scrollback, the screen saved behind the alternate one, and parser state are not on it, and growing
+the wire to carry them would make daemon-internal state a public compatibility surface. The dump reuses the wire's row
+codec and image chunks as encodings, recorded with their versions inside the dump, without joining the wire's contract.
 
 ### Where an auto-spawned daemon lands
 
@@ -143,9 +229,10 @@ daemon the sandbox cannot see, visible to `felis doctor` from any ordinary shell
 ### Crash recovery
 
 A controlled stop and a crash do not share a recovery story. A crash loses every session, because the daemon holds no
-on-disk session state. Persisting enough to recover is deferred: grid serialization is more complex than it looks (image
-bytes alone are a memory-vs-disk trade), and the crash mode of a long-running daemon is mostly "process killed by the OS
-for memory pressure", which is itself a sign of a bug.
+on-disk session state. Persisting enough to recover is deferred. The upgrade dump ("In-place upgrade" above) lives in
+memory for one exec; recovering from a crash would make it a durable on-disk format with every version a later daemon
+might meet, and image bytes alone are a memory-vs-disk trade. The crash mode of a long-running daemon is mostly "process
+killed by the OS for memory pressure", which is itself a sign of a bug.
 
 Lost session _state_ does not mean every session _process_ dies, and the gap is what a daemon cannot close from the
 outside ([session-lifecycle.md](session-lifecycle.md) "When the daemon ends"). A daemon running as a transient unit of

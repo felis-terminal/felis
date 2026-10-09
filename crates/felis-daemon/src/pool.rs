@@ -164,6 +164,8 @@ pub struct Session {
     /// Deferral prevents tearing down segments that producers like mpv reuse
     /// across frames ([`ShmDeferral`]).
     pub shm_segments: ShmDeferral,
+    /// Parks the PTY threads for an in-place upgrade.
+    pub quiescer: felis_pty::Quiescer,
 }
 
 impl Session {
@@ -176,6 +178,7 @@ impl Session {
             resizer,
             core,
             signals,
+            quiescer,
         } = spawned;
         Self {
             core,
@@ -193,6 +196,7 @@ impl Session {
             child: Arc::new(child),
             resizer: Arc::new(resizer),
             shm_segments: ShmDeferral::default(),
+            quiescer,
         }
     }
 
@@ -342,6 +346,16 @@ pub struct SessionHandle {
     /// `None` for a handle built without a PTY (test fixtures), which
     /// reports no foreground program.
     pub resizer: Option<Arc<Resizer>>,
+    /// What an in-place upgrade reaches without going through the owner
+    /// task, which must keep running while its threads park. `None` for
+    /// a handle built without a PTY.
+    pub upgrade: Option<UpgradeParts>,
+}
+
+#[derive(Clone)]
+pub struct UpgradeParts {
+    pub quiescer: felis_pty::Quiescer,
+    pub child: Arc<ChildHandle>,
 }
 
 /// One connection's admission against a session's input budget.
@@ -396,6 +410,11 @@ pub struct AttachmentIds(Arc<AtomicU64>);
 impl AttachmentIds {
     pub fn mint(&self) -> u64 {
         self.0.fetch_add(1, AtomicOrdering::Relaxed)
+    }
+
+    #[must_use]
+    pub fn peek(&self) -> u64 {
+        self.0.load(AtomicOrdering::Relaxed)
     }
 
     /// A standalone allocator for a session task built without a pool.
@@ -455,6 +474,8 @@ pub enum ReserveRefusal {
     AtCapacity { admitted: usize },
     /// The daemon is on its way out.
     Draining,
+    /// An in-place upgrade is running; admission resumes after it.
+    Upgrading,
 }
 
 /// Visibility of a registered session in by-name operations.
@@ -484,6 +505,10 @@ pub struct SessionPool {
     /// every admission is refused from here on, so the count this
     /// pool reports can only fall.
     draining: bool,
+    /// Set for the length of an in-place upgrade's pre-exec steps: no
+    /// admission may fork once the upgrade has begun clearing
+    /// close-on-exec on the descriptors it carries.
+    upgrading: bool,
     /// Woken whenever [`Self::admitted`] may have reached zero (a slot
     /// released, a session removed). The count is the truth; this only
     /// says when to re-read it.
@@ -524,6 +549,7 @@ impl SessionPool {
             held: HashSet::new(),
             reserved: Arc::new(AtomicUsize::new(0)),
             draining: false,
+            upgrading: false,
             settled: Arc::new(Notify::new()),
             tearing_down: Arc::new(AtomicUsize::new(0)),
             sequences: AtomicU64::new(0),
@@ -566,6 +592,9 @@ impl SessionPool {
         if self.draining {
             return Err(ReserveRefusal::Draining);
         }
+        if self.upgrading {
+            return Err(ReserveRefusal::Upgrading);
+        }
         let admitted = self.sessions.len() + self.reserved.load(AtomicOrdering::Acquire);
         if admitted >= max {
             return Err(ReserveRefusal::AtCapacity { admitted });
@@ -586,6 +615,56 @@ impl SessionPool {
     #[must_use]
     pub const fn draining(&self) -> bool {
         self.draining
+    }
+
+    /// Refuse admissions for an in-place upgrade. `false` when one is
+    /// already running or the pool is draining.
+    pub const fn begin_upgrade(&mut self) -> bool {
+        if self.upgrading || self.draining {
+            return false;
+        }
+        self.upgrading = true;
+        true
+    }
+
+    /// Lift [`Self::begin_upgrade`] after a refused upgrade.
+    pub const fn end_upgrade(&mut self) {
+        self.upgrading = false;
+    }
+
+    /// Spawns admitted but not registered, and sessions out of the pool
+    /// whose children are still being reaped: both still fork or still
+    /// own a child the dump would not name.
+    #[must_use]
+    pub fn in_flight(&self) -> usize {
+        self.reserved.load(AtomicOrdering::Acquire)
+            + self.tearing_down.load(AtomicOrdering::Acquire)
+    }
+
+    /// The next creation sequence [`Self::next_sequence`] would mint.
+    #[must_use]
+    pub fn peek_sequence(&self) -> u64 {
+        self.sequences.load(AtomicOrdering::Relaxed) + 1
+    }
+
+    /// Continue the creation sequence and attachment ids a predecessor
+    /// daemon handed over, so neither ever repeats.
+    pub fn resume_counters(&self, next_sequence: u64, next_attachment_id: u64) {
+        self.sequences
+            .store(next_sequence.saturating_sub(1), AtomicOrdering::Relaxed);
+        self.attachment_ids
+            .0
+            .store(next_attachment_id, AtomicOrdering::Relaxed);
+    }
+
+    /// Every registered session, held rows included: an upgrade carries
+    /// all of them.
+    #[must_use]
+    pub fn all_handles(&self) -> Vec<(SessionId, SessionHandle)> {
+        self.sessions
+            .iter()
+            .map(|(id, handle)| (*id, handle.clone()))
+            .collect()
     }
 
     /// The wake a drain waits on. Held as an `Arc` so the waiter does
@@ -937,6 +1016,7 @@ mod tests {
             cmd,
             input_budget: new_input_budget(),
             resizer: None,
+            upgrade: None,
             meta: Arc::new(StdMutex::new(SessionMeta {
                 rows: DEFAULT_ROWS,
                 cols: DEFAULT_COLS,

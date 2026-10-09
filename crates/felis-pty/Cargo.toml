@@ -16,7 +16,7 @@ rustix = { workspace = true, features = ["termios"] }
 
 # libc for tcgetpgrp: rustix's wrapper asserts pgid > 0, failing on a dead session leader.
 [target.'cfg(unix)'.dependencies]
-rustix = { workspace = true, features = ["event"] }
+rustix = { workspace = true, features = ["event", "pipe"] }
 libc = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]

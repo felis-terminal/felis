@@ -14,6 +14,9 @@ json = ["dep:serde_json"]
 # Renders the published `felis-json` v1 schema; default-off so the
 # shipped binaries stay schemars-free.
 schema = ["json", "dep:schemars"]
+# Serde for the state an in-place daemon upgrade carries across exec;
+# only the daemon enables it.
+state-dump = ["felis-vt/state-dump"]
 
 [dependencies]
 felis-protocol = { workspace = true }

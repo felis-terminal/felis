@@ -72,6 +72,11 @@ pub(crate) fn continues_cluster(
 /// the next character printed (REQ-909). One override is enough for the
 /// marker, so the queue is short; past it more overrides are dropped.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "state-dump",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(default)
+)]
 pub(crate) struct PendingBidi {
     chars: [char; Self::CAP],
     len: u8,
@@ -84,6 +89,11 @@ pub(crate) struct PendingBidi {
 
 impl PendingBidi {
     const CAP: usize = 8;
+
+    #[cfg(feature = "state-dump")]
+    pub(crate) fn check_restored(&self) -> bool {
+        usize::from(self.len) <= Self::CAP
+    }
 
     pub(crate) const fn is_empty(&self) -> bool {
         self.len == 0

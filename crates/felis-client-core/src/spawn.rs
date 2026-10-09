@@ -71,6 +71,15 @@ fn daemon_program() -> OsString {
     sibling_daemon().map_or_else(|| OsString::from(daemon_name()), Into::into)
 }
 
+/// The `felis-daemon` a spawn from this process would start when it
+/// names the binary absolutely: beside this executable, else the first
+/// on `PATH`. `felis daemon upgrade` names it as the successor, so an
+/// upgrade lands on the same build a cold spawn would.
+#[must_use]
+pub fn installed_daemon() -> Option<PathBuf> {
+    sibling_daemon().or_else(daemon_on_path)
+}
+
 fn daemon_name() -> String {
     format!("felis-daemon{}", std::env::consts::EXE_SUFFIX)
 }
@@ -121,7 +130,7 @@ enum HandOff {
 async fn hand_off_to_user_manager(socket: &Path, offer: Offer) -> HandOff {
     // The manager's PATH is not the launcher's, so the daemon the fork
     // would have found by name has to be named absolutely here.
-    let Some(program) = sibling_daemon().map(OsString::from).or_else(daemon_on_path) else {
+    let Some(program) = installed_daemon().map(OsString::from) else {
         return HandOff::Fork;
     };
     let Some(hand_off) = systemd::HandOff::production(program) else {
@@ -218,13 +227,11 @@ async fn connect_managed(
     connect_carrier_with_retry(Carrier::Local(socket.into()), offer, policy).await
 }
 
-#[cfg(target_os = "linux")]
-fn daemon_on_path() -> Option<OsString> {
+fn daemon_on_path() -> Option<PathBuf> {
     let name = daemon_name();
     std::env::split_paths(&std::env::var_os("PATH")?)
         .map(|dir| dir.join(&name))
         .find(|candidate| candidate.is_file())
-        .map(Into::into)
 }
 
 #[cfg(all(test, unix))]

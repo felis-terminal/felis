@@ -10,6 +10,19 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 
 ## [Unreleased]
 
+### Added
+
+- **CLI**: `felis daemon upgrade` asks the running daemon to replace its binary in place with the `felis-daemon`
+  installed beside `felis`, keeping every session. It runs on Linux and macOS; on Windows it refuses with `unsupported`.
+  A refusal leaves the daemon serving and names its reason (`--format json` puts it in `error.reason`);
+  `felis daemon stop --when-empty` remains the fallback. The verb never starts a daemon; with `--host` it runs the
+  remote host's own `felis daemon upgrade` over `ssh`.
+- **Wire**: protocol minor 1 adds `Ops::Upgrade` and `Ops::UpgradeReply`, with the closed refusal enum `UpgradeRefusal`.
+  A client refuses to send `Upgrade` to a minor-0 daemon, so `felis daemon upgrade` against an older daemon exits `2`
+  with `unsupported`.
+- **CLI**: `felis doctor` notes on the `daemon` row when the running daemon is a build other than the installed
+  `felis-daemon`, naming the installed one.
+
 ## [0.1.4] - 2026-10-09
 
 OSC 66 multi-row text and erases that follow a scroll no longer leave stale pieces on screen.

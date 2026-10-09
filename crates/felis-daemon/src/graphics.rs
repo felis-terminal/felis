@@ -304,6 +304,15 @@ pub fn anim_now_ms() -> u64 {
     u64::try_from(epoch.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
+/// Continues an in-place upgrade predecessor's clock, which read
+/// `elapsed_ms` at its dump. `false` when this process already started
+/// its own clock, or cannot reach that far back on its own.
+pub fn resume_anim_clock(elapsed_ms: u64) -> bool {
+    std::time::Instant::now()
+        .checked_sub(std::time::Duration::from_millis(elapsed_ms))
+        .is_some_and(|epoch| ANIM_EPOCH.set(epoch).is_ok())
+}
+
 /// `z>0` is the gap, `z<0` gapless (`0`, skipped in playback),
 /// `z=0`/absent the default.
 const fn gap_from_z(z: Option<i32>) -> u32 {

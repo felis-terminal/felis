@@ -352,6 +352,17 @@ pub enum SessionCmd {
         reply: oneshot::Sender<PushOutcome>,
     },
     Shutdown,
+    /// Answered once every command queued ahead of it has run, so input
+    /// admitted before an upgrade's barrier reaches the writer before it
+    /// parks. Until [`SessionCmd::Resume`] the task drains only for a parse
+    /// thread waiting on one: a later drain would write replies the parked
+    /// writer never reports and take effects out of the dumped grid.
+    Settle(oneshot::Sender<()>),
+    /// The session's state for an upgrade dump, read while its PTY
+    /// threads are parked.
+    Capture(oneshot::Sender<Box<crate::upgrade::dump::SessionState>>),
+    /// Ends the hold [`SessionCmd::Settle`] began.
+    Resume,
 }
 
 /// Two shapes, not a count with a sentinel: an `Accepted(0)` is a real
@@ -442,6 +453,76 @@ pub struct SessionLifecycle {
 #[allow(clippy::too_many_arguments)]
 pub async fn spawn_owned(
     pool: &Arc<Mutex<SessionPool>>,
+    session: Session,
+    policy: IdlePolicy,
+    id: SessionId,
+    pixel_w: u16,
+    pixel_h: u16,
+    tags: Vec<String>,
+    slot: Option<SessionSlot>,
+    listing: Listing,
+) -> SessionLifecycle {
+    spawn_task(
+        pool, session, policy, id, pixel_w, pixel_h, tags, slot, listing, None,
+    )
+    .await
+}
+
+/// What a session carried across an in-place upgrade keeps of its
+/// registration, so the successor lists it where its predecessor did.
+pub struct Restored {
+    pub sequence: std::num::NonZeroU64,
+    pub title: Option<String>,
+    pub cwd: Option<String>,
+    pub exited: bool,
+    /// What the program was last told, so the first reconcile reports
+    /// only what the departed windows changed.
+    pub reported_focus: bool,
+    pub reported_os_dark: bool,
+    pub reported_resize: Option<(u32, (u16, u16))>,
+    pub idle_for: Duration,
+    pub last_notification: Option<crate::pool::StoredNotification>,
+}
+
+/// The part of [`Restored`] the task itself holds.
+struct Carried {
+    reported_focus: bool,
+    reported_os_dark: bool,
+    reported_resize: Option<(u32, (u16, u16))>,
+    idle_since: Instant,
+    last_notification: Option<crate::pool::StoredNotification>,
+}
+
+/// Registers a session an in-place upgrade carried over, under its own
+/// id and sequence, listed at once: whoever created it is gone.
+pub async fn spawn_restored(
+    pool: &Arc<Mutex<SessionPool>>,
+    session: Session,
+    policy: IdlePolicy,
+    id: SessionId,
+    pixel_w: u16,
+    pixel_h: u16,
+    tags: Vec<String>,
+    restored: Restored,
+) -> SessionLifecycle {
+    spawn_task(
+        pool,
+        session,
+        policy,
+        id,
+        pixel_w,
+        pixel_h,
+        tags,
+        None,
+        Listing::Public,
+        Some(restored),
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn spawn_task(
+    pool: &Arc<Mutex<SessionPool>>,
     mut session: Session,
     policy: IdlePolicy,
     id: SessionId,
@@ -450,6 +531,7 @@ pub async fn spawn_owned(
     tags: Vec<String>,
     slot: Option<SessionSlot>,
     listing: Listing,
+    restored: Option<Restored>,
 ) -> SessionLifecycle {
     let (cmd_tx, cmd_rx) = mpsc::channel(CMD_CHANNEL_CAPACITY);
     // One lock hold, so the epochs describe exactly the strings seeded
@@ -473,7 +555,23 @@ pub async fn spawn_owned(
     // published: a session must never be listable without the sequence
     // that places it in the ring.
     let mut guard = pool.lock().await;
-    let sequence = guard.next_sequence();
+    let now = Instant::now();
+    let (sequence, title, cwd, exited, carried) = match restored {
+        Some(restored) => (
+            restored.sequence,
+            title.or(restored.title),
+            cwd.or(restored.cwd),
+            restored.exited,
+            Some(Carried {
+                reported_focus: restored.reported_focus,
+                reported_os_dark: restored.reported_os_dark,
+                reported_resize: restored.reported_resize,
+                idle_since: now.checked_sub(restored.idle_for).unwrap_or(now),
+                last_notification: restored.last_notification,
+            }),
+        ),
+        None => (guard.next_sequence(), title, cwd, false, None),
+    };
     let meta = Arc::new(StdMutex::new(SessionMeta {
         rows,
         cols,
@@ -481,11 +579,13 @@ pub async fn spawn_owned(
         pixel_h,
         title,
         cwd,
-        idle_since: Instant::now(),
+        idle_since: carried.as_ref().map_or(now, |carried| carried.idle_since),
         subscribers: 0,
         tags: tags.into_iter().collect(),
-        last_notification: None,
-        exited: false,
+        last_notification: carried
+            .as_ref()
+            .and_then(|carried| carried.last_notification.clone()),
+        exited,
         // A restored grid may already carry a D mark.
         last_exit_code: session.lock_core().grid.last_command_exit(),
         attachments: Vec::new(),
@@ -499,6 +599,10 @@ pub async fn spawn_owned(
                 input_budget: Arc::clone(&input_budget),
                 meta: Arc::clone(&meta),
                 resizer: Some(Arc::clone(&session.resizer)),
+                upgrade: Some(crate::pool::UpgradeParts {
+                    quiescer: session.quiescer.clone(),
+                    child: Arc::clone(&session.child),
+                }),
             },
             slot,
             listing,
@@ -518,7 +622,7 @@ pub async fn spawn_owned(
         session.resizer.foreground_pgrp(),
         Instant::now(),
     );
-    let task = SessionTask {
+    let mut task = SessionTask {
         id,
         session,
         input_budget: Arc::clone(&input_budget),
@@ -532,7 +636,7 @@ pub async fn spawn_owned(
         input_owner: None,
         attachments_dirty: false,
         pty_eof: false,
-        child_exited: false,
+        child_exited: exited,
         row_cache: streaming::RowEncodeCache::default(),
         reported_focus: false,
         focus_dirty: false,
@@ -547,7 +651,21 @@ pub async fn spawn_owned(
         meta_title_epoch: title_epoch,
         meta_cwd_epoch: cwd_epoch,
         pending_chunks: std::collections::VecDeque::new(),
+        upgrade_hold: false,
     };
+    if let Some(carried) = carried {
+        task.reported_focus = carried.reported_focus;
+        task.reported_os_dark = carried.reported_os_dark;
+        task.reported_resize = carried.reported_resize;
+        // The windows went with the predecessor; the program hears what
+        // their detach would have told it.
+        task.focus_dirty = true;
+        task.resize_notify_dirty = true;
+        task.recompute_presentation();
+        // The predecessor held its drain from the settle on, so the core
+        // may carry replies the program is still waiting for.
+        task.session.signals.mark_dirty();
+    }
     let child = Arc::clone(&task.session.child);
     let handle = tokio::spawn(run_session(task, cmd_rx));
     let (done_tx, done) = watch::channel(false);
@@ -751,6 +869,8 @@ struct SessionTask {
     /// command channel is bounded, so a producer re-queueing through it
     /// could block while holding the only thread that drains it.
     pending_chunks: std::collections::VecDeque<(SubscriberId, StreamId)>,
+    /// See [`SessionCmd::Settle`].
+    upgrade_hold: bool,
 }
 
 /// PTY-visible steps, recorded so a test can pin their order.
@@ -882,7 +1002,7 @@ async fn run_session(mut t: SessionTask, mut cmd_rx: mpsc::Receiver<SessionCmd>)
             }
             // Ungated by `attached`: a parked session still owes query
             // responses to the program and notifications to observers.
-            () = t.session.signals.parsed(), if drain_at.is_none() => {
+            () = t.session.signals.parsed(), if drain_at.is_none() && !t.upgrade_hold => {
                 if last_drain.elapsed() >= DRAIN_COALESCE {
                     let drained = t.drain_and_fan();
                     // From the drain's end, not its start: a drain that
@@ -902,7 +1022,7 @@ async fn run_session(mut t: SessionTask, mut cmd_rx: mpsc::Receiver<SessionCmd>)
                     drain_at = Some(last_drain + DRAIN_COALESCE);
                 }
             }
-            () = tokio::time::sleep_until(drain_deadline), if drain_at.is_some() => {
+            () = tokio::time::sleep_until(drain_deadline), if drain_at.is_some() && !t.upgrade_hold => {
                 drain_at = None;
                 let drained = t.drain_and_fan();
                 last_drain = tokio::time::Instant::now();
@@ -936,7 +1056,10 @@ async fn run_session(mut t: SessionTask, mut cmd_rx: mpsc::Receiver<SessionCmd>)
             }
             // No drain here: PTY flow control is the sink's pacer
             // (`crate::parse_sink`).
-            _ = drain_tick.tick(), if !attached => {
+            // Not while held for an upgrade: the dump names this child
+            // unreaped, so reaping it now would hand the successor a pid
+            // that may be reused.
+            _ = drain_tick.tick(), if !attached && !t.upgrade_hold => {
                 if !t.child_exited
                     && matches!(t.session.child.try_wait(), Ok(Some(_)))
                 {
@@ -1195,6 +1318,19 @@ impl SessionTask {
                 None
             }
             SessionCmd::Shutdown => Some(EndReason::Destroyed),
+            SessionCmd::Settle(done) => {
+                self.upgrade_hold = true;
+                let _settled = done.send(());
+                None
+            }
+            SessionCmd::Capture(reply) => {
+                let _sent = reply.send(Box::new(self.capture_state()));
+                None
+            }
+            SessionCmd::Resume => {
+                self.upgrade_hold = false;
+                None
+            }
         }
     }
 
@@ -1317,6 +1453,53 @@ impl SessionTask {
     /// and window events arrive in any order across connections.
     fn window_focused(&self) -> bool {
         self.subs.iter().any(|s| s.is_window && s.focused)
+    }
+
+    fn capture_state(&self) -> crate::upgrade::dump::SessionState {
+        use crate::upgrade::dump::{NotificationDump, SessionState};
+        let millis = |elapsed: Duration| u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX);
+        let now = Instant::now();
+        let (idle_ms, last_notification) = {
+            let meta = self
+                .meta
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            // An attached session is not idle: its windows leave at the
+            // exec, which is when its idle time starts.
+            let idle_ms = if self.subs.is_empty() {
+                millis(now.saturating_duration_since(meta.idle_since))
+            } else {
+                0
+            };
+            let last = meta.last_notification.as_ref().map(|n| NotificationDump {
+                title: n.title.clone(),
+                body: n.body.clone(),
+                urgency: n.urgency,
+                age_ms: millis(now.saturating_duration_since(n.at)),
+            });
+            (idle_ms, last)
+        };
+        let core = self.session.lock_core();
+        SessionState {
+            grid: core.grid.clone(),
+            parser: core.parser.clone(),
+            table_gc: core.table_gc.clone(),
+            images: self.session.images.clone(),
+            placements: self.session.placements.clone(),
+            saved_primary_placements: self.session.saved_primary_placements.clone(),
+            reassembler: self.session.graphics_reassembler.clone(),
+            shm_segments: self
+                .session
+                .shm_segments
+                .names()
+                .map(str::to_owned)
+                .collect(),
+            reported_focus: self.reported_focus,
+            reported_os_dark: self.reported_os_dark,
+            reported_resize: self.reported_resize,
+            idle_ms,
+            last_notification,
+        }
     }
 
     fn sync_focus_to_pty(&mut self) -> Option<EndReason> {
@@ -2680,6 +2863,7 @@ impl SessionTask {
             pty_steps: Vec::new(),
             pty_resized_over: Vec::new(),
             pending_chunks: std::collections::VecDeque::new(),
+            upgrade_hold: false,
             meta_title_epoch: 0,
             meta_cwd_epoch: 0,
         }
@@ -6159,6 +6343,7 @@ mod tests {
             cmd,
             input_budget: crate::pool::new_input_budget(),
             resizer: None,
+            upgrade: None,
             meta: Arc::new(StdMutex::new(SessionMeta {
                 rows: crate::DEFAULT_ROWS,
                 cols: crate::DEFAULT_COLS,
@@ -6325,6 +6510,7 @@ mod tests {
             cmd,
             input_budget: crate::pool::new_input_budget(),
             resizer: None,
+            upgrade: None,
             meta: Arc::new(StdMutex::new(SessionMeta {
                 rows: crate::DEFAULT_ROWS,
                 cols: crate::DEFAULT_COLS,

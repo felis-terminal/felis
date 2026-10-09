@@ -4,7 +4,7 @@ use felis_protocol::{
         AttachFailure, AttachRefusal, AttachTarget, Directed, InfoOutcome, NotifyToDaemonMsg,
         OpsToClientMsg, OpsToDaemonMsg, ResolvedId, ResourceReport, RetargetTarget, SessionInfo,
         SessionToClientMsg, SessionToDaemonMsg, SpawnArgs, SpawnOutcome, StopMode, StopOutcome,
-        StreamId, SwitchDenied, SwitchScope, SwitchTarget,
+        StreamId, SwitchDenied, SwitchScope, SwitchTarget, UpgradeOutcome,
     },
     minor::MinorGated,
 };
@@ -448,6 +448,30 @@ impl ControlRequest for StopReq {
     }
 }
 
+struct UpgradeReq {
+    successor: String,
+}
+
+impl CorrelatedRequest for UpgradeReq {}
+
+impl ControlRequest for UpgradeReq {
+    type Msg = OpsToDaemonMsg;
+    type ReplyMsg = OpsToClientMsg;
+    type Reply = UpgradeOutcome;
+    fn take_msg(&mut self) -> OpsToDaemonMsg {
+        OpsToDaemonMsg::Upgrade {
+            successor: std::mem::take(&mut self.successor),
+        }
+    }
+
+    fn interpret(&self, reply: OpsToClientMsg) -> Result<Self::Reply, ConnectError> {
+        match reply {
+            OpsToClientMsg::UpgradeReply { outcome } => Ok(outcome),
+            _ => Err(ConnectError::NotSessionAttached),
+        }
+    }
+}
+
 pub(super) struct TagReq {
     pub(super) id_prefix: String,
     pub(super) add: Vec<String>,
@@ -678,5 +702,24 @@ where
             "stopping the daemon",
         )?;
         self.correlated_request(StopReq { mode }).await
+    }
+
+    /// Gated as [`Self::daemon_stop`] is: a minor-0 daemon would drop
+    /// the connection over the arm instead of refusing it.
+    ///
+    /// # Errors
+    /// [`ConnectError::MinorTooOld`] below minor 1, with nothing sent.
+    pub async fn daemon_upgrade(
+        &mut self,
+        successor: String,
+    ) -> Result<UpgradeOutcome, ConnectError> {
+        check_arm_minor(
+            &OpsToDaemonMsg::Upgrade {
+                successor: String::new(),
+            },
+            self.effective_minor,
+            "upgrading the daemon in place",
+        )?;
+        self.correlated_request(UpgradeReq { successor }).await
     }
 }

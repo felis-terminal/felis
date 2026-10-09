@@ -946,6 +946,8 @@ dependencies = [
  "png",
  "proptest",
  "rustix 1.1.5",
+ "serde",
+ "serde_json",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
@@ -1068,6 +1070,8 @@ dependencies = [
  "insta",
  "miniz_oxide 0.9.1",
  "proptest",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

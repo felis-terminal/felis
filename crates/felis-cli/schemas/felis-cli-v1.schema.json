@@ -218,6 +218,24 @@
       ],
       "type": "object"
     },
+    "DaemonUpgradeResult": {
+      "description": "`daemon upgrade`'s answer. A refusal is an error object instead,\nso `outcome` has one value today; it is spelled out for a reader\nthat dispatches on it as it does on `daemon stop`'s.",
+      "properties": {
+        "outcome": {
+          "description": "`upgrading`.",
+          "type": "string"
+        },
+        "successor": {
+          "description": "The absolute path of the `felis-daemon` the daemon execs.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "outcome",
+        "successor"
+      ],
+      "type": "object"
+    },
     "DiagnosticObject": {
       "properties": {
         "key": {
@@ -372,6 +390,13 @@
         },
         "message": {
           "type": "string"
+        },
+        "reason": {
+          "description": "Why the daemon refused, on `daemon upgrade`'s refusal alone:\n`unsupported`, `dump_version`, `protocol_major`, `timeout`,\n`probe_failed`, `busy`, or `draining`.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "sessions": {
           "description": "Sessions the daemon still holds, on `daemon stop`'s refusal\nalone: the count is what the caller decides between `--force`\nand `--when-empty` on, and re-reading it out of the message\nwould make prose a parse target.",
@@ -960,6 +985,9 @@
         },
         {
           "$ref": "#/$defs/DaemonStopResult"
+        },
+        {
+          "$ref": "#/$defs/DaemonUpgradeResult"
         },
         {
           "$ref": "#/$defs/ConfigPathResult"

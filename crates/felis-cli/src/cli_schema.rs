@@ -10,9 +10,9 @@ use serde_json::{Map, Value, json};
 
 use crate::cli_bridge::{DaemonOp, Operation};
 use crate::cli_output::{
-    CaptureRow, CheckResult, ConfigPathResult, DaemonStatusResult, DaemonStopResult, DoctorResult,
-    EffectiveConfigResult, ListResult, MachineError, SURFACE_VERSION, SearchMatch, SessionObject,
-    SessionRef, SwitchResult, TagResult,
+    CaptureRow, CheckResult, ConfigPathResult, DaemonStatusResult, DaemonStopResult,
+    DaemonUpgradeResult, DoctorResult, EffectiveConfigResult, ListResult, MachineError,
+    SURFACE_VERSION, SearchMatch, SessionObject, SessionRef, SwitchResult, TagResult,
 };
 use crate::cli_version::VersionResult;
 
@@ -318,6 +318,7 @@ fn cli_document() -> Value {
             .to_value(),
         generator.subschema_for::<DaemonStatusResult>().to_value(),
         generator.subschema_for::<DaemonStopResult>().to_value(),
+        generator.subschema_for::<DaemonUpgradeResult>().to_value(),
         generator.subschema_for::<ConfigPathResult>().to_value(),
         generator.subschema_for::<CheckResult>().to_value(),
         generator

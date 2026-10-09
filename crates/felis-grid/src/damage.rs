@@ -5,6 +5,11 @@
 use crate::ScrollDirection;
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "state-dump",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(default)
+)]
 pub struct Damage {
     /// Tail bits beyond `len` stay zero; `dirty_rows()` and
     /// `mark_all()` depend on it.
@@ -290,6 +295,17 @@ impl Damage {
         self.blocks.resize(Self::block_count(rows), 0);
         // Also re-masks the tail past `rows`.
         self.mark_all();
+    }
+
+    /// Sized for `rows`, with the tail bits `dirty_rows` relies on clear.
+    #[cfg(feature = "state-dump")]
+    pub(crate) fn check_restored(&self, rows: usize) -> bool {
+        self.len == rows
+            && self.blocks.len() == Self::block_count(rows)
+            && self
+                .blocks
+                .last()
+                .is_none_or(|last| last & !Self::last_block_mask(rows) == 0)
     }
 }
 

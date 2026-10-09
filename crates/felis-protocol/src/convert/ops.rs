@@ -272,6 +272,33 @@ fn resource_kind_from_wire(raw: i32) -> Result<messages::ResourceKind, WireError
     }
 }
 
+const fn upgrade_refusal_to_wire(r: messages::UpgradeRefusal) -> v1::UpgradeRefusal {
+    use messages::UpgradeRefusal as R;
+    match r {
+        R::Unsupported => v1::UpgradeRefusal::Unsupported,
+        R::DumpVersion => v1::UpgradeRefusal::DumpVersion,
+        R::ProtocolMajor => v1::UpgradeRefusal::ProtocolMajor,
+        R::Timeout => v1::UpgradeRefusal::Timeout,
+        R::ProbeFailed => v1::UpgradeRefusal::ProbeFailed,
+        R::Busy => v1::UpgradeRefusal::Busy,
+        R::Draining => v1::UpgradeRefusal::Draining,
+    }
+}
+
+fn upgrade_refusal_from_wire(raw: i32) -> Result<messages::UpgradeRefusal, WireError> {
+    use messages::UpgradeRefusal as R;
+    match decode_enum::<v1::UpgradeRefusal>("UpgradeRefusal", raw)? {
+        v1::UpgradeRefusal::Unspecified => Err(WireError::UnspecifiedEnum("UpgradeRefusal")),
+        v1::UpgradeRefusal::Unsupported => Ok(R::Unsupported),
+        v1::UpgradeRefusal::DumpVersion => Ok(R::DumpVersion),
+        v1::UpgradeRefusal::ProtocolMajor => Ok(R::ProtocolMajor),
+        v1::UpgradeRefusal::Timeout => Ok(R::Timeout),
+        v1::UpgradeRefusal::ProbeFailed => Ok(R::ProbeFailed),
+        v1::UpgradeRefusal::Busy => Ok(R::Busy),
+        v1::UpgradeRefusal::Draining => Ok(R::Draining),
+    }
+}
+
 const fn resource_unit_to_wire(u: messages::ResourceUnit) -> v1::ResourceUnit {
     match u {
         messages::ResourceUnit::Count => v1::ResourceUnit::Count,
@@ -438,6 +465,9 @@ impl From<&messages::OpsToDaemonMsg> for v1::OpsToDaemonMsg {
             O::Info { id_prefix } => Msg::Info(v1::OpsInfo {
                 id_prefix: id_prefix.clone(),
             }),
+            O::Upgrade { successor } => Msg::Upgrade(v1::OpsUpgrade {
+                successor: successor.clone(),
+            }),
         };
         Self {
             msg: Some(msg),
@@ -541,6 +571,19 @@ impl From<&messages::OpsToClientMsg> for v1::OpsToClientMsg {
                     }
                 }),
             }),
+            O::UpgradeReply { outcome } => Msg::UpgradeReply(v1::OpsUpgradeReply {
+                outcome: Some(match outcome {
+                    messages::UpgradeOutcome::Upgrading => {
+                        v1::ops_upgrade_reply::Outcome::Upgrading(v1::UpgradeUpgrading {})
+                    }
+                    messages::UpgradeOutcome::Refused { reason, detail } => {
+                        v1::ops_upgrade_reply::Outcome::Refused(v1::UpgradeRefused {
+                            reason: upgrade_refusal_to_wire(*reason) as i32,
+                            detail: detail.clone(),
+                        })
+                    }
+                }),
+            }),
         };
         Self {
             msg: Some(msg),
@@ -594,6 +637,9 @@ impl TryFrom<v1::OpsToDaemonMsg> for messages::OpsToDaemonMsg {
                 },
                 Msg::Info(i) => Self::Info {
                     id_prefix: i.id_prefix,
+                },
+                Msg::Upgrade(u) => Self::Upgrade {
+                    successor: u.successor,
                 },
             },
         )
@@ -685,6 +731,22 @@ impl TryFrom<v1::OpsToClientMsg> for messages::OpsToClientMsg {
                         v1::ops_stop_reply::Outcome::Draining(d) => {
                             messages::StopOutcome::Draining {
                                 sessions: d.sessions,
+                            }
+                        }
+                    },
+                },
+                Msg::UpgradeReply(u) => Self::UpgradeReply {
+                    outcome: match u
+                        .outcome
+                        .ok_or(WireError::MissingOneof("OpsUpgradeReply.outcome"))?
+                    {
+                        v1::ops_upgrade_reply::Outcome::Upgrading(_) => {
+                            messages::UpgradeOutcome::Upgrading
+                        }
+                        v1::ops_upgrade_reply::Outcome::Refused(r) => {
+                            messages::UpgradeOutcome::Refused {
+                                reason: upgrade_refusal_from_wire(r.reason)?,
+                                detail: r.detail,
                             }
                         }
                     },
@@ -888,5 +950,44 @@ mod tests {
         )
         .unwrap();
         assert_eq!(back, domain);
+    }
+
+    fn upgrade_reply(outcome: Option<v1::ops_upgrade_reply::Outcome>) -> v1::OpsToClientMsg {
+        v1::OpsToClientMsg {
+            msg: Some(v1::ops_to_client_msg::Msg::UpgradeReply(
+                v1::OpsUpgradeReply { outcome },
+            )),
+            correlation: None,
+        }
+    }
+
+    /// A reply with no outcome claims neither that the daemon is
+    /// upgrading nor that it is still serving.
+    #[test]
+    fn an_upgrade_reply_without_an_outcome_is_rejected() {
+        assert!(matches!(
+            messages::OpsToClientMsg::try_from(upgrade_reply(None)),
+            Err(WireError::MissingOneof("OpsUpgradeReply.outcome"))
+        ));
+    }
+
+    /// `UNSPECIFIED` would name a refusal the daemon never chose, and a
+    /// value past the schema is a newer daemon's reason this build
+    /// cannot word.
+    #[test]
+    fn an_upgrade_refusal_outside_the_schema_is_rejected() {
+        let refused = |reason: i32| {
+            upgrade_reply(Some(v1::ops_upgrade_reply::Outcome::Refused(
+                v1::UpgradeRefused {
+                    reason,
+                    detail: String::new(),
+                },
+            )))
+        };
+        assert!(matches!(
+            messages::OpsToClientMsg::try_from(refused(v1::UpgradeRefusal::Unspecified as i32)),
+            Err(WireError::UnspecifiedEnum("UpgradeRefusal"))
+        ));
+        assert!(messages::OpsToClientMsg::try_from(refused(99)).is_err());
     }
 }

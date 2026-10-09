@@ -348,6 +348,15 @@ impl ShmDeferral {
     pub fn names(&self) -> impl ExactSizeIterator<Item = &str> {
         self.names.iter().map(String::as_str)
     }
+
+    /// Names an in-place upgrade carried, oldest first; `None` past
+    /// [`Self::CAP`], which no run of [`Self::record`] leaves.
+    #[must_use]
+    pub fn from_names(names: Vec<String>) -> Option<Self> {
+        (names.len() <= Self::CAP).then(|| Self {
+            names: names.into(),
+        })
+    }
 }
 
 /// The fstat + budget + `S=`/`O=` range logic, then the platform

@@ -84,6 +84,6 @@ pub use outgoing::{
 pub use selection::{GridPos, Selection, SelectionMode};
 pub use shadow::{ShadowError, ShadowScreen};
 #[cfg(feature = "native")]
-pub use spawn::{SpawnConnectError, connect_or_spawn_daemon};
+pub use spawn::{SpawnConnectError, connect_or_spawn_daemon, installed_daemon};
 #[cfg(feature = "native")]
 pub use stream::{OpenFrom, OpenStreamError, begin_stream, open_stream};

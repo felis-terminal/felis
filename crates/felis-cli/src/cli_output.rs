@@ -347,6 +347,11 @@ pub(crate) struct MachineError {
     /// would make prose a parse target.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) sessions: Option<u32>,
+    /// Why the daemon refused, on `daemon upgrade`'s refusal alone:
+    /// `unsupported`, `dump_version`, `protocol_major`, `timeout`,
+    /// `probe_failed`, `busy`, or `draining`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) reason: Option<&'static str>,
 }
 
 #[derive(Serialize)]
@@ -507,6 +512,7 @@ impl Reporter {
             kind,
             message,
             sessions: None,
+            reason: None,
         };
         match self.class {
             Class::Point => eprintln!(
@@ -535,19 +541,35 @@ impl Reporter {
     /// `daemon stop`'s refusal: the ordinary `refused` error object
     /// plus the count that names the remedy.
     pub(crate) fn fail_refusal(&self, sessions: u32, message: String) -> i32 {
+        self.refused(&MachineError {
+            kind: ErrorKind::Refused,
+            message,
+            sessions: Some(sessions),
+            reason: None,
+        })
+    }
+
+    /// `daemon upgrade`'s refusal: the ordinary `refused` error object
+    /// plus the daemon's reason token.
+    pub(crate) fn fail_upgrade_refusal(&self, reason: &'static str, message: String) -> i32 {
+        self.refused(&MachineError {
+            kind: ErrorKind::Refused,
+            message,
+            sessions: None,
+            reason: Some(reason),
+        })
+    }
+
+    fn refused(&self, error: &MachineError) -> i32 {
         debug_assert!(self.machine(), "the human framing prints its own sentence");
         eprintln!(
             "{}",
             render(&ErrorObject {
                 v: SURFACE_VERSION,
-                error: &MachineError {
-                    kind: ErrorKind::Refused,
-                    message,
-                    sessions: Some(sessions),
-                },
+                error,
             })
         );
-        ErrorKind::Refused.exit_code()
+        error.kind.exit_code()
     }
 
     pub(crate) fn line(&self, text: impl std::fmt::Display) {
@@ -778,6 +800,18 @@ pub(crate) struct DaemonStopResult {
     /// Sessions the outcome speaks about: those still held on
     /// `draining`, `0` on `stopping`.
     pub(crate) sessions: u32,
+}
+
+/// `daemon upgrade`'s answer. A refusal is an error object instead,
+/// so `outcome` has one value today; it is spelled out for a reader
+/// that dispatches on it as it does on `daemon stop`'s.
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub(crate) struct DaemonUpgradeResult {
+    /// `upgrading`.
+    pub(crate) outcome: &'static str,
+    /// The absolute path of the `felis-daemon` the daemon execs.
+    pub(crate) successor: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -1283,6 +1317,7 @@ mod tests {
             kind: ErrorKind::NoMatch,
             message: "nope".into(),
             sessions: None,
+            reason: None,
         };
         assert_eq!(
             render(&ErrorObject {
@@ -1299,8 +1334,9 @@ mod tests {
             }),
             r#"{"v":1,"event":"error","error":{"kind":"no_match","message":"nope"}}"#
         );
-        // `daemon stop`'s refusal is the one error object with a count:
-        // present only there, so no other error grows a key.
+        // `daemon stop`'s refusal is the one error object with a count,
+        // and `daemon upgrade`'s the one with a reason: each present
+        // only there, so no other error grows a key.
         assert_eq!(
             render(&ErrorObject {
                 v: SURFACE_VERSION,
@@ -1308,9 +1344,22 @@ mod tests {
                     kind: ErrorKind::Refused,
                     message: "held".into(),
                     sessions: Some(2),
+                    reason: None,
                 }
             }),
             r#"{"v":1,"error":{"kind":"refused","message":"held","sessions":2}}"#
+        );
+        assert_eq!(
+            render(&ErrorObject {
+                v: SURFACE_VERSION,
+                error: &MachineError {
+                    kind: ErrorKind::Refused,
+                    message: "busy".into(),
+                    sessions: None,
+                    reason: Some("busy"),
+                }
+            }),
+            r#"{"v":1,"error":{"kind":"refused","message":"busy","reason":"busy"}}"#
         );
         assert_eq!(
             render(&EndTerminal {

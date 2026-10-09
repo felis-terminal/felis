@@ -209,6 +209,14 @@ way down (`docs/reference/cli.md` "Auto-spawning").
 `--config`, `--host`, `--socket`, and `--ssh-arg` at exit `2` rather than ignoring them (the per-verb placement matrix
 is `docs/reference/cli.md` "Global options").
 
+**Replacing a stale daemon without losing sessions: `felis daemon upgrade`.** Point verb, `--format json`, never
+autospawns. The daemon execs the `felis-daemon` installed beside `felis` in place and keeps every session; it answers
+`{"outcome":"upgrading","successor":"<path>"}` at exit `0`, and attached windows re-attach on their own. A refusal is
+exit `1`, `{"error":{"kind":"refused","reason":…}}`, with the daemon still serving; the fallback is
+`felis daemon stop --when-empty`. Exit `2` covers an unreachable daemon and one too old to answer (`unsupported`). With
+`--host`, the remote host's own `felis daemon upgrade` runs over `ssh` and its output passes through; a remote `felis`
+too old to have the verb is reported as `unsupported`, exit `2`.
+
 ## Local or remote, same verbs
 
 `felis --host user@remote sessions …` runs every verb over SSH (`ssh <host> felis-daemon relay`) with identical ids,

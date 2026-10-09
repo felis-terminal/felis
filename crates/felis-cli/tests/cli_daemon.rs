@@ -1,5 +1,5 @@
-//! `felis daemon status` integration tests (docs/reference/cli.md
-//! "Daemon status").
+//! `felis daemon` integration tests (docs/reference/cli.md
+//! "Daemon status", "Daemon stop", "Daemon upgrade").
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 #![cfg(unix)]
@@ -364,4 +364,105 @@ async fn stop_on_an_empty_daemon_reports_stopping_and_ends_it() {
         std::io::ErrorKind::ConnectionRefused,
         "the stop autospawned no daemon"
     );
+}
+
+/// A `felis-daemon` for the successor lookup to find on `PATH`. The
+/// file is never run: a daemon that refuses the upgrade does so before
+/// exec, and the lookup only asks that the file exist.
+fn path_with_a_successor(tmp: &tempfile::TempDir) -> std::path::PathBuf {
+    let bin = tmp.path().join("successor-bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::write(bin.join("felis-daemon"), b"").unwrap();
+    bin
+}
+
+/// A refused upgrade is a typed refusal: exit `1`, the daemon's reason
+/// token beside the message, and the daemon still there to answer the
+/// next verb (docs/reference/cli.md "Daemon upgrade").
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_refused_upgrade_reports_the_reason_and_leaves_the_daemon_serving() {
+    let tmp = private_dir();
+    let (_server, socket, _pool) = spawn_daemon(&tmp, quiet_factory()).await;
+    create_and_detach(&socket).await;
+
+    let out = cli_command()
+        .env("PATH", path_with_a_successor(&tmp))
+        .arg("--socket")
+        .arg(&socket)
+        .args(["daemon", "upgrade", "--format", "json"])
+        .output()
+        .expect("run felis daemon upgrade");
+    assert_eq!(out.status.code(), Some(1), "a typed refusal exits 1");
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    let object: serde_json::Value =
+        serde_json::from_str(stderr.trim()).expect("one JSON error object");
+    schema::assert_cli_object(&object);
+    assert_eq!(object["error"]["kind"], "refused");
+    assert!(
+        object["error"]["reason"].is_string(),
+        "the refusal carries the daemon's reason: {stderr}"
+    );
+    assert!(
+        object["error"]["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("felis daemon stop --when-empty")),
+        "the message names the drain-and-restart remedy: {stderr}"
+    );
+
+    let after = cli_command()
+        .arg("--socket")
+        .arg(&socket)
+        .args(["sessions", "list", "--format", "json"])
+        .output()
+        .expect("run felis sessions list");
+    assert!(after.status.success(), "the refused daemon still answers");
+    let roster: serde_json::Value =
+        serde_json::from_slice(after.stdout.trim_ascii()).expect("one JSON object");
+    assert_eq!(
+        roster["sessions"].as_array().map(Vec::len),
+        Some(1),
+        "the session survived the refusal"
+    );
+}
+
+/// No daemon is no upgrade: exit `2`, and nothing started in order to
+/// be replaced.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_upgrade_with_no_daemon_running_starts_none() {
+    let tmp = private_dir();
+    let socket = tmp.path().join("daemon.sock");
+
+    let out = cli_command()
+        .env("PATH", path_with_a_successor(&tmp))
+        .arg("--socket")
+        .arg(&socket)
+        .args(["daemon", "upgrade", "--format", "json"])
+        .output()
+        .expect("run felis daemon upgrade");
+    assert_eq!(out.status.code(), Some(2));
+    let object: serde_json::Value =
+        serde_json::from_slice(out.stderr.trim_ascii()).expect("one JSON error object");
+    assert_eq!(object["error"]["kind"], "daemon_unreachable");
+    assert!(
+        std::os::unix::net::UnixStream::connect(&socket).is_err(),
+        "the upgrade autospawned no daemon"
+    );
+}
+
+/// Over `--host` the upgrade runs the remote host's own `felis`; an
+/// ssh that cannot run is the daemon being unreachable, exit `2`.
+#[test]
+fn an_upgrade_over_host_without_ssh_is_unreachable() {
+    let tmp = private_dir();
+    let out = cli_command()
+        .env("PATH", tmp.path())
+        .args(["--host", "user@devbox.invalid", "daemon", "upgrade"])
+        .args(["--format", "json"])
+        .output()
+        .expect("run felis daemon upgrade");
+    assert_eq!(out.status.code(), Some(2));
+    let object: serde_json::Value =
+        serde_json::from_slice(out.stderr.trim_ascii()).expect("one JSON error object");
+    schema::assert_cli_object(&object);
+    assert_eq!(object["error"]["kind"], "daemon_unreachable");
 }

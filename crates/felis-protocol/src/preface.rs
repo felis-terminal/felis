@@ -19,12 +19,15 @@ pub const PROTOCOL_MAJOR: u16 = 1;
 /// Protocol minor this build speaks: additive schema growth only, each
 /// addition with defined old-peer behavior (`docs/reference/ipc.md`
 /// "The minor ledger").
-pub const PROTOCOL_MINOR: u16 = 0;
+pub const PROTOCOL_MINOR: u16 = 1;
 
 /// Ordered list of minors and their additions (`docs/reference/ipc.md` "The minor ledger").
 ///
 /// Tested to ensure every [`PROTOCOL_MINOR`] bump records its old-peer behavior.
-pub const MINOR_LEDGER: &[(u16, &str)] = &[(0, "the base schema of protocol major 1")];
+pub const MINOR_LEDGER: &[(u16, &str)] = &[
+    (0, "the base schema of protocol major 1"),
+    (1, "Ops::Upgrade and Ops::UpgradeReply"),
+];
 
 const _: () = {
     let last = MINOR_LEDGER[MINOR_LEDGER.len() - 1].0;
@@ -584,7 +587,7 @@ mod tests {
         assert_eq!(bytes, [b'F', b'L', b'I', b'S', 0x01, 0x02, 0x03, 0x04]);
         assert_eq!(
             ClientPreface::CURRENT.encode(),
-            [b'F', b'L', b'I', b'S', 0x00, 0x01, 0x00, 0x00]
+            [b'F', b'L', b'I', b'S', 0x00, 0x01, 0x00, 0x01]
         );
     }
 
@@ -608,7 +611,7 @@ mod tests {
         );
         assert_eq!(
             DaemonPreface::from(DaemonAccept::select(ClientPreface::CURRENT).unwrap()).encode(),
-            [b'F', b'L', b'I', b'S', 0x00, 0x00, 0x00, 0x01, 0x00, 0x00]
+            [b'F', b'L', b'I', b'S', 0x00, 0x00, 0x00, 0x01, 0x00, 0x01]
         );
         assert_eq!(
             DaemonPreface::from(DaemonRefuse::CURRENT).encode(),
