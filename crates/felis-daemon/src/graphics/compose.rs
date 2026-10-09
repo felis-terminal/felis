@@ -250,6 +250,38 @@ mod tests {
             prop_assert_eq!(got, if opaque { src } else { dst });
         }
 
+        /// `blit_region` is `blit` of the source rectangle cut out on
+        /// its own, so it inherits `blit`'s pinned copy and blend.
+        #[test]
+        fn blit_region_matches_blit_of_the_cut_out_rectangle(
+            img_w in 1u32..=MAX_DIM,
+            img_h in 1u32..=MAX_DIM,
+            corners in prop::array::uniform4(any::<prop::sample::Index>()),
+            extent in prop::array::uniform2(any::<prop::sample::Index>()),
+            bpp in prop_oneof![Just(3usize), Just(4)],
+            replace in any::<bool>(),
+            dst_pool in bytes(),
+            src_pool in bytes(),
+        ) {
+            let w = extent[0].index(img_w as usize + 1) as u32;
+            let h = extent[1].index(img_h as usize + 1) as u32;
+            let at = |i: &prop::sample::Index, room: u32| i.index(room as usize + 1) as u32;
+            let (src_x, src_y) = (at(&corners[0], img_w - w), at(&corners[1], img_h - h));
+            let (dst_x, dst_y) = (at(&corners[2], img_w - w), at(&corners[3], img_h - h));
+            let dst = sized(&dst_pool, img_w, img_h, bpp);
+            let src = sized(&src_pool, img_w, img_h, bpp);
+            let mut cut = Vec::new();
+            for y in src_y..src_y + h {
+                let start = ((y * img_w + src_x) as usize) * bpp;
+                cut.extend_from_slice(&src[start..start + (w as usize) * bpp]);
+            }
+            let mut want = dst.clone();
+            blit(&mut want, img_w, img_h, &cut, w, h, dst_x, dst_y, bpp, replace);
+            let mut got = dst;
+            blit_region(&mut got, &src, img_w, dst_x, dst_y, src_x, src_y, w, h, bpp, replace);
+            prop_assert_eq!(got, want);
+        }
+
         /// kitty's `alpha_blend`: the result alpha is the "over"
         /// composite of the two, and no channel wraps.
         #[test]
@@ -272,21 +304,5 @@ mod tests {
         assert!(canvas[0] < 135 && canvas[0] > 120, "R={}", canvas[0]);
         assert!(canvas[1] > 120 && canvas[1] < 135, "G={}", canvas[1]);
         assert_eq!(canvas[3], 255, "result stays opaque");
-    }
-
-    #[test]
-    fn blit_region_of_zero_width_writes_nothing() {
-        let mut dst = vec![7u8; 4];
-        blit_region(&mut dst, &[], 1, 5, 5, 5, 5, 0, 3, 4, true);
-        assert_eq!(dst, vec![7u8; 4]);
-    }
-
-    #[test]
-    fn blit_region_copies_rectangle() {
-        let src = vec![1u8, 2, 3, 4, 9, 9, 9, 9];
-        let mut dst = vec![0u8; 8];
-        blit_region(&mut dst, &src, 2, 1, 0, 0, 0, 1, 1, 4, true);
-        assert_eq!(&dst[4..8], &[1, 2, 3, 4]);
-        assert_eq!(&dst[0..4], &[0, 0, 0, 0]);
     }
 }
