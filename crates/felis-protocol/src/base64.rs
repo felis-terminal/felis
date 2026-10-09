@@ -205,28 +205,8 @@ mod tests {
     }
 
     #[test]
-    fn rejects_non_alphabet_byte() {
-        assert_eq!(decode(b"!@#$"), None);
-    }
-
-    #[test]
-    fn rejects_one_char_tail() {
-        assert_eq!(decode(b"TWFua"), None, "5 chars = 1 char of tail");
-    }
-
-    #[test]
-    fn rejects_tail_after_padded_group() {
-        assert_eq!(decode(b"TQ==TW"), None);
-    }
-
-    #[test]
     fn rejects_pad_in_slot_3_without_pad_in_slot_4() {
         assert_eq!(decode(b"TQ=A"), None);
-    }
-
-    #[test]
-    fn rejects_pad_in_middle_of_input() {
-        assert_eq!(decode(b"TQ==TWFu"), None);
     }
 
     #[test]
@@ -286,6 +266,52 @@ mod tests {
             }
             let decoded = decode(&spaced);
             prop_assert_eq!(decoded.as_deref(), Some(payload.as_slice()));
+        }
+
+        /// A byte outside the alphabet is caught wherever it lands, in a
+        /// whole group or in the tail.
+        #[test]
+        fn a_foreign_byte_anywhere_is_rejected(
+            payload in proptest::collection::vec(any::<u8>(), 1..64),
+            at in any::<prop::sample::Index>(),
+            foreign in any::<u8>().prop_filter("outside the alphabet", |b| {
+                !b.is_ascii_alphanumeric() && !matches!(b, b'+' | b'/' | b'=') && !b.is_ascii_whitespace()
+            }),
+        ) {
+            let mut encoded = Vec::new();
+            encode_into(&payload, &mut encoded);
+            let i = at.index(encoded.len());
+            encoded[i] = foreign;
+            prop_assert_eq!(decode(&encoded), None);
+        }
+
+        /// Padding belongs to the last group only.
+        #[test]
+        fn padding_before_the_last_group_is_rejected(
+            payload in proptest::collection::vec(any::<u8>(), 4..64),
+            at in any::<prop::sample::Index>(),
+            tail in proptest::collection::vec(prop::sample::select(&b"AQw+/9"[..]), 0..4),
+        ) {
+            let mut encoded = Vec::new();
+            encode_into(&payload, &mut encoded);
+            let i = at.index(encoded.len() - 4);
+            encoded[i] = b'=';
+            encoded.extend(tail);
+            prop_assert_eq!(decode(&encoded), None);
+        }
+
+        /// One character cannot carry a whole byte.
+        #[test]
+        fn a_one_character_tail_is_rejected(
+            payload in proptest::collection::vec(any::<u8>(), 0..64),
+            extra in prop::sample::select(&b"AQw+/9"[..]),
+        ) {
+            let mut encoded = Vec::new();
+            encode_into(&payload, &mut encoded);
+            let mut unpadded: Vec<u8> = encoded.into_iter().filter(|b| *b != b'=').collect();
+            unpadded.truncate(unpadded.len() - unpadded.len() % 4);
+            unpadded.push(extra);
+            prop_assert_eq!(decode(&unpadded), None);
         }
 
         /// `decode` is total on malformed input. The Kani proof
