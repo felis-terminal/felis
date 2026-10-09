@@ -996,7 +996,9 @@ fn delete_default_d_eq_i_removes_placement_keeps_image() {
     assert!(images.get(ImageId(12)).is_some(), "image survives d=i");
 }
 
-use felis_grid::images::{CellPos, Placement, PlacementId};
+use std::num::NonZeroU16;
+
+use felis_grid::images::{CellPos, Extent, Placement, PlacementId};
 
 fn seeded_placement(
     image: u32,
@@ -1015,10 +1017,8 @@ fn seeded_placement(
             row: row_1based,
             col: col_1based,
         },
-        cols,
-        rows,
-        requested_cols: cols,
-        requested_rows: rows,
+        cols: Extent::Requested(NonZeroU16::new(cols).unwrap()),
+        rows: Extent::Requested(NonZeroU16::new(rows).unwrap()),
         source: None,
         z_index: z,
         no_cursor_move,
@@ -2017,7 +2017,7 @@ fn natural_sizing_resolves_cells_from_image_pixels_and_advances_cursor() {
         "natural sizing must advance cursor past the resolved cell box",
     );
     let p = placements.iter().next().expect("placement recorded");
-    assert_eq!((p.cols, p.rows), (4, 1));
+    assert_eq!(p.extent(), (4, 1));
 }
 
 #[test]
@@ -2054,7 +2054,7 @@ fn natural_sizing_resolves_from_the_source_rectangle() {
     .unwrap();
     let p = placements.iter().next().expect("placement recorded");
     assert_eq!(
-        (p.cols, p.rows),
+        p.extent(),
         (2, 1),
         "the 12 px the rectangle keeps inside the image, not the image's 32 px",
     );

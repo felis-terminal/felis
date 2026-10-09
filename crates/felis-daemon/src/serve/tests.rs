@@ -2238,7 +2238,11 @@ async fn detached_session_keeps_draining_so_child_does_not_block() {
 #[tokio::test]
 async fn scroll_into_scrollback_retains_placement_and_emits_shift() {
     use crate::graphics::ImageEvent;
-    use felis_grid::images::{CellPos, ImageEntry, ImageFormat, ImageId, Placement, PlacementId};
+    use std::num::NonZeroU16;
+
+    use felis_grid::images::{
+        CellPos, Extent, ImageEntry, ImageFormat, ImageId, Placement, PlacementId,
+    };
 
     let mut session = owned_session("read _x");
     session
@@ -2252,10 +2256,8 @@ async fn scroll_into_scrollback_retains_placement_and_emits_shift() {
         image_id: ImageId(7),
         placement_id: Some(PlacementId(1)),
         anchor: CellPos { row: 1, col: 1 },
-        cols: 4,
-        rows: 4,
-        requested_cols: 4,
-        requested_rows: 4,
+        cols: Extent::Requested(NonZeroU16::new(4).unwrap()),
+        rows: Extent::Requested(NonZeroU16::new(4).unwrap()),
         source: None,
         z_index: 0,
         no_cursor_move: false,
@@ -2499,7 +2501,11 @@ async fn measure_pull_cycles_under_flood() {
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn rehydrate_replays_persisted_images_and_placements() {
-    use felis_grid::images::{CellPos, ImageEntry, ImageFormat, ImageId, Placement, PlacementId};
+    use std::num::NonZeroU16;
+
+    use felis_grid::images::{
+        CellPos, Extent, ImageEntry, ImageFormat, ImageId, Placement, PlacementId,
+    };
     use felis_protocol::messages::ImageMsg;
 
     let tmp = private_dir();
@@ -2521,10 +2527,8 @@ async fn rehydrate_replays_persisted_images_and_placements() {
         image_id: ImageId(7),
         placement_id: Some(PlacementId(1)),
         anchor: CellPos { row: 1, col: 1 },
-        cols: 2,
-        rows: 2,
-        requested_cols: 2,
-        requested_rows: 2,
+        cols: Extent::Requested(NonZeroU16::new(2).unwrap()),
+        rows: Extent::Requested(NonZeroU16::new(2).unwrap()),
         source: None,
         z_index: 0,
         no_cursor_move: false,
@@ -2633,7 +2637,11 @@ async fn rehydrate_replays_persisted_images_and_placements() {
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn time_to_first_frame_under_simulated_slow_link() {
-    use felis_grid::images::{CellPos, ImageEntry, ImageFormat, ImageId, Placement, PlacementId};
+    use std::num::NonZeroU16;
+
+    use felis_grid::images::{
+        CellPos, Extent, ImageEntry, ImageFormat, ImageId, Placement, PlacementId,
+    };
     use felis_protocol::messages::ImageMsg;
 
     // The exact numbers are not load-bearing: the bound holds for any RTT ≥
@@ -2662,10 +2670,8 @@ async fn time_to_first_frame_under_simulated_slow_link() {
         image_id: ImageId(7),
         placement_id: Some(PlacementId(1)),
         anchor: CellPos { row: 1, col: 1 },
-        cols: 4,
-        rows: 4,
-        requested_cols: 4,
-        requested_rows: 4,
+        cols: Extent::Requested(NonZeroU16::new(4).unwrap()),
+        rows: Extent::Requested(NonZeroU16::new(4).unwrap()),
         source: None,
         z_index: 0,
         no_cursor_move: false,

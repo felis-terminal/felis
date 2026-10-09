@@ -1773,18 +1773,18 @@ impl Grid {
 
     /// Moves the cursor past a Kitty image placement as kitty's
     /// `screen_handle_graphics_command` does; the rule is the kitty-graphics
-    /// reference, "Placement parameters". Zero on an axis moves nothing.
+    /// reference, "Placement parameters".
     pub fn advance_cursor_after_image_placement(
         &mut self,
-        rows: u16,
-        cols: u16,
+        rows: NonZeroU16,
+        cols: NonZeroU16,
         no_cursor_move: bool,
     ) {
-        if no_cursor_move || (rows == 0 && cols == 0) {
+        if no_cursor_move {
             return;
         }
-        let mut row = u32::from(self.screen.cursor.row) + u32::from(rows.saturating_sub(1));
-        let mut col = u32::from(self.screen.cursor.col) + u32::from(cols);
+        let mut row = u32::from(self.screen.cursor.row) + u32::from(rows.get() - 1);
+        let mut col = u32::from(self.screen.cursor.col) + u32::from(cols.get());
         let top = u32::from(self.margins.top);
         let bottom = u32::from(self.margins.bottom);
         let clamp_to_region = self.origin_mode && (top..=bottom).contains(&row);

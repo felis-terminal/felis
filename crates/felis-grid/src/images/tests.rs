@@ -232,15 +232,21 @@ fn replacement_evicts_other_entries_if_needed() {
     assert!(s.get(ImageId(2)).is_none());
 }
 
+fn nz(n: u16) -> NonZeroU16 {
+    NonZeroU16::new(n).unwrap()
+}
+
+fn cells(n: u16) -> Extent {
+    Extent::Requested(nz(n))
+}
+
 fn placement(image: u32, placement: Option<u32>, z: i32) -> Placement {
     Placement {
         image_id: ImageId(image),
         placement_id: placement.map(PlacementId),
         anchor: CellPos { row: 1, col: 1 },
-        cols: 0,
-        rows: 0,
-        requested_cols: 0,
-        requested_rows: 0,
+        cols: cells(1),
+        rows: cells(1),
         source: None,
         z_index: z,
         no_cursor_move: false,
@@ -463,7 +469,7 @@ fn shift_up_evicts_anchor_scrolled_past_retention() {
 fn contains_row_matches_live_rows_for_straddling_placement() {
     // Anchor at -2, 6 rows tall: covers rows -2..=3.
     let mut p = placement_at_row(1, -2);
-    p.rows = 6;
+    p.rows = cells(6);
     assert!(p.contains_row(1));
     assert!(p.contains_row(3));
     assert!(!p.contains_row(4));
@@ -474,7 +480,7 @@ fn contains_row_matches_live_rows_for_straddling_placement() {
 fn remove_intersecting_evicts_straddling_placement() {
     let mut t = Placements::new();
     let mut p = placement_at_row(1, -2);
-    p.rows = 6; // covers live rows 1..=3 (0-based 0..=2)
+    p.rows = cells(6); // covers live rows 1..=3 (0-based 0..=2)
     t.upsert(p);
     let removed = t.remove_intersecting(0, 23, /* force */ false);
     assert_eq!(removed.len(), 1);
@@ -489,7 +495,7 @@ fn remove_intersecting_evicts_straddling_placement() {
 fn remove_intersecting_spares_fully_scrolled_out_placement() {
     let mut t = Placements::new();
     let mut p = placement_at_row(1, -9);
-    p.rows = 4; // covers rows -9..=-6, all in scrollback
+    p.rows = cells(4); // covers rows -9..=-6, all in scrollback
     t.upsert(p);
     let removed = t.remove_intersecting(0, 23, false);
     assert_eq!(removed, Vec::<Placement>::new());
@@ -502,8 +508,8 @@ fn placement_at(image: u32, row_1based: i32, rows_high: u16, no_cursor: bool) ->
         row: row_1based,
         col: 1,
     };
-    p.rows = rows_high;
-    p.cols = 8;
+    p.rows = cells(rows_high);
+    p.cols = cells(8);
     p.no_cursor_move = no_cursor;
     p
 }
@@ -581,10 +587,8 @@ fn placement_box(
             row: row_1based,
             col: col_1based,
         },
-        cols,
-        rows,
-        requested_cols: cols,
-        requested_rows: rows,
+        cols: cells(cols),
+        rows: cells(rows),
         source: None,
         z_index: z,
         no_cursor_move: false,
@@ -755,7 +759,7 @@ fn advance_cursor_after_image_placement_lands_right_of_the_last_row() {
     let mut g = Grid::new(8, 16);
     g.screen.cursor.row = 1;
     g.screen.cursor.col = 2;
-    g.advance_cursor_after_image_placement(2, 3, false);
+    g.advance_cursor_after_image_placement(nz(2), nz(3), false);
     assert_eq!((g.screen.cursor.row, g.screen.cursor.col), (2, 5));
     assert!(!g.screen.cursor.pending_wrap);
 }
@@ -767,7 +771,7 @@ fn advance_cursor_after_image_placement_respects_no_cursor_move() {
     let mut g = Grid::new(8, 16);
     g.screen.cursor.row = 1;
     g.screen.cursor.col = 2;
-    g.advance_cursor_after_image_placement(2, 3, true);
+    g.advance_cursor_after_image_placement(nz(2), nz(3), true);
     assert_eq!(g.screen.cursor.row, 1);
     assert_eq!(g.screen.cursor.col, 2);
 }
@@ -777,7 +781,7 @@ fn advance_cursor_after_image_placement_wraps_at_the_right_edge() {
     let mut g = Grid::new(8, 16);
     g.screen.cursor.row = 1;
     g.screen.cursor.col = 14;
-    g.advance_cursor_after_image_placement(1, 2, false);
+    g.advance_cursor_after_image_placement(nz(1), nz(2), false);
     assert_eq!((g.screen.cursor.row, g.screen.cursor.col), (2, 0));
 }
 
@@ -791,7 +795,7 @@ fn advance_cursor_after_image_placement_scrolls_past_the_bottom() {
     let mut g = Grid::new(4, 8);
     drive(&mut p, &mut g, b"one\r\ntwo\r\nthree");
     g.screen.cursor.col = 0;
-    g.advance_cursor_after_image_placement(4, 2, false);
+    g.advance_cursor_after_image_placement(nz(4), nz(2), false);
     assert_eq!((g.screen.cursor.row, g.screen.cursor.col), (3, 2));
     assert_eq!(top_text(&g), "three", "two rows scrolled off the top");
 }
@@ -802,7 +806,7 @@ fn advance_cursor_after_image_placement_wrap_on_the_bottom_row_scrolls_one() {
     let mut g = Grid::new(4, 8);
     drive(&mut p, &mut g, b"one\r\ntwo\r\n\r\n");
     g.screen.cursor.col = 4;
-    g.advance_cursor_after_image_placement(1, 4, false);
+    g.advance_cursor_after_image_placement(nz(1), nz(4), false);
     assert_eq!((g.screen.cursor.row, g.screen.cursor.col), (3, 0));
     assert_eq!(top_text(&g), "two");
 }
@@ -814,7 +818,7 @@ fn advance_cursor_after_image_placement_under_decom_stays_in_the_region() {
     // Region rows 1..=3; the image's last row (3) is inside it, the wrap
     // pushes one past, the region scrolls and the cursor stays on row 3.
     drive(&mut p, &mut g, b"\x1b[2;4r\x1b[?6h\x1b[2;5H");
-    g.advance_cursor_after_image_placement(2, 4, false);
+    g.advance_cursor_after_image_placement(nz(2), nz(4), false);
     assert_eq!((g.screen.cursor.row, g.screen.cursor.col), (3, 0));
 }
 
@@ -825,7 +829,7 @@ fn advance_cursor_after_image_placement_without_decom_may_leave_the_region() {
     // As above with origin mode off: the region still scrolls, but the
     // wrapped cursor keeps row 4, below the region.
     drive(&mut p, &mut g, b"\x1b[2;4r\x1b[3;5H");
-    g.advance_cursor_after_image_placement(2, 4, false);
+    g.advance_cursor_after_image_placement(nz(2), nz(4), false);
     assert_eq!((g.screen.cursor.row, g.screen.cursor.col), (4, 0));
 }
 
@@ -836,19 +840,8 @@ fn advance_cursor_after_image_placement_leaving_the_region_clamps_to_the_screen(
     // Region rows 1..=3; the image's last row (5) is below it: the region
     // scrolls by two, the cursor keeps row 5.
     drive(&mut p, &mut g, b"\x1b[2;4r\x1b[3;1H");
-    g.advance_cursor_after_image_placement(4, 2, false);
+    g.advance_cursor_after_image_placement(nz(4), nz(2), false);
     assert_eq!((g.screen.cursor.row, g.screen.cursor.col), (5, 2));
-}
-
-#[test]
-fn advance_cursor_after_image_placement_with_zero_dims_is_noop() {
-    // `c=0,r=0` means "natural" size, which the dispatcher resolves; a
-    // literal zero must not get a phantom movement.
-    let mut g = Grid::new(8, 16);
-    g.screen.cursor.row = 1;
-    g.screen.cursor.col = 2;
-    g.advance_cursor_after_image_placement(0, 0, false);
-    assert_eq!((g.screen.cursor.row, g.screen.cursor.col), (1, 2));
 }
 
 // (docs/reference/protocols/kitty-graphics.md "Animation")
@@ -1380,19 +1373,20 @@ fn ris_keeps_the_graphics_commands_queued_before_it() {
 }
 
 #[test]
-fn effective_extent_resolves_each_auto_axis_from_the_cell_size() {
-    let src = (30, 40);
-    assert_eq!(effective_extent((0, 0), src, (10, 20)), (3, 2));
-    assert_eq!(effective_extent((0, 0), src, (8, 16)), (4, 3));
-    assert_eq!(effective_extent((7, 0), src, (8, 16)), (7, 3));
-    assert_eq!(effective_extent((0, 9), src, (8, 16)), (4, 9));
-    assert_eq!(effective_extent((7, 9), src, (8, 16)), (7, 9));
+fn extent_resolve_keeps_a_request_and_rounds_an_auto_axis_up() {
+    assert_eq!(Extent::resolve(7, 30, 8), Extent::Requested(nz(7)));
+    assert_eq!(Extent::resolve(0, 30, 10), Extent::Natural(nz(3)));
+    assert_eq!(Extent::resolve(0, 30, 8), Extent::Natural(nz(4)));
 }
 
 #[test]
-fn effective_extent_counts_an_unknown_cell_size_as_one_pixel() {
-    assert_eq!(effective_extent((0, 0), (30, 40), (0, 16)), (30, 3));
-    assert_eq!(effective_extent((0, 0), (0, 0), (8, 16)), (1, 1));
+fn extent_resolve_counts_an_unknown_cell_size_as_one_pixel() {
+    assert_eq!(Extent::resolve(0, 30, 0), Extent::Natural(nz(30)));
+    assert_eq!(Extent::resolve(0, 0, 8), Extent::Natural(nz(1)));
+    assert_eq!(
+        Extent::resolve(0, 1 << 20, 0),
+        Extent::Natural(nz(u16::MAX))
+    );
 }
 
 #[test]
@@ -1428,11 +1422,12 @@ fn store_with_30x40(id: u32) -> ImageStore {
 }
 
 fn requested(image: u32, pid: u32, cols: u16, rows: u16, resolved: (u16, u16)) -> Placement {
+    let axis = |requested, resolved| {
+        NonZeroU16::new(requested).map_or_else(|| Extent::Natural(nz(resolved)), Extent::Requested)
+    };
     Placement {
-        cols: resolved.0,
-        rows: resolved.1,
-        requested_cols: cols,
-        requested_rows: rows,
+        cols: axis(cols, resolved.0),
+        rows: axis(rows, resolved.1),
         ..placement(image, Some(pid), 0)
     }
 }
@@ -1446,7 +1441,7 @@ fn rescale_re_resolves_only_auto_axes_and_reports_the_changed_placements() {
     t.upsert(requested(1, 3, 0, 2, (3, 2)));
     let mut changed = Vec::new();
     t.rescale(&store, (8, 16), |p| changed.push(p.placement_id));
-    let extents: Vec<_> = t.iter().map(|p| (p.cols, p.rows)).collect();
+    let extents: Vec<_> = t.iter().map(Placement::extent).collect();
     assert_eq!(extents, [(4, 3), (5, 5), (4, 2)]);
     assert_eq!(
         changed,
@@ -1462,7 +1457,7 @@ fn rescale_keeps_an_axis_whose_cell_size_is_unknown() {
     t.upsert(requested(1, 1, 0, 0, (3, 2)));
     t.rescale(&store, (0, 16), |_| {});
     let p = t.iter().next().unwrap();
-    assert_eq!((p.cols, p.rows), (3, 3));
+    assert_eq!(p.extent(), (3, 3));
 }
 
 #[test]
@@ -1474,5 +1469,5 @@ fn rescale_leaves_a_placement_whose_image_is_gone() {
     t.rescale(&store, (8, 16), |_| changed += 1);
     assert_eq!(changed, 0);
     let p = t.iter().next().unwrap();
-    assert_eq!((p.cols, p.rows), (3, 2));
+    assert_eq!(p.extent(), (3, 2));
 }
