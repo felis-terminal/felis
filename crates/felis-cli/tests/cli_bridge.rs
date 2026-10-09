@@ -1054,6 +1054,13 @@ async fn a_lost_daemon_answers_pending_point_requests_with_error_replies() {
     let mut daemon = Daemon::start(&tmp, quiet_factory()).await;
     let mut bridge = Bridge::start(&daemon.socket);
 
+    // A served reply first: a bridge still dialing when the daemon dies
+    // reports an unreachable daemon instead of answering the requests.
+    bridge
+        .send(&request("served", "sessions.list", &json!({})))
+        .await;
+    assert_eq!(bridge.next().await["id"], json!("served"));
+
     // Holding the pool keeps both outstanding when the daemon dies.
     let parked = Arc::clone(&daemon.pool).lock_owned().await;
     bridge
@@ -1169,11 +1176,11 @@ async fn a_lost_daemon_answers_every_outstanding_operation_and_exits_nonzero() {
     assert!(acked[0]["result"]["sessions"].is_array());
 
     daemon.kill();
-    // Await the loss before closing stdin, or the exit measured may be
-    // the clean-EOF one.
     let _terminal = bridge.collect_for(&json!("notify"), 1).await;
 
-    let (code, transcript, stderr) = bridge.finish().await;
+    // Not `finish`: the terminal above arrives on the observer link, so
+    // a stdin EOF can still beat the anchor's loss to a clean exit.
+    let (code, transcript, stderr) = bridge.exit_without_stdin_eof().await;
     assert_ne!(
         code, 0,
         "a bridge that lost its daemon must not report success"
@@ -1351,9 +1358,12 @@ async fn a_relative_spawn_cwd_is_resolved_from_the_bridge_process() {
                 .to_owned(),
         );
     }
+    // `pwd` prints the physical path, and a long temp dir wraps it
+    // across rows.
+    let nested = nested.canonicalize().unwrap();
     assert!(
-        rows.iter()
-            .any(|row| row.contains(&nested.to_string_lossy().into_owned())),
+        rows.concat()
+            .contains(&nested.to_string_lossy().into_owned()),
         "the child reports the cwd anchored by the bridge: {rows:?}"
     );
 
