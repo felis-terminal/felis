@@ -1136,10 +1136,23 @@ fn delete_filtered(
     }
     if free_images {
         for id in touched_ids {
-            free_image(images, placements, events, id);
+            free_if_unplaced(images, placements, events, id);
         }
     }
     ActionOutcome::Ok
+}
+
+/// An uppercase delete frees the image only once no placement of it is
+/// left, as kitty's `filter_refs` does.
+fn free_if_unplaced(
+    images: &mut felis_grid::images::ImageStore,
+    placements: &mut felis_grid::images::Placements,
+    events: &mut Vec<ImageEvent>,
+    id: ImageId,
+) {
+    if placements.for_image(id).next().is_none() {
+        free_image(images, placements, events, id);
+    }
 }
 
 fn delete_by_id(
@@ -1175,7 +1188,7 @@ fn delete_by_id(
         }
     }
     if free_image {
-        self::free_image(images, placements, events, id);
+        free_if_unplaced(images, placements, events, id);
     }
     ActionOutcome::Ok
 }

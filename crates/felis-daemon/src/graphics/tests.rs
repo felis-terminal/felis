@@ -2879,8 +2879,8 @@ fn dispatch_controls(
 enum PlacementOp {
     /// `a=p,i=1` with this `p=`, `None` for none.
     Put(Option<u32>),
-    /// `a=d,d=i,i=1` with this `p=`.
-    Delete(Option<u32>),
+    /// `a=d,d=i,i=1` (or `d=I` when `free`) with this `p=`.
+    Delete { p: Option<u32>, free: bool },
     /// `a=t,i=1` again with new data.
     Retransmit,
 }
@@ -2893,17 +2893,17 @@ fn placement_id_choice() -> impl Strategy<Value = Option<u32>> {
 fn placement_op() -> impl Strategy<Value = PlacementOp> {
     prop_oneof![
         6 => placement_id_choice().prop_map(PlacementOp::Put),
-        2 => placement_id_choice().prop_map(PlacementOp::Delete),
+        2 => (placement_id_choice(), any::<bool>()).prop_map(|(p, free)| PlacementOp::Delete { p, free }),
         1 => Just(PlacementOp::Retransmit),
     ]
 }
 
 proptest! {
     /// kitty's placement identity, against a model: a put replaces only
-    /// under a non-zero `p=`, else adds its own placement that no `p=`
-    /// addresses; a delete without `p=` (or `p=0`) removes them all;
-    /// re-transmitting deletes them. Replies echo only a non-zero `p=`,
-    /// and each live placement holds one ref under its own id.
+    /// under a non-zero `p=`, else adds one no `p=` addresses; a delete
+    /// without `p=` (or `p=0`) removes all, as does re-transmitting; `d=I`
+    /// frees the image once none is left. Replies echo only a non-zero
+    /// `p=`; each placement holds one ref on a live image under its id.
     #[test]
     fn placements_follow_kittys_identity_rules_across_puts_deletes_and_retransmits(
         ops in proptest::collection::vec(placement_op(), 0..32),
@@ -2915,8 +2915,14 @@ proptest! {
         dispatch_controls(&mut grid, &mut images, &mut placements, &transmit, &payload);
         let mut id_less = 0;
         let mut named = std::collections::BTreeSet::new();
+        let mut image_live = true;
         for op in ops {
             match op {
+                PlacementOp::Put(_) if !image_live => {
+                    let put = [(b'a', b"p".as_slice()), (b'i', b"1"), (b'c', b"1"), (b'r', b"1")];
+                    let reply = dispatch_controls(&mut grid, &mut images, &mut placements, &put, b"");
+                    prop_assert!(reply.is_some_and(|r| r.starts_with(b"\x1b_Gi=1;ENOENT")));
+                }
                 PlacementOp::Put(p) => {
                     let p_text = p.map(|p| p.to_string());
                     let mut put = vec![(b'a', b"p".as_slice()), (b'i', b"1".as_slice()), (b'c', b"1".as_slice()), (b'r', b"1".as_slice())];
@@ -2935,9 +2941,10 @@ proptest! {
                         }
                     }
                 }
-                PlacementOp::Delete(p) => {
+                PlacementOp::Delete { p, free } => {
                     let p_text = p.map(|p| p.to_string());
-                    let mut delete = vec![(b'a', b"d".as_slice()), (b'd', b"i".as_slice()), (b'i', b"1".as_slice())];
+                    let d: &[u8] = if free { b"I" } else { b"i" };
+                    let mut delete = vec![(b'a', b"d".as_slice()), (b'd', d), (b'i', b"1".as_slice())];
                     if let Some(text) = &p_text {
                         delete.push((b'p', text.as_bytes()));
                     }
@@ -2951,11 +2958,15 @@ proptest! {
                             named.clear();
                         }
                     }
+                    if free && image_live && id_less + named.len() == 0 {
+                        image_live = false;
+                    }
                 }
                 PlacementOp::Retransmit => {
                     dispatch_controls(&mut grid, &mut images, &mut placements, &transmit, &payload);
                     id_less = 0;
                     named.clear();
+                    image_live = true;
                 }
             }
             prop_assert_eq!(placements.len(), id_less + named.len());
@@ -2967,7 +2978,10 @@ proptest! {
                 .filter_map(|p| p.placement_id.map(|id| id.0))
                 .collect();
             prop_assert_eq!(&named_live, &named);
-            prop_assert_eq!(images.get(ImageId(1)).unwrap().refcount() as usize, placements.len());
+            prop_assert_eq!(images.get(ImageId(1)).is_some(), image_live);
+            if image_live {
+                prop_assert_eq!(images.get(ImageId(1)).unwrap().refcount() as usize, placements.len());
+            }
         }
     }
 }
