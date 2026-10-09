@@ -880,17 +880,19 @@ impl Placements {
     }
 
     /// Last write wins under one `(image_id, placement_id)`, as Kitty
-    /// specifies.
-    pub fn upsert(&mut self, placement: Placement) {
+    /// specifies. Returns the placement replaced, whose ref the caller
+    /// releases.
+    pub fn upsert(&mut self, placement: Placement) -> Option<Placement> {
         let key = (placement.image_id, placement.placement_id);
         if let Some(slot) = self
             .entries
             .iter_mut()
             .find(|p| (p.image_id, p.placement_id) == key)
         {
-            *slot = placement;
+            Some(std::mem::replace(slot, placement))
         } else {
             self.entries.push(placement);
+            None
         }
     }
 

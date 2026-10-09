@@ -1225,9 +1225,20 @@ fn insert_into_store(
     // frame-streaming producer's pinned frames fill the cap once and
     // every later frame is rejected.
     evict_oldest_to_fit(images, placements, events, id, entry.byte_len());
+    let replacing = images.get(id).is_some();
     match images.insert(id, entry) {
         Ok(evicted) => {
             announce_evictions(placements, events, evicted);
+            // kitty deletes an image's placements when its data is
+            // replaced; `insert` already reset the refcount they held.
+            if replacing {
+                for p in placements.delete_image(id) {
+                    events.push(ImageEvent::PlacementRemoved {
+                        image_id: p.image_id,
+                        placement_id: p.placement_id,
+                    });
+                }
+            }
             events.push(ImageEvent::Transmit(id));
             ActionOutcome::Ok
         }
@@ -1285,7 +1296,7 @@ fn upsert_placement(
             "image vanished before placement could pin it",
         );
     }
-    placements.upsert(Placement {
+    let replaced = placements.upsert(Placement {
         image_id,
         placement_id,
         anchor,
@@ -1296,6 +1307,9 @@ fn upsert_placement(
         no_cursor_move,
         quiet,
     });
+    if replaced.is_some() {
+        images.release(image_id);
+    }
     refs.image_id = Some(image_id.0);
     if let Some(p) = placement_id {
         refs.placement_id = Some(p.0);

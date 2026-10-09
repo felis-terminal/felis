@@ -75,6 +75,7 @@ responses id-less. `a=p` and the ID-targeted deletes (`a=d` with `d=i`/`I` or `d
 Image data is retained until:
 
 - The producer deletes the image (`a=d`) matching its ID or number.
+- The producer transmits again under the same ID: the new data replaces it, and its placements are deleted as in kitty.
 - A later transmission needs room under the session byte cap and evicts it, placements included, oldest first (see
   [Limits](#limits)).
 - The session is destroyed.

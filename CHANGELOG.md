@@ -25,6 +25,8 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 
 ### Fixed
 
+- Sending a Kitty graphics image again under the same id now removes its old placements, as kitty does; they used to
+  stay on screen showing the new pixels.
 - `kitten icat --transfer-mode=stream`, the mode icat uses over ssh, now shows its images. felis cut every Kitty
   graphics command at 8 KiB, while kitty's own client sends up to 128 KiB at once; the limit is now kitty's 256 KiB.
 - An image that a program places one cell at a time, as yazi's previewer does, now draws whole. Past the first 64

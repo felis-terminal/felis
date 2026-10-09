@@ -2851,3 +2851,93 @@ fn icat_replay_unpadded_frame_appends_and_a_eq_a_is_silent() {
     .expect("a=a on an unknown image responds");
     assert!(resp.starts_with(b"\x1b_Gi=424242;ENOENT"), "got: {resp:?}");
 }
+
+fn dispatch_controls(
+    grid: &mut felis_grid::Grid,
+    images: &mut felis_grid::images::ImageStore,
+    placements: &mut felis_grid::images::Placements,
+    controls: &[(u8, &[u8])],
+    payload: &[u8],
+) -> Option<Vec<u8>> {
+    handle_complete(
+        &mut ApcCtx {
+            grid,
+            images,
+            placements,
+            events: &mut Vec::new(),
+            shm: &mut ShmDeferral::default(),
+            cell_pixel_w: 8,
+            cell_pixel_h: 16,
+            anchor_cursor: Some((0, 0)),
+        },
+        &complete(controls, payload),
+    )
+}
+
+#[derive(Debug, Clone)]
+enum PlacementOp {
+    /// `a=p,i=1,p=` this id.
+    Put(u32),
+    /// `a=d,d=i,i=1` with this `p=`, `None` for none.
+    Delete(Option<u32>),
+    /// `a=t,i=1` again with new data.
+    Retransmit,
+}
+
+fn placement_op() -> impl Strategy<Value = PlacementOp> {
+    prop_oneof![
+        6 => (1u32..4).prop_map(PlacementOp::Put),
+        2 => proptest::option::of(1u32..4).prop_map(PlacementOp::Delete),
+        1 => Just(PlacementOp::Retransmit),
+    ]
+}
+
+proptest! {
+    /// kitty's placement lifetime, against a model: a put replaces the
+    /// image's placement under its `p=`; a delete without `p=` removes
+    /// every placement of the image and one with `p=` only that one;
+    /// re-transmitting the image deletes its placements. Every live
+    /// placement holds exactly one ref on the image.
+    #[test]
+    fn placements_follow_kittys_lifetime_rules_across_puts_deletes_and_retransmits(
+        ops in proptest::collection::vec(placement_op(), 0..32),
+    ) {
+        let (mut grid, mut images, mut placements) = handler_state();
+        let (ctrls, payload) = tiny_rgba_controls();
+        let mut transmit = vec![(b'a', b"t".as_slice()), (b'i', b"1".as_slice()), (b'q', b"2".as_slice())];
+        transmit.extend_from_slice(&ctrls);
+        dispatch_controls(&mut grid, &mut images, &mut placements, &transmit, &payload);
+        let mut live = std::collections::BTreeSet::new();
+        for op in ops {
+            match op {
+                PlacementOp::Put(p) => {
+                    let p_text = p.to_string();
+                    let put = [(b'a', b"p".as_slice()), (b'i', b"1"), (b'c', b"1"), (b'r', b"1"), (b'p', p_text.as_bytes()), (b'q', b"2")];
+                    dispatch_controls(&mut grid, &mut images, &mut placements, &put, b"");
+                    live.insert(p);
+                }
+                PlacementOp::Delete(p) => {
+                    let p_text = p.map(|p| p.to_string());
+                    let mut delete = vec![(b'a', b"d".as_slice()), (b'd', b"i".as_slice()), (b'i', b"1".as_slice())];
+                    if let Some(text) = &p_text {
+                        delete.push((b'p', text.as_bytes()));
+                    }
+                    dispatch_controls(&mut grid, &mut images, &mut placements, &delete, b"");
+                    match p {
+                        Some(p) => {
+                            live.remove(&p);
+                        }
+                        None => live.clear(),
+                    }
+                }
+                PlacementOp::Retransmit => {
+                    dispatch_controls(&mut grid, &mut images, &mut placements, &transmit, &payload);
+                    live.clear();
+                }
+            }
+            let ids: std::collections::BTreeSet<_> = placements.iter().filter_map(|p| p.placement_id.map(|id| id.0)).collect();
+            prop_assert_eq!(&ids, &live);
+            prop_assert_eq!(images.get(ImageId(1)).unwrap().refcount() as usize, placements.len());
+        }
+    }
+}

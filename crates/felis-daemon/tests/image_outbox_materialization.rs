@@ -140,16 +140,20 @@ fn a_placement_between_two_transmissions_survives_the_collapse() {
     // image; `ImageShadow::apply_placement` must not require the image.
     let mut s = State::with_cap(ROOMY_CAP);
     let mut shadow = ImageShadow::new();
+    // Re-transmitting deletes the first placement, as in kitty; the one
+    // made after it must still land.
     transmit(&mut s, 1, 4, 0x11);
     s.dispatch(&body("Ga=p,i=1,c=1,r=1,q=2", &[]));
     transmit(&mut s, 1, 4, 0x22);
+    s.dispatch(&body("Ga=p,i=1,c=2,r=1,q=2", &[]));
     s.ship(&mut shadow);
 
     assert_eq!(
         shadow.placements().len(),
         1,
-        "the placement must outlive the collapsed transmission",
+        "the later placement must outlive the collapsed transmission",
     );
+    assert_eq!(shadow.placements()[0].cols, 2);
     assert_eq!(shadow.placements()[0].image_id, ImageId(1));
     assert_eq!(shadow.image(ImageId(1)).unwrap().pixels(), &[0x22; 16]);
 }
