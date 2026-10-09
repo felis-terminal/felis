@@ -311,6 +311,11 @@ mod tests {
                     match std::fs::read_link(link.path()) {
                         Ok(target) if target == keeper || target == churn => {}
                         Ok(target) => seen_wrong.push(target.display().to_string()),
+                        // APFS fails a lookup racing a `rename` over a
+                        // symlink with `EINVAL`, a state no link write can
+                        // leave behind; a stranded link reads as `ENOENT`.
+                        #[cfg(target_os = "macos")]
+                        Err(err) if err.raw_os_error() == Some(libc::EINVAL) => {}
                         Err(err) => seen_wrong.push(format!("no link: {err}")),
                     }
                 }
