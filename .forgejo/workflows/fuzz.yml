@@ -43,6 +43,13 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Read-only: a PR's targets may differ from main's, so what they find
+      # is not written back.
+      - name: start from the nightly corpus
+        run: |
+          root="$HOME/.cache/forgejo-ci/${{ github.repository }}/fuzz-corpus"
+          mkdir -p "$root" fuzz/corpus
+          flock "$root.lock" cp -a "$root/." fuzz/corpus/
       - name: smoke every target (seed corpus + 10k runs each)
         # Shares libFuzzer flags with local runs via justfile to prevent divergence.
         run: nix develop -c just fuzz-smoke
@@ -54,5 +61,22 @@ jobs:
     timeout-minutes: 360
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # A host directory rather than actions/cache, for the reason in
+      # .forgejo/actions/cargo-env.
+      - name: resume from the previous night's corpus
+        run: |
+          root="$HOME/.cache/forgejo-ci/${{ github.repository }}/fuzz-corpus"
+          mkdir -p "$root" fuzz/corpus
+          flock "$root.lock" cp -a "$root/." fuzz/corpus/
       - name: long-run + minify each target
         run: nix develop -c just fuzz-long
+      - name: keep the minified corpus for the next night
+        run: |
+          root="$HOME/.cache/forgejo-ci/${{ github.repository }}/fuzz-corpus"
+          (
+            flock 9
+            rm -rf "${root:?}.new"
+            cp -a fuzz/corpus "$root.new"
+            rm -rf "${root:?}"
+            mv "$root.new" "$root"
+          ) 9>"$root.lock"

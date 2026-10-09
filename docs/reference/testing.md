@@ -160,6 +160,10 @@ and pull requests targeting it, skipping documentation-only changes, and `just f
 per target followed by a corpus minification pass. A finding at either cadence fails the run; a clean nightly is not a
 qualification.
 
+The just recipes build the targets without a sanitizer, a panic or a failed debug assertion being the finding.
+`FUZZ_SANITIZER` selects one (`address`, for instance), and `FUZZ_JOBS` sets how many targets `just fuzz-long` runs at
+once.
+
 ### Running fuzz targets
 
 | Task                              | Command                   |

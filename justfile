@@ -277,6 +277,12 @@ bench-vs-check-field *args:
 
 # ── Fuzz (mirrors fuzz.yml; Linux/macOS, needs the flake nightly) ───
 
+# Not cargo-fuzz's default AddressSanitizer: every fuzzed crate forbids
+# unsafe_code, so ASan finds nothing a panic would not, at a tenth of the
+# executions per second.
+fuzz_sanitizer := env('FUZZ_SANITIZER', 'none')
+fuzz_jobs := env('FUZZ_JOBS', '4')
+
 # Enumerate the cargo-fuzz targets.
 [group('fuzz')]
 fuzz-list:
@@ -290,19 +296,19 @@ fuzz-smoke: _fuzz-seed
     cd fuzz
     for target in $(cargo fuzz list); do
         echo "::: fuzzing $target"
-        cargo fuzz run "$target" -- -runs=10000
+        cargo fuzz run -s {{ fuzz_sanitizer }} "$target" -- -runs=10000
     done
 
-# Long-run + cmin every target — mirrors fuzz.yml nightly (10 min/target).
+# Long-run + cmin every target, FUZZ_JOBS (default 4) at a time — mirrors fuzz.yml nightly (10 min/target).
 [group('fuzz')]
 fuzz-long secs='600': _fuzz-seed && fuzz-cmin
     #!/usr/bin/env bash
     set -euo pipefail
     cd fuzz
-    for target in $(cargo fuzz list); do
-        echo "::: long-run $target ({{ secs }}s)"
-        cargo fuzz run "$target" -- -max_total_time={{ secs }}
-    done
+    # One build up front, or the parallel runs queue on cargo's build lock.
+    cargo fuzz build -s {{ fuzz_sanitizer }}
+    cargo fuzz list | xargs -P {{ fuzz_jobs }} -I '{}' bash -o pipefail -c \
+        'cargo fuzz run -s {{ fuzz_sanitizer }} {} -- -max_total_time={{ secs }} 2>&1 | sed -u "s/^/[{}] /"'
 
 # Minify every target's corpus without re-running.
 [group('fuzz')]
@@ -312,13 +318,13 @@ fuzz-cmin:
     cd fuzz
     for target in $(cargo fuzz list); do
         echo "::: cmin $target"
-        cargo fuzz cmin "$target"
+        cargo fuzz cmin -s {{ fuzz_sanitizer }} "$target"
     done
 
 # Run one fuzz target; extra libFuzzer args go after `--`.
 [group('fuzz')]
 fuzz target *args: _fuzz-seed
-    cd fuzz && cargo fuzz run {{ target }} {{ args }}
+    cd fuzz && cargo fuzz run -s {{ fuzz_sanitizer }} {{ target }} {{ args }}
 
 _fuzz-seed:
     ./fuzz/seed-corpus.sh
