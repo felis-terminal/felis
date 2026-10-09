@@ -10,6 +10,10 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-10-09
+
+OSC 66 multi-row text and erases that follow a scroll no longer leave stale pieces on screen.
+
 ### Fixed
 
 - Resizing the window no longer leaves broken pieces of OSC 66 multi-row text on screen. A narrowing that re-wraps a
@@ -138,7 +142,8 @@ commands in place of `felis frontend <name>`.
 
 Initial release.
 
-[unreleased]: https://github.com/felis-terminal/felis/compare/v0.1.3...HEAD
+[unreleased]: https://github.com/felis-terminal/felis/compare/v0.1.4...HEAD
+[0.1.4]: https://github.com/felis-terminal/felis/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/felis-terminal/felis/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/felis-terminal/felis/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/felis-terminal/felis/compare/v0.1.0...v0.1.1
