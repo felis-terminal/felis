@@ -7,18 +7,20 @@
 use crate::{ApcBody, PtyEffect, ScrollOp};
 
 /// Maximum APC bodies buffered between [`PtyEffectQueue::take`]
-/// drains. Each body is already capped at
-/// [`felis_vt::APC_BUFFER_LIMIT`]; this bounds a flood inside one
-/// `Parser::advance`. Kitty graphics traffic emits 1–4 per animation
-/// frame.
+/// drains; this bounds a flood inside one `Parser::advance`.
 pub const APC_OUTBOX_CAP: usize = 64;
 
-const _: () = assert!(APC_OUTBOX_CAP * felis_vt::APC_BUFFER_LIMIT == 512 * 1024);
+/// Maximum APC body bytes buffered between drains. A count cap alone
+/// would admit 64 bodies of [`felis_vt::APC_BUFFER_LIMIT`] each.
+pub const APC_OUTBOX_BYTES: usize = 1024 * 1024;
+
+const _: () = assert!(APC_OUTBOX_BYTES >= felis_vt::APC_BUFFER_LIMIT);
 
 #[derive(Debug, Clone, Default)]
 pub struct PtyEffectQueue {
     effects: Vec<PtyEffect>,
     apc_len: usize,
+    apc_bytes: usize,
 }
 
 impl PartialEq for PtyEffectQueue {
@@ -34,7 +36,9 @@ impl PtyEffectQueue {
     /// [`APC_OUTBOX_CAP`]. [`Self::push_apc`] copies the body only once
     /// there is room for it.
     pub fn push(&mut self, effect: PtyEffect) -> bool {
-        if matches!(effect, PtyEffect::Apc(_)) && !self.reserve_apc() {
+        if let PtyEffect::Apc(apc) = &effect
+            && !self.reserve_apc(apc.body.len())
+        {
             return false;
         }
         self.effects.push(effect);
@@ -44,7 +48,7 @@ impl PtyEffectQueue {
     /// `false` when this drain's APC budget is spent; a refused APC
     /// costs no allocation.
     pub fn push_apc(&mut self, body: &[u8], cursor_row: u16, cursor_col: u16) -> bool {
-        if !self.reserve_apc() {
+        if !self.reserve_apc(body.len()) {
             return false;
         }
         self.effects.push(PtyEffect::Apc(ApcBody {
@@ -104,22 +108,26 @@ impl PtyEffectQueue {
         });
     }
 
-    /// No further APC fits until the next [`Self::take`].
+    /// A body of the largest size might not fit before the next
+    /// [`Self::take`].
     pub const fn apc_budget_spent(&self) -> bool {
         self.apc_len >= APC_OUTBOX_CAP
+            || self.apc_bytes + felis_vt::APC_BUFFER_LIMIT > APC_OUTBOX_BYTES
     }
 
     /// The only drain; it refills the APC budget.
     pub fn take(&mut self) -> Vec<PtyEffect> {
         self.apc_len = 0;
+        self.apc_bytes = 0;
         std::mem::take(&mut self.effects)
     }
 
-    const fn reserve_apc(&mut self) -> bool {
-        if self.apc_budget_spent() {
+    const fn reserve_apc(&mut self, len: usize) -> bool {
+        if self.apc_len >= APC_OUTBOX_CAP || self.apc_bytes + len > APC_OUTBOX_BYTES {
             return false;
         }
         self.apc_len += 1;
+        self.apc_bytes += len;
         true
     }
 
@@ -142,11 +150,18 @@ impl serde::Serialize for PtyEffectQueue {
 impl<'de> serde::Deserialize<'de> for PtyEffectQueue {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let effects = Vec::<PtyEffect>::deserialize(deserializer)?;
-        let apc_len = effects
+        let (apc_len, apc_bytes) = effects
             .iter()
-            .filter(|effect| matches!(effect, PtyEffect::Apc(_)))
-            .count();
-        Ok(Self { effects, apc_len })
+            .filter_map(|effect| match effect {
+                PtyEffect::Apc(apc) => Some(apc.body.len()),
+                _ => None,
+            })
+            .fold((0, 0), |(n, bytes), len| (n + 1, bytes + len));
+        Ok(Self {
+            effects,
+            apc_len,
+            apc_bytes,
+        })
     }
 }
 

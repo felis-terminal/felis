@@ -17,7 +17,7 @@ use crate::{
     HyperlinkEntry, KITTY_KBD_STACK_LIMIT, LinkText, Margins, NOTIFY_OUTBOX_CAP, PtyEffect,
     ScreenBuffer, ShellPrompt, Sizing, SizingHandle, StyleTable, SyncOutput, TITLE_STACK_LIMIT,
     images::{ImageEntry, ImageId},
-    pty_effects::APC_OUTBOX_CAP,
+    pty_effects::{APC_OUTBOX_BYTES, APC_OUTBOX_CAP},
     screen::SavedScreen,
     wire::{MAX_CELLS_PER_ROW, ROW_CODEC_VERSION, RowEncode, decode_row, encode_row},
 };
@@ -106,6 +106,7 @@ impl Grid {
             .collect();
         check(
             apcs.len() <= APC_OUTBOX_CAP
+                && apcs.iter().map(|apc| apc.body.len()).sum::<usize>() <= APC_OUTBOX_BYTES
                 && apcs
                     .iter()
                     .all(|apc| apc.body.len() <= felis_vt::APC_BUFFER_LIMIT),

@@ -46,9 +46,10 @@ pub const OSC_BUFFER_LIMIT: usize = 8192;
 
 /// Cap on a single APC body before truncation + [`Sink::apc_overflow`].
 ///
-/// Set above 4096 bytes because the buffered body includes `G<controls>;`
-/// prefix around the 4096-byte chunk payload.
-pub const APC_BUFFER_LIMIT: usize = 8192;
+/// kitty's `MAX_ESCAPE_CODE_LENGTH`, not the spec's 4096-byte chunk
+/// guidance: kitty's own client sends 128 KiB chunks and unchunked
+/// bodies up to that size.
+pub const APC_BUFFER_LIMIT: usize = 256 * 1024;
 
 const _: () = assert!(APC_BUFFER_LIMIT > 4096 && OSC_BUFFER_LIMIT > 4096);
 
@@ -435,6 +436,8 @@ impl Intermediates {
     }
 }
 
+const RETAINED_CAPACITY: usize = 8192;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct LimitedBuffer<const LIMIT: usize> {
     bytes: Vec<u8>,
@@ -447,6 +450,9 @@ impl<const LIMIT: usize> LimitedBuffer<LIMIT> {
 
     fn clear(&mut self) {
         self.bytes.clear();
+        // One 256 KiB Kitty graphics body would otherwise stay
+        // allocated in every parser that ever saw one.
+        self.bytes.shrink_to(RETAINED_CAPACITY);
     }
 
     fn push(&mut self, byte: u8) -> bool {

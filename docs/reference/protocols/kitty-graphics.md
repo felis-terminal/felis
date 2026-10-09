@@ -261,16 +261,16 @@ Non-`G` APC escapes are silently ignored to prevent interfering with unrelated A
 
 ## Limits
 
-- Maximum APC body: 8192 bytes between the `ESC _` introducer and the terminating `ST`, controls and payload together.
-  The upstream spec caps a chunk's base64 payload at 4096 bytes, so a spec-legal chunk always fits. A longer body is
-  truncated to the cap, the bell rings, and the truncated body still reaches the dispatcher.
+- Maximum APC body: 256 KiB between the `ESC _` introducer and the terminating `ST`, controls and payload together,
+  kitty's own escape-code limit. A longer body is truncated to the cap, the bell rings, and the truncated body still
+  reaches the dispatcher.
 - Maximum decoded image memory: 256 MiB per session. When exceeded, the oldest images and their placements are evicted
   (emitting `PlacementRemoved` and `Delete`); a transmit that still does not fit is rejected with `ENOTSUP`.
 - Budget accounting: Decoded pixel size plus fixed per-entry and per-frame overheads count toward the 256 MiB session
   ceiling.
 - Maximum decoded image size: 64 MiB per image. A larger image is rejected with `ENOTSUP` before its buffer is sized.
 - Maximum frames per image: 4096 frames (including root). Additional frames are rejected with `ENOTSUP`.
-- APC command queue: at most 64 APC bodies (8 KiB each, 512 KiB total) buffered between daemon drains. The body that
-  fills the queue pauses the PTY parse until the daemon drains it, so a burst of any length arrives whole.
+- APC command queue: at most 64 APC bodies and 1 MiB buffered between daemon drains. The body that fills the queue
+  pauses the PTY parse until the daemon drains it, so a burst of any length arrives whole.
 - Shared-memory unlinks: Up to 16 deferred segment names per session. Subsequent segments trigger immediate unlinking of
   the oldest entry.

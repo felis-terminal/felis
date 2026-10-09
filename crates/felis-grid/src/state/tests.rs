@@ -99,6 +99,16 @@ fn a_grid_survives_the_hop_on_either_screen_and_mid_sequence() {
 }
 
 #[test]
+fn a_byte_budgeted_apc_queue_survives_the_hop_mid_body() {
+    // Five 200 KiB bodies fit the queue's 1 MiB and a sixth does not;
+    // the hop lands inside the fifth.
+    let body = format!("\x1b_Ga=t,i=1,m=1;{}\x1b\\", "A".repeat(200 * 1024));
+    let mut stream = body.repeat(6).into_bytes();
+    let tail = stream.split_off(body.len() * 4 + 100 * 1024);
+    assert_survives(5, 10, 0, &stream, &tail);
+}
+
+#[test]
 fn a_full_scrollback_ring_survives_the_hop() {
     let mut output = Vec::new();
     for i in 0..300 {

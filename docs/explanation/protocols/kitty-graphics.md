@@ -73,13 +73,13 @@ on the daemon: the async runtime is daemon-only, and a daemon-side clock is what
 
 The grid does not decode graphics commands; it copies each APC body into the effect queue the daemon drains. That copy
 is what needs a budget, because a producer chooses both the body size and how many arrive inside a single
-`Parser::advance`. The queue admits 64 bodies per drain, and the body that fills it stops the parse until the daemon has
-drained, the same stop a cursor-moving placement takes. Pausing beats both growing the buffer and dropping: the bound
-keeps a hostile producer from turning a command flood into daemon memory, and a producer that places an image one cell
-at a time (yazi) sends thousands of bodies in one write, none of which may be lost. The bound is a property of the queue
-type, not a check its callers remember: the queue holds the APC count it is compared against and mints every APC entry
-itself, because a count maintained beside the queue is one that eventually disagrees with it, and a budget that has
-drifted off what it names bounds nothing.
+`Parser::advance`. The queue admits 64 bodies and 1 MiB per drain, and the body that fills it stops the parse until the
+daemon has drained, the same stop a cursor-moving placement takes. Pausing beats both growing the buffer and dropping:
+the bound keeps a hostile producer from turning a command flood into daemon memory, and a producer that places an image
+one cell at a time (yazi) sends thousands of bodies in one write, none of which may be lost. The bound is a property of
+the queue type, not a check its callers remember: the queue holds the APC count it is compared against and mints every
+APC entry itself, because a count maintained beside the queue is one that eventually disagrees with it, and a budget
+that has drifted off what it names bounds nothing.
 
 Revisit if: a second dispatcher consumer appears (a CLI debug tool or headless renderer would justify extracting a
 `felis-image` crate, with the daemon as a thin caller); placement-heavy output shows the per-placement pause in
