@@ -529,6 +529,45 @@ fn sr_shifts_no_recycled_tail_into_view() {
 }
 
 #[test]
+fn decsel_exposes_no_recycled_tail() {
+    insta::assert_snapshot!(snap_rows(3, 5, "\x1b[?1049h字\x1b[S\x1b[3;2H\x1b[?0K"), @r#"
+    cursor: row=2 col=1 visible=1 pending_wrap=0
+    cells: ·|·|·|·|·
+    text: ""
+    cells: ·|·|·|·|·
+    text: ""
+    cells: ·|·|·|·|·
+    text: ""
+    "#);
+}
+
+#[test]
+fn a_colored_ech_keeps_a_recycled_rows_protected_tail_hidden() {
+    insta::assert_snapshot!(snap_rows(3, 5, "\x1b[?1049h\x1bV字\x1bW\x1b[S\x1b[3;2H\x1b[41m\x1b[X"), @r#"
+    cursor: row=2 col=1 visible=1 pending_wrap=0
+    cells: ·|·|·|·|·
+    text: ""
+    cells: ·|·|·|·|·
+    text: ""
+    cells: ·|·|·|·|·
+    text: ""
+    "#);
+}
+
+#[test]
+fn a_colored_ech_exposes_no_recycled_tail() {
+    insta::assert_snapshot!(snap_rows(3, 5, "\x1b[?1049h字\x1b[S\x1b[3;2H\x1b[41m\x1b[X"), @r#"
+    cursor: row=2 col=1 visible=1 pending_wrap=0
+    cells: ·|·|·|·|·
+    text: ""
+    cells: ·|·|·|·|·
+    text: ""
+    cells: ·|·|·|·|·
+    text: ""
+    "#);
+}
+
+#[test]
 fn decsed_exposes_no_recycled_tail() {
     insta::assert_snapshot!(snap_rows(3, 5, "\x1b[?1049h字\x1b[S\x1b[1;1H\x1b[?1J"), @r#"
     cursor: row=0 col=0 visible=1 pending_wrap=0

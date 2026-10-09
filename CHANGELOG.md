@@ -15,6 +15,9 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 - Resizing the window no longer leaves broken pieces of OSC 66 multi-row text on screen. A narrowing that re-wraps a
   scaled run draws its text at natural size, and a block whose top row scrolls into history leaves no lower half behind;
   both used to leave stray half-blocks.
+- Erasing from the middle of a line that a scroll had just brought into view no longer resurfaces text left of the
+  cursor that the line held before the scroll. It hit a selective erase (`CSI ? 0 K`), and an erase (`ECH`, `EL`) with a
+  background color or protection set.
 
 ## [0.1.3] - 2026-10-08
 

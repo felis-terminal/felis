@@ -891,6 +891,12 @@ impl Grid {
             link: None,
             sizing: None,
         };
+        // A pen-colored blank raises the watermark to `to`, over stale
+        // cells left of `from` or kept by the protected-cell skip below.
+        let phys = row_start / usize::from(self.screen.cols);
+        if blank != Cell::default() && usize::from(self.screen.occupancy[phys]) < to - row_start {
+            self.fill_leading_gap(phys, to - row_start);
+        }
         for slot in &mut self.screen.cells[from..to] {
             if iso_aware
                 && self
@@ -908,7 +914,6 @@ impl Grid {
         // must cover it; an erase-to-row-end with the default pen
         // lowers it instead, unless iso-protected cells may have
         // survived inside the range.
-        let phys = row_start / usize::from(self.screen.cols);
         if blank == Cell::default() {
             if !iso_aware && to == row_end {
                 let new_end = u16::try_from(from - row_start).unwrap_or(u16::MAX);
@@ -2275,6 +2280,9 @@ impl Grid {
             2 => (0, cols),
             _ => return,
         };
+        // The watermark is raised to `to`, over any stale tail left of
+        // `from` that this erase skips.
+        self.materialize_row_tail(row);
         let (from, to) = self.pair_aligned_span(row, from, to);
         let blank = self.selective_blank();
         let protect = AttrFlags::PROTECTED | AttrFlags::ISO_PROTECTED;
