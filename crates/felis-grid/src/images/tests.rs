@@ -1334,6 +1334,25 @@ fn parse_does_not_yield_on_a_placement_the_outbox_dropped() {
     assert_eq!(yields(&mut g, &["Ga=p,i=1"]), [true]);
 }
 
+#[test]
+fn parse_yields_when_the_outbox_fills_so_a_flood_of_placements_survives() {
+    let mut p = Parser::new();
+    let mut g = Grid::new(8, 16);
+    let mut bytes = Vec::new();
+    for _ in 0..APC_OUTBOX_CAP * 3 {
+        bytes.extend_from_slice(b"\x1b_Ga=p,i=1,p=2,C=1\x1b\\");
+    }
+    let mut rest = bytes.as_slice();
+    let mut drained = 0;
+    while let Some(consumed) = p.advance_until_yield(&mut g, rest) {
+        drained += apc_bodies(&mut g).len();
+        rest = &rest[consumed..];
+    }
+    drained += apc_bodies(&mut g).len();
+    assert_eq!(drained, APC_OUTBOX_CAP * 3);
+    assert!(!g.take_bell_pending(), "nothing was dropped");
+}
+
 fn alt_scrolls(g: &mut Grid) -> Vec<u32> {
     g.take_pty_effects()
         .into_iter()

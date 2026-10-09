@@ -23,6 +23,11 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 - **CLI**: `felis doctor` notes on the `daemon` row when the running daemon is a build other than the installed
   `felis-daemon`, naming the installed one.
 
+### Fixed
+
+- An image that a program places one cell at a time, as yazi's previewer does, now draws whole. Past the first 64
+  placements in one write, the rest were dropped and the bell rang, leaving only a few strips of the image.
+
 ## [0.1.4] - 2026-10-09
 
 OSC 66 multi-row text and erases that follow a scroll no longer leave stale pieces on screen.

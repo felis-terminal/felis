@@ -104,6 +104,11 @@ impl PtyEffectQueue {
         });
     }
 
+    /// No further APC fits until the next [`Self::take`].
+    pub const fn apc_budget_spent(&self) -> bool {
+        self.apc_len >= APC_OUTBOX_CAP
+    }
+
     /// The only drain; it refills the APC budget.
     pub fn take(&mut self) -> Vec<PtyEffect> {
         self.apc_len = 0;
@@ -111,7 +116,7 @@ impl PtyEffectQueue {
     }
 
     const fn reserve_apc(&mut self) -> bool {
-        if self.apc_len >= APC_OUTBOX_CAP {
+        if self.apc_budget_spent() {
             return false;
         }
         self.apc_len += 1;
