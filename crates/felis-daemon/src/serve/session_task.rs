@@ -542,6 +542,8 @@ pub async fn spawn_owned(
         reported_resize: None,
         #[cfg(all(test, unix))]
         pty_steps: Vec::new(),
+        #[cfg(all(test, unix))]
+        pty_resized_over: Vec::new(),
         meta_title_epoch: title_epoch,
         meta_cwd_epoch: cwd_epoch,
         pending_chunks: std::collections::VecDeque::new(),
@@ -742,6 +744,9 @@ struct SessionTask {
     /// can see the order.
     #[cfg(all(test, unix))]
     pty_steps: Vec<PtyStep>,
+    /// Test-only: the grid's geometry as each PTY resize goes out.
+    #[cfg(all(test, unix))]
+    pty_resized_over: Vec<(u16, u16)>,
     /// An in-task queue rather than a self-addressed `SessionCmd`: the
     /// command channel is bounded, so a producer re-queueing through it
     /// could block while holding the only thread that drains it.
@@ -2555,7 +2560,12 @@ impl SessionTask {
         // can block on its output pipe, which drains only through the
         // parser that lock serializes.
         #[cfg(all(test, unix))]
-        self.pty_steps.push(PtyStep::Resize);
+        {
+            self.pty_steps.push(PtyStep::Resize);
+            let core = self.session.lock_core();
+            self.pty_resized_over
+                .push((core.grid.rows(), core.grid.cols()));
+        }
         if let Err(err) = self.session.resizer.resize(size) {
             warn!(?err, "pty resize failed");
         }
@@ -2668,6 +2678,7 @@ impl SessionTask {
             resize_notify_dirty: false,
             reported_resize: None,
             pty_steps: Vec::new(),
+            pty_resized_over: Vec::new(),
             pending_chunks: std::collections::VecDeque::new(),
             meta_title_epoch: 0,
             meta_cwd_epoch: 0,
@@ -3746,6 +3757,18 @@ mod tests {
             2,
             "each set answers, even at an unchanged geometry: {seen:?}",
         );
+    }
+
+    /// The shell's repaint after SIGWINCH must meet the new grid, so the
+    /// PTY resizes only once the grid has reflowed to it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_pty_resizes_after_the_grid_takes_the_new_geometry() {
+        let mut task = SessionTask::for_tests(session_with("read _x"));
+        let (sub, _rx) = attach_sub(&mut task, false);
+        assert!(resize_to(&mut task, sub, 30, 120).is_none());
+        write_to_grid(&task, b"\x1b[?1049h");
+        assert!(resize_to(&mut task, sub, 20, 60).is_none());
+        assert_eq!(task.pty_resized_over, [(30, 120), (20, 60)]);
     }
 
     /// A resize triggered by size-ownership transfer reports before the
