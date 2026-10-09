@@ -1306,6 +1306,7 @@ fn parse_yields_after_a_cursor_moving_placement_only() {
         (&["Ga=q,f=24,s=1,v=1;AAAA"], &[false]),
         (&["Ga=T,C=1,f=24,s=1,v=1;AAAA"], &[false]),
         (&["Ga=T,U=1,f=24,s=1,v=1;AAAA"], &[false]),
+        (&["Ga=T,C=01,f=24,s=1,v=1;AAAA"], &[false]),
         // A repeated key reads its last value, as the dispatcher does.
         (&["Ga=t,a=T,f=24,s=1,v=1;AAAA"], &[true]),
         (&["Ga=T,a=t,f=24,s=1,v=1;AAAA"], &[false]),

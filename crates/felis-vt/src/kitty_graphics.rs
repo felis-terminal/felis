@@ -77,6 +77,36 @@ impl<'a> Command<'a> {
     }
 }
 
+/// The last value `key` carries in a completed command's controls.
+#[must_use]
+pub fn control(controls: &[(u8, Vec<u8>)], key: u8) -> Option<&[u8]> {
+    controls
+        .iter()
+        .rev()
+        .find_map(|(k, v)| (*k == key).then_some(v.as_slice()))
+}
+
+/// `key` read as a decimal number, so `C=01` means what `C=1` does.
+#[must_use]
+pub fn control_u32(controls: &[(u8, Vec<u8>)], key: u8) -> Option<u32> {
+    std::str::from_utf8(control(controls, key)?)
+        .ok()?
+        .parse()
+        .ok()
+}
+
+/// Whether kitty moves the cursor past the placement a completed command
+/// makes (`graphics.c` `handle_put_command`): `a=T` and `a=p` do unless
+/// `C=1` asks not to or `U=1` makes the placement virtual. The grid stops its parse on exactly these commands
+/// and the dispatcher moves the cursor on exactly these, so text after
+/// the image lands beside it.
+#[must_use]
+pub fn moves_cursor(controls: &[(u8, Vec<u8>)]) -> bool {
+    matches!(control(controls, b'a'), Some(b"T" | b"p"))
+        && control_u32(controls, b'C') != Some(1)
+        && control_u32(controls, b'U') != Some(1)
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ResponseRefs {
     /// `i=<u32>`.
@@ -396,6 +426,36 @@ mod kani_proofs {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn moves_cursor_reads_c_and_u_as_numbers() {
+        let controls = |body: &[u8]| -> Vec<(u8, Vec<u8>)> {
+            parse(body)
+                .unwrap()
+                .controls
+                .into_iter()
+                .map(|(k, v)| (k, v.to_vec()))
+                .collect()
+        };
+        for (body, want) in [
+            (&b"Ga=T"[..], true),
+            (b"Ga=p,C=0", true),
+            (b"Ga=p,C=2", true),
+            (b"Ga=T,C=1", false),
+            (b"Ga=T,C=01", false),
+            (b"Ga=p,U=01", false),
+            (b"Ga=T,C=1,C=0", true),
+            (b"Ga=t", false),
+            (b"G", false),
+        ] {
+            assert_eq!(
+                moves_cursor(&controls(body)),
+                want,
+                "{}",
+                String::from_utf8_lossy(body)
+            );
+        }
+    }
 
     #[test]
     fn rejects_body_not_starting_with_g() {

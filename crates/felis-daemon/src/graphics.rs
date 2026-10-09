@@ -314,11 +314,7 @@ const fn gap_from_z(z: Option<i32>) -> u32 {
 }
 
 fn control_value(complete: &CompleteCommand, key: u8) -> Option<&[u8]> {
-    complete
-        .controls
-        .iter()
-        .rev()
-        .find_map(|(k, v)| (*k == key).then_some(v.as_slice()))
+    kitty_graphics::control(&complete.controls, key)
 }
 
 fn control_byte(complete: &CompleteCommand, key: u8) -> Option<u8> {
@@ -327,8 +323,7 @@ fn control_byte(complete: &CompleteCommand, key: u8) -> Option<u8> {
 }
 
 fn control_u32(complete: &CompleteCommand, key: u8) -> Option<u32> {
-    let v = control_value(complete, key)?;
-    std::str::from_utf8(v).ok()?.parse::<u32>().ok()
+    kitty_graphics::control_u32(&complete.controls, key)
 }
 
 /// The geometry keys (`x=`/`y=`/`c=`/`r=`) live in cell space, so a
@@ -1254,7 +1249,7 @@ fn upsert_placement(
     let req_cols = control_u16(complete, b'c').unwrap_or(0);
     let req_rows = control_u16(complete, b'r').unwrap_or(0);
     let z_index = control_i32(complete, b'z').unwrap_or(0);
-    let no_cursor_move = control_u32(complete, b'C').is_some_and(|v| v == 1);
+    let no_cursor_move = !kitty_graphics::moves_cursor(&complete.controls);
     let quiet = quiet_level(complete);
     let source = source_rect(complete);
     // Natural sizing (`c=0` / `r=0`) resolves now, while the image
