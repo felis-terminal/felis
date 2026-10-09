@@ -436,6 +436,8 @@ impl Intermediates {
     }
 }
 
+const RETAINED_CAPACITY: usize = 8192;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct LimitedBuffer<const LIMIT: usize> {
     bytes: Vec<u8>,
@@ -448,6 +450,9 @@ impl<const LIMIT: usize> LimitedBuffer<LIMIT> {
 
     fn clear(&mut self) {
         self.bytes.clear();
+        // One 256 KiB Kitty graphics body would otherwise stay
+        // allocated in every parser that ever saw one.
+        self.bytes.shrink_to(RETAINED_CAPACITY);
     }
 
     fn push(&mut self, byte: u8) -> bool {
