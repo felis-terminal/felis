@@ -86,8 +86,10 @@ pub struct ScreenBuffer {
     pub(crate) sizing_table: Vec<Sizing>,
     /// Conservative hint for the [`sink::print_str`](crate::sink) bulk
     /// fast path. May read true after the last sized cell scrolled away,
-    /// which only de-opts the fast path.
-    pub(crate) has_sized_cells: bool,
+    /// which only de-opts the fast path; reading false while a viewport
+    /// cell carries a handle lets a print shear its block, so only the
+    /// methods that write or wipe cells move it.
+    has_sized_cells: bool,
     /// Bumped on every geometry change, and carried by every
     /// [`PtyEffect::Scrolled`](crate::PtyEffect): a consumer that ships
     /// a directive one generation late would shift rows the resize has
@@ -627,6 +629,57 @@ impl ScreenBuffer {
         self.has_sized_cells = self.cells.iter().any(|c| c.sizing.is_some());
     }
 
+    pub(crate) const fn has_sized_cells(&self) -> bool {
+        self.has_sized_cells
+    }
+
+    #[inline]
+    pub(crate) fn write_cell(&mut self, idx: usize, cell: Cell) {
+        self.cells[idx] = cell;
+        if cell.sizing.is_some() {
+            self.has_sized_cells = true;
+        }
+    }
+
+    /// Every cell, history included.
+    pub(crate) fn fill_cells(&mut self, cell: Cell) {
+        self.cells.fill(cell);
+        self.has_sized_cells = cell.sizing.is_some();
+    }
+
+    pub(crate) fn erase_viewport(&mut self, blank: Cell) {
+        if blank == Cell::default() {
+            // Everything past the watermark is already `Cell::default()`,
+            // so blanking only the occupied prefix suffices.
+            let cols = usize::from(self.cols);
+            for logical in 0..usize::from(self.rows) {
+                let phys = self.phys_row_at(logical);
+                let occ = usize::from(self.occupancy[phys]);
+                // A stale soft-wrap bit on an already-blank row
+                // still has to ship (it rides the row's delta).
+                if occ == 0 && !self.soft_wrap[phys] {
+                    continue;
+                }
+                if occ > 0 {
+                    let start = phys * cols;
+                    self.cells[start..start + occ].fill(blank);
+                    self.occupancy[phys] = 0;
+                }
+                self.soft_wrap[phys] = false;
+                self.damage.mark(logical);
+            }
+            self.has_sized_cells = false;
+        } else {
+            // BCE: every cell takes the pen's color, and the
+            // watermark pins at `cols` (a colored blank is not
+            // a default cell).
+            self.fill_cells(blank);
+            self.occupancy.fill(self.cols);
+            self.soft_wrap.fill(false);
+            self.damage.mark_all();
+        }
+    }
+
     /// The reservation covers the whole retention window up front
     /// (`ring_cells`), so this is the term that decides a grid's
     /// address-space cost.
@@ -855,7 +908,7 @@ impl ScreenBuffer {
                 let base = phys * usize::from(self.cols);
                 self.cells[base + occ..base + c].fill(Cell::default());
             }
-            self.cells[idx] = cell;
+            self.write_cell(idx, cell);
             self.occ_bump_idx(idx);
             self.damage.mark(row.into());
         }
@@ -972,6 +1025,9 @@ impl ScreenBuffer {
             return false;
         }
         dst.copy_from_slice(cells);
+        if cells.iter().any(|c| c.sizing.is_some()) {
+            self.has_sized_cells = true;
+        }
         self.occ_bump_row(row, self.cols);
         self.damage.mark(row.into());
         true

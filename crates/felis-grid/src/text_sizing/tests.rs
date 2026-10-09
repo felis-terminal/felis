@@ -61,6 +61,26 @@ fn clearing_a_cell_removes_it_from_the_side_table_only() {
     assert_eq!(g.sizing_by_handle(h), Some(&Sizing::default()));
 }
 
+#[test]
+fn a_sized_cell_written_whole_is_reported_on_its_row() {
+    let s = Sizing::default();
+    let mut g = Grid::new(4, 4);
+    let h = g.install_sizing(s).unwrap();
+    let cell = Cell {
+        sizing: Some(h),
+        ..Cell::default()
+    };
+    g.set_cell(1, 2, cell);
+    assert_eq!(g.row_sized_cells(1), vec![(2, s)], "set_cell");
+
+    let mut g = Grid::new(4, 4);
+    let h = g.install_sizing(s).unwrap();
+    let mut row = [Cell::default(); 4];
+    row[3].sizing = Some(h);
+    assert!(g.write_row_cells(1, &row));
+    assert_eq!(g.row_sized_cells(1), vec![(3, s)], "write_row_cells");
+}
+
 /// Matches the `Damage::mark` tolerance so a resize-window race needs
 /// no separate sweep before stamping a fresh row.
 #[test]
@@ -440,7 +460,7 @@ fn assert_blocks_whole(g: &Grid, case: &str) {
                 .sized_block_at(r, c)
                 .unwrap_or_else(|| panic!("{case}: ({r},{c}) carries a handle with no primary"));
             assert!(
-                g.screen.has_sized_cells,
+                g.screen.has_sized_cells(),
                 "{case}: ({r},{c}) carries a handle the print fast paths cannot see"
             );
             assert!(

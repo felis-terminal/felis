@@ -98,7 +98,7 @@ impl Grid {
         keep: impl Fn(&SizedBlock) -> bool,
     ) -> Vec<SizedBlock> {
         let mut out: Vec<SizedBlock> = Vec::new();
-        if !self.screen.has_sized_cells || row >= self.screen.rows {
+        if !self.screen.has_sized_cells() || row >= self.screen.rows {
             return out;
         }
         let phys = self.screen.phys_row(row);
@@ -125,7 +125,7 @@ impl Grid {
     /// block and not the others, so it erases every one it reaches
     /// first, as kitty's `nuke_multiline_char_intersecting_with` does.
     pub(crate) fn erase_multirow_blocks_on(&mut self, row: u16, left: u16, right: u16) {
-        if !self.screen.has_sized_cells {
+        if !self.screen.has_sized_cells() {
             return;
         }
         for block in self.multirow_blocks_on(row, left, right, |_| true) {
@@ -144,7 +144,7 @@ impl Grid {
         right: u16,
         departing: u16,
     ) {
-        if !self.screen.has_sized_cells {
+        if !self.screen.has_sized_cells() {
             return;
         }
         let mut cut: Vec<SizedBlock> = Vec::new();
@@ -334,7 +334,7 @@ impl Grid {
     }
 
     fn holds_lower_block_row(&self, row: u16, col: u16) -> bool {
-        self.screen.has_sized_cells
+        self.screen.has_sized_cells()
             && self
                 .screen
                 .cell(row, col)
@@ -351,7 +351,7 @@ impl Grid {
         let right = left + block_w;
         let natural_w = u16::from(self.screen.grapheme_width(g).max(1));
         for r in top..bottom {
-            if self.screen.has_sized_cells {
+            if self.screen.has_sized_cells() {
                 let occ = self.screen.occupancy[self.screen.phys_row(r)];
                 for c in left..right.min(occ) {
                     if self.screen.cells[self.screen.idx(r, c)].sizing.is_some() {
@@ -376,17 +376,19 @@ impl Grid {
                 } else {
                     Grapheme::SizedSpacer
                 };
-                self.screen.cells[base + usize::from(c)] = Cell {
-                    grapheme,
-                    style: self.pen_style,
-                    link: self.current_link,
-                    sizing: Some(handle),
-                };
+                self.screen.write_cell(
+                    base + usize::from(c),
+                    Cell {
+                        grapheme,
+                        style: self.pen_style,
+                        link: self.current_link,
+                        sizing: Some(handle),
+                    },
+                );
             }
             self.screen.occ_bump_phys(phys, right);
             self.screen.damage.mark(usize::from(r));
         }
-        self.screen.has_sized_cells = true;
         self.last_printed = Some(g);
         self.zwj_pending = false;
         let edge = self.print_right_edge_for_cursor();

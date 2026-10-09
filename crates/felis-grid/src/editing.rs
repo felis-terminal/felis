@@ -368,7 +368,7 @@ impl Grid {
         // Erase any foreign sized run before printing: Kitty text-sizing spec
         // requires erasing the entire character if any of its cells are modified.
         // Runs before `evict_wide_partner` so the latter sees post-clear cells.
-        if self.screen.has_sized_cells {
+        if self.screen.has_sized_cells() {
             self.clear_foreign_sized_run(self.screen.cursor.row, self.screen.cursor.col);
             if width == 2 && self.screen.cursor.col + 1 < self.screen.cols {
                 self.clear_foreign_sized_run(self.screen.cursor.row, self.screen.cursor.col + 1);
@@ -407,15 +407,15 @@ impl Grid {
         // The sizing stamp rides in the cell
         // (docs/explanation/data-model/grid-and-cells.md), so
         // re-printing over a sized cell clears its handle for free.
-        self.screen.cells[idx] = Cell {
-            grapheme: g,
-            style: self.pen_style,
-            link: self.current_link,
-            sizing: self.current_sizing_handle,
-        };
-        if self.current_sizing_handle.is_some() {
-            self.screen.has_sized_cells = true;
-        }
+        self.screen.write_cell(
+            idx,
+            Cell {
+                grapheme: g,
+                style: self.pen_style,
+                link: self.current_link,
+                sizing: self.current_sizing_handle,
+            },
+        );
         self.screen.occ_bump_phys(
             phys,
             self.screen.cursor.col.saturating_add(u16::from(width)),
@@ -1689,37 +1689,7 @@ impl Grid {
                     link: None,
                     sizing: None,
                 };
-                if blank == Cell::default() {
-                    // Everything past the watermark is already `Cell::default()`,
-                    // so blanking only the occupied prefix suffices.
-                    for logical in 0..usize::from(self.screen.rows) {
-                        let phys = self.screen.phys_row_at(logical);
-                        let occ = usize::from(self.screen.occupancy[phys]);
-                        // A stale soft-wrap bit on an already-blank row
-                        // still has to ship (it rides the row's delta).
-                        if occ == 0 && !self.screen.soft_wrap[phys] {
-                            continue;
-                        }
-                        if occ > 0 {
-                            let start = phys * cols;
-                            self.screen.cells[start..start + occ].fill(blank);
-                            self.screen.occupancy[phys] = 0;
-                        }
-                        self.screen.soft_wrap[phys] = false;
-                        self.screen.damage.mark(logical);
-                    }
-                } else {
-                    // BCE: every cell takes the pen's color, and the
-                    // watermark pins at `cols` (a colored blank is not
-                    // a default cell).
-                    self.screen.cells.fill(blank);
-                    self.screen.occupancy.fill(self.screen.cols);
-                    self.screen.soft_wrap.fill(false);
-                    self.screen.damage.mark_all();
-                }
-                // Drop the bulk-path hint so a `cat` right after a
-                // `clear` takes the plaintext fast path.
-                self.screen.has_sized_cells = false;
+                self.screen.erase_viewport(blank);
                 // Kitty graphics: `force = false` so the `C=1`
                 // exemption applies; RIS / DECSTR push a forced range.
                 self.pty_effects.push(PtyEffect::Erased(ErasedRange {
@@ -2610,7 +2580,7 @@ impl Grid {
                 *last = Cell::default();
             }
         }
-        if self.screen.has_sized_cells {
+        if self.screen.has_sized_cells() {
             for r in dest_top..dest_top + copy_rows {
                 for c in dest_left..dest_left + copy_cols {
                     if let Some(block) = self.sized_block_at(r, c)
@@ -2923,7 +2893,7 @@ impl Grid {
             link: None,
             sizing: None,
         };
-        self.screen.cells.fill(filler);
+        self.screen.fill_cells(filler);
         self.screen.occupancy.fill(self.screen.cols);
         self.screen.soft_wrap.fill(false);
         self.screen.cursor = Cursor::new();
