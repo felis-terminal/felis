@@ -1351,9 +1351,12 @@ async fn a_relative_spawn_cwd_is_resolved_from_the_bridge_process() {
                 .to_owned(),
         );
     }
+    // `pwd` prints the physical path, and a long temp dir wraps it
+    // across rows.
+    let nested = nested.canonicalize().unwrap();
     assert!(
-        rows.iter()
-            .any(|row| row.contains(&nested.to_string_lossy().into_owned())),
+        rows.concat()
+            .contains(&nested.to_string_lossy().into_owned()),
         "the child reports the cwd anchored by the bridge: {rows:?}"
     );
 
