@@ -110,7 +110,7 @@ dependencies = [
 
 [[package]]
 name = "felis-client-core"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "bitflags",
  "directories",
@@ -139,7 +139,7 @@ dependencies = [
 
 [[package]]
 name = "felis-grid"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "bitflags",
  "bytes",
@@ -156,7 +156,7 @@ dependencies = [
 
 [[package]]
 name = "felis-protocol"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "bitflags",
  "bytes",
@@ -168,7 +168,7 @@ dependencies = [
 
 [[package]]
 name = "felis-transport"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "bytes",
  "directories",
@@ -184,7 +184,7 @@ dependencies = [
 
 [[package]]
 name = "felis-vt"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "felis-protocol",
  "miniz_oxide",
