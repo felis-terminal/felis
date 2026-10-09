@@ -5413,8 +5413,8 @@ mod tests {
     async fn a_re_put_with_an_explicit_size_is_not_re_resolved() {
         let mut task = SessionTask::for_tests(session_with("read _x"));
         task.apply_size(sized_cells(&task, (10, 20)));
-        place_30x40(&task, 1, "");
-        write_to_grid(&task, b"\x1b_Ga=p,i=1,c=5,r=5,q=2\x1b\\");
+        place_30x40(&task, 1, ",p=1");
+        write_to_grid(&task, b"\x1b_Ga=p,i=1,p=1,c=5,r=5,q=2\x1b\\");
         task.drain_effects().expect("effects drain");
         assert_eq!(placement_extent(&task.session.placements, 1), (5, 5));
 

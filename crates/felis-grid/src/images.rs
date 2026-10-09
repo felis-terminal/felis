@@ -767,8 +767,10 @@ pub struct Placement {
     /// Must already exist in the [`ImageStore`]: the dispatcher inserts
     /// before recording the placement.
     pub image_id: ImageId,
-    /// `None` is the image's default placement, at most one per
-    /// `image_id`.
+    /// `Some` for every placement the dispatcher records; one sent
+    /// without `p=` gets [`Placements::allocate_anonymous_id`]'s. `None`
+    /// arrives only in a dump from a build that kept one id-less slot
+    /// per image.
     pub placement_id: Option<PlacementId>,
     pub anchor: CellPos,
     pub cols: Extent,
@@ -782,6 +784,10 @@ pub struct Placement {
     pub no_cursor_move: bool,
     /// `q=` (0/1/2).
     pub quiet: u8,
+    /// Its id came from [`Placements::allocate_anonymous_id`], not a
+    /// producer's `p=`, so no `p=` addresses it.
+    #[cfg_attr(feature = "state-dump", serde(default))]
+    pub anonymous: bool,
 }
 
 impl Placement {
@@ -868,6 +874,9 @@ pub struct Placements {
     /// `PlacementRemoved` names a virtual placement), so one dies only
     /// when its image leaves the store.
     virtuals: Vec<VirtualPlacement>,
+    /// Ids handed out by [`Self::allocate_anonymous_id`], counted down
+    /// from `u32::MAX`.
+    anonymous_issued: u32,
 }
 
 impl Placements {
@@ -876,18 +885,37 @@ impl Placements {
         Self {
             entries: Vec::new(),
             virtuals: Vec::new(),
+            anonymous_issued: 0,
         }
     }
 
-    /// Last write wins under one `(image_id, placement_id)`, as Kitty
-    /// specifies. Returns the placement replaced, whose ref the caller
-    /// releases.
+    /// Id for a placement sent without `p=`, which kitty never replaces:
+    /// each such put is a placement of its own. Counts down from
+    /// `u32::MAX`, clear of the low ids producers pick, skipping the
+    /// image's live ids.
+    pub fn allocate_anonymous_id(&mut self, image_id: ImageId) -> PlacementId {
+        loop {
+            let id = PlacementId(u32::MAX - self.anonymous_issued);
+            self.anonymous_issued = self.anonymous_issued.wrapping_add(1);
+            if !self
+                .entries
+                .iter()
+                .any(|p| p.image_id == image_id && p.placement_id == Some(id))
+            {
+                return id;
+            }
+        }
+    }
+
+    /// Last write wins under one producer `(image_id, placement_id)`, as
+    /// Kitty specifies; an anonymous placement is never replaced. Returns
+    /// the placement replaced, whose ref the caller releases.
     pub fn upsert(&mut self, placement: Placement) -> Option<Placement> {
         let key = (placement.image_id, placement.placement_id);
         if let Some(slot) = self
             .entries
             .iter_mut()
-            .find(|p| (p.image_id, p.placement_id) == key)
+            .find(|p| !p.anonymous && !placement.anonymous && (p.image_id, p.placement_id) == key)
         {
             Some(std::mem::replace(slot, placement))
         } else {
@@ -896,16 +924,37 @@ impl Placements {
         }
     }
 
+    /// Only a producer-addressed placement matches.
     pub fn remove(
         &mut self,
         image_id: ImageId,
         placement_id: Option<PlacementId>,
     ) -> Option<Placement> {
+        let idx = self.entries.iter().position(|p| {
+            !p.anonymous && p.image_id == image_id && p.placement_id == placement_id
+        })?;
+        Some(self.entries.remove(idx))
+    }
+
+    /// Moves an anonymous placement off `id` before a producer's `p=`
+    /// takes it, since the wire names both by `(image_id, placement_id)`.
+    /// It goes to the end of the table, where the client's remove and
+    /// re-add puts it, so equal-z stacking agrees on both sides. Returns
+    /// the id it left and the placement under its new id.
+    pub fn rekey_anonymous(
+        &mut self,
+        image_id: ImageId,
+        id: PlacementId,
+    ) -> Option<(PlacementId, Placement)> {
         let idx = self
             .entries
             .iter()
-            .position(|p| p.image_id == image_id && p.placement_id == placement_id)?;
-        Some(self.entries.remove(idx))
+            .position(|p| p.anonymous && p.image_id == image_id && p.placement_id == Some(id))?;
+        let fresh = self.allocate_anonymous_id(image_id);
+        let mut entry = self.entries.remove(idx);
+        entry.placement_id = Some(fresh);
+        self.entries.push(entry.clone());
+        Some((id, entry))
     }
 
     /// Removed entries come back in insertion order; kept entries keep

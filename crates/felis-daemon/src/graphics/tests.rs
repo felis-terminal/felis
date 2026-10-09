@@ -1023,6 +1023,7 @@ fn seeded_placement(
         z_index: z,
         no_cursor_move,
         quiet: 0,
+        anonymous: false,
     }
 }
 
@@ -2876,30 +2877,35 @@ fn dispatch_controls(
 
 #[derive(Debug, Clone)]
 enum PlacementOp {
-    /// `a=p,i=1,p=` this id.
-    Put(u32),
-    /// `a=d,d=i,i=1` with this `p=`, `None` for none.
+    /// `a=p,i=1` with this `p=`, `None` for none.
+    Put(Option<u32>),
+    /// `a=d,d=i,i=1` with this `p=`.
     Delete(Option<u32>),
     /// `a=t,i=1` again with new data.
     Retransmit,
 }
 
+fn placement_id_choice() -> impl Strategy<Value = Option<u32>> {
+    // `u32::MAX` is the first id an id-less put is given.
+    proptest::option::of(prop_oneof![Just(0u32), 1u32..4, Just(u32::MAX)])
+}
+
 fn placement_op() -> impl Strategy<Value = PlacementOp> {
     prop_oneof![
-        6 => (1u32..4).prop_map(PlacementOp::Put),
-        2 => proptest::option::of(1u32..4).prop_map(PlacementOp::Delete),
+        6 => placement_id_choice().prop_map(PlacementOp::Put),
+        2 => placement_id_choice().prop_map(PlacementOp::Delete),
         1 => Just(PlacementOp::Retransmit),
     ]
 }
 
 proptest! {
-    /// kitty's placement lifetime, against a model: a put replaces the
-    /// image's placement under its `p=`; a delete without `p=` removes
-    /// every placement of the image and one with `p=` only that one;
-    /// re-transmitting the image deletes its placements. Every live
-    /// placement holds exactly one ref on the image.
+    /// kitty's placement identity, against a model: a put replaces only
+    /// under a non-zero `p=`, else adds its own placement that no `p=`
+    /// addresses; a delete without `p=` (or `p=0`) removes them all;
+    /// re-transmitting deletes them. Replies echo only a non-zero `p=`,
+    /// and each live placement holds one ref under its own id.
     #[test]
-    fn placements_follow_kittys_lifetime_rules_across_puts_deletes_and_retransmits(
+    fn placements_follow_kittys_identity_rules_across_puts_deletes_and_retransmits(
         ops in proptest::collection::vec(placement_op(), 0..32),
     ) {
         let (mut grid, mut images, mut placements) = handler_state();
@@ -2907,14 +2913,27 @@ proptest! {
         let mut transmit = vec![(b'a', b"t".as_slice()), (b'i', b"1".as_slice()), (b'q', b"2".as_slice())];
         transmit.extend_from_slice(&ctrls);
         dispatch_controls(&mut grid, &mut images, &mut placements, &transmit, &payload);
-        let mut live = std::collections::BTreeSet::new();
+        let mut id_less = 0;
+        let mut named = std::collections::BTreeSet::new();
         for op in ops {
             match op {
                 PlacementOp::Put(p) => {
-                    let p_text = p.to_string();
-                    let put = [(b'a', b"p".as_slice()), (b'i', b"1"), (b'c', b"1"), (b'r', b"1"), (b'p', p_text.as_bytes()), (b'q', b"2")];
-                    dispatch_controls(&mut grid, &mut images, &mut placements, &put, b"");
-                    live.insert(p);
+                    let p_text = p.map(|p| p.to_string());
+                    let mut put = vec![(b'a', b"p".as_slice()), (b'i', b"1".as_slice()), (b'c', b"1".as_slice()), (b'r', b"1".as_slice())];
+                    if let Some(text) = &p_text {
+                        put.push((b'p', text.as_bytes()));
+                    }
+                    let reply = dispatch_controls(&mut grid, &mut images, &mut placements, &put, b"").expect("q=0 replies");
+                    match p {
+                        Some(p) if p != 0 => {
+                            named.insert(p);
+                            prop_assert_eq!(reply, format!("\x1b_Gi=1,p={p};OK\x1b\\").into_bytes());
+                        }
+                        _ => {
+                            id_less += 1;
+                            prop_assert_eq!(reply, b"\x1b_Gi=1;OK\x1b\\".to_vec());
+                        }
+                    }
                 }
                 PlacementOp::Delete(p) => {
                     let p_text = p.map(|p| p.to_string());
@@ -2924,20 +2943,52 @@ proptest! {
                     }
                     dispatch_controls(&mut grid, &mut images, &mut placements, &delete, b"");
                     match p {
-                        Some(p) => {
-                            live.remove(&p);
+                        Some(p) if p != 0 => {
+                            named.remove(&p);
                         }
-                        None => live.clear(),
+                        _ => {
+                            id_less = 0;
+                            named.clear();
+                        }
                     }
                 }
                 PlacementOp::Retransmit => {
                     dispatch_controls(&mut grid, &mut images, &mut placements, &transmit, &payload);
-                    live.clear();
+                    id_less = 0;
+                    named.clear();
                 }
             }
-            let ids: std::collections::BTreeSet<_> = placements.iter().filter_map(|p| p.placement_id.map(|id| id.0)).collect();
-            prop_assert_eq!(&ids, &live);
+            prop_assert_eq!(placements.len(), id_less + named.len());
+            let ids: std::collections::BTreeSet<_> = placements.iter().map(|p| p.placement_id.map(|id| id.0)).collect();
+            prop_assert_eq!(ids.len(), placements.len(), "every placement has its own id");
+            let named_live: std::collections::BTreeSet<_> = placements
+                .iter()
+                .filter(|p| !p.anonymous)
+                .filter_map(|p| p.placement_id.map(|id| id.0))
+                .collect();
+            prop_assert_eq!(&named_live, &named);
             prop_assert_eq!(images.get(ImageId(1)).unwrap().refcount() as usize, placements.len());
         }
     }
+}
+
+#[test]
+fn an_image_sent_without_an_id_ignores_p_and_stacks_its_placements() {
+    let (mut grid, mut images, mut placements) = handler_state();
+    let (ctrls, payload) = tiny_rgba_controls();
+    let mut put = vec![
+        (b'a', b"T".as_slice()),
+        (b'p', b"5".as_slice()),
+        (b'q', b"2".as_slice()),
+    ];
+    put.extend_from_slice(&ctrls);
+    dispatch_controls(&mut grid, &mut images, &mut placements, &put, &payload);
+    dispatch_controls(&mut grid, &mut images, &mut placements, &put, &payload);
+    assert_eq!(placements.len(), 2);
+    assert!(
+        placements
+            .iter()
+            .all(|p| p.placement_id != Some(PlacementId(5))),
+        "p= is the producer's handle on an image it named"
+    );
 }

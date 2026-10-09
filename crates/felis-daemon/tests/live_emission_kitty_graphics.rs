@@ -164,7 +164,10 @@ fn action_uppercase_t_emits_header_chunk_complete_then_placement() {
             ..
         } => {
             assert_eq!(image_id.0, 11);
-            assert_eq!(*placement_id, None);
+            assert!(
+                placement_id.is_some(),
+                "an id-less put still gets its own id"
+            );
             // Anchors are 1-based on the wire.
             assert_eq!(*anchor_row, 1);
             assert_eq!(*anchor_col, 1);
@@ -369,7 +372,7 @@ fn action_d_default_emits_placement_removed_only() {
             placement_id,
         } => {
             assert_eq!(image_id.0, 1);
-            assert_eq!(*placement_id, None);
+            assert!(placement_id.is_some());
         }
         m => panic!("expected PlacementRemoved, got {m:?}"),
     }

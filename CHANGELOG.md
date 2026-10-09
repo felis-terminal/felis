@@ -25,6 +25,8 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 
 ### Fixed
 
+- Placing the same Kitty graphics image twice without a placement id now shows two copies, as kitty does; the second put
+  used to move the first. A reply no longer echoes `p=0`.
 - Sending a Kitty graphics image again under the same id now removes its old placements, as kitty does; they used to
   stay on screen showing the new pixels.
 - `kitten icat --transfer-mode=stream`, the mode icat uses over ssh, now shows its images. felis cut every Kitty

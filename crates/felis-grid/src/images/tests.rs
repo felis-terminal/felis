@@ -252,6 +252,7 @@ fn placement(image: u32, placement: Option<u32>, z: i32) -> Placement {
         z_index: z,
         no_cursor_move: false,
         quiet: 0,
+        anonymous: false,
     }
 }
 
@@ -594,6 +595,7 @@ fn placement_box(
         z_index: z,
         no_cursor_move: false,
         quiet: 0,
+        anonymous: false,
     }
 }
 

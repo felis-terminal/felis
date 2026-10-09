@@ -123,7 +123,9 @@ include `a=t/T/p/q`, `a=d` (basic and extended deletion), and `a=a/f/c` animatio
   (DECOM) is set and the box's last row was inside it, and inside the screen otherwise. A zero-sized box moves nothing.
   Text written after the placement, even in the same write, prints at the moved cursor.
 - `q`: Quiet mode (suppress response acknowledgments).
-- `i`, `I`, `p`: Image and placement identifiers.
+- `i`, `I`, `p`: Image and placement identifiers. A put with a non-zero `p=` replaces the image's placement under that
+  id; a put without one, or with `p=0`, adds a placement of its own, as kitty does, and no `p=` addresses it afterwards.
+  On an image sent without `i=` or `I=`, `p=` is ignored.
 
 A placement's destination pixel offsets (`X`, `Y`) parse and are ignored: the image lands at the origin of its anchor
 cell. The uppercase pair carries a source offset for `a=c` frame composition, which felis does read ("Animation" below).
@@ -224,10 +226,10 @@ A reply is an APC of the request's shape:
 ESC _ G <id keys> ; <status> ESC \
 ```
 
-The id keys echo whichever of `i=<image id>`, `I=<image number>` and `p=<placement id>` the request carried, in that
-order. `<status>` is `OK` on success, and `<code>` or `<code>:<message>` on failure; in a message `;`, C0 bytes and DEL
-are replaced with `_`, so a message can neither end the APC early nor put bytes of its own on the PTY. Whether a reply
-is emitted at all is [`q=`](#response-suppression-q).
+The id keys echo whichever of `i=<image id>`, `I=<image number>` and a non-zero `p=<placement id>` the request carried,
+in that order. `<status>` is `OK` on success, and `<code>` or `<code>:<message>` on failure; in a message `;`, C0 bytes
+and DEL are replaced with `_`, so a message can neither end the APC early nor put bytes of its own on the PTY. Whether a
+reply is emitted at all is [`q=`](#response-suppression-q).
 
 ### Querying
 

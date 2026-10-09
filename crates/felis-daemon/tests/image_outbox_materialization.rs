@@ -236,3 +236,46 @@ fn a_frame_jump_in_the_same_batch_lands_the_mirror_on_the_live_frame() {
         "the mirror must display the frame the store displays",
     );
 }
+
+#[derive(Debug, Clone)]
+enum PlaceOp {
+    Put(Option<u32>),
+    Delete(Option<u32>),
+}
+
+fn place_op() -> impl proptest::strategy::Strategy<Value = PlaceOp> {
+    use proptest::prelude::*;
+    // `u32::MAX` is the first id an id-less put is given.
+    let p = proptest::option::of(prop_oneof![1u32..4, Just(u32::MAX)]);
+    prop_oneof![
+        4 => p.clone().prop_map(PlaceOp::Put),
+        1 => p.prop_map(PlaceOp::Delete),
+    ]
+}
+
+proptest::proptest! {
+    /// The mirror holds the daemon's placements in the daemon's order,
+    /// which is the renderer's tiebreak among equal z-indices, after any
+    /// mix of id-less and named puts, a named one landing on an id-less
+    /// placement's id included.
+    #[test]
+    fn the_mirror_keeps_the_daemons_placement_order(
+        ops in proptest::collection::vec(place_op(), 0..24),
+    ) {
+        let mut s = State::with_cap(ROOMY_CAP);
+        let mut shadow = ImageShadow::new();
+        transmit(&mut s, 1, 4, 0x11);
+        for op in ops {
+            let (action, p) = match op {
+                PlaceOp::Put(p) => ("a=p,i=1,c=1,r=1", p),
+                PlaceOp::Delete(p) => ("a=d,d=i,i=1", p),
+            };
+            let p = p.map_or(String::new(), |p| format!(",p={p}"));
+            s.dispatch(&body(&format!("G{action}{p},q=2"), &[]));
+            s.ship(&mut shadow);
+            let daemon: Vec<_> = s.placements.iter().map(|p| p.placement_id.map(|id| id.0)).collect();
+            let mirror: Vec<_> = shadow.placements().iter().map(|p| p.placement_id.map(|id| id.0)).collect();
+            proptest::prop_assert_eq!(daemon, mirror);
+        }
+    }
+}

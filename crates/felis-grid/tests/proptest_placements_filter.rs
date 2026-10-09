@@ -38,6 +38,7 @@ fn placement_strategy() -> impl Strategy<Value = Placement> {
                 z_index: z,
                 no_cursor_move,
                 quiet: 0,
+                anonymous: false,
             },
         )
 }

@@ -712,7 +712,7 @@ fn response_refs(complete: &CompleteCommand) -> ResponseRefs {
     ResponseRefs {
         image_id: control_u32(complete, b'i'),
         image_number: control_u32(complete, b'I'),
-        placement_id: control_u32(complete, b'p'),
+        placement_id: control_u32(complete, b'p').filter(|&p| p != 0),
     }
 }
 
@@ -1154,7 +1154,9 @@ fn delete_by_id(
         Ok(id) => id,
         Err(outcome) => return outcome,
     };
-    let placement_id = control_u32(complete, b'p').map(PlacementId);
+    let placement_id = control_u32(complete, b'p')
+        .filter(|&p| p != 0)
+        .map(PlacementId);
     if placement_id.is_some() {
         if let Some(removed) = placements.remove(id, placement_id) {
             images.release(removed.image_id);
@@ -1266,7 +1268,11 @@ fn upsert_placement(
     anchor_cursor: (u16, u16),
 ) -> ActionOutcome {
     let (cursor_row, cursor_col) = anchor_cursor;
-    let placement_id = control_u32(complete, b'p').map(PlacementId);
+    // kitty ignores `p=` on an image the producer did not name.
+    let named = control_u32(complete, b'i').is_some() || control_u32(complete, b'I').is_some();
+    let requested = control_u32(complete, b'p')
+        .filter(|&p| p != 0 && named)
+        .map(PlacementId);
     let req_cols = control_u16(complete, b'c').unwrap_or(0);
     let req_rows = control_u16(complete, b'r').unwrap_or(0);
     let z_index = control_i32(complete, b'z').unwrap_or(0);
@@ -1296,6 +1302,17 @@ fn upsert_placement(
             "image vanished before placement could pin it",
         );
     }
+    if let Some(p) = requested
+        && let Some((left, moved)) = placements.rekey_anonymous(image_id, p)
+    {
+        events.push(ImageEvent::PlacementRemoved {
+            image_id,
+            placement_id: Some(left),
+        });
+        events.push(placement_event(&moved));
+    }
+    let placement_id =
+        Some(requested.unwrap_or_else(|| placements.allocate_anonymous_id(image_id)));
     let replaced = placements.upsert(Placement {
         image_id,
         placement_id,
@@ -1306,12 +1323,13 @@ fn upsert_placement(
         z_index,
         no_cursor_move,
         quiet,
+        anonymous: requested.is_none(),
     });
     if replaced.is_some() {
         images.release(image_id);
     }
     refs.image_id = Some(image_id.0);
-    if let Some(p) = placement_id {
+    if let Some(p) = requested {
         refs.placement_id = Some(p.0);
     }
     events.push(ImageEvent::Placement {
