@@ -1,7 +1,7 @@
 //! Wide-pair snapshots: writing over, erasing, repeating or moving one half
-//! of a two-cell glyph, for both a single wide scalar and a multi-codepoint
-//! cluster. Each row renders cell by cell with its role, so an orphaned
-//! half (a `Spacer` with no owner, an owner with no `Spacer`) is visible.
+//! of a cluster, plus one wide-scalar case per family that
+//! `proptest_grid.rs` states as a property. Each row renders cell by cell
+//! with its role, so an orphaned half is visible.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -105,15 +105,6 @@ fn decsel_from_a_clusters_spacer_erases_the_pair() {
 }
 
 #[test]
-fn decsel_to_the_cursor_on_a_wide_scalars_left_half_erases_the_pair() {
-    insta::assert_snapshot!(snap(8, "字z\r\x1b[?1K"), @r#"
-    cursor: row=0 col=0 visible=1 pending_wrap=0
-    cells: ·|·|z|·|·|·|·|·
-    text: "  z"
-    "#);
-}
-
-#[test]
 fn decsel_leaves_a_protected_pair_whole() {
     insta::assert_snapshot!(snap(8, "\x1b[1\"q❤️\x1b[0\"qz\r\x1b[?1K"), @r#"
     cursor: row=0 col=0 visible=1 pending_wrap=0
@@ -177,24 +168,6 @@ fn decfra_over_a_clusters_left_half_blanks_its_spacer() {
 }
 
 #[test]
-fn decera_whose_right_edge_splits_a_wide_scalar_erases_the_pair() {
-    insta::assert_snapshot!(snap(8, "a字z\x1b[1;1;1;2$z"), @r#"
-    cursor: row=0 col=4 visible=1 pending_wrap=0
-    cells: ·|·|·|z|·|·|·|·
-    text: "   z"
-    "#);
-}
-
-#[test]
-fn decfra_whose_left_edge_splits_a_wide_scalar_blanks_its_owner() {
-    insta::assert_snapshot!(snap(8, "a字z\x1b[42;1;3;1;4$x"), @r#"
-    cursor: row=0 col=4 visible=1 pending_wrap=0
-    cells: a|·|*|*|·|·|·|·
-    text: "a **"
-    "#);
-}
-
-#[test]
 fn rep_after_a_vs16_emoji_repeats_the_whole_cluster() {
     insta::assert_snapshot!(snap(8, "❤️\x1b[2b"), @r#"
     cursor: row=0 col=6 visible=1 pending_wrap=0
@@ -235,15 +208,6 @@ fn snap_rows(rows: u16, cols: u16, bytes: &str) -> String {
 }
 
 #[test]
-fn dch_on_a_wide_scalars_left_half_erases_the_pair() {
-    insta::assert_snapshot!(snap(6, "字b\r\x1b[P"), @r#"
-    cursor: row=0 col=0 visible=1 pending_wrap=0
-    cells: ·|b|·|·|·|·
-    text: " b"
-    "#);
-}
-
-#[test]
 fn dch_on_a_wide_scalars_right_half_erases_the_pair() {
     insta::assert_snapshot!(snap(6, "字b\r\x1b[C\x1b[P"), @r#"
     cursor: row=0 col=1 visible=1 pending_wrap=0
@@ -253,119 +217,11 @@ fn dch_on_a_wide_scalars_right_half_erases_the_pair() {
 }
 
 #[test]
-fn ich_on_a_wide_scalars_right_half_erases_the_pair() {
-    insta::assert_snapshot!(snap(6, "字b\r\x1b[C\x1b[@"), @r#"
-    cursor: row=0 col=1 visible=1 pending_wrap=0
-    cells: ·|·|·|b|·|·
-    text: "   b"
-    "#);
-}
-
-#[test]
 fn ich_that_pushes_half_a_pair_off_the_line_erases_it() {
     insta::assert_snapshot!(snap(8, "abcdef字\r\x1b[@"), @r#"
     cursor: row=0 col=0 visible=1 pending_wrap=0
     cells: ·|a|b|c|d|e|f|·
     text: " abcdef"
-    "#);
-}
-
-#[test]
-fn an_irm_insert_on_a_wide_scalars_right_half_erases_the_pair() {
-    insta::assert_snapshot!(snap(6, "字b\r\x1b[C\x1b[4hX"), @r#"
-    cursor: row=0 col=2 visible=1 pending_wrap=0
-    cells: ·|X|·|b|·|·
-    text: " X b"
-    "#);
-}
-
-#[test]
-fn an_irm_insert_that_pushes_half_a_pair_off_the_line_erases_it() {
-    insta::assert_snapshot!(snap(8, "abcdef字\r\x1b[4hX"), @r#"
-    cursor: row=0 col=1 visible=1 pending_wrap=0
-    cells: X|a|b|c|d|e|f|·
-    text: "Xabcdef"
-    "#);
-}
-
-#[test]
-fn an_irm_wide_insert_that_pushes_half_a_pair_off_the_line_erases_it() {
-    insta::assert_snapshot!(snap(8, "a字字字\r\x1b[4h字"), @r#"
-    cursor: row=0 col=2 visible=1 pending_wrap=0
-    cells: 字|_|a|字|_|字|_|·
-    text: "字a字字"
-    "#);
-}
-
-#[test]
-fn sr_that_pushes_half_a_pair_off_the_line_erases_it() {
-    insta::assert_snapshot!(snap(6, "abcd字\x1b[1 A"), @r#"
-    cursor: row=0 col=5 visible=1 pending_wrap=1
-    cells: ·|a|b|c|d|·
-    text: " abcd"
-    "#);
-}
-
-#[test]
-fn sl_that_drops_half_a_pair_erases_it() {
-    insta::assert_snapshot!(snap(6, "字bcd\x1b[1 @"), @r#"
-    cursor: row=0 col=5 visible=1 pending_wrap=0
-    cells: ·|b|c|d|·|·
-    text: " bcd"
-    "#);
-}
-
-#[test]
-fn ich_that_pushes_half_a_pair_past_the_right_margin_erases_it() {
-    insta::assert_snapshot!(snap(6, "\x1b[?69h\x1b[1;4sab字\x1b[1;1H\x1b[@"), @r#"
-    cursor: row=0 col=0 visible=1 pending_wrap=0
-    cells: ·|a|b|·|·|·
-    text: " ab"
-    "#);
-}
-
-#[test]
-fn dch_inside_margins_that_a_pair_straddles_erases_it() {
-    insta::assert_snapshot!(snap(6, "abc字x\x1b[?69h\x1b[1;4s\x1b[1;1H\x1b[P"), @r#"
-    cursor: row=0 col=0 visible=1 pending_wrap=0
-    cells: b|c|·|·|·|x
-    text: "bc   x"
-    "#);
-}
-
-#[test]
-fn decic_on_a_wide_scalars_right_half_erases_the_pair() {
-    insta::assert_snapshot!(snap(6, "字b\r\x1b[C\x1b['}"), @r#"
-    cursor: row=0 col=1 visible=1 pending_wrap=0
-    cells: ·|·|·|b|·|·
-    text: "   b"
-    "#);
-}
-
-#[test]
-fn decdc_on_a_wide_scalars_right_half_erases_the_pair() {
-    insta::assert_snapshot!(snap(6, "字b\r\x1b[C\x1b['~"), @r#"
-    cursor: row=0 col=1 visible=1 pending_wrap=0
-    cells: ·|b|·|·|·|·
-    text: " b"
-    "#);
-}
-
-#[test]
-fn decbi_at_a_left_margin_that_a_pair_straddles_erases_it() {
-    insta::assert_snapshot!(snap(6, "a字bcd\x1b[?69h\x1b[3;6s\x1b[1;3H\x1b6"), @r#"
-    cursor: row=0 col=2 visible=1 pending_wrap=0
-    cells: a|·|·|·|b|c
-    text: "a   bc"
-    "#);
-}
-
-#[test]
-fn decfi_at_a_right_margin_that_a_pair_straddles_erases_it() {
-    insta::assert_snapshot!(snap(6, "abc字\x1b[?69h\x1b[1;4s\x1b[1;4H\x1b9"), @r#"
-    cursor: row=0 col=3 visible=1 pending_wrap=0
-    cells: b|c|·|·|·|·
-    text: "bc"
     "#);
 }
 
@@ -445,38 +301,11 @@ fn dch_on_a_sized_wide_scalars_spacer_erases_the_whole_block() {
 }
 
 #[test]
-fn ich_clamped_to_the_line_from_a_right_half_erases_the_pair() {
-    insta::assert_snapshot!(snap(6, "a字b\r\x1b[2C\x1b[9@"), @r#"
-    cursor: row=0 col=2 visible=1 pending_wrap=0
-    cells: a|·|·|·|·|·
-    text: "a"
-    "#);
-}
-
-#[test]
-fn dch_clamped_to_the_line_from_a_right_half_erases_the_pair() {
-    insta::assert_snapshot!(snap(6, "a字b\r\x1b[2C\x1b[9P"), @r#"
-    cursor: row=0 col=2 visible=1 pending_wrap=0
-    cells: a|·|·|·|·|·
-    text: "a"
-    "#);
-}
-
-#[test]
 fn ich_left_of_the_margins_leaves_a_straddling_pair_alone() {
     insta::assert_snapshot!(snap(6, "a字bcd\x1b[?69h\x1b[3;5s\x1b[1;1H\x1b[@"), @r#"
     cursor: row=0 col=0 visible=1 pending_wrap=0
     cells: a|字|_|b|c|d
     text: "a字bcd"
-    "#);
-}
-
-#[test]
-fn dch_right_of_the_margins_leaves_a_straddling_pair_alone() {
-    insta::assert_snapshot!(snap(6, "abcd字\x1b[?69h\x1b[1;4s\x1b[1;6H\x1b[P"), @r#"
-    cursor: row=0 col=5 visible=1 pending_wrap=0
-    cells: a|b|c|d|字|_
-    text: "abcd字"
     "#);
 }
 
@@ -497,32 +326,6 @@ fn a_keycap_widens_over_a_recycled_rows_stale_tail() {
     text: ""
     cells: x|1\u{fe0f}\u{20e3}|_|·|·
     text: "x1\u{fe0f}\u{20e3}"
-    cells: ·|·|·|·|·
-    text: ""
-    "#);
-}
-
-#[test]
-fn decfi_shifts_no_recycled_tail_into_view() {
-    insta::assert_snapshot!(snap_rows(3, 5, "\x1b[?1049h字\x1b[S\x1b[3;5H\x1b9"), @r#"
-    cursor: row=2 col=4 visible=1 pending_wrap=0
-    cells: ·|·|·|·|·
-    text: ""
-    cells: ·|·|·|·|·
-    text: ""
-    cells: ·|·|·|·|·
-    text: ""
-    "#);
-}
-
-#[test]
-fn sr_shifts_no_recycled_tail_into_view() {
-    insta::assert_snapshot!(snap_rows(3, 5, "\x1b[?1049h字\x1b[S\x1b[1 A"), @r#"
-    cursor: row=0 col=2 visible=1 pending_wrap=0
-    cells: ·|·|·|·|·
-    text: ""
-    cells: ·|·|·|·|·
-    text: ""
     cells: ·|·|·|·|·
     text: ""
     "#);
@@ -558,19 +361,6 @@ fn a_colored_ech_keeps_a_recycled_rows_protected_tail_hidden() {
 fn a_colored_ech_exposes_no_recycled_tail() {
     insta::assert_snapshot!(snap_rows(3, 5, "\x1b[?1049h字\x1b[S\x1b[3;2H\x1b[41m\x1b[X"), @r#"
     cursor: row=2 col=1 visible=1 pending_wrap=0
-    cells: ·|·|·|·|·
-    text: ""
-    cells: ·|·|·|·|·
-    text: ""
-    cells: ·|·|·|·|·
-    text: ""
-    "#);
-}
-
-#[test]
-fn decsed_exposes_no_recycled_tail() {
-    insta::assert_snapshot!(snap_rows(3, 5, "\x1b[?1049h字\x1b[S\x1b[1;1H\x1b[?1J"), @r#"
-    cursor: row=0 col=0 visible=1 pending_wrap=0
     cells: ·|·|·|·|·
     text: ""
     cells: ·|·|·|·|·
