@@ -89,8 +89,9 @@ impl Sink for Grid {
         }
         // Each of these modes mutates state the tight loop does not
         // model. An overprint of a sized cell is checked per chunk below:
-        // `has_sized_cells` never clears, so gating on it here would keep
-        // every later print off this loop after one OSC 66 write.
+        // `has_sized_cells` clears only on a full-screen wipe, so gating on
+        // it here would keep every later print off this loop after one
+        // OSC 66 write.
         if self.left_right_margin_mode
             || self.insert_mode
             || self.current_sizing_handle.is_some()
@@ -140,7 +141,8 @@ impl Sink for Grid {
             let take = (bytes.len() - i).min(room);
             let chunk_end = i + take;
             let occ = usize::from(self.screen.occupancy[row_base / cols]);
-            if self.screen.has_sized_cells && self.overprints_sized(row_base, start_col, take, occ)
+            if self.screen.has_sized_cells()
+                && self.overprints_sized(row_base, start_col, take, occ)
             {
                 for &b in &bytes[i..] {
                     self.print(b);
@@ -903,10 +905,7 @@ impl Grid {
                 self.screen.cursor.col = 0;
                 self.screen.cursor.pending_wrap = false;
                 if !(self.conformance_level >= 5 && self.dec_ncsm) {
-                    for cell in &mut self.screen.cells {
-                        *cell = Cell::default();
-                    }
-                    self.screen.has_sized_cells = false;
+                    self.screen.fill_cells(Cell::default());
                     self.screen.soft_wrap.fill(false);
                 }
                 self.screen.damage.mark_all();
@@ -1077,7 +1076,8 @@ impl Grid {
             let take = (bytes.len() - i).min(room);
             let chunk_end = i + take;
             let occ = usize::from(self.screen.occupancy[row_base / cols]);
-            if self.screen.has_sized_cells && self.overprints_sized(row_base, start_col, take, occ)
+            if self.screen.has_sized_cells()
+                && self.overprints_sized(row_base, start_col, take, occ)
             {
                 for &b in &bytes[i..] {
                     self.print(b);
