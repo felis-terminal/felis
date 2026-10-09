@@ -440,6 +440,10 @@ fn assert_blocks_whole(g: &Grid, case: &str) {
                 .sized_block_at(r, c)
                 .unwrap_or_else(|| panic!("{case}: ({r},{c}) carries a handle with no primary"));
             assert!(
+                g.screen.has_sized_cells,
+                "{case}: ({r},{c}) carries a handle the print fast paths cannot see"
+            );
+            assert!(
                 block.top + block.rows <= g.screen.rows && block.left + block.cols <= g.screen.cols,
                 "{case}: block at ({},{}) runs off the grid",
                 block.top,
@@ -650,7 +654,11 @@ fn arb_move() -> impl proptest::strategy::Strategy<Value = Vec<u8>> {
     let n = 1u8..4;
     prop_oneof![
         (1u8..7, 1u8..13).prop_map(|(r, c)| format!("\x1b[{r};{c}H").into_bytes()),
-        Just(b"x".to_vec()),
+        prop_oneof![
+            Just(b"x".to_vec()),
+            Just(b"xyzxyzxyzxyzxy".to_vec()),
+            Just("\u{5B57}\u{5B57}".as_bytes().to_vec()),
+        ],
         n.clone().prop_map(|n| format!("\x1b[{n}@").into_bytes()),
         n.clone().prop_map(|n| format!("\x1b[{n}P").into_bytes()),
         prop_oneof![Just(b"\x1b[4h".to_vec()), Just(b"\x1b[4l".to_vec())],
@@ -677,6 +685,7 @@ enum Op {
     /// An OSC 66 run at `s` scale and `w` width.
     Sized(u16, u16, &'static str),
     Move(Vec<u8>),
+    Resize(u16, u16),
 }
 
 fn arb_op() -> impl proptest::strategy::Strategy<Value = Op> {
@@ -689,23 +698,29 @@ fn arb_op() -> impl proptest::strategy::Strategy<Value = Op> {
         )
             .prop_map(|(s, w, text)| Op::Sized(s, w, text)),
         arb_move().prop_map(Op::Move),
+        (1u16..8, 1u16..14).prop_map(|(r, c)| Op::Resize(r, c)),
     ]
 }
 
 proptest::proptest! {
-    /// No sequence of writes and cell moves leaves part of a block
-    /// behind or a block running off the grid.
+    /// No sequence of writes, cell moves and resizes leaves part of a
+    /// block behind or a block running off the grid.
     #[test]
     fn no_cell_move_leaves_part_of_a_block(ops in proptest::collection::vec(arb_op(), 1..40)) {
         let mut p = Parser::new();
         let mut g = Grid::new(6, 12);
         for op in &ops {
-            let bytes = match op {
-                Op::Sized(s, w, text) => format!("\x1b]66;s={s}:w={w};{text}\x07").into_bytes(),
-                Op::Move(bytes) => bytes.clone(),
-            };
-            drive(&mut p, &mut g, &bytes);
-            assert_blocks_whole(&g, &format!("{:?}", String::from_utf8_lossy(&bytes)));
+            match op {
+                Op::Sized(s, w, text) => {
+                    drive(&mut p, &mut g, format!("\x1b]66;s={s}:w={w};{text}\x07").as_bytes());
+                }
+                Op::Move(bytes) => drive(&mut p, &mut g, bytes),
+                Op::Resize(r, c) if g.on_alternate_screen() => g.resize(*r, *c),
+                Op::Resize(r, c) => {
+                    g.reflow(*r, *c);
+                }
+            }
+            assert_blocks_whole(&g, &format!("{op:?}"));
         }
     }
 }
@@ -1111,4 +1126,47 @@ fn a_zwj_sequence_that_would_widen_a_sized_character_prints_beside_it() {
         g.screen.cell(0, 1).unwrap().grapheme,
         Grapheme::Char('\u{1F525}')
     );
+}
+
+/// A narrowing that re-wraps a two-row run shears its blocks, so each
+/// character falls back to its natural width instead of borrowing
+/// another block's lower half.
+#[test]
+fn a_reflow_that_rewraps_a_tall_run_keeps_its_text_unsized() {
+    let mut g = run(6, 12, "\x1b]66;s=2;AB\x07");
+    g.reflow(4, 2);
+    assert_blocks_whole(&g, "narrowed");
+    assert_eq!(g.sized_cell_count(), 0);
+    assert_eq!(g.screen.cell(0, 0).unwrap().grapheme, Grapheme::Ascii(b'A'));
+    assert_eq!(g.screen.cell(1, 0).unwrap().grapheme, Grapheme::Ascii(b'B'));
+}
+
+/// A block whose top row a shrink pushes into history leaves nothing
+/// of itself on the screen.
+#[test]
+fn a_reflow_that_sends_a_blocks_top_to_history_erases_its_rest() {
+    let mut g = run(6, 12, "\x1b]66;s=2;A\x07");
+    g.reflow(1, 4);
+    assert_blocks_whole(&g, "shrunk");
+    assert_eq!(g.row_sized_cells(0), vec![]);
+}
+
+/// Sizing is kept or dropped per block: a re-wrap that shears one
+/// block of a run leaves a neighbour that moved whole sized.
+#[test]
+fn a_reflow_keeps_the_block_it_moved_whole_beside_one_it_sheared() {
+    let mut g = run(8, 2, "\x1b]66;s=2;A\x07\x1b]66;s=2;B\x07");
+    g.reflow(8, 4);
+    assert_blocks_whole(&g, "widened");
+    assert_eq!(g.screen.cell(0, 0).unwrap().sizing, None, "A sheared");
+    assert_eq!(blocks(&g), [(1, 0, 2, 2)], "B moved whole");
+}
+
+/// A one-column grid drops a wide glyph from the line, and the cells
+/// after it land that much further left.
+#[test]
+fn a_reflow_to_one_column_lands_a_block_past_a_dropped_wide_glyph() {
+    let mut g = run(4, 5, "\u{5B57}\x1b]66;s=2;A\x07");
+    g.reflow(4, 1);
+    assert_blocks_whole(&g, "one column");
 }
