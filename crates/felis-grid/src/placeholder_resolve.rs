@@ -30,10 +30,13 @@ fn placeholder_text(grapheme: Grapheme, screen: &ScreenBuffer) -> Option<String>
     }
 }
 
-const fn fg_rgb24(color: Color) -> Option<u32> {
+/// kitty's `color_to_id`: a 24-bit color is the id's low 24 bits and a
+/// 256-color index is the id itself.
+const fn color_id(color: Color) -> Option<u32> {
     match color {
         Color::Rgb(r, g, b) => Some(((r as u32) << 16) | ((g as u32) << 8) | b as u32),
-        _ => None,
+        Color::Indexed(n) => Some(n as u32),
+        Color::Default => None,
     }
 }
 
@@ -61,7 +64,7 @@ impl ScreenBuffer {
                     prev = None;
                     continue;
                 };
-                let fg24 = fg_rgb24(self.style(cell.style).fg);
+                let fg24 = color_id(self.style(cell.style).fg);
                 let image_id = match (decoded.image_id_msb, fg24) {
                     (Some(msb), Some(low)) => ImageId((msb.get() << 24) | low),
                     (None, Some(low)) => ImageId(low),
@@ -194,6 +197,19 @@ mod tests {
         assert_eq!(cells[0].image_id, ImageId(5));
         assert_eq!(cells[1].image_id, ImageId(6));
         assert_eq!(cells[1].tile_col, 0);
+    }
+
+    #[test]
+    fn a_256_color_foreground_is_the_image_id() {
+        let mut g = Grid::new(1, 4);
+        let mut p = Parser::new();
+        drive(
+            &mut p,
+            &mut g,
+            "\u{1b}[38;5;42m\u{10eeee}\u{1b}[31m\u{10eeee}".as_bytes(),
+        );
+        let ids: Vec<ImageId> = g.placeholder_cells().iter().map(|c| c.image_id).collect();
+        assert_eq!(ids, vec![ImageId(42), ImageId(1)]);
     }
 
     #[test]

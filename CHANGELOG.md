@@ -25,6 +25,8 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 
 ### Fixed
 
+- A Kitty graphics Unicode-placeholder cell colored with a 256-color foreground (`\e[38;5;Nm`) now shows image `N`, as
+  kitty does; only a 24-bit foreground used to name the image.
 - A Kitty graphics `d=a` or `d=A` delete now leaves Unicode-placeholder images and images scrolled wholly into history
   in place, as kitty does. It used to drop placeholder images in the daemon without telling the window, so they vanished
   once the window reattached.
