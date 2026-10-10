@@ -1092,14 +1092,17 @@ fn handle_delete(
     }
 }
 
+/// kitty's `clear_filter_func_noncell`: virtual placements and those
+/// wholly in history stay, and `d=A` frees only the images left with
+/// no placement of either kind.
 fn delete_all(
     images: &mut felis_grid::images::ImageStore,
     placements: &mut felis_grid::images::Placements,
     events: &mut Vec<ImageEvent>,
     free_images: bool,
 ) -> ActionOutcome {
-    let removed = std::mem::replace(placements, felis_grid::images::Placements::new());
-    for placement in removed.iter() {
+    let removed = placements.remove_where(|p| p.anchor.row + i32::from(p.rows.cells().get()) > 1);
+    for placement in &removed {
         images.release(placement.image_id);
         events.push(ImageEvent::PlacementRemoved {
             image_id: placement.image_id,
@@ -1107,8 +1110,16 @@ fn delete_all(
         });
     }
     if free_images {
-        let ids: Vec<ImageId> = images.iter_ids().collect();
-        for id in ids {
+        let placed: std::collections::HashSet<ImageId> = placements
+            .iter()
+            .map(|p| p.image_id)
+            .chain(placements.iter_virtual().map(|v| v.image_id))
+            .collect();
+        let unplaced: Vec<ImageId> = images
+            .iter_ids()
+            .filter(|id| !placed.contains(id))
+            .collect();
+        for id in unplaced {
             free_image(images, placements, events, id);
         }
     }
