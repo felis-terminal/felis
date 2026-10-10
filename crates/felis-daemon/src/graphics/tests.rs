@@ -3006,3 +3006,133 @@ fn an_image_sent_without_an_id_ignores_p_and_stacks_its_placements() {
         "p= is the producer's handle on an image it named"
     );
 }
+
+/// One image of the `d=a` world: whether it has a `U=1` extent, and the
+/// anchor row and height of each of its placements.
+#[derive(Debug, Clone)]
+struct ClearImage {
+    virtual_placement: bool,
+    placements: Vec<(i32, u16)>,
+}
+
+fn clear_image() -> impl Strategy<Value = ClearImage> {
+    (
+        any::<bool>(),
+        proptest::collection::vec((-4i32..6, 1u16..4), 0..4),
+    )
+        .prop_map(|(virtual_placement, placements)| ClearImage {
+            virtual_placement,
+            placements,
+        })
+}
+
+proptest! {
+    /// kitty's `clear_filter_func_noncell`: `d=a` and `d=A` remove the
+    /// placements with a row still on screen and leave virtual ones and
+    /// those wholly in history; `d=A` then frees every image left with
+    /// no placement of either kind.
+    #[test]
+    fn delete_all_clears_on_screen_placements_and_keeps_virtual_and_history_ones(
+        world in proptest::collection::vec(clear_image(), 1..4),
+        free in any::<bool>(),
+    ) {
+        let (mut grid, mut images, mut placements) = handler_state();
+        let (ctrls, payload) = tiny_rgba_controls();
+        for (n, image) in world.iter().enumerate() {
+            let id = (n + 1).to_string();
+            let mut transmit = vec![(b'a', b"t".as_slice()), (b'i', id.as_bytes()), (b'q', b"2".as_slice())];
+            transmit.extend_from_slice(&ctrls);
+            dispatch_controls(&mut grid, &mut images, &mut placements, &transmit, &payload);
+            if image.virtual_placement {
+                let put = [(b'a', b"p".as_slice()), (b'U', b"1"), (b'i', id.as_bytes()), (b'c', b"1"), (b'r', b"1"), (b'q', b"2")];
+                dispatch_controls(&mut grid, &mut images, &mut placements, &put, b"");
+            }
+            for (k, &(row, rows)) in image.placements.iter().enumerate() {
+                let image_id = ImageId(u32::try_from(n + 1).unwrap());
+                prop_assert!(images.retain(image_id));
+                let replaced = placements.upsert(Placement {
+                    image_id,
+                    placement_id: Some(PlacementId(u32::try_from(k + 1).unwrap())),
+                    anchor: CellPos { row, col: 1 },
+                    cols: Extent::Requested(NonZeroU16::MIN),
+                    rows: Extent::Requested(NonZeroU16::new(rows).unwrap()),
+                    source: None,
+                    z_index: 0,
+                    no_cursor_move: true,
+                    quiet: 2,
+                    anonymous: false,
+                });
+                prop_assert!(replaced.is_none());
+            }
+        }
+        let d: &[u8] = if free { b"A" } else { b"a" };
+        let mut events = Vec::new();
+        handle_complete(
+            &mut ApcCtx {
+                grid: &mut grid,
+                images: &mut images,
+                placements: &mut placements,
+                events: &mut events,
+                shm: &mut ShmDeferral::default(),
+                cell_pixel_w: 8,
+                cell_pixel_h: 16,
+                anchor_cursor: Some((0, 0)),
+            },
+            &complete(&[(b'a', b"d"), (b'd', d)], b""),
+        );
+        let mut removed: Vec<(u32, u32)> = Vec::new();
+        let mut deleted: Vec<u32> = Vec::new();
+        for event in &events {
+            match event {
+                ImageEvent::PlacementRemoved { image_id, placement_id } => {
+                    removed.push((image_id.0, placement_id.unwrap().0));
+                }
+                ImageEvent::Delete { id } => deleted.push(id.0),
+                other => return Err(TestCaseError::fail(format!("unexpected event {other:?}"))),
+            }
+        }
+        removed.sort_unstable();
+        deleted.sort_unstable();
+        let mut want_removed: Vec<(u32, u32)> = Vec::new();
+        let mut want_deleted: Vec<u32> = Vec::new();
+        for (n, image) in world.iter().enumerate() {
+            let id = u32::try_from(n + 1).unwrap();
+            let mut kept = false;
+            for (k, &(row, rows)) in image.placements.iter().enumerate() {
+                if row + i32::from(rows) > 1 {
+                    want_removed.push((id, u32::try_from(k + 1).unwrap()));
+                } else {
+                    kept = true;
+                }
+            }
+            if free && !kept && !image.virtual_placement {
+                want_deleted.push(id);
+            }
+        }
+        prop_assert_eq!(removed, want_removed);
+        prop_assert_eq!(deleted, want_deleted);
+        for (n, image) in world.iter().enumerate() {
+            let image_id = ImageId(u32::try_from(n + 1).unwrap());
+            let kept: Vec<i32> = image
+                .placements
+                .iter()
+                .filter(|&&(row, rows)| row + i32::from(rows) <= 1)
+                .map(|&(row, _)| row)
+                .collect();
+            let mut left: Vec<i32> = placements.for_image(image_id).map(|p| p.anchor.row).collect();
+            left.sort_unstable();
+            let mut want = kept.clone();
+            want.sort_unstable();
+            prop_assert_eq!(left, want, "image {}", n + 1);
+            prop_assert_eq!(
+                placements.iter_virtual().any(|v| v.image_id == image_id),
+                image.virtual_placement,
+            );
+            let stored = !free || image.virtual_placement || !kept.is_empty();
+            prop_assert_eq!(images.get(image_id).is_some(), stored, "image {} stored", n + 1);
+            if let Some(entry) = images.get(image_id) {
+                prop_assert_eq!(entry.refcount() as usize, kept.len());
+            }
+        }
+    }
+}
