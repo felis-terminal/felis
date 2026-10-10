@@ -1023,6 +1023,7 @@ fn seeded_placement(
         z_index: z,
         no_cursor_move,
         quiet: 0,
+        anonymous: false,
     }
 }
 
@@ -2850,4 +2851,158 @@ fn icat_replay_unpadded_frame_appends_and_a_eq_a_is_silent() {
     )
     .expect("a=a on an unknown image responds");
     assert!(resp.starts_with(b"\x1b_Gi=424242;ENOENT"), "got: {resp:?}");
+}
+
+fn dispatch_controls(
+    grid: &mut felis_grid::Grid,
+    images: &mut felis_grid::images::ImageStore,
+    placements: &mut felis_grid::images::Placements,
+    controls: &[(u8, &[u8])],
+    payload: &[u8],
+) -> Option<Vec<u8>> {
+    handle_complete(
+        &mut ApcCtx {
+            grid,
+            images,
+            placements,
+            events: &mut Vec::new(),
+            shm: &mut ShmDeferral::default(),
+            cell_pixel_w: 8,
+            cell_pixel_h: 16,
+            anchor_cursor: Some((0, 0)),
+        },
+        &complete(controls, payload),
+    )
+}
+
+#[derive(Debug, Clone)]
+enum PlacementOp {
+    /// `a=p,i=1` with this `p=`, `None` for none.
+    Put(Option<u32>),
+    /// `a=d,d=i,i=1` (or `d=I` when `free`) with this `p=`.
+    Delete { p: Option<u32>, free: bool },
+    /// `a=t,i=1` again with new data.
+    Retransmit,
+}
+
+fn placement_id_choice() -> impl Strategy<Value = Option<u32>> {
+    // `u32::MAX` is the first id an id-less put is given.
+    proptest::option::of(prop_oneof![Just(0u32), 1u32..4, Just(u32::MAX)])
+}
+
+fn placement_op() -> impl Strategy<Value = PlacementOp> {
+    prop_oneof![
+        6 => placement_id_choice().prop_map(PlacementOp::Put),
+        2 => (placement_id_choice(), any::<bool>()).prop_map(|(p, free)| PlacementOp::Delete { p, free }),
+        1 => Just(PlacementOp::Retransmit),
+    ]
+}
+
+proptest! {
+    /// kitty's placement identity, against a model: a put replaces only
+    /// under a non-zero `p=`, else adds one no `p=` addresses; a delete
+    /// without `p=` (or `p=0`) removes all, as does re-transmitting; `d=I`
+    /// frees the image once none is left. Replies echo only a non-zero
+    /// `p=`; each placement holds one ref on a live image under its id.
+    #[test]
+    fn placements_follow_kittys_identity_rules_across_puts_deletes_and_retransmits(
+        ops in proptest::collection::vec(placement_op(), 0..32),
+    ) {
+        let (mut grid, mut images, mut placements) = handler_state();
+        let (ctrls, payload) = tiny_rgba_controls();
+        let mut transmit = vec![(b'a', b"t".as_slice()), (b'i', b"1".as_slice()), (b'q', b"2".as_slice())];
+        transmit.extend_from_slice(&ctrls);
+        dispatch_controls(&mut grid, &mut images, &mut placements, &transmit, &payload);
+        let mut id_less = 0;
+        let mut named = std::collections::BTreeSet::new();
+        let mut image_live = true;
+        for op in ops {
+            match op {
+                PlacementOp::Put(_) if !image_live => {
+                    let put = [(b'a', b"p".as_slice()), (b'i', b"1"), (b'c', b"1"), (b'r', b"1")];
+                    let reply = dispatch_controls(&mut grid, &mut images, &mut placements, &put, b"");
+                    prop_assert!(reply.is_some_and(|r| r.starts_with(b"\x1b_Gi=1;ENOENT")));
+                }
+                PlacementOp::Put(p) => {
+                    let p_text = p.map(|p| p.to_string());
+                    let mut put = vec![(b'a', b"p".as_slice()), (b'i', b"1".as_slice()), (b'c', b"1".as_slice()), (b'r', b"1".as_slice())];
+                    if let Some(text) = &p_text {
+                        put.push((b'p', text.as_bytes()));
+                    }
+                    let reply = dispatch_controls(&mut grid, &mut images, &mut placements, &put, b"").expect("q=0 replies");
+                    match p {
+                        Some(p) if p != 0 => {
+                            named.insert(p);
+                            prop_assert_eq!(reply, format!("\x1b_Gi=1,p={p};OK\x1b\\").into_bytes());
+                        }
+                        _ => {
+                            id_less += 1;
+                            prop_assert_eq!(reply, b"\x1b_Gi=1;OK\x1b\\".to_vec());
+                        }
+                    }
+                }
+                PlacementOp::Delete { p, free } => {
+                    let p_text = p.map(|p| p.to_string());
+                    let d: &[u8] = if free { b"I" } else { b"i" };
+                    let mut delete = vec![(b'a', b"d".as_slice()), (b'd', d), (b'i', b"1".as_slice())];
+                    if let Some(text) = &p_text {
+                        delete.push((b'p', text.as_bytes()));
+                    }
+                    dispatch_controls(&mut grid, &mut images, &mut placements, &delete, b"");
+                    match p {
+                        Some(p) if p != 0 => {
+                            named.remove(&p);
+                        }
+                        _ => {
+                            id_less = 0;
+                            named.clear();
+                        }
+                    }
+                    if free && image_live && id_less + named.len() == 0 {
+                        image_live = false;
+                    }
+                }
+                PlacementOp::Retransmit => {
+                    dispatch_controls(&mut grid, &mut images, &mut placements, &transmit, &payload);
+                    id_less = 0;
+                    named.clear();
+                    image_live = true;
+                }
+            }
+            prop_assert_eq!(placements.len(), id_less + named.len());
+            let ids: std::collections::BTreeSet<_> = placements.iter().map(|p| p.placement_id.map(|id| id.0)).collect();
+            prop_assert_eq!(ids.len(), placements.len(), "every placement has its own id");
+            let named_live: std::collections::BTreeSet<_> = placements
+                .iter()
+                .filter(|p| !p.anonymous)
+                .filter_map(|p| p.placement_id.map(|id| id.0))
+                .collect();
+            prop_assert_eq!(&named_live, &named);
+            prop_assert_eq!(images.get(ImageId(1)).is_some(), image_live);
+            if image_live {
+                prop_assert_eq!(images.get(ImageId(1)).unwrap().refcount() as usize, placements.len());
+            }
+        }
+    }
+}
+
+#[test]
+fn an_image_sent_without_an_id_ignores_p_and_stacks_its_placements() {
+    let (mut grid, mut images, mut placements) = handler_state();
+    let (ctrls, payload) = tiny_rgba_controls();
+    let mut put = vec![
+        (b'a', b"T".as_slice()),
+        (b'p', b"5".as_slice()),
+        (b'q', b"2".as_slice()),
+    ];
+    put.extend_from_slice(&ctrls);
+    dispatch_controls(&mut grid, &mut images, &mut placements, &put, &payload);
+    dispatch_controls(&mut grid, &mut images, &mut placements, &put, &payload);
+    assert_eq!(placements.len(), 2);
+    assert!(
+        placements
+            .iter()
+            .all(|p| p.placement_id != Some(PlacementId(5))),
+        "p= is the producer's handle on an image it named"
+    );
 }

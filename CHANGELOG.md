@@ -25,6 +25,13 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 
 ### Fixed
 
+- Placing the same Kitty graphics image twice without a placement id now shows two copies, as kitty does; the second put
+  used to move the first. A reply no longer echoes `p=0`.
+- Sending a Kitty graphics image again under the same id now removes its old placements, as kitty does; they used to
+  stay on screen showing the new pixels.
+- Deleting one placement of a Kitty graphics image with an uppercase delete (`d=I` with `p=`, or `d=P`/`Q`/`X`/`Y`/`Z`/
+  `C`/`R`) now keeps the image while other placements still show it, as kitty does; it used to free the image and orphan
+  them.
 - `kitten icat --transfer-mode=stream`, the mode icat uses over ssh, now shows its images. felis cut every Kitty
   graphics command at 8 KiB, while kitty's own client sends up to 128 KiB at once; the limit is now kitty's 256 KiB.
 - An image that a program places one cell at a time, as yazi's previewer does, now draws whole. Past the first 64

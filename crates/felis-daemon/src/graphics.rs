@@ -712,7 +712,7 @@ fn response_refs(complete: &CompleteCommand) -> ResponseRefs {
     ResponseRefs {
         image_id: control_u32(complete, b'i'),
         image_number: control_u32(complete, b'I'),
-        placement_id: control_u32(complete, b'p'),
+        placement_id: control_u32(complete, b'p').filter(|&p| p != 0),
     }
 }
 
@@ -1136,10 +1136,23 @@ fn delete_filtered(
     }
     if free_images {
         for id in touched_ids {
-            free_image(images, placements, events, id);
+            free_if_unplaced(images, placements, events, id);
         }
     }
     ActionOutcome::Ok
+}
+
+/// An uppercase delete frees the image only once no placement of it is
+/// left, as kitty's `filter_refs` does.
+fn free_if_unplaced(
+    images: &mut felis_grid::images::ImageStore,
+    placements: &mut felis_grid::images::Placements,
+    events: &mut Vec<ImageEvent>,
+    id: ImageId,
+) {
+    if placements.for_image(id).next().is_none() {
+        free_image(images, placements, events, id);
+    }
 }
 
 fn delete_by_id(
@@ -1154,7 +1167,9 @@ fn delete_by_id(
         Ok(id) => id,
         Err(outcome) => return outcome,
     };
-    let placement_id = control_u32(complete, b'p').map(PlacementId);
+    let placement_id = control_u32(complete, b'p')
+        .filter(|&p| p != 0)
+        .map(PlacementId);
     if placement_id.is_some() {
         if let Some(removed) = placements.remove(id, placement_id) {
             images.release(removed.image_id);
@@ -1173,7 +1188,7 @@ fn delete_by_id(
         }
     }
     if free_image {
-        self::free_image(images, placements, events, id);
+        free_if_unplaced(images, placements, events, id);
     }
     ActionOutcome::Ok
 }
@@ -1225,9 +1240,20 @@ fn insert_into_store(
     // frame-streaming producer's pinned frames fill the cap once and
     // every later frame is rejected.
     evict_oldest_to_fit(images, placements, events, id, entry.byte_len());
+    let replacing = images.get(id).is_some();
     match images.insert(id, entry) {
         Ok(evicted) => {
             announce_evictions(placements, events, evicted);
+            // kitty deletes an image's placements when its data is
+            // replaced; `insert` already reset the refcount they held.
+            if replacing {
+                for p in placements.delete_image(id) {
+                    events.push(ImageEvent::PlacementRemoved {
+                        image_id: p.image_id,
+                        placement_id: p.placement_id,
+                    });
+                }
+            }
             events.push(ImageEvent::Transmit(id));
             ActionOutcome::Ok
         }
@@ -1255,7 +1281,11 @@ fn upsert_placement(
     anchor_cursor: (u16, u16),
 ) -> ActionOutcome {
     let (cursor_row, cursor_col) = anchor_cursor;
-    let placement_id = control_u32(complete, b'p').map(PlacementId);
+    // kitty ignores `p=` on an image the producer did not name.
+    let named = control_u32(complete, b'i').is_some() || control_u32(complete, b'I').is_some();
+    let requested = control_u32(complete, b'p')
+        .filter(|&p| p != 0 && named)
+        .map(PlacementId);
     let req_cols = control_u16(complete, b'c').unwrap_or(0);
     let req_rows = control_u16(complete, b'r').unwrap_or(0);
     let z_index = control_i32(complete, b'z').unwrap_or(0);
@@ -1285,7 +1315,18 @@ fn upsert_placement(
             "image vanished before placement could pin it",
         );
     }
-    placements.upsert(Placement {
+    if let Some(p) = requested
+        && let Some((left, moved)) = placements.rekey_anonymous(image_id, p)
+    {
+        events.push(ImageEvent::PlacementRemoved {
+            image_id,
+            placement_id: Some(left),
+        });
+        events.push(placement_event(&moved));
+    }
+    let placement_id =
+        Some(requested.unwrap_or_else(|| placements.allocate_anonymous_id(image_id)));
+    let replaced = placements.upsert(Placement {
         image_id,
         placement_id,
         anchor,
@@ -1295,9 +1336,13 @@ fn upsert_placement(
         z_index,
         no_cursor_move,
         quiet,
+        anonymous: requested.is_none(),
     });
+    if replaced.is_some() {
+        images.release(image_id);
+    }
     refs.image_id = Some(image_id.0);
-    if let Some(p) = placement_id {
+    if let Some(p) = requested {
         refs.placement_id = Some(p.0);
     }
     events.push(ImageEvent::Placement {

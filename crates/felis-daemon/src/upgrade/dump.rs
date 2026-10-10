@@ -328,6 +328,7 @@ mod tests {
             z_index: -1,
             no_cursor_move: false,
             quiet: 0,
+            anonymous: false,
         });
         state.saved_primary_placements = Some(state.placements.clone());
         state.reported_focus = true;
