@@ -30,6 +30,9 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 - A Kitty graphics `d=a` or `d=A` delete now leaves Unicode-placeholder images and images scrolled wholly into history
   in place, as kitty does. It used to drop placeholder images in the daemon without telling the window, so they vanished
   once the window reattached.
+- A Kitty graphics put, delete, compose or animation command sent while a chunked (`m=1`) transmission is open now runs
+  at once, as kitty does; it used to be taken as the transmission's last chunk. A delete drops the open transmission;
+  the others leave it open. A non-zero `q=` on a later chunk now overrides the first chunk's.
 - Placing the same Kitty graphics image twice without a placement id now shows two copies, as kitty does; the second put
   used to move the first. A reply no longer echoes `p=0`.
 - Sending a Kitty graphics image again under the same id now removes its old placements, as kitty does; they used to
