@@ -113,6 +113,64 @@ proptest! {
         prop_assert_eq!(emitted.unwrap(), expected);
     }
 
+    /// A put, compose or animation-control command completes on its own
+    /// body whatever its `m=`, even mid-transfer, and the transfer it
+    /// interrupts still assembles from its chunks alone.
+    #[test]
+    fn put_compose_and_animate_run_at_once_without_disturbing_an_open_transfer(
+        chunks in proptest::collection::vec(
+            proptest::collection::vec(any::<u8>(), 0..32),
+            2..6,
+        ),
+        mid_transfer in prop::sample::select(vec![b"p", b"c", b"a"]),
+        interleaved in proptest::collection::vec(
+            (
+                0..6usize,
+                prop::sample::select(vec![b"p", b"c", b"a"]),
+                any::<bool>(),
+                proptest::collection::vec(any::<u8>(), 0..8),
+            ),
+            0..6,
+        ),
+    ) {
+        let mut r = Reassembler::new();
+        let last = chunks.len() - 1;
+        let mut emitted: Option<Vec<u8>> = None;
+        let forced = (last, mid_transfer, true, Vec::new());
+        for (i, chunk) in chunks.iter().enumerate() {
+            let here = interleaved.iter().chain(std::iter::once(&forced));
+            for (_, action, more, payload) in here.filter(|(at, ..)| *at == i) {
+                let m_value: &[u8] = if *more { b"1" } else { b"0" };
+                let cmd = Command {
+                    controls: vec![(b'a', action.as_slice()), (b'm', m_value)],
+                    payload,
+                };
+                let Outcome::Done(complete) = r.feed(&cmd) else {
+                    return Err(TestCaseError::fail("a non-add command must complete at once"));
+                };
+                prop_assert_eq!(complete.controls, vec![(b'a', action.to_vec())]);
+                prop_assert_eq!(&complete.payload, payload);
+            }
+            let m_value: &[u8] = if i == last { b"0" } else { b"1" };
+            let controls: Vec<(u8, &[u8])> = if i == 0 {
+                vec![(b'a', b"T".as_slice()), (b'm', m_value)]
+            } else {
+                vec![(b'm', m_value)]
+            };
+            match r.feed(&Command { controls, payload: chunk }) {
+                Outcome::Pending => prop_assert!(i < last),
+                Outcome::Done(complete) => {
+                    prop_assert_eq!(i, last);
+                    prop_assert_eq!(complete.controls, vec![(b'a', b"T".to_vec())]);
+                    emitted = Some(complete.payload);
+                }
+                Outcome::Overflow { .. } => return Ok(()),
+            }
+        }
+        let expected: Vec<u8> = chunks.into_iter().flatten().collect();
+        prop_assert_eq!(emitted.unwrap(), expected);
+    }
+
     /// Whatever `parse` emits is something a valid producer could have sent.
     #[test]
     fn round_trip_well_formed_input(

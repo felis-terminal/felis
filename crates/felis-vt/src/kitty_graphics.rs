@@ -243,6 +243,13 @@ pub enum Outcome {
     },
 }
 
+fn is_nonzero(value: &[u8]) -> bool {
+    std::str::from_utf8(value)
+        .ok()
+        .and_then(|v| v.parse::<u32>().ok())
+        .is_some_and(|v| v != 0)
+}
+
 fn owned_controls_without_m(cmd: &Command<'_>) -> Vec<(u8, Vec<u8>)> {
     cmd.controls
         .iter()
@@ -304,6 +311,19 @@ impl ReassemblyTracker {
     }
 
     pub fn step(&mut self, cmd: &Command<'_>) -> Step {
+        // kitty's `grman_handle_command` routes only add actions through
+        // `currently_loading`; the rest run at once. A delete drops an open
+        // transfer (`handle_delete_command`); the others leave it to its
+        // next chunk.
+        if let Some(action @ (b"p" | b"d" | b"c" | b"a")) = cmd.get(b'a') {
+            if action == b"d" {
+                self.reset();
+            }
+            return Step::Done {
+                controls: owned_controls_without_m(cmd),
+                continued: false,
+            };
+        }
         // kitty consults `g->more` only in the `t=d` arm of `load_image_data`
         // (graphics.c), so `m=` is meaningless for file-backed media. mpv's
         // `--vo-kitty-use-shm` sends `t=s,…,m=1` every frame with no
@@ -314,7 +334,16 @@ impl ReassemblyTracker {
             self.reset();
         }
         let more = !file_like && matches!(cmd.get(b'm'), Some(b"1"));
-        // Reject before mutating state so an overflow leaves the buffer
+        // The spec says a continuation's controls are ignored except `m`,
+        // but kitty lets a non-zero `q=` override the head's, and that
+        // holds for the reply to an overflowing chunk too.
+        if let (Some(state), Some(quiet)) =
+            (self.open.as_mut(), cmd.get(b'q').filter(|q| is_nonzero(q)))
+        {
+            state.head_controls.retain(|(k, _)| *k != b'q');
+            state.head_controls.push((b'q', quiet.to_vec()));
+        }
+        // Reject before mutating the buffer so an overflow leaves it
         // fresh. A first-chunk overflow has no stored head, so the offending
         // chunk's own controls stand in.
         let buffered = self.open.as_ref().map_or(0, |s| s.buffered);
@@ -327,7 +356,6 @@ impl ReassemblyTracker {
         }
         let continued = self.open.is_some();
         let state = match self.open.take() {
-            // Continuation chunk: the spec says to ignore controls except `m`.
             Some(mut state) => {
                 state.buffered += cmd.payload.len();
                 state
@@ -399,11 +427,16 @@ impl Reassembler {
                 controls,
                 continued,
             } => {
-                let mut payload = std::mem::take(&mut self.payload);
-                if !continued {
-                    payload.clear();
-                }
-                payload.extend_from_slice(cmd.payload);
+                let payload = if continued {
+                    let mut payload = std::mem::take(&mut self.payload);
+                    payload.extend_from_slice(cmd.payload);
+                    payload
+                } else {
+                    if !self.tracker.is_open() {
+                        self.payload = Vec::new();
+                    }
+                    cmd.payload.to_vec()
+                };
                 Outcome::Done(CompleteCommand { controls, payload })
             }
         }
@@ -694,6 +727,28 @@ mod tests {
         );
     }
 
+    #[test]
+    fn delete_mid_transfer_runs_and_drops_the_transfer() {
+        let mut r = Reassembler::new();
+        assert_eq!(
+            r.feed(&parse(b"Ga=T,i=6,m=1;aaaa").unwrap()),
+            Outcome::Pending
+        );
+        let Outcome::Done(delete) = r.feed(&parse(b"Ga=d,d=A,m=1").unwrap()) else {
+            panic!("expected the delete to complete");
+        };
+        assert_eq!(
+            delete.controls,
+            vec![(b'a', b"d".to_vec()), (b'd', b"A".to_vec())]
+        );
+        assert_eq!(r.in_flight_bytes(), None);
+        let Outcome::Done(tail) = r.feed(&parse(b"Gm=0;bb").unwrap()) else {
+            panic!("expected Done");
+        };
+        assert_eq!(tail.payload, b"bb");
+        assert_eq!(tail.controls, Vec::new());
+    }
+
     /// A reset releases the parked bytes and the gauge must say so.
     #[test]
     fn in_flight_bytes_clears_on_reset() {
@@ -729,6 +784,46 @@ mod tests {
             complete.controls,
             vec![(b'a', b"T".to_vec()), (b'f', b"100".to_vec())]
         );
+    }
+
+    #[test]
+    fn continuation_chunk_nonzero_q_overrides_the_heads() {
+        let mut r = Reassembler::new();
+        drop(r.feed(&parse(b"Ga=T,i=8,q=0,m=1;aa").unwrap()));
+        let Outcome::Done(complete) = r.feed(&parse(b"Gq=2,m=0;bb").unwrap()) else {
+            panic!("expected Done");
+        };
+        assert_eq!(control_u32(&complete.controls, b'q'), Some(2));
+    }
+
+    #[test]
+    fn repeated_continuation_q_keeps_one_override() {
+        let mut r = Reassembler::new();
+        drop(r.feed(&parse(b"Ga=T,i=8,q=0,m=1;aa").unwrap()));
+        for _ in 0..100 {
+            assert_eq!(r.feed(&parse(b"Gq=1,m=1;").unwrap()), Outcome::Pending);
+        }
+        let Outcome::Done(complete) = r.feed(&parse(b"Gq=2;bb").unwrap()) else {
+            panic!("expected Done");
+        };
+        assert_eq!(
+            complete.controls,
+            vec![
+                (b'a', b"T".to_vec()),
+                (b'i', b"8".to_vec()),
+                (b'q', b"2".to_vec())
+            ]
+        );
+    }
+
+    #[test]
+    fn continuation_chunk_zero_q_keeps_the_heads() {
+        let mut r = Reassembler::new();
+        drop(r.feed(&parse(b"Ga=T,i=8,q=1,m=1;aa").unwrap()));
+        let Outcome::Done(complete) = r.feed(&parse(b"Gq=0,m=0;bb").unwrap()) else {
+            panic!("expected Done");
+        };
+        assert_eq!(control_u32(&complete.controls, b'q'), Some(1));
     }
 
     #[test]
@@ -913,6 +1008,28 @@ mod tests {
         );
         let recover = parse(b"Ga=T;ok").unwrap();
         assert_eq!(done_payload(&r.feed(&recover)), b"ok");
+    }
+
+    #[test]
+    fn overflowing_chunk_quiet_override_reaches_the_overflow_reply() {
+        let mut r = Reassembler::new();
+        let near_cap = vec![b'x'; REASSEMBLY_BUFFER_LIMIT - 4];
+        let big_head = Command {
+            controls: vec![(b'a', b"T".as_slice()), (b'm', b"1".as_slice())],
+            payload: &near_cap,
+        };
+        assert_eq!(r.feed(&big_head), Outcome::Pending);
+        let overrun = vec![b'y'; 8];
+        let big_tail = Command {
+            controls: vec![(b'q', b"2".as_slice())],
+            payload: &overrun,
+        };
+        assert_eq!(
+            r.feed(&big_tail),
+            Outcome::Overflow {
+                controls: vec![(b'a', b"T".to_vec()), (b'q', b"2".to_vec())],
+            }
+        );
     }
 
     #[test]
