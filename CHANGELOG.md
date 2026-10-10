@@ -27,6 +27,16 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
   `--format json`. Paths under your home directory print as `~`, and keybinding commands and texts are redacted.
 - **CLI**: `felis doctor`'s `gpu` row names the driver version where the backend reports one.
 
+### Changed
+
+- Kitty graphics replies now follow kitty: only a command with a non-zero `i=` or `I=` is answered, a delete is never
+  answered even when it fails, a query is answered only when it carries `i=`, and a malformed escape or an unknown `a=`
+  is dropped without a reply. A command with both `i=` and `I=` is refused with `EINVAL` before it runs. An `i=0` or
+  `I=0` is the same as no id, so `a=t,i=0` stores an anonymous image instead of failing. Error codes match kitty's: a
+  `t=f`/`t=t`/`t=s` source that cannot be read is `EBADF` (was `EIO`), PNG data that does not decode is `EBADPNG` (was
+  `EBADF`), bad base64 or zlib data is `EINVAL` (was `EBADF`), and raw pixel data shorter than `s=`×`v=` is `ENODATA`
+  (was `EINVAL`).
+
 ### Fixed
 
 - A Kitty graphics Unicode-placeholder cell colored with a 256-color foreground (`\e[38;5;Nm`) now shows image `N`, as

@@ -147,7 +147,7 @@ fn pinned_entries_are_skipped_during_eviction() {
 #[test]
 fn insert_fails_when_all_entries_are_pinned() {
     // The store cannot make room without dropping live data, so the
-    // dispatcher gets OverCapacity (ENOTSUP / EBADF) rather than an
+    // dispatcher gets OverCapacity (ENOTSUP) rather than an
     // evicted placed image.
     let mut s = ImageStore::new(2 * charge(50));
     s.insert(ImageId(1), entry(50)).unwrap();

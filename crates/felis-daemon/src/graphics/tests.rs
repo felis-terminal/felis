@@ -89,20 +89,41 @@ fn foreign_apc_dialect_stays_silent_without_disturbing_reassembler() {
 }
 
 #[test]
-fn malformed_g_envelope_replies_einval() {
-    // Pins: unparseable controls reply id-less EINVAL (no `q=` was read,
-    // so none can be honored).
+fn malformed_g_envelope_is_dropped_without_a_reply() {
     let mut r = Reassembler::new();
-    match reassemble_apc_body(&mut r, b"Gbadcontrols") {
-        BodyDispatch::Reply(reply) => {
-            assert_eq!(
-                reply,
-                b"\x1b_G;EINVAL:malformed graphics escape\x1b\\".to_vec()
-            );
-        }
-        other => panic!("expected an EINVAL reply, got {other:?}"),
-    }
+    assert_eq!(
+        reassemble_apc_body(&mut r, b"Gbadcontrols"),
+        BodyDispatch::Silent
+    );
     assert!(assembled(reassemble_apc_body(&mut r, &body("Ga=q", b""))).is_some());
+}
+
+#[test]
+fn a_first_chunk_with_both_image_id_and_number_is_refused_at_once() {
+    let mut r = Reassembler::new();
+    let (mut grid, mut images, mut placements) = handler_state();
+    let Some(complete) = assembled(reassemble_apc_body(&mut r, b"Ga=T,i=1,I=2,m=1;zz")) else {
+        panic!("expected the command to complete");
+    };
+    let reply = handle_complete(
+        &mut ApcCtx {
+            grid: &mut grid,
+            images: &mut images,
+            placements: &mut placements,
+            events: &mut Vec::new(),
+            shm: &mut ShmDeferral::default(),
+            cell_pixel_w: 0,
+            cell_pixel_h: 0,
+            anchor_cursor: None,
+        },
+        &complete,
+    );
+    assert_eq!(
+        reply,
+        Some(
+            b"\x1b_Gi=1,I=2;EINVAL:must not specify both image id and image number\x1b\\".to_vec()
+        )
+    );
 }
 
 #[test]
@@ -254,7 +275,7 @@ proptest! {
         prop_assert_eq!(entry.pixels(), &pixels[..expected]);
 
         let short = decode_image(&complete(&controls, &b64(&pixels[..expected - 1])));
-        prop_assert!(matches!(short, Err(DecodeError::InvalidValue(_))));
+        prop_assert!(matches!(short, Err(DecodeError::NoData(_))));
     }
 }
 
@@ -300,9 +321,12 @@ fn raw_rejects_when_s_times_v_overflows_usize() {
 }
 
 #[test]
-fn bad_base64_payload_returns_bad_image() {
+fn bad_base64_payload_returns_invalid_value() {
     let cmd = complete(&[(b'f', b"32"), (b's', b"1"), (b'v', b"1")], b"!@#$");
-    assert!(matches!(decode_image(&cmd), Err(DecodeError::BadImage(_))));
+    assert!(matches!(
+        decode_image(&cmd),
+        Err(DecodeError::InvalidValue(_))
+    ));
 }
 
 #[test]
@@ -331,7 +355,7 @@ fn shared_memory_transmission_decodes_off_linux() {
 #[test]
 #[cfg(windows)]
 fn windows_declines_file_temp_and_shm_transmission_with_enotsup() {
-    // ENOTSUP, not EIO: EIO is retryable and would tell a producer to
+    // ENOTSUP, not EBADF: EBADF is retryable and would tell a producer to
     // keep trying a path that can never work.
     for method in [b"f".as_slice(), b"t".as_slice(), b"s".as_slice()] {
         let cmd = complete(
@@ -627,16 +651,7 @@ fn transmit_with_q1_suppresses_ok_response() {
 #[test]
 fn transmit_with_q1_still_emits_errors() {
     let (mut grid, mut images, mut placements) = handler_state();
-    // A missing `i=` auto-allocates, so the reserved zero id triggers
-    // the error.
-    let (ctrls, payload) = tiny_rgba_controls();
-    let mut all = vec![
-        (b'a', b"t".as_slice()),
-        (b'i', b"0".as_slice()),
-        (b'q', b"1".as_slice()),
-    ];
-    all.extend_from_slice(&ctrls);
-    let cmd = complete(&all, &payload);
+    let cmd = complete(&[(b'a', b"p"), (b'i', b"5"), (b'q', b"1")], b"");
     let response = handle_complete(
         &mut ApcCtx {
             grid: &mut grid,
@@ -652,7 +667,7 @@ fn transmit_with_q1_still_emits_errors() {
     )
     .expect("q=1 errors still emit");
     assert!(
-        response.starts_with(b"\x1b_Gi=0;EINVAL"),
+        response.starts_with(b"\x1b_Gi=5;ENOENT"),
         "q=1 error must still surface, got: {response:?}",
     );
 }
@@ -716,7 +731,7 @@ fn transmit_with_q3_or_higher_is_treated_as_silent() {
 #[test]
 fn transmit_with_missing_image_id_auto_allocates_an_anonymous_id() {
     // The Kitty spec allows an anonymous transmit (yazi's direct
-    // preview path sends one); the response then carries no id.
+    // preview path sends one); with no id to address, nothing replies.
     let (mut grid, mut images, mut placements) = handler_state();
     let (ctrls, payload) = tiny_rgba_controls();
     let mut all = vec![(b'a', b"t".as_slice())];
@@ -734,12 +749,8 @@ fn transmit_with_missing_image_id_auto_allocates_an_anonymous_id() {
             anchor_cursor: None,
         },
         &cmd,
-    )
-    .unwrap();
-    assert_eq!(
-        response, b"\x1b_G;OK\x1b\\",
-        "anonymous transmit → id-less OK, got: {response:?}",
     );
+    assert_eq!(response, None);
     assert!(
         images.get(ImageId(u32::MAX)).is_some(),
         "anonymous image lands under a terminal-allocated id",
@@ -747,7 +758,7 @@ fn transmit_with_missing_image_id_auto_allocates_an_anonymous_id() {
 }
 
 #[test]
-fn transmit_with_image_id_zero_rejected() {
+fn transmit_with_image_id_zero_is_anonymous() {
     let (mut grid, mut images, mut placements) = handler_state();
     let (ctrls, payload) = tiny_rgba_controls();
     let mut all = vec![(b'a', b"t".as_slice()), (b'i', b"0".as_slice())];
@@ -765,9 +776,9 @@ fn transmit_with_image_id_zero_rejected() {
             anchor_cursor: None,
         },
         &cmd,
-    )
-    .unwrap();
-    assert!(response.starts_with(b"\x1b_Gi=0;EINVAL"));
+    );
+    assert_eq!(response, None);
+    assert!(images.get(ImageId(u32::MAX)).is_some());
 }
 
 #[test]
@@ -1378,7 +1389,13 @@ fn query_with_valid_payload_emits_ok() {
 fn query_with_invalid_payload_emits_specific_error() {
     let (mut grid, mut images, mut placements) = handler_state();
     let cmd = complete(
-        &[(b'a', b"q"), (b'f', b"99"), (b's', b"1"), (b'v', b"1")],
+        &[
+            (b'a', b"q"),
+            (b'i', b"32"),
+            (b'f', b"99"),
+            (b's', b"1"),
+            (b'v', b"1"),
+        ],
         b"",
     );
     let response = handle_complete(
@@ -1396,13 +1413,13 @@ fn query_with_invalid_payload_emits_specific_error() {
     )
     .unwrap();
     assert!(
-        response.starts_with(b"\x1b_G;EINVAL"),
+        response.starts_with(b"\x1b_Gi=32;EINVAL"),
         "f=99 → EINVAL, got: {response:?}",
     );
 }
 
 #[test]
-fn unknown_action_returns_einval() {
+fn unknown_action_is_dropped_without_a_reply() {
     let (mut grid, mut images, mut placements) = handler_state();
     let cmd = complete(&[(b'a', b"X"), (b'i', b"1")], b"");
     let response = handle_complete(
@@ -1417,9 +1434,8 @@ fn unknown_action_returns_einval() {
             anchor_cursor: None,
         },
         &cmd,
-    )
-    .unwrap();
-    assert!(response.starts_with(b"\x1b_Gi=1;EINVAL"));
+    );
+    assert_eq!(response, None);
 }
 
 fn transmit_root(
@@ -2200,7 +2216,7 @@ fn transmit_via_file_path_rejects_parent_dir_component() {
 
 #[cfg(unix)] // t=f/t=t file transmission is Unix-only (Windows declines with ENOTSUP)
 #[test]
-fn transmit_via_file_path_missing_file_returns_eio() {
+fn transmit_via_file_path_missing_file_returns_ebadf() {
     let (mut grid, mut images, mut placements) = handler_state();
     let path_b64 = b64(b"/this/path/does/not/exist/even/maybe.png");
     let cmd = complete(
@@ -2222,7 +2238,7 @@ fn transmit_via_file_path_missing_file_returns_eio() {
     )
     .unwrap();
     assert!(
-        response.starts_with(b"\x1b_Gi=103;EIO"),
+        response.starts_with(b"\x1b_Gi=103;EBADF"),
         "got: {response:?}"
     );
 }
@@ -2265,8 +2281,8 @@ fn transmit_via_file_path_rejects_symlink_with_nofollow() {
     )
     .unwrap();
     assert!(
-        response.starts_with(b"\x1b_Gi=104;EIO"),
-        "symlinked path → EIO under NOFOLLOW, got: {response:?}",
+        response.starts_with(b"\x1b_Gi=104;EBADF"),
+        "symlinked path → EBADF under NOFOLLOW, got: {response:?}",
     );
     assert!(
         images.get(ImageId(104)).is_none(),
@@ -2299,10 +2315,8 @@ fn transmit_via_file_path_rejects_directory_target() {
     )
     .unwrap();
     assert!(
-        response.starts_with(b"\x1b_Gi=105;")
-            && (response.windows(6).any(|w| w == b"EINVAL")
-                || response.windows(3).any(|w| w == b"EIO")),
-        "directory target → EINVAL or EIO, got: {response:?}",
+        response.starts_with(b"\x1b_Gi=105;EINVAL"),
+        "directory target → EINVAL, got: {response:?}",
     );
 }
 
@@ -2387,8 +2401,8 @@ fn transmit_via_temp_file_rejects_symlink_with_nofollow() {
     )
     .unwrap();
     assert!(
-        response.starts_with(b"\x1b_Gi=201;EIO"),
-        "symlink target → EIO under NOFOLLOW, got: {response:?}",
+        response.starts_with(b"\x1b_Gi=201;EBADF"),
+        "symlink target → EBADF under NOFOLLOW, got: {response:?}",
     );
     assert!(
         target.path().exists(),
@@ -2608,7 +2622,7 @@ fn shm_over_budget_leaves_name_for_teardown() {
 #[test]
 #[cfg(target_os = "linux")]
 fn shm_missing_object_returns_io_error() {
-    // EIO (retryable), not EINVAL: the producer may have raced its own
+    // EBADF (retryable), not EINVAL: the producer may have raced its own
     // cleanup.
     let cmd = complete(
         &[(b't', b"s"), (b'f', b"32"), (b's', b"1"), (b'v', b"1")],
