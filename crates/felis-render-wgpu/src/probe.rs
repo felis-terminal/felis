@@ -14,9 +14,11 @@ pub struct AdapterProbe {
     pub backend: String,
     /// `discrete_gpu`, `integrated_gpu`, `virtual_gpu`, `cpu`, `other`.
     pub device_type: String,
-    /// Driver name and version string, empty where the backend reports
-    /// none.
+    /// Driver name, empty where the backend reports none.
     pub driver: String,
+    /// Driver version (Mesa, NVIDIA), empty where the backend reports
+    /// none.
+    pub driver_info: String,
 }
 
 /// The same [`PowerPreference`] as the renderer, so the answer names
@@ -43,6 +45,7 @@ pub async fn probe_adapter() -> Option<AdapterProbe> {
         backend: info.backend.to_str().to_owned(),
         device_type: device_type_token(info.device_type).to_owned(),
         driver: info.driver,
+        driver_info: info.driver_info,
     })
 }
 

@@ -16,6 +16,10 @@ pub struct ProbeReport {
     pub client_version: String,
     pub gpu: GpuProbe,
     pub clipboard: ClipboardProbe,
+    /// Written only for [`DOCTOR_REPORT_PROBE_FLAG`]: resolving the stack
+    /// scans the system's fonts, a cost plain `felis doctor` must not pay.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fonts: Option<FontsProbe>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -31,6 +35,26 @@ pub struct GpuProbe {
     pub device_type: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub driver: Option<String>,
+    /// The driver's version string (Mesa, NVIDIA), where the backend
+    /// reports one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub driver_info: Option<String>,
+}
+
+/// The faces a window would draw with, resolved from the same config.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum FontsProbe {
+    Resolved {
+        regular: String,
+        bold: String,
+        italic: String,
+        bold_italic: String,
+        fallbacks: Vec<String>,
+    },
+    Failed {
+        error: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -51,12 +75,19 @@ impl GpuProbe {
             backend: None,
             device_type: None,
             driver: None,
+            driver_info: None,
         }
     }
 }
 
 /// The flag `felis` passes to `felis-client` to request a [`ProbeReport`].
 pub const DOCTOR_PROBE_FLAG: &str = "--doctor-probe";
+
+/// [`DOCTOR_PROBE_FLAG`] plus [`ProbeReport::fonts`], for
+/// `felis doctor report`. Its optional `=<path>` value is the config
+/// file to resolve fonts against, absolute; absent means the default
+/// discovery a window launch makes.
+pub const DOCTOR_REPORT_PROBE_FLAG: &str = "--doctor-report-probe";
 
 #[cfg(test)]
 mod tests {
@@ -72,16 +103,44 @@ mod tests {
                 name: Some("Test Adapter".to_owned()),
                 backend: Some("vulkan".to_owned()),
                 device_type: Some("discrete_gpu".to_owned()),
-                driver: Some("mesa".to_owned()),
+                driver: Some("radv".to_owned()),
+                driver_info: Some("Mesa 26.1.2".to_owned()),
             },
             clipboard: ClipboardProbe {
                 available: false,
                 detail: Some("no display".to_owned()),
             },
+            fonts: Some(FontsProbe::Resolved {
+                regular: "Mono Regular".to_owned(),
+                bold: "Mono Bold".to_owned(),
+                italic: "Mono Italic".to_owned(),
+                bold_italic: "Mono Bold Italic".to_owned(),
+                fallbacks: vec!["Emoji".to_owned()],
+            }),
         };
         let text = serde_json::to_string(&report).expect("serialize");
         let back: ProbeReport = serde_json::from_str(&text).expect("deserialize");
         assert_eq!(back, report);
+    }
+
+    #[test]
+    fn a_failed_font_probe_round_trips_through_json() {
+        let fonts = FontsProbe::Failed {
+            error: "no font".to_owned(),
+        };
+        let text = serde_json::to_string(&fonts).expect("serialize");
+        let back: FontsProbe = serde_json::from_str(&text).expect("deserialize");
+        assert_eq!(back, fonts);
+    }
+
+    /// The fields this epoch added stay optional: a client that predates
+    /// them still parses under `PROBE_VERSION` 1.
+    #[test]
+    fn a_report_without_the_added_fields_parses() {
+        let text = r#"{"v":1,"client_version":"0.1.0","gpu":{"available":true,"name":"A","driver":"d"},"clipboard":{"available":true}}"#;
+        let report: ProbeReport = serde_json::from_str(text).expect("deserialize");
+        assert_eq!(report.fonts, None);
+        assert_eq!(report.gpu.driver_info, None);
     }
 
     /// Absent fields are omitted, not written as null.

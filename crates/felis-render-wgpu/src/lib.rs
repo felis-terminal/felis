@@ -22,7 +22,7 @@ use felis_protocol::{
     messages::{CursorStyle, ImageFormat, SourceRect, ThemeChannel},
 };
 pub use felis_shaping::FaceSpec;
-use felis_shaping::{CellMetrics, FontStack, ShapingError, StyleFaces};
+use felis_shaping::{CellMetrics, FontStack, ShapingError, StackDescription, StyleFaces};
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use thiserror::Error;
 use wgpu::{
@@ -455,6 +455,19 @@ fn resolve_font_stack(
             &cfg.style_faces(),
         )?),
     }
+}
+
+/// The stack [`Renderer::new_with_config`] would resolve from `cfg`,
+/// described rather than kept.
+pub fn describe_fonts(cfg: &RendererConfig) -> Result<StackDescription, ShapingError> {
+    discover_fonts(
+        &cfg.font_files,
+        cfg.font_family.as_deref(),
+        &cfg.font_features,
+        &cfg.font_fallbacks,
+        &cfg.style_faces(),
+    )
+    .map(|stack| stack.describe())
 }
 
 fn discover_fonts(

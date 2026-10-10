@@ -16,7 +16,7 @@ use skrifa::raw::{
 };
 pub use swash::GlyphId;
 use swash::{
-    FontRef, NormalizedCoord, Setting,
+    FontRef, NormalizedCoord, Setting, StringId,
     scale::{Render, ScaleContext, Source, StrikeWith, image::Content},
     shape::{Direction, ShapeContext},
     zeno::Format,
@@ -88,6 +88,10 @@ pub struct Font {
     /// face. Every scaler, shaper and metrics call must pass it, or a
     /// variable face draws its default instance whatever weight was asked.
     coords: Vec<NormalizedCoord>,
+    /// The axis settings behind `coords`, clamped to each axis's range,
+    /// in design units: what [`Font::display_name`] names. Normalizing
+    /// passes through `avar`, so `coords` cannot be read back exactly.
+    position: Vec<(swash::Tag, f32)>,
 }
 
 impl Font {
@@ -194,6 +198,7 @@ impl Font {
             key: swash::CacheKey::new(),
             color,
             coords: Vec::new(),
+            position: Vec::new(),
         })
     }
 
@@ -234,6 +239,15 @@ impl Font {
         if settings.is_empty() {
             return None;
         }
+        let position = settings
+            .iter()
+            .map(|&(tag, value)| {
+                let value = variations.find_by_tag(tag).map_or(value, |axis| {
+                    value.clamp(axis.min_value(), axis.max_value())
+                });
+                (tag, value)
+            })
+            .collect();
         let coords = variations.normalized_coords(settings).collect();
         Some(Self {
             bytes: self.bytes.clone(),
@@ -241,6 +255,7 @@ impl Font {
             key: swash::CacheKey::new(),
             color: self.color,
             coords,
+            position,
         })
     }
 
@@ -283,6 +298,37 @@ impl Font {
     #[must_use]
     pub const fn has_color_glyphs(&self) -> bool {
         self.color
+    }
+
+    /// The `name` table's full name, English first. A variation view
+    /// carries its file's default-instance name, so the axis position it
+    /// draws at follows it, as `(wght=700, slnt=-11)`.
+    #[must_use]
+    pub fn display_name(&self) -> String {
+        let strings = self.font_ref().localized_strings();
+        let name = [StringId::Full, StringId::Family]
+            .into_iter()
+            .find_map(|id| {
+                strings
+                    .find_by_id(id, Some("en"))
+                    .or_else(|| strings.find_by_id(id, None))
+            })
+            .map_or_else(|| "unnamed".to_owned(), |found| found.to_string());
+        if self.position.is_empty() {
+            return name;
+        }
+        let axes = self
+            .position
+            .iter()
+            .map(|(tag, value)| {
+                let tag = String::from_utf8_lossy(&tag.to_be_bytes())
+                    .trim_end()
+                    .to_owned();
+                format!("{tag}={value}")
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("{name} ({axes})")
     }
 
     pub(crate) fn font_ref(&self) -> FontRef<'_> {
@@ -424,6 +470,12 @@ impl Default for StyleFaces<'_> {
             bold_italic: INHERIT,
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StackDescription {
+    pub primary: [String; 4],
+    pub fallbacks: Vec<String>,
 }
 
 /// Ordered chain of fonts queried per glyph (`fonts[0]` is regular primary,
@@ -909,6 +961,21 @@ impl FontStack {
     pub fn font_at(&self, index: usize, style: FontStyle) -> &Arc<Font> {
         let chain = &self.chains[style.index()];
         chain.get(index).unwrap_or(&chain[0])
+    }
+
+    /// The faces a window would draw with, by [`FontStyle::index`] for
+    /// the primary and in chain order for the fallbacks.
+    #[must_use]
+    pub fn describe(&self) -> StackDescription {
+        StackDescription {
+            primary: std::array::from_fn(|i| self.chains[i][0].display_name()),
+            fallbacks: self
+                .fonts
+                .iter()
+                .skip(1)
+                .map(|f| f.display_name())
+                .collect(),
+        }
     }
 
     /// Always `false`; exists for clippy's `len_without_is_empty`.
@@ -2097,6 +2164,67 @@ mod tests {
             dims(pinned.cell_metrics(14.0))
         );
         assert_eq!(stack.len(), 1);
+    }
+
+    #[test]
+    fn a_described_stack_names_each_primary_style_from_the_name_table() {
+        let Some(files) = test_font_files() else {
+            eprintln!("FELIS_TEST_FONT_DIR unset; skipping");
+            return;
+        };
+        let stack = FontStack::discover_in_files(
+            &files,
+            Some(TEST_FONT_FAMILY),
+            &[],
+            &[],
+            &StyleFaces::default(),
+        )
+        .expect("the pinned family loads");
+        let described = stack.describe();
+        for name in &described.primary {
+            assert!(name.starts_with(TEST_FONT_FAMILY), "{name}");
+        }
+        assert_ne!(described.primary[0], described.primary[1]);
+        assert_eq!(described.fallbacks, Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_variation_view_is_named_with_the_position_it_draws_at() {
+        let Some(dir) = std::env::var_os("FELIS_TEST_FONT_DIR") else {
+            eprintln!("FELIS_TEST_FONT_DIR unset; skipping");
+            return;
+        };
+        let mut db = Database::new();
+        db.load_font_file(std::path::Path::new(&dir).join("truetype/Monaspace Neon Var.ttf"))
+            .expect("the variable face reads");
+        let font = Font::try_load_with(&db, "Monaspace Neon Var").expect("the variable face loads");
+        let bold = font.at_style(700, false).expect("the face has a wght axis");
+        let bold_italic = font.at_style(700, true).expect("the face has a slnt axis");
+        let heaviest = font
+            .at_style(1000, false)
+            .expect("the face has a wght axis");
+        assert!(
+            !font.display_name().ends_with(')'),
+            "{}",
+            font.display_name()
+        );
+        assert!(
+            bold.display_name().ends_with(" (wght=700)"),
+            "{}",
+            bold.display_name()
+        );
+        assert!(
+            bold_italic
+                .display_name()
+                .ends_with(" (wght=700, slnt=-11)"),
+            "{}",
+            bold_italic.display_name()
+        );
+        assert!(
+            heaviest.display_name().ends_with(" (wght=800)"),
+            "{}",
+            heaviest.display_name()
+        );
     }
 
     /// The pinned variable face defaults to `ExtraLight`, so a stack that

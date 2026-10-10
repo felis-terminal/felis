@@ -22,6 +22,10 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
   with `unsupported`.
 - **CLI**: `felis doctor` notes on the `daemon` row when the running daemon is a build other than the installed
   `felis-daemon`, naming the installed one.
+- **CLI**: `felis doctor report` prints the doctor checklist plus the builds, OS, display server, GPU driver version,
+  resolved fonts, non-default config keys, and log paths as Markdown to paste into a bug report, or as JSON with
+  `--format json`. Paths under your home directory print as `~`, and keybinding commands and texts are redacted.
+- **CLI**: `felis doctor`'s `gpu` row names the driver version where the backend reports one.
 
 ### Fixed
 

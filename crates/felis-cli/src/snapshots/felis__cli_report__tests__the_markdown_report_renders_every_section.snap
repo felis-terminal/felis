@@ -1,0 +1,52 @@
+---
+source: crates/felis-cli/src/cli_report.rs
+expression: "markdown(&sample(true), \"not running\")"
+---
+<!-- felis doctor report: review before posting. Paths under your home directory are shown as ~, and keybinding commands and texts as <redacted>. -->
+
+### felis
+
+| component | build |
+| --- | --- |
+| cli | 0.1.2 (aaaaaaaaaaaa) |
+| client | 0.1.2 (aaaaaaaaaaaa) |
+| daemon | not running |
+| binary | /nix/store/x-felis/bin/felis |
+
+### System
+
+- os: linux x86_64, NixOS 26.11, 7.2.7
+- display: XDG_SESSION_TYPE=wayland, XDG_CURRENT_DESKTOP=niri, WAYLAND_DISPLAY set, DISPLAY unset
+- gpu: GPU (vulkan, discrete_gpu, driver radv Mesa 26.1.2)
+- locale: LANG=en_US.UTF-8, LC_ALL=unset, LC_CTYPE=unset
+- shell: inside a felis session; TERM=xterm-felis, TERM_PROGRAM=felis, TERM_PROGRAM_VERSION=0.1.2, COLORTERM=truecolor
+- ssh: no
+
+### Fonts
+
+- regular: Mono Regular
+- bold: Mono Bold
+- italic: Mono Italic
+- bold italic: Mono Bold Italic
+- fallbacks: Emoji
+
+### Config
+
+<details><summary>Keys in <code>~/.config/felis/config.toml</code> that differ from the defaults</summary>
+
+```toml
+[font]
+size_px = 15.0
+```
+
+</details>
+
+### Checks
+
+| status | check | detail |
+| --- | --- | --- |
+| fail | terminfo | no entry \| see the how-to for help |
+
+### Logs
+
+- daemon.log: `~/.local/state/felis/daemon.log` (missing)

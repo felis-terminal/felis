@@ -52,6 +52,8 @@ Task-oriented; one goal per page.
   entries and terminal-identity allowlist workarounds.
 - [Fix keyboard input problems](how-to/fix-keyboard-input-problems.md) — symptom-first fixes for keys that type the
   wrong character: the JIS yen keycap, and where the modifier-combination fixes live.
+- [Report a bug](how-to/report-a-bug.md) — collect the environment a maintainer needs with `felis doctor report`, and
+  what to attach beside it.
 
 ## Reference
 

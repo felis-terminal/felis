@@ -851,6 +851,7 @@ dependencies = [
  "clap",
  "clap_complete",
  "clap_mangen",
+ "directories",
  "felis-client-core",
  "felis-daemon",
  "felis-grid",
