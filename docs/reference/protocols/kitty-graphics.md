@@ -78,6 +78,8 @@ Image data is retained until:
 
 - The producer deletes the image (`a=d`) matching its ID or number.
 - The producer transmits again under the same ID: the new data replaces it, and its placements are deleted as in kitty.
+- It was sent without `i=` or `I=` and has no placement left after a delete or a scroll; nothing could place it again.
+- A screen clear leaves it without a placement (see below).
 - A later transmission needs room under the session byte cap and evicts it, placements included, oldest first (see
   [Limits](#limits)).
 - The session is destroyed.

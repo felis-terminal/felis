@@ -44,6 +44,8 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
   nothing displays, so transmitted-but-unplaced images no longer pile up until the byte cap evicts them. Partial erases
   (`ED 0`, `ED 1`, `EL`) and the soft reset `DECSTR` no longer remove images, so redrawing one line next to an image
   keeps it. A clear on the alternate screen leaves the primary screen's images in place.
+- A Kitty graphics image sent without `i=` or `I=` is now freed once a delete or a scroll leaves it without a placement,
+  as in kitty; nothing could display it again, yet it used to hold its share of the byte cap until evicted.
 - A Kitty graphics Unicode-placeholder cell colored with a 256-color foreground (`\e[38;5;Nm`) now shows image `N`, as
   kitty does; only a 24-bit foreground used to name the image.
 - A Kitty graphics image shown through Unicode-placeholder cells now keeps its aspect ratio, centered in the placement's

@@ -607,6 +607,28 @@ fn ris_clears_the_screen_placements_and_frees_their_images() {
     assert_eq!((removed, deleted), (vec![7], vec![7]));
 }
 
+/// Nothing can place an image sent without an id again, so kitty frees
+/// it with its last placement; a named image stays for the next put.
+#[test]
+fn an_image_without_an_id_goes_with_its_last_placement() {
+    let mut s = State::new();
+    let payload = tiny_rgba_payload();
+    s.dispatch(&body("Ga=T,q=2,f=32,s=1,v=1,c=4,r=2", &payload));
+    s.dispatch(&body("Ga=T,i=42,f=32,s=1,v=1,c=4,r=2", &payload))
+        .unwrap();
+    let anonymous = s.images.iter_ids().find(|id| *id != ImageId(42)).unwrap();
+    s.drain_events();
+
+    s.dispatch(&body("Ga=d,d=a", b""));
+
+    let (removed, deleted) = removed_and_deleted(&s.drain_events());
+    let mut expected_removed = vec![anonymous.0, 42];
+    expected_removed.sort_unstable();
+    assert_eq!(removed, expected_removed);
+    assert_eq!(deleted, vec![anonymous.0]);
+    assert!(s.images.get(ImageId(42)).is_some());
+}
+
 /// kitty keeps the primary screen's images in a store of its own, so a
 /// full-screen program clearing the alternate screen cannot free them.
 #[test]

@@ -71,6 +71,9 @@ pub struct ImageEntry {
     current_loop: u32,
     /// Pinned (refcount > 0) entries are never evicted.
     refcount: u32,
+    /// Sent without `i=` or `I=`, so no later command can name it.
+    #[cfg_attr(feature = "state-dump", serde(default))]
+    anonymous: bool,
 }
 
 impl ImageEntry {
@@ -93,7 +96,19 @@ impl ImageEntry {
             max_loops: 0,
             current_loop: 0,
             refcount: 0,
+            anonymous: false,
         }
+    }
+
+    #[must_use]
+    pub const fn into_anonymous(mut self) -> Self {
+        self.anonymous = true;
+        self
+    }
+
+    #[must_use]
+    pub const fn is_anonymous(&self) -> bool {
+        self.anonymous
     }
 
     /// Pixels of the currently-displayed frame.

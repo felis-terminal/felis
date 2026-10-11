@@ -694,6 +694,7 @@ fn handle_complete(ctx: &mut ApcCtx<'_>, complete: &CompleteCommand) -> Option<V
                     "graphics delete failed (kitty sends no reply)"
                 );
             }
+            free_unreferenced_anonymous(images, placements, saved_primary, events);
             return None;
         }
         b'f' => handle_animation_frame(images, placements, events, complete, &mut refs),
@@ -832,7 +833,10 @@ fn transmit_image(
     refs: &mut ResponseRefs,
 ) -> Result<ImageId, ActionOutcome> {
     let id = resolve_or_allocate_image_id(complete, refs, images)?;
-    let entry = decode_image(complete).map_err(decode_error_to_outcome)?;
+    let mut entry = decode_image(complete).map_err(decode_error_to_outcome)?;
+    if refs.image_id.is_none() {
+        entry = entry.into_anonymous();
+    }
     match insert_into_store(images, placements, events, id, entry) {
         ActionOutcome::Ok => Ok(id),
         err @ ActionOutcome::Err(..) => Err(err),
@@ -908,6 +912,41 @@ fn free_unreferenced(
     saved_primary: Option<&felis_grid::images::Placements>,
     events: &mut Vec<ImageEvent>,
 ) {
+    free_unreferenced_where(images, placements, saved_primary, events, |_| true);
+}
+
+/// kitty frees an image sent without an id once its last placement
+/// goes, since nothing can place it again; its `modify_refs` (every
+/// scroll) and `filter_refs` (every delete) sweep for such images.
+pub fn free_unreferenced_anonymous(
+    images: &mut felis_grid::images::ImageStore,
+    placements: &mut felis_grid::images::Placements,
+    saved_primary: Option<&felis_grid::images::Placements>,
+    events: &mut Vec<ImageEvent>,
+) {
+    free_unreferenced_where(
+        images,
+        placements,
+        saved_primary,
+        events,
+        ImageEntry::is_anonymous,
+    );
+}
+
+fn free_unreferenced_where(
+    images: &mut felis_grid::images::ImageStore,
+    placements: &mut felis_grid::images::Placements,
+    saved_primary: Option<&felis_grid::images::Placements>,
+    events: &mut Vec<ImageEvent>,
+    candidate: impl Fn(&ImageEntry) -> bool,
+) {
+    let candidates: Vec<ImageId> = images
+        .iter_ids()
+        .filter(|id| images.get(*id).is_some_and(&candidate))
+        .collect();
+    if candidates.is_empty() {
+        return;
+    }
     let referenced: std::collections::HashSet<ImageId> = [Some(&*placements), saved_primary]
         .into_iter()
         .flatten()
@@ -918,11 +957,7 @@ fn free_unreferenced(
                 .chain(table.iter_virtual().map(|v| v.image_id))
         })
         .collect();
-    let unreferenced: Vec<ImageId> = images
-        .iter_ids()
-        .filter(|id| !referenced.contains(id))
-        .collect();
-    for id in unreferenced {
+    for id in candidates.into_iter().filter(|id| !referenced.contains(id)) {
         free_image(images, placements, events, id);
     }
 }

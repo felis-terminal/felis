@@ -54,6 +54,12 @@ fn shift_placements(session: &mut crate::pool::Session, n: u32, retain: u32) {
             placement_id: p.placement_id,
         });
     }
+    crate::graphics::free_unreferenced_anonymous(
+        &mut session.images,
+        &mut session.placements,
+        session.saved_primary_placements.as_ref(),
+        &mut session.image_events,
+    );
 }
 
 fn replay_effects(
