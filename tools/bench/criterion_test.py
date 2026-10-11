@@ -2,9 +2,8 @@
 """Unit tests for tools/bench/criterion.py.
 
 Hermetic — synthetic Criterion trees and canned cargo-metadata JSON,
-no cargo invocation — so CI can run them before the real gate and a
-parser break is caught here, not on a real regression PR (same role
-the bench-gate.test.sh smoke tests played for the bash gate).
+no cargo invocation — so CI can run them and a parser break is
+caught here rather than as a gate that silently passes a local A/B.
 
 Run: python3 tools/bench/criterion_test.py
 """

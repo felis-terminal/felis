@@ -2,9 +2,10 @@
 """felis benchmark orchestrator.
 
 Single entry point for every Criterion procedure so the local recipes
-(`just bench*`), the per-PR regression gate, and the nightly snapshot
-all share one set of flags — divergent hand-rolled `cargo bench`
-invocations is how baseline comparisons stop being like-for-like.
+(`just bench*`) share one set of flags — divergent hand-rolled
+`cargo bench` invocations is how baseline comparisons stop being
+like-for-like. The PR gate counts instructions instead
+(tools/bench/gungraun.py); these wall-clock numbers stay local.
 
 Python over shell: the inputs and outputs here are JSON (cargo
 metadata, Criterion's estimates.json / benchmark.json), and the bash
@@ -17,7 +18,7 @@ Commands
   list    discover Criterion bench targets via `cargo metadata`
   run     run benches with consistent flags; optionally emit a report
   report  summarize target/criterion/**/new/estimates.json
-  gate    fail on regressions vs a saved baseline (CI gate)
+  gate    fail on regressions vs a saved baseline (local A/B)
 
 The gate preserves the bench-gate.sh contract: env vars THRESHOLD /
 CRITERION_ROOT / ALLOWLIST and exit codes 0 (clean), 1 (regression),
@@ -34,14 +35,14 @@ import sys
 import time
 from pathlib import Path
 
-# Criterion writes under cargo's target directory, which CI parks outside
-# the workspace (.forgejo/actions/cargo-env), so a literal "target" would
+# Criterion writes under cargo's target directory, which may sit outside
+# the workspace (CARGO_TARGET_DIR), so a literal "target" would
 # name a directory the benches never wrote to and the gate would read an
 # empty run as nothing to check.
 DEFAULT_ROOT = Path(os.environ.get("CARGO_TARGET_DIR") or "target") / "criterion"
-# 15% default: free-CI runner noise adds ~5% jitter to small benches,
-# so the floor sits where a real regression dominates the noise.
-# Tighten via THRESHOLD when the runner stabilises (bench.yml env).
+# 15% default: run-to-run jitter on a busy machine reaches ~5% on small
+# benches, so the floor sits where a real regression dominates the noise.
+# Tighten via THRESHOLD on a quiet machine.
 DEFAULT_THRESHOLD = 0.15
 
 
@@ -228,8 +229,8 @@ def cargo_bench_cmd(target: dict, args: argparse.Namespace) -> list[str]:
         cmd += ["--features", ",".join(target["required_features"])]
     cmd.append("--")
     if args.quick:
-        # Matches the CI gate's budget: keeps each bench group in
-        # single-digit seconds at the cost of wider confidence
+        # Keeps each bench group in single-digit seconds at the
+        # cost of wider confidence
         # intervals — acceptable because the gate threshold (15%)
         # is far above the extra variance.
         cmd += ["--warm-up-time", "1", "--measurement-time", "3"]
@@ -303,7 +304,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     run = sub.add_parser("run", help="run Criterion benches")
     run.add_argument("targets", nargs="*", help="bench target names (default: all)")
     run.add_argument(
-        "--quick", action="store_true", help="CI-budget warm-up/measurement times"
+        "--quick", action="store_true", help="short warm-up/measurement times"
     )
     run.add_argument("--save-baseline", metavar="NAME")
     run.add_argument("--baseline", metavar="NAME")
