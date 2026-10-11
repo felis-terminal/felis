@@ -2212,6 +2212,56 @@ fn transmit_via_file_path_reads_bytes_from_disk() {
     assert_eq!(entry.pixels(), pixels);
 }
 
+/// kitty reads `t=f` / `t=t` data from `O=` for `S=` bytes, as for `t=s`;
+/// producers that pack several images into one file rely on it.
+#[cfg(unix)]
+#[test]
+fn file_transmissions_read_the_offset_and_size_they_name() {
+    let bytes = [0, 0, 0xDE, 0xAD, 0xBE, 0xEF, 0, 0];
+    let ranged = |medium: &'static [u8], path: &std::path::Path| {
+        decode_image(&complete(
+            &[
+                (b't', medium),
+                (b'f', b"32"),
+                (b's', b"1"),
+                (b'v', b"1"),
+                (b'O', b"2"),
+                (b'S', b"4"),
+            ],
+            &b64(path.to_str().unwrap().as_bytes()),
+        ))
+    };
+    let f = tempfile_with_bytes(&bytes);
+    assert_eq!(
+        ranged(b"f", f.path()).unwrap().pixels(),
+        [0xDE, 0xAD, 0xBE, 0xEF]
+    );
+    let t = tempfile_with_bytes(&bytes).into_temp_path().keep().unwrap();
+    assert_eq!(ranged(b"t", &t).unwrap().pixels(), [0xDE, 0xAD, 0xBE, 0xEF]);
+    assert!(!t.exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_temp_file_range_past_its_end_is_refused_and_still_unlinked() {
+    let t = tempfile_with_bytes(&[0; 4])
+        .into_temp_path()
+        .keep()
+        .unwrap();
+    let result = decode_image(&complete(
+        &[
+            (b't', b"t"),
+            (b'f', b"32"),
+            (b's', b"1"),
+            (b'v', b"1"),
+            (b'S', b"8"),
+        ],
+        &b64(t.to_str().unwrap().as_bytes()),
+    ));
+    assert!(matches!(result, Err(DecodeError::InvalidValue(_))));
+    assert!(!t.exists());
+}
+
 #[cfg(unix)] // t=f/t=t file transmission is Unix-only (Windows declines with ENOTSUP)
 #[test]
 fn transmit_via_file_path_rejects_relative_path() {

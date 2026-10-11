@@ -38,10 +38,13 @@ Transmission method support (`t=d/f/t/s`) is summarized in the
 `t=d` is supported; `t=f`, `t=t`, and `t=s` return `ENOTSUP`, allowing producer `a=q` probes to fall back to direct
 transmission; see [kitty-graphics.md](../../explanation/protocols/kitty-graphics.md).
 
+All three Unix methods read the range `S=` bytes long from offset `O=`; an absent or zero `S=` reads to the end. An `O=`
+or `O=+S=` past the end of the file or segment is refused with `EINVAL`; a temp file felis could open is deleted even
+then.
+
 Shared-memory transfer (`t=s`) behavior:
 
-- The daemon opens named segments read-only and copies the selected range (`S=`/`O=`, default: all) into internal
-  buffers.
+- The daemon opens named segments read-only and copies the selected range into internal buffers.
 - Segment names are not unlinked per read; unlinking is deferred to session teardown. A session defers up to 16
   successfully completed transfers; adding a seventeenth immediately unlinks the oldest name.
 - Names are accepted with or without a leading slash. On non-Linux Unix platforms, a leading slash is added

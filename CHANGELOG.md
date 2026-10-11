@@ -54,6 +54,8 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 - A Kitty graphics Unicode-placeholder cell with the default foreground no longer borrows the image id of the cell
   before it; as in kitty its foreground counts as `0` in the id. A cell without the id's high-byte diacritic now takes
   it from its run.
+- Kitty graphics file (`t=f`) and temp-file (`t=t`) transmissions now read the `S=` bytes at offset `O=`, as kitty does;
+  they used to read the whole file.
 - A Kitty graphics image shown through Unicode-placeholder cells now keeps its aspect ratio, centered in the placement's
   `c=` by `r=` box, as kitty does; it used to be stretched to fill the box.
 - A Kitty graphics `d=a` or `d=A` delete now leaves Unicode-placeholder images and images scrolled wholly into history
