@@ -105,7 +105,20 @@ fn replay_effects(
                 shift_placements(session, n, 0);
             }
             // Saved placements hold no image refcount (released on the switch).
-            PtyEffect::HardReset => session.saved_primary_placements = None,
+            // RIS leaves the alternate screen; the primary placements come
+            // back first so the clear that follows spares their history
+            // rows, as kitty's reset of the primary screen does.
+            PtyEffect::HardReset => {
+                if session.saved_primary_placements.is_some() {
+                    crate::graphics::apply_screen_switch(
+                        felis_grid::ScreenSwitch::LeftAlternate,
+                        &mut session.images,
+                        &mut session.placements,
+                        &mut session.saved_primary_placements,
+                        &mut session.image_events,
+                    );
+                }
+            }
             // Parked for `session_task::fan_out_grid_state`, the only consumer
             // that knows each shadow's damage.
             PtyEffect::Scrolled {

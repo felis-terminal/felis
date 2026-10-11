@@ -90,7 +90,15 @@ impl State {
                     &mut self.events,
                     scope,
                 ),
-                PtyEffect::HardReset => self.saved_primary_placements = None,
+                PtyEffect::HardReset if self.saved_primary_placements.is_some() => {
+                    apply_screen_switch(
+                        felis_grid::ScreenSwitch::LeftAlternate,
+                        &mut self.images,
+                        &mut self.placements,
+                        &mut self.saved_primary_placements,
+                        &mut self.events,
+                    );
+                }
                 _ => {}
             }
         }
@@ -627,6 +635,45 @@ fn an_image_without_an_id_goes_with_its_last_placement() {
     assert_eq!(removed, expected_removed);
     assert_eq!(deleted, vec![anonymous.0]);
     assert!(s.images.get(ImageId(42)).is_some());
+}
+
+/// kitty's RIS clears the primary screen's live rows and keeps its
+/// history; leaving the alternate screen on the way changes nothing.
+#[test]
+fn ris_on_the_alternate_screen_keeps_primary_scrollback_placements() {
+    let mut s = State::new();
+    s.dispatch(&body(
+        "Ga=T,i=42,f=32,s=1,v=1,c=4,r=2",
+        &tiny_rgba_payload(),
+    ))
+    .unwrap();
+    s.placements.shift_up(30, 1000);
+    s.dispatch(&body(
+        "Ga=T,i=43,f=32,s=1,v=1,c=4,r=2",
+        &tiny_rgba_payload(),
+    ))
+    .unwrap();
+    s.advance_and_drain(b"\x1b[?1049h");
+    s.dispatch(&body(
+        "Ga=T,i=44,f=32,s=1,v=1,c=4,r=2",
+        &tiny_rgba_payload(),
+    ))
+    .unwrap();
+    s.drain_events();
+
+    s.advance_and_drain(b"\x1bc");
+
+    assert_eq!(s.saved_primary_placements, None);
+    assert_eq!(
+        s.placements
+            .iter()
+            .map(|p| p.image_id.0)
+            .collect::<Vec<_>>(),
+        vec![42]
+    );
+    let mut stored: Vec<u32> = s.images.iter_ids().map(|id| id.0).collect();
+    stored.sort_unstable();
+    assert_eq!(stored, vec![42]);
 }
 
 /// kitty keeps the primary screen's images in a store of its own, so a
