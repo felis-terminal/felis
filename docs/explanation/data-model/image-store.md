@@ -19,10 +19,8 @@ still image is a one-frame entry, so animation adds no second representation. Pl
 side table rather than inside the store, which is what lets an image be placed twice, or placed and then scrolled,
 without the store knowing.
 
-Entries sit in one insertion-ordered map, front to back oldest to newest, and eviction walks it in that order. A
-`HashMap` beside a `VecDeque<ImageId>` is the alternative and is rejected because it makes the id-to-entry mapping and
-the eviction order two structures that can drift apart. A real LRU is rejected for a plainer reason: sessions hold tens
-of images, not thousands, so recency ordering would buy accuracy nobody can measure.
+Entries sit in one insertion-ordered map, front to back oldest to newest, which is the order the store's own refcount-0
+eviction walks.
 
 Ids for images transmitted without one are assigned counting **down** from the top of the id space, away from the low
 ids producers pick by hand. A collision here is not a rejected transmission but a silently overwritten image, which is
@@ -39,7 +37,7 @@ compressed (zlib) where useful; the daemon decodes once on intake, so the payloa
 The store also tracks a per-id refcount, bumped by `retain` (a placement pins its image) and dropped by `release`. The
 store's own eviction (`insert` and the frame mutators) respects it: refcount-0 entries go first, and when every
 remaining entry is pinned the store fails with `InsertError::OverCapacity`. But the dispatcher never surfaces that
-failure to producers: it pre-evicts the oldest images outright, placements included, before inserting (see Limits).
+failure to producers: it pre-evicts images outright, placements included, before inserting (see Limits).
 
 Placements anchored in scrollback keep their image refcount while the anchor line stays in the retained ring, so pixel
 memory for a scrolled-out image lives until the line is trimmed, bounded by `bytes_cap` and the scrollback depth, with
@@ -61,12 +59,12 @@ session budget alone would admit millions of frame slots ([kitty-graphics.md](..
 count cap"). It is refused before anything is evicted to fit, so a producer cannot spend other images to buy a frame
 slot it will not be allowed.
 
-When a new image would push past `bytes_cap`, the dispatcher first evicts the **oldest images outright, placements
-included** (emitting `PlacementRemoved` + `Delete` so attached clients drop them too), matching kitty's
-`ensure_space_for`; the store's refcount-respecting `insert` then runs against the freed space. The cap recycles rather
-than rejecting: a frame-streaming producer like mpv pins every frame with a `C=1` placement that no erase ever drops, so
-a refuse-to-evict-pinned policy would freeze playback the moment the cap filled (see
-[kitty-graphics.md](../protocols/kitty-graphics.md#eviction-under-the-byte-cap)).
+When a new image would push past `bytes_cap`, the dispatcher first frees every image without a placement, then evicts
+the **least recently used images outright, placements included** (emitting `PlacementRemoved` + `Delete` so attached
+clients drop them too), matching kitty's `apply_storage_quota`; the store's refcount-respecting `insert` then runs
+against the freed space. The cap recycles rather than rejecting: a frame-streaming producer like mpv pins every frame
+with a `C=1` placement that no erase ever drops, so a refuse-to-evict-pinned policy would freeze playback the moment the
+cap filled (see [kitty-graphics.md](../protocols/kitty-graphics.md#eviction-under-the-byte-cap)).
 
 The store's own refcount-respecting eviction announces what it drops: `insert`, `push_frame` and `replace_frame` return
 the evicted ids, and the dispatcher turns each into the same `Delete` a deliberate removal emits. Swallowing them would

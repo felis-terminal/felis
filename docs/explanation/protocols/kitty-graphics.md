@@ -281,10 +281,15 @@ that is not confined to whole rows, where clipping stops being expressible as a 
 
 ## Eviction under the byte cap
 
-When a transmit would overflow the per-session byte cap, the oldest images are evicted outright, placements included,
-matching kitty's `ensure_space_for`. This is what keeps a frame-streaming producer alive: mpv's `--vo=kitty` sends one
-anonymous `a=T` per video frame with a `C=1` placement that no erase ever drops, so a refuse-to-evict-pinned policy
-would freeze playback the moment the cap filled.
+When a transmit would overflow the per-session byte cap, felis follows kitty's `apply_storage_quota`: every image
+without a placement goes first, then the least recently used images are evicted outright, placements included. Evicting
+placed images is what keeps a frame-streaming producer alive: mpv's `--vo=kitty` sends one anonymous `a=T` per video
+frame with a `C=1` placement that nothing erases between frames, so a refuse-to-evict-pinned policy would freeze
+playback the moment the cap filled.
+
+kitty gives each screen its own image store, so a full-screen program filling the cap never evicts what the shell's
+screen shows. felis keeps one store per session: the stashed primary placements keep their images out of the first,
+unplaced-only step, but the least-recently-used step can still reach them.
 
 ## The frame count cap
 

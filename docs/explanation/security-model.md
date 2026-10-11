@@ -171,9 +171,10 @@ The graphics protocol is a large attack surface: it accepts compressed image dat
 - **Image decoders run with budgets.** The per-image decoded-byte budget is checked before a buffer is sized, so a zip
   bomb is refused rather than allocated; the decode aborts and the producer is answered with Kitty `ENOTSUP`, the status
   that tells it to retry smaller. The session byte cap and the per-image frame cap (REQ-1008) are the store's, applied
-  when the decoded image is admitted: the byte cap first evicts the oldest images and their placements and refuses with
-  `ENOTSUP` only when the image still does not fit, and the frame cap refuses without evicting anything
-  ([image-store.md](data-model/image-store.md#limits)). No breach of any of the three ends the session.
+  when the decoded image is admitted: the byte cap first evicts unplaced, then least recently used images with their
+  placements and refuses with `ENOTSUP` only when the image still does not fit, and the frame cap refuses without
+  evicting anything ([image-store.md](data-model/image-store.md#limits)). No breach of any of the three ends the
+  session.
 - **`t=f` (file) and `t=t` (temp file) are path-restricted**
   ([the rules](../reference/protocols/kitty-graphics.md#file-transmission-safety-tf--tt)). Each rule answers one attack:
   `O_NOFOLLOW` on the final component defeats swapping the file for a symlink between the stat and the read, refusing

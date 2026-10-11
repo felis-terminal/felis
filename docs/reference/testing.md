@@ -83,8 +83,8 @@ Specific fixed-points the design docs commit to that map cleanly to unit tests:
 - **Reflow round-trip**: `Grid::reflow` from W to W' and back to W restores original logical line breaks while no
   scrollback eviction fires (`reflow_soft_wrap_narrow_then_widen_round_trips` and cursor, prompt-mark, wide-glyph cases
   in `felis-grid`; [grid-and-cells.md](../explanation/data-model/grid-and-cells.md)).
-- **Image lifecycle**: an image with refcount 0 is evicted before a new arrival exceeds the per-session byte cap
-  ([image-store.md](../explanation/data-model/image-store.md)).
+- **Image lifecycle**: a new arrival over the per-session byte cap frees unplaced images first, then the least recently
+  used ([image-store.md](../explanation/data-model/image-store.md)).
 - **Connection-driver state machine**: `crates/felis-transport/src/driver/tests.rs` pins phase, direction, and
   correlation contracts: sequence numbers advancing independently, stream classification, items racing a cancel being
   dropped rather than fatal, one terminal per stream, stream bounds refusing requests instead of connections, and one

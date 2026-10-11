@@ -74,6 +74,10 @@ pub struct ImageEntry {
     /// Sent without `i=` or `I=`, so no later command can name it.
     #[cfg_attr(feature = "state-dump", serde(default))]
     anonymous: bool,
+    /// The store's clock at the last transmit or placement; the byte
+    /// cap evicts the smallest first.
+    #[cfg_attr(feature = "state-dump", serde(default))]
+    atime: u64,
 }
 
 impl ImageEntry {
@@ -97,6 +101,7 @@ impl ImageEntry {
             current_loop: 0,
             refcount: 0,
             anonymous: false,
+            atime: 0,
         }
     }
 
@@ -109,6 +114,11 @@ impl ImageEntry {
     #[must_use]
     pub const fn is_anonymous(&self) -> bool {
         self.anonymous
+    }
+
+    #[must_use]
+    pub const fn atime(&self) -> u64 {
+        self.atime
     }
 
     /// Pixels of the currently-displayed frame.
@@ -353,6 +363,8 @@ pub struct ImageStore {
     bytes_total: usize,
     bytes_cap: usize,
     next_anonymous_id: u32,
+    #[cfg_attr(feature = "state-dump", serde(default))]
+    clock: u64,
 }
 
 impl ImageStore {
@@ -363,6 +375,7 @@ impl ImageStore {
             bytes_total: 0,
             bytes_cap,
             next_anonymous_id: u32::MAX,
+            clock: 0,
         }
     }
 
@@ -379,6 +392,7 @@ impl ImageStore {
             entries,
             bytes_cap,
             next_anonymous_id: u32::MAX,
+            clock: 0,
         }
     }
 
@@ -424,7 +438,16 @@ impl ImageStore {
         let evicted = self.evict_to_fit(needed, None)?;
         self.bytes_total += needed;
         self.entries.insert(id, entry);
+        self.touch(id);
         Ok(evicted)
+    }
+
+    /// Mark the image as just used, for [`ImageEntry::atime`].
+    pub fn touch(&mut self, id: ImageId) {
+        if let Some(entry) = self.entries.get_mut(&id) {
+            self.clock += 1;
+            entry.atime = self.clock;
+        }
     }
 
     /// The target image is never evicted to make room for its own

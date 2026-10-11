@@ -46,6 +46,9 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
   keeps it. A clear on the alternate screen leaves the primary screen's images in place.
 - A Kitty graphics image sent without `i=` or `I=` is now freed once a delete or a scroll leaves it without a placement,
   as in kitty; nothing could display it again, yet it used to hold its share of the byte cap until evicted.
+- When Kitty graphics images fill the session's byte cap, felis now evicts as kitty does: every image without a
+  placement first, then the least recently transmitted or placed. It used to evict strictly in transmit order, so an
+  image redrawn a moment ago could go before a stale one.
 - A Kitty graphics Unicode-placeholder cell colored with a 256-color foreground (`\e[38;5;Nm`) now shows image `N`, as
   kitty does; only a 24-bit foreground used to name the image.
 - A Kitty graphics image shown through Unicode-placeholder cells now keeps its aspect ratio, centered in the placement's
