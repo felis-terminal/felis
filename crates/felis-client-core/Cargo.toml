@@ -62,12 +62,20 @@ prost = { workspace = true }
 [target.'cfg(unix)'.dev-dependencies]
 rustix = { workspace = true }
 
+# The instruction-count gate runs under Valgrind, which felis uses on Linux only.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+gungraun = { workspace = true }
+
 [[bench]]
 name = "end_to_end_throughput"
 harness = false
 
 [[bench]]
 name = "client_consume"
+harness = false
+
+[[bench]]
+name = "gungraun_gate"
 harness = false
 
 [lints]

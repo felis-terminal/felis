@@ -48,19 +48,25 @@ DEFAULT_THRESHOLD = 0.15
 # ── discovery ────────────────────────────────────────────────────────
 
 
-def bench_targets(metadata: dict) -> list[dict]:
+def calls_criterion_main(src_path: str) -> bool:
+    return "criterion_main!" in Path(src_path).read_text()
+
+
+def bench_targets(metadata: dict, is_criterion=calls_criterion_main) -> list[dict]:
     """Extract Criterion bench targets from `cargo metadata` output.
 
     Returns [{package, name, required_features}] sorted by (package,
     name). Discovery over a hand-maintained list: adding a bench to a
     crate's Cargo.toml must not require touching this script or the
     workflow (the fuzz workflow auto-discovers targets for the same
-    reason).
+    reason). A bench target with another harness (the gungraun gate)
+    rejects Criterion's flags, so only sources that call
+    `criterion_main!` count.
     """
     targets = []
     for pkg in metadata["packages"]:
         for tgt in pkg["targets"]:
-            if "bench" not in tgt["kind"]:
+            if "bench" not in tgt["kind"] or not is_criterion(tgt["src_path"]):
                 continue
             targets.append(
                 {
