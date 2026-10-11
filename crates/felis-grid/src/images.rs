@@ -1021,28 +1021,13 @@ impl Placements {
         self.entries.is_empty() && self.virtuals.is_empty()
     }
 
-    /// Remove every placement intersecting the inclusive 0-based row
-    /// range. `C=1` placements are exempt unless `force` (the RIS /
-    /// DECSTR path): a pinned status-line image survives ED / EL but
-    /// not a hard reset.
-    pub fn remove_intersecting(
-        &mut self,
-        erase_top: u16,
-        erase_bottom: u16,
-        force: bool,
-    ) -> Vec<Placement> {
-        let (removed, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut self.entries)
-            .into_iter()
-            .partition(|p| {
-                if p.no_cursor_move && !force {
-                    return false;
-                }
-                let p_top = p.anchor.row - 1;
-                let p_bottom = p_top.saturating_add(i32::from(p.rows.cells().get() - 1));
-                p_top <= i32::from(erase_bottom) && i32::from(erase_top) <= p_bottom
-            });
-        self.entries = kept;
-        removed
+    /// Remove the placements a screen clear drops (kitty's
+    /// `grman_clear`); virtual placements stay.
+    pub fn clear(&mut self, scope: crate::ImageClear) -> Vec<Placement> {
+        self.remove_where(|p| match scope {
+            crate::ImageClear::Screen => p.anchor.row + i32::from(p.rows.cells().get()) > 1,
+            crate::ImageClear::All => true,
+        })
     }
 
     /// Shift every anchor up by `lines`. Anchors that leave the

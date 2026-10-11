@@ -39,6 +39,11 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 
 ### Fixed
 
+- Clearing the screen now treats Kitty graphics images as kitty does. `ED 2` (`clear`), `DECSED 2` and `RIS` drop every
+  placement on the screen, `C=1` ones included, and `ED 3` drops scrollback placements too; each then frees every image
+  nothing displays, so transmitted-but-unplaced images no longer pile up until the byte cap evicts them. Partial erases
+  (`ED 0`, `ED 1`, `EL`) and the soft reset `DECSTR` no longer remove images, so redrawing one line next to an image
+  keeps it. A clear on the alternate screen leaves the primary screen's images in place.
 - A Kitty graphics Unicode-placeholder cell colored with a 256-color foreground (`\e[38;5;Nm`) now shows image `N`, as
   kitty does; only a 24-bit foreground used to name the image.
 - A Kitty graphics image shown through Unicode-placeholder cells now keeps its aspect ratio, centered in the placement's

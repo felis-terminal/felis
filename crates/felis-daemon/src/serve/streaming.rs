@@ -65,20 +65,13 @@ fn replay_effects(
     // invert. Query responses flow even with zero subscribers so programs do not hang.
     for effect in effects {
         match effect {
-            // Kitty's erase-evicts-placements semantics.
-            PtyEffect::Erased(range) => {
-                let removed =
-                    session
-                        .placements
-                        .remove_intersecting(range.top, range.bottom, range.force);
-                for p in removed {
-                    session.images.release(p.image_id);
-                    session.image_events.push(ImageEvent::PlacementRemoved {
-                        image_id: p.image_id,
-                        placement_id: p.placement_id,
-                    });
-                }
-            }
+            PtyEffect::ImagesCleared(scope) => crate::graphics::clear_images(
+                &mut session.images,
+                &mut session.placements,
+                session.saved_primary_placements.as_ref(),
+                &mut session.image_events,
+                scope,
+            ),
             // docs/explanation/protocols/kitty-graphics.md "Dispatcher
             // architecture".
             PtyEffect::Apc(apc) => {

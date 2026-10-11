@@ -7,7 +7,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use felis_daemon::graphics::{
-    ApcCtx, ImageEvent, ShmDeferral, apply_screen_switch, dispatch_apc_body,
+    ApcCtx, ImageEvent, ShmDeferral, apply_screen_switch, clear_images, dispatch_apc_body,
     materialize_image_events,
 };
 use felis_grid::images::{ImageStore, Placements};
@@ -59,6 +59,7 @@ impl State {
                 cell_pixel_w: 0,
                 cell_pixel_h: 0,
                 anchor_cursor: None,
+                saved_primary: None,
             },
             &mut self.reassembler,
             body,
@@ -74,14 +75,23 @@ impl State {
         let mut parser = Parser::new();
         parser.advance(&mut self.grid, bytes);
         for effect in self.grid.take_pty_effects() {
-            if let PtyEffect::ScreenSwitch(switch) = effect {
-                apply_screen_switch(
+            match effect {
+                PtyEffect::ScreenSwitch(switch) => apply_screen_switch(
                     switch,
                     &mut self.images,
                     &mut self.placements,
                     &mut self.saved_primary_placements,
                     &mut self.events,
-                );
+                ),
+                PtyEffect::ImagesCleared(scope) => clear_images(
+                    &mut self.images,
+                    &mut self.placements,
+                    self.saved_primary_placements.as_ref(),
+                    &mut self.events,
+                    scope,
+                ),
+                PtyEffect::HardReset => self.saved_primary_placements = None,
+                _ => {}
             }
         }
     }
@@ -496,190 +506,123 @@ fn replace_under_same_id_emits_a_fresh_header_chunk_complete() {
 
 /// Without erase-evicts-placements, `clear` / `Ctrl+L` leaves the
 /// previous yazi / mdcat image painted over the cleared screen.
+fn removed_and_deleted(events: &[ImageMsg]) -> (Vec<u32>, Vec<u32>) {
+    let mut removed = Vec::new();
+    let mut deleted = Vec::new();
+    for m in events {
+        match m {
+            ImageMsg::PlacementRemoved { image_id, .. } => removed.push(image_id.0),
+            ImageMsg::Delete { id } => deleted.push(id.0),
+            _ => {}
+        }
+    }
+    removed.sort_unstable();
+    deleted.sort_unstable();
+    (removed, deleted)
+}
+
+/// kitty's `grman_clear`, here through the selective `DECSED 2`: every
+/// placement on screen goes, `C=1` included, and then every image
+/// nothing references.
 #[test]
-fn ed_2_clears_placements_without_c_1() {
+fn ed_2_clears_the_screen_placements_and_frees_unreferenced_images() {
     let mut s = State::new();
     let payload = tiny_rgba_payload();
     s.dispatch(&body("Ga=T,i=42,f=32,s=1,v=1,c=4,r=2", &payload))
         .unwrap();
-    let initial = s.drain_events();
-    assert!(
-        initial.iter().any(|m| matches!(
-            m,
-            ImageMsg::Placement {
-                image_id: ImageId(42),
-                ..
-            }
-        )),
-        "expected initial Placement to land, got {initial:?}",
-    );
-
-    let mut parser = Parser::new();
-    parser.advance(&mut s.grid, b"\x1b[2J");
-
-    let ranges: Vec<_> = s
-        .grid
-        .take_pty_effects()
-        .into_iter()
-        .filter_map(|e| match e {
-            PtyEffect::Erased(r) => Some(r),
-            _ => None,
-        })
-        .collect();
-    assert!(
-        !ranges.is_empty(),
-        "ED 2 must push at least one ErasedRange"
-    );
-    for r in ranges {
-        let removed = s.placements.remove_intersecting(r.top, r.bottom, r.force);
-        for p in removed {
-            s.images.release(p.image_id);
-            s.events.push(ImageEvent::PlacementRemoved {
-                image_id: p.image_id,
-                placement_id: p.placement_id,
-            });
-        }
-    }
-
-    let events = s.drain_events();
-    assert!(
-        events.iter().any(|m| matches!(
-            m,
-            ImageMsg::PlacementRemoved {
-                image_id: ImageId(42),
-                ..
-            }
-        )),
-        "expected PlacementRemoved for image 42 after ED 2, got {events:?}",
-    );
-    assert!(s.placements.is_empty(), "placement must be evicted");
-}
-
-/// `C=1` opts out of erase-eviction; a pinned status-line image would
-/// otherwise vanish on every `clear`.
-#[test]
-fn ed_2_preserves_placements_with_c_1() {
-    let mut s = State::new();
-    let payload = tiny_rgba_payload();
     s.dispatch(&body("Ga=T,i=99,C=1,f=32,s=1,v=1,c=4,r=2", &payload))
         .unwrap();
+    s.dispatch(&body("Ga=t,i=5,f=32,s=1,v=1", &payload))
+        .unwrap();
+    s.dispatch(&body("Ga=t,i=6,f=32,s=1,v=1", &payload))
+        .unwrap();
+    s.dispatch(&body("Ga=p,U=1,i=6,c=2,r=1", b"")).unwrap();
     s.drain_events();
 
-    let mut parser = Parser::new();
-    parser.advance(&mut s.grid, b"\x1b[2J");
+    s.advance_and_drain(b"\x1b[?2J");
 
-    let ranges: Vec<_> = s
-        .grid
-        .take_pty_effects()
-        .into_iter()
-        .filter_map(|e| match e {
-            PtyEffect::Erased(r) => Some(r),
-            _ => None,
-        })
-        .collect();
-    for r in ranges {
-        let removed = s.placements.remove_intersecting(r.top, r.bottom, r.force);
-        for p in removed {
-            s.images.release(p.image_id);
-            s.events.push(ImageEvent::PlacementRemoved {
-                image_id: p.image_id,
-                placement_id: p.placement_id,
-            });
-        }
-    }
-
-    let events = s.drain_events();
-    assert!(
-        events.is_empty(),
-        "C=1 placement must survive ED 2; got events {events:?}",
+    let (removed, deleted) = removed_and_deleted(&s.drain_events());
+    assert_eq!(removed, vec![42, 99]);
+    assert_eq!(
+        deleted,
+        vec![5, 42, 99],
+        "the virtual placement keeps image 6"
     );
-    assert_eq!(s.placements.len(), 1, "placement must be retained");
+    assert_eq!(s.placements.len(), 0);
+    assert_eq!(s.placements.iter_virtual().count(), 1);
 }
 
-/// RIS (`ESC c`) wipes every placement, `C=1` included.
 #[test]
-fn ris_wipes_placements_including_c_1() {
+fn partial_erases_and_a_soft_reset_leave_images_alone() {
     let mut s = State::new();
-    let payload = tiny_rgba_payload();
-    s.dispatch(&body("Ga=T,i=7,C=1,f=32,s=1,v=1,c=4,r=2", &payload))
-        .unwrap();
+    s.dispatch(&body(
+        "Ga=T,i=42,f=32,s=1,v=1,c=4,r=2",
+        &tiny_rgba_payload(),
+    ))
+    .unwrap();
     s.drain_events();
+
+    s.advance_and_drain(b"\x1b[H\x1b[J\x1b[1J\x1b[2K\x1b[!p");
+
+    assert_eq!(s.drain_events(), Vec::new());
     assert_eq!(s.placements.len(), 1);
-
-    let mut parser = Parser::new();
-    parser.advance(&mut s.grid, b"\x1bc");
-
-    let ranges: Vec<_> = s
-        .grid
-        .take_pty_effects()
-        .into_iter()
-        .filter_map(|e| match e {
-            PtyEffect::Erased(r) => Some(r),
-            _ => None,
-        })
-        .collect();
-    assert!(!ranges.is_empty(), "RIS must push a forced ErasedRange");
-    for r in ranges {
-        let removed = s.placements.remove_intersecting(r.top, r.bottom, r.force);
-        for p in removed {
-            s.images.release(p.image_id);
-            s.events.push(ImageEvent::PlacementRemoved {
-                image_id: p.image_id,
-                placement_id: p.placement_id,
-            });
-        }
-    }
-
-    assert!(s.placements.is_empty(), "RIS must clear every placement");
-    let events = s.drain_events();
-    assert!(
-        events.iter().any(|m| matches!(
-            m,
-            ImageMsg::PlacementRemoved {
-                image_id: ImageId(7),
-                ..
-            }
-        )),
-        "expected PlacementRemoved for image 7, got {events:?}",
-    );
 }
 
-/// DECSTR (`CSI ! p`) wipes every placement, `C=1` included; the
-/// spec gives the soft reset no exemption.
 #[test]
-fn decstr_wipes_placements_including_c_1() {
+fn ed_3_also_clears_scrollback_placements() {
     let mut s = State::new();
-    let payload = tiny_rgba_payload();
-    s.dispatch(&body("Ga=T,i=8,C=1,f=32,s=1,v=1,c=4,r=2", &payload))
-        .unwrap();
+    s.dispatch(&body(
+        "Ga=T,i=42,f=32,s=1,v=1,c=4,r=2",
+        &tiny_rgba_payload(),
+    ))
+    .unwrap();
+    s.placements.shift_up(30, 1000);
     s.drain_events();
+
+    s.advance_and_drain(b"\x1b[2J");
+    assert_eq!(
+        s.placements.len(),
+        1,
+        "ED 2 spares a placement wholly in history"
+    );
+
+    s.advance_and_drain(b"\x1b[3J");
+    let (removed, deleted) = removed_and_deleted(&s.drain_events());
+    assert_eq!((removed, deleted), (vec![42], vec![42]));
+}
+
+#[test]
+fn ris_clears_the_screen_placements_and_frees_their_images() {
+    let mut s = State::new();
+    s.dispatch(&body(
+        "Ga=T,i=7,C=1,f=32,s=1,v=1,c=4,r=2",
+        &tiny_rgba_payload(),
+    ))
+    .unwrap();
+    s.drain_events();
+
+    s.advance_and_drain(b"\x1bc");
+
+    let (removed, deleted) = removed_and_deleted(&s.drain_events());
+    assert_eq!((removed, deleted), (vec![7], vec![7]));
+}
+
+/// kitty keeps the primary screen's images in a store of its own, so a
+/// full-screen program clearing the alternate screen cannot free them.
+#[test]
+fn a_clear_on_the_alternate_screen_keeps_the_primary_screen_images() {
+    let mut s = State::new();
+    s.dispatch(&body(
+        "Ga=T,i=42,f=32,s=1,v=1,c=4,r=2",
+        &tiny_rgba_payload(),
+    ))
+    .unwrap();
+    s.advance_and_drain(b"\x1b[?1049h\x1b[2J");
+    s.drain_events();
+    assert!(s.images.get(ImageId(42)).is_some());
+
+    s.advance_and_drain(b"\x1b[?1049l");
     assert_eq!(s.placements.len(), 1);
-
-    let mut parser = Parser::new();
-    parser.advance(&mut s.grid, b"\x1b[!p");
-
-    let ranges: Vec<_> = s
-        .grid
-        .take_pty_effects()
-        .into_iter()
-        .filter_map(|e| match e {
-            PtyEffect::Erased(r) => Some(r),
-            _ => None,
-        })
-        .collect();
-    assert!(!ranges.is_empty(), "DECSTR must push a forced ErasedRange");
-    for r in ranges {
-        let removed = s.placements.remove_intersecting(r.top, r.bottom, r.force);
-        for p in removed {
-            s.images.release(p.image_id);
-            s.events.push(ImageEvent::PlacementRemoved {
-                image_id: p.image_id,
-                placement_id: p.placement_id,
-            });
-        }
-    }
-
-    assert!(s.placements.is_empty(), "DECSTR must clear every placement");
 }
 
 /// `?1049h` stashes every primary placement and emits a

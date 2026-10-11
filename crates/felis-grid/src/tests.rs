@@ -1275,7 +1275,7 @@ fn pty_effects_drain_in_byte_stream_order() {
     let mut p = Parser::new();
     let mut g = Grid::new(2, 8);
     let mut burst = Vec::new();
-    burst.extend_from_slice(b"\x1b[2J"); // ED 2 → Erased
+    burst.extend_from_slice(b"\x1b[2J"); // ED 2 → ImagesCleared
     burst.extend_from_slice(b"\x1b_Ga=q,i=1;\x1b\\"); // → Apc
     burst.extend_from_slice(b"\x1b[c"); // DA1 → Response
     burst.extend_from_slice(b"a\r\nb\r\n"); // bottom LF → ScrolledIntoScrollback
@@ -1287,7 +1287,7 @@ fn pty_effects_drain_in_byte_stream_order() {
         .map(|e| match e {
             PtyEffect::Response(_) => "response",
             PtyEffect::Apc(_) => "apc",
-            PtyEffect::Erased(_) => "erased",
+            PtyEffect::ImagesCleared(_) => "images_cleared",
             PtyEffect::ScrolledIntoScrollback(_) => "scrolled",
             PtyEffect::AltScreenScrolled(_) => "alt_scrolled",
             PtyEffect::HardReset => "hard_reset",
@@ -1300,7 +1300,7 @@ fn pty_effects_drain_in_byte_stream_order() {
     assert_eq!(
         kinds,
         [
-            "erased",
+            "images_cleared",
             "apc",
             "response",
             "scrolled",
@@ -1348,7 +1348,7 @@ fn adjacent_scrollback_pushes_coalesce_and_interleaved_effects_split_the_run() {
         ),
         "the directive between the pushes must not split them: effects={effects:?}"
     );
-    drive(&mut p, &mut g, b"e\r\n\x1b[2Kf\r\n");
+    drive(&mut p, &mut g, b"e\r\n\x1b[cf\r\n");
     let effects = g.take_pty_effects();
     assert!(
         matches!(
@@ -1356,7 +1356,7 @@ fn adjacent_scrollback_pushes_coalesce_and_interleaved_effects_split_the_run() {
             [
                 PtyEffect::ScrolledIntoScrollback(1),
                 PtyEffect::Scrolled { .. },
-                PtyEffect::Erased(_),
+                PtyEffect::Response(_),
                 PtyEffect::ScrolledIntoScrollback(1),
                 PtyEffect::Scrolled { .. },
             ]

@@ -370,6 +370,11 @@ pub struct ApcCtx<'a> {
     /// trailing DECRC in the same burst cannot move the anchor; `None`
     /// anchors at the grid's live cursor.
     pub anchor_cursor: Option<(u16, u16)>,
+    /// The primary screen's placements while the alternate screen is up.
+    /// They hold no refcount there, yet kitty keeps their images in the
+    /// primary screen's own store, which no alternate-screen command
+    /// touches.
+    pub saved_primary: Option<&'a felis_grid::images::Placements>,
 }
 
 pub fn dispatch_apc_body(
@@ -460,6 +465,7 @@ pub fn dispatch_apc_bodies(
             cell_pixel_w,
             cell_pixel_h,
             anchor_cursor: Some((apc.cursor_row, apc.cursor_col)),
+            saved_primary: session.saved_primary_placements.as_ref(),
         };
         let response = dispatch_apc_body(&mut ctx, &mut session.graphics_reassembler, &apc.body);
         if let Some(response) = response {
@@ -615,7 +621,9 @@ fn handle_complete(ctx: &mut ApcCtx<'_>, complete: &CompleteCommand) -> Option<V
         cell_pixel_w,
         cell_pixel_h,
         anchor_cursor,
+        saved_primary,
     } = ctx;
+    let saved_primary = *saved_primary;
     let (cell_pixel_w, cell_pixel_h) = (*cell_pixel_w, *cell_pixel_h);
     let anchor_cursor = anchor_cursor.unwrap_or_else(|| {
         let cursor = grid.cursor();
@@ -671,9 +679,15 @@ fn handle_complete(ctx: &mut ApcCtx<'_>, complete: &CompleteCommand) -> Option<V
             // kitty's `case 'd'` calls no `finish_command_response`, so a
             // delete is never answered, failed or not. mpv's vo_kitty
             // cleanup sends a bare `a=d;` without q= and reads nothing.
-            if let ActionOutcome::Err(code, message) =
-                handle_delete(grid, images, placements, events, complete, &mut refs)
-            {
+            if let ActionOutcome::Err(code, message) = handle_delete(
+                grid,
+                images,
+                placements,
+                saved_primary,
+                events,
+                complete,
+                &mut refs,
+            ) {
                 tracing::debug!(
                     ?code,
                     message,
@@ -869,6 +883,50 @@ fn announce_evictions(
     }
 }
 
+/// kitty's `grman_clear` for ED 2 / ED 3 / RIS: drop the placements the
+/// clear covers, then every image nothing references any more.
+pub fn clear_images(
+    images: &mut felis_grid::images::ImageStore,
+    placements: &mut felis_grid::images::Placements,
+    saved_primary: Option<&felis_grid::images::Placements>,
+    events: &mut Vec<ImageEvent>,
+    scope: felis_grid::ImageClear,
+) {
+    for p in placements.clear(scope) {
+        images.release(p.image_id);
+        events.push(ImageEvent::PlacementRemoved {
+            image_id: p.image_id,
+            placement_id: p.placement_id,
+        });
+    }
+    free_unreferenced(images, placements, saved_primary, events);
+}
+
+fn free_unreferenced(
+    images: &mut felis_grid::images::ImageStore,
+    placements: &mut felis_grid::images::Placements,
+    saved_primary: Option<&felis_grid::images::Placements>,
+    events: &mut Vec<ImageEvent>,
+) {
+    let referenced: std::collections::HashSet<ImageId> = [Some(&*placements), saved_primary]
+        .into_iter()
+        .flatten()
+        .flat_map(|table| {
+            table
+                .iter()
+                .map(|p| p.image_id)
+                .chain(table.iter_virtual().map(|v| v.image_id))
+        })
+        .collect();
+    let unreferenced: Vec<ImageId> = images
+        .iter_ids()
+        .filter(|id| !referenced.contains(id))
+        .collect();
+    for id in unreferenced {
+        free_image(images, placements, events, id);
+    }
+}
+
 /// Central removal helper for dispatcher image deletions.
 ///
 /// Synchronizes store deletion with virtual placement removal so rehydrate
@@ -1006,6 +1064,7 @@ fn handle_delete(
     grid: &felis_grid::Grid,
     images: &mut felis_grid::images::ImageStore,
     placements: &mut felis_grid::images::Placements,
+    saved_primary: Option<&felis_grid::images::Placements>,
     events: &mut Vec<ImageEvent>,
     complete: &CompleteCommand,
     refs: &mut ResponseRefs,
@@ -1017,7 +1076,7 @@ fn handle_delete(
     match mode {
         b'i' => delete_by_id(images, placements, events, complete, refs, false),
         b'I' => delete_by_id(images, placements, events, complete, refs, true),
-        b'a' | b'A' => delete_all(images, placements, events, mode == b'A'),
+        b'a' | b'A' => delete_all(images, placements, saved_primary, events, mode == b'A'),
         b'c' | b'C' => {
             let cursor = grid.cursor();
             // Cursor is 0-based, placement geometry 1-based.
@@ -1135,30 +1194,26 @@ fn handle_delete(
 fn delete_all(
     images: &mut felis_grid::images::ImageStore,
     placements: &mut felis_grid::images::Placements,
+    saved_primary: Option<&felis_grid::images::Placements>,
     events: &mut Vec<ImageEvent>,
     free_images: bool,
 ) -> ActionOutcome {
-    let removed = placements.remove_where(|p| p.anchor.row + i32::from(p.rows.cells().get()) > 1);
-    for placement in &removed {
+    if free_images {
+        clear_images(
+            images,
+            placements,
+            saved_primary,
+            events,
+            felis_grid::ImageClear::Screen,
+        );
+        return ActionOutcome::Ok;
+    }
+    for placement in placements.clear(felis_grid::ImageClear::Screen) {
         images.release(placement.image_id);
         events.push(ImageEvent::PlacementRemoved {
             image_id: placement.image_id,
             placement_id: placement.placement_id,
         });
-    }
-    if free_images {
-        let placed: std::collections::HashSet<ImageId> = placements
-            .iter()
-            .map(|p| p.image_id)
-            .chain(placements.iter_virtual().map(|v| v.image_id))
-            .collect();
-        let unplaced: Vec<ImageId> = images
-            .iter_ids()
-            .filter(|id| !placed.contains(id))
-            .collect();
-        for id in unplaced {
-            free_image(images, placements, events, id);
-        }
     }
     ActionOutcome::Ok
 }

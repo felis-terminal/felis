@@ -46,6 +46,7 @@ fn drive_burst(
                         cell_pixel_w: 0,
                         cell_pixel_h: 0,
                         anchor_cursor: None,
+                        saved_primary: None,
                     },
                     reassembler,
                     &apc.body,
