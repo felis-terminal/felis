@@ -10,7 +10,7 @@ use std::num::NonZeroU32;
 use bytes::Bytes;
 use felis_grid::images::{
     CellPos, Evicted, Extent, Frame, FrameError, ImageEntry, ImageId, InsertError, Placement,
-    PlacementId,
+    PlacementId, Rekeyed, VirtualPlacement,
 };
 use felis_grid::{ApcBody, ScreenSwitch};
 use felis_protocol::messages::{ImageFormat, ImageMsg, ImageTarget, MAX_IMAGE_CHUNK_PAYLOAD};
@@ -64,6 +64,7 @@ pub enum ImageEvent {
     },
     VirtualPlacement {
         image_id: ImageId,
+        placement_id: Option<PlacementId>,
         cols: u16,
         rows: u16,
         z_index: i32,
@@ -265,11 +266,13 @@ pub fn materialize_image_events(
             }),
             ImageEvent::VirtualPlacement {
                 image_id,
+                placement_id,
                 cols,
                 rows,
                 z_index,
             } => out.push(ImageMsg::VirtualPlacement {
                 image_id,
+                placement_id,
                 cols,
                 rows,
                 z_index,
@@ -520,6 +523,9 @@ pub fn apply_screen_switch(
                     placement_id: p.placement_id,
                 });
             }
+            for v in snapshot.iter_virtual() {
+                events.push(virtual_removed_event(v));
+            }
             // A leftover save means a missed `LeftAlternate` drain;
             // overwrite rather than panic.
             *saved_primary_placements = Some(snapshot);
@@ -533,6 +539,9 @@ pub fn apply_screen_switch(
                     placement_id: p.placement_id,
                 });
             }
+            for v in alt.iter_virtual() {
+                events.push(virtual_removed_event(v));
+            }
             if let Some(saved) = saved_primary_placements.take() {
                 *placements = saved;
                 for p in placements.iter() {
@@ -545,15 +554,27 @@ pub fn apply_screen_switch(
                 // where stale entries re-enter.
                 placements.retain_virtual(|v| images.get(v.image_id).is_some());
                 for v in placements.iter_virtual() {
-                    events.push(ImageEvent::VirtualPlacement {
-                        image_id: v.image_id,
-                        cols: v.cols,
-                        rows: v.rows,
-                        z_index: v.z_index,
-                    });
+                    events.push(virtual_event(v));
                 }
             }
         }
+    }
+}
+
+const fn virtual_event(v: &VirtualPlacement) -> ImageEvent {
+    ImageEvent::VirtualPlacement {
+        image_id: v.image_id,
+        placement_id: v.placement_id,
+        cols: v.cols,
+        rows: v.rows,
+        z_index: v.z_index,
+    }
+}
+
+const fn virtual_removed_event(v: &VirtualPlacement) -> ImageEvent {
+    ImageEvent::PlacementRemoved {
+        image_id: v.image_id,
+        placement_id: v.placement_id,
     }
 }
 
@@ -1095,6 +1116,41 @@ fn handle_display_existing(
 }
 
 /// `U=1`, for `a=T` and `a=p` alike (kitty's `handle_put_command`): the
+/// kitty keys an image's placements, direct and virtual, by one `p=`:
+/// before a put takes `id`, the anonymous placement felis gave it moves
+/// to a fresh id, and a producer's placement of the other kind holding
+/// it goes; one of the same kind the put's upsert replaces in place.
+fn claim_placement_id(
+    images: &mut felis_grid::images::ImageStore,
+    placements: &mut felis_grid::images::Placements,
+    events: &mut Vec<ImageEvent>,
+    image_id: ImageId,
+    id: PlacementId,
+    virtual_put: bool,
+) {
+    if let Some(moved) = placements.rekey_anonymous(image_id, id) {
+        events.push(ImageEvent::PlacementRemoved {
+            image_id,
+            placement_id: Some(id),
+        });
+        events.push(match &moved {
+            Rekeyed::Anchored(p) => placement_event(p),
+            Rekeyed::Virtual(v) => virtual_event(v),
+        });
+    }
+    if virtual_put {
+        if let Some(removed) = placements.remove(image_id, Some(id)) {
+            images.release(removed.image_id);
+            events.push(ImageEvent::PlacementRemoved {
+                image_id,
+                placement_id: removed.placement_id,
+            });
+        }
+    } else if let Some(removed) = placements.remove_virtual_placement(image_id, id) {
+        events.push(virtual_removed_event(&removed));
+    }
+}
+
 /// producer paints `U+10EEEE` placeholder cells wherever it wants tiles
 /// (presenterm, tmux-compatible producers), so nothing anchors at the
 /// cursor and the cursor stays.
@@ -1109,22 +1165,26 @@ fn upsert_virtual_placement(
     let cols = control_u16(complete, b'c').unwrap_or(0);
     let rows = control_u16(complete, b'r').unwrap_or(0);
     let z_index = control_i32(complete, b'z').unwrap_or(0);
+    let requested = control_u32(complete, b'p')
+        .filter(|&p| p != 0 && addressed(complete))
+        .map(PlacementId);
+    if let Some(p) = requested {
+        claim_placement_id(images, placements, events, id, p, true);
+    }
     // Virtual placements are not pinned: producers churn image ids across
     // renders without removal messages, so refcount 0 lets the LRU evict
     // them while `free_image` drops the extent with the image.
-    placements.upsert_virtual(felis_grid::images::VirtualPlacement {
+    let placement = VirtualPlacement {
         image_id: id,
+        placement_id: Some(requested.unwrap_or_else(|| placements.allocate_anonymous_id(id))),
+        anonymous: requested.is_none(),
         cols,
         rows,
         z_index,
-    });
+    };
+    placements.upsert_virtual(placement);
     images.touch(id);
-    events.push(ImageEvent::VirtualPlacement {
-        image_id: id,
-        cols,
-        rows,
-        z_index,
-    });
+    events.push(virtual_event(&placement));
     refs.image_id = Some(id.0);
     ActionOutcome::Ok
 }
@@ -1236,16 +1296,27 @@ fn handle_delete(
                     "d=r needs x= <= y= (low <= high image id)",
                 );
             }
-            delete_filtered(
-                images,
-                placements,
-                events,
-                |p| {
-                    let id = p.image_id.0;
-                    id >= lo && id <= hi
-                },
-                mode == b'R',
-            )
+            let in_range: Vec<ImageId> = images
+                .iter_ids()
+                // kitty's `id_range_filter_func` skips images sent without an id.
+                .filter(|id| {
+                    (lo..=hi).contains(&id.0)
+                        && images.get(*id).is_some_and(|entry| !entry.is_anonymous())
+                })
+                .collect();
+            for id in in_range {
+                remove_all_placements(images, placements, events, id);
+                // The primary screen's images share the store while the
+                // alternate screen is up; kitty's stores are per screen.
+                let stashed = saved_primary.is_some_and(|saved| {
+                    saved.for_image(id).next().is_some()
+                        || saved.iter_virtual().any(|v| v.image_id == id)
+                });
+                if mode == b'R' && !stashed {
+                    free_image(images, placements, events, id);
+                }
+            }
+            ActionOutcome::Ok
         }
         b'f' | b'F' => {
             handle_delete_frame(images, placements, events, complete, refs, mode == b'F')
@@ -1322,8 +1393,30 @@ fn free_if_unplaced(
     events: &mut Vec<ImageEvent>,
     id: ImageId,
 ) {
-    if placements.for_image(id).next().is_none() {
+    if placements.for_image(id).next().is_none()
+        && !placements.iter_virtual().any(|v| v.image_id == id)
+    {
         free_image(images, placements, events, id);
+    }
+}
+
+/// Direct and virtual alike, as kitty's `id_filter_func` matches every
+/// ref of the image.
+fn remove_all_placements(
+    images: &mut felis_grid::images::ImageStore,
+    placements: &mut felis_grid::images::Placements,
+    events: &mut Vec<ImageEvent>,
+    id: ImageId,
+) {
+    for removed in placements.delete_image(id) {
+        images.release(removed.image_id);
+        events.push(ImageEvent::PlacementRemoved {
+            image_id: removed.image_id,
+            placement_id: removed.placement_id,
+        });
+    }
+    for removed in placements.remove_virtual(id) {
+        events.push(virtual_removed_event(&removed));
     }
 }
 
@@ -1373,22 +1466,19 @@ fn delete_image_placements(
     let placement_id = control_u32(complete, b'p')
         .filter(|&p| p != 0)
         .map(PlacementId);
-    if placement_id.is_some() {
-        if let Some(removed) = placements.remove(id, placement_id) {
+    if let Some(placement_id) = placement_id {
+        if let Some(removed) = placements.remove(id, Some(placement_id)) {
             images.release(removed.image_id);
             events.push(ImageEvent::PlacementRemoved {
                 image_id: removed.image_id,
                 placement_id: removed.placement_id,
             });
+        }
+        if let Some(removed) = placements.remove_virtual_placement(id, placement_id) {
+            events.push(virtual_removed_event(&removed));
         }
     } else {
-        for removed in placements.delete_image(id) {
-            images.release(removed.image_id);
-            events.push(ImageEvent::PlacementRemoved {
-                image_id: removed.image_id,
-                placement_id: removed.placement_id,
-            });
-        }
+        remove_all_placements(images, placements, events, id);
     }
     if free_image {
         free_if_unplaced(images, placements, events, id);
@@ -1445,6 +1535,9 @@ fn insert_into_store(
                         image_id: p.image_id,
                         placement_id: p.placement_id,
                     });
+                }
+                for v in placements.remove_virtual(id) {
+                    events.push(virtual_removed_event(&v));
                 }
             }
             events.push(ImageEvent::Transmit(id));
@@ -1509,14 +1602,8 @@ fn upsert_placement(
         );
     }
     images.touch(image_id);
-    if let Some(p) = requested
-        && let Some((left, moved)) = placements.rekey_anonymous(image_id, p)
-    {
-        events.push(ImageEvent::PlacementRemoved {
-            image_id,
-            placement_id: Some(left),
-        });
-        events.push(placement_event(&moved));
+    if let Some(p) = requested {
+        claim_placement_id(images, placements, events, image_id, p, false);
     }
     let placement_id =
         Some(requested.unwrap_or_else(|| placements.allocate_anonymous_id(image_id)));

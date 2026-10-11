@@ -1209,7 +1209,8 @@ version. The writer reads it, so a message answers what it costs to send and `Fr
 effective minor does not define. Nothing reaches the carrier except through that gate, including the daemon's
 pre-encoded fan-out and the client's send queue, which carry the requirement alongside the bytes because neither writer
 ever sees the message. A feature that wants to talk to an older peer therefore has to say how: omit the field, map the
-value down, or refuse locally.
+value down, or refuse locally. Image messages fan out to every attached window whatever its minor, so they omit at each
+connection's encode, where `ImageMsg::for_minor` cuts a message to what that peer reads.
 
 Gating the receive side instead is the obvious alternative and does not work: a receiver can see that a value is
 unknown, but not what the sender should have sent in its place, which is the whole content of a ledger row. The one

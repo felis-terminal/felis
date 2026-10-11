@@ -93,11 +93,13 @@ impl From<&messages::ImageMsg> for v1::ImageMsg {
             }),
             I::VirtualPlacement {
                 image_id,
+                placement_id,
                 cols,
                 rows,
                 z_index,
             } => Msg::VirtualPlacement(v1::ImageVirtualPlacement {
                 image_id: image_id.0,
+                placement_id: placement_id.map(|p| p.0),
                 cols: u32::from(*cols),
                 rows: u32::from(*rows),
                 z_index: *z_index,
@@ -187,6 +189,7 @@ impl TryFrom<v1::ImageMsg> for messages::ImageMsg {
                 },
                 Msg::VirtualPlacement(v) => Self::VirtualPlacement {
                     image_id: ImageId(v.image_id),
+                    placement_id: v.placement_id.map(PlacementId),
                     cols: narrow("VirtualPlacement.cols", v.cols)?,
                     rows: narrow("VirtualPlacement.rows", v.rows)?,
                     z_index: v.z_index,

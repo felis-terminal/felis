@@ -121,6 +121,9 @@ pub enum ImageMsg {
     /// Re-sent idempotently on repeated `U=1` transmissions for the same id.
     VirtualPlacement {
         image_id: ImageId,
+        /// `p=`, or the daemon's id for a put without one; `None` from a
+        /// minor-0 daemon, which keeps one virtual placement per image.
+        placement_id: Option<PlacementId>,
         /// `c=`.
         cols: u16,
         /// `r=`.
@@ -246,6 +249,14 @@ pub(crate) mod tests {
             },
             ImageMsg::VirtualPlacement {
                 image_id: ImageId(7),
+                placement_id: Some(PlacementId(2)),
+                cols: 40,
+                rows: 12,
+                z_index: -1,
+            },
+            ImageMsg::VirtualPlacement {
+                image_id: ImageId(7),
+                placement_id: None,
                 cols: 40,
                 rows: 12,
                 z_index: -1,
@@ -287,6 +298,22 @@ pub(crate) mod tests {
     fn image_messages_round_trip() {
         for msg in image_cases() {
             assert_eq!(roundtrip(&msg), msg);
+        }
+    }
+
+    /// A downgraded message is one the older peer may receive, and a
+    /// peer at the current minor gets the message unchanged.
+    #[test]
+    fn a_message_downgraded_for_a_minor_fits_it() {
+        use crate::minor::MinorGated;
+        for msg in image_cases() {
+            for minor in 0..=crate::PROTOCOL_MINOR {
+                assert!(
+                    msg.clone().for_minor(minor).requires().minor <= minor,
+                    "{msg:?}"
+                );
+            }
+            assert_eq!(msg.clone().for_minor(crate::PROTOCOL_MINOR), msg);
         }
     }
 

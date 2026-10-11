@@ -7,8 +7,8 @@
 use crate::caps::ConnectionMode;
 use crate::messages::{
     AttachFailure, AttachRefusal, ConnToClientMsg, ConnToDaemonMsg, CreateFailure, GridMsg,
-    OpsToClientMsg, OpsToDaemonMsg, PushMsg, RefusalReason, ResourceKind, SessionToClientMsg,
-    SessionToDaemonMsg, SpawnArgs, UpgradeRefusal,
+    ImageMsg, OpsToClientMsg, OpsToDaemonMsg, PushMsg, RefusalReason, ResourceKind,
+    SessionToClientMsg, SessionToDaemonMsg, SpawnArgs, UpgradeRefusal,
 };
 use crate::row::RowPayload;
 
@@ -86,6 +86,7 @@ pub fn gated_fields() -> Vec<Requires> {
         .chain(listed(PUSH_FIELDS))
         .chain(listed(SESSION_INFO_FIELDS))
         .chain(listed(SPAWN_ARGS_FIELDS))
+        .chain(listed(IMAGE_FIELDS))
         .collect()
 }
 
@@ -101,6 +102,50 @@ const OPS_TO_CLIENT_FIELDS: &[GatedField<OpsToClientMsg>] = &[];
 const PUSH_FIELDS: &[GatedField<PushMsg>] = &[];
 const SESSION_INFO_FIELDS: &[GatedField<crate::messages::SessionInfo>] = &[];
 const SPAWN_ARGS_FIELDS: &[GatedField<SpawnArgs>] = &[];
+const IMAGE_FIELDS: &[GatedField<ImageMsg>] = &[GatedField {
+    requires: Requires::new(1, "ImageVirtualPlacement.placement_id"),
+    present: |msg| {
+        matches!(
+            msg,
+            ImageMsg::VirtualPlacement {
+                placement_id: Some(_),
+                ..
+            }
+        )
+    },
+}];
+
+impl MinorGated for ImageMsg {
+    fn requires(&self) -> Requires {
+        arm_requires(self).max(field_requires(self, IMAGE_FIELDS))
+    }
+}
+
+impl ImageMsg {
+    /// The message as a peer at `minor` may receive it. Image messages
+    /// fan out to every attached window whatever its minor, so the
+    /// sender drops what the peer predates rather than refusing the
+    /// frame: a minor-0 window keys virtual placements by image alone.
+    #[must_use]
+    pub fn for_minor(self, minor: u16) -> Self {
+        match self {
+            Self::VirtualPlacement {
+                image_id,
+                cols,
+                rows,
+                z_index,
+                ..
+            } if minor < 1 => Self::VirtualPlacement {
+                image_id,
+                placement_id: None,
+                cols,
+                rows,
+                z_index,
+            },
+            other => other,
+        }
+    }
+}
 
 /// A value whose send authorization is computed rather than branched
 /// on. The gate is the send boundary ([`felis-transport`'s
@@ -383,7 +428,6 @@ macro_rules! gated_by_arm {
 
 gated_by_arm!(
     crate::messages::InputMsg,
-    crate::messages::ImageMsg,
     crate::messages::NotifyToDaemonMsg,
     crate::messages::NotifyToClientMsg,
     crate::messages::RegionToDaemonMsg,
@@ -437,7 +481,6 @@ mod tests {
         assert_eq!(future.minor, PROTOCOL_MINOR + 1);
         assert_eq!(future.what, "Future::Arm");
         assert_eq!(Requires::BASE.max(future), future);
-        assert_eq!(gated_fields(), Vec::new());
     }
 
     /// Both halves of the upgrade pair, every refusal included, cost

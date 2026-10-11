@@ -1543,6 +1543,10 @@ message ImageVirtualPlacement {
   uint32 rows = 3;
   // Z-index from z= (i32).
   sint32 z_index = 4;
+  // The producer's p=, or an id the daemon assigned to a put without
+  // one; a placeholder cell names it in its underline color. Unset
+  // keys the placement by image alone. Since minor 1.
+  optional uint32 placement_id = 5;
 }
 
 // Display frame `number` of image id now, in the same 1-based

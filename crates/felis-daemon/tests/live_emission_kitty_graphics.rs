@@ -59,7 +59,7 @@ impl State {
                 cell_pixel_w: 0,
                 cell_pixel_h: 0,
                 anchor_cursor: None,
-                saved_primary: None,
+                saved_primary: self.saved_primary_placements.as_ref(),
             },
             &mut self.reassembler,
             body,
@@ -227,6 +227,7 @@ fn unicode_placeholder_transmit_emits_virtual_placement_not_a_cursor_placement()
             cols,
             rows,
             z_index,
+            ..
         } => {
             assert_eq!(image_id.0, 12);
             assert_eq!(*cols, 4);
@@ -273,8 +274,7 @@ fn unicode_placeholder_put_of_a_stored_image_is_virtual_and_keeps_the_cursor() {
 
 #[test]
 fn virtual_extent_dies_with_its_image() {
-    // A virtual placement has no `PlacementRemoved` of its own; a
-    // surviving extent would rehydrate a tile size for a missing image.
+    // A surviving extent would rehydrate a tile size for a missing image.
     let mut s = State::new();
     let payload = tiny_rgba_payload();
     s.dispatch(&body("Ga=T,U=1,i=12,f=32,s=1,v=1,c=4,r=2", &payload))
@@ -292,6 +292,23 @@ fn virtual_extent_dies_with_its_image() {
 }
 
 #[test]
+fn removing_one_virtual_placement_tells_the_client_its_id() {
+    let mut s = State::new();
+    let payload = tiny_rgba_payload();
+    s.dispatch(&body("Ga=T,U=1,i=12,p=3,f=32,s=1,v=1,c=4,r=2", &payload))
+        .unwrap();
+    s.drain_events();
+    assert!(s.dispatch(&body("Ga=d,d=i,i=12,p=3", b"")).is_none());
+    assert_eq!(
+        s.drain_events(),
+        vec![ImageMsg::PlacementRemoved {
+            image_id: ImageId(12),
+            placement_id: Some(PlacementId(3)),
+        }]
+    );
+}
+
+#[test]
 fn alt_screen_round_trip_restores_and_restates_virtual_extents() {
     // The restore re-states a fresh `VirtualPlacement` so a client
     // that attached mid-alt learns the tile size.
@@ -305,6 +322,17 @@ fn alt_screen_round_trip_restores_and_restates_virtual_extents() {
         s.placements.iter_virtual().count(),
         0,
         "alt screen starts with no virtual extents"
+    );
+    let entered = s.drain_events();
+    assert!(
+        entered.iter().any(|e| matches!(
+            e,
+            ImageMsg::PlacementRemoved {
+                image_id: ImageId(12),
+                placement_id: Some(_),
+            }
+        )),
+        "the client drops the stashed extent too, got {entered:?}"
     );
     s.advance_and_drain(b"\x1b[?1049l");
     let events = s.drain_events();
@@ -881,4 +909,16 @@ fn redundant_alt_screen_entry_does_not_overwrite_saved_primary() {
         1,
         "primary survives the redundant-entry path"
     );
+}
+
+#[test]
+fn a_range_delete_on_the_alternate_screen_keeps_the_primary_screen_images() {
+    let mut s = State::new();
+    let payload = tiny_rgba_payload();
+    s.dispatch(&body("Ga=T,i=12,f=32,s=1,v=1,q=2", &payload));
+    s.advance_and_drain(b"\x1b[?1049h");
+    s.dispatch(&body("Ga=d,d=R,x=1,y=20", b""));
+    assert!(s.images.get(ImageId(12)).is_some());
+    s.advance_and_drain(b"\x1b[?1049l");
+    assert_eq!(s.placements.len(), 1);
 }

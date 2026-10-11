@@ -2345,7 +2345,7 @@ async fn write_event_frame<W: tokio::io::AsyncWrite + Unpin>(
     writer: &mut FrameWriter<W>,
     ev: &OutEvent,
 ) -> Result<(), ConnError> {
-    let frame = streaming::body_for(ev)?;
+    let frame = streaming::body_for(ev, writer.effective_minor())?;
     // A body past the framing ceiling is this daemon's bug, not the
     // subscriber's: nothing it could send makes an event too large. Say
     // so before the connection goes, or the eviction reads as a client
