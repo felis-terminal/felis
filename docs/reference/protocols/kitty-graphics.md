@@ -77,6 +77,12 @@ Transmissions (`a=t` or `a=T`) may omit both IDs: felis allocates an ID from the
 reply. An explicit `i=0` or `I=0` is the same as an omitted key. `a=p` and the ID-targeted deletes (`a=d` with `d=i`/`I`
 or `d=f`/`F`) require an explicit ID (see [kitty-graphics.md](../../explanation/protocols/kitty-graphics.md)).
 
+A transmission with `I=` always stores a new image, under the lowest image ID from `1` up that no image holds, and its
+reply carries both: `i=<assigned>,I=<number>`. Several images may share a number. Any other command that names an image
+by `I=` (`a=p`, `a=f`, `a=a`, `a=c`, `d=f`/`F`) acts on the newest of them and fails with `ENOENT` when there is none; a
+put's reply adds the ID it resolved. `d=n` deletes the placements of the newest image with the number (only `p=`'s when
+given), and `d=N` also frees that image once none is left. `d=i`/`I` match `i=` alone.
+
 Image data is retained until:
 
 - The producer deletes the image (`a=d`) matching its ID or number.
@@ -240,8 +246,9 @@ ESC _ G <id keys> ; <status> ESC \
 ```
 
 The id keys echo whichever of `i=<image id>`, `I=<image number>` and a non-zero `p=<placement id>` the request carried,
-in that order. `<status>` is `OK` on success, and `<code>` or `<code>:<message>` on failure; in a message `;`, C0 bytes
-and DEL are replaced with `_`, so a message can neither end the APC early nor put bytes of its own on the PTY.
+in that order; a transmission or put by `I=` adds the `i=` it resolved to. `<status>` is `OK` on success, and `<code>`
+or `<code>:<message>` on failure; in a message `;`, C0 bytes and DEL are replaced with `_`, so a message can neither end
+the APC early nor put bytes of its own on the PTY.
 
 A command carrying both a non-zero `i=` and a non-zero `I=` is refused with `EINVAL` before its action runs, a delete
 included. Otherwise, only a command with a non-zero `i=` or `I=` is answered, as in kitty; a command without one has

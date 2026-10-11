@@ -78,6 +78,12 @@ pub struct ImageEntry {
     /// cap evicts the smallest first.
     #[cfg_attr(feature = "state-dump", serde(default))]
     atime: u64,
+    /// The producer's `I=`.
+    #[cfg_attr(feature = "state-dump", serde(default))]
+    number: Option<u32>,
+    /// Creation order, which sending the image again keeps.
+    #[cfg_attr(feature = "state-dump", serde(default))]
+    serial: u64,
 }
 
 impl ImageEntry {
@@ -102,6 +108,8 @@ impl ImageEntry {
             refcount: 0,
             anonymous: false,
             atime: 0,
+            number: None,
+            serial: 0,
         }
     }
 
@@ -119,6 +127,17 @@ impl ImageEntry {
     #[must_use]
     pub const fn atime(&self) -> u64 {
         self.atime
+    }
+
+    #[must_use]
+    pub const fn with_number(mut self, number: u32) -> Self {
+        self.number = Some(number);
+        self
+    }
+
+    #[must_use]
+    pub const fn number(&self) -> Option<u32> {
+        self.number
     }
 
     /// Pixels of the currently-displayed frame.
@@ -365,6 +384,8 @@ pub struct ImageStore {
     next_anonymous_id: u32,
     #[cfg_attr(feature = "state-dump", serde(default))]
     clock: u64,
+    #[cfg_attr(feature = "state-dump", serde(default))]
+    next_serial: u64,
 }
 
 impl ImageStore {
@@ -376,6 +397,7 @@ impl ImageStore {
             bytes_cap,
             next_anonymous_id: u32::MAX,
             clock: 0,
+            next_serial: 0,
         }
     }
 
@@ -393,6 +415,7 @@ impl ImageStore {
             bytes_cap,
             next_anonymous_id: u32::MAX,
             clock: 0,
+            next_serial: 0,
         }
     }
 
@@ -431,9 +454,14 @@ impl ImageStore {
                 cap: self.bytes_cap,
             });
         }
+        let mut entry = entry;
         // shift_remove rather than swap_remove keeps the eviction order.
         if let Some(old) = self.entries.shift_remove(&id) {
             self.bytes_total -= old.byte_len();
+            entry.serial = old.serial;
+        } else {
+            self.next_serial += 1;
+            entry.serial = self.next_serial;
         }
         let evicted = self.evict_to_fit(needed, None)?;
         self.bytes_total += needed;
@@ -619,6 +647,34 @@ impl ImageStore {
 
     pub fn iter_ids(&self) -> impl Iterator<Item = ImageId> + '_ {
         self.entries.keys().copied()
+    }
+
+    /// kitty's `img_by_client_number`: of the images sent with `I=number`,
+    /// the last created.
+    #[must_use]
+    pub fn newest_with_number(&self, number: u32) -> Option<ImageId> {
+        self.entries
+            .iter()
+            .filter(|(_, entry)| entry.number == Some(number))
+            .max_by_key(|(_, entry)| entry.serial)
+            .map(|(id, _)| *id)
+    }
+
+    /// kitty's `get_free_client_id`: the lowest id from 1 up that no
+    /// image holds, which an `I=` transmission is given.
+    #[must_use]
+    pub fn lowest_free_id(&self) -> ImageId {
+        let mut taken: Vec<u32> = self.entries.keys().map(|id| id.0).collect();
+        taken.sort_unstable();
+        let mut free = 1;
+        for id in taken {
+            if id == free {
+                free += 1;
+            } else if id > free {
+                break;
+            }
+        }
+        ImageId(free)
     }
 
     #[must_use]
