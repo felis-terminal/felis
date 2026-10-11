@@ -761,6 +761,9 @@ fn response_refs(complete: &CompleteCommand) -> ResponseRefs {
         image_id: image_ref(complete, b'i'),
         image_number: image_ref(complete, b'I'),
         placement_id: control_u32(complete, b'p').filter(|&p| p != 0),
+        frame: (control_byte(complete, b'a') == Some(b'f'))
+            .then(|| control_u32(complete, b'r').filter(|&r| r != 0))
+            .flatten(),
     }
 }
 

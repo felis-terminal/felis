@@ -115,6 +115,8 @@ pub struct ResponseRefs {
     pub image_number: Option<u32>,
     /// `p=<u32>`.
     pub placement_id: Option<u32>,
+    /// `r=<u32>`, which kitty echoes on an `a=f` reply alone.
+    pub frame: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -189,6 +191,9 @@ pub fn format_response(refs: &ResponseRefs, status: Status<'_>) -> Vec<u8> {
     }
     if let Some(v) = refs.placement_id {
         push_kv(&mut out, b'p', v);
+    }
+    if let Some(v) = refs.frame {
+        push_kv(&mut out, b'r', v);
     }
     out.push(b';');
     match status {
@@ -929,16 +934,17 @@ mod tests {
 
     #[test]
     fn format_response_with_all_ids_in_canonical_order() {
-        // The spec's canonical order: image-id, image-number, placement-id.
+        // kitty's order: image id, image number, placement id, frame.
         let bytes = format_response(
             &ResponseRefs {
                 image_id: Some(1),
                 image_number: Some(2),
                 placement_id: Some(3),
+                frame: Some(4),
             },
             Status::Ok,
         );
-        assert_eq!(bytes, b"\x1b_Gi=1,I=2,p=3;OK\x1b\\");
+        assert_eq!(bytes, b"\x1b_Gi=1,I=2,p=3,r=4;OK\x1b\\");
     }
 
     #[test]

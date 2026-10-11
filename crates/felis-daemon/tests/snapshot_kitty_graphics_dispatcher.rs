@@ -446,3 +446,17 @@ fn sending_an_older_numbered_image_again_does_not_make_it_the_newest() {
     s.dispatch(&body("Ga=t,i=1,f=32,s=1,v=1", &b64(&TEST_PIXEL)));
     assert_eq!(s.images.newest_with_number(7), Some(ImageId(2)));
 }
+
+#[test]
+fn a_frame_reply_echoes_the_frame_it_edited() {
+    let mut s = State::new();
+    s.dispatch(&body("Ga=t,i=5,f=32,s=1,v=1", &b64(&TEST_PIXEL)));
+    assert_eq!(
+        s.dispatch(&body("Ga=f,i=5,r=1,f=32,s=1,v=1", &b64(&TEST_PIXEL))),
+        Some(b"\x1b_Gi=5,r=1;OK\x1b\\".to_vec())
+    );
+    assert_eq!(
+        s.dispatch(&body("Ga=p,i=5,r=1", b"")),
+        Some(b"\x1b_Gi=5;OK\x1b\\".to_vec())
+    );
+}
