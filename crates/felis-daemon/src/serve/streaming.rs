@@ -54,6 +54,12 @@ fn shift_placements(session: &mut crate::pool::Session, n: u32, retain: u32) {
             placement_id: p.placement_id,
         });
     }
+    crate::graphics::free_unreferenced_anonymous(
+        &mut session.images,
+        &mut session.placements,
+        session.saved_primary_placements.as_ref(),
+        &mut session.image_events,
+    );
 }
 
 fn replay_effects(
@@ -65,20 +71,13 @@ fn replay_effects(
     // invert. Query responses flow even with zero subscribers so programs do not hang.
     for effect in effects {
         match effect {
-            // Kitty's erase-evicts-placements semantics.
-            PtyEffect::Erased(range) => {
-                let removed =
-                    session
-                        .placements
-                        .remove_intersecting(range.top, range.bottom, range.force);
-                for p in removed {
-                    session.images.release(p.image_id);
-                    session.image_events.push(ImageEvent::PlacementRemoved {
-                        image_id: p.image_id,
-                        placement_id: p.placement_id,
-                    });
-                }
-            }
+            PtyEffect::ImagesCleared(scope) => crate::graphics::clear_images(
+                &mut session.images,
+                &mut session.placements,
+                session.saved_primary_placements.as_ref(),
+                &mut session.image_events,
+                scope,
+            ),
             // docs/explanation/protocols/kitty-graphics.md "Dispatcher
             // architecture".
             PtyEffect::Apc(apc) => {
@@ -106,7 +105,20 @@ fn replay_effects(
                 shift_placements(session, n, 0);
             }
             // Saved placements hold no image refcount (released on the switch).
-            PtyEffect::HardReset => session.saved_primary_placements = None,
+            // RIS leaves the alternate screen; the primary placements come
+            // back first so the clear that follows spares their history
+            // rows, as kitty's reset of the primary screen does.
+            PtyEffect::HardReset => {
+                if session.saved_primary_placements.is_some() {
+                    crate::graphics::apply_screen_switch(
+                        felis_grid::ScreenSwitch::LeftAlternate,
+                        &mut session.images,
+                        &mut session.placements,
+                        &mut session.saved_primary_placements,
+                        &mut session.image_events,
+                    );
+                }
+            }
             // Parked for `session_task::fan_out_grid_state`, the only consumer
             // that knows each shadow's damage.
             PtyEffect::Scrolled {

@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 /// The dump version this build writes and the one it reads. A field
 /// added with a default needs no bump; only a change a successor could
 /// not read from its predecessor does.
-pub const DUMP_VERSION: u32 = 1;
+pub const DUMP_VERSION: u32 = 2;
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -275,10 +275,10 @@ mod tests {
 
     #[test]
     fn another_version_is_refused_before_the_body_is_read() {
-        let body = br#"{"version":2,"sessions":"not even the right shape"}"#;
+        let body = br#"{"version":1,"sessions":"not even the right shape"}"#;
         assert!(matches!(
             Dump::decode(body),
-            Err(DumpError::Version { found: 2 })
+            Err(DumpError::Version { found: 1 })
         ));
     }
 

@@ -1,7 +1,7 @@
 use proptest::prelude::*;
 
 use super::*;
-use crate::{ErasedRange, ScreenSwitch};
+use crate::{ImageClear, ScreenSwitch};
 
 fn apc(n: usize) -> PtyEffect {
     PtyEffect::Apc(ApcBody {
@@ -110,11 +110,7 @@ fn an_intervening_effect_ends_a_scroll_run() {
 #[test]
 fn a_scroll_after_another_kind_starts_its_own_entry() {
     let mut queue = PtyEffectQueue::default();
-    queue.push(PtyEffect::Erased(ErasedRange {
-        top: 0,
-        bottom: 1,
-        force: false,
-    }));
+    queue.push(PtyEffect::ImagesCleared(ImageClear::Screen));
     queue.push_scroll(2);
     queue.push_scroll(2);
 

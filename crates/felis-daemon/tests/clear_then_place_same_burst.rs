@@ -59,18 +59,13 @@ fn stream_order_replay_keeps_the_clear_then_draw_image() {
     p.parser.advance(&mut p.grid, &clear_then_place_burst());
     for effect in p.grid.take_pty_effects() {
         match effect {
-            PtyEffect::Erased(range) => {
-                for removed in
-                    p.placements
-                        .remove_intersecting(range.top, range.bottom, range.force)
-                {
-                    p.images.release(removed.image_id);
-                    p.events.push(ImageEvent::PlacementRemoved {
-                        image_id: removed.image_id,
-                        placement_id: removed.placement_id,
-                    });
-                }
-            }
+            PtyEffect::ImagesCleared(scope) => felis_daemon::graphics::clear_images(
+                &mut p.images,
+                &mut p.placements,
+                None,
+                &mut p.events,
+                scope,
+            ),
             PtyEffect::Apc(apc) => {
                 dispatch_apc_body(
                     &mut ApcCtx {
@@ -82,6 +77,7 @@ fn stream_order_replay_keeps_the_clear_then_draw_image() {
                         cell_pixel_w: 0,
                         cell_pixel_h: 0,
                         anchor_cursor: None,
+                        saved_primary: None,
                     },
                     &mut p.reassembler,
                     &apc.body,

@@ -370,6 +370,11 @@ pub struct ApcCtx<'a> {
     /// trailing DECRC in the same burst cannot move the anchor; `None`
     /// anchors at the grid's live cursor.
     pub anchor_cursor: Option<(u16, u16)>,
+    /// The primary screen's placements while the alternate screen is up.
+    /// They hold no refcount there, yet kitty keeps their images in the
+    /// primary screen's own store, which no alternate-screen command
+    /// touches.
+    pub saved_primary: Option<&'a felis_grid::images::Placements>,
 }
 
 pub fn dispatch_apc_body(
@@ -460,6 +465,7 @@ pub fn dispatch_apc_bodies(
             cell_pixel_w,
             cell_pixel_h,
             anchor_cursor: Some((apc.cursor_row, apc.cursor_col)),
+            saved_primary: session.saved_primary_placements.as_ref(),
         };
         let response = dispatch_apc_body(&mut ctx, &mut session.graphics_reassembler, &apc.body);
         if let Some(response) = response {
@@ -615,7 +621,9 @@ fn handle_complete(ctx: &mut ApcCtx<'_>, complete: &CompleteCommand) -> Option<V
         cell_pixel_w,
         cell_pixel_h,
         anchor_cursor,
+        saved_primary,
     } = ctx;
+    let saved_primary = *saved_primary;
     let (cell_pixel_w, cell_pixel_h) = (*cell_pixel_w, *cell_pixel_h);
     let anchor_cursor = anchor_cursor.unwrap_or_else(|| {
         let cursor = grid.cursor();
@@ -644,11 +652,19 @@ fn handle_complete(ctx: &mut ApcCtx<'_>, complete: &CompleteCommand) -> Option<V
             addressed = refs.image_id.is_some();
             handle_query(complete)
         }
-        b't' => handle_transmit(images, placements, events, complete, &mut refs),
+        b't' => handle_transmit(
+            images,
+            placements,
+            saved_primary,
+            events,
+            complete,
+            &mut refs,
+        ),
         b'T' => handle_transmit_and_display(
             grid,
             images,
             placements,
+            saved_primary,
             events,
             complete,
             &mut refs,
@@ -671,15 +687,22 @@ fn handle_complete(ctx: &mut ApcCtx<'_>, complete: &CompleteCommand) -> Option<V
             // kitty's `case 'd'` calls no `finish_command_response`, so a
             // delete is never answered, failed or not. mpv's vo_kitty
             // cleanup sends a bare `a=d;` without q= and reads nothing.
-            if let ActionOutcome::Err(code, message) =
-                handle_delete(grid, images, placements, events, complete, &mut refs)
-            {
+            if let ActionOutcome::Err(code, message) = handle_delete(
+                grid,
+                images,
+                placements,
+                saved_primary,
+                events,
+                complete,
+                &mut refs,
+            ) {
                 tracing::debug!(
                     ?code,
                     message,
                     "graphics delete failed (kitty sends no reply)"
                 );
             }
+            free_unreferenced_anonymous(images, placements, saved_primary, events);
             return None;
         }
         b'f' => handle_animation_frame(images, placements, events, complete, &mut refs),
@@ -798,11 +821,12 @@ fn handle_query(complete: &CompleteCommand) -> ActionOutcome {
 fn handle_transmit(
     images: &mut felis_grid::images::ImageStore,
     placements: &mut felis_grid::images::Placements,
+    saved_primary: Option<&felis_grid::images::Placements>,
     events: &mut Vec<ImageEvent>,
     complete: &CompleteCommand,
     refs: &mut ResponseRefs,
 ) -> ActionOutcome {
-    match transmit_image(images, placements, events, complete, refs) {
+    match transmit_image(images, placements, saved_primary, events, complete, refs) {
         Ok(_) => ActionOutcome::Ok,
         Err(outcome) => outcome,
     }
@@ -813,33 +837,47 @@ fn handle_transmit(
 fn transmit_image(
     images: &mut felis_grid::images::ImageStore,
     placements: &mut felis_grid::images::Placements,
+    saved_primary: Option<&felis_grid::images::Placements>,
     events: &mut Vec<ImageEvent>,
     complete: &CompleteCommand,
     refs: &mut ResponseRefs,
 ) -> Result<ImageId, ActionOutcome> {
     let id = resolve_or_allocate_image_id(complete, refs, images)?;
-    let entry = decode_image(complete).map_err(decode_error_to_outcome)?;
-    match insert_into_store(images, placements, events, id, entry) {
+    let mut entry = decode_image(complete).map_err(decode_error_to_outcome)?;
+    if refs.image_id.is_none() {
+        entry = entry.into_anonymous();
+    }
+    match insert_into_store(images, placements, saved_primary, events, id, entry) {
         ActionOutcome::Ok => Ok(id),
         err @ ActionOutcome::Err(..) => Err(err),
     }
 }
 
-/// Evict the oldest images, placements and all, until `needed` more bytes fit.
-///
-/// Ensures space when un-erased pinned placements would otherwise prevent
-/// the refcount-respecting LRU from freeing space. Replacement images
-/// free superseded memory inside `insert` and are not evicted here.
-fn evict_oldest_to_fit(
+/// kitty's `apply_storage_quota`: every image nothing references goes
+/// first, then the least recently used, placements and all, until
+/// `growth` more bytes fit. The incoming image is spared.
+fn evict_to_fit(
     images: &mut felis_grid::images::ImageStore,
     placements: &mut felis_grid::images::Placements,
+    saved_primary: Option<&felis_grid::images::Placements>,
     events: &mut Vec<ImageEvent>,
     incoming: ImageId,
-    needed: usize,
+    growth: usize,
 ) {
-    let replacing = images.get(incoming).map_or(0, ImageEntry::byte_len);
-    while images.bytes_used() - replacing + needed > images.bytes_cap() {
-        let Some(oldest) = images.iter_ids().find(|id| *id != incoming) else {
+    let over =
+        |images: &felis_grid::images::ImageStore| images.bytes_used() + growth > images.bytes_cap();
+    if !over(images) {
+        return;
+    }
+    free_unreferenced_where(images, placements, saved_primary, events, |id, _| {
+        id != incoming
+    });
+    while over(images) {
+        let Some(oldest) = images
+            .iter_ids()
+            .filter(|id| *id != incoming)
+            .min_by_key(|id| images.get(*id).map_or(0, ImageEntry::atime))
+        else {
             break;
         };
         for removed in placements.delete_image(oldest) {
@@ -849,9 +887,7 @@ fn evict_oldest_to_fit(
                 placement_id: removed.placement_id,
             });
         }
-        if !free_image(images, placements, events, oldest) {
-            break;
-        }
+        free_image(images, placements, events, oldest);
     }
 }
 
@@ -866,6 +902,77 @@ fn announce_evictions(
     for id in evicted {
         placements.remove_virtual(id);
         events.push(ImageEvent::Delete { id });
+    }
+}
+
+/// kitty's `grman_clear` for ED 2 / ED 3 / RIS: drop the placements the
+/// clear covers, then every image nothing references any more.
+pub fn clear_images(
+    images: &mut felis_grid::images::ImageStore,
+    placements: &mut felis_grid::images::Placements,
+    saved_primary: Option<&felis_grid::images::Placements>,
+    events: &mut Vec<ImageEvent>,
+    scope: felis_grid::ImageClear,
+) {
+    for p in placements.clear(scope) {
+        images.release(p.image_id);
+        events.push(ImageEvent::PlacementRemoved {
+            image_id: p.image_id,
+            placement_id: p.placement_id,
+        });
+    }
+    free_unreferenced(images, placements, saved_primary, events);
+}
+
+fn free_unreferenced(
+    images: &mut felis_grid::images::ImageStore,
+    placements: &mut felis_grid::images::Placements,
+    saved_primary: Option<&felis_grid::images::Placements>,
+    events: &mut Vec<ImageEvent>,
+) {
+    free_unreferenced_where(images, placements, saved_primary, events, |_, _| true);
+}
+
+/// kitty frees an image sent without an id once its last placement
+/// goes, since nothing can place it again; its `modify_refs` (every
+/// scroll) and `filter_refs` (every delete) sweep for such images.
+pub fn free_unreferenced_anonymous(
+    images: &mut felis_grid::images::ImageStore,
+    placements: &mut felis_grid::images::Placements,
+    saved_primary: Option<&felis_grid::images::Placements>,
+    events: &mut Vec<ImageEvent>,
+) {
+    free_unreferenced_where(images, placements, saved_primary, events, |_, entry| {
+        entry.is_anonymous()
+    });
+}
+
+fn free_unreferenced_where(
+    images: &mut felis_grid::images::ImageStore,
+    placements: &mut felis_grid::images::Placements,
+    saved_primary: Option<&felis_grid::images::Placements>,
+    events: &mut Vec<ImageEvent>,
+    candidate: impl Fn(ImageId, &ImageEntry) -> bool,
+) {
+    let candidates: Vec<ImageId> = images
+        .iter_ids()
+        .filter(|&id| images.get(id).is_some_and(|entry| candidate(id, entry)))
+        .collect();
+    if candidates.is_empty() {
+        return;
+    }
+    let referenced: std::collections::HashSet<ImageId> = [Some(&*placements), saved_primary]
+        .into_iter()
+        .flatten()
+        .flat_map(|table| {
+            table
+                .iter()
+                .map(|p| p.image_id)
+                .chain(table.iter_virtual().map(|v| v.image_id))
+        })
+        .collect();
+    for id in candidates.into_iter().filter(|id| !referenced.contains(id)) {
+        free_image(images, placements, events, id);
     }
 }
 
@@ -906,6 +1013,7 @@ fn handle_transmit_and_display(
     grid: &mut felis_grid::Grid,
     images: &mut felis_grid::images::ImageStore,
     placements: &mut felis_grid::images::Placements,
+    saved_primary: Option<&felis_grid::images::Placements>,
     events: &mut Vec<ImageEvent>,
     complete: &CompleteCommand,
     refs: &mut ResponseRefs,
@@ -913,12 +1021,12 @@ fn handle_transmit_and_display(
     cell_pixel_h: u16,
     anchor_cursor: (u16, u16),
 ) -> ActionOutcome {
-    let id = match transmit_image(images, placements, events, complete, refs) {
+    let id = match transmit_image(images, placements, saved_primary, events, complete, refs) {
         Ok(id) => id,
         Err(outcome) => return outcome,
     };
     if control_u32(complete, b'U') == Some(1) {
-        return upsert_virtual_placement(placements, events, id, complete, refs);
+        return upsert_virtual_placement(images, placements, events, id, complete, refs);
     }
     upsert_placement(
         grid,
@@ -953,7 +1061,7 @@ fn handle_display_existing(
         return ActionOutcome::error(ErrorCode::NotFound, "image not in store");
     }
     if control_u32(complete, b'U') == Some(1) {
-        return upsert_virtual_placement(placements, events, id, complete, refs);
+        return upsert_virtual_placement(images, placements, events, id, complete, refs);
     }
     upsert_placement(
         grid,
@@ -974,6 +1082,7 @@ fn handle_display_existing(
 /// (presenterm, tmux-compatible producers), so nothing anchors at the
 /// cursor and the cursor stays.
 fn upsert_virtual_placement(
+    images: &mut felis_grid::images::ImageStore,
     placements: &mut felis_grid::images::Placements,
     events: &mut Vec<ImageEvent>,
     id: ImageId,
@@ -992,6 +1101,7 @@ fn upsert_virtual_placement(
         rows,
         z_index,
     });
+    images.touch(id);
     events.push(ImageEvent::VirtualPlacement {
         image_id: id,
         cols,
@@ -1006,6 +1116,7 @@ fn handle_delete(
     grid: &felis_grid::Grid,
     images: &mut felis_grid::images::ImageStore,
     placements: &mut felis_grid::images::Placements,
+    saved_primary: Option<&felis_grid::images::Placements>,
     events: &mut Vec<ImageEvent>,
     complete: &CompleteCommand,
     refs: &mut ResponseRefs,
@@ -1017,7 +1128,7 @@ fn handle_delete(
     match mode {
         b'i' => delete_by_id(images, placements, events, complete, refs, false),
         b'I' => delete_by_id(images, placements, events, complete, refs, true),
-        b'a' | b'A' => delete_all(images, placements, events, mode == b'A'),
+        b'a' | b'A' => delete_all(images, placements, saved_primary, events, mode == b'A'),
         b'c' | b'C' => {
             let cursor = grid.cursor();
             // Cursor is 0-based, placement geometry 1-based.
@@ -1135,30 +1246,26 @@ fn handle_delete(
 fn delete_all(
     images: &mut felis_grid::images::ImageStore,
     placements: &mut felis_grid::images::Placements,
+    saved_primary: Option<&felis_grid::images::Placements>,
     events: &mut Vec<ImageEvent>,
     free_images: bool,
 ) -> ActionOutcome {
-    let removed = placements.remove_where(|p| p.anchor.row + i32::from(p.rows.cells().get()) > 1);
-    for placement in &removed {
+    if free_images {
+        clear_images(
+            images,
+            placements,
+            saved_primary,
+            events,
+            felis_grid::ImageClear::Screen,
+        );
+        return ActionOutcome::Ok;
+    }
+    for placement in placements.clear(felis_grid::ImageClear::Screen) {
         images.release(placement.image_id);
         events.push(ImageEvent::PlacementRemoved {
             image_id: placement.image_id,
             placement_id: placement.placement_id,
         });
-    }
-    if free_images {
-        let placed: std::collections::HashSet<ImageId> = placements
-            .iter()
-            .map(|p| p.image_id)
-            .chain(placements.iter_virtual().map(|v| v.image_id))
-            .collect();
-        let unplaced: Vec<ImageId> = images
-            .iter_ids()
-            .filter(|id| !placed.contains(id))
-            .collect();
-        for id in unplaced {
-            free_image(images, placements, events, id);
-        }
     }
     ActionOutcome::Ok
 }
@@ -1267,6 +1374,7 @@ fn resolve_image_id(
 fn insert_into_store(
     images: &mut felis_grid::images::ImageStore,
     placements: &mut felis_grid::images::Placements,
+    saved_primary: Option<&felis_grid::images::Placements>,
     events: &mut Vec<ImageEvent>,
     id: ImageId,
     entry: ImageEntry,
@@ -1274,7 +1382,10 @@ fn insert_into_store(
     // Make room before the refcount-respecting insert, or a
     // frame-streaming producer's pinned frames fill the cap once and
     // every later frame is rejected.
-    evict_oldest_to_fit(images, placements, events, id, entry.byte_len());
+    let growth = entry
+        .byte_len()
+        .saturating_sub(images.get(id).map_or(0, ImageEntry::byte_len));
+    evict_to_fit(images, placements, saved_primary, events, id, growth);
     let replacing = images.get(id).is_some();
     match images.insert(id, entry) {
         Ok(evicted) => {
@@ -1350,6 +1461,7 @@ fn upsert_placement(
             "image vanished before placement could pin it",
         );
     }
+    images.touch(image_id);
     if let Some(p) = requested
         && let Some((left, moved)) = placements.rekey_anonymous(image_id, p)
     {
@@ -1492,14 +1604,11 @@ fn handle_animation_frame(
         );
         // kitty only changes an edited frame's gap when z is given.
         let gap = if z.is_some() { gap_from_z(z) } else { prev_gap };
-        return match images.replace_frame(
-            id,
-            idx,
-            Frame {
-                pixels: canvas.into(),
-                gap_ms: gap,
-            },
-        ) {
+        let frame = Frame {
+            pixels: canvas.into(),
+            gap_ms: gap,
+        };
+        return match images.replace_frame(id, idx, frame) {
             Ok(evicted) => {
                 announce_evictions(placements, events, evicted);
                 events.push(ImageEvent::TransmitFrame {
@@ -1534,13 +1643,11 @@ fn handle_animation_frame(
         img_bpp,
         replace,
     );
-    match images.push_frame(
-        id,
-        Frame {
-            pixels: canvas.into(),
-            gap_ms: gap_from_z(z),
-        },
-    ) {
+    let frame = Frame {
+        pixels: canvas.into(),
+        gap_ms: gap_from_z(z),
+    };
+    match images.push_frame(id, frame) {
         Ok(pushed) => {
             announce_evictions(placements, events, pushed.evicted);
             events.push(ImageEvent::TransmitFrame {
@@ -1688,14 +1795,11 @@ fn handle_compose(
         replace,
     );
     let _ = img_h;
-    match images.replace_frame(
-        id,
-        dst_idx,
-        Frame {
-            pixels: dst_px.into(),
-            gap_ms: dst_gap,
-        },
-    ) {
+    let frame = Frame {
+        pixels: dst_px.into(),
+        gap_ms: dst_gap,
+    };
+    match images.replace_frame(id, dst_idx, frame) {
         Ok(evicted) => {
             announce_evictions(placements, events, evicted);
             events.push(ImageEvent::TransmitFrame {

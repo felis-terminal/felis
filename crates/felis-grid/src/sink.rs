@@ -2,7 +2,7 @@
 //! points and the CSI/ESC/DCS/OSC/APC dispatch tables.
 
 use super::{
-    AttrFlags, Cell, DA1_REPLY, DCS_BUFFER_LIMIT, DcsKind, DcsState, ErasedRange, Grapheme, Grid,
+    AttrFlags, Cell, DA1_REPLY, DCS_BUFFER_LIMIT, DcsKind, DcsState, Grapheme, Grid,
     ModifyOtherKeys, MouseEncoding, MouseProtocol, PromptMark, PtyEffect, SPECIAL_COLOR_COUNT,
     Sink, ThemeChannel, parse_osc_133, sanitize_osc_str,
 };
@@ -622,12 +622,11 @@ impl Sink for Grid {
                 self.term_name = term_name;
                 self.graphics_tracker = graphics_tracker;
                 self.pty_effects = pty_effects;
-                self.pty_effects.push(PtyEffect::Erased(ErasedRange {
-                    top: 0,
-                    bottom: rows.saturating_sub(1),
-                    force: true,
-                }));
+                // The stashed primary placements go first, so the clear
+                // frees the images only they held.
                 self.pty_effects.push(PtyEffect::HardReset);
+                self.pty_effects
+                    .push(PtyEffect::ImagesCleared(crate::ImageClear::Screen));
             }
             (&[b'#'], b'8') => self.decaln(),
             _ => {}

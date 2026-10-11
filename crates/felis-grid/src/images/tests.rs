@@ -477,33 +477,6 @@ fn contains_row_matches_live_rows_for_straddling_placement() {
     assert!(!p.contains_row(4));
 }
 
-/// The scrolled-out part grants no immunity from a live-region erase.
-#[test]
-fn remove_intersecting_evicts_straddling_placement() {
-    let mut t = Placements::new();
-    let mut p = placement_at_row(1, -2);
-    p.rows = cells(6); // covers live rows 1..=3 (0-based 0..=2)
-    t.upsert(p);
-    let removed = t.remove_intersecting(0, 23, /* force */ false);
-    assert_eq!(removed.len(), 1);
-    assert!(
-        t.is_empty(),
-        "the reported eviction must actually leave the table",
-    );
-}
-
-/// `clear` wipes the screen, not the history.
-#[test]
-fn remove_intersecting_spares_fully_scrolled_out_placement() {
-    let mut t = Placements::new();
-    let mut p = placement_at_row(1, -9);
-    p.rows = cells(4); // covers rows -9..=-6, all in scrollback
-    t.upsert(p);
-    let removed = t.remove_intersecting(0, 23, false);
-    assert_eq!(removed, Vec::<Placement>::new());
-    assert_eq!(t.len(), 1);
-}
-
 fn placement_at(image: u32, row_1based: i32, rows_high: u16, no_cursor: bool) -> Placement {
     let mut p = placement(image, None, 0);
     p.anchor = CellPos {
@@ -516,61 +489,29 @@ fn placement_at(image: u32, row_1based: i32, rows_high: u16, no_cursor: bool) ->
     p
 }
 
-/// Kitty graphics: every placement overlapping an `ED 2` range is
-/// removed unless flagged `C=1`.
 #[test]
-fn remove_intersecting_drops_overlapping() {
+fn a_screen_clear_drops_every_placement_with_a_row_on_screen() {
     let mut t = Placements::new();
-    // Anchored at row 3 (1-based), 4 rows high: 0-based rows 2..=5.
     t.upsert(placement_at(1, 3, 4, false));
-    let removed = t.remove_intersecting(0, 23, /* force */ false);
-    assert_eq!(removed.len(), 1);
-    assert_eq!(removed[0].image_id, ImageId(1));
+    t.upsert(placement_at(2, 20, 1, /* no_cursor_move */ true));
+    t.upsert(placement_at(3, -1, 3, false)); // rows -1..=1: the last is the top live row
+    t.upsert(placement_at(4, -9, 4, false)); // rows -9..=-6, all in scrollback
+    let removed: Vec<u32> = t
+        .clear(ImageClear::Screen)
+        .iter()
+        .map(|p| p.image_id.0)
+        .collect();
+    assert_eq!(removed, vec![1, 2, 3]);
+    assert_eq!(t.iter().map(|p| p.image_id.0).collect::<Vec<_>>(), vec![4]);
+}
+
+#[test]
+fn a_full_clear_also_drops_scrollback_placements() {
+    let mut t = Placements::new();
+    t.upsert(placement_at(1, 3, 4, false));
+    t.upsert(placement_at(4, -9, 4, false));
+    assert_eq!(t.clear(ImageClear::All).len(), 2);
     assert!(t.is_empty());
-}
-
-/// `C=1` is the producer's opt-out from the ED / EL path: programs that
-/// pin a status-line image would otherwise lose it on every `clear`.
-#[test]
-fn remove_intersecting_keeps_c_1_placements_when_not_forced() {
-    let mut t = Placements::new();
-    t.upsert(placement_at(1, 3, 4, /* no_cursor_move */ true));
-    let removed = t.remove_intersecting(0, 23, /* force */ false);
-    assert_eq!(removed, Vec::<Placement>::new());
-    assert_eq!(t.len(), 1);
-}
-
-/// Kitty spec: a hard reset (RIS / DECSTR) has no per-placement
-/// opt-out.
-#[test]
-fn remove_intersecting_drops_c_1_placements_when_forced() {
-    let mut t = Placements::new();
-    t.upsert(placement_at(1, 3, 4, /* no_cursor_move */ true));
-    let removed = t.remove_intersecting(0, 23, /* force */ true);
-    assert_eq!(removed.len(), 1);
-    assert!(t.is_empty());
-}
-
-/// An `EL 0` on a row above the placement must not remove it.
-#[test]
-fn remove_intersecting_no_overlap_no_op() {
-    let mut t = Placements::new();
-    t.upsert(placement_at(1, 5, 4, false));
-    let removed = t.remove_intersecting(0, 2, false);
-    assert_eq!(removed, Vec::<Placement>::new());
-    assert_eq!(t.len(), 1);
-}
-
-#[test]
-fn remove_intersecting_single_row_touch_evicts() {
-    let mut t = Placements::new();
-    t.upsert(placement_at(1, 5, 1, false));
-    let removed = t.remove_intersecting(4, 4, false);
-    assert_eq!(removed.len(), 1);
-    assert!(
-        t.is_empty(),
-        "the reported eviction must actually leave the table",
-    );
 }
 
 fn placement_box(

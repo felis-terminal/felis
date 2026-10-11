@@ -175,18 +175,15 @@ pub enum MarkLocation {
     Evicted,
 }
 
-/// Rows the parser erased on the live region. The Kitty graphics
-/// dispatcher drops any placement whose cells intersect (the spec's
-/// auto-deletion rule for placements without `C=1`); `force` (RIS /
-/// DECSTR) wipes even `C=1` placements.
+/// The Kitty graphics placements a screen clear drops, as kitty's
+/// `grman_clear`; virtual (`U=1`) placements survive either.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "state-dump", derive(Serialize, Deserialize))]
-pub struct ErasedRange {
-    /// First erased row (inclusive).
-    pub top: u16,
-    /// Last erased row (inclusive).
-    pub bottom: u16,
-    pub force: bool,
+pub enum ImageClear {
+    /// ED 2 and RIS: placements with a row on the live screen.
+    Screen,
+    /// ED 3: scrollback placements too.
+    All,
 }
 
 /// One scroll-region shift recorded on the grid for
@@ -230,9 +227,9 @@ pub enum PtyEffect {
     /// dispatcher (`docs/explanation/protocols/kitty-graphics.md` "Dispatcher
     /// architecture").
     Apc(ApcBody),
-    /// A row range erased by ED / EL; the dispatcher evicts
-    /// intersecting placements.
-    Erased(ErasedRange),
+    /// ED 2 / ED 3 / RIS; the dispatcher drops the placements and then
+    /// every image nothing references.
+    ImagesCleared(ImageClear),
     /// Rows the primary screen pushed into scrollback. Adjacent scrolls
     /// coalesce into one entry.
     ScrolledIntoScrollback(u32),

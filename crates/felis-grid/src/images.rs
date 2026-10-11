@@ -71,6 +71,13 @@ pub struct ImageEntry {
     current_loop: u32,
     /// Pinned (refcount > 0) entries are never evicted.
     refcount: u32,
+    /// Sent without `i=` or `I=`, so no later command can name it.
+    #[cfg_attr(feature = "state-dump", serde(default))]
+    anonymous: bool,
+    /// The store's clock at the last transmit or placement; the byte
+    /// cap evicts the smallest first.
+    #[cfg_attr(feature = "state-dump", serde(default))]
+    atime: u64,
 }
 
 impl ImageEntry {
@@ -93,7 +100,25 @@ impl ImageEntry {
             max_loops: 0,
             current_loop: 0,
             refcount: 0,
+            anonymous: false,
+            atime: 0,
         }
+    }
+
+    #[must_use]
+    pub const fn into_anonymous(mut self) -> Self {
+        self.anonymous = true;
+        self
+    }
+
+    #[must_use]
+    pub const fn is_anonymous(&self) -> bool {
+        self.anonymous
+    }
+
+    #[must_use]
+    pub const fn atime(&self) -> u64 {
+        self.atime
     }
 
     /// Pixels of the currently-displayed frame.
@@ -338,6 +363,8 @@ pub struct ImageStore {
     bytes_total: usize,
     bytes_cap: usize,
     next_anonymous_id: u32,
+    #[cfg_attr(feature = "state-dump", serde(default))]
+    clock: u64,
 }
 
 impl ImageStore {
@@ -348,6 +375,7 @@ impl ImageStore {
             bytes_total: 0,
             bytes_cap,
             next_anonymous_id: u32::MAX,
+            clock: 0,
         }
     }
 
@@ -364,6 +392,7 @@ impl ImageStore {
             entries,
             bytes_cap,
             next_anonymous_id: u32::MAX,
+            clock: 0,
         }
     }
 
@@ -409,7 +438,16 @@ impl ImageStore {
         let evicted = self.evict_to_fit(needed, None)?;
         self.bytes_total += needed;
         self.entries.insert(id, entry);
+        self.touch(id);
         Ok(evicted)
+    }
+
+    /// Mark the image as just used, for [`ImageEntry::atime`].
+    pub fn touch(&mut self, id: ImageId) {
+        if let Some(entry) = self.entries.get_mut(&id) {
+            self.clock += 1;
+            entry.atime = self.clock;
+        }
     }
 
     /// The target image is never evicted to make room for its own
@@ -1021,28 +1059,13 @@ impl Placements {
         self.entries.is_empty() && self.virtuals.is_empty()
     }
 
-    /// Remove every placement intersecting the inclusive 0-based row
-    /// range. `C=1` placements are exempt unless `force` (the RIS /
-    /// DECSTR path): a pinned status-line image survives ED / EL but
-    /// not a hard reset.
-    pub fn remove_intersecting(
-        &mut self,
-        erase_top: u16,
-        erase_bottom: u16,
-        force: bool,
-    ) -> Vec<Placement> {
-        let (removed, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut self.entries)
-            .into_iter()
-            .partition(|p| {
-                if p.no_cursor_move && !force {
-                    return false;
-                }
-                let p_top = p.anchor.row - 1;
-                let p_bottom = p_top.saturating_add(i32::from(p.rows.cells().get() - 1));
-                p_top <= i32::from(erase_bottom) && i32::from(erase_top) <= p_bottom
-            });
-        self.entries = kept;
-        removed
+    /// Remove the placements a screen clear drops (kitty's
+    /// `grman_clear`); virtual placements stay.
+    pub fn clear(&mut self, scope: crate::ImageClear) -> Vec<Placement> {
+        self.remove_where(|p| match scope {
+            crate::ImageClear::Screen => p.anchor.row + i32::from(p.rows.cells().get()) > 1,
+            crate::ImageClear::All => true,
+        })
     }
 
     /// Shift every anchor up by `lines`. Anchors that leave the

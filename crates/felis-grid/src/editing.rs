@@ -1,12 +1,11 @@
 //! CSI / cursor-movement / scrolling / editing operations on `Grid`.
 
 use super::{
-    AttrFlags, Attributes, Cell, Color, Cursor, CursorStyle, ErasedRange, Grapheme, Grid,
-    MouseEncoding, MouseProtocol, PtyEffect, SavedCursor, ScrollDirection, ScrollOp, Sink, StyleId,
-    SyncOutput, TITLE_STACK_LIMIT, UnderlineStyle, ascii_to_hex, copy_within_cells,
-    default_tab_stops, encode_sgr_color, encode_sgr_underline_color, hex_to_ascii,
-    known_modifiable_dec_mode, permanently_reset_ansi, permanently_reset_dec_mode,
-    permanently_set_dec_mode, xtgettcap_value,
+    AttrFlags, Attributes, Cell, Color, Cursor, CursorStyle, Grapheme, Grid, MouseEncoding,
+    MouseProtocol, PtyEffect, SavedCursor, ScrollDirection, ScrollOp, Sink, StyleId, SyncOutput,
+    TITLE_STACK_LIMIT, UnderlineStyle, ascii_to_hex, copy_within_cells, default_tab_stops,
+    encode_sgr_color, encode_sgr_underline_color, hex_to_ascii, known_modifiable_dec_mode,
+    permanently_reset_ansi, permanently_reset_dec_mode, permanently_set_dec_mode, xtgettcap_value,
 };
 use crate::uax29::{is_extended_pictographic, is_grapheme_extend};
 
@@ -1589,22 +1588,12 @@ impl Grid {
         self.tab_stops = default_tab_stops(self.screen.cols);
         self.reverse_video = false;
         self.application_keypad = false;
-        // Kitty graphics: DECSTR wipes every placement, `C=1` included
-        // (no soft-reset opt-out in the spec). DECSTR zeroes no cells;
-        // this range is a placement-only signal.
-        let last_row = self.screen.rows.saturating_sub(1);
-        self.pty_effects.push(PtyEffect::Erased(ErasedRange {
-            top: 0,
-            bottom: last_row,
-            force: true,
-        }));
         self.screen.damage.mark_all();
     }
 
     pub(crate) fn el(&mut self, mode: u16) {
         let row_start = self.screen.idx(self.screen.cursor.row, 0);
         let cols = usize::from(self.screen.cols);
-        let mut erased_some = false;
         match mode {
             0 => {
                 let from = self
@@ -1612,7 +1601,6 @@ impl Grid {
                     .idx(self.screen.cursor.row, self.screen.cursor.col);
                 let to = row_start + cols;
                 self.range_blank_iso(self.screen.cursor.row, from, to);
-                erased_some = true;
             }
             1 => {
                 let to = self
@@ -1620,23 +1608,11 @@ impl Grid {
                     .idx(self.screen.cursor.row, self.screen.cursor.col)
                     + 1;
                 self.range_blank_iso(self.screen.cursor.row, row_start, to);
-                erased_some = true;
             }
             2 => {
                 self.range_blank_iso(self.screen.cursor.row, row_start, row_start + cols);
-                erased_some = true;
             }
             _ => {}
-        }
-        if erased_some {
-            // Kitty graphics: a single-row range; the dispatcher's
-            // intersection check covers the whole row regardless of
-            // which columns EL touched.
-            self.pty_effects.push(PtyEffect::Erased(ErasedRange {
-                top: self.screen.cursor.row,
-                bottom: self.screen.cursor.row,
-                force: false,
-            }));
         }
         self.screen.damage.mark(self.screen.cursor.row.into());
     }
@@ -1657,10 +1633,8 @@ impl Grid {
 
     pub(crate) fn ed(&mut self, mode: u16) {
         let cols = usize::from(self.screen.cols);
-        let last_row = self.screen.rows.saturating_sub(1);
         match mode {
             0 => {
-                // `el(0)` already pushed the cursor row's ErasedRange.
                 self.el(0);
                 let from_row = usize::from(self.screen.cursor.row) + 1;
                 for r in from_row..usize::from(self.screen.rows) {
@@ -1668,28 +1642,13 @@ impl Grid {
                     let start = self.screen.idx(logical, 0);
                     self.range_blank_iso(logical, start, start + cols);
                 }
-                if usize::from(self.screen.cursor.row) < usize::from(last_row) {
-                    self.pty_effects.push(PtyEffect::Erased(ErasedRange {
-                        top: self.screen.cursor.row + 1,
-                        bottom: last_row,
-                        force: false,
-                    }));
-                }
             }
             1 => {
-                // `el(1)` already pushed the cursor row's ErasedRange.
                 self.el(1);
                 for r in 0..usize::from(self.screen.cursor.row) {
                     let logical = u16::try_from(r).unwrap_or(u16::MAX);
                     let start = self.screen.idx(logical, 0);
                     self.range_blank_iso(logical, start, start + cols);
-                }
-                if self.screen.cursor.row > 0 {
-                    self.pty_effects.push(PtyEffect::Erased(ErasedRange {
-                        top: 0,
-                        bottom: self.screen.cursor.row - 1,
-                        force: false,
-                    }));
                 }
             }
             2 => {
@@ -1705,13 +1664,8 @@ impl Grid {
                     sizing: None,
                 };
                 self.screen.erase_viewport(blank);
-                // Kitty graphics: `force = false` so the `C=1`
-                // exemption applies; RIS / DECSTR push a forced range.
-                self.pty_effects.push(PtyEffect::Erased(ErasedRange {
-                    top: 0,
-                    bottom: last_row,
-                    force: false,
-                }));
+                self.pty_effects
+                    .push(PtyEffect::ImagesCleared(crate::ImageClear::Screen));
                 // Damage is settled above; the mark_all below would
                 // ship the untouched rows as no-op RowDeltas.
                 return;
@@ -1720,6 +1674,8 @@ impl Grid {
                 // xterm's `CSI 3 J`: the live screen is not touched
                 // (esctest's `test_ED_3`), so no damage either.
                 self.drop_history();
+                self.pty_effects
+                    .push(PtyEffect::ImagesCleared(crate::ImageClear::All));
                 // With the ring emptied the retained floor is
                 // `scrollback_total_pushed`, so the shared prune drops
                 // exactly the scrollback-bound prefix.
@@ -2370,6 +2326,8 @@ impl Grid {
             }
             2 => {
                 erase_range(0, rows * cols, &mut self.screen.cells, &blank);
+                self.pty_effects
+                    .push(PtyEffect::ImagesCleared(crate::ImageClear::Screen));
             }
             _ => return,
         }
