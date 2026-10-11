@@ -30,27 +30,25 @@ fn placeholder_text(grapheme: Grapheme, screen: &ScreenBuffer) -> Option<String>
     }
 }
 
-/// kitty's `color_to_id`: a 24-bit color is the id's low 24 bits and a
-/// 256-color index is the id itself.
-const fn color_id(color: Color) -> Option<u32> {
+/// kitty's `color_to_id`: a 24-bit color is the id's low 24 bits, a
+/// 256-color index is the id itself, and the default color is `0`.
+const fn color_id(color: Color) -> u32 {
     match color {
-        Color::Rgb(r, g, b) => Some(((r as u32) << 16) | ((g as u32) << 8) | b as u32),
-        Color::Indexed(n) => Some(n as u32),
-        Color::Default => None,
+        Color::Rgb(r, g, b) => ((r as u32) << 16) | ((g as u32) << 8) | b as u32,
+        Color::Indexed(n) => n as u32,
+        Color::Default => 0,
     }
 }
 
 impl ScreenBuffer {
-    /// A cell that omits the id inherits it from the previous placeholder
-    /// cell on the row; an omitted column auto-increments from the
-    /// previous cell of the same image; an omitted row inherits. A
-    /// non-placeholder cell, or a missing id with no run to inherit
-    /// from, breaks the run.
+    /// kitty's `screen_render_line_graphics` run rules, as the Kitty
+    /// graphics reference's "Unicode-placeholder placement" states them.
     #[must_use]
     pub fn placeholder_cells(&self) -> Vec<PlaceholderCell> {
         let mut out = Vec::new();
         for row in 0..self.rows() {
-            let mut prev: Option<(ImageId, u32, u32)> = None;
+            // (low 24 bits, high byte, tile row, tile column)
+            let mut prev: Option<(u32, u32, u32, u32)> = None;
             for col in 0..self.cols() {
                 let Some(cell) = self.cell(row, col) else {
                     prev = None;
@@ -64,30 +62,31 @@ impl ScreenBuffer {
                     prev = None;
                     continue;
                 };
-                let fg24 = color_id(self.style(cell.style).fg);
-                let image_id = match (decoded.image_id_msb, fg24) {
-                    (Some(msb), Some(low)) => ImageId((msb.get() << 24) | low),
-                    (None, Some(low)) => ImageId(low),
-                    (_, None) => {
-                        let Some((pid, _, _)) = prev else {
-                            prev = None;
-                            continue;
-                        };
-                        pid
-                    }
+                let low = color_id(self.style(cell.style).fg);
+                let msb = decoded.image_id_msb.map(Rank::get);
+                let tile_row = decoded.row.map(Rank::get);
+                let tile_col = decoded.col.map(Rank::get);
+                let run = prev.filter(|&(p_low, p_msb, p_row, p_col)| {
+                    p_low == low
+                        && msb.is_none_or(|m| m == p_msb)
+                        && tile_row.is_none_or(|r| r == p_row)
+                        && tile_col.is_none_or(|c| c == p_col.saturating_add(1))
+                });
+                let current = match run {
+                    Some((_, p_msb, p_row, p_col)) => (low, p_msb, p_row, p_col.saturating_add(1)),
+                    None => (
+                        low,
+                        msb.unwrap_or(0),
+                        tile_row.unwrap_or(0),
+                        tile_col.unwrap_or(0),
+                    ),
                 };
-                let same_run = prev.filter(|p| p.0 == image_id);
-                let tile_row = decoded
-                    .row
-                    .map(Rank::get)
-                    .or_else(|| same_run.map(|p| p.1))
-                    .unwrap_or(0);
-                let tile_col = decoded
-                    .col
-                    .map(Rank::get)
-                    .or_else(|| same_run.map(|p| p.2.saturating_add(1)))
-                    .unwrap_or(0);
-                prev = Some((image_id, tile_row, tile_col));
+                prev = Some(current);
+                let (low, msb, tile_row, tile_col) = current;
+                let image_id = ImageId((msb << 24) | low);
+                if image_id.0 == 0 {
+                    continue;
+                }
                 out.push(PlaceholderCell {
                     row,
                     col,
@@ -210,6 +209,51 @@ mod tests {
         );
         let ids: Vec<ImageId> = g.placeholder_cells().iter().map(|c| c.image_id).collect();
         assert_eq!(ids, vec![ImageId(42), ImageId(1)]);
+    }
+
+    /// kitty reads the default foreground as id 0, which names no
+    /// image; it does not borrow the id of the cell before.
+    #[test]
+    fn a_default_foreground_cell_does_not_continue_the_previous_image() {
+        let mut g = Grid::new(1, 4);
+        let mut p = Parser::new();
+        drive(
+            &mut p,
+            &mut g,
+            "\u{1b}[38;2;0;0;5m\u{10eeee}\u{1b}[39m\u{10eeee}".as_bytes(),
+        );
+        let cols: Vec<u16> = g.placeholder_cells().iter().map(|c| c.col).collect();
+        assert_eq!(cols, vec![0]);
+    }
+
+    #[test]
+    fn a_cell_without_the_high_byte_takes_it_from_its_run() {
+        let mut g = Grid::new(1, 4);
+        let mut p = Parser::new();
+        let mut bytes = String::from("\u{1b}[38;2;0;0;5m");
+        bytes.push_str(&cell_bytes(&[0, 0, 7]));
+        bytes.push('\u{10eeee}');
+        drive(&mut p, &mut g, bytes.as_bytes());
+        let cells = g.placeholder_cells();
+        assert_eq!(cells[1].image_id, ImageId((7 << 24) | 5));
+        assert_eq!(cells[1].tile_col, 1);
+    }
+
+    #[test]
+    fn a_column_that_skips_ahead_starts_a_new_run() {
+        let mut g = Grid::new(1, 4);
+        let mut p = Parser::new();
+        let mut bytes = String::from("\u{1b}[38;2;0;0;5m");
+        bytes.push_str(&cell_bytes(&[1, 0]));
+        bytes.push_str(&cell_bytes(&[0, 3]));
+        bytes.push('\u{10eeee}');
+        drive(&mut p, &mut g, bytes.as_bytes());
+        let tiles: Vec<(u32, u32)> = g
+            .placeholder_cells()
+            .iter()
+            .map(|c| (c.tile_row, c.tile_col))
+            .collect();
+        assert_eq!(tiles, vec![(1, 0), (0, 3), (0, 4)]);
     }
 
     #[test]

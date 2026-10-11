@@ -137,10 +137,13 @@ cell. The uppercase pair carries a source offset for `a=c` frame composition, wh
 
 ## Unicode-placeholder placement
 
-The Unicode-placeholder method (`U=1`) is supported. The daemon decodes diacritic-encoded row, column, and image IDs.
-Clients render placeholder cells with corresponding image regions matching direct placement z-index rules. The image is
-fit into the placement's `c=` by `r=` cell box with its aspect ratio kept and centered, so cells in the margin show
-nothing.
+The Unicode-placeholder method (`U=1`) is supported. The daemon decodes diacritic-encoded row, column, and image IDs. A
+cell's foreground color is the low 24 bits of its image id; the default foreground counts as `0`. An id of `0` names no
+image. A cell continues the run of the cell before it when their foreground ids match and each diacritic it carries
+agrees with the run (the same row, the next column, the same high byte); a continuing cell takes the diacritics it omits
+from the run, and a cell that starts a run takes `0` for them. Clients render placeholder cells with corresponding image
+regions matching direct placement z-index rules. The image is fit into the placement's `c=` by `r=` cell box with its
+aspect ratio kept and centered, so cells in the margin show nothing.
 
 A `U=1` transmission (`a=T`) or put (`a=p`) anchors nothing at the cursor and leaves it in place; it records placement
 extents (`c=`, `r=`, `z=`) in the session's placement table (keyed by image ID). Rehydration replays recorded extents to
