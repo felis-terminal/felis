@@ -26,9 +26,9 @@ A `t=d` transfer may arrive in chunks, `m=1` on every chunk but the last: the pa
 base64 decoding plus any `o=z` inflate run once, over the concatenation. A continuation chunk's controls are ignored
 apart from `m=` and a non-zero `q=`, which overrides the first chunk's. An `a=p`, `a=d`, `a=c` or `a=a` command ignores
 `m=` and runs at once, even mid-transfer. A delete drops the open transfer; after the others it continues with the next
-chunk. felis does not police the producer's chunking. A chunk whose payload passes the upstream 4096-byte cap is
-accepted to the [APC body limit](#limits), and a payload decodes with or without its RFC 4648 padding, which is what
-kitten emits.
+chunk. A command with both `i=` and `I=` is refused at once and leaves any open transfer alone. felis does not police
+the producer's chunking. A chunk whose payload passes the upstream 4096-byte cap is accepted to the
+[APC body limit](#limits), and a payload decodes with or without its RFC 4648 padding, which is what kitten emits.
 
 ## Transmission methods
 
@@ -50,7 +50,7 @@ Shared-memory transfer (`t=s`) behavior:
 - Data copying is split by platform: Linux uses `pread` (safe against concurrent truncations); macOS uses `mmap` (see
   `copy_shm_range_mmap` in `crates/felis-daemon/src/graphics/image_decode.rs`).
 - Raw payloads (`f=24`/`f=32`) longer than `s × v × bpp` keep the leading bytes and trim trailing padding (e.g.
-  page-boundary rounding on macOS). Payloads shorter than expected return `EINVAL`.
+  page-boundary rounding on macOS). Payloads shorter than expected return `ENODATA`.
 
 Chunking: `m=` only applies to `t=d`. A command specifying `t=f`, `t=t`, or `t=s` completes immediately regardless of
 `m=1` and aborts any active in-flight direct stream. Design details are documented in
@@ -70,9 +70,9 @@ Images reside in the daemon's image store and are indexed by:
 - `i=<u32>`: Caller-assigned image ID.
 - `I=<u32>`: Caller-assigned image number.
 
-Transmissions (`a=t` or `a=T`) may omit both IDs: felis allocates an ID from the top of the `u32` range and leaves
-responses id-less. `a=p` and the ID-targeted deletes (`a=d` with `d=i`/`I` or `d=f`/`F`) require an explicit ID (see
-[kitty-graphics.md](../../explanation/protocols/kitty-graphics.md)).
+Transmissions (`a=t` or `a=T`) may omit both IDs: felis allocates an ID from the top of the `u32` range and sends no
+reply. An explicit `i=0` or `I=0` is the same as an omitted key. `a=p` and the ID-targeted deletes (`a=d` with `d=i`/`I`
+or `d=f`/`F`) require an explicit ID (see [kitty-graphics.md](../../explanation/protocols/kitty-graphics.md)).
 
 Image data is retained until:
 
@@ -230,8 +230,22 @@ ESC _ G <id keys> ; <status> ESC \
 
 The id keys echo whichever of `i=<image id>`, `I=<image number>` and a non-zero `p=<placement id>` the request carried,
 in that order. `<status>` is `OK` on success, and `<code>` or `<code>:<message>` on failure; in a message `;`, C0 bytes
-and DEL are replaced with `_`, so a message can neither end the APC early nor put bytes of its own on the PTY. Whether a
-reply is emitted at all is [`q=`](#response-suppression-q).
+and DEL are replaced with `_`, so a message can neither end the APC early nor put bytes of its own on the PTY.
+
+A command carrying both a non-zero `i=` and a non-zero `I=` is refused with `EINVAL` before its action runs, a delete
+included. Otherwise, only a command with a non-zero `i=` or `I=` is answered, as in kitty; a command without one has
+nowhere to address the reply, and the reply would reach the shell as text. A query (`a=q`) is answered only when it
+carries `i=`, and its reply echoes `i=` alone. A command with an unknown `a=` is dropped. Among answered commands,
+[`q=`](#response-suppression-q) decides.
+
+| Code      | Cause                                                                         |
+| --------- | ----------------------------------------------------------------------------- |
+| `ENOENT`  | The command names an image or frame that does not exist                       |
+| `EINVAL`  | A control value felis cannot use, or base64 or zlib data that does not decode |
+| `ENODATA` | Decoded pixel data shorter than `s=`×`v=` requires                            |
+| `EBADPNG` | `f=100` data that does not decode as PNG                                      |
+| `EBADF`   | A `t=f`, `t=t` or `t=s` source that cannot be opened or read                  |
+| `ENOTSUP` | A limit, an unsupported medium, or a feature felis does not implement         |
 
 ### Querying
 
@@ -250,17 +264,13 @@ The `q=` parameter controls daemon acknowledgments:
 | `1`  | Errors emitted; success suppressed  |
 | `2`  | All responses suppressed            |
 
-Values above 2 clamp to `q=2`. Successful `a=a` (animation control) and `a=d` (delete) commands are never acknowledged,
-regardless of `q=`. Errors on these actions follow the `q=` table.
+Values above 2 clamp to `q=2`. A successful `a=a` (animation control) is never acknowledged; its errors follow the `q=`
+table. A delete (`a=d`) is never answered, whether it succeeds or fails, unless it carries both `i=` and `I=`.
 
-### Error responses on malformed input
+### Malformed input
 
-Two malformed-input conditions generate immediate `EINVAL` responses to prevent client polling hangs:
-
-- **Malformed `G` envelope**: Unparseable controls emit an id-less, unconditional `EINVAL` with message
-  `malformed graphics escape`.
-- **Reassembly overflow**: Chunked `t=d` transfers exceeding 64 MiB emit an `EINVAL` error honoring the initial chunk's
-  `q=` and image IDs.
+A `G` escape whose controls do not parse is dropped without a reply. A chunked `t=d` transfer exceeding 64 MiB is
+answered with `EINVAL`, honoring the first chunk's ids and the `q=` in effect.
 
 Non-`G` APC escapes are silently ignored to prevent interfering with unrelated APC protocol handlers.
 

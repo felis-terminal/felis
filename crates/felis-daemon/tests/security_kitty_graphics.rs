@@ -83,7 +83,7 @@ fn zlib_zip_bomb_is_capped_at_max_decoded_bytes() {
 
 #[cfg(unix)]
 #[test]
-fn t_eq_f_with_symlink_to_real_file_returns_eio_under_nofollow() {
+fn t_eq_f_with_symlink_to_real_file_returns_ebadf_under_nofollow() {
     // Refused even though the target is what the producer appears to
     // want: the rule keeps the namespace explicit.
     let real = tempfile::NamedTempFile::new().unwrap();
@@ -100,7 +100,7 @@ fn t_eq_f_with_symlink_to_real_file_returns_eio_under_nofollow() {
         ))
         .unwrap();
     assert!(
-        response.starts_with(b"\x1b_Gi=3;EIO"),
+        response.starts_with(b"\x1b_Gi=3;EBADF"),
         "NOFOLLOW must refuse the symlink, got: {response:?}",
     );
 }
@@ -128,8 +128,8 @@ fn t_eq_t_unlinks_temp_file_even_when_decode_fails() {
         ))
         .unwrap();
     assert!(
-        response.starts_with(b"\x1b_Gi=4;EINVAL"),
-        "raw payload length mismatch → EINVAL, got: {response:?}",
+        response.starts_with(b"\x1b_Gi=4;ENODATA"),
+        "raw payload length mismatch → ENODATA, got: {response:?}",
     );
     assert!(
         !path.exists(),
@@ -181,14 +181,14 @@ fn t_eq_f_with_null_byte_in_path_is_rejected() {
     let response = s
         .dispatch(&body("Ga=t,i=5,t=f,f=32,s=1,v=1", &b64(bad_path)))
         .unwrap();
-    // EINVAL (UTF-8 check), EIO (kernel NUL rejection) or ENOTSUP
+    // EINVAL (UTF-8 check), EBADF (kernel NUL rejection) or ENOTSUP
     // (Windows refusing `t=f` wholesale): the pin is that nothing is
     // stored, not which layer says no.
     let prefix_einval = response.starts_with(b"\x1b_Gi=5;EINVAL");
-    let prefix_eio = response.starts_with(b"\x1b_Gi=5;EIO");
+    let prefix_ebadf = response.starts_with(b"\x1b_Gi=5;EBADF");
     let prefix_enotsup = response.starts_with(b"\x1b_Gi=5;ENOTSUP");
     assert!(
-        prefix_einval || prefix_eio || prefix_enotsup,
+        prefix_einval || prefix_ebadf || prefix_enotsup,
         "NUL-byte path must reject, got: {response:?}",
     );
     assert!(s.images.is_empty());

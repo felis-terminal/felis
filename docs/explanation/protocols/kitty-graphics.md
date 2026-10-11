@@ -87,16 +87,21 @@ throughput (batch the drain handshake); or the decoder moves to an isolated work
 [`security-model.md`](../security-model.md)'s open question (the outbox pattern already accommodates that: the daemon
 forwards bodies instead of decoding inline).
 
-## Error replies on malformed input
+## Which commands are answered
 
-A malformed graphics command is answered with an `EINVAL`, not silently dropped. The reason is the producer's read loop:
-a program that sets `q=0` (or queries with `a=q`) blocks waiting for the terminal's response, so dropping the command on
-the floor hangs it. An `EINVAL` (the same status the action handlers return for a bad control _value_) lets that loop
-terminate and fall back. The reference states the two paths that reach this
-([reference twin](../../reference/protocols/kitty-graphics.md#error-responses-on-malformed-input)); they differ in what
-they can honor. A malformed envelope has no parsed controls, so its reply is id-less and unconditional (there is no `q=`
-to read and quiet-0 means "respond"). A reassembly overflow arrives after the head chunk already parsed, so its reply
-honors that chunk's `q=` and echoes its ids, matching how the action handlers treat a mid-stream error.
+felis answers the commands kitty answers: those that name their image with a non-zero `i=` or `I=`, deletes excepted
+([reference twin](../../reference/protocols/kitty-graphics.md#replies-and-errors)). A reply carries nothing a producer
+could pair with an anonymous request, so it reaches whatever reads the PTY next; for a producer that sent its command
+and moved on, that is the shell, which prints it as text. Producers are written against kitty, so none waits for a reply
+kitty never sends.
+
+The rejected alternative answers a malformed escape or an id-less failure with `EINVAL`, so that a producer blocked on a
+reply can stop waiting. A producer that blocks on a reply sends an `i=` to match it against; one that sends none cannot
+tell an `EINVAL` from shell output, so the extra reply rescues only a producer that already hangs under kitty, and costs
+every other producer stray bytes in the shell. A reassembly overflow is still answered, because it fails a transfer
+whose first chunk carried the ids.
+
+_Revisit if_ a producer in real use waits for a reply that kitty does not send.
 
 The silence for a non-`G` APC body is the load-bearing edge. felis answers only the Kitty graphics dialect
 (`ESC _ G …`); another APC dialect (a `felis-vt` non-graphics APC, or a different terminal's extension a producer probes
@@ -172,8 +177,8 @@ Nothing a user sees is lost; only the copy that `t=s` avoids comes back.
 
 Two properties of the rejection carry the weight:
 
-- **`ENOTSUP`, not `EIO`.** `EIO` is felis's retryable class: a missing path, a busy file, a racing producer's own
-  cleanup. A producer that reads `EIO` may reasonably try the same transmission again, and on Windows that loop can
+- **`ENOTSUP`, not `EBADF`.** `EBADF` is the retryable class: a missing path, a busy file, a racing producer's own
+  cleanup. A producer that reads `EBADF` may reasonably try the same transmission again, and on Windows that loop can
   never terminate. `ENOTSUP` says the method is absent, which is the fact.
 - **It is not a stub awaiting a port.** The Unix readers are built on `O_NOFOLLOW` opens (under a pinned parent
   directory with `openat` for `t=t`) and POSIX shared memory; a Windows equivalent is a second security-sensitive

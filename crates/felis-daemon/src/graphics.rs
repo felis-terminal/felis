@@ -336,6 +336,12 @@ fn control_u32(complete: &CompleteCommand, key: u8) -> Option<u32> {
     kitty_graphics::control_u32(&complete.controls, key)
 }
 
+/// `i=` or `I=`; kitty's parser defaults both to 0, so an explicit zero
+/// is the same as leaving the key out.
+fn image_ref(complete: &CompleteCommand, key: u8) -> Option<u32> {
+    control_u32(complete, key).filter(|&v| v != 0)
+}
+
 /// The geometry keys (`x=`/`y=`/`c=`/`r=`) live in cell space, so a
 /// value past `u16::MAX` is as malformed as a non-numeric one.
 fn control_u16(complete: &CompleteCommand, key: u8) -> Option<u16> {
@@ -395,17 +401,10 @@ pub fn reassemble_apc_body(reassembler: &mut Reassembler, body: &[u8]) -> BodyDi
         if !body.starts_with(b"G") {
             return BodyDispatch::Silent;
         }
-        // `EINVAL` so a producer's read-the-response loop terminates
-        // instead of hanging on a dropped command. The controls are
-        // unparseable, so no `q=` or ids can be honored: the reply is
-        // unconditional and id-less.
-        return BodyDispatch::Reply(format_response(
-            &ResponseRefs::default(),
-            Status::Error {
-                code: ErrorCode::InvalidValue,
-                message: "malformed graphics escape",
-            },
-        ));
+        // kitty logs an unparseable command and answers nothing: with no
+        // parsed `i=`, any reply would land in the shell as text.
+        tracing::debug!("malformed graphics escape dropped");
+        return BodyDispatch::Silent;
     };
     match reassembler.feed(&cmd) {
         Outcome::Pending => BodyDispatch::Silent,
@@ -423,7 +422,7 @@ pub fn reassemble_apc_body(reassembler: &mut Reassembler, body: &[u8]) -> BodyDi
                 ErrorCode::InvalidValue,
                 "payload exceeds the reassembly buffer limit; retry with smaller transmissions",
             );
-            match apply_quiet_mode(quiet, &refs, outcome) {
+            match apply_quiet_mode(addressed(&head), quiet, &refs, outcome) {
                 Some(reply) => BodyDispatch::Reply(reply),
                 None => BodyDispatch::Silent,
             }
@@ -625,9 +624,26 @@ fn handle_complete(ctx: &mut ApcCtx<'_>, complete: &CompleteCommand) -> Option<V
     let action = control_byte(complete, b'a').unwrap_or(b't');
     let mut refs = response_refs(complete);
     let quiet = quiet_level(complete);
+    let mut addressed = addressed(complete);
+    if image_ref(complete, b'i').is_some() && image_ref(complete, b'I').is_some() {
+        let both = ActionOutcome::error(
+            ErrorCode::InvalidValue,
+            "must not specify both image id and image number",
+        );
+        return apply_quiet_mode(true, quiet, &refs, both);
+    }
 
     let outcome: ActionOutcome = match action {
-        b'q' => handle_query(complete),
+        b'q' => {
+            // kitty answers a query with its `i=` alone, and a query
+            // without one not at all.
+            refs = ResponseRefs {
+                image_id: refs.image_id,
+                ..ResponseRefs::default()
+            };
+            addressed = refs.image_id.is_some();
+            handle_query(complete)
+        }
         b't' => handle_transmit(images, placements, events, complete, &mut refs),
         b'T' => handle_transmit_and_display(
             grid,
@@ -652,16 +668,19 @@ fn handle_complete(ctx: &mut ApcCtx<'_>, complete: &CompleteCommand) -> Option<V
             anchor_cursor,
         ),
         b'd' => {
-            // kitty parity: deletes are never acknowledged on success
-            // (`kitty/graphics.c` `case 'd'` has no
-            // `finish_command_response`). mpv's vo_kitty cleanup sends a
-            // bare `a=d;` without q= and reads nothing, so an OK would
-            // leak into the user's shell on exit.
-            let outcome = handle_delete(grid, images, placements, events, complete, &mut refs);
-            return match outcome {
-                ActionOutcome::Ok => None,
-                err @ ActionOutcome::Err(..) => apply_quiet_mode(quiet, &refs, err),
-            };
+            // kitty's `case 'd'` calls no `finish_command_response`, so a
+            // delete is never answered, failed or not. mpv's vo_kitty
+            // cleanup sends a bare `a=d;` without q= and reads nothing.
+            if let ActionOutcome::Err(code, message) =
+                handle_delete(grid, images, placements, events, complete, &mut refs)
+            {
+                tracing::debug!(
+                    ?code,
+                    message,
+                    "graphics delete failed (kitty sends no reply)"
+                );
+            }
+            return None;
         }
         b'f' => handle_animation_frame(images, placements, events, complete, &mut refs),
         b'a' => {
@@ -672,11 +691,17 @@ fn handle_complete(ctx: &mut ApcCtx<'_>, complete: &CompleteCommand) -> Option<V
             let outcome = handle_animation_control(images, events, complete, &mut refs);
             return match outcome {
                 ActionOutcome::Ok => None,
-                err @ ActionOutcome::Err(..) => apply_quiet_mode(quiet, &refs, err),
+                err @ ActionOutcome::Err(..) => apply_quiet_mode(addressed, quiet, &refs, err),
             };
         }
         b'c' => handle_compose(images, placements, events, complete, &mut refs),
-        _ => ActionOutcome::error(ErrorCode::InvalidValue, "unknown a= value"),
+        _ => {
+            tracing::debug!(
+                action,
+                "unknown graphics action dropped (kitty sends no reply)"
+            );
+            return None;
+        }
     };
 
     // Defer the unlink only once the command succeeded, the only outcome
@@ -691,7 +716,7 @@ fn handle_complete(ctx: &mut ApcCtx<'_>, complete: &CompleteCommand) -> Option<V
         unlink_shm_segment(&evicted);
     }
 
-    apply_quiet_mode(quiet, &refs, outcome)
+    apply_quiet_mode(addressed, quiet, &refs, outcome)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -710,8 +735,8 @@ impl ActionOutcome {
 /// producer's id hint back.
 fn response_refs(complete: &CompleteCommand) -> ResponseRefs {
     ResponseRefs {
-        image_id: control_u32(complete, b'i'),
-        image_number: control_u32(complete, b'I'),
+        image_id: image_ref(complete, b'i'),
+        image_number: image_ref(complete, b'I'),
         placement_id: control_u32(complete, b'p').filter(|&p| p != 0),
     }
 }
@@ -726,21 +751,33 @@ fn quiet_level(complete: &CompleteCommand) -> u8 {
     }
 }
 
-fn apply_quiet_mode(quiet: u8, refs: &ResponseRefs, outcome: ActionOutcome) -> Option<Vec<u8>> {
+/// kitty's `finish_command_response` answers only a command that names
+/// its image with a non-zero `i=` or `I=`; anything else has no id to
+/// address the reply to, and the reply would reach a shell as text.
+fn addressed(complete: &CompleteCommand) -> bool {
+    image_ref(complete, b'i').is_some() || image_ref(complete, b'I').is_some()
+}
+
+fn apply_quiet_mode(
+    addressed: bool,
+    quiet: u8,
+    refs: &ResponseRefs,
+    outcome: ActionOutcome,
+) -> Option<Vec<u8>> {
     let status = match outcome {
         ActionOutcome::Ok => Status::Ok,
         ActionOutcome::Err(code, message) => Status::Error { code, message },
     };
-    match (quiet, &status) {
-        (2, _) | (1, Status::Ok) => {
-            // `q=` suppresses the wire response only: mpv-class producers
+    match (addressed, quiet, &status) {
+        (false, ..) | (_, 2, _) | (_, 1, Status::Ok) => {
+            // Only the wire response is suppressed: mpv-class producers
             // run `q=2` permanently, so a dropped frame would otherwise
             // be invisible even at debug level.
             if let Status::Error { code, message } = &status {
                 tracing::debug!(
                     ?code,
                     message,
-                    "graphics command failed (response suppressed by q=)"
+                    "graphics command failed (no reply: q= or no image id)"
                 );
             }
             None
@@ -859,7 +896,7 @@ fn resolve_or_allocate_image_id(
     refs: &mut ResponseRefs,
     images: &mut felis_grid::images::ImageStore,
 ) -> Result<ImageId, ActionOutcome> {
-    if control_u32(complete, b'i').is_some() || control_u32(complete, b'I').is_some() {
+    if addressed(complete) {
         return resolve_image_id(complete, refs);
     }
     Ok(images.allocate_anonymous_id())
@@ -1204,30 +1241,17 @@ fn delete_by_id(
     ActionOutcome::Ok
 }
 
-/// `i=` wins over `I=` per the Kitty spec; both absent is `EINVAL`
-/// (transmit actions use [`resolve_or_allocate_image_id`]). `0` is
-/// reserved.
+/// [`handle_complete`] has refused `i=` with `I=`; both absent is `EINVAL`
+/// (transmit actions use [`resolve_or_allocate_image_id`]).
 fn resolve_image_id(
     complete: &CompleteCommand,
     refs: &mut ResponseRefs,
 ) -> Result<ImageId, ActionOutcome> {
-    if let Some(id) = control_u32(complete, b'i') {
-        if id == 0 {
-            return Err(ActionOutcome::error(
-                ErrorCode::InvalidValue,
-                "i= must be non-zero",
-            ));
-        }
+    if let Some(id) = image_ref(complete, b'i') {
         refs.image_id = Some(id);
         return Ok(ImageId(id));
     }
-    if let Some(num) = control_u32(complete, b'I') {
-        if num == 0 {
-            return Err(ActionOutcome::error(
-                ErrorCode::InvalidValue,
-                "I= must be non-zero",
-            ));
-        }
+    if let Some(num) = image_ref(complete, b'I') {
         // Image numbers are a separate terminal-assigned namespace per
         // spec; `I=` is treated as the id and echoed so `I=`-only
         // producers get consistent ids across re-queries.
@@ -1293,7 +1317,7 @@ fn upsert_placement(
 ) -> ActionOutcome {
     let (cursor_row, cursor_col) = anchor_cursor;
     // kitty ignores `p=` on an image the producer did not name.
-    let named = control_u32(complete, b'i').is_some() || control_u32(complete, b'I').is_some();
+    let named = addressed(complete);
     let requested = control_u32(complete, b'p')
         .filter(|&p| p != 0 && named)
         .map(PlacementId);
@@ -1395,6 +1419,7 @@ const fn decode_error_to_outcome(err: DecodeError) -> ActionOutcome {
     match err {
         DecodeError::InvalidValue(m) => ActionOutcome::error(ErrorCode::InvalidValue, m),
         DecodeError::Unsupported(m) => ActionOutcome::error(ErrorCode::Unsupported, m),
+        DecodeError::NoData(m) => ActionOutcome::error(ErrorCode::NoData, m),
         DecodeError::BadImage(m) => ActionOutcome::error(ErrorCode::BadImage, m),
         DecodeError::OverBudget => ActionOutcome::error(
             ErrorCode::Unsupported,

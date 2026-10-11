@@ -126,6 +126,53 @@ fn action_d_with_d_eq_i_drops_placement_but_keeps_image() {
 }
 
 #[test]
+fn a_query_is_answered_with_its_image_id_alone() {
+    let mut s = State::new();
+    let q = |keys: &str| format!("Ga=q,{keys},f=32,s=1,v=1");
+    assert_eq!(
+        s.dispatch(&body(&q("i=17,p=2"), &b64(&TEST_PIXEL))),
+        Some(b"\x1b_Gi=17;OK\x1b\\".to_vec())
+    );
+    assert_eq!(s.dispatch(&body(&q("I=4"), &b64(&TEST_PIXEL))), None);
+}
+
+#[test]
+fn a_command_with_both_image_id_and_number_is_refused_before_it_runs() {
+    let mut s = State::new();
+    s.dispatch(&body("Ga=T,i=5,f=32,s=1,v=1", &b64(&TEST_PIXEL)))
+        .unwrap();
+    let reply = s.dispatch(&body("Ga=d,d=i,i=5,I=9", b"")).unwrap();
+    assert!(reply.starts_with(b"\x1b_Gi=5,I=9;EINVAL"), "got: {reply:?}");
+    assert!(!s.placements.is_empty(), "the delete did not run");
+    assert_eq!(s.dispatch(&body("Ga=d,d=i,i=5,I=9,q=2", b"")), None);
+}
+
+#[test]
+fn a_zero_id_key_is_not_echoed() {
+    let mut s = State::new();
+    assert_eq!(
+        s.dispatch(&body("Ga=t,i=7,I=0,f=32,s=1,v=1", &b64(&TEST_PIXEL))),
+        Some(b"\x1b_Gi=7;OK\x1b\\".to_vec())
+    );
+}
+
+#[test]
+fn a_failed_delete_sends_no_reply() {
+    let mut s = State::new();
+    assert_eq!(s.dispatch(&body("Ga=d,d=?,i=5", b"")), None);
+}
+
+#[test]
+fn an_error_without_an_image_id_sends_no_reply() {
+    let mut s = State::new();
+    assert_eq!(
+        s.dispatch(&body("Ga=t,f=64,s=1,v=1", &b64(&TEST_PIXEL))),
+        None
+    );
+    assert_eq!(s.dispatch(&body("Ga=p,i=0", b"")), None);
+}
+
+#[test]
 fn action_d_with_d_eq_capital_a_clears_everything() {
     let mut s = State::new();
     for id in [6u32, 7, 8] {
@@ -254,23 +301,21 @@ fn quiet_two_silences_everything_including_errors() {
 }
 
 #[test]
-fn missing_image_id_auto_allocates_and_returns_id_less_ok() {
+fn missing_image_id_auto_allocates_without_a_reply() {
     // Valid per the Kitty spec (yazi's direct preview relies on it).
     let mut s = State::new();
-    let response = s
-        .dispatch(&body("Ga=t,f=32,s=1,v=1", &b64(&TEST_PIXEL)))
-        .unwrap();
-    assert_eq!(response, b"\x1b_G;OK\x1b\\", "got: {response:?}");
+    let response = s.dispatch(&body("Ga=t,f=32,s=1,v=1", &b64(&TEST_PIXEL)));
+    assert_eq!(response, None);
 }
 
 #[test]
-fn error_ebadf_on_malformed_base64() {
+fn error_einval_on_malformed_base64() {
     let mut s = State::new();
     let response = s
         .dispatch(&body("Ga=t,i=40,f=32,s=1,v=1", b"!@#$NOT-B64"))
         .unwrap();
     assert!(
-        response.starts_with(b"\x1b_Gi=40;EBADF"),
+        response.starts_with(b"\x1b_Gi=40;EINVAL"),
         "got: {response:?}",
     );
 }

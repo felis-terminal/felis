@@ -143,9 +143,10 @@ pub enum ErrorCode {
     Unsupported,
     /// `ENODATA`: chunked data promised (`m=1`) but never terminated.
     NoData,
-    /// `EBADF`: image present but the bytes are corrupt.
+    /// `EBADPNG`: PNG data that does not decode.
     BadImage,
-    /// `EIO`: transmission error (file read, SHM open).
+    /// `EBADF`: a file or shared-memory object that cannot be opened or
+    /// read.
     IoError,
 }
 
@@ -157,8 +158,8 @@ impl ErrorCode {
             Self::InvalidValue => "EINVAL",
             Self::Unsupported => "ENOTSUP",
             Self::NoData => "ENODATA",
-            Self::BadImage => "EBADF",
-            Self::IoError => "EIO",
+            Self::BadImage => "EBADPNG",
+            Self::IoError => "EBADF",
         }
     }
 }
@@ -311,6 +312,15 @@ impl ReassemblyTracker {
     }
 
     pub fn step(&mut self, cmd: &Command<'_>) -> Step {
+        // kitty refuses a command naming both an image id and an image
+        // number before any action runs, so it neither opens nor drops a
+        // transfer.
+        if cmd.get(b'i').is_some_and(is_nonzero) && cmd.get(b'I').is_some_and(is_nonzero) {
+            return Step::Done {
+                controls: owned_controls_without_m(cmd),
+                continued: false,
+            };
+        }
         // kitty's `grman_handle_command` routes only add actions through
         // `currently_loading`; the rest run at once. A delete drops an open
         // transfer (`handle_delete_command`); the others leave it to its
@@ -749,6 +759,29 @@ mod tests {
         assert_eq!(tail.controls, Vec::new());
     }
 
+    #[test]
+    fn a_command_with_both_image_id_and_number_neither_opens_nor_drops_a_transfer() {
+        let mut r = Reassembler::new();
+        assert!(matches!(
+            r.feed(&parse(b"Ga=T,i=1,I=2,m=1;zz").unwrap()),
+            Outcome::Done(_)
+        ));
+        assert_eq!(r.in_flight_bytes(), None);
+
+        assert_eq!(
+            r.feed(&parse(b"Ga=T,i=6,m=1;aaaa").unwrap()),
+            Outcome::Pending
+        );
+        assert!(matches!(
+            r.feed(&parse(b"Ga=d,d=A,i=1,I=2").unwrap()),
+            Outcome::Done(_)
+        ));
+        assert_eq!(
+            done_payload(&r.feed(&parse(b"Gm=0;bb").unwrap())),
+            b"aaaabb"
+        );
+    }
+
     /// A reset releases the parked bytes and the gauge must say so.
     #[test]
     fn in_flight_bytes_clears_on_reset() {
@@ -956,8 +989,8 @@ mod tests {
         assert_eq!(ErrorCode::InvalidValue.as_str(), "EINVAL");
         assert_eq!(ErrorCode::Unsupported.as_str(), "ENOTSUP");
         assert_eq!(ErrorCode::NoData.as_str(), "ENODATA");
-        assert_eq!(ErrorCode::BadImage.as_str(), "EBADF");
-        assert_eq!(ErrorCode::IoError.as_str(), "EIO");
+        assert_eq!(ErrorCode::BadImage.as_str(), "EBADPNG");
+        assert_eq!(ErrorCode::IoError.as_str(), "EBADF");
     }
 
     #[test]
@@ -980,7 +1013,7 @@ mod tests {
         let cmd = parse(inner).unwrap();
         assert_eq!(cmd.get(b'i'), Some(b"99".as_slice()));
         assert_eq!(cmd.get(b'p'), Some(b"5".as_slice()));
-        assert_eq!(cmd.payload, b"EBADF:checksum mismatch");
+        assert_eq!(cmd.payload, b"EBADPNG:checksum mismatch");
     }
 
     #[test]

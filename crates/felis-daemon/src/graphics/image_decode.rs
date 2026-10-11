@@ -32,14 +32,16 @@ pub enum DecodeError {
     InvalidValue(&'static str),
     /// `ENOTSUP`: something this build does not provide. The producer is
     /// expected to renegotiate, not retry, which is why these are not
-    /// `EIO`.
+    /// `EBADF`.
     Unsupported(&'static str),
-    /// `EBADF`: bytes present but corrupt.
+    /// `ENODATA`: fewer pixel bytes than the declared `s=` × `v=`.
+    NoData(&'static str),
+    /// `EBADPNG`: PNG bytes that do not decode.
     BadImage(&'static str),
     /// `ENOTSUP`-class: decoder budget exceeded. Distinct from `BadImage`
     /// so the producer knows it can retry smaller.
     OverBudget,
-    /// `EIO`: filesystem failure on `t=f` / `t=t` / `t=s`. Distinct from
+    /// `EBADF`: filesystem failure on `t=f` / `t=t` / `t=s`. Distinct from
     /// `BadImage` so the producer can decide whether a retry is
     /// meaningful.
     IoError(&'static str),
@@ -58,7 +60,7 @@ pub fn decode_image(complete: &CompleteCommand) -> Result<ImageEntry, DecodeErro
 fn bytes_from_transmission(complete: &CompleteCommand) -> Result<Vec<u8>, DecodeError> {
     match control_byte(complete, b't').unwrap_or(b'd') {
         b'd' => base64::decode(&complete.payload)
-            .ok_or(DecodeError::BadImage("malformed base64 payload")),
+            .ok_or(DecodeError::InvalidValue("malformed base64 payload")),
         b'f' => read_file_payload(&complete.payload, MAX_DECODED_BYTES),
         b't' => read_temp_file_payload(&complete.payload, MAX_DECODED_BYTES),
         b's' => read_shm_payload(complete, MAX_DECODED_BYTES),
@@ -74,7 +76,7 @@ fn bytes_from_transmission(complete: &CompleteCommand) -> Result<Vec<u8>, Decode
 #[cfg(unix)]
 fn read_file_payload(payload: &[u8], cap: usize) -> Result<Vec<u8>, DecodeError> {
     let path_bytes =
-        base64::decode(payload).ok_or(DecodeError::BadImage("malformed base64 path"))?;
+        base64::decode(payload).ok_or(DecodeError::InvalidValue("malformed base64 path"))?;
     let path_str = std::str::from_utf8(&path_bytes)
         .map_err(|_| DecodeError::InvalidValue("t=f path is not valid UTF-8"))?;
     let path = std::path::Path::new(path_str);
@@ -128,9 +130,9 @@ fn read_file_payload(payload: &[u8], cap: usize) -> Result<Vec<u8>, DecodeError>
 }
 
 /// `t=f` needs the `O_NOFOLLOW` open, which has no Windows equivalent
-/// felis carries. `ENOTSUP`, not `EIO`: a documented
+/// felis carries. `ENOTSUP`, not `EBADF`: a documented
 /// platform property (docs/reference/protocols/support-matrix.md
-/// "Kitty graphics"); `EIO` would invite a retry loop that can never
+/// "Kitty graphics"); `EBADF` would invite a retry loop that can never
 /// succeed.
 #[cfg(windows)]
 const fn read_file_payload(_payload: &[u8], _cap: usize) -> Result<Vec<u8>, DecodeError> {
@@ -147,7 +149,7 @@ const fn read_file_payload(_payload: &[u8], _cap: usize) -> Result<Vec<u8>, Deco
 #[cfg(unix)]
 fn read_temp_file_payload(payload: &[u8], cap: usize) -> Result<Vec<u8>, DecodeError> {
     let path_bytes =
-        base64::decode(payload).ok_or(DecodeError::BadImage("malformed base64 path"))?;
+        base64::decode(payload).ok_or(DecodeError::InvalidValue("malformed base64 path"))?;
     let path_str = std::str::from_utf8(&path_bytes)
         .map_err(|_| DecodeError::InvalidValue("t=t path is not valid UTF-8"))?;
     let path = std::path::Path::new(path_str);
@@ -241,8 +243,8 @@ const fn read_temp_file_payload(_payload: &[u8], _cap: usize) -> Result<Vec<u8>,
 fn read_shm_payload(complete: &CompleteCommand, cap: usize) -> Result<Vec<u8>, DecodeError> {
     use rustix::shm;
 
-    let name_bytes =
-        base64::decode(&complete.payload).ok_or(DecodeError::BadImage("malformed base64 name"))?;
+    let name_bytes = base64::decode(&complete.payload)
+        .ok_or(DecodeError::InvalidValue("malformed base64 name"))?;
     let name = std::str::from_utf8(&name_bytes)
         .map_err(|_| DecodeError::InvalidValue("t=s name is not valid UTF-8"))?;
     let name = normalize_shm_name(name);
@@ -252,7 +254,7 @@ fn read_shm_payload(complete: &CompleteCommand, cap: usize) -> Result<Vec<u8>, D
         Ok(fd) => fd,
         // INVAL is rustix's name-validation rejection (embedded '/', '.',
         // '..', empty): a malformed command, so EINVAL rather than a
-        // retryable EIO.
+        // retryable EBADF.
         Err(rustix::io::Errno::INVAL) => {
             return Err(DecodeError::InvalidValue(
                 "t=s name is not a valid shm name",
@@ -533,12 +535,10 @@ fn inflate_if_zlib(bytes: Vec<u8>, complete: &CompleteCommand) -> Result<Vec<u8>
     match zlib::inflate(&bytes, MAX_DECODED_BYTES) {
         Ok(out) => Ok(out),
         Err(zlib::InflateError::SizeLimit) => Err(DecodeError::OverBudget),
-        Err(zlib::InflateError::Decompression) => Err(DecodeError::BadImage(
+        Err(zlib::InflateError::Decompression) => Err(DecodeError::InvalidValue(
             "zlib stream malformed or checksum failed",
         )),
-        // `InflateError` is `#[non_exhaustive]`; EBADF is the closest Kitty
-        // code for an unmapped variant.
-        Err(_) => Err(DecodeError::BadImage("zlib inflate failed")),
+        Err(_) => Err(DecodeError::InvalidValue("zlib inflate failed")),
     }
 }
 
@@ -580,9 +580,7 @@ fn decode_raw(
         return Err(DecodeError::OverBudget);
     }
     if bytes.len() < expected {
-        return Err(DecodeError::InvalidValue(
-            "raw payload shorter than s × v × bpp",
-        ));
+        return Err(DecodeError::NoData("raw payload shorter than s × v × bpp"));
     }
     // `ImageStore::insert` trusts the dispatcher for the buffer matching
     // its declared shape.
