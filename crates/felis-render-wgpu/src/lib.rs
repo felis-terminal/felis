@@ -2354,12 +2354,14 @@ mod tests {
             total_rows: 2,
         };
         assert!(placeholder_tile_quad(slot, 8.0, 16.0, tile(0)).is_none());
-        let left = placeholder_tile_quad(slot, 8.0, 16.0, tile(1)).expect("column 1 holds the left edge");
+        let left =
+            placeholder_tile_quad(slot, 8.0, 16.0, tile(1)).expect("column 1 holds the left edge");
         assert_eq!(left.origin_px, [12.0, 0.0]);
         assert_eq!(left.size_px, [4.0, 16.0]);
         assert_eq!(left.uv_min, [0.5, 0.25]);
         assert_eq!(left.uv_max, [0.625, 0.375]);
-        let right = placeholder_tile_quad(slot, 8.0, 16.0, tile(2)).expect("column 2 holds the right edge");
+        let right =
+            placeholder_tile_quad(slot, 8.0, 16.0, tile(2)).expect("column 2 holds the right edge");
         assert_eq!(right.origin_px, [16.0, 0.0]);
         assert_eq!(right.size_px, [4.0, 16.0]);
         assert_eq!(right.uv_min, [0.625, 0.25]);

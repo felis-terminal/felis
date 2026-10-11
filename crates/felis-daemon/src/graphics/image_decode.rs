@@ -61,8 +61,8 @@ fn bytes_from_transmission(complete: &CompleteCommand) -> Result<Vec<u8>, Decode
     match control_byte(complete, b't').unwrap_or(b'd') {
         b'd' => base64::decode(&complete.payload)
             .ok_or(DecodeError::InvalidValue("malformed base64 payload")),
-        b'f' => read_file_payload(&complete.payload, MAX_DECODED_BYTES),
-        b't' => read_temp_file_payload(&complete.payload, MAX_DECODED_BYTES),
+        b'f' => read_file_payload(complete, MAX_DECODED_BYTES),
+        b't' => read_temp_file_payload(complete, MAX_DECODED_BYTES),
         b's' => read_shm_payload(complete, MAX_DECODED_BYTES),
         _ => Err(DecodeError::InvalidValue("t= must be one of d/f/t/s")),
     }
@@ -74,9 +74,9 @@ fn bytes_from_transmission(complete: &CompleteCommand) -> Result<Vec<u8>, Decode
 /// on the final component, and capped at `MAX_DECODED_BYTES`
 /// (`docs/explanation/security-model.md`).
 #[cfg(unix)]
-fn read_file_payload(payload: &[u8], cap: usize) -> Result<Vec<u8>, DecodeError> {
-    let path_bytes =
-        base64::decode(payload).ok_or(DecodeError::InvalidValue("malformed base64 path"))?;
+fn read_file_payload(complete: &CompleteCommand, cap: usize) -> Result<Vec<u8>, DecodeError> {
+    let path_bytes = base64::decode(&complete.payload)
+        .ok_or(DecodeError::InvalidValue("malformed base64 path"))?;
     let path_str = std::str::from_utf8(&path_bytes)
         .map_err(|_| DecodeError::InvalidValue("t=f path is not valid UTF-8"))?;
     let path = std::path::Path::new(path_str);
@@ -100,7 +100,8 @@ fn read_file_payload(payload: &[u8], cap: usize) -> Result<Vec<u8>, DecodeError>
     let meta =
         rustix::fs::fstat(&fd).map_err(|_| DecodeError::IoError("could not stat t=f path"))?;
     let size = usize::try_from(meta.st_size).unwrap_or(usize::MAX);
-    if size > cap {
+    let (offset, len) = requested_range(complete, size)?;
+    if len > cap {
         return Err(DecodeError::OverBudget);
     }
     // Devices / FIFOs could block the read. `From`, not `try_from`:
@@ -113,20 +114,7 @@ fn read_file_payload(payload: &[u8], cap: usize) -> Result<Vec<u8>, DecodeError>
             "t=f path must point at a regular file",
         ));
     }
-    let mut buf = vec![0u8; size];
-    let mut read = 0;
-    while read < size {
-        let n = rustix::io::read(&fd, &mut buf[read..])
-            .map_err(|_| DecodeError::IoError("read failed on t=f file"))?;
-        if n == 0 {
-            // A concurrent write shrank the file; return what arrived and let
-            // the format layer judge it.
-            buf.truncate(read);
-            break;
-        }
-        read += n;
-    }
-    Ok(buf)
+    read_range(&fd, offset, len, "read failed on t=f file")
 }
 
 /// `t=f` needs the `O_NOFOLLOW` open, which has no Windows equivalent
@@ -135,7 +123,10 @@ fn read_file_payload(payload: &[u8], cap: usize) -> Result<Vec<u8>, DecodeError>
 /// "Kitty graphics"); `EBADF` would invite a retry loop that can never
 /// succeed.
 #[cfg(windows)]
-const fn read_file_payload(_payload: &[u8], _cap: usize) -> Result<Vec<u8>, DecodeError> {
+const fn read_file_payload(
+    _complete: &CompleteCommand,
+    _cap: usize,
+) -> Result<Vec<u8>, DecodeError> {
     Err(DecodeError::Unsupported(
         "t=f file transmission is not supported on Windows; use t=d",
     ))
@@ -147,9 +138,9 @@ const fn read_file_payload(_payload: &[u8], _cap: usize) -> Result<Vec<u8>, Deco
 /// Reading uses `openat(NOFOLLOW)` and `unlinkat` from the pinned parent
 /// directory to resist TOCTOU symlink swaps.
 #[cfg(unix)]
-fn read_temp_file_payload(payload: &[u8], cap: usize) -> Result<Vec<u8>, DecodeError> {
-    let path_bytes =
-        base64::decode(payload).ok_or(DecodeError::InvalidValue("malformed base64 path"))?;
+fn read_temp_file_payload(complete: &CompleteCommand, cap: usize) -> Result<Vec<u8>, DecodeError> {
+    let path_bytes = base64::decode(&complete.payload)
+        .ok_or(DecodeError::InvalidValue("malformed base64 path"))?;
     let path_str = std::str::from_utf8(&path_bytes)
         .map_err(|_| DecodeError::InvalidValue("t=t path is not valid UTF-8"))?;
     let path = std::path::Path::new(path_str);
@@ -189,9 +180,16 @@ fn read_temp_file_payload(payload: &[u8], cap: usize) -> Result<Vec<u8>, DecodeE
     let meta =
         rustix::fs::fstat(&fd).map_err(|_| DecodeError::IoError("could not stat t=t path"))?;
     let size = usize::try_from(meta.st_size).unwrap_or(usize::MAX);
-    if size > cap {
-        // Still unlink: leaving an over-budget temp file behind leaks disk
-        // per retry.
+    // Still unlink on every early return: a temp file left behind leaks
+    // disk per retry.
+    let (offset, len) = match requested_range(complete, size) {
+        Ok(range) => range,
+        Err(err) => {
+            let _ = rustix::fs::unlinkat(&dir, name, rustix::fs::AtFlags::empty());
+            return Err(err);
+        }
+    };
+    if len > cap {
         let _ = rustix::fs::unlinkat(&dir, name, rustix::fs::AtFlags::empty());
         return Err(DecodeError::OverBudget);
     }
@@ -205,19 +203,10 @@ fn read_temp_file_payload(payload: &[u8], cap: usize) -> Result<Vec<u8>, DecodeE
         ));
     }
 
-    let mut buf = vec![0u8; size];
-    let mut read = 0;
-    while read < size {
-        let Ok(n) = rustix::io::read(&fd, &mut buf[read..]) else {
-            let _ = rustix::fs::unlinkat(&dir, name, rustix::fs::AtFlags::empty());
-            return Err(DecodeError::IoError("read failed on t=t file"));
-        };
-        if n == 0 {
-            buf.truncate(read);
-            break;
-        }
-        read += n;
-    }
+    let Ok(buf) = read_range(&fd, offset, len, "read failed on t=t file") else {
+        let _ = rustix::fs::unlinkat(&dir, name, rustix::fs::AtFlags::empty());
+        return Err(DecodeError::IoError("read failed on t=t file"));
+    };
     drop(fd);
 
     rustix::fs::unlinkat(&dir, name, rustix::fs::AtFlags::empty())
@@ -228,7 +217,10 @@ fn read_temp_file_payload(payload: &[u8], cap: usize) -> Result<Vec<u8>, DecodeE
 
 /// Windows shim for `t=t`: see [`read_file_payload`]'s Windows shim.
 #[cfg(windows)]
-const fn read_temp_file_payload(_payload: &[u8], _cap: usize) -> Result<Vec<u8>, DecodeError> {
+const fn read_temp_file_payload(
+    _complete: &CompleteCommand,
+    _cap: usize,
+) -> Result<Vec<u8>, DecodeError> {
     Err(DecodeError::Unsupported(
         "t=t temp-file transmission is not supported on Windows; use t=d",
     ))
@@ -386,11 +378,30 @@ fn read_shm_range(
         }
     }
     let size = usize::try_from(meta.st_size).unwrap_or(usize::MAX);
+    let (offset, len) = requested_range(complete, size)?;
+    if len > cap {
+        return Err(DecodeError::OverBudget);
+    }
+    #[cfg(target_os = "linux")]
+    {
+        read_range(fd, offset, len, "read failed on t=s shm object")
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        copy_shm_range_mmap(fd, offset, len)
+    }
+}
+
+/// The `O=` / `S=` byte range of a source `size` bytes long, as kitty
+/// reads it for `t=f`, `t=t` and `t=s` alike: `S=` absent or `0` runs to
+/// the end.
+#[cfg(unix)]
+fn requested_range(complete: &CompleteCommand, size: usize) -> Result<(usize, usize), DecodeError> {
     let offset = control_u32(complete, b'O').unwrap_or(0) as usize;
     if offset > size {
         return Err(DecodeError::InvalidValue("O= is past the end of the data"));
     }
-    let len = match control_u32(complete, b'S') {
+    let len = match control_u32(complete, b'S').filter(|&s| s != 0) {
         Some(s) => {
             let s = s as usize;
             if s > size - offset {
@@ -400,37 +411,28 @@ fn read_shm_range(
         }
         None => size - offset,
     };
-    if len > cap {
-        return Err(DecodeError::OverBudget);
-    }
-    #[cfg(target_os = "linux")]
-    {
-        copy_shm_range_pread(fd, offset, len)
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        copy_shm_range_mmap(fd, offset, len)
-    }
+    Ok((offset, len))
 }
 
 /// `pread` into uninitialized spare capacity
 /// (`rustix::buffer::spare_capacity`), not `vec![0; len]`: a fullscreen
 /// mpv frame is >10 MiB at 24-30 fps, and the zero fill would touch
 /// every page twice.
-#[cfg(target_os = "linux")]
-fn copy_shm_range_pread(
+#[cfg(unix)]
+fn read_range(
     fd: &rustix::fd::OwnedFd,
     offset: usize,
     len: usize,
+    failure: &'static str,
 ) -> Result<Vec<u8>, DecodeError> {
     let mut buf = Vec::with_capacity(len);
     while buf.len() < len {
         let pos = (offset + buf.len()) as u64;
         let n = rustix::io::pread(fd, rustix::buffer::spare_capacity(&mut buf), pos)
-            .map_err(|_| DecodeError::IoError("read failed on t=s shm object"))?;
+            .map_err(|_| DecodeError::IoError(failure))?;
         if n == 0 {
-            // A concurrent ftruncate shrank the object; the format layer judges
-            // what arrived.
+            // A concurrent truncate shrank the source; the format layer
+            // judges what arrived.
             break;
         }
     }
@@ -708,7 +710,7 @@ mod mmap_tests {
         let fd = open_ro(&name);
         for &(o, l) in &[(0usize, 20_000usize), (100, 5000), (8191, 4096)] {
             let via_mmap = copy_shm_range_mmap(&fd, o, l).expect("mmap");
-            let via_pread = copy_shm_range_pread(&fd, o, l).expect("pread");
+            let via_pread = read_range(&fd, o, l, "pread").expect("pread");
             assert_eq!(via_mmap, via_pread, "offset={o} len={l}");
         }
         let _ = rustix::shm::unlink(&name);
