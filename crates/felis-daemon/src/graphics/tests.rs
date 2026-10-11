@@ -2915,7 +2915,15 @@ fn icat_replay_unpadded_frame_appends_and_a_eq_a_is_silent() {
         .is_none(),
         "q=2 suppresses the a=T response",
     );
-    assert!(images.get(ImageId(629_321_462)).is_some());
+    assert!(
+        images
+            .get(
+                images
+                    .newest_with_number(629_321_462)
+                    .expect("icat's number")
+            )
+            .is_some()
+    );
     events.clear();
     let resp = dispatch_apc_body(
         &mut ApcCtx {
@@ -2933,7 +2941,13 @@ fn icat_replay_unpadded_frame_appends_and_a_eq_a_is_silent() {
         body_f,
     );
     assert!(resp.is_none(), "q=2 suppresses the a=f response");
-    let entry = images.get(ImageId(629_321_462)).unwrap();
+    let entry = images
+        .get(
+            images
+                .newest_with_number(629_321_462)
+                .expect("icat's number"),
+        )
+        .unwrap();
     assert_eq!(entry.frame_count(), 2, "unpadded a=f payload must decode");
     assert_eq!(entry.frame(1).unwrap().gap_ms, 80);
     assert!(

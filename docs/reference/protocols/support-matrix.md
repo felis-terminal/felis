@@ -217,18 +217,18 @@ The Unix targets below are the committed Unix set (`x86_64-linux`, `aarch64-linu
 
 ### Display / lifecycle (`a=`)
 
-| Key                   | Action                                    | Status                                                                                   |
-| --------------------- | ----------------------------------------- | ---------------------------------------------------------------------------------------- |
-| `a=t`                 | transmit only                             | ✅                                                                                       |
-| `a=T`                 | transmit and display                      | ✅                                                                                       |
-| `a=p`                 | display previously-transmitted            | ✅                                                                                       |
-| `a=q`                 | query capabilities                        | ✅                                                                                       |
-| `a=d`                 | delete (basic + extended `c/p/q/x/y/z/r`) | ✅                                                                                       |
-| `a=a` / `a=f` / `a=c` | animation                                 | ✅                                                                                       |
-| `d=f` / `d=F`         | delete frame                              | ✅                                                                                       |
-| `z=`                  | z-index ordering                          | ✅                                                                                       |
-| `U=1`                 | Unicode placeholder                       | ✅                                                                                       |
-| `X=` / `Y=`           | destination pixel offset within the cell  | ⚠️ consumed without effect ([kitty-graphics.md](kitty-graphics.md#placement-parameters)) |
+| Key                   | Action                                      | Status                                                                                   |
+| --------------------- | ------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `a=t`                 | transmit only                               | ✅                                                                                       |
+| `a=T`                 | transmit and display                        | ✅                                                                                       |
+| `a=p`                 | display previously-transmitted              | ✅                                                                                       |
+| `a=q`                 | query capabilities                          | ✅                                                                                       |
+| `a=d`                 | delete (basic + extended `c/n/p/q/x/y/z/r`) | ✅                                                                                       |
+| `a=a` / `a=f` / `a=c` | animation                                   | ✅                                                                                       |
+| `d=f` / `d=F`         | delete frame                                | ✅                                                                                       |
+| `z=`                  | z-index ordering                            | ✅                                                                                       |
+| `U=1`                 | Unicode placeholder                         | ✅                                                                                       |
+| `X=` / `Y=`           | destination pixel offset within the cell    | ⚠️ consumed without effect ([kitty-graphics.md](kitty-graphics.md#placement-parameters)) |
 
 ## Kitty text sizing (OSC 66)
 

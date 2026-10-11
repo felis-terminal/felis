@@ -375,3 +375,74 @@ fn chunked_transmission_assembles_across_three_bodies() {
     assert_eq!(response, b"\x1b_Gi=50;OK\x1b\\");
     assert_eq!(s.images.get(ImageId(50)).unwrap().pixels(), pixels);
 }
+
+/// `kitty_tests/graphics.py` `test_load_images`, the image-number part.
+#[test]
+fn each_numbered_transmission_gets_the_lowest_free_id() {
+    let mut s = State::new();
+    let t = |keys: &str| format!("Ga=t,{keys},f=32,s=1,v=1");
+    let mut send = |keys: &str| s.dispatch(&body(&t(keys), &b64(&TEST_PIXEL))).unwrap();
+    assert_eq!(send("I=1"), b"\x1b_Gi=1,I=1;OK\x1b\\");
+    assert_eq!(send("I=1"), b"\x1b_Gi=2,I=1;OK\x1b\\");
+    assert_eq!(send("I=1"), b"\x1b_Gi=3,I=1;OK\x1b\\");
+    assert_eq!(send("i=5"), b"\x1b_Gi=5;OK\x1b\\");
+    assert_eq!(send("I=3"), b"\x1b_Gi=4,I=3;OK\x1b\\");
+    assert_eq!(send("I=3"), b"\x1b_Gi=6,I=3;OK\x1b\\");
+}
+
+#[test]
+fn a_put_by_number_shows_the_newest_image_and_answers_with_its_id() {
+    let mut s = State::new();
+    for _ in 0..2 {
+        s.dispatch(&body("Ga=t,I=93,f=32,s=1,v=1", &b64(&TEST_PIXEL)));
+    }
+    assert_eq!(
+        s.dispatch(&body("Ga=p,I=93,c=2,r=2", b"")),
+        Some(b"\x1b_Gi=2,I=93;OK\x1b\\".to_vec())
+    );
+    assert!(s.placements.for_image(ImageId(2)).next().is_some());
+    let reply = s.dispatch(&body("Ga=p,I=94", b"")).unwrap();
+    assert!(reply.starts_with(b"\x1b_GI=94;ENOENT"), "got: {reply:?}");
+}
+
+#[test]
+fn a_number_delete_reaches_only_the_newest_image_with_it() {
+    let mut s = State::new();
+    for _ in 0..2 {
+        s.dispatch(&body("Ga=T,I=7,f=32,s=1,v=1", &b64(&TEST_PIXEL)));
+    }
+    s.dispatch(&body("Ga=d,d=n,I=7", b""));
+    assert!(s.placements.for_image(ImageId(2)).next().is_none());
+    assert!(s.images.get(ImageId(2)).is_some(), "d=n keeps the image");
+    s.dispatch(&body("Ga=d,d=N,I=7", b""));
+    assert!(s.images.get(ImageId(2)).is_none(), "d=N frees it");
+    assert!(s.placements.for_image(ImageId(1)).next().is_some());
+    s.dispatch(&body("Ga=d,d=N,I=7", b""));
+    assert!(s.images.get(ImageId(1)).is_none());
+}
+
+#[test]
+fn an_id_delete_ignores_an_image_number() {
+    let mut s = State::new();
+    s.dispatch(&body("Ga=T,I=7,f=32,s=1,v=1", &b64(&TEST_PIXEL)));
+    s.dispatch(&body("Ga=d,d=I,I=7", b""));
+    assert!(s.images.get(ImageId(1)).is_some());
+}
+
+#[test]
+fn sending_a_numbered_image_again_by_id_keeps_its_number() {
+    let mut s = State::new();
+    s.dispatch(&body("Ga=t,I=7,f=32,s=1,v=1", &b64(&TEST_PIXEL)));
+    s.dispatch(&body("Ga=t,i=1,f=32,s=1,v=1", &b64(&TEST_PIXEL)));
+    assert_eq!(s.images.newest_with_number(7), Some(ImageId(1)));
+}
+
+#[test]
+fn sending_an_older_numbered_image_again_does_not_make_it_the_newest() {
+    let mut s = State::new();
+    for _ in 0..2 {
+        s.dispatch(&body("Ga=t,I=7,f=32,s=1,v=1", &b64(&TEST_PIXEL)));
+    }
+    s.dispatch(&body("Ga=t,i=1,f=32,s=1,v=1", &b64(&TEST_PIXEL)));
+    assert_eq!(s.images.newest_with_number(7), Some(ImageId(2)));
+}

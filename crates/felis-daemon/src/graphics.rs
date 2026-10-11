@@ -842,10 +842,15 @@ fn transmit_image(
     complete: &CompleteCommand,
     refs: &mut ResponseRefs,
 ) -> Result<ImageId, ActionOutcome> {
-    let id = resolve_or_allocate_image_id(complete, refs, images)?;
+    let id = resolve_or_allocate_image_id(complete, refs, images);
     let mut entry = decode_image(complete).map_err(decode_error_to_outcome)?;
     if refs.image_id.is_none() {
         entry = entry.into_anonymous();
+    }
+    // kitty keeps an image's number when `i=` sends it again.
+    let number = image_ref(complete, b'I').or_else(|| images.get(id).and_then(ImageEntry::number));
+    if let Some(number) = number {
+        entry = entry.with_number(number);
     }
     match insert_into_store(images, placements, saved_primary, events, id, entry) {
         ActionOutcome::Ok => Ok(id),
@@ -997,16 +1002,23 @@ fn free_image(
 /// Like [`resolve_image_id`], but a missing id is not an error: the
 /// Kitty spec lets a producer transmit unnamed (yazi's direct preview
 /// path does, with `q=2`). `refs.image_id` stays unset since there is
-/// no client-chosen id to echo.
+/// no client-chosen id to echo. An `I=` always names a new image, so it
+/// gets a fresh id, echoed as kitty does.
 fn resolve_or_allocate_image_id(
     complete: &CompleteCommand,
     refs: &mut ResponseRefs,
     images: &mut felis_grid::images::ImageStore,
-) -> Result<ImageId, ActionOutcome> {
-    if addressed(complete) {
-        return resolve_image_id(complete, refs);
+) -> ImageId {
+    if let Some(id) = image_ref(complete, b'i') {
+        refs.image_id = Some(id);
+        return ImageId(id);
     }
-    Ok(images.allocate_anonymous_id())
+    if image_ref(complete, b'I').is_some() {
+        let id = images.lowest_free_id();
+        refs.image_id = Some(id.0);
+        return id;
+    }
+    images.allocate_anonymous_id()
 }
 
 fn handle_transmit_and_display(
@@ -1053,10 +1065,12 @@ fn handle_display_existing(
     cell_pixel_h: u16,
     anchor_cursor: (u16, u16),
 ) -> ActionOutcome {
-    let id = match resolve_image_id(complete, refs) {
+    let id = match resolve_image_id(complete, refs, images) {
         Ok(id) => id,
         Err(outcome) => return outcome,
     };
+    // kitty's put answers with the id it resolved an `I=` to.
+    refs.image_id = Some(id.0);
     if images.get(id).is_none() {
         return ActionOutcome::error(ErrorCode::NotFound, "image not in store");
     }
@@ -1126,8 +1140,8 @@ fn handle_delete(
     // bare `\e_Ga=d;`, which an `'i'` default would answer with EINVAL.
     let mode = control_byte(complete, b'd').unwrap_or(b'a');
     match mode {
-        b'i' => delete_by_id(images, placements, events, complete, refs, false),
-        b'I' => delete_by_id(images, placements, events, complete, refs, true),
+        b'i' | b'I' => delete_by_id(images, placements, events, complete, mode == b'I'),
+        b'n' | b'N' => delete_by_number(images, placements, events, complete, mode == b'N'),
         b'a' | b'A' => delete_all(images, placements, saved_primary, events, mode == b'A'),
         b'c' | b'C' => {
             let cursor = grid.cursor();
@@ -1310,18 +1324,49 @@ fn free_if_unplaced(
     }
 }
 
+/// kitty's `d=i` matches `i=` alone; an `I=` names nothing here.
 fn delete_by_id(
     images: &mut felis_grid::images::ImageStore,
     placements: &mut felis_grid::images::Placements,
     events: &mut Vec<ImageEvent>,
     complete: &CompleteCommand,
-    refs: &mut ResponseRefs,
     free_image: bool,
 ) -> ActionOutcome {
-    let id = match resolve_image_id(complete, refs) {
-        Ok(id) => id,
-        Err(outcome) => return outcome,
-    };
+    if let Some(id) = image_ref(complete, b'i') {
+        delete_image_placements(
+            images,
+            placements,
+            events,
+            complete,
+            ImageId(id),
+            free_image,
+        );
+    }
+    ActionOutcome::Ok
+}
+
+/// kitty's `d=n`: the newest image sent with this `I=`.
+fn delete_by_number(
+    images: &mut felis_grid::images::ImageStore,
+    placements: &mut felis_grid::images::Placements,
+    events: &mut Vec<ImageEvent>,
+    complete: &CompleteCommand,
+    free_image: bool,
+) -> ActionOutcome {
+    if let Some(id) = image_ref(complete, b'I').and_then(|n| images.newest_with_number(n)) {
+        delete_image_placements(images, placements, events, complete, id, free_image);
+    }
+    ActionOutcome::Ok
+}
+
+fn delete_image_placements(
+    images: &mut felis_grid::images::ImageStore,
+    placements: &mut felis_grid::images::Placements,
+    events: &mut Vec<ImageEvent>,
+    complete: &CompleteCommand,
+    id: ImageId,
+    free_image: bool,
+) {
     let placement_id = control_u32(complete, b'p')
         .filter(|&p| p != 0)
         .map(PlacementId);
@@ -1345,25 +1390,24 @@ fn delete_by_id(
     if free_image {
         free_if_unplaced(images, placements, events, id);
     }
-    ActionOutcome::Ok
 }
 
 /// [`handle_complete`] has refused `i=` with `I=`; both absent is `EINVAL`
-/// (transmit actions use [`resolve_or_allocate_image_id`]).
+/// (transmit actions use [`resolve_or_allocate_image_id`]). Only `i=` is
+/// echoed: kitty answers a command naming `I=` with the number alone.
 fn resolve_image_id(
     complete: &CompleteCommand,
     refs: &mut ResponseRefs,
+    images: &felis_grid::images::ImageStore,
 ) -> Result<ImageId, ActionOutcome> {
     if let Some(id) = image_ref(complete, b'i') {
         refs.image_id = Some(id);
         return Ok(ImageId(id));
     }
-    if let Some(num) = image_ref(complete, b'I') {
-        // Image numbers are a separate terminal-assigned namespace per
-        // spec; `I=` is treated as the id and echoed so `I=`-only
-        // producers get consistent ids across re-queries.
-        refs.image_id = Some(num);
-        return Ok(ImageId(num));
+    if let Some(number) = image_ref(complete, b'I') {
+        return images
+            .newest_with_number(number)
+            .ok_or_else(|| ActionOutcome::error(ErrorCode::NotFound, "no image with this number"));
     }
     Err(ActionOutcome::error(
         ErrorCode::InvalidValue,
@@ -1552,7 +1596,7 @@ fn handle_animation_frame(
     complete: &CompleteCommand,
     refs: &mut ResponseRefs,
 ) -> ActionOutcome {
-    let id = match resolve_image_id(complete, refs) {
+    let id = match resolve_image_id(complete, refs, images) {
         Ok(id) => id,
         Err(outcome) => return outcome,
     };
@@ -1666,7 +1710,7 @@ fn handle_animation_control(
     complete: &CompleteCommand,
     refs: &mut ResponseRefs,
 ) -> ActionOutcome {
-    let id = match resolve_image_id(complete, refs) {
+    let id = match resolve_image_id(complete, refs, images) {
         Ok(id) => id,
         Err(outcome) => return outcome,
     };
@@ -1714,7 +1758,7 @@ fn handle_compose(
     complete: &CompleteCommand,
     refs: &mut ResponseRefs,
 ) -> ActionOutcome {
-    let id = match resolve_image_id(complete, refs) {
+    let id = match resolve_image_id(complete, refs, images) {
         Ok(id) => id,
         Err(outcome) => return outcome,
     };
@@ -1823,7 +1867,7 @@ fn handle_delete_frame(
     refs: &mut ResponseRefs,
     free_image_if_no_frames: bool,
 ) -> ActionOutcome {
-    let id = match resolve_image_id(complete, refs) {
+    let id = match resolve_image_id(complete, refs, images) {
         Ok(id) => id,
         Err(outcome) => return outcome,
     };
@@ -1832,7 +1876,8 @@ fn handle_delete_frame(
     };
     if frame_count <= 1 {
         if free_image_if_no_frames {
-            return delete_by_id(images, placements, events, complete, refs, true);
+            delete_image_placements(images, placements, events, complete, id, true);
+            return ActionOutcome::Ok;
         }
         return ActionOutcome::Ok;
     }

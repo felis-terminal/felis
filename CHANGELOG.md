@@ -56,6 +56,10 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
   it from its run.
 - Kitty graphics file (`t=f`) and temp-file (`t=t`) transmissions now read the `S=` bytes at offset `O=`, as kitty does;
   they used to read the whole file.
+- Kitty graphics image numbers (`I=`) now work as in kitty. Each transmission with `I=` stores a new image under a free
+  id and answers `i=<id>,I=<number>`; a put or animation command by `I=` acts on the newest image with that number; and
+  the `d=n`/`d=N` deletes are supported. felis used to take the number as the image id, so a second transmission with
+  the same number replaced the first.
 - A Kitty graphics image shown through Unicode-placeholder cells now keeps its aspect ratio, centered in the placement's
   `c=` by `r=` box, as kitty does; it used to be stretched to fill the box.
 - A Kitty graphics `d=a` or `d=A` delete now leaves Unicode-placeholder images and images scrolled wholly into history
