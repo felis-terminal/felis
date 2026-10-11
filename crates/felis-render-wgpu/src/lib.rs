@@ -1955,6 +1955,10 @@ struct PlaceholderTile {
     total_rows: u16,
 }
 
+/// kitty's `grman_put_cell_image`: the image is fit into the whole
+/// `total_cols` x `total_rows` box with its aspect ratio kept and
+/// centered, and each cell shows its share of that box, or nothing when
+/// it falls in the margin.
 fn placeholder_tile_quad(
     slot: ImageSlot,
     cw: f32,
@@ -1969,31 +1973,37 @@ fn placeholder_tile_quad(
     if slot.width == 0 || slot.height == 0 {
         return None;
     }
-    // Consecutive cut points, so rounding never leaves a one-pixel seam
-    // between adjacent tiles.
-    let sx = at.tile_col * slot.width / cols;
-    let sw = (at.tile_col + 1) * slot.width / cols - sx;
-    let sy = at.tile_row * slot.height / rows;
-    let sh = (at.tile_row + 1) * slot.height / rows - sy;
-    if sw == 0 || sh == 0 {
+    let (img_w, img_h) = (slot.width as f32, slot.height as f32);
+    let (box_w, box_h) = (cols as f32 * cw, rows as f32 * ch);
+    let scale = (box_w / img_w).min(box_h / img_h);
+    let (fit_w, fit_h) = (img_w * scale, img_h * scale);
+    let (fit_x, fit_y) = ((box_w - fit_w) / 2.0, (box_h - fit_h) / 2.0);
+    // Both edges of a cell come from its index, so neighboring cells
+    // share the exact float boundary and no seam opens between them.
+    let cell_x = at.tile_col as f32 * cw;
+    let cell_y = at.tile_row as f32 * ch;
+    let x0 = cell_x.max(fit_x);
+    let x1 = ((at.tile_col + 1) as f32 * cw).min(fit_x + fit_w);
+    let y0 = cell_y.max(fit_y);
+    let y1 = ((at.tile_row + 1) as f32 * ch).min(fit_y + fit_h);
+    if x1 <= x0 || y1 <= y0 {
         return None;
     }
-    let p = ClientPlacement {
-        image_id: ImageId(0),
-        placement_id: None,
-        anchor_row: i32::from(at.screen_row) + 1,
-        anchor_col: at.screen_col.saturating_add(1),
-        cols: 1,
-        rows: 1,
-        source: Some(SourceRect {
-            x: sx,
-            y: sy,
-            width: sw,
-            height: sh,
-        }),
-        z_index: 0,
-    };
-    quad_for_placement(&p, slot, cw, ch, 0)
+    let du = slot.uv_max[0] - slot.uv_min[0];
+    let dv = slot.uv_max[1] - slot.uv_min[1];
+    let u = |x: f32| slot.uv_min[0] + du * (x - fit_x) / fit_w;
+    let v = |y: f32| slot.uv_min[1] + dv * (y - fit_y) / fit_h;
+    Some(ImgInstance {
+        origin_px: [
+            f32::from(at.screen_col).mul_add(cw, x0 - cell_x),
+            f32::from(at.screen_row).mul_add(ch, y0 - cell_y),
+        ],
+        size_px: [x1 - x0, y1 - y0],
+        uv_min: [u(x0), v(y0)],
+        uv_max: [u(x1), v(y1)],
+        opacity: 1.0,
+        _pad: [0.0; 3],
+    })
 }
 
 /// Under DECSCNM the letterbox takes the theme foreground too, or a
@@ -2290,6 +2300,115 @@ mod tests {
         assert!(f32::mul_add(span, -0.75, inst.uv_max[0]).abs() < 1e-6);
         assert!(f32::mul_add(span, -0.5, inst.uv_min[1]).abs() < 1e-6);
         assert!((inst.uv_max[1] - span).abs() < 1e-6);
+    }
+
+    /// A 2:1 image in a 10x10 box of 8x16 cells (80x160 px) fits to the
+    /// box width and centers vertically: 80x40 px from y=60 to y=100.
+    #[test]
+    fn placeholder_tiles_fit_a_wide_image_with_its_aspect_ratio() {
+        let slot = ImageSlot {
+            uv_min: [0.0, 0.0],
+            uv_max: [1.0, 1.0],
+            width: 200,
+            height: 100,
+        };
+        let tile = |tile_row| PlaceholderTile {
+            screen_row: tile_row as u16,
+            screen_col: 0,
+            tile_row,
+            tile_col: 0,
+            total_cols: 10,
+            total_rows: 10,
+        };
+        assert!(placeholder_tile_quad(slot, 8.0, 16.0, tile(2)).is_none());
+        let top =
+            placeholder_tile_quad(slot, 8.0, 16.0, tile(3)).expect("row 3 holds the top edge");
+        assert_eq!(top.origin_px, [0.0, 60.0]);
+        assert_eq!(top.size_px, [8.0, 4.0]);
+        assert_eq!(top.uv_min, [0.0, 0.0]);
+        assert_eq!(top.uv_max, [0.1, 0.1]);
+        let bottom =
+            placeholder_tile_quad(slot, 8.0, 16.0, tile(6)).expect("row 6 holds the bottom edge");
+        assert_eq!(bottom.origin_px, [0.0, 96.0]);
+        assert_eq!(bottom.size_px, [8.0, 4.0]);
+        assert!(placeholder_tile_quad(slot, 8.0, 16.0, tile(7)).is_none());
+    }
+
+    /// A 1:4 image in a 4x2 box of 8x16 cells (32x32 px) fits to the box
+    /// height and centers horizontally: 8x32 px from x=12 to x=20, read
+    /// from an atlas slot that does not start at the origin.
+    #[test]
+    fn placeholder_tiles_center_a_tall_image_inside_its_atlas_slot() {
+        let slot = ImageSlot {
+            uv_min: [0.5, 0.25],
+            uv_max: [0.75, 0.5],
+            width: 25,
+            height: 100,
+        };
+        let tile = |tile_col| PlaceholderTile {
+            screen_row: 0,
+            screen_col: tile_col as u16,
+            tile_row: 0,
+            tile_col,
+            total_cols: 4,
+            total_rows: 2,
+        };
+        assert!(placeholder_tile_quad(slot, 8.0, 16.0, tile(0)).is_none());
+        let left = placeholder_tile_quad(slot, 8.0, 16.0, tile(1)).expect("column 1 holds the left edge");
+        assert_eq!(left.origin_px, [12.0, 0.0]);
+        assert_eq!(left.size_px, [4.0, 16.0]);
+        assert_eq!(left.uv_min, [0.5, 0.25]);
+        assert_eq!(left.uv_max, [0.625, 0.375]);
+        let right = placeholder_tile_quad(slot, 8.0, 16.0, tile(2)).expect("column 2 holds the right edge");
+        assert_eq!(right.origin_px, [16.0, 0.0]);
+        assert_eq!(right.size_px, [4.0, 16.0]);
+        assert_eq!(right.uv_min, [0.625, 0.25]);
+        assert_eq!(right.uv_max, [0.75, 0.375]);
+        assert!(placeholder_tile_quad(slot, 8.0, 16.0, tile(3)).is_none());
+    }
+
+    proptest::proptest! {
+        /// The tiles of one box stay inside their cells, cover exactly the
+        /// fitted image, and sample it at one uniform scale, so the image
+        /// is never stretched.
+        #[test]
+        fn placeholder_tiles_cover_the_fitted_image_at_one_scale(
+            width in 1u32..400,
+            height in 1u32..400,
+            cols in 1u16..12,
+            rows in 1u16..12,
+            cw in 4u8..20,
+            ch in 8u8..40,
+        ) {
+            let (cw, ch) = (f32::from(cw), f32::from(ch));
+            let slot = ImageSlot { uv_min: [0.0, 0.0], uv_max: [1.0, 1.0], width, height };
+            let scale = (f32::from(cols) * cw / width as f32).min(f32::from(rows) * ch / height as f32);
+            let mut area = 0.0f64;
+            for tile_row in 0..u32::from(rows) {
+                for tile_col in 0..u32::from(cols) {
+                    let at = PlaceholderTile {
+                        screen_row: tile_row as u16,
+                        screen_col: tile_col as u16,
+                        tile_row,
+                        tile_col,
+                        total_cols: cols,
+                        total_rows: rows,
+                    };
+                    let Some(q) = placeholder_tile_quad(slot, cw, ch, at) else { continue };
+                    let (cx, cy) = (tile_col as f32 * cw, tile_row as f32 * ch);
+                    proptest::prop_assert!(q.origin_px[0] >= cx - 1e-3 && q.origin_px[1] >= cy - 1e-3);
+                    proptest::prop_assert!(q.origin_px[0] + q.size_px[0] <= cx + cw + 1e-3);
+                    proptest::prop_assert!(q.origin_px[1] + q.size_px[1] <= cy + ch + 1e-3);
+                    let px_per_image_px_x = q.size_px[0] / ((q.uv_max[0] - q.uv_min[0]) * width as f32);
+                    let px_per_image_px_y = q.size_px[1] / ((q.uv_max[1] - q.uv_min[1]) * height as f32);
+                    proptest::prop_assert!((px_per_image_px_x - scale).abs() <= scale * 1e-2);
+                    proptest::prop_assert!((px_per_image_px_y - scale).abs() <= scale * 1e-2);
+                    area = f64::from(q.size_px[0]).mul_add(f64::from(q.size_px[1]), area);
+                }
+            }
+            let fitted = f64::from(width as f32 * scale) * f64::from(height as f32 * scale);
+            proptest::prop_assert!((area - fitted).abs() <= fitted.mul_add(1e-3, 1e-3));
+        }
     }
 
     #[test]
