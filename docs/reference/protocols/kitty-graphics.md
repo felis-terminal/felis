@@ -132,10 +132,14 @@ include `a=t/T/p/q`, `a=d` (basic and extended deletion), and `a=a/f/c` animatio
 
 - `x`, `y`, `w`, `h`: Pixel sub-region of source image. As in kitty, each key defaults on its own: `x` and `y` to 0, an
   omitted or zero `w` or `h` to the image's width or height. The region is then clipped to the image.
-- `c`, `r`: Target width and height in terminal cells. An omitted (or zero) axis is the source size in pixels (the
-  clipped `x`, `y`, `w`, `h` region) over the cell size, rounded up. Like kitty, felis re-resolves it whenever the cell
-  size changes (font size, scale factor), so a naturally sized image keeps its pixel size. Until a client has reported a
-  cell size, one pixel counts as one cell.
+- `c`, `r`: Target width and height in terminal cells. With both given, the image is scaled to fill that box. With
+  neither, each axis is the source size in pixels (the clipped `x`, `y`, `w`, `h` region) over the cell size, rounded
+  up, and the image draws at its own pixel size. With only one given, as in kitty, the other axis is the given axis's
+  pixel span at the source's aspect ratio, over the cell size, rounded up, and the image draws at that aspect-preserving
+  size: a 101×100 image at `r=2` with 10×20 px cells takes 5 columns and draws 40.4×40 px. Like kitty, felis re-resolves
+  an omitted axis whenever the cell size changes (font size, scale factor): an image with neither axis given keeps its
+  pixel size, and one with a single axis given keeps its aspect ratio as that axis follows the cell size. Until a client
+  has reported a cell size, one pixel counts as one cell.
 - `z`: Z-index stacking order (negative behind text, positive above).
 - `C=1`: Prevent cursor motion after placement. Without it the cursor lands as in kitty: on the placed cell box's last
   row, one column right of it. A column past the right edge wraps to column 0 one row further down; a row past the

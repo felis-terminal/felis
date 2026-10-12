@@ -28,7 +28,7 @@ pub const MINOR_LEDGER: &[(u16, &str)] = &[
     (0, "the base schema of protocol major 1"),
     (
         1,
-        "Ops::Upgrade and Ops::UpgradeReply; ImageVirtualPlacement.placement_id; SearchQuery.source",
+        "Ops::Upgrade and Ops::UpgradeReply; ImageVirtualPlacement.placement_id; SearchQuery.source; ImagePlacement.requested",
     ),
 ];
 

@@ -1103,6 +1103,7 @@ pub(crate) fn compose_image_rehydrate(
             rows: p.extent().1,
             source: p.source,
             z_index: p.z_index,
+            requested: Some(p.requested()),
         }));
     }
     // Virtual (`U=1`) extents too: placeholder cells ride the `RowDelta`

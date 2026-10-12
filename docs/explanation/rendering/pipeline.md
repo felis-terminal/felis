@@ -128,10 +128,13 @@ a 1690-px mpv frame up to 212×8 = 1696 px: a non-integer resample that leaves a
 high-contrast edge crosses a half-texel boundary. It is invisible on flat color and a visible line on video, and
 vertical because a producer lands the height on a cell multiple but not the width.
 
-The renderer detects "the box is exactly `ceil(native)`" and collapses to native pixels, matching kitty's "natural size
-in pixels"; the last partial cell shows a few px of background, as kitty's does. The daemon re-resolves the count on
-every cell-size change, as kitty does, so a font-size change keeps the collapse. An explicit `c=`/`r=` asking for a
-_different_ box is scaled to fill it, since there the producer has said what it wants.
+The placement message therefore carries the `c=`/`r=` the put asked for beside the resolved count, and the renderer
+draws kitty's destination rectangle from it: an automatic axis at native pixels, or at the image's aspect ratio against
+a requested one; the last partial cell shows a few px of background, as kitty's does. Inferring the request from the
+count is rejected: an explicit `c=` that happens to equal `ceil(native)` reads the same as an automatic one, and a
+derived axis's width (40.4 px for a 101×100 image two 20-px rows tall) is no whole number of cells. That inference
+survives only for a daemon that sends no request, which collapses a box of exactly `ceil(native)` to native pixels. An
+explicit `c=`/`r=` pair is scaled to fill its box, since there the producer has said what it wants.
 
 Box-drawing and block-element glyphs (U+2500–U+259F) take the opposite treatment for the same reason: they are
 CPU-rasterized to the exact cell box rather than scaled from a font outline, so adjacent rows' lines connect instead of

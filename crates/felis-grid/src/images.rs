@@ -12,7 +12,7 @@ use table::{Keyed, Table};
 
 pub use felis_protocol::{
     ImageId, PlacementId,
-    messages::{ImageFormat, MAX_IMAGE_FRAMES, SourceRect},
+    messages::{ImageFormat, MAX_IMAGE_FRAMES, RequestedExtent, SourceRect},
 };
 
 /// One animation frame, already coalesced: the daemon composites the
@@ -796,49 +796,113 @@ pub fn clip_source(
 pub enum Extent {
     /// `c=` / `r=` as sent.
     Requested(NonZeroU16),
-    /// Omitted or zero `c=` / `r=`: `ceil(source_px / cell_px)`,
+    /// Omitted or zero with no requested axis to derive from:
+    /// `ceil(source_px / cell_px)`,
     /// re-resolved by [`Placements::rescale`] when the cell size changes.
     Natural(NonZeroU16),
+    /// Omitted beside a requested other axis: the other axis's pixel
+    /// span at the source's aspect ratio, in cells, rounded up (kitty's
+    /// `update_dest_rect`). Re-resolved like [`Self::Natural`].
+    Derived(NonZeroU16),
 }
 
 impl Extent {
-    /// A zero `requested` is auto. An unknown (zero) cell size counts as
-    /// 1 px, so the extent, and the cursor advance past it, cover the
-    /// image at any real cell size; the first real size shrinks it.
+    /// Both axes of a put, from its `c=` / `r=` (zero is automatic). An
+    /// unknown (zero) cell size counts as 1 px, so the extent, and the
+    /// cursor advance past it, cover the image at any real cell size;
+    /// the first real size shrinks it. A source with no pixels on the
+    /// axis a derivation divides by leaves the other axis natural.
     #[must_use]
-    pub fn resolve(requested: u16, source_px: u32, cell_px: u16) -> Self {
-        NonZeroU16::new(requested).map_or_else(
-            || Self::Natural(natural_cells(source_px, cell_px)),
-            Self::Requested,
-        )
+    pub fn resolve(
+        requested: (u16, u16),
+        source_px: (u32, u32),
+        cell_px: (u16, u16),
+    ) -> (Self, Self) {
+        let (cols, rows) = (NonZeroU16::new(requested.0), NonZeroU16::new(requested.1));
+        let cols = match (cols, rows) {
+            (Some(c), _) => Self::Requested(c),
+            (None, Some(r)) if source_px.1 > 0 => Self::Derived(derived_cells(
+                r,
+                cell_px.1,
+                (source_px.0, source_px.1),
+                cell_px.0,
+            )),
+            (None, _) => Self::Natural(natural_cells(source_px.0, cell_px.0)),
+        };
+        let rows = match (rows, NonZeroU16::new(requested.0)) {
+            (Some(r), _) => Self::Requested(r),
+            (None, Some(c)) if source_px.0 > 0 => Self::Derived(derived_cells(
+                c,
+                cell_px.0,
+                (source_px.1, source_px.0),
+                cell_px.1,
+            )),
+            (None, _) => Self::Natural(natural_cells(source_px.1, cell_px.1)),
+        };
+        (cols, rows)
     }
 
     #[must_use]
     pub const fn cells(self) -> NonZeroU16 {
         match self {
-            Self::Requested(n) | Self::Natural(n) => n,
+            Self::Requested(n) | Self::Natural(n) | Self::Derived(n) => n,
         }
     }
 
-    /// Re-resolves a natural axis at `cell_px` and reports whether it
-    /// moved. An unknown (zero) cell size keeps the axis: the 1 px rule
-    /// would grow the extent over text already printed past it.
-    fn rescale(&mut self, source_px: u32, cell_px: u16) -> bool {
-        let Self::Natural(n) = self else {
-            return false;
-        };
-        if cell_px == 0 {
-            return false;
+    /// The `c=` / `r=` this axis was put with, `0` for an automatic one.
+    #[must_use]
+    pub const fn requested(self) -> u16 {
+        match self {
+            Self::Requested(n) => n.get(),
+            Self::Natural(_) | Self::Derived(_) => 0,
         }
-        let resolved = natural_cells(source_px, cell_px);
-        let moved = *n != resolved;
-        *n = resolved;
+    }
+
+    /// Re-resolves both axes at `cell_px` and reports whether either
+    /// moved. An axis whose cell size is unknown (zero) keeps its
+    /// extent, a derived one whenever either size is: the 1 px rule
+    /// would grow the extent over text already printed past it.
+    fn rescale(
+        cols: &mut Self,
+        rows: &mut Self,
+        source_px: (u32, u32),
+        cell_px: (u16, u16),
+    ) -> bool {
+        let (new_cols, new_rows) =
+            Self::resolve((cols.requested(), rows.requested()), source_px, cell_px);
+        let known = |axis: Self, own_px: u16| match axis {
+            Self::Requested(_) => false,
+            Self::Natural(_) => own_px != 0,
+            Self::Derived(_) => cell_px.0 != 0 && cell_px.1 != 0,
+        };
+        let mut moved = false;
+        for (axis, new, own_px) in [(cols, new_cols, cell_px.0), (rows, new_rows, cell_px.1)] {
+            if known(*axis, own_px) && *axis != new {
+                *axis = new;
+                moved = true;
+            }
+        }
         moved
     }
 }
 
 fn natural_cells(source_px: u32, cell_px: u16) -> NonZeroU16 {
     let cells = u16::try_from(source_px.div_ceil(u32::from(cell_px.max(1)))).unwrap_or(u16::MAX);
+    NonZeroU16::new(cells).unwrap_or(NonZeroU16::MIN)
+}
+
+/// `ceil(given * given_cell_px * src.0 / src.1 / cell_px)`: the axis
+/// beside a requested one, in integers so an exact fit does not round
+/// up on float error. `src.1` is nonzero.
+fn derived_cells(
+    given: NonZeroU16,
+    given_cell_px: u16,
+    src: (u32, u32),
+    cell_px: u16,
+) -> NonZeroU16 {
+    let span = u64::from(given.get()) * u64::from(given_cell_px.max(1)) * u64::from(src.0);
+    let per_cell = u64::from(src.1) * u64::from(cell_px.max(1));
+    let cells = u16::try_from(span.div_ceil(per_cell)).unwrap_or(u16::MAX);
     NonZeroU16::new(cells).unwrap_or(NonZeroU16::MIN)
 }
 
@@ -888,6 +952,15 @@ pub struct Placement {
 }
 
 impl Placement {
+    /// The `c=` / `r=` this placement was put with.
+    #[must_use]
+    pub const fn requested(&self) -> RequestedExtent {
+        RequestedExtent {
+            cols: self.cols.requested(),
+            rows: self.rows.requested(),
+        }
+    }
+
     /// `(cols, rows)` in cells.
     #[must_use]
     pub const fn extent(&self) -> (u16, u16) {
@@ -941,6 +1014,9 @@ pub struct ClientPlacement {
     /// Negative renders under the cell layer; ties resolve by insertion
     /// order.
     pub z_index: i32,
+    /// The `c=` / `r=` the put asked for, which decides the drawn pixel
+    /// size; `None` from a minor-0 daemon.
+    pub requested: Option<RequestedExtent>,
 }
 
 /// A Kitty Unicode-placeholder virtual placement (`U=1`): the image's
@@ -1353,9 +1429,7 @@ impl Placements {
             };
             let source_px = clip_source(entry.width, entry.height, p.source)
                 .map_or((0, 0), |r| (r.width, r.height));
-            let cols_moved = p.cols.rescale(source_px.0, cell_px.0);
-            let rows_moved = p.rows.rescale(source_px.1, cell_px.1);
-            if cols_moved || rows_moved {
+            if Extent::rescale(&mut p.cols, &mut p.rows, source_px, cell_px) {
                 on_change(p);
             }
         }

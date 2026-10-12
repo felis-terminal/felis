@@ -57,6 +57,7 @@ pub enum ImageEvent {
         rows: u16,
         source: Option<felis_protocol::messages::SourceRect>,
         z_index: i32,
+        requested: felis_protocol::messages::RequestedExtent,
     },
     PlacementRemoved {
         image_id: ImageId,
@@ -247,6 +248,7 @@ pub fn materialize_image_events(
                 rows,
                 source,
                 z_index,
+                requested,
             } => out.push(ImageMsg::Placement {
                 image_id,
                 placement_id,
@@ -256,6 +258,7 @@ pub fn materialize_image_events(
                 rows,
                 source,
                 z_index,
+                requested: Some(requested),
             }),
             ImageEvent::PlacementRemoved {
                 image_id,
@@ -595,6 +598,7 @@ const fn placement_event(p: &Placement) -> ImageEvent {
         rows: p.extent().1,
         source: p.source,
         z_index: p.z_index,
+        requested: p.requested(),
     }
 }
 
@@ -1555,8 +1559,11 @@ fn upsert_placement(
     // image (the pixcat burn-in).
     let source_px = felis_grid::images::clip_source(image_w, image_h, source)
         .map_or((0, 0), |r| (r.width, r.height));
-    let cols = Extent::resolve(req_cols, source_px.0, cell_pixel_w);
-    let rows = Extent::resolve(req_rows, source_px.1, cell_pixel_h);
+    let (cols, rows) = Extent::resolve(
+        (req_cols, req_rows),
+        source_px,
+        (cell_pixel_w, cell_pixel_h),
+    );
     let anchor = CellPos {
         // 1-based `CellPos`. The i32 widening is the scrollback-anchor
         // space (docs/reference/protocols/kitty-graphics.md
@@ -1608,6 +1615,10 @@ fn upsert_placement(
         rows: rows.cells().get(),
         source,
         z_index,
+        requested: felis_protocol::messages::RequestedExtent {
+            cols: cols.requested(),
+            rows: rows.requested(),
+        },
     });
     // The only Grid mutation the dispatcher makes
     // (docs/explanation/protocols/kitty-graphics.md "Dispatcher
