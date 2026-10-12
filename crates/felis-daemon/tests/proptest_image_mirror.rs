@@ -8,6 +8,7 @@ use felis_client_core::image_shadow::ImageShadow;
 use felis_daemon::graphics::{
     ApcCtx, ImageEvent, SavedScreens, ShmDeferral, apply_screen_switch, clear_images,
     dispatch_apc_body, free_unreferenced_anonymous, materialize_image_events,
+    scroll_region_placements,
 };
 use std::fmt::Write as _;
 
@@ -55,14 +56,22 @@ struct Put {
     virtual_: bool,
     p: Option<u32>,
     cols: u16,
+    rows: u16,
 }
 
 fn put() -> impl Strategy<Value = Put> {
-    (any::<bool>(), proptest::option::of(1u32..4), 1u16..5).prop_map(|(virtual_, p, cols)| Put {
-        virtual_,
-        p,
-        cols,
-    })
+    (
+        any::<bool>(),
+        proptest::option::of(1u32..4),
+        1u16..5,
+        1u16..4,
+    )
+        .prop_map(|(virtual_, p, cols, rows)| Put {
+            virtual_,
+            p,
+            cols,
+            rows,
+        })
 }
 
 fn op() -> impl Strategy<Value = Op> {
@@ -99,6 +108,10 @@ fn op() -> impl Strategy<Value = Op> {
             Just("\x1b[3J"),
             Just("\x1bc"),
             Just("\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n"),
+            Just("\x1b[2;5r\x1b[5;1H\n\x1b[r"),
+            Just("\x1b[2;5r\x1b[2;1H\x1bM\x1bM\x1b[r"),
+            Just("\x1b[1;4r\x1b[4;1H\n\n\x1b[r"),
+            Just("\x1b[H\x1bM"),
         ]
         .prop_map(Op::Screen),
     ]
@@ -180,6 +193,17 @@ impl Session {
                     self.shift(n, retain);
                 }
                 PtyEffect::AltScreenScrolled(n) => self.shift(n, 0),
+                PtyEffect::RegionScrolled { op, into_history } => {
+                    let retain = u32::try_from(self.grid.scrollback().len()).unwrap();
+                    scroll_region_placements(
+                        &mut self.images,
+                        &mut self.placements,
+                        &mut self.events,
+                        (op, into_history),
+                        (8, 16),
+                        retain,
+                    );
+                }
                 _ => {}
             }
         }
@@ -202,7 +226,7 @@ impl Session {
 
     fn run(&mut self, op: &Op) {
         let put_keys = |put: Put| {
-            let mut keys = format!("c={},r=1", put.cols);
+            let mut keys = format!("c={},r={}", put.cols, put.rows);
             if put.virtual_ {
                 keys.push_str(",U=1");
             }
@@ -275,13 +299,29 @@ proptest! {
             let mut daemon: Vec<_> = s
                 .placements
                 .iter()
-                .map(|p| (p.image_id.0, p.placement_id.map(|id| id.0), p.anchor.row))
+                .map(|p| {
+                    (
+                        p.image_id.0,
+                        p.placement_id.map(|id| id.0),
+                        p.anchor.row,
+                        p.extent(),
+                        p.source.map(|r| (r.x, r.y, r.width, r.height)),
+                    )
+                })
                 .collect();
             let mut window: Vec<_> = s
                 .window
                 .placements()
                 .iter()
-                .map(|p| (p.image_id.0, p.placement_id.map(|id| id.0), p.anchor_row))
+                .map(|p| {
+                    (
+                        p.image_id.0,
+                        p.placement_id.map(|id| id.0),
+                        p.anchor_row,
+                        (p.cols, p.rows),
+                        p.source.map(|r| (r.x, r.y, r.width, r.height)),
+                    )
+                })
                 .collect();
             daemon.sort();
             window.sort();

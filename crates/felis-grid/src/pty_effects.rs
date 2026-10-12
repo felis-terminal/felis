@@ -93,6 +93,42 @@ impl PtyEffectQueue {
         }
     }
 
+    /// Coalesces like [`Self::push_scroll`]: moving a placement by `a`
+    /// then `b` rows, clipping at the margins each time, is moving it
+    /// by `a + b` once.
+    pub fn push_region_scroll(&mut self, op: ScrollOp, into_history: bool) {
+        let same = |tail: &ScrollOp, history: bool| {
+            history == into_history
+                && tail.region_top == op.region_top
+                && tail.region_bottom == op.region_bottom
+                && tail.direction == op.direction
+        };
+        let tail = match self.effects.as_mut_slice() {
+            [
+                ..,
+                PtyEffect::RegionScrolled {
+                    op: tail,
+                    into_history: history,
+                },
+                PtyEffect::Scrolled { .. },
+            ]
+            | [
+                ..,
+                PtyEffect::RegionScrolled {
+                    op: tail,
+                    into_history: history,
+                },
+            ] if same(tail, *history) => Some(tail),
+            _ => None,
+        };
+        if let Some(tail) = tail {
+            tail.n_rows = tail.n_rows.saturating_add(op.n_rows);
+        } else {
+            self.effects
+                .push(PtyEffect::RegionScrolled { op, into_history });
+        }
+    }
+
     /// Coalesces into a tail directive of the same band, direction and
     /// geometry: two shifts of one band are one shift by the sum, capped
     /// at the band height, which already blanks the band.

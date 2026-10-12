@@ -117,11 +117,23 @@ Anchor positions shift as text scrolls: `Placements::shift_up` preserves entries
 entries pushed beyond the retention horizon. The alternate screen operates with `retain_rows = 0`, evicting placements
 as they leave the live viewport.
 
-Scrolling triggers `ImageMsg::PlacementsShifted { lines }` to notify client shadows of anchor adjustments
+A full-screen scroll triggers `ImageMsg::PlacementsShifted { lines }` to notify client shadows of anchor adjustments
 ([ipc.md](../ipc.md)). The client never drops placements unilaterally, waiting for `PlacementRemoved` from the daemon.
 Live queries (`ED`, `d=c/p/q/x/y`) operate in live coordinate space, ignoring non-visible scrollback placements unless
 their extents cross into the viewport. Coordinate transformation details are in
 [kitty-graphics.md](../../explanation/protocols/kitty-graphics.md).
+
+## Scroll regions
+
+A scroll of part of the screen (inside a `DECSTBM` region) and any reverse scroll (`RI` at the top margin, `SD`) move
+each placement that lies wholly inside the scrolled rows, as in kitty; a placement that crosses a margin or lies outside
+the region stays where it is. A placement the scroll takes wholly out of the region is removed. One it takes partly past
+a margin loses the rows past it: its extent shrinks by those rows, a requested `r=` with it, and its source rectangle
+loses the pixels those rows showed at the scale the image draws at, so the part left keeps its size and place on the
+screen. A region that starts at the top row of the primary screen pushes its top rows into scrollback, and the
+placements inside it go into history whole, moving with the ones already there as on a full-screen scroll. Each moved
+placement is re-sent as `Placement` and each removed one as `PlacementRemoved`; `PlacementsShifted` moves every anchor,
+so a region scroll never uses it.
 
 ## Display
 

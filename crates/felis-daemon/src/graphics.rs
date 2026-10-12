@@ -621,6 +621,34 @@ pub fn rescale_placements(
     }
 }
 
+/// Moves the placements inside a scrolled band (kitty's
+/// `scroll_filter_margins_func`). Survivors are re-stated in full: a
+/// clip changes a placement's source and extent, and the placements
+/// outside the band stay, so the uniform `PlacementsShifted` cannot
+/// carry it.
+pub fn scroll_region_placements(
+    images: &mut felis_grid::images::ImageStore,
+    placements: &mut felis_grid::images::Placements,
+    events: &mut Vec<ImageEvent>,
+    (op, into_history): (felis_grid::ScrollOp, bool),
+    cell_px: (u16, u16),
+    retain_rows: u32,
+) {
+    if placements.is_empty() {
+        return;
+    }
+    let (moved, removed) = placements.scroll_region(op, into_history, images, cell_px, retain_rows);
+    events.extend(moved.iter().map(placement_event));
+    for p in removed {
+        images.release(p.image_id);
+        events.push(ImageEvent::PlacementRemoved {
+            image_id: p.image_id,
+            placement_id: p.placement_id,
+        });
+    }
+    free_unreferenced_anonymous(images, placements, events);
+}
+
 /// Replay every placement anchor through a reflow's row map (REQ-604).
 /// Survivors are re-stated in full: a re-wrap moves each anchor by its
 /// own delta, so the uniform `PlacementsShifted` cannot carry it.

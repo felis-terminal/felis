@@ -238,6 +238,10 @@ pub enum PtyEffect {
     /// Rows a full-screen scroll on the alternate screen dropped off its
     /// top: placements move up with the text and leave with it.
     AltScreenScrolled(u32),
+    /// A scroll of a band other than the two above: a DECSTBM region,
+    /// or any reverse scroll. `into_history` when the band's top rows
+    /// entered scrollback. Adjacent scrolls of one band coalesce.
+    RegionScrolled { op: ScrollOp, into_history: bool },
     /// RIS, after the forced erase that clears the live placements: the
     /// primary screen saved while on the alternate one goes too, and so
     /// does every program status record.

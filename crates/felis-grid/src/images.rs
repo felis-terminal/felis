@@ -858,6 +858,16 @@ impl Extent {
         }
     }
 
+    /// `by` is less than the extent: a clip always leaves a row.
+    fn shrunk(self, by: u16) -> Self {
+        let less = |n: NonZeroU16| NonZeroU16::new(n.get() - by).unwrap_or(NonZeroU16::MIN);
+        match self {
+            Self::Requested(n) => Self::Requested(less(n)),
+            Self::Natural(n) => Self::Natural(less(n)),
+            Self::Derived(n) => Self::Derived(less(n)),
+        }
+    }
+
     /// Re-resolves both axes at `cell_px` and reports whether either
     /// moved. An axis whose cell size is unknown (zero) keeps its
     /// extent, a derived one whenever either size is: the 1 px rule
@@ -884,6 +894,71 @@ impl Extent {
         }
         moved
     }
+}
+
+/// Cuts the rows of `p` that lie past a margin of the 1-based band
+/// `top..=bottom`; `false` when nothing of its source would remain.
+/// Only one margin can be crossed: the placement fit inside the band
+/// before it moved.
+fn clip_to_band(
+    p: &mut Placement,
+    images: &ImageStore,
+    (top, bottom): (i32, i32),
+    cell_px: (u16, u16),
+) -> bool {
+    let rows = i32::from(p.rows.cells().get());
+    let first = p.anchor.row;
+    let cut_top = (top - first).max(0);
+    let cut_bottom = (first + rows - 1 - bottom).max(0);
+    if cut_top == 0 && cut_bottom == 0 {
+        return true;
+    }
+    let Some(mut src) = images
+        .get(p.image_id)
+        .and_then(|entry| clip_source(entry.width, entry.height, p.source))
+    else {
+        return false;
+    };
+    let cell_h = f64::from(cell_px.1.max(1));
+    let scale = source_px_per_screen_px(p.requested(), src, cell_px);
+    if cut_top > 0 {
+        let cut = (scale * cell_h * f64::from(cut_top)).round() as u32;
+        if cut >= src.height {
+            return false;
+        }
+        src.y += cut;
+        src.height -= cut;
+        p.anchor.row = top;
+    } else {
+        let visible = (scale * cell_h * f64::from(rows - cut_bottom)).round() as u32;
+        if visible == 0 {
+            return false;
+        }
+        src.height = src.height.min(visible);
+    }
+    p.rows = p.rows.shrunk((cut_top + cut_bottom) as u16);
+    p.source = Some(src);
+    true
+}
+
+/// Source rows per screen pixel at the size the placement draws at
+/// (kitty's `src_pixels_per_screen_pixel`): a requested `r=` fixes
+/// the height, a lone `c=` the width at the source's aspect ratio, and
+/// with neither the source draws at its own size.
+fn source_px_per_screen_px(
+    requested: RequestedExtent,
+    src: SourceRect,
+    cell_px: (u16, u16),
+) -> f64 {
+    let (cell_w, cell_h) = (f64::from(cell_px.0.max(1)), f64::from(cell_px.1.max(1)));
+    let dest_h = match (requested.cols, requested.rows) {
+        (_, rows) if rows > 0 => f64::from(rows) * cell_h,
+        (cols, _) if cols > 0 => {
+            f64::from(cols) * cell_w * f64::from(src.height) / f64::from(src.width)
+        }
+        _ => return 1.0,
+    };
+    f64::from(src.height) / dest_h
 }
 
 fn natural_cells(source_px: u32, cell_px: u16) -> NonZeroU16 {
@@ -1411,6 +1486,60 @@ impl Placements {
             p.anchor.row = shifted;
             false
         })
+    }
+
+    /// Kitty's `scroll_filter_margins_func` over the band of `op`
+    /// (`docs/reference/protocols/kitty-graphics.md` "Scroll regions");
+    /// `into_history` placements evict as [`Self::shift_up`]'s do.
+    /// Returns the moved survivors and the removed placements.
+    pub fn scroll_region(
+        &mut self,
+        op: crate::ScrollOp,
+        into_history: bool,
+        images: &ImageStore,
+        cell_px: (u16, u16),
+        retain_rows: u32,
+    ) -> (Vec<Placement>, Vec<Placement>) {
+        let mut moved = Vec::new();
+        if op.n_rows == 0 || self.entries.is_empty() {
+            return (moved, Vec::new());
+        }
+        let top = i32::from(op.region_top) + 1;
+        let bottom = i32::from(op.region_bottom) + 1;
+        let n = i32::from(op.n_rows);
+        let amt = match op.direction {
+            crate::ScrollDirection::Up => -n,
+            crate::ScrollDirection::Down => n,
+        };
+        let horizon = 1i32.saturating_sub(i32::try_from(retain_rows).unwrap_or(i32::MAX));
+        let removed = self.entries.extract(|p| {
+            let first = p.anchor.row;
+            let last = first.saturating_add(i32::from(p.rows.cells().get()) - 1);
+            if into_history {
+                if last > bottom {
+                    return false;
+                }
+                let shifted = first.saturating_add(amt);
+                if shifted < horizon {
+                    return true;
+                }
+                p.anchor.row = shifted;
+            } else {
+                if first < top || last > bottom {
+                    return false;
+                }
+                if last + amt < top || first + amt > bottom {
+                    return true;
+                }
+                p.anchor.row = first + amt;
+                if !clip_to_band(p, images, (top, bottom), cell_px) {
+                    return true;
+                }
+            }
+            moved.push(p.clone());
+            false
+        });
+        (moved, removed)
     }
 
     /// Re-resolves the natural axes of every placement at `cell_px`, as
