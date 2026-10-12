@@ -825,6 +825,56 @@
       ],
       "type": "object"
     },
+    "ProgramStatusObject": {
+      "description": "One OSC 7501 record, every value as the program sent it. `state` and\n`kind` are open vocabularies: a value this build does not list is a\nnewer one, not an error.",
+      "properties": {
+        "app": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "description": "`\"\"` is the root record.",
+          "type": "string"
+        },
+        "kind": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "msg": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "progress": {
+          "format": "uint8",
+          "maximum": 100,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "state": {
+          "type": "string"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "state"
+      ],
+      "type": "object"
+    },
     "ProtocolVersion": {
       "properties": {
         "major": {
@@ -1046,6 +1096,13 @@
             }
           ]
         },
+        "program_status": {
+          "description": "OSC 7501 records, sorted by id. Always present, like `tags`.",
+          "items": {
+            "$ref": "#/$defs/ProgramStatusObject"
+          },
+          "type": "array"
+        },
         "rows": {
           "format": "uint16",
           "maximum": 65535,
@@ -1075,7 +1132,8 @@
         "rows",
         "cols",
         "tags",
-        "attachments"
+        "attachments",
+        "program_status"
       ],
       "type": "object"
     },

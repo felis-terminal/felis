@@ -105,6 +105,7 @@ mod tests {
             last_exit_code: None,
             attachments: Vec::new(),
             sequence: seq(sequence),
+            program_status: Vec::new(),
         }
     }
 

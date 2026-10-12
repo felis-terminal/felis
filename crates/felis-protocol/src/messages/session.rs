@@ -310,6 +310,7 @@ pub(crate) mod tests {
             last_exit_code: None,
             attachments: Vec::new(),
             sequence: NonZeroU64::new(3).unwrap(),
+            program_status: Vec::new(),
         }
     }
 

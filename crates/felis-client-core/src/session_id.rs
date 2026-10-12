@@ -61,6 +61,7 @@ mod tests {
             last_exit_code: None,
             attachments: Vec::new(),
             sequence: std::num::NonZeroU64::MIN,
+            program_status: Vec::new(),
         }
     }
 

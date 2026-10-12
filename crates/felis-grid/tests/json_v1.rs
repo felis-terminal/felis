@@ -20,7 +20,7 @@ use felis_protocol::kitty_graphics::{ImageId, PlacementId};
 use felis_protocol::messages::{
     AttachFailure, AttachRefusal, Attachment, ClipboardSelection, ClipboardWrite, ConnToClientMsg,
     CreateFailure, GridDims, GridMsg, ImageMsg, InputMsg, Key, KeyEvent, KeyEventKind, KeyLocation,
-    KeyMods, NamedKey, SessionInfo, SessionToClientMsg, SourceRect,
+    KeyMods, NamedKey, ProgramStatusRecord, SessionInfo, SessionToClientMsg, SourceRect,
 };
 use felis_protocol::{MessageKind, RowPayload, codec};
 use serde_json::{Value, json};
@@ -76,6 +76,15 @@ fn session_info() -> SessionInfo {
             input_owner: true,
         }],
         sequence: NonZeroU64::new(3).unwrap(),
+        program_status: vec![ProgramStatusRecord {
+            id: "build/test".to_owned(),
+            state: "blocked".to_owned(),
+            kind: Some("permission".to_owned()),
+            progress: Some(40),
+            app: Some("cargo".to_owned()),
+            title: Some("tests".to_owned()),
+            msg: Some("allow network access?".to_owned()),
+        }],
     }
 }
 
@@ -258,6 +267,34 @@ fn a_v1_frame_carrying_an_unknown_optional_field_still_decodes() {
     assert_eq!((back_kind, back_body), (kind, body));
 }
 
+/// `program_status` arrived inside v1, so an object written before it
+/// (or a record a later writer trimmed to its id) still decodes.
+#[test]
+fn a_session_row_without_program_status_keys_still_decodes() {
+    let (_, kind, body) = cases().remove(4);
+    let mut value = json_v1::encode(kind, &body).expect("the frame encodes");
+    let info = value["msg"]["info"]
+        .as_object_mut()
+        .expect("an info object");
+    info.remove("program_status")
+        .expect("the writer emits the key");
+    let (_, decoded) = json_v1::decode(&value).expect("a row without the key decodes");
+    let SessionToClientMsg::Attached { info } = codec::decode(&decoded).expect("a session frame")
+    else {
+        panic!("the case is an attach ack");
+    };
+    assert_eq!(info.program_status, []);
+
+    value["msg"]["info"]["program_status"] = json!([{ "id": "build" }]);
+    let (_, decoded) = json_v1::decode(&value).expect("a record with only an id decodes");
+    let SessionToClientMsg::Attached { info } = codec::decode(&decoded).expect("a session frame")
+    else {
+        panic!("the case is an attach ack");
+    };
+    assert_eq!(info.program_status[0].id, "build");
+    assert_eq!(info.program_status[0].state, "");
+}
+
 /// A new kind, variant or required field is `felis_json: 2`, and a v1
 /// reader refuses it on the version alone.
 #[test]
@@ -360,6 +397,9 @@ fn what_the_reader_refuses_the_schema_refuses() {
         "msg": { "type": "complete", "id": u64::from(u32::MAX) + 1 },
     });
 
+    let mut progress_past_100 = json_v1::encode(kind, &body).expect("the frame encodes");
+    progress_past_100["msg"]["info"]["program_status"][0]["progress"] = json!(101);
+
     let whole_fraction = row_delta_with(&row_cells(&[grapheme(b'x')], &sized_cell(1, 1)));
 
     let mut too_many_graphemes = row_delta_with(&row_cells(
@@ -372,6 +412,7 @@ fn what_the_reader_refuses_the_schema_refuses() {
     for (name, frame) in [
         ("a control byte in an ascii grapheme", control_byte),
         ("an uppercase session id", uppercase_id),
+        ("a program-status progress past 100", progress_past_100),
         ("a function key past F35", past_the_last_f_key),
         ("an image id past u32", image_id_past_u32),
         ("a fraction that is not below one", whole_fraction),

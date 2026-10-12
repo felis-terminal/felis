@@ -830,7 +830,7 @@ const NOTIFY_REASSEMBLY_IDS: usize = 32;
 
 /// Cap on reassembled bytes (title + body) per OSC 99 notification;
 /// past it the in-flight entry drops.
-const NOTIFY_REASSEMBLY_BYTES: usize = 64 * 1024;
+pub const NOTIFY_REASSEMBLY_BYTES: usize = 64 * 1024;
 
 /// One in-flight OSC 99 notification
 /// (`docs/reference/protocols/notifications.md`). Title and body

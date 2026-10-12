@@ -3,7 +3,7 @@
 
 use std::num::NonZeroU64;
 
-use super::{WireError, decode_enum, dims_from_wire, id_from_bytes, id_to_bytes};
+use super::{WireError, decode_enum, dims_from_wire, id_from_bytes, id_to_bytes, narrow};
 use crate::messages;
 use crate::wire::v1;
 
@@ -84,6 +84,7 @@ impl From<&messages::SessionInfo> for v1::SessionInfo {
             last_exit_code: s.last_exit_code,
             attachments: s.attachments.iter().map(Into::into).collect(),
             sequence: s.sequence.get(),
+            program_status: s.program_status.iter().map(Into::into).collect(),
         }
     }
 }
@@ -109,6 +110,51 @@ impl TryFrom<v1::SessionInfo> for messages::SessionInfo {
                 .collect::<Result<_, _>>()?,
             sequence: NonZeroU64::new(s.sequence)
                 .ok_or(WireError::MalformedField("SessionInfo.sequence"))?,
+            program_status: s
+                .program_status
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<Result<_, _>>()?,
+        })
+    }
+}
+
+impl From<&messages::ProgramStatusRecord> for v1::ProgramStatusRecord {
+    fn from(r: &messages::ProgramStatusRecord) -> Self {
+        Self {
+            id: r.id.clone(),
+            state: r.state.clone(),
+            kind: r.kind.clone(),
+            progress: r.progress.map(u32::from),
+            app: r.app.clone(),
+            title: r.title.clone(),
+            msg: r.msg.clone(),
+        }
+    }
+}
+
+impl TryFrom<v1::ProgramStatusRecord> for messages::ProgramStatusRecord {
+    type Error = WireError;
+    fn try_from(r: v1::ProgramStatusRecord) -> Result<Self, Self::Error> {
+        const FIELD: &str = "ProgramStatusRecord.progress";
+        let progress = match r.progress {
+            Some(value @ 0..=100) => Some(narrow::<u8>(FIELD, value)?),
+            Some(value) => {
+                return Err(WireError::OutOfRange {
+                    field: FIELD,
+                    value,
+                });
+            }
+            None => None,
+        };
+        Ok(Self {
+            id: r.id,
+            state: r.state,
+            kind: r.kind,
+            progress,
+            app: r.app,
+            title: r.title,
+            msg: r.msg,
         })
     }
 }
@@ -779,7 +825,59 @@ mod tests {
             last_exit_code: None,
             attachments,
             sequence,
+            program_status: Vec::new(),
         }
+    }
+
+    fn wire_record(progress: Option<u32>) -> v1::ProgramStatusRecord {
+        v1::ProgramStatusRecord {
+            id: "build".into(),
+            state: "working".into(),
+            kind: None,
+            progress,
+            app: None,
+            title: None,
+            msg: None,
+        }
+    }
+
+    #[test]
+    fn a_record_progress_up_to_100_decodes() {
+        for value in [0, 100] {
+            let record = messages::ProgramStatusRecord::try_from(wire_record(Some(value))).unwrap();
+            assert_eq!(record.progress, Some(u8::try_from(value).unwrap()));
+        }
+        let absent = messages::ProgramStatusRecord::try_from(wire_record(None)).unwrap();
+        assert_eq!(absent.progress, None);
+    }
+
+    #[test]
+    fn a_record_progress_past_100_is_rejected() {
+        for value in [101, 255, 256, u32::MAX] {
+            assert!(matches!(
+                messages::ProgramStatusRecord::try_from(wire_record(Some(value))),
+                Err(WireError::OutOfRange {
+                    field: "ProgramStatusRecord.progress",
+                    value: v,
+                }) if v == value
+            ));
+        }
+    }
+
+    /// Open vocabularies: a value no spec revision felis knows still
+    /// decodes, so a newer daemon's state reaches an older reader.
+    #[test]
+    fn an_unknown_record_state_and_kind_decode() {
+        let record = messages::ProgramStatusRecord::try_from(v1::ProgramStatusRecord {
+            state: "paused".into(),
+            kind: Some("captcha".into()),
+            ..wire_record(None)
+        })
+        .unwrap();
+        assert_eq!(
+            (record.state.as_str(), record.kind.as_deref()),
+            ("paused", Some("captcha"))
+        );
     }
 
     fn wire_attachment(attached_at: Option<prost_types::Timestamp>) -> v1::Attachment {

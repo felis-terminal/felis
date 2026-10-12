@@ -112,6 +112,9 @@ where
         if let Some(code) = session.last_exit_code {
             println!("exit:     {code}");
         }
+        for record in &session.program_status {
+            println!("status:   {}", status_line(record));
+        }
         for attachment in &session.attachments {
             println!(
                 "window:   {} (attached {}){}",
@@ -503,4 +506,114 @@ pub(crate) fn search_match<'a>(
 
 pub(super) fn session_passes_tag_filter(s: &SessionInfo, filter: &[String]) -> bool {
     filter.is_empty() || s.tags.iter().any(|t| filter.iter().any(|f| f == t))
+}
+
+/// One record on one line: `<id> <state>[ <kind>][ <progress>%][ [<app>]][ <title>][: <msg>]`,
+/// the root record shown as `(root)`. Producer text is printed with its
+/// direction controls spelled out: this line lands outside any grid
+/// that would mark them.
+fn status_line(record: &felis_protocol::messages::ProgramStatusRecord) -> String {
+    use std::fmt::Write as _;
+
+    let mut line = if record.id.is_empty() {
+        "(root)".to_owned()
+    } else {
+        disarm(&record.id)
+    };
+    let _ = write!(line, " {}", disarm(&record.state));
+    if let Some(kind) = &record.kind {
+        let _ = write!(line, " {}", disarm(kind));
+    }
+    if let Some(progress) = record.progress {
+        let _ = write!(line, " {progress}%");
+    }
+    if let Some(app) = &record.app {
+        let _ = write!(line, " [{}]", disarm(app));
+    }
+    if let Some(title) = &record.title {
+        let _ = write!(line, " {}", disarm(title));
+    }
+    if let Some(msg) = &record.msg {
+        let _ = write!(line, ": {}", disarm(msg));
+    }
+    line
+}
+
+/// Spells each UAX #9 explicit-formatting character and the implicit
+/// direction marks (LRM, RLM, ALM) as `<U+XXXX>`, and every other
+/// control character the same way.
+fn disarm(text: &str) -> String {
+    use std::fmt::Write as _;
+
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        if felis_grid::bidi::is_override(c)
+            || matches!(c, '\u{200E}' | '\u{200F}' | '\u{061C}')
+            || c.is_control()
+        {
+            let _ = write!(out, "<U+{:04X}>", u32::from(c));
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod status_line_tests {
+    use felis_protocol::messages::ProgramStatusRecord;
+
+    use super::status_line;
+
+    fn record(id: &str, state: &str) -> ProgramStatusRecord {
+        ProgramStatusRecord {
+            id: id.into(),
+            state: state.into(),
+            kind: None,
+            progress: None,
+            app: None,
+            title: None,
+            msg: None,
+        }
+    }
+
+    #[test]
+    fn a_bare_root_record_prints_its_state() {
+        assert_eq!(status_line(&record("", "idle")), "(root) idle");
+    }
+
+    #[test]
+    fn every_key_prints_in_order() {
+        let line = status_line(&ProgramStatusRecord {
+            kind: Some("permission".into()),
+            progress: Some(40),
+            app: Some("cargo".into()),
+            title: Some("tests".into()),
+            msg: Some("allow network?".into()),
+            ..record("build/test", "blocked")
+        });
+        assert_eq!(
+            line,
+            "build/test blocked permission 40% [cargo] tests: allow network?"
+        );
+    }
+
+    #[test]
+    fn direction_controls_in_producer_text_are_spelled_out() {
+        let line = status_line(&ProgramStatusRecord {
+            title: Some("a\u{202E}b\u{2066}c".into()),
+            msg: Some("\u{200F}x\u{061C}".into()),
+            ..record("", "done")
+        });
+        assert_eq!(line, "(root) done a<U+202E>b<U+2066>c: <U+200F>x<U+061C>");
+    }
+
+    #[test]
+    fn right_to_left_script_is_content_and_printed_as_is() {
+        let line = status_line(&ProgramStatusRecord {
+            msg: Some("\u{05E9}\u{05DC}\u{05D5}\u{05DD}".into()),
+            ..record("", "done")
+        });
+        assert_eq!(line, "(root) done: \u{05E9}\u{05DC}\u{05D5}\u{05DD}");
+    }
 }

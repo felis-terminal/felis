@@ -27,6 +27,7 @@ pub(crate) mod locale;
 pub mod notify;
 pub mod parse_sink;
 pub mod pool;
+pub mod program_status;
 pub mod relay;
 pub mod serve;
 pub(crate) mod terminfo;
