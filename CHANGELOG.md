@@ -57,6 +57,7 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 - Kitty graphics file (`t=f`) and temp-file (`t=t`) transmissions now read the `S=` bytes at offset `O=`, as kitty does;
   they used to read the whole file.
 - A reply to a Kitty graphics frame command (`a=f`) now echoes its `r=`, as kitty does.
+- A Kitty graphics placement whose image was evicted in the same burst that placed it no longer lingers in the window.
 - Kitty graphics Unicode-placeholder placements of one image now stay apart by `p=`, and a placeholder cell picks its
   placement by its underline color, as in kitty; felis kept one per image, so a second placement resized the first's
   tiles. `d=i`/`I`, `d=n`/`N`, `d=r`/`R` and transmitting the image again now remove its placeholder placements too.

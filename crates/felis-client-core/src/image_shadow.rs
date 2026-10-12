@@ -528,11 +528,13 @@ impl ImageShadow {
         if self.active.as_ref().is_some_and(|open| open.id == id) {
             self.active = None;
         }
+        // A drain that creates and drops an image in one cycle ships its
+        // placements but not its bytes, so they go even when it is absent.
+        self.placements.retain(|p| p.image_id != id);
+        self.virtual_placements.retain(|v| v.image_id != id);
         if let Some(entry) = self.images.remove(&id) {
             self.retained -= Self::bytes_of(&entry);
             self.image_order.retain(|x| *x != id);
-            self.placements.retain(|p| p.image_id != id);
-            self.virtual_placements.retain(|v| v.image_id != id);
             self.dirty_images.remove(&id);
         }
     }
@@ -722,6 +724,15 @@ mod tests {
             placement_id: None,
         });
         assert_eq!(s.virtual_placements(), []);
+    }
+
+    #[test]
+    fn a_delete_drops_the_placements_of_an_image_never_received() {
+        let mut s = ImageShadow::new();
+        s.apply_ok(&placement(12, Some(1), 0));
+        s.apply_ok(&virtual_placement(12, Some(2), 4));
+        s.apply_ok(&ImageMsg::Delete { id: ImageId(12) });
+        assert!(s.is_empty());
     }
 
     #[test]
