@@ -130,11 +130,12 @@ include `a=t/T/p/q`, `a=d` (basic and extended deletion), and `a=a/f/c` animatio
 
 ### Placement parameters
 
-- `x`, `y`, `w`, `h`: Pixel sub-region of source image.
-- `c`, `r`: Target width and height in terminal cells. An omitted (or zero) axis is the source size in pixels (the `x`,
-  `y`, `w`, `h` region when all four are given, clipped to the image) over the cell size, rounded up. Like kitty, felis
-  re-resolves it whenever the cell size changes (font size, scale factor), so a naturally sized image keeps its pixel
-  size. Until a client has reported a cell size, one pixel counts as one cell.
+- `x`, `y`, `w`, `h`: Pixel sub-region of source image. As in kitty, each key defaults on its own: `x` and `y` to 0, an
+  omitted or zero `w` or `h` to the image's width or height. The region is then clipped to the image.
+- `c`, `r`: Target width and height in terminal cells. An omitted (or zero) axis is the source size in pixels (the
+  clipped `x`, `y`, `w`, `h` region) over the cell size, rounded up. Like kitty, felis re-resolves it whenever the cell
+  size changes (font size, scale factor), so a naturally sized image keeps its pixel size. Until a client has reported a
+  cell size, one pixel counts as one cell.
 - `z`: Z-index stacking order (negative behind text, positive above).
 - `C=1`: Prevent cursor motion after placement. Without it the cursor lands as in kitty: on the placed cell box's last
   row, one column right of it. A column past the right edge wraps to column 0 one row further down; a row past the

@@ -66,6 +66,8 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 - Kitty graphics file (`t=f`) and temp-file (`t=t`) transmissions now read the `S=` bytes at offset `O=`, as kitty does;
   they used to read the whole file.
 - A reply to a Kitty graphics frame command (`a=f`) now echoes its `r=`, as kitty does.
+- A Kitty graphics placement with only some of `x`, `y`, `w`, `h` now crops as kitty does: `x` and `y` default to 0 and
+  `w` and `h` to the image's size. It used to draw the whole image unless all four were given.
 - A Kitty graphics placement whose image was evicted in the same burst that placed it no longer lingers in the window.
 - The alternate screen now has a Kitty graphics image store of its own, as in kitty. A full-screen program can no longer
   free the images on the shell screen it covers, whether by clearing its screen, deleting by id range, or filling the

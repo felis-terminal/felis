@@ -1,3 +1,4 @@
+use felis_protocol::messages::SourceRect;
 use felis_vt::Parser;
 use proptest::prelude::*;
 
@@ -2078,6 +2079,71 @@ fn natural_sizing_resolves_from_the_source_rectangle() {
         "the 12 px the rectangle keeps inside the image, not the image's 32 px",
     );
     assert_eq!(grid.cursor().col, 2);
+}
+
+/// kitty's `handle_put_command`: each of `x`/`y`/`w`/`h` defaults on
+/// its own, so a partial rectangle still crops.
+#[test]
+fn a_partial_source_rectangle_defaults_each_missing_key() {
+    type Case = (
+        &'static [(u8, &'static [u8])],
+        Option<SourceRect>,
+        (u16, u16),
+    );
+    let cases: [Case; 4] = [
+        (&[(b'x', b"40")], Some(rect(40, 0, 100, 50)), (6, 5)),
+        (&[(b'w', b"30")], Some(rect(0, 0, 30, 50)), (3, 5)),
+        (
+            &[(b'y', b"20"), (b'h', b"0")],
+            Some(rect(0, 20, 100, 50)),
+            (10, 3),
+        ),
+        (&[], None, (10, 5)),
+    ];
+    for (keys, want, extent) in cases {
+        let (mut grid, mut images, mut placements) = handler_state();
+        let payload = b64(&vec![0u8; 100 * 50 * 4]);
+        let mut controls: Vec<(u8, &[u8])> = vec![
+            (b'a', b"T"),
+            (b'i', b"42"),
+            (b'f', b"32"),
+            (b's', b"100"),
+            (b'v', b"50"),
+        ];
+        controls.extend_from_slice(keys);
+        let mut events = Vec::new();
+        handle_complete(
+            &mut ApcCtx {
+                grid: &mut grid,
+                images: &mut images,
+                placements: &mut placements,
+                events: &mut events,
+                shm: &mut ShmDeferral::default(),
+                cell_pixel_w: 10,
+                cell_pixel_h: 10,
+                anchor_cursor: None,
+            },
+            &complete(&controls, &payload),
+        )
+        .unwrap();
+        let p = placements.iter().next().expect("placement recorded");
+        assert_eq!(p.source, want, "{keys:?}");
+        assert_eq!(p.extent(), extent, "{keys:?}");
+        let sent = events.iter().find_map(|e| match e {
+            ImageEvent::Placement { source, .. } => Some(*source),
+            _ => None,
+        });
+        assert_eq!(sent, Some(want), "{keys:?}");
+    }
+}
+
+const fn rect(x: u32, y: u32, width: u32, height: u32) -> SourceRect {
+    SourceRect {
+        x,
+        y,
+        width,
+        height,
+    }
 }
 
 #[test]
