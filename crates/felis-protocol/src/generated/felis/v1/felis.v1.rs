@@ -2396,6 +2396,11 @@ pub struct SearchQuery {
     pub query: ::prost::alloc::string::String,
     #[prost(message, optional, tag="2")]
     pub options: ::core::option::Option<SearchOptions>,
+    /// Absent means SEARCH_SOURCE_SCROLLBACK. A minor-1 addition: a daemon
+    /// below it ignores the field and walks scrollback, so a client gates
+    /// a present value on the effective minor rather than send it.
+    #[prost(enumeration="SearchSource", optional, tag="3")]
+    pub source: ::core::option::Option<i32>,
 }
 /// One logical line of the active search returning a hit.
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -3193,6 +3198,40 @@ impl RegionSource {
             "REGION_SOURCE_VISIBLE" => Some(Self::Visible),
             "REGION_SOURCE_COMMAND_OUTPUT" => Some(Self::CommandOutput),
             "REGION_SOURCE_LAST_COMMAND" => Some(Self::LastCommand),
+            _ => None,
+        }
+    }
+}
+/// Rows a SearchQuery walks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum SearchSource {
+    Unspecified = 0,
+    /// Scrollback plus the live primary screen, stitched across the seam;
+    /// the alternate screen is skipped.
+    Scrollback = 1,
+    /// The live grid only, whichever screen is active, never stitched
+    /// into scrollback.
+    Visible = 2,
+}
+impl SearchSource {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "SEARCH_SOURCE_UNSPECIFIED",
+            Self::Scrollback => "SEARCH_SOURCE_SCROLLBACK",
+            Self::Visible => "SEARCH_SOURCE_VISIBLE",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "SEARCH_SOURCE_UNSPECIFIED" => Some(Self::Unspecified),
+            "SEARCH_SOURCE_SCROLLBACK" => Some(Self::Scrollback),
+            "SEARCH_SOURCE_VISIBLE" => Some(Self::Visible),
             _ => None,
         }
     }

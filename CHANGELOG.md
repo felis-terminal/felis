@@ -20,6 +20,12 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 - **Wire**: protocol minor 1 adds `Ops::Upgrade` and `Ops::UpgradeReply`, with the closed refusal enum `UpgradeRefusal`.
   A client refuses to send `Upgrade` to a minor-0 daemon, so `felis daemon upgrade` against an older daemon exits `2`
   with `unsupported`.
+- **CLI**: `felis sessions search --source visible` searches only the live screen, including the alternate screen a
+  fullscreen program draws on, so its `col_spans` give the cell columns of on-screen text. `--source scrollback` names
+  the default, which is unchanged. The stdio bridge's `sessions.search` takes the same values as `source`.
+- **Wire**: protocol minor 1 also adds `SearchQuery.source` with the closed enum `SearchSource`. A client refuses to
+  send a non-default source to a minor-0 daemon, which would ignore it and search scrollback, so `--source visible`
+  against an older daemon exits `2` with `unsupported`.
 - **CLI**: `felis doctor` notes on the `daemon` row when the running daemon is a build other than the installed
   `felis-daemon`, naming the installed one.
 - **CLI**: `felis doctor report` prints the doctor checklist plus the builds, OS, display server, GPU driver version,

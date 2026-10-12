@@ -905,6 +905,7 @@ impl App {
         let msg = SearchToDaemonMsg::Query {
             query: self.search.query.clone(),
             options: felis_protocol::messages::SearchOptions::default(),
+            source: felis_protocol::messages::SearchSource::Scrollback,
         };
         // Checked before `open_stream` rather than at send: opening advances
         // the client's stream counter, so a dropped frame desynchronizes stream

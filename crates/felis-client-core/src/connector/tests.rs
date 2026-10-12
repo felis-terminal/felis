@@ -736,6 +736,7 @@ async fn one_connection_answers_many_verbs_while_a_stream_runs() {
                 &SearchToDaemonMsg::Query {
                     query: "needle-".to_owned(),
                     options: SearchOptions::default(),
+                    source: felis_protocol::messages::SearchSource::Scrollback,
                 },
                 Correlation::stream(stream),
             )
@@ -756,6 +757,7 @@ async fn one_connection_answers_many_verbs_while_a_stream_runs() {
             &SearchToDaemonMsg::Query {
                 query: "needle-".to_owned(),
                 options: SearchOptions::default(),
+                source: felis_protocol::messages::SearchSource::Scrollback,
             },
             Correlation::stream(stream),
         )
@@ -821,6 +823,7 @@ async fn sequential_streams_free_their_slot_on_the_daemon() {
                 &SearchToDaemonMsg::Query {
                     query: "needle-".to_owned(),
                     options: SearchOptions::default(),
+                    source: felis_protocol::messages::SearchSource::Scrollback,
                 },
                 Correlation::stream(stream),
             )
@@ -890,6 +893,7 @@ async fn cancelling_a_search_mid_stream_stops_it_and_leaves_the_connection_usabl
             &SearchToDaemonMsg::Query {
                 query: "needle-".to_owned(),
                 options: SearchOptions::default(),
+                source: felis_protocol::messages::SearchSource::Scrollback,
             },
             Correlation::stream(stream),
         )
@@ -937,6 +941,7 @@ async fn a_huge_scrollback_search_emits_before_the_walk_completes() {
             &SearchToDaemonMsg::Query {
                 query: "needle-".to_owned(),
                 options: SearchOptions::default(),
+                source: felis_protocol::messages::SearchSource::Scrollback,
             },
             Correlation::stream(stream),
         )

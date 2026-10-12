@@ -1,11 +1,14 @@
 use std::ops::ControlFlow;
 
 use anyhow::Result;
-use felis_client_core::{ConnectError, Connection};
+use felis_client_core::{ConnectError, Connection, check_value_minor};
 use felis_protocol::messages::SessionInfo;
 use felis_protocol::{
     SessionHex,
-    messages::{ByteSpan, ColSpan, RegionSource, SearchToClientMsg, SearchToDaemonMsg},
+    messages::{
+        ByteSpan, ColSpan, RegionSource, SearchOptions, SearchSource, SearchToClientMsg,
+        SearchToDaemonMsg,
+    },
 };
 use tokio::io::{AsyncRead, AsyncWrite};
 
@@ -174,6 +177,7 @@ struct CapturedRow {
 fn open_stream_failure(out: &Reporter, verb: &str, err: &ConnectError) -> i32 {
     let kind = match err {
         ConnectError::Driver(_) => ErrorKind::Protocol,
+        ConnectError::MinorTooOld { .. } => ErrorKind::Unsupported,
         _ => ErrorKind::DaemonLost,
     };
     out.fail(kind, format!("{verb}: open a stream: {err}"))
@@ -360,14 +364,23 @@ pub(super) async fn cmd_search<R, W>(
     out: &Reporter,
     id_prefix: &str,
     pattern: &str,
-    regex: bool,
-    case_insensitive: bool,
+    options: SearchOptions,
+    source: SearchSource,
 ) -> Result<i32>
 where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
 {
-    use felis_protocol::messages::SearchOptions as WireSearchOptions;
+    let query = SearchToDaemonMsg::Query {
+        query: pattern.to_string(),
+        options,
+        source,
+    };
+    // Before the attach: a daemon below the source's minor would ignore
+    // the field and answer a scrollback search in its place.
+    if let Err(e) = check_value_minor(&query, conn.effective_minor) {
+        return Ok(out.fail(ErrorKind::Unsupported, format!("search: {e}")));
+    }
 
     let _resolved = match attach_by_prefix(&mut conn, out, id_prefix).await {
         Ok(v) => v,
@@ -376,15 +389,7 @@ where
 
     // Rehydrate frames arrive in parallel on the Grid kind; the drain
     // sees only the Search-kind ones and the stream's own terminal.
-    let opened = conn
-        .open_stream(&SearchToDaemonMsg::Query {
-            query: pattern.to_string(),
-            options: WireSearchOptions {
-                regex,
-                case_insensitive,
-            },
-        })
-        .await;
+    let opened = conn.open_stream(&query).await;
     let stream = match opened {
         Ok(stream) => stream,
         Err(e) => return Ok(open_stream_failure(out, "search", &e)),

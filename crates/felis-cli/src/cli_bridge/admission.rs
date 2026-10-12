@@ -3,7 +3,7 @@ use felis_protocol::{
     codec,
     messages::{
         Correlation, InputMsg, NotifyToDaemonMsg, OpsToDaemonMsg, RegionSource, RegionToDaemonMsg,
-        RequestId, SearchOptions, SearchToDaemonMsg,
+        RequestId, SearchOptions, SearchSource, SearchToDaemonMsg,
     },
 };
 use serde_json::Value;
@@ -109,7 +109,9 @@ impl Operation {
             Self::Daemon(DaemonOp::Switch) => &["to", "from", "attachment"],
             Self::Daemon(DaemonOp::Tag) => &["session", "add", "remove"],
             Self::Daemon(DaemonOp::Capture) => &["session", "source", "ansi", "lines"],
-            Self::Daemon(DaemonOp::Search) => &["session", "pattern", "regex", "case_insensitive"],
+            Self::Daemon(DaemonOp::Search) => {
+                &["session", "pattern", "regex", "case_insensitive", "source"]
+            }
             Self::Cancel => &["target"],
         }
     }
@@ -399,6 +401,13 @@ pub(super) fn region_source(params: &Params<'_>) -> Result<RegionSource, BridgeE
     }
 }
 
+pub(super) fn search_source(params: &Params<'_>) -> Result<SearchSource, BridgeError> {
+    match params.str_opt("source")? {
+        Some(raw) => crate::cli_sessions::parse_search_source(&raw).map_err(BridgeError::malformed),
+        None => Ok(SearchSource::Scrollback),
+    }
+}
+
 /// `text` only, no chord spelling: the bridge freezes the parameters
 /// its clients have needed, and `keys` is additive within `v:1`
 /// (docs/reference/cli.md "`felis bridge`"). A client that wants a
@@ -574,6 +583,7 @@ impl Core {
                 let pattern = params.str_req("pattern")?;
                 let regex = params.bool("regex")?;
                 let case_insensitive = params.bool("case_insensitive")?;
+                let source = search_source(&params)?;
                 check_search_pattern(&pattern)?;
                 preflight_correlated(&SearchToDaemonMsg::Query {
                     query: pattern,
@@ -581,6 +591,7 @@ impl Core {
                         regex,
                         case_insensitive,
                     },
+                    source,
                 })?;
             }
             Operation::Daemon(DaemonOp::Subscribe) => {

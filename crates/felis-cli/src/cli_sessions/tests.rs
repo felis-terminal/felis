@@ -17,9 +17,9 @@ use super::{
         chord_key_event, cmd_send, collect_send_payload, over_limit_payload, read_send_payload,
         resolve_spawn_cwd, tag_result,
     },
-    parse_region_source, plan,
-    read::{RowEncoding, session_passes_tag_filter},
-    source_names,
+    parse_region_source, parse_search_source, plan,
+    read::{RowEncoding, cmd_search, session_passes_tag_filter},
+    search_source_names, source_names,
 };
 use crate::cli_output::{ErrorKind, Format, PointFormat, Reporter, SessionRef};
 
@@ -490,6 +490,61 @@ async fn send_exit_code_when_the_daemon_drops_at_attach() -> i32 {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_daemon_closing_mid_attach_exits_two() {
     assert_eq!(send_exit_code_when_the_daemon_drops_at_attach().await, 2);
+}
+
+/// A daemon below the source's minor would ignore the field and search
+/// scrollback, so the verb refuses as `unsupported` (exit 2) before a
+/// byte leaves, the attach included.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_visible_search_on_a_minor_zero_daemon_exits_two_unsent() {
+    use felis_protocol::messages::{SearchOptions, SearchSource};
+    use felis_transport::{FrameReader, FrameWriter};
+    use tokio::io::AsyncReadExt as _;
+
+    let (client_side, mut daemon_side) = tokio::io::duplex(64 * 1024);
+    let (client_read, client_write) = tokio::io::split(client_side);
+    let conn = Connection::from_halves(
+        FrameReader::new(client_read),
+        FrameWriter::baseline(client_write),
+        felis_protocol::ConnectionMode::Ops,
+    );
+    let out = Reporter::stream(Format::Jsonl);
+    let code = cmd_search(
+        conn,
+        &out,
+        SEND_TEST_PREFIX,
+        "needle",
+        SearchOptions::default(),
+        SearchSource::Visible,
+    )
+    .await
+    .expect("search reports rather than erroring");
+    assert_eq!(code, 2);
+
+    let mut sent = Vec::new();
+    daemon_side
+        .read_to_end(&mut sent)
+        .await
+        .expect("read the daemon side");
+    assert!(
+        sent.is_empty(),
+        "nothing may reach the daemon, got {sent:?}"
+    );
+}
+
+#[test]
+fn the_search_source_refusal_names_exactly_the_current_vocabulary() {
+    let message = parse_search_source("command-output").unwrap_err();
+    assert_eq!(
+        message,
+        "unknown source `command-output` (expected scrollback or visible)",
+    );
+    for name in search_source_names() {
+        assert!(
+            message.contains(&name),
+            "`{name}` is missing from {message}"
+        );
+    }
 }
 
 #[test]

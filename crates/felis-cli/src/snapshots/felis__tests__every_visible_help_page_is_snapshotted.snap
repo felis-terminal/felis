@@ -318,6 +318,12 @@ Options:
       --case-insensitive
           Case-insensitive match
 
+      --source <SOURCE>
+          Rows to search: `scrollback` (history plus the primary screen; skips the alternate screen) or `visible` (the live screen alone, alternate screen included; every `line_index` is a grid row)
+          
+          [default: scrollback]
+          [possible values: scrollback, visible]
+
       --format <FORMAT>
           Output framing: `human` (default) or `jsonl`: one JSON object per line on stdout, ending in exactly one terminal object
           

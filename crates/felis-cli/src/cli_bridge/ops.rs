@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use felis_client_core::Offer;
+use felis_client_core::{Offer, check_value_minor};
 use felis_protocol::{
     SessionHex,
     messages::{
@@ -15,8 +15,8 @@ use serde_json::Value;
 
 use super::{
     admission::{
-        Params, check_search_pattern, region_source, send_input, spawn_args, switch_from,
-        switch_scope,
+        Params, check_search_pattern, region_source, search_source, send_input, spawn_args,
+        switch_from, switch_scope,
     },
     core::{Core, Op},
     envelope::BridgeError,
@@ -281,14 +281,18 @@ impl Core {
             case_insensitive: params.bool("case_insensitive")?,
         };
         check_search_pattern(&pattern)?;
+        let query = SearchToDaemonMsg::Query {
+            query: pattern,
+            options,
+            source: search_source(params)?,
+        };
+        // Every link dials the anchor's daemon, so its minor answers
+        // before an attach that a too-old daemon would make for nothing.
+        check_value_minor(&query, self.anchor.effective_minor())
+            .map_err(|err| BridgeError::new(ErrorKind::Unsupported, err.to_string()))?;
         let (_id, count) = self
             .with_session_by_prefix(op, &prefix, async |link| {
-                let mut stream = link
-                    .open_stream(&SearchToDaemonMsg::Query {
-                        query: pattern,
-                        options,
-                    })
-                    .await?;
+                let mut stream = link.open_stream(&query).await?;
                 op.bind_stream(&link, stream.id);
                 loop {
                     match stream.next().await {

@@ -32,6 +32,7 @@ use crate::conn::RehydrateError;
 /// operation waiting for it.
 pub(super) struct Link {
     label: &'static str,
+    effective_minor: u16,
     pub(super) writer: tokio::sync::Mutex<Option<FrameWriter<CarrierWriter>>>,
     pub(super) driver: std::sync::Mutex<ClientDriver>,
     pub(super) registry: std::sync::Mutex<Registry>,
@@ -58,6 +59,8 @@ pub(super) struct Registry {
 #[derive(Debug, Clone)]
 pub(super) enum LinkError {
     InvalidRequest(String),
+    /// The request needs a protocol minor the daemon predates.
+    Unsupported(String),
     Lost(String),
     Protocol(String),
     Refused {
@@ -131,10 +134,12 @@ impl Link {
             reader,
             writer,
             driver,
+            effective_minor,
             ..
         } = conn;
         let link = Arc::new(Self {
             label,
+            effective_minor,
             writer: tokio::sync::Mutex::new(Some(writer)),
             driver: std::sync::Mutex::new(driver),
             registry: std::sync::Mutex::new(Registry::default()),
@@ -145,6 +150,10 @@ impl Link {
         let pump = tokio::spawn(pump(Arc::clone(&link), reader));
         *link.pump.lock_or_poisoned() = Some(pump);
         link
+    }
+
+    pub(super) const fn effective_minor(&self) -> u16 {
+        self.effective_minor
     }
 
     pub(super) fn is_lost(&self) -> bool {
@@ -275,6 +284,9 @@ impl Link {
         .await;
         match opened {
             Ok(id) => Ok(StreamHandle { id, rx }),
+            Err(OpenStreamError::Invalid(
+                err @ felis_transport::TransportError::MinorTooOld { .. },
+            )) => Err(LinkError::Unsupported(err.to_string())),
             Err(OpenStreamError::Invalid(err)) => Err(LinkError::InvalidRequest(err.to_string())),
             Err(OpenStreamError::Begin(err)) => Err(err),
             Err(OpenStreamError::Write(err)) => Err(self.writer_died(writer, err).await),

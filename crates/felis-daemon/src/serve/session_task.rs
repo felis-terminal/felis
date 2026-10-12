@@ -918,6 +918,12 @@ enum ProducerKind {
         /// Logical lines per slice.
         budget: usize,
     },
+    /// Resumed by row position, as `Rows` is: the logical-line cursor
+    /// of `Search` assumes history that only grows at its newest end.
+    VisibleSearch {
+        query: felis_grid::SearchQuery,
+        row: usize,
+    },
     Rows {
         source: RegionSource,
         ansi: bool,
@@ -2337,7 +2343,11 @@ impl SessionTask {
         stream: StreamId,
     ) -> Option<EndReason> {
         let i = self.sub_index(sub_id)?;
-        let SearchToDaemonMsg::Query { query, options } = msg;
+        let SearchToDaemonMsg::Query {
+            query,
+            options,
+            source,
+        } = msg;
         let compiled = match felis_grid::SearchQuery::new(&query, options) {
             Ok(q) => q,
             Err(err) => {
@@ -2355,6 +2365,19 @@ impl SessionTask {
                 return None;
             }
         };
+        if source == felis_grid::SearchSource::Visible {
+            self.subs[i].producers.push(Producer {
+                stream,
+                canceled: false,
+                emitted: 0,
+                kind: ProducerKind::VisibleSearch {
+                    query: compiled,
+                    row: 0,
+                },
+            });
+            self.pending_chunks.push_back((sub_id, stream));
+            return None;
+        }
         // `lock_core` is not reentrant; one guard for both reads.
         let total = {
             let core = self.session.lock_core();
@@ -2528,6 +2551,32 @@ impl SessionTask {
                     seen_total: advanced.seen_total,
                 };
                 (cursor.visited >= advanced.seen(), emitted)
+            }
+            ProducerKind::VisibleSearch { query, row } => {
+                let core = session.lock_core();
+                let (resume, walk) =
+                    core.grid
+                        .search_visible_window(query, *row, SEARCH_CHUNK_LINES);
+                let mut emitted = 0u32;
+                let mut stopped_at = None;
+                for (next_row, hit) in walk {
+                    out.push(OutEvent::Search {
+                        msg: SearchToClientMsg::Match {
+                            line_index: hit.line_index,
+                            text: hit.text,
+                            byte_spans: hit.byte_spans,
+                            col_spans: hit.col_spans,
+                        },
+                        correlation,
+                    });
+                    emitted += 1;
+                    if emitted >= SEARCH_CHUNK_ITEMS {
+                        stopped_at = Some(next_row);
+                        break;
+                    }
+                }
+                *row = stopped_at.unwrap_or(resume);
+                (*row >= usize::from(core.grid.rows()), emitted)
             }
             ProducerKind::Rows {
                 source,
@@ -4186,6 +4235,7 @@ mod tests {
             SearchToDaemonMsg::Query {
                 query: "needle-".to_owned(),
                 options: felis_protocol::messages::SearchOptions::default(),
+                source: felis_protocol::messages::SearchSource::Scrollback,
             },
             stream,
         );
@@ -4229,6 +4279,7 @@ mod tests {
             SearchToDaemonMsg::Query {
                 query: "needle-".to_owned(),
                 options: felis_protocol::messages::SearchOptions::default(),
+                source: felis_protocol::messages::SearchSource::Scrollback,
             },
             stream,
         );
@@ -4259,6 +4310,103 @@ mod tests {
         assert_eq!(terminals, 1, "exactly one terminal, even under cancel");
     }
 
+    /// The query's source reaches the walk: the same needle on the
+    /// alternate screen is missing from the default search and found by
+    /// the visible one, at its live row.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_visible_search_walks_the_alternate_screen() {
+        use felis_protocol::messages::{SearchOptions, SearchSource};
+
+        let mut task = SessionTask::for_tests(session_with(
+            "printf '\\033[?1049h\\033[2;1Hon-alt'; read _x",
+        ));
+        let (sub, mut rx) = attach_sub(&mut task, false);
+        wait_for_grid_text(&task, "on-alt").await;
+        drain_events(&mut rx);
+
+        let mut hits = |source, id| {
+            task.handle_search(
+                sub,
+                SearchToDaemonMsg::Query {
+                    query: "on-alt".to_owned(),
+                    options: SearchOptions::default(),
+                    source,
+                },
+                test_stream(id),
+            );
+            while task.has_pending_chunks() {
+                task.run_next_chunk();
+            }
+            drain_events(&mut rx)
+                .into_iter()
+                .filter_map(|ev| match ev {
+                    OutEvent::Search {
+                        msg: SearchToClientMsg::Match { line_index, .. },
+                        ..
+                    } => Some(line_index),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(hits(SearchSource::Scrollback, 1), Vec::<i64>::new());
+        assert_eq!(hits(SearchSource::Visible, 2), vec![1]);
+    }
+
+    /// A visible walk with more hits than one send carries resumes at
+    /// the row after the last hit sent: every row once, in order, under
+    /// one terminal counting them all.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_visible_search_resumes_past_the_item_cap_at_the_next_row() {
+        use felis_protocol::messages::{SearchOptions, SearchSource};
+
+        let mut task = SessionTask::for_tests(session_with("read _x"));
+        let (sub, mut rx) = attach_sub(&mut task, false);
+        drain_events(&mut rx);
+        let rows: u16 = 300;
+        {
+            let mut core = task.session.lock_core();
+            let ParseCore { parser, grid, .. } = &mut *core;
+            *grid = felis_grid::Grid::new(rows, 8);
+            parser.advance(grid, "hit\r\n".repeat(usize::from(rows) - 1).as_bytes());
+            parser.advance(grid, b"hit");
+        }
+
+        task.handle_search(
+            sub,
+            SearchToDaemonMsg::Query {
+                query: "hit".to_owned(),
+                options: SearchOptions::default(),
+                source: SearchSource::Visible,
+            },
+            test_stream(1),
+        );
+        let mut sends = Vec::new();
+        let mut reported = Vec::new();
+        let mut terminal = None;
+        while task.has_pending_chunks() {
+            task.run_next_chunk();
+            let mut items = 0;
+            for ev in drain_events(&mut rx) {
+                match ev {
+                    OutEvent::Search {
+                        msg: SearchToClientMsg::Match { line_index, .. },
+                        ..
+                    } => {
+                        items += 1;
+                        reported.push(line_index);
+                    }
+                    OutEvent::Control(ConnToClientMsg::End { count, .. }) => terminal = Some(count),
+                    _ => {}
+                }
+            }
+            sends.push(items);
+        }
+        let cap = usize::try_from(SEARCH_CHUNK_ITEMS).unwrap();
+        assert_eq!(sends, vec![cap, cap, usize::from(rows) - 2 * cap]);
+        assert_eq!(reported, (0..i64::from(rows)).collect::<Vec<_>>());
+        assert_eq!(terminal, Some(u32::from(rows)));
+    }
+
     /// An unresolvable needle ends the stream with a typed error, not
     /// an empty success.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -4273,6 +4421,7 @@ mod tests {
             SearchToDaemonMsg::Query {
                 query: String::new(),
                 options: felis_protocol::messages::SearchOptions::default(),
+                source: felis_protocol::messages::SearchSource::Scrollback,
             },
             stream,
         );
@@ -4394,6 +4543,7 @@ mod tests {
             SearchToDaemonMsg::Query {
                 query: "needle-".to_owned(),
                 options: felis_protocol::messages::SearchOptions::default(),
+                source: felis_protocol::messages::SearchSource::Scrollback,
             },
             stream,
         );
@@ -4430,6 +4580,7 @@ mod tests {
             SearchToDaemonMsg::Query {
                 query: "needle-".to_owned(),
                 options: felis_protocol::messages::SearchOptions::default(),
+                source: felis_protocol::messages::SearchSource::Scrollback,
             },
             stream,
         );

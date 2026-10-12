@@ -19,6 +19,13 @@ felis sessions search abc1 panic --case-insensitive
 `felis sessions search` returns exit code `0` when at least one match is found and `1` on no matches, so it works
 directly in shell conditionals.
 
+While a fullscreen program holds the alternate screen, the default search sees only scrollback. Pass `--source visible`
+to search the screen the program drew instead; each match's `col_spans` then gives the cell columns it covers:
+
+```sh
+felis sessions search abc1 'Save changes' --source visible --format jsonl
+```
+
 ## Snapshot session state
 
 `felis sessions capture` dumps grid cell contents, while `felis sessions info` inspects session metadata. Use `--format`

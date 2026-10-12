@@ -541,6 +541,7 @@ mod tests {
             &crate::messages::SearchToDaemonMsg::Query {
                 query: "needle".into(),
                 options: crate::messages::SearchOptions::default(),
+                source: crate::messages::SearchSource::Scrollback,
             },
             stream,
         );

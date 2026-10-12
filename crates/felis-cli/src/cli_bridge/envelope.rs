@@ -71,6 +71,7 @@ impl From<LinkError> for BridgeError {
     fn from(err: LinkError) -> Self {
         match err {
             LinkError::InvalidRequest(detail) => Self::invalid(detail),
+            LinkError::Unsupported(detail) => Self::new(ErrorKind::Unsupported, detail),
             LinkError::Lost(detail) => Self::new(ErrorKind::DaemonLost, detail),
             LinkError::Protocol(detail) => Self::new(ErrorKind::Protocol, detail),
             LinkError::Refused { reason, detail } => Self::new(

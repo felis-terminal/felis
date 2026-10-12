@@ -62,6 +62,13 @@
         }
       ]
     },
+    "SearchSource": {
+      "enum": [
+        "scrollback",
+        "visible"
+      ],
+      "type": "string"
+    },
     "SessionsCaptureParams": {
       "additionalProperties": false,
       "properties": {
@@ -170,6 +177,16 @@
         },
         "session": {
           "$ref": "#/$defs/Prefix"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SearchSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
