@@ -285,6 +285,26 @@ pub fn check_arm_minor(
     Ok(())
 }
 
+/// The same gate over a whole value, post-release fields included.
+///
+/// # Errors
+/// [`ConnectError::MinorTooOld`] naming the ledger addition that raised
+/// the requirement.
+pub fn check_value_minor(
+    value: &impl MinorGated,
+    effective_minor: u16,
+) -> Result<(), ConnectError> {
+    let requires = value.requires();
+    if effective_minor < requires.minor {
+        return Err(ConnectError::MinorTooOld {
+            needs: requires.minor,
+            effective: effective_minor,
+            feature: requires.what,
+        });
+    }
+    Ok(())
+}
+
 pub struct Connection<R = ReadHalf, W = WriteHalf> {
     pub reader: FrameReader<R>,
     pub writer: FrameWriter<W>,
@@ -649,6 +669,15 @@ where
         crate::stream::open_stream(writer, msg, || begin_stream(driver, from))
             .await
             .map_err(|err| match err {
+                OpenStreamError::Invalid(TransportError::MinorTooOld {
+                    what,
+                    needs,
+                    effective,
+                }) => ConnectError::MinorTooOld {
+                    needs,
+                    effective,
+                    feature: what,
+                },
                 OpenStreamError::Invalid(err) | OpenStreamError::Write(err) => err.into(),
                 OpenStreamError::Begin(err) => err.into(),
             })

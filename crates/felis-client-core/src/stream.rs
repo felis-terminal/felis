@@ -73,6 +73,14 @@ where
     // allocation would leave the connection a skipped id it cannot
     // recover from.
     WireCodec::validate(msg).map_err(|err| OpenStreamError::Invalid(err.into()))?;
+    let requires = msg.requires();
+    if requires.minor > writer.effective_minor() {
+        return Err(OpenStreamError::Invalid(TransportError::MinorTooOld {
+            what: requires.what,
+            needs: requires.minor,
+            effective: writer.effective_minor(),
+        }));
+    }
     let id = begin().map_err(OpenStreamError::Begin)?;
     writer
         .send_correlated(msg, Correlation::stream(id))
@@ -87,7 +95,7 @@ mod tests {
         ConnectionMode, MessageKind,
         codec::peek_correlation,
         messages::{
-            MAX_SEARCH_PATTERN_BYTES, RegionSource, RegionToDaemonMsg, SearchOptions,
+            MAX_SEARCH_PATTERN_BYTES, RegionSource, RegionToDaemonMsg, SearchOptions, SearchSource,
             SearchToDaemonMsg, StreamId,
         },
     };
@@ -128,7 +136,7 @@ mod tests {
         SearchToDaemonMsg::Query {
             query: "a".repeat(len),
             options: SearchOptions::default(),
-            source: felis_protocol::messages::SearchSource::Scrollback,
+            source: SearchSource::Scrollback,
         }
     }
 
@@ -201,6 +209,47 @@ mod tests {
             .await
             .expect_err("an over-limit pattern is not sendable");
         assert!(matches!(err, ConnectError::Transport(_)), "got {err:?}");
+
+        let stream = conn.open_stream(&query(6)).await.unwrap();
+        assert_eq!(stream.get(), 1, "the refused open consumed no id");
+        let frame = wire.next_frame().await.unwrap().expect("an opener frame");
+        assert_eq!(opener(&frame), (MessageKind::Search, stream));
+    }
+
+    /// A source the daemon's minor predates is refused before an id is
+    /// issued, as the typed skew rather than a transport failure: an
+    /// older daemon would ignore the field and walk scrollback instead.
+    #[tokio::test]
+    async fn a_visible_search_against_a_minor_zero_daemon_is_refused_unsent() {
+        let (client, server) = tokio::io::duplex(64 * 1024);
+        let (reader, writer) = tokio::io::split(client);
+        let mut conn = Connection::from_halves(
+            FrameReader::new(reader),
+            FrameWriter::baseline(writer),
+            ConnectionMode::Ops,
+        );
+        let mut wire = FrameReader::new(server);
+        conn.driver.attached();
+
+        let err = conn
+            .open_stream(&SearchToDaemonMsg::Query {
+                query: "needle".into(),
+                options: SearchOptions::default(),
+                source: SearchSource::Visible,
+            })
+            .await
+            .expect_err("minor 0 cannot carry a search source");
+        assert!(
+            matches!(
+                err,
+                ConnectError::MinorTooOld {
+                    needs: 1,
+                    effective: 0,
+                    feature: "SearchQuery.source",
+                }
+            ),
+            "got {err:?}"
+        );
 
         let stream = conn.open_stream(&query(6)).await.unwrap();
         assert_eq!(stream.get(), 1, "the refused open consumed no id");
