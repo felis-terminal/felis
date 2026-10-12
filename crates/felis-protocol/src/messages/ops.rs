@@ -6,7 +6,7 @@ use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
 
-use super::{ArmMeta, CorrelationClass, Directed, Direction, ModeSet, PhaseSet};
+use super::{ArmMeta, Directed};
 
 use super::{CreateFailure, GridDims, Notification, RetargetTarget, SpawnArgs};
 #[cfg(test)]
@@ -463,82 +463,8 @@ pub enum SubjectKind {
     Subscriber,
 }
 
-/// Queries remain open to `Window` mode, while mutating verbs require
-/// `ConnectionMode::Ops`. Both are legal in `Setup` and `Attached`.
-const fn query(name: &'static str, direction: Direction, correlation: CorrelationClass) -> ArmMeta {
-    ArmMeta::new(name, direction, correlation, ModeSet::ATTACHERS)
-        .phases(PhaseSet::SETUP_OR_ATTACHED)
-}
-
-const fn mutation(
-    name: &'static str,
-    direction: Direction,
-    correlation: CorrelationClass,
-) -> ArmMeta {
-    ArmMeta::new(name, direction, correlation, ModeSet::OPS).phases(PhaseSet::SETUP_OR_ATTACHED)
-}
-
 impl Directed for OpsToDaemonMsg {
-    const ARMS: &'static [ArmMeta] = &[
-        query(
-            "Ops::List",
-            Direction::ToDaemon,
-            CorrelationClass::RequestOpener,
-        ),
-        mutation(
-            "Ops::Destroy",
-            Direction::ToDaemon,
-            CorrelationClass::RequestOpener,
-        ),
-        mutation(
-            "Ops::ForceDetach",
-            Direction::ToDaemon,
-            CorrelationClass::RequestOpener,
-        ),
-        mutation(
-            "Ops::Switch",
-            Direction::ToDaemon,
-            CorrelationClass::RequestOpener,
-        ),
-        mutation(
-            "Ops::Tag",
-            Direction::ToDaemon,
-            CorrelationClass::RequestOpener,
-        ),
-        query(
-            "Ops::Status",
-            Direction::ToDaemon,
-            CorrelationClass::RequestOpener,
-        ),
-        mutation(
-            "Ops::Spawn",
-            Direction::ToDaemon,
-            CorrelationClass::RequestOpener,
-        ),
-        // Setup only, unlike every other Ops verb: an attached
-        // connection queues its replies through an outbox the exiting
-        // process would not drain.
-        mutation(
-            "Ops::Stop",
-            Direction::ToDaemon,
-            CorrelationClass::RequestOpener,
-        )
-        .phases(PhaseSet::SETUP),
-        query(
-            "Ops::Info",
-            Direction::ToDaemon,
-            CorrelationClass::RequestOpener,
-        ),
-        // Setup only, for the reason `Ops::Stop` is: the reply is the
-        // last frame before the exec closes the connection.
-        mutation(
-            "Ops::Upgrade",
-            Direction::ToDaemon,
-            CorrelationClass::RequestOpener,
-        )
-        .phases(PhaseSet::SETUP)
-        .since(1),
-    ];
+    const ARMS: &'static [ArmMeta] = crate::schema_meta::OPS_TO_DAEMON_MSG_ARMS;
 
     fn arm_index(&self) -> usize {
         match self {
@@ -557,61 +483,7 @@ impl Directed for OpsToDaemonMsg {
 }
 
 impl Directed for OpsToClientMsg {
-    const ARMS: &'static [ArmMeta] = &[
-        query(
-            "Ops::Listed",
-            Direction::ToClient,
-            CorrelationClass::RequestReply,
-        ),
-        mutation(
-            "Ops::Destroyed",
-            Direction::ToClient,
-            CorrelationClass::RequestReply,
-        ),
-        mutation(
-            "Ops::Detached",
-            Direction::ToClient,
-            CorrelationClass::RequestReply,
-        ),
-        mutation(
-            "Ops::Switched",
-            Direction::ToClient,
-            CorrelationClass::RequestReply,
-        ),
-        mutation(
-            "Ops::TagsUpdated",
-            Direction::ToClient,
-            CorrelationClass::RequestReply,
-        ),
-        query(
-            "Ops::StatusReply",
-            Direction::ToClient,
-            CorrelationClass::RequestReply,
-        ),
-        mutation(
-            "Ops::Spawned",
-            Direction::ToClient,
-            CorrelationClass::RequestReply,
-        ),
-        mutation(
-            "Ops::StopReply",
-            Direction::ToClient,
-            CorrelationClass::RequestReply,
-        )
-        .phases(PhaseSet::SETUP),
-        query(
-            "Ops::InfoReply",
-            Direction::ToClient,
-            CorrelationClass::RequestReply,
-        ),
-        mutation(
-            "Ops::UpgradeReply",
-            Direction::ToClient,
-            CorrelationClass::RequestReply,
-        )
-        .phases(PhaseSet::SETUP)
-        .since(1),
-    ];
+    const ARMS: &'static [ArmMeta] = crate::schema_meta::OPS_TO_CLIENT_MSG_ARMS;
 
     fn arm_index(&self) -> usize {
         match self {

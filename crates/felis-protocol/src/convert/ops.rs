@@ -288,7 +288,7 @@ impl TryFrom<v1::SwitchDenied> for messages::SwitchDenied {
     }
 }
 
-const fn resource_kind_to_wire(k: messages::ResourceKind) -> v1::ResourceKind {
+pub(crate) const fn resource_kind_to_wire(k: messages::ResourceKind) -> v1::ResourceKind {
     use messages::ResourceKind as K;
     match k {
         K::Sessions => v1::ResourceKind::Sessions,
@@ -318,7 +318,7 @@ fn resource_kind_from_wire(raw: i32) -> Result<messages::ResourceKind, WireError
     }
 }
 
-const fn upgrade_refusal_to_wire(r: messages::UpgradeRefusal) -> v1::UpgradeRefusal {
+pub(crate) const fn upgrade_refusal_to_wire(r: messages::UpgradeRefusal) -> v1::UpgradeRefusal {
     use messages::UpgradeRefusal as R;
     match r {
         R::Unsupported => v1::UpgradeRefusal::Unsupported,

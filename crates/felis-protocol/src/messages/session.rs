@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{ArmMeta, CorrelationClass, Directed, Direction, ModeSet, PhaseSet};
+use super::{ArmMeta, Directed};
 
 use super::RequestedDims;
 
@@ -90,47 +90,8 @@ pub enum SessionToClientMsg {
     InputAccepted,
 }
 
-/// The openers and their answers are uncorrelated: a connection
-/// attaches once, so the ack needs no id to tell it from another attach
-/// in flight. The fence pair is the family's one exception, since a
-/// caller may put several barriers on one connection.
-const fn arm(name: &'static str, direction: Direction, phases: PhaseSet) -> ArmMeta {
-    ArmMeta::new(
-        name,
-        direction,
-        CorrelationClass::Uncorrelated,
-        ModeSet::ATTACHERS,
-    )
-    .phases(phases)
-}
-
-/// The openers and their three answers belong to `Setup` alone: a
-/// connection attaches or creates once, so a second opener is the peer
-/// losing its place rather than a request to serve.
-const fn opener(name: &'static str, direction: Direction) -> ArmMeta {
-    arm(name, direction, PhaseSet::SETUP)
-}
-
-const fn fence(name: &'static str, direction: Direction, correlation: CorrelationClass) -> ArmMeta {
-    ArmMeta::new(name, direction, correlation, ModeSet::ATTACHERS).phases(PhaseSet::ATTACHED)
-}
-
 impl Directed for SessionToDaemonMsg {
-    const ARMS: &'static [ArmMeta] = &[
-        opener("Session::Attach", Direction::ToDaemon),
-        opener("Session::Create", Direction::ToDaemon),
-        arm("Session::Detach", Direction::ToDaemon, PhaseSet::ATTACHED),
-        arm(
-            "Session::ConfigureTheme",
-            Direction::ToDaemon,
-            PhaseSet::ATTACHED,
-        ),
-        fence(
-            "Session::InputFence",
-            Direction::ToDaemon,
-            CorrelationClass::RequestOpener,
-        ),
-    ];
+    const ARMS: &'static [ArmMeta] = crate::schema_meta::SESSION_TO_DAEMON_MSG_ARMS;
 
     fn arm_index(&self) -> usize {
         match self {
@@ -144,16 +105,7 @@ impl Directed for SessionToDaemonMsg {
 }
 
 impl Directed for SessionToClientMsg {
-    const ARMS: &'static [ArmMeta] = &[
-        opener("Session::Attached", Direction::ToClient),
-        opener("Session::AttachFailed", Direction::ToClient),
-        opener("Session::Created", Direction::ToClient),
-        fence(
-            "Session::InputAccepted",
-            Direction::ToClient,
-            CorrelationClass::RequestReply,
-        ),
-    ];
+    const ARMS: &'static [ArmMeta] = crate::schema_meta::SESSION_TO_CLIENT_MSG_ARMS;
 
     fn arm_index(&self) -> usize {
         match self {
@@ -289,6 +241,7 @@ pub(crate) mod tests {
     use std::num::NonZeroU64;
 
     use super::*;
+    use crate::messages::CorrelationClass;
     use crate::messages::test_support::{assert_covers_every_arm, roundtrip};
 
     fn sample_ready_info(id: u128) -> crate::messages::SessionInfo {

@@ -5,7 +5,7 @@ use std::num::NonZeroU32;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
-use super::{ArmMeta, CorrelationClass, Directed, Direction, ModeSet};
+use super::{ArmMeta, Directed};
 
 use crate::kitty_graphics::{ImageId, PlacementId};
 
@@ -156,27 +156,8 @@ pub enum ImageMsg {
     PlacementsShifted { lines: u32 },
 }
 
-const fn arm(name: &'static str) -> ArmMeta {
-    ArmMeta::new(
-        name,
-        Direction::ToClient,
-        CorrelationClass::Uncorrelated,
-        ModeSet::ATTACHERS,
-    )
-}
-
 impl Directed for ImageMsg {
-    const ARMS: &'static [ArmMeta] = &[
-        arm("Image::Header"),
-        arm("Image::Chunk"),
-        arm("Image::Complete"),
-        arm("Image::Delete"),
-        arm("Image::Placement"),
-        arm("Image::PlacementRemoved"),
-        arm("Image::VirtualPlacement"),
-        arm("Image::ShowFrame"),
-        arm("Image::PlacementsShifted"),
-    ];
+    const ARMS: &'static [ArmMeta] = crate::schema_meta::IMAGE_MSG_ARMS;
 
     fn arm_index(&self) -> usize {
         match self {

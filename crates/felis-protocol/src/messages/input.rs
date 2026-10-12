@@ -6,7 +6,7 @@ use std::fmt;
 use bitflags::bitflags;
 use serde::{Deserialize, Serialize};
 
-use super::{ArmMeta, CorrelationClass, Directed, Direction, ModeSet};
+use super::{ArmMeta, Directed};
 
 use super::RequestedDims;
 
@@ -299,28 +299,8 @@ pub enum InputMsg {
     Key(KeyEvent),
 }
 
-const fn arm(name: &'static str) -> ArmMeta {
-    ArmMeta::new(
-        name,
-        Direction::ToDaemon,
-        CorrelationClass::Uncorrelated,
-        ModeSet::ATTACHERS,
-    )
-}
-
 impl Directed for InputMsg {
-    const ARMS: &'static [ArmMeta] = &[
-        arm("Input::KeyBytes"),
-        arm("Input::Paste"),
-        arm("Input::Mouse"),
-        arm("Input::Resize"),
-        arm("Input::FocusChange"),
-        arm("Input::ColorScheme"),
-        arm("Input::Viewport"),
-        arm("Input::JumpPrompt"),
-        arm("Input::NextGridFrame"),
-        arm("Input::Key"),
-    ];
+    const ARMS: &'static [ArmMeta] = crate::schema_meta::INPUT_MSG_ARMS;
 
     fn arm_index(&self) -> usize {
         match self {

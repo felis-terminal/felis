@@ -42,19 +42,23 @@ pick.
 The argument is in `docs/explanation/architecture/ipc.md`; these are the rules it yields.
 
 - A new oneof arm carries a `(felis.v1.arm)` field option spelling its routing row (direction, correlation, modes,
-  phases, since), matching the `ArmMeta` entry added beside it; `the_schema_declares_the_same_arm_table` is the only
-  gate on that row, since `buf breaking` does not read options.
+  phases) and, like any added field, `(felis.v1.field_since) = { minor: N }`; `just proto` generates the `ArmMeta` row
+  and arm field number from it, so the Rust side only adds the variant and its `arm_index()` position. `buf breaking`
+  does not read options, so review the generated `src/schema_meta.rs` diff for the row you meant.
 - Fields and oneof arms are **appended** with the next field number. A family with arms in both directions is two
   wrappers (`<Family>ToDaemonMsg`, `<Family>ToClientMsg`): a new arm joins the wrapper for its direction and takes the
   next number free across both, never a number the other wrapper uses. An addition bumps `PROTOCOL_MINOR`
   (`crates/felis-protocol/src/preface.rs` and the pinned declaration in `felis.proto`'s header). An arm, a closed-enum
   value, a connection mode or a row-codec version is gated on the connection's effective minor (the min of the two
   peers) before a sender may use it. A field goes in a payload message, never on a family wrapper, and must decode when
-  absent. It joins `ADDED_FIELDS` in `crates/felis-protocol/src/minor.rs` and is sent to every peer only when its ledger
-  row can state a safe outcome for an older peer that skips it, in either direction. Otherwise, as for a request
-  parameter like `SearchQuery.source`, it is gated: a `GatedField` row in the same file. A new member of a payload
-  message's `oneof` is not a field: an older peer reads the oneof as unset. It needs a send gate, and
-  `a_payload_oneof_keeps_the_members_of_the_base_schema` refuses it until one exists.
+  absent. It carries `(felis.v1.field_since) = { minor: N skippable: true }` when its ledger row can state a safe
+  outcome for an older peer that skips it, in either direction. Otherwise, as for a request parameter like
+  `SearchQuery.source`, it drops `skippable` and needs a presence test: a `GatedField` row in
+  `crates/felis-protocol/src/minor.rs`, wired into its family's `MinorGated` impl
+  (`every_gated_field_of_the_schema_has_a_presence_test` fails until the row exists). A new closed-enum value carries
+  `(felis.v1.value_since) = N`. A new member of a payload message's `oneof` is not a field: an older peer reads the
+  oneof as unset, so generation refuses `skippable` on it, and `a_payload_oneof_keeps_the_members_of_the_base_schema`
+  refuses it until it has a send gate. The option forms are in `docs/reference/ipc.md` "The minor ledger".
 - Renumbering, retyping, or reinterpreting an existing field is a semantic break: bump `PROTOCOL_MAJOR`; the preface
   then refuses the older half outright.
 - `--format` output shapes are append-only too; their epoch is the `"v"` every object carries.
@@ -86,8 +90,8 @@ A new message/verb typically touches, in dependency order:
      `buf breaking` against the merge-base with `origin/main`, the same comparison CI makes. For an intended pre-release
      break, add a `base: <40-hex sha of that merge-base>` line to `crates/felis-protocol/proto/BREAKING.md` with the
      why; the rule the gate applies is in `docs/reference/testing.md` "Wire compatibility gates". A minor bump also
-     needs its row in `PROTOCOL_MINOR`'s ledger (`docs/reference/ipc.md`) and a matching `MINOR_LEDGER` entry in
-     `preface.rs`, or the sync test fails;
+     needs its row in `PROTOCOL_MINOR`'s ledger (`docs/reference/ipc.md`), naming every addition, or the sync test
+     fails; that row is also what catches an addition whose minor annotation was left out;
    - `src/convert/<family>.rs`: the domain↔wire mapping: infallible `From<domain>`, fallible `TryFrom<wire>`. Narrow
      every proto-widened integer through `narrow()` (never a bare `as` cast), reject `_UNSPECIFIED` enum sentinels. No
      per-family test corpus lives here: only targeted decode-rejection tests that need a hand-built wire value (bad

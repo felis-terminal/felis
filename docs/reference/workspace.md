@@ -138,12 +138,12 @@ Four shared wire facilities support external satellite clients (see
   session JSON" in [ipc.md](ipc.md)); what `felis bridge` writes is the CLI contract instead, spelled in `felis-cli`.
 - **Cross-language wire contract:** `felis.proto` itself. There is no committed contract manifest beside it and none is
   needed: the message and enum shapes, the frame-kind numbering, the preface constants, and each oneof arm's routing row
-  are all declared in the schema, with tests asserting the Rust values match, so a non-Rust client generates its codec
-  from the one file the daemon is built from. Routing rides the descriptor as a `(felis.v1.arm)` field option per arm
-  ([ipc.md](ipc.md#the-arm-table)), which is why a client needs no second source for direction, correlation, modes,
-  phases, or introducing minor. The interior of the row payload is the single hand-off, to [row-codec.md](row-codec.md);
-  the keyboard and capability bit tables stay in [ipc.md](ipc.md) (the manifest's adopt/reject record is in the
-  architecture overview).
+  are all declared in the schema, with the Rust values generated from it or tests asserting they match, so a non-Rust
+  client generates its codec from the one file the daemon is built from. Routing rides the descriptor as field options
+  on each arm ([ipc.md](ipc.md#the-arm-table)), which is why a client needs no second source for direction, correlation,
+  modes, phases, or introducing minor. The interior of the row payload is the single hand-off, to
+  [row-codec.md](row-codec.md); the keyboard and capability bit tables stay in [ipc.md](ipc.md) (the manifest's
+  adopt/reject record is in the architecture overview).
 - **Server-side handshake helpers:** the daemon's `Hello → Welcome → attach-ack` sequence is a shared function (no
   `felis-server-core` crate; [overview.md](../explanation/architecture/overview.md) "Shared wire knowledge across the
   satellite clients" records why not).

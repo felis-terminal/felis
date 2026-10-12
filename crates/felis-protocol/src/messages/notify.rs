@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{ArmMeta, CorrelationClass, Directed, Direction, ModeSet, PhaseSet};
+use super::{ArmMeta, Directed};
 
 use super::Notification;
 
@@ -58,22 +58,8 @@ pub enum NotifyToClientMsg {
     Lagged { missed: u64 },
 }
 
-const fn arm(name: &'static str, direction: Direction, correlation: CorrelationClass) -> ArmMeta {
-    ArmMeta::new(name, direction, correlation, ModeSet::OBSERVER).phases(PhaseSet::OBSERVING)
-}
-
 impl Directed for NotifyToDaemonMsg {
-    const ARMS: &'static [ArmMeta] = &[
-        // The subscribe is what turns a `Setup` connection into an
-        // observer, so it alone is legal before the role exists; every
-        // stream item belongs to the role it created.
-        arm(
-            "Notify::Subscribe",
-            Direction::ToDaemon,
-            CorrelationClass::StreamOpener,
-        )
-        .phases(PhaseSet::SETUP),
-    ];
+    const ARMS: &'static [ArmMeta] = crate::schema_meta::NOTIFY_TO_DAEMON_MSG_ARMS;
 
     fn arm_index(&self) -> usize {
         match self {
@@ -83,23 +69,7 @@ impl Directed for NotifyToDaemonMsg {
 }
 
 impl Directed for NotifyToClientMsg {
-    const ARMS: &'static [ArmMeta] = &[
-        arm(
-            "Notify::Event",
-            Direction::ToClient,
-            CorrelationClass::StreamItem,
-        ),
-        arm(
-            "Notify::Subscribed",
-            Direction::ToClient,
-            CorrelationClass::StreamItem,
-        ),
-        arm(
-            "Notify::Lagged",
-            Direction::ToClient,
-            CorrelationClass::StreamItem,
-        ),
-    ];
+    const ARMS: &'static [ArmMeta] = crate::schema_meta::NOTIFY_TO_CLIENT_MSG_ARMS;
 
     fn arm_index(&self) -> usize {
         match self {

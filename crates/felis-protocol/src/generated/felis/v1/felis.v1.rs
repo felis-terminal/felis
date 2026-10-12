@@ -20,11 +20,6 @@ pub struct ArmRouting {
     /// In ladder order: handshake, setup, attached, observing.
     #[prost(enumeration="arm_routing::Phase", repeated, tag="4")]
     pub phases: ::prost::alloc::vec::Vec<i32>,
-    /// The protocol minor that introduced the arm; 0 for this major's
-    /// base schema, and then absent from the descriptor as a proto3
-    /// default.
-    #[prost(uint32, tag="5")]
-    pub since: u32,
 }
 /// Nested message and enum types in `ArmRouting`.
 pub mod arm_routing {
@@ -172,6 +167,20 @@ pub mod arm_routing {
             }
         }
     }
+}
+/// The protocol minor that added a field, an arm included, after this
+/// major's base schema, as `(felis.v1.field_since)`; the fields of a type
+/// an addition introduced need none. Never a wire message.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct FieldSince {
+    #[prost(uint32, tag="1")]
+    pub minor: u32,
+    /// An older peer may skip the field, landing where a sender that never
+    /// set it would. Unset, a present value is withheld from a peer below
+    /// `minor`. Never set on a oneof member, which a skipping peer would
+    /// read as an unset oneof.
+    #[prost(bool, tag="2")]
+    pub skippable: bool,
 }
 // ---------------------------------------------------------------------------
 // Shared data-carrying enums (modeled as messages with a oneof, since a
@@ -581,6 +590,9 @@ pub struct Attachment {
 // than per-family, allowing the shared connection driver to enforce
 // exactly one terminal per stream uniformly.
 
+// Every Conn arm is a connection-level fact, so none is tied to a mode
+// or correlated.
+
 /// Field 100 is the wire-wide `Correlation` slot, unused here: the
 /// handshake arms predate any stream, and cancel/terminal name their
 /// subject *inline*: a terminal whose stream_id went missing is
@@ -597,6 +609,9 @@ pub mod conn_to_daemon_msg {
     pub enum Msg {
         #[prost(message, tag="1")]
         Hello(super::ConnHello),
+        /// Stream control, not session traffic: a stream is live in whichever
+        /// phase opened it, and tying this to one role would leave an
+        /// observer unable to cancel its own stream.
         #[prost(message, tag="4")]
         Cancel(super::ConnCancel),
     }
@@ -612,6 +627,8 @@ pub mod conn_to_client_msg {
     pub enum Msg {
         #[prost(message, tag="2")]
         Welcome(super::ConnWelcome),
+        /// The mode gate also refuses a frame the peer sent after its
+        /// Welcome, so this refusal is written in any phase.
         #[prost(message, tag="3")]
         Refused(super::ConnRefused),
         #[prost(message, tag="5")]
@@ -1256,7 +1273,7 @@ pub struct ImagePlacement {
     pub z_index: i32,
     /// The c= and r= the put asked for, 0 for an axis it left automatic;
     /// cols and rows above are the resolved extent. Unset from a daemon
-    /// that does not report the request. Since minor 1.
+    /// that does not report the request.
     #[prost(message, optional, tag="9")]
     pub requested: ::core::option::Option<RequestedExtent>,
 }
@@ -1291,7 +1308,7 @@ pub struct ImageVirtualPlacement {
     pub z_index: i32,
     /// The producer's p=, or an id the daemon assigned to a put without
     /// one; a placeholder cell names it in its underline color. Unset
-    /// keys the placement by image alone. Since minor 1.
+    /// keys the placement by image alone.
     #[prost(uint32, optional, tag="5")]
     pub placement_id: ::core::option::Option<u32>,
 }
@@ -1331,6 +1348,9 @@ pub struct SessionToDaemonMsg {
 pub mod session_to_daemon_msg {
     #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum Msg {
+        /// The openers and their three answers belong to setup alone: a
+        /// connection attaches or creates once, so a second opener is the
+        /// peer losing its place rather than a request to serve.
         #[prost(message, tag="1")]
         Attach(super::SessionAttach),
         #[prost(message, tag="2")]
@@ -1485,7 +1505,8 @@ pub mod session_attach_failed {
 
 // Every Ops verb is a request whose reply echoes the request_id,
 // which lets several requests be in flight on one connection
-// instead of one verb per connection.
+// instead of one verb per connection. Queries stay open to the Window
+// mode, while a mutating verb takes the Ops mode.
 
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct OpsToDaemonMsg {
@@ -2271,6 +2292,9 @@ pub struct NotifyToDaemonMsg {
 pub mod notify_to_daemon_msg {
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
     pub enum Msg {
+        /// The subscribe is what turns a setup connection into an observer,
+        /// so it alone is legal before the role exists; every stream item
+        /// belongs to the role it created.
         #[prost(message, tag="1")]
         Subscribe(super::NotifySubscribe),
     }
@@ -2438,9 +2462,9 @@ pub struct SearchQuery {
     pub query: ::prost::alloc::string::String,
     #[prost(message, optional, tag="2")]
     pub options: ::core::option::Option<SearchOptions>,
-    /// Absent means SEARCH_SOURCE_SCROLLBACK. A minor-1 addition: a daemon
-    /// below it ignores the field and walks scrollback, so a client gates
-    /// a present value on the effective minor rather than send it.
+    /// Absent means SEARCH_SOURCE_SCROLLBACK. A daemon below minor 1
+    /// ignores the field and walks scrollback, so a present value is
+    /// withheld from it.
     #[prost(enumeration="SearchSource", optional, tag="3")]
     pub source: ::core::option::Option<i32>,
 }
@@ -2526,7 +2550,6 @@ pub struct SearchMatch {
 //      correlation: <CORRELATION_*>
 //      modes: <MODE_*>      // repeated, in WINDOW, OPS, OBSERVER order
 //      phases: <PHASE_*>    // repeated, in ladder order
-//      since: <minor>       // omitted where it is 0
 //    }]
 //
 // where direction is the one way the arm may travel (the direction its
@@ -2535,19 +2558,18 @@ pub struct SearchMatch {
 // the arm is legal, receive side; phases names the connection states
 // it may arrive in, where `setup` is a welcomed connection that has
 // not yet said what it is for, `attached` one subscribed to a session,
-// and `observing` one serving a notification stream; and since is the
-// protocol minor that introduced the arm, written only where it is not
-// 0: this major's base schema is minor 0, which is the proto3 default
-// and absent from the descriptor whether or not it is spelled, so an
-// addition is the one place a `since` appears. The `ArmRouting`
+// and `observing` one serving a notification stream. The `ArmRouting`
 // message below names the vocabulary. A peer
 // that cannot read Rust reads these options out of the descriptor this
 // file compiles to (`buf build`, or protoc reflection), with no comment
-// to parse; the Rust side asserts them against its own table
-// (`the_schema_declares_the_same_arm_table`), so an arm added here
-// without an option, or with the wrong one, fails the build. Options
-// are invisible to `buf breaking`, so that test, not the compat gate,
-// is what catches a routing edit.
+// to parse; the Rust side generates its table from the same options
+// (`tools/proto/schema_meta.py`, run by `just proto`), so an arm added
+// here without an option fails generation.
+//
+// A field added after this major's base schema, an arm included, names
+// the minor that added it as `(felis.v1.field_since)`, and a closed-enum
+// value as `(felis.v1.value_since)` (both defined beside ArmRouting
+// below); an unannotated element is base schema, minor 0.
 //
 // Naming: a message that is a `oneof` arm of a family wrapper is named
 // `<Family><Variant>` (the family being the wrapper minus `Msg`,

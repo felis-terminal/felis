@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{ArmMeta, CorrelationClass, Directed, Direction, ModeSet};
+use super::{ArmMeta, Directed};
 
 use super::RetargetTarget;
 #[cfg(test)]
@@ -41,24 +41,8 @@ pub enum PushMsg {
     },
 }
 
-const fn arm(name: &'static str, modes: ModeSet) -> ArmMeta {
-    ArmMeta::new(
-        name,
-        Direction::ToClient,
-        CorrelationClass::Uncorrelated,
-        modes,
-    )
-}
-
 impl Directed for PushMsg {
-    // Eviction concerns every subscriber; the window-management pushes
-    // ask a window to move, which a scripted `Ops` attach has none to do.
-    const ARMS: &'static [ArmMeta] = &[
-        arm("Push::Evicted", ModeSet::ATTACHERS),
-        arm("Push::Reattach", ModeSet::WINDOW),
-        arm("Push::SessionExited", ModeSet::WINDOW),
-        arm("Push::RetargetHost", ModeSet::WINDOW),
-    ];
+    const ARMS: &'static [ArmMeta] = crate::schema_meta::PUSH_MSG_ARMS;
 
     fn arm_index(&self) -> usize {
         match self {

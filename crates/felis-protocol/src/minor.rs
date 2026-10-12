@@ -47,16 +47,6 @@ impl Requires {
     }
 }
 
-/// Fields added after the base schema and sent to every peer, as the
-/// ledger spells them, with the minor that added each. The send gate does
-/// not read this: an older peer skips an unknown field number
-/// (`docs/explanation/architecture/ipc.md` "The ledger is the review gate").
-pub const ADDED_FIELDS: &[(&str, u16)] = &[
-    ("ImageVirtualPlacement.placement_id", 1),
-    ("ImagePlacement.requested", 1),
-    ("SessionInfo.program_status", 1),
-];
-
 /// An added field an older peer must not skip, because skipping it
 /// changes what the message asks for, paired with the test that decides
 /// whether a value carries it.
@@ -76,22 +66,8 @@ fn field_requires<T>(value: &T, fields: &[GatedField<T>]) -> Requires {
     })
 }
 
-/// Every gated field, named as the ledger spells it.
-#[must_use]
-pub fn gated_fields() -> Vec<Requires> {
-    SEARCH_TO_DAEMON_FIELDS
-        .iter()
-        .map(|field| field.requires)
-        .collect()
-}
-
-impl MinorGated for ImageMsg {
-    fn requires(&self) -> Requires {
-        arm_requires(self)
-    }
-}
 const SEARCH_TO_DAEMON_FIELDS: &[GatedField<SearchToDaemonMsg>] = &[GatedField {
-    requires: Requires::new(1, "SearchQuery.source"),
+    requires: crate::schema_meta::SEARCH_QUERY_SOURCE,
     present: |msg| match msg {
         SearchToDaemonMsg::Query { source, .. } => *source != SearchSource::Scrollback,
     },
@@ -136,25 +112,14 @@ pub fn row_codec_requires(payload: &RowPayload) -> Requires {
 impl AttachFailure {
     #[must_use]
     pub const fn since_minor(self) -> u16 {
-        match self {
-            Self::UnknownSession
-            | Self::SessionEnding
-            | Self::SessionExited
-            | Self::NoMatch
-            | Self::Ambiguous => 0,
-        }
+        crate::convert::attach_failure_to_wire(self).since_minor()
     }
 }
 
 impl CreateFailure {
     #[must_use]
     pub const fn since_minor(self) -> u16 {
-        match self {
-            Self::SpawnFailed
-            | Self::GeometryOutOfRange
-            | Self::SessionLimitReached
-            | Self::DaemonDraining => 0,
-        }
+        crate::convert::create_failure_to_wire(self).since_minor()
     }
 }
 
@@ -184,48 +149,28 @@ impl ConnectionMode {
     /// client may name only the modes the effective minor defines.
     #[must_use]
     pub const fn since_minor(self) -> u16 {
-        match self {
-            Self::Window | Self::Ops | Self::Observer => 0,
-        }
+        crate::convert::mode_to_wire(self).since_minor()
     }
 }
 
 impl RefusalReason {
     #[must_use]
     pub const fn since_minor(self) -> u16 {
-        match self {
-            Self::Role | Self::AtCapacity | Self::UnknownMode => 0,
-        }
+        crate::convert::refusal_to_wire(self).since_minor()
     }
 }
 
 impl ResourceKind {
     #[must_use]
     pub const fn since_minor(self) -> u16 {
-        match self {
-            Self::Sessions
-            | Self::ImageStoreBytes
-            | Self::InFlightDecodes
-            | Self::InFlightDecodeBytes
-            | Self::SubscriberQueueBytes
-            | Self::Connections
-            | Self::PtyInputBytes => 0,
-        }
+        crate::convert::resource_kind_to_wire(self).since_minor()
     }
 }
 
 impl UpgradeRefusal {
     #[must_use]
     pub const fn since_minor(self) -> u16 {
-        match self {
-            Self::Unsupported
-            | Self::DumpVersion
-            | Self::ProtocolMajor
-            | Self::Timeout
-            | Self::ProbeFailed
-            | Self::Busy
-            | Self::Draining => 1,
-        }
+        crate::convert::upgrade_refusal_to_wire(self).since_minor()
     }
 }
 
@@ -331,6 +276,7 @@ macro_rules! gated_by_arm {
 }
 
 gated_by_arm!(
+    ImageMsg,
     crate::messages::InputMsg,
     crate::messages::NotifyToDaemonMsg,
     crate::messages::NotifyToClientMsg,
@@ -534,155 +480,28 @@ mod tests {
         );
     }
 
-    /// Every value of every gated closed enum, walked from the
-    /// generated enum rather than listed: a value added to
-    /// `felis.proto` reaches the caller's match without anyone
-    /// remembering to append it. `_UNSPECIFIED` is 0, so the walk skips
-    /// it.
-    fn schema_values<W: TryFrom<i32>>() -> impl Iterator<Item = W> {
-        (1i32..=256).filter_map(|raw| W::try_from(raw).ok())
-    }
+    /// The closed enums whose values the send gate reads, as the
+    /// `MinorGated` impls above name them.
+    const GATED_ENUMS: &[&str] = &[
+        "AttachFailure",
+        "CreateFailure",
+        "RefusalReason",
+        "ResourceKind",
+        "UpgradeRefusal",
+        "ConnectionMode",
+    ];
 
-    /// The ledger spelling of every value of a gated closed enum,
-    /// matched exhaustively over the generated enum so a new value
-    /// cannot reach the wire without a row to authorize it.
-    fn gated_enum_values() -> Vec<(&'static str, u16)> {
-        use crate::wire::v1;
-
-        let attach = schema_values::<v1::AttachFailure>().map(|value| match value {
-            v1::AttachFailure::Unspecified => unreachable!("the walk starts past UNSPECIFIED"),
-            v1::AttachFailure::UnknownSession => (
-                "AttachFailure::UNKNOWN_SESSION",
-                AttachFailure::UnknownSession.since_minor(),
-            ),
-            v1::AttachFailure::SessionEnding => (
-                "AttachFailure::SESSION_ENDING",
-                AttachFailure::SessionEnding.since_minor(),
-            ),
-            v1::AttachFailure::SessionExited => (
-                "AttachFailure::SESSION_EXITED",
-                AttachFailure::SessionExited.since_minor(),
-            ),
-            v1::AttachFailure::NoMatch => (
-                "AttachFailure::NO_MATCH",
-                AttachFailure::NoMatch.since_minor(),
-            ),
-            v1::AttachFailure::Ambiguous => (
-                "AttachFailure::AMBIGUOUS",
-                AttachFailure::Ambiguous.since_minor(),
-            ),
-        });
-        let create = schema_values::<v1::CreateFailure>().map(|value| match value {
-            v1::CreateFailure::Unspecified => unreachable!("the walk starts past UNSPECIFIED"),
-            v1::CreateFailure::SpawnFailed => (
-                "CreateFailure::SPAWN_FAILED",
-                CreateFailure::SpawnFailed.since_minor(),
-            ),
-            v1::CreateFailure::GeometryOutOfRange => (
-                "CreateFailure::GEOMETRY_OUT_OF_RANGE",
-                CreateFailure::GeometryOutOfRange.since_minor(),
-            ),
-            v1::CreateFailure::SessionLimitReached => (
-                "CreateFailure::SESSION_LIMIT_REACHED",
-                CreateFailure::SessionLimitReached.since_minor(),
-            ),
-            v1::CreateFailure::DaemonDraining => (
-                "CreateFailure::DAEMON_DRAINING",
-                CreateFailure::DaemonDraining.since_minor(),
-            ),
-        });
-        let refusal = schema_values::<v1::RefusalReason>().map(|value| match value {
-            v1::RefusalReason::Unspecified => unreachable!("the walk starts past UNSPECIFIED"),
-            v1::RefusalReason::Role => ("RefusalReason::ROLE", RefusalReason::Role.since_minor()),
-            v1::RefusalReason::AtCapacity => (
-                "RefusalReason::AT_CAPACITY",
-                RefusalReason::AtCapacity.since_minor(),
-            ),
-            v1::RefusalReason::UnknownMode => (
-                "RefusalReason::UNKNOWN_MODE",
-                RefusalReason::UnknownMode.since_minor(),
-            ),
-        });
-        let mode = schema_values::<v1::ConnectionMode>().map(|value| match value {
-            v1::ConnectionMode::Unspecified => unreachable!("the walk starts past UNSPECIFIED"),
-            v1::ConnectionMode::Window => (
-                "ConnectionMode::WINDOW",
-                ConnectionMode::Window.since_minor(),
-            ),
-            v1::ConnectionMode::Ops => ("ConnectionMode::OPS", ConnectionMode::Ops.since_minor()),
-            v1::ConnectionMode::Observer => (
-                "ConnectionMode::OBSERVER",
-                ConnectionMode::Observer.since_minor(),
-            ),
-        });
-        let resource = schema_values::<v1::ResourceKind>().map(|value| match value {
-            v1::ResourceKind::Unspecified => unreachable!("the walk starts past UNSPECIFIED"),
-            v1::ResourceKind::Connections => (
-                "ResourceKind::CONNECTIONS",
-                ResourceKind::Connections.since_minor(),
-            ),
-            v1::ResourceKind::Sessions => (
-                "ResourceKind::SESSIONS",
-                ResourceKind::Sessions.since_minor(),
-            ),
-            v1::ResourceKind::ImageStoreBytes => (
-                "ResourceKind::IMAGE_STORE_BYTES",
-                ResourceKind::ImageStoreBytes.since_minor(),
-            ),
-            v1::ResourceKind::InFlightDecodes => (
-                "ResourceKind::IN_FLIGHT_DECODES",
-                ResourceKind::InFlightDecodes.since_minor(),
-            ),
-            v1::ResourceKind::InFlightDecodeBytes => (
-                "ResourceKind::IN_FLIGHT_DECODE_BYTES",
-                ResourceKind::InFlightDecodeBytes.since_minor(),
-            ),
-            v1::ResourceKind::SubscriberQueueBytes => (
-                "ResourceKind::SUBSCRIBER_QUEUE_BYTES",
-                ResourceKind::SubscriberQueueBytes.since_minor(),
-            ),
-            v1::ResourceKind::PtyInputBytes => (
-                "ResourceKind::PTY_INPUT_BYTES",
-                ResourceKind::PtyInputBytes.since_minor(),
-            ),
-        });
-        let upgrade = schema_values::<v1::UpgradeRefusal>().map(|value| match value {
-            v1::UpgradeRefusal::Unspecified => unreachable!("the walk starts past UNSPECIFIED"),
-            v1::UpgradeRefusal::Unsupported => (
-                "UpgradeRefusal::UNSUPPORTED",
-                UpgradeRefusal::Unsupported.since_minor(),
-            ),
-            v1::UpgradeRefusal::DumpVersion => (
-                "UpgradeRefusal::DUMP_VERSION",
-                UpgradeRefusal::DumpVersion.since_minor(),
-            ),
-            v1::UpgradeRefusal::ProtocolMajor => (
-                "UpgradeRefusal::PROTOCOL_MAJOR",
-                UpgradeRefusal::ProtocolMajor.since_minor(),
-            ),
-            v1::UpgradeRefusal::Timeout => (
-                "UpgradeRefusal::TIMEOUT",
-                UpgradeRefusal::Timeout.since_minor(),
-            ),
-            v1::UpgradeRefusal::ProbeFailed => (
-                "UpgradeRefusal::PROBE_FAILED",
-                UpgradeRefusal::ProbeFailed.since_minor(),
-            ),
-            v1::UpgradeRefusal::Busy => {
-                ("UpgradeRefusal::BUSY", UpgradeRefusal::Busy.since_minor())
-            }
-            v1::UpgradeRefusal::Draining => (
-                "UpgradeRefusal::DRAINING",
-                UpgradeRefusal::Draining.since_minor(),
-            ),
-        });
-        attach
-            .chain(create)
-            .chain(refusal)
-            .chain(mode)
-            .chain(resource)
-            .chain(upgrade)
-            .collect()
+    /// A value the schema dates past the base schema reaches an older
+    /// peer unless the send gate reads its enum, so every enum with one
+    /// is an enum the gate reads.
+    #[test]
+    fn every_enum_with_an_added_value_is_read_by_the_send_gate() {
+        for name in crate::schema_meta::ANNOTATED_ENUMS {
+            assert!(
+                GATED_ENUMS.contains(name),
+                "{name} has a value added after the base schema, but no MinorGated impl reads it"
+            );
+        }
     }
 
     /// The `Addition` cell of each ledger row in `docs/reference/ipc.md`,
@@ -710,6 +529,18 @@ mod tests {
             .collect()
     }
 
+    /// A field the schema marks gated reaches an older peer only through
+    /// a presence test here, so each one has exactly one, under the
+    /// requirement the schema states.
+    #[test]
+    fn every_gated_field_of_the_schema_has_a_presence_test() {
+        let gated: Vec<Requires> = SEARCH_TO_DAEMON_FIELDS
+            .iter()
+            .map(|field| field.requires)
+            .collect();
+        assert_eq!(gated, crate::schema_meta::GATED_FIELDS);
+    }
+
     /// The prose ledger and the executable metadata must cover the same
     /// additions: the table is as long as the highest minor any arm,
     /// field, enum value, or row codec claims, and every post-baseline
@@ -718,37 +549,12 @@ mod tests {
     #[test]
     fn the_ledger_covers_every_executable_addition() {
         let rows = ledger_rows();
-        let arms = crate::messages::tests::every_wrapper()
-            .into_iter()
-            .flat_map(|wrapper| wrapper.arms)
-            .map(|arm| {
-                let variant = arm
-                    .name
-                    .rsplit("::")
-                    .next()
-                    .expect("an arm name is Family::Variant");
-                (variant, arm.since_minor)
-            });
-        let codecs = ROW_CODEC_SINCE
-            .iter()
-            .map(|(codec, minor)| (format!("row-codec version {codec}"), *minor));
-
-        let gated = gated_fields();
-        let fields = ADDED_FIELDS
-            .iter()
-            .copied()
-            .chain(gated.iter().map(|field| (field.what, field.minor)));
-
-        let named: Vec<(String, u16)> = arms
-            .chain(gated_enum_values())
-            .chain(fields)
-            .map(|(name, minor)| (name.to_owned(), minor))
-            .chain(codecs)
-            .collect();
+        let named = crate::schema_meta::ADDITIONS;
 
         let highest = named
             .iter()
             .map(|(_, minor)| *minor)
+            .chain(ROW_CODEC_SINCE.iter().map(|(_, minor)| *minor))
             .max()
             .expect("the metadata names at least the base schema");
         assert_eq!(
@@ -758,16 +564,26 @@ mod tests {
             rows.len()
         );
 
-        for (name, minor) in &named {
+        for (name, minor) in named {
             let minor = *minor;
             if minor == 0 {
                 continue;
             }
             let row = &rows[usize::from(minor)];
             assert!(
-                row.contains(name.as_str()),
+                ledger_identifiers(row).contains(name),
                 "minor {minor} authorizes `{name}`, but the ledger row for minor {minor} \
                  does not name it: add it to the table in docs/reference/ipc.md"
+            );
+        }
+        for (codec, minor) in ROW_CODEC_SINCE {
+            if *minor == 0 {
+                continue;
+            }
+            assert!(
+                rows[usize::from(*minor)].contains(&format!("row-codec version {codec}")),
+                "minor {minor} defines row-codec version {codec}, but its ledger row does not \
+                 name it"
             );
         }
 
@@ -780,10 +596,7 @@ mod tests {
                  spell it as `felis.proto` does, so the metadata check can read it"
             );
             for span in spans {
-                let variant = span.rsplit("::").next().unwrap_or(span);
-                let found = named
-                    .iter()
-                    .find(|(name, _)| name == span || name == variant);
+                let found = named.iter().find(|(name, _)| *name == span);
                 let Some((name, claimed)) = found else {
                     panic!(
                         "the ledger row for minor {minor} names `{span}`, which no arm, \

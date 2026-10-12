@@ -2054,8 +2054,8 @@ const EVERY_MODE: [ConnectionMode; 3] = [
 /// The matrix the docs publish, written out by hand, against the folds
 /// the driver actually reads, so an arm whose `ModeSet`/`PhaseSet`
 /// silently widens its family's surface fails here rather than being
-/// asserted against itself. Per-arm rows are pinned one level down, by
-/// `the_schema_declares_the_same_arm_table` against `felis.proto`.
+/// asserted against itself. Per-arm rows are generated from
+/// `felis.proto`'s arm options.
 #[test]
 fn the_kind_folds_are_the_matrix_the_reference_publishes() {
     // (kind, modes, phases), from `docs/reference/ipc.md` "Connection

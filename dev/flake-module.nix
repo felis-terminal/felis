@@ -333,6 +333,24 @@
             files = "(\\.proto|buf\\.gen\\.yaml)$";
             pass_filenames = false;
           };
+          schema-meta = {
+            enable = true;
+            name = "schema metadata";
+            description = "regenerate felis-protocol's src/schema_meta.rs from felis.proto's options; fails when the committed copy is stale (`just proto`)";
+            entry = toString (
+              pkgs.writeShellScript "felis-schema-meta" ''
+                export PATH=${
+                  pkgs.lib.makeBinPath [
+                    pkgs.buf
+                    rustToolchain
+                  ]
+                }:$PATH
+                exec ${pkgs.python3}/bin/python3 tools/proto/schema_meta.py
+              ''
+            );
+            files = "(\\.proto|tools/proto/schema_meta\\.py)$";
+            pass_filenames = false;
+          };
           # Added lines of the staged diff, not a whole-tree lint: the
           # committed tree carries hits the norms postdate, and gating the
           # whole tree would force a cleanup commit before anyone could

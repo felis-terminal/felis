@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{ArmMeta, CorrelationClass, Directed, Direction, ModeSet};
+use super::{ArmMeta, Directed};
 
 /// Scrollback-search requests ([`crate::MessageKind::Search`], kind 9,
 /// REQ-607), attached connections only.
@@ -50,16 +50,8 @@ pub enum SearchToClientMsg {
     },
 }
 
-const fn arm(name: &'static str, direction: Direction, correlation: CorrelationClass) -> ArmMeta {
-    ArmMeta::new(name, direction, correlation, ModeSet::ATTACHERS)
-}
-
 impl Directed for SearchToDaemonMsg {
-    const ARMS: &'static [ArmMeta] = &[arm(
-        "Search::Query",
-        Direction::ToDaemon,
-        CorrelationClass::StreamOpener,
-    )];
+    const ARMS: &'static [ArmMeta] = crate::schema_meta::SEARCH_TO_DAEMON_MSG_ARMS;
 
     fn arm_index(&self) -> usize {
         match self {
@@ -69,11 +61,7 @@ impl Directed for SearchToDaemonMsg {
 }
 
 impl Directed for SearchToClientMsg {
-    const ARMS: &'static [ArmMeta] = &[arm(
-        "Search::Match",
-        Direction::ToClient,
-        CorrelationClass::StreamItem,
-    )];
+    const ARMS: &'static [ArmMeta] = crate::schema_meta::SEARCH_TO_CLIENT_MSG_ARMS;
 
     fn arm_index(&self) -> usize {
         match self {

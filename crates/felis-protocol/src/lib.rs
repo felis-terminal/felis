@@ -20,6 +20,7 @@ pub mod messages;
 pub mod minor;
 pub mod preface;
 pub mod row;
+mod schema_meta;
 pub mod session_prefix;
 /// Generated protobuf wire types (the `felis.v1` schema); prefer the
 /// domain types in [`messages`].
