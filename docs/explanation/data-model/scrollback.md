@@ -104,11 +104,16 @@ line's ordinal by one, and a cursor without it would re-report the lines that sh
 hit and then emitting the pile is the rejected alternative: it holds the lock for the whole scan, which leaves a cancel
 nothing to land between.
 
+The `visible` source resumes by row position instead, as capture's row stream does: the growth rule above holds only for
+history that grows at its newest end, and a program repaints live rows at will.
+
 **Limitations (intentional):**
 
-- **The alternate screen is not searched**: alt content (vim, less) is a transient surface the program repaints at will;
-  its rows are no continuation of scrollback and its `soft_wrap` bits describe the alt screen, not the saved primary.
-  The scrollback half still matches while a program holds the alt screen.
+- **The default walk leaves out the alternate screen**: alt content (vim, less) is a transient surface the program
+  repaints at will; its rows are no continuation of scrollback and its `soft_wrap` bits describe the alt screen, not the
+  saved primary. The scrollback half still matches while a program holds the alt screen. The `visible` source is a
+  separate walk over the live rows alone: it reads the alt screen because it stitches nothing into history, and its rows
+  stitch among themselves by bits that do describe them.
 - **Trailing-blank trim** on the logical line's tail: a needle of `"hi"` does not surprise the user by matching `"hi"`
   followed by 78 cells of `Empty` (which would, post-decode, look like `"hi" + 78 spaces` and be invisible). Leading and
   interior blanks are preserved; rows that wrap into the next drop only their trailing `Empty` cells (the unfillable

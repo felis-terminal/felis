@@ -258,7 +258,7 @@ All session verbs run under `felis sessions <verb>`:
 | `spawn [-- cmd...]` | Create a new detached session.               |
 | `send <id> [text]`  | Paste text or send keystrokes to a session.  |
 | `capture <id>`      | Stream terminal screen or scrollback rows.   |
-| `search <id> <pat>` | Search scrollback history.                   |
+| `search <id> <pat>` | Search scrollback or the live screen.        |
 | `kill <id>`         | Terminate a session and its process group.   |
 | `evict <id>`        | Disconnect all clients from a session.       |
 | `switch <id>`       | Retarget one window onto another session.    |
@@ -301,8 +301,11 @@ and `list` exits `0` on an empty roster.
   columns, a combining mark adds characters to its cell's column, and a Kitty Unicode-placeholder cell reads as U+10EEEE
   followed by its diacritics, so a character's index in the text is its column only on a row of single-width characters.
 - **`search`**: substring search by default; `--regex` enables regular expressions, `--case-insensitive` folds case.
-  Pattern limit is 4 KiB. It matches scrollback and the primary screen; while a program holds the alternate screen, only
-  scrollback is searched.
+  Pattern limit is 4 KiB. `--source <scrollback|visible>` picks the rows. `scrollback`, the default, matches scrollback
+  and the primary screen; while a program holds the alternate screen, only scrollback is searched. `visible` matches the
+  live screen alone, alternate screen included, so every `line_index` is a grid row and each `col_spans` segment names
+  the cell columns a match covers on screen. A daemon whose protocol minor predates `--source visible` would search
+  scrollback in its place, so against one the verb refuses with `unsupported` (exit `2`) before attaching.
 - **`switch`**: moves one window attached to the current session (`$FELIS_SESSION_ID` or `--from <id>`) to target
   `<id>`. When several windows mirror that session, the one that most recently received user input moves;
   `--attachment <ID>` names a window explicitly. A background `sessions send` is not a window and never becomes that
@@ -786,19 +789,19 @@ The stdio contract:
 
 Supported ops and their accepted parameters:
 
-| Op                                | Parameters                                        |
-| --------------------------------- | ------------------------------------------------- |
-| `sessions.list`                   | `tags`                                            |
-| `sessions.info`                   | `session`                                         |
-| `sessions.spawn`                  | `cwd`, `env`, `rows`, `cols`, `tags`, `cmd`       |
-| `sessions.send`                   | `session`, `text`, `raw`                          |
-| `sessions.kill`, `sessions.evict` | `session`                                         |
-| `sessions.switch`                 | `to`, `from`, `attachment`                        |
-| `sessions.tag`                    | `session`, `add`, `remove`                        |
-| `sessions.capture`                | `session`, `source`, `ansi`, `lines`              |
-| `sessions.search`                 | `session`, `pattern`, `regex`, `case_insensitive` |
-| `notifications.subscribe`         | `session`                                         |
-| `cancel`                          | `target` (an in-flight request id)                |
+| Op                                | Parameters                                                  |
+| --------------------------------- | ----------------------------------------------------------- |
+| `sessions.list`                   | `tags`                                                      |
+| `sessions.info`                   | `session`                                                   |
+| `sessions.spawn`                  | `cwd`, `env`, `rows`, `cols`, `tags`, `cmd`                 |
+| `sessions.send`                   | `session`, `text`, `raw`                                    |
+| `sessions.kill`, `sessions.evict` | `session`                                                   |
+| `sessions.switch`                 | `to`, `from`, `attachment`                                  |
+| `sessions.tag`                    | `session`, `add`, `remove`                                  |
+| `sessions.capture`                | `session`, `source`, `ansi`, `lines`                        |
+| `sessions.search`                 | `session`, `pattern`, `regex`, `case_insensitive`, `source` |
+| `notifications.subscribe`         | `session`                                                   |
+| `cancel`                          | `target` (an in-flight request id)                          |
 
 For a local daemon, a relative `sessions.spawn.params.cwd` is resolved against the bridge process's current directory,
 and the child's base environment is captured from the bridge process, both before the request is sent. Over an SSH relay
@@ -816,8 +819,9 @@ Three ops take less than their CLI verb, by policy rather than by a limit of the
   editor rather than a felis window. A switch that queued no window is a result carrying `"queued":0`, where the CLI
   verb fails with `not_queued`.
 
-`sessions.capture.source` takes the four region names `sessions capture --source` takes, and
-`sessions.switch.attachment` the decimal id `sessions info --format json` prints.
+`sessions.capture.source` takes the four region names `sessions capture --source` takes, `sessions.search.source` the
+two `sessions search --source` takes (`visible` against a daemon too old for it is refused `unsupported`, as the flag
+is), and `sessions.switch.attachment` the decimal id `sessions info --format json` prints.
 
 ### `felis completions <shell>`
 
@@ -825,8 +829,8 @@ Generates a completion script for `bash`, `elvish`, `fish`, `powershell`, or `zs
 for `zsh` and `fish` only, where it queries the local daemon asynchronously; the other shells get the static grammar.
 Running `felis completions` itself dials nothing: it prints a script built from this binary's own argument grammar, so
 the global carrier flags are refused on this verb. That grammar carries the finite option vocabularies with it:
-`--format` and `sessions capture --source` complete to their listed values in every generated script, as they list them
-in `--help` and in the man page.
+`--format` and the `--source` of `sessions capture` and `sessions search` complete to their listed values in every
+generated script, as they list them in `--help` and in the man page.
 
 ## Version reporting
 
