@@ -117,6 +117,7 @@ fn cases() -> Vec<(&'static str, MessageKind, Vec<u8>)> {
                     height: 32,
                 }),
                 z_index: -3,
+                requested: None,
             }),
         ),
         (

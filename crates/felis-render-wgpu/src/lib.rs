@@ -19,7 +19,7 @@ use felis_grid::{
 };
 use felis_protocol::{
     ImageId,
-    messages::{CursorStyle, ImageFormat, SourceRect, ThemeChannel},
+    messages::{CursorStyle, ImageFormat, RequestedExtent, SourceRect, ThemeChannel},
 };
 pub use felis_shaping::FaceSpec;
 use felis_shaping::{CellMetrics, FontStack, ShapingError, StackDescription, StyleFaces};
@@ -1491,20 +1491,15 @@ impl Renderer {
             if top_row >= i64::from(rows) {
                 continue;
             }
-            // Same ceil-div `quad_for_placement` resolves, so the cull
-            // bound matches what draws.
-            let quad_rows = if p.rows == 0 {
-                let ch_px = (ch.max(1.0)) as u32;
-                i64::from(slot.height.div_ceil(ch_px))
-            } else {
-                i64::from(p.rows)
-            };
-            if top_row + quad_rows <= 0 {
-                continue;
-            }
             let Some(instance) = quad_for_placement(p, slot, cw, ch, viewport) else {
                 continue;
             };
+            // The drawn height, not the daemon's row count: an automatic
+            // axis draws at this window's cell size, which a mirror with
+            // smaller cells than the daemon resolved against can exceed.
+            if instance.origin_px[1] + instance.size_px[1] <= 0.0 {
+                continue;
+            }
             match z_layer(p.z_index) {
                 ZLayer::UnderBg => self.image_scratch_under_bg.push(instance),
                 ZLayer::UnderText => self.image_scratch_under_text.push(instance),
@@ -1850,6 +1845,26 @@ const fn z_layer(z: i32) -> ZLayer {
     }
 }
 
+/// kitty's destination rectangle: a requested axis spans its cells, an
+/// automatic one keeps the source's aspect ratio against the other, and
+/// with neither requested the source draws at its own pixel size.
+/// `sw` and `sh` are nonzero ([`clip_source`]).
+fn dest_size_px(requested: RequestedExtent, sw: u32, sh: u32, cw: f32, ch: f32) -> [f32; 2] {
+    let aspect = sw as f32 / sh as f32;
+    match (requested.cols, requested.rows) {
+        (0, 0) => [sw as f32, sh as f32],
+        (0, rows) => {
+            let h = f32::from(rows) * ch;
+            [h * aspect, h]
+        }
+        (cols, 0) => {
+            let w = f32::from(cols) * cw;
+            [w, w / aspect]
+        }
+        (cols, rows) => [f32::from(cols) * cw, f32::from(rows) * ch],
+    }
+}
+
 /// The anchor is 1-based (`anchor_row - 1 + viewport`, `anchor_col - 1`),
 /// shifted by `viewport` so a placement tracks its text while browsing
 /// scrollback. `None` for a degenerate placement.
@@ -1887,22 +1902,26 @@ fn quad_for_placement(
         f32::from(p.anchor_col.saturating_sub(1)) * cw,
         origin_row as f32 * ch,
     ];
-    // Natural-sized boxes matching `ceil(px / cell)` draw at native pixels to avoid
-    // non-integer resampling seams on high-contrast edges. Explicit `c=` or `r=`
-    // dimensions still scale to the target box.
-    let cw_px = cw.max(1.0) as u32;
-    let ch_px = ch.max(1.0) as u32;
-    let width_px = if u32::from(cols) == sw.div_ceil(cw_px) {
-        sw as f32
+    let size_px = if let Some(requested) = p.requested {
+        dest_size_px(requested, sw, sh, cw, ch)
     } else {
-        f32::from(cols) * cw
+        // A minor-0 daemon sends no request: a box matching `ceil(px / cell)`
+        // draws at native pixels to avoid non-integer resampling seams on
+        // high-contrast edges, any other scales to the box.
+        let cw_px = cw.max(1.0) as u32;
+        let ch_px = ch.max(1.0) as u32;
+        let width_px = if u32::from(cols) == sw.div_ceil(cw_px) {
+            sw as f32
+        } else {
+            f32::from(cols) * cw
+        };
+        let height_px = if u32::from(rows) == sh.div_ceil(ch_px) {
+            sh as f32
+        } else {
+            f32::from(rows) * ch
+        };
+        [width_px, height_px]
     };
-    let height_px = if u32::from(rows) == sh.div_ceil(ch_px) {
-        sh as f32
-    } else {
-        f32::from(rows) * ch
-    };
-    let size_px = [width_px, height_px];
     let u0 = slot.uv_min[0];
     let v0 = slot.uv_min[1];
     let du = slot.uv_max[0] - u0;
@@ -2270,6 +2289,44 @@ mod tests {
         }
     }
 
+    /// The issue's case: a 101 x 100 image at 10 x 20 px cells.
+    #[test]
+    fn a_requested_placement_draws_kitty_s_destination_size() {
+        let slot = ImageSlot {
+            uv_min: [0.0, 0.0],
+            uv_max: [1.0, 1.0],
+            width: 101,
+            height: 100,
+        };
+        let cases = [
+            ((0, 2), (5, 2), [40.4, 40.0]),
+            ((3, 0), (3, 2), [30.0, 30.0 * 100.0 / 101.0]),
+            ((0, 0), (11, 5), [101.0, 100.0]),
+            ((4, 2), (4, 2), [40.0, 40.0]),
+        ];
+        for ((req_cols, req_rows), (cols, rows), want) in cases {
+            let p = ClientPlacement {
+                image_id: ImageId(1),
+                placement_id: None,
+                anchor_row: 1,
+                anchor_col: 1,
+                cols,
+                rows,
+                source: None,
+                z_index: 0,
+                requested: Some(RequestedExtent {
+                    cols: req_cols,
+                    rows: req_rows,
+                }),
+            };
+            let size = quad_for_placement(&p, slot, 10.0, 20.0, 0)
+                .expect("quad emits")
+                .size_px;
+            let close = size.iter().zip(want).all(|(got, w)| (got - w).abs() < 1e-3);
+            assert!(close, "c={req_cols} r={req_rows}: {size:?}, want {want:?}");
+        }
+    }
+
     #[test]
     fn quad_for_explicit_cols_rows_uses_them_directly() {
         let p = ClientPlacement {
@@ -2281,6 +2338,7 @@ mod tests {
             rows: 2,
             source: None,
             z_index: 0,
+            requested: None,
         };
         let inst = quad_for_placement(&p, unit_slot(), 8.0, 16.0, 0).expect("quad emits");
         assert_eq!(inst.origin_px, [4.0 * 8.0, 2.0 * 16.0]);
@@ -2465,6 +2523,7 @@ mod tests {
             rows: 1,
             source: None,
             z_index: 0,
+            requested: None,
         };
         let virt = |id: u32| VirtualPlacement {
             image_id: ImageId(id),
@@ -2496,6 +2555,7 @@ mod tests {
             rows: 2,
             source: None,
             z_index: 0,
+            requested: None,
         };
         let inst = quad_for_placement(&p, unit_slot(), 8.0, 16.0, 5).expect("quad emits");
         assert_eq!(inst.origin_px, [4.0 * 8.0, 7.0 * 16.0]);
@@ -2516,6 +2576,7 @@ mod tests {
             rows: 2,
             source: None,
             z_index: 0,
+            requested: None,
         };
         let inst = quad_for_placement(&p, unit_slot(), 8.0, 16.0, 5).expect("quad emits");
         assert_eq!(inst.origin_px, [0.0, 0.0]);
@@ -2555,6 +2616,7 @@ mod tests {
             rows: 0,
             source: None,
             z_index: 0,
+            requested: None,
         };
         let inst = quad_for_placement(&p, unit_slot(), 8.0, 16.0, 0).expect("natural sizing");
         assert_eq!(inst.size_px, [4.0 * 8.0, 2.0 * 16.0]);
@@ -2580,6 +2642,7 @@ mod tests {
             rows: 2,
             source: None,
             z_index: 0,
+            requested: None,
         };
         let inst = quad_for_placement(&p, slot, 8.0, 16.0, 0).expect("native sizing");
         assert_eq!(inst.size_px, [30.0, 30.0]);
@@ -2604,6 +2667,7 @@ mod tests {
             rows: 5,
             source: None,
             z_index: 0,
+            requested: None,
         };
         let inst = quad_for_placement(&p, slot, 8.0, 16.0, 0).expect("explicit scale");
         assert_eq!(inst.size_px, [10.0 * 8.0, 5.0 * 16.0]);
@@ -2625,6 +2689,7 @@ mod tests {
                 height: 16,
             }),
             z_index: 0,
+            requested: None,
         };
         let inst = quad_for_placement(&p, unit_slot(), 8.0, 16.0, 0).expect("sub-rect");
         let slot_u_extent = 32.0 / 256.0;
@@ -2651,6 +2716,7 @@ mod tests {
                 height: 999,
             }),
             z_index: 0,
+            requested: None,
         };
         let inst = quad_for_placement(&p, unit_slot(), 8.0, 16.0, 0).expect("clipped sub-rect");
         let slot_u_extent = 32.0 / 256.0;
@@ -2675,6 +2741,7 @@ mod tests {
             rows: 1,
             source: None,
             z_index: 0,
+            requested: None,
         };
         assert!(quad_for_placement(&p, degenerate_slot, 8.0, 16.0, 0).is_none());
     }

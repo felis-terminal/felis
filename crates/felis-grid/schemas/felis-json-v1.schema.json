@@ -1219,6 +1219,17 @@
                 "null"
               ]
             },
+            "requested": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/RequestedExtentJson"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Absent from a daemon that does not report the request."
+            },
             "rows": {
               "format": "uint16",
               "maximum": 65535,
@@ -2138,6 +2149,28 @@
         "cols",
         "pixel_w",
         "pixel_h"
+      ],
+      "type": "object"
+    },
+    "RequestedExtentJson": {
+      "description": "The `c=` / `r=` a put asked for; `0` is automatic.",
+      "properties": {
+        "cols": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "rows": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "cols",
+        "rows"
       ],
       "type": "object"
     },

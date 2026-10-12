@@ -1464,18 +1464,55 @@ fn ris_keeps_the_graphics_commands_queued_before_it() {
 
 #[test]
 fn extent_resolve_keeps_a_request_and_rounds_an_auto_axis_up() {
-    assert_eq!(Extent::resolve(7, 30, 8), Extent::Requested(nz(7)));
-    assert_eq!(Extent::resolve(0, 30, 10), Extent::Natural(nz(3)));
-    assert_eq!(Extent::resolve(0, 30, 8), Extent::Natural(nz(4)));
+    let (r, n) = (Extent::Requested, Extent::Natural);
+    assert_eq!(
+        Extent::resolve((7, 2), (30, 30), (8, 8)),
+        (r(nz(7)), r(nz(2)))
+    );
+    assert_eq!(
+        Extent::resolve((0, 0), (30, 30), (10, 8)),
+        (n(nz(3)), n(nz(4)))
+    );
+}
+
+#[test]
+fn extent_resolve_derives_an_auto_axis_from_the_requested_one() {
+    let (r, d) = (Extent::Requested, Extent::Derived);
+    // r=2 at 20 px rows is 40 px tall, 40.4 px wide: 5 columns of 10 px.
+    assert_eq!(
+        Extent::resolve((0, 2), (101, 100), (10, 20)),
+        (d(nz(5)), r(nz(2)))
+    );
+    // c=3 at 10 px is 30 px wide, 60 px tall: exactly 3 rows of 20 px.
+    assert_eq!(
+        Extent::resolve((3, 0), (50, 100), (10, 20)),
+        (r(nz(3)), d(nz(3)))
+    );
+}
+
+#[test]
+fn extent_resolve_falls_back_to_natural_without_source_pixels_to_divide_by() {
+    let (r, n) = (Extent::Requested, Extent::Natural);
+    assert_eq!(
+        Extent::resolve((0, 2), (30, 0), (10, 20)),
+        (n(nz(3)), r(nz(2)))
+    );
 }
 
 #[test]
 fn extent_resolve_counts_an_unknown_cell_size_as_one_pixel() {
-    assert_eq!(Extent::resolve(0, 30, 0), Extent::Natural(nz(30)));
-    assert_eq!(Extent::resolve(0, 0, 8), Extent::Natural(nz(1)));
+    let n = Extent::Natural;
     assert_eq!(
-        Extent::resolve(0, 1 << 20, 0),
-        Extent::Natural(nz(u16::MAX))
+        Extent::resolve((0, 0), (30, 0), (0, 8)),
+        (n(nz(30)), n(nz(1)))
+    );
+    assert_eq!(
+        Extent::resolve((0, 0), (1 << 20, 1), (0, 0)),
+        (n(nz(u16::MAX)), n(nz(1)))
+    );
+    assert_eq!(
+        Extent::resolve((0, 2), (30, 40), (0, 0)),
+        (Extent::Derived(nz(2)), Extent::Requested(nz(2)))
     );
 }
 
@@ -1512,12 +1549,14 @@ fn store_with_30x40(id: u32) -> ImageStore {
 }
 
 fn requested(image: u32, pid: u32, cols: u16, rows: u16, resolved: (u16, u16)) -> Placement {
-    let axis = |requested, resolved| {
-        NonZeroU16::new(requested).map_or_else(|| Extent::Natural(nz(resolved)), Extent::Requested)
+    let axis = |requested, other, resolved| match (NonZeroU16::new(requested), other) {
+        (Some(n), _) => Extent::Requested(n),
+        (None, 0) => Extent::Natural(nz(resolved)),
+        (None, _) => Extent::Derived(nz(resolved)),
     };
     Placement {
-        cols: axis(cols, resolved.0),
-        rows: axis(rows, resolved.1),
+        cols: axis(cols, rows, resolved.0),
+        rows: axis(rows, cols, resolved.1),
         ..placement(image, Some(pid), 0)
     }
 }
@@ -1528,16 +1567,36 @@ fn rescale_re_resolves_only_auto_axes_and_reports_the_changed_placements() {
     let mut t = Placements::new();
     t.upsert(requested(1, 1, 0, 0, (3, 2)));
     t.upsert(requested(1, 2, 5, 5, (5, 5)));
-    t.upsert(requested(1, 3, 0, 2, (3, 2)));
+    t.upsert(requested(1, 3, 0, 2, (2, 2)));
     let mut changed = Vec::new();
     t.rescale(&store, (8, 16), |p| changed.push(p.placement_id));
     let extents: Vec<_> = t.iter().map(Placement::extent).collect();
-    assert_eq!(extents, [(4, 3), (5, 5), (4, 2)]);
+    assert_eq!(
+        extents,
+        [(4, 3), (5, 5), (3, 2)],
+        "r=2 of 16 px rows is 32 px tall and 24 px wide: 3 columns of 8 px",
+    );
     assert_eq!(
         changed,
         [Some(PlacementId(1)), Some(PlacementId(3))],
         "the explicit placement did not move",
     );
+}
+
+#[test]
+fn rescale_keeps_a_derived_axis_while_either_cell_size_is_unknown() {
+    let store = store_with_30x40(1);
+    let mut t = Placements::new();
+    t.upsert(requested(1, 1, 0, 2, (2, 2)));
+    let mut changed = 0;
+    t.rescale(&store, (8, 0), |_| changed += 1);
+    assert_eq!((t.iter().next().unwrap().extent(), changed), ((2, 2), 0));
+}
+
+#[test]
+fn a_placement_reports_the_axes_it_was_put_with() {
+    let p = requested(1, 1, 0, 2, (3, 2));
+    assert_eq!(p.requested(), RequestedExtent { cols: 0, rows: 2 });
 }
 
 #[test]

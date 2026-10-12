@@ -53,7 +53,7 @@ pub use grid::{
     KITTY_KBD_FLAGS_MAX, ModifyOtherKeysJson, MouseProtocolJson, PaletteActionJson, PromptKindJson,
     RowJson, ScrollDirectionJson, ThemeActionJson, ThemeChannelJson,
 };
-pub use image::{ImageFormatJson, ImageJson, ImageTargetJson, SourceRectJson};
+pub use image::{ImageFormatJson, ImageJson, ImageTargetJson, RequestedExtentJson, SourceRectJson};
 pub use row::{
     ASCII_MAX, ASCII_MIN, ATTR_FLAGS_MAX, AttrRunJson, AttributesJson, ColorJson, GraphemeJson,
     HAlignJson, RowCellsJson, SizedCellJson, SizingJson, UnderlineStyleJson, VAlignJson,

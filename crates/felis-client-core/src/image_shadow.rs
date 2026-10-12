@@ -232,6 +232,7 @@ impl ImageShadow {
                 rows,
                 source,
                 z_index,
+                requested,
             } => {
                 self.apply_placement(ClientPlacement {
                     image_id: *image_id,
@@ -242,6 +243,7 @@ impl ImageShadow {
                     rows: *rows,
                     source: *source,
                     z_index: *z_index,
+                    requested: *requested,
                 });
             }
             ImageMsg::PlacementRemoved {
@@ -657,6 +659,7 @@ mod tests {
             rows: 2,
             source: None,
             z_index: z,
+            requested: None,
         }
     }
 

@@ -38,6 +38,15 @@ pub struct SourceRect {
     pub height: u32,
 }
 
+/// The `c=` / `r=` a put asked for, `0` for an axis left automatic
+/// (Kitty derives it from the other axis, or from the image's size when
+/// both are automatic).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RequestedExtent {
+    pub cols: u16,
+    pub rows: u16,
+}
+
 /// Producer-side cap on a single [`ImageMsg::Chunk`]'s payload bytes.
 ///
 /// Bounds how long interactive input waits behind bulk image frames
@@ -101,13 +110,15 @@ pub enum ImageMsg {
         anchor_row: i32,
         /// 1-based anchor column.
         anchor_col: u16,
-        /// `c=`.
+        /// Resolved cell extent: `c=`, or the axis kitty derives.
         cols: u16,
-        /// `r=`.
+        /// Resolved cell extent: `r=`, or the axis kitty derives.
         rows: u16,
         source: Option<SourceRect>,
         /// `z=`.
         z_index: i32,
+        /// What `c=` / `r=` asked for; `None` from a minor-0 daemon.
+        requested: Option<RequestedExtent>,
     },
     /// Remove one placement (Kitty `a=d, d=p`).
     PlacementRemoved {
@@ -228,6 +239,7 @@ pub(crate) mod tests {
                     height: 128,
                 }),
                 z_index: -1,
+                requested: Some(RequestedExtent { cols: 10, rows: 0 }),
             },
             ImageMsg::Placement {
                 image_id: ImageId(7),
@@ -238,6 +250,7 @@ pub(crate) mod tests {
                 rows: 0,
                 source: None,
                 z_index: 0,
+                requested: None,
             },
             ImageMsg::PlacementRemoved {
                 image_id: ImageId(7),
@@ -290,6 +303,7 @@ pub(crate) mod tests {
                 rows: 5,
                 source: None,
                 z_index: 0,
+                requested: Some(RequestedExtent { cols: 0, rows: 0 }),
             },
         ]
     }
@@ -315,6 +329,24 @@ pub(crate) mod tests {
             }
             assert_eq!(msg.clone().for_minor(crate::PROTOCOL_MINOR), msg);
         }
+    }
+
+    #[test]
+    fn a_minor_0_peer_is_sent_a_placement_without_its_request() {
+        let placement = |requested| ImageMsg::Placement {
+            image_id: ImageId(7),
+            placement_id: Some(PlacementId(3)),
+            anchor_row: 1,
+            anchor_col: 1,
+            cols: 5,
+            rows: 2,
+            source: None,
+            z_index: 0,
+            requested,
+        };
+        let asked = placement(Some(RequestedExtent { cols: 0, rows: 2 }));
+        assert_eq!(asked.clone().for_minor(0), placement(None));
+        assert_eq!(asked.clone().for_minor(1), asked);
     }
 
     #[test]

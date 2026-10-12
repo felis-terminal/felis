@@ -5590,17 +5590,19 @@ mod tests {
         task.apply_size(sized_cells(&task, (0, 20)));
         place_30x40(&task, 1, ",r=4");
         task.drain_effects().expect("effects drain");
-        assert_eq!(placement_extent(&task.session.placements, 1), (30, 4));
+        // r=4 of 20 px rows is 80 px tall, so the 30 x 40 image is 60 px
+        // wide: 60 one-pixel columns, then 8 columns of 8 px.
+        assert_eq!(placement_extent(&task.session.placements, 1), (60, 4));
         drain_events(&mut rx);
 
         task.apply_size(sized_cells(&task, (8, 20)));
-        assert_eq!(placement_extent(&task.session.placements, 1), (4, 4));
+        assert_eq!(placement_extent(&task.session.placements, 1), (8, 4));
         assert!(
             drain_events(&mut rx).iter().any(|ev| matches!(
                 ev,
                 OutEvent::Image(ImageMsg::Placement {
                     image_id: felis_protocol::ImageId(1),
-                    cols: 4,
+                    cols: 8,
                     rows: 4,
                     ..
                 })

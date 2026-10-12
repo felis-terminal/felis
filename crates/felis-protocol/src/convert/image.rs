@@ -35,6 +35,26 @@ impl From<v1::SourceRect> for messages::SourceRect {
     }
 }
 
+impl From<messages::RequestedExtent> for v1::RequestedExtent {
+    fn from(r: messages::RequestedExtent) -> Self {
+        Self {
+            cols: u32::from(r.cols),
+            rows: u32::from(r.rows),
+        }
+    }
+}
+
+impl TryFrom<v1::RequestedExtent> for messages::RequestedExtent {
+    type Error = WireError;
+
+    fn try_from(r: v1::RequestedExtent) -> Result<Self, Self::Error> {
+        Ok(Self {
+            cols: narrow("RequestedExtent.cols", r.cols)?,
+            rows: narrow("RequestedExtent.rows", r.rows)?,
+        })
+    }
+}
+
 impl From<&messages::ImageMsg> for v1::ImageMsg {
     fn from(m: &messages::ImageMsg) -> Self {
         use messages::ImageMsg as I;
@@ -74,6 +94,7 @@ impl From<&messages::ImageMsg> for v1::ImageMsg {
                 rows,
                 source,
                 z_index,
+                requested,
             } => Msg::Placement(v1::ImagePlacement {
                 image_id: image_id.0,
                 placement_id: placement_id.map(|p| p.0),
@@ -83,6 +104,7 @@ impl From<&messages::ImageMsg> for v1::ImageMsg {
                 rows: u32::from(*rows),
                 source: source.map(Into::into),
                 z_index: *z_index,
+                requested: requested.map(Into::into),
             }),
             I::PlacementRemoved {
                 image_id,
@@ -182,6 +204,7 @@ impl TryFrom<v1::ImageMsg> for messages::ImageMsg {
                     rows: narrow("Placement.rows", p.rows)?,
                     source: p.source.map(Into::into),
                     z_index: p.z_index,
+                    requested: p.requested.map(TryInto::try_into).transpose()?,
                 },
                 Msg::PlacementRemoved(p) => Self::PlacementRemoved {
                     image_id: ImageId(p.image_id),

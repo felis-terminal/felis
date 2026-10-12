@@ -3,7 +3,7 @@
 use std::num::NonZeroU32;
 
 use felis_protocol::kitty_graphics::{ImageId, PlacementId};
-use felis_protocol::messages::{ImageFormat, ImageMsg, ImageTarget, SourceRect};
+use felis_protocol::messages::{ImageFormat, ImageMsg, ImageTarget, RequestedExtent, SourceRect};
 
 use super::JsonError;
 use super::grid::plain_enum;
@@ -22,6 +22,12 @@ json_dto! {
         pub y: u32,
         pub width: u32,
         pub height: u32,
+    }
+
+    /// The `c=` / `r=` a put asked for; `0` is automatic.
+    pub struct RequestedExtentJson {
+        pub cols: u16,
+        pub rows: u16,
     }
 
     /// What an [`ImageJson::Header`] opens a transfer for.
@@ -68,6 +74,9 @@ json_dto! {
             rows: u16,
             source: Option<SourceRectJson>,
             z_index: i32,
+            /// Absent from a daemon that does not report the request.
+            #[serde(default, skip_serializing_if = "Option::is_none")]
+            requested: Option<RequestedExtentJson>,
         },
         PlacementRemoved {
             image_id: u32,
@@ -112,6 +121,24 @@ impl From<SourceRectJson> for SourceRect {
             y: rect.y,
             width: rect.width,
             height: rect.height,
+        }
+    }
+}
+
+impl From<RequestedExtent> for RequestedExtentJson {
+    fn from(r: RequestedExtent) -> Self {
+        Self {
+            cols: r.cols,
+            rows: r.rows,
+        }
+    }
+}
+
+impl From<RequestedExtentJson> for RequestedExtent {
+    fn from(r: RequestedExtentJson) -> Self {
+        Self {
+            cols: r.cols,
+            rows: r.rows,
         }
     }
 }
@@ -183,6 +210,7 @@ impl From<ImageMsg> for ImageJson {
                 rows,
                 source,
                 z_index,
+                requested,
             } => Self::Placement {
                 image_id: image_id.0,
                 placement_id: placement_id.map(|id| id.0),
@@ -192,6 +220,7 @@ impl From<ImageMsg> for ImageJson {
                 rows,
                 source: source.map(Into::into),
                 z_index,
+                requested: requested.map(Into::into),
             },
             ImageMsg::PlacementRemoved {
                 image_id,
@@ -246,6 +275,7 @@ impl TryFrom<ImageJson> for ImageMsg {
                 rows,
                 source,
                 z_index,
+                requested,
             } => Self::Placement {
                 image_id: ImageId(image_id),
                 placement_id: placement_id.map(PlacementId),
@@ -255,6 +285,7 @@ impl TryFrom<ImageJson> for ImageMsg {
                 rows,
                 source: source.map(Into::into),
                 z_index,
+                requested: requested.map(Into::into),
             },
             ImageJson::PlacementRemoved {
                 image_id,

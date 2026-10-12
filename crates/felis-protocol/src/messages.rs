@@ -24,7 +24,9 @@ pub use grid::{
     AttentionSource, ClipboardSelection, ClipboardWrite, CursorStyle, GridMsg, ModifyOtherKeys,
     MouseProtocol, PaletteAction, PromptKind, ScrollDirection, ThemeAction, ThemeChannel,
 };
-pub use image::{ImageFormat, ImageMsg, ImageTarget, MAX_IMAGE_CHUNK_PAYLOAD, SourceRect};
+pub use image::{
+    ImageFormat, ImageMsg, ImageTarget, MAX_IMAGE_CHUNK_PAYLOAD, RequestedExtent, SourceRect,
+};
 pub use input::{
     FKey, InputMods, InputMsg, Key, KeyEvent, KeyEventKind, KeyLocation, KeyMods, MouseAction,
     MouseButton, MouseEvent, NamedKey, PromptJump,

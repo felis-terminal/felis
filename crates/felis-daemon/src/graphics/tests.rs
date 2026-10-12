@@ -2146,6 +2146,59 @@ const fn rect(x: u32, y: u32, width: u32, height: u32) -> SourceRect {
     }
 }
 
+/// kitty's `update_dest_rect`: with only `r=`, the columns follow from
+/// the rows' pixel height at the image's aspect ratio.
+#[test]
+fn a_put_with_only_rows_derives_its_columns_and_reports_the_request() {
+    let (mut grid, mut images, mut placements) = handler_state();
+    let payload = b64(&vec![0u8; 101 * 100 * 4]);
+    let mut events = Vec::new();
+    handle_complete(
+        &mut ApcCtx {
+            grid: &mut grid,
+            images: &mut images,
+            placements: &mut placements,
+            events: &mut events,
+            shm: &mut ShmDeferral::default(),
+            cell_pixel_w: 10,
+            cell_pixel_h: 20,
+            anchor_cursor: None,
+        },
+        &complete(
+            &[
+                (b'a', b"T".as_slice()),
+                (b'i', b"42".as_slice()),
+                (b'f', b"32".as_slice()),
+                (b's', b"101".as_slice()),
+                (b'v', b"100".as_slice()),
+                (b'r', b"2".as_slice()),
+            ],
+            &payload,
+        ),
+    )
+    .unwrap();
+    let p = placements.iter().next().expect("placement recorded");
+    assert_eq!(p.extent(), (5, 2), "40.4 px wide is 5 columns of 10 px");
+    assert_eq!(grid.cursor().col, 5);
+    let sent = events.iter().find_map(|e| match e {
+        ImageEvent::Placement {
+            cols,
+            rows,
+            requested,
+            ..
+        } => Some((*cols, *rows, *requested)),
+        _ => None,
+    });
+    assert_eq!(
+        sent,
+        Some((
+            5,
+            2,
+            felis_protocol::messages::RequestedExtent { cols: 0, rows: 2 }
+        ))
+    );
+}
+
 #[test]
 fn natural_sizing_falls_back_when_cell_pixel_dims_are_zero() {
     // Pins: before any client reports cell pixel dims, the cursor still

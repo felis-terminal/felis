@@ -1225,6 +1225,19 @@ pub struct ImagePlacement {
     /// Z-index from z= (i32).
     #[prost(sint32, tag="8")]
     pub z_index: i32,
+    /// The c= and r= the put asked for, 0 for an axis it left automatic;
+    /// cols and rows above are the resolved extent. Unset from a daemon
+    /// that does not report the request. Since minor 1.
+    #[prost(message, optional, tag="9")]
+    pub requested: ::core::option::Option<RequestedExtent>,
+}
+/// A placement's requested cell extent (Kitty c= / r=); 0 is automatic.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct RequestedExtent {
+    #[prost(uint32, tag="1")]
+    pub cols: u32,
+    #[prost(uint32, tag="2")]
+    pub rows: u32,
 }
 /// Remove one placement.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]

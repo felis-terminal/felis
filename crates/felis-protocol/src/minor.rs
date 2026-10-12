@@ -102,18 +102,32 @@ const OPS_TO_CLIENT_FIELDS: &[GatedField<OpsToClientMsg>] = &[];
 const PUSH_FIELDS: &[GatedField<PushMsg>] = &[];
 const SESSION_INFO_FIELDS: &[GatedField<crate::messages::SessionInfo>] = &[];
 const SPAWN_ARGS_FIELDS: &[GatedField<SpawnArgs>] = &[];
-const IMAGE_FIELDS: &[GatedField<ImageMsg>] = &[GatedField {
-    requires: Requires::new(1, "ImageVirtualPlacement.placement_id"),
-    present: |msg| {
-        matches!(
-            msg,
-            ImageMsg::VirtualPlacement {
-                placement_id: Some(_),
-                ..
-            }
-        )
+const IMAGE_FIELDS: &[GatedField<ImageMsg>] = &[
+    GatedField {
+        requires: Requires::new(1, "ImageVirtualPlacement.placement_id"),
+        present: |msg| {
+            matches!(
+                msg,
+                ImageMsg::VirtualPlacement {
+                    placement_id: Some(_),
+                    ..
+                }
+            )
+        },
     },
-}];
+    GatedField {
+        requires: Requires::new(1, "ImagePlacement.requested"),
+        present: |msg| {
+            matches!(
+                msg,
+                ImageMsg::Placement {
+                    requested: Some(_),
+                    ..
+                }
+            )
+        },
+    },
+];
 
 impl MinorGated for ImageMsg {
     fn requires(&self) -> Requires {
@@ -141,6 +155,27 @@ impl ImageMsg {
                 cols,
                 rows,
                 z_index,
+            },
+            Self::Placement {
+                image_id,
+                placement_id,
+                anchor_row,
+                anchor_col,
+                cols,
+                rows,
+                source,
+                z_index,
+                requested: Some(_),
+            } if minor < 1 => Self::Placement {
+                image_id,
+                placement_id,
+                anchor_row,
+                anchor_col,
+                cols,
+                rows,
+                source,
+                z_index,
+                requested: None,
             },
             other => other,
         }

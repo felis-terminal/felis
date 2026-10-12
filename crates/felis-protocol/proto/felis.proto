@@ -1538,6 +1538,16 @@ message ImagePlacement {
   SourceRect source = 7;
   // Z-index from z= (i32).
   sint32 z_index = 8;
+  // The c= and r= the put asked for, 0 for an axis it left automatic;
+  // cols and rows above are the resolved extent. Unset from a daemon
+  // that does not report the request. Since minor 1.
+  RequestedExtent requested = 9;
+}
+
+// A placement's requested cell extent (Kitty c= / r=); 0 is automatic.
+message RequestedExtent {
+  uint32 cols = 1;
+  uint32 rows = 2;
 }
 
 // Remove one placement.
