@@ -1138,3 +1138,124 @@ fn every_wire_refusal_reason_has_a_surface_token() {
         assert_eq!(stream_error_reason(reason), token);
     }
 }
+
+/// A daemon below the source's minor would ignore it and search
+/// scrollback, so the bridge answers `unsupported` before opening the
+/// stream.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_visible_search_on_a_minor_zero_link_is_unsupported() {
+    use felis_protocol::messages::{SearchOptions, SearchSource, SearchToDaemonMsg};
+
+    let (near, _far) = tokio::net::UnixStream::pair().expect("a socket pair");
+    let (read, write) = near.into_split();
+    let link = Link::start(
+        Connection::from_halves(
+            FrameReader::new(CarrierReader::Local(read)),
+            FrameWriter::baseline(CarrierWriter::Local(write)),
+            felis_protocol::ConnectionMode::Ops,
+        ),
+        "test",
+    );
+    let Err(err) = link
+        .open_stream(&SearchToDaemonMsg::Query {
+            query: "needle".into(),
+            options: SearchOptions::default(),
+            source: SearchSource::Visible,
+        })
+        .await
+    else {
+        panic!("minor 0 cannot carry a search source");
+    };
+    assert_eq!(BridgeError::from(err).kind, ErrorKind::Unsupported);
+}
+
+#[cfg(unix)]
+struct CapturingWriter(Arc<std::sync::Mutex<Vec<u8>>>);
+
+#[cfg(unix)]
+impl tokio::io::AsyncWrite for CapturingWriter {
+    fn poll_write(
+        self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        self.0.lock_or_poisoned().extend_from_slice(buf);
+        std::task::Poll::Ready(Ok(buf.len()))
+    }
+
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::task::Poll::Ready(Ok(()))
+    }
+
+    fn poll_shutdown(
+        self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::task::Poll::Ready(Ok(()))
+    }
+}
+
+/// The refusal lands before any session dial: the target names no
+/// daemon, so a dial would answer `daemon_unreachable`, and an unknown
+/// prefix would answer from an attach. Neither may win over the skew.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_visible_search_against_a_minor_zero_daemon_is_unsupported_before_any_attach() {
+    let (near, far) = tokio::net::UnixStream::pair().expect("a socket pair");
+    let (read, write) = near.into_split();
+    let anchor = Link::start(
+        Connection::from_halves(
+            FrameReader::new(CarrierReader::Local(read)),
+            FrameWriter::baseline(CarrierWriter::Local(write)),
+            felis_protocol::ConnectionMode::Ops,
+        ),
+        "test",
+    );
+    let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let (out, writer) = Out::start_with_writer(CapturingWriter(Arc::clone(&captured)));
+    let core = Arc::new(Core {
+        target: Reconnector {
+            carrier: felis_client_core::Carrier::Local(felis_transport::Endpoint::unix("/unused")),
+            offer: Offer::ops(),
+        },
+        out: out.clone(),
+        anchor: Arc::clone(&anchor),
+        sessions: tokio::sync::Mutex::new(HashMap::new()),
+        active: std::sync::Mutex::new(HashMap::new()),
+        pending_replies: std::sync::Mutex::new(HashMap::new()),
+        links: Arc::new(tokio::sync::Semaphore::new(MAX_AUXILIARY_LINKS)),
+    });
+
+    core.accept(
+        r#"{"v":1,"id":1,"op":"sessions.search","params":{"session":"ffff","pattern":"x","source":"visible"}}"#,
+    )
+    .await
+    .expect("admit the request");
+    let reply = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let text = String::from_utf8(captured.lock_or_poisoned().clone()).unwrap();
+            if text.contains('\n') {
+                return text;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the search terminates");
+    let reply: Value = serde_json::from_str(reply.trim()).expect("one JSON object");
+    assert_eq!(reply["event"], "error", "got {reply}");
+    assert_eq!(reply["error"]["kind"], "unsupported", "got {reply}");
+
+    let mut buf = [0u8; 64];
+    assert!(
+        matches!(far.try_read(&mut buf), Err(e) if e.kind() == std::io::ErrorKind::WouldBlock),
+        "the anchor sent nothing for the refused search"
+    );
+    out.close().await.expect("the writer is running");
+    writer.await.expect("the writer drains");
+    anchor.shutdown().await;
+}

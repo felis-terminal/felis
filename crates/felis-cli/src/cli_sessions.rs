@@ -38,7 +38,7 @@ use felis_protocol::messages::{
     InfoOutcome, MAX_PASTE_BYTES, MAX_RAW_INPUT_BYTES, MAX_SEARCH_PATTERN_BYTES, ResolvedId,
     SessionInfo, SwitchScope, Validate, check_limit,
 };
-use felis_protocol::messages::{RegionSource, SessionToDaemonMsg};
+use felis_protocol::messages::{RegionSource, SearchOptions, SearchSource, SessionToDaemonMsg};
 use tokio::io::{AsyncRead, AsyncWrite};
 
 use self::attachment::{cmd_switch, require_switch_from};
@@ -369,6 +369,14 @@ pub(crate) enum SessionOp {
         /// Case-insensitive match.
         #[arg(long)]
         case_insensitive: bool,
+        /// Rows to search: `scrollback` (history plus the primary
+        /// screen; skips the alternate screen) or `visible` (the live
+        /// screen alone, alternate screen included; every `line_index`
+        /// is a grid row).
+        #[arg(long, value_name = "SOURCE", default_value = "scrollback",
+              value_parser = clap::builder::EnumValueParser::<SearchSourceArg>::new()
+                  .map(SearchSource::from))]
+        source: SearchSource,
         #[command(flatten)]
         output: StreamFormat,
     },
@@ -446,12 +454,36 @@ impl From<SourceArg> for RegionSource {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub(crate) enum SearchSourceArg {
+    Scrollback,
+    Visible,
+}
+
+impl From<SearchSourceArg> for SearchSource {
+    fn from(value: SearchSourceArg) -> Self {
+        match value {
+            SearchSourceArg::Scrollback => Self::Scrollback,
+            SearchSourceArg::Visible => Self::Visible,
+        }
+    }
+}
+
 /// Every `SourceArg` spelling, in `value_variants` order, as `--source`
 /// and the bridge accept it.
+#[cfg(test)]
 pub(crate) fn source_names() -> Vec<String> {
-    use clap::ValueEnum as _;
+    value_names::<SourceArg>()
+}
 
-    SourceArg::value_variants()
+/// [`source_names`] for `search --source`.
+#[cfg(test)]
+pub(crate) fn search_source_names() -> Vec<String> {
+    value_names::<SearchSourceArg>()
+}
+
+fn value_names<T: clap::ValueEnum>() -> Vec<String> {
+    T::value_variants()
         .iter()
         .filter_map(|variant| Some(variant.to_possible_value()?.get_name().to_owned()))
         .collect()
@@ -459,19 +491,26 @@ pub(crate) fn source_names() -> Vec<String> {
 
 /// `felis bridge` takes the same vocabulary as a JSON string rather
 /// than through clap, so it spells the refusal out itself. The
-/// spellings come from [`source_names`]: a literal list here would
+/// spellings come from the value enum: a literal list here would
 /// still name a variant that has since been renamed away.
+fn parse_source_value<T: clap::ValueEnum>(raw: &str) -> Result<T, String> {
+    T::from_str(raw, false).map_err(|_| {
+        let expected = match value_names::<T>().as_slice() {
+            [only] => only.clone(),
+            [first, second] => format!("{first} or {second}"),
+            [rest @ .., last] => format!("{}, or {last}", rest.join(", ")),
+            [] => String::new(),
+        };
+        format!("unknown source `{raw}` (expected {expected})")
+    })
+}
+
 pub(crate) fn parse_region_source(raw: &str) -> Result<RegionSource, String> {
-    <SourceArg as clap::ValueEnum>::from_str(raw, false)
-        .map(RegionSource::from)
-        .map_err(|_| {
-            let expected = match source_names().as_slice() {
-                [only] => only.clone(),
-                [rest @ .., last] => format!("{}, or {last}", rest.join(", ")),
-                [] => String::new(),
-            };
-            format!("unknown source `{raw}` (expected {expected})")
-        })
+    parse_source_value::<SourceArg>(raw).map(RegionSource::from)
+}
+
+pub(crate) fn parse_search_source(raw: &str) -> Result<SearchSource, String> {
+    parse_source_value::<SearchSourceArg>(raw).map(SearchSource::from)
 }
 
 /// Exit codes per docs/reference/ipc.md "CLI clients": 0 success, 1
@@ -676,6 +715,7 @@ pub(crate) fn plan(op: SessionOp, target: &Reconnector) -> ControlFlow<i32, Plan
             pattern,
             regex,
             case_insensitive,
+            source,
             output,
         } => {
             let (out, body) = stream_out(output.format);
@@ -691,7 +731,11 @@ pub(crate) fn plan(op: SessionOp, target: &Reconnector) -> ControlFlow<i32, Plan
                 return ControlFlow::Break(code);
             }
             Plan::ops(out, move |conn| async move {
-                cmd_search(conn, &body, &id, &pattern, regex, case_insensitive).await
+                let options = SearchOptions {
+                    regex,
+                    case_insensitive,
+                };
+                cmd_search(conn, &body, &id, &pattern, options, source).await
             })
         }
         SessionOp::Tag {

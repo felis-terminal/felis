@@ -115,6 +115,20 @@ impl JsonSchema for RegionSourceValue {
     }
 }
 
+/// [`RegionSourceValue`] for `sessions.search`, whose `source` names
+/// the two regions `search --source` takes.
+struct SearchSourceValue;
+
+impl JsonSchema for SearchSourceValue {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "SearchSource".into()
+    }
+
+    fn json_schema(_: &mut SchemaGenerator) -> schemars::Schema {
+        json_schema!({ "type": "string", "enum": crate::cli_sessions::search_source_names() })
+    }
+}
+
 params! {
     SessionsListParams { tags: Option<Vec<String>> }
     SessionsInfoParams { session: Prefix }
@@ -162,6 +176,7 @@ params! {
         pattern: String,
         regex: Option<bool>,
         case_insensitive: Option<bool>,
+        source: Option<SearchSourceValue>,
     }
     NotificationsSubscribeParams { session: Option<Prefix> }
     CancelParams { target: RequestId }
@@ -670,6 +685,23 @@ fn the_published_source_enum_is_the_set_the_bridge_parses() {
         );
     }
     assert!(crate::cli_sessions::parse_region_source("bogus").is_err());
+
+    let published = document["$defs"]["SearchSource"]["enum"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert_eq!(
+        published.len(),
+        crate::cli_sessions::search_source_names().len()
+    );
+    for value in &published {
+        let value = value.as_str().unwrap();
+        assert!(
+            crate::cli_sessions::parse_search_source(value).is_ok(),
+            "the schema publishes `{value}` but the bridge refuses it",
+        );
+    }
+    assert!(crate::cli_sessions::parse_search_source("command-output").is_err());
 }
 
 /// `kind` must stay an open string: the vocabulary grows additively
