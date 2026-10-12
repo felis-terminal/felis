@@ -7,6 +7,7 @@
   installShellFiles,
   ncurses,
   desktop-file-utils,
+  fontconfig,
   freetype,
   vulkan-loader,
   libxkbcommon,
@@ -28,6 +29,7 @@
 let
   # dlopen'd at runtime (absent from DT_NEEDED), so plain rpath fails to find them.
   runtimeLibs = [
+    fontconfig
     freetype
     vulkan-loader
     libxkbcommon

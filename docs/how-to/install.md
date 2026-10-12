@@ -174,12 +174,13 @@ Three things come from the host:
 - **A Vulkan driver and `libvulkan.so.1`.** The client renders through it and reports no adapter without one, which
   `felis doctor` names. On Debian and Ubuntu that is `libvulkan1` plus the driver package for your GPU
   (`mesa-vulkan-drivers` for AMD and Intel).
-- **A monospace font.** felis reads the host's fontconfig configuration for the `monospace` alias and the font
-  directories, and falls back to any installed fixed-pitch face when the alias names nothing installed. On Debian and
-  Ubuntu, `fonts-dejavu-core` is enough; `font.family` picks another face ([configuration](../reference/config.md)).
-- **A C library no newer than the bundled one.** The host's driver libraries are loaded into a process already running
-  the archive's glibc 2.42, which works as long as they were linked against 2.42 or older. Every current distribution
-  release is; a host newer than the archive is the case to watch, and the fix is a newer archive.
+- **libfontconfig and a monospace font.** felis loads the host's `libfontconfig.so.1` and draws the faces its
+  configuration names (`fc-match monospace` for the default); without the library the window does not open. On Debian
+  and Ubuntu, `libfontconfig1` and `fonts-dejavu-core` are enough; `font.family` picks another face
+  ([configuration](../reference/config.md)).
+- **A C library no newer than the bundled one.** The host's driver libraries and libfontconfig are loaded into a process
+  already running the archive's glibc 2.42, which works as long as they were linked against 2.42 or older. Every current
+  distribution release is; a host newer than the archive is the case to watch, and the fix is a newer archive.
 
 The compiled `xterm-felis` entry is at `share/terminfo`, and the daemon adds that directory to `TERMINFO_DIRS` for every
 session it starts, so programs in those sessions recognize `TERM=xterm-felis` with no setup. Only a program that reads

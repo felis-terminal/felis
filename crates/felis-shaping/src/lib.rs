@@ -3,9 +3,10 @@
 //! Output is a [`GlyphBitmap`] (coverage or RGBA pixels plus placement);
 //! conversion to a GPU texture happens in `felis-render-wgpu`.
 
-// Relaxes the workspace `unsafe_code = "deny"` for the single
-// `Mmap::map` in `Font::load_face_id`
-// (docs/explanation/rendering/text-shaping.md "Font loading").
+// Relaxes the workspace `unsafe_code = "deny"` for the `Mmap::map` in
+// `Font::load_face_id` and the libfontconfig calls in
+// `provider::fontconfig` (docs/explanation/rendering/text-shaping.md
+// "Font loading").
 #![allow(unsafe_code)]
 
 use std::{borrow::Cow, collections::HashMap, sync::Arc};
@@ -29,7 +30,9 @@ mod provider;
 
 use presentation::is_emoji_presentation;
 pub use provider::MONOSPACE_FALLBACK_FAMILIES;
-use provider::{BOLD_WEIGHT, FaceProvider, FaceSource, REGULAR_WEIGHT, system_db};
+#[cfg(any(not(target_os = "linux"), test))]
+use provider::system_db;
+use provider::{BOLD_WEIGHT, FaceProvider, FaceSource, LoadedAs, REGULAR_WEIGHT};
 
 #[derive(Debug, Error)]
 pub enum ShapingError {
@@ -37,6 +40,8 @@ pub enum ShapingError {
     NoFont,
     #[error("parse font face: {0}")]
     BadFont(String),
+    #[error("fontconfig: {0}")]
+    Fontconfig(String),
     #[error("load font {}: {detail}", path.display())]
     FontPath {
         path: std::path::PathBuf,
@@ -96,9 +101,9 @@ pub struct Font {
 
 impl Font {
     pub fn load_default() -> Result<Self, ShapingError> {
-        let db = system_db();
-        let (id, _) = db.default_monospace()?;
-        Self::load_face_id(&db, id)
+        let provider = system_provider()?;
+        let (id, _) = provider.default_monospace()?;
+        Self::load_face_id(&provider, id)
     }
 
     fn try_load_with<P: FaceProvider>(provider: &P, family: &str) -> Result<Self, ShapingError> {
@@ -160,7 +165,7 @@ impl Font {
 
     fn load_face_id<P: FaceProvider>(provider: &P, id: P::Id) -> Result<Self, ShapingError> {
         let face = provider.resolve_face(id).ok_or(ShapingError::NoFont)?;
-        let face_index = face.index;
+        let (face_index, instance) = (face.index, face.instance);
         let bytes: FontBytes = match face.source {
             FaceSource::Shared(bytes) => bytes,
             // fontdb exposes a persistent mmap only behind its `unsafe`
@@ -192,21 +197,60 @@ impl Font {
             let color = font_ref.color_palettes().len() != 0 || font_ref.color_strikes().len() != 0;
             (font_ref.offset, color)
         };
-        Ok(Self {
+        let font = Self {
             bytes,
             offset,
             key: swash::CacheKey::new(),
             color,
             coords: Vec::new(),
             position: Vec::new(),
+        };
+        Ok(match instance {
+            Some(index) => font.at_instance(index).ok_or_else(|| {
+                ShapingError::BadFont(format!("named instance {index} not in the face"))
+            })?,
+            None => font,
         })
+    }
+
+    /// The face at named instance `index` (zero-based, in `fvar` order);
+    /// `None` when the face has no such instance.
+    fn at_instance(&self, index: usize) -> Option<Self> {
+        let face = self.font_ref();
+        let variations = face.variations();
+        let values: Vec<f32> = face.instances().nth(index)?.values().collect();
+        let settings: Vec<(swash::Tag, f32)> = variations.map(|v| v.tag()).zip(values).collect();
+        let coords = variations
+            .normalized_coords(settings.iter().copied())
+            .collect();
+        Some(self.with_coords(coords, settings))
+    }
+
+    /// The regular view a stack draws: a face loaded at a named instance
+    /// stays there, any other variable face moves to `wght` 400.
+    fn into_regular_view(self) -> Self {
+        if !self.coords.is_empty() {
+            return self;
+        }
+        self.at_style(REGULAR_WEIGHT, false).unwrap_or(self)
+    }
+
+    fn with_coords(&self, coords: Vec<NormalizedCoord>, position: Vec<(swash::Tag, f32)>) -> Self {
+        Self {
+            bytes: self.bytes.clone(),
+            offset: self.offset,
+            key: swash::CacheKey::new(),
+            color: self.color,
+            coords,
+            position,
+        }
     }
 
     /// The same face at `weight` on its `wght` axis (clamped to the
     /// axis range) and, when `italic`, at the [`italic_position`] of its
     /// `ital`/`slnt` axes, sharing the font bytes; `None` when neither
-    /// applies. fontdb lists a variable file once, at its default
-    /// instance, so a bold or italic query returns that instance as is.
+    /// applies. Axes neither setting names keep `self`'s position, so a
+    /// face loaded at a named instance keeps its width or optical size.
     #[must_use]
     pub fn at_style(&self, weight: u16, italic: bool) -> Option<Self> {
         let face = self.font_ref();
@@ -239,24 +283,25 @@ impl Font {
         if settings.is_empty() {
             return None;
         }
-        let position = settings
-            .iter()
-            .map(|&(tag, value)| {
-                let value = variations.find_by_tag(tag).map_or(value, |axis| {
-                    value.clamp(axis.min_value(), axis.max_value())
-                });
-                (tag, value)
-            })
+        let mut position = self.position.clone();
+        for &(tag, value) in &settings {
+            let value = variations.find_by_tag(tag).map_or(value, |axis| {
+                value.clamp(axis.min_value(), axis.max_value())
+            });
+            match position.iter_mut().find(|(t, _)| *t == tag) {
+                Some(entry) => entry.1 = value,
+                None => position.push((tag, value)),
+            }
+        }
+        let mut coords: Vec<NormalizedCoord> = variations
+            .normalized_coords(settings.iter().copied())
             .collect();
-        let coords = variations.normalized_coords(settings).collect();
-        Some(Self {
-            bytes: self.bytes.clone(),
-            offset: self.offset,
-            key: swash::CacheKey::new(),
-            color: self.color,
-            coords,
-            position,
-        })
+        for ((coord, axis), base) in coords.iter_mut().zip(&axes).zip(&self.coords) {
+            if !settings.iter().any(|(tag, _)| *tag == axis.tag) {
+                *coord = *base;
+            }
+        }
+        Some(self.with_coords(coords, position))
     }
 
     #[must_use]
@@ -430,6 +475,22 @@ fn has_italic_token(name: &str) -> bool {
         .any(|t| t.eq_ignore_ascii_case("italic") || t.eq_ignore_ascii_case("oblique"))
 }
 
+/// The host's font set: fontconfig on Linux, where it is the configuration
+/// users edit, and fontdb's scan elsewhere.
+#[cfg(target_os = "linux")]
+fn system_provider() -> Result<provider::fontconfig::Fontconfig, ShapingError> {
+    provider::fontconfig::Fontconfig::system()
+}
+
+#[cfg(not(target_os = "linux"))]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "one signature with the Linux provider, which can fail to load"
+)]
+fn system_provider() -> Result<fontdb::Database, ShapingError> {
+    Ok(system_db())
+}
+
 /// A resolved `font.fallback` entry or styled font table.
 ///
 /// `None` inherits: `family` derives from base `font.family` at the target
@@ -491,6 +552,10 @@ pub struct FontStack {
     /// the entry is chosen on `fonts` and only the drawn face varies.
     chains: [Vec<Arc<Font>>; 4],
     styled_features: [Vec<String>; 4],
+    /// The fallbacks are the host's ranked cascade rather than a declared
+    /// or discovered-by-family order, so a text-presentation scalar takes
+    /// a mono face before an earlier-ranked color one.
+    mono_first: bool,
 }
 
 /// The bold, italic and bold-italic slots with the weight and slant each
@@ -526,6 +591,9 @@ const STYLE_VARIANTS: [(FontStyle, u16, bool); 3] = [
 /// same file and axis position share one `Arc`.
 struct StyleViews<'a, P: FaceProvider> {
     provider: &'a P,
+    /// Set for a fallback, whose styles are looked up among its own
+    /// family's faces rather than by name.
+    sibling_of: Option<P::Id>,
     /// `None` for a face that failed to load.
     by_id: HashMap<P::Id, Option<Arc<Font>>>,
     views: HashMap<(P::Id, Vec<NormalizedCoord>), Arc<Font>>,
@@ -536,6 +604,7 @@ impl<'a, P: FaceProvider> StyleViews<'a, P> {
     fn new(provider: &'a P, regular_id: P::Id, regular: &Arc<Font>) -> Self {
         Self {
             provider,
+            sibling_of: None,
             by_id: HashMap::from([(regular_id, Some(regular.clone()))]),
             views: HashMap::from([((regular_id, regular.coords.clone()), regular.clone())]),
             regular: regular.clone(),
@@ -544,7 +613,10 @@ impl<'a, P: FaceProvider> StyleViews<'a, P> {
 
     /// `family` at `weight` and `slant`; `None` when no face matches.
     fn resolve(&mut self, family: &str, weight: u16, italic: bool) -> Option<Arc<Font>> {
-        let id = self.provider.find_face(family, weight, italic)?;
+        let id = match self.sibling_of {
+            Some(of) => self.provider.find_sibling(of, family, weight, italic),
+            None => self.provider.find_face(family, weight, italic),
+        }?;
         let loaded = self
             .by_id
             .entry(id)
@@ -695,6 +767,7 @@ impl FontStack {
             features: vec![features],
             chains,
             styled_features,
+            mono_first: false,
         }
     }
 
@@ -727,7 +800,7 @@ impl FontStack {
         styles: &StyleFaces<'_>,
     ) -> Result<Self, ShapingError> {
         Self::auto_discover_in(
-            &system_db(),
+            &system_provider()?,
             primary_family,
             primary_features,
             explicit_fallbacks,
@@ -777,22 +850,22 @@ impl FontStack {
         explicit_fallbacks: &[FaceSpec],
         styles: &StyleFaces<'_>,
     ) -> Result<Self, ShapingError> {
-        let (regular_id, base_family) = match primary_family {
-            Some(name) => {
-                if let Some(id) = db.find_face(name, REGULAR_WEIGHT, false) {
-                    (id, name.to_owned())
-                } else {
-                    warn!(
-                        family = name,
-                        "font family not found; falling back to monospace"
-                    );
-                    db.default_monospace()?
-                }
+        let found = primary_family
+            .and_then(|name| Some((db.find_face(name, REGULAR_WEIGHT, false)?, name)));
+        let (regular_id, base_family, requested) = if let Some((id, name)) = found {
+            (id, name.to_owned(), name)
+        } else {
+            if let Some(name) = primary_family {
+                warn!(
+                    family = name,
+                    "font family not found; falling back to monospace"
+                );
             }
-            None => db.default_monospace()?,
+            let (id, family) = db.default_monospace()?;
+            (id, family, "monospace")
         };
         let loaded = Font::load_face_id(db, regular_id)?;
-        let regular = Arc::new(loaded.at_style(REGULAR_WEIGHT, false).unwrap_or(loaded));
+        let regular = Arc::new(loaded.into_regular_view());
         let mut stack = Self::with_primary_features(regular.clone(), primary_features.to_vec());
         stack.load_styled(
             db,
@@ -802,7 +875,11 @@ impl FontStack {
             primary_features,
             styles,
         );
-        if explicit_fallbacks.is_empty() {
+        if explicit_fallbacks.is_empty()
+            && let Some(cascaded) = append_cascade(&stack, db, requested, primary_features)
+        {
+            stack = cascaded;
+        } else if explicit_fallbacks.is_empty() {
             stack = append_first_installed(stack, db, CJK_FALLBACK_FAMILIES, primary_features);
             stack = append_all_installed(stack, db, SYMBOL_FALLBACK_FAMILIES, primary_features);
             stack = append_first_installed(stack, db, EMOJI_FALLBACK_FAMILIES, primary_features);
@@ -817,6 +894,13 @@ impl FontStack {
                     .features
                     .as_deref()
                     .map_or_else(|| primary_features.to_vec(), <[String]>::to_vec);
+                if stack.fonts.len() > MAX_FALLBACKS {
+                    warn!(
+                        family,
+                        "font.fallback lists more than {MAX_FALLBACKS} faces; dropping the rest"
+                    );
+                    break;
+                }
                 if let Ok(views) = fallback_views(db, family) {
                     stack = stack.with_fallback_views(views, features);
                 } else {
@@ -923,18 +1007,29 @@ impl FontStack {
         self.first_cover_styled_index(c, style)
     }
 
-    /// The first face covering `c`, presentation aside: the styled
-    /// primary, then the chain in order, then `0` for `.notdef`.
+    /// The face drawing `c` in text presentation: the styled primary, then
+    /// the chain in order, except that a `mono_first` stack takes a mono
+    /// face before any color one, the primary included; `0` for `.notdef`.
     fn first_cover_styled_index(&self, c: char, style: FontStyle) -> usize {
-        if self.chains[style.index()][0].has_glyph(c) {
+        let primary = &self.chains[style.index()][0];
+        let primary_covers = primary.has_glyph(c);
+        if primary_covers && !(self.mono_first && primary.has_color_glyphs()) {
             return 0;
         }
-        for (i, font) in self.fonts.iter().enumerate().skip(1) {
-            if font.has_glyph(c) {
-                return i;
-            }
+        let fallbacks = || self.fonts.iter().enumerate().skip(1);
+        let mono = self
+            .mono_first
+            .then(|| fallbacks().find(|(_, f)| !f.has_color_glyphs() && f.has_glyph(c)))
+            .flatten();
+        if let Some((i, _)) = mono {
+            return i;
         }
-        0
+        if primary_covers {
+            return 0;
+        }
+        fallbacks()
+            .find(|(_, f)| f.has_glyph(c))
+            .map_or(0, |(i, _)| i)
     }
 
     /// First face that covers `c` *and* carries color glyphs, `None`
@@ -994,13 +1089,24 @@ fn fallback_views<P: FaceProvider>(db: &P, family: &str) -> Result<[Arc<Font>; 4
     let id = db
         .find_face(family, REGULAR_WEIGHT, false)
         .ok_or(ShapingError::NoFont)?;
+    fallback_views_of(db, id, family)
+}
+
+fn fallback_views_of<P: FaceProvider>(
+    db: &P,
+    id: P::Id,
+    family: &str,
+) -> Result<[Arc<Font>; 4], ShapingError> {
     let loaded = Font::load_face_id(db, id)?;
-    let regular = Arc::new(loaded.at_style(REGULAR_WEIGHT, false).unwrap_or(loaded));
+    let regular = Arc::new(loaded.into_regular_view());
     let mut views = std::array::from_fn(|_| regular.clone());
     if regular.has_color_glyphs() {
         return Ok(views);
     }
-    let mut resolver = StyleViews::new(db, id, &regular);
+    let mut resolver = StyleViews {
+        sibling_of: Some(id),
+        ..StyleViews::new(db, id, &regular)
+    };
     for (style, weight, italic) in STYLE_VARIANTS {
         if let Some(view) = resolver.resolve(family, weight, italic) {
             views[style.index()] = covering_or_regular(view, &regular, family, style);
@@ -1027,6 +1133,67 @@ fn covering_or_regular(
         "styled fallback face covers less than regular; using regular"
     );
     regular.clone()
+}
+
+/// Face ids are six bits wide in [`SizingKey`]: id 0 is the primary and
+/// 0x3F doubles as the saturation bucket.
+const MAX_FALLBACKS: usize = 0x3E;
+
+/// The stack with the provider's ranked cascade appended, or `None` when
+/// it has none. The cascade is recomputed until every face it keeps has
+/// loaded as the class it was kept for: a face that fails to load or
+/// contradicts its reported color capability changes which later faces
+/// add coverage. Each face is loaded once, so the loop ends.
+fn append_cascade<P: FaceProvider>(
+    stack: &FontStack,
+    db: &P,
+    requested: &str,
+    features: &[String],
+) -> Option<FontStack> {
+    let mut verdicts = HashMap::new();
+    let mut loaded: HashMap<P::Id, [Arc<Font>; 4]> = HashMap::new();
+    let cascade = loop {
+        let cascade = db.fallback_cascade(requested, &verdicts)?;
+        let mut changed = false;
+        for face in cascade.iter().take(MAX_FALLBACKS) {
+            if verdicts.contains_key(&face.id) {
+                continue;
+            }
+            let family = db.family_of(face.id).unwrap_or_default();
+            let verdict = match fallback_views_of(db, face.id, &family) {
+                Ok(views) => {
+                    let color = views[0].has_color_glyphs();
+                    loaded.insert(face.id, views);
+                    changed |= color != face.color;
+                    LoadedAs::Color(color)
+                }
+                Err(e) => {
+                    warn!(family, error = %e, "fallback face failed to load");
+                    changed = true;
+                    LoadedAs::Unusable
+                }
+            };
+            verdicts.insert(face.id, verdict);
+        }
+        if !changed {
+            break cascade;
+        }
+    };
+    let mut cascaded = stack.clone();
+    cascaded.mono_first = true;
+    let dropped = cascade.len().saturating_sub(MAX_FALLBACKS);
+    for face in cascade.iter().take(MAX_FALLBACKS) {
+        if let Some(views) = loaded.remove(&face.id) {
+            cascaded = cascaded.with_fallback_views(views, features.to_vec());
+        }
+    }
+    if dropped > 0 {
+        debug!(
+            dropped,
+            "fallback cascade has more than {MAX_FALLBACKS} faces; dropping the least preferred"
+        );
+    }
+    Some(cascaded)
 }
 
 fn append_first_installed<P: FaceProvider>(
@@ -1598,6 +1765,7 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
+    use crate::provider::ResolvedFace;
 
     fn font() -> Font {
         Font::load_default().expect("load font")
@@ -2426,6 +2594,189 @@ mod tests {
         };
         let dir = std::path::PathBuf::from(dir);
         Some(names.iter().map(|name| dir.join(name)).collect())
+    }
+
+    fn axis_coord(font: &Font, tag: [u8; 4]) -> NormalizedCoord {
+        let tag = swash::tag_from_bytes(&tag);
+        let index = font
+            .font_ref()
+            .variations()
+            .position(|v| v.tag() == tag)
+            .expect("the face has the axis");
+        font.coords[index]
+    }
+
+    /// `instances().nth(16)` of the pinned variable face is `SemiWide
+    /// Regular`: its `wdth` sits off the default while `wght` is 400.
+    #[test]
+    fn a_named_instance_keeps_its_width_through_regular_and_bold_views() {
+        let Some(files) = pinned_files(&["truetype/Monaspace Neon Var.ttf"]) else {
+            return;
+        };
+        let mut db = Database::new();
+        db.load_font_file(&files[0])
+            .expect("the variable face reads");
+        let default = Font::try_load_with(&db, "Monaspace Neon Var").expect("the face loads");
+        let name = default
+            .font_ref()
+            .instances()
+            .nth(16)
+            .and_then(|i| i.name(Some("en")).map(|n| n.to_string()));
+        assert_eq!(name.as_deref(), Some("SemiWide Regular"));
+
+        let semiwide = default
+            .at_instance(16)
+            .expect("the instance exists")
+            .into_regular_view();
+        let width = axis_coord(&semiwide, *b"wdth");
+        assert_ne!(width, 0, "SemiWide must sit off the default width");
+
+        let bold = semiwide.at_style(BOLD_WEIGHT, false).expect("wght moves");
+        assert_eq!(axis_coord(&bold, *b"wdth"), width);
+        assert!(axis_coord(&bold, *b"wght") > axis_coord(&semiwide, *b"wght"));
+        assert!(default.at_instance(10_000).is_none());
+    }
+
+    /// One fallback a [`ScriptedProvider`] ranks.
+    struct ScriptedFace {
+        /// `None` stands for a file no font parser reads.
+        bytes: Option<FontBytes>,
+        reported_color: bool,
+        /// Pruned while this earlier face is kept in the same class, as a
+        /// face adding no coverage is.
+        shadowed_by: Option<usize>,
+    }
+
+    /// Ranks `fallbacks` (ids 1..) after `primary` (id 0) the way a
+    /// coverage-pruning provider would, honoring what loading showed.
+    struct ScriptedProvider {
+        primary: FontBytes,
+        fallbacks: Vec<ScriptedFace>,
+    }
+
+    impl FaceProvider for ScriptedProvider {
+        type Id = usize;
+
+        fn find_face(&self, _: &str, _: u16, _: bool) -> Option<usize> {
+            Some(0)
+        }
+
+        fn default_monospace(&self) -> Result<(usize, String), ShapingError> {
+            Ok((0, "primary".to_owned()))
+        }
+
+        fn resolve_face(&self, id: usize) -> Option<ResolvedFace> {
+            let bytes = match id {
+                0 => self.primary.clone(),
+                n => self.fallbacks[n - 1]
+                    .bytes
+                    .clone()
+                    .unwrap_or_else(|| Arc::new(vec![0_u8; 64])),
+            };
+            Some(ResolvedFace {
+                source: FaceSource::Shared(bytes),
+                index: 0,
+                instance: None,
+                slanted: false,
+            })
+        }
+
+        fn fallback_cascade(
+            &self,
+            _: &str,
+            loaded: &HashMap<usize, LoadedAs>,
+        ) -> Option<Vec<provider::CascadeFace<usize>>> {
+            let mut kept: Vec<provider::CascadeFace<usize>> = Vec::new();
+            for (i, face) in self.fallbacks.iter().enumerate() {
+                let id = i + 1;
+                let color = match loaded.get(&id) {
+                    Some(LoadedAs::Unusable) => continue,
+                    Some(LoadedAs::Color(color)) => *color,
+                    None => face.reported_color,
+                };
+                let shadowed = face
+                    .shadowed_by
+                    .is_some_and(|by| kept.iter().any(|k| k.id == by && k.color == color));
+                if !shadowed {
+                    kept.push(provider::CascadeFace { id, color });
+                }
+            }
+            Some(kept)
+        }
+    }
+
+    fn scripted_stack(fallbacks: Vec<ScriptedFace>) -> FontStack {
+        FontStack::auto_discover_in(
+            &ScriptedProvider {
+                primary: pinned_bytes("opentype/MonaspaceNeon-Regular.otf")
+                    .expect("callers check the pinned set first"),
+                fallbacks,
+            },
+            None,
+            &[],
+            &[],
+            &StyleFaces::default(),
+        )
+        .expect("the primary loads")
+    }
+
+    fn pinned_bytes(name: &str) -> Option<FontBytes> {
+        let files = pinned_files(&[name])?;
+        Some(Arc::new(
+            std::fs::read(&files[0]).expect("the pinned face reads"),
+        ))
+    }
+
+    #[test]
+    fn a_fallback_that_fails_to_load_yields_its_coverage_to_the_next() {
+        let Some(symbols) = pinned_bytes("NotoSansSymbols2-Regular.otf") else {
+            return;
+        };
+        let stack = scripted_stack(vec![
+            ScriptedFace {
+                bytes: None,
+                reported_color: false,
+                shadowed_by: None,
+            },
+            ScriptedFace {
+                bytes: Some(symbols),
+                reported_color: false,
+                shadowed_by: Some(1),
+            },
+        ]);
+        assert_eq!(stack.len(), 2);
+        assert_ne!(
+            stack.resolve_styled_index('\u{2702}', FontStyle::REGULAR),
+            0
+        );
+    }
+
+    /// The emoji face is reported mono, so it first shadows the mono
+    /// symbol face; once it loads as color, the symbol face stops being
+    /// shadowed and joins the chain.
+    #[test]
+    fn a_fallback_reported_mono_but_loaded_color_stops_shadowing_mono_faces() {
+        let (Some(emoji), Some(symbols)) = (
+            pinned_bytes("NotoColorEmoji.ttf"),
+            pinned_bytes("NotoSansSymbols2-Regular.otf"),
+        ) else {
+            return;
+        };
+        let stack = scripted_stack(vec![
+            ScriptedFace {
+                bytes: Some(emoji),
+                reported_color: false,
+                shadowed_by: None,
+            },
+            ScriptedFace {
+                bytes: Some(symbols),
+                reported_color: false,
+                shadowed_by: Some(1),
+            },
+        ]);
+        assert_eq!(stack.len(), 3);
+        let text = stack.resolve_styled_index('\u{2702}', FontStyle::REGULAR);
+        assert!(!stack.font_at(text, FontStyle::REGULAR).has_color_glyphs());
     }
 
     const MONASPACE_NEON_STATIC: [&str; 4] = [

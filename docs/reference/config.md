@@ -65,11 +65,13 @@ A local repository path may also be referenced: `#:schema <path>/crates/felis-cl
 
 ```toml
 [font]
-# Font family name. Omitted: the system monospace font. When the
-# system's `monospace` alias names a family that is not installed, the
-# first installed of DejaVu Sans Mono, Liberation Mono, Noto Sans Mono,
-# Ubuntu Mono, Menlo, and Consolas; failing those, the first installed
-# fixed-pitch family by name.
+# Font family name. Omitted: the system monospace font. On Linux that
+# is fontconfig's `monospace` match (`fc-match monospace`), and a name is
+# resolved through fontconfig, so `fonts.conf` aliases apply. Elsewhere,
+# when the system's `monospace` alias names a family that is not
+# installed, the first installed of DejaVu Sans Mono, Liberation Mono,
+# Noto Sans Mono, Ubuntu Mono, Menlo, and Consolas; failing those, the
+# first installed fixed-pitch family by name.
 family = "JetBrainsMono Nerd Font"
 
 # Logical pixel size for cell metrics and rasterization.
@@ -78,12 +80,16 @@ family = "JetBrainsMono Nerd Font"
 size_px = 14
 
 # Explicit font fallback chain resolved per codepoint.
-# Omitted (default): felis auto-discovers, in this order, the first
-# installed CJK family, every installed symbol family, the first
-# installed color-emoji family, and the first installed symbols-only
-# Nerd Font; a group with nothing installed contributes no face.
+# Omitted (default) on Linux: fontconfig's ranked fallback for the
+# primary (`fc-match -s`), keeping the faces that add coverage, at most
+# 62; a text-presentation character takes a monochrome face before an
+# earlier-ranked color one. Omitted elsewhere: felis auto-discovers, in
+# this order, the first installed CJK family, every installed symbol
+# family, the first installed color-emoji family, and the first
+# installed symbols-only Nerd Font; a group with nothing installed
+# contributes no face.
 # Non-empty: the declared entries are the whole chain, in order,
-# and auto-discovery does not run on top of them.
+# and the host's fallback does not run on top of them.
 # A character that defaults to emoji (⭐, ☕) takes the first color
 # face that covers it, wherever it is in the chain.
 # A variation sequence (葛󠄀) draws the variant glyph only when the
@@ -266,33 +272,35 @@ Diagnostics surface at two stages:
 - **load**: detected during file reading and parsing before window setup.
 - **window**: detected by renderer, shaper, or windowing system when applying values.
 
-| Situation                                                | Action taken                                                       | Stage  |
-| -------------------------------------------------------- | ------------------------------------------------------------------ | ------ |
-| Config file absent at default path                       | Uses built-in defaults. Refuses if specified via `--config`.       | load   |
-| Config file unreadable or malformed                      | Uses defaults and logs error. Refuses if specified via `--config`. | load   |
-| Unknown field in root or overlay                         | Skips field and logs warning; remaining configuration applies.     | load   |
-| Unknown token for a closed-enum key listed above         | Falls back to that field's default with warning; the rest applies. | load   |
-| Unknown `shader.post` selector or `builtin` name         | No post-process pass, with warning; the rest applies.              | load   |
-| Non-table `[client.<name>]`                              | Skips overlay with warning; base configuration applies.            | load   |
-| `[client.<name>]` for other client                       | Ignored without warning, whatever it contains.                     | load   |
-| `clipboard.osc_52` with OS clipboard disabled            | Inert; logs notice at startup.                                     | window |
-| `window.opacity` out of range                            | Clamped to `[0.0, 1.0]` with warning.                              | load   |
-| `window.opacity` not a number (`nan`)                    | Renders opaque with warning.                                       | load   |
-| `window.opacity` < 1.0 on opaque platform                | Renders opaque with warning.                                       | window |
-| `window.backdrop` unsupported by host OS                 | Ignored with diagnostic notice.                                    | window |
-| Path-valued key target missing                           | Skips field and logs warning; remaining configuration applies.     | load   |
-| `font.size_px` non-positive or NaN                       | Falls back to default with warning.                                | load   |
-| `font.size_px` outside `[4.0, 72.0]`                     | Clamped into valid range with warning.                             | load   |
-| `font.family` unavailable                                | Falls back to system monospace with warning.                       | window |
-| No monospace face installed                              | Window fails to open with `no monospace font installed`.           | window |
-| `font.fallback` entry missing                            | Skips missing entry; remainder of chain applies.                   | window |
-| `font.fallback` entry malformed                          | Skips entry with warning; remainder of chain applies.              | load   |
-| Font style sub-table omitted                             | Derived from `font.family` at matching weight and slant.           | window |
-| Color value malformed                                    | Keeps default color and logs warning.                              | window |
-| `theme.palette.indexed` key not an integer in `16..=255` | Ignores entry with warning; slots 0-15 have named fields.          | load   |
-| Malformed keymap chord, binding, or binding argument     | Skips entry and logs warning; remaining keybindings apply.         | load   |
-| `mouse.scroll_multiplier` outside `[0.1, 100.0]`         | Clamped into valid range with warning.                             | load   |
-| `mouse.scroll_multiplier` not a number (`nan`)           | Falls back to default with warning.                                | load   |
+| Situation                                                | Action taken                                                        | Stage  |
+| -------------------------------------------------------- | ------------------------------------------------------------------- | ------ |
+| Config file absent at default path                       | Uses built-in defaults. Refuses if specified via `--config`.        | load   |
+| Config file unreadable or malformed                      | Uses defaults and logs error. Refuses if specified via `--config`.  | load   |
+| Unknown field in root or overlay                         | Skips field and logs warning; remaining configuration applies.      | load   |
+| Unknown token for a closed-enum key listed above         | Falls back to that field's default with warning; the rest applies.  | load   |
+| Unknown `shader.post` selector or `builtin` name         | No post-process pass, with warning; the rest applies.               | load   |
+| Non-table `[client.<name>]`                              | Skips overlay with warning; base configuration applies.             | load   |
+| `[client.<name>]` for other client                       | Ignored without warning, whatever it contains.                      | load   |
+| `clipboard.osc_52` with OS clipboard disabled            | Inert; logs notice at startup.                                      | window |
+| `window.opacity` out of range                            | Clamped to `[0.0, 1.0]` with warning.                               | load   |
+| `window.opacity` not a number (`nan`)                    | Renders opaque with warning.                                        | load   |
+| `window.opacity` < 1.0 on opaque platform                | Renders opaque with warning.                                        | window |
+| `window.backdrop` unsupported by host OS                 | Ignored with diagnostic notice.                                     | window |
+| Path-valued key target missing                           | Skips field and logs warning; remaining configuration applies.      | load   |
+| `font.size_px` non-positive or NaN                       | Falls back to default with warning.                                 | load   |
+| `font.size_px` outside `[4.0, 72.0]`                     | Clamped into valid range with warning.                              | load   |
+| `font.family` unavailable                                | Falls back to system monospace with warning.                        | window |
+| No monospace face installed                              | Window fails to open with `no monospace font installed`.            | window |
+| `libfontconfig.so.1` not loadable (Linux)                | Window fails to open with a `fontconfig:` error naming the library. | window |
+| `font.fallback` entry missing                            | Skips missing entry; remainder of chain applies.                    | window |
+| `font.fallback` longer than 62 entries                   | Keeps the first 62 with warning.                                    | window |
+| `font.fallback` entry malformed                          | Skips entry with warning; remainder of chain applies.               | load   |
+| Font style sub-table omitted                             | Derived from `font.family` at matching weight and slant.            | window |
+| Color value malformed                                    | Keeps default color and logs warning.                               | window |
+| `theme.palette.indexed` key not an integer in `16..=255` | Ignores entry with warning; slots 0-15 have named fields.           | load   |
+| Malformed keymap chord, binding, or binding argument     | Skips entry and logs warning; remaining keybindings apply.          | load   |
+| `mouse.scroll_multiplier` outside `[0.1, 100.0]`         | Clamped into valid range with warning.                              | load   |
+| `mouse.scroll_multiplier` not a number (`nan`)           | Falls back to default with warning.                                 | load   |
 
 A load-stage row that names a warning is one `felis config check` reports; rows that name none are silent. Every warning
 the check can report appears above, either as a row in this table or, for a nested overlay, under the merge rules.

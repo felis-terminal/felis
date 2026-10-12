@@ -1,11 +1,14 @@
 //! The face-discovery seam: everything `FontStack` asks of the host's font
 //! set, so the stack never names a discovery library's types.
 
-use std::{hash::Hash, path::PathBuf};
+use std::{collections::HashMap, hash::Hash, path::PathBuf};
 
 use fontdb::{Database, Family, Query};
 
 use crate::{FontBytes, ShapingError};
+
+#[cfg(any(target_os = "linux", all(test, unix)))]
+pub(crate) mod fontconfig;
 
 pub(crate) const REGULAR_WEIGHT: u16 = 400;
 pub(crate) const BOLD_WEIGHT: u16 = 700;
@@ -17,16 +20,65 @@ pub(crate) trait FaceProvider {
     /// no face of that family is installed.
     fn find_face(&self, family: &str, weight: u16, italic: bool) -> Option<Self::Id>;
 
+    /// The face of `family`, which `id` was found under, closest to
+    /// `weight` and `italic`.
+    fn find_sibling(
+        &self,
+        _id: Self::Id,
+        family: &str,
+        weight: u16,
+        italic: bool,
+    ) -> Option<Self::Id> {
+        self.find_face(family, weight, italic)
+    }
+
     /// The face drawn when `font.family` is unset or names nothing, and
     /// the family name its styled faces derive from.
     fn default_monospace(&self) -> Result<(Self::Id, String), ShapingError>;
 
     fn resolve_face(&self, id: Self::Id) -> Option<ResolvedFace>;
+
+    /// The family a styled lookup of `id`'s bold or italic face names.
+    fn family_of(&self, _id: Self::Id) -> Option<String> {
+        None
+    }
+
+    /// The host's fallback ranked for `requested` (whose config rules may
+    /// name fallbacks the matched family's name does not), the primary's
+    /// own face included; `None` makes the stack discover fallbacks by
+    /// family. What loading showed (`loaded`) overrides the provider.
+    fn fallback_cascade(
+        &self,
+        _requested: &str,
+        _loaded: &HashMap<Self::Id, LoadedAs>,
+    ) -> Option<Vec<CascadeFace<Self::Id>>> {
+        None
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum LoadedAs {
+    #[cfg_attr(
+        not(any(target_os = "linux", test)),
+        expect(dead_code, reason = "only the Linux fontconfig provider reads it")
+    )]
+    Color(bool),
+    /// The loader cannot parse it, so it must not take coverage from a
+    /// face ranked after it.
+    Unusable,
+}
+
+pub(crate) struct CascadeFace<Id> {
+    pub id: Id,
+    pub color: bool,
 }
 
 pub(crate) struct ResolvedFace {
     pub source: FaceSource,
     pub index: u32,
+    /// Zero-based named instance in `fvar` order the face is drawn at;
+    /// `None` loads the file's default position.
+    pub instance: Option<usize>,
     /// The face itself is italic or oblique, so an italic query needs no
     /// axis move to reach it.
     pub slanted: bool,
@@ -50,6 +102,7 @@ pub const MONOSPACE_FALLBACK_FAMILIES: &[&str] = &[
 
 /// Rescans every installed font (~300 ms on a large system); share one
 /// across probes.
+#[cfg(any(not(target_os = "linux"), test))]
 pub(crate) fn system_db() -> Database {
     let mut db = Database::new();
     db.load_system_fonts();
@@ -115,6 +168,7 @@ impl FaceProvider for Database {
         Some(ResolvedFace {
             source,
             index: face.index,
+            instance: None,
             slanted: face.style != fontdb::Style::Normal,
         })
     }

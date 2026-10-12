@@ -94,6 +94,9 @@ fontdb = { version = "0.24", default-features = false, features = [
 # "Font loading"). Same version
 # fontdb already pulls in, so no duplicate.
 memmap2 = "0.9"
+# dlopen: the relocatable Linux archive takes libfontconfig, its config and
+# its cache from the host (nix/dist.nix), so nothing links it at build time.
+yeslogic-fontconfig-sys = { version = "6.0.1", features = ["dlopen"] }
 wgpu = "30"
 winit = "0.30"
 # default-features = false avoids dragging in the image crate with TIFF/JPEG decoders for text-only clipboard.

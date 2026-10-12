@@ -21,10 +21,18 @@ memmap2 = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+yeslogic-fontconfig-sys = { workspace = true }
+
 [dev-dependencies]
 criterion = { workspace = true }
 proptest = { workspace = true }
 unicode-width = { workspace = true }
+
+# The fontconfig provider's tests also run on other Unix hosts that have
+# libfontconfig, so it is checked outside Linux.
+[target.'cfg(unix)'.dev-dependencies]
+yeslogic-fontconfig-sys = { workspace = true }
 
 [[bench]]
 name = "shape_cache"
