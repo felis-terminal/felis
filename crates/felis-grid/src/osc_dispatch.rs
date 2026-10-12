@@ -515,7 +515,14 @@ impl Grid {
                 ProgramStatusEffect::Report(Box::new(report))
             }
             Some(Osc7501::Clear { id }) => ProgramStatusEffect::Clear { id },
-            Some(Osc7501::Query | Osc7501::Dropped(_)) | None => return,
+            // Bare: spec 0.4 reads a reply without `states=` / `kinds=`
+            // as exactly the base vocabulary, which is what the decoder
+            // admits.
+            Some(Osc7501::Query) => {
+                self.enqueue_response(b"\x1b]7501;?\x1b\\".to_vec());
+                return;
+            }
+            Some(Osc7501::Dropped(_)) | None => return,
         };
         self.pty_effects.push(PtyEffect::ProgramStatus(effect));
         self.yield_pending |= self.pty_effects.status_budget_spent();
