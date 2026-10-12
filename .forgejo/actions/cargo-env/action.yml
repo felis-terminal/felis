@@ -52,6 +52,19 @@ runs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         } finally { $lock.Close() }
 
+    # Otherwise the binary crates' build scripts run `git status`, whose first
+    # call on a fresh checkout rewrites .git/index, a file those scripts watch,
+    # so the job's next cargo invocation rebuilds the crates. Windows only: on
+    # Linux the bench gate builds a base worktree, which would inherit the
+    # head's revision.
+    - name: stamp the build from the checkout's revision
+      if: runner.os == 'Windows'
+      shell: powershell
+      run: |
+        $rev = git rev-parse HEAD
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        "FELIS_GIT_HASH=$rev" | Add-Content -Path $env:GITHUB_ENV
+
     # Every freshly linked test binary is scanned on its first execution, and
     # a debug build of this workspace produces dozens of them: cargo-nextest's
     # listing pass spent three minutes there. The guest resets its system disk
