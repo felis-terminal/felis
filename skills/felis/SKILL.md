@@ -77,8 +77,12 @@ prefix. The mutating verbs see no roster, so their replies carry `id` alone; fee
 #    24x80 unless you name it, and --rows/--cols travel as a pair:
 #    naming one alone is a usage error (exit 2), and the bridge's
 #    sessions.spawn answers half a geometry with invalid_request.
+#    A local child inherits YOUR environment; --env adds or overrides
+#    but cannot remove, so drop a variable with env -u (it matters when
+#    you drive a copy of yourself and inherit your own session markers).
 ID=$(felis sessions spawn -- /bin/zsh)
 ID=$(felis sessions spawn --rows 50 --cols 132 -- /bin/zsh)
+ID=$(env -u SOME_PARENT_MARKER felis sessions spawn --env KEY=VAL -- /bin/zsh)
 
 # 2. Drive it. `send` pastes text literally (bracketed-paste wrapped
 #    when the shell sets ?2004) and does NOT press Enter: a newline in
@@ -125,8 +129,16 @@ felis sessions kill "$ID"
 
 Capture rows are `{"v":1,"row":N,"text":"…","soft_wrap_continued":bool}`; scrollback rows use negative `row` indices
 (oldest first), and for `command-output` / `last-command` the `row` is 0-based within the mark range. Search matches are
-`{"v":1,"line_index":N,"text":"…"}`. `--ansi` composes with `--format jsonl`: each row gains an `ansi` field while
-`text` stays plain. The mark-range sources add `exit_code` to the terminal when the closing D mark carried one.
+`{"v":1,"line_index":N,"text":"…","byte_spans":[[s,e]…],"col_spans":[[row,start_col,end_col]…]}`, columns 0-based.
+`--ansi` composes with `--format jsonl`: each row gains an `ansi` field while `text` stays plain. The mark-range sources
+add `exit_code` to the terminal when the closing D mark carried one.
+
+A character's index in `text` is not its column: a wide character fills two columns and a combining mark none. To aim a
+mouse report (1-based) at text, take a `col_spans` segment on a live row (`row >= 0`) and add 1 to its row and start
+column. `search` skips the alternate screen, where a fullscreen TUI lives; there the index is a column only if
+everything before it on the row is single-width. A Kitty image drawn with Unicode placeholders captures as runs of
+U+10EEEE plus combining diacritics; filter those rows out of text you match, and treat their presence as the evidence
+that an image was placed.
 
 ### Payload limits
 

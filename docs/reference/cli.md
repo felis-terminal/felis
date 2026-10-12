@@ -272,13 +272,16 @@ and `list` exits `0` on an empty roster.
 - **`list`**: `--tag <t>` filters sessions by tag. A session in exit grace is marked `(exited)` or `"exited":true`.
 - **`info <id>`**: displays geometry, idle time, title, cwd, foreground command, exit code from OSC 133 `D` marks
   (`exit:` / `"last_exit_code"`), and active window attachments (`window:` / `"attachments"`).
-- **`spawn`**: `--tag <t>` sets initial tags (up to 32 tags of 128 bytes). `--env KEY=VAL` sets child environment
-  variables. `--rows N` and `--cols N` set initial geometry (1..=2048, REQ-605a); they are one flag pair, so naming only
-  one is a usage error (exit `2`) and naming neither asks for the daemon's default grid (24 rows by 80 cols).
-  `--cwd <dir>` sets the child's working directory. Limits follow REQ-105a (4 KiB paths, 1 MiB argv/env). The program,
-  its argv, and the cwd travel as UTF-8 ([ipc.md](ipc.md)), so a `--cwd` that is not valid UTF-8, and a caller working
-  directory that is not valid UTF-8 when the spawn is local, are each a usage error (exit `2`) rather than a lossy path.
-  Starts a daemon on the host it dials, `--host` included ("Auto-spawning").
+- **`spawn`**: `--tag <t>` sets initial tags (up to 32 tags of 128 bytes). A local spawn's child environment starts from
+  the `felis` process's own environment; over `--host` it starts from the remote login's. `--env KEY=VAL` sets or
+  overrides a variable on top of that base and cannot remove one, so `env -u KEY felis sessions spawn …` is how a local
+  caller drops one ([terminal-identity.md](terminal-identity.md) "The default identity"). `--rows N` and `--cols N` set
+  initial geometry (1..=2048, REQ-605a); they are one flag pair, so naming only one is a usage error (exit `2`) and
+  naming neither asks for the daemon's default grid (24 rows by 80 cols). `--cwd <dir>` sets the child's working
+  directory. Limits follow REQ-105a (4 KiB paths, 1 MiB argv/env). The program, its argv, and the cwd travel as UTF-8
+  ([ipc.md](ipc.md)), so a `--cwd` that is not valid UTF-8, and a caller working directory that is not valid UTF-8 when
+  the spawn is local, are each a usage error (exit `2`) rather than a lossy path. Starts a daemon on the host it dials,
+  `--host` included ("Auto-spawning").
 - **`send`**: one operation, and three constraints are its whole grammar: at least one of TEXT, `--key` or `--wait`;
   `--raw` requires TEXT; `--timeout` requires `--wait`. Each unmet constraint is a usage error (exit `2`). It pastes
   text; `--raw` sends literal bytes without bracketed paste; `-` reads stdin. `--key <chord>` (repeatable) presses keys
@@ -294,9 +297,12 @@ and `list` exits `0` on an empty roster.
   retained history oldest-first, `command-output` and `last-command` the output bounded by OSC 133 prompt marks.
   `--lines N` limits output to the last N rows, and under `--source scrollback` the daemon transmits that tail alone
   rather than the whole buffer. Output is plain text; `--ansi` adds the SGR escapes that reconstruct each cell's color
-  and style, on every `--source`.
+  and style, on every `--source`. A row's text is its cells' characters in column order: a wide character fills two
+  columns, a combining mark adds characters to its cell's column, and a Kitty Unicode-placeholder cell reads as U+10EEEE
+  followed by its diacritics, so a character's index in the text is its column only on a row of single-width characters.
 - **`search`**: substring search by default; `--regex` enables regular expressions, `--case-insensitive` folds case.
-  Pattern limit is 4 KiB.
+  Pattern limit is 4 KiB. It matches scrollback and the primary screen; while a program holds the alternate screen, only
+  scrollback is searched.
 - **`switch`**: moves one window attached to the current session (`$FELIS_SESSION_ID` or `--from <id>`) to target
   `<id>`. When several windows mirror that session, the one that most recently received user input moves;
   `--attachment <ID>` names a window explicitly. A background `sessions send` is not a window and never becomes that
