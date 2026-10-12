@@ -50,10 +50,13 @@ fuzz_target!(|data: &[u8]| {
     let pat_bytes = &data[2..2 + pat_len];
     // Patterns come from a printable-ASCII / regex-metachar mix so
     // libfuzzer can both find substring hits and stress the regex
-    // parser. Non-UTF-8 bytes get dropped.
+    // parser. Non-UTF-8 bytes get dropped, and so does `{`: a counted
+    // repetition of a Unicode class (`\w{999}`, `(\pL{9}){9}`) compiles up
+    // to the query's size limit, ~150 ms per input spent inside the regex
+    // crate rather than in felis.
     let pattern: String = pat_bytes
         .iter()
-        .filter(|&&b| b.is_ascii() && !b.is_ascii_control())
+        .filter(|&&b| b.is_ascii() && !b.is_ascii_control() && b != b'{')
         .map(|&b| b as char)
         .collect();
     let rest = &data[2 + pat_len..];
