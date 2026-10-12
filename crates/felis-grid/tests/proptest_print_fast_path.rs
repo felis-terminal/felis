@@ -4,7 +4,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use felis_grid::Grid;
-use felis_vt::{Parser, Sink};
+use felis_vt::{OscEnd, Parser, Sink};
 use proptest::prelude::*;
 
 /// Forwards everything to the grid except the two batched print entry
@@ -41,8 +41,8 @@ impl Sink for PerByte {
     fn dcs_unhook(&mut self) {
         self.0.dcs_unhook();
     }
-    fn osc_dispatch(&mut self, body: &[u8], bell_terminated: bool) {
-        self.0.osc_dispatch(body, bell_terminated);
+    fn osc_dispatch(&mut self, body: &[u8], end: OscEnd) {
+        self.0.osc_dispatch(body, end);
     }
     fn osc_overflow(&mut self) {
         self.0.osc_overflow();

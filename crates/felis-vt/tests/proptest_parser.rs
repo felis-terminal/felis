@@ -5,7 +5,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use felis_vt::{
-    MAX_INTERMEDIATES, MAX_PARAMS, OSC_BUFFER_LIMIT, Parser, Sink, State, utf8::Decoder,
+    MAX_INTERMEDIATES, MAX_PARAMS, OSC_BUFFER_LIMIT, OscEnd, Parser, Sink, State, utf8::Decoder,
 };
 use proptest::prelude::*;
 
@@ -37,7 +37,7 @@ enum Event {
     DcsUnhook,
     Osc {
         body: Vec<u8>,
-        bell_terminated: bool,
+        end: OscEnd,
     },
     Apc(Vec<u8>),
 }
@@ -144,10 +144,10 @@ impl Sink for LogSink {
     fn dcs_unhook(&mut self) {
         self.events.push(Event::DcsUnhook);
     }
-    fn osc_dispatch(&mut self, body: &[u8], bell_terminated: bool) {
+    fn osc_dispatch(&mut self, body: &[u8], end: OscEnd) {
         self.events.push(Event::Osc {
             body: body.to_vec(),
-            bell_terminated,
+            end,
         });
     }
     fn osc_overflow(&mut self) {
@@ -281,6 +281,58 @@ const fn current_state_is_valid(state: State) -> bool {
     )
 }
 
+/// How a generated OSC ends, and the dispatch that ending must produce.
+#[derive(Debug, Clone)]
+enum Ending {
+    Bel,
+    St,
+    /// ESC followed by a byte that does not make it ST.
+    EscThen(u8),
+    Cancel(u8),
+}
+
+impl Ending {
+    fn bytes(&self) -> Vec<u8> {
+        match *self {
+            Self::Bel => vec![0x07],
+            Self::St => b"\x1b\\".to_vec(),
+            Self::EscThen(b) => vec![0x1B, b],
+            Self::Cancel(b) => vec![b],
+        }
+    }
+
+    fn dispatch(&self, body: &[u8]) -> Event {
+        let (body, end) = match self {
+            Self::Bel => (body, OscEnd::Bel),
+            Self::St => (body, OscEnd::St),
+            Self::EscThen(_) => (body, OscEnd::Interrupted),
+            Self::Cancel(_) => (&[][..], OscEnd::Interrupted),
+        };
+        Event::Osc {
+            body: body.to_vec(),
+            end,
+        }
+    }
+}
+
+/// OSC bodies free of the bytes that end one, each closed one of the ways
+/// a producer can close or abandon it. The bytes after an interrupting
+/// ESC never open a string sequence, so every OSC in the stream is one of
+/// the generated ones.
+fn osc_stream() -> impl Strategy<Value = Vec<(Vec<u8>, Ending)>> {
+    let body = proptest::collection::vec(
+        any::<u8>().prop_filter("ends an OSC", |b| !matches!(b, 0x07 | 0x18 | 0x1A | 0x1B)),
+        0..64,
+    );
+    let ending = prop_oneof![
+        Just(Ending::Bel),
+        Just(Ending::St),
+        proptest::sample::select(b"[78c\x1b\n".to_vec()).prop_map(Ending::EscThen),
+        proptest::sample::select(vec![0x18u8, 0x1A]).prop_map(Ending::Cancel),
+    ];
+    proptest::collection::vec((body, ending), 1..8)
+}
+
 proptest! {
     /// Any byte slice: no panic, a defined DFA state, and dispatched
     /// param / intermediate slices within the documented caps.
@@ -364,6 +416,38 @@ proptest! {
 
         prop_assert_eq!(&parser, &reference);
         prop_assert_eq!(bulk.events, per_byte.events);
+    }
+
+    /// Each OSC reports the way it ended, whatever chunk boundary falls
+    /// between an ESC and the byte deciding whether it began ST.
+    #[test]
+    fn osc_dispatch_reports_how_each_osc_ended(
+        oscs in osc_stream(),
+        cuts in proptest::collection::vec(any::<prop::sample::Index>(), 0..8),
+    ) {
+        let mut bytes = Vec::new();
+        for (body, ending) in &oscs {
+            bytes.extend_from_slice(b"\x1b]");
+            bytes.extend_from_slice(body);
+            bytes.extend(ending.bytes());
+        }
+        let mut cuts: Vec<usize> = cuts.iter().map(|cut| cut.index(bytes.len() + 1)).collect();
+        cuts.push(0);
+        cuts.push(bytes.len());
+        cuts.sort_unstable();
+        let mut parser = Parser::new();
+        let mut sink = LogSink::default();
+        for pair in cuts.windows(2) {
+            parser.advance(&mut sink, &bytes[pair[0]..pair[1]]);
+        }
+
+        let got: Vec<Event> = sink
+            .events
+            .into_iter()
+            .filter(|event| matches!(event, Event::Osc { .. }))
+            .collect();
+        let want: Vec<Event> = oscs.iter().map(|(body, ending)| ending.dispatch(body)).collect();
+        prop_assert_eq!(got, want);
     }
 
     /// CAN / SUB drop the parser to Ground from any state (Williams), and

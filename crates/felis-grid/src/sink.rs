@@ -8,7 +8,7 @@ use super::{
 };
 use crate::editing::blank_cells;
 use crate::width::{bmp_widths, table_width};
-use felis_vt::{osc_number, split_osc_first};
+use felis_vt::{OscEnd, osc_number, split_osc_first};
 
 fn set_if_changed(field: &mut Option<String>, value: &str) -> bool {
     if field.as_deref() == Some(value) {
@@ -674,7 +674,7 @@ impl Sink for Grid {
         }
     }
 
-    fn osc_dispatch(&mut self, body: &[u8], _bell_terminated: bool) {
+    fn osc_dispatch(&mut self, body: &[u8], _end: OscEnd) {
         self.last_printed = None;
         // The payload arrives verbatim; each handler splits only the
         // fields its wire form defines, so a literal `;` past the last

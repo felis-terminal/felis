@@ -1,7 +1,7 @@
 //! `Parser::advance` and the per-state byte handlers.
 
 use super::{
-    ApcBuffer, Intermediates, OscBuffer, Params, Parser, Sink, SosPmApcKind, State,
+    ApcBuffer, Intermediates, OscBuffer, OscEnd, Params, Parser, Sink, SosPmApcKind, State,
     scan_mixed_print_run, scan_printable_run, scan_string_body,
 };
 
@@ -15,6 +15,7 @@ impl Parser {
             osc: OscBuffer::new(),
             apc: ApcBuffer::new(),
             sos_pm_apc_kind: None,
+            osc_pending: false,
         }
     }
 
@@ -98,6 +99,16 @@ impl Parser {
     }
 
     pub fn advance_byte<S: Sink>(&mut self, sink: &mut S, byte: u8) {
+        if self.osc_pending {
+            self.osc_pending = false;
+            let end = if byte == b'\\' {
+                OscEnd::St
+            } else {
+                OscEnd::Interrupted
+            };
+            sink.osc_dispatch(self.osc.bytes(), end);
+            self.osc.clear();
+        }
         // ESC restarts from Escape; CAN / SUB drop to Ground silently (Williams).
         if byte == 0x18 || byte == 0x1A {
             // Per `docs/explanation/security-model.md` "OSC 8 hyperlinks and
@@ -137,8 +148,10 @@ impl Parser {
         // body (Kitty graphics) dispatches. No state self-transitions, so
         // each `!matches!(next, …)` guard is always true (equivalent mutant).
         match self.state {
+            // Only the byte after the ESC tells ST from an interruption.
+            State::OscString if matches!(next, State::Escape) => self.osc_pending = true,
             State::OscString if !matches!(next, State::OscString) => {
-                self.dispatch_osc(sink, /*bell_terminated*/ false);
+                sink.osc_dispatch(self.osc.bytes(), OscEnd::Interrupted);
                 self.osc.clear();
             }
             State::SosPmApcString if !matches!(next, State::SosPmApcString) => {
@@ -376,7 +389,7 @@ impl Parser {
         match byte {
             // BEL acts as ST per xterm.
             0x07 => {
-                self.dispatch_osc(sink, true);
+                sink.osc_dispatch(self.osc.bytes(), OscEnd::Bel);
                 self.osc.clear();
                 self.state = State::Ground;
             }
@@ -397,9 +410,5 @@ impl Parser {
         if matches!(self.sos_pm_apc_kind, Some(SosPmApcKind::Apc)) && !self.apc.push(byte) {
             sink.apc_overflow();
         }
-    }
-
-    fn dispatch_osc<S: Sink>(&mut self, sink: &mut S, bell_terminated: bool) {
-        sink.osc_dispatch(self.osc.bytes(), bell_terminated);
     }
 }

@@ -32,7 +32,7 @@ enum Event {
     DcsUnhook,
     Osc {
         body: Vec<u8>,
-        bell: bool,
+        end: OscEnd,
     },
     OscOverflow,
     Apc(Vec<u8>),
@@ -82,10 +82,10 @@ impl Sink for LogSink {
     fn dcs_unhook(&mut self) {
         self.events.push(Event::DcsUnhook);
     }
-    fn osc_dispatch(&mut self, body: &[u8], bell_terminated: bool) {
+    fn osc_dispatch(&mut self, body: &[u8], end: OscEnd) {
         self.events.push(Event::Osc {
             body: body.to_vec(),
-            bell: bell_terminated,
+            end,
         });
     }
     fn osc_overflow(&mut self) {
@@ -287,7 +287,7 @@ fn osc_dispatch_bell_terminated() {
         evs,
         vec![Event::Osc {
             body: b"0;hello world".to_vec(),
-            bell: true,
+            end: OscEnd::Bel,
         }]
     );
 }
@@ -300,13 +300,123 @@ fn osc_dispatch_st_terminated() {
         vec![
             Event::Osc {
                 body: b"2;title".to_vec(),
-                bell: false,
+                end: OscEnd::St,
             },
             Event::Esc {
                 intermediates: vec![],
                 final_byte: b'\\',
             },
         ]
+    );
+}
+
+fn osc(body: &[u8], end: OscEnd) -> Event {
+    Event::Osc {
+        body: body.to_vec(),
+        end,
+    }
+}
+
+const fn esc(final_byte: u8) -> Event {
+    Event::Esc {
+        intermediates: vec![],
+        final_byte,
+    }
+}
+
+#[test]
+fn osc_ended_by_an_escape_sequence_dispatches_as_interrupted_before_it() {
+    assert_eq!(
+        parse(b"\x1b]2;title\x1b[1m"),
+        vec![
+            osc(b"2;title", OscEnd::Interrupted),
+            Event::Csi {
+                params: vec![1],
+                subparams: 0,
+                intermediates: vec![],
+                ignore: false,
+                final_byte: b'm',
+            },
+        ]
+    );
+    assert_eq!(
+        parse(b"\x1b]2;title\x1b7"),
+        vec![osc(b"2;title", OscEnd::Interrupted), esc(b'7')]
+    );
+}
+
+#[test]
+fn osc_ended_by_another_osc_dispatches_both_separately() {
+    assert_eq!(
+        parse(b"\x1b]2;a\x1b]2;b\x07"),
+        vec![osc(b"2;a", OscEnd::Interrupted), osc(b"2;b", OscEnd::Bel)]
+    );
+}
+
+#[test]
+fn osc_ended_by_a_doubled_escape_is_interrupted_and_the_second_escape_stays_live() {
+    assert_eq!(
+        parse(b"\x1b]2;a\x1b\x1b\\"),
+        vec![osc(b"2;a", OscEnd::Interrupted), esc(b'\\')]
+    );
+}
+
+#[test]
+fn osc_ended_by_can_or_sub_after_its_escape_is_interrupted_with_the_body() {
+    for cancel in [0x18u8, 0x1A] {
+        let mut bytes = b"\x1b]2;a\x1b".to_vec();
+        bytes.push(cancel);
+        assert_eq!(
+            parse(&bytes),
+            vec![osc(b"2;a", OscEnd::Interrupted), Event::Execute(cancel)]
+        );
+    }
+}
+
+#[test]
+fn osc_ended_by_a_c0_control_after_its_escape_is_interrupted() {
+    assert_eq!(
+        parse(b"\x1b]2;a\x1b\n"),
+        vec![osc(b"2;a", OscEnd::Interrupted), Event::Execute(b'\n')]
+    );
+}
+
+#[test]
+fn osc_escape_at_a_chunk_end_waits_for_the_next_chunk() {
+    for (next, want) in [
+        (&b"\\"[..], vec![osc(b"2;a", OscEnd::St), esc(b'\\')]),
+        (&b"x"[..], vec![osc(b"2;a", OscEnd::Interrupted), esc(b'x')]),
+    ] {
+        let mut parser = Parser::new();
+        let mut sink = LogSink::default();
+        parser.advance(&mut sink, b"\x1b]2;a\x1b");
+        assert_eq!(sink.events, vec![]);
+        assert_eq!(parser.state(), State::Escape);
+        parser.advance(&mut sink, next);
+        assert_eq!(sink.events, want);
+        assert_eq!(parser.state(), State::Ground);
+    }
+}
+
+#[test]
+fn osc_terminated_by_st_does_not_leak_its_body_into_the_next_osc() {
+    assert_eq!(
+        parse(b"\x1b]2;a\x1b\\\x1b]2;b\x1b\\"),
+        vec![
+            osc(b"2;a", OscEnd::St),
+            esc(b'\\'),
+            osc(b"2;b", OscEnd::St),
+            esc(b'\\'),
+        ]
+    );
+}
+
+#[test]
+fn escape_outside_an_osc_dispatches_no_osc() {
+    assert_eq!(parse(b"\x1b\\"), vec![esc(b'\\')]);
+    assert_eq!(
+        parse(b"\x1b_Gx\x1b\\"),
+        vec![Event::Apc(b"Gx".to_vec()), esc(b'\\')]
     );
 }
 
@@ -407,11 +517,12 @@ fn can_inside_osc_discards_the_partial_payload() {
         bytes.push(cancel);
         let evs = parse(&bytes);
         for ev in &evs {
-            if let Event::Osc { body, .. } = ev {
+            if let Event::Osc { body, end } = ev {
                 assert!(
                     body.is_empty(),
                     "canceled OSC leaked a partial body: {body:?}",
                 );
+                assert_eq!(*end, OscEnd::Interrupted);
             }
         }
     }

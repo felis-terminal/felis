@@ -7,6 +7,7 @@ use std::fmt;
 
 use crate::{
     APC_BUFFER_LIMIT, LimitedBuffer, MAX_INTERMEDIATES, MAX_PARAMS, OSC_BUFFER_LIMIT, Parser,
+    State,
     kitty_graphics::{REASSEMBLY_BUFFER_LIMIT, Reassembler, ReassemblyTracker},
     utf8::Decoder,
 };
@@ -123,6 +124,10 @@ impl Parser {
         check(
             self.apc.bytes.len() <= APC_BUFFER_LIMIT,
             "parser APC buffer",
+        )?;
+        check(
+            !self.osc_pending || matches!(self.state, State::Escape),
+            "parser pending OSC outside Escape",
         )
     }
 }
@@ -212,8 +217,8 @@ mod tests {
         fn dcs_unhook(&mut self) {
             self.0.push("unhook".to_owned());
         }
-        fn osc_dispatch(&mut self, body: &[u8], bell_terminated: bool) {
-            self.0.push(format!("osc {body:?} {bell_terminated}"));
+        fn osc_dispatch(&mut self, body: &[u8], end: crate::OscEnd) {
+            self.0.push(format!("osc {body:?} {end:?}"));
         }
         fn apc_dispatch(&mut self, body: &[u8]) {
             self.0.push(format!("apc {body:?}"));
@@ -229,9 +234,10 @@ mod tests {
     /// without the hop.
     #[test]
     fn a_parser_stopped_mid_sequence_resumes_where_it_stopped() {
-        let streams: [&[u8]; 6] = [
+        let streams: [&[u8]; 7] = [
             b"\x1b[38:2::10:20:30;1;4:3m",
             b"\x1b]8;id=x;https://example.com/a\x1b\\",
+            b"\x1b]2;title\x1b[1m",
             b"\x1b]2;title\x07",
             b"\x1b_Ga=T,f=24,s=1,v=1;AAAA\x1b\\",
             b"\x1bP$qm\x1b\\",
@@ -286,6 +292,9 @@ mod tests {
     fn states_no_run_could_reach_are_refused() {
         let mut parser = Parser::new();
         parser.params.len = MAX_PARAMS + 1;
+        assert!(parser.check_restored().is_err());
+        let mut parser = Parser::new();
+        parser.osc_pending = true;
         assert!(parser.check_restored().is_err());
         let decoder: Decoder =
             serde_json::from_str(r#"{"buf":[240,159,0,0],"len":3,"needed":1}"#).unwrap();
