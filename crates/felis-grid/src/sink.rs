@@ -3,8 +3,8 @@
 
 use super::{
     AttrFlags, Cell, DA1_REPLY, DCS_BUFFER_LIMIT, DcsKind, DcsState, Grapheme, Grid,
-    ModifyOtherKeys, MouseEncoding, MouseProtocol, PromptMark, PtyEffect, SPECIAL_COLOR_COUNT,
-    Sink, ThemeChannel, parse_osc_133, sanitize_osc_str,
+    ModifyOtherKeys, MouseEncoding, MouseProtocol, PromptKind, PromptMark, PtyEffect,
+    SPECIAL_COLOR_COUNT, Sink, ThemeChannel, parse_osc_133, sanitize_osc_str,
 };
 use crate::editing::blank_cells;
 use crate::width::{bmp_widths, table_width};
@@ -674,7 +674,7 @@ impl Sink for Grid {
         }
     }
 
-    fn osc_dispatch(&mut self, body: &[u8], _end: OscEnd) {
+    fn osc_dispatch(&mut self, body: &[u8], end: OscEnd) {
         self.last_printed = None;
         // The payload arrives verbatim; each handler splits only the
         // fields its wire form defines, so a literal `;` past the last
@@ -698,6 +698,7 @@ impl Sink for Grid {
             // `OSC 9 ST` still reaches the rejecting parser.
             9 => self.dispatch_osc9(body),
             99 => self.dispatch_osc99(body),
+            7501 => self.dispatch_osc7501(body, end),
             777 => self.dispatch_osc777(body),
             // `idx;spec` pairs, never one string: every `;` is framing.
             4 | 5 | 104 | 105 => self.dispatch_osc_palette(code, payload),
@@ -736,6 +737,10 @@ impl Sink for Grid {
                         let Some(mark) = parse_osc_133(text) else {
                             return;
                         };
+                        if mark.kind == PromptKind::PromptStart && !mark.secondary {
+                            self.pty_effects.push(PtyEffect::PromptStarted);
+                            self.yield_pending |= self.pty_effects.status_budget_spent();
+                        }
                         if !self.screen.on_alternate_screen() {
                             let ordinal = self.prompt_marks_pruned
                                 + u64::try_from(self.prompt_marks.len()).unwrap_or(u64::MAX);
@@ -774,7 +779,7 @@ impl Sink for Grid {
         }
         // Yield rather than drop past the cap: a producer placing an
         // image cell by cell sends hundreds of bodies in one write.
-        self.apc_yield =
+        self.yield_pending =
             self.completes_cursor_moving_placement(body) || self.pty_effects.apc_budget_spent();
     }
 
@@ -783,7 +788,7 @@ impl Sink for Grid {
     /// (`docs/explanation/protocols/kitty-graphics.md` "Dispatcher
     /// architecture").
     fn take_yield(&mut self) -> bool {
-        std::mem::take(&mut self.apc_yield)
+        std::mem::take(&mut self.yield_pending)
     }
 
     fn apc_overflow(&mut self) {

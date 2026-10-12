@@ -2,10 +2,11 @@
 
 use super::{
     ClipboardSelection, ClipboardWrite, ClusterText, Grapheme, Grid, NonZeroU16, NonZeroU32,
-    SPECIAL_COLOR_COUNT, ThemeChannel, default_dynamic_color, default_palette_color,
-    default_special_color, format_osc_52_response, format_osc_color_response, osc8_scheme_allowed,
-    parse_osc_8_id, parse_osc_52_selection, parse_palette_index, parse_x_color, sanitize_osc_str,
-    special_slot_from_osc4_alias, special_slot_from_osc5,
+    ProgramStatusEffect, PtyEffect, SPECIAL_COLOR_COUNT, ThemeChannel, default_dynamic_color,
+    default_palette_color, default_special_color, format_osc_52_response,
+    format_osc_color_response, osc8_scheme_allowed, parse_osc_8_id, parse_osc_52_selection,
+    parse_palette_index, parse_x_color, sanitize_osc_str, special_slot_from_osc4_alias,
+    special_slot_from_osc5,
 };
 use crate::editing::{continues_cluster, ends_in_pictographic_joiner, is_lone_regional_indicator};
 use felis_vt::{split_osc, split_osc_first};
@@ -492,6 +493,25 @@ impl Grid {
             };
             self.relay_notification(n);
         }
+    }
+
+    /// OSC 7501, the Program Status Protocol. Only a terminated sequence
+    /// is a report. `?` goes unanswered: answering advertises support,
+    /// which waits until the records it implies are observable.
+    pub(crate) fn dispatch_osc7501(&mut self, body: &[u8], end: felis_vt::OscEnd) {
+        use felis_vt::program_status::{Osc7501, Terminator, parse_osc7501};
+        let terminator = match end {
+            felis_vt::OscEnd::Bel => Terminator::Bel,
+            felis_vt::OscEnd::St => Terminator::St,
+            felis_vt::OscEnd::Interrupted => return,
+        };
+        let effect = match parse_osc7501(body, terminator) {
+            Some(Osc7501::Report(report)) => ProgramStatusEffect::Report(Box::new(report)),
+            Some(Osc7501::Clear { id }) => ProgramStatusEffect::Clear { id },
+            Some(Osc7501::Query | Osc7501::Dropped(_)) | None => return,
+        };
+        self.pty_effects.push(PtyEffect::ProgramStatus(effect));
+        self.yield_pending |= self.pty_effects.status_budget_spent();
     }
 
     /// A saturated outbox drops the notification and flags the bell,

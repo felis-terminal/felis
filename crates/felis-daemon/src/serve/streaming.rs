@@ -157,6 +157,7 @@ fn replay_effects(
                     "program disabled bracketed paste (?2004l); pastes to this session are unframed"
                 );
             }
+            PtyEffect::ProgramStatus(_) | PtyEffect::PromptStarted => {}
         }
     }
     Ok(())

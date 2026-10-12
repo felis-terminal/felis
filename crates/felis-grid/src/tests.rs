@@ -1269,7 +1269,8 @@ const _: () = {
 // order the program wrote them (cross-kind order inside one PTY burst is
 // the recurring Kitty-graphics bug class).
 
-/// `ED` → APC → DA1 → bottom-LF scroll → `?1049h`, in byte-stream order.
+/// `ED` → APC → DA1 → OSC 7501 → OSC 133 `A` → bottom-LF scroll →
+/// `?1049h`, in byte-stream order.
 #[test]
 fn pty_effects_drain_in_byte_stream_order() {
     let mut p = Parser::new();
@@ -1278,6 +1279,8 @@ fn pty_effects_drain_in_byte_stream_order() {
     burst.extend_from_slice(b"\x1b[2J"); // ED 2 → ImagesCleared
     burst.extend_from_slice(b"\x1b_Ga=q,i=1;\x1b\\"); // → Apc
     burst.extend_from_slice(b"\x1b[c"); // DA1 → Response
+    burst.extend_from_slice(b"\x1b]7501;state=done\x07"); // → ProgramStatus
+    burst.extend_from_slice(b"\x1b]133;A\x07"); // → PromptStarted
     burst.extend_from_slice(b"a\r\nb\r\n"); // bottom LF → ScrolledIntoScrollback
     burst.extend_from_slice(b"\x1b[?1049h"); // → ScreenSwitch
     drive(&mut p, &mut g, &burst);
@@ -1295,6 +1298,8 @@ fn pty_effects_drain_in_byte_stream_order() {
             PtyEffect::ScreenSwitch(_) => "switch",
             PtyEffect::PrimaryReflowed(_) => "reflowed",
             PtyEffect::BracketedPasteDisabled => "paste_guard_off",
+            PtyEffect::ProgramStatus(_) => "program_status",
+            PtyEffect::PromptStarted => "prompt_started",
         })
         .collect();
     assert_eq!(
@@ -1303,6 +1308,8 @@ fn pty_effects_drain_in_byte_stream_order() {
             "images_cleared",
             "apc",
             "response",
+            "program_status",
+            "prompt_started",
             "scrolled",
             "scroll_op",
             "switch"

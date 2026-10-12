@@ -16,11 +16,18 @@ pub const APC_OUTBOX_BYTES: usize = 1024 * 1024;
 
 const _: () = assert!(APC_OUTBOX_BYTES >= felis_vt::APC_BUFFER_LIMIT);
 
+/// [`ProgramStatus`](crate::PtyEffect::ProgramStatus) and
+/// [`PromptStarted`](crate::PtyEffect::PromptStarted) effects buffered
+/// between drains before the parse yields. Neither is ever dropped: the
+/// daemon's records must match what the producer sent.
+pub const STATUS_OUTBOX_YIELD: usize = 64;
+
 #[derive(Debug, Clone, Default)]
 pub struct PtyEffectQueue {
     effects: Vec<PtyEffect>,
     apc_len: usize,
     apc_bytes: usize,
+    status_len: usize,
 }
 
 impl PartialEq for PtyEffectQueue {
@@ -40,6 +47,12 @@ impl PtyEffectQueue {
             && !self.reserve_apc(apc.body.len())
         {
             return false;
+        }
+        if matches!(
+            effect,
+            PtyEffect::ProgramStatus(_) | PtyEffect::PromptStarted
+        ) {
+            self.status_len += 1;
         }
         self.effects.push(effect);
         true
@@ -115,10 +128,15 @@ impl PtyEffectQueue {
             || self.apc_bytes + felis_vt::APC_BUFFER_LIMIT > APC_OUTBOX_BYTES
     }
 
-    /// The only drain; it refills the APC budget.
+    pub const fn status_budget_spent(&self) -> bool {
+        self.status_len >= STATUS_OUTBOX_YIELD
+    }
+
+    /// The only drain; it refills both budgets.
     pub fn take(&mut self) -> Vec<PtyEffect> {
         self.apc_len = 0;
         self.apc_bytes = 0;
+        self.status_len = 0;
         std::mem::take(&mut self.effects)
     }
 
@@ -144,8 +162,8 @@ impl serde::Serialize for PtyEffectQueue {
     }
 }
 
-/// The APC count is the queue's own, so it is recounted rather than
-/// carried.
+/// The budget counts are the queue's own, so they are recounted rather
+/// than carried.
 #[cfg(feature = "state-dump")]
 impl<'de> serde::Deserialize<'de> for PtyEffectQueue {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
@@ -157,10 +175,20 @@ impl<'de> serde::Deserialize<'de> for PtyEffectQueue {
                 _ => None,
             })
             .fold((0, 0), |(n, bytes), len| (n + 1, bytes + len));
+        let status_len = effects
+            .iter()
+            .filter(|effect| {
+                matches!(
+                    effect,
+                    PtyEffect::ProgramStatus(_) | PtyEffect::PromptStarted
+                )
+            })
+            .count();
         Ok(Self {
             effects,
             apc_len,
             apc_bytes,
+            status_len,
         })
     }
 }

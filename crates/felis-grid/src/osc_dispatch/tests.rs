@@ -990,3 +990,254 @@ fn osc_10_refused_spec_keeps_the_override_and_sends_no_reply() {
     );
     assert_eq!(g.theme_override(ThemeChannel::Background), None);
 }
+
+fn effects_of(bytes: &[u8]) -> Vec<PtyEffect> {
+    let mut p = Parser::new();
+    let mut g = Grid::new(4, 20);
+    drive(&mut p, &mut g, bytes);
+    g.take_pty_effects()
+}
+
+fn report(state: felis_vt::program_status::State) -> felis_vt::program_status::Report {
+    felis_vt::program_status::Report {
+        id: String::new(),
+        state,
+        kind: None,
+        progress: None,
+        app: None,
+        title: None,
+        msg: None,
+    }
+}
+
+#[test]
+fn osc_7501_report_becomes_a_status_effect_for_either_terminator() {
+    use felis_vt::program_status::{Kind, State};
+    let want = PtyEffect::ProgramStatus(ProgramStatusEffect::Report(Box::new(
+        felis_vt::program_status::Report {
+            id: "build/test".to_owned(),
+            kind: Some(Kind::Permission),
+            progress: Some(40),
+            app: Some("claude".to_owned()),
+            title: Some("hi".to_owned()),
+            ..report(State::Blocked)
+        },
+    )));
+    let payload = "id=build/test:state=blocked:kind=permission:progress=40:app=claude:title=aGk=";
+    for end in ["\x07", "\x1b\\"] {
+        let bytes = format!("\x1b]7501;{payload}{end}");
+        assert_eq!(
+            effects_of(bytes.as_bytes()),
+            std::slice::from_ref(&want),
+            "{end:?}"
+        );
+    }
+}
+
+#[test]
+fn osc_7501_clear_becomes_a_clear_effect() {
+    assert_eq!(
+        effects_of(b"\x1b]7501;state=clear\x07\x1b]7501;id=a:state=clear\x07"),
+        [
+            PtyEffect::ProgramStatus(ProgramStatusEffect::Clear { id: String::new() }),
+            PtyEffect::ProgramStatus(ProgramStatusEffect::Clear { id: "a".to_owned() }),
+        ]
+    );
+}
+
+#[test]
+fn osc_7501_interrupted_by_an_escape_sequence_is_not_a_report() {
+    let da1 = PtyEffect::Response(DA1_REPLY.to_vec());
+    assert_eq!(effects_of(b"\x1b]7501;state=done\x1b[c"), [da1]);
+    assert_eq!(effects_of(b"\x1b]7501;state=done\x18"), []);
+}
+
+#[test]
+fn osc_7501_report_the_decoder_drops_queues_nothing() {
+    for bytes in [
+        &b"\x1b]7501;id=a\x07"[..],
+        b"\x1b]7501;state=finished\x07",
+        b"\x1b]7501;id=a//b:state=done\x07",
+        b"\x1b]7501;state=done:msg=Bw==\x07",
+    ] {
+        assert_eq!(effects_of(bytes), [], "{bytes:?}");
+    }
+}
+
+#[test]
+fn osc_7501_query_gets_no_reply_yet() {
+    assert_eq!(effects_of(b"\x1b]7501;?\x1b\\"), []);
+}
+
+/// The 4096-byte cap counts the terminator, so the same body fits with
+/// BEL and is one byte over with ST.
+#[test]
+fn osc_7501_sequence_cap_counts_the_terminator_the_parser_saw() {
+    let head = "\x1b]7501;state=done:x=";
+    let pad = "a".repeat(4096 - head.len() - 1);
+    let body = format!("{head}{pad}");
+    assert_eq!(
+        effects_of(format!("{body}\x07").as_bytes()),
+        [PtyEffect::ProgramStatus(ProgramStatusEffect::Report(
+            Box::new(report(felis_vt::program_status::State::Done))
+        ))]
+    );
+    assert_eq!(effects_of(format!("{body}\x1b\\").as_bytes()), []);
+}
+
+#[test]
+fn osc_133_prompt_start_queues_prompt_started_unless_a_continuation() {
+    assert_eq!(effects_of(b"\x1b]133;A\x07"), [PtyEffect::PromptStarted]);
+    assert_eq!(
+        effects_of(b"\x1b]133;A;redraw=0\x1b\\"),
+        [PtyEffect::PromptStarted]
+    );
+    for bytes in [
+        &b"\x1b]133;A;k=s\x07"[..],
+        b"\x1b]133;B\x07",
+        b"\x1b]133;C\x07",
+        b"\x1b]133;D;0\x07",
+    ] {
+        assert_eq!(effects_of(bytes), [], "{bytes:?}");
+    }
+}
+
+#[test]
+fn osc_133_prompt_start_on_the_alternate_screen_still_queues_prompt_started() {
+    let effects = effects_of(b"\x1b[?1049h\x1b]133;A\x07");
+    assert_eq!(
+        effects.last(),
+        Some(&PtyEffect::PromptStarted),
+        "{effects:?}"
+    );
+}
+
+#[test]
+fn ris_after_a_report_keeps_the_report_ahead_of_the_reset() {
+    assert_eq!(
+        effects_of(b"\x1b]7501;state=working\x07\x1bc"),
+        [
+            PtyEffect::ProgramStatus(ProgramStatusEffect::Report(Box::new(report(
+                felis_vt::program_status::State::Working
+            )))),
+            PtyEffect::HardReset,
+            PtyEffect::ImagesCleared(ImageClear::Screen),
+        ]
+    );
+}
+
+/// Feeds `bytes` through `advance_until_yield`, returning how many bytes
+/// each stop consumed.
+fn stops(g: &mut Grid, bytes: &[u8]) -> Vec<usize> {
+    let mut p = Parser::new();
+    let mut rest = bytes;
+    let mut out = Vec::new();
+    while let Some(n) = p.advance_until_yield(g, rest) {
+        out.push(n);
+        rest = &rest[n..];
+    }
+    out
+}
+
+#[test]
+fn the_report_that_fills_the_status_budget_stops_the_parse_after_its_terminator() {
+    for report in [
+        &b"\x1b]7501;state=idle\x07"[..],
+        b"\x1b]7501;state=idle\x1b\\",
+    ] {
+        let mut g = Grid::new(2, 8);
+        let short = report.repeat(STATUS_OUTBOX_YIELD - 1);
+        assert_eq!(stops(&mut g, &short), Vec::<usize>::new(), "{report:?}");
+        let mut more = report.to_vec();
+        more.extend_from_slice(report);
+        assert_eq!(
+            stops(&mut g, &more),
+            [report.len(), report.len()],
+            "{report:?}"
+        );
+        drop(g.take_pty_effects());
+        assert_eq!(
+            stops(&mut g, report),
+            Vec::<usize>::new(),
+            "the drain refills the budget"
+        );
+    }
+}
+
+#[test]
+fn an_interrupted_report_does_not_spend_the_status_budget() {
+    let mut g = Grid::new(2, 8);
+    let filler = b"\x1b]7501;state=idle\x1b[c".repeat(STATUS_OUTBOX_YIELD * 2);
+    assert_eq!(stops(&mut g, &filler), Vec::<usize>::new());
+}
+
+/// Prompt starts share the budget: a session task that drains only on
+/// request must still see them in bounded batches.
+#[test]
+fn prompt_starts_and_reports_fill_the_status_budget_together() {
+    let mut g = Grid::new(2, 8);
+    let prompt = b"\x1b]133;A\x07";
+    let report = b"\x1b]7501;state=idle\x07";
+    let mut bytes = Vec::new();
+    for _ in 0..STATUS_OUTBOX_YIELD / 2 {
+        bytes.extend_from_slice(prompt);
+        bytes.extend_from_slice(report);
+    }
+    assert_eq!(stops(&mut g, &bytes), [bytes.len()]);
+    drop(g.take_pty_effects());
+    let prompts = prompt.repeat(STATUS_OUTBOX_YIELD);
+    assert_eq!(stops(&mut g, &prompts), [prompts.len()]);
+}
+
+proptest::proptest! {
+    #[test]
+    fn osc_7501_never_panics_on_arbitrary_payloads(
+        payload in proptest::collection::vec(proptest::prelude::any::<u8>(), 0..5000),
+        st in proptest::prelude::any::<bool>(),
+    ) {
+        let mut bytes = b"\x1b]7501;".to_vec();
+        bytes.extend_from_slice(&payload);
+        bytes.extend_from_slice(if st { b"\x1b\\" } else { b"\x07" });
+        let mut p = Parser::new();
+        let mut g = Grid::new(4, 20);
+        drive(&mut p, &mut g, &bytes);
+        drop(g.take_pty_effects());
+    }
+
+    /// Whatever the chunking, a parse that stops whenever the grid asks
+    /// and drains at each stop delivers every report, in order.
+    #[test]
+    fn a_yielding_parse_delivers_every_report_in_order(
+        ids in proptest::collection::vec("[a-z]{1,8}", 1..200),
+        cuts in proptest::collection::vec(proptest::prelude::any::<proptest::sample::Index>(), 0..8),
+    ) {
+        let mut bytes = Vec::new();
+        for id in &ids {
+            bytes.extend_from_slice(format!("\x1b]7501;id={id}:state=done\x1b\\").as_bytes());
+        }
+        let mut cuts: Vec<usize> = cuts.iter().map(|c| c.index(bytes.len() + 1)).collect();
+        cuts.extend([0, bytes.len()]);
+        cuts.sort_unstable();
+        let mut p = Parser::new();
+        let mut g = Grid::new(2, 8);
+        let mut seen = Vec::new();
+        for pair in cuts.windows(2) {
+            let mut rest = &bytes[pair[0]..pair[1]];
+            while let Some(n) = p.advance_until_yield(&mut g, rest) {
+                let drained = g.take_pty_effects();
+                proptest::prop_assert!(drained.len() <= STATUS_OUTBOX_YIELD);
+                seen.extend(drained);
+                rest = &rest[n..];
+            }
+        }
+        seen.extend(g.take_pty_effects());
+        let got: Vec<String> = seen
+            .into_iter()
+            .map(|e| match e {
+                PtyEffect::ProgramStatus(ProgramStatusEffect::Report(r)) => r.id,
+                other => panic!("unexpected effect {other:?}"),
+            })
+            .collect();
+        proptest::prop_assert_eq!(got, ids);
+    }
+}

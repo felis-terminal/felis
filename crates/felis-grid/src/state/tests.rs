@@ -108,6 +108,23 @@ fn a_byte_budgeted_apc_queue_survives_the_hop_mid_body() {
     assert_survives(5, 10, 0, &stream, &tail);
 }
 
+/// The status budget is recounted from the queue, not carried: one
+/// short of it before the hop, the next report after it yields.
+#[test]
+fn a_status_queue_one_short_of_its_yield_survives_the_hop() {
+    let report = b"\x1b]7501;state=done\x07";
+    let mut parser = Parser::new();
+    let mut grid = Grid::new(2, 8);
+    for _ in 1..crate::STATUS_OUTBOX_YIELD {
+        assert_eq!(parser.advance_until_yield(&mut grid, report), None);
+    }
+    let (mut parser, mut grid) = hop(&parser, &grid);
+    assert_eq!(
+        parser.advance_until_yield(&mut grid, report),
+        Some(report.len())
+    );
+}
+
 #[test]
 fn a_full_scrollback_ring_survives_the_hop() {
     let mut output = Vec::new();
@@ -188,6 +205,10 @@ fn fragment() -> impl Strategy<Value = Vec<u8>> {
         Just(b"\x1b[J".to_vec()),
         Just(b"\x1b]66;s=2;w\x07".to_vec()),
         Just(b"\x1b]2;t\x07".to_vec()),
+        Just(b"\x1b]7501;state=working:progress=5:msg=aGk=\x07".to_vec()),
+        Just(b"\x1b]7501;id=a/b:state=blocked:kind=auth\x1b\\".to_vec()),
+        Just(b"\x1b]7501;state=clear\x1b\\".to_vec()),
+        Just(b"\x1b]133;A\x07".to_vec()),
         Just(b"\x1b[6n".to_vec()),
         Just(b"\x1b[".to_vec()),
         Just(b"\x1b]".to_vec()),
