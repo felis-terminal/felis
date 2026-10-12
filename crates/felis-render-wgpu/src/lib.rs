@@ -3044,4 +3044,89 @@ mod tests {
         assert_eq!(out.len(), 24 * 30 * 4);
         assert_every_pixel(&out, [0xCC, 0x11, 0x44, 0xFF]);
     }
+
+    struct OneImage {
+        id: ImageId,
+        width: u32,
+        height: u32,
+        pixels: Vec<u8>,
+    }
+
+    impl ImageSource for OneImage {
+        fn image_data(&self, id: ImageId) -> Option<ImageData<'_>> {
+            (id == self.id).then_some(ImageData {
+                width: self.width,
+                height: self.height,
+                format: ImageFormat::Rgba32,
+                pixels: &self.pixels,
+            })
+        }
+    }
+
+    /// A solid image placed through a 10 x 10 block of placeholder cells
+    /// covers its whole fitted rectangle, cell-row seams included.
+    #[test]
+    #[ignore = "needs a GPU adapter; `just test-gpu` runs it on lavapipe"]
+    fn a_placeholder_image_draws_without_a_band_between_cell_rows() {
+        use felis_protocol::kitty_graphics::placeholder::{PLACEHOLDER, Rank, diacritic_for};
+        let Some(mut renderer) = offscreen_on(&new_instance(), 8, 8, RendererConfig::default())
+        else {
+            eprintln!("FELIS_TEST_FONT_DIR unset; skipping");
+            return;
+        };
+        let cells = 10u16;
+        let image = OneImage {
+            id: ImageId(1),
+            width: 200,
+            height: 100,
+            pixels: [0xFF, 0x00, 0x00, 0xFF].repeat(200 * 100),
+        };
+        let m = renderer.cell_metrics();
+        let (w, h) = (
+            u32::from(cells + 2) * m.width,
+            u32::from(cells + 2) * m.height,
+        );
+        renderer.resize(w, h);
+        let mut grid = felis_grid::Grid::new(cells + 2, cells + 2);
+        let mut bytes = b"\x1b[?25l\x1b[38;2;0;0;1m".to_vec();
+        for r in 0..u32::from(cells) {
+            for c in 0..u32::from(cells) {
+                let mut cell = String::from(PLACEHOLDER);
+                cell.push(diacritic_for(Rank::new(r).expect("rank")));
+                cell.push(diacritic_for(Rank::new(c).expect("rank")));
+                bytes.extend_from_slice(cell.as_bytes());
+            }
+            bytes.extend_from_slice(b"\r\n");
+        }
+        felis_vt::Parser::new().advance(&mut grid, &bytes);
+        let vp = VirtualPlacement {
+            image_id: ImageId(1),
+            placement_id: None,
+            anonymous: false,
+            cols: cells,
+            rows: cells,
+            z_index: 0,
+        };
+        renderer
+            .render(grid.screen(), &[ImageId(1)], &image, &[], &[vp], 0, 0)
+            .expect("an offscreen render has no surface to lose");
+        let mut out = Vec::new();
+        renderer.read_frame(&mut out).expect("readback");
+        let (bw, bh) = (u32::from(cells) * m.width, u32::from(cells) * m.height);
+        let scale = (bw as f32 / 200.0).min(bh as f32 / 100.0);
+        let (fw, fh) = ((200.0 * scale) as u32, (100.0 * scale) as u32);
+        let (x0, y0) = ((bw - fw) / 2, (bh - fh) / 2);
+        let mut bad = Vec::new();
+        for y in y0 + 1..y0 + fh - 1 {
+            for x in x0 + 1..x0 + fw - 1 {
+                let i = ((y * w + x) * 4) as usize;
+                let px = &out[i..i + 4];
+                if px[0] < 0xF0 || px[1] > 0x10 || px[2] > 0x10 {
+                    bad.push((x, y, px.to_vec()));
+                }
+            }
+        }
+        bad.truncate(20);
+        assert!(bad.is_empty(), "cell {m:?}, off-red pixels: {bad:?}");
+    }
 }
