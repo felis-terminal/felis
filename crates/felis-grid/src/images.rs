@@ -7,6 +7,9 @@ use std::num::NonZeroU16;
 use bytes::Bytes;
 use indexmap::IndexMap;
 
+mod table;
+use table::{Keyed, Table};
+
 pub use felis_protocol::{
     ImageId, PlacementId,
     messages::{ImageFormat, MAX_IMAGE_FRAMES, SourceRect},
@@ -962,41 +965,161 @@ pub struct VirtualPlacement {
     pub z_index: i32,
 }
 
-/// What [`Placements::rekey_anonymous`] moved, under its new id.
+/// A placement of either kind, as a rekey or an eviction hands it back.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Rekeyed {
+pub enum AnyPlacement {
     Anchored(Placement),
     Virtual(VirtualPlacement),
 }
 
+/// What left the table to make way for [`Placements::upsert`]'s
+/// placement.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Displaced {
+    /// The placement under the same key; its ref is the caller's to
+    /// release.
+    Replaced(Placement),
+    /// The screen's oldest placement, over [`MAX_PLACEMENTS`].
+    Evicted(AnyPlacement),
+}
+
+/// Placements one screen holds, direct and virtual together. A session
+/// outlives its window and every client mirrors the table, so a producer
+/// repeating puts must not grow it without bound; kitty has no cap.
+pub const MAX_PLACEMENTS: usize = 16_384;
+
 /// Side-table of [`Placement`]s keyed by `(image_id, placement_id)`.
 /// Insertion order is the renderer's tiebreaker among equal z-indices.
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
+#[cfg_attr(
+    feature = "state-dump",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(from = "PlacementsDump", into = "PlacementsDump")
+)]
+pub struct Placements {
+    entries: Table<Placement>,
+    /// Keyed like `entries`, which share the key space: one
+    /// `(image_id, placement_id)` names a direct or a virtual placement,
+    /// never both. Kept apart because nothing that moves or clears
+    /// anchored placements touches them.
+    virtuals: Table<VirtualPlacement>,
+    /// Both tables draw from it, so the oldest placement of either kind
+    /// is the one with the lowest.
+    next_seq: u64,
+    /// Ids handed out by [`Self::allocate_anonymous_id`], counted down
+    /// from `u32::MAX`.
+    anonymous_issued: u32,
+    cap: usize,
+}
+
 #[cfg_attr(
     feature = "state-dump",
     derive(serde::Serialize, serde::Deserialize),
     serde(default)
 )]
-pub struct Placements {
+#[derive(Default)]
+struct PlacementsDump {
     entries: Vec<Placement>,
-    /// Keyed like `entries`, which share the key space: one
-    /// `(image_id, placement_id)` names a direct or a virtual placement,
-    /// never both. Kept apart because nothing that moves or clears
-    /// anchored placements touches them.
     virtuals: Vec<VirtualPlacement>,
-    /// Ids handed out by [`Self::allocate_anonymous_id`], counted down
-    /// from `u32::MAX`.
     anonymous_issued: u32,
+    /// Each entry's and virtual's sequence number, which orders the two
+    /// kinds against each other for eviction. Empty in a dump that
+    /// predates them: entries are then older than virtuals.
+    entry_seqs: Vec<u64>,
+    virtual_seqs: Vec<u64>,
 }
+
+impl From<PlacementsDump> for Placements {
+    fn from(dump: PlacementsDump) -> Self {
+        let mut table = Self::new();
+        table.anonymous_issued = dump.anonymous_issued;
+        let (entry_seqs, virtual_seqs) = if dump.entry_seqs.len() == dump.entries.len()
+            && dump.virtual_seqs.len() == dump.virtuals.len()
+        {
+            (dump.entry_seqs, dump.virtual_seqs)
+        } else {
+            let n = dump.entries.len() as u64;
+            (
+                (0..n).collect(),
+                (n..n + dump.virtuals.len() as u64).collect(),
+            )
+        };
+        for (seq, p) in entry_seqs.into_iter().zip(dump.entries) {
+            table.entries.insert(seq, p);
+        }
+        for (seq, v) in virtual_seqs.into_iter().zip(dump.virtuals) {
+            table.virtuals.insert(seq, v);
+        }
+        table.next_seq = table
+            .entries
+            .iter_seq()
+            .map(|(seq, _)| seq)
+            .chain(table.virtuals.iter_seq().map(|(seq, _)| seq))
+            .max()
+            .map_or(0, |seq| seq + 1);
+        table
+    }
+}
+
+impl From<Placements> for PlacementsDump {
+    fn from(table: Placements) -> Self {
+        Self {
+            entries: table.entries.iter().cloned().collect(),
+            virtuals: table.virtuals.iter().copied().collect(),
+            anonymous_issued: table.anonymous_issued,
+            entry_seqs: table.entries.iter_seq().map(|(seq, _)| seq).collect(),
+            virtual_seqs: table.virtuals.iter_seq().map(|(seq, _)| seq).collect(),
+        }
+    }
+}
+
+impl Default for Placements {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl PartialEq for Placements {
+    fn eq(&self, other: &Self) -> bool {
+        self.entries.iter().eq(other.entries.iter())
+            && self.virtuals.iter().eq(other.virtuals.iter())
+            && self.anonymous_issued == other.anonymous_issued
+            && self.cap == other.cap
+    }
+}
+
+impl Eq for Placements {}
 
 impl Placements {
     #[must_use]
-    pub const fn new() -> Self {
+    pub fn new() -> Self {
+        Self::with_cap(MAX_PLACEMENTS)
+    }
+
+    /// # Panics
+    ///
+    /// If `cap` is zero: the placement just put must stay.
+    #[must_use]
+    pub fn with_cap(cap: usize) -> Self {
+        assert!(cap > 0, "a placement table holds at least one placement");
         Self {
-            entries: Vec::new(),
-            virtuals: Vec::new(),
+            entries: Table::new(),
+            virtuals: Table::new(),
+            next_seq: 0,
             anonymous_issued: 0,
+            cap,
         }
+    }
+
+    #[must_use]
+    pub const fn cap(&self) -> usize {
+        self.cap
+    }
+
+    const fn take_seq(&mut self) -> u64 {
+        let seq = self.next_seq;
+        self.next_seq += 1;
+        seq
     }
 
     /// Id for a placement sent without `p=`, which kitty never replaces:
@@ -1014,30 +1137,36 @@ impl Placements {
     }
 
     fn holds(&self, image_id: ImageId, id: PlacementId) -> bool {
-        self.entries
-            .iter()
-            .any(|p| p.image_id == image_id && p.placement_id == Some(id))
-            || self
-                .virtuals
-                .iter()
-                .any(|v| v.image_id == image_id && v.placement_id == Some(id))
+        let key = (image_id, Some(id));
+        self.entries.contains(key) || self.virtuals.contains(key)
+    }
+
+    fn evict_over_cap(&mut self) -> Option<AnyPlacement> {
+        if self.entries.len() + self.virtuals.len() <= self.cap {
+            return None;
+        }
+        match (self.entries.oldest_seq(), self.virtuals.oldest_seq()) {
+            (Some(direct), Some(virt)) if virt < direct => {
+                self.virtuals.pop_oldest().map(AnyPlacement::Virtual)
+            }
+            (Some(_), _) => self.entries.pop_oldest().map(AnyPlacement::Anchored),
+            (None, _) => self.virtuals.pop_oldest().map(AnyPlacement::Virtual),
+        }
     }
 
     /// Last write wins under one producer `(image_id, placement_id)`, as
-    /// Kitty specifies; an anonymous placement is never replaced. Returns
-    /// the placement replaced, whose ref the caller releases.
-    pub fn upsert(&mut self, placement: Placement) -> Option<Placement> {
-        let key = (placement.image_id, placement.placement_id);
-        if let Some(slot) = self
-            .entries
-            .iter_mut()
-            .find(|p| !p.anonymous && !placement.anonymous && (p.image_id, p.placement_id) == key)
-        {
-            Some(std::mem::replace(slot, placement))
-        } else {
-            self.entries.push(placement);
-            None
+    /// Kitty specifies; an anonymous placement is never replaced.
+    pub fn upsert(&mut self, placement: Placement) -> Option<Displaced> {
+        let key = placement.key();
+        if !placement.anonymous && self.entries.get(key).is_some_and(|p| !p.anonymous) {
+            return self
+                .entries
+                .replace(key, placement)
+                .map(Displaced::Replaced);
         }
+        let seq = self.take_seq();
+        self.entries.insert(seq, placement);
+        self.evict_over_cap().map(Displaced::Evicted)
     }
 
     /// Only a producer-addressed placement matches.
@@ -1046,10 +1175,11 @@ impl Placements {
         image_id: ImageId,
         placement_id: Option<PlacementId>,
     ) -> Option<Placement> {
-        let idx = self.entries.iter().position(|p| {
-            !p.anonymous && p.image_id == image_id && p.placement_id == placement_id
-        })?;
-        Some(self.entries.remove(idx))
+        let key = (image_id, placement_id);
+        if self.entries.get(key)?.anonymous {
+            return None;
+        }
+        self.entries.remove(key)
     }
 
     /// Moves an anonymous placement off `id` before a producer's `p=`
@@ -1057,61 +1187,65 @@ impl Placements {
     /// It goes to the end of its table, where the client's remove and
     /// re-add puts it, so both sides keep one order. Returns the id it
     /// left and the placement under its new id.
-    pub fn rekey_anonymous(&mut self, image_id: ImageId, id: PlacementId) -> Option<Rekeyed> {
-        if let Some(idx) = self
-            .entries
-            .iter()
-            .position(|p| p.anonymous && p.image_id == image_id && p.placement_id == Some(id))
-        {
+    pub fn rekey_anonymous(&mut self, image_id: ImageId, id: PlacementId) -> Option<AnyPlacement> {
+        let key = (image_id, Some(id));
+        if self.entries.get(key).is_some_and(|p| p.anonymous) {
             let fresh = self.allocate_anonymous_id(image_id);
-            let mut entry = self.entries.remove(idx);
+            let mut entry = self.entries.remove(key)?;
             entry.placement_id = Some(fresh);
-            self.entries.push(entry.clone());
-            return Some(Rekeyed::Anchored(entry));
+            let seq = self.take_seq();
+            self.entries.insert(seq, entry.clone());
+            return Some(AnyPlacement::Anchored(entry));
         }
-        let idx = self
-            .virtuals
-            .iter()
-            .position(|v| v.anonymous && v.image_id == image_id && v.placement_id == Some(id))?;
+        if !self.virtuals.get(key).is_some_and(|v| v.anonymous) {
+            return None;
+        }
         let fresh = self.allocate_anonymous_id(image_id);
-        let mut entry = self.virtuals.remove(idx);
+        let mut entry = self.virtuals.remove(key)?;
         entry.placement_id = Some(fresh);
-        self.virtuals.push(entry);
-        Some(Rekeyed::Virtual(entry))
+        let seq = self.take_seq();
+        self.virtuals.insert(seq, entry);
+        Some(AnyPlacement::Virtual(entry))
     }
 
     /// Removed entries come back in insertion order; kept entries keep
     /// their order.
     pub fn remove_where(&mut self, mut pred: impl FnMut(&Placement) -> bool) -> Vec<Placement> {
-        let (removed, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut self.entries)
-            .into_iter()
-            .partition(|p| pred(p));
-        self.entries = kept;
-        removed
+        self.entries.extract(|p| pred(p))
     }
 
     pub fn delete_image(&mut self, image_id: ImageId) -> Vec<Placement> {
-        let (removed, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut self.entries)
-            .into_iter()
-            .partition(|p| p.image_id == image_id);
-        self.entries = kept;
-        removed
+        self.entries.extract_image(image_id)
+    }
+
+    /// Whether any placement of either kind shows the image.
+    #[must_use]
+    pub fn references(&self, image_id: ImageId) -> bool {
+        self.entries.has_image(image_id) || self.virtuals.has_image(image_id)
     }
 
     /// Overwritten in place under its `(image_id, placement_id)`, or by
     /// image alone when it has no id; an anonymous placement is always a
     /// new one. The client-side shadow applies the identical rule.
-    pub fn upsert_virtual(&mut self, placement: VirtualPlacement) {
-        if let Some(slot) = self.virtuals.iter_mut().find(|v| {
-            !placement.anonymous
-                && !v.anonymous
-                && v.image_id == placement.image_id
-                && (placement.placement_id.is_none() || v.placement_id == placement.placement_id)
-        }) {
-            *slot = placement;
-        } else {
-            self.virtuals.push(placement);
+    /// Returns the placement evicted over [`MAX_PLACEMENTS`].
+    pub fn upsert_virtual(&mut self, placement: VirtualPlacement) -> Option<AnyPlacement> {
+        if !placement.anonymous {
+            let held = match placement.placement_id {
+                Some(_) => self.virtuals.get(placement.key()).filter(|v| !v.anonymous),
+                None => self
+                    .virtuals
+                    .iter()
+                    .find(|v| !v.anonymous && v.image_id == placement.image_id),
+            }
+            .map(Keyed::key);
+            if let Some(key) = held {
+                self.virtuals.replace(key, placement);
+                return None;
+            }
         }
+        let seq = self.take_seq();
+        self.virtuals.insert(seq, placement);
+        self.evict_over_cap()
     }
 
     /// Only a producer-addressed virtual placement matches.
@@ -1120,19 +1254,16 @@ impl Placements {
         image_id: ImageId,
         placement_id: PlacementId,
     ) -> Option<VirtualPlacement> {
-        let idx = self.virtuals.iter().position(|v| {
-            !v.anonymous && v.image_id == image_id && v.placement_id == Some(placement_id)
-        })?;
-        Some(self.virtuals.remove(idx))
+        let key = (image_id, Some(placement_id));
+        if self.virtuals.get(key)?.anonymous {
+            return None;
+        }
+        self.virtuals.remove(key)
     }
 
     /// Every virtual placement of the image, in table order.
     pub fn remove_virtual(&mut self, image_id: ImageId) -> Vec<VirtualPlacement> {
-        let (removed, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut self.virtuals)
-            .into_iter()
-            .partition(|v| v.image_id == image_id);
-        self.virtuals = kept;
-        removed
+        self.virtuals.extract_image(image_id)
     }
 
     /// kitty's `grman_put_cell_image`: a non-zero id picks the virtual
@@ -1148,8 +1279,8 @@ impl Placements {
         })
     }
 
-    pub fn retain_virtual(&mut self, pred: impl FnMut(&VirtualPlacement) -> bool) {
-        self.virtuals.retain(pred);
+    pub fn retain_virtual(&mut self, mut pred: impl FnMut(&VirtualPlacement) -> bool) {
+        self.virtuals.extract(|v| !pred(v));
     }
 
     pub fn iter_virtual(&self) -> impl Iterator<Item = &VirtualPlacement> {
@@ -1162,17 +1293,17 @@ impl Placements {
     }
 
     pub fn for_image(&self, image_id: ImageId) -> impl Iterator<Item = &Placement> {
-        self.entries.iter().filter(move |p| p.image_id == image_id)
+        self.entries.of_image(image_id)
     }
 
     /// Anchored entries only; virtual placements are not counted.
     #[must_use]
-    pub const fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.entries.len()
     }
 
     #[must_use]
-    pub const fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.entries.is_empty() && self.virtuals.is_empty()
     }
 
@@ -1194,20 +1325,16 @@ impl Placements {
         if lines == 0 || self.entries.is_empty() {
             return Vec::new();
         }
-        let mut removed = Vec::new();
         let lines_i32 = i32::try_from(lines).unwrap_or(i32::MAX);
         let horizon = 1i32.saturating_sub(i32::try_from(retain_rows).unwrap_or(i32::MAX));
-        let mut i = 0;
-        while i < self.entries.len() {
-            let shifted = self.entries[i].anchor.row.saturating_sub(lines_i32);
-            if shifted >= horizon {
-                self.entries[i].anchor.row = shifted;
-                i += 1;
-            } else {
-                removed.push(self.entries.remove(i));
+        self.entries.extract(|p| {
+            let shifted = p.anchor.row.saturating_sub(lines_i32);
+            if shifted < horizon {
+                return true;
             }
-        }
-        removed
+            p.anchor.row = shifted;
+            false
+        })
     }
 
     /// Re-resolves the natural axes of every placement at `cell_px`, as
@@ -1220,7 +1347,7 @@ impl Placements {
         cell_px: (u16, u16),
         mut on_change: impl FnMut(&Placement),
     ) {
-        for p in &mut self.entries {
+        for p in self.entries.values_mut() {
             let Some(entry) = images.get(p.image_id) else {
                 continue;
             };
@@ -1238,18 +1365,13 @@ impl Placements {
     /// [`crate::Grid::reflow`] (REQ-604). `None` evicts the placement;
     /// evictions are returned as [`Self::shift_up`]'s are.
     pub fn remap_rows(&mut self, mut remap: impl FnMut(i32) -> Option<i32>) -> Vec<Placement> {
-        let mut removed = Vec::new();
-        let mut i = 0;
-        while i < self.entries.len() {
-            match remap(self.entries[i].anchor.row) {
-                Some(row) => {
-                    self.entries[i].anchor.row = row;
-                    i += 1;
-                }
-                None => removed.push(self.entries.remove(i)),
+        self.entries.extract(|p| match remap(p.anchor.row) {
+            Some(row) => {
+                p.anchor.row = row;
+                false
             }
-        }
-        removed
+            None => true,
+        })
     }
 }
 

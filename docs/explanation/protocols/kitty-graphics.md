@@ -318,6 +318,22 @@ again, one level down. So `ImageShadow` charges its aggregate in the same unit t
 looser than the store is what keeps this direction safe: a client can only refuse a session the daemon would itself have
 evicted.
 
+## The placement cap
+
+A placement costs no pixel bytes, so the byte cap does not bound how many there are: a producer repeating `a=p,i=1` with
+a fresh `p=`, or with no `p=` at all, adds one table entry per put. kitty sets no limit, and for kitty the table dies
+with the window. A felis session outlives its window and every attached client mirrors the table, so the same flood
+grows the daemon and each client without bound. Each screen therefore holds at most 16384 placements, direct and
+Unicode-placeholder together, since either kind fills the same table and the same mirror. The number covers one
+placement per cell of a 200 × 80 screen, the shape of yazi's previewer, which places an image one cell at a time.
+
+A put past the cap evicts the screen's oldest placement rather than being refused, for the byte cap's reason: what goes
+is a whole placement, which the producer can notice and put again, whereas a refusal would leave a long-running program
+unable to show anything new until it found something of its own to delete. The frame cap refuses for the opposite
+reason, since dropping frames would silently rewrite an animation in place.
+
+**Revisit if** a real producer meets the cap.
+
 ## The live outbox carries markers, not pixels
 
 Between two fan-outs the dispatcher accumulates what changed about the session's images in `Session::image_events`. The

@@ -175,6 +175,8 @@ The graphics protocol is a large attack surface: it accepts compressed image dat
   placements and refuses with `ENOTSUP` only when the image still does not fit, and the frame cap refuses without
   evicting anything ([image-store.md](data-model/image-store.md#limits)). No breach of any of the three ends the
   session.
+- **The placement table is capped.** Placements cost no pixel bytes, so a flood of puts is bounded by a count instead:
+  past it the screen's oldest placement goes ([the placement cap](protocols/kitty-graphics.md#the-placement-cap)).
 - **`t=f` (file) and `t=t` (temp file) are path-restricted**
   ([the rules](../reference/protocols/kitty-graphics.md#file-transmission-safety-tf--tt)). Each rule answers one attack:
   `O_NOFOLLOW` on the final component defeats swapping the file for a symlink between the stat and the read, refusing

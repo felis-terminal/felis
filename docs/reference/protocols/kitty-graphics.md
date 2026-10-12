@@ -313,6 +313,9 @@ Non-`G` APC escapes are silently ignored to prevent interfering with unrelated A
   ceiling.
 - Maximum decoded image size: 64 MiB per image. A larger image is rejected with `ENOTSUP` before its buffer is sized.
 - Maximum frames per image: 4096 frames (including root). Additional frames are rejected with `ENOTSUP`.
+- Maximum placements: 16384 per screen, direct and Unicode-placeholder placements together. A put past it removes the
+  screen's oldest placement (emitting `PlacementRemoved`), and an image without an id that loses its last placement this
+  way is deleted (emitting `Delete`). kitty has no such cap.
 - APC command queue: at most 64 APC bodies and 1 MiB buffered between daemon drains. The body that fills the queue
   pauses the PTY parse until the daemon drains it, so a burst of any length arrives whole.
 - Shared-memory unlinks: Up to 16 deferred segment names per session. Subsequent segments trigger immediate unlinking of
