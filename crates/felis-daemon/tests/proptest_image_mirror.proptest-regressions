@@ -1,0 +1,9 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc dd653878a3feee3cf74f1b2e4e8bbdaddd4340d9cc0c0dca4a43b87dd7f1b63a # shrinks to ops = [Transmit { id: None, put: Some(Put { virtual_: true, p: None, cols: 1 }) }]
+cc 0a477292575b353a50254828f45b3607a5be690582388b33d48c55bf2af5bf5d # shrinks to ops = [Transmit { id: Some(2), put: Some(Put { virtual_: false, p: None, cols: 1 }) }, Screen("\u{1b}[?1049h"), Delete { mode: 'I', id: 2, p: None }]
+cc 0eb3cab69f448b7855a7f9ecd2b816f68f9222fc314e068ab6856d62c09c5617 # shrinks to ops = [(Transmit { id: None, number: false, put: Some(Put { virtual_: true, p: None, cols: 1 }) }, false), (Transmit { id: None, number: false, put: Some(Put { virtual_: false, p: None, cols: 1 }) }, false), (Transmit { id: None, number: false, put: Some(Put { virtual_: false, p: None, cols: 1 }) }, false), (Transmit { id: None, number: false, put: None }, false)]
