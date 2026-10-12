@@ -5541,7 +5541,7 @@ async fn status_reports_every_accounted_resource_with_its_limit() {
     assert_eq!(subject_kind(images), Some(SubjectKind::Session));
     assert_eq!(
         per_subject_limit(images),
-        Some(crate::pool::DEFAULT_IMAGE_BYTE_CAP as u64)
+        Some(crate::pool::DEFAULT_IMAGE_BYTE_CAP as u64 * 2)
     );
     assert_eq!(
         images.total_used, 0,
@@ -5592,7 +5592,7 @@ async fn status_samples_what_the_sessions_are_holding() {
         ),
         "an m=1 head parks the transmission"
     );
-    let image_cap = owned.images.bytes_cap() as u64;
+    let image_cap = owned.images.bytes_cap() as u64 * 2;
     let deeper = owned.images.bytes_used() as u64;
     let _life = session_task::spawn_owned(
         &pool,

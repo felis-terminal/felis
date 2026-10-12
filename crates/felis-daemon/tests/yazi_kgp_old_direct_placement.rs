@@ -54,7 +54,6 @@ impl Harness {
                         cell_pixel_w: 0,
                         cell_pixel_h: 0,
                         anchor_cursor: None,
-                        saved_primary: None,
                     },
                     &mut self.reassembler,
                     &apc.body,

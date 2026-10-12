@@ -43,9 +43,11 @@ pub(crate) const SUBSCRIBER_BUFFER_CAP: usize = crate::pool::DEFAULT_IMAGE_BYTE_
 /// tracked by the hot paths.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct SessionStats {
+    /// Both screens' stores.
     pub image_bytes: usize,
     /// Read off the store, not the constant it was built from, so the
-    /// reported limit is the one an insert is refused against.
+    /// reported limit is the one an insert is refused against, once
+    /// per screen.
     pub image_bytes_cap: usize,
     /// `None` between transmissions.
     pub decode_bytes_in_flight: Option<usize>,
@@ -1486,7 +1488,7 @@ impl SessionTask {
             table_gc: core.table_gc.clone(),
             images: self.session.images.clone(),
             placements: self.session.placements.clone(),
-            saved_primary_placements: self.session.saved_primary_placements.clone(),
+            saved_primary: self.session.saved_primary.clone(),
             reassembler: self.session.graphics_reassembler.clone(),
             shm_segments: self
                 .session
@@ -1733,8 +1735,13 @@ impl SessionTask {
                     (max.max(queued), total.saturating_add(queued))
                 });
         SessionStats {
-            image_bytes: self.session.images.bytes_used(),
-            image_bytes_cap: self.session.images.bytes_cap(),
+            image_bytes: self.session.images.bytes_used()
+                + self
+                    .session
+                    .saved_primary
+                    .as_ref()
+                    .map_or(0, |saved| saved.images.bytes_used()),
+            image_bytes_cap: self.session.images.bytes_cap() * 2,
             decode_bytes_in_flight: self.session.graphics_reassembler.in_flight_bytes(),
             max_subscriber_backlog,
             total_subscriber_backlog,
@@ -2715,7 +2722,7 @@ impl SessionTask {
             crate::graphics::rescale_placements(
                 &self.session.images,
                 &mut self.session.placements,
-                self.session.saved_primary_placements.as_mut(),
+                self.session.saved_primary.as_mut(),
                 &mut self.session.image_events,
                 cell_px,
             );
@@ -5310,7 +5317,7 @@ mod tests {
         /// screen is up, whatever mix of switches, placements and RIS the
         /// effects carry; RIS also leaves no placement behind.
         #[test]
-        fn the_saved_primary_placements_exist_iff_on_the_alternate_screen(
+        fn the_saved_primary_exist_iff_on_the_alternate_screen(
             ops in prop::collection::vec(prop::sample::select(SWITCH_PLACE_RIS), 1..16),
             per_drain in 1usize..4,
         ) {
@@ -5325,7 +5332,7 @@ mod tests {
                 write_to_grid(&task, &burst.concat());
                 task.drain_effects().expect("effects drain");
                 let on_alt = task.session.lock_core().grid.on_alternate_screen();
-                prop_assert_eq!(task.session.saved_primary_placements.is_some(), on_alt, "{:?}", burst);
+                prop_assert_eq!(task.session.saved_primary.is_some(), on_alt, "{:?}", burst);
                 if burst.last() == Some(&RIS) {
                     prop_assert!(task.session.placements.is_empty(), "RIS leaves a placement");
                 }
@@ -5471,10 +5478,10 @@ mod tests {
         task.apply_size(sized_cells(&task, (8, 16)));
         let saved = task
             .session
-            .saved_primary_placements
+            .saved_primary
             .as_ref()
             .expect("primary placements stashed");
-        assert_eq!(placement_extent(saved, 1), (4, 3));
+        assert_eq!(placement_extent(&saved.placements, 1), (4, 3));
 
         drain_events(&mut rx);
         write_to_grid(&task, b"\x1b[?1049l");

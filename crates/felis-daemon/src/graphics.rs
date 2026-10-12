@@ -373,11 +373,6 @@ pub struct ApcCtx<'a> {
     /// trailing DECRC in the same burst cannot move the anchor; `None`
     /// anchors at the grid's live cursor.
     pub anchor_cursor: Option<(u16, u16)>,
-    /// The primary screen's placements while the alternate screen is up.
-    /// They hold no refcount there, yet kitty keeps their images in the
-    /// primary screen's own store, which no alternate-screen command
-    /// touches.
-    pub saved_primary: Option<&'a felis_grid::images::Placements>,
 }
 
 pub fn dispatch_apc_body(
@@ -468,7 +463,6 @@ pub fn dispatch_apc_bodies(
             cell_pixel_w,
             cell_pixel_h,
             anchor_cursor: Some((apc.cursor_row, apc.cursor_col)),
-            saved_primary: session.saved_primary_placements.as_ref(),
         };
         let response = dispatch_apc_body(&mut ctx, &mut session.graphics_reassembler, &apc.body);
         if let Some(response) = response {
@@ -494,69 +488,70 @@ pub fn dispatch_apc_bodies(
     responses
 }
 
-/// Apply one alt-screen toggle to per-screen placement contexts.
-///
-/// Releases refcounts on stashed placements and restores them on return,
-/// keeping `refcount == live_placement_count` invariant across toggles.
-/// Idempotent toggles are filtered upstream by the grid.
+/// The primary screen's images while the alternate screen is up: kitty
+/// gives each screen a store of its own, so no alternate-screen command
+/// reaches these.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SavedImages {
+    pub images: felis_grid::images::ImageStore,
+    pub placements: felis_grid::images::Placements,
+}
+
+/// Swap the live image store and placements for the other screen's,
+/// which the client's one mirrored store follows. Each placement is
+/// removed explicitly: a `Delete` then a `Transmit` of one id collapses
+/// to the `Transmit` at materialization.
 pub fn apply_screen_switch(
     switch: ScreenSwitch,
     images: &mut felis_grid::images::ImageStore,
     placements: &mut felis_grid::images::Placements,
-    saved_primary_placements: &mut Option<felis_grid::images::Placements>,
+    saved_primary: &mut Option<SavedImages>,
     events: &mut Vec<ImageEvent>,
 ) {
     tracing::trace!(
         target: "felis_daemon::graphics",
         ?switch,
-        saved_primary = saved_primary_placements.is_some(),
+        saved_primary = saved_primary.is_some(),
         live_placements = placements.len(),
         "apply_screen_switch",
     );
+    if switch == ScreenSwitch::LeftAlternate && saved_primary.is_none() {
+        return;
+    }
+    let leaving = SavedImages {
+        images: std::mem::replace(
+            images,
+            felis_grid::images::ImageStore::new(images.bytes_cap()),
+        ),
+        placements: std::mem::take(placements),
+    };
+    for p in leaving.placements.iter() {
+        events.push(ImageEvent::PlacementRemoved {
+            image_id: p.image_id,
+            placement_id: p.placement_id,
+        });
+    }
+    for v in leaving.placements.iter_virtual() {
+        events.push(virtual_removed_event(v));
+    }
+    for id in leaving.images.iter_ids() {
+        events.push(ImageEvent::Delete { id });
+    }
     match switch {
-        ScreenSwitch::EnteredAlternate => {
-            let snapshot = std::mem::take(placements);
-            for p in snapshot.iter() {
-                images.release(p.image_id);
-                events.push(ImageEvent::PlacementRemoved {
-                    image_id: p.image_id,
-                    placement_id: p.placement_id,
-                });
-            }
-            for v in snapshot.iter_virtual() {
-                events.push(virtual_removed_event(v));
-            }
-            // A leftover save means a missed `LeftAlternate` drain;
-            // overwrite rather than panic.
-            *saved_primary_placements = Some(snapshot);
-        }
+        // A leftover save means a missed `LeftAlternate` drain;
+        // overwrite rather than panic.
+        ScreenSwitch::EnteredAlternate => *saved_primary = Some(leaving),
         ScreenSwitch::LeftAlternate => {
-            let alt = std::mem::take(placements);
-            for p in alt.iter() {
-                images.release(p.image_id);
-                events.push(ImageEvent::PlacementRemoved {
-                    image_id: p.image_id,
-                    placement_id: p.placement_id,
-                });
+            let Some(saved) = saved_primary.take() else {
+                unreachable!("checked on entry");
+            };
+            *images = saved.images;
+            *placements = saved.placements;
+            for id in images.iter_ids() {
+                events.push(ImageEvent::Transmit(id));
             }
-            for v in alt.iter_virtual() {
-                events.push(virtual_removed_event(v));
-            }
-            if let Some(saved) = saved_primary_placements.take() {
-                *placements = saved;
-                for p in placements.iter() {
-                    images.retain(p.image_id);
-                    events.push(placement_event(p));
-                }
-                // `free_image` purges only the live table, so an LRU
-                // eviction during the alt-screen stay can leave a stashed
-                // extent pointing at a freed image; this is the one seam
-                // where stale entries re-enter.
-                placements.retain_virtual(|v| images.get(v.image_id).is_some());
-                for v in placements.iter_virtual() {
-                    events.push(virtual_event(v));
-                }
-            }
+            events.extend(placements.iter().map(placement_event));
+            events.extend(placements.iter_virtual().map(virtual_event));
         }
     }
 }
@@ -597,13 +592,13 @@ const fn placement_event(p: &Placement) -> ImageEvent {
 pub fn rescale_placements(
     images: &felis_grid::images::ImageStore,
     placements: &mut felis_grid::images::Placements,
-    saved_primary_placements: Option<&mut felis_grid::images::Placements>,
+    saved_primary: Option<&mut SavedImages>,
     events: &mut Vec<ImageEvent>,
     cell_px: (u16, u16),
 ) {
     placements.rescale(images, cell_px, |p| events.push(placement_event(p)));
-    if let Some(saved) = saved_primary_placements {
-        saved.rescale(images, cell_px, |_| {});
+    if let Some(saved) = saved_primary {
+        saved.placements.rescale(&saved.images, cell_px, |_| {});
     }
 }
 
@@ -642,9 +637,7 @@ fn handle_complete(ctx: &mut ApcCtx<'_>, complete: &CompleteCommand) -> Option<V
         cell_pixel_w,
         cell_pixel_h,
         anchor_cursor,
-        saved_primary,
     } = ctx;
-    let saved_primary = *saved_primary;
     let (cell_pixel_w, cell_pixel_h) = (*cell_pixel_w, *cell_pixel_h);
     let anchor_cursor = anchor_cursor.unwrap_or_else(|| {
         let cursor = grid.cursor();
@@ -673,19 +666,11 @@ fn handle_complete(ctx: &mut ApcCtx<'_>, complete: &CompleteCommand) -> Option<V
             addressed = refs.image_id.is_some();
             handle_query(complete)
         }
-        b't' => handle_transmit(
-            images,
-            placements,
-            saved_primary,
-            events,
-            complete,
-            &mut refs,
-        ),
+        b't' => handle_transmit(images, placements, events, complete, &mut refs),
         b'T' => handle_transmit_and_display(
             grid,
             images,
             placements,
-            saved_primary,
             events,
             complete,
             &mut refs,
@@ -708,22 +693,16 @@ fn handle_complete(ctx: &mut ApcCtx<'_>, complete: &CompleteCommand) -> Option<V
             // kitty's `case 'd'` calls no `finish_command_response`, so a
             // delete is never answered, failed or not. mpv's vo_kitty
             // cleanup sends a bare `a=d;` without q= and reads nothing.
-            if let ActionOutcome::Err(code, message) = handle_delete(
-                grid,
-                images,
-                placements,
-                saved_primary,
-                events,
-                complete,
-                &mut refs,
-            ) {
+            if let ActionOutcome::Err(code, message) =
+                handle_delete(grid, images, placements, events, complete, &mut refs)
+            {
                 tracing::debug!(
                     ?code,
                     message,
                     "graphics delete failed (kitty sends no reply)"
                 );
             }
-            free_unreferenced_anonymous(images, placements, saved_primary, events);
+            free_unreferenced_anonymous(images, placements, events);
             return None;
         }
         b'f' => handle_animation_frame(images, placements, events, complete, &mut refs),
@@ -845,12 +824,11 @@ fn handle_query(complete: &CompleteCommand) -> ActionOutcome {
 fn handle_transmit(
     images: &mut felis_grid::images::ImageStore,
     placements: &mut felis_grid::images::Placements,
-    saved_primary: Option<&felis_grid::images::Placements>,
     events: &mut Vec<ImageEvent>,
     complete: &CompleteCommand,
     refs: &mut ResponseRefs,
 ) -> ActionOutcome {
-    match transmit_image(images, placements, saved_primary, events, complete, refs) {
+    match transmit_image(images, placements, events, complete, refs) {
         Ok(_) => ActionOutcome::Ok,
         Err(outcome) => outcome,
     }
@@ -861,7 +839,6 @@ fn handle_transmit(
 fn transmit_image(
     images: &mut felis_grid::images::ImageStore,
     placements: &mut felis_grid::images::Placements,
-    saved_primary: Option<&felis_grid::images::Placements>,
     events: &mut Vec<ImageEvent>,
     complete: &CompleteCommand,
     refs: &mut ResponseRefs,
@@ -876,7 +853,7 @@ fn transmit_image(
     if let Some(number) = number {
         entry = entry.with_number(number);
     }
-    match insert_into_store(images, placements, saved_primary, events, id, entry) {
+    match insert_into_store(images, placements, events, id, entry) {
         ActionOutcome::Ok => Ok(id),
         err @ ActionOutcome::Err(..) => Err(err),
     }
@@ -888,7 +865,6 @@ fn transmit_image(
 fn evict_to_fit(
     images: &mut felis_grid::images::ImageStore,
     placements: &mut felis_grid::images::Placements,
-    saved_primary: Option<&felis_grid::images::Placements>,
     events: &mut Vec<ImageEvent>,
     incoming: ImageId,
     growth: usize,
@@ -898,9 +874,7 @@ fn evict_to_fit(
     if !over(images) {
         return;
     }
-    free_unreferenced_where(images, placements, saved_primary, events, |id, _| {
-        id != incoming
-    });
+    free_unreferenced_where(images, placements, events, |id, _| id != incoming);
     while over(images) {
         let Some(oldest) = images
             .iter_ids()
@@ -939,7 +913,6 @@ fn announce_evictions(
 pub fn clear_images(
     images: &mut felis_grid::images::ImageStore,
     placements: &mut felis_grid::images::Placements,
-    saved_primary: Option<&felis_grid::images::Placements>,
     events: &mut Vec<ImageEvent>,
     scope: felis_grid::ImageClear,
 ) {
@@ -950,16 +923,15 @@ pub fn clear_images(
             placement_id: p.placement_id,
         });
     }
-    free_unreferenced(images, placements, saved_primary, events);
+    free_unreferenced(images, placements, events);
 }
 
 fn free_unreferenced(
     images: &mut felis_grid::images::ImageStore,
     placements: &mut felis_grid::images::Placements,
-    saved_primary: Option<&felis_grid::images::Placements>,
     events: &mut Vec<ImageEvent>,
 ) {
-    free_unreferenced_where(images, placements, saved_primary, events, |_, _| true);
+    free_unreferenced_where(images, placements, events, |_, _| true);
 }
 
 /// kitty frees an image sent without an id once its last placement
@@ -968,18 +940,14 @@ fn free_unreferenced(
 pub fn free_unreferenced_anonymous(
     images: &mut felis_grid::images::ImageStore,
     placements: &mut felis_grid::images::Placements,
-    saved_primary: Option<&felis_grid::images::Placements>,
     events: &mut Vec<ImageEvent>,
 ) {
-    free_unreferenced_where(images, placements, saved_primary, events, |_, entry| {
-        entry.is_anonymous()
-    });
+    free_unreferenced_where(images, placements, events, |_, entry| entry.is_anonymous());
 }
 
 fn free_unreferenced_where(
     images: &mut felis_grid::images::ImageStore,
     placements: &mut felis_grid::images::Placements,
-    saved_primary: Option<&felis_grid::images::Placements>,
     events: &mut Vec<ImageEvent>,
     candidate: impl Fn(ImageId, &ImageEntry) -> bool,
 ) {
@@ -990,9 +958,7 @@ fn free_unreferenced_where(
     if candidates.is_empty() {
         return;
     }
-    let referenced: std::collections::HashSet<ImageId> = [Some(&*placements), saved_primary]
-        .into_iter()
-        .flatten()
+    let referenced: std::collections::HashSet<ImageId> = std::iter::once(&*placements)
         .flat_map(|table| {
             table
                 .iter()
@@ -1049,7 +1015,6 @@ fn handle_transmit_and_display(
     grid: &mut felis_grid::Grid,
     images: &mut felis_grid::images::ImageStore,
     placements: &mut felis_grid::images::Placements,
-    saved_primary: Option<&felis_grid::images::Placements>,
     events: &mut Vec<ImageEvent>,
     complete: &CompleteCommand,
     refs: &mut ResponseRefs,
@@ -1057,7 +1022,7 @@ fn handle_transmit_and_display(
     cell_pixel_h: u16,
     anchor_cursor: (u16, u16),
 ) -> ActionOutcome {
-    let id = match transmit_image(images, placements, saved_primary, events, complete, refs) {
+    let id = match transmit_image(images, placements, events, complete, refs) {
         Ok(id) => id,
         Err(outcome) => return outcome,
     };
@@ -1193,7 +1158,6 @@ fn handle_delete(
     grid: &felis_grid::Grid,
     images: &mut felis_grid::images::ImageStore,
     placements: &mut felis_grid::images::Placements,
-    saved_primary: Option<&felis_grid::images::Placements>,
     events: &mut Vec<ImageEvent>,
     complete: &CompleteCommand,
     refs: &mut ResponseRefs,
@@ -1205,7 +1169,7 @@ fn handle_delete(
     match mode {
         b'i' | b'I' => delete_by_id(images, placements, events, complete, mode == b'I'),
         b'n' | b'N' => delete_by_number(images, placements, events, complete, mode == b'N'),
-        b'a' | b'A' => delete_all(images, placements, saved_primary, events, mode == b'A'),
+        b'a' | b'A' => delete_all(images, placements, events, mode == b'A'),
         b'c' | b'C' => {
             let cursor = grid.cursor();
             // Cursor is 0-based, placement geometry 1-based.
@@ -1306,13 +1270,7 @@ fn handle_delete(
                 .collect();
             for id in in_range {
                 remove_all_placements(images, placements, events, id);
-                // The primary screen's images share the store while the
-                // alternate screen is up; kitty's stores are per screen.
-                let stashed = saved_primary.is_some_and(|saved| {
-                    saved.for_image(id).next().is_some()
-                        || saved.iter_virtual().any(|v| v.image_id == id)
-                });
-                if mode == b'R' && !stashed {
+                if mode == b'R' {
                     free_image(images, placements, events, id);
                 }
             }
@@ -1334,18 +1292,11 @@ fn handle_delete(
 fn delete_all(
     images: &mut felis_grid::images::ImageStore,
     placements: &mut felis_grid::images::Placements,
-    saved_primary: Option<&felis_grid::images::Placements>,
     events: &mut Vec<ImageEvent>,
     free_images: bool,
 ) -> ActionOutcome {
     if free_images {
-        clear_images(
-            images,
-            placements,
-            saved_primary,
-            events,
-            felis_grid::ImageClear::Screen,
-        );
+        clear_images(images, placements, events, felis_grid::ImageClear::Screen);
         return ActionOutcome::Ok;
     }
     for placement in placements.clear(felis_grid::ImageClear::Screen) {
@@ -1511,7 +1462,6 @@ fn resolve_image_id(
 fn insert_into_store(
     images: &mut felis_grid::images::ImageStore,
     placements: &mut felis_grid::images::Placements,
-    saved_primary: Option<&felis_grid::images::Placements>,
     events: &mut Vec<ImageEvent>,
     id: ImageId,
     entry: ImageEntry,
@@ -1522,7 +1472,7 @@ fn insert_into_store(
     let growth = entry
         .byte_len()
         .saturating_sub(images.get(id).map_or(0, ImageEntry::byte_len));
-    evict_to_fit(images, placements, saved_primary, events, id, growth);
+    evict_to_fit(images, placements, events, id, growth);
     let replacing = images.get(id).is_some();
     match images.insert(id, entry) {
         Ok(evicted) => {

@@ -109,7 +109,7 @@ async fn register(
         table_gc,
         images,
         placements,
-        saved_primary_placements,
+        saved_primary,
         reassembler,
         shm_segments,
         reported_focus,
@@ -128,7 +128,7 @@ async fn register(
     let mut session = Session::from_spawned(spawned);
     session.images = images;
     session.placements = placements;
-    session.saved_primary_placements = saved_primary_placements;
+    session.saved_primary = saved_primary;
     session.graphics_reassembler = reassembler;
     session.shm_segments =
         ShmDeferral::from_names(shm_segments).ok_or("too many deferred shared memory names")?;

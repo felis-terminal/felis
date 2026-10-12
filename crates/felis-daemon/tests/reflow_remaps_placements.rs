@@ -8,7 +8,7 @@
 
 use felis_daemon::graphics::ImageEvent;
 use felis_daemon::graphics::{
-    ApcCtx, ShmDeferral, apply_reflow_remap, apply_screen_switch, dispatch_apc_body,
+    ApcCtx, SavedImages, ShmDeferral, apply_reflow_remap, apply_screen_switch, dispatch_apc_body,
 };
 use felis_grid::images::{ImageStore, Placements};
 use felis_grid::{Grid, PtyEffect};
@@ -27,7 +27,7 @@ fn drive_burst(
     grid: &mut Grid,
     images: &mut ImageStore,
     placements: &mut Placements,
-    saved_primary: &mut Option<Placements>,
+    saved_primary: &mut Option<SavedImages>,
     events: &mut Vec<ImageEvent>,
     burst: &[u8],
 ) {
@@ -46,7 +46,6 @@ fn drive_burst(
                         cell_pixel_w: 0,
                         cell_pixel_h: 0,
                         anchor_cursor: None,
-                        saved_primary: None,
                     },
                     reassembler,
                     &apc.body,
@@ -70,7 +69,7 @@ fn resize_under_alt_screen_remaps_restored_placements_on_exit() {
     let mut grid = Grid::new(6, 10);
     let mut images = ImageStore::new(TEST_STORE_CAP);
     let mut placements = Placements::new();
-    let mut saved_primary: Option<Placements> = None;
+    let mut saved_primary: Option<SavedImages> = None;
     let mut events = Vec::new();
 
     let mut burst = Vec::new();

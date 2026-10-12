@@ -100,8 +100,12 @@ then frees every image no placement references, transmitted-only images included
 and `DECSTR` leave placements alone. The daemon sends `PlacementRemoved` and `Delete` to attached clients to drop the
 corresponding textures.
 
-Primary and alternate screens maintain isolated placement contexts. Switching to alternate screen (`?1049h`) stashes
-primary placements; switching back (`?1049l`) restores them and frees alternate placements.
+The primary and alternate screens each have an image store and placements of their own, as in kitty, so an id on one
+screen never names an image on the other. Switching to the alternate screen (`?1049h`) stashes the primary screen's
+images and placements and starts the alternate screen with an empty store; switching back (`?1049l`) drops the alternate
+screen's images and placements and restores the primary ones. Attached clients mirror only the screen being shown: the
+switch sends `PlacementRemoved` and `Delete` for the screen left behind, and re-sends the images and placements of the
+one coming up.
 
 ## Scrollback-anchored placements
 
@@ -301,11 +305,10 @@ Non-`G` APC escapes are silently ignored to prevent interfering with unrelated A
 - Maximum APC body: 256 KiB between the `ESC _` introducer and the terminating `ST`, controls and payload together,
   kitty's own escape-code limit. A longer body is truncated to the cap, the bell rings, and the truncated body still
   reaches the dispatcher.
-- Maximum decoded image memory: 256 MiB per session. A transmit that would exceed it first frees every image without a
-  placement, then evicts the least recently transmitted or placed images with their placements until it fits (emitting
-  `PlacementRemoved` and `Delete`), as kitty does. While the alternate screen is up, the primary screen's placements
-  count as placements.
-- Budget accounting: Decoded pixel size plus fixed per-entry and per-frame overheads count toward the 256 MiB session
+- Maximum decoded image memory: 256 MiB per screen's store. A transmit that would exceed it first frees every image
+  without a placement, then evicts the least recently transmitted or placed images with their placements until it fits
+  (emitting `PlacementRemoved` and `Delete`), as kitty does.
+- Budget accounting: Decoded pixel size plus fixed per-entry and per-frame overheads count toward the 256 MiB per-screen
   ceiling.
 - Maximum decoded image size: 64 MiB per image. A larger image is rejected with `ENOTSUP` before its buffer is sized.
 - Maximum frames per image: 4096 frames (including root). Additional frames are rejected with `ENOTSUP`.

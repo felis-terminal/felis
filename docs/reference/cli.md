@@ -329,7 +329,7 @@ workers:  8
 draining: no
 connections             3  /  1024 per daemon
 sessions                2  /  256 per daemon
-image_store_bytes       total 4 MiB  ·  max session 4 MiB  /  256 MiB per session
+image_store_bytes       total 4 MiB  ·  max session 4 MiB  /  512 MiB per session
 in_flight_decodes       0  /  256 per daemon
 in_flight_decode_bytes  total 0 B  ·  max session 0 B  /  64 MiB per session
 subscriber_queue_bytes  total 0 B  ·  max subscriber 0 B  /  512 MiB per subscriber
@@ -344,15 +344,15 @@ JSON output (`--format json`) yields:
 
 ### Accounted resources
 
-| `resource`               | Unit  | Scope        | Ceiling                                                            |
-| ------------------------ | ----- | ------------ | ------------------------------------------------------------------ |
-| `connections`            | count | `daemon`     | 1024 connections (REQ-916).                                        |
-| `sessions`               | count | `daemon`     | 256 sessions (REQ-915).                                            |
-| `image_store_bytes`      | bytes | `session`    | 256 MiB per session (REQ-1008). Oldest images evicted on pressure. |
-| `in_flight_decodes`      | count | `daemon`     | 256 transmissions.                                                 |
-| `in_flight_decode_bytes` | bytes | `session`    | 64 MiB per session (REQ-908).                                      |
-| `subscriber_queue_bytes` | bytes | `subscriber` | 512 MiB per subscriber. Slow subscribers evicted.                  |
-| `pty_input_bytes`        | bytes | `session`    | 16 MiB per session (REQ-1011a). Socket reads pause until drained.  |
+| `resource`               | Unit  | Scope        | Ceiling                                                                                |
+| ------------------------ | ----- | ------------ | -------------------------------------------------------------------------------------- |
+| `connections`            | count | `daemon`     | 1024 connections (REQ-916).                                                            |
+| `sessions`               | count | `daemon`     | 256 sessions (REQ-915).                                                                |
+| `image_store_bytes`      | bytes | `session`    | 512 MiB per session, 256 MiB per screen (REQ-1008). Oldest images evicted on pressure. |
+| `in_flight_decodes`      | count | `daemon`     | 256 transmissions.                                                                     |
+| `in_flight_decode_bytes` | bytes | `session`    | 64 MiB per session (REQ-908).                                                          |
+| `subscriber_queue_bytes` | bytes | `subscriber` | 512 MiB per subscriber. Slow subscribers evicted.                                      |
+| `pty_input_bytes`        | bytes | `session`    | 16 MiB per session (REQ-1011a). Socket reads pause until drained.                      |
 
 `resource`, `unit`, `scope` and `total_used` are on every row. The rest are the wire's two scope arms flattened into
 keys, so **absent is not `0`**:

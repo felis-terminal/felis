@@ -6,8 +6,8 @@
 
 use felis_client_core::image_shadow::ImageShadow;
 use felis_daemon::graphics::{
-    ApcCtx, ImageEvent, ShmDeferral, apply_screen_switch, clear_images, dispatch_apc_body,
-    free_unreferenced_anonymous, materialize_image_events,
+    ApcCtx, ImageEvent, SavedImages, ShmDeferral, apply_screen_switch, clear_images,
+    dispatch_apc_body, free_unreferenced_anonymous, materialize_image_events,
 };
 use std::fmt::Write as _;
 
@@ -108,7 +108,7 @@ struct Session {
     grid: Grid,
     images: ImageStore,
     placements: Placements,
-    saved_primary: Option<Placements>,
+    saved_primary: Option<SavedImages>,
     events: Vec<ImageEvent>,
     shm: ShmDeferral,
     window: ImageShadow,
@@ -140,7 +140,6 @@ impl Session {
                 cell_pixel_w: 8,
                 cell_pixel_h: 16,
                 anchor_cursor: None,
-                saved_primary: self.saved_primary.as_ref(),
             },
             &mut self.reassembler,
             &body(controls, payload),
@@ -161,7 +160,6 @@ impl Session {
                 PtyEffect::ImagesCleared(scope) => clear_images(
                     &mut self.images,
                     &mut self.placements,
-                    self.saved_primary.as_ref(),
                     &mut self.events,
                     scope,
                 ),
@@ -194,12 +192,7 @@ impl Session {
                 placement_id: p.placement_id,
             });
         }
-        free_unreferenced_anonymous(
-            &mut self.images,
-            &mut self.placements,
-            self.saved_primary.as_ref(),
-            &mut self.events,
-        );
+        free_unreferenced_anonymous(&mut self.images, &mut self.placements, &mut self.events);
     }
 
     fn run(&mut self, op: &Op) {
@@ -304,6 +297,12 @@ proptest! {
                     id,
                     op
                 );
+            }
+
+            let shown = s.window.placements().iter().map(|p| p.image_id)
+                .chain(s.window.virtual_placements().iter().map(|v| v.image_id));
+            for id in shown {
+                prop_assert!(s.window.image(id).is_some(), "image {:?} is shown but not stored after {:?}", id, op);
             }
         }
     }
