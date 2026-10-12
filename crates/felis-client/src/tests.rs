@@ -1632,34 +1632,34 @@ mod daemon_closed {
         assert!(matches!(state, PipeState::Idle));
     }
 
-    /// The guard a nested pipe/run chord asks: only a parked return
-    /// owes anything, and the visit that owes it is the one a second
-    /// visit would overwrite.
+    /// The guard a nested pipe/run chord asks: only a live transient
+    /// refuses. A return parked after a chain re-pointed to an ordinary
+    /// session does not, so a chord fired there supersedes it instead of
+    /// being refused until some unrelated landing settles it.
     #[test]
-    fn a_visit_owes_a_return_from_its_landing_until_the_return_lands() {
-        assert!(
-            PipeState::Returning {
-                viewport: 12,
-                expected: test_place("/tmp/a.sock", 0xaaa),
-            }
-            .owes_a_return()
-        );
-        assert!(!PipeState::Idle.owes_a_return());
+    fn only_a_live_transient_refuses_a_nested_visit() {
         assert!(
             PipeState::Active {
                 viewport: 12,
                 region: None,
                 source: test_place("/tmp/a.sock", 0xaaa),
             }
-            .owes_a_return(),
-            "a live transient owes its return before it has started it"
+            .in_visit()
         );
+        assert!(
+            !PipeState::Returning {
+                viewport: 12,
+                expected: test_place("/tmp/a.sock", 0xaaa),
+            }
+            .in_visit()
+        );
+        assert!(!PipeState::Idle.in_visit());
         assert!(
             !PipeState::Awaiting {
                 target: felis_client_core::PipeTarget::Clipboard,
                 viewport: 12,
             }
-            .owes_a_return()
+            .in_visit()
         );
     }
 
