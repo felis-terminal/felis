@@ -1054,6 +1054,180 @@ pub(crate) mod tests {
         }
     }
 
+    /// One declaration of the schema: a statement up to its `;`, or a
+    /// block (`message`, `oneof`, `enum`, …) with its body.
+    enum Decl {
+        Statement(String),
+        Block { head: String, body: Vec<Self> },
+    }
+
+    /// The schema's declarations, comments dropped and whitespace
+    /// collapsed. A bracketed field option is opaque, so the braces
+    /// inside an arm's `(felis.v1.arm)` literal are not structure.
+    fn declarations(schema: &str) -> Vec<Decl> {
+        let text = schema
+            .lines()
+            .map(|line| line.split("//").next().unwrap_or_default())
+            .collect::<Vec<_>>()
+            .join(" ");
+        let mut chars = text.chars();
+        let body = block_body(&mut chars);
+        assert!(
+            chars.next().is_none(),
+            "the schema closes a block it never opened"
+        );
+        body
+    }
+
+    fn block_body(chars: &mut core::str::Chars<'_>) -> Vec<Decl> {
+        let mut body = Vec::new();
+        let mut buffer = String::new();
+        let mut brackets = 0usize;
+        while let Some(c) = chars.next() {
+            match c {
+                '[' => brackets += 1,
+                ']' => brackets -= 1,
+                ';' if brackets == 0 => {
+                    body.push(Decl::Statement(collapse(&buffer)));
+                    buffer.clear();
+                    continue;
+                }
+                '{' if brackets == 0 => {
+                    let head = collapse(&buffer);
+                    buffer.clear();
+                    body.push(Decl::Block {
+                        head,
+                        body: block_body(chars),
+                    });
+                    continue;
+                }
+                '}' if brackets == 0 => {
+                    assert!(buffer.trim().is_empty(), "unterminated `{}`", buffer.trim());
+                    return body;
+                }
+                _ => {}
+            }
+            buffer.push(c);
+        }
+        assert!(buffer.trim().is_empty(), "unterminated `{}`", buffer.trim());
+        body
+    }
+
+    fn collapse(text: &str) -> String {
+        text.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+
+    /// A wrapper's top-level numbers are its family's arm space, so a
+    /// field added there would reach an older peer as the other
+    /// direction's arm. Besides its arms a wrapper carries only the
+    /// correlation envelope; an added field goes in a payload message.
+    #[test]
+    fn a_family_wrapper_declares_nothing_but_its_arms() {
+        let decls = declarations(include_str!("../proto/felis.proto"));
+        for wrapper in every_wrapper() {
+            let name = wrapper.schema_name();
+            let head = format!("message {name}");
+            let body = decls
+                .iter()
+                .find_map(|decl| match decl {
+                    Decl::Block {
+                        head: declared,
+                        body,
+                    } if *declared == head => Some(body),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("the schema declares {head}"));
+            for decl in body {
+                match decl {
+                    Decl::Block { head, .. } => {
+                        assert_eq!(
+                            head, "oneof msg",
+                            "{name} declares a block besides its arms"
+                        );
+                    }
+                    Decl::Statement(statement) => assert!(
+                        statement.starts_with("reserved ")
+                            || statement == "Correlation correlation = 100",
+                        "{name} declares `{statement}` besides its arms"
+                    ),
+                }
+            }
+        }
+    }
+
+    /// The members of every oneof outside a wrapper's `oneof msg`, as
+    /// `Message.oneof: member member …`, a nested message dotted.
+    fn payload_oneofs(prefix: &str, decls: &[Decl], wrappers: &[String], out: &mut Vec<String>) {
+        for decl in decls {
+            let Decl::Block { head, body } = decl else {
+                continue;
+            };
+            let Some(name) = head.strip_prefix("message ") else {
+                continue;
+            };
+            let path = format!("{prefix}{name}");
+            for decl in body {
+                if let Decl::Block {
+                    head,
+                    body: members,
+                } = decl
+                    && let Some(oneof) = head.strip_prefix("oneof ")
+                    && !wrappers.contains(&path)
+                {
+                    let names: Vec<&str> = members
+                        .iter()
+                        .filter_map(|member| match member {
+                            Decl::Statement(statement) => {
+                                statement.split(" = ").next()?.split(' ').nth(1)
+                            }
+                            Decl::Block { .. } => None,
+                        })
+                        .collect();
+                    out.push(format!("{path}.{oneof}: {}", names.join(" ")));
+                }
+            }
+            payload_oneofs(&format!("{path}."), body, wrappers, out);
+        }
+    }
+
+    /// Every payload oneof's members as its message was introduced with
+    /// them. A member added later is not an added field: a peer that
+    /// predates it skips it and reads the oneof as unset, which `convert/`
+    /// rejects as malformed. So a new member needs a send gate first.
+    const BASE_PAYLOAD_ONEOFS: &[&str] = &[
+        "MouseButton.button: left middle right wheel_up wheel_down wheel_left wheel_right button8 button9 button10 button11",
+        "KeyId.key: named function character other",
+        "Correlation.id: request_id stream_id",
+        "ConnError.subject: request_id stream_id",
+        "GridThemeColor.action: set reset",
+        "GridPaletteColor.action: set reset",
+        "ImageHeader.target: image frame",
+        "SessionAttach.target: id id_prefix",
+        "SessionAttachFailed.reason: attach create",
+        "OpsSpawned.outcome: ok refused",
+        "OpsInfoReply.outcome: found no_match ambiguous",
+        "SwitchScope.scope: default attachment",
+        "SwitchTarget.target: session carrier",
+        "ResolvedId.result: ok no_match ambiguous",
+        "RetargetTarget.carrier: local_endpoint ssh default_local",
+        "RetargetTarget.landing: attach create",
+        "SwitchDenied.reason: no_input_owner no_such_attachment",
+        "OpsStop.mode: if_empty force when_empty",
+        "OpsStopReply.outcome: stopping refused draining",
+        "OpsUpgradeReply.outcome: upgrading refused",
+        "ResourceReport.scope: daemon subject",
+        "Limit.limit: bounded unlimited",
+    ];
+
+    #[test]
+    fn a_payload_oneof_keeps_the_members_of_the_base_schema() {
+        let decls = declarations(include_str!("../proto/felis.proto"));
+        let wrappers: Vec<String> = every_wrapper().iter().map(Wrapper::schema_name).collect();
+        let mut oneofs = Vec::new();
+        payload_oneofs("", &decls, &wrappers, &mut oneofs);
+        assert_eq!(oneofs, BASE_PAYLOAD_ONEOFS);
+    }
+
     /// The driver finds an arm by its field number without decoding, so
     /// each row's number has to be the one the schema gives that arm.
     #[test]

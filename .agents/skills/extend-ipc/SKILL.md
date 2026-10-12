@@ -47,8 +47,14 @@ The argument is in `docs/explanation/architecture/ipc.md`; these are the rules i
 - Fields and oneof arms are **appended** with the next field number. A family with arms in both directions is two
   wrappers (`<Family>ToDaemonMsg`, `<Family>ToClientMsg`): a new arm joins the wrapper for its direction and takes the
   next number free across both, never a number the other wrapper uses. An addition bumps `PROTOCOL_MINOR`
-  (`crates/felis-protocol/src/preface.rs` and the pinned declaration in `felis.proto`'s header) and is gated on the
-  connection's effective minor (the min of the two peers) before a sender may use it.
+  (`crates/felis-protocol/src/preface.rs` and the pinned declaration in `felis.proto`'s header). An arm, a closed-enum
+  value, a connection mode or a row-codec version is gated on the connection's effective minor (the min of the two
+  peers) before a sender may use it. A field goes in a payload message, never on a family wrapper, and must decode when
+  absent. It joins `ADDED_FIELDS` in `crates/felis-protocol/src/minor.rs` and is sent to every peer only when its ledger
+  row can state a safe outcome for an older peer that skips it, in either direction. Otherwise, as for a request
+  parameter like `SearchQuery.source`, it is gated: a `GatedField` row in the same file. A new member of a payload
+  message's `oneof` is not a field: an older peer reads the oneof as unset. It needs a send gate, and
+  `a_payload_oneof_keeps_the_members_of_the_base_schema` refuses it until one exists.
 - Renumbering, retyping, or reinterpreting an existing field is a semantic break: bump `PROTOCOL_MAJOR`; the preface
   then refuses the older half outright.
 - `--format` output shapes are append-only too; their epoch is the `"v"` every object carries.
