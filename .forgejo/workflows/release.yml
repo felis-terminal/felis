@@ -1,5 +1,5 @@
-# The Windows chain below repeats `windows.yml`'s `windows-test`, `windows-smoke`
-# (its `main` release-build path) and `windows-package` step for step: a tag may
+# The Windows chain below repeats `windows.yml`'s `windows-test` and `windows-smoke`
+# (its `main` release-build and packaging path) step for step: a tag may
 # point at a revision that never had a green `main` run, and Forgejo Actions has
 # neither `workflow_call` nor a composite action that can carry these jobs'
 # `runs-on` and step-level `timeout-minutes`. Changes to either copy belong in both.
@@ -346,33 +346,16 @@ jobs:
         shell: powershell
         # Under $ErrorActionPreference = 'stop', taskkill stderr fails the step when no process exists; use Stop-Process.
         run: Get-Process -Name felis-daemon -ErrorAction SilentlyContinue | Stop-Process -Force
-      - uses: ./.forgejo/actions/cargo-env/done
-        if: always()
-
-  windows-package:
-    name: package felis (x86_64-pc-windows-msvc)
-    runs-on: x86_64-windows
-    needs: [verify-tag, windows-test, windows-smoke]
-    timeout-minutes: 90
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: ./.forgejo/actions/cargo-env
-      - name: build the release binaries
-        shell: powershell
-        run: |
-          cargo build --release --locked -p felis-daemon -p felis-client -p felis-cli
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-        timeout-minutes: 60
       - name: assemble the zip
         shell: powershell
         run: |
           $stage = "dist\felis-x86_64-pc-windows-msvc"
           New-Item -ItemType Directory -Force -Path $stage | Out-Null
-          Copy-Item "$env:CARGO_TARGET_DIR\release\felis.exe"        $stage
-          Copy-Item "$env:CARGO_TARGET_DIR\release\felis-client.exe" $stage
-          Copy-Item "$env:CARGO_TARGET_DIR\release\felis-daemon.exe" $stage
-          Copy-Item README.md                                          $stage
-          Copy-Item LICENSE                                            $stage
+          Copy-Item "$env:SMOKE_BIN_DIR\felis.exe"        $stage
+          Copy-Item "$env:SMOKE_BIN_DIR\felis-client.exe" $stage
+          Copy-Item "$env:SMOKE_BIN_DIR\felis-daemon.exe" $stage
+          Copy-Item README.md                              $stage
+          Copy-Item LICENSE                                $stage
           Compress-Archive -Path "$stage\*" -DestinationPath dist\felis-x86_64-pc-windows-msvc.zip -Force
       # Forgejo fork rather than upstream actions/upload-artifact: upstream rejects non-github.com runners.
       - uses: https://code.forgejo.org/forgejo/upload-artifact@cb8afe72b42edc798abfb8fcb556cf660d894245 # v5 (upstream v4 API, GHES check disabled)
@@ -386,7 +369,7 @@ jobs:
   release:
     name: publish the release page
     runs-on: x86_64-linux
-    needs: [flake-check, build, proto-compat, linux-smoke, linux-package, darwin-package, windows-package]
+    needs: [flake-check, build, proto-compat, linux-smoke, linux-package, darwin-package, windows-smoke]
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
