@@ -7,7 +7,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use felis_daemon::graphics::{
-    ApcCtx, ImageEvent, SavedImages, ShmDeferral, apply_screen_switch, clear_images,
+    ApcCtx, ImageEvent, SavedScreens, ShmDeferral, apply_screen_switch, clear_images,
     dispatch_apc_body, materialize_image_events,
 };
 use felis_grid::images::{ImageStore, Placements};
@@ -29,8 +29,8 @@ struct State {
     grid: Grid,
     images: ImageStore,
     placements: Placements,
-    /// Mirror of `Session::saved_primary`.
-    saved_primary: Option<SavedImages>,
+    /// Mirror of `Session::saved_screens`.
+    saved: SavedScreens,
     events: Vec<ImageEvent>,
     shm: ShmDeferral,
 }
@@ -42,7 +42,7 @@ impl State {
             grid: Grid::new(24, 80),
             images: ImageStore::new(TEST_STORE_CAP),
             placements: Placements::new(),
-            saved_primary: None,
+            saved: SavedScreens::default(),
             events: Vec::new(),
             shm: ShmDeferral::default(),
         }
@@ -79,7 +79,7 @@ impl State {
                     switch,
                     &mut self.images,
                     &mut self.placements,
-                    &mut self.saved_primary,
+                    &mut self.saved,
                     &mut self.events,
                 ),
                 PtyEffect::ImagesCleared(scope) => clear_images(
@@ -88,12 +88,12 @@ impl State {
                     &mut self.events,
                     scope,
                 ),
-                PtyEffect::HardReset if self.saved_primary.is_some() => {
+                PtyEffect::HardReset if self.saved.primary.is_some() => {
                     apply_screen_switch(
-                        felis_grid::ScreenSwitch::LeftAlternate,
+                        felis_grid::ScreenSwitch::LeftAlternate { kept: false },
                         &mut self.images,
                         &mut self.placements,
-                        &mut self.saved_primary,
+                        &mut self.saved,
                         &mut self.events,
                     );
                 }
@@ -691,7 +691,7 @@ fn ris_on_the_alternate_screen_keeps_primary_scrollback_placements() {
 
     s.advance_and_drain(b"\x1bc");
 
-    assert_eq!(s.saved_primary, None);
+    assert_eq!(s.saved.primary, None);
     assert_eq!(
         s.placements
             .iter()
@@ -716,7 +716,7 @@ fn a_clear_on_the_alternate_screen_keeps_the_primary_screen_images() {
     .unwrap();
     s.advance_and_drain(b"\x1b[?1049h\x1b[2J");
     s.drain_events();
-    let saved = s.saved_primary.as_ref().unwrap();
+    let saved = s.saved.primary.as_ref().unwrap();
     assert!(saved.images.get(ImageId(42)).is_some());
 
     s.advance_and_drain(b"\x1b[?1049l");
@@ -744,10 +744,10 @@ fn alt_screen_entry_hides_primary_placements() {
         "alt-screen entry must clear the live placements table",
     );
     assert!(
-        s.saved_primary.is_some(),
+        s.saved.primary.is_some(),
         "the primary placement must be stashed for restore",
     );
-    let saved = s.saved_primary.as_ref().unwrap();
+    let saved = s.saved.primary.as_ref().unwrap();
     assert_eq!(saved.placements.len(), 1, "stashed primary placement count");
     assert_eq!(
         saved.images.get(ImageId(11)).unwrap().refcount(),
@@ -792,7 +792,7 @@ fn alt_screen_leave_restores_primary_placements() {
 
     assert_eq!(s.placements.len(), 1, "primary placement restored");
     assert!(
-        s.saved_primary.is_none(),
+        s.saved.primary.is_none(),
         "save slot must be empty after restore",
     );
     let restored = s.placements.iter().next().unwrap();
@@ -895,7 +895,7 @@ fn second_alt_screen_entry_starts_with_no_alt_placements() {
         s.placements.iter().collect::<Vec<_>>(),
     );
     assert_eq!(
-        s.saved_primary.as_ref().map(|saved| saved
+        s.saved.primary.as_ref().map(|saved| saved
             .placements
             .iter()
             .map(|p| p.image_id.0)
@@ -917,8 +917,8 @@ fn redundant_alt_screen_entry_does_not_overwrite_saved_primary() {
 
     s.advance_and_drain(b"\x1b[?1049h\x1b[?1049h");
     s.drain_events();
-    assert!(s.saved_primary.is_some());
-    assert_eq!(s.saved_primary.as_ref().unwrap().placements.len(), 1);
+    assert!(s.saved.primary.is_some());
+    assert_eq!(s.saved.primary.as_ref().unwrap().placements.len(), 1);
 
     s.advance_and_drain(b"\x1b[?1049l");
     assert_eq!(
@@ -936,7 +936,8 @@ fn a_range_delete_on_the_alternate_screen_keeps_the_primary_screen_images() {
     s.advance_and_drain(b"\x1b[?1049h");
     s.dispatch(&body("Ga=d,d=R,x=1,y=20", b""));
     assert!(
-        s.saved_primary
+        s.saved
+            .primary
             .as_ref()
             .unwrap()
             .images
@@ -966,4 +967,58 @@ fn an_alternate_screen_image_does_not_replace_a_primary_one_with_its_id() {
     let entry = s.images.get(ImageId(5)).unwrap();
     assert_eq!(&entry.frame(0).unwrap().pixels[..], &[1, 1, 1, 1]);
     assert_eq!(s.placements.len(), 1);
+}
+
+/// kitty keeps the alternate screen's images with the buffer `?47l`
+/// keeps, so `?47h` brings both back.
+#[test]
+fn a_47_reentry_brings_back_the_alternate_screen_images() {
+    let mut s = State::new();
+    s.dispatch(&body(
+        "Ga=T,i=1,f=32,s=1,v=1,c=4,r=2,q=2",
+        &tiny_rgba_payload(),
+    ));
+    s.advance_and_drain(b"\x1b[?47h");
+    s.dispatch(&body(
+        "Ga=T,i=2,f=32,s=1,v=1,c=4,r=2,q=2",
+        &tiny_rgba_payload(),
+    ));
+    s.advance_and_drain(b"\x1b[?47l");
+    s.drain_events();
+
+    s.advance_and_drain(b"\x1b[?47h");
+
+    assert_eq!(
+        s.placements
+            .iter()
+            .map(|p| p.image_id.0)
+            .collect::<Vec<_>>(),
+        vec![2]
+    );
+    let events = s.drain_events();
+    assert!(
+        events.iter().any(|m| matches!(
+            m,
+            ImageMsg::Placement {
+                image_id: ImageId(2),
+                ..
+            }
+        )),
+        "the window gets the alternate placement back: {events:?}",
+    );
+}
+
+/// `?1047l` discards the alternate buffer, and its images with it.
+#[test]
+fn a_1047_leave_discards_the_alternate_screen_images() {
+    let mut s = State::new();
+    s.advance_and_drain(b"\x1b[?1047h");
+    s.dispatch(&body(
+        "Ga=T,i=2,f=32,s=1,v=1,c=4,r=2,q=2",
+        &tiny_rgba_payload(),
+    ));
+    s.advance_and_drain(b"\x1b[?1047l\x1b[?47h");
+
+    assert!(s.placements.is_empty());
+    assert!(s.images.is_empty());
 }

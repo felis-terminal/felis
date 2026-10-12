@@ -106,15 +106,14 @@ fn replay_effects(
             // back first so the clear that follows spares their history
             // rows, as kitty's reset of the primary screen does.
             PtyEffect::HardReset => {
-                if session.saved_primary.is_some() {
-                    crate::graphics::apply_screen_switch(
-                        felis_grid::ScreenSwitch::LeftAlternate,
-                        &mut session.images,
-                        &mut session.placements,
-                        &mut session.saved_primary,
-                        &mut session.image_events,
-                    );
-                }
+                crate::graphics::apply_screen_switch(
+                    felis_grid::ScreenSwitch::LeftAlternate { kept: false },
+                    &mut session.images,
+                    &mut session.placements,
+                    &mut session.saved_screens,
+                    &mut session.image_events,
+                );
+                session.saved_screens.alternate = None;
             }
             // Parked for `session_task::fan_out_grid_state`, the only consumer
             // that knows each shadow's damage.
@@ -148,7 +147,7 @@ fn replay_effects(
                     switch,
                     &mut session.images,
                     &mut session.placements,
-                    &mut session.saved_primary,
+                    &mut session.saved_screens,
                     &mut session.image_events,
                 );
             }

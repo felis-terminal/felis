@@ -94,14 +94,16 @@ fn adjacent_scrolls_coalesce_into_one_entry() {
 fn an_intervening_effect_ends_a_scroll_run() {
     let mut queue = PtyEffectQueue::default();
     queue.push_scroll(3);
-    queue.push(PtyEffect::ScreenSwitch(ScreenSwitch::EnteredAlternate));
+    queue.push(PtyEffect::ScreenSwitch(ScreenSwitch::EnteredAlternate {
+        resumed: false,
+    }));
     queue.push_scroll(4);
 
     assert_eq!(
         queue.take(),
         vec![
             PtyEffect::ScrolledIntoScrollback(3),
-            PtyEffect::ScreenSwitch(ScreenSwitch::EnteredAlternate),
+            PtyEffect::ScreenSwitch(ScreenSwitch::EnteredAlternate { resumed: false }),
             PtyEffect::ScrolledIntoScrollback(4),
         ]
     );

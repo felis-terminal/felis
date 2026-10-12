@@ -68,7 +68,7 @@ pub struct SessionState {
     pub table_gc: TableGc,
     pub images: ImageStore,
     pub placements: Placements,
-    pub saved_primary: Option<crate::graphics::SavedImages>,
+    pub saved_screens: crate::graphics::SavedScreens,
     pub reassembler: Reassembler,
     /// Shared memory names whose unlink the session still owes.
     pub shm_segments: Vec<String>,
@@ -88,7 +88,7 @@ impl Default for SessionState {
             table_gc: TableGc::new(),
             images: ImageStore::new(crate::pool::DEFAULT_IMAGE_BYTE_CAP),
             placements: Placements::new(),
-            saved_primary: None,
+            saved_screens: crate::graphics::SavedScreens::default(),
             reassembler: Reassembler::new(),
             shm_segments: Vec::new(),
             reported_focus: false,
@@ -330,7 +330,7 @@ mod tests {
             quiet: 0,
             anonymous: false,
         });
-        state.saved_primary = Some(crate::graphics::SavedImages {
+        state.saved_screens.primary = Some(crate::graphics::SavedImages {
             images: state.images.clone(),
             placements: state.placements.clone(),
         });

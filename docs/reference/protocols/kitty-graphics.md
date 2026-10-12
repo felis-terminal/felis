@@ -101,11 +101,12 @@ and `DECSTR` leave placements alone. The daemon sends `PlacementRemoved` and `De
 corresponding textures.
 
 The primary and alternate screens each have an image store and placements of their own, as in kitty, so an id on one
-screen never names an image on the other. Switching to the alternate screen (`?1049h`) stashes the primary screen's
-images and placements and starts the alternate screen with an empty store; switching back (`?1049l`) drops the alternate
-screen's images and placements and restores the primary ones. Attached clients mirror only the screen being shown: the
-switch sends `PlacementRemoved` and `Delete` for the screen left behind, and re-sends the images and placements of the
-one coming up.
+screen never names an image on the other. Entering the alternate screen (`?47h`, `?1047h`, `?1049h`) stashes the primary
+screen's images and placements. The alternate screen starts with an empty store unless a `?47l` kept its buffer, in
+which case that buffer's images and placements come back with it. Leaving restores the primary screen's; `?1047l` and
+`?1049l` drop the alternate screen's, and `?47l` keeps them for the next entry. Attached clients mirror only the screen
+being shown: the switch sends `PlacementRemoved` and `Delete` for the screen left behind, and re-sends the images and
+placements of the one coming up.
 
 ## Scrollback-anchored placements
 

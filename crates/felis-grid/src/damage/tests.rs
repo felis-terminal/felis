@@ -9,7 +9,10 @@ fn entering_alt_screen_pushes_a_screen_switch_event() {
     let mut p = Parser::new();
     drive(&mut p, &mut g, b"\x1b[?1049h");
     let switches = screen_switches(&mut g);
-    assert_eq!(switches, vec![ScreenSwitch::EnteredAlternate]);
+    assert_eq!(
+        switches,
+        vec![ScreenSwitch::EnteredAlternate { resumed: false }]
+    );
 }
 
 #[test]
@@ -20,7 +23,10 @@ fn leaving_alt_screen_pushes_a_screen_switch_event() {
     let switches = screen_switches(&mut g);
     assert_eq!(
         switches,
-        vec![ScreenSwitch::EnteredAlternate, ScreenSwitch::LeftAlternate,],
+        vec![
+            ScreenSwitch::EnteredAlternate { resumed: false },
+            ScreenSwitch::LeftAlternate { kept: false },
+        ],
     );
 }
 
@@ -32,7 +38,10 @@ fn redundant_alt_screen_entry_does_not_push_an_extra_event() {
     let mut p = Parser::new();
     drive(&mut p, &mut g, b"\x1b[?1049h\x1b[?1049h");
     let switches = screen_switches(&mut g);
-    assert_eq!(switches, vec![ScreenSwitch::EnteredAlternate]);
+    assert_eq!(
+        switches,
+        vec![ScreenSwitch::EnteredAlternate { resumed: false }]
+    );
 }
 
 /// Some programs emit `?1049l` on cleanup regardless of state.
@@ -331,4 +340,25 @@ fn setting_the_scroll_margins_marks_no_row() {
     g.damage_mut().clear();
     drive(&mut p, &mut g, b"\x1b[2;5r\x1b[r");
     assert_eq!(g.damage().dirty_rows().count(), 0);
+}
+
+#[test]
+fn a_47_round_trip_keeps_the_alternate_buffer_and_the_next_entry_resumes_it() {
+    let mut g = Grid::new(4, 8);
+    let mut p = Parser::new();
+    drive(
+        &mut p,
+        &mut g,
+        b"\x1b[?47h\x1b[?47l\x1b[?47h\x1b[?47l\x1b[?1049h",
+    );
+    assert_eq!(
+        screen_switches(&mut g),
+        vec![
+            ScreenSwitch::EnteredAlternate { resumed: false },
+            ScreenSwitch::LeftAlternate { kept: true },
+            ScreenSwitch::EnteredAlternate { resumed: true },
+            ScreenSwitch::LeftAlternate { kept: true },
+            ScreenSwitch::EnteredAlternate { resumed: true },
+        ],
+    );
 }

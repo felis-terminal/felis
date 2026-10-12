@@ -1870,7 +1870,7 @@ where
         signals,
         images: felis_grid::images::ImageStore::new(crate::pool::DEFAULT_IMAGE_BYTE_CAP),
         placements: felis_grid::images::Placements::new(),
-        saved_primary: None,
+        saved_screens: SavedScreens::default(),
         graphics_reassembler: Reassembler::new(),
         image_events: Vec::new(),
         scroll_ops: Vec::new(),

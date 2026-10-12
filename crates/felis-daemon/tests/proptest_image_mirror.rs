@@ -6,7 +6,7 @@
 
 use felis_client_core::image_shadow::ImageShadow;
 use felis_daemon::graphics::{
-    ApcCtx, ImageEvent, SavedImages, ShmDeferral, apply_screen_switch, clear_images,
+    ApcCtx, ImageEvent, SavedScreens, ShmDeferral, apply_screen_switch, clear_images,
     dispatch_apc_body, free_unreferenced_anonymous, materialize_image_events,
 };
 use std::fmt::Write as _;
@@ -93,6 +93,8 @@ fn op() -> impl Strategy<Value = Op> {
         prop_oneof![
             Just("\x1b[?1049h"),
             Just("\x1b[?1049l"),
+            Just("\x1b[?47h"),
+            Just("\x1b[?47l"),
             Just("\x1b[2J"),
             Just("\x1b[3J"),
             Just("\x1bc"),
@@ -108,7 +110,7 @@ struct Session {
     grid: Grid,
     images: ImageStore,
     placements: Placements,
-    saved_primary: Option<SavedImages>,
+    saved: SavedScreens,
     events: Vec<ImageEvent>,
     shm: ShmDeferral,
     window: ImageShadow,
@@ -122,7 +124,7 @@ impl Session {
             grid: Grid::new(6, 20),
             images: ImageStore::new(store_cap()),
             placements: Placements::new(),
-            saved_primary: None,
+            saved: SavedScreens::default(),
             events: Vec::new(),
             shm: ShmDeferral::default(),
             window: ImageShadow::new(),
@@ -154,7 +156,7 @@ impl Session {
                     switch,
                     &mut self.images,
                     &mut self.placements,
-                    &mut self.saved_primary,
+                    &mut self.saved,
                     &mut self.events,
                 ),
                 PtyEffect::ImagesCleared(scope) => clear_images(
@@ -163,13 +165,16 @@ impl Session {
                     &mut self.events,
                     scope,
                 ),
-                PtyEffect::HardReset if self.saved_primary.is_some() => apply_screen_switch(
-                    felis_grid::ScreenSwitch::LeftAlternate,
-                    &mut self.images,
-                    &mut self.placements,
-                    &mut self.saved_primary,
-                    &mut self.events,
-                ),
+                PtyEffect::HardReset => {
+                    apply_screen_switch(
+                        felis_grid::ScreenSwitch::LeftAlternate { kept: false },
+                        &mut self.images,
+                        &mut self.placements,
+                        &mut self.saved,
+                        &mut self.events,
+                    );
+                    self.saved.alternate = None;
+                }
                 PtyEffect::ScrolledIntoScrollback(n) => {
                     let retain = u32::try_from(self.grid.scrollback().len()).unwrap();
                     self.shift(n, retain);

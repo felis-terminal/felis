@@ -497,6 +497,15 @@ pub struct SavedImages {
     pub placements: felis_grid::images::Placements,
 }
 
+/// The images of the screen not shown: the primary one while the
+/// alternate screen is up, and the alternate one a `?47l` kept.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct SavedScreens {
+    pub primary: Option<SavedImages>,
+    pub alternate: Option<SavedImages>,
+}
+
 /// Swap the live image store and placements for the other screen's,
 /// which the client's one mirrored store follows. Each placement is
 /// removed explicitly: a `Delete` then a `Transmit` of one id collapses
@@ -505,25 +514,34 @@ pub fn apply_screen_switch(
     switch: ScreenSwitch,
     images: &mut felis_grid::images::ImageStore,
     placements: &mut felis_grid::images::Placements,
-    saved_primary: &mut Option<SavedImages>,
+    saved: &mut SavedScreens,
     events: &mut Vec<ImageEvent>,
 ) {
     tracing::trace!(
         target: "felis_daemon::graphics",
         ?switch,
-        saved_primary = saved_primary.is_some(),
+        saved_primary = saved.primary.is_some(),
         live_placements = placements.len(),
         "apply_screen_switch",
     );
-    if switch == ScreenSwitch::LeftAlternate && saved_primary.is_none() {
-        return;
-    }
+    let coming = match switch {
+        ScreenSwitch::EnteredAlternate { resumed } => {
+            let alternate = saved.alternate.take().filter(|_| resumed);
+            alternate.unwrap_or_else(|| SavedImages {
+                images: felis_grid::images::ImageStore::new(images.bytes_cap()),
+                placements: felis_grid::images::Placements::new(),
+            })
+        }
+        ScreenSwitch::LeftAlternate { .. } => {
+            let Some(primary) = saved.primary.take() else {
+                return;
+            };
+            primary
+        }
+    };
     let leaving = SavedImages {
-        images: std::mem::replace(
-            images,
-            felis_grid::images::ImageStore::new(images.bytes_cap()),
-        ),
-        placements: std::mem::take(placements),
+        images: std::mem::replace(images, coming.images),
+        placements: std::mem::replace(placements, coming.placements),
     };
     for p in leaving.placements.iter() {
         events.push(ImageEvent::PlacementRemoved {
@@ -537,22 +555,16 @@ pub fn apply_screen_switch(
     for id in leaving.images.iter_ids() {
         events.push(ImageEvent::Delete { id });
     }
+    for id in images.iter_ids() {
+        events.push(ImageEvent::Transmit(id));
+    }
+    events.extend(placements.iter().map(placement_event));
+    events.extend(placements.iter_virtual().map(virtual_event));
     match switch {
         // A leftover save means a missed `LeftAlternate` drain;
         // overwrite rather than panic.
-        ScreenSwitch::EnteredAlternate => *saved_primary = Some(leaving),
-        ScreenSwitch::LeftAlternate => {
-            let Some(saved) = saved_primary.take() else {
-                unreachable!("checked on entry");
-            };
-            *images = saved.images;
-            *placements = saved.placements;
-            for id in images.iter_ids() {
-                events.push(ImageEvent::Transmit(id));
-            }
-            events.extend(placements.iter().map(placement_event));
-            events.extend(placements.iter_virtual().map(virtual_event));
-        }
+        ScreenSwitch::EnteredAlternate { .. } => saved.primary = Some(leaving),
+        ScreenSwitch::LeftAlternate { kept } => saved.alternate = kept.then_some(leaving),
     }
 }
 
@@ -587,18 +599,21 @@ const fn placement_event(p: &Placement) -> ImageEvent {
 }
 
 /// A cell-size change re-resolves every auto extent, on both screens
-/// (kitty's `screen_rescale_images`). The stashed primary screen emits
-/// nothing: it is re-stated in full when restored.
+/// (kitty's `screen_rescale_images`). A screen not shown emits
+/// nothing: it is re-stated in full when it comes back.
 pub fn rescale_placements(
     images: &felis_grid::images::ImageStore,
     placements: &mut felis_grid::images::Placements,
-    saved_primary: Option<&mut SavedImages>,
+    saved: &mut SavedScreens,
     events: &mut Vec<ImageEvent>,
     cell_px: (u16, u16),
 ) {
     placements.rescale(images, cell_px, |p| events.push(placement_event(p)));
-    if let Some(saved) = saved_primary {
-        saved.placements.rescale(&saved.images, cell_px, |_| {});
+    for screen in [saved.primary.as_mut(), saved.alternate.as_mut()]
+        .into_iter()
+        .flatten()
+    {
+        screen.placements.rescale(&screen.images, cell_px, |_| {});
     }
 }
 

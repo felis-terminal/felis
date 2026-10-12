@@ -208,10 +208,12 @@ pub struct ScrollOp {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "state-dump", derive(Serialize, Deserialize))]
 pub enum ScreenSwitch {
-    /// `?1049h`.
-    EnteredAlternate,
-    /// `?1049l`.
-    LeftAlternate,
+    /// `?47h` / `?1047h` / `?1049h`; `resumed` when the alternate
+    /// buffer a `?47l` kept comes back with it.
+    EnteredAlternate { resumed: bool },
+    /// `?47l` / `?1047l` / `?1049l`; `kept` when `?47l` keeps the
+    /// alternate buffer for the next entry.
+    LeftAlternate { kept: bool },
 }
 
 /// One parser side-effect, kept in byte-stream order.
@@ -1632,6 +1634,7 @@ impl Grid {
         // Only `?47` re-entry restores prior alt cells; `?1047` / `?1049`
         // never populate `saved_alternate` on leave.
         let restored_alt = self.screen.saved_alternate.take();
+        let resumed = restored_alt.is_some();
         let blank_cells = || -> Vec<Cell> {
             vec![Cell::default(); usize::from(self.screen.rows) * usize::from(self.screen.cols)]
         };
@@ -1710,7 +1713,9 @@ impl Grid {
         }
         self.screen.damage.mark_all();
         self.pty_effects
-            .push(PtyEffect::ScreenSwitch(ScreenSwitch::EnteredAlternate));
+            .push(PtyEffect::ScreenSwitch(ScreenSwitch::EnteredAlternate {
+                resumed,
+            }));
     }
 
     /// `restore_cursor` is `?1049l` vs `?47l` / `?1047l`. `preserve_alt`
@@ -1766,7 +1771,9 @@ impl Grid {
         let remap = self.reflow_restored_primary(target_rows, target_cols);
         self.screen.damage.mark_all();
         self.pty_effects
-            .push(PtyEffect::ScreenSwitch(ScreenSwitch::LeftAlternate));
+            .push(PtyEffect::ScreenSwitch(ScreenSwitch::LeftAlternate {
+                kept: preserve_alt,
+            }));
         // After the switch effect: the remap must see the restored
         // primary placements.
         if let Some(remap) = remap {

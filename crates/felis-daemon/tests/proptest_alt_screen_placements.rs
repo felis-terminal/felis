@@ -10,7 +10,7 @@
 
 use felis_daemon::graphics::ImageEvent;
 use felis_daemon::graphics::{
-    ApcCtx, SavedImages, ShmDeferral, apply_screen_switch, dispatch_apc_body,
+    ApcCtx, SavedScreens, ShmDeferral, apply_screen_switch, dispatch_apc_body,
 };
 use felis_grid::images::{ImageStore, Placements};
 use felis_grid::{Grid, PtyEffect};
@@ -45,7 +45,7 @@ struct Harness {
     grid: Grid,
     images: ImageStore,
     placements: Placements,
-    saved_primary: Option<SavedImages>,
+    saved: SavedScreens,
     events: Vec<ImageEvent>,
     shm: ShmDeferral,
 }
@@ -57,7 +57,7 @@ impl Harness {
             grid: Grid::new(24, 80),
             images: ImageStore::new(TEST_STORE_CAP),
             placements: Placements::new(),
-            saved_primary: None,
+            saved: SavedScreens::default(),
             events: Vec::new(),
             shm: ShmDeferral::default(),
         }
@@ -72,7 +72,7 @@ impl Harness {
                     switch,
                     &mut self.images,
                     &mut self.placements,
-                    &mut self.saved_primary,
+                    &mut self.saved,
                     &mut self.events,
                 );
             }
@@ -159,7 +159,7 @@ proptest! {
 
         let after = placement_keys(&h.placements);
         prop_assert_eq!(before, after);
-        prop_assert!(h.saved_primary.is_none());
+        prop_assert!(h.saved.primary.is_none());
         prop_assert!(h.on_primary());
     }
 
@@ -176,7 +176,7 @@ proptest! {
         }
         // One ref per live placement: `i=` reuse makes
         // `ImageStore::insert` overwrite and reset the refcount to zero.
-        prop_assert!(h.saved_primary.is_none(), "primary-only end state");
+        prop_assert!(h.saved.primary.is_none(), "primary-only end state");
         prop_assert_eq!(refcount_sum(&h.images) as usize, h.placements.len());
     }
 
@@ -190,7 +190,7 @@ proptest! {
         for op in &ops {
             h.drive(*op);
             prop_assert_eq!(
-                h.saved_primary.is_some(),
+                h.saved.primary.is_some(),
                 !h.on_primary(),
                 "slot vs grid state out of sync after op {:?}",
                 op,
