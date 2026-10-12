@@ -1545,14 +1545,15 @@ fn upsert_placement(
     let z_index = control_i32(complete, b'z').unwrap_or(0);
     let no_cursor_move = !kitty_graphics::moves_cursor(&complete.controls);
     let quiet = quiet_level(complete);
-    let source = source_rect(complete);
+    let (image_w, image_h) = images
+        .get(image_id)
+        .map_or((0, 0), |entry| (entry.width, entry.height));
+    let source = source_rect(complete, image_w, image_h);
     // Natural sizing (`c=0` / `r=0`) resolves now, while the image
     // dimensions are in scope: the cursor advance needs the extent, and
     // a cursor left at the anchor row prints the next prompt under the
     // image (the pixcat burn-in).
-    let source_px = images
-        .get(image_id)
-        .and_then(|entry| felis_grid::images::clip_source(entry.width, entry.height, source))
+    let source_px = felis_grid::images::clip_source(image_w, image_h, source)
         .map_or((0, 0), |r| (r.width, r.height));
     let cols = Extent::resolve(req_cols, source_px.0, cell_pixel_w);
     let rows = Extent::resolve(req_rows, source_px.1, cell_pixel_h);
@@ -1644,21 +1645,23 @@ fn drop_evicted(
     }
 }
 
-/// All four or none: a partial spec collapses to the whole image per
-/// Kitty.
-fn source_rect(complete: &CompleteCommand) -> Option<felis_protocol::messages::SourceRect> {
-    let x = control_u32(complete, b'x')?;
-    let y = control_u32(complete, b'y')?;
-    let width = control_u32(complete, b'w')?;
-    let height = control_u32(complete, b'h')?;
-    if width == 0 || height == 0 {
+/// kitty's `handle_put_command` defaults each key on its own: `x`/`y`
+/// to 0, an absent or zero `w`/`h` to the image's size. Clipping to what
+/// is left past `x`/`y` is [`felis_grid::images::clip_source`]'s.
+fn source_rect(
+    complete: &CompleteCommand,
+    image_width: u32,
+    image_height: u32,
+) -> Option<felis_protocol::messages::SourceRect> {
+    let [x, y, w, h] = b"xywh".map(|key| control_u32(complete, key));
+    if [x, y, w, h].iter().all(Option::is_none) {
         return None;
     }
     Some(felis_protocol::messages::SourceRect {
-        x,
-        y,
-        width,
-        height,
+        x: x.unwrap_or(0),
+        y: y.unwrap_or(0),
+        width: w.filter(|&w| w != 0).unwrap_or(image_width),
+        height: h.filter(|&h| h != 0).unwrap_or(image_height),
     })
 }
 
