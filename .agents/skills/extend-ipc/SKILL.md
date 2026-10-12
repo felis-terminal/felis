@@ -77,11 +77,11 @@ A new message/verb typically touches, in dependency order:
    - `proto/felis.proto`: the wire schema: mirror the change with the next free field number (numbers are frozen as
      declared, not derived from the Rust variant order), then regenerate the committed codegen with `just proto` (CI
      diffs it against the schema, so a proto edit that skips regeneration cannot merge), then run `just proto-compat`:
-     `buf breaking` against the merge-base with `origin/main`, the same comparison the `proto-compat` CI job makes. For
-     an intended pre-release break, add a `base: <40-hex sha of that merge-base>` line to
-     `crates/felis-protocol/proto/BREAKING.md` with the why; the rule the gate applies is in `docs/reference/testing.md`
-     "Wire compatibility gates". A minor bump also needs its row in `PROTOCOL_MINOR`'s ledger (`docs/reference/ipc.md`)
-     and a matching `MINOR_LEDGER` entry in `preface.rs`, or the sync test fails;
+     `buf breaking` against the merge-base with `origin/main`, the same comparison CI makes. For an intended pre-release
+     break, add a `base: <40-hex sha of that merge-base>` line to `crates/felis-protocol/proto/BREAKING.md` with the
+     why; the rule the gate applies is in `docs/reference/testing.md` "Wire compatibility gates". A minor bump also
+     needs its row in `PROTOCOL_MINOR`'s ledger (`docs/reference/ipc.md`) and a matching `MINOR_LEDGER` entry in
+     `preface.rs`, or the sync test fails;
    - `src/convert/<family>.rs`: the domain↔wire mapping: infallible `From<domain>`, fallible `TryFrom<wire>`. Narrow
      every proto-widened integer through `narrow()` (never a bare `as` cast), reject `_UNSPECIFIED` enum sentinels. No
      per-family test corpus lives here: only targeted decode-rejection tests that need a hand-built wire value (bad

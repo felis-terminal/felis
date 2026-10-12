@@ -224,10 +224,9 @@ passed, not the target's gate to exist: a gate that is defined and wired but has
 
 The binary cache is not gated: the derivation is content-addressed, so a revision the cache lacks still builds to the
 same store path on the user's machine, and holding a push back withholds only speed, never the revision. The push
-therefore runs where the package builds (`pr.yml` `linux-smoke` and `darwin.yml` `darwin-build` on `main`,
-`release.yml`'s build jobs on a tag), and it names the store path it built rather than arming a post-build hook, which
-pushes nothing when a re-run finds the path already in the store. A pull request never pushes, since its code is not
-trusted with the cache's credential.
+therefore runs where the package builds (`pr.yml` and `darwin.yml` on `main`, `release.yml` on a tag), and it names the
+store path it built rather than arming a post-build hook, which pushes nothing when a re-run finds the path already in
+the store. A pull request never pushes, since its code is not trusted with the cache's credential.
 
 Rejected: a publish job per target behind that revision's smoke, which gated nothing a user could not build from the
 same revision and cost a runner slot and a second evaluation per `main` revision.
@@ -251,7 +250,7 @@ describe as untested. Withholding the expression instead would remove the only w
 
 ### A tag rebuilds rather than promotes
 
-`release.yml` runs the whole gate again on the tag's own revision, and `linux-smoke` refuses to push unless the built
+`release.yml` runs the whole gate again on the tag's own revision, and its Linux smoke refuses to push unless the built
 binary's own identity agrees with the tag.
 
 Promotion is rejected. A release could name the store path the tagged commit's own `main` run already pushed and attach
@@ -289,6 +288,6 @@ surface on a real GPU, the window server, the PTY, the input path.
 What it does not witness is everything a machine would re-check. No frame is compared against an expected one, no CI run
 reproduces the result, and the suite does not run on the target at all, so a regression only Cargo tests would catch
 reaches the cache. The evidence is also one person's report about the revisions that person happened to run, and a
-reader of a green run log cannot find it. The cache push runs in `darwin-build` after the build succeeds, so the cache
-never carries a path whose build failed. _Revisit if_ a darwin frontend smoke lands, which retires this class of
-evidence and makes the row read like `x86_64-linux`'s.
+reader of a green run log cannot find it. The cache push runs only after the darwin build succeeds, so the cache never
+carries a path whose build failed. _Revisit if_ a darwin frontend smoke lands, which retires this class of evidence and
+makes the row read like `x86_64-linux`'s.

@@ -94,7 +94,7 @@ test-msrv:
 fmt:
     treefmt
 
-# Check formatting without writing via treefmt (mirrors the treefmt check under `nix flake check`).
+# Check formatting without writing via treefmt (mirrors the treefmt hook under `nix flake check`).
 [group('lint')]
 fmt-check:
     treefmt --fail-on-change
