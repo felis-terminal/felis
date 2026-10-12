@@ -501,6 +501,70 @@ async fn info_prints_session_metadata() {
     server.abort();
 }
 
+/// A program's OSC 7501 report reaches both `sessions list --format
+/// json` and the human `sessions info`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn list_and_info_show_program_status_records() {
+    let tmp = private_dir();
+    let factory: SessionFactory = Arc::new(|_| {
+        let mut cmd = PtyCommand::new("/bin/sh");
+        cmd.args([
+            "-c",
+            "printf '\\033]7501;state=blocked:kind=question:progress=50:app=claude-code:msg=d2hpY2ggZmlsZT8=\\033\\\\'; read x",
+        ]);
+        cmd.env_clear();
+        cmd.env("PATH", "/bin:/usr/bin");
+        cmd
+    });
+    let (server, socket, pool) = spawn_daemon(&tmp, factory).await;
+    let id = create_and_detach(&socket).await;
+    let id_hex = format!("{id:032x}");
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while pool
+        .lock()
+        .await
+        .handle_cloned(felis_daemon::SessionId(id))
+        .is_none_or(|handle| handle.meta_snapshot().program_status.is_empty())
+    {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the report never reached the daemon"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+
+    let list = cli_command()
+        .arg("--socket")
+        .arg(&socket)
+        .args(["sessions", "list", "--format", "json"])
+        .output()
+        .expect("run felis sessions list --format json");
+    assert!(list.status.success(), "{list:?}");
+    let list_out = String::from_utf8_lossy(&list.stdout);
+    assert!(
+        list_out.contains(
+            r#""program_status":[{"id":"","state":"blocked","kind":"question","progress":50,"app":"claude-code","msg":"which file?"}]"#
+        ),
+        "list --format json must carry the record: {list_out}",
+    );
+
+    let info = cli_command()
+        .arg("--socket")
+        .arg(&socket)
+        .args(["sessions", "info", &id_hex])
+        .output()
+        .expect("run felis sessions info");
+    assert!(info.status.success(), "{info:?}");
+    let info_out = String::from_utf8_lossy(&info.stdout);
+    assert!(
+        info_out.contains("status:   (root) blocked question 50% [claude-code]: which file?\n"),
+        "info must print the record: {info_out}",
+    );
+
+    server.abort();
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn kill_removes_session_and_second_call_exits_one() {
     let tmp = private_dir();

@@ -738,6 +738,27 @@ message SessionInfo {
   // gaps. It orders the switch ring, which random ids cannot. 1-based,
   // and `0` is refused at decode: every row carries one.
   uint64 sequence = 12;
+  // The session's OSC 7501 program-status records, sorted by id. Empty
+  // when no program reported one; a minor-0 reader skips the field.
+  repeated ProgramStatusRecord program_status = 13;
+}
+
+// One OSC 7501 program-status record: the keys of the last report that
+// used its id, as the program sent them. `state` and `kind` are open
+// vocabularies: a reader treats a value it does not know as unknown
+// rather than refusing the row, so a later spec revision's value needs
+// no schema change.
+message ProgramStatusRecord {
+  // "" is the root record; otherwise `/`-separated segments.
+  string id = 1;
+  string state = 2;
+  optional string kind = 3;
+  // 0..=100; a larger value is refused at decode.
+  optional uint32 progress = 4;
+  // Raw: an ancestor's app is not inherited.
+  optional string app = 5;
+  optional string title = 6;
+  optional string msg = 7;
 }
 
 // One live window attachment of a session, as OpsListed reports it.

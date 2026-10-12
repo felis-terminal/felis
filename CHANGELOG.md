@@ -32,6 +32,10 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
   resolved fonts, non-default config keys, and log paths as Markdown to paste into a bug report, or as JSON with
   `--format json`. Paths under your home directory print as `~`, and keybinding commands and texts are redacted.
 - **CLI**: `felis doctor`'s `gpu` row names the driver version where the backend reports one.
+- **Protocol / CLI**: programs that report their status over OSC 7501 (experimental, spec revision 0.4) show it in
+  `felis sessions list --format json` and `felis sessions info`, so a script can find the session whose program is
+  waiting on you. felis answers the `OSC 7501 ; ?` detection query and draws nothing.
+- **Wire**: protocol minor 1 adds `SessionInfo.program_status`; a minor-0 client skips it as an unknown field.
 
 ### Changed
 

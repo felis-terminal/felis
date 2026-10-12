@@ -519,6 +519,35 @@ pub struct SessionInfo {
     /// and `0` is refused at decode: every row carries one.
     #[prost(uint64, tag="12")]
     pub sequence: u64,
+    /// The session's OSC 7501 program-status records, sorted by id. Empty
+    /// when no program reported one; a minor-0 reader skips the field.
+    #[prost(message, repeated, tag="13")]
+    pub program_status: ::prost::alloc::vec::Vec<ProgramStatusRecord>,
+}
+/// One OSC 7501 program-status record: the keys of the last report that
+/// used its id, as the program sent them. `state` and `kind` are open
+/// vocabularies: a reader treats a value it does not know as unknown
+/// rather than refusing the row, so a later spec revision's value needs
+/// no schema change.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ProgramStatusRecord {
+    /// "" is the root record; otherwise `/`-separated segments.
+    #[prost(string, tag="1")]
+    pub id: ::prost::alloc::string::String,
+    #[prost(string, tag="2")]
+    pub state: ::prost::alloc::string::String,
+    #[prost(string, optional, tag="3")]
+    pub kind: ::core::option::Option<::prost::alloc::string::String>,
+    /// 0..=100; a larger value is refused at decode.
+    #[prost(uint32, optional, tag="4")]
+    pub progress: ::core::option::Option<u32>,
+    /// Raw: an ancestor's app is not inherited.
+    #[prost(string, optional, tag="5")]
+    pub app: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag="6")]
+    pub title: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag="7")]
+    pub msg: ::core::option::Option<::prost::alloc::string::String>,
 }
 /// One live window attachment of a session, as OpsListed reports it.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]

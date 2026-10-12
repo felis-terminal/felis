@@ -7,7 +7,9 @@ sidebar:
 Make your shell report its prompts, command boundaries, exit codes and working directory to felis. The shell does this
 with `OSC 133` prompt marks and `OSC 7` directory reports; felis never guesses where a prompt is. Without them,
 `felis sessions send --wait` never returns, `last_exit_code` stays empty, `scroll_to_prompt` does nothing,
-`capture --source command-output` finds no range, and a resize can leave copies of a full-width prompt line behind.
+`capture --source command-output` finds no range, a program's stale `working` or `blocked`
+[status](find-sessions-waiting-on-you.md) is never cleared, and a resize can leave copies of a full-width prompt line
+behind.
 
 ## Check what your shell already sends
 

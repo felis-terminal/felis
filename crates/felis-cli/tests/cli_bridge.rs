@@ -1831,6 +1831,7 @@ fn reversing_peer(socket: std::path::PathBuf) -> tokio::task::JoinHandle<Vec<u64
                 last_exit_code: None,
                 attachments: Vec::new(),
                 sequence: std::num::NonZeroU64::new(seq).expect("a minted sequence"),
+                program_status: Vec::new(),
             };
             writer
                 .send_correlated(
@@ -2374,6 +2375,7 @@ async fn scripted_attach_daemon_signaling(
             exited: false,
             attachments: Vec::new(),
             sequence: std::num::NonZeroU64::MIN,
+            program_status: Vec::new(),
         }
     }
 

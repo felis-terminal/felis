@@ -54,6 +54,7 @@ impl Requires {
 pub const ADDED_FIELDS: &[(&str, u16)] = &[
     ("ImageVirtualPlacement.placement_id", 1),
     ("ImagePlacement.requested", 1),
+    ("SessionInfo.program_status", 1),
 ];
 
 /// An added field an older peer must not skip, because skipping it

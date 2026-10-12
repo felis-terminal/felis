@@ -1875,6 +1875,7 @@ where
         graphics_reassembler: Reassembler::new(),
         image_events: Vec::new(),
         scroll_ops: Vec::new(),
+        program_status: crate::program_status::ProgramStatusStore::default(),
         cell_pixel_w: 8,
         cell_pixel_h: 16,
         reader,

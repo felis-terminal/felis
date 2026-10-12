@@ -1064,9 +1064,47 @@ fn osc_7501_report_the_decoder_drops_queues_nothing() {
     }
 }
 
+const OSC_7501_REPLY: &[u8] = b"\x1b]7501;?\x1b\\";
+
+/// One bare reply per query, ST-terminated whichever terminator asked,
+/// and it spends nothing from the status budget.
 #[test]
-fn osc_7501_query_gets_no_reply_yet() {
-    assert_eq!(effects_of(b"\x1b]7501;?\x1b\\"), []);
+fn osc_7501_query_is_answered_with_the_bare_reply() {
+    let reply = PtyEffect::Response(OSC_7501_REPLY.to_vec());
+    assert_eq!(
+        effects_of(b"\x1b]7501;?\x1b\\"),
+        std::slice::from_ref(&reply)
+    );
+    assert_eq!(effects_of(b"\x1b]7501;?\x07"), std::slice::from_ref(&reply));
+    assert_eq!(
+        effects_of(b"\x1b]7501; ? \x07"),
+        std::slice::from_ref(&reply)
+    );
+    assert_eq!(
+        effects_of(b"\x1b]7501;?\x07\x1b]7501;?\x07"),
+        [reply.clone(), reply]
+    );
+}
+
+/// Detection is answered only for a sequence that finished; a
+/// cancelled query is not a question.
+#[test]
+fn osc_7501_interrupted_query_is_not_answered() {
+    assert_eq!(effects_of(b"\x1b]7501;?\x18"), []);
+    assert_eq!(effects_of(b"\x1b]7501;?\x1a"), []);
+}
+
+/// The DA1-after-query detection the spec recommends: the 7501 reply
+/// arrives first.
+#[test]
+fn osc_7501_query_reply_precedes_a_da1_sent_after_it() {
+    assert_eq!(
+        effects_of(b"\x1b]7501;?\x1b\\\x1b[c"),
+        [
+            PtyEffect::Response(OSC_7501_REPLY.to_vec()),
+            PtyEffect::Response(DA1_REPLY.to_vec()),
+        ]
+    );
 }
 
 /// The 4096-byte cap counts the terminator, so the same body fits with

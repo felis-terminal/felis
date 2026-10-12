@@ -1325,7 +1325,14 @@ async fn wait_for_attach<R: tokio::io::AsyncRead + Unpin, W: tokio::io::AsyncWri
                         outcome: StopOutcome::Stopping
                     }
                 );
-                let sent = writer.send_correlated(&reply, correlation).await;
+                let sent = match streaming::ops_reply_frame(
+                    &reply,
+                    correlation,
+                    felis_protocol::frame::DEFAULT_MAX_BODY as usize,
+                ) {
+                    Ok(frame) => writer.send_checked(&frame).await,
+                    Err(err) => Err(err),
+                };
                 if stopping {
                     // Fired even when the reply never reached the
                     // requester: the pool is already draining or
@@ -2643,6 +2650,7 @@ fn session_info_from_meta(
         last_exit_code: meta.last_exit_code,
         attachments: meta.attachments,
         sequence: meta.sequence,
+        program_status: meta.program_status,
     }
 }
 

@@ -8384,3 +8384,63 @@ proptest::proptest! {
         }
     }
 }
+
+/// PTY EOF expires working and blocked records once the child's last
+/// output is applied: the `done` written just before `exit` stays, and
+/// the session lists it through the post-exit grace.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn pty_eof_expires_transient_records_after_the_final_report() {
+    let tmp = private_dir();
+    let path = tmp.path().join("daemon.sock");
+    let pool = Arc::new(Mutex::new(SessionPool::new()));
+    let factory = shell_factory(concat!(
+        r"printf '\033]7501;id=w:state=working\033\\\033]7501;id=b:state=blocked\007",
+        r"\033]7501;id=i:state=idle\007\033]7501;state=done\033\\'; exit 0",
+    ));
+    let caps = DaemonCaps {
+        idle: IdlePolicy {
+            post_exit_grace: Duration::from_secs(60),
+            drain_interval: Duration::from_millis(10),
+        },
+        ..DaemonCaps::default()
+    };
+    spawn_daemon_with_caps(&path, pool.clone(), factory, caps).await;
+
+    let (read_half, write_half) = connect(&path).await.unwrap();
+    let (mut reader, mut writer) = framed(read_half, write_half).await;
+    hello_welcome(&mut reader, &mut writer, false).await;
+    let id = create_and_attach(&mut reader, &mut writer).await;
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let listed = loop {
+        let meta = pool
+            .lock()
+            .await
+            .handle_cloned(SessionId(id))
+            .map(|handle| handle.meta_snapshot());
+        let ids: Option<Vec<(String, String)>> = meta.as_ref().map(|meta| {
+            meta.program_status
+                .iter()
+                .map(|r| (r.id.clone(), r.state.clone()))
+                .collect()
+        });
+        if meta.as_ref().is_some_and(|meta| meta.exited)
+            && ids.as_ref().is_some_and(|ids| ids.len() == 2)
+        {
+            break ids.unwrap_or_default();
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the exited session never settled to two records: {ids:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    };
+    assert_eq!(
+        listed,
+        [
+            (String::new(), "done".to_owned()),
+            ("i".to_owned(), "idle".to_owned())
+        ]
+    );
+}

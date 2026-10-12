@@ -7,8 +7,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use felis_protocol::codec::EitherHalf;
 use felis_protocol::messages::{
     AttachFailure, AttachRefusal, AttachTarget, Attachment, CreateFailure, Directed as _,
-    Notification, SessionInfo, SessionNotification, SessionToClientMsg, SessionToDaemonMsg,
-    SpawnArgs, Urgency,
+    Notification, ProgramStatusRecord, SessionInfo, SessionNotification, SessionToClientMsg,
+    SessionToDaemonMsg, SpawnArgs, Urgency,
 };
 
 use super::JsonError;
@@ -101,6 +101,28 @@ json_dto! {
         pub input_owner: bool,
     }
 
+    /// One OSC 7501 program-status record. `state` and `kind` are open
+    /// vocabularies; every key may be absent from a later writer's
+    /// object.
+    pub struct ProgramStatusRecordJson {
+        /// `""` is the root record.
+        #[serde(default)]
+        pub id: String,
+        #[serde(default)]
+        pub state: String,
+        #[serde(default)]
+        pub kind: Option<String>,
+        #[serde(default)]
+        #[cfg_attr(feature = "schema", schemars(range(max = 100)))]
+        pub progress: Option<u8>,
+        #[serde(default)]
+        pub app: Option<String>,
+        #[serde(default)]
+        pub title: Option<String>,
+        #[serde(default)]
+        pub msg: Option<String>,
+    }
+
     /// One roster row.
     pub struct SessionInfoJson {
         /// The full 32-digit lowercase hex rendering.
@@ -119,6 +141,10 @@ json_dto! {
         /// Creation sequence, minted by the daemon; never `0`.
         #[cfg_attr(feature = "schema", schemars(range(min = 1)))]
         pub sequence: u64,
+        /// Sorted by id; absent from an object written before the key
+        /// existed.
+        #[serde(default)]
+        pub program_status: Vec<ProgramStatusRecordJson>,
     }
 
     /// Session-family frames in their v1 form.
@@ -151,6 +177,39 @@ json_dto! {
 }
 
 plain_enum!(UrgencyJson, Urgency, Low, Normal, Critical);
+
+impl From<ProgramStatusRecord> for ProgramStatusRecordJson {
+    fn from(r: ProgramStatusRecord) -> Self {
+        Self {
+            id: r.id,
+            state: r.state,
+            kind: r.kind,
+            progress: r.progress,
+            app: r.app,
+            title: r.title,
+            msg: r.msg,
+        }
+    }
+}
+
+impl TryFrom<ProgramStatusRecordJson> for ProgramStatusRecord {
+    type Error = JsonError;
+
+    fn try_from(r: ProgramStatusRecordJson) -> Result<Self, Self::Error> {
+        if r.progress.is_some_and(|p| p > 100) {
+            return Err(JsonError::field("progress", "a percentage is at most 100"));
+        }
+        Ok(Self {
+            id: r.id,
+            state: r.state,
+            kind: r.kind,
+            progress: r.progress,
+            app: r.app,
+            title: r.title,
+            msg: r.msg,
+        })
+    }
+}
 
 /// Flattens the wire's two-arm refusal onto v1's one vocabulary: a
 /// retype would be `felis_json: 2` (`docs/reference/ipc.md`
@@ -385,6 +444,7 @@ impl TryFrom<SessionInfo> for SessionInfoJson {
                 .map(TryInto::try_into)
                 .collect::<Result<Vec<_>, JsonError>>()?,
             sequence: info.sequence.get(),
+            program_status: info.program_status.into_iter().map(Into::into).collect(),
         })
     }
 }
@@ -412,6 +472,11 @@ impl TryFrom<SessionInfoJson> for SessionInfo {
                 .map(TryInto::try_into)
                 .collect::<Result<Vec<_>, JsonError>>()?,
             sequence,
+            program_status: info
+                .program_status
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<Result<Vec<_>, JsonError>>()?,
         })
     }
 }

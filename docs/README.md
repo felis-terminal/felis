@@ -45,6 +45,8 @@ Task-oriented; one goal per page.
   for a bug report, preview sessions with fzf.
 - [Label sessions with tags](how-to/label-sessions-with-tags.md) — tag sessions by what they are for, then list, pick,
   or end them by tag.
+- [Find sessions waiting on you](how-to/find-sessions-waiting-on-you.md) — list the sessions whose program is blocked on
+  you, wait for one to finish, and report status from your own program.
 - [Reap dead or stale sessions](how-to/reap-sessions.md) — find and destroy stale sessions by idle time or by tag.
 - [Drive a session beside its window](how-to/drive-a-session-beside-its-window.md) — steer a session from a script or
   editor while a window shows it.
@@ -100,6 +102,8 @@ Protocols:
 - [Kitty text sizing](reference/protocols/kitty-text-sizing.md) — the OSC 66 wire format with its metadata keys, and the
   limits; the behavior status is in the support matrix.
 - [Notifications](reference/protocols/notifications.md) — OSC 9 / 777 / 99 wire grammars and the conformance subset.
+- [Program status](reference/protocols/program-status.md) — the OSC 7501 report and detection grammar, how long a record
+  lives, and the `program_status` field on `felis sessions` and IPC.
 - [Key encoding](reference/protocols/key-encoding.md) — the PTY-bound byte encodings: Kitty keyboard protocol, legacy
   fallback, mouse reporting, bracketed paste.
 
@@ -162,6 +166,8 @@ Protocols:
 - [Kitty text sizing design](explanation/protocols/kitty-text-sizing.md) — daemon vs. client responsibilities and
   interactions.
 - [Notifications design](explanation/protocols/notifications.md) — why felis relays instead of acting.
+- [Program status design](explanation/protocols/program-status.md) — why felis keeps OSC 7501 records, draws nothing,
+  and ships them in an open shape.
 
 Engineering and verification:
 

@@ -631,6 +631,30 @@ pub(crate) struct SessionObject {
     /// Always present, like `tags`: a picker's `.attachments[]` must be
     /// iterable on a parked session too.
     pub(crate) attachments: Vec<AttachmentObject>,
+    /// OSC 7501 records, sorted by id. Always present, like `tags`.
+    pub(crate) program_status: Vec<ProgramStatusObject>,
+}
+
+/// One OSC 7501 record, every value as the program sent it. `state` and
+/// `kind` are open vocabularies: a value this build does not list is a
+/// newer one, not an error.
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub(crate) struct ProgramStatusObject {
+    /// `""` is the root record.
+    pub(crate) id: String,
+    pub(crate) state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(range(max = 100)))]
+    pub(crate) progress: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) app: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) msg: Option<String>,
 }
 
 impl SessionObject {
@@ -671,6 +695,19 @@ impl SessionObject {
                     id: a.id.to_string(),
                     attached_at: crate::timestamp::rfc3339_utc(a.attached_at),
                     input_owner: a.input_owner,
+                })
+                .collect(),
+            program_status: s
+                .program_status
+                .iter()
+                .map(|r| ProgramStatusObject {
+                    id: r.id.clone(),
+                    state: r.state.clone(),
+                    kind: r.kind.clone(),
+                    progress: r.progress,
+                    app: r.app.clone(),
+                    title: r.title.clone(),
+                    msg: r.msg.clone(),
                 })
                 .collect(),
         }
@@ -1385,6 +1422,7 @@ mod tests {
             last_exit_code: None,
             attachments,
             sequence: std::num::NonZeroU64::MIN,
+            program_status: Vec::new(),
         }
     }
 

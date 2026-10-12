@@ -58,6 +58,27 @@ pub struct SessionInfo {
     /// on it, since random session ids would reshuffle it on every
     /// creation.
     pub sequence: NonZeroU64,
+    /// The session's OSC 7501 program-status records, sorted by id;
+    /// empty when no program has reported one.
+    pub program_status: Vec<ProgramStatusRecord>,
+}
+
+/// One OSC 7501 program-status record ([`SessionInfo::program_status`]):
+/// the keys of the last report that used its id, as the program sent
+/// them. `state` and `kind` are open vocabularies, so a reader treats a
+/// value it does not know as unknown rather than refusing the row.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProgramStatusRecord {
+    /// `""` is the root record; otherwise `/`-separated segments.
+    pub id: String,
+    pub state: String,
+    pub kind: Option<String>,
+    /// `0..=100`.
+    pub progress: Option<u8>,
+    /// Raw: an ancestor's `app` is not inherited.
+    pub app: Option<String>,
+    pub title: Option<String>,
+    pub msg: Option<String>,
 }
 
 /// One live window attachment ([`SessionInfo::attachments`]). The id is
@@ -719,6 +740,26 @@ pub(crate) mod tests {
                 },
             ],
             sequence: NonZeroU64::new(42).unwrap(),
+            program_status: vec![
+                ProgramStatusRecord {
+                    id: String::new(),
+                    state: "idle".into(),
+                    kind: None,
+                    progress: None,
+                    app: Some("claude-code".into()),
+                    title: Some("refactor parser".into()),
+                    msg: None,
+                },
+                ProgramStatusRecord {
+                    id: "build/test".into(),
+                    state: "blocked".into(),
+                    kind: Some("permission".into()),
+                    progress: Some(40),
+                    app: None,
+                    title: None,
+                    msg: Some("allow network access?".into()),
+                },
+            ],
         }
     }
 
@@ -829,6 +870,7 @@ pub(crate) mod tests {
                     exited: false,
                     attachments: Vec::new(),
                     sequence: NonZeroU64::MIN,
+                    program_status: Vec::new(),
                 }],
             },
             OpsToClientMsg::Destroyed {

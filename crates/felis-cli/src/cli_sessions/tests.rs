@@ -271,6 +271,7 @@ fn tagged(tags: &[&str]) -> SessionInfo {
         last_exit_code: None,
         attachments: Vec::new(),
         sequence: std::num::NonZeroU64::MIN,
+        program_status: Vec::new(),
     }
 }
 
@@ -333,6 +334,7 @@ fn send_test_session() -> SessionInfo {
         last_exit_code: None,
         attachments: Vec::new(),
         sequence: std::num::NonZeroU64::MIN,
+        program_status: Vec::new(),
     }
 }
 

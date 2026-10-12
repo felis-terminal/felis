@@ -6,7 +6,8 @@
     "rows": 24,
     "cols": 80,
     "tags": [],
-    "attachments": []
+    "attachments": [],
+    "program_status": []
   },
   "repaired": {
     "id": "0123456789abcdef0123456789abcdef",
@@ -14,6 +15,7 @@
     "rows": 24,
     "cols": 80,
     "tags": [],
-    "attachments": []
+    "attachments": [],
+    "program_status": []
   }
 }

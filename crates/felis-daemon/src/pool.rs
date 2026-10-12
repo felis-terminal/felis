@@ -139,6 +139,9 @@ pub struct Session {
     /// [`felis_grid::PtyEffect`] queue with the placement effects (a
     /// scroll before an `a=T` shifts a placement the same burst creates).
     pub scroll_ops: Vec<crate::serve::streaming::QueuedScroll>,
+    /// OSC 7501 records, applied in byte order by the effect replay.
+    /// Not carried across an in-place upgrade.
+    pub program_status: crate::program_status::ProgramStatusStore,
     /// Cell pixel size from `InputMsg::Resize`; the graphics dispatcher
     /// resolves auto placement extents (`c=0` / `r=0`) with it so the
     /// cursor advances past the image. Zero before any client attaches
@@ -187,6 +190,7 @@ impl Session {
             graphics_reassembler: Reassembler::new(),
             image_events: Vec::new(),
             scroll_ops: Vec::new(),
+            program_status: crate::program_status::ProgramStatusStore::default(),
             cell_pixel_w: 0,
             cell_pixel_h: 0,
             reader,
@@ -264,6 +268,9 @@ pub struct SessionMeta {
     /// registration and never rewritten: a window holding a prior value
     /// would step through a ring that reordered under it.
     pub sequence: NonZeroU64,
+    /// The task's [`crate::program_status::ProgramStatusStore`] as of its
+    /// last meta publish.
+    pub program_status: Vec<felis_protocol::messages::ProgramStatusRecord>,
 }
 
 /// A session's most recent notification plus the `Instant` it arrived,
@@ -1029,6 +1036,7 @@ mod tests {
                 last_exit_code: None,
                 exited: false,
                 attachments: Vec::new(),
+                program_status: Vec::new(),
                 sequence: NonZeroU64::MIN,
             })),
         }

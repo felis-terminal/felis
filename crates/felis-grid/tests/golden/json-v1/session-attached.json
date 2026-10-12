@@ -26,6 +26,17 @@
       "idle_seconds": 12,
       "last_exit_code": 0,
       "last_notification": null,
+      "program_status": [
+        {
+          "app": "cargo",
+          "id": "build/test",
+          "kind": "permission",
+          "msg": "allow network access?",
+          "progress": 40,
+          "state": "blocked",
+          "title": "tests"
+        }
+      ],
       "sequence": 3,
       "tags": [
         "work"

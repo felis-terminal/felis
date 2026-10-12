@@ -206,11 +206,15 @@ roster; `sessions info` answers a single session object beside `"v"`. Both carry
 | `last_exit_code`    | number           | omitted until an OSC 133 `D` mark carries one                      |
 | `exited`            | boolean          | omitted when false; `true` marks a session in its post-exit grace  |
 | `attachments`       | array of objects | always, empty when no window is attached                           |
+| `program_status`    | array of objects | always, empty when no program reported an OSC 7501 status          |
 
 `last_notification` carries `body` (string), `urgency` (`low`, `normal`, or `critical`) and `age_seconds` (number) on
 every occurrence, and `title` (string) except for a body-only notification. Each `attachments[]` entry carries `id` (a
 decimal **string**, the spelling `--attachment` accepts), `attached_at` (RFC 3339, UTC) and `input_owner` (boolean), all
-three always present.
+three always present. Each `program_status[]` entry always carries `id` (string, `""` for the root record) and `state`
+(string). It carries `kind` (string), `progress` (number, `0` to `100`), `app`, `title` and `msg` (strings) when the
+record has them. A `state` or `kind` not listed in [program-status.md](protocols/program-status.md) is a newer value,
+not an error.
 
 The mutating verbs answer a point result naming what they reached:
 
@@ -271,7 +275,10 @@ and `list` exits `0` on an empty roster.
 
 - **`list`**: `--tag <t>` filters sessions by tag. A session in exit grace is marked `(exited)` or `"exited":true`.
 - **`info <id>`**: displays geometry, idle time, title, cwd, foreground command, exit code from OSC 133 `D` marks
-  (`exit:` / `"last_exit_code"`), and active window attachments (`window:` / `"attachments"`).
+  (`exit:` / `"last_exit_code"`), active window attachments (`window:` / `"attachments"`), and OSC 7501 program-status
+  records (`status:` / `"program_status"`). A `status:` line reads `<id> <state>[ <kind>][ <progress>%][ [<app>]][
+  <title>][: <msg>]`, the root record as `(root)`, with bidirectional-text and control characters in producer text spelled `<U+XXXX>`; for example
+  `status:   (root) blocked question 50% [mytool]: Which branch?`.
 - **`spawn`**: `--tag <t>` sets initial tags (up to 32 tags of 128 bytes). A local spawn's child environment starts from
   the `felis` process's own environment; over `--host` it starts from the remote login's. `--env KEY=VAL` sets or
   overrides a variable on top of that base and cannot remove one, so `env -u KEY felis sessions spawn …` is how a local

@@ -12,7 +12,8 @@
         "attached_at": "2026-09-01T08:15:00Z",
         "input_owner": true
       }
-    ]
+    ],
+    "program_status": []
   },
   "repaired": {
     "id": "0123456789abcdef0123456789abcdef",
@@ -26,6 +27,7 @@
         "attached_at": "2026-09-01T08:15:00Z",
         "input_owner": true
       }
-    ]
+    ],
+    "program_status": []
   }
 }

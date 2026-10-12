@@ -10,8 +10,11 @@ use super::session_task::OutEvent;
 use super::{
     ConnError, ConnectionMode, Grid, GridMsg, ImageMsg, Instant, PtyEffect, SessionId, ThemeChannel,
 };
-use felis_grid::{Damage, RowEncode, ScrollOp, ViewportRowView, encode_row};
-use felis_protocol::messages::{AttentionSource, Notification, PaletteAction, ThemeAction};
+use felis_grid::{Damage, ProgramStatusEffect, RowEncode, ScrollOp, ViewportRowView, encode_row};
+use felis_protocol::messages::{
+    AttentionSource, Correlation, Notification, OpsToClientMsg, PaletteAction, StreamErrorReason,
+    ThemeAction,
+};
 use felis_protocol::{RowPayload, messages::NotifyToClientMsg};
 use felis_transport::{CheckedFrame, TransportError};
 
@@ -29,14 +32,15 @@ pub(crate) fn drain_effects(
     // The replay's one grid mutation, the cursor advance past an image,
     // can scroll and queue effects of its own; they replay in this drain,
     // and anything a later pass would still queue waits for the next.
+    let mut written = Ok(());
     for _ in 0..3 {
         let effects = core.grid.take_pty_effects();
         if effects.is_empty() {
             break;
         }
-        replay_effects(session, core, effects)?;
+        replay_effects(session, core, effects, &mut written);
     }
-    Ok(())
+    written
 }
 
 fn shift_placements(session: &mut crate::pool::Session, n: u32, retain: u32) {
@@ -61,13 +65,23 @@ fn shift_placements(session: &mut crate::pool::Session, n: u32, retain: u32) {
     );
 }
 
+/// A failed PTY write is recorded in `written` (the first one wins) and
+/// later responses are skipped, but the state effects behind it still
+/// apply: the queue is already taken, and at EOF a reply the dead PTY
+/// refuses must not cost the child's final status report.
 fn replay_effects(
     session: &mut crate::pool::Session,
     core: &mut crate::pool::ParseCore,
     effects: Vec<PtyEffect>,
-) -> Result<(), ConnError> {
+    written: &mut Result<(), ConnError>,
+) {
     // Replay in byte-stream order so interleaved effects within a burst do not
     // invert. Query responses flow even with zero subscribers so programs do not hang.
+    fn respond(writer: &felis_pty::PtyWriter, bytes: &[u8], written: &mut Result<(), ConnError>) {
+        if written.is_ok() {
+            *written = write_pty(writer, bytes);
+        }
+    }
     for effect in effects {
         match effect {
             PtyEffect::ImagesCleared(scope) => crate::graphics::clear_images(
@@ -82,12 +96,10 @@ fn replay_effects(
                 let responses =
                     crate::graphics::dispatch_apc_bodies(session, &mut core.grid, vec![apc]);
                 for response in responses {
-                    write_pty(&session.writer, &response)?;
+                    respond(&session.writer, &response, written);
                 }
             }
-            PtyEffect::Response(bytes) => {
-                write_pty(&session.writer, &bytes)?;
-            }
+            PtyEffect::Response(bytes) => respond(&session.writer, &bytes, written),
             // Anchors that stay within retained scrollback survive with a
             // non-positive row (docs/reference/protocols/kitty-graphics.md
             // "Scrollback-anchored placements"), mirrored as one
@@ -125,6 +137,7 @@ fn replay_effects(
                     &mut session.image_events,
                 );
                 session.saved_screens.alternate = None;
+                session.program_status.reset();
             }
             // Parked for `session_task::fan_out_grid_state`, the only consumer
             // that knows each shadow's damage.
@@ -168,10 +181,15 @@ fn replay_effects(
                     "program disabled bracketed paste (?2004l); pastes to this session are unframed"
                 );
             }
-            PtyEffect::ProgramStatus(_) | PtyEffect::PromptStarted => {}
+            PtyEffect::ProgramStatus(ProgramStatusEffect::Report(report)) => {
+                session.program_status.report(*report);
+            }
+            PtyEffect::ProgramStatus(ProgramStatusEffect::Clear { id }) => {
+                session.program_status.clear(&id);
+            }
+            PtyEffect::PromptStarted => session.program_status.expire_transient(),
         }
     }
-    Ok(())
 }
 
 /// Retained scrollback rows + live rows; mirrors the renderer's
@@ -1080,11 +1098,50 @@ pub(crate) fn body_for(ev: &OutEvent) -> Result<CheckedFrame, TransportError> {
             CheckedFrame::encode_correlated(msg, *correlation)
         }
         OutEvent::Search { msg, correlation } => CheckedFrame::encode_correlated(msg, *correlation),
-        OutEvent::Ops { msg, correlation } => {
-            CheckedFrame::encode_correlated(msg.as_ref(), *correlation)
-        }
+        OutEvent::Ops { msg, correlation } => ops_reply_frame(
+            msg,
+            *correlation,
+            felis_protocol::frame::DEFAULT_MAX_BODY as usize,
+        ),
         OutEvent::Control(msg) => CheckedFrame::encode(msg),
     }
+}
+
+/// An `Ops` reply one frame cannot carry (a roster of sessions full of
+/// program-status records) is answered with a refusal that names the
+/// size: written as is, it fails at the writer and closes the
+/// connection, which the caller reads as a lost daemon.
+pub(crate) fn ops_reply_frame(
+    msg: &OpsToClientMsg,
+    correlation: Correlation,
+    ceiling: usize,
+) -> Result<CheckedFrame, TransportError> {
+    let frame = CheckedFrame::encode_correlated(msg, correlation)?;
+    let len = frame.body().len();
+    let Correlation::Request(request) = correlation else {
+        return Ok(frame);
+    };
+    if len <= ceiling {
+        return Ok(frame);
+    }
+    #[expect(clippy::cast_precision_loss, reason = "a size for a person to read")]
+    let mib = |bytes: usize| bytes as f64 / f64::from(1u32 << 20);
+    let (what, remedy) = match msg {
+        OpsToClientMsg::Listed { .. } => (
+            "the session list",
+            "; `felis sessions info <id>` reads one session at a time",
+        ),
+        _ => ("the reply", ""),
+    };
+    CheckedFrame::encode(&felis_transport::DaemonDriver::refuse_request(
+        request,
+        StreamErrorReason::Internal,
+        format!(
+            "{what} is {:.1} MiB, past the {:.1} MiB frame limit{remedy}",
+            mib(len),
+            mib(ceiling)
+        ),
+    ))
 }
 
 /// Each image ships as `Header` → `Chunk`s → `Complete`; placements
@@ -1281,5 +1338,80 @@ mod tests {
         let frame = body_for(&OutEvent::Grid(msg)).expect("a row delta is sendable");
         assert_eq!(frame.kind(), felis_protocol::MessageKind::Grid.as_u16());
         assert_eq!(frame.body(), direct);
+    }
+
+    fn roster(records: usize) -> OpsToClientMsg {
+        OpsToClientMsg::Listed {
+            sessions: vec![felis_protocol::messages::SessionInfo {
+                id: 1,
+                dims: felis_protocol::messages::GridDims {
+                    rows: 24,
+                    cols: 80,
+                    pixel_w: 0,
+                    pixel_h: 0,
+                },
+                title: None,
+                cwd: None,
+                idle_seconds: None,
+                tags: Vec::new(),
+                last_notification: None,
+                foreground: None,
+                exited: false,
+                last_exit_code: None,
+                attachments: Vec::new(),
+                sequence: std::num::NonZeroU64::MIN,
+                program_status: (0..records)
+                    .map(|i| felis_protocol::messages::ProgramStatusRecord {
+                        id: format!("r{i}"),
+                        state: "working".into(),
+                        kind: None,
+                        progress: None,
+                        app: None,
+                        title: None,
+                        msg: Some("m".repeat(2048)),
+                    })
+                    .collect(),
+            }],
+        }
+    }
+
+    fn request(n: u64) -> Correlation {
+        Correlation::Request(felis_protocol::messages::RequestId::new(n).unwrap())
+    }
+
+    #[test]
+    fn an_ops_reply_within_the_ceiling_goes_out_as_is() {
+        let msg = roster(4);
+        let frame = ops_reply_frame(&msg, request(7), 1 << 20).expect("encodes");
+        assert_eq!(frame.kind(), felis_protocol::MessageKind::Ops.as_u16());
+        assert_eq!(
+            frame.body(),
+            felis_protocol::codec::encode_correlated(&msg, request(7))
+        );
+    }
+
+    /// Past the ceiling the request is refused with the size and the
+    /// per-session way out, instead of a write that ends the connection.
+    #[test]
+    fn a_roster_past_the_ceiling_is_refused_with_its_size() {
+        let msg = roster(8);
+        let full = felis_protocol::codec::encode(&msg).len();
+        let frame = ops_reply_frame(&msg, request(7), 4096).expect("a refusal encodes");
+        assert_eq!(frame.kind(), felis_protocol::MessageKind::Conn.as_u16());
+        let refusal: felis_protocol::messages::ConnToClientMsg =
+            felis_protocol::codec::decode(frame.body()).expect("decodes");
+        let felis_protocol::messages::ConnToClientMsg::Error {
+            subject: felis_protocol::messages::Subject::Request(id),
+            reason: StreamErrorReason::Internal,
+            detail,
+        } = refusal
+        else {
+            panic!("expected a request refusal, got {refusal:?}");
+        };
+        assert_eq!(id.get(), 7);
+        assert!(detail.starts_with("the session list is 0."), "{detail}");
+        assert!(detail.contains("past the 0.0 MiB frame limit"), "{detail}");
+        assert!(detail.contains("`felis sessions info <id>`"), "{detail}");
+        assert!(full > 4096);
     }
 }

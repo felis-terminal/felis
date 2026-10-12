@@ -2088,6 +2088,59 @@
         }
       ]
     },
+    "ProgramStatusRecordJson": {
+      "description": "One OSC 7501 program-status record. `state` and `kind` are open\nvocabularies; every key may be absent from a later writer's\nobject.",
+      "properties": {
+        "app": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "default": "",
+          "description": "`\"\"` is the root record.",
+          "type": "string"
+        },
+        "kind": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "msg": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "progress": {
+          "default": null,
+          "format": "uint8",
+          "maximum": 100,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "state": {
+          "default": "",
+          "type": "string"
+        },
+        "title": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "PromptJumpJson": {
       "enum": [
         "previous",
@@ -2338,6 +2391,14 @@
               "type": "null"
             }
           ]
+        },
+        "program_status": {
+          "default": [],
+          "description": "Sorted by id; absent from an object written before the key\nexisted.",
+          "items": {
+            "$ref": "#/$defs/ProgramStatusRecordJson"
+          },
+          "type": "array"
         },
         "sequence": {
           "description": "Creation sequence, minted by the daemon; never `0`.",
