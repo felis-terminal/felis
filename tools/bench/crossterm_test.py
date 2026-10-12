@@ -1546,7 +1546,15 @@ class WrapperHandshakeTest(unittest.TestCase):
 
     def run_leg(self, results: Path, pin) -> None:
         quiet = io.StringIO()
+        wrapper_script = suites.fieldmod.wrapper_script
         with (
+            # The settle waits out a real window's first resize; the PTY
+            # here takes its size before the wrapper's shell has started.
+            mock.patch.object(
+                suites.fieldmod,
+                "wrapper_script",
+                lambda body, settle: wrapper_script(body, settle=0.1),
+            ),
             mock.patch.object(suites.fieldmod, "raise_window", lambda _pid: True),
             mock.patch.object(
                 suites.fieldmod, "launch_terminal", self.launcher(results, "kitty")
