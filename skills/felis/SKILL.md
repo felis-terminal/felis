@@ -174,12 +174,12 @@ resolved from the PTY foreground pgid (not content sniffing), and `last_notifica
 which is the "blocked / done" signal a full-screen TUI agent emits. `last_exit_code` is the youngest OSC 133 D mark and
 needs shell integration.
 
-`program_status` (experimental) is the session's OSC 7501 records, for producers that report their own state (Claude
-Code, Codex, Terraform): `[{id, state, kind?, progress?, app?, title?, msg?}]`, `id` `""` the root record. `state` is
-`idle`, `working`, `done`, `blocked` or `error`; `blocked` with `kind` (`permission`, `question`, `auth`) is the
-"waiting on the user" signal, and `msg` says why. Treat a `state` or `kind` you do not know as unknown. A new shell
-prompt or the session's exit drops `working` and `blocked`; `done` and `error` stay until the program replaces them. It
-is a snapshot: poll `sessions info` for it.
+`program_status` (experimental) is the session's OSC 7501 records, for producers that report their own state:
+`[{id, state, kind?, progress?, app?, title?, msg?}]`, `id` `""` the root record. `state` is `idle`, `working`, `done`,
+`blocked` or `error`; `blocked` with `kind` (`permission`, `question`, `auth`) is the "waiting on the user" signal, and
+`msg` says why. Treat a `state` or `kind` you do not know as unknown. A new shell prompt (with shell integration) or the
+session's exit drops `working` and `blocked`; `done` and `error` stay until the program replaces them. It is a snapshot:
+poll `sessions info` for it.
 
 ```sh
 felis sessions list --format json | jq '.sessions[] | select(any(.program_status[]; .state == "blocked")) | .id'
@@ -206,16 +206,18 @@ A full-screen TUI agent (Claude Code etc.) emits no OSC 133 marks, so `send --wa
 `--session --once` is its completion signal only when it is configured to emit OSC 9/99/777. A plain build emits no OSC
 9, so `send --wait` is the tool there.
 
-A producer that reports OSC 7501 status is the cheapest to wait on: poll its `program_status` until the root record
-leaves `working`.
+A producer that reports OSC 7501 status is the cheapest to wait on: poll until it holds a status and none of it is
+`working`. The loop also ends on `blocked`, which means the producer waits on input, so read the states before acting:
 
 ```sh
 deadline=$((SECONDS + 600))
-until felis sessions info "$ID" --format json \
-    | jq -e '.program_status[] | select(.id == "" and .state != "working")' >/dev/null; do
-  [ "$SECONDS" -ge "$deadline" ] && break
+while :; do
+  status=$(felis sessions info "$ID" --format json) || { rc=2; break; }   # session gone, daemon lost
+  echo "$status" | jq -e '.program_status | length > 0 and all(.[]; .state != "working")' >/dev/null && { rc=0; break; }
+  [ "$SECONDS" -ge "$deadline" ] && { rc=1; break; }
   sleep 2
 done
+echo "$status" | jq '.program_status'
 ```
 
 When a producer emits none of these, poll the visible grid against a deadline: `search --source visible` exits `0` on a
