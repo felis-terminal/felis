@@ -13,6 +13,8 @@ fuzz/seeds/
 ├── grid_dispatch/     — same shape as vt_parser, but exercises Grid handlers
 ├── kitty_graphics/    — APC G… body (the bytes between `\x1b_G` and `\x1b\\`)
 ├── kitty_text_sizing/ — OSC 66 metadata portion (the bytes before the `;`)
+├── program_status/  — OSC 7501 payload after `7501;`, behind one byte whose
+│                        low bit picks the terminator (set: BEL)
 ├── ipc_frame/         — `[ceiling:LE u32][frame_bytes…]` per the fuzz target's
 │                        input convention; frame fmt is `[len:LE u32]
 │                        [kind:LE u16][body]`
