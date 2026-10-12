@@ -933,9 +933,7 @@ async fn a_full_stream_buffer_backpressures_its_daemon_link() {
 
     let blocked_link = Arc::clone(&link);
     let mut blocked = tokio::spawn(async move {
-        blocked_link
-            .deliver_stream(7, StreamEvent::End { count: 1 })
-            .await;
+        blocked_link.deliver_stream(7, StreamEvent::End).await;
     });
     assert!(
         tokio::time::timeout(std::time::Duration::from_millis(20), &mut blocked)
@@ -947,10 +945,7 @@ async fn a_full_stream_buffer_backpressures_its_daemon_link() {
     blocked
         .await
         .expect("the terminal is delivered after space opens");
-    assert!(matches!(
-        rx.recv().await,
-        Some(StreamEvent::End { count: 1 })
-    ));
+    assert!(matches!(rx.recv().await, Some(StreamEvent::End)));
 
     link.shutdown().await;
     drop(far);
@@ -970,6 +965,7 @@ async fn an_operation_that_outlives_the_grace_is_answered_and_then_silenced() {
         state: std::sync::Mutex::new(ActiveState {
             done: false,
             terminal: Some(terminal),
+            items: 0,
         }),
         id: Value::from("cap"),
         stream: std::sync::Mutex::new(StreamSlot::default()),
@@ -1008,7 +1004,7 @@ async fn an_operation_that_outlives_the_grace_is_answered_and_then_silenced() {
     );
 
     entry
-        .emit_open(&out, r#"{"v":1,"id":"cap","item":{}}"#.to_owned())
+        .emit_open(&out, r#"{"v":1,"id":"cap","item":{}}"#.to_owned(), true)
         .await
         .expect("the output remains open");
     out.close().await.expect("close output");

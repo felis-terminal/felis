@@ -2322,6 +2322,10 @@ enum AttachScript {
     /// Land the attach, then assert what the bridge puts on the wire
     /// after an input: the fence, and nothing else.
     AcceptAndFence,
+    /// Land the attach, hold a search open until its cancel arrives,
+    /// then write the two matches still in flight and an `End` counting
+    /// them, as a producer whose last slice crossed the cancel does.
+    MatchesCrossingTheCancel,
 }
 
 /// A daemon whose roster answers name exactly one session, so a caller
@@ -2329,10 +2333,20 @@ enum AttachScript {
 /// whose attach then runs `script`. Connections are served in a loop:
 /// the bridge dials an auxiliary link beside its anchor.
 async fn scripted_attach_daemon(socket: std::path::PathBuf, script: AttachScript) {
+    scripted_attach_daemon_signaling(socket, script, Arc::new(tokio::sync::Notify::new())).await;
+}
+
+/// As [`scripted_attach_daemon`], notifying `opened` once a stream
+/// opener has arrived.
+async fn scripted_attach_daemon_signaling(
+    socket: std::path::PathBuf,
+    script: AttachScript,
+    opened: Arc<tokio::sync::Notify>,
+) {
     use felis_protocol::codec;
     use felis_protocol::messages::{
-        AttachTarget, Correlation, GridDims, GridMsg, InfoOutcome, OpsToClientMsg, OpsToDaemonMsg,
-        SessionInfo, SessionToClientMsg, SessionToDaemonMsg,
+        AttachTarget, ConnToDaemonMsg, Correlation, GridDims, GridMsg, InfoOutcome, OpsToClientMsg,
+        OpsToDaemonMsg, SearchToClientMsg, SessionInfo, SessionToClientMsg, SessionToDaemonMsg,
     };
     use felis_protocol::preface::{DaemonPreface, PROTOCOL_MAJOR, PROTOCOL_MINOR};
     use felis_transport::{
@@ -2366,6 +2380,7 @@ async fn scripted_attach_daemon(socket: std::path::PathBuf, script: AttachScript
     let listener = Listener::bind(&Endpoint::unix(socket)).expect("bind the scripted socket");
     loop {
         let stream = listener.accept().await.expect("accept a bridge connection");
+        let opened = Arc::clone(&opened);
         tokio::spawn(async move {
             let (mut read_half, mut write_half) = server_split(stream);
             let _bootstrap = read_client_bootstrap(&mut read_half)
@@ -2418,6 +2433,61 @@ async fn scripted_attach_daemon(socket: std::path::PathBuf, script: AttachScript
                                     .expect("write the refusal");
                             }
                             AttachScript::Hangup => {}
+                            AttachScript::MatchesCrossingTheCancel => {
+                                writer
+                                    .send(&SessionToClientMsg::Attached {
+                                        info: one_session(),
+                                    })
+                                    .await
+                                    .expect("write the attach ack");
+                                writer
+                                    .send(&GridMsg::RehydrateEnd)
+                                    .await
+                                    .expect("close the rehydrate burst");
+                                let mut open = None;
+                                while let Ok(Some(frame)) = reader.next_frame().await {
+                                    match MessageKind::from_u16(frame.kind) {
+                                        Some(MessageKind::Search) => {
+                                            open = codec::peek_correlation(&frame.body)
+                                                .expect("a query is correlated")
+                                                .and_then(Correlation::stream_id);
+                                            opened.notify_one();
+                                        }
+                                        Some(MessageKind::Conn) => {
+                                            let ConnToDaemonMsg::Cancel { stream_id } =
+                                                codec::decode::<ConnToDaemonMsg>(&frame.body)
+                                                    .expect("decode the cancel")
+                                            else {
+                                                continue;
+                                            };
+                                            assert_eq!(Some(stream_id), open);
+                                            for line_index in [1, 0] {
+                                                writer
+                                                    .send_correlated(
+                                                        &SearchToClientMsg::Match {
+                                                            line_index,
+                                                            text: "NEEDLE".to_owned(),
+                                                            byte_spans: Vec::new(),
+                                                            col_spans: Vec::new(),
+                                                        },
+                                                        Correlation::stream(stream_id),
+                                                    )
+                                                    .await
+                                                    .expect("write a match");
+                                            }
+                                            writer
+                                                .send(&ConnToClientMsg::End {
+                                                    stream_id,
+                                                    count: 2,
+                                                })
+                                                .await
+                                                .expect("write the terminal");
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                                return;
+                            }
                             AttachScript::AcceptAndFence => {
                                 writer
                                     .send(&SessionToClientMsg::Attached {
@@ -2623,6 +2693,121 @@ async fn a_daemon_closing_on_the_attach_is_reported_as_a_lost_daemon() {
     );
 
     let (_code, _transcript, stderr) = bridge.finish().await;
+    assert_stderr_is_human_only(&stderr);
+    daemon.abort();
+}
+
+/// Asserts the stream contract for one id: a clean terminal counts
+/// exactly the item lines ahead of it, a failing one is `canceled`, and
+/// nothing follows the terminal.
+fn assert_terminal_counts_what_was_written(transcript: &[Value], id: &Value) {
+    let mine: Vec<&Value> = transcript
+        .iter()
+        .filter(|o| o.get("id") == Some(id))
+        .collect();
+    let terminal_at = mine
+        .iter()
+        .position(|o| o.get("event").is_some_and(|e| e != "lag"))
+        .unwrap_or_else(|| panic!("{id} never got a terminal: {transcript:?}"));
+    assert_eq!(
+        terminal_at + 1,
+        mine.len(),
+        "nothing follows {id}'s terminal: {mine:?}"
+    );
+    let items = mine.iter().filter(|o| o.get("item").is_some()).count() as u64;
+    let terminal = mine[terminal_at];
+    match terminal["event"].as_str() {
+        Some("end") => assert_eq!(
+            terminal["count"],
+            json!(items),
+            "a clean terminal counts the items the client read, not the daemon's tally: {mine:?}"
+        ),
+        Some("error") => assert_eq!(terminal["error"]["kind"], json!("canceled"), "{terminal}"),
+        _ => panic!("a terminal names its event: {terminal}"),
+    }
+}
+
+/// The daemon's matches cross the cancel on the wire, so the client
+/// drops them; its `End` still counts them. The cancel arrives before
+/// the scripted producer writes anything, so the drop is certain.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_canceled_search_counts_only_the_matches_it_wrote() {
+    let tmp = private_dir();
+    let socket = tmp.path().join("cancel.sock");
+    let daemon = tokio::spawn(scripted_attach_daemon(
+        socket.clone(),
+        AttachScript::MatchesCrossingTheCancel,
+    ));
+    await_socket(&socket).await;
+
+    let mut bridge = Bridge::start(&socket);
+    bridge
+        .send(&request(
+            "find",
+            "sessions.search",
+            &json!({"session": "00", "pattern": "NEEDLE"}),
+        ))
+        .await;
+    bridge
+        .send(&request("stop", "cancel", &json!({"target": "find"})))
+        .await;
+    let terminal = loop {
+        let object = bridge.next().await;
+        if object["id"] == json!("find") && object.get("event").is_some() {
+            break object;
+        }
+    };
+    assert_eq!(
+        terminal,
+        json!({"v": 1, "id": "find", "event": "end", "count": 0}),
+        "the dropped matches are not claimed"
+    );
+
+    let (code, transcript, stderr) = bridge.finish().await;
+    assert_eq!(code, 0, "stderr: {stderr}");
+    assert_terminal_counts_what_was_written(&transcript, &json!("find"));
+    assert_stderr_is_human_only(&stderr);
+    daemon.abort();
+}
+
+/// Closing stdin behind an open search is the same cancel, issued by
+/// the shutdown path instead of a `cancel` op. Stdin closes only once
+/// the stream is open, so the daemon's terminal, not the shutdown
+/// grace, is what ends it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn stdin_eof_behind_a_search_never_claims_matches_it_did_not_write() {
+    let tmp = private_dir();
+    let socket = tmp.path().join("eof.sock");
+    let opened = Arc::new(tokio::sync::Notify::new());
+    let daemon = tokio::spawn(scripted_attach_daemon_signaling(
+        socket.clone(),
+        AttachScript::MatchesCrossingTheCancel,
+        Arc::clone(&opened),
+    ));
+    await_socket(&socket).await;
+
+    let mut bridge = Bridge::start(&socket);
+    bridge
+        .send(&request(
+            "find",
+            "sessions.search",
+            &json!({"session": "00", "pattern": "NEEDLE"}),
+        ))
+        .await;
+    tokio::time::timeout(REPLY_TIMEOUT, opened.notified())
+        .await
+        .expect("the search reached the daemon");
+    let (code, transcript, stderr) = bridge.finish().await;
+    assert_eq!(code, 0, "a client that closed stdin did nothing wrong");
+    let mine: Vec<&Value> = transcript
+        .iter()
+        .filter(|o| o["id"] == json!("find"))
+        .collect();
+    assert_eq!(
+        mine,
+        [&json!({"v": 1, "id": "find", "event": "end", "count": 0})],
+        "the dropped matches are neither written nor claimed: {transcript:?}"
+    );
     assert_stderr_is_human_only(&stderr);
     daemon.abort();
 }

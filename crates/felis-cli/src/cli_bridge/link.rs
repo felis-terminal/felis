@@ -96,9 +96,9 @@ pub(super) enum StreamEvent {
     /// Boxed: an item is an order of magnitude larger than either
     /// terminal.
     Item(Box<StreamItem>),
-    End {
-        count: u32,
-    },
+    /// Carries no count: the daemon's includes the items the driver
+    /// drops after a cancel.
+    End,
     Failed(LinkError),
 }
 
@@ -435,9 +435,8 @@ impl Link {
             .classify(frame)
             .map_err(|err| protocol_error(&err))?;
         match incoming {
-            Incoming::Control(ConnToClientMsg::End { stream_id, count }) => {
-                self.deliver_stream(stream_id.get(), StreamEvent::End { count })
-                    .await;
+            Incoming::Control(ConnToClientMsg::End { stream_id, .. }) => {
+                self.deliver_stream(stream_id.get(), StreamEvent::End).await;
             }
             Incoming::Control(ConnToClientMsg::Error {
                 subject: Subject::Stream(stream_id),

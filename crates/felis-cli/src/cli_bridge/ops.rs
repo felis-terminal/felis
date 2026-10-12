@@ -239,7 +239,7 @@ impl Core {
         let source = region_source(params)?;
         let ansi = params.bool("ansi")?;
         let lines = params.u32_opt("lines")?;
-        let (_id, (count, exit_code)) = self
+        let (_id, exit_code) = self
             .with_session_by_prefix(op, &prefix, async |link| {
                 let mut stream = link
                     .open_stream(&RegionToDaemonMsg::Rows {
@@ -261,15 +261,13 @@ impl Core {
                             }
                             _ => {}
                         },
-                        StreamEvent::End { count } => {
-                            return Ok((u64::from(count), exit_code));
-                        }
+                        StreamEvent::End => return Ok(exit_code),
                         StreamEvent::Failed(err) => return Err(err.into()),
                     }
                 }
             })
             .await?;
-        op.end(count, exit_code);
+        op.end(exit_code);
         Ok(())
     }
 
@@ -290,36 +288,35 @@ impl Core {
         // before an attach that a too-old daemon would make for nothing.
         check_value_minor(&query, self.anchor.effective_minor())
             .map_err(|err| BridgeError::new(ErrorKind::Unsupported, err.to_string()))?;
-        let (_id, count) = self
-            .with_session_by_prefix(op, &prefix, async |link| {
-                let mut stream = link.open_stream(&query).await?;
-                op.bind_stream(&link, stream.id);
-                loop {
-                    match stream.next().await {
-                        StreamEvent::Item(item) => {
-                            if let DaemonMsg::Search(SearchToClientMsg::Match {
+        self.with_session_by_prefix(op, &prefix, async |link| {
+            let mut stream = link.open_stream(&query).await?;
+            op.bind_stream(&link, stream.id);
+            loop {
+                match stream.next().await {
+                    StreamEvent::Item(item) => {
+                        if let DaemonMsg::Search(SearchToClientMsg::Match {
+                            line_index,
+                            text,
+                            byte_spans,
+                            col_spans,
+                        }) = item.msg
+                        {
+                            op.item(body_value(&crate::cli_sessions::search_match(
                                 line_index,
-                                text,
-                                byte_spans,
-                                col_spans,
-                            }) = item.msg
-                            {
-                                op.item(body_value(&crate::cli_sessions::search_match(
-                                    line_index,
-                                    &text,
-                                    &byte_spans,
-                                    &col_spans,
-                                )))
-                                .await?;
-                            }
+                                &text,
+                                &byte_spans,
+                                &col_spans,
+                            )))
+                            .await?;
                         }
-                        StreamEvent::End { count } => return Ok(u64::from(count)),
-                        StreamEvent::Failed(err) => return Err(err.into()),
                     }
+                    StreamEvent::End => return Ok(()),
+                    StreamEvent::Failed(err) => return Err(err.into()),
                 }
-            })
-            .await?;
-        op.end(count, None);
+            }
+        })
+        .await?;
+        op.end(None);
         Ok(())
     }
 
@@ -338,8 +335,8 @@ impl Core {
         op.track_link(&link);
         let outcome = self.stream_notifications(op, &link, session_prefix).await;
         link.shutdown().await;
-        let count = outcome?;
-        op.end(count, None);
+        outcome?;
+        op.end(None);
         Ok(())
     }
 
@@ -348,7 +345,7 @@ impl Core {
         op: &Op,
         link: &Arc<Link>,
         session_prefix: Option<String>,
-    ) -> Result<u64, BridgeError> {
+    ) -> Result<(), BridgeError> {
         let mut stream = link.subscribe_notifications(session_prefix).await?;
         op.bind_stream(link, stream.id);
         loop {
@@ -382,7 +379,7 @@ impl Core {
                     // is followed by the daemon's own error terminal.
                     _ => {}
                 },
-                StreamEvent::End { count } => return Ok(u64::from(count)),
+                StreamEvent::End => return Ok(()),
                 StreamEvent::Failed(err) => return Err(err.into()),
             }
         }

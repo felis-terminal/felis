@@ -45,6 +45,9 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 
 ### Fixed
 
+- A `felis bridge` stream canceled by a `cancel` op or by closing stdin no longer ends with a clean `end` whose `count`
+  claims items it never wrote. Items that reach the bridge after the cancel are dropped, and the clean `end` now counts
+  only the item lines that preceded it.
 - A `pipe` or `run` keybinding no longer gets refused with "this pipe/run visit still owes a return" on a session that a
   `run` command switched the window to (a session picker running `felis sessions switch`, say). The refusal used to hold
   until some other switch moved the window.
