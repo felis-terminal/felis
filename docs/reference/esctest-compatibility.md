@@ -18,9 +18,9 @@ The PTY integration test harness at `crates/felis-pty/tests/esctest_smoke.rs` ex
   `--xterm-reverse-wrap=383` (selects xterm post-2023 split reverse-wrap expectations). Both `--no-print-logs` and
   `--timeout=1` shape the pass count.
 - **Environment**: Built by the `esctest` derivation in `dev/packages/esctest.nix`, which `dev/flake-module.nix` puts on
-  the dev shell's `PATH`.
+  the dev shell's `PATH`. The derivation removes the window-op cases' waits for a window manager.
 - **Invocation**: `cargo nextest run -p felis-pty --test esctest_smoke` (skipped when the `esctest` binary is absent;
-  full run ≈ 35 s). `ESCTEST_BIN` names a binary to use instead of the one on `PATH`, and `ESCTEST_INCLUDE` passes an
+  full run ≈ 10 s). `ESCTEST_BIN` names a binary to use instead of the one on `PATH`, and `ESCTEST_INCLUDE` passes an
   `--include=` pattern so a single module can be re-run while iterating.
 
 ## Invariant and baseline
