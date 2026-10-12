@@ -1208,9 +1208,20 @@ definition it authorizes: an arm's `since_minor`, a `since_minor()` per closed-e
 version. The writer reads it, so a message answers what it costs to send and `FrameWriter` refuses one the connection's
 effective minor does not define. Nothing reaches the carrier except through that gate, including the daemon's
 pre-encoded fan-out and the client's send queue, which carry the requirement alongside the bytes because neither writer
-ever sees the message. A feature that wants to talk to an older peer therefore has to say how: omit the field, map the
-value down, or refuse locally. Image messages fan out to every attached window whatever its minor, so they omit at each
-connection's encode, where `ImageMsg::for_minor` cuts a message to what that peer reads.
+ever sees the message. A feature that wants to talk to an older peer therefore has to say how: map the value down, or
+refuse locally.
+
+Fields are the addition the gate mostly does not read; most are declared for the ledger check alone. An older decoder
+skips an unknown field number, so a field sent to a peer that predates it lands that peer exactly where leaving the
+field out would, and the ledger cell reads the same either way. Gating such a field would buy no safety and cost a
+downgrade at every send site a row-carrying message can take. Where landing there is wrong, the field stays gated: a
+search that names a source an older daemon skips would answer a different question, so `SearchQuery.source` refuses
+locally instead. The default is ungated because a field that only adds detail is the common case. The exemption covers
+fields of payload messages only: a family's wrapper numbers are its arms, and the driver reads any of them as one, so a
+plain field there would reach an older peer as the other direction's arm. A member added to a payload message's oneof is
+not covered either: an older peer skips it and finds the oneof unset, which its decoder rejects. No payload oneof has
+grown yet, so a schema test pins their members and the first to grow brings its own send gate. _Revisit if_ a supported
+wire peer decodes with a parser that rejects unknown fields; the proto3-JSON argument above is why none does today.
 
 Gating the receive side instead is the obvious alternative and does not work: a receiver can see that a value is
 unknown, but not what the sender should have sent in its place, which is the whole content of a ledger row. The one

@@ -8,7 +8,7 @@ use crate::caps::ConnectionMode;
 use crate::messages::{
     AttachFailure, AttachRefusal, ConnToClientMsg, ConnToDaemonMsg, CreateFailure, GridMsg,
     ImageMsg, OpsToClientMsg, OpsToDaemonMsg, PushMsg, RefusalReason, ResourceKind, SearchSource,
-    SearchToDaemonMsg, SessionToClientMsg, SessionToDaemonMsg, SpawnArgs, UpgradeRefusal,
+    SearchToDaemonMsg, SessionToClientMsg, SessionToDaemonMsg, UpgradeRefusal,
 };
 use crate::row::RowPayload;
 
@@ -45,140 +45,48 @@ impl Requires {
             self
         }
     }
-
-    /// `field`'s requirement when `present`, [`Self::BASE`] otherwise:
-    /// an omitted field costs nothing.
-    #[must_use]
-    pub const fn when(present: bool, field: Self) -> Self {
-        if present { field } else { Self::BASE }
-    }
 }
 
-/// A post-baseline field, paired with the test that decides whether a
-/// value carries it. The pair is the field's one home: a `requires`
-/// impl folds its owner's table instead of naming fields one by one, so
-/// the list [`gated_fields`] reports is the list the gate reads.
+/// Fields added after the base schema and sent to every peer, as the
+/// ledger spells them, with the minor that added each. The send gate does
+/// not read this: an older peer skips an unknown field number
+/// (`docs/explanation/architecture/ipc.md` "The ledger is the review gate").
+pub const ADDED_FIELDS: &[(&str, u16)] = &[
+    ("ImageVirtualPlacement.placement_id", 1),
+    ("ImagePlacement.requested", 1),
+];
+
+/// An added field an older peer must not skip, because skipping it
+/// changes what the message asks for, paired with the test that decides
+/// whether a value carries it.
 pub struct GatedField<T> {
     pub requires: Requires,
     pub present: fn(&T) -> bool,
 }
 
-/// The strictest requirement `value`'s present fields carry.
+/// The strictest requirement `value`'s present gated fields carry.
 fn field_requires<T>(value: &T, fields: &[GatedField<T>]) -> Requires {
     fields.iter().fold(Requires::BASE, |acc, field| {
-        acc.max(Requires::when((field.present)(value), field.requires))
+        if (field.present)(value) {
+            acc.max(field.requires)
+        } else {
+            acc
+        }
     })
 }
 
-/// Every post-baseline field the gate authorizes, named as the ledger
-/// spells it, collected from the tables the `requires` impls fold.
+/// Every gated field, named as the ledger spells it.
 #[must_use]
 pub fn gated_fields() -> Vec<Requires> {
-    fn listed<T>(fields: &[GatedField<T>]) -> impl Iterator<Item = Requires> + '_ {
-        fields.iter().map(|field| field.requires)
-    }
-    listed(CONN_TO_DAEMON_FIELDS)
-        .chain(listed(CONN_TO_CLIENT_FIELDS))
-        .chain(listed(SESSION_TO_DAEMON_FIELDS))
-        .chain(listed(SESSION_TO_CLIENT_FIELDS))
-        .chain(listed(OPS_TO_DAEMON_FIELDS))
-        .chain(listed(OPS_TO_CLIENT_FIELDS))
-        .chain(listed(PUSH_FIELDS))
-        .chain(listed(SESSION_INFO_FIELDS))
-        .chain(listed(SPAWN_ARGS_FIELDS))
-        .chain(listed(IMAGE_FIELDS))
-        .chain(listed(SEARCH_TO_DAEMON_FIELDS))
+    SEARCH_TO_DAEMON_FIELDS
+        .iter()
+        .map(|field| field.requires)
         .collect()
 }
 
-// A table left empty still stays, because its `requires` impl folds it:
-// that family's first post-release field is one row here and nothing else.
-const CONN_TO_DAEMON_FIELDS: &[GatedField<ConnToDaemonMsg>] = &[];
-const CONN_TO_CLIENT_FIELDS: &[GatedField<ConnToClientMsg>] = &[];
-const SESSION_TO_DAEMON_FIELDS: &[GatedField<SessionToDaemonMsg>] = &[];
-const SESSION_TO_CLIENT_FIELDS: &[GatedField<SessionToClientMsg>] = &[];
-const OPS_TO_DAEMON_FIELDS: &[GatedField<OpsToDaemonMsg>] = &[];
-const OPS_TO_CLIENT_FIELDS: &[GatedField<OpsToClientMsg>] = &[];
-const PUSH_FIELDS: &[GatedField<PushMsg>] = &[];
-const SESSION_INFO_FIELDS: &[GatedField<crate::messages::SessionInfo>] = &[];
-const SPAWN_ARGS_FIELDS: &[GatedField<SpawnArgs>] = &[];
-const IMAGE_FIELDS: &[GatedField<ImageMsg>] = &[
-    GatedField {
-        requires: Requires::new(1, "ImageVirtualPlacement.placement_id"),
-        present: |msg| {
-            matches!(
-                msg,
-                ImageMsg::VirtualPlacement {
-                    placement_id: Some(_),
-                    ..
-                }
-            )
-        },
-    },
-    GatedField {
-        requires: Requires::new(1, "ImagePlacement.requested"),
-        present: |msg| {
-            matches!(
-                msg,
-                ImageMsg::Placement {
-                    requested: Some(_),
-                    ..
-                }
-            )
-        },
-    },
-];
-
 impl MinorGated for ImageMsg {
     fn requires(&self) -> Requires {
-        arm_requires(self).max(field_requires(self, IMAGE_FIELDS))
-    }
-}
-
-impl ImageMsg {
-    /// The message as a peer at `minor` may receive it. Image messages
-    /// fan out to every attached window whatever its minor, so the
-    /// sender drops what the peer predates rather than refusing the
-    /// frame: a minor-0 window keys virtual placements by image alone.
-    #[must_use]
-    pub fn for_minor(self, minor: u16) -> Self {
-        match self {
-            Self::VirtualPlacement {
-                image_id,
-                cols,
-                rows,
-                z_index,
-                ..
-            } if minor < 1 => Self::VirtualPlacement {
-                image_id,
-                placement_id: None,
-                cols,
-                rows,
-                z_index,
-            },
-            Self::Placement {
-                image_id,
-                placement_id,
-                anchor_row,
-                anchor_col,
-                cols,
-                rows,
-                source,
-                z_index,
-                requested: Some(_),
-            } if minor < 1 => Self::Placement {
-                image_id,
-                placement_id,
-                anchor_row,
-                anchor_col,
-                cols,
-                rows,
-                source,
-                z_index,
-                requested: None,
-            },
-            other => other,
-        }
+        arm_requires(self)
     }
 }
 const SEARCH_TO_DAEMON_FIELDS: &[GatedField<SearchToDaemonMsg>] = &[GatedField {
@@ -193,7 +101,7 @@ const SEARCH_TO_DAEMON_FIELDS: &[GatedField<SearchToDaemonMsg>] = &[GatedField {
 /// `FrameWriter`](https://docs.rs/felis-transport)), never the caller.
 pub trait MinorGated {
     /// The strictest requirement this value carries, over its own arm,
-    /// its present fields, the closed-enum values it names, and any
+    /// the closed-enum values and connection mode it names, and any
     /// row-codec version it embeds.
     fn requires(&self) -> Requires;
 }
@@ -320,15 +228,9 @@ impl UpgradeRefusal {
     }
 }
 
-impl MinorGated for SpawnArgs {
-    fn requires(&self) -> Requires {
-        field_requires(self, SPAWN_ARGS_FIELDS)
-    }
-}
-
 impl MinorGated for ConnToDaemonMsg {
     fn requires(&self) -> Requires {
-        let arm = arm_requires(self).max(field_requires(self, CONN_TO_DAEMON_FIELDS));
+        let arm = arm_requires(self);
         match self {
             Self::Hello { mode, .. } => {
                 arm.max(Requires::new(mode.since_minor(), "ConnectionMode"))
@@ -340,7 +242,7 @@ impl MinorGated for ConnToDaemonMsg {
 
 impl MinorGated for ConnToClientMsg {
     fn requires(&self) -> Requires {
-        let arm = arm_requires(self).max(field_requires(self, CONN_TO_CLIENT_FIELDS));
+        let arm = arm_requires(self);
         match self {
             Self::Refused { reason, .. } => {
                 arm.max(Requires::new(reason.since_minor(), "RefusalReason"))
@@ -352,61 +254,38 @@ impl MinorGated for ConnToClientMsg {
 
 impl MinorGated for SessionToDaemonMsg {
     fn requires(&self) -> Requires {
-        let arm = arm_requires(self).max(field_requires(self, SESSION_TO_DAEMON_FIELDS));
-        match self {
-            Self::Create { args } => arm.max(args.requires()),
-            Self::Attach { .. } | Self::Detach | Self::ConfigureTheme { .. } | Self::InputFence => {
-                arm
-            }
-        }
+        arm_requires(self)
     }
 }
 
 impl MinorGated for SessionToClientMsg {
     fn requires(&self) -> Requires {
-        let arm = arm_requires(self).max(field_requires(self, SESSION_TO_CLIENT_FIELDS));
+        let arm = arm_requires(self);
         match self {
-            Self::Attached { info } | Self::Created { info } => {
-                arm.max(session_info_requires(info))
-            }
             Self::AttachFailed { reason, .. } => {
                 arm.max(Requires::new(reason.since_minor(), reason.vocabulary()))
             }
-            Self::InputAccepted => arm,
+            Self::Attached { .. } | Self::Created { .. } | Self::InputAccepted => arm,
         }
     }
 }
 
 impl MinorGated for OpsToDaemonMsg {
     fn requires(&self) -> Requires {
-        let arm = arm_requires(self).max(field_requires(self, OPS_TO_DAEMON_FIELDS));
-        match self {
-            Self::Switch { target, .. } => arm.max(match target {
-                crate::messages::SwitchTarget::Session(_) => Requires::BASE,
-                crate::messages::SwitchTarget::Carrier(target) => retarget_requires(target),
-            }),
-            Self::Spawn { args } => arm.max(args.requires()),
-            _ => arm,
-        }
+        arm_requires(self)
     }
 }
 
 impl MinorGated for OpsToClientMsg {
     fn requires(&self) -> Requires {
-        let arm = arm_requires(self).max(field_requires(self, OPS_TO_CLIENT_FIELDS));
+        let arm = arm_requires(self);
         match self {
-            Self::Listed { sessions } => sessions
-                .iter()
-                .fold(arm, |acc, info| acc.max(session_info_requires(info))),
             Self::StatusReply { resources, .. } => resources.iter().fold(arm, |acc, row| {
                 acc.max(Requires::new(row.resource.since_minor(), "ResourceKind"))
             }),
-            Self::Spawned { outcome } => match outcome {
-                crate::messages::SpawnOutcome::Ok { info } => arm.max(session_info_requires(info)),
-                crate::messages::SpawnOutcome::Refused { reason, .. } => {
-                    arm.max(Requires::new(reason.since_minor(), "CreateFailure"))
-                }
-            },
+            Self::Spawned {
+                outcome: crate::messages::SpawnOutcome::Refused { reason, .. },
+            } => arm.max(Requires::new(reason.since_minor(), "CreateFailure")),
             Self::UpgradeReply {
                 outcome: crate::messages::UpgradeOutcome::Refused { reason, .. },
             } => arm.max(Requires::new(reason.since_minor(), "UpgradeRefusal")),
@@ -417,11 +296,7 @@ impl MinorGated for OpsToClientMsg {
 
 impl MinorGated for PushMsg {
     fn requires(&self) -> Requires {
-        let arm = arm_requires(self).max(field_requires(self, PUSH_FIELDS));
-        match self {
-            Self::RetargetHost { target, .. } => arm.max(retarget_requires(target)),
-            Self::Reattach { .. } | Self::Evicted { .. } | Self::SessionExited { .. } => arm,
-        }
+        arm_requires(self)
     }
 }
 
@@ -437,26 +312,13 @@ impl MinorGated for GridMsg {
     }
 }
 
-fn session_info_requires(info: &crate::messages::SessionInfo) -> Requires {
-    field_requires(info, SESSION_INFO_FIELDS)
-}
-
-/// A retarget descriptor is relayed verbatim, so its landing's
-/// [`SpawnArgs`] rides to the peer inside whatever carries it.
-fn retarget_requires(target: &crate::messages::RetargetTarget) -> Requires {
-    match &target.landing {
-        crate::messages::RetargetLanding::Attach(_) => Requires::BASE,
-        crate::messages::RetargetLanding::Create(args) => args.requires(),
-    }
-}
-
 fn arm_requires(arm: &impl crate::messages::Directed) -> Requires {
     let meta = arm.meta();
     Requires::new(meta.since_minor, meta.name)
 }
 
-/// Families whose every addition is an arm: no post-baseline field or
-/// enum value rides inside one.
+/// Families whose only gated additions are arms: no post-baseline
+/// closed-enum value, mode or codec version rides inside one.
 macro_rules! gated_by_arm {
     ($($family:ty),+ $(,)?) => {
         $(impl MinorGated for $family {
@@ -615,30 +477,59 @@ mod tests {
         );
     }
 
-    /// An absent optional field costs nothing, and a table row raises
-    /// the value that carries it: the fold the `requires` impls run
-    /// over an empty table is the one the first post-release field
-    /// joins.
+    /// The ledger's field rows rest on protobuf rather than the gate: a
+    /// decoder that predates an added field reads the body as if the
+    /// sender had left the field out, and a current decoder accepts the
+    /// body an older sender writes. Pinned on the one added field, through
+    /// a hand-written stand-in for the minor-0 schema.
     #[test]
-    fn a_field_is_gated_only_when_it_is_present() {
-        const FUTURE: &[GatedField<SpawnArgs>] = &[GatedField {
-            requires: Requires::new(PROTOCOL_MINOR + 1, "SpawnArgs.future"),
-            present: |args| args.env_base.is_some(),
-        }];
+    fn a_peer_that_predates_a_field_reads_it_as_left_out() {
+        use prost::Message as _;
 
-        let bare = SpawnArgs::default();
-        assert_eq!(bare.requires(), Requires::BASE);
-        assert_eq!(field_requires(&bare, FUTURE), Requires::BASE);
+        #[derive(Clone, PartialEq, prost::Message)]
+        struct VirtualPlacementMinor0 {
+            #[prost(uint32, tag = "1")]
+            image_id: u32,
+            #[prost(uint32, tag = "2")]
+            cols: u32,
+            #[prost(uint32, tag = "3")]
+            rows: u32,
+            #[prost(sint32, tag = "4")]
+            z_index: i32,
+        }
 
-        let carrying = SpawnArgs {
-            env_base: Some(Vec::new()),
-            ..SpawnArgs::default()
+        let carrying = crate::wire::v1::ImageVirtualPlacement {
+            image_id: 12,
+            cols: 4,
+            rows: 2,
+            z_index: -1,
+            placement_id: Some(3),
         };
-        assert_eq!(carrying.requires(), Requires::BASE);
+        let left_out = crate::wire::v1::ImageVirtualPlacement {
+            placement_id: None,
+            ..carrying
+        };
+        let read = |bytes: Vec<u8>| {
+            VirtualPlacementMinor0::decode(bytes.as_slice()).expect("an older decoder reads it")
+        };
         assert_eq!(
-            field_requires(&carrying, FUTURE).minor,
-            PROTOCOL_MINOR + 1,
-            "a table row must raise the value that carries its field"
+            read(carrying.encode_to_vec()),
+            read(left_out.encode_to_vec())
+        );
+
+        let from_older_sender = crate::wire::v1::ImageMsg {
+            msg: Some(crate::wire::v1::image_msg::Msg::VirtualPlacement(left_out)),
+        };
+        assert_eq!(
+            crate::codec::decode::<ImageMsg>(from_older_sender.encode_to_vec().as_slice())
+                .expect("a current decoder accepts it"),
+            ImageMsg::VirtualPlacement {
+                image_id: crate::ImageId(12),
+                placement_id: None,
+                cols: 4,
+                rows: 2,
+                z_index: -1,
+            }
         );
     }
 
@@ -841,8 +732,11 @@ mod tests {
             .iter()
             .map(|(codec, minor)| (format!("row-codec version {codec}"), *minor));
 
-        let listed = gated_fields();
-        let fields = listed.iter().map(|field| (field.what, field.minor));
+        let gated = gated_fields();
+        let fields = ADDED_FIELDS
+            .iter()
+            .copied()
+            .chain(gated.iter().map(|field| (field.what, field.minor)));
 
         let named: Vec<(String, u16)> = arms
             .chain(gated_enum_values())

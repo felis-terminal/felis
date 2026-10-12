@@ -315,40 +315,6 @@ pub(crate) mod tests {
         }
     }
 
-    /// A downgraded message is one the older peer may receive, and a
-    /// peer at the current minor gets the message unchanged.
-    #[test]
-    fn a_message_downgraded_for_a_minor_fits_it() {
-        use crate::minor::MinorGated;
-        for msg in image_cases() {
-            for minor in 0..=crate::PROTOCOL_MINOR {
-                assert!(
-                    msg.clone().for_minor(minor).requires().minor <= minor,
-                    "{msg:?}"
-                );
-            }
-            assert_eq!(msg.clone().for_minor(crate::PROTOCOL_MINOR), msg);
-        }
-    }
-
-    #[test]
-    fn a_minor_0_peer_is_sent_a_placement_without_its_request() {
-        let placement = |requested| ImageMsg::Placement {
-            image_id: ImageId(7),
-            placement_id: Some(PlacementId(3)),
-            anchor_row: 1,
-            anchor_col: 1,
-            cols: 5,
-            rows: 2,
-            source: None,
-            z_index: 0,
-            requested,
-        };
-        let asked = placement(Some(RequestedExtent { cols: 0, rows: 2 }));
-        assert_eq!(asked.clone().for_minor(0), placement(None));
-        assert_eq!(asked.clone().for_minor(1), asked);
-    }
-
     #[test]
     fn image_cases_cover_every_variant() {
         assert_covers_every_arm(&image_cases());
