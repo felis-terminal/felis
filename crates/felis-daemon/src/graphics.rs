@@ -9,8 +9,8 @@ use std::num::NonZeroU32;
 
 use bytes::Bytes;
 use felis_grid::images::{
-    CellPos, Evicted, Extent, Frame, FrameError, ImageEntry, ImageId, InsertError, Placement,
-    PlacementId, Rekeyed, VirtualPlacement,
+    AnyPlacement, CellPos, Displaced, Evicted, Extent, Frame, FrameError, ImageEntry, ImageId,
+    InsertError, Placement, PlacementId, VirtualPlacement,
 };
 use felis_grid::{ApcBody, ScreenSwitch};
 use felis_protocol::messages::{ImageFormat, ImageMsg, ImageTarget, MAX_IMAGE_CHUNK_PAYLOAD};
@@ -529,7 +529,7 @@ pub fn apply_screen_switch(
             let alternate = saved.alternate.take().filter(|_| resumed);
             alternate.unwrap_or_else(|| SavedImages {
                 images: felis_grid::images::ImageStore::new(images.bytes_cap()),
-                placements: felis_grid::images::Placements::new(),
+                placements: felis_grid::images::Placements::with_cap(placements.cap()),
             })
         }
         ScreenSwitch::LeftAlternate { .. } => {
@@ -1114,8 +1114,8 @@ fn claim_placement_id(
             placement_id: Some(id),
         });
         events.push(match &moved {
-            Rekeyed::Anchored(p) => placement_event(p),
-            Rekeyed::Virtual(v) => virtual_event(v),
+            AnyPlacement::Anchored(p) => placement_event(p),
+            AnyPlacement::Virtual(v) => virtual_event(v),
         });
     }
     if virtual_put {
@@ -1162,8 +1162,11 @@ fn upsert_virtual_placement(
         rows,
         z_index,
     };
-    placements.upsert_virtual(placement);
+    let evicted = placements.upsert_virtual(placement);
     images.touch(id);
+    if let Some(gone) = evicted {
+        drop_evicted(images, placements, events, gone);
+    }
     events.push(virtual_event(&placement));
     refs.image_id = Some(id.0);
     ActionOutcome::Ok
@@ -1572,7 +1575,7 @@ fn upsert_placement(
     }
     let placement_id =
         Some(requested.unwrap_or_else(|| placements.allocate_anonymous_id(image_id)));
-    let replaced = placements.upsert(Placement {
+    let displaced = placements.upsert(Placement {
         image_id,
         placement_id,
         anchor,
@@ -1584,8 +1587,12 @@ fn upsert_placement(
         quiet,
         anonymous: requested.is_none(),
     });
-    if replaced.is_some() {
-        images.release(image_id);
+    match displaced {
+        Some(Displaced::Replaced(_)) => {
+            images.release(image_id);
+        }
+        Some(Displaced::Evicted(gone)) => drop_evicted(images, placements, events, gone),
+        None => {}
     }
     refs.image_id = Some(image_id.0);
     if let Some(p) = requested {
@@ -1606,6 +1613,35 @@ fn upsert_placement(
     // architecture").
     grid.advance_cursor_after_image_placement(rows.cells(), cols.cells(), no_cursor_move);
     ActionOutcome::Ok
+}
+
+/// The placement a put pushed over the table's cap, announced as a
+/// delete would announce it.
+fn drop_evicted(
+    images: &mut felis_grid::images::ImageStore,
+    placements: &mut felis_grid::images::Placements,
+    events: &mut Vec<ImageEvent>,
+    gone: AnyPlacement,
+) {
+    let image_id = match gone {
+        AnyPlacement::Anchored(p) => {
+            images.release(p.image_id);
+            events.push(ImageEvent::PlacementRemoved {
+                image_id: p.image_id,
+                placement_id: p.placement_id,
+            });
+            p.image_id
+        }
+        AnyPlacement::Virtual(v) => {
+            events.push(virtual_removed_event(&v));
+            v.image_id
+        }
+    };
+    let unreferenced = images.get(image_id).is_some_and(ImageEntry::is_anonymous)
+        && !placements.references(image_id);
+    if unreferenced {
+        free_image(images, placements, events, image_id);
+    }
 }
 
 /// All four or none: a partial spec collapses to the whole image per

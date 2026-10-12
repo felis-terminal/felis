@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc b2a44f53a7cffd823277e94afbd88035cf6ff90cc1dd1d7f7133348806428277 # shrinks to ops = [Put { image: 1, id: None, row: -2 }, ShiftUp(0)]

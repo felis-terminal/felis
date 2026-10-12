@@ -423,4 +423,47 @@ mod tests {
             started.elapsed()
         );
     }
+
+    #[test]
+    fn a_dumped_placement_table_evicts_the_same_placement_after_restore() {
+        use std::num::NonZeroU16;
+
+        use felis_grid::images::{
+            AnyPlacement, CellPos, Displaced, Extent, ImageId, Placement, PlacementId, Placements,
+            VirtualPlacement,
+        };
+        let anchored = |image: u32| Placement {
+            image_id: ImageId(image),
+            placement_id: Some(PlacementId(1)),
+            anchor: CellPos { row: 1, col: 1 },
+            cols: Extent::Natural(NonZeroU16::MIN),
+            rows: Extent::Natural(NonZeroU16::MIN),
+            source: None,
+            z_index: 0,
+            no_cursor_move: false,
+            quiet: 0,
+            anonymous: false,
+        };
+        let placeholder = VirtualPlacement {
+            image_id: ImageId(1),
+            placement_id: Some(PlacementId(1)),
+            anonymous: false,
+            cols: 1,
+            rows: 1,
+            z_index: 0,
+        };
+        let mut live = Placements::new();
+        live.upsert_virtual(placeholder);
+        live.upsert(anchored(2));
+        let json = serde_json::to_vec(&live).unwrap();
+        let mut restored: Placements = serde_json::from_slice(&json).unwrap();
+        assert_eq!(restored, live);
+        for image in 3..=u32::try_from(live.cap()).unwrap() {
+            assert_eq!(restored.upsert(anchored(image)), None);
+        }
+        assert_eq!(
+            restored.upsert(anchored(0)),
+            Some(Displaced::Evicted(AnyPlacement::Virtual(placeholder)))
+        );
+    }
 }

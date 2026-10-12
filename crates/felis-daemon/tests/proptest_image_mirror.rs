@@ -123,7 +123,7 @@ impl Session {
             parser: Parser::new(),
             grid: Grid::new(6, 20),
             images: ImageStore::new(store_cap()),
-            placements: Placements::new(),
+            placements: Placements::with_cap(4),
             saved: SavedScreens::default(),
             events: Vec::new(),
             shm: ShmDeferral::default(),

@@ -394,6 +394,66 @@ fn virtual_placements_live_and_die_apart_from_anchored_entries() {
 }
 
 #[test]
+fn a_put_past_the_cap_evicts_the_oldest_placement_of_either_kind() {
+    let mut t = Placements::with_cap(3);
+    t.upsert_virtual(virtual_placement(1, 1, 4));
+    assert_eq!(t.upsert(placement(2, Some(1), 0)), None);
+    assert_eq!(t.upsert(placement(3, Some(1), 0)), None);
+    assert_eq!(
+        t.upsert(placement(4, Some(1), 0)),
+        Some(Displaced::Evicted(AnyPlacement::Virtual(
+            virtual_placement(1, 1, 4)
+        )))
+    );
+    assert_eq!(
+        t.upsert_virtual(virtual_placement(5, 1, 4)),
+        Some(AnyPlacement::Anchored(placement(2, Some(1), 0)))
+    );
+    let anchored: Vec<_> = t.iter().map(|p| p.image_id.0).collect();
+    assert_eq!(anchored, vec![3, 4]);
+    assert_eq!(t.iter_virtual().count(), 1);
+}
+
+#[test]
+fn a_replacing_put_at_the_cap_keeps_its_place_and_evicts_nothing() {
+    let mut t = Placements::with_cap(2);
+    t.upsert(placement(1, Some(1), 0));
+    t.upsert(placement(2, Some(1), 0));
+    assert_eq!(
+        t.upsert(placement(1, Some(1), 5)),
+        Some(Displaced::Replaced(placement(1, Some(1), 0)))
+    );
+    t.upsert_virtual(virtual_placement(3, 1, 4));
+    t.upsert_virtual(virtual_placement(3, 1, 6));
+    let anchored: Vec<_> = t.iter().map(|p| (p.image_id.0, p.z_index)).collect();
+    assert_eq!(
+        anchored,
+        vec![(2, 0)],
+        "the replaced placement stayed oldest"
+    );
+}
+
+#[test]
+fn a_rekeyed_anonymous_placement_becomes_the_newest() {
+    let mut t = Placements::with_cap(2);
+    let id = t.allocate_anonymous_id(ImageId(1));
+    t.upsert(Placement {
+        anonymous: true,
+        ..placement(1, Some(id.0), 0)
+    });
+    t.upsert(placement(2, Some(1), 0));
+    t.rekey_anonymous(ImageId(1), id);
+    assert_eq!(
+        t.upsert(placement(3, Some(1), 0)),
+        Some(Displaced::Evicted(AnyPlacement::Anchored(placement(
+            2,
+            Some(1),
+            0
+        ))))
+    );
+}
+
+#[test]
 fn for_image_filters_placements_by_image() {
     let mut t = Placements::new();
     t.upsert(placement(1, Some(1), 0));

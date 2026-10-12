@@ -1022,3 +1022,47 @@ fn a_1047_leave_discards_the_alternate_screen_images() {
     assert!(s.placements.is_empty());
     assert!(s.images.is_empty());
 }
+
+#[test]
+fn a_put_past_the_placement_cap_removes_the_oldest_placement() {
+    let mut s = State::new();
+    s.placements = Placements::with_cap(2);
+    s.dispatch(&body("Ga=t,i=1,f=32,s=1,v=1,q=2", &tiny_rgba_payload()));
+    for p in 1..=3 {
+        s.dispatch(&body(&format!("Ga=p,i=1,p={p},q=2"), b""));
+    }
+    let removed: Vec<_> = s
+        .drain_events()
+        .into_iter()
+        .filter_map(|e| match e {
+            ImageMsg::PlacementRemoved {
+                image_id,
+                placement_id,
+            } => Some((image_id, placement_id)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(removed, vec![(ImageId(1), Some(PlacementId(1)))]);
+    let kept: Vec<_> = s.placements.iter().map(|p| p.placement_id).collect();
+    assert_eq!(kept, vec![Some(PlacementId(2)), Some(PlacementId(3))]);
+    assert_eq!(s.images.get(ImageId(1)).unwrap().refcount(), 2);
+}
+
+#[test]
+fn evicting_the_last_placement_of_an_anonymous_image_deletes_the_image() {
+    let mut s = State::new();
+    s.placements = Placements::with_cap(1);
+    s.dispatch(&body("Ga=T,f=32,s=1,v=1,q=2", &tiny_rgba_payload()));
+    let first = s.images.iter_ids().next().unwrap();
+    s.drain_events();
+    s.dispatch(&body("Ga=T,f=32,s=1,v=1,q=2", &tiny_rgba_payload()));
+    let events = s.drain_events();
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, ImageMsg::Delete { id } if *id == first)),
+        "{events:?}"
+    );
+    assert!(s.images.get(first).is_none());
+    assert_eq!(s.images.len(), 1);
+}

@@ -88,6 +88,8 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
   graphics command at 8 KiB, while kitty's own client sends up to 128 KiB at once; the limit is now kitty's 256 KiB.
 - An image that a program places one cell at a time, as yazi's previewer does, now draws whole. Past the first 64
   placements in one write, the rest were dropped and the bell rang, leaving only a few strips of the image.
+- A program repeating Kitty graphics puts no longer grows the daemon and every attached window without bound. Each
+  screen keeps at most 16384 placements, and a put past that removes the oldest one.
 
 ## [0.1.4] - 2026-10-09
 
