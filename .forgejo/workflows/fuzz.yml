@@ -43,6 +43,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.forgejo/actions/cargo-env
       # Read-only: a PR's targets may differ from main's, so what they find
       # is not written back.
       - name: start from the nightly corpus
@@ -53,6 +54,8 @@ jobs:
       - name: smoke every target (seed corpus + 10k runs each)
         # Shares libFuzzer flags with local runs via justfile to prevent divergence.
         run: nix develop -c just fuzz-smoke
+      - uses: ./.forgejo/actions/cargo-env/done
+        if: always()
 
   nightly:
     name: cargo fuzz nightly long-run
