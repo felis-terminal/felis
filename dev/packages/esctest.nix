@@ -19,6 +19,14 @@ stdenv.mkDerivation {
 
   nativeBuildInputs = [ python3 ];
 
+  # The window-op cases sleep after each resize, iconify or move for a real
+  # xterm's window manager to catch up. The harness applies them in stream
+  # order, so the sleeps (26 s of the run) change no result.
+  postPatch = ''
+    substituteInPlace esctest/tests/xterm_winops.py \
+      --replace-fail 'need_sleep = escargs.args.expected_terminal in ["xterm"]' 'need_sleep = False'
+  '';
+
   dontBuild = true;
 
   installPhase = ''
