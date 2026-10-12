@@ -141,8 +141,9 @@ pub trait Sink {
     fn apc_dispatch(&mut self, body: &[u8]) {}
     /// Same coalescing contract as [`Sink::osc_overflow`].
     fn apc_overflow(&mut self) {}
-    /// Asked once after each APC dispatch by
-    /// [`Parser::advance_until_yield`]; `true` stops the parse there.
+    /// Asked by [`Parser::advance_until_yield`] after each byte that ends
+    /// or interrupts an APC or OSC string, including the byte after an ESC
+    /// that left an OSC; `true` stops the parse there.
     fn take_yield(&mut self) -> bool {
         false
     }

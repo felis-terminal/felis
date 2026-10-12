@@ -4,6 +4,7 @@ use super::*;
 struct LogSink {
     events: Vec<Event>,
     yield_on_apc: bool,
+    yield_on_osc: bool,
     armed: bool,
 }
 
@@ -87,6 +88,7 @@ impl Sink for LogSink {
             body: body.to_vec(),
             end,
         });
+        self.armed = self.yield_on_osc;
     }
     fn osc_overflow(&mut self) {
         self.events.push(Event::OscOverflow);
@@ -1182,11 +1184,17 @@ fn esc_dispatch_table_carries_final_byte_and_intermediates() {
 /// Runs `advance_until_yield` over `chunks` until each is consumed,
 /// returning the events and every stop offset.
 fn parse_yielding(chunks: &[&[u8]]) -> (Vec<Event>, Vec<usize>) {
+    parse_yielding_with(
+        LogSink {
+            yield_on_apc: true,
+            ..LogSink::default()
+        },
+        chunks,
+    )
+}
+
+fn parse_yielding_with(mut sink: LogSink, chunks: &[&[u8]]) -> (Vec<Event>, Vec<usize>) {
     let mut parser = Parser::new();
-    let mut sink = LogSink {
-        yield_on_apc: true,
-        ..LogSink::default()
-    };
     let mut stops = Vec::new();
     for chunk in chunks {
         let mut rest = *chunk;
@@ -1196,6 +1204,58 @@ fn parse_yielding(chunks: &[&[u8]]) -> (Vec<Event>, Vec<usize>) {
         }
     }
     (sink.events, stops)
+}
+
+fn parse_yielding_on_osc(chunks: &[&[u8]]) -> (Vec<Event>, Vec<usize>) {
+    parse_yielding_with(
+        LogSink {
+            yield_on_osc: true,
+            ..LogSink::default()
+        },
+        chunks,
+    )
+}
+
+#[test]
+fn advance_until_yield_stops_on_the_bel_that_ends_the_osc() {
+    let (evs, stops) = parse_yielding_on_osc(&[b"a\x1b]0;x\x07b"]);
+    assert_eq!(stops, vec![7]);
+    assert_eq!(evs, parse(b"a\x1b]0;x\x07b"));
+}
+
+#[test]
+fn advance_until_yield_stops_on_the_backslash_of_the_st_that_ends_the_osc() {
+    let (evs, stops) = parse_yielding_on_osc(&[b"a\x1b]0;x\x1b\\b"]);
+    assert_eq!(
+        stops,
+        vec![8],
+        "after the \\, once the ESC is known to be ST"
+    );
+    assert_eq!(evs, parse(b"a\x1b]0;x\x1b\\b"));
+}
+
+#[test]
+fn advance_until_yield_stops_on_an_st_split_across_chunks() {
+    let (evs, stops) = parse_yielding_on_osc(&[b"\x1b]0;x\x1b", b"\\b"]);
+    assert_eq!(stops, vec![1]);
+    assert_eq!(evs, parse(b"\x1b]0;x\x1b\\b"));
+}
+
+#[test]
+fn advance_until_yield_stops_on_the_byte_that_both_interrupts_an_osc_and_opens_the_next() {
+    let (evs, stops) = parse_yielding_on_osc(&[b"\x1b]0;x\x1b]0;y\x07"]);
+    assert_eq!(stops, vec![7, 4]);
+    assert_eq!(evs, parse(b"\x1b]0;x\x1b]0;y\x07"));
+}
+
+#[test]
+fn advance_until_yield_does_not_ask_after_bytes_outside_a_string() {
+    let sink = LogSink {
+        armed: true,
+        ..LogSink::default()
+    };
+    let (_, stops) = parse_yielding_with(sink, &[b"a\x1b[1m\x1b7\x07\n"]);
+    assert_eq!(stops, Vec::<usize>::new());
 }
 
 #[test]
