@@ -189,7 +189,20 @@ the stream's one terminal (`--once` writes one too). A consumer that falls behin
 the connection without ending the stream.
 
 A full-screen TUI agent (Claude Code etc.) emits no OSC 133 marks, so `send --wait` never fires for it;
-`--session --once` is its completion signal. A plain build emits no OSC 9, so `send --wait` is the tool there.
+`--session --once` is its completion signal only when it is configured to emit OSC 9/99/777. A plain build emits no OSC
+9, so `send --wait` is the tool there.
+
+When a producer emits neither, poll the visible grid against a deadline. The check sees only what is on screen now, so
+anchor the pattern on a row your own input cannot produce (a status line, a line-anchored regex), or the echo of your
+prompt satisfies it before the reply exists:
+
+```sh
+deadline=$((SECONDS + 600))
+until felis sessions capture "$ID" --format jsonl | jq -e 'select(.text | test("^● Done"))' >/dev/null; do
+  [ "$SECONDS" -ge "$deadline" ] && break
+  sleep 2
+done
+```
 
 ## When something fails
 
