@@ -140,14 +140,15 @@ Tool: cargo-fuzz (<https://github.com/rust-fuzz/cargo-fuzz>) over libFuzzer (<ht
 
 ### Targets
 
-Ten targets live under `fuzz/fuzz_targets/`, discoverable via `cargo fuzz list`:
+Eleven targets live under `fuzz/fuzz_targets/`, discoverable via `cargo fuzz list`:
 
 - **`vt_parser`**: arbitrary byte sequences fed to the VT parser.
 - **`kitty_graphics`**: payload bytes for APC G... ST sequences.
 - **`ipc_frame`**: Unix socket framing layer (header and length caps).
 - **`ipc_body`**: framed protobuf payloads and domain conversion.
 - **`row_codec`**: row wire decoding and canonical re-encoding round-trips ([row-codec.md](row-codec.md)).
-- Additional targets: `grid_dispatch`, `kitty_text_sizing`, `sync_output`, `scrollback_search`, and `chord_parser`.
+- Additional targets: `grid_dispatch`, `kitty_text_sizing`, `program_status`, `sync_output`, `scrollback_search`, and
+  `chord_parser`.
 
 ### Acceptance criteria
 

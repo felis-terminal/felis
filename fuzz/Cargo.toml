@@ -68,6 +68,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "program_status"
+path = "fuzz_targets/program_status.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "sync_output"
 path = "fuzz_targets/sync_output.rs"
 test = false
