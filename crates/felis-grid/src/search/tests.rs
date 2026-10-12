@@ -69,6 +69,66 @@ fn case_insensitive_plain() {
     assert_eq!(&hits[0].text[0..5], "Hello");
 }
 
+/// `İ` lowercases to two code points (3 bytes from 2) and the Kelvin
+/// sign to ASCII `k` (1 byte from 3), so a match after either must
+/// still index the original text.
+#[test]
+fn case_insensitive_plain_spans_index_the_original_text() {
+    let ci = SearchOptions {
+        regex: false,
+        case_insensitive: true,
+    };
+    for line in ["İx hello", "\u{212A}x hello"] {
+        let mut sb = Rows::default();
+        push_text(&mut sb, 80, line);
+        let q = SearchQuery::new("HELLO", ci).unwrap();
+        let hits: Vec<_> = sb.search(&q, &ClusterTable::default()).collect();
+        assert_eq!(hits.len(), 1, "{line:?}");
+        assert_eq!(
+            hits[0].col_spans,
+            vec![ColSpan {
+                line_index: -1,
+                col_start: 3,
+                col_end: 8
+            }],
+            "{line:?}"
+        );
+        let span = hits[0].byte_spans[0];
+        let start = line.find("hello").unwrap();
+        assert_eq!(
+            (span.start as usize, span.end as usize),
+            (start, start + 5),
+            "{line:?}"
+        );
+        assert_eq!(
+            &hits[0].text[span.start as usize..span.end as usize],
+            "hello"
+        );
+    }
+}
+
+#[test]
+fn case_insensitive_plain_treats_regex_metacharacters_literally() {
+    let mut sb = Rows::default();
+    push_text(&mut sb, 80, "a.b axb A.B");
+    let q = SearchQuery::new(
+        "a.b",
+        SearchOptions {
+            regex: false,
+            case_insensitive: true,
+        },
+    )
+    .unwrap();
+    let hits: Vec<_> = sb.search(&q, &ClusterTable::default()).collect();
+    assert_eq!(
+        hits[0].byte_spans,
+        vec![
+            ByteSpan { start: 0, end: 3 },
+            ByteSpan { start: 8, end: 11 }
+        ]
+    );
+}
+
 #[test]
 fn regex_with_anchor() {
     let mut sb = Rows::default();
