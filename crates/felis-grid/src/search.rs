@@ -69,7 +69,8 @@ impl SearchQuery {
         self.options
     }
 
-    /// Half-open byte ranges into `text`.
+    /// Half-open, non-empty byte ranges, ascending by start and
+    /// non-overlapping; [`col_spans_of`] depends on the ordering.
     fn match_row(&self, text: &str) -> Vec<(usize, usize)> {
         match &self.matcher {
             Matcher::Plain {
@@ -328,16 +329,53 @@ fn trim_trailing_empty(row: &[Cell]) -> &[Cell] {
     &row[..keep]
 }
 
-/// `None` when the line is blank or has no matches.
-fn line_to_hit(
+/// One row of a stitched line: (`line_index`, byte offset into the
+/// line's text, byte→col map).
+type RowSeg = (i64, usize, Vec<u16>);
+
+/// One segment per (match, touched row). Rows with no bytes never emit.
+fn col_spans_of(raw: &[(usize, usize)], segs: &[RowSeg]) -> Vec<ColSpan> {
+    debug_assert!(raw.is_sorted_by_key(|&(s, _)| s));
+    let mut col_spans = Vec::with_capacity(raw.len());
+    // Rows ending at or before a match's start cannot hold any later
+    // match either, because starts ascend; rescanning them per match
+    // is quadratic on a grid-sized line under the session lock.
+    let mut first = 0;
+    for &(s, e) in raw {
+        while segs
+            .get(first)
+            .is_some_and(|(_, row_start, map)| row_start + (map.len() - 1) <= s)
+        {
+            first += 1;
+        }
+        for (li, row_start, map) in &segs[first..] {
+            if e <= *row_start {
+                break;
+            }
+            let row_len = map.len() - 1;
+            let rel_s = s.saturating_sub(*row_start);
+            let rel_e = (e - row_start).min(row_len);
+            if rel_e <= rel_s {
+                continue;
+            }
+            let (c0, c1) = byte_span_to_col_span((rel_s, rel_e), map);
+            col_spans.push(ColSpan {
+                line_index: *li,
+                col_start: c0,
+                col_end: c1,
+            });
+        }
+    }
+    col_spans
+}
+
+fn stitch(
     line_rows: &[&[Cell]],
-    query: &SearchQuery,
     first_line_index: i64,
     clusters: &ClusterTable,
-) -> Option<SearchHit> {
+) -> (String, Vec<RowSeg>) {
     let mut text = String::new();
-    // Per row: (line_index, byte offset into `text`, byte→col map).
-    let mut segs: Vec<(i64, usize, Vec<u16>)> = Vec::with_capacity(line_rows.len());
+    let mut segs: Vec<RowSeg> = Vec::with_capacity(line_rows.len());
     for (k, row) in line_rows.iter().enumerate() {
         let is_tail = k + 1 == line_rows.len();
         let slice = if is_tail {
@@ -353,6 +391,17 @@ fn line_to_hit(
         segs.push((li, text.len(), map));
         text.push_str(&t);
     }
+    (text, segs)
+}
+
+/// `None` when the line is blank or has no matches.
+fn line_to_hit(
+    line_rows: &[&[Cell]],
+    query: &SearchQuery,
+    first_line_index: i64,
+    clusters: &ClusterTable,
+) -> Option<SearchHit> {
+    let (text, segs) = stitch(line_rows, first_line_index, clusters);
     if text.is_empty() {
         return None;
     }
@@ -367,27 +416,7 @@ fn line_to_hit(
             end: u32::try_from(e).unwrap_or(u32::MAX),
         })
         .collect();
-    let mut col_spans = Vec::with_capacity(raw.len());
-    for &(s, e) in &raw {
-        for (li, row_start, map) in &segs {
-            let row_len = map.len() - 1;
-            let row_end = row_start + row_len;
-            if e <= *row_start || s >= row_end {
-                continue;
-            }
-            let rel_s = s.saturating_sub(*row_start);
-            let rel_e = (e - row_start).min(row_len);
-            if rel_e <= rel_s {
-                continue;
-            }
-            let (c0, c1) = byte_span_to_col_span((rel_s, rel_e), map);
-            col_spans.push(ColSpan {
-                line_index: *li,
-                col_start: c0,
-                col_end: c1,
-            });
-        }
-    }
+    let col_spans = col_spans_of(&raw, &segs);
     Some(SearchHit {
         line_index: first_line_index,
         text,

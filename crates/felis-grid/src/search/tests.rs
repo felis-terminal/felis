@@ -769,3 +769,155 @@ proptest! {
         }
     }
 }
+
+// ---- col_spans_of against the per-match full-row scan ----
+
+/// The straightforward mapping: every match against every row.
+fn col_spans_reference(raw: &[(usize, usize)], segs: &[RowSeg]) -> Vec<ColSpan> {
+    let mut col_spans = Vec::new();
+    for &(s, e) in raw {
+        for (li, row_start, map) in segs {
+            let row_len = map.len() - 1;
+            let row_end = row_start + row_len;
+            if e <= *row_start || s >= row_end {
+                continue;
+            }
+            let rel_s = s.saturating_sub(*row_start);
+            let rel_e = (e - row_start).min(row_len);
+            if rel_e <= rel_s {
+                continue;
+            }
+            let (c0, c1) = byte_span_to_col_span((rel_s, rel_e), map);
+            col_spans.push(ColSpan {
+                line_index: *li,
+                col_start: c0,
+                col_end: c1,
+            });
+        }
+    }
+    col_spans
+}
+
+#[derive(Debug, Clone, Copy)]
+enum CellKind {
+    Empty,
+    Ascii(u8),
+    TwoByte,
+    Wide,
+    Combining,
+}
+
+fn cell_kind() -> impl Strategy<Value = CellKind> {
+    prop_oneof![
+        Just(CellKind::Empty),
+        prop::sample::select(vec![b'a', b'A', b'b', b' ']).prop_map(CellKind::Ascii),
+        Just(CellKind::TwoByte),
+        Just(CellKind::Wide),
+        Just(CellKind::Combining),
+    ]
+}
+
+fn build_row(kinds: &[CellKind], clusters: &mut ClusterTable) -> Vec<Cell> {
+    let cell = |grapheme| Cell {
+        grapheme,
+        ..Cell::default()
+    };
+    let mut row = Vec::new();
+    for kind in kinds {
+        match kind {
+            CellKind::Empty => row.push(cell(Grapheme::Empty)),
+            CellKind::Ascii(b) => row.push(cell(Grapheme::Ascii(*b))),
+            CellKind::TwoByte => row.push(cell(Grapheme::Char('é'))),
+            CellKind::Wide => {
+                row.push(cell(Grapheme::Char('漢')));
+                row.push(cell(Grapheme::Spacer));
+            }
+            CellKind::Combining => {
+                let id = clusters.intern("a\u{301}").unwrap();
+                row.push(cell(Grapheme::Cluster(id)));
+            }
+        }
+    }
+    row
+}
+
+/// Ascending, non-overlapping, non-empty spans with arbitrary gaps,
+/// some running past the line's end.
+fn sorted_spans() -> impl Strategy<Value = Vec<(usize, usize)>> {
+    proptest::collection::vec((0usize..6, 1usize..10), 0..24).prop_map(|steps| {
+        let mut at = 0;
+        steps
+            .into_iter()
+            .map(|(gap, len)| {
+                let s = at + gap;
+                at = s + len;
+                (s, at)
+            })
+            .collect()
+    })
+}
+
+proptest! {
+    #[test]
+    fn col_spans_of_matches_reference_on_real_rows(
+        rows in proptest::collection::vec(proptest::collection::vec(cell_kind(), 0..10), 1..10),
+        pattern in prop::sample::select(vec![
+            "a", "A", "b", "ab", "a ", " ", "é", "漢", "a\u{301}", "\u{301}", "漢a",
+            "a+", "a*", "b?", "\\s+", ".", ".{3}", "[aé漢]+", "(?:a|漢)",
+        ]),
+        regex in any::<bool>(),
+        case_insensitive in any::<bool>(),
+    ) {
+        let mut clusters = ClusterTable::default();
+        let built: Vec<Vec<Cell>> = rows.iter().map(|r| build_row(r, &mut clusters)).collect();
+        let refs: Vec<&[Cell]> = built.iter().map(Vec::as_slice).collect();
+        let (text, segs) = stitch(&refs, -7, &clusters);
+        let q = SearchQuery::new(pattern, SearchOptions { regex, case_insensitive }).unwrap();
+        let raw = q.match_row(&text);
+        for &(s, e) in &raw {
+            prop_assert!(s < e, "empty or backwards match {s}..{e}");
+        }
+        for pair in raw.windows(2) {
+            prop_assert!(pair[0].1 <= pair[1].0, "matches out of order or overlapping: {pair:?}");
+        }
+        prop_assert_eq!(col_spans_of(&raw, &segs), col_spans_reference(&raw, &segs));
+    }
+
+    #[test]
+    fn col_spans_of_matches_reference_on_arbitrary_rows(
+        maps in proptest::collection::vec(proptest::collection::vec(any::<u16>(), 1..8), 0..12),
+        raw in sorted_spans(),
+    ) {
+        let mut segs: Vec<RowSeg> = Vec::new();
+        let mut at = 0;
+        for (k, map) in maps.into_iter().enumerate() {
+            let len = map.len() - 1;
+            segs.push((i64::try_from(k).unwrap(), at, map));
+            at += len;
+        }
+        prop_assert_eq!(col_spans_of(&raw, &segs), col_spans_reference(&raw, &segs));
+    }
+}
+
+/// REQ-605a's bound: one soft-wrapped 2048×2048 line of a single
+/// character, searched for that character. Visiting every row per
+/// match would take ~8.6e9 steps; the mapping must stay linear.
+#[test]
+fn col_spans_of_on_a_grid_sized_line_of_one_char_matches() {
+    const SIDE: usize = 2048;
+    let map: Vec<u16> = (0..=u16::try_from(SIDE).unwrap()).collect();
+    let segs: Vec<RowSeg> = (0..SIDE)
+        .map(|k| (i64::try_from(k).unwrap(), k * SIDE, map.clone()))
+        .collect();
+    let raw: Vec<(usize, usize)> = (0..SIDE * SIDE).map(|b| (b, b + 1)).collect();
+    let spans = col_spans_of(&raw, &segs);
+    assert_eq!(spans.len(), SIDE * SIDE);
+    assert_eq!(
+        spans[SIDE * SIDE - 1],
+        ColSpan {
+            line_index: i64::try_from(SIDE - 1).unwrap(),
+            col_start: u16::try_from(SIDE - 1).unwrap(),
+            col_end: u16::try_from(SIDE).unwrap(),
+        }
+    );
+}

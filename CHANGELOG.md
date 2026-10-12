@@ -51,6 +51,9 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 - A Kitty graphics placement with only `c=` or only `r=` now keeps the image's aspect ratio, as kitty does: the other
   axis follows from the given one, and the image draws at that size instead of stretching to a box whose missing axis
   came from the image's own size.
+- Searching a long soft-wrapped line with many matches (`felis sessions search`, the search overlay) no longer stalls
+  the session: mapping each match to screen columns rescanned every row of the line, so a grid-sized line held the
+  session's lock, and froze its output, for billions of steps.
 - Clearing the screen now treats Kitty graphics images as kitty does. `ED 2` (`clear`), `DECSED 2` and `RIS` drop every
   placement on the screen, `C=1` ones included, and `ED 3` drops scrollback placements too; each then frees every image
   nothing displays, so transmitted-but-unplaced images no longer pile up until the byte cap evicts them. Partial erases
