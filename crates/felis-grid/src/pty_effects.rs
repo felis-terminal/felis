@@ -95,7 +95,7 @@ impl PtyEffectQueue {
 
     /// Coalesces like [`Self::push_scroll`]: moving a placement by `a`
     /// then `b` rows, clipping at the margins each time, is moving it
-    /// by `a + b` once.
+    /// by `a + b` once, up to rounding each source cut to whole pixels.
     pub fn push_region_scroll(&mut self, op: ScrollOp, into_history: bool) {
         let same = |tail: &ScrollOp, history: bool| {
             history == into_history
