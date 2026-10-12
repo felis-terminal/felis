@@ -234,6 +234,8 @@
 
       treefmt = {
         projectRootFile = "flake.nix";
+        # The pre-commit check already runs this wrapper through its treefmt hook.
+        flakeCheck = false;
         # Excluded so rustfmt does not desync committed prost output from buf codegen.
         settings.global.excludes = [
           "crates/felis-protocol/src/generated/**"
