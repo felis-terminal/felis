@@ -20,6 +20,7 @@ pub mod bidi;
 pub mod kitty_graphics;
 pub mod kitty_text_sizing;
 pub mod notification;
+pub mod program_status;
 #[cfg(feature = "state-dump")]
 pub mod state;
 pub mod utf8;
