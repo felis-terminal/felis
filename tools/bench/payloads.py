@@ -133,13 +133,16 @@ def build(kind: str, megabytes: int, directory: Path) -> Path:
     if path.exists() and path.stat().st_size == want:
         return path
     rng = random.Random(f"{SEED}:{kind}")
-    blocks = [BUILDERS[kind](rng) for _ in range(BLOCKS)]
+    # Only as many blocks as the file reaches: each draws from the same
+    # stream in turn, so a short file is the prefix of a long one.
+    needed = min(BLOCKS, -(-want // BLOCK_BYTES))
+    blocks = [BUILDERS[kind](rng) for _ in range(needed)]
     digest = hashlib.sha256()
     written = 0
     with path.open("wb") as sink:
         i = 0
         while written < want:
-            block = blocks[i % BLOCKS][: want - written]
+            block = blocks[i % len(blocks)][: want - written]
             sink.write(block)
             digest.update(block)
             written += len(block)
