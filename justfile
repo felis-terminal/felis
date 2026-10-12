@@ -300,6 +300,8 @@ fuzz-smoke: _fuzz-seed
     #!/usr/bin/env bash
     set -euo pipefail
     cd fuzz
+    # One build up front: `cargo fuzz run` relinks the fuzz crate per target.
+    cargo fuzz build -s {{ fuzz_sanitizer }}
     for target in $(cargo fuzz list); do
         echo "::: fuzzing $target"
         cargo fuzz run -s {{ fuzz_sanitizer }} "$target" -- -runs=10000
