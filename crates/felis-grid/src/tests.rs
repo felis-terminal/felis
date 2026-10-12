@@ -1279,7 +1279,7 @@ fn pty_effects_drain_in_byte_stream_order() {
     burst.extend_from_slice(b"\x1b[2J"); // ED 2 → ImagesCleared
     burst.extend_from_slice(b"\x1b_Ga=q,i=1;\x1b\\"); // → Apc
     burst.extend_from_slice(b"\x1b[c"); // DA1 → Response
-    burst.extend_from_slice(b"\x1b]7501;state=done\x07"); // → ProgramStatus
+    burst.extend_from_slice(b"\x1b]7501;state=working\x07"); // → ProgramStatus
     burst.extend_from_slice(b"\x1b]133;A\x07"); // → PromptStarted
     burst.extend_from_slice(b"a\r\nb\r\n"); // bottom LF → ScrolledIntoScrollback
     burst.extend_from_slice(b"\x1b[?1049h"); // → ScreenSwitch

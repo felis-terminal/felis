@@ -506,7 +506,14 @@ impl Grid {
             felis_vt::OscEnd::Interrupted => return,
         };
         let effect = match parse_osc7501(body, terminator) {
-            Some(Osc7501::Report(report)) => ProgramStatusEffect::Report(Box::new(report)),
+            Some(Osc7501::Report(report)) => {
+                self.prompt_expiry_owed |= matches!(
+                    report.state,
+                    felis_vt::program_status::State::Working
+                        | felis_vt::program_status::State::Blocked
+                );
+                ProgramStatusEffect::Report(Box::new(report))
+            }
             Some(Osc7501::Clear { id }) => ProgramStatusEffect::Clear { id },
             Some(Osc7501::Query | Osc7501::Dropped(_)) | None => return,
         };

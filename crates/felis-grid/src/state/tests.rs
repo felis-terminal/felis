@@ -125,6 +125,19 @@ fn a_status_queue_one_short_of_its_yield_survives_the_hop() {
     );
 }
 
+/// A transient report before the hop still owes the next prompt start
+/// its expiry after it.
+#[test]
+fn an_owed_prompt_expiry_survives_the_hop() {
+    let mut parser = Parser::new();
+    let mut grid = Grid::new(2, 8);
+    parser.advance(&mut grid, b"\x1b]7501;state=working\x07");
+    assert_eq!(grid.take_pty_effects().len(), 1, "the report");
+    let (mut parser, mut grid) = hop(&parser, &grid);
+    parser.advance(&mut grid, b"\x1b]133;A\x07");
+    assert_eq!(grid.take_pty_effects(), [PtyEffect::PromptStarted]);
+}
+
 #[test]
 fn a_full_scrollback_ring_survives_the_hop() {
     let mut output = Vec::new();

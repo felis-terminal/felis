@@ -619,6 +619,11 @@ pub struct Grid {
     /// by an effect that spends an outbox budget; taken by
     /// [`felis_vt::Sink::take_yield`].
     yield_pending: bool,
+    /// A `working` or `blocked` OSC 7501 report was queued after the last
+    /// queued prompt start. Without one the daemon holds no record a
+    /// prompt start expires, so an OSC 133 `A` queues nothing: a shell
+    /// that never reports pays no effect per prompt.
+    prompt_expiry_owed: bool,
     /// `ESC =` / `ESC >` DECKPAM / DECKPNM, mirrored via [`ModeSnapshot`].
     application_keypad: bool,
     /// `?9001` win32-input-mode, requested by `ConPTY` on startup and by
@@ -1009,6 +1014,7 @@ impl Grid {
             pending_bidi: editing::PendingBidi::default(),
             graphics_tracker: felis_vt::kitty_graphics::ReassemblyTracker::new(),
             yield_pending: false,
+            prompt_expiry_owed: false,
             dcs: None,
             title: None,
             icon_name: None,

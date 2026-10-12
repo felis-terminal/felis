@@ -737,7 +737,10 @@ impl Sink for Grid {
                         let Some(mark) = parse_osc_133(text) else {
                             return;
                         };
-                        if mark.kind == PromptKind::PromptStart && !mark.secondary {
+                        if mark.kind == PromptKind::PromptStart
+                            && !mark.secondary
+                            && std::mem::take(&mut self.prompt_expiry_owed)
+                        {
                             self.pty_effects.push(PtyEffect::PromptStarted);
                             self.yield_pending |= self.pty_effects.status_budget_spent();
                         }
