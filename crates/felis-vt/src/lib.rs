@@ -54,6 +54,17 @@ pub const APC_BUFFER_LIMIT: usize = 256 * 1024;
 
 const _: () = assert!(APC_BUFFER_LIMIT > 4096 && OSC_BUFFER_LIMIT > 4096);
 
+/// How an OSC body ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OscEnd {
+    Bel,
+    /// `ESC \`; felis never reads 8-bit C1 ST.
+    St,
+    /// An ESC that does not start ST, or CAN / SUB: the producer never
+    /// finished the sequence.
+    Interrupted,
+}
+
 /// Williams DFA states plus DCS / OSC sub-states.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "state-dump", derive(serde::Serialize, serde::Deserialize))]
@@ -120,8 +131,7 @@ pub trait Sink {
     /// OSC dispatch for bytes between introducer and terminator.
     ///
     /// Truncated to [`OSC_BUFFER_LIMIT`], numeric prefix included.
-    /// `bell_terminated` is true for `BEL`, false for `ST`.
-    fn osc_dispatch(&mut self, body: &[u8], bell_terminated: bool) {}
+    fn osc_dispatch(&mut self, body: &[u8], end: OscEnd) {}
     /// Fires at least once per overflowing payload but not necessarily per
     /// dropped byte: the bulk body path coalesces a dropped run into one call.
     fn osc_overflow(&mut self) {}
@@ -151,6 +161,9 @@ pub struct Parser {
     osc: OscBuffer,
     apc: ApcBuffer,
     sos_pm_apc_kind: Option<SosPmApcKind>,
+    /// An ESC left `OscString` and the body in `osc` waits for the next
+    /// byte to say whether that ESC began ST.
+    osc_pending: bool,
 }
 
 /// APC is the only flavor the parser dispatches; SOS / PM are discarded.
@@ -169,6 +182,7 @@ impl fmt::Debug for Parser {
             .field("params_len", &self.params.len)
             .field("intermediates_len", &self.intermediates.len)
             .field("osc_len", &self.osc.bytes.len())
+            .field("osc_pending", &self.osc_pending)
             .field("apc_len", &self.apc.bytes.len())
             .field("sos_pm_apc_kind", &self.sos_pm_apc_kind)
             .finish()
