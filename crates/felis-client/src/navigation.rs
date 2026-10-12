@@ -528,10 +528,9 @@ impl App {
 
     /// Refuses nested visits: pipe/run chains collapse into a single return.
     /// Carrying parked handoffs across nested round-trips risks silently
-    /// dropping them on dead-connection error paths. Chains that retargeted
-    /// to ordinary sessions still owe a return.
+    /// dropping them on dead-connection error paths.
     pub(crate) fn refuse_nested_visit(&mut self, chord: &str) -> bool {
-        if !self.pipe_state.owes_a_return() {
+        if !self.pipe_state.in_visit() {
             return false;
         }
         self.set_notice(format!(

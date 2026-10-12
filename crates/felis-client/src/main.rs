@@ -1552,9 +1552,11 @@ impl PipeState {
         restore
     }
 
-    /// Whether a pipe/run visit still owes a return.
-    const fn owes_a_return(&self) -> bool {
-        matches!(self, Self::Active { .. } | Self::Returning { .. })
+    /// Whether the window sits inside a pipe/run visit. A parked
+    /// `Returning` does not count: a chord fired from the ordinary
+    /// session a chain re-pointed to supersedes that return.
+    const fn in_visit(&self) -> bool {
+        matches!(self, Self::Active { .. })
     }
 
     /// Conditional for the same reason as [`Self::settle_returning`].

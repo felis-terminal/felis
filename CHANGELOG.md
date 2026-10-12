@@ -39,6 +39,9 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 
 ### Fixed
 
+- A `pipe` or `run` keybinding no longer gets refused with "this pipe/run visit still owes a return" on a session that a
+  `run` command switched the window to (a session picker running `felis sessions switch`, say). The refusal used to hold
+  until some other switch moved the window.
 - Clearing the screen now treats Kitty graphics images as kitty does. `ED 2` (`clear`), `DECSED 2` and `RIS` drop every
   placement on the screen, `C=1` ones included, and `ED 3` drops scrollback placements too; each then frees every image
   nothing displays, so transmitted-but-unplaced images no longer pile up until the byte cap evicts them. Partial erases

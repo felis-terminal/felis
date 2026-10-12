@@ -493,7 +493,11 @@ transient hops (a local script re-entering a remote one) still collapses into th
 A re-point the chain makes (the landing an intent asks for from inside a visit) carries the parked viewport past itself,
 so the far end of the chain still has one to restore, but it does not leave the window marked as sitting on a transient:
 what an intent named is an ordinary session as far as the window can tell, and a window that kept the mark would stop
-recording the user's own moves out of that session for the rest of its life.
+recording the user's own moves out of that session for the rest of its life. For the same reason, a `pipe` or `run`
+chord fired from there is not refused. Any such chord that acts (every one but a `pipe` of an empty selection) drops the
+parked viewport, whether it opens a transient or writes to an in-place sink, so a later unwind to the chain's origin
+lands without restoring it. Refusing instead would lock every pipe/run chord on that session until some unrelated
+landing settled the handoff; only a chord fired inside a live transient is refused.
 
 ### Every ladder attempt is time-bounded
 
