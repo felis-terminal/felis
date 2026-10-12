@@ -1293,6 +1293,7 @@ fn pty_effects_drain_in_byte_stream_order() {
             PtyEffect::ImagesCleared(_) => "images_cleared",
             PtyEffect::ScrolledIntoScrollback(_) => "scrolled",
             PtyEffect::AltScreenScrolled(_) => "alt_scrolled",
+            PtyEffect::RegionScrolled { .. } => "region_scrolled",
             PtyEffect::HardReset => "hard_reset",
             PtyEffect::Scrolled { .. } => "scroll_op",
             PtyEffect::ScreenSwitch(_) => "switch",
@@ -1365,6 +1366,86 @@ fn adjacent_scrollback_pushes_coalesce_and_interleaved_effects_split_the_run() {
                 PtyEffect::Scrolled { .. },
                 PtyEffect::Response(_),
                 PtyEffect::ScrolledIntoScrollback(1),
+                PtyEffect::Scrolled { .. },
+            ]
+        ),
+        "effects={effects:?}"
+    );
+}
+
+#[test]
+fn region_scrolls_of_one_band_coalesce_and_report_their_band() {
+    let mut p = Parser::new();
+    let mut g = Grid::new(6, 8);
+    drive(&mut p, &mut g, b"\x1b[2;4r\x1b[4;1H\n\n\x1b[2;1H\x1bM");
+    let regions: Vec<_> = g
+        .take_pty_effects()
+        .into_iter()
+        .filter_map(|e| match e {
+            PtyEffect::RegionScrolled { op, into_history } => Some((
+                op.region_top,
+                op.region_bottom,
+                op.n_rows,
+                op.direction,
+                into_history,
+            )),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        regions,
+        [
+            (1, 3, 2, ScrollDirection::Up, false),
+            (1, 3, 1, ScrollDirection::Down, false),
+        ]
+    );
+}
+
+#[test]
+fn a_region_anchored_at_the_primary_top_scrolls_into_history() {
+    let mut p = Parser::new();
+    let mut g = Grid::new(6, 8);
+    drive(&mut p, &mut g, b"\x1b[1;3r\x1b[3;1H\n");
+    let effects = g.take_pty_effects();
+    assert!(
+        matches!(
+            effects.as_slice(),
+            [
+                PtyEffect::RegionScrolled {
+                    op: ScrollOp {
+                        region_top: 0,
+                        region_bottom: 2,
+                        n_rows: 1,
+                        direction: ScrollDirection::Up,
+                    },
+                    into_history: true,
+                },
+                PtyEffect::Scrolled { .. },
+            ]
+        ),
+        "effects={effects:?}"
+    );
+}
+
+#[test]
+fn a_full_screen_reverse_scroll_is_a_region_scroll_of_the_whole_screen() {
+    let mut p = Parser::new();
+    let mut g = Grid::new(4, 8);
+    drive(&mut p, &mut g, b"\x1bM");
+    let effects = g.take_pty_effects();
+    assert!(
+        matches!(
+            effects.as_slice(),
+            [
+                PtyEffect::RegionScrolled {
+                    op: ScrollOp {
+                        region_top: 0,
+                        region_bottom: 3,
+                        n_rows: 1,
+                        direction: ScrollDirection::Down,
+                    },
+                    into_history: false,
+                },
                 PtyEffect::Scrolled { .. },
             ]
         ),

@@ -102,6 +102,17 @@ fn replay_effects(
             PtyEffect::AltScreenScrolled(n) => {
                 shift_placements(session, n, 0);
             }
+            PtyEffect::RegionScrolled { op, into_history } => {
+                let retain = u32::try_from(core.grid.scrollback().len()).unwrap_or(u32::MAX);
+                crate::graphics::scroll_region_placements(
+                    &mut session.images,
+                    &mut session.placements,
+                    &mut session.image_events,
+                    (op, into_history),
+                    (session.cell_pixel_w, session.cell_pixel_h),
+                    retain,
+                );
+            }
             // RIS leaves the alternate screen; the primary placements come
             // back first so the clear that follows spares their history
             // rows, as kitty's reset of the primary screen does.

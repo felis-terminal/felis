@@ -248,6 +248,27 @@ straddling quads keep a negative y-origin and clip in clip space, with no scisso
 Revisit if Kitty ever specifies placement behavior on scrollback _trim_ more precisely than "image is freed when its
 text leaves the buffer": re-check the eviction horizon against upstream.
 
+## Region scrolls: where felis departs from kitty
+
+Placements inside a scrolled region follow kitty's `scroll_filter_margins_func`: they move, are clipped at a margin, and
+are dropped once outside. felis departs from it in two places, both where kitty's region path disagrees with its own
+full-screen path:
+
+- **A region anchored at the primary screen's top** pushes its top rows into scrollback. Kitty's region path clips a
+  placement at that margin and leaves the placements already in history in place, so they slide one row off their text
+  per scroll. felis moves both into history whole, as a full-screen scroll does, so scrolling back shows the image whole
+  beside its text.
+- **A full-screen reverse scroll** runs the region rule over the whole screen. Kitty's full-screen path moves every
+  placement down, those in history included though no history text moves, and keeps the placements pushed off the bottom
+  although their text is gone.
+
+The survivors of a region scroll are re-sent one `Placement` each, the shape the list above rejects for full-screen
+scrolls: a region scroll moves only some placements and changes the extent and source rectangle of a clipped one, which
+a uniform shift cannot express.
+
+Revisit if kitty's region path starts carrying placements into history, or its full-screen path stops moving history
+placements on a reverse scroll: follow upstream again.
+
 ## Anonymous transmits
 
 A transmit may omit `i=`/`I=`; felis then allocates the id itself (the rule is in the

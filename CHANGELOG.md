@@ -72,6 +72,9 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 - A Kitty graphics placement with only some of `x`, `y`, `w`, `h` now crops as kitty does: `x` and `y` default to 0 and
   `w` and `h` to the image's size. It used to draw the whole image unless all four were given.
 - A Kitty graphics placement whose image was evicted in the same burst that placed it no longer lingers in the window.
+- Kitty graphics images inside a scroll region (`DECSTBM`) now scroll with its text, as in kitty, and so do images on a
+  reverse scroll (`RI`, `SD`). An image the scroll pushes partly past a margin is cut off there, and one pushed wholly
+  out of the region is removed. They used to stay put while the text moved under them.
 - The alternate screen now has a Kitty graphics image store of its own, as in kitty. A full-screen program can no longer
   free the images on the shell screen it covers, whether by clearing its screen, deleting by id range, or filling the
   byte cap, and an image it sends with an id the shell already used no longer replaces the shell's image. Leaving the

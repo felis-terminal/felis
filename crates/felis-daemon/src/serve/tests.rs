@@ -2300,6 +2300,72 @@ async fn scroll_into_scrollback_retains_placement_and_emits_shift() {
     );
 }
 
+/// docs/reference/protocols/kitty-graphics.md: a scroll of a DECSTBM
+/// region moves the placements inside it, re-stated one by one, and
+/// leaves the one below it alone.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_region_scroll_moves_the_placements_inside_the_region() {
+    use crate::graphics::ImageEvent;
+    use std::num::NonZeroU16;
+
+    use felis_grid::images::{
+        CellPos, Extent, ImageEntry, ImageFormat, ImageId, Placement, PlacementId,
+    };
+
+    let mut session = owned_session("read _x");
+    session
+        .images
+        .insert(
+            ImageId(7),
+            ImageEntry::new(8, 8, ImageFormat::Rgba32, vec![0xAB; 8 * 8 * 4]),
+        )
+        .expect("insert under cap");
+    for (id, row) in [(1, 5), (2, 12)] {
+        session.placements.upsert(Placement {
+            image_id: ImageId(7),
+            placement_id: Some(PlacementId(id)),
+            anchor: CellPos { row, col: 1 },
+            cols: Extent::Requested(NonZeroU16::new(8).unwrap()),
+            rows: Extent::Requested(NonZeroU16::new(3).unwrap()),
+            source: None,
+            z_index: 0,
+            no_cursor_move: false,
+            quiet: 0,
+            anonymous: false,
+        });
+    }
+    {
+        let mut core = session.lock_core();
+        let core = &mut *core;
+        core.parser
+            .advance(&mut core.grid, b"\x1b[2;10r\x1b[10;1H\n\n");
+    }
+    let core = Arc::clone(&session.core);
+    drain_effects(&mut session, &mut core.lock()).unwrap();
+
+    let rows: Vec<(u32, i32)> = session
+        .placements
+        .iter()
+        .map(|p| (p.placement_id.unwrap().0, p.anchor.row))
+        .collect();
+    assert_eq!(rows, [(1, 3), (2, 12)]);
+    let restated: Vec<(Option<PlacementId>, i32)> = session
+        .image_events
+        .iter()
+        .filter_map(|m| match m {
+            ImageEvent::Placement {
+                placement_id,
+                anchor_row,
+                ..
+            } => Some((*placement_id, *anchor_row)),
+            ImageEvent::PlacementsShifted { .. } => panic!("the whole table did not move"),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(restated, [(Some(PlacementId(1)), 3)]);
+}
+
 /// Measurement (ignored): attached end-to-end drain of large input files.
 ///
 /// Subscriber pull-paces at ~60 Hz like the GUI client to measure throughput.

@@ -1001,6 +1001,18 @@ impl Grid {
         );
     }
 
+    fn note_region_scrolled(&mut self, n: u16, direction: ScrollDirection, into_history: bool) {
+        self.pty_effects.push_region_scroll(
+            ScrollOp {
+                region_top: self.margins.top,
+                region_bottom: self.margins.bottom,
+                n_rows: n,
+                direction,
+            },
+            into_history,
+        );
+    }
+
     /// Top rows fall into scrollback only when the region is anchored
     /// at row 0 on the primary screen; a sub-region or the alt screen
     /// discards them (xterm / kitty) so alt-screen animations do not
@@ -1047,12 +1059,13 @@ impl Grid {
             // depth.
             if full_screen {
                 self.scroll_full_screen_into_history(n, &blank);
+                // Saturating: the u32::MAX clamp just evicts every
+                // placement next drain.
+                self.note_scrolled_into_scrollback(u32::try_from(n).unwrap_or(u32::MAX));
             } else {
                 self.scroll_partial_top_into_history(n, region_bottom, &blank);
+                self.note_region_scrolled(n_u16, ScrollDirection::Up, true);
             }
-            // Saturating: the u32::MAX clamp just evicts every
-            // placement next drain.
-            self.note_scrolled_into_scrollback(u32::try_from(n).unwrap_or(u32::MAX));
             self.scrollback_total_pushed = self
                 .scrollback_total_pushed
                 .saturating_add(u64::try_from(n).unwrap_or(u64::MAX));
@@ -1064,6 +1077,8 @@ impl Grid {
                 self.pty_effects.push(PtyEffect::AltScreenScrolled(
                     u32::try_from(n).unwrap_or(u32::MAX),
                 ));
+            } else {
+                self.note_region_scrolled(n_u16, ScrollDirection::Up, false);
             }
         }
         self.queue_band_scroll(
@@ -1108,6 +1123,7 @@ impl Grid {
         };
         self.screen
             .rotate_region(region_top, region_bottom, n, ScrollDirection::Down, &blank);
+        self.note_region_scrolled(n_u16, ScrollDirection::Down, false);
         self.queue_band_scroll(
             self.margins.top,
             self.margins.bottom,
