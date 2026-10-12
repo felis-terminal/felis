@@ -776,6 +776,9 @@ The stdio contract:
   `felis-bridge-v1.schema.json` ("JSON Schema" above); a line that fails its shape is answered `malformed_request`, with
   two exceptions the grammar also states but the bridge charges to the request rather than to its spelling: the
   `rows`/`cols` pairing below, and `sessions.switch`'s required `from`. Both answer `invalid_request`.
+- When a `cancel` op or stdin EOF cancels a stream, items that reach the bridge after the cancel are dropped, and a
+  clean `end` counts only the item lines the bridge wrote for that stream. A stream the daemon has not terminated by the
+  time a stdin-EOF shutdown gives up waiting ends with a `canceled` failing terminal instead.
 - Closing stdin cleanly cancels in-flight operations and exits `0`. A stdin read failure exits `1`. A stdout write or
   flush failure stops every operation, closes every daemon link, and exits `1` without waiting for stdin EOF. A first
   `Ops` dial the daemon refuses `at_capacity` is answered with `id: null` before any line is read, and exits `1` as that

@@ -28,6 +28,9 @@ pub(super) struct ActiveOp {
 pub(super) struct ActiveState {
     pub(super) done: bool,
     pub(super) terminal: Option<TerminalSlot>,
+    /// What a clean terminal's `count` reports, rather than the daemon's
+    /// count: a cancel drops in-flight items the daemon already counted.
+    pub(super) items: u64,
 }
 
 #[derive(Default)]
@@ -54,9 +57,16 @@ impl StreamSlot {
 }
 
 impl ActiveOp {
-    pub(super) async fn emit_open(&self, out: &Out, object: String) -> Result<(), OutputClosed> {
+    /// `item` counts the line toward the clean terminal's `count`; a
+    /// `lag` event does not.
+    pub(super) async fn emit_open(
+        &self,
+        out: &Out,
+        object: String,
+        item: bool,
+    ) -> Result<(), OutputClosed> {
         let (queue, budget) = out.reserve_item().await?;
-        let state = self.state.lock_or_poisoned();
+        let mut state = self.state.lock_or_poisoned();
         if !state.done {
             let _sender = queue.send(OutLine::Data {
                 text: object,
@@ -64,14 +74,23 @@ impl ActiveOp {
                 terminal: None,
                 written: None,
             });
+            if item {
+                state.items += 1;
+            }
         }
         Ok(())
     }
 
     /// `false` means the operation already had a terminal and this one
     /// is discarded, which keeps "exactly one terminal per stream" true
-    /// when a natural end and the shutdown path race.
-    fn terminate(&self, object: String, written: impl FnOnce() + Send + 'static) -> bool {
+    /// when a natural end and the shutdown path race. `render` gets the
+    /// item count under the same lock that queues items, so the count
+    /// is exactly the item lines ahead of the terminal.
+    fn terminate(
+        &self,
+        render: impl FnOnce(u64) -> String,
+        written: impl FnOnce() + Send + 'static,
+    ) -> bool {
         let mut state = self.state.lock_or_poisoned();
         if state.done {
             return false;
@@ -80,7 +99,7 @@ impl ActiveOp {
             return false;
         };
         state.done = true;
-        terminal.send(object, written);
+        terminal.send(render(state.items), written);
         true
     }
 
@@ -193,6 +212,7 @@ impl Core {
             state: std::sync::Mutex::new(ActiveState {
                 done: false,
                 terminal: Some(terminal),
+                items: 0,
             }),
             id: request.id.clone(),
             stream: std::sync::Mutex::new(StreamSlot::default()),
@@ -610,7 +630,7 @@ pub(super) async fn settle(
         let _joined = task.await;
     }
     for entry in outstanding {
-        let _answered = entry.terminate(entry.shutdown_terminal(err), || {});
+        let _answered = entry.terminate(|_| entry.shutdown_terminal(err), || {});
     }
 }
 
@@ -663,7 +683,7 @@ impl Op {
 
     pub(super) async fn item(&self, body: Value) -> Result<(), BridgeError> {
         self.entry
-            .emit_open(&self.out, envelope(self.id(), None, Body::Item(body)))
+            .emit_open(&self.out, envelope(self.id(), None, Body::Item(body)), true)
             .await
             .map_err(Into::into)
     }
@@ -673,6 +693,7 @@ impl Op {
             .emit_open(
                 &self.out,
                 envelope(self.id(), Some("lag"), Body::Dropped(dropped)),
+                false,
             )
             .await
             .map_err(Into::into)
@@ -681,34 +702,33 @@ impl Op {
     /// Stdout, like the errors: on the bridge a reply that cannot be
     /// correlated cannot be used.
     pub(super) fn result(&self, body: Value) {
-        self.finish(envelope(self.id(), None, Body::Result(body)));
+        let object = envelope(self.id(), None, Body::Result(body));
+        self.finish(|_| object);
     }
 
     fn error(&self, err: &BridgeError) {
-        self.finish(error_object(self.id(), err));
+        let object = error_object(self.id(), err);
+        self.finish(|_| object);
     }
 
     /// Spelled exactly as the one-shot verbs spell theirs, with only
     /// the correlation `id` added: one contract in two framings.
-    pub(super) fn end(&self, count: u64, exit_code: Option<u32>) {
-        self.finish(envelope(
-            self.id(),
-            Some("end"),
-            Body::End { count, exit_code },
-        ));
+    pub(super) fn end(&self, exit_code: Option<u32>) {
+        self.finish(|count| envelope(self.id(), Some("end"), Body::End { count, exit_code }));
     }
 
     fn error_terminal(&self, err: &BridgeError) {
-        self.finish(error_terminal_object(self.id(), err));
+        let object = error_terminal_object(self.id(), err);
+        self.finish(|_| object);
     }
 
     /// Publication, not task scheduling, owns the id lifetime: the
     /// callback runs only after stdout accepts the JSONL delimiter.
-    fn finish(&self, object: String) {
+    fn finish(&self, render: impl FnOnce(u64) -> String) {
         let core = Arc::clone(&self.core);
         let key = self.key.clone();
         let entry = Arc::clone(&self.entry);
-        let _answered = self.entry.terminate(object, move || {
+        let _answered = self.entry.terminate(render, move || {
             core.retire(&key, &entry);
         });
     }
