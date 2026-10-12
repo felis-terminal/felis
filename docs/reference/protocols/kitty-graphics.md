@@ -246,9 +246,9 @@ ESC _ G <id keys> ; <status> ESC \
 ```
 
 The id keys echo whichever of `i=<image id>`, `I=<image number>` and a non-zero `p=<placement id>` the request carried,
-in that order; a transmission or put by `I=` adds the `i=` it resolved to. `<status>` is `OK` on success, and `<code>`
-or `<code>:<message>` on failure; in a message `;`, C0 bytes and DEL are replaced with `_`, so a message can neither end
-the APC early nor put bytes of its own on the PTY.
+in that order; a transmission or put by `I=` adds the `i=` it resolved to, and an `a=f` reply ends with the non-zero
+`r=` it carried. `<status>` is `OK` on success, and `<code>` or `<code>:<message>` on failure; in a message `;`, C0
+bytes and DEL are replaced with `_`, so a message can neither end the APC early nor put bytes of its own on the PTY.
 
 A command carrying both a non-zero `i=` and a non-zero `I=` is refused with `EINVAL` before its action runs, a delete
 included. Otherwise, only a command with a non-zero `i=` or `I=` is answered, as in kitty; a command without one has
