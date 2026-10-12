@@ -28,11 +28,7 @@ pub enum SearchQueryError {
 
 #[derive(Debug, Clone)]
 enum Matcher {
-    /// `needle` is pre-lowercased when `case_insensitive`.
-    Plain {
-        needle: String,
-        case_insensitive: bool,
-    },
+    Plain(String),
     Regex(regex::Regex),
 }
 
@@ -41,25 +37,29 @@ impl SearchQuery {
         if pattern.is_empty() {
             return Err(SearchQueryError::EmptyNeedle);
         }
-        let matcher = if options.regex {
+        // A case-insensitive substring rides the regex engine, escaped:
+        // lowercasing the haystack instead would report offsets into the
+        // lowered copy, which drift from `text` wherever lowercasing
+        // changes a character's byte length (`İ`, the Kelvin sign).
+        let matcher = if options.regex || options.case_insensitive {
+            let escaped;
+            let source = if options.regex {
+                pattern
+            } else {
+                escaped = regex::escape(pattern);
+                &escaped
+            };
             // The size cap keeps an adversarial pattern from blowing the
             // daemon's memory; 10 MiB is `regex` v1's default, pinned
             // against an upstream shift.
-            let r = regex::RegexBuilder::new(pattern)
+            let r = regex::RegexBuilder::new(source)
                 .case_insensitive(options.case_insensitive)
                 .size_limit(10 * 1024 * 1024)
                 .build()
                 .map_err(|e| SearchQueryError::BadRegex(e.to_string()))?;
             Matcher::Regex(r)
         } else {
-            Matcher::Plain {
-                needle: if options.case_insensitive {
-                    pattern.to_lowercase()
-                } else {
-                    pattern.to_string()
-                },
-                case_insensitive: options.case_insensitive,
-            }
+            Matcher::Plain(pattern.to_string())
         };
         Ok(Self { matcher, options })
     }
@@ -73,24 +73,14 @@ impl SearchQuery {
     /// non-overlapping; [`col_spans_of`] depends on the ordering.
     fn match_row(&self, text: &str) -> Vec<(usize, usize)> {
         match &self.matcher {
-            Matcher::Plain {
-                needle,
-                case_insensitive,
-            } => {
-                let haystack_owned;
-                let haystack = if *case_insensitive {
-                    haystack_owned = text.to_lowercase();
-                    haystack_owned.as_str()
-                } else {
-                    text
-                };
+            Matcher::Plain(needle) => {
                 let mut hits = Vec::new();
                 let mut start = 0;
-                while let Some(rel) = haystack[start..].find(needle.as_str()) {
+                while let Some(rel) = text[start..].find(needle.as_str()) {
                     let abs = start + rel;
                     hits.push((abs, abs + needle.len()));
                     start = abs + needle.len().max(1);
-                    if start >= haystack.len() {
+                    if start >= text.len() {
                         break;
                     }
                 }

@@ -54,6 +54,9 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 - Searching a long soft-wrapped line with many matches (`felis sessions search`, the search overlay) no longer stalls
   the session: mapping each match to screen columns rescanned every row of the line, so a grid-sized line held the
   session's lock, and froze its output, for billions of steps.
+- A case-insensitive search without `--regex` (`felis sessions search --case-insensitive`, the search overlay) now
+  reports `byte_spans` and `col_spans` at the match itself on a line where a character before it changes length when
+  lowercased, such as `İ` or the Kelvin sign; they used to land shifted, sometimes past the end of the text.
 - Clearing the screen now treats Kitty graphics images as kitty does. `ED 2` (`clear`), `DECSED 2` and `RIS` drop every
   placement on the screen, `C=1` ones included, and `ED 3` drops scrollback placements too; each then frees every image
   nothing displays, so transmitted-but-unplaced images no longer pile up until the byte cap evicts them. Partial erases
