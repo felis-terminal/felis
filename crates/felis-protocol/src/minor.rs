@@ -7,8 +7,8 @@
 use crate::caps::ConnectionMode;
 use crate::messages::{
     AttachFailure, AttachRefusal, ConnToClientMsg, ConnToDaemonMsg, CreateFailure, GridMsg,
-    ImageMsg, OpsToClientMsg, OpsToDaemonMsg, PushMsg, RefusalReason, ResourceKind,
-    SessionToClientMsg, SessionToDaemonMsg, SpawnArgs, UpgradeRefusal,
+    ImageMsg, OpsToClientMsg, OpsToDaemonMsg, PushMsg, RefusalReason, ResourceKind, SearchSource,
+    SearchToDaemonMsg, SessionToClientMsg, SessionToDaemonMsg, SpawnArgs, UpgradeRefusal,
 };
 use crate::row::RowPayload;
 
@@ -87,12 +87,12 @@ pub fn gated_fields() -> Vec<Requires> {
         .chain(listed(SESSION_INFO_FIELDS))
         .chain(listed(SPAWN_ARGS_FIELDS))
         .chain(listed(IMAGE_FIELDS))
+        .chain(listed(SEARCH_TO_DAEMON_FIELDS))
         .collect()
 }
 
-// The first public schema is the whole minor-0 base, so no field is
-// post-baseline yet. The tables stay because the `requires` impls fold
-// them: the first post-release field is one row here and nothing else.
+// A table left empty still stays, because its `requires` impl folds it:
+// that family's first post-release field is one row here and nothing else.
 const CONN_TO_DAEMON_FIELDS: &[GatedField<ConnToDaemonMsg>] = &[];
 const CONN_TO_CLIENT_FIELDS: &[GatedField<ConnToClientMsg>] = &[];
 const SESSION_TO_DAEMON_FIELDS: &[GatedField<SessionToDaemonMsg>] = &[];
@@ -146,6 +146,12 @@ impl ImageMsg {
         }
     }
 }
+const SEARCH_TO_DAEMON_FIELDS: &[GatedField<SearchToDaemonMsg>] = &[GatedField {
+    requires: Requires::new(1, "SearchQuery.source"),
+    present: |msg| match msg {
+        SearchToDaemonMsg::Query { source, .. } => *source != SearchSource::Scrollback,
+    },
+}];
 
 /// A value whose send authorization is computed rather than branched
 /// on. The gate is the send boundary ([`felis-transport`'s
@@ -432,9 +438,14 @@ gated_by_arm!(
     crate::messages::NotifyToClientMsg,
     crate::messages::RegionToDaemonMsg,
     crate::messages::RegionToClientMsg,
-    crate::messages::SearchToDaemonMsg,
     crate::messages::SearchToClientMsg,
 );
+
+impl MinorGated for SearchToDaemonMsg {
+    fn requires(&self) -> Requires {
+        arm_requires(self).max(field_requires(self, SEARCH_TO_DAEMON_FIELDS))
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -481,6 +492,24 @@ mod tests {
         assert_eq!(future.minor, PROTOCOL_MINOR + 1);
         assert_eq!(future.what, "Future::Arm");
         assert_eq!(Requires::BASE.max(future), future);
+    }
+
+    /// Only a non-default source costs minor 1: the default travels as
+    /// an absent field, which every peer already reads as scrollback.
+    #[test]
+    fn a_search_names_minor_one_only_for_a_non_default_source() {
+        use crate::messages::SearchOptions;
+
+        let query = |source| SearchToDaemonMsg::Query {
+            query: "needle".into(),
+            options: SearchOptions::default(),
+            source,
+        };
+        assert_eq!(query(SearchSource::Scrollback).requires().minor, 0);
+        assert_eq!(
+            query(SearchSource::Visible).requires(),
+            Requires::new(1, "SearchQuery.source")
+        );
     }
 
     /// Both halves of the upgrade pair, every refusal included, cost

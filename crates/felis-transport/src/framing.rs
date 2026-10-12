@@ -571,6 +571,7 @@ mod tests {
         let query = |n: usize| SearchToDaemonMsg::Query {
             query: "a".repeat(n),
             options: SearchOptions::default(),
+            source: felis_protocol::messages::SearchSource::Scrollback,
         };
         let open = |n: u64| Correlation::stream(StreamId::new(n).expect("nonzero"));
         let (a, b) = pair();

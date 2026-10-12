@@ -4034,6 +4034,7 @@ fn request_halves_route_to_the_task_and_a_reply_half_closes_the_connection() {
         &SearchToDaemonMsg::Query {
             query: "needle".to_owned(),
             options: felis_protocol::messages::SearchOptions::default(),
+            source: felis_protocol::messages::SearchSource::Scrollback,
         },
         Correlation::stream(StreamId::new(1).unwrap()),
     );

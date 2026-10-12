@@ -287,6 +287,7 @@ impl Core {
                     .open_stream(&SearchToDaemonMsg::Query {
                         query: pattern,
                         options,
+                        source: felis_protocol::messages::SearchSource::Scrollback,
                     })
                     .await?;
                 op.bind_stream(&link, stream.id);

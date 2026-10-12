@@ -210,6 +210,11 @@ data_free_enum!("RegionSource", region_source_to_i32, region_source_from_i32, me
     LastCommand => LastCommand,
 });
 
+data_free_enum!("SearchSource", search_source_to_i32, search_source_from_i32, messages::SearchSource, v1::SearchSource, {
+    Scrollback => Scrollback,
+    Visible => Visible,
+});
+
 impl From<messages::RequestedDims> for v1::GridDims {
     fn from(d: messages::RequestedDims) -> Self {
         Self {

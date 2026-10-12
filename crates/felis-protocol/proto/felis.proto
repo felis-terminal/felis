@@ -436,6 +436,17 @@ enum RegionSource {
   REGION_SOURCE_LAST_COMMAND = 4;
 }
 
+// Rows a SearchQuery walks.
+enum SearchSource {
+  SEARCH_SOURCE_UNSPECIFIED = 0;
+  // Scrollback plus the live primary screen, stitched across the seam;
+  // the alternate screen is skipped.
+  SEARCH_SOURCE_SCROLLBACK = 1;
+  // The live grid only, whichever screen is active, never stitched
+  // into scrollback.
+  SEARCH_SOURCE_VISIBLE = 2;
+}
+
 // Direction for an InputJumpPrompt.
 enum PromptJump {
   PROMPT_JUMP_UNSPECIFIED = 0;
@@ -2657,6 +2668,10 @@ message SearchQuery {
   // Literal substring, or a regex when options.regex is set.
   string query = 1;
   SearchOptions options = 2;
+  // Absent means SEARCH_SOURCE_SCROLLBACK. A minor-1 addition: a daemon
+  // below it ignores the field and walks scrollback, so a client gates
+  // a present value on the effective minor rather than send it.
+  optional SearchSource source = 3;
 }
 
 // One logical line of the active search returning a hit.

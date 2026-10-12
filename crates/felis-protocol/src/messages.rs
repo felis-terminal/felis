@@ -45,7 +45,9 @@ pub use ops::{
 };
 pub use push::PushMsg;
 pub use region::{RegionPosition, RegionToClientMsg, RegionToDaemonMsg};
-pub use search::{ByteSpan, ColSpan, SearchOptions, SearchToClientMsg, SearchToDaemonMsg};
+pub use search::{
+    ByteSpan, ColSpan, SearchOptions, SearchSource, SearchToClientMsg, SearchToDaemonMsg,
+};
 pub use session::{
     AttachFailure, AttachRefusal, AttachTarget, CreateFailure, MAX_ENV_BASE_BYTES,
     MAX_ENV_BASE_ENTRIES, SessionToClientMsg, SessionToDaemonMsg, SpawnArgs,

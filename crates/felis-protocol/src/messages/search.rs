@@ -9,7 +9,7 @@ use super::{ArmMeta, CorrelationClass, Directed, Direction, ModeSet};
 /// REQ-607), attached connections only.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SearchToDaemonMsg {
-    /// Opens a stream of search hits across scrollback and live primary screen.
+    /// Opens a stream of search hits over the rows `source` names.
     ///
     /// The daemon walks rows newest-first and emits [`SearchToClientMsg::Match`] items
     /// terminated by [`ConnToClientMsg::End`](super::ConnToClientMsg::End).
@@ -19,6 +19,9 @@ pub enum SearchToDaemonMsg {
         /// regex is refused with `InvalidRequest`.
         query: String,
         options: SearchOptions,
+        /// [`SearchSource::Scrollback`] travels as an absent field, so
+        /// only [`SearchSource::Visible`] needs the minor that defined it.
+        source: SearchSource,
     },
 }
 
@@ -109,6 +112,20 @@ pub struct SearchOptions {
     pub case_insensitive: bool,
 }
 
+/// The rows a [`SearchToDaemonMsg::Query`] walks; `felis-grid` re-exports
+/// it as `felis_grid::SearchSource`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum SearchSource {
+    /// Scrollback plus the live primary screen, stitched across the
+    /// seam. The live pass is skipped while the alternate screen is
+    /// active.
+    #[default]
+    Scrollback,
+    /// The live grid alone, alternate screen included, with
+    /// `line_index` always a grid row (`>= 0`).
+    Visible,
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -119,6 +136,12 @@ pub(crate) mod tests {
             SearchToDaemonMsg::Query {
                 query: "needle".into(),
                 options: SearchOptions::default(),
+                source: SearchSource::Scrollback,
+            },
+            SearchToDaemonMsg::Query {
+                query: "on screen".into(),
+                options: SearchOptions::default(),
+                source: SearchSource::Visible,
             },
             SearchToDaemonMsg::Query {
                 query: "(?i)foo|bar".into(),
@@ -126,6 +149,7 @@ pub(crate) mod tests {
                     regex: true,
                     case_insensitive: false,
                 },
+                source: SearchSource::Scrollback,
             },
             SearchToDaemonMsg::Query {
                 query: "case insensitive plain".into(),
@@ -133,6 +157,7 @@ pub(crate) mod tests {
                     regex: false,
                     case_insensitive: true,
                 },
+                source: SearchSource::Scrollback,
             },
         ]
     }

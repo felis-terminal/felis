@@ -383,6 +383,7 @@ where
                 regex,
                 case_insensitive,
             },
+            source: felis_protocol::messages::SearchSource::Scrollback,
         })
         .await;
     let stream = match opened {

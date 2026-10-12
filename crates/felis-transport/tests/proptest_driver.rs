@@ -41,6 +41,7 @@ fn render(shape: &Shaped) -> OwnedFrame {
             let query = SearchToDaemonMsg::Query {
                 query: "needle".into(),
                 options: SearchOptions::default(),
+                source: felis_protocol::messages::SearchSource::Scrollback,
             };
             // A generated 0 becomes the uncorrelated case.
             StreamId::new(*id).map_or_else(

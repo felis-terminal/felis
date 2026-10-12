@@ -2337,7 +2337,7 @@ impl SessionTask {
         stream: StreamId,
     ) -> Option<EndReason> {
         let i = self.sub_index(sub_id)?;
-        let SearchToDaemonMsg::Query { query, options } = msg;
+        let SearchToDaemonMsg::Query { query, options, .. } = msg;
         let compiled = match felis_grid::SearchQuery::new(&query, options) {
             Ok(q) => q,
             Err(err) => {
@@ -4186,6 +4186,7 @@ mod tests {
             SearchToDaemonMsg::Query {
                 query: "needle-".to_owned(),
                 options: felis_protocol::messages::SearchOptions::default(),
+                source: felis_protocol::messages::SearchSource::Scrollback,
             },
             stream,
         );
@@ -4229,6 +4230,7 @@ mod tests {
             SearchToDaemonMsg::Query {
                 query: "needle-".to_owned(),
                 options: felis_protocol::messages::SearchOptions::default(),
+                source: felis_protocol::messages::SearchSource::Scrollback,
             },
             stream,
         );
@@ -4273,6 +4275,7 @@ mod tests {
             SearchToDaemonMsg::Query {
                 query: String::new(),
                 options: felis_protocol::messages::SearchOptions::default(),
+                source: felis_protocol::messages::SearchSource::Scrollback,
             },
             stream,
         );
@@ -4394,6 +4397,7 @@ mod tests {
             SearchToDaemonMsg::Query {
                 query: "needle-".to_owned(),
                 options: felis_protocol::messages::SearchOptions::default(),
+                source: felis_protocol::messages::SearchSource::Scrollback,
             },
             stream,
         );
@@ -4430,6 +4434,7 @@ mod tests {
             SearchToDaemonMsg::Query {
                 query: "needle-".to_owned(),
                 options: felis_protocol::messages::SearchOptions::default(),
+                source: felis_protocol::messages::SearchSource::Scrollback,
             },
             stream,
         );

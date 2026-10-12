@@ -128,6 +128,7 @@ mod tests {
         SearchToDaemonMsg::Query {
             query: "a".repeat(len),
             options: SearchOptions::default(),
+            source: felis_protocol::messages::SearchSource::Scrollback,
         }
     }
 

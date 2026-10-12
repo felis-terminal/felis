@@ -581,6 +581,7 @@ impl Core {
                         regex,
                         case_insensitive,
                     },
+                    source: felis_protocol::messages::SearchSource::Scrollback,
                 })?;
             }
             Operation::Daemon(DaemonOp::Subscribe) => {

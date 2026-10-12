@@ -55,6 +55,7 @@ fn a_query() -> SearchToDaemonMsg {
     SearchToDaemonMsg::Query {
         query: "needle".into(),
         options: SearchOptions::default(),
+        source: felis_protocol::messages::SearchSource::Scrollback,
     }
 }
 
@@ -682,6 +683,7 @@ fn a_mode_refuses_a_surface_it_never_asked_for() {
         .classify(&frame(&SearchToDaemonMsg::Query {
             query: "x".into(),
             options: SearchOptions::default(),
+            source: felis_protocol::messages::SearchSource::Scrollback,
         }))
         .unwrap_err();
     assert!(
