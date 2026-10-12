@@ -219,8 +219,8 @@ release-mirror-test:
 release-homebrew-test:
     python3 tools/release/homebrew.py --self-test
 
-# ── Bench (mirrors bench.yml; tools/bench/criterion.py is the entry point) ──
-# Runs through orchestrator rather than bare cargo bench so flags match CI baselines.
+# ── Bench (tools/bench/criterion.py runs the wall-clock Criterion benches) ──
+# Runs through the orchestrator rather than bare cargo bench so every A/B run uses one set of flags.
 
 # Run the headline end-to-end throughput benchmark.
 [group('bench')]
@@ -237,15 +237,21 @@ bench-all *args:
 bench-report:
     python3 tools/bench/criterion.py report
 
-# Fail any past-threshold regression vs a saved baseline (docs/reference/testing.md "Running benchmarks").
+# Fail any past-threshold wall-clock regression vs a saved Criterion baseline (docs/reference/testing.md "Running benchmarks").
 [group('bench')]
 bench-gate:
     python3 tools/bench/criterion.py gate
 
-# Self-tests for the bench orchestrator (hermetic, no cargo).
+# Instruction-count gate vs a base revision under callgrind, as bench.yml runs it (Linux, dev shell).
+[group('bench')]
+bench-gate-ir base="origin/main":
+    python3 tools/bench/gungraun.py gate --base {{ base }}
+
+# Self-tests for the bench orchestrator and the instruction-count gate (hermetic, no cargo).
 [group('bench')]
 bench-selftest:
     python3 tools/bench/criterion_test.py
+    python3 tools/bench/gungraun_test.py
 
 # ── Cross-terminal comparison (not a CI gate) ───────────────────────
 # Note: latency suite drives active window; leave keyboard untouched while running.

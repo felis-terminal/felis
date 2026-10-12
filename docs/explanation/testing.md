@@ -142,22 +142,50 @@ the generic blowup exceeds solver limits, and the fuzz targets own those round-t
 
 ## Performance regression gating
 
-How Criterion benchmark targets are run, what they pin, and what fails the gate is the reference twin's job
+How the benchmark targets are run, what they pin, and what fails the gate is the reference twin's job
 ([reference/testing.md](../reference/testing.md#performance-benchmarks)); this section records why the regression gate
 is shaped the way it is.
 
-- **Python, not shell.** `tools/bench/criterion.py` is stdlib-only Python (`python3` pinned in the dev shell) rather
-  than shell: every input and output is JSON (`cargo metadata`, Criterion's `estimates.json` / `benchmark.json`), and a
-  shell version needs jq + awk for a fraction of the job.
+- **Python, not shell.** `tools/bench/criterion.py` and `tools/bench/gungraun.py` are stdlib-only Python (`python3`
+  pinned in the dev shell) rather than shell: every input and output is JSON (`cargo metadata`, Criterion's
+  `estimates.json` / `benchmark.json`, gungraun's `summary.json`), and a shell version needs jq + awk for a fraction of
+  the job.
 - **A pinned test font.** Font-dependent benches load the devshell-pinned probe font rather than a system probe, the
   same reasoning as the shaping feature tests (`dev/flake-module.nix` `testFonts`): a system probe makes the numbers
   machine-dependent (a different face is different GSUB/rasterization work, so two hosts' baselines never compare) and
   panics on a font-less CI runner.
-- **The regression gate measures change against baseline, not other terminals.** `bench.yml` gates pull requests on
-  `just bench-gate`, failing if the mean change against the PR's base commit exceeds the threshold
-  ([reference/testing.md](../reference/testing.md) "Running benchmarks"). The gate answers strictly whether felis has
-  regressed against its own previous commits on identical hardware. Comparative performance evaluation against peer
+- **The regression gate measures change against baseline, not other terminals.** `bench.yml` compares each pull request
+  with its base commit ([reference/testing.md](../reference/testing.md) "Instruction-count gate"). The gate answers
+  strictly whether felis has regressed against its own previous commits. Comparative performance evaluation against peer
   terminals is a local report rather than a gate, and lives in [benchmarks.md](benchmarks.md).
+
+### Instruction counts, not wall-clock time
+
+The gate compares callgrind instruction counts because the CI runner is a shared machine that also carries interactive
+work, and wall-clock time on it does not hold still. A wall-clock gate (Criterion's mean change against the base, at
+15%) is the obvious design and the rejected one: on this runner the change between two runs of unrelated code spread
+about 22% per benchmark, an A/A run of one commit against itself moved up to +18%, and the gate failed about a third of
+its pull-request runs, every failure on a change that did not touch the measured code. No threshold separates that noise
+from a real regression.
+
+An instruction count does not depend on what else the machine runs. Repeat runs give identical counts, with or without
+synthetic load beside them, and the same commit built from two checkout paths differs by under 0.2%, an order of
+magnitude below the 2% threshold. Injected regressions show the count tracks the cost the gate exists to catch: extra
+work in the print path raised it by 9% to 23% on the benchmarks that reach that path, where wall-clock time rose 10% to
+29%, and disabling the ASCII fast path raised it by 25% to 233%.
+
+The count is blind to a regression that only changes memory behavior. A change that added cache misses without adding
+instructions cost 25% to 55% in wall-clock time while the count moved under 0.7%; callgrind's estimated cycles, which
+weight its cache simulation, moved under 2%, so gating on them would not close the gap. A change to data layout or
+access patterns therefore still needs a local wall-clock comparison (`just bench`, `just bench-gate`), which the gate
+does not replace.
+
+An accepted cost is a label on the pull request (`perf-regression-accepted`) rather than an allowlist in the tree. The
+acceptance belongs to one change: once it merges, the next pull request's base already includes the cost, so a committed
+exemption would only outlive its reason and hide the next regression on the same benchmark.
+
+Revisit if CI gains a runner reserved for benchmarks on which an A/A wall-clock run stays well inside a usable
+threshold, or if a regression that reaches users turns out to be one the instruction count did not see.
 
 ## Shell overlays under the real interpreters
 

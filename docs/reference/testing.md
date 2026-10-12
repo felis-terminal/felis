@@ -21,7 +21,7 @@ workflows that gate them. The strategy behind the layers is in [testing.md](../e
 | Conformance tests      | VT100-VT520 + xterm sequence behavior         | vttest + esctest2                                              |
 | Protocol conformance   | Kitty graphics / sizing / keyboard wire specs | Upstream Kitty specs                                           |
 | Integration tests      | End-to-end daemon <-> client                  | Real PTY + spawned shell                                       |
-| Performance benchmarks | Hot-loop throughput and latency               | Criterion                                                      |
+| Performance benchmarks | Hot-loop throughput and latency               | Criterion, gungraun (Valgrind callgrind)                       |
 | Mutation testing       | Whether the other layers bite                 | cargo-mutants                                                  |
 | Visual regression      | Renderer correctness over time                | Out of scope for v1 ([explanation](../explanation/testing.md)) |
 
@@ -291,13 +291,14 @@ The bundle is checked from three directions:
 
 ## Performance benchmarks
 
-Tool: criterion (<https://docs.rs/criterion>).
+Tools: criterion (<https://docs.rs/criterion>) for wall-clock time, and gungraun (<https://docs.rs/gungraun>) for
+instruction counts under Valgrind's callgrind.
 
 ### Targets
 
-Every `[[bench]]` entry in the workspace is a Criterion target, and `tools/bench/criterion.py` discovers them from
-`cargo metadata` rather than a list, so adding one to a crate's `Cargo.toml` is all it takes to enter `just bench-all`
-and the nightly snapshot.
+Every `[[bench]]` entry whose source calls `criterion_main!` is a Criterion target, and `tools/bench/criterion.py`
+discovers them from `cargo metadata` rather than a list, so adding one to a crate's `Cargo.toml` is all it takes to
+enter `just bench-all`. The one other bench target, `gungraun_gate`, is the instruction-count gate's.
 
 | Target                  | Crate               | Measures                                                                                    |
 | ----------------------- | ------------------- | ------------------------------------------------------------------------------------------- |
@@ -329,9 +330,37 @@ boundary in every other build; the orchestrator reads the requirement from the m
 | Run all Criterion targets         | `just bench-all` (`--quick` for fast runs)                                                          |
 | Generate Markdown report          | `just bench-report`                                                                                 |
 | Check regression against baseline | `just bench --save-baseline before`, modify code, `just bench --baseline before`, `just bench-gate` |
-| Orchestrator self-tests           | `just bench-selftest`                                                                               |
+| Instruction-count gate            | `just bench-gate-ir [base]` (base revision, `origin/main` by default)                               |
+| Orchestrator and gate self-tests  | `just bench-selftest`                                                                               |
 
-The gate fails if the mean change exceeds the threshold (15% by default).
+`just bench-gate` fails if a benchmark's mean wall-clock change exceeds the threshold (15% by default). It has no CI
+caller; the pull-request gate is the instruction-count gate below.
+
+### Instruction-count gate
+
+`gungraun_gate` (`felis-client-core`) runs the nine workloads the `daemon_side` and `multi_cycle_end_to_end` groups of
+`end_to_end_throughput` measure, sharing their source (`benches/support/workload.rs`), and counts the instructions each
+executes (callgrind's `Ir`). It is Linux-only; on other platforms the target builds to a binary that only prints a
+notice.
+
+`tools/bench/gungraun.py gate --base <rev>`, which `bench.yml` runs on every pull request against its base commit:
+
+- benches the base revision in a temporary worktree and saves it as a gungraun baseline, then benches the current
+  checkout against it;
+- fails when any benchmark's `Ir` exceeds the base's by more than 2%, and prints a per-benchmark table of both counts
+  either way;
+- passes a regression, still printing the table, when the pull request carries the `perf-regression-accepted` label; by
+  convention a PR comment states why the cost is accepted;
+- fails when the bench run breaks or a benchmark the base ran is missing from the head run; the label passes neither;
+- skips with a notice when the base revision has no `gungraun_gate` bench.
+
+Each run writes gungraun's output to a fresh temporary home, and drops the workspace crates' `bench`-profile artifacts
+before each build, so neither side can bench a binary another checkout left in a shared target directory. Exit codes: 0
+clean, skipped, or accepted; 1 a regression, a failed bench run, or a missing benchmark; 2 nothing compared.
+
+The dev shell provides `valgrind` and `gungraun-runner` on Linux. The runner must be the exact version of the `gungraun`
+crate in `Cargo.lock`: `dev/packages/gungraun-runner.nix` pins it, and evaluating the dev shell fails when the two
+disagree.
 
 ## Damage-tracking correctness
 
@@ -468,7 +497,8 @@ normal `just check` needs.
 | `FELIS_PULL_MS`, `FELIS_ECHO_PULL`                                                          | `felis-daemon` `tests/real_app_harness.rs`                                                     | Pull-pacing period in milliseconds (16 is a 60 Hz client, 0 pulls continuously) and whether the echo-latency probe paces at all.                                         |
 | `FELIS_BENCH_FILE`, `FELIS_BENCH_ROWS`, `FELIS_BENCH_COLS`                                  | `felis-daemon` `parse_sink.rs`, `serve/tests.rs`                                               | Payload and its capture geometry for the `#[ignore]`d parse-floor and attached-drain measurements; a payload replayed at the wrong grid becomes a wrap-and-scroll storm. |
 | `FELIS_PROBE_*`                                                                             | `felis-grid` `scrollback_tests.rs`                                                             | Geometry, cap, occupancy, line count, iterations and cache pressure for the `#[ignore]`d cold-print ring probe.                                                          |
-| `THRESHOLD`, `ALLOWLIST`, `CRITERION_ROOT`                                                  | `tools/bench/criterion.py`                                                                     | Regression fraction that fails the gate, newline-separated benchmark ids exempt from it, and the Criterion output root. `bench.yml` sets `THRESHOLD` and `ALLOWLIST`.    |
+| `THRESHOLD`, `ALLOWLIST`, `CRITERION_ROOT`                                                  | `tools/bench/criterion.py`                                                                     | Regression fraction that fails `just bench-gate`, newline-separated benchmark ids exempt from it, and the Criterion output root.                                         |
+| `PR_LABELS`                                                                                 | `tools/bench/gungraun.py`                                                                      | The pull request's labels as JSON, from the event payload; `bench.yml` sets it. `perf-regression-accepted` among them passes an instruction-count regression.            |
 | `FELIS_SYSTEMD_TESTS`                                                                       | `felis-cli` `tests/cli_systemd_handoff.rs`                                                     | `1` runs the systemd hand-off tests against the live user manager (a transient unit per test, on its own socket path); without it they return at once.                   |
 | `FELIS_PROSE_CHECK_SKIP`                                                                    | `tools/prose_check.py`                                                                         | `1` makes the prose gate exit zero, for a commit whose prose is checked another way.                                                                                     |
 
@@ -488,7 +518,7 @@ published Forgejo release to the GitHub mirror and opens the Homebrew tap's vers
 | `darwin.yml`  | Push, PR                  | macOS build check on aarch64-darwin (`nix build .#felis .#felis-dist`, the package and the release archive), the archive's manifest, signature and headless smoke, and, on `main`, a cache push of the package.                          |
 | `fuzz.yml`    | Push, PR, Nightly, Manual | Smoke fuzzer run (push and PR) and a 10-minute-per-target nightly run with corpus minification.                                                                                                                                          |
 | `kani.yml`    | Weekly, Manual            | Weekly full verification of in-tree Kani proofs.                                                                                                                                                                                         |
-| `bench.yml`   | PR, Nightly, Manual       | Criterion regression gate against the PR's base commit and nightly full snapshot.                                                                                                                                                        |
+| `bench.yml`   | PR, PR label change       | Instruction-count regression gate against the PR's base commit.                                                                                                                                                                          |
 | `release.yml` | Tag (`v*`)                | Verifies tag revision, reruns the Linux, macOS and Windows chains on it, pushes both Nix targets to the cache, and attaches the Linux and macOS archives, the Windows zip, the config schema and the proto to the release.               |
 
 ### Frontend smoke test

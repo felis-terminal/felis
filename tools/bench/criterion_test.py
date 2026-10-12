@@ -2,9 +2,8 @@
 """Unit tests for tools/bench/criterion.py.
 
 Hermetic — synthetic Criterion trees and canned cargo-metadata JSON,
-no cargo invocation — so CI can run them before the real gate and a
-parser break is caught here, not on a real regression PR (same role
-the bench-gate.test.sh smoke tests played for the bash gate).
+no cargo invocation — so CI can run them and a parser break is
+caught here rather than as a gate that silently passes a local A/B.
 
 Run: python3 tools/bench/criterion_test.py
 """
@@ -137,10 +136,15 @@ class DiscoveryTest(unittest.TestCase):
             {
                 "name": "felis-protocol",
                 "targets": [
-                    {"name": "felis-protocol", "kind": ["lib"]},
+                    {
+                        "name": "felis-protocol",
+                        "kind": ["lib"],
+                        "src_path": "src/lib.rs",
+                    },
                     {
                         "name": "ipc_throughput",
                         "kind": ["bench"],
+                        "src_path": "benches/ipc_throughput.rs",
                         "required-features": ["postcard"],
                     },
                 ],
@@ -148,14 +152,27 @@ class DiscoveryTest(unittest.TestCase):
             {
                 "name": "felis-vt",
                 "targets": [
-                    {"name": "parser_throughput", "kind": ["bench"]},
+                    {
+                        "name": "parser_throughput",
+                        "kind": ["bench"],
+                        "src_path": "benches/parser_throughput.rs",
+                    },
+                    {
+                        "name": "gungraun_gate",
+                        "kind": ["bench"],
+                        "src_path": "benches/gungraun_gate.rs",
+                    },
                 ],
             },
         ]
     }
 
-    def test_only_bench_targets_with_features(self):
-        targets = bench.bench_targets(self.METADATA)
+    @staticmethod
+    def is_criterion(src_path: str) -> bool:
+        return not src_path.endswith("gungraun_gate.rs")
+
+    def test_only_criterion_bench_targets_with_features(self):
+        targets = bench.bench_targets(self.METADATA, self.is_criterion)
         self.assertEqual(
             targets,
             [
@@ -174,7 +191,9 @@ class DiscoveryTest(unittest.TestCase):
 
     def test_required_features_reach_cargo_argv(self):
         args = bench.parse_args(["run", "--quick", "--save-baseline", "ci-base"])
-        cmd = bench.cargo_bench_cmd(bench.bench_targets(self.METADATA)[0], args)
+        cmd = bench.cargo_bench_cmd(
+            bench.bench_targets(self.METADATA, self.is_criterion)[0], args
+        )
         self.assertEqual(
             cmd,
             [

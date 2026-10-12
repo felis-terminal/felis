@@ -7,15 +7,15 @@ sidebar:
 Why the cross-terminal benchmark harness (`tools/bench/crossterm.py`) is shaped the way it is, why the workloads and
 instruments were chosen, and what makes comparative measurements valid. The normative harness specification, suite
 definitions, and published results are in the reference twin, [benchmarks.md](../reference/benchmarks.md); in-tree
-performance regression gating (Criterion) is in [reference/testing.md](../reference/testing.md#performance-benchmarks)
-and [explanation/testing.md](testing.md).
+benchmarks and the regression gate are in [reference/testing.md](../reference/testing.md#performance-benchmarks) and
+[explanation/testing.md](testing.md).
 
 The page groups the harness decisions by the question each answers: what kind of tool the harness is, which workloads
 and instruments it borrows, which legs it lets into a report, and what a bar is allowed to claim.
 
 ## What the harness is
 
-The harness is written in **Python, not shell**, for the reason the Criterion driver is
+The harness is written in **Python, not shell**, for the reason the in-tree bench drivers are
 ([testing.md](testing.md#performance-regression-gating)): every input and output of `tools/bench/crossterm.py` (suite
 results, `meta.json`) is JSON.
 
@@ -23,8 +23,8 @@ results, `meta.json`) is JSON.
 
 `tools/bench/crossterm.py` launches real windows in every terminal of the field, so its numbers are only valid on an
 idle desktop whose window manager the harness can place a window through, conditions CI cannot offer. It answers a
-different question from the Criterion gate ("where does felis sit in the field" versus "did felis get slower"), and only
-the second question can be answered automatically.
+different question from the in-tree regression gate ("where does felis sit in the field" versus "did felis get slower"),
+and only the second question can be answered automatically.
 
 The report uses charts rather than a table because a field of up to seven terminals across eight suites is read by eye,
 and the payloads within a suite differ by more than an order of magnitude, so a shared axis flattens the fast ones into

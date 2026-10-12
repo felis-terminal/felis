@@ -177,6 +177,9 @@ proptest = "1"
 insta = { version = "1", features = ["yaml"] }
 tempfile = "3"
 criterion = { version = "0.8", default-features = false }
+# Exact pin: the gungraun-runner binary (dev/packages/gungraun-runner.nix)
+# refuses a library of any other version.
+gungraun = "=0.20.0"
 
 # Diagnostics — startup heap profiler. Wired behind the binaries'
 # `dhat-heap` feature only: it swaps the global allocator and records

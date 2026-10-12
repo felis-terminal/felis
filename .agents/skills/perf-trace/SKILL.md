@@ -99,10 +99,13 @@ cargo bench -p felis-grid --bench unicode_throughput
 cargo bench -p felis-vt   --bench parser_throughput
 ```
 
-Bare `cargo bench` is for this exploratory decomposition **only**. Any number you will compare across runs (a baseline,
-a regression gate, the headline figure) goes through the orchestrator: `just bench` / `just bench-all` /
-`just bench-gate` (the same flags as the `bench.yml` CI gate). Hand-rolled Criterion invocations are how two baselines
-stop being comparable.
+Bare `cargo bench` is for this exploratory decomposition **only**. Any wall-clock number you will compare across runs (a
+baseline, a local A/B, the headline figure) goes through the orchestrator: `just bench` / `just bench-all` /
+`just bench-gate`. Hand-rolled Criterion invocations are how two baselines stop being comparable.
+
+The PR gate (`bench.yml`) counts instructions, not time: run `just bench-gate-ir` in the dev shell before pushing a hot
+path change to see what it will say (`docs/reference/testing.md` "Instruction-count gate"). It cannot see a change that
+only moves cache behavior, so a layout or access-pattern win or loss still needs the wall-clock A/B above.
 
 Generate Unicode samples from code-point ranges in the bench itself; **never paste a third-party corpus** (e.g. kitty's
 GPL benchmark text) into the repo, even for a bench.

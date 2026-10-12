@@ -8,7 +8,7 @@ sidebar:
 `alacritty`, `ghostty`, `wezterm`, `foot`) on a local desktop. The harness pins configuration, font size, and grid
 geometry across all terminals, measures throughput, latency, startup, and memory footprint over multiple rounds, and
 generates comparative reports with per-suite charts. Architectural decisions governing the harness design and workload
-choices are in [the benchmark design](../explanation/benchmarks.md); in-tree regression performance targets (Criterion)
+choices are in [the benchmark design](../explanation/benchmarks.md); in-tree benchmark targets and the regression gate
 are in [testing.md](testing.md#performance-benchmarks).
 
 Figures from different machines do not compare directly: hardware, display pipelines, fonts, and latency instruments

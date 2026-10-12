@@ -103,6 +103,19 @@
 
       kani = pkgs.callPackage ./packages/kani.nix { };
 
+      gungraunRunner =
+        let
+          runner = pkgs.callPackage ./packages/gungraun-runner.nix { };
+          locked =
+            (pkgs.lib.findFirst (p: p.name == "gungraun") (throw "gungraun is missing from Cargo.lock")
+              (builtins.fromTOML (builtins.readFile ../Cargo.lock)).package
+            ).version;
+        in
+        assert pkgs.lib.assertMsg (
+          runner.version == locked
+        ) "dev/packages/gungraun-runner.nix pins ${runner.version} but Cargo.lock has gungraun ${locked}";
+        runner;
+
       devTools =
         with pkgs;
         [
@@ -136,6 +149,9 @@
         ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [
           # Fast linker for the per-mutant relinks (and dev builds generally).
           mold
+          # The instruction-count bench gate (`just bench-gate-ir`).
+          valgrind
+          gungraunRunner
         ];
     in
     {
