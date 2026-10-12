@@ -1,7 +1,7 @@
 ---
 name: Bug report
 about: Something in felis does not work as documented
-labels: bug
+labels: Kind/Bug
 ---
 
 ## What happened
