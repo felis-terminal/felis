@@ -77,8 +77,12 @@ prefix. The mutating verbs see no roster, so their replies carry `id` alone; fee
 #    24x80 unless you name it, and --rows/--cols travel as a pair:
 #    naming one alone is a usage error (exit 2), and the bridge's
 #    sessions.spawn answers half a geometry with invalid_request.
+#    A local child inherits YOUR environment; --env adds or overrides
+#    but cannot remove, so drop a variable with env -u (it matters when
+#    you drive a copy of yourself and inherit your own session markers).
 ID=$(felis sessions spawn -- /bin/zsh)
 ID=$(felis sessions spawn --rows 50 --cols 132 -- /bin/zsh)
+ID=$(env -u SOME_PARENT_MARKER felis sessions spawn --env KEY=VAL -- /bin/zsh)
 
 # 2. Drive it. `send` pastes text literally (bracketed-paste wrapped
 #    when the shell sets ?2004) and does NOT press Enter: a newline in
@@ -125,8 +129,16 @@ felis sessions kill "$ID"
 
 Capture rows are `{"v":1,"row":N,"text":"…","soft_wrap_continued":bool}`; scrollback rows use negative `row` indices
 (oldest first), and for `command-output` / `last-command` the `row` is 0-based within the mark range. Search matches are
-`{"v":1,"line_index":N,"text":"…"}`. `--ansi` composes with `--format jsonl`: each row gains an `ansi` field while
-`text` stays plain. The mark-range sources add `exit_code` to the terminal when the closing D mark carried one.
+`{"v":1,"line_index":N,"text":"…","byte_spans":[[s,e]…],"col_spans":[[row,start_col,end_col]…]}`, columns 0-based.
+`--ansi` composes with `--format jsonl`: each row gains an `ansi` field while `text` stays plain. The mark-range sources
+add `exit_code` to the terminal when the closing D mark carried one.
+
+A character's index in `text` is not its column: a wide character fills two columns and a combining mark none. To aim a
+mouse report (1-based) at text, take a `col_spans` segment on a live row (`row >= 0`) and add 1 to its row and start
+column. `search` skips the alternate screen, where a fullscreen TUI lives; there the index is a column only if
+everything before it on the row is single-width. A Kitty image drawn with Unicode placeholders captures as runs of
+U+10EEEE plus combining diacritics; filter those rows out of text you match, and treat their presence as the evidence
+that an image was placed.
 
 ### Payload limits
 
@@ -177,7 +189,20 @@ the stream's one terminal (`--once` writes one too). A consumer that falls behin
 the connection without ending the stream.
 
 A full-screen TUI agent (Claude Code etc.) emits no OSC 133 marks, so `send --wait` never fires for it;
-`--session --once` is its completion signal. A plain build emits no OSC 9, so `send --wait` is the tool there.
+`--session --once` is its completion signal only when it is configured to emit OSC 9/99/777. A plain build emits no OSC
+9, so `send --wait` is the tool there.
+
+When a producer emits neither, poll the visible grid against a deadline. The check sees only what is on screen now, so
+anchor the pattern on a row your own input cannot produce (a status line, a line-anchored regex), or the echo of your
+prompt satisfies it before the reply exists:
+
+```sh
+deadline=$((SECONDS + 600))
+until felis sessions capture "$ID" --format jsonl | jq -e 'select(.text | test("^● Done"))' >/dev/null; do
+  [ "$SECONDS" -ge "$deadline" ] && break
+  sleep 2
+done
+```
 
 ## When something fails
 
