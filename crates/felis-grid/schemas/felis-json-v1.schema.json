@@ -1299,6 +1299,16 @@
               "minimum": 0,
               "type": "integer"
             },
+            "placement_id": {
+              "default": null,
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
             "rows": {
               "format": "uint16",
               "maximum": 65535,

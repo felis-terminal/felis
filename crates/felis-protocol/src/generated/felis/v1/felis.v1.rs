@@ -1247,6 +1247,11 @@ pub struct ImageVirtualPlacement {
     /// Z-index from z= (i32).
     #[prost(sint32, tag="4")]
     pub z_index: i32,
+    /// The producer's p=, or an id the daemon assigned to a put without
+    /// one; a placeholder cell names it in its underline color. Unset
+    /// keys the placement by image alone. Since minor 1.
+    #[prost(uint32, optional, tag="5")]
+    pub placement_id: ::core::option::Option<u32>,
 }
 /// Display frame `number` of image id now, in the same 1-based
 /// numbering ImageFrame uses.

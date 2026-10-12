@@ -355,7 +355,7 @@ pub struct Renderer {
     image_scratch_under_bg: Vec<ImgInstance>,
     image_scratch_under_text: Vec<ImgInstance>,
     image_scratch_above: Vec<ImgInstance>,
-    vp_map: HashMap<ImageId, VirtualPlacement>,
+    vp_map: HashMap<(ImageId, u32), VirtualPlacement>,
     post: Option<PostStage>,
     /// Kept even with no stage, so a shader enabled by a live reload
     /// starts from the current state rather than the origin.
@@ -1528,15 +1528,28 @@ impl Renderer {
         let cw = metrics.width as f32;
         let ch = metrics.height as f32;
         self.vp_map.clear();
-        self.vp_map
-            .extend(virtual_placements.iter().map(|v| (v.image_id, *v)));
+        for v in virtual_placements {
+            // A cell naming no placement takes its image's first; one
+            // without an id (a minor-0 daemon's) answers every cell.
+            self.vp_map.entry((v.image_id, 0)).or_insert(*v);
+            let key = v.placement_id.map_or(0, |p| p.0);
+            self.vp_map.entry((v.image_id, key)).or_insert(*v);
+        }
         let mut ph_cells = 0u32;
         let mut ph_tiles = 0u32;
         let mut ph_no_slot = 0u32;
         let mut ph_no_vp = 0u32;
         for pc in screen.placeholder_cells() {
             ph_cells += 1;
-            let Some(&vp) = self.vp_map.get(&pc.image_id) else {
+            let found = self
+                .vp_map
+                .get(&(pc.image_id, pc.placement_id))
+                .or_else(|| {
+                    self.vp_map
+                        .get(&(pc.image_id, 0))
+                        .filter(|v| v.placement_id.is_none())
+                });
+            let Some(&vp) = found else {
                 ph_no_vp += 1;
                 continue;
             };
@@ -2455,6 +2468,8 @@ mod tests {
         };
         let virt = |id: u32| VirtualPlacement {
             image_id: ImageId(id),
+            placement_id: None,
+            anonymous: false,
             cols: 1,
             rows: 1,
             z_index: 0,

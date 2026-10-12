@@ -252,11 +252,19 @@ impl ImageShadow {
             }
             ImageMsg::VirtualPlacement {
                 image_id,
+                placement_id,
                 cols,
                 rows,
                 z_index,
             } => {
-                self.apply_virtual_placement(*image_id, *cols, *rows, *z_index);
+                self.apply_virtual_placement(VirtualPlacement {
+                    image_id: *image_id,
+                    placement_id: *placement_id,
+                    anonymous: false,
+                    cols: *cols,
+                    rows: *rows,
+                    z_index: *z_index,
+                });
             }
             ImageMsg::ShowFrame { id, number } => {
                 self.apply_show_frame(*id, *number);
@@ -520,11 +528,13 @@ impl ImageShadow {
         if self.active.as_ref().is_some_and(|open| open.id == id) {
             self.active = None;
         }
+        // A drain that creates and drops an image in one cycle ships its
+        // placements but not its bytes, so they go even when it is absent.
+        self.placements.retain(|p| p.image_id != id);
+        self.virtual_placements.retain(|v| v.image_id != id);
         if let Some(entry) = self.images.remove(&id) {
             self.retained -= Self::bytes_of(&entry);
             self.image_order.retain(|x| *x != id);
-            self.placements.retain(|p| p.image_id != id);
-            self.virtual_placements.retain(|v| v.image_id != id);
             self.dirty_images.remove(&id);
         }
     }
@@ -542,23 +552,21 @@ impl ImageShadow {
         }
     }
 
+    /// One `(image_id, placement_id)` names a direct or a virtual
+    /// placement, so the removal looks in both.
     fn apply_placement_removed(&mut self, image_id: ImageId, placement_id: Option<PlacementId>) {
         self.placements
             .retain(|p| !(p.image_id == image_id && p.placement_id == placement_id));
+        self.virtual_placements
+            .retain(|v| !(v.image_id == image_id && v.placement_id == placement_id));
     }
 
-    fn apply_virtual_placement(&mut self, image_id: ImageId, cols: u16, rows: u16, z_index: i32) {
-        let placement = VirtualPlacement {
-            image_id,
-            cols,
-            rows,
-            z_index,
-        };
-        if let Some(slot) = self
-            .virtual_placements
-            .iter_mut()
-            .find(|v| v.image_id == image_id)
-        {
+    /// The rule of [`felis_grid::images::Placements::upsert_virtual`].
+    fn apply_virtual_placement(&mut self, placement: VirtualPlacement) {
+        if let Some(slot) = self.virtual_placements.iter_mut().find(|v| {
+            v.image_id == placement.image_id
+                && (placement.placement_id.is_none() || v.placement_id == placement.placement_id)
+        }) {
             *slot = placement;
         } else {
             self.virtual_placements.push(placement);
@@ -652,9 +660,10 @@ mod tests {
         }
     }
 
-    fn virtual_placement(image_id: u32, cols: u16) -> ImageMsg {
+    fn virtual_placement(image_id: u32, placement_id: Option<u32>, cols: u16) -> ImageMsg {
         ImageMsg::VirtualPlacement {
             image_id: ImageId(image_id),
+            placement_id: placement_id.map(PlacementId),
             cols,
             rows: 2,
             z_index: 0,
@@ -662,28 +671,75 @@ mod tests {
     }
 
     #[test]
-    fn virtual_placement_upserts_one_extent_per_image() {
+    fn virtual_placement_upserts_one_extent_per_placement() {
         // Pins: a re-emission (rehydrate, alt-screen restore) overwrites
         // in place, or the renderer sizes tiles against a stale entry.
         let mut s = ImageShadow::new();
-        s.apply_ok(&virtual_placement(12, 4));
-        s.apply_ok(&virtual_placement(13, 6));
-        s.apply_ok(&virtual_placement(12, 8));
+        s.apply_ok(&virtual_placement(12, Some(1), 4));
+        s.apply_ok(&virtual_placement(13, Some(1), 6));
+        s.apply_ok(&virtual_placement(12, Some(2), 5));
+        s.apply_ok(&virtual_placement(12, Some(1), 8));
         let extents: Vec<_> = s
             .virtual_placements()
             .iter()
             .map(|v| (v.image_id, v.cols))
             .collect();
-        assert_eq!(extents, vec![(ImageId(12), 8), (ImageId(13), 6)]);
+        assert_eq!(
+            extents,
+            vec![(ImageId(12), 8), (ImageId(13), 6), (ImageId(12), 5)]
+        );
+    }
+
+    /// A minor-0 daemon sends no id and keeps one extent per image.
+    #[test]
+    fn a_virtual_placement_without_an_id_keeps_one_extent_per_image() {
+        let mut s = ImageShadow::new();
+        s.apply_ok(&virtual_placement(12, None, 4));
+        s.apply_ok(&virtual_placement(12, None, 8));
+        let extents: Vec<_> = s.virtual_placements().iter().map(|v| v.cols).collect();
+        assert_eq!(extents, vec![8]);
+    }
+
+    #[test]
+    fn a_placement_removal_drops_the_virtual_placement_it_names() {
+        let mut s = ImageShadow::new();
+        s.apply_ok(&virtual_placement(12, Some(1), 4));
+        s.apply_ok(&virtual_placement(12, Some(2), 6));
+        s.apply_ok(&ImageMsg::PlacementRemoved {
+            image_id: ImageId(12),
+            placement_id: Some(PlacementId(1)),
+        });
+        let extents: Vec<_> = s.virtual_placements().iter().map(|v| v.cols).collect();
+        assert_eq!(extents, vec![6]);
+    }
+
+    /// A daemon restored from a dump written before virtual placements
+    /// had ids names one by its image alone.
+    #[test]
+    fn a_placement_removal_without_an_id_drops_a_virtual_placement_without_one() {
+        let mut s = ImageShadow::new();
+        s.apply_ok(&virtual_placement(12, None, 4));
+        s.apply_ok(&ImageMsg::PlacementRemoved {
+            image_id: ImageId(12),
+            placement_id: None,
+        });
+        assert_eq!(s.virtual_placements(), []);
+    }
+
+    #[test]
+    fn a_delete_drops_the_placements_of_an_image_never_received() {
+        let mut s = ImageShadow::new();
+        s.apply_ok(&placement(12, Some(1), 0));
+        s.apply_ok(&virtual_placement(12, Some(2), 4));
+        s.apply_ok(&ImageMsg::Delete { id: ImageId(12) });
+        assert!(s.is_empty());
     }
 
     #[test]
     fn delete_drops_the_virtual_extent_with_the_image() {
-        // Pins: `Delete` is the only removal a virtual placement gets (no
-        // `PlacementRemoved` names one).
         let mut s = ImageShadow::new();
         transfer(&mut s, &header(12, 16), vec![0xAA; 16]);
-        s.apply_ok(&virtual_placement(12, 4));
+        s.apply_ok(&virtual_placement(12, Some(1), 4));
         s.apply_ok(&ImageMsg::Delete { id: ImageId(12) });
         assert_eq!(s.virtual_placements(), []);
         assert!(s.is_empty(), "nothing may survive the image");

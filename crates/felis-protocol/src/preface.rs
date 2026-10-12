@@ -26,7 +26,10 @@ pub const PROTOCOL_MINOR: u16 = 1;
 /// Tested to ensure every [`PROTOCOL_MINOR`] bump records its old-peer behavior.
 pub const MINOR_LEDGER: &[(u16, &str)] = &[
     (0, "the base schema of protocol major 1"),
-    (1, "Ops::Upgrade and Ops::UpgradeReply"),
+    (
+        1,
+        "Ops::Upgrade and Ops::UpgradeReply; ImageVirtualPlacement.placement_id",
+    ),
 ];
 
 const _: () = {

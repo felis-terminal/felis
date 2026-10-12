@@ -322,9 +322,11 @@ fn delete_image_removes_every_placement_of_that_image() {
     assert_eq!(kept, vec![ImageId(2)]);
 }
 
-fn virtual_placement(image: u32, cols: u16) -> VirtualPlacement {
+fn virtual_placement(image: u32, placement: u32, cols: u16) -> VirtualPlacement {
     VirtualPlacement {
         image_id: ImageId(image),
+        placement_id: Some(PlacementId(placement)),
+        anonymous: false,
         cols,
         rows: 2,
         z_index: 0,
@@ -332,25 +334,56 @@ fn virtual_placement(image: u32, cols: u16) -> VirtualPlacement {
 }
 
 #[test]
-fn upsert_virtual_keeps_one_extent_per_image_id() {
-    // A U=1 re-emission re-describes the same extent; accumulating
-    // would let a rehydrate replay a stale tile size beside the live
-    // one.
+fn upsert_virtual_keeps_one_extent_per_placement_id() {
     let mut t = Placements::new();
-    t.upsert_virtual(virtual_placement(1, 4));
-    t.upsert_virtual(virtual_placement(2, 6));
-    t.upsert_virtual(virtual_placement(1, 8));
+    t.upsert_virtual(virtual_placement(1, 1, 4));
+    t.upsert_virtual(virtual_placement(2, 1, 6));
+    t.upsert_virtual(virtual_placement(1, 2, 5));
+    t.upsert_virtual(virtual_placement(1, 1, 8));
     let extents: Vec<_> = t.iter_virtual().map(|v| (v.image_id, v.cols)).collect();
-    assert_eq!(extents, vec![(ImageId(1), 8), (ImageId(2), 6)]);
+    assert_eq!(
+        extents,
+        vec![(ImageId(1), 8), (ImageId(2), 6), (ImageId(1), 5)]
+    );
+}
+
+#[test]
+fn a_virtual_placement_without_an_id_replaces_every_extent_of_its_image() {
+    let mut t = Placements::new();
+    t.upsert_virtual(virtual_placement(1, 1, 4));
+    t.upsert_virtual(VirtualPlacement {
+        placement_id: None,
+        ..virtual_placement(1, 0, 8)
+    });
+    let extents: Vec<_> = t.iter_virtual().map(|v| v.cols).collect();
+    assert_eq!(extents, vec![8]);
+}
+
+#[test]
+fn a_cell_picks_its_placement_or_the_image_s_first() {
+    let mut t = Placements::new();
+    t.upsert_virtual(virtual_placement(1, 1, 4));
+    t.upsert_virtual(virtual_placement(1, 2, 6));
+    assert_eq!(t.virtual_for_cell(ImageId(1), 2).map(|v| v.cols), Some(6));
+    assert_eq!(t.virtual_for_cell(ImageId(1), 0).map(|v| v.cols), Some(4));
+    assert_eq!(t.virtual_for_cell(ImageId(1), 3), None);
+}
+
+#[test]
+fn an_anonymous_id_skips_the_ids_virtual_placements_hold() {
+    let mut t = Placements::new();
+    t.upsert_virtual(virtual_placement(1, u32::MAX, 4));
+    assert_eq!(
+        t.allocate_anonymous_id(ImageId(1)),
+        PlacementId(u32::MAX - 1)
+    );
 }
 
 #[test]
 fn virtual_placements_live_and_die_apart_from_anchored_entries() {
-    // A virtual placement's lifetime is its image's, not any placement
-    // id's.
     let mut t = Placements::new();
     t.upsert(placement(1, Some(1), 0));
-    t.upsert_virtual(virtual_placement(1, 4));
+    t.upsert_virtual(virtual_placement(1, 1, 4));
     t.delete_image(ImageId(1));
     assert_eq!(t.iter_virtual().count(), 1);
     assert!(!t.is_empty(), "a virtual extent alone keeps the table live");

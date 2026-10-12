@@ -54,13 +54,12 @@ image-displaying TUIs drive (yazi, ranger preview, jp2a, presenterm), which is w
 pipeline rather than a special-cased overlay.
 
 The `U=1` _extent_ (`c=`/`r=`/`z=`) is the one thing the cell pipeline cannot carry: a placeholder cell encodes only an
-image id and a tile coordinate, so tile sizing needs the extent replayed on attach, and the daemon therefore records it
-in the session's `Placements` beside the anchored entries. Its lifetime is deliberately tied to the image, not to a
-placement id: `U=1` producers churn a fresh random image id every render with no delete, so the image is left unpinned
-(refcount 0, LRU bait) and the extent record dies with the image in the same `free_image` funnel. A
-`VirtualPlacementRemoved` wire message is rejected: with image-tied lifetime the existing `Delete` already tells the
-client everything, and the client shadow purges its mirror table on exactly that message. Revisit if a producer appears
-that re-uses one image id across renders _and_ expects an extent to outlive an explicit placement delete.
+image id, a placement id and a tile coordinate, so tile sizing needs the extent replayed on attach, and the daemon
+therefore records it in the session's `Placements` beside the anchored entries. It shares their
+`(image id, placement id)` key, as kitty keeps one ref table per image, so the existing `PlacementRemoved` names a
+virtual placement as well as an anchored one; a `VirtualPlacementRemoved` message would be a second name for the same
+removal. The image stays unpinned (refcount 0, LRU bait), because `U=1` producers churn a fresh random image id every
+render with no delete, and whatever extents are left die with the image in the same `free_image` funnel.
 
 Decoding (`f=24/32/100`, `o=z`) is the daemon's job; the grid stores already-decoded bytes. The decoder is the `png`
 crate (<https://docs.rs/png/latest/png/>; `Decoder::set_limits` enforces the zip-bomb budget). PNG is the protocol's

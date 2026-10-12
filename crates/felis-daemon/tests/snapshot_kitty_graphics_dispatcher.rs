@@ -460,3 +460,86 @@ fn a_frame_reply_echoes_the_frame_it_edited() {
         Some(b"\x1b_Gi=5;OK\x1b\\".to_vec())
     );
 }
+
+fn virtual_ids(s: &State) -> Vec<(u32, Option<u32>)> {
+    s.placements
+        .iter_virtual()
+        .map(|v| (v.image_id.0, v.placement_id.map(|p| p.0)))
+        .collect()
+}
+
+fn with_two_virtual_placements() -> State {
+    let mut s = State::new();
+    s.dispatch(&body("Ga=t,i=7,f=32,s=1,v=1,q=2", &b64(&TEST_PIXEL)));
+    s.dispatch(&body("Ga=p,U=1,i=7,p=1,c=2,r=1,q=2", b""));
+    s.dispatch(&body("Ga=p,U=1,i=7,p=2,c=4,r=2,q=2", b""));
+    s
+}
+
+#[test]
+fn virtual_placements_of_one_image_are_kept_apart_by_placement_id() {
+    let s = with_two_virtual_placements();
+    assert_eq!(virtual_ids(&s), vec![(7, Some(1)), (7, Some(2))]);
+}
+
+#[test]
+fn an_id_delete_with_a_placement_id_removes_that_virtual_placement() {
+    let mut s = with_two_virtual_placements();
+    s.dispatch(&body("Ga=d,d=i,i=7,p=1", b""));
+    assert_eq!(virtual_ids(&s), vec![(7, Some(2))]);
+}
+
+#[test]
+fn an_uppercase_id_delete_frees_an_image_shown_only_through_placeholders() {
+    let mut s = with_two_virtual_placements();
+    s.dispatch(&body("Ga=d,d=I,i=7,p=1", b""));
+    assert!(
+        s.images.get(ImageId(7)).is_some(),
+        "placement 2 still shows it"
+    );
+    s.dispatch(&body("Ga=d,d=I,i=7", b""));
+    assert_eq!(virtual_ids(&s), vec![]);
+    assert!(s.images.get(ImageId(7)).is_none());
+}
+
+#[test]
+fn sending_an_image_again_drops_its_virtual_placements() {
+    let mut s = with_two_virtual_placements();
+    s.dispatch(&body("Ga=t,i=7,f=32,s=1,v=1,q=2", &b64(&TEST_PIXEL)));
+    assert_eq!(virtual_ids(&s), vec![]);
+}
+
+#[test]
+fn a_screen_delete_leaves_virtual_placements() {
+    let mut s = with_two_virtual_placements();
+    s.dispatch(&body("Ga=d,d=A", b""));
+    assert_eq!(virtual_ids(&s), vec![(7, Some(1)), (7, Some(2))]);
+}
+
+#[test]
+fn a_put_replaces_the_placement_of_the_other_kind_under_its_id() {
+    let mut s = with_two_virtual_placements();
+    s.dispatch(&body("Ga=p,i=7,p=1,q=2", b""));
+    assert_eq!(virtual_ids(&s), vec![(7, Some(2))]);
+    assert_eq!(s.placements.len(), 1);
+    s.dispatch(&body("Ga=p,U=1,i=7,p=1,q=2", b""));
+    assert_eq!(s.placements.len(), 0);
+    assert_eq!(virtual_ids(&s), vec![(7, Some(2)), (7, Some(1))]);
+}
+
+#[test]
+fn each_virtual_put_without_a_placement_id_is_a_placement_of_its_own() {
+    let mut s = State::new();
+    s.dispatch(&body("Ga=t,i=7,f=32,s=1,v=1,q=2", &b64(&TEST_PIXEL)));
+    s.dispatch(&body("Ga=p,U=1,i=7,q=2", b""));
+    s.dispatch(&body("Ga=p,U=1,i=7,q=2", b""));
+    assert_eq!(s.placements.iter_virtual().count(), 2);
+}
+
+#[test]
+fn a_range_delete_skips_an_image_sent_without_an_id() {
+    let mut s = State::new();
+    s.dispatch(&body("Ga=T,U=1,f=32,s=1,v=1,q=2", &b64(&TEST_PIXEL)));
+    s.dispatch(&body(&format!("Ga=d,d=R,x=1,y={}", u32::MAX), b""));
+    assert_eq!(s.placements.iter_virtual().count(), 1);
+}

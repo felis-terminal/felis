@@ -1058,14 +1058,17 @@ pub(crate) fn publish_notifications(
     latest
 }
 
-/// The fan-out body, authorized where it is encoded: the pump that
-/// writes it never sees the domain message.
+/// The fan-out body, authorized where it is encoded; an image message is
+/// first cut to what the connection's `minor` reads ([`ImageMsg::for_minor`]).
 ///
 /// # Errors
 /// [`TransportError::Wire`] for a message past a per-operation limit.
-pub(crate) fn body_for(ev: &OutEvent) -> Result<CheckedFrame, TransportError> {
+pub(crate) fn body_for(ev: &OutEvent, minor: u16) -> Result<CheckedFrame, TransportError> {
     match ev {
         OutEvent::Grid(msg) => CheckedFrame::encode(msg),
+        OutEvent::Image(msg) if felis_protocol::MinorGated::requires(msg).minor > minor => {
+            CheckedFrame::encode(&msg.clone().for_minor(minor))
+        }
         OutEvent::Image(msg) => CheckedFrame::encode(msg),
         OutEvent::Push(msg) => CheckedFrame::encode(msg),
         OutEvent::Region { msg, correlation } => CheckedFrame::encode_correlated(msg, *correlation),
@@ -1108,10 +1111,12 @@ pub(crate) fn compose_image_rehydrate(
     // Virtual (`U=1`) extents too: placeholder cells ride the `RowDelta`
     // path but name only an image id, and without the extent the client
     // cannot size the tiles. `free_image` keeps this table synced to the
-    // store, so every entry's image shipped above.
+    // store, so every entry's image shipped above. Table order is kept: a
+    // cell naming no placement takes its image's first.
     for v in placements.iter_virtual() {
         out.push(OutEvent::Image(ImageMsg::VirtualPlacement {
             image_id: v.image_id,
+            placement_id: v.placement_id,
             cols: v.cols,
             rows: v.rows,
             z_index: v.z_index,
@@ -1225,6 +1230,8 @@ mod tests {
         let mut placements = Placements::new();
         placements.upsert_virtual(VirtualPlacement {
             image_id: ImageId(12),
+            placement_id: Some(felis_grid::images::PlacementId(3)),
+            anonymous: false,
             cols: 4,
             rows: 2,
             z_index: 0,
@@ -1245,6 +1252,7 @@ mod tests {
         );
         let OutEvent::Image(ImageMsg::VirtualPlacement {
             image_id,
+            placement_id,
             cols,
             rows,
             z_index,
@@ -1253,8 +1261,8 @@ mod tests {
             unreachable!()
         };
         assert_eq!(
-            (image_id.0, *cols, *rows, *z_index),
-            (12, 4, 2, 0),
+            (image_id.0, *placement_id, *cols, *rows, *z_index),
+            (12, Some(felis_grid::images::PlacementId(3)), 4, 2, 0),
             "the replay restates the recorded extent verbatim"
         );
     }
@@ -1265,8 +1273,29 @@ mod tests {
             rows: vec![(1, RowPayload(vec![1, 2, 3, 4]))],
         };
         let direct = felis_protocol::codec::encode(&msg);
-        let frame = body_for(&OutEvent::Grid(msg)).expect("a row delta is sendable");
+        let frame = body_for(&OutEvent::Grid(msg), felis_protocol::PROTOCOL_MINOR)
+            .expect("a row delta is sendable");
         assert_eq!(frame.kind(), felis_protocol::MessageKind::Grid.as_u16());
         assert_eq!(frame.body(), direct);
+    }
+
+    #[test]
+    fn a_minor_0_window_is_sent_a_virtual_placement_without_its_id() {
+        let msg = ImageMsg::VirtualPlacement {
+            image_id: felis_grid::images::ImageId(12),
+            placement_id: Some(felis_grid::images::PlacementId(3)),
+            cols: 4,
+            rows: 2,
+            z_index: 0,
+        };
+        let frame = body_for(&OutEvent::Image(msg.clone()), 0).expect("downgraded");
+        assert_eq!(frame.requires().minor, 0);
+        let sent: ImageMsg = felis_protocol::codec::decode(frame.body()).expect("decodes");
+        assert_eq!(sent, msg.clone().for_minor(0));
+        let full = body_for(&OutEvent::Image(msg.clone()), 1).expect("sendable");
+        assert_eq!(
+            felis_protocol::codec::decode::<ImageMsg>(full.body()).unwrap(),
+            msg
+        );
     }
 }

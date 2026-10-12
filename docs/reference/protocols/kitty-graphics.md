@@ -150,15 +150,19 @@ The Unicode-placeholder method (`U=1`) is supported. The daemon decodes diacriti
 cell's foreground color is the low 24 bits of its image id; the default foreground counts as `0`. An id of `0` names no
 image. A cell continues the run of the cell before it when their foreground ids match and each diacritic it carries
 agrees with the run (the same row, the next column, the same high byte); a continuing cell takes the diacritics it omits
-from the run, and a cell that starts a run takes `0` for them. Clients render placeholder cells with corresponding image
-regions matching direct placement z-index rules. The image is fit into the placement's `c=` by `r=` cell box with its
-aspect ratio kept and centered, so cells in the margin show nothing.
+from the run, and a cell that starts a run takes `0` for them. A cell's underline color (SGR 58) names its placement the
+same way, and a change of it breaks the run: a non-zero id picks the image's virtual placement with that `p=`, and
+nothing draws when none matches; `0` picks the image's first virtual placement. Clients render placeholder cells with
+corresponding image regions matching direct placement z-index rules. The image is fit into the placement's `c=` by `r=`
+cell box with its aspect ratio kept and centered, so cells in the margin show nothing.
 
-A `U=1` transmission (`a=T`) or put (`a=p`) anchors nothing at the cursor and leaves it in place; it records placement
-extents (`c=`, `r=`, `z=`) in the session's placement table (keyed by image ID). Rehydration replays recorded extents to
-preserve placeholders across reattachments. An omitted `c=` or `r=` resolves when the client draws, with its own cell
-size. Extents persist until their backing image is freed, and transfer across screen buffer transitions
-(`?1049h`/`?1049l`).
+A `U=1` transmission (`a=T`) or put (`a=p`) anchors nothing at the cursor and leaves it in place; it records a virtual
+placement with its extent (`c=`, `r=`, `z=`) in the session's placement table. A `p=` names it, and a later put under
+the same `p=`, virtual or not, replaces it; a put without one adds a virtual placement of its own. Rehydration replays
+the recorded extents to preserve placeholders across reattachments. An omitted `c=` or `r=` resolves when the client
+draws, with its own cell size. A virtual placement goes with `d=i`/`I`, `d=n`/`N` (only the one `p=` names, when given)
+and `d=r`/`R`, when its image is transmitted again or freed, and with the rest of the screen's placements across a
+screen switch (`?1049h`/`?1049l`); the other deletes and the screen clears leave it, as in kitty.
 
 ## Animation
 

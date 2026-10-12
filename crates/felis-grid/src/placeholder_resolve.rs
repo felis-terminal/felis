@@ -7,12 +7,14 @@ use felis_protocol::kitty_graphics::placeholder::{PLACEHOLDER, Rank, decode_plac
 use crate::{Color, Grapheme, Grid, ScreenBuffer, images::ImageId};
 
 /// The `U+10EEEE` cell at `(row, col)` shows tile `(tile_row, tile_col)`
-/// of image `image_id`.
+/// of image `image_id`, sized by its virtual placement `placement_id`
+/// (`0`: the image's first).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PlaceholderCell {
     pub row: u16,
     pub col: u16,
     pub image_id: ImageId,
+    pub placement_id: u32,
     pub tile_row: u32,
     pub tile_col: u32,
 }
@@ -47,8 +49,8 @@ impl ScreenBuffer {
     pub fn placeholder_cells(&self) -> Vec<PlaceholderCell> {
         let mut out = Vec::new();
         for row in 0..self.rows() {
-            // (low 24 bits, high byte, tile row, tile column)
-            let mut prev: Option<(u32, u32, u32, u32)> = None;
+            // (low 24 bits, placement id, high byte, tile row, tile column)
+            let mut prev: Option<(u32, u32, u32, u32, u32)> = None;
             for col in 0..self.cols() {
                 let Some(cell) = self.cell(row, col) else {
                     prev = None;
@@ -62,27 +64,33 @@ impl ScreenBuffer {
                     prev = None;
                     continue;
                 };
-                let low = color_id(self.style(cell.style).fg);
+                let style = self.style(cell.style);
+                let low = color_id(style.fg);
+                let placement = color_id(style.underline_color);
                 let msb = decoded.image_id_msb.map(Rank::get);
                 let tile_row = decoded.row.map(Rank::get);
                 let tile_col = decoded.col.map(Rank::get);
-                let run = prev.filter(|&(p_low, p_msb, p_row, p_col)| {
+                let run = prev.filter(|&(p_low, p_placement, p_msb, p_row, p_col)| {
                     p_low == low
+                        && p_placement == placement
                         && msb.is_none_or(|m| m == p_msb)
                         && tile_row.is_none_or(|r| r == p_row)
                         && tile_col.is_none_or(|c| c == p_col.saturating_add(1))
                 });
                 let current = match run {
-                    Some((_, p_msb, p_row, p_col)) => (low, p_msb, p_row, p_col.saturating_add(1)),
+                    Some((_, _, p_msb, p_row, p_col)) => {
+                        (low, placement, p_msb, p_row, p_col.saturating_add(1))
+                    }
                     None => (
                         low,
+                        placement,
                         msb.unwrap_or(0),
                         tile_row.unwrap_or(0),
                         tile_col.unwrap_or(0),
                     ),
                 };
                 prev = Some(current);
-                let (low, msb, tile_row, tile_col) = current;
+                let (low, placement_id, msb, tile_row, tile_col) = current;
                 let image_id = ImageId((msb << 24) | low);
                 if image_id.0 == 0 {
                     continue;
@@ -91,6 +99,7 @@ impl ScreenBuffer {
                     row,
                     col,
                     image_id,
+                    placement_id,
                     tile_row,
                     tile_col,
                 });
@@ -123,6 +132,7 @@ mod tests {
                 row: 0,
                 col: 0,
                 image_id: ImageId(5),
+                placement_id: 0,
                 tile_row: 0,
                 tile_col: 0
             }
@@ -133,6 +143,7 @@ mod tests {
                 row: 0,
                 col: 1,
                 image_id: ImageId(5),
+                placement_id: 0,
                 tile_row: 0,
                 tile_col: 1
             }
@@ -237,6 +248,20 @@ mod tests {
         let cells = g.placeholder_cells();
         assert_eq!(cells[1].image_id, ImageId((7 << 24) | 5));
         assert_eq!(cells[1].tile_col, 1);
+    }
+
+    #[test]
+    fn the_underline_color_names_the_placement_and_a_change_breaks_the_run() {
+        let mut g = Grid::new(1, 4);
+        let mut p = Parser::new();
+        let bytes = "\u{1b}[38;5;5;58;5;1m\u{10eeee}\u{10eeee}\u{1b}[58;5;2m\u{10eeee}";
+        drive(&mut p, &mut g, bytes.as_bytes());
+        let cells: Vec<(u32, u32)> = g
+            .placeholder_cells()
+            .iter()
+            .map(|c| (c.placement_id, c.tile_col))
+            .collect();
+        assert_eq!(cells, vec![(1, 0), (1, 1), (2, 0)]);
     }
 
     #[test]

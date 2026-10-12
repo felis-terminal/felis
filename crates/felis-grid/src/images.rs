@@ -947,10 +947,26 @@ pub struct ClientPlacement {
 #[cfg_attr(feature = "state-dump", derive(serde::Serialize, serde::Deserialize))]
 pub struct VirtualPlacement {
     pub image_id: ImageId,
+    /// `p=`, or [`Placements::allocate_anonymous_id`]'s for a put
+    /// without one. `None` only in a client shadow fed by a minor-0
+    /// daemon, which keeps one virtual placement per image.
+    #[cfg_attr(feature = "state-dump", serde(default))]
+    pub placement_id: Option<PlacementId>,
+    /// Its id came from [`Placements::allocate_anonymous_id`]; no
+    /// command can name it.
+    #[cfg_attr(feature = "state-dump", serde(default))]
+    pub anonymous: bool,
     /// Total cells the whole image spans.
     pub cols: u16,
     pub rows: u16,
     pub z_index: i32,
+}
+
+/// What [`Placements::rekey_anonymous`] moved, under its new id.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Rekeyed {
+    Anchored(Placement),
+    Virtual(VirtualPlacement),
 }
 
 /// Side-table of [`Placement`]s keyed by `(image_id, placement_id)`.
@@ -963,10 +979,10 @@ pub struct VirtualPlacement {
 )]
 pub struct Placements {
     entries: Vec<Placement>,
-    /// At most one per image id. Kept apart from `entries`: their
-    /// lifetime is tied to the image, not a placement id (no
-    /// `PlacementRemoved` names a virtual placement), so one dies only
-    /// when its image leaves the store.
+    /// Keyed like `entries`, which share the key space: one
+    /// `(image_id, placement_id)` names a direct or a virtual placement,
+    /// never both. Kept apart because nothing that moves or clears
+    /// anchored placements touches them.
     virtuals: Vec<VirtualPlacement>,
     /// Ids handed out by [`Self::allocate_anonymous_id`], counted down
     /// from `u32::MAX`.
@@ -991,14 +1007,20 @@ impl Placements {
         loop {
             let id = PlacementId(u32::MAX - self.anonymous_issued);
             self.anonymous_issued = self.anonymous_issued.wrapping_add(1);
-            if !self
-                .entries
-                .iter()
-                .any(|p| p.image_id == image_id && p.placement_id == Some(id))
-            {
+            if !self.holds(image_id, id) {
                 return id;
             }
         }
+    }
+
+    fn holds(&self, image_id: ImageId, id: PlacementId) -> bool {
+        self.entries
+            .iter()
+            .any(|p| p.image_id == image_id && p.placement_id == Some(id))
+            || self
+                .virtuals
+                .iter()
+                .any(|v| v.image_id == image_id && v.placement_id == Some(id))
     }
 
     /// Last write wins under one producer `(image_id, placement_id)`, as
@@ -1032,23 +1054,30 @@ impl Placements {
 
     /// Moves an anonymous placement off `id` before a producer's `p=`
     /// takes it, since the wire names both by `(image_id, placement_id)`.
-    /// It goes to the end of the table, where the client's remove and
-    /// re-add puts it, so equal-z stacking agrees on both sides. Returns
-    /// the id it left and the placement under its new id.
-    pub fn rekey_anonymous(
-        &mut self,
-        image_id: ImageId,
-        id: PlacementId,
-    ) -> Option<(PlacementId, Placement)> {
-        let idx = self
+    /// It goes to the end of its table, where the client's remove and
+    /// re-add puts it, so both sides keep one order. Returns the id it
+    /// left and the placement under its new id.
+    pub fn rekey_anonymous(&mut self, image_id: ImageId, id: PlacementId) -> Option<Rekeyed> {
+        if let Some(idx) = self
             .entries
             .iter()
-            .position(|p| p.anonymous && p.image_id == image_id && p.placement_id == Some(id))?;
+            .position(|p| p.anonymous && p.image_id == image_id && p.placement_id == Some(id))
+        {
+            let fresh = self.allocate_anonymous_id(image_id);
+            let mut entry = self.entries.remove(idx);
+            entry.placement_id = Some(fresh);
+            self.entries.push(entry.clone());
+            return Some(Rekeyed::Anchored(entry));
+        }
+        let idx = self
+            .virtuals
+            .iter()
+            .position(|v| v.anonymous && v.image_id == image_id && v.placement_id == Some(id))?;
         let fresh = self.allocate_anonymous_id(image_id);
-        let mut entry = self.entries.remove(idx);
+        let mut entry = self.virtuals.remove(idx);
         entry.placement_id = Some(fresh);
-        self.entries.push(entry.clone());
-        Some((id, entry))
+        self.virtuals.push(entry);
+        Some(Rekeyed::Virtual(entry))
     }
 
     /// Removed entries come back in insertion order; kept entries keep
@@ -1069,22 +1098,54 @@ impl Placements {
         removed
     }
 
-    /// One entry per image id, overwritten in place; the client-side
-    /// shadow applies the identical rule.
+    /// Overwritten in place under its `(image_id, placement_id)`, or by
+    /// image alone when it has no id; an anonymous placement is always a
+    /// new one. The client-side shadow applies the identical rule.
     pub fn upsert_virtual(&mut self, placement: VirtualPlacement) {
-        if let Some(slot) = self
-            .virtuals
-            .iter_mut()
-            .find(|v| v.image_id == placement.image_id)
-        {
+        if let Some(slot) = self.virtuals.iter_mut().find(|v| {
+            !placement.anonymous
+                && !v.anonymous
+                && v.image_id == placement.image_id
+                && (placement.placement_id.is_none() || v.placement_id == placement.placement_id)
+        }) {
             *slot = placement;
         } else {
             self.virtuals.push(placement);
         }
     }
 
-    pub fn remove_virtual(&mut self, image_id: ImageId) {
-        self.virtuals.retain(|v| v.image_id != image_id);
+    /// Only a producer-addressed virtual placement matches.
+    pub fn remove_virtual_placement(
+        &mut self,
+        image_id: ImageId,
+        placement_id: PlacementId,
+    ) -> Option<VirtualPlacement> {
+        let idx = self.virtuals.iter().position(|v| {
+            !v.anonymous && v.image_id == image_id && v.placement_id == Some(placement_id)
+        })?;
+        Some(self.virtuals.remove(idx))
+    }
+
+    /// Every virtual placement of the image, in table order.
+    pub fn remove_virtual(&mut self, image_id: ImageId) -> Vec<VirtualPlacement> {
+        let (removed, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut self.virtuals)
+            .into_iter()
+            .partition(|v| v.image_id == image_id);
+        self.virtuals = kept;
+        removed
+    }
+
+    /// kitty's `grman_put_cell_image`: a non-zero id picks the virtual
+    /// placement with that id, zero the image's first.
+    pub fn virtual_for_cell(
+        &self,
+        image_id: ImageId,
+        placement_id: u32,
+    ) -> Option<&VirtualPlacement> {
+        self.virtuals.iter().find(|v| {
+            v.image_id == image_id
+                && (placement_id == 0 || v.placement_id.is_none_or(|p| p.0 == placement_id))
+        })
     }
 
     pub fn retain_virtual(&mut self, pred: impl FnMut(&VirtualPlacement) -> bool) {

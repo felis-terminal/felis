@@ -75,6 +75,8 @@ json_dto! {
         },
         VirtualPlacement {
             image_id: u32,
+            #[serde(default)]
+            placement_id: Option<u32>,
             cols: u16,
             rows: u16,
             z_index: i32,
@@ -200,11 +202,13 @@ impl From<ImageMsg> for ImageJson {
             },
             ImageMsg::VirtualPlacement {
                 image_id,
+                placement_id,
                 cols,
                 rows,
                 z_index,
             } => Self::VirtualPlacement {
                 image_id: image_id.0,
+                placement_id: placement_id.map(|id| id.0),
                 cols,
                 rows,
                 z_index,
@@ -261,11 +265,13 @@ impl TryFrom<ImageJson> for ImageMsg {
             },
             ImageJson::VirtualPlacement {
                 image_id,
+                placement_id,
                 cols,
                 rows,
                 z_index,
             } => Self::VirtualPlacement {
                 image_id: ImageId(image_id),
+                placement_id: placement_id.map(PlacementId),
                 cols,
                 rows,
                 z_index,
