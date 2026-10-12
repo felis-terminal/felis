@@ -321,7 +321,9 @@ pub use placeholder_resolve::PlaceholderCell;
 pub use pty_effects::{APC_OUTBOX_BYTES, APC_OUTBOX_CAP, PtyEffectQueue};
 use screen::SavedScreen;
 pub use screen::ScreenBuffer;
-pub use search::{SearchCursor, SearchHit, SearchOptions, SearchQuery, SearchQueryError, row_text};
+pub use search::{
+    SearchCursor, SearchHit, SearchOptions, SearchQuery, SearchQueryError, SearchSource, row_text,
+};
 pub use sgr::{AttrFlags, Attributes, Color, UnderlineStyle};
 pub use style_table::{StyleId, StyleTable};
 pub use table_gc::{Sweepable, TableGc};

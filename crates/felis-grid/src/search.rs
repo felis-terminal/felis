@@ -2,11 +2,10 @@
 //! `docs/explanation/data-model/scrollback.md` "Search").
 //! Matches per logical line, reporting one column segment per touched row.
 //! Works on UTF-8 bytes without Unicode normalization (principle 4).
-//! Alternate screen is excluded from search.
 
 use felis_protocol::messages::{ByteSpan, ColSpan};
 
-pub use felis_protocol::messages::SearchOptions;
+pub use felis_protocol::messages::{SearchOptions, SearchSource};
 
 use crate::ansi::logical_line_spans as line_spans;
 use crate::{Cell, ClusterTable, Grapheme};
@@ -214,15 +213,64 @@ pub fn search_rows<'a>(
 }
 
 impl crate::Grid {
-    /// Matches over scrollback plus the live primary screen,
-    /// newest-first, stitched across the seam so a needle spanning it
-    /// is found. On the alternate screen the live pass is skipped: alt
-    /// rows are no continuation of scrollback, and their `soft_wrap`
-    /// bits describe the alt screen, not the saved primary.
-    pub fn search<'a>(&'a self, query: &'a SearchQuery) -> impl Iterator<Item = SearchHit> + 'a {
-        self.search_window(query, SearchCursor::default(), usize::MAX)
-            .1
-            .map(|(_, hit)| hit)
+    /// Matches over the rows `source` names: scrollback newest-first,
+    /// visible top-down. The default walk skips the live pass on the
+    /// alternate screen: alt rows are no continuation of scrollback.
+    /// [`SearchSource::Visible`] joins no scrollback, so it reads the
+    /// alt screen, stitching by the alt rows' own wrap bits.
+    pub fn search<'a>(
+        &'a self,
+        query: &'a SearchQuery,
+        source: SearchSource,
+    ) -> Box<dyn Iterator<Item = SearchHit> + 'a> {
+        match source {
+            SearchSource::Scrollback => Box::new(
+                self.search_window(query, SearchCursor::default(), usize::MAX)
+                    .1
+                    .map(|(_, hit)| hit),
+            ),
+            SearchSource::Visible => Box::new(
+                self.search_visible_window(query, 0, usize::MAX)
+                    .1
+                    .map(|(_, hit)| hit),
+            ),
+        }
+    }
+
+    /// One slice of the visible walk, resumed by row position as capture
+    /// is: at most `budget` logical lines top-down from the first one
+    /// starting at or below `from_row`. Returns the next slice's start
+    /// row (`rows()` when done) and each hit paired with the row just
+    /// past its line, for a slice the caller cuts short.
+    pub fn search_visible_window<'a>(
+        &'a self,
+        query: &'a SearchQuery,
+        from_row: usize,
+        budget: usize,
+    ) -> (usize, impl Iterator<Item = (usize, SearchHit)> + 'a) {
+        let (rows, continued): (Vec<&[Cell]>, Vec<bool>) = (0..self.screen.rows())
+            .map(|r| {
+                (
+                    self.screen.row_content(r).unwrap_or(&[]),
+                    self.screen.row_soft_wrap_continued(r),
+                )
+            })
+            .unzip();
+        let spans: Vec<(usize, usize)> = line_spans(&continued)
+            .into_iter()
+            .filter(|&(start, _)| start >= from_row)
+            .collect();
+        let resume = spans.get(budget).map_or(rows.len(), |&(start, _)| start);
+        let clusters = self.screen.cluster_table();
+        let walk = spans
+            .into_iter()
+            .take(budget)
+            .filter_map(move |(start, end)| {
+                let first_line_index = i64::try_from(start).unwrap_or(i64::MAX);
+                line_to_hit(&rows[start..=end], query, first_line_index, clusters)
+                    .map(|hit| (end + 1, hit))
+            });
+        (resume, walk)
     }
 
     /// One slice of [`Self::search`]'s walk: skip `visited` lines from

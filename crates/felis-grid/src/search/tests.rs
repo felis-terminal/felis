@@ -421,7 +421,7 @@ fn driven_grid(rows: u16, cols: u16, bytes: &[u8]) -> crate::Grid {
 fn grid_search_finds_live_rows_in_the_non_negative_index_space() {
     let g = driven_grid(3, 8, b"hello\r\nworld");
     let q = SearchQuery::new("world", SearchOptions::default()).unwrap();
-    let hits: Vec<_> = g.search(&q).collect();
+    let hits: Vec<_> = g.search(&q, SearchSource::Scrollback).collect();
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0].line_index, 1);
     assert_eq!(
@@ -442,7 +442,7 @@ fn grid_search_stitches_a_line_across_the_scrollback_seam() {
     assert_eq!(g.scrollback().len(), 1);
     assert!(g.row_soft_wrap_continued(0), "live tail must be tied");
     let q = SearchQuery::new("bcde", SearchOptions::default()).unwrap();
-    let hits: Vec<_> = g.search(&q).collect();
+    let hits: Vec<_> = g.search(&q, SearchSource::Scrollback).collect();
     assert_eq!(hits.len(), 1);
     let h = &hits[0];
     assert_eq!(h.line_index, -1, "anchor = topmost row, in scrollback");
@@ -470,7 +470,10 @@ fn grid_search_stitches_a_line_across_the_scrollback_seam() {
 fn grid_search_orders_hits_live_first_then_scrollback() {
     let g = driven_grid(2, 8, b"foo\r\n.\r\n.\r\nfoo");
     let q = SearchQuery::new("foo", SearchOptions::default()).unwrap();
-    let indices: Vec<i64> = g.search(&q).map(|h| h.line_index).collect();
+    let indices: Vec<i64> = g
+        .search(&q, SearchSource::Scrollback)
+        .map(|h| h.line_index)
+        .collect();
     assert_eq!(indices, vec![1, -2]);
 }
 
@@ -482,14 +485,154 @@ fn grid_search_skips_the_live_pass_on_the_alternate_screen() {
     let mut p = felis_vt::Parser::new();
     crate::test_support::drive(&mut p, &mut g, b"needle\r\n.\r\n.\r\nneedle");
     let q = SearchQuery::new("needle", SearchOptions::default()).unwrap();
-    let before: Vec<i64> = g.search(&q).map(|h| h.line_index).collect();
+    let before: Vec<i64> = g
+        .search(&q, SearchSource::Scrollback)
+        .map(|h| h.line_index)
+        .collect();
     assert_eq!(before, vec![1, -2]);
     crate::test_support::drive(&mut p, &mut g, b"\x1b[?1049hneedle");
-    let during: Vec<i64> = g.search(&q).map(|h| h.line_index).collect();
+    let during: Vec<i64> = g
+        .search(&q, SearchSource::Scrollback)
+        .map(|h| h.line_index)
+        .collect();
     assert_eq!(during, vec![-2]);
     crate::test_support::drive(&mut p, &mut g, b"\x1b[?1049l");
-    let after: Vec<i64> = g.search(&q).map(|h| h.line_index).collect();
+    let after: Vec<i64> = g
+        .search(&q, SearchSource::Scrollback)
+        .map(|h| h.line_index)
+        .collect();
     assert_eq!(after, vec![1, -2]);
+}
+
+fn line_indices(g: &crate::Grid, q: &SearchQuery, source: SearchSource) -> Vec<i64> {
+    g.search(q, source).map(|h| h.line_index).collect()
+}
+
+/// The visible walk is the live grid alone: scrollback holding the same
+/// needle reports nothing.
+#[test]
+fn visible_search_leaves_scrollback_out() {
+    let g = driven_grid(2, 8, b"needle\r\n.\r\n.\r\nneedle");
+    let q = SearchQuery::new("needle", SearchOptions::default()).unwrap();
+    assert_eq!(line_indices(&g, &q, SearchSource::Visible), vec![1]);
+}
+
+/// The live half the default walk skips on the alternate screen is the
+/// one the visible walk reads, and its columns are cell columns: the
+/// two wide characters ahead of the needle put it at column 5, not at
+/// its byte or character index.
+#[test]
+fn visible_search_reads_the_alternate_screen_in_cell_columns() {
+    let mut g = crate::Grid::new(3, 20);
+    let mut p = felis_vt::Parser::new();
+    crate::test_support::drive(&mut p, &mut g, b"needle\r\n");
+    crate::test_support::drive(&mut p, &mut g, "\x1b[?1049h\x1b[H漢字 needle".as_bytes());
+    let q = SearchQuery::new("needle", SearchOptions::default()).unwrap();
+    assert_eq!(
+        line_indices(&g, &q, SearchSource::Scrollback),
+        Vec::<i64>::new()
+    );
+    let hits: Vec<_> = g.search(&q, SearchSource::Visible).collect();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].line_index, 0);
+    assert_eq!(hits[0].text, "漢字 needle");
+    assert_eq!(hits[0].byte_spans, vec![ByteSpan { start: 7, end: 13 }]);
+    assert_eq!(
+        hits[0].col_spans,
+        vec![ColSpan {
+            line_index: 0,
+            col_start: 5,
+            col_end: 11
+        }]
+    );
+}
+
+/// The top live row's bit ties it to history; the visible walk starts a
+/// line there instead, so only the on-screen tail matches.
+#[test]
+fn visible_search_does_not_stitch_into_scrollback() {
+    let g = driven_grid(2, 3, b"abcdef\r\nxx");
+    assert!(g.row_soft_wrap_continued(0), "live tail must be tied");
+    let spanning = SearchQuery::new("bcde", SearchOptions::default()).unwrap();
+    assert_eq!(
+        line_indices(&g, &spanning, SearchSource::Visible),
+        Vec::<i64>::new()
+    );
+    let tail = SearchQuery::new("def", SearchOptions::default()).unwrap();
+    let hits: Vec<_> = g.search(&tail, SearchSource::Visible).collect();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].line_index, 0);
+    assert_eq!(hits[0].text, "def");
+}
+
+/// An autowrap on the alternate screen sets the alt row's own bit, so a
+/// needle crossing that wrap edge is found with one segment per row.
+#[test]
+fn visible_search_stitches_soft_wrapped_alternate_screen_rows() {
+    let mut g = crate::Grid::new(3, 4);
+    let mut p = felis_vt::Parser::new();
+    crate::test_support::drive(&mut p, &mut g, b"\x1b[?1049h\x1b[Habcdefgh");
+    assert!(
+        g.row_soft_wrap_continued(1),
+        "the alt row's wrap bit is set"
+    );
+    let q = SearchQuery::new("cdef", SearchOptions::default()).unwrap();
+    let hits: Vec<_> = g.search(&q, SearchSource::Visible).collect();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].line_index, 0);
+    assert_eq!(hits[0].text, "abcdefgh");
+    assert_eq!(
+        hits[0].col_spans,
+        vec![
+            ColSpan {
+                line_index: 0,
+                col_start: 2,
+                col_end: 4
+            },
+            ColSpan {
+                line_index: 1,
+                col_start: 0,
+                col_end: 2
+            }
+        ]
+    );
+}
+
+fn visible_slice(
+    g: &crate::Grid,
+    q: &SearchQuery,
+    from_row: usize,
+    budget: usize,
+) -> (usize, Vec<i64>) {
+    let (resume, walk) = g.search_visible_window(q, from_row, budget);
+    (resume, walk.map(|(_, hit)| hit.line_index).collect())
+}
+
+/// A resumed visible walk starts at the cursor row on the screen as it
+/// is now: a rewrap and a repaint in unvisited rows are read as they
+/// stand, and nothing above the cursor is read twice.
+#[test]
+fn a_visible_walk_resumes_by_row_position() {
+    let q = SearchQuery::new("a", SearchOptions::default()).unwrap();
+    let rows = b"a0\r\na1\r\na2\r\na3\r\na4\r\na5";
+
+    let mut g = crate::Grid::new(6, 4);
+    let mut p = felis_vt::Parser::new();
+    crate::test_support::drive(&mut p, &mut g, rows);
+    assert_eq!(visible_slice(&g, &q, 0, 2), (2, vec![0, 1]));
+    // Rows 2 and 3 become one wrapped line; row 4 loses its match.
+    crate::test_support::drive(&mut p, &mut g, b"\x1b[3;1Hb2xxa3\x1b[5;1Hzz");
+    assert!(g.row_soft_wrap_continued(3));
+    assert_eq!(visible_slice(&g, &q, 2, usize::MAX), (6, vec![2, 5]));
+
+    let mut g = crate::Grid::new(6, 4);
+    let mut p = felis_vt::Parser::new();
+    crate::test_support::drive(&mut p, &mut g, rows);
+    assert_eq!(visible_slice(&g, &q, 0, 2), (2, vec![0, 1]));
+    // A visited line grows across the cursor: it is not reported again.
+    crate::test_support::drive(&mut p, &mut g, b"\x1b[2;1Ha1xxa2");
+    assert!(g.row_soft_wrap_continued(2));
+    assert_eq!(visible_slice(&g, &q, 2, usize::MAX), (6, vec![3, 4, 5]));
 }
 
 // ---- Property tests (REQ-607) ----
