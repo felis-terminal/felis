@@ -57,7 +57,6 @@ fn shift_placements(session: &mut crate::pool::Session, n: u32, retain: u32) {
     crate::graphics::free_unreferenced_anonymous(
         &mut session.images,
         &mut session.placements,
-        session.saved_primary_placements.as_ref(),
         &mut session.image_events,
     );
 }
@@ -74,7 +73,6 @@ fn replay_effects(
             PtyEffect::ImagesCleared(scope) => crate::graphics::clear_images(
                 &mut session.images,
                 &mut session.placements,
-                session.saved_primary_placements.as_ref(),
                 &mut session.image_events,
                 scope,
             ),
@@ -104,20 +102,18 @@ fn replay_effects(
             PtyEffect::AltScreenScrolled(n) => {
                 shift_placements(session, n, 0);
             }
-            // Saved placements hold no image refcount (released on the switch).
             // RIS leaves the alternate screen; the primary placements come
             // back first so the clear that follows spares their history
             // rows, as kitty's reset of the primary screen does.
             PtyEffect::HardReset => {
-                if session.saved_primary_placements.is_some() {
-                    crate::graphics::apply_screen_switch(
-                        felis_grid::ScreenSwitch::LeftAlternate,
-                        &mut session.images,
-                        &mut session.placements,
-                        &mut session.saved_primary_placements,
-                        &mut session.image_events,
-                    );
-                }
+                crate::graphics::apply_screen_switch(
+                    felis_grid::ScreenSwitch::LeftAlternate { kept: false },
+                    &mut session.images,
+                    &mut session.placements,
+                    &mut session.saved_screens,
+                    &mut session.image_events,
+                );
+                session.saved_screens.alternate = None;
             }
             // Parked for `session_task::fan_out_grid_state`, the only consumer
             // that knows each shadow's damage.
@@ -151,7 +147,7 @@ fn replay_effects(
                     switch,
                     &mut session.images,
                     &mut session.placements,
-                    &mut session.saved_primary_placements,
+                    &mut session.saved_screens,
                     &mut session.image_events,
                 );
             }

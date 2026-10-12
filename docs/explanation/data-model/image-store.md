@@ -4,9 +4,9 @@ sidebar:
   order: 3
 ---
 
-The image store is the daemon's per-session repository of Kitty graphics protocol images: one pool of decoded pixels
-that every placement in the session draws from. No cell holds a handle into it, and the two placement paths reach an
-image differently. A direct placement (`a=T` / `a=p`) is named only by the `Placements` side table beside the store, so
+The image store is the daemon's per-screen repository of Kitty graphics protocol images: one pool of decoded pixels that
+every placement on the screen draws from. No cell holds a handle into it, and the two placement paths reach an image
+differently. A direct placement (`a=T` / `a=p`) is named only by the `Placements` side table beside the store, so
 placing, moving or deleting one touches no cell and dirties no row. A Unicode-placeholder placement is grid content: the
 cell's own grapheme and foreground color spell the image id out, and the resolver reads it back from there
 ([grid-and-cells.md](grid-and-cells.md) "Image references"), so such a placement moves with the text it is written into
@@ -25,6 +25,16 @@ eviction walks.
 Ids for images transmitted without one are assigned counting **down** from the top of the id space, away from the low
 ids producers pick by hand. A collision here is not a rejected transmission but a silently overwritten image, which is
 why the two id sources are kept at opposite ends rather than merely checked against each other.
+
+## One store per screen
+
+The alternate screen gets a store of its own, as in kitty: a full-screen program that clears its screen, deletes by
+range, or fills the byte cap would otherwise free the images of the shell it covers. The client mirrors one store, the
+live screen's, so a screen switch deletes the screen left behind from the mirror and re-sends the one coming up.
+
+Rejected: a mirror holding both stores, with every image message naming its screen. It would spare the re-send on
+`?1049l` at the cost of a wire field and a second store in every client, for a program whose primary-screen images are
+usually few. _Revisit if_ the re-send on leaving a full-screen program shows up as a visible delay.
 
 ## Memory accounting
 
@@ -46,7 +56,7 @@ images if scrollback depth ever becomes configurable to very large values.
 
 ## Limits
 
-The numbers (the per-session byte cap, the per-image decode cap, the frame-count cap) are in
+The numbers (the per-screen byte cap, the per-image decode cap, the frame-count cap) are in
 [the reference](../../reference/protocols/kitty-graphics.md) "Limits". Two things about them are decisions.
 
 They are `felis-protocol` constants rather than daemon-private ones because a client mirrors this store and sizes its
@@ -116,6 +126,6 @@ the producer to retransmit. What the burst carries and in what order is in [ipc.
 = 2)". This page's decision is that the store ships **whole** rather than filtered to what the visible screen
 references, and that it ships **last**. A placement can name an image from a row that has scrolled away and back, so a
 subscriber that held only the visible subset would have to fetch on every scroll; the price of shipping everything is
-bounded by the per-session store budget, and putting the bytes after the grid keeps a cold attach painting at
-"round-trip + cells". _Revisit if_ the store budget grows past what a cold attach over a slow link can absorb; a
-referenced-first order or an on-demand fetch would then earn its bookkeeping.
+bounded by the store budget, and putting the bytes after the grid keeps a cold attach painting at "round-trip + cells".
+_Revisit if_ the store budget grows past what a cold attach over a slow link can absorb; a referenced-first order or an
+on-demand fetch would then earn its bookkeeping.

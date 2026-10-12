@@ -197,7 +197,7 @@ buffer, flattened by the daemon before storage) because it keeps `felis-grid` de
 renderer treat every frame as "upload this pixel buffer to an atlas slot" keyed by `(id, frame)`, and keeps the wire a
 dumb pixel pipe with no base-frame reference graph for a cross-host or non-Rust grid consumer to replicate: the geometry
 alone states how many bytes each frame's transfer must deliver. The cost is memory: N frames cost N full canvases even
-when each `a=f` touches a small rectangle; the per-session image byte cap bounds it (storage details in
+when each `a=f` touches a small rectangle; the per-screen image byte cap bounds it (storage details in
 [`image-store.md`](../data-model/image-store.md)). Revisit with lazy coalescing, as kitty does, if a real producer (say
 a spinner editing a tiny region across hundreds of frames) is starved by the cap where kitty would not be.
 
@@ -280,19 +280,18 @@ that is not confined to whole rows, where clipping stops being expressible as a 
 
 ## Eviction under the byte cap
 
-When a transmit would overflow the per-session byte cap, felis follows kitty's `apply_storage_quota`: every image
-without a placement goes first, then the least recently used images are evicted outright, placements included. Evicting
-placed images is what keeps a frame-streaming producer alive: mpv's `--vo=kitty` sends one anonymous `a=T` per video
-frame with a `C=1` placement that nothing erases between frames, so a refuse-to-evict-pinned policy would freeze
-playback the moment the cap filled.
+When a transmit would overflow the per-screen byte cap, felis follows kitty's `apply_storage_quota`: every image without
+a placement goes first, then the least recently used images are evicted outright, placements included. Evicting placed
+images is what keeps a frame-streaming producer alive: mpv's `--vo=kitty` sends one anonymous `a=T` per video frame with
+a `C=1` placement that nothing erases between frames, so a refuse-to-evict-pinned policy would freeze playback the
+moment the cap filled.
 
-kitty gives each screen its own image store, so a full-screen program filling the cap never evicts what the shell's
-screen shows. felis keeps one store per session: the stashed primary placements keep their images out of the first,
-unplaced-only step, but the least-recently-used step can still reach them.
+Each screen has a store of its own, as in kitty, so a full-screen program filling the cap never evicts what the shell's
+screen shows ([image-store.md](../data-model/image-store.md) "One store per screen").
 
 ## The frame count cap
 
-The per-image and per-session byte caps do not bound how many frames an image holds, because frames are charged
+The per-image and per-screen byte caps do not bound how many frames an image holds, because frames are charged
 individually: a 1×1 RGBA frame is four pixel bytes, so 64 MiB of budget admits something like sixteen million of them.
 Every frame also costs a slot in the store's vector and, on any client mirroring it, a record of its own. That is the
 shape of the problem: a run of appends, each of them affordable on its own bytes, whose count no byte cap bounds. A

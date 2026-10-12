@@ -6,8 +6,8 @@
 
 use felis_client_core::image_shadow::ImageShadow;
 use felis_daemon::graphics::{
-    ApcCtx, ImageEvent, ShmDeferral, apply_screen_switch, clear_images, dispatch_apc_body,
-    free_unreferenced_anonymous, materialize_image_events,
+    ApcCtx, ImageEvent, SavedScreens, ShmDeferral, apply_screen_switch, clear_images,
+    dispatch_apc_body, free_unreferenced_anonymous, materialize_image_events,
 };
 use std::fmt::Write as _;
 
@@ -93,6 +93,8 @@ fn op() -> impl Strategy<Value = Op> {
         prop_oneof![
             Just("\x1b[?1049h"),
             Just("\x1b[?1049l"),
+            Just("\x1b[?47h"),
+            Just("\x1b[?47l"),
             Just("\x1b[2J"),
             Just("\x1b[3J"),
             Just("\x1bc"),
@@ -108,7 +110,7 @@ struct Session {
     grid: Grid,
     images: ImageStore,
     placements: Placements,
-    saved_primary: Option<Placements>,
+    saved: SavedScreens,
     events: Vec<ImageEvent>,
     shm: ShmDeferral,
     window: ImageShadow,
@@ -122,7 +124,7 @@ impl Session {
             grid: Grid::new(6, 20),
             images: ImageStore::new(store_cap()),
             placements: Placements::new(),
-            saved_primary: None,
+            saved: SavedScreens::default(),
             events: Vec::new(),
             shm: ShmDeferral::default(),
             window: ImageShadow::new(),
@@ -140,7 +142,6 @@ impl Session {
                 cell_pixel_w: 8,
                 cell_pixel_h: 16,
                 anchor_cursor: None,
-                saved_primary: self.saved_primary.as_ref(),
             },
             &mut self.reassembler,
             &body(controls, payload),
@@ -155,23 +156,25 @@ impl Session {
                     switch,
                     &mut self.images,
                     &mut self.placements,
-                    &mut self.saved_primary,
+                    &mut self.saved,
                     &mut self.events,
                 ),
                 PtyEffect::ImagesCleared(scope) => clear_images(
                     &mut self.images,
                     &mut self.placements,
-                    self.saved_primary.as_ref(),
                     &mut self.events,
                     scope,
                 ),
-                PtyEffect::HardReset if self.saved_primary.is_some() => apply_screen_switch(
-                    felis_grid::ScreenSwitch::LeftAlternate,
-                    &mut self.images,
-                    &mut self.placements,
-                    &mut self.saved_primary,
-                    &mut self.events,
-                ),
+                PtyEffect::HardReset => {
+                    apply_screen_switch(
+                        felis_grid::ScreenSwitch::LeftAlternate { kept: false },
+                        &mut self.images,
+                        &mut self.placements,
+                        &mut self.saved,
+                        &mut self.events,
+                    );
+                    self.saved.alternate = None;
+                }
                 PtyEffect::ScrolledIntoScrollback(n) => {
                     let retain = u32::try_from(self.grid.scrollback().len()).unwrap();
                     self.shift(n, retain);
@@ -194,12 +197,7 @@ impl Session {
                 placement_id: p.placement_id,
             });
         }
-        free_unreferenced_anonymous(
-            &mut self.images,
-            &mut self.placements,
-            self.saved_primary.as_ref(),
-            &mut self.events,
-        );
+        free_unreferenced_anonymous(&mut self.images, &mut self.placements, &mut self.events);
     }
 
     fn run(&mut self, op: &Op) {
@@ -304,6 +302,12 @@ proptest! {
                     id,
                     op
                 );
+            }
+
+            let shown = s.window.placements().iter().map(|p| p.image_id)
+                .chain(s.window.virtual_placements().iter().map(|v| v.image_id));
+            for id in shown {
+                prop_assert!(s.window.image(id).is_some(), "image {:?} is shown but not stored after {:?}", id, op);
             }
         }
     }

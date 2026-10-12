@@ -167,7 +167,7 @@ async fn status_human_names_the_build_and_every_row() {
         assert!(stdout.contains(name), "{name} missing from {stdout}");
     }
     assert!(stdout.contains("max session"), "{stdout}");
-    assert!(stdout.contains("256 MiB per session"), "{stdout}");
+    assert!(stdout.contains("512 MiB per session"), "{stdout}");
     assert!(
         stdout
             .lines()

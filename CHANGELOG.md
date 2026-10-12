@@ -43,7 +43,7 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
   placement on the screen, `C=1` ones included, and `ED 3` drops scrollback placements too; each then frees every image
   nothing displays, so transmitted-but-unplaced images no longer pile up until the byte cap evicts them. Partial erases
   (`ED 0`, `ED 1`, `EL`) and the soft reset `DECSTR` no longer remove images, so redrawing one line next to an image
-  keeps it. A clear on the alternate screen leaves the primary screen's images in place.
+  keeps it.
 - A Kitty graphics image sent without `i=` or `I=` is now freed once a delete or a scroll leaves it without a placement,
   as in kitty; nothing could display it again, yet it used to hold its share of the byte cap until evicted.
 - When Kitty graphics images fill the session's byte cap, felis now evicts as kitty does: every image without a
@@ -58,6 +58,10 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
   they used to read the whole file.
 - A reply to a Kitty graphics frame command (`a=f`) now echoes its `r=`, as kitty does.
 - A Kitty graphics placement whose image was evicted in the same burst that placed it no longer lingers in the window.
+- The alternate screen now has a Kitty graphics image store of its own, as in kitty. A full-screen program can no longer
+  free the images on the shell screen it covers, whether by clearing its screen, deleting by id range, or filling the
+  byte cap, and an image it sends with an id the shell already used no longer replaces the shell's image. Leaving the
+  alternate screen with `?47l` keeps its images along with its text for the next `?47h`, as in kitty.
 - Kitty graphics Unicode-placeholder placements of one image now stay apart by `p=`, and a placeholder cell picks its
   placement by its underline color, as in kitty; felis kept one per image, so a second placement resized the first's
   tiles. `d=i`/`I`, `d=n`/`N`, `d=r`/`R` and transmitting the image again now remove its placeholder placements too.

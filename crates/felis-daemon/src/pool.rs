@@ -122,10 +122,8 @@ pub struct Session {
     /// Direct placements (`a=T` / `a=p`); persists across detach like
     /// `images`.
     pub placements: Placements,
-    /// The primary screen's placements while the program is on the
-    /// alternate screen (`?1049h`), restored on `?1049l`; `None` on the
-    /// primary. Stashed entries still pin their images.
-    pub saved_primary_placements: Option<Placements>,
+    /// The images and placements of the screen not shown.
+    pub saved_screens: crate::graphics::SavedScreens,
     /// Chunked-transmission reassembler
     /// (docs/explanation/protocols/kitty-graphics.md "Dispatcher
     /// architecture").
@@ -185,7 +183,7 @@ impl Session {
             signals,
             images: ImageStore::new(DEFAULT_IMAGE_BYTE_CAP),
             placements: Placements::new(),
-            saved_primary_placements: None,
+            saved_screens: crate::graphics::SavedScreens::default(),
             graphics_reassembler: Reassembler::new(),
             image_events: Vec::new(),
             scroll_ops: Vec::new(),

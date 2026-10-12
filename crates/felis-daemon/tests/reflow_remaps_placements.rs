@@ -8,7 +8,7 @@
 
 use felis_daemon::graphics::ImageEvent;
 use felis_daemon::graphics::{
-    ApcCtx, ShmDeferral, apply_reflow_remap, apply_screen_switch, dispatch_apc_body,
+    ApcCtx, SavedScreens, ShmDeferral, apply_reflow_remap, apply_screen_switch, dispatch_apc_body,
 };
 use felis_grid::images::{ImageStore, Placements};
 use felis_grid::{Grid, PtyEffect};
@@ -27,7 +27,7 @@ fn drive_burst(
     grid: &mut Grid,
     images: &mut ImageStore,
     placements: &mut Placements,
-    saved_primary: &mut Option<Placements>,
+    saved: &mut SavedScreens,
     events: &mut Vec<ImageEvent>,
     burst: &[u8],
 ) {
@@ -46,14 +46,13 @@ fn drive_burst(
                         cell_pixel_w: 0,
                         cell_pixel_h: 0,
                         anchor_cursor: None,
-                        saved_primary: None,
                     },
                     reassembler,
                     &apc.body,
                 );
             }
             PtyEffect::ScreenSwitch(switch) => {
-                apply_screen_switch(switch, images, placements, saved_primary, events);
+                apply_screen_switch(switch, images, placements, saved, events);
             }
             PtyEffect::PrimaryReflowed(remap) => {
                 apply_reflow_remap(&remap, images, placements, events);
@@ -70,7 +69,7 @@ fn resize_under_alt_screen_remaps_restored_placements_on_exit() {
     let mut grid = Grid::new(6, 10);
     let mut images = ImageStore::new(TEST_STORE_CAP);
     let mut placements = Placements::new();
-    let mut saved_primary: Option<Placements> = None;
+    let mut saved = SavedScreens::default();
     let mut events = Vec::new();
 
     let mut burst = Vec::new();
@@ -85,7 +84,7 @@ fn resize_under_alt_screen_remaps_restored_placements_on_exit() {
         &mut grid,
         &mut images,
         &mut placements,
-        &mut saved_primary,
+        &mut saved,
         &mut events,
         &burst,
     );
@@ -98,7 +97,7 @@ fn resize_under_alt_screen_remaps_restored_placements_on_exit() {
         &mut grid,
         &mut images,
         &mut placements,
-        &mut saved_primary,
+        &mut saved,
         &mut events,
         b"\x1b[?1049h",
     );
@@ -112,7 +111,7 @@ fn resize_under_alt_screen_remaps_restored_placements_on_exit() {
         &mut grid,
         &mut images,
         &mut placements,
-        &mut saved_primary,
+        &mut saved,
         &mut events,
         b"\x1b[?1049l",
     );

@@ -6,7 +6,9 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use felis_daemon::graphics::ImageEvent;
-use felis_daemon::graphics::{ApcCtx, ShmDeferral, apply_screen_switch, dispatch_apc_body};
+use felis_daemon::graphics::{
+    ApcCtx, SavedScreens, ShmDeferral, apply_screen_switch, dispatch_apc_body,
+};
 use felis_grid::images::{ImageStore, Placements};
 use felis_grid::{Grid, PtyEffect};
 use felis_vt::Parser;
@@ -23,7 +25,7 @@ fn drive_burst(
     grid: &mut Grid,
     images: &mut ImageStore,
     placements: &mut Placements,
-    saved_primary: &mut Option<Placements>,
+    saved: &mut SavedScreens,
     events: &mut Vec<ImageEvent>,
     burst: &[u8],
 ) {
@@ -42,14 +44,13 @@ fn drive_burst(
                         cell_pixel_w: 0,
                         cell_pixel_h: 0,
                         anchor_cursor: None,
-                        saved_primary: None,
                     },
                     reassembler,
                     &apc.body,
                 );
             }
             PtyEffect::ScreenSwitch(switch) => {
-                apply_screen_switch(switch, images, placements, saved_primary, events);
+                apply_screen_switch(switch, images, placements, saved, events);
             }
             _ => {}
         }
@@ -63,7 +64,7 @@ fn alt_enter_then_image_in_one_burst_keeps_the_placement() {
     let mut grid = Grid::new(24, 80);
     let mut images = ImageStore::new(TEST_STORE_CAP);
     let mut placements = Placements::new();
-    let mut saved_primary: Option<Placements> = None;
+    let mut saved = SavedScreens::default();
     let mut events = Vec::new();
 
     let mut burst = Vec::new();
@@ -79,7 +80,7 @@ fn alt_enter_then_image_in_one_burst_keeps_the_placement() {
         &mut grid,
         &mut images,
         &mut placements,
-        &mut saved_primary,
+        &mut saved,
         &mut events,
         &burst,
     );
@@ -88,6 +89,6 @@ fn alt_enter_then_image_in_one_burst_keeps_the_placement() {
     assert_eq!(
         placements.len(),
         1,
-        "the image placed after ?1049h must stay live on the alt screen, not be swept into saved_primary; events={events:?}"
+        "the image placed after ?1049h must stay live on the alt screen, not be swept into the saved primary screen; events={events:?}"
     );
 }

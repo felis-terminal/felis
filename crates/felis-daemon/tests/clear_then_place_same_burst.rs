@@ -62,7 +62,6 @@ fn stream_order_replay_keeps_the_clear_then_draw_image() {
             PtyEffect::ImagesCleared(scope) => felis_daemon::graphics::clear_images(
                 &mut p.images,
                 &mut p.placements,
-                None,
                 &mut p.events,
                 scope,
             ),
@@ -77,7 +76,6 @@ fn stream_order_replay_keeps_the_clear_then_draw_image() {
                         cell_pixel_w: 0,
                         cell_pixel_h: 0,
                         anchor_cursor: None,
-                        saved_primary: None,
                     },
                     &mut p.reassembler,
                     &apc.body,

@@ -115,7 +115,6 @@ fn a_first_chunk_with_both_image_id_and_number_is_refused_at_once() {
             cell_pixel_w: 0,
             cell_pixel_h: 0,
             anchor_cursor: None,
-            saved_primary: None,
         },
         &complete,
     );
@@ -404,7 +403,6 @@ fn windows_transmission_rejection_echoes_id_and_honors_quiet() {
             cell_pixel_w: 0,
             cell_pixel_h: 0,
             anchor_cursor: None,
-            saved_primary: None,
         },
         &complete(&controls, &path),
     )
@@ -427,7 +425,6 @@ fn windows_transmission_rejection_echoes_id_and_honors_quiet() {
                 cell_pixel_w: 0,
                 cell_pixel_h: 0,
                 anchor_cursor: None,
-                saved_primary: None,
             },
             &complete(&quiet, &path),
         )
@@ -605,7 +602,6 @@ fn transmit_inserts_into_image_store_and_emits_ok() {
             cell_pixel_w: 0,
             cell_pixel_h: 0,
             anchor_cursor: None,
-            saved_primary: None,
         },
         &cmd,
     )
@@ -640,7 +636,6 @@ fn transmit_with_q1_suppresses_ok_response() {
                 cell_pixel_w: 0,
                 cell_pixel_h: 0,
                 anchor_cursor: None,
-                saved_primary: None,
             },
             &cmd,
         )
@@ -667,7 +662,6 @@ fn transmit_with_q1_still_emits_errors() {
             cell_pixel_w: 0,
             cell_pixel_h: 0,
             anchor_cursor: None,
-            saved_primary: None,
         },
         &cmd,
     )
@@ -696,7 +690,6 @@ fn transmit_with_q2_suppresses_every_response_including_errors() {
                 cell_pixel_w: 0,
                 cell_pixel_h: 0,
                 anchor_cursor: None,
-                saved_primary: None,
             },
             &cmd,
         )
@@ -727,7 +720,6 @@ fn transmit_with_q3_or_higher_is_treated_as_silent() {
                 cell_pixel_w: 0,
                 cell_pixel_h: 0,
                 anchor_cursor: None,
-                saved_primary: None,
             },
             &cmd,
         )
@@ -755,7 +747,6 @@ fn transmit_with_missing_image_id_auto_allocates_an_anonymous_id() {
             cell_pixel_w: 0,
             cell_pixel_h: 0,
             anchor_cursor: None,
-            saved_primary: None,
         },
         &cmd,
     );
@@ -783,7 +774,6 @@ fn transmit_with_image_id_zero_is_anonymous() {
             cell_pixel_w: 0,
             cell_pixel_h: 0,
             anchor_cursor: None,
-            saved_primary: None,
         },
         &cmd,
     );
@@ -808,7 +798,6 @@ fn transmit_and_display_records_placement_at_cursor() {
             cell_pixel_w: 0,
             cell_pixel_h: 0,
             anchor_cursor: None,
-            saved_primary: None,
         },
         &cmd,
     )
@@ -841,7 +830,6 @@ fn display_existing_without_image_returns_enoent() {
             cell_pixel_w: 0,
             cell_pixel_h: 0,
             anchor_cursor: None,
-            saved_primary: None,
         },
         &cmd,
     )
@@ -869,7 +857,6 @@ fn display_existing_with_known_image_records_placement() {
             cell_pixel_w: 0,
             cell_pixel_h: 0,
             anchor_cursor: None,
-            saved_primary: None,
         },
         &complete(&all, &payload),
     )
@@ -885,7 +872,6 @@ fn display_existing_with_known_image_records_placement() {
             cell_pixel_w: 0,
             cell_pixel_h: 0,
             anchor_cursor: None,
-            saved_primary: None,
         },
         &display,
     )
@@ -912,7 +898,6 @@ fn delete_with_d_eq_a_clears_all_placements_but_keeps_images() {
                 cell_pixel_w: 0,
                 cell_pixel_h: 0,
                 anchor_cursor: None,
-                saved_primary: None,
             },
             &complete(&all, &payload),
         )
@@ -930,7 +915,6 @@ fn delete_with_d_eq_a_clears_all_placements_but_keeps_images() {
             cell_pixel_w: 0,
             cell_pixel_h: 0,
             anchor_cursor: None,
-            saved_primary: None,
         },
         &cmd,
     )
@@ -959,7 +943,6 @@ fn delete_with_d_eq_capital_a_clears_everything() {
             cell_pixel_w: 0,
             cell_pixel_h: 0,
             anchor_cursor: None,
-            saved_primary: None,
         },
         &complete(&all, &payload),
     )
@@ -975,7 +958,6 @@ fn delete_with_d_eq_capital_a_clears_everything() {
             cell_pixel_w: 0,
             cell_pixel_h: 0,
             anchor_cursor: None,
-            saved_primary: None,
         },
         &cmd,
     )
@@ -1001,7 +983,6 @@ fn delete_default_d_eq_i_removes_placement_keeps_image() {
             cell_pixel_w: 0,
             cell_pixel_h: 0,
             anchor_cursor: None,
-            saved_primary: None,
         },
         &complete(&all, &payload),
     )
@@ -1017,7 +998,6 @@ fn delete_default_d_eq_i_removes_placement_keeps_image() {
             cell_pixel_w: 0,
             cell_pixel_h: 0,
             anchor_cursor: None,
-            saved_primary: None,
         },
         &cmd,
     )
@@ -1081,7 +1061,6 @@ fn delete_test_state(
                 cell_pixel_w: 0,
                 cell_pixel_h: 0,
                 anchor_cursor: None,
-                saved_primary: None,
             },
             &complete(&all, &payload),
         )
@@ -1109,7 +1088,6 @@ fn delete_d_eq_p_drops_placement_intersecting_the_xy_cell() {
             cell_pixel_w: 0,
             cell_pixel_h: 0,
             anchor_cursor: None,
-            saved_primary: None,
         },
         &cmd,
     )
@@ -1141,7 +1119,6 @@ fn delete_d_eq_capital_p_also_frees_the_image_store() {
             cell_pixel_w: 0,
             cell_pixel_h: 0,
             anchor_cursor: None,
-            saved_primary: None,
         },
         &cmd,
     )
@@ -1168,7 +1145,6 @@ fn delete_d_eq_x_drops_placements_intersecting_the_column() {
             cell_pixel_w: 0,
             cell_pixel_h: 0,
             anchor_cursor: None,
-            saved_primary: None,
         },
         &cmd,
     )
@@ -1195,7 +1171,6 @@ fn delete_d_eq_y_drops_placements_intersecting_the_row() {
             cell_pixel_w: 0,
             cell_pixel_h: 0,
             anchor_cursor: None,
-            saved_primary: None,
         },
         &cmd,
     )
@@ -1222,7 +1197,6 @@ fn delete_d_eq_z_drops_placements_at_the_specified_z_index() {
             cell_pixel_w: 0,
             cell_pixel_h: 0,
             anchor_cursor: None,
-            saved_primary: None,
         },
         &cmd,
     )
@@ -1257,7 +1231,6 @@ fn delete_d_eq_q_requires_all_three_coords_to_match() {
             cell_pixel_w: 0,
             cell_pixel_h: 0,
             anchor_cursor: None,
-            saved_primary: None,
         },
         &cmd,
     )
@@ -1283,7 +1256,6 @@ fn delete_d_eq_c_uses_the_current_cursor_position() {
             cell_pixel_w: 0,
             cell_pixel_h: 0,
             anchor_cursor: None,
-            saved_primary: None,
         },
         &cmd,
     )
@@ -1315,7 +1287,6 @@ fn delete_d_eq_r_drops_placements_in_the_image_id_range() {
             cell_pixel_w: 0,
             cell_pixel_h: 0,
             anchor_cursor: None,
-            saved_primary: None,
         },
         &cmd,
     )
@@ -1346,7 +1317,6 @@ fn delete_d_eq_capital_r_also_frees_images_in_range() {
             cell_pixel_w: 0,
             cell_pixel_h: 0,
             anchor_cursor: None,
-            saved_primary: None,
         },
         &cmd,
     )
@@ -1375,7 +1345,6 @@ fn delete_extended_modes_emit_placement_removed_per_evicted_entry() {
             cell_pixel_w: 0,
             cell_pixel_h: 0,
             anchor_cursor: None,
-            saved_primary: None,
         },
         &cmd,
     )
@@ -1405,7 +1374,6 @@ fn query_with_valid_payload_emits_ok() {
             cell_pixel_w: 0,
             cell_pixel_h: 0,
             anchor_cursor: None,
-            saved_primary: None,
         },
         &cmd,
     )
@@ -1440,7 +1408,6 @@ fn query_with_invalid_payload_emits_specific_error() {
             cell_pixel_w: 0,
             cell_pixel_h: 0,
             anchor_cursor: None,
-            saved_primary: None,
         },
         &cmd,
     )
@@ -1465,7 +1432,6 @@ fn unknown_action_is_dropped_without_a_reply() {
             cell_pixel_w: 0,
             cell_pixel_h: 0,
             anchor_cursor: None,
-            saved_primary: None,
         },
         &cmd,
     );
@@ -1491,7 +1457,6 @@ fn transmit_root(
             cell_pixel_w: 0,
             cell_pixel_h: 0,
             anchor_cursor: None,
-            saved_primary: None,
         },
         &complete(&all, &payload),
     );
@@ -1526,7 +1491,6 @@ fn animation_frame_appends_and_emits_frame_transmission() {
             cell_pixel_w: 0,
             cell_pixel_h: 0,
             anchor_cursor: None,
-            saved_primary: None,
         },
         &complete(&ctrls, &payload),
     );
@@ -1586,7 +1550,6 @@ fn an_animation_frame_past_the_cap_is_declined_and_changes_nothing() {
             cell_pixel_w: 0,
             cell_pixel_h: 0,
             anchor_cursor: None,
-            saved_primary: None,
         },
         &complete(&ctrls, &payload),
     );
@@ -1633,7 +1596,6 @@ fn a_frame_push_that_evicts_announces_the_eviction() {
             cell_pixel_w: 0,
             cell_pixel_h: 0,
             anchor_cursor: None,
-            saved_primary: None,
         },
         &complete(&ctrls, &payload),
     );
@@ -1667,7 +1629,6 @@ fn animation_frame_default_gap_is_40ms_and_negative_is_gapless() {
             cell_pixel_w: 0,
             cell_pixel_h: 0,
             anchor_cursor: None,
-            saved_primary: None,
         },
         &complete(&ctrls, &payload),
     );
@@ -1683,7 +1644,6 @@ fn animation_frame_default_gap_is_40ms_and_negative_is_gapless() {
             cell_pixel_w: 0,
             cell_pixel_h: 0,
             anchor_cursor: None,
-            saved_primary: None,
         },
         &complete(&ctrls, &payload),
     );
@@ -1707,7 +1667,6 @@ fn animation_control_sets_state_loops_and_jumps() {
                 cell_pixel_w: 0,
                 cell_pixel_h: 0,
                 anchor_cursor: None,
-                saved_primary: None,
             },
             &complete(&ctrls, &payload),
         );
@@ -1730,7 +1689,6 @@ fn animation_control_sets_state_loops_and_jumps() {
             cell_pixel_w: 0,
             cell_pixel_h: 0,
             anchor_cursor: None,
-            saved_primary: None,
         },
         &complete(a, b""),
     );
@@ -1764,7 +1722,6 @@ fn delete_frame_removes_it_and_reships_the_image() {
             cell_pixel_w: 0,
             cell_pixel_h: 0,
             anchor_cursor: None,
-            saved_primary: None,
         },
         &complete(&ctrls, &payload),
     );
@@ -1781,7 +1738,6 @@ fn delete_frame_removes_it_and_reships_the_image() {
             cell_pixel_w: 0,
             cell_pixel_h: 0,
             anchor_cursor: None,
-            saved_primary: None,
         },
         &complete(d, b""),
     );
@@ -1819,7 +1775,6 @@ fn animation_frame_on_missing_image_is_not_found() {
             cell_pixel_w: 0,
             cell_pixel_h: 0,
             anchor_cursor: None,
-            saved_primary: None,
         },
         &complete(&ctrls, &payload),
     )
@@ -1845,7 +1800,6 @@ fn compose_copies_a_region_between_frames() {
             cell_pixel_w: 0,
             cell_pixel_h: 0,
             anchor_cursor: None,
-            saved_primary: None,
         },
         &complete(&ctrls, &payload),
     );
@@ -1866,7 +1820,6 @@ fn compose_copies_a_region_between_frames() {
             cell_pixel_w: 0,
             cell_pixel_h: 0,
             anchor_cursor: None,
-            saved_primary: None,
         },
         &complete(c, b""),
     );
@@ -1917,7 +1870,7 @@ where
         signals,
         images: felis_grid::images::ImageStore::new(crate::pool::DEFAULT_IMAGE_BYTE_CAP),
         placements: felis_grid::images::Placements::new(),
-        saved_primary_placements: None,
+        saved_screens: SavedScreens::default(),
         graphics_reassembler: Reassembler::new(),
         image_events: Vec::new(),
         scroll_ops: Vec::new(),
@@ -2001,7 +1954,6 @@ fn transmit_and_display_advances_cursor_by_cells() {
             cell_pixel_w: 0,
             cell_pixel_h: 0,
             anchor_cursor: None,
-            saved_primary: None,
         },
         &cmd,
     )
@@ -2037,7 +1989,6 @@ fn transmit_and_display_with_no_cursor_move_keeps_cursor() {
             cell_pixel_w: 0,
             cell_pixel_h: 0,
             anchor_cursor: None,
-            saved_primary: None,
         },
         &cmd,
     )
@@ -2074,7 +2025,6 @@ fn natural_sizing_resolves_cells_from_image_pixels_and_advances_cursor() {
             cell_pixel_w: 8,
             cell_pixel_h: 16,
             anchor_cursor: None,
-            saved_primary: None,
         },
         &cmd,
     )
@@ -2117,7 +2067,6 @@ fn natural_sizing_resolves_from_the_source_rectangle() {
             cell_pixel_w: 8,
             cell_pixel_h: 16,
             anchor_cursor: None,
-            saved_primary: None,
         },
         &cmd,
     )
@@ -2157,7 +2106,6 @@ fn natural_sizing_falls_back_when_cell_pixel_dims_are_zero() {
             cell_pixel_w: 0,
             cell_pixel_h: 0,
             anchor_cursor: None,
-            saved_primary: None,
         },
         &cmd,
     )
@@ -2203,7 +2151,6 @@ fn transmit_via_file_path_reads_bytes_from_disk() {
             cell_pixel_w: 0,
             cell_pixel_h: 0,
             anchor_cursor: None,
-            saved_primary: None,
         },
         &cmd,
     )
@@ -2281,7 +2228,6 @@ fn transmit_via_file_path_rejects_relative_path() {
             cell_pixel_w: 0,
             cell_pixel_h: 0,
             anchor_cursor: None,
-            saved_primary: None,
         },
         &cmd,
     )
@@ -2308,7 +2254,6 @@ fn transmit_via_file_path_rejects_parent_dir_component() {
             cell_pixel_w: 0,
             cell_pixel_h: 0,
             anchor_cursor: None,
-            saved_primary: None,
         },
         &cmd,
     )
@@ -2338,7 +2283,6 @@ fn transmit_via_file_path_missing_file_returns_ebadf() {
             cell_pixel_w: 0,
             cell_pixel_h: 0,
             anchor_cursor: None,
-            saved_primary: None,
         },
         &cmd,
     )
@@ -2382,7 +2326,6 @@ fn transmit_via_file_path_rejects_symlink_with_nofollow() {
             cell_pixel_w: 0,
             cell_pixel_h: 0,
             anchor_cursor: None,
-            saved_primary: None,
         },
         &cmd,
     )
@@ -2417,7 +2360,6 @@ fn transmit_via_file_path_rejects_directory_target() {
             cell_pixel_w: 0,
             cell_pixel_h: 0,
             anchor_cursor: None,
-            saved_primary: None,
         },
         &cmd,
     )
@@ -2461,7 +2403,6 @@ fn transmit_via_temp_file_reads_then_unlinks() {
             cell_pixel_w: 0,
             cell_pixel_h: 0,
             anchor_cursor: None,
-            saved_primary: None,
         },
         &cmd,
     )
@@ -2505,7 +2446,6 @@ fn transmit_via_temp_file_rejects_symlink_with_nofollow() {
             cell_pixel_w: 0,
             cell_pixel_h: 0,
             anchor_cursor: None,
-            saved_primary: None,
         },
         &cmd,
     )
@@ -2539,7 +2479,6 @@ fn transmit_via_temp_file_rejects_relative_path() {
             cell_pixel_w: 0,
             cell_pixel_h: 0,
             anchor_cursor: None,
-            saved_primary: None,
         },
         &cmd,
     )
@@ -2580,7 +2519,6 @@ fn transmit_via_file_path_oversize_file_returns_overbudget() {
             cell_pixel_w: 0,
             cell_pixel_h: 0,
             anchor_cursor: None,
-            saved_primary: None,
         },
         &cmd,
     )
@@ -2646,7 +2584,6 @@ fn transmit_via_shm_reads_without_unlinking() {
             cell_pixel_w: 0,
             cell_pixel_h: 0,
             anchor_cursor: None,
-            saved_primary: None,
         },
         &cmd,
     )
@@ -2786,7 +2723,6 @@ fn dispatch_with_deferral(cmd: &CompleteCommand, shm: &mut ShmDeferral) -> Optio
             cell_pixel_w: 0,
             cell_pixel_h: 0,
             anchor_cursor: Some((0, 0)),
-            saved_primary: None,
         },
         cmd,
     )
@@ -2907,7 +2843,6 @@ fn icat_replay_unpadded_frame_appends_and_a_eq_a_is_silent() {
                 cell_pixel_w: 0,
                 cell_pixel_h: 0,
                 anchor_cursor: None,
-                saved_primary: None,
             },
             &mut r,
             body_t,
@@ -2935,7 +2870,6 @@ fn icat_replay_unpadded_frame_appends_and_a_eq_a_is_silent() {
             cell_pixel_w: 0,
             cell_pixel_h: 0,
             anchor_cursor: None,
-            saved_primary: None,
         },
         &mut r,
         body_f,
@@ -2973,7 +2907,6 @@ fn icat_replay_unpadded_frame_appends_and_a_eq_a_is_silent() {
             cell_pixel_w: 0,
             cell_pixel_h: 0,
             anchor_cursor: None,
-            saved_primary: None,
         },
         &mut r,
         body_a,
@@ -2990,7 +2923,6 @@ fn icat_replay_unpadded_frame_appends_and_a_eq_a_is_silent() {
             cell_pixel_w: 0,
             cell_pixel_h: 0,
             anchor_cursor: None,
-            saved_primary: None,
         },
         &mut r,
         b"Ga=a,s=3,i=424242",
@@ -3016,7 +2948,6 @@ fn dispatch_controls(
             cell_pixel_w: 8,
             cell_pixel_h: 16,
             anchor_cursor: Some((0, 0)),
-            saved_primary: None,
         },
         &complete(controls, payload),
     )
@@ -3224,7 +3155,6 @@ proptest! {
                 cell_pixel_w: 8,
                 cell_pixel_h: 16,
                 anchor_cursor: Some((0, 0)),
-                saved_primary: None,
             },
             &complete(&[(b'a', b"d"), (b'd', d)], b""),
         );
@@ -3289,7 +3219,6 @@ proptest! {
 fn run_under_a_three_image_cap(
     images: &mut felis_grid::images::ImageStore,
     placements: &mut felis_grid::images::Placements,
-    saved_primary: Option<&felis_grid::images::Placements>,
     keys: &[(u8, &[u8])],
 ) -> Vec<ImageEvent> {
     let mut grid = felis_grid::Grid::new(24, 80);
@@ -3306,7 +3235,6 @@ fn run_under_a_three_image_cap(
             cell_pixel_w: 0,
             cell_pixel_h: 0,
             anchor_cursor: None,
-            saved_primary,
         },
         &complete(&all, &b64(&[0u8; 4])),
     );
@@ -3333,14 +3261,9 @@ fn the_byte_cap_frees_every_unplaced_image_before_a_placed_one() {
         &[(b'a', b"t"), (b'i', b"2")],
         &[(b'a', b"t"), (b'i', b"3")],
     ] {
-        run_under_a_three_image_cap(&mut images, &mut placements, None, keys);
+        run_under_a_three_image_cap(&mut images, &mut placements, keys);
     }
-    run_under_a_three_image_cap(
-        &mut images,
-        &mut placements,
-        None,
-        &[(b'a', b"t"), (b'i', b"4")],
-    );
+    run_under_a_three_image_cap(&mut images, &mut placements, &[(b'a', b"t"), (b'i', b"4")]);
     assert_eq!(
         stored_ids(&images),
         vec![1, 4],
@@ -3353,25 +3276,11 @@ fn the_byte_cap_evicts_the_least_recently_used_placed_image() {
     let mut images = three_image_store();
     let mut placements = felis_grid::images::Placements::new();
     for id in [b"1", b"2", b"3"] {
-        run_under_a_three_image_cap(
-            &mut images,
-            &mut placements,
-            None,
-            &[(b'a', b"T"), (b'i', id)],
-        );
+        run_under_a_three_image_cap(&mut images, &mut placements, &[(b'a', b"T"), (b'i', id)]);
     }
-    run_under_a_three_image_cap(
-        &mut images,
-        &mut placements,
-        None,
-        &[(b'a', b"p"), (b'i', b"1")],
-    );
-    let events = run_under_a_three_image_cap(
-        &mut images,
-        &mut placements,
-        None,
-        &[(b'a', b"T"), (b'i', b"4")],
-    );
+    run_under_a_three_image_cap(&mut images, &mut placements, &[(b'a', b"p"), (b'i', b"1")]);
+    let events =
+        run_under_a_three_image_cap(&mut images, &mut placements, &[(b'a', b"T"), (b'i', b"4")]);
     assert_eq!(
         stored_ids(&images),
         vec![1, 3, 4],

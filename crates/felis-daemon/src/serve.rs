@@ -1824,7 +1824,7 @@ async fn daemon_status(pool: &Arc<Mutex<SessionPool>>, caps: &DaemonCaps) -> Ops
     // The cap read off the stores, not the constant: the report must name
     // the ceiling an insert is refused against. The loosest in force, so
     // a larger store cannot hide behind a smaller neighbor.
-    let mut image_cap = crate::pool::DEFAULT_IMAGE_BYTE_CAP as u64;
+    let mut image_cap = crate::pool::DEFAULT_IMAGE_BYTE_CAP as u64 * 2;
     let mut decodes: u64 = 0;
     let mut decode_bytes = Aggregate::default();
     let mut outbox = Aggregate::default();
