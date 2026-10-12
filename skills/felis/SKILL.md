@@ -120,8 +120,10 @@ felis sessions capture "$ID" --format jsonl
 felis sessions capture "$ID" --source scrollback --lines 50
 felis sessions capture "$ID" --source last-command        # OSC 133 B→D range
 
-# 4. Search scrollback (substring; --regex for regex).
+# 4. Search scrollback (substring; --regex for regex). --source visible
+#    searches only the live screen, a fullscreen TUI's included.
 felis sessions search "$ID" panic --case-insensitive --format jsonl
+felis sessions search "$ID" 'Save changes' --source visible --format jsonl
 
 # 5. Clean up.
 felis sessions kill "$ID"
@@ -135,10 +137,10 @@ add `exit_code` to the terminal when the closing D mark carried one.
 
 A character's index in `text` is not its column: a wide character fills two columns and a combining mark none. To aim a
 mouse report (1-based) at text, take a `col_spans` segment on a live row (`row >= 0`) and add 1 to its row and start
-column. `search` skips the alternate screen, where a fullscreen TUI lives; there the index is a column only if
-everything before it on the row is single-width. A Kitty image drawn with Unicode placeholders captures as runs of
-U+10EEEE plus combining diacritics; filter those rows out of text you match, and treat their presence as the evidence
-that an image was placed.
+column. The default search skips the alternate screen, where a fullscreen TUI lives; `search --source visible` reads it,
+and every segment it returns is on a live row. A daemon too old for `--source visible` makes it exit `2` with
+`unsupported`. A Kitty image drawn with Unicode placeholders captures as runs of U+10EEEE plus combining diacritics;
+filter those rows out of text you match, and treat their presence as the evidence that an image was placed.
 
 ### Payload limits
 
@@ -192,14 +194,18 @@ A full-screen TUI agent (Claude Code etc.) emits no OSC 133 marks, so `send --wa
 `--session --once` is its completion signal only when it is configured to emit OSC 9/99/777. A plain build emits no OSC
 9, so `send --wait` is the tool there.
 
-When a producer emits neither, poll the visible grid against a deadline. The check sees only what is on screen now, so
-anchor the pattern on a row your own input cannot produce (a status line, a line-anchored regex), or the echo of your
-prompt satisfies it before the reply exists:
+When a producer emits neither, poll the visible grid against a deadline: `search --source visible` exits `0` on a match
+and `1` on none. Retry only on `1`; a `2` (a daemon too old for `--source visible`, a lost connection) does not clear by
+waiting, so stop and report it. The check sees only what is on screen now, so anchor the pattern on a row your own input
+cannot produce (a status line, a line-anchored regex), or the echo of your prompt satisfies it before the reply exists:
 
 ```sh
-deadline=$((SECONDS + 600))
-until felis sessions capture "$ID" --format jsonl | jq -e 'select(.text | test("^● Done"))' >/dev/null; do
-  [ "$SECONDS" -ge "$deadline" ] && break
+tries=300                          # 2 s apart: a 10-minute deadline
+while :; do
+  felis sessions search "$ID" '^● Done' --source visible --regex >/dev/null
+  rc=$?                            # 0 matched, 1 not yet, 2 failed to ask
+  [ "$rc" -ne 1 ] && break
+  tries=$((tries - 1)); [ "$tries" -le 0 ] && break
   sleep 2
 done
 ```
