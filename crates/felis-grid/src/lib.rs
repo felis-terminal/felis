@@ -239,7 +239,8 @@ pub enum PtyEffect {
     /// top: placements move up with the text and leave with it.
     AltScreenScrolled(u32),
     /// RIS, after the forced erase that clears the live placements: the
-    /// primary screen saved while on the alternate one goes too.
+    /// primary screen saved while on the alternate one goes too, and so
+    /// does every program status record.
     HardReset,
     /// A whole-row shift of a band (docs/reference/ipc.md `Scrolled`),
     /// with the grid's damage already moved along with the rows.
@@ -263,6 +264,21 @@ pub enum PtyEffect {
     /// warning on drain (REQ-902); edge-triggered so a reset storm
     /// doesn't flood the log.
     BracketedPasteDisabled,
+    /// A terminated OSC 7501 report or clear. The grid keeps no records;
+    /// the daemon applies these in order.
+    ProgramStatus(ProgramStatusEffect),
+    /// OSC 133 `A` that is not a `k=s` continuation, on either screen.
+    PromptStarted,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "state-dump", derive(Serialize, Deserialize))]
+pub enum ProgramStatusEffect {
+    /// The whole content of the record it replaces. Boxed: inline, it
+    /// would double every queued effect's size.
+    Report(Box<felis_vt::program_status::Report>),
+    /// `""` removes every record; otherwise the record and its descendants.
+    Clear { id: String },
 }
 
 /// Grid → ANSI/SGR re-encoding for the pipe action, `felis sessions
@@ -318,7 +334,7 @@ pub use mouse::encode_mouse;
 use osc_color::{format_osc_color_response, parse_x_color};
 use osc52::{format_osc_52_response, parse_osc_52_selection};
 pub use placeholder_resolve::PlaceholderCell;
-pub use pty_effects::{APC_OUTBOX_BYTES, APC_OUTBOX_CAP, PtyEffectQueue};
+pub use pty_effects::{APC_OUTBOX_BYTES, APC_OUTBOX_CAP, PtyEffectQueue, STATUS_OUTBOX_YIELD};
 use screen::SavedScreen;
 pub use screen::ScreenBuffer;
 pub use search::{
@@ -599,9 +615,15 @@ pub struct Grid {
     /// Mirrors the daemon's graphics reassembler over the APC bodies
     /// this grid admits, so it knows which body completes a command.
     graphics_tracker: felis_vt::kitty_graphics::ReassemblyTracker,
-    /// Set by an admitted APC that completes a cursor-moving placement;
-    /// taken by [`felis_vt::Sink::take_yield`].
-    apc_yield: bool,
+    /// Set by an admitted APC that completes a cursor-moving placement, or
+    /// by an effect that spends an outbox budget; taken by
+    /// [`felis_vt::Sink::take_yield`].
+    yield_pending: bool,
+    /// A `working` or `blocked` OSC 7501 report was queued after the last
+    /// queued prompt start. Without one the daemon holds no record a
+    /// prompt start expires, so an OSC 133 `A` queues nothing: a shell
+    /// that never reports pays no effect per prompt.
+    prompt_expiry_owed: bool,
     /// `ESC =` / `ESC >` DECKPAM / DECKPNM, mirrored via [`ModeSnapshot`].
     application_keypad: bool,
     /// `?9001` win32-input-mode, requested by `ConPTY` on startup and by
@@ -991,7 +1013,8 @@ impl Grid {
             zwj_pending: false,
             pending_bidi: editing::PendingBidi::default(),
             graphics_tracker: felis_vt::kitty_graphics::ReassemblyTracker::new(),
-            apc_yield: false,
+            yield_pending: false,
+            prompt_expiry_owed: false,
             dcs: None,
             title: None,
             icon_name: None,

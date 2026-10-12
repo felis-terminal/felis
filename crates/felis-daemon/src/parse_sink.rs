@@ -422,6 +422,43 @@ mod tests {
         assert!(!core.lock().grid.take_bell_pending(), "nothing was dropped");
     }
 
+    /// A burst of program status reports stops the parse each time the
+    /// status budget fills, so a session task that drains only on
+    /// request still bounds the queue, and every report arrives.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn sink_pauses_at_a_full_status_budget_and_loses_no_report() {
+        let core = test_core();
+        let signals = Arc::new(ParseSignals::new());
+        let mut sink = build_sink(Arc::clone(&core), Arc::clone(&signals));
+        let sent = felis_grid::STATUS_OUTBOX_YIELD * 3;
+        let burst = b"\x1b]7501;state=working\x1b\\".repeat(sent);
+        let feeder = std::thread::spawn(move || sink(&burst));
+        let take_reports = || {
+            let effects = core.lock().grid.take_pty_effects();
+            assert!(effects.len() <= felis_grid::STATUS_OUTBOX_YIELD);
+            effects
+                .into_iter()
+                .filter(|e| matches!(e, felis_grid::PtyEffect::ProgramStatus(_)))
+                .count()
+        };
+        let mut received = 0;
+        let mut drains = 0;
+        while !feeder.is_finished() {
+            let requested =
+                tokio::time::timeout(Duration::from_millis(100), signals.drain_requested()).await;
+            if requested.is_ok() {
+                let generation = signals.drain_generation();
+                received += take_reports();
+                drains += 1;
+                signals.publish_drained(generation);
+            }
+        }
+        feeder.join().unwrap();
+        received += take_reports();
+        assert_eq!(received, sent, "every report arrives");
+        assert_eq!(drains, 3, "one pause per filled budget");
+    }
+
     /// End-to-end sink contract: bytes fed to the sink land in the
     /// shared grid and flip the dirty signal.
     #[tokio::test]

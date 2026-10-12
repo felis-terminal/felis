@@ -50,6 +50,7 @@ impl Terminator {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "state-dump", derive(serde::Serialize, serde::Deserialize))]
 pub enum State {
     Idle,
     Working,
@@ -90,6 +91,7 @@ impl State {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "state-dump", derive(serde::Serialize, serde::Deserialize))]
 pub enum Kind {
     Permission,
     Question,
@@ -117,6 +119,7 @@ impl Kind {
 
 /// One accepted report: the whole content of the record it replaces.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "state-dump", derive(serde::Serialize, serde::Deserialize))]
 pub struct Report {
     /// `""` is the root record.
     pub id: String,
