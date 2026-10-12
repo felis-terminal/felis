@@ -1755,9 +1755,9 @@ compatibility freeze the dev wire carries no promise at all, so pre-freeze break
 unbumped.
 
 A pre-freeze break is acknowledged in `crates/felis-protocol/proto/BREAKING.md`, by a `base: <sha>` line naming the
-revision the break was written against; the _proto-compat_ CI job accepts a `buf breaking` failure only against that
-base, or a base that grew wire-compatibly past it ([testing.md](testing.md#wire-compatibility-gates) has the exact
-matching rule and the base each run compares with).
+revision the break was written against; the CI wire check accepts a `buf breaking` failure only against that base, or a
+base that grew wire-compatibly past it ([testing.md](testing.md#wire-compatibility-gates) has the exact matching rule
+and the base each run compares with).
 
 The freeze is the first final release: `tools/proto/compat.py` run on a tag asks the forge for the newest published
 final release and compares the schema with the `felis.proto` at that release's tag. It does not consult the
