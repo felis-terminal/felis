@@ -152,6 +152,9 @@
           # The instruction-count bench gate (`just bench-gate-ir`).
           valgrind
           gungraunRunner
+          # gungraun runs callgrind under `setarch <arch> -R`; a BusyBox setarch
+          # earlier on PATH (the CI runner's) accepts only linux32/linux64.
+          util-linux
         ];
     in
     {
