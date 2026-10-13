@@ -89,11 +89,22 @@
       # Noto Sans Mono is excluded so Family::Monospace resolves to Monaspace in shaping tests.
       # Pinned font set prevents tests from skipping silently on machines lacking ligature or emoji fonts.
       # The CJK face is subset to 葛 because the full collection is 32 MB; the subset keeps its cmap 14 entries.
+      # Only the Monaspace faces a test names are copied: every isolated fontconfig rescans this directory, and the full set cost ~1 s per test.
       testFonts =
         pkgs.runCommand "felis-test-fonts" { nativeBuildInputs = [ pkgs.python3Packages.fonttools ]; }
           ''
-            mkdir -p $out/share/fonts
-            cp -r ${pkgs.monaspace}/share/fonts/. $out/share/fonts/
+            mkdir -p $out/share/fonts/opentype $out/share/fonts/truetype
+            for family in Neon Argon ArgonNF Xenon; do
+              for face in ${pkgs.monaspace}/share/fonts/opentype/Monaspace$family-*.otf; do
+                case "$face" in
+                  *Wide*) ;;
+                  *) cp "$face" $out/share/fonts/opentype/ ;;
+                esac
+              done
+            done
+            cp ${pkgs.monaspace}/share/fonts/truetype/MonaspaceNeonFrozen-{Regular,Bold,Italic,BoldItalic}.ttf \
+              "${pkgs.monaspace}/share/fonts/truetype/Monaspace Neon Var.ttf" \
+              $out/share/fonts/truetype/
             cp ${pkgs.noto-fonts}/share/fonts/noto/NotoSansSymbols.ttf $out/share/fonts/
             cp ${pkgs.noto-fonts}/share/fonts/noto/NotoSansSymbols2-Regular.otf $out/share/fonts/
             cp ${pkgs.noto-fonts-color-emoji}/share/fonts/noto/NotoColorEmoji.ttf $out/share/fonts/
