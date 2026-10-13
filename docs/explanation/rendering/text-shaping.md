@@ -73,14 +73,14 @@ A run may contain codepoints that the primary font does not cover (e.g. emoji in
 (`FontStack`) is built **eagerly** at startup, not assembled lazily per miss, so the per-codepoint `resolve` call is a
 cheap charmap walk with no I/O. Where it comes from when the user leaves `font.fallback` unset depends on the platform.
 
-On **Linux** it is the host's fontconfig cascade: the ranked `FcFontSort` for the primary, so the order is the one
-`fc-match -s` prints and the user's `fonts.conf` rules (prefer lists, per-language rules, rejected fonts) and the
-locale's language apply. The sort is untrimmed and then cut to the faces that add coverage _within their presentation
-class_ (color by `FC_COLOR`, else mono, checked against the loaded face): fontconfig's own trim drops a color face whose
-code points an earlier mono face already covers, which is exactly the face an emoji needs. A text-presentation character
-then takes the first mono face covering it before an earlier-ranked color one, which is what the symbol group's position
-achieves below. The chain stops at 63 faces, the width of the face id in an atlas key; on a host with more faces that
-add coverage, the least preferred are dropped with a warning.
+On **Linux** it is the host's fontconfig cascade: the ranked sort for the primary, so the order is the one `fc-match -s`
+prints, less the faces the loader cannot parse ("Linux faces" below), and the user's `fonts.conf` rules (prefer lists,
+per-language rules, rejected fonts) and the locale's language apply. The sort is untrimmed and then cut to the faces
+that add coverage _within their presentation class_ (color by `FC_COLOR`, else mono, checked against the loaded face):
+fontconfig's own trim drops a color face whose code points an earlier mono face already covers, which is exactly the
+face an emoji needs. A text-presentation character then takes the first mono face covering it before an earlier-ranked
+color one, which is what the symbol group's position achieves below. The chain stops at 63 faces, the width of the face
+id in an atlas key; on a host with more faces that add coverage, the least preferred are dropped with a warning.
 
 Elsewhere `auto_discover` walks the CJK, **symbol**, emoji, and Nerd-symbol candidate lists, in that order, and appends
 the first family installed in each group, except the symbol group (see below). The cost is a single fontdb system scan
@@ -453,14 +453,18 @@ adding a per-script table. The primary-face binding is client-side policy; the d
 
 **Linux faces: libfontconfig, loaded from the host.** On Linux the configuration users edit is fontconfig's, so felis
 asks libfontconfig for the primary, the styled faces and the fallback order, and the faces drawn are the ones `fc-match`
-names. Reading that configuration any other way diverges from it: fontdb parses the XML itself but keeps only the first
-preferred family of the last `monospace` alias, ignores every other rule, and on Debian names `FreeMono` (from
-`69-unifont.conf`) on a host that has only DejaVu. Shelling out to `fc-match` is rejected because a host with only
-`fontconfig-config` lacks the CLI. The library is dlopened from the host rather than linked or bundled, the way the
-Vulkan loader is: the host's library is the one that reads the host's `/etc/fonts` syntax and cache format, which a
-bundled copy of another version may not (kitty's Linux build ships it the same way, for distributions' differing config
-paths). A host without libfontconfig cannot open a window. A family the config does not know is detected by the config
-rules it picks up, not by comparing names, so an `<alias>` that maps a requested name elsewhere is honored.
+names among the formats the loader parses. Reading that configuration any other way diverges from it: fontdb parses the
+XML itself but keeps only the first preferred family of the last `monospace` alias, ignores every other rule, and on
+Debian names `FreeMono` (from `69-unifont.conf`) on a host that has only DejaVu. Shelling out to `fc-match` is rejected
+because a host with only `fontconfig-config` lacks the CLI. The library is dlopened from the host rather than linked or
+bundled, the way the Vulkan loader is: the host's library is the one that reads the host's `/etc/fonts` syntax and cache
+format, which a bundled copy of another version may not (kitty's Linux build ships it the same way, for distributions'
+differing config paths). A host without libfontconfig cannot open a window. A family the config does not know is
+detected by the config rules it picks up, not by comparing names, so an `<alias>` that maps a requested name elsewhere
+is honored. Faces in a format the loader cannot parse (fontconfig also lists PCF, BDF and Type 1) are taken out of the
+font set before any match, so felis matches as if they were not installed. Asking for `scalable` in the query instead,
+as kitty does, does not work: fontconfig ranks it above the family, so a name whose only faces are bitmaps would draw
+another family without a warning.
 
 macOS and Windows keep fontdb's scan with a fixed list of common monospace families behind the `monospace` generic.
 
