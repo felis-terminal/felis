@@ -109,6 +109,45 @@ fn shell_factory(body: &'static str) -> SessionFactory {
 }
 
 #[cfg(unix)]
+fn script_factory(script: String) -> SessionFactory {
+    Arc::new(move |_| {
+        let mut cmd = Command::new("/bin/sh");
+        cmd.args(["-c", &script]);
+        cmd.env_clear();
+        cmd.env("PATH", fixture_path());
+        cmd
+    })
+}
+
+/// A FIFO a child script blocks on with `read _ < gate` until the test
+/// calls [`open_gate`]: a stall that ends when the test's precondition
+/// holds rather than after a guessed number of seconds.
+#[cfg(unix)]
+fn gate(dir: &Path) -> PathBuf {
+    let path = dir.join("gate");
+    let status = std::process::Command::new("mkfifo")
+        .arg(&path)
+        .env("PATH", fixture_path())
+        .status()
+        .expect("run mkfifo");
+    assert!(status.success(), "mkfifo {}", path.display());
+    path
+}
+
+#[cfg(unix)]
+async fn open_gate(gate: &Path) {
+    let gate = gate.to_owned();
+    tokio::time::timeout(
+        Duration::from_secs(30),
+        tokio::task::spawn_blocking(move || std::fs::write(gate, b"\n")),
+    )
+    .await
+    .expect("the child reaches its gate")
+    .expect("the gate writer does not panic")
+    .expect("write the gate");
+}
+
+#[cfg(unix)]
 fn owned_session(body: &str) -> crate::pool::Session {
     let mut cmd = Command::new("/bin/sh");
     cmd.args(["-c", body]);
@@ -1702,12 +1741,14 @@ async fn session_task_reaps_dead_session_after_grace() {
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_roster_names_the_program_that_owns_the_terminal_now() {
+    let tmp = private_dir();
+    let gate = gate(tmp.path());
     let pool = Arc::new(Mutex::new(SessionPool::new()));
     // `exec` keeps the pid (and so the foreground pgid) while replacing the
     // program.
     session_task::spawn_owned(
         &pool,
-        owned_session("sleep 3; exec sleep 20"),
+        owned_session(&format!("read _ < {}; exec sleep 20", gate.display())),
         IdlePolicy::default(),
         SessionId::new(),
         0,
@@ -1719,6 +1760,7 @@ async fn the_roster_names_the_program_that_owns_the_terminal_now() {
     .await;
 
     wait_for_listed_foreground(&pool, "sh").await;
+    open_gate(&gate).await;
     wait_for_listed_foreground(&pool, "sleep").await;
 }
 
@@ -6728,13 +6770,17 @@ async fn a_key_parked_on_a_full_budget_holds_back_the_fence_behind_it() {
 
     let tmp = private_dir();
     let path = tmp.path().join("daemon.sock");
+    let gate = gate(tmp.path());
     let pool = Arc::new(Mutex::new(SessionPool::new()));
-    // Reads nothing at first, so the budget-filling paste stays charged
-    // and the key behind it cannot be admitted.
+    // Reads nothing until the gate opens, so the budget-filling paste
+    // stays charged and the key behind it cannot be admitted.
     spawn_daemon(
         &path,
         pool,
-        shell_factory("stty raw -echo; sleep 3; exec cat >/dev/null"),
+        script_factory(format!(
+            "stty raw -echo; read _ < {}; exec cat >/dev/null",
+            gate.display()
+        )),
     )
     .await;
 
@@ -6770,6 +6816,7 @@ async fn a_key_parked_on_a_full_budget_holds_back_the_fence_behind_it() {
             .is_err(),
         "the fence was answered while the key ahead of it was still unadmitted",
     );
+    open_gate(&gate).await;
     tokio::time::timeout(Duration::from_secs(60), input_accepted(&mut typist_reader))
         .await
         .expect("the fence must be answered once the child drains the budget")
@@ -6791,15 +6838,19 @@ async fn an_exact_limit_paste_takes_the_budget_whole_and_completes() {
 
     let tmp = private_dir();
     let path = tmp.path().join("daemon.sock");
+    let gate = gate(tmp.path());
     let pool = Arc::new(Mutex::new(SessionPool::new()));
-    // Reads nothing at first, so the writer thread blocks with the whole
-    // reservation still held; `cat` then drains all of it. Raw mode for
-    // the same reason as the stall test above: a line discipline would
-    // discard the tail instead of throttling the master.
+    // Reads nothing until the gate opens, so the writer thread blocks
+    // with the whole reservation still held; `cat` then drains all of it.
+    // Raw mode for the same reason as the stall test above: a line
+    // discipline would discard the tail instead of throttling the master.
     spawn_daemon(
         &path,
         pool,
-        shell_factory("stty raw -echo; sleep 3; exec cat >/dev/null"),
+        script_factory(format!(
+            "stty raw -echo; read _ < {}; exec cat >/dev/null",
+            gate.display()
+        )),
     )
     .await;
 
@@ -6824,9 +6875,9 @@ async fn an_exact_limit_paste_takes_the_budget_whole_and_completes() {
     .await;
 
     // Held whole: the permit rides the bytes to the writer thread and is
-    // dropped only once `write_all` returns, so while the child sleeps
+    // dropped only once `write_all` returns, so while the child stalls
     // the reservation is the entire paste plus its bracketing.
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     let peak = loop {
         let row = pty_input_row(&mut ops_reader, &mut ops_writer, request).await;
         request += 1;
@@ -6849,6 +6900,7 @@ async fn an_exact_limit_paste_takes_the_budget_whole_and_completes() {
 
     // And given back once the child starts reading: this is the half a
     // reservation-size unit test cannot see.
+    open_gate(&gate).await;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
     loop {
         let row = pty_input_row(&mut ops_reader, &mut ops_writer, request).await;
@@ -6925,7 +6977,7 @@ async fn an_exact_limit_paste_takes_the_budget_whole_and_completes() {
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_paste_admitted_before_a_mode_flip_is_written_bracketed_within_its_reservation() {
-    use felis_protocol::limits::MAX_PASTE_BYTES;
+    use felis_protocol::limits::{MAX_PASTE_BYTES, PTY_INPUT_BUDGET};
 
     // Past the 64 bytes the first paste leaves unreserved, so this one
     // cannot be admitted beside it and must park on the budget, which
@@ -6936,23 +6988,26 @@ async fn a_paste_admitted_before_a_mode_flip_is_written_bracketed_within_its_res
     let tmp = private_dir();
     let path = tmp.path().join("daemon.sock");
     let received = tmp.path().join("received");
+    let gate = gate(tmp.path());
     let pool = Arc::new(Mutex::new(SessionPool::new()));
     // Reads nothing while the first paste fills the budget and the
     // second parks behind it, *then* enables bracketed paste, and only
     // afterwards drains: the flip therefore lands between the second
     // paste's admission and its write.
-    let script = format!(
-        "stty raw -echo; sleep 3; printf '\\033[?2004h'; exec cat > {}",
-        received.display()
-    );
-    let factory: SessionFactory = Arc::new(move |_| {
-        let mut cmd = Command::new("/bin/sh");
-        cmd.args(["-c", &script]);
-        cmd.env_clear();
-        cmd.env("PATH", fixture_path());
-        cmd
-    });
-    spawn_daemon(&path, pool, factory).await;
+    spawn_daemon(
+        &path,
+        pool,
+        script_factory(format!(
+            "stty raw -echo; read _ < {}; printf '\\033[?2004h'; exec cat > {}",
+            gate.display(),
+            received.display()
+        )),
+    )
+    .await;
+
+    let (ops_r, ops_w) = connect(&path).await.unwrap();
+    let (mut ops_reader, mut ops_writer) = framed(ops_r, ops_w).await;
+    hello_welcome_as(&mut ops_reader, &mut ops_writer, ConnectionMode::Ops, false).await;
 
     let (typist_r, typist_w) = connect(&path).await.unwrap();
     let (mut typist_reader, mut typist_writer) = framed(typist_r, typist_w).await;
@@ -6974,6 +7029,25 @@ async fn a_paste_admitted_before_a_mode_flip_is_written_bracketed_within_its_res
         &InputMsg::Paste(MARKER.as_bytes().to_vec()),
     )
     .await;
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let mut request = 1;
+    loop {
+        let row = pty_input_row(&mut ops_reader, &mut ops_writer, request).await;
+        request += 1;
+        // The first paste leaves a few bytes free, and tokio's semaphore
+        // hands free permits to the queued acquisition, so the whole
+        // budget in use means the marker paste is the one parked.
+        if max_subject_used(&row) == Some(PTY_INPUT_BUDGET as u64) {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the marker paste never parked on the budget: {row:?}",
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    open_gate(&gate).await;
 
     let expected = format!("\x1b[200~{MARKER}\x1b[201~");
     let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
