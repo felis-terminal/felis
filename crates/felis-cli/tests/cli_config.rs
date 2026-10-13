@@ -628,3 +628,24 @@ fn a_window_launch_refuses_a_selection_that_is_not_there() {
     let stderr = String::from_utf8(out.stderr).unwrap();
     assert!(stderr.contains("no config file at"), "{stderr}");
 }
+
+/// `felis config show-effective | head -0`: a reader that is gone before
+/// the document is written ends the verb as if it had finished, in both
+/// framings.
+#[test]
+fn a_stdout_whose_reader_is_gone_exits_zero_without_a_panic() {
+    let home = TempDir::new().unwrap();
+    write_config(&home, "");
+    for format in ["human", "json"] {
+        let (reader, writer) = std::io::pipe().unwrap();
+        drop(reader);
+        let out = cli(&home)
+            .args(["config", "show-effective", "--format", format])
+            .stdout(writer)
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(0), "{format}: {stderr}");
+        assert!(stderr.is_empty(), "{format}: {stderr}");
+    }
+}

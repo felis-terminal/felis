@@ -5,7 +5,6 @@
 
 #![expect(
     clippy::print_stderr,
-    clippy::print_stdout,
     reason = "this module owns the machine-output channels"
 )]
 
@@ -24,6 +23,55 @@ use serde::{Deserialize, Serialize};
 /// minor must be invisible here, or a consumer would re-negotiate for
 /// growth it cannot see.
 pub(crate) const SURFACE_VERSION: u32 = 1;
+
+/// `print!` that exits `0` once stdout's reader has gone (`| head`):
+/// the reader has all it asked for, and `print!` would panic on the
+/// `EPIPE`.
+macro_rules! stdout {
+    ($($arg:tt)*) => {
+        $crate::cli_output::write_stdout(format_args!($($arg)*), false)
+    };
+}
+
+/// `println!` with [`stdout!`]'s handling of a gone reader.
+macro_rules! stdoutln {
+    ($($arg:tt)*) => {
+        $crate::cli_output::write_stdout(format_args!($($arg)*), true)
+    };
+}
+
+pub(crate) use {stdout, stdoutln};
+
+pub(crate) fn write_stdout(args: std::fmt::Arguments<'_>, newline: bool) {
+    use std::io::Write as _;
+    let mut stdout = std::io::stdout().lock();
+    let written = stdout.write_fmt(args).and_then(|()| {
+        if newline {
+            stdout.write_all(b"\n")
+        } else {
+            Ok(())
+        }
+    });
+    stdout_written(written);
+}
+
+/// Bytes passed through verbatim, with [`stdout!`]'s handling of a gone
+/// reader.
+pub(crate) fn write_stdout_bytes(bytes: &[u8]) {
+    use std::io::Write as _;
+    stdout_written(std::io::stdout().lock().write_all(bytes));
+}
+
+/// Restoring `SIGPIPE`'s default action would end the process at the
+/// write too, but that takes `unsafe` this crate forbids, and it would
+/// leave Windows, which has no `SIGPIPE`, panicking.
+fn stdout_written(written: std::io::Result<()>) {
+    match written {
+        Ok(()) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::BrokenPipe => std::process::exit(0),
+        Err(err) => panic!("failed printing to stdout: {err}"),
+    }
+}
 
 /// The output types are plain structs, so serialization cannot fail;
 /// the fallback exists because a caller mid-emission has no channel
@@ -439,7 +487,7 @@ impl Reporter {
     pub(crate) fn result(&self, body: &impl Serialize) {
         debug_assert_eq!(self.class, Class::Point, "result is a point verb's answer");
         if self.machine() {
-            println!(
+            stdoutln!(
                 "{}",
                 render(&Versioned {
                     v: SURFACE_VERSION,
@@ -452,7 +500,7 @@ impl Reporter {
     pub(crate) fn item(&self, body: &impl Serialize) {
         debug_assert_eq!(self.class, Class::Stream, "items belong to a stream");
         if self.machine() && !self.terminated.load(Ordering::Relaxed) {
-            println!(
+            stdoutln!(
                 "{}",
                 render(&Versioned {
                     v: SURFACE_VERSION,
@@ -468,7 +516,7 @@ impl Reporter {
         debug_assert_eq!(self.class, Class::Stream, "lag belongs to a stream");
         if self.machine() {
             if !self.terminated.load(Ordering::Relaxed) {
-                println!(
+                stdoutln!(
                     "{}",
                     render(&LagEvent {
                         v: SURFACE_VERSION,
@@ -485,7 +533,7 @@ impl Reporter {
     pub(crate) fn end(&self, count: u64, exit_code: Option<u32>) {
         debug_assert_eq!(self.class, Class::Stream, "end closes a stream");
         if self.machine() && !self.terminated.swap(true, Ordering::Relaxed) {
-            println!(
+            stdoutln!(
                 "{}",
                 render(&EndTerminal {
                     v: SURFACE_VERSION,
@@ -524,7 +572,7 @@ impl Reporter {
             ),
             Class::Stream => {
                 if !self.terminated.swap(true, Ordering::Relaxed) {
-                    println!(
+                    stdoutln!(
                         "{}",
                         render(&ErrorTerminal {
                             v: SURFACE_VERSION,
@@ -574,7 +622,7 @@ impl Reporter {
 
     pub(crate) fn line(&self, text: impl std::fmt::Display) {
         if !self.machine() {
-            println!("{text}");
+            stdoutln!("{text}");
         }
     }
 }

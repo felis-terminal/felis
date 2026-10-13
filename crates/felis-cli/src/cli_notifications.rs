@@ -12,7 +12,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use felis_client_core::{ConnectError, Connection, Reconnector};
 
 use crate::cli_output::{
-    ErrorKind, Format, NotificationObject, Reporter, StreamFormat, short_id_alone,
+    ErrorKind, Format, NotificationObject, Reporter, StreamFormat, short_id_alone, stdoutln,
 };
 use crate::conn::Dial;
 use crate::session_id_from_resolved;
@@ -113,7 +113,6 @@ pub(crate) fn run(
     })
 }
 
-#[allow(clippy::print_stdout)]
 async fn stream_notifications<R, W>(
     mut conn: Connection<R, W>,
     out: &Reporter,
@@ -266,7 +265,7 @@ where
                     attached,
                 ));
             } else {
-                println!("{}", notification_line(session_id, &notification));
+                stdoutln!("{}", notification_line(session_id, &notification));
             }
             // Flush so a piped consumer sees each notification now, not
             // on block-buffer fill; a flush failure on a closed pipe

@@ -9,7 +9,7 @@ use felis_client_core::{ConnectError, Reconnector, RemoteSpawn};
 use felis_protocol::BuildIdentity;
 use serde::Serialize;
 
-use crate::cli_output::{PointFormat, Reporter};
+use crate::cli_output::{PointFormat, Reporter, stdoutln};
 
 /// This binary's own build, abbreviated: `felis --version`'s output.
 pub(crate) const SELF_VERSION_LINE: &str = concat!(
@@ -74,7 +74,6 @@ pub(crate) struct VersionResult<'a> {
     pub(crate) daemon_status: &'a str,
 }
 
-#[allow(clippy::print_stdout)] // the human table IS this verb's contract
 pub(crate) fn run(
     runtime: &tokio::runtime::Runtime,
     output: &PointFormat,
@@ -95,9 +94,9 @@ pub(crate) fn run(
             daemon_status: daemon.status,
         });
     } else {
-        println!("{:<6} {}", "cli", cli.human());
-        println!("{:<6} {}", "client", client.human());
-        println!("{:<6} {}", "daemon", daemon.human());
+        stdoutln!("{:<6} {}", "cli", cli.human());
+        stdoutln!("{:<6} {}", "client", client.human());
+        stdoutln!("{:<6} {}", "daemon", daemon.human());
     }
     0
 }

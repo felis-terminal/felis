@@ -3,11 +3,6 @@
 //! portable way to end it, and `felis daemon upgrade`, which replaces
 //! its binary while it keeps every session.
 
-#![expect(
-    clippy::print_stdout,
-    reason = "this module renders the human framing of a report"
-)]
-
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
@@ -21,7 +16,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 
 use crate::cli_output::{
     DaemonStatusResult, DaemonStopResult, DaemonUpgradeResult, ErrorKind, Format, PointFormat,
-    ProtocolVersion, Reporter, ResourceObject,
+    ProtocolVersion, Reporter, ResourceObject, stdoutln,
 };
 use crate::conn::Dial;
 
@@ -153,7 +148,7 @@ where
     if out.machine() {
         out.result(&stop_result(mode, outcome));
     } else {
-        println!("{}", stop_message(mode, outcome));
+        stdoutln!("{}", stop_message(mode, outcome));
     }
     Ok(0)
 }
@@ -231,8 +226,8 @@ fn upgrade_remotely(destination: &str, ssh_args: &[String], format: Format) -> i
         ),
         Some(code @ 0..=2) => {
             use std::io::Write as _;
+            crate::cli_output::write_stdout_bytes(&output.stdout);
             // A closed local pipe leaves nobody to report to.
-            drop(std::io::stdout().write_all(&output.stdout));
             drop(std::io::stderr().write_all(&output.stderr));
             code
         }
@@ -345,7 +340,7 @@ where
                     successor,
                 });
             } else {
-                println!("the daemon is switching to {successor}");
+                stdoutln!("the daemon is switching to {successor}");
             }
             Ok(0)
         }
@@ -492,17 +487,18 @@ const fn subject_token(subject: SubjectKind) -> &'static str {
 /// The scope is printed on every row, not only the surprising ones: a
 /// reader who must notice an *absent* qualifier has been given a trap.
 fn print_status(status: &DaemonStatus) {
-    println!("version:  {}", status.version);
-    println!(
+    stdoutln!("version:  {}", status.version);
+    stdoutln!(
         "wire:     {}.{}",
-        status.protocol_major, status.protocol_minor
+        status.protocol_major,
+        status.protocol_minor
     );
     // Not a resource row: the runtime is built at a fixed size, so
     // usage and ceiling would show the same number.
-    println!("workers:  {}", status.worker_threads);
+    stdoutln!("workers:  {}", status.worker_threads);
     // Printed on every status, not only a draining one: a reader who
     // must notice an *absent* line has been given a trap.
-    println!("draining: {}", if status.draining { "yes" } else { "no" });
+    stdoutln!("draining: {}", if status.draining { "yes" } else { "no" });
     let width = status
         .resources
         .iter()
@@ -510,7 +506,7 @@ fn print_status(status: &DaemonStatus) {
         .max()
         .unwrap_or(0);
     for r in &status.resources {
-        println!("{:<width$}  {}", resource_token(r.resource), render_row(r));
+        stdoutln!("{:<width$}  {}", resource_token(r.resource), render_row(r));
     }
 }
 

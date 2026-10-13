@@ -12,7 +12,7 @@ use super::{
     driver::{DrainTick, Drained, Stall, drain_frames},
     require_resolved, session_info_by_prefix,
 };
-use crate::cli_output::{ErrorKind, Reporter, SessionRef, TagResult};
+use crate::cli_output::{ErrorKind, Reporter, SessionRef, TagResult, stdoutln};
 
 /// `Some(exit code)` when a payload is larger than the daemon would
 /// ever admit. `--raw` rides `KeyBytes`, which the session's whole
@@ -377,8 +377,8 @@ fn report_wait_outcome(
                 });
             } else {
                 match exit_code {
-                    Some(code) => println!("{code}"),
-                    None => println!("-"),
+                    Some(code) => stdoutln!("{code}"),
+                    None => stdoutln!("-"),
                 }
             }
             0
@@ -457,7 +457,7 @@ where
     if out.machine() {
         out.result(&tag_result(resolved, &tags));
     } else {
-        println!("{}", tags.join(" "));
+        stdoutln!("{}", tags.join(" "));
     }
     Ok(0)
 }
@@ -604,7 +604,7 @@ where
     if out.machine() {
         out.result(&SessionRef::new(ack.id));
     } else {
-        println!("{}", SessionHex(ack.id));
+        stdoutln!("{}", SessionHex(ack.id));
     }
     Ok(0)
 }

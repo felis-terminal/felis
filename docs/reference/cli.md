@@ -67,6 +67,10 @@ exit `1` without an error object, and `felis bridge` overrides the code its own 
 
 `config show-effective` is not one of the exceptions above: past a document error it refuses with `invalid_request`.
 
+A verb whose stdout reader has gone (`felis sessions capture <id> | head -1`) stops at the write that finds it gone and
+exits `0`, as if it had finished, adding nothing to stderr. `felis bridge` is the exception: a reader that has gone is a
+stdout failure, its exit `1` above.
+
 ## Machine output
 
 The `--format` flag selects machine-readable framing on supported verbs:
