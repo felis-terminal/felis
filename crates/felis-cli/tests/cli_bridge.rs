@@ -25,7 +25,7 @@ mod fixtures;
 #[path = "common/schema.rs"]
 mod schema;
 
-use fixtures::{create_and_detach, private_dir, quiet_factory};
+use fixtures::{create_and_detach, poll_until, private_dir, quiet_factory};
 
 const REPLY_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -617,8 +617,12 @@ async fn two_concurrent_streams_stay_correlated_and_each_ends_once() {
     let daemon = Daemon::start(&tmp, banner_factory()).await;
     let id = create_and_detach(&daemon.socket).await;
     let hex = format!("{id:032x}");
-    // Let the parked drain advance the banner into the grid.
-    tokio::time::sleep(Duration::from_millis(400)).await;
+    poll_until(
+        &daemon.socket,
+        &["sessions", "capture", &hex],
+        "BRIDGE-LINE-TWO",
+    )
+    .await;
 
     let mut bridge = Bridge::start(&daemon.socket);
     bridge
@@ -717,7 +721,12 @@ async fn capture_rows_ride_the_structural_json_row_shape() {
     let daemon = Daemon::start(&tmp, banner_factory()).await;
     let id = create_and_detach(&daemon.socket).await;
     let hex = format!("{id:032x}");
-    tokio::time::sleep(Duration::from_millis(400)).await;
+    poll_until(
+        &daemon.socket,
+        &["sessions", "capture", &hex],
+        "BRIDGE-LINE-TWO",
+    )
+    .await;
 
     let mut bridge = Bridge::start(&daemon.socket);
     bridge
@@ -1317,7 +1326,7 @@ async fn a_relative_spawn_cwd_is_resolved_from_the_bridge_process() {
     std::fs::create_dir(&nested).unwrap();
     let factory: SessionFactory = Arc::new(|_| {
         let mut cmd = PtyCommand::new("/bin/sh");
-        cmd.args(["-c", "pwd; read x"]);
+        cmd.args(["-c", "pwd; echo PWD-DONE; read x"]);
         cmd.env_clear();
         cmd.env("PATH", "/bin:/usr/bin");
         cmd
@@ -1336,7 +1345,12 @@ async fn a_relative_spawn_cwd_is_resolved_from_the_bridge_process() {
         .as_str()
         .expect("spawn returns a session id")
         .to_owned();
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    poll_until(
+        &daemon.socket,
+        &["sessions", "capture", &session],
+        "PWD-DONE",
+    )
+    .await;
     bridge
         .send(&request(
             "capture",
@@ -1591,8 +1605,12 @@ async fn send_types_into_a_session_that_a_later_capture_reads_back() {
         "the ack names the session it typed into: {acked}"
     );
 
-    // Let the shell run and the parked drain land its output in the grid.
-    tokio::time::sleep(Duration::from_millis(600)).await;
+    poll_until(
+        &daemon.socket,
+        &["sessions", "capture", &hex],
+        "ECHOED-marker",
+    )
+    .await;
 
     bridge
         .send(&request(

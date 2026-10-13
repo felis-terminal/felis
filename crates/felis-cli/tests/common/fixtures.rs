@@ -89,7 +89,49 @@ pub(crate) async fn create_and_detach(socket: &std::path::Path) -> u128 {
     let mut conn = connect(socket, Offer::ops()).await.unwrap();
     let id = conn.create_with(SpawnArgs::default()).await.unwrap().id;
     drop(conn);
-    // The daemon's re-pool grace.
-    tokio::time::sleep(Duration::from_millis(200)).await;
-    id
+    let mut lister = connect(socket, Offer::ops()).await.unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let sessions = lister.list_sessions().await.unwrap();
+        let session = sessions
+            .iter()
+            .find(|s| s.id == id)
+            .expect("created session is listed");
+        if session.idle_seconds.is_some() {
+            return id;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the creator's attachment never went away",
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
+
+/// Reruns a read verb until its stdout contains `needle`, returning that
+/// stdout: the parked drain lands a child's output on its own schedule.
+#[cfg(unix)]
+pub(crate) async fn poll_until(socket: &std::path::Path, args: &[&str], needle: &str) -> String {
+    let bin = std::env::var_os("CARGO_BIN_EXE_felis").expect("cargo sets the felis bin path");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let out = std::process::Command::new(&bin)
+            .env_remove("FELIS_SOCKET")
+            .env_remove("RUST_LOG")
+            .arg("--socket")
+            .arg(socket)
+            .args(args)
+            .output()
+            .expect("run felis");
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        if stdout.contains(needle) {
+            return stdout;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "`felis {}` never printed {needle:?}; last stdout: {stdout}",
+            args.join(" "),
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
 }
