@@ -82,25 +82,17 @@ pub fn default_socket_path() -> std::io::Result<PathBuf> {
     crate::local::default_pipe_name().map(PathBuf::from)
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
-    #[cfg(unix)]
     use std::path::Path;
 
-    #[cfg(unix)]
     #[test]
     fn the_endpoint_is_derived_from_the_uid_alone() {
         let resolved = SocketPath::resolve(1234);
         assert_eq!(resolved.dir(), Path::new("/tmp/felis.1234"));
         assert_eq!(resolved.socket(), Path::new("/tmp/felis.1234/daemon.sock"));
-    }
 
-    /// Whatever this test process inherited from its environment, the
-    /// default endpoint is the uid's `/tmp` directory.
-    #[cfg(unix)]
-    #[test]
-    fn the_default_endpoint_ignores_the_environment_this_process_carries() {
         let own = rustix::process::geteuid().as_raw();
         assert_eq!(
             default_socket_path().unwrap(),
@@ -108,7 +100,6 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn a_relative_path_is_anchored_to_the_current_directory() {
         let anchored = anchor_to_current_dir(PathBuf::from("felis-relative.sock"));
@@ -118,16 +109,9 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn an_absolute_path_is_left_as_typed() {
         let typed = PathBuf::from("/tmp/felis-typed/../daemon.sock");
         assert_eq!(anchor_to_current_dir(typed.clone()), typed);
-    }
-
-    #[test]
-    fn socket_filename_is_stable() {
-        // The CLI surface promises a single socket per UID.
-        assert_eq!(SOCKET_FILENAME, "daemon.sock");
     }
 }

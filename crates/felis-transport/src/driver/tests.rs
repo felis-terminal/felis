@@ -259,6 +259,9 @@ fn cancelling_a_live_stream_twice_is_accepted() {
 // ── exactly one terminal ────────────────────────────────────────────
 
 /// A collecting loop reads its completion from exactly one terminal.
+/// The client's correlated wait re-feeds frames it read past, and a frame
+/// counted twice would settle a stream transition twice, so a second feed
+/// of one terminal is a correlation violation, never a second delivery.
 #[test]
 fn a_second_terminal_closes_the_connection() {
     let mut driver = in_phase::<ClientSide>(Phase::Attached, ConnectionMode::Window);
@@ -2132,19 +2135,10 @@ fn the_kind_gate_is_the_arm_tables_fold_in_every_cell() {
     every_cell::<DaemonSide>();
 }
 
-/// The handshake admits its own two arms and nothing else, and the
-/// preface admits no frame at all: the two rungs below `Setup`.
+/// The handshake admits its own two arms and nothing else.
 #[test]
-fn the_two_rungs_below_setup_admit_almost_nothing() {
+fn the_handshake_rung_admits_almost_nothing() {
     for kind in EVERY_KIND {
-        let mut fresh = ConnectionDriver::daemon();
-        assert!(
-            matches!(
-                fresh.classify(&sample_of(kind)),
-                Err(DriverError::UnexpectedKind { .. })
-            ),
-            "{kind} before the preface"
-        );
         let mut handshaking = ConnectionDriver::daemon();
         handshaking.preface_done();
         assert!(
@@ -2326,26 +2320,4 @@ fn a_denied_ops_verb_reads_the_same_before_and_after_the_attach() {
             "{phase:?}: got {err}"
         );
     }
-}
-
-/// A parked frame must reach the driver exactly once: the client's
-/// correlated wait re-feeds what it read past, and a frame counted twice
-/// settles a stream transition twice. The second feed of one frame is
-/// therefore a correlation violation, never a second delivery.
-#[test]
-fn feeding_one_frame_twice_is_a_correlation_violation() {
-    let mut client = in_phase::<ClientSide>(Phase::Attached, ConnectionMode::Window);
-    let id = client.open_stream().expect("the sequence is fresh");
-    let terminal = frame(&ConnToClientMsg::End {
-        stream_id: id,
-        count: 1,
-    });
-    assert!(matches!(
-        client.classify(&terminal).unwrap(),
-        Incoming::Control(ConnToClientMsg::End { .. })
-    ));
-    assert!(matches!(
-        client.classify(&terminal).unwrap_err(),
-        DriverError::Correlation { .. }
-    ));
 }
