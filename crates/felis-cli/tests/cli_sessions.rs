@@ -24,7 +24,7 @@ mod fixtures;
 mod schema;
 
 use fixtures::{
-    create_and_detach, private_dir, quiet_factory, spawn_daemon, spawn_daemon_with_caps,
+    create_and_detach, poll_until, private_dir, quiet_factory, spawn_daemon, spawn_daemon_with_caps,
 };
 
 /// The FHS pair keeps first claim; the runner's own `PATH` is the tail
@@ -149,30 +149,6 @@ fn cli_command() -> StdCommand {
     cmd.env_remove("FELIS_SOCKET");
     cmd.env_remove("RUST_LOG");
     cmd
-}
-
-/// Reruns a read verb until its stdout contains `needle`, returning that
-/// stdout: the parked drain lands a child's output on its own schedule.
-async fn poll_until(socket: &std::path::Path, args: &[&str], needle: &str) -> String {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    loop {
-        let out = cli_command()
-            .arg("--socket")
-            .arg(socket)
-            .args(args)
-            .output()
-            .expect("run felis");
-        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
-        if stdout.contains(needle) {
-            return stdout;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "`felis {}` never printed {needle:?}; last stdout: {stdout}",
-            args.join(" "),
-        );
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
 }
 
 /// The hidden completion helper lists the daemon an explicit

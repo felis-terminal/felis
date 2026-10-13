@@ -93,3 +93,31 @@ pub(crate) async fn create_and_detach(socket: &std::path::Path) -> u128 {
     tokio::time::sleep(Duration::from_millis(200)).await;
     id
 }
+
+/// Reruns a read verb until its stdout contains `needle`, returning that
+/// stdout: the parked drain lands a child's output on its own schedule.
+#[cfg(unix)]
+pub(crate) async fn poll_until(socket: &std::path::Path, args: &[&str], needle: &str) -> String {
+    let bin = std::env::var_os("CARGO_BIN_EXE_felis").expect("cargo sets the felis bin path");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let out = std::process::Command::new(&bin)
+            .env_remove("FELIS_SOCKET")
+            .env_remove("RUST_LOG")
+            .arg("--socket")
+            .arg(socket)
+            .args(args)
+            .output()
+            .expect("run felis");
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        if stdout.contains(needle) {
+            return stdout;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "`felis {}` never printed {needle:?}; last stdout: {stdout}",
+            args.join(" "),
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
