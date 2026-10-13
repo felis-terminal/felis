@@ -59,7 +59,7 @@ pub(crate) trait FaceProvider {
 #[derive(Clone, Copy)]
 pub(crate) enum LoadedAs {
     #[cfg_attr(
-        not(any(target_os = "linux", test)),
+        not(any(target_os = "linux", all(test, not(windows)))),
         expect(dead_code, reason = "only the Linux fontconfig provider reads it")
     )]
     Color(bool),
@@ -102,7 +102,7 @@ pub const MONOSPACE_FALLBACK_FAMILIES: &[&str] = &[
 
 /// Rescans every installed font (~300 ms on a large system); share one
 /// across probes.
-#[cfg(any(not(target_os = "linux"), test))]
+#[cfg(not(target_os = "linux"))]
 pub(crate) fn system_db() -> Database {
     let mut db = Database::new();
     db.load_system_fonts();

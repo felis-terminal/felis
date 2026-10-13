@@ -1492,6 +1492,13 @@ impl AtlasView for GlyphCache {
 #[cfg(test)]
 mod tests {
     #![allow(clippy::float_cmp)]
+    #![cfg_attr(
+        windows,
+        allow(
+            dead_code,
+            reason = "the pinned-font tests are compiled out on Windows"
+        )
+    )]
     use felis_grid::Grid;
 
     use std::sync::Arc;
@@ -1506,11 +1513,10 @@ mod tests {
     }
 
     fn stack() -> FontStack {
-        FontStack::new(Arc::new(
-            Font::load_default().expect("system monospace font"),
-        ))
+        FontStack::new(Arc::new(Font::load_test_font()))
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn an_overlay_cluster_is_shaped_and_its_glyphs_primed() {
         let mut idx = GlyphIndex::new(stack(), 14.0, nz(256));
@@ -1528,6 +1534,7 @@ mod tests {
         );
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn overlay_shapes_survive_the_frame_that_primed_them() {
         let mut idx = GlyphIndex::new(stack(), 14.0, nz(256));
@@ -1551,6 +1558,7 @@ mod tests {
         );
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn ensure_records_a_slot_and_pending_upload_for_a_printable_glyph() {
         let mut idx = GlyphIndex::new(stack(), 14.0, nz(256));
@@ -1573,6 +1581,7 @@ mod tests {
         );
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn ensure_is_idempotent_for_the_same_key() {
         let mut idx = GlyphIndex::new(stack(), 14.0, nz(256));
@@ -1587,6 +1596,7 @@ mod tests {
         );
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn whitespace_caches_a_negative_entry_with_no_upload() {
         let mut idx = GlyphIndex::new(stack(), 14.0, nz(256));
@@ -1601,6 +1611,7 @@ mod tests {
         );
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn populate_walks_the_grid_and_caches_unique_glyphs_once() {
         let mut screen = Grid::new(2, 5);
@@ -1618,6 +1629,7 @@ mod tests {
         assert_eq!(pending_count, 4);
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn sized_variant_takes_a_distinct_atlas_slot_from_default() {
         // An OSC 66 `s=2` 'A' must not share a slot with the default 'A'.
@@ -1646,6 +1658,7 @@ mod tests {
         );
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn a_full_atlas_resets_and_keeps_placing_glyphs() {
         // A small atlas so one page of distinct glyphs overflows; the
@@ -1694,6 +1707,7 @@ mod tests {
         })
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn distinct_blank_keys_keep_the_slot_map_under_the_blank_cap() {
         let mut idx = GlyphIndex::new(stack(), 14.0, nz(256));
@@ -1709,6 +1723,7 @@ mod tests {
         }
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn dropping_blank_entries_keeps_placed_slots_and_the_atlas() {
         let mut idx = GlyphIndex::new(stack(), 14.0, nz(256));
@@ -1734,6 +1749,7 @@ mod tests {
         idx.slots.values().filter(|s| s.is_some()).count()
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn distinct_tiny_placed_glyphs_recycle_the_atlas_at_the_placed_cap() {
         let mut idx = GlyphIndex::new(stack(), 14.0, nz(crate::GLYPH_ATLAS_SIDE));
@@ -1777,6 +1793,7 @@ mod tests {
     /// Overlay text (a chrome bar's label, the pre-edit) is primed
     /// after the grid walk, so its own overflow drops the grid's fresh
     /// slots; the renderer reads the same reported reset to walk again.
+    #[cfg(not(windows))]
     #[test]
     fn an_overlay_char_that_overflows_after_the_walk_reports_the_reset() {
         let mut idx = GlyphIndex::new(stack(), 14.0, nz(32));
@@ -1813,6 +1830,7 @@ mod tests {
     /// A reset partway through a walk drops slots already handed out,
     /// and rendering is damage-driven, so nothing would repaint those
     /// cells; the reported reset drives a second walk.
+    #[cfg(not(windows))]
     #[test]
     fn a_mid_walk_reset_is_reported_and_a_second_walk_reslots_the_grid() {
         let mut idx = GlyphIndex::new(stack(), 14.0, nz(48));
@@ -1869,6 +1887,7 @@ mod tests {
         }
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn a_glyph_too_large_for_the_atlas_degrades_without_looping() {
         // An atlas so small nothing fits even when empty: a reset frees
@@ -1884,6 +1903,7 @@ mod tests {
         );
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn fractional_scale_rasterizes_below_default_for_sub_cell_shrink() {
         // `s=1, n=1, d=2` is effective scale 0.5, so the bitmap must be
@@ -1915,9 +1935,10 @@ mod tests {
         );
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn primary_face_ascii_is_never_fitted_at_any_osc66_scale() {
-        let font = Arc::new(Font::load_test_font_or_default().expect("a monospace font"));
+        let font = Arc::new(Font::load_test_font());
         for px in [13.0, 18.67, 24.0, 29.33] {
             let mut idx = GlyphIndex::new(FontStack::new(font.clone()), px, nz(512));
             let h = idx.cell_metrics().height;
@@ -1946,12 +1967,10 @@ mod tests {
 
     /// The ink fills the block along its binding axis and is centred on
     /// both, so a fitted glyph reads as large as the cell allows.
+    #[cfg(not(windows))]
     #[test]
     fn a_fallback_glyph_wider_than_its_cell_fills_and_centres_in_it() {
-        let Some(stack) = FontStack::try_pinned_test_stack() else {
-            eprintln!("FELIS_TEST_FONT_DIR unset; skipping");
-            return;
-        };
+        let stack = FontStack::pinned_test_stack();
         let mut idx = GlyphIndex::new(stack, 18.0, nz(1024));
         let m = idx.cell_metrics();
         let (cw, ch, ascent) = (i64::from(m.width), i64::from(m.height), i64::from(m.ascent));
@@ -1999,12 +2018,10 @@ mod tests {
     /// An OSC 66 block is `w` (or the char's width) cells at the integer
     /// `s`, so a glyph between one and two cells wide fits `w=2` and a
     /// halved glyph in an `s=2` block, and is fitted only for `w=1`.
+    #[cfg(not(windows))]
     #[test]
     fn osc66_width_and_fractional_scale_set_the_fitted_block() {
-        let Some(stack) = FontStack::try_pinned_test_stack() else {
-            eprintln!("FELIS_TEST_FONT_DIR unset; skipping");
-            return;
-        };
+        let stack = FontStack::pinned_test_stack();
         let px = 18.0;
         let mut idx = GlyphIndex::new(stack, px, nz(1024));
         let m = idx.cell_metrics();
@@ -2037,12 +2054,10 @@ mod tests {
 
     /// A star the symbol faces cover is still drawn in color, as an
     /// emoji-presentation scalar.
+    #[cfg(not(windows))]
     #[test]
     fn an_emoji_presentation_char_rasterizes_in_color() {
-        let Some(stack) = FontStack::try_pinned_test_stack() else {
-            eprintln!("FELIS_TEST_FONT_DIR unset; skipping");
-            return;
-        };
+        let stack = FontStack::pinned_test_stack();
         let mut idx = GlyphIndex::new(stack, 18.0, nz(1024));
         let h = idx.cell_metrics().height;
         idx.ensure('\u{2B50}', h, SizingKey::default());
@@ -2053,7 +2068,7 @@ mod tests {
     }
 
     /// A one-row grid fed `bytes`, walked and painted against the pinned
-    /// set; `None` when `FELIS_TEST_FONT_DIR` is unset.
+    /// set.
     struct Painted {
         index: GlyphIndex,
         frame: ShapeFrame,
@@ -2061,8 +2076,8 @@ mod tests {
         fg: Vec<crate::instances::FgInstance>,
     }
 
-    fn paint_pinned(bytes: &[u8], cols: u16) -> Option<Painted> {
-        let stack = FontStack::try_pinned_test_stack()?;
+    fn paint_pinned(bytes: &[u8], cols: u16) -> Painted {
+        let stack = FontStack::pinned_test_stack();
         let mut grid = Grid::new(1, cols);
         Parser::new().advance(&mut grid, bytes);
         let mut index = GlyphIndex::new(stack, 18.0, nz(1024));
@@ -2085,12 +2100,12 @@ mod tests {
         )
         .with_viewport(0, 1)
         .extend_instances(&mut out);
-        Some(Painted {
+        Painted {
             index,
             frame,
             grid,
             fg: out.fg,
-        })
+        }
     }
 
     fn cluster_fit_px_at(p: &Painted, col: u16) -> u16 {
@@ -2114,6 +2129,7 @@ mod tests {
     /// Each repro is the only ink on its row, its cluster at `col` with
     /// `cells` cells: a ZWJ pair the face has no glyph for, a modifier on a
     /// base that takes none, and a VS16 widen refused at the last column.
+    #[cfg(not(windows))]
     #[test]
     fn a_cluster_wider_than_its_cells_fills_and_centres_in_them() {
         let repros: [(&str, &[u8], u16, u16); 3] = [
@@ -2122,10 +2138,7 @@ mod tests {
             ("refused widen", "\x1b[4G\u{2764}\u{FE0F}".as_bytes(), 3, 1),
         ];
         for (name, bytes, col, cells) in repros {
-            let Some(p) = paint_pinned(bytes, 4) else {
-                eprintln!("FELIS_TEST_FONT_DIR unset; skipping");
-                return;
-            };
+            let p = paint_pinned(bytes, 4);
             let fit_px = f32::from(cluster_fit_px_at(&p, col));
             assert_ne!(fit_px, 0.0, "{name}: fitted");
             // The size is floored to a whole pixel, which costs up to one
@@ -2152,13 +2165,11 @@ mod tests {
 
     /// The fit is the bare char's: a cluster of one glyph shrinks to the
     /// size `fitted_bitmap` gives that glyph alone.
+    #[cfg(not(windows))]
     #[test]
     fn a_one_glyph_cluster_fits_as_its_bare_char_does() {
-        let Some(cluster) = paint_pinned("\x1b[4G\u{263A}\u{FE0F}".as_bytes(), 4) else {
-            eprintln!("FELIS_TEST_FONT_DIR unset; skipping");
-            return;
-        };
-        let bare = paint_pinned("\x1b[4G\u{263A}".as_bytes(), 4).expect("pinned set");
+        let cluster = paint_pinned("\x1b[4G\u{263A}\u{FE0F}".as_bytes(), 4);
+        let bare = paint_pinned("\x1b[4G\u{263A}".as_bytes(), 4);
         let [a0, b0, a1, b1] = ink(&cluster.fg);
         let [c0, d0, c1, d1] = ink(&bare.fg);
         assert!(
@@ -2173,6 +2184,7 @@ mod tests {
 
     /// Clusters whose advance stays within their cells keep the native
     /// path: a ligated flag, a widened VS16 emoji, a keycap, a combining mark.
+    #[cfg(not(windows))]
     #[test]
     fn a_cluster_within_its_cells_is_not_fitted() {
         for text in [
@@ -2181,22 +2193,17 @@ mod tests {
             "#\u{FE0F}\u{20E3}",
             "e\u{301}",
         ] {
-            let Some(p) = paint_pinned(text.as_bytes(), 4) else {
-                eprintln!("FELIS_TEST_FONT_DIR unset; skipping");
-                return;
-            };
+            let p = paint_pinned(text.as_bytes(), 4);
             assert_eq!(cluster_fit_px_at(&p, 0), 0, "{text:?}");
         }
     }
 
     /// The fit is measured once per cluster: a later walk reads the memo,
     /// so a repainted prompt does not rasterize its clusters again.
+    #[cfg(not(windows))]
     #[test]
     fn a_fitted_cluster_is_measured_once() {
-        let Some(mut p) = paint_pinned("\u{1F408}\u{200D}\u{1F408}".as_bytes(), 4) else {
-            eprintln!("FELIS_TEST_FONT_DIR unset; skipping");
-            return;
-        };
+        let mut p = paint_pinned("\u{1F408}\u{200D}\u{1F408}".as_bytes(), 4);
         assert_eq!(p.index.cluster_fits.len(), 1);
         let first = cluster_fit_px_at(&p, 0);
         p.index.cluster_fits.values_mut().for_each(|px| *px += 1);
@@ -2220,13 +2227,11 @@ mod tests {
     /// Under an OSC 66 fractional scale a fitted cluster's pen shrinks
     /// with its glyphs: the second cat sits one advance at the fitted
     /// size after the first, not one advance at the native size.
+    #[cfg(not(windows))]
     #[test]
     fn a_fitted_cluster_advances_its_pen_at_the_fitted_size() {
         let cats = "\u{1F408}\u{200D}\u{1F408}";
-        let Some(stack) = FontStack::try_pinned_test_stack() else {
-            eprintln!("FELIS_TEST_FONT_DIR unset; skipping");
-            return;
-        };
+        let stack = FontStack::pinned_test_stack();
         let mut grid = Grid::new(2, 8);
         Parser::new().advance(
             &mut grid,
@@ -2278,6 +2283,7 @@ mod tests {
     /// A font-supplied `│` lands a glyph-sized bitmap shorter than the
     /// cell, so `size_px[1] == cell_height` only holds on the synthetic
     /// path.
+    #[cfg(not(windows))]
     #[test]
     fn vertical_box_drawing_bitmap_exactly_fills_the_cell() {
         let mut idx = GlyphIndex::new(stack(), 14.0, nz(256));
@@ -2298,6 +2304,7 @@ mod tests {
         );
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn allocations_within_the_atlas_never_overlap_in_uv_space() {
         let mut idx = GlyphIndex::new(stack(), 14.0, nz(256));
@@ -2320,6 +2327,7 @@ mod tests {
 
     /// Same idempotence and negative-entry handling as the per-char
     /// path.
+    #[cfg(not(windows))]
     #[test]
     fn ensure_glyph_id_is_idempotent_and_caches_a_slot() {
         use felis_shaping::Shaper;
@@ -2340,6 +2348,7 @@ mod tests {
     }
 
     /// `.notdef` stores a negative entry, like a charmap miss.
+    #[cfg(not(windows))]
     #[test]
     fn ensure_glyph_id_zero_lands_a_negative_slot() {
         let mut idx = GlyphIndex::new(stack(), 14.0, nz(256));
@@ -2362,6 +2371,7 @@ mod tests {
 
     /// Non-ASCII graphemes split the run; the wide cell falls back to
     /// the per-char path.
+    #[cfg(not(windows))]
     #[test]
     fn shape_run_stops_at_non_ascii_grapheme() {
         let mut screen = Grid::new(1, 5);
@@ -2381,6 +2391,7 @@ mod tests {
     /// The same raw `glyph_id` primed against two faces keys two slots;
     /// the second `ensure_glyph_id` reports work only because the key
     /// differs.
+    #[cfg(not(windows))]
     #[test]
     fn glyph_id_slots_key_on_font_id_so_faces_do_not_collide() {
         let mut idx = GlyphIndex::new(stack(), 14.0, nz(512));
@@ -2407,6 +2418,7 @@ mod tests {
     /// Single-glyph ligature cluster (the FiraCode-style collapse).
     /// Hand-rolled `ShapedGlyph` values so the shape under test cannot
     /// drift with the pinned font's GSUB.
+    #[cfg(not(windows))]
     #[test]
     fn single_glyph_ligature_cluster_marks_primary_then_trailing() {
         let stack = stack();
@@ -2448,6 +2460,7 @@ mod tests {
     /// blank lead glyph plus the body, both claiming the full span). The
     /// body's ink hangs off the second cell's pen with a negative left
     /// bearing, so it must land on cell 1.
+    #[cfg(not(windows))]
     #[test]
     fn multi_glyph_ligature_cluster_places_pieces_by_pen_position() {
         let stack = stack();
@@ -2496,6 +2509,7 @@ mod tests {
 
     /// A ligature wider than the cells it replaces is dropped, so the
     /// per-char path draws its source chars; one within them is kept.
+    #[cfg(not(windows))]
     #[test]
     fn a_ligature_wider_than_its_cells_leaves_them_unshaped() {
         let mut idx = GlyphIndex::new(stack(), 14.0, nz(512));
@@ -2546,15 +2560,12 @@ mod tests {
 
     /// Shaping `"->"` with `ss03` through the real run-scan + shape +
     /// apply pipeline against Monaspace Neon: both cells consumed, the
-    /// visible arrow on cell 1. Skips when `FELIS_TEST_FONT_DIR` is
-    /// unset; `flake.nix` exports it so CI always runs it.
+    /// visible arrow on cell 1.
+    #[cfg(not(windows))]
     #[test]
     fn ligature_run_places_monaspace_arrow_pieces() {
         use felis_shaping::{Font, FontStack, Shaper};
-        let Some(font) = Font::try_load_test_font() else {
-            eprintln!("FELIS_TEST_FONT_DIR unset; skipping");
-            return;
-        };
+        let font = Font::load_test_font();
         let features = vec!["ss03".to_owned()];
         let mut screen = Grid::new(1, 6);
         let mut parser = Parser::new();
@@ -2637,6 +2648,7 @@ mod tests {
 
     /// The memo returns byte-identical output to a direct
     /// `Shaper::shape_run` and reports hit/miss like `ensure`.
+    #[cfg(not(windows))]
     #[test]
     fn shape_run_cached_matches_direct_output_and_hits_on_repeat() {
         let stack = stack();
@@ -2668,6 +2680,7 @@ mod tests {
 
     /// Scrollback produces unbounded unique row texts, so the memo must
     /// stay bounded.
+    #[cfg(not(windows))]
     #[test]
     fn shape_run_cache_stays_bounded_under_unique_text_pressure() {
         let stack = stack();
@@ -2694,6 +2707,7 @@ mod tests {
     /// A color change mid-row must not end a run (kitty ligates across
     /// syntax-highlight boundaries); per-cell color is applied at
     /// emission by `push_sliced_by_cell`.
+    #[cfg(not(windows))]
     #[test]
     fn shape_run_continues_across_attribute_boundary() {
         use felis_grid::{Attributes, Cell, Color};
@@ -2735,6 +2749,7 @@ mod tests {
     }
 
     /// Unlike color, a bold/italic change ends the run.
+    #[cfg(not(windows))]
     #[test]
     fn shape_run_breaks_at_bold_italic_boundary() {
         use felis_grid::{AttrFlags, Attributes, Cell};
@@ -2790,6 +2805,7 @@ mod tests {
 
     /// The style rides the `SizingKey`, so bold and regular `'A'` key
     /// separate slots.
+    #[cfg(not(windows))]
     #[test]
     fn styled_cells_get_distinct_atlas_slots() {
         let stack = stack();
@@ -2811,4 +2827,5 @@ mod tests {
 }
 
 #[cfg(test)]
+#[cfg(not(windows))]
 mod walk_tests;

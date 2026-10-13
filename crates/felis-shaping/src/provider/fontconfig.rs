@@ -627,43 +627,44 @@ fn c_path(path: &std::path::Path) -> CString {
     CString::new(path.as_os_str().as_bytes().to_vec()).unwrap_or_default()
 }
 
+/// The pinned font set under `rules` (the body of a `<fontconfig>`
+/// document), queried as `lang`. `None` skips where libfontconfig is
+/// absent; Linux always has it, so it fails there.
+#[cfg(test)]
+pub(crate) fn pinned_config(rules: &str, lang: &str) -> Option<Fontconfig> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static NEXT: AtomicUsize = AtomicUsize::new(0);
+    let dir = crate::test_font_dir();
+    let file = std::env::temp_dir().join(format!(
+        "felis-fontconfig-{}-{}.conf",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::write(
+        &file,
+        format!("<?xml version=\"1.0\"?>\n<fontconfig>\n{rules}\n</fontconfig>\n"),
+    )
+    .expect("the rules file writes");
+    let config = Fontconfig::isolated(&dir, Some(&file), lang);
+    std::fs::remove_file(&file).ok();
+    match config {
+        Ok(config) => Some(config),
+        Err(e) if cfg!(target_os = "linux") => panic!("{e}"),
+        Err(e) => {
+            eprintln!("{e}; skipping");
+            None
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
     use super::*;
     use crate::provider::BOLD_WEIGHT;
     use crate::{FaceSpec, FontStack, FontStyle, Shaper, StyleFaces, TEST_FONT_FAMILY};
 
-    /// The pinned font set under `rules` (the body of a `<fontconfig>`
-    /// document), queried as `lang=ja`. `None` skips where the test fonts
-    /// or libfontconfig are absent; Linux has both, so it fails there.
     fn pinned(rules: &str) -> Option<Fontconfig> {
-        static NEXT: AtomicUsize = AtomicUsize::new(0);
-        let Some(dir) = std::env::var_os("FELIS_TEST_FONT_DIR") else {
-            eprintln!("FELIS_TEST_FONT_DIR unset; skipping");
-            return None;
-        };
-        let file = std::env::temp_dir().join(format!(
-            "felis-fontconfig-{}-{}.conf",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        ));
-        std::fs::write(
-            &file,
-            format!("<?xml version=\"1.0\"?>\n<fontconfig>\n{rules}\n</fontconfig>\n"),
-        )
-        .expect("the rules file writes");
-        let config = Fontconfig::isolated(std::path::Path::new(&dir), Some(&file), "ja");
-        std::fs::remove_file(&file).ok();
-        match config {
-            Ok(config) => Some(config),
-            Err(e) if cfg!(target_os = "linux") => panic!("{e}"),
-            Err(e) => {
-                eprintln!("{e}; skipping");
-                None
-            }
-        }
+        pinned_config(rules, "ja")
     }
 
     fn family(fc: &Fontconfig, id: usize) -> String {
@@ -872,11 +873,7 @@ ENDFONT
     #[test]
     fn a_named_instance_match_draws_where_the_axis_move_does() {
         let Some(fc) = pinned("") else { return };
-        let Some(files) = std::env::var_os("FELIS_TEST_FONT_DIR")
-            .map(|d| vec![PathBuf::from(d).join("truetype/Monaspace Neon Var.ttf")])
-        else {
-            return;
-        };
+        let files = vec![crate::test_font_dir().join("truetype/Monaspace Neon Var.ttf")];
         let family = "Monaspace Neon Var";
         let id = fc
             .find_face(family, REGULAR_WEIGHT, false)

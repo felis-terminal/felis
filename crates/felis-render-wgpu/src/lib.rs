@@ -2199,6 +2199,13 @@ fn cursor_rect_px(
 #[cfg(test)]
 mod tests {
     #![allow(clippy::float_cmp)]
+    #![cfg_attr(
+        windows,
+        allow(
+            dead_code,
+            reason = "the pinned-font tests are compiled out on Windows"
+        )
+    )]
 
     use crate::palette::srgb_to_linear_rgba;
 
@@ -2942,20 +2949,13 @@ mod tests {
         Instance::new(desc)
     }
 
-    /// `None` when `FELIS_TEST_FONT_DIR` is unset, the skip every
-    /// font-dependent test in the crate takes.
-    fn offscreen_on(
-        instance: &Instance,
-        width: u32,
-        height: u32,
-        cfg: RendererConfig,
-    ) -> Option<Renderer> {
-        let font = felis_shaping::Font::try_load_test_font()?;
+    fn offscreen_on(instance: &Instance, width: u32, height: u32, cfg: RendererConfig) -> Renderer {
+        let font = felis_shaping::Font::load_test_font();
         let cfg = offscreen_config(cfg).expect("no post shader configured");
         warmup::block_on(async {
             let adapter = request_adapter(instance, None).await.expect("adapter");
             let (device, queue) = request_device(&adapter).await.expect("device");
-            Some(Renderer::build_offscreen(
+            Renderer::build_offscreen(
                 device,
                 queue,
                 UploadMode::for_adapter(&adapter),
@@ -2963,7 +2963,7 @@ mod tests {
                 height,
                 &cfg,
                 FontStack::new(Arc::new(font)),
-            ))
+            )
         })
     }
 
@@ -2986,13 +2986,10 @@ mod tests {
         assert!(matches!(result, Err(RendererError::OffscreenPostShader)));
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn read_frame_refuses_a_target_nothing_was_rendered_into() {
-        let Some(mut renderer) = offscreen_on(&noop_instance(), 8, 8, RendererConfig::default())
-        else {
-            eprintln!("FELIS_TEST_FONT_DIR unset; skipping");
-            return;
-        };
+        let mut renderer = offscreen_on(&noop_instance(), 8, 8, RendererConfig::default());
         let mut out = vec![0xAA; 3];
         assert!(matches!(
             renderer.read_frame(&mut out),
@@ -3001,13 +2998,10 @@ mod tests {
         assert_eq!(out, [0xAA; 3]);
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn set_post_shader_refuses_an_offscreen_target() {
-        let Some(mut renderer) = offscreen_on(&noop_instance(), 8, 8, RendererConfig::default())
-        else {
-            eprintln!("FELIS_TEST_FONT_DIR unset; skipping");
-            return;
-        };
+        let mut renderer = offscreen_on(&noop_instance(), 8, 8, RendererConfig::default());
         assert!(matches!(
             renderer.set_post_shader(Some(TRAIL_SHADER_SOURCE)),
             Err(PostShaderError::Offscreen)
@@ -3018,13 +3012,10 @@ mod tests {
 
     /// 37 px rows are 148 bytes, padded to 256 for the copy: the
     /// padding must not reach `out`, before or after a resize.
+    #[cfg(not(windows))]
     #[test]
     fn read_frame_returns_unpadded_rows_at_the_current_size() {
-        let Some(mut renderer) = offscreen_on(&noop_instance(), 37, 5, RendererConfig::default())
-        else {
-            eprintln!("FELIS_TEST_FONT_DIR unset; skipping");
-            return;
-        };
+        let mut renderer = offscreen_on(&noop_instance(), 37, 5, RendererConfig::default());
         let mut out = vec![0xAA; 3];
         render_blank(&mut renderer, 1, 2);
         renderer.read_frame(&mut out).expect("readback");
@@ -3045,6 +3036,7 @@ mod tests {
 
     /// 300 rows of 256 padded bytes overflow a 64 KiB buffer limit: the
     /// readback must split into strips rather than trip wgpu validation.
+    #[cfg(not(windows))]
     #[test]
     fn read_frame_splits_a_frame_past_the_buffer_limit_into_strips() {
         let limits = wgpu::Limits {
@@ -3052,10 +3044,7 @@ mod tests {
             ..wgpu::Limits::default()
         };
         let instance = noop_instance_with(Some(limits));
-        let Some(mut renderer) = offscreen_on(&instance, 37, 300, RendererConfig::default()) else {
-            eprintln!("FELIS_TEST_FONT_DIR unset; skipping");
-            return;
-        };
+        let mut renderer = offscreen_on(&instance, 37, 300, RendererConfig::default());
         render_blank(&mut renderer, 1, 2);
         let mut out = Vec::new();
         renderer.read_frame(&mut out).expect("readback in strips");
@@ -3072,6 +3061,7 @@ mod tests {
     /// Pixels need a real adapter; the noop backend never executes a
     /// pass. `background_opacity` must not reach the offscreen clear,
     /// and a reused staging buffer must carry the new frame, not the old.
+    #[cfg(not(windows))]
     #[test]
     #[ignore = "needs a GPU adapter; `just test-gpu` runs it on lavapipe"]
     fn an_offscreen_frame_reads_back_the_opaque_theme_background() {
@@ -3080,10 +3070,7 @@ mod tests {
             background_opacity: Some(0.25),
             ..RendererConfig::default()
         };
-        let Some(mut renderer) = offscreen_on(&new_instance(), 40, 20, cfg) else {
-            eprintln!("FELIS_TEST_FONT_DIR unset; skipping");
-            return;
-        };
+        let mut renderer = offscreen_on(&new_instance(), 40, 20, cfg);
         let mut out = Vec::new();
         render_blank(&mut renderer, 1, 1);
         renderer.read_frame(&mut out).expect("readback");
@@ -3126,15 +3113,12 @@ mod tests {
 
     /// A solid image placed through a 10 x 10 block of placeholder cells
     /// covers its whole fitted rectangle, cell-row seams included.
+    #[cfg(not(windows))]
     #[test]
     #[ignore = "needs a GPU adapter; `just test-gpu` runs it on lavapipe"]
     fn a_placeholder_image_draws_without_a_band_between_cell_rows() {
         use felis_protocol::kitty_graphics::placeholder::{PLACEHOLDER, Rank, diacritic_for};
-        let Some(mut renderer) = offscreen_on(&new_instance(), 8, 8, RendererConfig::default())
-        else {
-            eprintln!("FELIS_TEST_FONT_DIR unset; skipping");
-            return;
-        };
+        let mut renderer = offscreen_on(&new_instance(), 8, 8, RendererConfig::default());
         let cells = 10u16;
         let image = OneImage {
             id: ImageId(1),
