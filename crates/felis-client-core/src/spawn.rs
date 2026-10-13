@@ -241,20 +241,8 @@ mod tests {
     use super::*;
     use felis_protocol::preface::{DaemonPreface, PROTOCOL_MAJOR};
     use felis_transport::{Endpoint, local::Listener, preface::write_daemon_preface};
-    use tempfile::TempDir;
 
-    /// A socket parent must be a `0700` directory this uid owns
-    /// (REQ-107), and `TempDir` follows the process umask.
-    fn private_dir() -> TempDir {
-        let tmp = TempDir::new().unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-
-            std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
-        }
-        tmp
-    }
+    use crate::test_support::{await_socket, private_dir};
 
     #[test]
     fn the_forked_daemon_is_not_handed_the_launchers_readiness_endpoint() {
@@ -823,12 +811,7 @@ mod tests {
         let server_task = tokio::spawn(async move {
             drop(serve_unix(&server_path, caps, Arc::new(Mutex::new(SessionPool::new()))).await);
         });
-        for _ in 0..200 {
-            if path.exists() {
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
+        await_socket(&path).await;
 
         let held = connect_or_spawn_daemon(&path, Offer::ops())
             .await

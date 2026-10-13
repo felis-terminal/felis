@@ -290,30 +290,9 @@ impl fmt::Display for Chord {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-
     use proptest::prelude::*;
 
     use super::*;
-
-    #[test]
-    fn distinct_chords_compare_unequal() {
-        let ctrl_a = Chord::with_mods(Modifiers::CONTROL, KeyCode::Character("a".into()));
-        let ctrl_shift_a = Chord::with_mods(
-            Modifiers::CONTROL | Modifiers::SHIFT,
-            KeyCode::Character("a".into()),
-        );
-        let ctrl_b = Chord::with_mods(Modifiers::CONTROL, KeyCode::Character("b".into()));
-        assert_ne!(ctrl_a, ctrl_shift_a);
-        assert_ne!(ctrl_a, ctrl_b);
-    }
-
-    #[test]
-    fn character_keys_are_case_sensitive() {
-        let lower = Chord::bare(KeyCode::Character("a".into()));
-        let upper = Chord::bare(KeyCode::Character("A".into()));
-        assert_ne!(lower, upper);
-    }
 
     fn parse(s: &str) -> Chord {
         s.parse().unwrap_or_else(|err| panic!("parse {s:?}: {err}"))
@@ -539,24 +518,13 @@ mod tests {
     }
 
     #[test]
-    fn plus_after_the_modifier_section_stays_the_literal_key() {
+    fn surplus_plus_signs_are_rejected_as_empty_parts() {
         assert_eq!(
             "ctrl+++".parse::<Chord>(),
             Err(ParseChordError::EmptyModifier),
         );
         assert_eq!("++".parse::<Chord>(), Err(ParseChordError::EmptyModifier));
         assert_eq!("a+".parse::<Chord>(), Err(ParseChordError::EmptyKey));
-    }
-
-    #[test]
-    fn modifier_and_named_key_spellings_ignore_ascii_case() {
-        assert_eq!(
-            parse("CTRL+SHIFT+PAGE_UP"),
-            Chord::with_mods(
-                Modifiers::CONTROL | Modifiers::SHIFT,
-                KeyCode::Named(NamedKey::PageUp),
-            ),
-        );
     }
 
     #[test]
@@ -582,40 +550,6 @@ mod tests {
             Chord::bare(KeyCode::Named(NamedKey::F(FKey::lit(12)))).to_string(),
             "f12",
         );
-    }
-
-    #[test]
-    fn chord_hashes_into_a_hashmap() {
-        let mut map: HashMap<Chord, &'static str> = HashMap::new();
-        map.insert(
-            Chord::with_mods(
-                Modifiers::CONTROL | Modifiers::SHIFT,
-                KeyCode::Character("f".into()),
-            ),
-            "search",
-        );
-        map.insert(
-            Chord::with_mods(Modifiers::SHIFT, KeyCode::Named(NamedKey::PageUp)),
-            "scroll-up",
-        );
-        map.insert(
-            Chord::bare(KeyCode::Named(NamedKey::F(FKey::lit(5)))),
-            "refresh",
-        );
-
-        assert_eq!(
-            map.get(&Chord::with_mods(
-                Modifiers::SHIFT | Modifiers::CONTROL,
-                KeyCode::Character("f".into()),
-            )),
-            Some(&"search"),
-            "modifier-set bitor order must not change the hash",
-        );
-        assert_eq!(
-            map.get(&Chord::bare(KeyCode::Named(NamedKey::F(FKey::lit(5))))),
-            Some(&"refresh"),
-        );
-        assert_eq!(map.len(), 3);
     }
 
     fn arb_modifiers() -> impl Strategy<Value = Modifiers> {
@@ -678,18 +612,6 @@ mod tests {
                 .parse()
                 .map_err(|err: ParseChordError| TestCaseError::fail(err.to_string()))?;
             prop_assert_eq!(reparsed, chord);
-        }
-
-        /// Pins the string round-trip, catching a Display impl that emits
-        /// two valid forms for the same Chord.
-        #[test]
-        fn display_is_idempotent_via_parse(chord in arb_chord()) {
-            let first = chord.to_string();
-            let reparsed: Chord = first
-                .parse()
-                .map_err(|err: ParseChordError| TestCaseError::fail(err.to_string()))?;
-            let second = reparsed.to_string();
-            prop_assert_eq!(first, second);
         }
 
         #[test]

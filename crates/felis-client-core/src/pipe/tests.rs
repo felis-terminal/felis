@@ -163,16 +163,30 @@ fn a_user_argv_is_passed_through_untouched() {
 }
 
 #[test]
-fn an_empty_argv_falls_back_to_a_pager() {
+fn an_empty_argv_runs_the_default_pager_on_the_region() {
     let _staging = staging_lock();
-    let spawn = prepare_spawn(Some(b"x\n"), &[], dims(), None, &Origin::default()).unwrap();
-    let temp = spawn.region.as_ref().unwrap().path().to_path_buf();
+    let spawn = prepare_spawn(
+        Some(b"x\n"),
+        &[],
+        dims(),
+        Some(position()),
+        &Origin::default(),
+    )
+    .unwrap();
+    let temp = spawn
+        .region
+        .as_ref()
+        .unwrap()
+        .path()
+        .to_str()
+        .unwrap()
+        .to_owned();
 
-    assert_ne!(spawn.args.command, "");
-    assert_eq!(
-        spawn.args.args.last().map(String::as_str),
-        Some(temp.to_string_lossy().as_ref())
-    );
+    let mut want = default_pager(Some(position()));
+    want.push(temp);
+    let mut got = vec![spawn.args.command.clone()];
+    got.extend(spawn.args.args.iter().cloned());
+    assert_eq!(got, want);
 }
 
 #[test]

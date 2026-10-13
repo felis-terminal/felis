@@ -100,25 +100,18 @@ async fn a_transient_carries_the_region_and_the_origin_context_to_the_child() {
     conn.create_with(prepared.args).await.unwrap();
 
     let text = read_when_written(&report).await;
-    assert!(
-        text.contains("0123456789abcdef"),
-        "the origin session id must reach the child: {text}"
-    );
-    assert!(
-        text.contains("user@devbox"),
-        "the origin carrier must reach the child: {text}"
-    );
-    assert!(
-        text.contains("file://devbox/srv/app"),
-        "the origin's OSC 7 report must reach the child verbatim: {text}"
-    );
-    assert!(
-        text.contains("42"),
-        "the region anchor must reach the child: {text}"
-    );
-    assert!(
-        text.contains("region line"),
-        "the child must be able to read the region file: {text}"
+    let session_hex = felis_protocol::SessionHex(origin.session_id).to_string();
+    assert_eq!(
+        text.lines().collect::<Vec<_>>(),
+        [
+            session_hex.as_str(),
+            "user@devbox",
+            "file://devbox/srv/app",
+            "42",
+            "region line",
+            "END",
+        ],
+        "the origin context, the region anchor, and the region file must reach the child",
     );
 }
 
@@ -150,8 +143,9 @@ async fn a_run_transient_reaches_the_child_with_the_argv_unchanged() {
     conn.create_with(prepared.args).await.unwrap();
 
     let text = read_when_written(&report).await;
-    assert!(
-        text.contains("args=[]"),
-        "a regionless run must append nothing to the argv: {text}"
+    assert_eq!(
+        text.lines().collect::<Vec<_>>(),
+        ["args=[]", "END"],
+        "a regionless run must append nothing to the argv",
     );
 }

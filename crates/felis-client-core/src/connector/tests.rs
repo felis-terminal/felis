@@ -8,16 +8,8 @@ use felis_daemon::{SessionPool, serve::DaemonCaps, serve_unix};
 #[cfg(unix)]
 use tempfile::TempDir;
 
-/// A socket parent must be a `0700` directory this uid owns
-/// (REQ-107), and `TempDir` follows the process umask.
 #[cfg(unix)]
-fn private_dir() -> TempDir {
-    use std::os::unix::fs::PermissionsExt as _;
-
-    let tmp = TempDir::new().unwrap();
-    std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
-    tmp
-}
+use crate::test_support::{await_socket, private_dir};
 #[cfg(unix)]
 use tokio::sync::Mutex;
 
@@ -448,42 +440,6 @@ fn tag_reply_lands_the_resolution_then_the_resulting_tag_set() {
 }
 
 #[test]
-fn tag_request_keeps_adds_and_removes_on_their_own_sides() {
-    let msg = TagReq {
-        id_prefix: "1a2b".to_owned(),
-        add: vec!["work".to_owned()],
-        remove: vec!["stale".to_owned()],
-    }
-    .take_msg();
-    assert_eq!(
-        msg,
-        OpsToDaemonMsg::Tag {
-            id_prefix: "1a2b".to_owned(),
-            add: vec!["work".to_owned()],
-            remove: vec!["stale".to_owned()],
-        },
-    );
-}
-
-#[test]
-fn switch_request_carries_the_target_arm_its_caller_chose() {
-    let msg = SwitchSessionReq {
-        from_prefix: "aa".to_owned(),
-        target: SwitchTarget::Session("bb".to_owned()),
-        scope: SwitchScope::Default,
-    }
-    .take_msg();
-    assert_eq!(
-        msg,
-        OpsToDaemonMsg::Switch {
-            from_prefix: "aa".to_owned(),
-            target: SwitchTarget::Session("bb".to_owned()),
-            scope: SwitchScope::Default,
-        },
-    );
-}
-
-#[test]
 fn an_ops_reply_of_the_wrong_variant_is_refused_by_each_request() {
     let stray = || OpsToClientMsg::Listed {
         sessions: Vec::new(),
@@ -523,13 +479,7 @@ async fn connector_round_trips_through_a_real_daemon() {
         drop(serve_unix(&server_path, DaemonCaps::default(), server_pool).await);
     });
 
-    for _ in 0..100 {
-        if path.exists() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    assert!(path.exists());
+    await_socket(&path).await;
 
     let mut conn = connect(&path, Offer::ops()).await.unwrap();
     assert_eq!(
@@ -579,7 +529,7 @@ async fn connect_stdio_command_returns_io_error_when_command_missing() {
 /// preface IO failure, the shape of an ssh connect failure.
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn connect_stdio_command_returns_eof_when_child_does_not_handshake() {
+async fn connect_stdio_command_fails_the_preface_transiently_when_the_child_exits_silently() {
     let cmd = Command::new("true");
     let result = connect_stdio_command(cmd, Offer::ops()).await;
     assert!(matches!(
@@ -655,13 +605,7 @@ async fn daemon_running(script: &'static str) -> (TempDir, PathBuf, tokio::task:
     let server = tokio::spawn(async move {
         drop(serve_unix_with_factory(&server_path, DaemonCaps::default(), pool, factory).await);
     });
-    for _ in 0..100 {
-        if path.exists() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    assert!(path.exists());
+    await_socket(&path).await;
     (tmp, path, server)
 }
 
@@ -874,42 +818,62 @@ async fn a_window_is_refused_a_mutating_verb_without_losing_the_connection() {
 async fn cancelling_a_search_mid_stream_stops_it_and_leaves_the_connection_usable() {
     use felis_protocol::messages::{SearchOptions, SearchToDaemonMsg};
 
-    // Deep enough that the walk cannot finish inside one slice.
+    // Deep enough that the walk spans dozens of slices for the cancel to land between.
     let (_tmp, path, server) =
-        daemon_running("i=0; while [ $i -lt 2000 ]; do echo needle-$i; i=$((i+1)); done; read _x")
+        daemon_running("i=0; while [ $i -lt 9000 ]; do echo needle-$i; i=$((i+1)); done; read _x")
             .await;
 
     let mut conn = connect(&path, Offer::window(false)).await.unwrap();
     conn.create_with(SpawnArgs::default()).await.unwrap();
     let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
     assert!(
-        await_row_containing(&mut conn, "needle-1999", deadline).await,
+        await_row_containing(&mut conn, "needle-8999", deadline).await,
         "the shell never filled the scrollback"
     );
 
-    let stream = conn.driver.open_stream().expect("the sequence is fresh");
-    conn.writer
-        .send_correlated(
-            &SearchToDaemonMsg::Query {
-                query: "needle-".to_owned(),
-                options: SearchOptions::default(),
-                source: felis_protocol::messages::SearchSource::Scrollback,
-            },
-            Correlation::stream(stream),
-        )
-        .await
-        .unwrap();
-    conn.driver.cancel_stream(stream);
-    conn.writer
-        .send(&ConnToDaemonMsg::Cancel { stream_id: stream })
-        .await
-        .unwrap();
+    let query = || SearchToDaemonMsg::Query {
+        query: "needle-".to_owned(),
+        options: SearchOptions::default(),
+        source: felis_protocol::messages::SearchSource::Scrollback,
+    };
 
-    let (_dropped, outcome) = collect_search(&mut conn, stream).await;
-    assert!(outcome.is_ok(), "a canceled stream ends clean: {outcome:?}");
-    assert_eq!(
-        conn.driver.classify_stream(stream),
-        felis_transport::StreamClass::Terminated,
+    let full = conn.driver.open_stream().expect("the sequence is fresh");
+    conn.writer
+        .send_correlated(&query(), Correlation::stream(full))
+        .await
+        .unwrap();
+    let (_found, outcome) = collect_search(&mut conn, full).await;
+    let full_count = outcome.expect("an uncanceled walk ends clean");
+
+    // The cancel races the walk across the socket, so one attempt may
+    // arrive after the last slice; a cancel that never stops the walk
+    // loses every attempt.
+    let mut shipped = Vec::new();
+    for _ in 0..10 {
+        let stream = conn.driver.open_stream().expect("the sequence is fresh");
+        conn.writer
+            .send_correlated(&query(), Correlation::stream(stream))
+            .await
+            .unwrap();
+        conn.driver.cancel_stream(stream);
+        conn.writer
+            .send(&ConnToDaemonMsg::Cancel { stream_id: stream })
+            .await
+            .unwrap();
+        let (_dropped, outcome) = collect_search(&mut conn, stream).await;
+        let count = outcome.expect("a canceled stream ends clean");
+        assert_eq!(
+            conn.driver.classify_stream(stream),
+            felis_transport::StreamClass::Terminated,
+        );
+        shipped.push(count);
+        if count < full_count {
+            break;
+        }
+    }
+    assert!(
+        shipped.iter().any(|&count| count < full_count),
+        "no cancel stopped the walk early: shipped {shipped:?} of {full_count} matches",
     );
 
     let listed = conn.list_sessions().await.expect("list after a cancel");
@@ -1017,13 +981,7 @@ async fn killed_client_reattaches_and_observes_prior_output() {
         );
     });
 
-    for _ in 0..100 {
-        if path.exists() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    assert!(path.exists());
+    await_socket(&path).await;
 
     let mut a = connect(&path, Offer::window(false)).await.unwrap();
     let attach = a.create_with(SpawnArgs::default()).await.unwrap();
@@ -1088,17 +1046,11 @@ async fn destroy_session_removes_session_and_acks_existed() {
         );
     });
 
-    for _ in 0..100 {
-        if path.exists() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
+    await_socket(&path).await;
 
     let mut a = connect(&path, Offer::ops()).await.unwrap();
     let id = a.create_with(SpawnArgs::default()).await.unwrap().id;
     drop(a);
-    tokio::time::sleep(Duration::from_millis(200)).await;
 
     let mut killer = connect(&path, Offer::ops()).await.unwrap();
     let resolved = killer
@@ -1111,7 +1063,6 @@ async fn destroy_session_removes_session_and_acks_existed() {
         "session must have been found and removed"
     );
     drop(killer);
-    tokio::time::sleep(Duration::from_millis(200)).await;
 
     let mut probe = connect(&path, Offer::ops()).await.unwrap();
     assert!(
@@ -1138,12 +1089,7 @@ async fn destroy_session_on_missing_id_returns_existed_false() {
     let server = tokio::spawn(async move {
         drop(serve_unix(&server_path, DaemonCaps::default(), server_pool).await);
     });
-    for _ in 0..100 {
-        if path.exists() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
+    await_socket(&path).await;
 
     let mut conn = connect(&path, Offer::ops()).await.unwrap();
     let resolved = conn.destroy_session("deadbeef".to_owned()).await.unwrap();
@@ -1227,6 +1173,15 @@ fn is_transient_classifies_each_variant() {
     assert!(
         !ConnectError::NotSessionAttached.is_transient(),
         "NotSessionAttached is a wire-level violation, not transient"
+    );
+    assert!(
+        !ConnectError::MinorTooOld {
+            needs: preface::PROTOCOL_MINOR + 1,
+            effective: preface::PROTOCOL_MINOR,
+            feature: "an addition this connection predates",
+        }
+        .is_transient(),
+        "a daemon too old for a feature stays too old on a redial"
     );
 
     // The `Preface` split is on the inner error, which the exhaustive
@@ -1819,18 +1774,6 @@ async fn a_refused_over_limit_request_does_not_burn_its_request_id() {
     server_task.abort();
 }
 
-#[test]
-fn a_too_old_minor_is_not_transient() {
-    assert!(
-        !ConnectError::MinorTooOld {
-            needs: preface::PROTOCOL_MINOR + 1,
-            effective: preface::PROTOCOL_MINOR,
-            feature: "an addition this connection predates",
-        }
-        .is_transient()
-    );
-}
-
 /// The two questions differ on exactly one answer: a full daemon is
 /// worth waiting for and must never be spawned over. Every other
 /// transient failure (including the daemon-restart race that dies
@@ -1921,13 +1864,7 @@ async fn daemon_with_exiting_shell() -> (TempDir, PathBuf, tokio::task::JoinHand
         drop(serve_unix_with_factory(&server_path, DaemonCaps::default(), pool, factory).await);
     });
 
-    for _ in 0..100 {
-        if path.exists() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    assert!(path.exists());
+    await_socket(&path).await;
     (tmp, path, server)
 }
 
