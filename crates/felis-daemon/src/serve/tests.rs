@@ -3931,8 +3931,22 @@ async fn attach_ready_reports_the_session_as_no_longer_idle() {
     let pool = Arc::new(Mutex::new(SessionPool::new()));
     spawn_daemon(&path, pool.clone(), shell_factory("read _x")).await;
 
-    let id = create_parked_session(pool).await;
-    tokio::time::sleep(Duration::from_millis(1500)).await;
+    let id = create_parked_session(pool.clone()).await;
+    // A parked row already reports `Some(0)`, so the premise is the
+    // detach having landed, not any length of idleness.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while pool
+        .lock()
+        .await
+        .handle_cloned(SessionId(id))
+        .is_none_or(|handle| handle.meta_snapshot().subscribers != 0)
+    {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the session never parked after its creator left",
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
 
     let (read_half, write_half) = connect(&path).await.unwrap();
     let (mut reader, mut writer) = framed(read_half, write_half).await;
