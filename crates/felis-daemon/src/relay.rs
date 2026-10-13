@@ -544,7 +544,7 @@ mod unix_tests {
     }
 
     /// A cold endpoint is the one thing that licenses a spawn.
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn a_cold_socket_spawns_where_it_resolved() {
         let dir = private_dir();
         let path = dir.path().join("cold.sock");
