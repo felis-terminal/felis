@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
-use felis_client_core::ShadowScreen;
+use felis_client_core::{Offer, ShadowScreen, connect};
 
 mod common;
 use common::{daemon_bin, resolve_binary, shadow_contains, wait_connectable};
@@ -382,7 +382,11 @@ async fn ssh_link_drop_preserves_the_persistent_daemon() {
     let Some(fx) = SshFixture::spawn().await else {
         return;
     };
-    let (socket, _daemon) = fx.spawn_persistent_daemon().await;
+    let Some(cat) = resolve_binary("cat") else {
+        eprintln!("skipping: cat not on PATH");
+        return;
+    };
+    let (socket, mut daemon) = fx.spawn_persistent_daemon().await;
 
     let remote = format!("'{}' relay --socket '{}'", daemon_bin(), socket.display());
     let mut cmd = fx.ssh_command(&remote);
@@ -396,22 +400,54 @@ async fn ssh_link_drop_preserves_the_persistent_daemon() {
     let mut reader = FrameReader::new(read_half);
 
     handshake(&mut reader, &mut writer).await;
+    writer
+        .send(&SessionToDaemonMsg::Create {
+            args: SpawnArgs {
+                command: cat.display().to_string(),
+                ..SpawnArgs::default()
+            },
+        })
+        .await
+        .unwrap();
+    let id = match next_control::<_, SessionToClientMsg>(
+        &mut reader,
+        MessageKind::Session,
+        "SessionCreated",
+    )
+    .await
+    {
+        SessionToClientMsg::Created { info } => info.id,
+        other => panic!("expected SessionToClientMsg::Created, got {other:?}"),
+    };
 
     child.kill().await.unwrap();
     drop(writer);
     drop(reader);
 
-    let survived = tokio::time::timeout(Duration::from_secs(10), async {
-        loop {
-            if tokio::net::UnixStream::connect(&socket).await.is_ok() {
-                return;
-            }
-            tokio::time::sleep(Duration::from_millis(100)).await;
+    // The relay's daemon connection closing is what detaches the
+    // session, so an empty attachment list means the teardown reached
+    // the daemon.
+    let mut ops = connect(&socket, Offer::ops()).await.unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    let session = loop {
+        let sessions = ops.list_sessions().await.unwrap();
+        let session = sessions
+            .into_iter()
+            .find(|s| s.id == id)
+            .expect("the session outlives the dropped link");
+        if session.attachments.is_empty() {
+            break session;
         }
-    })
-    .await;
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the relay's attachment never left the daemon: {session:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+
+    assert!(!session.exited, "the session's shell died with the link");
     assert!(
-        survived.is_ok(),
-        "persistent daemon stopped answering after the SSH link dropped"
+        daemon.try_wait().unwrap().is_none(),
+        "the persistent daemon exited after the SSH link dropped"
     );
 }

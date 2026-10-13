@@ -913,9 +913,10 @@ async fn explicit_su_directive_emits_scrolled_frame() {
 }
 
 /// nvim's TUI startup (`-c qall!`) runs through the cursor and cell
-/// paths.
+/// paths. Whether it flips the alt screen is version-dependent (some
+/// `nvim -u NONE` builds skip ?1049), so that is not asserted.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn nvim_alt_screen_entry_is_observed() {
+async fn nvim_startup_emits_cursor_and_cell_frames() {
     let Some(nvim) = skip_if_missing("nvim") else {
         return;
     };
@@ -929,33 +930,17 @@ async fn nvim_alt_screen_entry_is_observed() {
 
     let session = RealAppSession::spawn(cmd, false).await;
 
-    session
+    let observed = session
         .wait_for_counters(
             |c| c.count("CursorState") >= 1 && c.count("RowDelta") >= 1,
             Duration::from_secs(5),
         )
         .await;
-
-    let counters = session.counters();
-    eprintln!("nvim counters: {counters:?}");
-
-    // The alt-screen flip is version-dependent (some `nvim -u NONE`
-    // builds skip ?1049), so it is logged, not asserted.
     assert!(
-        counters.count("CursorState") >= 1,
-        "expected ≥ 1 CursorState frame from nvim startup; got {counters:?}",
+        observed,
+        "expected ≥ 1 CursorState and ≥ 1 cell-bearing RowDelta frame from nvim startup; got {:?}",
+        session.counters(),
     );
-    assert!(
-        counters.count("RowDelta") >= 1,
-        "expected ≥ 1 cell-bearing frame from nvim; got {counters:?}",
-    );
-    let alt = session.with_shadow(ShadowScreen::alt_screen);
-    if !alt {
-        eprintln!(
-            "note: nvim startup did not flip alt_screen; this version may use a different \
-             enter sequence (counters: {counters:?})",
-        );
-    }
 
     session.shutdown().await;
 }

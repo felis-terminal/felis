@@ -903,30 +903,12 @@ mod tests {
     }
 
     #[test]
-    fn arrow_keys_emit_csi_cursor_sequences() {
-        let cases = [
+    fn unmodified_cursor_and_editing_keys_keep_bare_legacy_form() {
+        for (key, expected) in [
             (NamedKey::ArrowUp, &b"\x1b[A"[..]),
             (NamedKey::ArrowDown, &b"\x1b[B"[..]),
             (NamedKey::ArrowRight, &b"\x1b[C"[..]),
             (NamedKey::ArrowLeft, &b"\x1b[D"[..]),
-        ];
-        for (key, expected) in cases {
-            let bytes = encode_no_app_cursor(
-                &Key::Named(key),
-                None,
-                Modifiers::empty(),
-                true,
-                KittyKbdFlags::empty(),
-            );
-            assert_eq!(bytes.as_deref(), Some(expected), "{key:?}");
-        }
-    }
-
-    #[test]
-    fn unmodified_arrow_keys_keep_bare_legacy_form() {
-        for (key, expected) in [
-            (NamedKey::ArrowUp, &b"\x1b[A"[..]),
-            (NamedKey::ArrowDown, &b"\x1b[B"[..]),
             (NamedKey::Home, &b"\x1b[H"[..]),
             (NamedKey::End, &b"\x1b[F"[..]),
             (NamedKey::PageUp, &b"\x1b[5~"[..]),

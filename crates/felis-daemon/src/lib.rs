@@ -422,7 +422,7 @@ mod tests {
         apply_env_policy(
             &mut cmd,
             0xfe115,
-            &TermHatch::from_daemon_env(),
+            &TermHatch::default(),
             endpoint.map(std::ffi::OsStr::new),
             lang,
         );
@@ -488,7 +488,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn apply_env_policy_inherits_parent_env_by_default() {
+    async fn apply_env_policy_passes_an_unlisted_variable_through_to_the_child() {
         let marker = "felis-inherit-test-marker-value";
         let text = read_child_env(None, |cmd| {
             cmd.env("FELIS_INHERIT_TEST", marker);
