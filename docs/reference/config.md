@@ -67,7 +67,9 @@ A local repository path may also be referenced: `#:schema <path>/crates/felis-cl
 [font]
 # Font family name. Omitted: the system monospace font. On Linux that
 # is fontconfig's `monospace` match (`fc-match monospace`), and a name is
-# resolved through fontconfig, so `fonts.conf` aliases apply. Elsewhere,
+# resolved through fontconfig, so `fonts.conf` aliases apply; bitmap
+# (PCF, BDF) and Type 1 faces are left out, so a family with only such
+# faces counts as not installed. Elsewhere,
 # when the system's `monospace` alias names a family that is not
 # installed, the first installed of DejaVu Sans Mono, Liberation Mono,
 # Noto Sans Mono, Ubuntu Mono, Menlo, and Consolas; failing those, the
@@ -289,7 +291,7 @@ Diagnostics surface at two stages:
 | Path-valued key target missing                           | Skips field and logs warning; remaining configuration applies.      | load   |
 | `font.size_px` non-positive or NaN                       | Falls back to default with warning.                                 | load   |
 | `font.size_px` outside `[4.0, 72.0]`                     | Clamped into valid range with warning.                              | load   |
-| `font.family` unavailable                                | Falls back to system monospace with warning.                        | window |
+| `font.family` unavailable or its face unreadable         | Falls back to system monospace with warning.                        | window |
 | No monospace face installed                              | Window fails to open with `no monospace font installed`.            | window |
 | `libfontconfig.so.1` not loadable (Linux)                | Window fails to open with a `fontconfig:` error naming the library. | window |
 | `font.fallback` entry missing                            | Skips missing entry; remainder of chain applies.                    | window |

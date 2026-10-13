@@ -16,8 +16,8 @@ use fontconfig_sys::{
     Fc, FcBool, FcCharSet, FcConfig, FcFontSet, FcMatchPattern, FcPattern, FcResult, FcResultMatch,
     FcSetApplication, FcSetSystem,
     constants::{
-        FC_CHARSET, FC_COLOR, FC_FAMILY, FC_FILE, FC_INDEX, FC_LANG, FC_SLANT, FC_SLANT_ITALIC,
-        FC_SLANT_ROMAN, FC_WEIGHT,
+        FC_CHARSET, FC_COLOR, FC_FAMILY, FC_FILE, FC_FONTFORMAT, FC_INDEX, FC_LANG, FC_SLANT,
+        FC_SLANT_ITALIC, FC_SLANT_ROMAN, FC_WEIGHT,
     },
 };
 
@@ -41,6 +41,10 @@ const VARIABLE_DEFAULT_INSTANCE: u32 = 0x8000;
 /// every name gets.
 const UNKNOWN_FAMILY: &str = "felis-unknown-family-sentinel";
 
+/// The `fontformat` of the sfnt containers the loader parses; fontconfig
+/// also lists PCF, BDF and Type 1 faces it cannot.
+const LOADABLE_FORMATS: [&CStr; 2] = [c"TrueType", c"CFF"];
+
 /// Loaded once per process; never unloaded, so the function pointers in
 /// `Fc` stay valid for `'static`.
 fn library() -> Result<&'static Fc, ShapingError> {
@@ -63,7 +67,11 @@ pub(crate) struct Fontconfig {
     lang: Option<CString>,
     faces: RefCell<Vec<Face>>,
     ids: RefCell<HashMap<FaceKey, usize>>,
-    /// Every installed face under each family name it carries, so a
+    /// The installed faces the loader can parse, matched and sorted in
+    /// place of the config's own sets so a face it cannot draw is never
+    /// chosen, as if it were not installed.
+    loadable: OnceCell<FontSet<'static>>,
+    /// Every loadable face under each family name it carries, so a
     /// fallback's styles are matched among its family alone instead of
     /// against the whole font set once per style.
     families: OnceCell<HashMap<Vec<u8>, FontSet<'static>>>,
@@ -102,7 +110,23 @@ struct FontSet<'a> {
     raw: *mut FcFontSet,
 }
 
-impl FontSet<'_> {
+impl<'a> FontSet<'a> {
+    fn new(lib: &'a Fc) -> Self {
+        // SAFETY: no preconditions; the set is owned by the guard.
+        let raw = unsafe { (lib.FcFontSetCreate)() };
+        assert!(!raw.is_null(), "FcFontSetCreate failed");
+        Self { lib, raw }
+    }
+
+    fn add(&self, pattern: *mut FcPattern) {
+        // SAFETY: both are live; the reference taken here is the one the
+        // set releases when destroyed.
+        unsafe {
+            (self.lib.FcPatternReference)(pattern);
+            (self.lib.FcFontSetAdd)(self.raw, pattern);
+        }
+    }
+
     fn patterns(&self) -> impl Iterator<Item = *mut FcPattern> + '_ {
         // SAFETY: `raw` is a non-null set fontconfig returned; a non-empty
         // set's `fonts` holds `nfont` patterns that live as long as the
@@ -194,6 +218,7 @@ impl Fontconfig {
             lang,
             faces: RefCell::new(Vec::new()),
             ids: RefCell::new(HashMap::new()),
+            loadable: OnceCell::new(),
             families: OnceCell::new(),
             unknown: RefCell::new(HashMap::new()),
         }
@@ -228,10 +253,23 @@ impl Fontconfig {
     }
 
     fn best_match(&self, query: &Pattern<'_>) -> Option<Pattern<'_>> {
+        self.match_in(self.loadable(), query)
+    }
+
+    fn match_in(&self, set: &FontSet<'_>, query: &Pattern<'_>) -> Option<Pattern<'_>> {
+        let mut sets = [set.raw];
         let mut result: FcResult = 0;
-        // SAFETY: `config` and `query` are live; the match is owned by
-        // the returned guard.
-        let raw = unsafe { (self.lib.FcFontMatch)(self.config, query.raw, &raw mut result) };
+        // SAFETY: `config`, the set and `query` are live; the match is
+        // owned by the returned guard.
+        let raw = unsafe {
+            (self.lib.FcFontSetMatch)(
+                self.config,
+                sets.as_mut_ptr(),
+                1,
+                query.raw,
+                &raw mut result,
+            )
+        };
         (!raw.is_null()).then_some(Pattern { lib: self.lib, raw })
     }
 
@@ -249,7 +287,9 @@ impl Fontconfig {
             (self.lib.FcPatternAddString)(raw, FC_FAMILY.as_ptr(), name.as_ptr().cast());
             let objects = (self.lib.FcObjectSetCreate)();
             (self.lib.FcObjectSetAdd)(objects, FC_FILE.as_ptr());
-            let set = (self.lib.FcFontList)(self.config, pattern.raw, objects);
+            let mut sets = [self.loadable().raw];
+            let set =
+                (self.lib.FcFontSetList)(self.config, sets.as_mut_ptr(), 1, pattern.raw, objects);
             (self.lib.FcObjectSetDestroy)(objects);
             if set.is_null() {
                 return false;
@@ -299,10 +339,10 @@ impl Fontconfig {
         unsafe { (self.lib.FcPatternEqual)(stripped.raw, sentinel.raw) != FC_FALSE }
     }
 
-    fn families(&self) -> &HashMap<Vec<u8>, FontSet<'static>> {
-        self.families.get_or_init(|| {
+    fn loadable(&self) -> &FontSet<'static> {
+        self.loadable.get_or_init(|| {
             let lib = self.lib;
-            let mut families: HashMap<Vec<u8>, FontSet<'static>> = HashMap::new();
+            let loadable = FontSet::new(lib);
             for which in [FcSetSystem, FcSetApplication] {
                 // SAFETY: `config` is live; the set stays owned by it.
                 let raw = unsafe { (lib.FcConfigGetFonts)(self.config, which) };
@@ -311,23 +351,27 @@ impl Fontconfig {
                 }
                 let installed = ManuallyDrop::new(FontSet { lib, raw });
                 for pattern in installed.patterns() {
-                    for family in (0..).map_while(|n| self.string_at(pattern, FC_FAMILY, n)) {
-                        let set = families
-                            .entry(family.to_bytes().to_vec())
-                            .or_insert_with(|| {
-                                // SAFETY: no preconditions; the set is
-                                // owned by the guard.
-                                let raw = unsafe { (lib.FcFontSetCreate)() };
-                                assert!(!raw.is_null(), "FcFontSetCreate failed");
-                                FontSet { lib, raw }
-                            });
-                        // SAFETY: both are live; the reference taken here
-                        // is the one the set releases when destroyed.
-                        unsafe {
-                            (lib.FcPatternReference)(pattern);
-                            (lib.FcFontSetAdd)(set.raw, pattern);
-                        }
+                    if self
+                        .string(pattern, FC_FONTFORMAT)
+                        .is_some_and(|format| LOADABLE_FORMATS.contains(&format))
+                    {
+                        loadable.add(pattern);
                     }
+                }
+            }
+            loadable
+        })
+    }
+
+    fn families(&self) -> &HashMap<Vec<u8>, FontSet<'static>> {
+        self.families.get_or_init(|| {
+            let mut families: HashMap<Vec<u8>, FontSet<'static>> = HashMap::new();
+            for pattern in self.loadable().patterns() {
+                for family in (0..).map_while(|n| self.string_at(pattern, FC_FAMILY, n)) {
+                    families
+                        .entry(family.to_bytes().to_vec())
+                        .or_insert_with(|| FontSet::new(self.lib))
+                        .add(pattern);
                 }
             }
             families
@@ -432,20 +476,7 @@ impl FaceProvider for Fontconfig {
         }
         let set = self.families().get(family.as_bytes())?;
         let query = self.query(family, weight, italic);
-        let mut sets = [set.raw];
-        let mut result: FcResult = 0;
-        // SAFETY: `config`, the set and `query` are live; the match is
-        // owned by the guard.
-        let raw = unsafe {
-            (self.lib.FcFontSetMatch)(
-                self.config,
-                sets.as_mut_ptr(),
-                1,
-                query.raw,
-                &raw mut result,
-            )
-        };
-        let matched = (!raw.is_null()).then_some(Pattern { lib: self.lib, raw })?;
+        let matched = self.match_in(set, &query)?;
         let found = self.face_of(matched.raw)?;
         Some(self.record(found))
     }
@@ -477,7 +508,7 @@ impl FaceProvider for Fontconfig {
     }
 
     /// fontconfig's ranked fallback, cut to the faces that add coverage
-    /// within their presentation class. Untrimmed: `FcFontSort`'s trim
+    /// within their presentation class. Untrimmed: `FcFontSetSort`'s trim
     /// drops a color face whose code points an earlier mono face covers.
     /// The primary's face stays in: a bold or italic override of another
     /// family may lack glyphs it has.
@@ -488,12 +519,16 @@ impl FaceProvider for Fontconfig {
     ) -> Option<Vec<CascadeFace<usize>>> {
         let lib = self.lib;
         let query = self.query(requested, REGULAR_WEIGHT, false);
+        let mut sets = [self.loadable().raw];
         let mut result: FcResult = 0;
-        // SAFETY: `config` and `query` are live; the set is owned by the
-        // guard and every charset is created and destroyed here.
+        // SAFETY: `config`, the set and `query` are live; the sorted set
+        // is owned by the guard and every charset is created and
+        // destroyed here.
         let (sorted, mono, color) = unsafe {
-            let raw = (lib.FcFontSort)(
+            let raw = (lib.FcFontSetSort)(
                 self.config,
+                sets.as_mut_ptr(),
+                1,
                 query.raw,
                 FC_FALSE,
                 ptr::null_mut(),
@@ -703,6 +738,51 @@ mod tests {
         assert_eq!(family(&fc, neon), TEST_FONT_FAMILY);
         assert_eq!(fc.find_face("Monaspace Neonn", REGULAR_WEIGHT, false), None);
         assert_eq!(fc.find_face("Monaspace Neonn", 700, true), None);
+    }
+
+    #[test]
+    fn a_family_with_only_bitmap_faces_is_not_installed() {
+        const BDF: &str = "STARTFONT 2.1
+FONT -felis-Felis Bitmap-Medium-R-Normal--16-160-75-75-C-80-ISO10646-1
+SIZE 16 75 75
+FONTBOUNDINGBOX 8 1 0 0
+STARTPROPERTIES 3
+FAMILY_NAME \"Felis Bitmap\"
+FONT_ASCENT 1
+FONT_DESCENT 0
+ENDPROPERTIES
+CHARS 1
+STARTCHAR A
+ENCODING 65
+SWIDTH 500 0
+DWIDTH 8 0
+BBX 8 1 0 0
+BITMAP
+7E
+ENDCHAR
+ENDFONT
+";
+        let Some(fc) = pinned("") else { return };
+        let dir = std::env::temp_dir().join(format!("felis-bitmap-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("the font dir creates");
+        std::fs::write(dir.join("felis-bitmap.bdf"), BDF).expect("the face writes");
+        let added = c_path(&dir);
+        // SAFETY: `config` is live; `added` outlives the call.
+        let scanned =
+            unsafe { (fc.lib.FcConfigAppFontAddDir)(fc.config, added.as_ptr().cast()) } != FC_FALSE;
+        std::fs::remove_dir_all(&dir).ok();
+        assert!(scanned);
+        assert_eq!(fc.find_face("Felis Bitmap", REGULAR_WEIGHT, false), None);
+        let stack = FontStack::auto_discover_in(
+            &fc,
+            Some("Felis Bitmap"),
+            &[],
+            &[],
+            &StyleFaces::default(),
+        )
+        .expect("the monospace face loads");
+        let (_, monospace) = fc.default_monospace().expect("a monospace face");
+        assert!(stack.primary().display_name().starts_with(&monospace));
     }
 
     #[test]

@@ -850,21 +850,32 @@ impl FontStack {
         explicit_fallbacks: &[FaceSpec],
         styles: &StyleFaces<'_>,
     ) -> Result<Self, ShapingError> {
-        let found = primary_family
-            .and_then(|name| Some((db.find_face(name, REGULAR_WEIGHT, false)?, name)));
-        let (regular_id, base_family, requested) = if let Some((id, name)) = found {
-            (id, name.to_owned(), name)
-        } else {
-            if let Some(name) = primary_family {
+        let named = primary_family.and_then(|name| {
+            let Some(id) = db.find_face(name, REGULAR_WEIGHT, false) else {
                 warn!(
                     family = name,
                     "font family not found; falling back to monospace"
                 );
+                return None;
+            };
+            match Font::load_face_id(db, id) {
+                Ok(loaded) => Some((id, loaded, name)),
+                Err(error) => {
+                    warn!(
+                        family = name,
+                        %error,
+                        "font family failed to load; falling back to monospace"
+                    );
+                    None
+                }
             }
+        });
+        let (regular_id, loaded, base_family, requested) = if let Some((id, loaded, name)) = named {
+            (id, loaded, name.to_owned(), name)
+        } else {
             let (id, family) = db.default_monospace()?;
-            (id, family, "monospace")
+            (id, Font::load_face_id(db, id)?, family, "monospace")
         };
-        let loaded = Font::load_face_id(db, regular_id)?;
         let regular = Arc::new(loaded.into_regular_view());
         let mut stack = Self::with_primary_features(regular.clone(), primary_features.to_vec());
         stack.load_styled(
@@ -2725,6 +2736,54 @@ mod tests {
         Some(Arc::new(
             std::fs::read(&files[0]).expect("the pinned face reads"),
         ))
+    }
+
+    /// Finds every named family at a face no parser reads (id 1); the
+    /// monospace face (id 0) loads.
+    struct UnreadableNamedFaces {
+        monospace: FontBytes,
+    }
+
+    impl FaceProvider for UnreadableNamedFaces {
+        type Id = usize;
+
+        fn find_face(&self, _: &str, _: u16, _: bool) -> Option<usize> {
+            Some(1)
+        }
+
+        fn default_monospace(&self) -> Result<(usize, String), ShapingError> {
+            Ok((0, TEST_FONT_FAMILY.to_owned()))
+        }
+
+        fn resolve_face(&self, id: usize) -> Option<ResolvedFace> {
+            let bytes = if id == 0 {
+                self.monospace.clone()
+            } else {
+                Arc::new(vec![0_u8; 64])
+            };
+            Some(ResolvedFace {
+                source: FaceSource::Shared(bytes),
+                index: 0,
+                instance: None,
+                slanted: false,
+            })
+        }
+    }
+
+    #[test]
+    fn a_font_family_whose_face_fails_to_load_falls_back_to_monospace() {
+        let Some(monospace) = pinned_bytes("opentype/MonaspaceNeon-Regular.otf") else {
+            return;
+        };
+        let stack = FontStack::auto_discover_in(
+            &UnreadableNamedFaces { monospace },
+            Some("Unreadable"),
+            &[],
+            &[],
+            &StyleFaces::default(),
+        )
+        .expect("the monospace face loads");
+        assert!(stack.primary().has_glyph('A'));
     }
 
     #[test]

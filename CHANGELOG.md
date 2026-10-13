@@ -46,12 +46,13 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
   `t=f`/`t=t`/`t=s` source that cannot be read is `EBADF` (was `EIO`), PNG data that does not decode is `EBADPNG` (was
   `EBADF`), bad base64 or zlib data is `EINVAL` (was `EBADF`), and raw pixel data shorter than `s=`×`v=` is `ENODATA`
   (was `EINVAL`).
-
 - On Linux, fonts are chosen by the host's fontconfig: the default face is `fc-match monospace`, `font.family` and the
   `[font.bold]`/`[font.italic]` families resolve through it (so `fonts.conf` aliases apply), and with `font.fallback`
   unset the fallback order is fontconfig's ranked list for the primary, following its prefer lists, per-language rules
   and rejected fonts and the locale's language. A text-presentation symbol takes a monochrome face before an
-  earlier-ranked color one. felis now needs `libfontconfig.so.1` on the host (`libfontconfig1` on Debian and Ubuntu).
+  earlier-ranked color one. Bitmap (PCF, BDF) and Type 1 faces that fontconfig lists are left out, so a family with only
+  such faces counts as not installed. felis now needs `libfontconfig.so.1` on the host (`libfontconfig1` on Debian and
+  Ubuntu).
 - A `font.fallback` list longer than 62 entries keeps the first 62, with a warning.
 
 ### Fixed

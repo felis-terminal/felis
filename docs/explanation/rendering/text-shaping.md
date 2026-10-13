@@ -460,7 +460,11 @@ preferred family of the last `monospace` alias, ignores every other rule, and on
 Vulkan loader is: the host's library is the one that reads the host's `/etc/fonts` syntax and cache format, which a
 bundled copy of another version may not (kitty's Linux build ships it the same way, for distributions' differing config
 paths). A host without libfontconfig cannot open a window. A family the config does not know is detected by the config
-rules it picks up, not by comparing names, so an `<alias>` that maps a requested name elsewhere is honored.
+rules it picks up, not by comparing names, so an `<alias>` that maps a requested name elsewhere is honored. Faces in a
+format the loader cannot parse (fontconfig also lists PCF, BDF and Type 1) are taken out of the font set before any
+match, so felis matches as if they were not installed. Asking for `scalable` in the query instead, as kitty does, does
+not work: fontconfig ranks it above the family, so a name whose only faces are bitmaps would draw another family without
+a warning.
 
 macOS and Windows keep fontdb's scan with a fixed list of common monospace families behind the `monospace` generic.
 
