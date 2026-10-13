@@ -259,15 +259,6 @@ fn csi_state_is_cleared_between_sequences() {
 }
 
 #[test]
-fn parser_debug_renders_state_fields() {
-    // Pins that the hand-written `Debug` names the struct and at least one
-    // tracked field.
-    let dbg = format!("{:?}", Parser::new());
-    assert!(dbg.contains("Parser"), "got {dbg:?}");
-    assert!(dbg.contains("state"), "got {dbg:?}");
-}
-
-#[test]
 fn csi_dispatch_with_private_intermediate() {
     let evs = parse(b"\x1b[?25h"); // DECTCEM show cursor
     assert_eq!(
@@ -401,7 +392,7 @@ fn osc_escape_at_a_chunk_end_waits_for_the_next_chunk() {
 }
 
 #[test]
-fn osc_terminated_by_st_does_not_leak_its_body_into_the_next_osc() {
+fn osc_terminated_by_st_or_bel_does_not_leak_its_body_into_the_next_osc() {
     assert_eq!(
         parse(b"\x1b]2;a\x1b\\\x1b]2;b\x1b\\"),
         vec![
@@ -410,6 +401,10 @@ fn osc_terminated_by_st_does_not_leak_its_body_into_the_next_osc() {
             osc(b"2;b", OscEnd::St),
             esc(b'\\'),
         ]
+    );
+    assert_eq!(
+        parse(b"\x1b]0;first\x07\x1b]0;second\x07"),
+        vec![osc(b"0;first", OscEnd::Bel), osc(b"0;second", OscEnd::Bel)]
     );
 }
 
@@ -517,16 +512,17 @@ fn can_inside_osc_discards_the_partial_payload() {
     for cancel in [0x18u8, 0x1A] {
         let mut bytes = Vec::from(&b"\x1b]7;/evil/path"[..]);
         bytes.push(cancel);
-        let evs = parse(&bytes);
-        for ev in &evs {
-            if let Event::Osc { body, end } = ev {
-                assert!(
-                    body.is_empty(),
-                    "canceled OSC leaked a partial body: {body:?}",
-                );
-                assert_eq!(*end, OscEnd::Interrupted);
-            }
-        }
+        assert_eq!(
+            parse(&bytes),
+            vec![
+                Event::Execute(cancel),
+                Event::Osc {
+                    body: vec![],
+                    end: OscEnd::Interrupted,
+                },
+            ],
+            "cancel byte {cancel:#04x}",
+        );
     }
 }
 
@@ -846,20 +842,6 @@ fn string_overflow_on_per_byte_push_path() {
         }
         assert_truncated_dispatch(s, &sink.events);
     }
-}
-
-#[test]
-fn osc_after_osc_resets_buffer() {
-    // Two consecutive OSC payloads must not concatenate.
-    let evs = parse(b"\x1b]0;first\x07\x1b]0;second\x07");
-    let oscs: Vec<Vec<u8>> = evs
-        .iter()
-        .filter_map(|e| match e {
-            Event::Osc { body, .. } => Some(body.clone()),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(oscs, vec![b"0;first".to_vec(), b"0;second".to_vec()]);
 }
 
 #[test]

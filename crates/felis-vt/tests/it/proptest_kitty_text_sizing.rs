@@ -32,8 +32,6 @@ proptest! {
         prop_assert!(s.cell_width() <= 7, "cell_width={} > 7", s.cell_width());
         prop_assert!(s.frac_num() <= 15, "frac_num={} > 15", s.frac_num());
         prop_assert!(s.frac_den() <= 15, "frac_den={} > 15", s.frac_den());
-        prop_assert!(matches!(s.valign(), VAlign::Top | VAlign::Bottom | VAlign::Center));
-        prop_assert!(matches!(s.halign(), HAlign::Left | HAlign::Right | HAlign::Center));
         if s.frac_den() != 0 {
             prop_assert!(
                 s.frac_num() < s.frac_den(),
@@ -91,15 +89,5 @@ proptest! {
             parse_metadata(bytes.as_bytes()).is_none(),
             "unknown key {key} should not parse",
         );
-    }
-
-    /// The empty-metadata path yields exactly `Sizing::default()`.
-    #[test]
-    fn empty_metadata_always_yields_default(
-        // The unrelated noise byte makes proptest sample the empty-input
-        // case repeatedly.
-        _stir in any::<u8>(),
-    ) {
-        prop_assert_eq!(parse_metadata(b""), Some(Sizing::default()));
     }
 }

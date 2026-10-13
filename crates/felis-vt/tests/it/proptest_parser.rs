@@ -261,26 +261,6 @@ fn csi_param_stream() -> impl Strategy<Value = Vec<u8>> {
     proptest::collection::vec(sequence, 1..12).prop_map(|seqs| seqs.concat())
 }
 
-const fn current_state_is_valid(state: State) -> bool {
-    matches!(
-        state,
-        State::Ground
-            | State::Escape
-            | State::EscapeIntermediate
-            | State::CsiEntry
-            | State::CsiParam
-            | State::CsiIntermediate
-            | State::CsiIgnore
-            | State::DcsEntry
-            | State::DcsParam
-            | State::DcsIntermediate
-            | State::DcsPassthrough
-            | State::DcsIgnore
-            | State::OscString
-            | State::SosPmApcString
-    )
-}
-
 /// How a generated OSC ends, and the dispatch that ending must produce.
 #[derive(Debug, Clone)]
 enum Ending {
@@ -334,14 +314,13 @@ fn osc_stream() -> impl Strategy<Value = Vec<(Vec<u8>, Ending)>> {
 }
 
 proptest! {
-    /// Any byte slice: no panic, a defined DFA state, and dispatched
+    /// Any byte slice: no panic, and dispatched
     /// param / intermediate slices within the documented caps.
     #[test]
     fn parser_is_total_on_arbitrary_bytes(bytes in proptest::collection::vec(any::<u8>(), 0..2048)) {
         let mut parser = Parser::new();
         let mut sink = LogSink::default();
         parser.advance(&mut sink, &bytes);
-        prop_assert!(current_state_is_valid(parser.state()));
         prop_assert!(sink.max_params() <= MAX_PARAMS);
         prop_assert!(sink.max_intermediates() <= MAX_INTERMEDIATES);
         prop_assert!(sink.max_osc_body() <= OSC_BUFFER_LIMIT);

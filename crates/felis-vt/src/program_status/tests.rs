@@ -572,14 +572,15 @@ fn title_encoded_cap() {
 
 #[test]
 fn base64_padding_is_optional() {
-    for encoded in [
-        b64(b"ok?"),
-        b64(b"ok"),
-        b64_unpadded(b"ok"),
-        b64_unpadded(b"o"),
+    for (encoded, text) in [
+        (b64(b"ok?"), "ok?"),
+        (b64(b"ok"), "ok"),
+        (b64_unpadded(b"ok"), "ok"),
+        (b64_unpadded(b"o"), "o"),
     ] {
-        assert!(
-            report(&format!("state=idle:msg={encoded}")).msg.is_some(),
+        assert_eq!(
+            report(&format!("state=idle:msg={encoded}")).msg.as_deref(),
+            Some(text),
             "{encoded}"
         );
     }
