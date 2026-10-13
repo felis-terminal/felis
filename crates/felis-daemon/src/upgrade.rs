@@ -47,6 +47,20 @@ impl std::fmt::Display for Refusal {
     }
 }
 
+impl Refusal {
+    /// The specifics the reason does not already say.
+    fn detail(&self) -> &str {
+        match self {
+            Self::Unsupported(detail)
+            | Self::DumpVersion(detail)
+            | Self::ProtocolMajor(detail)
+            | Self::Timeout(detail)
+            | Self::ProbeFailed(detail) => detail,
+            Self::Busy | Self::Draining => "",
+        }
+    }
+}
+
 /// The wire form of a refusal.
 #[must_use]
 pub fn refused(refusal: &Refusal) -> felis_protocol::messages::UpgradeOutcome {
@@ -62,7 +76,7 @@ pub fn refused(refusal: &Refusal) -> felis_protocol::messages::UpgradeOutcome {
     };
     felis_protocol::messages::UpgradeOutcome::Refused {
         reason,
-        detail: refusal.to_string(),
+        detail: refusal.detail().to_owned(),
     }
 }
 
@@ -213,6 +227,25 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
+
+    /// The client prints the reason itself; a detail repeating it would
+    /// say it twice.
+    #[test]
+    fn a_busy_or_draining_refusal_carries_no_detail() {
+        use felis_protocol::messages::UpgradeOutcome;
+        for refusal in [Refusal::Busy, Refusal::Draining] {
+            let UpgradeOutcome::Refused { detail, .. } = refused(&refusal) else {
+                panic!("a refusal is refused");
+            };
+            assert_eq!(detail, "", "{refusal:?}");
+        }
+        let UpgradeOutcome::Refused { detail, .. } =
+            refused(&Refusal::DumpVersion("reads 3, got 2".into()))
+        else {
+            panic!("a refusal is refused");
+        };
+        assert_eq!(detail, "reads 3, got 2");
+    }
 
     #[tokio::test]
     async fn closing_waits_for_a_dispatch_already_under_way() {
