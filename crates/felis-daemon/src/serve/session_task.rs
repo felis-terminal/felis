@@ -1176,7 +1176,13 @@ async fn run_session(mut t: SessionTask, mut cmd_rx: mpsc::Receiver<SessionCmd>)
 /// The window is for a shell that traps `SIGHUP` to save state; it is
 /// short because the session is already gone from the pool, so
 /// anything still running is unreachable by the user.
+#[cfg(not(test))]
 const HANGUP_GRACE: Duration = Duration::from_secs(2);
+/// Only a fixture that ignores `SIGHUP` waits the grace out; a shell
+/// that dies on the hangup and is polled late is killed instead, which
+/// ends it the same way.
+#[cfg(test)]
+const HANGUP_GRACE: Duration = Duration::from_millis(250);
 
 const HANGUP_POLL: Duration = Duration::from_millis(50);
 
