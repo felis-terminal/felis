@@ -226,8 +226,8 @@ fn upgrade_remotely(destination: &str, ssh_args: &[String], format: Format) -> i
         ),
         Some(code @ 0..=2) => {
             use std::io::Write as _;
+            crate::cli_output::write_stdout_bytes(&output.stdout);
             // A closed local pipe leaves nobody to report to.
-            drop(std::io::stdout().write_all(&output.stdout));
             drop(std::io::stderr().write_all(&output.stderr));
             code
         }

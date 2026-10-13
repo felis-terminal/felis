@@ -42,9 +42,6 @@ macro_rules! stdoutln {
 
 pub(crate) use {stdout, stdoutln};
 
-/// Restoring `SIGPIPE`'s default action would end the process at the
-/// write too, but that takes `unsafe` this crate forbids, and it would
-/// leave Windows, which has no `SIGPIPE`, panicking.
 pub(crate) fn write_stdout(args: std::fmt::Arguments<'_>, newline: bool) {
     use std::io::Write as _;
     let mut stdout = std::io::stdout().lock();
@@ -55,6 +52,20 @@ pub(crate) fn write_stdout(args: std::fmt::Arguments<'_>, newline: bool) {
             Ok(())
         }
     });
+    stdout_written(written);
+}
+
+/// Bytes passed through verbatim, with [`stdout!`]'s handling of a gone
+/// reader.
+pub(crate) fn write_stdout_bytes(bytes: &[u8]) {
+    use std::io::Write as _;
+    stdout_written(std::io::stdout().lock().write_all(bytes));
+}
+
+/// Restoring `SIGPIPE`'s default action would end the process at the
+/// write too, but that takes `unsafe` this crate forbids, and it would
+/// leave Windows, which has no `SIGPIPE`, panicking.
+fn stdout_written(written: std::io::Result<()>) {
     match written {
         Ok(()) => {}
         Err(err) if err.kind() == std::io::ErrorKind::BrokenPipe => std::process::exit(0),
