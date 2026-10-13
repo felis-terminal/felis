@@ -763,9 +763,6 @@ async fn send_waits_for_admission_rather_than_dropping_its_input() {
     use std::io::Write;
     use std::process::Stdio;
 
-    // Longer than either send needs, so the second one is written and
-    // parked while the budget is still full.
-    const STALL_SECS: u64 = 8;
     // Past the 64 bytes the first payload leaves unreserved, so this one
     // cannot slip into the budget beside it.
     const MARKER: &str = "MARKER-0123456789-0123456789-0123456789-0123456789-\
@@ -773,14 +770,23 @@ async fn send_waits_for_admission_rather_than_dropping_its_input() {
 
     let tmp = private_dir();
     let received = tmp.path().join("received");
+    let gate = tmp.path().join("gate");
+    let mkfifo = StdCommand::new("mkfifo")
+        .arg(&gate)
+        .env("PATH", fixture_path())
+        .status()
+        .expect("run mkfifo");
+    assert!(mkfifo.success(), "mkfifo failed: {mkfifo:?}");
     let factory: SessionFactory = {
         let received = received.clone();
+        let gate = gate.clone();
         Arc::new(move |_| {
             let mut cmd = PtyCommand::new("/bin/sh");
             cmd.args([
                 "-c",
                 &format!(
-                    "stty raw -echo; sleep {STALL_SECS}; exec cat > {}",
+                    "stty raw -echo; read _ < {}; exec cat > {}",
+                    gate.display(),
                     received.display()
                 ),
             ]);
@@ -834,12 +840,26 @@ async fn send_waits_for_admission_rather_than_dropping_its_input() {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 
-    let marker = cli_command()
+    let mut marker = cli_command()
         .arg("--socket")
         .arg(&socket)
         .args(["sessions", "send", &id_hex, MARKER, "--raw"])
-        .output()
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
         .expect("run felis sessions send");
+    // The child is still gated, so a send that exits inside this window
+    // returned before its input was admitted.
+    let parked_until = tokio::time::Instant::now() + Duration::from_secs(1);
+    while tokio::time::Instant::now() < parked_until {
+        assert!(
+            marker.try_wait().expect("poll marker send").is_none(),
+            "send exited while the budget was still full",
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    std::fs::write(&gate, b"\n").expect("release the child");
+    let marker = marker.wait_with_output().expect("wait for marker send");
     assert!(
         marker.status.success(),
         "send must succeed: status={:?} stderr={}",
