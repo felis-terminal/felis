@@ -54,6 +54,16 @@ impl StreamSlot {
             link.cancel(id);
         }
     }
+
+    /// A cancel that arrived while the operation was still dialing
+    /// fires here.
+    pub(super) fn bind(&mut self, link: &Arc<Link>, id: StreamId) {
+        self.link = Some(Arc::clone(link));
+        self.stream_id = Some(id);
+        if self.canceled {
+            link.cancel(id);
+        }
+    }
 }
 
 impl ActiveOp {
@@ -670,15 +680,8 @@ impl Op {
         self.entry.stream.lock_or_poisoned().link = Some(Arc::clone(link));
     }
 
-    /// A cancel that arrived while the operation was still dialing
-    /// fires here.
     pub(super) fn bind_stream(&self, link: &Arc<Link>, id: StreamId) {
-        let mut slot = self.entry.stream.lock_or_poisoned();
-        slot.link = Some(Arc::clone(link));
-        slot.stream_id = Some(id);
-        if slot.canceled {
-            link.cancel(id);
-        }
+        self.entry.stream.lock_or_poisoned().bind(link, id);
     }
 
     pub(super) async fn item(&self, body: Value) -> Result<(), BridgeError> {

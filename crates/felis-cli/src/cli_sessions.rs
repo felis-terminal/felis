@@ -615,7 +615,7 @@ pub(crate) fn plan(op: SessionOp, target: &Reconnector) -> ControlFlow<i32, Plan
                 // pipe failing, reported in the verb's framing rather
                 // than as a bare line (docs/reference/cli.md "Machine
                 // output").
-                Some(text) => match collect_send_payload(text, cap) {
+                Some(text) => match collect_send_payload(text, cap, std::io::stdin()) {
                     Ok(payload) => payload,
                     Err(err) => {
                         return ControlFlow::Break(

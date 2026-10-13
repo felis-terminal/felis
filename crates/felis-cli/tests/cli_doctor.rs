@@ -14,7 +14,11 @@ mod fixtures;
 #[path = "common/schema.rs"]
 mod schema;
 
+#[cfg(unix)]
+use felis_daemon::serve::DaemonCaps;
 use fixtures::private_dir;
+#[cfg(unix)]
+use fixtures::{quiet_factory, spawn_daemon_with_caps};
 
 fn cli(home: &TempDir) -> StdCommand {
     let mut cmd = cli_resolving(home);
@@ -174,36 +178,9 @@ fn a_cold_socket_warns_rather_than_failing_the_run() {
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_daemon_row_names_the_negotiated_minor_as_negotiated() {
-    use std::sync::Arc;
-    use std::time::Duration;
-
-    use felis_daemon::{
-        SessionPool,
-        serve::{DaemonCaps, SessionFactory, serve_unix_with_factory},
-    };
-    use felis_pty::Command as PtyCommand;
-    use tokio::sync::Mutex;
-
     let home = private_dir();
-    let socket = home.path().join("daemon.sock");
-    let factory: SessionFactory = Arc::new(|_| {
-        let mut cmd = PtyCommand::new("/bin/sh");
-        cmd.args(["-c", "read x"]);
-        cmd.env_clear();
-        cmd.env("PATH", "/bin:/usr/bin");
-        cmd
-    });
-    let server_path = socket.clone();
-    let server = tokio::spawn(async move {
-        let pool = Arc::new(Mutex::new(SessionPool::new()));
-        drop(serve_unix_with_factory(&server_path, DaemonCaps::default(), pool, factory).await);
-    });
-    for _ in 0..200 {
-        if tokio::net::UnixStream::connect(&socket).await.is_ok() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    }
+    let (server, socket, _pool) =
+        spawn_daemon_with_caps(&home, quiet_factory(), DaemonCaps::default()).await;
 
     let bin = std::env::var("CARGO_BIN_EXE_felis").unwrap();
     let out = StdCommand::new(bin)
@@ -336,42 +313,16 @@ fn the_stream_framing_is_a_usage_error() {
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_daemon_row_says_at_capacity_rather_than_not_running() {
-    use std::sync::Arc;
-    use std::time::Duration;
-
-    use felis_daemon::{
-        SessionPool,
-        serve::{ConnectionAdmission, DaemonCaps, SessionFactory, serve_unix_with_factory},
-    };
-    use felis_pty::Command as PtyCommand;
-    use tokio::sync::Mutex;
+    use felis_daemon::serve::ConnectionAdmission;
 
     let home = private_dir();
-    let socket = home.path().join("full.sock");
-    let factory: SessionFactory = Arc::new(|_| {
-        let mut cmd = PtyCommand::new("/bin/sh");
-        cmd.args(["-c", "read x"]);
-        cmd.env_clear();
-        cmd.env("PATH", "/bin:/usr/bin");
-        cmd
-    });
-    let server_path = socket.clone();
     // A cap of zero admits nothing, so the refusal needs no racing
     // second dial to provoke.
     let caps = DaemonCaps {
         admission: ConnectionAdmission::with_refusal_slots(0, 4),
         ..DaemonCaps::default()
     };
-    let server = tokio::spawn(async move {
-        let pool = Arc::new(Mutex::new(SessionPool::new()));
-        drop(serve_unix_with_factory(&server_path, caps, pool, factory).await);
-    });
-    for _ in 0..200 {
-        if tokio::net::UnixStream::connect(&socket).await.is_ok() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    }
+    let (server, socket, _pool) = spawn_daemon_with_caps(&home, quiet_factory(), caps).await;
 
     let bin = std::env::var("CARGO_BIN_EXE_felis").unwrap();
     let out = StdCommand::new(bin)

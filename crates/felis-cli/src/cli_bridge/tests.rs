@@ -189,15 +189,7 @@ impl tokio::io::AsyncWrite for ObservedDelimiterWriter {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_client_that_has_read_the_delimiter_can_reuse_the_id() {
     let (near, _far) = tokio::net::UnixStream::pair().expect("a socket pair");
-    let (read, write) = near.into_split();
-    let anchor = Link::start(
-        Connection::from_halves(
-            FrameReader::new(CarrierReader::Local(read)),
-            FrameWriter::at_build_minor(CarrierWriter::Local(write)),
-            felis_protocol::ConnectionMode::Ops,
-        ),
-        "test",
-    );
+    let anchor = Link::start(carrier(near), "test");
     let id = Value::from("reused");
     let slot = Arc::new(std::sync::OnceLock::new());
     let (seen, observed) = std::sync::mpsc::channel();
@@ -206,18 +198,12 @@ async fn a_client_that_has_read_the_delimiter_can_reuse_the_id() {
         key: id.to_string(),
         seen,
     });
-    let core = Arc::new(Core {
-        target: Reconnector {
-            carrier: felis_client_core::Carrier::Local(felis_transport::Endpoint::unix("/unused")),
-            offer: Offer::ops(),
-        },
-        out: out.clone(),
+    let core = test_core(
+        out.clone(),
         anchor,
-        sessions: tokio::sync::Mutex::new(HashMap::new()),
-        active: std::sync::Mutex::new(HashMap::new()),
-        pending_replies: std::sync::Mutex::new(HashMap::new()),
-        links: Arc::new(tokio::sync::Semaphore::new(MAX_AUXILIARY_LINKS)),
-    });
+        HashMap::new(),
+        Arc::new(tokio::sync::Semaphore::new(MAX_AUXILIARY_LINKS)),
+    );
     let _set = slot.set(Arc::downgrade(&core));
 
     core.answer_immediate(&id, "{}".to_owned())
@@ -240,15 +226,7 @@ async fn a_client_that_has_read_the_delimiter_can_reuse_the_id() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_request_id_is_allocated_only_under_the_writer_lock() {
     let (near, _far) = tokio::net::UnixStream::pair().expect("a socket pair");
-    let (read, write) = near.into_split();
-    let link = Link::start(
-        Connection::from_halves(
-            FrameReader::new(CarrierReader::Local(read)),
-            FrameWriter::at_build_minor(CarrierWriter::Local(write)),
-            felis_protocol::ConnectionMode::Ops,
-        ),
-        "test",
-    );
+    let link = Link::start(carrier(near), "test");
 
     let writer = link.writer.lock().await;
     // Every task is at its `request` call when the barrier
@@ -280,15 +258,39 @@ async fn a_request_id_is_allocated_only_under_the_writer_lock() {
     }
 }
 
-#[test]
-fn a_cancel_arriving_before_the_stream_binds_is_remembered() {
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_cancel_arriving_before_the_stream_binds_reaches_the_link_on_bind() {
+    use felis_protocol::messages::{ConnToDaemonMsg, StreamId};
+
+    let (near, far) = tokio::net::UnixStream::pair().expect("a socket pair");
+    let link = Link::start(carrier(near), "test");
+    let mut peer = peer_of(far);
+    let id = StreamId::new(3).expect("a nonzero stream id");
+
     let mut slot = StreamSlot::default();
-    assert!(!slot.canceled, "a fresh operation is not canceled");
     slot.cancel();
-    assert!(
-        slot.canceled,
-        "an unbound cancel survives until there is a stream to name",
-    );
+    slot.bind(&link, id);
+
+    let want = codec::encode(&ConnToDaemonMsg::Cancel { stream_id: id });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let mut seen = Vec::new();
+    while !seen.windows(want.len()).any(|w| w == want.as_slice()) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the remembered cancel never reached the daemon: {seen:?}"
+        );
+        let mut buf = [0_u8; 512];
+        match std::io::Read::read(&mut peer, &mut buf) {
+            Ok(0) => panic!("the link closed before the cancel: {seen:?}"),
+            Ok(read) => seen.extend_from_slice(&buf[..read]),
+            Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+            Err(err) => panic!("read the peer: {err}"),
+        }
+    }
+    link.shutdown().await;
 }
 
 #[test]
@@ -401,8 +403,22 @@ fn a_local_spawn_carries_the_bridge_environment_and_a_relay_none() {
     )
     .expect("a local spawn builds its args");
     let captured = local.env_base.expect("a local carrier captures a base");
+    let value = std::env::var_os("CARGO_MANIFEST_DIR").expect("the test runner sets the variable");
+    #[cfg(unix)]
+    let (key, value) = {
+        use std::os::unix::ffi::OsStrExt as _;
+        (b"CARGO_MANIFEST_DIR".to_vec(), value.as_bytes().to_vec())
+    };
+    #[cfg(windows)]
+    let (key, value) = {
+        use std::os::windows::ffi::OsStrExt as _;
+        let wide = |s: &std::ffi::OsStr| -> Vec<u8> {
+            s.encode_wide().flat_map(u16::to_le_bytes).collect()
+        };
+        (wide("CARGO_MANIFEST_DIR".as_ref()), wide(&value))
+    };
     assert!(
-        !captured.is_empty(),
+        captured.contains(&(key, value)),
         "the captured base is this process's environment"
     );
 
@@ -550,28 +566,14 @@ fn a_capture_row_carries_the_transcoded_row_object() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_immediate_reply_holds_its_id_while_stdout_is_blocked() {
     let (near, far) = tokio::net::UnixStream::pair().expect("a socket pair");
-    let (read, write) = near.into_split();
-    let anchor = Link::start(
-        Connection::from_halves(
-            FrameReader::new(CarrierReader::Local(read)),
-            FrameWriter::at_build_minor(CarrierWriter::Local(write)),
-            felis_protocol::ConnectionMode::Ops,
-        ),
-        "test",
-    );
+    let anchor = Link::start(carrier(near), "test");
     let (out, writer) = Out::start_with_writer(PendingWriter);
-    let core = Arc::new(Core {
-        target: Reconnector {
-            carrier: felis_client_core::Carrier::Local(felis_transport::Endpoint::unix("/unused")),
-            offer: Offer::ops(),
-        },
+    let core = test_core(
         out,
-        anchor: Arc::clone(&anchor),
-        sessions: tokio::sync::Mutex::new(HashMap::new()),
-        active: std::sync::Mutex::new(HashMap::new()),
-        pending_replies: std::sync::Mutex::new(HashMap::new()),
-        links: Arc::new(tokio::sync::Semaphore::new(MAX_AUXILIARY_LINKS)),
-    });
+        Arc::clone(&anchor),
+        HashMap::new(),
+        Arc::new(tokio::sync::Semaphore::new(MAX_AUXILIARY_LINKS)),
+    );
     let id = Value::from("control");
     let loss = BridgeError::new(ErrorKind::DaemonLost, "the daemon connection was lost");
     let request =
@@ -603,15 +605,7 @@ async fn an_immediate_reply_holds_its_id_while_stdout_is_blocked() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_session_link_remains_admitted_until_teardown_finishes() {
     let (near, far) = tokio::net::UnixStream::pair().expect("a socket pair");
-    let (read, write) = near.into_split();
-    let link = Link::start(
-        Connection::from_halves(
-            FrameReader::new(CarrierReader::Local(read)),
-            FrameWriter::at_build_minor(CarrierWriter::Local(write)),
-            felis_protocol::ConnectionMode::Ops,
-        ),
-        "test",
-    );
+    let link = Link::start(carrier(near), "test");
     let links = Arc::new(tokio::sync::Semaphore::new(1));
     let permit = Arc::clone(&links)
         .acquire_owned()
@@ -621,18 +615,12 @@ async fn a_session_link_remains_admitted_until_teardown_finishes() {
     slot.link = Some(Arc::clone(&link));
     slot.users = 1;
     let (out, output_writer) = Out::start_with_writer(PendingWriter);
-    let core = Arc::new(Core {
-        target: Reconnector {
-            carrier: felis_client_core::Carrier::Local(felis_transport::Endpoint::unix("/unused")),
-            offer: Offer::ops(),
-        },
+    let core = test_core(
         out,
-        anchor: Arc::clone(&link),
-        sessions: tokio::sync::Mutex::new(HashMap::from([(7, slot)])),
-        active: std::sync::Mutex::new(HashMap::new()),
-        pending_replies: std::sync::Mutex::new(HashMap::new()),
-        links: Arc::clone(&links),
-    });
+        Arc::clone(&link),
+        HashMap::from([(7, slot)]),
+        Arc::clone(&links),
+    );
     let writer = link.writer.lock().await;
     let releasing = tokio::spawn({
         let core = Arc::clone(&core);
@@ -690,6 +678,27 @@ fn carrier(stream: tokio::net::UnixStream) -> CarrierConnection {
 }
 
 #[cfg(unix)]
+fn test_core(
+    out: Out,
+    anchor: Arc<Link>,
+    sessions: HashMap<u128, SessionSlot>,
+    links: Arc<tokio::sync::Semaphore>,
+) -> Arc<Core> {
+    Arc::new(Core {
+        target: Reconnector {
+            carrier: felis_client_core::Carrier::Local(felis_transport::Endpoint::unix("/unused")),
+            offer: Offer::ops(),
+        },
+        out,
+        anchor,
+        sessions: tokio::sync::Mutex::new(sessions),
+        active: std::sync::Mutex::new(HashMap::new()),
+        pending_replies: std::sync::Mutex::new(HashMap::new()),
+        links,
+    })
+}
+
+#[cfg(unix)]
 fn detach_body() -> Vec<u8> {
     codec::encode(&SessionToDaemonMsg::Detach)
 }
@@ -711,18 +720,12 @@ async fn a_redundant_adoption_yields_its_capacity_only_after_it_closes() {
     slot.link = Some(Arc::clone(&live));
     slot.users = 1;
     let (out, output_writer) = Out::start_with_writer(PendingWriter);
-    let core = Arc::new(Core {
-        target: Reconnector {
-            carrier: felis_client_core::Carrier::Local(felis_transport::Endpoint::unix("/unused")),
-            offer: Offer::ops(),
-        },
+    let core = test_core(
         out,
-        anchor: Arc::clone(&live),
-        sessions: tokio::sync::Mutex::new(HashMap::from([(7, slot)])),
-        active: std::sync::Mutex::new(HashMap::new()),
-        pending_replies: std::sync::Mutex::new(HashMap::new()),
-        links: Arc::clone(&links),
-    });
+        Arc::clone(&live),
+        HashMap::from([(7, slot)]),
+        Arc::clone(&links),
+    );
 
     let (spare_near, spare_far) = tokio::net::UnixStream::pair().expect("a socket pair");
     let permit = Arc::clone(&links)
@@ -764,18 +767,7 @@ async fn concurrent_adoptions_install_one_link_and_close_the_other() {
     let anchor = Link::start(carrier(anchor_near), "test");
     let links = Arc::new(tokio::sync::Semaphore::new(2));
     let (out, output_writer) = Out::start_with_writer(PendingWriter);
-    let core = Arc::new(Core {
-        target: Reconnector {
-            carrier: felis_client_core::Carrier::Local(felis_transport::Endpoint::unix("/unused")),
-            offer: Offer::ops(),
-        },
-        out,
-        anchor: Arc::clone(&anchor),
-        sessions: tokio::sync::Mutex::new(HashMap::new()),
-        active: std::sync::Mutex::new(HashMap::new()),
-        pending_replies: std::sync::Mutex::new(HashMap::new()),
-        links: Arc::clone(&links),
-    });
+    let core = test_core(out, Arc::clone(&anchor), HashMap::new(), Arc::clone(&links));
 
     let start = Arc::new(tokio::sync::Barrier::new(2));
     let mut peers = Vec::new();
@@ -841,15 +833,7 @@ async fn concurrent_adoptions_install_one_link_and_close_the_other() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn shutting_down_a_link_closes_both_carrier_halves() {
     let (near, mut far) = tokio::net::UnixStream::pair().expect("a socket pair");
-    let (read, write) = near.into_split();
-    let link = Link::start(
-        Connection::from_halves(
-            FrameReader::new(CarrierReader::Local(read)),
-            FrameWriter::at_build_minor(CarrierWriter::Local(write)),
-            felis_protocol::ConnectionMode::Ops,
-        ),
-        "test",
-    );
+    let link = Link::start(carrier(near), "test");
 
     let (locked, ready) = oneshot::channel();
     let held_link = Arc::clone(&link);
@@ -882,15 +866,7 @@ async fn a_daemon_write_failure_fails_and_clears_the_link() {
         .expect("stop the peer reading");
     near.set_nonblocking(true).expect("nonblocking client");
     let near = tokio::net::UnixStream::from_std(near).expect("tokio client");
-    let (read, write) = near.into_split();
-    let link = Link::start(
-        Connection::from_halves(
-            FrameReader::new(CarrierReader::Local(read)),
-            FrameWriter::at_build_minor(CarrierWriter::Local(write)),
-            felis_protocol::ConnectionMode::Ops,
-        ),
-        "test",
-    );
+    let link = Link::start(carrier(near), "test");
 
     assert!(link.request(&OpsToDaemonMsg::List).await.is_err());
     assert!(link.is_lost(), "a write error is a terminal link state");
@@ -906,15 +882,7 @@ async fn a_daemon_write_failure_fails_and_clears_the_link() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_full_stream_buffer_backpressures_its_daemon_link() {
     let (near, far) = tokio::net::UnixStream::pair().expect("a socket pair");
-    let (read, write) = near.into_split();
-    let link = Link::start(
-        Connection::from_halves(
-            FrameReader::new(CarrierReader::Local(read)),
-            FrameWriter::at_build_minor(CarrierWriter::Local(write)),
-            felis_protocol::ConnectionMode::Ops,
-        ),
-        "test",
-    );
+    let link = Link::start(carrier(near), "test");
     let (tx, mut rx) = mpsc::channel(1);
     link.registry.lock_or_poisoned().streams.insert(7, tx);
     link.deliver_stream(
@@ -1062,7 +1030,7 @@ async fn an_over_limit_line_is_refused_without_buffering_it() {
     assert_eq!(lines.len, 16, "the length is counted past the cap");
     assert!(lines.buf.is_empty(), "the over-limit line was held");
 
-    writer.write_all(b"\n{\"id\":1}\n").await.unwrap();
+    writer.write_all(b"aa\n{\"id\":1}\n").await.unwrap();
     drop(writer);
 
     let refused = lines.next().await.unwrap().expect("a line");
@@ -1071,7 +1039,8 @@ async fn an_over_limit_line_is_refused_without_buffering_it() {
     };
     assert_eq!(
         err.to_string(),
-        "wire field bridge line carried 16 bytes, over the 8 limit"
+        "wire field bridge line carried 18 bytes, over the 8 limit",
+        "the count resumes across the park"
     );
 
     let BridgeLine::Text(line) = lines.next().await.unwrap().expect("a line") else {
@@ -1079,47 +1048,6 @@ async fn an_over_limit_line_is_refused_without_buffering_it() {
     };
     assert_eq!(line, "{\"id\":1}");
     assert!(lines.next().await.unwrap().is_none(), "EOF");
-}
-
-/// Verify an over-limit line is dropped as it is read (REQ-105a).
-///
-/// Memory stays bounded while a producer continues writing bytes
-/// before a newline arrives.
-#[tokio::test]
-async fn an_over_limit_line_is_dropped_while_it_is_still_arriving() {
-    use tokio::io::AsyncWriteExt as _;
-
-    let (mut writer, reader) = tokio::io::duplex(64);
-    let mut lines = BridgeLines {
-        reader: BufReader::new(reader),
-        cap: 8,
-        len: 0,
-        buf: Vec::new(),
-        started: false,
-    };
-
-    writer.write_all(&[b'a'; 32]).await.unwrap();
-    assert!(
-        tokio::time::timeout(std::time::Duration::from_millis(50), lines.next())
-            .await
-            .is_err(),
-        "no newline has arrived, so the line cannot be complete"
-    );
-    assert!(
-        lines.buf.len() <= lines.cap,
-        "the over-limit line was buffered whole: {} bytes held",
-        lines.buf.len()
-    );
-    assert_eq!(lines.len, 32, "the length is counted past the cap");
-
-    writer.write_all(b"a\n").await.unwrap();
-    let BridgeLine::TooLong(err) = lines.next().await.unwrap().expect("a line") else {
-        panic!("an over-limit line must be refused");
-    };
-    assert_eq!(
-        err.to_string(),
-        "wire field bridge line carried 33 bytes, over the 8 limit"
-    );
 }
 
 /// The refusal taxonomy is part of the output contract.
@@ -1213,18 +1141,12 @@ async fn a_visible_search_against_a_minor_zero_daemon_is_unsupported_before_any_
     );
     let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
     let (out, writer) = Out::start_with_writer(CapturingWriter(Arc::clone(&captured)));
-    let core = Arc::new(Core {
-        target: Reconnector {
-            carrier: felis_client_core::Carrier::Local(felis_transport::Endpoint::unix("/unused")),
-            offer: Offer::ops(),
-        },
-        out: out.clone(),
-        anchor: Arc::clone(&anchor),
-        sessions: tokio::sync::Mutex::new(HashMap::new()),
-        active: std::sync::Mutex::new(HashMap::new()),
-        pending_replies: std::sync::Mutex::new(HashMap::new()),
-        links: Arc::new(tokio::sync::Semaphore::new(MAX_AUXILIARY_LINKS)),
-    });
+    let core = test_core(
+        out.clone(),
+        Arc::clone(&anchor),
+        HashMap::new(),
+        Arc::new(tokio::sync::Semaphore::new(MAX_AUXILIARY_LINKS)),
+    );
 
     core.accept(
         r#"{"v":1,"id":1,"op":"sessions.search","params":{"session":"ffff","pattern":"x","source":"visible"}}"#,

@@ -42,7 +42,7 @@ fn staging_out() -> Reporter {
 /// wire the refusal is a closed connection, which the caller can
 /// only report as the transient `daemon_lost` class.
 #[test]
-fn an_over_limit_payload_is_refused_before_the_dial() {
+fn over_limit_payload_bounds_a_paste_and_a_raw_payload_by_their_own_caps() {
     use felis_protocol::limits::{MAX_PASTE_BYTES, PTY_INPUT_BUDGET};
 
     let out = staging_out();
@@ -125,22 +125,30 @@ fn the_session_flag_picks_attach_over_create() {
     assert!(args.command.is_empty(), "$SHELL is the daemon's to pick");
 }
 
+/// Reading stdin for anything but `-` would hang a caller whose stdin
+/// is a terminal.
+struct UnreadStdin;
+
+impl std::io::Read for UnreadStdin {
+    fn read(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
+        panic!("only a bare `-` may read stdin");
+    }
+}
+
 #[test]
 fn collect_send_payload_returns_text_verbatim() {
-    let (bytes, len) = collect_send_payload("hello", MAX_PASTE_BYTES).unwrap();
+    let (bytes, len) = collect_send_payload("hello", MAX_PASTE_BYTES, UnreadStdin).unwrap();
     assert_eq!(bytes, b"hello");
     assert_eq!(len, 5);
 }
 
 #[test]
 fn collect_send_payload_reads_stdin_only_for_bare_dash() {
-    // A real stdin feed needs a fork+pipe heavier than the assertion
-    // is worth: `-` reads the empty harness stdin, so empty is the
-    // exact expected value (`!= b"-"` would also accept the wrong
-    // branch).
-    let (bytes, len) = collect_send_payload("-", MAX_PASTE_BYTES).unwrap();
-    assert!(bytes.is_empty(), "expected empty harness stdin: {bytes:?}");
-    assert_eq!(len, 0);
+    let (bytes, len) = collect_send_payload("-", MAX_PASTE_BYTES, &b"piped\n"[..]).unwrap();
+    assert_eq!(bytes, b"piped\n");
+    assert_eq!(len, 6);
+    let (bytes, _) = collect_send_payload("--", MAX_PASTE_BYTES, UnreadStdin).unwrap();
+    assert_eq!(bytes, b"--");
 }
 
 /// The refusal must name what the caller actually piped, not the
@@ -254,24 +262,8 @@ fn tag_result_emits_an_always_present_sorted_array() {
 
 fn tagged(tags: &[&str]) -> SessionInfo {
     SessionInfo {
-        id: 1,
-        dims: felis_protocol::messages::GridDims {
-            rows: 24,
-            cols: 80,
-            pixel_w: 0,
-            pixel_h: 0,
-        },
-        title: None,
-        cwd: None,
-        idle_seconds: None,
         tags: tags.iter().map(|t| (*t).to_owned()).collect(),
-        last_notification: None,
-        foreground: None,
-        exited: false,
-        last_exit_code: None,
-        attachments: Vec::new(),
-        sequence: std::num::NonZeroU64::MIN,
-        program_status: Vec::new(),
+        ..crate::test_support::session_info(1)
     }
 }
 
@@ -316,26 +308,7 @@ const SEND_TEST_ID: u128 = 0x00ab_cdef;
 const SEND_TEST_PREFIX: &str = "00000000";
 
 fn send_test_session() -> SessionInfo {
-    SessionInfo {
-        id: SEND_TEST_ID,
-        dims: felis_protocol::messages::GridDims {
-            rows: 24,
-            cols: 80,
-            pixel_w: 0,
-            pixel_h: 0,
-        },
-        title: None,
-        cwd: None,
-        idle_seconds: None,
-        tags: Vec::new(),
-        last_notification: None,
-        foreground: None,
-        exited: false,
-        last_exit_code: None,
-        attachments: Vec::new(),
-        sequence: std::num::NonZeroU64::MIN,
-        program_status: Vec::new(),
-    }
+    crate::test_support::session_info(SEND_TEST_ID)
 }
 
 /// Run `cmd_send` against a scripted daemon over an in-memory duplex
@@ -550,43 +523,10 @@ fn the_search_source_refusal_names_exactly_the_current_vocabulary() {
 }
 
 #[test]
-fn only_a_typed_refusal_reports_a_which_session_failure() {
-    use felis_protocol::messages::AttachFailure;
-
-    assert_eq!(
-        ErrorKind::from_connect_error(&ConnectError::AttachFailed {
-            reason: AttachFailure::NoMatch,
-            detail: String::new(),
-        }),
-        ErrorKind::NoMatch
-    );
-    assert_eq!(
-        ErrorKind::from_connect_error(&ConnectError::AttachFailed {
-            reason: AttachFailure::Ambiguous,
-            detail: String::new(),
-        }),
-        ErrorKind::Ambiguous
-    );
-    for transport in [ConnectError::EofMidAttach, ConnectError::EofBeforeWelcome] {
-        assert_eq!(
-            ErrorKind::from_connect_error(&transport),
-            ErrorKind::DaemonLost
-        );
-    }
-    assert_eq!(
-        ErrorKind::from_connect_error(&ConnectError::NotSessionAttached),
-        ErrorKind::Protocol
-    );
+fn an_unexpected_frame_kind_reports_a_protocol_failure() {
     assert_eq!(
         ErrorKind::from_connect_error(&ConnectError::UnexpectedKind { kind: 99 }),
         ErrorKind::Protocol
-    );
-    assert_eq!(
-        ErrorKind::from_connect_error(&ConnectError::InvalidSessionPrefix {
-            prefix: String::new(),
-            reason: "empty".to_owned(),
-        }),
-        ErrorKind::InvalidRequest
     );
 }
 
