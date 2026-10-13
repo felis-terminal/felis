@@ -203,6 +203,164 @@ fn inconsistent_screen_state_is_refused() {
     }
 }
 
+fn assert_admitted(grid: &Grid, case: &str, edit: impl FnOnce(&mut serde_json::Value)) {
+    if let Some(err) = corrupt(grid, edit) {
+        panic!("{case}: refused with {err:?}");
+    }
+}
+
+fn assert_refused(grid: &Grid, expected: &str, edit: impl FnOnce(&mut serde_json::Value)) {
+    let err = corrupt(grid, edit).unwrap_or_else(|| panic!("{expected:?} was accepted"));
+    assert!(err.contains(expected), "expected {expected:?}, got {err:?}");
+}
+
+#[test]
+fn the_cursor_and_margins_may_reach_the_last_row_and_column_but_not_past() {
+    let grid = Grid::new(5, 10);
+    assert_admitted(&grid, "cursor on the last cell", |v| {
+        v["screen"]["cursor"]["row"] = 4.into();
+        v["screen"]["cursor"]["col"] = 9.into();
+    });
+    assert_refused(&grid, "cursor outside the screen", |v| {
+        v["screen"]["cursor"]["col"] = 10.into();
+    });
+    assert_refused(&grid, "scroll margins", |v| {
+        v["margins"]["bottom"] = 5.into()
+    });
+    assert_refused(&grid, "scroll margins", |v| {
+        v["margins"]["right"] = 10.into()
+    });
+}
+
+#[test]
+fn the_pen_id_must_name_a_table_entry_that_is_the_pen() {
+    let mut parser = Parser::new();
+    let mut grid = Grid::new(5, 10);
+    parser.advance(&mut grid, b"\x1b[1mx\x1b[0m");
+    let pens = serde_json::to_value(&grid).unwrap()["screen"]["styles"]
+        .as_array()
+        .unwrap()
+        .len();
+    assert_eq!(pens, 2, "the default pen and bold");
+    // Past the table, the id would resolve to the default pen, which is
+    // the pen here: only the bound tells the two apart.
+    assert_refused(&grid, "pen id", |v| v["pen_style"] = pens.into());
+    assert_refused(&grid, "pen id", |v| v["pen_style"] = 1.into());
+}
+
+#[test]
+fn the_scroll_band_must_lie_inside_the_screen_and_its_rotation_inside_the_band() {
+    let grid = Grid::new(5, 10);
+    let band = |top: usize, len: usize, rot: usize| {
+        move |v: &mut serde_json::Value| {
+            v["screen"]["band_top"] = top.into();
+            v["screen"]["band_len"] = len.into();
+            v["screen"]["band_rot"] = rot.into();
+        }
+    };
+    assert_admitted(&grid, "a band ending on the last row", band(1, 4, 3));
+    assert_refused(&grid, "scroll band", band(0, 6, 0));
+    assert_refused(&grid, "scroll band", band(2, 4, 0));
+    assert_refused(&grid, "scroll band", band(1, 4, 4));
+}
+
+#[test]
+fn damage_must_be_sized_for_the_screen_with_no_bit_past_its_last_row() {
+    let grid = Grid::new(5, 10);
+    let damage = |blocks: serde_json::Value, len: usize| {
+        move |v: &mut serde_json::Value| {
+            v["screen"]["damage"] = serde_json::json!({ "blocks": blocks, "len": len });
+        }
+    };
+    assert_admitted(
+        &grid,
+        "every row dirty",
+        damage(serde_json::json!([0b1_1111]), 5),
+    );
+    assert_refused(&grid, "damage rows", damage(serde_json::json!([0]), 6));
+    assert_refused(&grid, "damage rows", damage(serde_json::json!([0, 0]), 5));
+    assert_refused(
+        &grid,
+        "damage rows",
+        damage(serde_json::json!([0b10_0000]), 5),
+    );
+}
+
+#[test]
+fn held_bidi_controls_may_fill_their_queue_but_not_overrun_it() {
+    let grid = Grid::new(5, 10);
+    assert_admitted(&grid, "a full queue", |v| {
+        v["pending_bidi"]["len"] = 8.into()
+    });
+    assert_refused(&grid, "pending bidi controls", |v| {
+        v["pending_bidi"]["len"] = 9.into();
+    });
+}
+
+#[test]
+fn an_open_dcs_body_may_fill_its_buffer_but_not_overrun_it() {
+    let grid = Grid::new(5, 10);
+    let body = |len: usize| {
+        move |v: &mut serde_json::Value| {
+            v["dcs"] = serde_json::json!({
+                "kind": "Other",
+                "body": felis_vt::state::b64::encode(&vec![b'x'; len]),
+            });
+        }
+    };
+    assert_admitted(&grid, "a full DCS buffer", body(crate::DCS_BUFFER_LIMIT));
+    assert_refused(&grid, "DCS body", body(crate::DCS_BUFFER_LIMIT + 1));
+}
+
+#[test]
+fn queued_apc_bodies_are_held_to_the_outbox_count_byte_and_body_caps() {
+    let grid = Grid::new(5, 10);
+    let queue = |count: usize, len: usize| {
+        let apc = serde_json::to_value(PtyEffect::Apc(ApcBody {
+            body: vec![b'A'; len],
+            cursor_row: 0,
+            cursor_col: 0,
+        }))
+        .unwrap();
+        move |v: &mut serde_json::Value| {
+            v["pty_effects"] = serde_json::Value::Array(vec![apc; count]);
+        }
+    };
+    let limit = felis_vt::APC_BUFFER_LIMIT;
+    assert_eq!(APC_OUTBOX_BYTES % limit, 0, "whole bodies fill the bytes");
+    let fill = APC_OUTBOX_BYTES / limit;
+    assert!(fill < APC_OUTBOX_CAP, "the byte cap binds before the count");
+    assert_admitted(&grid, "a full count", queue(APC_OUTBOX_CAP, 1));
+    assert_admitted(&grid, "full bytes", queue(fill, limit));
+    assert_refused(&grid, "queued APC bodies", queue(APC_OUTBOX_CAP + 1, 1));
+    assert_refused(&grid, "queued APC bodies", queue(fill + 1, limit));
+    assert_refused(&grid, "queued APC bodies", queue(1, limit + 1));
+}
+
+#[test]
+fn notification_reassembly_is_held_to_its_id_and_byte_caps() {
+    let grid = Grid::new(5, 10);
+    let pending = |ids: usize, title: usize, body: usize| {
+        move |v: &mut serde_json::Value| {
+            let partials = (0..ids)
+                .map(|id| {
+                    let partial = serde_json::json!({
+                        "title": "t".repeat(title),
+                        "body": "b".repeat(body),
+                    });
+                    (id.to_string(), partial)
+                })
+                .collect();
+            v["osc99_pending"] = serde_json::Value::Object(partials);
+        }
+    };
+    let (ids, bytes) = (crate::NOTIFY_REASSEMBLY_IDS, crate::NOTIFY_REASSEMBLY_BYTES);
+    assert_admitted(&grid, "every id in use", pending(ids, 0, 0));
+    assert_admitted(&grid, "a partial at the byte cap", pending(1, bytes, 0));
+    assert_refused(&grid, "notification reassembly", pending(ids + 1, 0, 0));
+    assert_refused(&grid, "notification reassembly", pending(1, bytes, 1));
+}
+
 fn fragment() -> impl Strategy<Value = Vec<u8>> {
     prop_oneof![
         "[a-z ]{1,12}".prop_map(String::into_bytes),

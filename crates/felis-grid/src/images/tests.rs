@@ -27,6 +27,47 @@ fn frame_charge(size: usize) -> usize {
     frame_of(size).byte_len()
 }
 
+#[cfg(feature = "state-dump")]
+type StoreEdit<'a> = &'a dyn Fn(&mut ImageStore);
+
+#[cfg(feature = "state-dump")]
+#[test]
+fn a_restored_store_must_hold_well_formed_frames_and_charge_exactly_its_total() {
+    let full = || {
+        let mut s = ImageStore::new(charge(3));
+        s.insert(ImageId(1), entry(3)).unwrap();
+        s
+    };
+    let refusal = |edit: StoreEdit<'_>| {
+        let mut s = full();
+        edit(&mut s);
+        s.check_restored().err().map(|err| err.0)
+    };
+    let with_entry = |edit: fn(&mut ImageEntry)| {
+        move |s: &mut ImageStore| edit(s.entries.get_mut(&ImageId(1)).unwrap())
+    };
+    assert_eq!(refusal(&|_| {}), None, "a store charged exactly to its cap");
+
+    let frames = "frames of image 1";
+    let refused: [(&str, StoreEdit<'_>); 6] = [
+        (frames, &with_entry(|e| e.frames.clear())),
+        (frames, &with_entry(|e| e.current = e.frames.len())),
+        (frames, &with_entry(|e| e.frames[0] = frame_of(4))),
+        (
+            frames,
+            &with_entry(|e| e.frames.resize(MAX_IMAGE_FRAMES + 1, frame_of(3))),
+        ),
+        ("image store byte total", &|s| s.bytes_total += 1),
+        ("image store byte total", &|s| {
+            s.bytes_cap -= 1;
+        }),
+    ];
+    for (expected, edit) in refused {
+        let err = refusal(edit).unwrap_or_else(|| panic!("{expected:?} was accepted"));
+        assert_eq!(err, expected);
+    }
+}
+
 #[test]
 fn fresh_store_is_empty() {
     let s = ImageStore::new(1024);
