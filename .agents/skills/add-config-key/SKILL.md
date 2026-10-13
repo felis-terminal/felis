@@ -57,8 +57,8 @@ Commit the regenerated `crates/felis-client-core/felis-config.schema.json` toget
   "take a token from a closed set" (and its count).
 - `docs/reference/control-surfaces.md`: add the row to the name map if the knob exists on more than one surface.
 - `docs/reference/keybindings.md`: if a new action or default chord.
-- `skills/felis/SKILL.md` and Forgejo issues (if the key appears there); on a rename, also `nix/hm-module.nix` /
-  `nix/stylix.nix` and the repo-root `README.md`.
+- `skills/felis/` (`SKILL.md` and `references/`) and Forgejo issues (if the key appears there); on a rename, also
+  `nix/hm-module.nix` / `nix/stylix.nix` and the repo-root `README.md`.
 - If the _decision_ is non-obvious (why this surface, what was rejected), record it inline in the owning explanation doc
   (see the `doc-cascade` skill for the full sweep procedure).
 

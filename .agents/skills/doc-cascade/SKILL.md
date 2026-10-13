@@ -81,7 +81,7 @@ Run it for every renamed concept, flipped status, moved file, and changed number
 pass: it catches the mechanical `doc-prose` rules (dashes, history narration, filler) on the lines you added. Then check
 the non-doc mirrors:
 
-- `skills/felis/SKILL.md` (shipped skill) for CLI/IPC facts;
+- `skills/felis/` (shipped skill: `SKILL.md` and `references/`) for CLI/IPC facts;
 - `.agents/skills/*/SKILL.md` for paths and commands you moved;
 - `README.md` at the repo root, for the CLI surface it shows and the `--format` contract;
 - `nix/hm-module.nix` docstrings and `nix/stylix.nix` for config sections and key names;
