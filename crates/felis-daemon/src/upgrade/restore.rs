@@ -280,9 +280,15 @@ mod tests {
             .unwrap();
         settled.await.unwrap();
 
-        tokio::time::sleep(Duration::from_millis(1500)).await;
         let pid = Pid::from_raw(pid).unwrap();
-        assert!(exited(pid), "the child has exited");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !exited(pid) {
+            assert!(Instant::now() < deadline, "the child has exited");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        // Many drain intervals and post-exit graces, any of which would
+        // have reaped an unheld session.
+        tokio::time::sleep(Duration::from_millis(300)).await;
         let still_ours = rustix::process::waitid(
             WaitId::Pid(pid),
             WaitIdOptions::EXITED | WaitIdOptions::NOHANG | WaitIdOptions::NOWAIT,
