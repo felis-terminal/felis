@@ -39,6 +39,8 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 
 ### Changed
 
+- `CSI 14 t` and `CSI 16 t` now answer the text area and the cell size in pixels from the PTY's winsize, instead of
+  `0;0`. `CSI 13 t` and `CSI 15 t` (window position, screen size) still answer `0;0`.
 - Kitty graphics replies now follow kitty: only a command with a non-zero `i=` or `I=` is answered, a delete is never
   answered even when it fails, a query is answered only when it carries `i=`, and a malformed escape or an unknown `a=`
   is dropped without a reply. A command with both `i=` and `I=` is refused with `EINVAL` before it runs. An `i=0` or

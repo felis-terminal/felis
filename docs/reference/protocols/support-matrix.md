@@ -170,7 +170,8 @@ The exact reply payloads are specified in [vt-compliance.md](vt-compliance.md) "
 | DECREQTPARM (`CSI Ps x`)                             | ✅ (VT100 legacy)                                                                                                                               |
 | window-size cells (`CSI 18 t` / `19 t`)              | ✅                                                                                                                                              |
 | window state / titles (`CSI 11 t` / `20 t` / `21 t`) | ✅                                                                                                                                              |
-| pixel-size (`CSI 14 t` / `15 t` / `16 t`)            | ⚠️ stubbed; applications should query `TIOCGWINSZ` ([consumed without effect](vt-compliance.md#consumed-without-effect))                        |
+| pixel-size (`CSI 14 t` / `16 t`)                     | ✅ (the PTY's winsize)                                                                                                                          |
+| screen pixel size (`CSI 15 t`)                       | ⚠️ stubbed ([consumed without effect](vt-compliance.md#consumed-without-effect))                                                                |
 
 ### Charset
 

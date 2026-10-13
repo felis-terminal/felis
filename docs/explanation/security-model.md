@@ -85,14 +85,14 @@ rather than a pass-through of producer bytes, so an injected `\x1b` or `;` canno
 ### The inputs a reply may carry are a closed, named set
 
 Three sources reach the reflective class, and no fourth does: what a program on this session's own PTY wrote (palette,
-modes, cursor position, title and icon name, the clipboard mirror), the cell geometry the session's attached clients
-set, and the two presentation facets below. The title and icon name are the one place producer text is repeated rather
-than reformatted, and the control bytes that could break out of the reply frame never enter that state, because an OSC
-string value carrying one is rejected whole (REQ-901).
+modes, cursor position, title and icon name, the clipboard mirror), the cell and pixel geometry the session's attached
+clients set, and the two presentation facets below. The title and icon name are the one place producer text is repeated
+rather than reformatted, and the control bytes that could break out of the reply frame never enter that state, because
+an OSC string value carrying one is rejected whole (REQ-901).
 
 State that reached felis from the window manager or the OS has no query that reports it, which is what keeps the
 reflective class from becoming an exfiltration channel. There is no font readback and no OS-clipboard read, and the
-window-position and pixel-size queries answer a constant stub rather than a window's real numbers.
+window-position and screen-size queries answer a constant stub rather than the desktop's real numbers.
 
 ### One named carve-out: client-supplied presentation facets
 
@@ -109,15 +109,16 @@ answers is [session-lifecycle.md](architecture/session-lifecycle.md) "Client-der
 
 ### Every answered `CSI t` readback is classified
 
-Four `CSI t` readbacks are reflective. The text-cell size queries `CSI 18 t` / `CSI 19 t` answer in cells from this
-session's own geometry, and `CSI 20 t` / `CSI 21 t` answer the icon name and window title a program on this PTY set
-through OSC 0 / 1 / 2, in an `OSC L` / `OSC l` frame felis builds (an unset name answers an empty payload, so a probe
-can tell "supported" from "unsupported").
+Six `CSI t` readbacks are reflective. The text-cell size queries `CSI 18 t` / `CSI 19 t` answer in cells from this
+session's own geometry, the pixel-size queries `CSI 14 t` / `CSI 16 t` answer from the PTY's winsize (what `TIOCGWINSZ`
+already tells any program on the PTY, so they disclose nothing new), and `CSI 20 t` / `CSI 21 t` answer the icon name
+and window title a program on this PTY set through OSC 0 / 1 / 2, in an `OSC L` / `OSC l` frame felis builds (an unset
+name answers an empty payload, so a probe can tell "supported" from "unsupported").
 
-The rest are constant: `CSI 11 t` always reports "shown", and the window-position and pixel-size queries
-`CSI 13 / 14 / 15 / 16 t` reply a `0;0` stub, since a pixel extent is one window's fact and the grid is shared by every
-mirror of the session. The per-arm replies are [vt-compliance.md](../reference/protocols/vt-compliance.md)'s. The
-setters that exist are fire-and-forget.
+The rest are constant: `CSI 11 t` always reports "shown", and the window-position and screen-size queries
+`CSI 13 / 15 t` reply a `0;0` stub, since where a window sits and how large the display is are desktop facts the session
+has no claim on. The per-arm replies are [vt-compliance.md](../reference/protocols/vt-compliance.md)'s. The setters that
+exist are fire-and-forget.
 
 ### Clipboard, bracketed paste, and OSC control bytes
 
