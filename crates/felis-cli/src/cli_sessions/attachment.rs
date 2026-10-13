@@ -10,7 +10,9 @@ use felis_protocol::messages::{
 use tokio::io::{AsyncRead, AsyncWrite};
 
 use super::{AttachmentTarget, refuse_over_limit, require_resolved};
-use crate::cli_output::{ErrorKind, Format, PointFormat, Reporter, RetargetResult, SwitchResult};
+use crate::cli_output::{
+    ErrorKind, Format, PointFormat, Reporter, RetargetResult, SwitchResult, stdoutln,
+};
 use crate::conn::Dial;
 
 /// Flattened by every verb that retargets a window, so the spellings
@@ -269,9 +271,9 @@ where
             queued,
         });
     } else if queued == 0 {
-        println!("already on session {}; nothing queued", SessionHex(to));
+        stdoutln!("already on session {}; nothing queued", SessionHex(to));
     } else {
-        println!(
+        stdoutln!(
             "queued on {queued} {}; not landed — each window runs its own attach",
             windows(queued)
         );
@@ -339,7 +341,7 @@ where
             queued,
         });
     } else {
-        println!(
+        stdoutln!(
             "queued on {queued} {}; not landed — each window re-dials on its own",
             windows(queued)
         );

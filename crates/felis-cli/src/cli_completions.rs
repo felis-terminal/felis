@@ -7,6 +7,7 @@ use clap_complete::{Shell, generate};
 use felis_protocol::SessionHex;
 
 use crate::Cli;
+use crate::cli_output::{stdout, stdoutln};
 use felis_client_core::{Carrier, Reconnector, RemoteSpawn};
 
 /// The `sessions` subcommands whose first positional is a session id,
@@ -18,10 +19,7 @@ pub(crate) const SESSION_ID_VERBS: &[&str] = &[
 
 pub(crate) fn emit(shell: Shell) {
     let script = script(shell);
-    #[allow(clippy::print_stdout)]
-    {
-        print!("{script}");
-    }
+    stdout!("{script}");
 }
 
 /// The `clap_complete` script plus, for fish and zsh, the overlay.
@@ -69,10 +67,7 @@ pub(crate) fn run_complete_sessions(
 
     for s in &sessions {
         let line = format_completion_line(s);
-        #[allow(clippy::print_stdout)]
-        {
-            println!("{line}");
-        }
+        stdoutln!("{line}");
     }
     0
 }

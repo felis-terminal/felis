@@ -3,11 +3,6 @@
 //! Exits 0 or 1, treating an unreachable daemon as a finding rather than failure.
 //! GUI probes run via `felis-client --doctor-probe` to keep this front door GPU-free.
 
-#![expect(
-    clippy::print_stdout,
-    reason = "this module renders the human framing of a report"
-)]
-
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -26,7 +21,9 @@ use felis_client_core::{
 use felis_protocol::BuildIdentity;
 use felis_transport::preface::{PROBE_DEADLINE, ProbeOutcome, connect_error_is_absent, probe};
 
-use crate::cli_output::{CheckObject, DoctorReportResult, DoctorResult, PointFormat, Reporter};
+use crate::cli_output::{
+    CheckObject, DoctorReportResult, DoctorResult, PointFormat, Reporter, stdout, stdoutln,
+};
 use crate::cli_report::{self, HomeCollapse};
 use crate::conn::Resolved;
 
@@ -167,7 +164,7 @@ pub(crate) fn run_report(
     if out.machine() {
         out.result(&result);
     } else {
-        print!("{}", cli_report::markdown(&result, &daemon_detail));
+        stdout!("{}", cli_report::markdown(&result, &daemon_detail));
     }
     0
 }
@@ -269,7 +266,7 @@ fn installed_skew(running: &BuildIdentity, installed: Option<&BuildIdentity>) ->
 fn print_checks(checks: &[Check]) {
     let width = checks.iter().map(|c| c.name.len()).max().unwrap_or(0);
     for check in checks {
-        println!(
+        stdoutln!(
             "{:<7} {:<width$}  {}",
             check.status.token(),
             check.name,

@@ -366,13 +366,7 @@ fn main() -> Result<()> {
                 .error(clap::error::ErrorKind::ArgumentConflict, conflict)
                 .exit();
         }
-        #[expect(
-            clippy::print_stdout,
-            reason = "the version line IS this flag's contract"
-        )]
-        {
-            println!("felis {}", cli_version::SELF_VERSION_LINE);
-        }
+        cli_output::stdoutln!("felis {}", cli_version::SELF_VERSION_LINE);
         std::process::exit(0);
     }
 

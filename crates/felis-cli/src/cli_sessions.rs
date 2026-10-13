@@ -5,8 +5,7 @@
 
 #![expect(
     clippy::print_stderr,
-    clippy::print_stdout,
-    reason = "this module's job is printing to stdout/stderr"
+    reason = "this module's job is printing to stderr"
 )]
 
 mod attachment;

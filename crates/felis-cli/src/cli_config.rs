@@ -3,8 +3,6 @@
 //! These verbs never dial the daemon. `check` exits 1 on document errors
 //! and prints diagnostics to stdout.
 
-#![expect(clippy::print_stdout, reason = "these verbs render reports to stdout")]
-
 use std::path::PathBuf;
 
 use clap::Subcommand;
@@ -15,7 +13,7 @@ use felis_client_core::{
 
 use crate::cli_output::{
     CheckResult, ConfigPathResult, DiagnosticObject, EffectiveConfigResult, ErrorKind, Format,
-    PointFormat, Reporter,
+    PointFormat, Reporter, stdout, stdoutln,
 };
 
 /// The default is a constant, not a binary name: overlays key on
@@ -114,7 +112,7 @@ fn cmd_path(out: &Reporter, source: &ConfigSource) -> i32 {
         });
     } else {
         // The bare path alone, so it pipes into `$EDITOR` unfiltered.
-        println!("{}", path.display());
+        stdoutln!("{}", path.display());
     }
     0
 }
@@ -152,19 +150,19 @@ fn print_check(
     errors: usize,
     warnings: usize,
 ) {
-    println!("config: {}", path.display());
-    println!("client: {client}");
+    stdoutln!("config: {}", path.display());
+    stdoutln!("client: {client}");
     if !exists && errors == 0 {
         // "No problems" and "no file" are different answers; only one
         // means the user's settings are being applied. A selected
         // file that is absent carries an error diagnostic instead.
-        println!("no config file — felis uses its built-in defaults");
+        stdoutln!("no config file — felis uses its built-in defaults");
         return;
     }
     for d in diagnostics.iter() {
-        println!("{:<8} {d}", severity_token(d.severity));
+        stdoutln!("{:<8} {d}", severity_token(d.severity));
     }
-    println!("{errors} error(s), {warnings} warning(s)");
+    stdoutln!("{errors} error(s), {warnings} warning(s)");
 }
 
 fn cmd_show_effective(out: &Reporter, source: &ConfigSource, client: &str) -> i32 {
@@ -190,7 +188,7 @@ fn cmd_show_effective(out: &Reporter, source: &ConfigSource, client: &str) -> i3
         });
     } else {
         match toml::to_string_pretty(&config) {
-            Ok(text) => print!("{text}"),
+            Ok(text) => stdout!("{text}"),
             Err(err) => return out.fail(ErrorKind::Internal, err),
         }
     }

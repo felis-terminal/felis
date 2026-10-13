@@ -19,6 +19,7 @@ use super::{
 };
 use crate::cli_output::{
     CaptureRow, ErrorKind, Format, ListResult, Reporter, SearchMatch, SessionObject, short_id_in,
+    stdoutln,
 };
 
 /// "No daemon" (exit 2) and "0 sessions" (exit 0) are distinct
@@ -84,39 +85,39 @@ where
         // No column alignment: free-form title/cwd would push the value
         // column past any sane width. `id:` first so `head -1` yields
         // the hex id.
-        println!("id:       {}", SessionHex(session.id));
-        println!("short:    {short_id}");
-        println!("size:     {}x{}", session.dims.rows, session.dims.cols);
+        stdoutln!("id:       {}", SessionHex(session.id));
+        stdoutln!("short:    {short_id}");
+        stdoutln!("size:     {}x{}", session.dims.rows, session.dims.cols);
         if let Some(secs) = session.idle_seconds {
-            println!("idle:     {}", crate::format_idle_age(secs));
+            stdoutln!("idle:     {}", crate::format_idle_age(secs));
         }
         if session.exited {
-            println!("exited:   yes (in post-exit grace)");
+            stdoutln!("exited:   yes (in post-exit grace)");
         }
         if let Some(title) = session.title.as_deref().filter(|t| !t.trim().is_empty()) {
-            println!("title:    {}", title.trim());
+            stdoutln!("title:    {}", title.trim());
         }
         if let Some(cwd) = session.cwd.as_deref().filter(|c| !c.trim().is_empty()) {
-            println!("cwd:      {}", cwd.trim());
+            stdoutln!("cwd:      {}", cwd.trim());
         }
         if let Some(fg) = session
             .foreground
             .as_deref()
             .filter(|f| !f.trim().is_empty())
         {
-            println!("running:  {}", fg.trim());
+            stdoutln!("running:  {}", fg.trim());
         }
         if !session.tags.is_empty() {
-            println!("tags:     {}", session.tags.join(" "));
+            stdoutln!("tags:     {}", session.tags.join(" "));
         }
         if let Some(code) = session.last_exit_code {
-            println!("exit:     {code}");
+            stdoutln!("exit:     {code}");
         }
         for record in &session.program_status {
-            println!("status:   {}", status_line(record));
+            stdoutln!("status:   {}", status_line(record));
         }
         for attachment in &session.attachments {
-            println!(
+            stdoutln!(
                 "window:   {} (attached {}){}",
                 attachment.id,
                 crate::timestamp::rfc3339_utc(attachment.attached_at),
@@ -133,7 +134,7 @@ where
             } else {
                 n.notification.body.trim()
             };
-            println!(
+            stdoutln!(
                 "notify:   [{}] {} ({} ago)",
                 n.notification.urgency.as_str(),
                 text,
@@ -355,7 +356,7 @@ fn print_capture(out: &Reporter, rows: &[CapturedRow], encoding: RowEncoding) {
     let continued: Vec<bool> = rows.iter().map(|r| r.soft_wrap_continued).collect();
     for line in felis_grid::logical_lines(&texts, &continued) {
         let line = line.concat();
-        println!("{line}");
+        stdoutln!("{line}");
     }
 }
 
@@ -480,7 +481,7 @@ fn print_search_match(
     } else {
         // grep-style `<line>:<text>`; `line_index` anchors a stitched
         // soft-wrapped line at its topmost row.
-        println!("{line_index}:{text}");
+        stdoutln!("{line_index}:{text}");
     }
 }
 

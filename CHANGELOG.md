@@ -57,6 +57,8 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 
 ### Fixed
 
+- A `felis` verb piped into a reader that quits early (`felis sessions capture <id> | head -1`) no longer panics with
+  "failed printing to stdout: Broken pipe". It stops at that write and exits `0`.
 - A `felis bridge` stream canceled by a `cancel` op or by closing stdin no longer ends with a clean `end` whose `count`
   claims items it never wrote. Items that reach the bridge after the cancel are dropped, and the clean `end` now counts
   only the item lines that preceded it.
