@@ -429,8 +429,7 @@ enum EndReason {
 
 /// The id is minted by the caller before the PTY spawn so
 /// `apply_env_policy` can stamp `FELIS_SESSION_ID` into the child.
-/// `dims` is admitted already (REQ-605a) and applied here, not by the
-/// first attach's resize, so the child sees its winsize from byte one.
+/// `dims` is admitted (REQ-605a) and is what `spawned` was sized to.
 /// `slot` is released as the handle registers, under one pool lock.
 pub async fn spawn_session(
     pool: &Arc<Mutex<SessionPool>>,
@@ -443,25 +442,6 @@ pub async fn spawn_session(
     listing: Listing,
 ) -> SessionLifecycle {
     let owned = Session::from_spawned(spawned);
-    let (rows, cols) = (dims.rows, dims.cols);
-    let (cur_rows, cur_cols) = {
-        let core = owned.lock_core();
-        (core.grid.rows(), core.grid.cols())
-    };
-    // The pixel axes reach the child even when the cell count already
-    // matches: a producer reading TIOCGWINSZ derives its cell size from
-    // them.
-    if rows != cur_rows || cols != cur_cols || dims.pixel_w != 0 || dims.pixel_h != 0 {
-        if let Err(err) = owned.resizer.resize(PtySize {
-            rows,
-            cols,
-            pixel_width: dims.pixel_w,
-            pixel_height: dims.pixel_h,
-        }) {
-            warn!(?err, "spawn: initial PTY resize failed");
-        }
-        owned.lock_core().grid.resize(rows, cols);
-    }
     spawn_owned(
         pool,
         owned,

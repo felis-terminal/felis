@@ -172,7 +172,13 @@ impl SpawnedPty {
     }
 
     pub fn spawn(command: Command) -> Result<Self, SessionError> {
-        let mut parse_core = ParseCore::new(DEFAULT_ROWS, DEFAULT_COLS);
+        Self::spawn_sized(command, DEFAULT_SIZE)
+    }
+
+    /// The child's first winsize is `size`: a resize after the spawn
+    /// races the child's first `TIOCGWINSZ`.
+    pub fn spawn_sized(command: Command, size: Size) -> Result<Self, SessionError> {
+        let mut parse_core = ParseCore::new(size.rows, size.cols);
         if let Some(term) = command
             .get_envs()
             .find(|(key, _)| *key == "TERM")
@@ -183,7 +189,7 @@ impl SpawnedPty {
         let core = Arc::new(parking_lot::Mutex::new(parse_core));
         let signals = Arc::new(ParseSignals::new());
         let sink = parse_sink::build_sink(Arc::clone(&core), Arc::clone(&signals));
-        let session = felis_pty::spawn(command, DEFAULT_SIZE, sink)?;
+        let session = felis_pty::spawn(command, size, sink)?;
         Ok(Self::from_session(session, core, signals))
     }
 
@@ -359,6 +365,32 @@ mod tests {
             source.lines().any(|line| line.starts_with(&entry)),
             "share/terminfo/felis.terminfo declares no `{entry}...` entry",
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_sized_spawn_creates_the_pty_at_the_geometry() {
+        let mut cmd = Command::new("/bin/sh");
+        cmd.args(["-c", "exit 0"]);
+        let size = Size {
+            rows: 40,
+            cols: 100,
+            pixel_width: 800,
+            pixel_height: 640,
+        };
+        let spawned = SpawnedPty::spawn_sized(cmd, size).expect("spawn /bin/sh");
+        let winsize = rustix::termios::tcgetwinsize(spawned.resizer.master_fd()).expect("winsize");
+        assert_eq!(
+            (
+                winsize.ws_row,
+                winsize.ws_col,
+                winsize.ws_xpixel,
+                winsize.ws_ypixel
+            ),
+            (40, 100, 800, 640),
+        );
+        let core = spawned.core.lock();
+        assert_eq!((core.grid.rows(), core.grid.cols()), (40, 100));
     }
 
     #[cfg(windows)]

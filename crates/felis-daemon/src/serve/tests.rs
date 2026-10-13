@@ -4413,7 +4413,15 @@ fn spawn_with_args_rejects_a_reserved_env_key() {
             env: vec![(key.to_owned(), "x".to_owned())],
             ..Default::default()
         };
-        match spawn_with_args(&args, &factory, 0, EnvBaseSource::Birth, None, None) {
+        match spawn_with_args(
+            &args,
+            &factory,
+            0,
+            EnvBaseSource::Birth,
+            None,
+            None,
+            crate::DEFAULT_SIZE,
+        ) {
             Ok(_) => panic!("reserved env key {key} must be rejected"),
             Err(err) => assert!(
                 err.to_string().contains(key) && err.to_string().contains("reserved"),
@@ -4434,7 +4442,15 @@ fn spawn_with_args_rejects_an_over_cap_tag_set() {
             .collect(),
         ..Default::default()
     };
-    match spawn_with_args(&args, &factory, 0, EnvBaseSource::Birth, None, None) {
+    match spawn_with_args(
+        &args,
+        &factory,
+        0,
+        EnvBaseSource::Birth,
+        None,
+        None,
+        crate::DEFAULT_SIZE,
+    ) {
         Ok(_) => panic!("an over-cap tag set must be rejected"),
         Err(err) => assert!(
             err.to_string().contains("at most"),
@@ -4455,7 +4471,15 @@ fn spawn_with_args_rejects_args_without_a_command() {
         ..Default::default()
     };
     // `Session` is not `Debug`, so match rather than `expect_err`.
-    match spawn_with_args(&args, &factory, 0, EnvBaseSource::Birth, None, None) {
+    match spawn_with_args(
+        &args,
+        &factory,
+        0,
+        EnvBaseSource::Birth,
+        None,
+        None,
+        crate::DEFAULT_SIZE,
+    ) {
         Ok(_) => panic!("args without a command must be rejected"),
         Err(err) => assert!(
             err.to_string()
@@ -4786,7 +4810,15 @@ fn spawn_with_args_refuses_a_relative_cwd() {
         cwd: "build".to_owned(),
         ..Default::default()
     };
-    match spawn_with_args(&args, &factory, 0, EnvBaseSource::Birth, None, None) {
+    match spawn_with_args(
+        &args,
+        &factory,
+        0,
+        EnvBaseSource::Birth,
+        None,
+        None,
+        crate::DEFAULT_SIZE,
+    ) {
         Ok(_) => panic!("a relative cwd must be rejected"),
         Err(err) => assert!(
             err.to_string().contains("cwd must be absolute"),
@@ -4815,7 +4847,15 @@ fn spawn_with_args_falls_back_to_the_daemon_cwd_only_for_a_bare_launch() {
         ..Default::default()
     };
     // `Session` is not `Debug`, so match rather than `expect`.
-    if let Err(err) = spawn_with_args(&bare, &factory, 0, EnvBaseSource::Birth, None, None) {
+    if let Err(err) = spawn_with_args(
+        &bare,
+        &factory,
+        0,
+        EnvBaseSource::Birth,
+        None,
+        None,
+        crate::DEFAULT_SIZE,
+    ) {
         panic!("a bare launch must survive an unusable cwd, got: {err}");
     }
 
@@ -4826,7 +4866,16 @@ fn spawn_with_args_falls_back_to_the_daemon_cwd_only_for_a_bare_launch() {
         ..Default::default()
     };
     assert!(
-        spawn_with_args(&named, &factory, 0, EnvBaseSource::Birth, None, None).is_err(),
+        spawn_with_args(
+            &named,
+            &factory,
+            0,
+            EnvBaseSource::Birth,
+            None,
+            None,
+            crate::DEFAULT_SIZE
+        )
+        .is_err(),
         "a named command must not be run somewhere other than its requested cwd",
     );
 }
