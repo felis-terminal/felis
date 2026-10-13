@@ -113,14 +113,17 @@ proptest! {
         delta in 1u16..50,
     ) {
         let (cols, rows) = p.extent();
+        let anchor_row = u16::try_from(p.anchor.row).unwrap();
         let below = p.anchor.row + i32::from(rows) + i32::from(delta);
         prop_assert!(!p.contains_row(u16::try_from(below).unwrap()));
+        prop_assert!(!p.contains_cell(u16::try_from(below).unwrap(), p.anchor.col));
         if p.anchor.row > i32::from(delta) {
             let above = p.anchor.row - i32::from(delta);
             prop_assert!(!p.contains_row(u16::try_from(above).unwrap()));
         }
         let right = p.anchor.col.saturating_add(cols).saturating_add(delta);
         prop_assert!(!p.contains_col(right));
+        prop_assert!(!p.contains_cell(anchor_row, right));
         if p.anchor.col > delta {
             let left = p.anchor.col - delta;
             prop_assert!(!p.contains_col(left));
