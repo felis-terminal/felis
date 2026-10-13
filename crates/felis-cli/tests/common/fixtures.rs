@@ -89,9 +89,23 @@ pub(crate) async fn create_and_detach(socket: &std::path::Path) -> u128 {
     let mut conn = connect(socket, Offer::ops()).await.unwrap();
     let id = conn.create_with(SpawnArgs::default()).await.unwrap().id;
     drop(conn);
-    // The daemon's re-pool grace.
-    tokio::time::sleep(Duration::from_millis(200)).await;
-    id
+    let mut lister = connect(socket, Offer::ops()).await.unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let sessions = lister.list_sessions().await.unwrap();
+        let session = sessions
+            .iter()
+            .find(|s| s.id == id)
+            .expect("created session is listed");
+        if session.idle_seconds.is_some() {
+            return id;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the creator's attachment never went away",
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
 }
 
 /// Reruns a read verb until its stdout contains `needle`, returning that
