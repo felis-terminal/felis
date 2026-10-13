@@ -978,10 +978,10 @@ async fn send_wait_timeout_bounds_the_admission_of_a_wedged_child() {
             PAYLOAD,
             "--wait",
             "--timeout",
-            "2",
+            "1",
         ])
         .output()
-        .expect("run felis sessions send --wait --timeout 2");
+        .expect("run felis sessions send --wait --timeout 1");
     assert_eq!(
         out.status.code(),
         Some(1),
