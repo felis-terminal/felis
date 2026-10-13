@@ -47,8 +47,6 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
   `EBADF`), bad base64 or zlib data is `EINVAL` (was `EBADF`), and raw pixel data shorter than `s=`×`v=` is `ENODATA`
   (was `EINVAL`).
 
-### Changed
-
 - On Linux, fonts are chosen by the host's fontconfig: the default face is `fc-match monospace`, `font.family` and the
   `[font.bold]`/`[font.italic]` families resolve through it (so `fonts.conf` aliases apply), and with `font.fallback`
   unset the fallback order is fontconfig's ranked list for the primary, following its prefer lists, per-language rules
