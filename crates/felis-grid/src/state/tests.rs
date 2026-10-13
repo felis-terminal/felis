@@ -225,10 +225,10 @@ fn the_cursor_and_margins_may_reach_the_last_row_and_column_but_not_past() {
         v["screen"]["cursor"]["col"] = 10.into();
     });
     assert_refused(&grid, "scroll margins", |v| {
-        v["margins"]["bottom"] = 5.into()
+        v["margins"]["bottom"] = 5.into();
     });
     assert_refused(&grid, "scroll margins", |v| {
-        v["margins"]["right"] = 10.into()
+        v["margins"]["right"] = 10.into();
     });
 }
 
@@ -290,7 +290,7 @@ fn damage_must_be_sized_for_the_screen_with_no_bit_past_its_last_row() {
 fn held_bidi_controls_may_fill_their_queue_but_not_overrun_it() {
     let grid = Grid::new(5, 10);
     assert_admitted(&grid, "a full queue", |v| {
-        v["pending_bidi"]["len"] = 8.into()
+        v["pending_bidi"]["len"] = 8.into();
     });
     assert_refused(&grid, "pending bidi controls", |v| {
         v["pending_bidi"]["len"] = 9.into();
