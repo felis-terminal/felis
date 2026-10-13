@@ -116,37 +116,27 @@ fn xtgettcap_reply_reports_live_dimensions() {
 }
 
 #[test]
-fn xtgettcap_tn_and_name_report_the_stamped_term() {
-    let mut g = Grid::new(4, 8);
-    g.set_term_name("xterm-felis");
-    let mut p = Parser::new();
-    let hex = String::from_utf8(ascii_to_hex(b"xterm-felis")).unwrap();
-    drive(&mut p, &mut g, b"\x1bP+q544e\x1b\\");
-    let r = responses(&mut g);
-    assert_eq!(
-        std::str::from_utf8(&r[0]).unwrap(),
-        format!("\x1bP1+r544e={hex}\x1b\\")
-    );
-    drive(&mut p, &mut g, b"\x1bP+q6e616d65\x1b\\");
-    let r = responses(&mut g);
-    assert_eq!(
-        std::str::from_utf8(&r[0]).unwrap(),
-        format!("\x1bP1+r6e616d65={hex}\x1b\\")
-    );
-}
-
-#[test]
-fn xtgettcap_tn_reports_a_hatch_term_verbatim() {
-    let mut g = Grid::new(4, 8);
-    g.set_term_name("xterm-kitty");
-    let mut p = Parser::new();
-    drive(&mut p, &mut g, b"\x1bP+q544e\x1b\\");
-    let r = responses(&mut g);
-    let hex = String::from_utf8(ascii_to_hex(b"xterm-kitty")).unwrap();
-    assert_eq!(
-        std::str::from_utf8(&r[0]).unwrap(),
-        format!("\x1bP1+r544e={hex}\x1b\\")
-    );
+fn xtgettcap_tn_and_name_report_the_stamped_term_verbatim() {
+    for term in ["xterm-felis", "xterm-kitty"] {
+        let mut g = Grid::new(4, 8);
+        g.set_term_name(term);
+        let mut p = Parser::new();
+        let hex = String::from_utf8(ascii_to_hex(term.as_bytes())).unwrap();
+        drive(&mut p, &mut g, b"\x1bP+q544e\x1b\\");
+        let r = responses(&mut g);
+        assert_eq!(
+            std::str::from_utf8(&r[0]).unwrap(),
+            format!("\x1bP1+r544e={hex}\x1b\\"),
+            "TN for {term}"
+        );
+        drive(&mut p, &mut g, b"\x1bP+q6e616d65\x1b\\");
+        let r = responses(&mut g);
+        assert_eq!(
+            std::str::from_utf8(&r[0]).unwrap(),
+            format!("\x1bP1+r6e616d65={hex}\x1b\\"),
+            "name for {term}"
+        );
+    }
 }
 
 #[test]
@@ -165,4 +155,11 @@ fn ris_keeps_the_stamped_term_for_xtgettcap_tn() {
     let mut p = Parser::new();
     drive(&mut p, &mut g, b"\x1bc");
     assert_eq!(g.term_name(), Some("xterm-felis"));
+    drive(&mut p, &mut g, b"\x1bP+q544e\x1b\\");
+    let r = responses(&mut g);
+    let hex = String::from_utf8(ascii_to_hex(b"xterm-felis")).unwrap();
+    assert_eq!(
+        std::str::from_utf8(&r[0]).unwrap(),
+        format!("\x1bP1+r544e={hex}\x1b\\")
+    );
 }

@@ -37,24 +37,20 @@ proptest! {
     }
 
     /// `o=z` producers expect the exact bytes they sent, so inflate must
-    /// match the standard zlib encoder byte-for-byte.
-    #[test]
-    fn compress_inflate_round_trips_arbitrary_bytes(
-        original in proptest::collection::vec(any::<u8>(), 0..1024),
-    ) {
-        let compressed = compress_to_vec_zlib(&original, 6);
-        let inflated = inflate(&compressed, original.len()).unwrap();
-        prop_assert_eq!(inflated, original);
-    }
-
-    /// The cap is a hard budget, not a hint: a payload one byte over it
-    /// is a typed size-limit refusal, distinct from malformed input.
+    /// match the standard zlib encoder byte-for-byte. The cap is a hard
+    /// budget, not a hint: a payload one byte over it is a typed
+    /// size-limit refusal, distinct from malformed input.
     #[test]
     fn the_output_cap_decides_between_the_payload_and_a_size_limit(
         original in proptest::collection::vec(any::<u8>(), 1..1024),
         cap in 0usize..1024,
     ) {
         let compressed = compress_to_vec_zlib(&original, 6);
+        prop_assert_eq!(inflate(&compressed, original.len()), Ok(original.clone()));
+        prop_assert_eq!(
+            inflate(&compressed, original.len() - 1),
+            Err(InflateError::SizeLimit)
+        );
         if cap >= original.len() {
             prop_assert_eq!(inflate(&compressed, cap), Ok(original));
         } else {

@@ -20,57 +20,6 @@ fn assembled(d: BodyDispatch) -> Option<CompleteCommand> {
 }
 
 #[test]
-fn single_chunk_command_assembles_in_one_dispatch() {
-    let mut r = Reassembler::new();
-    let complete = assembled(reassemble_apc_body(&mut r, &body("Gi=1,a=q", b"")))
-        .expect("single-chunk command must assemble");
-    assert_eq!(complete.payload, b"");
-    assert!(
-        complete
-            .controls
-            .iter()
-            .any(|(k, v)| *k == b'i' && v == b"1")
-    );
-    assert!(
-        complete
-            .controls
-            .iter()
-            .any(|(k, v)| *k == b'a' && v == b"q")
-    );
-}
-
-#[test]
-fn chunked_transmission_assembles_across_three_bodies() {
-    let mut r = Reassembler::new();
-    assert_eq!(
-        reassemble_apc_body(&mut r, &body("Gi=7,a=t,m=1", b"head-")),
-        BodyDispatch::Silent,
-        "head chunk is pending",
-    );
-    assert_eq!(
-        reassemble_apc_body(&mut r, &body("Gm=1", b"middle-")),
-        BodyDispatch::Silent,
-        "middle chunk is pending",
-    );
-    let complete = assembled(reassemble_apc_body(&mut r, &body("Gm=0", b"tail")))
-        .expect("terminal chunk assembles");
-    assert_eq!(complete.payload, b"head-middle-tail");
-    assert!(
-        complete
-            .controls
-            .iter()
-            .any(|(k, v)| *k == b'i' && v == b"7")
-    );
-    assert!(
-        complete
-            .controls
-            .iter()
-            .any(|(k, v)| *k == b'a' && v == b"t")
-    );
-    assert!(!complete.controls.iter().any(|(k, _)| *k == b'm'));
-}
-
-#[test]
 fn foreign_apc_dialect_stays_silent_without_disturbing_reassembler() {
     // Pins: a non-`G` APC is another dialect, so no reply (a reply would
     // inject kitty bytes into a protocol we do not speak).

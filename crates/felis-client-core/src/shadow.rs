@@ -1210,50 +1210,13 @@ mod tests {
 
     #[test]
     fn bell_message_is_a_shadow_no_op_and_apply_succeeds() {
-        // Pins: Bell applies as a no-op and touches no cells or title.
-        use felis_grid::Grapheme;
-        let mut shadow = ShadowScreen::new(2, 4);
-        shadow
-            .apply(&GridMsg::RowDelta {
-                rows: vec![(
-                    0,
-                    RowPayload(packed_row(
-                        &[
-                            Cell {
-                                grapheme: Grapheme::Ascii(b'A'),
-                                style: StyleId::DEFAULT,
-                                link: None,
-                                sizing: None,
-                            },
-                            Cell::default(),
-                            Cell::default(),
-                            Cell::default(),
-                        ],
-                        &StyleTable::new(),
-                    )),
-                )],
-            })
-            .unwrap();
-        shadow
-            .apply(&GridMsg::Title {
-                value: "before".into(),
-            })
-            .unwrap();
-        drop(shadow.take_title_dirty());
+        let mut shadow = seeded_shadow_for_no_op_check();
         shadow
             .apply(&GridMsg::Attention {
                 source: AttentionSource::Bell,
             })
             .expect("Bell applies cleanly");
-        assert_eq!(
-            shadow.screen().cell(0, 0).unwrap().grapheme,
-            Grapheme::Ascii(b'A'),
-            "cell content untouched",
-        );
-        assert!(
-            shadow.take_title_dirty().is_none(),
-            "title-dirty stayed clean — Bell did not flip it",
-        );
+        assert_no_op_left_shadow_untouched(&mut shadow);
     }
 
     #[test]

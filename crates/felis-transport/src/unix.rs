@@ -318,6 +318,22 @@ mod tests {
         rustix::process::umask(mask)
     }
 
+    /// Held across a whole swap, bind, and restore. `UMASK_LOCK` cannot
+    /// be, because `bind` takes it, so without this a second test's swap
+    /// could land between this one's swap and its bind.
+    static INHERITED_UMASK_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Runs `op` with `inherited` as the process umask and returns its
+    /// result with the umask `op` left behind, restoring the original.
+    fn under_inherited_umask<T>(inherited: Mode, op: impl FnOnce() -> T) -> (T, Mode) {
+        #[allow(clippy::unwrap_used)]
+        let _serial = INHERITED_UMASK_LOCK.lock().unwrap();
+        let original = swap_umask(inherited);
+        let out = op();
+        let left_behind = swap_umask(original);
+        (out, left_behind)
+    }
+
     /// A socket parent must be a `0700` directory this uid owns
     /// (REQ-107), and `TempDir` follows the process umask.
     #[cfg(unix)]
@@ -362,9 +378,9 @@ mod tests {
         for inherited in [0o077, 0o777, 0o022] {
             let tmp = private_dir();
             let dir = tmp.path().join("felis");
-            let restore = swap_umask(Mode::from_raw_mode(inherited));
-            let bound = Listener::bind(&Endpoint::unix(dir.join("daemon.sock")));
-            swap_umask(restore);
+            let (bound, _) = under_inherited_umask(Mode::from_raw_mode(inherited), || {
+                Listener::bind(&Endpoint::unix(dir.join("daemon.sock")))
+            });
             bound.unwrap();
             assert_eq!(
                 fs::metadata(&dir).unwrap().mode() & 0o777,
@@ -866,9 +882,10 @@ mod tests {
     async fn bind_restores_the_process_umask() {
         let tmp = private_dir();
         let path = tmp.path().join("umask.sock");
-        let original = swap_umask(Mode::from_raw_mode(0o022));
-        let _l = Listener::bind(&Endpoint::unix(path)).unwrap();
-        let left_behind = swap_umask(original);
+        let (bound, left_behind) = under_inherited_umask(Mode::from_raw_mode(0o022), || {
+            Listener::bind(&Endpoint::unix(path))
+        });
+        bound.unwrap();
         assert_eq!(
             left_behind,
             Mode::from_raw_mode(0o022),

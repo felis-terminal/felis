@@ -555,31 +555,9 @@ mod tests {
         );
     }
 
-    /// Only these two prove the endpoint is cold; everything else has
-    /// to stay unverified or a caller would spawn beside a live daemon.
-    #[test]
-    fn only_enoent_and_econnrefused_prove_an_endpoint_is_cold() {
-        for kind in [io::ErrorKind::NotFound, io::ErrorKind::ConnectionRefused] {
-            assert!(
-                connect_error_is_absent(&io::Error::new(kind, "x")),
-                "{kind}"
-            );
-        }
-        for kind in [
-            io::ErrorKind::PermissionDenied,
-            io::ErrorKind::ConnectionReset,
-            io::ErrorKind::Other,
-        ] {
-            assert!(
-                !connect_error_is_absent(&io::Error::new(kind, "x")),
-                "{kind}"
-            );
-        }
-    }
-
-    #[cfg(unix)]
     /// The whole autospawn decision rests on this: anything but these
-    /// two kinds leaves the endpoint's state unknown.
+    /// two kinds leaves the endpoint's state unknown, and a caller that
+    /// read it as cold would spawn beside a live daemon.
     #[test]
     fn only_not_found_and_refused_prove_nothing_is_listening() {
         for kind in [io::ErrorKind::NotFound, io::ErrorKind::ConnectionRefused] {
@@ -587,6 +565,7 @@ mod tests {
         }
         for kind in [
             io::ErrorKind::PermissionDenied,
+            io::ErrorKind::ConnectionReset,
             io::ErrorKind::TimedOut,
             io::ErrorKind::Other,
         ] {

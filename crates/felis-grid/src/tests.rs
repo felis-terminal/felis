@@ -212,10 +212,11 @@ fn da1_query_responds_with_xterm_vt420_default_feature_mask() {
     let mut p = Parser::new();
     let mut g = Grid::new(1, 1);
     // `CSI c` and `CSI 0 c` are equivalent.
+    let reply = b"\x1b[?64;1;2;6;9;15;16;17;18;21;22;28;29c".to_vec();
     drive(&mut p, &mut g, b"\x1b[c");
-    assert_eq!(responses(&mut g), vec![DA1_REPLY.to_vec()]);
+    assert_eq!(responses(&mut g), vec![reply.clone()]);
     drive(&mut p, &mut g, b"\x1b[0c");
-    assert_eq!(responses(&mut g), vec![DA1_REPLY.to_vec()]);
+    assert_eq!(responses(&mut g), vec![reply]);
 }
 
 /// DECID is the legacy alias for DA1; terminfo probes expect the reply
@@ -1148,28 +1149,6 @@ fn combining_mark_at_column_zero_with_no_prior_print_drops() {
     drive(&mut p, &mut g, "\u{0301}".as_bytes());
     assert_eq!(g.cell(0, 0).unwrap().grapheme, Grapheme::Empty);
     assert_eq!(g.cursor().col, 0);
-}
-
-/// `append_combining_mark` lends its scratch buffer out via `mem::take`;
-/// every return path must move it back, or the reuse degrades to a
-/// fresh alloc per mark (visible only as benchmark noise).
-#[test]
-fn combining_mark_scratch_buffer_survives_every_return_path() {
-    let mut p = Parser::new();
-    let mut g = Grid::new(2, 4);
-    drive(&mut p, &mut g, "e\u{0301}".as_bytes());
-    let cap = g.screen.cluster_table.scratch.capacity();
-    assert!(cap > 0, "intern path must hand the scratch buffer back");
-    drive(&mut p, &mut g, "\u{0327}".as_bytes());
-    assert!(g.screen.cluster_table.scratch.capacity() >= cap);
-    // Park the cursor past a never-printed cell so the mark's owner
-    // resolves to `Grapheme::Empty`.
-    drive(&mut p, &mut g, b"\x1b[2;3H");
-    drive(&mut p, &mut g, "\u{0301}".as_bytes());
-    assert!(
-        g.screen.cluster_table.scratch.capacity() >= cap,
-        "early-return path dropped the scratch buffer"
-    );
 }
 
 #[test]

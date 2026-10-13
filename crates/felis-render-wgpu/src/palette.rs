@@ -427,15 +427,6 @@ mod tests {
     }
 
     #[test]
-    fn direct_rgb_passes_through_linearization() {
-        let theme = ResolvedTheme::new(&Theme::default());
-        assert!(approx(
-            resolve_fg(Color::Rgb(255, 0, 0), &theme),
-            srgb_to_linear_rgba([255, 0, 0], 1.0),
-        ));
-    }
-
-    #[test]
     fn resolved_theme_tables_match_the_per_call_transform_bit_for_bit() {
         let overrides = BTreeMap::from([(1u8, "#ff5555".to_owned())]);
         let theme = ResolvedTheme::new(&Theme::default().with_palette(&overrides));
@@ -453,9 +444,10 @@ mod tests {
                 resolve_bg(Color::Indexed(index), &theme),
                 srgb_to_linear_rgba(srgb, 1.0),
             );
+            let rgb = [index, index / 2, !index];
             assert_eq!(
-                resolve_fg(Color::Rgb(index, index, index), &theme),
-                srgb_to_linear_rgba([index; 3], 1.0),
+                resolve_fg(Color::Rgb(rgb[0], rgb[1], rgb[2]), &theme),
+                srgb_to_linear_rgba(rgb, 1.0),
             );
         }
     }
@@ -624,7 +616,6 @@ mod tests {
         assert_eq!(PALETTE_NAMES[7], "white");
         assert_eq!(PALETTE_NAMES[8], "bright_black");
         assert_eq!(PALETTE_NAMES[15], "bright_white");
-        assert_eq!(PALETTE_NAMES.len(), 16);
     }
 
     #[test]

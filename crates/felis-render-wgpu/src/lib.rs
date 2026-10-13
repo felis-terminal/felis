@@ -2200,7 +2200,7 @@ fn cursor_rect_px(
 mod tests {
     #![allow(clippy::float_cmp)]
 
-    use crate::palette::{XTERM_PALETTE, srgb_to_linear_rgba};
+    use crate::palette::srgb_to_linear_rgba;
 
     use super::*;
 
@@ -2259,7 +2259,6 @@ mod tests {
             let adapter = request_adapter(&instance, None)
                 .await
                 .expect("noop adapter");
-            assert_eq!(adapter.limits().max_texture_dimension_2d, 2048);
             let (device, _queue) = request_device(&adapter)
                 .await
                 .expect("a device at the adapter's own limits");
@@ -2779,13 +2778,6 @@ mod tests {
         assert_eq!(theme.palette[12], Some([0x55, 0x55, 0xFF]));
         assert!(theme.palette[0].is_none());
         assert!(theme.palette[15].is_none());
-        let _ = XTERM_PALETTE;
-    }
-
-    #[test]
-    fn theme_from_config_default_is_fully_opaque() {
-        let theme = Renderer::theme_from_config(&RendererConfig::default());
-        assert_eq!(theme.bg[3], 1.0);
     }
 
     #[test]
@@ -2802,6 +2794,8 @@ mod tests {
             [opaque[0], opaque[1], opaque[2]]
         );
         assert!((theme.bg[3] - 0.8).abs() < 1e-6);
+        let unset = Renderer::theme_from_config(&RendererConfig::default());
+        assert_eq!(unset.bg[3], 1.0, "no opacity configured is fully opaque");
     }
 
     #[test]

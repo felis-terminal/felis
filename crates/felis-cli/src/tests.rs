@@ -1,44 +1,16 @@
 use clap::Parser;
-use felis_client_core::local_socket::resolve_local_socket;
 
 use super::*;
 
-/// An explicit `--socket` outranks every other source; a relative path
-/// is anchored to the working directory the flag was typed in.
-#[test]
-fn resolve_local_socket_returns_override_when_set() {
-    let abs = PathBuf::from("/tmp/felis-work.sock");
-    assert_eq!(resolve_local_socket(Some(abs.as_path())).unwrap(), abs,);
-    let rel = PathBuf::from("./felis.sock");
-    #[cfg(unix)]
-    assert_eq!(
-        resolve_local_socket(Some(rel.as_path())).unwrap(),
-        std::env::current_dir().unwrap().join(&rel),
-    );
-    #[cfg(windows)]
-    assert_eq!(resolve_local_socket(Some(rel.as_path())).unwrap(), rel);
-}
-
 fn session(rows: u16, cols: u16) -> SessionInfo {
     SessionInfo {
-        id: 1,
         dims: felis_protocol::messages::GridDims {
             rows,
             cols,
             pixel_w: 0,
             pixel_h: 0,
         },
-        title: None,
-        cwd: None,
-        idle_seconds: None,
-        tags: Vec::new(),
-        last_notification: None,
-        foreground: None,
-        exited: false,
-        last_exit_code: None,
-        attachments: Vec::new(),
-        sequence: std::num::NonZeroU64::MIN,
-        program_status: Vec::new(),
+        ..test_support::session_info(1)
     }
 }
 
@@ -278,56 +250,10 @@ fn argv(words: &[&str]) -> Vec<OsString> {
 }
 
 #[test]
-fn the_removed_trace_perf_flag_is_an_unknown_argument() {
-    let err = Cli::try_parse_from(["felis", "--trace-perf"])
-        .expect_err("--trace-perf must be rejected as unknown");
-    assert_eq!(err.kind(), clap::error::ErrorKind::UnknownArgument);
-    let err = Cli::try_parse_from(["felis", "--trace-perf", "sessions", "list"])
-        .expect_err("--trace-perf with a verb must be rejected");
-    assert_eq!(err.kind(), clap::error::ErrorKind::UnknownArgument);
-    // The flag remains valid when forwarded opaquely after an external name.
+fn an_external_commands_own_trace_perf_flag_forwards_opaquely() {
     let external = external_command(&argv(&["felis", "tui", "--trace-perf"]))
         .expect("an external command's own --trace-perf forwards opaquely");
     assert_eq!(external.args, argv(&["--trace-perf"]));
-}
-
-#[test]
-fn the_retired_json_flag_is_an_unknown_argument() {
-    for argv in [
-        &["felis", "sessions", "list", "--jsonl"][..],
-        &["felis", "sessions", "info", "--json", "1a"],
-        &["felis", "sessions", "capture", "--json", "1a"],
-        &["felis", "sessions", "search", "--json", "1a", "pat"],
-        &["felis", "sessions", "kill", "--json", "1a"],
-        &["felis", "sessions", "evict", "--json", "1a"],
-        &["felis", "sessions", "tag", "--json", "1a", "work"],
-        &["felis", "sessions", "send", "--json", "--wait", "1a", "x"],
-        &["felis", "sessions", "spawn", "--json"],
-    ] {
-        let err = Cli::try_parse_from(argv)
-            .err()
-            .unwrap_or_else(|| panic!("{argv:?} must be rejected"));
-        assert_eq!(
-            err.kind(),
-            clap::error::ErrorKind::UnknownArgument,
-            "{argv:?} must fail as an unknown flag, not as something subtler"
-        );
-    }
-}
-
-#[test]
-fn sessions_send_reports_without_a_wait() {
-    Cli::try_parse_from(["felis", "sessions", "send", "1a", "x", "--format", "json"])
-        .expect("send --format json stands alone");
-    Cli::try_parse_from([
-        "felis", "sessions", "send", "1a", "x", "--wait", "--format", "json",
-    ])
-    .expect("send --wait --format json parses");
-    // No text: the pure-wait form.
-    Cli::try_parse_from([
-        "felis", "sessions", "send", "1a", "--wait", "--format", "json",
-    ])
-    .expect("send --wait with no text parses");
 }
 
 #[test]
@@ -340,48 +266,6 @@ fn sessions_tag_requires_an_add_or_a_remove() {
         "felis", "sessions", "tag", "1a", "new", "--remove", "old", "--remove", "stale",
     ])
     .expect("adds and repeated removes compose");
-}
-
-#[test]
-fn sessions_capture_format_source_matrix() {
-    for argv in [
-        &[
-            "felis",
-            "sessions",
-            "capture",
-            "--format",
-            "jsonl",
-            "--source",
-            "command-output",
-            "1a",
-        ][..],
-        &[
-            "felis",
-            "sessions",
-            "capture",
-            "--format",
-            "jsonl",
-            "--source",
-            "last-command",
-            "1a",
-        ],
-        &[
-            "felis", "sessions", "capture", "--format", "jsonl", "--ansi", "1a",
-        ],
-        &[
-            "felis",
-            "sessions",
-            "capture",
-            "--format",
-            "jsonl",
-            "--ansi",
-            "--source",
-            "scrollback",
-            "1a",
-        ],
-    ] {
-        Cli::try_parse_from(argv).unwrap_or_else(|e| panic!("{argv:?} must parse: {e}"));
-    }
 }
 
 #[test]
@@ -403,15 +287,6 @@ fn sessions_search_has_no_short_case_insensitive_flag() {
 fn sessions_has_no_standalone_wait_verb() {
     let gone = Cli::try_parse_from(["felis", "sessions", "wait", "1a"]);
     assert!(gone.is_err(), "`sessions wait` must not resolve");
-}
-
-#[test]
-fn cli_attach_is_a_top_level_verb() {
-    let cli = Cli::try_parse_from(["felis", "attach", "1a2b"]).expect("parses felis attach 1a2b");
-    match cli.cmd {
-        Some(Cmd::Attach { id }) => assert_eq!(id, "1a2b"),
-        other => panic!("expected Cmd::Attach, got {other:?}"),
-    }
 }
 
 #[test]
@@ -809,28 +684,9 @@ fn the_launch_verb_help_says_where_the_globals_go() {
     assert!(help.contains("felis --help"), "{help}");
 }
 
-/// `--help` lists the possible values of the finite options.
 #[test]
-fn help_lists_the_possible_values_of_the_finite_options() {
-    let help = <Cli as clap::CommandFactory>::command()
-        .find_subcommand_mut("sessions")
-        .and_then(|sessions| sessions.find_subcommand_mut("capture"))
-        .expect("sessions capture is a subcommand")
-        .render_long_help()
-        .to_string();
-    assert!(help.contains("[possible values: human, jsonl]"), "{help}");
-    assert!(
-        help.contains("[possible values: visible, scrollback, command-output, last-command]"),
-        "{help}"
-    );
-
-    let point = <Cli as clap::CommandFactory>::command()
-        .find_subcommand_mut("sessions")
-        .and_then(|sessions| sessions.find_subcommand_mut("list"))
-        .expect("sessions list is a subcommand")
-        .render_long_help()
-        .to_string();
-    assert!(point.contains("[possible values: human, json]"), "{point}");
+fn the_clap_tree_passes_its_own_consistency_checks() {
+    <Cli as clap::CommandFactory>::command().debug_assert();
 }
 
 /// Every visible help page in one snapshot.
@@ -863,17 +719,6 @@ fn every_visible_help_page_is_snapshotted() {
     let mut pages = String::new();
     walk(&mut root, "felis", &mut pages);
     insta::assert_snapshot!(pages);
-}
-
-#[test]
-fn a_bad_source_value_is_refused_with_the_possible_values() {
-    let err = Cli::try_parse_from(["felis", "sessions", "capture", "1a", "--source", "bogus"])
-        .expect_err("an unknown --source value is a usage error");
-    let rendered = err.to_string();
-    assert!(
-        rendered.contains("[possible values: visible, scrollback, command-output, last-command]"),
-        "{rendered}"
-    );
 }
 
 #[test]
@@ -1189,8 +1034,78 @@ mod argv_matrix {
             &["felis", "--trace-perf", "sessions", "list"],
             &["felis", "sessions", "spawn", "--trace-perf"],
             &["felis", "sessions", "list", "--json"],
+            &["felis", "sessions", "list", "--jsonl"],
+            &["felis", "sessions", "info", "--json", "1a"],
+            &["felis", "sessions", "capture", "--json", "1a"],
+            &["felis", "sessions", "search", "--json", "1a", "pat"],
+            &["felis", "sessions", "kill", "--json", "1a"],
+            &["felis", "sessions", "evict", "--json", "1a"],
+            &["felis", "sessions", "tag", "--json", "1a", "work"],
+            &["felis", "sessions", "send", "--json", "--wait", "1a", "x"],
         ] {
             check(argv, Outcome::Usage(UnknownArgument));
+        }
+    }
+
+    /// `capture`'s framing, source, and `--ansi` compose freely; only a
+    /// source outside the closed set is refused.
+    #[test]
+    fn capture_composes_its_framing_and_source_flags() {
+        use clap::error::ErrorKind::InvalidValue;
+
+        for (argv, outcome) in [
+            (
+                &[
+                    "felis",
+                    "sessions",
+                    "capture",
+                    "--format",
+                    "jsonl",
+                    "--source",
+                    "command-output",
+                    "1a",
+                ][..],
+                Outcome::Parses,
+            ),
+            (
+                &[
+                    "felis",
+                    "sessions",
+                    "capture",
+                    "--format",
+                    "jsonl",
+                    "--source",
+                    "last-command",
+                    "1a",
+                ],
+                Outcome::Parses,
+            ),
+            (
+                &[
+                    "felis", "sessions", "capture", "--format", "jsonl", "--ansi", "1a",
+                ],
+                Outcome::Parses,
+            ),
+            (
+                &[
+                    "felis",
+                    "sessions",
+                    "capture",
+                    "--format",
+                    "jsonl",
+                    "--ansi",
+                    "--source",
+                    "scrollback",
+                    "1a",
+                ],
+                Outcome::Parses,
+            ),
+            (
+                &["felis", "sessions", "capture", "1a", "--source", "bogus"],
+                Outcome::Usage(InvalidValue),
+            ),
+        ] {
+            check(argv, outcome);
         }
     }
 
@@ -1208,13 +1123,6 @@ mod argv_matrix {
         ] {
             check(argv, Outcome::Usage(InvalidValue));
         }
-
-        let err = Cli::try_parse_from(["felis", "sessions", "list", "--format", "jsonl"])
-            .expect_err("jsonl is not a point framing");
-        assert!(
-            err.to_string().contains("[possible values: human, json]"),
-            "{err}"
-        );
     }
 
     /// Clap alone never reaches an exec: an unknown leading token is
@@ -1279,6 +1187,23 @@ mod argv_matrix {
             ),
             (
                 &["felis", "sessions", "send", "1a", "x", "--raw"],
+                Outcome::Parses,
+            ),
+            // A machine framing reports on its own, with or without a wait.
+            (
+                &["felis", "sessions", "send", "1a", "x", "--format", "json"],
+                Outcome::Parses,
+            ),
+            (
+                &[
+                    "felis", "sessions", "send", "1a", "x", "--wait", "--format", "json",
+                ],
+                Outcome::Parses,
+            ),
+            (
+                &[
+                    "felis", "sessions", "send", "1a", "--wait", "--format", "json",
+                ],
                 Outcome::Parses,
             ),
             (

@@ -242,22 +242,4 @@ mod tests {
         assert_eq!(severity_token(Severity::Error), "error");
         assert_eq!(severity_token(Severity::Warning), "warning");
     }
-
-    /// The overlay default is the GUI client's constant, not the binary
-    /// name.
-    #[test]
-    fn the_client_scope_defaults_to_the_gui_overlay_constant() {
-        use clap::Parser as _;
-
-        #[derive(clap::Parser)]
-        struct Probe {
-            #[command(flatten)]
-            scope: ClientScope,
-        }
-        assert_eq!(Probe::parse_from(["probe"]).scope.client, GUI_CLIENT_ID);
-        assert_eq!(
-            Probe::parse_from(["probe", "--client", "tui"]).scope.client,
-            "tui"
-        );
-    }
 }

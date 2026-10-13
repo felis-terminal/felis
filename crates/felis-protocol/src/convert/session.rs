@@ -284,24 +284,6 @@ mod tests {
         );
     }
 
-    /// A sibling-field pair would admit a frame naming two sessions;
-    /// the union's single slot does not.
-    #[test]
-    fn a_second_target_replaces_the_first_instead_of_naming_two() {
-        let mut attach = v1::SessionAttach {
-            target: Some(v1::session_attach::Target::Id(id_to_bytes(0xCAFE))),
-            live_only: false,
-        };
-        attach.target = Some(v1::session_attach::Target::IdPrefix("beef".into()));
-        assert_eq!(
-            messages::SessionToDaemonMsg::try_from(wire_attach(attach.target)).unwrap(),
-            messages::SessionToDaemonMsg::Attach {
-                target: messages::AttachTarget::Prefix("beef".into()),
-                live_only: false,
-            }
-        );
-    }
-
     fn wire_attach_failed(
         reason: Option<v1::session_attach_failed::Reason>,
     ) -> v1::SessionToClientMsg {

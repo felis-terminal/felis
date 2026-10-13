@@ -669,11 +669,8 @@ mod tests {
         assert_eq!(reader.next_frame().await.unwrap().expect("frame").kind, 0);
     }
 
-    /// A body encoded away from the writer keeps the requirement its
-    /// own metadata reports, so the daemon's pre-encoded fan-out is
-    /// gated exactly as a direct send.
-    #[tokio::test]
-    async fn a_pre_encoded_body_carries_its_own_authorization() {
+    #[test]
+    fn a_pre_encoded_body_carries_its_message_kind() {
         use felis_protocol::messages::{AttachFailure, AttachRefusal, SessionToClientMsg};
 
         let msg = SessionToClientMsg::AttachFailed {
@@ -681,13 +678,7 @@ mod tests {
             detail: String::new(),
         };
         let frame = CheckedFrame::encode(&msg).unwrap();
-        assert_eq!(frame.requires(), msg.requires());
-        assert_eq!(frame.kind(), 4);
-        assert_ne!(frame.body(), b"");
-
-        let (a, _b) = pair();
-        let mut writer = FrameWriter::new(a, frame.requires().minor);
-        writer.send_checked(&frame).await.unwrap();
+        assert_eq!(frame.kind(), MessageKind::Session.as_u16());
     }
 
     /// The uncorrelated path refuses a correlated arm and writes

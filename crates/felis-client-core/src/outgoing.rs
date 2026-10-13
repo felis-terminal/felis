@@ -535,7 +535,7 @@ mod tests {
     }
 
     #[test]
-    fn keys_and_pastes_are_never_coalesced() {
+    fn only_a_resize_has_a_coalesce_key() {
         assert_eq!(coalesce_key(&InputMsg::KeyBytes(b"a".to_vec())), None);
         assert_eq!(coalesce_key(&InputMsg::Paste(b"a".to_vec())), None);
         assert_eq!(coalesce_key(&InputMsg::NextGridFrame), None);

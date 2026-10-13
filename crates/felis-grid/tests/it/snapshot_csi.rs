@@ -9,8 +9,7 @@ use felis_vt::Parser;
 
 use crate::common;
 use common::{
-    cell_char, drive, scroll_ops, styled_cell_lines, write_cells, write_cursor, write_dirty_rows,
-    write_pen,
+    cell_char, drive, scroll_ops, styled_cell_lines, write_cells, write_cursor, write_pen,
 };
 
 fn render(grid: &Grid) -> String {
@@ -27,7 +26,6 @@ fn render(grid: &Grid) -> String {
             writeln!(out, "{line}").unwrap();
         }
     }
-    write_dirty_rows(&mut out, grid);
     out
 }
 
@@ -53,7 +51,6 @@ fn colored_prompt_then_command() {
       (0,6): fg=idx4 bg=default flags=B
       (0,7): fg=idx4 bg=default flags=B
       (0,8): fg=idx4 bg=default flags=B
-    dirty_rows: [0, 1]
     ");
 }
 
@@ -67,7 +64,6 @@ fn cursor_moves_and_overwrite() {
     |abcXef....|
     attrs:
       (0,3): fg=default bg=default flags=R
-    dirty_rows: [0]
     ");
 }
 
@@ -82,7 +78,6 @@ fn ed_clears_screen_and_cup_homes_cursor() {
     |......|
     |......|
     attrs: (all default)
-    dirty_rows: [0, 1, 2]
     ");
 }
 
@@ -97,7 +92,6 @@ fn ed_0_clears_from_cursor_to_end_of_screen() {
     |BB....|
     |......|
     attrs: (all default)
-    dirty_rows: [0, 1, 2]
     ");
 }
 
@@ -112,7 +106,6 @@ fn ed_1_clears_from_start_of_screen_to_cursor() {
     |...BBB|
     |CCCCCC|
     attrs: (all default)
-    dirty_rows: [0, 1, 2]
     ");
 }
 
@@ -129,7 +122,6 @@ fn ed_3_clears_scrollback_only_and_leaves_screen_intact() {
     |BBBBBB|
     |CCCCCC|
     attrs: (all default)
-    dirty_rows: [0, 1, 2]
     ");
 }
 
@@ -144,7 +136,6 @@ fn ed_3_drops_scrollback_rows() {
     |DDD|
     |EEE|
     attrs: (all default)
-    dirty_rows: [0, 1]
     ");
 }
 
@@ -158,7 +149,6 @@ fn pending_wrap_holds_until_next_print() {
     |abcde|
     |.....|
     attrs: (all default)
-    dirty_rows: [0, 1]
     ");
 }
 
@@ -172,7 +162,6 @@ fn line_feed_at_bottom_pushes_into_scrollback() {
     |row2|
     |row3|
     attrs: (all default)
-    dirty_rows: [0, 1]
     ");
 }
 
@@ -193,7 +182,6 @@ fn alternate_screen_enter_blanks_and_homes_cursor() {
       (0,2): fg=idx1 bg=default flags=B
       (0,3): fg=idx1 bg=default flags=B
       (0,4): fg=idx1 bg=default flags=B
-    dirty_rows: [0, 1, 2]
     ");
 }
 
@@ -213,7 +201,6 @@ fn alternate_screen_leave_restores_primary_exactly() {
       (0,2): fg=idx2 bg=default flags=B
       (0,3): fg=idx2 bg=default flags=B
       (0,4): fg=idx2 bg=default flags=B
-    dirty_rows: [0, 1]
     ");
 }
 
@@ -400,7 +387,6 @@ fn ind_outside_left_right_at_scroll_bottom_is_no_op() {
     |..x.....|
     |........|
     attrs: (all default)
-    dirty_rows: [0, 1, 2, 3, 4, 5]
     ");
 }
 
@@ -418,7 +404,6 @@ fn ri_outside_left_right_at_scroll_top_is_no_op() {
     |..x.....|
     |........|
     attrs: (all default)
-    dirty_rows: [0, 1, 2, 3, 4, 5]
     ");
 }
 
@@ -437,7 +422,6 @@ fn nel_outside_left_right_snaps_column_but_does_not_scroll() {
     |..x.....|
     |........|
     attrs: (all default)
-    dirty_rows: [0, 1, 2, 3, 4, 5]
     ");
 }
 
@@ -457,7 +441,6 @@ fn bs_reverse_wrap_at_scroll_top_lands_on_scroll_bottom() {
     |........|
     |........|
     attrs: (all default)
-    dirty_rows: [0, 1, 2, 3, 4, 5]
     ");
 }
 
@@ -473,7 +456,6 @@ fn lnm_makes_lf_perform_implicit_cr() {
     |........|
     |........|
     attrs: (all default)
-    dirty_rows: [0, 1, 2]
     ");
 
     let on = drive(3, 8, b"\x1b[20h\x1b[2;5H\n");
@@ -485,7 +467,6 @@ fn lnm_makes_lf_perform_implicit_cr() {
     |........|
     |........|
     attrs: (all default)
-    dirty_rows: [0, 1, 2]
     ");
 }
 
@@ -504,7 +485,6 @@ fn irm_under_declrmm_truncates_at_right_margin() {
     |....abXcde..|
     |............|
     attrs: (all default)
-    dirty_rows: [0, 1]
     ");
 }
 
@@ -528,7 +508,6 @@ fn bs_reverse_wrap_outside_left_margin_lands_at_right_margin() {
     |............|
     |............|
     attrs: (all default)
-    dirty_rows: [0, 1, 2, 3, 4, 5]
     ");
 }
 
@@ -555,7 +534,6 @@ fn deccara_sets_listed_attributes_in_rectangle() {
       (2,2): fg=default bg=default flags=BR
       (2,3): fg=default bg=default flags=BR
       (2,4): fg=default bg=default flags=BR
-    dirty_rows: [0, 1, 2]
     ");
 }
 
@@ -579,7 +557,6 @@ fn decrara_reverses_listed_attributes_in_rectangle() {
       (2,2): fg=default bg=default flags=U
       (2,3): fg=default bg=default flags=U
       (2,4): fg=default bg=default flags=U
-    dirty_rows: [0, 1, 2]
     ");
 }
 
@@ -616,7 +593,6 @@ fn deccara_stream_extent_spans_full_rows_between_endpoints() {
       (2,2): fg=default bg=default flags=B
       (2,3): fg=default bg=default flags=B
       (2,4): fg=default bg=default flags=B
-    dirty_rows: [0, 1, 2]
     ");
 }
 
@@ -657,7 +633,6 @@ fn deccara_rectangle_offset_by_margins_under_origin_mode() {
       (3,5): fg=default bg=default flags=R
       (3,6): fg=default bg=default flags=R
       (3,7): fg=default bg=default flags=R
-    dirty_rows: [0, 1, 2, 3]
     ");
 }
 

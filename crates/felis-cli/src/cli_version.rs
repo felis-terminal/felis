@@ -194,18 +194,8 @@ mod tests {
 
     use super::*;
 
-    /// A socket parent must be a `0700` directory this uid owns
-    /// (REQ-107), and `TempDir` follows the process umask.
     #[cfg(unix)]
-    fn private_dir() -> tempfile::TempDir {
-        use std::os::unix::fs::PermissionsExt as _;
-
-        let tmp = tempfile::TempDir::new().unwrap();
-
-        std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
-
-        tmp
-    }
+    use crate::test_support::{one_shot_daemon, private_dir};
 
     #[cfg(unix)]
     fn local_target(endpoint: Endpoint) -> Reconnector {
@@ -307,40 +297,11 @@ mod tests {
         );
     }
 
-    /// Runs a one-shot daemon that answers the preface with `answer`
-    /// and holds the socket open until the probe drops it, so the
-    /// refusal cannot race the close.
     #[cfg(unix)]
     fn against_fake_daemon(name: &str, answer: felis_protocol::preface::DaemonPreface) -> Row {
-        use felis_transport::local::Listener;
-        use felis_transport::preface::write_daemon_preface;
-        use tokio::io::AsyncReadExt as _;
-
         let tmp = private_dir();
         let path = tmp.path().join(name);
-
-        // The probe blocks on its own runtime, so the fake daemon needs
-        // a thread and reactor of its own.
-        let (bound_tx, bound_rx) = std::sync::mpsc::channel();
-        let listen_path = path.clone();
-        let server = std::thread::spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .unwrap();
-            rt.block_on(async move {
-                let listener = Listener::bind(&Endpoint::unix(listen_path)).expect("bind");
-                bound_tx.send(()).expect("probe still waiting");
-                let stream = listener.accept().await.expect("accept");
-                let (mut read, mut write) = stream.into_split();
-                write_daemon_preface(&mut write, answer)
-                    .await
-                    .expect("write preface");
-                drop(read.read(&mut [0_u8; 1]).await);
-            });
-        });
-
-        bound_rx.recv().expect("fake daemon bound");
+        let server = one_shot_daemon(path.clone(), answer);
         let row = block_on_daemon_row(&local_target(Endpoint::unix(path)));
         server.join().expect("fake daemon thread");
         row

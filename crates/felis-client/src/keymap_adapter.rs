@@ -144,21 +144,6 @@ mod tests {
     }
 
     #[test]
-    fn modifier_bitset_is_reproduced_faithfully() {
-        // The dispatcher relies on `mods.contains(Modifiers::SUPER)`
-        // matching `ModifiersState::SUPER` end-to-end.
-        let chord = winit_to_chord(
-            &Key::Character("a".into()),
-            ModifiersState::CONTROL
-                | ModifiersState::SHIFT
-                | ModifiersState::ALT
-                | ModifiersState::SUPER,
-        )
-        .unwrap();
-        assert_eq!(chord, "ctrl+shift+alt+super+a".parse().unwrap());
-    }
-
-    #[test]
     fn multi_codepoint_character_returns_none() {
         // Composite IME strings or dead-key chains are not chord-bindable.
         assert!(winit_to_chord(&Key::Character("ab".into()), ModifiersState::empty()).is_none(),);

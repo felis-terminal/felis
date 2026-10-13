@@ -9,15 +9,6 @@ const fn at(row: u16, col: u16) -> GridPos {
 mod cli {
     use super::*;
 
-    /// Pins: a clap upgrade must not silently drop the flag.
-    #[test]
-    fn cli_parses_trace_perf_flag() {
-        let cli = Cli::try_parse_from(["felis", "--trace-perf"]).expect("parses with --trace-perf");
-        assert!(cli.trace_perf);
-        let default = Cli::try_parse_from(["felis"]).expect("parses bare felis");
-        assert!(!default.trace_perf);
-    }
-
     /// Pins: args after the program (including a `-c` string with
     /// spaces) survive as separate argv entries, never re-split or
     /// shell-evaluated.
@@ -249,8 +240,9 @@ mod wheel {
 
     #[test]
     fn wheel_arrow_bytes_shift_held_count_matches_unshifted() {
-        let three_pgup = wheel_arrow_bytes(MouseScrollDelta::LineDelta(0.0, 3.0), true);
-        assert_eq!(three_pgup, b"\x1b[5~\x1b[5~\x1b[5~".to_vec());
+        let delta = MouseScrollDelta::LineDelta(0.0, 3.0);
+        assert_eq!(wheel_arrow_bytes(delta, false), b"\x1b[A".repeat(3));
+        assert_eq!(wheel_arrow_bytes(delta, true), b"\x1b[5~".repeat(3));
     }
 
     #[test]
@@ -260,24 +252,6 @@ mod wheel {
             true,
         );
         assert_eq!(down, b"\x1b[6~".to_vec());
-    }
-
-    #[test]
-    fn clamped_scroll_multiplier_keeps_the_wheel_alive() {
-        use felis_client_core::config::MouseConfig;
-        // Direction is the delta's sign, not the multiplier's.
-        let zero = MouseConfig {
-            scroll_multiplier: 0.0,
-        };
-        assert!(zero.clamped_scroll_multiplier() > 0.0);
-        let negative = MouseConfig {
-            scroll_multiplier: -5.0,
-        };
-        assert!(negative.clamped_scroll_multiplier() > 0.0);
-        let sane = MouseConfig {
-            scroll_multiplier: 3.0,
-        };
-        assert!((sane.clamped_scroll_multiplier() - 3.0).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -488,47 +462,25 @@ mod wheel {
 }
 
 #[test]
-fn winit_state_reaches_the_wire_through_one_conversion() {
-    // The only winit -> wire path: `winit_keys::mods`, then `Modifiers::to_input_mods`.
-    use felis_protocol::messages::InputMods;
-
-    let mut state = ModifiersState::empty();
-    state |= ModifiersState::SHIFT;
-    state |= ModifiersState::CONTROL;
-    let mods = winit_keys::mods(state).to_input_mods();
-    assert!(mods.contains(InputMods::SHIFT));
-    assert!(mods.contains(InputMods::CTRL));
-    assert!(!mods.contains(InputMods::ALT));
-}
-
-#[test]
-fn ime_cursor_area_anchors_at_cell_origin() {
-    let (x, y, w, h) = ime_cursor_area_pixels(0, 0, 8, 16);
-    assert_eq!((x, y, w, h), (0, 0, 8, 16));
-}
-
-#[test]
-fn ime_cursor_area_scales_by_cell_metrics() {
+fn ime_cursor_area_is_the_cursor_cell_in_pixels() {
     // Platform IMEs lean on this; a one-pixel drift puts the popup over
     // the wrong character.
-    let (x, y, w, h) = ime_cursor_area_pixels(10, 3, 8, 16);
-    assert_eq!((x, y, w, h), (80, 48, 8, 16));
+    for (col, row, want) in [
+        (0, 0, (0, 0, 8, 16)),
+        (10, 3, (80, 48, 8, 16)),
+        (1000, 0, (8000, 0, 8, 16)),
+    ] {
+        assert_eq!(
+            ime_cursor_area_pixels(col, row, 8, 16),
+            want,
+            "cursor at col {col}, row {row}",
+        );
+    }
 }
 
 #[test]
-fn ime_cursor_area_handles_large_grid_dimensions() {
-    let (x, _, _, _) = ime_cursor_area_pixels(1000, 0, 8, 16);
-    assert_eq!(x, 8000);
-}
-#[test]
 fn search_ui_starts_off() {
-    let ui = SearchUi::default();
-    assert_eq!(ui.mode, SearchUiMode::Off);
-    assert_eq!(ui.query, "");
-    assert!(ui.matches.is_empty());
-    assert!(ui.current.is_none());
-    assert!(!ui.streaming);
-    assert!(ui.error.is_none());
+    assert_eq!(SearchUi::default().mode, SearchUiMode::Off);
 }
 #[test]
 fn format_search_label_renders_each_search_state() {
@@ -910,14 +862,6 @@ mod mouse_position {
 }
 
 #[test]
-fn window_attributes_keep_native_chrome_when_decorations_on() {
-    let attrs = window_attributes("felis".to_owned(), true, false);
-    assert!(attrs.decorations);
-    assert_eq!(attrs.title, "felis");
-    assert!(!attrs.transparent);
-}
-
-#[test]
 fn window_attributes_flag_transparent_surface_when_requested() {
     // Without it the OS composites the window opaque and the renderer's
     // bg alpha is silently ignored.
@@ -1295,17 +1239,6 @@ fn held_button_repeat_press_replaces_a_missed_release() {
 }
 
 #[test]
-fn held_button_repeat_press_becomes_the_newest_for_drag_attribution() {
-    let mut held = HeldButtons::default();
-    held.press(MouseButton::Left, PressRouting::Forwarded);
-    held.press(MouseButton::Right, PressRouting::Forwarded);
-    held.press(MouseButton::Left, PressRouting::Forwarded);
-    assert_eq!(held.last(), Some(MouseButton::Left));
-    held.release(MouseButton::Left);
-    assert_eq!(held.last(), Some(MouseButton::Right));
-}
-
-#[test]
 fn held_buttons_reports_the_newest_button_for_drag_attribution() {
     let mut held = HeldButtons::default();
     assert_eq!(held.last(), None);
@@ -1319,6 +1252,16 @@ fn held_buttons_reports_the_newest_button_for_drag_attribution() {
     held.release(MouseButton::Right);
     assert_eq!(held.last(), Some(MouseButton::Left));
     assert!(!held.is_held(MouseButton::Right));
+
+    held.press(MouseButton::Right, PressRouting::Forwarded);
+    held.press(MouseButton::Left, PressRouting::Forwarded);
+    assert_eq!(
+        held.last(),
+        Some(MouseButton::Left),
+        "a repeat press becomes the newest"
+    );
+    held.release(MouseButton::Left);
+    assert_eq!(held.last(), Some(MouseButton::Right));
 }
 
 mod selection_invalidation {
@@ -1776,18 +1719,14 @@ mod switch_state_carries_the_exit {
 mod lifecycle {
     use super::*;
 
-    /// The two halves the handler joins, pinned separately: the
-    /// classifier's verdict on a close that arrives mid-landing, and
-    /// the latch it then sets. Driving `App::on_daemon_closed` itself
-    /// needs a live winit event loop (Forgejo issue #150).
+    /// The latch `App::on_daemon_closed` sets on a close that arrives
+    /// mid-landing; the classifier's verdict is pinned in
+    /// `daemon_closed`. Driving the handler itself needs a live winit
+    /// event loop.
     #[test]
-    fn a_close_during_a_switch_classifies_as_await_switch_and_the_lost_latch_round_trips() {
+    fn the_lost_latch_starts_clear_and_stays_set_once_marked() {
         let (outgoing, _rx) = outgoing_channel();
         assert!(!outgoing.is_lost());
-        assert_eq!(
-            daemon_closed_outcome(FIRST_CONN_GEN, FIRST_CONN_GEN, true, &PipeState::Idle),
-            ClosedOutcome::AwaitSwitch,
-        );
         outgoing.mark_lost();
         assert!(
             outgoing.is_lost(),

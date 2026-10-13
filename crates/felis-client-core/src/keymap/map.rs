@@ -346,200 +346,208 @@ mod tests {
     }
 
     #[test]
-    fn binding_value_into_action_covers_every_non_unbind_variant() {
-        assert_eq!(
-            BindingValue::SwitchSession {
-                to: SwitchDirection::Previous,
-            }
-            .into_action(),
-            Some(Action::Ipc(IpcAction::SwitchSession {
-                to: SwitchDirection::Previous,
-            })),
-        );
-        assert_eq!(
-            BindingValue::SwitchSession {
-                to: SwitchDirection::Next,
-            }
-            .into_action(),
-            Some(Action::Ipc(IpcAction::SwitchSession {
-                to: SwitchDirection::Next,
-            })),
-        );
-        assert_eq!(
-            BindingValue::KillSession.into_action(),
-            Some(Action::Ipc(IpcAction::KillSession)),
-        );
-        assert_eq!(
-            BindingValue::OpenScrollbackSearch.into_action(),
-            Some(Action::Ipc(IpcAction::OpenScrollbackSearch)),
-        );
-        assert_eq!(
-            BindingValue::Scroll {
-                step: ScrollStep::HalfPageUp,
-            }
-            .into_action(),
-            Some(Action::Scroll(ScrollStep::HalfPageUp)),
-        );
-        assert_eq!(
-            BindingValue::ScrollToPrompt {
-                to: PromptJump::Previous,
-            }
-            .into_action(),
-            Some(Action::ScrollToPrompt(PromptJump::Previous)),
-        );
-        assert_eq!(
-            BindingValue::ScrollToPrompt {
-                to: PromptJump::Next,
-            }
-            .into_action(),
-            Some(Action::ScrollToPrompt(PromptJump::Next)),
-        );
-        assert_eq!(
-            BindingValue::SendString {
-                text: "hi\n".into(),
-                escapes: Escapes::CStyle,
-            }
-            .into_action(),
-            Some(Action::SendString {
-                text: "hi\n".into(),
-                escapes: Escapes::CStyle,
-            }),
-        );
-        assert_eq!(
-            BindingValue::Paste {
-                from: ClipboardScope::Primary,
-            }
-            .into_action(),
-            Some(Action::Paste {
-                from: ClipboardScope::Primary,
-            }),
-        );
-        assert_eq!(BindingValue::Reload.into_action(), Some(Action::Reload));
-        assert_eq!(BindingValue::Detach.into_action(), Some(Action::Detach));
-        assert_eq!(
-            BindingValue::FontSize {
-                step: FontSizeStep::Increase,
-            }
-            .into_action(),
-            Some(Action::FontSize(FontSizeStep::Increase)),
-        );
-        assert_eq!(
-            BindingValue::ToggleFullscreen.into_action(),
-            Some(Action::ToggleFullscreen),
-        );
-        assert_eq!(
-            BindingValue::NewSession.into_action(),
-            Some(Action::Ipc(IpcAction::NewSession)),
-        );
-        assert_eq!(
-            BindingValue::Copy {
-                what: ClipboardScope::System,
-            }
-            .into_action(),
-            Some(Action::Copy {
-                what: ClipboardScope::System,
-            }),
-        );
-        assert_eq!(
-            BindingValue::FontSize {
-                step: FontSizeStep::Decrease,
-            }
-            .into_action(),
-            Some(Action::FontSize(FontSizeStep::Decrease)),
-        );
-        assert_eq!(
-            BindingValue::FontSize {
-                step: FontSizeStep::Reset,
-            }
-            .into_action(),
-            Some(Action::FontSize(FontSizeStep::Reset)),
-        );
-        assert_eq!(
-            BindingValue::Pipe {
-                source: PipeRegionSource::Scrollback,
-                target: PipeSink::Command(vec!["less".into(), "-R".into()]),
-                ansi: true,
-            }
-            .into_action(),
-            Some(Action::PipeRegion {
-                source: PipeRegionSource::Scrollback,
-                target: PipeTarget::Command(vec!["less".into(), "-R".into()]),
-                ansi: true,
-            }),
-        );
-        assert_eq!(
-            BindingValue::Pipe {
-                source: PipeRegionSource::Selection,
-                target: PipeSink::default(),
-                ansi: false,
-            }
-            .into_action(),
-            Some(Action::PipeRegion {
-                source: PipeRegionSource::Selection,
-                target: PipeTarget::Command(vec![]),
-                ansi: false,
-            }),
-        );
-        assert_eq!(
-            BindingValue::Pipe {
-                source: PipeRegionSource::Visible,
-                target: PipeSink::Clipboard,
-                ansi: false,
-            }
-            .into_action(),
-            Some(Action::PipeRegion {
-                source: PipeRegionSource::Visible,
-                target: PipeTarget::Clipboard,
-                ansi: false,
-            }),
-        );
-        assert_eq!(
-            BindingValue::Pipe {
-                source: PipeRegionSource::Selection,
-                target: PipeSink::Paste,
-                ansi: false,
-            }
-            .into_action(),
-            Some(Action::PipeRegion {
-                source: PipeRegionSource::Selection,
-                target: PipeTarget::Paste,
-                ansi: false,
-            }),
-        );
-        assert_eq!(
-            BindingValue::Pipe {
-                source: PipeRegionSource::Scrollback,
-                target: PipeSink::TempFile,
-                ansi: false,
-            }
-            .into_action(),
-            Some(Action::PipeRegion {
-                source: PipeRegionSource::Scrollback,
-                target: PipeTarget::File(None),
-                ansi: false,
-            }),
-        );
-        assert_eq!(
-            BindingValue::Pipe {
-                source: PipeRegionSource::Scrollback,
-                target: PipeSink::File("/tmp/felis-dump.txt".into()),
-                ansi: false,
-            }
-            .into_action(),
-            Some(Action::PipeRegion {
-                source: PipeRegionSource::Scrollback,
-                target: PipeTarget::File(Some("/tmp/felis-dump.txt".into())),
-                ansi: false,
-            }),
-        );
-        assert_eq!(
-            BindingValue::Run {
-                command: vec!["felis-session-picker".into()],
-            }
-            .into_action(),
-            Some(Action::RunCommand {
-                command: vec!["felis-session-picker".into()],
-            }),
-        );
+    fn binding_value_into_action_maps_each_case_to_its_action() {
+        for (label, binding, want) in [
+            (
+                "switch_session previous",
+                BindingValue::SwitchSession {
+                    to: SwitchDirection::Previous,
+                },
+                Action::Ipc(IpcAction::SwitchSession {
+                    to: SwitchDirection::Previous,
+                }),
+            ),
+            (
+                "switch_session next",
+                BindingValue::SwitchSession {
+                    to: SwitchDirection::Next,
+                },
+                Action::Ipc(IpcAction::SwitchSession {
+                    to: SwitchDirection::Next,
+                }),
+            ),
+            (
+                "kill_session",
+                BindingValue::KillSession,
+                Action::Ipc(IpcAction::KillSession),
+            ),
+            (
+                "open_scrollback_search",
+                BindingValue::OpenScrollbackSearch,
+                Action::Ipc(IpcAction::OpenScrollbackSearch),
+            ),
+            (
+                "scroll half_page_up",
+                BindingValue::Scroll {
+                    step: ScrollStep::HalfPageUp,
+                },
+                Action::Scroll(ScrollStep::HalfPageUp),
+            ),
+            (
+                "scroll_to_prompt previous",
+                BindingValue::ScrollToPrompt {
+                    to: PromptJump::Previous,
+                },
+                Action::ScrollToPrompt(PromptJump::Previous),
+            ),
+            (
+                "scroll_to_prompt next",
+                BindingValue::ScrollToPrompt {
+                    to: PromptJump::Next,
+                },
+                Action::ScrollToPrompt(PromptJump::Next),
+            ),
+            (
+                "send_string c_style",
+                BindingValue::SendString {
+                    text: "hi\n".into(),
+                    escapes: Escapes::CStyle,
+                },
+                Action::SendString {
+                    text: "hi\n".into(),
+                    escapes: Escapes::CStyle,
+                },
+            ),
+            (
+                "paste primary",
+                BindingValue::Paste {
+                    from: ClipboardScope::Primary,
+                },
+                Action::Paste {
+                    from: ClipboardScope::Primary,
+                },
+            ),
+            ("reload", BindingValue::Reload, Action::Reload),
+            ("detach", BindingValue::Detach, Action::Detach),
+            (
+                "font_size increase",
+                BindingValue::FontSize {
+                    step: FontSizeStep::Increase,
+                },
+                Action::FontSize(FontSizeStep::Increase),
+            ),
+            (
+                "toggle_fullscreen",
+                BindingValue::ToggleFullscreen,
+                Action::ToggleFullscreen,
+            ),
+            (
+                "new_session",
+                BindingValue::NewSession,
+                Action::Ipc(IpcAction::NewSession),
+            ),
+            (
+                "copy system",
+                BindingValue::Copy {
+                    what: ClipboardScope::System,
+                },
+                Action::Copy {
+                    what: ClipboardScope::System,
+                },
+            ),
+            (
+                "font_size decrease",
+                BindingValue::FontSize {
+                    step: FontSizeStep::Decrease,
+                },
+                Action::FontSize(FontSizeStep::Decrease),
+            ),
+            (
+                "font_size reset",
+                BindingValue::FontSize {
+                    step: FontSizeStep::Reset,
+                },
+                Action::FontSize(FontSizeStep::Reset),
+            ),
+            (
+                "pipe scrollback to a command with ansi",
+                BindingValue::Pipe {
+                    source: PipeRegionSource::Scrollback,
+                    target: PipeSink::Command(vec!["less".into(), "-R".into()]),
+                    ansi: true,
+                },
+                Action::PipeRegion {
+                    source: PipeRegionSource::Scrollback,
+                    target: PipeTarget::Command(vec!["less".into(), "-R".into()]),
+                    ansi: true,
+                },
+            ),
+            (
+                "pipe selection to the default sink",
+                BindingValue::Pipe {
+                    source: PipeRegionSource::Selection,
+                    target: PipeSink::default(),
+                    ansi: false,
+                },
+                Action::PipeRegion {
+                    source: PipeRegionSource::Selection,
+                    target: PipeTarget::Command(vec![]),
+                    ansi: false,
+                },
+            ),
+            (
+                "pipe visible to the clipboard",
+                BindingValue::Pipe {
+                    source: PipeRegionSource::Visible,
+                    target: PipeSink::Clipboard,
+                    ansi: false,
+                },
+                Action::PipeRegion {
+                    source: PipeRegionSource::Visible,
+                    target: PipeTarget::Clipboard,
+                    ansi: false,
+                },
+            ),
+            (
+                "pipe selection to paste",
+                BindingValue::Pipe {
+                    source: PipeRegionSource::Selection,
+                    target: PipeSink::Paste,
+                    ansi: false,
+                },
+                Action::PipeRegion {
+                    source: PipeRegionSource::Selection,
+                    target: PipeTarget::Paste,
+                    ansi: false,
+                },
+            ),
+            (
+                "pipe scrollback to a temp file",
+                BindingValue::Pipe {
+                    source: PipeRegionSource::Scrollback,
+                    target: PipeSink::TempFile,
+                    ansi: false,
+                },
+                Action::PipeRegion {
+                    source: PipeRegionSource::Scrollback,
+                    target: PipeTarget::File(None),
+                    ansi: false,
+                },
+            ),
+            (
+                "pipe scrollback to a named file",
+                BindingValue::Pipe {
+                    source: PipeRegionSource::Scrollback,
+                    target: PipeSink::File("/tmp/felis-dump.txt".into()),
+                    ansi: false,
+                },
+                Action::PipeRegion {
+                    source: PipeRegionSource::Scrollback,
+                    target: PipeTarget::File(Some("/tmp/felis-dump.txt".into())),
+                    ansi: false,
+                },
+            ),
+            (
+                "run",
+                BindingValue::Run {
+                    command: vec!["felis-session-picker".into()],
+                },
+                Action::RunCommand {
+                    command: vec!["felis-session-picker".into()],
+                },
+            ),
+        ] {
+            assert_eq!(binding.into_action(), Some(want), "{label}");
+        }
     }
 }

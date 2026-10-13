@@ -972,21 +972,11 @@ fn which_on_path(name: &str) -> Option<PathBuf> {
         .find(|candidate| candidate.is_file())
 }
 
-/// A socket parent must be a `0700` directory this uid owns (REQ-107),
-/// and `TempDir` follows the process umask.
-#[cfg(all(test, unix))]
-fn private_dir() -> tempfile::TempDir {
-    #![allow(clippy::unwrap_used)]
-    use std::os::unix::fs::PermissionsExt as _;
-
-    let tmp = tempfile::TempDir::new().unwrap();
-    std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
-    tmp
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use crate::test_support::{one_shot_daemon, private_dir};
 
     fn identity(version: &str, revision: char) -> BuildIdentity {
         BuildIdentity::from_build_env(version, &revision.to_string().repeat(40))
@@ -1114,38 +1104,40 @@ mod tests {
     }
 
     /// A frontend from another release is refused, not reinterpreted.
+    #[cfg(unix)]
     #[test]
     fn a_probe_from_a_different_epoch_is_refused() {
-        // `sh -c` is no stand-in for the frontend; drive the parse
-        // directly.
-        let text = format!(
-            r#"{{"v":{},"client_version":"9.9.9","gpu":{{"available":true}},"clipboard":{{"available":true}}}}"#,
-            PROBE_VERSION + 1
+        let dir = private_dir();
+        let program = fake_frontend(
+            dir.path(),
+            &format!(
+                r#"echo '{{"v":{},"client_version":"9.9.9","gpu":{{"available":true}},"clipboard":{{"available":true}}}}'"#,
+                PROBE_VERSION + 1
+            ),
         );
-        let report: ProbeReport = serde_json::from_str(&text).unwrap();
-        assert_ne!(report.v, PROBE_VERSION);
+        let err = run_probe(&program, DOCTOR_PROBE_FLAG.as_ref())
+            .expect_err("a report from another epoch must be refused");
+        assert!(err.contains("different releases"), "{err}");
     }
 
     #[test]
     fn the_config_row_points_at_the_config_verb() {
-        // Whatever this machine's config is, the row is one of the
-        // four shapes.
-        let check = config_check(&ConfigSource::Default);
-        assert_eq!(check.name, "config");
-        if matches!(check.status, Status::Warn | Status::Fail)
-            && check.detail.contains("config.toml")
-        {
+        let dir = tempfile::TempDir::new().unwrap();
+        for (text, status) in [
+            ("this = is = not = toml\n", Status::Fail),
+            ("fnt = { size_px = 12.0 }\n", Status::Warn),
+        ] {
+            let path = dir.path().join("config.toml");
+            std::fs::write(&path, text).unwrap();
+            let check = config_check(&ConfigSource::Explicit(path));
+            assert_eq!(check.name, "config");
+            assert_eq!(check.status, status, "{text:?}: {}", check.detail);
             assert!(
                 check.detail.contains("felis config check"),
-                "{}",
+                "{text:?}: {}",
                 check.detail
             );
         }
-    }
-
-    #[test]
-    fn the_remote_helper_row_is_never_fatal() {
-        assert_ne!(remote_helper_check().status, Status::Fail);
     }
 
     /// A daemon that accepts a major this build never offered is a
@@ -1158,39 +1150,17 @@ mod tests {
         use felis_client_core::{Carrier, Offer};
         use felis_protocol::preface::{DaemonPreface, PROTOCOL_MAJOR, PROTOCOL_MINOR};
         use felis_transport::Endpoint;
-        use felis_transport::local::Listener;
-        use felis_transport::preface::write_daemon_preface;
-        use tokio::io::AsyncReadExt as _;
 
         let tmp = private_dir();
         let path = tmp.path().join("wrong-accept.sock");
 
-        let (bound_tx, bound_rx) = std::sync::mpsc::channel();
-        let listen_path = path.clone();
-        let server = std::thread::spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .unwrap();
-            rt.block_on(async move {
-                let listener = Listener::bind(&Endpoint::unix(listen_path)).expect("bind");
-                bound_tx.send(()).expect("doctor still waiting");
-                let stream = listener.accept().await.expect("accept");
-                let (mut read, mut write) = stream.into_split();
-                write_daemon_preface(
-                    &mut write,
-                    DaemonPreface::Accept {
-                        major: PROTOCOL_MAJOR + 9,
-                        minor: PROTOCOL_MINOR,
-                    },
-                )
-                .await
-                .expect("write accept");
-                drop(read.read(&mut [0_u8; 1]).await);
-            });
-        });
-
-        bound_rx.recv().expect("fake daemon bound");
+        let server = one_shot_daemon(
+            path.clone(),
+            DaemonPreface::Accept {
+                major: PROTOCOL_MAJOR + 9,
+                minor: PROTOCOL_MINOR,
+            },
+        );
         let target = Reconnector {
             carrier: Carrier::Local(Endpoint::unix(path)),
             offer: Offer::ops(),
@@ -1279,6 +1249,7 @@ mod endpoint_tests {
     use std::time::Duration;
 
     use super::*;
+    use crate::test_support::private_dir;
     use felis_client_core::{Carrier, Offer};
     use felis_protocol::messages::{ConnToClientMsg, RefusalReason};
     use felis_protocol::preface::{DaemonPreface, PROTOCOL_MAJOR, PROTOCOL_MINOR};

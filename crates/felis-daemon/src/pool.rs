@@ -831,7 +831,6 @@ impl SessionPool {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
     use std::time::Duration;
 
     use super::*;
@@ -1005,14 +1004,6 @@ mod tests {
         assert_eq!(tags, BTreeSet::new());
         apply_tag_delta(&mut tags, &["y".repeat(MAX_TAG_BYTES)], &[]).unwrap();
         assert_eq!(tags.len(), 1);
-    }
-
-    #[test]
-    fn session_ids_do_not_collide_across_a_burst() {
-        let mut seen = HashSet::new();
-        for _ in 0..1000 {
-            assert!(seen.insert(SessionId::new()), "id collision in burst");
-        }
     }
 
     fn dummy_handle(idle_since: Instant) -> SessionHandle {

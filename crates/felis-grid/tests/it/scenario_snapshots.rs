@@ -23,6 +23,24 @@ fn render(grid: &Grid) -> String {
         writeln!(out, "cwd: {cwd:?}").unwrap();
     }
     write_cells(&mut out, grid);
+    let link_lines = link_lines(grid);
+    if !link_lines.is_empty() {
+        writeln!(out, "links:").unwrap();
+        for line in link_lines {
+            writeln!(out, "{line}").unwrap();
+        }
+    }
+    if !grid.prompt_marks().is_empty() {
+        writeln!(out, "prompt_marks:").unwrap();
+        for m in grid.prompt_marks() {
+            writeln!(
+                out,
+                "  line={} kind={:?} exit={:?}",
+                m.line, m.kind, m.exit_code
+            )
+            .unwrap();
+        }
+    }
     let attr_lines = styled_cell_lines(grid);
     if !attr_lines.is_empty() {
         writeln!(out, "attrs:").unwrap();
@@ -31,6 +49,19 @@ fn render(grid: &Grid) -> String {
         }
     }
     out
+}
+
+fn link_lines(grid: &Grid) -> Vec<String> {
+    let mut lines = Vec::new();
+    for r in 0..grid.rows() {
+        for c in 0..grid.cols() {
+            if let Some(id) = grid.cell(r, c).unwrap().link {
+                let uri = grid.hyperlink(id).map(|e| e.uri.to_string());
+                lines.push(format!("  ({r},{c}): {uri:?}"));
+            }
+        }
+    }
+    lines
 }
 
 #[test]
@@ -57,6 +88,11 @@ fn shell_prompt_with_title_cwd_and_osc_133_marks() {
     |user@host:~$ ls.....|
     |foo bar.............|
     |....................|
+    prompt_marks:
+      line=0 kind=PromptStart exit=None
+      line=0 kind=InputStart exit=None
+      line=1 kind=OutputStart exit=None
+      line=2 kind=CommandEnd exit=Some(0)
     attrs:
       (0,0): fg=idx4 bg=default flags=B
       (0,1): fg=idx4 bg=default flags=B
@@ -182,11 +218,21 @@ fn osc_8_hyperlink_spans_only_the_bracketed_text() {
         20,
         b"before \x1b]8;;http://example.com\x1b\\link text\x1b]8;;\x1b\\ after",
     );
-    insta::assert_snapshot!(render(&g), @r"
+    insta::assert_snapshot!(render(&g), @r#"
     cursor: row=1 col=2 visible=1 pending_wrap=0
     alt_screen: 0
     grid 2x20:
     |before link text aft|
     |er..................|
-    ");
+    links:
+      (0,7): Some("http://example.com")
+      (0,8): Some("http://example.com")
+      (0,9): Some("http://example.com")
+      (0,10): Some("http://example.com")
+      (0,11): Some("http://example.com")
+      (0,12): Some("http://example.com")
+      (0,13): Some("http://example.com")
+      (0,14): Some("http://example.com")
+      (0,15): Some("http://example.com")
+    "#);
 }

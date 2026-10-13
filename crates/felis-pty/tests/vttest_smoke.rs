@@ -1320,12 +1320,13 @@ async fn dsr_cursor_position_round_trips() {
         .navigate(&["Test of terminal reports", "Device Status Report"])
         .await;
 
-    // vttest CUPs to known positions and validates `CSI 6 n` replies,
-    // printing "OK" per iteration and stopping at the first "Failed".
-    let hit = session.wait_for("OK", Duration::from_secs(8)).await;
+    // The DSR 5 line above ends in "TERMINAL OK", so a bare "OK" would
+    // match before the cursor report is ever checked. The needle is the
+    // verdict vttest prints after echoing the `CSI 6 n` reply.
+    let hit = session.wait_for("R  -- OK", Duration::from_secs(8)).await;
     if !hit {
         let dump = session.with_grid(dump_grid);
-        panic!("DSR cursor position round-trip did not produce 'OK'. Grid:\n{dump}");
+        panic!("DSR cursor position round-trip did not produce 'R  -- OK'. Grid:\n{dump}");
     }
 
     session.shutdown().await;

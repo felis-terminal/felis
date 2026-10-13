@@ -560,16 +560,8 @@ pub fn reconnector_for_target(
 mod tests {
     use super::*;
 
-    /// A socket parent must be a `0700` directory this uid owns
-    /// (REQ-107), and `TempDir` follows the process umask.
     #[cfg(unix)]
-    fn private_dir() -> tempfile::TempDir {
-        use std::os::unix::fs::PermissionsExt as _;
-
-        let tmp = tempfile::TempDir::new().unwrap();
-        std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
-        tmp
-    }
+    use crate::test_support::{await_socket, private_dir};
 
     use felis_protocol::messages::AttachFailure;
     use felis_transport::retry::RetryPolicy;
@@ -833,13 +825,7 @@ mod tests {
                 .await,
             );
         });
-        for _ in 0..200 {
-            if path.exists() {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-        assert!(path.exists(), "the test daemon must come up");
+        await_socket(&path).await;
 
         let carrier = Carrier::Local(path.into());
         let created = dial_and_land(

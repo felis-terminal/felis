@@ -754,30 +754,39 @@ fn decsera_does_not_respect_iso_protect() {
 /// ones (esctest's `test_{ED,EL,ECH}_respectsISOProtection`).
 #[test]
 fn ed_el_ech_respect_iso_protect_only() {
-    let mut g = Grid::new(2, 8);
-    let mut p = Parser::new();
-    drive(&mut p, &mut g, b"ab\x1bVc\x1bW\x1b[1;1H\x1b[0J");
-    assert_eq!(g.cell(0, 0).unwrap().grapheme, Grapheme::Empty);
-    assert_eq!(g.cell(0, 1).unwrap().grapheme, Grapheme::Empty);
-    assert_eq!(g.cell(0, 2).unwrap().grapheme, Grapheme::Ascii(b'c'));
-    // An EL 2 turned no-op would keep the protected cell too and
-    // still pass a protected-only oracle.
-    let mut g = Grid::new(2, 8);
-    let mut p = Parser::new();
-    drive(&mut p, &mut g, b"ab\x1bVc\x1bW\x1b[1;1H\x1b[2K");
-    assert_eq!(g.cell(0, 0).unwrap().grapheme, Grapheme::Empty);
-    assert_eq!(g.cell(0, 1).unwrap().grapheme, Grapheme::Empty);
-    assert_eq!(g.cell(0, 2).unwrap().grapheme, Grapheme::Ascii(b'c'));
-    let mut g = Grid::new(2, 8);
-    let mut p = Parser::new();
-    drive(&mut p, &mut g, b"ab\x1bVc\x1bW\x1b[1;1H\x1b[3X");
-    assert_eq!(g.cell(0, 0).unwrap().grapheme, Grapheme::Empty);
-    assert_eq!(g.cell(0, 1).unwrap().grapheme, Grapheme::Empty);
-    assert_eq!(g.cell(0, 2).unwrap().grapheme, Grapheme::Ascii(b'c'));
-    let mut g = Grid::new(2, 8);
-    let mut p = Parser::new();
-    drive(&mut p, &mut g, b"ab\x1b[1\"qc\x1b[0\"q\x1b[1;1H\x1b[0J");
-    assert_eq!(g.cell(0, 2).unwrap().grapheme, Grapheme::Empty);
+    let iso = Grapheme::Ascii(b'c');
+    let blank = Grapheme::Empty;
+    // An EL 2 turned no-op would keep the protected cell too, so each
+    // case also pins the unprotected cells blanked.
+    let cases: [(&str, &[u8], [Grapheme; 3]); 4] = [
+        (
+            "ED 0 over SPA",
+            b"ab\x1bVc\x1bW\x1b[1;1H\x1b[0J",
+            [blank, blank, iso],
+        ),
+        (
+            "EL 2 over SPA",
+            b"ab\x1bVc\x1bW\x1b[1;1H\x1b[2K",
+            [blank, blank, iso],
+        ),
+        (
+            "ECH 3 over SPA",
+            b"ab\x1bVc\x1bW\x1b[1;1H\x1b[3X",
+            [blank, blank, iso],
+        ),
+        (
+            "ED 0 over DECSCA",
+            b"ab\x1b[1\"qc\x1b[0\"q\x1b[1;1H\x1b[0J",
+            [blank, blank, blank],
+        ),
+    ];
+    for (what, bytes, expected) in cases {
+        let mut g = Grid::new(2, 8);
+        let mut p = Parser::new();
+        drive(&mut p, &mut g, bytes);
+        let got: Vec<Grapheme> = (0..3).map(|c| g.cell(0, c).unwrap().grapheme).collect();
+        assert_eq!(got, expected, "{what}");
+    }
 }
 
 /// ED 2 blanks even ISO-protected cells: esctest's `reset()` issues

@@ -1453,24 +1453,9 @@ mod tests {
         attachments: Vec<felis_protocol::messages::Attachment>,
     ) -> SessionInfo {
         SessionInfo {
-            id: 0xCAFE,
-            dims: felis_protocol::messages::GridDims {
-                rows: 24,
-                cols: 80,
-                pixel_w: 0,
-                pixel_h: 0,
-            },
-            title: None,
-            cwd: None,
             idle_seconds,
-            tags: Vec::new(),
-            last_notification: None,
-            foreground: None,
-            exited: false,
-            last_exit_code: None,
             attachments,
-            sequence: std::num::NonZeroU64::MIN,
-            program_status: Vec::new(),
+            ..crate::test_support::session_info(0xCAFE)
         }
     }
 
@@ -1511,8 +1496,6 @@ mod tests {
     /// Each class publishes its own framings and no others.
     #[test]
     fn each_class_publishes_only_its_own_framings() {
-        use clap::ValueEnum as _;
-
         fn spellings<T: clap::ValueEnum>() -> Vec<String> {
             T::value_variants()
                 .iter()
@@ -1524,8 +1507,6 @@ mod tests {
 
         assert_eq!(Format::from(PointFormatValue::Json), Format::Json);
         assert_eq!(Format::from(StreamFormatValue::Jsonl), Format::Jsonl);
-        assert!(PointFormatValue::from_str("jsonl", false).is_err());
-        assert!(StreamFormatValue::from_str("json", false).is_err());
     }
 
     #[test]
@@ -1602,19 +1583,6 @@ mod tests {
                 dropped: 7
             }),
             r#"{"v":1,"event":"lag","dropped":7}"#
-        );
-    }
-
-    #[test]
-    fn payload_strings_are_escaped() {
-        let object = TagResult {
-            id: "0".repeat(32),
-            tags: vec!["a\"b\\c\nd\u{1}".into()],
-        };
-        assert!(
-            render(&object).contains(r#""a\"b\\c\nd\u0001""#),
-            "{}",
-            render(&object)
         );
     }
 

@@ -91,10 +91,14 @@ mod tests {
     }
 
     #[test]
-    fn flush_without_request_returns_false() {
+    fn flush_without_request_returns_false_and_counts_nothing() {
         let mut s = RedrawScheduler::new();
         assert!(!s.flush());
+        assert!(!s.flush());
         assert_eq!(s.stats().flushed, 0);
+        s.request();
+        assert!(s.flush());
+        assert_eq!(s.stats().flushed, 1);
     }
 
     #[test]
@@ -106,16 +110,5 @@ mod tests {
         }
         assert_eq!(s.stats().requested, 5);
         assert_eq!(s.stats().flushed, 5);
-    }
-
-    #[test]
-    fn empty_flush_does_not_bump_flushed_counter() {
-        let mut s = RedrawScheduler::new();
-        let _ = s.flush();
-        let _ = s.flush();
-        assert_eq!(s.stats().flushed, 0);
-        s.request();
-        let _ = s.flush();
-        assert_eq!(s.stats().flushed, 1);
     }
 }

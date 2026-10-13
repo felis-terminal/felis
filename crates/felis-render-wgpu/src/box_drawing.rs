@@ -1148,14 +1148,17 @@ mod tests {
     /// The boundary rows of a stacked `▀` / `▄` pair meet at the cell
     /// midline without overlap or gap.
     #[test]
-    fn lower_half_block_fills_bottom_only() {
-        let bitmap = rasterize('▄', cell(8, 16, 12)).expect("▄ supported");
-        assert_eq!(px(&bitmap, 4, 0), 0, "top must be empty");
-        assert_ne!(
-            px(&bitmap, 4, bitmap.height() - 1),
-            0,
-            "bottom pixel must be filled"
-        );
+    fn upper_and_lower_half_blocks_meet_at_the_midline() {
+        let upper = rasterize('▀', cell(8, 16, 12)).expect("▀ supported");
+        let lower = rasterize('▄', cell(8, 16, 12)).expect("▄ supported");
+        assert_eq!(px(&lower, 4, 0), 0, "▄ top must be empty");
+        for y in 0..lower.height() {
+            assert_ne!(
+                px(&upper, 4, y) > 0,
+                px(&lower, 4, y) > 0,
+                "row {y}: exactly one of ▀ / ▄ covers it"
+            );
+        }
     }
 
     #[test]

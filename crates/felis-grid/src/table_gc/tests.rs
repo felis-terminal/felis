@@ -140,16 +140,15 @@ fn the_trigger_point_rises_only_on_a_sweep_that_reclaims_little() {
     assert!(SIZING_MAX < u16::MAX as usize);
 }
 
-/// A scrollback of unique truecolor pens holds millions of live entries;
-/// any cap pegs the trigger and fires the O(cells) sweep on every drain.
+/// A flat fraction of the scan would sweep several times per frame on a
+/// full screen of distinct pens; a scrollback of unique truecolor pens
+/// holds millions of live entries, and any cap there pegs the trigger and
+/// fires the O(cells) sweep on every drain.
 #[test]
-fn the_style_raise_clears_the_live_set_uncapped() {
-    let live = 1 << 21;
-    assert_eq!(
-        raise_past_live_set(live, live),
-        live * 2,
-        "a live set past any fixed cap must still lift the trigger clear",
-    );
+fn the_style_raise_doubles_a_live_set_that_fills_the_scan_uncapped() {
+    for live in [11_520, 1 << 21] {
+        assert_eq!(raise_past_live_set(live, live), live * 2, "live={live}");
+    }
 }
 
 #[test]
@@ -166,14 +165,6 @@ fn the_style_headroom_pays_for_the_cells_the_sweep_scanned() {
         deep > shallow,
         "deeper scrollback must sweep less often, not equally often",
     );
-}
-
-/// A flat fraction of the scan would sweep several times per frame on a
-/// full screen of distinct pens.
-#[test]
-fn the_style_headroom_still_clears_a_live_set_that_fills_the_scan() {
-    let live = 11_520;
-    assert_eq!(raise_past_live_set(live, live), live * 2);
 }
 
 #[test]

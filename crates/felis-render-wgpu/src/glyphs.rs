@@ -2299,38 +2299,6 @@ mod tests {
     }
 
     #[test]
-    fn reload_size_keeps_the_same_font_stack_arc_identity() {
-        // `reload_font_size` must not rebuild the `FontStack`; pin the
-        // primary `Arc<Font>` identity across the reload.
-        let mut idx = GlyphIndex::new(stack(), 14.0, nz(256));
-        let before = Arc::as_ptr(idx.stack().primary());
-        let new_stack = idx.stack().clone();
-        let atlas_side = nz(idx.atlas_side());
-        idx = GlyphIndex::new(new_stack, 18.0, atlas_side);
-        let after = Arc::as_ptr(idx.stack().primary());
-        assert_eq!(before, after, "size-only reload must not swap fonts");
-        assert!(idx.cell_metrics().height > 0);
-    }
-
-    #[test]
-    fn reload_size_resets_atlas_so_old_slot_uvs_no_longer_resolve() {
-        let mut idx = GlyphIndex::new(stack(), 14.0, nz(256));
-        let h_old = idx.cell_metrics().height;
-        let sk = SizingKey::default();
-        idx.ensure('A', h_old, sk);
-        assert!(idx.contains('A', h_old, sk));
-        let stack = idx.stack().clone();
-        let atlas_side = nz(idx.atlas_side());
-        idx = GlyphIndex::new(stack, 28.0, atlas_side);
-        let h_new = idx.cell_metrics().height;
-        assert!(h_new != h_old, "new size should change cell height");
-        assert!(
-            !idx.contains('A', h_new, sk),
-            "atlas reset → 'A' must re-rasterize at new size"
-        );
-    }
-
-    #[test]
     fn allocations_within_the_atlas_never_overlap_in_uv_space() {
         let mut idx = GlyphIndex::new(stack(), 14.0, nz(256));
         let h = idx.cell_metrics().height;

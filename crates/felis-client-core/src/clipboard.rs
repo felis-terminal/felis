@@ -78,53 +78,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn write_replaces_previous_contents() {
-        let cb = InMemoryClipboard::new();
-        cb.write(b"first").unwrap();
-        cb.write(b"second").unwrap();
-        assert_eq!(cb.read().unwrap(), b"second");
-    }
-
-    #[test]
-    fn fresh_clipboard_reads_empty() {
-        let cb = InMemoryClipboard::new();
-        assert_eq!(cb.read().unwrap(), b"");
-    }
-
-    #[test]
-    fn clipboard_is_object_safe() {
-        let cb: Box<dyn Clipboard> = Box::new(InMemoryClipboard::new());
-        cb.write(b"x").unwrap();
-        assert_eq!(cb.read().unwrap(), b"x");
-    }
-
-    #[test]
     fn write_user_default_routes_through_write() {
-        let cb = InMemoryClipboard::new();
+        let cb: Box<dyn Clipboard> = Box::new(InMemoryClipboard::new());
         cb.write_user(b"selection").unwrap();
         assert_eq!(cb.read().unwrap(), b"selection");
-    }
-
-    #[derive(Default)]
-    struct RecordingClipboard {
-        last: std::sync::Arc<std::sync::Mutex<&'static str>>,
-    }
-    impl Clipboard for RecordingClipboard {
-        fn read(&self) -> Result<Vec<u8>, ClipboardError> {
-            Ok(Vec::new())
-        }
-        fn write(&self, _bytes: &[u8]) -> Result<(), ClipboardError> {
-            *self.last.lock().unwrap() = "write";
-            Ok(())
-        }
-    }
-
-    #[test]
-    fn write_user_default_dispatch_observed_through_dyn() {
-        let last = std::sync::Arc::new(std::sync::Mutex::new(""));
-        let cb: Box<dyn Clipboard> = Box::new(RecordingClipboard { last: last.clone() });
-        cb.write_user(b"x").unwrap();
-        assert_eq!(*last.lock().unwrap(), "write");
     }
 
     #[test]

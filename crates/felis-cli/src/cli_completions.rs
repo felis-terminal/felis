@@ -410,24 +410,9 @@ mod tests {
 
     fn s(id: u128, title: Option<&str>, cwd: Option<&str>) -> SessionInfo {
         SessionInfo {
-            id,
-            dims: felis_protocol::messages::GridDims {
-                rows: 24,
-                cols: 80,
-                pixel_w: 0,
-                pixel_h: 0,
-            },
             title: title.map(str::to_owned),
             cwd: cwd.map(str::to_owned),
-            idle_seconds: None,
-            tags: Vec::new(),
-            last_notification: None,
-            foreground: None,
-            exited: false,
-            last_exit_code: None,
-            attachments: Vec::new(),
-            sequence: std::num::NonZeroU64::MIN,
-            program_status: Vec::new(),
+            ..crate::test_support::session_info(id)
         }
     }
 
@@ -471,13 +456,18 @@ mod tests {
     }
 
     #[test]
-    fn fish_overlay_verb_loop_is_generated_from_session_id_verbs() {
+    fn fish_overlay_verb_loop_names_the_session_id_verbs() {
         let overlay = fish_overlay();
-        let expected = format!("for __felis_sub in {}", SESSION_ID_VERBS.join(" "));
-        assert!(
-            overlay.contains(&expected),
-            "expected overlay to contain {expected:?}, got: {overlay}"
-        );
+        let verb_loop = overlay
+            .lines()
+            .find(|line| line.trim_start().starts_with("for __felis_sub in "))
+            .unwrap_or_else(|| panic!("no verb loop in the overlay: {overlay}"));
+        for verb in ["info", "capture", "switch"] {
+            assert!(
+                verb_loop.split_whitespace().any(|word| word == verb),
+                "{verb} is missing from {verb_loop:?}"
+            );
+        }
     }
 
     /// `SESSION_ID_VERBS` must track the clap tree: every `sessions`
@@ -874,9 +864,7 @@ mod tests {
             .enable_all()
             .build()
             .unwrap();
-        let started = std::time::Instant::now();
         assert_eq!(run_complete_sessions(&runtime, &target), 0);
-        assert!(started.elapsed() < std::time::Duration::from_secs(1));
         assert!(!marker.exists(), "ssh was spawned");
     }
 

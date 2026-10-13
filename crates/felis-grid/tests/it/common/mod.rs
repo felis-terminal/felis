@@ -143,11 +143,6 @@ pub(crate) fn styled_cell_lines(grid: &Grid) -> Vec<String> {
     lines
 }
 
-pub(crate) fn write_dirty_rows(out: &mut String, grid: &Grid) {
-    let dirty: Vec<_> = grid.damage().dirty_rows().collect();
-    writeln!(out, "dirty_rows: {dirty:?}").unwrap();
-}
-
 /// `_` is a `Spacer`, `·` an `Empty`; a zero-width scalar inside a
 /// cluster is spelled `\u{…}` so a dropped selector shows. Cells past
 /// a row's watermark read blank, as every reader sees them.

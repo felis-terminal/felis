@@ -214,23 +214,6 @@ const fn log_filter_directive(trace_perf: bool) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use clap::Parser;
-
-    /// `--trace-perf` parses on `serve` and defaults to `false`.
-    #[test]
-    fn cli_parses_trace_perf_flag() {
-        let cli = Cli::try_parse_from(["felis-daemon", "serve", "--trace-perf"])
-            .expect("parses with --trace-perf");
-        let Cmd::Serve { trace_perf, .. } = cli.cmd else {
-            panic!("expected Serve, got {:?}", cli.cmd);
-        };
-        assert!(trace_perf);
-        let default = Cli::try_parse_from(["felis-daemon", "serve"]).expect("parses bare serve");
-        let Cmd::Serve { trace_perf, .. } = default.cmd else {
-            panic!("expected Serve, got {:?}", default.cmd);
-        };
-        assert!(!trace_perf);
-    }
 
     /// `log_filter_directive(true)` widens hot-path targets to trace
     /// without bumping every other crate.

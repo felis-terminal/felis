@@ -611,9 +611,13 @@ where
 
 /// Bare `-` is the only stdin trigger; anything else is the payload
 /// itself.
-pub(super) fn collect_send_payload(text: &str, cap: usize) -> Result<(Vec<u8>, usize)> {
+pub(super) fn collect_send_payload(
+    text: &str,
+    cap: usize,
+    stdin: impl Read,
+) -> Result<(Vec<u8>, usize)> {
     if text == "-" {
-        return read_send_payload(std::io::stdin(), cap);
+        return read_send_payload(stdin, cap);
     }
     Ok((text.as_bytes().to_vec(), text.len()))
 }

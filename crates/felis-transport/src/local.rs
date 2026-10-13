@@ -251,31 +251,6 @@ mod tests {
         tmp
     }
 
-    /// Pins the facade's aliases and splits, not the backend socket.
-    #[tokio::test]
-    async fn bytes_round_trip_through_the_facade_halves() {
-        let tmp = private_dir();
-        let path = tmp.path().join("facade.sock");
-        let listener = Listener::bind(&Endpoint::unix(path.clone())).unwrap();
-
-        let server_task = tokio::spawn(async move {
-            let stream = listener.accept().await.unwrap();
-            let (mut rx, mut tx) = server_split(stream);
-            let mut buf = [0u8; 4];
-            rx.read_exact(&mut buf).await.unwrap();
-            assert_eq!(&buf, b"ping");
-            tx.write_all(b"pong").await.unwrap();
-        });
-
-        let (mut rx, mut tx) = connect(path.as_path()).await.unwrap();
-        tx.write_all(b"ping").await.unwrap();
-        let mut reply = [0u8; 4];
-        rx.read_exact(&mut reply).await.unwrap();
-        assert_eq!(&reply, b"pong");
-
-        server_task.await.unwrap();
-    }
-
     /// The adopted socket is the same listening socket, so a dial that
     /// queued while nobody accepted is served by the adopter.
     #[tokio::test]

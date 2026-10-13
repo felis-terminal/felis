@@ -30,6 +30,8 @@ mod cli_schema;
 mod cli_sessions;
 mod cli_version;
 mod conn;
+#[cfg(test)]
+mod test_support;
 mod timestamp;
 
 pub(crate) use felis_client_core::session_id::{SessionPrefixError, validate_session_id_prefix};

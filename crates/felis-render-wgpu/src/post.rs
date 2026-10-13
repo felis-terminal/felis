@@ -645,8 +645,12 @@ mod tests {
 
     #[test]
     fn a_shader_that_does_not_parse_is_refused_with_the_message() {
-        let err = validate_post_shader("@fragment fn fs_post( {").unwrap_err();
-        assert!(matches!(err, PostShaderError::Parse(_)));
+        let src = "@fragment fn fs_post( {";
+        let naga_message = wgsl::parse_str(src).unwrap_err().to_string();
+        let Err(PostShaderError::Parse(message)) = validate_post_shader(src) else {
+            panic!("an unparseable shader must be refused as a parse error");
+        };
+        assert_eq!(message, naga_message);
     }
 
     #[test]

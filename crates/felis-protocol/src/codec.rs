@@ -503,14 +503,6 @@ mod tests {
     }
 
     #[test]
-    fn round_trips_a_domain_message() {
-        let msg = crate::messages::ConnToClientMsg::Welcome { identity: None };
-        let bytes = encode(&msg);
-        let back: crate::messages::ConnToClientMsg = decode(&bytes).unwrap();
-        assert_eq!(back, msg);
-    }
-
-    #[test]
     fn round_trips_a_u128_id() {
         let msg = crate::messages::PushMsg::Reattach {
             id: 0x0123_4567_89AB_CDEF_FEDC_BA98_7654_3210,

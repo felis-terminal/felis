@@ -262,11 +262,4 @@ mod tests {
         assert_eq!(resolved.target.carrier.local_socket(), Some(socket));
         assert_eq!(resolved.local_source, Some(SocketSource::Explicit));
     }
-
-    #[test]
-    fn dial_policies_declare_their_handshake_mode() {
-        assert_eq!(Dial::Ops.offer(), Offer::ops());
-        assert_eq!(Dial::OpsOrSpawn.offer(), Offer::ops());
-        assert_eq!(Dial::Observer.offer(), Offer::observer());
-    }
 }

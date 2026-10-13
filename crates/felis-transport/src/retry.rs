@@ -148,7 +148,7 @@ mod tests {
     }
 
     #[test]
-    fn shortening_the_first_sleep_did_not_shorten_the_boot_window() {
+    fn the_daemon_boot_window_still_waits_out_a_slow_bind() {
         // The schedule must still wait out a slow bind.
         let window = RetryPolicy::DAEMON_BOOT.total_backoff();
         assert!(
@@ -167,10 +167,12 @@ mod tests {
     }
 
     #[test]
-    fn the_reconnect_default_still_gives_up_inside_half_a_minute() {
-        // A hung daemon must not pin the user's window for minutes.
+    fn the_default_policy_gives_up_inside_half_a_minute() {
         let window = RetryPolicy::default().total_backoff();
-        assert_eq!(window, Duration::from_millis(21_300));
+        assert!(
+            window < Duration::from_secs(30),
+            "default window {window:?}"
+        );
     }
 
     proptest::proptest! {

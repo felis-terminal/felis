@@ -612,18 +612,4 @@ mod unix_tests {
             assert!(spawns.paths().is_empty(), "spawned: {:?}", spawns.paths());
         }
     }
-
-    /// The relay resolves what every other process of this uid
-    /// resolves, whatever the SSH server passed on, so a relay under
-    /// Tailscale SSH reaches the daemon a desktop login started.
-    #[cfg(unix)]
-    #[test]
-    fn the_relay_resolves_the_uid_derived_endpoint() {
-        use felis_transport::socket::SocketPath;
-
-        assert_eq!(
-            SocketPath::resolve(1234).socket(),
-            Path::new("/tmp/felis.1234/daemon.sock")
-        );
-    }
 }

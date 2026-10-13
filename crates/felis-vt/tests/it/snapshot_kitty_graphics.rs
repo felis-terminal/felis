@@ -83,6 +83,10 @@ fn representative_wire_forms_parse_to_their_controls_and_payload() {
         // Combined forms.
         b"Ga=T,t=d,f=32,s=1,v=1;UkdCQQ",
         b"Ga=T,t=f,f=100,i=42;L3RtcC9hLnBuZw",
+        b"Ga=T,t=d,f=32,o=z,s=1,v=1;eJxr",
+        // The parser's job ends at preserving `m=1`.
+        b"Ga=T,t=d,f=32,m=1;CHUNK1",
+        b"Ga=d,i=1,p=1",
     ];
     let mut out = String::new();
     for body in cases {
@@ -112,45 +116,10 @@ fn representative_wire_forms_parse_to_their_controls_and_payload() {
     Ga=T,f=100;iVBORw0KGgo => [a=T f=100] payload 11 bytes
     Ga=T,t=d,f=32,s=1,v=1;UkdCQQ => [a=T t=d f=32 s=1 v=1] payload 6 bytes
     Ga=T,t=f,f=100,i=42;L3RtcC9hLnBuZw => [a=T t=f f=100 i=42] payload 14 bytes
+    Ga=T,t=d,f=32,o=z,s=1,v=1;eJxr => [a=T t=d f=32 o=z s=1 v=1] payload 4 bytes
+    Ga=T,t=d,f=32,m=1;CHUNK1 => [a=T t=d f=32 m=1] payload 6 bytes
+    Ga=d,i=1,p=1 => [a=d i=1 p=1] payload 0 bytes
     ");
-}
-
-#[test]
-fn compressed_rgba() {
-    insta::assert_snapshot!(pin(b"Ga=T,t=d,f=32,o=z,s=1,v=1;eJxr"), @"
-    controls:
-      a=T
-      t=d
-      f=32
-      o=z
-      s=1
-      v=1
-    payload (4 bytes): [101, 74, 120, 114]
-    ");
-}
-
-#[test]
-fn chunked_continuation_marker() {
-    // The parser's job ends at preserving `m=1`.
-    insta::assert_snapshot!(pin(b"Ga=T,t=d,f=32,m=1;CHUNK1"), @"
-    controls:
-      a=T
-      t=d
-      f=32
-      m=1
-    payload (6 bytes): [67, 72, 85, 78, 75, 49]
-    ");
-}
-
-#[test]
-fn placement_delete_with_image_and_placement_ids() {
-    insta::assert_snapshot!(pin(b"Ga=d,i=1,p=1"), @r#"
-    controls:
-      a=d
-      i=1
-      p=1
-    payload (0 bytes): []
-    "#);
 }
 
 #[test]

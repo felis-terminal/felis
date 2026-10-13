@@ -247,7 +247,6 @@ fn summarize(bytes: &[u8], width: u32, height: u32, padded_row: u32) -> FrameCap
 mod tests {
     use super::*;
 
-    /// A frame that cleared and drew nothing scores zero painted pixels.
     #[test]
     fn a_readback_strip_fits_the_buffer_limit() {
         assert_eq!(strip_rows(256 << 20, 33_024, 8193), Some(8128));
@@ -256,6 +255,7 @@ mod tests {
         assert_eq!(strip_rows(255, 256, 20), None);
     }
 
+    /// A frame that cleared and drew nothing scores zero painted pixels.
     #[test]
     fn a_single_color_frame_counts_no_painted_pixels() {
         let bytes = vec![7u8; 4 * 4 * 2];

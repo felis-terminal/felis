@@ -148,7 +148,7 @@ fn regex_with_anchor() {
 }
 
 #[test]
-fn regex_with_inline_case_insensitive_flag() {
+fn regex_honors_the_case_insensitive_option() {
     let mut sb = Rows::default();
     push_text(&mut sb, 80, "AbCdE");
     let q = SearchQuery::new(

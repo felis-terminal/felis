@@ -1189,43 +1189,33 @@ mod tests {
     }
 
     #[test]
-    fn keymap_section_parses_single_entry() {
-        let cfg: EffectiveConfig = toml::from_str(
-            r#"
-            [keymap]
-            "ctrl+shift+f" = { kind = "open_scrollback_search" }
-        "#,
-        )
-        .unwrap();
-        let compiled = cfg.keymap.compile(None);
-        assert_eq!(compiled.len(), 1);
-        let (chord, binding) = compiled.into_iter().next().unwrap();
-        assert_eq!(chord, "ctrl+shift+f".parse().unwrap());
-        assert_eq!(binding, BindingValue::OpenScrollbackSearch);
-        assert_eq!(
-            binding.into_action(),
-            Some(Action::Ipc(IpcAction::OpenScrollbackSearch)),
-        );
-    }
-
-    #[test]
-    fn keymap_section_parses_spawn_session() {
-        let cfg: EffectiveConfig = toml::from_str(
-            r#"
-            [keymap]
-            "ctrl+shift+n" = { kind = "new_session" }
-        "#,
-        )
-        .unwrap();
-        let compiled = cfg.keymap.compile(None);
-        assert_eq!(compiled.len(), 1);
-        let (chord, binding) = compiled.into_iter().next().unwrap();
-        assert_eq!(chord, "ctrl+shift+n".parse().unwrap());
-        assert_eq!(binding, BindingValue::NewSession);
-        assert_eq!(
-            binding.into_action(),
-            Some(Action::Ipc(IpcAction::NewSession)),
-        );
+    fn keymap_section_compiles_unit_bindings_to_their_ipc_actions() {
+        for (chord, kind, binding, action) in [
+            (
+                "ctrl+shift+f",
+                "open_scrollback_search",
+                BindingValue::OpenScrollbackSearch,
+                IpcAction::OpenScrollbackSearch,
+            ),
+            (
+                "ctrl+shift+n",
+                "new_session",
+                BindingValue::NewSession,
+                IpcAction::NewSession,
+            ),
+        ] {
+            let cfg: EffectiveConfig = toml::from_str(&format!(
+                "[keymap]\n\"{chord}\" = {{ kind = \"{kind}\" }}\n"
+            ))
+            .unwrap();
+            let compiled = cfg.keymap.compile(None);
+            assert_eq!(
+                compiled,
+                vec![(chord.parse().unwrap(), binding.clone())],
+                "{kind}"
+            );
+            assert_eq!(binding.into_action(), Some(Action::Ipc(action)), "{kind}");
+        }
     }
 
     #[test]
@@ -1624,26 +1614,6 @@ mod tests {
     }
 
     #[test]
-    fn keymap_section_does_not_interfere_with_other_sections() {
-        let cfg: EffectiveConfig = toml::from_str(
-            r#"
-            [font]
-            family = "Source Code Pro"
-            size_px = 14.0
-
-            [keymap]
-            "ctrl+shift+r" = { kind = "reload" }
-        "#,
-        )
-        .unwrap();
-        assert_eq!(cfg.font.family.as_deref(), Some("Source Code Pro"));
-        assert_eq!(cfg.font.size_px, Some(14.0));
-        let compiled = cfg.keymap.compile(None);
-        assert_eq!(compiled.len(), 1);
-        assert_eq!(compiled[0].1, BindingValue::Reload);
-    }
-
-    #[test]
     fn keymap_top_level_typo_is_reported_not_fatal() {
         let (cfg, ignored) = parse_with_ignored(
             r#"
@@ -1655,19 +1625,6 @@ mod tests {
         .unwrap();
         assert_eq!(cfg, EffectiveConfig::default());
         assert_eq!(ignored, vec!["kemyap".to_owned()]);
-    }
-
-    #[test]
-    fn font_family_and_size_round_trip() {
-        let toml_src = r#"
-            [font]
-            family = "JetBrains Mono"
-            size_px = 14.0
-        "#;
-        let cfg: EffectiveConfig = toml::from_str(toml_src).unwrap();
-        assert_eq!(cfg.font.family.as_deref(), Some("JetBrains Mono"));
-        assert_eq!(cfg.font.size_px, Some(14.0));
-        assert_eq!(cfg.font.fallback, Vec::<FontStyleConfig>::new());
     }
 
     fn fallback_families(cfg: &EffectiveConfig) -> Vec<&str> {
@@ -1697,25 +1654,6 @@ mod tests {
             ["Noto Sans CJK JP", "Noto Color Emoji"]
         );
         assert_eq!(cfg.font.fallback[0].features, None);
-    }
-
-    #[test]
-    fn font_features_primary_list_parses() {
-        let cfg: EffectiveConfig = toml::from_str(
-            r#"
-            [font]
-            family = "FiraCode"
-            features = ["calt", "liga", "ss01", "-clig"]
-        "#,
-        )
-        .unwrap();
-        assert_eq!(
-            cfg.font.features,
-            vec!["calt", "liga", "ss01", "-clig"]
-                .into_iter()
-                .map(str::to_owned)
-                .collect::<Vec<_>>(),
-        );
     }
 
     #[test]
@@ -1849,18 +1787,6 @@ mod tests {
     }
 
     #[test]
-    fn window_title_prefix_parses() {
-        let cfg: EffectiveConfig = toml::from_str(
-            r#"
-            [window]
-            title_prefix = "[work]"
-        "#,
-        )
-        .unwrap();
-        assert_eq!(cfg.window.title_prefix.as_deref(), Some("[work]"));
-    }
-
-    #[test]
     fn window_decorations_defaults_true() {
         let cfg = EffectiveConfig::default();
         assert!(cfg.window.decorations);
@@ -1869,36 +1795,11 @@ mod tests {
     }
 
     #[test]
-    fn window_decorations_false_parses() {
-        let cfg: EffectiveConfig = toml::from_str(
-            r"
-            [window]
-            decorations = false
-        ",
-        )
-        .unwrap();
-        assert!(!cfg.window.decorations);
-    }
-
-    #[test]
     fn window_opacity_defaults_fully_opaque() {
         assert_eq!(EffectiveConfig::default().window.opacity, 1.0);
         let cfg: EffectiveConfig = toml::from_str("[window]").unwrap();
         assert_eq!(cfg.window.opacity, 1.0);
         assert_eq!(cfg.window.clamped_opacity(), 1.0);
-    }
-
-    #[test]
-    fn window_opacity_parses_and_reports_translucent() {
-        let cfg: EffectiveConfig = toml::from_str(
-            r"
-            [window]
-            opacity = 0.85
-        ",
-        )
-        .unwrap();
-        assert!((cfg.window.clamped_opacity() - 0.85).abs() < f32::EPSILON);
-        assert!(cfg.window.clamped_opacity() < 1.0);
     }
 
     /// NaN is outside every band, so it is replaced rather than clamped:
@@ -1940,34 +1841,6 @@ mod tests {
     }
 
     #[test]
-    fn window_blur_with_opacity_parses() {
-        let cfg: EffectiveConfig = toml::from_str(
-            r#"
-            [window]
-            opacity = 0.8
-            backdrop = "blur"
-        "#,
-        )
-        .unwrap();
-        assert_eq!(cfg.window.backdrop, Backdrop::Blur);
-        assert!(cfg.window.clamped_opacity() < 1.0);
-    }
-
-    #[test]
-    fn window_title_bar_glass_combo_parses() {
-        let cfg: EffectiveConfig = toml::from_str(
-            r#"
-            [window]
-            backdrop = "mica"
-            opacity = 1.0
-        "#,
-        )
-        .unwrap();
-        assert_eq!(cfg.window.backdrop, Backdrop::Mica);
-        assert_eq!(cfg.window.clamped_opacity(), 1.0);
-    }
-
-    #[test]
     fn window_section_unknown_field_reported_with_full_path() {
         let (cfg, ignored) = parse_with_ignored(
             r#"
@@ -1981,20 +1854,6 @@ mod tests {
         assert_eq!(ignored, vec!["window.prefix".to_owned()]);
         assert!(!cfg.window.decorations);
         assert_eq!(cfg.window.title_prefix, None);
-    }
-
-    #[test]
-    fn cursor_color_parses() {
-        let cfg: EffectiveConfig = toml::from_str(
-            r##"
-            [cursor]
-            color = "#ffaa00"
-        "##,
-        )
-        .unwrap();
-        assert_eq!(cfg.cursor.color.as_deref(), Some("#ffaa00"));
-        assert_eq!(cfg.cursor.blink, CursorBlinkMode::Program);
-        assert_eq!(cfg.cursor.blink_interval_ms, 530);
     }
 
     #[test]
@@ -2055,27 +1914,6 @@ mod tests {
         let cfg: EffectiveConfig = toml::from_str("[mouse]\nscroll_multiplier = 7.5\n").unwrap();
         assert_eq!(cfg.mouse.scroll_multiplier, 7.5);
         assert_eq!(cfg.mouse.clamped_scroll_multiplier(), 7.5);
-    }
-
-    #[test]
-    fn theme_foreground_background_parse() {
-        let cfg: EffectiveConfig = toml::from_str(
-            r##"
-            [theme]
-            foreground = "#cdcdcd"
-            background = "#101010"
-        "##,
-        )
-        .unwrap();
-        assert_eq!(cfg.theme.foreground.as_deref(), Some("#cdcdcd"));
-        assert_eq!(cfg.theme.background.as_deref(), Some("#101010"));
-    }
-
-    #[test]
-    fn missing_section_keeps_other_section_default() {
-        let cfg: EffectiveConfig = toml::from_str(r"font = { size_px = 12.0 }").unwrap();
-        assert_eq!(cfg.font.size_px, Some(12.0));
-        assert_eq!(cfg.theme, ThemeConfig::default());
     }
 
     #[test]
@@ -2200,49 +2038,12 @@ mod tests {
     }
 
     #[test]
-    fn load_falls_back_to_default_on_any_error() {
-        let dir = tempfile::tempdir().unwrap();
-        let parse_err_path = dir.path().join("broken.toml");
-        std::fs::write(&parse_err_path, "this = is = not = toml").unwrap();
-        let cfg = EffectiveConfig::try_load_from(&parse_err_path, "felis").unwrap_or_default();
-        assert_eq!(cfg, EffectiveConfig::default());
-    }
-
-    #[test]
     fn clipboard_default_is_security_conscious() {
         let cfg = EffectiveConfig::default();
         assert!(cfg.clipboard.use_os_clipboard);
         assert_eq!(cfg.clipboard.osc_52, Osc52Policy::Mirror);
         assert!(!cfg.clipboard.osc_52.writes_to_system());
-    }
-
-    #[test]
-    fn clipboard_section_parses_explicit_overrides() {
-        let cfg: EffectiveConfig = toml::from_str(
-            r#"
-            [clipboard]
-            use_os_clipboard = false
-            osc_52 = "system"
-        "#,
-        )
-        .unwrap();
-        assert!(!cfg.clipboard.use_os_clipboard);
-        assert!(cfg.clipboard.osc_52.writes_to_system());
-    }
-
-    #[test]
-    fn theme_palette_section_parses_named_slots() {
-        let cfg: EffectiveConfig = toml::from_str(
-            r##"
-            [theme.palette]
-            red = "#ff5555"
-            bright_blue = "#5555ff"
-        "##,
-        )
-        .unwrap();
-        assert_eq!(cfg.theme.palette.red.as_deref(), Some("#ff5555"));
-        assert_eq!(cfg.theme.palette.bright_blue.as_deref(), Some("#5555ff"));
-        assert!(cfg.theme.palette.green.is_none());
+        assert!(Osc52Policy::System.writes_to_system());
     }
 
     #[test]

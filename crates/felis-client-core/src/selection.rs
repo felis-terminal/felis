@@ -639,21 +639,6 @@ mod tests {
             );
         }
 
-        /// Pins: the anchor and extent cells are contained regardless of
-        /// drag direction.
-        #[test]
-        fn endpoints_are_always_contained(
-            ar in 0u16..200,
-            ac in 0u16..200,
-            er in 0u16..200,
-            ec in 0u16..200,
-        ) {
-            let mut s = Selection::new(at(ar, ac));
-            s.extend(at(er, ec));
-            prop_assert!(s.contains(ar, ac));
-            prop_assert!(s.contains(er, ec));
-        }
-
         #[test]
         fn range_normalization_is_symmetric(
             ar in 0u16..200,
@@ -685,19 +670,6 @@ mod tests {
             let scalar = |(r, c): (u16, u16)| u32::from(r) * 1_000 + u32::from(c);
             let want = scalar(start) <= scalar((r, c)) && scalar((r, c)) <= scalar(end);
             prop_assert_eq!(s.contains(r, c), want);
-        }
-
-        #[test]
-        fn rectangle_endpoints_are_always_contained(
-            ar in 0u16..200,
-            ac in 0u16..200,
-            er in 0u16..200,
-            ec in 0u16..200,
-        ) {
-            let mut s = Selection::new_rectangle(at(ar, ac));
-            s.extend(at(er, ec));
-            prop_assert!(s.contains(ar, ac));
-            prop_assert!(s.contains(er, ec));
         }
 
         #[test]

@@ -56,38 +56,6 @@ proptest! {
             );
         }
     }
-
-    /// Pins that `dirty_rows()` is a set view (no duplicate rows).
-    #[test]
-    fn dirty_rows_union_is_associative(
-        rows in 1u16..=8,
-        cols in 1u16..=24,
-        a in proptest::collection::vec(workload_byte(), 0..64),
-        b in proptest::collection::vec(workload_byte(), 0..64),
-        c in proptest::collection::vec(workload_byte(), 0..64),
-    ) {
-        let da = dirty(rows, cols, &a);
-        let db = dirty(rows, cols, &b);
-        let dc = dirty(rows, cols, &c);
-        let left: BTreeSet<usize> = da.union(&db).copied().collect::<BTreeSet<_>>()
-            .union(&dc).copied().collect();
-        let right: BTreeSet<usize> = db.union(&dc).copied().collect::<BTreeSet<_>>();
-        let right: BTreeSet<usize> = da.union(&right).copied().collect();
-        prop_assert_eq!(left, right);
-    }
-
-    #[test]
-    fn clear_zeroes_the_dirty_set(
-        rows in 1u16..=8,
-        cols in 1u16..=24,
-        body in proptest::collection::vec(workload_byte(), 0..64),
-    ) {
-        let mut g = Grid::new(rows, cols);
-        let mut p = Parser::new();
-        p.advance(&mut g, &body);
-        g.damage_mut().clear();
-        prop_assert!(g.damage().dirty_rows().next().is_none());
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -204,8 +172,8 @@ proptest! {
         for op in &ops {
             apply(&mut damage, &mut flags, op);
             prop_assert_eq!(
-                damage.dirty_rows().collect::<BTreeSet<_>>(),
-                dirty_set(&flags),
+                damage.dirty_rows().collect::<Vec<_>>(),
+                dirty_set(&flags).into_iter().collect::<Vec<_>>(),
                 "after {:?}", op
             );
         }
