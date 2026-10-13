@@ -276,6 +276,20 @@ impl RealAppSession {
         false
     }
 
+    pub async fn wait_for_counters<F>(&self, mut predicate: F, timeout: Duration) -> bool
+    where
+        F: FnMut(&FrameCounters) -> bool,
+    {
+        let deadline = tokio::time::Instant::now() + timeout;
+        while tokio::time::Instant::now() < deadline {
+            if predicate(&self.counters()) {
+                return true;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        false
+    }
+
     pub async fn shutdown(mut self) {
         {
             let mut writer = self.writer.lock().await;
@@ -397,7 +411,14 @@ async fn large_burst_collapses_to_few_send_diffs_cycles() {
 
     let session = RealAppSession::spawn(cmd, false).await;
 
-    tokio::time::sleep(Duration::from_secs(1)).await;
+    let drew = session
+        .wait_for_shadow(|s| shadow_contains(s, "line-5000"), Duration::from_secs(10))
+        .await;
+    assert!(
+        drew,
+        "the burst's last line never reached the shadow: {:?}",
+        session.with_shadow(shadow_rows),
+    );
     let counters = session.counters();
     let cycle_count = counters.count("RowDelta");
     eprintln!("large-burst counters: {counters:?} (cycle_count={cycle_count})");
@@ -807,7 +828,13 @@ async fn pull_pacing_withholds_until_a_frame_is_requested() {
     let mut session = RealAppSession::spawn(cmd, true).await;
 
     // Rehydrate is eager (not pull-gated), so it lands in the baseline.
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(
+        session
+            .wait_for_counters(|c| c.count("RehydrateEnd") >= 1, Duration::from_secs(5))
+            .await,
+        "the attach never finished rehydrating: {:?}",
+        session.counters(),
+    );
     let cells_of = |c: &FrameCounters| c.count("RowDelta") + c.count("Scrolled");
     let baseline = cells_of(&session.counters());
 
@@ -871,7 +898,9 @@ async fn explicit_su_directive_emits_scrolled_frame() {
 
     let session = RealAppSession::spawn(cmd, false).await;
 
-    tokio::time::sleep(Duration::from_millis(700)).await;
+    session
+        .wait_for_counters(|c| c.count("Scrolled") >= 1, Duration::from_secs(5))
+        .await;
     let counters = session.counters();
     eprintln!("explicit-SU counters: {counters:?}");
 
@@ -900,7 +929,12 @@ async fn nvim_alt_screen_entry_is_observed() {
 
     let session = RealAppSession::spawn(cmd, false).await;
 
-    tokio::time::sleep(Duration::from_secs(1)).await;
+    session
+        .wait_for_counters(
+            |c| c.count("CursorState") >= 1 && c.count("RowDelta") >= 1,
+            Duration::from_secs(5),
+        )
+        .await;
 
     let counters = session.counters();
     eprintln!("nvim counters: {counters:?}");
