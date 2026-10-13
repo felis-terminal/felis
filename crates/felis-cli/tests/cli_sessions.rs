@@ -2173,9 +2173,6 @@ async fn search_returns_hits_and_no_match_exits_one() {
         "stdout must echo the matched text; got: {stdout}",
     );
 
-    // Let the search's detach land before the next attach.
-    tokio::time::sleep(Duration::from_millis(150)).await;
-
     let out_miss = cli_command()
         .arg("--socket")
         .arg(&socket)
@@ -2190,8 +2187,6 @@ async fn search_returns_hits_and_no_match_exits_one() {
         String::from_utf8_lossy(&out_miss.stdout),
         String::from_utf8_lossy(&out_miss.stderr),
     );
-
-    tokio::time::sleep(Duration::from_millis(150)).await;
 
     let out_json = cli_command()
         .arg("--socket")
