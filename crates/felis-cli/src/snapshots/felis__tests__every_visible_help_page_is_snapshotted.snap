@@ -152,9 +152,16 @@ Options:
           [possible values: human, json]
 
       --key <CHORD>
-          Press a named key after the text: `--key up`, `--key enter`, `--key ctrl+c` (repeatable, pressed in order).
+          Press a named key after the text: `--key up`, `--key enter`, `--key ctrl+c` (repeatable, in order with `--mouse`).
           
           Keys are encoded against current keyboard modes; hand-written `--raw` escapes send the wrong bytes to mode-switched programs.
+
+      --mouse <EVENT>
+          Send a mouse event after the text: `--mouse click:12,4` clicks 0-based column 12, row 4 (repeatable, in order with `--key`).
+          
+          EVENT is `[MODS+]ACTION[-BUTTON]:COL,ROW`. ACTION is click, press, drag, release, wheel-up, wheel-down, wheel-left or wheel-right; BUTTON is left (the default), middle or right; MODS are shift, alt and ctrl. COL,ROW count from 0, as `search` and `capture` do.
+          
+          Encoded against the program's mouse modes. Refused with nothing sent when the program has not turned on reporting for the event or the cell is off the grid.
 
   -h, --help
           Print help (see a summary with '-h')

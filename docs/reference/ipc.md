@@ -777,7 +777,8 @@ narrower than what the mode admits on receipt, and which the daemon may narrow f
   tick, which the session broadcasts to every subscriber rather than composing per attach; that is why the `Image` arms
   are legal on both attach-capable modes, and an `Ops` verb, holding no placement to advance, ignores it. What does
   arrive on the grid stream is what a verb acts on without a grid: the two burst markers, the keyboard modes
-  `send --key` encodes its chords against, and the prompt marks `send --wait` blocks on ("Grid (kind = 2)" below).
+  `send --key` encodes its chords against, the mouse protocol `send --mouse` checks its events against, and the prompt
+  marks `send --wait` blocks on ("Grid (kind = 2)" below).
 
 - **`Observer`** is `felis notifications subscribe`. It subscribes to the notification fan-out and nothing else: it
   neither attaches nor mutates, and even its `--session` filter resolves daemon-side
@@ -941,7 +942,8 @@ GUI window and `felis sessions spawn` both create sessions. In wire-tag order:
 - `InputAccepted {}`: daemon → client. Every `Input` frame that preceded the fence on this connection has been processed
   by the session: the bytes the byte-carrying arms (`KeyBytes`, `Paste`, `Key`, `Mouse`) encoded to were admitted
   against the per-session input budget ("Input admission" below) and queued to the PTY writer. It does not say the child
-  read anything.
+  read anything, nor that a `Mouse` event reached the program: one the active mouse protocol filters encodes to no bytes
+  and counts as processed.
 
   Every report the session generates for the other arms (a focus report under DECSET 1004 for `FocusChange`, a
   color-scheme report under DECSET 2031 for `ColorScheme`, an in-band resize report under DECSET 2048 for `Resize`) is
@@ -1239,11 +1241,12 @@ Client → daemon, listed in wire-tag order:
   rides `Key` instead. Capped at `MAX_RAW_INPUT_BYTES`.
 - `Paste(Vec<u8>)`.
 - `Mouse(MouseEvent)`: `{ button, action, mods, x, y, px, py }`. `x` / `y` are 1-based cell coordinates; `px` / `py` are
-  1-based pixel coordinates within the text area, filled by the client from the pointer's physical position (only the
-  client knows the cell metrics). The daemon passes both through and its encoder picks the pair the active mouse
-  encoding needs: cells for SGR (`?1006`), pixels for SGR-pixels (`?1016`). Motion is reported at cell granularity (no
-  separate sub-cell event), but every event carries true pixels. `mods` is a three-bit set (shift `1`, alt `2`, ctrl
-  `4`), the xterm mouse triple, with no Super bit.
+  1-based pixel coordinates within the text area, which a window fills from the pointer's physical position. A sender
+  with no pointer (`felis sessions send --mouse`) leaves them `0`, and the daemon sets each `0` axis to the middle of
+  the pixels that map back to the event's cell at the ratio of the PTY winsize's pixel extent to its cell count. The
+  encoder picks the pair the active mouse encoding needs: cells for SGR (`?1006`), pixels for SGR-pixels (`?1016`).
+  Motion is reported at cell granularity (no separate sub-cell event). `mods` is a three-bit set (shift `1`, alt `2`,
+  ctrl `4`), the xterm mouse triple, with no Super bit.
 - `Resize { dims: GridDims }`: the window's full geometry, pixel dims included, as the client asks for it. The daemon
   **clamps** it into the REQ-605a bounds and applies the clamped tuple; a resize is never refused and never ends the
   connection, whatever the client reports. Pixel `0` stays `0` (unknown) rather than being raised to the pixel minimum.
@@ -1313,8 +1316,9 @@ numbers are in `felis.proto`.
   the session through the `Region` / `Search` reply it asks for, so rows, cursor, meta, the prompt marks already on the
   grid, and the image store (up to the 256 MiB per-session store cap, read back out of the store to compose) would all
   be content it decodes and drops. The two mode messages stay because `felis sessions send --key` encodes its chords
-  against them ([cli.md](cli.md)). Live `PromptMark` frames still reach an `Ops` subscriber after the burst, which is
-  what `send --wait` blocks on.
+  against them and `send --mouse` refuses an event `ModeFlags.mouse_protocol` says the program would not see
+  ([cli.md](cli.md)). Live `PromptMark` frames still reach an `Ops` subscriber after the burst, which is what
+  `send --wait` blocks on.
 
 - `CycleEnd`: the terminator of one pull-paced compose cycle. A **cycle** is everything the daemon composed in answer to
   one `NextGridFrame`: mode flags, prompt marks, viewport state, a scroll directive, the registry entries the rows

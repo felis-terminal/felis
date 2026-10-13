@@ -102,6 +102,9 @@ printf '\003' | felis sessions send "$ID" --raw -           # same, hand-encoded
 #    flags, DECCKM…), which you cannot see from outside. Prefer it
 #    over --raw escapes.
 felis sessions send "$ID" --key down --key down --key enter
+#    A mouse-aware TUI also takes clicks at 0-based cells, the same
+#    numbers `search --source visible` returns in col_spans:
+felis sessions send "$ID" --mouse click:12,4
 
 #    Run-and-check: --wait blocks until the command's OSC 133 D mark and
 #    prints its exit code. Race-free (the subscription starts before the
@@ -147,7 +150,7 @@ Load a reference file only when the task reaches it:
 | ------------------------------------------------------------------------ | ---------------------------------------------------------------- |
 | Listing, tagging, or waiting on a session someone else started           | [references/watching.md](references/watching.md)                 |
 | A verb exits `1` or `2` and the `kind` does not say what to do           | [references/troubleshooting.md](references/troubleshooting.md)   |
-| Aiming a mouse report, reading a fullscreen TUI, image placeholders      | [references/reading-the-grid.md](references/reading-the-grid.md) |
+| Clicking on text, reading a fullscreen TUI, image placeholders           | [references/reading-the-grid.md](references/reading-the-grid.md) |
 | `--host`, or `felis` inside a session reaching an unexpected daemon      | [references/remote.md](references/remote.md)                     |
 | The bridge, window moves, keymap chords, `doctor` / `config` diagnostics | [references/other-surfaces.md](references/other-surfaces.md)     |
 

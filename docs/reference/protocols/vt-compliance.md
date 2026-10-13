@@ -128,10 +128,10 @@ The rectangle checksum query, DECRQCRA, shares this bounds model; its reply is s
 
 ## Mouse and focus
 
-- SGR-pixels mouse encoding (`?1016h`): the report carries the pointer's true pixel position within the text area,
-  filled by the client from the physical cursor (only the client knows the cell metrics). Motion events are still
-  emitted at cell granularity: a move that stays inside one cell produces no separate event. Every event that is emitted
-  carries real pixels, not cell-derived approximations.
+- SGR-pixels mouse encoding (`?1016h`): a window's report carries the pointer's true pixel position within the text
+  area. Motion events are still emitted at cell granularity: a move that stays inside one cell produces no separate
+  event. An event from `felis sessions send --mouse`, which has no pointer, reports the middle of its cell at the PTY
+  winsize's pixel ratio.
 
 ## OSC
 

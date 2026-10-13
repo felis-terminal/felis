@@ -1138,7 +1138,7 @@ mod argv_matrix {
     }
 
     /// The whole `send` grammar: at least one of TEXT / `--key` /
-    /// `--wait`, `--raw` only with TEXT, `--timeout` only with
+    /// `--mouse` / `--wait`, `--raw` only with TEXT, `--timeout` only with
     /// `--wait` (docs/reference/cli.md "Verb details").
     #[test]
     fn send_takes_three_constraints_and_no_others() {
@@ -1167,6 +1167,10 @@ mod argv_matrix {
             // Each payload kind stands alone, and they compose.
             (
                 &["felis", "sessions", "send", "1a", "--key", "enter"],
+                Outcome::Parses,
+            ),
+            (
+                &["felis", "sessions", "send", "1a", "--mouse", "click:0,0"],
                 Outcome::Parses,
             ),
             (

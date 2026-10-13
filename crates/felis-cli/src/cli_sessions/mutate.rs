@@ -7,6 +7,7 @@ use felis_client_core::{Carrier, ConnectError, Connection, Reconnector, spawn_ar
 use felis_protocol::{SessionHex, messages::InputMsg};
 use tokio::io::{AsyncRead, AsyncWrite};
 
+use super::mouse::MouseArg;
 use super::{
     attach_by_prefix, detach,
     driver::{DrainTick, Drained, Stall, drain_frames},
@@ -40,7 +41,7 @@ pub(super) async fn cmd_send<R, W>(
     id_prefix: &str,
     bytes: Vec<u8>,
     raw: bool,
-    keys: &[felis_client_core::Chord],
+    steps: &[SendStep],
     wait: Option<WaitParams>,
 ) -> Result<i32>
 where
@@ -60,8 +61,8 @@ where
 
     // An empty payload still resolves the target, so a caller learns
     // the full id; pasting nothing is a no-op, so the attach is
-    // skipped. `--key` and `--wait` still take the full path.
-    if bytes.is_empty() && keys.is_empty() && wait.is_none() {
+    // skipped. `--key`, `--mouse` and `--wait` still take the full path.
+    if bytes.is_empty() && steps.is_empty() && wait.is_none() {
         let (session, _short_id) = match session_info_by_prefix(&mut conn, out, id_prefix).await {
             Ok(v) => v,
             Err(code) => return Ok(code),
@@ -74,7 +75,9 @@ where
         Ok(v) => v,
         Err(code) => return Ok(code),
     };
-    let reached = || SessionRef::new(resolved);
+    let reached = || SessionRef::new(resolved.id);
+    let mut dims = resolved.dims;
+    let mut mouse_protocol = felis_protocol::messages::MouseProtocol::Off;
 
     // Drain the rehydrate burst before injecting input: an unread outbox
     // makes the daemon pump hit EPIPE mid-burst and drop the input frame.
@@ -108,8 +111,14 @@ where
                 let Drained::Item(msg) = msg else {
                     return ControlFlow::Continue(());
                 };
-                if matches!(msg, GridMsg::RehydrateEnd) {
-                    return ControlFlow::Break(());
+                match msg {
+                    GridMsg::RehydrateEnd => return ControlFlow::Break(()),
+                    GridMsg::ModeFlags {
+                        mouse_protocol: protocol,
+                        ..
+                    } => mouse_protocol = protocol,
+                    GridMsg::Size { dims: resized } => dims = resized,
+                    _ => {}
                 }
                 ControlFlow::Continue(())
             },
@@ -121,21 +130,34 @@ where
     }
 
     // Built before any frame goes out: a chord the daemon would refuse
-    // at admission must fail the whole command rather than deliver a
-    // truncated key sequence.
-    let mut key_frames: Vec<InputMsg> = Vec::with_capacity(keys.len());
-    for chord in keys {
-        let msg = InputMsg::Key(chord_key_event(chord));
-        if let Err(e) = msg.validate() {
-            return Ok(out.fail(
-                ErrorKind::InvalidRequest,
-                format!("send: --key {chord}: {e}"),
-            ));
+    // at admission, or a mouse event the program would never see, must
+    // fail the whole command rather than deliver a truncated sequence.
+    let mut step_frames: Vec<InputMsg> = Vec::with_capacity(steps.len());
+    for step in steps {
+        match step {
+            SendStep::Key(chord) => {
+                let msg = InputMsg::Key(chord_key_event(chord));
+                if let Err(e) = msg.validate() {
+                    return Ok(out.fail(
+                        ErrorKind::InvalidRequest,
+                        format!("send: --key {chord}: {e}"),
+                    ));
+                }
+                step_frames.push(msg);
+            }
+            SendStep::Mouse(arg) => {
+                if let Err(why) = arg.check(mouse_protocol, dims) {
+                    return Ok(out.fail(
+                        ErrorKind::InvalidRequest,
+                        format!("send: --mouse {arg}: {why}"),
+                    ));
+                }
+                step_frames.extend(arg.events().into_iter().map(InputMsg::Mouse));
+            }
         }
-        key_frames.push(msg);
     }
 
-    let wrote_input = !bytes.is_empty() || !key_frames.is_empty();
+    let wrote_input = !bytes.is_empty() || !step_frames.is_empty();
     if !bytes.is_empty() {
         let msg = if raw {
             InputMsg::KeyBytes(bytes)
@@ -154,11 +176,11 @@ where
     // appended to the paste payload: under `?2004` the daemon brackets
     // the whole Paste body, and a keystroke inside the brackets is
     // literal paste data (`--key enter` must run the line).
-    for msg in key_frames {
+    for msg in step_frames {
         if let Err(e) = conn.writer.send_unflushed(&msg).await {
             return Ok(out.fail(
                 ErrorKind::DaemonLost,
-                format!("send: write --key frame: {e}"),
+                format!("send: write input frame: {e}"),
             ));
         }
     }
@@ -228,6 +250,96 @@ where
 
 pub(super) struct WaitParams {
     pub(super) timeout: Option<u64>,
+}
+
+/// One `--key` or `--mouse` argument.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SendStep {
+    Key(felis_client_core::Chord),
+    Mouse(MouseArg),
+}
+
+/// `--key` and `--mouse` in command-line order. The derive would collect
+/// each flag into its own `Vec` and lose how the two interleave, so the
+/// pair is read back by argv index.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct SendSteps(pub(crate) Vec<SendStep>);
+
+const KEY_ID: &str = "keys";
+const MOUSE_ID: &str = "mouse";
+
+impl clap::FromArgMatches for SendSteps {
+    fn from_arg_matches(matches: &clap::ArgMatches) -> Result<Self, clap::Error> {
+        fn indexed<'m, T: Clone + Send + Sync + 'static>(
+            matches: &'m clap::ArgMatches,
+            id: &str,
+            step: impl Fn(T) -> SendStep + 'm,
+        ) -> impl Iterator<Item = (usize, SendStep)> + 'm {
+            let indices = matches.indices_of(id).into_iter().flatten();
+            let values = matches.get_many::<T>(id).into_iter().flatten().cloned();
+            indices.zip(values.map(step))
+        }
+        let mut steps: Vec<(usize, SendStep)> = indexed(matches, KEY_ID, SendStep::Key)
+            .chain(indexed(matches, MOUSE_ID, SendStep::Mouse))
+            .collect();
+        steps.sort_by_key(|(index, _)| *index);
+        Ok(Self(steps.into_iter().map(|(_, step)| step).collect()))
+    }
+
+    fn update_from_arg_matches(&mut self, matches: &clap::ArgMatches) -> Result<(), clap::Error> {
+        *self = Self::from_arg_matches(matches)?;
+        Ok(())
+    }
+}
+
+impl clap::Args for SendSteps {
+    fn augment_args(cmd: clap::Command) -> clap::Command {
+        use clap::{Arg, ArgAction};
+
+        cmd.arg(
+            Arg::new(KEY_ID)
+                .long("key")
+                .value_name("CHORD")
+                .action(ArgAction::Append)
+                .value_parser(parse_chord_arg)
+                .help(
+                    "Press a named key after the text: `--key up`, `--key enter`, \
+                     `--key ctrl+c` (repeatable, in order with `--mouse`)",
+                )
+                .long_help(
+                    "Press a named key after the text: `--key up`, `--key enter`, \
+                     `--key ctrl+c` (repeatable, in order with `--mouse`).\n\n\
+                     Keys are encoded against current keyboard modes; hand-written \
+                     `--raw` escapes send the wrong bytes to mode-switched programs.",
+                ),
+        )
+        .arg(
+            Arg::new(MOUSE_ID)
+                .long("mouse")
+                .value_name("EVENT")
+                .action(ArgAction::Append)
+                .value_parser(clap::value_parser!(MouseArg))
+                .help(
+                    "Send a mouse event after the text: `--mouse click:12,4` clicks \
+                     0-based column 12, row 4 (repeatable, in order with `--key`)",
+                )
+                .long_help(
+                    "Send a mouse event after the text: `--mouse click:12,4` clicks \
+                     0-based column 12, row 4 (repeatable, in order with `--key`).\n\n\
+                     EVENT is `[MODS+]ACTION[-BUTTON]:COL,ROW`. ACTION is click, press, \
+                     drag, release, wheel-up, wheel-down, wheel-left or wheel-right; \
+                     BUTTON is left (the default), middle or right; MODS are shift, alt \
+                     and ctrl. COL,ROW count from 0, as `search` and `capture` do.\n\n\
+                     Encoded against the program's mouse modes. Refused with nothing \
+                     sent when the program has not turned on reporting for the event \
+                     or the cell is off the grid.",
+                ),
+        )
+    }
+
+    fn augment_args_for_update(cmd: clap::Command) -> clap::Command {
+        Self::augment_args(cmd)
+    }
 }
 
 /// The keymap chord grammar (docs/reference/config.md `[keymap]`), so
