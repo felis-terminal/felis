@@ -1034,13 +1034,15 @@ mod tests {
         cmd
     }
 
-    /// The child's output reaches the sink and none of it leaks into
-    /// the reader half.
+    /// The child's stdout reaches the sink across the PTY, none of it
+    /// leaks into the reader half, and the child exits. On Windows a
+    /// child misrouted to the parent's std handles
+    /// (`STARTF_USESTDHANDLES`) surfaces here as an empty sink.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn sink_receives_output_and_reader_carries_no_data() {
+    async fn child_output_reaches_the_sink_but_not_the_reader() {
         let (collected, sink) = collector();
         let session = spawn(shell_echo("felis-sink"), small_size(), sink).expect("spawn");
-        let (mut reader, _writer, _child, _resizer) = session.split();
+        let (mut reader, _writer, child, _resizer) = session.split();
 
         let text = sink_until(&collected, "felis-sink").await;
         assert!(text.contains("felis-sink"), "sink missed output: {text:?}");
@@ -1054,6 +1056,16 @@ mod tests {
             Ok(Err(err)) => panic!("lifecycle reader errored: {err}"),
             Err(_) => {}
         }
+
+        let mut waited = None;
+        for _ in 0..50 {
+            if let Some(status) = child.try_wait().expect("try_wait") {
+                waited = Some(status);
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(waited.is_some(), "child did not exit");
     }
 
     /// The lifecycle EOF is ordered after the sink's last call. The sink
@@ -1118,29 +1130,6 @@ mod tests {
             .expect("reader must reach EOF after the sink panics, not park forever")
             .expect("clean EOF");
         assert_eq!(n, 0, "the lifecycle reader yielded data");
-    }
-
-    /// The child's stdout reaches the sink across the PTY. On Windows a
-    /// child misrouted to the parent's std handles (`STARTF_USESTDHANDLES`)
-    /// surfaces here as an empty sink.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn echoes_short_string_back() {
-        let (collected, sink) = collector();
-        let session = spawn(shell_echo("felis-pty"), small_size(), sink).expect("spawn");
-        let (_reader, _writer, child, _resizer) = session.split();
-
-        let text = sink_until(&collected, "felis-pty").await;
-        assert!(text.contains("felis-pty"), "expected echo, got: {text:?}");
-
-        let mut waited = None;
-        for _ in 0..50 {
-            if let Some(status) = child.try_wait().expect("try_wait") {
-                waited = Some(status);
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-        assert!(waited.is_some(), "child did not exit");
     }
 
     /// Cooked-mode echo is a Unix line-discipline contract; `ConPTY`

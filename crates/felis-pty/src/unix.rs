@@ -459,6 +459,8 @@ mod tests {
         fcntl_getfd(fd).unwrap().contains(FdFlags::CLOEXEC)
     }
 
+    /// REQ-912; `docs/reference/security-audits.md` "`O_CLOEXEC` +
+    /// `O_NOFOLLOW` audit (standing)".
     #[test]
     fn the_master_and_the_wake_pipe_never_reach_a_spawned_child() {
         let (master, slave) = open_pair(Size {
@@ -503,24 +505,5 @@ mod tests {
         child.hangup().unwrap();
         child.kill().unwrap();
         assert!(child.try_wait().unwrap().is_some());
-    }
-
-    /// Both ends carry `FD_CLOEXEC` (REQ-912;
-    /// `docs/reference/security-audits.md`
-    /// "`O_CLOEXEC` + `O_NOFOLLOW` audit (standing)"). The master gets
-    /// the flag from `fcntl`, the slave from `O_CLOEXEC` at open, so
-    /// both are read back.
-    #[test]
-    fn open_pair_sets_cloexec_on_both_ends() {
-        let (master, slave) = open_pair(Size {
-            rows: 24,
-            cols: 80,
-            pixel_width: 0,
-            pixel_height: 0,
-        })
-        .unwrap();
-
-        assert!(fcntl_getfd(&master).unwrap().contains(FdFlags::CLOEXEC));
-        assert!(fcntl_getfd(&slave).unwrap().contains(FdFlags::CLOEXEC));
     }
 }

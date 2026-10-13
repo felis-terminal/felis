@@ -200,7 +200,7 @@ mod tests {
     /// shape it; the key is `PATH` on every platform (folded from the
     /// OS's `Path` on Windows).
     #[test]
-    fn env_snapshot_then_narrowing() {
+    fn env_starts_from_the_parent_and_clear_set_remove_reshape_it() {
         let cmd = Command::new("true");
         assert!(cmd.env.contains_key(OsStr::new("PATH")));
 
