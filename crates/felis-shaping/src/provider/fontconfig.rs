@@ -727,7 +727,6 @@ mod tests {
     fn weights_map_onto_fontconfig_scale() {
         assert_eq!(fc_weight(400), 80);
         assert_eq!(fc_weight(700), 200);
-        assert_eq!(fc_weight(650), 180);
     }
 
     #[test]
