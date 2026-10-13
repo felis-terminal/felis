@@ -1,5 +1,6 @@
 //! Face discovery through the host's libfontconfig, so the faces drawn are
-//! the ones `fc-match` names and the user's `fonts.conf` rules apply.
+//! the ones `fc-match` names among the formats the loader parses, and the
+//! user's `fonts.conf` rules apply.
 
 use std::{
     cell::{OnceCell, RefCell},

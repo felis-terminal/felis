@@ -65,11 +65,11 @@ A local repository path may also be referenced: `#:schema <path>/crates/felis-cl
 
 ```toml
 [font]
-# Font family name. Omitted: the system monospace font. On Linux that
-# is fontconfig's `monospace` match (`fc-match monospace`), and a name is
-# resolved through fontconfig, so `fonts.conf` aliases apply; bitmap
-# (PCF, BDF) and Type 1 faces are left out, so a family with only such
-# faces counts as not installed. Elsewhere,
+# Font family name. Omitted: the system monospace font. On Linux faces
+# come from fontconfig less its bitmap (PCF, BDF) and Type 1 faces, so a
+# family with only such faces counts as not installed: the default is
+# its `monospace` match (`fc-match monospace`), and a name is resolved
+# through it, so `fonts.conf` aliases apply. Elsewhere,
 # when the system's `monospace` alias names a family that is not
 # installed, the first installed of DejaVu Sans Mono, Liberation Mono,
 # Noto Sans Mono, Ubuntu Mono, Menlo, and Consolas; failing those, the
