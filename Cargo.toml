@@ -263,3 +263,31 @@ missing_crate_level_docs = "warn"
 [profile.mutants]
 inherits = "test"
 debug = 0
+
+
+# The dependencies CPU-bound tests spend their time in (font rasterization, zlib, proptest's generators).
+# `"*"` buys the same test time but doubles a cold build's CPU.
+[profile.dev.package]
+swash = { opt-level = 1 }
+skrifa = { opt-level = 1 }
+read-fonts = { opt-level = 1 }
+zeno = { opt-level = 1 }
+fontdb = { opt-level = 1 }
+miniz_oxide = { opt-level = 1 }
+adler2 = { opt-level = 1 }
+simd-adler32 = { opt-level = 1 }
+crc32fast = { opt-level = 1 }
+flate2 = { opt-level = 1 }
+fdeflate = { opt-level = 1 }
+png = { opt-level = 1 }
+unicode-segmentation = { opt-level = 1 }
+proptest = { opt-level = 1 }
+rand = { opt-level = 1 }
+rand_core = { opt-level = 1 }
+rand_xorshift = { opt-level = 1 }
+regex-automata = { opt-level = 1 }
+regex-syntax = { opt-level = 1 }
+hashbrown = { opt-level = 1 }
+foldhash = { opt-level = 1 }
+serde_json = { opt-level = 1 }
+memchr = { opt-level = 1 }
