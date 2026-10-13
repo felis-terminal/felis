@@ -79,9 +79,14 @@ prefix. The mutating verbs see no roster, so their replies carry `id` alone; fee
 #    A local child inherits YOUR environment; --env adds or overrides
 #    but cannot remove, so drop a variable with env -u (it matters when
 #    you drive a copy of yourself and inherit your own session markers).
-ID=$(felis sessions spawn -- /bin/zsh)
-ID=$(felis sessions spawn --rows 50 --cols 132 -- /bin/zsh)
-ID=$(env -u SOME_PARENT_MARKER felis sessions spawn --env KEY=VAL -- /bin/zsh)
+#    Bare spawn runs the shell a new window would, with the user's rc
+#    files and so their shell integration; `-- <cmd>` runs a program
+#    instead (a REPL, a TUI), and a shell named there may lack the
+#    integration `send --wait` needs.
+ID=$(felis sessions spawn)
+ID=$(felis sessions spawn --rows 50 --cols 132)
+ID=$(env -u SOME_PARENT_MARKER felis sessions spawn --env KEY=VAL)
+ID=$(felis sessions spawn -- python3)
 
 # 2. Drive it. `send` pastes text literally (bracketed-paste wrapped
 #    when the shell sets ?2004) and does NOT press Enter: a newline in
