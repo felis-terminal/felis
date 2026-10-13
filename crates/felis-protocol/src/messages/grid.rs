@@ -4,7 +4,7 @@
 use bitflags::bitflags;
 use serde::{Deserialize, Serialize};
 
-use super::{ArmMeta, CorrelationClass, Directed, Direction, ModeSet};
+use super::{ArmMeta, Directed};
 
 use super::GridDims;
 use crate::kitty_keyboard::KittyKbdFlags;
@@ -176,39 +176,8 @@ pub enum GridMsg {
     CycleEnd,
 }
 
-const fn arm(name: &'static str) -> ArmMeta {
-    ArmMeta::new(
-        name,
-        Direction::ToClient,
-        CorrelationClass::Uncorrelated,
-        ModeSet::ATTACHERS,
-    )
-}
-
 impl Directed for GridMsg {
-    const ARMS: &'static [ArmMeta] = &[
-        arm("Grid::RehydrateBegin"),
-        arm("Grid::RehydrateEnd"),
-        arm("Grid::RowDelta"),
-        arm("Grid::Scrolled"),
-        arm("Grid::Cluster"),
-        arm("Grid::Hyperlink"),
-        arm("Grid::CursorState"),
-        arm("Grid::ViewportState"),
-        arm("Grid::Size"),
-        arm("Grid::Title"),
-        arm("Grid::Cwd"),
-        arm("Grid::PromptMark"),
-        arm("Grid::ThemeColor"),
-        arm("Grid::PointerShape"),
-        arm("Grid::KittyKbdFlags"),
-        arm("Grid::ModeFlags"),
-        arm("Grid::Attention"),
-        arm("Grid::ClipboardSet"),
-        arm("Grid::PaletteColor"),
-        arm("Grid::PaletteResetAll"),
-        arm("Grid::CycleEnd"),
-    ];
+    const ARMS: &'static [ArmMeta] = crate::schema_meta::GRID_MSG_ARMS;
 
     fn arm_index(&self) -> usize {
         match self {

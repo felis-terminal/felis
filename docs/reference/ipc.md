@@ -582,14 +582,13 @@ family. **The arm, not the kind, is the routing unit**, and each arm's row is no
 | correlation | `uncorrelated`, `request_opener`, `request_reply`, `stream_opener`, or `stream_item`; the envelope each demands is tabulated under "Correlation, requests, and streams" above. |
 | modes       | The `ConnectionMode`s this arm is legal on, receive side ("Connection modes" below).                                                                                           |
 | phases      | A subset of `handshake`, `setup`, `attached`, `observing` ("Connection phases" below). No arm is legal before the preface completes.                                           |
-| since       | The protocol minor that introduced the arm, written only where it is not `0`, which is this major's base schema ("Versioning" below).                                          |
+| since       | The protocol minor that introduced the arm: `0`, this major's base schema, unless the arm carries `(felis.v1.field_since)` ("The minor ledger" below).                         |
 
 The driver enforces the first four columns on every frame it admits. `since` is declarative: the driver holds no minor
 to judge it by, and what a receiver owes each addition is the ledger's old-peer-behavior column, not a refusal.
 
-Every family arm declares its row as a `(felis.v1.arm)` field option in `felis.proto`, a `felis.v1.ArmRouting` message
-whose entries are the five columns above; `since` is omitted here, as on every base arm, because `0` is the proto3
-default and never reaches the descriptor:
+Every family arm declares the first four columns as a `(felis.v1.arm)` field option in `felis.proto`, a
+`felis.v1.ArmRouting` message, and its minor the way any added field does; a base arm carries no minor option:
 
 ```proto
 ConnHello hello = 1 [(felis.v1.arm) = {
@@ -603,11 +602,11 @@ ConnHello hello = 1 [(felis.v1.arm) = {
 ```
 
 A non-Rust peer reads the whole matrix out of the descriptor the schema compiles to (`buf build`, or protoc reflection),
-with no comment and no Rust source to parse. `felis-protocol`'s `ArmMeta` table asserts against the same options
-(`the_schema_declares_the_same_arm_table`), so an arm carrying no option, or one disagreeing with the driver's table,
-fails the build. That test is the mechanical check, and the only one: `buf breaking` compares field numbers, names, and
-types, and an option is none of those, so the compat gate ("Wire compatibility gates" in [testing.md](testing.md)) is
-blind to a routing edit.
+with no comment and no Rust source to parse. `felis-protocol` generates its `ArmMeta` table and arm field numbers from
+the same options (`tools/proto/schema_meta.py`, run by `just proto`), so an arm carrying no option fails generation.
+`buf breaking` compares field numbers, names, and types, and an option is none of those, so the compat gate ("Wire
+compatibility gates" in [testing.md](testing.md)) is blind to a routing edit; the edit shows up as a change to the
+generated `src/schema_meta.rs`.
 
 The extension number, 50001, lies in protobuf's private range (50000-99999), which no registry allocates: it identifies
 the option inside a descriptor pool and nowhere else. A consumer that compiles `felis.proto` together with another
@@ -1828,16 +1827,33 @@ above).
 
 Every minor's additions are recorded here, one row per addition, with what an older peer does when it meets one. The
 table is the review gate for "is this really additive": an addition that cannot be written as a row is a feature flag or
-a major, not a minor. `felis-protocol`'s `MINOR_LEDGER` mirrors the first column, and a test holds the two together: a
-`PROTOCOL_MINOR` bump with no row here fails the build.
+a major, not a minor. A test requires one row per minor from 0 to `PROTOCOL_MINOR`, so a bump with no row here fails the
+build.
 
-The table is also machine-checked against the metadata in `felis-protocol` (the send gate's, plus the `ADDED_FIELDS`
-declaration for the fields the gate does not read; "Versioning" above), so a row names its additions by the identifiers
-`felis.proto` spells them with: an arm as `Family::Variant`, a closed-enum value as `Enum::VALUE`, a field as
-`Message.field`, and a row-codec version by its number. The check runs both ways: an addition whose identifier is
-missing from its row fails the build with the name it expected to find, and an identifier a row names that no arm, field
-or enum value declares at that minor fails it too. Only those three shapes read as an addition, so a row is free to name
-a bare type, a variant of an inner enum, or a command line beside them.
+Each addition also states its minor in `felis.proto`, beside the element it adds:
+
+| Element             | Option                                                                  |
+| ------------------- | ----------------------------------------------------------------------- |
+| field, arm included | `(felis.v1.field_since) = { minor: N }`, plus `skippable: true` (below) |
+| closed-enum value   | `(felis.v1.value_since) = N`                                            |
+
+An unannotated element of a type the base schema reaches is base schema. A member of a type an annotated element
+introduced needs no option of its own, since it travels only inside that element, which the send gate already holds to
+its minor. `skippable` marks an added field sent to every peer ("Versioning" above); an added field without it is held
+to the send-side contract whenever it is present on the wire, and a payload `oneof` member cannot carry it. A connection
+mode is a `ConnectionMode` value, and a row-codec version lives inside `packed_cells`, so its minor is
+`felis-protocol`'s `ROW_CODEC_SINCE` ([Row codec](row-codec.md)).
+
+`felis-protocol` generates the send gate's per-element minors from these options, and a test requires every closed enum
+with an added value to be one the send gate reads. An addition left unannotated reads as base schema; its ledger row is
+what catches it, since the check below fails on an identifier the row names at a minor the schema does not give it.
+
+The table is also machine-checked against that metadata, so a row names its additions by the identifiers `felis.proto`
+spells them with: an arm as `Family::Variant`, a closed-enum value as `Enum::VALUE`, a field as `Message.field`, and a
+row-codec version by its number. The check runs both ways: an addition whose identifier is missing from its row fails
+the build with the name it expected to find, and an identifier a row names that no arm, field or enum value declares at
+that minor fails it too. Only those three shapes read as an addition, so a row is free to name a bare type, a variant of
+an inner enum, or a command line beside them.
 
 | Minor | Addition                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | Older peer                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

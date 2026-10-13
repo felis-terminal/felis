@@ -21,25 +21,6 @@ pub const PROTOCOL_MAJOR: u16 = 1;
 /// "The minor ledger").
 pub const PROTOCOL_MINOR: u16 = 1;
 
-/// Ordered list of minors and their additions (`docs/reference/ipc.md` "The minor ledger").
-///
-/// Tested to ensure every [`PROTOCOL_MINOR`] bump records its old-peer behavior.
-pub const MINOR_LEDGER: &[(u16, &str)] = &[
-    (0, "the base schema of protocol major 1"),
-    (
-        1,
-        "Ops::Upgrade and Ops::UpgradeReply; ImageVirtualPlacement.placement_id; SearchQuery.source; ImagePlacement.requested; SessionInfo.program_status",
-    ),
-];
-
-const _: () = {
-    let last = MINOR_LEDGER[MINOR_LEDGER.len() - 1].0;
-    assert!(
-        last == PROTOCOL_MINOR,
-        "PROTOCOL_MINOR moved without a MINOR_LEDGER entry (and a ledger row in docs/reference/ipc.md)"
-    );
-};
-
 /// Lowest protocol major this build can serve.
 pub const SUPPORTED_MAJOR_MIN: u16 = PROTOCOL_MAJOR;
 
@@ -890,14 +871,12 @@ mod tests {
         assert_eq!(PROTOCOL_MINOR, declared("PROTOCOL_MINOR"));
     }
 
-    /// Every minor from 0 to the current one has exactly one ledger
-    /// entry, and the reference doc's ledger table lists the same set of
-    /// minors in the same order: a bump recorded in one place but not
-    /// the other is the drift this test exists to catch.
+    /// The reference doc's ledger table has one row per minor from 0 to
+    /// the current one, in order: a bump with no row is the drift this
+    /// test exists to catch.
     #[test]
-    fn the_minor_ledger_matches_the_reference_doc() {
-        let minors: Vec<u16> = MINOR_LEDGER.iter().map(|(minor, _)| *minor).collect();
-        assert_eq!(minors, (0..=PROTOCOL_MINOR).collect::<Vec<_>>());
+    fn the_minor_ledger_has_a_row_per_minor() {
+        let minors: Vec<u16> = (0..=PROTOCOL_MINOR).collect();
 
         // Read at test time rather than `include_str!`: the doc lives
         // outside the crate, and a compile-time include would make the
@@ -928,7 +907,7 @@ mod tests {
             .collect();
         assert_eq!(
             documented, minors,
-            "the minor ledger table in docs/reference/ipc.md and MINOR_LEDGER disagree"
+            "the minor ledger table in docs/reference/ipc.md lacks a row per minor"
         );
     }
 

@@ -6,7 +6,7 @@ use super::{
 use crate::messages;
 use crate::wire::v1;
 
-const fn attach_failure_to_wire(f: messages::AttachFailure) -> v1::AttachFailure {
+pub(crate) const fn attach_failure_to_wire(f: messages::AttachFailure) -> v1::AttachFailure {
     use messages::AttachFailure as F;
     match f {
         F::UnknownSession => v1::AttachFailure::UnknownSession,
@@ -31,7 +31,7 @@ fn attach_failure_from_wire(raw: i32) -> Result<messages::AttachFailure, WireErr
     }
 }
 
-pub(super) const fn create_failure_to_wire(f: messages::CreateFailure) -> v1::CreateFailure {
+pub(crate) const fn create_failure_to_wire(f: messages::CreateFailure) -> v1::CreateFailure {
     use messages::CreateFailure as F;
     match f {
         F::SpawnFailed => v1::CreateFailure::SpawnFailed,

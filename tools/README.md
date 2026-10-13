@@ -9,6 +9,9 @@ itself or when a recipe mentions the direct form.
   `buf breaking` against the base the run selects, plus the pre-release acknowledgment path.
   `tools/proto/compat_test.py` (`just proto-compat-test`, `compat.py --self-test`) is its exit-code suite on a throwaway
   repo.
+- `tools/proto/schema_meta.py` generates `crates/felis-protocol/src/schema_meta.rs` (the arm table and each addition's
+  minor) from `felis.proto`'s options, behind `just proto` and the `schema-meta` pre-commit hook, and checks the
+  schema's shape rules on the way.
 - `tools/release/verify.py` is the release identity gate behind `just release-check <tag>` and `release.yml`'s
   `verify-tag` job: the tag is annotated, points at the revision being published, agrees with the workspace version
   every crate inherits, and (for a final tag) has its CHANGELOG section, on a clean tree. `--identity` compares the

@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{ArmMeta, CorrelationClass, Directed, Direction, ModeSet, RegionSource};
+use super::{ArmMeta, Directed, RegionSource};
 
 /// Region-export requests ([`crate::MessageKind::Region`], kind 6),
 /// sent while attached.
@@ -79,23 +79,8 @@ pub enum RegionToClientMsg {
     },
 }
 
-const fn arm(name: &'static str, direction: Direction, correlation: CorrelationClass) -> ArmMeta {
-    ArmMeta::new(name, direction, correlation, ModeSet::ATTACHERS)
-}
-
 impl Directed for RegionToDaemonMsg {
-    const ARMS: &'static [ArmMeta] = &[
-        arm(
-            "Region::Request",
-            Direction::ToDaemon,
-            CorrelationClass::RequestOpener,
-        ),
-        arm(
-            "Region::Rows",
-            Direction::ToDaemon,
-            CorrelationClass::StreamOpener,
-        ),
-    ];
+    const ARMS: &'static [ArmMeta] = crate::schema_meta::REGION_TO_DAEMON_MSG_ARMS;
 
     fn arm_index(&self) -> usize {
         match self {
@@ -106,23 +91,7 @@ impl Directed for RegionToDaemonMsg {
 }
 
 impl Directed for RegionToClientMsg {
-    const ARMS: &'static [ArmMeta] = &[
-        arm(
-            "Region::Reply",
-            Direction::ToClient,
-            CorrelationClass::RequestReply,
-        ),
-        arm(
-            "Region::Row",
-            Direction::ToClient,
-            CorrelationClass::StreamItem,
-        ),
-        arm(
-            "Region::RowsDone",
-            Direction::ToClient,
-            CorrelationClass::StreamItem,
-        ),
-    ];
+    const ARMS: &'static [ArmMeta] = crate::schema_meta::REGION_TO_CLIENT_MSG_ARMS;
 
     fn arm_index(&self) -> usize {
         match self {

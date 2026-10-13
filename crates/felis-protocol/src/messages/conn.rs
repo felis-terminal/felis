@@ -5,10 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::build_identity::BuildIdentity;
 use crate::caps::ConnectionMode;
-use crate::messages::{
-    ArmMeta, CorrelationClass, Directed, Direction, ModeSet, PhaseSet, StreamErrorReason, StreamId,
-    Subject,
-};
+use crate::messages::{ArmMeta, Directed, StreamErrorReason, StreamId, Subject};
 
 /// The client's half of the connection family
 /// ([`crate::MessageKind::Conn`], kind 0): the handshake's opening and
@@ -80,26 +77,8 @@ pub enum ConnToClientMsg {
     },
 }
 
-/// Wire metadata, the handshake and the stream lifecycle: every arm is
-/// a connection-level fact, so none is tied to a mode or correlated.
-const fn arm(name: &'static str, direction: Direction, phases: PhaseSet) -> ArmMeta {
-    ArmMeta::new(
-        name,
-        direction,
-        CorrelationClass::Uncorrelated,
-        ModeSet::EVERY,
-    )
-    .phases(phases)
-}
-
 impl Directed for ConnToDaemonMsg {
-    const ARMS: &'static [ArmMeta] = &[
-        arm("Conn::Hello", Direction::ToDaemon, PhaseSet::HANDSHAKE),
-        // Stream control, not session traffic: a stream is live in
-        // whichever phase opened it, and tying these to one role
-        // would leave an observer unable to cancel its own stream.
-        arm("Conn::Cancel", Direction::ToDaemon, PhaseSet::LIVE),
-    ];
+    const ARMS: &'static [ArmMeta] = crate::schema_meta::CONN_TO_DAEMON_MSG_ARMS;
 
     fn arm_index(&self) -> usize {
         match self {
@@ -110,14 +89,7 @@ impl Directed for ConnToDaemonMsg {
 }
 
 impl Directed for ConnToClientMsg {
-    const ARMS: &'static [ArmMeta] = &[
-        arm("Conn::Welcome", Direction::ToClient, PhaseSet::HANDSHAKE),
-        // The mode gate also refuses a frame the peer sent after its
-        // `Welcome`, so this refusal is written in any phase.
-        arm("Conn::Refused", Direction::ToClient, PhaseSet::ANY),
-        arm("Conn::End", Direction::ToClient, PhaseSet::LIVE),
-        arm("Conn::Error", Direction::ToClient, PhaseSet::LIVE),
-    ];
+    const ARMS: &'static [ArmMeta] = crate::schema_meta::CONN_TO_CLIENT_MSG_ARMS;
 
     fn arm_index(&self) -> usize {
         match self {

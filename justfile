@@ -113,12 +113,14 @@ golden:
     UPDATE_GOLDEN=1 cargo nextest run -p felis-cli --test cli_bridge golden
     UPDATE_GOLDEN=1 cargo nextest run -p felis-grid --features json --test it json_v1::
 
-# Regenerate IPC wire types (crates/felis-protocol/src/generated) via buf.
-# The buf-generate pre-commit hook runs this and fails on a stale committed copy.
+# Regenerate the IPC wire types (crates/felis-protocol/src/generated) via buf, then the
+# schema metadata (src/schema_meta.rs) from the same schema.
+# The buf-generate and schema-meta pre-commit hooks run these and fail on a stale committed copy.
 [group('lint')]
 proto:
     cd crates/felis-protocol && buf lint
     cd crates/felis-protocol && buf generate
+    python3 tools/proto/schema_meta.py
 
 # Wire-compatibility gate against base (defaults to merge-base with origin/main).
 [group('lint')]

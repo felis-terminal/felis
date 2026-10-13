@@ -8,7 +8,7 @@ use crate::messages;
 use crate::messages::RefusalReason;
 use crate::wire::v1;
 
-const fn mode_to_wire(m: ConnectionMode) -> v1::ConnectionMode {
+pub(crate) const fn mode_to_wire(m: ConnectionMode) -> v1::ConnectionMode {
     match m {
         ConnectionMode::Window => v1::ConnectionMode::Window,
         ConnectionMode::Ops => v1::ConnectionMode::Ops,
@@ -27,7 +27,7 @@ fn mode_from_wire(raw: i32) -> Result<ConnectionMode, WireError> {
     }
 }
 
-const fn refusal_to_wire(r: RefusalReason) -> v1::RefusalReason {
+pub(crate) const fn refusal_to_wire(r: RefusalReason) -> v1::RefusalReason {
     match r {
         RefusalReason::Role => v1::RefusalReason::Role,
         RefusalReason::AtCapacity => v1::RefusalReason::AtCapacity,

@@ -257,11 +257,11 @@ pub trait WireCodec: Sized {
 }
 
 macro_rules! wire_codec {
-    ($($domain:ident => $kind:ident [$($field:literal),+]),+ $(,)?) => {
+    ($($domain:ident => $kind:ident $fields:ident),+ $(,)?) => {
         $(impl WireCodec for crate::messages::$domain {
             type Wire = crate::wire::v1::$domain;
             const KIND: crate::MessageKind = crate::MessageKind::$kind;
-            const ARM_FIELDS: &'static [u32] = &[$($field),+];
+            const ARM_FIELDS: &'static [u32] = crate::schema_meta::$fields;
             fn to_wire(&self) -> Self::Wire {
                 self.into()
             }
@@ -283,24 +283,22 @@ macro_rules! wire_codec {
 }
 
 wire_codec!(
-    ConnToDaemonMsg => Conn [1, 4],
-    ConnToClientMsg => Conn [2, 3, 5, 6],
-    InputMsg => Input [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
-    GridMsg => Grid [
-        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21
-    ],
-    ImageMsg => Image [1, 2, 3, 4, 5, 6, 7, 8, 9],
-    SessionToDaemonMsg => Session [1, 2, 3, 4, 8],
-    SessionToClientMsg => Session [5, 6, 7, 9],
-    OpsToDaemonMsg => Ops [1, 3, 5, 7, 9, 11, 13, 15, 17, 19],
-    OpsToClientMsg => Ops [2, 4, 6, 8, 10, 12, 14, 16, 18, 20],
-    RegionToDaemonMsg => Region [1, 3],
-    RegionToClientMsg => Region [2, 4, 5],
-    NotifyToDaemonMsg => Notify [1],
-    NotifyToClientMsg => Notify [2, 3, 4],
-    PushMsg => Push [1, 2, 3, 4],
-    SearchToDaemonMsg => Search [1],
-    SearchToClientMsg => Search [2],
+    ConnToDaemonMsg => Conn CONN_TO_DAEMON_MSG_ARM_FIELDS,
+    ConnToClientMsg => Conn CONN_TO_CLIENT_MSG_ARM_FIELDS,
+    InputMsg => Input INPUT_MSG_ARM_FIELDS,
+    GridMsg => Grid GRID_MSG_ARM_FIELDS,
+    ImageMsg => Image IMAGE_MSG_ARM_FIELDS,
+    SessionToDaemonMsg => Session SESSION_TO_DAEMON_MSG_ARM_FIELDS,
+    SessionToClientMsg => Session SESSION_TO_CLIENT_MSG_ARM_FIELDS,
+    OpsToDaemonMsg => Ops OPS_TO_DAEMON_MSG_ARM_FIELDS,
+    OpsToClientMsg => Ops OPS_TO_CLIENT_MSG_ARM_FIELDS,
+    RegionToDaemonMsg => Region REGION_TO_DAEMON_MSG_ARM_FIELDS,
+    RegionToClientMsg => Region REGION_TO_CLIENT_MSG_ARM_FIELDS,
+    NotifyToDaemonMsg => Notify NOTIFY_TO_DAEMON_MSG_ARM_FIELDS,
+    NotifyToClientMsg => Notify NOTIFY_TO_CLIENT_MSG_ARM_FIELDS,
+    PushMsg => Push PUSH_MSG_ARM_FIELDS,
+    SearchToDaemonMsg => Search SEARCH_TO_DAEMON_MSG_ARM_FIELDS,
+    SearchToClientMsg => Search SEARCH_TO_CLIENT_MSG_ARM_FIELDS,
 );
 
 /// `Conn` is absent on purpose: its `Cancel` / `End` / `Error` arms

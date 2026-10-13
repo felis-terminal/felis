@@ -260,13 +260,12 @@ impl CorrelationClass {
     }
 }
 
-/// One row of the arm-routing table. `felis.proto` restates it in the
-/// arm's `(felis.v1.arm)` field option, so a non-Rust peer reads the
-/// same matrix out of the descriptor
-/// (`the_schema_declares_the_same_arm_table`).
+/// One row of the arm-routing table, generated from the arm's
+/// `(felis.v1.arm)` field option in `felis.proto`, which a non-Rust peer
+/// reads out of the descriptor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ArmMeta {
-    /// `Family::Variant`, for diagnostics and for the schema comparison.
+    /// `Family::Variant`, for diagnostics.
     pub name: &'static str,
     pub direction: Direction,
     pub correlation: CorrelationClass,
@@ -318,44 +317,6 @@ impl ArmMeta {
             && self.correlation as u8 == other.correlation as u8
             && self.modes.0 == other.modes.0
             && self.phases.0 == other.phases.0
-    }
-
-    /// The body of the `(felis.v1.arm)` option `felis.proto` carries
-    /// for this arm: its text-format entries in schema order, joined
-    /// by spaces, which is what
-    /// `the_schema_declares_the_same_arm_table` normalizes the
-    /// schema's multi-line block down to.
-    #[must_use]
-    pub fn declaration(&self) -> String {
-        let mut entries = vec![
-            format!(
-                "direction: DIRECTION_{}",
-                self.direction.as_token().to_ascii_uppercase()
-            ),
-            format!(
-                "correlation: CORRELATION_{}",
-                self.correlation.as_token().to_ascii_uppercase()
-            ),
-        ];
-        entries.extend(
-            self.modes
-                .tokens()
-                .iter()
-                .map(|mode| format!("modes: MODE_{}", mode.to_ascii_uppercase())),
-        );
-        entries.extend(
-            self.phases
-                .tokens()
-                .iter()
-                .map(|phase| format!("phases: PHASE_{}", phase.to_ascii_uppercase())),
-        );
-        // Minor 0 is the proto3 default and never reaches the
-        // descriptor, so spelling it would compare against a row the
-        // schema cannot be written to carry.
-        if self.since_minor != 0 {
-            entries.push(format!("since: {}", self.since_minor));
-        }
-        entries.join(" ")
     }
 }
 
@@ -494,36 +455,5 @@ mod tests {
         ] {
             assert!(ModeSet::EVERY.contains(mode), "{mode:?}");
         }
-    }
-
-    #[test]
-    fn a_declaration_spells_every_column() {
-        let meta = ArmMeta::new(
-            "Ops::Status",
-            Direction::ToDaemon,
-            CorrelationClass::RequestOpener,
-            ModeSet::ATTACHERS,
-        )
-        .since(5);
-        assert_eq!(
-            meta.declaration(),
-            "direction: DIRECTION_TO_DAEMON correlation: CORRELATION_REQUEST_OPENER \
-             modes: MODE_WINDOW modes: MODE_OPS phases: PHASE_ATTACHED since: 5"
-        );
-    }
-
-    #[test]
-    fn a_base_arm_declares_no_since() {
-        let meta = ArmMeta::new(
-            "Ops::Status",
-            Direction::ToDaemon,
-            CorrelationClass::RequestOpener,
-            ModeSet::ATTACHERS,
-        );
-        assert_eq!(
-            meta.declaration(),
-            "direction: DIRECTION_TO_DAEMON correlation: CORRELATION_REQUEST_OPENER \
-             modes: MODE_WINDOW modes: MODE_OPS phases: PHASE_ATTACHED"
-        );
     }
 }

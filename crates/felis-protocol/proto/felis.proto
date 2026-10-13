@@ -72,7 +72,6 @@ import "google/protobuf/timestamp.proto";
 //     correlation: <CORRELATION_*>
 //     modes: <MODE_*>      // repeated, in WINDOW, OPS, OBSERVER order
 //     phases: <PHASE_*>    // repeated, in ladder order
-//     since: <minor>       // omitted where it is 0
 //   }]
 //
 // where direction is the one way the arm may travel (the direction its
@@ -81,19 +80,18 @@ import "google/protobuf/timestamp.proto";
 // the arm is legal, receive side; phases names the connection states
 // it may arrive in, where `setup` is a welcomed connection that has
 // not yet said what it is for, `attached` one subscribed to a session,
-// and `observing` one serving a notification stream; and since is the
-// protocol minor that introduced the arm, written only where it is not
-// 0: this major's base schema is minor 0, which is the proto3 default
-// and absent from the descriptor whether or not it is spelled, so an
-// addition is the one place a `since` appears. The `ArmRouting`
+// and `observing` one serving a notification stream. The `ArmRouting`
 // message below names the vocabulary. A peer
 // that cannot read Rust reads these options out of the descriptor this
 // file compiles to (`buf build`, or protoc reflection), with no comment
-// to parse; the Rust side asserts them against its own table
-// (`the_schema_declares_the_same_arm_table`), so an arm added here
-// without an option, or with the wrong one, fails the build. Options
-// are invisible to `buf breaking`, so that test, not the compat gate,
-// is what catches a routing edit.
+// to parse; the Rust side generates its table from the same options
+// (`tools/proto/schema_meta.py`, run by `just proto`), so an arm added
+// here without an option fails generation.
+//
+// A field added after this major's base schema, an arm included, names
+// the minor that added it as `(felis.v1.field_since)`, and a closed-enum
+// value as `(felis.v1.value_since)` (both defined beside ArmRouting
+// below); an unannotated element is base schema, minor 0.
 //
 // Naming: a message that is a `oneof` arm of a family wrapper is named
 // `<Family><Variant>` (the family being the wrapper minus `Msg`,
@@ -223,10 +221,8 @@ message ArmRouting {
   repeated Mode modes = 3;
   // In ladder order: handshake, setup, attached, observing.
   repeated Phase phases = 4;
-  // The protocol minor that introduced the arm; 0 for this major's
-  // base schema, and then absent from the descriptor as a proto3
-  // default.
-  uint32 since = 5;
+  reserved 5;
+  reserved "since";
 }
 
 // 50001 sits in protobuf's private extension range (50000-99999), which
@@ -236,6 +232,26 @@ message ArmRouting {
 // descriptor pools, or renumbers its own copy.
 extend google.protobuf.FieldOptions {
   ArmRouting arm = 50001;
+  FieldSince field_since = 50002;
+}
+
+// The protocol minor that added a field, an arm included, after this
+// major's base schema, as `(felis.v1.field_since)`; the fields of a type
+// an addition introduced need none. Never a wire message.
+message FieldSince {
+  uint32 minor = 1;
+  // An older peer may skip the field, landing where a sender that never
+  // set it would. Unset, a present value is withheld from a peer below
+  // `minor`. Never set on a oneof member, which a skipping peer would
+  // read as an unset oneof.
+  bool skippable = 2;
+}
+
+// The protocol minor that added a closed-enum value after this major's
+// base schema, as `(felis.v1.value_since)`: a peer below it would read
+// the value as unknown, so a sender withholds it.
+extend google.protobuf.EnumValueOptions {
+  uint32 value_since = 50003;
 }
 
 // ---------------------------------------------------------------------------
@@ -740,7 +756,10 @@ message SessionInfo {
   uint64 sequence = 12;
   // The session's OSC 7501 program-status records, sorted by id. Empty
   // when no program reported one; a minor-0 reader skips the field.
-  repeated ProgramStatusRecord program_status = 13;
+  repeated ProgramStatusRecord program_status = 13 [(felis.v1.field_since) = {
+    minor: 1
+    skippable: true
+  }];
 }
 
 // One OSC 7501 program-status record: the keys of the last report that
@@ -790,6 +809,9 @@ message Attachment {
 // than per-family, allowing the shared connection driver to enforce
 // exactly one terminal per stream uniformly.
 
+// Every Conn arm is a connection-level fact, so none is tied to a mode
+// or correlated.
+
 // Field 100 is the wire-wide `Correlation` slot, unused here: the
 // handshake arms predate any stream, and cancel/terminal name their
 // subject *inline*: a terminal whose stream_id went missing is
@@ -806,6 +828,9 @@ message ConnToDaemonMsg {
       modes: MODE_OBSERVER
       phases: PHASE_HANDSHAKE
     }];
+    // Stream control, not session traffic: a stream is live in whichever
+    // phase opened it, and tying this to one role would leave an
+    // observer unable to cancel its own stream.
     ConnCancel cancel = 4 [(felis.v1.arm) = {
       direction: DIRECTION_TO_DAEMON
       correlation: CORRELATION_UNCORRELATED
@@ -830,6 +855,8 @@ message ConnToClientMsg {
       modes: MODE_OBSERVER
       phases: PHASE_HANDSHAKE
     }];
+    // The mode gate also refuses a frame the peer sent after its
+    // Welcome, so this refusal is written in any phase.
     ConnRefused refused = 3 [(felis.v1.arm) = {
       direction: DIRECTION_TO_CLIENT
       correlation: CORRELATION_UNCORRELATED
@@ -1561,8 +1588,11 @@ message ImagePlacement {
   sint32 z_index = 8;
   // The c= and r= the put asked for, 0 for an axis it left automatic;
   // cols and rows above are the resolved extent. Unset from a daemon
-  // that does not report the request. Since minor 1.
-  RequestedExtent requested = 9;
+  // that does not report the request.
+  RequestedExtent requested = 9 [(felis.v1.field_since) = {
+    minor: 1
+    skippable: true
+  }];
 }
 
 // A placement's requested cell extent (Kitty c= / r=); 0 is automatic.
@@ -1587,8 +1617,11 @@ message ImageVirtualPlacement {
   sint32 z_index = 4;
   // The producer's p=, or an id the daemon assigned to a put without
   // one; a placeholder cell names it in its underline color. Unset
-  // keys the placement by image alone. Since minor 1.
-  optional uint32 placement_id = 5;
+  // keys the placement by image alone.
+  optional uint32 placement_id = 5 [(felis.v1.field_since) = {
+    minor: 1
+    skippable: true
+  }];
 }
 
 // Display frame `number` of image id now, in the same 1-based
@@ -1615,6 +1648,9 @@ message ImagePlacementsShifted {
 
 message SessionToDaemonMsg {
   oneof msg {
+    // The openers and their three answers belong to setup alone: a
+    // connection attaches or creates once, so a second opener is the
+    // peer losing its place rather than a request to serve.
     SessionAttach attach = 1 [(felis.v1.arm) = {
       direction: DIRECTION_TO_DAEMON
       correlation: CORRELATION_UNCORRELATED
@@ -1779,7 +1815,8 @@ message SessionAttachFailed {
 
 // Every Ops verb is a request whose reply echoes the request_id,
 // which lets several requests be in flight on one connection
-// instead of one verb per connection.
+// instead of one verb per connection. Queries stay open to the Window
+// mode, while a mutating verb takes the Ops mode.
 
 message OpsToDaemonMsg {
   oneof msg {
@@ -1852,13 +1889,15 @@ message OpsToDaemonMsg {
     }];
     // Setup only, as OpsStop is: the reply is the last frame before
     // the exec closes the connection.
-    OpsUpgrade upgrade = 19 [(felis.v1.arm) = {
-      direction: DIRECTION_TO_DAEMON
-      correlation: CORRELATION_REQUEST_OPENER
-      modes: MODE_OPS
-      phases: PHASE_SETUP
-      since: 1
-    }];
+    OpsUpgrade upgrade = 19 [
+      (felis.v1.arm) = {
+        direction: DIRECTION_TO_DAEMON
+        correlation: CORRELATION_REQUEST_OPENER
+        modes: MODE_OPS
+        phases: PHASE_SETUP
+      },
+      (felis.v1.field_since) = {minor: 1}
+    ];
   }
   Correlation correlation = 100;
 }
@@ -1930,13 +1969,15 @@ message OpsToClientMsg {
       phases: PHASE_SETUP
       phases: PHASE_ATTACHED
     }];
-    OpsUpgradeReply upgrade_reply = 20 [(felis.v1.arm) = {
-      direction: DIRECTION_TO_CLIENT
-      correlation: CORRELATION_REQUEST_REPLY
-      modes: MODE_OPS
-      phases: PHASE_SETUP
-      since: 1
-    }];
+    OpsUpgradeReply upgrade_reply = 20 [
+      (felis.v1.arm) = {
+        direction: DIRECTION_TO_CLIENT
+        correlation: CORRELATION_REQUEST_REPLY
+        modes: MODE_OPS
+        phases: PHASE_SETUP
+      },
+      (felis.v1.field_since) = {minor: 1}
+    ];
   }
   Correlation correlation = 100;
 }
@@ -2270,19 +2311,19 @@ message UpgradeRefused {
 enum UpgradeRefusal {
   UPGRADE_REFUSAL_UNSPECIFIED = 0;
   // This platform has no in-place upgrade.
-  UPGRADE_REFUSAL_UNSUPPORTED = 1;
+  UPGRADE_REFUSAL_UNSUPPORTED = 1 [(felis.v1.value_since) = 1];
   // The successor cannot read this daemon's dump version.
-  UPGRADE_REFUSAL_DUMP_VERSION = 2;
+  UPGRADE_REFUSAL_DUMP_VERSION = 2 [(felis.v1.value_since) = 1];
   // The successor does not serve a connected client's protocol major.
-  UPGRADE_REFUSAL_PROTOCOL_MAJOR = 3;
+  UPGRADE_REFUSAL_PROTOCOL_MAJOR = 3 [(felis.v1.value_since) = 1];
   // A step before the exec ran out of time.
-  UPGRADE_REFUSAL_TIMEOUT = 4;
+  UPGRADE_REFUSAL_TIMEOUT = 4 [(felis.v1.value_since) = 1];
   // The successor rejected the dump's contents, or the exec failed.
-  UPGRADE_REFUSAL_PROBE_FAILED = 5;
+  UPGRADE_REFUSAL_PROBE_FAILED = 5 [(felis.v1.value_since) = 1];
   // An upgrade is already running.
-  UPGRADE_REFUSAL_BUSY = 6;
+  UPGRADE_REFUSAL_BUSY = 6 [(felis.v1.value_since) = 1];
   // The daemon is draining toward stop.
-  UPGRADE_REFUSAL_DRAINING = 7;
+  UPGRADE_REFUSAL_DRAINING = 7 [(felis.v1.value_since) = 1];
 }
 
 // Client → daemon. Ask what this daemon is and what it is holding.
@@ -2527,6 +2568,9 @@ message RegionPosition {
 
 message NotifyToDaemonMsg {
   oneof msg {
+    // The subscribe is what turns a setup connection into an observer,
+    // so it alone is legal before the role exists; every stream item
+    // belongs to the role it created.
     NotifySubscribe subscribe = 1 [(felis.v1.arm) = {
       direction: DIRECTION_TO_DAEMON
       correlation: CORRELATION_STREAM_OPENER
@@ -2603,7 +2647,9 @@ message NotifyEvent {
 
 message PushMsg {
   // Un-correlated: the daemon originates these, so there is no client
-  // request id to echo.
+  // request id to echo. Eviction concerns every subscriber; the
+  // window-management pushes ask a window to move, which a scripted Ops
+  // attach has none to do.
   reserved 100;
   oneof msg {
     PushEvicted evicted = 1 [(felis.v1.arm) = {
@@ -2699,10 +2745,10 @@ message SearchQuery {
   // Literal substring, or a regex when options.regex is set.
   string query = 1;
   SearchOptions options = 2;
-  // Absent means SEARCH_SOURCE_SCROLLBACK. A minor-1 addition: a daemon
-  // below it ignores the field and walks scrollback, so a client gates
-  // a present value on the effective minor rather than send it.
-  optional SearchSource source = 3;
+  // Absent means SEARCH_SOURCE_SCROLLBACK. A daemon below minor 1
+  // ignores the field and walks scrollback, so a present value is
+  // withheld from it.
+  optional SearchSource source = 3 [(felis.v1.field_since) = {minor: 1}];
 }
 
 // One logical line of the active search returning a hit.

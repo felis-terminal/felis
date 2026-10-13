@@ -583,8 +583,7 @@ reads the file. A client generates its codec from it (the analogue of the `proto
 
 Which arms that client may send, and in which mode and phase, rides the same descriptor: each oneof arm carries a
 `(felis.v1.arm)` field option holding its routing row, so the matrix a peer must implement is read with the reflection
-it already has rather than parsed out of comments ([reference/ipc.md](../../reference/ipc.md#the-arm-table)). Options
-are invisible to `buf breaking`, so the Rust arm-table test is what holds the two in agreement.
+it already has rather than parsed out of comments ([reference/ipc.md](../../reference/ipc.md#the-arm-table)).
 
 What a schema structurally cannot hold is the bytes _around_ the protobuf bodies, because protobuf is not
 self-delimiting on a byte stream (the same reason gRPC prefixes each message with its own 5-byte frame): the fixed-size
