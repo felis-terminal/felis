@@ -39,6 +39,8 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 
 ### Changed
 
+- `CSI 14 t` and `CSI 16 t` now answer the text area and the cell size in pixels from the PTY's winsize, instead of
+  `0;0`. `CSI 13 t` and `CSI 15 t` (window position, screen size) still answer `0;0`.
 - Kitty graphics replies now follow kitty: only a command with a non-zero `i=` or `I=` is answered, a delete is never
   answered even when it fails, a query is answered only when it carries `i=`, and a malformed escape or an unknown `a=`
   is dropped without a reply. A command with both `i=` and `I=` is refused with `EINVAL` before it runs. An `i=0` or
@@ -57,6 +59,9 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 
 ### Fixed
 
+- A Textual app with mouse support no longer crashes on its first click. The `?2048` resize report now carries the PTY's
+  pixel extents instead of `0`, and reports a change of those extents alone; a session no window has sized gets 8 × 16
+  pixels per cell in its winsize and in the report.
 - A `felis` verb piped into a reader that quits early (`felis sessions capture <id> | head -1`) no longer panics with
   "failed printing to stdout: Broken pipe". It stops at that write and exits `0`.
 - A `felis bridge` stream canceled by a `cancel` op or by closing stdin no longer ends with a clean `end` whose `count`

@@ -2975,13 +2975,23 @@ impl Grid {
                 response.push(b't');
                 self.enqueue_response(response);
             }
-            // 14/15/16 (pixel sizes) reply 0;0 so a probe does not
-            // hang. Not for want of the numbers: they are one window's
-            // fact and this grid is shared by every mirror of the
-            // session (docs/reference/protocols/support-matrix.md).
-            14 => self.enqueue_response(b"\x1b[4;0;0t".to_vec()),
+            // `CSI 14 t` → `CSI 4 ; height ; width t`, the text area in
+            // pixels: the PTY's winsize, which `TIOCGWINSZ` returns too.
+            14 => {
+                let (w, h) = self.winsize_pixels;
+                self.enqueue_response(format!("\x1b[4;{h};{w}t").into_bytes());
+            }
+            // The screen's pixel size is the host's, not the PTY's; `0;0`
+            // so a probe does not hang.
             15 => self.enqueue_response(b"\x1b[5;0;0t".to_vec()),
-            16 => self.enqueue_response(b"\x1b[6;0;0t".to_vec()),
+            // `CSI 16 t` → `CSI 6 ; height ; width t`, one cell in
+            // pixels, floored as a `TIOCGWINSZ` reader derives it.
+            16 => {
+                let (w, h) = self.winsize_pixels;
+                let cell_w = w / self.screen.cols.max(1);
+                let cell_h = h / self.screen.rows.max(1);
+                self.enqueue_response(format!("\x1b[6;{cell_h};{cell_w}t").into_bytes());
+            }
             _ => {}
         }
     }

@@ -1516,9 +1516,22 @@ fn ich_shifts_cells_right_and_blanks_gap_without_declrmm() {
     assert_eq!(g.cursor().col, 2);
 }
 
-/// Each `xterm_window_op` report arm emits its fixed wire bytes.
+/// The `DECSET 2048` report states the PTY winsize's pixel extents the
+/// daemon set, height first.
 #[test]
-fn xterm_window_op_report_arms_emit_their_fixed_replies() {
+fn resize_notify_report_states_the_winsize_pixels() {
+    let mut g = Grid::new(8, 10);
+    g.set_winsize_pixels((805, 170));
+    assert_eq!(
+        std::str::from_utf8(&g.resize_notify_report_bytes()).unwrap(),
+        "\x1b[48;8;10;170;805t"
+    );
+}
+
+/// Each `xterm_window_op` report arm emits its wire bytes; the pixel
+/// arms answer `0` while the winsize's pixels are unknown.
+#[test]
+fn xterm_window_op_report_arms_emit_their_replies() {
     let mut g = Grid::new(8, 10);
     let mut p = Parser::new();
     let reply = |g: &mut Grid, p: &mut Parser, seq: &[u8]| -> String {
@@ -1532,6 +1545,24 @@ fn xterm_window_op_report_arms_emit_their_fixed_replies() {
     assert_eq!(reply(&mut g, &mut p, b"\x1b[15t"), "\x1b[5;0;0t");
     assert_eq!(reply(&mut g, &mut p, b"\x1b[16t"), "\x1b[6;0;0t");
     assert_eq!(reply(&mut g, &mut p, b"\x1b[19t"), "\x1b[9;8;10t");
+}
+
+/// The text-area and cell-size readbacks answer from the PTY's winsize,
+/// the cell floored as a `TIOCGWINSZ` reader derives it; the screen
+/// size stays the host's and unanswered.
+#[test]
+fn xterm_window_op_pixel_arms_answer_the_winsize_extents() {
+    let mut g = Grid::new(8, 10);
+    let mut p = Parser::new();
+    g.set_winsize_pixels((805, 170));
+    let reply = |g: &mut Grid, p: &mut Parser, seq: &[u8]| -> String {
+        drive(p, g, seq);
+        let r = responses(g);
+        String::from_utf8(r.into_iter().next().unwrap_or_default()).unwrap()
+    };
+    assert_eq!(reply(&mut g, &mut p, b"\x1b[14t"), "\x1b[4;170;805t");
+    assert_eq!(reply(&mut g, &mut p, b"\x1b[16t"), "\x1b[6;21;80t");
+    assert_eq!(reply(&mut g, &mut p, b"\x1b[15t"), "\x1b[5;0;0t");
 }
 
 /// `CSI 20 t` / `CSI 21 t` report icon name / window title with the

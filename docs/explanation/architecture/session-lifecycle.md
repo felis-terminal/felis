@@ -933,17 +933,22 @@ The two paths answer differently on purpose:
   with it. Clamping degrades the view; refusing destroys the session.
 
 Normalization happens **once, at admission**, and the clamped tuple is the only geometry the daemon then holds: the PTY
-size, the grid, the subscriber's remembered `desired_size` (so a later promotion replays the clamped size, not the raw
-request), the roster row, and the `GridMsg::Size` every mirror reads. The raw request is not observable anywhere
-afterward. The alternative (store the request, clamp at each use) is how a mirror ends up rendering one geometry while
-the PTY runs another.
+size (its unknown pixel axes filled, below), the grid, the subscriber's remembered `desired_size` (so a later promotion
+replays the clamped size, not the raw request), the roster row, and the `GridMsg::Size` every mirror reads. The raw
+request is not observable anywhere afterward. The alternative (store the request, clamp at each use) is how a mirror
+ends up rendering one geometry while the PTY runs another.
 
 Zero survives on the pixel axes alone. Pixel `0` means "unknown" (the TIOCGWINSZ convention) on both paths and is never
 raised to the pixel minimum, because fabricating a window size for a producer that reported none is worse than reporting
-none. Rows and columns have no such case: a create that wants the daemon's default asks by leaving `SpawnArgs.dims`
-absent, so `0` rows is refused on a create exactly as 1 000 000 rows is. Spelling the default as a value drawn from the
-geometry's own domain would cost one admission rule per verb over a single wire type. The argument, and why presence is
-cheap enough to take instead, is in [ipc.md](ipc.md) "Optional fields instead of in-band sentinels".
+none. The program is the other side of that boundary: the PTY's winsize, and the `?2048` report that states it, fill an
+unknown axis at a nominal 8 × 16 pixels per cell. A program that converts SGR-pixel mouse reports back to cells divides
+by those extents, and a `0` there crashes it, where a nominal cell is replaced by the next window resize. tmux fills
+unknown pixels the same way, at 16 × 32; 8 × 16 is chosen because a 2048-cell axis then stays inside the pixel bound.
+The fill stays at the PTY, and announced geometry keeps the `0`. Rows and columns have no such case: a create that wants
+the daemon's default asks by leaving `SpawnArgs.dims` absent, so `0` rows is refused on a create exactly as 1 000 000
+rows is. Spelling the default as a value drawn from the geometry's own domain would cost one admission rule per verb
+over a single wire type. The argument, and why presence is cheap enough to take instead, is in [ipc.md](ipc.md)
+"Optional fields instead of in-band sentinels".
 
 _Revisit if_ a display generation arrives whose cell counts approach 2048: the bound is a budget, and the budget is a
 number this argument can re-derive against a larger one.

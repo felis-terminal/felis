@@ -1082,6 +1082,12 @@ async fn create_session(
         env_base_source(&args, relay_env),
         caps.agent.as_deref(),
         caps.endpoint.as_deref(),
+        felis_pty::Size {
+            rows: dims.rows,
+            cols: dims.cols,
+            pixel_width: dims.pixel_w,
+            pixel_height: dims.pixel_h,
+        },
     )
     .map_err(|err| (CreateFailure::SpawnFailed, err.to_string()))?;
     // `dims` is already resolved and admitted above; `spawn_session`
@@ -2462,6 +2468,7 @@ pub(crate) fn spawn_with_args(
     base: EnvBaseSource<'_>,
     agent: Option<&crate::agent::AgentLink>,
     endpoint: Option<&OsStr>,
+    size: felis_pty::Size,
 ) -> Result<SpawnedPty, SessionError> {
     let default_program = args.command.is_empty();
     if default_program && !args.args.is_empty() {
@@ -2490,7 +2497,10 @@ pub(crate) fn spawn_with_args(
         return Err(SessionError::Spawn(format!("SpawnArgs: {err}")));
     }
     let Some(dir) = spawn_cwd(args) else {
-        return SpawnedPty::spawn(command_from_args(args, factory, session_id, None, &env));
+        return SpawnedPty::spawn_sized(
+            command_from_args(args, factory, session_id, None, &env),
+            size,
+        );
     };
     if !dir.is_absolute() {
         // A relative cwd would resolve against the daemon's directory, which
@@ -2500,13 +2510,10 @@ pub(crate) fn spawn_with_args(
             args.cwd
         )));
     }
-    match SpawnedPty::spawn(command_from_args(
-        args,
-        factory,
-        session_id,
-        Some(dir),
-        &env,
-    )) {
+    match SpawnedPty::spawn_sized(
+        command_from_args(args, factory, session_id, Some(dir), &env),
+        size,
+    ) {
         Err(err) if default_program => {
             // Fall back to daemon cwd for bare shell launches if requested cwd
             // does not exist; named commands still fail on bad directories
@@ -2516,7 +2523,10 @@ pub(crate) fn spawn_with_args(
                 %err,
                 "requested cwd unusable; starting the default shell in the daemon's cwd"
             );
-            SpawnedPty::spawn(command_from_args(args, factory, session_id, None, &env))
+            SpawnedPty::spawn_sized(
+                command_from_args(args, factory, session_id, None, &env),
+                size,
+            )
         }
         result => result,
     }
