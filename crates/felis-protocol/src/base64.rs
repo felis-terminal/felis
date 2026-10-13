@@ -156,22 +156,22 @@ mod tests {
     }
 
     #[test]
-    fn round_trips_short_payload_with_full_padding() {
+    fn decodes_one_byte_payload_with_full_padding() {
         assert_eq!(decode(b"TQ=="), Some(vec![b'M']));
     }
 
     #[test]
-    fn round_trips_two_byte_payload_with_one_pad() {
+    fn decodes_two_byte_payload_with_one_pad() {
         assert_eq!(decode(b"TWE="), Some(vec![b'M', b'a']));
     }
 
     #[test]
-    fn round_trips_three_byte_payload_with_no_padding() {
+    fn decodes_three_byte_payload_with_no_padding() {
         assert_eq!(decode(b"TWFu"), Some(vec![b'M', b'a', b'n']));
     }
 
     #[test]
-    fn round_trips_long_payload() {
+    fn decodes_long_payload() {
         let input = b"VGhlIHF1aWNrIGJyb3duIGZveCBqdW1wcyBvdmVyIHRoZSBsYXp5IGRvZw==";
         let expected = b"The quick brown fox jumps over the lazy dog";
         assert_eq!(decode(input), Some(expected.to_vec()));

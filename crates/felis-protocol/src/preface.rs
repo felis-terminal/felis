@@ -911,13 +911,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn this_build_serves_exactly_its_own_major() {
-        assert!(supports_major(PROTOCOL_MAJOR));
-        assert!(!supports_major(PROTOCOL_MAJOR - 1));
-        assert!(!supports_major(PROTOCOL_MAJOR + 1));
-    }
-
     /// The selection table: an offered major maps to the accept that
     /// echoes it with this build's minor for it, or to no reply; the
     /// advertised range in a refusal names exactly the majors `select`

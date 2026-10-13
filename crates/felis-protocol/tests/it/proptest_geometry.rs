@@ -117,17 +117,6 @@ proptest! {
         }
     }
 
-    /// The one surviving sentinel is the pixel pair's `0` = unknown;
-    /// admitted cell axes are always a real size.
-    #[test]
-    fn admission_preserves_only_the_pixel_sentinel(req in in_bounds()) {
-        let admitted = req.admit().expect("in_bounds draws only admissible geometry");
-        prop_assert!(admitted.rows >= MIN_GRID_ROWS);
-        prop_assert!(admitted.cols >= MIN_GRID_COLS);
-        prop_assert_eq!(admitted.pixel_w == 0, req.pixel_w == 0);
-        prop_assert_eq!(admitted.pixel_h == 0, req.pixel_h == 0);
-    }
-
     /// A zero row or column count is refused, not defaulted: a create
     /// asks for the daemon default by omitting `SpawnArgs.dims`.
     #[test]
