@@ -6,7 +6,7 @@ use felis_grid::{Cell, Grapheme, Grid, ScrollDirection, Sizing, SizingHandle};
 use felis_vt::Parser;
 use proptest::prelude::*;
 
-mod common;
+use crate::common;
 use common::{drive, scroll_ops};
 
 /// Models `ShadowScreen::apply` (`docs/reference/ipc.md`): drain queued

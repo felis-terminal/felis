@@ -9,7 +9,7 @@ use felis_grid::Grid;
 use felis_vt::Parser;
 use proptest::prelude::*;
 
-mod common;
+use crate::common;
 use common::drive_with;
 
 const ALPHA: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";

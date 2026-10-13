@@ -7,7 +7,7 @@
 
 use felis_grid::Grid;
 
-mod common;
+use crate::common;
 use common::{drive, render_roles};
 
 fn snap(cols: u16, bytes: &str) -> String {

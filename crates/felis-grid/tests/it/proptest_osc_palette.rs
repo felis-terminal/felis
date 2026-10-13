@@ -10,7 +10,7 @@ use felis_protocol::messages::ThemeChannel;
 use felis_vt::Parser;
 use proptest::prelude::*;
 
-mod common;
+use crate::common;
 
 fn responses_for(bytes: &[u8]) -> Vec<Vec<u8>> {
     let mut g = Grid::new(4, 16);

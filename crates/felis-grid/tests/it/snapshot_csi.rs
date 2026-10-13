@@ -7,7 +7,7 @@ use std::fmt::Write as _;
 use felis_grid::{AttrFlags, Grapheme, Grid, ScrollDirection};
 use felis_vt::Parser;
 
-mod common;
+use crate::common;
 use common::{
     cell_char, drive, scroll_ops, styled_cell_lines, write_cells, write_cursor, write_dirty_rows,
     write_pen,

@@ -8,7 +8,7 @@ use felis_grid::{
     UnderlineStyle, row_ansi_with,
 };
 
-mod common;
+use crate::common;
 use common::drive;
 
 fn representative_attrs() -> Vec<Attributes> {

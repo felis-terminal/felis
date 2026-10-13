@@ -12,7 +12,7 @@ use felis_grid::{
 use felis_vt::Parser;
 use proptest::prelude::*;
 
-mod common;
+use crate::common;
 
 const ANSI_FUNCTIONAL: &[u16] = &[4, 20];
 const ANSI_UNIMPLEMENTED: &[u16] = &[2, 12, 21, 33, 99];

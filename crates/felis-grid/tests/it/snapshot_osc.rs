@@ -8,7 +8,7 @@ use std::fmt::Write as _;
 use felis_grid::Grid;
 use felis_protocol::messages::ThemeChannel;
 
-mod common;
+use crate::common;
 use common::drive;
 
 fn render(grid: &Grid) -> String {

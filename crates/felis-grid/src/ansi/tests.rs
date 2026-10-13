@@ -1,5 +1,5 @@
 //! Tests for [`row_ansi`]. Round-tripping through the full parser,
-//! rather than `apply_sgr` alone, is `tests/ansi_round_trip.rs`.
+//! rather than `apply_sgr` alone, is `tests/it/ansi_round_trip.rs`.
 
 use super::*;
 use crate::search::row_text;

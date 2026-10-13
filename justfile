@@ -111,7 +111,7 @@ schema:
 [group('lint')]
 golden:
     UPDATE_GOLDEN=1 cargo nextest run -p felis-cli --test cli_bridge golden
-    UPDATE_GOLDEN=1 cargo nextest run -p felis-grid --features json --test json_v1
+    UPDATE_GOLDEN=1 cargo nextest run -p felis-grid --features json --test it json_v1::
 
 # Regenerate IPC wire types (crates/felis-protocol/src/generated) via buf.
 # The buf-generate pre-commit hook runs this and fails on a stale committed copy.

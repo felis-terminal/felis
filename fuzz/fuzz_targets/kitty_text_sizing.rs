@@ -2,7 +2,7 @@
 //!
 //! Drives `felis_vt::kitty_text_sizing::parse_metadata` with
 //! arbitrary bytes. Companion to the proptest in
-//! `crates/felis-vt/tests/proptest_kitty_text_sizing.rs`; the
+//! `crates/felis-vt/tests/it/proptest_kitty_text_sizing.rs`; the
 //! proptest already pins totality up to 256-byte inputs and the
 //! structural invariants on accepted sizings, but coverage-guided
 //! fuzzing widens the input space libfuzzer explores. Win
