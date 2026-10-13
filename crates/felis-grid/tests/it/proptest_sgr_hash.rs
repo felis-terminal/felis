@@ -63,13 +63,7 @@ fn arb_attributes() -> impl Strategy<Value = Attributes> {
         arb_color(),
         arb_color(),
         any::<u16>(),
-        prop_oneof![
-            Just(UnderlineStyle::Single),
-            Just(UnderlineStyle::Double),
-            Just(UnderlineStyle::Curly),
-            Just(UnderlineStyle::Dotted),
-            Just(UnderlineStyle::Dashed),
-        ],
+        arb_underline_style(),
     )
         .prop_map(
             |(fg, bg, underline_color, bits, underline_style)| Attributes {
@@ -82,16 +76,48 @@ fn arb_attributes() -> impl Strategy<Value = Attributes> {
         )
 }
 
+fn arb_underline_style() -> impl Strategy<Value = UnderlineStyle> {
+    prop_oneof![
+        Just(UnderlineStyle::Single),
+        Just(UnderlineStyle::Double),
+        Just(UnderlineStyle::Curly),
+        Just(UnderlineStyle::Dotted),
+        Just(UnderlineStyle::Dashed),
+    ]
+}
+
 proptest! {
     #[test]
-    fn rgb_pens_hash_equal_iff_equal(a in any::<(u8, u8, u8)>(), b in any::<(u8, u8, u8)>()) {
-        let pen_a = Attributes { fg: Color::Rgb(a.0, a.1, a.2), ..Attributes::default() };
-        let pen_b = Attributes { fg: Color::Rgb(b.0, b.1, b.2), ..Attributes::default() };
-        prop_assert_eq!(pen_a == pen_b, hash_of(&pen_a) == hash_of(&pen_b));
+    fn rgb_pens_one_bit_apart_hash_differently(
+        rgb in any::<[u8; 3]>(),
+        channel in 0usize..3,
+        bit in 0u8..8,
+    ) {
+        let mut flipped = rgb;
+        flipped[channel] ^= 1 << bit;
+        let pen = |[r, g, b]: [u8; 3]| Attributes { fg: Color::Rgb(r, g, b), ..Attributes::default() };
+        prop_assert_eq!(hash_of(&pen(rgb)), hash_of(&pen(rgb)));
+        prop_assert_ne!(hash_of(&pen(rgb)), hash_of(&pen(flipped)));
     }
 
     #[test]
-    fn attributes_hash_equal_iff_equal(a in arb_attributes(), b in arb_attributes()) {
-        prop_assert_eq!(a == b, hash_of(&a) == hash_of(&b));
+    fn attributes_hash_equal_until_one_field_differs(
+        a in arb_attributes(),
+        field in 0usize..5,
+        color in arb_color(),
+        flag_bit in 0u32..16,
+        style in arb_underline_style(),
+    ) {
+        let mut b = a;
+        prop_assert_eq!(hash_of(&a), hash_of(&b));
+        match field {
+            0 => b.fg = color,
+            1 => b.bg = color,
+            2 => b.underline_color = color,
+            3 => b.flags ^= AttrFlags::from_bits_truncate(1 << flag_bit),
+            _ => b.underline_style = style,
+        }
+        prop_assume!(a != b);
+        prop_assert_ne!(hash_of(&a), hash_of(&b));
     }
 }

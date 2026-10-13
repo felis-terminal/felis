@@ -35,26 +35,9 @@ fn snapshot_chars(g: &Grid) -> Vec<Vec<Grapheme>> {
 
 proptest! {
     #[test]
-    fn decera_full_grid_clears_every_cell(
+    fn decera_preserves_cells_outside_rectangle(
         rows in 1u16..=6,
         cols in 1u16..=6,
-    ) {
-        let mut g = Grid::new(rows, cols);
-        let mut p = Parser::new();
-        drive_with(&mut p, &mut g,b"x".repeat(usize::from(rows) * usize::from(cols)).as_slice());
-        let cmd = format!("\x1b[1;1;{rows};{cols}$z");
-        drive_with(&mut p, &mut g,cmd.as_bytes());
-        for r in 0..rows {
-            for c in 0..cols {
-                prop_assert_eq!(g.cell(r, c).unwrap().grapheme, Grapheme::Empty);
-            }
-        }
-    }
-
-    #[test]
-    fn decera_preserves_cells_outside_rectangle(
-        rows in 2u16..=6,
-        cols in 2u16..=6,
         pt in 1u16..=6,
         pl in 1u16..=6,
         pb in 1u16..=6,

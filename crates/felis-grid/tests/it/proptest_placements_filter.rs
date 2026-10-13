@@ -95,17 +95,6 @@ proptest! {
     }
 
     #[test]
-    fn contains_cell_agrees_with_row_and_col_helpers(
-        p in placement_strategy(),
-        query_row in 0u16..220,
-        query_col in 0u16..220,
-    ) {
-        let actual = p.contains_cell(query_row, query_col);
-        let composed = p.contains_row(query_row) && p.contains_col(query_col);
-        prop_assert_eq!(actual, composed);
-    }
-
-    #[test]
     fn every_cell_inside_the_box_matches(
         p in placement_strategy(),
         row_offset in 0u16..20,

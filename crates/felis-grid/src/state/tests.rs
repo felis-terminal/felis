@@ -179,18 +179,27 @@ fn inconsistent_screen_state_is_refused() {
     );
     assert_eq!(corrupt(&grid, |_| {}), None);
     let edits: [(&str, Edit); 7] = [
-        ("cursor", |v| v["screen"]["cursor"]["row"] = 5.into()),
+        ("cursor outside the screen", |v| {
+            v["screen"]["cursor"]["row"] = 5.into();
+        }),
         ("tab stops", |v| v["tab_stops"] = serde_json::json!([true])),
-        ("row codec", |v| v["screen"]["row_codec"] = 99.into()),
-        ("ring", |v| v["screen"]["ring"]["phys_cap"] = 4.into()),
-        ("links", |v| v["screen"]["links"] = serde_json::json!([])),
-        ("styles", |v| {
+        ("row codec 99 is not the version", |v| {
+            v["screen"]["row_codec"] = 99.into();
+        }),
+        ("ring geometry", |v| {
+            v["screen"]["ring"]["phys_cap"] = 4.into();
+        }),
+        ("names a handle past its table", |v| {
+            v["screen"]["links"] = serde_json::json!([]);
+        }),
+        ("a row names a pen the style table lacks", |v| {
             v["screen"]["styles"].as_array_mut().unwrap().truncate(1);
         }),
-        ("margins", |v| v["margins"]["bottom"] = 9.into()),
+        ("scroll margins", |v| v["margins"]["bottom"] = 9.into()),
     ];
-    for (what, edit) in edits {
-        assert!(corrupt(&grid, edit).is_some(), "{what} was accepted");
+    for (expected, edit) in edits {
+        let err = corrupt(&grid, edit).unwrap_or_else(|| panic!("{expected:?} was accepted"));
+        assert!(err.contains(expected), "expected {expected:?}, got {err:?}");
     }
 }
 

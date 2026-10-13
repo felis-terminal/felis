@@ -80,7 +80,7 @@ fn reflow_visible_snapshot(g: &Grid) -> (Vec<Grapheme>, Vec<bool>) {
 
 proptest! {
     #[test]
-    fn cursor_always_in_bounds(
+    fn cursor_and_cell_lookup_stay_within_declared_dimensions(
         rows in 1u16..=64,
         cols in 1u16..=160,
         bytes in proptest::collection::vec(any::<u8>(), 0..1024),
@@ -88,15 +88,6 @@ proptest! {
         let grid = drive(rows, cols, &bytes);
         prop_assert!(grid.cursor().row < grid.rows());
         prop_assert!(grid.cursor().col < grid.cols());
-    }
-
-    #[test]
-    fn cell_lookup_matches_declared_dimensions(
-        rows in 1u16..=32,
-        cols in 1u16..=80,
-        bytes in proptest::collection::vec(any::<u8>(), 0..512),
-    ) {
-        let grid = drive(rows, cols, &bytes);
         for r in 0..grid.rows() {
             for c in 0..grid.cols() {
                 prop_assert!(grid.cell(r, c).is_some());
@@ -489,11 +480,18 @@ proptest! {
         prop_assert_eq!(grid.cols(), new_cols);
         prop_assert!(grid.cursor().row < grid.rows());
         prop_assert!(grid.cursor().col < grid.cols());
+        let pushed_before = grid.scrollback_total_pushed();
         for _ in 0..usize::from(new_rows) * 3 {
-            parser.advance(&mut grid, b"x\r\n");
+            parser.advance(&mut grid, b"A\r\n");
         }
-        prop_assert!(grid.cell(new_rows - 1, new_cols - 1).is_some());
-        prop_assert!(grid.cell(new_rows, 0).is_none());
+        prop_assert!(
+            grid.scrollback_total_pushed() - pushed_before > 2 * u64::from(new_rows),
+            "every line feed past the bottom row must scroll into scrollback"
+        );
+        prop_assert_eq!(grid.cursor().row, new_rows - 1);
+        if new_rows >= 2 {
+            prop_assert_eq!(common::cell_char(&grid, new_rows - 2, 0), 'A');
+        }
     }
 }
 

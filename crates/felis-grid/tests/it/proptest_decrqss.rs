@@ -117,15 +117,29 @@ proptest! {
     ) {
         prop_assume!(top < bottom && bottom <= 24);
         let setup = format!("\x1b[{top};{bottom}r");
-        let (first, second) = round_trip(setup.as_bytes(), b"r");
-        // The grid exposes no scroll-region getter; home the cursor and compare.
-        let mut a = first;
-        let mut b = second;
-        let mut p1 = Parser::new();
-        let mut p2 = Parser::new();
-        p1.advance(&mut a, b"\x1b[H");
-        p2.advance(&mut b, b"\x1b[H");
-        prop_assert_eq!(a.cursor(), b.cursor());
+        let grids: [Grid; 2] = round_trip(setup.as_bytes(), b"r").into();
+        let label = |row: u16| char::from(b'A' + u8::try_from(row).unwrap());
+        let mut probe = Vec::new();
+        for row in 0..24u16 {
+            probe.extend_from_slice(format!("\x1b[{};1H{}", row + 1, label(row)).as_bytes());
+        }
+        probe.extend_from_slice(format!("\x1b[{bottom};1H\n").as_bytes());
+        let expected: Vec<char> = (0..24u16)
+            .map(|row| {
+                if row + 1 == bottom {
+                    '.'
+                } else if row + 1 >= top && row + 1 < bottom {
+                    label(row + 1)
+                } else {
+                    label(row)
+                }
+            })
+            .collect();
+        for mut grid in grids {
+            Parser::new().advance(&mut grid, &probe);
+            let column: Vec<char> = (0..24u16).map(|row| common::cell_char(&grid, row, 0)).collect();
+            prop_assert_eq!(&column, &expected);
+        }
     }
 
     #[test]

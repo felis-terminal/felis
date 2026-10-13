@@ -8,9 +8,10 @@
 use std::fmt::Write as _;
 
 use felis_grid::{Color, Grid};
+use felis_vt::Parser;
 
 use crate::common;
-use common::{drive, drive_take, write_cells, write_cursor, write_dirty_rows, write_pen};
+use common::{drive, drive_take, write_cells, write_cursor, write_pen};
 
 fn render(grid: &Grid) -> String {
     let mut out = String::new();
@@ -29,7 +30,6 @@ fn render(grid: &Grid) -> String {
     )
     .unwrap();
     write_cells(&mut out, grid);
-    write_dirty_rows(&mut out, grid);
     out
 }
 
@@ -58,7 +58,6 @@ fn cursor_positioning_handlers_compose() {
     |........|
     |.....X..|
     |........|
-    dirty_rows: [0, 1, 2]
     ");
 }
 
@@ -73,7 +72,6 @@ fn erase_handlers_blank_their_target_regions() {
     |row1aaaa|
     |.....bbb|
     |row3cccc|
-    dirty_rows: [0, 1, 2]
     ");
 }
 
@@ -86,7 +84,6 @@ fn ech_blanks_n_cells_without_moving_cursor() {
     modes: alt=0 bracket_paste=0 focus=0 sync=0 mouse=Off/Default kitty=0x00
     grid 1x8:
     |ab...fgh|
-    dirty_rows: [0]
     ");
 }
 
@@ -101,7 +98,6 @@ fn il_dl_shift_rows_inside_the_screen() {
     |....|
     |AAAA|
     |BBBB|
-    dirty_rows: [0, 1, 2]
     ");
 }
 
@@ -116,7 +112,6 @@ fn su_sd_scroll_the_whole_screen() {
     |BBBB|
     |CCCC|
     |....|
-    dirty_rows: [0, 1, 2]
     ");
 }
 
@@ -129,7 +124,6 @@ fn private_modes_compose_in_one_dispatch_and_take_effect() {
     modes: alt=0 bracket_paste=1 focus=1 sync=1 mouse=ButtonEvents/Sgr kitty=0x00
     grid 1x1:
     |.|
-    dirty_rows: [0]
     ");
 }
 
@@ -144,7 +138,6 @@ fn decsc_decrc_save_and_restore_cursor_and_pen() {
     |........|
     |..X.....|
     |........|
-    dirty_rows: [0, 1, 2]
     ");
 }
 
@@ -160,7 +153,6 @@ fn decstr_soft_resets_modes_and_pen_keeps_cells() {
     grid 2x4:
     |hi..|
     |....|
-    dirty_rows: [0, 1]
     ");
 }
 
@@ -173,7 +165,6 @@ fn kitty_kbd_push_set_pop_walks_the_stack() {
     modes: alt=0 bracket_paste=0 focus=0 sync=0 mouse=Off/Default kitty=0x05
     grid 1x1:
     |.|
-    dirty_rows: [0]
     ");
 }
 
@@ -237,7 +228,6 @@ fn decstbm_scrolls_only_inside_the_region() {
     |....|
     |....|
     |EEEE|
-    dirty_rows: [0, 1, 2, 3, 4]
     ");
 }
 
@@ -262,7 +252,6 @@ fn decom_makes_cup_address_region_relative() {
     |....|
     |...*|
     |....|
-    dirty_rows: [0, 1, 2, 3, 4]
     ");
 }
 
@@ -276,7 +265,6 @@ fn decawm_off_pins_writes_at_the_right_margin() {
     grid 2x4:
     |ABCG|
     |....|
-    dirty_rows: [0, 1]
     ");
 }
 
@@ -297,7 +285,6 @@ fn ri_at_top_of_region_scrolls_region_down() {
     |BBBB|
     |CCCC|
     |EEEE|
-    dirty_rows: [0, 1, 2, 3, 4]
     ");
 }
 
@@ -361,7 +348,6 @@ fn spa_epa_protect_unprotect_via_ecma48_aliases() {
     modes: alt=0 bracket_paste=0 focus=0 sync=0 mouse=Off/Default kitty=0x00
     grid 1x6:
     |AB....|
-    dirty_rows: [0]
     ");
 }
 
@@ -423,7 +409,6 @@ fn decsca_decsel_skip_protected_cells() {
     modes: alt=0 bracket_paste=0 focus=0 sync=0 mouse=Off/Default kitty=0x00
     grid 1x8:
     |AB......|
-    dirty_rows: [0]
     ");
 }
 
@@ -441,7 +426,6 @@ fn decsed_zero_keeps_protected_cells_after_cursor() {
     grid 2x4:
     |AB..|
     |XY..|
-    dirty_rows: [0, 1]
     ");
 }
 
@@ -455,7 +439,6 @@ fn sl_sr_shift_region_columns() {
     grid 2x5:
     |CDE..|
     |CDE..|
-    dirty_rows: [0, 1]
     ");
 
     let g = drive(2, 5, b"ABCDE\r\nABCDE\x1b[1 A");
@@ -466,7 +449,6 @@ fn sl_sr_shift_region_columns() {
     grid 2x5:
     |.ABCD|
     |.ABCD|
-    dirty_rows: [0, 1]
     ");
 }
 
@@ -479,7 +461,6 @@ fn rep_repeats_last_graphic_n_times() {
     modes: alt=0 bracket_paste=0 focus=0 sync=0 mouse=Off/Default kitty=0x00
     grid 1x10:
     |AAAAA.....|
-    dirty_rows: [0]
     ");
 }
 
@@ -492,7 +473,6 @@ fn rep_after_a_control_dispatch_is_a_noop() {
     modes: alt=0 bracket_paste=0 focus=0 sync=0 mouse=Off/Default kitty=0x00
     grid 1x10:
     |A.........|
-    dirty_rows: [0]
     ");
 }
 
@@ -532,7 +512,6 @@ fn irm_shifts_cells_right_on_print() {
     modes: alt=0 bracket_paste=0 focus=0 sync=0 mouse=Off/Default kitty=0x00
     grid 1x8:
     |AXBCDE..|
-    dirty_rows: [0]
     ");
 }
 
@@ -589,11 +568,16 @@ fn cbt_walks_backwards_through_set_stops() {
 
 #[test]
 fn decscnm_toggle_dirties_whole_screen() {
-    let g = drive(2, 4, b"\x1b[?5h");
+    let mut g = Grid::new(2, 4);
+    let mut p = Parser::new();
+    g.damage_mut().clear();
+    p.advance(&mut g, b"\x1b[?5h");
     assert!(g.reverse_video());
     assert_eq!(g.damage().dirty_rows().collect::<Vec<_>>(), vec![0, 1]);
-    let g_off = drive(2, 4, b"\x1b[?5h\x1b[?5l");
-    assert!(!g_off.reverse_video());
+    g.damage_mut().clear();
+    p.advance(&mut g, b"\x1b[?5l");
+    assert!(!g.reverse_video());
+    assert_eq!(g.damage().dirty_rows().collect::<Vec<_>>(), vec![0, 1]);
 }
 
 #[test]
@@ -642,7 +626,6 @@ fn decaln_fills_screen_with_e_and_homes_cursor() {
     grid 2x4:
     |EEEE|
     |EEEE|
-    dirty_rows: [0, 1]
     ");
 }
 

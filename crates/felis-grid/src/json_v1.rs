@@ -315,6 +315,11 @@ mod tests {
         let mut value = welcome();
         value["msg"]["invented_later"] = json!({ "any": "shape" });
         value["also_invented_later"] = json!(7);
-        assert!(decode(&value).is_ok());
+        let (kind, body) = decode(&value).unwrap();
+        assert_eq!(kind, MessageKind::Conn);
+        assert_eq!(
+            codec::decode::<ConnToClientMsg>(&body).unwrap(),
+            ConnToClientMsg::Welcome { identity: None }
+        );
     }
 }

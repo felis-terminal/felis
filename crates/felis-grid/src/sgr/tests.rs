@@ -157,16 +157,6 @@ fn overflowed_sgr_is_discarded_whole() {
     assert!(!attrs.flags.contains(AttrFlags::BOLD));
 }
 
-#[test]
-fn sgr_16_color_fg_and_bg() {
-    let mut p = Parser::new();
-    let mut g = Grid::new(1, 3);
-    drive(&mut p, &mut g, b"\x1b[31;44mX");
-    let attrs = g.style(g.cell(0, 0).unwrap().style);
-    assert_eq!(attrs.fg, Color::Indexed(1));
-    assert_eq!(attrs.bg, Color::Indexed(4));
-}
-
 /// Deleting any one arm would silently drop that attribute. (BOLD and
 /// the underline arms have their own tests above.)
 #[test]

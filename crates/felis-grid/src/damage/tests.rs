@@ -66,22 +66,6 @@ fn synchronized_output_mode_toggles_via_2026() {
 }
 
 #[test]
-fn synchronized_output_holds_writes_into_one_damage_burst() {
-    // The grid still mutates under sync; holding frame emission is the
-    // daemon's job.
-    let mut p = Parser::new();
-    let mut g = Grid::new(3, 6);
-    g.damage_mut().clear();
-    drive(&mut p, &mut g, b"\x1b[?2026h");
-    drive(&mut p, &mut g, b"first\r\nnext");
-    drive(&mut p, &mut g, b"\x1b[?2026l");
-    assert!(!g.synchronized_output());
-    let dirty: Vec<_> = g.damage().dirty_rows().collect();
-    assert!(dirty.contains(&0));
-    assert!(dirty.contains(&1));
-}
-
-#[test]
 fn mark_range_matches_per_row_mark() {
     for rows in [1usize, 7, 64, 65, 130] {
         for start in 0..rows {

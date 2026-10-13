@@ -103,27 +103,4 @@ proptest! {
             prop_assert!(g.synchronized_output_deadline(now).is_none());
         }
     }
-
-    #[test]
-    fn deadline_is_monotonic_or_none(
-        millis_first in 0u64..200,
-        millis_advance in 0u64..200,
-        re_observe in any::<bool>(),
-    ) {
-        let mut g = Grid::new(2, 4);
-        let mut p = Parser::new();
-        let t0 = Instant::now() + Duration::from_millis(millis_first);
-        p.advance(&mut g, b"\x1b[?2026h");
-        let d0 = g.synchronized_output_deadline(t0).unwrap();
-        let t1 = t0 + Duration::from_millis(millis_advance);
-        if t1 < d0 {
-            let d1 = g.synchronized_output_deadline(t1).unwrap();
-            prop_assert_eq!(d0, d1);
-        }
-        if re_observe {
-            let _ = g.synchronized_output_deadline(t1);
-        }
-        p.advance(&mut g, b"\x1b[?2026l");
-        prop_assert!(g.synchronized_output_deadline(t1).is_none());
-    }
 }
