@@ -11,6 +11,7 @@
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
 
 use felis_client_core::config::GUI_CLIENT_ID;
 use felis_client_core::doctor::{
@@ -204,8 +205,12 @@ fn gather(
         .filter(|(source, _)| *source == SocketSource::Default)
         .map(|(_, path)| path.as_path());
     let mut running = None;
-    let (mut daemon, primary) =
-        runtime.block_on(daemon_check_reading(&target.target, bounded, &mut running));
+    let (mut daemon, primary) = runtime.block_on(daemon_check_reading(
+        &target.target,
+        bounded,
+        PROBE_DEADLINE,
+        &mut running,
+    ));
     // The installed binary is this machine's, so only a local daemon is
     // compared with it.
     if local.is_some()
@@ -324,7 +329,7 @@ impl Primary {
 /// sibling row's wording turns on what this dial could establish.
 #[cfg(all(test, unix))]
 async fn daemon_check(target: &Reconnector, bounded: Option<&Path>) -> (Check, Primary) {
-    daemon_check_reading(target, bounded, &mut None).await
+    daemon_check_reading(target, bounded, PROBE_DEADLINE, &mut None).await
 }
 
 /// [`daemon_check`], also handing out the build a daemon that answered
@@ -332,38 +337,34 @@ async fn daemon_check(target: &Reconnector, bounded: Option<&Path>) -> (Check, P
 async fn daemon_check_reading(
     target: &Reconnector,
     bounded: Option<&Path>,
+    deadline: Duration,
     running: &mut Option<BuildIdentity>,
 ) -> (Check, Primary) {
     let dialed = match bounded {
-        Some(resolved) => match dial_bounded(
-            target.carrier.clone(),
-            target.offer,
-            REMOTE_SPAWN,
-            PROBE_DEADLINE,
-        )
-        .await
-        {
-            Ok(conn) => Ok(conn),
-            Err(BoundedDialError::Connect(err)) => Err(err),
-            Err(expired @ BoundedDialError::ConnectTimedOut { .. }) => {
-                return (
-                    Check::new(
-                        "daemon",
-                        Status::Warn,
-                        format!("could not dial {}: {expired}", resolved.display()),
-                    ),
-                    Primary::Undialable {
-                        why: expired.to_string(),
-                    },
-                );
+        Some(resolved) => {
+            match dial_bounded(target.carrier.clone(), target.offer, REMOTE_SPAWN, deadline).await {
+                Ok(conn) => Ok(conn),
+                Err(BoundedDialError::Connect(err)) => Err(err),
+                Err(expired @ BoundedDialError::ConnectTimedOut { .. }) => {
+                    return (
+                        Check::new(
+                            "daemon",
+                            Status::Warn,
+                            format!("could not dial {}: {expired}", resolved.display()),
+                        ),
+                        Primary::Undialable {
+                            why: expired.to_string(),
+                        },
+                    );
+                }
+                // The connect completed, so something is listening there
+                // whatever the handshake never said.
+                Err(expired @ BoundedDialError::HandshakeTimedOut { .. }) => {
+                    let why = expired.to_string();
+                    return (unverified(resolved, &why), Primary::Unverified { why });
+                }
             }
-            // The connect completed, so something is listening there
-            // whatever the handshake never said.
-            Err(expired @ BoundedDialError::HandshakeTimedOut { .. }) => {
-                let why = expired.to_string();
-                return (unverified(resolved, &why), Primary::Unverified { why });
-            }
-        },
+        }
         None => crate::conn::dial(target, REMOTE_SPAWN).await,
     };
     match dialed {
@@ -561,7 +562,7 @@ async fn endpoint_report(source: SocketSource, target: &Path, primary: &Primary)
         return EndpointReport::default();
     }
     let default = felis_transport::socket::default_socket_path();
-    endpoint_report_from(source, target, default, primary).await
+    endpoint_report_from(source, target, default, primary, PROBE_DEADLINE).await
 }
 
 /// A daemon the default endpoint answers while this shell is stamped
@@ -573,6 +574,7 @@ async fn endpoint_report_from(
     target: &Path,
     default: std::io::Result<PathBuf>,
     primary: &Primary,
+    deadline: Duration,
 ) -> EndpointReport {
     // An explicit `--socket` names one address on purpose; neither the
     // default nor the endpoints it is not answer a question it asked.
@@ -603,7 +605,7 @@ async fn endpoint_report_from(
         target,
         &default,
         primary,
-        probe(default.as_path(), PROBE_DEADLINE).await,
+        probe(default.as_path(), deadline).await,
     ));
     report
 }
@@ -1430,7 +1432,29 @@ mod endpoint_tests {
         default: &Path,
         primary: &Primary,
     ) -> EndpointReport {
-        endpoint_report_from(source, target, Ok(default.to_path_buf()), primary).await
+        report_within(source, target, default, primary, PROBE_DEADLINE).await
+    }
+
+    async fn report_within(
+        source: SocketSource,
+        target: &Path,
+        default: &Path,
+        primary: &Primary,
+        deadline: Duration,
+    ) -> EndpointReport {
+        endpoint_report_from(source, target, Ok(default.to_path_buf()), primary, deadline).await
+    }
+
+    /// Long enough for a same-host connect to complete, so a silent
+    /// listener still expires in the handshake rather than the connect.
+    const SILENT_DEADLINE: Duration = Duration::from_millis(200);
+
+    async fn daemon_check_within(
+        target: &Reconnector,
+        bounded: Option<&Path>,
+        deadline: Duration,
+    ) -> (Check, Primary) {
+        daemon_check_reading(target, bounded, deadline, &mut None).await
     }
 
     /// What the endpoint section reasons about at all: a local carrier,
@@ -1554,10 +1578,23 @@ mod endpoint_tests {
             let default = dir.path().join("default.sock");
             let stamped = dir.path().join("stamped.sock");
             let _daemon = FakeDaemon::start(&default, behavior);
+            // An answering daemon keeps the real deadline: under load it
+            // could lose a race against the shortened one.
+            let deadline = if daemon {
+                PROBE_DEADLINE
+            } else {
+                SILENT_DEADLINE
+            };
 
             let report = tokio::time::timeout(
                 PROBE_DEADLINE * 3,
-                report(SocketSource::Stamped, &stamped, &default, &Primary::Live),
+                report_within(
+                    SocketSource::Stamped,
+                    &stamped,
+                    &default,
+                    &Primary::Live,
+                    deadline,
+                ),
             )
             .await
             .expect("every probe is bounded");
@@ -1625,6 +1662,7 @@ mod endpoint_tests {
                 "the default endpoint is not a directory you own",
             )),
             &Primary::Live,
+            PROBE_DEADLINE,
         )
         .await;
         assert!(
@@ -1648,6 +1686,7 @@ mod endpoint_tests {
                 "the default endpoint is not a directory you own",
             )),
             &Primary::Live,
+            PROBE_DEADLINE,
         )
         .await;
 
@@ -1683,7 +1722,7 @@ mod endpoint_tests {
 
         let (row, live) = tokio::time::timeout(
             PROBE_DEADLINE * 3,
-            daemon_check(&local_target(&path), Some(&path)),
+            daemon_check_within(&local_target(&path), Some(&path), SILENT_DEADLINE),
         )
         .await
         .expect("the default-endpoint dial is bounded");
@@ -1754,8 +1793,8 @@ mod endpoint_tests {
 
         assert!(
             tokio::time::timeout(
-                PROBE_DEADLINE + Duration::from_millis(500),
-                daemon_check(&local_target(&path), None),
+                SILENT_DEADLINE * 3,
+                daemon_check_within(&local_target(&path), None, SILENT_DEADLINE),
             )
             .await
             .is_err(),
