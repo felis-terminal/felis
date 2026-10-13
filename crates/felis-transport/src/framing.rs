@@ -1074,7 +1074,7 @@ mod tests {
     /// The caller parks once per message it cannot admit, so the watch
     /// runs many times over one connection while the peer keeps writing.
     /// The read-ahead it admits is a total, not a per-call allowance.
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn repeated_hangup_watches_share_one_read_ahead_ceiling() {
         let (mut a, b) = pair();
         let mut reader = FrameReader::new(b);
