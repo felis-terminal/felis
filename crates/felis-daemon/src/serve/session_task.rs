@@ -505,7 +505,7 @@ pub struct Restored {
     /// only what the departed windows changed.
     pub reported_focus: bool,
     pub reported_os_dark: bool,
-    pub reported_resize: Option<(u32, (u16, u16))>,
+    pub reported_resize: Option<ReportedResize>,
     pub idle_for: Duration,
     pub last_notification: Option<crate::pool::StoredNotification>,
 }
@@ -514,7 +514,7 @@ pub struct Restored {
 struct Carried {
     reported_focus: bool,
     reported_os_dark: bool,
-    reported_resize: Option<(u32, (u16, u16))>,
+    reported_resize: Option<ReportedResize>,
     idle_since: Instant,
     last_notification: Option<crate::pool::StoredNotification>,
 }
@@ -573,9 +573,31 @@ async fn spawn_task(
             core.grid.cwd_epoch(),
         )
     };
+    let pty_pixels = {
+        let mut core = session.lock_core();
+        // Only a restore that carried no screen has a grid without the
+        // winsize `SpawnedPty::spawn_sized` recorded.
+        if core.grid.winsize_pixels().0 == 0 || core.grid.winsize_pixels().1 == 0 {
+            let program = crate::program_size(
+                PtySize {
+                    rows,
+                    cols,
+                    pixel_width: pixel_w,
+                    pixel_height: pixel_h,
+                },
+                crate::NOMINAL_CELL_PIXELS,
+            );
+            if let Err(err) = session.resizer.resize(program) {
+                warn!(?err, "restore: PTY resize failed");
+            }
+            core.grid
+                .set_winsize_pixels((program.pixel_width, program.pixel_height));
+        }
+        core.grid.winsize_pixels()
+    };
     // The same derivation `apply_size` runs.
-    session.cell_pixel_w = pixel_w.checked_div(cols).unwrap_or(0);
-    session.cell_pixel_h = pixel_h.checked_div(rows).unwrap_or(0);
+    session.cell_pixel_w = pty_pixels.0.checked_div(cols).unwrap_or(0);
+    session.cell_pixel_h = pty_pixels.1.checked_div(rows).unwrap_or(0);
     let input_budget = crate::pool::new_input_budget();
     // Minted under the registration's lock, before the meta is
     // published: a session must never be listable without the sequence
@@ -880,7 +902,7 @@ struct SessionTask {
     /// The set's own answer and the notification on a change are one
     /// emitter, so a report is owed by what the program was last told,
     /// never by which edge fired.
-    reported_resize: Option<(u32, (u16, u16))>,
+    reported_resize: Option<ReportedResize>,
     /// Grid epochs already mirrored into [`Self::meta`], gating the
     /// `String` clones.
     meta_title_epoch: u64,
@@ -961,11 +983,27 @@ enum ProducerKind {
     },
 }
 
-/// What a `DECSET 2048` report states, or `None` while the program has
-/// not opted in.
-fn resize_notify_key(grid: &felis_grid::Grid) -> Option<(u32, (u16, u16))> {
-    grid.in_band_resize_notify()
-        .then(|| (grid.resize_notify_epoch(), (grid.rows(), grid.cols())))
+/// What a `DECSET 2048` report states, and the epoch that tells a
+/// re-set apart from the set it follows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ReportedResize {
+    pub epoch: u32,
+    pub rows: u16,
+    pub cols: u16,
+    pub pixel_w: u16,
+    pub pixel_h: u16,
+}
+
+/// `None` while the program has not opted in.
+fn resize_notify_key(grid: &felis_grid::Grid) -> Option<ReportedResize> {
+    let (pixel_w, pixel_h) = grid.winsize_pixels();
+    grid.in_band_resize_notify().then(|| ReportedResize {
+        epoch: grid.resize_notify_epoch(),
+        rows: grid.rows(),
+        cols: grid.cols(),
+        pixel_w,
+        pixel_h,
+    })
 }
 
 struct SinkRelease(Arc<crate::parse_sink::ParseSignals>);
@@ -2691,12 +2729,16 @@ impl SessionTask {
         }
         self.active_sub = Some(sub_id);
         let differs = |size: PtySize| {
+            let program = self.program_size(size);
             let core = self.session.lock_core();
-            size.rows != core.grid.rows() || size.cols != core.grid.cols()
+            size.rows != core.grid.rows()
+                || size.cols != core.grid.cols()
+                || (program.pixel_width, program.pixel_height) != core.grid.winsize_pixels()
         };
-        if let Some(size) = self.subs[i].desired_size
-            && differs(size)
-        {
+        let Some(size) = self.subs[i].desired_size else {
+            return;
+        };
+        if differs(size) {
             debug!(
                 sub = sub_id.0,
                 rows = size.rows,
@@ -2704,7 +2746,32 @@ impl SessionTask {
                 "size ownership transferred on input"
             );
             self.apply_size(size);
+            return;
         }
+        // The new owner's pixels can fill to the PTY's current extents
+        // while what it supplied (an unknown axis, say) differs: the
+        // announcement follows the owner without a PTY resize.
+        let supplied = (size.pixel_width, size.pixel_height);
+        {
+            let mut meta = self
+                .meta
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if (meta.pixel_w, meta.pixel_h) == supplied {
+                return;
+            }
+            (meta.pixel_w, meta.pixel_h) = supplied;
+        }
+        self.broadcast(|_sub| {
+            vec![OutEvent::Grid(GridMsg::Size {
+                dims: GridDims {
+                    rows: size.rows,
+                    cols: size.cols,
+                    pixel_w: size.pixel_width,
+                    pixel_h: size.pixel_height,
+                },
+            })]
+        });
     }
 
     /// `false` when the refused requester's notice could not be queued
@@ -2772,17 +2839,26 @@ impl SessionTask {
 
     /// Announced to every subscriber, the requester included: its
     /// client treats a same-dims resize as a no-op.
+    /// A pixel axis the resize leaves unknown keeps the current cell:
+    /// the nominal one would re-resolve every natural image extent for
+    /// a window that only stopped knowing its pixels.
+    fn program_size(&self, size: PtySize) -> PtySize {
+        crate::program_size(size, (self.session.cell_pixel_w, self.session.cell_pixel_h))
+    }
+
     fn apply_size(&mut self, size: PtySize) {
+        let program = self.program_size(size);
         // Floor division matches how producers derive cell size from
         // TIOCGWINSZ.
         let cell_px = (
-            size.pixel_width.checked_div(size.cols).unwrap_or(0),
-            size.pixel_height.checked_div(size.rows).unwrap_or(0),
+            program.pixel_width.checked_div(program.cols).unwrap_or(0),
+            program.pixel_height.checked_div(program.rows).unwrap_or(0),
         );
         let cell_px_changed = cell_px != (self.session.cell_pixel_w, self.session.cell_pixel_h);
         (self.session.cell_pixel_w, self.session.cell_pixel_h) = cell_px;
         {
-            // `refresh_meta` samples the grid, which holds no pixels.
+            // `refresh_meta` samples the grid, whose pixels are the
+            // filled ones, not the supplied ones the roster states.
             let mut meta = self
                 .meta
                 .lock()
@@ -2792,11 +2868,13 @@ impl SessionTask {
         }
         let shared = Arc::clone(&self.session.core);
         let mut core = shared.lock();
-        // The `DECSET 2048` report carries cells only, so a pixels-only
-        // resize moves nothing it would state.
-        if (core.grid.rows(), core.grid.cols()) != (size.rows, size.cols) {
+        let pixels = (program.pixel_width, program.pixel_height);
+        if (core.grid.rows(), core.grid.cols()) != (size.rows, size.cols)
+            || pixels != core.grid.winsize_pixels()
+        {
             self.resize_notify_dirty = true;
         }
+        core.grid.set_winsize_pixels(pixels);
         // The primary screen reflows (REQ-604); the alternate screen
         // trims/pads, its rows being a distinct surface rather than a
         // continuation of the shared scrollback.
@@ -2852,7 +2930,7 @@ impl SessionTask {
             self.pty_resized_over
                 .push((core.grid.rows(), core.grid.cols()));
         }
-        if let Err(err) = self.session.resizer.resize(size) {
+        if let Err(err) = self.session.resizer.resize(program) {
             warn!(?err, "pty resize failed");
         }
         self.apply_meta(meta);
@@ -2920,11 +2998,13 @@ impl SessionTask {
     }
 
     #[cfg(all(test, unix))]
-    fn for_tests(session: Session) -> Self {
+    fn for_tests(mut session: Session) -> Self {
         let (rows, cols) = {
             let core = session.lock_core();
             (core.grid.rows(), core.grid.cols())
         };
+        session.cell_pixel_w = crate::NOMINAL_CELL_PIXELS.0;
+        session.cell_pixel_h = crate::NOMINAL_CELL_PIXELS.1;
         let meta = Arc::new(StdMutex::new(SessionMeta {
             rows,
             cols,
@@ -3971,10 +4051,10 @@ mod tests {
         assert!(resize_to(&mut task, sub, 31, 121).is_none());
         assert!(task.sync_resize_notify_to_pty().is_none());
 
-        let sentinel = b"\x1b[48;31;121;0;0t";
+        let sentinel = b"\x1b[48;31;121;496;968t";
         let seen = capture_through(&path, sentinel).await;
         assert_eq!(
-            count_bytes(&seen, b"\x1b[48;30;120;0;0t"),
+            count_bytes(&seen, b"\x1b[48;30;120;480;960t"),
             1,
             "the set answers the geometry it landed on: {seen:?}",
         );
@@ -3983,6 +4063,116 @@ mod tests {
             1,
             "one report per geometry change, and none for a same-dims resize: {seen:?}",
         );
+    }
+
+    /// A program converting SGR-pixel reports back to cells divides by
+    /// the reported extents, so a font change that keeps the cell count
+    /// still owes a report.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn mode_2048_reports_a_change_of_the_pixel_extents_alone() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("pty-in");
+        let mut task = capture_task(&path).await;
+        let (sub, _rx) = attach_sub(&mut task, false);
+
+        assert!(resize_to(&mut task, sub, 30, 120).is_none());
+        set_mode_2048(&task, true);
+        assert!(task.sync_resize_notify_to_pty().is_none());
+        assert!(resize_px(&mut task, sub, (30, 120), (1200, 600)).is_none());
+        assert!(task.resize_notify_dirty, "the run loop owes the report");
+        assert!(task.sync_resize_notify_to_pty().is_none());
+
+        let sentinel = b"\x1b[48;30;120;600;1200t";
+        let seen = capture_through(&path, sentinel).await;
+        assert_eq!(
+            count_bytes(&seen, b"\x1b[48;30;120;480;960t"),
+            1,
+            "the set answers the nominal extents of a session no window sized: {seen:?}",
+        );
+        assert_eq!(count_bytes(&seen, sentinel), 1, "{seen:?}");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_resize_without_pixels_keeps_the_cell_a_window_supplied() {
+        let mut task = SessionTask::for_tests(session_with("read _x"));
+        let (sub, _rx) = attach_sub(&mut task, false);
+        assert!(resize_px(&mut task, sub, (30, 120), (1200, 600)).is_none());
+        assert!(resize_to(&mut task, sub, 40, 100).is_none());
+        assert_eq!(pty_pixels(&task), (1000, 800));
+    }
+
+    /// A supplied width under one pixel per column floors the cell to
+    /// `0`, which a later resize without pixels must not multiply.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_resize_without_pixels_after_a_sub_pixel_cell_fills_the_nominal_cell() {
+        let mut task = SessionTask::for_tests(session_with("read _x"));
+        let (sub, _rx) = attach_sub(&mut task, false);
+        assert!(resize_px(&mut task, sub, (30, 80), (1, 600)).is_none());
+        assert!(resize_to(&mut task, sub, 30, 80).is_none());
+        assert_eq!(pty_pixels(&task), (80 * crate::NOMINAL_CELL_PIXELS.0, 600));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_retained_cell_fills_an_unknown_axis_no_further_than_the_pixel_bound() {
+        let mut task = SessionTask::for_tests(session_with("read _x"));
+        let (sub, _rx) = attach_sub(&mut task, false);
+        assert!(resize_px(&mut task, sub, (30, 100), (32_000, 600)).is_none());
+        assert!(resize_to(&mut task, sub, 30, 2048).is_none());
+        assert_eq!(
+            pty_pixels(&task).0,
+            felis_protocol::messages::MAX_GRID_PIXELS
+        );
+    }
+
+    /// The new owner supplied no pixels, which fill to the previous owner's
+    /// extents: the PTY stays put while the roster states what the owner
+    /// supplied.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn size_ownership_moves_the_supplied_pixels_when_the_filled_ones_match() {
+        let mut task = SessionTask::for_tests(session_with("read _x"));
+        let (a, _rx_a) = attach_sub(&mut task, false);
+        let (b, mut rx_b) = attach_sub(&mut task, false);
+        press_key(&mut task, a, b"A");
+        assert!(resize_px(&mut task, a, (30, 120), (960, 480)).is_none());
+        assert!(resize_to(&mut task, b, 30, 120).is_none());
+        drain_events(&mut rx_b);
+        task.pty_steps.clear();
+
+        press_key(&mut task, b, b"B");
+        assert_eq!(pty_pixels(&task), (960, 480));
+        assert!(
+            !task.pty_steps.contains(&PtyStep::Resize),
+            "{:?}",
+            task.pty_steps
+        );
+        let meta = task.meta.lock().unwrap().clone();
+        assert_eq!((meta.pixel_w, meta.pixel_h), (0, 0));
+        assert!(drain_events(&mut rx_b).iter().any(|ev| matches!(
+            ev,
+            OutEvent::Grid(GridMsg::Size {
+                dims: GridDims {
+                    pixel_w: 0,
+                    pixel_h: 0,
+                    ..
+                }
+            })
+        )));
+    }
+
+    /// Two windows with one cell count but different fonts: the PTY,
+    /// and the report, follow the window that takes the size.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn size_ownership_moves_the_pixel_extents_at_an_unchanged_cell_count() {
+        let mut task = SessionTask::for_tests(session_with("read _x"));
+        let (a, _rx_a) = attach_sub(&mut task, false);
+        let (b, _rx_b) = attach_sub(&mut task, false);
+        press_key(&mut task, a, b"A");
+        assert!(resize_px(&mut task, a, (30, 120), (960, 480)).is_none());
+        assert!(resize_px(&mut task, b, (30, 120), (1200, 600)).is_none());
+        assert_eq!(pty_pixels(&task), (960, 480), "b does not own the size yet");
+
+        press_key(&mut task, b, b"B");
+        assert_eq!(pty_pixels(&task), (1200, 600));
     }
 
     /// A `DECSET 2048` that lands on a resize the reconcile has not
@@ -4013,10 +4203,10 @@ mod tests {
             task.pty_steps,
         );
 
-        let sentinel = b"\x1b[48;31;121;0;0t";
+        let sentinel = b"\x1b[48;31;121;496;968t";
         let seen = capture_through(&path, sentinel).await;
         assert_eq!(
-            count_bytes(&seen, b"\x1b[48;30;120;0;0t"),
+            count_bytes(&seen, b"\x1b[48;30;120;480;960t"),
             0,
             "the geometry the set left behind is never reported: {seen:?}",
         );
@@ -4042,7 +4232,7 @@ mod tests {
 
         let seen = capture_through(&path, b"Z").await;
         assert_eq!(
-            count_bytes(&seen, b"\x1b[48;30;120;0;0t"),
+            count_bytes(&seen, b"\x1b[48;30;120;480;960t"),
             2,
             "each set answers, even at an unchanged geometry: {seen:?}",
         );
@@ -4083,7 +4273,7 @@ mod tests {
             "the transfer's resize report must precede the keystroke that triggered it",
         );
         let seen = capture_through(&path, b"B").await;
-        let report = find_bytes(&seen, b"\x1b[48;30;120;0;0t").expect("the transfer notified");
+        let report = find_bytes(&seen, b"\x1b[48;30;120;480;960t").expect("the transfer notified");
         let keystroke = find_bytes(&seen, b"B").expect("the keystroke reached the PTY");
         assert!(
             report < keystroke,
@@ -4108,7 +4298,11 @@ mod tests {
         let (cmd_tx, cmd_rx) = mpsc::channel(8);
         let loop_done = tokio::spawn(run_session(task, cmd_rx));
 
-        let report = format!("\x1b[48;{rows};{cols};0;0t");
+        let report = format!(
+            "\x1b[48;{rows};{cols};{};{}t",
+            rows * crate::NOMINAL_CELL_PIXELS.1,
+            cols * crate::NOMINAL_CELL_PIXELS.0
+        );
         let seen = capture_through(&path, report.as_bytes()).await;
         assert_eq!(
             count_bytes(&seen, report.as_bytes()),
@@ -4232,11 +4426,25 @@ mod tests {
         assert_eq!(core.grid.in_band_resize_notify(), on);
     }
 
+    fn pty_pixels(task: &SessionTask) -> (u16, u16) {
+        task.session.lock_core().grid.winsize_pixels()
+    }
+
     fn resize_to(
         task: &mut SessionTask,
         sub: SubscriberId,
         rows: u32,
         cols: u32,
+    ) -> Option<EndReason> {
+        resize_px(task, sub, (rows, cols), (0, 0))
+    }
+
+    /// `pixels` is `(width, height)`.
+    fn resize_px(
+        task: &mut SessionTask,
+        sub: SubscriberId,
+        (rows, cols): (u32, u32),
+        (pixel_w, pixel_h): (u32, u32),
     ) -> Option<EndReason> {
         task.handle_input(
             sub,
@@ -4244,8 +4452,8 @@ mod tests {
                 dims: RequestedDims {
                     rows,
                     cols,
-                    pixel_w: 0,
-                    pixel_h: 0,
+                    pixel_w,
+                    pixel_h,
                 },
             },
         )
@@ -5630,15 +5838,15 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn a_cell_width_reported_late_re_resolves_only_the_width() {
+    async fn a_cell_width_change_re_resolves_only_the_width() {
         let mut task = SessionTask::for_tests(session_with("read _x"));
         let (_sub, mut rx) = attach_sub(&mut task, false);
-        task.apply_size(sized_cells(&task, (0, 20)));
+        task.apply_size(sized_cells(&task, (10, 20)));
         place_30x40(&task, 1, ",r=4");
         task.drain_effects().expect("effects drain");
         // r=4 of 20 px rows is 80 px tall, so the 30 x 40 image is 60 px
-        // wide: 60 one-pixel columns, then 8 columns of 8 px.
-        assert_eq!(placement_extent(&task.session.placements, 1), (60, 4));
+        // wide: 6 columns of 10 px, then 8 columns of 8 px.
+        assert_eq!(placement_extent(&task.session.placements, 1), (6, 4));
         drain_events(&mut rx);
 
         task.apply_size(sized_cells(&task, (8, 20)));
@@ -5658,11 +5866,11 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn the_first_cell_size_shrinks_an_extent_placed_without_one() {
+    async fn a_window_cell_size_re_resolves_an_extent_placed_at_the_nominal_cell() {
         let mut task = SessionTask::for_tests(session_with("read _x"));
         place_30x40(&task, 1, "");
         task.drain_effects().expect("effects drain");
-        assert_eq!(placement_extent(&task.session.placements, 1), (30, 40));
+        assert_eq!(placement_extent(&task.session.placements, 1), (4, 3));
 
         task.apply_size(sized_cells(&task, (10, 20)));
         assert_eq!(placement_extent(&task.session.placements, 1), (3, 2));

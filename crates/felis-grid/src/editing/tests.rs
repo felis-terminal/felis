@@ -1516,6 +1516,18 @@ fn ich_shifts_cells_right_and_blanks_gap_without_declrmm() {
     assert_eq!(g.cursor().col, 2);
 }
 
+/// The `DECSET 2048` report states the PTY winsize's pixel extents the
+/// daemon set, height first.
+#[test]
+fn resize_notify_report_states_the_winsize_pixels() {
+    let mut g = Grid::new(8, 10);
+    g.set_winsize_pixels((805, 170));
+    assert_eq!(
+        std::str::from_utf8(&g.resize_notify_report_bytes()).unwrap(),
+        "\x1b[48;8;10;170;805t"
+    );
+}
+
 /// Each `xterm_window_op` report arm emits its fixed wire bytes.
 #[test]
 fn xterm_window_op_report_arms_emit_their_fixed_replies() {

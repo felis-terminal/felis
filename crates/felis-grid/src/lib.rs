@@ -672,6 +672,9 @@ pub struct Grid {
     /// geometry, and a reset coalesced with a re-set inside one parse
     /// burst leaves no other trace that the promised answer is owed.
     resize_notify_epoch: u32,
+    /// The PTY winsize's pixel extents, `(width, height)`, which the
+    /// daemon sets; `0` where unknown. The grid's own size is in cells.
+    winsize_pixels: (u16, u16),
     /// Last OS color preference the client reported (`true` = dark);
     /// `DSR ? 996 n` before any report answers with the light default.
     os_dark: Option<bool>,
@@ -1034,6 +1037,7 @@ impl Grid {
             color_scheme_notify: false,
             in_band_resize_notify: false,
             resize_notify_epoch: 0,
+            winsize_pixels: (0, 0),
             os_dark: None,
             prompt_marks: Vec::new(),
             prompt_marks_pruned: 0,
@@ -1502,13 +1506,26 @@ impl Grid {
         self.resize_notify_epoch
     }
 
+    #[must_use]
+    pub const fn winsize_pixels(&self) -> (u16, u16) {
+        self.winsize_pixels
+    }
+
+    pub const fn set_winsize_pixels(&mut self, pixels: (u16, u16)) {
+        self.winsize_pixels = pixels;
+    }
+
     /// `CSI 48 ; rows ; cols ; height_px ; width_px t`, the report the
     /// daemon writes for the `DECSET 2048` set itself and for every later
-    /// geometry change. The pixel axes carry the `0` stub `CSI 14 t`
-    /// answers (docs/reference/protocols/vt-compliance.md).
+    /// geometry change.
     #[must_use]
     pub fn resize_notify_report_bytes(&self) -> Vec<u8> {
-        format!("\x1b[48;{};{};0;0t", self.screen.rows, self.screen.cols).into_bytes()
+        let (pixel_w, pixel_h) = self.winsize_pixels;
+        format!(
+            "\x1b[48;{};{};{pixel_h};{pixel_w}t",
+            self.screen.rows, self.screen.cols
+        )
+        .into_bytes()
     }
 
     #[must_use]

@@ -1651,7 +1651,9 @@ initial geometry: an **absent** `dims` means the daemon default (24 × 80) and p
 rows/cols axis outside the REQ-605a bounds, `0` among them, refuses the whole create with
 `CreateFailure::GeometryOutOfRange`, checked over the full `uint32` domain before the daemon mints an id or spawns
 anything. What admission accepts it keeps: the resulting `(rows, cols, pixel_w, pixel_h)` is the child's first winsize
-and the geometry every later surface reports, `SessionInfo::dims` included.
+and the geometry every later surface reports, `SessionInfo::dims` included. The one difference is the winsize's pixel
+axes: where the announced pixel is `0`, the PTY carries 8 × 16 pixels per cell, and a later resize that leaves a pixel
+axis `0` keeps the PTY's current cell on that axis.
 
 Each field falls back independently: a `cwd` or an `env` pair sent with an empty `command` applies to that default
 shell. A non-empty `cwd` must be absolute: a relative one draws an `AttachFailed` ("SpawnArgs: cwd must be absolute")

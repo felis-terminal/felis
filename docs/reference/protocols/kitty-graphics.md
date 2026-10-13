@@ -150,8 +150,8 @@ include `a=t/T/p/q`, `a=d` (basic and extended deletion), and `a=a/f/c` animatio
   pixel span at the source's aspect ratio, over the cell size, rounded up, and the image draws at that aspect-preserving
   size: a 101×100 image at `r=2` with 10×20 px cells takes 5 columns and draws 40.4×40 px. Like kitty, felis re-resolves
   an omitted axis whenever the cell size changes (font size, scale factor): an image with neither axis given keeps its
-  pixel size, and one with a single axis given keeps its aspect ratio as that axis follows the cell size. Until a client
-  has reported a cell size, one pixel counts as one cell.
+  pixel size, and one with a single axis given keeps its aspect ratio as that axis follows the cell size. Until a window
+  has reported a cell size, the cell is the 8 × 16 px the PTY's winsize carries ([ipc.md](../ipc.md) "CLI clients").
 - `z`: Z-index stacking order (negative behind text, positive above).
 - `C=1`: Prevent cursor motion after placement. Without it the cursor lands as in kitty: on the placed cell box's last
   row, one column right of it. A column past the right edge wraps to column 0 one row further down; a row past the

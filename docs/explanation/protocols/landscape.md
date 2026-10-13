@@ -34,12 +34,12 @@ goes away with it.
 window manipulation and pixel-geometry reporting is a non-goal), because the two carry opposite risks. `?2048` is a
 notification a program opts into: setting the mode draws one immediate report, and from then on the terminal pushes a
 report on every effective geometry change and on nothing else. The notification reports the session's own PTY geometry,
-with the pixel axes carrying the same `0` stub `CSI 14 t` answers, so the push never widens what a program can learn
-about the host. Over the `SIGWINCH` a PTY resize raises, delivery is in band: the new size arrives on the read stream
-the program is draining, in order against adjacent input. A `SIGWINCH` races that input, collapses rapid resizes into a
-single signal, and requires a `TIOCGWINSZ` round-trip to learn what the signal meant. That ordering matters more under
-felis than under a single-window terminal, because the daemon resizes a PTY for a window resize, for a
-`window retarget`, and when size ownership moves to another attached client. A window-geometry query, by contrast, is
+pixel axes included, which every program on the PTY can already read with `TIOCGWINSZ`, so the push never widens what a
+program can learn about the host. Over the `SIGWINCH` a PTY resize raises, delivery is in band: the new size arrives on
+the read stream the program is draining, in order against adjacent input. A `SIGWINCH` races that input, collapses rapid
+resizes into a single signal, and requires a `TIOCGWINSZ` round-trip to learn what the signal meant. That ordering
+matters more under felis than under a single-window terminal, because the daemon resizes a PTY for a window resize, for
+a `window retarget`, and when size ownership moves to another attached client. A window-geometry query, by contrast, is
 pulled at any moment by any program that inherits the PTY, and on a terminal that answers it honestly it replies with
 the host's pixel extents, which is desktop information the shell has no claim on. The report-only XTWINOPS arms
 (`CSI 11 t`, `CSI 18 t` / `19 t`, `CSI 20 t` / `21 t`) pass the same test from the other side: each answers from grid

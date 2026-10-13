@@ -57,6 +57,9 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 
 ### Fixed
 
+- A Textual app with mouse support no longer crashes on its first click. The `?2048` resize report now carries the PTY's
+  pixel extents instead of `0`, and reports a change of those extents alone; a session no window has sized gets 8 × 16
+  pixels per cell in its winsize and in the report.
 - A `felis` verb piped into a reader that quits early (`felis sessions capture <id> | head -1`) no longer panics with
   "failed printing to stdout: Broken pipe". It stops at that write and exits `0`.
 - A `felis bridge` stream canceled by a `cancel` op or by closing stdin no longer ends with a clean `end` whose `count`

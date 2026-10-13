@@ -74,7 +74,7 @@ pub struct SessionState {
     pub shm_segments: Vec<String>,
     pub reported_focus: bool,
     pub reported_os_dark: bool,
-    pub reported_resize: Option<(u32, (u16, u16))>,
+    pub reported_resize: Option<crate::serve::session_task::ReportedResize>,
     /// How long the session had been idle, measured at the dump.
     pub idle_ms: u64,
     pub last_notification: Option<NotificationDump>,
@@ -335,7 +335,13 @@ mod tests {
             placements: state.placements.clone(),
         });
         state.reported_focus = true;
-        state.reported_resize = Some((2, (24, 80)));
+        state.reported_resize = Some(crate::serve::session_task::ReportedResize {
+            epoch: 2,
+            rows: 24,
+            cols: 80,
+            pixel_w: 640,
+            pixel_h: 384,
+        });
         state
     }
 

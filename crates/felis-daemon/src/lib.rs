@@ -43,6 +43,31 @@ pub const DEFAULT_SIZE: Size = Size {
     pixel_height: 0,
 };
 
+/// The cell a program is told while no window has supplied pixel
+/// extents, so a ratio it derives from them never divides by zero. A
+/// 2048-cell axis at this cell stays within `MAX_GRID_PIXELS`.
+pub(crate) const NOMINAL_CELL_PIXELS: (u16, u16) = (8, 16);
+
+/// `size` as the program sees it: an unknown (`0`) pixel axis is filled
+/// at `cell` pixels per cell, or at the nominal cell where `cell` is `0`
+/// (a supplied extent smaller than its cell count floors to that).
+pub(crate) fn program_size(size: Size, cell: (u16, u16)) -> Size {
+    let fill = |pixels: u16, cells: u16, cell: u16, nominal: u16| {
+        if pixels != 0 {
+            return pixels;
+        }
+        let cell = if cell == 0 { nominal } else { cell };
+        cells
+            .saturating_mul(cell)
+            .min(felis_protocol::messages::MAX_GRID_PIXELS)
+    };
+    Size {
+        pixel_width: fill(size.pixel_width, size.cols, cell.0, NOMINAL_CELL_PIXELS.0),
+        pixel_height: fill(size.pixel_height, size.rows, cell.1, NOMINAL_CELL_PIXELS.1),
+        ..size
+    }
+}
+
 /// The canonical identity line for `--version`
 /// (`docs/reference/workspace.md` "Versioning"). The revision lives
 /// here, not in `TERM_PROGRAM_VERSION`: programs inside the terminal
@@ -175,10 +200,15 @@ impl SpawnedPty {
         Self::spawn_sized(command, DEFAULT_SIZE)
     }
 
-    /// The child's first winsize is `size`: a resize after the spawn
-    /// races the child's first `TIOCGWINSZ`.
+    /// The child's first winsize is `size`, unknown pixel axes filled
+    /// with [`NOMINAL_CELL_PIXELS`]: a resize after the spawn races the
+    /// child's first `TIOCGWINSZ`.
     pub fn spawn_sized(command: Command, size: Size) -> Result<Self, SessionError> {
+        let size = program_size(size, NOMINAL_CELL_PIXELS);
         let mut parse_core = ParseCore::new(size.rows, size.cols);
+        parse_core
+            .grid
+            .set_winsize_pixels((size.pixel_width, size.pixel_height));
         if let Some(term) = command
             .get_envs()
             .find(|(key, _)| *key == "TERM")
@@ -367,6 +397,48 @@ mod tests {
         );
     }
 
+    #[test]
+    fn program_size_fills_only_an_unknown_pixel_axis() {
+        let size = Size {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 500,
+        };
+        let program = program_size(size, NOMINAL_CELL_PIXELS);
+        assert_eq!((program.pixel_width, program.pixel_height), (640, 500));
+    }
+
+    #[test]
+    fn program_size_never_fills_an_unknown_axis_with_zero_or_past_the_bound() {
+        use felis_protocol::messages::MAX_GRID_PIXELS;
+        let size = Size {
+            rows: 30,
+            cols: 2048,
+            pixel_width: 0,
+            pixel_height: 0,
+        };
+        let program = program_size(size, (320, 0));
+        assert_eq!(
+            (program.pixel_width, program.pixel_height),
+            (MAX_GRID_PIXELS, 30 * NOMINAL_CELL_PIXELS.1),
+        );
+    }
+
+    #[test]
+    fn the_nominal_cell_keeps_the_largest_grid_within_the_pixel_bound() {
+        use felis_protocol::messages::{MAX_GRID_COLS, MAX_GRID_PIXELS, MAX_GRID_ROWS};
+        let size = Size {
+            rows: MAX_GRID_ROWS,
+            cols: MAX_GRID_COLS,
+            pixel_width: 0,
+            pixel_height: 0,
+        };
+        let program = program_size(size, NOMINAL_CELL_PIXELS);
+        assert!(program.pixel_width <= MAX_GRID_PIXELS);
+        assert!(program.pixel_height <= MAX_GRID_PIXELS);
+    }
+
     #[cfg(unix)]
     #[test]
     fn a_sized_spawn_creates_the_pty_at_the_geometry() {
@@ -391,6 +463,35 @@ mod tests {
         );
         let core = spawned.core.lock();
         assert_eq!((core.grid.rows(), core.grid.cols()), (40, 100));
+    }
+
+    /// A session no window has sized still hands its child pixel
+    /// extents to divide by.
+    #[cfg(unix)]
+    #[test]
+    fn a_sized_spawn_without_pixels_fills_the_nominal_cell() {
+        let mut cmd = Command::new("/bin/sh");
+        cmd.args(["-c", "exit 0"]);
+        let size = Size {
+            rows: 40,
+            cols: 100,
+            pixel_width: 0,
+            pixel_height: 0,
+        };
+        let spawned = SpawnedPty::spawn_sized(cmd, size).expect("spawn /bin/sh");
+        let winsize = rustix::termios::tcgetwinsize(spawned.resizer.master_fd()).expect("winsize");
+        assert_eq!(
+            (
+                winsize.ws_row,
+                winsize.ws_col,
+                winsize.ws_xpixel,
+                winsize.ws_ypixel
+            ),
+            (40, 100, 800, 640),
+        );
+        let core = spawned.core.lock();
+        assert_eq!((core.grid.rows(), core.grid.cols()), (40, 100));
+        assert_eq!(core.grid.winsize_pixels(), (800, 640));
     }
 
     #[cfg(windows)]
