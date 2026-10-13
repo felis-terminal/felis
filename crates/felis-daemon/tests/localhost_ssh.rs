@@ -1,7 +1,7 @@
 //! `felis-daemon relay` through a real `ssh` hop against a test-owned
 //! sshd (docs/reference/ipc.md "Cross-host carrier: SSH stdio").
-//! Skips when the OpenSSH tooling is missing; the dev shell provides
-//! it. `cross_host_stdio.rs` covers the same wire without the hop.
+//! Missing OpenSSH tooling fails the tests; the dev shell provides it. `cross_host_stdio.rs` covers
+//! the same wire without the hop.
 
 #![cfg(unix)]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -17,7 +17,7 @@ use std::time::Duration;
 use felis_client_core::{Offer, ShadowScreen, connect};
 
 mod common;
-use common::{daemon_bin, resolve_binary, shadow_contains, wait_connectable};
+use common::{daemon_bin, require_tool, shadow_contains, wait_connectable};
 use felis_protocol::{
     ConnectionMode, MessageKind, codec,
     messages::{
@@ -29,6 +29,29 @@ use felis_protocol::{
 use felis_transport::framing::{FrameReader, FrameWriter};
 use felis_transport::{StdioSession, spawn_command};
 use tokio::io::{AsyncRead, AsyncWrite};
+
+/// `false` when sshd exited during startup and `may_retry` allows
+/// another port; an exit on the last attempt fails the test.
+async fn wait_for_sshd(sshd: &mut tokio::process::Child, port: u16, may_retry: bool) -> bool {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Some(status) = sshd.try_wait().unwrap() {
+            assert!(may_retry, "sshd exited during startup: {status}");
+            return false;
+        }
+        if tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .is_ok()
+        {
+            return true;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "sshd did not accept on 127.0.0.1:{port} within 10 s"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
 
 struct SshFixture {
     dir: tempfile::TempDir,
@@ -42,23 +65,11 @@ struct SshFixture {
 
 impl SshFixture {
     async fn spawn() -> Option<Self> {
-        let Some(sshd_bin) = resolve_binary("sshd") else {
-            eprintln!("skipping: sshd not on PATH (enter the dev shell for openssh)");
-            return None;
-        };
-        let Some(ssh) = resolve_binary("ssh") else {
-            eprintln!("skipping: ssh not on PATH");
-            return None;
-        };
-        let Some(keygen) = resolve_binary("ssh-keygen") else {
-            eprintln!("skipping: ssh-keygen not on PATH");
-            return None;
-        };
+        let sshd_bin = require_tool("sshd");
+        let ssh = require_tool("ssh");
+        let keygen = require_tool("ssh-keygen");
         // A non-root sshd can only auth its own uid.
-        let Ok(user) = std::env::var("USER") else {
-            eprintln!("skipping: USER is unset, cannot derive the ssh login name");
-            return None;
-        };
+        let user = std::env::var("USER").expect("USER names the ssh login");
         let dir = tempfile::tempdir().expect("create sshd fixture dir");
         // REQ-107: the daemon socket this fixture holds needs a 0700
         // parent this uid owns, and `tempdir` follows the umask.
@@ -76,60 +87,52 @@ impl SshFixture {
         let authorized_keys = dir.path().join("authorized_keys");
         std::fs::write(&authorized_keys, &client_pub).unwrap();
 
-        let port = std::net::TcpListener::bind(("127.0.0.1", 0))
-            .unwrap()
-            .local_addr()
-            .unwrap()
-            .port();
-
-        // StrictModes off: the tempdir's ancestors (a sticky /tmp) fail
-        // sshd's ownership walk. UsePAM off: a non-root sshd cannot run
-        // PAM session hooks.
-        let config_path = dir.path().join("sshd_config");
-        let config = format!(
-            "Port {port}\n\
-             ListenAddress 127.0.0.1\n\
-             HostKey {host_key}\n\
-             PidFile none\n\
-             AuthorizedKeysFile {auth}\n\
-             StrictModes no\n\
-             UsePAM no\n\
-             PasswordAuthentication no\n\
-             KbdInteractiveAuthentication no\n\
-             LogLevel VERBOSE\n",
-            host_key = host_key.display(),
-            auth = authorized_keys.display(),
-        );
-        std::fs::write(&config_path, config).unwrap();
-
         let host_pub = std::fs::read_to_string(host_key.with_extension("pub")).unwrap();
+        let config_path = dir.path().join("sshd_config");
         let known_hosts = dir.path().join("known_hosts");
-        std::fs::write(&known_hosts, format!("[127.0.0.1]:{port} {host_pub}")).unwrap();
+        // The probe listener drops before sshd binds, so another process
+        // can take the port in between; sshd then exits and a fresh port
+        // is tried.
+        let mut attempts = 0;
+        let (port, sshd) = loop {
+            attempts += 1;
+            let port = std::net::TcpListener::bind(("127.0.0.1", 0))
+                .unwrap()
+                .local_addr()
+                .unwrap()
+                .port();
 
-        // Without -D sshd daemonizes and kill_on_drop reaps the wrong
-        // process.
-        let mut cmd = tokio::process::Command::new(&sshd_bin);
-        cmd.arg("-D").arg("-e").arg("-f").arg(&config_path);
-        cmd.kill_on_drop(true);
-        let mut sshd = cmd.spawn().expect("spawn sshd");
-
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-        loop {
-            if let Some(status) = sshd.try_wait().unwrap() {
-                panic!("sshd exited during startup: {status}");
-            }
-            if tokio::net::TcpStream::connect(("127.0.0.1", port))
-                .await
-                .is_ok()
-            {
-                break;
-            }
-            assert!(
-                tokio::time::Instant::now() < deadline,
-                "sshd did not accept on 127.0.0.1:{port} within 10 s"
+            // StrictModes off: the tempdir's ancestors (a sticky /tmp)
+            // fail sshd's ownership walk. UsePAM off: a non-root sshd
+            // cannot run PAM session hooks.
+            let config = format!(
+                "Port {port}\n\
+                 ListenAddress 127.0.0.1\n\
+                 HostKey {host_key}\n\
+                 PidFile none\n\
+                 AuthorizedKeysFile {auth}\n\
+                 StrictModes no\n\
+                 UsePAM no\n\
+                 PasswordAuthentication no\n\
+                 KbdInteractiveAuthentication no\n\
+                 LogLevel VERBOSE\n",
+                host_key = host_key.display(),
+                auth = authorized_keys.display(),
             );
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
+            std::fs::write(&config_path, config).unwrap();
+            std::fs::write(&known_hosts, format!("[127.0.0.1]:{port} {host_pub}")).unwrap();
+
+            // Without -D sshd daemonizes and kill_on_drop reaps the wrong
+            // process.
+            let mut cmd = tokio::process::Command::new(&sshd_bin);
+            cmd.arg("-D").arg("-e").arg("-f").arg(&config_path);
+            cmd.kill_on_drop(true);
+            let mut sshd = cmd.spawn().expect("spawn sshd");
+
+            if wait_for_sshd(&mut sshd, port, attempts < 3).await {
+                break (port, sshd);
+            }
+        };
 
         let fixture = Self {
             dir,
@@ -314,10 +317,7 @@ async fn ssh_session_echoes_keystrokes_back_through_the_hop() {
     };
     // Absolute path: the daemon inherits sshd's minimal environment,
     // whose PATH need not contain coreutils (NixOS, notably).
-    let Some(cat) = resolve_binary("cat") else {
-        eprintln!("skipping: cat not on PATH");
-        return;
-    };
+    let cat = require_tool("cat");
     let (socket, _daemon) = fx.spawn_persistent_daemon().await;
     let (mut reader, mut writer) = prefaced(
         spawn_command(fx.ssh_command(&format!(
@@ -382,10 +382,7 @@ async fn ssh_link_drop_preserves_the_persistent_daemon() {
     let Some(fx) = SshFixture::spawn().await else {
         return;
     };
-    let Some(cat) = resolve_binary("cat") else {
-        eprintln!("skipping: cat not on PATH");
-        return;
-    };
+    let cat = require_tool("cat");
     let (socket, mut daemon) = fx.spawn_persistent_daemon().await;
 
     let remote = format!("'{}' relay --socket '{}'", daemon_bin(), socket.display());

@@ -14,7 +14,7 @@ use super::{ClusterGlyph, GlyphIndex, GridWalker, ShapeFrame, ShapedCell};
 
 fn stack() -> FontStack {
     static FONT: OnceLock<Arc<Font>> = OnceLock::new();
-    let font = FONT.get_or_init(|| Arc::new(Font::load_default().expect("system monospace font")));
+    let font = FONT.get_or_init(|| Arc::new(Font::load_test_font()));
     FontStack::new(Arc::clone(font))
 }
 

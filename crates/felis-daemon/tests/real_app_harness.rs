@@ -1,26 +1,25 @@
 //! Real-binary integration harness: the daemon over an in-memory
 //! duplex carrier, a real TUI as the session's child, and the
 //! `GridMsg` stream mirrored into a `ShadowScreen` with per-variant
-//! frame counters. Each test skips when its binary is not on `PATH`.
+//! frame counters. A test whose binary is not on `PATH` fails; the dev
+//! shell provides them.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 #![expect(
     clippy::manual_let_else,
-    clippy::print_stderr,
-    reason = "integration harness: eprintln! is intentional test diagnostics; explicit match reads clearly"
+    reason = "integration harness: explicit match reads clearly"
 )]
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use felis_client_core::ShadowScreen;
 
 mod common;
+use common::require_tool;
 #[cfg(unix)]
-use common::shadow_contains;
-use common::{resolve_binary, shadow_rows};
+use common::{resolve_binary, shadow_contains, shadow_rows};
 use felis_daemon::pool::SessionPool;
 use felis_daemon::serve::{DaemonCaps, SessionFactory, handle_stream};
 use felis_grid::{Cell, Grapheme};
@@ -315,23 +314,13 @@ impl Drop for RealAppSession {
     }
 }
 
-fn skip_if_missing(binary: &str) -> Option<PathBuf> {
-    if let Some(p) = resolve_binary(binary) {
-        Some(p)
-    } else {
-        eprintln!("skipping: {binary} not found on PATH");
-        None
-    }
-}
-
 /// The real `less` paging through the pipeline without a panic or
 /// stall (a `Scrolled` frame or a quiet burst are both
 /// protocol-correct).
+#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn less_pages_through_long_stdin() {
-    let Some(less) = skip_if_missing("less") else {
-        return;
-    };
+    let less = require_tool("less");
 
     // `-X` keeps less off the alt screen so it stays interactive.
     let mut cmd = Command::new("/bin/sh");
@@ -508,10 +497,7 @@ async fn profile_cat_throughput() {
         return;
     }
 
-    let cat = match skip_if_missing("cat") {
-        Some(p) => p,
-        None => return,
-    };
+    let cat = require_tool("cat");
     // `FELIS_CAT_ITERS` repeats the burst so a `samply` run gets enough
     // samples; one cat is ~50 ms.
     let iters: u32 = std::env::var("FELIS_CAT_ITERS")
@@ -590,10 +576,7 @@ async fn profile_cat_pull_paced() {
         eprintln!("skipping: FELIS_CAT_FILE is empty or unreadable");
         return;
     }
-    let cat = match skip_if_missing("cat") {
-        Some(p) => p,
-        None => return,
-    };
+    let cat = require_tool("cat");
     let iters: u32 = std::env::var("FELIS_CAT_ITERS")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -683,17 +666,12 @@ async fn profile_echo_latency() {
 
     const SAMPLES: usize = 200;
 
-    if skip_if_missing("sh").is_none() {
-        return;
-    }
+    require_tool("sh");
     // /usr/bin:/bin holds neither `stty` nor `cat` on NixOS.
-    let Some(coreutils_dir) = skip_if_missing("cat")
-        .as_deref()
-        .and_then(std::path::Path::parent)
-        .map(std::path::Path::to_path_buf)
-    else {
-        return;
-    };
+    let coreutils_dir = require_tool("cat")
+        .parent()
+        .expect("a PATH entry has a parent directory")
+        .to_path_buf();
     let pull = std::env::var("FELIS_ECHO_PULL").is_ok_and(|v| v != "0");
     // `-icanon -echo` makes `cat`'s read→write the single per-char
     // echo; the line discipline would echo first.
@@ -915,11 +893,10 @@ async fn explicit_su_directive_emits_scrolled_frame() {
 /// nvim's TUI startup (`-c qall!`) runs through the cursor and cell
 /// paths. Whether it flips the alt screen is version-dependent (some
 /// `nvim -u NONE` builds skip ?1049), so that is not asserted.
+#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn nvim_startup_emits_cursor_and_cell_frames() {
-    let Some(nvim) = skip_if_missing("nvim") else {
-        return;
-    };
+    let nvim = require_tool("nvim");
 
     let mut cmd = Command::new(nvim);
     cmd.args(["-u", "NONE", "-c", "qall!"]);

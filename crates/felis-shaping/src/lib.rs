@@ -30,7 +30,7 @@ mod provider;
 
 use presentation::is_emoji_presentation;
 pub use provider::MONOSPACE_FALLBACK_FAMILIES;
-#[cfg(any(not(target_os = "linux"), test))]
+#[cfg(not(target_os = "linux"))]
 use provider::system_db;
 use provider::{BOLD_WEIGHT, FaceProvider, FaceSource, LoadedAs, REGULAR_WEIGHT};
 
@@ -54,6 +54,18 @@ type FontBytes = Arc<dyn AsRef<[u8]> + Send + Sync>;
 /// Single-sourced so `flake.nix`'s pinned test-font dir, the loader, and
 /// every feature test agree on the face.
 pub const TEST_FONT_FAMILY: &str = "Monaspace Neon";
+
+/// The pinned test-font set `$FELIS_TEST_FONT_DIR` names; panics when
+/// it is unset.
+#[cfg(any(test, feature = "testing"))]
+#[must_use]
+pub fn test_font_dir() -> std::path::PathBuf {
+    std::env::var_os("FELIS_TEST_FONT_DIR")
+        .unwrap_or_else(|| {
+            panic!("FELIS_TEST_FONT_DIR is unset: run the tests in the dev shell, which sets it")
+        })
+        .into()
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct FontStyle {
@@ -137,22 +149,22 @@ impl Font {
         covers
     }
 
-    /// Load the pinned OpenType-feature probe font from `$FELIS_TEST_FONT_DIR`.
-    ///
-    /// Not a system-font probe: probing skips silently on hosts without a
-    /// ligature font. Panics if the env var is set but the family is absent.
+    /// The pinned probe font; panics when the fixture is absent.
+    #[cfg(any(test, feature = "testing"))]
     #[must_use]
-    pub fn try_load_test_font() -> Option<Self> {
-        let dir = std::path::PathBuf::from(std::env::var_os("FELIS_TEST_FONT_DIR")?);
+    pub fn load_test_font() -> Self {
+        Self::load_test_font_from(&test_font_dir())
+    }
+
+    fn load_test_font_from(dir: &std::path::Path) -> Self {
         let mut db = fontdb::Database::new();
-        db.load_fonts_dir(&dir);
-        let font = Self::try_load_with(&db, TEST_FONT_FAMILY).unwrap_or_else(|_| {
+        db.load_fonts_dir(dir);
+        Self::try_load_with(&db, TEST_FONT_FAMILY).unwrap_or_else(|_| {
             panic!(
-                "FELIS_TEST_FONT_DIR={} is set but {TEST_FONT_FAMILY:?} did not load",
+                "{TEST_FONT_FAMILY:?} did not load from FELIS_TEST_FONT_DIR={}",
                 dir.display()
             )
-        });
-        Some(font)
+        })
     }
 
     /// Load the test font when `$FELIS_TEST_FONT_DIR` is set, else default.
@@ -160,7 +172,9 @@ impl Font {
     /// Benchmarks load through this to prevent host-dependent baselines and
     /// failures on font-less CI runners.
     pub fn load_test_font_or_default() -> Result<Self, ShapingError> {
-        Self::try_load_test_font().map_or_else(Self::load_default, Ok)
+        std::env::var_os("FELIS_TEST_FONT_DIR").map_or_else(Self::load_default, |dir| {
+            Ok(Self::load_test_font_from(std::path::Path::new(&dir)))
+        })
     }
 
     fn load_face_id<P: FaceProvider>(provider: &P, id: P::Id) -> Result<Self, ShapingError> {
@@ -751,11 +765,11 @@ impl FontStack {
     /// so a fallback-dependent test sees the same faces on every host.
     #[cfg(any(test, feature = "testing"))]
     #[must_use]
-    pub fn try_pinned_test_stack() -> Option<Self> {
-        let dir = std::env::var_os("FELIS_TEST_FONT_DIR")?;
+    pub fn pinned_test_stack() -> Self {
         let mut db = fontdb::Database::new();
-        db.load_fonts_dir(std::path::PathBuf::from(dir));
-        Self::auto_discover_in(&db, None, &[], &[], &StyleFaces::default()).ok()
+        db.load_fonts_dir(test_font_dir());
+        Self::auto_discover_in(&db, None, &[], &[], &StyleFaces::default())
+            .unwrap_or_else(|e| panic!("the pinned set has no monospace face: {e}"))
     }
 
     #[must_use]
@@ -1771,6 +1785,13 @@ impl Shaper {
 }
 
 #[cfg(test)]
+#[cfg_attr(
+    windows,
+    allow(
+        dead_code,
+        reason = "the pinned-font tests are compiled out on Windows"
+    )
+)]
 mod tests {
     use fontdb::Database;
     use proptest::prelude::*;
@@ -1778,18 +1799,58 @@ mod tests {
     use super::*;
     use crate::provider::ResolvedFace;
 
+    /// The pinned set behind the provider [`system_provider`] would
+    /// build, with the `monospace` generic naming the probe family as a
+    /// host configuration would name its own.
+    #[cfg(target_os = "linux")]
+    fn pinned_system() -> provider::fontconfig::Fontconfig {
+        provider::fontconfig::pinned_config(
+            &format!(
+                "<alias><family>monospace</family>\
+                 <prefer><family>{TEST_FONT_FAMILY}</family></prefer></alias>"
+            ),
+            "en",
+        )
+        .expect("libfontconfig loads on Linux")
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn pinned_system() -> Database {
+        let mut db = Database::new();
+        db.load_fonts_dir(test_font_dir());
+        db.set_monospace_family(TEST_FONT_FAMILY);
+        db
+    }
+
+    /// [`FontStack::auto_discover`] over the pinned set.
+    fn discover(
+        primary: Option<&str>,
+        features: &[String],
+        fallbacks: &[FaceSpec],
+        styles: &StyleFaces<'_>,
+    ) -> Result<FontStack, ShapingError> {
+        FontStack::auto_discover_in(&pinned_system(), primary, features, fallbacks, styles)
+    }
+
     fn font() -> Font {
-        Font::load_default().expect("load font")
+        Font::load_test_font()
     }
 
     fn stack() -> FontStack {
-        FontStack::auto_discover(None, &[], &[], &StyleFaces::default()).expect("primary must load")
+        discover(None, &[], &[], &StyleFaces::default()).expect("primary must load")
     }
 
+    /// The family of the pinned CJK subset, which maps U+845B and its
+    /// ideographic variation sequences alone.
+    const PINNED_CJK_FAMILY: &str = "Noto Sans CJK JP";
+
+    #[cfg(not(windows))]
     #[test]
-    fn loads_system_monospace_font() {
-        // CI must provide a fontconfig DB with at least one monospace family.
-        let font = Font::load_default().expect("load font");
+    fn the_default_monospace_face_loads_with_nonzero_metrics() {
+        let provider = pinned_system();
+        let (id, family) = provider.default_monospace().expect("a monospace face");
+        assert_eq!(family, TEST_FONT_FAMILY);
+        let font = Font::load_face_id(&provider, id).expect("load font");
         let metrics = font.cell_metrics(16.0);
         assert!(metrics.width > 0);
         assert!(metrics.height > 0);
@@ -1865,6 +1926,7 @@ mod tests {
         }
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn rasterizes_capital_a() {
         let font = font();
@@ -1879,6 +1941,7 @@ mod tests {
 
     /// A mask glyph comes back as `Coverage`; the renderer routes it to
     /// the `R8` atlas on this tag.
+    #[cfg(not(windows))]
     #[test]
     fn mask_glyph_rasterizes_as_coverage() {
         let font = font();
@@ -1889,22 +1952,17 @@ mod tests {
         );
     }
 
-    /// A symbol only the color-emoji font covers (⏸ U+23F8) rasterizes
-    /// as `Rgba`, not collapsed to a mask (the ⏸/⏺ solid-square
-    /// regression). Skips when no color face covers it.
+    /// A color-face glyph (⏸ U+23F8) rasterizes as `Rgba`, not collapsed
+    /// to a mask (the ⏸/⏺ solid-square regression).
+    #[cfg(not(windows))]
     #[test]
     fn color_emoji_rasterizes_as_rgba_not_a_mask() {
-        let stack = stack();
-        let font = stack.resolve('⏸', FontStyle::REGULAR);
-        if !font.has_glyph('⏸') {
-            eprintln!("no font covers U+23F8 on this host; skipping color-emoji test");
-            return;
-        }
-        if !font.has_color_glyphs() {
-            eprintln!("U+23F8 resolves to a monochrome face on this host; skipping");
-            return;
-        }
-        let bitmap = rasterize(&mut ScaleContext::new(), font, '⏸', 32.0);
+        let dir = test_font_dir();
+        let mut db = Database::new();
+        db.load_fonts_dir(dir);
+        let font = Font::try_load_with(&db, "Noto Color Emoji").expect("pinned color face");
+        assert!(font.has_color_glyphs() && font.has_glyph('⏸'));
+        let bitmap = rasterize(&mut ScaleContext::new(), &font, '⏸', 32.0);
         assert!(
             bitmap.is_color(),
             "a color-face U+23F8 must rasterize as RGBA, not collapse to a mask",
@@ -1913,6 +1971,7 @@ mod tests {
 
     /// A base plus combining mark shapes without panicking. The GPOS
     /// offset is font-dependent, so no portable offset assertion exists.
+    #[cfg(not(windows))]
     #[test]
     fn combining_mark_cluster_shapes_without_panicking() {
         let stack = stack();
@@ -1925,17 +1984,17 @@ mod tests {
     }
 
     /// ❤️‍🔥 shapes against the color-emoji face, not the mono face a bare
-    /// U+2764 resolves to, or GSUB never forms the ligature. Skips when
-    /// the host has no distinct emoji face.
+    /// U+2764 resolves to, or GSUB never forms the ligature.
+    #[cfg(not(windows))]
     #[test]
     fn emoji_zwj_with_text_default_base_shapes_against_emoji_face() {
         let stack = stack();
         let heart_face = stack.resolve_styled_index('\u{2764}', FontStyle::REGULAR);
         let emoji_face = stack.resolve_styled_index('\u{1F525}', FontStyle::REGULAR);
-        if heart_face == emoji_face {
-            eprintln!("host lacks a distinct emoji face for U+1F525; skipping face-anchor test");
-            return;
-        }
+        assert_ne!(
+            heart_face, emoji_face,
+            "the pinned set keeps U+2764 off the emoji face"
+        );
         let mut shaper = Shaper::new();
         let cluster = shaper.shape_cluster(
             &stack,
@@ -1951,18 +2010,18 @@ mod tests {
 
     /// A bare ❤️ (VS16) resolves to the color face; the same base without
     /// VS16 keeps its mono face.
+    #[cfg(not(windows))]
     #[test]
     fn standalone_vs16_symbol_prefers_the_color_face() {
         let stack = stack();
         let plain = stack.resolve_styled_index('\u{2764}', FontStyle::REGULAR);
-        let Some(color_face) = stack.resolve_color_index('\u{2764}', FontStyle::REGULAR) else {
-            eprintln!("host has no color face covering U+2764; skipping VS16 color test");
-            return;
-        };
-        if plain == color_face {
-            eprintln!("U+2764 already resolves color on this host; nothing to correct");
-            return;
-        }
+        let color_face = stack
+            .resolve_color_index('\u{2764}', FontStyle::REGULAR)
+            .expect("the pinned color face covers U+2764");
+        assert_ne!(
+            plain, color_face,
+            "the pinned set resolves a bare U+2764 to a mono face"
+        );
         let mut shaper = Shaper::new();
         let with_vs16 = shaper.shape_cluster(&stack, 32.0, FontStyle::REGULAR, "\u{2764}\u{FE0F}");
         assert_eq!(
@@ -1976,6 +2035,7 @@ mod tests {
         );
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn cache_returns_stable_results() {
         let font = font();
@@ -1988,6 +2048,7 @@ mod tests {
 
     /// Once `bytes_used` crosses the cap, inserts evict other entries
     /// but keep the just-inserted one.
+    #[cfg(not(windows))]
     #[test]
     fn byte_cap_evicts_old_entries_but_keeps_the_newest() {
         let font = font();
@@ -2019,6 +2080,7 @@ mod tests {
     /// A cap wide enough for several entries is trimmed to the cap, not
     /// flushed. Five sizings of one glyph cost the same bytes, so the
     /// surviving count is exact.
+    #[cfg(not(windows))]
     #[test]
     fn byte_cap_evicts_only_down_to_the_cap_when_it_holds_several_entries() {
         let font = font();
@@ -2048,6 +2110,7 @@ mod tests {
         );
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn blank_bitmaps_count_against_the_byte_cap() {
         let font = font();
@@ -2070,6 +2133,7 @@ mod tests {
     }
 
     /// Distinct `SizingKey` values produce distinct cache entries.
+    #[cfg(not(windows))]
     #[test]
     fn sizing_key_prevents_collisions() {
         let font = font();
@@ -2100,6 +2164,7 @@ mod tests {
         assert!((SizingKey::default().effective_scale() - 1.0).abs() < 1e-5);
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn default_sizing_wrapper_shares_an_entry_with_explicit_default() {
         let font = font();
@@ -2111,6 +2176,7 @@ mod tests {
         assert_eq!(SizingKey::default(), SizingKey::new(1, 0, 0, 0, 0, 0));
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn space_is_blank() {
         let font = font();
@@ -2121,9 +2187,10 @@ mod tests {
 
     /// A typo in `font.family` falls back to `Family::Monospace` and
     /// picks the same face an unset `font.family` would.
+    #[cfg(not(windows))]
     #[test]
     fn unknown_primary_family_falls_back_to_monospace() {
-        let fallback = FontStack::auto_discover(
+        let fallback = discover(
             Some("definitely-not-a-real-family-xyz123"),
             &[],
             &[],
@@ -2147,14 +2214,12 @@ mod tests {
 
     /// Debian's fontconfig rules leave fontdb's `monospace` generic naming
     /// `FreeMono`, which the host need not install.
+    #[cfg(not(windows))]
     #[test]
     fn uninstalled_monospace_generic_falls_back_to_an_installed_fixed_pitch_family() {
-        let Some(dir) = std::env::var_os("FELIS_TEST_FONT_DIR") else {
-            eprintln!("FELIS_TEST_FONT_DIR unset; skipping");
-            return;
-        };
+        let dir = test_font_dir();
         let mut db = Database::new();
-        db.load_fonts_dir(std::path::PathBuf::from(dir));
+        db.load_fonts_dir(dir);
         db.set_monospace_family("FreeMono");
 
         let (id, family) = db
@@ -2180,6 +2245,7 @@ mod tests {
         );
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn has_glyph_true_for_ascii_in_monospace_font() {
         let font = font();
@@ -2188,12 +2254,14 @@ mod tests {
         }
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn has_glyph_false_for_unmapped_private_use_codepoint() {
         let font = font();
         assert!(!font.has_glyph('\u{F8FFD}'));
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn stack_with_only_primary_resolves_to_primary() {
         let primary = Arc::new(font());
@@ -2209,6 +2277,7 @@ mod tests {
         assert_eq!(stack.len(), 1);
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn stack_resolve_picks_first_match() {
         let primary = Arc::new(font());
@@ -2222,26 +2291,16 @@ mod tests {
         assert_eq!(stack.len(), 2);
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn stack_resolve_walks_past_primary_when_it_lacks_glyph() {
-        let primary = Arc::new(font());
-        let cjk_target = '\u{3042}';
-        if primary.has_glyph(cjk_target) {
-            eprintln!("primary monospace covers Hiragana — fallback walk untestable here");
-            return;
-        }
-        let db = system_db();
-        let mut cjk: Option<Arc<Font>> = None;
-        for &name in CJK_FALLBACK_FAMILIES {
-            if let Ok(font) = Font::try_load_with(&db, name) {
-                cjk = Some(Arc::new(font));
-                break;
-            }
-        }
-        let Some(cjk) = cjk else {
-            eprintln!("no CJK fallback installed; skipping fallback-walk assertion");
-            return;
-        };
+        let dir = test_font_dir();
+        let mut db = Database::new();
+        db.load_fonts_dir(dir);
+        let primary = Arc::new(Font::try_load_with(&db, TEST_FONT_FAMILY).expect("pinned primary"));
+        let cjk = Arc::new(Font::try_load_with(&db, PINNED_CJK_FAMILY).expect("pinned CJK face"));
+        let cjk_target = '\u{845B}';
+        assert!(!primary.has_glyph(cjk_target));
         let stack = FontStack::new(primary).with_fallback_features(cjk.clone(), Vec::new());
         assert!(
             Arc::ptr_eq(stack.resolve(cjk_target, FontStyle::REGULAR), &cjk),
@@ -2254,14 +2313,12 @@ mod tests {
     /// pinned devshell set (Monaspace + Noto Sans Symbols 2 + Noto Color
     /// Emoji, which also covers them); the host's own fontconfig may lack
     /// a mono home and legitimately go color.
+    #[cfg(not(windows))]
     #[test]
     fn text_presentation_dingbats_resolve_to_mono_not_color() {
-        let Some(dir) = std::env::var_os("FELIS_TEST_FONT_DIR") else {
-            eprintln!("FELIS_TEST_FONT_DIR unset; skipping");
-            return;
-        };
+        let dir = test_font_dir();
         let mut db = Database::new();
-        db.load_fonts_dir(std::path::PathBuf::from(dir));
+        db.load_fonts_dir(dir);
         // The pinned db has no fontconfig generic-family aliases, so
         // `Family::Monospace` would not resolve.
         let stack = FontStack::auto_discover_in(
@@ -2290,17 +2347,18 @@ mod tests {
         }
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn auto_discover_returns_at_least_the_primary() {
-        let stack = FontStack::auto_discover(None, &[], &[], &StyleFaces::default())
-            .expect("primary must load");
+        let stack = stack();
         assert!(!stack.is_empty());
         assert!(stack.primary().has_glyph('A'));
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn explicit_fallbacks_replace_auto_discover() {
-        let stack = FontStack::auto_discover(
+        let stack = discover(
             None,
             &[],
             &[FaceSpec::named("definitely-not-a-real-family-xyz123")],
@@ -2310,24 +2368,20 @@ mod tests {
         assert_eq!(stack.len(), 1);
     }
 
-    fn test_font_files() -> Option<Vec<std::path::PathBuf>> {
-        let dir = std::path::PathBuf::from(std::env::var_os("FELIS_TEST_FONT_DIR")?);
-        let files = std::fs::read_dir(dir.join("truetype"))
+    fn test_font_files() -> Vec<std::path::PathBuf> {
+        std::fs::read_dir(test_font_dir().join("truetype"))
             .expect("FELIS_TEST_FONT_DIR has a truetype directory")
             .map(|entry| entry.expect("readable directory entry").path())
             .filter(|path| path.to_string_lossy().contains("MonaspaceNeon"))
-            .collect();
-        Some(files)
+            .collect()
     }
 
     /// A fallback the system may well have (`DejaVu Sans Mono`) is absent from the
     /// pinned files, so it must not join the stack.
+    #[cfg(not(windows))]
     #[test]
     fn discover_in_files_resolves_from_the_given_fonts_alone() {
-        let Some(files) = test_font_files() else {
-            eprintln!("FELIS_TEST_FONT_DIR unset; skipping");
-            return;
-        };
+        let files = test_font_files();
         let stack = FontStack::discover_in_files(
             &files,
             Some(TEST_FONT_FAMILY),
@@ -2336,7 +2390,7 @@ mod tests {
             &StyleFaces::default(),
         )
         .expect("the pinned family loads");
-        let pinned = Font::try_load_test_font().expect("FELIS_TEST_FONT_DIR is set");
+        let pinned = Font::load_test_font();
         let dims = |m: CellMetrics| (m.width, m.height, m.ascent);
         assert_eq!(
             dims(stack.primary().cell_metrics(14.0)),
@@ -2345,12 +2399,10 @@ mod tests {
         assert_eq!(stack.len(), 1);
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn a_described_stack_names_each_primary_style_from_the_name_table() {
-        let Some(files) = test_font_files() else {
-            eprintln!("FELIS_TEST_FONT_DIR unset; skipping");
-            return;
-        };
+        let files = test_font_files();
         let stack = FontStack::discover_in_files(
             &files,
             Some(TEST_FONT_FAMILY),
@@ -2367,12 +2419,10 @@ mod tests {
         assert_eq!(described.fallbacks, Vec::<String>::new());
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn a_variation_view_is_named_with_the_position_it_draws_at() {
-        let Some(dir) = std::env::var_os("FELIS_TEST_FONT_DIR") else {
-            eprintln!("FELIS_TEST_FONT_DIR unset; skipping");
-            return;
-        };
+        let dir = test_font_dir();
         let mut db = Database::new();
         db.load_font_file(std::path::Path::new(&dir).join("truetype/Monaspace Neon Var.ttf"))
             .expect("the variable face reads");
@@ -2408,12 +2458,10 @@ mod tests {
 
     /// The pinned variable face defaults to `ExtraLight`, so a stack that
     /// draws its default instance renders regular and bold alike, too thin.
+    #[cfg(not(windows))]
     #[test]
     fn variable_face_draws_regular_and_bold_at_their_weights() {
-        let Some(dir) = std::env::var_os("FELIS_TEST_FONT_DIR") else {
-            eprintln!("FELIS_TEST_FONT_DIR unset; skipping");
-            return;
-        };
+        let dir = test_font_dir();
         let file = std::path::Path::new(&dir).join("truetype/Monaspace Neon Var.ttf");
         let family = "Monaspace Neon Var";
         let stack = FontStack::discover_in_files(
@@ -2451,13 +2499,11 @@ mod tests {
 
     /// The variable face defaults to `ExtraLight`, so a fallback loaded at
     /// its default instance draws thinner than the primary beside it.
+    #[cfg(not(windows))]
     #[test]
     fn variable_fallback_draws_at_the_regular_weight() {
-        let Some(mut files) = test_font_files() else {
-            eprintln!("FELIS_TEST_FONT_DIR unset; skipping");
-            return;
-        };
-        let dir = std::path::PathBuf::from(std::env::var_os("FELIS_TEST_FONT_DIR").unwrap());
+        let mut files = test_font_files();
+        let dir = test_font_dir();
         files.push(dir.join("truetype/Monaspace Neon Var.ttf"));
         let stack = FontStack::discover_in_files(
             &files,
@@ -2480,12 +2526,8 @@ mod tests {
         );
     }
 
-    fn pinned_variable_stack(styles: &StyleFaces<'_>) -> Option<(FontStack, std::path::PathBuf)> {
-        let Some(dir) = std::env::var_os("FELIS_TEST_FONT_DIR") else {
-            eprintln!("FELIS_TEST_FONT_DIR unset; skipping");
-            return None;
-        };
-        let dir = std::path::PathBuf::from(dir);
+    fn pinned_variable_stack(styles: &StyleFaces<'_>) -> (FontStack, std::path::PathBuf) {
+        let dir = test_font_dir();
         let files = [
             dir.join("truetype/Monaspace Neon Var.ttf"),
             dir.join("opentype/MonaspaceNeon-Italic.otf"),
@@ -2493,7 +2535,7 @@ mod tests {
         let stack =
             FontStack::discover_in_files(&files, Some("Monaspace Neon Var"), &[], &[], styles)
                 .expect("the pinned faces load");
-        Some((stack, files[0].clone()))
+        (stack, files[0].clone())
     }
 
     fn design_value(font: &Font, tag: swash::Tag, value: f32) -> NormalizedCoord {
@@ -2506,11 +2548,10 @@ mod tests {
 
     /// Monaspace Neon Var ships no italic file: its "Italic" and "Bold
     /// Italic" named instances sit at `slnt` -11 on the upright file.
+    #[cfg(not(windows))]
     #[test]
     fn variable_face_draws_italic_at_its_named_italic_slant() {
-        let Some((stack, _)) = pinned_variable_stack(&StyleFaces::default()) else {
-            return;
-        };
+        let (stack, _) = pinned_variable_stack(&StyleFaces::default());
         let regular = stack.styled_primary(FontStyle::REGULAR);
         let italic = stack.styled_primary(FontStyle {
             bold: false,
@@ -2546,6 +2587,7 @@ mod tests {
         assert_ne!(ink(regular), ink(italic));
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn separate_italic_file_keeps_its_own_design() {
         let italic_family = FaceSpec::named("Monaspace Neon");
@@ -2553,9 +2595,7 @@ mod tests {
             italic: &italic_family,
             ..StyleFaces::default()
         };
-        let Some((stack, _)) = pinned_variable_stack(&styles) else {
-            return;
-        };
+        let (stack, _) = pinned_variable_stack(&styles);
         let italic = stack.styled_primary(FontStyle {
             bold: false,
             italic: true,
@@ -2572,12 +2612,10 @@ mod tests {
 
     /// The pinned CJK subset varies `wght` only, so bold italic lands on
     /// the bold view and italic on the regular one.
+    #[cfg(not(windows))]
     #[test]
     fn styles_at_the_same_position_share_one_face() {
-        let Some(dir) = std::env::var_os("FELIS_TEST_FONT_DIR") else {
-            eprintln!("FELIS_TEST_FONT_DIR unset; skipping");
-            return;
-        };
+        let dir = test_font_dir();
         let file = std::path::Path::new(&dir).join("NotoSansCJKjp-Kuzu.otf");
         let stack = FontStack::discover_in_files(
             std::slice::from_ref(&file),
@@ -2598,13 +2636,9 @@ mod tests {
     }
 
     /// The pinned faces named by path under `$FELIS_TEST_FONT_DIR`.
-    fn pinned_files(names: &[&str]) -> Option<Vec<std::path::PathBuf>> {
-        let Some(dir) = std::env::var_os("FELIS_TEST_FONT_DIR") else {
-            eprintln!("FELIS_TEST_FONT_DIR unset; skipping");
-            return None;
-        };
-        let dir = std::path::PathBuf::from(dir);
-        Some(names.iter().map(|name| dir.join(name)).collect())
+    fn pinned_files(names: &[&str]) -> Vec<std::path::PathBuf> {
+        let dir = test_font_dir();
+        names.iter().map(|name| dir.join(name)).collect()
     }
 
     fn axis_coord(font: &Font, tag: [u8; 4]) -> NormalizedCoord {
@@ -2619,11 +2653,10 @@ mod tests {
 
     /// `instances().nth(16)` of the pinned variable face is `SemiWide
     /// Regular`: its `wdth` sits off the default while `wght` is 400.
+    #[cfg(not(windows))]
     #[test]
     fn a_named_instance_keeps_its_width_through_regular_and_bold_views() {
-        let Some(files) = pinned_files(&["truetype/Monaspace Neon Var.ttf"]) else {
-            return;
-        };
+        let files = pinned_files(&["truetype/Monaspace Neon Var.ttf"]);
         let mut db = Database::new();
         db.load_font_file(&files[0])
             .expect("the variable face reads");
@@ -2719,8 +2752,7 @@ mod tests {
     fn scripted_stack(fallbacks: Vec<ScriptedFace>) -> FontStack {
         FontStack::auto_discover_in(
             &ScriptedProvider {
-                primary: pinned_bytes("opentype/MonaspaceNeon-Regular.otf")
-                    .expect("callers check the pinned set first"),
+                primary: pinned_bytes("opentype/MonaspaceNeon-Regular.otf"),
                 fallbacks,
             },
             None,
@@ -2731,11 +2763,9 @@ mod tests {
         .expect("the primary loads")
     }
 
-    fn pinned_bytes(name: &str) -> Option<FontBytes> {
-        let files = pinned_files(&[name])?;
-        Some(Arc::new(
-            std::fs::read(&files[0]).expect("the pinned face reads"),
-        ))
+    fn pinned_bytes(name: &str) -> FontBytes {
+        let files = pinned_files(&[name]);
+        Arc::new(std::fs::read(&files[0]).expect("the pinned face reads"))
     }
 
     /// Finds every named family at a face no parser reads (id 1); the
@@ -2770,11 +2800,10 @@ mod tests {
         }
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn a_font_family_whose_face_fails_to_load_falls_back_to_monospace() {
-        let Some(monospace) = pinned_bytes("opentype/MonaspaceNeon-Regular.otf") else {
-            return;
-        };
+        let monospace = pinned_bytes("opentype/MonaspaceNeon-Regular.otf");
         let stack = FontStack::auto_discover_in(
             &UnreadableNamedFaces { monospace },
             Some("Unreadable"),
@@ -2786,11 +2815,10 @@ mod tests {
         assert!(stack.primary().has_glyph('A'));
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn a_fallback_that_fails_to_load_yields_its_coverage_to_the_next() {
-        let Some(symbols) = pinned_bytes("NotoSansSymbols2-Regular.otf") else {
-            return;
-        };
+        let symbols = pinned_bytes("NotoSansSymbols2-Regular.otf");
         let stack = scripted_stack(vec![
             ScriptedFace {
                 bytes: None,
@@ -2813,14 +2841,13 @@ mod tests {
     /// The emoji face is reported mono, so it first shadows the mono
     /// symbol face; once it loads as color, the symbol face stops being
     /// shadowed and joins the chain.
+    #[cfg(not(windows))]
     #[test]
     fn a_fallback_reported_mono_but_loaded_color_stops_shadowing_mono_faces() {
-        let (Some(emoji), Some(symbols)) = (
+        let (emoji, symbols) = (
             pinned_bytes("NotoColorEmoji.ttf"),
             pinned_bytes("NotoSansSymbols2-Regular.otf"),
-        ) else {
-            return;
-        };
+        );
         let stack = scripted_stack(vec![
             ScriptedFace {
                 bytes: Some(emoji),
@@ -2868,13 +2895,12 @@ mod tests {
     };
 
     /// The pinned CJK subset varies `wght` only and has no italic.
+    #[cfg(not(windows))]
     #[test]
     fn variable_fallback_draws_bold_cells_bold() {
         let mut names = MONASPACE_NEON_STATIC.to_vec();
         names.push("NotoSansCJKjp-Kuzu.otf");
-        let Some(files) = pinned_files(&names) else {
-            return;
-        };
+        let files = pinned_files(&names);
         let stack = FontStack::discover_in_files(
             &files,
             Some(TEST_FONT_FAMILY),
@@ -2899,13 +2925,12 @@ mod tests {
         );
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn static_fallback_draws_each_style_from_its_own_file() {
         let mut names = MONASPACE_NEON_STATIC.to_vec();
         names.push("NotoSansCJKjp-Kuzu.otf");
-        let Some(files) = pinned_files(&names) else {
-            return;
-        };
+        let files = pinned_files(&names);
         let stack = FontStack::discover_in_files(
             &files,
             Some("Noto Sans CJK JP"),
@@ -2924,11 +2949,10 @@ mod tests {
         assert!(ink(faces[0], 'M') < ink(faces[1], 'M'));
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn color_fallback_draws_the_same_face_in_every_style() {
-        let Some(files) = pinned_files(&[MONASPACE_NEON_STATIC[0], "NotoColorEmoji.ttf"]) else {
-            return;
-        };
+        let files = pinned_files(&[MONASPACE_NEON_STATIC[0], "NotoColorEmoji.ttf"]);
         let stack = FontStack::discover_in_files(
             &files,
             Some(TEST_FONT_FAMILY),
@@ -2944,24 +2968,21 @@ mod tests {
         }
     }
 
-    fn load_pinned(name: &str) -> Option<Arc<Font>> {
-        let files = pinned_files(&[name])?;
+    fn load_pinned(name: &str) -> Arc<Font> {
+        let files = pinned_files(&[name]);
         let mut db = Database::new();
         db.load_font_file(&files[0]).expect("the pinned face reads");
         let id = db.faces().next().expect("the file has a face").id;
-        Some(Arc::new(
-            Font::load_face_id(&db, id).expect("the face loads"),
-        ))
+        Arc::new(Font::load_face_id(&db, id).expect("the face loads"))
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn coverage_check_rejects_a_face_missing_a_regular_codepoint() {
-        let (Some(latin), Some(cjk)) = (
+        let (latin, cjk) = (
             load_pinned(MONASPACE_NEON_STATIC[0]),
             load_pinned("NotoSansCJKjp-Kuzu.otf"),
-        ) else {
-            return;
-        };
+        );
         assert!(!latin.covers_all_of(&cjk));
         assert!(!cjk.covers_all_of(&latin));
         let bold = cjk.at_style(700, false).expect("the subset varies wght");
@@ -2972,28 +2993,26 @@ mod tests {
         ));
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn coverage_check_accepts_a_sibling_file_with_the_same_cmap() {
-        let (Some(regular), Some(bold)) = (
+        let (regular, bold) = (
             load_pinned(MONASPACE_NEON_STATIC[0]),
             load_pinned(MONASPACE_NEON_STATIC[1]),
-        ) else {
-            return;
-        };
+        );
         assert!(bold.covers_all_of(&regular));
     }
 
     /// Entry 1's bold view covers `A` and its regular does not; a bold `A`
     /// still goes to entry 2, as a regular one does.
+    #[cfg(not(windows))]
     #[test]
     fn a_styled_view_covering_more_does_not_take_a_later_entrys_glyph() {
-        let (Some(emoji), Some(latin), Some(cjk)) = (
+        let (emoji, latin, cjk) = (
             load_pinned("NotoColorEmoji.ttf"),
             load_pinned(MONASPACE_NEON_STATIC[0]),
             load_pinned("NotoSansCJKjp-Kuzu.otf"),
-        ) else {
-            return;
-        };
+        );
         assert!(!emoji.has_glyph('A') && !cjk.has_glyph('A'));
         let wider_bold = [cjk.clone(), latin.clone(), cjk, latin.clone()];
         let stack = FontStack::new(emoji)
@@ -3147,12 +3166,10 @@ mod tests {
     }
 
     /// fontdb accepts a readable file with no face in it without error.
+    #[cfg(not(windows))]
     #[test]
     fn discover_in_files_reports_a_file_with_no_face() {
-        let Some(mut files) = test_font_files() else {
-            eprintln!("FELIS_TEST_FONT_DIR unset; skipping");
-            return;
-        };
+        let mut files = test_font_files();
         let not_a_font =
             std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml"));
         files.push(not_a_font.clone());
@@ -3168,11 +3185,12 @@ mod tests {
         assert!(matches!(err, ShapingError::FontPath { path, .. } if path == not_a_font));
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn auto_discover_inherits_primary_features_into_fallbacks() {
         let features = vec!["calt".to_owned(), "-clig".to_owned()];
-        let stack = FontStack::auto_discover(None, &features, &[], &StyleFaces::default())
-            .expect("primary must load");
+        let stack =
+            discover(None, &features, &[], &StyleFaces::default()).expect("primary must load");
         assert_eq!(stack.features_at(0), features.as_slice());
         for i in 0..stack.len() {
             assert_eq!(
@@ -3183,37 +3201,36 @@ mod tests {
         }
     }
 
-    #[test]
-    fn explicit_fallback_with_empty_features_opts_out() {
-        let primary_features = vec!["calt".to_owned(), "ss01".to_owned()];
-        let db = system_db();
-        let mut probe_family: Option<String> = None;
-        for &name in CJK_FALLBACK_FAMILIES
-            .iter()
-            .chain(EMOJI_FALLBACK_FAMILIES.iter())
-            .chain(NERD_FONT_FAMILIES.iter())
-        {
-            if Font::try_load_with(&db, name).is_ok() {
-                probe_family = Some(name.to_owned());
-                break;
-            }
-        }
-        let Some(family) = probe_family else {
-            eprintln!("no installable fallback family found; skipping opt-out assertion");
-            return;
+    /// A lone `font.fallback` entry naming `family`, over the pinned set.
+    fn pinned_explicit_fallback(
+        primary_features: &[String],
+        family: &str,
+        features: Option<Vec<String>>,
+    ) -> FontStack {
+        let provider = pinned_system();
+        let spec = FaceSpec {
+            family: Some(family.to_owned()),
+            features,
         };
-        let stack = FontStack::auto_discover(
+        let stack = FontStack::auto_discover_in(
+            &provider,
             None,
-            &primary_features,
-            &[FaceSpec {
-                family: Some(family),
-                features: Some(Vec::new()),
-            }],
+            primary_features,
+            &[spec],
             &StyleFaces::default(),
         )
         .expect("primary must load");
-        assert_eq!(stack.features_at(0), primary_features.as_slice());
         assert_eq!(stack.len(), 2, "primary + one fallback");
+        stack
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn explicit_fallback_with_empty_features_opts_out() {
+        let primary_features = vec!["calt".to_owned(), "ss01".to_owned()];
+        let stack =
+            pinned_explicit_fallback(&primary_features, "Noto Color Emoji", Some(Vec::new()));
+        assert_eq!(stack.features_at(0), primary_features.as_slice());
         let empty: &[String] = &[];
         assert_eq!(
             stack.features_at(1),
@@ -3222,27 +3239,11 @@ mod tests {
         );
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn explicit_fallback_without_features_inherits_primary() {
-        let db = system_db();
-        let Some(family) = CJK_FALLBACK_FAMILIES
-            .iter()
-            .chain(EMOJI_FALLBACK_FAMILIES.iter())
-            .chain(NERD_FONT_FAMILIES.iter())
-            .find(|name| Font::try_load_with(&db, name).is_ok())
-        else {
-            eprintln!("no installable fallback family found; skipping inherit assertion");
-            return;
-        };
         let primary_features = vec!["calt".to_owned(), "ss01".to_owned()];
-        let stack = FontStack::auto_discover(
-            None,
-            &primary_features,
-            &[FaceSpec::named(*family)],
-            &StyleFaces::default(),
-        )
-        .expect("primary must load");
-        assert_eq!(stack.len(), 2, "primary + one fallback");
+        let stack = pinned_explicit_fallback(&primary_features, "Noto Color Emoji", None);
         assert_eq!(
             stack.features_at(1),
             primary_features.as_slice(),
@@ -3250,42 +3251,27 @@ mod tests {
         );
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn explicit_fallback_with_features_overrides_primary() {
-        let db = system_db();
-        let mut probe_family: Option<String> = None;
-        for &name in CJK_FALLBACK_FAMILIES {
-            if Font::try_load_with(&db, name).is_ok() {
-                probe_family = Some(name.to_owned());
-                break;
-            }
-        }
-        let Some(family) = probe_family else {
-            eprintln!("no CJK fallback installed; skipping override assertion");
-            return;
-        };
         let override_features = vec!["palt".to_owned(), "trad".to_owned()];
-        let stack = FontStack::auto_discover(
-            None,
+        let stack = pinned_explicit_fallback(
             &["calt".to_owned()],
-            &[FaceSpec {
-                family: Some(family),
-                features: Some(override_features.clone()),
-            }],
-            &StyleFaces::default(),
-        )
-        .expect("primary must load");
+            PINNED_CJK_FAMILY,
+            Some(override_features.clone()),
+        );
         assert_eq!(stack.features_at(0), &["calt".to_owned()]);
         assert_eq!(stack.features_at(1), override_features.as_slice());
     }
 
     /// Feature lists follow the face `font_at` picks; a style with no
     /// override inherits the base list.
+    #[cfg(not(windows))]
     #[test]
     fn styled_feature_override_applies_where_the_styled_face_does() {
         let base = vec!["calt".to_owned()];
         let bold_features = vec!["-liga".to_owned()];
-        let stack = FontStack::auto_discover(
+        let stack = discover(
             None,
             &base,
             &[],
@@ -3327,6 +3313,7 @@ mod tests {
         );
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn shape_run_with_empty_text_produces_no_glyphs() {
         let font = font();
@@ -3337,6 +3324,7 @@ mod tests {
 
     /// Features-off shaping is one glyph per byte, or the renderer could
     /// not opt cells into shaping without shifting the grid.
+    #[cfg(not(windows))]
     #[test]
     fn shape_run_ascii_no_features_emits_one_glyph_per_byte() {
         let font = font();
@@ -3352,6 +3340,7 @@ mod tests {
         }
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn shape_run_of_spaces_produces_one_glyph_per_cell() {
         let font = font();
@@ -3365,6 +3354,7 @@ mod tests {
 
     /// Malformed feature strings are dropped silently and the output
     /// equals the empty-feature-list output.
+    #[cfg(not(windows))]
     #[test]
     fn shape_run_rejects_malformed_features_without_failing() {
         let font = font();
@@ -3384,6 +3374,7 @@ mod tests {
 
     /// The char path and the glyph-id path produce identical bitmaps, so
     /// mixed-mode rendering never draws one letter two ways.
+    #[cfg(not(windows))]
     #[test]
     fn rasterize_by_char_matches_rasterize_by_glyph_id() {
         let font = font();
@@ -3402,6 +3393,7 @@ mod tests {
 
     /// `rasterize_glyph_id(0)` returns a blank bitmap, matching the char
     /// path's charmap miss.
+    #[cfg(not(windows))]
     #[test]
     fn rasterize_glyph_id_zero_returns_blank() {
         let font = font();
@@ -3413,6 +3405,7 @@ mod tests {
 
     /// `font_ref()` hands swash the same `CacheKey` every call (swash
     /// keys its per-font caches on it) and distinct fonts never share one.
+    #[cfg(not(windows))]
     #[test]
     fn font_ref_key_is_stable_per_font_and_distinct_between_fonts() {
         let font = font();
@@ -3429,6 +3422,7 @@ mod tests {
         );
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn shape_run_is_repeatable_across_calls_on_the_same_shaper() {
         let font = font();
@@ -3449,14 +3443,11 @@ mod tests {
     /// Monaspace's `calt` texture healing is on by default (swash, like
     /// `HarfBuzz` and CSS, applies `calt` unrequested) and `-calt` turns
     /// it off. Needs the pinned devshell font: `FiraCode`'s calt never
-    /// yields a single ligature glyph, and an uninstalled probe font
-    /// skips silently.
+    /// yields a single ligature glyph.
+    #[cfg(not(windows))]
     #[test]
     fn shape_run_calt_texture_healing_defaults_on_and_disables() {
-        let Some(font) = Font::try_load_test_font() else {
-            eprintln!("FELIS_TEST_FONT_DIR unset; skipping");
-            return;
-        };
+        let font = Font::load_test_font();
         let charmap = font.font_ref().charmap();
         let base_ids = vec![charmap.map('m'), charmap.map('i'), charmap.map('m')];
         let mut shaper = Shaper::new();
@@ -3546,12 +3537,10 @@ mod tests {
     /// arrived (a `calt` check passes vacuously). Also pins the two-glyph
     /// blank-lead + body form `apply_shaped_run` in felis-render-wgpu
     /// depends on.
+    #[cfg(not(windows))]
     #[test]
     fn shape_run_applies_non_default_stylistic_set() {
-        let Some(font) = Font::try_load_test_font() else {
-            eprintln!("FELIS_TEST_FONT_DIR unset; skipping");
-            return;
-        };
+        let font = Font::load_test_font();
         let mut shaper = Shaper::new();
         let plain = shaper.shape_run(&font, 16.0, &[], "->");
         let ss03 = shaper.shape_run(&font, 16.0, &["ss03".to_owned()], "->");
@@ -3603,14 +3592,12 @@ mod tests {
     /// renderer breaks a shape run when the styled face stops covering.
     /// Bold is pinned to Noto Sans Symbols 2 (⌨, no Latin) against
     /// Monaspace Neon (the reverse).
+    #[cfg(not(windows))]
     #[test]
     fn primary_covers_answers_from_the_styled_primary_not_the_regular_one() {
-        let Some(dir) = std::env::var_os("FELIS_TEST_FONT_DIR") else {
-            eprintln!("FELIS_TEST_FONT_DIR unset; skipping");
-            return;
-        };
+        let dir = test_font_dir();
         let mut db = Database::new();
-        db.load_fonts_dir(std::path::PathBuf::from(dir));
+        db.load_fonts_dir(dir);
         let base = TEST_FONT_FAMILY;
         let regular_id = db
             .find_face(base, REGULAR_WEIGHT, false)
@@ -3649,14 +3636,12 @@ mod tests {
 
     /// Styled primaries load distinct faces when the family ships them,
     /// and a missing override dedups to the regular `Arc`.
+    #[cfg(not(windows))]
     #[test]
     fn styled_primaries_pick_real_faces_and_dedup_missing_to_regular() {
-        let Some(dir) = std::env::var_os("FELIS_TEST_FONT_DIR") else {
-            eprintln!("FELIS_TEST_FONT_DIR unset; skipping");
-            return;
-        };
+        let dir = test_font_dir();
         let mut db = Database::new();
-        db.load_fonts_dir(std::path::PathBuf::from(dir));
+        db.load_fonts_dir(dir);
         let base = TEST_FONT_FAMILY;
         let regular_id = db
             .find_face(base, REGULAR_WEIGHT, false)
@@ -3719,24 +3704,22 @@ mod tests {
 
     /// The pinned set with `fallbacks` as an explicit `font.fallback`
     /// list, or the discovered chain when it is empty.
-    fn pinned_stack(fallbacks: &[&str]) -> Option<FontStack> {
-        let dir = std::env::var_os("FELIS_TEST_FONT_DIR")?;
+    fn pinned_stack(fallbacks: &[&str]) -> FontStack {
         let mut db = Database::new();
-        db.load_fonts_dir(std::path::PathBuf::from(dir));
+        db.load_fonts_dir(test_font_dir());
         let specs: Vec<FaceSpec> = fallbacks.iter().map(|f| FaceSpec::named(*f)).collect();
-        FontStack::auto_discover_in(&db, None, &[], &specs, &StyleFaces::default()).ok()
+        FontStack::auto_discover_in(&db, None, &[], &specs, &StyleFaces::default())
+            .expect("the pinned set loads")
     }
 
     const EMOJI_DEFAULT: [char; 8] = ['⭐', '⚡', '☕', '⌚', '⛔', '☔', '♿', '🀄'];
 
     /// The symbol faces sit before the emoji face, so a mono face covers
     /// some of these first; each still resolves to the color face.
+    #[cfg(not(windows))]
     #[test]
     fn an_emoji_presentation_scalar_resolves_to_the_color_face() {
-        let Some(stack) = pinned_stack(&[]) else {
-            eprintln!("FELIS_TEST_FONT_DIR unset; skipping");
-            return;
-        };
+        let stack = pinned_stack(&[]);
         let style = FontStyle::REGULAR;
         let overridden = EMOJI_DEFAULT
             .into_iter()
@@ -3763,12 +3746,10 @@ mod tests {
 
     /// Text-default symbols keep the first face covering them, which the
     /// chain's symbol-before-emoji order makes a mono one.
+    #[cfg(not(windows))]
     #[test]
     fn a_text_presentation_symbol_keeps_its_first_covering_face() {
-        let Some(stack) = pinned_stack(&[]) else {
-            eprintln!("FELIS_TEST_FONT_DIR unset; skipping");
-            return;
-        };
+        let stack = pinned_stack(&[]);
         let style = FontStyle::REGULAR;
         for c in ['⏸', '✳', '❤', '☺', '⏭'] {
             assert_eq!(
@@ -3782,34 +3763,30 @@ mod tests {
     /// An explicit `font.fallback` list orders everything but the default
     /// emoji: a mono face listed first does not take `⭐`, and with no
     /// color face listed the first covering face still draws it.
+    #[cfg(not(windows))]
     #[test]
     fn an_explicit_fallback_order_yields_to_emoji_presentation() {
         let style = FontStyle::REGULAR;
-        let Some(with_emoji) = pinned_stack(&[
+        let with_emoji = pinned_stack(&[
             "Noto Sans Symbols 2",
             "Noto Sans Symbols",
             "Noto Color Emoji",
-        ]) else {
-            eprintln!("FELIS_TEST_FONT_DIR unset; skipping");
-            return;
-        };
+        ]);
         let mono = with_emoji.first_cover_styled_index('⭐', style);
         assert!(
             !with_emoji.font_at(mono, style).has_color_glyphs(),
             "a mono face lists ⭐ first"
         );
         assert!(with_emoji.resolve('⭐', style).has_color_glyphs());
-        let mono_only = pinned_stack(&["Noto Sans Symbols 2"]).expect("pinned set");
+        let mono_only = pinned_stack(&["Noto Sans Symbols 2"]);
         assert_eq!(mono_only.resolve_styled_index('⭐', style), mono);
     }
 
     /// A VS15 asks for the text face, a VS16 for the color face.
+    #[cfg(not(windows))]
     #[test]
     fn a_variation_selector_picks_the_star_face() {
-        let Some(stack) = pinned_stack(&[]) else {
-            eprintln!("FELIS_TEST_FONT_DIR unset; skipping");
-            return;
-        };
+        let stack = pinned_stack(&[]);
         let style = FontStyle::REGULAR;
         let mut shaper = Shaper::new();
         let text = shaper.shape_cluster(&stack, 18.0, style, "\u{2B50}\u{FE0E}");
@@ -3821,12 +3798,10 @@ mod tests {
 
     /// The astral anchor would otherwise put `🀄︎` on the color face; the
     /// VS15 right after the base wins over it.
+    #[cfg(not(windows))]
     #[test]
     fn a_vs15_keeps_an_astral_emoji_on_its_text_face() {
-        let Some(stack) = pinned_stack(&[]) else {
-            eprintln!("FELIS_TEST_FONT_DIR unset; skipping");
-            return;
-        };
+        let stack = pinned_stack(&[]);
         let style = FontStyle::REGULAR;
         let mono = stack.first_cover_styled_index('🀄', style);
         assert!(
@@ -3842,12 +3817,10 @@ mod tests {
 
     /// The keycap ligature needs `#` and U+20E3 adjacent; a VS16 left
     /// between them shapes as `.notdef` and splits it into three glyphs.
+    #[cfg(not(windows))]
     #[test]
     fn a_keycap_with_vs16_shapes_to_the_one_keycap_glyph() {
-        let Some(stack) = pinned_stack(&[]) else {
-            eprintln!("FELIS_TEST_FONT_DIR unset; skipping");
-            return;
-        };
+        let stack = pinned_stack(&[]);
         let style = FontStyle::REGULAR;
         let mut shaper = Shaper::new();
         for base in ['#', '1', '*'] {
@@ -3876,12 +3849,10 @@ mod tests {
 
     /// Noto Sans CJK JP names a variant for `葛` + U+E0100, keeps the
     /// default for U+E0101, and has no entry for U+E0102.
+    #[cfg(not(windows))]
     #[test]
     fn an_ideographic_variation_sequence_shapes_to_the_face_variant() {
-        let Some(stack) = pinned_stack(&[]) else {
-            eprintln!("FELIS_TEST_FONT_DIR unset; skipping");
-            return;
-        };
+        let stack = pinned_stack(&[]);
         let style = FontStyle::REGULAR;
         let mut shaper = Shaper::new();
         let plain = shaper.shape_cluster(&stack, 18.0, style, "葛");

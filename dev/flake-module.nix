@@ -143,14 +143,15 @@
           cargo-watch
           samply
           cargo-flamegraph
-          # Conformance harnesses required so felis-pty integration tests do not skip silently.
+          # Tools the integration tests drive; a test missing one fails.
           esctest
           vttest
-          # localhost-SSH tests skip when sshd is missing; sshd usually lives outside default PATH (/usr/sbin).
+          # sshd usually lives outside the default PATH (/usr/sbin).
           openssh
-          # Completion tests drive generated fish/zsh scripts and skip when interpreters are missing.
           fish
           zsh
+          less
+          neovim
           python3
           yq-go
           buf

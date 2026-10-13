@@ -168,8 +168,26 @@ pub(crate) fn block_on<F: Future>(future: F) -> F::Output {
 }
 
 #[cfg(test)]
+#[cfg_attr(
+    windows,
+    allow(
+        dead_code,
+        reason = "the pinned-font tests are compiled out on Windows"
+    )
+)]
 mod tests {
     use super::*;
+
+    /// The default config held to one pinned face, so discovery never
+    /// reads the host's fonts.
+    fn font_config() -> RendererConfig {
+        RendererConfig {
+            font_files: vec![
+                felis_shaping::test_font_dir().join("truetype/MonaspaceNeonFrozen-Regular.ttf"),
+            ],
+            ..RendererConfig::default()
+        }
+    }
 
     fn fonts_only(cfg: &RendererConfig) -> Warmup {
         let mut warmup = Warmup {
@@ -180,45 +198,49 @@ mod tests {
         warmup
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn warm_font_stack_is_handed_over_when_the_config_is_unchanged() {
-        let cfg = RendererConfig::default();
+        let cfg = font_config();
         let mut warmup = fonts_only(&cfg);
         let stack = warmup.take_fonts(&cfg).expect("joined").expect("monospace");
         let fresh = FontInputs::of(&cfg).discover().expect("monospace");
         assert_eq!(stack.len(), fresh.len());
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn warm_font_stack_is_discarded_when_a_font_input_changed() {
-        let started = RendererConfig::default();
+        let started = font_config();
         let mut warmup = fonts_only(&started);
         let reloaded = RendererConfig {
             font_features: vec!["-liga".to_owned()],
-            ..RendererConfig::default()
+            ..font_config()
         };
         assert!(warmup.take_fonts(&reloaded).is_none());
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn warm_font_stack_is_discarded_when_the_font_files_changed() {
-        let started = RendererConfig::default();
+        let started = font_config();
         let mut warmup = fonts_only(&started);
         let pinned = RendererConfig {
             font_files: vec!["/nonexistent/felis-font.ttf".into()],
-            ..RendererConfig::default()
+            ..font_config()
         };
         assert!(warmup.take_fonts(&pinned).is_none());
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn warm_font_stack_ignores_non_font_config() {
-        let started = RendererConfig::default();
+        let started = font_config();
         let mut warmup = fonts_only(&started);
         let recolored = RendererConfig {
             theme_fg: Some("#ffffff".to_owned()),
             font_size_physical_px: Some(28.0),
-            ..RendererConfig::default()
+            ..font_config()
         };
         assert!(warmup.take_fonts(&recolored).is_some());
     }
