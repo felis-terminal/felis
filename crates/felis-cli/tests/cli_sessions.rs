@@ -151,6 +151,30 @@ fn cli_command() -> StdCommand {
     cmd
 }
 
+/// Reruns a read verb until its stdout contains `needle`, returning that
+/// stdout: the parked drain lands a child's output on its own schedule.
+async fn poll_until(socket: &std::path::Path, args: &[&str], needle: &str) -> String {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let out = cli_command()
+            .arg("--socket")
+            .arg(socket)
+            .args(args)
+            .output()
+            .expect("run felis");
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        if stdout.contains(needle) {
+            return stdout;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "`felis {}` never printed {needle:?}; last stdout: {stdout}",
+            args.join(" "),
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
 /// The hidden completion helper lists the daemon an explicit
 /// `--socket` names (the shell overlays forward only that flag).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -735,19 +759,12 @@ async fn send_returns_zero_on_detached_session() {
         String::from_utf8_lossy(&out.stderr),
     );
 
-    // Let the parked drain land the echo in the grid.
-    tokio::time::sleep(Duration::from_millis(400)).await;
-    let cap = cli_command()
-        .arg("--socket")
-        .arg(&socket)
-        .args(["sessions", "capture", &id_hex])
-        .output()
-        .expect("run felis sessions capture");
-    let stdout = String::from_utf8_lossy(&cap.stdout);
-    assert!(
-        stdout.contains("got=PROBE-12345"),
-        "sent bytes must reach the shell; grid was: {stdout}",
-    );
+    poll_until(
+        &socket,
+        &["sessions", "capture", &id_hex],
+        "got=PROBE-12345",
+    )
+    .await;
 
     server.abort();
 }
@@ -1063,18 +1080,7 @@ async fn send_key_enter_delivers_text_and_enter_in_one_call() {
         String::from_utf8_lossy(&out.stderr),
     );
 
-    tokio::time::sleep(Duration::from_millis(400)).await;
-    let cap = cli_command()
-        .arg("--socket")
-        .arg(&socket)
-        .args(["sessions", "capture", &id_hex])
-        .output()
-        .expect("run felis sessions capture");
-    let stdout = String::from_utf8_lossy(&cap.stdout);
-    assert!(
-        stdout.contains("got=SUBMIT-99"),
-        "--key enter must terminate the shell's read; grid was: {stdout}",
-    );
+    poll_until(&socket, &["sessions", "capture", &id_hex], "got=SUBMIT-99").await;
 
     server.abort();
 }
@@ -1096,8 +1102,12 @@ async fn capture_renders_visible_grid_rows() {
     let id = create_and_detach(&socket).await;
     let id_hex = format!("{id:032x}");
 
-    // Let the parked drain land the banner in the grid.
-    tokio::time::sleep(Duration::from_millis(400)).await;
+    poll_until(
+        &socket,
+        &["sessions", "capture", &id_hex],
+        "CAPTURE-LINE-TWO",
+    )
+    .await;
 
     let out = cli_command()
         .arg("--socket")
@@ -1147,8 +1157,7 @@ async fn capture_scrollback_includes_offscreen_history() {
     let id = create_and_detach(&socket).await;
     let id_hex = format!("{id:032x}");
 
-    // Let the parked drain land all 50 lines.
-    tokio::time::sleep(Duration::from_millis(400)).await;
+    poll_until(&socket, &["sessions", "capture", &id_hex], "SB-LINE-050").await;
 
     let plain = cli_command()
         .arg("--socket")
@@ -1208,7 +1217,7 @@ async fn capture_lines_tails_the_region_and_keeps_row_indices() {
     let id = create_and_detach(&socket).await;
     let id_hex = format!("{id:032x}");
 
-    tokio::time::sleep(Duration::from_millis(400)).await;
+    poll_until(&socket, &["sessions", "capture", &id_hex], "SB-LINE-050").await;
 
     let capture_json = |extra: Vec<&str>| {
         let mut args = vec!["sessions", "capture", &id_hex, "--format", "jsonl"];
@@ -1285,7 +1294,7 @@ async fn capture_ansi_reconstructs_sgr_color() {
     let id = create_and_detach(&socket).await;
     let id_hex = format!("{id:032x}");
 
-    tokio::time::sleep(Duration::from_millis(400)).await;
+    poll_until(&socket, &["sessions", "capture", &id_hex], "ANSI-RED-LINE").await;
 
     let ansi = cli_command()
         .arg("--socket")
@@ -1345,7 +1354,7 @@ async fn capture_ansi_json_carries_both_forms_per_row() {
     let id = create_and_detach(&socket).await;
     let id_hex = format!("{id:032x}");
 
-    tokio::time::sleep(Duration::from_millis(400)).await;
+    poll_until(&socket, &["sessions", "capture", &id_hex], "ANSI-RED-LINE").await;
 
     let out = cli_command()
         .arg("--socket")
@@ -1400,7 +1409,12 @@ async fn capture_ansi_json_composes_on_a_mark_range_source() {
     let id = create_and_detach(&socket).await;
     let id_hex = format!("{id:032x}");
 
-    tokio::time::sleep(Duration::from_millis(400)).await;
+    poll_until(
+        &socket,
+        &["sessions", "capture", &id_hex, "--source", "command-output"],
+        "RED-133",
+    )
+    .await;
 
     let out = cli_command()
         .arg("--socket")
@@ -1454,8 +1468,12 @@ async fn capture_source_command_output_returns_the_c_to_d_range() {
     let id = create_and_detach(&socket).await;
     let id_hex = format!("{id:032x}");
 
-    // Let the parked drain land the marks in the grid.
-    tokio::time::sleep(Duration::from_millis(400)).await;
+    poll_until(
+        &socket,
+        &["sessions", "capture", &id_hex, "--source", "command-output"],
+        "CMDOUT-133",
+    )
+    .await;
 
     let out = cli_command()
         .arg("--socket")
@@ -1512,7 +1530,12 @@ async fn capture_json_semantic_source_emits_region_relative_rows() {
     let id = create_and_detach(&socket).await;
     let id_hex = format!("{id:032x}");
 
-    tokio::time::sleep(Duration::from_millis(400)).await;
+    poll_until(
+        &socket,
+        &["sessions", "capture", &id_hex, "--source", "last-command"],
+        "CMDOUT-133",
+    )
+    .await;
 
     let out = cli_command()
         .arg("--socket")
@@ -1682,9 +1705,12 @@ async fn payload_less_wait_ignores_historical_marks_and_times_out() {
     let id = create_and_detach(&socket).await;
     let id_hex = format!("{id:032x}");
 
-    // Let the D;7 land in the grid so it is historical when the wait
-    // attaches.
-    tokio::time::sleep(Duration::from_millis(400)).await;
+    poll_until(
+        &socket,
+        &["sessions", "info", &id_hex, "--format", "json"],
+        "\"last_exit_code\":7",
+    )
+    .await;
 
     let out = cli_command()
         .arg("--socket")
@@ -2122,8 +2148,7 @@ async fn search_returns_hits_and_no_match_exits_one() {
     let id = create_and_detach(&socket).await;
     let id_hex = format!("{id:032x}");
 
-    // Let the parked drain land the rows in grid and scrollback.
-    tokio::time::sleep(Duration::from_millis(400)).await;
+    poll_until(&socket, &["sessions", "capture", &id_hex], "entry-49-PROBE").await;
 
     let out = cli_command()
         .arg("--socket")
