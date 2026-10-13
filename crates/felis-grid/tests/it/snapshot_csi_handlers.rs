@@ -9,7 +9,7 @@ use std::fmt::Write as _;
 
 use felis_grid::{Color, Grid};
 
-mod common;
+use crate::common;
 use common::{drive, drive_take, write_cells, write_cursor, write_dirty_rows, write_pen};
 
 fn render(grid: &Grid) -> String {

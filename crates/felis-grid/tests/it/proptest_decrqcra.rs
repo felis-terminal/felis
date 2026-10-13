@@ -10,7 +10,7 @@ use felis_grid::Grid;
 use felis_vt::Parser;
 use proptest::prelude::*;
 
-mod common;
+use crate::common;
 
 fn responses_for(rows: u16, cols: u16, bytes: &[u8]) -> Vec<Vec<u8>> {
     let mut g = Grid::new(rows, cols);

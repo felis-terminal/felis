@@ -1,5 +1,5 @@
 ---
-source: crates/felis-grid/tests/ref_recordings.rs
+source: crates/felis-grid/tests/it/ref_recordings.rs
 expression: render(&grid)
 ---
 size: 24 rows x 80 cols

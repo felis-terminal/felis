@@ -7,7 +7,7 @@ use std::fmt::Write;
 
 use felis_grid::{Grapheme, Grid};
 
-mod common;
+use crate::common;
 use common::drive;
 
 fn render(grid: &Grid) -> String {

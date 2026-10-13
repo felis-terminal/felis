@@ -41,11 +41,11 @@ Data flows one way; place each piece at its lowest correct layer:
 
 ## 3. Tests (in the established style; see `test-strategy`)
 
-- **insta snapshots** are the conformance workhorse: `crates/felis-grid/tests/snapshot_csi.rs`,
-  `snapshot_csi_handlers.rs`, `snapshot_osc.rs`; protocol-specific ones in `crates/felis-vt/tests/snapshot_kitty_*.rs`.
-  Review with `cargo insta review`.
-- Drive helpers: integration tests under `crates/felis-grid/tests/` use `common/mod.rs`'s `drive(rows, cols, bytes)` /
-  `drive_take` / `drive_with(parser, grid, bytes)`; unit tests inside `felis-grid` use `src/test_support.rs`'s
+- **insta snapshots** are the conformance workhorse: `crates/felis-grid/tests/it/snapshot_csi.rs`,
+  `snapshot_csi_handlers.rs`, `snapshot_osc.rs`; protocol-specific ones in
+  `crates/felis-vt/tests/it/snapshot_kitty_*.rs`. Review with `cargo insta review`.
+- Drive helpers: integration tests under `crates/felis-grid/tests/it/` use `common/mod.rs`'s `drive(rows, cols, bytes)`
+  / `drive_take` / `drive_with(parser, grid, bytes)`; unit tests inside `felis-grid` use `src/test_support.rs`'s
   `drive(parser, grid, bytes)`. Reuse the helper of the layer you are in and never invent a new argument order.
 - **Fuzz**: the parser's totality is owned by `fuzz/fuzz_targets/vt_parser.rs` / `grid_dispatch.rs`; add a seed with the
   new sequence to `fuzz/seeds/<target>/` and run `just fuzz-smoke`.

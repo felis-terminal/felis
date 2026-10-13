@@ -7,7 +7,7 @@ use felis_grid::Grid;
 use felis_vt::Parser;
 use proptest::prelude::*;
 
-mod common;
+use crate::common;
 
 fn round_trip(setup: &[u8], query: &[u8]) -> (Grid, Grid) {
     let mut first = Grid::new(24, 80);

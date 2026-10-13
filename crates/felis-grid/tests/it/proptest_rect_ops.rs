@@ -10,7 +10,7 @@ use felis_grid::{AttrFlags, Grapheme, Grid};
 use felis_vt::Parser;
 use proptest::prelude::*;
 
-mod common;
+use crate::common;
 use common::drive_with;
 
 fn snapshot_flags(g: &Grid) -> Vec<Vec<AttrFlags>> {

@@ -51,7 +51,7 @@ iTerm2) verify their escape-sequence layer.
   [wezterm #133](https://github.com/wez/wezterm/issues/133)), and the peer in-process unit cultures grew partly to
   replace it, so felis does not gate on what it cannot automate honestly.
 - **Layered fuzz targets on crate boundaries** (`just fuzz*`), after ghostty's three-target AFL++ shape.
-- **Recording-based RefTest fixtures**, after alacritty's shape (`crates/felis-grid/tests/ref_recordings.rs` replays
+- **Recording-based RefTest fixtures**, after alacritty's shape (`crates/felis-grid/tests/it/ref_recordings.rs` replays
   `crates/felis-grid/tests/ref/<scenario>/` `recording.bin` + `size.json` into a `Parser` + `Grid` and pins the screen
   with insta): anything a human can demonstrate interactively becomes a deterministic regression. Alacritty's
   `config.json` is dropped (the felis vt layer is configless by design) and its bespoke `expected.snap` format is
@@ -77,8 +77,8 @@ where a single off-by-one in a bitmask or a wrapping add is the whole bug: the p
 wire-format encoders/decoders.
 
 `felis-vt` is the trust root for every byte that arrives from a child program: a panic or a wrong answer in the parser
-corrupts grid state for attacker-controlled input (see the preamble of `crates/felis-vt/tests/proptest_parser.rs`). The
-`State::Ground` hot path coalesces printable runs with hand-written SWAR (SIMD-within-a-register) bit tricks
+corrupts grid state for attacker-controlled input (see the preamble of `crates/felis-vt/tests/it/proptest_parser.rs`).
+The `State::Ground` hot path coalesces printable runs with hand-written SWAR (SIMD-within-a-register) bit tricks
 (`scan_printable_run`, `scan_mixed_print_run`, and the masks that drive them), built on the classic `hasless`/`haszero`
 subtract-and-mask predicates from Bit Twiddling Hacks (<https://graphics.stanford.edu/~seander/bithacks.html>), whose
 correctness is alignment- and borrow-sensitive across lanes.

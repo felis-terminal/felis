@@ -5,7 +5,7 @@
 
 use felis_grid::Grapheme;
 
-mod common;
+use crate::common;
 use common::drive;
 
 #[test]

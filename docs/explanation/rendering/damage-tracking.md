@@ -81,7 +81,7 @@ Overdraw is allowed by design at both layers: a one-cell write dirties its whole
 slot each frame. It costs IPC bytes and GPU time, not correctness; the per-cell tracking that would remove it is
 rejected ("Prior art" below).
 
-The harnesses are `crates/felis-grid/tests/damage_correctness.rs` for the grid, a property test in
+The harnesses are `crates/felis-grid/tests/it/damage_correctness.rs` for the grid, a property test in
 `crates/felis-daemon/src/serve/tests.rs` that requires every shadow to hold the grid's cells, cursor and soft-wrap bits
 after each composition it receives, and two property tests for the client: one in
 `crates/felis-render-wgpu/src/row_cache.rs` requires the cached instances to equal a full rebuild after every frame, and

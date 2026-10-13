@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use felis_grid::Grid;
 use felis_vt::Parser;
 
-mod common;
+use crate::common;
 use common::drive_with;
 
 #[test]

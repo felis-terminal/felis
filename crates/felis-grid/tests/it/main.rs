@@ -1,0 +1,42 @@
+//! Every felis-grid integration test, linked as one binary.
+
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
+mod ansi_round_trip;
+mod common;
+mod damage_correctness;
+mod e2e_osc_66_producers;
+#[cfg(feature = "json")]
+mod json_v1;
+mod proptest_cluster;
+mod proptest_damage;
+mod proptest_decrqcra;
+mod proptest_decrqm;
+mod proptest_decrqss;
+mod proptest_grid;
+mod proptest_image_store;
+#[cfg(feature = "json")]
+mod proptest_json_v1_row;
+mod proptest_mouse;
+mod proptest_osc;
+mod proptest_osc_52;
+mod proptest_osc_palette;
+mod proptest_placements_filter;
+mod proptest_placements_model;
+mod proptest_print_fast_path;
+mod proptest_rect_ops;
+mod proptest_row_codec;
+mod proptest_sgr_hash;
+mod proptest_sync_output;
+mod protocol_coverage_matrix;
+mod ref_recordings;
+mod repro_osc66_clear_leak;
+mod scenario_snapshots;
+mod sizing_gc;
+mod snapshot_cluster_boundaries;
+mod snapshot_csi;
+mod snapshot_csi_handlers;
+mod snapshot_osc;
+mod snapshot_wide_pairs;
+mod style_gc;
+mod sync_output_deadline;
