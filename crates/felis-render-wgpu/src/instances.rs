@@ -2607,7 +2607,7 @@ mod tests {
     }
 
     #[test]
-    fn block_cursor_keeps_reverse_video_swap_no_marker_quad() {
+    fn block_cursor_emits_no_marker_quad() {
         let g = drive(1, 3, b"AB"); // default style stays Block
         let atlas = MockAtlas::full(slot());
         let buffers = build_instances(g.screen(), metrics(), &Theme::default(), &atlas);
@@ -2940,8 +2940,9 @@ mod tests {
         .with_cursor_visible(true)
         .with_viewport(0, u32::from(g.rows()))
         .extend_instances(&mut buffers);
-        for inst in &buffers.bg {
-            assert_ne!(inst.color, SELECTION_BG);
+        assert_eq!(buffers.bg.len(), 5);
+        for (i, inst) in buffers.bg.iter().enumerate() {
+            assert_eq!(inst.color, theme.bg, "cell {i}");
         }
     }
 

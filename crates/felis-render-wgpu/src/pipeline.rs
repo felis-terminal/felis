@@ -331,12 +331,17 @@ mod tests {
         // Nothing at build time ties the layouts to the WGSL structs; a
         // `@location` renumber must fail here, not corrupt the fetch.
         let module = wgsl::parse_str(SHADER_SOURCE).expect("WGSL parse");
-        for (entry, layout) in [
-            ("bg_vs", bg_instance_layout()),
-            ("fg_vs", fg_instance_layout()),
-            ("deco_vs", decoration_instance_layout()),
-            ("image_vs", img_instance_layout()),
+        for (entry, layout, rust_size) in [
+            ("bg_vs", bg_instance_layout(), size_of::<BgInstance>()),
+            ("fg_vs", fg_instance_layout(), size_of::<FgInstance>()),
+            (
+                "deco_vs",
+                decoration_instance_layout(),
+                size_of::<DecorationInstance>(),
+            ),
+            ("image_vs", img_instance_layout(), size_of::<ImgInstance>()),
         ] {
+            assert_eq!(layout.array_stride, rust_size as u64, "{entry}: stride");
             let members = instance_members(&module, entry);
             assert_eq!(
                 members.len(),
@@ -370,58 +375,6 @@ mod tests {
                 );
             }
         }
-    }
-
-    #[test]
-    fn bg_layout_offsets_are_field_offsets() {
-        let layout = bg_instance_layout();
-        assert_eq!(layout.array_stride, size_of::<BgInstance>() as u64);
-        assert_eq!(layout.attributes.len(), 3);
-        assert_eq!(layout.attributes[0].offset, 0);
-        assert_eq!(layout.attributes[1].offset, 8);
-        assert_eq!(layout.attributes[2].offset, 16);
-    }
-
-    #[test]
-    fn img_layout_offsets_are_field_offsets() {
-        let layout = img_instance_layout();
-        assert_eq!(layout.array_stride, size_of::<ImgInstance>() as u64);
-        assert_eq!(layout.attributes.len(), 5);
-        assert_eq!(layout.attributes[0].offset, 0);
-        assert_eq!(layout.attributes[1].offset, 8);
-        assert_eq!(layout.attributes[2].offset, 16);
-        assert_eq!(layout.attributes[3].offset, 24);
-        assert_eq!(layout.attributes[4].offset, 32);
-    }
-
-    #[test]
-    fn fg_layout_offsets_are_field_offsets() {
-        let layout = fg_instance_layout();
-        assert_eq!(layout.array_stride, size_of::<FgInstance>() as u64);
-        assert_eq!(layout.attributes.len(), 6);
-        assert_eq!(layout.attributes[0].offset, 0);
-        assert_eq!(layout.attributes[1].offset, 8);
-        assert_eq!(layout.attributes[2].offset, 16);
-        assert_eq!(layout.attributes[3].offset, 24);
-        assert_eq!(layout.attributes[4].offset, 32);
-        assert_eq!(layout.attributes[5].offset, 48);
-    }
-
-    #[test]
-    fn decoration_layout_offsets_are_field_offsets() {
-        let layout = decoration_instance_layout();
-        assert_eq!(
-            layout.array_stride,
-            size_of::<DecorationInstance>() as u64,
-            "stride tracks the struct so a new field can't silently desync",
-        );
-        assert_eq!(layout.attributes.len(), 6);
-        assert_eq!(layout.attributes[0].offset, 0);
-        assert_eq!(layout.attributes[1].offset, 8);
-        assert_eq!(layout.attributes[2].offset, 16);
-        assert_eq!(layout.attributes[3].offset, 32);
-        assert_eq!(layout.attributes[4].offset, 36);
-        assert_eq!(layout.attributes[5].offset, 40);
     }
 
     #[test]
@@ -481,34 +434,6 @@ mod tests {
             BindingType::Sampler(kind) => assert_eq!(kind, SamplerBindingType::Filtering),
             _ => panic!("expected Sampler binding at slot 1"),
         }
-    }
-
-    #[test]
-    fn shader_locations_cover_every_field() {
-        let bg_locs: Vec<u32> = bg_instance_layout()
-            .attributes
-            .iter()
-            .map(|a| a.shader_location)
-            .collect();
-        assert_eq!(bg_locs, vec![0, 1, 2]);
-        let fg_locs: Vec<u32> = fg_instance_layout()
-            .attributes
-            .iter()
-            .map(|a| a.shader_location)
-            .collect();
-        assert_eq!(fg_locs, vec![0, 1, 2, 3, 4, 5]);
-        let img_locs: Vec<u32> = img_instance_layout()
-            .attributes
-            .iter()
-            .map(|a| a.shader_location)
-            .collect();
-        assert_eq!(img_locs, vec![0, 1, 2, 3, 4]);
-        let deco_locs: Vec<u32> = decoration_instance_layout()
-            .attributes
-            .iter()
-            .map(|a| a.shader_location)
-            .collect();
-        assert_eq!(deco_locs, vec![0, 1, 2, 3, 4, 5]);
     }
 
     #[test]
