@@ -385,18 +385,16 @@ mod tests {
     #[test]
     fn overflow_evicts_the_oldest_entry() {
         let mut trail = Trail::default();
-        for id in 0..u128::try_from(TRAIL_CAPACITY).unwrap() + 3 {
+        let cap = u128::try_from(TRAIL_CAPACITY).unwrap();
+        for id in 0..cap + 3 {
             trail.push(place("/tmp/a.sock", id));
         }
-        assert_eq!(trail.len(), TRAIL_CAPACITY);
-        assert_eq!(
-            trail.newest(),
-            Some(&place(
-                "/tmp/a.sock",
-                u128::try_from(TRAIL_CAPACITY).unwrap() + 2
-            ))
-        );
-        assert_eq!(trail.pop().map(|p| p.session_id), Some(18));
+        let mut survivors = Vec::new();
+        while let Some(entry) = trail.pop() {
+            survivors.push(entry.session_id);
+        }
+        survivors.reverse();
+        assert_eq!(survivors, (3..cap + 3).collect::<Vec<_>>());
     }
 
     #[test]

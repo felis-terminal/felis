@@ -192,7 +192,13 @@ mod tests {
         let Some(cb) = os_clipboard_or_skip(false) else {
             return;
         };
-        let before = cb.read_primary().unwrap_or_default();
+        // Skip (not pass vacuously) when read_primary() itself fails:
+        // with both sides defaulting to empty, the assert would pass even
+        // if the write landed.
+        let Ok(before) = cb.read_primary() else {
+            eprintln!("PRIMARY read unavailable in this environment; skipping");
+            return;
+        };
         cb.write_primary_program(b"hostile-primary-payload")
             .unwrap();
         let after = cb.read_primary().unwrap_or_default();

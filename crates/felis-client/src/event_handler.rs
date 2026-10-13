@@ -1356,7 +1356,6 @@ mod paint_gate_tests {
             source: AttentionSource::Bell,
         });
         assert!(!painted(&pull), "a facet push cannot paint the grid");
-        assert!(!painted(&pull), "nor can a blink or animation tick");
 
         pull.on_frame(&GridMsg::CycleEnd);
         assert!(painted(&pull), "the marker releases the paint");

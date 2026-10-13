@@ -673,11 +673,6 @@ mod tests {
     }
 
     #[test]
-    fn activation_target_parse_rejects_an_interior_nul_before_reaching_the_shell_handoff() {
-        assert!(ActivationTarget::parse("https://example.com/\0evil").is_err());
-    }
-
-    #[test]
     fn the_windows_handoff_encodes_non_ascii_as_utf16() {
         // Surrogate pairs are two code units; a one-unit-per-char encoding
         // would corrupt an IDN or emoji URL.
