@@ -608,9 +608,13 @@ mod tests {
     }
 
     #[cfg(unix)]
-    fn shell_on_path(shell: &str) -> bool {
-        std::env::var_os("PATH")
-            .is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join(shell).is_file()))
+    fn require_shell(shell: &str) {
+        assert!(
+            std::env::var_os("PATH").is_some_and(
+                |path| std::env::split_paths(&path).any(|dir| dir.join(shell).is_file())
+            ),
+            "{shell} not on PATH; the dev shell provides it"
+        );
     }
 
     /// Command lines for `<TAB>` testing and expected helper invocations.
@@ -652,15 +656,11 @@ mod tests {
 
     /// Drives the generated fish script through `complete -C` (which
     /// hands the line to `commandline` exactly as an interactive
-    /// `<TAB>` would) against a recording `felis` stub. Skips when
-    /// `fish` is not on `PATH`; the dev shell carries it so CI runs it.
+    /// `<TAB>` would) against a recording `felis` stub.
     #[test]
     #[cfg(unix)]
     fn fish_completion_never_invokes_the_helper_with_an_ssh_carrier() {
-        if !shell_on_path("fish") {
-            eprintln!("skipping: fish not on PATH");
-            return;
-        }
+        require_shell("fish");
         let stub = FelisStub::new();
         let script = stub.script("felis.fish", Shell::Fish);
         for (line, expected) in TAB_LINES {
@@ -714,10 +714,7 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn fish_offers_hosts_only_in_the_ssh_destination_slot() {
-        if !shell_on_path("fish") {
-            eprintln!("skipping: fish not on PATH");
-            return;
-        }
+        require_shell("fish");
         let stub = FelisStub::new();
         let script = stub.script("felis.fish", Shell::Fish);
         // A `$HOME` of its own, so the candidate set is this one
@@ -765,17 +762,13 @@ mod tests {
     /// Same contract for zsh. There is no `complete -C` equivalent, so
     /// the test sources the script under `zsh -f` with `compdef` and
     /// `_describe` stubbed and calls the two helpers with `words` set
-    /// as the completion system would. Skips when `zsh` is not on
-    /// `PATH`; the dev shell carries it so CI runs it.
+    /// as the completion system would.
     #[test]
     #[cfg(unix)]
     fn zsh_completion_never_invokes_the_helper_with_an_ssh_carrier() {
         use std::fmt::Write as _;
 
-        if !shell_on_path("zsh") {
-            eprintln!("skipping: zsh not on PATH");
-            return;
-        }
+        require_shell("zsh");
         let stub = FelisStub::new();
         let script = stub.script("_felis", Shell::Zsh);
         // Re-assert `path` inside the driver because `zsh -f` reads `/etc/zshenv`,

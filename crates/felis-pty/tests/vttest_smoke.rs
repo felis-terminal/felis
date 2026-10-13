@@ -1,7 +1,8 @@
 //! Black-box harness: spawn `vttest` in a PTY, pipe output through
 //! `Parser` and `Grid`, and reply to capability probes (DA1, DSR, etc.).
-//! Skipped when no `vttest` binary is on `PATH` (`VTTEST_BIN` overrides).
+//! A missing `vttest` (`VTTEST_BIN` overrides `PATH`) fails the tests.
 
+#![cfg(unix)]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::path::PathBuf;
@@ -15,7 +16,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::task::JoinHandle;
 
 mod common;
-use common::{COLS, ROWS, host_replies, resolve_binary};
+use common::{COLS, ROWS, host_replies, require_binary};
 
 struct VttestSession {
     read_task: Option<JoinHandle<()>>,
@@ -84,16 +85,8 @@ impl VttestSession {
         }
     }
 
-    #[expect(
-        clippy::print_stderr,
-        reason = "the skip notice must reach the test log; allow-print-in-tests covers only #[test] fns, not this shared helper"
-    )]
-    fn open(what: &str) -> Option<Self> {
-        let Some(binary) = resolve_binary("VTTEST_BIN", "vttest") else {
-            eprintln!("skipping {what}: vttest binary not found in PATH or VTTEST_BIN");
-            return None;
-        };
-        Some(Self::spawn_for(binary))
+    fn open() -> Self {
+        Self::spawn_for(require_binary("VTTEST_BIN", "vttest"))
     }
 
     fn with_grid<T>(&self, f: impl FnOnce(&Grid) -> T) -> T {
@@ -199,9 +192,7 @@ fn grid_contains(grid: &Grid, needle: &str) -> bool {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn intro_banner_reaches_the_grid() {
-    let Some(session) = VttestSession::open("vttest smoke") else {
-        return;
-    };
+    let session = VttestSession::open();
 
     // "VT100 test program" rather than the full banner, so a changed
     // version suffix still passes.
@@ -215,9 +206,7 @@ async fn intro_banner_reaches_the_grid() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn da1_reply_round_trips_through_terminal_reports_menu() {
-    let Some(session) = VttestSession::open("vttest DA1 round-trip") else {
-        return;
-    };
+    let session = VttestSession::open();
     session
         .navigate(&["Test of terminal reports", "Primary Device Attributes"])
         .await;
@@ -239,9 +228,7 @@ async fn da1_reply_round_trips_through_terminal_reports_menu() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "diagnostic probe — dumps a four-level submenu screen N.M.K.L"]
 async fn dump_four_level_screen() {
-    let Some(session) = VttestSession::open("dump four level screen") else {
-        return;
-    };
+    let session = VttestSession::open();
     let path: Vec<String> = std::env::var("VTTEST_PATH")
         .unwrap_or_else(|_| "11.1.2.4".into())
         .split('.')
@@ -271,9 +258,7 @@ async fn dump_four_level_screen() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "diagnostic probe — dumps a sub-sub-menu screen N.M.K"]
 async fn dump_subsubmenu_screen() {
-    let Some(session) = VttestSession::open("dump subsubmenu screen") else {
-        return;
-    };
+    let session = VttestSession::open();
     let outer = std::env::var("VTTEST_OUTER").unwrap_or_else(|_| "11".into());
     let inner = std::env::var("VTTEST_INNER").unwrap_or_else(|_| "5".into());
     let leaf = std::env::var("VTTEST_LEAF").unwrap_or_else(|_| "7".into());
@@ -302,9 +287,7 @@ async fn dump_subsubmenu_screen() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "diagnostic probe — dumps a sub-menu screen N.M"]
 async fn dump_submenu_screen() {
-    let Some(session) = VttestSession::open("dump submenu screen") else {
-        return;
-    };
+    let session = VttestSession::open();
     let outer = std::env::var("VTTEST_OUTER").unwrap_or_else(|_| "11".into());
     let inner = std::env::var("VTTEST_INNER").unwrap_or_else(|_| "1".into());
     assert!(
@@ -330,9 +313,7 @@ async fn dump_submenu_screen() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "diagnostic probe — walks menu N forward by RETURNs"]
 async fn dump_menu_walk() {
-    let Some(session) = VttestSession::open("dump menu walk") else {
-        return;
-    };
+    let session = VttestSession::open();
     let menu = std::env::var("VTTEST_MENU").unwrap_or_else(|_| "2".into());
     let steps: u32 = std::env::var("VTTEST_STEPS")
         .ok()
@@ -365,9 +346,7 @@ async fn dump_menu_walk() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "diagnostic probe — prints the main menu to stderr"]
 async fn dump_main_menu() {
-    let Some(session) = VttestSession::open("dump main menu") else {
-        return;
-    };
+    let session = VttestSession::open();
     assert!(
         session
             .wait_for("VT100 test program", Duration::from_secs(3))
@@ -383,9 +362,7 @@ async fn dump_main_menu() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "diagnostic probe — prints a menu screen to stderr"]
 async fn dump_menu_screen() {
-    let Some(session) = VttestSession::open("dump menu screen") else {
-        return;
-    };
+    let session = VttestSession::open();
     let menu = std::env::var("VTTEST_MENU").unwrap_or_else(|_| "1".into());
     assert!(
         session
@@ -408,9 +385,7 @@ async fn dump_menu_screen() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "diagnostic probe — prints the reports submenu to stderr"]
 async fn dump_terminal_reports_submenu() {
-    let Some(session) = VttestSession::open("dump terminal reports submenu") else {
-        return;
-    };
+    let session = VttestSession::open();
     assert!(
         session
             .wait_for("VT100 test program", Duration::from_secs(3))
@@ -431,9 +406,7 @@ async fn dump_terminal_reports_submenu() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn da2_reply_round_trips_through_terminal_reports_menu() {
-    let Some(session) = VttestSession::open("vttest DA2 round-trip") else {
-        return;
-    };
+    let session = VttestSession::open();
     session
         .navigate(&["Test of terminal reports", "Secondary Device Attributes"])
         .await;
@@ -455,9 +428,7 @@ async fn da2_reply_round_trips_through_terminal_reports_menu() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn da3_reply_round_trips_through_terminal_reports_menu() {
-    let Some(session) = VttestSession::open("vttest DA3 round-trip") else {
-        return;
-    };
+    let session = VttestSession::open();
     session
         .navigate(&["Test of terminal reports", "Tertiary Device Attributes"])
         .await;
@@ -479,9 +450,7 @@ async fn da3_reply_round_trips_through_terminal_reports_menu() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn decreqtparm_reply_round_trips_through_terminal_reports_menu() {
-    let Some(session) = VttestSession::open("vttest DECREQTPARM round-trip") else {
-        return;
-    };
+    let session = VttestSession::open();
     session
         .navigate(&["Test of terminal reports", "Request Terminal Parameters"])
         .await;
@@ -499,9 +468,7 @@ async fn decreqtparm_reply_round_trips_through_terminal_reports_menu() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cursor_movements_draws_unbroken_frame() {
-    let Some(session) = VttestSession::open("cursor-movements") else {
-        return;
-    };
+    let session = VttestSession::open();
     session.navigate(&["Test of cursor movements"]).await;
 
     // The first sub-test draws an unbroken `*` frame around the outer
@@ -532,9 +499,7 @@ async fn cursor_movements_draws_unbroken_frame() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn decrqss_decscusr_round_trips_blink_state() {
-    let Some(session) = VttestSession::open("DECRQSS DECSCUSR test") else {
-        return;
-    };
+    let session = VttestSession::open();
     session
         .navigate(&[
             "non-VT100",
@@ -561,9 +526,7 @@ async fn decrqss_decscusr_round_trips_blink_state() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn xtversion_round_trips_felis_name_and_version() {
-    let Some(session) = VttestSession::open("XTVERSION test") else {
-        return;
-    };
+    let session = VttestSession::open();
     session
         .navigate(&[
             "non-VT100",
@@ -586,9 +549,7 @@ async fn xtversion_round_trips_felis_name_and_version() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn window_state_report_returns_normal_in_menu_11_8_9() {
-    let Some(session) = VttestSession::open("window-state test") else {
-        return;
-    };
+    let session = VttestSession::open();
     session
         .navigate(&[
             "non-VT100",
@@ -609,9 +570,7 @@ async fn window_state_report_returns_normal_in_menu_11_8_9() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn decsca_leaves_protected_asterisk_box_after_decsed() {
-    let Some(session) = VttestSession::open("DECSCA test") else {
-        return;
-    };
+    let session = VttestSession::open();
     session
         .navigate(&[
             "non-VT100",
@@ -650,9 +609,7 @@ async fn decsca_leaves_protected_asterisk_box_after_decsed() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn su_lifts_asterisks_to_top_row() {
-    let Some(session) = VttestSession::open("SU test") else {
-        return;
-    };
+    let session = VttestSession::open();
     session
         .navigate(&[
             "non-VT100",
@@ -682,9 +639,7 @@ async fn su_lifts_asterisks_to_top_row() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn sr_centers_asterisk_column_on_the_screen() {
-    let Some(session) = VttestSession::open("SR test") else {
-        return;
-    };
+    let session = VttestSession::open();
     session
         .navigate(&[
             "non-VT100",
@@ -724,9 +679,7 @@ async fn sr_centers_asterisk_column_on_the_screen() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn rep_draws_diagonal_of_plus_characters() {
-    let Some(session) = VttestSession::open("REP test") else {
-        return;
-    };
+    let session = VttestSession::open();
     session
         .navigate(&["non-VT100", "Test other ISO-6429 features", "Test Repeat"])
         .await;
@@ -763,9 +716,7 @@ async fn rep_draws_diagonal_of_plus_characters() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cnl_numbers_lines_in_sequence_at_column_zero() {
-    let Some(session) = VttestSession::open("CNL test") else {
-        return;
-    };
+    let session = VttestSession::open();
     session
         .navigate(&["non-VT100", "ISO-6429 cursor-movement", "Test Next-Line"])
         .await;
@@ -808,9 +759,7 @@ async fn cnl_numbers_lines_in_sequence_at_column_zero() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn hpa_draws_box_outline_in_the_middle() {
-    let Some(session) = VttestSession::open("HPA test") else {
-        return;
-    };
+    let session = VttestSession::open();
     session
         .navigate(&[
             "non-VT100",
@@ -871,9 +820,7 @@ async fn hpa_draws_box_outline_in_the_middle() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn ech_paints_clear_gap_diagonal() {
-    let Some(session) = VttestSession::open("ECH test") else {
-        return;
-    };
+    let session = VttestSession::open();
     session
         .navigate(&[
             "non-VT100",
@@ -925,9 +872,7 @@ async fn ech_paints_clear_gap_diagonal() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn dectcem_hides_cursor_in_menu_11_1_2_2() {
-    let Some(session) = VttestSession::open("DECTCEM test") else {
-        return;
-    };
+    let session = VttestSession::open();
     session
         .navigate(&[
             "non-VT100",
@@ -952,9 +897,7 @@ async fn dectcem_hides_cursor_in_menu_11_1_2_2() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn s8c1t_round_trips_through_8bit_control_test() {
-    let Some(session) = VttestSession::open("S8C1T test") else {
-        return;
-    };
+    let session = VttestSession::open();
     session
         .navigate(&["non-VT100", "Test of VT220 features", "Test 8-bit controls"])
         .await;
@@ -987,9 +930,7 @@ async fn s8c1t_round_trips_through_8bit_control_test() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn private_dsr_reports_no_printer_locked_udk_us_keyboard() {
-    let Some(session) = VttestSession::open("private DSR test") else {
-        return;
-    };
+    let session = VttestSession::open();
     session
         .navigate(&[
             "non-VT100",
@@ -1022,9 +963,7 @@ async fn private_dsr_reports_no_printer_locked_udk_us_keyboard() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn wrap_around_cursor_addressing_pins_stars_to_last_column() {
-    let Some(session) = VttestSession::open("wrap-around bug test") else {
-        return;
-    };
+    let session = VttestSession::open();
     session
         .navigate(&["Test of known bugs", "Wrap around with cursor"])
         .await;
@@ -1059,9 +998,7 @@ async fn wrap_around_cursor_addressing_pins_stars_to_last_column() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn decstr_soft_reset_completes_in_menu_10() {
-    let Some(session) = VttestSession::open("DECSTR") else {
-        return;
-    };
+    let session = VttestSession::open();
     session
         .navigate(&["Test of reset", "Soft Terminal Reset"])
         .await;
@@ -1081,9 +1018,7 @@ async fn decstr_soft_reset_completes_in_menu_10() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn bce_clear_paints_screen_background_blue() {
-    let Some(session) = VttestSession::open("BCE test") else {
-        return;
-    };
+    let session = VttestSession::open();
     session
         .navigate(&[
             "non-VT100",
@@ -1114,9 +1049,7 @@ async fn bce_clear_paints_screen_background_blue() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn iso_6429_colors_paints_named_palette() {
-    let Some(session) = VttestSession::open("ISO-6429 colors") else {
-        return;
-    };
+    let session = VttestSession::open();
     session
         .navigate(&[
             "non-VT100",
@@ -1172,9 +1105,7 @@ async fn iso_6429_colors_paints_named_palette() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn screen_features_autowrap_fills_three_rows_with_stars() {
-    let Some(session) = VttestSession::open("autowrap test") else {
-        return;
-    };
+    let session = VttestSession::open();
     session.navigate(&["Test of screen features"]).await;
 
     // ~240 `*` into a fresh screen with default autowrap leaves three
@@ -1210,9 +1141,7 @@ async fn screen_features_autowrap_fills_three_rows_with_stars() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn screen_features_tab_setting_lands_stars_on_custom_stops() {
-    let Some(session) = VttestSession::open("tab-setting test") else {
-        return;
-    };
+    let session = VttestSession::open();
     session.navigate(&["Test of screen features"]).await;
 
     // Step past the autowrap screen to the tab-setting screen: TBC 3,
@@ -1257,9 +1186,7 @@ async fn screen_features_tab_setting_lands_stars_on_custom_stops() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn vt102_accordion_test_draws_per_row_letter_fill() {
-    let Some(session) = VttestSession::open("VT102 accordion test") else {
-        return;
-    };
+    let session = VttestSession::open();
     session.navigate(&["Test of VT102 features"]).await;
 
     // The accordion seed fills row r with its own letter (A, B, …),
@@ -1313,9 +1240,7 @@ async fn vt102_accordion_test_draws_per_row_letter_fill() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn dsr_cursor_position_round_trips() {
-    let Some(session) = VttestSession::open("vttest DSR round-trip") else {
-        return;
-    };
+    let session = VttestSession::open();
     session
         .navigate(&["Test of terminal reports", "Device Status Report"])
         .await;

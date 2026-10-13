@@ -19,20 +19,17 @@ pub(crate) fn host_replies(grid: &mut Grid) -> Vec<Vec<u8>> {
         .collect()
 }
 
-pub(crate) fn resolve_binary(override_var: &str, name: &str) -> Option<PathBuf> {
-    if let Ok(explicit) = std::env::var(override_var) {
+pub(crate) fn require_binary(override_var: &str, name: &str) -> PathBuf {
+    if let Some(explicit) = std::env::var_os(override_var) {
         let p = PathBuf::from(explicit);
-        if p.is_file() {
-            return Some(p);
-        }
-        return None;
+        assert!(p.is_file(), "{override_var}={} is not a file", p.display());
+        return p;
     }
-    let path = std::env::var_os("PATH")?;
-    for dir in std::env::split_paths(&path) {
-        let candidate = dir.join(name);
-        if candidate.is_file() {
-            return Some(candidate);
-        }
-    }
-    None
+    std::env::var_os("PATH")
+        .and_then(|path| {
+            std::env::split_paths(&path)
+                .map(|dir| dir.join(name))
+                .find(|candidate| candidate.is_file())
+        })
+        .unwrap_or_else(|| panic!("{name} not on PATH; the dev shell provides it"))
 }

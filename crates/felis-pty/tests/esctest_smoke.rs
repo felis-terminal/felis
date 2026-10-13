@@ -1,7 +1,8 @@
 //! Conformance smoke: drive ThomasDickey/esctest2 against `felis-vt`
 //! and `felis-grid` in a PTY and assert the summary meets a tracked baseline.
-//! Skipped when no `esctest` binary is on `PATH` (`ESCTEST_BIN` overrides).
+//! A missing `esctest` (`ESCTEST_BIN` overrides `PATH`) fails the test.
 
+#![cfg(unix)]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 #![expect(
     clippy::used_underscore_binding,
@@ -19,7 +20,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::task::JoinHandle;
 
 mod common;
-use common::{COLS, ROWS, host_replies, resolve_binary};
+use common::{COLS, ROWS, host_replies, require_binary};
 
 /// Lower bound on passed count under `--expected-terminal=xterm --max-vt-level=4`.
 /// Ratchet: a commit that flips cases to PASS bumps this floor.
@@ -194,10 +195,7 @@ mod parse_tests {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn esctest_suite_pass_count_meets_baseline() {
-    let Some(binary) = resolve_binary("ESCTEST_BIN", "esctest") else {
-        eprintln!("skipping esctest smoke: binary not found in PATH or ESCTEST_BIN");
-        return;
-    };
+    let binary = require_binary("ESCTEST_BIN", "esctest");
 
     // Per-invocation logfile so parallel test runs do not race over
     // esctest's default /tmp/esctest.log.

@@ -203,8 +203,8 @@ The two shells are driven differently. fish exposes its completion engine direct
 line to `commandline` as an interactive `<TAB>` would); zsh has no equivalent, so the test sources the script under
 `zsh -f`, stubs `compdef` and `_describe`, and calls the helpers with `words` set as the completion system would.
 
-Each test skips rather than fails when its shell is off `PATH`, because a contributor's machine need not carry both
-shells; the dev shell does, so CI never takes the skip.
+Each test fails when its shell is off `PATH` rather than skipping: the dev shell provides both shells, and a skip would
+let an environment that lost one pass as green.
 
 ## Why a support claim needs a passed gate
 

@@ -39,6 +39,10 @@ pub(crate) async fn wait_connectable(socket: &Path) {
     }
 }
 
+pub(crate) fn require_tool(name: &str) -> PathBuf {
+    resolve_binary(name).unwrap_or_else(|| panic!("{name} not on PATH; the dev shell provides it"))
+}
+
 pub(crate) fn resolve_binary(name: &str) -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
     for dir in std::env::split_paths(&path) {

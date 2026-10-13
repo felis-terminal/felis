@@ -241,9 +241,8 @@ Permanent end-to-end regression specifications:
 - **Real-binary sessions**: `crates/felis-daemon/tests/real_app_harness.rs` runs the daemon over an in-memory carrier
   with a real child on the PTY and mirrors the `GridMsg` stream into a `ShadowScreen`. `/bin/sh` drives the burst,
   escape-barrage and pull-pacing cases; `less` pages long stdin; `nvim` enters the alt screen. The cases that need
-  `less`, `nvim`, or coreutils resolve them on `PATH` and skip when absent, so a machine missing one loses that case
-  rather than the run; the shell-driven cases assume a POSIX `/bin/sh`. The file also holds `#[ignore]`d measurement
-  probes ("Contributor environment variables" below).
+  `less`, `nvim`, or coreutils resolve them on `PATH`; the shell-driven cases assume a POSIX `/bin/sh`. The file also
+  holds `#[ignore]`d measurement probes ("Contributor environment variables" below).
 - **Detach/attach persistence**: closing the client window keeps the shell alive; a new client re-hydrates the visible
   screen, and scrollback stays in the daemon for later viewport requests. Tested in
   `crates/felis-client-core/src/connector/tests.rs` (`killed_client_reattaches_and_observes_prior_output`).
@@ -255,6 +254,10 @@ Permanent end-to-end regression specifications:
   a daemon, verifying correlation, error framing, cancel cleanup, and stream exit.
 - **Shell completion overlays**: `crates/felis-cli/src/cli_completions.rs` tests generated fish and zsh completion
   scripts under real interpreters.
+
+The tests that drive an external tool (sshd and ssh in `crates/felis-daemon/tests/localhost_ssh.rs`, `less` and `nvim`
+above, vttest and esctest in the conformance harnesses, fish and zsh) need the dev shell's tools and fail without them.
+They compile on Unix only, so the native Windows job does not run them.
 
 REQ-1206 ([spec.md](spec.md)) states the exit criteria for this layer, and part of it is met by hand rather than by a
 test: an editor or file-manager session driven end to end through the GUI client. The automated coverage of the client
@@ -491,7 +494,7 @@ normal `just check` needs.
 | `FELIS_STARTUP_EXIT_MS`                                                                     | `felis-client` `event_handler.rs`                                                              | Exit this many milliseconds after the renderer is ready, so a non-interactive run captures warm RSS and the `dhat-heap` dump.                                            |
 | `UPDATE_SCHEMA`                                                                             | `felis-cli` `cli_schema.rs`, `felis-client-core` `config.rs`, `felis-grid` `json_v1/schema.rs` | Rewrite the committed JSON schemas instead of asserting byte equality. `just schema` sets it.                                                                            |
 | `UPDATE_GOLDEN`                                                                             | `felis-cli` `tests/cli_bridge.rs`, `felis-grid` `tests/it/json_v1.rs`                          | Rewrite the golden bridge conversations from the live run, and the golden `felis-json` v1 frames. `just golden` sets it.                                                 |
-| `VTTEST_BIN`, `ESCTEST_BIN`                                                                 | `felis-pty` `tests/vttest_smoke.rs`, `tests/esctest_smoke.rs`                                  | Absolute path to the conformance binary; without it the harness resolves the name on `PATH` and skips when absent.                                                       |
+| `VTTEST_BIN`, `ESCTEST_BIN`                                                                 | `felis-pty` `tests/vttest_smoke.rs`, `tests/esctest_smoke.rs`                                  | Absolute path to the conformance binary, which must exist; without it the harness resolves the name on `PATH`.                                                           |
 | `ESCTEST_INCLUDE`                                                                           | `felis-pty` `tests/esctest_smoke.rs`                                                           | Pattern passed to esctest's `--include`, to run one case group instead of the full suite.                                                                                |
 | `VTTEST_MENU`, `VTTEST_STEPS`, `VTTEST_PATH`, `VTTEST_OUTER`, `VTTEST_INNER`, `VTTEST_LEAF` | `felis-pty` `tests/vttest_smoke.rs`                                                            | Menu coordinates for the `#[ignore]`d diagnostic probes that dump a vttest screen.                                                                                       |
 | `FELIS_CAT_FILE`, `FELIS_CAT_ITERS`                                                         | `felis-daemon` `tests/real_app_harness.rs`                                                     | Payload and repeat count for the `#[ignore]`d cat-throughput probes; without the file they skip.                                                                         |
