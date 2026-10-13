@@ -94,6 +94,10 @@ pub struct UpgradeState {
     /// hands across the exec without borrowing the serving loop's.
     #[cfg(unix)]
     listener: Mutex<Option<(std::os::fd::OwnedFd, PathBuf)>>,
+    /// Held by one upgrade from before its first probe until its exec
+    /// or refusal.
+    #[cfg(unix)]
+    claimed: std::sync::atomic::AtomicBool,
 }
 
 impl UpgradeState {

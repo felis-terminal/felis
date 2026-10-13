@@ -4,7 +4,7 @@ use std::{
     os::fd::{AsFd as _, AsRawFd as _, OwnedFd, RawFd},
     os::unix::process::{CommandExt as _, ExitStatusExt as _},
     path::PathBuf,
-    sync::Arc,
+    sync::{Arc, atomic::Ordering},
     time::Duration,
 };
 
@@ -42,6 +42,27 @@ pub struct Prepared {
     undo: Undo,
 }
 
+/// One upgrade's hold on the daemon. A second request is refused
+/// before it forks a probe, which could otherwise run while the first
+/// has close-on-exec off the descriptors it carries across the exec.
+struct Claim(Arc<UpgradeState>);
+
+impl Claim {
+    fn take(state: &Arc<UpgradeState>) -> Option<Self> {
+        state
+            .claimed
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .ok()
+            .map(|_| Self(Arc::clone(state)))
+    }
+}
+
+impl Drop for Claim {
+    fn drop(&mut self) {
+        self.0.claimed.store(false, Ordering::Release);
+    }
+}
+
 /// Armed from the moment the pool stops admitting: a refusal runs it,
 /// and so does a drop, so a cancelled or panicking upgrade still
 /// leaves the daemon serving.
@@ -55,10 +76,11 @@ struct Undo {
     /// Session tasks holding their drains since the settle.
     held: Vec<mpsc::Sender<SessionCmd>>,
     armed: bool,
+    _claim: Claim,
 }
 
 impl Undo {
-    fn new(pool: &Arc<Mutex<SessionPool>>, state: &Arc<UpgradeState>) -> Self {
+    fn new(pool: &Arc<Mutex<SessionPool>>, state: &Arc<UpgradeState>, claim: Claim) -> Self {
         Self {
             pool: Arc::clone(pool),
             state: Arc::clone(state),
@@ -66,6 +88,7 @@ impl Undo {
             pending: None,
             held: Vec::new(),
             armed: true,
+            _claim: claim,
         }
     }
 
@@ -145,6 +168,10 @@ pub async fn prepare(
             "this daemon serves no listening socket to carry".to_owned(),
         ));
     };
+    let claim = Claim::take(state).ok_or(Refusal::Busy)?;
+    if pool.lock().await.draining() {
+        return Err(Refusal::Draining);
+    }
     probe::ask(&successor, None).await?;
     {
         let mut guard = pool.lock().await;
@@ -155,7 +182,7 @@ pub async fn prepare(
             return Err(Refusal::Busy);
         }
     }
-    let mut undo = Undo::new(pool, state);
+    let mut undo = Undo::new(pool, state, claim);
     // A frame already dispatched may hold its permit for as long as its
     // verb runs (a stop waiting for sessions to end), so closing is
     // bounded like every other wait behind the barrier.
@@ -420,7 +447,7 @@ mod tests {
         let pool = Arc::new(Mutex::new(SessionPool::new()));
         let state = UpgradeState::replaceable();
         assert!(pool.lock().await.begin_upgrade());
-        let undo = Undo::new(&pool, &state);
+        let undo = Undo::new(&pool, &state, Claim::take(&state).expect("unclaimed"));
         assert!(state.gate.close().await);
         drop(undo);
         tokio::time::timeout(Duration::from_secs(5), state.gate.wait_open())
@@ -429,6 +456,58 @@ mod tests {
         assert!(
             pool.lock().await.begin_upgrade(),
             "the pool left its upgrade, so another may begin"
+        );
+        assert!(Claim::take(&state).is_some(), "the claim was released");
+    }
+
+    /// A successor path no probe can run: a refusal other than the one
+    /// asserted means the probe was attempted.
+    async fn prepare_with_a_listener(
+        pool: &Arc<Mutex<SessionPool>>,
+        state: &Arc<UpgradeState>,
+    ) -> Result<Prepared, Refusal> {
+        let listener = std::fs::File::open("/dev/null").expect("/dev/null opens");
+        state
+            .set_listener(listener.as_fd(), PathBuf::from("/nonexistent/d.sock"))
+            .expect("the listener is recorded");
+        prepare(PathBuf::from("/nonexistent/felis-daemon"), pool, state).await
+    }
+
+    #[tokio::test]
+    async fn a_second_upgrade_is_busy_before_it_probes() {
+        let pool = Arc::new(Mutex::new(SessionPool::new()));
+        let state = UpgradeState::replaceable();
+        let _first = Claim::take(&state).expect("unclaimed");
+        let refusal = prepare_with_a_listener(&pool, &state).await.err();
+        assert_eq!(refusal, Some(Refusal::Busy));
+    }
+
+    #[tokio::test]
+    async fn a_draining_daemon_refuses_before_it_probes() {
+        let pool = Arc::new(Mutex::new(SessionPool::new()));
+        pool.lock().await.start_draining();
+        let state = UpgradeState::replaceable();
+        let refusal = prepare_with_a_listener(&pool, &state).await.err();
+        assert_eq!(refusal, Some(Refusal::Draining));
+        assert!(
+            Claim::take(&state).is_some(),
+            "the refusal released its claim"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_version_probe_releases_the_claim() {
+        let pool = Arc::new(Mutex::new(SessionPool::new()));
+        let state = UpgradeState::replaceable();
+        let refusal = prepare_with_a_listener(&pool, &state).await.err();
+        assert!(
+            matches!(refusal, Some(Refusal::ProbeFailed(_))),
+            "{refusal:?}"
+        );
+        assert!(Claim::take(&state).is_some());
+        assert!(
+            pool.lock().await.begin_upgrade(),
+            "the pool is left admitting"
         );
     }
 }
