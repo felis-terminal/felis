@@ -120,7 +120,7 @@ A new message/verb typically touches, in dependency order:
 - `docs/explanation/architecture/ipc.md` if a design decision was made.
 - `docs/reference/control-surfaces.md` if the verb adds a knob.
 - Affected `docs/how-to/` recipes and the two tutorials.
-- **`skills/felis/SKILL.md`** — the shipped agent-facing skill documents the verbs, `--format` shapes, and the three
-  guarantees; a verb change that skips it ships a stale skill to every user.
+- **`skills/felis/`** (`SKILL.md` and `references/`): the shipped agent-facing skill documents the verbs, `--format`
+  shapes, and the three guarantees; a verb change that skips it ships a stale skill to every user.
 
 Run the `doc-cascade` skill for the grep sweep.

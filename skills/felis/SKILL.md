@@ -5,7 +5,7 @@ description:
   exit code and output, steer a REPL or TUI with keystrokes and read the screen back, or wait for another session (a TUI
   agent, a build) to finish. Use when a command would outlive the agent's own shell tool, needs a real PTY, or must be
   watched from outside. The interface is `felis sessions` with `--format json` / `--format jsonl`; not for editor
-  plugins, keymap scripts, or config debugging (see `docs/reference/cli.md`).
+  plugins, keymap scripts, or config debugging.
 allowed-tools: Bash
 ---
 
@@ -21,9 +21,8 @@ This skill covers the three things a coding agent does with it:
 2. **Drive**: a REPL, debugger, or TUI, sending keys and reading the screen.
 3. **Watch**: wait for a session someone else started (a full-screen TUI agent, a long command) to finish or go idle.
 
-The contract is `docs/reference/cli.md` (task recipes in `docs/how-to/`); read it before relying on a flag not shown
-here. The surfaces an agent rarely reaches (editor bridge, window moves, keymap scripts, config and GUI diagnostics) are
-listed at the end with pointers only.
+This file holds the contract and the core workflow; "Where to read next" maps the rest to reference files, loaded only
+when a task reaches them.
 
 ## The contract
 
@@ -135,194 +134,21 @@ Capture rows are `{"v":1,"row":N,"text":"…","soft_wrap_continued":bool}`; scro
 `--ansi` composes with `--format jsonl`: each row gains an `ansi` field while `text` stays plain. The mark-range sources
 add `exit_code` to the terminal when the closing D mark carried one.
 
-A character's index in `text` is not its column: a wide character fills two columns and a combining mark none. To aim a
-mouse report (1-based) at text, take a `col_spans` segment on a live row (`row >= 0`) and add 1 to its row and start
-column. The default search skips the alternate screen, where a fullscreen TUI lives; `search --source visible` reads it,
-and every segment it returns is on a live row. A daemon too old for `--source visible` makes it exit `2` with
-`unsupported`. A Kitty image drawn with Unicode placeholders captures as runs of U+10EEEE plus combining diacritics;
-filter those rows out of text you match, and treat their presence as the evidence that an image was placed.
+## Where to read next
 
-### Payload limits
+Load a reference file only when the task reaches it:
 
-An over-limit request is refused before it reaches the daemon, exit `1` with `{"error":{"kind":"invalid_request",…}}`.
-Chunk rather than raise.
+| When                                                                     | Read                                                             |
+| ------------------------------------------------------------------------ | ---------------------------------------------------------------- |
+| Listing, tagging, or waiting on a session someone else started           | [references/watching.md](references/watching.md)                 |
+| A verb exits `1` or `2` and the `kind` does not say what to do           | [references/troubleshooting.md](references/troubleshooting.md)   |
+| Aiming a mouse report, reading a fullscreen TUI, image placeholders      | [references/reading-the-grid.md](references/reading-the-grid.md) |
+| `--host`, or `felis` inside a session reaching an unexpected daemon      | [references/remote.md](references/remote.md)                     |
+| The bridge, window moves, keymap chords, `doctor` / `config` diagnostics | [references/other-surfaces.md](references/other-surfaces.md)     |
 
-| Verb              | Bound                                                                                                        |
-| ----------------- | ------------------------------------------------------------------------------------------------------------ |
-| `sessions send`   | 16 MiB − 64 of text; 16 MiB with `--raw`                                                                     |
-| `sessions search` | 4 KiB of pattern                                                                                             |
-| `sessions spawn`  | 4 KiB each for the program and `--cwd`; 4096 argv entries / 1 MiB of argv; 4096 `--env` pairs / 1 MiB of env |
-
-## Discovering and labeling sessions
-
-```sh
-felis sessions list --format json          # {"v":1,"sessions":[…]}
-felis sessions info "$ID" --format json    # geometry, idle, title, cwd,
-                                           # foreground, last_notification,
-                                           # tags, last_exit_code, attachments,
-                                           # program_status
-felis sessions tag "$ID" agent work        # opaque labels; idempotent
-felis sessions tag "$ID" done --remove agent   # add + remove atomically
-felis sessions spawn --tag agent -- …      # label at creation, no untagged gap
-felis sessions list --tag agent --format json  # client-side filter
-```
-
-Tags are bounded (≤32 per session, ≤128 bytes each); an over-cap delta is refused whole at exit `1`.
-
-Two status fields exist for an external picker to annotate with: `foreground`, the program in the terminal foreground
-resolved from the PTY foreground pgid (not content sniffing), and `last_notification`, the most recent OSC 9/99/777,
-which is the "blocked / done" signal a full-screen TUI agent emits. `last_exit_code` is the youngest OSC 133 D mark and
-needs shell integration.
-
-`program_status` (experimental) is the session's OSC 7501 records, for producers that report their own state:
-`[{id, state, kind?, progress?, app?, title?, msg?}]`, `id` `""` the root record. `state` is `idle`, `working`, `done`,
-`blocked` or `error`; `blocked` with `kind` (`permission`, `question`, `auth`) is the "waiting on the user" signal, and
-`msg` says why. Treat a `state` or `kind` you do not know as unknown. A new shell prompt (with shell integration) or the
-session's exit drops `working` and `blocked`; `done` and `error` stay until the program replaces them. It is a snapshot:
-poll `sessions info` for it.
-
-```sh
-felis sessions list --format json | jq '.sessions[] | select(any(.program_status[]; .state == "blocked")) | .id'
-```
-
-A row with `"exited":true` is a corpse in the post-exit grace: its shell is gone and the daemon reaps it seconds after
-the last detach. Never route new work at it (`.sessions[] | select(.exited != true)`).
-
-## Waiting for status: pick by producer
-
-```sh
-felis notifications subscribe --format jsonl   # OSC 9/99/777 from every session
-felis notifications subscribe --session "$ID" --once --timeout 600 --format jsonl
-                                               # block for THAT session's next one
-```
-
-Items are `{"v":1,"session_id","title","body","urgency","notification_id",` `"session_title","cwd","attached"}`, then
-the stream's one terminal (`--once` writes one too). A consumer that falls behind sees
-`{"v":1,"event":"lag","dropped":N}`; the dropped events may include the one it waited for. `--once` exits `1` on
-`--timeout`, on a clean end (daemon shutdown), or on an unresolvable `--session` prefix, and `2` if the daemon dropped
-the connection without ending the stream.
-
-A full-screen TUI agent (Claude Code etc.) emits no OSC 133 marks, so `send --wait` never fires for it;
-`--session --once` is its completion signal only when it is configured to emit OSC 9/99/777. A plain build emits no OSC
-9, so `send --wait` is the tool there.
-
-A producer that reports OSC 7501 status is the cheapest to wait on: poll until it holds a status and none of it is
-`working`. The loop also ends on `blocked`, which means the producer waits on input, so read the states before acting:
-
-```sh
-deadline=$((SECONDS + 600))
-while :; do
-  status=$(felis sessions info "$ID" --format json) || { rc=2; break; }   # session gone, daemon lost
-  echo "$status" | jq -e '.program_status | length > 0 and all(.[]; .state != "working")' >/dev/null && { rc=0; break; }
-  [ "$SECONDS" -ge "$deadline" ] && { rc=1; break; }
-  sleep 2
-done
-echo "$status" | jq '.program_status'
-```
-
-When a producer emits none of these, poll the visible grid against a deadline: `search --source visible` exits `0` on a
-match and `1` on none. Retry only on `1`; a `2` (a daemon too old for `--source visible`, a lost connection) does not
-clear by waiting, so stop and report it. The check sees only what is on screen now, so anchor the pattern on a row your
-own input cannot produce (a status line, a line-anchored regex), or the echo of your prompt satisfies it before the
-reply exists:
-
-```sh
-tries=300                          # 2 s apart: a 10-minute deadline
-while :; do
-  felis sessions search "$ID" '^● Done' --source visible --regex >/dev/null
-  rc=$?                            # 0 matched, 1 not yet, 2 failed to ask
-  [ "$rc" -ne 1 ] && break
-  tries=$((tries - 1)); [ "$tries" -le 0 ] && break
-  sleep 2
-done
-```
-
-## When something fails
-
-**`spawn` refused, `send` goes nowhere: `felis daemon status --format json`.** One object listing every admitted
-resource as `{"resource","unit",` `"scope","total_used","max_subject_used","per_subject_limit",` `"global_limit"}`;
-absent fields mean no value, so read with `.field // empty`. Two rows matter to an agent. A spawn past the `sessions`
-cap (256) or a connect past the `connections` cap (1024) is `{"error":{"kind":"at_capacity"}}` at exit `1`: reap or
-close and retry rather than treating it as a broken invocation. A `pty_input_bytes` row near its per-subject limit means
-the child stopped reading its stdin; `send` then blocks until admitted, and `--wait --timeout N` bounds that wait too.
-The verb exits `2` for an unreachable daemon and never starts one.
-
-**Spawn refused with `invalid_request` naming a draining daemon: that daemon is going away.** `"draining": true` in
-`daemon status` says the same thing. No reap makes room, so retrying against it never succeeds; start the session on
-another daemon (`--socket` / `--host`).
-
-**Ending a daemon you started: `felis daemon stop`.** Point verb, `--format json`, never autospawns. A bare stop refuses
-while anything is running (exit `1`, `{"error":{"kind":"refused","sessions":N}}`), so it cannot destroy an agent's work
-by accident. `--force` destroys every session and stops; `--when-empty` refuses new sessions and stops after the last
-one ends, answering `{"outcome":"draining","mode":"when_empty", "sessions":N}`. A stop that goes through answers
-`{"outcome":"stopping","mode":…}` at exit `0`; exit `2` means the daemon is unreachable or too old to answer.
-
-On Linux a daemon started by a client running under the systemd user manager is a transient unit,
-`felis-daemon-<hash>.service` in `app.slice`; `systemctl --user stop` on it is refused, so the verb above is the only
-way down (`docs/reference/cli.md` "Auto-spawning").
-
-**Stale daemon: `felis version --format json`.** `cli`, `client`, `daemon`, each `{"version","revision","dirty"}`;
-`client` and `daemon` are `null` unless their `*_status` is `ok`. The daemon outlives its windows, so compare
-`daemon.revision` against `cli.revision`. `felis --version` reports only this binary and dials nothing, so it refuses
-`--config`, `--host`, `--socket`, and `--ssh-arg` at exit `2` rather than ignoring them (the per-verb placement matrix
-is `docs/reference/cli.md` "Global options").
-
-**Replacing a stale daemon without losing sessions: `felis daemon upgrade`.** Point verb, `--format json`, never
-autospawns. The daemon execs the `felis-daemon` installed beside `felis` in place and keeps every session; it answers
-`{"outcome":"upgrading","successor":"<path>"}` at exit `0`, and attached windows re-attach on their own. A refusal is
-exit `1`, `{"error":{"kind":"refused","reason":…}}`, with the daemon still serving; the fallback is
-`felis daemon stop --when-empty`. Exit `2` covers an unreachable daemon and one too old to answer (`unsupported`). With
-`--host`, the remote host's own `felis daemon upgrade` runs over `ssh` and its output passes through; a remote `felis`
-too old to have the verb is reported as `unsupported`, exit `2`.
-
-## Local or remote, same verbs
-
-`felis --host user@remote sessions …` runs every verb over SSH (`ssh <host> felis-daemon relay`) with identical ids,
-exit codes, and shapes, auto-spawn included: `--host … sessions spawn` starts a cold remote daemon exactly as a local
-`spawn` does, while every read/drive verb runs `relay --no-spawn` and exits `2` instead. `--host` and `--socket` are
-mutually exclusive; a relative `--socket` path is anchored to the caller's working directory; `--ssh-arg <TOKEN>`
-(repeatable, needs `--host`) splices verbatim tokens before the destination.
-
-The local daemon is resolved as `--socket`, then `$FELIS_SOCKET`, then the platform default, which on Unix is
-`/tmp/felis.<uid>/daemon.sock`, derived from the uid alone. No environment variable takes part, so a desktop login, an
-SSH login and a relay all reach one daemon. A socket named by `--socket` or `$FELIS_SOCKET` must sit in a dedicated
-directory you own with mode `0700`, and the daemon refuses to start otherwise. Every daemon stamps `FELIS_SOCKET` into
-its children, so `felis` inside a session reaches the daemon holding it; run `env -u FELIS_SOCKET felis …` to reach the
-default endpoint. Do not set `FELIS_SOCKET` yourself; `sessions spawn --env` refuses it.
-
-A session spawned over `--host` inherits the remote login's environment, and its `SSH_AUTH_SOCK` is a stable
-daemon-owned path, so agent forwarding survives the SSH connection that opened it. The endpoint outlives the login, so
-the only thing that ends a remote daemon short of a reboot is the systemd user manager stopping one it started for a
-non-lingering user.
-
-## Surfaces this skill does not cover
-
-Each is documented in `docs/reference/cli.md` under the named section; none is needed for the three scenarios above.
-
-- **`felis bridge`**: one long-lived JSON-lines process for an editor plugin that would otherwise pay a process launch
-  per keystroke ("Other verbs"; protocol in `docs/reference/ipc.md`, "Non-Rust clients: the stdio bridge"). Same `kind`
-  vocabulary as the CLI, failures on stdout, no `--wait` and no `--key`. Its ops are session automation only
-  (`sessions.*`, `notifications.subscribe`, `cancel`): the operator verbs (`daemon`, `config`, `doctor`, `version`), the
-  window launches, and the shell plumbing (`completions`, `__mangen`, `__complete-sessions`) are CLI-only, run as point
-  verbs with `--format json`. It admits 64 concurrent operations and 32 auxiliary links, bounds stream and stdout
-  queues, rejects unknown fields and parameters (the grammar is `$defs/request` of `felis-bridge-v1.schema.json`), and
-  exits `1` immediately if stdout fails. A local relative `sessions.spawn` `cwd` is anchored at the bridge process's
-  directory.
-- **`sessions switch`, `felis ssh <dest>`, `felis window retarget [<socket>]`**: move a live window to another session
-  or daemon. They act on windows, which an agent driving a headless session has none of ("Session verbs", "Re-point a
-  window across daemons"). `felis ssh devbox` re-points the window it runs in at devbox's daemon; `felis --host devbox`
-  opens a new window there instead, and before a headless verb the same flag names the daemon that verb dials.
-- **`pipe` / `run` keymap chords** and their `FELIS_ORIGIN_SESSION_ID` / `FELIS_HOST` / `FELIS_CWD` environment:
-  user-authored scripts fired from a window's `[keymap]` (`docs/reference/keybindings.md`, "Unbound by default").
-- **`felis doctor`, `felis config check`**: GUI and config diagnostics for a human at the desk ("Doctor", "Config
-  verbs"). The one exception worth reaching for: when a roster looks empty where you expected sessions,
-  `felis doctor --format json` on that host carries a `daemon-sibling` row when this shell's `$FELIS_SOCKET` names an
-  endpoint other than the default; the row says what the default holds, and when a felis daemon answers there its
-  `detail` names the path to pass to `felis --socket <path> sessions list`. `doctor`, `config check`, and
-  `config show-effective` are Point-diagnostic verbs: exit `1` means the document or a check reported diagnostics.
-  `doctor` and `config check` still write their result object; `config show-effective` writes an `invalid_request` error
-  object instead. `felis doctor report` prints the same checklist plus the environment a bug report needs; it is a Point
-  verb and exits `0` with failing rows ("Doctor report").
+For a flag not shown here, `felis <verb> --help` and `man felis-<verb>` (for example `man felis-sessions-send`) ship
+with every install and work offline. The full contract is the
+[CLI reference](https://github.com/felis-terminal/felis/blob/main/docs/reference/cli.md).
 
 ## What felis deliberately does not do
 

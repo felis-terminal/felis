@@ -118,8 +118,8 @@ the batch case.
   Reference (`docs/reference/...`) holds only normative facts.
 - History belongs to `git log` (and `CHANGELOG.md` for user-affecting surfaces), never to the docs.
 - Run the `doc-cascade` checklist before declaring a doc change done: update the twin, grep the changed term across
-  `docs/`, regenerate schemas/contracts when touched, and check the non-doc mirrors (`README.md`,
-  `skills/felis/SKILL.md`, `nix/hm-module.nix`, `CHANGELOG.md`).
+  `docs/`, regenerate schemas/contracts when touched, and check the non-doc mirrors (`README.md`, `skills/felis/`,
+  `nix/hm-module.nix`, `CHANGELOG.md`).
 
 ## Workspace policy
 
