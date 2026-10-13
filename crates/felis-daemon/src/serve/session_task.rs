@@ -1273,7 +1273,11 @@ pub(crate) async fn end_child(child: &ChildHandle) {
 fn encode_input(core: &ParseCore, msg: &InputMsg) -> Option<Vec<u8>> {
     match msg {
         InputMsg::Mouse(event) => felis_grid::encode_mouse(
-            *event,
+            felis_grid::fill_cell_center_pixels(
+                *event,
+                (core.grid.cols(), core.grid.rows()),
+                core.grid.winsize_pixels(),
+            ),
             core.grid.mouse_protocol(),
             core.grid.mouse_encoding(),
         ),
@@ -6092,6 +6096,36 @@ mod tests {
                 })
             )),
             "the surviving mirror must keep receiving frames",
+        );
+    }
+
+    #[test]
+    fn a_mouse_event_without_pixels_reports_its_cell_center_under_sgr_pixels() {
+        use felis_protocol::messages::{InputMods, MouseAction, MouseButton, MouseEvent};
+
+        let mut core = ParseCore::new(24, 80);
+        core.grid.set_winsize_pixels((809, 384));
+        core.parser
+            .advance(&mut core.grid, b"\x1b[?1000h\x1b[?1016h");
+        let event = |px, py| {
+            InputMsg::Mouse(MouseEvent {
+                button: Some(MouseButton::Left),
+                action: MouseAction::Press,
+                mods: InputMods::empty(),
+                x: 80,
+                y: 1,
+                px,
+                py,
+            })
+        };
+        assert_eq!(
+            encode_input(&core, &event(0, 0)).as_deref(),
+            Some(&b"\x1b[<0;804;8M"[..]),
+        );
+        assert_eq!(
+            encode_input(&core, &event(805, 3)).as_deref(),
+            Some(&b"\x1b[<0;805;3M"[..]),
+            "a window's pixels pass through",
         );
     }
 

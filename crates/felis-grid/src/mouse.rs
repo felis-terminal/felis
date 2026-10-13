@@ -13,21 +13,8 @@ pub fn encode_mouse(
     protocol: MouseProtocol,
     encoding: MouseEncoding,
 ) -> Option<Vec<u8>> {
-    if protocol == MouseProtocol::Off {
+    if !mouse_event_reported(protocol, event.action) {
         return None;
-    }
-    match event.action {
-        MouseAction::Press | MouseAction::Release => {}
-        MouseAction::Drag => {
-            if matches!(protocol, MouseProtocol::ButtonEvents) {
-                return None;
-            }
-        }
-        MouseAction::Motion => {
-            if !matches!(protocol, MouseProtocol::AnyMotion) {
-                return None;
-            }
-        }
     }
     let cb = button_code(event.button, event.action, event.mods);
     Some(match encoding {
@@ -35,6 +22,53 @@ pub fn encode_mouse(
         MouseEncoding::SgrPixels => encode_sgr(cb, event.action, event.px, event.py),
         MouseEncoding::Default => encode_x10(cb, event),
     })
+}
+
+/// Whether `protocol` reports an event of `action` at all: the filter
+/// [`encode_mouse`] applies, so a sender can refuse an event before
+/// writing it.
+#[must_use]
+pub const fn mouse_event_reported(protocol: MouseProtocol, action: MouseAction) -> bool {
+    match action {
+        MouseAction::Press | MouseAction::Release => !matches!(protocol, MouseProtocol::Off),
+        MouseAction::Drag => matches!(
+            protocol,
+            MouseProtocol::ButtonAndDrag | MouseProtocol::AnyMotion
+        ),
+        MouseAction::Motion => matches!(protocol, MouseProtocol::AnyMotion),
+    }
+}
+
+/// `event` with each pixel axis it left at `0` set to the middle of the
+/// pixels a program maps back to its cell at the full ratio
+/// `winsize_pixels / cells` (cols, rows); a floored per-cell size drifts
+/// onto the neighboring column across a wide grid.
+#[must_use]
+pub fn fill_cell_center_pixels(
+    event: MouseEvent,
+    cells: (u16, u16),
+    winsize_pixels: (u16, u16),
+) -> MouseEvent {
+    let center = |pixel: u16, cell: u16, cells: u16, extent: u16| {
+        if pixel != 0 || cells == 0 || extent == 0 {
+            return pixel;
+        }
+        let (cells, extent) = (u64::from(cells), u64::from(extent));
+        let index = u64::from(cell.max(1) - 1);
+        let first = (index * extent).div_ceil(cells);
+        let past = ((index + 1) * extent).div_ceil(cells);
+        let middle = if past > first {
+            u64::midpoint(first, past - 1)
+        } else {
+            first.min(extent - 1)
+        };
+        u16::try_from(middle + 1).unwrap_or(u16::MAX)
+    };
+    MouseEvent {
+        px: center(event.px, event.x, cells.0, winsize_pixels.0),
+        py: center(event.py, event.y, cells.1, winsize_pixels.1),
+        ..event
+    }
 }
 
 /// xterm `ctlseqs` button-code byte, shared by both encodings before

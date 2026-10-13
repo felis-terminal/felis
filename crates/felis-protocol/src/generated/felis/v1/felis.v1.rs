@@ -799,10 +799,11 @@ pub struct InputMouseEvent {
     /// Cell row, 1-based.
     #[prost(uint32, tag="5")]
     pub y: u32,
-    /// Pixel column within the text area, 1-based (?1016 SGR-pixels).
+    /// Pixel column within the text area, 1-based (?1016 SGR-pixels); 0 asks
+    /// the daemon to place it at the middle of the cell.
     #[prost(uint32, tag="6")]
     pub px: u32,
-    /// Pixel row within the text area, 1-based.
+    /// Pixel row within the text area, 1-based; 0 as for px.
     #[prost(uint32, tag="7")]
     pub py: u32,
 }

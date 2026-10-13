@@ -366,3 +366,90 @@ fn every_encoding_fits_the_reserved_report_size() {
         );
     }
 }
+
+const ALL_PROTOCOLS: [MouseProtocol; 4] = [
+    MouseProtocol::Off,
+    MouseProtocol::ButtonEvents,
+    MouseProtocol::ButtonAndDrag,
+    MouseProtocol::AnyMotion,
+];
+
+#[test]
+fn mouse_event_reported_is_exactly_the_filter_encode_mouse_applies() {
+    let actions = [
+        (Some(MouseButton::Left), MouseAction::Press),
+        (Some(MouseButton::Left), MouseAction::Release),
+        (Some(MouseButton::Left), MouseAction::Drag),
+        (None, MouseAction::Motion),
+    ];
+    for protocol in ALL_PROTOCOLS {
+        for (button, action) in actions {
+            let e = ev(button, action, InputMods::empty(), 3, 4);
+            assert_eq!(
+                mouse_event_reported(protocol, action),
+                encode_mouse(e, protocol, MouseEncoding::Sgr).is_some(),
+                "{protocol:?} / {action:?}",
+            );
+        }
+    }
+}
+
+fn unplaced(x: u16, y: u16) -> MouseEvent {
+    MouseEvent {
+        px: 0,
+        py: 0,
+        ..ev(
+            Some(MouseButton::Left),
+            MouseAction::Press,
+            InputMods::empty(),
+            x,
+            y,
+        )
+    }
+}
+
+#[test]
+fn a_filled_center_maps_back_to_its_own_cell_at_the_full_ratio() {
+    // Extents the cell counts do not divide: a center built from the
+    // floored cell (809 / 80 = 10) puts column 80's click on column 79.
+    for (extent, cells) in [
+        (809_u16, 80_u16),
+        (800, 80),
+        (1001, 7),
+        (17, 16),
+        (32_768, 2048),
+    ] {
+        for cell in 1..=cells {
+            let filled =
+                fill_cell_center_pixels(unplaced(cell, cell), (cells, cells), (extent, extent));
+            let back = |px: u16| u64::from(px - 1) * u64::from(cells) / u64::from(extent);
+            assert_eq!(
+                back(filled.px),
+                u64::from(cell - 1),
+                "{extent} px over {cells}, col {cell}"
+            );
+            assert_eq!(
+                back(filled.py),
+                u64::from(cell - 1),
+                "{extent} px over {cells}, row {cell}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_filled_center_stays_within_an_extent_narrower_than_its_cells() {
+    let filled = fill_cell_center_pixels(unplaced(80, 24), (80, 24), (1, 1));
+    assert_eq!((filled.px, filled.py), (1, 1));
+}
+
+#[test]
+fn a_supplied_pixel_axis_is_left_as_the_window_placed_it() {
+    let placed = MouseEvent {
+        px: 137,
+        py: 0,
+        ..unplaced(10, 5)
+    };
+    let filled = fill_cell_center_pixels(placed, (80, 24), (800, 384));
+    assert_eq!((filled.px, filled.py), (137, 72));
+}

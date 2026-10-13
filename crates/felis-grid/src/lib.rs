@@ -334,7 +334,7 @@ use modes::{
     known_modifiable_dec_mode, permanently_reset_ansi, permanently_reset_dec_mode,
     permanently_set_dec_mode,
 };
-pub use mouse::encode_mouse;
+pub use mouse::{encode_mouse, fill_cell_center_pixels, mouse_event_reported};
 use osc_color::{format_osc_color_response, parse_x_color};
 use osc52::{format_osc_52_response, parse_osc_52_selection};
 pub use placeholder_resolve::PlaceholderCell;
