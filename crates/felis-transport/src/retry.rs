@@ -63,16 +63,6 @@ impl RetryPolicy {
     }
 }
 
-impl Default for RetryPolicy {
-    fn default() -> Self {
-        Self {
-            initial_backoff: Duration::from_millis(100),
-            max_backoff: Duration::from_secs(5),
-            max_attempts: nonzero(10),
-        }
-    }
-}
-
 /// Carries the last failure.
 #[derive(Debug, thiserror::Error)]
 #[error("retry exhausted after {attempts} attempt(s); last error: {source}")]
@@ -163,15 +153,6 @@ mod tests {
         assert!(
             (Duration::from_secs(15)..Duration::from_secs(16)).contains(&window),
             "managed boot window {window:?}",
-        );
-    }
-
-    #[test]
-    fn the_default_policy_gives_up_inside_half_a_minute() {
-        let window = RetryPolicy::default().total_backoff();
-        assert!(
-            window < Duration::from_secs(30),
-            "default window {window:?}"
         );
     }
 
