@@ -592,7 +592,7 @@ Only the variables named above have their values reported. Before either renderi
 
 The report reads no hostname, username, session title, or terminal content on its own. One can still reach it inside a
 check's detail (an error passed on from a `--host` dial, for one) or a configured path outside the home directory, such
-as a `font.files` entry.
+as `shader.post.file`.
 
 The fonts come from the frontend: `doctor report` runs `felis-client --doctor-report-probe[=<config path>]`, the probe
 `doctor` runs plus a font resolution. When that probe fails, a frontend that predates the flag included, the plain probe
