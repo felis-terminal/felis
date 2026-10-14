@@ -19,7 +19,7 @@ set -eu
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get install -y -qq --no-install-recommends \
-  locales xvfb xauth fonts-dejavu-core fontconfig-config libvulkan1 \
+  locales xvfb xauth fonts-dejavu-core libfontconfig1 libvulkan1 \
   mesa-vulkan-drivers libwayland-client0 libxkbcommon-x11-0
 locale-gen en_US.UTF-8 ja_JP.UTF-8
 
