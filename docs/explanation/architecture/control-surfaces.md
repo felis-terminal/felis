@@ -1000,9 +1000,9 @@ the D mark of even an instantly-finishing command must still arrive on this stre
 
 That ordering is also why the wait is a flag on `send` and not a verb beside it: a standalone `wait` opens its own
 connection, so a command started by a preceding `send` can finish before the wait subscribes, a race the surface's own
-docs would have to warn callers away from. Nothing is lost: `send --wait` with no text or `--key` injects nothing and
-purely watches. The named caller is the agent-driving skill (`skills/felis`), which otherwise polls `capture` in a sleep
-loop.
+docs would have to warn callers away from. Nothing is lost: `send --wait` with no text, `--key` or `--mouse` injects
+nothing and purely watches. The named caller is the agent-driving skill (`skills/felis`), which otherwise polls
+`capture` in a sleep loop.
 
 _Revisit if_ a waiter needs marks without the full grid-diff traffic an attach carries (e.g. hundreds of concurrent
 waiters), at which point a lean mark-only subscription kind earns its place.
@@ -1040,19 +1040,38 @@ intent.
 _Revisit if_ a surface appears that must encode a keystroke with no daemon in reach, which would argue for a client-side
 encoder.
 
+#### `send --mouse` refuses an event the program would not see
+
+`send --mouse` sends `InputMsg::Mouse` for the same stale-mode reason: a hand-encoded `--raw` report guesses between
+X10, SGR and SGR-pixels, and Textual turns on SGR-pixels wherever `?2048` is supported. The daemon also places the
+pixels, because the pixel extent a program maps a report back with is the PTY winsize, which can hold a nominal cell the
+roster's pixel fields report as unknown.
+
+Unlike a keystroke, a mouse event has a state in which the program discards it: with no mouse reporting on, the encoder
+writes nothing, and a caller that clicked a button would read success while nothing happened. So the CLI checks each
+event against the `ModeFlags` mouse protocol and the grid before it writes, and refuses the whole command. This narrows
+the stale-mode window without closing it: a mode change after the check still drops an event behind a successful fence.
+Closing it would need a per-event outcome on the fence, a wire change no consumer has needed, and programs set their
+mouse modes once at start-up.
+
+Cells are 0-based, as `search`'s `col_spans` and `capture`'s rows are, so a match is clicked without arithmetic.
+
+_Revisit if_ a program is found that toggles mouse reporting around the input it is waiting for, which would make the
+check's residual window a real failure and earn the per-event outcome.
+
 #### `send` is one typed operation
 
-Three constraints are its whole grammar ([cli.md](../../reference/cli.md) "Verb details"): at least one of TEXT, `--key`
-or `--wait`; `--raw` with TEXT; `--timeout` with `--wait`. The operation is "deliver this input, then optionally await
-the next prompt mark", which with no payload degenerates to watching the command already running.
+Three constraints are its whole grammar ([cli.md](../../reference/cli.md) "Verb details"): at least one of TEXT,
+`--key`, `--mouse` or `--wait`; `--raw` with TEXT; `--timeout` with `--wait`. The operation is "deliver this input, then
+optionally await the next prompt mark", which with no payload degenerates to watching the command already running.
 
 Splitting it into `send` / `key` / `wait` verbs is rejected, and the two halves fail differently. A separate `wait`
 races, for the reason the `send --wait` section above gives: it subscribes after the input was injected, so a fast
 command's `D` mark can be gone before the verb is listening. A separate `key` verb has no race, since a finished `send`
 has already enqueued its paste ahead of anything issued later; what keeps `--key` on `send` is that one call names one
-target, resolves it once, and states the input sequence in order. Every combination of payload kind, chords and wait is
-meaningful, which is what makes the cross-product one operation rather than three verbs sharing a target.
+target, resolves it once, and states the input sequence in order. Every combination of payload kind, chords, mouse
+events and wait is meaningful, which is what makes the cross-product one operation rather than verbs sharing a target.
 
 Hence the rule the grammar is frozen under: no new flag may depend on another. The two `requires` above are the whole
-dependency graph, and a different wait condition or a different payload kind is a new verb, not a fourth flag that reads
-only in combination with one of these.
+dependency graph. An input kind that stands alone, as `--key` and `--mouse` do, joins the first constraint; anything
+that would read only in combination with one of these flags is a new verb.

@@ -10,6 +10,7 @@
 
 mod attachment;
 mod driver;
+mod mouse;
 mod mutate;
 mod read;
 #[cfg(test)]
@@ -42,7 +43,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 
 use self::attachment::{cmd_switch, require_switch_from};
 use self::mutate::{
-    WaitParams, cmd_evict, cmd_kill, cmd_send, cmd_tag, collect_send_payload, parse_chord_arg,
+    SendSteps, WaitParams, cmd_evict, cmd_kill, cmd_send, cmd_tag, collect_send_payload,
     parse_env_pair, spawn_args_for, spawn_on,
 };
 use self::read::{RowEncoding, cmd_capture, cmd_info, cmd_list, cmd_search};
@@ -130,7 +131,7 @@ async fn attach_by_prefix<R, W>(
     conn: &mut Connection<R, W>,
     out: &Reporter,
     id_prefix: &str,
-) -> Result<u128, i32>
+) -> Result<SessionInfo, i32>
 where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
@@ -139,7 +140,7 @@ where
         .attach_by_prefix(id_prefix.to_owned(), AttachIntent::Deliberate)
         .await
     {
-        Ok(info) => Ok(info.id),
+        Ok(info) => Ok(info),
         // `NoMatch` carries no count, so it renders the resolver's own
         // sentence; `Ambiguous` carries one only in `detail`, which is
         // where the number a caller needs lives.
@@ -209,7 +210,7 @@ pub(crate) enum SessionOp {
         #[arg(value_name = "ID-OR-PREFIX", value_parser = crate::validate_session_id_prefix)]
         id: String,
         /// Literal text to send. `-` reads from stdin.
-        #[arg(value_name = "TEXT", required_unless_present_any = ["wait", "keys"])]
+        #[arg(value_name = "TEXT", required_unless_present_any = ["wait", "keys", "mouse"])]
         text: Option<String>,
         /// Send the bytes untouched, without bracketed-paste quoting.
         /// Use when injecting control bytes or escape sequences that
@@ -231,17 +232,8 @@ pub(crate) enum SessionOp {
         timeout: Option<u64>,
         #[command(flatten)]
         output: PointFormat,
-        /// Press a named key after the text: `--key up`, `--key enter`,
-        /// `--key ctrl+c` (repeatable, pressed in order).
-        ///
-        /// Keys are encoded against current keyboard modes; hand-written
-        /// `--raw` escapes send the wrong bytes to mode-switched programs.
-        #[arg(
-            long = "key",
-            value_name = "CHORD",
-            value_parser = parse_chord_arg
-        )]
-        keys: Vec<felis_client_core::Chord>,
+        #[command(flatten)]
+        steps: SendSteps,
     },
     /// Terminate a session and remove it from the daemon.
     ///
@@ -599,7 +591,7 @@ pub(crate) fn plan(op: SessionOp, target: &Reconnector) -> ControlFlow<i32, Plan
             wait,
             timeout,
             output,
-            keys,
+            steps,
         } => {
             // An empty payload is *not* a usage error: it must still
             // resolve the id so an unknown session reports 1;
@@ -635,7 +627,7 @@ pub(crate) fn plan(op: SessionOp, target: &Reconnector) -> ControlFlow<i32, Plan
             }
             let wait = wait.then_some(WaitParams { timeout });
             Plan::ops(out, move |conn| async move {
-                cmd_send(conn, &body, &id, bytes, raw, &keys, wait).await
+                cmd_send(conn, &body, &id, bytes, raw, &steps.0, wait).await
             })
         }
         SessionOp::Kill { id, output } => {

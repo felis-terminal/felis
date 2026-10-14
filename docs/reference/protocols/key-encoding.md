@@ -118,7 +118,7 @@ so Option-arrow word motions still work in shells while Cmd-W still closes the w
 ## Mouse reporting
 
 - Mouse position is reported in cell coordinates under the SGR encoding (`?1006h`); the SGR-pixels encoding (`?1016h`)
-  reports pixel resolution instead.
+  reports pixel resolution instead, the middle of the cell for an event from `felis sessions send --mouse`.
 - When the active program has a mouse protocol active (e.g. `?1000h` button events, `?1002h` button-event tracking,
   `?1003h` any-motion), wheel events are encoded as protocol mouse events and forwarded to the daemon. (Without an
   active mouse protocol, wheel input is consumed locally for scrollback; see [input.md](../../explanation/input.md).)

@@ -1,10 +1,19 @@
 # Reading the grid precisely
 
-Read this when you aim a mouse report at text, match against a fullscreen TUI, or see image placeholders in a capture.
+Read this when you click on text, match against a fullscreen TUI, or see image placeholders in a capture.
 
-A character's index in `text` is not its column: a wide character fills two columns and a combining mark none. To aim a
-mouse report (1-based) at text, take a `col_spans` segment on a live row (`row >= 0`) and add 1 to its row and start
-column.
+A character's index in `text` is not its column: a wide character fills two columns and a combining mark none. To click
+text, take a `col_spans` segment `[row, start, end]` from `search --source visible` and pass its row and a column inside
+`start..end` as they are; `--mouse` cells are 0-based like the segment:
+
+```sh
+felis sessions search "$ID" --source visible --format jsonl 'Save'
+# {"v":1,"line_index":4,"text":"   Save","byte_spans":[[3,7]],"col_spans":[[4,3,7]]}
+felis sessions send "$ID" --mouse click:3,4
+```
+
+`send --mouse` exits `1` with `invalid_request` and sends nothing when the program has no mouse reporting on (drive it
+with `--key` instead) or the cell is off the grid.
 
 The default search skips the alternate screen, where a fullscreen TUI lives; `search --source visible` reads it, and
 every segment it returns is on a live row. A daemon too old for `--source visible` makes it exit `2` with `unsupported`.

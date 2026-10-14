@@ -1071,9 +1071,10 @@ message InputMouseEvent {
   uint32 x = 4;
   // Cell row, 1-based.
   uint32 y = 5;
-  // Pixel column within the text area, 1-based (?1016 SGR-pixels).
+  // Pixel column within the text area, 1-based (?1016 SGR-pixels); 0 asks
+  // the daemon to place it at the middle of the cell.
   uint32 px = 6;
-  // Pixel row within the text area, 1-based.
+  // Pixel row within the text area, 1-based; 0 as for px.
   uint32 py = 7;
 }
 

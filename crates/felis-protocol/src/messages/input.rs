@@ -220,7 +220,8 @@ pub enum MouseAction {
 
 /// A single mouse event. Cell coordinates are 1-based to match xterm's
 /// wire encoding; the pixel coordinates ride alongside for the `?1016`
-/// SGR-pixel encoding, since only the client knows the cell metrics.
+/// SGR-pixel encoding, filled by a window from its pointer. A `0` pixel
+/// axis asks the daemon to place it at the middle of the cell.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MouseEvent {
     /// `None` when [`Self::action`] is [`MouseAction::Motion`].
@@ -231,7 +232,8 @@ pub struct MouseEvent {
     pub x: u16,
     /// Cell row, 1-based.
     pub y: u16,
-    /// Pixel column within the terminal text area, 1-based.
+    /// Pixel column within the terminal text area, 1-based; `0` when
+    /// the sender has no pointer.
     pub px: u16,
     /// Pixel row within the terminal text area, 1-based.
     pub py: u16,

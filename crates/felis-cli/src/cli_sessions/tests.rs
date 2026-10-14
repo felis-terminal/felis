@@ -14,8 +14,8 @@ use super::{
     SessionOp,
     attachment::{RetargetArgs, local_carrier, retarget_from_args, staged_retarget},
     mutate::{
-        chord_key_event, cmd_send, collect_send_payload, over_limit_payload, read_send_payload,
-        resolve_spawn_cwd, tag_result,
+        SendStep, SendSteps, chord_key_event, cmd_send, collect_send_payload, over_limit_payload,
+        read_send_payload, resolve_spawn_cwd, tag_result,
     },
     parse_region_source, parse_search_source, plan,
     read::{RowEncoding, cmd_search, session_passes_tag_filter},
@@ -317,6 +317,23 @@ fn send_test_session() -> SessionInfo {
 /// default: with bracketed paste off both deliver byte-identical
 /// PTY input, so the distinction lives in the message variant.
 async fn input_frames_from_send(bytes: &[u8], raw: bool, keys: &[&str]) -> Vec<InputMsg> {
+    let steps: Vec<SendStep> = keys
+        .iter()
+        .map(|k| SendStep::Key(k.parse().expect("chord")))
+        .collect();
+    let (code, frames) = send_against_burst(bytes, raw, &steps, Vec::new()).await;
+    assert_eq!(code, 0, "the scripted daemon satisfies every step");
+    frames
+}
+
+/// Run `cmd_send` against a scripted daemon whose rehydrate burst is
+/// `burst`, returning the exit code and every `InputMsg` frame written.
+async fn send_against_burst(
+    bytes: &[u8],
+    raw: bool,
+    steps: &[SendStep],
+    burst: Vec<felis_protocol::messages::GridMsg>,
+) -> (i32, Vec<InputMsg>) {
     use felis_protocol::MessageKind;
     use felis_protocol::messages::{GridMsg, OpsToClientMsg, OpsToDaemonMsg};
     use felis_transport::{FrameReader, FrameWriter};
@@ -364,6 +381,9 @@ async fn input_frames_from_send(bytes: &[u8], raw: bool, keys: &[&str]) -> Vec<I
                                 info: send_test_session(),
                             };
                             writer.send(&ready).await.expect("write Ready");
+                            for msg in &burst {
+                                writer.send(msg).await.expect("write burst frame");
+                            }
                             writer
                                 .send(&GridMsg::RehydrateEnd)
                                 .await
@@ -396,8 +416,6 @@ async fn input_frames_from_send(bytes: &[u8], raw: bool, keys: &[&str]) -> Vec<I
         FrameWriter::at_build_minor(client_write),
         felis_protocol::ConnectionMode::Window,
     );
-    let keys: Vec<felis_client_core::Chord> =
-        keys.iter().map(|k| k.parse().expect("chord")).collect();
     let out = Reporter::point(Format::Human);
     let code = cmd_send(
         conn,
@@ -405,13 +423,12 @@ async fn input_frames_from_send(bytes: &[u8], raw: bool, keys: &[&str]) -> Vec<I
         SEND_TEST_PREFIX,
         bytes.to_vec(),
         raw,
-        &keys,
+        steps,
         None,
     )
     .await
     .expect("send completes");
-    assert_eq!(code, 0, "the scripted daemon satisfies every step");
-    daemon.await.expect("daemon task")
+    (code, daemon.await.expect("daemon task"))
 }
 
 /// Run `cmd_send` against a daemon that reads the attach and then
@@ -557,7 +574,7 @@ fn send_op(text: String, raw: bool) -> SessionOp {
         output: PointFormat {
             format: Format::Json,
         },
-        keys: Vec::new(),
+        steps: SendSteps::default(),
     }
 }
 
@@ -735,5 +752,132 @@ fn the_source_refusal_names_exactly_the_current_vocabulary() {
             message.contains(&name),
             "`{name}` is missing from {message}"
         );
+    }
+}
+
+fn mouse_mode(
+    protocol: felis_protocol::messages::MouseProtocol,
+) -> felis_protocol::messages::GridMsg {
+    felis_protocol::messages::GridMsg::ModeFlags {
+        bracketed_paste: false,
+        alt_screen: true,
+        mouse_protocol: protocol,
+        application_cursor: false,
+        modify_other_keys: felis_protocol::messages::ModifyOtherKeys::Off,
+        application_keypad: false,
+        win32_input_mode: false,
+        reverse_video: false,
+    }
+}
+
+fn send_steps(argv: &[&str]) -> Vec<SendStep> {
+    use clap::Parser as _;
+
+    #[derive(clap::Parser)]
+    struct Probe {
+        #[command(subcommand)]
+        op: SessionOp,
+    }
+    let argv = ["probe", "send", "1a"].iter().chain(argv);
+    match Probe::try_parse_from(argv).expect("parses").op {
+        SessionOp::Send { steps, .. } => steps.0,
+        _ => unreachable!("parsed a send"),
+    }
+}
+
+#[test]
+fn key_and_mouse_steps_keep_their_command_line_order() {
+    let mouse = |s: &str| SendStep::Mouse(s.parse().expect("event"));
+    let key = |s: &str| SendStep::Key(s.parse().expect("chord"));
+    assert_eq!(
+        send_steps(&[
+            "--mouse",
+            "click:1,2",
+            "--key",
+            "enter",
+            "--mouse",
+            "wheel-up:0,0",
+            "--key",
+            "tab",
+        ]),
+        [
+            mouse("click:1,2"),
+            key("enter"),
+            mouse("wheel-up:0,0"),
+            key("tab")
+        ],
+    );
+}
+
+/// The events go out after the paste and between the keys, as
+/// unplaced 1-based cells the daemon encodes against the live modes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mouse_frames_follow_the_paste_in_order_with_the_keys() {
+    use felis_protocol::messages::{
+        InputMods, MouseAction, MouseButton, MouseEvent, MouseProtocol,
+    };
+
+    let steps = send_steps(&["--key", "escape", "--mouse", "click:12,4"]);
+    let (code, frames) = send_against_burst(
+        b"x",
+        false,
+        &steps,
+        vec![mouse_mode(MouseProtocol::ButtonEvents)],
+    )
+    .await;
+    assert_eq!(code, 0);
+    let click = |action| {
+        InputMsg::Mouse(MouseEvent {
+            button: Some(MouseButton::Left),
+            action,
+            mods: InputMods::empty(),
+            x: 13,
+            y: 5,
+            px: 0,
+            py: 0,
+        })
+    };
+    assert_eq!(
+        frames,
+        [
+            InputMsg::Paste(b"x".to_vec()),
+            InputMsg::Key(chord_key_event(&"escape".parse().expect("chord"))),
+            click(MouseAction::Press),
+            click(MouseAction::Release),
+        ],
+    );
+}
+
+/// A refused event fails the whole command before any frame, the
+/// paste and the keys included, goes out.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_event_the_program_would_not_see_sends_nothing() {
+    use felis_protocol::messages::{GridDims, GridMsg, MouseProtocol};
+
+    let resized = GridMsg::Size {
+        dims: GridDims {
+            rows: 10,
+            cols: 40,
+            pixel_w: 0,
+            pixel_h: 0,
+        },
+    };
+    for (argv, burst) in [
+        // No `ModeFlags` with reporting on: the program is not listening.
+        (&["--key", "enter", "--mouse", "click:0,0"][..], vec![]),
+        (
+            &["--mouse", "drag:0,0"],
+            vec![mouse_mode(MouseProtocol::ButtonEvents)],
+        ),
+        // Inside the attach reply's 80x24, outside the grid it resized to.
+        (
+            &["--mouse", "click:50,5"],
+            vec![mouse_mode(MouseProtocol::AnyMotion), resized],
+        ),
+    ] {
+        let steps = send_steps(argv);
+        let (code, frames) = send_against_burst(b"x", false, &steps, burst).await;
+        assert_eq!(code, 1, "{argv:?}");
+        assert_eq!(frames, [], "{argv:?}");
     }
 }

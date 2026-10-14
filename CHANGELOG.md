@@ -12,6 +12,12 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 
 ### Added
 
+- **CLI**: `felis sessions send --mouse EVENT` (repeatable) clicks, drags and scrolls in a fullscreen program at a
+  0-based cell, `[MODS+]ACTION[-BUTTON]:COL,ROW` (for example `--mouse click:12,4`), the cell numbers
+  `search --source visible` returns. The daemon encodes each event against the program's current mouse modes, and under
+  SGR-pixels (`?1016`) reports the middle of the cell. The verb exits `1` under `invalid_request` with nothing sent when
+  the program has no reporting on for an event or the cell is off the grid. `--key` and `--mouse` go out in command-line
+  order.
 - **CLI**: `felis daemon upgrade` asks the running daemon to replace its binary in place with the `felis-daemon`
   installed beside `felis`, keeping every session. It runs on Linux and macOS; on Windows it refuses with `unsupported`.
   A refusal leaves the daemon serving and names its reason (`--format json` puts it in `error.reason`);
