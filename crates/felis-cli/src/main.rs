@@ -30,6 +30,7 @@ mod cli_schema;
 mod cli_sessions;
 mod cli_version;
 mod conn;
+mod frontend_probe;
 #[cfg(test)]
 mod test_support;
 mod timestamp;

@@ -26,6 +26,7 @@ use crate::cli_output::{
 };
 use crate::cli_report::{self, HomeCollapse};
 use crate::conn::Resolved;
+use crate::frontend_probe::{self, Cause, ProbeFailure};
 
 /// The terminfo entry the daemon stamps into every session. Spelled
 /// here rather than imported because felis-cli must not depend on
@@ -872,36 +873,12 @@ fn run_probe(program: &OsStr, flag: &OsStr) -> Result<ProbeReport, String> {
     run_probe_classified(program, flag).map_err(|failure| failure.message)
 }
 
-struct ProbeFailure {
-    /// clap's refusal of an argument this frontend does not know: exit
-    /// `2` naming it on stderr.
-    unknown_flag: bool,
-    message: String,
-}
-
 fn run_probe_classified(program: &OsStr, flag: &OsStr) -> Result<ProbeReport, ProbeFailure> {
     let failed = |message: String| ProbeFailure {
-        unknown_flag: false,
+        cause: Cause::Failed,
         message,
     };
-    let output = Command::new(program).arg(flag).output().map_err(|err| {
-        failed(format!(
-            "the felis GUI frontend ({}) could not be run: {err}",
-            program.to_string_lossy()
-        ))
-    })?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(ProbeFailure {
-            unknown_flag: output.status.code() == Some(2) && stderr.contains("unexpected argument"),
-            message: format!(
-                "the felis GUI frontend exited {} for {}; it may predate this check",
-                output.status,
-                flag.to_string_lossy(),
-            ),
-        });
-    }
-    let text = String::from_utf8_lossy(&output.stdout);
+    let text = frontend_probe::run(program, flag)?;
     let report: ProbeReport = serde_json::from_str(text.trim())
         .map_err(|err| failed(format!("the frontend's probe report did not parse: {err}")))?;
     if report.v != PROBE_VERSION {
@@ -935,7 +912,7 @@ fn run_report_probe(
     };
     let plain = run_probe(program, DOCTOR_PROBE_FLAG.as_ref());
     let note = plain.is_ok().then(|| {
-        if failure.unknown_flag {
+        if failure.cause == Cause::UnknownFlag {
             "this felis-client predates the font probe".to_owned()
         } else {
             failure.message
@@ -976,7 +953,7 @@ fn which_on_path(name: &str) -> Option<PathBuf> {
 mod tests {
     use super::*;
     #[cfg(unix)]
-    use crate::test_support::{one_shot_daemon, private_dir};
+    use crate::test_support::{fake_frontend, one_shot_daemon, private_dir};
 
     fn identity(version: &str, revision: char) -> BuildIdentity {
         BuildIdentity::from_build_env(version, &revision.to_string().repeat(40))
@@ -1007,17 +984,6 @@ mod tests {
         assert_eq!(Status::Warn.token(), "warn");
         assert_eq!(Status::Fail.token(), "fail");
         assert_eq!(Status::Skipped.token(), "skipped");
-    }
-
-    /// A stand-in frontend: `script` is the body of a `sh` program that
-    /// sees the probe flag as `$1`.
-    #[cfg(unix)]
-    fn fake_frontend(dir: &Path, script: &str) -> OsString {
-        use std::os::unix::fs::PermissionsExt as _;
-        let path = dir.join("felis-client");
-        std::fs::write(&path, format!("#!/bin/sh\n{script}\n")).unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-        path.into_os_string()
     }
 
     #[cfg(unix)]
