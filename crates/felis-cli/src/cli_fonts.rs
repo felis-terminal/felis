@@ -265,6 +265,16 @@ echo '{"v":2,"families":[{"name":"DejaVu Sans Mono","monospace":true,"styles":[]
 
     #[cfg(unix)]
     #[test]
+    fn a_frontend_whose_interpreter_is_missing_is_internal_not_absent() {
+        let dir = private_dir();
+        let program = fake_frontend(dir.path(), "");
+        std::fs::write(&program, "#!/nonexistent/interpreter\n").unwrap();
+        let (kind, _) = list_families(&program).unwrap_err();
+        assert_eq!(kind, ErrorKind::Internal);
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn a_failed_enumeration_keeps_the_frontends_reason() {
         let (kind, message) =
             listed_by(r#"echo '{"v":2,"error":"fontconfig: load libfontconfig.so.1"}'"#)

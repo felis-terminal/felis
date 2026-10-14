@@ -3,6 +3,7 @@
 //! this binary stays GPU-free.
 
 use std::ffi::OsStr;
+use std::path::Path;
 use std::process::Command;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -27,7 +28,9 @@ pub(crate) fn run(program: &OsStr, flag: &OsStr) -> Result<String, ProbeFailure>
         .arg(flag)
         .output()
         .map_err(|err| ProbeFailure {
-            cause: if err.kind() == std::io::ErrorKind::NotFound {
+            // An existing frontend whose interpreter or loader is missing
+            // also fails with `NotFound`.
+            cause: if err.kind() == std::io::ErrorKind::NotFound && !Path::new(program).is_file() {
                 Cause::Absent
             } else {
                 Cause::Failed
