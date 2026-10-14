@@ -970,9 +970,11 @@ async fn wrap_around_cursor_addressing_pins_stars_to_last_column() {
 
     // vttest's "Bug 7": CUP-then-print at the rightmost column. On a
     // buggy terminal the `*`s land in column 0 instead of column 79.
+    // The explanation is drawn before the stars and the prompt after
+    // them, so only the prompt says the stars are all there.
     assert!(
         session
-            .wait_for("wrap around bug", Duration::from_secs(5))
+            .wait_for("Push <RETURN>", Duration::from_secs(5))
             .await
     );
     let stars_ok = session.with_grid(|g| {
