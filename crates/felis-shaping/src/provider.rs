@@ -4,8 +4,12 @@
 use std::{collections::HashMap, hash::Hash, path::PathBuf};
 
 use fontdb::{Database, Family, Query};
+use skrifa::{
+    MetadataProvider,
+    instance::{LocationRef, Size},
+};
 
-use crate::{FontBytes, ShapingError};
+use crate::{FaceStyle, FontBytes, InstalledFamily, ShapingError, named_instance_styles};
 
 #[cfg(any(target_os = "linux", all(test, unix)))]
 pub(crate) mod fontconfig;
@@ -109,6 +113,66 @@ pub(crate) fn system_db() -> Database {
     db
 }
 
+/// Every family name a face in `db` carries, the set
+/// [`FaceProvider::find_face`] accepts. fontdb compares names exactly, so
+/// only identical spellings collapse.
+#[cfg_attr(
+    all(target_os = "linux", not(test)),
+    expect(dead_code, reason = "Linux lists families through fontconfig")
+)]
+pub(crate) fn database_families(db: &Database) -> Vec<InstalledFamily> {
+    let mut families: HashMap<&str, InstalledFamily> = HashMap::new();
+    for face in db.faces() {
+        let own = FaceStyle {
+            italic: face.style != fontdb::Style::Normal,
+            weight: face.weight.0,
+        };
+        let (monospace, mut styles) = db
+            .with_face_data(face.id, |data, index| {
+                let instances = usize::try_from(index)
+                    .ok()
+                    .and_then(|index| swash::FontRef::from_index(data, index))
+                    .map(named_instance_styles)
+                    .unwrap_or_default();
+                (ascii_is_fixed_pitch(data, index), instances)
+            })
+            .unwrap_or_default();
+        if styles.is_empty() {
+            styles.push(own);
+        }
+        for (name, _) in &face.families {
+            let family = families
+                .entry(name)
+                .or_insert_with(|| InstalledFamily::new(name.clone()));
+            for &style in &styles {
+                family.add_face(monospace, style);
+            }
+        }
+    }
+    families.into_values().collect()
+}
+
+/// Printable ASCII is what sizes the cell, so neither the face's own
+/// `post.isFixedPitch` nor fontconfig's `spacing` decides: Monaco and many
+/// CJK faces leave the flag unset, and fontconfig calls Monaco
+/// proportional for its wider non-ASCII glyphs.
+pub(crate) fn ascii_is_fixed_pitch(data: &[u8], index: u32) -> bool {
+    let Ok(font) = skrifa::FontRef::from_index(data, index) else {
+        return false;
+    };
+    let charmap = font.charmap();
+    let metrics = font.glyph_metrics(Size::unscaled(), LocationRef::default());
+    let mut advances = (' '..='~').map(|c| {
+        charmap
+            .map(c)
+            .and_then(|glyph| metrics.advance_width(glyph))
+    });
+    let Some(Some(first)) = advances.next() else {
+        return false;
+    };
+    advances.all(|advance| advance == Some(first))
+}
+
 impl FaceProvider for Database {
     type Id = fontdb::ID;
 
@@ -171,5 +235,68 @@ impl FaceProvider for Database {
             instance: None,
             slanted: face.style != fontdb::Style::Normal,
         })
+    }
+}
+
+#[cfg(all(test, not(windows)))]
+mod tests {
+    use super::*;
+    use crate::{TEST_FONT_FAMILY, test_font_dir};
+
+    #[test]
+    fn the_database_lists_each_family_once() {
+        let mut db = Database::new();
+        db.load_fonts_dir(test_font_dir());
+        let mut names: Vec<String> = database_families(&db)
+            .into_iter()
+            .map(|family| family.name)
+            .collect();
+        assert!(names.iter().any(|n| n == TEST_FONT_FAMILY), "{names:?}");
+        for name in &names {
+            assert!(
+                db.find_face(name, REGULAR_WEIGHT, false).is_some(),
+                "{name} is listed but not accepted"
+            );
+        }
+        names.sort_unstable();
+        assert!(names.windows(2).all(|w| w[0] != w[1]), "{names:?}");
+    }
+
+    #[test]
+    fn the_database_reports_each_familys_pitch_and_styles() {
+        let mut db = Database::new();
+        db.load_fonts_dir(test_font_dir());
+        let families = database_families(&db);
+        let named = |name: &str| {
+            families
+                .iter()
+                .find(|family| family.name == name)
+                .unwrap_or_else(|| panic!("{name} is installed"))
+        };
+        let argon = named("Monaspace Argon");
+        assert!(argon.monospace);
+        for style in [
+            (false, 400),
+            (false, BOLD_WEIGHT),
+            (true, 400),
+            (true, BOLD_WEIGHT),
+        ] {
+            let style = FaceStyle {
+                italic: style.0,
+                weight: style.1,
+            };
+            assert!(argon.styles.contains(&style), "{:?}", argon.styles);
+        }
+        assert!(argon.styles.is_sorted(), "{:?}", argon.styles);
+        assert!(!named("Noto Sans Symbols").monospace);
+        let variable = &named("Monaspace Neon Var").styles;
+        for (italic, weight) in [(false, 400), (false, 700), (true, 700)] {
+            let style = FaceStyle { italic, weight };
+            assert!(variable.contains(&style), "named instances: {variable:?}");
+        }
+        assert!(
+            !named("Noto Color Emoji").monospace,
+            "printable ASCII is not mapped"
+        );
     }
 }

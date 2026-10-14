@@ -22,8 +22,11 @@ use fontconfig_sys::{
     },
 };
 
-use super::{CascadeFace, FaceProvider, FaceSource, LoadedAs, REGULAR_WEIGHT, ResolvedFace};
-use crate::ShapingError;
+use super::{
+    CascadeFace, FaceProvider, FaceSource, LoadedAs, REGULAR_WEIGHT, ResolvedFace,
+    ascii_is_fixed_pitch,
+};
+use crate::{FaceStyle, InstalledFamily, ShapingError, map_face_file};
 
 const FC_FALSE: FcBool = 0;
 #[cfg(test)]
@@ -195,19 +198,20 @@ impl Fontconfig {
             return Err(fail("FcConfigCreate"));
         }
         let this = Self::with_config(lib, config, Some(c_string(lang)));
-        let dir = c_path(font_dir);
-        // SAFETY: `config` is live; `dir` outlives the call.
-        if unsafe { (lib.FcConfigAppFontAddDir)(config, dir.as_ptr().cast()) } == FC_FALSE {
-            return Err(fail("FcConfigAppFontAddDir"));
-        }
+        // Before the scan, so a `target="scan"` rule edits the faces.
         if let Some(rules) = rules_file {
             let rules = c_path(rules);
-            // SAFETY: as above.
+            // SAFETY: `config` is live; `rules` outlives the call.
             if unsafe { (lib.FcConfigParseAndLoad)(config, rules.as_ptr().cast(), FC_TRUE) }
                 == FC_FALSE
             {
                 return Err(fail("FcConfigParseAndLoad"));
             }
+        }
+        let dir = c_path(font_dir);
+        // SAFETY: as above.
+        if unsafe { (lib.FcConfigAppFontAddDir)(config, dir.as_ptr().cast()) } == FC_FALSE {
+            return Err(fail("FcConfigAppFontAddDir"));
         }
         Ok(this)
     }
@@ -376,6 +380,82 @@ impl Fontconfig {
                 }
             }
             families
+        })
+    }
+
+    /// Every family name a loadable face carries, one per name fontconfig
+    /// matches as the same family (ignoring case and spaces, its
+    /// `FcStrCmpIgnoreBlanksAndCase`), described by the faces of all the
+    /// names merged. Of the spellings that compare equal, the bytewise
+    /// smallest is kept.
+    pub(crate) fn installed_families(&self) -> Vec<InstalledFamily> {
+        let sets = self.families();
+        let mut names: Vec<CString> = sets
+            .keys()
+            .filter_map(|name| CString::new(name.clone()).ok())
+            .collect();
+        names.sort();
+        let blankless: Vec<CString> = names
+            .iter()
+            .map(|name| {
+                let kept = name.as_bytes().iter().copied().filter(|&b| b != b' ');
+                CString::new(kept.collect::<Vec<u8>>()).unwrap_or_default()
+            })
+            .collect();
+        let compare = |a: usize, b: usize| {
+            // SAFETY: both strings are NUL-terminated and outlive the call.
+            let order = unsafe {
+                (self.lib.FcStrCmpIgnoreCase)(
+                    blankless[a].as_ptr().cast(),
+                    blankless[b].as_ptr().cast(),
+                )
+            };
+            order.cmp(&0)
+        };
+        let mut order: Vec<usize> = (0..names.len()).collect();
+        order.sort_by(|&a, &b| compare(a, b));
+        let mut pitches: HashMap<FaceKey, bool> = HashMap::new();
+        let mut families: Vec<InstalledFamily> = Vec::new();
+        let mut kept = None;
+        for at in order {
+            let family = match families.last_mut() {
+                Some(family) if kept.is_some_and(|kept| compare(at, kept).is_eq()) => family,
+                _ => {
+                    kept = Some(at);
+                    families.push(InstalledFamily::new(
+                        names[at].to_string_lossy().into_owned(),
+                    ));
+                    let Some(family) = families.last_mut() else {
+                        continue;
+                    };
+                    family
+                }
+            };
+            for pattern in sets[names[at].as_bytes()].patterns() {
+                let Some(face) = self.face_of(pattern) else {
+                    continue;
+                };
+                let monospace = *pitches.entry(face.key).or_insert_with_key(|key| {
+                    map_face_file(&key.path)
+                        .is_ok_and(|data| ascii_is_fixed_pitch(&data, split_index(key.index).0))
+                });
+                match self.style_of(pattern) {
+                    Some(style) => family.add_face(monospace, style),
+                    None => family.monospace &= monospace,
+                }
+            }
+        }
+        families
+    }
+
+    /// `None` for a variable face's own pattern, whose weight is a range;
+    /// its named instances are listed as faces of their own.
+    fn style_of(&self, pattern: *mut FcPattern) -> Option<FaceStyle> {
+        Some(FaceStyle {
+            italic: self
+                .integer(pattern, FC_SLANT)
+                .is_some_and(|s| s != FC_SLANT_ROMAN),
+            weight: opentype_weight(self.integer(pattern, FC_WEIGHT)?),
         })
     }
 
@@ -597,25 +677,33 @@ fn split_index(packed: u32) -> (u32, Option<usize>) {
     (face, named)
 }
 
-/// OpenType `usWeightClass` to fontconfig's weight scale, at the nearest
-/// named weight: only 400 and 700 are asked for, so the table needs no
-/// interpolation.
+/// OpenType `usWeightClass` against fontconfig's weight scale at the
+/// named weights: a query asks only for 400 and 700, and a listing
+/// reports the nearest named weight, so the table needs no interpolation.
+const WEIGHT_SCALE: [(u16, c_int); 9] = [
+    (100, 0),
+    (200, 40),
+    (300, 50),
+    (400, 80),
+    (500, 100),
+    (600, 180),
+    (700, 200),
+    (800, 205),
+    (900, 210),
+];
+
 fn fc_weight(weight: u16) -> c_int {
-    const SCALE: [(u16, c_int); 9] = [
-        (100, 0),
-        (200, 40),
-        (300, 50),
-        (400, 80),
-        (500, 100),
-        (600, 180),
-        (700, 200),
-        (800, 205),
-        (900, 210),
-    ];
-    SCALE
+    WEIGHT_SCALE
         .iter()
         .min_by_key(|(ot, _)| ot.abs_diff(weight))
         .map_or(80, |&(_, fc)| fc)
+}
+
+fn opentype_weight(weight: c_int) -> u16 {
+    WEIGHT_SCALE
+        .iter()
+        .min_by_key(|(_, fc)| fc.abs_diff(weight))
+        .map_or(REGULAR_WEIGHT, |&(ot, _)| ot)
 }
 
 fn c_string(s: &str) -> CString {
@@ -728,6 +816,9 @@ mod tests {
     fn weights_map_onto_fontconfig_scale() {
         assert_eq!(fc_weight(400), 80);
         assert_eq!(fc_weight(700), 200);
+        for (ot, fc) in WEIGHT_SCALE {
+            assert_eq!(opentype_weight(fc), ot);
+        }
     }
 
     #[test]
@@ -741,8 +832,9 @@ mod tests {
         assert_eq!(fc.find_face("Monaspace Neonn", 700, true), None);
     }
 
-    #[test]
-    fn a_family_with_only_bitmap_faces_is_not_installed() {
+    /// A BDF face of family `Felis Bitmap`, which fontconfig lists and
+    /// the loader cannot parse.
+    fn add_bitmap_face(fc: &Fontconfig) {
         const BDF: &str = "STARTFONT 2.1
 FONT -felis-Felis Bitmap-Medium-R-Normal--16-160-75-75-C-80-ISO10646-1
 SIZE 16 75 75
@@ -763,8 +855,12 @@ BITMAP
 ENDCHAR
 ENDFONT
 ";
-        let Some(fc) = pinned("") else { return };
-        let dir = std::env::temp_dir().join(format!("felis-bitmap-{}", std::process::id()));
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "felis-bitmap-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
         std::fs::create_dir_all(&dir).expect("the font dir creates");
         std::fs::write(dir.join("felis-bitmap.bdf"), BDF).expect("the face writes");
         let added = c_path(&dir);
@@ -773,6 +869,91 @@ ENDFONT
             unsafe { (fc.lib.FcConfigAppFontAddDir)(fc.config, added.as_ptr().cast()) } != FC_FALSE;
         std::fs::remove_dir_all(&dir).ok();
         assert!(scanned);
+    }
+
+    #[test]
+    fn the_family_list_names_loadable_faces_and_drops_bitmap_ones() {
+        let Some(fc) = pinned("") else { return };
+        add_bitmap_face(&fc);
+        // SAFETY: `config` is live; the set stays owned by it.
+        let scanned = ManuallyDrop::new(FontSet {
+            lib: fc.lib,
+            raw: unsafe { (fc.lib.FcConfigGetFonts)(fc.config, FcSetApplication) },
+        });
+        assert!(
+            scanned
+                .patterns()
+                .any(|p| fc.string(p, FC_FAMILY) == Some(c"Felis Bitmap")),
+            "fontconfig itself lists the bitmap face"
+        );
+        let names: Vec<String> = fc
+            .installed_families()
+            .into_iter()
+            .map(|family| family.name)
+            .collect();
+        assert!(names.iter().any(|n| n == TEST_FONT_FAMILY), "{names:?}");
+        assert!(!names.iter().any(|n| n == "Felis Bitmap"), "{names:?}");
+        for name in &names {
+            assert!(
+                fc.find_face(name, REGULAR_WEIGHT, false).is_some(),
+                "{name} is listed but not accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn names_fontconfig_matches_as_one_family_are_listed_once() {
+        let Some(fc) = pinned(
+            r"<match target='scan'><edit name='family' mode='append'>
+              <string>monaspace  NEON</string></edit></match>",
+        ) else {
+            return;
+        };
+        let families = fc.installed_families();
+        let squashed = |n: &str| n.replace(' ', "").to_lowercase();
+        let neon: Vec<&InstalledFamily> = families
+            .iter()
+            .filter(|family| squashed(&family.name) == "monaspaceneon")
+            .collect();
+        assert_eq!(neon.len(), 1, "{neon:?}");
+        assert_eq!(
+            neon[0].name, "Monaspace Neon",
+            "the bytewise smallest spelling"
+        );
+    }
+
+    #[test]
+    fn fontconfig_reports_each_familys_pitch_and_styles() {
+        let Some(fc) = pinned("") else { return };
+        let families = fc.installed_families();
+        let named = |name: &str| {
+            families
+                .iter()
+                .find(|family| family.name == name)
+                .unwrap_or_else(|| panic!("{name} is installed"))
+        };
+        let argon = named("Monaspace Argon");
+        assert!(argon.monospace);
+        for (italic, weight) in [(false, 400), (false, 700), (true, 400), (true, 700)] {
+            let style = FaceStyle { italic, weight };
+            assert!(argon.styles.contains(&style), "{:?}", argon.styles);
+        }
+        assert!(!named("Noto Sans Symbols").monospace);
+        let variable = &named("Monaspace Neon Var").styles;
+        for (italic, weight) in [(false, 400), (false, 700), (true, 700)] {
+            let style = FaceStyle { italic, weight };
+            assert!(variable.contains(&style), "named instances: {variable:?}");
+        }
+        assert!(
+            !named("Noto Color Emoji").monospace,
+            "printable ASCII is not mapped"
+        );
+    }
+
+    #[test]
+    fn a_family_with_only_bitmap_faces_is_not_installed() {
+        let Some(fc) = pinned("") else { return };
+        add_bitmap_face(&fc);
         assert_eq!(fc.find_face("Felis Bitmap", REGULAR_WEIGHT, false), None);
         let stack = FontStack::auto_discover_in(
             &fc,

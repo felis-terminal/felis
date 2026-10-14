@@ -187,23 +187,7 @@ impl Font {
             // into a `Vec` turns a 183 MB emoji face into dirty heap
             // instead of reclaimable page cache
             // (docs/explanation/rendering/text-shaping.md "Font loading").
-            FaceSource::File(path) => {
-                let file = std::fs::File::open(&path)
-                    .map_err(|e| ShapingError::BadFont(format!("open {}: {e}", path.display())))?;
-                // SAFETY: `path` is a provider-discovered face under a
-                // system font root: root-owned, read-only, not mutated
-                // for the process lifetime
-                // (docs/reference/security-audits.md "`O_CLOEXEC` +
-                // `O_NOFOLLOW` audit (standing)"). The only documented
-                // hazard of `Mmap::map` is SIGBUS if the file is
-                // truncated while mapped, which does not happen for
-                // these immutable OS assets. This is the same trade-off
-                // fontdb's own `make_shared_face_data` and FreeType's
-                // path-based `FT_New_Face` accept.
-                let mmap = unsafe { memmap2::Mmap::map(&file) }
-                    .map_err(|e| ShapingError::BadFont(format!("mmap {}: {e}", path.display())))?;
-                Arc::new(mmap)
-            }
+            FaceSource::File(path) => Arc::new(map_face_file(&path)?),
         };
         let (offset, color) = {
             let font_ref = FontRef::from_index(bytes.as_ref().as_ref(), face_index as usize)
@@ -468,6 +452,28 @@ fn italic_position(
     Vec::new()
 }
 
+/// The styles a variable face's named instances draw at, read as a
+/// styled lookup reads them: weight from `wght`, italic from the
+/// instance's name. Empty for a static face.
+fn named_instance_styles(face: FontRef<'_>) -> Vec<FaceStyle> {
+    let wght = face.variations().position(|axis| axis.tag() == WGHT);
+    face.instances()
+        .filter_map(|instance| {
+            let weight = instance.values().nth(wght?)?;
+            let name = instance
+                .name(Some("en"))
+                .or_else(|| instance.name(None))?
+                .to_string();
+            Some(FaceStyle {
+                italic: has_italic_token(&name),
+                // Saturates into u16; `wght` is 1–1000 by spec.
+                #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                weight: weight.round() as u16,
+            })
+        })
+        .collect()
+}
+
 /// Splits on spaces, `-`, `_` and lowercase-to-uppercase boundaries, so
 /// `BoldItalic` matches and `Italicized` does not.
 fn has_italic_token(name: &str) -> bool {
@@ -503,6 +509,79 @@ fn system_provider() -> Result<provider::fontconfig::Fontconfig, ShapingError> {
 )]
 fn system_provider() -> Result<fontdb::Database, ShapingError> {
     Ok(system_db())
+}
+
+// fontdb exposes a persistent mmap only behind its `unsafe`
+// `make_shared_face_data`, so map the file here: reading it into a `Vec`
+// turns a 183 MB emoji face into dirty heap instead of reclaimable page
+// cache (docs/explanation/rendering/text-shaping.md "Font loading").
+fn map_face_file(path: &std::path::Path) -> Result<memmap2::Mmap, ShapingError> {
+    let file = std::fs::File::open(path)
+        .map_err(|e| ShapingError::BadFont(format!("open {}: {e}", path.display())))?;
+    // SAFETY: `path` is a provider-discovered face under a
+    // system font root: root-owned, read-only, not mutated
+    // for the process lifetime
+    // (docs/reference/security-audits.md "`O_CLOEXEC` +
+    // `O_NOFOLLOW` audit (standing)"). The only documented
+    // hazard of `Mmap::map` is SIGBUS if the file is
+    // truncated while mapped, which does not happen for
+    // these immutable OS assets. This is the same trade-off
+    // fontdb's own `make_shared_face_data` and FreeType's
+    // path-based `FT_New_Face` accept.
+    unsafe { memmap2::Mmap::map(&file) }
+        .map_err(|e| ShapingError::BadFont(format!("mmap {}: {e}", path.display())))
+}
+
+/// A family name an installed face carries, with what its faces declare.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstalledFamily {
+    pub name: String,
+    /// Every face maps all of printable ASCII to glyphs of one advance.
+    pub monospace: bool,
+    /// Sorted upright first, then by weight; one entry per distinct pair.
+    pub styles: Vec<FaceStyle>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct FaceStyle {
+    pub italic: bool,
+    /// On the OpenType 1–1000 scale.
+    pub weight: u16,
+}
+
+impl InstalledFamily {
+    const fn new(name: String) -> Self {
+        Self {
+            name,
+            monospace: true,
+            styles: Vec::new(),
+        }
+    }
+
+    fn add_face(&mut self, monospace: bool, style: FaceStyle) {
+        self.monospace &= monospace;
+        if let Err(at) = self.styles.binary_search(&style) {
+            self.styles.insert(at, style);
+        }
+    }
+}
+
+/// Every family name `font.family` and the other `family` keys accept
+/// as an installed family: the faces fontconfig lists on Linux in the
+/// formats the loader parses, and fontdb's scan elsewhere. Names the
+/// provider matches as one family appear once.
+pub fn installed_families() -> Result<Vec<InstalledFamily>, ShapingError> {
+    let host = system_provider()?;
+    #[cfg(target_os = "linux")]
+    let mut families = host.installed_families();
+    #[cfg(not(target_os = "linux"))]
+    let mut families = provider::database_families(&host);
+    sort_ignoring_case(&mut families);
+    Ok(families)
+}
+
+fn sort_ignoring_case(families: &mut [InstalledFamily]) {
+    families.sort_by_cached_key(|family| (family.name.to_lowercase(), family.name.clone()));
 }
 
 /// A resolved `font.fallback` entry or styled font table.
@@ -1798,6 +1877,31 @@ mod tests {
 
     use super::*;
     use crate::provider::ResolvedFace;
+
+    #[test]
+    fn families_are_listed_in_case_blind_order() {
+        let mut families = ["noto Sans", "Liberation Mono", "DejaVu Sans", "dejavu Sans"]
+            .map(|name| InstalledFamily::new(name.to_owned()));
+        sort_ignoring_case(&mut families);
+        assert_eq!(
+            families.map(|family| family.name),
+            ["DejaVu Sans", "dejavu Sans", "Liberation Mono", "noto Sans"]
+        );
+    }
+
+    #[test]
+    fn a_family_is_monospace_only_when_every_face_is() {
+        let regular = FaceStyle {
+            italic: false,
+            weight: 400,
+        };
+        let mut family = InstalledFamily::new("Mixed".to_owned());
+        family.add_face(true, regular);
+        assert!(family.monospace);
+        family.add_face(false, regular);
+        assert!(!family.monospace);
+        assert_eq!(family.styles, [regular]);
+    }
 
     /// The pinned set behind the provider [`system_provider`] would
     /// build, with the `monospace` generic naming the probe family as a
