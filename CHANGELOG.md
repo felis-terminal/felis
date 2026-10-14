@@ -10,6 +10,30 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-14
+
+The daemon can now replace itself with a new build without ending your sessions, and scripts and agents can do more in a
+session.
+
+- **In-place daemon upgrade**: `felis daemon upgrade` replaces the running daemon with the installed build on Linux and
+  macOS, keeping every session and its screen.
+- **Mouse input from the command line**: `felis sessions send --mouse click:12,4` clicks, drags and scrolls in a
+  fullscreen program, at the cells `felis sessions search --source visible` finds on the live screen.
+- **Program status**: a program that reports its state over OSC 7501, such as a coding agent waiting on you, shows it in
+  `felis sessions list` and `felis sessions info`.
+- **Bug reports**: `felis doctor report` prints the builds, platform, GPU, fonts and non-default config as Markdown to
+  paste into a report.
+- **Fonts through fontconfig on Linux**: the default face, `font.family` and the fallback order follow the host's
+  fontconfig.
+- **Kitty graphics as in kitty**: placement, deletion, scrolling, eviction and replies now follow kitty, and
+  `kitten icat` over ssh and yazi's previews draw whole.
+
+Upgrading from 0.1:
+
+- A 0.1 daemon predates the upgrade request, so restart it once after installing 0.2.0; for example,
+  `felis daemon stop --when-empty` stops it after its last session ends.
+- On Linux, felis now needs `libfontconfig.so.1` on the host (`libfontconfig1` on Debian and Ubuntu).
+
 ### Added
 
 - **CLI**: `felis sessions send --mouse EVENT` (repeatable) clicks, drags and scrolls in a fullscreen program at a
@@ -65,6 +89,9 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 
 ### Fixed
 
+- A new session's program sees the window's size from its first `TIOCGWINSZ`; it used to see 24 × 80 until the resize
+  that followed the spawn landed.
+- On macOS, a session's shell no longer inherits the PTY master of a session created at the same moment.
 - A Textual app with mouse support no longer crashes on its first click. The `?2048` resize report now carries the PTY's
   pixel extents instead of `0`, and reports a change of those extents alone; a session no window has sized gets 8 × 16
   pixels per cell in its winsize and in the report.
@@ -274,7 +301,8 @@ commands in place of `felis frontend <name>`.
 
 Initial release.
 
-[unreleased]: https://github.com/felis-terminal/felis/compare/v0.1.4...HEAD
+[unreleased]: https://github.com/felis-terminal/felis/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/felis-terminal/felis/compare/v0.1.4...v0.2.0
 [0.1.4]: https://github.com/felis-terminal/felis/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/felis-terminal/felis/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/felis-terminal/felis/compare/v0.1.1...v0.1.2
