@@ -14,6 +14,7 @@ Commands:
   notifications  Stream desktop notifications from sessions
   config         Inspect the config file felis reads without dialing a daemon
   doctor         Check every layer felis needs and diagnose failures
+  fonts          List the font family names felis accepts
   version        Compare this build against the GUI client and running daemon
   daemon         Inspect the daemon behind sessions
   attach         Open a window attached to an existing session
@@ -520,6 +521,38 @@ Print the checklist and this machine's environment as Markdown to paste into a b
 Run it from the affected window and review it before posting; exits 0 whenever the report is written, failing checks included.
 
 Usage: felis doctor report [OPTIONS]
+
+Options:
+      --format <FORMAT>
+          Output framing: `human` (default) or `json`: one object on stdout, with a failure as one error object on stderr
+          
+          [default: human]
+          [possible values: human, json]
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+$ felis fonts --help
+List the font family names felis accepts.
+
+`list` prints every installed family name the `family` config keys accept on this machine; a name outside it falls back to the default monospace unless a fontconfig alias maps it.
+
+Usage: felis fonts <COMMAND>
+
+Commands:
+  list  List the font family names the `family` config keys accept
+  help  Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help
+          Print help (see a summary with '-h')
+
+$ felis fonts list --help
+List the font family names the `family` config keys accept.
+
+One family per line, sorted ignoring case, with whether its printable ASCII is fixed-pitch and the styles installed. A name outside this list makes a window fall back to the default monospace face, unless a fontconfig alias (`monospace`, a `fonts.conf` `<alias>`) maps it.
+
+Usage: felis fonts list [OPTIONS]
 
 Options:
       --format <FORMAT>

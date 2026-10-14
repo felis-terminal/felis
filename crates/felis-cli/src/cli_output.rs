@@ -241,8 +241,8 @@ error_kinds! {
     /// Its own token because the remedy is to free something first
     /// (`docs/reference/cli.md` "Daemon status").
     AtCapacity => "at_capacity", 1;
-    /// The request names something this connection's negotiated minor
-    /// cannot carry.
+    /// The request needs something this connection's negotiated minor,
+    /// this platform, or the installed frontend cannot provide.
     Unsupported => "unsupported", 2;
     /// No daemon answered at the named endpoint.
     DaemonUnreachable => "daemon_unreachable", 2;
@@ -940,6 +940,34 @@ pub(crate) struct ConfigPathResult {
     pub(crate) path: String,
     /// The path is reported either way.
     pub(crate) exists: bool,
+}
+
+/// `felis fonts list`: sorted ignoring case, one entry per name the
+/// platform's font matching treats as one family.
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub(crate) struct FontFamiliesResult {
+    pub(crate) families: Vec<FontFamilyObject>,
+}
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub(crate) struct FontFamilyObject {
+    pub(crate) name: String,
+    /// Every face maps all of printable ASCII to glyphs of one advance.
+    pub(crate) monospace: bool,
+    /// One entry per installed weight and slant, upright first, then by
+    /// weight.
+    pub(crate) styles: Vec<FontStyleObject>,
+}
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub(crate) struct FontStyleObject {
+    /// On the OpenType 1–1000 scale: 400 regular, 700 bold.
+    pub(crate) weight: u16,
+    /// Italic or oblique.
+    pub(crate) italic: bool,
 }
 
 #[derive(Debug, Serialize)]

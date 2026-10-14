@@ -28,6 +28,7 @@ use felis_client_core::{
     config::{Backdrop, BuiltinShader, GUI_CLIENT_ID, PostShaderChoice, compose_window_title},
     config_watcher, cursor_blink, cursor_trail, dial_and_land, dial_and_land_within,
     doctor::{ClipboardProbe, FontsProbe, GpuProbe, PROBE_VERSION, ProbeReport},
+    font_families::{FAMILIES_PROBE_VERSION, FamiliesOutcome, FamiliesProbe, Family, Style},
     launch_args,
     outgoing::{OutgoingFrame, OutgoingFull, OutgoingQueue},
     pipe::StagedRegion,
@@ -366,6 +367,10 @@ struct Cli {
         require_equals = true
     )]
     doctor_report_probe: Option<Option<PathBuf>>,
+    /// Report every font family name the `family` config keys accept as
+    /// JSON on stdout, then exit. Hidden handoff for `felis fonts list`.
+    #[arg(long, hide = true, exclusive = true)]
+    font_families_probe: bool,
 }
 
 const fn log_filter_directive(trace_perf: bool) -> &'static str {
@@ -390,6 +395,9 @@ fn main() -> Result<ExitCode> {
     if let Some(config) = cli.doctor_report_probe {
         let source = config.map_or(ConfigSource::Default, ConfigSource::Explicit);
         return run_doctor_probe(Some(&source)).map(|()| ExitCode::SUCCESS);
+    }
+    if cli.font_families_probe {
+        return run_font_families_probe().map(|()| ExitCode::SUCCESS);
     }
     // Tee logs into a per-user file: a `.app` launch inherits `/dev/null`
     // for stdout/stderr, so console-only logging records nothing when a
@@ -530,6 +538,46 @@ fn probe_fonts(source: &ConfigSource) -> FontsProbe {
             error: err.to_string(),
         },
     }
+}
+
+/// A failed enumeration is reported in the payload, not the exit code,
+/// so the caller can tell it from a frontend that predates the flag.
+fn run_font_families_probe() -> Result<()> {
+    let outcome = match felis_render_wgpu::installed_families() {
+        Ok(families) => FamiliesOutcome::Listed {
+            families: families
+                .into_iter()
+                .map(|family| Family {
+                    name: family.name,
+                    monospace: family.monospace,
+                    styles: family
+                        .styles
+                        .into_iter()
+                        .map(|style| Style {
+                            weight: style.weight,
+                            italic: style.italic,
+                        })
+                        .collect(),
+                })
+                .collect(),
+        },
+        Err(err) => FamiliesOutcome::Failed {
+            error: err.to_string(),
+        },
+    };
+    let probe = FamiliesProbe {
+        v: FAMILIES_PROBE_VERSION,
+        outcome,
+    };
+    let text = serde_json::to_string(&probe).context("serialize font families")?;
+    #[expect(
+        clippy::print_stdout,
+        reason = "stdout is this mode's whole output channel"
+    )]
+    {
+        println!("{text}");
+    }
+    Ok(())
 }
 
 /// Session listing lives on felis-cli's `cli_sessions::cmd_list` and

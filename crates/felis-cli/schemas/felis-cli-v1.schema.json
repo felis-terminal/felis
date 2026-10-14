@@ -519,6 +519,65 @@
         "internal"
       ]
     },
+    "FontFamiliesResult": {
+      "description": "`felis fonts list`: sorted ignoring case, one entry per name the\nplatform's font matching treats as one family.",
+      "properties": {
+        "families": {
+          "items": {
+            "$ref": "#/$defs/FontFamilyObject"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "families"
+      ],
+      "type": "object"
+    },
+    "FontFamilyObject": {
+      "properties": {
+        "monospace": {
+          "description": "Every face maps all of printable ASCII to glyphs of one advance.",
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string"
+        },
+        "styles": {
+          "description": "One entry per installed weight and slant, upright first, then by\nweight.",
+          "items": {
+            "$ref": "#/$defs/FontStyleObject"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "monospace",
+        "styles"
+      ],
+      "type": "object"
+    },
+    "FontStyleObject": {
+      "properties": {
+        "italic": {
+          "description": "Italic or oblique.",
+          "type": "boolean"
+        },
+        "weight": {
+          "description": "On the OpenType 1–1000 scale: 400 regular, 700 bold.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "weight",
+        "italic"
+      ],
+      "type": "object"
+    },
     "FontsObject": {
       "description": "The faces a window would draw with. Exactly one of the face fields\nand `unavailable` is set.",
       "properties": {
@@ -1467,6 +1526,9 @@
         },
         {
           "$ref": "#/$defs/VersionResult"
+        },
+        {
+          "$ref": "#/$defs/FontFamiliesResult"
         }
       ]
     },

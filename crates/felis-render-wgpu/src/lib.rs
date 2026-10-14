@@ -21,8 +21,8 @@ use felis_protocol::{
     ImageId,
     messages::{CursorStyle, ImageFormat, RequestedExtent, SourceRect, ThemeChannel},
 };
-pub use felis_shaping::FaceSpec;
 use felis_shaping::{CellMetrics, FontStack, ShapingError, StackDescription, StyleFaces};
+pub use felis_shaping::{FaceSpec, installed_families};
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use thiserror::Error;
 use wgpu::{

@@ -21,6 +21,7 @@ mod cli_completions;
 mod cli_config;
 mod cli_daemon;
 mod cli_doctor;
+mod cli_fonts;
 mod cli_mangen;
 mod cli_notifications;
 mod cli_output;
@@ -114,6 +115,15 @@ enum Cmd {
         op: Option<cli_doctor::DoctorOp>,
         #[command(flatten)]
         output: cli_output::PointFormat,
+    },
+    /// List the font family names felis accepts.
+    ///
+    /// `list` prints every installed family name the `family` config keys
+    /// accept on this machine; a name outside it falls back to the default
+    /// monospace unless a fontconfig alias maps it.
+    Fonts {
+        #[command(subcommand)]
+        op: cli_fonts::FontsOp,
     },
     /// Compare this build against the GUI client and running daemon.
     ///
@@ -315,6 +325,7 @@ const fn verb_reporter(cmd: Option<&Cmd>) -> cli_output::Reporter {
         }
         Some(Cmd::Notifications { op }) => Reporter::stream(op.format()),
         Some(Cmd::Config { op }) => Reporter::point(op.format()),
+        Some(Cmd::Fonts { op }) => Reporter::point(op.format()),
         Some(Cmd::Daemon { op }) => Reporter::point(op.format()),
         Some(Cmd::Doctor { op: Some(op), .. }) => Reporter::point(op.format()),
         Some(Cmd::Doctor { output, .. } | Cmd::Version { output }) => {
@@ -425,6 +436,11 @@ fn main() -> Result<()> {
         }
         Some(Cmd::Config { op }) => {
             std::process::exit(cli_config::run(op, &config_source));
+        }
+        Some(Cmd::Fonts { op }) => {
+            std::process::exit(cli_fonts::run(op, || {
+                frontend_program(DEFAULT_FRONTEND_BIN)
+            }));
         }
         Some(Cmd::Doctor { op, output }) => {
             // Unlike the config verbs, `doctor` dials, so `--host` makes
@@ -660,6 +676,7 @@ fn verb_reading_no_config(cmd: Option<&Cmd>) -> Option<String> {
         Cmd::Sessions { .. } => "felis sessions",
         Cmd::Notifications { .. } => "felis notifications",
         Cmd::Version { .. } => "felis version",
+        Cmd::Fonts { .. } => "felis fonts",
         Cmd::Daemon { .. } => "felis daemon",
         Cmd::Window {
             op: WindowOp::Retarget { .. },
@@ -708,6 +725,12 @@ fn verb_refusing_carrier(cmd: Option<&Cmd>) -> Option<(String, &'static str)> {
             "felis ssh".to_owned(),
             "this verb is addressed to the window's own daemon and carries its own destination. \
              Put the destination after the verb instead.",
+        ),
+        Cmd::Fonts { .. } => (
+            "felis fonts".to_owned(),
+            "this verb dials nothing — it lists this machine's fonts, which a window on this \
+             machine draws with. Drop the flag; to list a remote machine's fonts, run \
+             `felis fonts list` there.",
         ),
         Cmd::Completions { .. } => (
             "felis completions".to_owned(),
