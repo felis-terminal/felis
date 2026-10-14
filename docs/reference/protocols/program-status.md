@@ -65,8 +65,7 @@ session-wide one; one that runs several tasks reports each under its own path (`
 | The shell draws a new prompt (`OSC 133 ; A`; a continuation, `k=s`, does not) | removes `working` and `blocked` records; `idle`, `done`, `error` stay    |
 | The session's program exits (the end of the PTY)                              | removes `working` and `blocked` records, after its final report applies  |
 | A hard reset (RIS, `ESC c`)                                                   | removes every record                                                     |
-| A soft reset (DECSTR), alternate-screen switches, detach, reattach            | none                                                                     |
-| In-place daemon upgrade                                                       | records held before the upgrade are dropped; reports after it apply      |
+| A soft reset (DECSTR), alternate-screen switches, detach, reattach, upgrade   | none                                                                     |
 
 Records change in the order the program wrote its reports, prompts, and resets.
 

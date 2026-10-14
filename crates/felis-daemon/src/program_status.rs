@@ -106,6 +106,27 @@ impl ProgramStatusStore {
             .collect()
     }
 
+    /// Least recently updated first, the order [`Self::from_reports`]
+    /// needs to rebuild the same eviction order.
+    #[must_use]
+    pub fn reports(&self) -> Vec<Report> {
+        let mut entries: Vec<&Entry> = self.records.values().collect();
+        entries.sort_by_key(|entry| entry.updated);
+        entries
+            .into_iter()
+            .map(|entry| entry.report.clone())
+            .collect()
+    }
+
+    #[must_use]
+    pub fn from_reports(reports: impl IntoIterator<Item = Report>) -> Self {
+        let mut store = Self::default();
+        for report in reports {
+            store.report(report);
+        }
+        store
+    }
+
     fn evict_least_recently_updated(&mut self) {
         let oldest = self
             .records
