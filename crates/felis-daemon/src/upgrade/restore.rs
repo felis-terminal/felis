@@ -22,6 +22,7 @@ use crate::{
     SessionId, SessionPool, SpawnedPty,
     graphics::ShmDeferral,
     pool::{ParseCore, Session, StoredNotification},
+    program_status::ProgramStatusStore,
     serve::{
         IdlePolicy,
         session_task::{Restored, spawn_restored},
@@ -117,6 +118,7 @@ async fn register(
         reported_resize,
         idle_ms,
         last_notification,
+        program_status,
     } = *state;
     let core = ParseCore {
         parser,
@@ -130,6 +132,7 @@ async fn register(
     session.placements = placements;
     session.saved_screens = saved_screens;
     session.graphics_reassembler = reassembler;
+    session.program_status = ProgramStatusStore::from_reports(program_status);
     session.shm_segments =
         ShmDeferral::from_names(shm_segments).ok_or("too many deferred shared memory names")?;
     let now = Instant::now();

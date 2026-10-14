@@ -140,7 +140,6 @@ pub struct Session {
     /// scroll before an `a=T` shifts a placement the same burst creates).
     pub scroll_ops: Vec<crate::serve::streaming::QueuedScroll>,
     /// OSC 7501 records, applied in byte order by the effect replay.
-    /// Not carried across an in-place upgrade.
     pub program_status: crate::program_status::ProgramStatusStore,
     /// Cell pixel size from `InputMsg::Resize`; the graphics dispatcher
     /// resolves auto placement extents (`c=0` / `r=0`) with it so the

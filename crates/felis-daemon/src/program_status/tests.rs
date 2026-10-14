@@ -227,6 +227,21 @@ fn replacing_a_record_at_the_cap_evicts_nothing() {
     assert_eq!(ids(&store), before);
 }
 
+/// What an in-place upgrade hands over: the successor's store lists the
+/// same records and evicts in the same order.
+#[test]
+fn a_store_rebuilt_from_its_reports_keeps_records_and_eviction_order() {
+    let mut store = ProgramStatusStore::default();
+    fill_to_the_cap(&mut store);
+    store.report(report("r000", State::Done));
+    let mut rebuilt = ProgramStatusStore::from_reports(store.reports());
+    assert_eq!(rebuilt.snapshot(), store.snapshot());
+    rebuilt.report(report("new", State::Working));
+    let ids = ids(&rebuilt);
+    assert!(ids.contains(&"r000".to_owned()));
+    assert!(!ids.contains(&"r001".to_owned()));
+}
+
 #[derive(Debug, Clone)]
 enum Op {
     Report(String, State),

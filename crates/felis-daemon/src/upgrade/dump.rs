@@ -78,6 +78,8 @@ pub struct SessionState {
     /// How long the session had been idle, measured at the dump.
     pub idle_ms: u64,
     pub last_notification: Option<NotificationDump>,
+    /// OSC 7501 records, least recently updated first.
+    pub program_status: Vec<felis_vt::program_status::Report>,
 }
 
 impl Default for SessionState {
@@ -96,6 +98,7 @@ impl Default for SessionState {
             reported_resize: None,
             idle_ms: 0,
             last_notification: None,
+            program_status: Vec::new(),
         }
     }
 }
@@ -131,6 +134,14 @@ impl SessionState {
         self.reassembler.check_restored().map_err(|err| err.0)?;
         if self.shm_segments.len() > crate::graphics::ShmDeferral::CAP {
             return Err("deferred shared memory names".to_owned());
+        }
+        if self.program_status.len() > felis_vt::program_status::limits::RECORDS_MAX
+            || self
+                .program_status
+                .iter()
+                .any(|report| report.progress.is_some_and(|progress| progress > 100))
+        {
+            return Err("program-status records".to_owned());
         }
         Ok(())
     }
@@ -311,6 +322,15 @@ mod tests {
             &mut state.grid,
             b"\x1b]2;title\x07\x1b[31mred\x1b[0m\r\n\x1b[?1049h\x1b[5;5Halt\x1b[38;2;1",
         );
+        state.program_status.push(felis_vt::program_status::Report {
+            id: String::new(),
+            state: felis_vt::program_status::State::Working,
+            kind: None,
+            progress: Some(50),
+            app: None,
+            title: None,
+            msg: None,
+        });
         state
             .images
             .insert(
@@ -390,6 +410,9 @@ mod tests {
         ));
         assert!(refused(|state| state["parser"]["params"]["len"] = 17.into()));
         assert!(refused(|state| state["images"]["bytes_total"] = 1.into()));
+        assert!(refused(
+            |state| state["program_status"][0]["progress"] = 101.into()
+        ));
         assert!(refused(|state| {
             state["images"]["entries"][0][1]["frames"][0]["pixels"] = "AAAA".into();
         }));

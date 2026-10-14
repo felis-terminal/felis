@@ -637,9 +637,10 @@ async fn spawn_task(
         // A restored grid may already carry a D mark.
         last_exit_code: session.lock_core().grid.last_command_exit(),
         attachments: Vec::new(),
-        program_status: Vec::new(),
+        program_status: session.program_status.snapshot(),
         sequence,
     }));
+    let meta_status_generation = session.program_status.generation();
     let (hub, attachment_ids) = {
         guard.register(
             id,
@@ -699,7 +700,7 @@ async fn spawn_task(
         pty_resized_over: Vec::new(),
         meta_title_epoch: title_epoch,
         meta_cwd_epoch: cwd_epoch,
-        meta_status_generation: 0,
+        meta_status_generation,
         pending_chunks: std::collections::VecDeque::new(),
         upgrade_hold: false,
     };
@@ -1586,6 +1587,7 @@ impl SessionTask {
             reported_resize: self.reported_resize,
             idle_ms,
             last_notification,
+            program_status: self.session.program_status.reports(),
         }
     }
 

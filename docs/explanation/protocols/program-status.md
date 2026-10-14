@@ -56,9 +56,3 @@ both until they are replaced or cleared.
 consumer has every record and the tree, so filling it in daemon-side would only hide which record actually said it.
 `title` and `msg` likewise ship as decoded, direction controls included: disarming them is the job of whoever draws
 them, and the right disarm depends on the surface. felis's own human-readable output disarms its copy.
-
-## Records do not cross an upgrade
-
-An in-place upgrade drops the records the predecessor held. Carrying them needs a dump-format change for state a program
-re-establishes on its next report, and a `blocked` lost in the handoff is re-sent by any program still blocked when it
-next reports. _Revisit if_ a consumer acts on records across an upgrade window.
