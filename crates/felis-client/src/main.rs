@@ -760,14 +760,14 @@ fn font_settings_differ(a: &RendererConfig, b: &RendererConfig) -> bool {
 }
 
 /// A `[font.bold]` / `[font.italic]` / `[font.bold_italic]` change loads
-/// different styled faces, so it needs the fontdb-rescan reload path.
+/// different styled faces, so it needs the rediscovering reload path.
 fn styled_faces_differ(a: &RendererConfig, b: &RendererConfig) -> bool {
     a.font_bold != b.font_bold
         || a.font_italic != b.font_italic
         || a.font_bold_italic != b.font_bold_italic
 }
 
-/// The inputs to `FontStack::auto_discover` that need a fontdb rescan.
+/// The inputs to `FontStack::auto_discover` that need a rediscovery.
 /// False with `font_settings_differ` true means size-only and/or
 /// features-only: [`Renderer::reload_font_size`] /
 /// [`Renderer::reload_font_features`].
@@ -777,8 +777,8 @@ fn font_stack_inputs_differ(a: &RendererConfig, b: &RendererConfig) -> bool {
         || styled_faces_differ(a, b)
 }
 
-/// Features are shape-time, not fontdb-time, so a features-only edit
-/// must NOT rebuild the `FontStack` (a fontdb rescan stutters the reload).
+/// Features are shape-time, not discovery-time, so a features-only edit
+/// must NOT rebuild the `FontStack` (rediscovering stutters the reload).
 fn font_features_differ(a: &RendererConfig, b: &RendererConfig) -> bool {
     a.font_features != b.font_features
 }

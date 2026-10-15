@@ -82,17 +82,10 @@ swash = "0.2"
 # The version swash 0.2 pulls in, so no duplicate.
 skrifa = { version = "0.48", default-features = false, features = ["std"] }
 zeno = "0.3"
-fontdb = { version = "0.24", default-features = false, features = [
-  "fontconfig",
-  # memmap over fs::read: avoids reading ~230 MB of emoji/CJK fonts onto heap during startup metadata scan.
-  "memmap",
-] }
-# `felis-shaping` mmaps the *kept* fallback faces too (fontdb stores
-# them as `Source::File`, so without this they would be `fs::read` onto
-# the heap — ~190 MB live for the emoji + CJK faces). The map call is
+# `felis-shaping` maps the faces it draws rather than reading them onto
+# the heap (~190 MB live for the emoji + CJK faces). The map call is
 # `unsafe`, relaxed in `felis-shaping` (docs/explanation/rendering/text-shaping.md
-# "Font loading"). Same version
-# fontdb already pulls in, so no duplicate.
+# "Font loading").
 memmap2 = "0.9"
 # dlopen: the relocatable Linux archive takes libfontconfig, its config and
 # its cache from the host (nix/dist.nix), so nothing links it at build time.
@@ -296,7 +289,6 @@ swash = { opt-level = 1 }
 skrifa = { opt-level = 1 }
 read-fonts = { opt-level = 1 }
 zeno = { opt-level = 1 }
-fontdb = { opt-level = 1 }
 miniz_oxide = { opt-level = 1 }
 adler2 = { opt-level = 1 }
 simd-adler32 = { opt-level = 1 }

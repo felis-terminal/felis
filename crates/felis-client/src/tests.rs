@@ -1066,7 +1066,7 @@ mod font_differs {
     fn a_size_only_edit_takes_the_size_only_reload_path() {
         // `App::reload_config` picks its renderer call from these
         // predicates; a size-only edit must land on `reload_font_size`,
-        // since the full `reload_font` rescans fontdb. The size is not
+        // since the full `reload_font` rediscovers the faces. The size is not
         // on `RendererConfig`, so the invariant spans both inputs the
         // reload reads.
         let base = config::EffectiveConfig {
@@ -1102,8 +1102,8 @@ mod font_differs {
 
     #[test]
     fn font_stack_inputs_differ_isolates_stack_edits() {
-        // Pins the split between the slow path (`reload_font` rescans
-        // fontdb) and the fast paths that keep the `FontStack`.
+        // Pins the split between the slow path (`reload_font` rediscovers
+        // the faces) and the fast paths that keep the `FontStack`.
         let base = RendererConfig {
             font_family: Some("JetBrains Mono".to_owned()),
             font_fallbacks: vec![FaceSpec::named("Noto Sans CJK JP")],
@@ -1124,7 +1124,7 @@ mod font_differs {
             !font_stack_inputs_differ(&base, &features),
             "features-only edit must take the shape-time fast path",
         );
-        // A new styled face needs the fontdb rescan like a base-family change.
+        // A new styled face needs the rediscovery like a base-family change.
         let mut bold = base.clone();
         bold.font_bold = FaceSpec::named("Iosevka");
         assert!(font_settings_differ(&base, &bold));

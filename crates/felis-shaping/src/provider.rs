@@ -3,7 +3,6 @@
 
 use std::{collections::HashMap, hash::Hash, path::PathBuf};
 
-use fontdb::{Database, Family, Query};
 use skrifa::{
     MetadataProvider,
     instance::{LocationRef, Size},
@@ -15,6 +14,7 @@ use crate::{FaceStyle, FontBytes, FontStyle, ShapingError};
 pub(crate) mod coretext;
 #[cfg(windows)]
 pub(crate) mod directwrite;
+pub(crate) mod files;
 #[cfg(any(target_os = "linux", all(test, unix)))]
 pub(crate) mod fontconfig;
 
@@ -280,71 +280,6 @@ pub(crate) fn instance_at(
     distance(&defaults)
         .is_some_and(|far| far < AXIS_TOLERANCE)
         .then_some(AxisPosition::Default)
-}
-
-impl FaceProvider for Database {
-    type Id = fontdb::ID;
-
-    fn find_face(&self, family: &str, weight: u16, italic: bool) -> Option<fontdb::ID> {
-        self.query(&Query {
-            families: &[Family::Name(family)],
-            weight: fontdb::Weight(weight),
-            style: if italic {
-                fontdb::Style::Italic
-            } else {
-                fontdb::Style::Normal
-            },
-            ..Query::default()
-        })
-    }
-
-    /// fontdb keeps only the first `prefer` entry of the last `monospace`
-    /// alias it parses, so on Debian the generic names `FreeMono`
-    /// (69-unifont.conf) even when only `DejaVu Sans Mono` is installed.
-    fn default_monospace(&self) -> Result<(fontdb::ID, String), ShapingError> {
-        let generic = self.family_name(&Family::Monospace);
-        let resolve = |name: &str| {
-            self.find_face(name, REGULAR_WEIGHT, false)
-                .map(|id| (id, name.to_owned()))
-        };
-        if let Some(found) = resolve(generic) {
-            return Ok(found);
-        }
-        let found = MONOSPACE_FALLBACK_FAMILIES
-            .iter()
-            .find_map(|name| resolve(name))
-            .or_else(|| {
-                self.faces()
-                    .filter(|face| face.monospaced)
-                    .filter_map(|face| face.families.first().map(|(name, _)| name.as_str()))
-                    .min()
-                    .and_then(resolve)
-            });
-        if let Some((_, family)) = &found {
-            tracing::info!(
-                generic,
-                family = family.as_str(),
-                "monospace generic not installed; using a fallback family"
-            );
-        }
-        found.ok_or(ShapingError::NoFont)
-    }
-
-    fn resolve_face(&self, id: fontdb::ID) -> Option<ResolvedFace> {
-        let face = self.face(id)?;
-        let source = match &face.source {
-            fontdb::Source::Binary(bytes) | fontdb::Source::SharedFile(_, bytes) => {
-                FaceSource::Shared(bytes.clone())
-            }
-            fontdb::Source::File(path) => FaceSource::File(path.clone()),
-        };
-        Some(ResolvedFace {
-            source,
-            index: face.index,
-            instance: None,
-            slanted: face.style != fontdb::Style::Normal,
-        })
-    }
 }
 
 #[cfg(test)]

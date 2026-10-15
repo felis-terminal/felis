@@ -36,6 +36,7 @@ use presentation::is_emoji_presentation;
 pub use provider::MONOSPACE_FALLBACK_FAMILIES;
 use provider::{
     BOLD_WEIGHT, FaceProvider, FaceSource, LoadedAs, REGULAR_WEIGHT, ResolvedFace, SystemFallback,
+    files::FileSet,
 };
 
 #[derive(Debug, Error)]
@@ -163,9 +164,9 @@ impl Font {
     }
 
     fn load_test_font_from(dir: &std::path::Path) -> Self {
-        let mut db = fontdb::Database::new();
-        db.load_fonts_dir(dir);
-        Self::try_load_with(&db, TEST_FONT_FAMILY).unwrap_or_else(|_| {
+        let mut set = FileSet::default();
+        set.add_dir(dir);
+        Self::try_load_with(&set, TEST_FONT_FAMILY).unwrap_or_else(|_| {
             panic!(
                 "{TEST_FONT_FAMILY:?} did not load from FELIS_TEST_FONT_DIR={}",
                 dir.display()
@@ -191,11 +192,6 @@ impl Font {
         let (face_index, instance) = (face.index, face.instance);
         let bytes: FontBytes = match face.source {
             FaceSource::Shared(bytes) => bytes,
-            // fontdb exposes a persistent mmap only behind its `unsafe`
-            // `make_shared_face_data`, so map the file here: reading it
-            // into a `Vec` turns a 183 MB emoji face into dirty heap
-            // instead of reclaimable page cache
-            // (docs/explanation/rendering/text-shaping.md "Font loading").
             FaceSource::File(path) => Arc::new(map_face_file(&path)?),
         };
         let (offset, color) = {
@@ -503,10 +499,9 @@ fn system_provider() -> Result<provider::directwrite::DirectWrite, ShapingError>
     provider::directwrite::DirectWrite::system()
 }
 
-// fontdb exposes a persistent mmap only behind its `unsafe`
-// `make_shared_face_data`, so map the file here: reading it into a `Vec`
-// turns a 183 MB emoji face into dirty heap instead of reclaimable page
-// cache (docs/explanation/rendering/text-shaping.md "Font loading").
+// Mapped rather than read: a 183 MB emoji face read into a `Vec` is dirty
+// heap instead of reclaimable page cache
+// (docs/explanation/rendering/text-shaping.md "Font loading").
 fn map_face_file(path: &std::path::Path) -> Result<memmap2::Mmap, ShapingError> {
     let file = std::fs::File::open(path)
         .map_err(|e| ShapingError::BadFont(format!("open {}: {e}", path.display())))?;
@@ -518,8 +513,7 @@ fn map_face_file(path: &std::path::Path) -> Result<memmap2::Mmap, ShapingError> 
     // hazard of `Mmap::map` is SIGBUS if the file is
     // truncated while mapped, which does not happen for
     // these immutable OS assets. This is the same trade-off
-    // fontdb's own `make_shared_face_data` and FreeType's
-    // path-based `FT_New_Face` accept.
+    // FreeType's path-based `FT_New_Face` accepts.
     unsafe { memmap2::Mmap::map(&file) }
         .map_err(|e| ShapingError::BadFont(format!("mmap {}: {e}", path.display())))
 }
@@ -560,8 +554,8 @@ impl InstalledFamily {
 
 /// Every family name `font.family` and the other `family` keys accept
 /// as an installed family: the faces fontconfig lists on Linux in the
-/// formats the loader parses, and fontdb's scan elsewhere. Names the
-/// provider matches as one family appear once.
+/// formats the loader parses, CoreText's on macOS and DirectWrite's on
+/// Windows. Names the provider matches as one family appear once.
 pub fn installed_families() -> Result<Vec<InstalledFamily>, ShapingError> {
     let host = system_provider()?;
     let mut families = host.installed_families();
@@ -996,9 +990,9 @@ impl FontStack {
     #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn pinned_test_stack() -> Self {
-        let mut db = fontdb::Database::new();
-        db.load_fonts_dir(test_font_dir());
-        Self::auto_discover_in(&db, None, &[], &[], &StyleFaces::default())
+        let mut set = FileSet::default();
+        set.add_dir(test_font_dir());
+        Self::auto_discover_in(&set, None, &[], &[], &StyleFaces::default())
             .unwrap_or_else(|e| panic!("the pinned set has no monospace face: {e}"))
     }
 
@@ -1069,22 +1063,19 @@ impl FontStack {
         explicit_fallbacks: &[FaceSpec],
         styles: &StyleFaces<'_>,
     ) -> Result<Self, ShapingError> {
-        let mut db = fontdb::Database::new();
+        let mut set = FileSet::default();
         for path in files {
             let err = |detail: String| ShapingError::FontPath {
                 path: path.clone(),
                 detail,
             };
             let bytes = std::fs::read(path).map_err(|e| err(e.to_string()))?;
-            if db
-                .load_font_source(fontdb::Source::Binary(Arc::new(bytes)))
-                .is_empty()
-            {
+            if !set.add(bytes) {
                 return Err(err("no font face in the file".to_owned()));
             }
         }
         Self::auto_discover_in(
-            &db,
+            &set,
             primary_family,
             primary_features,
             explicit_fallbacks,
@@ -2075,7 +2066,6 @@ impl Shaper {
 mod tests {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-    use fontdb::Database;
     use proptest::prelude::*;
 
     use super::*;
@@ -2122,9 +2112,9 @@ mod tests {
     }
 
     #[cfg(not(target_os = "linux"))]
-    fn pinned_system() -> Database {
-        let mut db = Database::new();
-        db.load_fonts_dir(test_font_dir());
+    fn pinned_system() -> FileSet {
+        let mut db = FileSet::default();
+        db.add_dir(test_font_dir());
         db.set_monospace_family(TEST_FONT_FAMILY);
         db
     }
@@ -2265,8 +2255,8 @@ mod tests {
     #[test]
     fn color_emoji_rasterizes_as_rgba_not_a_mask() {
         let dir = test_font_dir();
-        let mut db = Database::new();
-        db.load_fonts_dir(dir);
+        let mut db = FileSet::default();
+        db.add_dir(dir);
         let font = Font::try_load_with(&db, "Noto Color Emoji").expect("pinned color face");
         assert!(font.has_color_glyphs() && font.has_glyph('⏸'));
         let bitmap = rasterize(&mut ScaleContext::new(), &font, '⏸', 32.0);
@@ -2514,29 +2504,39 @@ mod tests {
 
     #[test]
     fn default_monospace_is_no_font_only_when_no_face_is_installed() {
-        let result =
-            FontStack::auto_discover_in(&Database::new(), None, &[], &[], &StyleFaces::default());
+        let result = FontStack::auto_discover_in(
+            &FileSet::default(),
+            None,
+            &[],
+            &[],
+            &StyleFaces::default(),
+        );
         assert!(matches!(result, Err(ShapingError::NoFont)));
     }
 
-    /// Debian's fontconfig rules leave fontdb's `monospace` generic naming
-    /// `FreeMono`, which the host need not install.
+    /// A monospace default the set does not hold, as Debian's fontconfig
+    /// rules name `FreeMono` whether or not it is installed.
     #[cfg(not(windows))]
     #[test]
     fn uninstalled_monospace_generic_falls_back_to_an_installed_fixed_pitch_family() {
         let dir = test_font_dir();
-        let mut db = Database::new();
-        db.load_fonts_dir(dir);
+        let mut db = FileSet::default();
+        db.add_dir(dir);
         db.set_monospace_family("FreeMono");
 
         let (id, family) = db
             .default_monospace()
             .expect("a fixed-pitch face is installed");
-        let face = db.face(id).expect("resolved id names a face");
-        assert!(face.monospaced);
-        assert_eq!(face.families[0].0, family);
-        assert_eq!(face.weight, fontdb::Weight::NORMAL);
-        assert_eq!(face.style, fontdb::Style::Normal);
+        let (style, monospace) = db.traits_of(id).expect("resolved id names a face");
+        assert!(monospace);
+        assert_eq!(db.family_of(id).as_deref(), Some(family.as_str()));
+        assert_eq!(
+            style,
+            FaceStyle {
+                italic: false,
+                weight: REGULAR_WEIGHT
+            }
+        );
 
         let stack = FontStack::auto_discover_in(&db, None, &[], &[], &StyleFaces::default())
             .expect("default config loads");
@@ -2602,8 +2602,8 @@ mod tests {
     #[test]
     fn stack_resolve_walks_past_primary_when_it_lacks_glyph() {
         let dir = test_font_dir();
-        let mut db = Database::new();
-        db.load_fonts_dir(dir);
+        let mut db = FileSet::default();
+        db.add_dir(dir);
         let primary = Arc::new(Font::try_load_with(&db, TEST_FONT_FAMILY).expect("pinned primary"));
         let cjk = Arc::new(Font::try_load_with(&db, PINNED_CJK_FAMILY).expect("pinned CJK face"));
         let cjk_target = '\u{845B}';
@@ -2624,8 +2624,8 @@ mod tests {
     #[test]
     fn text_presentation_dingbats_resolve_to_mono_not_color() {
         let dir = test_font_dir();
-        let mut db = Database::new();
-        db.load_fonts_dir(dir);
+        let mut db = FileSet::default();
+        db.add_dir(dir);
         // The pinned db has no fontconfig generic-family aliases, so
         // `Family::Monospace` would not resolve.
         let stack = FontStack::auto_discover_in(
@@ -2683,6 +2683,29 @@ mod tests {
             .collect()
     }
 
+    /// The pinned Neon statics name their wide cuts with the normal
+    /// family, so which file comes first must not pick the width.
+    #[cfg(not(windows))]
+    #[test]
+    fn a_file_set_family_resolves_to_its_normal_width_in_any_file_order() {
+        let truetype = test_font_dir().join("truetype");
+        let normal = truetype.join("MonaspaceNeonFrozen-Regular.ttf");
+        let wide = truetype.join("MonaspaceNeonFrozen-WideRegular.ttf");
+        for order in [[&normal, &wide], [&wide, &normal]] {
+            let mut files = FileSet::default();
+            for path in order {
+                files.add_file(path).expect("the pinned file loads");
+            }
+            let family = files.family_of(0).expect("the first file has a family");
+            assert_eq!(files.family_of(1).as_ref(), Some(&family));
+            let id = files
+                .find_face(&family, REGULAR_WEIGHT, false)
+                .expect("the family resolves");
+            let expected = usize::from(order[0] == &wide);
+            assert_eq!(id, expected, "{order:?}");
+        }
+    }
+
     /// A fallback the system may well have (`DejaVu Sans Mono`) is absent from the
     /// pinned files, so it must not join the stack.
     #[cfg(not(windows))]
@@ -2730,8 +2753,8 @@ mod tests {
     #[test]
     fn a_variation_view_is_named_with_the_position_it_draws_at() {
         let dir = test_font_dir();
-        let mut db = Database::new();
-        db.load_font_file(std::path::Path::new(&dir).join("truetype/Monaspace Neon Var.ttf"))
+        let mut db = FileSet::default();
+        db.add_file(std::path::Path::new(&dir).join("truetype/Monaspace Neon Var.ttf"))
             .expect("the variable face reads");
         let font = Font::try_load_with(&db, "Monaspace Neon Var").expect("the variable face loads");
         let bold = font.at_style(700, false).expect("the face has a wght axis");
@@ -2779,8 +2802,8 @@ mod tests {
             &StyleFaces::default(),
         )
         .expect("the variable face loads");
-        let mut db = Database::new();
-        db.load_font_file(&file).expect("the variable face reads");
+        let mut db = FileSet::default();
+        db.add_file(&file).expect("the variable face reads");
         let default_instance = Font::try_load_with(&db, family).expect("the variable face loads");
         let ink = |font: &Font| {
             let bitmap = rasterize(&mut ScaleContext::new(), font, 'M', 32.0);
@@ -3267,9 +3290,8 @@ mod tests {
     #[test]
     fn a_named_instance_keeps_its_width_through_regular_and_bold_views() {
         let files = pinned_files(&["truetype/Monaspace Neon Var.ttf"]);
-        let mut db = Database::new();
-        db.load_font_file(&files[0])
-            .expect("the variable face reads");
+        let mut db = FileSet::default();
+        db.add_file(&files[0]).expect("the variable face reads");
         let default = Font::try_load_with(&db, "Monaspace Neon Var").expect("the face loads");
         let name = default
             .font_ref()
@@ -3580,10 +3602,9 @@ mod tests {
 
     fn load_pinned(name: &str) -> Arc<Font> {
         let files = pinned_files(&[name]);
-        let mut db = Database::new();
-        db.load_font_file(&files[0]).expect("the pinned face reads");
-        let id = db.faces().next().expect("the file has a face").id;
-        Arc::new(Font::load_face_id(&db, id).expect("the face loads"))
+        let mut db = FileSet::default();
+        db.add_file(&files[0]).expect("the pinned face reads");
+        Arc::new(Font::load_face_id(&db, 0).expect("the face loads"))
     }
 
     #[cfg(not(windows))]
@@ -3775,7 +3796,7 @@ mod tests {
         assert!(matches!(err, ShapingError::FontPath { path, .. } if path == missing));
     }
 
-    /// fontdb accepts a readable file with no face in it without error.
+    /// A readable file with no face in it fails like a missing one.
     #[cfg(not(windows))]
     #[test]
     fn discover_in_files_reports_a_file_with_no_face() {
@@ -4206,8 +4227,8 @@ mod tests {
     #[test]
     fn primary_covers_answers_from_the_styled_primary_not_the_regular_one() {
         let dir = test_font_dir();
-        let mut db = Database::new();
-        db.load_fonts_dir(dir);
+        let mut db = FileSet::default();
+        db.add_dir(dir);
         let base = TEST_FONT_FAMILY;
         let regular_id = db
             .find_face(base, REGULAR_WEIGHT, false)
@@ -4250,8 +4271,8 @@ mod tests {
     #[test]
     fn styled_primaries_pick_real_faces_and_dedup_missing_to_regular() {
         let dir = test_font_dir();
-        let mut db = Database::new();
-        db.load_fonts_dir(dir);
+        let mut db = FileSet::default();
+        db.add_dir(dir);
         let base = TEST_FONT_FAMILY;
         let regular_id = db
             .find_face(base, REGULAR_WEIGHT, false)
@@ -4315,8 +4336,8 @@ mod tests {
     /// The pinned set with `fallbacks` as an explicit `font.fallback`
     /// list, or the discovered chain when it is empty.
     fn pinned_stack(fallbacks: &[&str]) -> FontStack {
-        let mut db = Database::new();
-        db.load_fonts_dir(test_font_dir());
+        let mut db = FileSet::default();
+        db.add_dir(test_font_dir());
         let specs: Vec<FaceSpec> = fallbacks.iter().map(|f| FaceSpec::named(*f)).collect();
         FontStack::auto_discover_in(&db, None, &[], &specs, &StyleFaces::default())
             .expect("the pinned set loads")
