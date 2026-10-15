@@ -1450,16 +1450,20 @@ impl GlyphBitmap {
 
 /// Sizing component of the shape-cache key packed into a `u32`.
 ///
-/// Encodes OSC 66 sizing fields, [`FontStyle`] (bits 24-25), and fallback id
-/// (bits 26-31). Packed into one `u32` because hashing the tuple form costs ~4×
+/// Encodes OSC 66 sizing fields, [`FontStyle`] (bits 20-21), and face id
+/// (bits 22-31). Packed into one `u32` because hashing the tuple form costs ~4×
 /// on the cache hit path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SizingKey(u32);
 
+/// The face id saturation bucket: [`SizingKey::with_font_id`] folds every
+/// larger id into it.
+pub const FACE_ID_SATURATED: usize = 0x3FF;
+
 impl SizingKey {
-    /// Fields are masked to 4 bits; the VT parser already rejects OSC 66
-    /// metadata past the spec ranges (`s` 1-7, `w` 0-7, `n`/`d` 0-15,
-    /// `v`/`h` 0-2).
+    /// `v`/`h` are masked to 2 bits and the rest to 4; the VT parser
+    /// already rejects OSC 66 metadata past the spec ranges (`s` 1-7,
+    /// `w` 0-7, `n`/`d` 0-15, `v`/`h` 0-2).
     #[must_use]
     pub const fn new(
         scale: u8,
@@ -1473,60 +1477,63 @@ impl SizingKey {
         let cell_width = (cell_width & 0xF) as u32;
         let frac_num = (frac_num & 0xF) as u32;
         let frac_den = (frac_den & 0xF) as u32;
-        let valign = (valign & 0xF) as u32;
-        let halign = (halign & 0xF) as u32;
+        let valign = (valign & 0b11) as u32;
+        let halign = (halign & 0b11) as u32;
         Self(
             halign
-                | (valign << 4)
-                | (frac_den << 8)
-                | (frac_num << 12)
-                | (cell_width << 16)
-                | (scale << 20),
+                | (valign << 2)
+                | (frac_den << 4)
+                | (frac_num << 8)
+                | (cell_width << 12)
+                | (scale << 16),
         )
     }
 
     #[must_use]
     pub const fn with_style(self, style: FontStyle) -> Self {
-        Self((self.0 & !(0b11 << 24)) | ((style.index() as u32) << 24))
+        Self((self.0 & !(0b11 << 20)) | ((style.index() as u32) << 20))
     }
 
     #[must_use]
     pub const fn style(self) -> FontStyle {
-        FontStyle::from_index(((self.0 >> 24) & 0b11) as usize)
+        FontStyle::from_index(((self.0 >> 20) & 0b11) as usize)
     }
 
-    /// Ids past 63 saturate into one shared bucket; a real font stack
-    /// never has that many faces.
+    /// Ids past [`FACE_ID_SATURATED`] share its bucket.
     #[must_use]
     pub const fn with_font_id(self, font_id: usize) -> Self {
-        let id = if font_id > 0x3F { 0x3F } else { font_id as u32 };
-        Self((self.0 & !(0x3F << 26)) | (id << 26))
+        let id = if font_id > FACE_ID_SATURATED {
+            FACE_ID_SATURATED as u32
+        } else {
+            font_id as u32
+        };
+        Self((self.0 & !(0x3FF << 22)) | (id << 22))
     }
 
     #[must_use]
     pub const fn font_id(self) -> usize {
-        ((self.0 >> 26) & 0x3F) as usize
+        ((self.0 >> 22) & 0x3FF) as usize
     }
 
     /// The OSC 66 `w` field; `0` is auto.
     #[must_use]
     pub const fn cell_width(self) -> u8 {
-        ((self.0 >> 16) & 0xF) as u8
-    }
-
-    #[must_use]
-    pub const fn scale(self) -> u8 {
-        ((self.0 >> 20) & 0xF) as u8
-    }
-
-    #[must_use]
-    pub const fn frac_num(self) -> u8 {
         ((self.0 >> 12) & 0xF) as u8
     }
 
     #[must_use]
-    pub const fn frac_den(self) -> u8 {
+    pub const fn scale(self) -> u8 {
+        ((self.0 >> 16) & 0xF) as u8
+    }
+
+    #[must_use]
+    pub const fn frac_num(self) -> u8 {
         ((self.0 >> 8) & 0xF) as u8
+    }
+
+    #[must_use]
+    pub const fn frac_den(self) -> u8 {
+        ((self.0 >> 4) & 0xF) as u8
     }
 
     /// `s`, or `s × n/d` when fractional (kitty text-sizing spec); the
