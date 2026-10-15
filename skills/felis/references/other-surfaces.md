@@ -9,10 +9,10 @@ None of these is needed for the three scenarios in `SKILL.md`. Each links to its
   protocol in
   [ipc.md "Non-Rust clients: the stdio bridge"](https://github.com/felis-terminal/felis/blob/main/docs/reference/ipc.md#non-rust-clients-the-stdio-bridge)).
   Same `kind` vocabulary as the CLI, failures on stdout, no `--wait`, `--key` or `--mouse`. Its ops are session
-  automation only (`sessions.*`, `notifications.subscribe`, `cancel`): the operator verbs (`daemon`, `config`, `doctor`,
-  `version`), the window launches, and the shell plumbing (`completions`, `__mangen`, `__complete-sessions`) are
-  CLI-only, run as point verbs with `--format json`. It admits 64 concurrent operations and 32 auxiliary links, bounds
-  stream and stdout queues, rejects unknown fields and parameters (the grammar is `$defs/request` of
+  automation only (`sessions.*`, `notifications.subscribe`, `cancel`): the operator verbs (`daemon`, `config`, `fonts`,
+  `doctor`, `version`), the window launches, and the shell plumbing (`completions`, `__mangen`, `__complete-sessions`)
+  are CLI-only, run as point verbs with `--format json`. It admits 64 concurrent operations and 32 auxiliary links,
+  bounds stream and stdout queues, rejects unknown fields and parameters (the grammar is `$defs/request` of
   `felis-bridge-v1.schema.json`), and exits `1` immediately if stdout fails. A local relative `sessions.spawn` `cwd` is
   anchored at the bridge process's directory.
 - **`sessions switch`, `felis ssh <dest>`, `felis window retarget [<socket>]`**: move a live window to another session

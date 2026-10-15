@@ -177,7 +177,7 @@ Three things come from the host:
 - **libfontconfig and a monospace font.** felis loads the host's `libfontconfig.so.1` and draws the faces its
   configuration names (`fc-match monospace` for the default); without the library the window does not open. On Debian
   and Ubuntu, `libfontconfig1` and `fonts-dejavu-core` are enough; `font.family` picks another face
-  ([configuration](../reference/config.md)).
+  ([configuration](../reference/config.md)), and `felis fonts list` prints the names it accepts.
 - **A C library no newer than the bundled one.** The host's driver libraries and libfontconfig are loaded into a process
   already running the archive's glibc 2.42, which works as long as they were linked against 2.42 or older. Every current
   distribution release is; a host newer than the archive is the case to watch, and the fix is a newer archive.

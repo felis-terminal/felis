@@ -13,6 +13,17 @@ pub(crate) fn private_dir() -> tempfile::TempDir {
     tmp
 }
 
+/// A stand-in `felis-client`: `script` is the body of a `sh` program
+/// that sees the probe flag as `$1`.
+#[cfg(unix)]
+pub(crate) fn fake_frontend(dir: &std::path::Path, script: &str) -> std::ffi::OsString {
+    use std::os::unix::fs::PermissionsExt as _;
+    let path = dir.join("felis-client");
+    std::fs::write(&path, format!("#!/bin/sh\n{script}\n")).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    path.into_os_string()
+}
+
 /// A detached, untagged 24x80 session; tests override the fields they
 /// exercise.
 pub(crate) fn session_info(id: u128) -> SessionInfo {

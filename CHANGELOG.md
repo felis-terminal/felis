@@ -10,6 +10,10 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 
 ## [Unreleased]
 
+- **Font names**: `felis fonts list` prints every family name `font.family` and the other `family` keys accept on this
+  machine, with whether it is monospace and which weights and slants it has, so a name that would fall back to monospace
+  can be checked before opening a window.
+
 ## [0.2.0] - 2026-10-14
 
 The daemon can now replace itself with a new build without ending your sessions, and scripts and agents can do more in a

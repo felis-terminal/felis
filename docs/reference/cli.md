@@ -33,6 +33,7 @@ error, exit `2`).
 | Headless verbs: `sessions`, `notifications`, `daemon`, `version`, `bridge` | refused    | dials                   | dials      | dials                   |
 | `daemon upgrade`                                                           | refused    | runs remote `felis`     | dials      | forwarded to `ssh`      |
 | `config path` / `check` / `show-effective`                                 | read       | refused                 | refused    | refused                 |
+| `fonts list`                                                               | refused    | refused                 | refused    | refused                 |
 | `doctor`, `doctor report`                                                  | read       | dials                   | dials      | dials                   |
 | `felis ssh`, `window retarget`                                             | refused    | refused                 | refused    | refused                 |
 | `<name>` (external command)                                                | refused    | refused                 | refused    | refused                 |
@@ -63,7 +64,7 @@ exit `1` without an error object, and `felis bridge` overrides the code its own 
 | `1`  | `config check`, `doctor`                            | Diagnostics were reported: the document has errors, or a check reported `fail`. Nothing was refused, and the result object still lands on stdout.                                                                          |
 | `1`  | `sessions search`, `notifications subscribe --once` | Nothing to report: the search matched nothing, or the daemon ended the stream before a matching notification arrived. The stream's clean terminal still lands; no error object is written.                                 |
 | `1`  | `felis bridge`                                      | The bridge's own stdin or stdout failed, or its first `Ops` dial was refused `at_capacity`. The kinds `input_failed` and `output_failed` exit `2` everywhere else; a stdout failure cannot carry its own correlated error. |
-| `2`  | all                                                 | Failure to ask: bad syntax, unreachable daemon, connection lost, protocol break, or unsupported protocol major.                                                                                                            |
+| `2`  | all                                                 | Failure to ask: bad syntax, unreachable daemon, connection lost, protocol break, unsupported protocol major, or a frontend that cannot answer.                                                                             |
 
 `config show-effective` is not one of the exceptions above: past a document error it refuses with `invalid_request`.
 
@@ -90,12 +91,12 @@ The `--format` flag selects machine-readable framing on supported verbs:
 
 Classification by verb:
 
-| Class            | Verbs                                                                                                                                                                                                                                                                  |
-| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Point            | `sessions list`, `sessions info`, `sessions spawn`, `sessions send`, `sessions kill`, `sessions evict`, `sessions tag`, `sessions switch`, `felis ssh`, `window retarget`, `daemon status`, `daemon stop`, `daemon upgrade`, `config path`, `version`, `doctor report` |
-| Point-diagnostic | `config check`, `config show-effective`, `doctor`                                                                                                                                                                                                                      |
-| Stream           | `sessions capture`, `sessions search`, `notifications subscribe`                                                                                                                                                                                                       |
-| Exempt           | `felis`, `felis attach`, `felis completions`, `felis bridge`, `felis <name>`                                                                                                                                                                                           |
+| Class            | Verbs                                                                                                                                                                                                                                                                                |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Point            | `sessions list`, `sessions info`, `sessions spawn`, `sessions send`, `sessions kill`, `sessions evict`, `sessions tag`, `sessions switch`, `felis ssh`, `window retarget`, `daemon status`, `daemon stop`, `daemon upgrade`, `config path`, `fonts list`, `version`, `doctor report` |
+| Point-diagnostic | `config check`, `config show-effective`, `doctor`                                                                                                                                                                                                                                    |
+| Stream           | `sessions capture`, `sessions search`, `notifications subscribe`                                                                                                                                                                                                                     |
+| Exempt           | `felis`, `felis attach`, `felis completions`, `felis bridge`, `felis <name>`                                                                                                                                                                                                         |
 
 A verb with no row in this table has no `--format` flag. `felis bridge` streams exactly the operations whose verb is a
 Stream here.
@@ -348,6 +349,58 @@ All config verbs operate locally on the configuration file and **never dial a da
 run. Missing default config files are treated as valid (defaults apply). Missing files explicitly named via `--config`
 are reported as errors. `--client <id>` selects a specific client overlay (default `felis`).
 
+## Fonts
+
+`felis fonts list` prints every font family name that `font.family`, a `font.fallback` entry's `family`, and
+`[font.bold|italic|bold_italic].family` accept as an installed family on this machine ([config.md](config.md)), one per
+line under a header, with whether the family is monospace and the styles it has installed:
+
+```
+FAMILY                 MONO  STYLES
+Menlo                  yes   Regular, Bold, Italic, Bold Italic
+Noto Color Emoji       no    Regular
+```
+
+It never dials a daemon and reads no config file, so it refuses every global flag. JSON output (`--format json`):
+
+```json
+{
+  "v": 1,
+  "families": [
+    {
+      "name": "Menlo",
+      "monospace": true,
+      "styles": [
+        { "weight": 400, "italic": false },
+        { "weight": 700, "italic": false }
+      ]
+    }
+  ]
+}
+```
+
+A family is monospace when every face of it maps all of printable ASCII (U+0020–U+007E) to glyphs of one advance, on
+every platform, whatever the face's own fixed-pitch flag (OpenType `post.isFixedPitch`) or fontconfig's `spacing` says.
+A `no` is not an error: the family is still accepted, and a fallback family is rarely monospace.
+
+`styles` has one entry per installed weight (OpenType 1–1000; 400 is regular, 700 bold) and slant (`italic` counts
+oblique too), upright first, then by weight. A variable face contributes its named instances, an instance being italic
+when its name carries an `Italic` or `Oblique` token. The text output names each weight by the nearest of Thin (100),
+ExtraLight, Light, Regular, Medium, SemiBold, Bold, ExtraBold, and Black (900); `--format json` keeps the exact number.
+A family without a bold or an italic style draws that style with its regular face; felis does not synthesize one.
+
+The names come from the same font set a window resolves against: on Linux, the faces fontconfig lists less its bitmap
+(PCF, BDF) and Type 1 faces, with every family name a face carries; elsewhere, the faces fontdb scans. Names that the
+platform's matching treats as one family appear once: on Linux, names that differ only in letter case or spaces, of
+which the bytewise smallest spelling is printed, described by the faces of all of them; elsewhere, only identical names.
+The list is sorted ignoring letter case. On Linux a `fonts.conf` alias such as `monospace` is accepted as a family
+without appearing in the list.
+
+The list comes from the frontend: `fonts list` runs `felis-client --font-families-probe`, since `felis` does not link
+the font stack. A missing `felis-client` and one that predates the flag are reported as `unsupported`, exit `2`; a
+frontend that ran but could not enumerate the fonts (for example, `libfontconfig.so.1` not loadable) is `internal`, exit
+`2`.
+
 ## Daemon status
 
 `felis daemon status` inspects a running daemon and reports resource utilization against configured ceilings:
@@ -592,7 +645,7 @@ Only the variables named above have their values reported. Before either renderi
 
 The report reads no hostname, username, session title, or terminal content on its own. One can still reach it inside a
 check's detail (an error passed on from a `--host` dial, for one) or a configured path outside the home directory, such
-as a `font.files` entry.
+as `shader.post.file`.
 
 The fonts come from the frontend: `doctor report` runs `felis-client --doctor-report-probe[=<config path>]`, the probe
 `doctor` runs plus a font resolution. When that probe fails, a frontend that predates the flag included, the plain probe
@@ -777,8 +830,8 @@ Persistent JSON-lines helper on stdio for editors and non-Rust clients speaking 
 to session automation: the `sessions.*` ops, `notifications.subscribe`, and `cancel`. Three verb groups are CLI-only,
 and a bridge client reaches them by running the point verb with `--format json`:
 
-- operator verbs: `daemon status`, `daemon stop`, `daemon upgrade`, `config path|check|show-effective`, `doctor`,
-  `version`;
+- operator verbs: `daemon status`, `daemon stop`, `daemon upgrade`, `config path|check|show-effective`, `fonts list`,
+  `doctor`, `version`;
 - window launches: bare `felis`, `attach`, `ssh`, `window retarget`;
 - shell plumbing: `completions <shell>`, `__mangen`, `__complete-sessions`.
 

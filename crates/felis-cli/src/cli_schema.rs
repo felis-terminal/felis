@@ -342,6 +342,9 @@ fn cli_document() -> Value {
         generator.subschema_for::<DoctorResult>().to_value(),
         generator.subschema_for::<DoctorReportResult>().to_value(),
         generator.subschema_for::<VersionResult<'_>>().to_value(),
+        generator
+            .subschema_for::<crate::cli_output::FontFamiliesResult>()
+            .to_value(),
     ];
     let item_bodies = vec![
         generator.subschema_for::<CaptureRow<'_>>().to_value(),

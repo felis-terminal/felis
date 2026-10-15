@@ -491,6 +491,7 @@ fn config_selection_is_a_root_flag_the_non_readers_refuse() {
         (vec!["felis", "version"], "felis version"),
         (vec!["felis", "bridge"], "felis bridge"),
         (vec!["felis", "completions", "fish"], "felis completions"),
+        (vec!["felis", "fonts", "list"], "felis fonts"),
     ] {
         let cli = Cli::try_parse_from(&argv).unwrap();
         let named = verb_reading_no_config(cli.cmd.as_ref())
@@ -532,7 +533,11 @@ fn expected_globals(cmd: Option<&Cmd>) -> (Global, Global) {
             | Cmd::Bridge,
         ) => (Refused, Dialed),
         Some(
-            Cmd::Window { .. } | Cmd::Ssh { .. } | Cmd::Completions { .. } | Cmd::Mangen { .. },
+            Cmd::Window { .. }
+            | Cmd::Ssh { .. }
+            | Cmd::Fonts { .. }
+            | Cmd::Completions { .. }
+            | Cmd::Mangen { .. },
         ) => (Refused, Refused),
         Some(Cmd::CompleteSessions) => (Refused, NoCandidates),
     }
@@ -560,6 +565,7 @@ fn every_verb_form_places_every_global_flag() {
         &["felis", "bridge"],
         &["felis", "window", "retarget"],
         &["felis", "ssh", "vm"],
+        &["felis", "fonts", "list"],
         &["felis", "completions", "fish"],
         &["felis", "__complete-sessions"],
         &["felis", "__mangen", "man"],
