@@ -235,6 +235,10 @@ struct Fallback {
 }
 
 impl SystemFallback for Fallback {
+    fn name(&self) -> &'static str {
+        "DirectWrite"
+    }
+
     fn face_for(
         &self,
         query: &str,

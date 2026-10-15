@@ -611,6 +611,13 @@
             "null"
           ]
         },
+        "system_fallback": {
+          "description": "The platform API asked per character for what `fallbacks` miss.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "unavailable": {
           "description": "Why no stack is reported: the frontend could not be probed,\npredates the font probe, or resolved no font.",
           "type": [
@@ -625,6 +632,7 @@
         "italic",
         "bold_italic",
         "fallbacks",
+        "system_fallback",
         "unavailable"
       ],
       "type": "object"

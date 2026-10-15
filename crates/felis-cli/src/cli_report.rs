@@ -88,6 +88,7 @@ fn fonts_object(probe: &Result<ProbeReport, String>, note: Option<&str>) -> Font
         italic: None,
         bold_italic: None,
         fallbacks: Vec::new(),
+        system_fallback: None,
         unavailable: Some(why),
     };
     match probe {
@@ -99,12 +100,14 @@ fn fonts_object(probe: &Result<ProbeReport, String>, note: Option<&str>) -> Font
                 italic,
                 bold_italic,
                 fallbacks,
+                system_fallback,
             }) => FontsObject {
                 regular: Some(regular.clone()),
                 bold: Some(bold.clone()),
                 italic: Some(italic.clone()),
                 bold_italic: Some(bold_italic.clone()),
                 fallbacks: fallbacks.clone(),
+                system_fallback: system_fallback.clone(),
                 unavailable: None,
             },
             Some(FontsProbe::Failed { error }) => unavailable(format!("no font resolved: {error}")),
@@ -296,10 +299,17 @@ pub(crate) fn markdown(report: &DoctorReportResult, daemon_detail: &str) -> Stri
         let _ = writeln!(out, "- bold: {}", name(&fonts.bold));
         let _ = writeln!(out, "- italic: {}", name(&fonts.italic));
         let _ = writeln!(out, "- bold italic: {}", name(&fonts.bold_italic));
-        let fallbacks = if fonts.fallbacks.is_empty() {
+        let mut chain = fonts.fallbacks.clone();
+        chain.extend(
+            fonts
+                .system_fallback
+                .iter()
+                .map(|api| format!("{api} per character")),
+        );
+        let fallbacks = if chain.is_empty() {
             "none".to_owned()
         } else {
-            fonts.fallbacks.join(", ")
+            chain.join(", ")
         };
         let _ = writeln!(out, "- fallbacks: {fallbacks}\n");
     }
@@ -783,6 +793,7 @@ mod tests {
                     italic: Some("Mono Italic".to_owned()),
                     bold_italic: Some("Mono Bold Italic".to_owned()),
                     fallbacks: vec!["Emoji".to_owned()],
+                    system_fallback: Some("CoreText".to_owned()),
                     unavailable: None,
                 },
                 config: ConfigObject {

@@ -28,7 +28,7 @@ expression: "markdown(&sample(true), \"not running\")"
 - bold: Mono Bold
 - italic: Mono Italic
 - bold italic: Mono Bold Italic
-- fallbacks: Emoji
+- fallbacks: Emoji, CoreText per character
 
 ### Config
 

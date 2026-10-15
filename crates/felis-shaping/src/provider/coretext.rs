@@ -271,6 +271,10 @@ impl Fallback {
 }
 
 impl SystemFallback for Fallback {
+    fn name(&self) -> &'static str {
+        "CoreText"
+    }
+
     fn face_for(
         &self,
         query: &str,

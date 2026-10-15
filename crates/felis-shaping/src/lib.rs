@@ -613,6 +613,8 @@ impl Default for StyleFaces<'_> {
 pub struct StackDescription {
     pub primary: [String; 4],
     pub fallbacks: Vec<String>,
+    /// The platform API asked per character for what `fallbacks` miss.
+    pub system_fallback: Option<String>,
 }
 
 /// Ordered chain of fonts queried per glyph (`fonts[0]` is regular primary,
@@ -1359,6 +1361,10 @@ impl FontStack {
                 .skip(1)
                 .map(|f| f.display_name())
                 .collect(),
+            system_fallback: self
+                .system
+                .as_ref()
+                .map(|system| system.source.name().to_owned()),
         }
     }
 
@@ -2747,6 +2753,7 @@ mod tests {
         }
         assert_ne!(described.primary[0], described.primary[1]);
         assert_eq!(described.fallbacks, Vec::<String>::new());
+        assert_eq!(described.system_fallback, None);
     }
 
     #[cfg(not(windows))]
@@ -2986,6 +2993,10 @@ mod tests {
     }
 
     impl SystemFallback for ScriptedSystem {
+        fn name(&self) -> &'static str {
+            "scripted"
+        }
+
         fn face_for(
             &self,
             query: &str,
@@ -3027,6 +3038,10 @@ mod tests {
     #[test]
     fn a_scalar_no_ordered_face_covers_draws_from_the_system_face_asked_once() {
         let (stack, asked) = system_stack(&[("\u{2602}", SYMBOLS2)]);
+        assert_eq!(
+            stack.describe().system_fallback.as_deref(),
+            Some("scripted")
+        );
         let index = stack.resolve_styled_index(UMBRELLA, FontStyle::REGULAR);
         assert_eq!(index, stack.len());
         assert!(stack.font_at(index, FontStyle::REGULAR).has_glyph(UMBRELLA));

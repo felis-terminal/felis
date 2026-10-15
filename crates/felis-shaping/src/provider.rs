@@ -80,6 +80,9 @@ pub(crate) trait SystemFallback: Send + Sync {
     /// so the next miss asks again.
     fn face_for(&self, query: &str, style: FontStyle)
     -> Result<Option<ResolvedFace>, ShapingError>;
+
+    /// The platform API that answers, as a report names it.
+    fn name(&self) -> &'static str;
 }
 
 #[derive(Clone, Copy)]

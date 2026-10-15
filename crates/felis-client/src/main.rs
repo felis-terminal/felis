@@ -532,6 +532,7 @@ fn probe_fonts(source: &ConfigSource) -> FontsProbe {
                 italic,
                 bold_italic,
                 fallbacks: found.fallbacks,
+                system_fallback: found.system_fallback,
             }
         }
         Err(err) => FontsProbe::Failed {

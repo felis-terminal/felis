@@ -1126,6 +1126,8 @@ pub(crate) struct FontsObject {
     pub(crate) italic: Option<String>,
     pub(crate) bold_italic: Option<String>,
     pub(crate) fallbacks: Vec<String>,
+    /// The platform API asked per character for what `fallbacks` miss.
+    pub(crate) system_fallback: Option<String>,
     /// Why no stack is reported: the frontend could not be probed,
     /// predates the font probe, or resolved no font.
     pub(crate) unavailable: Option<String>,
