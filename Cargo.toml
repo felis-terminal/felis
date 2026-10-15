@@ -135,6 +135,15 @@ objc2-core-foundation = { version = "0.3", default-features = false, features = 
   "CFLocale",
   "CFString",
 ] }
+# The macOS face provider (felis-shaping): family matching, the user's
+# fixed-pitch font and the per-character fallback.
+objc2-core-text = { version = "0.3", default-features = false, features = [
+  "std",
+  "CTFont",
+  "CTFontDescriptor",
+  "CTFontManager",
+  "CTFontTraits",
+] }
 bytemuck = { version = "1", features = ["derive"] }
 regex = "1"
 miniz_oxide = { version = "0.9", default-features = false, features = [

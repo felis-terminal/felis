@@ -24,6 +24,15 @@ tracing = { workspace = true }
 [target.'cfg(target_os = "linux")'.dependencies]
 yeslogic-fontconfig-sys = { workspace = true }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-core-foundation = { workspace = true, features = [
+  "CFArray",
+  "CFCGTypes",
+  "CFDictionary",
+  "CFURL",
+] }
+objc2-core-text = { workspace = true }
+
 [dev-dependencies]
 criterion = { workspace = true }
 proptest = { workspace = true }

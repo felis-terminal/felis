@@ -34,7 +34,7 @@ mod provider;
 
 use presentation::is_emoji_presentation;
 pub use provider::MONOSPACE_FALLBACK_FAMILIES;
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 use provider::system_db;
 use provider::{
     BOLD_WEIGHT, FaceProvider, FaceSource, LoadedAs, REGULAR_WEIGHT, ResolvedFace, SystemFallback,
@@ -464,6 +464,10 @@ fn italic_position(
 /// The styles a variable face's named instances draw at, read as a
 /// styled lookup reads them: weight from `wght`, italic from the
 /// instance's name. Empty for a static face.
+#[cfg_attr(
+    all(target_os = "macos", not(test)),
+    expect(dead_code, reason = "macOS lists named instances through CoreText")
+)]
 fn named_instance_styles(face: FontRef<'_>) -> Vec<FaceStyle> {
     let wght = face.variations().position(|axis| axis.tag() == WGHT);
     face.instances()
@@ -505,13 +509,22 @@ fn has_italic_token(name: &str) -> bool {
 }
 
 /// The host's font set: fontconfig on Linux, where it is the configuration
-/// users edit, and fontdb's scan elsewhere.
+/// users edit, CoreText on macOS, and fontdb's scan elsewhere.
 #[cfg(target_os = "linux")]
 fn system_provider() -> Result<provider::fontconfig::Fontconfig, ShapingError> {
     provider::fontconfig::Fontconfig::system()
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "macos")]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "one signature with the Linux provider, which can fail to load"
+)]
+fn system_provider() -> Result<provider::coretext::CoreText, ShapingError> {
+    Ok(provider::coretext::CoreText::system())
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 #[expect(
     clippy::unnecessary_wraps,
     reason = "one signature with the Linux provider, which can fail to load"
@@ -581,9 +594,9 @@ impl InstalledFamily {
 /// provider matches as one family appear once.
 pub fn installed_families() -> Result<Vec<InstalledFamily>, ShapingError> {
     let host = system_provider()?;
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     let mut families = host.installed_families();
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     let mut families = provider::database_families(&host);
     sort_ignoring_case(&mut families);
     Ok(families)
@@ -1162,8 +1175,9 @@ impl FontStack {
         } else if explicit_fallbacks.is_empty()
             && let Some(system) = db.system_fallback(regular_id)
         {
-            // CoreText answers no private-use scalar, so the Nerd glyphs
-            // need a face of their own.
+            // CoreText draws a BMP private-use scalar, where the Nerd
+            // glyphs live, from whichever face maps it (STIX Two Math, or
+            // LastResort) rather than a Nerd font.
             stack = append_first_installed(stack, db, NERD_FONT_FAMILIES, primary_features);
             stack = stack.with_system_fallback(system);
         } else if explicit_fallbacks.is_empty() {

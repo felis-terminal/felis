@@ -13,6 +13,8 @@ use crate::{
     FaceStyle, FontBytes, FontStyle, InstalledFamily, ShapingError, named_instance_styles,
 };
 
+#[cfg(target_os = "macos")]
+pub(crate) mod coretext;
 #[cfg(any(target_os = "linux", all(test, unix)))]
 pub(crate) mod fontconfig;
 
@@ -114,6 +116,91 @@ pub(crate) enum FaceSource {
     Shared(FontBytes),
 }
 
+/// The face CSS Fonts 4 font matching picks among `faces` for `weight`
+/// and `italic`: the slant first, then the weight. `None` for no faces.
+pub(crate) fn closest_style(faces: &[FaceStyle], weight: u16, italic: bool) -> Option<usize> {
+    let slant_matches = faces.iter().any(|face| face.italic == italic);
+    (0..faces.len())
+        .filter(|&i| !slant_matches || faces[i].italic == italic)
+        .min_by_key(|&i| weight_rank(weight, faces[i].weight))
+}
+
+/// Lower ranks first. 400 and 500 look up to 500, then down, then up past
+/// 500; a lighter weight looks down first, a heavier one up first.
+fn weight_rank(desired: u16, weight: u16) -> (u8, u16) {
+    match desired {
+        400..=500 if (desired..=500).contains(&weight) => (0, weight - desired),
+        400..=500 if weight < desired => (1, desired - weight),
+        400..=500 => (2, weight - 500),
+        ..400 if weight <= desired => (0, desired - weight),
+        ..400 => (1, weight - desired),
+        _ if weight >= desired => (0, weight - desired),
+        _ => (1, desired - weight),
+    }
+}
+
+/// The language the platform fallback is asked in: the first of the
+/// user's languages that writes Han, else the first. Only Han changes
+/// form by language, so a list led by English still decides it.
+#[cfg(any(target_os = "macos", windows, test))]
+pub(crate) fn fallback_language<S: AsRef<str>>(languages: &[S]) -> Option<&str> {
+    const HAN_LANGUAGES: &[&str] = &[
+        "ja", "ko", "zh", "cmn", "yue", "wuu", "hak", "nan", "gan", "hsn", "lzh",
+    ];
+    const HAN_SCRIPTS: &[&str] = &["Hani", "Hans", "Hant", "Hanb", "Jpan", "Kore"];
+    let writes_han = |language: &&str| {
+        let mut subtags = language.split(['-', '_']);
+        let primary = subtags.next().unwrap_or_default();
+        HAN_LANGUAGES
+            .iter()
+            .any(|han| primary.eq_ignore_ascii_case(han))
+            || subtags.any(|subtag| {
+                HAN_SCRIPTS
+                    .iter()
+                    .any(|script| subtag.eq_ignore_ascii_case(script))
+            })
+    };
+    languages
+        .iter()
+        .map(AsRef::as_ref)
+        .find(writes_han)
+        .or_else(|| languages.first().map(AsRef::as_ref))
+}
+
+#[cfg(test)]
+mod language_tests {
+    use super::fallback_language;
+
+    #[test]
+    fn the_fallback_language_is_the_first_that_writes_han() {
+        assert_eq!(
+            fallback_language(&["en-US", "zh-Hans-CN", "ja"]),
+            Some("zh-Hans-CN")
+        );
+        assert_eq!(fallback_language(&["en-GB", "fr", "ja-JP"]), Some("ja-JP"));
+        assert_eq!(fallback_language(&["de", "KO_kr"]), Some("KO_kr"));
+        assert_eq!(
+            fallback_language(&["yue-Hant-HK", "ja-JP"]),
+            Some("yue-Hant-HK")
+        );
+        assert_eq!(
+            fallback_language(&["en", "cmn-Hans", "ja"]),
+            Some("cmn-Hans")
+        );
+        assert_eq!(
+            fallback_language(&["fr", "und-Hant", "ja"]),
+            Some("und-Hant")
+        );
+    }
+
+    #[test]
+    fn a_list_without_a_han_language_asks_in_its_first() {
+        assert_eq!(fallback_language(&["en-US", "fr-FR"]), Some("en-US"));
+        assert_eq!(fallback_language(&["jam", "zha"]), Some("jam"));
+        assert_eq!(fallback_language::<&str>(&[]), None);
+    }
+}
+
 /// Tried in order when the `monospace` generic names nothing installed.
 pub const MONOSPACE_FALLBACK_FAMILIES: &[&str] = &[
     "DejaVu Sans Mono",
@@ -126,7 +213,7 @@ pub const MONOSPACE_FALLBACK_FAMILIES: &[&str] = &[
 
 /// Rescans every installed font (~300 ms on a large system); share one
 /// across probes.
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub(crate) fn system_db() -> Database {
     let mut db = Database::new();
     db.load_system_fonts();
@@ -137,8 +224,11 @@ pub(crate) fn system_db() -> Database {
 /// [`FaceProvider::find_face`] accepts. fontdb compares names exactly, so
 /// only identical spellings collapse.
 #[cfg_attr(
-    all(target_os = "linux", not(test)),
-    expect(dead_code, reason = "Linux lists families through fontconfig")
+    all(any(target_os = "linux", target_os = "macos"), not(test)),
+    expect(
+        dead_code,
+        reason = "Linux and macOS list families through the platform"
+    )
 )]
 pub(crate) fn database_families(db: &Database) -> Vec<InstalledFamily> {
     let mut families: HashMap<&str, InstalledFamily> = HashMap::new();
@@ -255,6 +345,48 @@ impl FaceProvider for Database {
             instance: None,
             slanted: face.style != fontdb::Style::Normal,
         })
+    }
+}
+
+#[cfg(test)]
+mod matching_tests {
+    use super::*;
+
+    const fn style(weight: u16, italic: bool) -> FaceStyle {
+        FaceStyle { italic, weight }
+    }
+
+    fn picked(faces: &[FaceStyle], weight: u16, italic: bool) -> FaceStyle {
+        faces[closest_style(faces, weight, italic).expect("a face is picked")]
+    }
+
+    #[test]
+    fn the_slant_decides_before_the_weight() {
+        let faces = [style(400, false), style(700, true)];
+        assert_eq!(picked(&faces, 400, true), style(700, true));
+        assert_eq!(picked(&faces, 700, false), style(400, false));
+    }
+
+    #[test]
+    fn a_regular_query_looks_up_to_medium_then_down_then_up() {
+        let faces = [style(300, false), style(500, false), style(600, false)];
+        assert_eq!(picked(&faces, 400, false), style(500, false));
+        let faces = [style(300, false), style(600, false)];
+        assert_eq!(picked(&faces, 400, false), style(300, false));
+        assert_eq!(picked(&faces, 500, false), style(300, false));
+    }
+
+    #[test]
+    fn a_light_query_looks_down_first_and_a_heavy_one_up_first() {
+        let faces = [style(200, false), style(350, false), style(800, false)];
+        assert_eq!(picked(&faces, 300, false), style(200, false));
+        assert_eq!(picked(&faces, 700, false), style(800, false));
+        assert_eq!(picked(&faces[..2], 700, false), style(350, false));
+    }
+
+    #[test]
+    fn no_face_picks_nothing() {
+        assert_eq!(closest_style(&[], 400, false), None);
     }
 }
 
