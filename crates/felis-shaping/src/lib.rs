@@ -34,8 +34,6 @@ mod provider;
 
 use presentation::is_emoji_presentation;
 pub use provider::MONOSPACE_FALLBACK_FAMILIES;
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-use provider::system_db;
 use provider::{
     BOLD_WEIGHT, FaceProvider, FaceSource, LoadedAs, REGULAR_WEIGHT, ResolvedFace, SystemFallback,
 };
@@ -48,6 +46,8 @@ pub enum ShapingError {
     BadFont(String),
     #[error("fontconfig: {0}")]
     Fontconfig(String),
+    #[error("DirectWrite: {0}")]
+    DirectWrite(String),
     #[error("load font {}: {detail}", path.display())]
     FontPath {
         path: std::path::PathBuf,
@@ -461,32 +461,6 @@ fn italic_position(
     Vec::new()
 }
 
-/// The styles a variable face's named instances draw at, read as a
-/// styled lookup reads them: weight from `wght`, italic from the
-/// instance's name. Empty for a static face.
-#[cfg_attr(
-    all(target_os = "macos", not(test)),
-    expect(dead_code, reason = "macOS lists named instances through CoreText")
-)]
-fn named_instance_styles(face: FontRef<'_>) -> Vec<FaceStyle> {
-    let wght = face.variations().position(|axis| axis.tag() == WGHT);
-    face.instances()
-        .filter_map(|instance| {
-            let weight = instance.values().nth(wght?)?;
-            let name = instance
-                .name(Some("en"))
-                .or_else(|| instance.name(None))?
-                .to_string();
-            Some(FaceStyle {
-                italic: has_italic_token(&name),
-                // Saturates into u16; `wght` is 1–1000 by spec.
-                #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                weight: weight.round() as u16,
-            })
-        })
-        .collect()
-}
-
 /// Splits on spaces, `-`, `_` and lowercase-to-uppercase boundaries, so
 /// `BoldItalic` matches and `Italicized` does not.
 fn has_italic_token(name: &str) -> bool {
@@ -509,7 +483,7 @@ fn has_italic_token(name: &str) -> bool {
 }
 
 /// The host's font set: fontconfig on Linux, where it is the configuration
-/// users edit, CoreText on macOS, and fontdb's scan elsewhere.
+/// users edit, and the platform's own font API elsewhere.
 #[cfg(target_os = "linux")]
 fn system_provider() -> Result<provider::fontconfig::Fontconfig, ShapingError> {
     provider::fontconfig::Fontconfig::system()
@@ -524,13 +498,9 @@ fn system_provider() -> Result<provider::coretext::CoreText, ShapingError> {
     Ok(provider::coretext::CoreText::system())
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-#[expect(
-    clippy::unnecessary_wraps,
-    reason = "one signature with the Linux provider, which can fail to load"
-)]
-fn system_provider() -> Result<fontdb::Database, ShapingError> {
-    Ok(system_db())
+#[cfg(windows)]
+fn system_provider() -> Result<provider::directwrite::DirectWrite, ShapingError> {
+    provider::directwrite::DirectWrite::system()
 }
 
 // fontdb exposes a persistent mmap only behind its `unsafe`
@@ -594,10 +564,7 @@ impl InstalledFamily {
 /// provider matches as one family appear once.
 pub fn installed_families() -> Result<Vec<InstalledFamily>, ShapingError> {
     let host = system_provider()?;
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
     let mut families = host.installed_families();
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    let mut families = provider::database_families(&host);
     sort_ignoring_case(&mut families);
     Ok(families)
 }
@@ -3226,6 +3193,72 @@ mod tests {
             .position(|v| v.tag() == tag)
             .expect("the face has the axis");
         font.coords[index]
+    }
+
+    /// The pinned variable face and its instance 16's position as
+    /// `(tag, value)` pairs.
+    #[cfg(not(windows))]
+    fn semiwide_position() -> (Vec<u8>, Vec<(u32, f32)>) {
+        let files = pinned_files(&["truetype/Monaspace Neon Var.ttf"]);
+        let data = std::fs::read(&files[0]).expect("the variable face reads");
+        let font = FontRef::from_index(&data, 0).expect("the face parses");
+        let coords = font
+            .instances()
+            .nth(16)
+            .expect("the instance exists")
+            .values();
+        let position = font
+            .variations()
+            .map(|axis| axis.tag())
+            .zip(coords)
+            .collect();
+        (data, position)
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn a_host_position_resolves_to_the_named_instance_there() {
+        let (data, mut position) = semiwide_position();
+        let font = FontRef::from_index(&data, 0).expect("the face parses");
+        assert_eq!(
+            provider::instance_at(font, &position),
+            Some(provider::AxisPosition::Named(16))
+        );
+        position[0].1 += 0.25;
+        assert_eq!(
+            provider::instance_at(font, &position),
+            Some(provider::AxisPosition::Named(16))
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn a_host_position_no_instance_names_is_unrepresentable() {
+        let (data, mut position) = semiwide_position();
+        let font = FontRef::from_index(&data, 0).expect("the face parses");
+        let wdth = swash::tag_from_bytes(b"wdth");
+        let at = position
+            .iter()
+            .position(|&(tag, _)| tag == wdth)
+            .expect("the face has wdth");
+        position[at].1 += 3.0;
+        assert_eq!(provider::instance_at(font, &position), None);
+
+        let (_, mut position) = semiwide_position();
+        position.push((swash::tag_from_bytes(b"ZZZZ"), 0.0));
+        assert_eq!(provider::instance_at(font, &position), None);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn a_host_position_at_every_default_is_representable() {
+        let (data, _) = semiwide_position();
+        let font = FontRef::from_index(&data, 0).expect("the face parses");
+        let position: Vec<(u32, f32)> = font
+            .variations()
+            .map(|axis| (axis.tag(), axis.default_value()))
+            .collect();
+        assert!(provider::instance_at(font, &position).is_some());
     }
 
     /// `instances().nth(16)` of the pinned variable face is `SemiWide

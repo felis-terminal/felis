@@ -1138,6 +1138,8 @@ dependencies = [
  "thiserror 2.0.21",
  "tracing",
  "unicode-width",
+ "windows",
+ "windows-core",
  "yeslogic-fontconfig-sys",
  "zeno",
 ]

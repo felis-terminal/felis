@@ -9,12 +9,12 @@ use skrifa::{
     instance::{LocationRef, Size},
 };
 
-use crate::{
-    FaceStyle, FontBytes, FontStyle, InstalledFamily, ShapingError, named_instance_styles,
-};
+use crate::{FaceStyle, FontBytes, FontStyle, ShapingError};
 
 #[cfg(target_os = "macos")]
 pub(crate) mod coretext;
+#[cfg(windows)]
+pub(crate) mod directwrite;
 #[cfg(any(target_os = "linux", all(test, unix)))]
 pub(crate) mod fontconfig;
 
@@ -211,57 +211,6 @@ pub const MONOSPACE_FALLBACK_FAMILIES: &[&str] = &[
     "Consolas",
 ];
 
-/// Rescans every installed font (~300 ms on a large system); share one
-/// across probes.
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-pub(crate) fn system_db() -> Database {
-    let mut db = Database::new();
-    db.load_system_fonts();
-    db
-}
-
-/// Every family name a face in `db` carries, the set
-/// [`FaceProvider::find_face`] accepts. fontdb compares names exactly, so
-/// only identical spellings collapse.
-#[cfg_attr(
-    all(any(target_os = "linux", target_os = "macos"), not(test)),
-    expect(
-        dead_code,
-        reason = "Linux and macOS list families through the platform"
-    )
-)]
-pub(crate) fn database_families(db: &Database) -> Vec<InstalledFamily> {
-    let mut families: HashMap<&str, InstalledFamily> = HashMap::new();
-    for face in db.faces() {
-        let own = FaceStyle {
-            italic: face.style != fontdb::Style::Normal,
-            weight: face.weight.0,
-        };
-        let (monospace, mut styles) = db
-            .with_face_data(face.id, |data, index| {
-                let instances = usize::try_from(index)
-                    .ok()
-                    .and_then(|index| swash::FontRef::from_index(data, index))
-                    .map(named_instance_styles)
-                    .unwrap_or_default();
-                (ascii_is_fixed_pitch(data, index), instances)
-            })
-            .unwrap_or_default();
-        if styles.is_empty() {
-            styles.push(own);
-        }
-        for (name, _) in &face.families {
-            let family = families
-                .entry(name)
-                .or_insert_with(|| InstalledFamily::new(name.clone()));
-            for &style in &styles {
-                family.add_face(monospace, style);
-            }
-        }
-    }
-    families.into_values().collect()
-}
-
 /// Printable ASCII is what sizes the cell, so neither the face's own
 /// `post.isFixedPitch` nor fontconfig's `spacing` decides: Monaco and many
 /// CJK faces leave the flag unset, and fontconfig calls Monaco
@@ -281,6 +230,56 @@ pub(crate) fn ascii_is_fixed_pitch(data: &[u8], index: u32) -> bool {
         return false;
     };
     advances.all(|advance| advance == Some(first))
+}
+
+/// How far, in an axis's own units, a host's reported position may sit
+/// from the `fvar` coordinate it was read from.
+#[cfg(any(windows, test))]
+const AXIS_TOLERANCE: f32 = 0.5;
+
+/// Where on a variable face's axes a host draws it.
+#[cfg(any(windows, test))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AxisPosition {
+    /// Every axis at its default, as a static face sits.
+    Default,
+    /// The `fvar` named instance at this index.
+    Named(usize),
+}
+
+/// The `fvar` named instance nearest `position`, given as OpenType axis
+/// tags and values; `None` for a position no instance names, which loading
+/// would draw at the default instead.
+#[cfg(any(windows, test))]
+pub(crate) fn instance_at(
+    font: swash::FontRef<'_>,
+    position: &[(u32, f32)],
+) -> Option<AxisPosition> {
+    let tags: Vec<u32> = font.variations().map(|axis| axis.tag()).collect();
+    // `None` when `position` names an axis the face lacks.
+    let distance = |coords: &[f32]| {
+        position.iter().try_fold(0.0_f32, |far, &(tag, value)| {
+            let at = tags.iter().position(|&t| t == tag)?;
+            Some(far.max((coords.get(at)? - value).abs()))
+        })
+    };
+    let nearest = font
+        .instances()
+        .enumerate()
+        .filter_map(|(at, instance)| {
+            let coords: Vec<f32> = instance.values().collect();
+            Some((at, distance(&coords)?))
+        })
+        .min_by(|a, b| a.1.total_cmp(&b.1));
+    if let Some((at, far)) = nearest
+        && far < AXIS_TOLERANCE
+    {
+        return Some(AxisPosition::Named(at));
+    }
+    let defaults: Vec<f32> = font.variations().map(|axis| axis.default_value()).collect();
+    distance(&defaults)
+        .is_some_and(|far| far < AXIS_TOLERANCE)
+        .then_some(AxisPosition::Default)
 }
 
 impl FaceProvider for Database {
@@ -387,68 +386,5 @@ mod matching_tests {
     #[test]
     fn no_face_picks_nothing() {
         assert_eq!(closest_style(&[], 400, false), None);
-    }
-}
-
-#[cfg(all(test, not(windows)))]
-mod tests {
-    use super::*;
-    use crate::{TEST_FONT_FAMILY, test_font_dir};
-
-    #[test]
-    fn the_database_lists_each_family_once() {
-        let mut db = Database::new();
-        db.load_fonts_dir(test_font_dir());
-        let mut names: Vec<String> = database_families(&db)
-            .into_iter()
-            .map(|family| family.name)
-            .collect();
-        assert!(names.iter().any(|n| n == TEST_FONT_FAMILY), "{names:?}");
-        for name in &names {
-            assert!(
-                db.find_face(name, REGULAR_WEIGHT, false).is_some(),
-                "{name} is listed but not accepted"
-            );
-        }
-        names.sort_unstable();
-        assert!(names.windows(2).all(|w| w[0] != w[1]), "{names:?}");
-    }
-
-    #[test]
-    fn the_database_reports_each_familys_pitch_and_styles() {
-        let mut db = Database::new();
-        db.load_fonts_dir(test_font_dir());
-        let families = database_families(&db);
-        let named = |name: &str| {
-            families
-                .iter()
-                .find(|family| family.name == name)
-                .unwrap_or_else(|| panic!("{name} is installed"))
-        };
-        let argon = named("Monaspace Argon");
-        assert!(argon.monospace);
-        for style in [
-            (false, 400),
-            (false, BOLD_WEIGHT),
-            (true, 400),
-            (true, BOLD_WEIGHT),
-        ] {
-            let style = FaceStyle {
-                italic: style.0,
-                weight: style.1,
-            };
-            assert!(argon.styles.contains(&style), "{:?}", argon.styles);
-        }
-        assert!(argon.styles.is_sorted(), "{:?}", argon.styles);
-        assert!(!named("Noto Sans Symbols").monospace);
-        let variable = &named("Monaspace Neon Var").styles;
-        for (italic, weight) in [(false, 400), (false, 700), (true, 700)] {
-            let style = FaceStyle { italic, weight };
-            assert!(variable.contains(&style), "named instances: {variable:?}");
-        }
-        assert!(
-            !named("Noto Color Emoji").monospace,
-            "printable ASCII is not mapped"
-        );
     }
 }
