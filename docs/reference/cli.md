@@ -390,11 +390,13 @@ ExtraLight, Light, Regular, Medium, SemiBold, Bold, ExtraBold, and Black (900); 
 A family without a bold or an italic style draws that style with its regular face; felis does not synthesize one.
 
 The names come from the same font set a window resolves against: on Linux, the faces fontconfig lists less its bitmap
-(PCF, BDF) and Type 1 faces, with every family name a face carries; elsewhere, the faces fontdb scans. Names that the
+(PCF, BDF) and Type 1 faces, with every family name a face carries; on macOS, the faces CoreText lists; on Windows,
+DirectWrite's system font collection. On macOS and Windows every localized family name is listed too. Names that the
 platform's matching treats as one family appear once: on Linux, names that differ only in letter case or spaces, of
-which the bytewise smallest spelling is printed, described by the faces of all of them; elsewhere, only identical names.
-The list is sorted ignoring letter case. On Linux a `fonts.conf` alias such as `monospace` is accepted as a family
-without appearing in the list.
+which the bytewise smallest spelling is printed, described by the faces of all of them; on Windows, names that differ
+only in letter case, of which the bytewise smallest is printed; on macOS, only identical names. The list is sorted
+ignoring letter case. On Linux a `fonts.conf` alias such as `monospace` is accepted as a family without appearing in the
+list.
 
 The list comes from the frontend: `fonts list` runs `felis-client --font-families-probe`, since `felis` does not link
 the font stack. A missing `felis-client` and one that predates the flag are reported as `unsupported`, exit `2`; a
