@@ -9,7 +9,9 @@ use skrifa::{
     instance::{LocationRef, Size},
 };
 
-use crate::{FaceStyle, FontBytes, InstalledFamily, ShapingError, named_instance_styles};
+use crate::{
+    FaceStyle, FontBytes, FontStyle, InstalledFamily, ShapingError, named_instance_styles,
+};
 
 #[cfg(any(target_os = "linux", all(test, unix)))]
 pub(crate) mod fontconfig;
@@ -58,6 +60,24 @@ pub(crate) trait FaceProvider {
     ) -> Option<Vec<CascadeFace<Self::Id>>> {
         None
     }
+
+    /// The host's per-character fallback for a stack whose regular primary
+    /// is `primary`, asked for what no ordered face covers; `None` makes
+    /// the stack discover fallbacks by family.
+    fn system_fallback(&self, _primary: Self::Id) -> Option<Box<dyn SystemFallback>> {
+        None
+    }
+}
+
+/// The face the host draws a scalar with, asked only once the stack's own
+/// faces have missed it.
+pub(crate) trait SystemFallback: Send + Sync {
+    /// The face the host picks for `query` (one scalar, a presentation
+    /// selector appended when one was asked for) next to the primary at
+    /// `style`; `Ok(None)` when it has none. An `Err` is not remembered,
+    /// so the next miss asks again.
+    fn face_for(&self, query: &str, style: FontStyle)
+    -> Result<Option<ResolvedFace>, ShapingError>;
 }
 
 #[derive(Clone, Copy)]

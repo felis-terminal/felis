@@ -9,7 +9,11 @@
 // "Font loading").
 #![allow(unsafe_code)]
 
-use std::{borrow::Cow, collections::HashMap, sync::Arc};
+use std::{
+    borrow::Cow,
+    collections::HashMap,
+    sync::{Arc, Mutex, OnceLock, PoisonError},
+};
 
 use skrifa::raw::{
     FontData, FontRead,
@@ -32,7 +36,9 @@ use presentation::is_emoji_presentation;
 pub use provider::MONOSPACE_FALLBACK_FAMILIES;
 #[cfg(not(target_os = "linux"))]
 use provider::system_db;
-use provider::{BOLD_WEIGHT, FaceProvider, FaceSource, LoadedAs, REGULAR_WEIGHT};
+use provider::{
+    BOLD_WEIGHT, FaceProvider, FaceSource, LoadedAs, REGULAR_WEIGHT, ResolvedFace, SystemFallback,
+};
 
 #[derive(Debug, Error)]
 pub enum ShapingError {
@@ -178,7 +184,10 @@ impl Font {
     }
 
     fn load_face_id<P: FaceProvider>(provider: &P, id: P::Id) -> Result<Self, ShapingError> {
-        let face = provider.resolve_face(id).ok_or(ShapingError::NoFont)?;
+        Self::load_resolved(provider.resolve_face(id).ok_or(ShapingError::NoFont)?)
+    }
+
+    fn load_resolved(face: ResolvedFace) -> Result<Self, ShapingError> {
         let (face_index, instance) = (face.index, face.instance);
         let bytes: FontBytes = match face.source {
             FaceSource::Shared(bytes) => bytes,
@@ -649,6 +658,168 @@ pub struct FontStack {
     /// or discovered-by-family order, so a text-presentation scalar takes
     /// a mono face before an earlier-ranked color one.
     mono_first: bool,
+    /// Asked once the faces above miss; its faces take the ids after them.
+    system: Option<Arc<SystemFaces>>,
+}
+
+/// Faces the host's per-character fallback picked, outside the ordered
+/// chain: a face found for one scalar never answers for another without
+/// asking the host, so what a cell draws does not depend on which text
+/// came first.
+struct SystemFaces {
+    source: Box<dyn SystemFallback>,
+    /// Append-only, so a face id handed out stays valid while the stack
+    /// lives.
+    pool: Box<[OnceLock<Arc<Font>>]>,
+    state: Mutex<SystemState>,
+}
+
+#[derive(Default)]
+struct SystemState {
+    answers: HashMap<(char, Presentation, usize), Option<usize>>,
+    /// `None` for a face that failed to load or found the pool full.
+    slots: HashMap<FaceKey, Option<usize>>,
+    len: usize,
+}
+
+/// Bounds what a stream of distinct scalars can make the stack remember;
+/// past it the answers are asked for again, the faces stay.
+const MAX_SYSTEM_ANSWERS: usize = 1 << 16;
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+enum Presentation {
+    Text,
+    Color,
+}
+
+impl Presentation {
+    /// The selector rides along so the host weighs the presentation the
+    /// stack asks for, not the scalar's default.
+    fn query(self, c: char) -> String {
+        match self {
+            Self::Text if is_emoji_presentation(c) => format!("{c}\u{FE0E}"),
+            Self::Text => c.to_string(),
+            Self::Color => format!("{c}\u{FE0F}"),
+        }
+    }
+}
+
+/// One face as the pool draws it: a variable face found for a bold cell
+/// sits at another weight than the same face found for a regular one.
+#[derive(PartialEq, Eq, Hash)]
+struct FaceKey {
+    source: FaceSourceKey,
+    index: u32,
+    instance: Option<usize>,
+    bold: bool,
+}
+
+#[derive(PartialEq, Eq, Hash)]
+enum FaceSourceKey {
+    File(std::path::PathBuf),
+    Shared(usize),
+}
+
+impl FaceKey {
+    fn of(face: &ResolvedFace, style: FontStyle) -> Self {
+        let source = match &face.source {
+            FaceSource::File(path) => FaceSourceKey::File(path.clone()),
+            FaceSource::Shared(bytes) => {
+                FaceSourceKey::Shared(Arc::as_ptr(bytes).cast::<u8>() as usize)
+            }
+        };
+        Self {
+            source,
+            index: face.index,
+            instance: face.instance,
+            bold: style.bold,
+        }
+    }
+}
+
+impl SystemFaces {
+    fn new(source: Box<dyn SystemFallback>, capacity: usize) -> Self {
+        Self {
+            source,
+            pool: (0..capacity).map(|_| OnceLock::new()).collect(),
+            state: Mutex::default(),
+        }
+    }
+
+    fn face(&self, slot: usize) -> Option<&Arc<Font>> {
+        self.pool.get(slot)?.get()
+    }
+
+    /// The pool slot of the face the host draws `c` with in
+    /// `presentation`, `None` when it has none that covers `c` in it.
+    fn slot_for(&self, c: char, presentation: Presentation, style: FontStyle) -> Option<usize> {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let key = (c, presentation, style.index());
+        if let Some(&answer) = state.answers.get(&key) {
+            return answer;
+        }
+        let face = match self.source.face_for(&presentation.query(c), style) {
+            Ok(face) => face,
+            Err(error) => {
+                debug!(%error, ?c, "system fallback lookup failed");
+                return None;
+            }
+        };
+        let slot = face
+            .and_then(|face| self.intern(&mut state, face, style))
+            .filter(|&slot| {
+                self.face(slot).is_some_and(|font| {
+                    font.has_glyph(c)
+                        && (presentation == Presentation::Text || font.has_color_glyphs())
+                })
+            });
+        if state.answers.len() >= MAX_SYSTEM_ANSWERS {
+            state.answers.clear();
+        }
+        state.answers.insert(key, slot);
+        slot
+    }
+
+    fn intern(
+        &self,
+        state: &mut SystemState,
+        face: ResolvedFace,
+        style: FontStyle,
+    ) -> Option<usize> {
+        let key = FaceKey::of(&face, style);
+        if let Some(&slot) = state.slots.get(&key) {
+            return slot;
+        }
+        let slot = if state.len == self.pool.len() {
+            warn!("the system fallback picked more faces than a stack holds; drawing .notdef");
+            None
+        } else {
+            match Font::load_resolved(face) {
+                Ok(font) => {
+                    let weight = if style.bold {
+                        BOLD_WEIGHT
+                    } else {
+                        REGULAR_WEIGHT
+                    };
+                    let font = if font.coords.is_empty() {
+                        font.at_style(weight, false).unwrap_or(font)
+                    } else {
+                        font
+                    };
+                    let slot = state.len;
+                    self.pool[slot].get_or_init(|| Arc::new(font));
+                    state.len += 1;
+                    Some(slot)
+                }
+                Err(error) => {
+                    warn!(%error, "system fallback face failed to load");
+                    None
+                }
+            }
+        };
+        state.slots.insert(key, slot);
+        slot
+    }
 }
 
 /// The bold, italic and bold-italic slots with the weight and slant each
@@ -861,6 +1032,7 @@ impl FontStack {
             chains,
             styled_features,
             mono_first: false,
+            system: None,
         }
     }
 
@@ -872,6 +1044,10 @@ impl FontStack {
     }
 
     fn with_fallback_views(mut self, views: [Arc<Font>; 4], features: Vec<String>) -> Self {
+        debug_assert!(
+            self.system.is_none(),
+            "system faces take the ids after the chain"
+        );
         self.fonts.push(views[FontStyle::REGULAR.index()].clone());
         self.features.push(features);
         for (chain, view) in self.chains.iter_mut().zip(views) {
@@ -983,6 +1159,13 @@ impl FontStack {
             && let Some(cascaded) = append_cascade(&stack, db, requested, primary_features)
         {
             stack = cascaded;
+        } else if explicit_fallbacks.is_empty()
+            && let Some(system) = db.system_fallback(regular_id)
+        {
+            // CoreText answers no private-use scalar, so the Nerd glyphs
+            // need a face of their own.
+            stack = append_first_installed(stack, db, NERD_FONT_FAMILIES, primary_features);
+            stack = stack.with_system_fallback(system);
         } else if explicit_fallbacks.is_empty() {
             stack = append_first_installed(stack, db, CJK_FALLBACK_FAMILIES, primary_features);
             stack = append_all_installed(stack, db, SYMBOL_FALLBACK_FAMILIES, primary_features);
@@ -1042,6 +1225,25 @@ impl FontStack {
         }
     }
 
+    /// Hands the misses of every face so far to `source`, whose faces take
+    /// the ids left after them.
+    fn with_system_fallback(mut self, source: Box<dyn SystemFallback>) -> Self {
+        let capacity = FACE_ID_SATURATED.saturating_sub(self.fonts.len());
+        self.system = Some(Arc::new(SystemFaces::new(source, capacity)));
+        self
+    }
+
+    fn system_index(&self, c: char, presentation: Presentation, style: FontStyle) -> Option<usize> {
+        let slot = self.system.as_ref()?.slot_for(c, presentation, style)?;
+        Some(self.fonts.len() + slot)
+    }
+
+    fn system_face(&self, index: usize) -> Option<&Arc<Font>> {
+        self.system
+            .as_ref()?
+            .face(index.checked_sub(self.fonts.len())?)
+    }
+
     #[must_use]
     pub fn primary(&self) -> &Arc<Font> {
         &self.fonts[0]
@@ -1080,10 +1282,13 @@ impl FontStack {
     /// were shaped against is the bug this pairing prevents.
     #[must_use]
     pub fn features_for(&self, index: usize, style: FontStyle) -> &[String] {
-        if index == 0 || self.fonts.get(index).is_none() {
-            return &self.styled_features[style.index()];
+        if index != 0 && self.fonts.get(index).is_some() {
+            return self.features_at(index);
         }
-        self.features_at(index)
+        if index != 0 && self.system_face(index).is_some() {
+            return self.features_at(0);
+        }
+        &self.styled_features[style.index()]
     }
 
     #[must_use]
@@ -1113,7 +1318,8 @@ impl FontStack {
 
     /// The face drawing `c` in text presentation: the styled primary, then
     /// the chain in order, except that a `mono_first` stack takes a mono
-    /// face before any color one, the primary included; `0` for `.notdef`.
+    /// face before any color one, the primary included, then the system
+    /// fallback; `0` for `.notdef`.
     fn first_cover_styled_index(&self, c: char, style: FontStyle) -> usize {
         let primary = &self.chains[style.index()][0];
         let primary_covers = primary.has_glyph(c);
@@ -1133,7 +1339,9 @@ impl FontStack {
         }
         fallbacks()
             .find(|(_, f)| f.has_glyph(c))
-            .map_or(0, |(i, _)| i)
+            .map(|(i, _)| i)
+            .or_else(|| self.system_index(c, Presentation::Text, style))
+            .unwrap_or(0)
     }
 
     /// First face that covers `c` *and* carries color glyphs, `None`
@@ -1152,14 +1360,19 @@ impl FontStack {
             .skip(1)
             .find(|(_, font)| font.has_glyph(c) && font.has_color_glyphs())
             .map(|(i, _)| i)
+            .or_else(|| self.system_index(c, Presentation::Color, style))
     }
 
-    /// Index `0` is the styled primary; an index past the chain (the
-    /// [`SizingKey::with_font_id`] saturation bucket) falls back to it.
+    /// Index `0` is the styled primary; an index past the chain and the
+    /// system faces (the [`SizingKey::with_font_id`] saturation bucket)
+    /// falls back to it.
     #[must_use]
     pub fn font_at(&self, index: usize, style: FontStyle) -> &Arc<Font> {
         let chain = &self.chains[style.index()];
-        chain.get(index).unwrap_or(&chain[0])
+        chain
+            .get(index)
+            .or_else(|| self.system_face(index))
+            .unwrap_or(&chain[0])
     }
 
     /// The faces a window would draw with, by [`FontStyle::index`] for
@@ -1879,6 +2092,8 @@ impl Shaper {
     )
 )]
 mod tests {
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
     use fontdb::Database;
     use proptest::prelude::*;
 
@@ -2750,6 +2965,243 @@ mod tests {
     fn pinned_files(names: &[&str]) -> Vec<std::path::PathBuf> {
         let dir = test_font_dir();
         names.iter().map(|name| dir.join(name)).collect()
+    }
+
+    const SYMBOLS2: &str = "NotoSansSymbols2-Regular.otf";
+    const EMOJI: &str = "NotoColorEmoji.ttf";
+    const UMBRELLA: char = '\u{2602}';
+    const SCISSORS: char = '\u{2702}';
+    const HOT_BEVERAGE: char = '\u{2615}';
+
+    /// Answers each query with the pinned file `answers` names for it,
+    /// counting the questions; `fail_first` fails the first one.
+    struct ScriptedSystem {
+        answers: HashMap<String, &'static str>,
+        asked: Arc<AtomicUsize>,
+        fail_first: AtomicBool,
+    }
+
+    impl SystemFallback for ScriptedSystem {
+        fn face_for(
+            &self,
+            query: &str,
+            _: FontStyle,
+        ) -> Result<Option<ResolvedFace>, ShapingError> {
+            self.asked.fetch_add(1, Ordering::Relaxed);
+            if self.fail_first.swap(false, Ordering::Relaxed) {
+                return Err(ShapingError::BadFont("transient".to_owned()));
+            }
+            Ok(self.answers.get(query).map(|name| ResolvedFace {
+                source: FaceSource::File(test_font_dir().join(name)),
+                index: 0,
+                instance: None,
+                slanted: false,
+            }))
+        }
+    }
+
+    fn scripted_system(answers: &[(&str, &'static str)]) -> (ScriptedSystem, Arc<AtomicUsize>) {
+        let asked = Arc::new(AtomicUsize::new(0));
+        let system = ScriptedSystem {
+            answers: answers
+                .iter()
+                .map(|&(query, name)| (query.to_owned(), name))
+                .collect(),
+            asked: asked.clone(),
+            fail_first: AtomicBool::new(false),
+        };
+        (system, asked)
+    }
+
+    fn system_stack(answers: &[(&str, &'static str)]) -> (FontStack, Arc<AtomicUsize>) {
+        let (system, asked) = scripted_system(answers);
+        let stack = FontStack::new(Arc::new(font())).with_system_fallback(Box::new(system));
+        (stack, asked)
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn a_scalar_no_ordered_face_covers_draws_from_the_system_face_asked_once() {
+        let (stack, asked) = system_stack(&[("\u{2602}", SYMBOLS2)]);
+        let index = stack.resolve_styled_index(UMBRELLA, FontStyle::REGULAR);
+        assert_eq!(index, stack.len());
+        assert!(stack.font_at(index, FontStyle::REGULAR).has_glyph(UMBRELLA));
+        assert_eq!(
+            stack.resolve_styled_index(UMBRELLA, FontStyle::REGULAR),
+            index
+        );
+        assert_eq!(asked.load(Ordering::Relaxed), 1);
+    }
+
+    /// The emoji face the host picks for the scissors also covers the
+    /// umbrella, which the host draws from the symbol face.
+    #[cfg(not(windows))]
+    #[test]
+    fn a_system_face_answers_only_the_scalars_the_host_gave_it() {
+        let umbrella_in_color = |order: [char; 2]| {
+            let (stack, _) = system_stack(&[("\u{2702}", EMOJI), ("\u{2602}", SYMBOLS2)]);
+            for c in order {
+                assert_ne!(stack.resolve_styled_index(c, FontStyle::REGULAR), 0);
+            }
+            let index = stack.resolve_styled_index(UMBRELLA, FontStyle::REGULAR);
+            stack.font_at(index, FontStyle::REGULAR).has_color_glyphs()
+        };
+        assert!(!umbrella_in_color([SCISSORS, UMBRELLA]));
+        assert!(!umbrella_in_color([UMBRELLA, SCISSORS]));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn scalars_the_host_draws_from_one_face_share_its_id() {
+        let (stack, _) = system_stack(&[("\u{2602}", SYMBOLS2), ("\u{2702}", SYMBOLS2)]);
+        assert_eq!(
+            stack.resolve_styled_index(UMBRELLA, FontStyle::REGULAR),
+            stack.resolve_styled_index(SCISSORS, FontStyle::REGULAR)
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn an_emoji_presentation_scalar_asks_the_host_for_color_first() {
+        let (stack, _) =
+            system_stack(&[("\u{2615}\u{FE0F}", EMOJI), ("\u{2615}\u{FE0E}", SYMBOLS2)]);
+        let index = stack.resolve_styled_index(HOT_BEVERAGE, FontStyle::REGULAR);
+        assert!(stack.font_at(index, FontStyle::REGULAR).has_color_glyphs());
+        let text = stack.first_cover_styled_index(HOT_BEVERAGE, FontStyle::REGULAR);
+        assert!(!stack.font_at(text, FontStyle::REGULAR).has_color_glyphs());
+        assert_ne!(text, 0);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn a_mono_answer_to_a_color_request_is_not_taken_as_color() {
+        let (stack, _) = system_stack(&[
+            ("\u{2615}\u{FE0F}", SYMBOLS2),
+            ("\u{2615}\u{FE0E}", SYMBOLS2),
+        ]);
+        assert_eq!(
+            stack.resolve_color_index(HOT_BEVERAGE, FontStyle::REGULAR),
+            None
+        );
+        let index = stack.resolve_styled_index(HOT_BEVERAGE, FontStyle::REGULAR);
+        assert_eq!(index, stack.len());
+    }
+
+    /// The pinned set behind a host to ask, with Monaspace Argon NF
+    /// standing in for a symbols-only Nerd Font.
+    struct Hosted<P> {
+        files: P,
+        asked: Arc<AtomicUsize>,
+    }
+
+    impl<P: FaceProvider> FaceProvider for Hosted<P> {
+        type Id = P::Id;
+
+        fn find_face(&self, family: &str, weight: u16, italic: bool) -> Option<P::Id> {
+            let family = if NERD_FONT_FAMILIES.contains(&family) {
+                "Monaspace Argon NF"
+            } else {
+                family
+            };
+            self.files.find_face(family, weight, italic)
+        }
+
+        fn find_sibling(
+            &self,
+            id: P::Id,
+            family: &str,
+            weight: u16,
+            italic: bool,
+        ) -> Option<P::Id> {
+            self.files.find_sibling(id, family, weight, italic)
+        }
+
+        fn default_monospace(&self) -> Result<(P::Id, String), ShapingError> {
+            self.files.default_monospace()
+        }
+
+        fn resolve_face(&self, id: P::Id) -> Option<ResolvedFace> {
+            self.files.resolve_face(id)
+        }
+
+        fn family_of(&self, id: P::Id) -> Option<String> {
+            self.files.family_of(id)
+        }
+
+        fn system_fallback(&self, _primary: P::Id) -> Option<Box<dyn SystemFallback>> {
+            Some(Box::new(ScriptedSystem {
+                answers: HashMap::new(),
+                asked: self.asked.clone(),
+                fail_first: AtomicBool::new(false),
+            }))
+        }
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn a_nerd_glyph_draws_from_the_nerd_font_without_asking_the_host() {
+        const GIT_BRANCH: char = '\u{F418}';
+        let asked = Arc::new(AtomicUsize::new(0));
+        let hosted = Hosted {
+            files: pinned_system(),
+            asked: asked.clone(),
+        };
+        let stack = FontStack::auto_discover_in(
+            &hosted,
+            Some(TEST_FONT_FAMILY),
+            &[],
+            &[],
+            &StyleFaces::default(),
+        )
+        .expect("the pinned primary loads");
+        let index = stack.resolve_styled_index(GIT_BRANCH, FontStyle::REGULAR);
+        assert!(
+            index > 0 && index < stack.len(),
+            "{index} of {}",
+            stack.len()
+        );
+        assert!(
+            stack
+                .font_at(index, FontStyle::REGULAR)
+                .display_name()
+                .starts_with("Monaspace Argon NF")
+        );
+        assert_eq!(asked.load(Ordering::Relaxed), 0);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn a_failed_lookup_is_asked_again() {
+        let (system, asked) = scripted_system(&[("\u{2602}", SYMBOLS2)]);
+        system.fail_first.store(true, Ordering::Relaxed);
+        let stack = FontStack::new(Arc::new(font())).with_system_fallback(Box::new(system));
+        assert_eq!(stack.resolve_styled_index(UMBRELLA, FontStyle::REGULAR), 0);
+        assert_eq!(
+            stack.resolve_styled_index(UMBRELLA, FontStyle::REGULAR),
+            stack.len()
+        );
+        assert_eq!(asked.load(Ordering::Relaxed), 2);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn a_system_face_shapes_with_the_primary_features() {
+        let (system, _) = scripted_system(&[("\u{2602}", SYMBOLS2)]);
+        let features = vec!["calt".to_owned()];
+        let stack = FontStack::with_primary_features(Arc::new(font()), features.clone())
+            .with_system_fallback(Box::new(system));
+        let index = stack.resolve_styled_index(UMBRELLA, FontStyle::REGULAR);
+        assert_eq!(stack.features_for(index, FontStyle::REGULAR), features);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn a_full_pool_draws_notdef_for_a_face_it_does_not_hold() {
+        let (system, _) = scripted_system(&[("\u{2602}", SYMBOLS2), ("\u{2702}", EMOJI)]);
+        let faces = SystemFaces::new(Box::new(system), 1);
+        let text = Presentation::Text;
+        assert_eq!(faces.slot_for(UMBRELLA, text, FontStyle::REGULAR), Some(0));
+        assert_eq!(faces.slot_for(SCISSORS, text, FontStyle::REGULAR), None);
     }
 
     fn axis_coord(font: &Font, tag: [u8; 4]) -> NormalizedCoord {
