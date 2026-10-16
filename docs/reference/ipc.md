@@ -55,8 +55,9 @@ the workspace layout wants ([overview.md](../explanation/architecture/overview.m
   Pipes live in `\\.\pipe\`, not the filesystem (<https://learn.microsoft.com/en-us/windows/win32/ipc/pipe-names>), so
   the Unix `0700`-dir and stale-socket cleanup do not apply: a pipe vanishes when its last instance handle closes. The
   default endpoint is `\\.\pipe\felis.<sid>.daemon`, disambiguated per user by SID string (stable, unlike a volatile
-  session id). Peer authentication is a per-instance DACL plus an active client-SID check: the named-pipe analogue of
-  the Unix `0600` + peer-UID pair; see [security-model.md](../explanation/security-model.md) "Daemon IPC".
+  session id). Peer authentication is a per-instance DACL plus an active SID check by both sides (the daemon on the
+  client, the dialer on the server): the named-pipe analogue of the Unix `0600` + peer-UID pair; see
+  [security-model.md](../explanation/security-model.md) "Daemon IPC".
 
 `Endpoint` is the platform-neutral address at the carrier boundary: a Unix path on Unix, a pipe name on Windows. The
 binaries keep passing the address as the `PathBuf` they already carry and convert at the boundary; they never do
