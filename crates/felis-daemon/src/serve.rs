@@ -53,6 +53,8 @@ pub(crate) mod streaming;
 use session_task::{
     OutEvent, PushOutcome, SessionCmd, SubscribeOk, SubscribeRefused, SubscribeReq, SubscriberId,
 };
+#[cfg(test)]
+use streaming::frame_paste;
 use streaming::{write_paste, write_pty};
 
 /// Sized to hold a full diff cycle so a whole cycle coalesces into one

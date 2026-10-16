@@ -91,7 +91,9 @@ ID=$(felis sessions spawn -- python3)
 # 2. Drive it. `send` pastes text literally (bracketed-paste wrapped
 #    when the shell sets ?2004) and does NOT press Enter: a newline in
 #    TEXT is inserted, not run. `--key enter` travels as a separate key
-#    frame after the paste. `-` reads the payload from stdin.
+#    frame after the paste. `-` reads the payload from stdin. Under
+#    ?2004 the paste drops control bytes other than tab, LF and CR;
+#    send those with --key or --raw.
 felis sessions send "$ID" 'cargo build --release' --key enter  # paste + Enter
 felis sessions send "$ID" --key ctrl+c                      # named key (preferred)
 printf '\003' | felis sessions send "$ID" --raw -           # same, hand-encoded
