@@ -39,8 +39,8 @@ Transmission method support (`t=d/f/t/s`) is summarized in the
 transmission; see [kitty-graphics.md](../../explanation/protocols/kitty-graphics.md).
 
 All three Unix methods read the range `S=` bytes long from offset `O=`; an absent or zero `S=` reads to the end. An `O=`
-or `O=+S=` past the end of the file or segment is refused with `EINVAL`; a temp file felis could open is deleted even
-then.
+or `O=+S=` past the end of the file or segment is refused with `EINVAL`; a temp file felis could open is still deleted
+when the `t=t` deletion rule admits it ([File transmission safety](#file-transmission-safety-tf--tt)).
 
 Shared-memory transfer (`t=s`) behavior:
 
