@@ -1,7 +1,8 @@
 //! Windows named-pipe backend for the [`crate::local`] carrier facade.
 //!
 //! Enforces DACL per-instance and validates client SID before `Hello` (REQ-106)
-//! via `GetNamedPipeClientProcessId` and `OpenProcessToken`.
+//! via `GetNamedPipeClientProcessId` and `OpenProcessToken`; a dialer checks
+//! the server's SID the same way through `GetNamedPipeServerProcessId`.
 
 use std::ffi::c_void;
 use std::io;
@@ -24,7 +25,7 @@ use windows_sys::Win32::Security::{
     GetTokenInformation, PSECURITY_DESCRIPTOR, PSID, SECURITY_ATTRIBUTES, TOKEN_QUERY, TOKEN_USER,
     TokenUser,
 };
-use windows_sys::Win32::System::Pipes::GetNamedPipeClientProcessId;
+use windows_sys::Win32::System::Pipes::{GetNamedPipeClientProcessId, GetNamedPipeServerProcessId};
 use windows_sys::Win32::System::Threading::{
     GetCurrentProcess, OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
 };
@@ -186,15 +187,32 @@ fn client_sid_string(server: &NamedPipeServer) -> io::Result<String> {
     if ok == 0 {
         return Err(io::Error::last_os_error());
     }
+    process_sid_string(pid)
+}
+
+/// The dialer's twin of [`client_sid_string`] (REQ-106a).
+fn server_sid_string(client: &NamedPipeClient) -> io::Result<String> {
+    let handle = client.as_raw_handle() as HANDLE;
+    let mut pid: u32 = 0;
+    // SAFETY: `handle` is the live client end of a connected pipe;
+    // `pid` is a valid out-pointer.
+    let ok = unsafe { GetNamedPipeServerProcessId(handle, &raw mut pid) };
+    if ok == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    process_sid_string(pid)
+}
+
+fn process_sid_string(pid: u32) -> io::Result<String> {
     // SAFETY: opening another process for limited query is sound; the
     // returned handle is wrapped in OwnedHandle and closed on drop.
     //
-    // Accepted TOCTOU: between GetNamedPipeClientProcessId and this
-    // OpenProcess the client can exit and the pid be recycled, so the
-    // SID we read may belong to the recycled process. Exploiting it
-    // requires winning a pid-reuse race as an attacker the pipe DACL
-    // already excludes from opening the pipe at all, so the risk is
-    // recorded rather than chased. Impersonation-based checks were
+    // Accepted TOCTOU: between the pid lookup and this OpenProcess the
+    // peer can exit and the pid be recycled, so the SID we read may
+    // belong to the recycled process. A client exploiting it must win a
+    // pid-reuse race as an attacker the pipe DACL already excludes; a
+    // foreign server must have its pid land on one of the user's own
+    // processes, which it cannot steer. Impersonation-based checks were
     // rejected because the client has written no bytes yet (see the
     // module doc).
     let proc = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid) };
@@ -247,6 +265,14 @@ pub(crate) async fn connect(pipe_name: &str) -> io::Result<NamedPipeClient> {
         Ok(Err(e)) => Err(e),
         Err(err) => Err(err.source),
     }
+}
+
+/// Refuses a pipe whose server runs as another user, before the caller
+/// writes its first byte (REQ-106).
+pub(crate) fn verify_server(client: &NamedPipeClient) -> io::Result<()> {
+    let expected = current_user_sid_string()?;
+    let peer = server_sid_string(client)?;
+    admit(peer, &expected).map_err(|err| io::Error::new(io::ErrorKind::PermissionDenied, err))
 }
 
 pub(crate) struct Listener {

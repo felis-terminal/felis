@@ -172,6 +172,8 @@ pub async fn connect(endpoint: impl Into<Endpoint>) -> io::Result<(ReadHalf, Wri
     {
         let endpoint = endpoint.into();
         let client = backend::connect(endpoint.pipe_name()).await?;
+        backend::verify_server(&client)
+            .map_err(|err| io::Error::new(err.kind(), format!("{endpoint}: {err}")))?;
         Ok(tokio::io::split(client))
     }
 }

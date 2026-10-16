@@ -2095,7 +2095,7 @@ transport that is gone, not one that is slow.
 - Local (Unix socket): file mode `0600` on the socket, inside a `0700` directory the daemon owns; only the daemon's user
   can connect. The UID is verified by both sides before any application byte: the daemon on accept, the dialer after
   connect (`SO_PEERCRED` on Linux, `getpeereid` on macOS and the BSDs). No further auth.
-- Local (Windows named pipe): per-instance DACL plus an active client-SID check; see
-  [security-model.md](../explanation/security-model.md) "Daemon IPC".
+- Local (Windows named pipe): per-instance DACL plus an active SID check by both sides, the daemon on the client and the
+  dialer on the server; see [security-model.md](../explanation/security-model.md) "Daemon IPC".
 - Cross-host (SSH stdio): the SSH layer is the auth boundary. felis adds no second password / token layer (see
   "Cross-host carrier: SSH stdio" above).

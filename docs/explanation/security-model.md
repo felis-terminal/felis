@@ -305,24 +305,28 @@ pathname connect is safe whatever a cleaner or another uid did to the path in be
 keeps the relay's carrier block (its whole environment) from ever reaching a foreign listener, and it is why felis needs
 no equivalent of Linux's `fs.protected_symlinks` on macOS.
 
-On Windows it is the client's user SID, resolved from the pipe's client process rather than through
-`ImpersonateNamedPipeClient`, which is unreliable until the client has written bytes and the reject-before-`Hello`
-contract means it has not.
+On Windows it is the user SID of the process at the other end, resolved from the pipe's client or server process. The
+daemon resolves the client's rather than calling `ImpersonateNamedPipeClient`, which is unreliable until the client has
+written bytes and the reject-before-`Hello` contract means it has not. The dialer resolves the server's before the first
+byte of the preface, because the DACL describes only instances the daemon created: a successful open says nothing about
+who created the instance it reached.
 
 The cross-host carrier changes nothing: the relay is an ordinary local client on the remote host, running as the
 SSH-authenticated user, so SSH is the network auth boundary and does not bypass the local one.
 
 #### The Windows pid lookup carries an accepted TOCTOU
 
-Between reading the client's pid and opening the process, the client can exit and the pid be recycled, so the SID may
-describe the recycled process. Exploiting it means winning a pid-reuse race from an account the DACL already admits (an
-account the DACL excludes cannot open the pipe to start the race at all), so the window is recorded here rather than
-chased.
+Between reading the peer's pid and opening the process, the peer can exit and the pid be recycled, so the SID may
+describe the recycled process. On the daemon side, exploiting it means winning a pid-reuse race from an account the DACL
+already admits (an account the DACL excludes cannot open the pipe to start the race at all). On the dialer side, a
+foreign server would need its creator's pid to be reused by one of the user's own processes while the pipe stays open, a
+reuse it cannot steer. Both windows are recorded here rather than chased.
 
 The DACL and the same-user admit have runtime tests on the `x86_64-windows` runner (REQ-106a); the mismatch path is
 pinned through the `admit` seam, since a single-account runner can never present a foreign SID to `accept`.
 
-_Revisit if_ the pid lookup ever gates something the DACL does not already gate.
+_Revisit if_ Windows offers a server-identity query that is not keyed by pid, or the daemon-side pid lookup ever gates
+something the DACL does not already gate.
 
 #### The `RetargetHost` push relays existing authority, not new
 
