@@ -2624,7 +2624,7 @@ fn xtgettcap_body_exactly_at_the_dcs_buffer_limit_is_answered_intact() {
 }
 
 /// One byte past the limit the overflow is dropped: the query's final
-/// `f` is gone, so `636` cannot decode and the cap goes unanswered.
+/// `f` is gone, so `636` cannot decode and the cap is answered empty.
 #[test]
 fn xtgettcap_body_one_byte_past_the_dcs_buffer_limit_drops_the_overflow() {
     let mut p = Parser::new();
@@ -2643,7 +2643,7 @@ fn xtgettcap_body_one_byte_past_the_dcs_buffer_limit_drops_the_overflow() {
         .next()
         .expect("XTGETTCAP reply");
     assert!(
-        reply.ends_with(b";636\x1b\\"),
+        reply.ends_with(b";\x1b\\"),
         "expected the last body byte dropped, got: {:?}",
         String::from_utf8_lossy(&reply)
     );

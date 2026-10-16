@@ -140,3 +140,22 @@ fn osc_52_payload_with_embedded_semicolon_round_trips() {
     let set = g.take_pending_clipboard_set().unwrap();
     assert_eq!(set.data, b"ab;cd");
 }
+
+#[test]
+fn osc_52_query_with_a_selector_outside_xterms_alphabet_is_unanswered() {
+    let mut p = Parser::new();
+    let mut g = Grid::new(1, 1);
+    drive(&mut p, &mut g, b"\x1b]52;c\nid\n;?\x07");
+    assert_eq!(responses(&mut g), Vec::<Vec<u8>>::new());
+}
+
+#[test]
+fn osc_52_query_echoes_every_xterm_selector_char() {
+    let mut p = Parser::new();
+    let mut g = Grid::new(1, 1);
+    drive(&mut p, &mut g, b"\x1b]52;cpqs01234567;?\x07");
+    assert_eq!(
+        responses(&mut g),
+        vec![b"\x1b]52;cpqs01234567;\x07".to_vec()]
+    );
+}

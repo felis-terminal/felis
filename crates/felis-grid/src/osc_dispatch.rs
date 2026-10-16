@@ -322,9 +322,13 @@ impl Grid {
         // A `?` with anything after its `;` is still the query form.
         let sigil = split_osc_first(data_bytes).0;
         if sigil == b"?" {
-            let cached = self.clipboard_cache_for(selection);
             // The request's selector chars are echoed verbatim, not the
-            // honored subset.
+            // honored subset, so a selector outside xterm's alphabet
+            // goes unanswered rather than reaching the PTY as input.
+            if !selection_bytes.iter().all(|b| b"cpqs01234567".contains(b)) {
+                return;
+            }
+            let cached = self.clipboard_cache_for(selection);
             self.enqueue_response(format_osc_52_response(selection_bytes, cached));
             return;
         }
@@ -564,8 +568,15 @@ impl Grid {
     /// The `p=?` reply, in kitty's shape
     /// (`docs/reference/protocols/notifications.md`): title, body, and
     /// the three urgencies, no actions or close events. An absent id
-    /// echoes `i=0`.
+    /// echoes `i=0`; an id outside the spec's `[a-zA-Z0-9_+.-]` is not
+    /// answered, since the echo reaches the PTY as input.
     fn respond_osc99_support(&mut self, id: &str) {
+        if !id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"_+.-".contains(&b))
+        {
+            return;
+        }
         let id = if id.is_empty() { "0" } else { id };
         let mut out = Vec::with_capacity(48);
         out.extend_from_slice(b"\x1b]99;i=");

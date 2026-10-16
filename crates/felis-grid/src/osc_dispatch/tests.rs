@@ -1563,3 +1563,22 @@ proptest::proptest! {
         proptest::prop_assert_eq!(got, ids);
     }
 }
+
+#[test]
+fn osc99_support_query_with_an_id_outside_the_spec_alphabet_is_unanswered() {
+    let mut p = Parser::new();
+    let mut g = Grid::new(1, 10);
+    drive(&mut p, &mut g, b"\x1b]99;i=\nid\n:p=?;\x07");
+    assert_eq!(responses(&mut g), Vec::<Vec<u8>>::new());
+}
+
+#[test]
+fn osc99_support_query_echoes_an_id_using_every_spec_punctuation() {
+    let mut p = Parser::new();
+    let mut g = Grid::new(1, 10);
+    drive(&mut p, &mut g, b"\x1b]99;i=aZ9_+.-:p=?;\x1b\\");
+    assert_eq!(
+        responses(&mut g),
+        vec![b"\x1b]99;i=aZ9_+.-:p=?;p=title,body:u=0,1,2\x1b\\".to_vec()]
+    );
+}

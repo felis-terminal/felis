@@ -163,3 +163,38 @@ fn ris_keeps_the_stamped_term_for_xtgettcap_tn() {
         format!("\x1bP1+r544e={hex}\x1b\\")
     );
 }
+
+#[test]
+fn xtgettcap_undecodable_name_is_answered_empty_not_echoed() {
+    let mut g = Grid::new(4, 8);
+    let mut p = Parser::new();
+    drive(&mut p, &mut g, b"\x1bP+q436f;\nid\n\x1b\\");
+    let r = responses(&mut g);
+    assert_eq!(
+        std::str::from_utf8(&r[0]).unwrap(),
+        "\x1bP0+r436f=323536;\x1b\\"
+    );
+}
+
+proptest! {
+    /// Whatever the query body, the reply between its `DCS 0+r` /
+    /// `DCS 1+r` opener and `ST` is lowercase hex, `;` and `=` alone.
+    #[test]
+    fn xtgettcap_reply_body_carries_no_producer_bytes(
+        body in prop::collection::vec(any::<u8>(), 0..64),
+    ) {
+        let mut g = Grid::new(4, 8);
+        g.xtgettcap_reply(&body);
+        let r = responses(&mut g);
+        prop_assert_eq!(r.len(), 1);
+        let reply = &r[0];
+        prop_assert!(reply.starts_with(b"\x1bP0+r") || reply.starts_with(b"\x1bP1+r"));
+        prop_assert!(reply.ends_with(b"\x1b\\"));
+        let inner = &reply[5..reply.len() - 2];
+        prop_assert!(
+            inner.iter().all(|b| b.is_ascii_hexdigit() || *b == b';' || *b == b'='),
+            "reply leaked {:?}",
+            String::from_utf8_lossy(reply)
+        );
+    }
+}
