@@ -610,10 +610,11 @@ today it shows nothing at all.
 
 ## Drag-and-drop
 
-Dropping a file on the window inserts its path as input, the universal terminal convention. The path is inserted
-**verbatim**: no quoting, no space-escaping, no `file://` decoding. Adding any of those would parse intent into the path
-string, which is shell _content_, and "Explicit over heuristic" ([principles](principles.md) principle 4) pushes that
-out. A user who needs a quoted path quotes it; the shell, not the terminal, owns that.
+Dropping a file on the window inserts its path as input, the universal terminal convention. The path is inserted without
+interpretation: no quoting, no space-escaping, no `file://` decoding (the bracketed-paste filter below is the one change
+it can see). Adding any of those would parse intent into the path string, which is shell _content_, and "Explicit over
+heuristic" ([principles](principles.md) principle 4) pushes that out. A user who needs a quoted path quotes it; the
+shell, not the terminal, owns that.
 
 The drop is ferried through the same path as a clipboard paste, so bracketed-paste mode and its control-code filter
 apply: under `?2004` a path's embedded control bytes other than HT, LF and CR are removed before framing. One file is
