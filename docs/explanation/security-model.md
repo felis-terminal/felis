@@ -185,16 +185,18 @@ The graphics protocol is a large attack surface: it accepts compressed image dat
   past it the screen's oldest placement goes ([the placement cap](protocols/kitty-graphics.md#the-placement-cap)).
 - **`t=f` (file) and `t=t` (temp file) are path-restricted**
   ([the rules](../reference/protocols/kitty-graphics.md#file-transmission-safety-tf--tt)). Each rule answers one attack:
-  `O_NOFOLLOW` on the final component defeats swapping the file for a symlink between the stat and the read, refusing
+  `O_NOFOLLOW` on the final component defeats swapping the file for a symlink between the stat and the read, walking the
+  parent down from `/` without following a link keeps a swapped directory from moving the open elsewhere, refusing
   anything but a regular file keeps a device or FIFO from stalling the read, and the size cap keeps the open from
-  becoming an unbounded one. No root allowlist is enforced, because the daemon runs under the user's own UID and its
-  filesystem reach already equals the producer's; the deferral and its revisit trigger are in the
-  [Kitty graphics design](protocols/kitty-graphics.md).
-- **`t=t` deletes only what kitty would, atomically.** The equal-reach argument above covers a read, whose bytes never
-  return to the producer, but not a delete, so felis follows kitty's rule: it deletes only under a temp directory and
-  only a path naming `tty-graphics-protocol`, and reads anything else without deleting it. The read and the unlink go
-  through the same pinned parent dirfd, so a path swap between them cannot redirect the delete, and an unlink failure
-  aborts the transmission.
+  becoming an unbounded one. A path under `/proc`, `/sys` or `/dev` (a file under `/dev/shm` aside) is refused before
+  the open, and every failure past the request's own checks gets one reply, so the reply does not reveal what a path
+  holds. No root allowlist is enforced, as in kitty; the reasoning and its revisit trigger are in the
+  [Kitty graphics design](protocols/kitty-graphics.md#file-path-reach-tf).
+- **`t=t` deletes only what kitty would, atomically.** A read's bytes never return to the producer, but a delete acts on
+  the file itself, so felis follows kitty's rule: it deletes only under a temp directory and only a path naming
+  `tty-graphics-protocol`, and reads anything else without deleting it. The read and the unlink go through the same
+  pinned parent dirfd, so a path swap between them cannot redirect the delete, and an unlink failure aborts the
+  transmission.
 - **Image IDs are session-scoped.** ID 42 in session A and ID 42 in session B are different objects. Cross-session
   reference is not expressible in the protocol.
 - **A chunked upload is bounded by bytes, not by a clock.** One in-flight transmission reassembles into a capped buffer,

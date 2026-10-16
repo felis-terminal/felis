@@ -426,8 +426,8 @@ Key threat model verifications:
   sequence.
 - **Image decoder budgets**: decompressed pixel counts and dimensions exceeding configured budgets abort decode and emit
   bell errors.
-- **Symlink traversal**: file reads open the final path component with `O_NOFOLLOW` (`t=t` through `openat` under a
-  pinned parent).
+- **Symlink traversal**: file reads open the final path component with `O_NOFOLLOW` (through `openat` under a parent
+  walked down from `/` without following links).
 - **Peer authentication**: peer UID is checked via socket credentials before greeting.
 - **Frame length ceiling**: frames exceeding configured caps tear down connections without allocation. Pinned in
   `crates/felis-protocol/src/frame.rs` and fuzz targets.

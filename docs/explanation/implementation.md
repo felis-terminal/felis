@@ -297,8 +297,8 @@ Source: [security-model.md](security-model.md) "Process and environment boundary
 - `O_CLOEXEC` on every fd opened by the daemon (sockets, log files, image temp files). This is a Linux-side flag
   (`man 2 open`); macOS exposes the same via `O_CLOEXEC` since 10.7.
 - File-bearing image transmissions (`t=f`, `t=t` per the Kitty graphics protocol) open the final path component with
-  `O_NOFOLLOW` (`t=t` through `openat(2)` from a pinned parent directory) to defeat symlink-race attacks. `O_NOFOLLOW`
-  is POSIX.1-2008.
+  `O_NOFOLLOW` (through `openat(2)` from a parent directory walked down from `/` without following links) to defeat
+  symlink-race attacks, and `O_NONBLOCK` so a FIFO is refused rather than waited on. `O_NOFOLLOW` is POSIX.1-2008.
 - Path-named SHM (`t=s`) is name-validated, opened read-only with `O_NOFOLLOW`, size-capped, and copied out
   (`crates/felis-daemon/src/graphics/image_decode.rs`). Fd passing is not expressible in the Kitty protocol (producers
   speak over the PTY, not the daemon socket), so the name is the handle; the containment argument is in

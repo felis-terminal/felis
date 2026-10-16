@@ -145,8 +145,8 @@ fn t_eq_t_unlinks_temp_file_even_when_decode_fails() {
         ))
         .unwrap();
     assert!(
-        response.starts_with(b"\x1b_Gi=4;ENODATA"),
-        "raw payload length mismatch → ENODATA, got: {response:?}",
+        response.starts_with(b"\x1b_Gi=4;EBADF:Failed to read image file"),
+        "a file that does not decode gets the one file-medium reply, got: {response:?}",
     );
     assert!(
         !path.exists(),

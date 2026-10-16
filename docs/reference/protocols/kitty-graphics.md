@@ -39,8 +39,9 @@ Transmission method support (`t=d/f/t/s`) is summarized in the
 transmission; see [kitty-graphics.md](../../explanation/protocols/kitty-graphics.md).
 
 All three Unix methods read the range `S=` bytes long from offset `O=`; an absent or zero `S=` reads to the end. An `O=`
-or `O=+S=` past the end of the file or segment is refused with `EINVAL`; a temp file felis could open is still deleted
-when the `t=t` deletion rule admits it ([File transmission safety](#file-transmission-safety-tf--tt)).
+or `O=+S=` past the end of the file or segment is refused with the one file-medium failure reply; a temp file felis
+could open is still deleted when the `t=t` deletion rule admits it
+([File transmission safety](#file-transmission-safety-tf--tt)).
 
 Shared-memory transfer (`t=s`) behavior:
 
@@ -53,7 +54,8 @@ Shared-memory transfer (`t=s`) behavior:
 - Data copying is split by platform: Linux uses `pread` (safe against concurrent truncations); macOS uses `mmap` (see
   `copy_shm_range_mmap` in `crates/felis-daemon/src/graphics/image_decode.rs`).
 - Raw payloads (`f=24`/`f=32`) longer than `s × v × bpp` keep the leading bytes and trim trailing padding (e.g.
-  page-boundary rounding on macOS). Payloads shorter than expected return `ENODATA`.
+  page-boundary rounding on macOS). Payloads shorter than expected get the one file-medium failure reply
+  ([File transmission safety](#file-transmission-safety-tf--tt)).
 
 Chunking: `m=` only applies to `t=d`. A command specifying `t=f`, `t=t`, or `t=s` completes immediately regardless of
 `m=1` and aborts any active in-flight direct stream. Design details are documented in
@@ -263,14 +265,23 @@ rows at any z-index (see [kitty-graphics.md](../../explanation/protocols/kitty-g
 File-based transfers enforce path traversal defenses before I/O:
 
 - Paths must be absolute and contain no `..` traversal segments.
-- `t=f` opens the path with `O_NOFOLLOW`, so a symlink as the final component is refused.
-- `t=t` opens the parent directory first, then opens the file with `openat` and `O_NOFOLLOW` relative to that directory
-  descriptor. It deletes the file afterwards with `unlinkat` on the same descriptor, whether or not the image loads,
-  only when the parent resolves under `/tmp`, `/dev/shm`, or `$TMPDIR` and the path contains `tty-graphics-protocol`
-  (kitty's rule); any other `t=t` file is read and left in place.
+- A path whose parent resolves under `/proc`, `/sys` or `/dev` is refused before it is opened, except a file under
+  `/dev/shm` (kitty's rule).
+- Only a regular file is read; a FIFO or device is refused without waiting on it.
+- Both open the resolved parent by walking down from `/` one directory at a time without following a link, then the file
+  with `openat` and `O_NOFOLLOW` relative to that directory descriptor, so a symlink as the final component is refused.
+- `t=t` deletes the file afterwards with `unlinkat` on the same descriptor, whether or not the image loads, only when
+  the parent resolves under `/tmp`, `/dev/shm`, or `$TMPDIR` and the path contains `tty-graphics-protocol` (kitty's
+  rule); any other `t=t` file is read and left in place.
 
-`t=f` accesses any absolute path readable by the daemon's effective UID; threat model and privilege boundaries are
-detailed in [security-model.md](../../explanation/security-model.md).
+Outside those locations, `t=f` reads any absolute path readable by the daemon's effective UID; threat model and
+privilege boundaries are detailed in [security-model.md](../../explanation/security-model.md).
+
+On Unix, once a `t=f`, `t=t` or `t=s` command passes the checks on its own bytes (base64, UTF-8, an absolute path
+without `..`, a valid shm name), every failure from reading its source on gets the one reply
+`EBADF:Failed to read image file`, as in kitty: a source that is missing, refused, not a regular file, too large or
+shorter than `O=`/`S=` name, data read from it that does not decode, and an image or `a=f` frame from it that the store
+or the image's bounds then refuse, alike.
 
 ## Replies and errors
 
@@ -297,7 +308,7 @@ carries `i=`, and its reply echoes `i=` alone. A command with an unknown `a=` is
 | `EINVAL`  | A control value felis cannot use, or base64 or zlib data that does not decode |
 | `ENODATA` | Decoded pixel data shorter than `s=`×`v=` requires                            |
 | `EBADPNG` | `f=100` data that does not decode as PNG                                      |
-| `EBADF`   | A `t=f`, `t=t` or `t=s` source that cannot be opened or read                  |
+| `EBADF`   | Any failure of a `t=f`, `t=t` or `t=s` source past the request's own checks   |
 | `ENOTSUP` | A limit, an unsupported medium, or a feature felis does not implement         |
 
 ### Querying
@@ -337,8 +348,10 @@ Non-`G` APC escapes are silently ignored to prevent interfering with unrelated A
   (emitting `PlacementRemoved` and `Delete`), as kitty does.
 - Budget accounting: Decoded pixel size plus fixed per-entry and per-frame overheads count toward the 256 MiB per-screen
   ceiling.
-- Maximum decoded image size: 64 MiB per image. A larger image is rejected with `ENOTSUP` before its buffer is sized.
-- Maximum frames per image: 4096 frames (including root). Additional frames are rejected with `ENOTSUP`.
+- Maximum decoded image size: 64 MiB per image. A larger image is rejected with `ENOTSUP` before its buffer is sized
+  (from a `t=f`, `t=t` or `t=s` source, with the one file-medium failure reply).
+- Maximum frames per image: 4096 frames (including root). Additional frames are rejected with `ENOTSUP` (from a file
+  medium, with the one file-medium failure reply).
 - Maximum placements: 16384 per screen, direct and Unicode-placeholder placements together. A put past it removes the
   screen's oldest placement (emitting `PlacementRemoved`), and an image without an id that loses its last placement this
   way is deleted (emitting `Delete`). kitty has no such cap.
