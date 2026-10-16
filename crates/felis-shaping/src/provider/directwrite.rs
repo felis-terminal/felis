@@ -696,6 +696,30 @@ mod tests {
         assert!(weight(bold) > weight(FontStyle::REGULAR));
     }
 
+    /// DirectWrite answers these with Segoe UI Emoji whatever selector
+    /// follows them; text presentation draws its outlines.
+    #[test]
+    fn a_text_presentation_symbol_draws_in_mono() {
+        let stack = crate::FontStack::auto_discover(None, &[], &[], &crate::StyleFaces::default())
+            .expect("the default stack loads");
+        let mut ctx = swash::scale::ScaleContext::new();
+        for c in ['\u{2733}', '\u{23FA}', '\u{2602}'] {
+            let index = stack.first_cover_styled_index(c, FontStyle::REGULAR);
+            assert_ne!(index, 0, "U+{:04X}", c as u32);
+            let font = stack.font_at(index, FontStyle::REGULAR);
+            assert!(!font.has_color_glyphs(), "U+{:04X}", c as u32);
+            assert!(
+                !crate::rasterize(&mut ctx, font, c, 32.0).is_color(),
+                "U+{:04X}",
+                c as u32
+            );
+        }
+        let emoji = stack
+            .resolve_color_index('\u{2733}', FontStyle::REGULAR)
+            .expect("Segoe UI Emoji draws U+2733 in color");
+        assert!(stack.font_at(emoji, FontStyle::REGULAR).has_color_glyphs());
+    }
+
     #[test]
     fn the_fallback_and_user_locales_are_nul_terminated_names() {
         for locale in [fallback_locale(), user_locale()] {

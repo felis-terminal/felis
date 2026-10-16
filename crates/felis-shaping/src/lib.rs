@@ -348,6 +348,25 @@ impl Font {
         self.color
     }
 
+    /// A CBDT face carries an empty `glyf` entry under each bitmap.
+    fn has_outline(&self, c: char) -> bool {
+        let font = self.font_ref();
+        let mut ctx = ScaleContext::new();
+        let mut scaler = ctx.builder(font).normalized_coords(&self.coords).build();
+        scaler
+            .scale_outline(font.charmap().map(c))
+            .is_some_and(|outline| !outline.is_empty())
+    }
+
+    /// The same face with its color tables left unread, for a scalar
+    /// drawn in text presentation.
+    fn outlines_only(&self) -> Self {
+        Self {
+            color: false,
+            ..self.with_coords(self.coords.clone(), self.position.clone())
+        }
+    }
+
     /// The `name` table's full name, English first. A variation view
     /// carries its file's default-instance name, so the axis position it
     /// draws at follows it, as `(wght=700, slnt=-11)`.
@@ -681,16 +700,18 @@ impl Presentation {
 }
 
 /// One face as the pool draws it: a variable face found for a bold cell
-/// sits at another weight than the same face found for a regular one.
-#[derive(PartialEq, Eq, Hash)]
+/// sits at another weight than the same face found for a regular one, and
+/// a color face drawn in text presentation is its outlines alone.
+#[derive(Clone, PartialEq, Eq, Hash)]
 struct FaceKey {
     source: FaceSourceKey,
     index: u32,
     instance: Option<usize>,
     bold: bool,
+    outlines_only: bool,
 }
 
-#[derive(PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 enum FaceSourceKey {
     File(std::path::PathBuf),
     Shared(usize),
@@ -709,6 +730,7 @@ impl FaceKey {
             index: face.index,
             instance: face.instance,
             bold: style.bold,
+            outlines_only: false,
         }
     }
 }
@@ -742,7 +764,10 @@ impl SystemFaces {
             }
         };
         let slot = face
-            .and_then(|face| self.intern(&mut state, face, style))
+            .and_then(|face| {
+                let text = (presentation == Presentation::Text).then_some(c);
+                self.intern(&mut state, face, text, style)
+            })
             .filter(|&slot| {
                 self.face(slot).is_some_and(|font| {
                     font.has_glyph(c)
@@ -756,21 +781,22 @@ impl SystemFaces {
         slot
     }
 
+    /// A color face answering for `text`, a scalar asked for in text
+    /// presentation, draws its outline: DirectWrite names Segoe UI Emoji
+    /// for U+2733 whatever selector follows it. A glyph with no outline
+    /// stays in color.
     fn intern(
         &self,
         state: &mut SystemState,
         face: ResolvedFace,
+        text: Option<char>,
         style: FontStyle,
     ) -> Option<usize> {
         let key = FaceKey::of(&face, style);
-        if let Some(&slot) = state.slots.get(&key) {
-            return slot;
-        }
-        let slot = if state.len == self.pool.len() {
-            warn!("the system fallback picked more faces than a stack holds; drawing .notdef");
-            None
+        let slot = if let Some(&slot) = state.slots.get(&key) {
+            slot
         } else {
-            match Font::load_resolved(face) {
+            let slot = match Font::load_resolved(face) {
                 Ok(font) => {
                     let weight = if style.bold {
                         BOLD_WEIGHT
@@ -782,19 +808,42 @@ impl SystemFaces {
                     } else {
                         font
                     };
-                    let slot = state.len;
-                    self.pool[slot].get_or_init(|| Arc::new(font));
-                    state.len += 1;
-                    Some(slot)
+                    self.push(state, font)
                 }
                 Err(error) => {
                     warn!(%error, "system fallback face failed to load");
                     None
                 }
-            }
+            };
+            state.slots.insert(key.clone(), slot);
+            slot
+        }?;
+        let font = self.face(slot)?;
+        if !font.has_color_glyphs() || !text.is_some_and(|c| font.has_outline(c)) {
+            return Some(slot);
+        }
+        let key = FaceKey {
+            outlines_only: true,
+            ..key
         };
-        state.slots.insert(key, slot);
-        slot
+        if let Some(&slot) = state.slots.get(&key) {
+            return slot;
+        }
+        let outlines = self.push(state, font.outlines_only()).unwrap_or(slot);
+        state.slots.insert(key, Some(outlines));
+        Some(outlines)
+    }
+
+    /// `None` for a full pool.
+    fn push(&self, state: &mut SystemState, font: Font) -> Option<usize> {
+        if state.len == self.pool.len() {
+            warn!("the system fallback picked more faces than a stack holds; drawing .notdef");
+            return None;
+        }
+        let slot = state.len;
+        self.pool[slot].get_or_init(|| Arc::new(font));
+        state.len += 1;
+        Some(slot)
     }
 }
 
@@ -1860,13 +1909,18 @@ fn rasterize_with(ctx: &mut ScaleContext, font: &Font, glyph_id: GlyphId, px: f3
         .hint(hint)
         .normalized_coords(&font.coords)
         .build();
-    let image = Render::new(&[
-        Source::ColorOutline(0),
-        Source::ColorBitmap(StrikeWith::BestFit),
-        Source::Outline,
-    ])
-    .format(Format::Alpha)
-    .render(&mut scaler, glyph_id);
+    let sources: &[Source] = if font.color {
+        &[
+            Source::ColorOutline(0),
+            Source::ColorBitmap(StrikeWith::BestFit),
+            Source::Outline,
+        ]
+    } else {
+        &[Source::Outline]
+    };
+    let image = Render::new(sources)
+        .format(Format::Alpha)
+        .render(&mut scaler, glyph_id);
     let Some(image) = image else {
         return GlyphBitmap::blank();
     };
@@ -3104,6 +3158,16 @@ mod tests {
         );
         let index = stack.resolve_styled_index(HOT_BEVERAGE, FontStyle::REGULAR);
         assert_eq!(index, stack.len());
+    }
+
+    /// A CBDT face has no outline to draw in text presentation.
+    #[cfg(not(windows))]
+    #[test]
+    fn a_color_answer_without_an_outline_stays_in_color_for_text() {
+        let (stack, _) = system_stack(&[("\u{2602}", EMOJI)]);
+        let index = stack.first_cover_styled_index(UMBRELLA, FontStyle::REGULAR);
+        assert_ne!(index, 0);
+        assert!(stack.font_at(index, FontStyle::REGULAR).has_color_glyphs());
     }
 
     /// The pinned set behind a host to ask, with Monaspace Argon NF

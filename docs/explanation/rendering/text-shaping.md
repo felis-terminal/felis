@@ -85,11 +85,14 @@ up front; on a host with more faces that add coverage, the least preferred are d
 On **macOS** and **Windows** the platform answers **per character**. A codepoint that neither the primary nor the
 Nerd-symbol group (below) covers goes to CoreText's `CTFontCreateForStringWithLanguage` or DirectWrite's
 `IDWriteFontFallback::MapCharacters`, next to the styled primary. The language passed picks the Japanese or Chinese form
-of Han, so it is the first entry of the user's language list that writes Han, else the first, as Firefox picks it.
-Rejected: **the first entry alone**: a list led by English would leave Han to the platform's default form. An answer is
-kept only if it maps the codepoint (and, for emoji presentation, carries color glyphs), and is remembered for that
-codepoint, presentation and style alone. It never joins the chain, so what a codepoint draws with does not depend on
-what was drawn before it, as in kitty.
+of Han, so it is the first entry of the user's language list that writes Han, else the first, as Firefox picks it. An
+answer is kept only if it maps the codepoint (and, for emoji presentation, carries color glyphs), and is remembered for
+that codepoint, presentation and style alone. It never joins the chain, so what a codepoint draws with does not depend
+on what was drawn before it, as in kitty.
+
+DirectWrite reads no variation selector and names Segoe UI Emoji for `✳` and `☕︎` alike, so a color face answering a
+text-presentation request draws its outline, as kitty and Alacritty do; a glyph with no outline (CBDT, sbix) stays in
+color.
 
 Rejected: **append each answer to the chain**, as WezTerm, Ghostty and Rio do. A later miss would then take the
 first-cover walk through faces chosen for other characters, so the same text could draw differently depending on what
@@ -151,11 +154,11 @@ visible. Resolving `❤` (U+2764, text by default and a Zapf Dingbat) on its own
 `❤`, wrong the moment VS16 or a ZWJ join asks for the color emoji.
 
 Three cluster signals override the default, checked in this order. A VS15 directly after the base (`⭐︎`, `🀄︎`) asks for
-text, so the base takes the first face covering it even when it defaults to emoji; that is mono only when a mono face
-covers it. Otherwise an emoji ZWJ / modifier sequence anchors its face on the first astral emoji scalar
-(`is_emoji_face_anchor`, U+1F000..=U+1FAFF) so `❤️‍🔥` resolves off the fire. Failing both, a VS16 anywhere in the cluster
-(a bare `❤️`, a keycap) routes the base through `resolve_color_index`. A VS16-less dingbat (`⏸`, a plain `❤`) has no
-signal and stays mono.
+text, so the base takes the first face covering it even when it defaults to emoji; that is mono when a mono face covers
+it, or when the platform's answer is a color face with an outline for it. Otherwise an emoji ZWJ / modifier sequence
+anchors its face on the first astral emoji scalar (`is_emoji_face_anchor`, U+1F000..=U+1FAFF) so `❤️‍🔥` resolves off the
+fire. Failing both, a VS16 anywhere in the cluster (a bare `❤️`, a keycap) routes the base through
+`resolve_color_index`. A VS16-less dingbat (`⏸`, a plain `❤`) has no signal and stays mono.
 
 Once the face is chosen, the cluster is shaped without the variation selectors that face does not map. swash 0.2.10
 never looks a selector up in the cmap's variation-sequence subtable (format 14), and it drops VS15/VS16 only after an
