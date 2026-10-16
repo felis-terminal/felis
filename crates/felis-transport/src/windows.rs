@@ -270,9 +270,14 @@ pub(crate) async fn connect(pipe_name: &str) -> io::Result<NamedPipeClient> {
 /// Refuses a pipe whose server runs as another user, before the caller
 /// writes its first byte (REQ-106).
 pub(crate) fn verify_server(client: &NamedPipeClient) -> io::Result<()> {
-    let expected = current_user_sid_string()?;
+    verify_server_as(client, &current_user_sid_string()?)
+}
+
+/// [`verify_server`] against a given SID, so a single-account runner can
+/// still drive the reject arm.
+fn verify_server_as(client: &NamedPipeClient, expected: &str) -> io::Result<()> {
     let peer = server_sid_string(client)?;
-    admit(peer, &expected).map_err(|err| io::Error::new(io::ErrorKind::PermissionDenied, err))
+    admit(peer, expected).map_err(|err| io::Error::new(io::ErrorKind::PermissionDenied, err))
 }
 
 pub(crate) struct Listener {
@@ -626,6 +631,47 @@ mod tests {
             current_user_sid_string().unwrap(),
             "the accept path must have resolved this process's own SID"
         );
+    }
+
+    /// REQ-106a, dialer side: the facade's connect checks the server and
+    /// the SID it resolves is this process's own.
+    #[tokio::test]
+    async fn a_same_user_server_is_admitted_by_the_dialer() {
+        let name = unique_pipe_name("dial");
+        let listener = Listener::bind(&Endpoint::pipe(name.clone())).unwrap();
+        let server_task = tokio::spawn(async move {
+            let mut server = listener.accept().await.unwrap();
+            let mut buf = [0u8; 4];
+            server.read_exact(&mut buf).await.unwrap();
+            assert_eq!(&buf, b"ping");
+        });
+
+        let (_read, mut write) = crate::local::connect(Endpoint::pipe(name))
+            .await
+            .expect("same-user server admitted");
+        write.write_all(b"ping").await.unwrap();
+        server_task.await.unwrap();
+    }
+
+    /// The dialer's reject arm fails before the caller writes anything:
+    /// the server sees end of stream, not a byte.
+    #[tokio::test]
+    async fn a_foreign_server_sid_is_refused_before_any_byte() {
+        let name = unique_pipe_name("dial-reject");
+        let listener = Listener::bind(&Endpoint::pipe(name.clone())).unwrap();
+        let server_task = tokio::spawn(async move {
+            let mut server = listener.accept().await.unwrap();
+            let mut buf = Vec::new();
+            server.read_to_end(&mut buf).await.ok();
+            buf
+        });
+
+        let client = connect(&name).await.unwrap();
+        let err = verify_server_as(&client, "S-1-5-21-1111111111-2222222222-3333333333-1001")
+            .expect_err("a foreign server SID must be refused");
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+        drop(client);
+        assert_eq!(server_task.await.unwrap(), Vec::<u8>::new());
     }
 
     /// REQ-106a's reject arm, unreachable through `accept` on a
