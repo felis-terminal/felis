@@ -132,9 +132,9 @@ const fn read_file_payload(
     ))
 }
 
-/// `t=t`: read the temp file, unlinking it when [`temp_file_is_deletable`]
-/// admits it; a failed admitted unlink drops the image. `openat(NOFOLLOW)`
-/// and `unlinkat` share the pinned parent to resist TOCTOU symlink swaps.
+/// `t=t`: read the temp file, unlinking it when [`deletion_root`] admits
+/// it; a failed admitted unlink drops the image. `openat(NOFOLLOW)` and
+/// `unlinkat` share the pinned parent to resist TOCTOU symlink swaps.
 #[cfg(unix)]
 fn read_temp_file_payload(complete: &CompleteCommand, cap: usize) -> Result<Vec<u8>, DecodeError> {
     let path_bytes = base64::decode(&complete.payload)
@@ -161,15 +161,33 @@ fn read_temp_file_payload(complete: &CompleteCommand, cap: usize) -> Result<Vec<
         .ok_or(DecodeError::InvalidValue("t=t path must end in a filename"))?;
     let parent = std::fs::canonicalize(parent)
         .map_err(|_| DecodeError::IoError("could not open t=t parent directory"))?;
-    let deletable = temp_file_is_deletable(&parent, path_str);
-
     // `RDONLY | DIRECTORY` rather than `O_PATH`, which is Linux-only.
-    let dir = rustix::fs::open(
-        &parent,
-        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
-        Mode::empty(),
-    )
-    .map_err(|_| DecodeError::IoError("could not open t=t parent directory"))?;
+    let dir_flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC;
+    let open_failed = |_| DecodeError::IoError("could not open t=t parent directory");
+    let deletable_root = deletion_root(&parent, path_str);
+    let deletable = deletable_root.is_some();
+    let dir = match deletable_root {
+        // Walked down from the root without following a link, so the
+        // directory the unlink reaches is the one the rule admitted even
+        // if a component is swapped after the canonicalize.
+        Some(root) => {
+            let mut dir = rustix::fs::open(&root, dir_flags, Mode::empty()).map_err(open_failed)?;
+            let rest = parent
+                .strip_prefix(&root)
+                .unwrap_or_else(|_| std::path::Path::new(""));
+            for component in rest.components() {
+                dir = rustix::fs::openat(
+                    &dir,
+                    component.as_os_str(),
+                    dir_flags | OFlags::NOFOLLOW,
+                    Mode::empty(),
+                )
+                .map_err(open_failed)?;
+            }
+            dir
+        }
+        None => rustix::fs::open(&parent, dir_flags, Mode::empty()).map_err(open_failed)?,
+    };
     let discard = || {
         if deletable {
             let _ = rustix::fs::unlinkat(&dir, name, rustix::fs::AtFlags::empty());
@@ -225,11 +243,15 @@ fn read_temp_file_payload(complete: &CompleteCommand, cap: usize) -> Result<Vec<
 
 /// kitty's rule for deleting a `t=t` file: its parent resolves under a
 /// temp directory and its path names `tty-graphics-protocol`
-/// (docs/explanation/security-model.md "Kitty graphics").
+/// (docs/explanation/security-model.md "Kitty graphics"). Returns the
+/// canonical temp directory the parent lies under.
 #[cfg(unix)]
-pub(super) fn temp_file_is_deletable(canonical_parent: &std::path::Path, path: &str) -> bool {
+pub(super) fn deletion_root(
+    canonical_parent: &std::path::Path,
+    path: &str,
+) -> Option<std::path::PathBuf> {
     if !path.contains("tty-graphics-protocol") {
-        return false;
+        return None;
     }
     let tmpdir = std::env::var_os("TMPDIR").map(std::path::PathBuf::from);
     [
@@ -241,7 +263,7 @@ pub(super) fn temp_file_is_deletable(canonical_parent: &std::path::Path, path: &
     .into_iter()
     .flatten()
     .filter_map(|dir| std::fs::canonicalize(dir).ok())
-    .any(|dir| canonical_parent.starts_with(dir))
+    .find(|dir| canonical_parent.starts_with(dir))
 }
 
 /// Windows shim for `t=t`: see [`read_file_payload`]'s Windows shim.

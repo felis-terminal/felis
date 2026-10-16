@@ -28,7 +28,7 @@ use crate::pool::Session;
 mod compose;
 mod image_decode;
 #[cfg(all(test, unix))]
-use image_decode::temp_file_is_deletable;
+use image_decode::deletion_root;
 pub use image_decode::{
     DecodeError, MAX_DECODED_BYTES, ShmDeferral, decode_image, shm_segment_name, unlink_shm_segment,
 };

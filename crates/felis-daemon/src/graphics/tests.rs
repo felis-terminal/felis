@@ -2495,6 +2495,25 @@ fn transmit_via_temp_file_reads_then_unlinks() {
 
 #[cfg(unix)]
 #[test]
+fn a_marked_temp_file_in_a_nested_temp_directory_is_unlinked() {
+    let dir = tempfile::Builder::new()
+        .prefix("tty-graphics-protocol-")
+        .tempdir()
+        .unwrap();
+    let nested = dir.path().join("a").join("b");
+    std::fs::create_dir_all(&nested).unwrap();
+    let t = nested.join("image");
+    std::fs::write(&t, [0xFE, 0xED, 0xFA, 0xCE]).unwrap();
+    decode_image(&complete(
+        &[(b't', b"t"), (b'f', b"32"), (b's', b"1"), (b'v', b"1")],
+        &b64(t.to_str().unwrap().as_bytes()),
+    ))
+    .expect("decoded");
+    assert!(!t.exists());
+}
+
+#[cfg(unix)]
+#[test]
 fn a_temp_file_without_the_protocol_marker_is_read_but_kept() {
     let t = tempfile_with_bytes(&[0xFE, 0xED, 0xFA, 0xCE]);
     let image = decode_image(&complete(
@@ -2510,17 +2529,11 @@ fn a_temp_file_without_the_protocol_marker_is_read_but_kept() {
 #[test]
 fn a_temp_file_outside_the_temp_directories_is_not_deletable() {
     let marked = "/etc/tty-graphics-protocol-x";
-    assert!(!temp_file_is_deletable(
-        std::path::Path::new("/etc"),
-        marked
-    ));
+    assert_eq!(deletion_root(std::path::Path::new("/etc"), marked), None);
     let tmp = std::fs::canonicalize(std::env::temp_dir()).unwrap();
     let in_tmp = format!("{}/tty-graphics-protocol-x", tmp.display());
-    assert!(temp_file_is_deletable(&tmp, &in_tmp));
-    assert!(!temp_file_is_deletable(
-        &tmp,
-        &format!("{}/x", tmp.display())
-    ));
+    assert!(deletion_root(&tmp, &in_tmp).is_some());
+    assert_eq!(deletion_root(&tmp, &format!("{}/x", tmp.display())), None);
 }
 
 #[cfg(unix)] // symlink NOFOLLOW guard is POSIX-only
