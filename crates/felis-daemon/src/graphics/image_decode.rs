@@ -132,11 +132,9 @@ const fn read_file_payload(
     ))
 }
 
-/// `t=t`: read the temp file and unlink it.
-///
-/// Unlinking is enforced by felis; if unlinking fails the image is dropped.
-/// Reading uses `openat(NOFOLLOW)` and `unlinkat` from the pinned parent
-/// directory to resist TOCTOU symlink swaps.
+/// `t=t`: read the temp file, unlinking it when [`temp_file_is_deletable`]
+/// admits it; a failed admitted unlink drops the image. `openat(NOFOLLOW)`
+/// and `unlinkat` share the pinned parent to resist TOCTOU symlink swaps.
 #[cfg(unix)]
 fn read_temp_file_payload(complete: &CompleteCommand, cap: usize) -> Result<Vec<u8>, DecodeError> {
     let path_bytes = base64::decode(&complete.payload)
@@ -161,14 +159,22 @@ fn read_temp_file_payload(complete: &CompleteCommand, cap: usize) -> Result<Vec<
     let name = path
         .file_name()
         .ok_or(DecodeError::InvalidValue("t=t path must end in a filename"))?;
+    let parent = std::fs::canonicalize(parent)
+        .map_err(|_| DecodeError::IoError("could not open t=t parent directory"))?;
+    let deletable = temp_file_is_deletable(&parent, path_str);
 
     // `RDONLY | DIRECTORY` rather than `O_PATH`, which is Linux-only.
     let dir = rustix::fs::open(
-        parent,
+        &parent,
         OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
         Mode::empty(),
     )
     .map_err(|_| DecodeError::IoError("could not open t=t parent directory"))?;
+    let discard = || {
+        if deletable {
+            let _ = rustix::fs::unlinkat(&dir, name, rustix::fs::AtFlags::empty());
+        }
+    };
 
     let fd = rustix::fs::openat(
         &dir,
@@ -185,34 +191,57 @@ fn read_temp_file_payload(complete: &CompleteCommand, cap: usize) -> Result<Vec<
     let (offset, len) = match requested_range(complete, size) {
         Ok(range) => range,
         Err(err) => {
-            let _ = rustix::fs::unlinkat(&dir, name, rustix::fs::AtFlags::empty());
+            discard();
             return Err(err);
         }
     };
     if len > cap {
-        let _ = rustix::fs::unlinkat(&dir, name, rustix::fs::AtFlags::empty());
+        discard();
         return Err(DecodeError::OverBudget);
     }
     // See `read_file_payload` for the `allow`.
     #[allow(clippy::useless_conversion)]
     let mode: u32 = meta.st_mode.into();
     if mode & libc_s_ifmt() != libc_s_ifreg() {
-        let _ = rustix::fs::unlinkat(&dir, name, rustix::fs::AtFlags::empty());
+        discard();
         return Err(DecodeError::InvalidValue(
             "t=t path must point at a regular file",
         ));
     }
 
     let Ok(buf) = read_range(&fd, offset, len, "read failed on t=t file") else {
-        let _ = rustix::fs::unlinkat(&dir, name, rustix::fs::AtFlags::empty());
+        discard();
         return Err(DecodeError::IoError("read failed on t=t file"));
     };
     drop(fd);
 
-    rustix::fs::unlinkat(&dir, name, rustix::fs::AtFlags::empty())
-        .map_err(|_| DecodeError::IoError("could not unlink t=t file after read"))?;
+    if deletable {
+        rustix::fs::unlinkat(&dir, name, rustix::fs::AtFlags::empty())
+            .map_err(|_| DecodeError::IoError("could not unlink t=t file after read"))?;
+    }
 
     Ok(buf)
+}
+
+/// kitty's rule for deleting a `t=t` file: its parent resolves under a
+/// temp directory and its path names `tty-graphics-protocol`
+/// (docs/explanation/security-model.md "Kitty graphics").
+#[cfg(unix)]
+pub(super) fn temp_file_is_deletable(canonical_parent: &std::path::Path, path: &str) -> bool {
+    if !path.contains("tty-graphics-protocol") {
+        return false;
+    }
+    let tmpdir = std::env::var_os("TMPDIR").map(std::path::PathBuf::from);
+    [
+        Some(std::path::PathBuf::from("/tmp")),
+        Some(std::path::PathBuf::from("/dev/shm")),
+        tmpdir,
+        Some(std::env::temp_dir()),
+    ]
+    .into_iter()
+    .flatten()
+    .filter_map(|dir| std::fs::canonicalize(dir).ok())
+    .any(|dir| canonical_parent.starts_with(dir))
 }
 
 /// Windows shim for `t=t`: see [`read_file_payload`]'s Windows shim.

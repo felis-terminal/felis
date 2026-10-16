@@ -265,7 +265,9 @@ File-based transfers enforce path traversal defenses before I/O:
 - Paths must be absolute and contain no `..` traversal segments.
 - `t=f` opens the path with `O_NOFOLLOW`, so a symlink as the final component is refused.
 - `t=t` opens the parent directory first, then opens the file with `openat` and `O_NOFOLLOW` relative to that directory
-  descriptor, and always deletes the file afterwards with `unlinkat` on the same descriptor.
+  descriptor. It deletes the file afterwards with `unlinkat` on the same descriptor, whether or not the image loads,
+  only when the parent resolves under `/tmp`, `/dev/shm`, or `$TMPDIR` and the path contains `tty-graphics-protocol`
+  (kitty's rule); any other `t=t` file is read and left in place.
 
 `t=f` accesses any absolute path readable by the daemon's effective UID; threat model and privilege boundaries are
 detailed in [security-model.md](../../explanation/security-model.md).

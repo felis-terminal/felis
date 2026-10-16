@@ -190,9 +190,11 @@ The graphics protocol is a large attack surface: it accepts compressed image dat
   becoming an unbounded one. No root allowlist is enforced, because the daemon runs under the user's own UID and its
   filesystem reach already equals the producer's; the deferral and its revisit trigger are in the
   [Kitty graphics design](protocols/kitty-graphics.md).
-- **`t=t` deletes after read, atomically.** The read and the unlink go through the same pinned parent dirfd, so a path
-  swap between them cannot redirect the delete. The "temp file" contract is enforced by felis rather than trusted from
-  the producer, and an unlink failure aborts the transmission.
+- **`t=t` deletes only what kitty would, atomically.** The equal-reach argument above covers a read, whose bytes never
+  return to the producer, but not a delete, so felis follows kitty's rule: it deletes only under a temp directory and
+  only a path naming `tty-graphics-protocol`, and reads anything else without deleting it. The read and the unlink go
+  through the same pinned parent dirfd, so a path swap between them cannot redirect the delete, and an unlink failure
+  aborts the transmission.
 - **Image IDs are session-scoped.** ID 42 in session A and ID 42 in session B are different objects. Cross-session
   reference is not expressible in the protocol.
 - **A chunked upload is bounded by bytes, not by a clock.** One in-flight transmission reassembles into a capped buffer,

@@ -2195,6 +2195,20 @@ fn tempfile_with_bytes(bytes: &[u8]) -> tempfile::NamedTempFile {
     f
 }
 
+/// A temp file kitty's `t=t` deletion rule admits: under the temp
+/// directory, with `tty-graphics-protocol` in its name.
+#[cfg(unix)]
+fn graphics_tempfile_with_bytes(bytes: &[u8]) -> std::path::PathBuf {
+    use std::io::Write;
+    let mut f = tempfile::Builder::new()
+        .prefix("tty-graphics-protocol-")
+        .tempfile()
+        .expect("tempfile");
+    f.write_all(bytes).expect("write");
+    f.flush().expect("flush");
+    f.into_temp_path().keep().expect("keep")
+}
+
 #[cfg(unix)] // t=f/t=t file transmission is Unix-only (Windows declines with ENOTSUP)
 #[test]
 fn transmit_via_file_path_reads_bytes_from_disk() {
@@ -2255,7 +2269,7 @@ fn file_transmissions_read_the_offset_and_size_they_name() {
         ranged(b"f", f.path()).unwrap().pixels(),
         [0xDE, 0xAD, 0xBE, 0xEF]
     );
-    let t = tempfile_with_bytes(&bytes).into_temp_path().keep().unwrap();
+    let t = graphics_tempfile_with_bytes(&bytes);
     assert_eq!(ranged(b"t", &t).unwrap().pixels(), [0xDE, 0xAD, 0xBE, 0xEF]);
     assert!(!t.exists());
 }
@@ -2263,10 +2277,7 @@ fn file_transmissions_read_the_offset_and_size_they_name() {
 #[cfg(unix)]
 #[test]
 fn a_temp_file_range_past_its_end_is_refused_and_still_unlinked() {
-    let t = tempfile_with_bytes(&[0; 4])
-        .into_temp_path()
-        .keep()
-        .unwrap();
+    let t = graphics_tempfile_with_bytes(&[0; 4]);
     let result = decode_image(&complete(
         &[
             (b't', b"t"),
@@ -2447,12 +2458,7 @@ fn transmit_via_file_path_rejects_directory_target() {
 fn transmit_via_temp_file_reads_then_unlinks() {
     let (mut grid, mut images, mut placements) = handler_state();
     let pixels = [0xFE, 0xED, 0xFA, 0xCE];
-    let f = tempfile_with_bytes(&pixels);
-    let path = f.path().to_owned();
-    // Keep the guard alive but off the file, so its Drop cannot race the
-    // dispatcher's `unlinkat`.
-    let _keep_dir_alive = f.into_temp_path();
-    std::fs::write(&path, pixels).expect("rewrite for t=t test");
+    let path = graphics_tempfile_with_bytes(&pixels);
     let path_b64 = b64(path.to_str().unwrap().as_bytes());
     let cmd = complete(
         &[
@@ -2485,6 +2491,36 @@ fn transmit_via_temp_file_reads_then_unlinks() {
         !path.exists(),
         "t=t must unlink the temp file after reading",
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_temp_file_without_the_protocol_marker_is_read_but_kept() {
+    let t = tempfile_with_bytes(&[0xFE, 0xED, 0xFA, 0xCE]);
+    let image = decode_image(&complete(
+        &[(b't', b"t"), (b'f', b"32"), (b's', b"1"), (b'v', b"1")],
+        &b64(t.path().to_str().unwrap().as_bytes()),
+    ))
+    .expect("decoded");
+    assert_eq!(image.pixels(), [0xFE, 0xED, 0xFA, 0xCE]);
+    assert!(t.path().exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_temp_file_outside_the_temp_directories_is_not_deletable() {
+    let marked = "/etc/tty-graphics-protocol-x";
+    assert!(!temp_file_is_deletable(
+        std::path::Path::new("/etc"),
+        marked
+    ));
+    let tmp = std::fs::canonicalize(std::env::temp_dir()).unwrap();
+    let in_tmp = format!("{}/tty-graphics-protocol-x", tmp.display());
+    assert!(temp_file_is_deletable(&tmp, &in_tmp));
+    assert!(!temp_file_is_deletable(
+        &tmp,
+        &format!("{}/x", tmp.display())
+    ));
 }
 
 #[cfg(unix)] // symlink NOFOLLOW guard is POSIX-only
