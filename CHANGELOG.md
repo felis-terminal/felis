@@ -13,6 +13,10 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 - **Font names**: `felis fonts list` prints every family name `font.family` and the other `family` keys accept on this
   machine, with whether it is monospace and which weights and slants it has, so a name that would fall back to monospace
   can be checked before opening a window.
+- **Scrollback jump keys**: jumping to the top or bottom of the scrollback moves from `Ctrl+Home` / `Ctrl+End` to
+  `Ctrl+Shift+Home` / `Ctrl+Shift+End`, as in kitty and Windows Terminal, so `Ctrl+Home` / `Ctrl+End` reach editors such
+  as vim and nano again. `"ctrl+home" = { kind = "scroll", step = "home" }` under `[keymap]` (and `step = "end"` for
+  `ctrl+end`) brings the old chords back.
 
 ## [0.2.0] - 2026-10-14
 

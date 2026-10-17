@@ -77,14 +77,16 @@ impl Keymap {
             },
         );
 
+        // Not `Ctrl+Home` / `Ctrl+End`: editors bind those to file start /
+        // end, and a chord here is consumed even on the alternate screen.
         // Bare `End` is gated by the dispatcher on viewport state, so vim
         // / pagers still see `kend` at the live view.
         km.insert(
-            chord(Modifiers::CONTROL, KeyCode::Named(NamedKey::Home)),
+            chord(ctrl_shift, KeyCode::Named(NamedKey::Home)),
             Action::Scroll(ScrollStep::Home),
         );
         km.insert(
-            chord(Modifiers::CONTROL, KeyCode::Named(NamedKey::End)),
+            chord(ctrl_shift, KeyCode::Named(NamedKey::End)),
             Action::Scroll(ScrollStep::End),
         );
         km.insert(
@@ -235,11 +237,11 @@ mod tests {
         );
 
         assert_eq!(
-            km.resolve(&parse("ctrl+home")),
+            km.resolve(&parse("ctrl+shift+home")),
             Some(&Action::Scroll(ScrollStep::Home)),
         );
         assert_eq!(
-            km.resolve(&parse("ctrl+end")),
+            km.resolve(&parse("ctrl+shift+end")),
             Some(&Action::Scroll(ScrollStep::End)),
         );
         assert_eq!(
@@ -266,6 +268,14 @@ mod tests {
 
         assert!(km.resolve(&parse("ctrl+v")).is_none());
         assert!(km.resolve(&parse("a")).is_none());
+    }
+
+    #[test]
+    fn ctrl_home_and_ctrl_end_reach_the_application() {
+        let km = Keymap::common_linux_style();
+
+        assert!(km.resolve(&parse("ctrl+home")).is_none());
+        assert!(km.resolve(&parse("ctrl+end")).is_none());
     }
 
     /// The dispatcher's viewport gate assumes this binding exists.
