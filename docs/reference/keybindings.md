@@ -12,19 +12,19 @@ chords.
 
 ## Default chords
 
-| Action                                   | Linux / Windows                                           | macOS                                                                             |
-| ---------------------------------------- | --------------------------------------------------------- | --------------------------------------------------------------------------------- |
-| Copy selection to clipboard              | `Ctrl+Shift+C`                                            | `Cmd+C`                                                                           |
-| Paste from clipboard                     | `Ctrl+Shift+V`                                            | `Cmd+V`                                                                           |
-| Paste from PRIMARY selection             | `Shift+Insert`                                            | `Shift+Insert` (no PRIMARY on macOS; falls back to the system clipboard)          |
-| Open scrollback search                   | `Ctrl+Shift+F`                                            | `Cmd+F`                                                                           |
-| Reload config                            | `Ctrl+Shift+R`                                            | `Cmd+R`                                                                           |
-| Font size up                             | `Ctrl+Shift+=` / `Ctrl+Shift++`                           | `Cmd+=` / `Cmd++`                                                                 |
-| Font size down                           | `Ctrl+Shift+-` / `Ctrl+Shift+_`                           | `Cmd+-` / `Cmd+_`                                                                 |
-| Font size reset                          | `Ctrl+Shift+0` / `Ctrl+Shift+)`                           | `Cmd+0` / `Cmd+)`                                                                 |
-| Scroll half a page up / down             | `shift+page_up` / `shift+page_down`                       | same                                                                              |
-| Jump to scrollback top / bottom          | `Ctrl+Home` / `Ctrl+End` (also bare `End` while browsing) | same                                                                              |
-| Jump to previous / next prompt (OSC 133) | `Ctrl+Shift+Z` / `Ctrl+Shift+X`                           | same (`Cmd+Shift+Z` is system redo, so prompt jump keeps `Ctrl+Shift` everywhere) |
+| Action                                   | Linux / Windows                                                       | macOS                                                                             |
+| ---------------------------------------- | --------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| Copy selection to clipboard              | `Ctrl+Shift+C`                                                        | `Cmd+C`                                                                           |
+| Paste from clipboard                     | `Ctrl+Shift+V`                                                        | `Cmd+V`                                                                           |
+| Paste from PRIMARY selection             | `Shift+Insert`                                                        | `Shift+Insert` (no PRIMARY on macOS; falls back to the system clipboard)          |
+| Open scrollback search                   | `Ctrl+Shift+F`                                                        | `Cmd+F`                                                                           |
+| Reload config                            | `Ctrl+Shift+R`                                                        | `Cmd+R`                                                                           |
+| Font size up                             | `Ctrl+Shift+=` / `Ctrl+Shift++`                                       | `Cmd+=` / `Cmd++`                                                                 |
+| Font size down                           | `Ctrl+Shift+-` / `Ctrl+Shift+_`                                       | `Cmd+-` / `Cmd+_`                                                                 |
+| Font size reset                          | `Ctrl+Shift+0` / `Ctrl+Shift+)`                                       | `Cmd+0` / `Cmd+)`                                                                 |
+| Scroll half a page up / down             | `shift+page_up` / `shift+page_down`                                   | same                                                                              |
+| Jump to scrollback top / bottom          | `Ctrl+Shift+Home` / `Ctrl+Shift+End` (also bare `End` while browsing) | same                                                                              |
+| Jump to previous / next prompt (OSC 133) | `Ctrl+Shift+Z` / `Ctrl+Shift+X`                                       | same (`Cmd+Shift+Z` is system redo, so prompt jump keeps `Ctrl+Shift` everywhere) |
 
 Both spellings of the zoom symbols are bound because keyboard layouts disagree on whether Shift produces the shifted
 character (US `Shift+=` → `+`; DE has a separate `+` keycap).
