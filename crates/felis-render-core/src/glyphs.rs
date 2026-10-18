@@ -18,6 +18,7 @@ use foldhash::fast::RandomState;
 use crate::{
     atlas::{Allocation, ShelfAtlas},
     box_drawing,
+    display_list::AtlasKind,
 };
 
 /// Glyphs are cell-sized, so the 8192 image ceiling would be gross
@@ -48,12 +49,10 @@ pub fn cluster_base_char(screen: &ScreenBuffer, id: NonZeroU32) -> Option<char> 
     screen.cluster_str(id).and_then(|s| s.chars().next())
 }
 
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct GlyphSlot {
-    /// Atlas uv min: top-left in `[0, 1]`.
-    pub uv_min: [f32; 2],
-    /// Atlas uv max: bottom-right in `[0, 1]`.
-    pub uv_max: [f32; 2],
+    /// Top-left of the bitmap in its atlas sheet, in pixels.
+    pub atlas_px: [u32; 2],
     /// Pixel size of the glyph bitmap (not the cell).
     pub size_px: [u32; 2],
     /// `(left, top)` from the cell's `(0, baseline)` origin, per swash.
@@ -91,6 +90,9 @@ pub trait AtlasView {
     /// The shaped glyphs of a multi-scalar overlay cluster, `None` until
     /// the overlay's text was populated.
     fn overlay_cluster(&self, text: &str) -> Option<&[ClusterGlyph]>;
+
+    /// The pixel side of the sheet a slot's [`GlyphSlot::atlas_px`] is in.
+    fn sheet_side(&self, sheet: AtlasKind) -> u32;
 }
 
 /// Mirrors the enum-to-u8 mapping `felis-vt`'s parser enforces.
@@ -715,30 +717,21 @@ impl GlyphIndex {
         let (width, height) = (bitmap.width(), bitmap.height());
         let offset_px = [bitmap.left, bitmap.top];
         let is_color = bitmap.is_color();
-        let (alloc, side) = if is_color {
-            match self.color_atlas.alloc(width, height) {
-                Some(alloc) => (alloc, self.color_atlas.width()),
-                None => return AllocOutcome::Full(bitmap),
-            }
+        let sheet = if is_color {
+            &mut self.color_atlas
         } else {
-            match self.atlas.alloc(width, height) {
-                Some(alloc) => (alloc, self.atlas.width()),
-                None => return AllocOutcome::Full(bitmap),
-            }
+            &mut self.atlas
         };
-        let side = side as f32;
-        let uv_min = [alloc.x as f32 / side, alloc.y as f32 / side];
-        let uv_max = [
-            (alloc.x + alloc.width) as f32 / side,
-            (alloc.y + alloc.height) as f32 / side,
-        ];
+        let Some(alloc) = sheet.alloc(width, height) else {
+            return AllocOutcome::Full(bitmap);
+        };
+        let atlas_px = [alloc.x, alloc.y];
         self.pending.push(PendingUpload {
             alloc,
             pixels: bitmap.into_pixels(),
         });
         AllocOutcome::Placed(GlyphSlot {
-            uv_min,
-            uv_max,
+            atlas_px,
             size_px: [width, height],
             offset_px,
             is_color,
@@ -764,7 +757,7 @@ struct ShapeRun {
 /// Identifies eligible [`Grapheme::Ascii`] runs with default sizing and primary-face coverage.
 ///
 /// Color and link boundaries do not end the run, preserving ligatures across syntax highlighting;
-/// `extend_instances` slices quads per cell instead. Bold and italic changes do end the run
+/// `CellPainter` slices quads per cell instead. Bold and italic changes do end the run
 /// because they select a different face.
 fn next_shape_run<F>(
     screen: &ScreenBuffer,
@@ -960,6 +953,13 @@ impl AtlasView for GlyphIndex {
     fn overlay_cluster(&self, text: &str) -> Option<&[ClusterGlyph]> {
         self.overlay_clusters.get(text).map(Vec::as_slice)
     }
+
+    fn sheet_side(&self, sheet: AtlasKind) -> u32 {
+        match sheet {
+            AtlasKind::Mono => self.atlas.width(),
+            AtlasKind::Color => self.color_atlas.width(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -986,7 +986,7 @@ fn saturated_face_id(font_id: usize) -> u16 {
 }
 
 /// Produced while the [`ShapeFrame`] is built and read back in
-/// `extend_instances`, so priming and emission cannot drift.
+/// the cell painter, so priming and emission cannot drift.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ClusterGlyph {
     pub glyph_id: GlyphId,
@@ -1073,7 +1073,7 @@ impl ShapeFrame {
         self.cluster_glyphs = pool;
     }
 
-    /// The quad-slicing tests in `instances.rs` build frames directly
+    /// The quad-slicing tests in `painter.rs` build frames directly
     /// because the full pipeline needs a real ligature font.
     #[cfg(any(test, feature = "testing"))]
     #[must_use]
@@ -1458,8 +1458,8 @@ mod tests {
         assert!(did_work, "first ensure must rasterize + allocate");
         assert!(idx.contains('A', h, sk));
         let slot = idx.slot('A', h, sk).expect("A produced a slot");
-        assert!(slot.uv_min[0] >= 0.0 && slot.uv_max[0] <= 1.0);
-        assert!(slot.uv_min[1] >= 0.0 && slot.uv_max[1] <= 1.0);
+        assert!(slot.atlas_px[0] + slot.size_px[0] <= idx.sheet_side(AtlasKind::Mono));
+        assert!(slot.atlas_px[1] + slot.size_px[1] <= idx.sheet_side(AtlasKind::Mono));
         assert!(slot.size_px[0] > 0 && slot.size_px[1] > 0);
         let mut iter = idx.drain_pending();
         let first = iter.next().expect("one upload queued");
@@ -1535,8 +1535,8 @@ mod tests {
         let small = idx.slot('A', h, default_sk).expect("default slot");
         let large = idx.slot('A', h, scale_2_sk).expect("scaled slot");
         assert_ne!(
-            (small.uv_min, small.uv_max),
-            (large.uv_min, large.uv_max),
+            (small.atlas_px, small.size_px),
+            (large.atlas_px, large.size_px),
             "sized variant must occupy a different atlas rect"
         );
         // Generous slack: swash's hinted metrics are not exactly 2×.
@@ -2055,15 +2055,16 @@ mod tests {
 
     #[cfg(not(windows))]
     #[test]
-    fn allocations_within_the_atlas_never_overlap_in_uv_space() {
+    fn allocations_within_the_atlas_never_overlap() {
         let mut idx = GlyphIndex::new(stack(), 14.0, nz(256));
         let h = idx.cell_metrics().height;
         let sk = SizingKey::default();
-        let mut rects: Vec<(f32, f32, f32, f32)> = Vec::new();
+        let mut rects: Vec<(u32, u32, u32, u32)> = Vec::new();
         for c in 0x21u8..=0x7Eu8 {
             idx.ensure(c as char, h, sk);
             if let Some(s) = idx.slot(c as char, h, sk) {
-                rects.push((s.uv_min[0], s.uv_min[1], s.uv_max[0], s.uv_max[1]));
+                let [x, y] = s.atlas_px;
+                rects.push((x, y, x + s.size_px[0], y + s.size_px[1]));
             }
         }
         for (i, a) in rects.iter().enumerate() {

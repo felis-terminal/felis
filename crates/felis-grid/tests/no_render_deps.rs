@@ -81,7 +81,7 @@ fn felis_grid_has_no_render_or_shaping_deps() {
     assert!(
         violations.is_empty(),
         "felis-grid stores raw state only — presentation belongs in \
-         felis-shaping / felis-render-wgpu (the daemon owns state, the \
+         felis-shaping / felis-render-core / felis-render-wgpu (the daemon owns state, the \
          client owns pixels). \
          Banned production dep(s) reached: {violations:?}\n\nFull tree:\n{stdout}",
     );

@@ -524,7 +524,7 @@ mod tests {
         assert_eq!(s.mode(), SelectionMode::Rectangle);
     }
 
-    /// Mirrors `felis-render-wgpu`'s `selection_contains` predicate.
+    /// Mirrors `felis-render-core`'s `selection_contains` predicate.
     ///
     /// Restated here because client-core cannot depend on the renderer
     /// (`docs/explanation/architecture/overview.md`).

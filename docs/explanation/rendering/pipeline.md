@@ -27,8 +27,9 @@ redraw request, so a burst of frames costs one paint ([damage-tracking.md](damag
 ```
 1. winit dispatches RedrawRequested.
 2. The renderer walks the rows the shadow marked since the
-   last paint for glyphs and rebuilds their cell instances
-   (damage-tracking.md), plus live image placements.
+   last paint for glyphs, repaints them into the cell
+   painter's display list and encodes that into their cell
+   instances (damage-tracking.md), plus live image placements.
 3. Each row is cut into shaping units: a ligature run where the
    fast path applies, a single cell otherwise (text-shaping.md).
    Shaped runs are memoized.
@@ -54,6 +55,13 @@ instances are appended. Skipping the reserved row in the grid walk is not enough
 across rows anchors above the row and reaches into it, and it rides the same foreground pass as the bar's text, where
 nothing occludes anything. A bar a producer can paint over guarantees nothing; see
 [the security model](../security-model.md) "OSC 8 hyperlinks and OSC 7 CWD" for what rests on that guarantee.
+
+How a cell looks is decided before any instance exists. The cell painter in `felis-render-core` resolves each cell's
+colors (reverse video, cursor, selection, the bidi warning, faint), its decorations, the overlays and bottom bars, and
+the chrome clip, and emits each row as a display list of rectangles, glyph draws and decorations in physical pixels.
+`felis-render-wgpu` encodes that list into the instance records of the tiers below and caches the encoded rows. The
+display list is the seam a backend other than wgpu draws from; why it is data rather than a trait the painter calls is
+recorded in [the architecture overview](../architecture/overview.md) "Workspace: the crate-boundary decision record".
 
 ## wgpu surface and resources
 

@@ -10,13 +10,14 @@ use felis_render_core::{
     SelectionRange,
     glyphs::{GLYPH_ATLAS_SIDE, GlyphIndex, GridWalker, ShapeFrame},
     overlay::{ConfirmOverlay, LinkPreviewOverlay, PreeditOverlay, SearchHitSpan, SearchOverlay},
+    painter::BAR_ELLIPSIS,
     palette::{ResolvedTheme, Theme},
 };
 use felis_shaping::{FontStack, Shaper, SizingKey};
 use felis_vt::Parser;
 
 use super::{CellFrame, RowCache};
-use crate::instances::{BAR_ELLIPSIS, InstanceBuffers};
+use crate::gpu_instances::InstanceBuffers;
 
 const FONT_SIZE_PX: f32 = 16.0;
 

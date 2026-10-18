@@ -1,19 +1,17 @@
-//! Per-frame instance buffers built from the screen: the bg and fg
-//! passes of `docs/explanation/rendering/pipeline.md`. Coordinates are
-//! `[f32; 2]` physical pixels; the vertex shader divides by viewport
-//! size. The layout is committed here so shader and Rust cannot drift.
+//! The cell painter: turns the screen and the frame's overlays into
+//! the display list of [`crate::display_list`].
 
 use std::borrow::Cow;
 
-use bytemuck::{Pod, Zeroable};
 use felis_grid::{
     AttrFlags, Cell, Color, CursorStyle, Grapheme, HAlign, ScreenBuffer, Sizing, UnderlineStyle,
     VAlign, bidi, char_cell_width,
 };
 use felis_shaping::{CellMetrics, SizingKey};
 
-use felis_render_core::{
+use crate::{
     SelectionRange,
+    display_list::{AtlasKind, DecoKind, Decoration, GlyphDraw, Rect, RowPaint},
     glyphs::{
         AtlasView, ClusterGlyph, GlyphSlot, ShapeFrame, ShapedCell, cluster_base_char,
         cluster_block_cols, font_style_of, sizing_key_from,
@@ -26,7 +24,7 @@ use felis_render_core::{
     },
 };
 
-pub(crate) const CURSOR_MARKER_PX: f32 = 2.0;
+pub const CURSOR_MARKER_PX: f32 = 2.0;
 
 /// One pixel less than the cursor marker so a cursor underline on a
 /// link cell still visually wins.
@@ -39,111 +37,6 @@ const PREEDIT_UNDERLINE_PX: f32 = 2.0;
 const PREEDIT_ACTIVE_UNDERLINE_PX: f32 = 4.0;
 
 const SCROLLBAR_LANE_PX: f32 = 6.0;
-
-#[repr(C)]
-#[derive(Copy, Clone, Debug, PartialEq, Pod, Zeroable)]
-pub struct BgInstance {
-    /// Top-left of the cell in physical pixels.
-    pub origin_px: [f32; 2],
-    /// Cell width / height in physical pixels.
-    pub size_px: [f32; 2],
-    /// Background color in linear RGBA.
-    pub color: [f32; 4],
-}
-
-const _: () = assert!(size_of::<BgInstance>() == 32);
-
-#[repr(C)]
-#[derive(Copy, Clone, Debug, PartialEq, Pod, Zeroable)]
-pub struct FgInstance {
-    /// Top-left of the glyph quad in physical pixels.
-    pub origin_px: [f32; 2],
-    /// Glyph quad width / height in physical pixels.
-    pub size_px: [f32; 2],
-    /// Atlas-space uv min `[u, v]` in [0, 1].
-    pub uv_min: [f32; 2],
-    /// Atlas-space uv max `[u, v]` in [0, 1].
-    pub uv_max: [f32; 2],
-    /// Foreground (glyph) color in linear RGBA.
-    pub color: [f32; 4],
-    /// `1.0` for an RGBA color bitmap from the color atlas, `0.0` for a
-    /// coverage mask tinted by `color`. A float so it rides
-    /// `VertexFormat::Float32` like the rest of the instance.
-    pub is_color: f32,
-    /// Pads the stride to the WGSL struct layout.
-    #[expect(
-        clippy::pub_underscore_fields,
-        reason = "explicit WGSL alignment padding; never read, but Pod needs it pub"
-    )]
-    pub _pad: [f32; 3],
-}
-
-const _: () = assert!(size_of::<FgInstance>() == 64);
-
-/// Two passes share this layout (z<0 below the cell layers, z≥0
-/// above) for the `docs/reference/protocols/kitty-graphics.md`
-/// z-ordering.
-#[repr(C)]
-#[derive(Copy, Clone, Debug, PartialEq, Pod, Zeroable)]
-pub struct ImgInstance {
-    /// Top-left of the image quad in physical pixels.
-    pub origin_px: [f32; 2],
-    /// Image quad width / height in physical pixels.
-    pub size_px: [f32; 2],
-    /// Atlas-space uv min `[u, v]` in [0, 1].
-    pub uv_min: [f32; 2],
-    /// Atlas-space uv max `[u, v]` in [0, 1].
-    pub uv_max: [f32; 2],
-    /// Reserved; the dispatcher pins this to `1.0`.
-    pub opacity: f32,
-    /// Pads the stride to the WGSL struct layout.
-    #[expect(
-        clippy::pub_underscore_fields,
-        reason = "explicit WGSL alignment padding; the underscore marks it as never read, and Pod needs it pub"
-    )]
-    pub _pad: [f32; 3],
-}
-
-const _: () = assert!(size_of::<ImgInstance>() == 48);
-
-/// The quad spans the decoration band: the line rectangle for the
-/// straight kinds, a taller band the sine swings inside for
-/// `DECO_CURLY`. `deco_fs` computes coverage from [`Self::kind`].
-#[repr(C)]
-#[derive(Copy, Clone, Debug, PartialEq, Pod, Zeroable)]
-pub struct DecorationInstance {
-    /// Top-left of the band quad in physical pixels.
-    pub origin_px: [f32; 2],
-    /// Band width / height in physical pixels.
-    pub size_px: [f32; 2],
-    /// Line color in linear RGBA.
-    pub color: [f32; 4],
-    /// [`DECO_SOLID`] / [`DECO_DOTTED`] / [`DECO_DASHED`] / [`DECO_CURLY`].
-    pub kind: f32,
-    /// Line thickness in physical pixels.
-    pub thickness_px: f32,
-    /// Pattern period (dotted / dashed) or sine wavelength (curly), px.
-    /// Unused by [`DECO_SOLID`].
-    pub period_px: f32,
-    /// Pads the stride to the WGSL struct layout.
-    #[expect(
-        clippy::pub_underscore_fields,
-        reason = "explicit WGSL alignment padding; never read, but Pod needs it pub"
-    )]
-    pub _pad: f32,
-}
-
-const _: () = assert!(size_of::<DecorationInstance>().is_multiple_of(16));
-
-/// The kind values must match the `deco_fs` branch cutoffs in
-/// `shader.wgsl`.
-pub const DECO_SOLID: f32 = 0.0;
-/// Dotted underline (`SGR 4:4`).
-pub const DECO_DOTTED: f32 = 1.0;
-/// Dashed underline (`SGR 4:5`).
-pub const DECO_DASHED: f32 = 2.0;
-/// Curly / wavy underline (`SGR 4:3`).
-pub const DECO_CURLY: f32 = 3.0;
 
 /// Cell count is governed by the integer `s` (and `w`) alone; `n/d`
 /// scales the bitmap, not the cell count (Kitty: "the fractional scale
@@ -161,14 +54,6 @@ fn sizing_glyph_scale(sizing: Sizing) -> f32 {
     sizing_key_from(sizing).effective_scale()
 }
 
-#[derive(Debug, Default, PartialEq)]
-pub struct InstanceBuffers {
-    pub bg: Vec<BgInstance>,
-    pub fg: Vec<FgInstance>,
-    /// Drawn after the glyph pass so strikethrough sits over the ink.
-    pub deco: Vec<DecorationInstance>,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PreeditSpan {
     pub row: u16,
@@ -178,16 +63,42 @@ pub struct PreeditSpan {
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) struct CursorPaint {
-    /// The row and first column of the character under the cursor.
-    pub(crate) cell: Option<(u16, u16)>,
+pub struct CursorPaint {
+    cell: Option<(u16, u16)>,
     last_col: u16,
     style: CursorStyle,
 }
 
 impl CursorPaint {
+    /// The row and first column of the character under the cursor.
+    #[must_use]
+    pub const fn cell(&self) -> Option<(u16, u16)> {
+        self.cell
+    }
+
     fn covers(&self, row: u16, col: u16) -> bool {
         matches!(self.cell, Some((r, first)) if r == row && (first..=self.last_col).contains(&col))
+    }
+}
+
+/// `(x, y, width, height)` in pixels of the cursor the cell pass paints
+/// over the columns `span` covers.
+#[must_use]
+pub fn cursor_rect_px(
+    metrics: CellMetrics,
+    origin_px: [f32; 2],
+    row: u16,
+    (first, last): (u16, u16),
+    style: CursorStyle,
+) -> [f32; 4] {
+    let (cw, ch) = (metrics.width as f32, metrics.height as f32);
+    let x = f32::from(first).mul_add(cw, origin_px[0]);
+    let y = f32::from(row).mul_add(ch, origin_px[1]);
+    let w = f32::from(last - first + 1) * cw;
+    match style {
+        CursorStyle::Block => [x, y, w, ch],
+        CursorStyle::Underline => [x, y + ch - CURSOR_MARKER_PX, w, CURSOR_MARKER_PX],
+        CursorStyle::Bar => [x, y, CURSOR_MARKER_PX, ch],
     }
 }
 
@@ -202,7 +113,7 @@ struct CellColors {
     fg: [f32; 4],
     bg: [f32; 4],
     /// For `Underline` / `Bar`; `Block` folds into `fg` / `bg`.
-    cursor_marker: Option<BgInstance>,
+    cursor_marker: Option<Rect>,
     is_bidi: bool,
     faint: bool,
 }
@@ -217,8 +128,7 @@ pub struct CellPainter<'a, A: AtlasView> {
     ch: f32,
     ascent: f32,
     cursor_visible: bool,
-    /// Resolved at the start of the walk; meaningless before.
-    pub(crate) cursor: CursorPaint,
+    cursor: CursorPaint,
     selection: Option<SelectionRange>,
     viewport: u32,
     viewport_max: u32,
@@ -311,11 +221,11 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
     /// Appends into caller-owned scratch (kept across frames so the
     /// steady state allocates nothing); callers clear first for a fresh
     /// frame. An atlas miss skips only the fg quad; the bg still lands.
-    pub fn extend_instances(self, out: &mut InstanceBuffers) {
+    pub fn extend_screen(self, out: &mut RowPaint) {
         let painter = self.resolved();
         let cells = usize::from(painter.screen.rows()) * usize::from(painter.screen.cols());
-        out.bg.reserve(cells);
-        out.fg.reserve(cells);
+        out.rects.reserve(cells);
+        out.glyphs.reserve(cells);
         for r in 0..painter.screen.rows() {
             painter.extend_row(out, r);
         }
@@ -324,16 +234,22 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
 
     /// Fixes the cursor paint, which every row reads.
     #[must_use]
-    pub(crate) fn resolved(mut self) -> Self {
+    pub fn resolved(mut self) -> Self {
         self.cursor = self.resolve_cursor();
         self
     }
 
+    /// Resolved by [`Self::resolved`]; meaningless before.
+    #[must_use]
+    pub const fn cursor(&self) -> CursorPaint {
+        self.cursor
+    }
+
     /// Everything a row emits depends on that row's cells and the
     /// painter's frame-wide inputs alone, which is what lets
-    /// [`crate::row_cache::RowCache`] repaint a row in isolation.
-    pub(crate) fn extend_row(&self, out: &mut InstanceBuffers, r: u16) {
-        // Cell instances must not land under the bottom chrome: a glyph
+    /// a renderer's row cache repaint a row in isolation.
+    pub fn extend_row(&self, out: &mut RowPaint, r: u16) {
+        // Cell draws must not land under the bottom chrome: a glyph
         // rides the fg pass and would draw on top of the bar. Capping the
         // walk is the only fix; there is no fg occlusion across passes.
         if r >= self.screen.rows().saturating_sub(self.reserved_bottom_rows) {
@@ -370,7 +286,7 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
             };
             let fg_color = self.push_cell_chrome(out, &at);
             // CONCEAL (SGR 8). SECURITY: this must gate every fg push.
-            // The bg / cursor / selection / decoration instances above
+            // The bg / cursor / selection / decoration draws above
             // stay (a concealed cell reads as a space).
             if at.attrs.flags.contains(AttrFlags::CONCEAL) || glyph_under_preedit {
                 continue;
@@ -471,10 +387,10 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
             || selection_contains(self.selection, at.row, last)
     }
 
-    fn push_cell_chrome(&self, out: &mut InstanceBuffers, at: &CellRef<'_>) -> [f32; 4] {
+    fn push_cell_chrome(&self, out: &mut RowPaint, at: &CellRef<'_>) -> [f32; 4] {
         let colors = self.resolve_cell_colors(at);
         let origin = self.origin(at);
-        out.bg.push(BgInstance {
+        out.rects.push(Rect {
             origin_px: origin,
             size_px: [self.cw, self.ch],
             color: colors.bg,
@@ -482,14 +398,14 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
         // Before the cursor marker so a cursor underline on a link cell
         // wins; skipped on bidi cells so the warning stays unobstructed.
         if at.cell.link.is_some() && !colors.is_bidi {
-            out.bg.push(BgInstance {
+            out.rects.push(Rect {
                 origin_px: [origin[0], origin[1] + self.ch - LINK_UNDERLINE_PX],
                 size_px: [self.cw, LINK_UNDERLINE_PX],
                 color: LINK_UNDERLINE,
             });
         }
         if let Some(marker) = colors.cursor_marker {
-            out.bg.push(marker);
+            out.rects.push(marker);
         }
         // The decoration pass draws after the glyph pass, so precedence
         // against the bg-pass overlays is enforced by suppression, not
@@ -498,7 +414,7 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
         // marker.
         if !colors.is_bidi {
             let suppress_underline = at.cell.link.is_some() || self.cursor.covers(at.row, at.col);
-            self.push_cell_decorations(&mut out.deco, at, &colors, suppress_underline);
+            self.push_cell_decorations(&mut out.decos, at, &colors, suppress_underline);
         }
         colors.fg
     }
@@ -508,7 +424,7 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
         at: &CellRef<'_>,
         fg_color: &mut [f32; 4],
         bg_color: &mut [f32; 4],
-    ) -> Option<BgInstance> {
+    ) -> Option<Rect> {
         let origin = self.origin(at);
         let original_bg = *bg_color;
         let cursor_color = self.theme.cursor.unwrap_or(*fg_color);
@@ -524,13 +440,13 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
                 }
                 None
             }
-            CursorStyle::Underline => Some(BgInstance {
+            CursorStyle::Underline => Some(Rect {
                 origin_px: [origin[0], origin[1] + self.ch - CURSOR_MARKER_PX],
                 size_px: [self.cw, CURSOR_MARKER_PX],
                 color: cursor_color,
             }),
             CursorStyle::Bar if self.cursor.cell.is_some_and(|(_, first)| first != at.col) => None,
-            CursorStyle::Bar => Some(BgInstance {
+            CursorStyle::Bar => Some(Rect {
                 origin_px: origin,
                 size_px: [CURSOR_MARKER_PX, self.ch],
                 color: cursor_color,
@@ -538,12 +454,12 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
         }
     }
 
-    /// One instance per shaped glyph at the cell origin plus pen advance
+    /// One draw per shaped glyph at the cell origin plus pen advance
     /// and GPOS offset; a single-glyph cluster places identically to the
     /// equivalent `Char` cell.
     fn push_cluster_cell(
         &self,
-        out: &mut InstanceBuffers,
+        out: &mut RowPaint,
         at: &CellRef<'_>,
         fg_color: [f32; 4],
         (start, len): (u32, u16),
@@ -580,7 +496,7 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
                 ],
                 ..pen
             },
-            &mut out.fg,
+            &mut out.glyphs,
         );
     }
 
@@ -632,7 +548,7 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
 
     fn push_char_cell(
         &self,
-        out: &mut InstanceBuffers,
+        out: &mut RowPaint,
         at: &CellRef<'_>,
         fg_color: [f32; 4],
         shaped: ShapedCell,
@@ -720,15 +636,7 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
         };
         let origin = self.origin(at);
         let draw_origin = [origin[0] + h_offset, origin[1] + v_offset];
-        let quad = FgInstance {
-            origin_px: draw_origin,
-            size_px: [slot.size_px[0] as f32, slot.size_px[1] as f32],
-            uv_min: slot.uv_min,
-            uv_max: slot.uv_max,
-            is_color: if slot.is_color { 1.0 } else { 0.0 },
-            _pad: [0.0; 3],
-            color: fg_color,
-        };
+        let quad = glyph_draw(slot, draw_origin, fg_color);
         // Shape runs do not split at color changes (`next_shape_run`),
         // so a glyph inking across cells is sliced per cell with each
         // strip's own color (kitty's per-cell sprite behavior). Color
@@ -736,13 +644,13 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
         if shape_primary.is_some() && !slot.is_color {
             self.push_sliced_by_cell(out, quad, at);
         } else {
-            out.fg.push(quad);
+            out.glyphs.push(quad);
         }
     }
 
     /// Absent at the live bottom. Gated on `viewport_max > rows` as
     /// defense-in-depth: the daemon should already have clamped.
-    pub(crate) fn push_scrollbar_lane(&self, out: &mut InstanceBuffers) {
+    pub fn push_scrollbar_lane(&self, out: &mut RowPaint) {
         let rows_u32 = u32::from(self.screen.rows());
         if self.viewport > 0 && self.viewport_max > rows_u32 {
             let max_scroll = (self.viewport_max - rows_u32) as f32;
@@ -750,7 +658,7 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
             let total_h = f32::from(self.screen.rows()) * self.ch;
             let lane_x = total_w - SCROLLBAR_LANE_PX;
             // Track first so the thumb wins at overlap.
-            out.bg.push(BgInstance {
+            out.rects.push(Rect {
                 origin_px: [lane_x, 0.0],
                 size_px: [SCROLLBAR_LANE_PX, total_h],
                 color: SCROLLBAR_TRACK,
@@ -761,7 +669,7 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
             let thumb_h = thumb_h_raw.max(SCROLLBAR_LANE_PX).min(total_h);
             let thumb_top_band = total_h - thumb_h;
             let thumb_top = thumb_top_band * (max_scroll - self.viewport as f32) / max_scroll;
-            out.bg.push(BgInstance {
+            out.rects.push(Rect {
                 origin_px: [lane_x, thumb_top],
                 size_px: [SCROLLBAR_LANE_PX, thumb_h],
                 color: SCROLLBAR_THUMB,
@@ -775,7 +683,7 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
     /// slot).
     fn push_cell_decorations(
         &self,
-        out: &mut Vec<DecorationInstance>,
+        out: &mut Vec<Decoration>,
         at: &CellRef<'_>,
         colors: &CellColors,
         suppress_underline: bool,
@@ -786,15 +694,14 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
         let ox = origin[0];
         let oy = origin[1];
         let cw = self.cw;
-        let solid = |out: &mut Vec<DecorationInstance>, top: f32, color: [f32; 4]| {
-            out.push(DecorationInstance {
+        let solid = |out: &mut Vec<Decoration>, top: f32, color: [f32; 4]| {
+            out.push(Decoration {
                 origin_px: [ox, top.clamp(oy, oy + self.ch - thickness)],
                 size_px: [cw, thickness],
                 color,
-                kind: DECO_SOLID,
+                kind: DecoKind::Solid,
                 thickness_px: thickness,
                 period_px: 0.0,
-                _pad: 0.0,
             });
         };
 
@@ -818,23 +725,21 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
                     solid(out, underline_top, color);
                     solid(out, thickness.mul_add(-2.0, underline_top), color);
                 }
-                UnderlineStyle::Dotted => out.push(DecorationInstance {
+                UnderlineStyle::Dotted => out.push(Decoration {
                     origin_px: [ox, underline_top],
                     size_px: [cw, thickness],
                     color,
-                    kind: DECO_DOTTED,
+                    kind: DecoKind::Dotted,
                     thickness_px: thickness,
                     period_px: (thickness * 3.0).max(3.0),
-                    _pad: 0.0,
                 }),
-                UnderlineStyle::Dashed => out.push(DecorationInstance {
+                UnderlineStyle::Dashed => out.push(Decoration {
                     origin_px: [ox, underline_top],
                     size_px: [cw, thickness],
                     color,
-                    kind: DECO_DASHED,
+                    kind: DecoKind::Dashed,
                     thickness_px: thickness,
                     period_px: (cw * 0.75).max(6.0),
-                    _pad: 0.0,
                 }),
                 UnderlineStyle::Curly => {
                     // Taller band so the sine can swing ± its amplitude.
@@ -844,14 +749,13 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
                     let band_top = band_h
                         .mul_add(-0.5, center)
                         .clamp(oy, oy + self.ch - band_h);
-                    out.push(DecorationInstance {
+                    out.push(Decoration {
                         origin_px: [ox, band_top],
                         size_px: [cw, band_h],
                         color,
-                        kind: DECO_CURLY,
+                        kind: DecoKind::Curly,
                         thickness_px: thickness,
                         period_px: cw.max(thickness * 4.0),
-                        _pad: 0.0,
                     });
                 }
             }
@@ -867,14 +771,14 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
     }
 
     /// Shape runs do not end at color boundaries (`next_shape_run`), and
-    /// one instance carries one tint, so a glyph covering
+    /// one draw carries one tint, so a glyph covering
     /// differently-colored cells is split into per-cell strips (kitty's
     /// per-cell sprites). A uniform-color run emits the original quad.
-    fn push_sliced_by_cell(&self, out: &mut InstanceBuffers, quad: FgInstance, at: &CellRef<'_>) {
+    fn push_sliced_by_cell(&self, out: &mut RowPaint, quad: GlyphDraw, at: &CellRef<'_>) {
         let x0 = quad.origin_px[0];
         let x1 = x0 + quad.size_px[0];
         if quad.size_px[0] <= 0.0 {
-            out.fg.push(quad);
+            out.glyphs.push(quad);
             return;
         }
         // Overflow past either edge stays attached to the boundary
@@ -886,7 +790,7 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
         let col_last = col_last_raw.min(self.screen.cols().saturating_sub(1));
         let col_first = col_first_raw.min(col_last);
         if col_first == col_last {
-            out.fg.push(quad);
+            out.glyphs.push(quad);
             return;
         }
         let fg_at = |col: u16| -> [f32; 4] {
@@ -910,10 +814,9 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
         #[allow(clippy::float_cmp)]
         let uniform = (col_first..=col_last).all(|col| fg_at(col) == quad.color);
         if uniform {
-            out.fg.push(quad);
+            out.glyphs.push(quad);
             return;
         }
-        let u_span = quad.uv_max[0] - quad.uv_min[0];
         let w = x1 - x0;
         for col in col_first..=col_last {
             let sx0 = if col == col_first {
@@ -931,14 +834,14 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
             }
             let t0 = (sx0 - x0) / w;
             let t1 = (sx1 - x0) / w;
-            out.fg.push(FgInstance {
+            let mut strip = GlyphDraw {
                 origin_px: [sx0, quad.origin_px[1]],
                 size_px: [sx1 - sx0, quad.size_px[1]],
-                uv_min: [u_span.mul_add(t0, quad.uv_min[0]), quad.uv_min[1]],
-                uv_max: [u_span.mul_add(t1, quad.uv_min[0]), quad.uv_max[1]],
                 color: fg_at(col),
                 ..quad
-            });
+            };
+            strip.crop_src_x(t0, t1);
+            out.glyphs.push(strip);
         }
     }
 }
@@ -984,7 +887,7 @@ fn cell_contains_bidi_override(grapheme: Grapheme, screen: &ScreenBuffer) -> boo
 
 /// The fg pass runs after the bg pass, so a cell's glyph can only be
 /// hidden by not emitting it. The walk mirrors
-/// `extend_preedit_instances` so the skipped span matches the painted
+/// `extend_preedit` so the skipped span matches the painted
 /// span (`preedit_span_matches_painted_extent` pins the two).
 pub fn preedit_covered_cols(overlay: &PreeditOverlay, grid_cols: u16) -> Option<PreeditSpan> {
     let (row, start) = overlay.anchor;
@@ -1002,13 +905,13 @@ pub fn preedit_covered_cols(overlay: &PreeditOverlay, grid_cols: u16) -> Option<
 /// panels stay on one line in every platform IME. Cells whose glyph
 /// misses the atlas still get bg + underline; the renderer primes the
 /// overlay text for the next frame.
-pub fn extend_preedit_instances<A: AtlasView>(
+pub fn extend_preedit<A: AtlasView>(
     overlay: &PreeditOverlay,
     metrics: CellMetrics,
     grid_rows: u16,
     grid_cols: u16,
     atlas: &A,
-    out: &mut InstanceBuffers,
+    out: &mut RowPaint,
 ) {
     let (row, start) = overlay.anchor;
     if row >= grid_rows {
@@ -1019,7 +922,7 @@ pub fn extend_preedit_instances<A: AtlasView>(
     // Mozc / fcitx / iBus surface an active segment on multi-segment
     // compositions.
     let active_range = overlay.cursor.filter(|(s, e)| e > s);
-    let first_glyph = out.fg.len();
+    let first_glyph = out.glyphs.len();
     for cell in overlay_cells(&overlay.text, start, grid_cols) {
         let origin = [f32::from(cell.col) * cw, f32::from(row) * ch];
         let span_px = [cw * f32::from(cell.width), ch];
@@ -1029,12 +932,12 @@ pub fn extend_preedit_instances<A: AtlasView>(
             } else {
                 PREEDIT_UNDERLINE_PX
             };
-        out.bg.push(BgInstance {
+        out.rects.push(Rect {
             origin_px: origin,
             size_px: span_px,
             color: PREEDIT_BG,
         });
-        out.bg.push(BgInstance {
+        out.rects.push(Rect {
             origin_px: [origin[0], origin[1] + ch - underline_px],
             size_px: [span_px[0], underline_px],
             color: theme_default_fg(),
@@ -1044,10 +947,10 @@ pub fn extend_preedit_instances<A: AtlasView>(
             metrics,
             &overlay.text[cell.bytes],
             origin,
-            &mut out.fg,
+            &mut out.glyphs,
         );
     }
-    clip_fg_right_of(&mut out.fg, first_glyph, f32::from(grid_cols) * cw);
+    clip_fg_right_of(&mut out.glyphs, first_glyph, f32::from(grid_cols) * cw);
 }
 
 /// One cell of overlay text placed on the grid.
@@ -1098,7 +1001,7 @@ fn push_overlay_glyphs<A: AtlasView>(
     metrics: CellMetrics,
     cluster: &str,
     origin: [f32; 2],
-    out: &mut Vec<FgInstance>,
+    out: &mut Vec<GlyphDraw>,
 ) {
     let ascent = f32::from(u16::try_from(metrics.ascent).unwrap_or(u16::MAX));
     let mut chars = cluster.chars();
@@ -1124,18 +1027,14 @@ fn push_overlay_glyphs<A: AtlasView>(
         return;
     }
     if let Some(slot) = atlas.slot(base, metrics.height, SizingKey::default()) {
-        out.push(FgInstance {
-            origin_px: [
+        out.push(glyph_draw(
+            slot,
+            [
                 origin[0] + slot.offset_px[0] as f32,
                 origin[1] + ascent - slot.offset_px[1] as f32,
             ],
-            size_px: [slot.size_px[0] as f32, slot.size_px[1] as f32],
-            uv_min: slot.uv_min,
-            uv_max: slot.uv_max,
-            is_color: if slot.is_color { 1.0 } else { 0.0 },
-            _pad: [0.0; 3],
-            color: theme_default_fg(),
-        });
+            theme_default_fg(),
+        ));
     }
 }
 
@@ -1203,22 +1102,32 @@ fn cluster_ink_box<A: AtlasView>(
         .reduce(|[a, b, c, d], [x0, y0, x1, y1]| [a.min(x0), b.min(y0), c.max(x1), d.max(y1)])
 }
 
+const fn glyph_draw(slot: GlyphSlot, origin_px: [f32; 2], color: [f32; 4]) -> GlyphDraw {
+    let [x, y] = slot.atlas_px;
+    let [w, h] = slot.size_px;
+    GlyphDraw {
+        origin_px,
+        size_px: [w as f32, h as f32],
+        atlas: if slot.is_color {
+            AtlasKind::Color
+        } else {
+            AtlasKind::Mono
+        },
+        src_min_px: [x as f32, y as f32],
+        src_max_px: [(x + w) as f32, (y + h) as f32],
+        color,
+    }
+}
+
 fn push_cluster_glyphs<A: AtlasView>(
     atlas: &A,
     cell_height: u32,
     pen: ClusterPen<'_>,
-    out: &mut Vec<FgInstance>,
+    out: &mut Vec<GlyphDraw>,
 ) {
     out.extend(
-        cluster_glyph_quads(atlas, cell_height, pen).map(|(slot, origin_px)| FgInstance {
-            origin_px,
-            size_px: [slot.size_px[0] as f32, slot.size_px[1] as f32],
-            uv_min: slot.uv_min,
-            uv_max: slot.uv_max,
-            is_color: if slot.is_color { 1.0 } else { 0.0 },
-            _pad: [0.0; 3],
-            color: pen.color,
-        }),
+        cluster_glyph_quads(atlas, cell_height, pen)
+            .map(|(slot, origin_px)| glyph_draw(slot, origin_px, pen.color)),
     );
 }
 
@@ -1229,17 +1138,17 @@ const fn theme_default_fg() -> [f32; 4] {
 }
 
 /// Appended after the cell pass so highlights and bar paint on top.
-/// Atlas misses in the label are skipped; `Renderer::render` primes the
-/// label before building instances. Highlights on the bar row are still
+/// Atlas misses in the label are skipped; the renderer primes the
+/// label before painting. Highlights on the bar row are still
 /// emitted but covered by the bar.
-pub fn extend_search_instances<A: AtlasView>(
+pub fn extend_search<A: AtlasView>(
     overlay: &SearchOverlay,
     metrics: CellMetrics,
     grid_rows: u16,
     grid_cols: u16,
     draw_bar: bool,
     atlas: &A,
-    out: &mut InstanceBuffers,
+    out: &mut RowPaint,
 ) {
     if grid_rows == 0 || grid_cols == 0 {
         return;
@@ -1261,7 +1170,7 @@ pub fn extend_search_instances<A: AtlasView>(
         } else {
             SEARCH_MATCH_BG
         };
-        out.bg.push(BgInstance {
+        out.rects.push(Rect {
             origin_px: [f32::from(col_start) * cw, f32::from(hit.row) * ch],
             size_px: [f32::from(col_end - col_start) * cw, ch],
             color,
@@ -1284,14 +1193,14 @@ pub fn extend_search_instances<A: AtlasView>(
     );
 }
 
-/// Same emission contract as [`extend_search_instances`]'s bar step.
-pub fn extend_confirm_instances<A: AtlasView>(
+/// Same emission contract as [`extend_search`]'s bar step.
+pub fn extend_confirm<A: AtlasView>(
     overlay: &ConfirmOverlay,
     metrics: CellMetrics,
     grid_rows: u16,
     grid_cols: u16,
     atlas: &A,
-    out: &mut InstanceBuffers,
+    out: &mut RowPaint,
 ) {
     if grid_rows == 0 || grid_cols == 0 || overlay.label.is_empty() {
         return;
@@ -1307,17 +1216,17 @@ pub fn extend_confirm_instances<A: AtlasView>(
     );
 }
 
-/// Same emission contract as [`extend_search_instances`]'s bar step.
+/// Same emission contract as [`extend_search`]'s bar step.
 /// Reuses [`SEARCH_BAR_BG`] rather than [`CONFIRM_BAR_BG`]: the preview
 /// is informational, not a destructive prompt, so it must not read like
 /// one.
-pub fn extend_link_preview_instances<A: AtlasView>(
+pub fn extend_link_preview<A: AtlasView>(
     overlay: &LinkPreviewOverlay,
     metrics: CellMetrics,
     grid_rows: u16,
     grid_cols: u16,
     atlas: &A,
-    out: &mut InstanceBuffers,
+    out: &mut RowPaint,
 ) {
     if grid_rows == 0 || grid_cols == 0 || overlay.text.is_empty() {
         return;
@@ -1337,25 +1246,25 @@ pub fn extend_link_preview_instances<A: AtlasView>(
 ///
 /// Glyphs anchored above reserved rows can reach into them via tall bitmaps or OSC 66
 /// runs (`docs/reference/protocols/kitty-text-sizing.md`), sharing the foreground pass with chrome.
-pub fn clip_cell_instances_above(out: &mut InstanceBuffers, max_y: f32) {
-    out.bg.retain_mut(|quad| {
+pub fn clip_cells_above(out: &mut RowPaint, max_y: f32) {
+    out.rects.retain_mut(|quad| {
         clip_extent_at(quad.origin_px[1], &mut quad.size_px[1], max_y).is_some()
     });
-    out.fg.retain_mut(|quad| {
+    out.glyphs.retain_mut(|quad| {
         let Some(kept) = clip_extent_at(quad.origin_px[1], &mut quad.size_px[1], max_y) else {
             return false;
         };
-        quad.uv_max[1] = (quad.uv_max[1] - quad.uv_min[1]).mul_add(kept, quad.uv_min[1]);
+        quad.crop_src_y(0.0, kept);
         true
     });
-    out.deco.retain_mut(|quad| {
+    out.decos.retain_mut(|quad| {
         clip_extent_at(quad.origin_px[1], &mut quad.size_px[1], max_y).is_some()
     });
 }
 
 /// Cuts the glyph quads from `from` on at `max_x`, the window's right
 /// edge, so overlay text never draws past it.
-fn clip_fg_right_of(quads: &mut Vec<FgInstance>, from: usize, max_x: f32) {
+fn clip_fg_right_of(quads: &mut Vec<GlyphDraw>, from: usize, max_x: f32) {
     let mut i = from;
     while i < quads.len() {
         let quad = &mut quads[i];
@@ -1363,7 +1272,7 @@ fn clip_fg_right_of(quads: &mut Vec<FgInstance>, from: usize, max_x: f32) {
             quads.remove(i);
             continue;
         };
-        quad.uv_max[0] = (quad.uv_max[0] - quad.uv_min[0]).mul_add(kept, quad.uv_min[0]);
+        quad.crop_src_x(0.0, kept);
         i += 1;
     }
 }
@@ -1371,7 +1280,8 @@ fn clip_fg_right_of(quads: &mut Vec<FgInstance>, from: usize, max_x: f32) {
 /// Shrinks `extent`, along one axis, so the quad ends at `max`,
 /// reporting the fraction of it that survived, or `None` when nothing
 /// does.
-fn clip_extent_at(origin: f32, extent: &mut f32, max: f32) -> Option<f32> {
+#[must_use]
+pub fn clip_extent_at(origin: f32, extent: &mut f32, max: f32) -> Option<f32> {
     if *extent <= 0.0 {
         return None;
     }
@@ -1385,18 +1295,6 @@ fn clip_extent_at(origin: f32, extent: &mut f32, max: f32) -> Option<f32> {
     let kept = visible / *extent;
     *extent = visible;
     Some(kept)
-}
-
-/// Cuts an image quad off at `max_y`, the first pixel row the client's
-/// chrome owns, and drops one that starts at or below it. The atlas `v`
-/// axis is linear in the quad's `y`, so the visible fraction of the
-/// height is the visible fraction of the source; nothing is rescaled,
-/// the tail is simply not sampled.
-#[must_use]
-pub fn clip_img_quad_above(mut quad: ImgInstance, max_y: f32) -> Option<ImgInstance> {
-    let kept = clip_extent_at(quad.origin_px[1], &mut quad.size_px[1], max_y)?;
-    quad.uv_max[1] = (quad.uv_max[1] - quad.uv_min[1]).mul_add(kept, quad.uv_min[1]);
-    Some(quad)
 }
 
 /// Truncation indicator for chrome bars.
@@ -1507,13 +1405,13 @@ fn push_bottom_bar<A: AtlasView>(
     grid_rows: u16,
     grid_cols: u16,
     atlas: &A,
-    out: &mut InstanceBuffers,
+    out: &mut RowPaint,
 ) {
     let cw = metrics.width as f32;
     let ch = metrics.height as f32;
     let bar_row = grid_rows - 1;
     let bar_origin_y = f32::from(bar_row) * ch;
-    out.bg.push(BgInstance {
+    out.rects.push(Rect {
         origin_px: [0.0, bar_origin_y],
         size_px: [f32::from(grid_cols) * cw, ch],
         color: bar_bg,
@@ -1521,12 +1419,12 @@ fn push_bottom_bar<A: AtlasView>(
 
     // Whitespace advances the column without an fg emission, like the
     // cell pass's atlas-miss handling.
-    let first_glyph = out.fg.len();
+    let first_glyph = out.glyphs.len();
     for cell in overlay_cells(label, 0, grid_cols) {
         let origin = [f32::from(cell.col) * cw, bar_origin_y];
-        push_overlay_glyphs(atlas, metrics, &label[cell.bytes], origin, &mut out.fg);
+        push_overlay_glyphs(atlas, metrics, &label[cell.bytes], origin, &mut out.glyphs);
     }
-    clip_fg_right_of(&mut out.fg, first_glyph, f32::from(grid_cols) * cw);
+    clip_fg_right_of(&mut out.glyphs, first_glyph, f32::from(grid_cols) * cw);
 }
 
 /// The XOR makes `?5` compose with SGR 7 the way every modern terminal
@@ -1597,10 +1495,10 @@ mod tests {
     #[cfg(not(windows))]
     use std::num::NonZeroU32;
 
-    use felis_grid::{Color, Grid};
     #[cfg(not(windows))]
-    use felis_render_core::glyphs::{GlyphIndex, GridWalker};
-    use felis_render_core::{overlay::SearchHitSpan, palette::Theme};
+    use crate::glyphs::{GlyphIndex, GridWalker};
+    use crate::{overlay::SearchHitSpan, palette::Theme};
+    use felis_grid::{Color, Grid};
     #[cfg(not(windows))]
     use felis_shaping::{FontStack, FontStyle, Shaper};
     use felis_vt::Parser;
@@ -1657,6 +1555,10 @@ mod tests {
         fn overlay_cluster(&self, text: &str) -> Option<&[ClusterGlyph]> {
             self.clusters.get(text).map(Vec::as_slice)
         }
+
+        fn sheet_side(&self, _sheet: AtlasKind) -> u32 {
+            80
+        }
     }
 
     fn metrics() -> CellMetrics {
@@ -1669,8 +1571,7 @@ mod tests {
 
     fn slot() -> GlyphSlot {
         GlyphSlot {
-            uv_min: [0.0, 0.0],
-            uv_max: [0.1, 0.1],
+            atlas_px: [0, 0],
             size_px: [6, 10],
             offset_px: [1, 10],
             is_color: false,
@@ -1689,7 +1590,7 @@ mod tests {
         metrics: CellMetrics,
         theme: &Theme,
         atlas: &A,
-    ) -> InstanceBuffers {
+    ) -> RowPaint {
         build_instances_with_reverse(screen, metrics, theme, atlas, false)
     }
 
@@ -1699,8 +1600,8 @@ mod tests {
         theme: &Theme,
         atlas: &A,
         screen_reverse: bool,
-    ) -> InstanceBuffers {
-        let mut buffers = InstanceBuffers::default();
+    ) -> RowPaint {
+        let mut buffers = RowPaint::default();
         CellPainter::new(
             screen,
             metrics,
@@ -1711,8 +1612,30 @@ mod tests {
         .with_cursor_visible(true)
         .with_viewport(0, u32::from(screen.rows()))
         .with_reverse_video(screen_reverse)
-        .extend_instances(&mut buffers);
+        .extend_screen(&mut buffers);
         buffers
+    }
+
+    #[test]
+    fn cursor_rect_spans_both_columns_of_a_wide_character() {
+        let metrics = CellMetrics {
+            width: 10,
+            height: 20,
+            ascent: 16,
+        };
+        let span = (3, 4);
+        assert_eq!(
+            cursor_rect_px(metrics, [5.0, 0.0], 1, span, CursorStyle::Block),
+            [35.0, 20.0, 20.0, 20.0]
+        );
+        assert_eq!(
+            cursor_rect_px(metrics, [5.0, 0.0], 1, span, CursorStyle::Underline),
+            [35.0, 40.0 - CURSOR_MARKER_PX, 20.0, CURSOR_MARKER_PX]
+        );
+        assert_eq!(
+            cursor_rect_px(metrics, [5.0, 0.0], 1, span, CursorStyle::Bar),
+            [35.0, 20.0, CURSOR_MARKER_PX, 20.0]
+        );
     }
 
     #[test]
@@ -1722,8 +1645,8 @@ mod tests {
         let g = drive(1, 4, b"\x1b]66;v=1;A\x07");
         let atlas = MockAtlas::full(slot());
         let buffers = build_instances(g.screen(), metrics(), &Theme::default(), &atlas);
-        assert_eq!(buffers.fg.len(), 1);
-        assert_eq!(buffers.fg[0].origin_px, [1.0, 6.0]);
+        assert_eq!(buffers.glyphs.len(), 1);
+        assert_eq!(buffers.glyphs[0].origin_px, [1.0, 6.0]);
     }
 
     #[test]
@@ -1733,8 +1656,8 @@ mod tests {
         let g = drive(1, 4, b"\x1b]66;w=3:h=1;A\x07");
         let atlas = MockAtlas::full(slot());
         let buffers = build_instances(g.screen(), metrics(), &Theme::default(), &atlas);
-        assert_eq!(buffers.fg.len(), 1);
-        assert_eq!(buffers.fg[0].origin_px, [18.0, 2.0]);
+        assert_eq!(buffers.glyphs.len(), 1);
+        assert_eq!(buffers.glyphs[0].origin_px, [18.0, 2.0]);
     }
 
     #[test]
@@ -1744,8 +1667,8 @@ mod tests {
         let g = drive(1, 4, b"\x1b]66;w=3:h=2:v=2;A\x07");
         let atlas = MockAtlas::full(slot());
         let buffers = build_instances(g.screen(), metrics(), &Theme::default(), &atlas);
-        assert_eq!(buffers.fg.len(), 1);
-        assert_eq!(buffers.fg[0].origin_px, [9.0, 3.0]);
+        assert_eq!(buffers.glyphs.len(), 1);
+        assert_eq!(buffers.glyphs[0].origin_px, [9.0, 3.0]);
     }
 
     #[test]
@@ -1755,22 +1678,22 @@ mod tests {
         // sits at `ascent × 2 - offset_px[1] = 24 - 10 = 14`.
         let integer = drive(2, 4, b"\x1b]66;s=2;A\x07");
         let integer = build_instances(integer.screen(), metrics(), &Theme::default(), &atlas);
-        assert_eq!(integer.fg.len(), 1);
-        assert_eq!(integer.fg[0].origin_px, [1.0, 14.0]);
+        assert_eq!(integer.glyphs.len(), 1);
+        assert_eq!(integer.glyphs[0].origin_px, [1.0, 14.0]);
 
         // `s=2:n=1:d=2`: effective glyph scale `s × n/d = 1`, so the
         // baseline drops back to 2.
         let fractional = drive(2, 4, b"\x1b]66;s=2:n=1:d=2;A\x07");
         let fractional = build_instances(fractional.screen(), metrics(), &Theme::default(), &atlas);
-        assert_eq!(fractional.fg.len(), 1);
-        assert_eq!(fractional.fg[0].origin_px, [1.0, 2.0]);
+        assert_eq!(fractional.glyphs.len(), 1);
+        assert_eq!(fractional.glyphs[0].origin_px, [1.0, 2.0]);
 
         // The block still measures `s` cells: v=1 anchors at
         // `ch × s - bitmap_h = 32 - 10 = 22`.
         let bottom = drive(2, 4, b"\x1b]66;s=2:n=1:d=2:v=1;A\x07");
         let bottom = build_instances(bottom.screen(), metrics(), &Theme::default(), &atlas);
-        assert_eq!(bottom.fg.len(), 1);
-        assert_eq!(bottom.fg[0].origin_px, [1.0, 22.0]);
+        assert_eq!(bottom.glyphs.len(), 1);
+        assert_eq!(bottom.glyphs[0].origin_px, [1.0, 22.0]);
     }
 
     #[test]
@@ -1780,27 +1703,26 @@ mod tests {
         let g = drive(2, 4, b"\x1b]66;s=2;X\x07");
         let atlas = MockAtlas::full(slot());
         let buffers = build_instances(g.screen(), metrics(), &Theme::default(), &atlas);
-        assert_eq!(buffers.bg.len(), 8);
-        assert_eq!(buffers.fg.len(), 1);
-        let inst = &buffers.fg[0];
+        assert_eq!(buffers.rects.len(), 8);
+        assert_eq!(buffers.glyphs.len(), 1);
+        let inst = &buffers.glyphs[0];
         assert_eq!(inst.origin_px, [1.0, 14.0]);
         assert_eq!(inst.size_px, [6.0, 10.0]);
     }
 
     /// The slice arithmetic accumulates one f32 rounding step.
     #[track_caller]
-    fn assert_uv_close(got: f32, want: f32) {
+    fn assert_px_close(got: f32, want: f32) {
         assert!(
-            (got - want).abs() < 1e-6,
-            "uv mismatch: got {got}, want {want}"
+            (got - want).abs() < 1e-5,
+            "source px mismatch: got {got}, want {want}"
         );
     }
 
     /// 24 px of ink spanning three 8 px cells.
     fn ligature_slot(left: i32) -> GlyphSlot {
         GlyphSlot {
-            uv_min: [0.0, 0.0],
-            uv_max: [0.3, 0.1],
+            atlas_px: [0, 0],
             size_px: [24, 10],
             offset_px: [left, 10],
             is_color: false,
@@ -1809,12 +1731,8 @@ mod tests {
 
     /// Cursor hidden so the Block-cursor fg swap cannot leak into the
     /// color assertions.
-    fn build_shaped(
-        screen: &ScreenBuffer,
-        atlas: &MockAtlas,
-        frame: &ShapeFrame,
-    ) -> InstanceBuffers {
-        let mut buffers = InstanceBuffers::default();
+    fn build_shaped(screen: &ScreenBuffer, atlas: &MockAtlas, frame: &ShapeFrame) -> RowPaint {
+        let mut buffers = RowPaint::default();
         CellPainter::new(
             screen,
             metrics(),
@@ -1824,7 +1742,7 @@ mod tests {
         )
         .with_cursor_visible(false)
         .with_viewport(0, u32::from(screen.rows()))
-        .extend_instances(&mut buffers);
+        .extend_screen(&mut buffers);
         buffers
     }
 
@@ -1848,20 +1766,20 @@ mod tests {
             3,
         );
         let buffers = build_shaped(g.screen(), &atlas, &frame);
-        assert_eq!(buffers.fg.len(), 3, "one strip per covered cell");
-        for (i, inst) in buffers.fg.iter().enumerate() {
+        assert_eq!(buffers.glyphs.len(), 3, "one strip per covered cell");
+        for (i, inst) in buffers.glyphs.iter().enumerate() {
             let i_f = i as f32;
             assert_eq!(inst.origin_px, [8.0 * i_f, 2.0]);
             assert_eq!(inst.size_px, [8.0, 10.0]);
-            assert_uv_close(inst.uv_min[0], 0.1 * i_f);
-            assert_uv_close(inst.uv_max[0], 0.1 * (i_f + 1.0));
-            assert_eq!(inst.uv_min[1], 0.0);
-            assert_eq!(inst.uv_max[1], 0.1);
+            assert_px_close(inst.src_min_px[0], 8.0 * i_f);
+            assert_px_close(inst.src_max_px[0], 8.0 * (i_f + 1.0));
+            assert_eq!(inst.src_min_px[1], 0.0);
+            assert_eq!(inst.src_max_px[1], 10.0);
         }
         let red = resolve_fg(Color::Indexed(1), &ResolvedTheme::new(&Theme::default()));
-        assert_eq!(buffers.fg[0].color, buffers.fg[1].color);
-        assert_eq!(buffers.fg[2].color, red);
-        assert_ne!(buffers.fg[0].color, red);
+        assert_eq!(buffers.glyphs[0].color, buffers.glyphs[1].color);
+        assert_eq!(buffers.glyphs[2].color, red);
+        assert_ne!(buffers.glyphs[0].color, red);
     }
 
     /// Uniform colors take the unsliced fast path.
@@ -1882,12 +1800,12 @@ mod tests {
             3,
         );
         let buffers = build_shaped(g.screen(), &atlas, &frame);
-        assert_eq!(buffers.fg.len(), 1, "uniform colors must not slice");
-        let inst = &buffers.fg[0];
+        assert_eq!(buffers.glyphs.len(), 1, "uniform colors must not slice");
+        let inst = &buffers.glyphs[0];
         assert_eq!(inst.origin_px, [0.0, 2.0]);
         assert_eq!(inst.size_px, [24.0, 10.0]);
-        assert_eq!(inst.uv_min, [0.0, 0.0]);
-        assert_eq!(inst.uv_max, [0.3, 0.1]);
+        assert_eq!(inst.src_min_px, [0.0, 0.0]);
+        assert_eq!(inst.src_max_px, [24.0, 10.0]);
     }
 
     /// Monaspace-style pieces reach back across earlier cells via
@@ -1917,18 +1835,18 @@ mod tests {
             3,
         );
         let buffers = build_shaped(g.screen(), &atlas, &frame);
-        assert_eq!(buffers.fg.len(), 3, "one strip per reached-back cell");
+        assert_eq!(buffers.glyphs.len(), 3, "one strip per reached-back cell");
         let red = resolve_fg(Color::Indexed(1), &ResolvedTheme::new(&Theme::default()));
-        assert_eq!(buffers.fg[0].origin_px, [0.0, 2.0]);
+        assert_eq!(buffers.glyphs[0].origin_px, [0.0, 2.0]);
         assert_eq!(
-            buffers.fg[0].color, red,
+            buffers.glyphs[0].color, red,
             "reached-back cell keeps its own red"
         );
         assert_eq!(
-            buffers.fg[1].color, buffers.fg[2].color,
+            buffers.glyphs[1].color, buffers.glyphs[2].color,
             "default-fg cells match"
         );
-        assert_ne!(buffers.fg[1].color, red);
+        assert_ne!(buffers.glyphs[1].color, red);
     }
 
     /// A combining mark (advance 0, reaching-back GPOS x, positive GPOS
@@ -1970,15 +1888,15 @@ mod tests {
             ],
         );
         let buffers = build_shaped(g.screen(), &atlas, &frame);
-        assert_eq!(buffers.fg.len(), 2, "one instance per cluster glyph");
-        assert_eq!(buffers.fg[0].origin_px, [1.0, 2.0]);
-        assert_eq!(buffers.fg[1].origin_px, [1.0, -2.0]);
+        assert_eq!(buffers.glyphs.len(), 2, "one instance per cluster glyph");
+        assert_eq!(buffers.glyphs[0].origin_px, [1.0, 2.0]);
+        assert_eq!(buffers.glyphs[1].origin_px, [1.0, -2.0]);
         assert_eq!(
-            buffers.fg[0].origin_px[0], buffers.fg[1].origin_px[0],
+            buffers.glyphs[0].origin_px[0], buffers.glyphs[1].origin_px[0],
             "mark shares the base's x column",
         );
         assert!(
-            buffers.fg[1].origin_px[1] < buffers.fg[0].origin_px[1],
+            buffers.glyphs[1].origin_px[1] < buffers.glyphs[0].origin_px[1],
             "mark sits above its base (smaller screen y)",
         );
     }
@@ -2015,16 +1933,16 @@ mod tests {
         };
         let frame = ShapeFrame::from_cluster_cells(cells, 4, glyphs);
         let buffers = build_shaped(g.screen(), &atlas, &frame);
-        assert_eq!(buffers.fg.len(), 2, "one instance per cluster glyph");
-        assert_eq!(buffers.fg[0].origin_px, [1.0, 14.0]);
-        assert_eq!(buffers.fg[1].origin_px, [1.0, 6.0]);
-        let rise = buffers.fg[0].origin_px[1] - buffers.fg[1].origin_px[1];
+        assert_eq!(buffers.glyphs.len(), 2, "one instance per cluster glyph");
+        assert_eq!(buffers.glyphs[0].origin_px, [1.0, 14.0]);
+        assert_eq!(buffers.glyphs[1].origin_px, [1.0, 6.0]);
+        let rise = buffers.glyphs[0].origin_px[1] - buffers.glyphs[1].origin_px[1];
         assert!(
             (rise - 8.0).abs() < f32::EPSILON,
             "mark rises 2× the unscaled 4 px"
         );
         assert_eq!(
-            buffers.fg[0].origin_px[0], buffers.fg[1].origin_px[0],
+            buffers.glyphs[0].origin_px[0], buffers.glyphs[1].origin_px[0],
             "mark still shares the base's x column at scale",
         );
     }
@@ -2039,8 +1957,7 @@ mod tests {
         atlas.gid_map.insert(
             200,
             GlyphSlot {
-                uv_min: [0.0, 0.0],
-                uv_max: [0.1, 0.1],
+                atlas_px: [0, 0],
                 size_px: [10, 12],
                 offset_px: [0, 11],
                 is_color: false,
@@ -2070,13 +1987,17 @@ mod tests {
         };
         let frame = ShapeFrame::from_cluster_cells(cells, 4, glyphs);
         let buffers = build_shaped(g.screen(), &atlas, &frame);
-        assert_eq!(buffers.fg.len(), 2, "one instance per cluster glyph");
+        assert_eq!(buffers.glyphs.len(), 2, "one instance per cluster glyph");
         // Union ink box [0,1]..[10,13]: Right shifts 16 − 10 = 6, Bottom
         // 16 − 13 = 3 (base-referenced alignment would shift 9 and
         // overflow by 3 px).
-        assert_eq!(buffers.fg[0].origin_px, [7.0, 5.0], "base rides the shift");
         assert_eq!(
-            buffers.fg[1].origin_px,
+            buffers.glyphs[0].origin_px,
+            [7.0, 5.0],
+            "base rides the shift"
+        );
+        assert_eq!(
+            buffers.glyphs[1].origin_px,
             [6.0, 4.0],
             "the mark's ink ends flush with the block's right/bottom edges",
         );
@@ -2144,7 +2065,7 @@ mod tests {
         let frame = ShapeFrame::from_cluster_cells(cells, 4, vec![glyph]);
         let buffers = build_shaped(g.screen(), &atlas, &frame);
         // Ink 6 px wide from x = 1: (16 − 6) / 2 − 1 = 4, plus the bearing.
-        assert_eq!(buffers.fg[0].origin_px[0], 5.0);
+        assert_eq!(buffers.glyphs[0].origin_px[0], 5.0);
     }
 
     /// A fitted cluster reads the slots rasterized at its fitted size,
@@ -2178,10 +2099,10 @@ mod tests {
         };
         let frame = ShapeFrame::from_cluster_cells(cells, 4, vec![glyph]);
         let buffers = build_shaped(g.screen(), &atlas, &frame);
-        assert_eq!(buffers.fg.len(), 1);
-        assert_eq!(buffers.fg[0].size_px, [4.0, 6.0], "the fitted slot");
+        assert_eq!(buffers.glyphs.len(), 1);
+        assert_eq!(buffers.glyphs[0].size_px, [4.0, 6.0], "the fitted slot");
         // An 8×16 cell centres a 4×6 ink at (2, 5).
-        assert_eq!(buffers.fg[0].origin_px, [2.0, 5.0]);
+        assert_eq!(buffers.glyphs[0].origin_px, [2.0, 5.0]);
     }
 
     /// A single-glyph cluster places identically to the equivalent
@@ -2192,7 +2113,7 @@ mod tests {
         let atlas = MockAtlas::full(slot());
         let char_buffers =
             build_instances(char_grid.screen(), metrics(), &Theme::default(), &atlas);
-        let char_inst = char_buffers.fg[0];
+        let char_inst = char_buffers.glyphs[0];
         let g = drive(1, 4, b"x");
         let mut cluster_atlas = MockAtlas::full(slot());
         cluster_atlas.gid_map.insert(100, slot());
@@ -2218,14 +2139,14 @@ mod tests {
         );
         let buffers = build_shaped(g.screen(), &cluster_atlas, &frame);
         assert_eq!(
-            buffers.fg.len(),
+            buffers.glyphs.len(),
             1,
             "single-glyph cluster emits one instance"
         );
-        assert_eq!(buffers.fg[0].origin_px, char_inst.origin_px);
-        assert_eq!(buffers.fg[0].size_px, char_inst.size_px);
-        assert_eq!(buffers.fg[0].uv_min, char_inst.uv_min);
-        assert_eq!(buffers.fg[0].uv_max, char_inst.uv_max);
+        assert_eq!(buffers.glyphs[0].origin_px, char_inst.origin_px);
+        assert_eq!(buffers.glyphs[0].size_px, char_inst.size_px);
+        assert_eq!(buffers.glyphs[0].src_min_px, char_inst.src_min_px);
+        assert_eq!(buffers.glyphs[0].src_max_px, char_inst.src_max_px);
     }
 
     #[test]
@@ -2233,9 +2154,9 @@ mod tests {
         let g = drive(2, 3, b"");
         let atlas = MockAtlas::full(slot());
         let buffers = build_instances(g.screen(), metrics(), &Theme::default(), &atlas);
-        assert_eq!(buffers.bg.len(), 6);
-        assert_eq!(buffers.fg, Vec::<FgInstance>::new());
-        let last = buffers.bg.last().unwrap();
+        assert_eq!(buffers.rects.len(), 6);
+        assert_eq!(buffers.glyphs, Vec::<GlyphDraw>::new());
+        let last = buffers.rects.last().unwrap();
         assert_eq!(last.origin_px, [16.0, 16.0]);
         assert_eq!(last.size_px, [8.0, 16.0]);
     }
@@ -2245,13 +2166,13 @@ mod tests {
         let g = drive(1, 3, b"A");
         let atlas = MockAtlas::full(slot());
         let buffers = build_instances(g.screen(), metrics(), &Theme::default(), &atlas);
-        assert_eq!(buffers.bg.len(), 3);
-        assert_eq!(buffers.fg.len(), 1);
-        let inst = &buffers.fg[0];
+        assert_eq!(buffers.rects.len(), 3);
+        assert_eq!(buffers.glyphs.len(), 1);
+        let inst = &buffers.glyphs[0];
         assert_eq!(inst.origin_px, [1.0, 2.0]);
         assert_eq!(inst.size_px, [6.0, 10.0]);
-        assert_eq!(inst.uv_min, [0.0, 0.0]);
-        assert_eq!(inst.uv_max, [0.1, 0.1]);
+        assert_eq!(inst.src_min_px, [0.0, 0.0]);
+        assert_eq!(inst.src_max_px, [6.0, 10.0]);
     }
 
     #[test]
@@ -2261,10 +2182,10 @@ mod tests {
         let atlas = MockAtlas::full(slot());
         let buffers = build_instances(g.screen(), metrics(), &Theme::default(), &atlas);
         let theme = Theme::default();
-        assert_eq!(buffers.fg[0].color, theme.fg);
-        assert_eq!(buffers.bg[0].color, theme.bg);
-        assert_eq!(buffers.fg[1].color, theme.bg);
-        assert_eq!(buffers.bg[1].color, theme.fg);
+        assert_eq!(buffers.glyphs[0].color, theme.fg);
+        assert_eq!(buffers.rects[0].color, theme.bg);
+        assert_eq!(buffers.glyphs[1].color, theme.bg);
+        assert_eq!(buffers.rects[1].color, theme.fg);
     }
 
     /// DECSCNM and SGR 7 compose by XOR on the *resolved* pair.
@@ -2280,7 +2201,7 @@ mod tests {
 
         let plain = build_instances_with_reverse(g.screen(), metrics(), &theme, &atlas, false);
         let pairs: Vec<_> = (0..4)
-            .map(|i| (plain.fg[i].color, plain.bg[i].color))
+            .map(|i| (plain.glyphs[i].color, plain.rects[i].color))
             .collect();
         assert_eq!(
             pairs,
@@ -2290,7 +2211,7 @@ mod tests {
 
         let reversed = build_instances_with_reverse(g.screen(), metrics(), &theme, &atlas, true);
         let pairs: Vec<_> = (0..4)
-            .map(|i| (reversed.fg[i].color, reversed.bg[i].color))
+            .map(|i| (reversed.glyphs[i].color, reversed.rects[i].color))
             .collect();
         assert_eq!(
             pairs,
@@ -2311,8 +2232,8 @@ mod tests {
         };
         let g = drive(1, 2, b"AB");
         let buffers = build_instances(g.screen(), metrics(), &Theme::default(), &atlas);
-        assert_eq!(buffers.bg.len(), 2, "every cell still has a bg");
-        assert_eq!(buffers.fg.len(), 1, "B produced no glyph instance");
+        assert_eq!(buffers.rects.len(), 2, "every cell still has a bg");
+        assert_eq!(buffers.glyphs.len(), 1, "B produced no glyph instance");
     }
 
     #[test]
@@ -2321,7 +2242,7 @@ mod tests {
         let atlas = MockAtlas::full(slot());
         let buffers = build_instances(g.screen(), metrics(), &Theme::default(), &atlas);
         let expected = resolve_fg(Color::Indexed(1), &ResolvedTheme::new(&Theme::default()));
-        assert_eq!(buffers.fg[0].color, expected);
+        assert_eq!(buffers.glyphs[0].color, expected);
     }
 
     #[test]
@@ -2333,11 +2254,11 @@ mod tests {
         assert_eq!(g.cursor().row, 0);
         assert_eq!(g.cursor().col, 1);
         assert_eq!(
-            buffers.bg[1].color, theme.fg,
+            buffers.rects[1].color, theme.fg,
             "cursor cell bg must be the theme fg (reverse video)"
         );
-        assert_eq!(buffers.bg[0].color, theme.bg);
-        assert_eq!(buffers.fg[0].color, theme.fg);
+        assert_eq!(buffers.rects[0].color, theme.bg);
+        assert_eq!(buffers.glyphs[0].color, theme.fg);
     }
 
     #[test]
@@ -2348,7 +2269,7 @@ mod tests {
         let buffers = build_instances(g.screen(), metrics(), &Theme::default(), &atlas);
         let theme = Theme::default();
         assert!(!g.cursor().visible);
-        assert_eq!(buffers.bg[1].color, theme.bg);
+        assert_eq!(buffers.rects[1].color, theme.bg);
     }
 
     #[test]
@@ -2367,7 +2288,7 @@ mod tests {
                 if cell_contains_bidi_override(cell.grapheme, g.screen()) {
                     let idx = usize::from(r) * usize::from(g.cols()) + usize::from(c);
                     assert_eq!(
-                        buffers.bg[idx].color, BIDI_MARKER_BG,
+                        buffers.rects[idx].color, BIDI_MARKER_BG,
                         "bidi-override cell at ({r},{c}) must paint with marker bg"
                     );
                     marked = true;
@@ -2386,8 +2307,8 @@ mod tests {
         let atlas = MockAtlas::full(slot());
         let theme = Theme::default();
         let buffers = build_instances(g.screen(), metrics(), &theme, &atlas);
-        assert_eq!(buffers.bg[0].color, BIDI_MARKER_BG);
-        assert_eq!(buffers.bg[1].color, theme.bg);
+        assert_eq!(buffers.rects[0].color, BIDI_MARKER_BG);
+        assert_eq!(buffers.rects[1].color, theme.bg);
     }
 
     #[test]
@@ -2399,13 +2320,13 @@ mod tests {
         let atlas = MockAtlas::full(slot());
         let buffers = build_instances(g.screen(), metrics(), &Theme::default(), &atlas);
         let theme = Theme::default();
-        for inst in &buffers.bg {
+        for inst in &buffers.rects {
             assert_ne!(
                 inst.color, BIDI_MARKER_BG,
                 "non-bidi text must not paint the warning marker"
             );
         }
-        assert_eq!(buffers.bg[0].color, theme.bg);
+        assert_eq!(buffers.rects[0].color, theme.bg);
     }
 
     #[test]
@@ -2418,13 +2339,13 @@ mod tests {
         ));
         let atlas = MockAtlas::full(slot());
         let buffers = build_instances(g.screen(), metrics(), &Theme::default(), &atlas);
-        assert_eq!(buffers.bg[0].color, BIDI_MARKER_BG);
+        assert_eq!(buffers.rects[0].color, BIDI_MARKER_BG);
         assert!(
-            !buffers.fg.is_empty(),
+            !buffers.glyphs.is_empty(),
             "the `A` under the cursor draws a glyph"
         );
         assert!(
-            buffers.fg.iter().all(|f| f.color == BIDI_MARKER_FG),
+            buffers.glyphs.iter().all(|f| f.color == BIDI_MARKER_FG),
             "the glyph on the cursor cell keeps the marker fg"
         );
     }
@@ -2436,10 +2357,10 @@ mod tests {
         let buffers = build_instances(g.screen(), metrics(), &Theme::default(), &atlas);
         let theme = Theme::default();
         assert_eq!(g.cursor().col, 1);
-        assert_eq!(buffers.bg[0].color, theme.bg, "cell 0 normal");
-        assert_eq!(buffers.bg[1].color, theme.bg, "cursor cell bg unchanged");
+        assert_eq!(buffers.rects[0].color, theme.bg, "cell 0 normal");
+        assert_eq!(buffers.rects[1].color, theme.bg, "cursor cell bg unchanged");
         let marker = buffers
-            .bg
+            .rects
             .iter()
             .find(|b| b.size_px[1] == CURSOR_MARKER_PX)
             .expect("underline marker present");
@@ -2454,7 +2375,7 @@ mod tests {
         let atlas = MockAtlas::full(slot());
         let buffers = build_instances(g.screen(), metrics(), &Theme::default(), &atlas);
         let marker = buffers
-            .bg
+            .rects
             .iter()
             .find(|b| b.size_px[0] == CURSOR_MARKER_PX)
             .expect("bar marker present");
@@ -2468,7 +2389,7 @@ mod tests {
         let g = drive(1, 3, b"AB"); // default style stays Block
         let atlas = MockAtlas::full(slot());
         let buffers = build_instances(g.screen(), metrics(), &Theme::default(), &atlas);
-        assert_eq!(buffers.bg.len(), 3);
+        assert_eq!(buffers.rects.len(), 3);
     }
 
     #[test]
@@ -2481,7 +2402,7 @@ mod tests {
         let atlas = MockAtlas::full(slot());
         let buffers = build_instances(g.screen(), metrics(), &theme, &atlas);
         let marker = buffers
-            .bg
+            .rects
             .iter()
             .find(|b| b.size_px[1] == CURSOR_MARKER_PX)
             .expect("underline marker present");
@@ -2498,7 +2419,7 @@ mod tests {
         let atlas = MockAtlas::full(slot());
         let buffers = build_instances(g.screen(), metrics(), &theme, &atlas);
         let marker = buffers
-            .bg
+            .rects
             .iter()
             .find(|b| b.size_px[0] == CURSOR_MARKER_PX)
             .expect("bar marker present");
@@ -2514,7 +2435,10 @@ mod tests {
         p.advance(&mut g, "\x1b[4 qA\u{202E}\x1b[1;1H".as_bytes());
         let atlas = MockAtlas::full(slot());
         let buffers = build_instances(g.screen(), metrics(), &Theme::default(), &atlas);
-        let marker = buffers.bg.iter().find(|b| b.size_px[1] == CURSOR_MARKER_PX);
+        let marker = buffers
+            .rects
+            .iter()
+            .find(|b| b.size_px[1] == CURSOR_MARKER_PX);
         assert!(
             marker.is_none(),
             "bidi marker must suppress the underline marker"
@@ -2528,7 +2452,10 @@ mod tests {
         p.advance(&mut g, "\x1b[6 qA\u{202E}\x1b[1;1H".as_bytes());
         let atlas = MockAtlas::full(slot());
         let buffers = build_instances(g.screen(), metrics(), &Theme::default(), &atlas);
-        let marker = buffers.bg.iter().find(|b| b.size_px[0] == CURSOR_MARKER_PX);
+        let marker = buffers
+            .rects
+            .iter()
+            .find(|b| b.size_px[0] == CURSOR_MARKER_PX);
         assert!(
             marker.is_none(),
             "bidi marker must suppress the bar marker too"
@@ -2540,7 +2467,7 @@ mod tests {
         let g = drive(1, 3, b"AB");
         let atlas = MockAtlas::full(slot());
         let theme = Theme::default();
-        let mut buffers = InstanceBuffers::default();
+        let mut buffers = RowPaint::default();
         CellPainter::new(
             g.screen(),
             metrics(),
@@ -2550,9 +2477,9 @@ mod tests {
         )
         .with_cursor_visible(false)
         .with_viewport(0, u32::from(g.rows()))
-        .extend_instances(&mut buffers);
-        assert_eq!(buffers.bg.len(), 3);
-        for inst in &buffers.bg {
+        .extend_screen(&mut buffers);
+        assert_eq!(buffers.rects.len(), 3);
+        for inst in &buffers.rects {
             assert_eq!(inst.color, theme.bg, "no cell painted with cursor swap");
         }
     }
@@ -2564,7 +2491,7 @@ mod tests {
         let g = drive(2, 3, b"AB\r\nCD");
         let atlas = MockAtlas::full(slot());
         let theme = Theme::default();
-        let mut buffers = InstanceBuffers::default();
+        let mut buffers = RowPaint::default();
         CellPainter::new(
             g.screen(),
             metrics(),
@@ -2575,20 +2502,20 @@ mod tests {
         .with_cursor_visible(true)
         .with_viewport(0, u32::from(g.rows()))
         .with_reserved_bottom_rows(1)
-        .extend_instances(&mut buffers);
+        .extend_screen(&mut buffers);
         assert_eq!(
-            buffers.bg.len(),
+            buffers.rects.len(),
             3,
             "bottom row's bg cells must be suppressed"
         );
         let bar_y = f32::from(g.rows() - 1) * metrics().height as f32;
-        for inst in &buffers.bg {
+        for inst in &buffers.rects {
             assert!(
                 inst.origin_px[1] < bar_y,
                 "bg cell leaked onto the reserved bar row"
             );
         }
-        for inst in &buffers.fg {
+        for inst in &buffers.glyphs {
             assert!(
                 inst.origin_px[1] < bar_y,
                 "fg glyph leaked onto the reserved bar row"
@@ -2603,7 +2530,7 @@ mod tests {
         let g = drive(1, 5, b"ABCDE");
         let atlas = MockAtlas::full(slot());
         let theme = Theme::default();
-        let mut buffers = InstanceBuffers::default();
+        let mut buffers = RowPaint::default();
         let overlay = PreeditOverlay {
             anchor: (0, 1),
             text: "あ".to_string(),
@@ -2629,20 +2556,20 @@ mod tests {
         .with_cursor_visible(true)
         .with_viewport(0, u32::from(g.rows()))
         .with_preedit(span)
-        .extend_instances(&mut buffers);
+        .extend_screen(&mut buffers);
         let cw = metrics().width as f32;
         let leaked = |x: f32| {
             let col = (x / cw).round() as u16;
             (col == 1 || col == 2).then_some(col)
         };
-        for inst in &buffers.bg {
+        for inst in &buffers.rects {
             assert!(
                 leaked(inst.origin_px[0]).is_none(),
                 "cell bg leaked under the pre-edit overlay at col {:?}",
                 leaked(inst.origin_px[0]),
             );
         }
-        for inst in &buffers.fg {
+        for inst in &buffers.glyphs {
             assert!(
                 leaked(inst.origin_px[0]).is_none(),
                 "glyph leaked under the pre-edit overlay at col {:?}",
@@ -2662,11 +2589,11 @@ mod tests {
             cursor: None,
         };
         let cols = 6; // col 1 + 5 cells == exactly the right edge
-        let mut buffers = InstanceBuffers::default();
-        extend_preedit_instances(&overlay, metrics(), 1, cols, &atlas, &mut buffers);
+        let mut buffers = RowPaint::default();
+        extend_preedit(&overlay, metrics(), 1, cols, &atlas, &mut buffers);
         let cw = metrics().width as f32;
         let painted_end = buffers
-            .bg
+            .rects
             .iter()
             .map(|b| b.origin_px[0] + b.size_px[0])
             .fold(0.0_f32, f32::max);
@@ -2684,7 +2611,7 @@ mod tests {
     fn unfocused_window_suppresses_underline_marker_too() {
         let g = drive(1, 3, b"\x1b[4 qA");
         let atlas = MockAtlas::full(slot());
-        let mut buffers = InstanceBuffers::default();
+        let mut buffers = RowPaint::default();
         CellPainter::new(
             g.screen(),
             metrics(),
@@ -2694,8 +2621,11 @@ mod tests {
         )
         .with_cursor_visible(false)
         .with_viewport(0, u32::from(g.rows()))
-        .extend_instances(&mut buffers);
-        let marker = buffers.bg.iter().find(|b| b.size_px[1] == CURSOR_MARKER_PX);
+        .extend_screen(&mut buffers);
+        let marker = buffers
+            .rects
+            .iter()
+            .find(|b| b.size_px[1] == CURSOR_MARKER_PX);
         assert!(
             marker.is_none(),
             "underline marker must drop when unfocused"
@@ -2706,7 +2636,7 @@ mod tests {
     fn unfocused_window_suppresses_bar_marker_too() {
         let g = drive(1, 3, b"\x1b[6 qA");
         let atlas = MockAtlas::full(slot());
-        let mut buffers = InstanceBuffers::default();
+        let mut buffers = RowPaint::default();
         CellPainter::new(
             g.screen(),
             metrics(),
@@ -2716,8 +2646,11 @@ mod tests {
         )
         .with_cursor_visible(false)
         .with_viewport(0, u32::from(g.rows()))
-        .extend_instances(&mut buffers);
-        let marker = buffers.bg.iter().find(|b| b.size_px[0] == CURSOR_MARKER_PX);
+        .extend_screen(&mut buffers);
+        let marker = buffers
+            .rects
+            .iter()
+            .find(|b| b.size_px[0] == CURSOR_MARKER_PX);
         assert!(marker.is_none(), "bar marker must drop when unfocused");
     }
 
@@ -2726,7 +2659,7 @@ mod tests {
         let g = drive(1, 5, b"\x1b[?25l"); // hide cursor for isolation
         let atlas = MockAtlas::full(slot());
         let theme = Theme::default();
-        let mut buffers = InstanceBuffers::default();
+        let mut buffers = RowPaint::default();
         CellPainter::new(
             g.screen(),
             metrics(),
@@ -2741,13 +2674,13 @@ mod tests {
             rectangle: false,
         }))
         .with_viewport(0, u32::from(g.rows()))
-        .extend_instances(&mut buffers);
-        assert_eq!(buffers.bg.len(), 5);
-        assert_eq!(buffers.bg[0].color, theme.bg, "cell 0 outside selection");
-        for (i, buffer) in buffers.bg.iter().enumerate().skip(1).take(3) {
+        .extend_screen(&mut buffers);
+        assert_eq!(buffers.rects.len(), 5);
+        assert_eq!(buffers.rects[0].color, theme.bg, "cell 0 outside selection");
+        for (i, buffer) in buffers.rects.iter().enumerate().skip(1).take(3) {
             assert_eq!(buffer.color, SELECTION_BG, "cell {i} should be highlighted");
         }
-        assert_eq!(buffers.bg[4].color, theme.bg, "cell 4 outside selection");
+        assert_eq!(buffers.rects[4].color, theme.bg, "cell 4 outside selection");
     }
 
     #[test]
@@ -2755,7 +2688,7 @@ mod tests {
         let g = drive(3, 4, b"\x1b[?25l");
         let atlas = MockAtlas::full(slot());
         let theme = Theme::default();
-        let mut buffers = InstanceBuffers::default();
+        let mut buffers = RowPaint::default();
         CellPainter::new(
             g.screen(),
             metrics(),
@@ -2770,9 +2703,9 @@ mod tests {
             rectangle: false,
         }))
         .with_viewport(0, u32::from(g.rows()))
-        .extend_instances(&mut buffers);
+        .extend_screen(&mut buffers);
         let inside = |idx: usize| matches!(idx, 2..=9);
-        for (idx, inst) in buffers.bg.iter().enumerate() {
+        for (idx, inst) in buffers.rects.iter().enumerate() {
             if inside(idx) {
                 assert_eq!(inst.color, SELECTION_BG, "idx {idx} should be highlighted");
             } else {
@@ -2786,7 +2719,7 @@ mod tests {
         let g = drive(1, 5, b"\x1b[?25l");
         let atlas = MockAtlas::full(slot());
         let theme = Theme::default();
-        let mut buffers = InstanceBuffers::default();
+        let mut buffers = RowPaint::default();
         CellPainter::new(
             g.screen(),
             metrics(),
@@ -2796,9 +2729,9 @@ mod tests {
         )
         .with_cursor_visible(true)
         .with_viewport(0, u32::from(g.rows()))
-        .extend_instances(&mut buffers);
-        assert_eq!(buffers.bg.len(), 5);
-        for (i, inst) in buffers.bg.iter().enumerate() {
+        .extend_screen(&mut buffers);
+        assert_eq!(buffers.rects.len(), 5);
+        for (i, inst) in buffers.rects.iter().enumerate() {
             assert_eq!(inst.color, theme.bg, "cell {i}");
         }
     }
@@ -2812,7 +2745,7 @@ mod tests {
         p.advance(&mut g, "\x1b[?25lA\u{202E}B".as_bytes());
         let atlas = MockAtlas::full(slot());
         let theme = Theme::default();
-        let mut buffers = InstanceBuffers::default();
+        let mut buffers = RowPaint::default();
         CellPainter::new(
             g.screen(),
             metrics(),
@@ -2827,14 +2760,14 @@ mod tests {
             rectangle: false,
         }))
         .with_viewport(0, u32::from(g.rows()))
-        .extend_instances(&mut buffers);
+        .extend_screen(&mut buffers);
         for r in 0..g.rows() {
             for c in 0..g.cols() {
                 let Some(cell) = g.cell(r, c) else { continue };
                 if cell_contains_bidi_override(cell.grapheme, g.screen()) {
                     let idx = usize::from(r) * usize::from(g.cols()) + usize::from(c);
                     assert_eq!(
-                        buffers.bg[idx].color, BIDI_MARKER_BG,
+                        buffers.rects[idx].color, BIDI_MARKER_BG,
                         "bidi cell at ({r},{c}) must keep marker bg",
                     );
                 }
@@ -2852,7 +2785,7 @@ mod tests {
         let atlas = MockAtlas::full(slot());
         let buffers = build_instances(g.screen(), metrics(), &theme, &atlas);
         assert_eq!(g.cursor().col, 2);
-        assert_eq!(buffers.bg[2].color, [0.5, 0.7, 0.9, 1.0]);
+        assert_eq!(buffers.rects[2].color, [0.5, 0.7, 0.9, 1.0]);
     }
 
     #[test]
@@ -2863,116 +2796,119 @@ mod tests {
         let theme = Theme::default();
         assert_eq!(g.cursor().row, 0);
         assert_eq!(g.cursor().col, 0);
-        assert_eq!(buffers.bg[0].color, theme.fg);
+        assert_eq!(buffers.rects[0].color, theme.fg);
         assert_eq!(
-            buffers.fg[0].color, theme.bg,
+            buffers.glyphs[0].color, theme.bg,
             "cursor cell glyph must paint in reversed fg color"
         );
     }
 
     #[test]
     fn extend_preedit_empty_text_is_noop() {
-        let mut out = InstanceBuffers::default();
+        let mut out = RowPaint::default();
         let overlay = PreeditOverlay {
             anchor: (0, 0),
             text: String::new(),
             cursor: None,
         };
         let atlas = MockAtlas::full(slot());
-        extend_preedit_instances(&overlay, metrics(), 5, 80, &atlas, &mut out);
-        assert_eq!(out.bg, Vec::<BgInstance>::new());
-        assert_eq!(out.fg, Vec::<FgInstance>::new());
+        extend_preedit(&overlay, metrics(), 5, 80, &atlas, &mut out);
+        assert_eq!(out.rects, Vec::<Rect>::new());
+        assert_eq!(out.glyphs, Vec::<GlyphDraw>::new());
     }
 
     #[test]
     fn extend_preedit_emits_bg_underline_glyph_per_ascii_char() {
-        let mut out = InstanceBuffers::default();
+        let mut out = RowPaint::default();
         let overlay = PreeditOverlay {
             anchor: (1, 2),
             text: "ab".to_owned(),
             cursor: None,
         };
         let atlas = MockAtlas::full(slot());
-        extend_preedit_instances(&overlay, metrics(), 5, 80, &atlas, &mut out);
-        assert_eq!(out.bg.len(), 4);
-        assert_eq!(out.fg.len(), 2);
-        assert_eq!(out.bg[0].origin_px, [16.0, 16.0]);
-        assert_eq!(out.bg[0].size_px, [8.0, 16.0]);
-        assert_eq!(out.bg[0].color, PREEDIT_BG);
-        assert_eq!(out.bg[1].origin_px, [16.0, 30.0]);
-        assert_eq!(out.bg[1].size_px[1], PREEDIT_UNDERLINE_PX);
-        assert_eq!(out.bg[2].origin_px, [24.0, 16.0]);
+        extend_preedit(&overlay, metrics(), 5, 80, &atlas, &mut out);
+        assert_eq!(out.rects.len(), 4);
+        assert_eq!(out.glyphs.len(), 2);
+        assert_eq!(out.rects[0].origin_px, [16.0, 16.0]);
+        assert_eq!(out.rects[0].size_px, [8.0, 16.0]);
+        assert_eq!(out.rects[0].color, PREEDIT_BG);
+        assert_eq!(out.rects[1].origin_px, [16.0, 30.0]);
+        assert_eq!(out.rects[1].size_px[1], PREEDIT_UNDERLINE_PX);
+        assert_eq!(out.rects[2].origin_px, [24.0, 16.0]);
     }
 
     #[test]
     fn extend_preedit_advances_two_cells_for_wide_glyph() {
-        let mut out = InstanceBuffers::default();
+        let mut out = RowPaint::default();
         let overlay = PreeditOverlay {
             anchor: (0, 0),
             text: "あい".to_owned(),
             cursor: None,
         };
         let atlas = MockAtlas::full(slot());
-        extend_preedit_instances(&overlay, metrics(), 5, 80, &atlas, &mut out);
-        assert_eq!(out.bg[0].origin_px, [0.0, 0.0]);
-        assert_eq!(out.bg[0].size_px, [16.0, 16.0]);
-        assert_eq!(out.bg[2].origin_px, [16.0, 0.0]);
-        assert_eq!(out.bg[2].size_px, [16.0, 16.0]);
+        extend_preedit(&overlay, metrics(), 5, 80, &atlas, &mut out);
+        assert_eq!(out.rects[0].origin_px, [0.0, 0.0]);
+        assert_eq!(out.rects[0].size_px, [16.0, 16.0]);
+        assert_eq!(out.rects[2].origin_px, [16.0, 0.0]);
+        assert_eq!(out.rects[2].size_px, [16.0, 16.0]);
     }
 
     #[test]
     fn extend_preedit_anchor_out_of_range_is_noop() {
-        let mut out = InstanceBuffers::default();
+        let mut out = RowPaint::default();
         let overlay = PreeditOverlay {
             anchor: (10, 0),
             text: "x".to_owned(),
             cursor: None,
         };
         let atlas = MockAtlas::full(slot());
-        extend_preedit_instances(&overlay, metrics(), 5, 80, &atlas, &mut out);
-        assert_eq!(out.bg, Vec::<BgInstance>::new());
+        extend_preedit(&overlay, metrics(), 5, 80, &atlas, &mut out);
+        assert_eq!(out.rects, Vec::<Rect>::new());
     }
 
     #[test]
     fn extend_preedit_col_at_or_past_grid_cols_is_noop() {
         // A daemon-side cursor briefly reporting `col == cols` must not
         // push off-screen instances.
-        let mut out = InstanceBuffers::default();
+        let mut out = RowPaint::default();
         let overlay = PreeditOverlay {
             anchor: (0, 80),
             text: "abc".to_owned(),
             cursor: None,
         };
         let atlas = MockAtlas::full(slot());
-        extend_preedit_instances(&overlay, metrics(), 5, 80, &atlas, &mut out);
-        assert!(out.bg.is_empty(), "no bg pushed when col >= grid_cols");
-        assert!(out.fg.is_empty(), "no glyph pushed when col >= grid_cols");
+        extend_preedit(&overlay, metrics(), 5, 80, &atlas, &mut out);
+        assert!(out.rects.is_empty(), "no bg pushed when col >= grid_cols");
+        assert!(
+            out.glyphs.is_empty(),
+            "no glyph pushed when col >= grid_cols"
+        );
     }
 
     #[test]
     fn extend_preedit_active_segment_paints_thicker_underline() {
-        let mut out = InstanceBuffers::default();
+        let mut out = RowPaint::default();
         let overlay = PreeditOverlay {
             anchor: (0, 0),
             text: "abcde".to_owned(),
             cursor: Some((1, 3)),
         };
         let atlas = MockAtlas::full(slot());
-        extend_preedit_instances(&overlay, metrics(), 1, 80, &atlas, &mut out);
+        extend_preedit(&overlay, metrics(), 1, 80, &atlas, &mut out);
         assert!(
-            (out.bg[1].size_px[1] - PREEDIT_UNDERLINE_PX).abs() < f32::EPSILON,
+            (out.rects[1].size_px[1] - PREEDIT_UNDERLINE_PX).abs() < f32::EPSILON,
             "char 0 'a' outside active range: default underline",
         );
         assert!(
-            (out.bg[3].size_px[1] - PREEDIT_ACTIVE_UNDERLINE_PX).abs() < f32::EPSILON,
+            (out.rects[3].size_px[1] - PREEDIT_ACTIVE_UNDERLINE_PX).abs() < f32::EPSILON,
             "char 1 'b' inside active range: thicker underline",
         );
         assert!(
-            (out.bg[5].size_px[1] - PREEDIT_ACTIVE_UNDERLINE_PX).abs() < f32::EPSILON,
+            (out.rects[5].size_px[1] - PREEDIT_ACTIVE_UNDERLINE_PX).abs() < f32::EPSILON,
             "char 2 'c' inside active range: thicker underline",
         );
         assert!(
-            (out.bg[7].size_px[1] - PREEDIT_UNDERLINE_PX).abs() < f32::EPSILON,
+            (out.rects[7].size_px[1] - PREEDIT_UNDERLINE_PX).abs() < f32::EPSILON,
             "char 3 'd' outside active range: default underline",
         );
     }
@@ -2980,17 +2916,17 @@ mod tests {
     #[test]
     fn extend_preedit_empty_active_range_falls_back_to_default_underline() {
         // start == end is a position, not a range.
-        let mut out = InstanceBuffers::default();
+        let mut out = RowPaint::default();
         let overlay = PreeditOverlay {
             anchor: (0, 0),
             text: "ab".to_owned(),
             cursor: Some((1, 1)),
         };
         let atlas = MockAtlas::full(slot());
-        extend_preedit_instances(&overlay, metrics(), 1, 80, &atlas, &mut out);
+        extend_preedit(&overlay, metrics(), 1, 80, &atlas, &mut out);
         for i in [1, 3] {
             assert!(
-                (out.bg[i].size_px[1] - PREEDIT_UNDERLINE_PX).abs() < f32::EPSILON,
+                (out.rects[i].size_px[1] - PREEDIT_UNDERLINE_PX).abs() < f32::EPSILON,
                 "no thicker underline when cursor is a single point",
             );
         }
@@ -2999,64 +2935,64 @@ mod tests {
     #[test]
     fn extend_preedit_active_segment_handles_multibyte_chars() {
         // Each char is 3 bytes; (3, 6) covers exactly the second.
-        let mut out = InstanceBuffers::default();
+        let mut out = RowPaint::default();
         let overlay = PreeditOverlay {
             anchor: (0, 0),
             text: "あいう".to_owned(),
             cursor: Some((3, 6)),
         };
         let atlas = MockAtlas::full(slot());
-        extend_preedit_instances(&overlay, metrics(), 1, 80, &atlas, &mut out);
+        extend_preedit(&overlay, metrics(), 1, 80, &atlas, &mut out);
         assert!(
-            (out.bg[1].size_px[1] - PREEDIT_UNDERLINE_PX).abs() < f32::EPSILON,
+            (out.rects[1].size_px[1] - PREEDIT_UNDERLINE_PX).abs() < f32::EPSILON,
             "あ outside active range: default underline",
         );
         assert!(
-            (out.bg[3].size_px[1] - PREEDIT_ACTIVE_UNDERLINE_PX).abs() < f32::EPSILON,
+            (out.rects[3].size_px[1] - PREEDIT_ACTIVE_UNDERLINE_PX).abs() < f32::EPSILON,
             "い inside active range: thicker underline",
         );
         assert!(
-            (out.bg[5].size_px[1] - PREEDIT_UNDERLINE_PX).abs() < f32::EPSILON,
+            (out.rects[5].size_px[1] - PREEDIT_UNDERLINE_PX).abs() < f32::EPSILON,
             "う outside active range: default underline",
         );
     }
 
     #[test]
     fn extend_preedit_clips_at_right_edge_of_row() {
-        let mut out = InstanceBuffers::default();
+        let mut out = RowPaint::default();
         let overlay = PreeditOverlay {
             anchor: (0, 4),
             text: "abc".to_owned(),
             cursor: None,
         };
         let atlas = MockAtlas::full(slot());
-        extend_preedit_instances(&overlay, metrics(), 1, 5, &atlas, &mut out);
-        assert_eq!(out.bg.len(), 2);
-        assert_eq!(out.fg.len(), 1);
+        extend_preedit(&overlay, metrics(), 1, 5, &atlas, &mut out);
+        assert_eq!(out.rects.len(), 2);
+        assert_eq!(out.glyphs.len(), 1);
     }
 
     #[test]
     fn extend_preedit_clips_wide_glyph_at_right_edge_to_one_cell() {
         // A wide glyph at the last cell clips rather than wrapping (which
         // would lie about where the committed char lands) or vanishing.
-        let mut out = InstanceBuffers::default();
+        let mut out = RowPaint::default();
         let overlay = PreeditOverlay {
             anchor: (0, 4),
             text: "あ".to_owned(),
             cursor: None,
         };
         let atlas = MockAtlas::full(slot());
-        extend_preedit_instances(&overlay, metrics(), 1, 5, &atlas, &mut out);
+        extend_preedit(&overlay, metrics(), 1, 5, &atlas, &mut out);
         // MockAtlas only knows ASCII, so the fg pass is empty; the bg /
         // underline geometry carries the clip.
-        assert_eq!(out.bg.len(), 2, "bg quad + underline only");
-        assert_eq!(out.bg[0].size_px, [8.0, 16.0], "bg clipped to 1 cell");
-        assert_eq!(out.bg[1].size_px[0], 8.0, "underline clipped to 1 cell");
+        assert_eq!(out.rects.len(), 2, "bg quad + underline only");
+        assert_eq!(out.rects[0].size_px, [8.0, 16.0], "bg clipped to 1 cell");
+        assert_eq!(out.rects[1].size_px[0], 8.0, "underline clipped to 1 cell");
     }
 
     #[test]
     fn link_cells_emit_an_extra_underline_instance() {
-        use felis_render_core::palette::LINK_UNDERLINE;
+        use crate::palette::LINK_UNDERLINE;
         let g = drive(
             1,
             4,
@@ -3064,18 +3000,22 @@ mod tests {
         );
         let atlas = MockAtlas::full(slot());
         let buffers = build_instances(g.screen(), metrics(), &Theme::default(), &atlas);
-        assert_eq!(buffers.bg.len(), 6, "two link cells each add an underline");
-        assert_eq!(buffers.bg[1].color, LINK_UNDERLINE);
-        assert_eq!(buffers.bg[1].size_px[1], LINK_UNDERLINE_PX);
-        assert_eq!(buffers.bg[3].color, LINK_UNDERLINE);
-        assert_eq!(buffers.bg[4].color, Theme::default().bg);
-        assert_eq!(buffers.bg[5].color, Theme::default().bg);
+        assert_eq!(
+            buffers.rects.len(),
+            6,
+            "two link cells each add an underline"
+        );
+        assert_eq!(buffers.rects[1].color, LINK_UNDERLINE);
+        assert_eq!(buffers.rects[1].size_px[1], LINK_UNDERLINE_PX);
+        assert_eq!(buffers.rects[3].color, LINK_UNDERLINE);
+        assert_eq!(buffers.rects[4].color, Theme::default().bg);
+        assert_eq!(buffers.rects[5].color, Theme::default().bg);
     }
 
     /// REQ-910: a `javascript:` OSC 8 emits no `LINK_UNDERLINE`.
     #[test]
     fn disallowed_scheme_emits_no_link_underline_instance() {
-        use felis_render_core::palette::LINK_UNDERLINE;
+        use crate::palette::LINK_UNDERLINE;
         let g = drive(
             1,
             6,
@@ -3084,7 +3024,7 @@ mod tests {
         let atlas = MockAtlas::full(slot());
         let buffers = build_instances(g.screen(), metrics(), &Theme::default(), &atlas);
         assert!(
-            buffers.bg.iter().all(|b| b.color != LINK_UNDERLINE),
+            buffers.rects.iter().all(|b| b.color != LINK_UNDERLINE),
             "javascript: scheme leaked past dispatch_osc_8 and produced a link underline",
         );
     }
@@ -3093,7 +3033,7 @@ mod tests {
     /// rather than inheriting the safe URI.
     #[test]
     fn disallowed_scheme_after_safe_open_clears_underline_run() {
-        use felis_render_core::palette::LINK_UNDERLINE;
+        use crate::palette::LINK_UNDERLINE;
         let g = drive(
             1,
             8,
@@ -3102,7 +3042,7 @@ mod tests {
         let atlas = MockAtlas::full(slot());
         let buffers = build_instances(g.screen(), metrics(), &Theme::default(), &atlas);
         let underline_count = buffers
-            .bg
+            .rects
             .iter()
             .filter(|b| b.color == LINK_UNDERLINE)
             .count();
@@ -3116,7 +3056,7 @@ mod tests {
     fn link_underline_skipped_on_bidi_marker_cells() {
         // The bidi marker drops the link underline so the warning stays
         // unobstructed.
-        use felis_render_core::palette::{BIDI_MARKER_BG, LINK_UNDERLINE};
+        use crate::palette::{BIDI_MARKER_BG, LINK_UNDERLINE};
         let g = drive(
             1,
             3,
@@ -3124,9 +3064,9 @@ mod tests {
         );
         let atlas = MockAtlas::full(slot());
         let buffers = build_instances(g.screen(), metrics(), &Theme::default(), &atlas);
-        assert_eq!(buffers.bg[0].color, BIDI_MARKER_BG);
+        assert_eq!(buffers.rects[0].color, BIDI_MARKER_BG);
         assert!(
-            buffers.bg.iter().all(|b| b.color != LINK_UNDERLINE),
+            buffers.rects.iter().all(|b| b.color != LINK_UNDERLINE),
             "link underline must not paint over bidi marker",
         );
     }
@@ -3136,7 +3076,7 @@ mod tests {
         let g = drive(3, 4, b"\x1b[?25l");
         let atlas = MockAtlas::full(slot());
         let theme = Theme::default();
-        let mut buffers = InstanceBuffers::default();
+        let mut buffers = RowPaint::default();
         CellPainter::new(
             g.screen(),
             metrics(),
@@ -3151,13 +3091,13 @@ mod tests {
             rectangle: true,
         }))
         .with_viewport(0, u32::from(g.rows()))
-        .extend_instances(&mut buffers);
+        .extend_screen(&mut buffers);
         let inside = |r: u16, c: u16| (1..=2).contains(&c) && (0..=2).contains(&r);
         for r in 0..3u16 {
             for c in 0..4u16 {
                 let idx = (usize::from(r) * 4) + usize::from(c);
                 let want_highlight = inside(r, c);
-                let got = buffers.bg[idx].color;
+                let got = buffers.rects[idx].color;
                 if want_highlight {
                     assert_eq!(got, SELECTION_BG, "({r},{c}) should be highlighted");
                 } else {
@@ -3214,7 +3154,7 @@ mod tests {
 
     #[test]
     fn extend_preedit_atlas_miss_still_paints_bg_and_underline() {
-        let mut out = InstanceBuffers::default();
+        let mut out = RowPaint::default();
         let overlay = PreeditOverlay {
             anchor: (0, 0),
             text: "?".to_owned(),
@@ -3226,21 +3166,21 @@ mod tests {
             fitted_map: HashMap::new(),
             clusters: HashMap::new(),
         };
-        extend_preedit_instances(&overlay, metrics(), 1, 5, &atlas, &mut out);
-        assert_eq!(out.bg.len(), 2, "bg + underline survive an atlas miss");
-        assert!(out.fg.is_empty(), "fg pass skipped on atlas miss");
+        extend_preedit(&overlay, metrics(), 1, 5, &atlas, &mut out);
+        assert_eq!(out.rects.len(), 2, "bg + underline survive an atlas miss");
+        assert!(out.glyphs.is_empty(), "fg pass skipped on atlas miss");
     }
 
     #[test]
     fn extend_search_empty_overlay_is_noop() {
         // The App can push a fresh-but-empty overlay between
         // Off and Composing without polluting the frame.
-        let mut out = InstanceBuffers::default();
+        let mut out = RowPaint::default();
         let overlay = SearchOverlay::default();
         let atlas = MockAtlas::full(slot());
-        extend_search_instances(&overlay, metrics(), 5, 80, true, &atlas, &mut out);
-        assert_eq!(out.bg, Vec::<BgInstance>::new());
-        assert_eq!(out.fg, Vec::<FgInstance>::new());
+        extend_search(&overlay, metrics(), 5, 80, true, &atlas, &mut out);
+        assert_eq!(out.rects, Vec::<Rect>::new());
+        assert_eq!(out.glyphs, Vec::<GlyphDraw>::new());
     }
 
     #[test]
@@ -3248,7 +3188,7 @@ mod tests {
         // A chord can arm a confirmation while a search is composing.
         // The question takes the row; the hit highlights are the
         // search's own rows and stay.
-        let mut out = InstanceBuffers::default();
+        let mut out = RowPaint::default();
         let overlay = SearchOverlay {
             label: "search: ab".to_owned(),
             visible_hits: vec![SearchHitSpan {
@@ -3259,15 +3199,15 @@ mod tests {
             }],
         };
         let atlas = MockAtlas::full(slot());
-        extend_search_instances(&overlay, metrics(), 5, 80, false, &atlas, &mut out);
-        assert_eq!(out.bg.len(), 1, "the highlight, and no bar background");
-        assert_eq!(out.bg[0].color, SEARCH_CURRENT_BG);
-        assert!(out.fg.is_empty(), "no label glyphs without the bar");
+        extend_search(&overlay, metrics(), 5, 80, false, &atlas, &mut out);
+        assert_eq!(out.rects.len(), 1, "the highlight, and no bar background");
+        assert_eq!(out.rects[0].color, SEARCH_CURRENT_BG);
+        assert!(out.glyphs.is_empty(), "no label glyphs without the bar");
     }
 
     #[test]
     fn extend_search_paints_match_bg_for_visible_hit() {
-        let mut out = InstanceBuffers::default();
+        let mut out = RowPaint::default();
         let overlay = SearchOverlay {
             label: String::new(),
             visible_hits: vec![SearchHitSpan {
@@ -3278,16 +3218,16 @@ mod tests {
             }],
         };
         let atlas = MockAtlas::full(slot());
-        extend_search_instances(&overlay, metrics(), 5, 80, true, &atlas, &mut out);
-        assert_eq!(out.bg.len(), 1);
-        assert_eq!(out.bg[0].origin_px, [24.0, 32.0]);
-        assert_eq!(out.bg[0].size_px, [32.0, 16.0]);
-        assert_eq!(out.bg[0].color, SEARCH_MATCH_BG);
+        extend_search(&overlay, metrics(), 5, 80, true, &atlas, &mut out);
+        assert_eq!(out.rects.len(), 1);
+        assert_eq!(out.rects[0].origin_px, [24.0, 32.0]);
+        assert_eq!(out.rects[0].size_px, [32.0, 16.0]);
+        assert_eq!(out.rects[0].color, SEARCH_MATCH_BG);
     }
 
     #[test]
     fn extend_search_current_hit_paints_in_vivid_color() {
-        let mut out = InstanceBuffers::default();
+        let mut out = RowPaint::default();
         let overlay = SearchOverlay {
             label: String::new(),
             visible_hits: vec![SearchHitSpan {
@@ -3298,16 +3238,16 @@ mod tests {
             }],
         };
         let atlas = MockAtlas::full(slot());
-        extend_search_instances(&overlay, metrics(), 5, 80, true, &atlas, &mut out);
-        assert_eq!(out.bg.len(), 1);
-        assert_eq!(out.bg[0].color, SEARCH_CURRENT_BG);
+        extend_search(&overlay, metrics(), 5, 80, true, &atlas, &mut out);
+        assert_eq!(out.rects.len(), 1);
+        assert_eq!(out.rects[0].color, SEARCH_CURRENT_BG);
     }
 
     #[test]
     fn extend_search_clips_hit_past_grid_edges() {
         // The daemon's viewport edits and the client's hit list can race
         // during a rapid scroll; a panic there would lose a frame.
-        let mut out = InstanceBuffers::default();
+        let mut out = RowPaint::default();
         let overlay = SearchOverlay {
             label: String::new(),
             visible_hits: vec![
@@ -3326,42 +3266,42 @@ mod tests {
             ],
         };
         let atlas = MockAtlas::full(slot());
-        extend_search_instances(&overlay, metrics(), 5, 8, true, &atlas, &mut out);
-        assert_eq!(out.bg.len(), 1);
-        assert_eq!(out.bg[0].size_px, [16.0, 16.0]);
+        extend_search(&overlay, metrics(), 5, 8, true, &atlas, &mut out);
+        assert_eq!(out.rects.len(), 1);
+        assert_eq!(out.rects[0].size_px, [16.0, 16.0]);
     }
 
     #[test]
     fn extend_search_paints_bar_at_bottom_row_with_label_glyphs() {
-        let mut out = InstanceBuffers::default();
+        let mut out = RowPaint::default();
         let overlay = SearchOverlay {
             label: "ab".to_owned(),
             visible_hits: vec![],
         };
         let atlas = MockAtlas::full(slot());
-        extend_search_instances(&overlay, metrics(), 3, 10, true, &atlas, &mut out);
-        assert_eq!(out.bg.len(), 1, "1 bar bg quad");
-        assert_eq!(out.bg[0].origin_px, [0.0, 32.0]);
-        assert_eq!(out.bg[0].size_px, [80.0, 16.0]);
-        assert_eq!(out.bg[0].color, SEARCH_BAR_BG);
-        assert_eq!(out.fg.len(), 2, "1 fg quad per label char");
+        extend_search(&overlay, metrics(), 3, 10, true, &atlas, &mut out);
+        assert_eq!(out.rects.len(), 1, "1 bar bg quad");
+        assert_eq!(out.rects[0].origin_px, [0.0, 32.0]);
+        assert_eq!(out.rects[0].size_px, [80.0, 16.0]);
+        assert_eq!(out.rects[0].color, SEARCH_BAR_BG);
+        assert_eq!(out.glyphs.len(), 2, "1 fg quad per label char");
     }
 
     #[test]
     fn extend_search_label_clips_at_right_edge() {
-        let mut out = InstanceBuffers::default();
+        let mut out = RowPaint::default();
         let overlay = SearchOverlay {
             label: "abcdef".to_owned(),
             visible_hits: vec![],
         };
         let atlas = MockAtlas::full(slot());
-        extend_search_instances(&overlay, metrics(), 2, 3, true, &atlas, &mut out);
-        assert_eq!(out.fg.len(), 3);
+        extend_search(&overlay, metrics(), 2, 3, true, &atlas, &mut out);
+        assert_eq!(out.glyphs.len(), 3);
     }
 
     #[test]
     fn extend_search_zero_grid_is_noop() {
-        let mut out = InstanceBuffers::default();
+        let mut out = RowPaint::default();
         let overlay = SearchOverlay {
             label: "find: x".to_owned(),
             visible_hits: vec![SearchHitSpan {
@@ -3372,51 +3312,29 @@ mod tests {
             }],
         };
         let atlas = MockAtlas::full(slot());
-        extend_search_instances(&overlay, metrics(), 0, 80, true, &atlas, &mut out);
-        assert_eq!(out.bg, Vec::<BgInstance>::new());
-        assert_eq!(out.fg, Vec::<FgInstance>::new());
-        let mut out2 = InstanceBuffers::default();
-        extend_search_instances(&overlay, metrics(), 5, 0, true, &atlas, &mut out2);
-        assert_eq!(out2.bg, Vec::<BgInstance>::new());
-        assert_eq!(out2.fg, Vec::<FgInstance>::new());
+        extend_search(&overlay, metrics(), 0, 80, true, &atlas, &mut out);
+        assert_eq!(out.rects, Vec::<Rect>::new());
+        assert_eq!(out.glyphs, Vec::<GlyphDraw>::new());
+        let mut out2 = RowPaint::default();
+        extend_search(&overlay, metrics(), 5, 0, true, &atlas, &mut out2);
+        assert_eq!(out2.rects, Vec::<Rect>::new());
+        assert_eq!(out2.glyphs, Vec::<GlyphDraw>::new());
     }
 
     #[test]
     fn extend_link_preview_paints_bar_at_bottom_row_with_search_bar_color() {
         // Same neutral chrome as the search bar: a hover preview is
         // informational, not the destructive-prompt CONFIRM_BAR_BG.
-        let mut out = InstanceBuffers::default();
+        let mut out = RowPaint::default();
         let overlay = LinkPreviewOverlay {
             text: "https://e".to_owned(),
         };
         let atlas = MockAtlas::full(slot());
-        extend_link_preview_instances(&overlay, metrics(), 3, 10, &atlas, &mut out);
-        assert_eq!(out.bg.len(), 1, "1 bar bg quad");
-        assert_eq!(out.bg[0].origin_px, [0.0, 32.0]);
-        assert_eq!(out.bg[0].color, SEARCH_BAR_BG);
-        assert_eq!(out.fg.len(), overlay.text.chars().count());
-    }
-
-    fn img_quad(origin_y: f32, height: f32) -> ImgInstance {
-        ImgInstance {
-            origin_px: [0.0, origin_y],
-            size_px: [32.0, height],
-            uv_min: [0.0, 0.25],
-            uv_max: [0.5, 0.75],
-            opacity: 1.0,
-            _pad: [0.0; 3],
-        }
-    }
-
-    #[test]
-    fn an_image_overlapping_the_chrome_row_is_cut_at_its_top_edge() {
-        // A producer that paints over the link preview could show a URL
-        // other than the one Ctrl+Click activates.
-        let clipped = clip_img_quad_above(img_quad(0.0, 64.0), 32.0).expect("upper half survives");
-        assert_eq!(clipped.size_px[1], 32.0);
-        // Half the height kept, so half the source `v` span.
-        assert!((clipped.uv_max[1] - 0.5).abs() < f32::EPSILON);
-        assert_eq!(clipped.uv_min[1], 0.25);
+        extend_link_preview(&overlay, metrics(), 3, 10, &atlas, &mut out);
+        assert_eq!(out.rects.len(), 1, "1 bar bg quad");
+        assert_eq!(out.rects[0].origin_px, [0.0, 32.0]);
+        assert_eq!(out.rects[0].color, SEARCH_BAR_BG);
+        assert_eq!(out.glyphs.len(), overlay.text.chars().count());
     }
 
     #[test]
@@ -3424,42 +3342,32 @@ mod tests {
         // An OSC 66 run scaled across rows is bottom-aligned inside its
         // block, so a producer can aim ink into the reserved row from
         // the row above; it rides the same pass as the bar's own text.
-        let mut out = InstanceBuffers::default();
-        out.fg.push(FgInstance {
+        let mut out = RowPaint::default();
+        out.glyphs.push(GlyphDraw {
             origin_px: [0.0, 16.0],
             size_px: [8.0, 32.0],
-            uv_min: [0.0, 0.0],
-            uv_max: [0.1, 0.2],
-            is_color: 0.0,
-            _pad: [0.0; 3],
+            atlas: AtlasKind::Mono,
+            src_min_px: [0.0, 0.0],
+            src_max_px: [8.0, 16.0],
             color: [1.0; 4],
         });
-        out.fg.push(FgInstance {
+        out.glyphs.push(GlyphDraw {
             origin_px: [0.0, 34.0],
             size_px: [8.0, 10.0],
-            uv_min: [0.0, 0.0],
-            uv_max: [0.1, 0.2],
-            is_color: 0.0,
-            _pad: [0.0; 3],
+            atlas: AtlasKind::Mono,
+            src_min_px: [0.0, 0.0],
+            src_max_px: [8.0, 16.0],
             color: [1.0; 4],
         });
-        clip_cell_instances_above(&mut out, 32.0);
-        assert_eq!(out.fg.len(), 1, "the quad starting inside the row is gone");
-        assert_eq!(out.fg[0].size_px[1], 16.0);
+        clip_cells_above(&mut out, 32.0);
+        assert_eq!(
+            out.glyphs.len(),
+            1,
+            "the quad starting inside the row is gone"
+        );
+        assert_eq!(out.glyphs[0].size_px[1], 16.0);
         // Half the height kept, so half the source `v` span.
-        assert!((out.fg[0].uv_max[1] - 0.1).abs() < f32::EPSILON);
-    }
-
-    #[test]
-    fn an_image_entirely_inside_the_chrome_row_is_dropped() {
-        assert_eq!(clip_img_quad_above(img_quad(32.0, 16.0), 32.0), None);
-        assert_eq!(clip_img_quad_above(img_quad(48.0, 16.0), 32.0), None);
-    }
-
-    #[test]
-    fn an_image_clear_of_the_chrome_row_is_untouched() {
-        let quad = img_quad(0.0, 32.0);
-        assert_eq!(clip_img_quad_above(quad, 32.0), Some(quad));
+        assert!((out.glyphs[0].src_max_px[1] - 8.0).abs() < f32::EPSILON);
     }
 
     #[test]
@@ -3467,22 +3375,22 @@ mod tests {
         // The whole point of the preview is that the user reads the true
         // target; a cut that looks like the end of the URI would be read
         // as one.
-        let mut out = InstanceBuffers::default();
+        let mut out = RowPaint::default();
         let overlay = LinkPreviewOverlay {
             text: "https://example.com/very/long/path".to_owned(),
         };
-        // `Renderer::render` primes the ellipsis alongside the text, so
+        // The renderer primes the ellipsis alongside the text, so
         // the atlas answers for it here too.
         let mut atlas = MockAtlas::full(slot());
         atlas.map.insert(BAR_ELLIPSIS, slot());
-        extend_link_preview_instances(&overlay, metrics(), 3, 10, &atlas, &mut out);
+        extend_link_preview(&overlay, metrics(), 3, 10, &atlas, &mut out);
         assert_eq!(fit_bar_text_to_cells(&overlay.text, 10), "https://e…");
-        assert_eq!(out.fg.len(), 10, "one quad per column");
+        assert_eq!(out.glyphs.len(), 10, "one quad per column");
         // The mark occupies the last cell, so a clip is visible rather
         // than a URI that merely stops.
         let cw = metrics().width as f32;
         let offset_x = slot().offset_px[0] as f32;
-        assert_eq!(out.fg[9].origin_px[0], 9.0f32.mul_add(cw, offset_x));
+        assert_eq!(out.glyphs[9].origin_px[0], 9.0f32.mul_add(cw, offset_x));
     }
 
     #[test]
@@ -3550,34 +3458,34 @@ mod tests {
 
     #[test]
     fn extend_link_preview_empty_text_is_noop() {
-        let mut out = InstanceBuffers::default();
+        let mut out = RowPaint::default();
         let overlay = LinkPreviewOverlay::default();
         let atlas = MockAtlas::full(slot());
-        extend_link_preview_instances(&overlay, metrics(), 3, 10, &atlas, &mut out);
-        assert_eq!(out.bg, Vec::<BgInstance>::new());
-        assert_eq!(out.fg, Vec::<FgInstance>::new());
+        extend_link_preview(&overlay, metrics(), 3, 10, &atlas, &mut out);
+        assert_eq!(out.rects, Vec::<Rect>::new());
+        assert_eq!(out.glyphs, Vec::<GlyphDraw>::new());
     }
 
     #[test]
     fn extend_link_preview_zero_grid_is_noop() {
-        let mut out = InstanceBuffers::default();
+        let mut out = RowPaint::default();
         let overlay = LinkPreviewOverlay {
             text: "https://example.com".to_owned(),
         };
         let atlas = MockAtlas::full(slot());
-        extend_link_preview_instances(&overlay, metrics(), 0, 80, &atlas, &mut out);
-        assert_eq!(out.bg, Vec::<BgInstance>::new());
-        assert_eq!(out.fg, Vec::<FgInstance>::new());
+        extend_link_preview(&overlay, metrics(), 0, 80, &atlas, &mut out);
+        assert_eq!(out.rects, Vec::<Rect>::new());
+        assert_eq!(out.glyphs, Vec::<GlyphDraw>::new());
     }
 
-    /// `extend_instances` at viewport=0 is byte-identical to the live
+    /// `extend_screen` at viewport=0 is byte-identical to the live
     /// path.
     #[test]
-    fn extend_instances_viewport_zero_paints_same_bg_as_live_path() {
+    fn extend_screen_viewport_zero_paints_same_bg_as_live_path() {
         let g = drive(2, 4, b"\x1b[?25lAB\r\nCD");
         let atlas = MockAtlas::full(slot());
         let theme = Theme::default();
-        let mut buffers = InstanceBuffers::default();
+        let mut buffers = RowPaint::default();
         CellPainter::new(
             g.screen(),
             metrics(),
@@ -3587,13 +3495,13 @@ mod tests {
         )
         .with_cursor_visible(true)
         .with_viewport(0, u32::from(g.rows()))
-        .extend_instances(&mut buffers);
+        .extend_screen(&mut buffers);
         assert_eq!(
-            buffers.bg.len(),
+            buffers.rects.len(),
             8,
             "viewport=0 must paint cells only — no scrollbar lane",
         );
-        for inst in &buffers.bg {
+        for inst in &buffers.rects {
             assert_ne!(inst.color, SCROLLBAR_TRACK);
             assert_ne!(inst.color, SCROLLBAR_THUMB);
         }
@@ -3602,7 +3510,7 @@ mod tests {
     /// While `viewport > 0` a track and thumb paint along the right
     /// edge, track behind thumb.
     #[test]
-    fn extend_instances_paints_scrollbar_lane_while_browsing() {
+    fn extend_screen_paints_scrollbar_lane_while_browsing() {
         let mut g = Grid::new(2, 4);
         let mut p = Parser::new();
         p.advance(&mut g, b"\x1b[?25l");
@@ -3610,7 +3518,7 @@ mod tests {
         assert!(!g.scrollback().is_empty());
         let atlas = MockAtlas::full(slot());
         let theme = Theme::default();
-        let mut buffers = InstanceBuffers::default();
+        let mut buffers = RowPaint::default();
         CellPainter::new(
             g.screen(),
             metrics(),
@@ -3620,13 +3528,13 @@ mod tests {
         )
         .with_cursor_visible(true)
         .with_viewport(1, 3)
-        .extend_instances(&mut buffers);
+        .extend_screen(&mut buffers);
         assert_eq!(
-            buffers.bg.len(),
+            buffers.rects.len(),
             8 + 2,
             "browse mode must add a track and a thumb to the cell quads",
         );
-        let last_two = &buffers.bg[buffers.bg.len() - 2..];
+        let last_two = &buffers.rects[buffers.rects.len() - 2..];
         assert_eq!(last_two[0].color, SCROLLBAR_TRACK, "track painted first");
         assert_eq!(last_two[1].color, SCROLLBAR_THUMB, "thumb wins on top");
         let lane_x = (g.cols() as f32).mul_add(metrics().width as f32, -SCROLLBAR_LANE_PX);
@@ -3637,14 +3545,14 @@ mod tests {
     /// While browsing, the cursor would smear onto whichever scrollback
     /// row landed at its `(row, col)`, so it is hidden.
     #[test]
-    fn extend_instances_hides_cursor_while_viewport_above_zero() {
+    fn extend_screen_hides_cursor_while_viewport_above_zero() {
         let mut g = Grid::new(2, 4);
         let mut p = Parser::new();
         p.advance(&mut g, b"row1\r\nrow2\r\nrow3");
         let atlas = MockAtlas::full(slot());
         let theme = Theme::default();
-        let mut buffers_live = InstanceBuffers::default();
-        let mut buffers_browse = InstanceBuffers::default();
+        let mut buffers_live = RowPaint::default();
+        let mut buffers_browse = RowPaint::default();
         CellPainter::new(
             g.screen(),
             metrics(),
@@ -3654,7 +3562,7 @@ mod tests {
         )
         .with_cursor_visible(true)
         .with_viewport(0, 3)
-        .extend_instances(&mut buffers_live);
+        .extend_screen(&mut buffers_live);
         CellPainter::new(
             g.screen(),
             metrics(),
@@ -3664,25 +3572,25 @@ mod tests {
         )
         .with_cursor_visible(true)
         .with_viewport(1, 3)
-        .extend_instances(&mut buffers_browse);
+        .extend_screen(&mut buffers_browse);
         let cursor = g.cursor();
         let idx = usize::from(cursor.row) * usize::from(g.cols()) + usize::from(cursor.col);
         assert_eq!(
-            buffers_live.bg[idx].color, theme.fg,
+            buffers_live.rects[idx].color, theme.fg,
             "live cursor paints with the swap (cursor bg = theme fg)",
         );
         assert_ne!(
-            buffers_browse.bg[idx].color, theme.fg,
+            buffers_browse.rects[idx].color, theme.fg,
             "cursor must hide in browse mode — no swap on the cursor cell",
         );
     }
 
-    fn deco_for(sgr: &[u8]) -> Vec<DecorationInstance> {
+    fn deco_for(sgr: &[u8]) -> Vec<Decoration> {
         let mut bytes = sgr.to_vec();
         bytes.push(b'A');
         let g = drive(1, 4, &bytes);
         let atlas = MockAtlas::full(slot());
-        build_instances(g.screen(), metrics(), &Theme::default(), &atlas).deco
+        build_instances(g.screen(), metrics(), &Theme::default(), &atlas).decos
     }
 
     #[test]
@@ -3690,7 +3598,7 @@ mod tests {
         let deco = deco_for(b"\x1b[4m");
         assert_eq!(deco.len(), 1);
         let d = deco[0];
-        assert_eq!(d.kind, DECO_SOLID);
+        assert_eq!(d.kind, DecoKind::Solid);
         assert_eq!(d.size_px[0], metrics().width as f32, "spans the cell width");
         assert_eq!(
             d.color,
@@ -3710,7 +3618,7 @@ mod tests {
     fn double_underline_emits_two_stacked_lines() {
         let deco = deco_for(b"\x1b[21m");
         assert_eq!(deco.len(), 2);
-        assert!(deco.iter().all(|d| d.kind == DECO_SOLID));
+        assert!(deco.iter().all(|d| d.kind == DecoKind::Solid));
         assert_ne!(
             deco[0].origin_px[1], deco[1].origin_px[1],
             "two distinct rows"
@@ -3719,9 +3627,9 @@ mod tests {
 
     #[test]
     fn curly_dotted_dashed_underlines_pick_the_procedural_kinds() {
-        assert_eq!(deco_for(b"\x1b[4:3m")[0].kind, DECO_CURLY);
-        assert_eq!(deco_for(b"\x1b[4:4m")[0].kind, DECO_DOTTED);
-        assert_eq!(deco_for(b"\x1b[4:5m")[0].kind, DECO_DASHED);
+        assert_eq!(deco_for(b"\x1b[4:3m")[0].kind, DecoKind::Curly);
+        assert_eq!(deco_for(b"\x1b[4:4m")[0].kind, DecoKind::Dotted);
+        assert_eq!(deco_for(b"\x1b[4:5m")[0].kind, DecoKind::Dashed);
         let curly = deco_for(b"\x1b[4:3m")[0];
         assert!(
             curly.size_px[1] > curly.thickness_px,
@@ -3742,7 +3650,7 @@ mod tests {
     fn underline_color_uses_sgr_58_when_set() {
         let deco = deco_for(b"\x1b[4;58:2::255:0:0m");
         assert_eq!(deco.len(), 1);
-        let want = felis_render_core::palette::srgb_to_linear_rgba([255, 0, 0], 1.0);
+        let want = crate::palette::srgb_to_linear_rgba([255, 0, 0], 1.0);
         assert_eq!(
             deco[0].color, want,
             "SGR 58 underline color must be honored"
@@ -3755,7 +3663,7 @@ mod tests {
         let deco = deco_for(b"\x1b[9m");
         assert_eq!(deco.len(), 1);
         let d = deco[0];
-        assert_eq!(d.kind, DECO_SOLID);
+        assert_eq!(d.kind, DecoKind::Solid);
         assert_eq!(d.color, Theme::default().fg);
         let ascent = metrics().ascent as f32;
         assert!(
@@ -3768,7 +3676,7 @@ mod tests {
     fn overline_emits_a_line_at_the_cell_top() {
         let deco = deco_for(b"\x1b[53m");
         assert_eq!(deco.len(), 1);
-        assert_eq!(deco[0].kind, DECO_SOLID);
+        assert_eq!(deco[0].kind, DecoKind::Solid);
         assert_eq!(deco[0].origin_px[1], 0.0, "overline seats at the cell top");
         assert_eq!(deco[0].color, Theme::default().fg);
     }
@@ -3779,19 +3687,19 @@ mod tests {
         let atlas = MockAtlas::full(slot());
         let plain = build_instances(drive(1, 4, b"A").screen(), metrics(), &theme, &atlas);
         let faint = build_instances(drive(1, 4, b"\x1b[2mA").screen(), metrics(), &theme, &atlas);
-        assert_eq!(plain.fg.len(), 1);
-        assert_eq!(faint.fg.len(), 1);
+        assert_eq!(plain.glyphs.len(), 1);
+        assert_eq!(faint.glyphs.len(), 1);
         assert_eq!(
-            plain.fg[0].color, theme.fg,
+            plain.glyphs[0].color, theme.fg,
             "baseline glyph paints the theme fg"
         );
         assert_eq!(
-            faint.fg[0].color,
+            faint.glyphs[0].color,
             dim_toward_bg(theme.fg, theme.bg),
             "faint glyph mixes the fg toward the bg",
         );
         assert_ne!(
-            faint.fg[0].color, theme.fg,
+            faint.glyphs[0].color, theme.fg,
             "faint must actually change the color"
         );
     }
@@ -3801,9 +3709,12 @@ mod tests {
         let theme = Theme::default();
         let atlas = MockAtlas::full(slot());
         let buffers = build_instances(drive(1, 4, b"\x1b[8mA").screen(), metrics(), &theme, &atlas);
-        assert!(buffers.fg.is_empty(), "concealed glyph must leave no ink");
         assert!(
-            !buffers.bg.is_empty(),
+            buffers.glyphs.is_empty(),
+            "concealed glyph must leave no ink"
+        );
+        assert!(
+            !buffers.rects.is_empty(),
             "the cell background must still paint"
         );
     }
@@ -3819,7 +3730,7 @@ mod tests {
             &Theme::default(),
             &atlas,
         );
-        assert!(buffers.fg.is_empty(), "conceal still hides the glyph");
+        assert!(buffers.glyphs.is_empty(), "conceal still hides the glyph");
         assert_eq!(deco.len(), 1, "the underline survives conceal");
     }
 
@@ -3842,7 +3753,7 @@ mod tests {
             },
         );
         let atlas = MockAtlas::full(slot());
-        let deco = build_instances(g.screen(), metrics(), &Theme::default(), &atlas).deco;
+        let deco = build_instances(g.screen(), metrics(), &Theme::default(), &atlas).decos;
         assert_eq!(
             deco.len(),
             1,
@@ -3872,7 +3783,7 @@ mod tests {
             },
         );
         let atlas = MockAtlas::full(slot());
-        let deco = build_instances(g.screen(), metrics(), &Theme::default(), &atlas).deco;
+        let deco = build_instances(g.screen(), metrics(), &Theme::default(), &atlas).decos;
         assert!(
             deco.is_empty(),
             "a bidi-override cell drops every decoration"
@@ -3903,62 +3814,33 @@ mod tests {
                 proptest::prop_assert!(text.starts_with(head));
             }
         }
-
-        /// A clipped image quad never reaches below the row the chrome
-        /// owns, keeps its origin, and samples a sub-span of its source.
-        #[test]
-        fn a_clipped_image_quad_stays_above_the_chrome_row(
-            origin_y in -256.0f32..256.0,
-            height in -16.0f32..256.0,
-            max_y in -256.0f32..256.0,
-        ) {
-            let quad = ImgInstance {
-                origin_px: [0.0, origin_y],
-                size_px: [32.0, height],
-                ..img_quad(origin_y, height)
-            };
-            match clip_img_quad_above(quad, max_y) {
-                None => proptest::prop_assert!(height <= 0.0 || max_y <= origin_y),
-                Some(clipped) => {
-                    proptest::prop_assert!(height > 0.0 && max_y > origin_y);
-                    proptest::prop_assert_eq!(clipped.origin_px, quad.origin_px);
-                    proptest::prop_assert!(clipped.size_px[1] <= height);
-                    // `max_y - origin_y` is the height the clip keeps;
-                    // comparing the sum back against `max_y` would fail
-                    // on f32 rounding alone.
-                    proptest::prop_assert!(clipped.size_px[1] <= max_y - origin_y);
-                    proptest::prop_assert!(clipped.uv_max[1] <= quad.uv_max[1]);
-                    proptest::prop_assert!(clipped.uv_max[1] >= quad.uv_min[1]);
-                }
-            }
-        }
     }
 
     /// The per-cell background quads, without the cursor or link markers
     /// pushed between them.
-    fn cell_bgs(buffers: &InstanceBuffers) -> Vec<[f32; 4]> {
+    fn cell_bgs(buffers: &RowPaint) -> Vec<[f32; 4]> {
         let m = metrics();
         buffers
-            .bg
+            .rects
             .iter()
             .filter(|b| b.size_px == [m.width as f32, m.height as f32])
             .map(|b| b.color)
             .collect()
     }
 
-    fn fg_in_col(buffers: &InstanceBuffers, col: u16) -> Option<&FgInstance> {
+    fn fg_in_col(buffers: &RowPaint, col: u16) -> Option<&GlyphDraw> {
         let cw = metrics().width as f32;
         let left = f32::from(col) * cw;
         buffers
-            .fg
+            .glyphs
             .iter()
             .find(|q| q.origin_px[0] >= left && q.origin_px[0] < left + cw)
     }
 
-    fn build_with_selection(screen: &ScreenBuffer, range: SelectionRange) -> InstanceBuffers {
+    fn build_with_selection(screen: &ScreenBuffer, range: SelectionRange) -> RowPaint {
         let theme = Theme::default();
         let atlas = MockAtlas::full(slot());
-        let mut buffers = InstanceBuffers::default();
+        let mut buffers = RowPaint::default();
         CellPainter::new(
             screen,
             metrics(),
@@ -3969,7 +3851,7 @@ mod tests {
         .with_cursor_visible(true)
         .with_selection(Some(range))
         .with_viewport(0, u32::from(screen.rows()))
-        .extend_instances(&mut buffers);
+        .extend_screen(&mut buffers);
         buffers
     }
 
@@ -3999,7 +3881,7 @@ mod tests {
         let buffers = build_instances(g.screen(), metrics(), &Theme::default(), &atlas);
         let cw = metrics().width as f32;
         let xs: Vec<f32> = buffers
-            .bg
+            .rects
             .iter()
             .filter(|b| b.size_px == [cw, CURSOR_MARKER_PX])
             .map(|b| b.origin_px[0])
@@ -4013,7 +3895,7 @@ mod tests {
         let atlas = MockAtlas::full(slot());
         let buffers = build_instances(g.screen(), metrics(), &Theme::default(), &atlas);
         let xs: Vec<f32> = buffers
-            .bg
+            .rects
             .iter()
             .filter(|b| b.size_px[0] == CURSOR_MARKER_PX)
             .map(|b| b.origin_px[0])
@@ -4084,7 +3966,7 @@ mod tests {
         let g = drive(1, 6, "\x1b[?25la\x1b[41m字\x1b[mb".as_bytes());
         let theme = Theme::default();
         let atlas = MockAtlas::full(slot());
-        let mut buffers = InstanceBuffers::default();
+        let mut buffers = RowPaint::default();
         CellPainter::new(
             g.screen(),
             metrics(),
@@ -4099,7 +3981,7 @@ mod tests {
             col_start: 2,
             col_end: 4,
         }))
-        .extend_instances(&mut buffers);
+        .extend_screen(&mut buffers);
         assert!(fg_in_col(&buffers, 0).is_some(), "a draws");
         assert!(
             fg_in_col(&buffers, 1).is_none(),
@@ -4108,7 +3990,7 @@ mod tests {
         let cw = metrics().width as f32;
         assert!(
             buffers
-                .bg
+                .rects
                 .iter()
                 .any(|b| b.origin_px[0] == cw && b.size_px[0] == cw && b.color != theme.bg),
             "the lead keeps its red background"
@@ -4154,18 +4036,18 @@ mod tests {
             atlas.gid_map.insert(
                 id,
                 GlyphSlot {
-                    uv_min: [f32::from(id) / 10.0, 0.0],
+                    atlas_px: [u32::from(id), 0],
                     ..slot()
                 },
             );
         }
-        let uv_of = |text: &str| {
-            let mut out = InstanceBuffers::default();
-            extend_preedit_instances(&preedit(text, 0), metrics(), 1, 10, &atlas, &mut out);
-            assert_eq!(out.fg.len(), 1, "{text:?} draws one shaped glyph");
-            out.fg[0].uv_min
+        let src_of = |text: &str| {
+            let mut out = RowPaint::default();
+            extend_preedit(&preedit(text, 0), metrics(), 1, 10, &atlas, &mut out);
+            assert_eq!(out.glyphs.len(), 1, "{text:?} draws one shaped glyph");
+            out.glyphs[0].src_min_px
         };
-        assert_ne!(uv_of("🇯🇵"), uv_of("🇯🇲"));
+        assert_ne!(src_of("🇯🇵"), src_of("🇯🇲"));
     }
 
     #[test]
@@ -4178,9 +4060,9 @@ mod tests {
         atlas.map.insert('字', wide);
         let cols = 5;
         let edge = f32::from(cols) * metrics().width as f32;
-        let mut out = InstanceBuffers::default();
-        extend_preedit_instances(&preedit("ab字", 2), metrics(), 1, cols, &atlas, &mut out);
-        extend_search_instances(
+        let mut out = RowPaint::default();
+        extend_preedit(&preedit("ab字", 2), metrics(), 1, cols, &atlas, &mut out);
+        extend_search(
             &SearchOverlay {
                 label: "abcd字".to_owned(),
                 visible_hits: Vec::new(),
@@ -4193,11 +4075,11 @@ mod tests {
             &mut out,
         );
         assert_eq!(
-            out.fg.len(),
+            out.glyphs.len(),
             3 + 5,
             "each clipped 字 keeps its visible half"
         );
-        for q in &out.fg {
+        for q in &out.glyphs {
             assert!(q.origin_px[0] + q.size_px[0] <= edge, "{q:?}");
         }
     }
@@ -4208,7 +4090,7 @@ mod tests {
     struct Painted {
         index: GlyphIndex,
         frame: ShapeFrame,
-        fg: Vec<FgInstance>,
+        glyphs: Vec<GlyphDraw>,
     }
 
     #[cfg(not(windows))]
@@ -4226,7 +4108,7 @@ mod tests {
             &mut frame,
         );
         let theme = Theme::default();
-        let mut out = InstanceBuffers::default();
+        let mut out = RowPaint::default();
         CellPainter::new(
             grid.screen(),
             index.cell_metrics(),
@@ -4235,11 +4117,11 @@ mod tests {
             &frame,
         )
         .with_viewport(0, 1)
-        .extend_instances(&mut out);
+        .extend_screen(&mut out);
         Painted {
             index,
             frame,
-            fg: out.fg,
+            glyphs: out.glyphs,
         }
     }
 
@@ -4253,7 +4135,7 @@ mod tests {
 
     /// The fg quads' union as `[x0, y0, x1, y1]`.
     #[cfg(not(windows))]
-    fn ink(fg: &[FgInstance]) -> [f32; 4] {
+    fn ink(fg: &[GlyphDraw]) -> [f32; 4] {
         fg.iter()
             .map(|q| {
                 let [x, y] = q.origin_px;
@@ -4284,7 +4166,7 @@ mod tests {
             let m = p.index.cell_metrics();
             let (cw, ch) = (m.width as f32, m.height as f32);
             let (bx0, bx1) = (f32::from(col) * cw, f32::from(col + cells) * cw);
-            let [x0, y0, x1, y1] = ink(&p.fg);
+            let [x0, y0, x1, y1] = ink(&p.glyphs);
             assert!(
                 x0 >= bx0 - 1.0 && x1 <= bx1 + 1.0 && y0 >= -1.0 && y1 <= ch + 1.0,
                 "{name}: ink {x0}..{x1} x {y0}..{y1} inside {bx0}..{bx1} x 0..{ch}"
@@ -4307,8 +4189,8 @@ mod tests {
     fn a_one_glyph_cluster_fits_as_its_bare_char_does() {
         let cluster = paint_pinned("\x1b[4G\u{263A}\u{FE0F}".as_bytes(), 4);
         let bare = paint_pinned("\x1b[4G\u{263A}".as_bytes(), 4);
-        let [a0, b0, a1, b1] = ink(&cluster.fg);
-        let [c0, d0, c1, d1] = ink(&bare.fg);
+        let [a0, b0, a1, b1] = ink(&cluster.glyphs);
+        let [c0, d0, c1, d1] = ink(&bare.glyphs);
         assert!(
             ((a1 - a0) - (c1 - c0)).abs() <= 1.0 && ((b1 - b0) - (d1 - d0)).abs() <= 1.0,
             "cluster {}x{} vs bare {}x{}",
@@ -4354,7 +4236,7 @@ mod tests {
             pool[0].advance_px
         );
         let theme = Theme::default();
-        let mut out = InstanceBuffers::default();
+        let mut out = RowPaint::default();
         CellPainter::new(
             grid.screen(),
             index.cell_metrics(),
@@ -4363,9 +4245,9 @@ mod tests {
             &frame,
         )
         .with_viewport(0, 2)
-        .extend_instances(&mut out);
-        let [first, second] = out.fg.as_slice() else {
-            panic!("two cats: {} quads", out.fg.len());
+        .extend_screen(&mut out);
+        let [first, second] = out.glyphs.as_slice() else {
+            panic!("two cats: {} quads", out.glyphs.len());
         };
         let step = second.origin_px[0] - first.origin_px[0];
         let fitted_advance = native.glyphs[0].advance_px * f32::from(fit_px) / 18.0;

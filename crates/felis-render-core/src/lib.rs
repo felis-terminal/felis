@@ -4,8 +4,10 @@ use felis_protocol::{ImageId, messages::ImageFormat};
 
 pub mod atlas;
 pub mod box_drawing;
+pub mod display_list;
 pub mod glyphs;
 pub mod overlay;
+pub mod painter;
 pub mod palette;
 
 /// `start` / `end` are normalized by the client: row-major min/max for

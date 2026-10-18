@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish.workspace = true
-description = "felis wgpu renderer: pipeline, glyph atlas, image atlas, decoration shader"
+description = "felis wgpu renderer: pipeline, instance encoding, glyph and image atlas textures, decoration shader"
 
 [dependencies]
 felis-protocol = { workspace = true }

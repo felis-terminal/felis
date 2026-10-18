@@ -3,19 +3,21 @@
 
 use crate::{
     buffer_ring::RowUpdates,
-    instances::{
-        BgInstance, CellPainter, ChromeBar, CursorPaint, DecorationInstance, FgInstance,
-        InstanceBuffers, PreeditSpan, bottom_bar_claim, clip_cell_instances_above,
-        extend_confirm_instances, extend_link_preview_instances, extend_preedit_instances,
-        extend_search_instances, preedit_covered_cols,
+    gpu_instances::{
+        AtlasSides, BgInstance, DecorationInstance, FgInstance, InstanceBuffers, encode,
     },
 };
 use bytemuck::Zeroable;
 use felis_grid::ScreenBuffer;
 use felis_render_core::{
     SelectionRange,
+    display_list::RowPaint,
     glyphs::{AtlasView, ShapeFrame},
     overlay::{ConfirmOverlay, LinkPreviewOverlay, PreeditOverlay, SearchOverlay},
+    painter::{
+        CellPainter, ChromeBar, CursorPaint, PreeditSpan, bottom_bar_claim, clip_cells_above,
+        extend_confirm, extend_link_preview, extend_preedit, extend_search, preedit_covered_cols,
+    },
     palette::ResolvedTheme,
 };
 use felis_shaping::CellMetrics;
@@ -77,6 +79,9 @@ pub struct RowCache {
     version: u64,
     epoch: u64,
     row: InstanceBuffers,
+    /// The display list a row or the overlays paint into before
+    /// [`encode`] turns it into `row` or appends it to `out`.
+    paint: RowPaint,
     flat: InstanceBuffers,
     ends: Vec<[usize; 3]>,
     /// Set when the rows fit slots far wider than they need.
@@ -107,8 +112,8 @@ impl RowCache {
         shape_frame: &ShapeFrame,
         frame: &CellFrame<'_>,
     ) -> (&InstanceBuffers, u16) {
-        // Keep in lockstep with `extend_search_instances` /
-        // `extend_confirm_instances` / `extend_link_preview_instances`,
+        // Keep in lockstep with `extend_search` / `extend_confirm` /
+        // `extend_link_preview`,
         // which draw under the same `!label.is_empty()` condition; the
         // reserved row must not double through the overlay.
         let search_active = frame.search.is_some_and(|o| !o.label.is_empty());
@@ -148,9 +153,18 @@ impl RowCache {
         // across rows), and it rides the same pass as the bar's text.
         let clip_max_y = (reserved_bottom_rows > 0)
             .then(|| f32::from(rows.saturating_sub(reserved_bottom_rows)) * metrics.height as f32);
-        let out = self.paint(&painter, key, screen.damage().dirty_rows(), clip_max_y);
+        let sides = AtlasSides::of(atlas);
+        self.paint(
+            &painter,
+            key,
+            screen.damage().dirty_rows(),
+            clip_max_y,
+            sides,
+        );
+        let mut out = std::mem::take(&mut self.paint);
+        out.clear();
         if let Some(overlay) = frame.preedit {
-            extend_preedit_instances(overlay, metrics, rows, cols, atlas, out);
+            extend_preedit(overlay, metrics, rows, cols, atlas, &mut out);
         }
         if let Some(overlay) = frame.search {
             // Hit highlights regardless; the bar only when the search
@@ -158,19 +172,21 @@ impl RowCache {
             // search is composing, and two bars in one row interleave
             // their glyphs rather than one hiding the other.
             let draw_bar = matches!(chrome, ChromeBar::Search);
-            extend_search_instances(overlay, metrics, rows, cols, draw_bar, atlas, out);
+            extend_search(overlay, metrics, rows, cols, draw_bar, atlas, &mut out);
         }
         // After the search bar: an open question wins the bottom row.
         if let Some(overlay) = frame.confirm {
-            extend_confirm_instances(overlay, metrics, rows, cols, atlas, out);
+            extend_confirm(overlay, metrics, rows, cols, atlas, &mut out);
         }
         // Last, and only when neither of the above claimed the row
         // (`bottom_bar_claim` carries the precedence and its test).
         if bottom_bar.draw_link_preview()
             && let Some(overlay) = frame.link_preview
         {
-            extend_link_preview_instances(overlay, metrics, rows, cols, atlas, out);
+            extend_link_preview(overlay, metrics, rows, cols, atlas, &mut out);
         }
+        encode(&out, sides, &mut self.out);
+        self.paint = out;
         (&self.out, reserved_bottom_rows)
     }
 
@@ -183,33 +199,30 @@ impl RowCache {
         key: FrameKey,
         dirty: impl Iterator<Item = usize>,
         clip_max_y: Option<f32>,
+        sides: AtlasSides,
     ) -> &mut InstanceBuffers {
         self.version += 1;
-        let cursor = painter.cursor;
+        let cursor = painter.cursor();
         let rows = usize::from(key.rows);
         let reusable = self.key == Some(key) && self.row_version.len() == rows;
         let fits = reusable && {
             self.truncate_to_rows();
-            let moved = (self.cursor != cursor).then_some([self.cursor.cell, cursor.cell]);
+            let moved = (self.cursor != cursor).then_some([self.cursor.cell(), cursor.cell()]);
             let cursor_rows = moved.into_iter().flatten().flatten();
             dirty
                 .chain(cursor_rows.map(|(r, _)| usize::from(r)))
                 .filter(|&r| r < rows)
-                .all(|r| self.repaint_row(painter, r, clip_max_y))
+                .all(|r| self.repaint_row(painter, r, clip_max_y, sides))
         };
         if !fits {
-            self.repaint_all(painter, key, clip_max_y);
+            self.repaint_all(painter, key, clip_max_y, sides);
         }
-        let mut lane = std::mem::take(&mut self.row);
-        lane.bg.clear();
-        lane.fg.clear();
-        lane.deco.clear();
-        painter.push_scrollbar_lane(&mut lane);
+        self.paint.clear();
+        painter.push_scrollbar_lane(&mut self.paint);
         if let Some(max_y) = clip_max_y {
-            clip_cell_instances_above(&mut lane, max_y);
+            clip_cells_above(&mut self.paint, max_y);
         }
-        self.out.bg.extend_from_slice(&lane.bg);
-        self.row = lane;
+        encode(&self.paint, sides, &mut self.out);
         self.key = Some(key);
         self.cursor = cursor;
         &mut self.out
@@ -233,17 +246,19 @@ impl RowCache {
 
     fn paint_row_scratch<A: AtlasView>(
         row: &mut InstanceBuffers,
+        paint: &mut RowPaint,
         painter: &CellPainter<'_, A>,
         r: usize,
         clip_max_y: Option<f32>,
+        sides: AtlasSides,
     ) {
-        row.bg.clear();
-        row.fg.clear();
-        row.deco.clear();
-        painter.extend_row(row, r as u16);
+        paint.clear();
+        painter.extend_row(paint, r as u16);
         if let Some(max_y) = clip_max_y {
-            clip_cell_instances_above(row, max_y);
+            clip_cells_above(paint, max_y);
         }
+        row.clear();
+        encode(paint, sides, row);
     }
 
     fn repaint_row<A: AtlasView>(
@@ -251,8 +266,16 @@ impl RowCache {
         painter: &CellPainter<'_, A>,
         r: usize,
         clip_max_y: Option<f32>,
+        sides: AtlasSides,
     ) -> bool {
-        Self::paint_row_scratch(&mut self.row, painter, r, clip_max_y);
+        Self::paint_row_scratch(
+            &mut self.row,
+            &mut self.paint,
+            painter,
+            r,
+            clip_max_y,
+            sides,
+        );
         let [bg, fg, deco] = self.stride;
         if self.row.bg.len() > bg || self.row.fg.len() > fg || self.row.deco.len() > deco {
             return false;
@@ -271,13 +294,14 @@ impl RowCache {
         painter: &CellPainter<'_, A>,
         key: FrameKey,
         clip_max_y: Option<f32>,
+        sides: AtlasSides,
     ) {
         let rows = usize::from(key.rows);
         if !self.relayout && self.row_version.len() == rows {
             self.truncate_to_rows();
             let mut widest = [0usize; 3];
             let fits = (0..rows).all(|r| {
-                let fits = self.repaint_row(painter, r, clip_max_y);
+                let fits = self.repaint_row(painter, r, clip_max_y, sides);
                 widest = widen(widest, &self.row);
                 fits
             });
@@ -288,13 +312,18 @@ impl RowCache {
         }
         self.relayout = false;
         let mut flat = std::mem::take(&mut self.flat);
-        flat.bg.clear();
-        flat.fg.clear();
-        flat.deco.clear();
+        flat.clear();
         self.ends.clear();
         let mut widest = [0usize; 3];
         for r in 0..rows {
-            Self::paint_row_scratch(&mut self.row, painter, r, clip_max_y);
+            Self::paint_row_scratch(
+                &mut self.row,
+                &mut self.paint,
+                painter,
+                r,
+                clip_max_y,
+                sides,
+            );
             widest = widen(widest, &self.row);
             flat.bg.extend_from_slice(&self.row.bg);
             flat.fg.extend_from_slice(&self.row.fg);
@@ -389,7 +418,7 @@ mod tests {
     use felis_shaping::{CellMetrics, GlyphId, SizingKey};
     use proptest::prelude::*;
 
-    use felis_render_core::{glyphs::GlyphSlot, palette::Theme};
+    use felis_render_core::{display_list::AtlasKind, glyphs::GlyphSlot, palette::Theme};
 
     use super::*;
 
@@ -400,8 +429,7 @@ mod tests {
     impl AtlasView for Atlas {
         fn slot(&self, glyph: char, _: u32, _: SizingKey) -> Option<GlyphSlot> {
             (glyph.is_ascii_graphic()).then(|| GlyphSlot {
-                uv_min: [f32::from(glyph as u8) / 128.0, self.0 as f32],
-                uv_max: [1.0, 1.0],
+                atlas_px: [u32::from(glyph as u8), self.0 as u32],
                 size_px: [6, 10],
                 offset_px: [1, 10],
                 is_color: false,
@@ -424,6 +452,10 @@ mod tests {
 
         fn overlay_cluster(&self, _: &str) -> Option<&[felis_render_core::glyphs::ClusterGlyph]> {
             None
+        }
+
+        fn sheet_side(&self, _: AtlasKind) -> u32 {
+            128
         }
     }
 
@@ -651,20 +683,23 @@ mod tests {
                 atlas_generation: self.atlas,
             };
             let dirty = self.screen.damage().dirty_rows();
-            let cached = cache.paint(&painter, key, dirty, clip);
+            let sides = AtlasSides::of(&atlas);
+            let cached = cache.paint(&painter, key, dirty, clip, sides);
             let got = InstanceBuffers {
                 bg: occupied(&cached.bg),
                 fg: occupied(&cached.fg),
                 deco: occupied(&cached.deco),
             };
-            let mut want = InstanceBuffers::default();
+            let mut paint = RowPaint::default();
             for r in 0..rows {
-                painter.extend_row(&mut want, r);
+                painter.extend_row(&mut paint, r);
             }
-            painter.push_scrollbar_lane(&mut want);
+            painter.push_scrollbar_lane(&mut paint);
             if let Some(max_y) = clip {
-                clip_cell_instances_above(&mut want, max_y);
+                clip_cells_above(&mut paint, max_y);
             }
+            let mut want = InstanceBuffers::default();
+            encode(&paint, sides, &mut want);
             self.cache = cache;
             self.screen.clear_damage();
             (got, want)
