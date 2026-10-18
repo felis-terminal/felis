@@ -976,6 +976,7 @@ dependencies = [
  "felis-client-core",
  "felis-grid",
  "felis-protocol",
+ "felis-render-core",
  "felis-render-wgpu",
  "felis-transport",
  "memory-stats",
@@ -1106,6 +1107,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "felis-render-core"
+version = "0.2.0"
+dependencies = [
+ "felis-grid",
+ "felis-protocol",
+ "felis-shaping",
+ "felis-vt",
+ "proptest",
+ "tracing",
+]
+
+[[package]]
 name = "felis-render-wgpu"
 version = "0.2.0"
 dependencies = [
@@ -1113,6 +1126,7 @@ dependencies = [
  "criterion",
  "felis-grid",
  "felis-protocol",
+ "felis-render-core",
  "felis-shaping",
  "felis-vt",
  "foldhash 0.2.0",

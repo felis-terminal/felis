@@ -4,7 +4,7 @@
 
 use std::num::NonZeroU32;
 
-use felis_render_wgpu::atlas::{Allocation, ShelfAtlas};
+use felis_render_core::atlas::{Allocation, ShelfAtlas};
 use proptest::prelude::*;
 
 const fn overlap(a: Allocation, b: Allocation) -> bool {

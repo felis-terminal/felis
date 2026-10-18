@@ -56,10 +56,13 @@ use felis_protocol::{
         SessionToDaemonMsg, StreamId, Subject, ViewportAnchor,
     },
 };
+use felis_render_core::{
+    ImageData, ImageSource,
+    overlay::{PreeditOverlay, SearchHitSpan, SearchOverlay},
+};
 use felis_render_wgpu::{
-    DEFAULT_FONT_SIZE_LOGICAL_PX, FaceSpec, ImageData, ImageSource, MouseState, PreeditOverlay,
-    Renderer, RendererConfig, SearchHitSpan, SearchOverlay, SurfaceError, TRAIL_SHADER_SOURCE,
-    TrailState, Warmup, validate_post_shader,
+    DEFAULT_FONT_SIZE_LOGICAL_PX, FaceSpec, MouseState, Renderer, RendererConfig, SurfaceError,
+    TRAIL_SHADER_SOURCE, TrailState, Warmup, validate_post_shader,
 };
 use felis_transport::{ClientDriver, Delivery, FrameReader, FrameWriter, Incoming, OwnedFrame};
 use std::sync::{Mutex, PoisonError};
@@ -874,12 +877,12 @@ fn resolve_post_shader(cfg: &config::EffectiveConfig) -> Option<String> {
 pub(crate) fn configure_theme_frame(
     cfg: &RendererConfig,
 ) -> Result<OutgoingFrame, felis_transport::TransportError> {
-    let (fg, bg, cursor) = felis_render_wgpu::palette::configured_theme_report(
+    let (fg, bg, cursor) = felis_render_core::palette::configured_theme_report(
         cfg.theme_fg.as_deref(),
         cfg.theme_bg.as_deref(),
         cfg.theme_cursor.as_deref(),
     );
-    let palette = felis_render_wgpu::palette::configured_palette_report(&cfg.theme_palette);
+    let palette = felis_render_core::palette::configured_palette_report(&cfg.theme_palette);
     OutgoingFrame::ordered(&SessionToDaemonMsg::ConfigureTheme {
         fg,
         bg,

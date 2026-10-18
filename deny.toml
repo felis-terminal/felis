@@ -25,6 +25,14 @@ wildcards = "deny"
 allow-wildcard-paths = true
 # Runtime evaluators are intentionally excluded; extension is IPC-based.
 deny = [
+  # GPU and windowing crates, each admitted only as a direct dependency of
+  # the crate that owns it (docs/reference/workspace.md "Crate map").
+  { crate = "wgpu", wrappers = [
+    "felis-render-wgpu",
+  ], reason = "only felis-render-wgpu talks to the GPU" },
+  { crate = "winit", wrappers = [
+    "felis-client",
+  ], reason = "only felis-client owns a window" },
   # Lua bindings and runtimes.
   "mlua",
   "rlua",

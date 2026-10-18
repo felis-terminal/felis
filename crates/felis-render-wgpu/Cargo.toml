@@ -12,6 +12,7 @@ description = "felis wgpu renderer: pipeline, glyph atlas, image atlas, decorati
 felis-protocol = { workspace = true }
 felis-grid = { workspace = true }
 felis-shaping = { workspace = true }
+felis-render-core = { workspace = true }
 wgpu = { workspace = true }
 bytemuck = { workspace = true }
 raw-window-handle = { workspace = true }

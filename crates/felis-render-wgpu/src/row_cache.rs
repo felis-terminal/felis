@@ -2,20 +2,22 @@
 //! frame repaints and uploads only the rows the shadow marked dirty.
 
 use crate::{
-    SelectionRange,
     buffer_ring::RowUpdates,
     glyphs::ShapeFrame,
     instances::{
-        AtlasView, BgInstance, CellPainter, ChromeBar, ConfirmOverlay, CursorPaint,
-        DecorationInstance, FgInstance, InstanceBuffers, LinkPreviewOverlay, PreeditOverlay,
-        PreeditSpan, SearchOverlay, bottom_bar_claim, clip_cell_instances_above,
+        AtlasView, BgInstance, CellPainter, ChromeBar, CursorPaint, DecorationInstance, FgInstance,
+        InstanceBuffers, PreeditSpan, bottom_bar_claim, clip_cell_instances_above,
         extend_confirm_instances, extend_link_preview_instances, extend_preedit_instances,
         extend_search_instances, preedit_covered_cols,
     },
-    palette::ResolvedTheme,
 };
 use bytemuck::Zeroable;
 use felis_grid::ScreenBuffer;
+use felis_render_core::{
+    SelectionRange,
+    overlay::{ConfirmOverlay, LinkPreviewOverlay, PreeditOverlay, SearchOverlay},
+    palette::ResolvedTheme,
+};
 use felis_shaping::CellMetrics;
 
 /// The per-frame inputs besides the screen, theme, and atlas that decide
@@ -387,12 +389,10 @@ mod tests {
     use felis_shaping::{CellMetrics, GlyphId, SizingKey};
     use proptest::prelude::*;
 
+    use felis_render_core::palette::Theme;
+
     use super::*;
-    use crate::{
-        glyphs::ShapeFrame,
-        instances::GlyphSlot,
-        palette::{ResolvedTheme, Theme},
-    };
+    use crate::{glyphs::ShapeFrame, instances::GlyphSlot};
 
     /// Every printable char has a slot whose uv depends on the atlas
     /// generation, so a cached row that outlived a recycle shows up.

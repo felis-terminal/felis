@@ -19,7 +19,12 @@ use felis_grid::{
 };
 use felis_protocol::{
     ImageId,
-    messages::{CursorStyle, ImageFormat, ThemeChannel},
+    messages::{CursorStyle, ThemeChannel},
+};
+use felis_render_core::{
+    ImageSource, SelectionRange,
+    overlay::{ConfirmOverlay, LinkPreviewOverlay, PreeditOverlay, SearchOverlay},
+    palette::{ResolvedTheme, Theme, effective_theme},
 };
 use felis_shaping::{CellMetrics, FontStack, ShapingError, StackDescription, StyleFaces};
 pub use felis_shaping::{FaceSpec, installed_families};
@@ -37,15 +42,12 @@ use wgpu::{
     TextureViewDescriptor, Trace, VertexBufferLayout, VertexState,
 };
 
-pub mod atlas;
-pub mod box_drawing;
 mod buffer_ring;
 mod capture;
 pub mod glyphs;
 mod gpu_resources;
 pub mod image_atlas;
 pub mod instances;
-pub mod palette;
 pub mod pipeline;
 pub mod post;
 pub mod probe;
@@ -67,7 +69,6 @@ use crate::{
         BAR_ELLIPSIS, BgInstance, CURSOR_MARKER_PX, DecorationInstance, FgInstance, ImgInstance,
         clip_img_quad_above,
     },
-    palette::{ResolvedTheme, Theme, effective_theme},
     pipeline::{
         ViewportUniform, atlas_bind_group_layout_entries, bg_instance_layout,
         decoration_instance_layout, fg_instance_layout, glyph_bind_group_layout_entries,
@@ -78,18 +79,6 @@ use crate::{
     texture_upload::TextureUploader,
 };
 
-/// `start` / `end` are normalized by the client: row-major min/max for
-/// a linear selection, axis-aligned bounding box for a rectangle.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SelectionRange {
-    pub start: (u16, u16),
-    pub end: (u16, u16),
-    pub rectangle: bool,
-}
-
-pub use crate::instances::{
-    ConfirmOverlay, LinkPreviewOverlay, PreeditOverlay, SearchHitSpan, SearchOverlay,
-};
 /// Re-exported so the client can match on `Renderer::render`'s error
 /// without a `wgpu` dependency.
 #[derive(Debug, thiserror::Error)]
@@ -104,16 +93,6 @@ pub enum SurfaceError {
     OutOfMemory,
     #[error("surface error: {0}")]
     Other(String),
-}
-
-/// `pixels.len()` equals `width * height * bytes_per_pixel(format)`;
-/// the daemon dispatcher enforces it.
-#[derive(Debug, Clone, Copy)]
-pub struct ImageData<'a> {
-    pub width: u32,
-    pub height: u32,
-    pub format: ImageFormat,
-    pub pixels: &'a [u8],
 }
 
 /// The recovery set after an atlas reset, deduped in first-mention
@@ -134,14 +113,6 @@ enum UploadOutcome {
     Uploaded,
     SheetFull,
     Missing,
-}
-
-/// Supplies image pixels for GPU atlas re-uploads when the atlas recycles itself.
-///
-/// Images are held in `felis_client_core::ImageShadow`. Returns `None` if pixels have not
-/// fully arrived or were deleted, in which case placements paint nothing.
-pub trait ImageSource {
-    fn image_data(&self, id: ImageId) -> Option<ImageData<'_>>;
 }
 
 #[derive(Debug, Error)]
@@ -1834,7 +1805,8 @@ mod tests {
         )
     )]
 
-    use crate::palette::srgb_to_linear_rgba;
+    use felis_protocol::messages::ImageFormat;
+    use felis_render_core::{ImageData, palette::srgb_to_linear_rgba};
 
     use super::*;
 

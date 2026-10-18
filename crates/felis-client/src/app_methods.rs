@@ -227,11 +227,11 @@ impl App {
     /// only bounds how many glyphs a hidden/narrow window rasterizes.
     pub(crate) fn build_link_preview_overlay(
         &self,
-    ) -> Option<felis_render_wgpu::LinkPreviewOverlay> {
+    ) -> Option<felis_render_core::overlay::LinkPreviewOverlay> {
         const PREVIEW_MAX_CHARS: usize = 120;
         self.hover_target
             .as_ref()
-            .map(|target| felis_render_wgpu::LinkPreviewOverlay {
+            .map(|target| felis_render_core::overlay::LinkPreviewOverlay {
                 text: target.preview(PREVIEW_MAX_CHARS),
             })
     }
@@ -261,7 +261,7 @@ impl App {
     pub(crate) fn update_renderer_selection(&mut self) {
         let range = self.selection().map(|sel| {
             let (start, end) = sel.range();
-            felis_render_wgpu::SelectionRange {
+            felis_render_core::SelectionRange {
                 start,
                 end,
                 rectangle: matches!(sel.mode(), felis_client_core::SelectionMode::Rectangle),
@@ -705,12 +705,14 @@ impl App {
     /// One bottom bar for two transient uses. An armed question outranks a
     /// notice: the question is waiting on a key, the notice only reports
     /// what a key already did.
-    pub(crate) fn build_confirm_overlay(&self) -> Option<felis_render_wgpu::ConfirmOverlay> {
+    pub(crate) fn build_confirm_overlay(
+        &self,
+    ) -> Option<felis_render_core::overlay::ConfirmOverlay> {
         let label = match self.pending_confirm.as_ref() {
             Some(pending) => pending.label(),
             None => self.notice.clone()?,
         };
-        Some(felis_render_wgpu::ConfirmOverlay { label })
+        Some(felis_render_core::overlay::ConfirmOverlay { label })
     }
 
     pub(crate) fn set_notice(&mut self, text: String) {

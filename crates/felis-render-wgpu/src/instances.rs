@@ -12,8 +12,9 @@ use felis_grid::{
 };
 use felis_shaping::{CellMetrics, FontStyle, SizingKey};
 
-use crate::{
+use felis_render_core::{
     SelectionRange,
+    overlay::{ConfirmOverlay, LinkPreviewOverlay, PreeditOverlay, SearchOverlay},
     palette::{
         BIDI_MARKER_BG, BIDI_MARKER_FG, CONFIRM_BAR_BG, LINK_UNDERLINE, PREEDIT_BG, ResolvedTheme,
         SCROLLBAR_THUMB, SCROLLBAR_TRACK, SEARCH_BAR_BG, SEARCH_CURRENT_BG, SEARCH_MATCH_BG,
@@ -34,44 +35,6 @@ const PREEDIT_UNDERLINE_PX: f32 = 2.0;
 const PREEDIT_ACTIVE_UNDERLINE_PX: f32 = 4.0;
 
 const SCROLLBAR_LANE_PX: f32 = 6.0;
-
-/// Uncommitted IME composition text painted at 0-based `anchor` `(row, col)`.
-///
-/// Stops at the row's right edge without wrapping. `cursor` is the active-segment
-/// byte range reported by winit.
-#[derive(Debug, Clone)]
-pub struct PreeditOverlay {
-    pub anchor: (u16, u16),
-    pub text: String,
-    pub cursor: Option<(usize, usize)>,
-}
-
-/// Scrollback-search overlay with hit highlights and a bottom-row status bar.
-///
-/// The bar occludes the bottom row's cells. Re-derived on redraw and painted
-/// until [`crate::Renderer::set_search_overlay`] passes `None`.
-#[derive(Debug, Clone, Default)]
-pub struct SearchOverlay {
-    /// Empty suppresses the bar; highlights still paint.
-    pub label: String,
-    /// One entry per `col_span` of a `SearchToClientMsg::Match`, already mapped
-    /// through the viewport by the caller. The renderer clips
-    /// out-of-range rows / cols so a viewport edit racing the paint
-    /// cannot panic.
-    pub visible_hits: Vec<SearchHitSpan>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SearchHitSpan {
-    /// Composed-view row (0 = top of visible screen; `rows - 1` = bottom).
-    pub row: u16,
-    /// Inclusive column range start.
-    pub col_start: u16,
-    /// Exclusive column range end.
-    pub col_end: u16,
-    /// The renderer does not enforce uniqueness.
-    pub is_current: bool,
-}
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, PartialEq, Pod, Zeroable)]
@@ -1407,14 +1370,6 @@ pub fn extend_search_instances<A: AtlasView>(
     );
 }
 
-/// Same chrome surface as the search bar (the caller reserves the
-/// bottom row identically), with [`CONFIRM_BAR_BG`] so a destructive
-/// prompt never reads as a search.
-#[derive(Debug, Clone, Default)]
-pub struct ConfirmOverlay {
-    pub label: String,
-}
-
 /// Same emission contract as [`extend_search_instances`]'s bar step.
 pub fn extend_confirm_instances<A: AtlasView>(
     overlay: &ConfirmOverlay,
@@ -1436,15 +1391,6 @@ pub fn extend_confirm_instances<A: AtlasView>(
         atlas,
         out,
     );
-}
-
-/// The Ctrl-hover OSC 8 activation preview (`docs/explanation/security-model.md`
-/// "OSC 8 hyperlinks and OSC 7 CWD"): `text` is already
-/// `ActivationTarget::preview`'s output, so it carries no control or
-/// bidi codepoint by construction.
-#[derive(Debug, Clone, Default)]
-pub struct LinkPreviewOverlay {
-    pub text: String,
 }
 
 /// Same emission contract as [`extend_search_instances`]'s bar step.
@@ -1736,10 +1682,10 @@ mod tests {
     use std::collections::HashMap;
 
     use felis_grid::{Color, Grid};
+    use felis_render_core::{overlay::SearchHitSpan, palette::Theme};
     use felis_vt::Parser;
 
     use super::*;
-    use crate::palette::Theme;
 
     /// Whitespace returns `None`, mimicking swash.
     struct MockAtlas {
@@ -3199,7 +3145,7 @@ mod tests {
 
     #[test]
     fn link_cells_emit_an_extra_underline_instance() {
-        use crate::palette::LINK_UNDERLINE;
+        use felis_render_core::palette::LINK_UNDERLINE;
         let g = drive(
             1,
             4,
@@ -3218,7 +3164,7 @@ mod tests {
     /// REQ-910: a `javascript:` OSC 8 emits no `LINK_UNDERLINE`.
     #[test]
     fn disallowed_scheme_emits_no_link_underline_instance() {
-        use crate::palette::LINK_UNDERLINE;
+        use felis_render_core::palette::LINK_UNDERLINE;
         let g = drive(
             1,
             6,
@@ -3236,7 +3182,7 @@ mod tests {
     /// rather than inheriting the safe URI.
     #[test]
     fn disallowed_scheme_after_safe_open_clears_underline_run() {
-        use crate::palette::LINK_UNDERLINE;
+        use felis_render_core::palette::LINK_UNDERLINE;
         let g = drive(
             1,
             8,
@@ -3259,7 +3205,7 @@ mod tests {
     fn link_underline_skipped_on_bidi_marker_cells() {
         // The bidi marker drops the link underline so the warning stays
         // unobstructed.
-        use crate::palette::{BIDI_MARKER_BG, LINK_UNDERLINE};
+        use felis_render_core::palette::{BIDI_MARKER_BG, LINK_UNDERLINE};
         let g = drive(
             1,
             3,
@@ -3885,7 +3831,7 @@ mod tests {
     fn underline_color_uses_sgr_58_when_set() {
         let deco = deco_for(b"\x1b[4;58:2::255:0:0m");
         assert_eq!(deco.len(), 1);
-        let want = crate::palette::srgb_to_linear_rgba([255, 0, 0], 1.0);
+        let want = felis_render_core::palette::srgb_to_linear_rgba([255, 0, 0], 1.0);
         assert_eq!(
             deco[0].color, want,
             "SGR 58 underline color must be honored"
