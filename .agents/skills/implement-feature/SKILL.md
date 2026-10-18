@@ -78,7 +78,8 @@ teed to `daemon.log` (`docs/reference/cli.md` "Log files"; `RUST_LOG` respected,
   - config structs, CLI `--format` output, bridge grammar, or felis-json types changed → `just schema` and commit every
     rewritten `*.schema.json` (`crates/felis-client-core/felis-config.schema.json`, `crates/felis-cli/schemas/`,
     `crates/felis-grid/schemas/`); a test fails on staleness under `--all-features`.
-  - bridge conversations or felis-json frames changed → `just golden`.
+  - bridge conversations, felis-json frames, or the cell instances the renderer paints changed on purpose →
+    `just golden`.
   - `felis.proto` changed → `just proto` (the pre-commit hook fails on a stale generated copy); see the `extend-ipc`
     skill.
   - Unicode version bumped → change the UCD pin in `dev/flake-module.nix` together with `unicode-width`, then

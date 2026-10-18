@@ -4,12 +4,36 @@
 use crate::{
     SelectionRange,
     buffer_ring::RowUpdates,
+    glyphs::ShapeFrame,
     instances::{
-        AtlasView, BgInstance, CellPainter, CursorPaint, DecorationInstance, FgInstance,
-        InstanceBuffers, PreeditSpan, clip_cell_instances_above,
+        AtlasView, BgInstance, CellPainter, ChromeBar, ConfirmOverlay, CursorPaint,
+        DecorationInstance, FgInstance, InstanceBuffers, LinkPreviewOverlay, PreeditOverlay,
+        PreeditSpan, SearchOverlay, bottom_bar_claim, clip_cell_instances_above,
+        extend_confirm_instances, extend_link_preview_instances, extend_preedit_instances,
+        extend_search_instances, preedit_covered_cols,
     },
+    palette::ResolvedTheme,
 };
 use bytemuck::Zeroable;
+use felis_grid::ScreenBuffer;
+use felis_shaping::CellMetrics;
+
+/// The per-frame inputs besides the screen, theme, and atlas that decide
+/// a frame's cell instances.
+#[derive(Clone, Copy, Debug)]
+pub struct CellFrame<'a> {
+    pub viewport: u32,
+    pub viewport_max: u32,
+    pub cursor_visible: bool,
+    pub selection: Option<SelectionRange>,
+    pub reverse_video: bool,
+    pub font_features: &'a [String],
+    pub atlas_generation: u64,
+    pub preedit: Option<&'a PreeditOverlay>,
+    pub search: Option<&'a SearchOverlay>,
+    pub confirm: Option<&'a ConfirmOverlay>,
+    pub link_preview: Option<&'a LinkPreviewOverlay>,
+}
 
 /// The frame-wide inputs every row's instances depend on. The theme is
 /// not here: its setters call [`RowCache::invalidate`] instead.
@@ -37,7 +61,7 @@ const DECO: usize = size_of::<DecorationInstance>();
 const PADDING_ALLOWANCE: usize = 16 << 20;
 
 #[derive(Default)]
-pub(crate) struct RowCache {
+pub struct RowCache {
     /// Half the device's buffer size limit bounds a padded layer, since
     /// the ring rounds a buffer's capacity up to a power of two.
     max_buffer_bytes: usize,
@@ -58,7 +82,8 @@ pub(crate) struct RowCache {
 }
 
 impl RowCache {
-    pub(crate) fn new(max_buffer_bytes: u64) -> Self {
+    #[must_use]
+    pub fn new(max_buffer_bytes: u64) -> Self {
         Self {
             max_buffer_bytes: usize::try_from(max_buffer_bytes).unwrap_or(usize::MAX),
             ..Self::default()
@@ -67,6 +92,84 @@ impl RowCache {
 
     pub(crate) const fn invalidate(&mut self) {
         self.key = None;
+    }
+
+    /// The instances the renderer uploads for `screen` this frame, and the
+    /// bottom rows the overlays reserved from the cell painter.
+    pub fn paint_frame<A: AtlasView>(
+        &mut self,
+        screen: &ScreenBuffer,
+        metrics: CellMetrics,
+        theme: &ResolvedTheme,
+        atlas: &A,
+        shape_frame: &ShapeFrame,
+        frame: &CellFrame<'_>,
+    ) -> (&InstanceBuffers, u16) {
+        // Keep in lockstep with `extend_search_instances` /
+        // `extend_confirm_instances` / `extend_link_preview_instances`,
+        // which draw under the same `!label.is_empty()` condition; the
+        // reserved row must not double through the overlay.
+        let search_active = frame.search.is_some_and(|o| !o.label.is_empty());
+        let confirm_active = frame.confirm.is_some_and(|o| !o.label.is_empty());
+        let link_preview_active = frame.link_preview.is_some_and(|o| !o.text.is_empty());
+        let preedit_active = frame.preedit.is_some_and(|o| !o.text.is_empty());
+        let chrome = ChromeBar::from_flags(search_active, confirm_active);
+        let bottom_bar = bottom_bar_claim(chrome, preedit_active, link_preview_active);
+        let reserved_bottom_rows = bottom_bar.reserved_rows();
+        let (rows, cols) = (screen.rows(), screen.cols());
+        // Reserved so the overlay's opaque bg hides the underlying glyph;
+        // the fg pass cannot occlude across the two passes.
+        let preedit_cols = frame.preedit.and_then(|o| preedit_covered_cols(o, cols));
+        let painter = CellPainter::new(screen, metrics, theme, atlas, shape_frame)
+            .with_cursor_visible(frame.cursor_visible)
+            .with_selection(frame.selection)
+            .with_viewport(frame.viewport, frame.viewport_max)
+            .with_reserved_bottom_rows(reserved_bottom_rows)
+            .with_preedit(preedit_cols)
+            .with_reverse_video(frame.reverse_video)
+            .resolved();
+        let key = FrameKey {
+            rows,
+            cols,
+            metrics: [metrics.width, metrics.height, metrics.ascent],
+            viewport: frame.viewport,
+            reserved_bottom_rows,
+            preedit: preedit_cols,
+            selection: frame.selection,
+            reverse_video: frame.reverse_video,
+            shaped: !frame.font_features.is_empty() || screen.cluster_count() > 0,
+            atlas_generation: frame.atlas_generation,
+        };
+        // Before any overlay is appended, so only producer-controlled
+        // quads are cut: a glyph anchored above the reserved row can
+        // still reach into it (a tall bitmap, an OSC 66 run scaled
+        // across rows), and it rides the same pass as the bar's text.
+        let clip_max_y = (reserved_bottom_rows > 0)
+            .then(|| f32::from(rows.saturating_sub(reserved_bottom_rows)) * metrics.height as f32);
+        let out = self.paint(&painter, key, screen.damage().dirty_rows(), clip_max_y);
+        if let Some(overlay) = frame.preedit {
+            extend_preedit_instances(overlay, metrics, rows, cols, atlas, out);
+        }
+        if let Some(overlay) = frame.search {
+            // Hit highlights regardless; the bar only when the search
+            // holds the row. A chord can arm a confirmation while a
+            // search is composing, and two bars in one row interleave
+            // their glyphs rather than one hiding the other.
+            let draw_bar = matches!(chrome, ChromeBar::Search);
+            extend_search_instances(overlay, metrics, rows, cols, draw_bar, atlas, out);
+        }
+        // After the search bar: an open question wins the bottom row.
+        if let Some(overlay) = frame.confirm {
+            extend_confirm_instances(overlay, metrics, rows, cols, atlas, out);
+        }
+        // Last, and only when neither of the above claimed the row
+        // (`bottom_bar_claim` carries the precedence and its test).
+        if bottom_bar.draw_link_preview()
+            && let Some(overlay) = frame.link_preview
+        {
+            extend_link_preview_instances(overlay, metrics, rows, cols, atlas, out);
+        }
+        (&self.out, reserved_bottom_rows)
     }
 
     /// Repaints `dirty` plus the rows the cursor left and entered, or every
@@ -623,3 +726,7 @@ mod tests {
         assert_eq!(h.cache.out.bg.len(), got.bg.len());
     }
 }
+
+#[cfg(test)]
+#[cfg(not(windows))]
+mod golden_tests;
