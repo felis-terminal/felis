@@ -283,6 +283,20 @@ negative-z case (`z=-1`, yazi's direct / old-Kitty preview path) sits above the 
 text. Collapsing both into one "below everything" tier lets the cell-background pass paint over `z=-1` placements, so
 yazi previews never appear.
 
+## Equal-z order travels on the wire
+
+kitty stacks equal-z draws by the internal ids it gives an image and a ref when it creates them. A mirror cannot recover
+that order from the order messages arrive in: the live outbox collapses an image sent twice in one drain to its last
+transmission, so a re-sent older image arrives after a newer one, and a rehydrate replays every anchored placement
+before every virtual one, so a placement put under the `p=` of a virtual placement loses the place the virtual placement
+held. The daemon therefore numbers images and placements itself and ships the numbers. Rejected: **an arrival order the
+daemon guarantees**, which moves a collapsed transmission back to its first position and makes message order a contract
+nothing types; a frame or show-frame marker queued between the two transmissions then names a frame the moved one does
+not carry.
+
+kitty orders a placeholder cell against a direct placement of the same image by when the cell's row last rendered, since
+it mints a ref per rendered row. felis draws the placeholder above, the order kitty shows once the row renders again.
+
 ## Chrome rows are not drawable
 
 Images with `z >= 0` paint after the cell glyphs, which is what Kitty specifies and what a producer drawing over its own

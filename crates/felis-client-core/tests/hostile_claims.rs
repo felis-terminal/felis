@@ -40,6 +40,7 @@ fn image_header(width: u32, height: u32) -> Vec<u8> {
         width,
         height,
         format: v1::ImageFormat::Rgba32 as i32,
+        serial: None,
     }))
 }
 

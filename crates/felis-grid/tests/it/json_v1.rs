@@ -19,8 +19,9 @@ use felis_protocol::build_identity::BuildIdentity;
 use felis_protocol::kitty_graphics::{ImageId, PlacementId};
 use felis_protocol::messages::{
     AttachFailure, AttachRefusal, Attachment, ClipboardSelection, ClipboardWrite, ConnToClientMsg,
-    CreateFailure, GridDims, GridMsg, ImageMsg, InputMsg, Key, KeyEvent, KeyEventKind, KeyLocation,
-    KeyMods, NamedKey, ProgramStatusRecord, SessionInfo, SessionToClientMsg, SourceRect,
+    CreateFailure, GridDims, GridMsg, ImageFormat, ImageMsg, ImageTarget, InputMsg, Key, KeyEvent,
+    KeyEventKind, KeyLocation, KeyMods, NamedKey, ProgramStatusRecord, SessionInfo,
+    SessionToClientMsg, SourceRect,
 };
 use felis_protocol::{MessageKind, RowPayload, codec};
 use serde_json::{Value, json};
@@ -127,6 +128,7 @@ fn cases() -> Vec<(&'static str, MessageKind, Vec<u8>)> {
                 }),
                 z_index: -3,
                 requested: None,
+                serial: Some(5),
             }),
         ),
         (
@@ -172,6 +174,19 @@ fn cases() -> Vec<(&'static str, MessageKind, Vec<u8>)> {
                 kind: KeyEventKind::Press,
                 location: KeyLocation::Standard,
             })),
+        ),
+        (
+            "image-header-new",
+            MessageKind::Image,
+            codec::encode(&ImageMsg::Header {
+                id: ImageId(9),
+                target: ImageTarget::New {
+                    width: 64,
+                    height: 32,
+                    format: ImageFormat::Rgba32,
+                    serial: Some(2),
+                },
+            }),
         ),
     ]
 }

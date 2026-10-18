@@ -17,6 +17,10 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 - **Terminal reset keeps the window's colors**: after a full reset (`ESC c`, `reset`), color queries keep answering the
   window's configured colors and light/dark preference instead of xterm white, a window stops painting the colors the
   program had set and shows the default mouse pointer again, and pixel-size reports keep the window's size.
+- **Kitty images of equal z stack as in kitty**: overlapping images at the same `z=` draw in the order they were
+  created, where sending an image again under its id keeps its place, and one image's placements draw in the order they
+  were first put; a window that reattaches draws them in the same order. The protocol minor is 2: `ImageNew.serial` and
+  `ImagePlacement.serial` carry the two orders.
 - **Kitty placeholder images under the text**: an image drawn through Unicode-placeholder cells sits between the cell
   backgrounds and the text, whatever `z=` it was placed with, as in kitty. An image re-sent under the same id disappears
   until the new data has arrived, rather than showing the old picture meanwhile.

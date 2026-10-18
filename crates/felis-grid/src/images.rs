@@ -169,6 +169,12 @@ impl ImageEntry {
         self.frames.len() > 1
     }
 
+    /// Creation order in its store, which equal-z images stack by.
+    #[must_use]
+    pub const fn serial(&self) -> u64 {
+        self.serial
+    }
+
     #[must_use]
     pub const fn current_frame(&self) -> usize {
         self.current
@@ -1024,6 +1030,10 @@ pub struct Placement {
     /// producer's `p=`, so no `p=` addresses it.
     #[cfg_attr(feature = "state-dump", serde(default))]
     pub anonymous: bool,
+    /// Its place in creation order, which equal-z placements of one
+    /// image stack by ([`Placements::upsert`]).
+    #[cfg_attr(feature = "state-dump", serde(default))]
+    pub serial: u64,
 }
 
 impl Placement {
@@ -1086,12 +1096,14 @@ pub struct ClientPlacement {
     pub rows: u16,
     /// `None` paints the whole image.
     pub source: Option<SourceRect>,
-    /// Negative renders under the cell layer; ties resolve by insertion
-    /// order.
+    /// Negative renders under the cell layer; ties resolve by image
+    /// rank, then [`Self::serial`].
     pub z_index: i32,
     /// The `c=` / `r=` the put asked for, which decides the drawn pixel
     /// size; `None` from a minor-0 daemon.
     pub requested: Option<RequestedExtent>,
+    /// [`Placement::serial`]; `None` from a minor-1 daemon.
+    pub serial: Option<u64>,
 }
 
 /// A Kitty Unicode-placeholder virtual placement (`U=1`): the image's
@@ -1114,6 +1126,10 @@ pub struct VirtualPlacement {
     pub cols: u16,
     pub rows: u16,
     pub z_index: i32,
+    /// As [`Placement::serial`]: a put turning this placement direct
+    /// keeps it. Daemon-side only; a client shadow holds `0`.
+    #[cfg_attr(feature = "state-dump", serde(default))]
+    pub serial: u64,
 }
 
 /// A placement of either kind, as a rekey or an eviction hands it back.
@@ -1195,10 +1211,18 @@ impl From<PlacementsDump> for Placements {
                 (n..n + dump.virtuals.len() as u64).collect(),
             )
         };
-        for (seq, p) in entry_seqs.into_iter().zip(dump.entries) {
+        // A dump that predates serials orders by `seq`, which is what
+        // `upsert` would have assigned.
+        for (seq, mut p) in entry_seqs.into_iter().zip(dump.entries) {
+            if p.serial == 0 {
+                p.serial = seq + 1;
+            }
             table.entries.insert(seq, p);
         }
-        for (seq, v) in virtual_seqs.into_iter().zip(dump.virtuals) {
+        for (seq, mut v) in virtual_seqs.into_iter().zip(dump.virtuals) {
+            if v.serial == 0 {
+                v.serial = seq + 1;
+            }
             table.virtuals.insert(seq, v);
         }
         table.next_seq = table
@@ -1305,17 +1329,37 @@ impl Placements {
         }
     }
 
+    /// The [`Placement::serial`] of the placement of either kind under
+    /// this key: what a put converting it to the other kind keeps, as
+    /// kitty's `handle_put_command` keeps the ref.
+    #[must_use]
+    pub fn serial(&self, image_id: ImageId, placement_id: Option<PlacementId>) -> Option<u64> {
+        let key = (image_id, placement_id);
+        self.entries
+            .get(key)
+            .map(|p| p.serial)
+            .or_else(|| self.virtuals.get(key).map(|v| v.serial))
+    }
+
     /// Last write wins under one producer `(image_id, placement_id)`, as
-    /// Kitty specifies; an anonymous placement is never replaced.
-    pub fn upsert(&mut self, placement: Placement) -> Option<Displaced> {
+    /// Kitty specifies; an anonymous placement is never replaced. The
+    /// replaced placement's [`Placement::serial`] stays; a new one keeps
+    /// a nonzero serial (a conversion's, [`Self::serial`]) or takes the next.
+    pub fn upsert(&mut self, mut placement: Placement) -> Option<Displaced> {
         let key = placement.key();
-        if !placement.anonymous && self.entries.get(key).is_some_and(|p| !p.anonymous) {
+        if !placement.anonymous
+            && let Some(held) = self.entries.get(key).filter(|p| !p.anonymous)
+        {
+            placement.serial = held.serial;
             return self
                 .entries
                 .replace(key, placement)
                 .map(Displaced::Replaced);
         }
         let seq = self.take_seq();
+        if placement.serial == 0 {
+            placement.serial = seq + 1;
+        }
         self.entries.insert(seq, placement);
         self.evict_over_cap().map(Displaced::Evicted)
     }
@@ -1336,8 +1380,8 @@ impl Placements {
     /// Moves an anonymous placement off `id` before a producer's `p=`
     /// takes it, since the wire names both by `(image_id, placement_id)`.
     /// It goes to the end of its table, where the client's remove and
-    /// re-add puts it, so both sides keep one order. Returns the id it
-    /// left and the placement under its new id.
+    /// re-add puts it, keeping its serial as kitty's ref keeps its id.
+    /// Returns the placement under its new id.
     pub fn rekey_anonymous(&mut self, image_id: ImageId, id: PlacementId) -> Option<AnyPlacement> {
         let key = (image_id, Some(id));
         if self.entries.get(key).is_some_and(|p| p.anonymous) {
@@ -1377,7 +1421,8 @@ impl Placements {
 
     /// Overwritten in place under its `(image_id, placement_id)`, or by
     /// image alone when it has no id; an anonymous placement is always a
-    /// new one. The client-side shadow applies the identical rule.
+    /// new one. The client-side shadow applies the identical rule. The
+    /// serial follows [`Self::upsert`]'s rule.
     /// Returns the placement evicted over [`MAX_PLACEMENTS`].
     pub fn upsert_virtual(&mut self, placement: VirtualPlacement) -> Option<AnyPlacement> {
         if !placement.anonymous {
@@ -1390,11 +1435,17 @@ impl Placements {
             }
             .map(Keyed::key);
             if let Some(key) = held {
+                let mut placement = placement;
+                placement.serial = self.virtuals.get(key).map_or(0, |v| v.serial);
                 self.virtuals.replace(key, placement);
                 return None;
             }
         }
         let seq = self.take_seq();
+        let mut placement = placement;
+        if placement.serial == 0 {
+            placement.serial = seq + 1;
+        }
         self.virtuals.insert(seq, placement);
         self.evict_over_cap()
     }

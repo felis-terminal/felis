@@ -1545,6 +1545,13 @@ message ImageNew {
   uint32 width = 1;
   uint32 height = 2;
   ImageFormat format = 3;
+  // The image's place in creation order, which equal-z placements
+  // stack by: a re-transmission under the same id keeps it, a deletion
+  // forfeits it. Unset from a daemon that does not report it.
+  optional uint64 serial = 4 [(felis.v1.field_since) = {
+    minor: 2
+    skippable: true
+  }];
 }
 
 // One frame of an image already transferred, in Kitty's 1-based
@@ -1592,6 +1599,13 @@ message ImagePlacement {
   // that does not report the request.
   RequestedExtent requested = 9 [(felis.v1.field_since) = {
     minor: 1
+    skippable: true
+  }];
+  // The placement's place in creation order, which equal-z placements
+  // of one image stack by: a put under its key keeps it, whichever kind
+  // the key held. Unset from a daemon that does not report it.
+  optional uint64 serial = 10 [(felis.v1.field_since) = {
+    minor: 2
     skippable: true
   }];
 }

@@ -123,12 +123,14 @@ fn action_t_emits_header_chunk_complete_only() {
                     width,
                     height,
                     format,
+                    serial,
                 },
         } => {
             assert_eq!(id.0, 7);
             assert_eq!(*width, 1);
             assert_eq!(*height, 1);
             assert_eq!(*format, ImageFormat::Rgba32);
+            assert_eq!(*serial, Some(1));
         }
         m => panic!("expected Header, got {m:?}"),
     }
@@ -1065,4 +1067,56 @@ fn evicting_the_last_placement_of_an_anonymous_image_deletes_the_image() {
     );
     assert!(s.images.get(first).is_none());
     assert_eq!(s.images.len(), 1);
+}
+
+fn placement_serials(msgs: &[ImageMsg]) -> Vec<(u32, Option<u64>)> {
+    msgs.iter()
+        .filter_map(|m| match m {
+            ImageMsg::Placement {
+                placement_id,
+                serial,
+                ..
+            } => Some((placement_id.unwrap().0, *serial)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// kitty keeps a ref's id when a put names its `p=` again, of either
+/// kind, so a live put reports the serial the table kept.
+#[test]
+fn a_live_put_reports_the_serial_its_placement_keeps() {
+    let mut s = State::new();
+    s.dispatch(&body("Ga=t,i=1,f=32,s=1,v=1", &tiny_rgba_payload()));
+    for controls in [
+        "Ga=p,i=1,p=1,q=2",
+        "Ga=p,i=1,p=2,q=2",
+        "Ga=p,i=1,p=1,z=3,q=2",
+        "Ga=p,i=1,p=3,U=1,q=2",
+        "Ga=p,i=1,p=3,q=2",
+    ] {
+        s.dispatch(&body(controls, b""));
+    }
+    assert_eq!(
+        placement_serials(&s.drain_events()),
+        [(1, Some(1)), (2, Some(2)), (1, Some(1)), (3, Some(3))]
+    );
+}
+
+#[test]
+fn a_placement_turned_virtual_and_back_keeps_its_serial() {
+    let mut s = State::new();
+    s.dispatch(&body("Ga=t,i=1,f=32,s=1,v=1", &tiny_rgba_payload()));
+    for controls in [
+        "Ga=p,i=1,p=1,q=2",
+        "Ga=p,i=1,p=2,q=2",
+        "Ga=p,i=1,p=1,U=1,q=2",
+        "Ga=p,i=1,p=1,q=2",
+    ] {
+        s.dispatch(&body(controls, b""));
+    }
+    assert_eq!(
+        placement_serials(&s.drain_events()),
+        [(1, Some(1)), (2, Some(2)), (1, Some(1))]
+    );
 }

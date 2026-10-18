@@ -64,6 +64,9 @@ pub enum ImageTarget {
         width: u32,
         height: u32,
         format: ImageFormat,
+        /// Creation order, which a re-transmission under the same id
+        /// keeps; `None` from a minor-1 daemon.
+        serial: Option<u64>,
     },
     /// One frame of an image already transferred, in Kitty's 1-based
     /// numbering: `1` is the root frame in place, `2..=frames + 1`
@@ -119,6 +122,9 @@ pub enum ImageMsg {
         z_index: i32,
         /// What `c=` / `r=` asked for; `None` from a minor-0 daemon.
         requested: Option<RequestedExtent>,
+        /// Creation order among the image's placements, kept by a put
+        /// under the same key; `None` from a minor-1 daemon.
+        serial: Option<u64>,
     },
     /// Remove one placement (Kitty `a=d, d=p`).
     PlacementRemoved {
@@ -194,6 +200,16 @@ pub(crate) mod tests {
                     width: 256,
                     height: 128,
                     format: ImageFormat::Rgba32,
+                    serial: Some(3),
+                },
+            },
+            ImageMsg::Header {
+                id: ImageId(8),
+                target: ImageTarget::New {
+                    width: 1,
+                    height: 1,
+                    format: ImageFormat::Rgb24,
+                    serial: None,
                 },
             },
             ImageMsg::Chunk {
@@ -221,6 +237,7 @@ pub(crate) mod tests {
                 }),
                 z_index: -1,
                 requested: Some(RequestedExtent { cols: 10, rows: 0 }),
+                serial: Some(4),
             },
             ImageMsg::Placement {
                 image_id: ImageId(7),
@@ -232,6 +249,7 @@ pub(crate) mod tests {
                 source: None,
                 z_index: 0,
                 requested: None,
+                serial: None,
             },
             ImageMsg::PlacementRemoved {
                 image_id: ImageId(7),
@@ -285,6 +303,7 @@ pub(crate) mod tests {
                 source: None,
                 z_index: 0,
                 requested: Some(RequestedExtent { cols: 0, rows: 0 }),
+                serial: Some(1),
             },
         ]
     }

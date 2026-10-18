@@ -349,6 +349,7 @@ mod tests {
             no_cursor_move: false,
             quiet: 0,
             anonymous: false,
+            serial: 0,
         });
         state.saved_screens.primary = Some(crate::graphics::SavedImages {
             images: state.images.clone(),
@@ -472,6 +473,7 @@ mod tests {
             no_cursor_move: false,
             quiet: 0,
             anonymous: false,
+            serial: 0,
         };
         let placeholder = VirtualPlacement {
             image_id: ImageId(1),
@@ -480,6 +482,7 @@ mod tests {
             cols: 1,
             rows: 1,
             z_index: 0,
+            serial: 0,
         };
         let mut live = Placements::new();
         live.upsert_virtual(placeholder);
@@ -492,7 +495,12 @@ mod tests {
         }
         assert_eq!(
             restored.upsert(anchored(0)),
-            Some(Displaced::Evicted(AnyPlacement::Virtual(placeholder)))
+            Some(Displaced::Evicted(AnyPlacement::Virtual(
+                VirtualPlacement {
+                    serial: 1,
+                    ..placeholder
+                }
+            )))
         );
     }
 }

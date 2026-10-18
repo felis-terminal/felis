@@ -7,12 +7,19 @@ use super::*;
 use crate::{Grid, test_support::drive};
 
 /// Images keyed by id; an id absent here is one still mid-transfer.
+/// An image's creation rank is its id unless [`Sizes::ranked`] says
+/// otherwise.
 #[derive(Default)]
-struct Sizes(HashMap<ImageId, (u32, u32)>);
+struct Sizes(HashMap<ImageId, (u32, u32)>, HashMap<ImageId, u64>);
 
 impl Sizes {
     fn with(mut self, id: u32, width: u32, height: u32) -> Self {
         self.0.insert(ImageId(id), (width, height));
+        self
+    }
+
+    fn ranked(mut self, id: u32, rank: u64) -> Self {
+        self.1.insert(ImageId(id), rank);
         self
     }
 }
@@ -20,6 +27,10 @@ impl Sizes {
 impl LayoutImages for Sizes {
     fn drawable_size(&self, id: ImageId) -> Option<(u32, u32)> {
         self.0.get(&id).copied()
+    }
+
+    fn stack_rank(&self, id: ImageId) -> u64 {
+        self.1.get(&id).copied().unwrap_or_else(|| u64::from(id.0))
     }
 }
 
@@ -34,11 +45,17 @@ fn placed(id: u32, anchor_row: i32, anchor_col: u16, cols: u16, rows: u16) -> Cl
         source: None,
         z_index: 0,
         requested: None,
+        serial: None,
     }
 }
 
 fn with_z(mut p: ClientPlacement, z: i32) -> ClientPlacement {
     p.z_index = z;
+    p
+}
+
+fn with_serial(mut p: ClientPlacement, serial: u64) -> ClientPlacement {
+    p.serial = Some(serial);
     p
 }
 
@@ -50,6 +67,7 @@ fn virt(id: u32, cols: u16, rows: u16, z: i32) -> VirtualPlacement {
         cols,
         rows,
         z_index: z,
+        serial: 0,
     }
 }
 
@@ -322,7 +340,7 @@ fn ids(draws: &[ImageDraw]) -> Vec<u32> {
 }
 
 #[test]
-fn each_layer_is_in_ascending_z_with_arrival_order_on_ties() {
+fn each_layer_is_in_ascending_z() {
     let grid = Grid::new(10, 10);
     let images = Sizes::default()
         .with(1, 8, 16)
@@ -390,6 +408,89 @@ fn a_placeholder_stacks_by_z_against_anchored_placements() {
 /// The client paints a viewport the daemon already composed, so a
 /// placeholder sits on the row it shows on while anchored placements
 /// shift by the viewport.
+/// kitty's `(z, image id, ref id)`: at equal z the older image draws
+/// first, whichever placement the client heard of first.
+#[test]
+fn equal_z_draws_stack_by_image_creation_not_placement_arrival() {
+    let grid = Grid::new(4, 4);
+    let images = Sizes::default()
+        .with(1, 8, 16)
+        .with(2, 8, 16)
+        .ranked(1, 9)
+        .ranked(2, 4);
+    let placements = [placed(1, 1, 1, 1, 1), placed(2, 1, 1, 1, 1)];
+    let mut layout = ImageLayout::new();
+    layout.rebuild(grid.screen(), &images, &placements, &[], (8.0, 16.0), 0);
+    assert_eq!(ids(layout.above_text()), [2, 1]);
+}
+
+fn columns(draws: &[ImageDraw]) -> Vec<f32> {
+    draws.iter().map(|d| d.dst[0]).collect()
+}
+
+#[test]
+fn one_image_s_equal_z_placements_stack_by_their_serial() {
+    let grid = Grid::new(4, 4);
+    let images = Sizes::default().with(1, 8, 16);
+    let placements = [
+        with_serial(placed(1, 1, 1, 1, 1), 7),
+        with_serial(placed(1, 1, 2, 1, 1), 3),
+    ];
+    let mut layout = ImageLayout::new();
+    layout.rebuild(grid.screen(), &images, &placements, &[], (8.0, 16.0), 0);
+    assert_eq!(columns(layout.above_text()), [8.0, 0.0]);
+}
+
+/// A daemon that sends no serial leaves the shadow's order, which is
+/// arrival with a re-put kept in place.
+#[test]
+fn placements_without_a_serial_keep_shadow_order() {
+    let grid = Grid::new(4, 4);
+    let images = Sizes::default().with(1, 8, 16);
+    let placements = [placed(1, 1, 2, 1, 1), placed(1, 1, 1, 1, 1)];
+    let mut layout = ImageLayout::new();
+    layout.rebuild(grid.screen(), &images, &placements, &[], (8.0, 16.0), 0);
+    assert_eq!(columns(layout.above_text()), [8.0, 0.0]);
+}
+
+#[test]
+fn an_older_image_s_placeholder_draws_under_a_newer_image_at_z_minus_one() {
+    let grid = placeholder_grid(4, 4, 7, 1, 1);
+    let images = Sizes::default()
+        .with(7, 8, 16)
+        .with(2, 8, 16)
+        .ranked(7, 1)
+        .ranked(2, 5);
+    let mut layout = ImageLayout::new();
+    layout.rebuild(
+        grid.screen(),
+        &images,
+        &[with_z(placed(2, 1, 1, 1, 1), -1)],
+        &[virt(7, 1, 1, 0)],
+        (8.0, 16.0),
+        0,
+    );
+    assert_eq!(ids(layout.under_text()), [7, 2]);
+}
+
+/// kitty mints a placeholder ref each time its row renders, so it
+/// outranks the image's direct refs.
+#[test]
+fn a_placeholder_draws_over_a_direct_placement_of_its_own_image() {
+    let grid = placeholder_grid(4, 4, 7, 1, 1);
+    let images = Sizes::default().with(7, 8, 16);
+    let mut layout = ImageLayout::new();
+    layout.rebuild(
+        grid.screen(),
+        &images,
+        &[with_serial(with_z(placed(7, 1, 2, 1, 1), -1), 9)],
+        &[virt(7, 1, 1, 0)],
+        (8.0, 16.0),
+        0,
+    );
+    assert_eq!(columns(layout.under_text()), [8.0, 0.0]);
+}
+
 #[test]
 fn placeholder_tiles_take_no_viewport_offset() {
     let grid = placeholder_grid(4, 4, 7, 1, 1);

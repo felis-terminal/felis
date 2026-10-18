@@ -37,6 +37,9 @@ json_dto! {
             width: u32,
             height: u32,
             format: ImageFormatJson,
+            /// Creation order; absent from a daemon that does not report it.
+            #[serde(default, skip_serializing_if = "Option::is_none")]
+            serial: Option<u64>,
         },
         /// Kitty's 1-based frame numbering; `0` is not a frame.
         Frame {
@@ -77,6 +80,10 @@ json_dto! {
             /// Absent from a daemon that does not report the request.
             #[serde(default, skip_serializing_if = "Option::is_none")]
             requested: Option<RequestedExtentJson>,
+            /// Creation order among the image's placements; absent from a
+            /// daemon that does not report it.
+            #[serde(default, skip_serializing_if = "Option::is_none")]
+            serial: Option<u64>,
         },
         PlacementRemoved {
             image_id: u32,
@@ -150,10 +157,12 @@ impl From<ImageTarget> for ImageTargetJson {
                 width,
                 height,
                 format,
+                serial,
             } => Self::New {
                 width,
                 height,
                 format: format.into(),
+                serial,
             },
             ImageTarget::Frame { number } => Self::Frame {
                 number: number.get(),
@@ -171,10 +180,12 @@ impl TryFrom<ImageTargetJson> for ImageTarget {
                 width,
                 height,
                 format,
+                serial,
             } => Self::New {
                 width,
                 height,
                 format: format.into(),
+                serial,
             },
             ImageTargetJson::Frame { number } => Self::Frame {
                 number: frame_number(number)?,
@@ -211,6 +222,7 @@ impl From<ImageMsg> for ImageJson {
                 source,
                 z_index,
                 requested,
+                serial,
             } => Self::Placement {
                 image_id: image_id.0,
                 placement_id: placement_id.map(|id| id.0),
@@ -221,6 +233,7 @@ impl From<ImageMsg> for ImageJson {
                 source: source.map(Into::into),
                 z_index,
                 requested: requested.map(Into::into),
+                serial,
             },
             ImageMsg::PlacementRemoved {
                 image_id,
@@ -276,6 +289,7 @@ impl TryFrom<ImageJson> for ImageMsg {
                 source,
                 z_index,
                 requested,
+                serial,
             } => Self::Placement {
                 image_id: ImageId(image_id),
                 placement_id: placement_id.map(PlacementId),
@@ -286,6 +300,7 @@ impl TryFrom<ImageJson> for ImageMsg {
                 source: source.map(Into::into),
                 z_index,
                 requested: requested.map(Into::into),
+                serial,
             },
             ImageJson::PlacementRemoved {
                 image_id,

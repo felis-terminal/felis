@@ -1745,6 +1745,7 @@ fn a_drained_uniform_body_over_a_stateless_limit_is_corruption() {
             width: u32::MAX,
             height: u32::MAX,
             format: ImageFormat::Rgba32,
+            serial: None,
         },
     };
     let payload = drained(&mut client, MessageKind::Image, codec::encode(&oversized));

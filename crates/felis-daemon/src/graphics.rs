@@ -58,6 +58,7 @@ pub enum ImageEvent {
         source: Option<felis_protocol::messages::SourceRect>,
         z_index: i32,
         requested: felis_protocol::messages::RequestedExtent,
+        serial: u64,
     },
     PlacementRemoved {
         image_id: ImageId,
@@ -158,6 +159,7 @@ pub fn image_sync_messages(
             width: entry.width,
             height: entry.height,
             format: entry.format,
+            serial: Some(entry.serial()),
         },
     });
     for chunk in chunked(&frames[0].pixels) {
@@ -249,6 +251,7 @@ pub fn materialize_image_events(
                 source,
                 z_index,
                 requested,
+                serial,
             } => out.push(ImageMsg::Placement {
                 image_id,
                 placement_id,
@@ -259,6 +262,7 @@ pub fn materialize_image_events(
                 source,
                 z_index,
                 requested: Some(requested),
+                serial: Some(serial),
             }),
             ImageEvent::PlacementRemoved {
                 image_id,
@@ -599,6 +603,7 @@ const fn placement_event(p: &Placement) -> ImageEvent {
         source: p.source,
         z_index: p.z_index,
         requested: p.requested(),
+        serial: p.serial,
     }
 }
 
@@ -1127,11 +1132,11 @@ fn handle_display_existing(
     )
 }
 
-/// `U=1`, for `a=T` and `a=p` alike (kitty's `handle_put_command`): the
 /// kitty keys an image's placements, direct and virtual, by one `p=`:
 /// before a put takes `id`, the anonymous placement felis gave it moves
 /// to a fresh id, and a producer's placement of the other kind holding
-/// it goes; one of the same kind the put's upsert replaces in place.
+/// it goes, its serial returned for the put to keep as kitty keeps the
+/// ref; one of the same kind the put's upsert replaces in place.
 fn claim_placement_id(
     images: &mut felis_grid::images::ImageStore,
     placements: &mut felis_grid::images::Placements,
@@ -1139,7 +1144,7 @@ fn claim_placement_id(
     image_id: ImageId,
     id: PlacementId,
     virtual_put: bool,
-) {
+) -> Option<u64> {
     if let Some(moved) = placements.rekey_anonymous(image_id, id) {
         events.push(ImageEvent::PlacementRemoved {
             image_id,
@@ -1151,18 +1156,21 @@ fn claim_placement_id(
         });
     }
     if virtual_put {
-        if let Some(removed) = placements.remove(image_id, Some(id)) {
-            images.release(removed.image_id);
-            events.push(ImageEvent::PlacementRemoved {
-                image_id,
-                placement_id: removed.placement_id,
-            });
-        }
-    } else if let Some(removed) = placements.remove_virtual_placement(image_id, id) {
+        let removed = placements.remove(image_id, Some(id))?;
+        images.release(removed.image_id);
+        events.push(ImageEvent::PlacementRemoved {
+            image_id,
+            placement_id: removed.placement_id,
+        });
+        Some(removed.serial)
+    } else {
+        let removed = placements.remove_virtual_placement(image_id, id)?;
         events.push(virtual_removed_event(&removed));
+        Some(removed.serial)
     }
 }
 
+/// `U=1`, for `a=T` and `a=p` alike (kitty's `handle_put_command`): the
 /// producer paints `U+10EEEE` placeholder cells wherever it wants tiles
 /// (presenterm, tmux-compatible producers), so nothing anchors at the
 /// cursor and the cursor stays.
@@ -1180,9 +1188,9 @@ fn upsert_virtual_placement(
     let requested = control_u32(complete, b'p')
         .filter(|&p| p != 0 && addressed(complete))
         .map(PlacementId);
-    if let Some(p) = requested {
-        claim_placement_id(images, placements, events, id, p, true);
-    }
+    let inherited = requested
+        .and_then(|p| claim_placement_id(images, placements, events, id, p, true))
+        .unwrap_or(0);
     // Virtual placements are not pinned: producers churn image ids across
     // renders without removal messages, so refcount 0 lets the LRU evict
     // them while `free_image` drops the extent with the image.
@@ -1193,6 +1201,7 @@ fn upsert_virtual_placement(
         cols,
         rows,
         z_index,
+        serial: inherited,
     };
     let evicted = placements.upsert_virtual(placement);
     images.touch(id);
@@ -1606,9 +1615,9 @@ fn upsert_placement(
         );
     }
     images.touch(image_id);
-    if let Some(p) = requested {
-        claim_placement_id(images, placements, events, image_id, p, false);
-    }
+    let inherited = requested
+        .and_then(|p| claim_placement_id(images, placements, events, image_id, p, false))
+        .unwrap_or(0);
     let placement_id =
         Some(requested.unwrap_or_else(|| placements.allocate_anonymous_id(image_id)));
     let displaced = placements.upsert(Placement {
@@ -1622,6 +1631,7 @@ fn upsert_placement(
         no_cursor_move,
         quiet,
         anonymous: requested.is_none(),
+        serial: inherited,
     });
     match displaced {
         Some(Displaced::Replaced(_)) => {
@@ -1647,6 +1657,7 @@ fn upsert_placement(
             cols: cols.requested(),
             rows: rows.requested(),
         },
+        serial: placements.serial(image_id, placement_id).unwrap_or(0),
     });
     // The only Grid mutation the dispatcher makes
     // (docs/explanation/protocols/kitty-graphics.md "Dispatcher
