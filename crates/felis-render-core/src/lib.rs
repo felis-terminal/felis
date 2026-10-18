@@ -2,11 +2,15 @@
 
 use felis_protocol::{ImageId, messages::ImageFormat};
 
+pub mod appearance;
 pub mod atlas;
+#[cfg(feature = "glyphs")]
 pub mod box_drawing;
 pub mod display_list;
+#[cfg(feature = "glyphs")]
 pub mod glyphs;
 pub mod overlay;
+#[cfg(feature = "glyphs")]
 pub mod painter;
 pub mod palette;
 

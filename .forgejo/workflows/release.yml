@@ -55,7 +55,7 @@ jobs:
       - run: nix develop -c just lint
       - run: nix develop -c just test
       - run: nix develop -c just deny
-      - name: felis-client-core's portable core still builds for wasm32
+      - name: the portable cores of felis-client-core and felis-render-core still build for wasm32
         run: nix develop -c just check-portable
       - uses: ./.forgejo/actions/cargo-env/done
         if: always()
