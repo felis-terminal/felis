@@ -423,7 +423,9 @@ the glyph index and its atlas packer, the frame-state types, and the cell painte
 `felis-render-wgpu` holds the wgpu pipeline, the instance records its shaders read, and the encoder that turns the
 painter's output into them. While wgpu is the only backend, the split costs a small amount of API plumbing (items public
 across a boundary one consumer crosses); that is the accepted price of a CPU backend or another client reusing those
-pieces instead of re-deriving how a cell looks, where each port drifts on the rules it misses.
+pieces instead of re-deriving how a cell looks, where each port drifts on the rules it misses. The appearance resolver
+takes a row of cells and a style table rather than a `ScreenBuffer` because a browser client's scrollback rows exist
+only as packed rows decoded into its own style table, with no screen to hold them.
 
 The painter hands a backend data, not calls: per row, a display list of rectangles, glyph draws and line decorations in
 physical pixels, with each glyph's source in atlas pixels as an image draw's source is in image pixels. A renderer trait
