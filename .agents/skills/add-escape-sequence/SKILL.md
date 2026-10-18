@@ -34,8 +34,9 @@ Data flows one way; place each piece at its lowest correct layer:
 - **State** — `crates/felis-grid`: cells, modes, scrollback, image store, damage. Most sequences end here.
 - **Daemon orchestration** — `crates/felis-daemon` only when the sequence needs session-level work (e.g. graphics APC
   bodies, notifications relay).
-- **Client/render** — `crates/felis-client-core` (shadow screen) and `felis-render-wgpu` only if presentation changes.
-  Daemon owns state, client owns pixels (principle 3); a sequence must not make the daemon decide presentation.
+- **Client/render** — `crates/felis-client-core` (shadow screen) and the renderer crates (`felis-render-core`,
+  `felis-render-wgpu`) only if presentation changes. Daemon owns state, client owns pixels (principle 3); a sequence
+  must not make the daemon decide presentation.
 - Query/report sequences (DECRQM-style) reply on the PTY. Follow an existing reply's path through the grid's
   host-response queue.
 

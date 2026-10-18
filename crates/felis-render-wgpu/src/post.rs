@@ -25,7 +25,7 @@ use wgpu::{
     },
 };
 
-use crate::palette::ResolvedTheme;
+use felis_render_core::palette::ResolvedTheme;
 
 /// Reported to the shader as `contract_version` so an effect can branch
 /// on a field it is unsure of rather than fail to load.
@@ -343,7 +343,7 @@ impl PostStage {
         self.uniforms.mouse_buttons = mouse.buttons;
         self.uniforms.background = frame.theme.bg;
         self.uniforms.foreground = frame.theme.fg;
-        self.uniforms.selection_bg = crate::palette::SELECTION_BG;
+        self.uniforms.selection_bg = felis_render_core::palette::SELECTION_BG;
         self.uniforms.palette = frame.theme.palette;
         self.uniforms_ring
             .write(device, queue, bytemuck::bytes_of(&self.uniforms));

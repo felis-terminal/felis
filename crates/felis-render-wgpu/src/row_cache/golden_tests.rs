@@ -6,16 +6,19 @@ use std::{num::NonZeroU32, path::PathBuf};
 
 use bytemuck::{Pod, cast_slice};
 use felis_grid::Grid;
+use felis_render_core::{
+    SelectionRange,
+    overlay::{ConfirmOverlay, LinkPreviewOverlay, PreeditOverlay, SearchHitSpan, SearchOverlay},
+    palette::{ResolvedTheme, Theme},
+};
 use felis_shaping::{FontStack, Shaper, SizingKey};
 use felis_vt::Parser;
 
 use super::{CellFrame, RowCache};
 use crate::{
-    ConfirmOverlay, GLYPH_ATLAS_SIDE, LinkPreviewOverlay, PreeditOverlay, SearchHitSpan,
-    SearchOverlay, SelectionRange,
+    GLYPH_ATLAS_SIDE,
     glyphs::{GlyphIndex, GridWalker, ShapeFrame},
     instances::{BAR_ELLIPSIS, InstanceBuffers},
-    palette::{ResolvedTheme, Theme},
 };
 
 const FONT_SIZE_PX: f32 = 16.0;

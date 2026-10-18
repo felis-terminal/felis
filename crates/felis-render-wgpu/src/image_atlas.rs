@@ -7,12 +7,12 @@
 use std::{collections::HashMap, num::NonZeroU32};
 
 use felis_protocol::{ImageId, messages::ImageFormat};
+use felis_render_core::atlas::{Allocation, ShelfAtlas};
 use wgpu::{
     BindGroup, BindGroupLayout, Device, Sampler, Texture, TextureFormat, TextureViewDescriptor,
 };
 
 use crate::{
-    atlas::{Allocation, ShelfAtlas},
     buffer_ring::UploadMode,
     gpu_resources,
     texture_upload::{TexelLayout, TextureUploader},

@@ -417,9 +417,12 @@ versioning) lives in [reference/workspace.md](../../reference/workspace.md). Thi
 where they do.
 
 Each crate is a seam: a boundary that a future repository split, or a non-Rust client, must be able to reuse in
-isolation. The "MUST-NOT-depend-on" column of the crate map is the load-bearing one: it is the extraction criterion.
-Some seams are aspirational (`felis-render-wgpu` only earns its keep when a non-wgpu renderer exists) and cost a small
-amount of API plumbing while only one consumer exists; that is the accepted price of extractability.
+isolation. The "MUST-NOT-depend-on" column of the crate map is the load-bearing one: it is the extraction criterion. The
+renderer is two seams: `felis-render-core` holds the backend-neutral pieces (the palette, the box-drawing rasterizer,
+the atlas packer, the frame-state types), and `felis-render-wgpu` holds the wgpu pipeline and everything that still
+names its instance layout. While wgpu is the only backend, the split costs a small amount of API plumbing (items public
+across a boundary one consumer crosses); that is the accepted price of a CPU backend or another client reusing those
+pieces instead of porting them, where each port drifts on the rules it misses.
 
 ### Rejected workspace shapes
 
@@ -445,6 +448,10 @@ amount of API plumbing while only one consumer exists; that is the accepted pric
   that crate. A crate's tests keep their helpers beside them instead, and a test that reaches above its own crate root
   belongs in `tests/` (the guard shape above). _Revisit if_ a fixture copied into several crates' tests diverges between
   the copies in a way that lets a defect through.
+- The renderer-neutral code spread over `felis-shaping` and `felis-client-core` instead of a crate of its own: both
+  crates exist, so no new seam looks needed. But `felis-client-core` bans `swash`, which the box-drawing rasterizer
+  reaches through `felis-shaping`'s bitmap types, and `felis-shaping` would gain the grid's color and selection
+  vocabulary, which none of its shaping work reads.
 - A crate between `felis-protocol` and `felis-transport` to hold the shared connection driver: one module in a crate of
   its own, drawing a seam a repo split would have to un-draw. The driver lives in `felis-transport`, the first crate
   that already has both the protocol vocabulary and `tokio` ([ipc.md](ipc.md) "Why the driver lives in
@@ -640,8 +647,8 @@ point the shared functions graduate into `felis-server-core`.
 The crate split is settled, but three developments would reopen it:
 
 - Profiling shows compile-time pressure from too many crates.
-- A second renderer (software / OpenGL / Metal-direct) is built: reconfirm `felis-render-wgpu` earns its keep as a
-  separate crate.
+- The software-rendered native path of the reuse-paths table is dropped while `felis-render-wgpu` is still the only
+  consumer of `felis-render-core`: the boundary then buys nothing, and the two crates merge back into one.
 - `felis-grid` reuse demands splitting cells / scrollback / image store into separate crates. The image store is folded
   into `felis-grid` because reflow, placement remapping, and placeholder resolution all read the grid and the store
   together; splitting later is a refactor, not a redesign.

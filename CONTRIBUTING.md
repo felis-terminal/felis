@@ -68,7 +68,7 @@ below.
 | `grid`        | `felis-grid` crate, cells, scrollback, image store                                             |
 | `protocol`    | `felis-protocol` crate, `felis.proto`, frame layout, version constants                         |
 | `pty`         | `felis-pty` crate, PTY backends                                                                |
-| `render`      | `felis-render-wgpu` crate, GPU pipeline, atlas                                                 |
+| `render`      | `felis-render-core` and `felis-render-wgpu` crates, palette, GPU pipeline, atlas               |
 | `shaping`     | `felis-shaping` crate, swash shaper, font fallback                                             |
 | `transport`   | `felis-transport` crate, framing, socket/pipe, SSH carrier                                     |
 | `vt`          | `felis-vt` crate, VT parser, dispatch                                                          |

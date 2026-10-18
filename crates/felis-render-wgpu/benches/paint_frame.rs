@@ -8,10 +8,13 @@ use std::{fmt::Write as _, hint::black_box, num::NonZeroU32, sync::Arc};
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use felis_grid::Grid;
-use felis_render_wgpu::{
-    GLYPH_ATLAS_SIDE, SelectionRange,
-    glyphs::{GlyphIndex, ShapeFrame},
+use felis_render_core::{
+    SelectionRange,
     palette::{ResolvedTheme, Theme},
+};
+use felis_render_wgpu::{
+    GLYPH_ATLAS_SIDE,
+    glyphs::{GlyphIndex, ShapeFrame},
     row_cache::{CellFrame, RowCache},
 };
 use felis_shaping::{Font, FontStack};

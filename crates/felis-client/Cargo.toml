@@ -24,6 +24,7 @@ felis-protocol = { workspace = true }
 felis-grid = { workspace = true }
 felis-transport = { workspace = true }
 felis-client-core = { workspace = true }
+felis-render-core = { workspace = true }
 felis-render-wgpu = { workspace = true }
 winit = { workspace = true }
 tokio = { workspace = true }

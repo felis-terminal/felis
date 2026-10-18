@@ -1073,7 +1073,7 @@ fn css_shorthand_theme_color_falls_back_to_the_defaults_end_to_end() {
         ..Default::default()
     };
     let theme = Renderer::theme_from_config(&renderer_config_from(&short));
-    let default = felis_render_wgpu::palette::Theme::default();
+    let default = felis_render_core::palette::Theme::default();
     assert_eq!(theme.fg, default.fg, "shorthand fg keeps the default");
     assert_eq!(theme.bg, default.bg, "shorthand bg keeps the default");
     assert_eq!(

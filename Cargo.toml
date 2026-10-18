@@ -21,6 +21,7 @@ felis-pty = { path = "crates/felis-pty" }
 felis-transport = { path = "crates/felis-transport" }
 felis-client-core = { path = "crates/felis-client-core" }
 felis-shaping = { path = "crates/felis-shaping" }
+felis-render-core = { path = "crates/felis-render-core" }
 felis-render-wgpu = { path = "crates/felis-render-wgpu" }
 
 # External — version-pinned in one place via workspace inheritance.

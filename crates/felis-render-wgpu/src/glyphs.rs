@@ -8,6 +8,10 @@ use std::{
 };
 
 use felis_grid::{Grapheme, ScreenBuffer};
+use felis_render_core::{
+    atlas::{Allocation, ShelfAtlas},
+    box_drawing,
+};
 use felis_shaping::{
     CellMetrics, FACE_ID_SATURATED, Font, FontStack, FontStyle, GlyphBitmap, GlyphId, GlyphPixels,
     ShapeCache, ShapedGlyph, Shaper, SizingKey,
@@ -16,8 +20,6 @@ use foldhash::fast::RandomState;
 use wgpu::{BindGroup, BindGroupLayout, Device, Texture, TextureFormat, TextureViewDescriptor};
 
 use crate::{
-    atlas::{Allocation, ShelfAtlas},
-    box_drawing,
     buffer_ring::UploadMode,
     gpu_resources,
     instances::{AtlasView, GlyphSlot, font_style_of},
@@ -2094,12 +2096,12 @@ mod tests {
             &[],
             &mut frame,
         );
-        let theme = crate::palette::Theme::default();
+        let theme = felis_render_core::palette::Theme::default();
         let mut out = crate::instances::InstanceBuffers::default();
         crate::instances::CellPainter::new(
             grid.screen(),
             index.cell_metrics(),
-            &crate::palette::ResolvedTheme::new(&theme),
+            &felis_render_core::palette::ResolvedTheme::new(&theme),
             &index,
             &frame,
         )
@@ -2263,12 +2265,12 @@ mod tests {
             "pool advance {} vs {expected}",
             pool[0].advance_px
         );
-        let theme = crate::palette::Theme::default();
+        let theme = felis_render_core::palette::Theme::default();
         let mut out = crate::instances::InstanceBuffers::default();
         crate::instances::CellPainter::new(
             grid.screen(),
             index.cell_metrics(),
-            &crate::palette::ResolvedTheme::new(&theme),
+            &felis_render_core::palette::ResolvedTheme::new(&theme),
             &index,
             &frame,
         )

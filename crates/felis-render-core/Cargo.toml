@@ -1,0 +1,22 @@
+[package]
+name = "felis-render-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "felis renderer-neutral core: palette, box drawing, shelf atlas, frame overlays"
+
+[dependencies]
+felis-protocol = { workspace = true }
+felis-grid = { workspace = true }
+felis-shaping = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+felis-vt = { workspace = true }
+
+[lints]
+workspace = true
