@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish.workspace = true
-description = "felis renderer-neutral core: palette, box drawing, glyph index, shelf atlas, cell painter and its display list"
+description = "felis renderer-neutral core: palette, cell appearance, box drawing, glyph index, shelf atlas, cell painter and its display list"
 
 [features]
 default = ["glyphs"]

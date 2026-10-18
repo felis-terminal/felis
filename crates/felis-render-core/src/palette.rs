@@ -294,6 +294,30 @@ pub fn srgb_to_linear_rgba(srgb: [u8; 3], alpha: f32) -> [f32; 4] {
     ]
 }
 
+/// The inverse of [`srgb_byte_to_linear`], for a client that writes
+/// colors into an sRGB-encoded surface itself (a DOM style).
+#[must_use]
+pub fn linear_to_srgb_byte(component: f32) -> u8 {
+    let c = component.clamp(0.0, 1.0);
+    let encoded = if c <= 0.003_130_8 {
+        c * 12.92
+    } else {
+        1.055f32.mul_add(c.powf(1.0 / 2.4), -0.055)
+    };
+    (encoded * 255.0).round() as u8
+}
+
+/// Alpha is coverage, not light, so it scales without the transfer curve.
+#[must_use]
+pub fn linear_rgba_to_srgb8(linear: [f32; 4]) -> [u8; 4] {
+    [
+        linear_to_srgb_byte(linear[0]),
+        linear_to_srgb_byte(linear[1]),
+        linear_to_srgb_byte(linear[2]),
+        (linear[3].clamp(0.0, 1.0) * 255.0).round() as u8,
+    ]
+}
+
 /// Every color a cell walk can ask for, linearized once per theme
 /// change: resolving at cell time costs a `powf` per channel per cell
 /// per frame.
@@ -393,6 +417,19 @@ mod tests {
     #[test]
     fn srgb_max_is_linear_one() {
         assert!((srgb_byte_to_linear(255) - 1.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn linear_to_srgb_byte_inverts_srgb_byte_to_linear_for_every_byte() {
+        for byte in 0..=u8::MAX {
+            assert_eq!(linear_to_srgb_byte(srgb_byte_to_linear(byte)), byte);
+        }
+    }
+
+    #[test]
+    fn linear_rgba_to_srgb8_encodes_color_and_scales_alpha() {
+        let linear = srgb_to_linear_rgba([0x12, 0x80, 0xFE], 0.5);
+        assert_eq!(linear_rgba_to_srgb8(linear), [0x12, 0x80, 0xFE, 128]);
     }
 
     #[test]

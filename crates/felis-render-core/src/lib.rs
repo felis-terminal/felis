@@ -2,6 +2,7 @@
 
 use felis_protocol::{ImageId, messages::ImageFormat};
 
+pub mod appearance;
 pub mod atlas;
 #[cfg(feature = "glyphs")]
 pub mod box_drawing;

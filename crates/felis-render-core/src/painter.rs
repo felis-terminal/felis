@@ -4,13 +4,17 @@
 use std::borrow::Cow;
 
 use felis_grid::{
-    AttrFlags, Cell, Color, CursorStyle, Grapheme, HAlign, ScreenBuffer, Sizing, UnderlineStyle,
-    VAlign, bidi, char_cell_width,
+    Cell, CursorStyle, Grapheme, HAlign, ScreenBuffer, Sizing, UnderlineStyle, VAlign,
+    char_cell_width,
 };
 use felis_shaping::{CellMetrics, SizingKey};
 
+pub use crate::appearance::{CursorPaint, PreeditSpan};
 use crate::{
     SelectionRange,
+    appearance::{
+        CellAppearance, CursorMarkerKind, Disposition, FrameState, RowCells, RowFrame, resolve_cell,
+    },
     display_list::{AtlasKind, DecoKind, Decoration, GlyphDraw, Rect, RowPaint},
     glyphs::{
         AtlasView, ClusterGlyph, GlyphSlot, ShapeFrame, ShapedCell, cluster_base_char,
@@ -18,9 +22,8 @@ use crate::{
     },
     overlay::{ConfirmOverlay, LinkPreviewOverlay, PreeditOverlay, SearchOverlay},
     palette::{
-        BIDI_MARKER_BG, BIDI_MARKER_FG, CONFIRM_BAR_BG, LINK_UNDERLINE, PREEDIT_BG, ResolvedTheme,
-        SCROLLBAR_THUMB, SCROLLBAR_TRACK, SEARCH_BAR_BG, SEARCH_CURRENT_BG, SEARCH_MATCH_BG,
-        SELECTION_BG, resolve_bg, resolve_fg,
+        CONFIRM_BAR_BG, PREEDIT_BG, ResolvedTheme, SCROLLBAR_THUMB, SCROLLBAR_TRACK, SEARCH_BAR_BG,
+        SEARCH_CURRENT_BG, SEARCH_MATCH_BG,
     },
 };
 
@@ -54,33 +57,6 @@ fn sizing_glyph_scale(sizing: Sizing) -> f32 {
     sizing_key_from(sizing).effective_scale()
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PreeditSpan {
-    pub row: u16,
-    pub col_start: u16,
-    /// One past the last column the composition covers.
-    pub col_end: u16,
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct CursorPaint {
-    cell: Option<(u16, u16)>,
-    last_col: u16,
-    style: CursorStyle,
-}
-
-impl CursorPaint {
-    /// The row and first column of the character under the cursor.
-    #[must_use]
-    pub const fn cell(&self) -> Option<(u16, u16)> {
-        self.cell
-    }
-
-    fn covers(&self, row: u16, col: u16) -> bool {
-        matches!(self.cell, Some((r, first)) if r == row && (first..=self.last_col).contains(&col))
-    }
-}
-
 /// `(x, y, width, height)` in pixels of the cursor the cell pass paints
 /// over the columns `span` covers.
 #[must_use]
@@ -107,15 +83,8 @@ struct CellRef<'a> {
     col: u16,
     cell: &'a Cell,
     attrs: &'a felis_grid::Attributes,
-}
-
-struct CellColors {
-    fg: [f32; 4],
-    bg: [f32; 4],
-    /// For `Underline` / `Bar`; `Block` folds into `fg` / `bg`.
-    cursor_marker: Option<Rect>,
-    is_bidi: bool,
-    faint: bool,
+    cells: &'a RowCells<'a>,
+    frame: &'a RowFrame,
 }
 
 pub struct CellPainter<'a, A: AtlasView> {
@@ -128,13 +97,9 @@ pub struct CellPainter<'a, A: AtlasView> {
     ch: f32,
     ascent: f32,
     cursor_visible: bool,
-    cursor: CursorPaint,
-    selection: Option<SelectionRange>,
     viewport: u32,
     viewport_max: u32,
-    reserved_bottom_rows: u16,
-    preedit: Option<PreeditSpan>,
-    reverse_video: bool,
+    frame: FrameState,
 }
 
 impl<'a, A: AtlasView> CellPainter<'a, A> {
@@ -160,13 +125,16 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
             ch: metrics.height as f32,
             ascent: f32::from(u16::try_from(metrics.ascent).unwrap_or(u16::MAX)),
             cursor_visible: false,
-            cursor: CursorPaint::default(),
-            selection: None,
             viewport: 0,
             viewport_max: 0,
-            reserved_bottom_rows: 0,
-            preedit: None,
-            reverse_video: false,
+            frame: FrameState {
+                cursor: CursorPaint::default(),
+                selection: None,
+                screen_reverse: false,
+                preedit: None,
+                reserved_bottom_rows: 0,
+                rows: screen.rows(),
+            },
         }
     }
 
@@ -174,7 +142,7 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
     /// SGR 7.
     #[must_use]
     pub const fn with_reverse_video(mut self, on: bool) -> Self {
-        self.reverse_video = on;
+        self.frame.screen_reverse = on;
         self
     }
 
@@ -188,7 +156,7 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
 
     #[must_use]
     pub const fn with_selection(mut self, selection: Option<SelectionRange>) -> Self {
-        self.selection = selection;
+        self.frame.selection = selection;
         self
     }
 
@@ -205,7 +173,7 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
     /// bar) owns them without the cells doubling through.
     #[must_use]
     pub const fn with_reserved_bottom_rows(mut self, rows: u16) -> Self {
-        self.reserved_bottom_rows = rows;
+        self.frame.reserved_bottom_rows = rows;
         self
     }
 
@@ -214,7 +182,7 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
     /// in the later fg pass.
     #[must_use]
     pub const fn with_preedit(mut self, span: Option<PreeditSpan>) -> Self {
-        self.preedit = span;
+        self.frame.preedit = span;
         self
     }
 
@@ -235,60 +203,61 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
     /// Fixes the cursor paint, which every row reads.
     #[must_use]
     pub fn resolved(mut self) -> Self {
-        self.cursor = self.resolve_cursor();
+        self.frame = FrameState::for_screen(
+            self.screen,
+            self.cursor_visible,
+            self.viewport,
+            self.frame.selection,
+            self.frame.screen_reverse,
+            self.frame.preedit,
+            self.frame.reserved_bottom_rows,
+        );
         self
     }
 
     /// Resolved by [`Self::resolved`]; meaningless before.
     #[must_use]
     pub const fn cursor(&self) -> CursorPaint {
-        self.cursor
+        self.frame.cursor
     }
 
     /// Everything a row emits depends on that row's cells and the
     /// painter's frame-wide inputs alone, which is what lets
     /// a renderer's row cache repaint a row in isolation.
     pub fn extend_row(&self, out: &mut RowPaint, r: u16) {
+        // Straight off the shadow's screen: the shadow has no
+        // scrollback ring, so when viewport > 0 the daemon ships
+        // composed RowDeltas against composed-view rows. Composing
+        // here (`cell_at_viewport`) would fall back to live cells.
+        let Some(cells) = RowCells::of_screen(self.screen, r) else {
+            return;
+        };
+        let frame = self.frame.row(r, &cells);
         // Cell draws must not land under the bottom chrome: a glyph
         // rides the fg pass and would draw on top of the bar. Capping the
         // walk is the only fix; there is no fg occlusion across passes.
-        if r >= self.screen.rows().saturating_sub(self.reserved_bottom_rows) {
+        if !frame.painted {
             return;
         }
-        for c in 0..self.screen.cols() {
-            // Same two-pass occlusion limit: a cell emitted under the
-            // composition overlay draws through it in the fg pass.
-            let glyph_under_preedit = match self.preedit {
-                Some(span) if r == span.row => {
-                    if c >= span.col_start && c < span.col_end {
-                        continue;
-                    }
-                    // The lead of a wide character half under the overlay
-                    // keeps its background but not its glyph, which inks
-                    // across both halves.
-                    let (first, last) = self.screen.char_span(r, c);
-                    last >= span.col_start && first < span.col_end
-                }
-                _ => false,
-            };
-            // Straight off the shadow's screen: the shadow has no
-            // scrollback ring, so when viewport > 0 the daemon ships
-            // composed RowDeltas against composed-view rows. Composing
-            // here (`cell_at_viewport`) would fall back to live cells.
-            let Some(cell) = self.screen.cell(r, c) else {
+        for c in 0..cells.cols {
+            let look = resolve_cell(&cells, &frame, self.theme, c);
+            if look.disposition == Disposition::Skip {
                 continue;
-            };
+            }
+            let cell = cells.cell(c);
             let at = CellRef {
                 row: r,
                 col: c,
                 cell,
-                attrs: self.screen.style(cell.style),
+                attrs: cells.styles.resolve(cell.style),
+                cells: &cells,
+                frame: &frame,
             };
-            let fg_color = self.push_cell_chrome(out, &at);
+            self.push_cell_chrome(out, &at, &look);
             // CONCEAL (SGR 8). SECURITY: this must gate every fg push.
             // The bg / cursor / selection / decoration draws above
             // stay (a concealed cell reads as a space).
-            if at.attrs.flags.contains(AttrFlags::CONCEAL) || glyph_under_preedit {
+            if !look.glyph_visible {
                 continue;
             }
             // Shape-frame lookup precedes char-path decoding so a
@@ -298,10 +267,10 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
                 continue;
             }
             if let ShapedCell::Cluster { start, len, fit_px } = shaped {
-                self.push_cluster_cell(out, &at, fg_color, (start, len), fit_px);
+                self.push_cluster_cell(out, &at, look.fg, (start, len), fit_px);
                 continue;
             }
-            self.push_char_cell(out, &at, fg_color, shaped);
+            self.push_char_cell(out, &at, look.fg, shaped);
         }
     }
 
@@ -309,149 +278,38 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
         [f32::from(at.col) * self.cw, f32::from(at.row) * self.ch]
     }
 
-    /// `pending_wrap` can bump `col` past the right edge for one print;
-    /// the in-bounds check skips that. Focus loss hides the cursor, and
-    /// so does viewport > 0 (Kitty / Alacritty's cursor-in-scrollback
-    /// behavior): the live row has scrolled off the visible window.
-    fn resolve_cursor(&self) -> CursorPaint {
-        let cursor = self.screen.cursor();
-        let in_bounds = cursor.row < self.screen.rows() && cursor.col < self.screen.cols();
-        let (first, last) = self.screen.char_span(cursor.row, cursor.col);
-        CursorPaint {
-            cell: (cursor.visible && in_bounds && self.cursor_visible && self.viewport == 0)
-                .then_some((cursor.row, first)),
-            last_col: last,
-            style: self.screen.cursor_style(),
-        }
-    }
-
-    /// Every path that needs a cell's foreground goes through here, the
-    /// chrome pass and the per-cell slicing of a shaped quad alike, so
-    /// the precedence chain has one spelling.
-    fn resolve_cell_colors(&self, at: &CellRef<'_>) -> CellColors {
-        // A wide character is painted as one: its Spacer takes the
-        // lead's bidi warning, and the cursor or a selection on either
-        // half covers both.
-        let is_bidi = match at.cell.grapheme {
-            Grapheme::Spacer if at.col > 0 => self
-                .screen
-                .cell(at.row, at.col - 1)
-                .is_some_and(|lead| cell_contains_bidi_override(lead.grapheme, self.screen)),
-            g => cell_contains_bidi_override(g, self.screen),
-        };
-        let (mut fg, mut bg) = resolve_pair(
-            at.attrs.fg,
-            at.attrs.bg,
-            self.theme,
-            at.attrs.flags,
-            self.reverse_video,
-        );
-        // Pushed after the cell's bg quad so it draws over the bg but
-        // under the glyph.
-        let mut cursor_marker = if self.cursor.covers(at.row, at.col) {
-            self.apply_cursor_style(at, &mut fg, &mut bg)
-        } else {
-            None
-        };
-        // After the cursor swap so the security signal wins on the
-        // cursor cell too (CVE-2021-42574).
-        if is_bidi {
-            bg = BIDI_MARKER_BG;
-            fg = BIDI_MARKER_FG;
-            // The marker would obstruct the warning.
-            cursor_marker = None;
-        } else if self.selection_covers(at) {
-            bg = SELECTION_BG;
-        }
-        // After cursor / bidi / selection so it dims the effective fg,
-        // and never the bidi warning.
-        let faint = at.attrs.flags.contains(AttrFlags::FAINT) && !is_bidi;
-        if faint {
-            fg = dim_toward_bg(fg, bg);
-        }
-        CellColors {
-            fg,
-            bg,
-            cursor_marker,
-            is_bidi,
-            faint,
-        }
-    }
-
-    fn selection_covers(&self, at: &CellRef<'_>) -> bool {
-        if self.selection.is_none() {
-            return false;
-        }
-        let (first, last) = self.screen.char_span(at.row, at.col);
-        selection_contains(self.selection, at.row, first)
-            || selection_contains(self.selection, at.row, last)
-    }
-
-    fn push_cell_chrome(&self, out: &mut RowPaint, at: &CellRef<'_>) -> [f32; 4] {
-        let colors = self.resolve_cell_colors(at);
+    fn push_cell_chrome(&self, out: &mut RowPaint, at: &CellRef<'_>, look: &CellAppearance) {
         let origin = self.origin(at);
         out.rects.push(Rect {
             origin_px: origin,
             size_px: [self.cw, self.ch],
-            color: colors.bg,
+            color: look.bg,
         });
         // Before the cursor marker so a cursor underline on a link cell
-        // wins; skipped on bidi cells so the warning stays unobstructed.
-        if at.cell.link.is_some() && !colors.is_bidi {
+        // wins.
+        if let Some(color) = look.link_underline {
             out.rects.push(Rect {
                 origin_px: [origin[0], origin[1] + self.ch - LINK_UNDERLINE_PX],
                 size_px: [self.cw, LINK_UNDERLINE_PX],
-                color: LINK_UNDERLINE,
+                color,
             });
         }
-        if let Some(marker) = colors.cursor_marker {
-            out.rects.push(marker);
-        }
-        // The decoration pass draws after the glyph pass, so precedence
-        // against the bg-pass overlays is enforced by suppression, not
-        // z-order: a bidi cell drops every decoration, and the SGR
-        // underline yields its slot to the link underline and the cursor
-        // marker.
-        if !colors.is_bidi {
-            let suppress_underline = at.cell.link.is_some() || self.cursor.covers(at.row, at.col);
-            self.push_cell_decorations(&mut out.decos, at, &colors, suppress_underline);
-        }
-        colors.fg
-    }
-
-    fn apply_cursor_style(
-        &self,
-        at: &CellRef<'_>,
-        fg_color: &mut [f32; 4],
-        bg_color: &mut [f32; 4],
-    ) -> Option<Rect> {
-        let origin = self.origin(at);
-        let original_bg = *bg_color;
-        let cursor_color = self.theme.cursor.unwrap_or(*fg_color);
-        match self.cursor.style {
-            CursorStyle::Block => {
-                // With `theme.cursor`: bg = cursor color, glyph = original
-                // cell bg for contrast. Without: reverse-video swap.
-                if self.theme.cursor.is_some() {
-                    *bg_color = cursor_color;
-                    *fg_color = original_bg;
-                } else {
-                    std::mem::swap(fg_color, bg_color);
-                }
-                None
-            }
-            CursorStyle::Underline => Some(Rect {
+        // Pushed after the cell's bg quad so it draws over the bg but
+        // under the glyph.
+        match look.cursor_marker {
+            Some((CursorMarkerKind::Underline, color)) => out.rects.push(Rect {
                 origin_px: [origin[0], origin[1] + self.ch - CURSOR_MARKER_PX],
                 size_px: [self.cw, CURSOR_MARKER_PX],
-                color: cursor_color,
+                color,
             }),
-            CursorStyle::Bar if self.cursor.cell.is_some_and(|(_, first)| first != at.col) => None,
-            CursorStyle::Bar => Some(Rect {
+            Some((CursorMarkerKind::Bar, color)) => out.rects.push(Rect {
                 origin_px: origin,
                 size_px: [CURSOR_MARKER_PX, self.ch],
-                color: cursor_color,
+                color,
             }),
+            None => {}
         }
+        self.push_cell_decorations(&mut out.decos, at, look);
     }
 
     /// One draw per shaped glyph at the cell origin plus pen advance
@@ -678,17 +536,13 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
     }
 
     /// Underlines sit in the descender band, strikethrough at ~x-height,
-    /// overline at the top edge. `suppress_underline` drops only the
-    /// underline family (the link underline or cursor marker owns that
-    /// slot).
+    /// overline at the top edge.
     fn push_cell_decorations(
         &self,
         out: &mut Vec<Decoration>,
         at: &CellRef<'_>,
-        colors: &CellColors,
-        suppress_underline: bool,
+        look: &CellAppearance,
     ) {
-        let flags = at.attrs.flags;
         let thickness = decoration_thickness(self.ch);
         let origin = self.origin(at);
         let ox = origin[0];
@@ -705,21 +559,14 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
             });
         };
 
-        if flags.contains(AttrFlags::UNDERLINE) && !suppress_underline {
-            let color = underline_deco_color(
-                at.attrs.underline_color,
-                colors.fg,
-                colors.bg,
-                self.theme,
-                colors.faint,
-            );
+        if let Some((style, color)) = look.underline {
             // Clamped so a font whose ascent nearly fills the cell keeps
             // the line on-cell.
             let descent_band = (self.ch - self.ascent).max(thickness);
             let underline_top = (oy + self.ascent + (descent_band * 0.3).round().max(1.0))
                 .min(oy + self.ch - thickness)
                 .max(oy);
-            match at.attrs.underline_style {
+            match style {
                 UnderlineStyle::Single => solid(out, underline_top, color),
                 UnderlineStyle::Double => {
                     solid(out, underline_top, color);
@@ -760,13 +607,13 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
                 }
             }
         }
-        if flags.contains(AttrFlags::STRIKETHROUGH) {
+        if let Some(color) = look.strikethrough {
             // 0.6 of the ascent reads as through the middle of most glyphs.
             let strike_top = thickness.mul_add(-0.5, oy + (self.ascent * 0.6).round());
-            solid(out, strike_top, colors.fg);
+            solid(out, strike_top, color);
         }
-        if flags.contains(AttrFlags::OVERLINE) {
-            solid(out, oy, colors.fg);
+        if let Some(color) = look.overline {
+            solid(out, oy, color);
         }
     }
 
@@ -797,18 +644,9 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
             if col == at.col {
                 return quad.color;
             }
-            let Some(cell) = self.screen.cell(at.row, col) else {
-                return quad.color;
-            };
-            self.resolve_cell_colors(&CellRef {
-                row: at.row,
-                col,
-                cell,
-                attrs: self.screen.style(cell.style),
-            })
-            .fg
+            resolve_cell(at.cells, at.frame, self.theme, col).fg
         };
-        // Both sides come from the same `resolve_pair` lookups, so equal
+        // Both sides come from the same palette lookups, so equal
         // colors are equal bit patterns; an epsilon would blur distinct
         // palette entries.
         #[allow(clippy::float_cmp)]
@@ -843,45 +681,6 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
             strip.crop_src_x(t0, t1);
             out.glyphs.push(strip);
         }
-    }
-}
-
-/// Mirrors `Selection::contains` in `felis-client-core` but stays
-/// local so this crate takes no UI-state dep
-/// (docs/explanation/architecture/overview.md
-/// "Workspace: the crate-boundary decision record").
-const fn selection_contains(selection: Option<SelectionRange>, row: u16, col: u16) -> bool {
-    let Some(sel) = selection else {
-        return false;
-    };
-    let (sr, sc) = sel.start;
-    let (er, ec) = sel.end;
-    if row < sr || row > er {
-        return false;
-    }
-    if sel.rectangle {
-        return col >= sc && col <= ec;
-    }
-    if row == sr && col < sc {
-        return false;
-    }
-    if row == er && col > ec {
-        return false;
-    }
-    true
-}
-
-/// The nine UAX #9 explicit-formatting characters. Cluster cells walk
-/// every codepoint so a base plus combining RLO surfaces.
-fn cell_contains_bidi_override(grapheme: Grapheme, screen: &ScreenBuffer) -> bool {
-    match grapheme {
-        Grapheme::Empty | Grapheme::Spacer | Grapheme::SizedSpacer | Grapheme::Ascii(_) => false,
-        Grapheme::Char(c) => bidi::is_override(c),
-        // (docs/explanation/data-model/grid-and-cells.md "Cluster
-        // interning"); an unresolved handle carries no override.
-        Grapheme::Cluster(id) => screen
-            .cluster_str(id)
-            .is_some_and(|s| bidi::iter_contains_override(s.chars())),
     }
 }
 
@@ -1427,64 +1226,9 @@ fn push_bottom_bar<A: AtlasView>(
     clip_fg_right_of(&mut out.glyphs, first_glyph, f32::from(grid_cols) * cw);
 }
 
-/// The XOR makes `?5` compose with SGR 7 the way every modern terminal
-/// treats it. Both halves swap the *resolved* colors, so an indexed or
-/// direct-RGB pair swaps too.
-fn resolve_pair(
-    fg: Color,
-    bg: Color,
-    theme: &ResolvedTheme,
-    flags: AttrFlags,
-    screen_reverse: bool,
-) -> ([f32; 4], [f32; 4]) {
-    if flags.contains(AttrFlags::REVERSE) == screen_reverse {
-        (resolve_fg(fg, theme), resolve_bg(bg, theme))
-    } else {
-        (resolve_bg(bg, theme), resolve_fg(fg, theme))
-    }
-}
-
-/// A 50/50 mix roughly halves perceived brightness on a dark theme,
-/// matching kitty's dim intensity.
-const FAINT_FG_WEIGHT: f32 = 0.5;
-
-/// Mixes toward the *cell* bg, not black, so a dimmed glyph stays
-/// legible on a light or colored background; alpha is untouched.
-fn dim_toward_bg(fg: [f32; 4], bg: [f32; 4]) -> [f32; 4] {
-    let w = FAINT_FG_WEIGHT;
-    [
-        fg[0].mul_add(w, bg[0] * (1.0 - w)),
-        fg[1].mul_add(w, bg[1] * (1.0 - w)),
-        fg[2].mul_add(w, bg[2] * (1.0 - w)),
-        fg[3],
-    ]
-}
-
 /// One px at a ~16 px cell, two at ~32 px.
 fn decoration_thickness(ch: f32) -> f32 {
     (ch / 16.0).round().max(1.0)
-}
-
-/// An explicit SGR 58 color is dimmed too when the cell is faint so the
-/// whole cell reads at one intensity.
-fn underline_deco_color(
-    underline_color: Color,
-    fg_color: [f32; 4],
-    bg_color: [f32; 4],
-    theme: &ResolvedTheme,
-    faint: bool,
-) -> [f32; 4] {
-    match underline_color {
-        Color::Default => fg_color,
-        other => {
-            let base = resolve_fg(other, theme);
-            if faint {
-                dim_toward_bg(base, bg_color)
-            } else {
-                base
-            }
-        }
-    }
 }
 
 #[cfg(test)]
@@ -1497,8 +1241,12 @@ mod tests {
 
     #[cfg(not(windows))]
     use crate::glyphs::{GlyphIndex, GridWalker};
-    use crate::{overlay::SearchHitSpan, palette::Theme};
-    use felis_grid::{Color, Grid};
+    use crate::{
+        appearance::{cell_contains_bidi_override, dim_toward_bg},
+        overlay::SearchHitSpan,
+        palette::{BIDI_MARKER_BG, BIDI_MARKER_FG, SELECTION_BG, Theme, resolve_fg},
+    };
+    use felis_grid::{AttrFlags, Color, Grid};
     #[cfg(not(windows))]
     use felis_shaping::{FontStack, FontStyle, Shaper};
     use felis_vt::Parser;
@@ -2285,7 +2033,7 @@ mod tests {
         for r in 0..g.rows() {
             for c in 0..g.cols() {
                 let Some(cell) = g.cell(r, c) else { continue };
-                if cell_contains_bidi_override(cell.grapheme, g.screen()) {
+                if cell_contains_bidi_override(cell.grapheme, g.screen().cluster_table()) {
                     let idx = usize::from(r) * usize::from(g.cols()) + usize::from(c);
                     assert_eq!(
                         buffers.rects[idx].color, BIDI_MARKER_BG,
@@ -2335,7 +2083,7 @@ mod tests {
         let g = drive(1, 4, "A\u{202E}\x1b[1;1H".as_bytes());
         assert!(cell_contains_bidi_override(
             g.cell(0, 0).unwrap().grapheme,
-            g.screen()
+            g.screen().cluster_table()
         ));
         let atlas = MockAtlas::full(slot());
         let buffers = build_instances(g.screen(), metrics(), &Theme::default(), &atlas);
@@ -2764,7 +2512,7 @@ mod tests {
         for r in 0..g.rows() {
             for c in 0..g.cols() {
                 let Some(cell) = g.cell(r, c) else { continue };
-                if cell_contains_bidi_override(cell.grapheme, g.screen()) {
+                if cell_contains_bidi_override(cell.grapheme, g.screen().cluster_table()) {
                     let idx = usize::from(r) * usize::from(g.cols()) + usize::from(c);
                     assert_eq!(
                         buffers.rects[idx].color, BIDI_MARKER_BG,
@@ -3104,51 +2852,6 @@ mod tests {
                     assert_eq!(got, theme.bg, "({r},{c}) should NOT be highlighted");
                 }
             }
-        }
-    }
-
-    #[test]
-    fn selection_contains_is_false_for_every_cell_when_nothing_is_selected() {
-        for row in 0..4u16 {
-            for col in 0..4u16 {
-                assert!(!selection_contains(None, row, col));
-            }
-        }
-    }
-
-    proptest::proptest! {
-        /// `selection_contains` mirrors
-        /// `felis_client_core::Selection::contains`; the crates cannot
-        /// depend on each other, so each is pinned against the same
-        /// stated predicates.
-        #[test]
-        fn selection_contains_matches_its_stated_ranges(
-            rectangle: bool,
-            ar in 0u16..30,
-            ac in 0u16..30,
-            er in 0u16..30,
-            ec in 0u16..30,
-            r  in 0u16..30,
-            c  in 0u16..30,
-        ) {
-            // `SelectionRange` arrives normalized (client-core's
-            // `Selection::range` does it).
-            let (start, end) = if rectangle {
-                ((ar.min(er), ac.min(ec)), (ar.max(er), ac.max(ec)))
-            } else if (ar, ac) <= (er, ec) {
-                ((ar, ac), (er, ec))
-            } else {
-                ((er, ec), (ar, ac))
-            };
-            let range = SelectionRange { start, end, rectangle };
-
-            let want = if rectangle {
-                r >= start.0 && r <= end.0 && c >= start.1 && c <= end.1
-            } else {
-                let scalar = |(r, c): (u16, u16)| u32::from(r) * 1_000 + u32::from(c);
-                scalar(start) <= scalar((r, c)) && scalar((r, c)) <= scalar(end)
-            };
-            proptest::prop_assert_eq!(selection_contains(Some(range), r, c), want);
         }
     }
 
