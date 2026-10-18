@@ -1217,6 +1217,11 @@ pub struct ImageNew {
     pub height: u32,
     #[prost(enumeration="ImageFormat", tag="3")]
     pub format: i32,
+    /// The image's place in creation order, which equal-z placements
+    /// stack by: a re-transmission under the same id keeps it, a deletion
+    /// forfeits it. Unset from a daemon that does not report it.
+    #[prost(uint64, optional, tag="4")]
+    pub serial: ::core::option::Option<u64>,
 }
 /// One frame of an image already transferred, in Kitty's 1-based
 /// numbering: 1 is the root frame, N in 2..=frames+1 edits frame N or
@@ -1277,6 +1282,11 @@ pub struct ImagePlacement {
     /// that does not report the request.
     #[prost(message, optional, tag="9")]
     pub requested: ::core::option::Option<RequestedExtent>,
+    /// The placement's place in creation order, which equal-z placements
+    /// of one image stack by: a put under its key keeps it, whichever kind
+    /// the key held. Unset from a daemon that does not report it.
+    #[prost(uint64, optional, tag="10")]
+    pub serial: ::core::option::Option<u64>,
 }
 /// A placement's requested cell extent (Kitty c= / r=); 0 is automatic.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]

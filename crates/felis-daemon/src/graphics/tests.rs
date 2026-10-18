@@ -985,6 +985,7 @@ fn seeded_placement(
         no_cursor_move,
         quiet: 0,
         anonymous: false,
+        serial: 0,
     }
 }
 
@@ -3208,6 +3209,7 @@ proptest! {
                     no_cursor_move: true,
                     quiet: 2,
                     anonymous: false,
+                    serial: 0,
                 });
                 prop_assert!(replaced.is_none());
             }

@@ -1168,6 +1168,7 @@ pub(crate) fn compose_image_rehydrate(
             source: p.source,
             z_index: p.z_index,
             requested: Some(p.requested()),
+            serial: Some(p.serial),
         }));
     }
     // Virtual (`U=1`) extents too: placeholder cells ride the `RowDelta`
@@ -1297,6 +1298,7 @@ mod tests {
             cols: 4,
             rows: 2,
             z_index: 0,
+            serial: 0,
         });
         let mut out = Vec::new();
         compose_image_rehydrate(&images, &placements, &mut out);
@@ -1413,5 +1415,86 @@ mod tests {
         assert!(detail.contains("past the 0.0 MiB frame limit"), "{detail}");
         assert!(detail.contains("`felis sessions info <id>`"), "{detail}");
         assert!(full > 4096);
+    }
+
+    /// kitty's `(z, image id, ref id)`, through a re-sent older image
+    /// (whose header the live drain ships after the newer one's) and a
+    /// virtual placement turned direct, for a window attached throughout
+    /// and one that reattaches.
+    #[test]
+    fn equal_z_images_stack_in_kitty_s_order_live_and_after_a_rehydrate() {
+        use felis_client_core::image_shadow::ImageShadow;
+        use felis_grid::image_layout::ImageLayout;
+        use felis_grid::images::{ImageStore, Placements};
+
+        let mut grid = Grid::new(4, 16);
+        let mut images = ImageStore::new(1 << 20);
+        let mut placements = Placements::new();
+        let mut events = Vec::new();
+        let mut reassembler = felis_vt::kitty_graphics::Reassembler::new();
+        for controls in [
+            "a=t,i=1,f=32,s=1,v=1",
+            "a=t,i=2,f=32,s=1,v=1",
+            "a=p,i=2,p=1,c=1,r=1,q=2",
+            "a=p,i=1,p=1,c=1,r=1,q=2",
+            "a=p,i=1,p=2,c=1,r=1,q=2",
+            // Sending the older image again drops its placements, as in
+            // kitty, but not its place.
+            "a=t,i=1,f=32,s=1,v=1",
+            "a=p,i=1,p=2,c=1,r=1,q=2",
+            "a=p,i=1,p=1,c=1,r=1,q=2",
+            "a=p,i=2,p=3,U=1,c=1,r=1,q=2",
+            "a=p,i=2,p=4,c=1,r=1,q=2",
+            "a=p,i=2,p=3,c=1,r=1,q=2",
+        ] {
+            let payload = if controls.starts_with("a=t") {
+                ";AAAAAA=="
+            } else {
+                ""
+            };
+            crate::graphics::dispatch_apc_body(
+                &mut crate::graphics::ApcCtx {
+                    grid: &mut grid,
+                    images: &mut images,
+                    placements: &mut placements,
+                    events: &mut events,
+                    shm: &mut crate::graphics::ShmDeferral::default(),
+                    cell_pixel_w: 8,
+                    cell_pixel_h: 16,
+                    anchor_cursor: None,
+                },
+                &mut reassembler,
+                format!("G{controls}{payload}").as_bytes(),
+            );
+        }
+        let draw_order = |msgs: &[ImageMsg]| {
+            let mut shadow = ImageShadow::new();
+            for msg in msgs {
+                shadow.apply(msg).unwrap();
+            }
+            let mut layout = ImageLayout::new();
+            shadow.layout_into(&mut layout, grid.screen(), (8.0, 16.0), 0);
+            layout
+                .above_text()
+                .iter()
+                .map(|d| (d.image_id.0, d.dst[0] / 8.0))
+                .collect::<Vec<_>>()
+        };
+        let live = crate::graphics::materialize_image_events(&events, &images);
+        let mut rehydrate = Vec::new();
+        compose_image_rehydrate(&images, &placements, &mut rehydrate);
+        let rehydrate: Vec<_> = rehydrate
+            .into_iter()
+            .map(|e| match e {
+                OutEvent::Image(msg) => msg,
+                other => panic!("expected an image message, got {other:?}"),
+            })
+            .collect();
+        // Each put anchors one column right of the last; the virtual
+        // put anchors nothing. Image 1's two re-puts, then image 2's
+        // first put, its converted p=3, and p=4.
+        let kitty = vec![(1, 3.0), (1, 4.0), (2, 0.0), (2, 6.0), (2, 5.0)];
+        assert_eq!(draw_order(&live), kitty, "live");
+        assert_eq!(draw_order(&rehydrate), kitty, "after a rehydrate");
     }
 }

@@ -65,6 +65,9 @@ pub struct ClientImage {
     /// starts.
     drawable: bool,
     generation: u64,
+    /// [`LayoutImages::stack_rank`]: the daemon's creation serial, or
+    /// first arrival from a daemon that sends none.
+    rank: u64,
 }
 
 impl ClientImage {
@@ -205,6 +208,9 @@ pub struct ImageShadow {
     /// multi-megabyte transmission.
     retained: usize,
     active: Option<ActiveTransfer>,
+    /// Images first heard of, for [`ClientImage::rank`] when the daemon
+    /// sends no serial.
+    arrivals: u64,
 }
 
 impl ImageShadow {
@@ -223,8 +229,8 @@ impl ImageShadow {
         self.images.get(&id)
     }
 
-    /// Insertion order: [`ImageLayout`] sorts by [`ClientPlacement::z_index`]
-    /// and keeps this order on ties.
+    /// Insertion order, which [`ImageLayout`] keeps among equal-z
+    /// placements of an image only when the daemon sends no serial.
     #[must_use]
     pub fn placements(&self) -> &[ClientPlacement] {
         &self.placements
@@ -304,6 +310,7 @@ impl ImageShadow {
                 source,
                 z_index,
                 requested,
+                serial,
             } => {
                 self.apply_placement(ClientPlacement {
                     image_id: *image_id,
@@ -315,6 +322,7 @@ impl ImageShadow {
                     source: *source,
                     z_index: *z_index,
                     requested: *requested,
+                    serial: *serial,
                 });
             }
             ImageMsg::PlacementRemoved {
@@ -337,6 +345,7 @@ impl ImageShadow {
                     cols: *cols,
                     rows: *rows,
                     z_index: *z_index,
+                    serial: 0,
                 });
             }
             ImageMsg::ShowFrame { id, number } => {
@@ -416,7 +425,8 @@ impl ImageShadow {
                 width,
                 height,
                 format,
-            } => self.open_new(id, width, height, format)?,
+                serial,
+            } => self.open_new(id, width, height, format, serial)?,
             ImageTarget::Frame { number } => self.open_frame(id, number)?,
         };
         let expected = self.images.get(&id).map_or(0, |entry| entry.frame_len);
@@ -436,18 +446,28 @@ impl ImageShadow {
     }
 
     /// Replaces the whole entry, animation frames included: a fresh
-    /// transmission under a live id is a new image, not an edit.
+    /// transmission under a live id is a new image, not an edit, though
+    /// it keeps its rank as kitty keeps the image's id.
     fn open_new(
         &mut self,
         id: ImageId,
         width: u32,
         height: u32,
         format: ImageFormat,
+        serial: Option<u64>,
     ) -> Result<usize, ImageShadowError> {
         let frame_len = Self::frame_len(id, width, height, format)?;
         let freed = self.images.get(&id).map_or(0, Self::bytes_of);
         let retained =
             self.admit_aggregate(id, freed, ENTRY_OVERHEAD + FRAME_OVERHEAD + frame_len)?;
+        let rank = match (serial, self.images.get(&id)) {
+            (Some(serial), _) => serial,
+            (None, Some(held)) => held.rank,
+            (None, None) => {
+                self.arrivals += 1;
+                self.arrivals
+            }
+        };
         let entry = ClientImage {
             width,
             height,
@@ -460,6 +480,7 @@ impl ImageShadow {
             current: 0,
             drawable: false,
             generation: next_generation(),
+            rank,
         };
         let is_new = !self.images.contains_key(&id);
         self.images.insert(id, entry);
@@ -674,6 +695,10 @@ impl LayoutImages for ImageShadow {
         let image = self.images.get(&id)?;
         image.drawable.then_some((image.width, image.height))
     }
+
+    fn stack_rank(&self, id: ImageId) -> u64 {
+        self.images.get(&id).map_or(u64::MAX, |image| image.rank)
+    }
 }
 
 #[cfg(test)]
@@ -703,8 +728,46 @@ mod tests {
                 width: u32::try_from(total / 4).unwrap(),
                 height: 1,
                 format: ImageFormat::Rgba32,
+                serial: None,
             },
         }
+    }
+
+    fn serial_header(id: u32, serial: u64) -> ImageMsg {
+        ImageMsg::Header {
+            id: ImageId(id),
+            target: ImageTarget::New {
+                width: 1,
+                height: 1,
+                format: ImageFormat::Rgba32,
+                serial: Some(serial),
+            },
+        }
+    }
+
+    #[test]
+    fn an_image_ranks_by_the_daemon_s_serial_whatever_order_it_arrives_in() {
+        let mut s = ImageShadow::new();
+        s.apply_ok(&serial_header(2, 8));
+        close(&mut s, 2, 4);
+        s.apply_ok(&serial_header(1, 3));
+        close(&mut s, 1, 4);
+        assert_eq!((s.stack_rank(ImageId(1)), s.stack_rank(ImageId(2))), (3, 8));
+    }
+
+    #[test]
+    fn without_a_serial_an_image_ranks_by_first_arrival_and_a_resend_keeps_it() {
+        let mut s = ImageShadow::new();
+        transfer(&mut s, &header(1, 4), vec![0; 4]);
+        transfer(&mut s, &header(2, 4), vec![0; 4]);
+        transfer(&mut s, &header(1, 8), vec![0; 8]);
+        assert!(s.stack_rank(ImageId(1)) < s.stack_rank(ImageId(2)));
+        s.apply_ok(&ImageMsg::Delete { id: ImageId(1) });
+        transfer(&mut s, &header(1, 4), vec![0; 4]);
+        assert!(
+            s.stack_rank(ImageId(1)) > s.stack_rank(ImageId(2)),
+            "a deleted id comes back as a new image"
+        );
     }
 
     fn frame_header(id: u32, number: u32) -> ImageMsg {
@@ -760,6 +823,7 @@ mod tests {
             source: None,
             z_index: z,
             requested: None,
+            serial: None,
         }
     }
 
@@ -1371,6 +1435,7 @@ mod tests {
                 width: 2,
                 height: 1,
                 format: ImageFormat::Rgb24,
+                serial: None,
             },
         };
         transfer(&mut s, &rgb, vec![1, 2, 3, 4, 5, 6]);

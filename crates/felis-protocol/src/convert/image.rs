@@ -67,10 +67,12 @@ impl From<&messages::ImageMsg> for v1::ImageMsg {
                         width,
                         height,
                         format,
+                        serial,
                     } => v1::image_header::Target::Image(v1::ImageNew {
                         width: *width,
                         height: *height,
                         format: image_format_to_i32(*format),
+                        serial: *serial,
                     }),
                     messages::ImageTarget::Frame { number } => {
                         v1::image_header::Target::Frame(v1::ImageFrame {
@@ -95,6 +97,7 @@ impl From<&messages::ImageMsg> for v1::ImageMsg {
                 source,
                 z_index,
                 requested,
+                serial,
             } => Msg::Placement(v1::ImagePlacement {
                 image_id: image_id.0,
                 placement_id: placement_id.map(|p| p.0),
@@ -105,6 +108,7 @@ impl From<&messages::ImageMsg> for v1::ImageMsg {
                 source: source.map(Into::into),
                 z_index: *z_index,
                 requested: requested.map(Into::into),
+                serial: *serial,
             }),
             I::PlacementRemoved {
                 image_id,
@@ -161,6 +165,7 @@ fn header_from_wire(h: v1::ImageHeader) -> Result<messages::ImageMsg, WireError>
                 width: n.width,
                 height: n.height,
                 format,
+                serial: n.serial,
             }
         }
         Target::Frame(f) => messages::ImageTarget::Frame {
@@ -205,6 +210,7 @@ impl TryFrom<v1::ImageMsg> for messages::ImageMsg {
                     source: p.source.map(Into::into),
                     z_index: p.z_index,
                     requested: p.requested.map(TryInto::try_into).transpose()?,
+                    serial: p.serial,
                 },
                 Msg::PlacementRemoved(p) => Self::PlacementRemoved {
                     image_id: ImageId(p.image_id),
@@ -236,6 +242,7 @@ mod tests {
             width,
             height: 1,
             format: v1::ImageFormat::Rgba32 as i32,
+            serial: None,
         }))
     }
 
@@ -277,6 +284,7 @@ mod tests {
                 width: u32::MAX,
                 height: u32::MAX,
                 format: v1::ImageFormat::Rgba32 as i32,
+                serial: None,
             }))),
             Err(WireError::OverLimit { .. })
         ));

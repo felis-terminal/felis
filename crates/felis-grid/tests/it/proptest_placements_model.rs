@@ -69,7 +69,8 @@ fn op() -> impl Strategy<Value = Op> {
     ]
 }
 
-/// The pre-index table: linear scans, one sequence number per insertion.
+/// The pre-index table: linear scans, one sequence number per insertion,
+/// which a new placement also takes as its serial.
 #[derive(Default)]
 struct Model {
     entries: Vec<(u64, Placement)>,
@@ -96,31 +97,35 @@ impl Model {
         }
     }
 
-    fn upsert(&mut self, p: Placement) -> Option<Displaced> {
+    fn upsert(&mut self, mut p: Placement) -> Option<Displaced> {
         if let Some(slot) = self.entries.iter_mut().find(|(_, q)| {
             !p.anonymous
                 && !q.anonymous
                 && q.image_id == p.image_id
                 && q.placement_id == p.placement_id
         }) {
+            p.serial = slot.1.serial;
             return Some(Displaced::Replaced(std::mem::replace(&mut slot.1, p)));
         }
         let seq = self.next();
+        p.serial = seq;
         self.entries.push((seq, p));
         self.evict().map(Displaced::Evicted)
     }
 
-    fn upsert_virtual(&mut self, v: VirtualPlacement) -> Option<AnyPlacement> {
+    fn upsert_virtual(&mut self, mut v: VirtualPlacement) -> Option<AnyPlacement> {
         if let Some(slot) = self.virtuals.iter_mut().find(|(_, w)| {
             !v.anonymous
                 && !w.anonymous
                 && w.image_id == v.image_id
                 && w.placement_id == v.placement_id
         }) {
+            v.serial = slot.1.serial;
             slot.1 = v;
             return None;
         }
         let seq = self.next();
+        v.serial = seq;
         self.virtuals.push((seq, v));
         self.evict()
     }
@@ -138,6 +143,7 @@ const fn placement(image: u32, id: PlacementId, anonymous: bool, row: i32) -> Pl
         no_cursor_move: false,
         quiet: 0,
         anonymous,
+        serial: 0,
     }
 }
 
@@ -172,6 +178,7 @@ proptest! {
                         cols,
                         rows: 1,
                         z_index: 0,
+                        serial: 0,
                     };
                     prop_assert_eq!(table.upsert_virtual(v), model.upsert_virtual(v), "{:?}", op);
                 }
@@ -235,7 +242,7 @@ proptest! {
 }
 
 /// Mirrors a rekey the table reported: the placement leaves its slot and
-/// rejoins as the newest under its new id.
+/// rejoins as the newest under its new id, keeping its serial.
 fn model_rekey(model: &mut Model, image: ImageId, from: PlacementId, moved: &AnyPlacement) {
     let seq = model.next();
     match moved {
@@ -247,7 +254,8 @@ fn model_rekey(model: &mut Model, image: ImageId, from: PlacementId, moved: &Any
                     q.anonymous && q.image_id == image && q.placement_id == Some(from)
                 })
                 .expect("the model holds the anonymous placement the table moved");
-            model.entries.remove(idx);
+            let (_, old) = model.entries.remove(idx);
+            assert_eq!(p.serial, old.serial, "a rekey keeps the serial");
             model.entries.push((seq, p.clone()));
         }
         AnyPlacement::Virtual(v) => {
@@ -258,7 +266,8 @@ fn model_rekey(model: &mut Model, image: ImageId, from: PlacementId, moved: &Any
                     w.anonymous && w.image_id == image && w.placement_id == Some(from)
                 })
                 .expect("the model holds the anonymous placement the table moved");
-            model.virtuals.remove(idx);
+            let (_, old) = model.virtuals.remove(idx);
+            assert_eq!(v.serial, old.serial, "a rekey keeps the serial");
             model.virtuals.push((seq, *v));
         }
     }

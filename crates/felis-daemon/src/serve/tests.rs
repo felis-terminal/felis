@@ -2334,6 +2334,7 @@ async fn scroll_into_scrollback_retains_placement_and_emits_shift() {
         no_cursor_move: false,
         quiet: 0,
         anonymous: false,
+        serial: 0,
     });
 
     let rows = usize::from(session.lock_core().grid.rows());
@@ -2404,6 +2405,7 @@ async fn a_region_scroll_moves_the_placements_inside_the_region() {
             no_cursor_move: false,
             quiet: 0,
             anonymous: false,
+            serial: 0,
         });
     }
     {
@@ -2672,6 +2674,7 @@ async fn rehydrate_replays_persisted_images_and_placements() {
         no_cursor_move: false,
         quiet: 0,
         anonymous: false,
+        serial: 0,
     });
     let session_task::SessionLifecycle { id: session_id, .. } = session_task::spawn_owned(
         &pool,
@@ -2816,6 +2819,7 @@ async fn time_to_first_frame_under_simulated_slow_link() {
         no_cursor_move: false,
         quiet: 0,
         anonymous: false,
+        serial: 0,
     });
     let session_task::SessionLifecycle { id: session_id, .. } = session_task::spawn_owned(
         &pool,

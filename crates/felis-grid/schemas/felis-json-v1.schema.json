@@ -1255,6 +1255,17 @@
               "minimum": 0,
               "type": "integer"
             },
+            "serial": {
+              "description": "Creation order among the image's placements; absent from a\ndaemon that does not report it.",
+              "format": "uint64",
+              "maximum": 18446744073709551615,
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ],
+              "x-bound-exceeds-f64-precision": true
+            },
             "source": {
               "anyOf": [
                 {
@@ -1425,6 +1436,17 @@
               "maximum": 4294967295,
               "minimum": 0,
               "type": "integer"
+            },
+            "serial": {
+              "description": "Creation order; absent from a daemon that does not report it.",
+              "format": "uint64",
+              "maximum": 18446744073709551615,
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ],
+              "x-bound-exceeds-f64-precision": true
             },
             "target": {
               "const": "new",

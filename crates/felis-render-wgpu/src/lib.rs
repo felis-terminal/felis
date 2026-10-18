@@ -2418,6 +2418,10 @@ mod tests {
         fn drawable_size(&self, id: ImageId) -> Option<(u32, u32)> {
             (id == self.id).then_some((self.width, self.height))
         }
+
+        fn stack_rank(&self, _: ImageId) -> u64 {
+            0
+        }
     }
 
     /// A solid image placed through a 10 x 10 block of placeholder cells
@@ -2460,6 +2464,7 @@ mod tests {
             cols: cells,
             rows: cells,
             z_index: 0,
+            serial: 0,
         };
         let mut layout = ImageLayout::new();
         layout.rebuild(

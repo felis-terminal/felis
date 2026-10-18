@@ -249,7 +249,11 @@ Image layers stack relative to text according to Kitty rules:
 6. Images with `z >= 0`, in z order.
 7. Cursor.
 
-Images of equal z draw anchored placements in the order the client received them, then placeholder cells.
+Images of equal z stack in creation order, as in kitty: the image transmitted first draws first, sending an image again
+under its id keeps its place, and deleting it gives the place up. Within one image, anchored placements draw in the
+order they were first put, which a later put under the same `p=`, direct or virtual, keeps; the image's placeholder
+cells draw after them, in row-major order. The daemon numbers both orders (`ImageNew.serial`, `ImagePlacement.serial` in
+[ipc.md](../ipc.md)), so a reattached window stacks as one attached throughout.
 
 Interface chrome (search, confirmation, or link preview bars) clips all image rendering; images do not draw into chrome
 rows at any z-index (see [kitty-graphics.md](../../explanation/protocols/kitty-graphics.md)).

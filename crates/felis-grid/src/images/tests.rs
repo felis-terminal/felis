@@ -294,6 +294,7 @@ fn placement(image: u32, placement: Option<u32>, z: i32) -> Placement {
         no_cursor_move: false,
         quiet: 0,
         anonymous: false,
+        serial: 0,
     }
 }
 
@@ -371,6 +372,7 @@ fn virtual_placement(image: u32, placement: u32, cols: u16) -> VirtualPlacement 
         cols,
         rows: 2,
         z_index: 0,
+        serial: 0,
     }
 }
 
@@ -443,12 +445,18 @@ fn a_put_past_the_cap_evicts_the_oldest_placement_of_either_kind() {
     assert_eq!(
         t.upsert(placement(4, Some(1), 0)),
         Some(Displaced::Evicted(AnyPlacement::Virtual(
-            virtual_placement(1, 1, 4)
+            VirtualPlacement {
+                serial: 1,
+                ..virtual_placement(1, 1, 4)
+            }
         )))
     );
     assert_eq!(
         t.upsert_virtual(virtual_placement(5, 1, 4)),
-        Some(AnyPlacement::Anchored(placement(2, Some(1), 0)))
+        Some(AnyPlacement::Anchored(Placement {
+            serial: 2,
+            ..placement(2, Some(1), 0)
+        }))
     );
     let anchored: Vec<_> = t.iter().map(|p| p.image_id.0).collect();
     assert_eq!(anchored, vec![3, 4]);
@@ -462,7 +470,10 @@ fn a_replacing_put_at_the_cap_keeps_its_place_and_evicts_nothing() {
     t.upsert(placement(2, Some(1), 0));
     assert_eq!(
         t.upsert(placement(1, Some(1), 5)),
-        Some(Displaced::Replaced(placement(1, Some(1), 0)))
+        Some(Displaced::Replaced(Placement {
+            serial: 1,
+            ..placement(1, Some(1), 0)
+        }))
     );
     t.upsert_virtual(virtual_placement(3, 1, 4));
     t.upsert_virtual(virtual_placement(3, 1, 6));
@@ -486,11 +497,10 @@ fn a_rekeyed_anonymous_placement_becomes_the_newest() {
     t.rekey_anonymous(ImageId(1), id);
     assert_eq!(
         t.upsert(placement(3, Some(1), 0)),
-        Some(Displaced::Evicted(AnyPlacement::Anchored(placement(
-            2,
-            Some(1),
-            0
-        ))))
+        Some(Displaced::Evicted(AnyPlacement::Anchored(Placement {
+            serial: 2,
+            ..placement(2, Some(1), 0)
+        })))
     );
 }
 
@@ -671,6 +681,7 @@ fn placement_box(
         no_cursor_move: false,
         quiet: 0,
         anonymous: false,
+        serial: 0,
     }
 }
 
@@ -1693,6 +1704,7 @@ fn put_at(store: &ImageStore, image: u32, row: i32, requested: (u16, u16)) -> Pl
         no_cursor_move: false,
         quiet: 0,
         anonymous: false,
+        serial: 0,
     }
 }
 
@@ -1895,4 +1907,69 @@ proptest! {
             );
         }
     }
+}
+
+#[test]
+fn a_replaced_placement_keeps_its_serial_and_a_new_key_takes_the_next() {
+    let mut t = Placements::new();
+    t.upsert(placement(1, Some(1), 0));
+    t.upsert(placement(1, Some(2), 0));
+    t.upsert(placement(1, Some(1), 4));
+    assert_eq!(t.serial(ImageId(1), Some(PlacementId(1))), Some(1));
+    assert_eq!(t.serial(ImageId(1), Some(PlacementId(2))), Some(2));
+    t.upsert_virtual(virtual_placement(1, 3, 4));
+    t.upsert_virtual(virtual_placement(1, 3, 6));
+    assert_eq!(t.serial(ImageId(1), Some(PlacementId(3))), Some(3));
+}
+
+#[test]
+fn a_rekeyed_anonymous_placement_keeps_its_serial() {
+    let mut t = Placements::new();
+    let id = t.allocate_anonymous_id(ImageId(1));
+    t.upsert(Placement {
+        anonymous: true,
+        ..placement(1, Some(id.0), 0)
+    });
+    t.upsert(placement(1, Some(1), 0));
+    let Some(AnyPlacement::Anchored(moved)) = t.rekey_anonymous(ImageId(1), id) else {
+        panic!("the anonymous placement moves");
+    };
+    assert_eq!(moved.serial, 1);
+    assert_eq!(t.serial(ImageId(1), moved.placement_id), Some(1));
+}
+
+/// What a put converting a placement to the other kind relies on.
+#[test]
+fn a_new_placement_keeps_a_serial_it_arrives_with() {
+    let mut t = Placements::new();
+    t.upsert_virtual(virtual_placement(1, 1, 4));
+    t.upsert(placement(1, Some(2), 0));
+    let inherited = t.serial(ImageId(1), Some(PlacementId(1))).unwrap();
+    t.remove_virtual_placement(ImageId(1), PlacementId(1));
+    t.upsert(Placement {
+        serial: inherited,
+        ..placement(1, Some(1), 0)
+    });
+    assert_eq!(t.serial(ImageId(1), Some(PlacementId(1))), Some(1));
+    assert_eq!(t.serial(ImageId(1), Some(PlacementId(2))), Some(2));
+}
+
+#[cfg(feature = "state-dump")]
+#[test]
+fn a_dump_without_serials_takes_them_from_its_sequence_numbers() {
+    let mut t = Placements::new();
+    t.upsert(placement(1, Some(1), 0));
+    t.upsert_virtual(virtual_placement(1, 2, 4));
+    t.upsert(placement(2, Some(1), 0));
+    let mut dump = PlacementsDump::from(t);
+    for p in &mut dump.entries {
+        p.serial = 0;
+    }
+    for v in &mut dump.virtuals {
+        v.serial = 0;
+    }
+    let restored = Placements::from(dump);
+    assert_eq!(restored.serial(ImageId(1), Some(PlacementId(1))), Some(1));
+    assert_eq!(restored.serial(ImageId(1), Some(PlacementId(2))), Some(2));
+    assert_eq!(restored.serial(ImageId(2), Some(PlacementId(1))), Some(3));
 }

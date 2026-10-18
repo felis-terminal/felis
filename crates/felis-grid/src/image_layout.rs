@@ -15,6 +15,29 @@ use crate::{
 /// only once it can draw. An image mid-transfer answers `None`.
 pub trait LayoutImages {
     fn drawable_size(&self, id: ImageId) -> Option<(u32, u32)>;
+
+    /// The image's place in creation order: kitty stacks equal-z draws
+    /// by it before the placement's own.
+    fn stack_rank(&self, id: ImageId) -> u64;
+}
+
+/// kitty's `(z_index, image id, ref id)`. `kind` puts an image's
+/// placeholder tiles above its direct placements: kitty mints a
+/// placeholder ref each time its row renders, so it outranks every
+/// older ref of the image, and the tiles keep cell order among
+/// themselves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct StackKey {
+    z: i32,
+    image: u64,
+    kind: DrawKind,
+    placement: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum DrawKind {
+    Direct,
+    Placeholder,
 }
 
 /// One rectangle of one image. `src` is in the image's own pixels and
@@ -77,7 +100,7 @@ pub struct ImageLayout {
     above_text: Vec<ImageDraw>,
     live: Vec<ImageId>,
     placeholder_stats: PlaceholderStats,
-    sorted: Vec<(i32, ImageDraw)>,
+    sorted: Vec<(StackKey, ImageDraw)>,
     vp_map: HashMap<(ImageId, u32), VirtualPlacement>,
     seen: HashSet<ImageId>,
 }
@@ -132,14 +155,14 @@ impl ImageLayout {
         self.collect_live(placements, virtual_placements);
         self.push_placements(screen, images, placements, cell_px, viewport);
         self.push_placeholders(screen, images, virtual_placements, cell_px);
-        // Stable, so equal z keeps arrival order: anchored placements in
-        // shadow order, then placeholder tiles in cell order.
-        self.sorted.sort_by_key(|(z, _)| *z);
+        // Stable: placeholder tiles tie and keep cell order, as do the
+        // placements of a daemon that sends no serial, in shadow order.
+        self.sorted.sort_by_key(|(key, _)| *key);
         self.under_bg.clear();
         self.under_text.clear();
         self.above_text.clear();
-        for &(z, draw) in &self.sorted {
-            match z_layer(z) {
+        for &(key, draw) in &self.sorted {
+            match z_layer(key.z) {
                 ZLayer::UnderBg => self.under_bg.push(draw),
                 ZLayer::UnderText => self.under_text.push(draw),
                 ZLayer::AboveText => self.above_text.push(draw),
@@ -193,7 +216,13 @@ impl ImageLayout {
             if draw.dst[1] + draw.dst[3] <= 0.0 {
                 continue;
             }
-            self.sorted.push((p.z_index, draw));
+            let key = StackKey {
+                z: p.z_index,
+                image: images.stack_rank(p.image_id),
+                kind: DrawKind::Direct,
+                placement: p.serial.unwrap_or(0),
+            };
+            self.sorted.push((key, draw));
         }
     }
 
@@ -249,7 +278,13 @@ impl ImageLayout {
             };
             if let Some(draw) = placeholder_tile_draw(pc.image_id, width, height, cw, ch, tile) {
                 self.placeholder_stats.tiles += 1;
-                self.sorted.push((PLACEHOLDER_Z, draw));
+                let key = StackKey {
+                    z: PLACEHOLDER_Z,
+                    image: images.stack_rank(pc.image_id),
+                    kind: DrawKind::Placeholder,
+                    placement: 0,
+                };
+                self.sorted.push((key, draw));
             }
         }
     }

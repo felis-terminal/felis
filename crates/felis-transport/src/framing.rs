@@ -960,6 +960,7 @@ mod tests {
                 width: 1024,
                 height: 768,
                 format: ImageFormat::Rgba32,
+                serial: None,
             },
         };
         let chunks: Vec<ImageMsg> = (0..3)

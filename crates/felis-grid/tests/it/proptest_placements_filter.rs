@@ -39,6 +39,7 @@ fn placement_strategy() -> impl Strategy<Value = Placement> {
                 no_cursor_move,
                 quiet: 0,
                 anonymous: false,
+                serial: 0,
             },
         )
 }
