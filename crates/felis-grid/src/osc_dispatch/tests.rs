@@ -129,6 +129,19 @@ fn osc_22_takes_the_first_valid_shape_of_a_fallback_list() {
 }
 
 #[test]
+fn ris_ships_the_pointer_shape_reset_and_empties_the_stack() {
+    let mut p = Parser::new();
+    let mut g = Grid::new(1, 4);
+    drive(&mut p, &mut g, b"\x1b]22;text\x07\x1b]22;>wait\x07");
+    assert_eq!(g.take_pointer_shape_dirty(), Some(Some("wait".to_owned())));
+    drive(&mut p, &mut g, b"\x1bc");
+    assert_eq!(g.pointer_shape(), None);
+    assert_eq!(g.take_pointer_shape_dirty(), Some(None), "reset is shipped");
+    drive(&mut p, &mut g, b"\x1b]22;<\x07");
+    assert_eq!(g.pointer_shape(), None, "the pushed shape is gone");
+}
+
+#[test]
 fn osc_8_dedupes_same_id_and_uri_to_one_table_row() {
     let mut p = Parser::new();
     let mut g = Grid::new(1, 6);

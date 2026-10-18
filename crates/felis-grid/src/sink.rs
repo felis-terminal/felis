@@ -616,8 +616,9 @@ impl Sink for Grid {
                 let rows = self.screen.rows;
                 let cols = self.screen.cols;
                 // Cleared through the setters so the attached windows are
-                // told to drop the colors they paint, not left showing a
-                // program override no query answers.
+                // told to drop the colors and pointer they show, not left
+                // showing a program override no query answers.
+                self.set_pointer_shape(None);
                 for channel in [
                     ThemeChannel::Foreground,
                     ThemeChannel::Background,
@@ -629,6 +630,7 @@ impl Sink for Grid {
                 let theme_dirty = self.theme_dirty;
                 let palette_dirty = std::mem::take(&mut self.palette_dirty);
                 let palette_reset_all_pending = self.palette_reset_all_pending;
+                let pointer_shape_dirty = self.pointer_shape_dirty;
                 let term_name = self.term_name.take();
                 let theme_config_defaults = self.theme_config_defaults;
                 let palette_config_defaults = self.palette_config_defaults;
@@ -640,6 +642,7 @@ impl Sink for Grid {
                 self.theme_dirty = theme_dirty;
                 self.palette_dirty = palette_dirty;
                 self.palette_reset_all_pending = palette_reset_all_pending;
+                self.pointer_shape_dirty = pointer_shape_dirty;
                 self.term_name = term_name;
                 self.theme_config_defaults = theme_config_defaults;
                 self.palette_config_defaults = palette_config_defaults;
