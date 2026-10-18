@@ -17,6 +17,13 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
   `Ctrl+Shift+Home` / `Ctrl+Shift+End`, as in kitty and Windows Terminal, so `Ctrl+Home` / `Ctrl+End` reach editors such
   as vim and nano again. `"ctrl+home" = { kind = "scroll", step = "home" }` under `[keymap]` (and `step = "end"` for
   `ctrl+end`) brings the old chords back.
+- **Fonts through CoreText and DirectWrite**: on macOS and Windows, `font.family` resolves through the platform's font
+  API, and a character the font misses draws from the face the platform picks for it, so Han takes the Japanese or the
+  Chinese form your language list asks for. A symbols-only Nerd Font still comes first, and an explicit `font.fallback`
+  still replaces both.
+- The default font is your fixed-pitch font on macOS (Menlo unless you changed it) and Cascadia Mono on Windows.
+- `felis doctor report` names the platform's per-character fallback after the fallback faces, and `--format json` adds
+  it as `fonts.system_fallback`.
 
 ## [0.2.0] - 2026-10-14
 

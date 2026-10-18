@@ -1019,9 +1019,9 @@ impl Renderer {
         Ok(self.glyphs.cell_metrics())
     }
 
-    /// Size only, skipping the fontdb rescan [`Self::reload_font`] pays:
-    /// on a system with hundreds of faces the scan dominates the zoom
-    /// frame budget and stutters while the chord is held.
+    /// Size only, skipping the face discovery [`Self::reload_font`] pays:
+    /// on a system with hundreds of faces it dominates the zoom frame
+    /// budget and stutters while the chord is held.
     pub fn reload_font_size(&mut self, size_physical_px: f32) -> CellMetrics {
         self.glyphs.reload_font_size(size_physical_px);
         self.cells.invalidate();

@@ -1050,7 +1050,7 @@ ENDFONT
     }
 
     /// fontconfig names the variable file's Regular instance; it must draw
-    /// at the same position fontdb reaches by moving the default to 400.
+    /// at the same position a file set reaches by moving the default to 400.
     #[test]
     fn a_named_instance_match_draws_where_the_axis_move_does() {
         let Some(fc) = pinned("") else { return };
@@ -1066,9 +1066,9 @@ ENDFONT
         let style = StyleFaces::default();
         let via_fc = FontStack::auto_discover_in(&fc, Some(family), &[], &[], &style)
             .expect("loads through fontconfig");
-        let via_db = FontStack::discover_in_files(&files, Some(family), &[], &[], &style)
-            .expect("loads through fontdb");
-        assert_eq!(via_fc.primary().coords, via_db.primary().coords);
+        let via_files = FontStack::discover_in_files(&files, Some(family), &[], &[], &style)
+            .expect("loads from the file");
+        assert_eq!(via_fc.primary().coords, via_files.primary().coords);
     }
 
     /// Sorting on the matched family's own name would drop the alias's

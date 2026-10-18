@@ -69,12 +69,13 @@ A local repository path may also be referenced: `#:schema <path>/crates/felis-cl
 # come from fontconfig less its bitmap (PCF, BDF) and Type 1 faces, so a
 # family with only such faces counts as not installed: the default is
 # its `monospace` match (`fc-match monospace`), and a name is resolved
-# through it, so `fonts.conf` aliases apply. Elsewhere,
-# when the system's `monospace` alias names a family that is not
-# installed, the first installed of DejaVu Sans Mono, Liberation Mono,
-# Noto Sans Mono, Ubuntu Mono, Menlo, and Consolas; failing those, the
-# first installed fixed-pitch family by name. `felis fonts list` prints
-# every name this key and the other `family` keys accept.
+# through it, so `fonts.conf` aliases apply. On macOS the user's
+# fixed-pitch font (Menlo unless changed); on Windows Cascadia Mono.
+# Failing that, the first installed of DejaVu Sans Mono, Liberation
+# Mono, Noto Sans Mono, Ubuntu Mono, Menlo, and Consolas. Names resolve
+# through CoreText on macOS and DirectWrite on Windows, localized names
+# included. `felis fonts list` prints every name this key and the other
+# `family` keys accept.
 family = "JetBrainsMono Nerd Font"
 
 # Logical pixel size for cell metrics and rasterization.
@@ -86,11 +87,10 @@ size_px = 14
 # Omitted (default) on Linux: fontconfig's ranked fallback for the
 # primary (`fc-match -s`), keeping the faces that add coverage, at most
 # 62; a text-presentation character takes a monochrome face before an
-# earlier-ranked color one. Omitted elsewhere: felis auto-discovers, in
-# this order, the first installed CJK family, every installed symbol
-# family, the first installed color-emoji family, and the first
-# installed symbols-only Nerd Font; a group with nothing installed
-# contributes no face.
+# earlier-ranked color one. Omitted on macOS and Windows: the first
+# installed symbols-only Nerd Font, then, per character it misses, the
+# face CoreText or DirectWrite picks for it in the user's first
+# Han-writing language (else their first language).
 # Non-empty: the declared entries are the whole chain, in order,
 # and the host's fallback does not run on top of them.
 # A character that defaults to emoji (⭐, ☕) takes the first color

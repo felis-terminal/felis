@@ -69,9 +69,8 @@ is a hash lookup plus a copy into a per-frame scratch buffer, ~110× cheaper tha
 
 ## Font fallback
 
-A run may contain codepoints that the primary font does not cover (e.g. emoji in a programming font). The fallback chain
-(`FontStack`) is built **eagerly** at startup, not assembled lazily per miss, so the per-codepoint `resolve` call is a
-cheap charmap walk with no I/O. Where it comes from when the user leaves `font.fallback` unset depends on the platform.
+A run may contain codepoints that the primary font does not cover (e.g. emoji in a programming font). Which face draws
+one, when the user leaves `font.fallback` unset, depends on the platform.
 
 On **Linux** it is the host's fontconfig cascade: the ranked sort for the primary, so the order is the one `fc-match -s`
 prints, less the faces the loader cannot parse ("Linux faces" below), and the user's `fonts.conf` rules (prefer lists,
@@ -79,25 +78,47 @@ per-language rules, rejected fonts) and the locale's language apply. The sort is
 that add coverage _within their presentation class_ (color by `FC_COLOR`, else mono, checked against the loaded face):
 fontconfig's own trim drops a color face whose code points an earlier mono face already covers, which is exactly the
 face an emoji needs. A text-presentation character then takes the first mono face covering it before an earlier-ranked
-color one, which is what the symbol group's position achieves below. The chain stops at 63 faces, the width of the face
-id in an atlas key; on a host with more faces that add coverage, the least preferred are dropped with a warning.
+color one, which is what the symbol group's position achieves below. The chain (`FontStack`) is built **eagerly** at
+startup, so the per-codepoint `resolve` call is a cheap charmap walk with no I/O, and it stops at 63 faces, each loaded
+up front; on a host with more faces that add coverage, the least preferred are dropped with a warning.
 
-Elsewhere `auto_discover` walks the CJK, **symbol**, emoji, and Nerd-symbol candidate lists, in that order, and appends
-the first family installed in each group, except the symbol group (see below). The cost is a single fontdb system scan
-shared across every probe, paid up front.
+On **macOS** and **Windows** the platform answers **per character**. A codepoint that neither the primary nor the
+Nerd-symbol group (below) covers goes to CoreText's `CTFontCreateForStringWithLanguage` or DirectWrite's
+`IDWriteFontFallback::MapCharacters`, next to the styled primary. The language passed picks the Japanese or Chinese form
+of Han, so it is the first entry of the user's language list that writes Han, else the first, as Firefox picks it. An
+answer is kept only if it maps the codepoint (and, for emoji presentation, carries color glyphs), and is remembered for
+that codepoint, presentation and style alone. It never joins the chain, so what a codepoint draws with does not depend
+on what was drawn before it, as in kitty.
+
+DirectWrite reads no variation selector and names Segoe UI Emoji for `✳` and `☕︎` alike, so a color face answering a
+text-presentation request draws its outline, as kitty and Alacritty do; a glyph with no outline (CBDT, sbix) stays in
+color.
+
+Rejected: **append each answer to the chain**, as WezTerm, Ghostty and Rio do. A later miss would then take the
+first-cover walk through faces chosen for other characters, so the same text could draw differently depending on what
+the session printed earlier. **The platform's cascade list as an ordered chain** (CoreText's
+`CTFontCopyDefaultCascadeListForLanguages`): it is ranked for the primary, not per character, misses 121 faces the
+per-character lookup reaches on a stock macOS, and lacks Zapf Dingbats, so `✳` would draw from the color emoji face. **A
+worker thread drawing a placeholder until the answer arrives**: it costs a redraw and a visible flash for a wait no
+measured lookup came near (2000 Han lookups took 38 ms on macOS, the slowest 4.7 ms).
+
+The Nerd-symbol group stays an ordered entry on these platforms because CoreText answers a BMP private-use codepoint,
+where the Nerd glyphs live, with whichever face maps it (STIX Two Math, or LastResort) rather than a Nerd font.
 
 A caller that must draw the same faces on every machine, such as a recording-to-video converter or a screenshot test,
-runs the same discovery over a given set of font files instead of the system scan. A stack built from a single primary
-face would not do: the styled faces and the fallback walk would then differ from what a window draws with those fonts.
+runs the same discovery over a given set of font files instead of the system's. A stack built from a single primary face
+would not do: the styled faces and the fallback walk would then differ from what a window draws with those fonts. A file
+set has no platform to ask, so `auto_discover` walks the CJK, **symbol**, emoji, and Nerd-symbol candidate lists in that
+order and appends the first family installed in each group, except the symbol group (see below).
 
 An explicit `font.fallback` list in `config.toml` (keys and grammar in the
 [config reference](../../reference/config.md)) replaces auto-discovery outright: felis appends each entry in declared
-order and skips the discovery walk, so the declared order _is_ the resolution order, except for an emoji-presentation
-character, which takes the first color face covering it, the primary included (see below). A missing family is skipped
-with a warning rather than failing the chain: a config written on one machine degrades gracefully on another that lacks
-a face.
+order and neither walks the candidate lists nor asks the platform, so the declared order _is_ the resolution order,
+except for an emoji-presentation character, which takes the first color face covering it, the primary included (see
+below). A missing family is skipped with a warning rather than failing the chain: a config written on one machine
+degrades gracefully on another that lacks a face.
 
-Outside Linux the **symbol group sits before the emoji group, and appends every installed family rather than the
+In the file-set walk the **symbol group sits before the emoji group, and appends every installed family rather than the
 first**. Both deviations are deliberate.
 
 The ordering serves text-presentation-default symbols (Unicode `Emoji_Presentation=No`: the asterisk dingbats
@@ -133,11 +154,11 @@ visible. Resolving `❤` (U+2764, text by default and a Zapf Dingbat) on its own
 `❤`, wrong the moment VS16 or a ZWJ join asks for the color emoji.
 
 Three cluster signals override the default, checked in this order. A VS15 directly after the base (`⭐︎`, `🀄︎`) asks for
-text, so the base takes the first face covering it even when it defaults to emoji; that is mono only when a mono face
-covers it. Otherwise an emoji ZWJ / modifier sequence anchors its face on the first astral emoji scalar
-(`is_emoji_face_anchor`, U+1F000..=U+1FAFF) so `❤️‍🔥` resolves off the fire. Failing both, a VS16 anywhere in the cluster
-(a bare `❤️`, a keycap) routes the base through `resolve_color_index`. A VS16-less dingbat (`⏸`, a plain `❤`) has no
-signal and stays mono.
+text, so the base takes the first face covering it even when it defaults to emoji; that is mono when a mono face covers
+it, or when the platform's answer is a color face with an outline for it. Otherwise an emoji ZWJ / modifier sequence
+anchors its face on the first astral emoji scalar (`is_emoji_face_anchor`, U+1F000..=U+1FAFF) so `❤️‍🔥` resolves off the
+fire. Failing both, a VS16 anywhere in the cluster (a bare `❤️`, a keycap) routes the base through
+`resolve_color_index`. A VS16-less dingbat (`⏸`, a plain `❤`) has no signal and stays mono.
 
 Once the face is chosen, the cluster is shaped without the variation selectors that face does not map. swash 0.2.10
 never looks a selector up in the cmap's variation-sequence subtable (format 14), and it drops VS15/VS16 only after an
@@ -184,28 +205,28 @@ from the base `font.family` at the matching weight/slant, so a plain single-`fam
 variants automatically, matching the first-run expectation set by every other terminal.
 
 **Missing styled face: reuse regular, never synthesize.** felis does **not** synthesize fake-bold (outline emboldening)
-or fake-italic (a shear transform) when a family ships no real styled face. The face provider (fontconfig or fontdb)
-returns the closest face (the regular one) for a family without a Bold; felis dedups faces by face id and variation
-coordinates and reuses the _same_ `Arc<Font>`, so the missing style costs no extra bytes and draws the regular glyph.
-This mirrors the fallback policy elsewhere (a missing `font.fallback` family is skipped, not substituted): the config is
-a description of intent that degrades gracefully across machines, and a user who wants bold to stand out installs a bold
-face rather than accepting a mechanically-smeared approximation.
+or fake-italic (a shear transform) when a family ships no real styled face. The face provider (fontconfig, CoreText or
+DirectWrite) returns the closest face (the regular one) for a family without a Bold; felis dedups faces by face id and
+variation coordinates and reuses the _same_ `Arc<Font>`, so the missing style costs no extra bytes and draws the regular
+glyph. This mirrors the fallback policy elsewhere (a missing `font.fallback` family is skipped, not substituted): the
+config is a description of intent that degrades gracefully across machines, and a user who wants bold to stand out
+installs a bold face rather than accepting a mechanically-smeared approximation.
 
 _Revisit if_ users ask for synthesized styles for faces that genuinely lack them: the hook is a synthesis pass (zeno
 emboldening + a shear in the scaler) gated behind an opt-in config, layered on top of this face-selection path without
 disturbing it.
 
-**Variable fonts: a position the font names, never an angle felis picks.** fontdb lists a variable font file once, at
-its default instance, so a weight or slant query returns that instance unchanged; fontconfig lists each named instance
-as its own face, and felis draws a matched instance at its position. Either way felis sets the styled view itself,
-moving only the axes below and keeping the matched instance's others (`wdth`, `opsz`): `wght` to 400 for regular and 700
-for bold, and, for an italic style whose matched file is upright, the `ital`/`slnt` axes to the font's own italic
-position. That position comes from an fvar named instance whose subfamily name has an "Italic" or "Oblique" token
-(`BoldItalic` counts), restricted to instances whose other axes (`wdth`, `opsz`) are at the defaults felis draws and
-taken nearest the target weight; both italic axes come from that one instance. A face with an `ital` axis but no such
-instance gets `ital` = 1, its registered meaning. Otherwise the italic draws upright, as a family without an italic face
-does. A separate italic file wins over an upright file's axes. Driving these axes is not synthesis: the instance is a
-design the font ships.
+**Variable fonts: a position the font names, never an angle felis picks.** A file set lists a variable font file once,
+at its default instance, so a weight or slant query returns that instance unchanged; fontconfig, CoreText and
+DirectWrite list each named instance as its own face, and felis draws a matched instance at its position. Either way
+felis sets the styled view itself, moving only the axes below and keeping the matched instance's others (`wdth`,
+`opsz`): `wght` to 400 for regular and 700 for bold, and, for an italic style whose matched file is upright, the
+`ital`/`slnt` axes to the font's own italic position. That position comes from an fvar named instance whose subfamily
+name has an "Italic" or "Oblique" token (`BoldItalic` counts), restricted to instances whose other axes (`wdth`, `opsz`)
+are at the defaults felis draws and taken nearest the target weight; both italic axes come from that one instance. A
+face with an `ital` axis but no such instance gets `ital` = 1, its registered meaning. Otherwise the italic draws
+upright, as a family without an italic face does. A separate italic file wins over an upright file's axes. Driving these
+axes is not synthesis: the instance is a design the font ships.
 
 Named instances were chosen over the STAT table's axis labels, which kitty reads per axis. STAT names each axis's values
 separately, so building a position from it leaves felis to combine `ital` with `slnt`, choose among weight-specific
@@ -227,9 +248,9 @@ ordered `font.fallback` then lands on the same family in every style, even where
 its regular one. For that choice to be safe, a styled face is kept only if it maps every codepoint its regular face maps
 (a variable entry's styled views share its cmap); a family whose bold file covers less draws that style regular, the
 outcome for a family with no bold at all. Rejected: **draw a styled-face miss from the regular face under a second
-handle**, which keeps bold for the glyphs such a family does cover but needs a second id space in the 6-bit sizing-key
-font id and a fourth case in every resolver, for a family shape not seen in practice. A per-script styled cascade
-(kitty's configurable per-script chains) stays out of scope for felis's one-flat-chain model.
+handle**, which keeps bold for the glyphs such a family does cover but needs a second id space in the sizing-key font id
+and a fourth case in every resolver, for a family shape not seen in practice. A per-script styled cascade (kitty's
+configurable per-script chains) stays out of scope for felis's one-flat-chain model.
 
 _Revisit if_ a real fallback family's styled face fails the coverage check, so a style users expect draws regular.
 
@@ -262,49 +283,40 @@ means. One type costs the bare-string spelling and buys a rule the user learns o
 
 Font bytes are **memory-mapped, not heap-copied**. The face provider hands system faces back as file paths; felis opens
 each one and maps it with `memmap2::Mmap::map`, so a large face (Apple Color Emoji is ~183 MB) stays file-backed
-(shared, clean, reclaimable page cache) instead of becoming dirty heap. Faces fontdb already shares (`Binary` /
-`SharedFile`) reuse the existing `Arc` directly; no system face is copied onto the heap. fontdb's own system scan runs
-with its `memmap` feature on for the same reason. The one exception is a caller's pinned font files (see "Font
-fallback"), which are read into memory: mapping is sound only while nothing truncates the file, which holds for a
-root-owned system font directory but not for a file the caller owns.
+(shared, clean, reclaimable page cache) instead of becoming dirty heap; no system face is copied onto the heap. The one
+exception is a caller's pinned font files (see "Font fallback"), which are read into memory: mapping is sound only while
+nothing truncates the file, which holds for a root-owned system font directory but not for a file the caller owns.
 
-The numbers force this. With `fs::read`, the client's physical footprint on macOS is ~450 MB, almost entirely font heap:
-the system scan reads every font file onto the heap just to parse it (macOS malloc then retains ~240 MB of the freed
-blocks in `phys_footprint`), and the eagerly loaded emoji + CJK fallback faces are ~190 MB of _live_ heap. Mapped, the
-footprint is ~43 MB and Apple Color Emoji costs 16 KB resident: coverage probes (`has_glyph`) and rasterization fault
-pages on demand, so cold faces stay unfaulted. That puts felis in the Alacritty/Kitty/Ghostty band (~20–100 MB) instead
-of far above it. The field agrees: every surveyed terminal (Alacritty/`crossfont`, WezTerm, Ghostty, Kitty, foot/`fcft`)
-keeps font bytes file-backed, via the OS font API (CoreText) or FreeType's path-based `FT_New_Face` (which mmaps on
-Unix); WezTerm mmaps the file itself and feeds FreeType an `FT_Stream` (`wezterm-font/src/ftwrap.rs`), the same shape
-felis uses.
+The numbers force this. With `fs::read`, the eagerly loaded emoji + CJK fallback faces alone are ~190 MB of _live_ heap.
+Mapped, the client's footprint on macOS is ~43 MB and Apple Color Emoji costs 16 KB resident: coverage probes
+(`has_glyph`) and rasterization fault pages on demand, so cold faces stay unfaulted. That puts felis in the
+Alacritty/Kitty/Ghostty band (~20–100 MB) instead of far above it. The field agrees: every surveyed terminal
+(Alacritty/`crossfont`, WezTerm, Ghostty, Kitty, foot/`fcft`) keeps font bytes file-backed, via the OS font API
+(CoreText) or FreeType's path-based `FT_New_Face` (which mmaps on Unix); WezTerm mmaps the file itself and feeds
+FreeType an `FT_Stream` (`wezterm-font/src/ftwrap.rs`), the same shape felis uses.
 
-The cost is one `unsafe` call. fontdb stores kept faces as bare paths and exposes a persistent mmap only through its
-`unsafe fn make_shared_face_data`; swash needs a persistent `&[u8]` to rasterize from, so there is no safe route to a
-file-backed face. `felis-shaping` therefore relaxes the workspace-wide `unsafe_code = "deny"` lint crate-wide (the
-policy lives in `Cargo.toml` / `clippy.toml`), with `Mmap::map` as the audited mapping site, carrying a `// SAFETY:`
-comment. The Linux face provider's libfontconfig calls are the relaxation's one other user: the library is a C ABI
-loaded at run time, and no safe binding to it exists. A mapped file truncated underneath the process would SIGBUS;
-accepted, because the mapped paths are root-owned read-only OS font assets that are not rewritten in place during a
-session, the identical trade-off fontdb's `make_shared_face_data` and FreeType already make.
+The cost is one `unsafe` call. swash needs a persistent `&[u8]` to rasterize from, and mapping a file has no safe API,
+so there is no safe route to a file-backed face. `felis-shaping` therefore relaxes the workspace-wide
+`unsafe_code = "deny"` lint crate-wide (the policy lives in `Cargo.toml` / `clippy.toml`), with `Mmap::map` as the
+audited mapping site, carrying a `// SAFETY:` comment. The face providers' platform calls are the relaxation's other
+users: libfontconfig on Linux is a C ABI loaded at run time with no safe binding, and the CoreText and DirectWrite
+bindings expose their calls as `unsafe`. A mapped file truncated underneath the process would SIGBUS; accepted, because
+the mapped paths are root-owned read-only OS font assets that are not rewritten in place during a session, the identical
+trade-off FreeType already makes.
 
 Rejected alternatives:
 
 - **Keep `fs::read`, accept the footprint.** ~190 MB of dirty heap for fonts is anomalous against every surveyed
   terminal.
-- **fontdb's `make_shared_face_data`.** Equally `unsafe`, so it needs the same lint relaxation, but it requires
-  threading `&mut Database` into the load path and caching inside fontdb. The direct `memmap2::Mmap::map` is one
-  self-contained line and matches WezTerm's reference implementation.
-- **Lazy fallback-face opening (no `unsafe`).** The field's other technique: defer opening emoji/CJK until a glyph
-  misses the primary. Helps only ASCII-only sessions, needs interior mutability in `FontStack::resolve`, and still reads
-  183 MB the first time an emoji appears; with mmap a held face costs ~16 KB resident, so the laziness buys nothing once
-  the file is mapped, and Nerd-Font / emoji glyphs are common enough that the fast path would rarely fire. Could still
-  be layered on later if cold-start face _count_ ever matters.
+- **Lazy fallback-face opening instead of mapping (no `unsafe`).** The field's other technique: defer opening emoji/CJK
+  until a glyph misses the primary. It still reads 183 MB onto the heap the first time an emoji appears; with mmap a
+  held face costs ~16 KB resident, so laziness buys no memory once the file is mapped.
 - **Keep `fs::read` but switch to a returning allocator (jemalloc/mimalloc).** Hands the freed transient blocks back to
   the OS but leaves the live kept faces on the heap: treats the malloc-retention symptom, not the heap-copying cause.
 
-Revisit if: an `unsafe` block outside these two is ever proposed in `felis-shaping` (widen the relaxation deliberately,
-not silently); fontdb grows a **safe** API for persistent mmap'd sources (then drop the mapping's `unsafe`); or a
-platform appears where mapping system fonts is unsafe in practice (fonts mutated in place, or no mmap support): fall
+Revisit if: an `unsafe` block outside these sites is ever proposed in `felis-shaping` (widen the relaxation
+deliberately, not silently); a **safe** API for persistent mapped sources appears (then drop the mapping's `unsafe`); or
+a platform appears where mapping system fonts is unsafe in practice (fonts mutated in place, or no mmap support): fall
 back to `fs::read` there behind `cfg`.
 
 ## Atlas integration
@@ -453,23 +465,23 @@ adding a per-script table. The primary-face binding is client-side policy; the d
 
 **Linux faces: libfontconfig, loaded from the host.** On Linux the configuration users edit is fontconfig's, so felis
 asks libfontconfig for the primary, the styled faces and the fallback order, and the faces drawn are the ones `fc-match`
-names among the formats the loader parses. Reading that configuration any other way diverges from it: fontdb parses the
-XML itself but keeps only the first preferred family of the last `monospace` alias, ignores every other rule, and on
-Debian names `FreeMono` (from `69-unifont.conf`) on a host that has only DejaVu. Shelling out to `fc-match` is rejected
-because a host with only `fontconfig-config` lacks the CLI. The library is dlopened from the host rather than linked or
-bundled, the way the Vulkan loader is: the host's library is the one that reads the host's `/etc/fonts` syntax and cache
-format, which a bundled copy of another version may not (kitty's Linux build ships it the same way, for distributions'
-differing config paths). A host without libfontconfig cannot open a window. A family the config does not know is
-detected by the config rules it picks up, not by comparing names, so an `<alias>` that maps a requested name elsewhere
-is honored. Faces in a format the loader cannot parse (fontconfig also lists PCF, BDF and Type 1) are taken out of the
-font set before any match, so felis matches as if they were not installed. Asking for `scalable` in the query instead,
-as kitty does, does not work: fontconfig ranks it above the family, so a name whose only faces are bitmaps would draw
-another family without a warning.
+names among the formats the loader parses. Reading that configuration any other way diverges from it: a reader that
+parses the XML itself (fontdb's) keeps only the first preferred family of the last `monospace` alias, ignores every
+other rule, and on Debian names `FreeMono` (from `69-unifont.conf`) on a host that has only DejaVu. Shelling out to
+`fc-match` is rejected because a host with only `fontconfig-config` lacks the CLI. The library is dlopened from the host
+rather than linked or bundled, the way the Vulkan loader is: the host's library is the one that reads the host's
+`/etc/fonts` syntax and cache format, which a bundled copy of another version may not (kitty's Linux build ships it the
+same way, for distributions' differing config paths). A host without libfontconfig cannot open a window. A family the
+config does not know is detected by the config rules it picks up, not by comparing names, so an `<alias>` that maps a
+requested name elsewhere is honored. Faces in a format the loader cannot parse (fontconfig also lists PCF, BDF and
+Type 1) are taken out of the font set before any match, so felis matches as if they were not installed. Asking for
+`scalable` in the query instead, as kitty does, does not work: fontconfig ranks it above the family, so a name whose
+only faces are bitmaps would draw another family without a warning.
 
-macOS and Windows keep fontdb's scan with a fixed list of common monospace families behind the `monospace` generic.
-
-_Revisit if_ a user reports a fallback order on macOS or Windows that the platform's own cascade (CoreText, DirectWrite)
-gets right: the face provider seam takes a native backend there the same way.
+**macOS and Windows faces: CoreText and DirectWrite.** The same argument holds: the faces drawn are the ones the
+platform's font API names, localized names included. The default is the platform terminal's own, ahead of the shared
+monospace list: the user's fixed-pitch font on macOS (Menlo unless changed) and Cascadia Mono on Windows. A DirectWrite
+answer's scale factor or synthesized style is ignored, the no-synthesis rule above.
 
 **Sub-pixel positioning: not done.** Kitty, WezTerm, Ghostty, and iTerm2 rasterize each glyph at four horizontal
 sub-pixel offsets. felis rasterizes pixel-aligned, sizing cells in whole pixels with no sub-pixel offset axis in the

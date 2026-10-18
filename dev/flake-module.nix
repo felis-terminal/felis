@@ -102,7 +102,7 @@
                 esac
               done
             done
-            cp ${pkgs.monaspace}/share/fonts/truetype/MonaspaceNeonFrozen-{Regular,Bold,Italic,BoldItalic}.ttf \
+            cp ${pkgs.monaspace}/share/fonts/truetype/MonaspaceNeonFrozen-{Regular,Bold,Italic,BoldItalic,WideRegular}.ttf \
               "${pkgs.monaspace}/share/fonts/truetype/Monaspace Neon Var.ttf" \
               $out/share/fonts/truetype/
             cp ${pkgs.noto-fonts}/share/fonts/noto/NotoSansSymbols.ttf $out/share/fonts/

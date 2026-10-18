@@ -51,6 +51,8 @@ pub enum FontsProbe {
         italic: String,
         bold_italic: String,
         fallbacks: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        system_fallback: Option<String>,
     },
     Failed {
         error: String,
@@ -116,6 +118,7 @@ mod tests {
                 italic: "Mono Italic".to_owned(),
                 bold_italic: "Mono Bold Italic".to_owned(),
                 fallbacks: vec!["Emoji".to_owned()],
+                system_fallback: Some("CoreText".to_owned()),
             }),
         };
         let text = serde_json::to_string(&report).expect("serialize");

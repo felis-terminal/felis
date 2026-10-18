@@ -2,7 +2,7 @@
 //! into one `u32`: each field reads back what was written, a `with_*`
 //! setter disturbs no other field, and distinct tuples never share a slot.
 
-use felis_shaping::{FontStyle, SizingKey};
+use felis_shaping::{FACE_ID_SATURATED, FontStyle, SizingKey};
 use proptest::prelude::*;
 
 /// `(scale, cell_width, frac_num, frac_den, valign, halign)`.
@@ -15,8 +15,8 @@ const fn masked(fields: Fields) -> Fields {
         fields.1 & 0xF,
         fields.2 & 0xF,
         fields.3 & 0xF,
-        fields.4 & 0xF,
-        fields.5 & 0xF,
+        fields.4 & 0b11,
+        fields.5 & 0b11,
     )
 }
 
@@ -68,17 +68,17 @@ proptest! {
         prop_assert_eq!(keyed.with_style(FontStyle::REGULAR), base);
     }
 
-    /// Ids past 63 saturate into one bucket rather than wrapping into a
+    /// Ids past the bucket saturate into it rather than wrapping into a
     /// neighbouring face's slot.
     #[test]
     fn a_font_id_round_trips_up_to_the_saturation_bucket(
         fields in any::<Fields>(),
         (bold, italic) in any::<(bool, bool)>(),
-        font_id in prop_oneof![0..=0x3F_usize, 0x40..=usize::MAX],
+        font_id in prop_oneof![0..=FACE_ID_SATURATED, FACE_ID_SATURATED + 1..=usize::MAX],
     ) {
         let base = key(fields).with_style(style(bold, italic));
         let keyed = base.with_font_id(font_id);
-        prop_assert_eq!(keyed.font_id(), font_id.min(0x3F));
+        prop_assert_eq!(keyed.font_id(), font_id.min(FACE_ID_SATURATED));
         prop_assert_eq!(keyed.style(), base.style());
         prop_assert_eq!(keyed.scale(), base.scale());
         prop_assert_eq!(keyed.frac_num(), base.frac_num());

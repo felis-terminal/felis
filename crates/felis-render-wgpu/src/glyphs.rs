@@ -9,8 +9,8 @@ use std::{
 
 use felis_grid::{Grapheme, ScreenBuffer};
 use felis_shaping::{
-    CellMetrics, Font, FontStack, FontStyle, GlyphBitmap, GlyphId, GlyphPixels, ShapeCache,
-    ShapedGlyph, Shaper, SizingKey,
+    CellMetrics, FACE_ID_SATURATED, Font, FontStack, FontStyle, GlyphBitmap, GlyphId, GlyphPixels,
+    ShapeCache, ShapedGlyph, Shaper, SizingKey,
 };
 use foldhash::fast::RandomState;
 use wgpu::{BindGroup, BindGroupLayout, Device, Texture, TextureFormat, TextureViewDescriptor};
@@ -464,7 +464,7 @@ impl GlyphIndex {
                 FontStyle::REGULAR,
                 text,
             );
-            let font_id = u8::try_from(shaping.font_id.min(0x3F)).unwrap_or(0x3F);
+            let font_id = saturated_face_id(shaping.font_id);
             let glyphs = shaping
                 .glyphs
                 .iter()
@@ -479,7 +479,7 @@ impl GlyphIndex {
             self.overlay_clusters.insert(text.to_owned(), glyphs);
         }
         let cell_height = self.metrics.height;
-        let primes: Vec<(GlyphId, u8)> = self.overlay_clusters[text]
+        let primes: Vec<(GlyphId, u16)> = self.overlay_clusters[text]
             .iter()
             .map(|g| (g.glyph_id, g.font_id))
             .collect();
@@ -888,14 +888,19 @@ pub enum ShapedCell {
     Cluster { start: u32, len: u16, fit_px: u16 },
 }
 
+fn saturated_face_id(font_id: usize) -> u16 {
+    u16::try_from(font_id.min(FACE_ID_SATURATED)).unwrap_or(u16::MAX)
+}
+
 /// Produced while the [`ShapeFrame`] is built and read back in
 /// `extend_instances`, so priming and emission cannot drift.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ClusterGlyph {
     pub glyph_id: GlyphId,
-    /// [`SizingKey::with_font_id`] handle, already saturated to the
-    /// 6-bit field; priming and emission both rebuild the key with it.
-    pub font_id: u8,
+    /// [`SizingKey::with_font_id`] handle, already saturated to
+    /// [`FACE_ID_SATURATED`]; priming and emission both rebuild the key
+    /// with it.
+    pub font_id: u16,
     /// Horizontal pen advance in pixels (≈0 for a combining mark).
     pub advance_px: f32,
     pub x_offset_px: f32,
@@ -1424,7 +1429,7 @@ fn composite_cluster(
         return;
     }
     let sized_key = site.sizing.with_font_id(shaping.font_id);
-    let font_id = u8::try_from(shaping.font_id.min(0x3F)).unwrap_or(0x3F);
+    let font_id = saturated_face_id(shaping.font_id);
     let cols = crate::instances::cluster_block_cols(screen, site.row, site.col);
     let fit_px = index.cluster_fit_px(text, &shaping.glyphs, cols, sized_key);
     // Emission scales the pen by the sizing's glyph scale; pre-scaling

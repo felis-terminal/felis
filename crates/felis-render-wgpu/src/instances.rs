@@ -1273,7 +1273,7 @@ fn cluster_glyph_quads<'g, A: AtlasView>(
     pen.glyphs
         .iter()
         .scan(0.0f32, move |x, cg| {
-            let key = pen.base_sizing.with_font_id(cg.font_id as usize);
+            let key = pen.base_sizing.with_font_id(usize::from(cg.font_id));
             let slot = match pen.fit_px {
                 0 => atlas.glyph_id_slot(cg.glyph_id, cell_height, key),
                 px => atlas.fitted_glyph_id_slot(cg.glyph_id, px, cell_height, key),
