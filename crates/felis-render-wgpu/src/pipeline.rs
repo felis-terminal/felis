@@ -12,7 +12,7 @@ use wgpu::{
     VertexStepMode,
 };
 
-use crate::instances::{BgInstance, DecorationInstance, FgInstance, ImgInstance};
+use crate::gpu_instances::{BgInstance, DecorationInstance, FgInstance, ImgInstance};
 
 /// CPU-side mirror of the WGSL `Viewport` uniform. `origin_px` doubles
 /// as the 16-byte rounding the uniform address space requires, so there

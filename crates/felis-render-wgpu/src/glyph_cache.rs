@@ -5,8 +5,11 @@
 use std::num::NonZeroU32;
 
 use felis_grid::ScreenBuffer;
-use felis_render_core::glyphs::{
-    AtlasView, ClusterGlyph, GlyphIndex, GlyphSlot, GridWalker, ShapeFrame, color_atlas_side,
+use felis_render_core::{
+    display_list::AtlasKind,
+    glyphs::{
+        AtlasView, ClusterGlyph, GlyphIndex, GlyphSlot, GridWalker, ShapeFrame, color_atlas_side,
+    },
 };
 use felis_shaping::{CellMetrics, FontStack, GlyphId, GlyphPixels, Shaper, SizingKey};
 use wgpu::{BindGroup, BindGroupLayout, Device, Texture, TextureFormat, TextureViewDescriptor};
@@ -224,5 +227,9 @@ impl AtlasView for GlyphCache {
 
     fn overlay_cluster(&self, text: &str) -> Option<&[ClusterGlyph]> {
         self.index.overlay_cluster(text)
+    }
+
+    fn sheet_side(&self, sheet: AtlasKind) -> u32 {
+        self.index.sheet_side(sheet)
     }
 }

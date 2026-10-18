@@ -16,7 +16,7 @@ use felis_shaping::{FontStack, Shaper, SizingKey};
 use felis_vt::Parser;
 
 use super::{CellFrame, RowCache};
-use crate::instances::{BAR_ELLIPSIS, InstanceBuffers};
+use crate::{gpu_instances::InstanceBuffers, instances::BAR_ELLIPSIS};
 
 const FONT_SIZE_PX: f32 = 16.0;
 

@@ -46,6 +46,7 @@ use wgpu::{
 mod buffer_ring;
 mod capture;
 pub mod glyph_cache;
+pub mod gpu_instances;
 mod gpu_resources;
 pub mod image_atlas;
 pub mod instances;
@@ -65,11 +66,9 @@ pub use crate::warmup::Warmup;
 use crate::{
     buffer_ring::{GrowingInstanceBuffer, UniformRing, UploadMode},
     glyph_cache::GlyphCache,
+    gpu_instances::{BgInstance, DecorationInstance, FgInstance, ImgInstance, clip_img_quad_above},
     image_atlas::{ImageAtlas, ImageSlot},
-    instances::{
-        BAR_ELLIPSIS, BgInstance, CURSOR_MARKER_PX, DecorationInstance, FgInstance, ImgInstance,
-        clip_img_quad_above,
-    },
+    instances::{BAR_ELLIPSIS, CURSOR_MARKER_PX},
     pipeline::{
         ViewportUniform, atlas_bind_group_layout_entries, bg_instance_layout,
         decoration_instance_layout, fg_instance_layout, glyph_bind_group_layout_entries,
