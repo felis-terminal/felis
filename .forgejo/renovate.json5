@@ -17,6 +17,12 @@
       matchUpdateTypes: ["major"],
       automerge: false,
     },
+    {
+      // `#[implement]` expands to `::windows_core` paths, so windows-core
+      // must be the series `windows` itself builds on: one PR moves both.
+      matchPackageNames: ["windows", "windows-core"],
+      groupName: "windows-rs",
+    },
   ],
   nix: {
     enabled: true,
