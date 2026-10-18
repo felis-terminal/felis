@@ -1528,6 +1528,15 @@ fn resize_notify_report_states_the_winsize_pixels() {
     );
 }
 
+#[test]
+fn ris_keeps_the_winsize_pixels() {
+    let mut g = Grid::new(8, 10);
+    let mut p = Parser::new();
+    g.set_winsize_pixels((805, 170));
+    drive(&mut p, &mut g, b"\x1bc\x1b[14t");
+    assert_eq!(responses(&mut g), vec![b"\x1b[4;170;805t".to_vec()]);
+}
+
 /// Each `xterm_window_op` report arm emits its wire bytes; the pixel
 /// arms answer `0` while the winsize's pixels are unknown.
 #[test]

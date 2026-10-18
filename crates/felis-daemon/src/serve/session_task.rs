@@ -3,6 +3,7 @@
 //! Slow subscribers past `SUBSCRIBER_BUFFER_CAP` are evicted rather than
 //! backpressuring the shared PTY (session-lifecycle.md "Same-user mirroring").
 
+use std::collections::BTreeMap;
 use std::sync::{
     Arc, Mutex as StdMutex, Weak,
     atomic::{AtomicUsize, Ordering},
@@ -344,7 +345,7 @@ pub enum SessionCmd {
         sub: SubscriberId,
         stream: StreamId,
     },
-    /// The client's configured colors, so an `OSC 10/11/12 ; ?` query
+    /// The client's configured colors, so an `OSC 4/10/11/12 ; ?` query
     /// answers with the real surface color
     /// (`SessionToDaemonMsg::ConfigureTheme`).
     ConfigureTheme {
@@ -352,6 +353,7 @@ pub enum SessionCmd {
         fg: Option<(u8, u8, u8)>,
         bg: Option<(u8, u8, u8)>,
         cursor: Option<(u8, u8, u8)>,
+        palette: BTreeMap<u8, (u8, u8, u8)>,
     },
     /// `SessionToDaemonMsg::InputFence`: the barrier answered once every
     /// `Input` command queued ahead of it on this channel has run.
@@ -814,13 +816,19 @@ struct Subscriber {
 
 /// Presentation chain layer (session-lifecycle.md "Client-derived presentation state").
 ///
-/// One `Option` over the trio because `ConfigureTheme` is an atomic report;
-/// an unset channel means "no color", not fallback to another window.
+/// One `Option` over the whole report because `ConfigureTheme` is atomic;
+/// an unset channel or palette slot means "no color", not fallback to
+/// another window.
 #[derive(Default)]
 struct PresentationReports {
-    /// Indexed by `ThemeChannel as usize`.
-    theme: Option<[Option<(u8, u8, u8)>; 3]>,
+    theme: Option<ThemeReport>,
     os_dark: Option<bool>,
+}
+
+struct ThemeReport {
+    /// Indexed by `ThemeChannel as usize`.
+    channels: [Option<(u8, u8, u8)>; 3],
+    palette: BTreeMap<u8, (u8, u8, u8)>,
 }
 
 impl Subscriber {
@@ -1354,9 +1362,13 @@ impl SessionTask {
                 fg,
                 bg,
                 cursor,
+                palette,
             } => {
                 let i = self.sub_index(sub)?;
-                self.subs[i].presentation.theme = Some([fg, bg, cursor]);
+                self.subs[i].presentation.theme = Some(ThemeReport {
+                    channels: [fg, bg, cursor],
+                    palette,
+                });
                 self.recompute_presentation_now()
             }
             SessionCmd::InputFence { sub, request } => {
@@ -1632,8 +1644,12 @@ impl SessionTask {
     fn recompute_presentation(&mut self) {
         let theme = self
             .presentation_chain()
-            .find_map(|s| s.presentation.theme)
-            .unwrap_or([None; 3]);
+            .find_map(|s| s.presentation.theme.as_ref());
+        let channels = theme.map_or([None; 3], |t| t.channels);
+        let mut palette = [None; 256];
+        for (&index, &rgb) in theme.iter().flat_map(|t| &t.palette) {
+            palette[usize::from(index)] = Some(rgb);
+        }
         let os_dark = self
             .presentation_chain()
             .find_map(|s| s.presentation.os_dark);
@@ -1648,7 +1664,10 @@ impl SessionTask {
             ThemeChannel::Background,
             ThemeChannel::Cursor,
         ] {
-            grid.set_theme_config_default(channel, theme[channel as usize]);
+            grid.set_theme_config_default(channel, channels[channel as usize]);
+        }
+        for (index, rgb) in (0..=u8::MAX).zip(palette) {
+            grid.set_palette_config_default(index, rgb);
         }
         match os_dark {
             Some(dark) => grid.set_os_dark(dark),
@@ -3320,13 +3339,27 @@ mod tests {
     }
 
     fn report_theme(task: &mut SessionTask, sub: SubscriberId, bg: Option<(u8, u8, u8)>) {
+        report_theme_and_palette(task, sub, bg, &[]);
+    }
+
+    fn report_theme_and_palette(
+        task: &mut SessionTask,
+        sub: SubscriberId,
+        bg: Option<(u8, u8, u8)>,
+        palette: &[(u8, (u8, u8, u8))],
+    ) {
         let end = task.handle_cmd(SessionCmd::ConfigureTheme {
             sub,
             fg: Some((0xE5, 0xE5, 0xE5)),
             bg,
             cursor: None,
+            palette: palette.iter().copied().collect(),
         });
         assert!(end.is_none(), "ConfigureTheme is a continuing command");
+    }
+
+    fn effective_palette(task: &SessionTask, index: u8) -> Option<(u8, u8, u8)> {
+        task.session.lock_core().grid.palette_config_default(index)
     }
 
     fn report_scheme(task: &mut SessionTask, sub: SubscriberId, dark: bool) {
@@ -3480,7 +3513,8 @@ mod tests {
         (
             s.presentation
                 .theme
-                .and_then(|trio| trio[ThemeChannel::Background as usize]),
+                .as_ref()
+                .and_then(|t| t.channels[ThemeChannel::Background as usize]),
             s.presentation.os_dark,
         )
     }
@@ -3550,6 +3584,38 @@ mod tests {
         assert!(
             drain_events(&mut rx_a).is_empty() && drain_events(&mut rx_b).is_empty(),
             "presentation reports are query-answering state: nothing is pushed to any window",
+        );
+    }
+
+    /// The palette travels inside the theme report: the owner's palette
+    /// answers whole, and a slot it leaves out is not filled from a
+    /// mirror's report.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_palette_resolves_with_the_owners_report_and_never_stitches() {
+        let mut task = SessionTask::for_tests(session_with("read _x"));
+        let (a, _rx_a) = attach_sub(&mut task, false);
+        let (b, _rx_b) = attach_sub(&mut task, false);
+        report_theme_and_palette(&mut task, a, None, &[(1, (0x11, 0x00, 0x00))]);
+        report_theme_and_palette(
+            &mut task,
+            b,
+            None,
+            &[(1, (0x22, 0x00, 0x00)), (2, (0x00, 0x22, 0x00))],
+        );
+        take_input_ownership(&mut task, a);
+        assert_eq!(effective_palette(&task, 1), Some((0x11, 0x00, 0x00)));
+        assert_eq!(effective_palette(&task, 2), None, "no slot from the mirror");
+
+        take_input_ownership(&mut task, b);
+        assert_eq!(effective_palette(&task, 1), Some((0x22, 0x00, 0x00)));
+        assert_eq!(effective_palette(&task, 2), Some((0x00, 0x22, 0x00)));
+
+        task.remove_sub(a);
+        task.remove_sub(b);
+        assert_eq!(
+            effective_palette(&task, 1),
+            None,
+            "the palette must not outlive the last window",
         );
     }
 

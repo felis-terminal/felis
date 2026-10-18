@@ -1,6 +1,7 @@
 //! v1 DTO for [`SessionToDaemonMsg`] and [`SessionToClientMsg`], this
 //! connection's session lifecycle.
 
+use std::collections::BTreeMap;
 use std::num::NonZeroU64;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -101,6 +102,12 @@ json_dto! {
         pub input_owner: bool,
     }
 
+    /// One configured palette slot of a [`SessionJson::ConfigureTheme`].
+    pub struct ConfiguredPaletteEntryJson {
+        pub index: u8,
+        pub rgb: super::common::RgbJson,
+    }
+
     /// One OSC 7501 program-status record. `state` and `kind` are open
     /// vocabularies; every key may be absent from a later writer's
     /// object.
@@ -162,6 +169,10 @@ json_dto! {
             fg: Option<super::common::RgbJson>,
             bg: Option<super::common::RgbJson>,
             cursor: Option<super::common::RgbJson>,
+            /// Ascending by index, each at most once; absent from an
+            /// object written before the key existed.
+            #[serde(default)]
+            palette: Vec<ConfiguredPaletteEntryJson>,
         },
         Attached {
             info: Box<SessionInfoJson>,
@@ -492,10 +503,22 @@ impl TryFrom<SessionToDaemonMsg> for SessionJson {
             },
             SessionToDaemonMsg::Create { args } => Self::Create { args: args.into() },
             SessionToDaemonMsg::Detach => Self::Detach,
-            SessionToDaemonMsg::ConfigureTheme { fg, bg, cursor } => Self::ConfigureTheme {
+            SessionToDaemonMsg::ConfigureTheme {
+                fg,
+                bg,
+                cursor,
+                palette,
+            } => Self::ConfigureTheme {
                 fg: fg.map(Into::into),
                 bg: bg.map(Into::into),
                 cursor: cursor.map(Into::into),
+                palette: palette
+                    .into_iter()
+                    .map(|(index, rgb)| ConfiguredPaletteEntryJson {
+                        index,
+                        rgb: rgb.into(),
+                    })
+                    .collect(),
             },
             // The fence pair is a correlated request/reply, and this
             // format carries no correlation envelope: a reply stripped
@@ -557,11 +580,26 @@ impl TryFrom<SessionJson> for EitherHalf<SessionToDaemonMsg, SessionToClientMsg>
                 Self::ToDaemon(SessionToDaemonMsg::Create { args: args.into() })
             }
             SessionJson::Detach => Self::ToDaemon(SessionToDaemonMsg::Detach),
-            SessionJson::ConfigureTheme { fg, bg, cursor } => {
+            SessionJson::ConfigureTheme {
+                fg,
+                bg,
+                cursor,
+                palette,
+            } => {
+                let mut slots = BTreeMap::new();
+                for entry in palette {
+                    if slots.insert(entry.index, entry.rgb.into()).is_some() {
+                        return Err(JsonError::Field {
+                            field: "palette",
+                            detail: "names one index twice",
+                        });
+                    }
+                }
                 Self::ToDaemon(SessionToDaemonMsg::ConfigureTheme {
                     fg: fg.map(Into::into),
                     bg: bg.map(Into::into),
                     cursor: cursor.map(Into::into),
+                    palette: slots,
                 })
             }
             SessionJson::Attached { info } => Self::ToClient(SessionToClientMsg::Attached {
@@ -583,10 +621,32 @@ impl TryFrom<SessionJson> for EitherHalf<SessionToDaemonMsg, SessionToClientMsg>
 #[cfg(test)]
 mod tests {
     use super::{
-        JsonError, SessionJson, SessionToClientMsg, SessionToDaemonMsg, SystemTime, TimestampJson,
-        UNIX_EPOCH,
+        ConfiguredPaletteEntryJson, EitherHalf, JsonError, SessionJson, SessionToClientMsg,
+        SessionToDaemonMsg, SystemTime, TimestampJson, UNIX_EPOCH,
     };
+    use crate::json_v1::common::RgbJson;
     use std::time::Duration;
+
+    #[test]
+    fn a_theme_report_naming_one_palette_slot_twice_is_refused() {
+        let entry = |r| ConfiguredPaletteEntryJson {
+            index: 3,
+            rgb: RgbJson { r, g: 0, b: 0 },
+        };
+        let json = SessionJson::ConfigureTheme {
+            fg: None,
+            bg: None,
+            cursor: None,
+            palette: vec![entry(1), entry(2)],
+        };
+        assert!(matches!(
+            EitherHalf::<SessionToDaemonMsg, SessionToClientMsg>::try_from(json),
+            Err(JsonError::Field {
+                field: "palette",
+                ..
+            })
+        ));
+    }
 
     #[test]
     fn the_fence_pair_is_refused_as_outside_the_format() {

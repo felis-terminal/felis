@@ -1,7 +1,10 @@
 //! `SessionToDaemonMsg` / `SessionToClientMsg` <-> wire.
 
+use std::collections::BTreeMap;
+
 use super::{
-    WireError, decode_enum, id_from_bytes, id_to_bytes, opt_rgb_from_wire, opt_rgb_to_wire,
+    WireError, decode_enum, id_from_bytes, id_to_bytes, narrow, opt_rgb_from_wire, opt_rgb_to_wire,
+    rgb_from_wire, rgb_to_wire,
 };
 use crate::messages;
 use crate::wire::v1;
@@ -159,13 +162,23 @@ impl From<&messages::SessionToDaemonMsg> for v1::SessionToDaemonMsg {
                 args: Some(args.into()),
             }),
             S::Detach => Msg::Detach(v1::SessionDetach {}),
-            S::ConfigureTheme { fg, bg, cursor } => {
-                Msg::ConfigureTheme(v1::SessionConfigureTheme {
-                    fg: opt_rgb_to_wire(*fg),
-                    bg: opt_rgb_to_wire(*bg),
-                    cursor: opt_rgb_to_wire(*cursor),
-                })
-            }
+            S::ConfigureTheme {
+                fg,
+                bg,
+                cursor,
+                palette,
+            } => Msg::ConfigureTheme(v1::SessionConfigureTheme {
+                fg: opt_rgb_to_wire(*fg),
+                bg: opt_rgb_to_wire(*bg),
+                cursor: opt_rgb_to_wire(*cursor),
+                palette: palette
+                    .iter()
+                    .map(|(&index, &rgb)| v1::ConfiguredPaletteEntry {
+                        index: u32::from(index),
+                        rgb: Some(rgb_to_wire(rgb)),
+                    })
+                    .collect(),
+            }),
             S::InputFence => Msg::InputFence(v1::SessionInputFence {}),
         };
         Self {
@@ -222,6 +235,7 @@ impl TryFrom<v1::SessionToDaemonMsg> for messages::SessionToDaemonMsg {
                     fg: opt_rgb_from_wire(t.fg)?,
                     bg: opt_rgb_from_wire(t.bg)?,
                     cursor: opt_rgb_from_wire(t.cursor)?,
+                    palette: configured_palette_from_wire(t.palette)?,
                 },
                 Msg::InputFence(_) => Self::InputFence,
             },
@@ -258,6 +272,24 @@ impl TryFrom<v1::SessionToClientMsg> for messages::SessionToClientMsg {
             },
         )
     }
+}
+
+fn configured_palette_from_wire(
+    entries: Vec<v1::ConfiguredPaletteEntry>,
+) -> Result<BTreeMap<u8, (u8, u8, u8)>, WireError> {
+    let mut palette = BTreeMap::new();
+    for entry in entries {
+        let index = narrow("ConfiguredPaletteEntry.index", entry.index)?;
+        let rgb = rgb_from_wire(
+            entry
+                .rgb
+                .ok_or(WireError::MissingField("ConfiguredPaletteEntry.rgb"))?,
+        )?;
+        if palette.insert(index, rgb).is_some() {
+            return Err(WireError::MalformedField("SessionConfigureTheme.palette"));
+        }
+    }
+    Ok(palette)
 }
 
 #[cfg(test)]
@@ -346,6 +378,70 @@ mod tests {
                 target: messages::AttachTarget::Prefix("cafe".into()),
                 live_only: false,
             }
+        );
+    }
+
+    fn wire_theme(palette: Vec<v1::ConfiguredPaletteEntry>) -> v1::SessionToDaemonMsg {
+        v1::SessionToDaemonMsg {
+            msg: Some(v1::session_to_daemon_msg::Msg::ConfigureTheme(
+                v1::SessionConfigureTheme {
+                    fg: None,
+                    bg: None,
+                    cursor: None,
+                    palette,
+                },
+            )),
+            correlation: None,
+        }
+    }
+
+    fn entry(index: u32, rgb: Option<(u8, u8, u8)>) -> v1::ConfiguredPaletteEntry {
+        v1::ConfiguredPaletteEntry {
+            index,
+            rgb: rgb.map(rgb_to_wire),
+        }
+    }
+
+    #[test]
+    fn a_palette_entry_past_slot_255_is_rejected() {
+        let err =
+            messages::SessionToDaemonMsg::try_from(wire_theme(vec![entry(256, Some((1, 2, 3)))]))
+                .expect_err("the palette has 256 slots");
+        assert!(
+            matches!(
+                err,
+                WireError::OutOfRange {
+                    field: "ConfiguredPaletteEntry.index",
+                    value: 256
+                }
+            ),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn a_palette_entry_without_a_color_is_rejected() {
+        let err = messages::SessionToDaemonMsg::try_from(wire_theme(vec![entry(3, None)]))
+            .expect_err("an entry must carry its color");
+        assert!(
+            matches!(err, WireError::MissingField("ConfiguredPaletteEntry.rgb")),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn a_palette_naming_one_slot_twice_is_rejected() {
+        let err = messages::SessionToDaemonMsg::try_from(wire_theme(vec![
+            entry(3, Some((1, 2, 3))),
+            entry(3, Some((4, 5, 6))),
+        ]))
+        .expect_err("a duplicate slot has no one meaning");
+        assert!(
+            matches!(
+                err,
+                WireError::MalformedField("SessionConfigureTheme.palette")
+            ),
+            "{err:?}"
         );
     }
 }

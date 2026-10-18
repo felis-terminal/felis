@@ -734,6 +734,12 @@ pub struct Grid {
     /// Consulted by `OSC 10/11/12 ; ?` before xterm fallback so background
     /// detectors see actual surface colors. Not VT state (not saved/reset).
     theme_config_defaults: [Option<(u8, u8, u8)>; 3],
+    /// Attached client's configured palette, the layer an `OSC 4 ; n ; ?`
+    /// answers between [`Self::palette_overrides`] and
+    /// [`default_palette_color`]. Not VT state (not saved/reset), and
+    /// not dumped: a restored session re-resolves it from its windows.
+    #[cfg_attr(feature = "state-dump", serde(skip, default = "no_palette_config"))]
+    palette_config_defaults: [Option<(u8, u8, u8)>; 256],
     /// `OSC 4` overrides, sparse over [`default_palette_color`]. Answers
     /// OSC 4 queries (REQ-203) and, mirrored via `GridMsg::PaletteColor`,
     /// is what the renderer resolves `Color::Indexed` against. A
@@ -1055,6 +1061,7 @@ impl Grid {
             theme_overrides: [None; 3],
             theme_dirty: [false; 3],
             theme_config_defaults: [None; 3],
+            palette_config_defaults: [None; 256],
             palette_overrides: BTreeMap::new(),
             palette_dirty: BTreeSet::new(),
             palette_reset_all_pending: false,
@@ -1216,6 +1223,17 @@ impl Grid {
     #[must_use]
     pub const fn theme_config_default(&self, channel: ThemeChannel) -> Option<(u8, u8, u8)> {
         self.theme_config_defaults[channel as usize]
+    }
+
+    /// Client state, not parsed VT state: untouched by DECSC / reset
+    /// and never emits a `GridMsg::PaletteColor`.
+    pub const fn set_palette_config_default(&mut self, index: u8, rgb: Option<(u8, u8, u8)>) {
+        self.palette_config_defaults[index as usize] = rgb;
+    }
+
+    #[must_use]
+    pub const fn palette_config_default(&self, index: u8) -> Option<(u8, u8, u8)> {
+        self.palette_config_defaults[index as usize]
     }
 
     /// `Option<Option<…>>`: the outer level distinguishes "nothing
@@ -2935,6 +2953,11 @@ const fn special_slot_from_osc4_alias(idx: u16) -> Option<usize> {
     } else {
         None
     }
+}
+
+#[cfg(feature = "state-dump")]
+const fn no_palette_config() -> [Option<(u8, u8, u8)>; 256] {
+    [None; 256]
 }
 
 /// Default xterm-256color palette entry: 0..=7 classic ANSI (`0xCD` /

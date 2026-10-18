@@ -1152,8 +1152,8 @@ mod font_differs {
 #[test]
 fn reported_theme_differs_tracks_only_the_reported_colors() {
     // The reload path re-sends `ConfigureTheme` off this predicate, and
-    // the frame carries fg / bg / cursor only: a stale one leaves OSC
-    // 10/11/12 answering the attach-time color; a palette- or
+    // the frame carries fg / bg / cursor and the palette: a stale one
+    // leaves OSC 4 / 10 / 11 / 12 answering the attach-time color; an
     // opacity-only edit would resend identical colors.
     let base = RendererConfig {
         theme_fg: Some("#ffffff".to_owned()),
@@ -1177,7 +1177,7 @@ fn reported_theme_differs_tracks_only_the_reported_colors() {
 
     let mut palette_only = base.clone();
     palette_only.theme_palette.insert(1, "#ff0000".to_owned());
-    assert!(!reported_theme_differs(&base, &palette_only));
+    assert!(reported_theme_differs(&base, &palette_only));
 
     let mut opacity_only = base.clone();
     opacity_only.background_opacity = Some(0.8);

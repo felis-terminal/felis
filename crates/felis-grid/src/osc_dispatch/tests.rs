@@ -851,6 +851,109 @@ fn osc_11_query_without_a_configured_default_keeps_the_xterm_baseline() {
     assert_eq!(replies, vec![b"\x1b]11;rgb:ffff/ffff/ffff\x1b\\".to_vec()]);
 }
 
+#[test]
+fn ris_keeps_the_client_configured_colors_and_os_preference() {
+    let mut p = Parser::new();
+    let mut g = Grid::new(1, 1);
+    g.set_theme_config_default(ThemeChannel::Background, Some((0x0D, 0x0D, 0x12)));
+    g.set_os_dark(true);
+    drive(&mut p, &mut g, b"\x1bc\x1b]11;?\x07\x1b[?996n");
+    let replies = responses(&mut g);
+    assert_eq!(
+        replies,
+        vec![
+            b"\x1b]11;rgb:0d0d/0d0d/1212\x1b\\".to_vec(),
+            b"\x1b[?997;1n".to_vec(),
+        ]
+    );
+}
+
+/// The attached windows paint from these deltas; a RIS that dropped
+/// the overrides silently would leave them painting what no query
+/// answers any more.
+#[test]
+fn ris_ships_resets_for_the_color_overrides_it_drops() {
+    let mut p = Parser::new();
+    let mut g = Grid::new(1, 1);
+    drive(&mut p, &mut g, b"\x1b]4;3;#aabbcc\x07\x1b]11;#102030\x07");
+    drop(g.take_palette_dirty());
+    let _ = g.take_theme_dirty(ThemeChannel::Background);
+    drive(&mut p, &mut g, b"\x1bc");
+    let palette = g.take_palette_dirty();
+    assert!(palette.reset_all);
+    assert_eq!(g.take_theme_dirty(ThemeChannel::Background), Some(None));
+    assert_eq!(g.take_theme_dirty(ThemeChannel::Foreground), None);
+}
+
+#[test]
+fn ris_without_color_overrides_ships_no_color_resets() {
+    let mut p = Parser::new();
+    let mut g = Grid::new(1, 1);
+    drive(&mut p, &mut g, b"\x1bc");
+    assert!(!g.take_palette_dirty().reset_all);
+    assert_eq!(g.take_theme_dirty(ThemeChannel::Background), None);
+}
+
+#[test]
+fn osc_4_query_reports_the_client_configured_palette_slot() {
+    let mut p = Parser::new();
+    let mut g = Grid::new(1, 1);
+    g.set_palette_config_default(1, Some((0xFF, 0x55, 0x55)));
+    g.set_palette_config_default(17, Some((0x5E, 0x81, 0xAC)));
+    drive(&mut p, &mut g, b"\x1b]4;1;?;17;?;2;?\x07");
+    let replies = responses(&mut g);
+    assert_eq!(
+        replies,
+        vec![
+            b"\x1b]4;1;rgb:ffff/5555/5555\x1b\\".to_vec(),
+            b"\x1b]4;17;rgb:5e5e/8181/acac\x1b\\".to_vec(),
+            b"\x1b]4;2;rgb:0000/cdcd/0000\x1b\\".to_vec(),
+        ]
+    );
+}
+
+#[test]
+fn runtime_osc_4_set_wins_over_the_configured_palette_slot() {
+    let mut p = Parser::new();
+    let mut g = Grid::new(1, 1);
+    g.set_palette_config_default(1, Some((0xFF, 0x55, 0x55)));
+    drive(&mut p, &mut g, b"\x1b]4;1;#abcdef\x07\x1b]4;1;?\x07");
+    let replies = responses(&mut g);
+    assert_eq!(replies, vec![b"\x1b]4;1;rgb:abab/cdcd/efef\x1b\\".to_vec()]);
+}
+
+#[test]
+fn osc_104_and_ris_fall_back_to_the_configured_palette_slot() {
+    let configured = b"\x1b]4;1;rgb:ffff/5555/5555\x1b\\".to_vec();
+    let mut p = Parser::new();
+    let mut g = Grid::new(1, 1);
+    g.set_palette_config_default(1, Some((0xFF, 0x55, 0x55)));
+    for reset in [&b"\x1b]104;1\x07"[..], b"\x1b]104\x07", b"\x1bc"] {
+        drive(&mut p, &mut g, b"\x1b]4;1;#abcdef\x07");
+        drive(&mut p, &mut g, reset);
+        drive(&mut p, &mut g, b"\x1b]4;1;?\x07");
+        assert_eq!(
+            responses(&mut g).last(),
+            Some(&configured),
+            "after {reset:?}"
+        );
+    }
+}
+
+#[test]
+fn special_color_aliases_ignore_the_configured_palette() {
+    // `OSC 4 ; 259` aliases special color 3, not palette slot 3.
+    let mut p = Parser::new();
+    let mut g = Grid::new(1, 1);
+    let baseline = {
+        drive(&mut p, &mut g, b"\x1b]4;259;?\x07\x1b]5;3;?\x07");
+        responses(&mut g)
+    };
+    g.set_palette_config_default(3, Some((0x11, 0x22, 0x33)));
+    drive(&mut p, &mut g, b"\x1b]4;259;?\x07\x1b]5;3;?\x07");
+    assert_eq!(responses(&mut g), baseline);
+}
+
 /// A mutant returning the constant `1` or leaking the table fails the
 /// second assertion.
 #[test]

@@ -1433,9 +1433,10 @@ pub struct SessionCreate {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SessionDetach {
 }
-/// Client → daemon. Report the client's configured theme colors. Each
-/// channel is present when set, absent to leave the renderer/xterm default.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+/// Client → daemon. Report the client's configured theme colors and
+/// palette. Each channel is present when set, absent to leave the
+/// renderer/xterm default.
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SessionConfigureTheme {
     /// Configured default foreground (OSC 10).
     #[prost(message, optional, tag="1")]
@@ -1446,6 +1447,21 @@ pub struct SessionConfigureTheme {
     /// Configured cursor color (OSC 12).
     #[prost(message, optional, tag="3")]
     pub cursor: ::core::option::Option<Rgb>,
+    /// Configured palette slots (OSC 4), only those the window's config
+    /// sets; a slot left out answers the compiled-in palette. A duplicate
+    /// index is refused at decode. A minor-1 reader skips the field.
+    #[prost(message, repeated, tag="4")]
+    pub palette: ::prost::alloc::vec::Vec<ConfiguredPaletteEntry>,
+}
+/// One configured palette slot of a SessionConfigureTheme.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ConfiguredPaletteEntry {
+    /// Palette index, 0..=255. Wider values are rejected on decode.
+    #[prost(uint32, tag="1")]
+    pub index: u32,
+    /// Required: an entry without a color is refused at decode.
+    #[prost(message, optional, tag="2")]
+    pub rgb: ::core::option::Option<Rgb>,
 }
 /// Daemon → client. A SessionAttach landed; the rehydrate burst follows.
 /// The full SessionInfo rather than a bare id + dims pair, so no client
@@ -2532,7 +2548,7 @@ pub struct SearchMatch {
 // below and asserts the Rust values equal them, so editing one here
 // without the other fails the build; prose-check: ignore):
 //    PROTOCOL_MAJOR = 1
-//    PROTOCOL_MINOR = 1
+//    PROTOCOL_MINOR = 2
 //
 // Kind or arm: a frame kind is a *surface*, so a message addressing a
 // surface no existing kind owns earns a kind, as does one whose

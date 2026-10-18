@@ -306,15 +306,15 @@ The principle assigns most concerns on sight: the PTY, the parser, the grid, the
 session's own lifecycle are the daemon's; the window, the input devices, the fonts, the atlas, the draw calls and every
 per-window animation are the client's. Seven assignments do not follow from it.
 
-| Concern                        | Owner  | Notes                                                                                                                                                                                    |
-| ------------------------------ | ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Damage tracking                | daemon | The daemon's damage decides what ships; the shadow marks the rows it applies, and the renderer rebuilds only those ([damage-tracking.md](../rendering/damage-tracking.md)).              |
-| Selection                      | client | An anchor/extent pair over the shadow screen; no selection state crosses the wire ([input.md](../input.md)).                                                                             |
-| Keymap → action lookup         | client | An action reaches the daemon only when it needs a session-side effect ([input.md](../input.md) "Action mapping").                                                                        |
-| Key encoding                   | daemon | The client captures the keystroke; the bytes depend on keyboard modes only the daemon has parsed ([input.md](../input.md) "Keyboard").                                                   |
-| Clipboard                      | client | The OS clipboard is the window's; the daemon never touches it ([security-model.md](../security-model.md)).                                                                               |
-| Default colors and OS scheme   | both   | Pixels are the client's, but it reports its resolved trio so the daemon can answer a program's query ([session-lifecycle.md](session-lifecycle.md) "Client-derived presentation state"). |
-| Authentication / authorization | daemon | Local socket permissions, or the SSH carrier cross-host ([security-model.md](../security-model.md) "Daemon IPC").                                                                        |
+| Concern                        | Owner  | Notes                                                                                                                                                                                                |
+| ------------------------------ | ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Damage tracking                | daemon | The daemon's damage decides what ships; the shadow marks the rows it applies, and the renderer rebuilds only those ([damage-tracking.md](../rendering/damage-tracking.md)).                          |
+| Selection                      | client | An anchor/extent pair over the shadow screen; no selection state crosses the wire ([input.md](../input.md)).                                                                                         |
+| Keymap → action lookup         | client | An action reaches the daemon only when it needs a session-side effect ([input.md](../input.md) "Action mapping").                                                                                    |
+| Key encoding                   | daemon | The client captures the keystroke; the bytes depend on keyboard modes only the daemon has parsed ([input.md](../input.md) "Keyboard").                                                               |
+| Clipboard                      | client | The OS clipboard is the window's; the daemon never touches it ([security-model.md](../security-model.md)).                                                                                           |
+| Default colors and OS scheme   | both   | Pixels are the client's, but it reports its resolved trio and palette so the daemon can answer a program's query ([session-lifecycle.md](session-lifecycle.md) "Client-derived presentation state"). |
+| Authentication / authorization | daemon | Local socket permissions, or the SSH carrier cross-host ([security-model.md](../security-model.md) "Daemon IPC").                                                                                    |
 
 Per-cell pixel buffers, client font selections, and configuration synchronization never cross the IPC wire. Each side
 reads its own declarative configuration independently; there is no runtime settings replication message.
@@ -338,14 +338,14 @@ came out of the PTY. It does not interpret them as "the user's red" or "backgrou
 protocol-level color to actual pixels.
 
 A config change on the client (theme reload, palette swap) does not invalidate any grid state in the daemon. The one
-deliberate exception to "the daemon does not know": the client reports its _resolved_ default fg/bg/cursor on attach
-(`SessionToDaemonMsg::ConfigureTheme`) and its OS light/dark preference (`InputMsg::ColorScheme`), because the daemon
-owns the query surface: a program's `OSC 10/11/12 ; ?` or `DSR ? 996 n` must answer with the real surface colors, and
-the program talks to the daemon, not the client. The daemon stores the reports opaquely (it still never interprets a
-color) and **per window**, then resolves the one answer a query gets along a fixed candidate chain. Which mirror's
-colors a program sees is therefore a property of the chain, not of whose attach frame landed last, and an empty chain
-answers with the compiled-in fallback ([session-lifecycle.md](session-lifecycle.md) "Client-derived presentation
-state").
+deliberate exception to "the daemon does not know": the client reports its _resolved_ default fg/bg/cursor and its
+configured palette slots on attach (`SessionToDaemonMsg::ConfigureTheme`) and its OS light/dark preference
+(`InputMsg::ColorScheme`), because the daemon owns the query surface: a program's `OSC 4 ; n ; ?`, `OSC 10/11/12 ; ?` or
+`DSR ? 996 n` must answer with the colors the window paints, and the program talks to the daemon, not the client. The
+daemon stores the reports opaquely (it still never interprets a color) and **per window**, then resolves the one answer
+a query gets along a fixed candidate chain. Which mirror's colors a program sees is therefore a property of the chain,
+not of whose attach frame landed last, and an empty chain answers with the compiled-in fallback
+([session-lifecycle.md](session-lifecycle.md) "Client-derived presentation state").
 
 #### The daemon is font-blind
 

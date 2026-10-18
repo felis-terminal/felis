@@ -975,6 +975,7 @@ pub(crate) const ADDITIONS: &[(&str, u16)] = &[
     ("SessionInfo.program_status", 1),
     ("ImagePlacement.requested", 1),
     ("ImageVirtualPlacement.placement_id", 1),
+    ("SessionConfigureTheme.palette", 2),
     ("SearchQuery.source", 1),
     ("ConnectionMode::WINDOW", 0),
     ("ConnectionMode::OPS", 0),

@@ -265,6 +265,25 @@
         }
       ]
     },
+    "ConfiguredPaletteEntryJson": {
+      "description": "One configured palette slot of a [`SessionJson::ConfigureTheme`].",
+      "properties": {
+        "index": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "rgb": {
+          "$ref": "#/$defs/RgbJson"
+        }
+      },
+      "required": [
+        "index",
+        "rgb"
+      ],
+      "type": "object"
+    },
     "ConnJson": {
       "description": "Connection-family frames in their v1 form.",
       "oneOf": [
@@ -2513,6 +2532,14 @@
                   "type": "null"
                 }
               ]
+            },
+            "palette": {
+              "default": [],
+              "description": "Ascending by index, each at most once; absent from an\nobject written before the key existed.",
+              "items": {
+                "$ref": "#/$defs/ConfiguredPaletteEntryJson"
+              },
+              "type": "array"
             },
             "type": {
               "const": "configure_theme",

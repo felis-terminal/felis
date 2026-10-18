@@ -96,16 +96,18 @@ window-position and screen-size queries answer a constant stub rather than the d
 
 ### One named carve-out: client-supplied presentation facets
 
-Two replies answer with values a client supplied rather than the PTY: the `OSC 10/11/12 ; ?` fallback colors (the
-attached window's configured surface colors, consulted only when no program has set a runtime override) and the OS
-light/dark preference behind `DSR ? 996 n` and `DECSET 2031`. They earn the exception because the alternative misleads
-every program that asks: a dark felis without them answers xterm white, and auto-detecting colorschemes inverts.
+Two facets a client supplies answer in place of the PTY: its configured colors and its OS light/dark preference. The
+colors are the `OSC 10/11/12 ; ?` fallback (the attached window's configured surface colors, consulted only when no
+program has set a runtime override) and the `OSC 4 ; n ; ?` fallback (its configured palette slots, consulted only for a
+slot no program has set); the preference stands behind `DSR ? 996 n` and `DECSET 2031`. They earn the exception because
+the alternative misleads every program that asks: a dark felis without them answers xterm white, auto-detecting
+colorschemes invert, and a program that picks readable colors from the palette picks against colors nobody sees.
 
-What contains them is that both sources are windows attached to _this_ session (never another session, never the window
-manager), both values are a color or a two-valued preference the user configured rather than anything a producer wrote,
-and the reply shape is generated like every other. Palette entries take no client fallback at all (an unset OSC 4 / 5
-entry answers the compiled-in palette), so the one query with 256 slots to fill stays purely reflective. Which window
-answers is [session-lifecycle.md](architecture/session-lifecycle.md) "Client-derived presentation state".
+What contains them is that every source is a window attached to _this_ session (never another session, never the window
+manager), every value is a color or a two-valued preference the user configured rather than anything a producer wrote,
+and the reply shape is generated like every other. The special colors behind `OSC 5` take no client fallback: no config
+key sets one, so an unset entry answers the compiled-in default. Which window answers is
+[session-lifecycle.md](architecture/session-lifecycle.md) "Client-derived presentation state".
 
 ### Every answered `CSI t` readback is classified
 
