@@ -495,6 +495,53 @@ async fn info_prints_session_metadata() {
     server.abort();
 }
 
+/// A session created without a cwd lists the daemon's, though its
+/// program never sends OSC 7.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn list_and_info_show_the_spawn_directory() {
+    let tmp = private_dir();
+    let (server, socket, _pool) = spawn_daemon(&tmp, quiet_factory()).await;
+    let id = create_and_detach(&socket).await;
+    let id_hex = format!("{id:032x}");
+    let daemon_cwd = std::env::current_dir()
+        .unwrap()
+        .into_os_string()
+        .into_string()
+        .unwrap();
+
+    let list = cli_command()
+        .arg("--socket")
+        .arg(&socket)
+        .args(["sessions", "list", "--format", "json"])
+        .output()
+        .expect("run felis sessions list --format json");
+    assert!(list.status.success(), "{list:?}");
+    let row = parse_point(&String::from_utf8_lossy(&list.stdout), "sessions list")["sessions"]
+        .as_array()
+        .expect("sessions is an array")
+        .iter()
+        .find(|row| row["id"] == id_hex.as_str())
+        .cloned()
+        .expect("the session is listed");
+    assert_eq!(row["spawn_cwd"], daemon_cwd.as_str());
+    assert!(row.get("cwd").is_none(), "no OSC 7 was sent: {row}");
+
+    let info = cli_command()
+        .arg("--socket")
+        .arg(&socket)
+        .args(["sessions", "info", &id_hex[..8]])
+        .output()
+        .expect("run felis sessions info");
+    assert!(info.status.success(), "{info:?}");
+    let stdout = String::from_utf8_lossy(&info.stdout);
+    assert!(
+        stdout.contains(&format!("spawned:  {daemon_cwd}\n")),
+        "info names the spawn directory: {stdout}"
+    );
+
+    server.abort();
+}
+
 /// A program's OSC 7501 report reaches both `sessions list --format
 /// json` and the human `sessions info`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

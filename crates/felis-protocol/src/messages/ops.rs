@@ -61,6 +61,10 @@ pub struct SessionInfo {
     /// The session's OSC 7501 program-status records, sorted by id;
     /// empty when no program has reported one.
     pub program_status: Vec<ProgramStatusRecord>,
+    /// The absolute directory the child was started in, as the daemon
+    /// resolved it; unlike [`SessionInfo::cwd`], it never follows the
+    /// program. `None` when the daemon does not know it.
+    pub spawn_cwd: Option<String>,
 }
 
 /// One OSC 7501 program-status record ([`SessionInfo::program_status`]):
@@ -586,6 +590,7 @@ pub(crate) mod tests {
             },
             title: Some("zsh: ~/work".into()),
             cwd: Some("file://localhost/home/me/work".into()),
+            spawn_cwd: Some("/home/me/work".into()),
             idle_seconds: Some(3661),
             tags: vec!["work".into(), "agent".into()],
             last_notification: Some(SessionNotification {
@@ -734,6 +739,7 @@ pub(crate) mod tests {
                     },
                     title: None,
                     cwd: None,
+                    spawn_cwd: None,
                     idle_seconds: None,
                     tags: Vec::new(),
                     last_notification: None,

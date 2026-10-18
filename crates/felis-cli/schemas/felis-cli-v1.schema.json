@@ -1179,6 +1179,13 @@
         "short_id": {
           "type": "string"
         },
+        "spawn_cwd": {
+          "description": "The directory the child was started in; unlike `cwd`, it never\nfollows the program.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "tags": {
           "description": "Always present, empty for an untagged session, so a `jq` picker\ncan rely on `.tags` being iterable.",
           "items": {

@@ -51,6 +51,7 @@ pub struct SessionDump {
     pub pixel_h: u16,
     pub title: Option<String>,
     pub cwd: Option<String>,
+    pub spawn_cwd: Option<String>,
     pub tags: Vec<String>,
     pub exited: bool,
     /// `None` restores a blank screen.
@@ -264,6 +265,7 @@ mod tests {
                 unwritten: b"queued input".to_vec(),
                 rows: 24,
                 cols: 80,
+                spawn_cwd: Some("/home/me/work".to_owned()),
                 tags: vec!["build".to_owned()],
                 ..SessionDump::default()
             }],

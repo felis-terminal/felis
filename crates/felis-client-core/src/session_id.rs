@@ -53,6 +53,7 @@ mod tests {
             },
             title: None,
             cwd: None,
+            spawn_cwd: None,
             idle_seconds: None,
             tags: Vec::new(),
             last_notification: None,

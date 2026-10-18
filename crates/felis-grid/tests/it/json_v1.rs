@@ -65,6 +65,7 @@ fn session_info() -> SessionInfo {
         },
         title: Some("zsh".to_owned()),
         cwd: Some("file://localhost/tmp".to_owned()),
+        spawn_cwd: None,
         idle_seconds: Some(12),
         tags: vec!["work".to_owned()],
         last_notification: None,

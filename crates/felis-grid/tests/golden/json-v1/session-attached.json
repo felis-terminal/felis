@@ -38,6 +38,7 @@
         }
       ],
       "sequence": 3,
+      "spawn_cwd": null,
       "tags": [
         "work"
       ],
