@@ -973,10 +973,13 @@ fn collect_facets_ships_palette_sets_and_the_whole_table_reset() {
 /// A window paints the overrides it was sent until told otherwise, so
 /// a RIS that drops them must say so.
 #[test]
-fn collect_facets_ships_the_color_resets_a_ris_implies() {
+fn collect_facets_ships_the_color_and_pointer_resets_a_ris_implies() {
     let mut grid = Grid::new(2, 8);
     let mut parser = felis_vt::Parser::new();
-    parser.advance(&mut grid, b"\x1b]4;1;#ff0000\x1b\\\x1b]11;#102030\x1b\\");
+    parser.advance(
+        &mut grid,
+        b"\x1b]4;1;#ff0000\x1b\\\x1b]11;#102030\x1b\\\x1b]22;text\x1b\\",
+    );
     drop(collect_facets(&mut grid));
     parser.advance(&mut grid, b"\x1bc");
     let facets = collect_facets(&mut grid);
@@ -986,6 +989,10 @@ fn collect_facets_ships_the_color_resets_a_ris_implies() {
             channel: ThemeChannel::Background,
             action: ThemeAction::Reset,
         }),
+        "{facets:?}"
+    );
+    assert!(
+        facets.contains(&GridMsg::PointerShape { name: None }),
         "{facets:?}"
     );
 }

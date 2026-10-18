@@ -16,7 +16,7 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
   protocol minor 2 addition; against an older daemon or window, queries answer the stock palette as before.
 - **Terminal reset keeps the window's colors**: after a full reset (`ESC c`, `reset`), color queries keep answering the
   window's configured colors and light/dark preference instead of xterm white, a window stops painting the colors the
-  program had set, and pixel-size reports keep the window's size.
+  program had set and shows the default mouse pointer again, and pixel-size reports keep the window's size.
 - **Kitty placeholder images under the text**: an image drawn through Unicode-placeholder cells sits between the cell
   backgrounds and the text, whatever `z=` it was placed with, as in kitty. An image re-sent under the same id disappears
   until the new data has arrived, rather than showing the old picture meanwhile.
