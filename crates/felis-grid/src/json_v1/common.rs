@@ -1,6 +1,6 @@
 //! Vocabulary shared by more than one family's DTO.
 
-use felis_protocol::messages::{GridDims, RequestedDims};
+use felis_protocol::messages::{GridDims, RequestedDims, ViewportAnchor};
 
 use super::JsonError;
 
@@ -30,6 +30,31 @@ json_dto! {
         pub pixel_w: u32,
         /// `0` means unknown.
         pub pixel_h: u32,
+    }
+
+    /// Opaque history point of a browsing viewport offset; a client
+    /// echoes it back unchanged.
+    pub struct ViewportAnchorJson {
+        pub pushed: u64,
+        pub generation: u64,
+    }
+}
+
+impl From<ViewportAnchor> for ViewportAnchorJson {
+    fn from(a: ViewportAnchor) -> Self {
+        Self {
+            pushed: a.pushed,
+            generation: a.generation,
+        }
+    }
+}
+
+impl From<ViewportAnchorJson> for ViewportAnchor {
+    fn from(a: ViewportAnchorJson) -> Self {
+        Self {
+            pushed: a.pushed,
+            generation: a.generation,
+        }
     }
 }
 

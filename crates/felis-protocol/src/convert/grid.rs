@@ -17,6 +17,24 @@ fn row_entry_from_wire(e: v1::RowEntry) -> Result<(u16, RowPayload), WireError> 
     Ok((narrow("RowEntry.row", e.row)?, RowPayload(e.packed_cells)))
 }
 
+impl From<messages::ViewportAnchor> for v1::ViewportAnchor {
+    fn from(a: messages::ViewportAnchor) -> Self {
+        Self {
+            pushed: a.pushed,
+            generation: a.generation,
+        }
+    }
+}
+
+impl From<v1::ViewportAnchor> for messages::ViewportAnchor {
+    fn from(a: v1::ViewportAnchor) -> Self {
+        Self {
+            pushed: a.pushed,
+            generation: a.generation,
+        }
+    }
+}
+
 data_free_enum!("AttentionSource", attention_source_to_i32, attention_source_from_i32, messages::AttentionSource, v1::AttentionSource, {
     Bell => Bell,
     Notification => Notification,
@@ -105,9 +123,11 @@ impl From<&messages::GridMsg> for v1::GridMsg {
             G::ViewportState {
                 lines_from_bottom,
                 max,
+                anchor,
             } => Msg::ViewportState(v1::GridViewportState {
                 lines_from_bottom: *lines_from_bottom,
                 max: *max,
+                anchor: anchor.map(Into::into),
             }),
             G::Size { dims } => Msg::Size(v1::GridSize {
                 dims: Some((*dims).into()),
@@ -227,6 +247,7 @@ impl TryFrom<v1::GridMsg> for messages::GridMsg {
             Msg::ViewportState(v) => Self::ViewportState {
                 lines_from_bottom: v.lines_from_bottom,
                 max: v.max,
+                anchor: v.anchor.map(Into::into),
             },
             Msg::Size(g) => Self::Size {
                 dims: dims_from_wire(g.dims, "GridSize.dims")?,

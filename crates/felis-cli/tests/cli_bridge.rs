@@ -2489,6 +2489,7 @@ async fn scripted_attach_daemon_signaling(
                                                             text: "NEEDLE".to_owned(),
                                                             byte_spans: Vec::new(),
                                                             col_spans: Vec::new(),
+                                                            anchor: None,
                                                         },
                                                         Correlation::stream(stream_id),
                                                     )

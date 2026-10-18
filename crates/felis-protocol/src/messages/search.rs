@@ -47,6 +47,9 @@ pub enum SearchToClientMsg {
         /// contributes one segment per touched row, so this is not 1:1
         /// with `byte_spans`.
         col_spans: Vec<ColSpan>,
+        /// The history point `line_index` and the segments' rows count
+        /// from; `None` from a daemon below minor 2.
+        anchor: Option<super::ViewportAnchor>,
     },
 }
 
@@ -171,12 +174,17 @@ pub(crate) mod tests {
                         col_end: 3,
                     },
                 ],
+                anchor: Some(crate::messages::ViewportAnchor {
+                    pushed: 40,
+                    generation: 2,
+                }),
             },
             SearchToClientMsg::Match {
                 line_index: 7,
                 text: String::new(),
                 byte_spans: vec![],
                 col_spans: vec![],
+                anchor: None,
             },
         ]
     }

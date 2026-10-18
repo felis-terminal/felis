@@ -41,8 +41,8 @@ pub mod schema;
 mod session;
 
 pub use common::{
-    GridDimsJson, RequestedDimsJson, RgbJson, SESSION_ID_PATTERN, session_id_from_hex,
-    session_id_hex,
+    GridDimsJson, RequestedDimsJson, RgbJson, SESSION_ID_PATTERN, ViewportAnchorJson,
+    session_id_from_hex, session_id_hex,
 };
 pub use conn::{
     BuildIdentityJson, ConnJson, ConnectionModeJson, RefusalReasonJson, StreamErrorReasonJson,

@@ -853,6 +853,11 @@ pub struct InputViewport {
     /// Scrollback rows to lift the visible window by; 0 tracks live bottom.
     #[prost(uint32, tag="1")]
     pub lines_from_bottom: u32,
+    /// The anchor of the browsing GridViewportState this offset was
+    /// computed from, echoed verbatim. Unset reads the offset against the
+    /// current bottom.
+    #[prost(message, optional, tag="2")]
+    pub anchor: ::core::option::Option<ViewportAnchor>,
 }
 /// Prompt-jump request.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
@@ -1005,6 +1010,18 @@ pub struct GridViewportState {
     /// Total composable rows = retained scrollback + live row count.
     #[prost(uint32, tag="2")]
     pub max: u32,
+    /// The history point a non-zero lines_from_bottom is expressed
+    /// against. Unset at the live bottom.
+    #[prost(message, optional, tag="3")]
+    pub anchor: ::core::option::Option<ViewportAnchor>,
+}
+/// Opaque to a client: echoed in InputViewport.anchor.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ViewportAnchor {
+    #[prost(uint64, tag="1")]
+    pub pushed: u64,
+    #[prost(uint64, tag="2")]
+    pub generation: u64,
 }
 /// Authoritative grid dimensions changed mid-stream.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
@@ -2509,6 +2526,9 @@ pub struct SearchMatch {
     /// Paintable highlight segments (not 1:1 with byte_spans).
     #[prost(message, repeated, tag="4")]
     pub col_spans: ::prost::alloc::vec::Vec<ColSpan>,
+    /// The history point line_index and the segments' rows count from.
+    #[prost(message, optional, tag="5")]
+    pub anchor: ::core::option::Option<ViewportAnchor>,
 }
 // Protocol Buffers schema for the felis terminal emulator's IPC.
 //

@@ -227,8 +227,12 @@ impl From<&messages::InputMsg> for v1::InputMsg {
                 Msg::FocusChange(v1::InputFocusChange { focused: *focused })
             }
             I::ColorScheme { dark } => Msg::ColorScheme(v1::InputColorScheme { dark: *dark }),
-            I::Viewport { lines_from_bottom } => Msg::Viewport(v1::InputViewport {
+            I::Viewport {
+                lines_from_bottom,
+                anchor,
+            } => Msg::Viewport(v1::InputViewport {
                 lines_from_bottom: *lines_from_bottom,
+                anchor: anchor.map(Into::into),
             }),
             I::JumpPrompt { direction } => Msg::JumpPrompt(v1::InputJumpPrompt {
                 direction: prompt_jump_to_i32(*direction),
@@ -256,6 +260,7 @@ impl TryFrom<v1::InputMsg> for messages::InputMsg {
                 Msg::ColorScheme(c) => Self::ColorScheme { dark: c.dark },
                 Msg::Viewport(v) => Self::Viewport {
                     lines_from_bottom: v.lines_from_bottom,
+                    anchor: v.anchor.map(Into::into),
                 },
                 Msg::JumpPrompt(j) => Self::JumpPrompt {
                     direction: prompt_jump_from_i32(j.direction)?,

@@ -141,6 +141,103 @@ fn clamp_viewport_saturates_at_scrollback_depth() {
     assert_eq!(g.clamp_viewport(99), 1, "must clamp to scrollback len");
 }
 
+#[test]
+fn anchor_viewport_grows_a_browsing_offset_by_the_rows_pushed_since() {
+    let mut p = Parser::new();
+    let mut g = Grid::new(2, 4);
+    drive(&mut p, &mut g, b"r1\r\nr2\r\nr3\r\nr4");
+    let since = g.viewport_anchor();
+    let top_before = g.cell_at_viewport(2, 0, 1).unwrap().grapheme;
+    drive(&mut p, &mut g, b"\r\nr5\r\nr6");
+    assert_eq!(g.anchor_viewport(2, since), 4);
+    assert_eq!(
+        g.cell_at_viewport(4, 0, 1).unwrap().grapheme,
+        top_before,
+        "the grown offset shows the line the old one did",
+    );
+}
+
+#[test]
+fn anchor_viewport_keeps_the_live_bottom_live() {
+    let mut p = Parser::new();
+    let mut g = Grid::new(2, 4);
+    drive(&mut p, &mut g, b"r1\r\nr2\r\nr3");
+    let since = g.viewport_anchor();
+    drive(&mut p, &mut g, b"\r\nr4\r\nr5");
+    assert_eq!(g.anchor_viewport(0, since), 0);
+}
+
+#[test]
+fn anchor_viewport_clamps_to_the_oldest_row_once_the_read_rows_are_evicted() {
+    let mut p = Parser::new();
+    let mut g = Grid::with_scrollback(2, 4, 3);
+    drive(&mut p, &mut g, b"r1\r\nr2\r\nr3\r\nr4\r\nr5");
+    assert_eq!(g.scrollback().len(), 3);
+    let since = g.viewport_anchor();
+    drive(&mut p, &mut g, b"\r\nr6\r\nr7");
+    assert_eq!(g.anchor_viewport(2, since), 3);
+}
+
+#[test]
+fn anchor_viewport_drops_to_live_when_history_is_erased() {
+    let mut p = Parser::new();
+    let mut g = Grid::new(2, 4);
+    drive(&mut p, &mut g, b"r1\r\nr2\r\nr3\r\nr4");
+    let since = g.viewport_anchor();
+    drive(&mut p, &mut g, b"\x1b[3J");
+    assert_eq!(g.anchor_viewport(2, since), 0);
+}
+
+#[test]
+fn anchor_viewport_drops_to_live_on_the_alternate_screen() {
+    let mut p = Parser::new();
+    let mut g = Grid::new(2, 4);
+    drive(&mut p, &mut g, b"r1\r\nr2\r\nr3\r\nr4");
+    let since = g.viewport_anchor();
+    drive(&mut p, &mut g, b"\x1b[?1049h\r\nx\r\ny");
+    assert_eq!(g.anchor_viewport(2, since), 0);
+}
+
+#[test]
+fn anchor_viewport_goes_live_across_a_resize() {
+    let mut p = Parser::new();
+    let mut g = Grid::new(2, 4);
+    drive(&mut p, &mut g, b"r1\r\nr2\r\nr3\r\nr4\r\nr5\r\nr6");
+    let since = g.viewport_anchor();
+    g.resize(3, 4);
+    assert_eq!(g.anchor_viewport(2, since), 0);
+}
+
+#[test]
+fn anchor_viewport_goes_live_when_history_is_erased_and_refilled() {
+    let mut p = Parser::new();
+    let mut g = Grid::new(2, 4);
+    drive(&mut p, &mut g, b"r1\r\nr2\r\nr3\r\nr4");
+    let since = g.viewport_anchor();
+    drive(&mut p, &mut g, b"\x1b[3J\r\nx1\r\nx2\r\nx3\r\nx4");
+    assert_eq!(g.anchor_viewport(2, since), 0);
+}
+
+#[test]
+fn anchor_viewport_goes_live_across_a_full_reset() {
+    let mut p = Parser::new();
+    let mut g = Grid::new(2, 4);
+    drive(&mut p, &mut g, b"r1\r\nr2\r\nr3\r\nr4");
+    let since = g.viewport_anchor();
+    drive(&mut p, &mut g, b"\x1bcx1\r\nx2\r\nx3\r\nx4");
+    assert_eq!(g.anchor_viewport(2, since), 0);
+}
+
+#[test]
+fn anchor_viewport_goes_live_across_an_alternate_screen_round_trip() {
+    let mut p = Parser::new();
+    let mut g = Grid::new(2, 4);
+    drive(&mut p, &mut g, b"r1\r\nr2\r\nr3\r\nr4");
+    let since = g.viewport_anchor();
+    drive(&mut p, &mut g, b"\x1b[?1049h\x1b[?1049l");
+    assert_eq!(g.anchor_viewport(2, since), 0);
+}
+
 /// No scrollback on the alternate screen (xterm convention).
 #[test]
 fn clamp_viewport_returns_zero_on_alternate_screen() {

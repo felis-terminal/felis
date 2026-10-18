@@ -13,7 +13,7 @@ use felis_protocol::{
     kitty_keyboard::KittyKbdFlags,
     messages::{
         ClipboardWrite, CursorStyle, GridDims, GridMsg, MAX_GRID_COLS, MAX_GRID_ROWS,
-        ModifyOtherKeys, MouseProtocol,
+        ModifyOtherKeys, MouseProtocol, ViewportAnchor,
     },
 };
 use thiserror::Error;
@@ -89,6 +89,8 @@ pub struct ShadowScreen {
     /// `0` = live bottom; `N>0` = the top `min(N, rows)` visible rows
     /// come from retained scrollback.
     viewport: u32,
+    /// What `viewport` is expressed against; `None` at the live bottom.
+    viewport_anchor: Option<ViewportAnchor>,
     /// Retained scrollback + live rows; starts at `rows`.
     viewport_max: u32,
     pending_clipboard_set: Option<ClipboardWrite>,
@@ -128,6 +130,7 @@ impl ShadowScreen {
             win32_input_mode: false,
             reverse_video: false,
             viewport: 0,
+            viewport_anchor: None,
             viewport_max: u32::from(rows),
             pending_clipboard_set: None,
             rehydrating: false,
@@ -206,6 +209,13 @@ impl ShadowScreen {
     #[must_use]
     pub const fn viewport(&self) -> u32 {
         self.viewport
+    }
+
+    /// The anchor a request computed from [`Self::viewport`] echoes;
+    /// `None` at the live bottom.
+    #[must_use]
+    pub const fn viewport_anchor(&self) -> Option<ViewportAnchor> {
+        self.viewport_anchor
     }
 
     /// Retained scrollback rows + live rows.
@@ -424,6 +434,7 @@ impl ShadowScreen {
             GridMsg::ViewportState {
                 lines_from_bottom,
                 max,
+                anchor,
             } => {
                 if lines_from_bottom > max {
                     return Err(ShadowError::Viewport {
@@ -432,6 +443,7 @@ impl ShadowScreen {
                     });
                 }
                 self.viewport = *lines_from_bottom;
+                self.viewport_anchor = anchor.filter(|_| *lines_from_bottom > 0);
                 self.viewport_max = *max;
             }
             GridMsg::Scrolled {
@@ -1306,6 +1318,7 @@ mod tests {
             .apply(&GridMsg::ViewportState {
                 lines_from_bottom: 7,
                 max: 1024,
+                anchor: None,
             })
             .unwrap();
         assert_eq!(shadow.viewport(), 7);
@@ -1318,6 +1331,7 @@ mod tests {
             .apply(&GridMsg::ViewportState {
                 lines_from_bottom: 0,
                 max: 1024,
+                anchor: None,
             })
             .unwrap();
         assert!(shadow.viewport_at_bottom());
@@ -1611,15 +1625,42 @@ mod tests {
             .apply(&GridMsg::ViewportState {
                 lines_from_bottom: 1024,
                 max: 1024,
+                anchor: None,
             })
             .expect("a viewport at its maximum is legal");
         let err = shadow
             .apply(&GridMsg::ViewportState {
                 lines_from_bottom: 1025,
                 max: 1024,
+                anchor: None,
             })
             .unwrap_err();
         assert!(matches!(err, ShadowError::Viewport { .. }));
+    }
+
+    #[test]
+    fn a_browsing_viewport_state_records_its_anchor_and_the_live_bottom_drops_it() {
+        let anchor = ViewportAnchor {
+            pushed: 9,
+            generation: 1,
+        };
+        let mut shadow = ShadowScreen::new(4, 8);
+        shadow
+            .apply(&GridMsg::ViewportState {
+                lines_from_bottom: 3,
+                max: 20,
+                anchor: Some(anchor),
+            })
+            .unwrap();
+        assert_eq!(shadow.viewport_anchor(), Some(anchor));
+        shadow
+            .apply(&GridMsg::ViewportState {
+                lines_from_bottom: 0,
+                max: 20,
+                anchor: Some(anchor),
+            })
+            .unwrap();
+        assert_eq!(shadow.viewport_anchor(), None);
     }
 
     #[test]

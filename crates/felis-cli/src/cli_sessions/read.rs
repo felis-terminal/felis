@@ -431,6 +431,7 @@ where
                 text,
                 byte_spans,
                 col_spans,
+                ..
             }) => {
                 total = total.saturating_add(1);
                 print_search_match(out, line_index, &text, &byte_spans, &col_spans);

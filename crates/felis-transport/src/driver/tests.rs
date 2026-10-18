@@ -65,6 +65,7 @@ fn a_match() -> SearchToClientMsg {
         text: "hit".into(),
         byte_spans: vec![],
         col_spans: vec![],
+        anchor: None,
     }
 }
 

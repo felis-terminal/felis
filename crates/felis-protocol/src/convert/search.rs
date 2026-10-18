@@ -96,11 +96,13 @@ impl From<&messages::SearchToClientMsg> for v1::SearchToClientMsg {
                 text,
                 byte_spans,
                 col_spans,
+                anchor,
             } => Msg::Match(v1::SearchMatch {
                 line_index: *line_index,
                 text: text.clone(),
                 byte_spans: byte_spans.iter().copied().map(byte_span_to_wire).collect(),
                 col_spans: col_spans.iter().copied().map(col_span_to_wire).collect(),
+                anchor: anchor.map(Into::into),
             }),
         };
         Self {
@@ -150,6 +152,7 @@ impl TryFrom<v1::SearchToClientMsg> for messages::SearchToClientMsg {
                         .into_iter()
                         .map(col_span_from_wire)
                         .collect::<Result<_, _>>()?,
+                    anchor: s.anchor.map(Into::into),
                 },
             },
         )

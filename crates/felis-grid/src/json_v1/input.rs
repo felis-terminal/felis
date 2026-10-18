@@ -7,7 +7,7 @@ use felis_protocol::messages::{
 };
 
 use super::JsonError;
-use super::common::RequestedDimsJson;
+use super::common::{RequestedDimsJson, ViewportAnchorJson};
 use super::grid::plain_enum;
 
 /// Lowest function-key index `FKey` admits.
@@ -138,7 +138,14 @@ json_dto! {
         Resize { dims: RequestedDimsJson },
         FocusChange { focused: bool },
         ColorScheme { dark: bool },
-        Viewport { lines_from_bottom: u32 },
+        Viewport {
+            lines_from_bottom: u32,
+            /// The anchor of the browsing `viewport_state` this offset
+            /// was computed from; absent reads it against the current
+            /// bottom.
+            #[serde(default, skip_serializing_if = "Option::is_none")]
+            anchor: Option<ViewportAnchorJson>,
+        },
         JumpPrompt { direction: PromptJumpJson },
         NextGridFrame,
         Key { event: KeyEventJson },
@@ -290,7 +297,13 @@ impl From<InputMsg> for InputJson {
             InputMsg::Resize { dims } => Self::Resize { dims: dims.into() },
             InputMsg::FocusChange { focused } => Self::FocusChange { focused },
             InputMsg::ColorScheme { dark } => Self::ColorScheme { dark },
-            InputMsg::Viewport { lines_from_bottom } => Self::Viewport { lines_from_bottom },
+            InputMsg::Viewport {
+                lines_from_bottom,
+                anchor,
+            } => Self::Viewport {
+                lines_from_bottom,
+                anchor: anchor.map(Into::into),
+            },
             InputMsg::JumpPrompt { direction } => Self::JumpPrompt {
                 direction: direction.into(),
             },
@@ -313,7 +326,13 @@ impl TryFrom<InputJson> for InputMsg {
             InputJson::Resize { dims } => Self::Resize { dims: dims.into() },
             InputJson::FocusChange { focused } => Self::FocusChange { focused },
             InputJson::ColorScheme { dark } => Self::ColorScheme { dark },
-            InputJson::Viewport { lines_from_bottom } => Self::Viewport { lines_from_bottom },
+            InputJson::Viewport {
+                lines_from_bottom,
+                anchor,
+            } => Self::Viewport {
+                lines_from_bottom,
+                anchor: anchor.map(Into::into),
+            },
             InputJson::JumpPrompt { direction } => Self::JumpPrompt {
                 direction: direction.into(),
             },

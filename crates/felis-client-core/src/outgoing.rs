@@ -438,6 +438,7 @@ mod tests {
             InputMsg::NextGridFrame,
             InputMsg::Viewport {
                 lines_from_bottom: 3,
+                anchor: None,
             },
         ] {
             let none: &[CoalesceKey] = &[];
