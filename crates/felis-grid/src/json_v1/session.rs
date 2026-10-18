@@ -152,6 +152,9 @@ json_dto! {
         /// existed.
         #[serde(default)]
         pub program_status: Vec<ProgramStatusRecordJson>,
+        /// Absent from an object written before the key existed.
+        #[serde(default)]
+        pub spawn_cwd: Option<String>,
     }
 
     /// Session-family frames in their v1 form.
@@ -456,6 +459,7 @@ impl TryFrom<SessionInfo> for SessionInfoJson {
                 .collect::<Result<Vec<_>, JsonError>>()?,
             sequence: info.sequence.get(),
             program_status: info.program_status.into_iter().map(Into::into).collect(),
+            spawn_cwd: info.spawn_cwd,
         })
     }
 }
@@ -488,6 +492,7 @@ impl TryFrom<SessionInfoJson> for SessionInfo {
                 .into_iter()
                 .map(TryInto::try_into)
                 .collect::<Result<Vec<_>, JsonError>>()?,
+            spawn_cwd: info.spawn_cwd,
         })
     }
 }

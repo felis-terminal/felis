@@ -973,6 +973,7 @@ pub(crate) const ADDITIONS: &[(&str, u16)] = &[
     ("Search::Query", 0),
     ("Search::Match", 0),
     ("SessionInfo.program_status", 1),
+    ("SessionInfo.spawn_cwd", 2),
     ("InputViewport.anchor", 2),
     ("GridViewportState.anchor", 2),
     ("ImageNew.serial", 2),

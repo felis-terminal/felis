@@ -85,6 +85,7 @@ impl From<&messages::SessionInfo> for v1::SessionInfo {
             attachments: s.attachments.iter().map(Into::into).collect(),
             sequence: s.sequence.get(),
             program_status: s.program_status.iter().map(Into::into).collect(),
+            spawn_cwd: s.spawn_cwd.clone(),
         }
     }
 }
@@ -115,6 +116,7 @@ impl TryFrom<v1::SessionInfo> for messages::SessionInfo {
                 .into_iter()
                 .map(TryInto::try_into)
                 .collect::<Result<_, _>>()?,
+            spawn_cwd: s.spawn_cwd,
         })
     }
 }
@@ -817,6 +819,7 @@ mod tests {
             }),
             title: None,
             cwd: None,
+            spawn_cwd: None,
             idle_seconds: None,
             tags: Vec::new(),
             last_notification: None,

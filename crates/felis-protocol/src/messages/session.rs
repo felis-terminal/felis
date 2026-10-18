@@ -261,6 +261,7 @@ pub(crate) mod tests {
             },
             title: Some("zsh".into()),
             cwd: None,
+            spawn_cwd: None,
             idle_seconds: None,
             tags: Vec::new(),
             last_notification: None,

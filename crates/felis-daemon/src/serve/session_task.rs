@@ -164,6 +164,7 @@ fn session_info_wire_len(info: &SessionInfo) -> usize {
         .sum();
     opt(&info.title)
         + opt(&info.cwd)
+        + opt(&info.spawn_cwd)
         + opt(&info.foreground)
         + notification
         + tags
@@ -436,6 +437,7 @@ enum EndReason {
 pub async fn spawn_session(
     pool: &Arc<Mutex<SessionPool>>,
     spawned: crate::SpawnedPty,
+    spawn_cwd: Option<String>,
     policy: IdlePolicy,
     id: SessionId,
     dims: GridDims,
@@ -443,7 +445,8 @@ pub async fn spawn_session(
     slot: Option<SessionSlot>,
     listing: Listing,
 ) -> SessionLifecycle {
-    let owned = Session::from_spawned(spawned);
+    let mut owned = Session::from_spawned(spawned);
+    owned.spawn_cwd = spawn_cwd;
     spawn_owned(
         pool,
         owned,
@@ -640,6 +643,7 @@ async fn spawn_task(
         last_exit_code: session.lock_core().grid.last_command_exit(),
         attachments: Vec::new(),
         program_status: session.program_status.snapshot(),
+        spawn_cwd: session.spawn_cwd.clone(),
         sequence,
     }));
     let meta_status_generation = session.program_status.generation();
@@ -3058,6 +3062,7 @@ impl SessionTask {
             exited: false,
             attachments: Vec::new(),
             program_status: Vec::new(),
+            spawn_cwd: None,
             sequence: std::num::NonZeroU64::MIN,
         }));
         Self {
@@ -6996,6 +7001,7 @@ mod tests {
             last_exit_code: None,
             attachments: Vec::new(),
             sequence: std::num::NonZeroU64::MIN,
+            spawn_cwd: None,
             program_status: (0..records)
                 .map(|i| felis_protocol::messages::ProgramStatusRecord {
                     id: format!("r{i}"),
@@ -7171,6 +7177,7 @@ mod tests {
                 exited: false,
                 attachments: Vec::new(),
                 program_status: Vec::new(),
+                spawn_cwd: None,
                 sequence: std::num::NonZeroU64::MIN,
             })),
         };
@@ -7248,6 +7255,7 @@ mod tests {
         let SessionLifecycle { id, .. } = spawn_session(
             &pool,
             crate::SpawnedPty::spawn(cmd).expect("spawn /bin/sh"),
+            None,
             IdlePolicy::default(),
             SessionId::new(),
             GridDims {
@@ -7339,6 +7347,7 @@ mod tests {
                 exited: false,
                 attachments: Vec::new(),
                 program_status: Vec::new(),
+                spawn_cwd: None,
                 sequence: std::num::NonZeroU64::MIN,
             })),
         };

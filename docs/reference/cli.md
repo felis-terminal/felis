@@ -205,6 +205,7 @@ roster; `sessions info` answers a single session object beside `"v"`. Both carry
 | `idle_seconds`      | number           | omitted while a window is attached; it counts from the last detach |
 | `title`             | string           | omitted until the session sets one                                 |
 | `cwd`               | string           | omitted when the daemon has none for the session                   |
+| `spawn_cwd`         | string           | omitted when the daemon does not know where it started the child   |
 | `tags`              | array of strings | always, empty when untagged                                        |
 | `last_notification` | object           | omitted until the session emits one                                |
 | `foreground`        | string           | omitted when no foreground command is known                        |
@@ -279,9 +280,10 @@ and `list` exits `0` on an empty roster.
 ### Verb details
 
 - **`list`**: `--tag <t>` filters sessions by tag. A session in exit grace is marked `(exited)` or `"exited":true`.
-- **`info <id>`**: displays geometry, idle time, title, cwd, foreground command, exit code from OSC 133 `D` marks
-  (`exit:` / `"last_exit_code"`), active window attachments (`window:` / `"attachments"`), and OSC 7501 program-status
-  records (`status:` / `"program_status"`). A `status:` line reads `<id> <state>[ <kind>][ <progress>%][ [<app>]][
+- **`info <id>`**: displays geometry, idle time, title, cwd, the directory the child was started in (`spawned:` /
+  `"spawn_cwd"`), foreground command, exit code from OSC 133 `D` marks (`exit:` / `"last_exit_code"`), active window
+  attachments (`window:` / `"attachments"`), and OSC 7501 program-status records (`status:` / `"program_status"`). A
+  `status:` line reads `<id> <state>[ <kind>][ <progress>%][ [<app>]][
   <title>][: <msg>]`, the root record as `(root)`, with bidirectional-text and control characters in producer text spelled `<U+XXXX>`; for example
   `status:   (root) blocked question 50% [mytool]: Which branch?`.
 - **`spawn`**: `--tag <t>` sets initial tags (up to 32 tags of 128 bytes). A local spawn's child environment starts from

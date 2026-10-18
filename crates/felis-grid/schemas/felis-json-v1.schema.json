@@ -2471,6 +2471,14 @@
           "type": "integer",
           "x-bound-exceeds-f64-precision": true
         },
+        "spawn_cwd": {
+          "default": null,
+          "description": "Absent from an object written before the key existed.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "tags": {
           "items": {
             "type": "string"

@@ -1834,6 +1834,7 @@ where
         resizer: std::sync::Arc::new(resizer),
         shm_segments: ShmDeferral::default(),
         quiescer,
+        spawn_cwd: None,
     };
     let bodies = prep(&mut session);
     let cursor = session.lock_core().grid.cursor();

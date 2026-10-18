@@ -2276,6 +2276,40 @@ async fn a_create_ack_reports_the_window_it_attached() {
     );
 }
 
+/// The roster row names the directory the create asked for, though the
+/// child never announces one with OSC 7.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_create_ack_reports_the_directory_the_child_started_in() {
+    let tmp = private_dir();
+    let path = tmp.path().join("daemon.sock");
+    let pool = Arc::new(Mutex::new(SessionPool::new()));
+    spawn_daemon(&path, pool.clone(), shell_factory("sleep 30")).await;
+    let dir = tmp.path().to_str().unwrap().to_owned();
+
+    let (read_half, write_half) = connect(&path).await.unwrap();
+    let (mut reader, mut writer) = framed(read_half, write_half).await;
+    hello_welcome(&mut reader, &mut writer, false).await;
+    send_kind(
+        &mut writer,
+        &SessionToDaemonMsg::Create {
+            args: felis_protocol::messages::SpawnArgs {
+                cwd: dir.clone(),
+                ..Default::default()
+            },
+        },
+    )
+    .await;
+    let created = reader.next_frame().await.unwrap().expect("session-created");
+    let info = match codec::decode::<SessionToClientMsg>(&created.body).unwrap() {
+        SessionToClientMsg::Created { info } => info,
+        other => panic!("expected SessionToClientMsg::Created, got {other:?}"),
+    };
+
+    assert_eq!(info.spawn_cwd, Some(dir));
+    assert_eq!(info.cwd, None);
+}
+
 /// Stamped at creation and never renumbered: an attach that renumbered it
 /// would move the window's anchor mid-switch.
 #[cfg(unix)]
@@ -5112,6 +5146,11 @@ fn spawn_with_args_refuses_a_relative_cwd() {
 #[cfg(unix)]
 #[test]
 fn spawn_with_args_falls_back_to_the_daemon_cwd_only_for_a_bare_launch() {
+    let daemon_cwd = std::env::current_dir()
+        .unwrap()
+        .into_os_string()
+        .into_string()
+        .unwrap();
     let factory: SessionFactory = Arc::new(|_| {
         let mut cmd = Command::new("/bin/sh");
         cmd.args(["-c", "exit 0"]);
@@ -5126,7 +5165,7 @@ fn spawn_with_args_falls_back_to_the_daemon_cwd_only_for_a_bare_launch() {
         ..Default::default()
     };
     // `Session` is not `Debug`, so match rather than `expect`.
-    if let Err(err) = spawn_with_args(
+    match spawn_with_args(
         &bare,
         &factory,
         0,
@@ -5136,7 +5175,12 @@ fn spawn_with_args_falls_back_to_the_daemon_cwd_only_for_a_bare_launch() {
         None,
         crate::DEFAULT_SIZE,
     ) {
-        panic!("a bare launch must survive an unusable cwd, got: {err}");
+        Ok(spawned) => assert_eq!(
+            spawned.cwd.as_deref(),
+            Some(daemon_cwd.as_str()),
+            "the fallback reports the directory the shell started in, not the one asked for"
+        ),
+        Err(err) => panic!("a bare launch must survive an unusable cwd, got: {err}"),
     }
 
     let named = felis_protocol::messages::SpawnArgs {
@@ -5159,6 +5203,36 @@ fn spawn_with_args_falls_back_to_the_daemon_cwd_only_for_a_bare_launch() {
         .is_err(),
         "a named command must not be run somewhere other than its requested cwd",
     );
+}
+
+/// An empty `cwd` asks for the daemon's own, which is what the child
+/// inherits.
+#[cfg(unix)]
+#[test]
+fn spawn_with_args_reports_the_daemon_cwd_for_an_empty_one() {
+    let factory: SessionFactory = Arc::new(|_| {
+        let mut cmd = Command::new("/bin/sh");
+        cmd.args(["-c", "exit 0"]);
+        cmd
+    });
+    let daemon_cwd = std::env::current_dir()
+        .unwrap()
+        .into_os_string()
+        .into_string()
+        .unwrap();
+    match spawn_with_args(
+        &felis_protocol::messages::SpawnArgs::default(),
+        &factory,
+        0,
+        EnvBaseSource::Birth,
+        None,
+        None,
+        None,
+        crate::DEFAULT_SIZE,
+    ) {
+        Ok(spawned) => assert_eq!(spawned.cwd, Some(daemon_cwd)),
+        Err(err) => panic!("a bare launch spawns, got: {err}"),
+    }
 }
 
 /// Each `SpawnArgs` field falls back independently (docs/reference/ipc.md),

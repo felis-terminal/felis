@@ -13,7 +13,7 @@ Scenario 3: find the sessions on a daemon, label them, and block until one finis
 ```sh
 felis sessions list --format json          # {"v":1,"sessions":[…]}
 felis sessions info "$ID" --format json    # geometry, idle, title, cwd,
-                                           # foreground, last_notification,
+                                           # spawn_cwd, foreground, last_notification,
                                            # tags, last_exit_code, attachments,
                                            # program_status
 felis sessions tag "$ID" agent work        # opaque labels; idempotent
@@ -23,6 +23,10 @@ felis sessions list --tag agent --format json  # client-side filter
 ```
 
 Tags are bounded (≤32 per session, ≤128 bytes each); an over-cap delta is refused whole at exit `1`.
+
+`cwd` is the directory the program last announced with OSC 7 and is absent without shell integration; `spawn_cwd` is the
+directory the daemon started the child in, fixed at creation, so group sessions by it rather than storing a path in a
+tag.
 
 A row with `"exited":true` is a corpse in the post-exit grace: its shell is gone and the daemon reaps it seconds after
 the last detach. Never route new work at it (`.sessions[] | select(.exited != true)`).

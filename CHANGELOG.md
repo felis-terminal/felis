@@ -12,6 +12,12 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 
 ### Added
 
+- **CLI**: `felis sessions list` and `felis sessions info` report the directory a session's child was started in as
+  `spawn_cwd` in `--format json` and as a `spawned:` line in `info`, so a session whose program never announces its
+  directory with OSC 7 (a coding agent, a command spawned without a shell) still has one. It is the `--cwd` the session
+  was created with, or the daemon's own directory when there was none.
+- **Wire**: protocol minor 2 adds `SessionInfo.spawn_cwd`. An older client skips it; a client facing an older daemon
+  lists no spawn directory.
 - **CLI**: `felis fonts list` prints every family name `font.family` and the other `family` keys accept on this machine,
   with whether it is monospace and which weights and slants it has, so a name that would fall back to monospace can be
   checked before opening a window.

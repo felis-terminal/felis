@@ -665,6 +665,10 @@ pub(crate) struct SessionObject {
     pub(crate) title: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) cwd: Option<String>,
+    /// The directory the child was started in; unlike `cwd`, it never
+    /// follows the program.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) spawn_cwd: Option<String>,
     /// Always present, empty for an untagged session, so a `jq` picker
     /// can rely on `.tags` being iterable.
     pub(crate) tags: Vec<String>,
@@ -723,6 +727,7 @@ impl SessionObject {
             idle_seconds: s.idle_seconds,
             title: s.title.clone(),
             cwd: s.cwd.clone(),
+            spawn_cwd: s.spawn_cwd.clone(),
             tags: s.tags.clone(),
             last_notification: s
                 .last_notification

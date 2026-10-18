@@ -760,6 +760,14 @@ message SessionInfo {
     minor: 1
     skippable: true
   }];
+  // The absolute directory the daemon started the child in, which may be
+  // the daemon's own cwd when the request named none or its directory
+  // was unusable for a bare shell. Absent when the daemon does not know
+  // it; a pre-minor-2 reader skips the field.
+  optional string spawn_cwd = 14 [(felis.v1.field_since) = {
+    minor: 2
+    skippable: true
+  }];
 }
 
 // One OSC 7501 program-status record: the keys of the last report that

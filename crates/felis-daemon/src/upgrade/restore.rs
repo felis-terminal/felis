@@ -133,6 +133,7 @@ async fn register(
     session.saved_screens = saved_screens;
     session.graphics_reassembler = reassembler;
     session.program_status = ProgramStatusStore::from_reports(program_status);
+    session.spawn_cwd = dump.spawn_cwd.clone();
     session.shm_segments =
         ShmDeferral::from_names(shm_segments).ok_or("too many deferred shared memory names")?;
     let now = Instant::now();
@@ -347,6 +348,40 @@ mod tests {
             rustix::process::kill_process_group(Pid::from_raw(pid).unwrap(), Signal::KILL);
         assert_eq!(meta.title, None);
         assert_eq!(meta.cwd, None);
+    }
+
+    /// The spawn directory survives the upgrade, and a predecessor whose
+    /// dump has no such key leaves the restored session without one.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_restored_session_lists_the_spawn_directory_its_dump_carried() {
+        for spawn_cwd in [Some("/home/me/work"), None] {
+            let (master, pid, _first) = carried_child("sleep 30");
+            let dump = SessionDump {
+                id: crate::upgrade::dump::format_session_id(7),
+                sequence: 1,
+                child: crate::upgrade::dump::ChildDump {
+                    pid,
+                    exit_status: None,
+                },
+                rows: 24,
+                cols: 80,
+                spawn_cwd: spawn_cwd.map(str::to_owned),
+                ..SessionDump::default()
+            };
+            let mut written = serde_json::to_value(&dump).unwrap();
+            if spawn_cwd.is_none() {
+                written.as_object_mut().unwrap().remove("spawn_cwd");
+            }
+            let dump: SessionDump = serde_json::from_value(written).unwrap();
+            let pool = Arc::new(Mutex::new(SessionPool::new()));
+            register(&pool, IdlePolicy::default(), &dump, master)
+                .await
+                .unwrap();
+            let meta = pool.lock().await.all_handles()[0].1.meta_snapshot();
+            let _killed =
+                rustix::process::kill_process_group(Pid::from_raw(pid).unwrap(), Signal::KILL);
+            assert_eq!(meta.spawn_cwd.as_deref(), spawn_cwd);
+        }
     }
 
     /// A reply the predecessor parsed but never drained reaches the

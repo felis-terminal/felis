@@ -166,6 +166,7 @@ pub struct Session {
     pub shm_segments: ShmDeferral,
     /// Parks the PTY threads for an in-place upgrade.
     pub quiescer: felis_pty::Quiescer,
+    pub spawn_cwd: Option<String>,
 }
 
 impl Session {
@@ -198,6 +199,7 @@ impl Session {
             resizer: Arc::new(resizer),
             shm_segments: ShmDeferral::default(),
             quiescer,
+            spawn_cwd: None,
         }
     }
 
@@ -270,6 +272,7 @@ pub struct SessionMeta {
     /// The task's [`crate::program_status::ProgramStatusStore`] as of its
     /// last meta publish.
     pub program_status: Vec<felis_protocol::messages::ProgramStatusRecord>,
+    pub spawn_cwd: Option<String>,
 }
 
 /// A session's most recent notification plus the `Instant` it arrived,
@@ -1027,6 +1030,7 @@ mod tests {
                 exited: false,
                 attachments: Vec::new(),
                 program_status: Vec::new(),
+                spawn_cwd: None,
                 sequence: NonZeroU64::MIN,
             })),
         }

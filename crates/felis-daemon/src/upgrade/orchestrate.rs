@@ -394,6 +394,7 @@ fn session_dump(
         pixel_h: meta.pixel_h,
         title: meta.title,
         cwd: meta.cwd,
+        spawn_cwd: meta.spawn_cwd,
         tags: meta.tags.into_iter().collect(),
         exited: meta.exited || exit_status.is_some(),
         state: None,

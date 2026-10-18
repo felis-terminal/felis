@@ -1841,6 +1841,7 @@ fn reversing_peer(socket: std::path::PathBuf) -> tokio::task::JoinHandle<Vec<u64
                 },
                 title: None,
                 cwd: None,
+                spawn_cwd: None,
                 idle_seconds: None,
                 tags: vec![tag.clone()],
                 last_notification: None,
@@ -2117,9 +2118,9 @@ fn normalize(value: &Value) -> Value {
                 .iter()
                 .map(|(key, value)| {
                     let masked = match key.as_str() {
-                        "message" | "text" | "ansi" | "cwd" | "title" | "session_title"
-                        | "foreground" | "attached_at" | "short_id" | "notification_id"
-                        | "idle_seconds" => {
+                        "message" | "text" | "ansi" | "cwd" | "spawn_cwd" | "title"
+                        | "session_title" | "foreground" | "attached_at" | "short_id"
+                        | "notification_id" | "idle_seconds" => {
                             json!(format!("<{key}>"))
                         }
                         _ => normalize(value),
@@ -2385,6 +2386,7 @@ async fn scripted_attach_daemon_signaling(
             },
             title: None,
             cwd: None,
+            spawn_cwd: None,
             idle_seconds: None,
             tags: Vec::new(),
             last_notification: None,

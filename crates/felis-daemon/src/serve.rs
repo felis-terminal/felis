@@ -1080,7 +1080,7 @@ async fn create_session(
     let sid = SessionId::new();
     // A spawn failure reaches the wire so `felis -- /nonexistent` reports
     // the exec error, not a bare EOF.
-    let session = spawn_with_args(
+    let spawned = spawn_with_args(
         &args,
         factory,
         sid.0,
@@ -1100,7 +1100,8 @@ async fn create_session(
     // applies it, it does not default anything.
     let life = session_task::spawn_session(
         pool,
-        session,
+        spawned.pty,
+        spawned.cwd,
         caps.idle,
         sid,
         dims,
@@ -2467,6 +2468,13 @@ async fn end_observer<W: tokio::io::AsyncWrite + Unpin>(
     Ok(())
 }
 
+/// A child started from `SpawnArgs`, with the directory it started in.
+pub(crate) struct SpawnedWithArgs {
+    pub(crate) pty: SpawnedPty,
+    /// `SessionInfo::spawn_cwd`.
+    pub(crate) cwd: Option<String>,
+}
+
 /// Spawn a PTY session from `SpawnArgs`; an empty `args.command` takes
 /// its program from the factory, every other field applies either way.
 /// Every session carries the inherit + denylist + overrides env posture
@@ -2480,7 +2488,7 @@ pub(crate) fn spawn_with_args(
     endpoint: Option<&OsStr>,
     terminfo_dir: Option<&Path>,
     size: felis_pty::Size,
-) -> Result<SpawnedPty, SessionError> {
+) -> Result<SpawnedWithArgs, SessionError> {
     let default_program = args.command.is_empty();
     if default_program && !args.args.is_empty() {
         // Args with no program would hand the default shell an argv meant
@@ -2507,11 +2515,18 @@ pub(crate) fn spawn_with_args(
     {
         return Err(SessionError::Spawn(format!("SpawnArgs: {err}")));
     }
-    let Some(dir) = spawn_cwd(args) else {
-        return SpawnedPty::spawn_sized(
+    let in_daemon_cwd = || {
+        SpawnedPty::spawn_sized(
             command_from_args(args, factory, session_id, None, &env, terminfo_dir),
             size,
-        );
+        )
+        .map(|pty| SpawnedWithArgs {
+            pty,
+            cwd: daemon_cwd(),
+        })
+    };
+    let Some(dir) = spawn_cwd(args) else {
+        return in_daemon_cwd();
     };
     if !dir.is_absolute() {
         // A relative cwd would resolve against the daemon's directory, which
@@ -2525,6 +2540,10 @@ pub(crate) fn spawn_with_args(
         command_from_args(args, factory, session_id, Some(dir), &env, terminfo_dir),
         size,
     ) {
+        Ok(pty) => Ok(SpawnedWithArgs {
+            pty,
+            cwd: Some(args.cwd.clone()),
+        }),
         Err(err) if default_program => {
             // Fall back to daemon cwd for bare shell launches if requested cwd
             // does not exist; named commands still fail on bad directories
@@ -2534,13 +2553,21 @@ pub(crate) fn spawn_with_args(
                 %err,
                 "requested cwd unusable; starting the default shell in the daemon's cwd"
             );
-            SpawnedPty::spawn_sized(
-                command_from_args(args, factory, session_id, None, &env, terminfo_dir),
-                size,
-            )
+            in_daemon_cwd()
         }
-        result => result,
+        Err(err) => Err(err),
     }
+}
+
+/// The directory a child spawned without a cwd inherits; the daemon
+/// never changes its own, so reading it now names the child's. `None`
+/// when it is unreadable or not UTF-8, which the wire cannot carry.
+fn daemon_cwd() -> Option<String> {
+    std::env::current_dir()
+        .ok()?
+        .into_os_string()
+        .into_string()
+        .ok()
 }
 
 /// `None` when the field is empty: the wire contract's "inherit the
@@ -2668,6 +2695,7 @@ fn session_info_from_meta(
         attachments: meta.attachments,
         sequence: meta.sequence,
         program_status: meta.program_status,
+        spawn_cwd: meta.spawn_cwd,
     }
 }
 

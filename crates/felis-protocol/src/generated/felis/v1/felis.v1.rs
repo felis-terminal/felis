@@ -532,6 +532,12 @@ pub struct SessionInfo {
     /// when no program reported one; a minor-0 reader skips the field.
     #[prost(message, repeated, tag="13")]
     pub program_status: ::prost::alloc::vec::Vec<ProgramStatusRecord>,
+    /// The absolute directory the daemon started the child in, which may be
+    /// the daemon's own cwd when the request named none or its directory
+    /// was unusable for a bare shell. Absent when the daemon does not know
+    /// it; a pre-minor-2 reader skips the field.
+    #[prost(string, optional, tag="14")]
+    pub spawn_cwd: ::core::option::Option<::prost::alloc::string::String>,
 }
 /// One OSC 7501 program-status record: the keys of the last report that
 /// used its id, as the program sent them. `state` and `kind` are open

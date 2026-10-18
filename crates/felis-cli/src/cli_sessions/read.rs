@@ -100,6 +100,9 @@ where
         if let Some(cwd) = session.cwd.as_deref().filter(|c| !c.trim().is_empty()) {
             stdoutln!("cwd:      {}", cwd.trim());
         }
+        if let Some(dir) = session.spawn_cwd.as_deref() {
+            stdoutln!("spawned:  {dir}");
+        }
         if let Some(fg) = session
             .foreground
             .as_deref()
