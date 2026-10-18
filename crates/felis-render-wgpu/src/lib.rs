@@ -23,6 +23,7 @@ use felis_protocol::{
 };
 use felis_render_core::{
     ImageSource, SelectionRange,
+    glyphs::{GLYPH_ATLAS_SIDE, ShapeFrame},
     overlay::{ConfirmOverlay, LinkPreviewOverlay, PreeditOverlay, SearchOverlay},
     palette::{ResolvedTheme, Theme, effective_theme},
 };
@@ -44,7 +45,7 @@ use wgpu::{
 
 mod buffer_ring;
 mod capture;
-pub mod glyphs;
+pub mod glyph_cache;
 mod gpu_resources;
 pub mod image_atlas;
 pub mod instances;
@@ -63,7 +64,7 @@ pub use crate::post::{
 pub use crate::warmup::Warmup;
 use crate::{
     buffer_ring::{GrowingInstanceBuffer, UniformRing, UploadMode},
-    glyphs::GlyphCache,
+    glyph_cache::GlyphCache,
     image_atlas::{ImageAtlas, ImageSlot},
     instances::{
         BAR_ELLIPSIS, BgInstance, CURSOR_MARKER_PX, DecorationInstance, FgInstance, ImgInstance,
@@ -190,12 +191,6 @@ impl RendererConfig {
 /// upload, so an image-free session never pays for it.
 pub const MAX_ATLAS_SIDE: u32 = 8192;
 
-/// Glyphs are cell-sized, so the 8192 image ceiling would be gross
-/// over-allocation: a 2048² `R8` sheet is 4 MiB against 64 MiB and holds
-/// thousands of slots; the packer's evict-and-rebuild path absorbs
-/// overflow. Revisit if CJK-heavy sessions show glyph atlas churn.
-pub const GLYPH_ATLAS_SIDE: u32 = 2048;
-
 /// Floor for a downlevel adapter: below this no useful shelf fits, and
 /// the packer's side must stay non-zero whatever the adapter claims.
 const MIN_ATLAS_SIDE: NonZeroU32 = match NonZeroU32::new(256) {
@@ -314,7 +309,7 @@ pub struct Renderer {
     shaper: felis_shaping::Shaper,
     font_features: Vec<String>,
     font_files: Vec<PathBuf>,
-    shape_frame: glyphs::ShapeFrame,
+    shape_frame: ShapeFrame,
     cells: RowCache,
     image_scratch_under_bg: Vec<ImgInstance>,
     image_scratch_under_text: Vec<ImgInstance>,
@@ -814,7 +809,7 @@ impl Renderer {
             shaper: felis_shaping::Shaper::new(),
             font_features: cfg.font_features.clone(),
             font_files: cfg.font_files.clone(),
-            shape_frame: glyphs::ShapeFrame::empty(),
+            shape_frame: ShapeFrame::empty(),
             cells,
             image_scratch_under_bg: Vec::new(),
             image_scratch_under_text: Vec::new(),

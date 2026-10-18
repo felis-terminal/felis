@@ -1867,7 +1867,7 @@ impl ShapeCache {
     }
 
     /// Not cached here: glyph-id bitmaps are cached at the atlas layer in
-    /// `felis-render-wgpu`, so a map entry would double-store them.
+    /// `felis-render-core`, so a map entry would double-store them.
     /// `glyph_id == 0` returns a blank bitmap, as the char path does for
     /// a charmap miss.
     #[must_use]
@@ -4245,7 +4245,7 @@ mod tests {
     /// A bare `"ss03"` must reach GSUB: Monaspace keeps its arrows in
     /// `ss03`, off by default, so a glyph-id change proves the feature
     /// arrived (a `calt` check passes vacuously). Also pins the two-glyph
-    /// blank-lead + body form `apply_shaped_run` in felis-render-wgpu
+    /// blank-lead + body form `apply_shaped_run` in felis-render-core
     /// depends on.
     #[cfg(not(windows))]
     #[test]

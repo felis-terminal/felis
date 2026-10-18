@@ -10,13 +10,10 @@ use criterion::{Criterion, criterion_group, criterion_main};
 use felis_grid::Grid;
 use felis_render_core::{
     SelectionRange,
+    glyphs::{GLYPH_ATLAS_SIDE, GlyphIndex, ShapeFrame},
     palette::{ResolvedTheme, Theme},
 };
-use felis_render_wgpu::{
-    GLYPH_ATLAS_SIDE,
-    glyphs::{GlyphIndex, ShapeFrame},
-    row_cache::{CellFrame, RowCache},
-};
+use felis_render_wgpu::row_cache::{CellFrame, RowCache};
 use felis_shaping::{Font, FontStack};
 use felis_vt::Parser;
 

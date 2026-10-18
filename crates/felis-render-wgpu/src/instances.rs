@@ -10,10 +10,14 @@ use felis_grid::{
     AttrFlags, Cell, Color, CursorStyle, Grapheme, HAlign, ScreenBuffer, Sizing, UnderlineStyle,
     VAlign, bidi, char_cell_width,
 };
-use felis_shaping::{CellMetrics, FontStyle, SizingKey};
+use felis_shaping::{CellMetrics, SizingKey};
 
 use felis_render_core::{
     SelectionRange,
+    glyphs::{
+        AtlasView, ClusterGlyph, GlyphSlot, ShapeFrame, ShapedCell, cluster_base_char,
+        cluster_block_cols, font_style_of, sizing_key_from,
+    },
     overlay::{ConfirmOverlay, LinkPreviewOverlay, PreeditOverlay, SearchOverlay},
     palette::{
         BIDI_MARKER_BG, BIDI_MARKER_FG, CONFIRM_BAR_BG, LINK_UNDERLINE, PREEDIT_BG, ResolvedTheme,
@@ -141,84 +145,6 @@ pub const DECO_DASHED: f32 = 2.0;
 /// Curly / wavy underline (`SGR 4:3`).
 pub const DECO_CURLY: f32 = 3.0;
 
-#[derive(Copy, Clone, Debug, PartialEq)]
-pub struct GlyphSlot {
-    /// Atlas uv min: top-left in `[0, 1]`.
-    pub uv_min: [f32; 2],
-    /// Atlas uv max: bottom-right in `[0, 1]`.
-    pub uv_max: [f32; 2],
-    /// Pixel size of the glyph bitmap (not the cell).
-    pub size_px: [u32; 2],
-    /// `(left, top)` from the cell's `(0, baseline)` origin, per swash.
-    pub offset_px: [i32; 2],
-    /// True when the bitmap lives in the RGBA color atlas.
-    pub is_color: bool,
-}
-
-pub trait AtlasView {
-    /// `None` on a miss (cache not populated, atlas full, whitespace).
-    /// `sizing` keeps OSC 66 sized variants on separate slots.
-    fn slot(&self, glyph: char, cell_height_px: u32, sizing: SizingKey) -> Option<GlyphSlot>;
-
-    /// Deliberately no default impl: a `None` default would be silently
-    /// inherited by `GlyphCache`, and every shaped lookup would miss, so
-    /// any non-empty `font.features` would render primary-font runs
-    /// blank.
-    fn glyph_id_slot(
-        &self,
-        glyph_id: felis_shaping::GlyphId,
-        cell_height_px: u32,
-        sizing: SizingKey,
-    ) -> Option<GlyphSlot>;
-
-    /// The slot of a cluster glyph shrunk to `px` to fit its cells;
-    /// see [`crate::glyphs::ShapedCell::Cluster`].
-    fn fitted_glyph_id_slot(
-        &self,
-        glyph_id: felis_shaping::GlyphId,
-        px: u16,
-        cell_height_px: u32,
-        sizing: SizingKey,
-    ) -> Option<GlyphSlot>;
-
-    /// The shaped glyphs of a multi-scalar overlay cluster, `None` until
-    /// the overlay's text was populated.
-    fn overlay_cluster(&self, text: &str) -> Option<&[crate::glyphs::ClusterGlyph]>;
-}
-
-/// Mirrors the enum-to-u8 mapping `felis-vt`'s parser enforces.
-#[must_use]
-pub const fn sizing_key_from(sizing: Sizing) -> SizingKey {
-    let valign = match sizing.valign() {
-        VAlign::Top => 0,
-        VAlign::Bottom => 1,
-        VAlign::Center => 2,
-    };
-    let halign = match sizing.halign() {
-        HAlign::Left => 0,
-        HAlign::Right => 1,
-        HAlign::Center => 2,
-    };
-    SizingKey::new(
-        sizing.scale(),
-        sizing.cell_width(),
-        sizing.frac_num(),
-        sizing.frac_den(),
-        valign,
-        halign,
-    )
-}
-
-/// Only `BOLD` / `ITALIC` participate; `FAINT` does not change glyph
-/// selection.
-#[must_use]
-pub const fn font_style_of(flags: AttrFlags) -> FontStyle {
-    FontStyle {
-        bold: flags.contains(AttrFlags::BOLD),
-        italic: flags.contains(AttrFlags::ITALIC),
-    }
-}
-
 /// Cell count is governed by the integer `s` (and `w`) alone; `n/d`
 /// scales the bitmap, not the cell count (Kitty: "the fractional scale
 /// does not affect the number of cells the text occupies"). Matches
@@ -285,7 +211,7 @@ pub struct CellPainter<'a, A: AtlasView> {
     screen: &'a ScreenBuffer,
     theme: &'a ResolvedTheme,
     atlas: &'a A,
-    shape_frame: &'a crate::glyphs::ShapeFrame,
+    shape_frame: &'a ShapeFrame,
     metrics: CellMetrics,
     cw: f32,
     ch: f32,
@@ -312,7 +238,7 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
         metrics: CellMetrics,
         theme: &'a ResolvedTheme,
         atlas: &'a A,
-        shape_frame: &'a crate::glyphs::ShapeFrame,
+        shape_frame: &'a ShapeFrame,
     ) -> Self {
         Self {
             screen,
@@ -452,10 +378,10 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
             // Shape-frame lookup precedes char-path decoding so a
             // `Trailing` cell skips its fg entirely.
             let shaped = self.shape_frame.cell_at(r, c);
-            if matches!(shaped, crate::glyphs::ShapedCell::Trailing) {
+            if matches!(shaped, ShapedCell::Trailing) {
                 continue;
             }
-            if let crate::glyphs::ShapedCell::Cluster { start, len, fit_px } = shaped {
+            if let ShapedCell::Cluster { start, len, fit_px } = shaped {
                 self.push_cluster_cell(out, &at, fg_color, (start, len), fit_px);
                 continue;
             }
@@ -709,10 +635,10 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
         out: &mut InstanceBuffers,
         at: &CellRef<'_>,
         fg_color: [f32; 4],
-        shaped: crate::glyphs::ShapedCell,
+        shaped: ShapedCell,
     ) {
         let shape_primary = match shaped {
-            crate::glyphs::ShapedCell::Primary {
+            ShapedCell::Primary {
                 glyph_id,
                 span_cols,
             } => Some((glyph_id, span_cols)),
@@ -733,7 +659,7 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
             // primed the base char at the cell's sizing) or the handle no
             // longer resolves (docs/explanation/data-model/grid-and-cells.md
             // "Cluster interning").
-            Grapheme::Cluster(id) => match crate::glyphs::cluster_base_char(self.screen, *id) {
+            Grapheme::Cluster(id) => match cluster_base_char(self.screen, *id) {
                 Some(c) if c == felis_protocol::kitty_graphics::placeholder::PLACEHOLDER => {
                     return;
                 }
@@ -1218,7 +1144,7 @@ fn push_overlay_glyphs<A: AtlasView>(
 /// fitted slots.
 #[derive(Clone, Copy)]
 struct ClusterPen<'g> {
-    glyphs: &'g [crate::glyphs::ClusterGlyph],
+    glyphs: &'g [ClusterGlyph],
     base_sizing: SizingKey,
     fit_px: u16,
     glyph_scale: f32,
@@ -1294,18 +1220,6 @@ fn push_cluster_glyphs<A: AtlasView>(
             color: pen.color,
         }),
     );
-}
-
-/// The columns a cluster's block spans before the OSC 66 scale: `w`,
-/// else the grid's span, so a VS16 widen the grid refused gets one.
-pub(crate) fn cluster_block_cols(screen: &ScreenBuffer, row: u16, col: u16) -> u16 {
-    match screen.cell_sizing(row, col).map_or(0, |s| s.cell_width()) {
-        0 => {
-            let (first, last) = screen.char_span(row, col);
-            last - first + 1
-        }
-        w => u16::from(w),
-    }
 }
 
 /// Hard-coded rather than `theme.fg` so the overlay stays high-contrast
@@ -1680,9 +1594,15 @@ mod tests {
     #![allow(clippy::float_cmp)]
 
     use std::collections::HashMap;
+    #[cfg(not(windows))]
+    use std::num::NonZeroU32;
 
     use felis_grid::{Color, Grid};
+    #[cfg(not(windows))]
+    use felis_render_core::glyphs::{GlyphIndex, GridWalker};
     use felis_render_core::{overlay::SearchHitSpan, palette::Theme};
+    #[cfg(not(windows))]
+    use felis_shaping::{FontStack, FontStyle, Shaper};
     use felis_vt::Parser;
 
     use super::*;
@@ -1692,7 +1612,7 @@ mod tests {
         map: HashMap<char, GlyphSlot>,
         gid_map: HashMap<felis_shaping::GlyphId, GlyphSlot>,
         fitted_map: HashMap<(felis_shaping::GlyphId, u16), GlyphSlot>,
-        clusters: HashMap<String, Vec<crate::glyphs::ClusterGlyph>>,
+        clusters: HashMap<String, Vec<ClusterGlyph>>,
     }
 
     impl MockAtlas {
@@ -1734,7 +1654,7 @@ mod tests {
             self.fitted_map.get(&(glyph_id, px)).copied()
         }
 
-        fn overlay_cluster(&self, text: &str) -> Option<&[crate::glyphs::ClusterGlyph]> {
+        fn overlay_cluster(&self, text: &str) -> Option<&[ClusterGlyph]> {
             self.clusters.get(text).map(Vec::as_slice)
         }
     }
@@ -1786,7 +1706,7 @@ mod tests {
             metrics,
             &ResolvedTheme::new(theme),
             atlas,
-            &crate::glyphs::ShapeFrame::empty(),
+            &ShapeFrame::empty(),
         )
         .with_cursor_visible(true)
         .with_viewport(0, u32::from(screen.rows()))
@@ -1892,7 +1812,7 @@ mod tests {
     fn build_shaped(
         screen: &ScreenBuffer,
         atlas: &MockAtlas,
-        frame: &crate::glyphs::ShapeFrame,
+        frame: &ShapeFrame,
     ) -> InstanceBuffers {
         let mut buffers = InstanceBuffers::default();
         CellPainter::new(
@@ -1913,7 +1833,6 @@ mod tests {
     /// `<->`).
     #[test]
     fn shaped_quad_slices_per_cell_when_colors_differ() {
-        use crate::glyphs::{ShapeFrame, ShapedCell};
         let g = drive(1, 3, b"<-\x1b[31m>");
         let mut atlas = MockAtlas::full(slot());
         atlas.gid_map.insert(42, ligature_slot(0));
@@ -1948,7 +1867,6 @@ mod tests {
     /// Uniform colors take the unsliced fast path.
     #[test]
     fn shaped_quad_stays_unsliced_when_colors_match() {
-        use crate::glyphs::{ShapeFrame, ShapedCell};
         let g = drive(1, 3, b"<->");
         let mut atlas = MockAtlas::full(slot());
         atlas.gid_map.insert(42, ligature_slot(0));
@@ -1976,7 +1894,6 @@ mod tests {
     /// negative left bearing; the slices carry those cells' own colors.
     #[test]
     fn shaped_quad_with_negative_bearing_slices_back_across_cells() {
-        use crate::glyphs::{ShapeFrame, ShapedCell};
         let g = drive(1, 3, b"\x1b[31m<\x1b[39m->");
         let mut atlas = MockAtlas::full(slot());
         atlas.gid_map.insert(43, ligature_slot(-16));
@@ -2019,7 +1936,6 @@ mod tests {
     /// placement cannot drift with a real font's GPOS.
     #[test]
     fn cluster_cell_emits_one_instance_per_glyph_stacked_by_gpos() {
-        use crate::glyphs::{ClusterGlyph, ShapeFrame, ShapedCell};
         let g = drive(1, 4, b"x");
         let mut atlas = MockAtlas::full(slot());
         atlas.gid_map.insert(100, slot());
@@ -2071,7 +1987,6 @@ mod tests {
     /// GPOS by the glyph scale and lifts the baseline to `ascent × scale`.
     #[test]
     fn sized_cluster_scales_pen_and_gpos_by_glyph_scale() {
-        use crate::glyphs::{ClusterGlyph, ShapeFrame, ShapedCell};
         let g = drive(2, 4, b"\x1b]66;s=2;X\x07");
         let mut atlas = MockAtlas::full(slot());
         atlas.gid_map.insert(100, slot());
@@ -2118,7 +2033,6 @@ mod tests {
     /// base glyph's.
     #[test]
     fn sized_cluster_alignment_uses_the_union_ink_box() {
-        use crate::glyphs::{ClusterGlyph, ShapeFrame, ShapedCell};
         let g = drive(1, 4, b"\x1b]66;w=2:h=1:v=1;X\x07");
         let mut atlas = MockAtlas::full(slot());
         atlas.gid_map.insert(100, slot());
@@ -2210,7 +2124,6 @@ mod tests {
     /// takes, where its width-1 base would centre it in one.
     #[test]
     fn a_centred_cluster_centres_in_its_grid_span() {
-        use crate::glyphs::{ClusterGlyph, ShapeFrame, ShapedCell};
         let g = drive(1, 4, "\x1b]66;h=2;\u{2764}\u{FE0F}\x07".as_bytes());
         assert_eq!(g.screen().char_span(0, 0), (0, 1), "the grid widened it");
         let mut atlas = MockAtlas::full(slot());
@@ -2239,7 +2152,6 @@ mod tests {
     /// as a fitted char's bitmap is centred.
     #[test]
     fn a_fitted_cluster_draws_its_fitted_slots_centred() {
-        use crate::glyphs::{ClusterGlyph, ShapeFrame, ShapedCell};
         let g = drive(1, 4, b"x");
         let mut atlas = MockAtlas::full(slot());
         atlas.gid_map.insert(100, slot());
@@ -2276,7 +2188,6 @@ mod tests {
     /// `Char` cell.
     #[test]
     fn single_glyph_cluster_matches_char_placement() {
-        use crate::glyphs::{ClusterGlyph, ShapeFrame, ShapedCell};
         let char_grid = drive(1, 4, b"A");
         let atlas = MockAtlas::full(slot());
         let char_buffers =
@@ -2635,7 +2546,7 @@ mod tests {
             metrics(),
             &ResolvedTheme::new(&theme),
             &atlas,
-            &crate::glyphs::ShapeFrame::empty(),
+            &ShapeFrame::empty(),
         )
         .with_cursor_visible(false)
         .with_viewport(0, u32::from(g.rows()))
@@ -2659,7 +2570,7 @@ mod tests {
             metrics(),
             &ResolvedTheme::new(&theme),
             &atlas,
-            &crate::glyphs::ShapeFrame::empty(),
+            &ShapeFrame::empty(),
         )
         .with_cursor_visible(true)
         .with_viewport(0, u32::from(g.rows()))
@@ -2713,7 +2624,7 @@ mod tests {
             metrics(),
             &ResolvedTheme::new(&theme),
             &atlas,
-            &crate::glyphs::ShapeFrame::empty(),
+            &ShapeFrame::empty(),
         )
         .with_cursor_visible(true)
         .with_viewport(0, u32::from(g.rows()))
@@ -2779,7 +2690,7 @@ mod tests {
             metrics(),
             &ResolvedTheme::new(&Theme::default()),
             &atlas,
-            &crate::glyphs::ShapeFrame::empty(),
+            &ShapeFrame::empty(),
         )
         .with_cursor_visible(false)
         .with_viewport(0, u32::from(g.rows()))
@@ -2801,7 +2712,7 @@ mod tests {
             metrics(),
             &ResolvedTheme::new(&Theme::default()),
             &atlas,
-            &crate::glyphs::ShapeFrame::empty(),
+            &ShapeFrame::empty(),
         )
         .with_cursor_visible(false)
         .with_viewport(0, u32::from(g.rows()))
@@ -2821,7 +2732,7 @@ mod tests {
             metrics(),
             &ResolvedTheme::new(&theme),
             &atlas,
-            &crate::glyphs::ShapeFrame::empty(),
+            &ShapeFrame::empty(),
         )
         .with_cursor_visible(true)
         .with_selection(Some(SelectionRange {
@@ -2850,7 +2761,7 @@ mod tests {
             metrics(),
             &ResolvedTheme::new(&theme),
             &atlas,
-            &crate::glyphs::ShapeFrame::empty(),
+            &ShapeFrame::empty(),
         )
         .with_cursor_visible(true)
         .with_selection(Some(SelectionRange {
@@ -2881,7 +2792,7 @@ mod tests {
             metrics(),
             &ResolvedTheme::new(&theme),
             &atlas,
-            &crate::glyphs::ShapeFrame::empty(),
+            &ShapeFrame::empty(),
         )
         .with_cursor_visible(true)
         .with_viewport(0, u32::from(g.rows()))
@@ -2907,7 +2818,7 @@ mod tests {
             metrics(),
             &ResolvedTheme::new(&theme),
             &atlas,
-            &crate::glyphs::ShapeFrame::empty(),
+            &ShapeFrame::empty(),
         )
         .with_cursor_visible(true)
         .with_selection(Some(SelectionRange {
@@ -3231,7 +3142,7 @@ mod tests {
             metrics(),
             &ResolvedTheme::new(&theme),
             &atlas,
-            &crate::glyphs::ShapeFrame::empty(),
+            &ShapeFrame::empty(),
         )
         .with_cursor_visible(true)
         .with_selection(Some(SelectionRange {
@@ -3672,7 +3583,7 @@ mod tests {
             metrics(),
             &ResolvedTheme::new(&theme),
             &atlas,
-            &crate::glyphs::ShapeFrame::empty(),
+            &ShapeFrame::empty(),
         )
         .with_cursor_visible(true)
         .with_viewport(0, u32::from(g.rows()))
@@ -3705,7 +3616,7 @@ mod tests {
             metrics(),
             &ResolvedTheme::new(&theme),
             &atlas,
-            &crate::glyphs::ShapeFrame::empty(),
+            &ShapeFrame::empty(),
         )
         .with_cursor_visible(true)
         .with_viewport(1, 3)
@@ -3739,7 +3650,7 @@ mod tests {
             metrics(),
             &ResolvedTheme::new(&theme),
             &atlas,
-            &crate::glyphs::ShapeFrame::empty(),
+            &ShapeFrame::empty(),
         )
         .with_cursor_visible(true)
         .with_viewport(0, 3)
@@ -3749,7 +3660,7 @@ mod tests {
             metrics(),
             &ResolvedTheme::new(&theme),
             &atlas,
-            &crate::glyphs::ShapeFrame::empty(),
+            &ShapeFrame::empty(),
         )
         .with_cursor_visible(true)
         .with_viewport(1, 3)
@@ -4053,7 +3964,7 @@ mod tests {
             metrics(),
             &ResolvedTheme::new(&theme),
             &atlas,
-            &crate::glyphs::ShapeFrame::empty(),
+            &ShapeFrame::empty(),
         )
         .with_cursor_visible(true)
         .with_selection(Some(range))
@@ -4179,7 +4090,7 @@ mod tests {
             metrics(),
             &ResolvedTheme::new(&theme),
             &atlas,
-            &crate::glyphs::ShapeFrame::empty(),
+            &ShapeFrame::empty(),
         )
         .with_cursor_visible(true)
         .with_viewport(0, u32::from(g.rows()))
@@ -4232,7 +4143,7 @@ mod tests {
         for (id, flag) in [(1, "🇯🇵"), (2, "🇯🇲")] {
             atlas.clusters.insert(
                 flag.to_owned(),
-                vec![crate::glyphs::ClusterGlyph {
+                vec![ClusterGlyph {
                     glyph_id: id,
                     font_id: 0,
                     advance_px: 16.0,
@@ -4289,5 +4200,178 @@ mod tests {
         for q in &out.fg {
             assert!(q.origin_px[0] + q.size_px[0] <= edge, "{q:?}");
         }
+    }
+
+    /// A one-row grid fed `bytes`, walked and painted against the pinned
+    /// set.
+    #[cfg(not(windows))]
+    struct Painted {
+        index: GlyphIndex,
+        frame: ShapeFrame,
+        fg: Vec<FgInstance>,
+    }
+
+    #[cfg(not(windows))]
+    fn paint_pinned(bytes: &[u8], cols: u16) -> Painted {
+        let stack = FontStack::pinned_test_stack();
+        let mut grid = Grid::new(1, cols);
+        Parser::new().advance(&mut grid, bytes);
+        let mut index = GlyphIndex::new(stack, 18.0, NonZeroU32::new(1024).unwrap());
+        let mut frame = ShapeFrame::empty();
+        GridWalker::default().walk(
+            &mut index,
+            grid.screen(),
+            &mut Shaper::new(),
+            &[],
+            &mut frame,
+        );
+        let theme = Theme::default();
+        let mut out = InstanceBuffers::default();
+        CellPainter::new(
+            grid.screen(),
+            index.cell_metrics(),
+            &ResolvedTheme::new(&theme),
+            &index,
+            &frame,
+        )
+        .with_viewport(0, 1)
+        .extend_instances(&mut out);
+        Painted {
+            index,
+            frame,
+            fg: out.fg,
+        }
+    }
+
+    #[cfg(not(windows))]
+    fn cluster_fit_px_at(p: &Painted, col: u16) -> u16 {
+        match p.frame.cell_at(0, col) {
+            ShapedCell::Cluster { fit_px, .. } => fit_px,
+            other => panic!("col {col} is not a cluster: {other:?}"),
+        }
+    }
+
+    /// The fg quads' union as `[x0, y0, x1, y1]`.
+    #[cfg(not(windows))]
+    fn ink(fg: &[FgInstance]) -> [f32; 4] {
+        fg.iter()
+            .map(|q| {
+                let [x, y] = q.origin_px;
+                [x, y, x + q.size_px[0], y + q.size_px[1]]
+            })
+            .reduce(|[a, b, c, d], [x0, y0, x1, y1]| [a.min(x0), b.min(y0), c.max(x1), d.max(y1)])
+            .expect("the cluster painted")
+    }
+
+    /// Each repro is the only ink on its row, its cluster at `col` with
+    /// `cells` cells: a ZWJ pair the face has no glyph for, a modifier on a
+    /// base that takes none, and a VS16 widen refused at the last column.
+    #[cfg(not(windows))]
+    #[test]
+    fn a_cluster_wider_than_its_cells_fills_and_centres_in_them() {
+        let repros: [(&str, &[u8], u16, u16); 3] = [
+            ("non-RGI ZWJ", "\u{1F408}\u{200D}\u{1F408}".as_bytes(), 0, 2),
+            ("modifier", "\u{1F600}\u{1F3FB}".as_bytes(), 0, 2),
+            ("refused widen", "\x1b[4G\u{2764}\u{FE0F}".as_bytes(), 3, 1),
+        ];
+        for (name, bytes, col, cells) in repros {
+            let p = paint_pinned(bytes, 4);
+            let fit_px = f32::from(cluster_fit_px_at(&p, col));
+            assert_ne!(fit_px, 0.0, "{name}: fitted");
+            // The size is floored to a whole pixel, which costs up to one
+            // part in `fit_px + 1` of the block.
+            let filled = |ink: f32, block: f32| ink >= block * fit_px / (fit_px + 1.0) - 1.0;
+            let m = p.index.cell_metrics();
+            let (cw, ch) = (m.width as f32, m.height as f32);
+            let (bx0, bx1) = (f32::from(col) * cw, f32::from(col + cells) * cw);
+            let [x0, y0, x1, y1] = ink(&p.fg);
+            assert!(
+                x0 >= bx0 - 1.0 && x1 <= bx1 + 1.0 && y0 >= -1.0 && y1 <= ch + 1.0,
+                "{name}: ink {x0}..{x1} x {y0}..{y1} inside {bx0}..{bx1} x 0..{ch}"
+            );
+            assert!(
+                ((x0 - bx0) - (bx1 - x1)).abs() <= 1.0 && (y0 - (ch - y1)).abs() <= 1.0,
+                "{name}: ink {x0}..{x1} x {y0}..{y1} centred in {bx0}..{bx1} x 0..{ch}"
+            );
+            assert!(
+                filled(x1 - x0, bx1 - bx0) || filled(y1 - y0, ch),
+                "{name}: ink {x0}..{x1} x {y0}..{y1} fills an axis"
+            );
+        }
+    }
+
+    /// The fit is the bare char's: a cluster of one glyph shrinks to the
+    /// size `fitted_bitmap` gives that glyph alone.
+    #[cfg(not(windows))]
+    #[test]
+    fn a_one_glyph_cluster_fits_as_its_bare_char_does() {
+        let cluster = paint_pinned("\x1b[4G\u{263A}\u{FE0F}".as_bytes(), 4);
+        let bare = paint_pinned("\x1b[4G\u{263A}".as_bytes(), 4);
+        let [a0, b0, a1, b1] = ink(&cluster.fg);
+        let [c0, d0, c1, d1] = ink(&bare.fg);
+        assert!(
+            ((a1 - a0) - (c1 - c0)).abs() <= 1.0 && ((b1 - b0) - (d1 - d0)).abs() <= 1.0,
+            "cluster {}x{} vs bare {}x{}",
+            a1 - a0,
+            b1 - b0,
+            c1 - c0,
+            d1 - d0,
+        );
+    }
+
+    /// Under an OSC 66 fractional scale a fitted cluster's pen shrinks
+    /// with its glyphs: the second cat sits one advance at the fitted
+    /// size after the first, not one advance at the native size.
+    #[cfg(not(windows))]
+    #[test]
+    fn a_fitted_cluster_advances_its_pen_at_the_fitted_size() {
+        let cats = "\u{1F408}\u{200D}\u{1F408}";
+        let stack = FontStack::pinned_test_stack();
+        let mut grid = Grid::new(2, 8);
+        Parser::new().advance(
+            &mut grid,
+            format!("\x1b]66;w=1:s=2:n=3:d=4;{cats}\x07").as_bytes(),
+        );
+        let mut index = GlyphIndex::new(stack, 18.0, NonZeroU32::new(1024).unwrap());
+        let mut frame = ShapeFrame::empty();
+        GridWalker::default().walk(
+            &mut index,
+            grid.screen(),
+            &mut Shaper::new(),
+            &[],
+            &mut frame,
+        );
+        let ShapedCell::Cluster { start, len, fit_px } = frame.cell_at(0, 0) else {
+            panic!("not a cluster: {:?}", frame.cell_at(0, 0));
+        };
+        assert_ne!(fit_px, 0, "fitted");
+        let native = Shaper::new().shape_cluster(index.stack(), 18.0, FontStyle::REGULAR, cats);
+        let pool = frame.cluster_slice(start, len);
+        let expected = native.glyphs[0].advance_px * f32::from(fit_px) / (18.0 * 1.5);
+        assert!(
+            (pool[0].advance_px - expected).abs() < 1e-3,
+            "pool advance {} vs {expected}",
+            pool[0].advance_px
+        );
+        let theme = Theme::default();
+        let mut out = InstanceBuffers::default();
+        CellPainter::new(
+            grid.screen(),
+            index.cell_metrics(),
+            &ResolvedTheme::new(&theme),
+            &index,
+            &frame,
+        )
+        .with_viewport(0, 2)
+        .extend_instances(&mut out);
+        let [first, second] = out.fg.as_slice() else {
+            panic!("two cats: {} quads", out.fg.len());
+        };
+        let step = second.origin_px[0] - first.origin_px[0];
+        let fitted_advance = native.glyphs[0].advance_px * f32::from(fit_px) / 18.0;
+        assert!(
+            (step - fitted_advance).abs() < 1e-3,
+            "step {step} vs the fitted advance {fitted_advance}"
+        );
     }
 }

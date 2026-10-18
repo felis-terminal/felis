@@ -9,7 +9,7 @@ use std::{num::NonZeroU32, sync::Arc};
 use std::hint::black_box;
 
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
-use felis_render_wgpu::glyphs::GlyphIndex;
+use felis_render_core::glyphs::GlyphIndex;
 use felis_shaping::{Font, FontStack, FontStyle, Shaper};
 
 /// Same row as `felis-shaping`'s `shape_run` bench so the numbers
