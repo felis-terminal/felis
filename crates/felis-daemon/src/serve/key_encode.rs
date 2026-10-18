@@ -110,9 +110,9 @@ pub(crate) fn encode(
         && let Key::Character(s) = key
     {
         let body: Option<u8> = if mods.control_key() {
-            ctrl_byte(s)
+            legacy_ctrl_byte(s)
         } else {
-            single_ascii_lower(s)
+            single_ascii(s)
         };
         if let Some(byte) = body {
             return Some(vec![0x1b, byte]);
@@ -122,7 +122,7 @@ pub(crate) fn encode(
         && !mods.alt_key()
         && !mods.super_key()
         && let Key::Character(s) = key
-        && let Some(byte) = ctrl_byte(s)
+        && let Some(byte) = legacy_ctrl_byte(s)
     {
         return Some(vec![byte]);
     }
@@ -245,6 +245,15 @@ const fn legacy_kitty_keycode(named: NamedKey) -> Option<u32> {
         NamedKey::Space => Some(32),
         _ => None,
     }
+}
+
+fn single_ascii(s: &str) -> Option<u8> {
+    let mut chars = s.chars();
+    let c = chars.next()?;
+    if chars.next().is_some() || !c.is_ascii() {
+        return None;
+    }
+    Some(c as u8)
 }
 
 /// Lowercase per the Kitty spec ("the lowercase ASCII codepoint of the
@@ -549,11 +558,14 @@ fn encode_named(named: NamedKey, mods: Modifiers, application_cursor: bool) -> O
     if matches!(named, NamedKey::Tab) && mods.shift_key() {
         return Some(b"\x1b[Z".to_vec());
     }
+    let ctrl = mods.control_key() && !mods.super_key();
     let bare: Vec<u8> = match named {
         NamedKey::Enter => b"\r".to_vec(),
+        NamedKey::Backspace if ctrl => vec![0x08],
         NamedKey::Backspace => vec![0x7f],
         NamedKey::Tab => b"\t".to_vec(),
         NamedKey::Escape => vec![0x1b],
+        NamedKey::Space if ctrl => vec![0x00],
         NamedKey::Space => b" ".to_vec(),
         _ => return None,
     };
@@ -583,6 +595,21 @@ fn ctrl_byte(s: &str) -> Option<u8> {
         '^' => Some(0x1e),
         '_' => Some(0x1f),
         _ => None,
+    }
+}
+
+/// Not folded into [`ctrl_byte`]: `modifyOtherKeys` level 1 reads that
+/// as "has a legacy byte" and escapes Ctrl+digit / Ctrl+punctuation.
+fn legacy_ctrl_byte(s: &str) -> Option<u8> {
+    match s {
+        "2" => Some(0x00),
+        "3" => Some(0x1b),
+        "4" => Some(0x1c),
+        "5" => Some(0x1d),
+        "6" => Some(0x1e),
+        "7" | "/" => Some(0x1f),
+        "8" | "?" => Some(0x7f),
+        _ => ctrl_byte(s),
     }
 }
 
@@ -731,15 +758,145 @@ mod tests {
     }
 
     #[test]
-    fn alt_uppercase_letter_normalizes_to_lowercase_meta_prefix() {
+    fn alt_uppercase_letter_keeps_its_case_after_meta_prefix() {
         let bytes = encode_no_app_cursor(
-            &lit("A"),
-            Some("A"),
-            Modifiers::ALT,
+            &lit("B"),
+            Some("B"),
+            Modifiers::ALT | Modifiers::SHIFT,
             true,
             KittyKbdFlags::empty(),
         );
-        assert_eq!(bytes, Some(vec![0x1b, b'a']));
+        assert_eq!(bytes, Some(vec![0x1b, b'B']));
+    }
+
+    #[test]
+    fn ctrl_space_and_backspace_emit_xterm_c0() {
+        for (key, mods, expected) in [
+            (NamedKey::Space, Modifiers::CONTROL, &[0x00][..]),
+            (
+                NamedKey::Space,
+                Modifiers::CONTROL | Modifiers::SHIFT,
+                &[0x00][..],
+            ),
+            (NamedKey::Backspace, Modifiers::CONTROL, &[0x08][..]),
+            (
+                NamedKey::Backspace,
+                Modifiers::CONTROL | Modifiers::SHIFT,
+                &[0x08][..],
+            ),
+            (
+                NamedKey::Space,
+                Modifiers::CONTROL | Modifiers::ALT,
+                &[0x1b, 0x00][..],
+            ),
+            (
+                NamedKey::Backspace,
+                Modifiers::CONTROL | Modifiers::ALT,
+                &[0x1b, 0x08][..],
+            ),
+            (
+                NamedKey::Space,
+                Modifiers::CONTROL | Modifiers::SUPER,
+                &b" "[..],
+            ),
+        ] {
+            let bytes =
+                encode_no_app_cursor(&Key::Named(key), None, mods, true, KittyKbdFlags::empty());
+            assert_eq!(bytes.as_deref(), Some(expected), "{key:?} {mods:?}");
+        }
+    }
+
+    #[test]
+    fn ctrl_digit_and_punctuation_follow_xterm_table() {
+        for (s, expected) in [
+            ("2", 0x00),
+            ("3", 0x1b),
+            ("4", 0x1c),
+            ("5", 0x1d),
+            ("6", 0x1e),
+            ("7", 0x1f),
+            ("8", 0x7f),
+            ("/", 0x1f),
+            ("?", 0x7f),
+        ] {
+            let bytes = encode_no_app_cursor(
+                &lit(s),
+                Some(s),
+                Modifiers::CONTROL,
+                true,
+                KittyKbdFlags::empty(),
+            );
+            assert_eq!(bytes, Some(vec![expected]), "Ctrl+{s}");
+            let bytes = encode_no_app_cursor(
+                &lit(s),
+                Some(s),
+                Modifiers::CONTROL | Modifiers::ALT,
+                true,
+                KittyKbdFlags::empty(),
+            );
+            assert_eq!(bytes, Some(vec![0x1b, expected]), "Ctrl+Alt+{s}");
+        }
+    }
+
+    #[test]
+    fn ctrl_digit_outside_xterm_table_passes_text_through() {
+        for s in ["1", "9", "0"] {
+            let bytes = encode_no_app_cursor(
+                &lit(s),
+                Some(s),
+                Modifiers::CONTROL,
+                true,
+                KittyKbdFlags::empty(),
+            );
+            assert_eq!(bytes, Some(s.as_bytes().to_vec()), "Ctrl+{s}");
+        }
+    }
+
+    #[test]
+    fn modify_other_keys_level1_leaves_fixed_legacy_bytes_to_unescaped_keys() {
+        for (key, mods, expected) in [
+            (Key::Named(NamedKey::Space), Modifiers::CONTROL, &[0x00][..]),
+            (
+                Key::Named(NamedKey::Backspace),
+                Modifiers::CONTROL,
+                &[0x08][..],
+            ),
+            (
+                lit("B"),
+                Modifiers::ALT | Modifiers::SHIFT,
+                &[0x1b, b'B'][..],
+            ),
+        ] {
+            let bytes = encode_mok(&key, None, mods, ModifyOtherKeys::Level1);
+            assert_eq!(bytes.as_deref(), Some(expected), "{key:?} {mods:?}");
+        }
+    }
+
+    #[test]
+    fn kitty_flags_without_csi_u_leave_fixed_legacy_bytes() {
+        for (key, mods, expected) in [
+            (Key::Named(NamedKey::Space), Modifiers::CONTROL, &[0x00][..]),
+            (
+                lit("B"),
+                Modifiers::ALT | Modifiers::SHIFT,
+                &[0x1b, b'B'][..],
+            ),
+        ] {
+            let bytes =
+                encode_no_app_cursor(&key, None, mods, true, KittyKbdFlags::REPORT_EVENT_TYPES);
+            assert_eq!(bytes.as_deref(), Some(expected), "{key:?} {mods:?}");
+        }
+    }
+
+    #[test]
+    fn modify_other_keys_level1_still_escapes_ctrl_digit() {
+        let bytes = encode_mok(
+            &lit("2"),
+            Some("2"),
+            Modifiers::CONTROL,
+            ModifyOtherKeys::Level1,
+        );
+        assert_eq!(bytes, Some(b"\x1b[50;5u".to_vec()));
     }
 
     #[test]
@@ -2199,9 +2356,9 @@ mod tests {
             let bytes = encode_no_app_cursor(&key, Some(s.as_str()), mods, true, KittyKbdFlags::empty())
                 .expect("printable ASCII always encodes under Alt");
             let body_resolves = if ctrl {
-                ctrl_byte(&s).is_some()
+                legacy_ctrl_byte(&s).is_some()
             } else {
-                single_ascii_lower(&s).is_some()
+                single_ascii(&s).is_some()
             };
             if body_resolves {
                 proptest::prop_assert_eq!(

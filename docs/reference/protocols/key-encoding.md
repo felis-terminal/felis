@@ -19,7 +19,26 @@ session until a program pushes flags. It encodes:
 
 - xterm-style for arrow / function keys,
 - modifier-encoded with CSI `;n` parameters,
-- backspace as DEL (`0x7F`).
+- backspace as DEL (`0x7F`), and Ctrl+Backspace as BS (`0x08`),
+- Ctrl with a key whose produced character (Shift already applied) is one of those below as its C0 byte:
+
+  | Character        | Byte          |
+  | ---------------- | ------------- |
+  | `a`–`z`, `A`–`Z` | `0x01`–`0x1A` |
+  | `@`, Space, `2`  | `0x00`        |
+  | `[`, `3`         | `0x1B`        |
+  | `\`, `4`         | `0x1C`        |
+  | `]`, `5`         | `0x1D`        |
+  | `^`, `6`         | `0x1E`        |
+  | `_`, `/`, `7`    | `0x1F`        |
+  | `?`, `8`         | `0x7F`        |
+
+  Ctrl with any other character sends that character's text,
+
+- Alt as an `ESC` prefix: on a key producing a single ASCII character, `ESC` and that character with its case kept (with
+  Ctrl, `ESC` and the C0 byte above, or the character's text alone when the table has no row for it); on Enter, Tab,
+  Backspace, Escape and Space, `ESC` and the byte the key sends without Alt. Non-ASCII text goes out without the prefix,
+  Shift+Tab stays `CSI Z`, and Super held with Alt drops the prefix.
 
 The mode is driven by the running program, not by config. felis mirrors the flags on a per-session stack, 32 entries
 deep; a push against a full stack evicts the bottom entry. The active flag set is the top of the stack, and the empty
@@ -54,10 +73,10 @@ With bit 1 (disambiguate) or bit 8 (report all keys as escapes) active, a key th
 - `text`: the codepoints of the OS-composed text, colon-separated, present only for presses while bit 16 (associated
   text) is active.
 
-A key that needs no escaping under bit 1 (an unmodified letter, or a modified key with a distinct legacy byte such as
-Ctrl+C) keeps its legacy bytes; bit 8 escapes every key. Escape is escaped under bit 1 even unmodified. Shift+Enter,
-Shift+Backspace, and Shift+Space are escaped under bit 1 although shift alone would not require it, matching Kitty;
-Shift+Tab stays `CSI Z`.
+Bit 1 escapes Enter, Tab, Backspace, Space, and any key producing a single ASCII character when Ctrl, Alt, or Super is
+held, Ctrl+C included, and Escape even unmodified; an unmodified key keeps its legacy bytes. Bit 8 escapes every key.
+Shift+Enter, Shift+Backspace, and Shift+Space are escaped under bit 1 although shift alone would not require it,
+matching Kitty; Shift+Tab stays `CSI Z`.
 
 ### xterm `modifyOtherKeys`
 
@@ -67,8 +86,10 @@ modern forms whatever they say.
 
 A key the level escapes is sent as `CSI keycode ; 1+modifiers u`, the Kitty key event without its optional parts:
 
-- Level 1 escapes the combinations that have no legacy byte of their own, Ctrl with a digit or punctuation and Super
-  with anything: Ctrl+C still sends `0x03`, and Alt still sends its `ESC`-prefixed byte.
+- Level 1 escapes a key producing a single ASCII character when Super is held, or Ctrl with a character other than an
+  ASCII letter, `@ [ \ ] ^ _` and Space, so Ctrl+2 and Ctrl+/ are escaped while Ctrl+C still sends `0x03`. Escape aside,
+  a key held with Alt, and Enter, Tab, Backspace and Space under any modifier, keep their [legacy](#keyboard-encoding)
+  bytes.
 - Level 2 escapes every key held with Ctrl, Alt, or Super, and Shift+Enter, Shift+Backspace and Shift+Space besides;
   Shift+Tab stays `CSI Z`.
 - Escape held with Ctrl, Alt, or Super reports keycode 27 at either level; a bare key is never escaped, and arrows,

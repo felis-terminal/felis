@@ -20,6 +20,10 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
   `Ctrl+Shift+Home` / `Ctrl+Shift+End`, as in kitty and Windows Terminal, so `Ctrl+Home` / `Ctrl+End` reach editors such
   as vim and nano again. `"ctrl+home" = { kind = "scroll", step = "home" }` under `[keymap]` (and `step = "end"` for
   `ctrl+end`) brings the old chords back.
+- **Legacy key bytes match xterm**: in the legacy encoding a session starts in, `Ctrl+Space` sends NUL and
+  `Ctrl+Backspace` sends BS, `Ctrl+2` through `Ctrl+8`, `Ctrl+/` and `Ctrl+?` send xterm's control bytes, and Alt keeps
+  the case Shift gave a letter (`Alt+Shift+B` sends `ESC B`), so Emacs `C-SPC`, readline `M-B` and a shell's
+  `Ctrl+Backspace` word delete receive the key they bind.
 - **Fonts through CoreText and DirectWrite**: on macOS and Windows, `font.family` resolves through the platform's font
   API, and a character the font misses draws from the face the platform picks for it, so Han takes the Japanese or the
   Chinese form your language list asks for. A symbols-only Nerd Font still comes first, and an explicit `font.fallback`
