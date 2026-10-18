@@ -418,10 +418,11 @@ where they do.
 
 Each crate is a seam: a boundary that a future repository split, or a non-Rust client, must be able to reuse in
 isolation. The "MUST-NOT-depend-on" column of the crate map is the load-bearing one: it is the extraction criterion. The
-renderer is two seams: `felis-render-core` holds what any pixel-composing backend needs, and `felis-render-wgpu` maps it
-onto wgpu. While wgpu is the only backend, the split costs a small amount of API plumbing (items public across a
-boundary one consumer crosses); that is the accepted price of a CPU backend or another client reusing the core instead
-of re-deriving how a cell looks, where each port drifts on the rules it misses.
+renderer is two seams: `felis-render-core` holds the backend-neutral pieces (the palette, the box-drawing rasterizer,
+the atlas packer, the frame-state types), and `felis-render-wgpu` holds the wgpu pipeline and everything that still
+names its instance layout. While wgpu is the only backend, the split costs a small amount of API plumbing (items public
+across a boundary one consumer crosses); that is the accepted price of a CPU backend or another client reusing those
+pieces instead of porting them, where each port drifts on the rules it misses.
 
 ### Rejected workspace shapes
 
