@@ -547,9 +547,9 @@ impl App {
         let keep_parked = carried || self.on_transient || self.is_busy();
         let landed = self.current_place();
         if let Some(viewport) = self.pipe_state.settle_returning(&landed, keep_parked)
-            && viewport > 0
+            && viewport.offset > 0
         {
-            self.send_viewport(viewport);
+            self.send_viewport_at(viewport.offset, viewport.anchor);
         }
     }
 }

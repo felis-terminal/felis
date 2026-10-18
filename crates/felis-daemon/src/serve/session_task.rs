@@ -2413,20 +2413,28 @@ impl SessionTask {
                     return Some(reason);
                 }
             }
-            InputMsg::Viewport { lines_from_bottom } => {
+            InputMsg::Viewport {
+                lines_from_bottom,
+                anchor,
+            } => {
                 let stream = &mut self.subs[i].stream;
-                let new_viewport = session.lock_core().grid.clamp_viewport(lines_from_bottom);
-                if new_viewport != stream.diff.viewport {
-                    stream.diff.viewport = new_viewport;
+                let moved = stream.diff.request_viewport(
+                    &session.lock_core().grid,
+                    lines_from_bottom,
+                    anchor,
+                );
+                if moved {
                     stream.damage.mark_all();
                 }
             }
             InputMsg::JumpPrompt { direction } => {
                 let stream = &mut self.subs[i].stream;
-                let target = session
-                    .lock_core()
-                    .grid
-                    .prompt_jump_target(stream.diff.viewport, direction);
+                let target = {
+                    let core = session.lock_core();
+                    stream.diff.rebase_viewport(&core.grid);
+                    core.grid
+                        .prompt_jump_target(stream.diff.viewport, direction)
+                };
                 if let Some(target) = target {
                     stream.diff.viewport = target;
                     stream.damage.mark_all();
@@ -2615,7 +2623,8 @@ impl SessionTask {
     ) -> (Vec<OutEvent>, bool, Option<(StreamErrorReason, String)>) {
         let stream = self.subs[i].producers[p].stream;
         let correlation = Correlation::stream(stream);
-        let viewport = self.subs[i].stream.diff.viewport;
+        let diff = &self.subs[i].stream.diff;
+        let viewport = diff.viewport_now(&self.session.lock_core().grid);
         let mut out = Vec::new();
         let session = &self.session;
         let (done, results) = match &mut self.subs[i].producers[p].kind {
@@ -2625,6 +2634,7 @@ impl SessionTask {
                 budget,
             } => {
                 let core = session.lock_core();
+                let anchor = core.grid.viewport_anchor();
                 let (advanced, walk) = core.grid.search_window(query, *cursor, *budget);
                 let mut emitted = 0u32;
                 let mut stopped_at = None;
@@ -2635,6 +2645,7 @@ impl SessionTask {
                             text: hit.text,
                             byte_spans: hit.byte_spans,
                             col_spans: hit.col_spans,
+                            anchor: Some(anchor),
                         },
                         correlation,
                     });
@@ -2661,6 +2672,7 @@ impl SessionTask {
             }
             ProducerKind::VisibleSearch { query, row } => {
                 let core = session.lock_core();
+                let anchor = core.grid.viewport_anchor();
                 let (resume, walk) =
                     core.grid
                         .search_visible_window(query, *row, SEARCH_CHUNK_LINES);
@@ -2673,6 +2685,7 @@ impl SessionTask {
                             text: hit.text,
                             byte_spans: hit.byte_spans,
                             col_spans: hit.col_spans,
+                            anchor: Some(anchor),
                         },
                         correlation,
                     });
@@ -2993,9 +3006,9 @@ impl SessionTask {
         let Some(i) = self.sub_index(sub_id) else {
             return;
         };
-        let viewport = self.subs[i].stream.diff.viewport;
         let (data, position, exit_code) = {
             let core = self.session.lock_core();
+            let viewport = self.subs[i].stream.diff.viewport_now(&core.grid);
             let serialized = crate::serve::region::serialize_region_positioned(
                 &core.grid, viewport, source, ansi,
             );
@@ -3316,6 +3329,7 @@ mod tests {
             sub_a,
             InputMsg::Viewport {
                 lines_from_bottom: 9_999,
+                anchor: None,
             },
         );
         assert!(end.is_none(), "Viewport is a continuing input");

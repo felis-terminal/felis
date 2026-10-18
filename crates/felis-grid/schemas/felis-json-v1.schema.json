@@ -802,6 +802,17 @@
         },
         {
           "properties": {
+            "anchor": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ViewportAnchorJson"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Present exactly while `lines_from_bottom > 0`."
+            },
             "lines_from_bottom": {
               "format": "uint32",
               "maximum": 4294967295,
@@ -1602,6 +1613,17 @@
         },
         {
           "properties": {
+            "anchor": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ViewportAnchorJson"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The anchor of the browsing `viewport_state` this offset\nwas computed from; absent reads it against the current\nbottom."
+            },
             "lines_from_bottom": {
               "format": "uint32",
               "maximum": 4294967295,
@@ -3240,6 +3262,30 @@
         "center"
       ],
       "type": "string"
+    },
+    "ViewportAnchorJson": {
+      "description": "Opaque history point of a browsing viewport offset; a client\nechoes it back unchanged.",
+      "properties": {
+        "generation": {
+          "format": "uint64",
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": "integer",
+          "x-bound-exceeds-f64-precision": true
+        },
+        "pushed": {
+          "format": "uint64",
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": "integer",
+          "x-bound-exceeds-f64-precision": true
+        }
+      },
+      "required": [
+        "pushed",
+        "generation"
+      ],
+      "type": "object"
     }
   },
   "$id": "https://raw.githubusercontent.com/felis-terminal/felis/main/crates/felis-grid/schemas/felis-json-v1.schema.json",

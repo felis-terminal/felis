@@ -1114,6 +1114,13 @@ message InputColorScheme {
 message InputViewport {
   // Scrollback rows to lift the visible window by; 0 tracks live bottom.
   uint32 lines_from_bottom = 1;
+  // The anchor of the browsing GridViewportState this offset was
+  // computed from, echoed verbatim. Unset reads the offset against the
+  // current bottom.
+  ViewportAnchor anchor = 2 [(felis.v1.field_since) = {
+    minor: 2
+    skippable: true
+  }];
 }
 
 // Prompt-jump request.
@@ -1348,6 +1355,18 @@ message GridViewportState {
   uint32 lines_from_bottom = 1;
   // Total composable rows = retained scrollback + live row count.
   uint32 max = 2;
+  // The history point a non-zero lines_from_bottom is expressed
+  // against. Unset at the live bottom.
+  ViewportAnchor anchor = 3 [(felis.v1.field_since) = {
+    minor: 2
+    skippable: true
+  }];
+}
+
+// Opaque to a client: echoed in InputViewport.anchor.
+message ViewportAnchor {
+  uint64 pushed = 1;
+  uint64 generation = 2;
 }
 
 // Authoritative grid dimensions changed mid-stream.
@@ -2791,6 +2810,11 @@ message SearchMatch {
   repeated ByteSpan byte_spans = 3;
   // Paintable highlight segments (not 1:1 with byte_spans).
   repeated ColSpan col_spans = 4;
+  // The history point line_index and the segments' rows count from.
+  ViewportAnchor anchor = 5 [(felis.v1.field_since) = {
+    minor: 2
+    skippable: true
+  }];
 }
 
 // No family declares a stream terminator of its own. ConnEnd /

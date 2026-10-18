@@ -1,7 +1,7 @@
 //! v1 DTO for [`GridMsg`], the daemon→client grid diffs.
 
 use super::JsonError;
-use super::common::{GridDimsJson, RgbJson};
+use super::common::{GridDimsJson, RgbJson, ViewportAnchorJson};
 use super::row::{self, RowCellsJson};
 use crate::StyleTable;
 use felis_protocol::RowPayload;
@@ -140,6 +140,9 @@ json_dto! {
         ViewportState {
             lines_from_bottom: u32,
             max: u32,
+            /// Present exactly while `lines_from_bottom > 0`.
+            #[serde(default, skip_serializing_if = "Option::is_none")]
+            anchor: Option<ViewportAnchorJson>,
         },
         Size {
             dims: GridDimsJson,
@@ -354,9 +357,11 @@ impl TryFrom<GridMsg> for GridJson {
             GridMsg::ViewportState {
                 lines_from_bottom,
                 max,
+                anchor,
             } => Self::ViewportState {
                 lines_from_bottom,
                 max,
+                anchor: anchor.map(Into::into),
             },
             GridMsg::Size { dims } => Self::Size { dims: dims.into() },
             GridMsg::Title { value } => Self::Title { value },
@@ -458,9 +463,11 @@ impl TryFrom<GridJson> for GridMsg {
             GridJson::ViewportState {
                 lines_from_bottom,
                 max,
+                anchor,
             } => Self::ViewportState {
                 lines_from_bottom,
                 max,
+                anchor: anchor.map(Into::into),
             },
             GridJson::Size { dims } => Self::Size { dims: dims.into() },
             GridJson::Title { value } => Self::Title { value },

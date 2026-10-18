@@ -13,7 +13,7 @@ pub use felis_protocol::kitty_text_sizing::{HAlign, Sizing, VAlign};
 pub use felis_protocol::messages::CursorStyle;
 pub use felis_protocol::messages::ScrollDirection;
 pub use felis_protocol::messages::{
-    ClipboardSelection, ClipboardWrite, ModifyOtherKeys, MouseProtocol,
+    ClipboardSelection, ClipboardWrite, ModifyOtherKeys, MouseProtocol, ViewportAnchor,
 };
 use felis_protocol::messages::{PromptJump, PromptKind, ThemeChannel};
 use felis_vt::Sink;
@@ -694,6 +694,10 @@ pub struct Grid {
     /// Never drained (contrast [`Self::scrolled_into_scrollback`]).
     /// Saturating.
     scrollback_total_pushed: u64,
+    /// Bumped when history stops continuing the lines a push count
+    /// names: `CSI 3 J` and either alternate-screen switch. Folded into
+    /// [`ViewportAnchor::generation`].
+    history_epoch: u64,
     /// `XTERM_SAVE` / `XTERM_RESTORE` (`CSI ? Ps s` / `CSI ? Ps r`)
     /// slots per private mode; RESTORE on a never-written slot is a
     /// no-op.
@@ -1050,6 +1054,7 @@ impl Grid {
             prompt_marks_pruned: 0,
             shell_prompt: ShellPrompt::new(),
             scrollback_total_pushed: 0,
+            history_epoch: 0,
             xterm_save_slots: HashMap::new(),
             dec_sace: 0,
             left_right_margin_mode: false,
@@ -1692,6 +1697,7 @@ impl Grid {
         if self.screen.saved_primary.is_some() {
             return;
         }
+        self.history_epoch = self.history_epoch.wrapping_add(1);
         // `SavedScreen` records `base` but no band, and its restore /
         // resize helpers reason in raw ring order, so a snapshot must
         // carry no band rotation.
@@ -1791,6 +1797,7 @@ impl Grid {
         let Some(saved) = self.screen.saved_primary.take() else {
             return;
         };
+        self.history_epoch = self.history_epoch.wrapping_add(1);
         // Same contract as `enter_alternate`: no band rotation in a
         // snapshot.
         self.screen.materialize_band();
@@ -2554,6 +2561,7 @@ impl Grid {
         {
             return;
         }
+        self.history_epoch = self.history_epoch.wrapping_add(1);
         let cols = usize::from(self.screen.cols);
         let rows = usize::from(self.screen.rows);
         let mut cells = ring_cells(rows * cols, rows + self.screen.cap, cols);
@@ -3153,6 +3161,32 @@ impl Grid {
     #[must_use]
     pub fn clamp_viewport(&self, requested: u32) -> u32 {
         self.screen.clamp_viewport(requested)
+    }
+
+    /// The point a scrollback offset taken now is expressed against;
+    /// pass it to [`Self::anchor_viewport`] later.
+    #[must_use]
+    pub const fn viewport_anchor(&self) -> ViewportAnchor {
+        ViewportAnchor {
+            pushed: self.scrollback_total_pushed,
+            generation: self.screen.geometry_gen().wrapping_add(self.history_epoch),
+        }
+    }
+
+    /// `lines_from_bottom`, taken at `since`, re-expressed against now so
+    /// a scrolled-back view stays on its lines as output arrives. `0`
+    /// stays live. Across a resize, `CSI 3 J` or a screen switch no line
+    /// it showed is known to survive, so the view goes live.
+    #[must_use]
+    pub fn anchor_viewport(&self, lines_from_bottom: u32, since: ViewportAnchor) -> u32 {
+        if lines_from_bottom == 0 {
+            return 0;
+        }
+        let Some(grown) = since.rows_until(self.viewport_anchor()) else {
+            return 0;
+        };
+        let grown = u32::try_from(grown.max(0)).unwrap_or(u32::MAX);
+        self.clamp_viewport(lines_from_bottom.saturating_add(grown))
     }
 
     #[must_use]

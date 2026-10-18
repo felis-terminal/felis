@@ -605,13 +605,16 @@ fn dummy_hit(line_index: i64) -> SearchHitRecord {
             col_start: 0,
             col_end: 1,
         }],
+        anchor: None,
     }
 }
 
 use crate::app_methods::format_search_label as format_search_label_for;
 
 mod search_navigation {
-    use crate::app_methods::{next_search_index, search_hit_anchor_line, visible_hit_spans};
+    use crate::app_methods::{
+        hit_navigation, next_search_index, search_hit_anchor_line, visible_hit_spans,
+    };
 
     use super::*;
 
@@ -628,6 +631,7 @@ mod search_navigation {
                     col_end: 6,
                 })
                 .collect(),
+            anchor: None,
         }
     }
 
@@ -677,6 +681,112 @@ mod search_navigation {
 
     /// Pins: the jump centers on the first painted segment; the logical
     /// line's top may be a row where nothing is highlighted.
+    const fn at(pushed: u64, generation: u64) -> ViewportAnchor {
+        ViewportAnchor { pushed, generation }
+    }
+
+    fn anchored(line_index: i64, anchor: Option<ViewportAnchor>) -> SearchHitRecord {
+        SearchHitRecord {
+            anchor,
+            ..stitched_hit(line_index, 0, 1)
+        }
+    }
+
+    #[test]
+    fn a_hit_keeps_its_row_while_output_grows_the_browsed_offset() {
+        // Found at -6 with the view at 5: row 0 of the browsed screen.
+        // Three pushes later the same lines sit at offset 8.
+        let hit = anchored(-6, Some(at(10, 0)));
+        let row_of = |frame, viewport| {
+            visible_hit_spans(std::slice::from_ref(&hit), None, frame, viewport, 24)[0].row
+        };
+        assert_eq!(row_of(Some(at(10, 0)), 6), 0);
+        assert_eq!(row_of(Some(at(13, 0)), 9), 0);
+    }
+
+    #[test]
+    fn a_hit_found_after_the_view_last_moved_shifts_the_other_way() {
+        let hit = anchored(-9, Some(at(13, 0)));
+        assert_eq!(
+            visible_hit_spans(&[hit], None, Some(at(10, 0)), 6, 24)[0].row,
+            0,
+            "-9 three pushes on is -6 in the older frame",
+        );
+    }
+
+    #[test]
+    fn a_hit_from_another_generation_is_not_painted() {
+        let hit = anchored(-6, Some(at(10, 0)));
+        assert_eq!(
+            visible_hit_spans(&[hit], None, Some(at(13, 1)), 6, 24),
+            Vec::<SearchHitSpan>::new()
+        );
+    }
+
+    #[test]
+    fn navigating_to_a_hit_from_another_generation_names_its_own_anchor() {
+        let hit = anchored(-6, Some(at(10, 0)));
+        let shown = ViewportPosition {
+            offset: 6,
+            anchor: Some(at(13, 1)),
+        };
+        let request = hit_navigation(&hit, shown, 24, 100).expect("not shown");
+        assert_eq!(
+            request.anchor,
+            Some(at(10, 0)),
+            "the daemon answers a stale one with live"
+        );
+    }
+
+    #[test]
+    fn navigating_to_a_hit_names_the_hit_frame() {
+        // In the shadow's older frame this hit would project to line 0,
+        // a live-bottom target the daemon would not grow.
+        let hit = anchored(-1, Some(at(11, 0)));
+        let shown = ViewportPosition {
+            offset: 0,
+            anchor: None,
+        };
+        let request = hit_navigation(&hit, shown, 24, 100).expect("the hit is off-screen");
+        assert_eq!(request.offset, 13);
+        assert_eq!(request.anchor, Some(at(11, 0)));
+    }
+
+    #[test]
+    fn navigating_to_an_anchored_hit_leaves_the_clamp_to_the_daemon() {
+        // The shadow's maximum of 1 predates the scrollback the hit lies in.
+        let hit = anchored(-2, Some(at(11, 0)));
+        let shown = ViewportPosition {
+            offset: 1,
+            anchor: Some(at(10, 0)),
+        };
+        let request = hit_navigation(&hit, shown, 24, 1).expect("the hit is off-screen");
+        assert_eq!(request.offset, 14);
+    }
+
+    #[test]
+    fn navigating_to_a_hit_found_live_that_scrolled_into_history_browses_to_it() {
+        // Found on live row 5; twenty pushes later it is scrollback line -15.
+        let hit = anchored(5, Some(at(10, 0)));
+        let shown = ViewportPosition {
+            offset: 30,
+            anchor: Some(at(30, 0)),
+        };
+        let request = hit_navigation(&hit, shown, 24, 100).expect("the hit is off-screen");
+        assert_eq!(request.offset, 27);
+        assert_eq!(request.anchor, Some(at(30, 0)));
+    }
+
+    #[test]
+    fn navigating_to_a_hit_already_in_view_sends_nothing() {
+        let hit = anchored(-13, Some(at(10, 0)));
+        let shown = ViewportPosition {
+            offset: 28,
+            anchor: Some(at(13, 0)),
+        };
+        assert_eq!(hit_navigation(&hit, shown, 24, 100), None);
+    }
+
     #[test]
     fn search_hit_anchor_line_prefers_the_first_painted_segment() {
         assert_eq!(search_hit_anchor_line(&stitched_hit(-40, 3, 2)), -37);
@@ -684,6 +794,7 @@ mod search_navigation {
             search_hit_anchor_line(&SearchHitRecord {
                 line_index: -40,
                 col_spans: Vec::new(),
+                anchor: None,
             }),
             -40
         );
@@ -693,7 +804,7 @@ mod search_navigation {
     fn visible_hit_spans_project_each_segment_and_tag_the_current_hit() {
         let matches = [stitched_hit(-5, 0, 2), stitched_hit(-2, 0, 1)];
         // `composed_row = line_index + K`.
-        let spans = visible_hit_spans(&matches, Some(1), 5, 24);
+        let spans = visible_hit_spans(&matches, Some(1), None, 5, 24);
         assert_eq!(spans.len(), 3);
         assert_eq!(
             spans.iter().map(|s| s.row).collect::<Vec<_>>(),
@@ -704,7 +815,7 @@ mod search_navigation {
             vec![false, false, true],
         );
         assert_eq!((spans[0].col_start, spans[0].col_end), (2, 6));
-        let none_current = visible_hit_spans(&matches, None, 5, 24);
+        let none_current = visible_hit_spans(&matches, None, None, 5, 24);
         assert!(none_current.iter().all(|s| !s.is_current));
     }
 
@@ -712,11 +823,11 @@ mod search_navigation {
     /// would paint a highlight over unrelated text.
     #[test]
     fn visible_hit_spans_drop_offscreen_segments_and_keep_the_visible_ones() {
-        let spans = visible_hit_spans(&[stitched_hit(-6, 0, 2)], Some(0), 5, 24);
+        let spans = visible_hit_spans(&[stitched_hit(-6, 0, 2)], Some(0), None, 5, 24);
         assert_eq!(spans.len(), 1, "only the on-screen segment paints");
         assert_eq!(spans[0].row, 0);
         assert_eq!(
-            visible_hit_spans(&[stitched_hit(-100, 0, 1)], Some(0), 5, 24),
+            visible_hit_spans(&[stitched_hit(-100, 0, 1)], Some(0), None, 5, 24),
             Vec::<SearchHitSpan>::new()
         );
     }
@@ -739,9 +850,10 @@ mod search_navigation {
                     col_end: 5,
                 },
             ],
+            anchor: None,
         };
         assert_eq!(
-            visible_hit_spans(&[empty], Some(0), 5, 24),
+            visible_hit_spans(&[empty], Some(0), None, 5, 24),
             Vec::<SearchHitSpan>::new()
         );
     }
@@ -1269,6 +1381,57 @@ mod selection_invalidation {
 
     use super::*;
 
+    const LIVE: (u32, Option<ViewportAnchor>) = (0, None);
+
+    const fn browsing(offset: u32, pushed: u64) -> (u32, Option<ViewportAnchor>) {
+        (
+            offset,
+            Some(ViewportAnchor {
+                pushed,
+                generation: 0,
+            }),
+        )
+    }
+
+    fn state((offset, anchor): (u32, Option<ViewportAnchor>)) -> GridMsg {
+        GridMsg::ViewportState {
+            lines_from_bottom: offset,
+            max: 1_000,
+            anchor,
+        }
+    }
+
+    #[test]
+    fn output_growing_a_browsed_offset_keeps_the_selection() {
+        assert!(!viewport_message_enters_scrollback(
+            &state(browsing(7, 13)),
+            browsing(5, 11),
+        ));
+    }
+
+    #[test]
+    fn a_browsed_view_that_moves_off_its_lines_clears_the_selection() {
+        assert!(viewport_message_enters_scrollback(
+            &state(browsing(6, 11)),
+            browsing(5, 11),
+        ));
+        assert!(viewport_message_enters_scrollback(
+            &state(browsing(5, 13)),
+            browsing(5, 11),
+        ));
+        let resized = (
+            7,
+            Some(ViewportAnchor {
+                pushed: 13,
+                generation: 1,
+            }),
+        );
+        assert!(viewport_message_enters_scrollback(
+            &state(resized),
+            browsing(5, 11),
+        ));
+    }
+
     #[test]
     fn viewport_state_into_scrollback_clears_selection() {
         // Pins: the highlight must not outlive the cells it was anchored to.
@@ -1276,13 +1439,25 @@ mod selection_invalidation {
             &GridMsg::ViewportState {
                 lines_from_bottom: 1,
                 max: 100,
-            }
+                anchor: None,
+            },
+            LIVE,
         ));
         assert!(viewport_message_enters_scrollback(
             &GridMsg::ViewportState {
                 lines_from_bottom: 9_999,
                 max: 10_024,
-            }
+                anchor: None,
+            },
+            LIVE,
+        ));
+    }
+
+    #[test]
+    fn leaving_a_browsed_view_for_live_clears_the_selection() {
+        assert!(viewport_message_enters_scrollback(
+            &state(LIVE),
+            browsing(5, 11),
         ));
     }
 
@@ -1292,22 +1467,30 @@ mod selection_invalidation {
             &GridMsg::ViewportState {
                 lines_from_bottom: 0,
                 max: 24,
-            }
+                anchor: None,
+            },
+            LIVE,
         ));
     }
 
     #[test]
     fn unrelated_grid_messages_never_request_a_selection_clear() {
-        assert!(!viewport_message_enters_scrollback(&GridMsg::Attention {
-            source: felis_protocol::messages::AttentionSource::Bell,
-        }));
-        assert!(!viewport_message_enters_scrollback(&GridMsg::CursorState {
-            row: 0,
-            col: 0,
-            visible: true,
-            style: felis_protocol::messages::CursorStyle::default(),
-            blink: true,
-        }));
+        assert!(!viewport_message_enters_scrollback(
+            &GridMsg::Attention {
+                source: felis_protocol::messages::AttentionSource::Bell,
+            },
+            LIVE,
+        ));
+        assert!(!viewport_message_enters_scrollback(
+            &GridMsg::CursorState {
+                row: 0,
+                col: 0,
+                visible: true,
+                style: felis_protocol::messages::CursorStyle::default(),
+                blink: true,
+            },
+            LIVE,
+        ));
     }
 
     #[test]
@@ -1325,8 +1508,8 @@ mod selection_invalidation {
     fn entering_or_leaving_the_alt_screen_clears_the_selection() {
         // A `?1049` swap replaces every visible cell, in both directions.
         let msg = mode_flags(true, MouseProtocol::Off);
-        assert!(grid_change_invalidates_selection(&msg, false, true));
-        assert!(grid_change_invalidates_selection(&msg, true, false));
+        assert!(grid_change_invalidates_selection(&msg, false, true, LIVE));
+        assert!(grid_change_invalidates_selection(&msg, true, false, LIVE));
     }
 
     #[test]
@@ -1337,12 +1520,14 @@ mod selection_invalidation {
         assert!(!grid_change_invalidates_selection(
             &mode_flags(true, MouseProtocol::AnyMotion),
             true,
-            true
+            true,
+            LIVE,
         ));
         assert!(!grid_change_invalidates_selection(
             &mode_flags(false, MouseProtocol::ButtonEvents),
             false,
-            false
+            false,
+            LIVE,
         ));
     }
 
@@ -1351,14 +1536,22 @@ mod selection_invalidation {
         let scrolled = GridMsg::ViewportState {
             lines_from_bottom: 3,
             max: 100,
+            anchor: None,
         };
-        assert!(grid_change_invalidates_selection(&scrolled, false, false));
-        assert!(grid_change_invalidates_selection(&scrolled, true, true));
+        assert!(grid_change_invalidates_selection(
+            &scrolled, false, false, LIVE
+        ));
+        assert!(grid_change_invalidates_selection(
+            &scrolled, true, true, LIVE
+        ));
         let at_bottom = GridMsg::ViewportState {
             lines_from_bottom: 0,
             max: 100,
+            anchor: None,
         };
-        assert!(!grid_change_invalidates_selection(&at_bottom, false, false));
+        assert!(!grid_change_invalidates_selection(
+            &at_bottom, false, false, LIVE
+        ));
     }
 
     const fn mode_flags(alt_screen: bool, mouse_protocol: MouseProtocol) -> GridMsg {
@@ -1424,6 +1617,18 @@ fn ime_preedit_enabled_disabled_carry_no_bytes_today() {
 mod daemon_closed {
     use super::*;
 
+    const SAVED: ViewportPosition = ViewportPosition {
+        offset: 12,
+        anchor: Some(ViewportAnchor {
+            pushed: 40,
+            generation: 0,
+        }),
+    };
+    const AWAITED: ViewportPosition = ViewportPosition {
+        offset: 7,
+        anchor: None,
+    };
+
     #[test]
     fn daemon_closed_on_the_live_connection_reconnects_when_nothing_is_in_flight() {
         assert_eq!(
@@ -1451,12 +1656,12 @@ mod daemon_closed {
                 3,
                 false,
                 &PipeState::Active {
-                    viewport: 12,
+                    viewport: SAVED,
                     region: None,
                     source: test_place("/tmp/a.sock", 0xaaa),
                 },
             ),
-            ClosedOutcome::PipeReturn { viewport: 12 },
+            ClosedOutcome::PipeReturn { viewport: SAVED },
         );
     }
 
@@ -1470,15 +1675,15 @@ mod daemon_closed {
                 PipeState::Idle,
                 PipeState::Awaiting {
                     target: felis_client_core::PipeTarget::Command(vec!["less".to_owned()]),
-                    viewport: 12,
+                    viewport: SAVED,
                 },
                 PipeState::Active {
-                    viewport: 12,
+                    viewport: SAVED,
                     region: None,
                     source: test_place("/tmp/a.sock", 0xaaa),
                 },
                 PipeState::Returning {
-                    viewport: 12,
+                    viewport: SAVED,
                     expected: test_place("/tmp/a.sock", 0xaaa),
                 },
             ] {
@@ -1502,7 +1707,7 @@ mod daemon_closed {
         let path = dir.join("region.txt");
         std::fs::write(&path, b"region\n").unwrap();
         let mut state = PipeState::Active {
-            viewport: 12,
+            viewport: SAVED,
             region: Some(StagedRegion::adopt(path.clone())),
             source: test_place("/tmp/a.sock", 0xaaa),
         };
@@ -1514,7 +1719,7 @@ mod daemon_closed {
         assert!(matches!(
             state,
             PipeState::Active {
-                viewport: 12,
+                viewport: SAVED,
                 region: Some(_),
                 ..
             },
@@ -1533,14 +1738,14 @@ mod daemon_closed {
     fn a_return_landing_restores_the_viewport_only_at_the_expected_place() {
         let expected = test_place("/tmp/a.sock", 0xaaa);
         let mut state = PipeState::Returning {
-            viewport: 12,
+            viewport: SAVED,
             expected: expected.clone(),
         };
-        assert_eq!(state.settle_returning(&expected, false), Some(12));
+        assert_eq!(state.settle_returning(&expected, false), Some(SAVED));
         assert!(matches!(state, PipeState::Idle));
 
         let mut state = PipeState::Returning {
-            viewport: 12,
+            viewport: SAVED,
             expected: expected.clone(),
         };
         assert_eq!(
@@ -1561,7 +1766,7 @@ mod daemon_closed {
     fn a_handoff_survives_the_landings_inside_a_transient_chain() {
         let expected = test_place("/tmp/a.sock", 0xaaa);
         let mut state = PipeState::Returning {
-            viewport: 12,
+            viewport: SAVED,
             expected: expected.clone(),
         };
         assert_eq!(
@@ -1572,7 +1777,7 @@ mod daemon_closed {
             matches!(state, PipeState::Returning { .. }),
             "a landing the chain's own re-point made keeps the handoff parked"
         );
-        assert_eq!(state.settle_returning(&expected, false), Some(12));
+        assert_eq!(state.settle_returning(&expected, false), Some(SAVED));
         assert!(matches!(state, PipeState::Idle));
     }
 
@@ -1584,7 +1789,7 @@ mod daemon_closed {
     fn only_a_live_transient_refuses_a_nested_visit() {
         assert!(
             PipeState::Active {
-                viewport: 12,
+                viewport: SAVED,
                 region: None,
                 source: test_place("/tmp/a.sock", 0xaaa),
             }
@@ -1592,7 +1797,7 @@ mod daemon_closed {
         );
         assert!(
             !PipeState::Returning {
-                viewport: 12,
+                viewport: SAVED,
                 expected: test_place("/tmp/a.sock", 0xaaa),
             }
             .in_visit()
@@ -1601,7 +1806,7 @@ mod daemon_closed {
         assert!(
             !PipeState::Awaiting {
                 target: felis_client_core::PipeTarget::Clipboard,
-                viewport: 12,
+                viewport: SAVED,
             }
             .in_visit()
         );
@@ -1613,7 +1818,7 @@ mod daemon_closed {
     #[test]
     fn a_handoff_with_nothing_left_to_continue_it_is_dropped() {
         let mut state = PipeState::Returning {
-            viewport: 12,
+            viewport: SAVED,
             expected: test_place("/tmp/a.sock", 0xaaa),
         };
         assert_eq!(
@@ -1633,7 +1838,7 @@ mod daemon_closed {
     fn a_handoff_survives_a_landing_with_a_continuation_still_parked() {
         let expected = test_place("/tmp/a.sock", 0xaaa);
         let mut state = PipeState::Returning {
-            viewport: 12,
+            viewport: SAVED,
             expected: expected.clone(),
         };
         assert_eq!(
@@ -1641,7 +1846,7 @@ mod daemon_closed {
             None
         );
         assert!(matches!(state, PipeState::Returning { .. }));
-        assert_eq!(state.settle_returning(&expected, false), Some(12));
+        assert_eq!(state.settle_returning(&expected, false), Some(SAVED));
     }
 
     #[test]
@@ -1649,23 +1854,29 @@ mod daemon_closed {
         // A region reply carries no sink of its own, so it is only
         // answerable while `Awaiting`.
         let mut state = PipeState::Active {
-            viewport: 12,
+            viewport: SAVED,
             region: None,
             source: test_place("/tmp/a.sock", 0xaaa),
         };
         assert!(state.take_awaiting().is_none());
-        assert!(matches!(state, PipeState::Active { viewport: 12, .. }));
+        assert!(matches!(
+            state,
+            PipeState::Active {
+                viewport: SAVED,
+                ..
+            }
+        ));
 
         let mut state = PipeState::Awaiting {
             target: felis_client_core::PipeTarget::Command(vec!["less".to_owned()]),
-            viewport: 7,
+            viewport: AWAITED,
         };
         let (target, viewport) = state.take_awaiting().expect("the awaited sink comes back");
         assert_eq!(
             target,
             felis_client_core::PipeTarget::Command(vec!["less".to_owned()]),
         );
-        assert_eq!(viewport, 7);
+        assert_eq!(viewport, AWAITED);
         assert!(matches!(state, PipeState::Idle));
     }
 

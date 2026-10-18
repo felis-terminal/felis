@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{ArmMeta, Directed};
 
-use super::RequestedDims;
+use super::{RequestedDims, ViewportAnchor};
 
 bitflags! {
     /// Modifier keys held when an input event fires.
@@ -283,6 +283,9 @@ pub enum InputMsg {
         /// `0` is live; `N` shows the youngest `min(N, rows)` rows of
         /// scrollback at the top of the screen.
         lines_from_bottom: u32,
+        /// The anchor of the browsing `ViewportState` this offset was
+        /// computed from; `None` reads it against the current bottom.
+        anchor: Option<ViewportAnchor>,
     },
     /// Move the scrollback viewport to the previous / next `OSC 133`
     /// prompt-start mark (`docs/explanation/data-model/scrollback.md`);
@@ -408,12 +411,21 @@ pub(crate) mod tests {
             InputMsg::ColorScheme { dark: false },
             InputMsg::Viewport {
                 lines_from_bottom: 0,
+                anchor: None,
             },
             InputMsg::Viewport {
                 lines_from_bottom: 12_345,
+                anchor: Some(ViewportAnchor {
+                    pushed: 0,
+                    generation: 3,
+                }),
             },
             InputMsg::Viewport {
                 lines_from_bottom: u32::MAX,
+                anchor: Some(ViewportAnchor {
+                    pushed: u64::MAX,
+                    generation: u64::MAX,
+                }),
             },
             InputMsg::JumpPrompt {
                 direction: PromptJump::Previous,

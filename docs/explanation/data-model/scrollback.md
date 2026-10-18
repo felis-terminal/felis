@@ -275,6 +275,22 @@ history ends with **no wrap** (returns `None` when it would not move). Jumps are
 only consider still-retained marks (evicted marks are skipped). Deferred refinements (e.g. per-output-block jumps) are a
 revisit.
 
+### Browsing while output arrives
+
+A browsing view stays on the lines it shows while the program keeps printing: the offset grows by the rows pushed into
+scrollback (`Grid::anchor_viewport`), as kitty grows `scrolled_by` and alacritty its display offset, and reaching the
+bottom joins the live view again. A resize, `CSI 3 J` or a screen switch also returns the view to live: each stops a
+push count naming the same lines, and the anchor's generation records it even when one burst erases history and refills
+it before the next compose, where a clamp alone would land on unrelated rows. The anchoring lives in felis-grid so an
+embedder holding its own offset calls the same function. The client's next step must start from the grown offset, and
+with pull pacing a frame carrying it is usually in flight while the user scrolls, so a step sent then would name an
+offset the daemon has since grown. Every browsing `ViewportState` therefore carries the `ViewportAnchor` it is expressed
+against and a request echoes it back (wire in [ipc.md](../../reference/ipc.md)). **Rejected: daemon-side anchoring
+alone**, reading each request against the current bottom: correct between frames, but a scroll during streaming output
+lands one frame's output away, and on a remote attachment, where the round trip is longer than a frame, that becomes the
+common case. **Revisit if** requests gain a correlation with their replies, which would also settle a step sent before
+the previous reply arrives.
+
 ## Selection vs scrollback
 
 The selection model is client-side pure data (`crates/felis-client-core/src/selection.rs`): an anchor/extent pair in

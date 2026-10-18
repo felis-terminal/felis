@@ -299,6 +299,7 @@ impl Core {
                             text,
                             byte_spans,
                             col_spans,
+                            ..
                         }) = item.msg
                         {
                             op.item(body_value(&crate::cli_sessions::search_match(

@@ -375,8 +375,9 @@ impl ApplicationHandler<AppEvent> for App {
                     return;
                 }
                 // `grid_change_invalidates_selection` needs the alt-screen
-                // flag on both sides of the apply.
+                // flag and the viewport on both sides of the apply.
                 let alt_screen_before = self.shadow.alt_screen();
+                let viewport_before = (self.shadow.viewport(), self.shadow.viewport_anchor());
                 if let Err(err) = self.shadow.apply(&msg) {
                     // A value the frame layer cannot catch: `packed_cells`
                     // is opaque `bytes` to the envelope, and a coordinate
@@ -445,6 +446,7 @@ impl ApplicationHandler<AppEvent> for App {
                         &msg,
                         alt_screen_before,
                         self.shadow.alt_screen(),
+                        viewport_before,
                     )
                 {
                     self.drag = DragState::Idle;
@@ -471,11 +473,13 @@ impl ApplicationHandler<AppEvent> for App {
                 let SearchToClientMsg::Match {
                     line_index,
                     col_spans,
+                    anchor,
                     ..
                 } = msg;
                 self.search.matches.push(SearchHitRecord {
                     line_index,
                     col_spans,
+                    anchor,
                 });
                 self.redraw.request();
             }

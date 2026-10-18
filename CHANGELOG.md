@@ -10,6 +10,13 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 
 ## [Unreleased]
 
+- **Scrollback stays put while output arrives**: a window scrolled back keeps showing the same lines while the program
+  keeps printing, and the next scroll moves one line from them instead of jumping by the lines printed meanwhile; search
+  highlights and a selection stay on their lines too. A resize, a cleared scrollback, a full reset, or a full-screen
+  program starting or ending while scrolled back returns the window to the live bottom, and leaving a scrolled-back view
+  clears a selection made there, since it no longer covers the rows on screen. The viewport messages and search hits
+  carry the history point they count from, a protocol minor 2 addition; an older window keeps its frozen view, and a
+  scroll it sends while a frame is still on its way can land off by that frame's output.
 - **Palette queries answer your palette**: a program asking for a palette color (`OSC 4 ; n ; ?`) gets the color the
   window paints from `[theme.palette]` and `[theme.palette.indexed]`, not the stock xterm one, so a program that picks
   readable colors from the palette picks against what you see. The window sends its palette in the theme report, a

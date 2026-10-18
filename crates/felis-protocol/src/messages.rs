@@ -23,6 +23,7 @@ pub use conn::{ConnToClientMsg, ConnToDaemonMsg, RefusalReason};
 pub use grid::{
     AttentionSource, ClipboardSelection, ClipboardWrite, CursorStyle, GridMsg, ModifyOtherKeys,
     MouseProtocol, PaletteAction, PromptKind, ScrollDirection, ThemeAction, ThemeChannel,
+    ViewportAnchor,
 };
 pub use image::{
     ImageFormat, ImageMsg, ImageTarget, MAX_IMAGE_CHUNK_PAYLOAD, RequestedExtent, SourceRect,

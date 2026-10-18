@@ -10,7 +10,9 @@ use super::session_task::OutEvent;
 use super::{
     ConnError, ConnectionMode, Grid, GridMsg, ImageMsg, Instant, PtyEffect, SessionId, ThemeChannel,
 };
-use felis_grid::{Damage, ProgramStatusEffect, RowEncode, ScrollOp, ViewportRowView, encode_row};
+use felis_grid::{
+    Damage, ProgramStatusEffect, RowEncode, ScrollOp, ViewportAnchor, ViewportRowView, encode_row,
+};
 use felis_protocol::messages::{
     AttentionSource, Correlation, Notification, OpsToClientMsg, PaletteAction, StreamErrorReason,
     ThemeAction,
@@ -219,10 +221,15 @@ pub(crate) struct DiffStreamState {
     /// [`Grid::prompt_marks_pruned`] to index the retained slice.
     pub(crate) prompt_marks_sent: usize,
     pub(crate) last_mode_flags: felis_grid::ModeSnapshot,
-    /// Scrollback offset this subscriber is browsing at (0 = live).
+    /// Scrollback offset this subscriber is browsing at (0 = live),
+    /// expressed against `viewport_anchor`.
     pub(crate) viewport: u32,
-    /// Last `(lines_from_bottom, max)` shipped as `ViewportState`.
-    pub(crate) last_viewport_state: (u32, u32),
+    pub(crate) viewport_anchor: ViewportAnchor,
+    /// Last `(lines_from_bottom, max, anchor)` shipped as `ViewportState`.
+    pub(crate) last_viewport_state: (u32, u32, Option<ViewportAnchor>),
+    /// The anchor and offset the browse rows the shadow holds were
+    /// composed at; `None` while it holds the live rows.
+    pub(crate) composed_browse: Option<(ViewportAnchor, u32)>,
 }
 
 impl DiffStreamState {
@@ -237,8 +244,41 @@ impl DiffStreamState {
             prompt_marks_sent,
             last_mode_flags: grid.mode_snapshot(),
             viewport: 0,
-            last_viewport_state: (0, viewport_max_for(grid)),
+            viewport_anchor: grid.viewport_anchor(),
+            last_viewport_state: (0, viewport_max_for(grid), None),
+            composed_browse: None,
         }
+    }
+
+    /// The offset showing the lines this subscriber browsed to, after
+    /// whatever output has pushed into scrollback since.
+    pub(crate) fn viewport_now(&self, grid: &Grid) -> u32 {
+        grid.anchor_viewport(self.viewport, self.viewport_anchor)
+    }
+
+    pub(crate) fn rebase_viewport(&mut self, grid: &Grid) {
+        self.viewport = self.viewport_now(grid);
+        self.viewport_anchor = grid.viewport_anchor();
+    }
+
+    /// Takes a client's `Viewport` request. An anchored one was computed
+    /// from a browsing `ViewportState` and is re-expressed against now;
+    /// an unanchored one counts from the current bottom. `true` when the
+    /// offset moved.
+    pub(crate) fn request_viewport(
+        &mut self,
+        grid: &Grid,
+        lines_from_bottom: u32,
+        anchor: Option<ViewportAnchor>,
+    ) -> bool {
+        self.rebase_viewport(grid);
+        let requested = match anchor {
+            Some(anchor) => grid.anchor_viewport(lines_from_bottom, anchor),
+            None => grid.clamp_viewport(lines_from_bottom),
+        };
+        let moved = requested != self.viewport;
+        self.viewport = requested;
+        moved
     }
 }
 
@@ -776,6 +816,7 @@ pub(crate) fn compose_rehydrate(
     out.push(OutEvent::Grid(GridMsg::ViewportState {
         lines_from_bottom: 0,
         max: viewport_max_for(grid),
+        anchor: None,
     }));
     compose_image_rehydrate(images, placements, out);
     out.push(OutEvent::Grid(GridMsg::RehydrateEnd));
@@ -831,23 +872,40 @@ pub(crate) fn compose_diffs(
     // would shift them again: replay the rows instead, at the sequence
     // this compose reads them under.
     sub.catch_up_to(grid);
-    // Re-clamp every cycle: scrollback eviction or a `?1049h` can make
-    // the honored offset stale, and felis-grid would compose against 0
-    // while the shadow keeps showing the stale value.
-    let effective_viewport = grid.clamp_viewport(sub.diff.viewport);
-    if effective_viewport != sub.diff.viewport {
-        sub.diff.viewport = effective_viewport;
-    }
-    let viewport_changed = effective_viewport != sub.diff.last_viewport_state.0;
-    let cur_viewport_state = (effective_viewport, viewport_max_for(grid));
+    sub.diff.rebase_viewport(grid);
+    let effective_viewport = sub.diff.viewport;
+    let anchor = sub.diff.viewport_anchor;
+    // The anchor ships even when the offset and max did not move: at
+    // capacity an eviction moves only the anchor, and a client echoing
+    // a stale anchor would have its next step grown back to the cap.
+    let cur_viewport_state = (
+        effective_viewport,
+        viewport_max_for(grid),
+        (effective_viewport > 0).then_some(anchor),
+    );
     if cur_viewport_state != sub.diff.last_viewport_state {
         out.push(OutEvent::Grid(GridMsg::ViewportState {
             lines_from_bottom: cur_viewport_state.0,
             max: cur_viewport_state.1,
+            anchor: cur_viewport_state.2,
         }));
         sub.diff.last_viewport_state = cur_viewport_state;
     }
+    // The shadow's browse rows stay valid while they are the same lines:
+    // pure growth moves the offset, not the top line. A geometry change
+    // rewrites the rows whatever the offset says.
+    let top_line = anchor.pushed.saturating_sub(u64::from(effective_viewport));
+    let browse_stale = effective_viewport > 0
+        && sub.diff.composed_browse.is_none_or(|(at, offset)| {
+            let composed_top = at.pushed.saturating_sub(u64::from(offset));
+            at.generation != anchor.generation || composed_top != top_line
+        });
     if effective_viewport == 0 {
+        // Re-anchoring can end a browse on its own (a resize, an erased
+        // history); the shadow still holds browse rows then.
+        if sub.diff.composed_browse.take().is_some() {
+            sub.damage.mark_all();
+        }
         // docs/reference/ipc.md: accepted scroll directives ship first, in
         // arrival order, so the shadow's shift reproduces the daemon's state
         // before the `RowDelta` replay patches the changed rows.
@@ -912,7 +970,8 @@ pub(crate) fn compose_diffs(
             sub.diff.last_cursor_style = style;
             sub.diff.last_cursor_blink = blink;
         }
-    } else if viewport_changed {
+    } else if browse_stale {
+        sub.diff.composed_browse = Some((anchor, effective_viewport));
         // The shadow has no scrollback, so the daemon composes the browsed
         // view. A scroll directive must never reach a browsing shadow (it
         // would shift the composed view); accepted ones fold back into the

@@ -53,7 +53,7 @@ use felis_protocol::{
         ColSpan, ConnToClientMsg, ConnToDaemonMsg, Correlation, GridMsg, ImageMsg, InputMsg,
         MouseAction, MouseButton, MouseEvent, OpsToClientMsg, PushMsg, RegionToClientMsg,
         RegionToDaemonMsg, RetargetTarget, SearchToClientMsg, SearchToDaemonMsg, SessionInfo,
-        SessionToDaemonMsg, StreamId, Subject,
+        SessionToDaemonMsg, StreamId, Subject, ViewportAnchor,
     },
 };
 use felis_render_wgpu::{
@@ -1567,6 +1567,15 @@ impl PendingReattach {
     }
 }
 
+/// A scrollback offset and the anchor it is expressed against, as the
+/// shadow held them; restoring it echoes the anchor, so output that
+/// arrived meanwhile does not move the view off its lines.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ViewportPosition {
+    offset: u32,
+    anchor: Option<ViewportAnchor>,
+}
+
 /// docs/explanation/input.md "Which daemon runs the command".
 #[derive(Debug, Default)]
 enum PipeState {
@@ -1577,11 +1586,11 @@ enum PipeState {
     /// (provenance is the request's, not the reply's).
     Awaiting {
         target: felis_client_core::PipeTarget,
-        /// Viewport offset the user was at when invoking the pipe.
-        viewport: u32,
+        /// Viewport the user was at when invoking the pipe.
+        viewport: ViewportPosition,
     },
     Active {
-        viewport: u32,
+        viewport: ViewportPosition,
         /// Dropping this unlinks the region file. `None` for `run`.
         region: Option<StagedRegion>,
         /// Captured when the visit starts rather than read off the trail
@@ -1591,7 +1600,7 @@ enum PipeState {
         source: exit_ladder::Place,
     },
     Returning {
-        viewport: u32,
+        viewport: ViewportPosition,
         expected: exit_ladder::Place,
     },
 }
@@ -1601,7 +1610,11 @@ impl PipeState {
     /// through the same handler, and taking there would drop the
     /// [`Self::Active`] the chord had just parked, leaking the region
     /// file.
-    fn settle_returning(&mut self, landed: &exit_ladder::Place, keep_parked: bool) -> Option<u32> {
+    fn settle_returning(
+        &mut self,
+        landed: &exit_ladder::Place,
+        keep_parked: bool,
+    ) -> Option<ViewportPosition> {
         let Self::Returning { viewport, expected } = self else {
             return None;
         };
@@ -1620,7 +1633,7 @@ impl PipeState {
     }
 
     /// Conditional for the same reason as [`Self::settle_returning`].
-    fn take_awaiting(&mut self) -> Option<(felis_client_core::PipeTarget, u32)> {
+    fn take_awaiting(&mut self) -> Option<(felis_client_core::PipeTarget, ViewportPosition)> {
         let Self::Awaiting { target, viewport } = self else {
             return None;
         };
@@ -1640,7 +1653,7 @@ enum ClosedOutcome {
     AwaitSwitch,
     /// A transient pipe/run command exited; unwind to the place it came
     /// from.
-    PipeReturn { viewport: u32 },
+    PipeReturn { viewport: ViewportPosition },
     /// The transport dropped with nothing in flight: re-dial the same
     /// carrier and session.
     Reconnect,
@@ -1715,6 +1728,8 @@ struct SearchHitRecord {
     /// A match crossing a soft-wrap edge carries one segment per touched
     /// row.
     col_spans: Vec<ColSpan>,
+    /// The history point the indices count from.
+    anchor: Option<ViewportAnchor>,
 }
 
 /// `Some(bytes)` only on a non-empty `Ime::Commit`; pre-edit text rides
@@ -1881,25 +1896,38 @@ const fn forwarded_press_dismisses_selection(button: MouseButton) -> bool {
 /// swapped. `alt_screen_before`/`alt_screen_now` bracket `Shadow::apply`
 /// because `ModeFlags` resends unchanged alt-screen bits on unrelated mode
 /// updates; only an actual transition indicates a screen swap.
-const fn grid_change_invalidates_selection(
+fn grid_change_invalidates_selection(
     msg: &GridMsg,
     alt_screen_before: bool,
     alt_screen_now: bool,
+    viewport_before: (u32, Option<ViewportAnchor>),
 ) -> bool {
-    alt_screen_before != alt_screen_now || viewport_message_enters_scrollback(msg)
+    alt_screen_before != alt_screen_now || viewport_message_enters_scrollback(msg, viewport_before)
 }
 
-/// The selection model stores visible-row coordinates
-/// (`felis-client-core::selection::Selection`), so scrolling into
-/// history drops the stale highlight, matching xterm. Snap-back
-/// (`lines_from_bottom == 0`) does not invalidate.
-const fn viewport_message_enters_scrollback(msg: &GridMsg) -> bool {
-    match msg {
-        GridMsg::ViewportState {
-            lines_from_bottom, ..
-        } => *lines_from_bottom != 0,
-        _ => false,
+/// The selection holds visible-row coordinates, so a view that moves
+/// drops it (xterm), into history or back to live. An offset grown by
+/// exactly the rows output pushed keeps it: same lines on screen.
+fn viewport_message_enters_scrollback(
+    msg: &GridMsg,
+    (offset_before, anchor_before): (u32, Option<ViewportAnchor>),
+) -> bool {
+    let GridMsg::ViewportState {
+        lines_from_bottom,
+        anchor,
+        ..
+    } = msg
+    else {
+        return false;
+    };
+    if *lines_from_bottom == 0 {
+        return offset_before > 0;
     }
+    let same_lines = anchor_before
+        .zip(*anchor)
+        .and_then(|(before, now)| before.rows_until(now))
+        .is_some_and(|grown| i64::from(*lines_from_bottom) - i64::from(offset_before) == grown);
+    !same_lines
 }
 
 const fn map_button(button: WinitMouseButton) -> Option<MouseButton> {

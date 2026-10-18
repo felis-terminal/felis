@@ -8,11 +8,11 @@ use super::{
     OutgoingFrame, PhysicalPosition, PhysicalSize, PipeState, Pumps, Reconnector,
     RegionToDaemonMsg, Renderer, SearchDirection, SearchHitRecord, SearchHitSpan, SearchOverlay,
     SearchToDaemonMsg, SearchUi, SearchUiMode, Selection, SessionInfo, SessionToDaemonMsg,
-    SharedDriver, SwitchState, TrailRecord, TrailState, activation_target, apply_window_backdrop,
-    codec, compose_window_title, composed_row_for_line, config, configured_font_size_logical_px,
-    cursor_trail, dial_and_land, error, font_features_differ, font_settings_differ,
-    font_stack_inputs_differ, ime_cursor_area_pixels, info, keymap_adapter, launch_args,
-    pointer_icon, preedit_from_ime, renderer_config_from, reported_theme_differs,
+    SharedDriver, SwitchState, TrailRecord, TrailState, ViewportPosition, activation_target,
+    apply_window_backdrop, codec, compose_window_title, composed_row_for_line, config,
+    configured_font_size_logical_px, cursor_trail, dial_and_land, error, font_features_differ,
+    font_settings_differ, font_stack_inputs_differ, ime_cursor_area_pixels, info, keymap_adapter,
+    launch_args, pointer_icon, preedit_from_ime, renderer_config_from, reported_theme_differs,
     resolve_local_socket, viewport_for_hit, warn,
 };
 use crate::winit_keys;
@@ -21,7 +21,7 @@ use felis_client_core::connector::{Carrier, RemoteSpawn, connect_carrier};
 use felis_client_core::pipe::write_region_file;
 use felis_client_core::roster::RingKey;
 use felis_client_core::{FontSizeStep, PipeRegionSource, PipeTarget};
-use felis_protocol::messages::{GridDims, RegionPosition, RequestedDims};
+use felis_protocol::messages::{GridDims, RegionPosition, RequestedDims, ViewportAnchor};
 
 impl App {
     /// `current_font_size_logical_px` (the unit `font.size_px` and the zoom
@@ -860,16 +860,18 @@ impl App {
             return;
         };
         self.search.current = Some(next);
-        let line_index = search_hit_anchor_line(&self.search.matches[next]);
         let rows = self.shadow.screen().rows();
         let max_scroll = self.shadow.viewport_max().saturating_sub(u32::from(rows));
-        let target = viewport_for_hit(line_index, rows, max_scroll);
-        if target == self.shadow.viewport() {
+        match hit_navigation(
+            &self.search.matches[next],
+            self.viewport_position(),
+            rows,
+            max_scroll,
+        ) {
+            Some(request) => self.send_viewport_at(request.offset, request.anchor),
             // Already on-screen: no viewport round-trip to ride a redraw
             // on, so flip the `is_current` color locally.
-            self.redraw.request();
-        } else {
-            self.send_viewport(target);
+            None => self.redraw.request(),
         }
     }
 
@@ -893,6 +895,7 @@ impl App {
         visible_hit_spans(
             &self.search.matches,
             self.search.current,
+            self.shadow.viewport_anchor(),
             self.shadow.viewport(),
             self.shadow.screen().rows(),
         )
@@ -1056,7 +1059,7 @@ impl App {
             tracing::debug!("pipe or switch already in progress; ignoring chord");
             return;
         }
-        let viewport = self.shadow.viewport();
+        let viewport = self.viewport_position();
         let Some(wire_source) = source.wire_source() else {
             let Some(sel) = self.selection() else {
                 tracing::debug!("pipe selection: no active selection; ignoring");
@@ -1103,7 +1106,7 @@ impl App {
         data: &[u8],
         position: Option<RegionPosition>,
         target: PipeTarget,
-        viewport: u32,
+        viewport: ViewportPosition,
     ) {
         match target {
             PipeTarget::Command(argv) => {
@@ -1154,7 +1157,7 @@ impl App {
             tracing::debug!("run: empty command; ignoring");
             return;
         }
-        let viewport = self.shadow.viewport();
+        let viewport = self.viewport_position();
         self.enter_transient(None, command, None, viewport);
     }
 
@@ -1167,7 +1170,7 @@ impl App {
         region: Option<&[u8]>,
         argv: &[String],
         position: Option<RegionPosition>,
-        viewport: u32,
+        viewport: ViewportPosition,
     ) {
         let origin = felis_client_core::pipe::Origin {
             session_id: self.current_session_id,
@@ -1236,7 +1239,7 @@ impl App {
     /// Every way a transient's exit reaches the client must route through
     /// here: a path that skips it leaves `pipe_state` at `Active`, where
     /// every later handoff chord is silently dropped.
-    pub(crate) fn park_pipe_return(&mut self, viewport: u32) {
+    pub(crate) fn park_pipe_return(&mut self, viewport: ViewportPosition) {
         let PipeState::Active { region, source, .. } =
             std::mem::replace(&mut self.pipe_state, PipeState::Idle)
         else {
@@ -1407,9 +1410,26 @@ impl App {
     }
 
     /// The daemon clamps; the shadow's `viewport()` updates on the
-    /// round-trip `GridMsg::ViewportState`.
+    /// round-trip `GridMsg::ViewportState`. The offset was computed from
+    /// the shadow's, so it names the shadow's anchor.
     pub(crate) fn send_viewport(&self, lines_from_bottom: u32) {
-        self.send_input(&InputMsg::Viewport { lines_from_bottom });
+        self.send_viewport_at(lines_from_bottom, self.shadow.viewport_anchor());
+    }
+
+    /// `0` goes without an anchor whatever it was computed from: the
+    /// live bottom follows output.
+    pub(crate) fn send_viewport_at(&self, lines_from_bottom: u32, anchor: Option<ViewportAnchor>) {
+        self.send_input(&InputMsg::Viewport {
+            lines_from_bottom,
+            anchor: anchor.filter(|_| lines_from_bottom > 0),
+        });
+    }
+
+    pub(crate) const fn viewport_position(&self) -> ViewportPosition {
+        ViewportPosition {
+            offset: self.shadow.viewport(),
+            anchor: self.shadow.viewport_anchor(),
+        }
     }
 
     /// No-op at the bottom so redundant `Viewport` frames are not sent.
@@ -1624,22 +1644,79 @@ pub(crate) fn search_hit_anchor_line(hit: &SearchHitRecord) -> i64 {
         .map_or(hit.line_index, |seg| seg.line_index)
 }
 
+/// The `Viewport` request that brings `hit` into view, `None` when it is
+/// already shown. Computed in the newer of the hit's frame and the
+/// view's: projecting into the older one can carry a scrollback hit
+/// across `0`, which the daemon reads as the live bottom, or leave a hit
+/// found on the live screen at `0` after it scrolled into history.
+pub(crate) fn hit_navigation(
+    hit: &SearchHitRecord,
+    shown: ViewportPosition,
+    rows: u16,
+    max_scroll: u32,
+) -> Option<ViewportPosition> {
+    let shift = hit_shift(hit, shown.anchor);
+    let in_view_frame = match shift {
+        Some(shift) => hit.anchor.is_none() || shift >= 0 && shown.anchor.is_some(),
+        None => false,
+    };
+    let (line, anchor, max_scroll) = if in_view_frame {
+        let shift = shift.unwrap_or(0);
+        (
+            search_hit_anchor_line(hit) - shift,
+            shown.anchor,
+            max_scroll,
+        )
+    } else {
+        // The view's maximum belongs to its own, older frame; the daemon
+        // clamps, and answers a stale generation with the live bottom.
+        (search_hit_anchor_line(hit), hit.anchor, u32::MAX)
+    };
+    let target = viewport_for_hit(line, rows, max_scroll);
+    let there = if target == 0 {
+        shown.offset == 0
+    } else if anchor == shown.anchor {
+        target == shown.offset
+    } else {
+        shift.is_some_and(|shift| i64::from(target) + shift == i64::from(shown.offset))
+    };
+    (!there).then_some(ViewportPosition {
+        offset: target,
+        anchor,
+    })
+}
+
+/// Rows to take off a hit's indices to count them from the bottom `frame`
+/// names; a hit computed after a push that `frame` predates shifts the
+/// other way. Unanchored on either side, the hit projects as reported.
+/// `None` for a hit from another generation: the lines it named are gone.
+pub(crate) fn hit_shift(hit: &SearchHitRecord, frame: Option<ViewportAnchor>) -> Option<i64> {
+    match hit.anchor.zip(frame) {
+        Some((at, frame)) => at.rows_until(frame),
+        None => Some(0),
+    }
+}
+
 /// Off-screen segments are dropped; n/N scrolls the viewport to bring one
 /// into view on demand.
 pub(crate) fn visible_hit_spans(
     matches: &[SearchHitRecord],
     current: Option<usize>,
+    frame: Option<ViewportAnchor>,
     viewport: u32,
     rows: u16,
 ) -> Vec<SearchHitSpan> {
     let mut spans = Vec::new();
     for (idx, hit) in matches.iter().enumerate() {
         let is_current = current == Some(idx);
+        let Some(shift) = hit_shift(hit, frame) else {
+            continue;
+        };
         for seg in &hit.col_spans {
             if seg.col_end <= seg.col_start {
                 continue;
             }
-            let Some(row) = composed_row_for_line(seg.line_index, viewport, rows) else {
+            let Some(row) = composed_row_for_line(seg.line_index - shift, viewport, rows) else {
                 continue;
             };
             spans.push(SearchHitSpan {

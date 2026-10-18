@@ -1527,7 +1527,9 @@ fn compose_diffs_freezes_view_during_steady_browse() {
         pending_wrap: false,
     };
     stream.diff.viewport = 1;
-    stream.diff.last_viewport_state = (1u32, viewport_max_for(&grid));
+    stream.diff.viewport_anchor = grid.viewport_anchor();
+    stream.diff.last_viewport_state = (1u32, viewport_max_for(&grid), Some(grid.viewport_anchor()));
+    stream.diff.composed_browse = Some((grid.viewport_anchor(), 1));
     grid.damage_mut().clear();
     parser.advance(&mut grid, b"more!");
     merge_damage(&mut grid, &mut stream);
@@ -1545,6 +1547,175 @@ fn compose_diffs_freezes_view_during_steady_browse() {
         stream.damage.dirty_rows().next().is_some(),
         "damage must remain accumulated for the snap-back flush",
     );
+}
+
+fn browse_top_row(out: &[OutEvent]) -> Option<String> {
+    grid_msgs(out).iter().find_map(|m| match m {
+        GridMsg::RowDelta { rows } => rows
+            .iter()
+            .find(|(r, _)| *r == 0)
+            .map(|(_, payload)| row_text(&payload.0).trim_end().to_owned()),
+        _ => None,
+    })
+}
+
+fn shipped_viewport(out: &[OutEvent]) -> Option<(u32, Option<felis_grid::ViewportAnchor>)> {
+    grid_msgs(out).iter().rev().find_map(|m| match m {
+        GridMsg::ViewportState {
+            lines_from_bottom,
+            anchor,
+            ..
+        } => Some((*lines_from_bottom, *anchor)),
+        _ => None,
+    })
+}
+
+/// A two-row grid holding `l1` .. `l{n}`, browsed at `offset`.
+fn browsing_at(
+    lines: u32,
+    offset: u32,
+    scrollback: usize,
+) -> (Grid, felis_vt::Parser, SubscriberStream) {
+    let mut grid = Grid::with_scrollback(2, 8, scrollback);
+    let mut parser = felis_vt::Parser::new();
+    let text: Vec<String> = (1..=lines).map(|n| format!("l{n}")).collect();
+    parser.advance(&mut grid, text.join("\r\n").as_bytes());
+    let mut stream = seeded_stream(&grid);
+    grid.damage_mut().clear();
+    stream.diff.request_viewport(&grid, offset, None);
+    let mut out = Vec::new();
+    compose_one(&mut grid, &mut stream, &mut out).expect("compose ok");
+    (grid, parser, stream)
+}
+
+#[test]
+fn a_browsed_view_stays_on_its_lines_as_output_arrives() {
+    let (mut grid, mut parser, mut stream) = browsing_at(8, 2, 100);
+    assert_eq!(
+        grid.cell_at_viewport(2, 0, 1).unwrap().grapheme,
+        felis_grid::Grapheme::Ascii(b'5')
+    );
+    parser.advance(&mut grid, b"\r\nl9\r\nl10");
+    merge_damage(&mut grid, &mut stream);
+
+    let mut out = Vec::new();
+    compose_one(&mut grid, &mut stream, &mut out).expect("compose ok");
+
+    let (offset, anchor) = shipped_viewport(&out).expect("the grown offset is reported");
+    assert_eq!(offset, 4);
+    assert_eq!(anchor, Some(grid.viewport_anchor()));
+    assert_eq!(
+        browse_top_row(&out),
+        None,
+        "the same lines stay on screen; nothing to resend"
+    );
+
+    stream.diff.request_viewport(&grid, offset + 1, anchor);
+    let mut out = Vec::new();
+    compose_one(&mut grid, &mut stream, &mut out).expect("compose ok");
+    assert_eq!(
+        browse_top_row(&out).as_deref(),
+        Some("l4"),
+        "one line above l5"
+    );
+}
+
+#[test]
+fn a_step_computed_before_the_grown_offset_arrived_still_moves_one_line() {
+    let (mut grid, mut parser, mut stream) = browsing_at(8, 2, 100);
+    let seen = grid.viewport_anchor();
+    parser.advance(&mut grid, b"\r\nl9\r\nl10");
+    merge_damage(&mut grid, &mut stream);
+    let mut out = Vec::new();
+    compose_one(&mut grid, &mut stream, &mut out).expect("compose ok");
+
+    // Computed from offset 2 at the anchor the client last saw.
+    stream.diff.request_viewport(&grid, 3, Some(seen));
+    let mut out = Vec::new();
+    compose_one(&mut grid, &mut stream, &mut out).expect("compose ok");
+    assert_eq!(browse_top_row(&out).as_deref(), Some("l4"));
+}
+
+#[test]
+fn an_unanchored_step_counts_from_the_current_bottom() {
+    let (mut grid, mut parser, mut stream) = browsing_at(8, 0, 100);
+    parser.advance(&mut grid, b"\r\nl9\r\nl10");
+    merge_damage(&mut grid, &mut stream);
+    stream.diff.request_viewport(&grid, 1, None);
+    let mut out = Vec::new();
+    compose_one(&mut grid, &mut stream, &mut out).expect("compose ok");
+    assert_eq!(browse_top_row(&out).as_deref(), Some("l8"));
+}
+
+#[test]
+fn an_anchored_zero_joins_the_live_view() {
+    let (mut grid, mut parser, mut stream) = browsing_at(8, 1, 100);
+    let seen = grid.viewport_anchor();
+    parser.advance(&mut grid, b"\r\nl9");
+    assert!(stream.diff.request_viewport(&grid, 0, Some(seen)));
+    assert_eq!(stream.diff.viewport, 0);
+}
+
+#[test]
+fn eviction_under_a_browsed_view_recomposes_it_and_ships_a_fresh_anchor() {
+    let (mut grid, mut parser, mut stream) = browsing_at(8, 3, 3);
+    assert_eq!(
+        stream.diff.viewport, 3,
+        "browsing at the oldest retained row"
+    );
+    let before = stream.diff.last_viewport_state;
+    parser.advance(&mut grid, b"\r\nl9");
+    merge_damage(&mut grid, &mut stream);
+
+    let mut out = Vec::new();
+    compose_one(&mut grid, &mut stream, &mut out).expect("compose ok");
+
+    let (offset, anchor) = shipped_viewport(&out).expect("a fresh anchor ships");
+    assert_eq!(offset, before.0, "still the oldest row");
+    assert_ne!(anchor, before.2);
+    assert_eq!(
+        browse_top_row(&out).as_deref(),
+        Some("l5"),
+        "l4 was evicted"
+    );
+
+    stream.diff.request_viewport(&grid, offset - 1, anchor);
+    let mut out = Vec::new();
+    compose_one(&mut grid, &mut stream, &mut out).expect("compose ok");
+    assert_eq!(
+        browse_top_row(&out).as_deref(),
+        Some("l6"),
+        "line-down moves one line"
+    );
+}
+
+#[test]
+fn a_resize_under_a_browsed_view_returns_it_to_live() {
+    let (mut grid, _parser, mut stream) = browsing_at(8, 2, 100);
+    grid.resize(2, 6);
+    merge_damage(&mut grid, &mut stream);
+    stream.catch_up_to(&grid);
+    let mut out = Vec::new();
+    compose_one(&mut grid, &mut stream, &mut out).expect("compose ok");
+    assert_eq!(shipped_viewport(&out), Some((0, None)));
+    let resent = grid_msgs(&out)
+        .iter()
+        .filter_map(|m| match m {
+            GridMsg::RowDelta { rows } => Some(rows.len()),
+            _ => None,
+        })
+        .sum::<usize>();
+    assert_eq!(resent, 2, "every live row replaces the browse rows");
+}
+
+#[test]
+fn an_erased_and_refilled_history_returns_a_browsed_view_to_live() {
+    let (mut grid, mut parser, mut stream) = browsing_at(8, 2, 100);
+    parser.advance(&mut grid, b"\x1b[3J\r\nx1\r\nx2\r\nx3\r\nx4");
+    merge_damage(&mut grid, &mut stream);
+    let mut out = Vec::new();
+    compose_one(&mut grid, &mut stream, &mut out).expect("compose ok");
+    assert_eq!(shipped_viewport(&out), Some((0, None)));
 }
 
 /// A subscriber that still owes rows in the band takes the directive
@@ -4238,6 +4409,7 @@ fn request_halves_route_to_the_task_and_a_reply_half_closes_the_connection() {
             text: String::new(),
             byte_spans: Vec::new(),
             col_spans: Vec::new(),
+            anchor: None,
         },
         Correlation::stream(StreamId::new(1).unwrap()),
     );
@@ -6647,6 +6819,7 @@ fn a_paste_reserves_its_bracketing_whatever_the_mode() {
         InputMsg::FocusChange { focused: true },
         InputMsg::Viewport {
             lines_from_bottom: 3,
+            anchor: None,
         },
     ] {
         assert_eq!(

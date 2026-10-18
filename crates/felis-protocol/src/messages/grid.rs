@@ -10,6 +10,30 @@ use super::GridDims;
 use crate::kitty_keyboard::KittyKbdFlags;
 use crate::row::RowPayload;
 
+/// The point in a grid's history a scrollback offset is expressed
+/// against: the rows pushed into scrollback so far and the generation
+/// they were counted under, which moves whenever a push count stops
+/// naming the same lines (a resize, an erased history, a screen switch). A client treats it as opaque
+/// and echoes it in [`InputMsg::Viewport`](super::InputMsg::Viewport).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ViewportAnchor {
+    pub pushed: u64,
+    pub generation: u64,
+}
+
+impl ViewportAnchor {
+    /// Rows the bottom moved from `self` to `later`, negative when
+    /// `later` is the older of the two; `None` across a generation.
+    #[must_use]
+    pub fn rows_until(self, later: Self) -> Option<i64> {
+        if self.generation != later.generation {
+            return None;
+        }
+        let moved = i128::from(later.pushed) - i128::from(self.pushed);
+        Some(i64::try_from(moved).unwrap_or(if moved < 0 { i64::MIN } else { i64::MAX }))
+    }
+}
+
 /// Grid-family messages ([`crate::MessageKind::Grid`], kind 2). Always
 /// daemon → client.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -88,6 +112,10 @@ pub enum GridMsg {
         lines_from_bottom: u32,
         /// Retained scrollback rows + live row count.
         max: u32,
+        /// The history point a non-zero `lines_from_bottom` is
+        /// expressed against; `None` at the live bottom and from a
+        /// daemon below minor 2.
+        anchor: Option<ViewportAnchor>,
     },
     /// Authoritative grid dimensions changed mid-stream.
     ///
@@ -427,14 +455,23 @@ pub(crate) mod tests {
             GridMsg::ViewportState {
                 lines_from_bottom: 0,
                 max: 24,
+                anchor: None,
             },
             GridMsg::ViewportState {
                 lines_from_bottom: 9_999,
                 max: 10_024,
+                anchor: Some(ViewportAnchor {
+                    pushed: 0,
+                    generation: 0,
+                }),
             },
             GridMsg::ViewportState {
                 lines_from_bottom: u32::MAX,
                 max: u32::MAX,
+                anchor: Some(ViewportAnchor {
+                    pushed: u64::MAX,
+                    generation: u64::MAX,
+                }),
             },
             GridMsg::Size {
                 dims: GridDims {

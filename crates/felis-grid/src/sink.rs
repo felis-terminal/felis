@@ -638,7 +638,13 @@ impl Sink for Grid {
                 let winsize_pixels = self.winsize_pixels;
                 let graphics_tracker = std::mem::take(&mut self.graphics_tracker);
                 let pty_effects = std::mem::take(&mut self.pty_effects);
+                let anchor_generation = self.viewport_anchor().generation;
                 *self = Self::new(rows, cols);
+                // A fresh grid restarts its counters; an anchor taken
+                // before the reset must not match one taken after it.
+                self.history_epoch = anchor_generation
+                    .wrapping_add(1)
+                    .wrapping_sub(self.screen.geometry_gen());
                 self.theme_dirty = theme_dirty;
                 self.palette_dirty = palette_dirty;
                 self.palette_reset_all_pending = palette_reset_all_pending;
