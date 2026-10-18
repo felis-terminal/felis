@@ -10,45 +10,51 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 
 ## [Unreleased]
 
-- **Scrollback stays put while output arrives**: a window scrolled back keeps showing the same lines while the program
-  keeps printing, and the next scroll moves one line from them instead of jumping by the lines printed meanwhile; search
-  highlights and a selection stay on their lines too. A resize, a cleared scrollback, a full reset, or a full-screen
-  program starting or ending while scrolled back returns the window to the live bottom, and leaving a scrolled-back view
-  clears a selection made there, since it no longer covers the rows on screen. The viewport messages and search hits
-  carry the history point they count from, a protocol minor 2 addition; an older window keeps its frozen view, and a
-  scroll it sends while a frame is still on its way can land off by that frame's output.
-- **Palette queries answer your palette**: a program asking for a palette color (`OSC 4 ; n ; ?`) gets the color the
-  window paints from `[theme.palette]` and `[theme.palette.indexed]`, not the stock xterm one, so a program that picks
-  readable colors from the palette picks against what you see. The window sends its palette in the theme report, a
-  protocol minor 2 addition; against an older daemon or window, queries answer the stock palette as before.
-- **Terminal reset keeps the window's colors**: after a full reset (`ESC c`, `reset`), color queries keep answering the
-  window's configured colors and light/dark preference instead of xterm white, a window stops painting the colors the
-  program had set and shows the default mouse pointer again, and pixel-size reports keep the window's size.
-- **Kitty images of equal z stack as in kitty**: overlapping images at the same `z=` draw in the order they were
-  created, where sending an image again under its id keeps its place, and one image's placements draw in the order they
-  were first put; a window that reattaches draws them in the same order. The protocol minor is 2: `ImageNew.serial` and
-  `ImagePlacement.serial` carry the two orders.
-- **Kitty placeholder images under the text**: an image drawn through Unicode-placeholder cells sits between the cell
-  backgrounds and the text, whatever `z=` it was placed with, as in kitty. An image re-sent under the same id disappears
-  until the new data has arrived, rather than showing the old picture meanwhile.
-- **Font names**: `felis fonts list` prints every family name `font.family` and the other `family` keys accept on this
-  machine, with whether it is monospace and which weights and slants it has, so a name that would fall back to monospace
-  can be checked before opening a window.
-- **Scrollback jump keys**: jumping to the top or bottom of the scrollback moves from `Ctrl+Home` / `Ctrl+End` to
-  `Ctrl+Shift+Home` / `Ctrl+Shift+End`, as in kitty and Windows Terminal, so `Ctrl+Home` / `Ctrl+End` reach editors such
-  as vim and nano again. `"ctrl+home" = { kind = "scroll", step = "home" }` under `[keymap]` (and `step = "end"` for
-  `ctrl+end`) brings the old chords back.
-- **Legacy key bytes match xterm**: in the legacy encoding a session starts in, `Ctrl+Space` sends NUL and
-  `Ctrl+Backspace` sends BS, `Ctrl+2` through `Ctrl+8`, `Ctrl+/` and `Ctrl+?` send xterm's control bytes, and Alt keeps
-  the case Shift gave a letter (`Alt+Shift+B` sends `ESC B`), so Emacs `C-SPC`, readline `M-B` and a shell's
-  `Ctrl+Backspace` word delete receive the key they bind.
-- **Fonts through CoreText and DirectWrite**: on macOS and Windows, `font.family` resolves through the platform's font
-  API, and a character the font misses draws from the face the platform picks for it, so Han takes the Japanese or the
-  Chinese form your language list asks for. A symbols-only Nerd Font still comes first, and an explicit `font.fallback`
-  still replaces both.
+### Added
+
+- **CLI**: `felis fonts list` prints every family name `font.family` and the other `family` keys accept on this machine,
+  with whether it is monospace and which weights and slants it has, so a name that would fall back to monospace can be
+  checked before opening a window.
+- **CLI**: `felis doctor report` names the platform's per-character fallback after the fallback faces, and
+  `--format json` adds it as `fonts.system_fallback`.
+
+### Changed
+
+- Jumping to the top or bottom of the scrollback moves from `Ctrl+Home` / `Ctrl+End` to `Ctrl+Shift+Home` /
+  `Ctrl+Shift+End`, as in kitty and Windows Terminal, so `Ctrl+Home` / `Ctrl+End` reach editors such as vim and nano
+  again. `"ctrl+home" = { kind = "scroll", step = "home" }` under `[keymap]` (and `step = "end"` for `ctrl+end`) brings
+  the old chords back.
+- On macOS and Windows, `font.family` resolves through the platform's font API, and a character the font misses draws
+  from the face the platform picks for it, so Han takes the Japanese or the Chinese form your language list asks for. A
+  symbols-only Nerd Font still comes first, and an explicit `font.fallback` still replaces both.
 - The default font is your fixed-pitch font on macOS (Menlo unless you changed it) and Cascadia Mono on Windows.
-- `felis doctor report` names the platform's per-character fallback after the fallback faces, and `--format json` adds
-  it as `fonts.system_fallback`.
+- A window scrolled back keeps showing the same lines while the program keeps printing, and the next scroll moves one
+  line from them instead of jumping by the lines printed meanwhile; search highlights and a selection stay on their
+  lines too. A resize, a cleared scrollback, a full reset, or a full-screen program starting or ending while scrolled
+  back returns the window to the live bottom, and leaving a scrolled-back view clears a selection made there, since it
+  no longer covers the rows on screen. The viewport messages and search hits carry the history point they count from, a
+  protocol minor 2 addition; an older window keeps its frozen view, and a scroll it sends while a frame is still on its
+  way can land off by that frame's output.
+
+### Fixed
+
+- A program asking for a palette color (`OSC 4 ; n ; ?`) now gets the color the window paints from `[theme.palette]` and
+  `[theme.palette.indexed]`, not the stock xterm one, so a program that picks readable colors from the palette picks
+  against what you see. The window sends its palette in the theme report, a protocol minor 2 addition; against an older
+  daemon or window, queries answer the stock palette as before.
+- After a full reset (`ESC c`, `reset`), color queries keep answering the window's configured colors and light/dark
+  preference instead of xterm white, a window stops painting the colors the program had set and shows the default mouse
+  pointer again, and pixel-size reports keep the window's size.
+- In the legacy encoding a session starts in, `Ctrl+Space` now sends NUL and `Ctrl+Backspace` sends BS, `Ctrl+2` through
+  `Ctrl+8`, `Ctrl+/` and `Ctrl+?` send xterm's control bytes, and Alt keeps the case Shift gave a letter (`Alt+Shift+B`
+  sends `ESC B`), so Emacs `C-SPC`, readline `M-B` and a shell's `Ctrl+Backspace` word delete receive the key they bind.
+- Overlapping Kitty graphics images at the same `z=` now draw, as in kitty, in the order they were created, where
+  sending an image again under its id keeps its place, and one image's placements draw in the order they were first put;
+  a window that reattaches draws them in the same order. The protocol minor is 2: `ImageNew.serial` and
+  `ImagePlacement.serial` carry the two orders.
+- A Kitty graphics image drawn through Unicode-placeholder cells now sits between the cell backgrounds and the text,
+  whatever `z=` it was placed with, as in kitty. An image re-sent under the same id disappears until the new data has
+  arrived, rather than showing the old picture meanwhile.
 
 ## [0.2.0] - 2026-10-14
 
