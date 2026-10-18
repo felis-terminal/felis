@@ -118,7 +118,6 @@ Two helper worlds exist and **cannot share code**: they are separate compilation
 - **One integration binary per crate** in felis-grid, felis-vt and felis-protocol: a new test file goes in `tests/it/`
   and gets a `mod` line in `tests/it/main.rs`, never a new `tests/<name>.rs`. Each binary relinks the crate's whole
   dependency graph, so a binary per file made a one-line edit relink dozens (and cargo-mutants relink them per mutant).
-  Only a guard that inspects cargo metadata rather than the crate (`no_render_deps`, `crate_purity`) stays standalone.
 
 Duplication _between_ these two worlds is expected, not a smell: a helper needed in both lives once in each. Do **not**
 add a dev-only `felis-test-*` crate to bridge them (`docs/explanation/architecture/overview.md` "Rejected workspace
@@ -126,8 +125,7 @@ shapes" records why). Duplication _within_ one world is the smell: centralize it
 
 A test that asserts something about the **workspace** rather than about a crate goes in the `tests/` member, not in
 whichever crate is convenient; today that is only the source-reference guard (`tests/doc_source_references.rs`).
-Markdown links are `just docs-links` (lychee), and dependency bans are `cargo deny` plus the per-crate purity tests
-(`crate_purity`, `no_render_deps`), each of which inspects its own crate's graph. A guard reaching above its own crate
+Markdown links are `just docs-links` (lychee), and dependency bans are `just deny`. A guard reaching above its own crate
 root breaks when that crate is extracted, having never tested the crate hosting it. Tests that exercise one crate
 against another are the opposite case and stay in the crate that owns the seam.
 
@@ -203,9 +201,9 @@ filter that narrows here.
   suite"). Budget wall-clock: the full felis-grid sweep is ~5 h this way on a twelve-core host, felis-vt ~25 min,
   felis-protocol ~30 min.
 - **Killing nothing does not mean useless.** Mutation testing cannot grade a guard over something it does not mutate:
-  `crate_purity`, `no_render_deps`, the `*_cases_cover_every_variant` exhaustiveness tests, a `size_of` pin, a table
-  cross-checked against `unicode-width`, a doc/schema sync check, or an early `return Err` cargo-mutants finds unviable.
-  Read the test before believing its zero.
+  the `*_cases_cover_every_variant` exhaustiveness tests, a `size_of` pin, a table cross-checked against
+  `unicode-width`, a doc/schema sync check, or an early `return Err` cargo-mutants finds unviable. Read the test before
+  believing its zero.
 - **Scoping a sweep to one crate needs `--no-config`.** `-F 'crates/felis-vt/'` narrows the mutant list, but the
   config's `additional_cargo_args` still passes `--features felis-grid/json` to a `--package=felis-vt` test run, which
   cargo rejects outright, so the baseline fails before any mutant runs. Re-state the settings on the command line
