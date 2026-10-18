@@ -615,11 +615,34 @@ impl Sink for Grid {
                 // `graphics_tracker` in step with the daemon's reassembler.
                 let rows = self.screen.rows;
                 let cols = self.screen.cols;
+                // Cleared through the setters so the attached windows are
+                // told to drop the colors they paint, not left showing a
+                // program override no query answers.
+                for channel in [
+                    ThemeChannel::Foreground,
+                    ThemeChannel::Background,
+                    ThemeChannel::Cursor,
+                ] {
+                    self.set_theme_override(channel, None);
+                }
+                self.clear_all_palette_overrides();
+                let theme_dirty = self.theme_dirty;
+                let palette_dirty = std::mem::take(&mut self.palette_dirty);
+                let palette_reset_all_pending = self.palette_reset_all_pending;
                 let term_name = self.term_name.take();
+                let theme_config_defaults = self.theme_config_defaults;
+                let os_dark = self.os_dark;
+                let winsize_pixels = self.winsize_pixels;
                 let graphics_tracker = std::mem::take(&mut self.graphics_tracker);
                 let pty_effects = std::mem::take(&mut self.pty_effects);
                 *self = Self::new(rows, cols);
+                self.theme_dirty = theme_dirty;
+                self.palette_dirty = palette_dirty;
+                self.palette_reset_all_pending = palette_reset_all_pending;
                 self.term_name = term_name;
+                self.theme_config_defaults = theme_config_defaults;
+                self.os_dark = os_dark;
+                self.winsize_pixels = winsize_pixels;
                 self.graphics_tracker = graphics_tracker;
                 self.pty_effects = pty_effects;
                 // The stashed primary placements go first, so the clear

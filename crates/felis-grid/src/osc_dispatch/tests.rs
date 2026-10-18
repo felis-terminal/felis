@@ -851,6 +851,49 @@ fn osc_11_query_without_a_configured_default_keeps_the_xterm_baseline() {
     assert_eq!(replies, vec![b"\x1b]11;rgb:ffff/ffff/ffff\x1b\\".to_vec()]);
 }
 
+#[test]
+fn ris_keeps_the_client_configured_colors_and_os_preference() {
+    let mut p = Parser::new();
+    let mut g = Grid::new(1, 1);
+    g.set_theme_config_default(ThemeChannel::Background, Some((0x0D, 0x0D, 0x12)));
+    g.set_os_dark(true);
+    drive(&mut p, &mut g, b"\x1bc\x1b]11;?\x07\x1b[?996n");
+    let replies = responses(&mut g);
+    assert_eq!(
+        replies,
+        vec![
+            b"\x1b]11;rgb:0d0d/0d0d/1212\x1b\\".to_vec(),
+            b"\x1b[?997;1n".to_vec(),
+        ]
+    );
+}
+
+/// The attached windows paint from these deltas; a RIS that dropped
+/// the overrides silently would leave them painting what no query
+/// answers any more.
+#[test]
+fn ris_ships_resets_for_the_color_overrides_it_drops() {
+    let mut p = Parser::new();
+    let mut g = Grid::new(1, 1);
+    drive(&mut p, &mut g, b"\x1b]4;3;#aabbcc\x07\x1b]11;#102030\x07");
+    drop(g.take_palette_dirty());
+    let _ = g.take_theme_dirty(ThemeChannel::Background);
+    drive(&mut p, &mut g, b"\x1bc");
+    let palette = g.take_palette_dirty();
+    assert!(palette.reset_all);
+    assert_eq!(g.take_theme_dirty(ThemeChannel::Background), Some(None));
+    assert_eq!(g.take_theme_dirty(ThemeChannel::Foreground), None);
+}
+
+#[test]
+fn ris_without_color_overrides_ships_no_color_resets() {
+    let mut p = Parser::new();
+    let mut g = Grid::new(1, 1);
+    drive(&mut p, &mut g, b"\x1bc");
+    assert!(!g.take_palette_dirty().reset_all);
+    assert_eq!(g.take_theme_dirty(ThemeChannel::Background), None);
+}
+
 /// A mutant returning the constant `1` or leaking the table fails the
 /// second assertion.
 #[test]
