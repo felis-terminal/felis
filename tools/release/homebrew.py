@@ -29,6 +29,7 @@ PACKAGING = (
     "nix/package.nix",
     "nix/make-macos-app.sh",
     "nix/compile-terminfo.sh",
+    "crates/felis-daemon/terminfo",
     "share",
 )
 

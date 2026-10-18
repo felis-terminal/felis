@@ -63,10 +63,10 @@ is probed via standard escape queries (`APC _G a=q` and `CSI ? u`).
 
 ## The terminfo entry
 
-A terminfo definition is provided in `share/terminfo/felis.terminfo`, compiling to `xterm-felis`. It inherits from
-`xterm-256color` and adds verified features: 24-bit truecolor with colon-delimited RGB parameters, styled and colored
-underlines, bracketed paste, focus tracking, DECSCUSR cursor shapes, strikethrough (`smxx` / `rmxx`), cursor color (`Cs`
-/ `Cr`), and the Kitty keyboard flag `fullkbd`.
+A terminfo definition is provided in `crates/felis-daemon/terminfo/felis.terminfo`, compiling to `xterm-felis`. It
+inherits from `xterm-256color` and adds verified features: 24-bit truecolor with colon-delimited RGB parameters, styled
+and colored underlines, bracketed paste, focus tracking, DECSCUSR cursor shapes, strikethrough (`smxx` / `rmxx`), cursor
+color (`Cs` / `Cr`), and the Kitty keyboard flag `fullkbd`.
 
 The entry omits DCS-based synchronization (`Sync`): felis implements only DEC private mode synchronization
 (`CSI ? 2026 h/l`). Six standard capabilities are explicitly canceled. `acsc`, `smacs`, `rmacs` and `sgr` go because
@@ -88,9 +88,15 @@ the host's default directories. A directory already listed is not added again, a
 `cargo build`, a distribution package that installs into the system database) leaves the variable alone. The archives'
 `bin/` launchers prepend the same directory for the commands they run themselves, which is how `felis doctor` finds it.
 
+A program that serves sessions from `felis-daemon` in its own executable has no such directory beside it. The library
+exports the entry's source as `felis_daemon::TERMINFO_SOURCE`; the embedder compiles it with `tic -x` into a directory
+of its choosing and names that directory in `DaemonCaps::terminfo_dir`, which the daemon lists in place of the shipped
+one, by the same rules. Set to `None`, the field leaves `TERMINFO_DIRS` as the spawn would otherwise have it. The daemon
+never compiles the entry itself.
+
 On systems where `xterm-felis` is not yet installed in the system terminfo database
-(`tic -x share/terminfo/felis.terminfo`), applications may fail terminfo lookups. Users can fall back to standard
-profiles via `FELIS_TERM=xterm-256color`.
+(`tic -x crates/felis-daemon/terminfo/felis.terminfo`), applications may fail terminfo lookups. Users can fall back to
+standard profiles via `FELIS_TERM=xterm-256color`.
 
 ## The escape hatch: `FELIS_TERM` / `FELIS_TERM_PROGRAM`
 

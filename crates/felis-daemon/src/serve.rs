@@ -280,6 +280,10 @@ pub struct DaemonCaps {
     pub shutdown: Arc<Shutdown>,
     /// The in-place upgrade's barrier and the listening socket it carries.
     pub upgrade: Arc<crate::upgrade::UpgradeState>,
+    /// Listed first in every session's `TERMINFO_DIRS` on Unix; defaults to
+    /// the directory shipped beside this executable. An embedder names where
+    /// it compiled [`crate::TERMINFO_SOURCE`]; `None` adds nothing.
+    pub terminfo_dir: Option<PathBuf>,
 }
 
 /// The daemon's own exit signal: one sender for the process, watched by
@@ -323,6 +327,7 @@ impl Default for DaemonCaps {
             handshake: HandshakeDeadlines::default(),
             shutdown: Shutdown::new(),
             upgrade: crate::upgrade::UpgradeState::new(),
+            terminfo_dir: crate::terminfo::shipped_dir().map(Path::to_path_buf),
         }
     }
 }
@@ -1082,6 +1087,7 @@ async fn create_session(
         env_base_source(&args, relay_env),
         caps.agent.as_deref(),
         caps.endpoint.as_deref(),
+        caps.terminfo_dir.as_deref(),
         felis_pty::Size {
             rows: dims.rows,
             cols: dims.cols,
@@ -2472,6 +2478,7 @@ pub(crate) fn spawn_with_args(
     base: EnvBaseSource<'_>,
     agent: Option<&crate::agent::AgentLink>,
     endpoint: Option<&OsStr>,
+    terminfo_dir: Option<&Path>,
     size: felis_pty::Size,
 ) -> Result<SpawnedPty, SessionError> {
     let default_program = args.command.is_empty();
@@ -2502,7 +2509,7 @@ pub(crate) fn spawn_with_args(
     }
     let Some(dir) = spawn_cwd(args) else {
         return SpawnedPty::spawn_sized(
-            command_from_args(args, factory, session_id, None, &env),
+            command_from_args(args, factory, session_id, None, &env, terminfo_dir),
             size,
         );
     };
@@ -2515,7 +2522,7 @@ pub(crate) fn spawn_with_args(
         )));
     }
     match SpawnedPty::spawn_sized(
-        command_from_args(args, factory, session_id, Some(dir), &env),
+        command_from_args(args, factory, session_id, Some(dir), &env, terminfo_dir),
         size,
     ) {
         Err(err) if default_program => {
@@ -2528,7 +2535,7 @@ pub(crate) fn spawn_with_args(
                 "requested cwd unusable; starting the default shell in the daemon's cwd"
             );
             SpawnedPty::spawn_sized(
-                command_from_args(args, factory, session_id, None, &env),
+                command_from_args(args, factory, session_id, None, &env, terminfo_dir),
                 size,
             )
         }
@@ -2551,6 +2558,7 @@ fn command_from_args(
     session_id: u128,
     cwd: Option<&Path>,
     env: &ResolvedEnv,
+    terminfo_dir: Option<&Path>,
 ) -> felis_pty::Command {
     let mut cmd = if args.command.is_empty() {
         // The factory gets the resolved base: the default program is the
@@ -2563,14 +2571,7 @@ fn command_from_args(
         }
         cmd
     };
-    apply_spawn_posture(
-        &mut cmd,
-        session_id,
-        cwd,
-        env,
-        &args.env,
-        crate::terminfo::shipped_dir(),
-    );
+    apply_spawn_posture(&mut cmd, session_id, cwd, env, &args.env, terminfo_dir);
     cmd
 }
 
@@ -2584,7 +2585,7 @@ fn apply_spawn_posture(
     cwd: Option<&Path>,
     resolved: &ResolvedEnv,
     env: &[(String, String)],
-    shipped_terminfo: Option<&Path>,
+    terminfo_dir: Option<&Path>,
 ) {
     if let Some(dir) = cwd {
         cmd.cwd(dir);
@@ -2607,7 +2608,9 @@ fn apply_spawn_posture(
     }
     // After the caller's pairs, so a `TERMINFO_DIRS` among them still
     // resolves the `TERM` stamped above.
-    if let Some(dir) = shipped_terminfo {
+    if cfg!(unix)
+        && let Some(dir) = terminfo_dir
+    {
         crate::terminfo::list_in(cmd, dir);
     }
 }

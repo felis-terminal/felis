@@ -213,6 +213,9 @@ class Suite:
             "share/applications/felis.desktop", "[Desktop Entry]\n", "v0.2.0-rc.1"
         )
         self.commit("crates/core.rs", "fn b() {}\n", "v0.2.0")
+        self.commit(
+            "crates/felis-daemon/terminfo/felis.terminfo", "xterm-felis|\n", "v0.2.1"
+        )
 
     def reset(self, formula: str = FORMULA) -> None:
         self.github.branches = {"main": formula}
@@ -310,6 +313,17 @@ class Suite:
             and "v0.1.1" in pulls[0]["body"]
             and "share/applications/felis.desktop" in pulls[0]["body"],
             f"a packaging change since the previous final release opens a draft (exit {code})",
+        )
+
+        self.reset()
+        code = self.run_bump("v0.2.1")
+        pulls = self.github.pulls
+        self.record(
+            code == 0
+            and len(pulls) == 1
+            and pulls[0]["draft"] is True
+            and "crates/felis-daemon/terminfo/felis.terminfo" in pulls[0]["body"],
+            f"a change to the terminfo source the formula compiles opens a draft (exit {code})",
         )
 
         self.reset()

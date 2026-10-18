@@ -737,7 +737,7 @@ fn terminfo_check() -> Check {
             format!(
                 "no {FELIS_TERM} entry in this machine's terminfo database; \
                  TUIs will degrade. See docs/how-to/fix-terminfo-problems.md \
-                 (from a source checkout: `tic -x share/terminfo/felis.terminfo`)"
+                 (from a source checkout: `tic -x crates/felis-daemon/terminfo/felis.terminfo`)"
             ),
         ),
     }
