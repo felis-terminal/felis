@@ -3,9 +3,8 @@
 
 use crate::{
     buffer_ring::RowUpdates,
-    glyphs::ShapeFrame,
     instances::{
-        AtlasView, BgInstance, CellPainter, ChromeBar, CursorPaint, DecorationInstance, FgInstance,
+        BgInstance, CellPainter, ChromeBar, CursorPaint, DecorationInstance, FgInstance,
         InstanceBuffers, PreeditSpan, bottom_bar_claim, clip_cell_instances_above,
         extend_confirm_instances, extend_link_preview_instances, extend_preedit_instances,
         extend_search_instances, preedit_covered_cols,
@@ -15,6 +14,7 @@ use bytemuck::Zeroable;
 use felis_grid::ScreenBuffer;
 use felis_render_core::{
     SelectionRange,
+    glyphs::{AtlasView, ShapeFrame},
     overlay::{ConfirmOverlay, LinkPreviewOverlay, PreeditOverlay, SearchOverlay},
     palette::ResolvedTheme,
 };
@@ -389,10 +389,9 @@ mod tests {
     use felis_shaping::{CellMetrics, GlyphId, SizingKey};
     use proptest::prelude::*;
 
-    use felis_render_core::palette::Theme;
+    use felis_render_core::{glyphs::GlyphSlot, palette::Theme};
 
     use super::*;
-    use crate::{glyphs::ShapeFrame, instances::GlyphSlot};
 
     /// Every printable char has a slot whose uv depends on the atlas
     /// generation, so a cached row that outlived a recycle shows up.
@@ -423,7 +422,7 @@ mod tests {
             None
         }
 
-        fn overlay_cluster(&self, _: &str) -> Option<&[crate::glyphs::ClusterGlyph]> {
+        fn overlay_cluster(&self, _: &str) -> Option<&[felis_render_core::glyphs::ClusterGlyph]> {
             None
         }
     }

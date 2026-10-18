@@ -4,6 +4,7 @@ use felis_protocol::{ImageId, messages::ImageFormat};
 
 pub mod atlas;
 pub mod box_drawing;
+pub mod glyphs;
 pub mod overlay;
 pub mod palette;
 

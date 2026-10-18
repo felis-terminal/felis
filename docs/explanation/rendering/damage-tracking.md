@@ -85,7 +85,7 @@ The harnesses are `crates/felis-grid/tests/it/damage_correctness.rs` for the gri
 `crates/felis-daemon/src/serve/tests.rs` that requires every shadow to hold the grid's cells, cursor and soft-wrap bits
 after each composition it receives, and two property tests for the client: one in
 `crates/felis-render-wgpu/src/row_cache.rs` requires the cached instances to equal a full rebuild after every frame, and
-one in `crates/felis-render-wgpu/src/glyphs/walk_tests.rs` requires the same of the populate walk's shape results and
+one in `crates/felis-render-core/src/glyphs/walk_tests.rs` requires the same of the populate walk's shape results and
 atlas slots. [The testing reference](../../reference/testing.md) "Damage-tracking correctness" lists all four.
 
 ## Prior art and alternatives considered

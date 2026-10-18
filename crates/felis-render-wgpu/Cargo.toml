@@ -16,24 +16,16 @@ felis-render-core = { workspace = true }
 wgpu = { workspace = true }
 bytemuck = { workspace = true }
 raw-window-handle = { workspace = true }
-foldhash = { workspace = true }
 tracing = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
 felis-shaping = { workspace = true, features = ["testing"] }
+felis-render-core = { workspace = true, features = ["testing"] }
 proptest = { workspace = true }
 felis-vt = { workspace = true }
 criterion = { workspace = true }
 wgpu = { workspace = true, features = ["noop"] }
-
-[[bench]]
-name = "atlas"
-harness = false
-
-[[bench]]
-name = "shape_memo"
-harness = false
 
 [[bench]]
 name = "paint_frame"

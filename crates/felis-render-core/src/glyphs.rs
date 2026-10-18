@@ -1,39 +1,39 @@
-//! Glyph cache that bridges `felis_shaping` with the GPU atlas:
-//! [`GlyphIndex`] is the CPU bookkeeping (testable without an adapter),
-//! [`GlyphCache`] wraps it with the wgpu texture and upload path.
+//! Glyph index that bridges `felis_shaping` with a backend's glyph
+//! atlas: [`GlyphIndex`] shapes, rasterizes and packs glyphs, and the
+//! backend drains its [`PendingUpload`]s into wherever its atlas lives
+//! (`felis-render-wgpu`'s `GlyphCache` writes them into a texture).
 
 use std::{
     collections::{HashMap, HashSet},
     num::NonZeroU32,
 };
 
-use felis_grid::{Grapheme, ScreenBuffer};
-use felis_render_core::{
-    atlas::{Allocation, ShelfAtlas},
-    box_drawing,
-};
+use felis_grid::{AttrFlags, Grapheme, HAlign, ScreenBuffer, Sizing, VAlign};
 use felis_shaping::{
     CellMetrics, FACE_ID_SATURATED, Font, FontStack, FontStyle, GlyphBitmap, GlyphId, GlyphPixels,
     ShapeCache, ShapedGlyph, Shaper, SizingKey,
 };
 use foldhash::fast::RandomState;
-use wgpu::{BindGroup, BindGroupLayout, Device, Texture, TextureFormat, TextureViewDescriptor};
 
 use crate::{
-    buffer_ring::UploadMode,
-    gpu_resources,
-    instances::{AtlasView, GlyphSlot, font_style_of},
-    texture_upload::{TexelLayout, TextureUploader},
+    atlas::{Allocation, ShelfAtlas},
+    box_drawing,
 };
+
+/// Glyphs are cell-sized, so the 8192 image ceiling would be gross
+/// over-allocation: a 2048² `R8` sheet is 4 MiB against 64 MiB and holds
+/// thousands of slots; the packer's evict-and-rebuild path absorbs
+/// overflow. Revisit if CJK-heavy sessions show glyph atlas churn.
+pub const GLYPH_ATLAS_SIDE: u32 = 2048;
 
 /// Color-glyph atlas side ceiling. At four bytes per pixel an `Rgba8`
 /// sheet half the mono side costs the same bytes as the mono `R8` sheet
 /// and still holds hundreds of emoji before a reset recycles it.
 pub const COLOR_GLYPH_ATLAS_SIDE: u32 = 1024;
-const _: () = assert!(COLOR_GLYPH_ATLAS_SIDE < crate::GLYPH_ATLAS_SIDE);
+const _: () = assert!(COLOR_GLYPH_ATLAS_SIDE < GLYPH_ATLAS_SIDE);
 
-/// Never larger than the mono sheet. Shared by [`GlyphIndex`] and
-/// [`GlyphCache`] so their UV spaces agree.
+/// Never larger than the mono sheet. Shared by [`GlyphIndex`] and the
+/// backend's color atlas so their UV spaces agree.
 #[must_use]
 pub fn color_atlas_side(mono_side: NonZeroU32) -> NonZeroU32 {
     NonZeroU32::new(mono_side.get().min(COLOR_GLYPH_ATLAS_SIDE)).unwrap_or(mono_side)
@@ -44,8 +44,99 @@ pub fn color_atlas_side(mono_side: NonZeroU32) -> NonZeroU32 {
 /// this so they agree on the scalar. `None` while the handle is not yet
 /// in the screen's cluster table (a transient reattach state).
 #[must_use]
-pub(crate) fn cluster_base_char(screen: &ScreenBuffer, id: NonZeroU32) -> Option<char> {
+pub fn cluster_base_char(screen: &ScreenBuffer, id: NonZeroU32) -> Option<char> {
     screen.cluster_str(id).and_then(|s| s.chars().next())
+}
+
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct GlyphSlot {
+    /// Atlas uv min: top-left in `[0, 1]`.
+    pub uv_min: [f32; 2],
+    /// Atlas uv max: bottom-right in `[0, 1]`.
+    pub uv_max: [f32; 2],
+    /// Pixel size of the glyph bitmap (not the cell).
+    pub size_px: [u32; 2],
+    /// `(left, top)` from the cell's `(0, baseline)` origin, per swash.
+    pub offset_px: [i32; 2],
+    /// True when the bitmap lives in the RGBA color atlas.
+    pub is_color: bool,
+}
+
+pub trait AtlasView {
+    /// `None` on a miss (cache not populated, atlas full, whitespace).
+    /// `sizing` keeps OSC 66 sized variants on separate slots.
+    fn slot(&self, glyph: char, cell_height_px: u32, sizing: SizingKey) -> Option<GlyphSlot>;
+
+    /// Deliberately no default impl: a `None` default would be silently
+    /// inherited by `GlyphCache`, and every shaped lookup would miss, so
+    /// any non-empty `font.features` would render primary-font runs
+    /// blank.
+    fn glyph_id_slot(
+        &self,
+        glyph_id: GlyphId,
+        cell_height_px: u32,
+        sizing: SizingKey,
+    ) -> Option<GlyphSlot>;
+
+    /// The slot of a cluster glyph shrunk to `px` to fit its cells;
+    /// see [`ShapedCell::Cluster`].
+    fn fitted_glyph_id_slot(
+        &self,
+        glyph_id: GlyphId,
+        px: u16,
+        cell_height_px: u32,
+        sizing: SizingKey,
+    ) -> Option<GlyphSlot>;
+
+    /// The shaped glyphs of a multi-scalar overlay cluster, `None` until
+    /// the overlay's text was populated.
+    fn overlay_cluster(&self, text: &str) -> Option<&[ClusterGlyph]>;
+}
+
+/// Mirrors the enum-to-u8 mapping `felis-vt`'s parser enforces.
+#[must_use]
+pub const fn sizing_key_from(sizing: Sizing) -> SizingKey {
+    let valign = match sizing.valign() {
+        VAlign::Top => 0,
+        VAlign::Bottom => 1,
+        VAlign::Center => 2,
+    };
+    let halign = match sizing.halign() {
+        HAlign::Left => 0,
+        HAlign::Right => 1,
+        HAlign::Center => 2,
+    };
+    SizingKey::new(
+        sizing.scale(),
+        sizing.cell_width(),
+        sizing.frac_num(),
+        sizing.frac_den(),
+        valign,
+        halign,
+    )
+}
+
+/// Only `BOLD` / `ITALIC` participate; `FAINT` does not change glyph
+/// selection.
+#[must_use]
+pub const fn font_style_of(flags: AttrFlags) -> FontStyle {
+    FontStyle {
+        bold: flags.contains(AttrFlags::BOLD),
+        italic: flags.contains(AttrFlags::ITALIC),
+    }
+}
+
+/// The columns a cluster's block spans before the OSC 66 scale: `w`,
+/// else the grid's span, so a VS16 widen the grid refused gets one.
+#[must_use]
+pub fn cluster_block_cols(screen: &ScreenBuffer, row: u16, col: u16) -> u16 {
+    match screen.cell_sizing(row, col).map_or(0, |s| s.cell_width()) {
+        0 => {
+            let (first, last) = screen.char_span(row, col);
+            last - first + 1
+        }
+        w => u16::from(w),
+    }
 }
 
 #[derive(Debug)]
@@ -356,7 +447,7 @@ impl GlyphIndex {
         self.ensure_glyph_slot(SlotKey::Glyph(glyph_id), glyph_id, px, cell_height, sizing)
     }
 
-    /// [`Self::ensure_glyph_id`] at `px`, the size [`Self::cluster_fit_px`]
+    /// [`Self::ensure_glyph_id`] at `px`, the size `cluster_fit_px`
     /// chose, instead of the sizing's own.
     pub fn ensure_fitted_glyph_id(
         &mut self,
@@ -450,7 +541,7 @@ impl GlyphIndex {
 
     /// Bounds the overlay shapes between frames, never during one: the
     /// frame paints every cluster it primed.
-    pub(crate) fn trim_overlay_clusters(&mut self) {
+    pub fn trim_overlay_clusters(&mut self) {
         if self.overlay_clusters.len() > Self::OVERLAY_CLUSTER_MAX {
             self.overlay_clusters.clear();
         }
@@ -458,7 +549,7 @@ impl GlyphIndex {
 
     /// Shapes `text`, one multi-scalar cluster of overlay text, as
     /// `composite_cluster` shapes a cluster cell, and primes its glyphs.
-    pub(crate) fn ensure_overlay_cluster(&mut self, shaper: &mut Shaper, text: &str) {
+    pub fn ensure_overlay_cluster(&mut self, shaper: &mut Shaper, text: &str) {
         if !self.overlay_clusters.contains_key(text) {
             let shaping = shaper.shape_cluster(
                 &self.stack,
@@ -572,7 +663,7 @@ impl GlyphIndex {
             };
             let sizing = screen
                 .cell_sizing(r, c)
-                .map(|s| crate::instances::sizing_key_from(*s))
+                .map(|s| sizing_key_from(*s))
                 .unwrap_or_default()
                 .with_style(font_style_of(screen.style(cell.style).flags));
             self.prime_char(glyph, cell_height, sizing);
@@ -984,8 +1075,9 @@ impl ShapeFrame {
 
     /// The quad-slicing tests in `instances.rs` build frames directly
     /// because the full pipeline needs a real ligature font.
-    #[cfg(test)]
-    pub(crate) const fn from_cells(cells: Vec<ShapedCell>, cols: u16) -> Self {
+    #[cfg(any(test, feature = "testing"))]
+    #[must_use]
+    pub const fn from_cells(cells: Vec<ShapedCell>, cols: u16) -> Self {
         Self {
             cells,
             cols,
@@ -994,8 +1086,9 @@ impl ShapeFrame {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) const fn from_cluster_cells(
+    #[cfg(any(test, feature = "testing"))]
+    #[must_use]
+    pub const fn from_cluster_cells(
         cells: Vec<ShapedCell>,
         cols: u16,
         cluster_glyphs: Vec<ClusterGlyph>,
@@ -1036,190 +1129,10 @@ impl ShapeFrame {
     }
 }
 
-pub struct GlyphCache {
-    index: GlyphIndex,
-    texture: Texture,
-    /// Allocated eagerly so the fg bind group is valid from frame one; a
-    /// lazy texture would force a bind-group rebuild on the first emoji.
-    color_texture: Texture,
-    bind_group: BindGroup,
-    walker: GridWalker,
-}
-
-impl GlyphCache {
-    pub(crate) fn new(
-        device: &Device,
-        upload_mode: UploadMode,
-        layout: &BindGroupLayout,
-        stack: FontStack,
-        font_size_physical_px: f32,
-        atlas_side: NonZeroU32,
-    ) -> Self {
-        let texture = gpu_resources::create_atlas_texture(
-            device,
-            upload_mode,
-            atlas_side.get(),
-            TextureFormat::R8Unorm,
-            "felis glyph atlas",
-        );
-        let view = texture.create_view(&TextureViewDescriptor::default());
-        // sRGB RGBA, like the image atlas, so the alpha blend stays
-        // gamma-correct against the sRGB surface.
-        let color_side = color_atlas_side(atlas_side);
-        let color_texture = gpu_resources::create_atlas_texture(
-            device,
-            upload_mode,
-            color_side.get(),
-            TextureFormat::Rgba8UnormSrgb,
-            "felis glyph color atlas",
-        );
-        let color_view = color_texture.create_view(&TextureViewDescriptor::default());
-        let sampler = gpu_resources::create_atlas_sampler(device, "felis atlas sampler");
-        let bind_group = gpu_resources::create_atlas_bind_group(
-            device,
-            layout,
-            &view,
-            &sampler,
-            Some(&color_view),
-            "felis atlas bind group",
-        );
-        Self {
-            index: GlyphIndex::new(stack, font_size_physical_px, atlas_side),
-            texture,
-            color_texture,
-            bind_group,
-            walker: GridWalker::default(),
-        }
-    }
-
-    #[must_use]
-    pub const fn cell_metrics(&self) -> CellMetrics {
-        self.index.cell_metrics()
-    }
-
-    #[must_use]
-    pub const fn font_size_physical_px(&self) -> f32 {
-        self.index.font_size_physical_px()
-    }
-
-    /// Bind group for the fg pass, slot `@group(1)`.
-    #[must_use]
-    pub const fn bind_group(&self) -> &BindGroup {
-        &self.bind_group
-    }
-
-    /// The texture stays resident; the index, shape cache and allocator
-    /// reset, so the next `populate_grid` re-rasterizes everything.
-    /// Stale pixels in unreached regions are harmless: the new allocator
-    /// never hands them out.
-    pub fn reload_font(&mut self, stack: FontStack, font_size_physical_px: f32) {
-        self.rebuild_index_with(stack, font_size_physical_px);
-    }
-
-    /// Keeps the existing `FontStack`: zoom (Ctrl+= / Ctrl+- / wheel)
-    /// would otherwise pay `load_system_fonts()` per keypress, which
-    /// stutters on systems with many fonts.
-    pub fn reload_font_size(&mut self, font_size_physical_px: f32) {
-        let stack = self.index.stack().clone();
-        self.rebuild_index_with(stack, font_size_physical_px);
-    }
-
-    fn rebuild_index_with(&mut self, stack: FontStack, font_size_physical_px: f32) {
-        let atlas_side = NonZeroU32::new(self.index.atlas_side()).unwrap_or(NonZeroU32::MIN);
-        self.index = GlyphIndex::new(stack, font_size_physical_px, atlas_side);
-    }
-
-    #[must_use]
-    pub const fn atlas_was_reset(&self) -> bool {
-        self.index.atlas_was_reset()
-    }
-
-    #[must_use]
-    pub const fn atlas_resets(&self) -> u64 {
-        self.index.atlas_resets()
-    }
-
-    /// Populates `frame` with shaped runs, clusters, and primed cells;
-    /// [`GridWalker::walk`] decides which rows.
-    pub(crate) fn populate_grid_with_features(
-        &mut self,
-        screen: &ScreenBuffer,
-        shaper: &mut Shaper,
-        features: &[String],
-        uploader: &mut TextureUploader,
-        frame: &mut ShapeFrame,
-    ) {
-        self.walker
-            .walk(&mut self.index, screen, shaper, features, frame);
-        self.flush_pending_uploads(uploader);
-    }
-
-    /// For off-screen text (the IME pre-edit overlay). Pre-edit has no
-    /// OSC 66 surface, so every char is resident at default sizing.
-    pub(crate) fn populate_chars(
-        &mut self,
-        chars: impl IntoIterator<Item = char>,
-        uploader: &mut TextureUploader,
-    ) {
-        let cell_height = self.index.cell_metrics().height;
-        for c in chars {
-            self.index.ensure(c, cell_height, SizingKey::default());
-        }
-        self.flush_pending_uploads(uploader);
-    }
-
-    /// For overlay text laid out by [`felis_grid::text_cells`]: a lone
-    /// scalar is primed as a char, a cluster is shaped.
-    pub(crate) fn trim_overlay_clusters(&mut self) {
-        self.index.trim_overlay_clusters();
-    }
-
-    pub(crate) fn populate_overlay_text(
-        &mut self,
-        text: &str,
-        shaper: &mut Shaper,
-        uploader: &mut TextureUploader,
-    ) {
-        let cell_height = self.index.cell_metrics().height;
-        for (range, _) in felis_grid::text_cells(text) {
-            let cluster = &text[range];
-            let mut chars = cluster.chars();
-            match (chars.next(), chars.next()) {
-                (Some(c), None) => {
-                    self.index.ensure(c, cell_height, SizingKey::default());
-                }
-                _ => self.index.ensure_overlay_cluster(shaper, cluster),
-            }
-        }
-        self.flush_pending_uploads(uploader);
-    }
-
-    fn flush_pending_uploads(&mut self, uploader: &mut TextureUploader) {
-        for upload in self.index.drain_pending() {
-            let (texture, layout, bytes_per_row) = match &upload.pixels {
-                GlyphPixels::Rgba(_) => (
-                    &self.color_texture,
-                    TexelLayout::Rgba8,
-                    upload.alloc.width * 4,
-                ),
-                GlyphPixels::Coverage(_) => (&self.texture, TexelLayout::R8, upload.alloc.width),
-            };
-            uploader.write(
-                texture,
-                layout,
-                [upload.alloc.x, upload.alloc.y],
-                [upload.alloc.width, upload.alloc.height],
-                upload.pixels.as_bytes(),
-                bytes_per_row,
-            );
-        }
-    }
-}
-
 /// Scratch and bookkeeping for the grid walk, kept apart from the GPU
 /// resources so tests drive it against a bare [`GlyphIndex`].
 #[derive(Default)]
-pub(crate) struct GridWalker {
+pub struct GridWalker {
     run_text: String,
     run_glyphs: Vec<ShapedGlyph>,
     rows: Vec<u16>,
@@ -1231,7 +1144,7 @@ impl GridWalker {
     /// every row otherwise. With empty `features` and no interned
     /// clusters this avoids shaping overhead. `shaper` is borrowed
     /// mutably so Swash's feature cache on `ShapeContext` stays resident.
-    pub(crate) fn walk(
+    pub fn walk(
         &mut self,
         index: &mut GlyphIndex,
         screen: &ScreenBuffer,
@@ -1373,7 +1286,7 @@ fn shape_cell(
     let style = font_style_of(screen.style(cell.style).flags);
     let sizing = screen
         .cell_sizing(row, col)
-        .map(|s| crate::instances::sizing_key_from(*s))
+        .map(|s| sizing_key_from(*s))
         .unwrap_or_default()
         .with_style(style);
     let cell_height = index.cell_metrics().height;
@@ -1432,7 +1345,7 @@ fn composite_cluster(
     }
     let sized_key = site.sizing.with_font_id(shaping.font_id);
     let font_id = saturated_face_id(shaping.font_id);
-    let cols = crate::instances::cluster_block_cols(screen, site.row, site.col);
+    let cols = cluster_block_cols(screen, site.row, site.col);
     let fit_px = index.cluster_fit_px(text, &shaping.glyphs, cols, sized_key);
     // Emission scales the pen by the sizing's glyph scale; pre-scaling
     // the pool by the fit keeps one formula for both.
@@ -1463,36 +1376,6 @@ fn composite_cluster(
             fit_px: fit_px.unwrap_or(0),
         };
         frame.live_cluster_glyphs += usize::from(len);
-    }
-}
-
-impl AtlasView for GlyphCache {
-    fn slot(&self, glyph: char, cell_height_px: u32, sizing: SizingKey) -> Option<GlyphSlot> {
-        self.index.slot(glyph, cell_height_px, sizing)
-    }
-
-    fn glyph_id_slot(
-        &self,
-        glyph_id: GlyphId,
-        cell_height_px: u32,
-        sizing: SizingKey,
-    ) -> Option<GlyphSlot> {
-        self.index.glyph_id_slot(glyph_id, cell_height_px, sizing)
-    }
-
-    fn fitted_glyph_id_slot(
-        &self,
-        glyph_id: GlyphId,
-        px: u16,
-        cell_height_px: u32,
-        sizing: SizingKey,
-    ) -> Option<GlyphSlot> {
-        self.index
-            .fitted_glyph_id_slot(glyph_id, px, cell_height_px, sizing)
-    }
-
-    fn overlay_cluster(&self, text: &str) -> Option<&[ClusterGlyph]> {
-        self.index.overlay_cluster(text)
     }
 }
 
@@ -1759,7 +1642,7 @@ mod tests {
     #[cfg(not(windows))]
     #[test]
     fn distinct_tiny_placed_glyphs_recycle_the_atlas_at_the_placed_cap() {
-        let mut idx = GlyphIndex::new(stack(), 14.0, nz(crate::GLYPH_ATLAS_SIDE));
+        let mut idx = GlyphIndex::new(stack(), 14.0, nz(GLYPH_ATLAS_SIDE));
         let h = idx.cell_metrics().height;
         let fractional = osc66_sizings()
             .filter(|sk| sk.scale() == 1 && sk.frac_num() > 0 && sk.frac_num() < sk.frac_den());
@@ -2074,16 +1957,14 @@ mod tests {
         assert!(slot.is_color);
     }
 
-    /// A one-row grid fed `bytes`, walked and painted against the pinned
-    /// set.
-    struct Painted {
+    /// A one-row grid fed `bytes` and walked against the pinned set.
+    struct Walked {
         index: GlyphIndex,
         frame: ShapeFrame,
         grid: Grid,
-        fg: Vec<crate::instances::FgInstance>,
     }
 
-    fn paint_pinned(bytes: &[u8], cols: u16) -> Painted {
+    fn walk_pinned(bytes: &[u8], cols: u16) -> Walked {
         let stack = FontStack::pinned_test_stack();
         let mut grid = Grid::new(1, cols);
         Parser::new().advance(&mut grid, bytes);
@@ -2096,97 +1977,14 @@ mod tests {
             &[],
             &mut frame,
         );
-        let theme = felis_render_core::palette::Theme::default();
-        let mut out = crate::instances::InstanceBuffers::default();
-        crate::instances::CellPainter::new(
-            grid.screen(),
-            index.cell_metrics(),
-            &felis_render_core::palette::ResolvedTheme::new(&theme),
-            &index,
-            &frame,
-        )
-        .with_viewport(0, 1)
-        .extend_instances(&mut out);
-        Painted {
-            index,
-            frame,
-            grid,
-            fg: out.fg,
-        }
+        Walked { index, frame, grid }
     }
 
-    fn cluster_fit_px_at(p: &Painted, col: u16) -> u16 {
+    fn cluster_fit_px_at(p: &Walked, col: u16) -> u16 {
         match p.frame.cell_at(0, col) {
             ShapedCell::Cluster { fit_px, .. } => fit_px,
             other => panic!("col {col} is not a cluster: {other:?}"),
         }
-    }
-
-    /// The fg quads' union as `[x0, y0, x1, y1]`.
-    fn ink(fg: &[crate::instances::FgInstance]) -> [f32; 4] {
-        fg.iter()
-            .map(|q| {
-                let [x, y] = q.origin_px;
-                [x, y, x + q.size_px[0], y + q.size_px[1]]
-            })
-            .reduce(|[a, b, c, d], [x0, y0, x1, y1]| [a.min(x0), b.min(y0), c.max(x1), d.max(y1)])
-            .expect("the cluster painted")
-    }
-
-    /// Each repro is the only ink on its row, its cluster at `col` with
-    /// `cells` cells: a ZWJ pair the face has no glyph for, a modifier on a
-    /// base that takes none, and a VS16 widen refused at the last column.
-    #[cfg(not(windows))]
-    #[test]
-    fn a_cluster_wider_than_its_cells_fills_and_centres_in_them() {
-        let repros: [(&str, &[u8], u16, u16); 3] = [
-            ("non-RGI ZWJ", "\u{1F408}\u{200D}\u{1F408}".as_bytes(), 0, 2),
-            ("modifier", "\u{1F600}\u{1F3FB}".as_bytes(), 0, 2),
-            ("refused widen", "\x1b[4G\u{2764}\u{FE0F}".as_bytes(), 3, 1),
-        ];
-        for (name, bytes, col, cells) in repros {
-            let p = paint_pinned(bytes, 4);
-            let fit_px = f32::from(cluster_fit_px_at(&p, col));
-            assert_ne!(fit_px, 0.0, "{name}: fitted");
-            // The size is floored to a whole pixel, which costs up to one
-            // part in `fit_px + 1` of the block.
-            let filled = |ink: f32, block: f32| ink >= block * fit_px / (fit_px + 1.0) - 1.0;
-            let m = p.index.cell_metrics();
-            let (cw, ch) = (m.width as f32, m.height as f32);
-            let (bx0, bx1) = (f32::from(col) * cw, f32::from(col + cells) * cw);
-            let [x0, y0, x1, y1] = ink(&p.fg);
-            assert!(
-                x0 >= bx0 - 1.0 && x1 <= bx1 + 1.0 && y0 >= -1.0 && y1 <= ch + 1.0,
-                "{name}: ink {x0}..{x1} x {y0}..{y1} inside {bx0}..{bx1} x 0..{ch}"
-            );
-            assert!(
-                ((x0 - bx0) - (bx1 - x1)).abs() <= 1.0 && (y0 - (ch - y1)).abs() <= 1.0,
-                "{name}: ink {x0}..{x1} x {y0}..{y1} centred in {bx0}..{bx1} x 0..{ch}"
-            );
-            assert!(
-                filled(x1 - x0, bx1 - bx0) || filled(y1 - y0, ch),
-                "{name}: ink {x0}..{x1} x {y0}..{y1} fills an axis"
-            );
-        }
-    }
-
-    /// The fit is the bare char's: a cluster of one glyph shrinks to the
-    /// size `fitted_bitmap` gives that glyph alone.
-    #[cfg(not(windows))]
-    #[test]
-    fn a_one_glyph_cluster_fits_as_its_bare_char_does() {
-        let cluster = paint_pinned("\x1b[4G\u{263A}\u{FE0F}".as_bytes(), 4);
-        let bare = paint_pinned("\x1b[4G\u{263A}".as_bytes(), 4);
-        let [a0, b0, a1, b1] = ink(&cluster.fg);
-        let [c0, d0, c1, d1] = ink(&bare.fg);
-        assert!(
-            ((a1 - a0) - (c1 - c0)).abs() <= 1.0 && ((b1 - b0) - (d1 - d0)).abs() <= 1.0,
-            "cluster {}x{} vs bare {}x{}",
-            a1 - a0,
-            b1 - b0,
-            c1 - c0,
-            d1 - d0,
-        );
     }
 
     /// Clusters whose advance stays within their cells keep the native
@@ -2200,7 +1998,7 @@ mod tests {
             "#\u{FE0F}\u{20E3}",
             "e\u{301}",
         ] {
-            let p = paint_pinned(text.as_bytes(), 4);
+            let p = walk_pinned(text.as_bytes(), 4);
             assert_eq!(cluster_fit_px_at(&p, 0), 0, "{text:?}");
         }
     }
@@ -2210,7 +2008,7 @@ mod tests {
     #[cfg(not(windows))]
     #[test]
     fn a_fitted_cluster_is_measured_once() {
-        let mut p = paint_pinned("\u{1F408}\u{200D}\u{1F408}".as_bytes(), 4);
+        let mut p = walk_pinned("\u{1F408}\u{200D}\u{1F408}".as_bytes(), 4);
         assert_eq!(p.index.cluster_fits.len(), 1);
         let first = cluster_fit_px_at(&p, 0);
         p.index.cluster_fits.values_mut().for_each(|px| *px += 1);
@@ -2228,62 +2026,6 @@ mod tests {
             cluster_fit_px_at(&p, 0),
             first + 1,
             "the walk read the memo"
-        );
-    }
-
-    /// Under an OSC 66 fractional scale a fitted cluster's pen shrinks
-    /// with its glyphs: the second cat sits one advance at the fitted
-    /// size after the first, not one advance at the native size.
-    #[cfg(not(windows))]
-    #[test]
-    fn a_fitted_cluster_advances_its_pen_at_the_fitted_size() {
-        let cats = "\u{1F408}\u{200D}\u{1F408}";
-        let stack = FontStack::pinned_test_stack();
-        let mut grid = Grid::new(2, 8);
-        Parser::new().advance(
-            &mut grid,
-            format!("\x1b]66;w=1:s=2:n=3:d=4;{cats}\x07").as_bytes(),
-        );
-        let mut index = GlyphIndex::new(stack, 18.0, nz(1024));
-        let mut frame = ShapeFrame::empty();
-        GridWalker::default().walk(
-            &mut index,
-            grid.screen(),
-            &mut Shaper::new(),
-            &[],
-            &mut frame,
-        );
-        let ShapedCell::Cluster { start, len, fit_px } = frame.cell_at(0, 0) else {
-            panic!("not a cluster: {:?}", frame.cell_at(0, 0));
-        };
-        assert_ne!(fit_px, 0, "fitted");
-        let native = Shaper::new().shape_cluster(index.stack(), 18.0, FontStyle::REGULAR, cats);
-        let pool = frame.cluster_slice(start, len);
-        let expected = native.glyphs[0].advance_px * f32::from(fit_px) / (18.0 * 1.5);
-        assert!(
-            (pool[0].advance_px - expected).abs() < 1e-3,
-            "pool advance {} vs {expected}",
-            pool[0].advance_px
-        );
-        let theme = felis_render_core::palette::Theme::default();
-        let mut out = crate::instances::InstanceBuffers::default();
-        crate::instances::CellPainter::new(
-            grid.screen(),
-            index.cell_metrics(),
-            &felis_render_core::palette::ResolvedTheme::new(&theme),
-            &index,
-            &frame,
-        )
-        .with_viewport(0, 2)
-        .extend_instances(&mut out);
-        let [first, second] = out.fg.as_slice() else {
-            panic!("two cats: {} quads", out.fg.len());
-        };
-        let step = second.origin_px[0] - first.origin_px[0];
-        let fitted_advance = native.glyphs[0].advance_px * f32::from(fit_px) / 18.0;
-        assert!(
-            (step - fitted_advance).abs() < 1e-3,
-            "step {step} vs the fitted advance {fitted_advance}"
         );
     }
 

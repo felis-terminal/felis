@@ -1110,10 +1110,12 @@ dependencies = [
 name = "felis-render-core"
 version = "0.2.0"
 dependencies = [
+ "criterion",
  "felis-grid",
  "felis-protocol",
  "felis-shaping",
  "felis-vt",
+ "foldhash 0.2.0",
  "proptest",
  "tracing",
 ]
@@ -1129,7 +1131,6 @@ dependencies = [
  "felis-render-core",
  "felis-shaping",
  "felis-vt",
- "foldhash 0.2.0",
  "proptest",
  "raw-window-handle",
  "thiserror 2.0.21",
