@@ -292,11 +292,13 @@ impl Grid {
                 .unwrap_or_else(default_special_color);
         }
         if u8::try_from(idx).is_ok() {
+            let idx = idx as u8;
             return self
                 .palette_overrides
-                .get(&(idx as u8))
+                .get(&idx)
                 .copied()
-                .unwrap_or_else(|| default_palette_color(idx as u8));
+                .or_else(|| self.palette_config_default(idx))
+                .unwrap_or_else(|| default_palette_color(idx));
         }
         if let Some(slot) = special_slot_from_osc4_alias(idx) {
             return self.special_color_overrides[slot].unwrap_or_else(default_special_color);

@@ -276,19 +276,21 @@ incremental diffs, each at its own pull cadence ([pipeline.md](../rendering/pipe
 
 ### Client-derived presentation state
 
-Right after attaching, the client sends `ConfigureTheme { fg, bg, cursor }` carrying its _configured_ default colors,
-and reports the OS light/dark preference as `InputMsg::ColorScheme`. The daemon consults them when a program asks
-(`OSC 10/11/12 ; ?` falls back to the trio, `DSR ? 996 n` and `DECSET 2031` answer from the preference), so a background
-detector (neovim, modern CLIs) reads felis's real surface color instead of the xterm baseline (white). Without them a
-dark felis is mistaken for a light terminal and auto-detected colorschemes invert. The reports ride every attach (and
-every session switch), not the session's creation, because the same idle session can be re-attached by a client with a
-different colorscheme.
+Right after attaching, the client sends `ConfigureTheme { fg, bg, cursor, palette }` carrying its _configured_ default
+colors and palette slots, and reports the OS light/dark preference as `InputMsg::ColorScheme`. The daemon consults them
+when a program asks (`OSC 10/11/12 ; ?` falls back to the trio, `OSC 4 ; n ; ?` to the palette, `DSR ? 996 n` and
+`DECSET 2031` answer from the preference), so a background detector (neovim, modern CLIs) reads felis's real surface
+color instead of the xterm baseline (white), and a program that picks readable colors from the palette reads the colors
+the window paints. Without them a dark felis is mistaken for a light terminal and auto-detected colorschemes invert. The
+reports ride every attach (and every session switch), not the session's creation, because the same idle session can be
+re-attached by a client with a different colorscheme.
 
 Two layers meet here, and only one of them is a window's to move. Colors a running program _sets_ (`OSC 4/10/11/12`) are
 session state and always win: they were installed on this PTY, and a query answers them whatever windows happen to be
-attached. The client-derived layer underneath is exactly the `ConfigureTheme` trio and the OS preference: palette
-entries have no client-derived fallback, so an unset `OSC 4` slot answers the compiled-in palette rather than a window's
-idea of one.
+attached. The client-derived layer underneath is exactly the `ConfigureTheme` report (the trio and the configured
+palette slots) and the OS preference; a slot neither the program nor the window's config sets answers the compiled-in
+palette. A reset (`OSC 104`, `OSC 110–112`, RIS) drops only the program's layer, so a query after it answers what the
+window paints again.
 
 #### Mirrors resolve along one candidate chain
 
@@ -300,8 +302,8 @@ picks), then the remaining windows in reverse attach order. Scripted `Ops` subsc
 
 The two facets travel that chain **independently**: each answers from the first candidate that has reported it, and a
 window that reported only its theme leaves the OS preference to the next one. A single `ConfigureTheme` is atomic,
-though (one report, three channels), so a channel the client left unset means "no color", not "ask the next window", and
-a query can never see a trio stitched from two mirrors.
+though (one report: three channels and the palette), so a channel or palette slot the client left unset means "no
+color", not "ask the next window", and a query can never see colors stitched from two mirrors.
 
 The chain is re-resolved after **every** report, attach, detach, and ownership transfer, and which subscriber supplies a
 facet is an output of that resolution rather than a gate on it: a window that never reported before takes the facet the
@@ -346,8 +348,8 @@ file hides the difference in the common case, which is what makes it worth refus
 on the day it does surface.
 
 _Per-window virtual palettes_ (giving each mirror its own view of the full color state) is rejected too: the querier is
-the _program_, it has one PTY, and there is no answer to "which window's palette" to give it; that is also why palette
-entries stay producer-only.
+the _program_, it has one PTY, and there is no answer to "which window's palette" to give it. The configured palette
+answers along the chain instead, inside the same report as the trio: one window's palette, picked by the same order.
 
 _Revisit if_ a single session ever has mirrors that genuinely differ in theme by design (a shared session across two
 users' machines, say) rather than by transient OS-theme skew. The chain answers with one window's colors by

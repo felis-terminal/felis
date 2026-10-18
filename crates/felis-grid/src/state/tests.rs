@@ -138,6 +138,17 @@ fn an_owed_prompt_expiry_survives_the_hop() {
     assert_eq!(grid.take_pty_effects(), [PtyEffect::PromptStarted]);
 }
 
+/// The configured palette is the windows' to report again, so a restored
+/// session starts without one rather than answering a departed window's.
+#[test]
+fn a_configured_palette_does_not_survive_the_hop() {
+    let parser = Parser::new();
+    let mut grid = Grid::new(2, 8);
+    grid.set_palette_config_default(1, Some((0xFF, 0x55, 0x55)));
+    let (_, grid) = hop(&parser, &grid);
+    assert_eq!(grid.palette_config_default(1), None);
+}
+
 #[test]
 fn a_full_scrollback_ring_survives_the_hop() {
     let mut output = Vec::new();

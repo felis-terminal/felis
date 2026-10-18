@@ -1,6 +1,8 @@
 //! [`SessionToDaemonMsg`] and [`SessionToClientMsg`]: this
 //! connection's session lifecycle (kind 4).
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use super::{ArmMeta, Directed};
@@ -37,8 +39,9 @@ pub enum SessionToDaemonMsg {
     Detach,
     /// Client configured theme colors, sent right after attach.
     ///
-    /// Answers `OSC 10/11/12 ; ?` queries with client surface colors.
-    /// `None` retains renderer and xterm defaults.
+    /// Answers `OSC 10/11/12 ; ?` and `OSC 4 ; n ; ?` queries with the
+    /// colors the window paints. `None` retains renderer and xterm
+    /// defaults.
     ConfigureTheme {
         /// Configured default foreground (`OSC 10`), or `None`.
         fg: Option<(u8, u8, u8)>,
@@ -46,6 +49,9 @@ pub enum SessionToDaemonMsg {
         bg: Option<(u8, u8, u8)>,
         /// Configured cursor color (`OSC 12`), or `None`.
         cursor: Option<(u8, u8, u8)>,
+        /// Configured palette slots (`OSC 4`), only those the window's
+        /// config sets; an absent slot answers the compiled-in palette.
+        palette: BTreeMap<u8, (u8, u8, u8)>,
     },
     /// Barrier over this connection's earlier
     /// [`InputMsg`](super::InputMsg) frames, answered with
@@ -329,11 +335,13 @@ pub(crate) mod tests {
                 fg: Some((0xE5, 0xE5, 0xE5)),
                 bg: Some((0x0D, 0x0D, 0x12)),
                 cursor: Some((0xFF, 0xAA, 0x00)),
+                palette: BTreeMap::from([(0, (0x1D, 0x1D, 0x22)), (255, (0xEE, 0xEE, 0xEE))]),
             },
             SessionToDaemonMsg::ConfigureTheme {
                 fg: None,
                 bg: Some((0x0D, 0x0D, 0x12)),
                 cursor: None,
+                palette: BTreeMap::new(),
             },
             SessionToDaemonMsg::InputFence,
         ]

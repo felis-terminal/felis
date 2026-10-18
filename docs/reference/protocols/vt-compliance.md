@@ -145,8 +145,9 @@ The rectangle checksum query, DECRQCRA, shares this bounds model; its reply is s
   of indices, and a bare `OSC 104` drops every override. The overrides are session state: they reach each attached
   window as a per-index delta, are replayed on attach, and are resolved at paint time: a cell stores the palette index,
   never the color, so a recolor reaches cells already on screen and in scrollback. A `?` spec queries the slot,
-  answering with the override where one is set and the xterm-256 baseline otherwise. `OSC 104` leaves the
-  `OSC 10 / 11 / 12` channels alone; their reset is `OSC 110 / 111 / 112`.
+  answering with the override where one is set, else the attached window's configured slot (`[theme.palette]`,
+  `[theme.palette.indexed]`), else the xterm-256 baseline, so a reset answers what the window paints. `OSC 104` leaves
+  the `OSC 10 / 11 / 12` channels alone; their reset is `OSC 110 / 111 / 112`.
 - `OSC 5 / 105`: special-color set / reset (the colors addressed above the 256-entry ANSI palette).
 - `OSC 8`: hyperlink. The form is `OSC 8 ; params ; URI ST`, where `params` is a colon-separated `key=value` list of
   which felis recognizes `id=` alone. `OSC 8 ; ; ST` closes the open link, as does a bare `OSC 8`. A control byte in

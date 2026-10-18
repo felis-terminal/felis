@@ -77,6 +77,18 @@ pub fn configured_theme_report(
     )
 }
 
+/// The palette slots the client reports so an `OSC 4 ; n ; ?` query
+/// answers with the painted color: exactly the entries
+/// [`Theme::with_palette`] applies, a malformed one left out as it is
+/// left at the xterm default there.
+#[must_use]
+pub fn configured_palette_report(palette: &BTreeMap<u8, String>) -> BTreeMap<u8, (u8, u8, u8)> {
+    palette
+        .iter()
+        .filter_map(|(&i, s)| parse_hex_color(s).map(|rgb| (i, rgb.into())))
+        .collect()
+}
+
 impl Theme {
     #[must_use]
     pub fn with_overrides(fg: Option<&str>, bg: Option<&str>) -> Self {
@@ -506,6 +518,24 @@ mod tests {
         assert_eq!(fg, Some((0xE5, 0xE5, 0xE5)));
         assert_eq!(bg, Some((0x0D, 0x0D, 0x12)));
         assert_eq!(cursor, None);
+    }
+
+    #[test]
+    fn configured_palette_report_is_the_painted_palette() {
+        let config = BTreeMap::from([
+            (1, "#ff5555".to_owned()),
+            (17, "#5e81ac".to_owned()),
+            (18, "not-a-color".to_owned()),
+        ]);
+        let painted = Theme::default().with_palette(&config).palette;
+        let reported = configured_palette_report(&config);
+        for index in 0..=u8::MAX {
+            assert_eq!(
+                reported.get(&index).map(|&rgb| <[u8; 3]>::from(rgb)),
+                painted[usize::from(index)],
+                "slot {index}",
+            );
+        }
     }
 
     #[test]

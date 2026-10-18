@@ -53,7 +53,7 @@ import "google/protobuf/timestamp.proto";
 // below and asserts the Rust values equal them, so editing one here
 // without the other fails the build; prose-check: ignore):
 //   PROTOCOL_MAJOR = 1
-//   PROTOCOL_MINOR = 1
+//   PROTOCOL_MINOR = 2
 //
 // Kind or arm: a frame kind is a *surface*, so a message addressing a
 // surface no existing kind owns earns a kind, as does one whose
@@ -1759,8 +1759,9 @@ message SessionCreate {
 // Client → daemon. The window is closing; the session lives on.
 message SessionDetach {}
 
-// Client → daemon. Report the client's configured theme colors. Each
-// channel is present when set, absent to leave the renderer/xterm default.
+// Client → daemon. Report the client's configured theme colors and
+// palette. Each channel is present when set, absent to leave the
+// renderer/xterm default.
 message SessionConfigureTheme {
   // Configured default foreground (OSC 10).
   Rgb fg = 1;
@@ -1768,6 +1769,21 @@ message SessionConfigureTheme {
   Rgb bg = 2;
   // Configured cursor color (OSC 12).
   Rgb cursor = 3;
+  // Configured palette slots (OSC 4), only those the window's config
+  // sets; a slot left out answers the compiled-in palette. A duplicate
+  // index is refused at decode. A minor-1 reader skips the field.
+  repeated ConfiguredPaletteEntry palette = 4 [(felis.v1.field_since) = {
+    minor: 2
+    skippable: true
+  }];
+}
+
+// One configured palette slot of a SessionConfigureTheme.
+message ConfiguredPaletteEntry {
+  // Palette index, 0..=255. Wider values are rejected on decode.
+  uint32 index = 1;
+  // Required: an entry without a color is refused at decode.
+  Rgb rgb = 2;
 }
 
 // Daemon → client. A SessionAttach landed; the rehydrate burst follows.

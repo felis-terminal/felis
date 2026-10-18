@@ -10,6 +10,10 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 
 ## [Unreleased]
 
+- **Palette queries answer your palette**: a program asking for a palette color (`OSC 4 ; n ; ?`) gets the color the
+  window paints from `[theme.palette]` and `[theme.palette.indexed]`, not the stock xterm one, so a program that picks
+  readable colors from the palette picks against what you see. The window sends its palette in the theme report, a
+  protocol minor 2 addition; against an older daemon or window, queries answer the stock palette as before.
 - **Terminal reset keeps the window's colors**: after a full reset (`ESC c`, `reset`), color queries keep answering the
   window's configured colors and light/dark preference instead of xterm white, a window stops painting the colors the
   program had set, and pixel-size reports keep the window's size.

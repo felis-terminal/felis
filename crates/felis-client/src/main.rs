@@ -788,7 +788,10 @@ fn font_features_differ(a: &RendererConfig, b: &RendererConfig) -> bool {
 /// from the last frame the client sent. Narrower than "the theme
 /// changed": the palette and background alpha are not in the report.
 fn reported_theme_differs(a: &RendererConfig, b: &RendererConfig) -> bool {
-    a.theme_fg != b.theme_fg || a.theme_bg != b.theme_bg || a.theme_cursor != b.theme_cursor
+    a.theme_fg != b.theme_fg
+        || a.theme_bg != b.theme_bg
+        || a.theme_cursor != b.theme_cursor
+        || a.theme_palette != b.theme_palette
 }
 
 /// What the zoom chords start from and Ctrl+Shift+0 returns to; sanitized
@@ -865,9 +868,9 @@ fn resolve_post_shader(cfg: &config::EffectiveConfig) -> Option<String> {
     }
 }
 
-/// Sent right after every attach: the daemon answers `OSC 10/11/12 ; ?`
-/// from it, and clears it with the last detach, so a session switch
-/// re-reports it to the new session's grid.
+/// Sent right after every attach: the daemon answers `OSC 4 ; n ; ?` and
+/// `OSC 10/11/12 ; ?` from it, and clears it with the last detach, so a
+/// session switch re-reports it to the new session's grid.
 pub(crate) fn configure_theme_frame(
     cfg: &RendererConfig,
 ) -> Result<OutgoingFrame, felis_transport::TransportError> {
@@ -876,7 +879,13 @@ pub(crate) fn configure_theme_frame(
         cfg.theme_bg.as_deref(),
         cfg.theme_cursor.as_deref(),
     );
-    OutgoingFrame::ordered(&SessionToDaemonMsg::ConfigureTheme { fg, bg, cursor })
+    let palette = felis_render_wgpu::palette::configured_palette_report(&cfg.theme_palette);
+    OutgoingFrame::ordered(&SessionToDaemonMsg::ConfigureTheme {
+        fg,
+        bg,
+        cursor,
+        palette,
+    })
 }
 
 fn run_client(

@@ -631,6 +631,7 @@ impl Sink for Grid {
                 let palette_reset_all_pending = self.palette_reset_all_pending;
                 let term_name = self.term_name.take();
                 let theme_config_defaults = self.theme_config_defaults;
+                let palette_config_defaults = self.palette_config_defaults;
                 let os_dark = self.os_dark;
                 let winsize_pixels = self.winsize_pixels;
                 let graphics_tracker = std::mem::take(&mut self.graphics_tracker);
@@ -641,6 +642,7 @@ impl Sink for Grid {
                 self.palette_reset_all_pending = palette_reset_all_pending;
                 self.term_name = term_name;
                 self.theme_config_defaults = theme_config_defaults;
+                self.palette_config_defaults = palette_config_defaults;
                 self.os_dark = os_dark;
                 self.winsize_pixels = winsize_pixels;
                 self.graphics_tracker = graphics_tracker;

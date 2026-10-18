@@ -2109,14 +2109,18 @@ fn route_frame(
             };
             match delivered.msg {
                 SessionToDaemonMsg::Detach => Ok(Route::Detach),
-                SessionToDaemonMsg::ConfigureTheme { fg, bg, cursor } => {
-                    Ok(Route::Cmd(SessionCmd::ConfigureTheme {
-                        sub,
-                        fg,
-                        bg,
-                        cursor,
-                    }))
-                }
+                SessionToDaemonMsg::ConfigureTheme {
+                    fg,
+                    bg,
+                    cursor,
+                    palette,
+                } => Ok(Route::Cmd(SessionCmd::ConfigureTheme {
+                    sub,
+                    fg,
+                    bg,
+                    cursor,
+                    palette,
+                })),
                 SessionToDaemonMsg::InputFence => Ok(Route::Cmd(SessionCmd::InputFence {
                     sub,
                     request: delivered.request(),
