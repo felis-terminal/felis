@@ -1,3 +1,7 @@
+[graph]
+# The crate-map `wrappers` below must see optional edges too, the same scope tools/dep_bans.py checks.
+all-features = true
+
 [advisories]
 yanked = "deny"
 # Scoped to workspace: transitive unmaintained deps cannot be updated from this repository.
