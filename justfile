@@ -173,10 +173,16 @@ check-portable:
     cargo clippy -p felis-client-core --no-default-features --target wasm32-unknown-unknown -- -D warnings
     cargo clippy -p felis-render-core --no-default-features --target wasm32-unknown-unknown -- -D warnings
 
-# License / ban / advisory audit (pr.yml's build job runs this).
+# cargo-deny audit plus the crate map's closure bans (pr.yml's build job runs this).
 [group('lint')]
 deny:
     cargo deny check
+    python3 tools/dep_bans.py
+
+# Self-test the closure-ban checker against its fixture.
+[group('lint')]
+dep-bans-selftest:
+    python3 tools/dep_bans.py --self-test
 
 # Source-based unused-dependency scan.
 [group('lint')]
@@ -190,7 +196,7 @@ docs-links:
 
 # Hermetic self-tests of every Python tool under tools/ (pr.yml's build job runs this).
 [group('lint')]
-selftest: prose-check-selftest proto-compat-test release-check-test release-mirror-test release-homebrew-test bench-selftest bench-vs-selftest
+selftest: prose-check-selftest dep-bans-selftest proto-compat-test release-check-test release-mirror-test release-homebrew-test bench-selftest bench-vs-selftest
 
 # Run full check suite: fmt-check + lint + portable core + prose + skills + test + docs links + deny + proto-compat + tool self-tests.
 [group('lint')]

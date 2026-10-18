@@ -1,3 +1,7 @@
+[graph]
+# The crate-map `wrappers` below must see optional edges too, the same scope tools/dep_bans.py checks.
+all-features = true
+
 [advisories]
 yanked = "deny"
 # Scoped to workspace: transitive unmaintained deps cannot be updated from this repository.
@@ -25,14 +29,85 @@ wildcards = "deny"
 allow-wildcard-paths = true
 # Runtime evaluators are intentionally excluded; extension is IPC-based.
 deny = [
-  # GPU and windowing crates, each admitted only as a direct dependency of
-  # the crate that owns it (docs/reference/workspace.md "Crate map").
+  # GPU, windowing and shaping crates, each admitted only as a direct
+  # dependency of the crate that owns it (docs/reference/workspace.md "Crate map").
   { crate = "wgpu", wrappers = [
     "felis-render-wgpu",
   ], reason = "only felis-render-wgpu talks to the GPU" },
   { crate = "winit", wrappers = [
     "felis-client",
   ], reason = "only felis-client owns a window" },
+  { crate = "swash", wrappers = [
+    "felis-shaping",
+  ], reason = "only felis-shaping shapes text" },
+  # The crate map (docs/reference/workspace.md "Crate map"): each felis-*
+  # library is admitted only as a direct dependency of the rows that list it.
+  # Parents after `# dev` are dev-dependency edges, which cargo-deny's graph
+  # includes; promoting one to a normal edge passes here.
+  { crate = "felis-protocol", wrappers = [
+    "felis-vt",
+    "felis-grid",
+    "felis-transport",
+    "felis-daemon",
+    "felis-client-core",
+    "felis-render-core",
+    "felis-render-wgpu",
+    "felis-cli",
+    "felis-client",
+  ], reason = "edge not in the crate map" },
+  { crate = "felis-vt", wrappers = [
+    "felis-grid",
+    "felis-daemon",
+    # dev
+    "felis-client-core",
+    "felis-pty",
+    "felis-render-core",
+    "felis-render-wgpu",
+  ], reason = "edge not in the crate map" },
+  { crate = "felis-grid", wrappers = [
+    "felis-daemon",
+    "felis-client-core",
+    "felis-render-core",
+    "felis-render-wgpu",
+    "felis-cli",
+    "felis-client",
+    # dev
+    "felis-pty",
+  ], reason = "edge not in the crate map" },
+  { crate = "felis-pty", wrappers = [
+    "felis-daemon",
+    # dev
+    "felis-cli",
+    "felis-client-core",
+  ], reason = "edge not in the crate map" },
+  { crate = "felis-transport", wrappers = [
+    "felis-daemon",
+    "felis-client-core",
+    "felis-cli",
+    "felis-client",
+  ], reason = "edge not in the crate map" },
+  { crate = "felis-daemon", wrappers = [
+    # dev
+    "felis-cli",
+    "felis-client-core",
+  ], reason = "edge not in the crate map" },
+  { crate = "felis-client-core", wrappers = [
+    "felis-cli",
+    "felis-client",
+    # dev
+    "felis-daemon",
+  ], reason = "edge not in the crate map" },
+  { crate = "felis-shaping", wrappers = [
+    "felis-render-core",
+    "felis-render-wgpu",
+  ], reason = "edge not in the crate map" },
+  { crate = "felis-render-core", wrappers = [
+    "felis-render-wgpu",
+    "felis-client",
+  ], reason = "edge not in the crate map" },
+  { crate = "felis-render-wgpu", wrappers = [
+    "felis-client",
+  ], reason = "edge not in the crate map" },
   # Lua bindings and runtimes.
   "mlua",
   "rlua",

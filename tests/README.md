@@ -8,9 +8,7 @@ root would not survive the split ([workspace.md](../docs/reference/workspace.md)
 | -------------------------- | ------------------------------------------------------------ |
 | `doc_source_references.rs` | every bare `crates/.../*.rs` citation under `docs/` resolves |
 
-Markdown links are checked by the repository's `lychee` lint. Dependency bans are checked by `cargo-deny` and by
-per-crate purity tests (`crates/felis-protocol/tests/crate_purity.rs`, `crates/felis-grid/tests/no_render_deps.rs`) that
-inspect only their own crate's graph.
+Markdown links are checked by the repository's `lychee` lint. Dependency bans are checked by `just deny`.
 
 A test belongs here only if it asserts something about the workspace itself. Tests that exercise one crate against
 another — the daemon against the PTY layer, the client against the daemon — belong in the `tests/` directory of the

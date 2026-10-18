@@ -60,6 +60,6 @@ represents the cross-language wire vocabulary surface: it must contain no runtim
 - **Dev dependencies**: Benchmarking and fuzzing utilities (`criterion`, `proptest`) are restricted to non-production
   targets. ✅
 
-This invariant is enforced by the `crate_purity_no_async_or_os_deps` integration test in
-`crates/felis-protocol/tests/it/`. If a pull request adds `tokio`, `async-std`, `mio`, `libc`, `rustix`, `nix`, or any
-`windows-sys` / `core-foundation` / `objc` crate to the production dependency graph, the test fails.
+This invariant is enforced by `tools/dep_bans.py` under `just deny` ([workspace.md](workspace.md) "Crate map"). If a
+pull request adds `tokio`, `async-std`, `mio`, `libc`, `rustix`, `nix`, or any `windows-sys` / `core-foundation` /
+`objc` crate to the production dependency graph on any target, the check fails.

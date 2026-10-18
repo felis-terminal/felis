@@ -15,13 +15,9 @@ in [implementation.md](../explanation/implementation.md).
 
 felis is a virtual Cargo workspace. Twelve `felis-*` crates sit under `crates/` (the prefix keeps the crates.io
 namespace consistent); the thirteenth member, `tests/`, is a test-only package outside that tree ("Workspace guards"
-below). The "MUST NOT depend on" column is normative. Two of its rows are CI tests over `cargo tree`: the
-`felis-protocol` async-runtime and OS-crate ban (`crates/felis-protocol/tests/crate_purity.rs`) and the `felis-grid`
-font, shaping and GPU ban (`crates/felis-grid/tests/no_render_deps.rs`). The `wgpu` and `winit` cells are `deny.toml`
-`[bans]` entries with `wrappers`, which admit `wgpu` only as a direct dependency of `felis-render-wgpu` and `winit` only
-as one of `felis-client`. A binary has no dependents, so the `winit` entry settles that cell in every row. The `wgpu`
-entry settles it for `felis-render-core` and `felis-shaping`, which cannot depend on `felis-render-wgpu` without a
-cycle; for `felis-client-core` and `felis-cli` it catches only a direct edge. Review enforces the rest.
+below). Both dependency columns are normative and `just deny` enforces them: `deny.toml` admits each crate only as a
+direct dependency of the crates whose row names it (plus the dev-dependency parents listed under the table), and
+`tools/dep_bans.py` checks each crate's production closure against its "MUST NOT depend on" cell.
 
 ### Per-crate contracts
 
