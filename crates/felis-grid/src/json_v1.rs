@@ -168,7 +168,7 @@ impl Frame {
             MessageKind::Session => Self::Session(
                 codec::decode_either::<SessionToDaemonMsg, SessionToClientMsg>(body)?.try_into()?,
             ),
-            MessageKind::Input => Self::Input(codec::decode::<InputMsg>(body)?.into()),
+            MessageKind::Input => Self::Input(codec::decode::<InputMsg>(body)?.try_into()?),
             other => return Err(JsonError::Kind(format!("{other:?}"))),
         })
     }

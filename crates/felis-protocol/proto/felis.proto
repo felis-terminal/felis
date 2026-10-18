@@ -1065,6 +1065,16 @@ message InputMsg {
       modes: MODE_OPS
       phases: PHASE_ATTACHED
     }];
+    InputViewportStep viewport_step = 11 [
+      (felis.v1.arm) = {
+        direction: DIRECTION_TO_DAEMON
+        correlation: CORRELATION_UNCORRELATED
+        modes: MODE_WINDOW
+        modes: MODE_OPS
+        phases: PHASE_ATTACHED
+      },
+      (felis.v1.field_since) = {minor: 2}
+    ];
   }
 }
 
@@ -1129,6 +1139,14 @@ message InputViewport {
     minor: 2
     skippable: true
   }];
+}
+
+// Relative scrollback step, applied to the viewport the daemon holds
+// for this subscriber when it handles the frame.
+message InputViewportStep {
+  // Rows toward history; negative toward the live bottom. The result
+  // clamps to the retained scrollback.
+  sint32 rows = 1;
 }
 
 // Prompt-jump request.

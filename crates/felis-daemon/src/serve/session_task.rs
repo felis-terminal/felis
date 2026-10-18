@@ -2431,6 +2431,13 @@ impl SessionTask {
                     stream.damage.mark_all();
                 }
             }
+            InputMsg::ViewportStep { rows } => {
+                let stream = &mut self.subs[i].stream;
+                let moved = stream.diff.step_viewport(&session.lock_core().grid, rows);
+                if moved {
+                    stream.damage.mark_all();
+                }
+            }
             InputMsg::JumpPrompt { direction } => {
                 let stream = &mut self.subs[i].stream;
                 let target = {
@@ -3355,6 +3362,93 @@ mod tests {
             drain_events(&mut rx_b).is_empty(),
             "a viewport change must not disturb other subscribers",
         );
+    }
+
+    fn task_with_scrollback(extra: usize) -> (SessionTask, felis_vt::Parser, u32) {
+        let task = SessionTask::for_tests(session_with("read _x"));
+        let rows = task.session.lock_core().grid.rows();
+        let pad = "x\r\n".repeat(usize::from(rows) + extra);
+        let mut parser = felis_vt::Parser::new();
+        parser.advance(&mut task.session.lock_core().grid, pad.as_bytes());
+        let depth = task.session.lock_core().grid.scrollback().len() as u32;
+        (task, parser, depth)
+    }
+
+    fn step(task: &mut SessionTask, sub: SubscriberId, rows: i32) {
+        assert!(
+            task.handle_input(sub, InputMsg::ViewportStep { rows })
+                .is_none(),
+            "ViewportStep is a continuing input",
+        );
+    }
+
+    /// Two steps sent before either reply lands count from each other,
+    /// not from the offset the client last saw.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn viewport_steps_accumulate_from_the_daemon_offset() {
+        let (mut task, _parser, depth) = task_with_scrollback(5);
+        assert!(depth >= 5, "fixture needs ≥ 5 scrollback rows, got {depth}");
+        let (sub, _rx) = attach_sub(&mut task, false);
+
+        step(&mut task, sub, 1);
+        step(&mut task, sub, 1);
+        assert_eq!(task.subs[0].stream.diff.viewport, 2);
+        step(&mut task, sub, -1);
+        assert_eq!(task.subs[0].stream.diff.viewport, 1);
+    }
+
+    /// End then `LineUp` before End's reply: one row above the live
+    /// bottom, not one row above where the view was browsing.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_step_after_a_return_to_live_counts_from_the_live_bottom() {
+        let (mut task, _parser, _depth) = task_with_scrollback(5);
+        let (sub, _rx) = attach_sub(&mut task, false);
+        step(&mut task, sub, 4);
+
+        let end = task.handle_input(
+            sub,
+            InputMsg::Viewport {
+                lines_from_bottom: 0,
+                anchor: None,
+            },
+        );
+        assert!(end.is_none());
+        step(&mut task, sub, 1);
+        assert_eq!(task.subs[0].stream.diff.viewport, 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_viewport_step_clamps_to_both_ends_of_history() {
+        let (mut task, _parser, depth) = task_with_scrollback(3);
+        let (sub, _rx) = attach_sub(&mut task, false);
+
+        step(&mut task, sub, i32::MAX);
+        assert_eq!(task.subs[0].stream.diff.viewport, depth);
+        step(&mut task, sub, i32::MIN);
+        assert_eq!(task.subs[0].stream.diff.viewport, 0);
+    }
+
+    /// The step applies to the offset grown by the rows output pushed
+    /// while browsing, so the view moves one row from the lines shown.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_viewport_step_counts_from_the_offset_output_has_grown() {
+        let (mut task, mut parser, _depth) = task_with_scrollback(5);
+        let (sub, _rx) = attach_sub(&mut task, false);
+        step(&mut task, sub, 2);
+
+        parser.advance(&mut task.session.lock_core().grid, b"y\r\n");
+        step(&mut task, sub, 1);
+        assert_eq!(task.subs[0].stream.diff.viewport, 4);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_viewport_step_on_the_alternate_screen_stays_live() {
+        let (mut task, mut parser, _depth) = task_with_scrollback(3);
+        let (sub, _rx) = attach_sub(&mut task, false);
+        parser.advance(&mut task.session.lock_core().grid, b"\x1b[?1049h");
+
+        step(&mut task, sub, 1);
+        assert_eq!(task.subs[0].stream.diff.viewport, 0);
     }
 
     fn report_theme(task: &mut SessionTask, sub: SubscriberId, bg: Option<(u8, u8, u8)>) {

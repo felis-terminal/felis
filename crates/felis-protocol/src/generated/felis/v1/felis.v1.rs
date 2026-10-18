@@ -755,7 +755,7 @@ pub mod conn_error {
 
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct InputMsg {
-    #[prost(oneof="input_msg::Msg", tags="1, 2, 3, 4, 5, 6, 7, 8, 9, 10")]
+    #[prost(oneof="input_msg::Msg", tags="1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11")]
     pub msg: ::core::option::Option<input_msg::Msg>,
 }
 /// Nested message and enum types in `InputMsg`.
@@ -786,6 +786,8 @@ pub mod input_msg {
         /// the keyboard modes it owns.
         #[prost(message, tag="10")]
         Key(super::InputKeyEvent),
+        #[prost(message, tag="11")]
+        ViewportStep(super::InputViewportStep),
     }
 }
 /// A single mouse event.
@@ -864,6 +866,15 @@ pub struct InputViewport {
     /// current bottom.
     #[prost(message, optional, tag="2")]
     pub anchor: ::core::option::Option<ViewportAnchor>,
+}
+/// Relative scrollback step, applied to the viewport the daemon holds
+/// for this subscriber when it handles the frame.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct InputViewportStep {
+    /// Rows toward history; negative toward the live bottom. The result
+    /// clamps to the retained scrollback.
+    #[prost(sint32, tag="1")]
+    pub rows: i32,
 }
 /// Prompt-jump request.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]

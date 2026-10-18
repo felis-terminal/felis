@@ -288,8 +288,17 @@ offset the daemon has since grown. Every browsing `ViewportState` therefore carr
 against and a request echoes it back (wire in [ipc.md](../../reference/ipc.md)). **Rejected: daemon-side anchoring
 alone**, reading each request against the current bottom: correct between frames, but a scroll during streaming output
 lands one frame's output away, and on a remote attachment, where the round trip is longer than a frame, that becomes the
-common case. **Revisit if** requests gain a correlation with their replies, which would also settle a step sent before
-the previous reply arrives.
+common case. **Revisit if** requests gain a correlation with their replies.
+
+A relative scroll (a line, a half page, a wheel tick, Home) is not an offset at all: the window sends
+`InputMsg::ViewportStep` and the daemon applies it to the view it holds for that subscriber, as `JumpPrompt` already
+resolves a prompt jump, so a step sent before the previous step's reply arrives still counts from it. An offset the
+window computed from its mirror would name the mirror's offset plus one, losing the step in flight or undoing a return
+to live still on its way. **Rejected: a request sequence echoed in `ViewportState`**, with the window stepping from its
+latest unacknowledged request: every request would have to earn a reply even when the view does not move, and after a
+prompt jump, whose target only the daemon knows, the window would still have nothing to step from until the reply.
+Absolute requests (a scrollbar position, a search hit, a returning visit) stay offsets with an anchor, since what they
+name is a place, not a distance.
 
 ## Selection vs scrollback
 

@@ -49,6 +49,10 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 
 ### Fixed
 
+- Scrolling faster than the window redraws no longer loses or undoes steps: two quick line scrolls move two lines, a
+  scroll right after jumping to the bottom moves up from the bottom, and typing right after scrolling up returns to the
+  prompt. The window sends each scroll as a step the daemon applies to its own view, a protocol minor 2 addition;
+  against an older daemon the window scrolls as before.
 - A program asking for a palette color (`OSC 4 ; n ; ?`) now gets the color the window paints from `[theme.palette]` and
   `[theme.palette.indexed]`, not the stock xterm one, so a program that picks readable colors from the palette picks
   against what you see. The window sends its palette in the theme report, a protocol minor 2 addition; against an older

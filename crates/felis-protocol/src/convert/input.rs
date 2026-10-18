@@ -239,6 +239,7 @@ impl From<&messages::InputMsg> for v1::InputMsg {
             }),
             I::NextGridFrame => Msg::NextGridFrame(v1::InputNextGridFrame {}),
             I::Key(event) => Msg::Key(event.into()),
+            I::ViewportStep { rows } => Msg::ViewportStep(v1::InputViewportStep { rows: *rows }),
         };
         Self { msg: Some(msg) }
     }
@@ -267,6 +268,7 @@ impl TryFrom<v1::InputMsg> for messages::InputMsg {
                 },
                 Msg::NextGridFrame(_) => Self::NextGridFrame,
                 Msg::Key(event) => Self::Key(event.try_into()?),
+                Msg::ViewportStep(step) => Self::ViewportStep { rows: step.rows },
             },
         )
     }

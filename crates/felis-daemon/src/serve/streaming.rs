@@ -280,6 +280,16 @@ impl DiffStreamState {
         self.viewport = requested;
         moved
     }
+
+    /// Takes a client's `ViewportStep`: `rows` toward history from the
+    /// offset this subscriber is at now. `true` when the offset moved.
+    pub(crate) fn step_viewport(&mut self, grid: &Grid, rows: i32) -> bool {
+        self.rebase_viewport(grid);
+        let stepped = grid.clamp_viewport(self.viewport.saturating_add_signed(rows));
+        let moved = stepped != self.viewport;
+        self.viewport = stepped;
+        moved
+    }
 }
 
 /// One parked scroll effect: the directive, the geometry it belongs to,

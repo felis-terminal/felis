@@ -131,7 +131,11 @@ pub const fn coalesce_key(msg: &InputMsg) -> Option<CoalesceKey> {
 #[must_use]
 pub const fn seals_key(msg: &InputMsg) -> &'static [CoalesceKey] {
     match msg {
-        InputMsg::JumpPrompt { .. } => &[CoalesceKey::Viewport],
+        InputMsg::JumpPrompt { .. }
+        | InputMsg::ViewportStep { .. }
+        | InputMsg::Key(_)
+        | InputMsg::KeyBytes(_)
+        | InputMsg::Paste(_) => &[CoalesceKey::Viewport],
         InputMsg::Mouse(event) => match (event.action, event.button) {
             (MouseAction::Motion, None) => &[],
             _ => &[CoalesceKey::MouseMotion, CoalesceKey::Resize],
@@ -408,16 +412,78 @@ mod tests {
         assert_eq!(latest.frame().body(), b"20");
     }
 
+    /// Typing while browsing queues a return to live ahead of the
+    /// keystroke; a request queued after the keystroke must not take
+    /// that slot, or the daemon browses again before the key lands.
     #[test]
-    fn only_a_jump_and_an_ordered_mouse_event_seal_a_slot() {
-        use felis_protocol::messages::PromptJump;
+    fn a_keystroke_closes_the_viewport_slot_behind_it() {
+        const VIEWPORT_KIND: u16 = 3;
+        const STEP_KIND: u16 = 4;
+        const KEY_KIND: u16 = 5;
 
+        let viewport =
+            |body: &[u8]| OutgoingFrame::raw(VIEWPORT_KIND, body, Some(CoalesceKey::Viewport), &[]);
+        let mut queue = OutgoingQueue::default();
+        queue
+            .push(OutgoingFrame::raw(
+                STEP_KIND,
+                b"+1",
+                None,
+                seals_key(&InputMsg::ViewportStep { rows: 1 }),
+            ))
+            .expect("under the cap");
+        queue.push(viewport(b"0")).expect("under the cap");
+        queue
+            .push(OutgoingFrame::raw(
+                KEY_KIND,
+                b"a",
+                None,
+                seals_key(&InputMsg::KeyBytes(b"a".to_vec())),
+            ))
+            .expect("under the cap");
+        queue.push(viewport(b"40")).expect("under the cap");
+
+        let drained: Vec<_> = std::iter::from_fn(|| queue.pop())
+            .map(|frame| (frame.frame().kind(), frame.frame().body().to_vec()))
+            .collect();
         assert_eq!(
-            seals_key(&InputMsg::JumpPrompt {
-                direction: PromptJump::Previous
-            }),
-            &[CoalesceKey::Viewport],
+            drained,
+            vec![
+                (STEP_KIND, b"+1".to_vec()),
+                (VIEWPORT_KIND, b"0".to_vec()),
+                (KEY_KIND, b"a".to_vec()),
+                (VIEWPORT_KIND, b"40".to_vec()),
+            ],
         );
+    }
+
+    #[test]
+    fn viewport_readers_and_keystrokes_seal_the_viewport_slot() {
+        use felis_protocol::messages::{
+            Key, KeyEvent, KeyEventKind, KeyLocation, KeyMods, NamedKey, PromptJump,
+        };
+
+        for msg in [
+            InputMsg::JumpPrompt {
+                direction: PromptJump::Previous,
+            },
+            InputMsg::ViewportStep { rows: -3 },
+            InputMsg::KeyBytes(b"a".to_vec()),
+            InputMsg::Paste(b"a".to_vec()),
+            InputMsg::Key(KeyEvent {
+                key: Key::Named(NamedKey::Enter),
+                text: None,
+                mods: KeyMods::empty(),
+                kind: KeyEventKind::Press,
+                location: KeyLocation::Standard,
+            }),
+        ] {
+            assert_eq!(seals_key(&msg), &[CoalesceKey::Viewport], "{msg:?}");
+        }
+    }
+
+    #[test]
+    fn an_ordered_mouse_event_seals_motion_and_resize() {
         assert_eq!(
             seals_key(&motion(Some(MouseButton::Left), MouseAction::Press)),
             &[CoalesceKey::MouseMotion, CoalesceKey::Resize],
@@ -434,7 +500,6 @@ mod tests {
             "a buttonless motion is the kind that coalesces, not one that seals",
         );
         for msg in [
-            InputMsg::KeyBytes(b"a".to_vec()),
             InputMsg::NextGridFrame,
             InputMsg::Viewport {
                 lines_from_bottom: 3,
@@ -540,6 +605,11 @@ mod tests {
         assert_eq!(coalesce_key(&InputMsg::KeyBytes(b"a".to_vec())), None);
         assert_eq!(coalesce_key(&InputMsg::Paste(b"a".to_vec())), None);
         assert_eq!(coalesce_key(&InputMsg::NextGridFrame), None);
+        assert_eq!(
+            coalesce_key(&InputMsg::ViewportStep { rows: 1 }),
+            None,
+            "two steps are two rows of movement",
+        );
         assert_eq!(
             coalesce_key(&InputMsg::Resize {
                 dims: RequestedDims {

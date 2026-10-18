@@ -2,8 +2,8 @@
 //! has to be able to write back.
 
 use felis_protocol::messages::{
-    FKey, InputMods, InputMsg, Key, KeyEvent, KeyEventKind, KeyLocation, KeyMods, MouseAction,
-    MouseButton, MouseEvent, NamedKey, PromptJump,
+    Directed as _, FKey, InputMods, InputMsg, Key, KeyEvent, KeyEventKind, KeyLocation, KeyMods,
+    MouseAction, MouseButton, MouseEvent, NamedKey, PromptJump,
 };
 
 use super::JsonError;
@@ -286,9 +286,11 @@ impl TryFrom<MouseEventJson> for MouseEvent {
     }
 }
 
-impl From<InputMsg> for InputJson {
-    fn from(msg: InputMsg) -> Self {
-        match msg {
+impl TryFrom<InputMsg> for InputJson {
+    type Error = JsonError;
+
+    fn try_from(msg: InputMsg) -> Result<Self, JsonError> {
+        Ok(match msg {
             InputMsg::KeyBytes(bytes) => Self::KeyBytes { bytes },
             InputMsg::Paste(bytes) => Self::Paste { bytes },
             InputMsg::Mouse(event) => Self::Mouse {
@@ -311,7 +313,11 @@ impl From<InputMsg> for InputJson {
             InputMsg::Key(event) => Self::Key {
                 event: event.into(),
             },
-        }
+            // A new variant inside `felis_json: 1` is a format break.
+            ref outside @ InputMsg::ViewportStep { .. } => {
+                return Err(JsonError::Outside(outside.variant()));
+            }
+        })
     }
 }
 
@@ -345,6 +351,14 @@ impl TryFrom<InputJson> for InputMsg {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_viewport_step_is_refused_as_outside_the_format() {
+        assert!(matches!(
+            InputJson::try_from(InputMsg::ViewportStep { rows: 1 }),
+            Err(JsonError::Outside(_))
+        ));
+    }
 
     fn key_event(mods: u8) -> KeyEventJson {
         KeyEventJson {
