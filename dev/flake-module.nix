@@ -74,7 +74,7 @@
           }
           ''
             bash ${../nix/compile-terminfo.sh} \
-              ${../share/terminfo/felis.terminfo} $out/share/terminfo
+              ${../crates/felis-daemon/terminfo/felis.terminfo} $out/share/terminfo
           '';
 
       # The version unicode-width encodes: tools/unicode/gen_tables.py derives

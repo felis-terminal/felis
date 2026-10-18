@@ -1,6 +1,6 @@
 # terminfo source for felis — TERM=xterm-felis
 #
-# Install:   tic -x -o ~/.terminfo share/terminfo/felis.terminfo
+# Install:   tic -x -o ~/.terminfo crates/felis-daemon/terminfo/felis.terminfo
 # Verify:    infocmp -x xterm-felis
 #
 # This entry is `use=xterm-256color` plus ONLY the capabilities felis

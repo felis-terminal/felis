@@ -101,7 +101,7 @@ craneLib.buildPackage (
     env = lib.optionalAttrs (gitHash != null) { FELIS_GIT_HASH = gitHash; };
 
     postInstall = ''
-      bash ${./compile-terminfo.sh} share/terminfo/felis.terminfo "$out/share/terminfo"
+      bash ${./compile-terminfo.sh} crates/felis-daemon/terminfo/felis.terminfo "$out/share/terminfo"
       install -Dm644 share/felis/shell-integration/felis.zsh \
         "$out/share/felis/shell-integration/felis.zsh"
     ''

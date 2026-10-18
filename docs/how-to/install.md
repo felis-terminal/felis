@@ -138,7 +138,7 @@ Installing outside Nix requires setting up the terminfo entry, shell completions
 manually. Compile the terminfo entry once with `tic`:
 
 ```sh
-tic -x share/terminfo/felis.terminfo   # writes into ~/.terminfo
+tic -x crates/felis-daemon/terminfo/felis.terminfo   # writes into ~/.terminfo
 ```
 
 Verify the installation with `infocmp -x xterm-felis`. For terminfo overrides and environment configuration, see

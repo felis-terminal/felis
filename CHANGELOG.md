@@ -17,9 +17,14 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
   checked before opening a window.
 - **CLI**: `felis doctor report` names the platform's per-character fallback after the fallback faces, and
   `--format json` adds it as `fonts.system_fallback`.
+- **Library**: a program that serves sessions from `felis-daemon` in its own executable can hand them the `xterm-felis`
+  terminfo entry: `felis_daemon::TERMINFO_SOURCE` is the entry's source to compile with `tic -x`, and
+  `DaemonCaps::terminfo_dir` names the compiled directory the daemon puts first in each session's `TERMINFO_DIRS`.
 
 ### Changed
 
+- The terminfo source moved from `share/terminfo/felis.terminfo` to `crates/felis-daemon/terminfo/felis.terminfo`; a
+  package or a `tic -x` command that compiles it from a source checkout needs the new path.
 - Jumping to the top or bottom of the scrollback moves from `Ctrl+Home` / `Ctrl+End` to `Ctrl+Shift+Home` /
   `Ctrl+Shift+End`, as in kitty and Windows Terminal, so `Ctrl+Home` / `Ctrl+End` reach editors such as vim and nano
   again. `"ctrl+home" = { kind = "scroll", step = "home" }` under `[keymap]` (and `step = "end"` for `ctrl+end`) brings

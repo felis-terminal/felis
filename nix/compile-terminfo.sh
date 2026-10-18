@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Compile share/terminfo/felis.terminfo, then assert the two properties
+# Compile crates/felis-daemon/terminfo/felis.terminfo, then assert the two properties
 # the entry's macOS readers need. Apple ships ncurses 6.0, which predates
 # the 32-bit terminfo format (magic 0o1036) and refuses any entry over
 # 4096 bytes — either violation makes /usr/bin/tput, vim and less inside

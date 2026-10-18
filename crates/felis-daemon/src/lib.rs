@@ -153,9 +153,15 @@ pub(crate) const NOTIFY_SOCKET_ENV: &str = "NOTIFY_SOCKET";
 /// `felis_client_core::local_socket` (docs/reference/terminal-identity.md).
 const SOCKET_ENV: &str = "FELIS_SOCKET";
 
-/// Must match the entry name in `share/terminfo/felis.terminfo`
+/// Must match the entry name in [`TERMINFO_SOURCE`]
 /// (docs/reference/terminal-identity.md).
 const DEFAULT_TERM: &str = "xterm-felis";
+
+/// The source of the `xterm-felis` terminfo entry every session's `TERM`
+/// names. An embedder that serves sessions from its own executable
+/// compiles it (`tic -x`) into a directory of its choosing and names that
+/// directory in [`serve::DaemonCaps::terminfo_dir`].
+pub const TERMINFO_SOURCE: &str = include_str!("../terminfo/felis.terminfo");
 
 const DEFAULT_TERM_PROGRAM: &str = "felis";
 
@@ -389,11 +395,10 @@ mod tests {
     fn default_term_matches_the_shipped_terminfo_entry() {
         // Renaming either side alone leaves every child with a TERM no
         // terminfo database resolves.
-        let source = include_str!("../../../share/terminfo/felis.terminfo");
         let entry = format!("{DEFAULT_TERM}|");
         assert!(
-            source.lines().any(|line| line.starts_with(&entry)),
-            "share/terminfo/felis.terminfo declares no `{entry}...` entry",
+            TERMINFO_SOURCE.lines().any(|line| line.starts_with(&entry)),
+            "TERMINFO_SOURCE declares no `{entry}...` entry",
         );
     }
 
