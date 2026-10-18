@@ -59,11 +59,11 @@ nothing occludes anything. A bar a producer can paint over guarantees nothing; s
 How a cell looks is decided before any instance exists. The cell painter in `felis-render-core` resolves each cell's
 colors (reverse video, cursor, selection, the bidi warning, faint), its decorations, the overlays and bottom bars, and
 the chrome clip, and emits each row as a display list of rectangles, glyph draws and decorations in physical pixels. The
-per-cell part of that is a row-level function over a slice of cells, which the painter and a DOM client both call, so
-the browser client paints a cell's colors and decorations by the same rules. `felis-render-wgpu` encodes that list into
-the instance records of the tiers below and caches the encoded rows. The display list is the seam a backend other than
-wgpu draws from; why it is data rather than a trait the painter calls is recorded in
-[the architecture overview](../architecture/overview.md) "Workspace: the crate-boundary decision record".
+per-cell part of that is a row-level function over a slice of cells, built without felis-shaping, so a client that draws
+text with its own fonts (a DOM or canvas view) can call it and paint a cell's colors and decorations by the same rules.
+`felis-render-wgpu` encodes that list into the instance records of the tiers below and caches the encoded rows. The
+display list is the seam a backend other than wgpu draws from; why it is data rather than a trait the painter calls is
+recorded in [the architecture overview](../architecture/overview.md) "Workspace: the crate-boundary decision record".
 
 ## wgpu surface and resources
 

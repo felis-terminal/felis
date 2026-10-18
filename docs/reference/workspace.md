@@ -120,7 +120,7 @@ sibling repos in the ecosystem.
 | ----------------------------------- | --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
 | Native Rust GPU (this repo)         | all client-side crates                                                                                    | none                                                                                              |
 | Software-rendered native            | `felis-protocol`, `felis-transport`, `felis-client-core`, `felis-shaping`, `felis-render-core`            | pixel composer drawing the `felis-render-core` display list in place of `felis-render-wgpu`       |
-| Browser tab (`felis-web-component`) | `felis-client-core` + `felis-grid` + `felis-render-core` (without `glyphs`) compiled to wasm              | `felis-web-gateway`, a native `felis-client-core` attach re-exposing the session over a WebSocket |
+| Browser tab (`felis-web-component`) | `felis-client-core` + `felis-grid` compiled to wasm                                                       | `felis-web-gateway`, a native `felis-client-core` attach re-exposing the session over a WebSocket |
 | Emacs (`felis.el`)                  | none (pure Elisp): runs `felis bridge` as a subprocess and reads one JSON object per line from its stdout | `felis bridge`, which ships with the CLI                                                          |
 | Host-terminal TUI (`felis-tui`)     | `felis-client-core` + `felis-grid` (`ansi` for the re-encode)                                             | none; attaches over the Unix socket and repaints the host terminal                                |
 
