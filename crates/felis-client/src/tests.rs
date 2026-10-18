@@ -730,7 +730,7 @@ mod search_navigation {
             offset: 6,
             anchor: Some(at(13, 1)),
         };
-        let request = hit_navigation(&hit, shown, 24, 100).expect("not shown");
+        let request = hit_navigation(&hit, shown, 24, 100);
         assert_eq!(
             request.anchor,
             Some(at(10, 0)),
@@ -747,7 +747,7 @@ mod search_navigation {
             offset: 0,
             anchor: None,
         };
-        let request = hit_navigation(&hit, shown, 24, 100).expect("the hit is off-screen");
+        let request = hit_navigation(&hit, shown, 24, 100);
         assert_eq!(request.offset, 13);
         assert_eq!(request.anchor, Some(at(11, 0)));
     }
@@ -760,7 +760,7 @@ mod search_navigation {
             offset: 1,
             anchor: Some(at(10, 0)),
         };
-        let request = hit_navigation(&hit, shown, 24, 1).expect("the hit is off-screen");
+        let request = hit_navigation(&hit, shown, 24, 1);
         assert_eq!(request.offset, 14);
     }
 
@@ -772,19 +772,21 @@ mod search_navigation {
             offset: 30,
             anchor: Some(at(30, 0)),
         };
-        let request = hit_navigation(&hit, shown, 24, 100).expect("the hit is off-screen");
+        let request = hit_navigation(&hit, shown, 24, 100);
         assert_eq!(request.offset, 27);
         assert_eq!(request.anchor, Some(at(30, 0)));
     }
 
+    /// The shadow may lag a step still in flight, so a hit it already
+    /// shows is requested anyway, at the offset it is shown at.
     #[test]
-    fn navigating_to_a_hit_already_in_view_sends_nothing() {
+    fn navigating_to_a_hit_already_in_view_requests_the_shown_offset() {
         let hit = anchored(-13, Some(at(10, 0)));
         let shown = ViewportPosition {
             offset: 28,
             anchor: Some(at(13, 0)),
         };
-        assert_eq!(hit_navigation(&hit, shown, 24, 100), None);
+        assert_eq!(hit_navigation(&hit, shown, 24, 100), shown);
     }
 
     #[test]

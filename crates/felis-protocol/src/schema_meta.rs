@@ -172,8 +172,16 @@ pub(crate) const INPUT_MSG_ARMS: &[ArmMeta] = &[
         phases: PhaseSet::NONE.union(PhaseSet::ATTACHED),
         since_minor: 0,
     },
+    ArmMeta {
+        name: "Input::ViewportStep",
+        direction: Direction::ToDaemon,
+        correlation: CorrelationClass::Uncorrelated,
+        modes: ModeSet::NONE.union(ModeSet::WINDOW).union(ModeSet::OPS),
+        phases: PhaseSet::NONE.union(PhaseSet::ATTACHED),
+        since_minor: 2,
+    },
 ];
-pub(crate) const INPUT_MSG_ARM_FIELDS: &[u32] = &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+pub(crate) const INPUT_MSG_ARM_FIELDS: &[u32] = &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
 
 pub(crate) const GRID_MSG_ARMS: &[ArmMeta] = &[
     ArmMeta {
@@ -898,6 +906,7 @@ pub(crate) const ADDITIONS: &[(&str, u16)] = &[
     ("Input::JumpPrompt", 0),
     ("Input::NextGridFrame", 0),
     ("Input::Key", 0),
+    ("Input::ViewportStep", 2),
     ("Grid::RehydrateBegin", 0),
     ("Grid::RehydrateEnd", 0),
     ("Grid::RowDelta", 0),

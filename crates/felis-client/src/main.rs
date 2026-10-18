@@ -6,6 +6,7 @@
 #![cfg_attr(not(test), deny(unsafe_code))]
 
 use std::{
+    cell::Cell,
     num::NonZeroU8,
     path::PathBuf,
     process::ExitCode,
@@ -36,7 +37,7 @@ use felis_client_core::{
     roster::{RingKey, pick_switch_target},
     session_id::validate_session_id_prefix,
     shader_clock,
-    viewport::{composed_row_for_line, viewport_for_hit},
+    viewport::{ViewportIntent, composed_row_for_line, viewport_for_hit},
 };
 use felis_client_core::{CarrierReader, CarrierWriter};
 use felis_transport::logging::{self, Console};
@@ -1010,6 +1011,7 @@ fn drive(
     }
 
     let (input_tx, input_rx) = outgoing_channel();
+    let effective_minor = writer.effective_minor();
     let pump = Pumps::spawn(
         reader,
         writer,
@@ -1041,6 +1043,8 @@ fn drive(
         pump: Some(pump),
         driver,
         conn_gen: FIRST_CONN_GEN,
+        effective_minor,
+        viewport_intent: Cell::default(),
         shadow: ShadowScreen::new(attached_dims.rows, attached_dims.cols),
         image_shadow: ImageShadow::new(),
         image_layout: ImageLayout::new(),
@@ -1279,6 +1283,10 @@ struct App {
     /// cannot carry this: `JoinHandle::abort` takes effect at the task's
     /// next yield, which a reader already returning from EOF has passed.
     conn_gen: u64,
+    /// The live connection's, read off its writer.
+    effective_minor: u16,
+    /// A `Cell` because every input path sends through `&self`.
+    viewport_intent: Cell<ViewportIntent>,
     shadow: ShadowScreen,
     image_shadow: ImageShadow,
     image_layout: ImageLayout,

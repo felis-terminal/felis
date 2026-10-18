@@ -302,6 +302,12 @@ pub enum InputMsg {
     /// its keymap bindings; only the mode-dependent byte encoding is
     /// the daemon's (`docs/explanation/input.md` "Keyboard").
     Key(KeyEvent),
+    /// Move the scrollback viewport by `rows` from wherever the daemon
+    /// holds it for this subscriber when it handles the frame, so a
+    /// step sent before the previous step's `ViewportState` arrives
+    /// still counts from it. Positive is toward history; the result
+    /// clamps to the retained scrollback.
+    ViewportStep { rows: i32 },
 }
 
 impl Directed for InputMsg {
@@ -319,6 +325,7 @@ impl Directed for InputMsg {
             Self::JumpPrompt { .. } => 7,
             Self::NextGridFrame => 8,
             Self::Key(_) => 9,
+            Self::ViewportStep { .. } => 10,
         }
     }
 }
@@ -464,6 +471,10 @@ pub(crate) mod tests {
                 kind: KeyEventKind::Press,
                 location: KeyLocation::Left,
             }),
+            InputMsg::ViewportStep { rows: 1 },
+            InputMsg::ViewportStep { rows: -1 },
+            InputMsg::ViewportStep { rows: i32::MAX },
+            InputMsg::ViewportStep { rows: i32::MIN },
         ]
     }
 

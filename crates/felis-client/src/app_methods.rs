@@ -20,6 +20,7 @@ use felis_client_core::confirm::{ConfirmDecision, PendingConfirm, decide_confirm
 use felis_client_core::connector::{Carrier, RemoteSpawn, connect_carrier};
 use felis_client_core::pipe::write_region_file;
 use felis_client_core::roster::RingKey;
+use felis_client_core::viewport::{ViewportIntent, step_request};
 use felis_client_core::{FontSizeStep, PipeRegionSource, PipeTarget};
 use felis_protocol::messages::{GridDims, RegionPosition, RequestedDims, ViewportAnchor};
 
@@ -864,17 +865,18 @@ impl App {
         self.search.current = Some(next);
         let rows = self.shadow.screen().rows();
         let max_scroll = self.shadow.viewport_max().saturating_sub(u32::from(rows));
-        match hit_navigation(
+        // Sent even when the shadow already shows the hit: a step still
+        // in flight may have moved the daemon's view off it. A request
+        // that does not move earns no `ViewportState` to ride a redraw on,
+        // so the `is_current` color flips locally.
+        let request = hit_navigation(
             &self.search.matches[next],
             self.viewport_position(),
             rows,
             max_scroll,
-        ) {
-            Some(request) => self.send_viewport_at(request.offset, request.anchor),
-            // Already on-screen: no viewport round-trip to ride a redraw
-            // on, so flip the `is_current` color locally.
-            None => self.redraw.request(),
-        }
+        );
+        self.send_viewport_at(request.offset, request.anchor);
+        self.redraw.request();
     }
 
     pub(crate) fn build_search_overlay(&self) -> Option<SearchOverlay> {
@@ -1012,7 +1014,7 @@ impl App {
                 // encoder so pagers / vim still see `kend`.
                 let bare_end_at_live = matches!(key, Key::Named(NamedKey::End))
                     && self.modifiers == ModifiersState::empty()
-                    && self.shadow.viewport_at_bottom();
+                    && self.viewport_live();
                 if bare_end_at_live {
                     return false;
                 }
@@ -1303,6 +1305,9 @@ impl App {
         // The generation bump is what holds the line: `abort` is
         // best-effort (see `Pumps::abort_reader`).
         self.conn_gen += 1;
+        self.effective_minor = writer.effective_minor();
+        // Every rehydrate presents the live bottom.
+        self.viewport_intent.set(ViewportIntent::default());
         if let Some(pump) = self.pump.as_ref() {
             pump.abort_reader();
         }
@@ -1406,9 +1411,20 @@ impl App {
         // so an over-limit paste or raw payload costs the window its
         // carrier rather than one frame unless it is dropped here.
         match OutgoingFrame::input(msg) {
-            Ok(frame) => self.enqueue(frame),
+            Ok(frame) => {
+                let mut intent = self.viewport_intent.get();
+                intent.note(msg);
+                self.viewport_intent.set(intent);
+                self.enqueue(frame);
+            }
             Err(err) => warn!(%err, "dropping an over-limit outgoing frame"),
         }
+    }
+
+    /// At the live bottom both on screen and in every viewport request
+    /// still in flight.
+    pub(crate) const fn viewport_live(&self) -> bool {
+        self.viewport_intent.get().is_live(self.shadow.viewport())
     }
 
     /// The daemon clamps; the shadow's `viewport()` updates on the
@@ -1436,7 +1452,7 @@ impl App {
 
     /// No-op at the bottom so redundant `Viewport` frames are not sent.
     pub(crate) fn snap_to_live(&self) {
-        if self.shadow.viewport() > 0 {
+        if !self.viewport_live() {
             self.send_viewport(0);
         }
     }
@@ -1474,46 +1490,49 @@ impl App {
         self.send_input(&InputMsg::Key(event));
     }
 
-    /// Reads `viewport()` / `viewport_max()` off the shadow rather than
-    /// tracking client-side state: the daemon is authoritative and a stale
-    /// shadow resyncs on the next `ViewportState`.
     pub(crate) fn apply_scroll(&self, step: felis_client_core::action::ScrollStep) {
         use felis_client_core::action::ScrollStep;
-        let viewport = self.shadow.viewport();
-        let rows = self.shadow.screen().rows();
-        // The largest legal offset is the scrollback portion alone;
-        // saturate in case an early-handshake shadow has viewport_max < rows.
-        let max_scroll = self.shadow.viewport_max().saturating_sub(u32::from(rows));
         // Half-page jumps match Kitty's `scroll_half_page` default; floor
         // at 1 so a 1-row grid still scrolls.
-        let half_page = u32::from(rows / 2).max(1);
-        let new_viewport = match step {
-            ScrollStep::LineUp => viewport.saturating_add(1).min(max_scroll),
-            ScrollStep::LineDown => viewport.saturating_sub(1),
-            ScrollStep::HalfPageUp => viewport.saturating_add(half_page).min(max_scroll),
-            ScrollStep::HalfPageDown => viewport.saturating_sub(half_page),
-            ScrollStep::Home => max_scroll,
-            ScrollStep::End => 0,
+        let half_page = i32::from(self.shadow.screen().rows() / 2).max(1);
+        let rows = match step {
+            ScrollStep::LineUp => 1,
+            ScrollStep::LineDown => -1,
+            ScrollStep::HalfPageUp => half_page,
+            ScrollStep::HalfPageDown => -half_page,
+            // The daemon clamps to the oldest retained row, which the
+            // shadow's maximum understates while output streams.
+            ScrollStep::Home => i32::MAX,
+            ScrollStep::End => {
+                self.snap_to_live();
+                return;
+            }
         };
-        if new_viewport != viewport {
-            self.send_viewport(new_viewport);
-        }
+        self.scroll_by_rows(rows);
     }
 
-    /// Positive = into history, clamped to `[0, max_scroll]`.
+    /// Positive = into history.
     pub(crate) fn scroll_by_rows(&self, delta_rows: i32) {
-        if delta_rows == 0 {
+        // The daemon holds the alternate screen live, and a step it
+        // ignores would mark the intent browsing: the next bare `End`
+        // would scroll instead of reaching the program.
+        if self.shadow.alt_screen() {
             return;
         }
-        let viewport = i64::from(self.shadow.viewport());
-        let max_scroll = i64::from(
-            self.shadow
-                .viewport_max()
-                .saturating_sub(u32::from(self.shadow.screen().rows())),
-        );
-        let new_viewport = (viewport + i64::from(delta_rows)).clamp(0, max_scroll) as u32;
-        if new_viewport != self.shadow.viewport() {
-            self.send_viewport(new_viewport);
+        // The largest legal offset is the scrollback portion alone;
+        // saturate in case an early-handshake shadow has viewport_max < rows.
+        let max_scroll = self
+            .shadow
+            .viewport_max()
+            .saturating_sub(u32::from(self.shadow.screen().rows()));
+        if let Some(request) = step_request(
+            delta_rows,
+            self.effective_minor,
+            self.shadow.viewport(),
+            self.shadow.viewport_anchor(),
+            max_scroll,
+        ) {
+            self.send_input(&request);
         }
     }
 
@@ -1646,17 +1665,17 @@ pub(crate) fn search_hit_anchor_line(hit: &SearchHitRecord) -> i64 {
         .map_or(hit.line_index, |seg| seg.line_index)
 }
 
-/// The `Viewport` request that brings `hit` into view, `None` when it is
-/// already shown. Computed in the newer of the hit's frame and the
-/// view's: projecting into the older one can carry a scrollback hit
-/// across `0`, which the daemon reads as the live bottom, or leave a hit
-/// found on the live screen at `0` after it scrolled into history.
+/// The `Viewport` request that brings `hit` into view. Computed in the
+/// newer of the hit's frame and the view's: projecting into the older one
+/// can carry a scrollback hit across `0`, which the daemon reads as the
+/// live bottom, or leave a hit found on the live screen at `0` after it
+/// scrolled into history.
 pub(crate) fn hit_navigation(
     hit: &SearchHitRecord,
     shown: ViewportPosition,
     rows: u16,
     max_scroll: u32,
-) -> Option<ViewportPosition> {
+) -> ViewportPosition {
     let shift = hit_shift(hit, shown.anchor);
     let in_view_frame = match shift {
         Some(shift) => hit.anchor.is_none() || shift >= 0 && shown.anchor.is_some(),
@@ -1674,18 +1693,10 @@ pub(crate) fn hit_navigation(
         // clamps, and answers a stale generation with the live bottom.
         (search_hit_anchor_line(hit), hit.anchor, u32::MAX)
     };
-    let target = viewport_for_hit(line, rows, max_scroll);
-    let there = if target == 0 {
-        shown.offset == 0
-    } else if anchor == shown.anchor {
-        target == shown.offset
-    } else {
-        shift.is_some_and(|shift| i64::from(target) + shift == i64::from(shown.offset))
-    };
-    (!there).then_some(ViewportPosition {
-        offset: target,
+    ViewportPosition {
+        offset: viewport_for_hit(line, rows, max_scroll),
         anchor,
-    })
+    }
 }
 
 /// Rows to take off a hit's indices to count them from the bottom `frame`
