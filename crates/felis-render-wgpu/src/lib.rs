@@ -17,14 +17,12 @@ use felis_grid::{
     ScreenBuffer,
     image_layout::{ImageDraw, ImageLayout},
 };
-use felis_protocol::{
-    ImageId,
-    messages::{CursorStyle, ThemeChannel},
-};
+use felis_protocol::{ImageId, messages::ThemeChannel};
 use felis_render_core::{
     ImageSource, SelectionRange,
     glyphs::{GLYPH_ATLAS_SIDE, ShapeFrame},
     overlay::{ConfirmOverlay, LinkPreviewOverlay, PreeditOverlay, SearchOverlay},
+    painter::{BAR_ELLIPSIS, cursor_rect_px},
     palette::{ResolvedTheme, Theme, effective_theme},
 };
 use felis_shaping::{CellMetrics, FontStack, ShapingError, StackDescription, StyleFaces};
@@ -49,7 +47,6 @@ pub mod glyph_cache;
 pub mod gpu_instances;
 mod gpu_resources;
 pub mod image_atlas;
-pub mod instances;
 pub mod pipeline;
 pub mod post;
 pub mod probe;
@@ -68,7 +65,6 @@ use crate::{
     glyph_cache::GlyphCache,
     gpu_instances::{BgInstance, DecorationInstance, FgInstance, ImgInstance, clip_img_quad_above},
     image_atlas::{ImageAtlas, ImageSlot},
-    instances::{BAR_ELLIPSIS, CURSOR_MARKER_PX},
     pipeline::{
         ViewportUniform, atlas_bind_group_layout_entries, bg_instance_layout,
         decoration_instance_layout, fg_instance_layout, glyph_bind_group_layout_entries,
@@ -1038,7 +1034,7 @@ impl Renderer {
     }
 
     /// Read by the client to resolve the bottom-row precedence at click
-    /// time (`instances::bottom_bar_claim`): the composition lives here,
+    /// time (`painter::bottom_bar_claim`): the composition lives here,
     /// while the search and confirmation states it competes with live on
     /// the client.
     #[must_use]
@@ -1768,26 +1764,6 @@ fn build_pipeline(
     })
 }
 
-/// `(x, y, width, height)` in pixels of the cursor the cell pass paints
-/// over the columns `span` covers.
-fn cursor_rect_px(
-    metrics: CellMetrics,
-    origin_px: [f32; 2],
-    row: u16,
-    (first, last): (u16, u16),
-    style: CursorStyle,
-) -> [f32; 4] {
-    let (cw, ch) = (metrics.width as f32, metrics.height as f32);
-    let x = f32::from(first).mul_add(cw, origin_px[0]);
-    let y = f32::from(row).mul_add(ch, origin_px[1]);
-    let w = f32::from(last - first + 1) * cw;
-    match style {
-        CursorStyle::Block => [x, y, w, ch],
-        CursorStyle::Underline => [x, y + ch - CURSOR_MARKER_PX, w, CURSOR_MARKER_PX],
-        CursorStyle::Bar => [x, y, CURSOR_MARKER_PX, ch],
-    }
-}
-
 #[cfg(test)]
 mod tests {
     #![allow(clippy::float_cmp)]
@@ -1803,28 +1779,6 @@ mod tests {
     use felis_render_core::{ImageData, palette::srgb_to_linear_rgba};
 
     use super::*;
-
-    #[test]
-    fn cursor_rect_spans_both_columns_of_a_wide_character() {
-        let metrics = CellMetrics {
-            width: 10,
-            height: 20,
-            ascent: 16,
-        };
-        let span = (3, 4);
-        assert_eq!(
-            cursor_rect_px(metrics, [5.0, 0.0], 1, span, CursorStyle::Block),
-            [35.0, 20.0, 20.0, 20.0]
-        );
-        assert_eq!(
-            cursor_rect_px(metrics, [5.0, 0.0], 1, span, CursorStyle::Underline),
-            [35.0, 40.0 - CURSOR_MARKER_PX, 20.0, CURSOR_MARKER_PX]
-        );
-        assert_eq!(
-            cursor_rect_px(metrics, [5.0, 0.0], 1, span, CursorStyle::Bar),
-            [35.0, 20.0, CURSOR_MARKER_PX, 20.0]
-        );
-    }
 
     /// REQ-705 / REQ-1005: sides are `min(ceiling, adapter max 2D)`; a
     /// downlevel (2048) adapter clamps the image sheet and leaves the

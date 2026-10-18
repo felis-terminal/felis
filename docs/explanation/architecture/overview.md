@@ -419,10 +419,21 @@ where they do.
 Each crate is a seam: a boundary that a future repository split, or a non-Rust client, must be able to reuse in
 isolation. The "MUST-NOT-depend-on" column of the crate map is the load-bearing one: it is the extraction criterion. The
 renderer is two seams: `felis-render-core` holds the backend-neutral pieces (the palette, the box-drawing rasterizer,
-the atlas packer, the frame-state types), and `felis-render-wgpu` holds the wgpu pipeline and everything that still
-names its instance layout. While wgpu is the only backend, the split costs a small amount of API plumbing (items public
+the glyph index and its atlas packer, the frame-state types, and the cell painter that decides how each cell looks), and
+`felis-render-wgpu` holds the wgpu pipeline, the instance records its shaders read, and the encoder that turns the
+painter's output into them. While wgpu is the only backend, the split costs a small amount of API plumbing (items public
 across a boundary one consumer crosses); that is the accepted price of a CPU backend or another client reusing those
-pieces instead of porting them, where each port drifts on the rules it misses.
+pieces instead of re-deriving how a cell looks, where each port drifts on the rules it misses.
+
+The painter hands a backend data, not calls: per row, a display list of rectangles, glyph draws and line decorations in
+physical pixels, with each glyph's source in atlas pixels as an image draw's source is in image pixels. A renderer trait
+the painter calls per draw is the rejected alternative, as it is for `renderer_effect` and `image_layout` ("The
+felis-client-core / felis-client seam" below): the painter would fix the call order for every backend, the wgpu backend
+would only re-buffer the calls into its instance arrays, and its row cache, which keeps each row's instances across
+frames and replaces only the rows that changed, needs a row's output as a value it can hold. The price is one encode
+pass per repainted row. A painter generic over a per-backend sink, writing instance records with no list in between,
+would remove that pass at the cost of putting each backend's record shape back into the painter's signature. _Revisit
+if_ a profile of a steady-state frame shows the encode pass rather than the painter's own walk.
 
 ### Rejected workspace shapes
 

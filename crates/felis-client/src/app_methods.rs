@@ -200,7 +200,7 @@ impl App {
 
     /// Whether the bottom row would go to a link preview, resolved with
     /// the renderer's own precedence rule rather than a second copy of it
-    /// (`felis_render_wgpu::instances::bottom_bar_claim`). Asked with
+    /// (`felis_render_core::painter::bottom_bar_claim`). Asked with
     /// `link_preview_active = true` because the caller is deciding whether
     /// a preview may exist at all.
     pub(crate) fn link_preview_row_free(&self) -> bool {
@@ -214,8 +214,8 @@ impl App {
             .surface
             .as_ref()
             .is_some_and(|s| s.renderer.preedit_active());
-        felis_render_wgpu::instances::bottom_bar_claim(
-            felis_render_wgpu::instances::ChromeBar::from_flags(search_active, confirm_active),
+        felis_render_core::painter::bottom_bar_claim(
+            felis_render_core::painter::ChromeBar::from_flags(search_active, confirm_active),
             preedit_active,
             true,
         )

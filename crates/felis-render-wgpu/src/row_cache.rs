@@ -6,10 +6,6 @@ use crate::{
     gpu_instances::{
         AtlasSides, BgInstance, DecorationInstance, FgInstance, InstanceBuffers, encode,
     },
-    instances::{
-        CellPainter, ChromeBar, CursorPaint, PreeditSpan, bottom_bar_claim, clip_cells_above,
-        extend_confirm, extend_link_preview, extend_preedit, extend_search, preedit_covered_cols,
-    },
 };
 use bytemuck::Zeroable;
 use felis_grid::ScreenBuffer;
@@ -18,6 +14,10 @@ use felis_render_core::{
     display_list::RowPaint,
     glyphs::{AtlasView, ShapeFrame},
     overlay::{ConfirmOverlay, LinkPreviewOverlay, PreeditOverlay, SearchOverlay},
+    painter::{
+        CellPainter, ChromeBar, CursorPaint, PreeditSpan, bottom_bar_claim, clip_cells_above,
+        extend_confirm, extend_link_preview, extend_preedit, extend_search, preedit_covered_cols,
+    },
     palette::ResolvedTheme,
 };
 use felis_shaping::CellMetrics;
@@ -202,12 +202,12 @@ impl RowCache {
         sides: AtlasSides,
     ) -> &mut InstanceBuffers {
         self.version += 1;
-        let cursor = painter.cursor;
+        let cursor = painter.cursor();
         let rows = usize::from(key.rows);
         let reusable = self.key == Some(key) && self.row_version.len() == rows;
         let fits = reusable && {
             self.truncate_to_rows();
-            let moved = (self.cursor != cursor).then_some([self.cursor.cell, cursor.cell]);
+            let moved = (self.cursor != cursor).then_some([self.cursor.cell(), cursor.cell()]);
             let cursor_rows = moved.into_iter().flatten().flatten();
             dirty
                 .chain(cursor_rows.map(|(r, _)| usize::from(r)))

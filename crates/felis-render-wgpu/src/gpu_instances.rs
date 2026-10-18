@@ -8,9 +8,8 @@ use bytemuck::{Pod, Zeroable};
 use felis_render_core::{
     display_list::{AtlasKind, DecoKind, RowPaint},
     glyphs::AtlasView,
+    painter::clip_extent_at,
 };
-
-use crate::instances::clip_extent_at;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, PartialEq, Pod, Zeroable)]

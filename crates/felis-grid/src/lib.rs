@@ -17,7 +17,7 @@ pub use felis_protocol::messages::{
 };
 use felis_protocol::messages::{PromptJump, PromptKind, ThemeChannel};
 use felis_vt::Sink;
-/// Re-exported so `felis-render-wgpu` can flag Trojan-Source characters
+/// Re-exported so `felis-render-core` can flag Trojan-Source characters
 /// without depending on `felis-vt` (`docs/explanation/architecture/overview.md`
 /// "Workspace: the crate-boundary decision record").
 pub use felis_vt::bidi;

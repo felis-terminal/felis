@@ -1073,7 +1073,7 @@ impl ShapeFrame {
         self.cluster_glyphs = pool;
     }
 
-    /// The quad-slicing tests in `instances.rs` build frames directly
+    /// The quad-slicing tests in `painter.rs` build frames directly
     /// because the full pipeline needs a real ligature font.
     #[cfg(any(test, feature = "testing"))]
     #[must_use]

@@ -1,5 +1,5 @@
 //! The cell painter: turns the screen and the frame's overlays into
-//! the display list of [`felis_render_core::display_list`].
+//! the display list of [`crate::display_list`].
 
 use std::borrow::Cow;
 
@@ -9,7 +9,7 @@ use felis_grid::{
 };
 use felis_shaping::{CellMetrics, SizingKey};
 
-use felis_render_core::{
+use crate::{
     SelectionRange,
     display_list::{AtlasKind, DecoKind, Decoration, GlyphDraw, Rect, RowPaint},
     glyphs::{
@@ -24,7 +24,7 @@ use felis_render_core::{
     },
 };
 
-pub(crate) const CURSOR_MARKER_PX: f32 = 2.0;
+pub const CURSOR_MARKER_PX: f32 = 2.0;
 
 /// One pixel less than the cursor marker so a cursor underline on a
 /// link cell still visually wins.
@@ -63,16 +63,42 @@ pub struct PreeditSpan {
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) struct CursorPaint {
-    /// The row and first column of the character under the cursor.
-    pub(crate) cell: Option<(u16, u16)>,
+pub struct CursorPaint {
+    cell: Option<(u16, u16)>,
     last_col: u16,
     style: CursorStyle,
 }
 
 impl CursorPaint {
+    /// The row and first column of the character under the cursor.
+    #[must_use]
+    pub const fn cell(&self) -> Option<(u16, u16)> {
+        self.cell
+    }
+
     fn covers(&self, row: u16, col: u16) -> bool {
         matches!(self.cell, Some((r, first)) if r == row && (first..=self.last_col).contains(&col))
+    }
+}
+
+/// `(x, y, width, height)` in pixels of the cursor the cell pass paints
+/// over the columns `span` covers.
+#[must_use]
+pub fn cursor_rect_px(
+    metrics: CellMetrics,
+    origin_px: [f32; 2],
+    row: u16,
+    (first, last): (u16, u16),
+    style: CursorStyle,
+) -> [f32; 4] {
+    let (cw, ch) = (metrics.width as f32, metrics.height as f32);
+    let x = f32::from(first).mul_add(cw, origin_px[0]);
+    let y = f32::from(row).mul_add(ch, origin_px[1]);
+    let w = f32::from(last - first + 1) * cw;
+    match style {
+        CursorStyle::Block => [x, y, w, ch],
+        CursorStyle::Underline => [x, y + ch - CURSOR_MARKER_PX, w, CURSOR_MARKER_PX],
+        CursorStyle::Bar => [x, y, CURSOR_MARKER_PX, ch],
     }
 }
 
@@ -102,8 +128,7 @@ pub struct CellPainter<'a, A: AtlasView> {
     ch: f32,
     ascent: f32,
     cursor_visible: bool,
-    /// Resolved at the start of the walk; meaningless before.
-    pub(crate) cursor: CursorPaint,
+    cursor: CursorPaint,
     selection: Option<SelectionRange>,
     viewport: u32,
     viewport_max: u32,
@@ -209,15 +234,21 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
 
     /// Fixes the cursor paint, which every row reads.
     #[must_use]
-    pub(crate) fn resolved(mut self) -> Self {
+    pub fn resolved(mut self) -> Self {
         self.cursor = self.resolve_cursor();
         self
     }
 
+    /// Resolved by [`Self::resolved`]; meaningless before.
+    #[must_use]
+    pub const fn cursor(&self) -> CursorPaint {
+        self.cursor
+    }
+
     /// Everything a row emits depends on that row's cells and the
     /// painter's frame-wide inputs alone, which is what lets
-    /// [`crate::row_cache::RowCache`] repaint a row in isolation.
-    pub(crate) fn extend_row(&self, out: &mut RowPaint, r: u16) {
+    /// a renderer's row cache repaint a row in isolation.
+    pub fn extend_row(&self, out: &mut RowPaint, r: u16) {
         // Cell draws must not land under the bottom chrome: a glyph
         // rides the fg pass and would draw on top of the bar. Capping the
         // walk is the only fix; there is no fg occlusion across passes.
@@ -619,7 +650,7 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
 
     /// Absent at the live bottom. Gated on `viewport_max > rows` as
     /// defense-in-depth: the daemon should already have clamped.
-    pub(crate) fn push_scrollbar_lane(&self, out: &mut RowPaint) {
+    pub fn push_scrollbar_lane(&self, out: &mut RowPaint) {
         let rows_u32 = u32::from(self.screen.rows());
         if self.viewport > 0 && self.viewport_max > rows_u32 {
             let max_scroll = (self.viewport_max - rows_u32) as f32;
@@ -1107,7 +1138,7 @@ const fn theme_default_fg() -> [f32; 4] {
 }
 
 /// Appended after the cell pass so highlights and bar paint on top.
-/// Atlas misses in the label are skipped; `Renderer::render` primes the
+/// Atlas misses in the label are skipped; the renderer primes the
 /// label before painting. Highlights on the bar row are still
 /// emitted but covered by the bar.
 pub fn extend_search<A: AtlasView>(
@@ -1249,7 +1280,8 @@ fn clip_fg_right_of(quads: &mut Vec<GlyphDraw>, from: usize, max_x: f32) {
 /// Shrinks `extent`, along one axis, so the quad ends at `max`,
 /// reporting the fraction of it that survived, or `None` when nothing
 /// does.
-pub(crate) fn clip_extent_at(origin: f32, extent: &mut f32, max: f32) -> Option<f32> {
+#[must_use]
+pub fn clip_extent_at(origin: f32, extent: &mut f32, max: f32) -> Option<f32> {
     if *extent <= 0.0 {
         return None;
     }
@@ -1463,10 +1495,10 @@ mod tests {
     #[cfg(not(windows))]
     use std::num::NonZeroU32;
 
-    use felis_grid::{Color, Grid};
     #[cfg(not(windows))]
-    use felis_render_core::glyphs::{GlyphIndex, GridWalker};
-    use felis_render_core::{overlay::SearchHitSpan, palette::Theme};
+    use crate::glyphs::{GlyphIndex, GridWalker};
+    use crate::{overlay::SearchHitSpan, palette::Theme};
+    use felis_grid::{Color, Grid};
     #[cfg(not(windows))]
     use felis_shaping::{FontStack, FontStyle, Shaper};
     use felis_vt::Parser;
@@ -1582,6 +1614,28 @@ mod tests {
         .with_reverse_video(screen_reverse)
         .extend_screen(&mut buffers);
         buffers
+    }
+
+    #[test]
+    fn cursor_rect_spans_both_columns_of_a_wide_character() {
+        let metrics = CellMetrics {
+            width: 10,
+            height: 20,
+            ascent: 16,
+        };
+        let span = (3, 4);
+        assert_eq!(
+            cursor_rect_px(metrics, [5.0, 0.0], 1, span, CursorStyle::Block),
+            [35.0, 20.0, 20.0, 20.0]
+        );
+        assert_eq!(
+            cursor_rect_px(metrics, [5.0, 0.0], 1, span, CursorStyle::Underline),
+            [35.0, 40.0 - CURSOR_MARKER_PX, 20.0, CURSOR_MARKER_PX]
+        );
+        assert_eq!(
+            cursor_rect_px(metrics, [5.0, 0.0], 1, span, CursorStyle::Bar),
+            [35.0, 20.0, CURSOR_MARKER_PX, 20.0]
+        );
     }
 
     #[test]
@@ -2938,7 +2992,7 @@ mod tests {
 
     #[test]
     fn link_cells_emit_an_extra_underline_instance() {
-        use felis_render_core::palette::LINK_UNDERLINE;
+        use crate::palette::LINK_UNDERLINE;
         let g = drive(
             1,
             4,
@@ -2961,7 +3015,7 @@ mod tests {
     /// REQ-910: a `javascript:` OSC 8 emits no `LINK_UNDERLINE`.
     #[test]
     fn disallowed_scheme_emits_no_link_underline_instance() {
-        use felis_render_core::palette::LINK_UNDERLINE;
+        use crate::palette::LINK_UNDERLINE;
         let g = drive(
             1,
             6,
@@ -2979,7 +3033,7 @@ mod tests {
     /// rather than inheriting the safe URI.
     #[test]
     fn disallowed_scheme_after_safe_open_clears_underline_run() {
-        use felis_render_core::palette::LINK_UNDERLINE;
+        use crate::palette::LINK_UNDERLINE;
         let g = drive(
             1,
             8,
@@ -3002,7 +3056,7 @@ mod tests {
     fn link_underline_skipped_on_bidi_marker_cells() {
         // The bidi marker drops the link underline so the warning stays
         // unobstructed.
-        use felis_render_core::palette::{BIDI_MARKER_BG, LINK_UNDERLINE};
+        use crate::palette::{BIDI_MARKER_BG, LINK_UNDERLINE};
         let g = drive(
             1,
             3,
@@ -3325,7 +3379,7 @@ mod tests {
         let overlay = LinkPreviewOverlay {
             text: "https://example.com/very/long/path".to_owned(),
         };
-        // `Renderer::render` primes the ellipsis alongside the text, so
+        // The renderer primes the ellipsis alongside the text, so
         // the atlas answers for it here too.
         let mut atlas = MockAtlas::full(slot());
         atlas.map.insert(BAR_ELLIPSIS, slot());
@@ -3596,7 +3650,7 @@ mod tests {
     fn underline_color_uses_sgr_58_when_set() {
         let deco = deco_for(b"\x1b[4;58:2::255:0:0m");
         assert_eq!(deco.len(), 1);
-        let want = felis_render_core::palette::srgb_to_linear_rgba([255, 0, 0], 1.0);
+        let want = crate::palette::srgb_to_linear_rgba([255, 0, 0], 1.0);
         assert_eq!(
             deco[0].color, want,
             "SGR 58 underline color must be honored"
