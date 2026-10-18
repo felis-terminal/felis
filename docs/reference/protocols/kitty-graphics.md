@@ -87,6 +87,7 @@ Image data is retained until:
 
 - The producer deletes the image (`a=d`) matching its ID or number.
 - The producer transmits again under the same ID: the new data replaces it, and its placements are deleted as in kitty.
+  The image draws nothing from the start of the new transmission until it completes.
 - It was sent without `i=` or `I=` and has no placement left after a delete or a scroll; nothing could place it again.
 - A screen clear leaves it without a placement (see below).
 - A later transmission needs room under the session byte cap and evicts it, placements included (see [Limits](#limits)).
@@ -174,9 +175,9 @@ image. A cell continues the run of the cell before it when their foreground ids 
 agrees with the run (the same row, the next column, the same high byte); a continuing cell takes the diacritics it omits
 from the run, and a cell that starts a run takes `0` for them. A cell's underline color (SGR 58) names its placement the
 same way, and a change of it breaks the run: a non-zero id picks the image's virtual placement with that `p=`, and
-nothing draws when none matches; `0` picks the image's first virtual placement. Clients render placeholder cells with
-corresponding image regions matching direct placement z-index rules. The image is fit into the placement's `c=` by `r=`
-cell box with its aspect ratio kept and centered, so cells in the margin show nothing.
+nothing draws when none matches; `0` picks the image's first virtual placement. Placeholder cells draw at z = -1,
+between the cell backgrounds and the glyphs, whatever `z=` the virtual placement recorded, as in kitty. The image is fit
+into the placement's `c=` by `r=` cell box with its aspect ratio kept and centered, so cells in the margin show nothing.
 
 A `U=1` transmission (`a=T`) or put (`a=p`) anchors nothing at the cursor and leaves it in place; it records a virtual
 placement with its extent (`c=`, `r=`, `z=`) in the session's placement table. A `p=` names it, and a later put under
@@ -247,6 +248,8 @@ Image layers stack relative to text according to Kitty rules:
 5. Cell glyphs.
 6. Images with `z >= 0`, in z order.
 7. Cursor.
+
+Images of equal z draw anchored placements in the order the client received them, then placeholder cells.
 
 Interface chrome (search, confirmation, or link preview bars) clips all image rendering; images do not draw into chrome
 rows at any z-index (see [kitty-graphics.md](../../explanation/protocols/kitty-graphics.md)).

@@ -6,7 +6,7 @@
 //! caller supplies; this crate has no `winit` dependency.
 
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, HashSet},
     num::NonZeroU32,
     path::PathBuf,
     sync::Arc,
@@ -15,11 +15,11 @@ use std::{
 use bytemuck::cast_slice;
 use felis_grid::{
     ScreenBuffer,
-    images::{ClientPlacement, VirtualPlacement, clip_source},
+    image_layout::{ImageDraw, ImageLayout},
 };
 use felis_protocol::{
     ImageId,
-    messages::{CursorStyle, ImageFormat, RequestedExtent, SourceRect, ThemeChannel},
+    messages::{CursorStyle, ImageFormat, ThemeChannel},
 };
 use felis_shaping::{CellMetrics, FontStack, ShapingError, StackDescription, StyleFaces};
 pub use felis_shaping::{FaceSpec, installed_families};
@@ -121,17 +121,12 @@ pub struct ImageData<'a> {
 /// The recovery set after an atlas reset, deduped in first-mention
 /// order. Anything a live placement names must be in it: a producer
 /// never retransmits an image it already delivered.
-fn live_image_ids(
-    dirty_images: &[ImageId],
-    placements: &[ClientPlacement],
-    virtual_placements: &[VirtualPlacement],
-) -> Vec<ImageId> {
+fn live_image_ids(dirty_images: &[ImageId], live: &[ImageId]) -> Vec<ImageId> {
     let mut seen = HashSet::new();
     dirty_images
         .iter()
+        .chain(live)
         .copied()
-        .chain(placements.iter().map(|p| p.image_id))
-        .chain(virtual_placements.iter().map(|v| v.image_id))
         .filter(|id| seen.insert(*id))
         .collect()
 }
@@ -355,7 +350,6 @@ pub struct Renderer {
     image_scratch_under_bg: Vec<ImgInstance>,
     image_scratch_under_text: Vec<ImgInstance>,
     image_scratch_above: Vec<ImgInstance>,
-    vp_map: HashMap<(ImageId, u32), VirtualPlacement>,
     post: Option<PostStage>,
     /// Kept even with no stage, so a shader enabled by a live reload
     /// starts from the current state rather than the origin.
@@ -856,7 +850,6 @@ impl Renderer {
             image_scratch_under_bg: Vec::new(),
             image_scratch_under_text: Vec::new(),
             image_scratch_above: Vec::new(),
-            vp_map: HashMap::new(),
             post,
             trail_state: TrailState::default(),
             mouse_state: MouseState::default(),
@@ -1106,13 +1099,13 @@ impl Renderer {
     ///
     /// The cursor is composited into cell layers so opaque `z >= 0` images cover it.
     /// `images` supplies pixels when a full atlas recycles and live images must re-upload.
+    /// `layout` must be built at this renderer's [`Self::cell_metrics`].
     pub fn render(
         &mut self,
         screen: &ScreenBuffer,
         dirty_images: &[ImageId],
         images: &impl ImageSource,
-        placements: &[ClientPlacement],
-        virtual_placements: &[VirtualPlacement],
+        layout: &ImageLayout,
         viewport: u32,
         viewport_max: u32,
     ) -> Result<(), SurfaceError> {
@@ -1131,7 +1124,7 @@ impl Renderer {
                 self.glyph_repaint_pending = true;
             }
         }
-        self.upload_dirty_images(dirty_images, images, placements, virtual_placements);
+        self.upload_dirty_images(dirty_images, images, layout.live_images());
 
         let metrics = self.glyphs.cell_metrics();
         self.build_cell_instances(screen, metrics, viewport, viewport_max);
@@ -1140,8 +1133,7 @@ impl Renderer {
             // repaint the client is about to request.
             self.cells.invalidate();
         }
-        self.build_placement_instances(screen, placements, metrics, viewport);
-        self.build_placeholder_instances(screen, virtual_placements, metrics);
+        self.build_image_instances(layout);
         self.clip_images_out_of_chrome(screen.rows(), metrics);
         let counts = self.upload_frame_buffers(screen, metrics);
         self.last_counts = Some(counts);
@@ -1260,13 +1252,12 @@ impl Renderer {
         &mut self,
         dirty_images: &[ImageId],
         images: &impl ImageSource,
-        placements: &[ClientPlacement],
-        virtual_placements: &[VirtualPlacement],
+        live: &[ImageId],
     ) {
         for id in dirty_images {
             if self.try_upload_image(*id, images) == UploadOutcome::SheetFull {
                 self.images.reset();
-                self.reupload_live_images(dirty_images, images, placements, virtual_placements);
+                self.reupload_live_images(dirty_images, images, live);
                 return;
             }
         }
@@ -1278,11 +1269,10 @@ impl Renderer {
         &mut self,
         dirty_images: &[ImageId],
         images: &impl ImageSource,
-        placements: &[ClientPlacement],
-        virtual_placements: &[VirtualPlacement],
+        live: &[ImageId],
     ) {
         let mut skipped = 0usize;
-        for id in live_image_ids(dirty_images, placements, virtual_placements) {
+        for id in live_image_ids(dirty_images, live) {
             if self.try_upload_image(id, images) == UploadOutcome::SheetFull {
                 skipped += 1;
             }
@@ -1463,128 +1453,38 @@ impl Renderer {
         }
     }
 
-    fn build_placement_instances(
-        &mut self,
-        screen: &ScreenBuffer,
-        placements: &[ClientPlacement],
-        metrics: CellMetrics,
-        viewport: u32,
-    ) {
-        self.image_scratch_under_bg.clear();
-        self.image_scratch_under_text.clear();
-        self.image_scratch_above.clear();
-        let mut sorted = placements.to_vec();
-        sorted.sort_by_key(|p| p.z_index);
-        let cw = metrics.width as f32;
-        let ch = metrics.height as f32;
-        let rows = u32::from(screen.rows());
-        for p in &sorted {
-            let Some(slot) = self.images.slot(p.image_id) else {
-                continue;
-            };
-            if slot.width == 0 || slot.height == 0 {
-                continue;
-            }
-            // Mirrors `ScreenBuffer::cell_at_viewport`: live row L paints
-            // at visible row L + viewport.
-            let top_row = i64::from(p.anchor_row) - 1 + i64::from(viewport);
-            if top_row >= i64::from(rows) {
-                continue;
-            }
-            let Some(instance) = quad_for_placement(p, slot, cw, ch, viewport) else {
-                continue;
-            };
-            // The drawn height, not the daemon's row count: an automatic
-            // axis draws at this window's cell size, which a mirror with
-            // smaller cells than the daemon resolved against can exceed.
-            if instance.origin_px[1] + instance.size_px[1] <= 0.0 {
-                continue;
-            }
-            match z_layer(p.z_index) {
-                ZLayer::UnderBg => self.image_scratch_under_bg.push(instance),
-                ZLayer::UnderText => self.image_scratch_under_text.push(instance),
-                ZLayer::AboveText => self.image_scratch_above.push(instance),
+    fn build_image_instances(&mut self, layout: &ImageLayout) {
+        let mut unpainted = 0u32;
+        for (draws, quads) in [
+            (layout.under_bg(), &mut self.image_scratch_under_bg),
+            (layout.under_text(), &mut self.image_scratch_under_text),
+            (layout.above_text(), &mut self.image_scratch_above),
+        ] {
+            quads.clear();
+            for draw in draws {
+                match self
+                    .images
+                    .slot(draw.image_id)
+                    .and_then(|slot| instance_for_draw(draw, slot))
+                {
+                    Some(instance) => quads.push(instance),
+                    None => unpainted += 1,
+                }
             }
         }
-    }
-
-    /// Kitty Unicode-placeholder tiles (`U=1`). Placeholder cells are
-    /// screen content already composed into the viewport, so unlike
-    /// anchored placements a tile takes no viewport offset.
-    fn build_placeholder_instances(
-        &mut self,
-        screen: &ScreenBuffer,
-        virtual_placements: &[VirtualPlacement],
-        metrics: CellMetrics,
-    ) {
-        if virtual_placements.is_empty() {
-            return;
+        let stats = layout.placeholder_stats();
+        if stats.virtual_placements > 0 {
+            tracing::debug!(
+                target: "felis::placeholder",
+                vps = stats.virtual_placements,
+                ph_cells = stats.cells,
+                ph_tiles = stats.tiles,
+                ph_no_image = stats.no_image,
+                ph_no_vp = stats.no_placement,
+                no_slot_draws = unpainted,
+                "placeholder pass",
+            );
         }
-        let cw = metrics.width as f32;
-        let ch = metrics.height as f32;
-        self.vp_map.clear();
-        for v in virtual_placements {
-            // A cell naming no placement takes its image's first; one
-            // without an id (a minor-0 daemon's) answers every cell.
-            self.vp_map.entry((v.image_id, 0)).or_insert(*v);
-            let key = v.placement_id.map_or(0, |p| p.0);
-            self.vp_map.entry((v.image_id, key)).or_insert(*v);
-        }
-        let mut ph_cells = 0u32;
-        let mut ph_tiles = 0u32;
-        let mut ph_no_slot = 0u32;
-        let mut ph_no_vp = 0u32;
-        for pc in screen.placeholder_cells() {
-            ph_cells += 1;
-            let found = self
-                .vp_map
-                .get(&(pc.image_id, pc.placement_id))
-                .or_else(|| {
-                    self.vp_map
-                        .get(&(pc.image_id, 0))
-                        .filter(|v| v.placement_id.is_none())
-                });
-            let Some(&vp) = found else {
-                ph_no_vp += 1;
-                continue;
-            };
-            let Some(slot) = self.images.slot(pc.image_id) else {
-                ph_no_slot += 1;
-                continue;
-            };
-            let (eff_cols, eff_rows) =
-                placeholder_grid_extent(vp.cols, vp.rows, slot.width, slot.height, cw, ch);
-            let Some(instance) = placeholder_tile_quad(
-                slot,
-                cw,
-                ch,
-                PlaceholderTile {
-                    screen_row: pc.row,
-                    screen_col: pc.col,
-                    tile_row: pc.tile_row,
-                    tile_col: pc.tile_col,
-                    total_cols: eff_cols,
-                    total_rows: eff_rows,
-                },
-            ) else {
-                continue;
-            };
-            ph_tiles += 1;
-            match z_layer(vp.z_index) {
-                ZLayer::UnderBg => self.image_scratch_under_bg.push(instance),
-                ZLayer::UnderText => self.image_scratch_under_text.push(instance),
-                ZLayer::AboveText => self.image_scratch_above.push(instance),
-            }
-        }
-        tracing::debug!(
-            target: "felis::placeholder",
-            vps = virtual_placements.len(),
-            ph_cells,
-            ph_tiles,
-            ph_no_slot,
-            ph_no_vp,
-            "placeholder pass",
-        );
     }
 
     /// The letterbox origin rides the viewport uniform so every instance
@@ -1821,218 +1721,31 @@ fn viewport_bind_group(
     })
 }
 
-/// Kitty draws images with `z < INT32_MIN / 2` under the cell
-/// backgrounds and `[INT32_MIN / 2, 0)` above them but below text
-/// (`docs/reference/protocols/kitty-graphics.md` "Z-ordering").
-/// Collapsing all negative z under the backgrounds lets opaque
-/// backgrounds paint over `z=-1` placements (yazi's previews).
-const Z_UNDER_BG_MAX: i32 = i32::MIN / 2;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ZLayer {
-    UnderBg,
-    UnderText,
-    AboveText,
-}
-
-const fn z_layer(z: i32) -> ZLayer {
-    if z < Z_UNDER_BG_MAX {
-        ZLayer::UnderBg
-    } else if z < 0 {
-        ZLayer::UnderText
-    } else {
-        ZLayer::AboveText
-    }
-}
-
-/// kitty's destination rectangle: a requested axis spans its cells, an
-/// automatic one keeps the source's aspect ratio against the other, and
-/// with neither requested the source draws at its own pixel size.
-/// `sw` and `sh` are nonzero ([`clip_source`]).
-fn dest_size_px(requested: RequestedExtent, sw: u32, sh: u32, cw: f32, ch: f32) -> [f32; 2] {
-    let aspect = sw as f32 / sh as f32;
-    match (requested.cols, requested.rows) {
-        (0, 0) => [sw as f32, sh as f32],
-        (0, rows) => {
-            let h = f32::from(rows) * ch;
-            [h * aspect, h]
-        }
-        (cols, 0) => {
-            let w = f32::from(cols) * cw;
-            [w, w / aspect]
-        }
-        (cols, rows) => [f32::from(cols) * cw, f32::from(rows) * ch],
-    }
-}
-
-/// The anchor is 1-based (`anchor_row - 1 + viewport`, `anchor_col - 1`),
-/// shifted by `viewport` so a placement tracks its text while browsing
-/// scrollback. `None` for a degenerate placement.
-fn quad_for_placement(
-    p: &ClientPlacement,
-    slot: ImageSlot,
-    cw: f32,
-    ch: f32,
-    viewport: u32,
-) -> Option<ImgInstance> {
-    let SourceRect {
-        x: sx,
-        y: sy,
-        width: sw,
-        height: sh,
-    } = clip_source(slot.width, slot.height, p.source)?;
-    let cols = if p.cols == 0 {
-        ((sw + (cw.max(1.0) as u32).saturating_sub(1)) / cw.max(1.0) as u32).max(1) as u16
-    } else {
-        p.cols
-    };
-    let rows = if p.rows == 0 {
-        ((sh + (ch.max(1.0) as u32).saturating_sub(1)) / ch.max(1.0) as u32).max(1) as u16
-    } else {
-        p.rows
-    };
-    if cols == 0 || rows == 0 {
+/// `None` when the slot holds another size of the image than the layout
+/// was computed against: the upload of a replacement lags the layout,
+/// and a source rectangle for one size samples outside a slot of the
+/// other.
+fn instance_for_draw(draw: &ImageDraw, slot: ImageSlot) -> Option<ImgInstance> {
+    if [slot.width, slot.height] != draw.image_size || slot.width == 0 || slot.height == 0 {
         return None;
     }
-    // Signed: a scrollback-anchored placement (`anchor_row <= 0`) has a
-    // negative origin until the viewport lifts it into view, and the GPU
-    // clips the rest.
-    let origin_row = i64::from(p.anchor_row) - 1 + i64::from(viewport);
-    let origin_px = [
-        f32::from(p.anchor_col.saturating_sub(1)) * cw,
-        origin_row as f32 * ch,
-    ];
-    let size_px = if let Some(requested) = p.requested {
-        dest_size_px(requested, sw, sh, cw, ch)
-    } else {
-        // A minor-0 daemon sends no request: a box matching `ceil(px / cell)`
-        // draws at native pixels to avoid non-integer resampling seams on
-        // high-contrast edges, any other scales to the box.
-        let cw_px = cw.max(1.0) as u32;
-        let ch_px = ch.max(1.0) as u32;
-        let width_px = if u32::from(cols) == sw.div_ceil(cw_px) {
-            sw as f32
-        } else {
-            f32::from(cols) * cw
-        };
-        let height_px = if u32::from(rows) == sh.div_ceil(ch_px) {
-            sh as f32
-        } else {
-            f32::from(rows) * ch
-        };
-        [width_px, height_px]
-    };
-    let u0 = slot.uv_min[0];
-    let v0 = slot.uv_min[1];
-    let du = slot.uv_max[0] - u0;
-    let dv = slot.uv_max[1] - v0;
-    let inv_w = 1.0 / slot.width as f32;
-    let inv_h = 1.0 / slot.height as f32;
-    let uv_min = [
-        du.mul_add(sx as f32 * inv_w, u0),
-        dv.mul_add(sy as f32 * inv_h, v0),
-    ];
-    let uv_max = [
-        du.mul_add((sx + sw) as f32 * inv_w, u0),
-        dv.mul_add((sy + sh) as f32 * inv_h, v0),
-    ];
-    Some(ImgInstance {
-        origin_px,
-        size_px,
-        uv_min,
-        uv_max,
-        opacity: 1.0,
-        _pad: [0.0; 3],
-    })
-}
-
-/// The producer's `c=`/`r=` when sent (presenterm), else the natural
-/// `ceil(image_px / cell_px)`: yazi omits them and paints exactly that
-/// screen, and a zero extent would skip every tile.
-fn placeholder_grid_extent(
-    vp_cols: u16,
-    vp_rows: u16,
-    img_w: u32,
-    img_h: u32,
-    cw: f32,
-    ch: f32,
-) -> (u16, u16) {
-    let natural = |px: u32, cell: f32| {
-        u16::try_from(px.div_ceil((cell.max(1.0)) as u32))
-            .unwrap_or(u16::MAX)
-            .max(1)
-    };
-    let cols = if vp_cols > 0 {
-        vp_cols
-    } else {
-        natural(img_w, cw)
-    };
-    let rows = if vp_rows > 0 {
-        vp_rows
-    } else {
-        natural(img_h, ch)
-    };
-    (cols, rows)
-}
-
-#[derive(Clone, Copy)]
-struct PlaceholderTile {
-    /// 0-based, unlike `ClientPlacement`'s anchor.
-    screen_row: u16,
-    screen_col: u16,
-    /// 0-based.
-    tile_row: u32,
-    tile_col: u32,
-    total_cols: u16,
-    total_rows: u16,
-}
-
-/// kitty's `grman_put_cell_image`: the image is fit into the whole
-/// `total_cols` x `total_rows` box with its aspect ratio kept and
-/// centered, and each cell shows its share of that box, or nothing when
-/// it falls in the margin.
-fn placeholder_tile_quad(
-    slot: ImageSlot,
-    cw: f32,
-    ch: f32,
-    at: PlaceholderTile,
-) -> Option<ImgInstance> {
-    let cols = u32::from(at.total_cols);
-    let rows = u32::from(at.total_rows);
-    if cols == 0 || rows == 0 || at.tile_col >= cols || at.tile_row >= rows {
-        return None;
-    }
-    if slot.width == 0 || slot.height == 0 {
-        return None;
-    }
-    let (img_w, img_h) = (slot.width as f32, slot.height as f32);
-    let (box_w, box_h) = (cols as f32 * cw, rows as f32 * ch);
-    let scale = (box_w / img_w).min(box_h / img_h);
-    let (fit_w, fit_h) = (img_w * scale, img_h * scale);
-    let (fit_x, fit_y) = ((box_w - fit_w) / 2.0, (box_h - fit_h) / 2.0);
-    // Both edges of a cell come from its index, so neighboring cells
-    // share the exact float boundary and no seam opens between them.
-    let cell_x = at.tile_col as f32 * cw;
-    let cell_y = at.tile_row as f32 * ch;
-    let x0 = cell_x.max(fit_x);
-    let x1 = ((at.tile_col + 1) as f32 * cw).min(fit_x + fit_w);
-    let y0 = cell_y.max(fit_y);
-    let y1 = ((at.tile_row + 1) as f32 * ch).min(fit_y + fit_h);
-    if x1 <= x0 || y1 <= y0 {
-        return None;
-    }
+    let [sx, sy, sw, sh] = draw.src;
+    let [dx, dy, dw, dh] = draw.dst;
     let du = slot.uv_max[0] - slot.uv_min[0];
     let dv = slot.uv_max[1] - slot.uv_min[1];
-    let u = |x: f32| slot.uv_min[0] + du * (x - fit_x) / fit_w;
-    let v = |y: f32| slot.uv_min[1] + dv * (y - fit_y) / fit_h;
+    let inv_w = 1.0 / slot.width as f32;
+    let inv_h = 1.0 / slot.height as f32;
     Some(ImgInstance {
-        origin_px: [
-            f32::from(at.screen_col).mul_add(cw, x0 - cell_x),
-            f32::from(at.screen_row).mul_add(ch, y0 - cell_y),
+        origin_px: [dx, dy],
+        size_px: [dw, dh],
+        uv_min: [
+            du.mul_add(sx * inv_w, slot.uv_min[0]),
+            dv.mul_add(sy * inv_h, slot.uv_min[1]),
         ],
-        size_px: [x1 - x0, y1 - y0],
-        uv_min: [u(x0), v(y0)],
-        uv_max: [u(x1), v(y1)],
+        uv_max: [
+            du.mul_add((sx + sw) * inv_w, slot.uv_min[0]),
+            dv.mul_add((sy + sh) * inv_h, slot.uv_min[1]),
+        ],
         opacity: 1.0,
         _pad: [0.0; 3],
     })
@@ -2286,470 +1999,60 @@ mod tests {
         );
     }
 
-    fn unit_slot() -> ImageSlot {
-        ImageSlot {
-            uv_min: [0.0, 0.0],
-            uv_max: [32.0 / 256.0, 32.0 / 256.0],
-            width: 32,
-            height: 32,
-        }
-    }
-
-    /// The issue's case: a 101 x 100 image at 10 x 20 px cells.
-    #[test]
-    fn a_requested_placement_draws_kitty_s_destination_size() {
-        let slot = ImageSlot {
-            uv_min: [0.0, 0.0],
-            uv_max: [1.0, 1.0],
-            width: 101,
-            height: 100,
-        };
-        let cases = [
-            ((0, 2), (5, 2), [40.4, 40.0]),
-            ((3, 0), (3, 2), [30.0, 30.0 * 100.0 / 101.0]),
-            ((0, 0), (11, 5), [101.0, 100.0]),
-            ((4, 2), (4, 2), [40.0, 40.0]),
-        ];
-        for ((req_cols, req_rows), (cols, rows), want) in cases {
-            let p = ClientPlacement {
-                image_id: ImageId(1),
-                placement_id: None,
-                anchor_row: 1,
-                anchor_col: 1,
-                cols,
-                rows,
-                source: None,
-                z_index: 0,
-                requested: Some(RequestedExtent {
-                    cols: req_cols,
-                    rows: req_rows,
-                }),
-            };
-            let size = quad_for_placement(&p, slot, 10.0, 20.0, 0)
-                .expect("quad emits")
-                .size_px;
-            let close = size.iter().zip(want).all(|(got, w)| (got - w).abs() < 1e-3);
-            assert!(close, "c={req_cols} r={req_rows}: {size:?}, want {want:?}");
-        }
-    }
-
-    #[test]
-    fn quad_for_explicit_cols_rows_uses_them_directly() {
-        let p = ClientPlacement {
+    fn draw(src: [f32; 4], image_size: [u32; 2]) -> ImageDraw {
+        ImageDraw {
             image_id: ImageId(1),
-            placement_id: None,
-            anchor_row: 3,
-            anchor_col: 5,
-            cols: 4,
-            rows: 2,
-            source: None,
-            z_index: 0,
-            requested: None,
-        };
-        let inst = quad_for_placement(&p, unit_slot(), 8.0, 16.0, 0).expect("quad emits");
-        assert_eq!(inst.origin_px, [4.0 * 8.0, 2.0 * 16.0]);
-        assert_eq!(inst.size_px, [4.0 * 8.0, 2.0 * 16.0]);
-        assert_eq!(inst.uv_min, [0.0, 0.0]);
-        assert_eq!(inst.uv_max, [32.0 / 256.0, 32.0 / 256.0]);
-        assert_eq!(inst.opacity, 1.0);
-    }
-
-    #[test]
-    fn placeholder_tile_quad_carves_the_right_image_slice_into_one_cell() {
-        let inst = placeholder_tile_quad(
-            unit_slot(),
-            8.0,
-            16.0,
-            PlaceholderTile {
-                screen_row: 3,
-                screen_col: 5,
-                tile_row: 1,
-                tile_col: 2,
-                total_cols: 4,
-                total_rows: 2,
-            },
-        )
-        .expect("tile quad emits");
-        assert_eq!(inst.origin_px, [5.0 * 8.0, 3.0 * 16.0]);
-        assert_eq!(inst.size_px, [8.0, 16.0]);
-        let span = 32.0 / 256.0;
-        assert!(f32::mul_add(span, -0.5, inst.uv_min[0]).abs() < 1e-6);
-        assert!(f32::mul_add(span, -0.75, inst.uv_max[0]).abs() < 1e-6);
-        assert!(f32::mul_add(span, -0.5, inst.uv_min[1]).abs() < 1e-6);
-        assert!((inst.uv_max[1] - span).abs() < 1e-6);
-    }
-
-    /// A 2:1 image in a 10x10 box of 8x16 cells (80x160 px) fits to the
-    /// box width and centers vertically: 80x40 px from y=60 to y=100.
-    #[test]
-    fn placeholder_tiles_fit_a_wide_image_with_its_aspect_ratio() {
-        let slot = ImageSlot {
-            uv_min: [0.0, 0.0],
-            uv_max: [1.0, 1.0],
-            width: 200,
-            height: 100,
-        };
-        let tile = |tile_row| PlaceholderTile {
-            screen_row: tile_row as u16,
-            screen_col: 0,
-            tile_row,
-            tile_col: 0,
-            total_cols: 10,
-            total_rows: 10,
-        };
-        assert!(placeholder_tile_quad(slot, 8.0, 16.0, tile(2)).is_none());
-        let top =
-            placeholder_tile_quad(slot, 8.0, 16.0, tile(3)).expect("row 3 holds the top edge");
-        assert_eq!(top.origin_px, [0.0, 60.0]);
-        assert_eq!(top.size_px, [8.0, 4.0]);
-        assert_eq!(top.uv_min, [0.0, 0.0]);
-        assert_eq!(top.uv_max, [0.1, 0.1]);
-        let bottom =
-            placeholder_tile_quad(slot, 8.0, 16.0, tile(6)).expect("row 6 holds the bottom edge");
-        assert_eq!(bottom.origin_px, [0.0, 96.0]);
-        assert_eq!(bottom.size_px, [8.0, 4.0]);
-        assert!(placeholder_tile_quad(slot, 8.0, 16.0, tile(7)).is_none());
-    }
-
-    /// A 1:4 image in a 4x2 box of 8x16 cells (32x32 px) fits to the box
-    /// height and centers horizontally: 8x32 px from x=12 to x=20, read
-    /// from an atlas slot that does not start at the origin.
-    #[test]
-    fn placeholder_tiles_center_a_tall_image_inside_its_atlas_slot() {
-        let slot = ImageSlot {
-            uv_min: [0.5, 0.25],
-            uv_max: [0.75, 0.5],
-            width: 25,
-            height: 100,
-        };
-        let tile = |tile_col| PlaceholderTile {
-            screen_row: 0,
-            screen_col: tile_col as u16,
-            tile_row: 0,
-            tile_col,
-            total_cols: 4,
-            total_rows: 2,
-        };
-        assert!(placeholder_tile_quad(slot, 8.0, 16.0, tile(0)).is_none());
-        let left =
-            placeholder_tile_quad(slot, 8.0, 16.0, tile(1)).expect("column 1 holds the left edge");
-        assert_eq!(left.origin_px, [12.0, 0.0]);
-        assert_eq!(left.size_px, [4.0, 16.0]);
-        assert_eq!(left.uv_min, [0.5, 0.25]);
-        assert_eq!(left.uv_max, [0.625, 0.375]);
-        let right =
-            placeholder_tile_quad(slot, 8.0, 16.0, tile(2)).expect("column 2 holds the right edge");
-        assert_eq!(right.origin_px, [16.0, 0.0]);
-        assert_eq!(right.size_px, [4.0, 16.0]);
-        assert_eq!(right.uv_min, [0.625, 0.25]);
-        assert_eq!(right.uv_max, [0.75, 0.375]);
-        assert!(placeholder_tile_quad(slot, 8.0, 16.0, tile(3)).is_none());
-    }
-
-    proptest::proptest! {
-        /// The tiles of one box stay inside their cells, cover exactly the
-        /// fitted image, and sample it at one uniform scale, so the image
-        /// is never stretched.
-        #[test]
-        fn placeholder_tiles_cover_the_fitted_image_at_one_scale(
-            width in 1u32..400,
-            height in 1u32..400,
-            cols in 1u16..12,
-            rows in 1u16..12,
-            cw in 4u8..20,
-            ch in 8u8..40,
-        ) {
-            let (cw, ch) = (f32::from(cw), f32::from(ch));
-            let slot = ImageSlot { uv_min: [0.0, 0.0], uv_max: [1.0, 1.0], width, height };
-            let scale = (f32::from(cols) * cw / width as f32).min(f32::from(rows) * ch / height as f32);
-            let mut area = 0.0f64;
-            for tile_row in 0..u32::from(rows) {
-                for tile_col in 0..u32::from(cols) {
-                    let at = PlaceholderTile {
-                        screen_row: tile_row as u16,
-                        screen_col: tile_col as u16,
-                        tile_row,
-                        tile_col,
-                        total_cols: cols,
-                        total_rows: rows,
-                    };
-                    let Some(q) = placeholder_tile_quad(slot, cw, ch, at) else { continue };
-                    let (cx, cy) = (tile_col as f32 * cw, tile_row as f32 * ch);
-                    proptest::prop_assert!(q.origin_px[0] >= cx - 1e-3 && q.origin_px[1] >= cy - 1e-3);
-                    proptest::prop_assert!(q.origin_px[0] + q.size_px[0] <= cx + cw + 1e-3);
-                    proptest::prop_assert!(q.origin_px[1] + q.size_px[1] <= cy + ch + 1e-3);
-                    let px_per_image_px_x = q.size_px[0] / ((q.uv_max[0] - q.uv_min[0]) * width as f32);
-                    let px_per_image_px_y = q.size_px[1] / ((q.uv_max[1] - q.uv_min[1]) * height as f32);
-                    proptest::prop_assert!((px_per_image_px_x - scale).abs() <= scale * 1e-2);
-                    proptest::prop_assert!((px_per_image_px_y - scale).abs() <= scale * 1e-2);
-                    area = f64::from(q.size_px[0]).mul_add(f64::from(q.size_px[1]), area);
-                }
-            }
-            let fitted = f64::from(width as f32 * scale) * f64::from(height as f32 * scale);
-            proptest::prop_assert!((area - fitted).abs() <= fitted.mul_add(1e-3, 1e-3));
+            image_size,
+            src,
+            dst: [5.0, 6.0, 7.0, 8.0],
         }
     }
 
+    /// A 32 x 32 image packed at an offset inside a 256-px atlas.
+    const OFFSET_SLOT: ImageSlot = ImageSlot {
+        uv_min: [0.5, 0.25],
+        uv_max: [0.625, 0.375],
+        width: 32,
+        height: 32,
+    };
+
     #[test]
-    fn placeholder_grid_extent_uses_c_r_or_falls_back_to_natural() {
-        assert_eq!(
-            placeholder_grid_extent(40, 11, 353, 221, 9.0, 22.0),
-            (40, 11)
-        );
-        assert_eq!(placeholder_grid_extent(0, 0, 353, 221, 9.0, 22.0), (40, 11));
-        assert_eq!(placeholder_grid_extent(5, 0, 90, 44, 9.0, 22.0), (5, 2));
-        assert_eq!(placeholder_grid_extent(0, 0, 1, 1, 9.0, 22.0), (1, 1));
+    fn a_draw_s_source_maps_into_its_atlas_slot() {
+        let inst = instance_for_draw(&draw([8.0, 0.0, 16.0, 32.0], [32, 32]), OFFSET_SLOT)
+            .expect("same size as the slot");
+        assert_eq!(inst.origin_px, [5.0, 6.0]);
+        assert_eq!(inst.size_px, [7.0, 8.0]);
+        assert!((inst.uv_min[0] - 0.53125).abs() < 1e-6);
+        assert!((inst.uv_min[1] - 0.25).abs() < 1e-6);
+        assert!((inst.uv_max[0] - 0.59375).abs() < 1e-6);
+        assert!((inst.uv_max[1] - 0.375).abs() < 1e-6);
+    }
+
+    /// The upload of a replacement lags the layout by a frame, so for
+    /// that frame the slot and the draw disagree on the size.
+    #[test]
+    fn a_draw_against_another_size_than_the_slot_holds_is_skipped() {
+        let full = [0.0, 0.0, 64.0, 32.0];
+        assert!(instance_for_draw(&draw(full, [64, 32]), OFFSET_SLOT).is_none());
     }
 
     #[test]
-    fn placeholder_tile_quad_rejects_out_of_grid_tiles() {
-        let tile = |tile_row, tile_col, total_cols| PlaceholderTile {
-            screen_row: 0,
-            screen_col: 0,
-            tile_row,
-            tile_col,
-            total_cols,
-            total_rows: 2,
+    fn a_degenerate_slot_draws_nothing() {
+        let degenerate = ImageSlot {
+            uv_min: [0.0, 0.0],
+            uv_max: [0.0, 0.0],
+            width: 0,
+            height: 0,
         };
-        assert!(placeholder_tile_quad(unit_slot(), 8.0, 16.0, tile(0, 4, 4)).is_none());
-        assert!(placeholder_tile_quad(unit_slot(), 8.0, 16.0, tile(2, 0, 4)).is_none());
-        assert!(placeholder_tile_quad(unit_slot(), 8.0, 16.0, tile(0, 0, 0)).is_none());
+        assert!(instance_for_draw(&draw([0.0; 4], [0, 0]), degenerate).is_none());
     }
 
     /// The recovery set covers every placed image, not just the dirty
     /// ids; a producer never retransmits an image it already delivered.
     #[test]
     fn recovery_set_covers_dirty_plus_every_placed_image_once() {
-        let anchored = |id: u32| ClientPlacement {
-            image_id: ImageId(id),
-            placement_id: None,
-            anchor_row: 1,
-            anchor_col: 1,
-            cols: 1,
-            rows: 1,
-            source: None,
-            z_index: 0,
-            requested: None,
-        };
-        let virt = |id: u32| VirtualPlacement {
-            image_id: ImageId(id),
-            placement_id: None,
-            anonymous: false,
-            cols: 1,
-            rows: 1,
-            z_index: 0,
-        };
-
-        let ids = live_image_ids(
-            &[ImageId(1)],
-            &[anchored(2), anchored(1), anchored(2)],
-            &[virt(3), virt(2)],
-        );
+        let ids = live_image_ids(&[ImageId(1)], &[ImageId(2), ImageId(1), ImageId(3)]);
         assert_eq!(ids, vec![ImageId(1), ImageId(2), ImageId(3)]);
-    }
-
-    #[test]
-    fn quad_shifts_down_by_viewport_so_images_track_scrollback() {
-        // A live row L paints at visible row L + viewport; the quad
-        // follows and x is untouched.
-        let p = ClientPlacement {
-            image_id: ImageId(1),
-            placement_id: None,
-            anchor_row: 3,
-            anchor_col: 5,
-            cols: 4,
-            rows: 2,
-            source: None,
-            z_index: 0,
-            requested: None,
-        };
-        let inst = quad_for_placement(&p, unit_slot(), 8.0, 16.0, 5).expect("quad emits");
-        assert_eq!(inst.origin_px, [4.0 * 8.0, 7.0 * 16.0]);
-        assert_eq!(inst.size_px, [4.0 * 8.0, 2.0 * 16.0]);
-    }
-
-    /// Scrollback-anchored placement (docs/reference/protocols/kitty-graphics.md
-    /// "Scrollback-anchored placements"): browsing back exactly to its
-    /// line lands the quad at the window top.
-    #[test]
-    fn scrollback_anchored_quad_surfaces_at_matching_viewport() {
-        let p = ClientPlacement {
-            image_id: ImageId(1),
-            placement_id: None,
-            anchor_row: -4,
-            anchor_col: 1,
-            cols: 4,
-            rows: 2,
-            source: None,
-            z_index: 0,
-            requested: None,
-        };
-        let inst = quad_for_placement(&p, unit_slot(), 8.0, 16.0, 5).expect("quad emits");
-        assert_eq!(inst.origin_px, [0.0, 0.0]);
-        let inst = quad_for_placement(&p, unit_slot(), 8.0, 16.0, 4).expect("straddling quad");
-        assert_eq!(inst.origin_px, [0.0, -16.0]);
-    }
-
-    #[test]
-    fn z_minus_one_lands_above_the_cell_backgrounds() {
-        // yazi's direct path places previews at z=-1; that tier paints
-        // above the opaque cell backgrounds.
-        assert_eq!(z_layer(-1), ZLayer::UnderText);
-    }
-
-    #[test]
-    fn only_z_below_int_min_half_paints_under_the_backgrounds() {
-        assert_eq!(z_layer(Z_UNDER_BG_MAX), ZLayer::UnderText);
-        assert_eq!(z_layer(Z_UNDER_BG_MAX - 1), ZLayer::UnderBg);
-        assert_eq!(z_layer(i32::MIN), ZLayer::UnderBg);
-    }
-
-    #[test]
-    fn non_negative_z_paints_above_text() {
-        assert_eq!(z_layer(0), ZLayer::AboveText);
-        assert_eq!(z_layer(1), ZLayer::AboveText);
-        assert_eq!(z_layer(i32::MAX), ZLayer::AboveText);
-    }
-
-    #[test]
-    fn quad_for_zero_cols_falls_back_to_natural_cell_count() {
-        let p = ClientPlacement {
-            image_id: ImageId(1),
-            placement_id: None,
-            anchor_row: 1,
-            anchor_col: 1,
-            cols: 0,
-            rows: 0,
-            source: None,
-            z_index: 0,
-            requested: None,
-        };
-        let inst = quad_for_placement(&p, unit_slot(), 8.0, 16.0, 0).expect("natural sizing");
-        assert_eq!(inst.size_px, [4.0 * 8.0, 2.0 * 16.0]);
-    }
-
-    #[test]
-    fn quad_resolved_natural_cells_render_at_native_pixels_not_stretched() {
-        // Natural sizing arrives resolved to `ceil(px/cell)` cells (cols=4
-        // for 30 px at 8-px cells); the quad stays the native 30 px rather
-        // than the 32-px box, or the resample leaves a seam.
-        let slot = ImageSlot {
-            uv_min: [0.0, 0.0],
-            uv_max: [30.0 / 256.0, 30.0 / 256.0],
-            width: 30,
-            height: 30,
-        };
-        let p = ClientPlacement {
-            image_id: ImageId(1),
-            placement_id: None,
-            anchor_row: 1,
-            anchor_col: 1,
-            cols: 4,
-            rows: 2,
-            source: None,
-            z_index: 0,
-            requested: None,
-        };
-        let inst = quad_for_placement(&p, slot, 8.0, 16.0, 0).expect("native sizing");
-        assert_eq!(inst.size_px, [30.0, 30.0]);
-    }
-
-    #[test]
-    fn quad_explicit_cell_box_unequal_to_native_still_scales() {
-        // An explicit `c=`/`r=` naming a box other than `ceil(native)`
-        // still scales.
-        let slot = ImageSlot {
-            uv_min: [0.0, 0.0],
-            uv_max: [30.0 / 256.0, 30.0 / 256.0],
-            width: 30,
-            height: 30,
-        };
-        let p = ClientPlacement {
-            image_id: ImageId(1),
-            placement_id: None,
-            anchor_row: 1,
-            anchor_col: 1,
-            cols: 10,
-            rows: 5,
-            source: None,
-            z_index: 0,
-            requested: None,
-        };
-        let inst = quad_for_placement(&p, slot, 8.0, 16.0, 0).expect("explicit scale");
-        assert_eq!(inst.size_px, [10.0 * 8.0, 5.0 * 16.0]);
-    }
-
-    #[test]
-    fn quad_for_source_subrect_clips_uvs_within_slot() {
-        let p = ClientPlacement {
-            image_id: ImageId(1),
-            placement_id: None,
-            anchor_row: 1,
-            anchor_col: 1,
-            cols: 2,
-            rows: 1,
-            source: Some(SourceRect {
-                x: 8,
-                y: 0,
-                width: 16,
-                height: 16,
-            }),
-            z_index: 0,
-            requested: None,
-        };
-        let inst = quad_for_placement(&p, unit_slot(), 8.0, 16.0, 0).expect("sub-rect");
-        let slot_u_extent = 32.0 / 256.0;
-        let slot_v_extent = 32.0 / 256.0;
-        assert!(f32::mul_add(slot_u_extent, -0.25, inst.uv_min[0]).abs() < 1e-6);
-        assert!((inst.uv_min[1] - 0.0).abs() < 1e-6);
-        assert!(f32::mul_add(slot_u_extent, -0.75, inst.uv_max[0]).abs() < 1e-6);
-        assert!(f32::mul_add(slot_v_extent, -0.5, inst.uv_max[1]).abs() < 1e-6);
-    }
-
-    #[test]
-    fn quad_for_source_clamps_to_image_bounds_without_crash() {
-        let p = ClientPlacement {
-            image_id: ImageId(1),
-            placement_id: None,
-            anchor_row: 1,
-            anchor_col: 1,
-            cols: 1,
-            rows: 1,
-            source: Some(SourceRect {
-                x: 24,
-                y: 24,
-                width: 999,
-                height: 999,
-            }),
-            z_index: 0,
-            requested: None,
-        };
-        let inst = quad_for_placement(&p, unit_slot(), 8.0, 16.0, 0).expect("clipped sub-rect");
-        let slot_u_extent = 32.0 / 256.0;
-        assert!((inst.uv_max[0] - slot_u_extent).abs() < 1e-6);
-        assert!((inst.uv_max[1] - slot_u_extent).abs() < 1e-6);
-    }
-
-    #[test]
-    fn quad_for_degenerate_source_returns_none() {
-        let degenerate_slot = ImageSlot {
-            uv_min: [0.0, 0.0],
-            uv_max: [0.0, 0.0],
-            width: 0,
-            height: 0,
-        };
-        let p = ClientPlacement {
-            image_id: ImageId(1),
-            placement_id: None,
-            anchor_row: 1,
-            anchor_col: 1,
-            cols: 1,
-            rows: 1,
-            source: None,
-            z_index: 0,
-            requested: None,
-        };
-        assert!(quad_for_placement(&p, degenerate_slot, 8.0, 16.0, 0).is_none());
     }
 
     #[test]
@@ -2972,7 +2275,7 @@ mod tests {
         let mut grid = felis_grid::Grid::new(rows, cols);
         felis_vt::Parser::new().advance(&mut grid, b"\x1b[?25l");
         renderer
-            .render(grid.screen(), &[], &NoImages, &[], &[], 0, 0)
+            .render(grid.screen(), &[], &NoImages, &ImageLayout::new(), 0, 0)
             .expect("an offscreen render has no surface to lose");
     }
 
@@ -3111,6 +2414,12 @@ mod tests {
         }
     }
 
+    impl felis_grid::image_layout::LayoutImages for OneImage {
+        fn drawable_size(&self, id: ImageId) -> Option<(u32, u32)> {
+            (id == self.id).then_some((self.width, self.height))
+        }
+    }
+
     /// A solid image placed through a 10 x 10 block of placeholder cells
     /// covers its whole fitted rectangle, cell-row seams included.
     #[cfg(not(windows))]
@@ -3144,7 +2453,7 @@ mod tests {
             bytes.extend_from_slice(b"\r\n");
         }
         felis_vt::Parser::new().advance(&mut grid, &bytes);
-        let vp = VirtualPlacement {
+        let vp = felis_grid::images::VirtualPlacement {
             image_id: ImageId(1),
             placement_id: None,
             anonymous: false,
@@ -3152,8 +2461,17 @@ mod tests {
             rows: cells,
             z_index: 0,
         };
+        let mut layout = ImageLayout::new();
+        layout.rebuild(
+            grid.screen(),
+            &image,
+            &[],
+            &[vp],
+            (m.width as f32, m.height as f32),
+            0,
+        );
         renderer
-            .render(grid.screen(), &[ImageId(1)], &image, &[], &[vp], 0, 0)
+            .render(grid.screen(), &[ImageId(1)], &image, &layout, 0, 0)
             .expect("an offscreen render has no surface to lose");
         let mut out = Vec::new();
         renderer.read_frame(&mut out).expect("readback");

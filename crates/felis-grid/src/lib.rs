@@ -291,6 +291,7 @@ pub mod ansi;
 mod cluster_table;
 mod damage;
 mod editing;
+pub mod image_layout;
 pub mod images;
 /// `felis-json` v1: the named, versioned JSON form of a frame body
 /// for the consumers that re-expose or record a session as JSON.

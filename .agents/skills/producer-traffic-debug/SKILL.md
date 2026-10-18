@@ -39,8 +39,10 @@ Grep these (the script tails them for you):
 - `felis_daemon::graphics: dispatch_apc_bodies … events=[…]`: what the producer actually sent
   (`Transmit`/`Placement`/`VirtualPlacement`/`Delete`/… + image ids; reveals `U=1` vs anchored, and id churn).
 - `felis_client::event_handler: image header`: image reached the client.
-- `felis::placeholder: placeholder pass … ph_cells/ph_tiles/ph_no_slot/ ph_no_vp`: the Kitty Unicode-placeholder render
-  lifecycle, cell by frame.
+- `felis::placeholder: placeholder pass … ph_cells/ph_tiles/ph_no_image/ph_no_vp/no_slot_draws`: the Kitty
+  Unicode-placeholder render lifecycle, cell by frame. `ph_no_image` counts cells whose image has no complete pixels
+  yet, `ph_no_vp` cells no virtual placement matches, and `no_slot_draws` laid-out draws (of any kind) the GPU atlas
+  could not paint.
 
 ## Gotchas that cost real time
 
