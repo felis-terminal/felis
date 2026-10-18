@@ -522,10 +522,19 @@ impl ApplicationHandler<AppEvent> for App {
                     );
                     return;
                 }
-                // Header / Chunk only build up the pixel buffer; redrawing
-                // per chunk would turn one multi-MiB transmission into N
-                // full frame encodes. ShowFrame is the animation tick.
-                let needs_redraw = !matches!(msg, ImageMsg::Header { .. } | ImageMsg::Chunk { .. });
+                // Chunks and frame headers only build up a pixel buffer;
+                // redrawing per chunk would turn one multi-MiB transmission
+                // into N full frame encodes. A new-image header does
+                // repaint, since a same-id replacement hides the image from
+                // its start. ShowFrame is the animation tick.
+                let needs_redraw = !matches!(
+                    msg,
+                    ImageMsg::Chunk { .. }
+                        | ImageMsg::Header {
+                            target: felis_protocol::messages::ImageTarget::Frame { .. },
+                            ..
+                        }
+                );
                 // Producer-reported geometry, so a real-device session can
                 // verify yazi/mdcat pre-scale as expected.
                 match &msg {
@@ -1192,6 +1201,13 @@ impl App {
             return;
         };
         let renderer = &mut surface.renderer;
+        let metrics = renderer.cell_metrics();
+        self.image_shadow.layout_into(
+            &mut self.image_layout,
+            self.shadow.screen(),
+            (metrics.width as f32, metrics.height as f32),
+            self.shadow.viewport(),
+        );
         renderer.set_search_overlay(search_overlay);
         renderer.set_confirm_overlay(confirm_overlay);
         renderer.set_link_preview_overlay(link_preview_overlay);
@@ -1201,8 +1217,7 @@ impl App {
             // Not just the dirty batch: an atlas reset invalidates every
             // slot, and the renderer re-uploads the whole live set.
             &ShadowImages(&self.image_shadow),
-            self.image_shadow.placements(),
-            self.image_shadow.virtual_placements(),
+            &self.image_layout,
             self.shadow.viewport(),
             self.shadow.viewport_max(),
         );

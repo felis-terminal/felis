@@ -10,6 +10,9 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 
 ## [Unreleased]
 
+- **Kitty placeholder images under the text**: an image drawn through Unicode-placeholder cells sits between the cell
+  backgrounds and the text, whatever `z=` it was placed with, as in kitty. An image re-sent under the same id disappears
+  until the new data has arrived, rather than showing the old picture meanwhile.
 - **Font names**: `felis fonts list` prints every family name `font.family` and the other `family` keys accept on this
   machine, with whether it is monospace and which weights and slants it has, so a name that would fall back to monospace
   can be checked before opening a window.

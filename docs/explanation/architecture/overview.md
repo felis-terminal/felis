@@ -514,7 +514,7 @@ reaches the daemon through `felis bridge`, the CLI's JSONL stdio subcommand, ins
 An ecosystem of downstream clients reads a felis session: `felis-web-component` (a wasm `felis-client-core` core plus
 the TS `<felis-terminal>` view) with `felis-web-gateway` in front of it (a native attach re-exposing a session over a
 WebSocket), `felis-fcast` (a `.fcast` recorder plus a `serve` pseudo-daemon), `felis-tui` (a host-terminal multiplexer),
-and `felis.el`, which reaches the daemon through `felis bridge` rather than the socket. Four pieces of wire knowledge
+and `felis.el`, which reaches the daemon through `felis bridge` rather than the socket. Five pieces of wire knowledge
 recur across them; the sections below record where each belongs.
 
 #### Structural session JSON: adopt as a named format, `felis-json` v1 in `felis-grid`
@@ -573,6 +573,29 @@ Two alternatives are rejected:
 _Revisit if_ a consumer needs an emission mode that would drag client policy (per-host quirk tables, terminal-specific
 workarounds) into the shared module; that policy belongs in the client, which composes it around the encoder rather than
 inside it.
+
+#### Kitty image layout: adopt, into `felis-grid`
+
+Turning the mirrored placements and the Unicode-placeholder cells into screen rectangles is where most of the Kitty
+graphics semantics a client must honor live: the anchor and viewport offset, the automatic `c=`/`r=` extent, the source
+clamp, the placeholder box fit, and the layer and stacking rules. `felis-grid::image_layout` computes it once and
+returns plain draws in image and screen pixels, per layer in paint order, which the GPU client maps into its atlas and a
+canvas view hands to `drawImage`. It returns data rather than calling a renderer trait, for the reason `renderer_effect`
+does ("The felis-client-core / felis-client seam" above).
+
+It sits in `felis-grid` rather than beside `ImageShadow` in `felis-client-core` because `felis-render-wgpu` is below the
+core and has to name the layout's types; the layout reads only the `ScreenBuffer` and the placement types `felis-grid`
+already owns, and learns about pixels through a one-method trait the shadow implements.
+
+Two alternatives are rejected:
+
+- **A layout per frontend.** A TypeScript port in the browser view drifts from the GPU client on exactly the cases a
+  producer exercises (the placeholder fit, a scrollback-anchored placement), and each frontend relearns kitty's rules.
+- **The daemon composing images into what it ships.** Pre-placed pixels or rectangles put presentation in the daemon
+  (principle 3) and fix one cell size for every attached window.
+
+_Revisit if_ a frontend paints at a pixel grid other than the cell metrics it attaches with (a canvas scaled by a
+device-pixel ratio it cannot fold into the cell size), when the draws would move to cell units.
 
 #### Wire constants: the schema is the authority, prose covers the bytes around it
 

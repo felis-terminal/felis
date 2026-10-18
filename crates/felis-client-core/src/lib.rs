@@ -77,7 +77,8 @@ pub use dial::{
 pub use felis_protocol::{ImageId, PlacementId};
 pub use hyperlink::{ActivationRejection, ActivationTarget, SchemeClass};
 pub use image_shadow::{
-    ClientImage, ClientPlacement, ImageShadow, ImageShadowError, VirtualPlacement,
+    ClientImage, ClientPlacement, ImageDraw, ImageLayout, ImageShadow, ImageShadowError,
+    VirtualPlacement,
 };
 pub use keymap::{BindingValue, Chord, FKey, KeyCode, Keymap, Modifiers, NamedKey, PipeSink};
 #[cfg(feature = "native")]

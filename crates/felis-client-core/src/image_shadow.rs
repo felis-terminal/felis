@@ -1,11 +1,12 @@
 //! Client-side mirror of Kitty graphics state driven by `ImageMsg`.
 //!
-//! Placements preserve insertion order so z-index sorting is deterministic on ties.
+//! Placements preserve insertion order, which the layout keeps on equal z.
 
 use std::collections::{HashMap, HashSet};
-
 use std::num::NonZeroU32;
+use std::sync::atomic::{AtomicU64, Ordering};
 
+use felis_grid::{ScreenBuffer, image_layout::LayoutImages};
 use felis_protocol::{
     ImageId, PlacementId,
     messages::{
@@ -16,7 +17,17 @@ use felis_protocol::{
 use thiserror::Error;
 // The renderer sits below client-core in the dependency order, so it
 // cannot name a type defined here.
+pub use felis_grid::image_layout::{ImageDraw, ImageLayout};
 pub use felis_grid::images::{ClientPlacement, VirtualPlacement};
+
+/// Process-wide rather than per shadow: a session switch replaces the
+/// shadow, and a conversion still in flight from the replaced shadow
+/// must not match a token its successor hands out.
+static NEXT_GENERATION: AtomicU64 = AtomicU64::new(1);
+
+fn next_generation() -> u64 {
+    NEXT_GENERATION.fetch_add(1, Ordering::Relaxed)
+}
 
 /// One animation frame. felis ships coalesced frames
 /// (docs/reference/protocols/kitty-graphics.md "Animation"), so each
@@ -47,6 +58,13 @@ pub struct ClientImage {
     /// Playback order; `frames[0]` is the root. Always non-empty.
     pub frames: Vec<ClientFrame>,
     pub current: usize,
+    /// The displayed frame has completed since the entry was opened. A
+    /// re-transmission of that frame keeps it drawable on the copy the
+    /// frontend already holds; a whole-image replacement does not, as
+    /// kitty frees an image's pixels when a transmission under its id
+    /// starts.
+    drawable: bool,
+    generation: u64,
 }
 
 impl ClientImage {
@@ -68,6 +86,35 @@ impl ClientImage {
     #[must_use]
     pub const fn frame_count(&self) -> usize {
         self.frames.len()
+    }
+
+    #[must_use]
+    pub const fn is_drawable(&self) -> bool {
+        self.drawable
+    }
+
+    /// Changes whenever what this image displays changes, and is never
+    /// reused within the process: an asynchronous frontend tags a pixel
+    /// conversion with it and installs the result only if it still
+    /// matches.
+    #[must_use]
+    pub const fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// The displayed frame as straight RGBA8, the one format a canvas
+    /// `ImageData` takes.
+    pub fn write_rgba8(&self, out: &mut Vec<u8>) {
+        out.clear();
+        match self.format {
+            ImageFormat::Rgba32 => out.extend_from_slice(self.pixels()),
+            ImageFormat::Rgb24 => {
+                out.reserve(self.pixels().len() / 3 * 4);
+                for px in self.pixels().as_chunks::<3>().0 {
+                    out.extend_from_slice(&[px[0], px[1], px[2], 0xFF]);
+                }
+            }
+        }
     }
 }
 
@@ -130,6 +177,11 @@ struct ActiveTransfer {
     slot: usize,
     expected: usize,
     received: usize,
+    /// Pixels for the displayed frame, swapped in at `Complete` so a
+    /// re-read mid-transfer (an atlas reset) finds what was on screen.
+    /// Uncharged to the session cap, as the daemon edits frames in place
+    /// and admits the edit at the cap; one open transfer bounds it.
+    staged: Option<Vec<u8>>,
 }
 
 /// What one mirrored image costs the aggregate before a single pixel:
@@ -171,14 +223,14 @@ impl ImageShadow {
         self.images.get(&id)
     }
 
-    /// Insertion order: the renderer sorts by [`ClientPlacement::z_index`]
-    /// and uses this order as the tie-breaker.
+    /// Insertion order: [`ImageLayout`] sorts by [`ClientPlacement::z_index`]
+    /// and keeps this order on ties.
     #[must_use]
     pub fn placements(&self) -> &[ClientPlacement] {
         &self.placements
     }
 
-    /// What the renderer resolves a `U+10EEEE` cell against.
+    /// What the layout resolves a `U+10EEEE` cell against.
     #[must_use]
     pub fn virtual_placements(&self) -> &[VirtualPlacement] {
         &self.virtual_placements
@@ -194,6 +246,25 @@ impl ImageShadow {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.images.is_empty() && self.placements.is_empty() && self.virtual_placements.is_empty()
+    }
+
+    /// Lays out this shadow's placements over `screen`, the composed
+    /// viewport the client paints; see [`ImageLayout::rebuild`].
+    pub fn layout_into(
+        &self,
+        layout: &mut ImageLayout,
+        screen: &ScreenBuffer,
+        cell_px: (f32, f32),
+        viewport: u32,
+    ) {
+        layout.rebuild(
+            screen,
+            self,
+            &self.placements,
+            &self.virtual_placements,
+            cell_px,
+            viewport,
+        );
     }
 
     /// In image insertion order: the renderer's atlas-allocation cache
@@ -349,11 +420,17 @@ impl ImageShadow {
             ImageTarget::Frame { number } => self.open_frame(id, number)?,
         };
         let expected = self.images.get(&id).map_or(0, |entry| entry.frame_len);
+        let staged = self
+            .images
+            .get(&id)
+            .filter(|entry| entry.drawable && entry.current == slot)
+            .map(|_| vec![0u8; expected]);
         self.active = Some(ActiveTransfer {
             id,
             slot,
             expected,
             received: 0,
+            staged,
         });
         Ok(())
     }
@@ -381,6 +458,8 @@ impl ImageShadow {
                 complete: false,
             }],
             current: 0,
+            drawable: false,
+            generation: next_generation(),
         };
         let is_new = !self.images.contains_key(&id);
         self.images.insert(id, entry);
@@ -422,6 +501,9 @@ impl ImageShadow {
             });
         }
         let frame_len = entry.frame_len;
+        if entry.drawable && entry.current == slot {
+            return Ok(slot);
+        }
         let freed = entry.frames.get(slot).map_or(0, Self::frame_bytes);
         let retained = self.admit_aggregate(id, freed, FRAME_OVERHEAD + frame_len)?;
 
@@ -461,7 +543,11 @@ impl ImageShadow {
             });
         }
         let slot = active.slot;
-        if let Some(frame) = self
+        if let Some(active) = self.active.as_mut()
+            && let Some(staged) = active.staged.as_mut()
+        {
+            staged[start..end].copy_from_slice(bytes);
+        } else if let Some(frame) = self
             .images
             .get_mut(&id)
             .and_then(|entry| entry.frames.get_mut(slot))
@@ -493,12 +579,17 @@ impl ImageShadow {
             });
         }
         let slot = active.slot;
-        self.active = None;
+        let staged = self.active.take().and_then(|open| open.staged);
         if let Some(entry) = self.images.get_mut(&id) {
             if let Some(frame) = entry.frames.get_mut(slot) {
+                if let Some(pixels) = staged {
+                    frame.pixels = pixels;
+                }
                 frame.complete = true;
             }
             if entry.current == slot {
+                entry.drawable = true;
+                entry.generation = next_generation();
                 self.dirty_images.insert(id);
             }
         }
@@ -518,6 +609,8 @@ impl ImageShadow {
             return;
         }
         entry.current = slot;
+        entry.drawable = true;
+        entry.generation = next_generation();
         // The renderer keys its atlas by image id, so a frame swap is a
         // re-upload of the id.
         self.dirty_images.insert(id);
@@ -573,6 +666,13 @@ impl ImageShadow {
         } else {
             self.virtual_placements.push(placement);
         }
+    }
+}
+
+impl LayoutImages for ImageShadow {
+    fn drawable_size(&self, id: ImageId) -> Option<(u32, u32)> {
+        let image = self.images.get(&id)?;
+        image.drawable.then_some((image.width, image.height))
     }
 }
 
@@ -1155,5 +1255,148 @@ mod tests {
             used - 2 * per_image + entry_cost(last) + entry_cost(4),
             "a delete releases the whole entry's bytes",
         );
+    }
+
+    fn generation(s: &ImageShadow, id: u32) -> u64 {
+        s.image(ImageId(id)).expect("image held").generation()
+    }
+
+    fn drawable(s: &ImageShadow, id: u32) -> Option<(u32, u32)> {
+        s.drawable_size(ImageId(id))
+    }
+
+    #[test]
+    fn an_image_draws_only_once_its_displayed_frame_completes() {
+        let mut s = ImageShadow::new();
+        s.apply_ok(&header(1, 8));
+        assert_eq!(drawable(&s, 1), None);
+        let opened = generation(&s, 1);
+        close(&mut s, 1, 8);
+        assert_eq!(drawable(&s, 1), Some((2, 1)));
+        assert!(generation(&s, 1) > opened);
+    }
+
+    /// kitty frees an image's pixels when a same-id transmission starts,
+    /// so the image vanishes until that transmission completes, and a
+    /// conversion started before it fails the generation check.
+    #[test]
+    fn a_replacement_header_hides_the_image_until_its_complete() {
+        let mut s = ImageShadow::new();
+        transfer(&mut s, &header(1, 8), vec![0u8; 8]);
+        let shown = generation(&s, 1);
+        s.apply_ok(&header(1, 16));
+        assert_eq!(drawable(&s, 1), None);
+        let replacing = generation(&s, 1);
+        assert!(replacing > shown);
+        close(&mut s, 1, 16);
+        assert_eq!(drawable(&s, 1), Some((4, 1)));
+        assert!(generation(&s, 1) > replacing);
+    }
+
+    #[test]
+    fn a_frame_transfer_off_screen_leaves_the_displayed_image_untouched() {
+        let mut s = ImageShadow::new();
+        transfer(&mut s, &header(1, 8), vec![0u8; 8]);
+        let shown = generation(&s, 1);
+        s.apply_ok(&frame_header(1, 2));
+        assert_eq!((drawable(&s, 1), generation(&s, 1)), (Some((2, 1)), shown));
+        s.apply_ok(&chunk(1, vec![0u8; 8]));
+        assert_eq!((drawable(&s, 1), generation(&s, 1)), (Some((2, 1)), shown));
+        s.apply_ok(&complete(1));
+        assert_eq!((drawable(&s, 1), generation(&s, 1)), (Some((2, 1)), shown));
+        s.apply_ok(&show_frame(1, 2));
+        assert!(generation(&s, 1) > shown);
+        assert_eq!(drawable(&s, 1), Some((2, 1)));
+    }
+
+    /// Until the new pixels complete, the frame keeps showing, and an
+    /// atlas reset that re-reads it must find what was on screen.
+    #[test]
+    fn re_sending_the_displayed_frame_keeps_its_pixels_until_complete() {
+        let mut s = ImageShadow::new();
+        transfer(&mut s, &header(1, 4), vec![1, 2, 3, 4]);
+        s.take_dirty_images();
+        let shown = generation(&s, 1);
+        let before = s.retained_bytes();
+        s.apply_ok(&frame_header(1, 1));
+        s.apply_ok(&chunk(1, vec![5, 6, 7, 8]));
+        let image = s.image(ImageId(1)).unwrap();
+        assert_eq!(image.pixels(), [1, 2, 3, 4]);
+        assert_eq!((drawable(&s, 1), generation(&s, 1)), (Some((1, 1)), shown));
+        assert_eq!(s.take_dirty_images(), []);
+        s.apply_ok(&complete(1));
+        assert_eq!(s.image(ImageId(1)).unwrap().pixels(), [5, 6, 7, 8]);
+        assert!(generation(&s, 1) > shown);
+        assert_eq!(s.take_dirty_images(), [ImageId(1)]);
+        assert_eq!(s.retained_bytes(), before);
+    }
+
+    /// The daemon edits a frame in place and admits the edit at the cap,
+    /// so the mirror must not refuse it for the copy it stages.
+    #[test]
+    fn re_sending_the_displayed_frame_is_admitted_at_the_session_cap() {
+        let mut s = ImageShadow::new();
+        let per_image = entry_cost(MAX_IMAGE_BYTES as usize);
+        let count = MAX_SESSION_IMAGE_BYTES / per_image;
+        for id in 0..count {
+            s.apply_ok(&header(id as u32, MAX_IMAGE_BYTES));
+            close(&mut s, id as u32, MAX_IMAGE_BYTES as usize);
+        }
+        let full = s.retained_bytes();
+        assert!(full + per_image > MAX_SESSION_IMAGE_BYTES);
+        s.apply_ok(&frame_header(0, 1));
+        assert_eq!(s.retained_bytes(), full);
+        close(&mut s, 0, MAX_IMAGE_BYTES as usize);
+        assert_eq!(s.retained_bytes(), full);
+        s.apply_ok(&frame_header(0, 1));
+        s.apply_ok(&ImageMsg::Delete { id: ImageId(0) });
+        assert_eq!(s.retained_bytes(), full - per_image);
+    }
+
+    #[test]
+    fn generations_never_repeat_across_a_new_shadow() {
+        let mut old = ImageShadow::new();
+        transfer(&mut old, &header(1, 4), vec![0u8; 4]);
+        let mut new = ImageShadow::new();
+        transfer(&mut new, &header(1, 4), vec![0u8; 4]);
+        assert_ne!(generation(&old, 1), generation(&new, 1));
+    }
+
+    #[test]
+    fn rgb_pixels_widen_to_opaque_rgba() {
+        let mut s = ImageShadow::new();
+        let rgb = ImageMsg::Header {
+            id: ImageId(1),
+            target: ImageTarget::New {
+                width: 2,
+                height: 1,
+                format: ImageFormat::Rgb24,
+            },
+        };
+        transfer(&mut s, &rgb, vec![1, 2, 3, 4, 5, 6]);
+        let mut out = vec![9; 3];
+        s.image(ImageId(1)).unwrap().write_rgba8(&mut out);
+        assert_eq!(out, [1, 2, 3, 0xFF, 4, 5, 6, 0xFF]);
+
+        transfer(&mut s, &header(2, 4), vec![7, 8, 9, 10]);
+        s.image(ImageId(2)).unwrap().write_rgba8(&mut out);
+        assert_eq!(out, [7, 8, 9, 10]);
+    }
+
+    #[test]
+    fn layout_skips_an_image_mid_replacement() {
+        let screen = felis_grid::Grid::new(4, 4);
+        let mut s = ImageShadow::new();
+        transfer(&mut s, &header(1, 8), vec![0u8; 8]);
+        s.apply_ok(&placement(1, None, 0));
+        let mut layout = ImageLayout::new();
+        s.layout_into(&mut layout, screen.screen(), (8.0, 16.0), 0);
+        assert_eq!(layout.above_text().len(), 1);
+        s.apply_ok(&header(1, 16));
+        s.layout_into(&mut layout, screen.screen(), (8.0, 16.0), 0);
+        assert_eq!(layout.above_text(), []);
+        close(&mut s, 1, 16);
+        s.layout_into(&mut layout, screen.screen(), (8.0, 16.0), 0);
+        assert_eq!(layout.above_text()[0].image_size, [4, 1]);
     }
 }

@@ -21,8 +21,8 @@ use clap::{Parser, Subcommand};
 pub(crate) use felis_client_core::local_socket::resolve_local_socket;
 use felis_client_core::{
     ActivationTarget, Carrier, Clipboard, ConfigSource, DialError, DialedConnection, GridPos,
-    ImageId, ImageShadow, InMemoryClipboard, Keymap, LANDING_REMOTE_SPAWN, Landing, Offer,
-    Reconnector, Selection, SelectionMode, ShadowScreen,
+    ImageId, ImageLayout, ImageShadow, InMemoryClipboard, Keymap, LANDING_REMOTE_SPAWN, Landing,
+    Offer, Reconnector, Selection, SelectionMode, ShadowScreen,
     action::{Action, ClipboardScope, IpcAction, SwitchDirection},
     config,
     config::{Backdrop, BuiltinShader, GUI_CLIENT_ID, PostShaderChoice, compose_window_title},
@@ -1031,6 +1031,7 @@ fn drive(
         conn_gen: FIRST_CONN_GEN,
         shadow: ShadowScreen::new(attached_dims.rows, attached_dims.cols),
         image_shadow: ImageShadow::new(),
+        image_layout: ImageLayout::new(),
         modifiers: ModifiersState::empty(),
         current_session_id: anchor.id,
         current_sequence: anchor.sequence,
@@ -1268,6 +1269,7 @@ struct App {
     conn_gen: u64,
     shadow: ShadowScreen,
     image_shadow: ImageShadow,
+    image_layout: ImageLayout,
     modifiers: ModifiersState,
     /// Updated atomically with the pump swap in `install_new_session`.
     current_session_id: u128,
