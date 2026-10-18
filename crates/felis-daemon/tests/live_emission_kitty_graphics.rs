@@ -1102,3 +1102,21 @@ fn a_live_put_reports_the_serial_its_placement_keeps() {
         [(1, Some(1)), (2, Some(2)), (1, Some(1)), (3, Some(3))]
     );
 }
+
+#[test]
+fn a_placement_turned_virtual_and_back_keeps_its_serial() {
+    let mut s = State::new();
+    s.dispatch(&body("Ga=t,i=1,f=32,s=1,v=1", &tiny_rgba_payload()));
+    for controls in [
+        "Ga=p,i=1,p=1,q=2",
+        "Ga=p,i=1,p=2,q=2",
+        "Ga=p,i=1,p=1,U=1,q=2",
+        "Ga=p,i=1,p=1,q=2",
+    ] {
+        s.dispatch(&body(controls, b""));
+    }
+    assert_eq!(
+        placement_serials(&s.drain_events()),
+        [(1, Some(1)), (2, Some(2)), (1, Some(1))]
+    );
+}
