@@ -9,14 +9,18 @@ publish.workspace = true
 description = "felis renderer-neutral core: palette, box drawing, glyph index, shelf atlas, cell painter and its display list"
 
 [features]
+default = ["glyphs"]
+# Gates the modules that rasterize through felis-shaping, so a wasm32 client links the palette and display-list types
+# without it; a wasm arm in felis-shaping would pull a font stack it has no provider for.
+glyphs = ["dep:felis-shaping", "dep:foldhash"]
 # Named testing over test-support because clippy::redundant_feature_names rejects the -support suffix.
-testing = []
+testing = ["glyphs"]
 
 [dependencies]
 felis-protocol = { workspace = true }
 felis-grid = { workspace = true }
-felis-shaping = { workspace = true }
-foldhash = { workspace = true }
+felis-shaping = { workspace = true, optional = true }
+foldhash = { workspace = true, optional = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
@@ -28,10 +32,12 @@ criterion = { workspace = true }
 [[bench]]
 name = "atlas"
 harness = false
+required-features = ["glyphs"]
 
 [[bench]]
 name = "shape_memo"
 harness = false
+required-features = ["glyphs"]
 
 [lints]
 workspace = true

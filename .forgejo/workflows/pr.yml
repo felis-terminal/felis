@@ -34,7 +34,7 @@ jobs:
       - run: nix develop -c just lint
       - run: nix develop -c just test
       - run: nix develop -c just deny
-      - name: felis-client-core's portable core still builds for wasm32
+      - name: the portable cores of felis-client-core and felis-render-core still build for wasm32
         run: nix develop -c just check-portable
       # Here rather than beside each tool's own job: the release gate runs
       # only on tags and the bench orchestrators only on bench-relevant

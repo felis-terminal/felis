@@ -165,12 +165,13 @@ skill-check:
 lint:
     cargo clippy --workspace --all-targets --all-features -- -D warnings
 
-# Lint felis-client-core's portable core on wasm32 (pr.yml's build job runs this).
+# Lint the portable cores of felis-client-core and felis-render-core on wasm32 (pr.yml's build job runs this).
 # Clippy over check: -D warnings also catches the dead cfg leftovers a
 # feature split leaves behind, which `cargo check` accepts silently.
 [group('lint')]
 check-portable:
     cargo clippy -p felis-client-core --no-default-features --target wasm32-unknown-unknown -- -D warnings
+    cargo clippy -p felis-render-core --no-default-features --target wasm32-unknown-unknown -- -D warnings
 
 # License / ban / advisory audit (pr.yml's build job runs this).
 [group('lint')]
