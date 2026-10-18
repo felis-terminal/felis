@@ -107,11 +107,12 @@ schema:
     UPDATE_SCHEMA=1 cargo test -p felis-grid --features schema json_v1::schema
 
 # Regenerate the golden `felis bridge` conversations from a live bridge,
-# and the golden felis-json v1 frames.
+# the golden felis-json v1 frames, and the cell instance fixtures.
 [group('lint')]
 golden:
     UPDATE_GOLDEN=1 cargo nextest run -p felis-cli --test cli_bridge golden
     UPDATE_GOLDEN=1 cargo nextest run -p felis-grid --features json --test it json_v1::
+    UPDATE_GOLDEN=1 cargo nextest run -p felis-render-wgpu row_cache::golden_tests
 
 # Regenerate the IPC wire types (crates/felis-protocol/src/generated) via buf, then the
 # schema metadata (src/schema_meta.rs) from the same schema.

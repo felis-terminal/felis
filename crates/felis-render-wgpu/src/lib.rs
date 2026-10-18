@@ -49,7 +49,7 @@ pub mod palette;
 pub mod pipeline;
 pub mod post;
 pub mod probe;
-mod row_cache;
+pub mod row_cache;
 mod texture_upload;
 mod warmup;
 
@@ -64,10 +64,8 @@ use crate::{
     glyphs::GlyphCache,
     image_atlas::{ImageAtlas, ImageSlot},
     instances::{
-        BAR_ELLIPSIS, BgInstance, CURSOR_MARKER_PX, CellPainter, ChromeBar, DecorationInstance,
-        FgInstance, ImgInstance, bottom_bar_claim, clip_img_quad_above, extend_confirm_instances,
-        extend_link_preview_instances, extend_preedit_instances, extend_search_instances,
-        preedit_covered_cols,
+        BAR_ELLIPSIS, BgInstance, CURSOR_MARKER_PX, DecorationInstance, FgInstance, ImgInstance,
+        clip_img_quad_above,
     },
     palette::{ResolvedTheme, Theme, effective_theme},
     pipeline::{
@@ -76,7 +74,7 @@ use crate::{
         img_instance_layout, viewport_bind_group_layout_entries,
     },
     post::{PostFrame, PostStage},
-    row_cache::{FrameKey, RowCache},
+    row_cache::{CellFrame, RowCache},
     texture_upload::TextureUploader,
 };
 
@@ -1321,112 +1319,28 @@ impl Renderer {
         viewport: u32,
         viewport_max: u32,
     ) {
-        // Keep in lockstep with `extend_search_instances` /
-        // `extend_confirm_instances` / `extend_link_preview_instances`,
-        // which draw under the same `!label.is_empty()` condition; the
-        // reserved row must not double through the overlay.
-        let search_active = self.search.as_ref().is_some_and(|o| !o.label.is_empty());
-        let confirm_active = self.confirm.as_ref().is_some_and(|o| !o.label.is_empty());
-        let link_preview_active = self
-            .link_preview
-            .as_ref()
-            .is_some_and(|o| !o.text.is_empty());
-        let preedit_active = self.preedit.as_ref().is_some_and(|o| !o.text.is_empty());
-        let chrome = ChromeBar::from_flags(search_active, confirm_active);
-        let bottom_bar = bottom_bar_claim(chrome, preedit_active, link_preview_active);
-        let reserved_bottom_rows = bottom_bar.reserved_rows();
-        self.chrome_rows = reserved_bottom_rows;
-        // Reserved so the overlay's opaque bg hides the underlying glyph;
-        // the fg pass cannot occlude across the two passes.
-        let preedit_cols = self
-            .preedit
-            .as_ref()
-            .and_then(|o| preedit_covered_cols(o, screen.cols()));
-        let painter = CellPainter::new(
+        let frame = CellFrame {
+            viewport,
+            viewport_max,
+            cursor_visible: self.window_focused && self.cursor_blink_visible,
+            selection: self.selection,
+            reverse_video: self.reverse_video,
+            font_features: &self.font_features,
+            atlas_generation: self.glyphs.atlas_resets(),
+            preedit: self.preedit.as_ref(),
+            search: self.search.as_ref(),
+            confirm: self.confirm.as_ref(),
+            link_preview: self.link_preview.as_ref(),
+        };
+        let (_, reserved_bottom_rows) = self.cells.paint_frame(
             screen,
             metrics,
             &self.resolved_theme,
             &self.glyphs,
             &self.shape_frame,
-        )
-        .with_cursor_visible(self.window_focused && self.cursor_blink_visible)
-        .with_selection(self.selection)
-        .with_viewport(viewport, viewport_max)
-        .with_reserved_bottom_rows(reserved_bottom_rows)
-        .with_preedit(preedit_cols)
-        .with_reverse_video(self.reverse_video)
-        .resolved();
-        let key = FrameKey {
-            rows: screen.rows(),
-            cols: screen.cols(),
-            metrics: [metrics.width, metrics.height, metrics.ascent],
-            viewport,
-            reserved_bottom_rows,
-            preedit: preedit_cols,
-            selection: self.selection,
-            reverse_video: self.reverse_video,
-            shaped: !self.font_features.is_empty() || screen.cluster_count() > 0,
-            atlas_generation: self.glyphs.atlas_resets(),
-        };
-        // Before any overlay is appended, so only producer-controlled
-        // quads are cut: a glyph anchored above the reserved row can
-        // still reach into it (a tall bitmap, an OSC 66 run scaled
-        // across rows), and it rides the same pass as the bar's text.
-        let clip_max_y = (reserved_bottom_rows > 0).then(|| {
-            f32::from(screen.rows().saturating_sub(reserved_bottom_rows)) * metrics.height as f32
-        });
-        let dirty = screen.damage().dirty_rows();
-        let out = self.cells.paint(&painter, key, dirty, clip_max_y);
-        if let Some(overlay) = &self.preedit {
-            extend_preedit_instances(
-                overlay,
-                metrics,
-                screen.rows(),
-                screen.cols(),
-                &self.glyphs,
-                out,
-            );
-        }
-        if let Some(overlay) = &self.search {
-            // Hit highlights regardless; the bar only when the search
-            // holds the row. A chord can arm a confirmation while a
-            // search is composing, and two bars in one row interleave
-            // their glyphs rather than one hiding the other.
-            extend_search_instances(
-                overlay,
-                metrics,
-                screen.rows(),
-                screen.cols(),
-                matches!(chrome, ChromeBar::Search),
-                &self.glyphs,
-                out,
-            );
-        }
-        // After the search bar: an open question wins the bottom row.
-        if let Some(overlay) = &self.confirm {
-            extend_confirm_instances(
-                overlay,
-                metrics,
-                screen.rows(),
-                screen.cols(),
-                &self.glyphs,
-                out,
-            );
-        }
-        // Last, and only when neither of the above claimed the row
-        // (`bottom_bar_claim` carries the precedence and its test).
-        if bottom_bar.draw_link_preview()
-            && let Some(overlay) = &self.link_preview
-        {
-            extend_link_preview_instances(
-                overlay,
-                metrics,
-                screen.rows(),
-                screen.cols(),
-                &self.glyphs,
-                out,
-            );
-        }
+            &frame,
+        );
+        self.chrome_rows = reserved_bottom_rows;
     }
 
     /// Trims images out of rows occupied by client chrome.

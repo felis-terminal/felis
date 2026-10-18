@@ -35,6 +35,10 @@ name = "shape_memo"
 harness = false
 
 [[bench]]
+name = "paint_frame"
+harness = false
+
+[[bench]]
 name = "video_frame"
 harness = false
 
