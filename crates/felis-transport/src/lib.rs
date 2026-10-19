@@ -1,9 +1,4 @@
-//! Wire framing and carriers (Unix socket, Windows named pipe, SSH stdio).
-//!
-//! Enforces security invariants per `docs/explanation/security-model.md`.
-//! The OS-specific local carrier stays behind the [`local`] facade
-//! exposing `local::{ReadHalf, WriteHalf}`.
-
+#![doc = include_str!("../README.md")]
 // `deny`, not `forbid`: `peer::peer_uid` (`getpeereid(3)`) and
 // `inherit::take_inherited` opt back in with fn-scoped allows, which
 // `forbid` would reject.

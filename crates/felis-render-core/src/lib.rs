@@ -1,4 +1,4 @@
-//! `felis-render-core`: the renderer-neutral half of the native renderer.
+#![doc = include_str!("../README.md")]
 
 use felis_protocol::{ImageId, messages::ImageFormat};
 

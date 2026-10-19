@@ -1,0 +1,11 @@
+# felis-client-core
+
+The client core that the frontends of [felis](https://github.com/felis-terminal/felis), a daemon-backed terminal
+emulator for persistent sessions and headless control share: the shadow screen, the action enum, the IPC client
+connector, the clipboard trait and the shared config.
+
+With `default-features = false` it builds for wasm32.
+
+Wire compatibility follows `PROTOCOL_MINOR` and the
+[minor ledger](https://github.com/felis-terminal/felis/blob/main/docs/reference/ipc.md#the-minor-ledger), independent of
+the crate version.

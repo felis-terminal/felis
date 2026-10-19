@@ -1,8 +1,4 @@
-//! `felis-shaping`: swash text shaping, fallback chain, shape cache.
-//!
-//! Output is a [`GlyphBitmap`] (coverage or RGBA pixels plus placement);
-//! conversion to a GPU texture happens in `felis-render-wgpu`.
-
+#![doc = include_str!("../README.md")]
 // Relaxes the workspace `unsafe_code = "deny"` for the `Mmap::map` in
 // `Font::load_face_id` and the libfontconfig calls in
 // `provider::fontconfig` (docs/explanation/rendering/text-shaping.md

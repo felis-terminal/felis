@@ -172,9 +172,12 @@ the app version, the one a release tag and `felis version` name. Every library c
 at 0.1.0, which Cargo's semver rules govern for its Rust API; the root `[workspace.dependencies]` entries name the same
 versions next to their paths. A release bumps a library whose package differs from its newest crates.io version, a minor
 for a breaking change and a patch otherwise, raises every requirement on it, and leaves an unchanged library at its
-version ("Release gate" below). Every crate under `crates/` is publishable to crates.io; the `tests/` member is not. A
-wire-schema change is recorded where a peer can act on it (`PROTOCOL_MINOR` and the minor ledger in [ipc.md](ipc.md)
-"The minor ledger", one row per addition), and `felis-protocol`'s crate version is not bumped alongside it
+version ("Release gate" below). Every crate under `crates/` is publishable to crates.io; the `tests/` member is not.
+`cargo install felis-cli felis-client felis-daemon` is unsupported: it installs only the three binaries, while the
+packages in [install.md](../how-to/install.md) also ship the terminfo entry, desktop entry, man pages and shell
+completions. The READMEs of the crates that speak the IPC wire point to the wire contract below. A wire-schema change is
+recorded where a peer can act on it (`PROTOCOL_MINOR` and the minor ledger in [ipc.md](ipc.md) "The minor ledger", one
+row per addition), and `felis-protocol`'s crate version is not bumped alongside it
 ([implementation.md](../explanation/implementation.md) "Why the crate version carries no wire information").
 
 A third axis names the _build_ rather than either contract: the `BuildIdentity` in `felis-protocol`, holding a semver,

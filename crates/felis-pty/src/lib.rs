@@ -1,7 +1,4 @@
-//! Self-hosted async PTY layer: Unix `posix_openpt` and Windows `ConPTY`.
-//!
-//! Bridges blocking OS PTY interfaces to Tokio via dedicated threads and swap
-//! buffers (`docs/explanation/implementation.md` "PTY layer (self-hosted)").
+#![doc = include_str!("../README.md")]
 
 use std::{
     io::{self, Read, Write},

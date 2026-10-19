@@ -1,9 +1,4 @@
-//! Headless client core shared across felis frontends.
-//!
-//! Must compile without GPU, font, or window dependencies. The `native` feature
-//! gates tokio and transport; `default-features = false` leaves the portable
-//! core compiling to wasm32.
-
+#![doc = include_str!("../README.md")]
 #![cfg_attr(not(test), forbid(unsafe_code))]
 
 pub mod action;
