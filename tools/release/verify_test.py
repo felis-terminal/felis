@@ -106,8 +106,8 @@ serde = "1"
         self.git("config", "tag.forceSignAnnotated", "false")
         self.git("config", "tag.gpgSign", "false")
         self.write_workspace("0.1.0")
-        self.write_manifest("felis-cli")
-        self.write_manifest("felis-grid")
+        for name in ("felis-cli", "felis-client", "felis-daemon", "felis-grid"):
+            self.write_manifest(name)
         self.repo.joinpath("CHANGELOG.md").write_text(
             """# Changelog
 
@@ -155,15 +155,37 @@ serde = "1"
         self.expect(1, "a dirty working tree fails", "v0.1.0", release)
         self.git("checkout", "-q", "--", "CHANGELOG.md")
 
-        self.write_manifest("felis-grid", 'version = "0.2.0"')
-        self.git("commit", "-q", "-am", "pin one crate's version")
-        pinned = self.git("rev-parse", "HEAD", capture=True)
+        self.write_manifest("felis-grid", 'version = "0.4.0"')
+        self.git("commit", "-q", "-am", "give a library crate its own version")
+        library = self.git("rev-parse", "HEAD", capture=True)
         self.git("tag", "-a", "-m", "felis 0.1.0-rc.2", "v0.1.0-rc.2")
         self.expect(
-            1,
-            "a crate that pins its own version fails",
+            0,
+            "a library crate on its own version passes",
             "v0.1.0-rc.2",
+            library,
+        )
+
+        self.write_manifest("felis-daemon", 'version = "0.2.0"')
+        self.git("commit", "-q", "-am", "pin a binary crate's version")
+        pinned = self.git("rev-parse", "HEAD", capture=True)
+        self.git("tag", "-a", "-m", "felis 0.1.0-rc.3", "v0.1.0-rc.3")
+        self.expect(
+            1,
+            "a binary crate that pins its own version fails",
+            "v0.1.0-rc.3",
             pinned,
+        )
+
+        self.git("rm", "-qr", "crates/felis-client")
+        self.git("commit", "-q", "-m", "drop a binary crate")
+        missing = self.git("rev-parse", "HEAD", capture=True)
+        self.git("tag", "-a", "-m", "felis 0.1.0-rc.4", "v0.1.0-rc.4")
+        self.expect(
+            1,
+            "a missing binary crate fails",
+            "v0.1.0-rc.4",
+            missing,
         )
         self.git("reset", "-q", "--hard", after)
 
