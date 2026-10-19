@@ -137,6 +137,8 @@
           prek
           cargo-deny
           cargo-machete
+          cargo-semver-checks
+          release-plz
           lychee
           cargo-nextest
           cargo-insta

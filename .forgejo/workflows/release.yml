@@ -23,7 +23,7 @@ jobs:
   verify-tag:
     name: the tag names this exact revision
     runs-on: x86_64-linux
-    timeout-minutes: 45
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         # Annotated-tag inspection needs the tag object and the commit
@@ -32,8 +32,16 @@ jobs:
           fetch-depth: 0
       - name: the gate tells a good tag from a bad one (self-test)
         run: nix develop -c python3 tools/release/verify.py --self-test
+      - run: nix develop -c python3 tools/release/crates.py --self-test
       - name: the tag is annotated, clean, and agrees with the manifests
         run: nix develop -c python3 tools/release/verify.py "$GITHUB_REF_NAME" "$GITHUB_SHA"
+      - uses: ./.forgejo/actions/cargo-env
+      # Before the builds, so a forgotten or too-small library bump fails in
+      # minutes; needs crates.io for the published baselines.
+      - name: the library versions are ready to publish
+        run: nix develop -c python3 tools/release/crates.py check
+      - uses: ./.forgejo/actions/cargo-env/done
+        if: always()
 
   flake-check:
     name: nix flake check
@@ -55,6 +63,7 @@ jobs:
       - run: nix develop -c just lint
       - run: nix develop -c just test
       - run: nix develop -c just deny
+      - run: nix develop -c just publish-dry-run
       - name: the portable cores of felis-client-core and felis-render-core still build for wasm32
         run: nix develop -c just check-portable
       - uses: ./.forgejo/actions/cargo-env/done

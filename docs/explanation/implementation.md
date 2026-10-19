@@ -346,3 +346,12 @@ The library crates carry their own versions and the binary crates carry the app'
 minor release, and every app release would bump libraries whose package did not change, telling their consumers to
 re-check an API that did not move. The binary crates stay on the app version because the release tag, the archives and
 `felis version` already name it, and felis-daemon's library API, which embedders use, changes with the app.
+
+Publishing runs on GitHub, after the Forgejo release, through crates.io trusted publishing: each run gets a short-lived
+token bound to one workflow and environment, so no publish credential is stored anywhere, least of all on the
+self-hosted runner that also builds pull requests. The gate stays on Forgejo; the GitHub job only uploads what the tag
+already passed. release-plz prepares the bumps and checks them but does not publish: its `release` cannot publish the
+binary crates it must leave alone (a processed crate that inherits the workspace version would move the app version) and
+asks for a forge token the upload does not need. What the check leaves to the release procedure, a break that reaches a
+dependent's consumers through a library's types and a change to a platform-only public item, is rare enough that
+automating it costs more than the review it replaces.

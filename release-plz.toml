@@ -1,0 +1,25 @@
+# `just release-prepare` runs `release-plz update` only; publishing is
+# tools/release/crates.py plus cargo in release-mirror.yml.
+[workspace]
+changelog_update = false
+git_tag_enable = false
+git_release_enable = false
+semver_check = true
+
+# The binaries carry the app version, which the maintainer bumps: a processed
+# package inheriting `version.workspace` would make release-plz move it.
+[[package]]
+name = "felis-cli"
+release = false
+
+[[package]]
+name = "felis-client"
+release = false
+
+[[package]]
+name = "felis-daemon"
+release = false
+
+[[package]]
+name = "felis-workspace-tests"
+release = false
