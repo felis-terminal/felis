@@ -304,6 +304,7 @@ mod osc52;
 mod osc_color;
 mod osc_dispatch;
 mod placeholder_resolve;
+#[doc(hidden)]
 pub mod pty_effects;
 mod screen;
 pub mod search;
@@ -324,9 +325,14 @@ pub use ansi::{
     AnsiCaps, RowAnsiOptions, logical_line_spans, logical_lines, push_cell_text, row_ansi,
     row_ansi_with, row_text_trim, sgr_set,
 };
-pub use cluster_table::{CLUSTER_TABLE_CAP, ClusterTable};
+#[doc(hidden)]
+pub use cluster_table::CLUSTER_TABLE_CAP;
+pub use cluster_table::ClusterTable;
 pub use damage::Damage;
-pub use link_table::{LINK_TABLE_BYTE_CAP, LinkTable, LinkText};
+#[doc(hidden)]
+pub use link_table::LINK_TABLE_BYTE_CAP;
+pub use link_table::LinkTable;
+pub use link_table::LinkText;
 pub use modes::{
     KNOWN_MODIFIABLE_DEC_MODES, PERMANENTLY_RESET_ANSI_MODES, PERMANENTLY_RESET_DEC_MODES,
     PERMANENTLY_SET_DEC_MODES,
@@ -339,6 +345,7 @@ pub use mouse::{encode_mouse, fill_cell_center_pixels, mouse_event_reported};
 use osc_color::{format_osc_color_response, parse_x_color};
 use osc52::{format_osc_52_response, parse_osc_52_selection};
 pub use placeholder_resolve::PlaceholderCell;
+#[doc(hidden)]
 pub use pty_effects::{APC_OUTBOX_BYTES, APC_OUTBOX_CAP, PtyEffectQueue, STATUS_OUTBOX_YIELD};
 use screen::SavedScreen;
 pub use screen::ScreenBuffer;
@@ -347,6 +354,7 @@ pub use search::{
 };
 pub use sgr::{AttrFlags, Attributes, Color, UnderlineStyle};
 pub use style_table::{StyleId, StyleTable};
+#[doc(hidden)]
 pub use table_gc::{Sweepable, TableGc};
 pub use text_cells::{TextCells, text_cells};
 pub use width::char_cell_width;

@@ -47,6 +47,7 @@ use crate::{
 pub(crate) mod key_encode;
 pub(crate) mod region;
 pub(crate) mod registry_sync;
+#[doc(hidden)]
 pub mod session_task;
 pub(crate) mod streaming;
 use session_task::{
@@ -63,9 +64,11 @@ const WRITE_BUF_CAPACITY: usize = 64 * 1024;
 ///
 /// Handed the resolved environment base ([`EnvBaseSource`]) so `spawn_with_args`
 /// remains the central site applying cwd, env policy, and overrides.
+#[doc(hidden)]
 pub type SessionFactory =
     Arc<dyn Fn(Option<&[crate::child_env::EnvEntry]>) -> felis_pty::Command + Send + Sync>;
 
+#[doc(hidden)]
 #[must_use]
 pub fn default_session_factory() -> SessionFactory {
     Arc::new(SpawnedPty::default_shell_command)
@@ -89,6 +92,7 @@ pub enum ServeError {
 /// Per-connection (and session-task pipeline) error surface. A wire
 /// error can never orphan a session: the session lives in its owner
 /// task, and a failed connection merely unsubscribes.
+#[doc(hidden)]
 #[derive(Debug, Error)]
 pub enum ConnError {
     #[error("transport: {0}")]
@@ -152,6 +156,7 @@ pub enum ConnError {
 }
 
 /// Which pre-attach phase a [`ConnError::HandshakeTimeout`] cut.
+#[doc(hidden)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HandshakePhase {
     Preface,
@@ -228,11 +233,13 @@ impl ConnectionAdmission {
     /// `None` when the daemon is full. Taken before the spawn: a permit
     /// acquired inside the task would let the flood create the tasks it
     /// was meant to bound.
+    #[doc(hidden)]
     #[must_use]
     pub fn admit(&self) -> Option<tokio::sync::OwnedSemaphorePermit> {
         self.served.clone().try_acquire_owned().ok()
     }
 
+    #[doc(hidden)]
     #[must_use]
     pub fn refusal_slot(&self) -> Option<tokio::sync::OwnedSemaphorePermit> {
         self.refusing.clone().try_acquire_owned().ok()
@@ -257,20 +264,18 @@ impl ConnectionAdmission {
 pub struct DaemonCaps {
     pub idle: IdlePolicy,
     /// Most sessions this daemon admits. A field rather than
-    /// [`crate::pool::MAX_SESSIONS`] read at the check: an embedder (and
-    /// the admission tests, which cannot afford 256 real PTYs) picks its
-    /// own.
+    /// `MAX_SESSIONS` read at the check: an embedder (and the admission
+    /// tests, which cannot afford 256 real PTYs) picks its own.
     pub max_sessions: usize,
-    /// The stable `SSH_AUTH_SOCK` link; `None` before
-    /// [`serve_unix_with_factory`] derives it from the endpoint, and on
-    /// Windows.
+    /// The stable `SSH_AUTH_SOCK` link; `None` before [`serve_unix`]
+    /// derives it from the endpoint, and on Windows.
     pub agent: Option<Arc<crate::agent::AgentLink>>,
     /// The endpoint as a child is told to address it (`FELIS_SOCKET`).
-    /// Filled by [`serve_unix_with_factory`] from the bound address; a
-    /// caller driving [`handle_stream`] directly stamps nothing.
+    /// Filled by [`serve_unix`] from the bound address; a caller driving
+    /// `handle_stream` directly stamps nothing.
     pub endpoint: Option<OsString>,
     /// The connection ledger. Only the accept loop takes permits from
-    /// it; a caller driving [`handle_stream`] over its own carrier (the
+    /// it; a caller driving `handle_stream` over its own carrier (the
     /// relay's stdio) is one connection the accepting daemon already
     /// admitted.
     pub admission: Arc<ConnectionAdmission>,
@@ -388,6 +393,7 @@ fn endpoint_env(endpoint: &Endpoint) -> OsString {
 /// the listener again (`docs/reference/spec.md` REQ-916).
 const ACCEPT_ERROR_BACKOFF: Duration = Duration::from_millis(50);
 
+#[doc(hidden)]
 pub async fn serve_unix_with_factory(
     endpoint: impl Into<Endpoint>,
     caps: DaemonCaps,
@@ -416,6 +422,7 @@ pub async fn serve_unix_with_factory(
 /// Serves the listening socket a predecessor carried across an in-place
 /// upgrade. The predecessor already cleared stale links and told the
 /// service manager it was ready, and the socket path is still its.
+#[doc(hidden)]
 #[cfg(unix)]
 pub async fn serve_resumed(
     server: Listener,
@@ -522,6 +529,7 @@ async fn accept_loop(
 
 /// Per-connection driver shared by every carrier: a `UnixStream`'s
 /// halves or the relay's stdio pipes alike.
+#[doc(hidden)]
 pub async fn handle_stream<R, W>(
     read_half: R,
     write_half: W,
@@ -647,6 +655,7 @@ where
     result
 }
 
+#[doc(hidden)]
 pub async fn handle_connection(
     stream: ServerStream,
     caps: DaemonCaps,

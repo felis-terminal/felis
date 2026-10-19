@@ -3,11 +3,14 @@
 
 #[cfg(unix)]
 mod carrier;
+#[doc(hidden)]
 pub mod dump;
 #[cfg(unix)]
 mod orchestrate;
+#[doc(hidden)]
 #[cfg(unix)]
 pub mod probe;
+#[doc(hidden)]
 #[cfg(unix)]
 pub mod restore;
 
@@ -17,11 +20,13 @@ use std::{path::PathBuf, sync::Mutex};
 
 use tokio::sync::{RwLock, RwLockReadGuard, watch};
 
+#[doc(hidden)]
 #[cfg(unix)]
 pub use orchestrate::{Prepared, prepare};
 
 /// Why an upgrade did not happen. Every refusal leaves the daemon
 /// serving as before.
+#[doc(hidden)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Refusal {
     Unsupported(String),
@@ -62,6 +67,7 @@ impl Refusal {
 }
 
 /// The wire form of a refusal.
+#[doc(hidden)]
 #[must_use]
 pub fn refused(refusal: &Refusal) -> felis_protocol::messages::UpgradeOutcome {
     use felis_protocol::messages::UpgradeRefusal as Reason;
@@ -84,6 +90,7 @@ pub fn refused(refusal: &Refusal) -> felis_protocol::messages::UpgradeOutcome {
 /// listening.
 #[derive(Debug, Default)]
 pub struct UpgradeState {
+    #[doc(hidden)]
     pub gate: UpgradeGate,
     /// Only the `felis-daemon` binary may exec its successor: a process
     /// embedding the daemon library, such as a test, would be replaced
@@ -108,6 +115,7 @@ impl UpgradeState {
     }
 
     /// The `felis-daemon` process's own state: an upgrade execs over it.
+    #[doc(hidden)]
     #[must_use]
     pub fn replaceable() -> Arc<Self> {
         #[cfg(unix)]
@@ -120,6 +128,7 @@ impl UpgradeState {
     }
 
     /// Records the listening socket until [`Self::clear_listener`].
+    #[doc(hidden)]
     #[cfg(unix)]
     pub fn set_listener(
         &self,
@@ -139,6 +148,7 @@ impl UpgradeState {
 
     /// Closes the held copy: a daemon that stopped accepting must not
     /// leave dials queueing on a socket nobody accepts.
+    #[doc(hidden)]
     #[cfg(unix)]
     pub fn clear_listener(&self) {
         self.listener
@@ -162,6 +172,7 @@ impl UpgradeState {
 /// from dispatching another frame. Session-bound commands are sent
 /// under a dispatch permit, so closing waits for the ones already
 /// being sent.
+#[doc(hidden)]
 #[derive(Debug)]
 pub struct UpgradeGate {
     closed: watch::Sender<bool>,

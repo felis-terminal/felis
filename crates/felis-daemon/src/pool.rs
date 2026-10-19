@@ -569,22 +569,26 @@ impl SessionPool {
     /// registration takes, so pool order is sequence order. Starts at 1
     /// because the wire spells `0` as a missing field, which the reader
     /// refuses.
+    #[doc(hidden)]
     pub fn next_sequence(&self) -> NonZeroU64 {
         NonZeroU64::MIN.saturating_add(self.sequences.fetch_add(1, AtomicOrdering::Relaxed))
     }
 
     /// Grabbed once per task so a subscribe never takes the pool lock to
     /// number itself.
+    #[doc(hidden)]
     #[must_use]
     pub fn attachment_ids(&self) -> AttachmentIds {
         self.attachment_ids.clone()
     }
 
+    #[doc(hidden)]
     #[must_use]
     pub fn notify_hub(&self) -> broadcast::Sender<NotifyToClientMsg> {
         self.notify_hub.clone()
     }
 
+    #[doc(hidden)]
     #[must_use]
     pub fn subscribe_notifications(&self) -> broadcast::Receiver<NotifyToClientMsg> {
         self.notify_hub.subscribe()
@@ -595,6 +599,7 @@ impl SessionPool {
     /// pool lock held, which makes the drain check, the count and the
     /// increment one critical section: that is what stops a create from
     /// landing after a stop decided the pool was empty.
+    #[doc(hidden)]
     pub fn try_reserve(&self, max: usize) -> Result<SessionSlot, ReserveRefusal> {
         if self.draining {
             return Err(ReserveRefusal::Draining);
@@ -615,10 +620,12 @@ impl SessionPool {
 
     /// Refuse every further admission. Idempotent, and one-way: nothing
     /// resumes a daemon that has begun to exit.
+    #[doc(hidden)]
     pub const fn start_draining(&mut self) {
         self.draining = true;
     }
 
+    #[doc(hidden)]
     #[must_use]
     pub const fn draining(&self) -> bool {
         self.draining
@@ -626,6 +633,7 @@ impl SessionPool {
 
     /// Refuse admissions for an in-place upgrade. `false` when one is
     /// already running or the pool is draining.
+    #[doc(hidden)]
     pub const fn begin_upgrade(&mut self) -> bool {
         if self.upgrading || self.draining {
             return false;
@@ -635,6 +643,7 @@ impl SessionPool {
     }
 
     /// Lift [`Self::begin_upgrade`] after a refused upgrade.
+    #[doc(hidden)]
     pub const fn end_upgrade(&mut self) {
         self.upgrading = false;
     }
@@ -642,6 +651,7 @@ impl SessionPool {
     /// Spawns admitted but not registered, and sessions out of the pool
     /// whose children are still being reaped: both still fork or still
     /// own a child the dump would not name.
+    #[doc(hidden)]
     #[must_use]
     pub fn in_flight(&self) -> usize {
         self.reserved.load(AtomicOrdering::Acquire)
@@ -649,6 +659,7 @@ impl SessionPool {
     }
 
     /// The next creation sequence [`Self::next_sequence`] would mint.
+    #[doc(hidden)]
     #[must_use]
     pub fn peek_sequence(&self) -> u64 {
         self.sequences.load(AtomicOrdering::Relaxed) + 1
@@ -656,6 +667,7 @@ impl SessionPool {
 
     /// Continue the creation sequence and attachment ids a predecessor
     /// daemon handed over, so neither ever repeats.
+    #[doc(hidden)]
     pub fn resume_counters(&self, next_sequence: u64, next_attachment_id: u64) {
         self.sequences
             .store(next_sequence.saturating_sub(1), AtomicOrdering::Relaxed);
@@ -666,6 +678,7 @@ impl SessionPool {
 
     /// Every registered session, held rows included: an upgrade carries
     /// all of them.
+    #[doc(hidden)]
     #[must_use]
     pub fn all_handles(&self) -> Vec<(SessionId, SessionHandle)> {
         self.sessions
@@ -676,6 +689,7 @@ impl SessionPool {
 
     /// The wake a drain waits on. Held as an `Arc` so the waiter does
     /// not keep the pool locked between re-reads.
+    #[doc(hidden)]
     #[must_use]
     pub fn settled(&self) -> Arc<Notify> {
         Arc::clone(&self.settled)
@@ -683,6 +697,7 @@ impl SessionPool {
 
     /// Count a session out of the pool but not yet reaped. Taken before
     /// [`Self::remove`] and held until the child is gone.
+    #[doc(hidden)]
     #[must_use]
     pub fn begin_teardown(&self) -> TeardownGuard {
         self.tearing_down.fetch_add(1, AtomicOrdering::Release);
@@ -695,6 +710,7 @@ impl SessionPool {
     /// Nothing admitted and nothing left to reap: what a stop waits for
     /// before the shutdown fires. [`Self::admitted`] alone would let the
     /// process exit during the last child's hangup.
+    #[doc(hidden)]
     #[must_use]
     pub fn quiescent(&self) -> bool {
         self.admitted() == 0 && self.tearing_down.load(AtomicOrdering::Acquire) == 0
@@ -703,6 +719,7 @@ impl SessionPool {
     /// Take every registered session out of the pool, held rows
     /// included: a forced stop must reach the sessions a create has
     /// registered but not yet named to its caller.
+    #[doc(hidden)]
     pub fn drain_sessions(&mut self) -> Vec<SessionHandle> {
         self.held.clear();
         let handles: Vec<_> = self.sessions.drain().map(|(_, handle)| handle).collect();
@@ -714,6 +731,7 @@ impl SessionPool {
     /// the pool. A drain that only waits for the count to fall would
     /// miss the teardown a session task runs *after* it removes itself,
     /// so the waiter needs the handles of the sessions it must outlive.
+    #[doc(hidden)]
     #[must_use]
     pub fn live_handles(&self) -> Vec<SessionHandle> {
         self.sessions.values().cloned().collect()
@@ -722,6 +740,7 @@ impl SessionPool {
     /// Register a spawned session task's handle, releasing its admission
     /// slot in the same critical section: released a statement earlier the
     /// cap over-admits, a statement later it double-counts this session.
+    #[doc(hidden)]
     pub fn register(
         &mut self,
         id: SessionId,
@@ -739,11 +758,13 @@ impl SessionPool {
     /// Make a [`Listing::Held`] row nameable. `false`: the row is gone
     /// (an instantly exiting child reaps itself), so the caller is
     /// publishing nothing.
+    #[doc(hidden)]
     pub fn publish(&mut self, id: SessionId) -> bool {
         self.held.remove(&id);
         self.sessions.contains_key(&id)
     }
 
+    #[doc(hidden)]
     #[must_use]
     pub fn get(&self, id: SessionId) -> Option<&SessionHandle> {
         if self.held.contains(&id) {
@@ -752,6 +773,7 @@ impl SessionPool {
         self.sessions.get(&id)
     }
 
+    #[doc(hidden)]
     #[must_use]
     pub fn handle_cloned(&self, id: SessionId) -> Option<SessionHandle> {
         self.get(id).cloned()
@@ -760,6 +782,7 @@ impl SessionPool {
     /// Dropping the handle kills nothing (the task owns the `Session`),
     /// which is why `DestroySession` follows up with
     /// `SessionCmd::Shutdown`.
+    #[doc(hidden)]
     pub fn remove(&mut self, id: SessionId) -> Option<SessionHandle> {
         self.held.remove(&id);
         let removed = self.sessions.remove(&id);
@@ -772,6 +795,7 @@ impl SessionPool {
     /// it would disagree with [`Self::admitted`], which is what the cap
     /// is checked against and what `felis daemon status` reports. The
     /// by-name paths (`get`, `ids`, the rosters) skip held rows instead.
+    #[doc(hidden)]
     #[must_use]
     pub fn len(&self) -> usize {
         self.sessions.len()
@@ -781,11 +805,13 @@ impl SessionPool {
     /// reserved. A cap refusal and the `sessions` status row report this
     /// rather than [`Self::len`] so a burst never reads "at 1 of 3" while
     /// the cap is full of reservations.
+    #[doc(hidden)]
     #[must_use]
     pub fn admitted(&self) -> usize {
         self.sessions.len() + self.reserved.load(AtomicOrdering::Acquire)
     }
 
+    #[doc(hidden)]
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.sessions.is_empty()
@@ -800,6 +826,7 @@ impl SessionPool {
     /// Arbitrary `HashMap` order; `OpsToDaemonMsg::List` uses
     /// [`Self::roster_by_recency`]. Prefix resolution runs off this, so
     /// held rows are skipped.
+    #[doc(hidden)]
     pub fn ids(&self) -> impl Iterator<Item = SessionId> + '_ {
         self.sessions
             .keys()
@@ -808,6 +835,7 @@ impl SessionPool {
     }
 
     /// Most recently parked first.
+    #[doc(hidden)]
     #[must_use]
     pub fn ids_by_recency(&self) -> Vec<SessionId> {
         let mut ids: Vec<_> = self
@@ -820,6 +848,7 @@ impl SessionPool {
 
     /// [`Self::ids_by_recency`]'s order with each row's metadata and a
     /// fresh foreground-pgrp sample, one clone per session.
+    #[doc(hidden)]
     #[must_use]
     pub fn roster_by_recency(&self) -> Vec<(SessionId, SessionMeta, Option<i32>)> {
         let mut rows: Vec<_> = self

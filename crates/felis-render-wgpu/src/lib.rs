@@ -43,13 +43,18 @@ use wgpu::{
 
 mod buffer_ring;
 mod capture;
+#[doc(hidden)]
 pub mod glyph_cache;
+#[doc(hidden)]
 pub mod gpu_instances;
 mod gpu_resources;
+#[doc(hidden)]
 pub mod image_atlas;
+#[doc(hidden)]
 pub mod pipeline;
 pub mod post;
 pub mod probe;
+#[doc(hidden)]
 pub mod row_cache;
 mod texture_upload;
 mod warmup;
