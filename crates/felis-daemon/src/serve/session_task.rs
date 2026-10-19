@@ -644,6 +644,7 @@ async fn spawn_task(
         attachments: Vec::new(),
         program_status: session.program_status.snapshot(),
         spawn_cwd: session.spawn_cwd.clone(),
+        terminal_progress: session.terminal_progress,
         sequence,
     }));
     let meta_status_generation = session.program_status.generation();
@@ -1604,6 +1605,7 @@ impl SessionTask {
             idle_ms,
             last_notification,
             program_status: self.session.program_status.reports(),
+            terminal_progress: self.session.terminal_progress,
         }
     }
 
@@ -1929,6 +1931,7 @@ impl SessionTask {
             self.meta_status_generation = status_generation;
             meta.program_status = records;
         }
+        meta.terminal_progress = self.session.terminal_progress;
         meta.rows = rows;
         meta.cols = cols;
         if let Some((epoch, title)) = title {
@@ -3070,6 +3073,7 @@ impl SessionTask {
             attachments: Vec::new(),
             program_status: Vec::new(),
             spawn_cwd: None,
+            terminal_progress: None,
             sequence: std::num::NonZeroU64::MIN,
         }));
         Self {
@@ -7030,6 +7034,60 @@ mod tests {
         assert_eq!(listed_status(&task), status(&[("ab", "done")]));
     }
 
+    fn listed_progress(task: &SessionTask) -> felis_vt::progress::ProgressReport {
+        task.meta.lock().unwrap().terminal_progress
+    }
+
+    const fn progress(
+        state: felis_vt::progress::ProgressState,
+        value: Option<u8>,
+    ) -> felis_vt::progress::Progress {
+        felis_vt::progress::Progress { state, value }
+    }
+
+    /// Each report replaces the last whole, and the session keeps it
+    /// across screen switches, DECSTR, a continuation prompt and a
+    /// detach.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn terminal_progress_reaches_the_roster_and_is_replaced_whole() {
+        use felis_vt::progress::ProgressState;
+        let mut task = SessionTask::for_tests(session_with("read _x"));
+        let (win, _rx) = attach_sub(&mut task, false);
+        write_to_grid(&task, b"\x1b]9;4;2;71\x1b\\");
+        task.drive_cycle().expect("drive");
+        assert_eq!(
+            listed_progress(&task),
+            Some(progress(ProgressState::Error, Some(71)))
+        );
+
+        write_to_grid(
+            &task,
+            b"\x1b]9;4;4\x07\x1b[?1049h\x1b[!p\x1b]133;A;k=s\x07\x1b[?1049l",
+        );
+        task.drive_cycle().expect("drive");
+        assert_eq!(
+            listed_progress(&task),
+            Some(progress(ProgressState::Paused, None))
+        );
+
+        task.remove_sub(win);
+        task.refresh_meta();
+        assert_eq!(
+            listed_progress(&task),
+            Some(progress(ProgressState::Paused, None))
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_clear_ris_or_primary_prompt_start_clears_terminal_progress() {
+        for clear in [&b"\x1b]9;4;0\x07"[..], b"\x1bc", b"\x1b]133;A\x07"] {
+            let mut task = SessionTask::for_tests(session_with("read _x"));
+            write_to_grid(&task, &[&b"\x1b]9;4;1;50\x07"[..], clear].concat());
+            task.drive_cycle().expect("drive");
+            assert_eq!(listed_progress(&task), None, "{clear:?}");
+        }
+    }
+
     /// The detection reply is written to the child with nobody
     /// attached.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -7103,6 +7161,7 @@ mod tests {
             attachments: Vec::new(),
             sequence: std::num::NonZeroU64::MIN,
             spawn_cwd: None,
+            terminal_progress: None,
             program_status: (0..records)
                 .map(|i| felis_protocol::messages::ProgramStatusRecord {
                     id: format!("r{i}"),
@@ -7279,6 +7338,7 @@ mod tests {
                 attachments: Vec::new(),
                 program_status: Vec::new(),
                 spawn_cwd: None,
+                terminal_progress: None,
                 sequence: std::num::NonZeroU64::MIN,
             })),
         };
@@ -7449,6 +7509,7 @@ mod tests {
                 attachments: Vec::new(),
                 program_status: Vec::new(),
                 spawn_cwd: None,
+                terminal_progress: None,
                 sequence: std::num::NonZeroU64::MIN,
             })),
         };

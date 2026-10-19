@@ -213,6 +213,7 @@ roster; `sessions info` answers a single session object beside `"v"`. Both carry
 | `exited`            | boolean          | omitted when false; `true` marks a session in its post-exit grace  |
 | `attachments`       | array of objects | always, empty when no window is attached                           |
 | `program_status`    | array of objects | always, empty when no program reported an OSC 7501 status          |
+| `terminal_progress` | object           | omitted when the session holds no `OSC 9 ; 4` progress             |
 
 `last_notification` carries `body` (string), `urgency` (`low`, `normal`, or `critical`) and `age_seconds` (number) on
 every occurrence, and `title` (string) except for a body-only notification. Each `attachments[]` entry carries `id` (a
@@ -220,7 +221,8 @@ decimal **string**, the spelling `--attachment` accepts), `attached_at` (RFC 333
 three always present. Each `program_status[]` entry always carries `id` (string, `""` for the root record) and `state`
 (string). It carries `kind` (string), `progress` (number, `0` to `100`), `app`, `title` and `msg` (strings) when the
 record has them. A `state` or `kind` not listed in [program-status.md](protocols/program-status.md) is a newer value,
-not an error.
+not an error. `terminal_progress` always carries `state` (string) and carries `value` (number, `0` to `100`) when the
+report had one; a `state` not listed in [terminal-progress.md](protocols/terminal-progress.md) is a newer value.
 
 The mutating verbs answer a point result naming what they reached:
 
@@ -282,8 +284,9 @@ and `list` exits `0` on an empty roster.
 - **`list`**: `--tag <t>` filters sessions by tag. A session in exit grace is marked `(exited)` or `"exited":true`.
 - **`info <id>`**: displays geometry, idle time, title, cwd, the directory the child was started in (`spawned:` /
   `"spawn_cwd"`), foreground command, exit code from OSC 133 `D` marks (`exit:` / `"last_exit_code"`), active window
-  attachments (`window:` / `"attachments"`), and OSC 7501 program-status records (`status:` / `"program_status"`). A
-  `status:` line reads `<id> <state>[ <kind>][ <progress>%][ [<app>]][
+  attachments (`window:` / `"attachments"`), OSC 7501 program-status records (`status:` / `"program_status"`), and the
+  last `OSC 9 ; 4` progress (`progress:` / `"terminal_progress"`), read as `<state>[ <value>%]`. A `status:` line reads
+  `<id> <state>[ <kind>][ <progress>%][ [<app>]][
   <title>][: <msg>]`, the root record as `(root)`, with bidirectional-text and control characters in producer text spelled `<U+XXXX>`; for example
   `status:   (root) blocked question 50% [mytool]: Which branch?`.
 - **`spawn`**: `--tag <t>` sets initial tags (up to 32 tags of 128 bytes). A local spawn's child environment starts from

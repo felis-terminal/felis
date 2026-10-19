@@ -8912,16 +8912,17 @@ proptest::proptest! {
 
 /// PTY EOF expires working and blocked records once the child's last
 /// output is applied: the `done` written just before `exit` stays, and
-/// the session lists it through the post-exit grace.
+/// the session lists it through the post-exit grace. EOF clears no
+/// terminal progress.
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn pty_eof_expires_transient_records_after_the_final_report() {
+async fn pty_eof_expires_transient_records_and_keeps_progress_after_the_final_report() {
     let tmp = private_dir();
     let path = tmp.path().join("daemon.sock");
     let pool = Arc::new(Mutex::new(SessionPool::new()));
     let factory = shell_factory(concat!(
         r"printf '\033]7501;id=w:state=working\033\\\033]7501;id=b:state=blocked\007",
-        r"\033]7501;id=i:state=idle\007\033]7501;state=done\033\\'; exit 0",
+        r"\033]7501;id=i:state=idle\007\033]7501;state=done\033\\\033]9;4;2;71\007'; exit 0",
     ));
     let caps = DaemonCaps {
         idle: IdlePolicy {
@@ -8950,9 +8951,16 @@ async fn pty_eof_expires_transient_records_after_the_final_report() {
                 .map(|r| (r.id.clone(), r.state.clone()))
                 .collect()
         });
-        if meta.as_ref().is_some_and(|meta| meta.exited)
+        if let Some(meta) = meta.as_ref().filter(|meta| meta.exited)
             && ids.as_ref().is_some_and(|ids| ids.len() == 2)
         {
+            assert_eq!(
+                meta.terminal_progress,
+                Some(felis_vt::progress::Progress {
+                    state: felis_vt::progress::ProgressState::Error,
+                    value: Some(71),
+                })
+            );
             break ids.unwrap_or_default();
         }
         assert!(

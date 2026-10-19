@@ -104,6 +104,8 @@ Protocols:
 - [Notifications](reference/protocols/notifications.md) — OSC 9 / 777 / 99 wire grammars and the conformance subset.
 - [Program status](reference/protocols/program-status.md) — the OSC 7501 report and detection grammar, how long a record
   lives, and the `program_status` field on `felis sessions` and IPC.
+- [Terminal progress](reference/protocols/terminal-progress.md) — the `OSC 9 ; 4` decoding rules, how long a progress
+  lasts, and the `terminal_progress` field on `felis sessions` and IPC.
 - [Key encoding](reference/protocols/key-encoding.md) — the PTY-bound byte encodings: Kitty keyboard protocol, legacy
   fallback, mouse reporting, bracketed paste.
 
@@ -168,6 +170,8 @@ Protocols:
 - [Notifications design](explanation/protocols/notifications.md) — why felis relays instead of acting.
 - [Program status design](explanation/protocols/program-status.md) — why felis keeps OSC 7501 records, draws nothing,
   and ships them in an open shape.
+- [Terminal progress design](explanation/protocols/terminal-progress.md) — why felis relays `OSC 9 ; 4` to agents
+  without drawing it, apart from OSC 7501, and with no timer.
 
 Engineering and verification:
 

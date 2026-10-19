@@ -73,8 +73,8 @@ Prompt expiry needs a shell that marks its prompts ([Mark shell prompts](../../h
 those marks, a `working` or `blocked` record stays while the shell lives, so a program should report `done`, `error`, or
 `clear` on every exit path, an interrupt included.
 
-`OSC 9 ; 4` progress is not mapped to a record; it stays
-[consumed without effect](vt-compliance.md#consumed-without-effect).
+`OSC 9 ; 4` progress is not mapped to a record; the session keeps it apart, as its
+[terminal progress](terminal-progress.md).
 
 ## Where records surface
 

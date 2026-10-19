@@ -119,6 +119,9 @@ where
         for record in &session.program_status {
             stdoutln!("status:   {}", status_line(record));
         }
+        if let Some(progress) = &session.terminal_progress {
+            stdoutln!("progress: {}", progress_line(progress));
+        }
         for attachment in &session.attachments {
             stdoutln!(
                 "window:   {} (attached {}){}",
@@ -544,6 +547,15 @@ fn status_line(record: &felis_protocol::messages::ProgramStatusRecord) -> String
     line
 }
 
+/// `<state>[ <value>%]`.
+fn progress_line(progress: &felis_protocol::messages::TerminalProgress) -> String {
+    let state = disarm(&progress.state);
+    match progress.value {
+        Some(value) => format!("{state} {value}%"),
+        None => state,
+    }
+}
+
 /// Spells each UAX #9 explicit-formatting character and the implicit
 /// direction marks (LRM, RLM, ALM) as `<U+XXXX>`, and every other
 /// control character the same way.
@@ -568,7 +580,7 @@ fn disarm(text: &str) -> String {
 mod status_line_tests {
     use felis_protocol::messages::ProgramStatusRecord;
 
-    use super::status_line;
+    use super::{progress_line, status_line};
 
     fn record(id: &str, state: &str) -> ProgramStatusRecord {
         ProgramStatusRecord {
@@ -580,6 +592,20 @@ mod status_line_tests {
             title: None,
             msg: None,
         }
+    }
+
+    #[test]
+    fn a_progress_prints_its_state_and_any_value() {
+        use felis_protocol::messages::TerminalProgress;
+        let progress = |state: &str, value| TerminalProgress {
+            state: state.into(),
+            value,
+        };
+        assert_eq!(progress_line(&progress("error", Some(71))), "error 71%");
+        assert_eq!(
+            progress_line(&progress("indeterminate", None)),
+            "indeterminate"
+        );
     }
 
     #[test]

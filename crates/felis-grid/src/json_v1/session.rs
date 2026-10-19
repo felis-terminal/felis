@@ -9,7 +9,7 @@ use felis_protocol::codec::EitherHalf;
 use felis_protocol::messages::{
     AttachFailure, AttachRefusal, AttachTarget, Attachment, CreateFailure, Directed as _,
     Notification, ProgramStatusRecord, SessionInfo, SessionNotification, SessionToClientMsg,
-    SessionToDaemonMsg, SpawnArgs, Urgency,
+    SessionToDaemonMsg, SpawnArgs, TerminalProgress, Urgency,
 };
 
 use super::JsonError;
@@ -155,6 +155,18 @@ json_dto! {
         /// Absent from an object written before the key existed.
         #[serde(default)]
         pub spawn_cwd: Option<String>,
+        /// Absent from an object written before the key existed.
+        #[serde(default)]
+        pub terminal_progress: Option<TerminalProgressJson>,
+    }
+
+    /// One `OSC 9 ; 4` progress report. `state` is an open vocabulary.
+    pub struct TerminalProgressJson {
+        #[serde(default)]
+        pub state: String,
+        #[serde(default)]
+        #[cfg_attr(feature = "schema", schemars(range(max = 100)))]
+        pub value: Option<u8>,
     }
 
     /// Session-family frames in their v1 form.
@@ -221,6 +233,29 @@ impl TryFrom<ProgramStatusRecordJson> for ProgramStatusRecord {
             app: r.app,
             title: r.title,
             msg: r.msg,
+        })
+    }
+}
+
+impl From<TerminalProgress> for TerminalProgressJson {
+    fn from(p: TerminalProgress) -> Self {
+        Self {
+            state: p.state,
+            value: p.value,
+        }
+    }
+}
+
+impl TryFrom<TerminalProgressJson> for TerminalProgress {
+    type Error = JsonError;
+
+    fn try_from(p: TerminalProgressJson) -> Result<Self, Self::Error> {
+        if p.value.is_some_and(|v| v > 100) {
+            return Err(JsonError::field("value", "a percentage is at most 100"));
+        }
+        Ok(Self {
+            state: p.state,
+            value: p.value,
         })
     }
 }
@@ -460,6 +495,7 @@ impl TryFrom<SessionInfo> for SessionInfoJson {
             sequence: info.sequence.get(),
             program_status: info.program_status.into_iter().map(Into::into).collect(),
             spawn_cwd: info.spawn_cwd,
+            terminal_progress: info.terminal_progress.map(Into::into),
         })
     }
 }
@@ -493,6 +529,7 @@ impl TryFrom<SessionInfoJson> for SessionInfo {
                 .map(TryInto::try_into)
                 .collect::<Result<Vec<_>, JsonError>>()?,
             spawn_cwd: info.spawn_cwd,
+            terminal_progress: info.terminal_progress.map(TryInto::try_into).transpose()?,
         })
     }
 }

@@ -21,7 +21,7 @@ use felis_protocol::messages::{
     AttachFailure, AttachRefusal, Attachment, ClipboardSelection, ClipboardWrite, ConnToClientMsg,
     CreateFailure, GridDims, GridMsg, ImageFormat, ImageMsg, ImageTarget, InputMsg, Key, KeyEvent,
     KeyEventKind, KeyLocation, KeyMods, NamedKey, ProgramStatusRecord, SessionInfo,
-    SessionToClientMsg, SourceRect,
+    SessionToClientMsg, SourceRect, TerminalProgress,
 };
 use felis_protocol::{MessageKind, RowPayload, codec};
 use serde_json::{Value, json};
@@ -87,6 +87,10 @@ fn session_info() -> SessionInfo {
             title: Some("tests".to_owned()),
             msg: Some("allow network access?".to_owned()),
         }],
+        terminal_progress: Some(TerminalProgress {
+            state: "error".to_owned(),
+            value: Some(71),
+        }),
     }
 }
 
@@ -311,6 +315,23 @@ fn a_session_row_without_program_status_keys_still_decodes() {
     assert_eq!(info.program_status[0].state, "");
 }
 
+#[test]
+fn a_session_row_without_terminal_progress_still_decodes() {
+    let (_, kind, body) = cases().remove(4);
+    let mut value = json_v1::encode(kind, &body).expect("the frame encodes");
+    value["msg"]["info"]
+        .as_object_mut()
+        .expect("an info object")
+        .remove("terminal_progress")
+        .expect("the writer emits the key");
+    let (_, decoded) = json_v1::decode(&value).expect("a row without the key decodes");
+    let SessionToClientMsg::Attached { info } = codec::decode(&decoded).expect("a session frame")
+    else {
+        panic!("the case is an attach ack");
+    };
+    assert_eq!(info.terminal_progress, None);
+}
+
 /// A new kind, variant or required field is `felis_json: 2`, and a v1
 /// reader refuses it on the version alone.
 #[test]
@@ -416,6 +437,9 @@ fn what_the_reader_refuses_the_schema_refuses() {
     let mut progress_past_100 = json_v1::encode(kind, &body).expect("the frame encodes");
     progress_past_100["msg"]["info"]["program_status"][0]["progress"] = json!(101);
 
+    let mut terminal_progress_past_100 = json_v1::encode(kind, &body).expect("the frame encodes");
+    terminal_progress_past_100["msg"]["info"]["terminal_progress"]["value"] = json!(101);
+
     let whole_fraction = row_delta_with(&row_cells(&[grapheme(b'x')], &sized_cell(1, 1)));
 
     let mut too_many_graphemes = row_delta_with(&row_cells(
@@ -429,6 +453,10 @@ fn what_the_reader_refuses_the_schema_refuses() {
         ("a control byte in an ascii grapheme", control_byte),
         ("an uppercase session id", uppercase_id),
         ("a program-status progress past 100", progress_past_100),
+        (
+            "a terminal progress value past 100",
+            terminal_progress_past_100,
+        ),
         ("a function key past F35", past_the_last_f_key),
         ("an image id past u32", image_id_past_u32),
         ("a fraction that is not below one", whole_fraction),

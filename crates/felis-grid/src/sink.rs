@@ -730,7 +730,7 @@ impl Sink for Grid {
             // OSC 9 / 99 / 777 (docs/reference/protocols/notifications.md)
             // are handled ahead of the single-string group so a bare
             // `OSC 9 ST` still reaches the rejecting parser.
-            9 => self.dispatch_osc9(body),
+            9 => self.dispatch_osc9(body, end),
             99 => self.dispatch_osc99(body),
             7501 => self.dispatch_osc7501(body, end),
             777 => self.dispatch_osc777(body),

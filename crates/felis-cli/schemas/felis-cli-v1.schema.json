@@ -1193,6 +1193,17 @@
           },
           "type": "array"
         },
+        "terminal_progress": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TerminalProgressObject"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The last `OSC 9 ; 4` progress the program reported and has not\ncleared."
+        },
         "title": {
           "type": [
             "string",
@@ -1328,6 +1339,27 @@
       "required": [
         "id",
         "tags"
+      ],
+      "type": "object"
+    },
+    "TerminalProgressObject": {
+      "description": "One `OSC 9 ; 4` report. `state` is an open vocabulary, as\n[`ProgramStatusObject::state`] is.",
+      "properties": {
+        "state": {
+          "type": "string"
+        },
+        "value": {
+          "format": "uint8",
+          "maximum": 100,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "state"
       ],
       "type": "object"
     },

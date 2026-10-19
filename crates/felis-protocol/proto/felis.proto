@@ -768,6 +768,21 @@ message SessionInfo {
     minor: 2
     skippable: true
   }];
+  // The last ConEmu OSC 9;4 progress a program reported and has not
+  // cleared. Absent when none is held; a pre-minor-2 reader skips it.
+  TerminalProgress terminal_progress = 15 [(felis.v1.field_since) = {
+    minor: 2
+    skippable: true
+  }];
+}
+
+// One OSC 9;4 progress report. `state` is an open vocabulary ("normal",
+// "error", "indeterminate", "paused" today): a reader treats a value it
+// does not know as unknown rather than refusing the row.
+message TerminalProgress {
+  string state = 1;
+  // 0..=100; a larger value is refused at decode.
+  optional uint32 value = 2;
 }
 
 // One OSC 7501 program-status record: the keys of the last report that

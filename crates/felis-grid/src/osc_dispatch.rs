@@ -369,19 +369,36 @@ impl Grid {
     }
 
     /// OSC 9, iTerm2 notification. A `ConEmu` `OSC 9 ; <digit> ; …`
-    /// subcommand is filtered out: a bare-digit first field is never a
-    /// human message (`docs/reference/protocols/notifications.md`).
-    pub(crate) fn dispatch_osc9(&mut self, body: &[u8]) {
+    /// subcommand is never a human message
+    /// (`docs/reference/protocols/notifications.md`): `9 ; 4` is progress
+    /// (`docs/reference/protocols/terminal-progress.md`), the others are
+    /// consumed.
+    pub(crate) fn dispatch_osc9(&mut self, body: &[u8], end: felis_vt::OscEnd) {
         let (_, message) = split_osc_first(body);
         if let Some(message) = message {
             let (first, rest) = split_osc_first(message);
-            if rest.is_some() && first.len() == 1 && first[0].is_ascii_digit() {
+            if let Some(rest) = rest
+                && first.len() == 1
+                && first[0].is_ascii_digit()
+            {
+                if first == b"4" && end != felis_vt::OscEnd::Interrupted {
+                    self.dispatch_progress(rest);
+                }
                 return;
             }
         }
         if let Some(n) = felis_vt::notification::parse_osc9(body) {
             self.relay_notification(n);
         }
+    }
+
+    fn dispatch_progress(&mut self, fields: &[u8]) {
+        let Some(report) = felis_vt::progress::parse_progress(fields) else {
+            return;
+        };
+        self.prompt_expiry_owed |= report.is_some();
+        self.pty_effects.push(PtyEffect::TerminalProgress(report));
+        self.yield_pending |= self.pty_effects.status_budget_spent();
     }
 
     /// OSC 777, rxvt-unicode `notify ; title ; body`.

@@ -16,10 +16,11 @@ pub const APC_OUTBOX_BYTES: usize = 1024 * 1024;
 
 const _: () = assert!(APC_OUTBOX_BYTES >= felis_vt::APC_BUFFER_LIMIT);
 
-/// [`ProgramStatus`](crate::PtyEffect::ProgramStatus) and
-/// [`PromptStarted`](crate::PtyEffect::PromptStarted) effects buffered
-/// between drains before the parse yields. Neither is ever dropped: the
-/// daemon's records must match what the producer sent.
+/// [`ProgramStatus`](crate::PtyEffect::ProgramStatus),
+/// [`PromptStarted`](crate::PtyEffect::PromptStarted) and
+/// [`TerminalProgress`](crate::PtyEffect::TerminalProgress) effects
+/// buffered between drains before the parse yields. None is ever dropped:
+/// the daemon's state must match what the producer sent.
 pub const STATUS_OUTBOX_YIELD: usize = 64;
 
 #[derive(Debug, Clone, Default)]
@@ -50,7 +51,7 @@ impl PtyEffectQueue {
         }
         if matches!(
             effect,
-            PtyEffect::ProgramStatus(_) | PtyEffect::PromptStarted
+            PtyEffect::ProgramStatus(_) | PtyEffect::PromptStarted | PtyEffect::TerminalProgress(_)
         ) {
             self.status_len += 1;
         }
@@ -216,7 +217,9 @@ impl<'de> serde::Deserialize<'de> for PtyEffectQueue {
             .filter(|effect| {
                 matches!(
                     effect,
-                    PtyEffect::ProgramStatus(_) | PtyEffect::PromptStarted
+                    PtyEffect::ProgramStatus(_)
+                        | PtyEffect::PromptStarted
+                        | PtyEffect::TerminalProgress(_)
                 )
             })
             .count();

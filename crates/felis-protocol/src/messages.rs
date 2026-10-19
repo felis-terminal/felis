@@ -44,7 +44,8 @@ pub use ops::{
     Attachment, InfoOutcome, Limit, MAX_SESSION_TAGS, MAX_TAG_BYTES, OpsToClientMsg,
     OpsToDaemonMsg, ProgramStatusRecord, ReportScope, ResolvedId, ResourceKind, ResourceReport,
     ResourceUnit, SessionInfo, SessionNotification, SpawnOutcome, StopMode, StopOutcome,
-    SubjectKind, SwitchDenied, SwitchScope, SwitchTarget, UpgradeOutcome, UpgradeRefusal,
+    SubjectKind, SwitchDenied, SwitchScope, SwitchTarget, TerminalProgress, UpgradeOutcome,
+    UpgradeRefusal,
 };
 pub use push::PushMsg;
 pub use region::{RegionPosition, RegionToClientMsg, RegionToDaemonMsg};

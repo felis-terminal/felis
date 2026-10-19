@@ -2485,6 +2485,18 @@
           },
           "type": "array"
         },
+        "terminal_progress": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TerminalProgressJson"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Absent from an object written before the key existed."
+        },
         "title": {
           "type": [
             "string",
@@ -3179,6 +3191,26 @@
           "type": "object"
         }
       ]
+    },
+    "TerminalProgressJson": {
+      "description": "One `OSC 9 ; 4` progress report. `state` is an open vocabulary.",
+      "properties": {
+        "state": {
+          "default": "",
+          "type": "string"
+        },
+        "value": {
+          "default": null,
+          "format": "uint8",
+          "maximum": 100,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
     },
     "ThemeActionJson": {
       "description": "What a [`GridJson::ThemeColor`] does to its channel.",

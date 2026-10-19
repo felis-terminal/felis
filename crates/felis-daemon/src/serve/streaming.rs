@@ -140,6 +140,7 @@ fn replay_effects(
                 );
                 session.saved_screens.alternate = None;
                 session.program_status.reset();
+                session.terminal_progress = None;
             }
             // Parked for `session_task::fan_out_grid_state`, the only consumer
             // that knows each shadow's damage.
@@ -189,7 +190,11 @@ fn replay_effects(
             PtyEffect::ProgramStatus(ProgramStatusEffect::Clear { id }) => {
                 session.program_status.clear(&id);
             }
-            PtyEffect::PromptStarted => session.program_status.expire_transient(),
+            PtyEffect::PromptStarted => {
+                session.program_status.expire_transient();
+                session.terminal_progress = None;
+            }
+            PtyEffect::TerminalProgress(report) => session.terminal_progress = report,
         }
     }
 }
@@ -1432,6 +1437,7 @@ mod tests {
                 attachments: Vec::new(),
                 sequence: std::num::NonZeroU64::MIN,
                 spawn_cwd: None,
+                terminal_progress: None,
                 program_status: (0..records)
                     .map(|i| felis_protocol::messages::ProgramStatusRecord {
                         id: format!("r{i}"),

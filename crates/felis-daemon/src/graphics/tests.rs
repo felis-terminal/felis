@@ -1835,6 +1835,7 @@ where
         shm_segments: ShmDeferral::default(),
         quiescer,
         spawn_cwd: None,
+        terminal_progress: None,
     };
     let bodies = prep(&mut session);
     let cursor = session.lock_core().grid.cursor();

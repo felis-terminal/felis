@@ -42,6 +42,10 @@
       "tags": [
         "work"
       ],
+      "terminal_progress": {
+        "state": "error",
+        "value": 71
+      },
       "title": "zsh"
     },
     "type": "attached"

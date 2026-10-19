@@ -195,10 +195,10 @@ async fn an_upgrade_keeps_the_screen_a_session_drew() {
     assert_eq!(sessions[0].title.as_deref(), Some("kept-title"));
 }
 
-/// A program that reported it is blocked is still listed as blocked
-/// after an upgrade: it has no reason to report again.
+/// A program that reported it is blocked, or how far it has got, is
+/// still listed so after an upgrade: it has no reason to report again.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn an_upgrade_keeps_the_program_status_a_session_reported() {
+async fn an_upgrade_keeps_the_program_status_and_progress_a_session_reported() {
     let tmp = private_dir();
     let socket = tmp.path().join("daemon.sock");
     let _daemon = spawn_real_daemon(tmp.path(), &socket);
@@ -209,7 +209,8 @@ async fn an_upgrade_keeps_the_program_status_a_session_reported() {
         command: "/bin/sh".to_owned(),
         args: vec![
             "-c".to_owned(),
-            "printf '\\033]7501;state=blocked:kind=question\\033\\\\'; exec sleep 600".to_owned(),
+            "printf '\\033]7501;state=blocked:kind=question\\033\\\\\\033]9;4;1;40\\007'; exec sleep 600"
+                .to_owned(),
         ],
         ..SpawnArgs::default()
     })
@@ -218,8 +219,11 @@ async fn an_upgrade_keeps_the_program_status_a_session_reported() {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     let before = loop {
         let sessions = conn.list_sessions().await.unwrap();
-        if !sessions[0].program_status.is_empty() {
-            break sessions[0].program_status.clone();
+        if !sessions[0].program_status.is_empty() && sessions[0].terminal_progress.is_some() {
+            break (
+                sessions[0].program_status.clone(),
+                sessions[0].terminal_progress.clone(),
+            );
         }
         assert!(
             tokio::time::Instant::now() < deadline,
@@ -227,7 +231,8 @@ async fn an_upgrade_keeps_the_program_status_a_session_reported() {
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
     };
-    assert_eq!(before[0].state, "blocked");
+    assert_eq!(before.0[0].state, "blocked");
+    assert_eq!(before.1.as_ref().and_then(|p| p.value), Some(40));
 
     let mut conn = connect(&socket, Offer::ops()).await.unwrap();
     let outcome = conn.daemon_upgrade(common::daemon_bin()).await.unwrap();
@@ -237,7 +242,13 @@ async fn an_upgrade_keeps_the_program_status_a_session_reported() {
 
     let mut after = connect(&socket, Offer::ops()).await.unwrap();
     let sessions = after.list_sessions().await.unwrap();
-    assert_eq!(sessions[0].program_status, before);
+    assert_eq!(
+        (
+            sessions[0].program_status.clone(),
+            sessions[0].terminal_progress.clone()
+        ),
+        before
+    );
 }
 
 /// A successor that cannot answer the probe refuses the upgrade, and

@@ -685,6 +685,21 @@ pub(crate) struct SessionObject {
     pub(crate) attachments: Vec<AttachmentObject>,
     /// OSC 7501 records, sorted by id. Always present, like `tags`.
     pub(crate) program_status: Vec<ProgramStatusObject>,
+    /// The last `OSC 9 ; 4` progress the program reported and has not
+    /// cleared.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) terminal_progress: Option<TerminalProgressObject>,
+}
+
+/// One `OSC 9 ; 4` report. `state` is an open vocabulary, as
+/// [`ProgramStatusObject::state`] is.
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub(crate) struct TerminalProgressObject {
+    pub(crate) state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(range(max = 100)))]
+    pub(crate) value: Option<u8>,
 }
 
 /// One OSC 7501 record, every value as the program sent it. `state` and
@@ -763,6 +778,13 @@ impl SessionObject {
                     msg: r.msg.clone(),
                 })
                 .collect(),
+            terminal_progress: s
+                .terminal_progress
+                .as_ref()
+                .map(|p| TerminalProgressObject {
+                    state: p.state.clone(),
+                    value: p.value,
+                }),
         }
     }
 }
