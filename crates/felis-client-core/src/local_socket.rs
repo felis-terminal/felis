@@ -26,6 +26,7 @@ pub enum SocketSource {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct LocalSocket {
     pub path: PathBuf,
     pub source: SocketSource,

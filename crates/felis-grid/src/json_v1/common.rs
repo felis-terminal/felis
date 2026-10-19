@@ -6,6 +6,7 @@ use super::JsonError;
 
 json_dto! {
     /// A 24-bit color, as an object rather than the domain tuple.
+    #[non_exhaustive]
     pub struct RgbJson {
         pub r: u8,
         pub g: u8,
@@ -13,6 +14,7 @@ json_dto! {
     }
 
     /// Authoritative grid geometry (`felis_protocol::messages::GridDims`).
+    #[non_exhaustive]
     pub struct GridDimsJson {
         pub rows: u16,
         pub cols: u16,
@@ -23,6 +25,7 @@ json_dto! {
     }
 
     /// Geometry a client asks for, before the daemon admits it.
+    #[non_exhaustive]
     pub struct RequestedDimsJson {
         pub rows: u32,
         pub cols: u32,
@@ -34,6 +37,7 @@ json_dto! {
 
     /// Opaque history point of a browsing viewport offset; a client
     /// echoes it back unchanged.
+    #[non_exhaustive]
     pub struct ViewportAnchorJson {
         pub pushed: u64,
         pub generation: u64,

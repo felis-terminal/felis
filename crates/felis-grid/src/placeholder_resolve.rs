@@ -10,6 +10,7 @@ use crate::{Color, Grapheme, Grid, ScreenBuffer, images::ImageId};
 /// of image `image_id`, sized by its virtual placement `placement_id`
 /// (`0`: the image's first).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct PlaceholderCell {
     pub row: u16,
     pub col: u16,

@@ -54,23 +54,27 @@ json_dto! {
 
     /// An instant on the daemon's clock, as seconds and nanoseconds
     /// since the Unix epoch.
+    #[non_exhaustive]
     pub struct TimestampJson {
         pub unix_secs: u64,
         #[cfg_attr(feature = "schema", schemars(range(max = 999_999_999)))]
         pub unix_nanos: u32,
     }
 
+    #[non_exhaustive]
     pub struct EnvPairJson {
         pub name: String,
         pub value: String,
     }
 
     /// One entry of a child's base environment, as raw platform bytes.
+    #[non_exhaustive]
     pub struct EnvBytesJson {
         pub name: Vec<u8>,
         pub value: Vec<u8>,
     }
 
+    #[non_exhaustive]
     pub struct SpawnArgsJson {
         /// Empty means the daemon's default (`$SHELL`).
         pub command: String,
@@ -84,18 +88,21 @@ json_dto! {
         pub tags: Vec<String>,
     }
 
+    #[non_exhaustive]
     pub struct NotificationJson {
         pub title: Option<String>,
         pub body: String,
         pub urgency: UrgencyJson,
     }
 
+    #[non_exhaustive]
     pub struct SessionNotificationJson {
         pub notification: NotificationJson,
         pub age_seconds: u64,
     }
 
     /// One live window attachment.
+    #[non_exhaustive]
     pub struct AttachmentJson {
         pub id: u64,
         pub attached_at: TimestampJson,
@@ -103,6 +110,7 @@ json_dto! {
     }
 
     /// One configured palette slot of a [`SessionJson::ConfigureTheme`].
+    #[non_exhaustive]
     pub struct ConfiguredPaletteEntryJson {
         pub index: u8,
         pub rgb: super::common::RgbJson,
@@ -111,6 +119,7 @@ json_dto! {
     /// One OSC 7501 program-status record. `state` and `kind` are open
     /// vocabularies; every key may be absent from a later writer's
     /// object.
+    #[non_exhaustive]
     pub struct ProgramStatusRecordJson {
         /// `""` is the root record.
         #[serde(default)]
@@ -131,6 +140,7 @@ json_dto! {
     }
 
     /// One roster row.
+    #[non_exhaustive]
     pub struct SessionInfoJson {
         /// The full 32-digit lowercase hex rendering.
         #[cfg_attr(feature = "schema", schemars(regex(pattern = SESSION_ID_PATTERN)))]

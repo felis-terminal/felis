@@ -119,6 +119,7 @@ pub enum DaemonPreface {
 
 /// The accept this build answers a served major with: status 0.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct DaemonAccept {
     /// The agreed protocol major.
     pub major: u16,
@@ -150,6 +151,7 @@ impl From<DaemonAccept> for DaemonPreface {
 
 /// The refusal this build answers an unserved major with: status 1.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct DaemonRefuse {
     /// Lowest major the daemon serves.
     pub min_major: u16,

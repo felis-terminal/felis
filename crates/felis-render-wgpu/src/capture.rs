@@ -20,6 +20,7 @@ const COPY_ROW_ALIGNMENT: u32 = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
 const SUPPORTED_TEXEL_BYTES: u32 = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct FrameCapture {
     /// Framebuffer width in physical pixels.
     pub width: u32,

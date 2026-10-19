@@ -56,6 +56,7 @@ impl Drop for StagedRegion {
 }
 
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct TransientSpawn {
     pub args: SpawnArgs,
     /// `None` for `run`, which is fed no region.

@@ -21,6 +21,7 @@ json_dto! {
     /// One dirty row of a [`GridJson::RowDelta`]. The cells ride the
     /// row codec's structural form (`docs/reference/row-codec.md`),
     /// never the packed bytes the socket carries.
+    #[non_exhaustive]
     pub struct RowJson {
         /// Zero-based.
         pub row: u16,
@@ -94,6 +95,7 @@ json_dto! {
     }
 
     /// One `OSC 52` write request.
+    #[non_exhaustive]
     pub struct ClipboardWriteJson {
         /// Bit 0 is the clipboard, bit 1 X11 PRIMARY
         /// (`docs/reference/ipc.md`).

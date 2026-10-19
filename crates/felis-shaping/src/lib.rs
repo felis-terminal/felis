@@ -542,6 +542,7 @@ fn map_face_file(path: &std::path::Path) -> Result<memmap2::Mmap, ShapingError> 
 
 /// A family name an installed face carries, with what its faces declare.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct InstalledFamily {
     pub name: String,
     /// Every face maps all of printable ASCII to glyphs of one advance.
@@ -551,6 +552,7 @@ pub struct InstalledFamily {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[non_exhaustive]
 pub struct FaceStyle {
     pub italic: bool,
     /// On the OpenType 1–1000 scale.
@@ -632,6 +634,7 @@ impl Default for StyleFaces<'_> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct StackDescription {
     pub primary: [String; 4],
     pub fallbacks: Vec<String>,
@@ -2030,6 +2033,7 @@ pub struct ShapedGlyph {
 /// [`FontStack::resolve_styled_index`] handle the renderer packs into
 /// [`SizingKey::with_font_id`].
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct ClusterShaping {
     pub font_id: usize,
     pub glyphs: Vec<ShapedGlyph>,

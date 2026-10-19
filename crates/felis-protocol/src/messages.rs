@@ -159,6 +159,7 @@ impl core::fmt::Display for GeometryAxis {
 /// rejects rather than clamps ([`RequestedDims::admit`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[error("{axis} {value} is outside the supported range {min}..={max}")]
+#[non_exhaustive]
 pub struct GeometryRejection {
     /// Which dimension was out of range.
     pub axis: GeometryAxis,

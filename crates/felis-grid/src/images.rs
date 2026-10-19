@@ -368,6 +368,7 @@ pub type Evicted = Vec<ImageId>;
 /// [`ImageStore::push_frame`]'s result: the new frame's 0-based index,
 /// plus whatever the store dropped to fit it.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct PushedFrame {
     pub index: usize,
     pub evicted: Evicted,

@@ -492,6 +492,7 @@ enum ViewportRow {
 
 /// One composed-view row, resolved through the viewport seam exactly
 /// once. See [`Grid::viewport_row`].
+#[non_exhaustive]
 pub struct ViewportRowView<'a> {
     /// The row's cells in column order, occupancy-clipped: columns
     /// from `cells.len()` to the grid width are [`Cell::BLANK`].
@@ -945,6 +946,7 @@ pub struct HyperlinkEntry {
     clippy::struct_excessive_bools,
     reason = "a flat mirror of independent terminal mode bits; a bitflags newtype would obscure the per-mode field names the daemon reads"
 )]
+#[non_exhaustive]
 pub struct ModeSnapshot {
     /// `?2004` bracketed paste mirror.
     pub bracketed_paste: bool,
@@ -971,6 +973,7 @@ pub struct ModeSnapshot {
 /// One diff cycle's worth of indexed-palette movement, as
 /// [`Grid::take_palette_dirty`] hands it to the daemon.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct PaletteDeltas {
     /// A whole-table reset fired. Ship it before [`Self::entries`]: a
     /// reset that arrived first must not undo a later set.
@@ -981,6 +984,7 @@ pub struct PaletteDeltas {
 
 /// One index's new state inside a [`PaletteDeltas`] batch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct PaletteEntry {
     pub index: u8,
     /// `Some(rgb)` for an `OSC 4` set, `None` for a per-index reset:

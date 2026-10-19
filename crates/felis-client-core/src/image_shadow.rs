@@ -33,6 +33,7 @@ fn next_generation() -> u64 {
 /// (docs/reference/protocols/kitty-graphics.md "Animation"), so each
 /// frame is a complete pixel buffer.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct ClientFrame {
     pub pixels: Vec<u8>,
     pub complete: bool,
@@ -44,6 +45,7 @@ pub struct ClientFrame {
 /// displayed frame with `ShowFrame`; the client never animates on its
 /// own (docs/reference/protocols/kitty-graphics.md "Animation").
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct ClientImage {
     /// Image width in pixels (Kitty `s=`).
     pub width: u32,

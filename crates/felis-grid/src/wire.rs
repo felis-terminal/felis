@@ -83,6 +83,7 @@ pub enum RowCodecError {
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct DecodedRow {
     pub cells: Vec<Cell>,
     /// The caller installs each sizing into its grid and stamps the

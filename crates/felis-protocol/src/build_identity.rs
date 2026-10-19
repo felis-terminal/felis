@@ -95,6 +95,7 @@ impl fmt::Display for BuildIdentity {
 /// Why a line is not a canonical identity.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("not a build identity (`<version> (<revision>[-dirty])`): {line}")]
+#[non_exhaustive]
 pub struct BuildIdentityParseError {
     pub line: String,
 }
