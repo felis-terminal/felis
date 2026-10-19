@@ -35,9 +35,9 @@ directories = { workspace = true }
 schemars = { workspace = true, optional = true }
 
 [dev-dependencies]
-felis-daemon = { path = "../felis-daemon" }
-felis-transport = { path = "../felis-transport", features = ["test-util"] }
-felis-pty = { path = "../felis-pty" }
+felis-daemon = { workspace = true }
+felis-transport = { workspace = true, features = ["test-util"] }
+felis-pty = { workspace = true }
 insta = { workspace = true }
 tempfile = { workspace = true }
 boon = { workspace = true }

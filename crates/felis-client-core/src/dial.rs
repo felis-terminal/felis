@@ -583,6 +583,8 @@ pub fn reconnector_for_target(
 
 #[cfg(test)]
 mod tests {
+    #![cfg_attr(not(feature = "daemon-tests"), allow(unused))]
+
     use super::*;
 
     #[cfg(unix)]
@@ -894,7 +896,7 @@ mod tests {
     /// The trail names its session outright, so the roster round trip
     /// `Landing::Attach` spends is skipped: a dead entry must cost one
     /// connect and one refusal, not a listing and its own timeout.
-    #[cfg(unix)]
+    #[cfg(all(unix, feature = "daemon-tests"))]
     #[tokio::test]
     async fn an_exact_attach_lands_without_listing_the_roster() {
         use felis_daemon::serve::{SessionFactory, serve_unix_with_factory};

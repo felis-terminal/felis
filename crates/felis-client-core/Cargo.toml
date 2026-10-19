@@ -13,6 +13,10 @@ default = ["native"]
 native = ["dep:tokio", "dep:felis-transport", "dep:directories"]
 # Default-off so shipping binaries stay schemars-free; enabled for schema sync test.
 schema = ["dep:schemars", "felis-protocol/schema"]
+# The tests that serve a real felis-daemon. felis-daemon dev-depends on this
+# crate, so the edge back names `path` alone and cargo package drops it; the
+# self dev-dependency turns this on in the workspace and is dropped with it.
+daemon-tests = []
 
 [dependencies]
 felis-protocol = { workspace = true }
@@ -32,7 +36,7 @@ directories = { workspace = true, optional = true }
 rustix = { workspace = true }
 
 [dev-dependencies]
-felis-transport = { path = "../felis-transport", features = ["test-util"] }
+felis-transport = { workspace = true, features = ["test-util"] }
 tokio = { workspace = true, features = [
   "macros",
   "rt-multi-thread",
@@ -42,8 +46,9 @@ tokio = { workspace = true, features = [
 ] }
 tempfile = { workspace = true }
 felis-daemon = { path = "../felis-daemon" }
-felis-pty = { path = "../felis-pty" }
-felis-vt = { path = "../felis-vt" }
+felis-client-core = { path = ".", features = ["daemon-tests"] }
+felis-pty = { workspace = true }
+felis-vt = { workspace = true }
 insta = { workspace = true }
 proptest = { workspace = true }
 criterion = { workspace = true }
@@ -76,6 +81,10 @@ harness = false
 [[bench]]
 name = "gungraun_gate"
 harness = false
+
+[[test]]
+name = "transient_spawn"
+required-features = ["daemon-tests"]
 
 [lints]
 workspace = true

@@ -24,9 +24,9 @@ foldhash = { workspace = true, optional = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
-felis-shaping = { path = "../felis-shaping", features = ["testing"] }
+felis-shaping = { workspace = true, features = ["testing"] }
 proptest = { workspace = true }
-felis-vt = { path = "../felis-vt" }
+felis-vt = { workspace = true }
 criterion = { workspace = true }
 
 [[bench]]

@@ -1001,6 +1001,7 @@ dependencies = [
  "criterion",
  "dhat",
  "directories",
+ "felis-client-core",
  "felis-daemon",
  "felis-grid",
  "felis-protocol",

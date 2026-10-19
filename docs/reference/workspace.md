@@ -45,7 +45,9 @@ differs from the idealized contracts:
   `felis-cli` tests against `felis-daemon`/`felis-pty`, `felis-client-core` against
   `felis-daemon`/`felis-pty`/`felis-vt`, `felis-daemon` against `felis-client-core`, `felis-pty` against
   `felis-vt`/`felis-grid`, and `felis-render-core` and `felis-render-wgpu` against `felis-vt`. These do not appear in
-  the runtime graph below.
+  the runtime graph below. A published package keeps them, so its tests build against the crates.io releases, except
+  `felis-client-core`'s tests against `felis-daemon`: that edge would close a cycle, and the package leaves those tests
+  out (its `daemon-tests` feature).
 
 felis hand-rolls the VT engine in `felis-vt`: it does **not** depend on `vte`, `alacritty_terminal`, or `libghostty`.
 Those upstreams are read as reference only; the rationale is in [implementation.md](../explanation/implementation.md)
@@ -310,7 +312,8 @@ The same job then runs `tools/release/crates.py check`, which needs crates.io, a
 version is not ready to publish:
 
 1. a `[workspace.dependencies]` entry's `version` differs from that crate's own version, or a member names a felis crate
-   as a normal or build dependency without inheriting that entry, or as a dev-dependency with anything but `path`;
+   without inheriting that entry, except felis-client-core's dev-dependencies on felis-daemon and on itself, which name
+   `path` alone;
 2. `cargo semver-checks` fails for a library, or for felis-daemon's library target, against its newest crates.io
    version: the bump is smaller than the API change requires (for felis-daemon, the bump is the app version's);
 3. `release-plz update` (configured by `release-plz.toml`) would change the tree, that is, a library whose package
@@ -319,7 +322,8 @@ version is not ready to publish:
 A crate with no crates.io version skips 2 and 3. `just release-prepare` runs the same `release-plz update` to make those
 bumps before the tag.
 
-Behind it the tag reruns `nix flake check`, the Cargo suite with clippy and `cargo deny`, the wire gate on its tag path
+Behind it the tag reruns `nix flake check`, the Cargo suite with clippy and `cargo deny` plus `just package-tests`
+(every crate's tests build from its extracted package, against the other felis packages), the wire gate on its tag path
 (`buf breaking` against the newest published final release, [testing.md](testing.md) "Wire compatibility gates"), and
 the Linux frontend smoke, and the release page waits on all of them. The Linux smoke pushes the store path to the niks3
 cache as soon as it builds, and it checks the built binary before it does: `felis version --format json` must report the

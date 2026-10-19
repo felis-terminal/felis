@@ -23,8 +23,8 @@ windows-sys = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "io-util", "time"] }
-felis-vt = { path = "../felis-vt" }
-felis-grid = { path = "../felis-grid" }
+felis-vt = { workspace = true }
+felis-grid = { workspace = true }
 
 [lints]
 workspace = true

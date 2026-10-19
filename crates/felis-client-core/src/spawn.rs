@@ -237,6 +237,7 @@ fn daemon_on_path() -> Option<PathBuf> {
 #[cfg(all(test, unix))]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
+    #![cfg_attr(not(feature = "daemon-tests"), allow(unused))]
 
     use super::*;
     use felis_protocol::preface::{DaemonPreface, PROTOCOL_MAJOR};
@@ -349,6 +350,7 @@ mod tests {
 
         /// A daemon on the socket, standing in for the one a concurrent
         /// launcher's unit started.
+        #[cfg(feature = "daemon-tests")]
         async fn serve_forever(socket: PathBuf) {
             use felis_daemon::{SessionPool, serve::DaemonCaps, serve_unix};
             use std::sync::Arc;
@@ -364,6 +366,7 @@ mod tests {
             );
         }
 
+        #[cfg(feature = "daemon-tests")]
         #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
         async fn a_launcher_that_lost_the_unit_name_waits_for_the_winner_instead_of_forking() {
             let tmp = private_dir();
@@ -793,6 +796,7 @@ mod tests {
     /// The refusal that is *retryable* is still an answer from a live
     /// daemon: spawning a second one over it would fail its bind and
     /// leave the caller with "unreachable" instead of "full".
+    #[cfg(feature = "daemon-tests")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn a_full_daemon_is_reported_at_capacity_instead_of_spawned_over() {
         use felis_daemon::{

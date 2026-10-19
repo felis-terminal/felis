@@ -215,6 +215,11 @@ release-check tag:
     python3 tools/release/verify.py {{ tag }}
     python3 tools/release/crates.py check
 
+# Build every crate's tests from its extracted package, as a crates.io consumer would (release.yml's build job runs this).
+[group('release')]
+package-tests:
+    python3 tools/release/crates.py package-tests
+
 # Bump the library crates that changed since their crates.io release and raise the requirements on them.
 [group('release')]
 release-prepare:
