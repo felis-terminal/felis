@@ -1,5 +1,5 @@
 {
-  description = "felis — GPU-accelerated terminal emulator";
+  description = "Daemon-backed terminal emulator for persistent sessions and headless control";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";

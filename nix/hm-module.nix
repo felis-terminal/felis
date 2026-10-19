@@ -60,7 +60,7 @@ let
 in
 {
   options.programs.felis = {
-    enable = lib.mkEnableOption "felis, a GPU-accelerated terminal emulator";
+    enable = lib.mkEnableOption "felis, a daemon-backed terminal emulator for persistent sessions and headless control";
 
     package = lib.mkOption {
       type = lib.types.package;
