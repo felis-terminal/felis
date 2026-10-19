@@ -308,6 +308,7 @@ mod osc_dispatch;
 mod placeholder_resolve;
 #[doc(hidden)]
 pub mod pty_effects;
+mod reply_identity;
 mod screen;
 pub mod search;
 mod sgr;
@@ -349,6 +350,7 @@ use osc52::{format_osc_52_response, parse_osc_52_selection};
 pub use placeholder_resolve::PlaceholderCell;
 #[doc(hidden)]
 pub use pty_effects::{APC_OUTBOX_BYTES, APC_OUTBOX_CAP, PtyEffectQueue, STATUS_OUTBOX_YIELD};
+pub use reply_identity::ReplyIdentity;
 use screen::SavedScreen;
 pub use screen::ScreenBuffer;
 pub use search::{
@@ -830,6 +832,10 @@ pub struct Grid {
     /// The `TERM` the host stamped on the child; XTGETTCAP `TN` answers
     /// it, and reports the cap unknown while it is unset.
     term_name: Option<Box<str>>,
+    /// Not dumped: a restoring daemon stamps its own, so a carried
+    /// session names the new version.
+    #[cfg_attr(feature = "state-dump", serde(skip))]
+    reply_identity: Option<ReplyIdentity>,
 }
 
 /// Matches the depth the spec's reference implementation enforces.
@@ -1103,6 +1109,7 @@ impl Grid {
             clipboard_cache_primary: None,
             utf8: felis_vt::utf8::Decoder::new(),
             term_name: None,
+            reply_identity: None,
         }
     }
 
@@ -1228,6 +1235,17 @@ impl Grid {
     #[must_use]
     pub fn term_name(&self) -> Option<&str> {
         self.term_name.as_deref()
+    }
+
+    /// Host state, not parsed VT state: survives RIS. With none,
+    /// XTVERSION goes unanswered and DA3 reports xterm's all-zero unit ID.
+    pub fn set_reply_identity(&mut self, identity: Option<ReplyIdentity>) {
+        self.reply_identity = identity;
+    }
+
+    #[must_use]
+    pub const fn reply_identity(&self) -> Option<&ReplyIdentity> {
+        self.reply_identity.as_ref()
     }
 
     /// Client state, not parsed VT state: untouched by DECSC / reset

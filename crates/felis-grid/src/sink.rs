@@ -7,6 +7,7 @@ use super::{
     SPECIAL_COLOR_COUNT, Sink, ThemeChannel, parse_osc_133, sanitize_osc_str,
 };
 use crate::editing::blank_cells;
+use crate::reply_identity::ReplyIdentity;
 use crate::width::{bmp_widths, table_width};
 use felis_vt::{OscEnd, osc_number, split_osc_first};
 
@@ -348,11 +349,10 @@ impl Sink for Grid {
             }
             // XTVERSION; tmux gates path selection on the reply.
             (&[b'>'], b'q') if p1 == 0 => {
-                let mut response = Vec::with_capacity(32);
-                response.extend_from_slice(b"\x1bP>|felis ");
-                response.extend_from_slice(env!("CARGO_PKG_VERSION").as_bytes());
-                response.extend_from_slice(b"\x1b\\");
-                self.enqueue_response(response);
+                if let Some(identity) = &self.reply_identity {
+                    let reply = identity.xtversion_reply();
+                    self.enqueue_response(reply);
+                }
             }
             // xterm resource-modifier set. Only `modifyOtherKeys` (Pp=4)
             // is acted on (REQ-506: honor it as if Kitty keyboard were
@@ -370,11 +370,9 @@ impl Sink for Grid {
                     };
                 }
             }
-            // DA3: the hex of "felis-1" rather than xterm's all-zeroes
-            // placeholder (`docs/reference/protocols/vt-compliance.md`
-            // "Reporting and queries").
             (&[b'='], b'c') if p1 == 0 => {
-                self.enqueue_response(b"\x1bP!|66656c69732d31\x1b\\".to_vec());
+                let reply = ReplyIdentity::da3_reply(self.reply_identity.as_ref());
+                self.enqueue_response(reply);
             }
             // DECRQM is unrecognized below DECSCL level 3 and no reply
             // is sent (esctest's `test_DECSCL_Level2DoesntSupportDECRQM`).
@@ -632,6 +630,7 @@ impl Sink for Grid {
                 let palette_reset_all_pending = self.palette_reset_all_pending;
                 let pointer_shape_dirty = self.pointer_shape_dirty;
                 let term_name = self.term_name.take();
+                let reply_identity = self.reply_identity.take();
                 let theme_config_defaults = self.theme_config_defaults;
                 let palette_config_defaults = self.palette_config_defaults;
                 let os_dark = self.os_dark;
@@ -650,6 +649,7 @@ impl Sink for Grid {
                 self.palette_reset_all_pending = palette_reset_all_pending;
                 self.pointer_shape_dirty = pointer_shape_dirty;
                 self.term_name = term_name;
+                self.reply_identity = reply_identity;
                 self.theme_config_defaults = theme_config_defaults;
                 self.palette_config_defaults = palette_config_defaults;
                 self.os_dark = os_dark;

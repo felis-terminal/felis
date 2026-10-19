@@ -624,6 +624,21 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_spawned_grid_answers_xtversion_with_the_app_version() {
+        let core = read_until_output_complete(
+            SpawnedPty::spawn(env_dump_command()).expect("spawn env dumper"),
+        )
+        .await;
+        let core = core.lock();
+        let identity = core.grid.reply_identity().expect("the daemon stamps one");
+        assert_eq!(
+            identity.xtversion(),
+            concat!("felis ", env!("CARGO_PKG_VERSION"))
+        );
+        assert_eq!(identity.unit_id(), "felis-1");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn the_grid_answers_xtgettcap_tn_with_the_stamped_term() {
         assert_eq!(
             spawned_term_name(&TermHatch::default()).await.as_deref(),

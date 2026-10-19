@@ -208,7 +208,10 @@ The rectangle checksum query, DECRQCRA, shares this bounds model; its reply is s
   unit ID, the hex of the ASCII string `felis-1` (`66 65 6c 69 73 2d 31`), so the reply names felis rather than the
   xterm all-zeroes placeholder.
 - DECID (`ESC Z`): legacy alias for DA1; same response.
-- XTVERSION (`CSI > 0 q`): replies `DCS > | felis <version> ST`.
+- XTVERSION (`CSI > 0 q`): replies `DCS > | felis <version> ST`, the daemon's version.
+- The DA3 unit ID and the XTVERSION payload are the host's: felis-daemon supplies the two above to felis-grid
+  (`Grid::set_reply_identity`). A grid embedded without one answers DA3 with xterm's `\eP!|00000000\e\\` and leaves
+  XTVERSION unanswered.
 - DECRQSS (`DCS $ q <setting> ST`): reports the active setting for the queried sequence: SGR (`m`, whose report includes
   underline color so a program that set SGR 58 round-trips it back), the scroll region (`r`), DECSCA (`"q`), DECSACE
   (`*x`), DECSCL (`"p`), DECSLRM (`s`), and the cursor shape (` q`). Any other setting, including the ones felis parses

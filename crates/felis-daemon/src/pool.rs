@@ -15,7 +15,7 @@ use std::{
 };
 
 use felis_grid::{
-    Grid, TableGc,
+    Grid, ReplyIdentity, TableGc,
     images::{ImageStore, Placements},
 };
 use felis_protocol::messages::{Attachment, MAX_SESSION_TAGS, MAX_TAG_BYTES, NotifyToClientMsg};
@@ -90,12 +90,20 @@ pub struct ParseCore {
     pub table_gc: TableGc,
 }
 
+/// This crate's version is the app's; the grid's is its own.
+#[must_use]
+pub fn reply_identity() -> Option<ReplyIdentity> {
+    ReplyIdentity::new(concat!("felis ", env!("CARGO_PKG_VERSION")), "felis-1")
+}
+
 impl ParseCore {
     #[must_use]
     pub fn new(rows: u16, cols: u16) -> Self {
+        let mut grid = Grid::new(rows, cols);
+        grid.set_reply_identity(reply_identity());
         Self {
             parser: Parser::new(),
-            grid: Grid::new(rows, cols),
+            grid,
             table_gc: TableGc::new(),
         }
     }

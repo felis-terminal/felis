@@ -11,7 +11,7 @@
     reason = "test harness: the fingerprint struct mirrors independent grid state bits, and the explicit fill loop reads clearer than a resize"
 )]
 
-use felis_grid::{Cell, Grapheme, Grid, ModeSnapshot};
+use felis_grid::{Cell, Grapheme, Grid, ModeSnapshot, ReplyIdentity};
 use felis_protocol::messages::ThemeChannel;
 use felis_vt::Parser;
 
@@ -104,6 +104,7 @@ fn seed_state(grid: &mut Grid, parser: &mut Parser) {
 
 fn assert_probe_changes_state(probe: &Probe) {
     let mut grid = Grid::new(ROWS, COLS);
+    grid.set_reply_identity(ReplyIdentity::new("felis 0.0.0", "felis-1"));
     let mut parser = Parser::new();
     seed_state(&mut grid, &mut parser);
     let before = GridFingerprint::snapshot(&grid);

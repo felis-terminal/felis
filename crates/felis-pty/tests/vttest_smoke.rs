@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use felis_grid::{Grapheme, Grid};
+use felis_grid::{Grapheme, Grid, ReplyIdentity};
 use felis_pty::spawn;
 use felis_pty::{Command, Size};
 use tokio::io::AsyncWriteExt;
@@ -49,7 +49,9 @@ impl VttestSession {
         .expect("spawn vttest");
         let (_reader, writer, _child, _resizer) = session.split();
 
-        let grid = Arc::new(Mutex::new(Grid::new(ROWS, COLS)));
+        let mut grid = Grid::new(ROWS, COLS);
+        grid.set_reply_identity(ReplyIdentity::new("felis 0.1.0", "felis-1"));
+        let grid = Arc::new(Mutex::new(grid));
         let writer_arc: Arc<tokio::sync::Mutex<Box<dyn tokio::io::AsyncWrite + Send + Unpin>>> =
             Arc::new(tokio::sync::Mutex::new(Box::new(writer)));
 

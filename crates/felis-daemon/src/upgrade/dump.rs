@@ -404,6 +404,29 @@ mod tests {
         assert_eq!(state.grid.title(), Some("title"));
     }
 
+    #[test]
+    fn the_reply_identity_is_not_dumped() {
+        let mut state = SessionState {
+            grid: Grid::new(24, 80),
+            ..SessionState::default()
+        };
+        state.grid.set_reply_identity(crate::pool::reply_identity());
+        let encoded = with_state(state).encode();
+        let value: serde_json::Value = serde_json::from_slice(&encoded).unwrap();
+        let grid = value["sessions"][0]["state"]["grid"].as_object().unwrap();
+        assert!(!grid.contains_key("reply_identity"));
+        let decoded = Dump::decode(&encoded).unwrap();
+        assert_eq!(
+            decoded.sessions[0]
+                .state
+                .as_ref()
+                .unwrap()
+                .grid
+                .reply_identity(),
+            None
+        );
+    }
+
     fn refused(edit: impl FnOnce(&mut serde_json::Value)) -> bool {
         let mut value: serde_json::Value =
             serde_json::from_slice(&with_state(drawn_state()).encode()).unwrap();
