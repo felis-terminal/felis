@@ -749,7 +749,7 @@ pub(crate) fn pinned_config(rules: &str, lang: &str) -> Option<Fontconfig> {
 mod tests {
     use super::*;
     use crate::provider::BOLD_WEIGHT;
-    use crate::{FaceSpec, FontStack, FontStyle, Shaper, StyleFaces, TEST_FONT_FAMILY};
+    use crate::{FaceSpec, Font, FontStack, FontStyle, Shaper, StyleFaces, TEST_FONT_FAMILY};
 
     fn pinned(rules: &str) -> Option<Fontconfig> {
         pinned_config(rules, "ja")
@@ -1231,5 +1231,42 @@ ENDFONT
             han.has_glyph('\u{845B}'),
             "the cascade covers what the declared faces miss"
         );
+    }
+
+    /// Both CJK subsets cover `葛`, so only the query's language can put
+    /// one ahead. The subsets are too small for fontconfig to derive a
+    /// language from, so the rules tag them as a full face would be.
+    #[test]
+    fn the_cjk_fallback_follows_the_query_language() {
+        const JP: &str = "Noto Sans CJK JP";
+        const SC: &str = "Noto Sans CJK SC";
+        let rules = format!(
+            r"<match target='scan'><test name='family'><string>{JP}</string></test>
+              <edit name='lang' mode='assign'><langset><string>ja</string></langset></edit></match>
+              <match target='scan'><test name='family'><string>{SC}</string></test>
+              <edit name='lang' mode='assign'><langset><string>zh-cn</string></langset></edit></match>"
+        );
+        for (lang, expected) in [("ja", JP), ("zh-cn", SC)] {
+            let Some(fc) = pinned_config(&rules, lang) else {
+                return;
+            };
+            for name in [JP, SC] {
+                let id = fc
+                    .find_face(name, REGULAR_WEIGHT, false)
+                    .unwrap_or_else(|| panic!("{name} is installed"));
+                let font = Font::load_face_id(&fc, id).expect("the subset loads");
+                assert!(font.has_glyph('葛'), "{name} covers 葛");
+            }
+            let stack = FontStack::auto_discover_in(
+                &fc,
+                Some(TEST_FONT_FAMILY),
+                &[],
+                &[],
+                &StyleFaces::default(),
+            )
+            .expect("the pinned primary loads");
+            let han = stack.resolve('葛', FontStyle::REGULAR).display_name();
+            assert!(han.starts_with(expected), "{lang}: {han}");
+        }
     }
 }
