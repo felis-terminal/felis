@@ -1,11 +1,10 @@
 [package]
 name = "felis-transport"
-version.workspace = true
+version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-publish.workspace = true
 description = "felis IPC transport: framing, local carrier (Unix socket / Windows named pipe), peer-identity verification, SSH stdio"
 
 [features]

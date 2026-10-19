@@ -5,7 +5,6 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-publish.workspace = true
 description = "felis headless front-door: CLI verbs (sessions, notifications, completions) and the frontend launcher"
 
 [[bin]]
@@ -37,8 +36,8 @@ schemars = { workspace = true, optional = true }
 
 [dev-dependencies]
 felis-daemon = { path = "../felis-daemon" }
-felis-transport = { workspace = true, features = ["test-util"] }
-felis-pty = { workspace = true }
+felis-transport = { path = "../felis-transport", features = ["test-util"] }
+felis-pty = { path = "../felis-pty" }
 insta = { workspace = true }
 tempfile = { workspace = true }
 boon = { workspace = true }

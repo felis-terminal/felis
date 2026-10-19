@@ -179,6 +179,11 @@ deny:
     cargo deny check
     python3 tools/dep_bans.py
 
+# Package every crate and build each against the others, in publish order, without uploading (pr.yml's build job runs this).
+[group('lint')]
+publish-dry-run:
+    cargo publish --workspace --dry-run --allow-dirty
+
 # Self-test the closure-ban checker against its fixture.
 [group('lint')]
 dep-bans-selftest:
@@ -198,9 +203,9 @@ docs-links:
 [group('lint')]
 selftest: prose-check-selftest dep-bans-selftest proto-compat-test release-check-test release-mirror-test release-homebrew-test bench-selftest bench-vs-selftest
 
-# Run full check suite: fmt-check + lint + portable core + prose + skills + test + docs links + deny + proto-compat + tool self-tests.
+# Run full check suite: fmt-check + lint + portable core + prose + skills + test + docs links + deny + publish dry-run + proto-compat + tool self-tests.
 [group('lint')]
-check: fmt-check lint check-portable prose-check skill-check test docs-links deny proto-compat selftest
+check: fmt-check lint check-portable prose-check skill-check test docs-links deny publish-dry-run proto-compat selftest
 
 # ── Release ────────────────────────────────────────────────────────
 

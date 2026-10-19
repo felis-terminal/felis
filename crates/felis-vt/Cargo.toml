@@ -1,11 +1,10 @@
 [package]
 name = "felis-vt"
-version.workspace = true
+version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-publish.workspace = true
 description = "felis VT parser: Williams DFA, UTF-8 buffering, Kitty graphics/keyboard/text-sizing dispatch"
 
 [features]

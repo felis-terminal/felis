@@ -1,11 +1,10 @@
 [package]
 name = "felis-client-core"
-version.workspace = true
+version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-publish.workspace = true
 description = "felis headless client: shadow screen, action enum, IPC client connector, OS-clipboard trait, shared config"
 
 [features]
@@ -33,7 +32,7 @@ directories = { workspace = true, optional = true }
 rustix = { workspace = true }
 
 [dev-dependencies]
-felis-transport = { workspace = true, features = ["test-util"] }
+felis-transport = { path = "../felis-transport", features = ["test-util"] }
 tokio = { workspace = true, features = [
   "macros",
   "rt-multi-thread",
@@ -43,8 +42,8 @@ tokio = { workspace = true, features = [
 ] }
 tempfile = { workspace = true }
 felis-daemon = { path = "../felis-daemon" }
-felis-pty = { workspace = true }
-felis-vt = { workspace = true }
+felis-pty = { path = "../felis-pty" }
+felis-vt = { path = "../felis-vt" }
 insta = { workspace = true }
 proptest = { workspace = true }
 criterion = { workspace = true }

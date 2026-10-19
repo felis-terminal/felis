@@ -332,12 +332,17 @@ top of them.
 
 ### Why the crate version carries no wire information
 
-Every member sits at one `[workspace.package] version` and none is published, so no resolver reads a felis crate version
-and no consumer can act on one. The wire contract is carried where a peer can act on it instead: `PROTOCOL_MINOR` and
-the minor ledger, negotiated per connection ([workspace.md](../reference/workspace.md) "Versioning",
-[ipc.md](../reference/ipc.md) "The minor ledger"). The alternative rule, pre-1.0 a wire-schema change bumps
-`felis-protocol`'s crate minor, asks for a second ledger with no reader: two numbers to keep in step, one of which
-nothing resolves.
+A library crate's version is a contract with a Cargo resolver about its Rust API; the wire contract is carried where a
+peer can act on it instead: `PROTOCOL_MINOR` and the minor ledger, negotiated per connection
+([workspace.md](../reference/workspace.md) "Versioning", [ipc.md](../reference/ipc.md) "The minor ledger"). The two move
+for different reasons: `felis-protocol`'s wire stays stable while its Rust API does not, and a Rust-only break (a
+renamed type) changes no byte. The alternative rule, pre-1.0 a wire-schema change bumps `felis-protocol`'s crate minor,
+ties a non-Rust peer's compatibility to a number it never resolves and makes every Rust refactor look like a wire event.
 
-_Revisit if_ `felis-protocol` is published for the cross-language reuse it is shaped for. A resolver is then a real
-consumer, its version a real contract, and semver governs it, independently of the protocol minor.
+### Why library versions are decoupled from the app version
+
+The library crates carry their own versions and the binary crates carry the app's. Lockstep, every crate at
+`[workspace.package] version`, is the rejected alternative: an embedder-visible break in one library would force an app
+minor release, and every app release would bump libraries whose package did not change, telling their consumers to
+re-check an API that did not move. The binary crates stay on the app version because the release tag, the archives and
+`felis version` already name it, and felis-daemon's library API, which embedders use, changes with the app.

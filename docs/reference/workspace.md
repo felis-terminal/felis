@@ -166,13 +166,14 @@ is additive growth, and a connection speaks the lower of the two peers' minors (
 Until the compatibility freeze the dev wire carries no promise, and a break changes the bytes under major 1 rather than
 burning a number.
 
-The **crate** version is Cargo's, and it carries no wire information. It is declared once, as
-`[workspace.package] version` in the root `Cargo.toml`, and every member inherits it with `version.workspace = true`, so
-all members sit at one version and float together with the project by construction; none is published, so nothing
-resolves them and no consumer can read a promise out of them. A wire-schema change is recorded where a peer can act on
-it (`PROTOCOL_MINOR` and the minor ledger in [ipc.md](ipc.md) "The minor ledger", one row per addition), and
-`felis-protocol`'s crate version is not bumped alongside it ([implementation.md](../explanation/implementation.md) "Why
-the crate version carries no wire information").
+The **crate** version is Cargo's, and it carries no wire information. The three binary crates (felis-cli, felis-client,
+felis-daemon) inherit `[workspace.package] version` in the root `Cargo.toml` with `version.workspace = true`: that is
+the app version, the one a release tag and `felis version` name. Every library crate declares its own version, starting
+at 0.1.0, which Cargo's semver rules govern for its Rust API; the root `[workspace.dependencies]` entries name the same
+versions next to their paths. Every crate under `crates/` is publishable to crates.io; the `tests/` member is not. A
+wire-schema change is recorded where a peer can act on it (`PROTOCOL_MINOR` and the minor ledger in [ipc.md](ipc.md)
+"The minor ledger", one row per addition), and `felis-protocol`'s crate version is not bumped alongside it
+([implementation.md](../explanation/implementation.md) "Why the crate version carries no wire information").
 
 A third axis names the _build_ rather than either contract: the `BuildIdentity` in `felis-protocol`, holding a semver,
 the full git revision the binary was compiled from, and a `dirty` flag for a revision whose tracked working tree had
