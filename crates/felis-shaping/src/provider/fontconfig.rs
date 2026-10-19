@@ -1201,23 +1201,35 @@ ENDFONT
     }
 
     #[test]
-    fn an_explicit_fallback_replaces_the_cascade_and_its_mono_first_rule() {
+    fn an_explicit_fallback_comes_before_the_cascade_and_outside_its_mono_first_rule() {
         let Some(fc) = pinned("") else { return };
+        let explicit = [
+            FaceSpec::named("Noto Color Emoji"),
+            FaceSpec::named("Noto Sans Symbols 2"),
+        ];
         let stack = FontStack::auto_discover_in(
             &fc,
             Some(TEST_FONT_FAMILY),
             &[],
-            &[
-                FaceSpec::named("Noto Color Emoji"),
-                FaceSpec::named("Noto Sans Symbols 2"),
-            ],
+            &explicit,
             &StyleFaces::default(),
         )
         .expect("the pinned primary loads");
-        assert_eq!(stack.len(), 3);
+        let names = stack.describe().fallbacks;
+        assert!(names[0].starts_with("Noto Color Emoji"));
+        assert!(names[1].starts_with("Noto Sans Symbols 2"));
+        assert!(
+            names[2..].iter().all(|n| *n != names[0] && *n != names[1]),
+            "the cascade does not repeat a declared face"
+        );
         assert!(
             drawn_in_color(&stack, "\u{2764}"),
             "the declared color face covers it first"
+        );
+        let han = stack.resolve('\u{845B}', FontStyle::REGULAR);
+        assert!(
+            han.has_glyph('\u{845B}'),
+            "the cascade covers what the declared faces miss"
         );
     }
 }

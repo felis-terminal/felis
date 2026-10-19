@@ -11,7 +11,7 @@
 
 use std::{
     borrow::Cow,
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::{Arc, Mutex, OnceLock, PoisonError},
 };
 
@@ -649,10 +649,11 @@ pub struct FontStack {
     /// the entry is chosen on `fonts` and only the drawn face varies.
     chains: [Vec<Arc<Font>>; 4],
     styled_features: [Vec<String>; 4],
-    /// The fallbacks are the host's ranked cascade rather than a declared
-    /// or discovered-by-family order, so a text-presentation scalar takes
-    /// a mono face before an earlier-ranked color one.
-    mono_first: bool,
+    /// Where the host's ranked cascade starts in `fonts`. Its order is the
+    /// host's rather than declared or discovered by family, so among its
+    /// faces a text-presentation scalar takes a mono face before an
+    /// earlier-ranked color one.
+    cascade_from: Option<usize>,
     /// Asked once the faces above miss; its faces take the ids after them.
     system: Option<Arc<SystemFaces>>,
 }
@@ -1056,7 +1057,7 @@ impl FontStack {
             features: vec![features],
             chains,
             styled_features,
-            mono_first: false,
+            cascade_from: None,
             system: None,
         }
     }
@@ -1084,9 +1085,9 @@ impl FontStack {
 
     /// Load the primary font and fallbacks.
     ///
-    /// Unknown families fall back to the default monospace face. Non-empty
-    /// `explicit_fallbacks` replaces auto-discovery; `features: None` inherits
-    /// `primary_features`, while `Some([])` opts out.
+    /// Unknown families fall back to the default monospace face.
+    /// `explicit_fallbacks` come before auto-discovery; `features: None`
+    /// inherits `primary_features`, while `Some([])` opts out.
     pub fn auto_discover(
         primary_family: Option<&str>,
         primary_features: &[String],
@@ -1177,46 +1178,68 @@ impl FontStack {
             primary_features,
             styles,
         );
-        if explicit_fallbacks.is_empty()
-            && let Some(cascaded) = append_cascade(&stack, db, requested, primary_features)
-        {
+        let mut declared = HashSet::new();
+        for spec in explicit_fallbacks {
+            let Some(family) = spec.family.as_deref() else {
+                warn!("font.fallback entry names no family; skipping");
+                continue;
+            };
+            let features = spec
+                .features
+                .as_deref()
+                .map_or_else(|| primary_features.to_vec(), <[String]>::to_vec);
+            if declared.len() == MAX_FALLBACKS {
+                warn!(
+                    family,
+                    "font.fallback lists more than {MAX_FALLBACKS} faces; dropping the rest"
+                );
+                break;
+            }
+            let Some(id) = db.find_face(family, REGULAR_WEIGHT, false) else {
+                warn!(family, "font.fallback entry not installed; skipping");
+                continue;
+            };
+            match fallback_views_of(db, id, family) {
+                Ok(views) if declared.insert(id) => {
+                    stack = stack.with_fallback_views(views, features);
+                }
+                Ok(_) => {}
+                Err(error) => warn!(family, %error, "font.fallback entry failed to load; skipping"),
+            }
+        }
+        if let Some(cascaded) = append_cascade(&stack, db, requested, primary_features, &declared) {
             stack = cascaded;
-        } else if explicit_fallbacks.is_empty()
-            && let Some(system) = db.system_fallback(regular_id)
-        {
+        } else if let Some(system) = db.system_fallback(regular_id) {
             // CoreText draws a BMP private-use scalar, where the Nerd
             // glyphs live, from whichever face maps it (STIX Two Math, or
             // LastResort) rather than a Nerd font.
-            stack = append_first_installed(stack, db, NERD_FONT_FAMILIES, primary_features);
+            stack =
+                append_first_installed(stack, db, NERD_FONT_FAMILIES, primary_features, &declared);
             stack = stack.with_system_fallback(system);
-        } else if explicit_fallbacks.is_empty() {
-            stack = append_first_installed(stack, db, CJK_FALLBACK_FAMILIES, primary_features);
-            stack = append_all_installed(stack, db, SYMBOL_FALLBACK_FAMILIES, primary_features);
-            stack = append_first_installed(stack, db, EMOJI_FALLBACK_FAMILIES, primary_features);
-            stack = append_first_installed(stack, db, NERD_FONT_FAMILIES, primary_features);
         } else {
-            for spec in explicit_fallbacks {
-                let Some(family) = spec.family.as_deref() else {
-                    warn!("font.fallback entry names no family; skipping");
-                    continue;
-                };
-                let features = spec
-                    .features
-                    .as_deref()
-                    .map_or_else(|| primary_features.to_vec(), <[String]>::to_vec);
-                if stack.fonts.len() > MAX_FALLBACKS {
-                    warn!(
-                        family,
-                        "font.fallback lists more than {MAX_FALLBACKS} faces; dropping the rest"
-                    );
-                    break;
-                }
-                if let Ok(views) = fallback_views(db, family) {
-                    stack = stack.with_fallback_views(views, features);
-                } else {
-                    warn!(family, "font.fallback entry not installed; skipping");
-                }
-            }
+            stack = append_first_installed(
+                stack,
+                db,
+                CJK_FALLBACK_FAMILIES,
+                primary_features,
+                &declared,
+            );
+            stack = append_all_installed(
+                stack,
+                db,
+                SYMBOL_FALLBACK_FAMILIES,
+                primary_features,
+                &declared,
+            );
+            stack = append_first_installed(
+                stack,
+                db,
+                EMOJI_FALLBACK_FAMILIES,
+                primary_features,
+                &declared,
+            );
+            stack =
+                append_first_installed(stack, db, NERD_FONT_FAMILIES, primary_features, &declared);
         }
         Ok(stack)
     }
@@ -1340,29 +1363,42 @@ impl FontStack {
     }
 
     /// The face drawing `c` in text presentation: the styled primary, then
-    /// the chain in order, except that a `mono_first` stack takes a mono
-    /// face before any color one, the primary included, then the system
-    /// fallback; `0` for `.notdef`.
+    /// the chain in order, then the system fallback; `0` for `.notdef`.
+    /// Past [`Self::cascade_from`], a mono face goes before any color one,
+    /// a color primary included.
     fn first_cover_styled_index(&self, c: char, style: FontStyle) -> usize {
         let primary = &self.chains[style.index()][0];
         let primary_covers = primary.has_glyph(c);
-        if primary_covers && !(self.mono_first && primary.has_color_glyphs()) {
+        let covers = |from: usize, to: usize| {
+            self.fonts[from..to]
+                .iter()
+                .position(|f| f.has_glyph(c))
+                .map(|i| from + i)
+        };
+        let Some(from) = self.cascade_from else {
+            if primary_covers {
+                return 0;
+            }
+            return covers(1, self.fonts.len())
+                .or_else(|| self.system_index(c, Presentation::Text, style))
+                .unwrap_or(0);
+        };
+        if primary_covers && !primary.has_color_glyphs() {
             return 0;
         }
-        let fallbacks = || self.fonts.iter().enumerate().skip(1);
-        let mono = self
-            .mono_first
-            .then(|| fallbacks().find(|(_, f)| !f.has_color_glyphs() && f.has_glyph(c)))
-            .flatten();
-        if let Some((i, _)) = mono {
+        if let Some(i) = covers(1, from) {
             return i;
+        }
+        let mono = self.fonts[from..]
+            .iter()
+            .position(|f| !f.has_color_glyphs() && f.has_glyph(c));
+        if let Some(i) = mono {
+            return from + i;
         }
         if primary_covers {
             return 0;
         }
-        fallbacks()
-            .find(|(_, f)| f.has_glyph(c))
-            .map(|(i, _)| i)
+        covers(from, self.fonts.len())
             .or_else(|| self.system_index(c, Presentation::Text, style))
             .unwrap_or(0)
     }
@@ -1429,13 +1465,6 @@ impl FontStack {
 /// drawn from the family's own face for that style. A color face, or a
 /// style whose face would drop a codepoint the regular one covers, draws
 /// the regular face.
-fn fallback_views<P: FaceProvider>(db: &P, family: &str) -> Result<[Arc<Font>; 4], ShapingError> {
-    let id = db
-        .find_face(family, REGULAR_WEIGHT, false)
-        .ok_or(ShapingError::NoFont)?;
-    fallback_views_of(db, id, family)
-}
-
 fn fallback_views_of<P: FaceProvider>(
     db: &P,
     id: P::Id,
@@ -1479,8 +1508,9 @@ fn covering_or_regular(
     regular.clone()
 }
 
-/// Face ids are six bits wide in [`SizingKey`]: id 0 is the primary and
-/// 0x3F doubles as the saturation bucket.
+/// Bounds the declared entries and, separately, the host's cascade: each
+/// face is loaded up front, and a full font set's cascade runs to hundreds
+/// of faces that would cost seconds of startup.
 const MAX_FALLBACKS: usize = 0x3E;
 
 /// The stack with the provider's ranked cascade appended, or `None` when
@@ -1493,11 +1523,13 @@ fn append_cascade<P: FaceProvider>(
     db: &P,
     requested: &str,
     features: &[String],
+    declared: &HashSet<P::Id>,
 ) -> Option<FontStack> {
     let mut verdicts = HashMap::new();
     let mut loaded: HashMap<P::Id, [Arc<Font>; 4]> = HashMap::new();
     let cascade = loop {
-        let cascade = db.fallback_cascade(requested, &verdicts)?;
+        let mut cascade = db.fallback_cascade(requested, &verdicts)?;
+        cascade.retain(|face| !declared.contains(&face.id));
         let mut changed = false;
         for face in cascade.iter().take(MAX_FALLBACKS) {
             if verdicts.contains_key(&face.id) {
@@ -1524,7 +1556,7 @@ fn append_cascade<P: FaceProvider>(
         }
     };
     let mut cascaded = stack.clone();
-    cascaded.mono_first = true;
+    cascaded.cascade_from = Some(cascaded.fonts.len());
     let dropped = cascade.len().saturating_sub(MAX_FALLBACKS);
     for face in cascade.iter().take(MAX_FALLBACKS) {
         if let Some(views) = loaded.remove(&face.id) {
@@ -1540,14 +1572,17 @@ fn append_cascade<P: FaceProvider>(
     Some(cascaded)
 }
 
+/// Skips a candidate the user already declared, so the next one gets
+/// its place.
 fn append_first_installed<P: FaceProvider>(
     stack: FontStack,
     db: &P,
     candidates: &[&str],
     inherited_features: &[String],
+    declared: &HashSet<P::Id>,
 ) -> FontStack {
     for &name in candidates {
-        if let Ok(views) = fallback_views(db, name) {
+        if let Some(views) = undeclared_views(db, name, declared) {
             return stack.with_fallback_views(views, inherited_features.to_vec());
         }
     }
@@ -1559,13 +1594,26 @@ fn append_all_installed<P: FaceProvider>(
     db: &P,
     candidates: &[&str],
     inherited_features: &[String],
+    declared: &HashSet<P::Id>,
 ) -> FontStack {
     for &name in candidates {
-        if let Ok(views) = fallback_views(db, name) {
+        if let Some(views) = undeclared_views(db, name, declared) {
             stack = stack.with_fallback_views(views, inherited_features.to_vec());
         }
     }
     stack
+}
+
+fn undeclared_views<P: FaceProvider>(
+    db: &P,
+    family: &str,
+    declared: &HashSet<P::Id>,
+) -> Option<[Arc<Font>; 4]> {
+    let id = db.find_face(family, REGULAR_WEIGHT, false)?;
+    if declared.contains(&id) {
+        return None;
+    }
+    fallback_views_of(db, id, family).ok()
 }
 
 /// Pixel-space cell metrics at a given font size.
@@ -2724,15 +2772,16 @@ mod tests {
 
     #[cfg(not(windows))]
     #[test]
-    fn explicit_fallbacks_replace_auto_discover() {
-        let stack = discover(
+    fn a_missing_explicit_fallback_leaves_auto_discovery_as_it_was() {
+        let missing = discover(
             None,
             &[],
             &[FaceSpec::named("definitely-not-a-real-family-xyz123")],
             &StyleFaces::default(),
         )
         .expect("primary must load");
-        assert_eq!(stack.len(), 1);
+        let auto = discover(None, &[], &[], &StyleFaces::default()).expect("primary must load");
+        assert_eq!(missing.describe().fallbacks, auto.describe().fallbacks);
     }
 
     fn test_font_files() -> Vec<std::path::PathBuf> {
@@ -3930,7 +3979,10 @@ mod tests {
             &StyleFaces::default(),
         )
         .expect("primary must load");
-        assert_eq!(stack.len(), 2, "primary + one fallback");
+        assert!(
+            stack.describe().fallbacks[0].starts_with(family),
+            "the declared entry comes right after the primary"
+        );
         stack
     }
 
@@ -4489,7 +4541,30 @@ mod tests {
         );
         assert!(with_emoji.resolve('⭐', style).has_color_glyphs());
         let mono_only = pinned_stack(&["Noto Sans Symbols 2"]);
-        assert_eq!(mono_only.resolve_styled_index('⭐', style), mono);
+        assert_eq!(mono_only.first_cover_styled_index('⭐', style), mono);
+        assert!(
+            mono_only.resolve('⭐', style).has_color_glyphs(),
+            "the discovered color face still draws the default emoji"
+        );
+    }
+
+    /// The declared entries come first, and discovery still covers what
+    /// they miss without adding a declared face a second time.
+    #[cfg(not(windows))]
+    #[test]
+    fn an_explicit_fallback_comes_before_discovery_without_repeating() {
+        let style = FontStyle::REGULAR;
+        let auto = pinned_stack(&[]);
+        let stack = pinned_stack(&["Noto Color Emoji"]);
+        let names = stack.describe().fallbacks;
+        assert!(names[0].starts_with("Noto Color Emoji"));
+        assert_eq!(names.iter().filter(|n| **n == names[0]).count(), 1);
+        assert_eq!(names.len(), auto.describe().fallbacks.len());
+        let han = stack.resolve('\u{845B}', style);
+        assert!(
+            han.has_glyph('\u{845B}'),
+            "discovery covers what the declared face misses"
+        );
     }
 
     /// A VS15 asks for the text face, a VS16 for the color face.

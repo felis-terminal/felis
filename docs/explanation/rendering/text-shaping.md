@@ -79,8 +79,8 @@ that add coverage _within their presentation class_ (color by `FC_COLOR`, else m
 fontconfig's own trim drops a color face whose code points an earlier mono face already covers, which is exactly the
 face an emoji needs. A text-presentation character then takes the first mono face covering it before an earlier-ranked
 color one, which is what the symbol group's position achieves below. The chain (`FontStack`) is built **eagerly** at
-startup, so the per-codepoint `resolve` call is a cheap charmap walk with no I/O, and it stops at 63 faces, each loaded
-up front; on a host with more faces that add coverage, the least preferred are dropped with a warning.
+startup, so the per-codepoint `resolve` call is a cheap charmap walk with no I/O, and the cascade stops at 62 faces,
+each loaded up front; on a host with more faces that add coverage, the least preferred are dropped.
 
 On **macOS** and **Windows** the platform answers **per character**. A codepoint that neither the primary nor the
 Nerd-symbol group (below) covers goes to CoreText's `CTFontCreateForStringWithLanguage` or DirectWrite's
@@ -112,11 +112,11 @@ set has no platform to ask, so `auto_discover` walks the CJK, **symbol**, emoji,
 order and appends the first family installed in each group, except the symbol group (see below).
 
 An explicit `font.fallback` list in `config.toml` (keys and grammar in the
-[config reference](../../reference/config.md)) replaces auto-discovery outright: felis appends each entry in declared
-order and neither walks the candidate lists nor asks the platform, so the declared order _is_ the resolution order,
-except for an emoji-presentation character, which takes the first color face covering it, the primary included (see
-below). A missing family is skipped with a warning rather than failing the chain: a config written on one machine
-degrades gracefully on another that lacks a face.
+[config reference](../../reference/config.md)) goes between the primary and the fallback above, which still covers what
+the list misses and skips a face the list already names. A character a listed face covers takes the first such face in
+declared order, ahead of the cascade's mono-first rule, except for an emoji-presentation character, which takes the
+first color face covering it anywhere in the chain, the primary included (see below). A missing family is skipped with a
+warning rather than failing the chain: a config written on one machine degrades gracefully on another that lacks a face.
 
 In the file-set walk the **symbol group sits before the emoji group, and appends every installed family rather than the
 first**. Both deviations are deliberate.
@@ -460,8 +460,8 @@ calls.
 
 **Font fallback: built from the OS, not a per-script table.** Kitty makes the per-script chain configurable; WezTerm and
 iTerm2 defer to the platform font API. felis keeps the font config to one flat chain: the user's chosen primary, then
-the OS's fallback (see "Font fallback" above), with an explicit `font.fallback` list replacing it wholesale rather than
-adding a per-script table. The primary-face binding is client-side policy; the daemon stores no font information.
+the OS's fallback (see "Font fallback" above), with an explicit `font.fallback` list placed before it rather than a
+per-script table. The primary-face binding is client-side policy; the daemon stores no font information.
 
 **Linux faces: libfontconfig, loaded from the host.** On Linux the configuration users edit is fontconfig's, so felis
 asks libfontconfig for the primary, the styled faces and the fallback order, and the faces drawn are the ones `fc-match`
