@@ -1,11 +1,10 @@
 [package]
 name = "felis-pty"
-version.workspace = true
+version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-publish.workspace = true
 description = "Self-hosted async PTY layer (openpty on Unix, ConPTY on Windows)"
 
 [dependencies]
@@ -24,8 +23,8 @@ windows-sys = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "io-util", "time"] }
-felis-vt = { workspace = true }
-felis-grid = { workspace = true }
+felis-vt = { path = "../felis-vt" }
+felis-grid = { path = "../felis-grid" }
 
 [lints]
 workspace = true

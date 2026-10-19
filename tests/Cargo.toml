@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-publish.workspace = true
+publish = false
 description = "Guards on workspace-wide invariants: documented source references"
 
 # Outside `crates/` and carrying no lib or bin: these tests assert properties of

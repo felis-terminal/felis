@@ -5,7 +5,6 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-publish.workspace = true
 description = "felis daemon: session pool, IPC server, signal handling"
 
 [lib]
@@ -44,7 +43,7 @@ libc = { workspace = true }
 objc2-core-foundation = { workspace = true }
 
 [dev-dependencies]
-felis-transport = { workspace = true, features = ["test-util"] }
+felis-transport = { path = "../felis-transport", features = ["test-util"] }
 # `test-util` for the paused clock: the handshake deadlines are seconds
 # long, and a test that waited them out in real time would be the
 # slowest in the suite.
@@ -57,7 +56,7 @@ tokio = { workspace = true, features = [
 ] }
 tempfile = { workspace = true }
 miniz_oxide = { workspace = true }
-felis-client-core = { workspace = true }
+felis-client-core = { path = "../felis-client-core" }
 proptest = { workspace = true }
 
 [lints]

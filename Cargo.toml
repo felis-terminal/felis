@@ -9,20 +9,21 @@ edition = "2024"
 rust-version = "1.88"
 license = "Apache-2.0"
 repository = "https://github.com/felis-terminal/felis"
-# Kept off crates.io until first stable release.
-publish = false
 
 [workspace.dependencies]
-# Internal — path deps for the in-repo split.
-felis-protocol = { path = "crates/felis-protocol" }
-felis-vt = { path = "crates/felis-vt" }
-felis-grid = { path = "crates/felis-grid" }
-felis-pty = { path = "crates/felis-pty" }
-felis-transport = { path = "crates/felis-transport" }
-felis-client-core = { path = "crates/felis-client-core" }
-felis-shaping = { path = "crates/felis-shaping" }
-felis-render-core = { path = "crates/felis-render-core" }
-felis-render-wgpu = { path = "crates/felis-render-wgpu" }
+# Internal — `path` for the workspace build, `version` for the published
+# manifest. A dev-dependency on a felis crate names `path` alone instead of
+# inheriting these: `cargo package` then drops it, which is what lets the
+# felis-client-core <-> felis-daemon dev-dependency cycle publish at all.
+felis-protocol = { path = "crates/felis-protocol", version = "0.1.0" }
+felis-vt = { path = "crates/felis-vt", version = "0.1.0" }
+felis-grid = { path = "crates/felis-grid", version = "0.1.0" }
+felis-pty = { path = "crates/felis-pty", version = "0.1.0" }
+felis-transport = { path = "crates/felis-transport", version = "0.1.0" }
+felis-client-core = { path = "crates/felis-client-core", version = "0.1.0" }
+felis-shaping = { path = "crates/felis-shaping", version = "0.1.0" }
+felis-render-core = { path = "crates/felis-render-core", version = "0.1.0" }
+felis-render-wgpu = { path = "crates/felis-render-wgpu", version = "0.1.0" }
 
 # External — version-pinned in one place via workspace inheritance.
 tokio = { version = "1", features = [

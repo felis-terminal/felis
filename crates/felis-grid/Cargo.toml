@@ -1,11 +1,10 @@
 [package]
 name = "felis-grid"
-version.workspace = true
+version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-publish.workspace = true
 description = "felis grid model: cells, cursor, scrollback, image store, damage tracker"
 
 [features]

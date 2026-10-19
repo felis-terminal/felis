@@ -1,11 +1,10 @@
 [package]
 name = "felis-shaping"
-version.workspace = true
+version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-publish.workspace = true
 description = "felis text shaper: swash + font fallback + shape cache"
 
 [features]

@@ -85,7 +85,7 @@ client=${client:-"$repo_root/target/release/felis-client"}
 daemon=${daemon:-"$repo_root/target/release/felis-daemon"}
 out=${out:-"$repo_root/target/release"}
 if [ -z "$version" ]; then
-  # `[workspace.package] version`, the one number every crate inherits.
+  # `[workspace.package] version`, the app version the binary crates inherit.
   # Kept in lockstep with nix/package.nix, which reads the same field.
   version=$(sed -nE '/^\[workspace\.package\]/,/^\[/ s/^version = "([^"]+)".*/\1/p' \
     "$repo_root/Cargo.toml" | head -n1)

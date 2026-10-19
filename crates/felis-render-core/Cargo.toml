@@ -1,11 +1,10 @@
 [package]
 name = "felis-render-core"
-version.workspace = true
+version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-publish.workspace = true
 description = "felis renderer-neutral core: palette, cell appearance, box drawing, glyph index, shelf atlas, cell painter and its display list"
 
 [features]
@@ -25,9 +24,9 @@ foldhash = { workspace = true, optional = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
-felis-shaping = { workspace = true, features = ["testing"] }
+felis-shaping = { path = "../felis-shaping", features = ["testing"] }
 proptest = { workspace = true }
-felis-vt = { workspace = true }
+felis-vt = { path = "../felis-vt" }
 criterion = { workspace = true }
 
 [[bench]]
