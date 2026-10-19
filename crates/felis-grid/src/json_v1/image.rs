@@ -17,6 +17,7 @@ json_dto! {
     }
 
     /// Sub-region of an image, in image pixels.
+    #[non_exhaustive]
     pub struct SourceRectJson {
         pub x: u32,
         pub y: u32,
@@ -25,6 +26,7 @@ json_dto! {
     }
 
     /// The `c=` / `r=` a put asked for; `0` is automatic.
+    #[non_exhaustive]
     pub struct RequestedExtentJson {
         pub cols: u16,
         pub rows: u16,

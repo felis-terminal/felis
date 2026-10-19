@@ -122,6 +122,7 @@ impl SearchCursor {
 
 /// One logical line's worth of matches.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct SearchHit {
     /// Row index (REQ-608: `-1` is the youngest scrollback row, live
     /// rows are `0`-based) of the line's topmost row; a stitched line

@@ -50,6 +50,7 @@ impl Requires {
 /// An added field an older peer must not skip, because skipping it
 /// changes what the message asks for, paired with the test that decides
 /// whether a value carries it.
+#[non_exhaustive]
 pub struct GatedField<T> {
     pub requires: Requires,
     pub present: fn(&T) -> bool,

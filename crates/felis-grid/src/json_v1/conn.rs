@@ -53,6 +53,7 @@ json_dto! {
     }
 
     /// The build a daemon reports.
+    #[non_exhaustive]
     pub struct BuildIdentityJson {
         pub version: String,
         pub revision: String,

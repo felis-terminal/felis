@@ -101,6 +101,7 @@ json_dto! {
         Other,
     }
 
+    #[non_exhaustive]
     pub struct KeyEventJson {
         pub key: KeyJson,
         pub text: Option<String>,
@@ -112,6 +113,7 @@ json_dto! {
         pub location: KeyLocationJson,
     }
 
+    #[non_exhaustive]
     pub struct MouseEventJson {
         /// `null` for a bare motion.
         pub button: Option<MouseButtonJson>,

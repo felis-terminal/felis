@@ -51,6 +51,7 @@ pub async fn read_client_preface<R: AsyncRead + Unpin>(
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ClientBootstrap {
     /// `None` on a bare `FLIS` stream (a local client, or a relay that
     /// sent no block), and on a block whose format version this build

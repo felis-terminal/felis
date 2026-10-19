@@ -32,6 +32,7 @@ pub struct TrailMetrics {
 
 /// In UV with the origin top-left.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
 pub struct TrailGeometry {
     /// `(x, y, width, height)`.
     pub cursor_rect: [f32; 4],

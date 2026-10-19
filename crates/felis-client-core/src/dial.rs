@@ -327,6 +327,7 @@ where
     connection.list_sessions().await
 }
 
+#[non_exhaustive]
 pub struct DialedConnection {
     pub conn: CarrierConnection,
     pub attach: felis_protocol::messages::SessionInfo,

@@ -7,6 +7,7 @@ use wgpu::{Backends, DeviceType, Instance, InstanceDescriptor, PowerPreference};
 
 /// Fields are the `felis doctor --format json` surface.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct AdapterProbe {
     /// The adapter's own name, as the driver reports it.
     pub name: String,

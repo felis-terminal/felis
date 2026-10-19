@@ -66,6 +66,7 @@ impl RetryPolicy {
 /// Carries the last failure.
 #[derive(Debug, thiserror::Error)]
 #[error("retry exhausted after {attempts} attempt(s); last error: {source}")]
+#[non_exhaustive]
 pub struct RetryError<E> {
     pub attempts: u32,
     #[source]

@@ -172,6 +172,7 @@ pub struct Payload {
 /// the class the arm declares, so a handler reads the id off the
 /// delivery instead of re-deriving it from the raw envelope.
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct Delivered<M> {
     pub msg: M,
     correlation: Option<Correlation>,

@@ -198,6 +198,7 @@ impl Default for MouseState {
 }
 
 #[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
 pub struct PostFrame<'a> {
     pub cell_size_px: [f32; 2],
     pub theme: &'a ResolvedTheme,

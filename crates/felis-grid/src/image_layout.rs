@@ -81,6 +81,7 @@ const fn z_layer(z: i32) -> ZLayer {
 /// frontend's debug log: a producer whose image never shows is told
 /// apart by which count stays at zero.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct PlaceholderStats {
     pub virtual_placements: usize,
     pub cells: u32,

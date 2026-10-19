@@ -3,6 +3,7 @@
 //! real `window.request_redraw()` there.
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct RedrawStats {
     pub requested: u64,
     /// Flushes that returned `true`: the `window.request_redraw()` calls
