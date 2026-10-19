@@ -1675,7 +1675,7 @@ required; the optional fields are omitted from the machine framing when absent:
 - `terminal_progress`: the last `OSC 9 ; 4` progress a program in the session reported and has not cleared,
   `{ state: string, value?: u32 }`; absent when none is held. `state` is an open vocabulary (`normal`, `error`,
   `indeterminate`, `paused` today), and a `value` above `100` fails the decode. A minor-1 peer skips it as an unknown
-  field (the minor ledger below).
+  field (the minor ledger below). Decoding and lifetime are in [terminal-progress.md](protocols/terminal-progress.md).
 
 `SpawnArgs` (the GUI-launch payload on `SessionToDaemonMsg::Create`, and the `sessions spawn` payload on
 `OpsToDaemonMsg::Spawn`) is fixed-shape per principle 1: `command`, `args`, `cwd`, `env`, `dims`, `tags`, `env_base`;

@@ -61,11 +61,13 @@ statuses, which the [support matrix](../../reference/protocols/support-matrix.md
 - **`OSC 13` through `19` are tolerated for three reasons at once.** There is no Tektronix mode to color (15 / 16 / 18),
   the mouse pointer is drawn by the OS compositor rather than by felis (13 / 14), and selection colors (17 / 19) are a
   client-config concern that no target workflow sets dynamically. _Revisit 17 / 19 if_ one does.
-- **ConEmu's `OSC 9` subcommands, progress (`9 ; 4`) included, are tolerated rather than decoded.** Progress waits on a
-  window-chrome indicator, and winit exposes no portable taskbar / dock progress API to draw one; decoding the family
-  into a typed event before anything can consume it would put a wire shape on the IPC surface that no reader constrains.
-  The bare `OSC 9 ; <message>` form is iTerm2's notification, which felis decodes and relays
-  ([notifications.md](notifications.md)).
+- **ConEmu's progress, `OSC 9 ; 4`, is decoded and relayed on IPC.** Its consumer is an agent or a script polling
+  `felis sessions`, the pattern the shipped `felis` skill teaches, which reads how far a build in another session has
+  got ([terminal-progress.md](terminal-progress.md)).
+- **Progress is not drawn.** Drawing it needs a window-chrome indicator, and winit exposes no portable taskbar / dock
+  progress API to draw one.
+- **The other ConEmu `OSC 9` subcommands are tolerated rather than decoded.** The bare `OSC 9 ; <message>` form is
+  iTerm2's notification, which felis decodes and relays ([notifications.md](notifications.md)).
 - **`OSC 72` (kitty structured drag-and-drop) is rejected for now.** A window-side file drop inserts the path verbatim
   instead ([input.md](../input.md) "Drag-and-drop"). _Revisit if_ a target workflow depends on the structured form.
 

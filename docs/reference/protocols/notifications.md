@@ -26,9 +26,10 @@ Upstream protocol references:
 OSC 9 ; <message> ST
 ```
 
-Body only, no title. `<message>` is UTF-8. Disambiguated from the ConEmu progress family by the first parameter: a
-single ASCII digit with further parameters following (`OSC 9 ; 4 ; …`) is window chrome, not a notification. All other
-parameter forms are parsed as iTerm2 notification bodies.
+Body only, no title. `<message>` is UTF-8. Disambiguated from the ConEmu subcommand family by the first parameter: a
+single ASCII digit with further parameters following is a subcommand, not a notification. Of those, progress
+(`OSC 9 ; 4 ; …`) is [terminal progress](terminal-progress.md), and the rest are consumed without effect. All other
+parameter forms are parsed as iTerm2 notification bodies, bare `OSC 9 ; 4` (the body "4") included.
 
 ### OSC 777 (rxvt-unicode)
 

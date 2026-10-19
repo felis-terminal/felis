@@ -49,6 +49,12 @@ poll `sessions info` for it.
 felis sessions list --format json | jq '.sessions[] | select(any(.program_status[]; .state == "blocked")) | .id'
 ```
 
+`terminal_progress` is the last ConEmu OSC 9;4 progress a program in the session reported: `{state, value?}`, `state`
+`normal`, `error`, `indeterminate` or `paused`, `value` `0` to `100`; absent when none is held. `error` means failed so
+far, not stopped: the build may still be running. A new shell prompt (with shell integration) clears it; without one, a
+killed producer's last report stays. It is live progress, not an outcome, so take the result from `send --wait`'s exit
+code. cargo sends it only with `term.progress.term-integration = true`.
+
 ## Waiting for status: pick by producer
 
 ```sh
