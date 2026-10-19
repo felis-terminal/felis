@@ -10,7 +10,7 @@
 #![cfg_attr(not(test), deny(unsafe_code))]
 
 use std::env;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use felis_protocol::SessionHex;
 use felis_pty::{ChildHandle, Command, PtyError, PtyReader, PtyWriter, Resizer, Size};
@@ -86,16 +86,12 @@ pub(crate) fn program_size(size: Size, cell: (u16, u16)) -> Size {
 /// protocol major/minor, so the revision is free to churn.
 #[doc(hidden)]
 #[must_use]
-pub const fn version() -> &'static str {
-    concat!(
-        env!("CARGO_PKG_VERSION"),
-        " (",
-        env!("FELIS_BUILD_STAMP"),
-        ")"
-    )
+pub fn version() -> &'static str {
+    static LINE: LazyLock<String> = LazyLock::new(|| build_identity().to_string());
+    &LINE
 }
 
-/// The build the daemon was compiled from (`build.rs`), typed. Sent in
+/// The build the daemon was compiled from, typed. Sent in
 /// `Welcome` so `felis version` shows which build the running daemon
 /// is, as distinct from the on-disk binary.
 #[doc(hidden)]
@@ -103,7 +99,7 @@ pub const fn version() -> &'static str {
 pub fn build_identity() -> felis_protocol::BuildIdentity {
     felis_protocol::BuildIdentity::from_build_env(
         env!("CARGO_PKG_VERSION"),
-        env!("FELIS_BUILD_STAMP"),
+        option_env!("FELIS_GIT_HASH").unwrap_or_default(),
     )
 }
 
