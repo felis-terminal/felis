@@ -20,22 +20,23 @@ process name loses them, so every unattended run gets its own daemon on its own 
 
 ```sh
 eval "$(.agents/skills/isolated-daemon/scripts/isolated-daemon.sh start)"   # sets SOCK and LOG
-env SHELL=/path/to/probe.sh ./target/release/felis --socket "$SOCK" >client.log 2>&1 &
+env SHELL=/path/to/probe.sh ./target/release/felis --socket "$SOCK" >/dev/null 2>&1 &
 # … experiment …
 .agents/skills/isolated-daemon/scripts/isolated-daemon.sh stop "$SOCK"
 ```
 
 `start` binds a fresh `0700` directory under `/tmp`, runs `felis-daemon serve` there with a debug `RUST_LOG`, waits
-until the socket is served, and prints `SOCK=` and `LOG=`. `stop` ends the clients on that socket first, then the
-daemon, then removes the directory. Scripts source the same file for `felis_dbg_socket`, `felis_dbg_wait`,
-`felis_dbg_pids`, and `felis_dbg_stop`.
+until the socket is served, and prints `SOCK=` and `LOG=`. A daemon or window on that socket logs into the same
+directory (`daemon.log`, `client.log`), which `stop` removes, so copy what the run needs first. `stop` ends the clients
+on that socket first, then the daemon, then removes the directory. Scripts source the same file for `felis_dbg_socket`,
+`felis_dbg_wait`, `felis_dbg_pids`, and `felis_dbg_stop`.
 
 ## Rules the helper encodes
 
 - **A fresh socket per run.** A reused socket connects to the daemon an earlier run left behind, which runs the old
   build and writes no fresh logs.
-- **Start the daemon yourself.** An auto-spawned daemon's stderr goes to `/dev/null` or the systemd journal, and its
-  lines reach only `daemon.log` in the log directory (`docs/reference/cli.md` "Log files"). On a Linux desktop with a
+- **Start the daemon yourself.** An auto-spawned daemon's stderr goes to `/dev/null` or the systemd journal, so a start
+  that fails before its log file opens leaves no trace (`docs/reference/cli.md` "Log files"). On a Linux desktop with a
   systemd user manager, autospawn also hands the daemon to `systemd-run`, outside any profiler's process tree.
 - **The socket's parent must be a `0700` directory you own.** `/tmp` and the `$TMPDIR` root are refused by name, a
   `0755` directory for its mode, and a long path (an agent scratchpad, a sandboxed `$TMPDIR`) fails `SUN_LEN`. All three

@@ -635,7 +635,7 @@ JSON output (`--format json`) carries the same content:
 | `shell`           | `inside_felis`: whether `FELIS_SESSION_ID` is set ([terminal-identity.md](terminal-identity.md)). The values of `TERM`, `TERM_PROGRAM`, `TERM_PROGRAM_VERSION`, `COLORTERM`, as this shell sees them. `ssh`: whether `SSH_CONNECTION` is set, never its value.                                                                                                                                                            |
 | `fonts`           | The faces a window would resolve from the same config: `regular`, `bold`, `italic`, `bold_italic`, and `fallbacks` in chain order, each the face's full name; a variation-axis view adds the position it draws at, as `(wght=700, slnt=-11)`. `system_fallback` names the platform API asked per character for what `fallbacks` miss (`CoreText`, `DirectWrite`), `null` where none is. Otherwise `unavailable` says why. |
 | `config`          | `path`; `state`: `absent` (no file, defaults apply), `applied`, or `invalid` (errors, defaults apply, `diff` is empty); `diff`: the keys whose values differ from the defaults, nested as in `config.toml`.                                                                                                                                                                                                               |
-| `logs`            | `daemon.log` and `client.log` under the log directory ("Log files"), with whether each exists. Their contents are not included.                                                                                                                                                                                                                                                                                           |
+| `logs`            | `daemon.log` and `client.log` under the log directory ("Log files"), with whether each exists; for a socket other than the default, those beside the socket too. Their contents are not included.                                                                                                                                                                                                                         |
 
 Only the variables named above have their values reported. Before either rendering is built, the report redacts:
 
@@ -961,6 +961,11 @@ Log directory locations:
 - macOS: `~/Library/Logs/felis/`
 - Windows: `%LOCALAPPDATA%\felis\data\`
 - Linux/other: `$XDG_STATE_HOME/felis/` (fallback `~/.local/state/felis/`)
+
+That directory belongs to the default endpoint. On Linux and macOS, a daemon or window on any other socket logs into the
+socket's own directory instead, when that directory already exists, is owned by the user, and has mode `0700` (the
+listener's own rule); otherwise it uses the directory above. Test and experiment daemons therefore stay out of the
+user's `daemon.log`, and a second daemon on a hand-picked socket such as `~/x.sock` writes `~/daemon.log`.
 
 Files exceeding 8 MiB are rotated to `<name>.old` at process startup. The console half of the tee is stderr for
 `felis-daemon serve` and stdout for `felis-client`, whose stderr a `.app` launch does not keep; both halves are filtered
