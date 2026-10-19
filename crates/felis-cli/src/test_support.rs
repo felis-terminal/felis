@@ -38,6 +38,7 @@ pub(crate) fn session_info(id: u128) -> SessionInfo {
         title: None,
         cwd: None,
         spawn_cwd: None,
+        terminal_progress: None,
         idle_seconds: None,
         tags: Vec::new(),
         last_notification: None,

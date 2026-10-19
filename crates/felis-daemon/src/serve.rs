@@ -2705,6 +2705,12 @@ fn session_info_from_meta(
         sequence: meta.sequence,
         program_status: meta.program_status,
         spawn_cwd: meta.spawn_cwd,
+        terminal_progress: meta.terminal_progress.map(|progress| {
+            felis_protocol::messages::TerminalProgress {
+                state: progress.state.as_str().to_owned(),
+                value: progress.value,
+            }
+        }),
     }
 }
 

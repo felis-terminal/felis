@@ -18,6 +18,11 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
   was created with, or the daemon's own directory when there was none.
 - **Wire**: protocol minor 2 adds `SessionInfo.spawn_cwd`. An older client skips it; a client facing an older daemon
   lists no spawn directory.
+- **CLI**: `felis sessions list --format json` and `felis sessions info` report the last ConEmu `OSC 9 ; 4` progress a
+  program in the session sent, as `terminal_progress` and as a `progress:` line in `info` (`progress: error 71%`). A new
+  shell prompt clears it. felis draws nothing for it; cargo sends it with `term.progress.term-integration = true`.
+- **Wire**: protocol minor 2 adds `SessionInfo.terminal_progress`. An older client skips it; a client facing an older
+  daemon lists no progress.
 - **CLI**: `felis fonts list` prints every family name `font.family` and the other `family` keys accept on this machine,
   with whether it is monospace and which weights and slants it has, so a name that would fall back to monospace can be
   checked before opening a window.

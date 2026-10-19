@@ -542,16 +542,16 @@ async fn list_and_info_show_the_spawn_directory() {
     server.abort();
 }
 
-/// A program's OSC 7501 report reaches both `sessions list --format
-/// json` and the human `sessions info`.
+/// A program's OSC 7501 and OSC 9;4 reports reach both `sessions list
+/// --format json` and the human `sessions info`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn list_and_info_show_program_status_records() {
+async fn list_and_info_show_program_status_records_and_progress() {
     let tmp = private_dir();
     let factory: SessionFactory = Arc::new(|_| {
         let mut cmd = PtyCommand::new("/bin/sh");
         cmd.args([
             "-c",
-            "printf '\\033]7501;state=blocked:kind=question:progress=50:app=claude-code:msg=d2hpY2ggZmlsZT8=\\033\\\\'; read x",
+            "printf '\\033]7501;state=blocked:kind=question:progress=50:app=claude-code:msg=d2hpY2ggZmlsZT8=\\033\\\\\\033]9;4;2;71\\007'; read x",
         ]);
         cmd.env_clear();
         cmd.env("PATH", "/bin:/usr/bin");
@@ -566,7 +566,7 @@ async fn list_and_info_show_program_status_records() {
         .lock()
         .await
         .handle_cloned(felis_daemon::SessionId(id))
-        .is_none_or(|handle| handle.meta_snapshot().program_status.is_empty())
+        .is_none_or(|handle| handle.meta_snapshot().terminal_progress.is_none())
     {
         assert!(
             tokio::time::Instant::now() < deadline,
@@ -589,6 +589,10 @@ async fn list_and_info_show_program_status_records() {
         ),
         "list --format json must carry the record: {list_out}",
     );
+    assert!(
+        list_out.contains(r#""terminal_progress":{"state":"error","value":71}"#),
+        "list --format json must carry the progress: {list_out}",
+    );
 
     let info = cli_command()
         .arg("--socket")
@@ -601,6 +605,10 @@ async fn list_and_info_show_program_status_records() {
     assert!(
         info_out.contains("status:   (root) blocked question 50% [claude-code]: which file?\n"),
         "info must print the record: {info_out}",
+    );
+    assert!(
+        info_out.contains("progress: error 71%\n"),
+        "info must print the progress: {info_out}",
     );
 
     server.abort();

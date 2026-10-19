@@ -271,6 +271,7 @@ pub(crate) mod tests {
             attachments: Vec::new(),
             sequence: NonZeroU64::new(3).unwrap(),
             program_status: Vec::new(),
+            terminal_progress: None,
         }
     }
 

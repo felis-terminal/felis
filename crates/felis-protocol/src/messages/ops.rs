@@ -65,6 +65,18 @@ pub struct SessionInfo {
     /// resolved it; unlike [`SessionInfo::cwd`], it never follows the
     /// program. `None` when the daemon does not know it.
     pub spawn_cwd: Option<String>,
+    /// The last `OSC 9 ; 4` progress a program reported and has not
+    /// cleared; `None` when none is held.
+    pub terminal_progress: Option<TerminalProgress>,
+}
+
+/// One `OSC 9 ; 4` progress report ([`SessionInfo::terminal_progress`]).
+/// `state` is an open vocabulary, as [`ProgramStatusRecord::state`] is.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalProgress {
+    pub state: String,
+    /// `0..=100`.
+    pub value: Option<u8>,
 }
 
 /// One OSC 7501 program-status record ([`SessionInfo::program_status`]):
@@ -637,6 +649,10 @@ pub(crate) mod tests {
                     msg: Some("allow network access?".into()),
                 },
             ],
+            terminal_progress: Some(TerminalProgress {
+                state: "error".into(),
+                value: Some(71),
+            }),
         }
     }
 
@@ -749,6 +765,7 @@ pub(crate) mod tests {
                     attachments: Vec::new(),
                     sequence: NonZeroU64::MIN,
                     program_status: Vec::new(),
+                    terminal_progress: None,
                 }],
             },
             OpsToClientMsg::Destroyed {

@@ -54,6 +54,7 @@ mod tests {
             title: None,
             cwd: None,
             spawn_cwd: None,
+            terminal_progress: None,
             idle_seconds: None,
             tags: Vec::new(),
             last_notification: None,

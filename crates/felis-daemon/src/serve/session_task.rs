@@ -7161,6 +7161,7 @@ mod tests {
             attachments: Vec::new(),
             sequence: std::num::NonZeroU64::MIN,
             spawn_cwd: None,
+            terminal_progress: None,
             program_status: (0..records)
                 .map(|i| felis_protocol::messages::ProgramStatusRecord {
                     id: format!("r{i}"),

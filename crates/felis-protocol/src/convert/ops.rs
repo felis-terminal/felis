@@ -86,6 +86,7 @@ impl From<&messages::SessionInfo> for v1::SessionInfo {
             sequence: s.sequence.get(),
             program_status: s.program_status.iter().map(Into::into).collect(),
             spawn_cwd: s.spawn_cwd.clone(),
+            terminal_progress: s.terminal_progress.as_ref().map(Into::into),
         }
     }
 }
@@ -117,6 +118,37 @@ impl TryFrom<v1::SessionInfo> for messages::SessionInfo {
                 .map(TryInto::try_into)
                 .collect::<Result<_, _>>()?,
             spawn_cwd: s.spawn_cwd,
+            terminal_progress: s.terminal_progress.map(TryInto::try_into).transpose()?,
+        })
+    }
+}
+
+impl From<&messages::TerminalProgress> for v1::TerminalProgress {
+    fn from(p: &messages::TerminalProgress) -> Self {
+        Self {
+            state: p.state.clone(),
+            value: p.value.map(u32::from),
+        }
+    }
+}
+
+impl TryFrom<v1::TerminalProgress> for messages::TerminalProgress {
+    type Error = WireError;
+    fn try_from(p: v1::TerminalProgress) -> Result<Self, Self::Error> {
+        const FIELD: &str = "TerminalProgress.value";
+        let value = match p.value {
+            Some(value @ 0..=100) => Some(narrow::<u8>(FIELD, value)?),
+            Some(value) => {
+                return Err(WireError::OutOfRange {
+                    field: FIELD,
+                    value,
+                });
+            }
+            None => None,
+        };
+        Ok(Self {
+            state: p.state,
+            value,
         })
     }
 }
@@ -829,6 +861,27 @@ mod tests {
             attachments,
             sequence,
             program_status: Vec::new(),
+            terminal_progress: None,
+        }
+    }
+
+    #[test]
+    fn a_progress_value_past_100_is_rejected() {
+        for value in [101, u32::MAX] {
+            let session = v1::SessionInfo {
+                terminal_progress: Some(v1::TerminalProgress {
+                    state: "normal".into(),
+                    value: Some(value),
+                }),
+                ..wire_session(1, Vec::new())
+            };
+            assert!(matches!(
+                messages::SessionInfo::try_from(session),
+                Err(WireError::OutOfRange {
+                    field: "TerminalProgress.value",
+                    value: v,
+                }) if v == value
+            ));
         }
     }
 

@@ -538,6 +538,21 @@ pub struct SessionInfo {
     /// it; a pre-minor-2 reader skips the field.
     #[prost(string, optional, tag="14")]
     pub spawn_cwd: ::core::option::Option<::prost::alloc::string::String>,
+    /// The last ConEmu OSC 9;4 progress a program reported and has not
+    /// cleared. Absent when none is held; a pre-minor-2 reader skips it.
+    #[prost(message, optional, tag="15")]
+    pub terminal_progress: ::core::option::Option<TerminalProgress>,
+}
+/// One OSC 9;4 progress report. `state` is an open vocabulary ("normal",
+/// "error", "indeterminate", "paused" today): a reader treats a value it
+/// does not know as unknown rather than refusing the row.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct TerminalProgress {
+    #[prost(string, tag="1")]
+    pub state: ::prost::alloc::string::String,
+    /// 0..=100; a larger value is refused at decode.
+    #[prost(uint32, optional, tag="2")]
+    pub value: ::core::option::Option<u32>,
 }
 /// One OSC 7501 program-status record: the keys of the last report that
 /// used its id, as the program sent them. `state` and `kind` are open
