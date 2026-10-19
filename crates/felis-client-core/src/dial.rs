@@ -94,6 +94,21 @@ impl DialError {
         )
     }
 
+    /// The raw connect to the socket found nothing listening (REQ-009c's
+    /// absence errors). A failure after the connect, such as the EOF of
+    /// a connection accepted just before an in-place upgrade's exec, is
+    /// not: the successor still holds the listener.
+    #[must_use]
+    pub fn daemon_gone(&self) -> bool {
+        matches!(
+            self,
+            Self::Connect {
+                source: ConnectError::Connect(err),
+                ..
+            } if felis_transport::preface::connect_error_is_absent(err)
+        )
+    }
+
     /// Whether a window's reconnect ladder is worth another sleep: a
     /// verdict the daemon stated reads the same on every attempt.
     #[must_use]
@@ -125,7 +140,7 @@ impl DialError {
 /// carries, so the window takes the exit ladder instead.
 #[derive(Debug, Error)]
 pub enum ReconnectError {
-    #[error("the daemon no longer knows this session")]
+    #[error("the session is gone")]
     SessionGone(#[source] DialError),
     #[error("the daemon refused this window")]
     Refused(#[source] DialError),
@@ -154,13 +169,22 @@ pub async fn redial_session(
                 id,
                 intent: AttachIntent::Automatic,
             };
-            // Through `dial_launch`, not `connect_carrier`: a dead local
-            // daemon has to be replaced before an attach can report the
-            // session gone, or every rung would fail at the socket and
-            // the ladder would end in exhaustion saying nothing about
-            // the session.
+            // A cold local socket is already the verdict: a daemon that
+            // died took its sessions, and one spawned here could only
+            // answer `UnknownSession` while racing the dead daemon's
+            // systemd unit, which is still draining, for its name.
             let attempt = async {
-                let conn = reconnector.dial_launch(LANDING_REMOTE_SPAWN).await?;
+                let conn = match reconnector.carrier.local_socket() {
+                    Some(_) => {
+                        connect_carrier(reconnector.carrier.clone(), offer, RemoteSpawn::Allow)
+                            .await
+                            .map_err(|source| DialError::Connect {
+                                intent: DialIntent::Switch,
+                                source,
+                            })?
+                    }
+                    None => reconnector.dial_launch(LANDING_REMOTE_SPAWN).await?,
+                };
                 land_on(conn, landing, DialIntent::Switch, offer).await
             };
             match tokio::time::timeout(RECONNECT_ATTEMPT_TIMEOUT, attempt).await {
@@ -171,7 +195,7 @@ pub async fn redial_session(
             }
         },
         felis_transport::retry::RetryPolicy::WINDOW_RECONNECT,
-        DialError::reconnect_retryable,
+        |err| !err.daemon_gone() && err.reconnect_retryable(),
     )
     .await
     .map_err(|err| classify_reconnect(err.attempts, err.source))
@@ -185,8 +209,8 @@ pub async fn redial_session(
 pub const RECONNECT_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[must_use]
-const fn classify_reconnect(attempts: u32, source: DialError) -> ReconnectError {
-    if source.target_vanished() {
+fn classify_reconnect(attempts: u32, source: DialError) -> ReconnectError {
+    if source.target_vanished() || source.daemon_gone() {
         return ReconnectError::SessionGone(source);
     }
     if source.reconnect_retryable() {
@@ -622,6 +646,39 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn only_a_raw_connect_that_found_nothing_listening_means_the_daemon_is_gone() {
+        for kind in [
+            std::io::ErrorKind::NotFound,
+            std::io::ErrorKind::ConnectionRefused,
+        ] {
+            let cold = DialError::Connect {
+                intent: DialIntent::Switch,
+                source: ConnectError::Connect(std::io::Error::from(kind)),
+            };
+            assert!(cold.daemon_gone(), "{kind:?}");
+            assert!(
+                matches!(classify_reconnect(1, cold), ReconnectError::SessionGone(_)),
+                "{kind:?}"
+            );
+        }
+        let after_accept = DialError::Connect {
+            intent: DialIntent::Switch,
+            source: ConnectError::EofBeforeWelcome,
+        };
+        assert!(
+            !after_accept.daemon_gone(),
+            "an upgrade's exec can end an accepted connection while the successor listens"
+        );
+        let undialable = DialError::Connect {
+            intent: DialIntent::Switch,
+            source: ConnectError::Connect(std::io::Error::from(
+                std::io::ErrorKind::PermissionDenied,
+            )),
+        };
+        assert!(!undialable.daemon_gone());
+    }
+
     /// The autospawn path reports both a daemon that could not be
     /// started and a daemon that answered "full"; only the first is the
     /// ladder's business to give up on.
@@ -668,6 +725,44 @@ mod tests {
             policy.initial_backoff >= Duration::from_secs(1),
             "a retry that spawns an ssh child must not hammer the host"
         );
+    }
+
+    /// A daemon that died leaves either no socket or a stale one; the
+    /// first rung reports the session gone without starting a daemon.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_reconnect_to_a_dead_local_daemon_reports_the_session_gone_without_spawning() {
+        let tmp = private_dir();
+        let absent = tmp.path().join("absent.sock");
+        let stale = tmp.path().join("stale.sock");
+        drop(
+            felis_transport::local::Listener::bind(&felis_transport::Endpoint::unix(stale.clone()))
+                .expect("bind the soon-dead daemon"),
+        );
+        assert!(stale.exists(), "a listener's drop leaves the path behind");
+
+        for socket in [absent.clone(), stale] {
+            let started = std::time::Instant::now();
+            let err = redial_session(
+                Carrier::Local(socket.clone().into()),
+                Offer::window(true),
+                0x7,
+            )
+            .await
+            .err()
+            .expect("a dead daemon has no session to land on");
+            assert!(
+                matches!(err, ReconnectError::SessionGone(_)),
+                "{}: {err}",
+                socket.display()
+            );
+            assert!(
+                started.elapsed() < Duration::from_secs(1),
+                "the first rung decides it, with no ladder sleep"
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(!absent.exists(), "no daemon was started on the socket");
     }
 
     /// A carrier that accepts the connection and then says nothing has
