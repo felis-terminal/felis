@@ -3675,6 +3675,13 @@ mod tests {
         let (a, mut rx_a) = attach_sub(&mut task, false);
         let (b, mut rx_b) = attach_sub(&mut task, false);
         take_input_ownership(&mut task, a);
+        // The echo has to be on the grid and shipped before the reports,
+        // or a report's cycle carries it and the last assertion measures
+        // the keystroke.
+        wait_for_grid_text(&task, "k").await;
+        task.after_drive();
+        drain_events(&mut rx_a);
+        drain_events(&mut rx_b);
         report_theme(&mut task, a, Some((0x11, 0x11, 0x11)));
         report_scheme(&mut task, a, false);
         report_theme(&mut task, a, Some((0x11, 0x11, 0x11)));
