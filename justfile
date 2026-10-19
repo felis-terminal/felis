@@ -209,15 +209,22 @@ check: fmt-check lint check-portable prose-check skill-check test docs-links den
 
 # ── Release ────────────────────────────────────────────────────────
 
-# Assert a release tag's identity before pushing it (mirrors release.yml's verify-tag).
+# Assert a release tag's identity before pushing it (mirrors release.yml's verify-tag; the crate check needs crates.io).
 [group('release')]
 release-check tag:
     python3 tools/release/verify.py {{ tag }}
+    python3 tools/release/crates.py check
 
-# Self-test the release identity gate on a throwaway repo.
+# Bump the library crates that changed since their crates.io release and raise the requirements on them.
+[group('release')]
+release-prepare:
+    release-plz update
+
+# Self-test the release identity gate on a throwaway repo, and the crate checks on fixtures.
 [group('release')]
 release-check-test:
     python3 tools/release/verify.py --self-test
+    python3 tools/release/crates.py --self-test
 
 # Self-test the release page publisher against a local fake forge.
 [group('release')]

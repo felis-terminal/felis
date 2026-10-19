@@ -519,8 +519,8 @@ normal `just check` needs.
 
 CI runs on Forgejo Actions (<https://forgejo.org/docs/latest/user/actions/>) with configuration under
 `.forgejo/workflows/`. The one workflow under `.github/workflows/`, `release-mirror.yml`, gates nothing: it copies a
-published Forgejo release to the GitHub mirror and opens the Homebrew tap's version bump ([workspace.md](workspace.md)
-"Release gate").
+published Forgejo release to the GitHub mirror, publishes the crates whose version is not on crates.io, and opens the
+Homebrew tap's version bump ([workspace.md](workspace.md) "Release gate").
 
 ### Workflows
 
@@ -532,7 +532,7 @@ published Forgejo release to the GitHub mirror and opens the Homebrew tap's vers
 | `fuzz.yml`    | Push, PR, Nightly, Manual | Smoke fuzzer run (push and PR) and a 10-minute-per-target nightly run with corpus minification.                                                                                                                                                                                                                             |
 | `kani.yml`    | Weekly, Manual            | Weekly full verification of in-tree Kani proofs.                                                                                                                                                                                                                                                                            |
 | `bench.yml`   | PR, PR label change       | Instruction-count regression gate against the PR's base commit.                                                                                                                                                                                                                                                             |
-| `release.yml` | Tag (`v*`)                | Verifies tag revision, reruns the Linux, macOS and Windows chains on it, pushes both Nix targets to the cache, and attaches the Linux and macOS archives, the Windows zip, the config schema and the proto to the release.                                                                                                  |
+| `release.yml` | Tag (`v*`)                | Verifies tag revision and the library versions, reruns the Linux, macOS and Windows chains on it, pushes both Nix targets to the cache, and attaches the Linux and macOS archives, the Windows zip, the config schema and the proto to the release.                                                                         |
 
 ### Frontend smoke test
 

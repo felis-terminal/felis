@@ -17,6 +17,10 @@ itself or when a recipe mentions the direct form.
   binary crates inherit, and (for a final tag) has its CHANGELOG section, on a clean tree. `--identity` compares the
   built binary's `felis version --format json` with the tag, and `tools/release/verify_test.py`
   (`just release-check-test`, `verify.py --self-test`) is its exit-code suite on a throwaway repo.
+- `tools/release/crates.py` is the crate half of the release: `check` (in `release.yml`'s `verify-tag` and
+  `just release-check`) refuses a tree whose library versions are not ready to publish, and `publish-plan` lists, for
+  `release-mirror.yml`'s `crates` job, the crates whose version is not on crates.io. `--self-test` runs
+  `tools/release/crates_test.py` on fixtures and a file-backed index.
 - `tools/dep_bans.py` checks each crate's production dependency closure against the "MUST NOT depend on" column of
   [workspace.md](../docs/reference/workspace.md) "Crate map", behind `just deny` and the CI job that runs it;
   `--self-test` (`just dep-bans-selftest`) is its fixture suite.

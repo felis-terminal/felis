@@ -170,7 +170,9 @@ The **crate** version is Cargo's, and it carries no wire information. The three 
 felis-daemon) inherit `[workspace.package] version` in the root `Cargo.toml` with `version.workspace = true`: that is
 the app version, the one a release tag and `felis version` name. Every library crate declares its own version, starting
 at 0.1.0, which Cargo's semver rules govern for its Rust API; the root `[workspace.dependencies]` entries name the same
-versions next to their paths. Every crate under `crates/` is publishable to crates.io; the `tests/` member is not. A
+versions next to their paths. A release bumps a library whose package differs from its newest crates.io version, a minor
+for a breaking change and a patch otherwise, raises every requirement on it, and leaves an unchanged library at its
+version ("Release gate" below). Every crate under `crates/` is publishable to crates.io; the `tests/` member is not. A
 wire-schema change is recorded where a peer can act on it (`PROTOCOL_MINOR` and the minor ledger in [ipc.md](ipc.md)
 "The minor ledger", one row per addition), and `felis-protocol`'s crate version is not bumped alongside it
 ([implementation.md](../explanation/implementation.md) "Why the crate version carries no wire information").
@@ -301,6 +303,19 @@ locally, and its own self-test first) on a full-history checkout, asserting:
    are still accruing under Unreleased;
 6. the working tree is clean.
 
+The same job then runs `tools/release/crates.py check`, which needs crates.io, and refuses the tag when a library's
+version is not ready to publish:
+
+1. a `[workspace.dependencies]` entry's `version` differs from that crate's own version, or a member names a felis crate
+   as a normal or build dependency without inheriting that entry, or as a dev-dependency with anything but `path`;
+2. `cargo semver-checks` fails for a library, or for felis-daemon's library target, against its newest crates.io
+   version: the bump is smaller than the API change requires (for felis-daemon, the bump is the app version's);
+3. `release-plz update` (configured by `release-plz.toml`) would change the tree, that is, a library whose package
+   differs from its newest crates.io version was not bumped, or a requirement on a bumped library was not raised.
+
+A crate with no crates.io version skips 2 and 3. `just release-prepare` runs the same `release-plz update` to make those
+bumps before the tag.
+
 Behind it the tag reruns `nix flake check`, the Cargo suite with clippy and `cargo deny`, the wire gate on its tag path
 (`buf breaking` against the newest published final release, [testing.md](testing.md) "Wire compatibility gates"), and
 the Linux frontend smoke, and the release page waits on all of them. The Linux smoke pushes the store path to the niks3
@@ -364,6 +379,14 @@ Once the GitHub release exists, the workflow's `homebrew` job runs `tools/releas
 `felis-terminal/homebrew-tap` that moves the formula to the tag's source archive. The pull request is a draft, which the
 tap does not publish on its own, when `nix/package.nix`, `nix/make-macos-app.sh`, `nix/compile-terminfo.sh`,
 `crates/felis-daemon/terminfo/` or `share/` changed since the previous final tag.
+
+Beside it, the `crates` job publishes to crates.io for a tag without a prerelease suffix.
+`tools/release/crates.py publish-plan` lists the crates whose version is not on crates.io; with none, the job ends
+there. A crate that was never published fails it, since crates.io creates a crate only from an API token, never through
+trusted publishing. Otherwise `cargo publish --dry-run` builds the listed packages with no credential present, then
+`rust-lang/crates-io-auth-action` exchanges the job's OIDC token for a short-lived crates.io token, which each crate's
+trusted publisher grants only to this workflow in the `crates-io` environment, and `cargo publish --no-verify` uploads
+them in dependency order. A rerun publishes what is still missing.
 
 [non-goals.md](../explanation/non-goals.md) "Cross-platform constraints" states: "Where a feature is not uniformly
 implementable across macOS, Linux, and Windows, it is omitted rather than gated."
