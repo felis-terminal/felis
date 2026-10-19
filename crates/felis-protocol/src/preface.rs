@@ -873,46 +873,6 @@ mod tests {
         assert_eq!(PROTOCOL_MINOR, declared("PROTOCOL_MINOR"));
     }
 
-    /// The reference doc's ledger table has one row per minor from 0 to
-    /// the current one, in order: a bump with no row is the drift this
-    /// test exists to catch.
-    #[test]
-    fn the_minor_ledger_has_a_row_per_minor() {
-        let minors: Vec<u16> = (0..=PROTOCOL_MINOR).collect();
-
-        // Read at test time rather than `include_str!`: the doc lives
-        // outside the crate, and a compile-time include would make the
-        // crate unpackageable on its own.
-        let doc = std::fs::read_to_string(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../docs/reference/ipc.md"
-        ))
-        .expect("docs/reference/ipc.md beside the workspace");
-        let table = doc
-            .split("### The minor ledger")
-            .nth(1)
-            .expect("ipc.md has a \"The minor ledger\" section");
-        let documented: Vec<u16> = table
-            .lines()
-            .skip_while(|l| !l.starts_with("| Minor |"))
-            .skip(2)
-            .take_while(|l| l.starts_with('|'))
-            .map(|row| {
-                row.trim_start_matches('|')
-                    .split('|')
-                    .next()
-                    .expect("a table row has a first cell")
-                    .trim()
-                    .parse()
-                    .expect("the ledger's first column is the minor")
-            })
-            .collect();
-        assert_eq!(
-            documented, minors,
-            "the minor ledger table in docs/reference/ipc.md lacks a row per minor"
-        );
-    }
-
     /// The selection table: an offered major maps to the accept that
     /// echoes it with this build's minor for it, or to no reply; the
     /// advertised range in a refusal names exactly the majors `select`

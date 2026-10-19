@@ -54,6 +54,8 @@ deny = [
     "felis-render-wgpu",
     "felis-cli",
     "felis-client",
+    # dev
+    "felis-workspace-tests",
   ], reason = "edge not in the crate map" },
   { crate = "felis-vt", wrappers = [
     "felis-grid",

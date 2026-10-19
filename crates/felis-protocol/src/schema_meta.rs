@@ -888,8 +888,8 @@ pub(crate) const PAYLOAD_ONEOFS: &[&str] = &[
 
 /// Every arm, added field and closed-enum value, as the ledger spells
 /// it, with the minor that added it.
-#[cfg(test)]
-pub(crate) const ADDITIONS: &[(&str, u16)] = &[
+#[doc(hidden)]
+pub const ADDITIONS: &[(&str, u16)] = &[
     ("Conn::Hello", 0),
     ("Conn::Cancel", 0),
     ("Conn::Welcome", 0),
