@@ -61,6 +61,9 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 
 ### Fixed
 
+- When the daemon dies, open windows close without starting a new daemon on their way out. That replacement could only
+  report the session gone, and on Linux, while the dead daemon's systemd unit was still shutting down, it started inside
+  a window's own unit, where an out-of-memory kill of one shell later took it and every session down.
 - Scrolling faster than the window redraws no longer loses or undoes steps: two quick line scrolls move two lines, a
   scroll right after jumping to the bottom moves up from the bottom, and typing right after scrolling up returns to the
   prompt. The window sends each scroll as a step the daemon applies to its own view, a protocol minor 2 addition;

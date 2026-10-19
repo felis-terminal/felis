@@ -558,10 +558,14 @@ the remote daemon, so retrying the same id reaches that daemon: the endpoint is 
 until the remote host reboots, so nothing between two attaches moves it. On the local socket a close is either an
 in-place upgrade or the daemon's own death. An upgrade keeps the listen socket open across its exec, so the first
 attempt waits in the accept queue and re-attaches the same session on the successor ([overview.md](overview.md)
-"In-place upgrade"). A death took the PTY masters, and the session with them. The first attempt still auto-spawns a
-replacement daemon, exactly as a window launch does, because that is what turns a dead socket into an answer: the fresh
-daemon has never heard of the session, the attach comes back `UnknownSession`, and the ladder stops there. One ladder
-serves both carriers because the local case settles on the first attempt either way.
+"In-place upgrade"). A death took the PTY masters, and the session with them, so a socket with nothing listening is
+itself the answer: the first attempt reports the session gone and the ladder stops there. One ladder serves both
+carriers because the local case settles on the first attempt either way.
+
+The reconnect does not auto-spawn a replacement, as a window launch would. A fresh daemon has never heard of the
+session, so all it could add is the same `UnknownSession`, and starting it races the dead daemon's systemd unit, which
+stays loaded while its cgroup drains: the hand-off is refused on the name and the replacement forks into the closing
+window's own unit, the placement "Where an auto-spawned daemon lands" in [overview.md](overview.md) exists to avoid.
 
 A verdict that the session is gone hands the window to the exit ladder above, since the shell ending is the same fact
 whether the window heard it from `SessionExited` or from a re-dial. The other two endings, the daemon refusing the

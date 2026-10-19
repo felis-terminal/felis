@@ -683,10 +683,11 @@ When its shell exits, a window takes the first of these it can:
 With none of that left it closes and exits `0`. When the transport to the daemon drops instead, the window marks its
 title `— disconnected` and re-dials the same session for up to six attempts: roughly 23 seconds of backoff between them,
 plus up to 10 seconds for each attempt itself, so a ladder whose attempts hang runs about 83 seconds rather than 23. A
-reconnect that finds the session gone enters the same trail unwind rather than closing outright, so it ends the same way
-any other shell exit does: attached elsewhere, or closed with exit code `0`. Every other reconnect failure closes the
-window directly with exit `2`, the reason and the remedy in the log: the daemon refused the window, or no daemon
-answered inside the retry budget (`felis attach <id>` once it is back).
+reconnect never starts a daemon: on the local socket, nothing listening means the session is gone. A reconnect that
+finds the session gone enters the same trail unwind rather than closing outright, so it ends the same way any other
+shell exit does: attached elsewhere, or closed with exit code `0`. Every other reconnect failure closes the window
+directly with exit `2`, the reason and the remedy in the log: the daemon refused the window, or no daemon answered
+inside the retry budget (`felis attach <id>` once it is back).
 
 ## Re-point a window across daemons: `felis ssh`, `felis window retarget`
 
