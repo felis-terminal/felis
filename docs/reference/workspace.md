@@ -294,8 +294,8 @@ locally, and its own self-test first) on a full-history checkout, asserting:
 2. the tag is annotated, not lightweight;
 3. it points at the commit the run is publishing (`github.sha`);
 4. the tag's core semver, with any prerelease suffix stripped, equals the root manifest's `[workspace.package] version`
-   (the source `nix/package.nix` reads the package version from), and every crate inherits that version rather than
-   pinning one of its own;
+   (the source `nix/package.nix` reads the package version from), and the three binary crates (felis-cli, felis-client,
+   felis-daemon) inherit that version rather than pinning one of their own;
 5. a final tag has a `## [<core semver>] - <date>` section in `CHANGELOG.md`; a candidate does not, since its entries
    are still accruing under Unreleased;
 6. the working tree is clean.

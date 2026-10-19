@@ -13,8 +13,8 @@ itself or when a recipe mentions the direct form.
   minor) from `felis.proto`'s options, behind `just proto` and the `schema-meta` pre-commit hook, and checks the
   schema's shape rules on the way.
 - `tools/release/verify.py` is the release identity gate behind `just release-check <tag>` and `release.yml`'s
-  `verify-tag` job: the tag is annotated, points at the revision being published, agrees with the workspace version
-  every crate inherits, and (for a final tag) has its CHANGELOG section, on a clean tree. `--identity` compares the
+  `verify-tag` job: the tag is annotated, points at the revision being published, agrees with the workspace version the
+  binary crates inherit, and (for a final tag) has its CHANGELOG section, on a clean tree. `--identity` compares the
   built binary's `felis version --format json` with the tag, and `tools/release/verify_test.py`
   (`just release-check-test`, `verify.py --self-test`) is its exit-code suite on a throwaway repo.
 - `tools/dep_bans.py` checks each crate's production dependency closure against the "MUST NOT depend on" column of

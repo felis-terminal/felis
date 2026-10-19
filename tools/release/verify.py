@@ -17,6 +17,8 @@ TAG_RE = re.compile(
     r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-rc\.[1-9][0-9]*)?"
 )
 
+BINARY_CRATES = ("felis-cli", "felis-client", "felis-daemon")
+
 
 class VerifyError(Exception):
     pass
@@ -76,19 +78,20 @@ def check_manifests(core: str) -> None:
     if found != core:
         raise VerifyError(f"Cargo.toml says {found}, tag says {core}")
 
-    pinned: list[Path] = []
+    manifests = {}
     for manifest in sorted(Path("crates").glob("*/Cargo.toml")):
         package = load_toml(manifest).get("package", {})
+        manifests[package.get("name")] = (manifest, package)
+    for name in BINARY_CRATES:
+        if name not in manifests:
+            raise VerifyError(f"no crate under crates/ is named {name}")
+        manifest, package = manifests[name]
         if package.get("version") != {"workspace": True}:
-            pinned.append(manifest)
-    for manifest in pinned:
-        print(
-            f"release-verify: {manifest} does not inherit the workspace version",
-            file=sys.stderr,
-        )
-    if pinned:
-        raise VerifyError("every crate must take its version from [workspace.package]")
-    note(f"the workspace is at {core} and every crate inherits it")
+            raise VerifyError(
+                f"{manifest} does not inherit the workspace version; "
+                f"{name} carries the app version"
+            )
+    note(f"the workspace is at {core} and {', '.join(BINARY_CRATES)} inherit it")
 
 
 def check_changelog(core: str) -> None:
