@@ -301,8 +301,8 @@ def render(proto):
     out.append("")
     out.append("/// Every arm, added field and closed-enum value, as the ledger spells")
     out.append("/// it, with the minor that added it.")
-    out.append("#[cfg(test)]")
-    out.append(f"pub(crate) const ADDITIONS: &[(&str, u16)] = &[{rows}\n];")
+    out.append("#[doc(hidden)]")
+    out.append(f"pub const ADDITIONS: &[(&str, u16)] = &[{rows}\n];")
     annotated = ", ".join(
         f'"{name}"' for _, name, rows in enums if any(minor for _, _, minor in rows)
     )

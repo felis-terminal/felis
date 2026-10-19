@@ -1193,6 +1193,9 @@ dependencies = [
 [[package]]
 name = "felis-workspace-tests"
 version = "0.2.0"
+dependencies = [
+ "felis-protocol",
+]
 
 [[package]]
 name = "find-msvc-tools"

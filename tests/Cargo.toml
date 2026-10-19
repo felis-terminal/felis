@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish = false
-description = "Guards on workspace-wide invariants: documented source references"
+description = "Guards on workspace-wide invariants: documented source references, the protocol minor ledger"
 
 # Outside `crates/` and carrying no lib or bin: these tests assert properties of
 # the workspace itself, so they belong to no crate's extraction set. The targets
@@ -15,6 +15,13 @@ description = "Guards on workspace-wide invariants: documented source references
 [[test]]
 name = "doc_source_references"
 path = "doc_source_references.rs"
+
+[[test]]
+name = "protocol_ledger"
+path = "protocol_ledger.rs"
+
+[dev-dependencies]
+felis-protocol = { workspace = true }
 
 [lints]
 workspace = true

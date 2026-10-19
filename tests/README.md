@@ -4,9 +4,10 @@ Guards on invariants that belong to the workspace as a whole rather than to any 
 because `crates/*` is the extraction set — each crate there must stay separable, and a check that walks the workspace
 root would not survive the split ([workspace.md](../docs/reference/workspace.md)).
 
-| Test                       | Pins                                                         |
-| -------------------------- | ------------------------------------------------------------ |
-| `doc_source_references.rs` | every bare `crates/.../*.rs` citation under `docs/` resolves |
+| Test                       | Pins                                                                                            |
+| -------------------------- | ----------------------------------------------------------------------------------------------- |
+| `doc_source_references.rs` | every bare `crates/.../*.rs` citation under `docs/` resolves                                    |
+| `protocol_ledger.rs`       | the minor ledger in `docs/reference/ipc.md` covers felis-protocol's metadata, one row per minor |
 
 Markdown links are checked by the repository's `lychee` lint. Dependency bans are checked by `just deny`.
 
