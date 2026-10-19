@@ -1,45 +1,27 @@
 # felis
 
-A terminal for your toolkit. Not an environment.
+A daemon-backed terminal emulator for persistent sessions and headless control.
 
-felis is a fast, GPU-accelerated terminal that keeps your sessions alive and renders modern protocols with full
-fidelity, while leaving layout to your window manager and workflow to your tools.
+The daemon holds live sessions, terminal state, scrollback, and images in memory; GUI windows and CLI tools connect as
+clients over a public, versioned IPC.
 
 ## What felis owns
 
-- **Sessions outlive windows.** Close the window without killing the shell, a long build, or an agent. Reattach locally
-  or over SSH with the grid and scrollback intact in the daemon. Sessions live in memory; you get process persistence
-  without the double-emulation layer, protocol degradation, or keybind collisions of tmux.
-- **Modern protocol fidelity.** A narrow scope does not mean reduced capabilities. felis implements modern protocols in
-  full: Kitty graphics, Kitty text sizing, Kitty keyboard protocol, OSC 8 hyperlinks, OSC 133 prompt marks, East Asian
-  width, and ligature font shaping. If a rich TUI runs in Kitty, it runs identically in felis.
-- **Engineered for throughput.** Because felis declines tabs, splits, and an embedded scripting runtime, engineering
-  focuses strictly on parser dispatch, damage tracking, and GPU rendering. [Performance](#performance) shows where that
-  lands against Kitty, Alacritty, WezTerm, Ghostty, and foot on macOS and Linux.
-- **An interface for your tools.** Automation belongs outside the terminal process. Typed CLI commands
-  (`felis sessions`) and a public, versioned IPC let scripts, programs, and AI agents spawn sessions headlessly, inject
-  input, and inspect screen state with `--format jsonl`.
-
-## The rest stays yours
-
-Your window manager handles layout (tiling, tabs, workspaces). Your shell and tools handle workflow. felis provides the
-interfaces for those tools to interact with it, without moving their logic inside the terminal. There are no in-terminal
-tabs or splits, and no embedded scripting language.
-
-Small utilities belong alongside the terminal: a session picker, a notification consumer, an editor integration. They
-can use the same public interfaces as your own scripts. The point is to let you choose and combine dedicated tools, not
-require an entire environment to use a terminal.
-
-Read the [vision](docs/explanation/vision.md) for where felis draws the line, and the
-[design values](docs/explanation/design.md) for why.
-
-## Performance
-
-felis is measured against Kitty, Alacritty, WezTerm, Ghostty and foot with the in-tree cross-terminal harness
-(`just bench-vs`). On an Apple M4 Max it has the best throughput of the field on every benchmark. On Linux it is faster
-than Kitty, WezTerm and Ghostty on every throughput benchmark and splits them with Alacritty, Ghostty's tip build and
-foot, while foot and Alacritty keep the lead on keystroke latency, startup, and memory.
-[Benchmarks](docs/reference/benchmarks.md) summarizes the standing per suite and has every figure.
+- **Persistent sessions, local and remote.** Close a window without killing the shell, a long build, or an agent.
+  Reattach locally with `felis attach`, or put a local GPU window onto a remote daemon with `felis --host user@remote`.
+  Because the daemon transfers live terminal state instead of stacking a second emulator, sessions survive disconnects
+  without tmux's protocol degradation or keybind collisions ([attach over SSH](docs/how-to/attach-over-ssh.md),
+  [tmux workflows without tmux](docs/how-to/tmux-workflows-without-tmux.md)).
+- **Headless control and typed IPC.** Every session is reachable without a window. `felis sessions` and `felis bridge`
+  let scripts, editor integrations, and AI agents spawn sessions, inject input, wait for commands to finish, and inspect
+  screen state with `--format json` or `jsonl`
+  ([driving a session without a window](docs/tutorials/drive-without-a-window.md),
+  [CLI reference](docs/reference/cli.md), [IPC protocol](docs/reference/ipc.md)).
+- **Modern protocol fidelity.** felis implements Kitty graphics, Kitty text sizing, Kitty keyboard protocol, OSC 8
+  hyperlinks, OSC 133 prompt marks, OSC 7501 program status, East Asian width, and ligature font shaping
+  ([protocol support matrix](docs/reference/protocols/support-matrix.md)). Because the daemon retains protocol state in
+  memory, rich TUIs keep their fidelity across detach and reattach
+  ([correct by construction](docs/explanation/design.md#correct-by-construction-not-by-replay)).
 
 ## Quick start
 
@@ -49,22 +31,31 @@ With [Nix](https://nixos.org/download) and flakes enabled:
 nix run github:felis-terminal/felis
 ```
 
-A window opens on a fresh session, and the shell inside it keeps running once you close the window. Reattach with
-`felis attach`.
+A window opens on a fresh session, and the shell inside it keeps running once you close the window.
 
 The [install guide](docs/how-to/install.md) covers the profile, Home Manager, Homebrew, standalone release archives
 (Linux, macOS, Windows), and from-source paths. [Your first session](docs/tutorials/first-session.md) walks the
-close-and-reattach loop, and [tmux workflows without tmux](docs/how-to/tmux-workflows-without-tmux.md) maps everyday
-tmux patterns to felis.
-
-## Working with your tools
-
-`felis --host user@remote` puts a local window on a remote daemon that keeps its sessions across disconnects
-([attach over SSH](docs/how-to/attach-over-ssh.md)). Session verbs speak JSON (`--format json` or `jsonl`) and
-`felis bridge` keeps a connection open for a longer-lived integration
-([driving a session without a window](docs/tutorials/drive-without-a-window.md), [CLI reference](docs/reference/cli.md),
-[IPC protocol](docs/reference/ipc.md)). One TOML file controls fonts, colors, keybindings, and window appearance
+close-and-reattach loop. One TOML file controls fonts, colors, keybindings, and window appearance
 ([configuration](docs/reference/config.md), [keybindings](docs/reference/keybindings.md)).
+
+## Performance
+
+felis is measured against Kitty, Alacritty, WezTerm, Ghostty and foot with the in-tree cross-terminal harness
+(`just bench-vs`). On an Apple M4 Max it has the best throughput of the field on every benchmark. On Linux it is faster
+than Kitty, WezTerm and Ghostty on every throughput benchmark and splits them with Alacritty, Ghostty's tip build and
+foot, while foot and Alacritty keep the lead on keystroke latency, startup, and memory.
+[Benchmarks](docs/reference/benchmarks.md) summarizes the standing per suite and has every figure.
+
+## Scope and design
+
+Each felis window displays one session. Layout (tiling, tabs, workspaces) belongs to your window manager, and workflow
+belongs to your shell and external programs. There are no in-terminal tabs or splits, and no embedded scripting runtime;
+session pickers, notification consumers, and editor integrations run as separate tools over the same public CLI and IPC
+as your own scripts.
+
+Read the [vision](docs/explanation/vision.md) for where felis draws the line, the
+[design values](docs/explanation/design.md) and [testable principles](docs/explanation/principles.md) for why, and
+[non-goals](docs/explanation/non-goals.md) for what stays outside the boundary.
 
 ## Status and compatibility
 
@@ -82,11 +73,8 @@ Open work is tracked in [Forgejo issues](https://git.natsukium.com/felis-termina
 
 ## Documentation and development
 
-The manual and its full index live in [`docs/`](docs/README.md).
-
-To understand the design, read the [vision](docs/explanation/vision.md), [values](docs/explanation/design.md), and
-[testable principles](docs/explanation/principles.md), in that order. For architecture and comparisons with other
-terminals, follow the [explanation index](docs/README.md#explanation).
+The manual and its full index live in [`docs/`](docs/README.md). For architecture and comparisons with other terminals,
+follow the [explanation index](docs/README.md#explanation).
 
 felis is written in Rust with wgpu and winit. The Nix flake owns the development toolchain:
 

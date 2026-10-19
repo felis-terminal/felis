@@ -139,7 +139,7 @@ craneLib.buildPackage (
     passthru = { inherit commonArgs; };
 
     meta = {
-      description = "GPU-accelerated terminal emulator with a daemon/client split";
+      description = "Daemon-backed terminal emulator for persistent sessions and headless control";
       homepage = "https://github.com/felis-terminal/felis";
       license = lib.licenses.asl20;
       mainProgram = "felis";
