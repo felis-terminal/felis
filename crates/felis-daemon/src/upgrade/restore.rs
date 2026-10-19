@@ -105,7 +105,7 @@ async fn register(
         })
     });
     let SessionState {
-        grid,
+        mut grid,
         parser,
         table_gc,
         images,
@@ -121,6 +121,7 @@ async fn register(
         program_status,
         terminal_progress,
     } = *state;
+    grid.set_reply_identity(crate::pool::reply_identity());
     let core = ParseCore {
         parser,
         grid,
@@ -444,5 +445,52 @@ mod tests {
             got, b"\x1b[?",
             "the queued device-attributes reply reached the child"
         );
+    }
+
+    /// The restoring daemon's identity answers XTVERSION, whatever the
+    /// carried grid held.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_restored_session_answers_xtversion_as_the_restoring_daemon() {
+        let tmp = tempfile::tempdir().unwrap();
+        let reply = tmp.path().join("reply");
+        let expected = format!("\x1bP>|felis {}\x1b\\", env!("CARGO_PKG_VERSION"));
+        let (master, pid, _first) = carried_child(&format!(
+            "stty raw -echo; sleep 1; printf '\\033[>q'; head -c {} > '{}'; sleep 30",
+            expected.len(),
+            reply.display()
+        ));
+        let mut stale = felis_grid::Grid::new(24, 80);
+        stale.set_reply_identity(felis_grid::ReplyIdentity::new("felis 0.0.0", "felis-0"));
+        let dump = SessionDump {
+            id: crate::upgrade::dump::format_session_id(7),
+            sequence: 1,
+            child: crate::upgrade::dump::ChildDump {
+                pid,
+                exit_status: None,
+            },
+            rows: 24,
+            cols: 80,
+            state: Some(Box::new(SessionState {
+                grid: stale,
+                ..SessionState::default()
+            })),
+            ..SessionDump::default()
+        };
+        let pool = Arc::new(Mutex::new(SessionPool::new()));
+        register(&pool, IdlePolicy::default(), &dump, master)
+            .await
+            .unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let got = loop {
+            let got = std::fs::read(&reply).unwrap_or_default();
+            if got.len() >= expected.len() || Instant::now() >= deadline {
+                break got;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        };
+        let _killed =
+            rustix::process::kill_process_group(Pid::from_raw(pid).unwrap(), Signal::KILL);
+        assert_eq!(String::from_utf8_lossy(&got), expected);
     }
 }

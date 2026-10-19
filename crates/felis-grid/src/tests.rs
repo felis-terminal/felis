@@ -243,22 +243,70 @@ fn da2_query_responds_with_vt420_model_and_in_range_version() {
     assert_eq!(responses(&mut g), vec![b"\x1b[>41;400;0c".to_vec()]);
 }
 
-/// `docs/reference/protocols/vt-compliance.md` "Reporting and queries":
-/// the hex of "felis-1", not xterm's all-zeroes placeholder.
+fn identified_grid() -> Grid {
+    let mut g = Grid::new(1, 1);
+    g.set_reply_identity(ReplyIdentity::new("felis 9.9.9", "felis-1"));
+    g
+}
+
 #[test]
-fn da3_query_responds_with_the_felis_unit_id() {
+fn da3_replies_with_the_hex_of_the_host_unit_id() {
     let mut p = Parser::new();
     let mut g = Grid::new(1, 1);
-    drive(&mut p, &mut g, b"\x1b[=0c");
+    g.set_reply_identity(ReplyIdentity::new("host 1.0", "host-2"));
+    drive(&mut p, &mut g, b"\x1b[=0c\x1b[=c");
     assert_eq!(
         responses(&mut g),
-        vec![b"\x1bP!|66656c69732d31\x1b\\".to_vec()]
+        vec![b"\x1bP!|686f73742d32\x1b\\".to_vec(); 2]
     );
+}
+
+#[test]
+fn da3_without_a_host_identity_replies_with_the_all_zero_unit_id() {
+    let mut p = Parser::new();
+    let mut g = Grid::new(1, 1);
     drive(&mut p, &mut g, b"\x1b[=c");
+    assert_eq!(responses(&mut g), vec![b"\x1bP!|00000000\x1b\\".to_vec()]);
+}
+
+#[test]
+fn xtversion_replies_with_the_host_string_not_the_grid_crate_version() {
+    let mut p = Parser::new();
+    let mut g = identified_grid();
+    drive(&mut p, &mut g, b"\x1b[>q\x1b[>0q");
     assert_eq!(
         responses(&mut g),
-        vec![b"\x1bP!|66656c69732d31\x1b\\".to_vec()]
+        vec![b"\x1bP>|felis 9.9.9\x1b\\".to_vec(); 2]
     );
+}
+
+#[test]
+fn xtversion_without_a_host_identity_is_unanswered_while_da1_still_replies() {
+    let mut p = Parser::new();
+    let mut g = Grid::new(1, 1);
+    drive(&mut p, &mut g, b"\x1b[>q\x1b[c");
+    let replies = responses(&mut g);
+    assert_eq!(replies.len(), 1);
+    assert!(replies[0].starts_with(b"\x1b[?64;"));
+}
+
+#[test]
+fn ris_keeps_the_host_reply_identity() {
+    let mut p = Parser::new();
+    let mut g = identified_grid();
+    drive(&mut p, &mut g, b"\x1bc\x1b[>q");
+    assert_eq!(
+        responses(&mut g),
+        vec![b"\x1bP>|felis 9.9.9\x1b\\".to_vec()]
+    );
+}
+
+#[test]
+fn reply_identity_refuses_bytes_that_could_break_the_dcs_frame() {
+    assert!(ReplyIdentity::new("felis\x1b\\", "felis-1").is_none());
+    assert!(ReplyIdentity::new("felis", "felis\u{9c}").is_none());
+    assert!(ReplyIdentity::new("felis\u{e9}", "felis-1").is_none());
+    assert!(ReplyIdentity::new("felis 0.3.0", "felis-1").is_some());
 }
 
 #[test]
