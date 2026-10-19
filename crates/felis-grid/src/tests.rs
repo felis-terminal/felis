@@ -1280,6 +1280,7 @@ fn pty_effects_drain_in_byte_stream_order() {
             PtyEffect::BracketedPasteDisabled => "paste_guard_off",
             PtyEffect::ProgramStatus(_) => "program_status",
             PtyEffect::PromptStarted => "prompt_started",
+            PtyEffect::TerminalProgress(_) => "terminal_progress",
         })
         .collect();
     assert_eq!(

@@ -119,6 +119,7 @@ async fn register(
         idle_ms,
         last_notification,
         program_status,
+        terminal_progress,
     } = *state;
     let core = ParseCore {
         parser,
@@ -133,6 +134,7 @@ async fn register(
     session.saved_screens = saved_screens;
     session.graphics_reassembler = reassembler;
     session.program_status = ProgramStatusStore::from_reports(program_status);
+    session.terminal_progress = terminal_progress;
     session.spawn_cwd = dump.spawn_cwd.clone();
     session.shm_segments =
         ShmDeferral::from_names(shm_segments).ok_or("too many deferred shared memory names")?;

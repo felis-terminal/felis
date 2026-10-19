@@ -273,6 +273,8 @@ pub enum PtyEffect {
     ProgramStatus(ProgramStatusEffect),
     /// OSC 133 `A` that is not a `k=s` continuation, on either screen.
     PromptStarted,
+    /// A terminated `ConEmu` `OSC 9 ; 4` report; `None` clears.
+    TerminalProgress(felis_vt::progress::ProgressReport),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -632,10 +634,11 @@ pub struct Grid {
     /// by an effect that spends an outbox budget; taken by
     /// [`felis_vt::Sink::take_yield`].
     yield_pending: bool,
-    /// A `working` or `blocked` OSC 7501 report was queued after the last
-    /// queued prompt start. Without one the daemon holds no record a
-    /// prompt start expires, so an OSC 133 `A` queues nothing: a shell
-    /// that never reports pays no effect per prompt.
+    /// A `working` / `blocked` OSC 7501 report or a non-clear `OSC 9 ; 4`
+    /// was queued after the last queued prompt start; without one an OSC
+    /// 133 `A` queues nothing, so a shell that never reports pays nothing
+    /// per prompt. A progress clear leaves it set: an earlier 7501 report
+    /// may still owe its expiry.
     prompt_expiry_owed: bool,
     /// `ESC =` / `ESC >` DECKPAM / DECKPNM, mirrored via [`ModeSnapshot`].
     application_keypad: bool,

@@ -21,6 +21,7 @@ pub mod kitty_graphics;
 pub mod kitty_text_sizing;
 pub mod notification;
 pub mod program_status;
+pub mod progress;
 #[cfg(feature = "state-dump")]
 pub mod state;
 pub mod utf8;

@@ -141,6 +141,9 @@ pub struct Session {
     pub scroll_ops: Vec<crate::serve::streaming::QueuedScroll>,
     /// OSC 7501 records, applied in byte order by the effect replay.
     pub program_status: crate::program_status::ProgramStatusStore,
+    /// The last `OSC 9 ; 4` report, applied in byte order like
+    /// [`Self::program_status`].
+    pub terminal_progress: felis_vt::progress::ProgressReport,
     /// Cell pixel size from `InputMsg::Resize`; the graphics dispatcher
     /// resolves auto placement extents (`c=0` / `r=0`) with it so the
     /// cursor advances past the image. Zero before any client attaches
@@ -191,6 +194,7 @@ impl Session {
             image_events: Vec::new(),
             scroll_ops: Vec::new(),
             program_status: crate::program_status::ProgramStatusStore::default(),
+            terminal_progress: None,
             cell_pixel_w: 0,
             cell_pixel_h: 0,
             reader,
@@ -273,6 +277,7 @@ pub struct SessionMeta {
     /// last meta publish.
     pub program_status: Vec<felis_protocol::messages::ProgramStatusRecord>,
     pub spawn_cwd: Option<String>,
+    pub terminal_progress: felis_vt::progress::ProgressReport,
 }
 
 /// A session's most recent notification plus the `Instant` it arrived,
@@ -1060,6 +1065,7 @@ mod tests {
                 attachments: Vec::new(),
                 program_status: Vec::new(),
                 spawn_cwd: None,
+                terminal_progress: None,
                 sequence: NonZeroU64::MIN,
             })),
         }

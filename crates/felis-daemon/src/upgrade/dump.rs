@@ -81,6 +81,7 @@ pub struct SessionState {
     pub last_notification: Option<NotificationDump>,
     /// OSC 7501 records, least recently updated first.
     pub program_status: Vec<felis_vt::program_status::Report>,
+    pub terminal_progress: felis_vt::progress::ProgressReport,
 }
 
 impl Default for SessionState {
@@ -100,6 +101,7 @@ impl Default for SessionState {
             idle_ms: 0,
             last_notification: None,
             program_status: Vec::new(),
+            terminal_progress: None,
         }
     }
 }
@@ -143,6 +145,12 @@ impl SessionState {
                 .any(|report| report.progress.is_some_and(|progress| progress > 100))
         {
             return Err("program-status records".to_owned());
+        }
+        if self
+            .terminal_progress
+            .is_some_and(|progress| progress.value.is_some_and(|value| value > 100))
+        {
+            return Err("terminal progress".to_owned());
         }
         Ok(())
     }
@@ -333,6 +341,10 @@ mod tests {
             title: None,
             msg: None,
         });
+        state.terminal_progress = Some(felis_vt::progress::Progress {
+            state: felis_vt::progress::ProgressState::Error,
+            value: Some(71),
+        });
         state
             .images
             .insert(
@@ -415,6 +427,9 @@ mod tests {
         assert!(refused(|state| state["images"]["bytes_total"] = 1.into()));
         assert!(refused(
             |state| state["program_status"][0]["progress"] = 101.into()
+        ));
+        assert!(refused(
+            |state| state["terminal_progress"]["value"] = 101.into()
         ));
         assert!(refused(|state| {
             state["images"]["entries"][0][1]["frames"][0]["pixels"] = "AAAA".into();

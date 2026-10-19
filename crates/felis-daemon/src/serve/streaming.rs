@@ -140,6 +140,7 @@ fn replay_effects(
                 );
                 session.saved_screens.alternate = None;
                 session.program_status.reset();
+                session.terminal_progress = None;
             }
             // Parked for `session_task::fan_out_grid_state`, the only consumer
             // that knows each shadow's damage.
@@ -189,7 +190,11 @@ fn replay_effects(
             PtyEffect::ProgramStatus(ProgramStatusEffect::Clear { id }) => {
                 session.program_status.clear(&id);
             }
-            PtyEffect::PromptStarted => session.program_status.expire_transient(),
+            PtyEffect::PromptStarted => {
+                session.program_status.expire_transient();
+                session.terminal_progress = None;
+            }
+            PtyEffect::TerminalProgress(report) => session.terminal_progress = report,
         }
     }
 }
