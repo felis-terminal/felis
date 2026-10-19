@@ -37,7 +37,11 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
   the old chords back.
 - On macOS and Windows, `font.family` resolves through the platform's font API, and a character the font misses draws
   from the face the platform picks for it, so Han takes the Japanese or the Chinese form your language list asks for. A
-  symbols-only Nerd Font still comes first, and an explicit `font.fallback` still replaces both.
+  symbols-only Nerd Font still comes first.
+- A `font.fallback` list now goes before the system's font fallback instead of replacing it, so listing one CJK font no
+  longer turns emoji, symbols and other scripts into boxes. The listed fonts still win for every character they cover,
+  except that a character shown as emoji by default (⭐) takes a color emoji font even when only monochrome fonts are
+  listed.
 - The default font is your fixed-pitch font on macOS (Menlo unless you changed it) and Cascadia Mono on Windows.
 - A window scrolled back keeps showing the same lines while the program keeps printing, and the next scroll moves one
   line from them instead of jumping by the lines printed meanwhile; search highlights and a selection stay on their

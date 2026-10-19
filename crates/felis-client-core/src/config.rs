@@ -607,10 +607,10 @@ pub struct FontConfig {
     /// (the Ctrl+Wheel zoom band) with a warning; non-positive,
     /// non-finite, and omitted values use the built-in default.
     pub size_px: Option<f32>,
-    /// Explicit per-grapheme fallback chain, appended in declared order
-    /// (missing families warn and are skipped). Empty (default) takes the
-    /// host's fallback instead, never on top: fontconfig's on Linux, a CJK
-    /// / symbol / emoji / Nerd Font discovery elsewhere. Each entry is `{ family = "...", features = [...] }`, where an
+    /// Explicit per-grapheme fallback chain, tried in declared order
+    /// (missing families warn and are skipped) before the host's fallback:
+    /// fontconfig's on Linux, the platform's per-character lookup on macOS
+    /// and Windows. Each entry is `{ family = "...", features = [...] }`, where an
     /// omitted `features` inherits `font.features` (docs/reference/config.md).
     #[serde(deserialize_with = "deserialize_fallback_chain")]
     pub fallback: Vec<FontStyleConfig>,

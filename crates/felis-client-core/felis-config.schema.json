@@ -543,7 +543,7 @@
           "default": {}
         },
         "fallback": {
-          "description": "Explicit per-grapheme fallback chain, appended in declared order\n(missing families warn and are skipped). Empty (default) takes the\nhost's fallback instead, never on top: fontconfig's on Linux, a CJK\n/ symbol / emoji / Nerd Font discovery elsewhere. Each entry is `{ family = \"...\", features = [...] }`, where an\nomitted `features` inherits `font.features` (docs/reference/config.md).",
+          "description": "Explicit per-grapheme fallback chain, tried in declared order\n(missing families warn and are skipped) before the host's fallback:\nfontconfig's on Linux, the platform's per-character lookup on macOS\nand Windows. Each entry is `{ family = \"...\", features = [...] }`, where an\nomitted `features` inherits `font.features` (docs/reference/config.md).",
           "type": "array",
           "default": [],
           "items": {

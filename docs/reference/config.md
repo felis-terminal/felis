@@ -83,16 +83,16 @@ family = "JetBrainsMono Nerd Font"
 # Either TOML spelling is accepted: 14 and 14.0 are the same size.
 size_px = 14
 
-# Explicit font fallback chain resolved per codepoint.
-# Omitted (default) on Linux: fontconfig's ranked fallback for the
+# Explicit font fallback chain resolved per codepoint, tried in
+# declared order before the host's fallback, which covers what the
+# entries miss. Default: [] (the host's fallback alone).
+# The host's fallback on Linux: fontconfig's ranked fallback for the
 # primary (`fc-match -s`), keeping the faces that add coverage, at most
-# 62; a text-presentation character takes a monochrome face before an
-# earlier-ranked color one. Omitted on macOS and Windows: the first
-# installed symbols-only Nerd Font, then, per character it misses, the
-# face CoreText or DirectWrite picks for it in the user's first
-# Han-writing language (else their first language).
-# Non-empty: the declared entries are the whole chain, in order,
-# and the host's fallback does not run on top of them.
+# 62; among those, a text-presentation character takes a monochrome
+# face before an earlier-ranked color one. On macOS and Windows: the
+# first installed symbols-only Nerd Font, then, per character it
+# misses, the face CoreText or DirectWrite picks for it in the user's
+# first Han-writing language (else their first language).
 # A character that defaults to emoji (⭐, ☕) takes the first color
 # face that covers it, wherever it is in the chain.
 # A variation sequence (葛󠄀) draws the variant glyph only when the

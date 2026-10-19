@@ -149,7 +149,7 @@ pub struct RendererConfig {
     /// Sparse `[theme.palette]` overrides by index; absent indices keep
     /// the xterm baseline.
     pub theme_palette: BTreeMap<u8, String>,
-    /// `font.fallback`; empty enables auto-discovery.
+    /// `font.fallback`, tried before auto-discovery.
     pub font_fallbacks: Vec<FaceSpec>,
     pub font_features: Vec<String>,
     pub font_bold: FaceSpec,
