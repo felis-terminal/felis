@@ -40,7 +40,7 @@ use felis_client_core::{
     viewport::{ViewportIntent, composed_row_for_line, viewport_for_hit},
 };
 use felis_client_core::{CarrierReader, CarrierWriter};
-use felis_transport::logging::{self, Console};
+use felis_transport::logging::{self, Console, LogFile};
 
 fn build_runtime() -> Result<tokio::runtime::Runtime> {
     tokio::runtime::Builder::new_multi_thread()
@@ -406,9 +406,13 @@ fn main() -> Result<ExitCode> {
     // Tee logs into a per-user file: a `.app` launch inherits `/dev/null`
     // for stdout/stderr, so console-only logging records nothing when a
     // window dies in the field.
+    let log_socket = resolve_local_socket(cli.socket.as_deref()).ok();
     logging::init(
         Console::Stdout,
-        Some("client.log"),
+        Some(LogFile {
+            name: "client.log",
+            socket: log_socket.as_deref(),
+        }),
         log_filter_directive(cli.trace_perf),
     );
 

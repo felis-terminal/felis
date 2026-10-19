@@ -24,6 +24,8 @@ pub(crate) struct Inputs<'a> {
     pub(crate) fonts_note: Option<&'a str>,
     pub(crate) daemon: Option<&'a BuildIdentity>,
     pub(crate) config_source: &'a ConfigSource,
+    /// `None` under `--host`.
+    pub(crate) socket: Option<&'a Path>,
 }
 
 /// Only the named variables are ever read; nothing walks the
@@ -77,7 +79,7 @@ pub(crate) fn environment(
         },
         fonts: fonts_object(inputs.probe, inputs.fonts_note),
         config: config_object(inputs.config_source),
-        logs: log_objects(),
+        logs: log_objects(inputs.socket),
     }
 }
 
@@ -139,19 +141,23 @@ fn config_object(source: &ConfigSource) -> ConfigObject {
     }
 }
 
-fn log_objects() -> Vec<LogObject> {
-    let Some(dir) = felis_transport::logging::log_dir() else {
-        return Vec::new();
-    };
-    ["daemon.log", "client.log"]
+/// Both places for a non-default socket: a daemon whose socket
+/// directory did not exist yet when it started logged that run to the
+/// user's log directory, and nothing here can tell which run it was.
+fn log_objects(socket: Option<&Path>) -> Vec<LogObject> {
+    socket
+        .and_then(felis_transport::logging::adjacent_log_dir)
         .into_iter()
-        .map(|name| {
-            let path = dir.join(name);
-            LogObject {
-                name: name.to_owned(),
-                path: path.to_string_lossy().into_owned(),
-                present: path.is_file(),
-            }
+        .chain(felis_transport::logging::log_dir())
+        .flat_map(|dir| {
+            ["daemon.log", "client.log"].map(|name| {
+                let path = dir.join(name);
+                LogObject {
+                    name: name.to_owned(),
+                    path: path.to_string_lossy().into_owned(),
+                    present: path.is_file(),
+                }
+            })
         })
         .collect()
 }
@@ -665,6 +671,33 @@ mod tests {
         let (config, diagnostics) = EffectiveConfig::diagnose(&path, "felis");
         assert_eq!(diagnostics.errors().count(), 0, "{text}");
         config
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_non_default_socket_reports_the_logs_beside_it_and_the_user_ones() {
+        let paths: Vec<String> = log_objects(Some(Path::new("/tmp/felis-dbg.x/d.sock")))
+            .into_iter()
+            .map(|log| log.path)
+            .collect();
+        let user = felis_transport::logging::log_dir().unwrap();
+
+        assert_eq!(
+            paths,
+            [
+                "/tmp/felis-dbg.x/daemon.log".to_owned(),
+                "/tmp/felis-dbg.x/client.log".to_owned(),
+                user.join("daemon.log").to_string_lossy().into_owned(),
+                user.join("client.log").to_string_lossy().into_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_default_socket_reports_only_the_user_logs() {
+        let default = felis_transport::socket::default_socket_path().unwrap();
+        assert_eq!(log_objects(Some(&default)).len(), 2);
+        assert_eq!(log_objects(None).len(), 2);
     }
 
     #[test]

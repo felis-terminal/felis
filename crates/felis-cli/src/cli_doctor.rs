@@ -122,6 +122,19 @@ pub(crate) fn run(
     i32::from(failed > 0)
 }
 
+#[cfg(unix)]
+fn local_socket(target: &Resolved) -> Option<&Path> {
+    match &target.target.carrier {
+        felis_client_core::Carrier::Local(endpoint) => Some(endpoint.path()),
+        felis_client_core::Carrier::Ssh { .. } => None,
+    }
+}
+
+#[cfg(windows)]
+const fn local_socket(_target: &Resolved) -> Option<&Path> {
+    None
+}
+
 /// Exits `0` whenever the report is written: a failing check is what a
 /// reporter came to report, not a failure of the verb.
 pub(crate) fn run_report(
@@ -149,6 +162,7 @@ pub(crate) fn run_report(
             fonts_note: fonts_note.as_deref(),
             daemon: gathered.daemon.as_ref(),
             config_source,
+            socket: local_socket(target),
         },
         &cli_report::process_env,
     );

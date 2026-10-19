@@ -113,7 +113,7 @@ pub(crate) async fn connect(path: impl AsRef<Path>) -> io::Result<UnixStream> {
     UnixStream::connect(path).await
 }
 
-fn socket_parent(path: &Path) -> PathBuf {
+pub(crate) fn socket_parent(path: &Path) -> PathBuf {
     match path.parent() {
         Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
         _ => PathBuf::from("."),
@@ -190,16 +190,20 @@ fn create_dir_0700(dir: &Path) -> Result<(), BindError> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct DirFacts {
-    uid: u32,
-    mode: u32,
+pub(crate) struct DirFacts {
+    pub(crate) uid: u32,
+    pub(crate) mode: u32,
 }
 
 /// tmux's `check_dir`, and what closes the squat on a predictable name
 /// in a shared `/tmp`: setgid and sticky bits are ignored, the access
 /// bits are not. Never tightened: a parent felis did not create is the
 /// user's, and a `chmod` on it would hide whatever set it loose.
-fn judge_socket_dir(dir: &Path, expected_uid: u32, facts: DirFacts) -> Result<(), BindError> {
+pub(crate) fn judge_socket_dir(
+    dir: &Path,
+    expected_uid: u32,
+    facts: DirFacts,
+) -> Result<(), BindError> {
     let refuse = |reason: &str| {
         Err(BindError::Parent {
             path: dir.to_path_buf(),

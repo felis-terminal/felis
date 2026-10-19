@@ -29,6 +29,9 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 
 ### Changed
 
+- **Logs**: a daemon or window on a socket other than the default one logs into that socket's own `0700` directory
+  instead of the user's log directory, so test and experiment daemons no longer interleave with, or rotate away, the
+  real daemon's `daemon.log`.
 - The terminfo source moved from `share/terminfo/felis.terminfo` to `crates/felis-daemon/terminfo/felis.terminfo`; a
   package or a `tic -x` command that compiles it from a source checkout needs the new path.
 - Jumping to the top or bottom of the scrollback moves from `Ctrl+Home` / `Ctrl+End` to `Ctrl+Shift+Home` /

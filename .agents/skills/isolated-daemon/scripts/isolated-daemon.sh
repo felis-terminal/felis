@@ -67,14 +67,17 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
   case "${1:-}" in
   start)
     felis_dbg_socket || exit 1
+    # serve tees into daemon.log beside its socket itself; its stderr
+    # keeps what precedes the tee, such as a refused socket parent.
     LOG="$FELIS_DBG_DIR/daemon.log"
     # An inherited NOTIFY_SOCKET makes `serve` report readiness to a
     # manager that is not there, and exit right after its bind when that fails.
     RUST_LOG="${RUST_LOG:-info,felis_daemon=debug}" env -u NOTIFY_SOCKET \
-      "${FELIS_DAEMON_BIN:-./target/release/felis-daemon}" serve --socket "$FELIS_DBG_SOCK" >"$LOG" 2>&1 &
+      "${FELIS_DAEMON_BIN:-./target/release/felis-daemon}" serve --socket "$FELIS_DBG_SOCK" \
+      >/dev/null 2>"$FELIS_DBG_DIR/serve.err" &
     if ! felis_dbg_wait "$FELIS_DBG_SOCK" $!; then
-      echo "the daemon is not serving $FELIS_DBG_SOCK; see $LOG" >&2
-      tail -5 "$LOG" >&2
+      echo "the daemon is not serving $FELIS_DBG_SOCK; see $LOG and $FELIS_DBG_DIR/serve.err" >&2
+      tail -5 "$FELIS_DBG_DIR/serve.err" >&2
       exit 1
     fi
     echo "SOCK=$FELIS_DBG_SOCK"

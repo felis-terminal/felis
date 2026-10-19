@@ -13,7 +13,7 @@ use felis_daemon::{
     ServeError, SessionPool, relay::run_stdio_relay, serve::DaemonCaps, serve_unix,
 };
 use felis_transport::{
-    logging::{self, Console},
+    logging::{self, Console, LogFile},
     socket::default_socket_path,
 };
 use tokio::sync::Mutex;
@@ -106,9 +106,13 @@ fn main() -> Result<()> {
         } => {
             // Only `serve` tees into the log file: a relay teeing into the same
             // file would race the serving daemon's rotation.
+            let log_socket = socket.clone().or_else(|| default_socket_path().ok());
             logging::init(
                 Console::Stderr,
-                Some("daemon.log"),
+                Some(LogFile {
+                    name: "daemon.log",
+                    socket: log_socket.as_deref(),
+                }),
                 log_filter_directive(trace_perf),
             );
             #[cfg(unix)]
