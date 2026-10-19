@@ -10,7 +10,7 @@
 #![cfg_attr(not(test), deny(unsafe_code))]
 
 use std::env;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use felis_protocol::SessionHex;
 use felis_pty::{ChildHandle, Command, PtyError, PtyReader, PtyWriter, Resizer, Size};
@@ -19,23 +19,34 @@ use crate::parse_sink::ParseSignals;
 use crate::pool::ParseCore;
 
 pub mod agent;
+#[doc(hidden)]
 pub mod child_env;
+#[doc(hidden)]
 pub mod foreground;
+#[doc(hidden)]
 pub mod graphics;
 pub(crate) mod locale;
 #[cfg(target_os = "linux")]
+#[doc(hidden)]
 pub mod notify;
+#[doc(hidden)]
 pub mod parse_sink;
+#[doc(hidden)]
 pub mod pool;
+#[doc(hidden)]
 pub mod program_status;
+#[doc(hidden)]
 pub mod relay;
 pub mod serve;
 pub(crate) mod terminfo;
 pub mod upgrade;
-pub use pool::{DEFAULT_COLS, DEFAULT_ROWS, SessionId, SessionMeta, SessionPool};
+pub use pool::SessionPool;
+#[doc(hidden)]
+pub use pool::{DEFAULT_COLS, DEFAULT_ROWS, SessionId, SessionMeta};
 pub use serve::{ServeError, serve_unix};
 
 /// Initial PTY size before the client reports its viewport.
+#[doc(hidden)]
 pub const DEFAULT_SIZE: Size = Size {
     rows: 24,
     cols: 80,
@@ -73,27 +84,26 @@ pub(crate) fn program_size(size: Size, cell: (u16, u16)) -> Size {
 /// here, not in `TERM_PROGRAM_VERSION`: programs inside the terminal
 /// want stable semver, and compatibility is gated by the preface's
 /// protocol major/minor, so the revision is free to churn.
+#[doc(hidden)]
 #[must_use]
-pub const fn version() -> &'static str {
-    concat!(
-        env!("CARGO_PKG_VERSION"),
-        " (",
-        env!("FELIS_BUILD_STAMP"),
-        ")"
-    )
+pub fn version() -> &'static str {
+    static LINE: LazyLock<String> = LazyLock::new(|| build_identity().to_string());
+    &LINE
 }
 
-/// The build the daemon was compiled from (`build.rs`), typed. Sent in
+/// The build the daemon was compiled from, typed. Sent in
 /// `Welcome` so `felis version` shows which build the running daemon
 /// is, as distinct from the on-disk binary.
+#[doc(hidden)]
 #[must_use]
 pub fn build_identity() -> felis_protocol::BuildIdentity {
     felis_protocol::BuildIdentity::from_build_env(
         env!("CARGO_PKG_VERSION"),
-        env!("FELIS_BUILD_STAMP"),
+        option_env!("FELIS_GIT_HASH").unwrap_or_default(),
     )
 }
 
+#[doc(hidden)]
 pub type SessionError = PtyError;
 
 /// Env-var denylist applied to every child shell
@@ -114,6 +124,7 @@ const ENV_DENYLIST: &[&str] = &[
 ///
 /// Ensures explicit config validation and base sanitization agree, while
 /// allowing unreserved identity stamps (`TERM`, etc.) to be overridden.
+#[doc(hidden)]
 #[must_use]
 pub const fn reserved_env_keys() -> &'static [&'static str] {
     &RESERVED_ENV_KEYS
@@ -168,6 +179,7 @@ const DEFAULT_TERM_PROGRAM: &str = "felis";
 /// The owned halves of a freshly spawned PTY session plus the parse
 /// pipeline the PTY parse thread feeds; [`pool::Session`] wraps these
 /// with the async-side state.
+#[doc(hidden)]
 pub struct SpawnedPty {
     /// Carries only the EOF/error lifecycle signal; the sink on the parse
     /// thread consumes the data (`felis_pty::ByteSink`).
@@ -271,6 +283,7 @@ impl SpawnedPty {
 /// Honors terminal identity hatches (`docs/reference/terminal-identity.md`),
 /// sets session addressing variables (`FELIS_SESSION_ID`, `FELIS_SOCKET`),
 /// and clears stale daemon socket inherited from outer sessions.
+#[doc(hidden)]
 pub fn apply_env_policy(
     cmd: &mut Command,
     session_id: u128,
@@ -302,6 +315,7 @@ pub fn apply_env_policy(
 /// environment (a warm daemon's copy came from an earlier login, or
 /// another host). Read before the denylist scrub removes the two keys
 /// (docs/reference/terminal-identity.md).
+#[doc(hidden)]
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct TermHatch {
     pub term: Option<String>,

@@ -322,8 +322,8 @@ def first_line(text: str | None) -> str | None:
 def paren_hash(line: str | None) -> str | None:
     """`"felis 0.1.0 (b27da75c9f1e-dirty)"` → `"b27da75c9f1e"`.
 
-    The commit `felis --version` was compiled against, embedded by
-    `crates/felis-cli/build.rs`. This is the only revision that names the
+    The commit `felis --version` was compiled against, from the
+    compile-time `FELIS_GIT_HASH`. This is the only revision that names the
     binary that ran; everything else names a directory. The `-dirty`
     suffix is dropped here and reported by `revision_drift` instead.
     """
@@ -343,8 +343,8 @@ def revision_drift(binary: str | None, checkout: str | None) -> str | None:
     one the tree the report is read next to would produce.
 
     Compared by prefix because the two hashes are abbreviated
-    independently (`git describe --always` and the build script's
-    `rev-parse --short` need not pick the same length). A dirty checkout
+    independently (`git describe --always` and the binary's twelve-digit
+    abbreviation need not pick the same length). A dirty checkout
     is called out even when the hashes agree: the binary cannot carry a
     hash for uncommitted work, so the revision does not identify it.
     """
@@ -545,6 +545,10 @@ def felis_info(repo: Path, felis_bin: Path) -> dict:
     }
     if drift := revision_drift(binary, checkout):
         info["drift"] = drift
+    elif binary is None and version and "(unknown" in version:
+        info["drift"] = (
+            "binary carries no revision (a cargo build without FELIS_GIT_HASH)"
+        )
     return info
 
 

@@ -10,7 +10,8 @@ description = "felis IPC transport: framing, local carrier (Unix socket / Window
 
 [features]
 # The unchecked frame write, for tests and benches that must produce a
-# body no domain message can. Never enabled by a production dependency.
+# body no domain message can. Never enabled by a production dependency,
+# and outside the semver contract.
 test-util = []
 
 [dependencies]

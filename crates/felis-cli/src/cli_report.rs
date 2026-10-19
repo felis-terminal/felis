@@ -15,7 +15,7 @@ use crate::cli_output::{
     BuildsObject, ConfigObject, DisplayObject, DoctorReportResult, EnvironmentObject, FontsObject,
     GpuObject, LocaleObject, LogObject, OsObject, ShellObject,
 };
-use crate::cli_version::SELF_VERSION_LINE;
+use crate::cli_version::self_version_line;
 
 /// What the checklist run already learned, handed over rather than
 /// asked again.
@@ -42,7 +42,7 @@ pub(crate) fn environment(
     let probe = inputs.probe.as_ref().ok();
     EnvironmentObject {
         builds: BuildsObject {
-            cli: SELF_VERSION_LINE.to_owned(),
+            cli: self_version_line(),
             client: probe.map(|report| report.client_version.clone()),
             daemon: inputs.daemon.map(BuildIdentity::human),
         },

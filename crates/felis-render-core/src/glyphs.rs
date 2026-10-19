@@ -1076,6 +1076,7 @@ impl ShapeFrame {
     /// The quad-slicing tests in `painter.rs` build frames directly
     /// because the full pipeline needs a real ligature font.
     #[cfg(any(test, feature = "testing"))]
+    #[doc(hidden)]
     #[must_use]
     pub const fn from_cells(cells: Vec<ShapedCell>, cols: u16) -> Self {
         Self {
@@ -1087,6 +1088,7 @@ impl ShapeFrame {
     }
 
     #[cfg(any(test, feature = "testing"))]
+    #[doc(hidden)]
     #[must_use]
     pub const fn from_cluster_cells(
         cells: Vec<ShapedCell>,

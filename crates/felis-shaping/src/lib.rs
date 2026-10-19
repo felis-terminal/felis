@@ -60,11 +60,13 @@ type FontBytes = Arc<dyn AsRef<[u8]> + Send + Sync>;
 
 /// Single-sourced so `flake.nix`'s pinned test-font dir, the loader, and
 /// every feature test agree on the face.
+#[doc(hidden)]
 pub const TEST_FONT_FAMILY: &str = "Monaspace Neon";
 
 /// The pinned test-font set `$FELIS_TEST_FONT_DIR` names; panics when
 /// it is unset.
 #[cfg(any(test, feature = "testing"))]
+#[doc(hidden)]
 #[must_use]
 pub fn test_font_dir() -> std::path::PathBuf {
     std::env::var_os("FELIS_TEST_FONT_DIR")
@@ -158,6 +160,7 @@ impl Font {
 
     /// The pinned probe font; panics when the fixture is absent.
     #[cfg(any(test, feature = "testing"))]
+    #[doc(hidden)]
     #[must_use]
     pub fn load_test_font() -> Self {
         Self::load_test_font_from(&test_font_dir())
@@ -1032,6 +1035,7 @@ pub const NERD_FONT_FAMILIES: &[&str] = &["Symbols Nerd Font", "Symbols Nerd Fon
 
 impl FontStack {
     #[cfg(any(test, feature = "testing"))]
+    #[doc(hidden)]
     #[must_use]
     pub fn new(primary: Arc<Font>) -> Self {
         Self::with_primary_features(primary, Vec::new())
@@ -1040,6 +1044,7 @@ impl FontStack {
     /// Auto-discovery over the pinned `$FELIS_TEST_FONT_DIR` set alone,
     /// so a fallback-dependent test sees the same faces on every host.
     #[cfg(any(test, feature = "testing"))]
+    #[doc(hidden)]
     #[must_use]
     pub fn pinned_test_stack() -> Self {
         let mut set = FileSet::default();

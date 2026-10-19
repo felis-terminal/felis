@@ -52,11 +52,10 @@ runs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         } finally { $lock.Close() }
 
-    # Otherwise the binary crates' build scripts run `git status`, whose first
-    # call on a fresh checkout rewrites .git/index, a file those scripts watch,
-    # so the job's next cargo invocation rebuilds the crates. Windows only: on
-    # Linux the bench gate builds a base worktree, which would inherit the
-    # head's revision.
+    # The Windows artifacts are cargo builds, which stamp only what
+    # FELIS_GIT_HASH carries.
+    # Windows only: on Linux the bench gate builds a base worktree, which would
+    # inherit the head's revision.
     - name: stamp the build from the checkout's revision
       if: runner.os == 'Windows'
       shell: powershell

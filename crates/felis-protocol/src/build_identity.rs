@@ -38,11 +38,11 @@ pub struct BuildIdentity {
 }
 
 impl BuildIdentity {
-    /// Builds the identity a binary stamps into itself from its
-    /// `build.rs` constants: `stamp` is `<revision>[-dirty]`.
+    /// Builds the identity a binary stamps into itself from the
+    /// compile-time `FELIS_GIT_HASH`: `stamp` is `<revision>[-dirty]`.
     ///
-    /// Total: a build script has nobody to report a parse failure to,
-    /// so a stamp that is not a revision becomes [`UNKNOWN_REVISION`].
+    /// Total: a binary has nobody to report a bad stamp to, so anything
+    /// else (an unset variable included) becomes [`UNKNOWN_REVISION`].
     #[must_use]
     pub fn from_build_env(version: &str, stamp: &str) -> Self {
         let (revision, dirty) = match stamp.strip_suffix("-dirty") {

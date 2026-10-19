@@ -11,7 +11,7 @@ use std::{
     path::PathBuf,
     process::ExitCode,
     sync::{
-        Arc,
+        Arc, LazyLock,
         atomic::{AtomicBool, Ordering},
     },
     time::{Duration, Instant},
@@ -287,23 +287,23 @@ enum ClientCmd {
 }
 
 /// The canonical identity line (`docs/reference/workspace.md`
-/// "Versioning"): the revision (from build.rs) answers "which build is
-/// this?" where the semver cannot. Printed in full rather than
-/// abbreviated because `felis version` parses this line back into a
-/// `BuildIdentity`.
-const FELIS_VERSION: &str = concat!(
-    env!("CARGO_PKG_VERSION"),
-    " (",
-    env!("FELIS_BUILD_STAMP"),
-    ")"
-);
+/// "Versioning"): the revision answers "which build is this?" where the
+/// semver cannot. Printed in full rather than abbreviated because
+/// `felis version` parses this line back into a `BuildIdentity`.
+static FELIS_VERSION: LazyLock<String> = LazyLock::new(|| {
+    felis_protocol::BuildIdentity::from_build_env(
+        env!("CARGO_PKG_VERSION"),
+        option_env!("FELIS_GIT_HASH").unwrap_or_default(),
+    )
+    .to_string()
+});
 
 /// `felis-client`: native GUI frontend CLI surface. The `felis`
 /// front-door owns the user-facing help / completions / man pages and
 /// the headless verbs; this is the narrower surface it execs with, also
 /// usable directly.
 #[derive(Debug, Parser)]
-#[command(name = "felis-client", version = FELIS_VERSION)]
+#[command(name = "felis-client", version = FELIS_VERSION.as_str())]
 struct Cli {
     /// Subcommand. `attach <id>` reattaches to an existing session;
     /// absent means create a new one.
@@ -513,7 +513,7 @@ fn run_doctor_probe(fonts_from: Option<&ConfigSource>) -> Result<()> {
     };
     let report = ProbeReport {
         v: PROBE_VERSION,
-        client_version: FELIS_VERSION.to_owned(),
+        client_version: FELIS_VERSION.clone(),
         gpu,
         clipboard,
         fonts: fonts_from.map(probe_fonts),

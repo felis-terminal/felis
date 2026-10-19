@@ -180,13 +180,11 @@ uncommitted changes. Its canonical rendering is `<semver> (<revision>[-dirty])`,
 emit from `--version` and which `felis version` parses back out of them (`felis --version` and the human tables
 abbreviate the revision to twelve digits; the abbreviation is not a parse target).
 
-How a build gets stamped differs by path, and only one path can promise the stamp is exact. `crates/build-common.rs`
-runs `git rev-parse HEAD` plus a `git status --porcelain` check at build time, re-running when `.git/HEAD`,
-`.git/logs/HEAD` or `.git/index` moves. A cargo build therefore picks up commits and staged changes, but an _unstaged_
-edit does not re-stamp, and the binary claims a cleanliness it does not have. The Nix path has no such gap: `flake.nix`
-passes `self.rev` (clean) or `self.dirtyRev` (dirty) as `FELIS_GIT_HASH`, evaluated per build, and that is the path a
-release is cut from. A build with neither reports `unknown`. A dirty _release_ is refused by the tag workflow ("Release
-gate" below).
+The binaries take the revision from `FELIS_GIT_HASH` at compile time, so a build carries one only when that variable is
+set. `flake.nix` passes `self.rev` (clean) or `self.dirtyRev` (dirty), evaluated per build, and the Windows CI jobs pass
+the checkout's revision; the release artifacts come from those two paths. A build without it, such as a bare
+`cargo build` or a registry install, reports `unknown`. A dirty _release_ is refused by the tag workflow ("Release gate"
+below).
 
 ## Cargo configuration
 

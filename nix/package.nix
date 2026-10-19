@@ -20,9 +20,8 @@
   libxcb,
   # Default on Linux; dead weight on macOS where arboard already handles the system pasteboard.
   withWaylandClipboard ? stdenv.hostPlatform.isLinux,
-  # Forwarded commit revision because build src excludes `.git`. Shape is
-  # `<rev40>[-dirty]`, exactly what `git rev-parse HEAD` plus a dirty check
-  # would have produced in the tree.
+  # The revision the binaries stamp (`FELIS_GIT_HASH`): `<rev40>[-dirty]`;
+  # anything else stamps `unknown`.
   gitHash ? null,
 }:
 

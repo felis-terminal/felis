@@ -11,16 +11,16 @@ use serde::Serialize;
 
 use crate::cli_output::{PointFormat, Reporter, stdoutln};
 
-/// This binary's own build, abbreviated: `felis --version`'s output.
-pub(crate) const SELF_VERSION_LINE: &str = concat!(
-    env!("CARGO_PKG_VERSION"),
-    " (",
-    env!("FELIS_BUILD_STAMP_SHORT"),
-    ")"
-);
-
 fn self_identity() -> BuildIdentity {
-    BuildIdentity::from_build_env(env!("CARGO_PKG_VERSION"), env!("FELIS_BUILD_STAMP"))
+    BuildIdentity::from_build_env(
+        env!("CARGO_PKG_VERSION"),
+        option_env!("FELIS_GIT_HASH").unwrap_or_default(),
+    )
+}
+
+/// This binary's own build, abbreviated: `felis --version`'s output.
+pub(crate) fn self_version_line() -> String {
+    self_identity().human()
 }
 
 /// `status` is the token a consumer branches on; `detail` is the human
@@ -323,13 +323,5 @@ mod tests {
     fn a_line_outside_the_canonical_form_yields_nothing() {
         assert!(identity_from_version_line("felis-client 0.1.0 (e3abf80)").is_none());
         assert!(identity_from_version_line("felis-client 0.1.0").is_none());
-    }
-
-    /// `--version`'s own line must be the abbreviated human rendering
-    /// of the identity the verb reports, so the two surfaces cannot
-    /// disagree about which build this is.
-    #[test]
-    fn the_self_report_line_matches_the_verb_s_own_row() {
-        assert_eq!(SELF_VERSION_LINE, self_identity().human());
     }
 }

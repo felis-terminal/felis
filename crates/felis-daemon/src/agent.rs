@@ -11,6 +11,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use felis_transport::local::Endpoint;
 use tracing::warn;
 
+#[doc(hidden)]
 pub const AGENT_ENV: &str = "SSH_AUTH_SOCK";
 
 struct Registration {
@@ -42,6 +43,7 @@ impl std::fmt::Debug for AgentLink {
 
 /// A live registration. Releasing it (on drop, when the relay
 /// connection ends) restores the next-newest live target.
+#[doc(hidden)]
 pub struct AgentLease {
     link: std::sync::Arc<AgentLink>,
     id: u64,
@@ -96,6 +98,7 @@ impl AgentLink {
 
     /// Point the link at `target` and hold it there until the returned
     /// lease drops.
+    #[doc(hidden)]
     pub fn register(self: &std::sync::Arc<Self>, target: PathBuf) -> AgentLease {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         {
@@ -152,6 +155,7 @@ impl AgentLink {
     /// Called at startup: the daemon has no shutdown hook, and a child
     /// resolving a stale link hangs against a dead peer rather than
     /// failing the way an unset `SSH_AUTH_SOCK` does.
+    #[doc(hidden)]
     #[cfg(unix)]
     pub fn clear_stale(&self) {
         for path in [self.path.clone(), staging_path(&self.path)] {
@@ -170,6 +174,7 @@ impl AgentLink {
         clippy::missing_const_for_fn,
         reason = "one signature with the Unix branch, which reads the receiver and is not const"
     )]
+    #[doc(hidden)]
     pub fn clear_stale(&self) {}
 
     #[cfg(windows)]

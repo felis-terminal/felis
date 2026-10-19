@@ -1874,6 +1874,20 @@ class EnvinfoTest(unittest.TestCase):
         self.assertEqual(info["revision"], "43a4a20b")
         self.assertNotIn("drift", info)
 
+    def test_a_binary_stamped_unknown_is_drift(self):
+        # Nothing ties an unstamped cargo build to the checkout, so
+        # crediting the checkout's revision to it must be called out.
+        with mock.patch.object(
+            envinfo,
+            "run",
+            side_effect=lambda *cmd, **kw: (
+                "felis 0.2.0 (unknown)" if "--version" in cmd else "43a4a20b"
+            ),
+        ):
+            info = envinfo.felis_info(Path("/repo"), Path("/repo/target/release/felis"))
+        self.assertEqual(info["revision"], "43a4a20b")
+        self.assertIn("no revision", info["drift"])
+
     def test_a_store_path_reports_no_build_time_rather_than_1970(self):
         # Nix normalizes store mtimes to the epoch; formatting that as a
         # date puts a field in the report that looks answered and is not.

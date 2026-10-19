@@ -380,7 +380,7 @@ fn main() -> Result<()> {
                 .error(clap::error::ErrorKind::ArgumentConflict, conflict)
                 .exit();
         }
-        cli_output::stdoutln!("felis {}", cli_version::SELF_VERSION_LINE);
+        cli_output::stdoutln!("felis {}", cli_version::self_version_line());
         std::process::exit(0);
     }
 
