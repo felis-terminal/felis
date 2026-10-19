@@ -13,6 +13,7 @@ default = ["glyphs"]
 # Gates the modules that rasterize through felis-shaping, so a wasm32 client links the palette and display-list types
 # without it; a wasm arm in felis-shaping would pull a font stack it has no provider for.
 glyphs = ["dep:felis-shaping", "dep:foldhash"]
+# Test-only support, outside the semver contract.
 # Named testing over test-support because clippy::redundant_feature_names rejects the -support suffix.
 testing = ["glyphs"]
 

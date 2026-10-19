@@ -9,6 +9,7 @@ publish.workspace = true
 description = "felis text shaper: swash + font fallback + shape cache"
 
 [features]
+# Test-only support, outside the semver contract.
 # Named testing over test-support because clippy::redundant_feature_names rejects the -support suffix.
 testing = []
 

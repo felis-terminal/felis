@@ -274,6 +274,7 @@ impl CheckedFrame {
     /// queue with opaque bytes. Never a production path: production
     /// bodies are authorized by the encoder that made them.
     #[cfg(feature = "test-util")]
+    #[doc(hidden)]
     #[must_use]
     pub const fn raw(kind: u16, body: Vec<u8>, requires: Requires) -> Self {
         Self {
@@ -355,6 +356,7 @@ impl<W: AsyncWrite + Unpin> FrameWriter<W> {
     /// Never a production path: production writers carry the minor the
     /// preface settled on.
     #[cfg(any(test, feature = "test-util"))]
+    #[doc(hidden)]
     pub fn at_build_minor(inner: W) -> Self {
         Self::new(inner, felis_protocol::PROTOCOL_MINOR)
     }
@@ -387,6 +389,7 @@ impl<W: AsyncWrite + Unpin> FrameWriter<W> {
     /// message produces (a bogus kind, an oversized payload). Never a
     /// production path: production writes carry their authorization.
     #[cfg(feature = "test-util")]
+    #[doc(hidden)]
     pub async fn write_frame_unchecked(&mut self, frame: &Frame<'_>) -> Result<(), TransportError> {
         self.write_frame(frame).await
     }
