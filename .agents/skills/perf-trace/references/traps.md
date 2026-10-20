@@ -12,14 +12,14 @@ structure the real code doesn't have (or vice versa).
   worse end-to-end on csi than the compiler's per-cell store loop at typical erase widths. Call overhead dominates under
   ~2 KiB spans.
 - **`Parser::advance`'s dispatch loop punishes any extra shape.** A CsiParam run fast path was tried in five shapes:
-  inlining the params mutation into the loop cost csi_heavy ~50% (register allocation); an `#[inline(never)]` consumer
-  fixed that and won sgr_dense −15% / csi_heavy −5% on the NoopSink criterion bench, yet still lost ~16% on
-  termbench-pro's SGR categories in the real daemon, where `advance` inlines into the Grid sink instead. The `mixed`
-  stream regressed +7–10% in every shape including a guard-free jump table; it tracks `advance`'s code size, not branch
-  order. Reverted; the chunk-invariance test (`csi_param_chunked_advance_matches_per_byte_dispatch`) and the `sgr_dense`
-  bench case remain for the next attempt. A NoopSink parser win must be re-proven end-to-end BEFORE any cleanup pass,
-  and on this box that means interleaved A/B runs (keep both builds' binaries, alternate `FELIS_BIN`, n≥3); single
-  termbench runs swing ±25% whenever the user's VMs are awake.
+  inlining the params mutation into the loop cost the CSI-heavy case ~50% (register allocation); an `#[inline(never)]`
+  consumer fixed that and won −15% on dense SGR / −5% on CSI-heavy in the NoopSink `parser_throughput` bench, yet still
+  lost ~16% on termbench-pro's SGR categories in the real daemon, where `advance` inlines into the Grid sink instead.
+  The mixed stream regressed +7–10% in every shape including a guard-free jump table; it tracks `advance`'s code size,
+  not branch order. Reverted; the chunk-invariance test in `crates/felis-vt/src/tests.rs` and the dense-SGR bench case
+  remain for the next attempt. A NoopSink parser win must be re-proven end-to-end BEFORE any cleanup pass, and on this
+  box that means interleaved A/B runs (keep both builds' binaries, alternate `FELIS_BIN`, n≥3); single termbench runs
+  swing ±25% whenever the user's VMs are awake.
 - **A `self.cells` write/call before `print_str`'s bulk loop poisons it.** The loop's throughput needs the compiler to
   hoist the `Vec` data pointer and elide bounds checks across the whole run; any `self.cells` write or opaque
   `&mut self` call preceding it in the same function body defeats that at compile time, even on a branch the run never

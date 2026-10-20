@@ -100,7 +100,7 @@ operation pays a per-element `clone()` (plus drop glue on the overwritten slot) 
 `Grid::scroll_region_up` (the `cat` / shell-output shape: each line-feed at the bottom evicts one row into the history
 side of the unified ring and blanks one) and the IL / DL / ICH / DCH shuffles. Measured on an 80-cell row (release), the
 scroll-by-1 cell cost is 893 ns with `clone()` against a 71 ns `Copy` ceiling (12.6×), and `scroll_region_up` accounts
-for ~58% of the daemon-side `plaintext_scroll` cost. With the handle, the bulk paths use `copy_from_slice` /
+for ~58% of the daemon-side plaintext-scroll bench cost. With the handle, the bulk paths use `copy_from_slice` /
 `copy_within` / `slice::fill`, and `Cell` is a 16-byte `Copy` struct (see [Style interning](#style-interning)) rather
 than the ≥48 bytes an owning payload forces: less scrollback residency and less memory bandwidth on every grid walk. The
 regression anchors are `crates/felis-grid/benches/scroll_region.rs` and

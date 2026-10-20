@@ -54,11 +54,11 @@ The argument is in `docs/explanation/architecture/ipc.md`; these are the rules i
   absent. It carries `(felis.v1.field_since) = { minor: N skippable: true }` when its ledger row can state a safe
   outcome for an older peer that skips it, in either direction. Otherwise, as for a request parameter like
   `SearchQuery.source`, it drops `skippable` and needs a presence test: a `GatedField` row in
-  `crates/felis-protocol/src/minor.rs`, wired into its family's `MinorGated` impl
-  (`every_gated_field_of_the_schema_has_a_presence_test` fails until the row exists). A new closed-enum value carries
-  `(felis.v1.value_since) = N`. A new member of a payload message's `oneof` is not a field: an older peer reads the
-  oneof as unset, so generation refuses `skippable` on it, and `a_payload_oneof_keeps_the_members_of_the_base_schema`
-  refuses it until it has a send gate. The option forms are in `docs/reference/ipc.md` "The minor ledger".
+  `crates/felis-protocol/src/minor.rs`, wired into its family's `MinorGated` impl (a guard test in `minor.rs` fails
+  until the row exists). A new closed-enum value carries `(felis.v1.value_since) = N`. A new member of a payload
+  message's `oneof` is not a field: an older peer reads the oneof as unset, so generation refuses `skippable` on it, and
+  a guard test in `messages.rs` refuses it until it has a send gate. The option forms are in `docs/reference/ipc.md`
+  "The minor ledger".
 - Renumbering, retyping, or reinterpreting an existing field is a semantic break: bump `PROTOCOL_MAJOR`; the preface
   then refuses the older half outright.
 - `--format` output shapes are append-only too; their epoch is the `"v"` every object carries.
@@ -102,10 +102,9 @@ A new message/verb typically touches, in dependency order:
    client call.
 4. `crates/felis-cli`: the verb, its `--format` output (declare the class from step 0 by flattening `PointFormat` or
    `StreamFormat`, and emit through the `Reporter`), and completions. A bridge operation for a Stream verb also joins
-   the `DaemonOp::is_streaming` match in `cli_bridge/admission.rs`;
-   `the_bridge_streams_exactly_the_operations_whose_verb_is_a_stream` fails until the two agree. Any change to
-   `cli_output.rs` or the bridge's request grammar means running `just schema`: the published bundle under
-   `crates/felis-cli/schemas/` is generated from those types and CI fails on a stale copy.
+   the `DaemonOp::is_streaming` match in `cli_bridge/admission.rs`; a guard test in `cli_schema.rs` fails until the two
+   agree. Any change to `cli_output.rs` or the bridge's request grammar means running `just schema`: the published
+   bundle under `crates/felis-cli/schemas/` is generated from those types and CI fails on a stale copy.
 
 ## 5. Tests
 
