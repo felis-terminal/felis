@@ -18,20 +18,24 @@
   glibc,
   cbmc,
   kissat,
+  writeShellApplication,
+  curl,
+  jq,
+  nix-prefetch-git,
 }:
 
 let
-  version = "0.67.0";
+  version = "0.68.0";
 
   # Pinned to kani release's rust-toolchain.toml: precompiled sysroot is MIR-locked to this exact nightly.
-  rustToolchainDate = "2025-11-21";
+  rustToolchainDate = "2026-08-21";
 
   src = fetchFromGitHub {
     owner = "model-checking";
     repo = "kani";
     tag = "kani-${version}";
     fetchSubmodules = true;
-    hash = "sha256-Advfh0BWvvEbnwWvTpHzu/7MI9P0/dhzvtX9r2qnXeI=";
+    hash = "sha256-OwjC0I06KxFxnQ4J/599v6ktZKqWgE3Kn/SY8hSk6DY=";
   };
 
   kaniRustToolchain = rust-bin.nightly.${rustToolchainDate}.default.override {
@@ -55,7 +59,7 @@ let
 
     src = fetchzip {
       url = "https://github.com/model-checking/kani/releases/download/kani-${version}/kani-${version}-x86_64-unknown-linux-gnu.tar.gz";
-      hash = "sha256-I+GKPEWYXPZimCN79IB9dKiY8+NhP4Y8JjAS7R00XMs=";
+      hash = "sha256-VHeWwkuZg+JVP4ZXU3Svwp4Px8cZRhIIOhmoMWrIkSQ=";
     };
 
     buildInputs = [ stdenv.cc.cc.lib ];
@@ -78,9 +82,8 @@ let
 in
 # Only the x86_64-linux release tarball is wired up; upstream does publish
 # aarch64-linux + darwin tarballs as of 0.67.0 — widen once tested.
-assert lib.assertMsg (
-  stdenv.hostPlatform.system == "x86_64-linux"
-) "dev/packages/kani.nix: only x86_64-linux is wired up (got ${stdenv.hostPlatform.system})";
+assert lib.assertMsg (stdenv.hostPlatform.system == "x86_64-linux")
+  "dev/packages/kani/default.nix: only x86_64-linux is wired up (got ${stdenv.hostPlatform.system})";
 
 rustPlatform.buildRustPackage {
   pname = "kani";
@@ -89,7 +92,7 @@ rustPlatform.buildRustPackage {
   # fetchCargoVendor over cargoLock.lockFile: handles git dependencies (Charon submodule).
   cargoDeps = rustPlatform.fetchCargoVendor {
     inherit src;
-    hash = "sha256-vH4eslc5wm7YVNwXWGEtlWyZwxXIxXwgDVli681ENGY=";
+    hash = "sha256-kxUIQcpbMXOI4AWFpPKAyfpDuOepTCHV1DyHu8CD79w=";
   };
 
   nativeBuildInputs = [ makeWrapper ];
@@ -132,7 +135,18 @@ rustPlatform.buildRustPackage {
     done
   '';
 
-  passthru.toolchain = kaniRustToolchain;
+  passthru = {
+    toolchain = kaniRustToolchain;
+    updateScript = writeShellApplication {
+      name = "kani-update";
+      runtimeInputs = [
+        curl
+        jq
+        nix-prefetch-git
+      ];
+      text = builtins.readFile ./update.sh;
+    };
+  };
 
   meta = {
     description = "Kani Rust model checker (bit-precise verification via CBMC)";

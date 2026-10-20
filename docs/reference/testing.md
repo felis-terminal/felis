@@ -227,9 +227,10 @@ violations across bounded inputs. Each proof is a `#[kani::proof]` harness under
 ```
 just kani                     # run all proofs in the Kani dev shell
 just kani --harness <name>    # run a specific proof
+just kani-update              # bump dev/packages/kani/default.nix to the latest Kani release
 ```
 
-`.forgejo/workflows/kani.yml` reruns every proof weekly.
+`.forgejo/workflows/kani.yml` reruns every proof weekly, and on a PR that changes `dev/packages/kani/`.
 
 ## Mutation testing
 
@@ -279,7 +280,7 @@ published Forgejo release to GitHub, crates.io, and the Homebrew tap ([workspace
 | `windows.yml` | Push, PR                  | Windows clippy, nextest, headless smoke, and package artifact.                                                 |
 | `darwin.yml`  | Push, PR                  | aarch64-darwin package and release-archive build, with the archive's manifest, signature, and smoke checks.    |
 | `fuzz.yml`    | Push, PR, Nightly, Manual | Fuzz smoke on push and PR; the nightly long run with corpus minification.                                      |
-| `kani.yml`    | Weekly, Manual            | Every Kani proof.                                                                                              |
+| `kani.yml`    | Weekly, PR, Manual        | Every Kani proof; on a PR, only when `dev/packages/kani/` changes.                                             |
 | `bench.yml`   | PR, PR label change       | Instruction-count regression gate against the PR's base commit.                                                |
 | `release.yml` | Tag (`v*`)                | The release gate on the tag's revision, then the release assets ([workspace.md](workspace.md) "Release gate"). |
 

@@ -32,6 +32,7 @@
         checks = "dev";
         devShells = "dev";
         formatter = "dev";
+        legacyPackages = "dev";
       };
       partitions.dev = {
         extraInputsFlake = ./dev;

@@ -95,12 +95,13 @@ while the proptest stays as the fast always-on check.
 
 The layer reaches x86_64-linux only, from a dedicated `.#kani` dev shell: Kani's compiler pins one exact nightly and
 borrows its precompiled sysroot from an upstream release tarball, and only that platform's tarball is wired up. The
-packaging record is `dev/packages/kani.nix`, the file it governs.
+packaging record is `dev/packages/kani/default.nix`, the file it governs.
 
 Because `cfg(kani)` code compiles under no other layer (not under `cargo test`, not under clippy), a kernel edit can
 invalidate a proof silently. The proofs are therefore re-checked by a weekly scheduled CI job plus manual dispatch
 (`kani.yml`), not per PR: CBMC's runtime would dominate the per-PR pipeline, and nightly buys nothing over weekly for a
-proof set that moves far more slowly than the parser it guards.
+proof set that moves far more slowly than the parser it guards. The exception is a PR that changes the Kani package
+itself: it swaps the verifier under every proof, so the full run gates it instead of trailing it by up to a week.
 
 _Revisit if_ the inventory grows enough that a full run outgrows the weekly window (then split per-crate jobs or gate by
 changed paths).
