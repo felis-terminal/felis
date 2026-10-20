@@ -1,9 +1,11 @@
+#![cfg_attr(not(feature = "daemon-tests"), allow(unused))]
+
 use felis_protocol::frame::Frame;
 
 #[cfg(unix)]
 use std::{num::NonZeroU32, sync::Arc};
 
-#[cfg(unix)]
+#[cfg(all(unix, feature = "daemon-tests"))]
 use felis_daemon::{SessionPool, serve::DaemonCaps, serve_unix};
 #[cfg(unix)]
 use tempfile::TempDir;
@@ -466,7 +468,7 @@ fn an_ops_reply_of_the_wrong_variant_is_refused_by_each_request() {
     ));
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, feature = "daemon-tests"))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn connector_round_trips_through_a_real_daemon() {
     let tmp = private_dir();
@@ -586,7 +588,7 @@ async fn await_row_containing(
     false
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, feature = "daemon-tests"))]
 async fn daemon_running(script: &'static str) -> (TempDir, PathBuf, tokio::task::JoinHandle<()>) {
     use felis_daemon::{serve::SessionFactory, serve::serve_unix_with_factory};
     use felis_pty::Command;
@@ -654,7 +656,7 @@ async fn collect_search(conn: &mut Connection, stream: StreamId) -> (usize, Resu
 
 /// Every reply is matched to its own request while a search stream
 /// runs on the same connection.
-#[cfg(unix)]
+#[cfg(all(unix, feature = "daemon-tests"))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn one_connection_answers_many_verbs_while_a_stream_runs() {
     use felis_protocol::messages::{SearchOptions, SearchToDaemonMsg};
@@ -749,7 +751,7 @@ async fn one_connection_answers_many_verbs_while_a_stream_runs() {
 
 /// The daemon's slot is freed by the terminal its outbound pump
 /// writes, which no in-process driver test can reach.
-#[cfg(unix)]
+#[cfg(all(unix, feature = "daemon-tests"))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn sequential_streams_free_their_slot_on_the_daemon() {
     use felis_protocol::messages::{SearchOptions, SearchToDaemonMsg};
@@ -784,7 +786,7 @@ async fn sequential_streams_free_their_slot_on_the_daemon() {
     server.abort();
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, feature = "daemon-tests"))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_window_is_refused_a_mutating_verb_without_losing_the_connection() {
     let (_tmp, path, server) = daemon_running("read _x").await;
@@ -813,7 +815,7 @@ async fn a_window_is_refused_a_mutating_verb_without_losing_the_connection() {
     server.abort();
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, feature = "daemon-tests"))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn cancelling_a_search_mid_stream_stops_it_and_leaves_the_connection_usable() {
     use felis_protocol::messages::{SearchOptions, SearchToDaemonMsg};
@@ -882,7 +884,7 @@ async fn cancelling_a_search_mid_stream_stops_it_and_leaves_the_connection_usabl
     server.abort();
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, feature = "daemon-tests"))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_huge_scrollback_search_emits_before_the_walk_completes() {
     use felis_protocol::messages::{SearchOptions, SearchToClientMsg, SearchToDaemonMsg};
@@ -952,7 +954,7 @@ async fn a_huge_scrollback_search_emits_before_the_walk_completes() {
 
 /// Both halves are `Window` connections: only the window burst
 /// carries grid rows.
-#[cfg(unix)]
+#[cfg(all(unix, feature = "daemon-tests"))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn killed_client_reattaches_and_observes_prior_output() {
     use felis_daemon::{serve::SessionFactory, serve::serve_unix_with_factory};
@@ -1017,7 +1019,7 @@ async fn killed_client_reattaches_and_observes_prior_output() {
     server.abort();
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, feature = "daemon-tests"))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn destroy_session_removes_session_and_acks_existed() {
     use felis_daemon::{serve::SessionFactory, serve::serve_unix_with_factory};
@@ -1078,7 +1080,7 @@ async fn destroy_session_removes_session_and_acks_existed() {
     server.abort();
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, feature = "daemon-tests"))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn destroy_session_on_missing_id_returns_existed_false() {
     let tmp = private_dir();
@@ -1203,7 +1205,7 @@ fn is_transient_classifies_each_variant() {
     );
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, feature = "daemon-tests"))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn connect_carrier_with_retry_succeeds_after_daemon_starts_late() {
     let tmp = private_dir();
@@ -1842,7 +1844,7 @@ async fn await_session_exited(
     None
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, feature = "daemon-tests"))]
 async fn daemon_with_exiting_shell() -> (TempDir, PathBuf, tokio::task::JoinHandle<()>) {
     use felis_daemon::{serve::SessionFactory, serve::serve_unix_with_factory};
     use felis_pty::Command;
@@ -1871,7 +1873,7 @@ async fn daemon_with_exiting_shell() -> (TempDir, PathBuf, tokio::task::JoinHand
 /// The daemon pushes `SessionExited` before dropping the
 /// subscription (session-lifecycle.md "Telling the attached window
 /// the shell exited").
-#[cfg(unix)]
+#[cfg(all(unix, feature = "daemon-tests"))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn window_client_hears_session_exited_when_shell_exits() {
     let (_tmp, path, server) = daemon_with_exiting_shell().await;
@@ -1889,7 +1891,7 @@ async fn window_client_hears_session_exited_when_shell_exits() {
     server.abort();
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, feature = "daemon-tests"))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_ops_attach_gets_channel_close_without_session_exited() {
     use felis_protocol::messages::PushMsg;

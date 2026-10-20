@@ -12,9 +12,9 @@ repository = "https://github.com/felis-terminal/felis"
 
 [workspace.dependencies]
 # Internal — `path` for the workspace build, `version` for the published
-# manifest. A dev-dependency on a felis crate names `path` alone instead of
-# inheriting these: `cargo package` then drops it, which is what lets the
-# felis-client-core <-> felis-daemon dev-dependency cycle publish at all.
+# manifest, which keeps dev-dependencies too so a packaged crate's tests
+# build. felis-client-core's dev-dependency on felis-daemon is the exception
+# (see its manifest).
 felis-protocol = { path = "crates/felis-protocol", version = "0.1.0" }
 felis-vt = { path = "crates/felis-vt", version = "0.1.0" }
 felis-grid = { path = "crates/felis-grid", version = "0.1.0" }
@@ -24,6 +24,7 @@ felis-client-core = { path = "crates/felis-client-core", version = "0.1.0" }
 felis-shaping = { path = "crates/felis-shaping", version = "0.1.0" }
 felis-render-core = { path = "crates/felis-render-core", version = "0.1.0" }
 felis-render-wgpu = { path = "crates/felis-render-wgpu", version = "0.1.0" }
+felis-daemon = { path = "crates/felis-daemon", version = "0.2.0" }
 
 # External — version-pinned in one place via workspace inheritance.
 tokio = { version = "1", features = [

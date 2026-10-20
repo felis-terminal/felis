@@ -39,7 +39,9 @@ class Suite:
         protocol_version: str = "0.1.1",
         protocol_requirement: str = "0.1.1",
         grid_dependency: str = "felis-protocol = { workspace = true }",
-        daemon_dev_dependency: str = 'felis-protocol = { path = "../felis-protocol" }',
+        daemon_dev_dependency: str = "felis-protocol = { workspace = true }",
+        client_core_dev_dependencies: str = 'felis-daemon = { path = "../felis-daemon" }\n'
+        'felis-client-core = { path = ".", features = ["daemon-tests"] }',
     ) -> Path:
         tree = Path(tempfile.mkdtemp(dir=self.root))
         tree.joinpath("Cargo.toml").write_text(
@@ -53,6 +55,9 @@ class Suite:
             + "\n",
             "felis-daemon": "version.workspace = true\n\n[dev-dependencies]\n"
             + daemon_dev_dependency
+            + "\n",
+            "felis-client-core": 'version = "0.1.0"\n\n[dev-dependencies]\n'
+            + client_core_dev_dependencies
             + "\n",
         }
         for name, body in manifests.items():
@@ -133,8 +138,17 @@ class Suite:
             False,
         )
         self.requirements(
-            "a versioned felis dev-dependency fails",
-            self.tree(daemon_dev_dependency="felis-protocol = { workspace = true }"),
+            "a path-only felis dev-dependency fails",
+            self.tree(
+                daemon_dev_dependency='felis-protocol = { path = "../felis-protocol" }'
+            ),
+            False,
+        )
+        self.requirements(
+            "a versioned client-core to daemon dev-dependency fails",
+            self.tree(
+                client_core_dev_dependencies="felis-daemon = { workspace = true }"
+            ),
             False,
         )
 
@@ -143,6 +157,7 @@ class Suite:
             {
                 "felis-protocol": ["0.1.0"],
                 "felis-grid": ["0.1.0"],
+                "felis-client-core": ["0.1.0"],
                 "felis-daemon": ["0.2.0"],
             }
         )
@@ -156,6 +171,7 @@ class Suite:
             {
                 "felis-protocol": ["0.1.1"],
                 "felis-grid": ["0.1.0"],
+                "felis-client-core": ["0.1.0"],
                 "felis-daemon": ["0.3.0"],
             }
         )

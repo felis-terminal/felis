@@ -56,7 +56,7 @@ jobs:
     name: cargo build / clippy / test / deny
     runs-on: x86_64-linux
     needs: [verify-tag]
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.forgejo/actions/cargo-env
@@ -64,6 +64,7 @@ jobs:
       - run: nix develop -c just test
       - run: nix develop -c just deny
       - run: nix develop -c just publish-dry-run
+      - run: nix develop -c just package-tests
       - name: the portable cores of felis-client-core and felis-render-core still build for wasm32
         run: nix develop -c just check-portable
       - uses: ./.forgejo/actions/cargo-env/done

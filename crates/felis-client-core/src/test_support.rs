@@ -1,4 +1,5 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
+#![cfg_attr(not(feature = "daemon-tests"), allow(unused))]
 
 use std::path::Path;
 use std::time::Duration;

@@ -6,6 +6,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import tomllib
 import urllib.parse
@@ -15,6 +16,7 @@ from verify import BINARY_CRATES
 
 USAGE = """usage: tools/release/crates.py check
        tools/release/crates.py publish-plan
+       tools/release/crates.py package-tests
        tools/release/crates.py --self-test
 
 check: refuses a tree whose library versions are not ready to publish: a
@@ -26,11 +28,20 @@ publish-plan: prints, in workspace order, the crates whose local version is not
 on crates.io, one per line. Fails when one of them was never published, since
 trusted publishing cannot create a crate.
 
+package-tests: packages every publishable crate and builds each package's
+tests from the extracted tree, the way a crates.io consumer would, with the
+other felis packages patched in for their unpublished versions.
+
 FELIS_CRATES_INDEX overrides the sparse index base (default
 https://index.crates.io).
 """
 INDEX = "https://index.crates.io"
 SEMVER_CHECKED_BINARY = "felis-daemon"
+# The one dev-dependency edge that stays `path` alone: with a version on it,
+# felis-client-core and felis-daemon (which dev-depends back) could not be
+# packaged before each other. cargo package drops it, along with the
+# self-dependency that turns on the tests needing it.
+PATH_ONLY_DEV_DEPENDENCY = ("felis-client-core", "felis-daemon")
 
 
 class CratesError(Exception):
@@ -130,13 +141,18 @@ def check_requirements(root: Path) -> list[str]:
                 if name not in versions:
                     continue
                 where = f"{crate.manifest} [{table}] {name}"
-                if table.endswith("dev-dependencies"):
-                    if (
-                        not isinstance(entry, dict)
-                        or "path" not in entry
-                        or "version" in entry
-                        or "workspace" in entry
-                    ):
+                path_only = isinstance(entry, dict) and set(entry) - {"features"} == {
+                    "path"
+                }
+                if table.endswith("dev-dependencies") and (
+                    (crate.name, name) == PATH_ONLY_DEV_DEPENDENCY
+                    or (
+                        name == crate.name
+                        and isinstance(entry, dict)
+                        and entry.get("path") == "."
+                    )
+                ):
+                    if not path_only:
                         problems.append(
                             f"{where} must name `path` alone, so cargo package drops it"
                         )
@@ -264,17 +280,70 @@ def check(root: Path) -> None:
     note("release-plz update leaves the tree unchanged")
 
 
+def package_tests(root: Path) -> None:
+    _, crates = workspace(root)
+    published = [crate for crate in crates if crate.publishable]
+    target = Path(
+        json.loads(
+            output(
+                ["cargo", "metadata", "--format-version", "1", "--no-deps"], cwd=root
+            )
+        )["target_directory"]
+    )
+    args = ["cargo", "package", "--no-verify", "--allow-dirty"]
+    for crate in published:
+        args += ["-p", crate.name]
+    run(args, cwd=root)
+    with tempfile.TemporaryDirectory() as scratch:
+        extracted: dict[str, Path] = {}
+        for crate in published:
+            archive = target / "package" / f"{crate.name}-{crate.version}.crate"
+            try:
+                with tarfile.open(archive) as handle:
+                    handle.extractall(scratch, filter="data")
+            except (OSError, tarfile.TarError) as error:
+                raise CratesError(f"cannot extract {archive}: {error}") from error
+            extracted[crate.name] = Path(scratch) / f"{crate.name}-{crate.version}"
+        patches: list[str] = []
+        for name, path in extracted.items():
+            patches += [
+                "--config",
+                f"patch.crates-io.{name}.path={json.dumps(str(path))}",
+            ]
+        for name, path in extracted.items():
+            note(f"building the packaged tests of {name}")
+            try:
+                run(
+                    [
+                        "cargo",
+                        *patches,
+                        "test",
+                        "--no-run",
+                        "--target-dir",
+                        str(target / "package-tests"),
+                    ],
+                    cwd=path,
+                )
+            except CratesError as error:
+                raise CratesError(
+                    f"the packaged tests of {name} do not build"
+                ) from error
+    note(f"the packaged tests build for {', '.join(extracted)}")
+
+
 def main(argv: list[str]) -> int:
     if argv == ["--self-test"]:
         test = Path(__file__).with_name("crates_test.py")
         os.execv(sys.executable, [sys.executable, str(test)])
-    if len(argv) != 1 or argv[0] not in {"check", "publish-plan"}:
+    if len(argv) != 1 or argv[0] not in {"check", "publish-plan", "package-tests"}:
         print(USAGE, file=sys.stderr, end="")
         return 64
     root = Path.cwd()
     try:
         if argv[0] == "check":
             check(root)
+        elif argv[0] == "package-tests":
+            package_tests(root)
         else:
             for name in publish_plan(root):
                 print(name)

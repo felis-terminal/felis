@@ -14,7 +14,8 @@ are its "Versioning". This skill is the order of operations.
 ## 1. Release PR
 
 1. Bump `[workspace.package] version` in the root `Cargo.toml` (the app version: felis-cli, felis-client, felis-daemon)
-   and add the `## [X.Y.Z] - YYYY-MM-DD` section to `CHANGELOG.md`.
+   and the `felis-daemon` entry in `[workspace.dependencies]` to match, and add the `## [X.Y.Z] - YYYY-MM-DD` section to
+   `CHANGELOG.md`.
 2. `just release-prepare` (`release-plz update`): bumps every library whose package differs from its newest crates.io
    version, raises the requirements on it, and patch-bumps its dependents. Commit the manifests and `Cargo.lock`.
 3. Review what the tools do not decide, and edit `[package] version`, the matching `[workspace.dependencies]` entry, and
