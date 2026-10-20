@@ -2,14 +2,21 @@
 name: kani
 
 on:
+  # A Kani bump changes the verifier under every proof, so it is checked
+  # before it lands rather than by the next weekly run.
+  pull_request:
+    paths:
+      - 'dev/packages/kani/**'
+      - '.forgejo/workflows/kani.yml'
   schedule:
     - cron: '0 4 * * 1'
   workflow_dispatch:
 
-# No PR trigger to supersede here; the group serializes a manual dispatch
-# against the weekly cron so two four-hour proof runs cannot overlap.
+# Superseding a PR commit cancels its run; on main the group serializes a
+# manual dispatch against the weekly cron so two proof runs cannot overlap.
 concurrency:
-  group: ${{ github.workflow }}
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   proofs:
