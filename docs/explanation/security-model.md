@@ -346,10 +346,10 @@ plausible-looking header and blame the peer for rejecting it.
 
 #### Each operation carries its own limit beside the framing cap (REQ-105a)
 
-Each surface names its own number, listed in [ipc.md](../reference/ipc.md) "Semantic limits". The 64 MiB frame cap says
-what the framing layer will carry; it says nothing about what a search pattern, a retarget descriptor, or an argv is
-allowed to be, and letting it stand in for all of them leaves ordinary inputs and descriptors free to grow to nearly the
-whole ceiling.
+Each surface names its own number, listed in [ipc.md](../reference/ipc.md) "Semantic limits". The frame cap says what
+the framing layer will carry; it says nothing about what a search pattern, a retarget descriptor, or an argv is allowed
+to be, and letting it stand in for all of them leaves ordinary inputs and descriptors free to grow to nearly the whole
+ceiling.
 
 A single cap per message family was rejected for the same reason: `SessionToDaemonMsg` alone spans a 4 KiB path and a 1
 MiB argv, and one number for both is either useless on the path or wrong on the argv.
@@ -362,10 +362,10 @@ The numbers are deliberately generous, and each carries its rationale in `felis-
 
 #### Connections are admitted against a daemon-wide cap (REQ-916)
 
-The daemon serves at most 1024 connections at once against an owned permit taken before the connection's task exists, so
-the ceiling holds under a burst rather than after it; a dial past it is answered `Refused { AtCapacity }` and closed. A
-same-UID process can open sockets as fast as the kernel accepts them, and every accepted one costs a task, a file
-descriptor, and a read and write buffer.
+The daemon serves at most `MAX_CONNECTIONS` connections at once ([ipc.md](../reference/ipc.md) "Handshake") against an
+owned permit taken before the connection's task exists, so the ceiling holds under a burst rather than after it; a dial
+past it is answered `Refused { AtCapacity }` and closed. A same-UID process can open sockets as fast as the kernel
+accepts them, and every accepted one costs a task, a file descriptor, and a read and write buffer.
 
 Answering costs a task too, so the refusal path has its own small ceiling, past which the socket is dropped unanswered.
 This is the one case a caller cannot tell from a dead daemon, and the price of not letting the refusal path become the
@@ -428,11 +428,11 @@ to be told to hold.
 
 #### Pending input is bounded per session (REQ-1011a)
 
-Each session admits 16 MiB of unwritten input, the connection reserves against it before handing the bytes over, and the
-reservation is released only when the PTY writer's `write_all` returns. A child that has stopped reading its stdin
-(stopped, wedged in a syscall, or simply slow) is not a reason for the daemon to grow: a same-UID `felis sessions send`
-loop into one would otherwise move arbitrary backlog into daemon memory, since nothing upstream could tell "queued" from
-"written".
+Each session admits a fixed budget of unwritten input (`PTY_INPUT_BUDGET`, [ipc.md](../reference/ipc.md) "Client →
+daemon: the input budget"), the connection reserves against it before handing the bytes over, and the reservation is
+released only when the PTY writer's `write_all` returns. A child that has stopped reading its stdin (stopped, wedged in
+a syscall, or simply slow) is not a reason for the daemon to grow: a same-UID `felis sessions send` loop into one would
+otherwise move arbitrary backlog into daemon memory, since nothing upstream could tell "queued" from "written".
 
 Making the session task itself block on the PTY was the rejected alternative: that task serves every subscriber and the
 parser drain, so one stuck child would freeze the grid for every mirror of that session; the cost falls on the wrong

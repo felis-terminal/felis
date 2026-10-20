@@ -2,8 +2,8 @@ use crate::test_support::drive;
 use crate::*;
 use felis_vt::Parser;
 
-/// REQ-605 publishes the number itself; every other test spells it
-/// symbolically.
+/// docs/explanation/data-model/scrollback.md publishes the number itself;
+/// every other test spells it symbolically.
 #[test]
 fn default_scrollback_rows_is_ten_thousand() {
     assert_eq!(DEFAULT_SCROLLBACK_ROWS, 10_000);

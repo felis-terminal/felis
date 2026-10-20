@@ -57,8 +57,9 @@ zero-sized quad, which rasterizes nothing. It then uploads only the rebuilt rows
 on rebuilds them all: the grid geometry, the cell metrics, the theme and palette, DECSCNM, the selection, the viewport,
 a chrome bar or pre-edit span, and a glyph atlas recycle, which moves every slot. So does a row that outgrows its slot.
 When padding every row to the widest one would take more than half the device's buffer limit, or four times the packed
-size past a 16 MiB allowance, the rows stay packed and every frame rebuilds and uploads all of them until the rows even
-out. Images and the overlays are not cell instances and are rebuilt every frame.
+size past a fixed allowance (`PADDING_ALLOWANCE` in `crates/felis-render-wgpu/src/row_cache.rs`), the rows stay packed
+and every frame rebuilds and uploads all of them until the rows even out. Images and the overlays are not cell instances
+and are rebuilt every frame.
 
 The glyph populate walk that runs before the instances are built follows the same marks: it primes atlas slots for, and
 shapes, only the marked rows, and keeps the shape results of the other rows from earlier frames. It walks every row when

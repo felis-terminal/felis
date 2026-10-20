@@ -102,7 +102,8 @@ A fact has exactly one home, and the repo-root files are not it. `docs/` owns fa
 `CONTRIBUTING.md`, `README.md` and every `SKILL.md` cite the owning page instead of restating it, and a skill states
 only procedure (commands, order of operations, environment gotchas). When a root file must name a value the config owns
 (MSRV, edition, a lint), it names the file, not the value. Test: if a change to one number would edit prose in two
-files, one of them should have been a citation. Cite by heading, never by section number; numbers drift. One exception
+files, one of them should have been a citation. A `spec.md` REQ row is no exception: it states the commitment and links
+its owner, never the owner's values or mechanism. Cite by heading, never by section number; numbers drift. One exception
 is `AGENTS.md`: it is the only file every agent session loads, so a rule an agent must hold before it opens anything
 (protected `main`, Forgejo Actions, the worktree location) may stand there as a one-line restatement. The other is
 `README.md`: it is the product front page, so it may summarize a topic in a sentence or two before linking its owner,

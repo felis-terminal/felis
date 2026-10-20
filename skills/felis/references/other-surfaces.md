@@ -11,10 +11,10 @@ None of these is needed for the three scenarios in `SKILL.md`. Each links to its
   Same `kind` vocabulary as the CLI, failures on stdout, no `--wait`, `--key` or `--mouse`. Its ops are session
   automation only (`sessions.*`, `notifications.subscribe`, `cancel`): the operator verbs (`daemon`, `config`, `fonts`,
   `doctor`, `version`), the window launches, and the shell plumbing (`completions`, `__mangen`, `__complete-sessions`)
-  are CLI-only, run as point verbs with `--format json`. It admits 64 concurrent operations and 32 auxiliary links,
-  bounds stream and stdout queues, rejects unknown fields and parameters (the grammar is `$defs/request` of
-  `felis-bridge-v1.schema.json`), and exits `1` immediately if stdout fails. A local relative `sessions.spawn` `cwd` is
-  anchored at the bridge process's directory.
+  are CLI-only, run as point verbs with `--format json`. It bounds concurrent operations, auxiliary links, and stream
+  and stdout queues (a request past a bound is answered `at_capacity`), rejects unknown fields and parameters (the
+  grammar is `$defs/request` of `felis-bridge-v1.schema.json`), and exits `1` immediately if stdout fails. A local
+  relative `sessions.spawn` `cwd` is anchored at the bridge process's directory.
 - **`sessions switch`, `felis ssh <dest>`, `felis window retarget [<socket>]`**: move a live window to another session
   or daemon. They act on windows, which an agent driving a headless session has none of
   ([cli.md "Re-point a window across daemons"](https://github.com/felis-terminal/felis/blob/main/docs/reference/cli.md#re-point-a-window-across-daemons-felis-ssh-felis-window-retarget)).

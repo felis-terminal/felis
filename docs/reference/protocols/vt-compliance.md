@@ -276,8 +276,9 @@ The rectangle checksum query, DECRQCRA, shares this bounds model; its reply is s
   answers with nothing. The height and width axes are the pixel extents of the PTY's own winsize, the values
   `TIOCGWINSZ` returns, so a change of the pixel extents alone reports too. A session whose shell has already exited is
   silent.
-- Synchronized output (`CSI ? 2026 h` / `l`): the client defers a frame until the daemon signals "synchronized update
-  ended".
+- Synchronized output (`CSI ? 2026 h` / `l`): the daemon holds the screen's updates until the reset or 150 ms after the
+  set (`Grid::SYNC_OUTPUT_TIMEOUT`), whichever comes first, and ships them as one batch; a repeated set does not extend
+  the deadline.
 
 ## Consumed without effect
 

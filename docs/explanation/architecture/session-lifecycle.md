@@ -23,7 +23,7 @@ sessions and between daemons, how several windows share one session, and what ha
                                             │                  │
                                             │ child has exited │
                                             └──────────────────┘
-                                              and ~5 s grace lapses
+                                              and the grace lapses
 ```
 
 - **Init:** PTY spawned, shell started, registered in the pool, but no subscription yet. Not observable to a `Create`'s
@@ -258,10 +258,10 @@ rejected alternatives to it, are in [grid-and-cells.md](../data-model/grid-and-c
 causal, not positional".
 
 **Its middle is composed for the connection's mode, before anything is composed.** Filtering afterwards has already paid
-for the row encodes and a read-back of an image store that runs to 256 MiB. A scripted `Ops` attach therefore gets the
-two markers and the keyboard modes only: it reads the session through the `Region` or `Search` reply it asks for, and a
-renderer-grade snapshot is content it would decode and drop. The markers themselves are mode-independent, because they
-are the ordering barrier a client drains to before writing its first request.
+for the row encodes and a read-back of an image store that may be as large as its cap. A scripted `Ops` attach therefore
+gets the two markers and the keyboard modes only: it reads the session through the `Region` or `Search` reply it asks
+for, and a renderer-grade snapshot is content it would decode and drop. The markers themselves are mode-independent,
+because they are the ordering barrier a client drains to before writing its first request.
 
 The burst is per subscriber. A late joiner rehydrates from the current grid while the existing subscribers carry on with
 incremental diffs, each at its own pull cadence ([pipeline.md](../rendering/pipeline.md) "Frame pacing").
@@ -493,7 +493,8 @@ a bare-close transient end, or a reconnect verdict of `SessionGone`, and, when t
 landing was still in flight, only once that landing settles and fails. Rung 1 and every trail entry are wrapped
 connect-to-attach in whatever is left of that budget; a timeout consumes the entry like a refusal, and once the deadline
 passes the remaining trail entries are skipped. The ring rung sits outside that budget: its one guarded attempt gets a
-full `RECONNECT_ATTEMPT_TIMEOUT` (10 s) of its own, so the ladder's own attempts end within 30 s + 10 s of starting.
+full `RECONNECT_ATTEMPT_TIMEOUT` of its own, so the ladder's own attempts end within the deadline plus one attempt
+timeout of starting.
 
 A create-form parked retarget (`felis window retarget … -- <cmd>`) bounds only its connect step even at rung 1:
 cancelling after the create request went out could orphan a session the target daemon already made, so the
@@ -528,11 +529,11 @@ daemon's death and a superseded switch share that wire shape. So the window does
 shadow it last applied on screen, appends a disconnected marker to its title, stops the cursor blink (a blinking caret
 would read as a shell waiting for input), and re-dials _the same carrier and the same session_.
 
-The re-dial is six attempts backing off from one second to eight, roughly 23 s of waiting
-(`RetryPolicy::WINDOW_RECONNECT`, sized so each attempt can spawn a fresh `ssh` without hammering the host), and each
-attempt itself bounded to ten seconds (`RECONNECT_ATTEMPT_TIMEOUT`), so the ladder is under a minute and a half even
-against a route that accepts the connection and then answers nothing. Nothing below that bound would ever return: an
-`ssh` child on a half-open path can wait as long as the kernel lets it.
+The re-dial is a fixed number of backed-off attempts (`RetryPolicy::WINDOW_RECONNECT`, sized so each attempt can spawn a
+fresh `ssh` without hammering the host), and each attempt is itself bounded (`RECONNECT_ATTEMPT_TIMEOUT`), so the ladder
+ends within the bound [cli.md](../../reference/cli.md#window-launches) "Window launches" states even against a route
+that accepts the connection and then answers nothing. Nothing below that bound would ever return: an `ssh` child on a
+half-open path can wait as long as the kernel lets it.
 
 The re-attach goes out live-only, so a session that ended while the transport was down refuses rather than parking the
 window on a corpse. The indicator and the stopped blink are client-local presentation (principle 3); no daemon message

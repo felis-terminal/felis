@@ -183,11 +183,12 @@ What the hand-off does guarantee is the positive case, and `Type=notify` is what
 only once that binary has bound that socket, which is why `serve` sends `READY=1` after its bind and treats a failed
 send as a startup failure.
 
-Each remaining property of the unit answers a failure the hand-off can produce. `TimeoutStartSec=15s` replaces the 90 s
-default, because a `serve` that never reaches `READY=1` is broken and every concurrent launcher waits on that same start
-job. `--collect` unloads a unit that ends inactive or failed, so a failed start leaves no name to reset before the next
-window tries. `KillMode=process` is rejected, which is why the unit keeps systemd's default: it would leave a surviving
-child holding the cgroup, and the next start would then fail on a name that is still loaded.
+Each remaining property of the unit answers a failure the hand-off can produce. `TimeoutStartSec`
+([cli.md](../../reference/cli.md#auto-spawning) "Auto-spawning") replaces systemd's 90 s default, because a `serve` that
+never reaches `READY=1` is broken and every concurrent launcher waits on that same start job. `--collect` unloads a unit
+that ends inactive or failed, so a failed start leaves no name to reset before the next window tries. `KillMode=process`
+is rejected, which is why the unit keeps systemd's default: it would leave a surviving child holding the cgroup, and the
+next start would then fail on a name that is still loaded.
 
 #### Launchers outside the user manager fork
 

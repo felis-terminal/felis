@@ -255,10 +255,10 @@ Each frame:
 
 #### Semantic limits
 
-The 64 MiB frame cap is a **framing backstop**, not any operation's policy. Each surface below carries its own limit
-(REQ-105a); the backstop only bounds what the framing layer will carry at all. Every limit on a value that becomes a
-frame body sits far under it. The bridge line is the one entry that does not: it is a JSON envelope on a pipe rather
-than a body, and the payload inside it is bounded by `MAX_PASTE_BYTES` on the way to the wire.
+The frame cap (`DEFAULT_MAX_BODY`) is a **framing backstop**, not any operation's policy. Each surface below carries its
+own limit (REQ-105a); the backstop only bounds what the framing layer will carry at all. Every limit on a value that
+becomes a frame body sits far under it. The bridge line is the one entry that does not: it is a JSON envelope on a pipe
+rather than a body, and the payload inside it is bounded by `MAX_PASTE_BYTES` on the way to the wire.
 
 A limit the `Checked` column marks `sender and receiver` is checked twice with the same number: by the sender before the
 body is encoded (`FrameWriter::send*`, and the CLI and bridge before they dial), and by the receiver after the body
@@ -673,9 +673,9 @@ subject by id and need no family context, so they live here once instead of once
   which the daemon closes. `reason` has three arms:
 
   - `Role`: the frame the peer sent belongs to a family its stated mode does not admit.
-  - `AtCapacity`: the daemon is already serving the connection cap (`MAX_CONNECTIONS`, 1024) and admitted no further
-    connections. The peer did nothing wrong; the remedy is to retry once a connection frees, and `detail` names the
-    admitted count and the limit.
+  - `AtCapacity`: the daemon is already serving the connection cap (`MAX_CONNECTIONS`, "Handshake") and admitted no
+    further connections. The peer did nothing wrong; the remedy is to retry once a connection frees, and `detail` names
+    the admitted count and the limit.
   - `UnknownMode`: the `Hello` named a `ConnectionMode` this daemon does not define, so the peer is the newer half and
     the remedy is a newer daemon; `detail` names the mode number.
 
@@ -1018,9 +1018,9 @@ order:
 - `Tag { id_prefix, add, remove }` / `TagsUpdated { resolved: ResolvedId, tags, denied }`: add and/or remove opaque
   labels on a session in one round-trip (backs `sessions tag`, whose positional TAGs are the adds and `--remove` the
   removes). The daemon applies adds then removes, sorts, and dedups; `tags` is the resulting set. The set is bounded
-  (`MAX_SESSION_TAGS` = 32 per session, `MAX_TAG_BYTES` = 128 per tag): a delta that would breach a cap is refused whole
-  (`denied` carries the reason, `tags` the untouched pre-request set), never partially applied. felis never interprets a
-  tag (the marginalia model, [control-surfaces.md](../explanation/architecture/control-surfaces.md)).
+  (`MAX_SESSION_TAGS` per session, `MAX_TAG_BYTES` per tag, "Semantic limits"): a delta that would breach a cap is
+  refused whole (`denied` carries the reason, `tags` the untouched pre-request set), never partially applied. felis
+  never interprets a tag (the marginalia model, [control-surfaces.md](../explanation/architecture/control-surfaces.md)).
 - `Status` / `StatusReply { worker_threads, draining, resources }`: what this daemon is holding (backs
   `felis daemon status`). Live state only: the daemon's build and the wire pair it speaks are already established on
   every connection by `Welcome.identity` and the preface's accept, and a client composes the `version` and `protocol`
@@ -1293,7 +1293,7 @@ Client → daemon, listed in wire-tag order:
   it (design in [input.md](../explanation/input.md) "Keyboard"; byte forms in
   [key-encoding.md](protocols/key-encoding.md)).
 
-  `key`'s character is capped at `MAX_KEY_CHARACTER_BYTES` and `text` at `MAX_KEY_TEXT_BYTES`, both 32 UTF-8 bytes: one
+  `key`'s character is capped at `MAX_KEY_CHARACTER_BYTES` and `text` at `MAX_KEY_TEXT_BYTES` ("Semantic limits"): one
   keystroke's worth. A frame past either cap is refused at admission, like an oversized `Paste`. Admission reserves
   `MAX_KEY_REPORT_BYTES` against the session's input budget, the widest report any mode can produce, because the child
   can flip modes between the reservation and the write.
@@ -1327,8 +1327,8 @@ numbers are in `felis.proto`.
 
   Between the markers an `Ops` attach receives `KittyKbdFlags` and `ModeFlags` and nothing else: a one-shot verb reads
   the session through the `Region` / `Search` reply it asks for, so rows, cursor, meta, the prompt marks already on the
-  grid, and the image store (up to the 256 MiB per-session store cap, read back out of the store to compose) would all
-  be content it decodes and drops. The two mode messages stay because `felis sessions send --key` encodes its chords
+  grid, and the image store (up to `MAX_SESSION_IMAGE_BYTES`, read back out of the store to compose) would all be
+  content it decodes and drops. The two mode messages stay because `felis sessions send --key` encodes its chords
   against them and `send --mouse` refuses an event `ModeFlags.mouse_protocol` says the program would not see
   ([cli.md](cli.md)). Live `PromptMark` frames still reach an `Ops` subscriber after the burst, which is what
   `send --wait` blocks on.
@@ -1649,7 +1649,7 @@ required; the optional fields are omitted from the machine framing when absent:
   PTY master, then the name (`/proc/<pgid>/comm` on Linux, `proc_pidpath` on macOS). The column therefore names the
   program that owns the terminal at query time even for a session that has produced no output since. Read from the OS
   process table by pid, never the shell's output (principle 4).
-- `exited` (`bool`): the shell exited and the session is lingering in the post-exit grace
+- `exited` (`bool`): the shell exited and the session is lingering in the post-exit grace, 5 s from the last detach
   ([session-lifecycle.md](../explanation/architecture/session-lifecycle.md) "Post-exit reaping"). A client's automatic
   pick must skip these (attaching one blocks the reap and nothing ever pushes the window off it); deliberate attaches
   stay allowed, since viewing the corpse's final screen is what the grace is for.
@@ -1977,8 +1977,8 @@ output.
 
 **Scheduling happens only at frame boundaries.** A frame that has begun is written to completion before anything else on
 that connection moves, so the largest frame the daemon can emit bounds the worst-case delay input sits behind bulk
-output. `MAX_IMAGE_CHUNK_PAYLOAD` (256 KiB) is what sets that bound, which is why it is far below the 64 MiB
-`DEFAULT_MAX_BODY` a frame may legally carry.
+output. `MAX_IMAGE_CHUNK_PAYLOAD` is what sets that bound, which is why it is far below the `DEFAULT_MAX_BODY` a frame
+may legally carry.
 
 What the daemon does _not_ do is apply the socket's backpressure to the PTY. A subscriber's outbox is an unbounded queue
 guarded by a bytes-in-flight gauge; a subscriber whose unwritten backlog crosses `SUBSCRIBER_BUFFER_CAP` (512 MiB) is
@@ -2012,7 +2012,7 @@ to the child's stdin rather than the enqueue alone.
 | `Input::KeyBytes`       | the payload length                                                                                                                     |
 | `Input::Paste`          | the payload length plus `PASTE_BRACKET_OVERHEAD` (12 bytes: `ESC [ 200~` and `ESC [ 201~`), whether or not the session has `?2004` set |
 | `Input::Mouse`          | `MAX_MOUSE_REPORT_BYTES` (32), whatever the event encodes to — or nothing, if the active protocol filters the event out                |
-| `Input::Key`            | `MAX_KEY_REPORT_BYTES` (280), whatever the active keyboard mode encodes to — or nothing, if the key has no encoding under it           |
+| `Input::Key`            | `MAX_KEY_REPORT_BYTES`, whatever the active keyboard mode encodes to — or nothing, if the key has no encoding under it                 |
 | every other `Input` arm | nothing: none of them carries bytes of its own for the child                                                                           |
 
 A paste reserves its bracketing unconditionally because the mode is read when the write happens, and the child can flip
@@ -2021,16 +2021,16 @@ key report reserve the widest form their encoders produce for the same reason: t
 modes are all read at write time. The key report's bound follows from the two per-key caps
 ([key-encoding.md](protocols/key-encoding.md) "Report size").
 
-`MAX_PASTE_BYTES` (16 MiB − 64) is pinned below the budget minus that overhead: a reservation larger than the budget
-could never be granted, so a paste past the cap is refused and the connection closed rather than parked forever. Both
-senders refuse an over-limit paste locally: `felis sessions send` exits `1` (`invalid_request`) and a window logs and
-drops it. The connection-closing path is reached only by a peer that ignored the published limit.
+`MAX_PASTE_BYTES` is pinned below the budget minus that overhead: a reservation larger than the budget could never be
+granted, so a paste past the cap is refused and the connection closed rather than parked forever. Both senders refuse an
+over-limit paste locally: `felis sessions send` exits `1` (`invalid_request`) and a window logs and drops it. The
+connection-closing path is reached only by a peer that ignored the published limit.
 
 Only the reserved bytes ride the budget. The session actor's own writes carry no reservation: a `DA` answer to the
 child, and the reports a client-side change owes it, which are a focus report under DECSET 1004, a color-scheme report
 under DECSET 2031, and an in-band resize report under DECSET 2048. They are bounded separately, by the PTY writer's 1
 MiB gauge of unreserved pending bytes, and dropped rather than queued past it. The two gauges are separate so that an
-admitted 16 MiB paste cannot silence the replies a child is waiting on while it drains.
+admitted maximum-size paste cannot silence the replies a child is waiting on while it drains.
 
 While a session's budget is exhausted, the connection feeding it stops reading its socket, except for noticing that the
 peer hung up: a connection parked on a budget a wedged child will never release would otherwise hold its admission
@@ -2056,9 +2056,9 @@ per-session budget ([cli.md](cli.md) "Daemon status").
 
 A window queues at most `CLIENT_OUTGOING_CAP` of encoded frames for its carrier: the largest single message the daemon
 would accept (`MAX_PASTE_BYTES` plus its bracketing) plus 4 MiB of backlog on top, 20 MiB in all. The cap has to clear
-one whole message, or the queue would refuse a lone 16 MiB paste against an empty queue and declare a healthy carrier
-dead; it has to clear it with room to spare, or the next keystroke typed while that paste drains would. Two rules apply,
-by message kind and never by payload:
+one whole message, or the queue would refuse a lone maximum-size paste against an empty queue and declare a healthy
+carrier dead; it has to clear it with room to spare, or the next keystroke typed while that paste drains would. Two
+rules apply, by message kind and never by payload:
 
 - **Ordered** — `Input::KeyBytes`, `Input::Paste`, `Input::JumpPrompt`, `Input::NextGridFrame`, `Input::Key`,
   `Input::ViewportStep`, and every non-`Input` family: appended, never replaced, never reordered.
