@@ -10,6 +10,30 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-20
+
+Every felis crate is now on crates.io, sessions report more about what runs in them, and fonts and scrollback behave as
+on other terminals.
+
+- **crates.io**: every crate under `crates/` is published, the libraries on their own versions from 0.1.0.
+- **Session details**: `felis sessions list` and `felis sessions info` show the directory a session was started in and
+  the last `OSC 9 ; 4` progress its program reported, such as cargo's.
+- **Fonts**: `felis fonts list` shows the family names `font.family` accepts; on macOS and Windows fonts resolve through
+  the platform, and `font.fallback` adds to the system fallback instead of replacing it.
+- **Scrollback that stays put**: a window scrolled back keeps showing the same lines while the program prints, and quick
+  scrolls no longer lose steps.
+- **Kitty graphics**: video through `mpv --vo=kitty` plays smoothly in a large window, and overlapping images stack in
+  kitty's order.
+- **Hardening**: terminal replies, bracketed paste, Kitty graphics file reads and the Windows daemon pipe are tightened.
+
+Upgrading from 0.2:
+
+- `felis daemon upgrade` moves a 0.2 daemon to 0.3.0 in place, keeping every session.
+- Jumping to the top or bottom of the scrollback is now `Ctrl+Shift+Home` / `Ctrl+Shift+End`; see Changed to bring back
+  `Ctrl+Home` / `Ctrl+End`.
+- A package that compiles the terminfo entry from a source checkout reads it from
+  `crates/felis-daemon/terminfo/felis.terminfo`.
+
 ### Added
 
 - **CLI**: `felis sessions list` and `felis sessions info` report the directory a session's child was started in as
@@ -31,7 +55,6 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 - **Library**: a program that serves sessions from `felis-daemon` in its own executable can hand them the `xterm-felis`
   terminfo entry: `felis_daemon::TERMINFO_SOURCE` is the entry's source to compile with `tic -x`, and
   `DaemonCaps::terminfo_dir` names the compiled directory the daemon puts first in each session's `TERMINFO_DIRS`.
-
 - **Library**: every crate under `crates/` is published on crates.io. The libraries carry their own versions, starting
   at 0.1.0; `felis-cli`, `felis-client` and `felis-daemon` carry the app version. felis itself installs from the
   packages in the install guide, which also ship the terminfo entry, desktop entry, man pages and shell completions.
@@ -399,7 +422,8 @@ commands in place of `felis frontend <name>`.
 
 Initial release.
 
-[unreleased]: https://github.com/felis-terminal/felis/compare/v0.2.0...HEAD
+[unreleased]: https://github.com/felis-terminal/felis/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/felis-terminal/felis/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/felis-terminal/felis/compare/v0.1.4...v0.2.0
 [0.1.4]: https://github.com/felis-terminal/felis/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/felis-terminal/felis/compare/v0.1.2...v0.1.3
