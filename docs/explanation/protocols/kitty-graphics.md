@@ -22,16 +22,17 @@ The protocol dispatcher is a `felis-daemon::graphics` module (a free function ta
 bodies; per body it borrows the session's graphics state as an `ApcCtx`), not part of `felis-grid`. The grid stays
 decoder-free, filesystem-free, and tokio-free: hosting the dispatcher there would drag the PNG decoder, `rustix` file
 access, and a response-write callback into the one crate the workspace's one-way dependency rule keeps display-only, and
-would put per-grid copies of the 256 MiB image budget and the 64 MiB reassembly buffer in the wrong place. Both bounded
-buffers co-locate on `Session` so a future per-session memory-budget knob touches one place.
+would put per-grid copies of the image budget and the reassembly buffer in the wrong place. Both bounded buffers
+co-locate on `Session` so a future per-session memory-budget knob touches one place.
 
 `Grid::apc_dispatch` is a short relay: it queues each body as a `PtyEffect::Apc` on the grid's stream-ordered
 side-effect queue, carrying the raw bytes plus the cursor position at delivery time; a trailing DECRC / CUP in the same
 `Parser::advance` burst would otherwise move the cursor away from the placement anchor before the daemon drains. This
 mirrors the dirty-flag posture the grid already uses for OSC titles / cwd / theme overrides: the daemon polls after
 every `advance`; the grid stays passive. Chunk reassembly (`m=1`) also runs at the daemon
-(`Session.graphics_reassembler`, capped at 64 MiB per [`security-model.md`](../security-model.md)); the grid keeps only
-the payload-free half of that state machine, enough to know when a body completes a command.
+(`Session.graphics_reassembler`, capped as
+[kitty-graphics.md](../../reference/protocols/kitty-graphics.md#malformed-input) "Malformed input" states); the grid
+keeps only the payload-free half of that state machine, enough to know when a body completes a command.
 
 That knowledge serves one rule: kitty moves the cursor after a placement inside the parse, so text written after the
 image in the same write prints beside it, not under it. The daemon dispatches after the parse, so when a body completes
@@ -40,8 +41,8 @@ until the session task has drained the queue, cursor move included, before parsi
 timed-out wait is a misplaced line under load, which is the bug itself; liveness comes from the session task releasing
 the reader for good when it exits. Two cheaper shapes are rejected. Moving the cursor in the grid at delivery time needs
 the cell box, and with `c`/`r` omitted that box comes from the decoded image's pixel size and the client's cell size,
-both daemon-side. Running the dispatcher under the parse lock puts the PNG decoder and the 64 MiB reassembly on the
-reader thread's critical section for every APC, not just the placements that move the cursor.
+both daemon-side. Running the dispatcher under the parse lock puts the PNG decoder and the reassembly on the reader
+thread's critical section for every APC, not just the placements that move the cursor.
 
 Because the dispatcher's entry holds `&mut Session`, it reaches the image store, the placement table, the response
 writer, and `&mut session.grid` through one borrow root: no callback ping-pong, no interior mutability. A
@@ -72,13 +73,14 @@ on the daemon: the async runtime is daemon-only, and a daemon-side clock is what
 
 The grid does not decode graphics commands; it copies each APC body into the effect queue the daemon drains. That copy
 is what needs a budget, because a producer chooses both the body size and how many arrive inside a single
-`Parser::advance`. The queue admits 64 bodies and 1 MiB per drain, and the body that fills it stops the parse until the
-daemon has drained, the same stop a cursor-moving placement takes. Pausing beats both growing the buffer and dropping:
-the bound keeps a hostile producer from turning a command flood into daemon memory, and a producer that places an image
-one cell at a time (yazi) sends thousands of bodies in one write, none of which may be lost. The bound is a property of
-the queue type, not a check its callers remember: the queue holds the APC count it is compared against and mints every
-APC entry itself, because a count maintained beside the queue is one that eventually disagrees with it, and a budget
-that has drifted off what it names bounds nothing.
+`Parser::advance`. The queue admits a bounded count and size of bodies per drain
+([kitty-graphics.md](../../reference/protocols/kitty-graphics.md#limits) "Limits"), and the body that fills it stops the
+parse until the daemon has drained, the same stop a cursor-moving placement takes. Pausing beats both growing the buffer
+and dropping: the bound keeps a hostile producer from turning a command flood into daemon memory, and a producer that
+places an image one cell at a time (yazi) sends thousands of bodies in one write, none of which may be lost. The bound
+is a property of the queue type, not a check its callers remember: the queue holds the APC count it is compared against
+and mints every APC entry itself, because a count maintained beside the queue is one that eventually disagrees with it,
+and a budget that has drifted off what it names bounds nothing.
 
 Revisit if: a second dispatcher consumer appears (a CLI debug tool or headless renderer would justify extracting a
 `felis-image` crate, with the daemon as a thin caller); placement-heavy output shows the per-placement pause in

@@ -289,24 +289,24 @@ and `list` exits `0` on an empty roster.
   `<id> <state>[ <kind>][ <progress>%][ [<app>]][
   <title>][: <msg>]`, the root record as `(root)`, with bidirectional-text and control characters in producer text spelled `<U+XXXX>`; for example
   `status:   (root) blocked question 50% [mytool]: Which branch?`.
-- **`spawn`**: `--tag <t>` sets initial tags (up to 32 tags of 128 bytes). A local spawn's child environment starts from
-  the `felis` process's own environment; over `--host` it starts from the remote login's. `--env KEY=VAL` sets or
-  overrides a variable on top of that base and cannot remove one, so `env -u KEY felis sessions spawn …` is how a local
-  caller drops one ([terminal-identity.md](terminal-identity.md) "The default identity"). `--rows N` and `--cols N` set
-  initial geometry (1..=2048, REQ-605a); they are one flag pair, so naming only one is a usage error (exit `2`) and
-  naming neither asks for the daemon's default grid (24 rows by 80 cols). `--cwd <dir>` sets the child's working
-  directory. Limits follow REQ-105a (4 KiB paths, 1 MiB argv/env). The program, its argv, and the cwd travel as UTF-8
-  ([ipc.md](ipc.md)), so a `--cwd` that is not valid UTF-8, and a caller working directory that is not valid UTF-8 when
-  the spawn is local, are each a usage error (exit `2`) rather than a lossy path. Starts a daemon on the host it dials,
-  `--host` included ("Auto-spawning").
+- **`spawn`**: `--tag <t>` sets initial tags. A local spawn's child environment starts from the `felis` process's own
+  environment; over `--host` it starts from the remote login's. `--env KEY=VAL` sets or overrides a variable on top of
+  that base and cannot remove one, so `env -u KEY felis sessions spawn …` is how a local caller drops one
+  ([terminal-identity.md](terminal-identity.md) "The default identity"). `--rows N` and `--cols N` set initial geometry
+  (1..=2048, REQ-605a); they are one flag pair, so naming only one is a usage error (exit `2`) and naming neither asks
+  for the daemon's default grid (24 rows by 80 cols). `--cwd <dir>` sets the child's working directory. The `SpawnArgs`
+  rows of [ipc.md](ipc.md#semantic-limits) "Semantic limits" bound the program, the argv, the cwd, the env and the tags.
+  The program, its argv, and the cwd travel as UTF-8 ([ipc.md](ipc.md)), so a `--cwd` that is not valid UTF-8, and a
+  caller working directory that is not valid UTF-8 when the spawn is local, are each a usage error (exit `2`) rather
+  than a lossy path. Starts a daemon on the host it dials, `--host` included ("Auto-spawning").
 - **`send`**: one operation, and three constraints are its whole grammar: at least one of TEXT, `--key`, `--mouse` or
   `--wait`; `--raw` requires TEXT; `--timeout` requires `--wait`. Each unmet constraint is a usage error (exit `2`). It
   pastes text, which loses its C0 controls but HT, LF and CR when the program enabled bracketed paste; `--raw` sends
   literal bytes without bracketed paste; `-` reads stdin. `--key <chord>` (repeatable) presses keys after text (`up`,
   `escape`, `ctrl+c`, `enter`). A chord travels as the keystroke itself and the daemon encodes it against the session's
-  current keyboard modes, so it needs no knowledge of them from the caller. A chord's character is capped at 32 UTF-8
-  bytes (REQ-105a); past it the verb exits `1` under `invalid_request`. `--mouse <event>` (repeatable) sends a mouse
-  event, `[MODS+]ACTION[-BUTTON]:COL,ROW`: ACTION is `click` (press then release), `press`, `drag`, `release`,
+  current keyboard modes, so it needs no knowledge of them from the caller. A chord's character is capped at
+  `MAX_KEY_CHARACTER_BYTES`; past it the verb exits `1` under `invalid_request`. `--mouse <event>` (repeatable) sends a
+  mouse event, `[MODS+]ACTION[-BUTTON]:COL,ROW`: ACTION is `click` (press then release), `press`, `drag`, `release`,
   `wheel-up`, `wheel-down`, `wheel-left` or `wheel-right`; BUTTON is `left` (the default), `middle` or `right`, and a
   wheel action takes none; MODS are `shift`, `alt` and `ctrl` in the chord spelling. COL and ROW are 0-based, as
   `search`'s `col_spans` and `capture`'s rows are, so `--mouse click:12,4` clicks a match that starts at column 12 of
@@ -319,7 +319,8 @@ and `list` exits `0` on an empty roster.
   `felis sessions send <id> --wait` watches a command someone else started. `--timeout <secs>` bounds everything past
   the writes: the daemon's admission of the input and the mark watch alike. An unbounded `--wait` waits indefinitely,
   and `--timeout 0` is a deadline already past, so neither wait gets a chance to finish and the verb exits `1` under
-  `timeout`. Payload cap is 16 MiB minus 64 bytes of text, 16 MiB with `--raw` (REQ-105a).
+  `timeout`. The payload is capped at `MAX_PASTE_BYTES` of text, `MAX_RAW_INPUT_BYTES` with `--raw`
+  ([ipc.md](ipc.md#semantic-limits) "Semantic limits").
 - **`capture`**: `--source <visible|scrollback|command-output|last-command>` picks the region; `scrollback` streams
   retained history oldest-first, `command-output` and `last-command` the output bounded by OSC 133 prompt marks.
   `--lines N` limits output to the last N rows, and under `--source scrollback` the daemon transmits that tail alone
@@ -327,12 +328,13 @@ and `list` exits `0` on an empty roster.
   and style, on every `--source`. A row's text is its cells' characters in column order: a wide character fills two
   columns, a combining mark adds characters to its cell's column, and a Kitty Unicode-placeholder cell reads as U+10EEEE
   followed by its diacritics, so a character's index in the text is its column only on a row of single-width characters.
-- **`search`**: substring search by default; `--regex` enables regular expressions, `--case-insensitive` folds case.
-  Pattern limit is 4 KiB. `--source <scrollback|visible>` picks the rows. `scrollback`, the default, matches scrollback
-  and the primary screen; while a program holds the alternate screen, only scrollback is searched. `visible` matches the
-  live screen alone, alternate screen included, so every `line_index` is a grid row and each `col_spans` segment names
-  the cell columns a match covers on screen. A daemon whose protocol minor predates `--source visible` would search
-  scrollback in its place, so against one the verb refuses with `unsupported` (exit `2`) before attaching.
+- **`search`**: substring search by default; `--regex` enables regular expressions, `--case-insensitive` folds case. The
+  pattern is capped at `MAX_SEARCH_PATTERN_BYTES`. `--source <scrollback|visible>` picks the rows. `scrollback`, the
+  default, matches scrollback and the primary screen; while a program holds the alternate screen, only scrollback is
+  searched. `visible` matches the live screen alone, alternate screen included, so every `line_index` is a grid row and
+  each `col_spans` segment names the cell columns a match covers on screen. A daemon whose protocol minor predates
+  `--source visible` would search scrollback in its place, so against one the verb refuses with `unsupported` (exit `2`)
+  before attaching.
 - **`switch`**: moves one window attached to the current session (`$FELIS_SESSION_ID` or `--from <id>`) to target
   `<id>`. When several windows mirror that session, the one that most recently received user input moves;
   `--attachment <ID>` names a window explicitly. A background `sessions send` is not a window and never becomes that
@@ -434,15 +436,15 @@ JSON output (`--format json`) yields:
 
 ### Accounted resources
 
-| `resource`               | Unit  | Scope        | Ceiling                                                                                |
-| ------------------------ | ----- | ------------ | -------------------------------------------------------------------------------------- |
-| `connections`            | count | `daemon`     | 1024 connections (REQ-916).                                                            |
-| `sessions`               | count | `daemon`     | 256 sessions (REQ-915).                                                                |
-| `image_store_bytes`      | bytes | `session`    | 512 MiB per session, 256 MiB per screen (REQ-1008). Oldest images evicted on pressure. |
-| `in_flight_decodes`      | count | `daemon`     | 256 transmissions.                                                                     |
-| `in_flight_decode_bytes` | bytes | `session`    | 64 MiB per session (REQ-908).                                                          |
-| `subscriber_queue_bytes` | bytes | `subscriber` | 512 MiB per subscriber. Slow subscribers evicted.                                      |
-| `pty_input_bytes`        | bytes | `session`    | 16 MiB per session (REQ-1011a). Socket reads pause until drained.                      |
+| `resource`               | Unit  | Scope        | Ceiling                                                                                                                                                     |
+| ------------------------ | ----- | ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `connections`            | count | `daemon`     | `MAX_CONNECTIONS` ([ipc.md](ipc.md) "Handshake").                                                                                                           |
+| `sessions`               | count | `daemon`     | 256 sessions (REQ-915).                                                                                                                                     |
+| `image_store_bytes`      | bytes | `session`    | The per-screen store cap ([kitty-graphics.md](protocols/kitty-graphics.md#limits) "Limits") for each of the two screens. Oldest images evicted on pressure. |
+| `in_flight_decodes`      | count | `daemon`     | The `sessions` ceiling: a session reassembles one transmission at a time.                                                                                   |
+| `in_flight_decode_bytes` | bytes | `session`    | The chunked-transfer cap ([kitty-graphics.md](protocols/kitty-graphics.md#malformed-input) "Malformed input").                                              |
+| `subscriber_queue_bytes` | bytes | `subscriber` | `SUBSCRIBER_BUFFER_CAP` ([ipc.md](ipc.md#backpressure) "Backpressure"). Slow subscribers evicted.                                                           |
+| `pty_input_bytes`        | bytes | `session`    | `PTY_INPUT_BUDGET` ([ipc.md](ipc.md) "Client → daemon: the input budget"). Socket reads pause until drained.                                                |
 
 `resource`, `unit`, `scope` and `total_used` are on every row. The rest are the wire's two scope arms flattened into
 keys, so **absent is not `0`**:
@@ -714,9 +716,9 @@ felis window retarget [<socket>] [--from <prefix>]
 - `--session <prefix>`: attaches to an existing session on the target daemon.
 - `-- <cmd...>`: spawns a new command on the target daemon.
 
-Destination descriptors are bounded at 64 KiB (REQ-105a). Exit codes: `0` once the window's outbox has taken the push
-and not once it has landed ("Result objects"), `1` if window not found or descriptor over limit, `2` on invalid
-arguments or unreachable daemon.
+Destination descriptors are bounded by `MAX_RETARGET_DESCRIPTOR_BYTES` ([ipc.md](ipc.md#semantic-limits) "Semantic
+limits"). Exit codes: `0` once the window's outbox has taken the push and not once it has landed ("Result objects"), `1`
+if window not found or descriptor over limit, `2` on invalid arguments or unreachable daemon.
 
 ## External commands: `felis <name>`
 
@@ -847,8 +849,9 @@ The stdio contract:
 
 - Standard input: newline-delimited requests `{"v":1,"id":<id>,"op":"<op>","params":{...}}`. The only accepted top-level
   keys are `v`, `id`, `op`, and `params`; `params` is an object or may be omitted. Unknown operation parameters are
-  refused rather than ignored. A line may contain at most `MAX_BRIDGE_LINE_BYTES` (8 × `MAX_PASTE_BYTES`, just under 128
-  MiB); an over-limit line is discarded through its newline and answered as `invalid_request` with `id: null`.
+  refused rather than ignored. A line may contain at most `MAX_BRIDGE_LINE_BYTES` ([ipc.md](ipc.md#semantic-limits)
+  "Semantic limits"); an over-limit line is discarded through its newline and answered as `invalid_request` with
+  `id: null`.
 - A request `id` is either a string of at most 128 UTF-8 bytes or a non-negative integer no greater than
   `9007199254740991` (the largest integer represented exactly by common JSON consumers). It remains in use until the
   request's reply or stream terminal is published as a complete stdout line.

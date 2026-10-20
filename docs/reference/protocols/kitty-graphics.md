@@ -343,15 +343,15 @@ Non-`G` APC escapes are silently ignored to prevent interfering with unrelated A
 - Maximum APC body: 256 KiB between the `ESC _` introducer and the terminating `ST`, controls and payload together,
   kitty's own escape-code limit. A longer body is truncated to the cap, the bell rings, and the truncated body still
   reaches the dispatcher.
-- Maximum decoded image memory: 256 MiB per screen's store. A transmit that would exceed it first frees every image
-  without a placement, then evicts the least recently transmitted or placed images with their placements until it fits
-  (emitting `PlacementRemoved` and `Delete`), as kitty does.
-- Budget accounting: Decoded pixel size plus fixed per-entry and per-frame overheads count toward the 256 MiB per-screen
-  ceiling.
-- Maximum decoded image size: 64 MiB per image. A larger image is rejected with `ENOTSUP` before its buffer is sized
-  (from a `t=f`, `t=t` or `t=s` source, with the one file-medium failure reply).
-- Maximum frames per image: 4096 frames (including root). Additional frames are rejected with `ENOTSUP` (from a file
-  medium, with the one file-medium failure reply).
+- Maximum decoded image memory: `MAX_SESSION_IMAGE_BYTES` per screen's store ([ipc.md](../ipc.md#semantic-limits)
+  "Semantic limits"). A transmit that would exceed it first frees every image without a placement, then evicts the least
+  recently transmitted or placed images with their placements until it fits (emitting `PlacementRemoved` and `Delete`),
+  as kitty does.
+- Budget accounting: Decoded pixel size plus fixed per-entry and per-frame overheads count toward that ceiling.
+- Maximum decoded image size: `MAX_IMAGE_BYTES` per image. A larger image is rejected with `ENOTSUP` before its buffer
+  is sized (from a `t=f`, `t=t` or `t=s` source, with the one file-medium failure reply).
+- Maximum frames per image: `MAX_IMAGE_FRAMES` (including root). Additional frames are rejected with `ENOTSUP` (from a
+  file medium, with the one file-medium failure reply).
 - Maximum placements: 16384 per screen, direct and Unicode-placeholder placements together. A put past it removes the
   screen's oldest placement (emitting `PlacementRemoved`), and an image without an id that loses its last placement this
   way is deleted (emitting `Delete`). kitty has no such cap.

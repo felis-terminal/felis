@@ -212,9 +212,9 @@ selection would put presentation state on the wrong side of principle 3, and wou
 
 ### A region too large to carry
 
-A 10 000-row scrollback of wide, heavily colored cells (REQ-605, REQ-605a) with `ansi = true` serializes past the 64 MiB
+A 10 000-row scrollback of wide, heavily colored cells (REQ-605, REQ-605a) with `ansi = true` serializes past the
 framing backstop, and a body that big would be refused by the daemon's own writer, costing the requesting window its
-connection in the middle of a chord (REQ-105). So the reply carries a ceiling of its own at half the backstop
+connection in the middle of a chord (REQ-105). So the reply carries a ceiling of its own below the backstop
 (`MAX_REGION_REPLY_BYTES`, [ipc.md](../../reference/ipc.md) "Semantic limits"), and a region past it is trimmed to its
 youngest lines rather than sent whole.
 
@@ -231,7 +231,7 @@ export the blob cannot carry still has a route.
 The `paste` sink is bounded tighter than the other two, at `MAX_PASTE_BYTES` ([ipc.md](../../reference/ipc.md) "Semantic
 limits"): its region goes back out as an `InputMsg::Paste`, and the budget above admits twice what one of those may
 carry. It is refused with the same notice a clipboard paste of that size draws, since the sink is what makes the cap
-reachable without a human holding a 16 MiB clipboard.
+reachable without a human holding a clipboard that large.
 
 The OSC 133-keyed pipe sources (`CommandOutput` = last `C→D` range, `LastCommand` = last `B→D` range) extract their rows
 the same way, but across the scrollback/screen boundary: prompt marks carry **absolute line coordinates**

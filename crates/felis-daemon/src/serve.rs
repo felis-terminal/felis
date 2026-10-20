@@ -354,7 +354,7 @@ struct ConnParams {
 /// destructive knob is the post-exit grace.
 #[derive(Debug, Clone, Copy)]
 pub struct IdlePolicy {
-    /// Default 5 s per `session-lifecycle.md` "Post-exit reaping".
+    /// `session-lifecycle.md` "Post-exit reaping".
     pub post_exit_grace: Duration,
     /// How often a parked (0-subscriber) session task polls the child for
     /// exit.

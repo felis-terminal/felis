@@ -14,11 +14,11 @@ Read this when a verb exits `1` or `2` and the `error.kind` alone does not say w
 
 Run `felis daemon status --format json`. It prints one object listing every admitted resource as `{"resource","unit",`
 `"scope","total_used","max_subject_used","per_subject_limit",` `"global_limit"}`; absent fields mean no value, so read
-with `.field // empty`. Two rows matter to an agent. A spawn past the `sessions` cap (256) or a connect past the
-`connections` cap (1024) is `{"error":{"kind":"at_capacity"}}` at exit `1`: reap or close and retry rather than treating
-it as a broken invocation. A `pty_input_bytes` row near its per-subject limit means the child stopped reading its stdin;
-`send` then blocks until admitted, and `--wait --timeout N` bounds that wait too. The verb exits `2` for an unreachable
-daemon and never starts one.
+with `.field // empty`. Two rows matter to an agent. A spawn past the `sessions` cap or a connect past the `connections`
+cap (each row's `per_subject_limit` or `global_limit`) is `{"error":{"kind":"at_capacity"}}` at exit `1`: reap or close
+and retry rather than treating it as a broken invocation. A `pty_input_bytes` row near its per-subject limit means the
+child stopped reading its stdin; `send` then blocks until admitted, and `--wait --timeout N` bounds that wait too. The
+verb exits `2` for an unreachable daemon and never starts one.
 
 ## A draining daemon
 
@@ -56,11 +56,6 @@ too old to have the verb is reported as `unsupported`, exit `2`.
 
 ## Payload limits
 
-An over-limit request is refused before it reaches the daemon, exit `1` with `{"error":{"kind":"invalid_request",…}}`.
-Chunk rather than raise.
-
-| Verb              | Bound                                                                                                        |
-| ----------------- | ------------------------------------------------------------------------------------------------------------ |
-| `sessions send`   | 16 MiB − 64 of text; 16 MiB with `--raw`                                                                     |
-| `sessions search` | 4 KiB of pattern                                                                                             |
-| `sessions spawn`  | 4 KiB each for the program and `--cwd`; 4096 argv entries / 1 MiB of argv; 4096 `--env` pairs / 1 MiB of env |
+An over-limit request (the text of `sessions send`, the pattern of `sessions search`, the program, cwd, argv or env of
+`sessions spawn`) is refused before it reaches the daemon, exit `1` with `{"error":{"kind":"invalid_request",…}}`; the
+message names the field, its size, and the cap. Chunk rather than raise.

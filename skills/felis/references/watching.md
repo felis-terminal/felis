@@ -22,7 +22,8 @@ felis sessions spawn --tag agent -- …      # label at creation, no untagged ga
 felis sessions list --tag agent --format json  # client-side filter
 ```
 
-Tags are bounded (≤32 per session, ≤128 bytes each); an over-cap delta is refused whole at exit `1`.
+Tags are bounded in count per session and in bytes per tag; an over-cap delta is refused whole at exit `1`, with a
+message naming the cap.
 
 `cwd` is the directory the program last announced with OSC 7 and is absent without shell integration; `spawn_cwd` is the
 directory the daemon started the child in, fixed at creation, so group sessions by it rather than storing a path in a

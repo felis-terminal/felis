@@ -419,11 +419,11 @@ an image header's `New` target announces, and its `Frame` number are the fields 
 one is whether the receiver's memory use is a function of the number rather than of the bytes that carry it.
 
 That distinction is the whole reason the frame-body ceiling does not already cover this. A `MAX_PASTE_BYTES` breach has
-to _ship_ sixteen megabytes; the framing layer would have refused a large enough one anyway, and the per-operation limit
-only sharpens where the line sits. A claim ships nothing. `GridMsg::Size { rows: 65535, cols: 65535 }` is twenty bytes
-on the wire and 4.3 billion cells in the shadow grid; an `ImageMsg::Header` announcing a `u32::MAX × u32::MAX` canvas is
-a few dozen bytes and a `vec![0; n]` that never returns. Bounding bytes received bounds the wrong quantity, so these are
-checked where the number is read rather than where the body is sized.
+to _ship_ every byte past the cap; the framing layer would have refused a large enough one anyway, and the per-operation
+limit only sharpens where the line sits. A claim ships nothing. `GridMsg::Size { rows: 65535, cols: 65535 }` is twenty
+bytes on the wire and 4.3 billion cells in the shadow grid; an `ImageMsg::Header` announcing a `u32::MAX × u32::MAX`
+canvas is a few dozen bytes and a `vec![0; n]` that never returns. Bounding bytes received bounds the wrong quantity, so
+these are checked where the number is read rather than where the body is sized.
 
 Letting the client trust the daemon is the rejected alternative, on the argument that a daemon buggy enough to announce
 a bad number is buggy enough to ship bad bytes, and the chunk writer drops what does not fit anyway. It is wrong on its
@@ -442,9 +442,9 @@ would be the daemon's bug. A receiver-side check would add nothing and cost some
 would lose its connection over bytes the client can hold.
 
 The client's aggregate image total is the one bound here that is not a per-field check. It exists because per-image
-limits compose badly: five hundred headers each a legal 64 MiB is 32 GiB, all of it individually admissible. The daemon
-holds the same total by evicting; the mirror cannot evict without inventing a retention policy the daemon did not run,
-so it refuses and the connection ends.
+limits compose badly: five hundred headers each at a legal `MAX_IMAGE_BYTES` sum to five hundred times that, all of it
+individually admissible. The daemon holds the same total by evicting; the mirror cannot evict without inventing a
+retention policy the daemon did not run, so it refuses and the connection ends.
 
 ### Optional fields instead of in-band sentinels
 

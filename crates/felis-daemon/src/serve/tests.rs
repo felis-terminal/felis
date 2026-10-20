@@ -1902,7 +1902,7 @@ async fn first_frame_on_wrong_kind_is_rejected_cleanly() {
     server.abort();
 }
 
-/// Pins the documented defaults: 5 s post-exit grace (spec REQ-009), 100 ms
+/// Pins the documented defaults: 5 s post-exit grace (docs/reference/ipc.md `exited`), 100 ms
 /// parked drain.
 #[test]
 fn idle_policy_default_carries_the_documented_grace_and_drain_interval() {

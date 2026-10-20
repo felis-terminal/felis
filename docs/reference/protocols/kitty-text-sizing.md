@@ -19,8 +19,8 @@ OSC 66 ; metadata ; text ST
 ```
 
 `metadata` is a colon-separated list of `key=value` pairs. All keys are optional; an empty metadata field
-(`OSC 66 ; ; text ST`) renders `text` at default size with auto-derived width. The recognized keys are pinned in
-[spec.md](../spec.md) (REQ-400 through REQ-408):
+(`OSC 66 ; ; text ST`) renders `text` at default size with auto-derived width. The recognized keys (REQ-400 through
+REQ-408 in [spec.md](../spec.md)):
 
 | Key | Range | Default | Purpose                                           |
 | --- | ----- | ------- | ------------------------------------------------- |

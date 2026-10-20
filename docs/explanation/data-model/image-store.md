@@ -78,11 +78,11 @@ cap filled (see [kitty-graphics.md](../protocols/kitty-graphics.md#eviction-unde
 
 The store's own refcount-respecting eviction announces what it drops: `insert`, `push_frame` and `replace_frame` return
 the evicted ids, and the dispatcher turns each into the same `Delete` a deliberate removal emits. Swallowing them would
-be a real divergence rather than a tidiness point: a client mirrors this store's byte total against the same 256 MiB
-cap, so an eviction it never heard about would leave it counting bytes the daemon has already freed, until its own cap
-refused an honest header and cost the window its connection. Eviction is also priced before anything is dropped, so a
-mutation that ends in `OverCapacity` leaves the store exactly as it found it and there is nothing unannounced to report
-on the error path.
+be a real divergence rather than a tidiness point: a client mirrors this store's byte total against the same cap
+(`MAX_SESSION_IMAGE_BYTES`), so an eviction it never heard about would leave it counting bytes the daemon has already
+freed, until its own cap refused an honest header and cost the window its connection. Eviction is also priced before
+anything is dropped, so a mutation that ends in `OverCapacity` leaves the store exactly as it found it and there is
+nothing unannounced to report on the error path.
 
 ## Animation frames
 
