@@ -55,8 +55,9 @@ the workspace layout wants ([overview.md](../explanation/architecture/overview.m
   Pipes live in `\\.\pipe\`, not the filesystem (<https://learn.microsoft.com/en-us/windows/win32/ipc/pipe-names>), so
   the Unix `0700`-dir and stale-socket cleanup do not apply: a pipe vanishes when its last instance handle closes. The
   default endpoint is `\\.\pipe\felis.<sid>.daemon`, disambiguated per user by SID string (stable, unlike a volatile
-  session id). Peer authentication is a per-instance DACL plus an active client-SID check: the named-pipe analogue of
-  the Unix `0600` + peer-UID pair; see [security-model.md](../explanation/security-model.md) "Daemon IPC".
+  session id). Peer authentication is a per-instance DACL plus an active SID check by both sides (the daemon on the
+  client, the dialer on the server): the named-pipe analogue of the Unix `0600` + peer-UID pair; see
+  [security-model.md](../explanation/security-model.md) "Daemon IPC".
 
 `Endpoint` is the platform-neutral address at the carrier boundary: a Unix path on Unix, a pipe name on Windows. The
 binaries keep passing the address as the `PathBuf` they already carry and convert at the boundary; they never do
@@ -2095,7 +2096,7 @@ transport that is gone, not one that is slow.
 - Local (Unix socket): file mode `0600` on the socket, inside a `0700` directory the daemon owns; only the daemon's user
   can connect. The UID is verified by both sides before any application byte: the daemon on accept, the dialer after
   connect (`SO_PEERCRED` on Linux, `getpeereid` on macOS and the BSDs). No further auth.
-- Local (Windows named pipe): per-instance DACL plus an active client-SID check; see
-  [security-model.md](../explanation/security-model.md) "Daemon IPC".
+- Local (Windows named pipe): per-instance DACL plus an active SID check by both sides, the daemon on the client and the
+  dialer on the server; see [security-model.md](../explanation/security-model.md) "Daemon IPC".
 - Cross-host (SSH stdio): the SSH layer is the auth boundary. felis adds no second password / token layer (see
   "Cross-host carrier: SSH stdio" above).

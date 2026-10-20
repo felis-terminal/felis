@@ -1,7 +1,8 @@
 //! Windows named-pipe backend for the [`crate::local`] carrier facade.
 //!
 //! Enforces DACL per-instance and validates client SID before `Hello` (REQ-106)
-//! via `GetNamedPipeClientProcessId` and `OpenProcessToken`.
+//! via `GetNamedPipeClientProcessId` and `OpenProcessToken`; a dialer checks
+//! the server's SID the same way through `GetNamedPipeServerProcessId`.
 
 use std::ffi::c_void;
 use std::io;
@@ -24,7 +25,7 @@ use windows_sys::Win32::Security::{
     GetTokenInformation, PSECURITY_DESCRIPTOR, PSID, SECURITY_ATTRIBUTES, TOKEN_QUERY, TOKEN_USER,
     TokenUser,
 };
-use windows_sys::Win32::System::Pipes::GetNamedPipeClientProcessId;
+use windows_sys::Win32::System::Pipes::{GetNamedPipeClientProcessId, GetNamedPipeServerProcessId};
 use windows_sys::Win32::System::Threading::{
     GetCurrentProcess, OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
 };
@@ -186,15 +187,32 @@ fn client_sid_string(server: &NamedPipeServer) -> io::Result<String> {
     if ok == 0 {
         return Err(io::Error::last_os_error());
     }
+    process_sid_string(pid)
+}
+
+/// The dialer's twin of [`client_sid_string`] (REQ-106a).
+fn server_sid_string(client: &NamedPipeClient) -> io::Result<String> {
+    let handle = client.as_raw_handle() as HANDLE;
+    let mut pid: u32 = 0;
+    // SAFETY: `handle` is the live client end of a connected pipe;
+    // `pid` is a valid out-pointer.
+    let ok = unsafe { GetNamedPipeServerProcessId(handle, &raw mut pid) };
+    if ok == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    process_sid_string(pid)
+}
+
+fn process_sid_string(pid: u32) -> io::Result<String> {
     // SAFETY: opening another process for limited query is sound; the
     // returned handle is wrapped in OwnedHandle and closed on drop.
     //
-    // Accepted TOCTOU: between GetNamedPipeClientProcessId and this
-    // OpenProcess the client can exit and the pid be recycled, so the
-    // SID we read may belong to the recycled process. Exploiting it
-    // requires winning a pid-reuse race as an attacker the pipe DACL
-    // already excludes from opening the pipe at all, so the risk is
-    // recorded rather than chased. Impersonation-based checks were
+    // Accepted TOCTOU: between the pid lookup and this OpenProcess the
+    // peer can exit and the pid be recycled, so the SID we read may
+    // belong to the recycled process. A client exploiting it must win a
+    // pid-reuse race as an attacker the pipe DACL already excludes; a
+    // foreign server must have its pid land on one of the user's own
+    // processes, which it cannot steer. Impersonation-based checks were
     // rejected because the client has written no bytes yet (see the
     // module doc).
     let proc = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid) };
@@ -247,6 +265,19 @@ pub(crate) async fn connect(pipe_name: &str) -> io::Result<NamedPipeClient> {
         Ok(Err(e)) => Err(e),
         Err(err) => Err(err.source),
     }
+}
+
+/// Refuses a pipe whose server runs as another user, before the caller
+/// writes its first byte (REQ-106).
+pub(crate) fn verify_server(client: &NamedPipeClient) -> io::Result<()> {
+    verify_server_as(client, &current_user_sid_string()?)
+}
+
+/// [`verify_server`] against a given SID, so a single-account runner can
+/// still drive the reject arm.
+fn verify_server_as(client: &NamedPipeClient, expected: &str) -> io::Result<()> {
+    let peer = server_sid_string(client)?;
+    admit(peer, expected).map_err(|err| io::Error::new(io::ErrorKind::PermissionDenied, err))
 }
 
 pub(crate) struct Listener {
@@ -600,6 +631,47 @@ mod tests {
             current_user_sid_string().unwrap(),
             "the accept path must have resolved this process's own SID"
         );
+    }
+
+    /// REQ-106a, dialer side: the facade's connect checks the server and
+    /// the SID it resolves is this process's own.
+    #[tokio::test]
+    async fn a_same_user_server_is_admitted_by_the_dialer() {
+        let name = unique_pipe_name("dial");
+        let listener = Listener::bind(&Endpoint::pipe(name.clone())).unwrap();
+        let server_task = tokio::spawn(async move {
+            let mut server = listener.accept().await.unwrap();
+            let mut buf = [0u8; 4];
+            server.read_exact(&mut buf).await.unwrap();
+            assert_eq!(&buf, b"ping");
+        });
+
+        let (_read, mut write) = crate::local::connect(Endpoint::pipe(name))
+            .await
+            .expect("same-user server admitted");
+        write.write_all(b"ping").await.unwrap();
+        server_task.await.unwrap();
+    }
+
+    /// The dialer's reject arm fails before the caller writes anything:
+    /// the server sees end of stream, not a byte.
+    #[tokio::test]
+    async fn a_foreign_server_sid_is_refused_before_any_byte() {
+        let name = unique_pipe_name("dial-reject");
+        let listener = Listener::bind(&Endpoint::pipe(name.clone())).unwrap();
+        let server_task = tokio::spawn(async move {
+            let mut server = listener.accept().await.unwrap();
+            let mut buf = Vec::new();
+            server.read_to_end(&mut buf).await.ok();
+            buf
+        });
+
+        let client = connect(&name).await.unwrap();
+        let err = verify_server_as(&client, "S-1-5-21-1111111111-2222222222-3333333333-1001")
+            .expect_err("a foreign server SID must be refused");
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+        drop(client);
+        assert_eq!(server_task.await.unwrap(), Vec::<u8>::new());
     }
 
     /// REQ-106a's reject arm, unreachable through `accept` on a
