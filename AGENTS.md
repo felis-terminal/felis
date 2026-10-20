@@ -73,7 +73,7 @@ the agent-facing dev-environment details (which shells exist, what the dev shell
 The rules an agent must hold without opening either:
 
 - No doc may add `rust-toolchain.toml`, `cargo install …`, `.editorconfig`, or ad-hoc tool-version pins.
-- A commit scope is an area, never a change type.
+- A commit scope is an area, never a change type. A doc or skill update riding along with a code change adds no scope.
 - `main` is protected; direct pushes (force-pushes included) are disabled. All changes go through feature branches and
   pull requests; a feature branch may be rebased, squashed, and pushed with `--force-with-lease` freely.
 - The repo uses **Forgejo Actions** for CI, not GitHub Actions. Be careful when touching workflow files.

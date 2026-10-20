@@ -86,6 +86,8 @@ Guidance:
 - For a change touching two scopes, either pick the more general parent, list both comma-separated
   (`daemon, client: ...`), or use `treewide:` if it truly spans the tree. If no scope fits cleanly, treat it as a
   special commit and write a clear description.
+- Scope names the area whose behavior changes. A doc or skill update that rides along with a code change adds no scope;
+  `docs:`, `manual:`, and `skills:` are for commits that change only those trees.
 - Keep scope lowercase; use `client-core` (with hyphen) as in the crate name, not `client_core`.
 
 ### Examples
