@@ -1085,9 +1085,12 @@ async fn run_session(mut t: SessionTask, mut cmd_rx: mpsc::Receiver<SessionCmd>)
                 }
             }
             // After commands in the biased order: a `Cancel` sent
-            // mid-walk lands before the next slice.
+            // mid-walk lands before the next slice. The yield lets the
+            // connection pump that forwards it run: this arm is always
+            // ready, so without it the walk finishes in one poll.
             () = std::future::ready(()), if t.has_pending_chunks() => {
                 t.run_next_chunk();
+                tokio::task::yield_now().await;
             }
             // Ungated by `attached`: a parked session still owes query
             // responses to the program and notifications to observers.
