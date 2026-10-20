@@ -30,8 +30,6 @@ use felis_protocol::frame::Frame;
 #[cfg(unix)]
 use felis_protocol::messages::{PushMsg, RegionToClientMsg, StreamErrorReason, Subject};
 #[cfg(unix)]
-use felis_transport::local::connect;
-#[cfg(unix)]
 use std::num::NonZeroU64;
 #[cfg(unix)]
 use std::time::Instant;
@@ -273,6 +271,28 @@ where
 }
 
 /// Blocks until the socket file appears so a connect cannot race the bind.
+/// The socket file appears at `bind`, before `listen`: a connect in
+/// that window is refused though the daemon is still starting.
+#[cfg(unix)]
+async fn connect(
+    path: &Path,
+) -> io::Result<(
+    felis_transport::local::ReadHalf,
+    felis_transport::local::WriteHalf,
+)> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        match felis_transport::local::connect(path).await {
+            Err(err)
+                if err.kind() == io::ErrorKind::ConnectionRefused && Instant::now() < deadline =>
+            {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            other => return other,
+        }
+    }
+}
+
 #[cfg(unix)]
 async fn spawn_daemon(path: &Path, pool: Arc<Mutex<SessionPool>>, factory: SessionFactory) {
     spawn_daemon_with_caps(path, pool, factory, DaemonCaps::default()).await;
