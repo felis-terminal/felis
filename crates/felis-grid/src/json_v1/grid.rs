@@ -98,7 +98,7 @@ json_dto! {
     #[non_exhaustive]
     pub struct ClipboardWriteJson {
         /// Bit 0 is the clipboard, bit 1 X11 PRIMARY
-        /// (`docs/reference/ipc.md`).
+        /// (`felis.proto` `GridClipboardSet.selection`).
         #[cfg_attr(feature = "schema", schemars(range(max = CLIPBOARD_SELECTION_MAX)))]
         pub selection: u8,
         /// Decoded bytes, post-base64.

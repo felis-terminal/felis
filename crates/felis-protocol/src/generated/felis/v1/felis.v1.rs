@@ -339,9 +339,9 @@ pub struct EnvPair {
     pub value: ::prost::alloc::string::String,
 }
 /// Native-representation (bytes, bytes) pair in SpawnArgs.env_base (raw
-/// bytes on Unix, little-endian uint16 code units on Windows). Inherited
-/// OS state is not guaranteed UTF-8; REQ-912 requires preserving non-UTF-8
-/// entries like paths without silent drops (see EnvBase).
+/// bytes on Unix, whole little-endian uint16 code units on Windows).
+/// Inherited OS state is not guaranteed UTF-8; REQ-912 requires
+/// preserving non-UTF-8 entries like paths without silent drops.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct EnvBytesPair {
     #[prost(bytes="vec", tag="1")]
@@ -351,8 +351,9 @@ pub struct EnvBytesPair {
 }
 /// Captured environment snapshot for SpawnArgs.env_base. Wrapped in a
 /// message so presence is distinguishable on the wire from an omitted
-/// base. Bounded by MAX_ENV_BASE_ENTRIES entries and MAX_ENV_BASE_BYTES
-/// total bytes (docs/reference/ipc.md).
+/// base: a present, empty snapshot is an empty base. Bounded by
+/// MAX_ENV_BASE_ENTRIES and MAX_ENV_BASE_BYTES, checked in the spawn
+/// path rather than at decode (docs/reference/ipc.md "Semantic limits").
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EnvBase {
     #[prost(message, repeated, tag="1")]
@@ -416,20 +417,22 @@ pub struct SourceRect {
     #[prost(uint32, tag="4")]
     pub height: u32,
 }
-/// Typed spawn parameters, shared by SessionCreate and OpsSpawn.
-///
-/// command, args, and cwd are UTF-8, unlike env_base, which is bytes. A
-/// client refuses a native value that is not valid UTF-8 before the wire
-/// rather than substituting U+FFFD (REQ-105b).
+/// Typed spawn parameters, shared by SessionCreate and OpsSpawn. Each
+/// field falls back to its default independently. command, args, and cwd
+/// are UTF-8, unlike env_base: a client refuses a native value that is
+/// not valid UTF-8 before the wire rather than substituting U+FFFD
+/// (REQ-105b).
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SpawnArgs {
-    /// Program to exec. Empty → default ($SHELL). UTF-8.
+    /// Program to exec. Empty → default ($SHELL from the resolved base).
     #[prost(string, tag="1")]
     pub command: ::prost::alloc::string::String,
     /// Argv after the program (excludes the program name). UTF-8.
     #[prost(string, repeated, tag="2")]
     pub args: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
-    /// Working directory. Empty → inherit the daemon's cwd. UTF-8.
+    /// Working directory; non-empty must be absolute. Empty → the daemon's
+    /// cwd. An unusable one fails the spawn when command is set; a default
+    /// shell falls back to the daemon's cwd instead.
     #[prost(string, tag="3")]
     pub cwd: ::prost::alloc::string::String,
     /// Extra env pairs, applied last: over the resolved base and over
@@ -439,17 +442,17 @@ pub struct SpawnArgs {
     /// Initial geometry. Absent asks for the daemon default (24x80);
     /// present must name rows and cols inside the REQ-605a bounds
     /// (1..=2048, so 0 is refused rather than defaulted), or the create is
-    /// refused with ATTACH_FAILURE_GEOMETRY_OUT_OF_RANGE. Only the pixel
+    /// refused with CREATE_FAILURE_GEOMETRY_OUT_OF_RANGE. Only the pixel
     /// axes keep 0 = unknown.
     #[prost(message, optional, tag="5")]
     pub dims: ::core::option::Option<GridDims>,
-    /// Opaque labels applied at creation (as OpsTag would afterwards).
+    /// Opaque labels applied at creation, normalized as OpsTag's are.
     #[prost(string, repeated, tag="6")]
     pub tags: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
-    /// Replaces child base environment (no overlay). Injected only when
-    /// the carrier to the target daemon is a local socket, since over an
-    /// SSH stdio relay the dialer environment names the wrong host.
-    /// Absent falls back to relay snapshot or daemon birth env.
+    /// Replaces the child's base environment (no overlay). Filled by the
+    /// dialing process just before it sends, and only when its carrier to
+    /// the target daemon is a local socket; omitted when it breaks a cap.
+    /// Absent falls back to the relay carrier block, else the daemon's own.
     #[prost(message, optional, tag="7")]
     pub env_base: ::core::option::Option<EnvBase>,
 }
@@ -489,7 +492,7 @@ pub struct SessionInfo {
     pub id: ::prost::alloc::vec::Vec<u8>,
     #[prost(message, optional, tag="2")]
     pub dims: ::core::option::Option<GridDims>,
-    /// Most recent OSC 0/2 window title, if any.
+    /// Most recent OSC 0/2 window title; absent until a program sets one.
     #[prost(string, optional, tag="3")]
     pub title: ::core::option::Option<::prost::alloc::string::String>,
     /// Most recent OSC 7 cwd, if any.
@@ -503,18 +506,22 @@ pub struct SessionInfo {
     /// Opaque user-supplied labels (OpsTag). Empty when untagged.
     #[prost(string, repeated, tag="6")]
     pub tags: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
-    /// Most recent decoded desktop notification, if any.
+    /// Most recent decoded desktop notification (OSC 9/99/777), kept while
+    /// the session is parked too; absent if none.
     #[prost(message, optional, tag="7")]
     pub last_notification: ::core::option::Option<SessionNotification>,
-    /// Foreground program comm, if resolvable.
+    /// The comm of the PTY's foreground process group, read from the OS
+    /// process table at list-build time, if resolvable.
     #[prost(string, optional, tag="8")]
     pub foreground: ::core::option::Option<::prost::alloc::string::String>,
-    /// Shell exited; session lingers in the post-exit grace. Exit-driven
+    /// Shell exited; session lingers in the post-exit grace (5 s from the
+    /// last detach). Exit-driven
     /// switches must skip it (attaching blocks the reap forever).
     #[prost(bool, tag="9")]
     pub exited: bool,
     /// Exit code of the most recent completed command (youngest retained
-    /// OSC 133 D mark), if any.
+    /// OSC 133 D mark). Absent when that mark carried none: an older mark's
+    /// code is never substituted.
     #[prost(uint32, optional, tag="10")]
     pub last_exit_code: ::core::option::Option<u32>,
     /// The session's live window attachments, oldest first. Empty for a
@@ -589,11 +596,10 @@ pub struct Attachment {
     /// every mirror and every later re-attach.
     #[prost(uint64, tag="1")]
     pub id: u64,
-    /// When the attach landed, on the daemon's clock. Absolute where the
-    /// roster's other stamps are ages: the daemon owns the clock this is
-    /// measured against, and a cross-host reader cannot re-derive an attach
-    /// instant from its own. Typed rather than formatted, so the range is
-    /// the type's and not a convention a reader has to parse.
+    /// When the attach landed, on the daemon's clock: absolute where the
+    /// roster's other stamps are ages, since a cross-host reader cannot
+    /// re-derive the instant from its own clock. A value outside the
+    /// Timestamp range (years 0001-9999, nanos 0..1e9) fails the decode.
     #[prost(message, optional, tag="2")]
     pub attached_at: ::core::option::Option<::prost_types::Timestamp>,
     /// This attachment is the session's last window input owner: the
@@ -675,13 +681,14 @@ pub struct ConnHello {
     #[prost(bool, tag="2")]
     pub pull_paced: bool,
 }
-/// Daemon → client. Reply to ConnHello. It echoes nothing back: version
-/// selection is the preface's, and a Hello answered with this one named
-/// a mode the daemon defines.
+/// Daemon → client. Reply to ConnHello. It echoes nothing back and
+/// carries no session roster (that is OpsList): version selection is
+/// the preface's, and a Hello answered with this one named a mode the
+/// daemon defines.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ConnWelcome {
-    /// The daemon's build, typed: semver, full revision, dirty flag.
-    /// Purely informational; the version gate is the preface, never this.
+    /// The running daemon's build, which may differ from the binary on
+    /// disk. Informational only; the version gate is the preface.
     #[prost(message, optional, tag="1")]
     pub identity: ::core::option::Option<BuildIdentity>,
 }
@@ -730,8 +737,9 @@ pub struct ConnCancel {
 pub struct ConnEnd {
     #[prost(uint64, tag="1")]
     pub stream_id: u64,
-    /// Items that preceded this terminator. 0 is normal (no hits, an empty
-    /// region); the terminal is what says the stream ended cleanly.
+    /// Results that preceded this terminator: rows, matches, events, never
+    /// acks, loss markers or trailers (NotifySubscribed, NotifyLagged,
+    /// RegionRowsDone). 0 is normal (no hits, an empty region).
     #[prost(uint32, tag="2")]
     pub count: u32,
 }
@@ -777,10 +785,12 @@ pub struct InputMsg {
 pub mod input_msg {
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
     pub enum Msg {
-        /// KeyBytes(Vec<u8>): already-encoded keystroke bytes.
+        /// Literal bytes forwarded to the PTY verbatim, at most
+        /// MAX_RAW_INPUT_BYTES. A physical keystroke rides `key` instead.
         #[prost(bytes, tag="1")]
         KeyBytes(::prost::alloc::vec::Vec<u8>),
-        /// Paste(Vec<u8>): bracketed-paste payload.
+        /// Paste payload, at most MAX_PASTE_BYTES; the daemon brackets it
+        /// when the session has ?2004 set.
         #[prost(bytes, tag="2")]
         Paste(::prost::alloc::vec::Vec<u8>),
         #[prost(message, tag="3")]
@@ -797,8 +807,8 @@ pub mod input_msg {
         JumpPrompt(super::InputJumpPrompt),
         #[prost(message, tag="9")]
         NextGridFrame(super::InputNextGridFrame),
-        /// Key(KeyEvent): a physical key event the daemon encodes against
-        /// the keyboard modes it owns.
+        /// A physical key event the daemon encodes against the keyboard
+        /// modes it has parsed, not the client's mirror of them.
         #[prost(message, tag="10")]
         Key(super::InputKeyEvent),
         #[prost(message, tag="11")]
@@ -813,17 +823,18 @@ pub struct InputMouseEvent {
     pub button: ::core::option::Option<MouseButton>,
     #[prost(enumeration="MouseAction", tag="2")]
     pub action: i32,
-    /// InputMods bitflags (u8): raw bits; see messages.rs (SHIFT/ALT/CTRL).
+    /// InputMods bits, the xterm triple: shift 1, alt 2, ctrl 4. No super.
     #[prost(uint32, tag="3")]
     pub mods: u32,
-    /// Cell column, 1-based.
+    /// Cell column, 1-based. Motion reports at cell granularity.
     #[prost(uint32, tag="4")]
     pub x: u32,
     /// Cell row, 1-based.
     #[prost(uint32, tag="5")]
     pub y: u32,
     /// Pixel column within the text area, 1-based (?1016 SGR-pixels); 0 asks
-    /// the daemon to place it at the middle of the cell.
+    /// the daemon for the middle of the cell's pixels at the PTY winsize's
+    /// pixel-per-cell ratio.
     #[prost(uint32, tag="6")]
     pub px: u32,
     /// Pixel row within the text area, 1-based; 0 as for px.
@@ -841,8 +852,8 @@ pub struct InputKeyEvent {
     /// is not an absent one.
     #[prost(string, optional, tag="2")]
     pub text: ::core::option::Option<::prost::alloc::string::String>,
-    /// KeyMods bitflags (u8): raw bits; see messages.rs
-    /// (CTRL/SHIFT/ALT/SUPER). Wider than InputMods by SUPER.
+    /// KeyMods bits: ctrl 1, shift 2, alt 4, super 8. Ordered unlike
+    /// InputMods, and wider by super.
     #[prost(uint32, tag="3")]
     pub mods: u32,
     #[prost(enumeration="KeyEventKind", tag="4")]
@@ -854,11 +865,13 @@ pub struct InputKeyEvent {
 /// row/col/pixel fields: GridDims is the one geometry vocabulary.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct InputResize {
-    /// Clamped into the REQ-605a bounds on receipt; never refused.
+    /// Clamped into the REQ-605a bounds on receipt, over the whole uint32
+    /// domain; never refused. A pixel axis of 0 stays 0 (unknown).
     #[prost(message, optional, tag="1")]
     pub dims: ::core::option::Option<GridDims>,
 }
-/// Window-focus change.
+/// This window's own OS focus. The daemon reduces every window's report
+/// to one session-level fact (focused iff any window is).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct InputFocusChange {
     #[prost(bool, tag="1")]
@@ -873,7 +886,8 @@ pub struct InputColorScheme {
 /// Scrollback viewport request.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct InputViewport {
-    /// Scrollback rows to lift the visible window by; 0 tracks live bottom.
+    /// Scrollback rows to lift the visible window by; 0 is the live bottom
+    /// whatever the anchor, and is sent without one.
     #[prost(uint32, tag="1")]
     pub lines_from_bottom: u32,
     /// The anchor of the browsing GridViewportState this offset was
@@ -883,7 +897,8 @@ pub struct InputViewport {
     pub anchor: ::core::option::Option<ViewportAnchor>,
 }
 /// Relative scrollback step, applied to the viewport the daemon holds
-/// for this subscriber when it handles the frame.
+/// for this subscriber when it handles the frame. A step that moves the
+/// view earns a GridViewportState; one clamped at either end earns none.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct InputViewportStep {
     /// Rows toward history; negative toward the live bottom. The result
@@ -891,7 +906,8 @@ pub struct InputViewportStep {
     #[prost(sint32, tag="1")]
     pub rows: i32,
 }
-/// Prompt-jump request.
+/// Prompt-jump request: the daemon resolves the previous or next OSC 133
+/// prompt-start mark and answers with a GridViewportState.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct InputJumpPrompt {
     #[prost(enumeration="PromptJump", tag="1")]
@@ -967,7 +983,8 @@ pub mod grid_msg {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GridCycleEnd {
 }
-/// Start of a fresh-attach rehydration.
+/// Start of a fresh-attach rehydration. The client blanks its mirror at
+/// the geometry already announced; the burst restates none.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GridRehydrateBegin {
 }
@@ -976,19 +993,23 @@ pub struct GridRehydrateBegin {
 pub struct GridRehydrateEnd {
 }
 /// One cycle's worth of dirty-row cell data. A single dirty row is a
-/// one-entry batch.
+/// one-entry batch; entries apply in order, a later one for a row
+/// overriding an earlier. A cycle near the frame cap splits across
+/// consecutive frames, which apply independently.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GridRowDelta {
     #[prost(message, repeated, tag="1")]
     pub rows: ::prost::alloc::vec::Vec<RowEntry>,
 }
-/// Scroll directive for a region of the grid.
+/// Whole-row shift of the band region_top..=region_bottom; the vacated
+/// rows fill with default cells.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GridScrolled {
     #[prost(uint32, tag="1")]
     pub region_top: u32,
     #[prost(uint32, tag="2")]
     pub region_bottom: u32,
+    /// At least 1.
     #[prost(uint32, tag="3")]
     pub n_rows: u32,
     #[prost(enumeration="ScrollDirection", tag="4")]
@@ -1001,9 +1022,11 @@ pub struct GridScrolled {
 /// table ahead of the first row.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GridCluster {
-    /// 1-based id matching a Grapheme::Cluster handle.
+    /// 1-based id matching a Grapheme::Cluster handle, at most
+    /// CLUSTER_TABLE_CAP (131 072).
     #[prost(uint32, tag="1")]
     pub id: u32,
+    /// At most ClusterText::CAP bytes (the daemon's fold cap).
     #[prost(string, tag="2")]
     pub text: ::prost::alloc::string::String,
 }
@@ -1020,13 +1043,15 @@ pub struct GridHyperlink {
     #[prost(string, tag="3")]
     pub uri: ::prost::alloc::string::String,
 }
-/// Cursor update.
+/// Cursor update. The position stays inside the announced grid even
+/// while the cursor is hidden.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GridCursorState {
     #[prost(uint32, tag="1")]
     pub row: u32,
     #[prost(uint32, tag="2")]
     pub col: u32,
+    /// DECTCEM.
     #[prost(bool, tag="3")]
     pub visible: bool,
     #[prost(enumeration="CursorStyle", tag="4")]
@@ -1037,13 +1062,17 @@ pub struct GridCursorState {
 /// Scrollback-viewport mirror.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GridViewportState {
+    /// At most max. A browsing offset grows by the rows pushed into
+    /// scrollback, clamped to retained history; a resize, CSI 3 J or a
+    /// screen switch returns it to 0, the live bottom.
     #[prost(uint32, tag="1")]
     pub lines_from_bottom: u32,
     /// Total composable rows = retained scrollback + live row count.
     #[prost(uint32, tag="2")]
     pub max: u32,
     /// The history point a non-zero lines_from_bottom is expressed
-    /// against. Unset at the live bottom.
+    /// against. Unset at the live bottom; a new one ships whenever it
+    /// changes, an eviction that leaves both numbers unchanged included.
     #[prost(message, optional, tag="3")]
     pub anchor: ::core::option::Option<ViewportAnchor>,
 }
@@ -1055,7 +1084,9 @@ pub struct ViewportAnchor {
     #[prost(uint64, tag="2")]
     pub generation: u64,
 }
-/// Authoritative grid dimensions changed mid-stream.
+/// Authoritative (post-clamp) grid dimensions, sent when they change
+/// mid-stream or to overrule this client's InputResize when another
+/// mirror owns the size. Cell content follows as GridRowDelta replay.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GridSize {
     #[prost(message, optional, tag="1")]
@@ -1112,7 +1143,8 @@ pub mod grid_theme_color {
 pub struct ThemeReset {
 }
 /// One indexed-palette slot changed: OSC 4 set or OSC 104 per-index
-/// reset.
+/// reset. An OSC 4 naming several slots emits one message per slot, and
+/// rehydrate replays the override layer ascending by index.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GridPaletteColor {
     /// Palette index, 0..=255. Wider values are rejected on decode.
@@ -1163,16 +1195,20 @@ pub struct GridKittyKbdFlags {
 /// Mode-bit mirror.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GridModeFlags {
+    /// ?2004.
     #[prost(bool, tag="1")]
     pub bracketed_paste: bool,
+    /// ?1049.
     #[prost(bool, tag="2")]
     pub alt_screen: bool,
     #[prost(enumeration="MouseProtocol", tag="3")]
     pub mouse_protocol: i32,
+    /// ?1 DECCKM.
     #[prost(bool, tag="4")]
     pub application_cursor: bool,
     #[prost(enumeration="ModifyOtherKeys", tag="5")]
     pub modify_other_keys: i32,
+    /// ESC = / ESC > (DECKPAM / DECKPNM).
     #[prost(bool, tag="6")]
     pub application_keypad: bool,
     /// ?9001 win32-input-mode: client emits win32-input key records so a
@@ -1190,10 +1226,12 @@ pub struct GridAttention {
     #[prost(enumeration="AttentionSource", tag="1")]
     pub source: i32,
 }
-/// OSC 52 clipboard write.
+/// A program's OSC 52 clipboard write, sent to the initiating (active)
+/// subscriber only, never broadcast.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GridClipboardSet {
-    /// ClipboardSelection bitmap of OS targets (u8 bits: c=1, p=2).
+    /// ClipboardSelection bitmap: bit 0 `c` (system clipboard), bit 1 `p`
+    /// (X11 PRIMARY). Unknown bits are dropped on decode.
     #[prost(uint32, tag="1")]
     pub selection: u32,
     #[prost(bytes="vec", tag="2")]
@@ -1297,7 +1335,8 @@ pub struct ImageComplete {
     #[prost(uint32, tag="1")]
     pub id: u32,
 }
-/// Drop an image and any placements referencing it.
+/// Drop an image and any placements referencing it, also announcing the
+/// daemon's own store evictions. Aborts a transfer open on this id.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ImageDelete {
     #[prost(uint32, tag="1")]
@@ -1354,7 +1393,9 @@ pub struct ImagePlacementRemoved {
     #[prost(uint32, optional, tag="2")]
     pub placement_id: ::core::option::Option<u32>,
 }
-/// A Kitty Unicode-placeholder virtual placement (U=1).
+/// A Kitty Unicode-placeholder virtual placement (U=1): not grid-anchored,
+/// so it carries only the cell extent the placeholder tiles are sized by.
+/// An upsert under (image_id, placement_id).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ImageVirtualPlacement {
     #[prost(uint32, tag="1")]
@@ -1367,13 +1408,16 @@ pub struct ImageVirtualPlacement {
     #[prost(sint32, tag="4")]
     pub z_index: i32,
     /// The producer's p=, or an id the daemon assigned to a put without
-    /// one; a placeholder cell names it in its underline color. Unset
-    /// keys the placement by image alone.
+    /// one; a placeholder cell names it in its underline color. Shares
+    /// ImagePlacement's key space, so ImagePlacementRemoved removes it
+    /// too. Unset keys the placement by image alone.
     #[prost(uint32, optional, tag="5")]
     pub placement_id: ::core::option::Option<u32>,
 }
 /// Display frame `number` of image id now, in the same 1-based
-/// numbering ImageFrame uses.
+/// numbering ImageFrame uses: one per animation advance, and one on
+/// reattach. Unlike the transfer messages, it tolerates a frame the
+/// receiver does not hold.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ImageShowFrame {
     #[prost(uint32, tag="1")]
@@ -1381,7 +1425,9 @@ pub struct ImageShowFrame {
     #[prost(uint32, tag="2")]
     pub number: u32,
 }
-/// Every placement's anchor shifted up by `lines`.
+/// Every placement's anchor shifted up by `lines`, the rows the live
+/// region pushed into scrollback. A placement whose anchor leaves the
+/// retained scrollback gets its own ImagePlacementRemoved.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ImagePlacementsShifted {
     #[prost(uint32, tag="1")]
@@ -1451,8 +1497,8 @@ pub struct SessionAttach {
     /// Refuse this attach if the session's shell has already exited: the
     /// form every *system-selected* landing uses, checked inside the
     /// session actor so the answer cannot race the exit. A deliberate
-    /// attach leaves it false and may land on a corpse (`ipc.md`
-    /// "Session (kind = 4)").
+    /// attach leaves it false and may land on a corpse
+    /// (docs/explanation/architecture/session-lifecycle.md).
     #[prost(bool, tag="2")]
     pub live_only: bool,
     /// Which session to land on. A union rather than sibling fields, so
@@ -1471,9 +1517,9 @@ pub mod session_attach {
         /// Session id (u128 → 16 bytes, big-endian).
         #[prost(bytes, tag="1")]
         Id(::prost::alloc::vec::Vec<u8>),
-        /// Lowercase hex session-id prefix (1-32 digits), resolved in the
-        /// same step that takes the session handle, so nothing slips
-        /// between the resolution and the attach.
+        /// Session-id prefix (docs/reference/ipc.md "Ops (kind = 5)" has the
+        /// grammar), resolved in the step that takes the session handle;
+        /// SessionAttached.info.id carries the full id back.
         #[prost(string, tag="3")]
         IdPrefix(::prost::alloc::string::String),
     }
@@ -1492,9 +1538,9 @@ pub struct SessionCreate {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SessionDetach {
 }
-/// Client → daemon. Report the client's configured theme colors and
-/// palette. Each channel is present when set, absent to leave the
-/// renderer/xterm default.
+/// Client → daemon, right after attach. The client's configured colors
+/// and palette, which OSC 10/11/12 and OSC 4 queries answer. Each
+/// channel is present when set, absent to leave the renderer default.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SessionConfigureTheme {
     /// Configured default foreground (OSC 10).
@@ -1532,7 +1578,7 @@ pub struct SessionAttached {
 }
 /// Daemon → client. A SessionCreate landed: the session exists and this
 /// connection is already subscribed, so the rehydrate burst follows
-/// exactly as after SessionAttached.
+/// exactly as after SessionAttached. info.dims is the resolved geometry.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SessionCreated {
     #[prost(message, optional, tag="1")]
@@ -1556,8 +1602,9 @@ pub struct SessionInputAccepted {
 /// can follow a successful spawn are never one vocabulary.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SessionAttachFailed {
-    /// Human-readable specifics (the exec error behind a SPAWN_FAILED).
-    /// Empty for the reasons that carry no dynamic value. Never parsed.
+    /// Human-readable specifics, set for every reason: the exec error, the
+    /// offending axis and bound, the admitted count and limit, or the
+    /// session id. Never parsed.
     #[prost(string, tag="3")]
     pub detail: ::prost::alloc::string::String,
     #[prost(oneof="session_attach_failed::Reason", tags="1, 2")]
@@ -1746,13 +1793,16 @@ pub struct OpsInfoAmbiguous {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct OpsList {
 }
-/// Daemon → client. Reply to OpsList.
+/// Daemon → client. Reply to OpsList: every pooled session, attached or
+/// idle, in the daemon's recency order (SessionInfo.sequence is the
+/// creation order).
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct OpsListed {
     #[prost(message, repeated, tag="1")]
     pub sessions: ::prost::alloc::vec::Vec<SessionInfo>,
 }
-/// Client → daemon. Remove the named session from the pool.
+/// Client → daemon. Remove the named session from the pool and end the
+/// program running in it.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct OpsDestroy {
     /// Lowercase hex session-id prefix (1-32 digits), resolved against
@@ -1768,7 +1818,8 @@ pub struct OpsDestroyed {
     #[prost(message, optional, tag="1")]
     pub resolved: ::core::option::Option<ResolvedId>,
 }
-/// Client → daemon. Force-detach the client attached to the named session.
+/// Client → daemon. Return the named session to the idle pool: every
+/// client streaming it receives PushEvicted before the reply.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct OpsForceDetach {
     #[prost(string, tag="1")]
@@ -1779,10 +1830,13 @@ pub struct OpsForceDetach {
 pub struct OpsDetached {
     #[prost(message, optional, tag="1")]
     pub resolved: ::core::option::Option<ResolvedId>,
+    /// False when the session was already idle.
     #[prost(bool, tag="2")]
     pub was_attached: bool,
 }
-/// Client → daemon. Ask subscribers of `from` to move to `target`.
+/// Client → daemon. Ask window subscribers of `from` to move to
+/// `target`. A session target resolving to `from` itself is answered
+/// at once (queued 0, no denial) without resolving the scope.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct OpsSwitch {
     #[prost(string, tag="1")]
@@ -1983,7 +2037,8 @@ pub mod switch_denied {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SwitchNoInputOwner {
 }
-/// Client → daemon. Add and/or remove opaque labels on the named session.
+/// Client → daemon. Add and/or remove opaque labels on the named
+/// session: adds apply before removes.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct OpsTag {
     #[prost(string, tag="1")]
@@ -2078,6 +2133,7 @@ pub struct StopRefused {
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct StopDraining {
+    /// Counted as StopRefused.sessions is.
     #[prost(uint32, tag="1")]
     pub sessions: u32,
 }
@@ -2159,7 +2215,8 @@ pub struct ResourceReport {
     pub resource: i32,
     #[prost(enumeration="ResourceUnit", tag="2")]
     pub unit: i32,
-    /// Summed over every subject, at reply-build time.
+    /// Summed over every subject, each sampled once while the reply is
+    /// built: a set of samples, not one daemon-wide instant.
     #[prost(uint64, tag="3")]
     pub total_used: u64,
     /// What one subject is, and the numbers that only that answer makes
@@ -2268,8 +2325,9 @@ pub mod region_to_client_msg {
         RowsDone(super::RegionRowsDone),
     }
 }
-/// Client → daemon. Serialize a region of the attached session's buffer.
-/// The sink never travels: the requester routes the reply on its own host.
+/// Client → daemon. Serialize a region of the attached session's buffer,
+/// soft-wrapped rows stitched into logical lines. The sink never
+/// travels: the requester routes the reply on its own host.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct RegionRequest {
     #[prost(enumeration="RegionSource", tag="1")]
@@ -2284,10 +2342,12 @@ pub struct RegionReply {
     /// Empty means the region was absent or empty.
     #[prost(bytes="vec", tag="1")]
     pub data: ::prost::alloc::vec::Vec<u8>,
-    /// Unset for a region with no viewport anchor (the OSC 133 sources).
+    /// Unset for a region with no viewport anchor (the OSC 133 sources),
+    /// and for a reply trimmed to MAX_REGION_REPLY_BYTES.
     #[prost(message, optional, tag="2")]
     pub position: ::core::option::Option<RegionPosition>,
-    /// Exit code of the youngest OSC 133 D mark, if it carried one.
+    /// Exit code of the youngest OSC 133 D mark, whenever a region
+    /// resolved and that mark carried one.
     #[prost(uint32, optional, tag="3")]
     pub exit_code: ::core::option::Option<u32>,
 }
@@ -2326,11 +2386,10 @@ pub struct RegionRow {
     #[prost(bool, tag="4")]
     pub soft_wrap_continued: bool,
 }
-/// Daemon → client. The last item of a RegionRows stream, after the last
-/// RegionRow. It is an item, not the terminator: the stream's one
-/// terminal is the shared ConnEnd / ConnError, and this still ships
-/// because the exit code is region data a family-agnostic terminal has
-/// no business carrying.
+/// Daemon → client. The last item of a RegionRows stream, after the
+/// last RegionRow, even for an empty or unresolved region. An item, not
+/// the terminator: the shared ConnEnd / ConnError still closes the
+/// stream, and does not count this trailer.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct RegionRowsDone {
     /// Exit code of the range-closing OSC 133 D mark (mark-range sources).
@@ -2418,7 +2477,8 @@ pub struct NotifyLagged {
     #[prost(uint64, tag="1")]
     pub missed: u64,
 }
-/// Daemon → observer. One decoded desktop notification.
+/// Daemon → observer. One decoded desktop notification (OSC 9 / 99 /
+/// 777) from any pooled session.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct NotifyEvent {
     /// Session the notification fired on (u128 → 16 bytes, big-endian).
@@ -2426,7 +2486,8 @@ pub struct NotifyEvent {
     pub session_id: ::prost::alloc::vec::Vec<u8>,
     #[prost(message, optional, tag="2")]
     pub notification: ::core::option::Option<Notification>,
-    /// Producer's OSC 99 i= identifier, if any.
+    /// Producer's OSC 99 i= identifier, if any; the CLI's JSON spells it
+    /// notification_id.
     #[prost(string, optional, tag="3")]
     pub notify_id: ::core::option::Option<::prost::alloc::string::String>,
     /// The session's window title (OSC 0/2).
@@ -2469,20 +2530,24 @@ pub struct PushEvicted {
     #[prost(string, tag="1")]
     pub reason: ::prost::alloc::string::String,
 }
-/// Daemon → client. Re-attach to the named session (relay of OpsSwitch).
+/// Daemon → client. Re-attach to the named session (relay of OpsSwitch);
+/// the client runs its ordinary switch path.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PushReattach {
     #[prost(bytes="vec", tag="1")]
     pub id: ::prost::alloc::vec::Vec<u8>,
 }
-/// Daemon → client. The session's shell exited cleanly (PTY EOF).
+/// Daemon → client. The session's shell exited (PTY EOF), sent just
+/// before the subscription drops so a window reads the close as an
+/// ending rather than a lost transport.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PushSessionExited {
     #[prost(bytes="vec", tag="1")]
     pub id: ::prost::alloc::vec::Vec<u8>,
 }
-/// Daemon → client. Re-dial a different daemon (relay of OpsSwitch
-/// with retarget set: the window retarget verb).
+/// Daemon → client. Re-dial a different daemon (relay of an OpsSwitch
+/// carrier target). The daemon relays `target` verbatim and never
+/// inspects it; its validity is the client's post-dial concern.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PushRetargetHost {
     #[prost(message, optional, tag="1")]
@@ -2538,18 +2603,20 @@ pub struct SearchQuery {
     pub query: ::prost::alloc::string::String,
     #[prost(message, optional, tag="2")]
     pub options: ::core::option::Option<SearchOptions>,
-    /// Absent means SEARCH_SOURCE_SCROLLBACK. A daemon below minor 1
-    /// ignores the field and walks scrollback, so a present value is
-    /// withheld from it.
+    /// Absent means SEARCH_SOURCE_SCROLLBACK; UNSPECIFIED is refused at
+    /// decode. A daemon below minor 1 ignores the field and walks
+    /// scrollback, so a present value is withheld from it.
     #[prost(enumeration="SearchSource", optional, tag="3")]
     pub source: ::core::option::Option<i32>,
 }
 /// One logical line of the active search returning a hit.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SearchMatch {
-    /// Row index of the logical line's topmost row; negative = scrollback.
+    /// Row index of the logical line's topmost row: -1 the youngest
+    /// scrollback row, -N older, a live row its grid index (REQ-608).
     #[prost(sint64, tag="1")]
     pub line_index: i64,
+    /// The stitched logical line.
     #[prost(string, tag="2")]
     pub text: ::prost::alloc::string::String,
     /// Half-open byte ranges into text where matches fired.
@@ -2821,12 +2888,12 @@ pub enum RefusalReason {
     Unspecified = 0,
     /// The frame's family is one the peer's connection mode does not admit.
     Role = 1,
-    /// The daemon is already serving max_connections and admitted no
-    /// further one. Retryable once a connection frees: nothing about the
-    /// peer or its request was wrong.
+    /// The daemon is already serving MAX_CONNECTIONS and admitted
+    /// no further one. Retryable once a connection frees; `detail` names
+    /// the admitted count and the limit.
     AtCapacity = 2,
     /// ConnHello named a ConnectionMode this daemon does not define: the
-    /// peer is newer. Not retryable against this daemon.
+    /// peer is newer. Not retryable here; `detail` names the mode number.
     UnknownMode = 3,
 }
 impl RefusalReason {
@@ -3210,7 +3277,8 @@ impl MouseProtocol {
         }
     }
 }
-/// xterm modifyOtherKeys level (CSI > 4 ; Pv m).
+/// xterm modifyOtherKeys level (CSI > 4 ; Pv m); a Pv above 2 parses as
+/// LEVEL2.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum ModifyOtherKeys {
@@ -3555,7 +3623,10 @@ impl KeyEventKind {
 #[repr(i32)]
 pub enum AttentionSource {
     Unspecified = 0,
+    /// BEL events, coalesced to one per cycle.
     Bell = 1,
+    /// A notification on this attached session; window subscribers only.
+    /// Its content goes to observers as NotifyEvent.
     Notification = 2,
 }
 impl AttentionSource {
@@ -3586,7 +3657,7 @@ impl AttentionSource {
 #[repr(i32)]
 pub enum UpgradeRefusal {
     Unspecified = 0,
-    /// This platform has no in-place upgrade.
+    /// This platform has no in-place upgrade (Windows).
     Unsupported = 1,
     /// The successor cannot read this daemon's dump version.
     DumpVersion = 2,

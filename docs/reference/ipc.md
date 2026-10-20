@@ -31,56 +31,43 @@ Stream layer           (binary stream: Unix socket / named pipe /
 
 ### Stream layer
 
-A reliable, in-order, bidirectional byte stream. The frame layer operates on `AsyncRead + AsyncWrite`, and
-`Connection<R, W>` is generic over its halves; that generic bound is the seam every carrier plugs into. The stream
-carries no seek, no metadata, no peer credentials: peer authentication belongs to the carrier. A future carrier (TLS,
-in-memory, a WebSocket tunnel for a browser-hosted client) hooks the same seam.
+A reliable, in-order, bidirectional byte stream. The frame layer runs over any such stream, so every carrier plugs into
+the same seam. The stream carries no seek, no metadata, no peer credentials: peer authentication belongs to the carrier.
 
 #### Local carrier
 
-The `local` module in `felis-transport` is the single place the OS-specific local carrier is named; the binaries import
-the carrier surface (`connect`, `Listener`, `server_split` re-exported at the crate root; `ServerStream`, `ReadHalf`,
-`WriteHalf` from `local`) and never an OS stream type, so the carrier leaks from exactly one module: the extraction seam
-the workspace layout wants ([overview.md](../explanation/architecture/overview.md)).
+The OS-specific local carrier is named in one place, `felis-transport`'s `local` module.
 
-- **Unix:** `tokio::net::UnixStream`, split via `into_split`. The default endpoint is `/tmp/felis.<uid>/daemon.sock`,
-  derived from the uid alone; `--socket` and `FELIS_SOCKET` are the only overrides, and both require a parent that is a
-  `0700` directory the uid owns. The daemon creates that directory `0700`, binds the socket `0600` under an explicit
-  `umask`, and holds an exclusive `flock` on the directory for the probe-unlink-bind window only. It leaves the socket
-  file in place when it exits; the next start's probe classifies and replaces it. Beside the socket the daemon keeps
-  `daemon.sock.agent`, the stable `SSH_AUTH_SOCK` symlink ("Cross-host carrier" below).
-- **Windows:** a named pipe via `tokio::net::windows::named_pipe`
-  (<https://docs.rs/tokio/latest/tokio/net/windows/named_pipe/index.html>). Pipes have no owned-half split, so
-  `local::connect` uses `tokio::io::split`; callers receive a uniform `(ReadHalf, WriteHalf)` pair on both platforms.
-  Pipes live in `\\.\pipe\`, not the filesystem (<https://learn.microsoft.com/en-us/windows/win32/ipc/pipe-names>), so
-  the Unix `0700`-dir and stale-socket cleanup do not apply: a pipe vanishes when its last instance handle closes. The
-  default endpoint is `\\.\pipe\felis.<sid>.daemon`, disambiguated per user by SID string (stable, unlike a volatile
-  session id). Peer authentication is a per-instance DACL plus an active SID check by both sides (the daemon on the
-  client, the dialer on the server): the named-pipe analogue of the Unix `0600` + peer-UID pair; see
+- **Unix:** a Unix domain stream socket. The default endpoint is `/tmp/felis.<uid>/daemon.sock`, derived from the uid
+  alone; `--socket` and `FELIS_SOCKET` are the only overrides, and both require a parent that is a `0700` directory the
+  uid owns. The daemon creates that directory `0700`, binds the socket `0600` under an explicit `umask`, and holds an
+  exclusive `flock` on the directory for the probe-unlink-bind window only. It leaves the socket file in place when it
+  exits; the next start's probe classifies and replaces it. Beside the socket the daemon keeps `daemon.sock.agent`, the
+  stable `SSH_AUTH_SOCK` symlink ("Cross-host carrier" below).
+- **Windows:** a named pipe. Pipes live in `\\.\pipe\`, not the filesystem
+  (<https://learn.microsoft.com/en-us/windows/win32/ipc/pipe-names>), so the Unix `0700`-dir and stale-socket cleanup do
+  not apply: a pipe vanishes when its last instance handle closes. The default endpoint is
+  `\\.\pipe\felis.<sid>.daemon`, disambiguated per user by SID string (stable, unlike a volatile session id). Peer
+  authentication is a per-instance DACL plus an active SID check by both sides (the daemon on the client, the dialer on
+  the server): the named-pipe analogue of the Unix `0600` + peer-UID pair; see
   [security-model.md](../explanation/security-model.md) "Daemon IPC".
-
-`Endpoint` is the platform-neutral address at the carrier boundary: a Unix path on Unix, a pipe name on Windows. The
-binaries keep passing the address as the `PathBuf` they already carry and convert at the boundary; they never do
-filesystem operations on the Windows value, so the "no filesystem model for pipes" rule holds without rewriting every
-`&Path` call site.
 
 For Windows carrier design rationale and rejected alternatives, see
 [ipc.md](../explanation/architecture/ipc.md#carrier-choices).
 
 #### Cross-host carrier: SSH stdio
 
-The client runs an `ssh user@host …` sub-process and treats the child's stdin / stdout as the IPC byte stream
-(`ChildStdout` / `ChildStdin` through the same `AsyncRead + AsyncWrite` seam, per ssh(1)'s stdio-forwarding semantics;
-<https://man.openbsd.org/ssh.1>). On the remote the SSH command is `felis-daemon relay`, a felis **stdio relay**: it
-connects to the remote user's **persistent per-UID daemon socket** and pumps frames between the SSH pipes and that
-socket. A cold socket starts a daemon by intent, exactly as it does locally: a window launch's relay autospawns the
-daemon (the same connect-or-spawn-the-daemon policy as a local launch, forked here since the relay runs under the remote
-login's session scope), while a headless read/drive verb dials `relay --no-spawn`, which fails with a "no daemon on this
-host" diagnostic on the caller's stderr instead of resurrecting one.
+The client runs an `ssh user@host …` sub-process and treats the child's stdin / stdout as the IPC byte stream, per
+ssh(1)'s stdio-forwarding semantics (<https://man.openbsd.org/ssh.1>). On the remote the SSH command is
+`felis-daemon relay`, a felis **stdio relay**: it connects to the remote user's **persistent per-UID daemon socket** and
+pumps frames between the SSH pipes and that socket. A cold socket starts a daemon by intent, exactly as it does locally:
+a window launch's relay autospawns the daemon (the same connect-or-spawn-the-daemon policy as a local launch, forked
+here since the relay runs under the remote login's session scope), while a headless read/drive verb dials
+`relay --no-spawn`, which fails with a "no daemon on this host" diagnostic on the caller's stderr instead of
+resurrecting one.
 
 The relay carries bytes only; the client and the remote daemon handshake and converse end-to-end through it, so local
-and remote attach share `FrameReader` / `FrameWriter`, the handshake, the rehydrate path, and the input pipeline
-unchanged.
+and remote attach share the framing, the handshake, the rehydrate path, and the input pipeline unchanged.
 
 Nothing listens on the network on either end, so existing SSH firewall configurations, jump hosts, and `~/.ssh/config`
 entries work unchanged, and felis inherits keys, agents, and 2FA prompts. felis puts no connection deadline on the `ssh`
@@ -90,10 +77,8 @@ The `FRLY` **carrier block** ("Relay carrier block" below), holding the relay's 
 relay can write of its own, once, before the splicing begins; it is omitted when that environment exceeds either frozen
 cap, and the relay then warns and splices the client's bare `FLIS` stream. Running as sshd's remote command, that
 environment is the remote login's (including the `SSH_AUTH_SOCK` sshd has just forwarded), and it is what the remote
-daemon falls back to when it creates a session for a client that could not supply one. It has to come from the relay,
-because the persistent daemon's own environment descends from whatever SSH connection started it, and on a warm daemon
-that names an agent socket that died with that login. The relay decodes nothing else: after the block it is a byte pump,
-with no frame awareness at all.
+daemon falls back to when it creates a session for a client that could not supply one ("Session (kind = 4)" below). The
+relay decodes nothing else: after the block it is a byte pump, with no frame awareness at all.
 
 The relay resolves its endpoint the way every local process of that uid does
 ([cli.md](cli.md#carrier-and-connection-lifetime) "Carrier and connection lifetime"): `/tmp/felis.<uid>/daemon.sock`,
@@ -113,10 +98,8 @@ alternatives, see [ipc.md](../explanation/architecture/ipc.md#carrier-choices).
 SSH is the auth and confidentiality boundary; felis adds no second password / token layer. The relay needs no
 special-cased auth: it runs as the SSH-authenticated user and connects to that user's `0600` socket, so the remote
 daemon's ordinary local peer-UID check ([security-model.md](../explanation/security-model.md) "Daemon IPC") already
-covers the cross-host client. There is no separate "skip the check over stdio" path to get wrong. The cross-host client
-speaks the same protobuf binary a local one does, preface included: the relay moves bytes and negotiates nothing, so the
-link's speed changes no part of the contract. The `ipc_throughput` bench (`crates/felis-protocol/benches/`) measures
-that codec over the message shapes the daemon emits.
+covers the cross-host client. The cross-host client speaks the same protobuf binary a local one does, preface included:
+the relay moves bytes and negotiates nothing, so the link's speed changes no part of the contract.
 
 ### Version preface
 
@@ -157,7 +140,7 @@ Decoding is lenient; negotiation is exact (REQ-104d). An accept's first word equ
 client checks this before it reads any frame: on a mismatch it closes with no frame written and reports its own error
 class, distinct from a refusal (`felis version` and `felis doctor` name both majors). On the daemon, the accepted major
 and the minor advertised with it are one selection: a build that serves two majors during a deprecation window
-advertises each major's own minor. The decoder does not compare; the check sits above it, in the connector.
+advertises each major's own minor.
 
 A first four bytes that are not the magic end the connection with no reply: an unknown protocol gets no answer in ours.
 
@@ -205,24 +188,18 @@ so a peer that gets it wrong is not one this build can bootstrap with, and there
 
 A payload format version other than `0` and the ones the reader decodes is **not** malformed. The reader has already
 consumed the payload by its length word, so it warns, takes the no-block fallback below, and reads the client preface
-from the next byte. `0` is the one value held apart because the version word is what tells a writer that predates it
-from one that has it: such a writer puts its entry count where the version belongs, and that count's high half is zero.
+from the next byte.
 
 `MAX_CARRIER_PAYLOAD_BYTES` is frozen for all time, with the envelope: it bounds the one allocation a length word buys,
 in every format version including the ones this build cannot decode. `MAX_CARRIER_ENTRIES` is frozen with format version
-1, the entry encoding it counts. Neither is per minor or per daemon: the block precedes version negotiation, so a limit
-either side picked for itself would reintroduce the skew the frozen layer exists to remove. Every relay checks them
-before sending and every daemon checks them on read; the daemon checks the declared payload length _before_ reading the
-payload, so a bogus length word costs a close rather than an allocation.
+1, the entry encoding it counts. Neither is per minor or per daemon. Every relay checks them before sending and every
+daemon checks them on read; the daemon checks the declared payload length _before_ reading the payload, so a bogus
+length word costs a close rather than an allocation.
 
 | Limit                       | Value | Applies to              | Sized for                                                                    |
 | --------------------------- | ----- | ----------------------- | ---------------------------------------------------------------------------- |
 | `MAX_CARRIER_ENTRIES`       | 4096  | entries in one block    | the per-entry length words, which are read before any entry body             |
 | `MAX_CARRIER_PAYLOAD_BYTES` | 1 MiB | the payload length word | the one allocation the declared length buys before any byte of it is trusted |
-
-Both values are set against a measured login environment, which runs to tens of KiB (53 KiB in a login shell, 59 KiB
-inside this repo's `nix develop` shell). At 1 MiB the payload cap clears the environments a relay actually carries by
-more than an order of magnitude, and still bounds what an unverified length word can ask the daemon to allocate.
 
 An environment over either limit is **not sent**: the relay logs a warning on its stderr, which is the SSH session's
 stderr and therefore the caller's terminal, and splices the client's bytes without a block. The daemon then takes the
@@ -247,11 +224,11 @@ Each frame:
 - All header integers are little-endian.
 - `len` covers the rest of the frame (`kind` + `body`), so the body it admits is `len` minus the two kind bytes. That
   body is capped in both directions at `DEFAULT_MAX_BODY` (64 MiB) (REQ-105). Inbound, a `len` describing a larger body
-  is fatal: the frame layer rejects it before allocating anything and the connection is torn down. Outbound,
-  `Frame::encode`, `encode_to` and `FrameWriter::write_frame` refuse a larger body before the `u32` narrowing and before
-  any header byte is written, so a refused frame leaves the stream consistent and the connection usable. Image producers
-  keep each `ImageMsg::Chunk` payload at or below `MAX_IMAGE_CHUNK_PAYLOAD` (256 KiB), far under that ceiling: the cap
-  is sized as a scheduling quantum, not as ceiling headroom ("Backpressure" below).
+  is fatal: the frame layer rejects it before allocating anything and the connection is torn down. Outbound, the sender
+  refuses a larger body before writing any header byte, so a refused frame leaves the stream consistent and the
+  connection usable. Image producers keep each `ImageMsg::Chunk` payload at or below `MAX_IMAGE_CHUNK_PAYLOAD` (256
+  KiB), far under that ceiling: the cap is sized as a scheduling quantum, not as ceiling headroom ("Backpressure"
+  below).
 
 #### Semantic limits
 
@@ -261,11 +238,11 @@ becomes a frame body sits far under it. The bridge line is the one entry that do
 rather than a body, and the payload inside it is bounded by `MAX_PASTE_BYTES` on the way to the wire.
 
 A limit the `Checked` column marks `sender and receiver` is checked twice with the same number: by the sender before the
-body is encoded (`FrameWriter::send*`, and the CLI and bridge before they dial), and by the receiver after the body
-decodes (`codec::decode`), where a breach is `WireError::OverLimit`, naming the field, the size, the cap, and the unit
-the cap counts (bytes, entries, or frames). Every other marking is a departure from that and says which half is missing:
-a cap the sender alone holds, one a handler reads instead of the decode, and one a table or constructor enforces each
-answer in their own terms, which `Outcome` states, rather than by closing the connection.
+body is encoded (the CLI and bridge before they dial), and by the receiver as the body decodes, where a breach is
+`WireError::OverLimit`, naming the field, the size, the cap, and the unit the cap counts (bytes, entries, or frames).
+Every other marking is a departure from that and says which half is missing: a cap the sender alone holds, one a handler
+reads instead of the decode, and one a table or constructor enforces each answer in their own terms, which `Outcome`
+states, rather than by closing the connection.
 
 The receive-side values are part of major `1` itself, not rows of the minor ledger. Lowering one for every peer narrows
 what a field already accepts, which is a change of meaning (REQ-104b): a released peer sending a value under the old
@@ -309,12 +286,12 @@ confirmation bar, and pattern length appears in the search bar.
 The region reply is the one row checked on the sending side alone: it bounds a body the daemon builds from its own
 scrollback rather than anything a peer asked for by size, and an over-budget region is trimmed rather than refused.
 
-The hyperlink table's entry _count_ needs no constant of its own: the `NonZeroU16` handle is the bound (65 535), which
+The hyperlink table's entry _count_ needs no constant of its own: the 16-bit nonzero handle bounds it at 65 535, which
 is why only its byte budget is listed.
 
 The geometry and image rows bound a **claim** rather than a length: a number that tells the receiver how much memory to
-reserve for bytes that have not arrived and need never arrive. They are therefore admitted in the `TryFrom<v1::*>`
-conversion, where the number is read, rather than on both sides of the send
+reserve for bytes that have not arrived and need never arrive. They are therefore admitted at decode, where the number
+is read, rather than on both sides of the send
 ([the IPC design explanation](../explanation/architecture/ipc.md#bounding-announced-quantities)).
 
 - The header carries no sequence number: ordering is the stream's own guarantee, and the one thing a peer does act on
@@ -339,13 +316,12 @@ rejected, is recorded in [the IPC design explanation](../explanation/architectur
 encoding on the socket, JSON at a bridge" section.
 
 The wire schema is `crates/felis-protocol/proto/felis.proto` (package `felis.v1`), and it is the **single
-machine-readable authority** for the schema layer: the message families, their supporting structs and enums, the
-`FrameKind` values, and the preface constants it documents for a generator to read. The generated Rust types are
-committed under `felis-protocol/src/generated/` and regenerated by `just proto`, so a build needs no protoc; the
-hand-written types in `felis-protocol/src/messages/` are internal domain types with validated constructors over the same
-shapes, and `convert/` is the validator between them, checking what proto3 cannot state (a required oneof, an enum with
-no `UNSPECIFIED` counterpart, an integer that must narrow). Where the schema and the Rust could disagree, the schema
-wins, and tests that read `felis.proto` are what keep them from drifting apart.
+machine-readable authority** for the schema layer: the message families, every message and field with its meaning in the
+comment beside it, the supporting structs and enums, the `FrameKind` values, and the preface constants it documents for
+a generator to read. A field comment marked REQUIRED, or saying a value is refused at decode, states a rule proto3
+cannot express, and a receiver enforces it. The generated Rust types are committed under `felis-protocol/src/generated/`
+and regenerated by `just proto`, so a build needs no protoc. Where the schema and the Rust could disagree, the schema
+wins.
 
 The `felis.v1` package name is a schema namespace, not a copy of the protocol major: it moves only when a daemon has to
 hold two schemas at once, which is what a post-freeze major's deprecation window needs.
@@ -361,11 +337,10 @@ Correlation { oneof id { uint64 request_id = 1; uint64 stream_id = 2; } }
 ```
 
 The envelope names **exactly one** id. A frame belongs to a point request or to a stream, never to both, so the schema
-is a `oneof` and the domain type an exclusive `Correlation::Request(RequestId) | Correlation::Stream(StreamId)`. Three
-encodings are malformed and end the connection: an unset `id`, a set arm holding `0` (`0` is how the wire spells absent,
-which is why both sequences start at 1), and a body setting both tags, which the schema cannot express. The both-tags
-refusal reads tag _presence_, not the values that survive: a body that writes `request_id`, then `stream_id`, then
-`request_id` again as `0` names both, however a last-field-wins reader would resolve it.
+is a `oneof`. Three encodings are malformed and end the connection: an unset `id`, a set arm holding `0` (`0` is how the
+wire spells absent, which is why both sequences start at 1), and a body setting both tags, which the schema cannot
+express. The both-tags refusal reads tag _presence_, not the values that survive: a body that writes `request_id`, then
+`stream_id`, then `request_id` again as `0` names both, however a last-field-wins reader would resolve it.
 
 Which id an arm must carry is its `correlation` class ("The arm table" below), and the driver checks the envelope
 against the class before it delivers anything:
@@ -378,15 +353,10 @@ against the class before it delivers anything:
 | `stream_opener`  | A `stream_id` equal to the receiver's next unopened stream id, which then advances.                             |
 | `stream_item`    | The `stream_id` of a live stream.                                                                               |
 
-The class half of that check runs on the sending side too. The encoder every send path goes through
-(`CheckedFrame::encode` and `encode_correlated`, and so `FrameWriter::send*`, the client's outgoing queue, and the
-daemon's pre-encoded fan-out) refuses a correlated arm handed no envelope, an `uncorrelated` arm handed one, and an id
-of the wrong kind for the class. The refusal is local and recoverable: nothing is written and the connection stays
-usable. It names the arm and the envelope the class wants, in the sentence the receiving driver would have used. The
-sender checks the class only; the identity (the next unissued id, an outstanding request, a live stream) stays the
-receiving driver's, since only it holds the sequences. The unchecked test paths (`CheckedFrame::raw`,
-`FrameWriter::write_frame_unchecked`) are the sole way to write a frame past this, and exist so a test can play a
-malformed peer.
+The class half of that check runs on the sending side too: every send path refuses a correlated arm handed no envelope,
+an `uncorrelated` arm handed one, and an id of the wrong kind for the class. The refusal is local and recoverable:
+nothing is written and the connection stays usable. The sender checks the class only; the identity (the next unissued
+id, an outstanding request, a live stream) stays the receiving driver's, since only it holds the sequences.
 
 Which families carry the envelope, and on which arms:
 
@@ -420,12 +390,6 @@ then advances. The daemon therefore classifies any `stream_id` against the activ
 | terminated     | not in the table and `< next_stream_id`          |
 | never opened   | `>= next_stream_id`                              |
 
-Client-side, the allocation and the write are one call: `felis-client-core`'s `open_stream` writes the opening request
-under the id `begin_stream` issues, so the id, the `stream_id` envelope, and the `Setup` → `Observing` transition an
-observer's `Notify::Subscribe` needs cannot come apart. `Connection::open_stream` and
-`Connection::subscribe_notifications` are the attached and observer entry points; a caller that must register a receiver
-between the allocation and the write (the `felis bridge` link) hands that registration to the same helper.
-
 **Terminals.** Every stream ends in exactly one `ConnToClientMsg::End { stream_id, count }` or
 `ConnToClientMsg::Error { subject, reason, detail }` (REQ-113). The terminal lives on the control family rather than
 once per streaming family, so one terminal per stream is enforced in one place. An item or a second terminal after a
@@ -452,10 +416,9 @@ earlier stream terminates), `Unavailable` (the subject went away mid-flight), `I
 stream on its own fault). `detail` says which value provoked it and is never parsed.
 
 For design rationale regarding body envelopes and stream cancellation, see the design record in
-[ipc.md](../explanation/architecture/ipc.md). The state machine behind all of this is one shared typed connection
-driver, `crates/felis-transport/src/driver.rs`, run by the daemon and by every client: phase ("Connection phases"
-below), per-direction message legality, connection mode, correlation, and the cancel/terminal races are validated in a
-single place rather than once per call site.
+[ipc.md](../explanation/architecture/ipc.md). The daemon and every Rust client validate all of this (phase,
+per-direction message legality, connection mode, correlation, and the cancel/terminal races) in one shared connection
+driver, `crates/felis-transport/src/driver.rs`.
 
 ## Corruption
 
@@ -469,10 +432,10 @@ racing a `Cancel` is expected; an item on a never-opened or already-terminated s
 unknown oneof variants are likewise fatal: the effective minor is a send-side contract ("Versioning" below).
 
 Validation falls in two tiers, and a limit's tier is the one its `Checked` and `Outcome` rows in "Semantic limits" above
-give it, not one inferred from the kind of value it bounds. **Wire-level validation** is what `codec::decode` performs
-on a single body: the protobuf structure, the conversion into the domain type, which refuses a oneof arm this build does
-not define, and the caps that table records as read by the receiver at decode, whose breach is a fatal `WireError`. It
-is the driver's, and it runs on every path a frame can take, the drain path included: a reader that discards a family
+give it, not one inferred from the kind of value it bounds. **Wire-level validation** is what the decode performs on a
+single body: the protobuf structure, the conversion into the domain type, which refuses a oneof arm this build does not
+define, and the caps that table records as read by the receiver at decode, whose breach is a fatal `WireError`. It is
+the driver's, and it runs on every path a frame can take, the drain path included: a reader that discards a family
 decodes its bodies before dropping them, so a malformed `Grid` body ends the connection of a role that never draws a
 grid exactly as it ends a window client's.
 
@@ -541,14 +504,13 @@ the body width are the only grid values bounded protocol-wide rather than by the
 
 ## Message families
 
-The variant names below mirror the `*Msg` enums in the protocol crate
-([`messages.rs`](../../crates/felis-protocol/src/messages.rs)); those modules are the workspace's domain vocabulary,
-mapped to the generated `felis.v1` wire types through the anti-corruption layer. Each family is a protobuf oneof whose
-field numbers are the ones `felis.proto` declares, frozen for the life of a protocol major; a new arm takes the next
-free number. A number the release baseline (the newest published final release, "Wire compatibility gates" in
-[testing.md](testing.md#wire-compatibility-gates)) carries is `reserved` on retirement and never recycled; a number
-retired while no baseline exists is free again. New variants land at the tail under a minor bump, recorded in the ledger
-("Versioning" below).
+This page names a message `Family::Variant`, as the arm table and the minor ledger do; `felis.proto` spells the same
+message `<Family><Variant>` and defines every message and field, with its meaning, in the comment beside it. Each family
+is a protobuf oneof whose field numbers are the ones `felis.proto` declares, frozen for the life of a protocol major; a
+new arm takes the next free number. A number the release baseline (the newest published final release, "Wire
+compatibility gates" in [testing.md](testing.md#wire-compatibility-gates)) carries is `reserved` on retirement and never
+recycled; a number retired while no baseline exists is free again. New variants land at the tail under a minor bump,
+recorded in the ledger ("Versioning" below).
 
 The families are split by purpose, not pooled into a catch-all: kind 0 (`Conn`) carries the handshake and the stream
 lifecycle, and the session, ops, region, notify, push, and search surfaces each ride their own frame kind (`Session`,
@@ -570,7 +532,9 @@ The design rationale is in [ipc.md](../explanation/architecture/ipc.md).
 
 The family sections below run in conversation order rather than kind order: `Conn` first, then the control families
 (`Session`, `Ops`, `Region`, `Notify`, `Push`), then an attached session's own data path (`Input`, `Grid`, `Image`) and
-`Search`. Each heading names its kind, and the arm table above is the lookup keyed by kind.
+`Search`. Each heading names its kind, and the arm table below is the lookup keyed by kind. A section states what the
+schema cannot: the conversation the family carries, which reply answers which request, and the rules that span several
+messages.
 
 ### The arm table
 
@@ -603,8 +567,8 @@ ConnHello hello = 1 [(felis.v1.arm) = {
 ```
 
 A non-Rust peer reads the whole matrix out of the descriptor the schema compiles to (`buf build`, or protoc reflection),
-with no comment and no Rust source to parse. `felis-protocol` generates its `ArmMeta` table and arm field numbers from
-the same options (`tools/proto/schema_meta.py`, run by `just proto`), so an arm carrying no option fails generation.
+with no comment and no Rust source to parse. `felis-protocol` generates its routing table and arm field numbers from the
+same options (`tools/proto/schema_meta.py`, run by `just proto`), so an arm carrying no option fails generation.
 `buf breaking` compares field numbers, names, and types, and an option is none of those, so the compat gate ("Wire
 compatibility gates" in [testing.md](testing.md)) is blind to a routing edit; the edit shows up as a change to the
 generated `src/schema_meta.rs`.
@@ -623,11 +587,11 @@ Every received frame is judged by the table, whatever the receiver means to do w
 holds back until an outstanding request is answered are refused on the same rows as one it consumes: REQ-114 makes a
 routing violation end the connection rather than become a dropped frame.
 
-Where every arm of a family declares the same row the fold is exact rather than coarse (`MessageKind::arms_are_uniform`,
-true today of `Input`, `Grid` and `Image`). A reader that drains such a family without reading it, as the `felis bridge`
-link does with the grid burst and a one-shot verb does with another family's frame, judges it on the kind columns
-instead of the arm's row. The envelope, which the frame carries rather than the arm, and the body, which decides nothing
-here but is corruption when it does not decode ("Corruption" above), are still checked per frame.
+Where every arm of a family declares the same row, as every arm of `Input`, `Grid` and `Image` does, the fold is exact
+rather than coarse. A reader that drains such a family without reading it, as the `felis bridge` link does with the grid
+burst and a one-shot verb does with another family's frame, judges it on the kind columns instead of the arm's row. The
+envelope, which the frame carries rather than the arm, and the body, which decides nothing here but is corruption when
+it does not decode ("Corruption" above), are still checked per frame.
 
 Whether a change earns a new kind or a new arm turns on which surface owns it: **new kind** iff the messages address a
 surface no existing kind owns, or iff the refusal must land before the body is decoded, which only the kind fold can do;
@@ -651,50 +615,29 @@ Which values a `GridDims` may hold is a property of the field carrying it, not o
 | `InputResize.dims`                                         | clamped up to the minimum                                                 | clamped into the band                                   |
 | every other `GridDims` (`GridSize`, `SessionInfo.dims`, …) | refused                                                                   | refused, `WireError::OutOfRange`, ending the connection |
 
-`pixel_w` / `pixel_h` `0` means "unknown" on all of them, and stays legal everywhere. Each carrying message is described
-under its own family below.
+`pixel_w` / `pixel_h` `0` means "unknown" on all of them, and stays legal everywhere.
 
 ### Conn (kind = 0)
 
-Bidirectional. Kind 0 carries the application handshake and the stream lifecycle: a `Cancel` and a terminal name their
-subject by id and need no family context, so they live here once instead of once per streaming family.
+Bidirectional. Kind 0 carries the application handshake and the stream lifecycle: `Cancel` and the two terminals name
+their subject by id and need no family context, so they live here once instead of once per streaming family. The
+messages are `ConnToDaemonMsg` and `ConnToClientMsg` in `felis.proto`.
 
-- `Hello { mode, pull_paced }`: client → daemon, first message on a connection. Version selection already happened in
-  the preface, so nothing here negotiates one. `mode` is a `ConnectionMode` saying what the connection is for, which
-  decides the arms the daemon admits ("Connection modes" below); it is minor-gated like any other addition, so the
-  sender names only a mode the effective minor defines. `pull_paced` states whether the client paces grid emission with
-  per-vsync pulls.
-- `Welcome { identity }`: daemon → client reply. It echoes nothing back, and it carries **no** session roster: listing
-  is `OpsToDaemonMsg::List` (below), so an attach never pays for the marginalia payload and a live connection can
-  re-list at any time. `identity` is a `BuildIdentity` (`version`, a semver; `revision`, full lowercase hex or
-  `unknown`; `dirty`) naming the build the running daemon is, distinct from the on-disk binary, for `felis version` to
-  show. It is informational only; the version gate is the preface.
-- `Refused { reason: RefusalReason, detail }`: daemon → client, sent in place of the answer the peer asked for, after
-  which the daemon closes. `reason` has three arms:
+The handshake is `Hello`, the first frame on a connection, answered by `Welcome` or `Refused` ("Handshake" below).
+`Hello` states the connection's mode and the `pull_paced` flag and declares no capability bitset: version selection
+already happened in the preface (REQ-104). `Welcome` carries the running daemon's build identity and no session roster;
+listing is `Ops::List`, so an attach never pays for the roster and a live connection can re-list at any time.
 
-  - `Role`: the frame the peer sent belongs to a family its stated mode does not admit.
-  - `AtCapacity`: the daemon is already serving the connection cap (`MAX_CONNECTIONS`, "Handshake") and admitted no
-    further connections. The peer did nothing wrong; the remedy is to retry once a connection frees, and `detail` names
-    the admitted count and the limit.
-  - `UnknownMode`: the `Hello` named a `ConnectionMode` this daemon does not define, so the peer is the newer half and
-    the remedy is a newer daemon; `detail` names the mode number.
+`Refused` is the pre-attach refusal: the daemon sends it in place of the answer the peer asked for and then closes. Its
+reason says whether the frame's family is one the mode does not admit (`Role`), the daemon is at its connection cap
+(`AtCapacity`, retryable), or the peer named a mode this daemon does not define (`UnknownMode`, the peer is newer). Once
+attached, the daemon answers an invalid request with `Error { subject: Request(id), reason: InvalidRequest }` instead,
+and the connection survives ("Ops (kind = 5)" below).
 
-  `detail` provides human-readable specifics for logs and display and is never parsed. Without this frame, a refusal
-  would be a bare close that a client could confuse with a transient EOF and retry indefinitely. This is the pre-attach
-  refusal shape. Once attached, the daemon answers invalid requests with
-  `Error { subject: Request(id), reason: InvalidRequest }` and the connection survives ("Ops (kind = 5)" below).
-
-- `Cancel { stream_id }`: client → daemon, best-effort, racing the terminal in both directions ("Correlation, requests,
-  and streams" above).
-- `End { stream_id, count }`: daemon → client, a stream's clean terminal. `count` is the results that preceded it (rows,
-  matches, notification events), never the acks, markers, and family trailers riding the same stream
-  (`NotifyToClientMsg::Subscribed`, `NotifyToClientMsg::Lagged`, `RegionToClientMsg::RowsDone`). What sorts a new frame
-  is the request: only the values it asked for are results. An acknowledgement, a loss marker, or a family trailer
-  escorts those values without joining them, a trailer included when it carries data `End` has no field for. `0` is
-  normal (no hits, an empty region), and the terminal is what says the stream ended cleanly.
-- `Error { subject, reason: StreamErrorReason, detail }`: daemon → client. A request that produced no reply, or a
-  stream's terminal when it ends badly. `subject` is required and is either a `request_id` or a `stream_id`: an error
-  nobody can attribute is worse than none.
+`Cancel` (client → daemon), `End` and `Error` (daemon → client) are the stream lifecycle of "Correlation, requests, and
+streams" above. `Error` also answers a request that produced no reply, and names its subject either way. `End.count`
+counts the results the request asked for, never the acknowledgements, loss markers and family trailers riding the same
+stream.
 
 #### Connection phases
 
@@ -795,8 +738,8 @@ daemon's decode, so the client refuses before the `Hello` goes out. The daemon h
 corrupt body. Every mode this build ships belongs to the base schema, so the rule binds nothing today and is what the
 first added mode lands on.
 
-The `pull_paced` field of `Hello` is the one optional _optimization_, a feature flag rather than a mode: when true, the
-client's `InputMsg::NextGridFrame` pulls pace grid emission; when false the daemon eager-pushes ("Versioning" below).
+The `pull_paced` field of `Hello` is the one optional _optimization_, a feature flag rather than a mode ("Versioning"
+below).
 
 A non-Rust implementation needs no contract manifest beside this page: `felis.proto` carries the message and enum
 shapes, the `FrameKind` values, and the preface constants, and what remains outside it is the frame-header layout, the
@@ -807,624 +750,325 @@ preface byte layout, and the row codec's `packed_cells` payload, the first two s
 
 Bidirectional, _this connection's own_ session: the attach / create requests and their replies before attach, plus
 detach, theme configuration, and the input barrier while attached. Operating on _other named_ sessions is the `Ops`
-family. Variant names drop the `Session` prefix; the family carries it. Open to the `Window` and `Ops` modes alike: the
-GUI window and `felis sessions spawn` both create sessions. In wire-tag order:
+family. Open to the `Window` and `Ops` modes alike. The messages are `SessionToDaemonMsg` and `SessionToClientMsg` in
+`felis.proto`.
 
-- `Attach { target, live_only }`: client → daemon. Subscribe to the named idle session and start streaming. `target` is
-  a union of `id` (a full 16-byte session id) and `id_prefix` (a lowercase-hex prefix), so a frame naming both targets
-  is not something a sender built from the schema can write; one naming neither is refused at decode. An `id_prefix`
-  decodes as sent; the daemon strips an optional `0x` and lowercases it, and one that is then empty, longer than 32
-  digits, or not hex is answered `AttachFailure::NoMatch`, exactly as the `Ops` verbs' `id_prefix` resolves: the two
-  share one resolver so they cannot disagree on what a prefix is.
+**Attach and create.** In the `Setup` phase a client sends one `Attach`, naming an existing session by full id or by
+prefix ("Ops (kind = 5)" below), or one `Create`, which spawns a session from `SpawnArgs` and attaches this connection
+to it in the same step. The daemon answers `Attached` or `Created` once the subscription has landed, and the rehydrate
+burst follows either ("Grid (kind = 2)" below); otherwise it answers `AttachFailed` and closes, so a caller never has to
+read a bare EOF as a refusal. Several same-user clients may subscribe to one session at once, each with its own
+rehydrate burst, diff cursor, and pull cadence
+([session-lifecycle.md](../explanation/architecture/session-lifecycle.md)). A caller that wants no window creates
+through `Ops::Spawn` instead.
 
-  A prefix is resolved against the pool inside the daemon, under the lock that takes the session handle, so an attach
-  costs one round trip and no roster the client holds can go stale between the two; `Attached.info.id` carries the full
-  id back. A teardown still races the subscription that follows, which answers `AttachFailure::SessionEnding`, so a
-  session reaped mid-request does not always read as `NoMatch`. The exact form stays for the callers that already hold
-  an id and did not shorten it: the reconnect ladder's trail entries and a roster-driven switch. Attach is additive; see
-  the mirroring discussion in [session-lifecycle.md](../explanation/architecture/session-lifecycle.md). Multiple
-  same-user clients may subscribe to one session at once, each with its own rehydrate burst, diff cursor, and pull
-  cadence.
+A prefix resolves inside the daemon, under the lock that takes the session handle, so an attach costs one round trip and
+no roster the client holds can go stale in between. A teardown still races the subscription that follows, which answers
+`SessionEnding`, so a session reaped mid-request does not always read as `NoMatch`.
 
-  `live_only` refuses the attach with `AttachFailure::SessionExited` when the session shell has exited. Every landing
-  the client _picked_ sets it (a switch chord's roster pick, the exit ladder's automatic trail and ring rungs, the
-  re-attach after transport loss), and the session task answers it against its own view of the exit, which is the only
-  check the exit cannot race. A landing the user named leaves it `false` and may land on an exited session, including
-  one the exit ladder runs on the user's behalf, since a parked `Reattach` or an attach-form retarget keeps the attach
-  mode the user's own invocation had (see [session-lifecycle.md](../explanation/architecture/session-lifecycle.md)
-  "Picking the session a chord lands on").
+`AttachFailed` names which half of the request refused: `attach`, an `AttachFailure` about a session that already
+exists, or `create`, a `CreateFailure` about one that does not exist yet. Which values each request admits is exact, and
+a client is entitled to refuse anything else as a protocol failure rather than report it as a refusal:
 
-- `Create { args: SpawnArgs }`: client → daemon. Create a session through the daemon's factory **and attach this
-  connection to it**, in one step; the daemon replies `Created { info }` only after the subscription landed, so the
-  rehydrate burst follows it exactly as it follows an `Attach` ack. Empty `SpawnArgs` fields fall back to daemon
-  defaults (`$SHELL`, the daemon's cwd), and an absent `SpawnArgs.dims` is how a create asks for the default 24 × 80
-  grid. A `dims` that is _present_ must name rows and columns inside the REQ-605a bounds, so `0` rows or columns is
-  refused rather than defaulted; only the pixel axes keep `0` = unknown (the `GridDims` table above).
+| Request                   | Admits                                                                                                                                    |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `Attach` naming a full id | `attach ∈ {UnknownSession, SessionEnding}`, plus `SessionExited` when it set `live_only`                                                  |
+| `Attach` naming a prefix  | `attach ∈ {NoMatch, Ambiguous, SessionEnding}`, plus `SessionExited` when it set `live_only`                                              |
+| `Create`                  | any `create` value, or `attach = SessionEnding` alone: its spawn landed and its subscription lost a race against a child that ended first |
 
-  A caller that wants no window uses `Ops::Spawn` instead; that is what `felis sessions spawn` sends. The GUI window
-  path drives creation here, and bare `felis -- <cmd>` fills `SpawnArgs.command` / `args` to run that argv in the new
-  window: an _ordinary persistent_ session, not a transient one (lifecycle in [cli.md](cli.md)). `SpawnArgs.tags`
-  applies opaque labels at creation (normalized exactly as `Tag`/`TagsUpdated` would), so the session is never listable
-  untagged.
+A create past the daemon's session limit is refused `SessionLimitReached` before anything is executed, its `detail`
+naming the admitted count and the limit (REQ-915); one arriving while the daemon drains toward exit is refused
+`DaemonDraining`.
 
-  `SpawnArgs.command`, `args`, and `cwd` are `string`, so they carry UTF-8 only, unlike the `bytes` of `env_base` below.
-  A Unix-native program path, argv entry, or cwd is arbitrary bytes and so may fail to be UTF-8, rarely and never when
-  the user typed it; a valid Windows UTF-16 value always converts. A client holding such a value refuses it before the
-  wire rather than substituting U+FFFD, which would name a program or directory the user never asked for (REQ-105b).
-  `felis sessions spawn` and `felis window retarget` answer one with a usage error ([cli.md](cli.md)).
+**Creating a session.** `Created` is written once the session answers lookups by id and prefix on every connection, and
+an ack that fails to write leaves the session detached rather than rolled back. A create that fails after the session
+was registered, the subscribe having failed to land, is rolled back before the refusal is written: the pool entry is
+removed, the session shut down, and its child reaped
+([the IPC design explanation](../explanation/architecture/ipc.md#creating-a-session)).
 
-  A create carries the child's environment in two fields, and which type each uses is fixed by where its content comes
-  from:
+A present `SpawnArgs.dims` naming rows or columns outside the REQ-605a bounds, `0` among them, refuses the whole create
+with `GeometryOutOfRange`, checked over the full `uint32` domain before the daemon mints an id or spawns anything. What
+admission accepts it keeps: the resolved geometry is the child's first winsize and the geometry every later surface
+reports, `SessionInfo.dims` included. The one difference is the winsize's pixel axes: where the announced pixel is `0`,
+the PTY carries 8 × 16 pixels per cell, and a later resize that leaves a pixel axis `0` keeps the PTY's current cell on
+that axis.
 
-  | Field                | Wire type                                                    | Origin                                              | Effect                                                                                    |
-  | -------------------- | ------------------------------------------------------------ | --------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-  | `SpawnArgs.env`      | `repeated EnvPair` (`string` key and value, UTF-8)           | typed by a user — `--env KEY=VAL`, a bridge request | overlaid **last**, over the resolved base and over the daemon's identity stamps (REQ-912) |
-  | `SpawnArgs.env_base` | `optional EnvBase` of `EnvBytesPair` (`bytes` key and value) | captured from a host by the dialing process         | **replaces** the base the daemon would otherwise resolve                                  |
+`SpawnArgs.command`, `args`, and `cwd` carry UTF-8 only. A client holding a native value that is not UTF-8 refuses it
+before the wire rather than substituting U+FFFD, which would name a program or directory the user never asked for
+(REQ-105b); `felis sessions spawn` and `felis window retarget` answer one with a usage error ([cli.md](cli.md)).
 
-  `SpawnArgs.env_base` is the environment the child's base is **replaced** with, no overlay. It carries raw platform
-  bytes (Unix bytes; Windows little-endian `u16` code units, whole units only), not strings, and it carries
-  **presence**: an empty-but-present snapshot means an empty base. Whichever process dials the `Create` fills it,
-  immediately before dialing, and **only when its carrier to the target daemon is the local socket**. Why the two fields
-  differ in type and who is expected to fill which is in
-  [the IPC design explanation](../explanation/architecture/ipc.md#the-two-environment-fields).
+**The child's environment.** A create carries it in two fields: `SpawnArgs.env`, pairs a user typed (`--env KEY=VAL`, a
+bridge request), and `SpawnArgs.env_base`, a snapshot of a host's environment as raw platform bytes. The dialing process
+fills `env_base` immediately before it sends, and only when its carrier to the target daemon is the local socket, never
+over the SSH relay (REQ-912a); why the two fields differ in type and in who fills them is in
+[the IPC design explanation](../explanation/architecture/ipc.md#the-two-environment-fields).
 
-  When the field is absent the daemon resolves the base through one frozen chain: the connection's relay carrier block
-  if it has one, else the daemon's own environment. Then, in order: the base, the daemon's denylist scrub, the forced
-  identity stamps, and explicit `env` last, which may override a stamp (REQ-912). A base source is scrubbed
-  **silently**; an explicit `env` pair naming a reserved key is refused.
+The daemon builds the child's environment in one frozen order:
 
-  Two values come out of the resolved base rather than out of the daemon: the `$SHELL` a create with no `command` runs,
-  and the `FELIS_TERM` / `FELIS_TERM_PROGRAM` identity hatch, read before the scrub that removes them. Each falls back
-  to the daemon's own environment when the base is silent ([terminal-identity.md](terminal-identity.md)).
+1. the base: `env_base` when present, which replaces it outright; else the connection's relay carrier block; else the
+   daemon's own environment;
+2. the daemon's denylist scrub;
+3. the forced identity stamps;
+4. on macOS only, `LANG` from the host's current region, when the base sets none of `LANG`, `LC_ALL` and `LC_CTYPE` to a
+   non-empty value;
+5. explicit `env` last, which may override a stamp (REQ-912).
 
-  One stamp is conditional where the identity stamps are not: on macOS the daemon fills `LANG` from the host's current
-  region between the stamps and the explicit `env` pairs, and only when the same entries the hatch is read from set none
-  of `LANG`, `LC_ALL` and `LC_CTYPE` to a non-empty value ([terminal-identity.md](terminal-identity.md)).
+Two values come out of the base rather than out of the daemon: the `$SHELL` a create with no `command` runs, and the
+`FELIS_TERM` / `FELIS_TERM_PROGRAM` identity hatch, read before the scrub removes them. Each falls back to the daemon's
+own environment when the base is silent ([terminal-identity.md](terminal-identity.md)).
 
-  The daemon stays authoritative for validity, for both fields alike: names are nonempty and contain no `=` or NUL,
-  values contain no NUL, Windows byte strings are whole `u16` code units, and Windows `=`-prefixed pseudo-variables
-  (`=C:`) are dropped from `env_base` silently and refuse an explicit `env`. Names are compared under the **target
-  platform's** semantics (case-insensitive on Windows), canonicalized before the reserved and denylist checks, before
-  dedup, and before overrides are applied, so `felis_session_id` cannot slip past an exact-case check. Case-colliding
-  explicit `env` pairs refuse the spawn; case-colliding `env_base` entries dedup with the later entry winning. Anything
-  invalid, and any cap breach, is a `CreateFailure::SpawnFailed`. No refusal and no log line carries an environment name
-  or value the caller supplied.
+A base is scrubbed silently; an explicit `env` pair naming a reserved key is refused. The daemon is authoritative for
+validity on both fields: names are nonempty and contain no `=` or NUL, values contain no NUL, Windows byte strings are
+whole `u16` code units, and Windows `=`-prefixed pseudo-variables (`=C:`) are dropped from a base silently and refuse an
+explicit pair. Names compare under the **target platform's** semantics (case-insensitive on Windows), canonicalized
+before the reserved and denylist checks, before dedup, and before overrides apply, so `felis_session_id` cannot slip
+past an exact-case check. Case-colliding explicit pairs refuse the spawn; case-colliding base entries dedup with the
+later entry winning. Anything invalid, and a breach of the `env_base` caps ("Semantic limits" above), is a
+`CreateFailure::SpawnFailed`, and no refusal and no log line carries an environment name or value the caller supplied.
 
-  The two `env_base` caps ("Semantic limits" above) are checked on the daemon in the spawn path rather than in
-  `codec::decode`, and by the dialing process before it sends: a process whose own environment breaks one **omits** the
-  field instead of sending it.
+**While attached.** `Detach` ends this connection's subscription; the session lives on. `ConfigureTheme`, sent right
+after attach, reports the window's configured colors and palette slots. The daemon stores each report against its
+subscriber and answers a query from the first window in the candidate chain that has sent one: the last window input
+owner, then the remaining windows in reverse attach order, scripted `Ops` subscribers never. The chain is re-resolved
+after every report, attach, detach, and ownership transfer, and an empty chain answers with the compiled-in fallback
+([session-lifecycle.md "Client-derived presentation state"](../explanation/architecture/session-lifecycle.md)).
 
-- `Detach`: client → daemon, sent while attached. The window is closing; the session lives on.
-- `ConfigureTheme { fg, bg, cursor, palette }`: client → daemon, right after attach. The client's configured colors
-  (each an optional sRGB triple), so an `OSC 10/11/12 ; ?` query answers the real surface color, and its configured
-  palette slots, so an `OSC 4 ; n ; ?` query answers the painted color. `palette` is sparse: it carries only the slots
-  the window's config sets, a slot left out answers the compiled-in palette, and a frame naming an index past 255 or one
-  index twice is refused at decode. One atomic report per window: the daemon stores it against the reporting subscriber
-  and resolves the report a query sees, trio and palette together, from the first window in the candidate chain that has
-  sent one: the last window input owner, then the remaining windows in reverse attach order, scripted `Ops` subscribers
-  never. The chain is re-resolved after every report, attach, detach, and ownership transfer, so the report travels with
-  every attach and an empty chain (the last window detached) answers with the compiled-in fallback
-  ([session-lifecycle.md "Client-derived presentation state"](../explanation/architecture/session-lifecycle.md)).
-- `Attached { info: SessionInfo }`: daemon → client, the `Attach` ack. The rehydrate burst follows. `info` is the
-  session's full roster row (the same `SessionInfo` an `Ops::Listed` reply carries), so a client seeds its session list
-  without fabricating a placeholder from a bare id + dims pair.
-- `AttachFailed { reason, detail }`: daemon → client. Written on every refusal path of `Attach` and `Create` before the
-  daemon closes, so a caller never has to read a bare EOF as a refusal. `reason` is a two-arm union naming which half of
-  the request refused, and an unset one is refused at decode:
-
-  - `attach: AttachFailure`: the attach half, which needs a session that already exists. `UnknownSession` (no pooled
-    session holds the id), `SessionEnding` (the reap raced the attach), `SessionExited` (a `live_only` attach named a
-    session whose shell has already exited; the session is pooled and its task is running, so this is neither of the
-    previous two), `NoMatch` / `Ambiguous` (an `id_prefix` named no session, or more than one; the count rides in
-    `detail`).
-  - `create: CreateFailure`: the spawn half, which is about a session that does not exist yet. `SpawnFailed` (the create
-    could not start its program), `GeometryOutOfRange` (the create named a geometry outside the REQ-605a bounds; nothing
-    was execed, and the same request fails the same way), `SessionLimitReached` (the create arrived while the daemon
-    already held its configured maximum of sessions; the request is fine and nothing was executed, so the remedy is to
-    reap a session, REQ-915), `DaemonDraining` (the create arrived while the daemon was draining toward exit; no reap
-    makes room, so the remedy is another daemon, REQ-917).
-
-  Which values each request admits is exact, and a client is entitled to refuse anything else as a protocol failure
-  rather than report it as a refusal: an `Attach` naming a full id admits `attach ∈ {UnknownSession, SessionEnding}`,
-  plus `SessionExited` when it set `live_only`; an `Attach` naming a prefix admits
-  `attach ∈ {NoMatch, Ambiguous, SessionEnding}`, plus `SessionExited` under `live_only`; a `Create` admits any `create`
-  value, or `attach = SessionEnding` alone, which is its spawn landing and its subscription then losing the race against
-  a child that ended first. `detail` carries the exec error behind a `SpawnFailed`, the offending axis, value, and bound
-  behind a `GeometryOutOfRange`, the admitted count and the limit behind a `SessionLimitReached`, and the session id
-  behind the rest; every reason carries one, and it is for logs and display, never parsed.
-
-- `Created { info: SessionInfo }`: daemon → client, the `Create` ack. The connection is already subscribed when it
-  arrives, so the rehydrate burst follows exactly as after `Attached`; `info.dims` is the real spawn geometry after the
-  `SpawnArgs` defaults resolved. The session answers lookups by id and prefix on every connection before `Created` is
-  written, and an ack that fails to write leaves it detached rather than rolled back. A create that fails _after_ the
-  session was registered, the subscribe having failed to land, is rolled back before the refusal is written: the pool
-  entry is removed, the session is shut down, and the daemon waits for the child to be reaped
-  ([the IPC design explanation](../explanation/architecture/ipc.md#creating-a-session)).
-- `InputFence {}`: client → daemon, while attached. A barrier over this connection's earlier `Input` frames, answered
-  with `InputAccepted` on the fence's own `request_id`.
-- `InputAccepted {}`: daemon → client. Every `Input` frame that preceded the fence on this connection has been processed
-  by the session: the bytes the byte-carrying arms (`KeyBytes`, `Paste`, `Key`, `Mouse`) encoded to were admitted
-  against the per-session input budget ("Input admission" below) and queued to the PTY writer. It does not say the child
-  read anything, nor that a `Mouse` event reached the program: one the active mouse protocol filters encodes to no bytes
-  and counts as processed.
-
-  Every report the session generates for the other arms (a focus report under DECSET 1004 for `FocusChange`, a
-  color-scheme report under DECSET 2031 for `ColorScheme`, an in-band resize report under DECSET 2048 for `Resize`) is
-  an unreserved write attempted before the session reaches the fence, so the attempt order is guaranteed and delivery is
-  not: a saturated writer drops one and the fence still completes. A fence answered while the session is ending says
-  only that the bytes were admitted before it ended; once the session has gone the fence gets no reply and the
-  connection ends.
+`InputFence` is a barrier over this connection's earlier `Input` frames, answered by `InputAccepted` on the fence's own
+`request_id`. The answer says every earlier `Input` frame was processed: the bytes the byte-carrying arms encoded to
+were admitted against the session's input budget ("Client → daemon: the input budget" below) and queued to the PTY
+writer. It does not say the child read anything, nor that a mouse event the active protocol filters reached the program.
+The reports the other `Input` arms generate are unreserved writes attempted before the fence, so their order is
+guaranteed and their delivery is not: a saturated writer drops one and the fence still completes. A fence answered while
+the session is ending says only that the bytes were admitted before it ended; once the session has gone the fence gets
+no reply and the connection ends.
 
 ### Ops (kind = 5)
 
 Bidirectional request/reply on _named other_ sessions: the scripted operator's family. Every request carries a
-`request_id` its reply echoes, so several may be in flight on one connection at once. The three pure queries, `List`,
-`Info` and `Status`, are runnable by attach-capable modes (`Window`, `Ops`); mutating requests require `Ops` mode
-("Connection modes" above). A `Window` connection that issues one anyway is answered
+`request_id` its reply echoes, so several may be in flight on one connection at once. The pairs are `List` / `Listed`,
+`Info` / `InfoReply`, `Destroy` / `Destroyed`, `ForceDetach` / `Detached`, `Switch` / `Switched`, `Tag` / `TagsUpdated`,
+`Status` / `StatusReply`, `Spawn` / `Spawned`, `Stop` / `StopReply`, and `Upgrade` / `UpgradeReply`, defined in
+`felis.proto` as `OpsToDaemonMsg` and `OpsToClientMsg`; the CLI verb each backs is in [cli.md](cli.md). `Listed`,
+`InfoReply` and `Spawned` carry `SessionInfo`, the session's roster row, whose fields `felis.proto` defines.
+
+The three pure queries, `List`, `Info` and `Status`, are runnable from both attach-capable modes; every other request is
+a mutation and requires `Ops` mode ("Connection modes" above). A `Window` connection that issues one anyway is answered
 `ConnToClientMsg::Error { subject: Request(id), reason: InvalidRequest }` and keeps its connection: post-attach the
 daemon is streaming a session on that wire, and a mode denial is the verb's answer rather than grounds to drop the grid
-under a window. The `Refused`-then-close shape in "Conn (kind = 0)" above belongs to pre-attach connections, where no
-session exists yet.
+under a window. The `Refused`-then-close shape in "Conn (kind = 0)" above belongs to pre-attach connections.
 
-Every mutating request names its session by a lowercase-hex **id prefix** (`id_prefix` / `from_prefix`), resolved
-daemon-side against the pool; the paired reply carries the resolution as a `ResolvedId`: `Ok { id }` (the full resolved
-id), `NoMatch`, or `Ambiguous { matches }`. A caller therefore needs one round-trip, never a prior `List`. In wire-tag
-order:
+**Session-id prefixes.** Every request that names a session does so by a lowercase-hex id prefix, resolved daemon-side
+against the pool, so a caller needs one round trip and never a prior `List`. `Session::Attach` and `Notify::Subscribe`
+resolve through the same resolver: the daemon strips an optional `0x` and lowercases, and a prefix that is then empty,
+longer than 32 digits, or not hex matches nothing. A reply carries the resolution as a `ResolvedId` (the full id,
+`NoMatch`, or `Ambiguous` with the count); `InfoReply` is a closed outcome union in the same style, so only its
+successful arm carries session data.
 
-- `List` / `Listed { sessions: [SessionInfo] }`: client asks for the daemon's current roster; the daemon replies with
-  every pooled session, attached or idle. Backs `felis sessions list`; the roster is not part of the handshake
-  (`Welcome` carries none), so a live connection can re-list.
-- `Info { id_prefix }` / `InfoReply { outcome }`: one session's roster row by prefix, backing `felis sessions info` and
-  the bridge's `sessions.info`. `outcome` is a closed union in the `Spawned` style, so only the successful arm carries
-  session data: `found { session: SessionInfo, short_id }`, `no_match {}`, or `ambiguous { matches }`. `short_id` is the
-  display prefix the daemon shortened against its own pool at reply time, from the same snapshot the resolution ran
-  against, so the row, the resolution and the shortening cannot disagree about which sessions exist. Runnable from the
-  attach-capable modes, like `List`.
-- `Destroy { id_prefix }` / `Destroyed { resolved: ResolvedId }`: remove a session from the pool and end the program
-  running in it (backs `sessions kill`; the signals are in
-  [session-lifecycle.md](../explanation/architecture/session-lifecycle.md) "Destruction"). A `NoMatch` / `Ambiguous`
-  resolution maps to a CLI 1-exit rather than a hard error.
-- `ForceDetach { id_prefix }` / `Detached { resolved: ResolvedId, was_attached }`: return a session to the idle pool by
-  evicting every client that streams it (backs `sessions evict`, [control-surfaces reference](control-surfaces.md)). The
-  daemon sends the live client a `PushMsg::Evicted`, pools the session, then replies; `was_attached` is false when the
-  session was already idle.
-- `Switch { from_prefix, target: SwitchTarget, scope: SwitchScope }` /
-  `Switched { from: ResolvedId, to: ResolvedId?, queued, denied: SwitchDenied? }`: ask the windows attached to the
-  session `from_prefix` resolves to, to move to `target` (backs `sessions switch`, `felis ssh`, and
-  `felis window retarget`). `SwitchTarget` is a two-arm union, and the arm picks both the push and its gate:
-  - `Session(prefix)`: another session on this daemon, also named by prefix. The daemon resolves it, pushes
-    `PushMsg::Reattach` to `from`'s _window_ subscribers, and reports `queued` and the target resolution in `to`. A
-    target that resolves to `from` itself is answered without resolving `scope` at all (`queued: 0`, `denied` unset),
-    because the asked-for state already holds and no window has to be chosen to reach it.
-  - `Carrier(RetargetTarget)`: a session on another daemon. The daemon pushes `PushMsg::RetargetHost { target }` to
-    `from`'s window subscribers, relaying the descriptor verbatim; the reply carries `to: None` (this daemon cannot
-    resolve another daemon's roster).
+**Switch.** `Switch` asks the windows attached to the session `from_prefix` names to move. Its target picks the push: a
+session on this daemon is relayed as `Push::Reattach`, a carrier descriptor for a session on another daemon as
+`Push::RetargetHost` ("Push (kind = 8)" below). Its scope picks the windows: by default the session's last window input
+owner, else the sole attached window, or one window named by the attachment id the roster reports. The default scope is
+one window, any other scope is named explicitly, and a scope that resolves to no window is a typed `denied` reply, never
+a guess among several windows or a broadcast (REQ-006a). The daemon resolves the scope inside the session actor, in the
+same step that enqueues the push.
 
-  `scope` is the orthogonal axis, _which_ of `from`'s windows move, and it is a two-arm union the daemon resolves inside
-  the session actor, in the same step that enqueues the push. It is mandatory: a `Switch` that carries no scope is
-  malformed and is refused at decode.
-  - `Default`: the session's **last window input owner**, else the sole attached window. Neither available is a
-    `denied: NoInputOwner` reply, never a guess among several windows and never a silent fallback. This is what the
-    in-window verbs send.
-  - `Attachment(id)`: one window, by the `Attachment.id` the roster reports. An id that is not attached to this session
-    is a `denied: NoSuchAttachment { attachment }` reply; ids are never reused, so that can only mean "gone".
+`Switched.queued` counts the subscriber outboxes that took the push. It is **queue admission, not landing**: the reply
+is written the moment the frames are enqueued, and the landing arrives later on a connection of its own, which this
+reply cannot await ([the IPC design explanation](../explanation/architecture/ipc.md#what-a-switch-reply-can-report)).
+`denied` is symmetric with it: a resolve-time verdict only, so none can arrive once a push is enqueued.
 
-  `queued` counts the subscriber outboxes that took the push. It is **queue admission, not landing**: the reply is
-  written the moment the frames are enqueued, and the landing arrives later, on a connection of its own, which this
-  reply cannot await. The boundary is argued in
-  [the IPC design explanation](../explanation/architecture/ipc.md#what-a-switch-reply-can-report). `denied` is symmetric
-  with it: it is a **resolve-time** verdict only, so no arm of it can arrive once a push is enqueued.
+**Tag, Spawn, Status.** A tag delta that would breach a tag cap ("Semantic limits" above) is refused whole: `denied`
+carries the reason, `tags` the untouched set, and nothing is applied. felis never interprets a tag (the marginalia
+model, [control-surfaces.md](../explanation/architecture/control-surfaces.md)). `Spawn` creates a session this
+connection does not attach to, through the same `SpawnArgs` admission as `Session::Create` ("Session (kind = 4)" above);
+its refusal is an arm of `Spawned` carrying a `CreateFailure`, not a `ConnToClientMsg::Error`: the request failed, the
+connection did not. `StatusReply` reports what the daemon holds, one row per accounted resource; build and wire identity
+are already established on every connection by `Welcome` and the preface. Its rendering, the omitted key in
+`--format json`, and the normative per-resource meanings are in [cli.md](cli.md) "Daemon status"; why a row's scope and
+ceilings are unions is in
+[the IPC design explanation](../explanation/architecture/ipc.md#typed-unions-for-mode-selecting-fields).
 
-- `Tag { id_prefix, add, remove }` / `TagsUpdated { resolved: ResolvedId, tags, denied }`: add and/or remove opaque
-  labels on a session in one round-trip (backs `sessions tag`, whose positional TAGs are the adds and `--remove` the
-  removes). The daemon applies adds then removes, sorts, and dedups; `tags` is the resulting set. The set is bounded
-  (`MAX_SESSION_TAGS` per session, `MAX_TAG_BYTES` per tag, "Semantic limits"): a delta that would breach a cap is
-  refused whole (`denied` carries the reason, `tags` the untouched pre-request set), never partially applied. felis
-  never interprets a tag (the marginalia model, [control-surfaces.md](../explanation/architecture/control-surfaces.md)).
-- `Status` / `StatusReply { worker_threads, draining, resources }`: what this daemon is holding (backs
-  `felis daemon status`). Live state only: the daemon's build and the wire pair it speaks are already established on
-  every connection by `Welcome.identity` and the preface's accept, and a client composes the `version` and `protocol`
-  its report prints from those (`felis daemon status` prints the daemon's own minor, not the connection's effective
-  one). `worker_threads` is the size of the daemon's async runtime, an identity field rather than a row. `resources`
-  carries one `ResourceReport { resource, unit, total_used, scope }` per accounted resource: `resource` is a closed enum
-  (connections, sessions, image-store bytes, in-flight decodes and their bytes, subscriber-queue bytes, PTY input
-  bytes), `unit` is `COUNT` or `BYTES`, and `total_used` sums every subject. `scope` is a required oneof naming what one
-  subject is, and it carries every number that only that answer makes meaningful:
+**Stop.** `Stop` asks this daemon to exit, in one of three modes:
 
-  | `scope` arm            | Carries                                                                                                       |
-  | ---------------------- | ------------------------------------------------------------------------------------------------------------- |
-  | `DaemonScope daemon`   | `global_limit`. The daemon is its own single subject, so `total_used` is already the deepest                  |
-  | `SubjectScope subject` | `subject` (`SubjectKind`: `SESSION` or `SUBSCRIBER`), `max_subject_used`, `per_subject_limit`, `global_limit` |
+| Mode        | The daemon admits a session         | The daemon admits nothing |
+| ----------- | ----------------------------------- | ------------------------- |
+| `IfEmpty`   | `Refused { sessions }`, no change   | `Stopping`                |
+| `WhenEmpty` | `Draining { sessions }`             | `Stopping`                |
+| `Force`     | every session destroyed, `Stopping` | `Stopping`                |
 
-  A daemon row with a per-subject ceiling is therefore unrepresentable rather than merely undocumented, and a consumer
-  pairs each observation with the ceiling in its own arm: `total_used` against `global_limit`, `max_subject_used`
-  against `per_subject_limit`. A `ResourceReport` carrying no `scope` is malformed and is refused at decode.
+`sessions` counts pooled sessions plus the creates in flight, the number the sessions row of a `StatusReply` carries.
+Once a daemon is draining, a further `IfEmpty` or `WhenEmpty` stop answers the state it already reported (`Draining`
+while sessions remain, `Stopping` once none do), while `Force` escalates past the drain; a `Create` or `Spawn` arriving
+meanwhile is refused `DaemonDraining`. The decision and the refusal are one critical section: a create cannot be
+admitted after a stop was answered `Stopping`, because the admission it needs is refused by the same state that
+answered. The reply is written before the shutdown fires and after the teardown its mode owes, so a `Force` reply
+arrives only once every child is reaped. Unlike the rest of the family, `Stop` is admitted in the `Setup` phase alone:
+its reply is the last frame its connection writes.
 
-  Each ceiling is a `Limit`, itself a required oneof of `uint64 bounded` and `Unlimited unlimited`: `bounded: 0` is a
-  resource nothing may hold, which is not what "felis budgets no ceiling here" means, so neither reading can stand in
-  for the other. A `Limit` with no arm, or a `Limit` message absent where the arm declares one, is refused at decode.
-
-  The `felis daemon status` rendering of the same arms, including the omitted key in `--format json`, is in
-  [cli.md](cli.md) "Daemon status", which also carries the normative per-resource meanings. Every number is **sampled**
-  as the reply is built, each subject read once and the subjects one after another, so a row is that set of samples
-  rather than one daemon-wide instant. The report has no session-count field and no grid row. Why the row names its
-  dimensions, why it samples rather than counts, and what earns a row are in
-  [control-surfaces.md](../explanation/architecture/control-surfaces.md#diagnostic-verbs); why the scope and its
-  ceilings are union arms is in
-  [the IPC design explanation](../explanation/architecture/ipc.md#typed-unions-for-mode-selecting-fields).
-
-  `draining` says whether this daemon has been asked to stop once it is empty (`Stop` below): while it holds, every
-  create is refused and the count the sessions row reports can only fall.
-
-- `Spawn { args: SpawnArgs }` / `Spawned { outcome: SpawnOutcome }` (`Ops` mode only, like every other mutation): create
-  a session this connection does not attach to; backs `felis sessions spawn` and the editor bridge's `sessions.spawn`.
-  `args` is the same `SpawnArgs` a `Session::Create` carries and the admission steps are identical ("Session (kind = 4)"
-  above). The reply is a two-arm outcome: `Ok { info: SessionInfo }`, the new session's full roster row, or
-  `Refused { reason: CreateFailure, detail }`. A spawn subscribes to nothing, so its vocabulary is the spawn half's
-  alone and the field's type says so; the attach-half reasons a `Session::AttachFailed` can also carry are not
-  representable here. A refusal is the reply, not a `ConnToClientMsg::Error`: the request failed, the connection did
-  not. Because every `Ops` request carries a `request_id`, several spawns may be in flight on one connection and each
-  reply is attributed by id.
-- `Stop { mode: StopMode }` / `StopReply { outcome: StopOutcome }` (`Ops` mode only): ask this daemon to exit; backs
-  `felis daemon stop`. `StopMode` is a three-arm union rather than a pair of flags, so no request can name two postures:
-  `IfEmpty`, `Force`, and `WhenEmpty`, each an explicit arm; an unset oneof is refused at decode. `StopOutcome` answers
-  in the same shape: `Stopping`, `Refused { sessions }`, or `Draining { sessions }`, where `sessions` counts what the
-  daemon admits: pooled sessions plus the creates in flight, the same number the sessions row of a `StatusReply`
-  carries.
-
-  An `IfEmpty` stop against a daemon holding anything is `Refused` and changes nothing; against an empty one it is
-  `Stopping`. `WhenEmpty` is `Draining` while sessions remain and `Stopping` when none do; `Force` destroys every
-  session and is always `Stopping`. Once a daemon is draining, a further `IfEmpty` or `WhenEmpty` `Stop` answers the
-  state it already reported: `Draining` while sessions remain, `Stopping` once none do. Those modes are therefore
-  idempotent, while `Force` escalates past the drain and destroys what is left. A `Create` or `Spawn` arriving meanwhile
-  is refused `DaemonDraining`.
-
-  The decision and the refusal are one critical section, which is what the verb exists for: a create cannot be admitted
-  after a stop was answered `Stopping`, because the admission it needs is refused by the same state that answered. The
-  reply is written before the shutdown fires, so the caller reads the outcome of a stop that then happens; the teardown
-  a mode owes runs first, which is why a `Force` reply arrives only once every child is reaped. Unlike the rest of the
-  family this pair is admitted in the setup phase alone: the reply is the last frame its connection writes.
-
-- `Upgrade { successor }` / `UpgradeReply { outcome: UpgradeOutcome }` (`Ops` mode only, setup phase alone, since minor
-  1): ask this daemon to replace its own binary in place while it keeps every session; backs `felis daemon upgrade`.
-  `successor` is the absolute path of the `felis-daemon` binary the daemon execs, named by the requester because the
-  running daemon's own executable is the one being replaced. `UpgradeOutcome` is a two-arm union, and an unset oneof is
-  refused at decode:
-  - `Upgrading`: written just before the daemon execs the successor. The connection then closes with the exec, so this
-    is the last frame it carries.
-  - `Refused { reason: UpgradeRefusal, detail }`: nothing was handed over, and the daemon keeps serving every session
-    and connection as before. `detail` is human-readable and never parsed.
-
-  `UpgradeRefusal` is a closed enum, and every value has the same remedy, drain-and-restart:
-
-  | Value            | Meaning                                                                |
-  | ---------------- | ---------------------------------------------------------------------- |
-  | `UNSUPPORTED`    | This platform has no in-place upgrade (Windows).                       |
-  | `DUMP_VERSION`   | The successor cannot read this daemon's dump version.                  |
-  | `PROTOCOL_MAJOR` | The successor does not serve the protocol major of a connected client. |
-  | `TIMEOUT`        | A step before the exec ran out of time.                                |
-  | `PROBE_FAILED`   | The successor rejected the dump's contents, or the exec failed.        |
-  | `BUSY`           | An upgrade is already running.                                         |
-  | `DRAINING`       | The daemon is draining toward stop (`Stop` above).                     |
-
-  The pair is a minor-1 addition ("The minor ledger" below): a client refuses before sending `Upgrade` to a daemon whose
-  effective minor is `0`, and a daemon never writes `UpgradeReply` on such a connection.
+**Upgrade.** `Upgrade` asks this daemon to exec a successor binary in place while it keeps every session. Like `Stop` it
+is admitted in `Setup` alone. Its reply is `Upgrading`, the last frame before the exec closes the connection, or
+`Refused`, after which the daemon keeps serving every session and connection as before; every `UpgradeRefusal` has the
+same remedy, drain and restart. The pair is a minor-1 addition ("The minor ledger" below): a client refuses before
+sending `Upgrade` to a daemon whose effective minor is `0`.
 
 ### Region (kind = 6)
 
 Client → daemon while attached, with the daemon's region replies: the region-export family, open to the `Window` and
 `Ops` modes; design in
 [scrollback.md "Piping to an external command"](../explanation/data-model/scrollback.md#piping-to-an-external-command)
-and [input.md "Action mapping"](../explanation/input.md).
+and [input.md "Action mapping"](../explanation/input.md). The messages are `RegionToDaemonMsg` and `RegionToClientMsg`
+in `felis.proto`.
 
 The daemon serializes and the requester routes. Only the daemon holds a grid, so only it can read a region; every sink
 runs on the requester's host, where the keymap that named the argv, the path and the pager lives
-([input.md "Which daemon runs the command"](../explanation/input.md#which-daemon-runs-the-command)). One source
-vocabulary serves both readers of a region: the keymap `pipe` chord asks for a stitched blob (`Request` / `Reply`) and
-`felis sessions capture` asks for the same region row by row (`Rows` / `Row` … `RowsDone`). The `run` action never
-reaches this family at all: it has no region to read, so the client creates its transient directly through
-`SessionToDaemonMsg::Create`. In wire-tag order:
+([input.md "Which daemon runs the command"](../explanation/input.md#which-daemon-runs-the-command)), so the sink never
+travels. The `run` action never reaches this family: it has no region to read, so the client creates its transient
+directly through `Session::Create`. One source vocabulary serves two conversations:
 
-- `Request { source: RegionSource, ansi }`: serialize the named region of the attached buffer, plain by default or with
-  reconstructed SGR when `ansi`; soft-wrapped rows are stitched into logical lines. The sink does not travel: the
-  requester remembers what it asked for, which is also what keeps a `clipboard` sink's provenance intact (see
-  [the design record](../explanation/architecture/ipc.md#pipe-to-clipboard-provenance)).
-- `Reply { data, position, exit_code }`: daemon → client, one frame per request, shipped to the **originating**
-  subscriber only: a region read is that user's action, not a session event. `data` is empty when the region was absent
-  or empty (no closed `OSC 133` range yet); the reply is unconditional so a requester waiting on it is never left
-  hanging.
+- `Request` → `Reply`, correlated by `request_id`: the region as one stitched blob, what the keymap `pipe` chord asks
+  for. The reply is unconditional, so a requester waiting on it is never left hanging. A stitched region is the only
+  daemon → client body with no bound of its own, so one past `MAX_REGION_REPLY_BYTES` is trimmed by the sender to its
+  youngest resumable boundary rather than refused
+  ([the design record](../explanation/data-model/scrollback.md#a-region-too-large-to-carry)).
+- `Rows` → `Row` … → `RowsDone`, a stream under the `Rows` frame's `stream_id` that one `ConnToClientMsg::End` or
+  `Error` closes: the same region row by row, oldest first, without the reply ceiling; the structural read behind
+  `felis sessions capture`. A `Cancel` stops the walk. `RowsDone` is the stream's last item, not its terminator: it
+  ships even for an empty or unresolved region, and as a trailer it is not in the terminal's `count`.
 
-  A stitched region is the only daemon → client body with no bound of its own, so one that serializes past
-  `MAX_REGION_REPLY_BYTES` ("Semantic limits") is trimmed by the sender to its youngest resumable boundary rather than
-  refused (see [the design record](../explanation/data-model/scrollback.md#a-region-too-large-to-carry)).
-  `felis sessions capture`'s row stream reads the same region without the ceiling. `position` is the region's viewport
-  anchor as 1-based stitched-logical-line coordinates (`top_line`, `cursor_line`, `cursor_column`), unset for the
-  `OSC 133` mark sources, which have none, and for a trimmed reply; the client turns it into the child's `FELIS_*`
-  position variables and the built-in pager's `+N` ([keybindings.md](keybindings.md)). `exit_code` is the code the
-  youngest `OSC 133 ; D` mark carried, set whenever a region resolved and that mark carried one.
-
-- `Rows { source, ansi, max_rows? }`: serialize the same region row by row instead, the structural read behind
-  `felis sessions capture`. It opens a stream: the `Row` items and the `RowsDone` item carry its `stream_id`, a `Cancel`
-  stops the walk, and one terminal closes it. The daemon encodes text itself, so a row consumer needs no cell codec:
-  plain `text` always ships, and `ansi` asks for each row's SGR reconstruction _beside_ it (one stream carries both
-  forms, which is what lets `capture --ansi --format jsonl` compose). `max_rows` emits only the youngest rows (still
-  oldest-first) without renumbering: the `--lines N` tail, cut daemon-side so the wire never carries rows the client
-  would drop.
-- `Row { row, text, ansi?, soft_wrap_continued }`: daemon → client, one region row, oldest-first, to the originating
-  subscriber only. `row` is the region's own coordinate space: scrollback rows are negative (`-1` the youngest retained
-  row), live grid rows count `0..rows`, and a mark-range row counts from `0` at the range's first row.
-  `soft_wrap_continued` ties the row to the one above as one logical line, so a consumer can stitch a wrapped URL / path
-  itself.
-- `RowsDone { exit_code? }`: daemon → client, the stream's **last item**, not its terminator: the terminal is the shared
-  `ConnToClientMsg::End` / `Error` that closes every stream. It ships even for an empty or unresolved region, because
-  `exit_code` (mirroring `Reply.exit_code`) is region data a family-agnostic terminal has no business carrying. It is a
-  trailer rather than a result, so it is not in the terminal's `count` and an empty region reports `0`.
-
-The rehydrate burst still precedes the row stream on the wire (any attach ships its markers); a capture client drains to
-`RehydrateEnd` before writing its request. Under the `Ops` mode that burst is empty of session content: the daemon
-serializes the region, so no grid is reconstructed client-side.
+Either answer goes to the **originating** subscriber only: a region read is that user's action, not a session event. The
+rehydrate burst precedes either on the wire, and a capture client drains to `RehydrateEnd` before writing its request;
+under the `Ops` mode that burst carries no session content, since the daemon serializes the region.
 
 ### Notify (kind = 7)
 
-Notification-observer connections: the `Observer` mode's whole surface, and a correlated stream like any other.
-`Subscribe` opens it, `Subscribed` / `Event` / `Lagged` are its items, and it ends in one `ConnToClientMsg::End` or
-`Error`. The subscription is endless by intent; having an explicit terminal lets consumers waiting for an event
-distinguish daemon shutdown from idle silence without relying on raw EOF (design in
-[notifications.md](../explanation/protocols/notifications.md)).
+Notification-observer connections: the `Observer` mode's whole surface, and a correlated stream like any other. The
+messages are `NotifyToDaemonMsg` and `NotifyToClientMsg` in `felis.proto`.
 
-- `Subscribe { session_prefix? }`: client → daemon, sent in place of an attach: the connection becomes an observer of
-  every session's desktop notifications instead of attaching. An optional lowercase-hex id prefix narrows the stream to
-  one session, resolved daemon-side like every `Ops` prefix. Backs `felis notifications subscribe`.
-- `Subscribed { filter: ResolvedId? }`: daemon → observer, the ack before the event stream. `filter` echoes the prefix
-  resolution (`None` when the subscribe carried no prefix), so a bad `--session` surfaces as a typed reply, never a bare
-  close. A prefix that resolves to nothing then ends the stream with `Error { reason: InvalidRequest }`.
-- `Event { session_id, notification, notify_id, session_title, cwd, attached }`: daemon → observer. One decoded desktop
-  notification (OSC 9 / 99 / 777) from any pooled session, carrying the shared `Notification { title, body, urgency }`
-  core plus the context the daemon already tracks. `attached` says whether a GUI is live on the session, so a consumer
-  can `notify-send` only the detached ones. felis decodes and relays; it never draws a banner. The wire field
-  `notify_id` is spelled `notification_id` at the CLI boundary: `felis notifications subscribe --format jsonl` emits the
-  key `notification_id` for this value.
-- `Lagged { missed }`: daemon → observer. The observer fell behind the daemon's shared notification ring and `missed`
-  events were dropped before it caught up. Loss under backpressure is the contract (the daemon never buffers unboundedly
-  for a slow reader), but it is never silent: the marker tells a consumer waiting on a specific event that it may be
-  among the missed.
+`Subscribe`, sent in place of an attach, turns the connection into an observer of every session's desktop notifications,
+optionally narrowed to one session by an id prefix the daemon resolves ("Ops (kind = 5)" above). The stream's items are
+`Subscribed` first, then any number of `Event`s and `Lagged` markers, and it ends in one `ConnToClientMsg::End` or
+`Error`. `Subscribed` echoes the prefix resolution, so a bad `--session` surfaces as a typed reply rather than a bare
+close; a prefix that resolves to nothing then ends the stream with `Error { reason: InvalidRequest }`. The subscription
+is endless by intent; the explicit terminal lets a consumer waiting for an event tell daemon shutdown from idle silence
+without relying on raw EOF (design in [notifications.md](../explanation/protocols/notifications.md)).
+
+Loss under backpressure is the contract: the daemon never buffers without bound for a slow observer, so one that falls
+behind the shared notification ring loses events. The loss is never silent: `Lagged` says how many were missed, so a
+consumer waiting on a specific event knows it may be among them. felis decodes and relays; it never draws a banner.
 
 ### Push (kind = 8)
 
-Daemon → client pushes. `Reattach`, `SessionExited`, and `RetargetHost` each move or alert a window, so the daemon sends
-them only to `Window` subscribers, and for the two relayed by an `OpsToDaemonMsg::Switch` only to the ones its `scope`
-names ("Ops (kind = 5)" above). `Evicted` goes to every subscriber: it is the last frame before the daemon closes the
-connection, and a scripted read wants the same notice a window does. In wire-tag order:
+Daemon → client pushes, uncorrelated; the messages are `PushMsg` in `felis.proto`. `Reattach`, `SessionExited`, and
+`RetargetHost` each move or alert a window, so the daemon sends them only to `Window` subscribers, and the two an
+`Ops::Switch` relays only to the windows its scope names ("Ops (kind = 5)" above). `Evicted` goes to every subscriber:
+it is the last frame before the daemon closes the connection after an `Ops::ForceDetach`, and a scripted read wants the
+same notice a window does. It is the daemon evicting, distinct from a client's own `Session::Detach`.
 
-- `Evicted { reason }`: the session this client streamed was force-detached by another process (an
-  `OpsToDaemonMsg::ForceDetach`); the client closes its window, the session survives. Distinct from the client-initiated
-  `SessionToDaemonMsg::Detach`: the daemon is evicting, not the client leaving.
-- `Reattach { id }`: another process asked (via an `OpsToDaemonMsg::Switch` carrying a `SwitchTarget::Session`) that
-  this client re-attach to the named session. The client runs its ordinary switch path, so the push cannot put a window
-  anywhere a switch chord couldn't.
-- `SessionExited { id }`: the session's shell exited (PTY EOF), sent just before the subscription is dropped so a window
-  client reads the close as an ending rather than as a lost transport. The window then takes its exit ladder, and closes
-  on the shell's last screen only when no rung of it lands
-  ([session-lifecycle.md](../explanation/architecture/session-lifecycle.md)). Only `Window` subscribers hear it; a
-  scripted `Ops` attach hears nothing and its channel simply closes, which already ends its verb.
-- `RetargetHost { target: RetargetTarget }`: another process asked (via an `OpsToDaemonMsg::Switch` carrying a
-  `SwitchTarget::Carrier`) that this window leave its current daemon and dial the carrier `target` describes. The client
-  detaches, dials, and attaches there, running the same sequential re-dial the switch path runs against one daemon (see
-  [session-lifecycle.md](../explanation/architecture/session-lifecycle.md)). Distinct from `Reattach` because the
-  payload is a carrier descriptor, not a session id, and the reaction re-dials rather than re-attaching in place. The
-  daemon relays `target` **verbatim**: it never inspects the host, socket, or args, so target validity is the client's
-  post-dial concern.
-
-  `RetargetTarget` is the carrier descriptor: two nested unions, so a combination that means nothing (an SSH destination
-  beside a local socket path, a session prefix beside a respawn command) cannot be written down.
-
-  **`carrier`** says how to reach the target daemon, and is **required**: an unset carrier is a malformed frame.
-  - `default_local`: the client's own default local socket. An empty message, since the sending daemon cannot name that
-    socket for the client.
-  - `local_endpoint: String`: an explicit local socket path.
-  - `ssh: SshEndpoint { destination, ssh_args }`: an SSH-stdio carrier. `destination` is passed verbatim to `ssh`
-    (`user@host`, a `~/.ssh/config` alias, an `ssh://user@host:port` URI) and `ssh_args` are tokens spliced between
-    `ssh` and the destination, uninterpreted. felis models no part of `ssh`'s grammar.
-
-  **`landing`** says what to do once the dial lands, and is **required**: "attach to nothing" and "create nothing" are
-  both non-behaviors, so an unset landing is a malformed frame:
-  - `attach: String`: a hex-id prefix of a session on the _target_ daemon, resolved by the client after dialing. A
-    prefix rather than a resolved id, because the sending daemon cannot resolve another daemon's namespace.
-  - `create: SpawnArgs`: create a fresh session there.
-
-  The CLI destination grammar mirrors these unions one-to-one ([cli.md](cli.md)). For cross-carrier re-dial design
-  rationale, see [session-lifecycle.md](../explanation/architecture/session-lifecycle.md).
+- `Reattach` moves the window to another session on this daemon. The client runs its ordinary switch path, so the push
+  cannot put a window anywhere a switch chord could not.
+- `SessionExited` precedes the drop of the subscription when the session's shell exits, so the window reads the close as
+  an ending rather than a lost transport and takes its exit ladder
+  ([session-lifecycle.md](../explanation/architecture/session-lifecycle.md)). A scripted `Ops` attach hears nothing; its
+  channel simply closes, which already ends its verb.
+- `RetargetHost` moves the window off this daemon: the client detaches, dials the carrier the `RetargetTarget`
+  describes, and lands there, through the same sequential re-dial its switch path runs. It is distinct from `Reattach`
+  because the payload is a carrier descriptor rather than a session id, and the reaction re-dials rather than
+  re-attaching in place. The daemon relays the descriptor verbatim and never inspects it, so target validity is the
+  client's post-dial concern. The descriptor's two unions, how to reach the daemon and what to land on, are both
+  required, and the CLI destination grammar mirrors them one-to-one ([cli.md](cli.md)).
 
 ### Input (kind = 1)
 
-Client → daemon, listed in wire-tag order:
+Client → daemon, uncorrelated, while attached; the messages are `InputMsg` in `felis.proto`. Search and region requests
+are not `Input` messages: each rides its own kind together with its replies.
 
-- `KeyBytes(Vec<u8>)`: literal bytes, forwarded to the PTY verbatim. What a caller means byte for byte:
-  `sessions send --raw`, the `send_string` action, a committed IME string, a file drop's path. A physical keystroke
-  rides `Key` instead. Capped at `MAX_RAW_INPUT_BYTES`.
-- `Paste(Vec<u8>)`.
-- `Mouse(MouseEvent)`: `{ button, action, mods, x, y, px, py }`. `x` / `y` are 1-based cell coordinates; `px` / `py` are
-  1-based pixel coordinates within the text area, which a window fills from the pointer's physical position. A sender
-  with no pointer (`felis sessions send --mouse`) leaves them `0`, and the daemon sets each `0` axis to the middle of
-  the pixels that map back to the event's cell at the ratio of the PTY winsize's pixel extent to its cell count. The
-  encoder picks the pair the active mouse encoding needs: cells for SGR (`?1006`), pixels for SGR-pixels (`?1016`).
-  Motion is reported at cell granularity (no separate sub-cell event). `mods` is a three-bit set (shift `1`, alt `2`,
-  ctrl `4`), the xterm mouse triple, with no Super bit.
-- `Resize { dims: GridDims }`: the window's full geometry, pixel dims included, as the client asks for it. The daemon
-  **clamps** it into the REQ-605a bounds and applies the clamped tuple; a resize is never refused and never ends the
-  connection, whatever the client reports. Pixel `0` stays `0` (unknown) rather than being raised to the pixel minimum.
-  The clamping runs over the whole `uint32` domain, before narrowing, so a value past 65535 is clamped like any other.
-- `FocusChange { focused }`: this window's own OS focus. The daemon reduces the per-window reports to a session-level
-  fact (focused iff any window subscriber is focused) and writes `CSI I` / `CSI O` (under `DECSET 1004`) only on that
-  session-level edge. A session whose shell has already exited is silent, on the same rule as the `DECSET 2031` report
-  below.
-- `ColorScheme { dark }`: the OS light/dark toggle observed by the client. Stored against the reporting subscriber and
-  resolved along the same candidate chain as `ConfigureTheme`, independently of it, to the preference `DSR ? 996 n`
-  answers with. When `DECSET 2031` is on the daemon reports `CSI ? 997 ; Ps n` to the PTY whenever a resolution
-  _changes_ that answer (a fresh report, an attach, a detach, or an ownership transfer, whoever supplied the new value)
-  and stays silent when it does not, so the re-report every client sends on attach reaches no program.
+The arms split by what reaches the child. The byte-carrying arms each encode to bytes for the PTY and reserve against
+the session's input budget ("Client → daemon: the input budget" below): `KeyBytes` and `Paste` carry literal bytes,
+while `Key` and `Mouse` are events the daemon encodes against the modes it has parsed (Kitty flags, DECCKM, DECKPAM,
+`modifyOtherKeys`, win32-input-mode, the mouse protocol and encoding), so the bytes follow the session's real state
+rather than the client's mirror of it (design in [input.md](../explanation/input.md) "Keyboard"; byte forms in
+[key-encoding.md](protocols/key-encoding.md)). The other arms change what the daemon holds for this window: its
+geometry, focus, color scheme, viewport, and grid-frame pull. A `Resize` is clamped into the REQ-605a bounds and
+applied, never refused, so it never ends the connection whatever the client reports.
 
-  A session whose shell has already exited is silent outright: the report still resolves for later queries, but the
-  daemon's own reports (this one and the focus edge above) are never written to a PTY past end of file. The rule covers
-  what the daemon sends on its own initiative, not what a user types: input still reaches the PTY, and a write that
-  fails there still ends the session.
+**Reports on a window's behalf.** `FocusChange` and `ColorScheme` are per-window reports the daemon resolves to one
+session-level fact: focused iff any window subscriber is focused, and the color scheme along the
+`Session::ConfigureTheme` candidate chain ("Session (kind = 4)" above), independently of the theme. The daemon writes
+`CSI I` / `CSI O` (under `DECSET 1004`) only on the session-level focus edge, and `CSI ? 997 ; Ps n` (under
+`DECSET 2031`) only when a resolution changes the preference `DSR ? 996 n` answers with, whoever supplied the new value,
+so the re-report every client sends on attach reaches no program. A session whose shell has already exited is silent:
+the resolution still answers later queries, but no report the daemon sends on its own initiative is written to a PTY
+past end of file. Input a user types still reaches the PTY, and a write that fails there still ends the session.
 
-- `Viewport { lines_from_bottom, anchor }`: scrollback viewport request. `anchor` echoes, unchanged, the anchor of the
-  browsing `ViewportState` the offset was computed from; the daemon re-expresses the offset by the rows output pushed
-  into scrollback since, so the request lands where the client meant it even when a newer `ViewportState` was in flight.
-  A request without an anchor counts from the current bottom. `0` is the live bottom whatever its anchor, and a client
-  sends it without one.
-- `JumpPrompt { direction }`: prompt-jump request: the daemon resolves the previous / next `OSC 133` prompt-start mark
-  to a viewport offset and replies through the normal `ViewportState` path.
-- `NextGridFrame`: demand-driven frame pull: the client asks for one coalesced grid diff covering everything dirty since
-  the last one (sent only on a connection whose `Hello` stated `pull_paced`; design in
-  [rendering/pipeline.md](../explanation/rendering/pipeline.md)). The daemon withholds grid diffs and ships one cycle
-  per pull, so the client's vsync paces emission. The cycle it answers is delimited by `GridMsg::CycleEnd` ("Grid (kind
-  = 2)" below), and the client holds the pull until that marker. Payload-free: the pull carries no acknowledgement
-  position, because the daemon keeps no per-subscriber frame count to compare one against.
-- `Key(KeyEvent)`: `{ key, text, mods, kind, location }`. `key` is a named key, the key's own character, or neither (a
-  dead key or bare modifier, which falls through to `text`); `text` is the text the OS composed for this keystroke,
-  absent when there is none; `mods` is a four-bit set (ctrl `1`, shift `2`, alt `4`, super `8`), wider than the
-  `InputMods` the mouse arm carries; `kind` is press, repeat, or release; `location` distinguishes the numpad, which
-  DECKPAM encodes differently.
+**Viewport.** `Viewport` requests an absolute scrollback offset, `ViewportStep` a relative one, and `JumpPrompt` the
+previous or next prompt-start mark; each is answered, when the view moves, through `Grid::ViewportState`. A `Viewport`
+echoes the anchor of the `ViewportState` its offset was computed from, and the daemon re-expresses the offset by the
+rows output pushed into scrollback since, so the request lands where the client meant it even when a newer
+`ViewportState` was in flight. A step counts from the viewport as the daemon holds it when the frame is handled, so a
+step sent before the previous one's `ViewportState` arrives still counts from it, which an absolute `Viewport` computed
+from the mirrored offset cannot.
 
-  The daemon encodes the event against the keyboard modes it has parsed (Kitty flags, DECCKM, DECKPAM,
-  `modifyOtherKeys`, win32-input-mode), so the bytes follow the session's real state rather than the client's mirror of
-  it (design in [input.md](../explanation/input.md) "Keyboard"; byte forms in
-  [key-encoding.md](protocols/key-encoding.md)).
-
-  `key`'s character is capped at `MAX_KEY_CHARACTER_BYTES` and `text` at `MAX_KEY_TEXT_BYTES` ("Semantic limits"): one
-  keystroke's worth. A frame past either cap is refused at admission, like an oversized `Paste`. Admission reserves
-  `MAX_KEY_REPORT_BYTES` against the session's input budget, the widest report any mode can produce, because the child
-  can flip modes between the reservation and the write.
-
-- `ViewportStep { rows }`: relative scrollback step: the daemon moves the viewport it holds for this subscriber, as it
-  stands when the frame is handled, by `rows` (positive toward history), clamped to the retained scrollback. A step that
-  moves the view surfaces as the next `ViewportState`; one clamped at either end moves nothing and earns none. A step
-  sent before the previous one's `ViewportState` arrives still counts from it, which an absolute `Viewport` computed
-  from the mirrored offset cannot.
-
-Search and region requests are not `Input` messages: each rides its own kind ("Search (kind = 9)" / "Region (kind = 6)")
-together with its replies.
+**Pull pacing.** On a connection whose `Hello` stated `pull_paced`, the daemon withholds grid diffs and ships one
+compose cycle per `NextGridFrame`, closed by `Grid::CycleEnd` ("Grid (kind = 2)" below); the client holds its pull until
+that marker, so its vsync paces emission ([rendering/pipeline.md](../explanation/rendering/pipeline.md)). The pull
+carries no acknowledgement position, because the daemon keeps no per-subscriber frame count to compare one against.
 
 ### Grid (kind = 2)
 
-Daemon → client, grouped by category: rehydrate framing, row content, cursor / viewport, session meta, events. The field
-numbers are in `felis.proto`.
+Daemon → client, uncorrelated, while attached: rehydrate framing, row content, cursor and viewport, session meta, and
+events. The messages are `GridMsg` in `felis.proto`.
 
-- `RehydrateBegin`, `RehydrateEnd`. The client blanks its shadow at the dimensions already announced (the
-  `SessionToClientMsg::Attached` or `SessionToClientMsg::Created` this burst answers, or the latest `Size`), so the
-  burst itself carries none. Both markers are sent on every attach, whatever the mode: they are the attach-ordering
-  barrier a client drains to before it writes its own first request.
+**The rehydrate burst.** Every attach, whatever the mode, gets `RehydrateBegin` … `RehydrateEnd`: the attach-ordering
+barrier a client drains to before it writes its own first request. The client blanks its shadow at the dimensions
+already announced (the `Session::Attached` or `Created` this burst answers, or the latest `Size`), so the burst itself
+carries none. What rides between the markers depends on `Hello.mode` ("Connection modes" above):
 
-  What rides _between_ them depends on `Hello.mode` ("Connection modes" above). A `Window` receives the whole session,
-  ordered for first-byte latency: the `Hyperlink` / `Cluster` entries the visible rows reference, then those cell rows +
-  `CursorState` (the visible terminal), then title / cwd / theme / Kitty-kbd flags, then images (`Header` → `Chunk`s →
-  `Complete`), then `Placement`s, then `RehydrateEnd`. Image bytes are the largest payload and go last so a cold attach
-  paints the grid at "round-trip + cells" rather than "round-trip + every image". The registry entries no visible row
-  names are not in the burst at all; they stream afterwards ("Registry delivery" below). The local path orders the same
-  way; over a 100 ms SSH round trip this ordering is what keeps a cold attach feeling instant.
-
-  Between the markers an `Ops` attach receives `KittyKbdFlags` and `ModeFlags` and nothing else: a one-shot verb reads
-  the session through the `Region` / `Search` reply it asks for, so rows, cursor, meta, the prompt marks already on the
-  grid, and the image store (up to `MAX_SESSION_IMAGE_BYTES`, read back out of the store to compose) would all be
-  content it decodes and drops. The two mode messages stay because `felis sessions send --key` encodes its chords
-  against them and `send --mouse` refuses an event `ModeFlags.mouse_protocol` says the program would not see
+- A `Window` receives the whole session, ordered for first-byte latency: the `Hyperlink` / `Cluster` entries the visible
+  rows reference, then those rows and `CursorState`, then title, cwd, theme, palette overrides and Kitty keyboard flags,
+  then images (`Image::Header` → `Chunk`s → `Complete`), then placements, then `RehydrateEnd`. Image bytes are the
+  largest payload and go last, so a cold attach paints the grid at "round trip + cells" rather than "round trip + every
+  image"; over a 100 ms SSH round trip this ordering is what keeps a cold attach feeling instant. The registry entries
+  no visible row names are not in the burst; they stream afterwards ("Registry delivery" below).
+- An `Ops` attach receives `KittyKbdFlags` and `ModeFlags` and nothing else: a one-shot verb reads the session through
+  the `Region` / `Search` reply it asks for. The two mode messages stay because `felis sessions send --key` encodes its
+  chords against them and `send --mouse` refuses an event the mouse protocol says the program would not see
   ([cli.md](cli.md)). Live `PromptMark` frames still reach an `Ops` subscriber after the burst, which is what
   `send --wait` blocks on.
 
-- `CycleEnd`: the terminator of one pull-paced compose cycle. A **cycle** is everything the daemon composed in answer to
-  one `NextGridFrame`: mode flags, prompt marks, viewport state, a scroll directive, the registry entries the rows
-  reference, one or more `RowDelta` frames, cursor state, and the registry tail, in that order. The marker follows all
-  of them, so exactly one arrives per non-empty cycle and nothing of that cycle follows it. An empty cycle ships nothing
-  at all, the marker included: the pull stays armed daemon-side and outstanding client-side, and the next dirty cycle
-  answers it. Only a subscriber whose `Hello` stated `pull_paced` receives one; an eager-push peer has no cycle to
-  close.
+**Compose cycles.** A **cycle** is what the daemon composes in one pass: mode flags, prompt marks, viewport state, a
+scroll directive, the registry entries the rows reference, one or more `RowDelta` frames, cursor state, and the registry
+tail, in that order. On a pull-paced connection each cycle answers one `Input::NextGridFrame` and ends in `CycleEnd`:
+exactly one per non-empty cycle, with nothing of that cycle after it. An empty cycle ships nothing at all, the marker
+included; the pull stays armed daemon-side and outstanding client-side, and the next dirty cycle answers it. The marker
+is what clears the client's outstanding pull and releases its grid paint, so no redraw source (a pending redraw, a
+cursor blink, an animation tick, a facet push) can put a cycle's `Scrolled` on screen without the rows and cursor that
+follow it. An eager-push peer receives no `CycleEnd`. The rehydrate burst is the other boundary and keeps its own: it
+ships eagerly at attach, answers no pull, and ends at `RehydrateEnd`.
 
-  The marker is what clears the client's outstanding pull and what releases its grid paint, so no redraw source (a
-  pending redraw, a cursor blink, an animation tick, a facet push) can put a cycle's `Scrolled` on screen without the
-  rows and cursor that follow it. Payload-free, for the reason `NextGridFrame` is ("Input (kind = 1)" above). The
-  rehydrate burst is the other boundary and keeps its own: it ships eagerly at attach, answers no pull, and ends at
-  `RehydrateEnd`.
+**Scroll directives.** The daemon emits a `Scrolled` for every scroll of the scrolling region (a line feed, `IND`, `NEL`
+or `RI` at a margin, `SU`, `SD`) and for `IL` / `DL`, whose band runs from the cursor row to the bottom margin, whether
+or not the band holds rows written in the same cycle; a band narrowed by DECSLRM left and right margins ships as rows
+instead. The client's shadow performs the same shift, and the cycle's `RowDelta` then carries the vacated rows and the
+rows written since, which are the rows the shift does not reproduce. Consecutive shifts of one band in one direction
+fold into one directive, and a directive whose whole band the `RowDelta` restates is not sent. A vacated row that the
+`RowDelta` restates with anything but default cells is preceded in the same batch by an entry of default cells for that
+row. The pending directive queue is cleared on rehydrate, since the burst restates the grid outright. A region or count
+outside the announced grid closes the attachment, and the daemon's send-side rules across a resize are stated with it
+("Grid admission" above).
 
-- `RowDelta { rows }`: one frame and one socket write per diff cycle, carrying a `(row, packed_cells)` entry per dirty
-  row. A single dirty row is a one-entry batch; the many-row cycles (full-screen redraw, resize replay, rehydration) are
-  what the shape is for. Entries apply in vector order: a later entry for a row overrides an earlier one. A cycle whose
-  rows would together approach the frame ceiling (REQ-105) splits across consecutive frames instead; rows are keyed by
-  index and apply independently, so the reader reaches the same screen.
-- `Scrolled { region_top, region_bottom, n_rows, direction }`: whole-row shift of the band `region_top..=region_bottom`
-  instead of per-row diffs. The daemon emits one for every scroll of the scrolling region (a line feed, `IND`, `NEL` or
-  `RI` at a margin, `SU`, `SD`) and for `IL` / `DL`, whose band runs from the cursor row to the bottom margin, whether
-  or not the band holds rows written in the same cycle. A band narrowed by DECSLRM left and right margins ships as rows
-  instead. `direction` is `Up` / `Down` and `n_rows >= 1`.
-
-  The client's shadow performs the same in-place row shift via `apply_scroll_directive`, filling the vacated rows with
-  default cells, and the cycle's `RowDelta` then carries the vacated rows and the rows written since, which are the rows
-  the shift does not reproduce. Consecutive shifts of one band in one direction fold into one directive; a directive
-  whose whole band the `RowDelta` restates is not sent. A vacated row that the `RowDelta` restates with anything but
-  default cells is preceded in the same batch by an entry of default cells for that row. A region or count outside the
-  announced grid closes the attachment ("Grid admission" above). The pending scroll-directive queue is cleared on
-  rehydrate (the burst restates the grid outright).
-
-- `Cluster { id, text }`: grapheme-cluster registry entry
-  ([grid-and-cells.md](../explanation/data-model/grid-and-cells.md)). Cells holding a multi-codepoint cluster carry a
-  `NonZeroU32` id on their `RowDelta` instead of the text; the daemon ships each `Cluster` **before** any `RowDelta`
-  that references it ("Registry delivery" below). Mirrors `Hyperlink`. `text` is at most 128 bytes (the daemon's fold
-  cap), and ids run to 131 072 (the daemon's per-grid table cap). A client refuses id 0, an id past the cap, and
-  over-cap text: a table it grew to an arbitrary id would be an allocation the sender chooses.
-- `Hyperlink { id, anchor, uri }`: hyperlink registry entry from `OSC 8`, shipped **before** any `RowDelta` that
-  references it (same delivery rule as `Cluster`).
-- `CursorState { row, col, visible, style, blink }`: the coordinate is inside the announced grid whether or not the
-  cursor is visible, a hidden cursor standing somewhere as much as a visible one ("Grid admission" above). A `DECTCEM`
-  change is another `CursorState`, not a flag on some other message.
-- `ViewportState { lines_from_bottom, max, anchor }`: scrollback-viewport mirror; `lines_from_bottom` is at most `max`.
-  A browsing offset stays on its lines as output arrives: it grows by the rows pushed into scrollback, clamped to the
-  retained history. A resize, `CSI 3 J` or a screen switch returns it to `0`, the live bottom, since no line it showed
-  is known to survive one. `anchor` is the opaque `ViewportAnchor` the offset is expressed against, present exactly
-  while `lines_from_bottom > 0`, and a new one ships whenever it changes, including an eviction that leaves both numbers
-  unchanged.
-- `Size { dims }`: authoritative (post-clamp, REQ-605a) grid dimensions changed mid-stream; see mirroring in
-  [session-lifecycle.md](../explanation/architecture/session-lifecycle.md). Either the active mirror resized the PTY, or
-  another mirror owns the size and this message corrects this client's own `InputMsg::Resize`. The shadow resizes to
-  match and the renderer letterboxes the difference; cell content rides the normal `RowDelta` replay. No rehydrate is
-  needed as dimensions are the only data exchanged.
-- OSC-sourced session meta:
-  - `Title { value }`.
-  - `Cwd { value }`.
-  - `PromptMark { line, kind, exit_code }` (absolute line).
-  - `ThemeColor { channel, action }`: `action` is an explicit `Set { rgb }` / `Reset` oneof, as `PaletteColor` carries.
-  - `PointerShape { name }`: a sanitized CSS cursor keyword the client maps to a `winit::CursorIcon`; `None` resets to
-    the default arrow.
-  - `KittyKbdFlags { flags }`.
-  - `ModeFlags { … }`: the mode-bit mirror.
-    - `mouse_protocol` is a `MouseProtocol` enum, `Off` / `ButtonEvents` (`?1000`) / `ButtonAndDrag` (`?1002`) /
-      `AnyMotion` (`?1003`).
-    - `modify_other_keys` is a `ModifyOtherKeys` enum, `Off` / `Level1` / `Level2`, the xterm `CSI > 4 ; Pv m` levels; a
-      higher `Pv` is clamped to `Level2` at the parser.
-    - The remaining six are bools: `bracketed_paste` (`?2004`), `alt_screen` (`?1049`), `application_cursor` (`?1`
-      DECCKM), `application_keypad` (`ESC =` / `ESC >`, DECKPAM / DECKPNM), `win32_input_mode` (`?9001`), and
-      `reverse_video` (`?5` DECSCNM, which the renderer XORs with each cell's SGR 7).
-- Indexed palette: `PaletteColor { index, action }`, one `OSC 4` set or one `OSC 104 ; idx` reset. `index` is `0..=255`;
-  `action` is an explicit `Set { rgb }` / `Reset` oneof, so a malformed frame cannot decode as a reset. An `OSC 4`
-  carrying several `idx ; spec` pairs emits one message per pair. `PaletteResetAll` is the bare `OSC 104`: distinct from
-  a per-index reset, and it leaves the `ThemeColor` channels alone. The whole override layer replays on rehydrate,
-  ascending by index; no row payload carries a palette entry, since a cell names an index rather than a color.
-- Events: `Attention { source }`, the session asking for the user's attention. `source` is an `AttentionSource`: `Bell`
-  (BEL events coalesced into one per cycle) or `Notification` (a desktop notification fired on this _attached_ session;
-  the content goes to observers via `NotifyToClientMsg::Event`, not here, and this source reaches window subscribers
-  only, [notifications.md](../explanation/protocols/notifications.md)). The client's response is the same non-disruptive
-  window-attention request for either source; the enum keeps them distinguishable for a client that later wants to style
-  them apart.
-- `ClipboardSet { selection, data }`, a program's `OSC 52` clipboard write (distinct from a `RegionToClientMsg::Reply` a
-  `pipe → clipboard` chord asked for, which is the user's own action). `selection` is a `ClipboardSelection` bitmap (bit
-  0 `c`, the system clipboard; bit 1 `p`, X11 PRIMARY) riding a `uint32` on the wire like the other bitflags; unknown
-  bits are dropped on decode. Unlike the other facets this message is not broadcast: the daemon sends it to the
-  initiating (active) subscriber only: per-client clipboard scope,
-  [security-model.md](../explanation/security-model.md).
+**Session meta and events.** Title, cwd, prompt marks, theme and palette overrides, pointer shape, the Kitty keyboard
+flags, and the mode-bit mirror are facets the daemon sends as they change; the palette override layer replays on
+rehydrate, and no row payload carries a palette entry, since a cell names an index rather than a color. `Attention` asks
+for the user's attention on a BEL or on a desktop notification fired on this attached session, whose content goes to
+observers ("Notify (kind = 7)" above); the client answers either with the same non-disruptive window-attention request.
+`ClipboardSet`, a program's `OSC 52` write, is the one facet not broadcast: the daemon sends it to the initiating
+(active) subscriber only, per-client clipboard scope ([security-model.md](../explanation/security-model.md)). It is
+distinct from a `Region::Reply` a `pipe → clipboard` chord asked for, which is the user's own action.
 
 #### Registry delivery
 
-`Cluster` and `Hyperlink` carry the two id registries a `RowDelta` addresses by handle. One rule governs both, on the
+`Cluster` and `Hyperlink` carry the two id registries a `RowDelta` addresses by handle. A cluster's text and id are
+bounded by the daemon's fold and table caps (REQ-602; "Semantic limits" above). One rule governs both registries, on the
 attach burst and on every diff alike: **the daemon sends every entry a row references before that row**, and sends no
 entry twice to the same connection.
 
@@ -1454,143 +1098,90 @@ The argument for this ordering is in [grid-and-cells.md](../explanation/data-mod
 
 #### Row codec
 
-When a row is dirty and ships to the client, felis encodes this content:
-
-```
-Row {
-    graphemes:           [Grapheme],       // one per column
-    attr_runs:           [(len, Attributes, link)],
-    sized_cells:         [(col, Sizing)],  // OSC 66 side-band
-    soft_wrap_continued: bool,
-}
-```
-
-The byte layout is specified on its own page: [Row codec](row-codec.md) is the normative, language-neutral specification
-of the `packed_cells` bytes: field order and widths, the grapheme and attribute-run encodings, the limits checked before
-any allocation, the decoding rules, and the golden vectors every implementation must reproduce. Where that page and this
-one could be read as disagreeing, that page is right. What follows here is the message-family view (what the field
-carries and why it is shaped that way), not a second description of the bytes. The Rust implementation is
-`crates/felis-grid/src/wire.rs`, hand-written in both directions with no serde derive on the path, so a type refactor
-cannot move the bytes silently.
+A `RowDelta` entry's `packed_cells` is one row's cells in the felis row codec: per column a grapheme, the attribute and
+hyperlink runs over them, the OSC 66 sized-cell band, and the row's soft-wrap bit, which the shadow mirrors so a
+client-side triple-click stitches logical lines. [Row codec](row-codec.md) is the normative, language-neutral
+specification of those bytes, with its golden vectors; where it and this page could be read as disagreeing, that page is
+right. The Rust implementation is `crates/felis-grid/src/wire.rs`.
 
 The payload is opaque to `felis-protocol` and to the schema: `felis.proto` declares `packed_cells` a `bytes` field and
-the protocol crate never interprets it. Ownership sits in `felis-grid`, one crate below the protocol boundary.
+the protocol crate never interprets it. Attributes and sizings ship **resolved**, never as the grid-local handles a cell
+holds in memory, so each side interns into its own tables and neither's registry maintenance is visible to the other
+([grid-and-cells.md "Style interning"](../explanation/data-model/grid-and-cells.md#style-interning)). Clusters and
+hyperlinks are the exception: a row names them by handle, and the registries above deliver the entries. For the codec's
+design rationale and benchmarks, see [ipc.md](../explanation/architecture/ipc.md).
 
-Attributes and sizings ship **resolved**, never as the grid-local handles a `Cell` holds in memory: ids are grid-local,
-so the daemon resolves `StyleId → Attributes` on encode and the shadow re-interns `Attributes → StyleId` into its own
-table on decode. Each side interns into its own tables and neither's registry maintenance is visible to the other; see
-[grid-and-cells.md "Style interning"](../explanation/data-model/grid-and-cells.md#style-interning). Decoded cells carry
-`sizing: None`; the caller stamps OSC 66 handles from the `sized_cells` band; see
-[grid-and-cells.md](../explanation/data-model/grid-and-cells.md). The `soft_wrap_continued` bit rides the row payload
-([Row codec](row-codec.md) states where it sits and why), and the shadow mirrors it so client-side triple-click stitches
-logical lines.
+The payload's leading `version` byte is the version handle: a later codec lands as version 2, leaving version 1
+decodable as the documented codec for any second reader. The byte is invisible to the protobuf envelope but not to the
+row decoder, which rejects a version it does not implement rather than skipping past it. The tag identifies; the
+effective minor authorizes: a new codec version is an addition gated on the minor like any other, so a sender never
+writes a version the other peer's minor does not define ("Versioning" below).
 
-Attributes are run-length encoded: a uniform row collapses to a single attribute run, so the pen serializes once per
-row, while the per-column grapheme stream stays a cheap 1–2 byte record per cell. Decode enforces that the runs cover
-exactly as many columns as there are graphemes, so a malformed body errors at the frame boundary rather than silently
-dropping or duplicating cells. For row codec design rationale and benchmarks, see
-[ipc.md](../explanation/architecture/ipc.md).
-
-The payload's leading `version` byte is the version handle: a later codec (columnar, attribute dictionary,
-delta-against-previous-row) lands as version 2, leaving version 1 decodable as the documented codec for any second
-reader. The byte is invisible to the protobuf envelope (`packed_cells` stays opaque `bytes`) but not to the row decoder,
-which rejects a version it does not implement rather than skipping past it. The tag identifies; the effective minor
-authorizes: a new codec version is an addition gated on the minor like any other, so a sender never writes a version the
-other peer's minor does not define ("Versioning" below).
-
-The session task encodes a row **once per ship cycle** and fans the shared `GridMsg` out to the mirrored subscribers
-owed it. Every composition in a cycle reads the grid under one hold of its lock, and the cache starts empty each cycle,
-so no payload outlives the grid it was encoded from. A client that cannot decode the packed payload does not mirror the
-grid at all: it reads the session through `sessions.capture` on the stdio bridge, whose rows are text the daemon
-rendered ("CLI clients" below).
+A client that cannot decode the packed payload does not mirror the grid at all: it reads the session through
+`sessions.capture` on the stdio bridge, whose rows are text the daemon rendered ("CLI clients" below).
 
 ### Image (kind = 3)
 
-Daemon → client. Bytes stream as `Header { id, target }` → `Chunk { id, bytes }`\* → `Complete { id }`:
+Daemon → client, uncorrelated, while attached: the Kitty graphics store and its placements
+([kitty-graphics.md](protocols/kitty-graphics.md)). The messages are `ImageMsg` in `felis.proto`.
 
-- `Header` opens a transfer and its `target` says what the bytes become. `New { width, height, format }` is a fresh
-  image under `id`, replacing whatever the id held, animation frames included. `Frame { number }` is one frame of an
-  image already transferred, in Kitty's 1-based numbering: `1` re-transmits the root frame in place, `number` in
-  `2..=frames + 1` edits that frame or appends when it is one past the last. A frame inherits the image's geometry and
-  cannot restate it, so the root has exactly one encoding and frame `0` does not decode.
-- The byte count a transfer must deliver never travels the wire: felis ships coalesced frames, so every buffer of an
-  image is `width × height × bytes_per_pixel` and the geometry states it once. That product is the header's allocation
-  claim and is admitted on decode against `MAX_IMAGE_BYTES` (computed saturating, since nothing bounds the two axes on
-  their own), and a `Frame` number against `MAX_IMAGE_FRAMES`. A client mirroring the store also holds its total to
-  `MAX_SESSION_IMAGE_BYTES` ("Semantic limits" above).
-- **One transfer at a time, chunks in order.** `Chunk` appends at the open transfer's own byte count and `Complete`
-  closes it. Both name the transfer's `id` as a cross-check. Nine sequences are malformed and end the connection,
-  connection-locally:
-  - a `Header` while a transfer is open;
-  - a `Frame` for an id the receiver holds no image for;
-  - a `Frame` number past the append point;
-  - a number past `MAX_IMAGE_FRAMES`;
-  - a `Chunk` or `Complete` with no transfer open;
-  - a `Chunk` or `Complete` naming another id;
-  - a `Chunk` carrying more bytes than the geometry accounts for;
-  - a `Complete` whose chunks fell short of it;
-  - a header whose claim is over either cap.
+**Transfers.** Bytes stream as `Header` → `Chunk`\* → `Complete`, one transfer at a time, chunks in order. A `Header`'s
+target is a fresh image (`New`, replacing whatever the id held, animation frames included) or one frame of an image
+already transferred (`Frame`, in Kitty's 1-based numbering). The byte count a transfer must deliver never travels the
+wire: felis ships coalesced frames, so every buffer of an image is `width × height × bytes_per_pixel` and the geometry
+states it once. That product is the header's allocation claim and is admitted on decode against `MAX_IMAGE_BYTES`
+(computed saturating, since nothing bounds the two axes on their own), and a `Frame` number against `MAX_IMAGE_FRAMES`.
+A client mirroring the store also holds its total to `MAX_SESSION_IMAGE_BYTES` ("Semantic limits" above).
 
-  A zero-length `Chunk` is a legal no-op. A `Complete` is therefore the proof the buffer is whole: the receiver never
-  zero-fills a shortfall and never normalizes a malformed sequence. `Delete` of the image a transfer is open on aborts
-  that transfer.
+`Chunk` appends at the open transfer's own byte count and `Complete` closes it; both name the transfer's `id` as a
+cross-check. Nine sequences are malformed and end the connection, connection-locally:
 
-- `Delete { id }`: drop an image and its placements. It also carries the store's own evictions: an image the daemon
-  dropped to fit a new transmission or animation frame is announced the same way, so a mirror's byte total tracks the
-  daemon's.
-- `Placement { image_id, placement_id, anchor_row, anchor_col, cols, rows, source, z_index, requested }` /
-  `PlacementRemoved { image_id, placement_id }`. `cols` and `rows` are the resolved cell extent; `requested` carries the
-  `c=` and `r=` the put asked for, `0` for an automatic axis, so the renderer can draw an automatic axis at the image's
-  aspect ratio rather than stretched to whole cells. A minor-0 daemon leaves `requested` unset.
-- `VirtualPlacement { image_id, placement_id, cols, rows, z_index }`: a Kitty Unicode-placeholder placement (`U=1`). The
-  image is not grid-anchored; the producer paints `U+10EEEE` placeholder cells (carrying per-cell row/column diacritics,
-  the image id, and the placement id in the underline color) wherever it wants tiles drawn, and this message only
-  carries the cell extent so the renderer can size each tile. `placement_id` is the producer's `p=` or an id the daemon
-  assigned to a put without one, and shares the key space of `Placement`'s, so `PlacementRemoved` removes a virtual
-  placement too. An upsert under `(image_id, placement_id)`, or under `image_id` alone when the id is unset, as a
-  minor-0 daemon sends it and a minor-0 window receives it. Replayed in table order in the attach rehydrate burst after
-  the image bytes, removed and re-stated across alt-screen switches with the rest of the screen's placements, and
-  dropped with its image (`Delete`).
-- `ShowFrame { id, number }`: display a frame of image `id` now, in the same 1-based numbering the `Frame` target uses.
-  Playback timing stays on the daemon: its animation timer emits one `ShowFrame` per advance (and one on reattach to
-  restore the live frame), so no per-frame gap travels the wire. Unlike the transfer messages this one is tolerant of a
-  frame the receiver does not hold: the daemon collapses superseded transmissions, so a rehydrate can name a frame a
-  later eviction in the same drain removed.
-- `PlacementsShifted { lines }`: every placement's anchor shifted up by `lines` because the live region pushed that many
-  rows into scrollback. The client replays the shift on its placement mirror; placements whose anchor left the retained
-  scrollback get an explicit `PlacementRemoved`.
+- a `Header` while a transfer is open;
+- a `Frame` for an id the receiver holds no image for;
+- a `Frame` number past the append point;
+- a number past `MAX_IMAGE_FRAMES`;
+- a `Chunk` or `Complete` with no transfer open;
+- a `Chunk` or `Complete` naming another id;
+- a `Chunk` carrying more bytes than the geometry accounts for;
+- a `Complete` whose chunks fell short of it;
+- a header whose claim is over either cap.
+
+A zero-length `Chunk` is a legal no-op. A `Complete` is therefore the proof the buffer is whole: the receiver never
+zero-fills a shortfall and never normalizes a malformed sequence. A `Delete` of the image a transfer is open on aborts
+that transfer.
+
+**Store and placements.** `Delete` drops an image with its placements and also announces the daemon's own evictions, so
+a mirror's byte total tracks the daemon's. `Placement` and `VirtualPlacement` are upserts that `PlacementRemoved`
+removes, and `PlacementsShifted` moves every anchor when the live region pushes rows into scrollback; a placement whose
+anchor leaves the retained scrollback gets an explicit `PlacementRemoved`. The attach burst replays the image bytes,
+then the placements in table order; placements are removed and restated across alt-screen switches with the rest of the
+screen. `ShowFrame` drives animation: playback timing stays on the daemon, which emits one per advance and one on
+reattach, so no per-frame gap travels the wire. Unlike the transfer messages it tolerates a frame the receiver does not
+hold, since the daemon collapses superseded transmissions and a rehydrate can name a frame a later eviction in the same
+drain removed.
 
 ### Search (kind = 9)
 
-Bidirectional on the _attached_ connection: the whole REQ-607 search conversation. Open to the `Window` and `Ops` modes:
-the search overlay and `felis sessions search` drive the same conversation. In wire-tag order:
+Bidirectional on the _attached_ connection: the whole REQ-607 search conversation, open to the `Window` and `Ops` modes,
+so the search overlay and `felis sessions search` drive the same conversation. The messages are `SearchToDaemonMsg` and
+`SearchToClientMsg` in `felis.proto`.
 
-- `Query { query, options, source }`: client → daemon, opening a stream. Walk the rows `source` names and stream the
-  hits. `SearchSource::SCROLLBACK`, which an absent field also means, walks retained scrollback plus the live primary
-  screen, stitched across the seam; while the alternate screen is active its live pass is skipped.
-  `SearchSource::VISIBLE` walks the live grid alone, alternate screen included, and never stitches into scrollback, so
-  every `line_index` it reports is a grid row (`>= 0`); its rows still stitch among themselves by their own soft-wrap
-  bits. `UNSPECIFIED` is refused at decode. Either walk runs in slices, releasing the session lock between them, so a
-  `Cancel` for this `stream_id` stops it mid-flight and a keystroke on the same session is not queued behind it. The
-  visible walk resumes at a row position, as `Rows` does, so a slice reads the rows as they stand when it runs: a row
-  repainted behind the walk is not revisited. Each slice also bounds how many items it _enqueues per turn_, so a
-  scrollback-wide match set never lands as one burst. That bounds the burst, not the outbox: the outbox itself is
-  unbounded and gauged by bytes in flight, and a search that outruns its reader is cut by that gauge like any other
-  backlog ("Backpressure" below).
-- `Match { line_index, text, byte_spans, col_spans, anchor }`: daemon → client, one frame per hit logical line:
-  soft-wrapped rows arrive stitched, `line_index` is the hit line's **topmost** row, `text` the stitched logical line,
-  and `col_spans` a list of paintable `(row, col_start, col_end)` segments; a match that crosses a wrap edge contributes
-  one segment per touched row, so segments are not 1:1 with `byte_spans`. `anchor` is the `ViewportAnchor` the rows
-  count from, so a client can re-express a hit against the anchor of the view it shows, and request a viewport onto it
-  with the hit's own anchor. Each `Match` carries the query's `stream_id`.
+`Query` opens a stream under its `stream_id`, and each `Match` carries that id. The family has no terminator of its own:
+a search stream ends in the shared `ConnToClientMsg::End { count }` or `Error`, like every other stream, and a `Cancel`
+stops a running walk.
 
-The family has no terminator of its own: a search stream ends in the shared `ConnToClientMsg::End { count }` or `Error`,
-like every other stream.
+The walk runs in slices, releasing the session lock between them, so a `Cancel` stops it mid-flight and a keystroke on
+the same session is not queued behind it. The scrollback walk, the default source, covers retained scrollback plus the
+live primary screen, stitched across the seam, and iterates newest-first: live bottom up, then scrollback youngest to
+oldest; while the alternate screen is active its live pass is skipped. The visible walk covers the live grid alone,
+alternate screen included, top-down, and never stitches into scrollback; it resumes at a row position, as `Region::Rows`
+does, so a row repainted behind the walk is not revisited. Each slice also bounds how many items it _enqueues per turn_,
+so a scrollback-wide match set never lands as one burst. That bounds the burst, not the outbox: a search that outruns
+its reader is cut by the outbox gauge like any other backlog ("Backpressure" below).
 
-`line_index` follows REQ-608's negative-from-top convention: `-1` is the youngest scrollback row, `-N` older; a live row
-reports its grid row index (`>= 0`). A seam-straddling hit anchors at its topmost (scrollback) row and its `col_spans`
-carry rows of both signs. The scrollback walk iterates newest-first: live bottom up, then scrollback youngest to oldest.
-The visible walk iterates top-down. For search matcher design and limits, see
+One `Match` covers one hit logical line, soft-wrapped rows stitched, and a match that crosses a wrap edge contributes
+one highlight segment per touched row. Row indices follow REQ-608's negative-from-top convention; a seam-straddling hit
+anchors at its topmost (scrollback) row, and its segments carry rows of both signs. For matcher design and limits, see
 [scrollback.md "Search"](../explanation/data-model/scrollback.md#search). Why search rides the attached connection
 rather than `Ops` is in [the IPC design explanation](../explanation/architecture/ipc.md#kind-or-arm).
 
@@ -1606,101 +1197,20 @@ in [control-surfaces.md](../explanation/architecture/control-surfaces.md).
 
 The verbs ride the families documented under ["Message families"](#message-families) above: the `Ops` requests (`list`,
 `info`, `kill`, `evict`, `switch`, `tag`, `spawn`), and the `Search` / `Region` conversations for `search` and
-`capture`, with the gating, reply fields, and design-record links stated per family there. A connection is persistent
-and multiplexed, so a driver may keep one open and run several requests and streams over it, each correlated by its own
-id. The CLI itself still opens one connection per invocation: a one-shot process has one operation to run and exits, so
-nothing is left to multiplex. That is an implementation choice, not a wire constraint.
+`capture`, with the gating and design-record links stated per family there. A connection is persistent and multiplexed,
+so a driver may keep one open and run several requests and streams over it, each correlated by its own id. The CLI
+itself still opens one connection per invocation: a one-shot process has one operation to run and exits, so nothing is
+left to multiplex. That is an implementation choice, not a wire constraint.
 
-A `tag` write does not wake a parked session: the daemon mutates the session's shared meta directly, with no owner-task
-round-trip, and the labels ride back to every reader in `SessionInfo.tags`.
-
-`SessionInfo` (the row in an `OpsToClientMsg::Listed` roster) carries `id`, `dims` (a `GridDims`: the session's
-effective geometry, pixel dims included where a client has reported them), `title`, `cwd`, `spawn_cwd`, `idle_seconds`,
-and `sequence`, plus the `tags` above and two daemon-_derived_ annotations for the fzf/marginalia picker. `sequence` is
-required; the optional fields are omitted from the machine framing when absent:
-
-- `title` (`string`): the session's most recent `OSC 0`/`2` window title, absent until a program sets one. With `cwd`
-  below, it is what `felis __complete-sessions` renders as a completion's description.
-- `cwd` (`string`): the session's most recent `OSC 7` working directory, absent from a shell without the integration.
-- `spawn_cwd` (`string`): the absolute directory the daemon started the session's child in, fixed at creation: the
-  `SpawnArgs.cwd` the session was created with, as sent, or the daemon's own cwd when that field was empty or a default
-  shell fell back from an unusable one (`SpawnArgs` below). Unlike `cwd`, it never follows the program, so a program
-  that sends no `OSC 7` still has one. Absent when the daemon does not know it: its own cwd was not UTF-8, or the
-  session crossed an in-place upgrade from a daemon that did not record it. A minor-1 peer skips it as an unknown field
-  (the minor ledger below).
-- `idle_seconds` (`u64`): seconds since the session's last detach, evaluated at list-build time. **Absent while the
-  session is attached**, which is its one meaning for "attached": a present `0` is a session detached for under a
-  second. A picker that reaps by age therefore tests presence as well as magnitude
-  ([reap-sessions.md](../how-to/reap-sessions.md)).
-
-- `sequence` (`u64`, 1-based, **required**): the daemon-assigned creation sequence, monotonic over the daemon's
-  lifetime, stamped once when the session is created and never reassigned, so a reap leaves a gap rather than handing
-  its place to the next creation. A `0` is refused (`WireError::MalformedField`), and since an omitted field writes `0`
-  a row without a sequence is refused on the same rule: every row a daemon lists carries one. It is the order a window's
-  `switch_session` chords step through, which random `u128` ids cannot provide (see the session picker discussion in
-  [session-lifecycle.md](../explanation/architecture/session-lifecycle.md)). `Listed` stays in daemon recency order (the
-  order `felis sessions list` prints); consumers that want ring order can sort by `sequence`.
-
-- `last_notification`: the session's most recent decoded OSC 9/99/777 desktop notification
-  (`{ notification: { title?, body, urgency }, age_seconds }`), stashed in `SessionMeta` by the notification fan-out
-  (even while parked) and age-stamped at list-build time. The one typed status a full-screen TUI agent (Claude Code)
-  emits, since it sets no OSC 133 prompt marks: the picker's "blocked / done" column.
-- `foreground`: the `comm` of the PTY foreground process group, both taken while the roster is built: `tcgetpgrp` on the
-  PTY master, then the name (`/proc/<pgid>/comm` on Linux, `proc_pidpath` on macOS). The column therefore names the
-  program that owns the terminal at query time even for a session that has produced no output since. Read from the OS
-  process table by pid, never the shell's output (principle 4).
-- `exited` (`bool`): the shell exited and the session is lingering in the post-exit grace, 5 s from the last detach
-  ([session-lifecycle.md](../explanation/architecture/session-lifecycle.md) "Post-exit reaping"). A client's automatic
-  pick must skip these (attaching one blocks the reap and nothing ever pushes the window off it); deliberate attaches
-  stay allowed, since viewing the corpse's final screen is what the grace is for.
-- `last_exit_code` (`u32`): exit code of the session's most recent completed command: the youngest retained OSC 133 `D`
-  mark's code, sampled from the grid into `SessionMeta` on each drain cycle. Absent when the shell sets no OSC 133 marks
-  (a full-screen TUI agent, a shell without integration), when nothing has completed yet, or when the youngest `D`
-  carried no code (an older mark's code is never substituted; it describes a different command). The typed "did it
-  succeed" signal for a scripted driver.
-- `attachments`: the session's live **window** attachments, oldest first,
-  `{ id: u64, attached_at: Timestamp, input_owner: bool }` each. Always present (empty for a parked session, and for one
-  only scripted `Ops` readers are on: an `Ops` attach has no window, so it is not addressable as a switch target). `id`
-  is the daemon-lifetime attachment id (allocated per window attach, unique across every session the daemon holds, never
-  reused), and it is the value a `SwitchScope::Attachment` names. `attached_at` is a `google.protobuf.Timestamp` on the
-  daemon's clock, absolute where the roster's other stamps are ages, because an attach _instant_ is a fact about the
-  daemon's clock a cross-host reader cannot re-derive from its own. A value outside that type's range (years 0001-9999),
-  or with `nanos` outside `0..1e9`, fails the decode. `input_owner` marks the session's last window input owner; exactly
-  one attachment reports `true`, or none while the marker is clear.
-- `program_status`: the session's OSC 7501 program-status records, sorted by `id`, each
-  `{ id: string, state: string, kind?: string, progress?: u32, app?: string, title?: string, msg?: string }`. Always
-  present (empty when no program reported one). `id` `""` is the root record; `state` and `kind` are open vocabularies,
-  so a reader treats a value it does not know as unknown rather than refusing the row; a `progress` above `100` fails
-  the decode. A minor-0 peer skips it as an unknown field (the minor ledger below). Lifetimes and limits are in
-  [program-status.md](protocols/program-status.md).
-- `terminal_progress`: the last `OSC 9 ; 4` progress a program in the session reported and has not cleared,
-  `{ state: string, value?: u32 }`; absent when none is held. `state` is an open vocabulary (`normal`, `error`,
-  `indeterminate`, `paused` today), and a `value` above `100` fails the decode. A minor-1 peer skips it as an unknown
-  field (the minor ledger below). Decoding and lifetime are in [terminal-progress.md](protocols/terminal-progress.md).
-
-`SpawnArgs` (the GUI-launch payload on `SessionToDaemonMsg::Create`, and the `sessions spawn` payload on
-`OpsToDaemonMsg::Spawn`) is fixed-shape per principle 1: `command`, `args`, `cwd`, `env`, `dims`, `tags`, `env_base`;
-empty `command` falls back to the daemon's default factory (`$SHELL`). `dims` is optional and carries the requested
-initial geometry: an **absent** `dims` means the daemon default (24 × 80) and pixel `0` means unknown, while any
-rows/cols axis outside the REQ-605a bounds, `0` among them, refuses the whole create with
-`CreateFailure::GeometryOutOfRange`, checked over the full `uint32` domain before the daemon mints an id or spawns
-anything. What admission accepts it keeps: the resulting `(rows, cols, pixel_w, pixel_h)` is the child's first winsize
-and the geometry every later surface reports, `SessionInfo::dims` included. The one difference is the winsize's pixel
-axes: where the announced pixel is `0`, the PTY carries 8 × 16 pixels per cell, and a later resize that leaves a pixel
-axis `0` keeps the PTY's current cell on that axis.
-
-Each field falls back independently: a `cwd` or an `env` pair sent with an empty `command` applies to that default
-shell. A non-empty `cwd` must be absolute: a relative one draws an `AttachFailed` ("SpawnArgs: cwd must be absolute")
-rather than resolving against the daemon's own directory. An unusable absolute `cwd` fails the spawn only when `command`
-is non-empty; with an empty one the daemon retries in its own cwd
-([session-lifecycle.md](../explanation/architecture/session-lifecycle.md) "Creation").
+A verb's reply rows are `felis.proto` messages, `SessionInfo` above all: its fields and what an absent one means are
+defined there, and their CLI rendering is in [cli.md](cli.md).
 
 The CLI inherits the v1 `0600` socket trust boundary ([security-model.md](../explanation/security-model.md) "Daemon
 IPC"): any process running as the daemon's uid can drive any session. Cross-host CLI rides the SSH stdio carrier (see
 "Cross-host carrier: SSH stdio" above): the global `--host user@remote` flag selects, for _every_ headless verb, the
 `ssh <host> felis-daemon relay` carrier in place of the local socket, so `felis --host remote sessions list` drives the
-remote per-UID daemon end-to-end. The wire is carrier-agnostic (`Connection<R, W>` is generic over its halves), so a
-verb's body is identical on either carrier: only the _open_ forks, in one place.
+remote per-UID daemon end-to-end. The wire is carrier-agnostic, so a verb's body is identical on either carrier: only
+the _open_ forks, in one place.
 
 Which forms may autospawn the daemon is decided by the verb, not by the carrier: over the SSH carrier a read or drive
 verb dials `felis-daemon relay --no-spawn`, so a cold remote socket fails exactly as a cold local one does. The per-form
@@ -1828,10 +1338,8 @@ predates it skips it and reads the oneof as unset, which it rejects as malformed
 absent, since an older sender never writes it. A minor bump never requires a coordinated restart, which is the property
 the daemon exists to protect: the sessions it holds outlive every client rebuild.
 
-The writer takes that minor at construction and has no default, so no send path can inherit this build's own ceiling by
-omission: a carrier whose preface has not run (`FrameWriter::baseline`) authorizes the base schema and nothing else.
-Only a harness that is both peers, and so negotiates nothing, builds a writer at this build's `PROTOCOL_MINOR`, through
-a constructor no production dependency compiles.
+A sender whose preface has not run may send the base schema and nothing else; no send path inherits this build's own
+`PROTOCOL_MINOR` by default.
 
 Two consequences follow from the send-side rule, and they are what make the rest of this page's "corruption" language
 exact:
@@ -1922,16 +1430,16 @@ family its mode does not admit before it has attached; after that, a denial is t
 
 Skew a client can meet, and where each is reported:
 
-| Condition                                                               | Where it surfaces                                                                                                    |
-| ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| The peer is not felis                                                   | wrong preface magic; the connection closes with no reply                                                             |
-| The daemon does not serve the client's major                            | preface status `1`, carrying the majors it does serve                                                                |
-| The daemon accepts (status `0`) naming a major the client never offered | `ConnectError::AcceptedUnofferedMajor`, closed before any frame; `felis version` and `felis doctor` name both majors |
-| The daemon refuses for a newer reason                                   | preface status the client cannot name; treated as a refusal                                                          |
-| The peer's mode does not admit a family, before it attaches             | `ConnToClientMsg::Refused { Role }`, then close                                                                      |
-| The daemon is serving every connection it admits                        | `ConnToClientMsg::Refused { AtCapacity }`, then close; retryable                                                     |
-| The peer names a mode the daemon does not define                        | `ConnToClientMsg::Refused { UnknownMode }`, then close; not retryable                                                |
-| The peer stays silent through a pre-attach phase                        | no frame: the daemon closes at that phase's deadline                                                                 |
+| Condition                                                               | Where it surfaces                                                                                         |
+| ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| The peer is not felis                                                   | wrong preface magic; the connection closes with no reply                                                  |
+| The daemon does not serve the client's major                            | preface status `1`, carrying the majors it does serve                                                     |
+| The daemon accepts (status `0`) naming a major the client never offered | a client-side connect error, closed before any frame; `felis version` and `felis doctor` name both majors |
+| The daemon refuses for a newer reason                                   | preface status the client cannot name; treated as a refusal                                               |
+| The peer's mode does not admit a family, before it attaches             | `ConnToClientMsg::Refused { Role }`, then close                                                           |
+| The daemon is serving every connection it admits                        | `ConnToClientMsg::Refused { AtCapacity }`, then close; retryable                                          |
+| The peer names a mode the daemon does not define                        | `ConnToClientMsg::Refused { UnknownMode }`, then close; not retryable                                     |
+| The peer stays silent through a pre-attach phase                        | no frame: the daemon closes at that phase's deadline                                                      |
 
 A major refusal is not retryable: both halves must be rebuilt, and a client that treats it as a transient EOF would burn
 its whole backoff budget on a permanent condition.
@@ -1958,8 +1466,7 @@ for hours between notifications. A `Window` and an `Observer` owe a subject, so 
 task ends. A dial past the cap is answered `Refused { AtCapacity }` rather than queued or closed, so a caller can tell a
 full daemon from a dead one. Answering costs a task of its own, so the refusal path is admitted against its own small
 ceiling; past that the socket is dropped unanswered. Every step of a refusal is deadline-bounded, the write of the
-refusal included: a peer that finishes the handshake and then stops reading would otherwise hold one of those few slots
-for as long as it liked, and enough such peers would silence the refusal path for everyone.
+refusal included, so a peer that stops reading cannot hold one of those few slots.
 
 ## Backpressure
 
@@ -1989,12 +1496,9 @@ allows: until `Hello` the daemon cannot tell a silent peer from a hung one, and 
 been named, the connection cap is the only bound left. Past the attach the daemon knows what the connection is for and
 bounds it by what it queues.
 
-The gauge is the bound, and the queue is unbounded so that the _cut_ is a decision the daemon makes rather than a stall
-it suffers: a bounded channel would apply the slow peer's backpressure to whoever tried to enqueue, which on this side
-is the session task serving everyone. What a producer bounds instead is how much it enqueues per turn ("Search (kind =
-9)" above): a burst limit, not a queue limit. `felis daemon status`'s `subscriber_queue_bytes` row reports the deepest
-live backlog against this cap, beside the daemon-wide sum of every outbox, which is the only place the gauge is
-observable ([cli.md](cli.md) "Daemon status").
+What a producer bounds instead is how much it enqueues per turn ("Search (kind = 9)" above): a burst limit, not a queue
+limit. `felis daemon status`'s `subscriber_queue_bytes` row reports the deepest live backlog against this cap, beside
+the daemon-wide sum of every outbox, which is the only place the gauge is observable ([cli.md](cli.md) "Daemon status").
 
 Grid updates do coalesce, but per cycle rather than per channel: one `RowDelta` per diff cycle carries every dirty row
 (split across consecutive frames only when the batch would approach the frame ceiling), and a row dirtied twice inside a
@@ -2004,8 +1508,8 @@ cycle ships once.
 
 The other direction is bounded rather than cut. Each session admits `PTY_INPUT_BUDGET` (16 MiB) of client input that the
 child has not yet taken. A connection acquires its share **before** the bytes enter the session's command channel, and
-the reservation is released only once the PTY writer's `write_all` returns, so it covers the whole path from the socket
-to the child's stdin rather than the enqueue alone.
+the reservation is released only once the PTY write returns, so it covers the whole path from the socket to the child's
+stdin rather than the enqueue alone.
 
 | Message                 | Reserves                                                                                                                               |
 | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
@@ -2029,8 +1533,7 @@ connection-closing path is reached only by a peer that ignored the published lim
 Only the reserved bytes ride the budget. The session actor's own writes carry no reservation: a `DA` answer to the
 child, and the reports a client-side change owes it, which are a focus report under DECSET 1004, a color-scheme report
 under DECSET 2031, and an in-band resize report under DECSET 2048. They are bounded separately, by the PTY writer's 1
-MiB gauge of unreserved pending bytes, and dropped rather than queued past it. The two gauges are separate so that an
-admitted maximum-size paste cannot silence the replies a child is waiting on while it drains.
+MiB gauge of unreserved pending bytes, and dropped rather than queued past it.
 
 While a session's budget is exhausted, the connection feeding it stops reading its socket, except for noticing that the
 peer hung up: a connection parked on a budget a wedged child will never release would otherwise hold its admission
@@ -2040,8 +1543,7 @@ itself.
 
 The budget bounds what a session holds, not what the daemon does: a pump parks holding the one frame it had already
 read, so the daemon's worst case is that frame per connection, bounded by the connection cap above it and the frame cap
-below it rather than by this budget. Reserving before the body is read would need the reservation to be made against an
-announced length the peer has not yet justified.
+below it rather than by this budget.
 
 A hangup noticed there ends the connection _and_ the message it was admitting, so a peer that needs its input delivered
 has to stay until the daemon has taken it: `felis sessions send` puts a `Session::InputFence` on the same connection,

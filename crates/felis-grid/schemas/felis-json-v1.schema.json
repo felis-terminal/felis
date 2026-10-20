@@ -182,7 +182,7 @@
           "type": "array"
         },
         "selection": {
-          "description": "Bit 0 is the clipboard, bit 1 X11 PRIMARY\n(`docs/reference/ipc.md`).",
+          "description": "Bit 0 is the clipboard, bit 1 X11 PRIMARY\n(`felis.proto` `GridClipboardSet.selection`).",
           "format": "uint8",
           "maximum": 3,
           "minimum": 0,
@@ -1699,7 +1699,7 @@
           "$ref": "#/$defs/KeyLocationJson"
         },
         "mods": {
-          "description": "Bits 0–3: ctrl, shift, alt, super\n(`docs/reference/ipc.md` \"Input (kind = 1)\").",
+          "description": "Bits 0–3: ctrl, shift, alt, super\n(`felis.proto` `InputKeyEvent.mods`).",
           "format": "uint8",
           "maximum": 15,
           "minimum": 0,

@@ -28,7 +28,8 @@ pick.
 - `docs/reference/ipc.md`: the normative wire spec: stream/frame/ application layers, message families, handshake,
   versioning rules.
 - `crates/felis-protocol/proto/felis.proto`: the machine-readable authority for the schema itself: the families, their
-  supporting types, and the `FrameKind` numbering. A message change starts here.
+  supporting types, the `FrameKind` numbering, and what each message and field means, in the comment beside it. A
+  message change starts here.
 - `docs/reference/row-codec.md`: the one field the schema does not describe: the `packed_cells` bytes, spec'd
   language-neutrally with golden vectors.
 - `docs/explanation/architecture/ipc.md`: why it looks like this; its **rejected alternatives** are load-bearing (a
@@ -73,7 +74,7 @@ The argument is in `docs/explanation/architecture/ipc.md`; these are the rules i
 `docs/reference/security-audits.md` has a standing "felis-protocol purity" checklist; run it over your diff. Non-Rust
 clients (felis.el) generate their codec straight from `felis.proto` via a `protoc-gen-*`; there is no in-repo wire
 manifest to regenerate. Framing/handshake constants a client can't get from the schema (frame header, the frozen preface
-layout, keyboard bits) are documented in `docs/reference/ipc.md`.
+layout) are documented in `docs/reference/ipc.md`.
 
 ## 4. Wiring path
 
@@ -85,13 +86,14 @@ A new message/verb typically touches, in dependency order:
      corpus, because it is the **single** round-trip corpus (the codec round-trip also exercises the `convert/` impls),
      and the `*_cover_every_variant` guard fails until the case exists;
    - `proto/felis.proto`: the wire schema: mirror the change with the next free field number (numbers are frozen as
-     declared, not derived from the Rust variant order), then regenerate the committed codegen with `just proto` (CI
-     diffs it against the schema, so a proto edit that skips regeneration cannot merge), then run `just proto-compat`:
-     `buf breaking` against the merge-base with `origin/main`, the same comparison CI makes. For an intended pre-release
-     break, add a `base: <40-hex sha of that merge-base>` line to `crates/felis-protocol/proto/BREAKING.md` with the
-     why; the rule the gate applies is in `docs/reference/testing.md` "Wire compatibility gates". A minor bump also
-     needs its row in `PROTOCOL_MINOR`'s ledger (`docs/reference/ipc.md`), naming every addition, or the sync test
-     fails; that row is also what catches an addition whose minor annotation was left out;
+     declared, not derived from the Rust variant order) and state the new field's meaning in its comment, then
+     regenerate the committed codegen with `just proto` (CI diffs it against the schema, so a proto edit that skips
+     regeneration cannot merge), then run `just proto-compat`: `buf breaking` against the merge-base with `origin/main`,
+     the same comparison CI makes. For an intended pre-release break, add a `base: <40-hex sha of that merge-base>` line
+     to `crates/felis-protocol/proto/BREAKING.md` with the why; the rule the gate applies is in
+     `docs/reference/testing.md` "Wire compatibility gates". A minor bump also needs its row in `PROTOCOL_MINOR`'s
+     ledger (`docs/reference/ipc.md`), naming every addition, or the sync test fails; that row is also what catches an
+     addition whose minor annotation was left out;
    - `src/convert/<family>.rs`: the domain↔wire mapping: infallible `From<domain>`, fallible `TryFrom<wire>`. Narrow
      every proto-widened integer through `narrow()` (never a bare `as` cast), reject `_UNSPECIFIED` enum sentinels. No
      per-family test corpus lives here: only targeted decode-rejection tests that need a hand-built wire value (bad
@@ -119,7 +121,8 @@ A new message/verb typically touches, in dependency order:
 
 ## 6. Doc cascade (wider than usual)
 
-- `docs/reference/ipc.md` and `docs/reference/cli.md` (normative).
+- `docs/reference/ipc.md` and `docs/reference/cli.md` (normative). `ipc.md` takes a conversation or cross-message rule,
+  never a field's meaning, which the proto comment already holds.
 - `docs/explanation/architecture/ipc.md` if a design decision was made.
 - `docs/reference/control-surfaces.md` if the verb adds a knob.
 - Affected `docs/how-to/` recipes and the two tutorials.
