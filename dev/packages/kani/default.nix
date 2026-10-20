@@ -18,6 +18,10 @@
   glibc,
   cbmc,
   kissat,
+  writeShellApplication,
+  curl,
+  jq,
+  nix-prefetch-git,
 }:
 
 let
@@ -78,9 +82,8 @@ let
 in
 # Only the x86_64-linux release tarball is wired up; upstream does publish
 # aarch64-linux + darwin tarballs as of 0.67.0 — widen once tested.
-assert lib.assertMsg (
-  stdenv.hostPlatform.system == "x86_64-linux"
-) "dev/packages/kani.nix: only x86_64-linux is wired up (got ${stdenv.hostPlatform.system})";
+assert lib.assertMsg (stdenv.hostPlatform.system == "x86_64-linux")
+  "dev/packages/kani/default.nix: only x86_64-linux is wired up (got ${stdenv.hostPlatform.system})";
 
 rustPlatform.buildRustPackage {
   pname = "kani";
@@ -132,7 +135,18 @@ rustPlatform.buildRustPackage {
     done
   '';
 
-  passthru.toolchain = kaniRustToolchain;
+  passthru = {
+    toolchain = kaniRustToolchain;
+    updateScript = writeShellApplication {
+      name = "kani-update";
+      runtimeInputs = [
+        curl
+        jq
+        nix-prefetch-git
+      ];
+      text = builtins.readFile ./update.sh;
+    };
+  };
 
   meta = {
     description = "Kani Rust model checker (bit-precise verification via CBMC)";

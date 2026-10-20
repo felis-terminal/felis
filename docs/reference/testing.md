@@ -227,6 +227,7 @@ violations across bounded inputs. Each proof is a `#[kani::proof]` harness under
 ```
 just kani                     # run all proofs in the Kani dev shell
 just kani --harness <name>    # run a specific proof
+just kani-update              # bump dev/packages/kani/default.nix to the latest Kani release
 ```
 
 `.forgejo/workflows/kani.yml` reruns every proof weekly.

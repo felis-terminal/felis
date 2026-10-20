@@ -95,7 +95,7 @@ while the proptest stays as the fast always-on check.
 
 The layer reaches x86_64-linux only, from a dedicated `.#kani` dev shell: Kani's compiler pins one exact nightly and
 borrows its precompiled sysroot from an upstream release tarball, and only that platform's tarball is wired up. The
-packaging record is `dev/packages/kani.nix`, the file it governs.
+packaging record is `dev/packages/kani/default.nix`, the file it governs.
 
 Because `cfg(kani)` code compiles under no other layer (not under `cargo test`, not under clippy), a kernel edit can
 invalidate a proof silently. The proofs are therefore re-checked by a weekly scheduled CI job plus manual dispatch

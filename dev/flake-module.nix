@@ -114,7 +114,7 @@
               --font-number=2 --unicodes=U+845B,U+E0100-E0101 --output-file=$out/share/fonts/NotoSansCJKsc-Kuzu.otf
           '';
 
-      kani = pkgs.callPackage ./packages/kani.nix { };
+      kani = pkgs.callPackage ./packages/kani { };
 
       gungraunRunner =
         let
@@ -420,6 +420,8 @@
           };
         };
       };
+
+      legacyPackages = pkgs.lib.optionalAttrs (system == "x86_64-linux") { inherit kani; };
 
       devShells = {
         default = pkgs.mkShell {

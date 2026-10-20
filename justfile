@@ -373,6 +373,11 @@ _fuzz-seed:
 kani *args:
     nix develop .#kani -c cargo kani -p felis-vt -p felis-protocol -p felis-grid -p felis-client-core --no-default-features {{ args }}
 
+# Bump dev/packages/kani/default.nix to the latest Kani release (then run `just kani`).
+[group('kani')]
+kani-update:
+    nix run .#kani.updateScript
+
 # ── Mutation testing (audits whether the suite bites) ───────────────
 
 mutants_jobs := env('CARGO_MUTANTS_JOBS', '4')

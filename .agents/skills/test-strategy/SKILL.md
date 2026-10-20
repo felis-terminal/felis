@@ -8,7 +8,7 @@ description:
   kernel-selection heuristic, the `#[cfg(kani)]` recipe, `just kani`, and — just as important — what NOT to verify with
   each tool.
 compatibility:
-  Kani layer is x86_64-linux only (see dev/packages/kani.nix, the packaging record). proptest / fuzz / insta run
+  Kani layer is x86_64-linux only (see dev/packages/kani/default.nix, the packaging record). proptest / fuzz / insta run
   everywhere the dev shell does.
 allowed-tools:
   Read Edit Bash(just kani:*) Bash(just test:*) Bash(just fuzz:*) Bash(cargo nextest:*) Bash(cargo kani:*) Bash(git
@@ -217,5 +217,5 @@ filter that narrows here.
 
 - New `.rs` files with `#[cfg(kani)]` proofs must be **git-tracked/staged** before `nix develop`/`just kani`, because
   flakes only see tracked files.
-- The Kani toolchain is pinned (`dev/packages/kani.nix`); if it breaks, the lower layers still guard everything. Don't
-  make Kani the _only_ coverage of a kernel.
+- The Kani toolchain is pinned (`dev/packages/kani/default.nix`); if it breaks, the lower layers still guard everything.
+  Don't make Kani the _only_ coverage of a kernel.
