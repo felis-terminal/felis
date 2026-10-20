@@ -32,6 +32,13 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
   terminfo entry: `felis_daemon::TERMINFO_SOURCE` is the entry's source to compile with `tic -x`, and
   `DaemonCaps::terminfo_dir` names the compiled directory the daemon puts first in each session's `TERMINFO_DIRS`.
 
+- **Library**: every crate under `crates/` is published on crates.io. The libraries carry their own versions, starting
+  at 0.1.0; `felis-cli`, `felis-client` and `felis-daemon` carry the app version. felis itself installs from the
+  packages in the install guide, which also ship the terminfo entry, desktop entry, man pages and shell completions.
+- **Library**: a program embedding `felis-grid` names itself in the XTVERSION and DA3 replies with
+  `Grid::set_reply_identity`. With no identity set, XTVERSION goes unanswered and DA3 reports xterm's all-zero unit ID;
+  `felis-daemon` sets felis's own.
+
 ### Changed
 
 - **Logs**: a daemon or window on a socket other than the default one logs into that socket's own `0700` directory
