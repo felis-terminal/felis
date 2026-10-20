@@ -34,7 +34,7 @@ live screen's, so a screen switch deletes the screen left behind from the mirror
 
 Rejected: a mirror holding both stores, with every image message naming its screen. It would spare the re-send on
 `?1049l` at the cost of a wire field and a second store in every client, for a program whose primary-screen images are
-usually few. _Revisit if_ the re-send on leaving a full-screen program shows up as a visible delay.
+usually few.
 
 ## Memory accounting
 
@@ -95,14 +95,13 @@ stays compose-free and the renderer and wire see only finished buffers (the prot
 
 The cost is memory: N frames cost N full canvases even when each `a=f` touches one pixel. Kitty budgets animation
 storage separately at `storage_limit × 5`; felis folds frames into the one existing `bytes_cap` budget, so a
-pathological producer hits eviction sooner than kitty would. Revisit with lazy coalescing and a bounded reference chain
-if a real producer is starved. The frame mutators (`push_frame` / `replace_frame` / `remove_frame`) run the same
-refcount-aware eviction as `insert`, excluding the image being grown so it never evicts itself to fit its own frame.
-They are also the only way in: the store lends out an `AnimationControl` view (gap, displayed frame, run mode, loop
-bound) rather than a mutable entry, so a mutation that moves bytes has nowhere to be written except a method that
-charges for it. A `&mut ImageEntry` is rejected for the reason budgets usually fail: it reaches the entry's dimensions
-and its frame vector, so the charge stays honest only as long as every caller remembers to make it, and the store must
-not depend on that.
+pathological producer hits eviction sooner than kitty would. The frame mutators (`push_frame` / `replace_frame` /
+`remove_frame`) run the same refcount-aware eviction as `insert`, excluding the image being grown so it never evicts
+itself to fit its own frame. They are also the only way in: the store lends out an `AnimationControl` view (gap,
+displayed frame, run mode, loop bound) rather than a mutable entry, so a mutation that moves bytes has nowhere to be
+written except a method that charges for it. A `&mut ImageEntry` is rejected for the reason budgets usually fail: it
+reaches the entry's dimensions and its frame vector, so the charge stays honest only as long as every caller remembers
+to make it, and the store must not depend on that.
 
 Playback state lives on the entry, and the advance state machine (`ImageEntry::advance(now_ms) -> Option<usize>`) is
 pure and clock-source-agnostic: it takes monotonic milliseconds, not `Instant`, so it is proptest-able without a real
@@ -127,5 +126,3 @@ the producer to retransmit. What the burst carries and in what order is in [ipc.
 references, and that it ships **last**. A placement can name an image from a row that has scrolled away and back, so a
 subscriber that held only the visible subset would have to fetch on every scroll; the price of shipping everything is
 bounded by the store budget, and putting the bytes after the grid keeps a cold attach painting at "round-trip + cells".
-_Revisit if_ the store budget grows past what a cold attach over a slow link can absorb; a referenced-first order or an
-on-demand fetch would then earn its bookkeeping.

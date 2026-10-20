@@ -53,8 +53,6 @@ through the receiving wrapper, as that wrapper's arm with the other skipped as a
 look for the other wrapper's field numbers itself. It steps over field keys rather than decoding the body a second time
 as the other wrapper, so an honest frame pays one pass that builds nothing.
 
-_Revisit if_ an arm ever has to travel both ways, which the split would force into a copy per wrapper.
-
 ### Kind or arm?
 
 The split promotes _role_ to the frame kind, and the question that follows is where growth lands: a new kind, or a new
@@ -82,8 +80,7 @@ effective minor is a send-side contract, so an arm above it is the _sender's_ vi
 policed it would need the negotiation's outcome threaded into the driver to buy nothing the ledger's old-peer behavior
 does not already give.
 
-_Revisit if_ a frame can ever reach a driver under a minor its sender did not agree to; a mixed-version relay chain
-would do it.
+_Revisit if_ a mixed-version relay chain appears: it could deliver a frame under a minor its sender did not agree to.
 
 #### The arm table lives in the schema
 
@@ -135,9 +132,6 @@ The checks that stop short of the decode do so for reasons other than cost: `fel
 rather than to be fatal belongs to its handler, since the only verdict the driver has is the connection's life. Both
 stay with their consumers, the reference's semantic tier ([ipc.md](../../reference/ipc.md#corruption)).
 
-_Revisit if_ a uniform family ever needs a per-arm decision, such as a `since_minor` the receiver checks, since that is
-the point the fold stops being exact.
-
 #### Search and region are kinds of their own
 
 Search and region instance the rule at the kind level. Each owns a surface of its own (`Search`, `Region`), request and
@@ -188,11 +182,8 @@ attribution for free, and its refusals become a typed `SpawnOutcome` arm rather 
 `ResolvedId` gives the prefix verbs.
 
 A lost `Spawned` reply leaves a _detached_ session the roster shows, which is what a headless spawn wanted anyway; that
-is the asymmetry that lets `Spawn` answer without attaching while `Create` cannot.
-
-_Revisit if_ a client ever needs create-without-attach on a window connection: a window that spawns a sibling session it
-does not display, say. Today that caller opens an `Ops`-mode connection; the trigger to reconsider is a caller for which
-the second connection is the cost, not the round trip.
+is the asymmetry that lets `Spawn` answer without attaching while `Create` cannot. A window that wants a sibling session
+it does not display opens an `Ops`-mode connection for it.
 
 ### The two environment fields
 
@@ -215,9 +206,6 @@ The exposure is narrow as well. A Unix-native argv entry or path is arbitrary by
 value that reached felis because the user typed it came through UTF-8 arguments already, and on Windows a valid UTF-16
 argv or path always converts. What a client owes such a value is a refusal, not a lossy conversion, because a path
 spelled with U+FFFD dials a socket nobody listens on or opens a window in a directory that does not exist (REQ-105b).
-
-_Revisit if_ a caller appears whose argv or cwd is genuinely not UTF-8: a parallel `bytes` field beside the `string` one
-is an additive minor, where retyping the existing field would be a major.
 
 #### The snapshot replaces the base, over a local socket only
 
@@ -370,9 +358,6 @@ Rejected alternatives:
 - **Hand-rolled TLV**: maximum control, maximum cost. It re-implements protobuf's tag-length-value framing and
   additive-skip rules by hand, with no codegen and no upstream maintenance (principle 1: add only what earns its place).
 
-_Revisit if_ the prost dependency weight or the `just proto` codegen friction ever outweighs the cross-language benefit,
-or a consumer's language finds generating a reader from `felis.proto` harder than expected.
-
 ### The schema is the authority over the Rust types
 
 A shared `.proto` makes the schema the authority rather than a projection of the Rust types
@@ -426,9 +411,6 @@ Two alternatives are rejected:
 - **Passing a context flag into the conversion** (a `dims_from_wire(.., Policy)`). It keeps one type but puts the
   daemon's admission policy inside the schema's validator, where a client that never creates sessions would still link
   it, and where a future third context with a third policy has nowhere to go but another flag.
-
-_Revisit if_ a third geometry-carrying request appears whose policy is neither reject nor clamp; two policies over one
-wide type is the cheapest shape for exactly two.
 
 ### Bounding announced quantities
 
@@ -492,12 +474,6 @@ it in proto3.
 The pixel pair keeps its `0`: a headless create and an unmapped window have no pixel size to name, and pixel extents are
 the one part of a geometry a peer may legitimately not know.
 
-_Revisit if_ a field appears whose absent case must itself be distinguished from two kinds of absence; a second optional
-layer is worse than a named enum, which is what such a field should be.
-
-_Revisit if_ a producer appears that must distinguish "a zero-pixel window" from "a window whose pixel size is unknown":
-retiring the pixel sentinel means an `optional` pixel pair and a major bump, since the wire cannot say it otherwise.
-
 ### Ordering and completion of image transfers
 
 Two shapes are rejected against the single active transfer whose completion the chunk count proves
@@ -518,9 +494,6 @@ geometry it inherits, and frame `0` is not expressible.
 
 Interleaved transfers are the alternative to the single active-transfer state; they would need per-target state on the
 receiver to buy a concurrency the producer does not have.
-
-_Revisit if_ a carrier appears that reorders (a datagram leg, a multi-stream one), since chunk offsets would then carry
-information the stream does not.
 
 ### One encoding on the socket, JSON at a bridge
 
@@ -580,11 +553,9 @@ The price is retention: a queued chunk pins its whole backing image until it is 
 store cap that already governs image memory, plus whatever the in-flight queues hold, and it is the trade the copy-free
 path makes; the alternative pins the same bytes twice.
 
-Only that field is converted. Every other `bytes` field on the wire is a session id, a keystroke, or a clipboard
-payload, where a refcount and its atomics buy nothing over an inline `Vec<u8>`.
-
-_Revisit if_ a second field grows into the same size class (a scrollback region reply, say), in which case it joins the
-list in `buf.gen.yaml` rather than growing a general rule.
+Only that field is converted, named in `buf.gen.yaml` rather than covered by a general rule. Every other `bytes` field
+on the wire is a session id, a keystroke, or a clipboard payload, where a refcount and its atomics buy nothing over an
+inline `Vec<u8>`.
 
 ## Carrier choices
 
@@ -601,8 +572,6 @@ Rejected alternatives:
   over a raw socket or bridging a sync-only crate: strictly more unsafe code for no gain over the pipe DACL.
 - **TCP on loopback + token auth.** The "no network ports / no second auth layer" stance is about attack surface, not
   transport distance; a loopback listener is still a listener.
-
-_Revisit if_ tokio ships async AF_UNIX on Windows.
 
 ### Cross-host attach: SSH stdio
 
@@ -678,8 +647,6 @@ detection is built.
 - **A daemon-held lifetime lock as a cleaner shield**: only systemd-tmpfiles honors it, and combined with the startup
   lock it would make every later starter wait on a live daemon.
 
-_Revisit if_ a target platform mounts a per-login `/tmp`.
-
 #### The cross-host carrier re-dials
 
 The cross-host carrier re-dials, not just attaches once. Its `Reconnector` descriptor carries the SSH destination and
@@ -697,8 +664,6 @@ ControlMaster in their own ssh config; felis does not manage ssh multiplexing. N
 `ssh` child: connection timeouts (`ConnectTimeout`, `ServerAliveInterval`) are OpenSSH policy the user's ssh config
 already owns, and a felis-side timer would fire under a password or host-key prompt that the inherited tty is still
 delivering to the user.
-
-_Revisit if_ a felis path dials with no tty, so that no prompt can reach the user and a hang has no operator.
 
 #### Rejected cross-host carriers
 
@@ -742,9 +707,6 @@ protobuf decode error after the preface, in the frames the frozen layer exists t
 The daemon pairs the accepted major with that major's minor in one selection for the same reason: two independent
 lookups let a build that serves two majors hand the older schema the current major's minor, and the client cannot tell
 that pairing from a correct one until a frame fails.
-
-_Revisit if_ a second major ships side-by-side decoders: the selection then grows a per-major minor table, and the
-client's check stays as it is.
 
 ### The magic and the byte order
 
@@ -799,20 +761,18 @@ Two other ways of versioning the block are rejected:
 A later payload format therefore lands as a new version word under the same envelope, and the caps that guard the read
 stay where they are.
 
-_Revisit if_ a carrier payload has to carry something a connection cannot proceed without: skipping an unknown version
-is safe only while the block's whole content is a fallback the daemon has a documented substitute for.
+Skipping an unknown version is safe only while the block's whole content is a fallback the daemon has a documented
+substitute for.
 
 #### An oversized environment degrades rather than fails
 
 An environment that will not fit the frozen limits therefore degrades rather than fails: the relay warns and splices
-without a block, and the daemon falls back to its own environment. Refusing the connection instead would trade a create
-whose agent socket is stale for no session at all, on a host the user reached specifically to get a session.
+without a block, and the daemon falls back to its own environment. A measured login environment is tens of KiB, far
+under the cap. Refusing the connection instead would trade a create whose agent socket is stale for no session at all,
+on a host the user reached specifically to get a session.
 
 A **chunked** payload the daemon reads incrementally is rejected on the same ground the protocol-aware relay is: chunk
 boundaries are framing, and a relay that has to respect them is not the byte pump the splice depends on.
-
-_Revisit if_ an environment over 1 MiB is observed on a host felis is expected to serve; a measured login environment is
-tens of KiB today.
 
 ### `Hello` and `Welcome` carry no version check
 
@@ -947,10 +907,6 @@ and both user-facing surfaces are worded to match: the CLI exits `0` on admissio
 words, and a landing that fails afterwards is the target window's own business
 ([control-surfaces.md](control-surfaces.md) "A relay verb reports queue admission").
 
-_Revisit if_ a consumer appears that must act on the window's new home: a script that retargets a window onto another
-host and then works against it there. That consumer is what would define the verdict, since what it must read is what
-the reply would have to carry.
-
 ## A corrupt frame ends the connection
 
 A frame can stop making sense in four places, and the reference enumerates them
@@ -1024,9 +980,6 @@ A `Closing` phase would name a state with no frames in it: a detach or a stream'
 has a use for, so the interval after it admits nothing. A window that wants another session dials again, which it must
 do anyway to reach a different daemon.
 
-_Revisit if_ a connection ever needs to re-attach in place: a `Detach` that keeps the socket for a later `Attach` would
-need `Attached → Setup`, and the ladder is where that edge belongs.
-
 ### Why the driver lives in felis-transport
 
 The driver is protocol knowledge, so `felis-protocol` would be its natural home. It cannot live there: it holds a live
@@ -1042,9 +995,6 @@ to separate a state machine from the bytes it validates is a seam a repo split w
 The driver owns no socket either, for a related reason: its three hosts drive their reads differently (the daemon runs
 two independent pump loops over one connection, the GUI runs a reader task feeding an event loop, the CLI wraps its
 reads in deadlines), and a driver that owned the socket would have to become three drivers to serve them.
-
-_Revisit if_ the repo split needs transport bytes-only: a consumer that wants the framing without the protocol
-vocabulary is the point at which this module's dependency on the message families starts costing something.
 
 ## Pipe-to-clipboard provenance
 
@@ -1138,8 +1088,6 @@ in-band sentinels" gives above: collapsing to `0 = unlimited` cannot be made to 
 is in [the reference](../../reference/ipc.md#ops-kind--5), and the `felis daemon status` rendering of it in
 [control-surfaces.md](control-surfaces.md#diagnostic-verbs).
 
-_Revisit if_ a resource appears whose ceiling is neither a count nor absent.
-
 ## Schema evolution: major, minor, feature flag
 
 Every change to the wire is a major, a minor, or a feature flag
@@ -1214,8 +1162,7 @@ fields of payload messages only: a family's wrapper numbers are its arms, and th
 plain field there would reach an older peer as the other direction's arm. A member added to a payload message's oneof is
 not covered either: an older peer skips it and finds the oneof unset, which its decoder rejects, so such a member cannot
 be marked skippable. No payload oneof has grown yet, so a schema test pins their members and the first to grow brings
-its own send gate. _Revisit if_ a supported wire peer decodes with a parser that rejects unknown fields; the proto3-JSON
-argument above is why none does today.
+its own send gate.
 
 Gating the receive side instead is the obvious alternative and does not work: a receiver can see that a value is
 unknown, but not what the sender should have sent in its place, which is the whole content of a ledger row. The one
@@ -1340,8 +1287,7 @@ redundant frame the acknowledgement position would suppress never gets composed 
 
 A dedup that did act on such a position would need the session task to tally, per subscriber, the grid frames it has
 handed the write pump, the only counter comparable with a client's own tally. Until that counter exists, an
-acknowledgement field on the wire is a number no code can read, so the pull carries none. _Revisit if_ the task starts
-keeping that per-subscriber tally.
+acknowledgement field on the wire is a number no code can read, so the pull carries none.
 
 ## Row codec: why a hand-written RLE payload
 
@@ -1399,10 +1345,6 @@ format, but the spec would then have to describe how serde maps Rust enums and `
 declarations stay the real authority and the silent-reorder hole stays open. And a schema-driven inner codec, a nested
 protobuf message, is measured and rejected below, on the client's decode path.
 
-_Revisit if_ an off-the-shelf format arrives that is both specified independently of a Rust type and as cheap on the
-emit path; the argument above is about the contract and the decode holes, not about byte-shuffling code being
-intrinsically better.
-
 ### The tooling gap this leaves
 
 The envelope's field-numbered compatibility stops at this `bytes` field. `buf breaking` sees a `bytes` field, not the
@@ -1423,9 +1365,6 @@ and each row ships 1.4–1.95× more bytes. Native cells would leave the produce
 slower to mirror the grid. A JSON-only row is worse still: proto3-JSON base64-inflates the per-cell data to roughly
 11–13× the bytes and 10× the decode. So the compact RLE payload stays until cell churn makes schema-governed cell
 compatibility worth that client-side cost.
-
-_Revisit if_ cell-shape changes turn frequent enough that maintaining the codec version by hand costs more than that
-measured client-side price.
 
 ## Open extensibility considerations
 

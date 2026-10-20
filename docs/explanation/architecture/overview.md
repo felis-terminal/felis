@@ -208,16 +208,11 @@ Two designs that reach further are rejected:
 - **A shipped unit file** pins `ExecStart` to one installed binary, losing the sibling-binary guarantee that makes
   `nix run`, a source build, and an SSH relay each start _their own_ daemon.
 
-_Revisit if_ felis adopts idle-daemon exit and re-draws the auto-spawn table so every dial may start a daemon.
-
 #### Deliberately not built
 
 Each of these answers a need nobody has reported: a hand-off for the SSH relay, a `supervisor` field in `daemon status`
 (diagnosis is `systemctl --user list-units 'felis-daemon-*'` plus the logged reason), `loginctl enable-linger` handling,
 and cgroup v1.
-
-_Revisit if_ a fallback fork is observed reproducing the OOM failure in a real deployment, or users cannot tell which
-kind of daemon they have.
 
 #### Sandboxed launchers
 
@@ -434,8 +429,7 @@ felis-client-core / felis-client seam" below): the painter would fix the call or
 would only re-buffer the calls into its instance arrays, and its row cache, which keeps each row's instances across
 frames and replaces only the rows that changed, needs a row's output as a value it can hold. The price is one encode
 pass per repainted row. A painter generic over a per-backend sink, writing instance records with no list in between,
-would remove that pass at the cost of putting each backend's record shape back into the painter's signature. _Revisit
-if_ a profile of a steady-state frame shows the encode pass rather than the painter's own walk.
+would remove that pass at the cost of putting each backend's record shape back into the painter's signature.
 
 ### Rejected workspace shapes
 
@@ -569,9 +563,6 @@ sight.
 The families only `felis bridge` renders (`Ops`, `Region`, `Notify`, `Push`, `Search`) are not in the format: they live
 in `felis-cli` under the CLI's own `v: 1` contract, which already publishes their schemas.
 
-_Revisit if_ a consumer needs a family outside the five the format covers, or if a second format version is ever wanted
-at the same time as a wire major, when whether the two track each other is worth deciding rather than inheriting.
-
 #### Grid→ANSI re-encoding: adopt, into `felis-grid`
 
 Turning stored cell state back into escape sequences recurs in three places: the daemon's pipe action,
@@ -590,9 +581,8 @@ Two alternatives are rejected:
 - **The feature gate its `json` sibling carries.** That gate exists to make `serde_json` optional, and ANSI emission
   adds no dependency to save.
 
-_Revisit if_ a consumer needs an emission mode that would drag client policy (per-host quirk tables, terminal-specific
-workarounds) into the shared module; that policy belongs in the client, which composes it around the encoder rather than
-inside it.
+Client policy (per-host quirk tables, terminal-specific workarounds) belongs in the client, which composes it around the
+encoder rather than inside it.
 
 #### Kitty image layout: adopt, into `felis-grid`
 
@@ -652,14 +642,10 @@ than copied.
 today (`serve`); a whole crate for one consumer fails principle 1 ("if no real consumer needs it yet … the terminal does
 not implement it").
 
-_Revisit if a second server-side consumer appears_ (a second pseudo-daemon, or a record-and-forward proxy), at which
-point the shared functions graduate into `felis-server-core`.
-
 ### Revisit triggers
 
-The crate split is settled, but three developments would reopen it:
+The crate split is settled, but two developments would reopen it:
 
-- Profiling shows compile-time pressure from too many crates.
 - The software-rendered native path of the reuse-paths table is dropped while `felis-render-wgpu` is still the only
   consumer of `felis-render-core`: the boundary then buys nothing, and the two crates merge back into one.
 - `felis-grid` reuse demands splitting cells / scrollback / image store into separate crates. The image store is folded

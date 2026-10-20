@@ -46,8 +46,7 @@ If a sequence is not used by any tool in this list, it is a candidate for remova
   `rgbi:` is a normalized RGB triple and would cost only a scale, but felis refuses it for the same reason: the
   producers felis targets emit `#hex` or `rgb:`. esctest exercises these forms (21 cases, recorded as rejected in the
   [esctest compatibility reference](../../reference/esctest-compatibility.md)), but that is xterm's coverage of an xterm
-  extension, not producer demand. _Revisit if_ a tool in the target set above ships a colorimetric spec on its default
-  path.
+  extension, not producer demand.
 - **DECARM** (auto-repeat): permanently reset in DECRQM; auto-repeat lives in the OS, not the terminal.
 
 ## Reply identity
@@ -55,7 +54,7 @@ If a sequence is not used by any tool in this list, it is a candidate for remova
 The replies themselves live in the [reference twin](../../reference/protocols/vt-compliance.md) "Reporting and queries";
 two of them are shaped by constraints recorded here. DA1 advertises a VT400-class terminal (`?64`) carrying xterm's
 VT420 default feature mask verbatim (including bits for families felis parses but does not drive), because a trimmed
-mask sends DA1-branching programs into legacy fallbacks; the argument and its _Revisit if_ live in
+mask sends DA1-branching programs into legacy fallbacks; the argument lives in
 [terminal-identity.md](../architecture/terminal-identity.md). DA2's middle field is a fixed firmware number `400`,
 deliberately independent of `CARGO_PKG_VERSION`: esctest's `DA2Tests` requires `314 ≤ Pv ≤ 999` _and_ a value that does
 not track the build version, so a constant satisfies both. The wider identity argument (why `TERM=xterm-felis` rather

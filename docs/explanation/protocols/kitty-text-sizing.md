@@ -64,8 +64,8 @@ character, and a run of characters that each fit is what producers write for a w
 
 felis departs from kitty in two places. kitty treats a run with an explicit `w` as one block holding the whole text;
 felis gives each cluster its own `w · s` block, because one block holding several clusters needs a primary that the
-renderer shapes as a run. _Revisit if_ a producer relies on kitty's whole-run block. And kitty has no left/right
-margins: felis uses the edges a printed character uses, so sized and plain text wrap at the same column.
+renderer shapes as a run. And kitty has no left/right margins: felis uses the edges a printed character uses, so sized
+and plain text wrap at the same column.
 
 ## How felis stores it
 

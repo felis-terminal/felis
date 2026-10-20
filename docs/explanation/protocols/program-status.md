@@ -36,7 +36,7 @@ makes:
   removed.
 
 Unknown report keys are dropped rather than passed through to consumers. Passing them through would make the public
-shape whatever producers invent, outside any spec revision. _Revisit if_ the spec defines an extension namespace.
+shape whatever producers invent, outside any spec revision.
 
 ## Lifetimes come from events felis already sees
 

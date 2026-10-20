@@ -109,8 +109,7 @@ side") rests on the spec's floor: `maxTextureDimension2D` defaults to 8192 (<htt
 floor and so always available; see [rendering/pipeline.md](rendering/pipeline.md) "Atlases".)
 
 wgpu carries a small overhead vs. native Metal / Vulkan, dwarfed by VT and shaping costs; benchmarks show terminal
-workloads do not notice. Revisit if profiling on representative TUI workloads shows measurable per-frame overhead (>1 ms
-of frame time directly attributable to wgpu vs. native).
+workloads do not notice.
 
 ### winit
 
@@ -118,8 +117,7 @@ Source: [input.md](input.md).
 
 winit is the windowing/input library (pinned to `winit = "0.30"`): the de facto standard, well-maintained, handling the
 per-platform messy bits (IME, DPI, multi-monitor, focus events) once instead of three times. [input.md](input.md) uses
-it as the source of OS event translation (keyboard, mouse, IME, focus). _Revisit if_ winit's IME on a target platform
-proves unfixable for felis's use case.
+it as the source of OS event translation (keyboard, mouse, IME, focus).
 
 ### Wayland fractional scaling
 
@@ -151,10 +149,6 @@ The prior art, and why each is rejected:
   tooling cost: Rust ↔ Zig crossings in the hot path, lifetimes that need care across the FFI boundary, release
   schedules tied to Ghostty's, and constrained protocol divergence.
 
-Revisit if a `libghostty-vt` Rust binding emerges that is maintained by a team larger than one, with stable lifetimes
-and zero copy across the FFI boundary, or if a proven, full-fidelity Kitty protocol crate becomes available in the Rust
-ecosystem.
-
 ### Williams DFA
 
 The parser layer follows Paul Flo Williams's VT500-series state diagram (<https://vt100.net/emu/dec_ansi_parser>) as
@@ -180,7 +174,7 @@ MiB/s (`ascii_throughput`, bare `\n` and `\r\n` line endings). That gap is the g
 per-cell store and the per-row damage and occupancy bookkeeping (`crates/felis-grid/src/sink.rs`) are where ASCII
 throughput is spent. Both wider-stride options also carry a cost the shipped `u64` SWAR avoids: the `unsafe` line the
 workspace `unsafe_code` lint (`Cargo.toml` `[workspace.lints]`) guards for `std::arch` AVX2 / NEON, and the nightly pin
-for `std::simd`. Revisit if a plaintext-flood profile ever shows the scan itself, not the grid mutation, dominating.
+for `std::simd`.
 
 ### Grapheme clustering
 
@@ -253,8 +247,6 @@ against real conhost; its known behavioral gap is recorded in `crates/felis-pty/
 
 The [non-goals.md](non-goals.md#cross-platform-constraints) platform-shim carve-out (ConPTY vs. `/dev/ptmx`) holds, with
 the shim living in `felis-pty`.
-
-Revisit if the committed target set grows beyond what `rustix` + `windows-sys` cover.
 
 ## Text shaping and rasterization
 

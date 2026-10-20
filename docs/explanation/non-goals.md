@@ -7,7 +7,7 @@ sidebar:
 Things felis explicitly will not do. This list is load-bearing: disagreements about scope should be resolved by adding
 to this file rather than by relaxing it, and a feature being cheap to implement is not a reason to add it. Items can be
 promoted out of "non-goal" status only through an explicit design decision recorded in the owning design doc, with
-rationale, rejected alternatives, and revisit trigger included.
+rationale and rejected alternatives included.
 
 ## Multiplexer features (delegated to the WM)
 
@@ -87,17 +87,15 @@ Single-user SSH stdio attach is implemented, and the protocol is transport-plugg
   rejects the premise that tmux should be in the local loop.
 - **Colorimetric color specs** (X11's `CIELab`, `CIELuv`, `CIEXYZ`, `CIExyY`, `CIEuvY`, `TekHVC` forms in
   `OSC 4 / 5 / 10–12`, and the `rgbi:` intensity form alongside them). `rgb:` and `#hex` are the committed subset; the
-  remaining forms serve xterm's own extension rather than any tool felis targets. The argument and its revisit trigger
-  are in [protocols/vt-compliance.md](protocols/vt-compliance.md) "Conscious omissions".
+  remaining forms serve xterm's own extension rather than any tool felis targets. The argument is in
+  [protocols/vt-compliance.md](protocols/vt-compliance.md) "Conscious omissions".
 - **Sixel.** Kitty graphics is the only inline-image protocol felis implements. Software that emits only Sixel is
   second-class. (Kitty itself does not implement Sixel; rejecting it keeps felis aligned with the upstream protocol
   set.)
 - **XTSMGRAPHICS graphics sizing query (`CSI ? Pi ; Pa ; Pv S`).** It sizes xterm's raster surfaces, the Sixel
   color-register count and the Sixel and ReGIS geometry, none of which felis keeps. No replacement query stands in for
   it: Kitty graphics' `a=q` is a capability probe that answers which transmission media and formats decode, never a
-  numeric limit. While there is no raster surface for a producer to size, there is nothing for one to ask. _Revisit if_
-  felis adopts a graphics family of its own whose bounded raster or color-index resources a producer must size before
-  transmitting.
+  numeric limit. While there is no raster surface for a producer to size, there is nothing for one to ask.
 
 ## Convenience features that hide complexity
 
@@ -108,8 +106,7 @@ Single-user SSH stdio attach is implemented, and the protocol is transport-plugg
 - **Built-in image viewer, file picker, completion menu.** Shell-level tools handle these.
 - **An in-client performance overlay.** An overlay spends GPU time inside the frame it is measuring, so it perturbs the
   number it reports, and it leaves no artifact to compare against a previous run; diagnostics are trace-driven from
-  outside the process instead ([feature-baseline.md](feature-baseline.md#diagnostics-and-performance-budgets)). _Revisit
-  if_ a class of rendering bug appears that a trace taken outside the client cannot localize.
+  outside the process instead ([feature-baseline.md](feature-baseline.md#diagnostics-and-performance-budgets)).
 - **An in-process desktop-notification surface.** The terminal is not a notification daemon: felis never links zbus /
   portal / NSUserNotification / Windows Toast and never draws a popup itself; that role lives one process boundary away,
   with the popup a consumer's job (`notify-send` / `terminal-notifier` / `osascript`). Decoding the notification

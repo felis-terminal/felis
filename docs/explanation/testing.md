@@ -33,7 +33,7 @@ the async, GPU and OS-FFI crates pay poorly: slow suites, a GPU that cannot run 
 One layer the inventory marks out of scope is out for a decided reason. Pixel-level visual regression is not attempted:
 a pixel snapshot is brittle across OS font-rasterization changes, and the damage harness
 ([reference/testing.md](../reference/testing.md#damage-tracking-correctness)) already enforces pixel-equivalent output
-by diffing against a full redraw. _Revisit if_ cell-level snapshots plus the damage diff miss a renderer regression.
+by diffing against a full redraw.
 
 ## Peer conformance practices
 
@@ -184,9 +184,6 @@ An accepted cost is a label on the pull request (`perf-regression-accepted`) rat
 acceptance belongs to one change: once it merges, the next pull request's base already includes the cost, so a committed
 exemption would only outlive its reason and hide the next regression on the same benchmark.
 
-Revisit if CI gains a runner reserved for benchmarks on which an A/A wall-clock run stays well inside a usable
-threshold, or if a regression that reaches users turns out to be one the instruction count did not see.
-
 ## Shell overlays under the real interpreters
 
 The completion tests drive the generated fish and zsh overlays through the interpreter itself, against a `felis`
@@ -241,8 +238,6 @@ smoke that the claim rests on runs on every `main` revision and tag. The shipped
 workspace crate per commit (the Nix package also stamps the revision, so even a commit that touches no crate misses its
 cache), while the debug binaries are one link away from what the suite already compiled.
 
-_Revisit if_ a `main` run's package smoke fails after its pull request passed.
-
 ### A source build is not an artifact
 
 The flake may keep exposing an ungated target; a Nix user who builds `aarch64-linux` from source gets a build the docs
@@ -262,8 +257,6 @@ The rebuild is cheap where it would hurt: the derivation is content-addressed, s
 `main` build produces the same store path and the cache push is a no-op. The attached archives are relocated copies of
 that same store path rather than a second build, so the cache stays the reproducibility story and the tarballs are only
 what a host without Nix can unpack. What the second run pays for is runner time, which a release spends once.
-
-_Revisit if_ Forgejo gains cross-workflow gating, which would make promotion an option worth re-costing.
 
 ### Claims name exact targets
 
@@ -289,5 +282,4 @@ What it does not witness is everything a machine would re-check. No frame is com
 reproduces the result, and the suite does not run on the target at all, so a regression only Cargo tests would catch
 reaches the cache. The evidence is also one person's report about the revisions that person happened to run, and a
 reader of a green run log cannot find it. The cache push runs only after the darwin build succeeds, so the cache never
-carries a path whose build failed. _Revisit if_ a darwin frontend smoke lands, which retires this class of evidence and
-makes the row read like `x86_64-linux`'s.
+carries a path whose build failed.

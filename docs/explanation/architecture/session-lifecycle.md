@@ -145,9 +145,6 @@ specifically, so running it elsewhere would answer a different question. A relat
 wire rather than resolved against the daemon's frozen directory; the CLI anchors a relative `--cwd` to the caller before
 sending, since only the caller's process knows what it meant.
 
-_Revisit if_ a window-opening chord wants the focused session's live `OSC 7` cwd rather than the launching process's,
-the way the transient sessions below already do.
-
 ### Transient sessions start in the origin session's directory
 
 The transient sessions `pipe` and `run` create take their directory from a third source: the origin session's live
@@ -219,8 +216,6 @@ Three alternatives are rejected:
 - **Disclaiming persistent agent support.** The stale agent is the most common form of the very failure this exists to
   fix.
 
-_Revisit if_ a platform appears where the agent endpoint is neither a filesystem path nor already stable.
-
 #### `LANG` is filled rather than stamped, and only on macOS
 
 felis fills `LANG` in the daemon when a macOS session would otherwise start with no locale. launchd hands a
@@ -243,9 +238,6 @@ The value comes from CoreFoundation's language and country codes rather than its
 decorates with `@currency=…` and other collator metadata, and a candidate is accepted only when `/usr/share/locale`
 holds it. That is the directory `setlocale` itself consults, checked as a directory because calling `setlocale` would be
 FFI in a crate that denies `unsafe`.
-
-_Revisit if_ a launcher on another platform is reported starting sessions with no locale at all, or a relay-chain child
-needs the far host's locale rather than the locale of the host it runs on.
 
 ## Attach
 
@@ -351,10 +343,6 @@ _Per-window virtual palettes_ (giving each mirror its own view of the full color
 the _program_, it has one PTY, and there is no answer to "which window's palette" to give it. The configured palette
 answers along the chain instead, inside the same report as the trio: one window's palette, picked by the same order.
 
-_Revisit if_ a single session ever has mirrors that genuinely differ in theme by design (a shared session across two
-users' machines, say) rather than by transient OS-theme skew. The chain answers with one window's colors by
-construction; a case where two answers are simultaneously right needs a different model, not a different order.
-
 ### Focus across mirrors
 
 Focus is per-window state too, reduced differently: each window reports its own OS focus (`InputMsg::FocusChange`), and
@@ -435,9 +423,6 @@ which connection closed rather than by what arrived on it: it numbers each conne
 number but the live one says nothing about the daemon. Canceling the superseded connection's reader cannot carry this by
 itself (a reader that has already reached EOF is past the point where cancellation reaches it), and back-to-back
 switches retire two connections inside a millisecond, which is exactly when that race is lost.
-
-_Revisit if_ the daemon grows a typed close reason: the connection number would then corroborate a verdict the wire
-already states instead of being the only source of one.
 
 ### The exit ladder
 
@@ -723,8 +708,6 @@ A revisioned catalog stream, the daemon pushing roster deltas to each window, is
 consumer: nothing inside the window displays a session list (there is no in-window picker, principle 1), so its only
 reader would be a pick that happens a few times a day.
 
-_Revisit if_ a session-list UI ever needs live updates.
-
 ## Cross-carrier re-dial
 
 Session switching moves a window between sessions on _one_ daemon. A window can also be re-pointed at a _different_
@@ -756,10 +739,6 @@ that machinery (the same dial → attach → detach transaction the switch path 
 for the session id), including the bounded two-connection overlap: during a retarget the existing carrier stays
 connected until the new one has attached, so an unreachable target leaves the window on its current daemon instead of
 blank. The rejected shape is _steady-state_ fan-out across daemons, not the transactional interval.
-
-_Revisit if_ a design answers all of partial compatibility, partial failure, and the cross-daemon roster at once without
-moving authoritative session state onto the client (principle 3); only then is simultaneous multi-daemon attach
-reconsiderable.
 
 ### Crossing carriers to unwind the trail
 
@@ -956,9 +935,6 @@ rows is. Spelling the default as a value drawn from the geometry's own domain wo
 over a single wire type. The argument, and why presence is cheap enough to take instead, is in [ipc.md](ipc.md)
 "Optional fields instead of in-band sentinels".
 
-_Revisit if_ a display generation arrives whose cell counts approach 2048: the bound is a budget, and the budget is a
-number this argument can re-derive against a larger one.
-
 ### Slow subscribers: eviction, not backpressure
 
 The owner task never blocks on one subscriber's wire: a subscriber whose unwritten backlog crosses the cap is evicted
@@ -1020,16 +996,12 @@ open that door.
 
 Revisit if:
 
-- **The active-owns-the-size policy proves wrong in daily use.** It is the most likely knob to need tuning; tmux's
-  four-way `window-size` option exists precisely because no single policy satisfies everyone, so a config knob is the
-  obvious escape hatch.
 - **Per-client independent _sizing_ becomes wanted**: each device reflowing the grid to its own dimensions. felis _can_
   build it where dtach/abduco/mosh structurally cannot, by maintaining a per-client reflowed projection of the daemon
   grid; deferred because no surveyed tool ships it and live per-client reflow is the hard case, where letterbox is the
   predictable answer.
 - **Per-subscriber daemon state grows unexpectedly** (a client count high enough that diff fan-out shows in a profile):
   revisit the fan-out representation.
-- **A non-Rust subscriber appears** that cannot drive the rehydrate / pull path: revisit the subscriber contract.
 - **Interleaved input from concurrent typists proves harmful** beyond the accepted shared-shell semantics: consider an
   opt-in input lock (one writer at a time), at the cost of reintroducing a coordination surface.
 
@@ -1068,5 +1040,3 @@ Two alternatives are rejected:
 
 The watchdog therefore holds its own reference to the child from before the task started: it is the one piece of the
 session that has to outlive the unwind.
-
-_Revisit if_ the daemon grows a general supervision layer; the watchdog is per-task and ad hoc.
