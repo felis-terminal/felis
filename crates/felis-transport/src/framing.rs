@@ -1,7 +1,7 @@
 //! Async frame reader / writer over any [`AsyncRead`] / [`AsyncWrite`].
 //! The length prefix is checked against the ceiling before any body
-//! space is reserved (`docs/reference/testing.md` "Security tests", "Frame
-//! length ceiling").
+//! space is reserved (`docs/explanation/security-model.md`
+//! "Frame length has a hard ceiling, both ways").
 
 use std::io;
 

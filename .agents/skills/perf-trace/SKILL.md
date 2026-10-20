@@ -158,13 +158,15 @@ end-to-end A/B:
   sidecar; aggregate with `scripts/prof-top.py <profile> <syms> <thread-substr>` (python3 via
   `nix run nixpkgs#python3`).
 
-Single-thread floor and full-daemon drain for any payload file (the two ends that bracket every end-to-end number):
+Single-thread floor and full-daemon drain for any payload file (the two ends that bracket every end-to-end number) are
+the two ignored `felis-daemon` probes that read `FELIS_BENCH_FILE` (`rg -l FELIS_BENCH_FILE crates/felis-daemon` finds
+them, in `parse_sink.rs` and `serve/tests.rs`):
 
 ```sh
 FELIS_BENCH_FILE=/abs/path/payload \
 FELIS_BENCH_ROWS=35 FELIS_BENCH_COLS=137 \
   cargo nextest run --release -p felis-daemon \
-  -E 'test(measure_parse_into_grid_floor) or test(measure_attached_cat_drain)' \
+  -E 'test(<floor probe>) or test(<drain probe>)' \
   --run-ignored all --no-capture
 ```
 

@@ -463,7 +463,6 @@ impl Reassembler {
     }
 }
 
-// Kani proofs (`docs/reference/testing.md` "Kani proof inventory").
 #[cfg(kani)]
 mod kani_proofs {
     use super::parse_controls;

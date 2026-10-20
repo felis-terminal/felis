@@ -291,9 +291,8 @@ undecodable body earns: a newer peer's mode is the one handshake failure that is
 Naming the mode costs the daemon a second decode of the `Hello` body, which recovers the raw enum number the validated
 codec has already refused. That second read is a diagnostic for a peer that is not honoring the contract, not a
 compatibility fallback: a conforming client refuses a mode above the effective minor before it writes `Hello` at all
-(`check_mode_minor`), so ordinary skew never reaches it. `serve/tests.rs` pins both halves:
-`a_hello_naming_an_unknown_mode_is_refused_by_name` and
-`an_unreadable_hello_that_is_not_a_future_mode_closes_unanswered`.
+(`check_mode_minor`), so ordinary skew never reaches it. `serve/tests.rs` pins both halves: an unknown mode is refused
+by name, and an unreadable `Hello` that does not name a future mode closes unanswered.
 
 ### The roster queries both attach-capable modes share
 
@@ -362,11 +361,11 @@ Rejected alternatives:
 
 A shared `.proto` makes the schema the authority rather than a projection of the Rust types
 ([the reference states how the crate is arranged](../../reference/ipc.md#application-messages)): where the two could
-disagree the schema wins, and the tests that read the file (`the_protocol_version_matches_the_schema`,
-`every_message_kind_matches_the_schema_enum`) are what stops them from drifting apart quietly. What the domain types buy
-for that mapping is invariants the generated structs cannot hold (a `u128` session id, `NonZero` correlation ids) and a
-`felis-protocol` free of `tokio` and OS symbols: `prost`, `prost-types` (the well-known types the schema imports) and
-`bytes` are the only added dependencies, all pure-Rust and runtime-free.
+disagree the schema wins, and the tests that check the protocol version and the message-kind enum against the file are
+what stops them from drifting apart quietly. What the domain types buy for that mapping is invariants the generated
+structs cannot hold (a `u128` session id, `NonZero` correlation ids) and a `felis-protocol` free of `tokio` and OS
+symbols: `prost`, `prost-types` (the well-known types the schema imports) and `bytes` are the only added dependencies,
+all pure-Rust and runtime-free.
 
 ### Protobuf costs no throughput against postcard
 
@@ -1298,11 +1297,11 @@ the Rust types. Two decisions, argued in that order below. The blob rides as an 
 envelope encoding.
 
 Attributes are run-length encoded because serializing them per cell is the daemon's single largest emit cost: a samply
-profile of `daemon_side/plaintext_scroll` under a per-cell codec puts ~44 % of self-time into serializing `Color` /
-`Attributes` / `Cell` (an 80-column `cat` line pays the three-`Color`-plus-flags serialize 80 times for one pen), and
-the plaintext stream is daemon-produce bound, so that serialize is the binding constraint on throughput. A uniform row
-collapses to a single attribute run, so the pen serializes once per row; the per-column grapheme stream stays, but a
-grapheme record is a cheap 1–2 bytes that never re-serializes the pen.
+profile of the end-to-end bench's daemon-side plaintext-scroll case under a per-cell codec puts ~44 % of self-time into
+serializing `Color` / `Attributes` / `Cell` (an 80-column `cat` line pays the three-`Color`-plus-flags serialize 80
+times for one pen), and the plaintext stream is daemon-produce bound, so that serialize is the binding constraint on
+throughput. A uniform row collapses to a single attribute run, so the pen serializes once per row; the per-column
+grapheme stream stays, but a grapheme record is a cheap 1–2 bytes that never re-serializes the pen.
 
 Worst case, a row that alternates pen every column produces one run per cell, larger than a flat body, but real terminal
 output holds runs even in heavily-colored TUIs; if a workload ever defeats RLE as a measured regression, the fix is a
@@ -1356,8 +1355,8 @@ opaque trades that tooling coverage for the hand-tuned RLE packing above.
 
 Schema-governed cells have a measured price rather than a hypothetical one. A spike swapped the row codec to a native
 protobuf `Row` / `Cell` model (field-numbered, so `buf breaking` would guard it) and ran the end-to-end benches. The
-encode side is free: the daemon's emit path (`daemon_side` in `felis-client-core`'s `end_to_end_throughput` bench) moves
-within noise, because parse, grid-diff, and framing dominate the producer.
+encode side is free: the daemon's emit path (the daemon-side group of `felis-client-core`'s `end_to_end_throughput`
+bench) moves within noise, because parse, grid-diff, and framing dominate the producer.
 
 The decode side is not, because the row is decoded on every client's consume hot path where nothing else hides it:
 `client_consume` regresses about 140 %, the full single-cycle round trip 40–60 %, the batched production path 13–16 %,

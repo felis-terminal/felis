@@ -300,6 +300,8 @@ jobs:
 
   windows-smoke:
     name: frontend smoke (Windows)
+    # The runner must live in a desktop session, not run as a session-0
+    # service: DX12 needs a surface, which session 0 never has.
     runs-on: x86_64-windows
     needs: [verify-tag, windows-test]
     timeout-minutes: 90

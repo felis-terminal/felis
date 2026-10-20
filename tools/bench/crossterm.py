@@ -27,8 +27,14 @@ Commands
 Results root layout, written by `run` and read by `report`:
 
     <root>/meta.json          machine, tools, the pinned condition
-    <root>/grid               felis's probed grid, "ROWS COLS"
+    <root>/grid               felis's probed grid, "ROWS COLS XPIXEL YPIXEL"
     <root>/<suite>/           that suite's raw artifacts, plus run.log
+    <root>/<suite>/<leg>.size      the leg's TIOCGWINSZ, in the same four fields
+    <root>/<suite>/<leg>.env.json  load, throttling and display at both ends
+                                   of the leg, and `refused` if it was
+    <root>/<suite>/<leg>.res.json  CPU time and memory over the measured pass
+                                   (`usage.py`)
+    <root>/<suite>/<leg>.latency-failed  each failed latency attempt's reason
     <root>/<suite>/order      the order the legs ran in
     <root>/<suite>/grid-mismatch  legs that missed the pin, if any
     <root>/<suite>/refused/   a refused leg's artifacts, out of the report's reach
@@ -40,6 +46,14 @@ Results root layout, written by `run` and read by `report`:
 With `ROUNDS` above 1 each suite's artifacts move one level down, into
 `<root>/<suite>/round-<n>/`, and a leg's resume marker is per round.
 `loaders.rounds` is the one place that resolves either layout.
+
+Environment
+  FELIS_BENCH_<TOOL>  absolute path to one pinned binary of the field
+                      (FELIS_BENCH_KITTY, FELIS_BENCH_GHOSTTY, ...),
+                      overriding what the field would resolve
+  FELIS_BENCH_SHELL   marks the run as inside `nix develop .#bench`;
+                      absent, `run` warns that the field came from the
+                      host PATH, and meta.json records it
 """
 
 from __future__ import annotations

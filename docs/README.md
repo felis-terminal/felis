@@ -78,8 +78,8 @@ Information-oriented lookup; consulted, not read in order.
   concept, CLI verb, keymap `kind`, `IpcAction`, wire message.
 - [Workspace](reference/workspace.md) — the canonical crate map, dependency direction, filesystem layout, build and
   platform matrix, and where the lint policy lives.
-- [Testing](reference/testing.md) — the test-layer table, per-layer targets, fuzz targets, the Kani proof inventory,
-  mutation testing, and the CI shape.
+- [Testing](reference/testing.md) — the test layers, their acceptance bars and commands, mutation testing, and the CI
+  shape.
 - [Security audits](reference/security-audits.md) — the standing audits: `O_CLOEXEC`+`O_NOFOLLOW` open sites, the OS
   hand-off sites, and `felis-protocol` crate purity.
 - [Spec summary](reference/spec.md) — numbered (REQ-XXX) index of every requirement, citing the doc that commits to it.

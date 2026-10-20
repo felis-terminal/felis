@@ -19,9 +19,8 @@ differ across environments.
 ### Comparison field
 
 A run over the full field measures ghostty twice: its release and its tip. On Linux `nix develop .#bench` pins both, the
-tip to the upstream commit in `dev/flake.lock`; on macOS the tip is passed as `--tool ghostty-tip=<path>`
-(`just bench-vs-fetch-tip` prints the path). A full run refuses to start when either is missing; `--terminals` narrows
-the field and lifts the requirement.
+tip to the upstream commit in `dev/flake.lock`; on macOS `just bench-vs-fetch-tip` fetches the tip and the run is given
+its path. A full run refuses to start when either is missing; a run that narrows the field lifts the requirement.
 
 ### Suites and workloads
 
@@ -51,9 +50,8 @@ leg instead.
 
 `wl-latency` reads each screen state it waits for (the typed reference pattern, a cleared line, an empty cell before a
 key) by polling until it appears or 2 s pass, and releases each key right after pressing it. A cell already painted over
-before its key is waited out and counted as `covered_before_key` in the leg's JSON. A leg the instrument fails is
-measured once more in a fresh window; each failed attempt's reason is appended to `<name>.latency-failed`, and the chart
-quotes it.
+before its key is waited out rather than timed. A leg the instrument fails is retried once in a fresh window, and the
+chart quotes the reason for each failure.
 
 #### Startup measurement
 
@@ -67,11 +65,9 @@ recorded failure with no bar. On a tiler, work that delays the first configure i
 animation is not timed.
 
 felis has two rows. **felis (cold)** stops the bench daemon before every launch, so each launch autospawns one. **felis
-(warm)** starts with one untimed launch whose autospawned daemon every later launch reuses: stopping a launch terminates
-its process tree except that daemon, which on macOS is a child of the client and so inside the tree. Before every launch
-the cold row checks that no daemon is bound to the bench socket and the warm row that the same daemon still is; a launch
-that fails its check ends the row as a recorded failure. Each row records in `daemon_checked` how many launches passed
-their check.
+(warm)** starts with one untimed launch whose autospawned daemon every later launch reuses. Before every launch the cold
+row checks that no daemon is bound to the bench socket and the warm row that the same daemon still is; a launch that
+fails its check ends the row as a recorded failure.
 
 ### Resource accounting and sampling
 
@@ -85,11 +81,9 @@ carries a driver share the reader cannot separate from the rest, while a CPU ren
 recorded per leg and named on the chart.
 
 `vtebench`, `termbench`, `cat`, `kittenbench` and `doom-fire` also record what each terminal spent on the measured pass,
-in `<name>.res.json` beside the suite's results (`tools/bench/usage.py`), charted as one CPU-time and one peak-memory
-chart with a panel per suite. The wrapper touches `<name>.start` and waits for `<name>.started`, which the sampler
-writes after its baseline reading; the window closes once the wrapper has touched `<name>.end` and the processes have
-gone idle (under 5% of one core for a 0.25 s interval, at most 3 s after the marker). In between, the processes are
-sampled every 0.25 s:
+charted as one CPU-time and one peak-memory chart with a panel per suite. The window opens after the sampler's baseline
+reading, before the workload starts, and closes once the workload has ended and the processes have gone idle (under 5%
+of one core for a 0.25 s interval, at most 3 s after the end). In between, the processes are sampled every 0.25 s:
 
 | Field     | Linux                                          | macOS                                                                                                          |
 | --------- | ---------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
@@ -115,23 +109,17 @@ detection:
 | niri                                           | `niri msg action move-window-to-floating`, then `set-window-width` / `set-window-height` in logical pixels, iterated against the tty | cell grid and render area in pixels |
 
 A leg the pin cannot place falls back to a tty pin (`stty rows cols`) so that every terminal still parses identical
-bytes; it is recorded as `tty-only` in `grid-mismatch`, because the render area differs even where the cell grid
-matches.
+bytes; it is recorded as `tty-only`, because the render area differs even where the cell grid matches.
 
-Each leg records `rows cols xpixel ypixel` from TIOCGWINSZ in `<name>.size`, and the reference is cached in the same
-four fields as `<root>/grid`. Verification compares width and height separately against the reference, each within one
-reference cell (`xpixel/cols`, `ypixel/rows`): padding is smaller than a cell, while a font pin that did not apply moves
-the window by at least one. A terminal that leaves the pixel fields at zero is verified by cell count alone and its bar
-carries `pixels unreported`. `GRID_ROWS` and `GRID_COLS` override the reference as a pair, and only a pin that can
-resize accepts them.
+Each leg reads its `rows cols xpixel ypixel` from TIOCGWINSZ. Verification compares width and height separately against
+the reference, each within one reference cell (`xpixel/cols`, `ypixel/rows`): padding is smaller than a cell, while a
+font pin that did not apply moves the window by at least one. A terminal that leaves the pixel fields at zero is
+verified by cell count alone and its bar carries `pixels unreported`.
 
 ### Rounds and reporting
 
 The field is measured `ROUNDS` times (default 1, a publishable run 3). A round runs every leg once, and the leg order
-rotates by one per round so that no terminal keeps a position; the order a round ran in is recorded beside its artifacts
-as `order`. One round writes each leg's artifacts directly under `<root>/<suite>/`, two or more write them under
-`<root>/<suite>/round-<n>/`. Resume markers are per `(round, terminal)`, so a crashed multi-round run continues where it
-stopped; resuming a root under a different `ROUNDS` than it was measured with is refused before the first window opens.
+rotates by one per round so that no terminal keeps a position.
 
 A bar is the median of that terminal's per-round values and its whisker their min-max range. A bar from fewer than two
 rounds carries no whisker and states the count it has ("1/3 rounds"); a single-round chart draws the within-leg spread
@@ -139,11 +127,11 @@ instead. Each chart's subtitle names the whisker it drew, and the table prints r
 together. The `felis vs best other` column prints a ratio only where the run supports one: `—` when either side measured
 fewer than two rounds, and `—` when the two ranges overlap.
 
-Each leg records the machine it ran on at both ends of itself, in `<name>.env.json`: the one-minute load average on
-every platform, plus the `pmset -g therm` speed limit on macOS and the `/sys/devices/system/cpu/*/thermal_throttle/`
-counters on Linux, recorded as `unavailable` where the platform reports neither. A chart note names the legs whose load
-average ran more than 1.0 above the load `meta.json` recorded when the run started, and the legs the platform called
-throttled: on Linux a counter that advanced across the leg, on macOS a speed limit below 100 at either end of it.
+Each leg records the machine it ran on at both ends of itself: the one-minute load average on every platform, plus the
+`pmset -g therm` speed limit on macOS and the `/sys/devices/system/cpu/*/thermal_throttle/` counters on Linux, recorded
+as `unavailable` where the platform reports neither. A chart note names the legs whose load average ran more than 1.0
+above the load recorded when the run started, and the legs the platform called throttled: on Linux a counter that
+advanced across the leg, on macOS a speed limit below 100 at either end of it.
 
 The same record carries `display`, whether a window could present a frame, as `locked` and `asleep` (`true`, `false`, or
 `null` for unknown):
@@ -153,42 +141,12 @@ The same record carries `display`, whether a window could present a frame, as `l
 | `locked` | `IOConsoleLocked` from `ioreg -a -n Root -d1`                      | logind's `LockedHint` on `seat0`'s active session |
 | `asleep` | `CGDisplayIsAsleep` for the main display, read through `osascript` | `null`: no reading is taken                       |
 
-A leg sampled with either field `true` is refused: at its start the leg is not launched, and at its end it is stopped as
-usual. `<name>.env.json` records the reason under `refused`, and the console prints it. Every other artifact of the
-attempt, its resume marker included, lands in `refused/` beside the suite's results, where the report does not read it;
-the chart note names the leg, and a resumed run retakes it.
+A leg sampled with either field `true` is refused and has no bar: the chart note names it, and a resumed run retakes it.
 
-#### Leg attempts
-
-Each attempt at a leg writes every artifact, its own and the harness's records of it, into a fresh directory under
-`.attempts/` in the suite (or round) directory, and the report reads none of them there. Starting an attempt deletes the
-artifacts an earlier attempt of the same leg left in the suite directory, except `<name>.latency-failed`, which the
-harness appends across attempts. When a leg ends, after its end-of-leg environment sample and before its processes are
-stopped, the attempt's files are copied into a sealed directory, which holds every later record the harness writes for
-the attempt; a suite that runs no process that writes there (`startup`) is sealed when the attempt returns. An attempt
-that returns is promoted: its sealed directory is renamed to `.attempts/<name>.promoting` as the commit, and its files
-are then moved into the suite directory, the resume marker last. An attempt that returns without its resume marker
-(`<name>.done`; `<name>.mem.json` in `memory`) lands only its env record in the suite directory, and every other file in
-`unfinished/`, which the report does not read. An attempt that raises or is interrupted is discarded. Before a suite
-starts, a committed promotion is finished and every other attempt directory is deleted; before the report reads a
-directory, committed promotions are finished.
-
-Stopping a leg sends SIGTERM to the launch and every process under it, and to felis's daemon and every process under it.
-The tree is walked before the first signal and again every 50 ms while waiting; a process that remains after 5 s gets
-SIGKILL, and one still alive after that is printed as `LINGERING`. Each process is held by its identity from the moment
-it is found: the launch through the harness's own `Popen`, any other process through a pidfd on Linux and through its
-start time from `proc_pid_rusage`, compared again before each signal, on macOS. A child is held only after it is
-confirmed to still be its parent's child while the parent is alive. `startup` stops each launch the same way, sparing
-the warm daemon, and stops the bench daemon between cold launches with SIGTERM alone.
-
-For workload parameter overrides and prerequisites, see `python3 tools/bench/crossterm.py --help`.
-
-### Environment variables
-
-| Variable             | Read by                                  | Effect                                                                                                                                              |
-| -------------------- | ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `FELIS_BENCH_<TOOL>` | `tools/bench/crossterm.py`               | Absolute path to one pinned comparison binary (`FELIS_BENCH_KITTY`, `FELIS_BENCH_GHOSTTY`, …), overriding what the field resolves.                  |
-| `FELIS_BENCH_SHELL`  | `tools/bench/crossterm.py`, `envinfo.py` | Marks the run as inside `nix develop .#bench`. Absent, the run warns that its field came from the host `PATH`, and records the fact in `meta.json`. |
+What the report reads of a leg is always one complete attempt at it; a leg interrupted or stopped partway contributes
+nothing. Run mechanics (CLI flags, workload knobs, environment variables, the results-root layout, resume, how attempts
+are isolated and how a leg's processes are stopped) are documented by `python3 tools/bench/crossterm.py --help`, the
+`tools/bench/crossterm.py` module docstring, and `tools/bench/field.py`.
 
 ## macOS
 

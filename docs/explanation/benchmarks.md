@@ -117,8 +117,8 @@ pixel that departs from it, and the pattern is the evenly spaced run of them on 
 rather than over the image, because a whole-screen diff is not a quiet picture, since the previous leg's window is still
 closing.
 
-A felis-only latency regression seen here is bisected with the headless `profile_echo_latency` probe
-(`crates/felis-daemon/tests/`), since this suite cannot see inside the pipeline.
+A felis-only latency regression seen here is bisected with the headless echo-latency probe
+(`crates/felis-daemon/tests/real_app_harness.rs`), since this suite cannot see inside the pipeline.
 
 ### Startup ends at the first window, not at the process exit
 

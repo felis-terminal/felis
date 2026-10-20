@@ -1,8 +1,11 @@
 name: cargo-env
 description: >-
-  Point cargo at a persistent build directory outside the workspace; the job
-  releases it with cargo-env/done. The rebuild policy is
-  docs/reference/testing.md "Persistent build directory".
+  Point cargo at a persistent build directory outside the workspace, claimed
+  until the job's cargo-env/done step releases it. guard.mjs rebuilds it from
+  scratch when an ended or over-6-hour-old job left its claim, when it is over
+  7 days old or unstamped, when the toolchain, Cargo.lock or a CARGO_PROFILE_*
+  override changed (not on a pull request), or when Windows D: is under 8 GB
+  free; a running job's claim defers the rebuild to the next unclaimed job.
 
 runs:
   using: composite

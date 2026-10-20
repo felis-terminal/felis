@@ -24,12 +24,12 @@ Each row stays contiguous, so the print fast path keeps its hoisted per-row-chun
 on the row base. The live window is contiguous in ring space (a monotone `base`, no permutation); a sub-region scroll
 (DECSTBM, IL/DL), which cannot be a whole-window shift, rotates a _scroll band_ over the region instead of moving rows:
 an O(1) counter bump, recorded in ["Interior scroll band"](#interior-scroll-band) below. Resize / reflow re-lay the ring
-out canonically (`install_ring`). One eviction copy remains: a scroll region anchored at the top but not covering the
-full screen (`DECSTBM` with `top = 0`, `bottom < rows - 1`) pushes to scrollback but cannot be a pure base bump, because
-rows below the region must stay; that cold path (`scroll_partial_top_into_history`) evicts its top rows through the
-full-screen path and then shifts the rows below the band back down, the same occupancy-clipped move. Because history and
-the live screen are one surface, the scrollback / live seam that `search`, `reflow`, the pipe sources, and the viewport
-composition read is a plain window read, not a join of two stores.
+out canonically. One eviction copy remains: a scroll region anchored at the top but not covering the full screen
+(`DECSTBM` with `top = 0`, `bottom < rows - 1`) pushes to scrollback but cannot be a pure base bump, because rows below
+the region must stay; that cold path evicts its top rows through the full-screen path and then shifts the rows below the
+band back down, the same occupancy-clipped move. Because history and the live screen are one surface, the scrollback /
+live seam that `search`, `reflow`, the pipe sources, and the viewport composition read is a plain window read, not a
+join of two stores.
 
 The physical buffer grows lazily: it starts at the live `rows` and doubles toward `rows + cap` only as history fills,
 re-laying the ring out canonically on each growth (amortized O(1) per push). This is a requirement, not an optimization.
@@ -54,12 +54,11 @@ needing no scratch buffer. The `soft_wrap` and `occupancy` side-arrays are rebui
 Readers go through a borrowing `ScrollbackView` (`Grid::scrollback()`), which clips each history row at its occupancy
 watermark ([grid-and-cells.md "Occupancy watermark"](grid-and-cells.md#occupancy-watermark)): a history row is a former
 viewport row left in place, so its tail past the watermark holds undefined bytes from the zero-copy recycle. Every
-consumer already trims trailing blanks: the daemon copy / pipe sources (`row_text_trim` / `encode_row`), seam search,
-and reflow, which re-pads history rows to full width locally so a bare-LF column carry still reconstructs. On the
-alternate screen `cap = 0` and the live ring is a bare viewport; a scrollback read routes into the saved primary buffer
-rather than the live (alt) fields, and the `SavedScreen` snapshot carries `base`, `phys_cap`, `history_len`, and `cap`
-across the toggle, plus the `rows` and `cols` they are relative to, which a resize under the alt screen moves the live
-grid past ("Reflow on resize", D4).
+consumer already trims trailing blanks: the daemon copy / pipe sources, seam search, and reflow, which re-pads history
+rows to full width locally so a bare-LF column carry still reconstructs. On the alternate screen `cap = 0` and the live
+ring is a bare viewport; a scrollback read routes into the saved primary buffer rather than the live (alt) fields, and
+the `SavedScreen` snapshot carries `base`, `phys_cap`, `history_len`, and `cap` across the toggle, plus the `rows` and
+`cols` they are relative to, which a resize under the alt screen moves the live grid past ("Reflow on resize", D4).
 
 ## Soft wrap
 
@@ -254,10 +253,10 @@ later scrolls and resize.
 - `Evicted`: it has scrolled past the retained ring and is unrecoverable.
 
 `prompt_marks` is **front-pruned**: marks are pushed as boundaries fire, resize never touches them, and a mark is
-dropped once its line evicts past the retained scrollback ring or is cleared by ED 3. `prune_evicted_marks` runs on each
-scrollback eviction and on ED 3; it drains the leading marks whose `line` has fallen below the oldest retained row and
-adds their count to `prompt_marks_pruned`. The vector therefore stays bounded by the number of _retained_ marks, not by
-session lifetime.
+dropped once its line evicts past the retained scrollback ring or is cleared by ED 3. The prune runs on each scrollback
+eviction and on ED 3; it drains the leading marks whose `line` has fallen below the oldest retained row and adds their
+count to `prompt_marks_pruned`. The vector therefore stays bounded by the number of _retained_ marks, not by session
+lifetime.
 
 Front-draining breaks the naive "mark index = position in the vector" assumption, so the daemon's streaming cursor
 counts in a **never-pruned ordinal**: mark `i` in the live vector carries absolute ordinal `prompt_marks_pruned + i`. A
@@ -367,8 +366,8 @@ Five decisions fix the reflow's edges:
 - **The round-trip is exact only without eviction (D2).** `W → W' → W` restores the original layout only while no
   scrollback eviction occurs. Narrowing produces more physical rows, and once the ring is at `cap` the oldest rows evict
   first (as in Kitty), so a narrow-then-widen that overflowed the ring cannot resurrect the evicted head. This is the
-  scoped limit of the round-trip guarantee (REQ-604, REQ-407); the proptest that pins it
-  (`reflow_width_round_trip_restores_plain_text`) holds the input under the cap so no eviction fires.
+  scoped limit of the round-trip guarantee (REQ-604, REQ-407); the width round-trip proptest that pins it holds its
+  input under the cap so no eviction fires.
 - **The alternate screen keeps trim/pad (D3).** On the alt screen `reflow` delegates to `resize`. Alt rows are a
   distinct surface with no shared scrollback to stitch against, so re-wrapping them against the primary's history would
   join unrelated content; trim and pad is the right operator there.

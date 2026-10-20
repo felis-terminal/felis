@@ -20,8 +20,8 @@ therefore swallows interior printable ASCII.
 
 The vim / lazygit / helix per-keystroke shape. Current: a default-pen ED 2 blanks only each row's occupancy-watermark
 prefix and marks damage only on rows that actually changed; the BCE (colored-pen) path keeps the full vectorized fill.
-`daemon_side/csi_redraw` 85 MiB/s, `multi_cycle` 160. kitten's benchmarks and vtebench barely lean on ED 2, so the
-criterion case is the only guard; keep it.
+The `end_to_end_throughput` bench's daemon-side CSI-redraw case reads 85 MiB/s, its multi-cycle case 160. kitten's
+benchmarks and vtebench barely lean on ED 2, so the criterion case is the only guard; keep it.
 
 ## Plaintext `cat`: topology, and the pty wall (2026-08-20)
 

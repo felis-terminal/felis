@@ -5,8 +5,8 @@ sidebar:
 ---
 
 How felis verifies correctness, conformance, robustness, and performance, and why the verification stack has the layers
-it has. The layer inventory itself (targets, acceptance bars, commands, CI wiring, the Kani proof inventory) is the
-reference twin, [reference/testing.md](../reference/testing.md); this page owns the strategy and the decision record.
+it has. The layer inventory itself (acceptance bars, commands, CI wiring) is the reference twin,
+[reference/testing.md](../reference/testing.md); this page owns the strategy and the decision record.
 
 ## Why the layers exist
 
@@ -83,16 +83,15 @@ The `State::Ground` hot path coalesces printable runs with hand-written SWAR (SI
 subtract-and-mask predicates from Bit Twiddling Hacks (<https://graphics.stanford.edu/~seander/bithacks.html>), whose
 correctness is alignment- and borrow-sensitive across lanes.
 
-Randomized testing samples that space poorly: the proptest `scan_printable_run_matches_scalar` only ever places **one**
-offending byte in printable filler, so it never exercises borrow interaction between two non-printable bytes. The Kani
-proof against `nonprintable_mask` disproves the tempting invariant ("`0x80` set in _every_ non-printable byte"): the
-counterexample `[0x7F, 0x7E, 0xFF×6]` shows a low `0x7F` (DEL) borrowing into lane 1 and falsely flagging the printable
-`0x7E`. The code is correct (only the _lowest_ set lane is read, via `trailing_zeros()`), but that contract is wrong,
-and no sampling layer catches it.
+Randomized testing samples that space poorly: the proptest that checks `scan_printable_run` against a scalar loop only
+ever places **one** offending byte in printable filler, so it never exercises borrow interaction between two
+non-printable bytes. The Kani proof against `nonprintable_mask` disproves the tempting invariant ("`0x80` set in _every_
+non-printable byte"): the counterexample `[0x7F, 0x7E, 0xFF×6]` shows a low `0x7F` (DEL) borrowing into lane 1 and
+falsely flagging the printable `0x7E`. The code is correct (only the _lowest_ set lane is read, via `trailing_zeros()`),
+but that contract is wrong, and no sampling layer catches it.
 
 The SWAR scanners are therefore proven equivalent to their scalar references for every input up to the bounded window,
-while the proptest stays as the fast always-on check. The live proof list is the
-[Kani proof inventory](../reference/testing.md#kani-proof-inventory) in the reference twin.
+while the proptest stays as the fast always-on check.
 
 The layer reaches x86_64-linux only, from a dedicated `.#kani` dev shell: Kani's compiler pins one exact nightly and
 borrows its precompiled sysroot from an upstream release tarball, and only that platform's tarball is wired up. The

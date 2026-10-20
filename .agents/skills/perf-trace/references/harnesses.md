@@ -221,8 +221,8 @@ one axis, and the chart names which one it drew. The macOS traps are unlike ever
   the one suite that does not inherit `FONT_PT`).
 - **The floor is the machine's.** The published figures include the compositor, the display and the instrument
   (`docs/reference/benchmarks.md` "Latency"), so read the bars against each other. A felis-only regression is better
-  chased with the headless `profile_echo_latency` probe in `crates/felis-daemon/tests/real_app_harness.rs`, which can
-  see inside the pipeline. The Linux leg has its own three:
+  chased with the headless echo-latency probe in `crates/felis-daemon/tests/real_app_harness.rs`, which can see inside
+  the pipeline. The Linux leg has its own three:
 
 - **The instrument has to pass its own calibration first.** `tools/bench/wl-latency/` is its own crate, not a workspace
   member (build it by hand with `cargo build --release --manifest-path tools/bench/wl-latency/Cargo.toml`). `--globals`

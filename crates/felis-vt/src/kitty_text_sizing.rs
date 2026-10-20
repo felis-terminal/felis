@@ -98,7 +98,6 @@ fn parse_u8(bytes: &[u8]) -> Option<u8> {
     Some(acc as u8)
 }
 
-// Kani proofs (`docs/reference/testing.md` "Kani proof inventory").
 #[cfg(kani)]
 mod kani_proofs {
     use super::parse_u8;
