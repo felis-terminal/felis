@@ -147,10 +147,9 @@ felis-built frame whose only variable inputs are the three named sources: state 
 session's cell geometry, and the two presentation facets supplied by windows attached to that same session. No reply
 carries state from another session, from the window manager, or from the OS.
 
-_Revisit if_ a reflective query is proposed whose state can reach the session from outside those three sources: an
-OS-clipboard read, a palette shared across sessions, or a path that lets the window manager write the session title the
-`CSI 21 t` readback reports. Reflection is safe while the writer is the session itself or the user's own window, and a
-query that breaks that is exfiltration in the same shape.
+Reflection is safe while the writer is the session itself or the user's own window. A query whose state can reach the
+session from outside those three sources (an OS-clipboard read, a palette shared across sessions, a path that lets the
+window manager write the session title the `CSI 21 t` readback reports) is exfiltration in the same shape.
 
 ## Parser robustness
 
@@ -190,7 +189,7 @@ The graphics protocol is a large attack surface: it accepts compressed image dat
   anything but a regular file keeps a device or FIFO from stalling the read, and the size cap keeps the open from
   becoming an unbounded one. A path under `/proc`, `/sys` or `/dev` (a file under `/dev/shm` aside) is refused before
   the open, and every failure past the request's own checks gets one reply, so the reply does not reveal what a path
-  holds. No root allowlist is enforced, as in kitty; the reasoning and its revisit trigger are in the
+  holds. No root allowlist is enforced, as in kitty; the reasoning is in the
   [Kitty graphics design](protocols/kitty-graphics.md#file-path-reach-tf).
 - **`t=t` deletes only what kitty would, atomically.** A read's bytes never return to the producer, but a delete acts on
   the file itself, so felis follows kitty's rule: it deletes only under a temp directory and only a path naming
@@ -329,9 +328,6 @@ reuse it cannot steer. Both windows are recorded here rather than chased.
 The DACL and the same-user admit have runtime tests on the `x86_64-windows` runner (REQ-106a); the mismatch path is
 pinned through the `admit` seam, since a single-account runner can never present a foreign SID to `accept`.
 
-_Revisit if_ Windows offers a server-identity query that is not keyed by pid, or the daemon-side pid lookup ever gates
-something the DACL does not already gate.
-
 #### The `RetargetHost` push relays existing authority, not new
 
 A same-UID caller on the `0600` socket can drive `OpsToDaemonMsg::Switch` with a `SwitchTarget::Carrier`, and the daemon
@@ -362,8 +358,7 @@ Both peers check the same constants, so a limit is a property of the protocol ra
 be newer: the numbers the first release ships are part of major 1, and narrowing one afterwards owes the old-peer answer
 [ipc.md](architecture/ipc.md#schema-evolution-major-minor-feature-flag) describes rather than a quiet edit.
 
-_Revisit if_ a real workflow hits one: the numbers are deliberately generous, and each carries its rationale in
-`felis-protocol`'s `messages/limits.rs`.
+The numbers are deliberately generous, and each carries its rationale in `felis-protocol`'s `messages/limits.rs`.
 
 #### Connections are admitted against a daemon-wide cap (REQ-916)
 
@@ -378,8 +373,6 @@ flood.
 
 Per-session subscriber caps were the rejected alternative: with connections bounded, subscribers are bounded by the same
 number, and a second gauge would bound nothing the first does not while adding a lock to the attach path.
-
-_Revisit if_ a real deployment wants more mirrors per session than `MAX_CONNECTIONS / MAX_SESSIONS` (1024 / 256).
 
 #### The descriptor table can bind before the cap does
 
@@ -445,8 +438,7 @@ Making the session task itself block on the PTY was the rejected alternative: th
 parser drain, so one stuck child would freeze the grid for every mirror of that session; the cost falls on the wrong
 people. Bounding at the connection puts it on the one peer that is typing.
 
-_Revisit if_ a single session ever legitimately needs more than 16 MiB of input in flight; the number is per session, so
-the daemon-wide worst case is it times `max_sessions`.
+The number is per session, so the daemon-wide worst case is it times `max_sessions`.
 
 ### What stays out of a client's reach
 
@@ -495,8 +487,6 @@ highlighter colors the token right after the override.
 Giving each codepoint a cell of its own was rejected: a program that lays out a row with glibc `wcwidth` counts the
 codepoint as zero columns, so the rest of the row lands one column right of where it drew it, per codepoint. A
 Fluent-localized CLI wraps every placeholder in U+2068 / U+2069, which makes that drift common in ordinary output.
-
-_Revisit if_ glibc `wcwidth` gives these codepoints a column.
 
 ### Grapheme cluster length is bounded
 

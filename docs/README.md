@@ -4,8 +4,8 @@ title: "felis: documentation"
 
 The tree follows [Diátaxis](https://diataxis.fr/): four quadrants, split by what the reader is doing. **Learning** →
 tutorials. **Doing a task** → how-to guides. **Looking something up** → reference. **Understanding why** → explanation.
-The explanation pages are the design docs: each owns its decisions (rationale, rejected alternatives, "Revisit if …"
-triggers) inline; history lives in `git log` and the repo-root `CHANGELOG.md` (user-affecting changes), not here.
+The explanation pages are the design docs: each owns its decisions (rationale, rejected alternatives) inline; history
+lives in `git log` and the repo-root `CHANGELOG.md` (user-affecting changes), not here.
 
 Where a subject spans both normative facts and architectural rationale (IPC, the protocols, testing, …), the pages link
 each other: the reference page carries the normative lookup material, the explanation page carries the argument.

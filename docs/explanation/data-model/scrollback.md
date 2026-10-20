@@ -142,8 +142,7 @@ richer source lands on capture rather than a separate `sessions pipe` verb is re
 
 **Row indices live in the region's own coordinate space.** Scrollback rows are negative (REQ-608), live rows keep their
 grid coordinate, and a mark range counts from zero at its first row, because a mark range is anchored to a command
-rather than to the grid and a grid-absolute index there would name a row the range does not have. _Revisit if_ a
-consumer needs a mark range's rows tied back to absolute grid lines, which would force the wire to carry them.
+rather than to the grid and a grid-absolute index there would name a row the range does not have.
 
 **A caller never has to choose between color and structure.** Asking for both runs both encoders and each row carries
 its plain and its SGR form side by side, because raw escapes would corrupt the structural field and dropping one form
@@ -158,8 +157,7 @@ drop. A logical line the cut bisects prints only its surviving rows, which is ho
 recomposed window. The viewport path is built for an interactive GUI under pull pacing: the daemon _withholds_ row diffs
 while the viewport is non-zero and only flushes on snap-back (a frozen-view policy matching kitty/wezterm), so a
 headless CLI client would have to fake the pull cadence and de-overlap window seams. A single synchronous daemon walk is
-simpler and round-trip-free. **Revisit if** an interactive in-window "export visible + scrollback" action ever needs the
-same dump without a CLI round-trip: it would reuse `region_rows_window` directly.
+simpler and round-trip-free.
 
 ## Piping to an external command
 
@@ -272,8 +270,7 @@ mark pruned before a subscriber ever streamed it is skipped, never re-sent as a 
 `Grid::prompt_jump_target(viewport, direction)` resolves a previous/next prompt jump to a scrollback viewport entirely
 on the daemon. The matched `PromptStart` mark is top-aligned in the composed view; the result is hard-clamped at the
 history ends with **no wrap** (returns `None` when it would not move). Jumps are disabled on the alternate screen and
-only consider still-retained marks (evicted marks are skipped). Deferred refinements (e.g. per-output-block jumps) are a
-revisit.
+only consider still-retained marks (evicted marks are skipped).
 
 ### Browsing while output arrives
 
@@ -288,7 +285,7 @@ offset the daemon has since grown. Every browsing `ViewportState` therefore carr
 against and a request echoes it back (wire in [ipc.md](../../reference/ipc.md)). **Rejected: daemon-side anchoring
 alone**, reading each request against the current bottom: correct between frames, but a scroll during streaming output
 lands one frame's output away, and on a remote attachment, where the round trip is longer than a frame, that becomes the
-common case. **Revisit if** requests gain a correlation with their replies.
+common case.
 
 A relative scroll (a line, a half page, a wheel tick, Home) is not an offset at all: the window sends
 `InputMsg::ViewportStep` and the daemon applies it to the view it holds for that subscriber, as `JumpPrompt` already
@@ -393,14 +390,12 @@ Five decisions fix the reflow's edges:
   output nothing repaints. For the same reason a prompt that appears while a marked command runs (a nested shell, or one
   the marking shell `exec`ed) is left alone until that shell ends a marked command itself. What stays out of reach is
   output a background job writes while the shell waits at its prompt: no mark separates it from the echo of the line
-  being typed, so the blank takes it too, as it does in kitty and Ghostty. _Revisit if_ a widely used shell marks its
-  prompt but neither repaints it on SIGWINCH nor emits `redraw=0`.
+  being typed, so the blank takes it too, as it does in kitty and Ghostty.
 
 A multi-cell sized run (OSC 66) that the re-wrap cannot fit is discarded, and the producer re-emits it on the new
 geometry: the same keep-or-discard rule `resize` already applies (REQ-406/REQ-407), not a re-fit in place. The rewrap
 lays cells out one at a time and does not retain the run's source text, so a run split across a new wrap boundary cannot
-be re-fitted from the grid alone. _Revisit if_ producers need a sized run preserved across a wrap boundary, which would
-mean retaining run source text on the grid.
+be re-fitted from the grid alone.
 
 **Coordinate space: negative-from-top.** Row 0 is the top of the visible grid, −1 the line just above, −N further back
 (REQ-608). The alternative, absolute line numbers from session start, is used by some logging-style terminals where
@@ -485,7 +480,3 @@ Alternatives considered:
 - **Rotating only at read time without materialization hooks** (lazy everywhere): every raw-ring-order consumer (`base`
   bumps, snapshots, the saved-screen compaction) would need band awareness threaded through; the hook points are few and
   cold, so eager materialization at those seams keeps the band invisible everywhere else.
-
-Revisit if: a workload alternates scroll regions faster than it scrolls within them (materialize thrash, which would
-show as region scrolls regressing toward the per-row-move cost), or a second simultaneously-hot region appears (the band
-is deliberately singular).

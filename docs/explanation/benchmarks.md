@@ -30,9 +30,6 @@ The report uses charts rather than a table because a field of up to seven termin
 and the payloads within a suite differ by more than an order of magnitude, so a shared axis flattens the fast ones into
 slivers.
 
-_Revisit if_ a dedicated, otherwise-idle benchmark machine appears; the resume markers make an unattended nightly run
-possible, only the environment is missing.
-
 ### Repetition is what makes two bars comparable
 
 Only running the field again measures whether felis's bar differs from the bar beside it, which is what `ROUNDS` buys.
@@ -46,9 +43,6 @@ positions: a rotation moves every terminal each round, while a shuffle can leave
 A two-decimal ratio taken from one leg each side is a claim the next run can reverse, so a ratio is printed only where
 the two ranges are apart. A dispersion estimate over those rounds, a MAD or a standard deviation, is rejected: three
 points do not support one, and the range is the honest statement of what the run saw.
-
-_Revisit if_ a publishable run grows past the handful of rounds a desktop has time for, where a range starts tracking
-the worst round rather than the spread.
 
 ## Workloads and instruments
 
@@ -74,8 +68,6 @@ Each way around the patch fails:
 - **Relaying the app through a harness-owned pty.** It inserts a copy between the app and the terminal under test, the
   thing being measured.
 - **Replaying a recorded byte stream.** It removes the app's own CPU cost, which is most of what caps the frame rate.
-
-_Revisit if_ upstream grows a headless or fixed-length mode; the patch is then a rebase burden with nothing left to buy.
 
 ### Input latency is borrowed, not invented
 
@@ -125,10 +117,8 @@ pixel that departs from it, and the pattern is the evenly spaced run of them on 
 rather than over the image, because a whole-screen diff is not a quiet picture, since the previous leg's window is still
 closing.
 
-_Revisit if_ a second Linux compositor enters the field, at which point `wl-latency`'s niri-only focus check needs a
-second implementation; or if a felis-only latency regression ever appears here, at which point the headless
-`profile_echo_latency` probe (`crates/felis-daemon/tests/`) is the one that can bisect it, since this suite cannot see
-inside the pipeline.
+A felis-only latency regression seen here is bisected with the headless `profile_echo_latency` probe
+(`crates/felis-daemon/tests/`), since this suite cannot see inside the pipeline.
 
 ### Startup ends at the first window, not at the process exit
 
@@ -141,8 +131,6 @@ wezterm on macOS never orders its window on screen), so those bars time a teardo
 
 The startup suite skips the WM pin and the grid read-back the other suites rely on, because the pin's handshake would
 sit inside the timed launch.
-
-_Revisit if_ macOS exposes a first-frame signal for another process's window.
 
 ## Which legs reach the report
 
@@ -158,8 +146,6 @@ Waking the display from the harness is already done for a whole run (`caffeinate
 screen, so the check has to stand on its own. On Linux only a locker that reports to logind is seen, and display sleep
 is not read at all; those halves are recorded as unknown rather than as presenting.
 
-_Revisit if_ niri exposes output power state or its lock over IPC.
-
 ### A leg's artifacts reach the report only as one completed attempt
 
 Each attempt writes into its own directory and is promoted whole. No process a leg started ever holds a path in the
@@ -173,8 +159,6 @@ read, a daemon-parented wrapper outside the launch's tree. The attempt directory
 
 Stopping the processes is then about the next leg's machine, not about the numbers, so a process that escapes the walk
 costs a `LINGERING` line and never a wrong bar.
-
-_Revisit if_ a suite has to write outside its attempt directory while a leg runs.
 
 ## What a bar measures
 
@@ -206,8 +190,6 @@ The grid gets the same treatment from the other side: the window manager is the 
 terminal's request, so the harness asks it directly instead of asking each terminal. Every leg's grid is then read back
 from inside the terminal rather than assumed, because a pin nothing checks is a comment and a cell count alone cannot
 see a font pin that did not apply.
-
-_Revisit if_ felis gains an initial-size surface (the probe could go), or ghostty documents a stable cell cost.
 
 #### Not a nested compositor
 
@@ -244,6 +226,3 @@ no equivalent, and half a field is not a comparison).
 Both revisions are recorded and their disagreement written out as a sentence, because the one attribution every reader
 will attempt is the one that would silently be wrong. `--felis` may name a `nix build` result or a stale
 `target/release` binary; either is a perfectly good thing to measure and a very bad thing to file under `git describe`.
-
-_Revisit if_ the build stops embedding a hash (a tarball release falls back to the checkout, the honest answer only
-because there is nothing better to say).

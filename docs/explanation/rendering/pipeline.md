@@ -126,9 +126,6 @@ draws the frame's working set already covers.
 
 A discrete GPU keeps the staged path, since a mappable buffer there lives in host memory the GPU reads across the bus.
 
-_Revisit if_ wgpu writes unified-memory resources without a staging copy, or the driver stops holding a working set per
-encoder type.
-
 ### Image quad sizing
 
 Each placement is one textured quad, bilinear-sampled from the atlas. A _naturally_ sized placement (`c=`/`r=` absent)
@@ -288,10 +285,6 @@ end, while DOOM-fire's frame rate stays within run-to-run noise.
 - **Composing off the shared lock** (a grid snapshot or double buffer). Removes the contention instead of arbitrating
   it, but reshapes the parse/compose boundary for a liveness problem a fair lock already solves.
 
-_Revisit if_ a flood still starves pulls behind the fair lock on a platform whose parking backend differs (macOS,
-Windows), the one acquisition per cycle still leaves pulls waiting on the lock, or compose under the lock grows long
-enough that the forced hand-offs measurably cut parse throughput (the snapshot shape is then the next step).
-
 #### Client demand is the only clock that is correct everywhere
 
 - The daemon is headless; the refresh rate exists only on the client (winit reports it via
@@ -334,12 +327,8 @@ interval anywhere, and it never claims to match a refresh rate.
   of shell output, which [principles.md](../principles.md) Principle 4 forbids; readability of fast output is the
   pager's job.
 
-_Revisit if_ a non-interactive consumer (recorder, relay, headless test client) that has no vsync to pull with becomes
-common (it would have to drive its own cadence or use the push fallback, which might then deserve to be first-class);
-`NextGridFrame` at high refresh rates measurably crowds genuine input on the shared `input` channel (would justify a
-separate logical channel or priority); a frozen or stuttering GUI is reported on a specific refresh rate / compositor
-(no env escape hatch back to eager push exists, so one would need adding); or winit/wgpu expose per-frame VRR deadlines
-to pace against more precisely than one pull per painted frame.
+_Revisit if_ `NextGridFrame` at high refresh rates measurably crowds genuine input on the shared `input` channel: that
+would justify a separate logical channel or priority.
 
 ## DPI and multi-monitor
 
@@ -389,10 +378,8 @@ No value is a blur-strength number. Both platforms are driven through the window
 public OS APIs, and those APIs fix the blur by preset with no numeric radius; the only numeric knob on macOS is a
 private SPI felis refuses to call.
 
-_Revisit if_ winit grows a first-class vibrancy/backdrop attribute (map the key onto it); a portable Wayland blur
-protocol stabilizes (add a Linux material); a public macOS radius API appears (a strength would need a companion key,
-since `backdrop` names materials); or a consumer needs the DWM caption _colors_, which is a separate FFI surface not
-covered here.
+_Revisit if_ a portable Wayland blur protocol stabilizes (add a Linux material), or a public macOS radius API appears (a
+strength would need a companion key, since `backdrop` names materials).
 
 ## Cursor trail and user post-process shaders
 
@@ -467,8 +454,6 @@ The SGR-blink rejection below rests on who triggers the flashing: a remote progr
 user has no lever. A shader flashes only if the user installs one that does, in their own config. The two decisions
 share the axis and do not conflict.
 
-_Revisit if_ a real consumer needs an animated window while it is not focused: a screen recording is the plausible one.
-
 ### Loading and failure
 
 The config names each shader explicitly and says which kind it is, rather than covering both in one string classified by
@@ -503,9 +488,7 @@ counterexample: an invalid shader can black the window and the error reaches onl
   vocabulary is kept instead.
 
 _Revisit if_ a real consumer needs the vertex stage, multi-pass composition, or a persistent texture (kitty's
-`.pipeline` groups and `persist` texture are the shape to study); Slang's WGSL target leaves experimental status and
-offline-compiled Slang becomes the convenient authoring path (still offline; the in-process ban stands); or naga stops
-being the validation layer wgpu ships with.
+`.pipeline` groups and `persist` texture are the shape to study).
 
 ## Performance principles
 
@@ -556,8 +539,6 @@ and ships the flag for fidelity, but rendering a blinking cell is rejected on ac
 a photosensitivity and distraction hazard, and unlike the cursor's blink there is no lever to stop program-driven text
 blink once a hostile or careless program sets it.
 
-_Revisit if_ a user-controlled "honor SGR blink" opt-in is asked for; it would default off.
-
 ### Atlases
 
 #### Glyph atlas: a first-fit shelf packer at a fixed size
@@ -600,15 +581,11 @@ sheet would otherwise drop the overlay's slots and leave the bar's label absent 
 overlay the one thing that can overflow _after_ the grid has its slots, so the reported reset is read once more after
 priming and drives the same bounded second walk.
 
-_Revisit if_ CJK-heavy sessions show the sheets churning.
-
 #### No SDF / MSDF
 
 Signed-distance-field text scales without re-rasterizing, but its one win (free zoom) does not apply to a terminal at
 one or two fixed sizes; it is also mildly fuzzy next to native-size grayscale rasterization, which terminal users
 notice.
-
-Revisit only if Kitty text sizing's 7× max scale produces ugly upscaling.
 
 #### Image atlas: one large, lazily-allocated texture
 

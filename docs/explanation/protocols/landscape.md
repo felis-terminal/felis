@@ -19,9 +19,7 @@ unknown sequence is something a producer can detect and branch on, and a silent 
 
 The tolerated set is enumerated in the [compliance reference](../../reference/protocols/vt-compliance.md)'s "Consumed
 without effect", replies included, because the stub answers (`0;0`, `Ps=0`, `0$r`) are what a probing program branches
-on: they are observable behavior, and a change to one is a break rather than a tweak. _Revisit if_ a target workflow
-needs a tolerated input to take effect; the row then earns an implementation or its family is re-argued, and the shim
-goes away with it.
+on: they are observable behavior, and a change to one is a break rather than a tweak.
 
 ## Control codes and charset
 
@@ -60,7 +58,7 @@ statuses, which the [support matrix](../../reference/protocols/support-matrix.md
 
 - **`OSC 13` through `19` are tolerated for three reasons at once.** There is no Tektronix mode to color (15 / 16 / 18),
   the mouse pointer is drawn by the OS compositor rather than by felis (13 / 14), and selection colors (17 / 19) are a
-  client-config concern that no target workflow sets dynamically. _Revisit 17 / 19 if_ one does.
+  client-config concern that no target workflow sets dynamically.
 - **ConEmu's progress, `OSC 9 ; 4`, is decoded and relayed on IPC.** Its consumer is an agent or a script polling
   `felis sessions`, the pattern the shipped `felis` skill teaches, which reads how far a build in another session has
   got ([terminal-progress.md](terminal-progress.md)).
@@ -69,7 +67,7 @@ statuses, which the [support matrix](../../reference/protocols/support-matrix.md
 - **The other ConEmu `OSC 9` subcommands are tolerated rather than decoded.** The bare `OSC 9 ; <message>` form is
   iTerm2's notification, which felis decodes and relays ([notifications.md](notifications.md)).
 - **`OSC 72` (kitty structured drag-and-drop) is rejected for now.** A window-side file drop inserts the path verbatim
-  instead ([input.md](../input.md) "Drag-and-drop"). _Revisit if_ a target workflow depends on the structured form.
+  instead ([input.md](../input.md) "Drag-and-drop").
 
 ## DCS
 

@@ -22,9 +22,7 @@ locator, NRCS beyond parse-and-ignore) or implements partially (rectangular edit
 was rejected: programs that branch on DA1 treat a sparse mask as "legacy terminal" and drop into fallback paths that
 hurt UX for no functional gain, while feature _selection_ happens through terminfo (the layer this doc holds to
 verified-only), not through DA1's coarse class bits. What DA1 must be is constant and version-independent (the
-identity-class query rule in [security-model.md](../security-model.md)); accuracy per bit is terminfo's job. _Revisit
-if_ a real program is found driving an unimplemented family off a DA1 bit alone; that flips the cost-benefit the same
-way the DCS-form `Sync` case does for terminfo.
+identity-class query rule in [security-model.md](../security-model.md)); accuracy per bit is terminfo's job.
 
 The two costs this design carries are accepted deliberately:
 
@@ -32,8 +30,7 @@ The two costs this design carries are accepted deliberately:
   one-variable fallback on hosts without the entry.
 - The entry not being reconstructable from `infocmp` on a remote host (the price of `use=xterm-256color` over kitty's
   standalone entry) is acceptable because felis cross-host work goes through the daemon ([ipc.md](ipc.md)), not TERM
-  propagation. _Revisit if_ a host without `xterm-felis` becomes the common case rather than the `ssh` exception: a
-  standalone entry gives up the inheritance but survives `infocmp` transport.
+  propagation.
 
 ## Why the entry is trimmed and 16-bit
 

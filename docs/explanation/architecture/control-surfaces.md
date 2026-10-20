@@ -142,8 +142,7 @@ close _some_ subject is to its ceiling, and therefore whether the pressure is on
 whole. It does not name that session: `felis sessions list` inventories the candidates but measures none of these
 resources, so the id is nowhere today.
 
-_Revisit if_ an operator turns out to need it: at that point the row would carry a subject identifier beside the sample,
-not a table.
+If an operator needs the id, the row carries a subject identifier beside the sample, not a table.
 
 #### What earns a row
 
@@ -169,9 +168,6 @@ client-side by design (the table above), and the daemon's own knobs live in a st
 daemon config file to make one number movable would be a larger decision than the number deserves, and what the report
 is for is accounting, not tuning. So v1 reports a ceiling it cannot move; the connection cap sits on the same compiled
 struct rather than behind a `--max-connections` flag.
-
-_Revisit if_ a knob wants _tuning_ rather than reporting: compiled constants with a report are honest, a knob users are
-told to change without a place to change it is a config file denied.
 
 ### The config verbs never dial the daemon
 
@@ -235,9 +231,6 @@ system font scan that bare `doctor` must not pay). A `--report` flag on `doctor`
 shapes and two exit-code meanings. The report needs its own of each: it is a Point verb that exits `0` with failing
 rows, because a broken install is exactly what its user came to report, while `doctor` exits `1` for the same rows so a
 script can branch on health.
-
-_Revisit if_ a second document-shaped output appears for another verb: that would make a human document format a
-cross-verb concept, which `--format` could then carry.
 
 ## Stopping the daemon
 
@@ -412,8 +405,6 @@ compares JSON numbers as `f64`, so an enforceable bound would sit below `u64::MA
 emits. A few thousand values slipping past a bound nothing produces is the cheaper failure
 ([cli.md](../../reference/cli.md) "JSON Schema").
 
-_Revisit if_ `"v"` ever moves, which closes the `error.kind` vocabulary for the epoch it leaves behind.
-
 #### One rule decides where a refusal of the invocation lands
 
 A refusal the argument parser can state is the parser's: a human message on stderr with exit `2`, since at that moment
@@ -429,9 +420,6 @@ would then have to know, refusal by refusal, whether stderr held prose or an obj
 The same rule is why a machine format silences felis's own console log: even the `WARN` a failed systemd hand-off emits
 would make a point verb's "exactly one error object" two lines. `RUST_LOG` still wins, so the diagnostic is one variable
 away, and the failure's own detail is in `error.message` rather than only in the log.
-
-_Revisit if_ clap grows a way to state a root-flag/subcommand conflict, which would empty the post-parse case and let
-the rule collapse to "usage errors are human".
 
 #### The exit code is a function of `error.kind`
 
@@ -521,8 +509,7 @@ A failed stdout write or flush ends the bridge immediately. Continuing to read s
 protocol sink is gone cannot produce an observable answer and merely accumulates work; trying to synthesize error
 terminals is equally ineffective on the failed channel. The bridge aborts its operations and closes every link instead.
 
-_Revisit if_ the bridge gains resumable output with an acknowledged handoff; a larger fixed queue alone would not change
-the lifetime argument.
+A larger fixed queue alone would not change that; only resumable output with an acknowledged handoff would.
 
 ### Identifiers and text
 
@@ -622,8 +609,6 @@ Two per-platform adjustments are rejected:
 - **An XDG fallback on macOS.** Beyond that override, it buys a precedence rule and a two-candidate `config path`
   output, when a symlink from the `ProjectDirs` location already answers "my dotfiles live in `~/.config`" with neither.
 
-_Revisit if_ `ProjectDirs` changes its layout.
-
 ### Lenient config parsing is the permanent contract, not a transition aid
 
 Because the document is shared, no single consumer owns its full vocabulary: another felis frontend or an external tool
@@ -635,8 +620,6 @@ Strict `deny_unknown_fields` parsing is the rejected alternative: it zeroes ever
 it makes the shared document unreadable the moment any other consumer adds a key. The generated JSON schema is
 deliberately non-strict for the same reason: it exists for editor completion and hover, and the runtime parser stays the
 authority; the editor is also where typos surface loudest.
-
-_Revisit:_ none; leniency follows from the shared document, which follows from the one-document decision above.
 
 ### An enum's vocabulary grows additively too, one field at a time
 
@@ -676,9 +659,6 @@ The document type is separate from the effective config for the second reason: o
 different client's overlay), and only the document knows which file it came from, which is what path-valued keys resolve
 against.
 
-_Revisit if_ a consumer needs diagnostics streamed as they are found rather than as a set; nothing in the CLI or the
-client wants that today.
-
 ### File-valued keys resolve against `config.toml`, not the process's working directory
 
 A `shader.post = { file = "fx/glow.wgsl" }` names the file beside the config that mentions it, and a `pipe` binding's
@@ -693,9 +673,6 @@ relative path only works from one place.
 A missing shader file stays a **warning**: felis renders without the pass, matching the fall-back-and-warn rule for
 every other malformed value, and the same document may legitimately be shared with a machine where the file exists.
 
-_Revisit if_ a key ever needs a search path rather than a single location, which would be a different (and much larger)
-decision than this one.
-
 ### `font.size_px` is logical pixels, and the code says so at the DPI boundary
 
 The key is multiplied by the window's scale factor, so one value holds across a HiDPI and a standard-DPI monitor. The
@@ -704,13 +681,11 @@ and the multiply is the one place they meet. A single `_px` name on both sides o
 spelling: it reads as correct at every site while a Retina window rasterizes glyphs at half size, which is the bug class
 the names make visible.
 
-_Revisit:_ none; the unit is a compatibility surface, and renaming costs nothing at the boundary.
-
 ## Deliberate asymmetries
 
-Each coverage gap in the [name map](../../reference/control-surfaces.md) is recorded here with the trigger that would
-reopen it. The gaps fall into five groups: where a verb sits in the front door, how a window is switched or moved,
-region operations, session tags, and driving a session from a script.
+Each coverage gap in the [name map](../../reference/control-surfaces.md) is recorded here with its reason. The gaps fall
+into five groups: where a verb sits in the front door, how a window is switched or moved, region operations, session
+tags, and driving a session from a script.
 
 One general trigger spans the whole map: a non-Rust client ships and surfaces a capability it can only reach through a
 missing CLI verb. Add the verb under this map; do not open a parallel surface. Completing the grid for symmetry's sake
@@ -730,8 +705,8 @@ The global carrier flags `--host` / `--socket` are _orthogonal_ to this split: t
 or a local socket) any front-door invocation talks to, so they modify both a window launch (`felis --host remote`) and a
 headless verb (`felis --host remote sessions list`).
 
-The launch/verb line itself has no revisit trigger; it is the GPU-free-front-door split ([overview.md](overview.md)), a
-structural boundary, not a gap.
+The launch/verb line itself is not a gap: it is the GPU-free-front-door split ([overview.md](overview.md)), a structural
+boundary.
 
 #### The completion helper stays local-only
 
@@ -747,8 +722,6 @@ installed completion script is regenerated only when the user reruns `felis comp
 
 Rejected: a short hard timeout plus `BatchMode=yes` and a roster cache. felis would then be choosing ssh policy the
 user's own config already owns, and a cache is state the completion path has no place to keep coherent.
-
-_Revisit if_ OpenSSH grows a non-interactive probe felis can call without owning that policy.
 
 #### The cross-carrier re-dial is `felis ssh` and `felis window retarget`
 
@@ -799,8 +772,6 @@ forced on every spawn path, REQ-912), so it adds a key, not a mechanism. The dae
 auto-spawned daemon can inherit its launcher's value, and honoring that would have it bind an address another process is
 already serving.
 
-_Revisit if_ a second `window` verb never materializes **and** the namespace reads as ceremony rather than as an object.
-
 #### `felis bridge` is the session-automation surface, not a mirror of the CLI
 
 Its op set is closed to the `sessions.*` ops, `notifications.subscribe`, and `cancel`, which is how a bridge client ends
@@ -825,8 +796,6 @@ Within the shared ops, three differences are policy and are frozen with their re
   rather than a felis window, so the variable would name whatever session launched the editor. That verb also answers
   `queued == 0` with a result rather than a refusal, because whether "no window moved" is a failure is the editor's
   judgement, while the one-shot CLI has to pick an exit code and picks `not_queued`.
-
-_Revisit if_ a bridge client needs an operator verb it cannot reach by running the point verb beside it.
 
 #### Any unknown first word runs `felis-<word>`
 
@@ -904,8 +873,6 @@ menu instead of a prefix", wants e.g. just the last command's output) is a riche
 It is **not** a `sessions pipe` verb, which would wear the push name on a pull operation. The source _token_ aligns with
 the keymap; `selection` is client-owned and has no headless form, so it stays keymap-only.
 
-_Revisit:_ none open; the push/pull split is structural, and a richer region extends `capture`.
-
 #### `pipe`'s `clipboard` sink overlaps `copy`, and keeps its place
 
 `pipe { source = "selection", target = "clipboard" }` and `copy { what = "system" }` reach the same clipboard write with
@@ -917,9 +884,6 @@ have to remember which sink disappears for which source.
 The duplication costs one redundant spelling; the alternative costs the regularity of the whole `pipe` grammar. `copy`
 is the one that earns its own token: it is the chord on the selection a user makes with the mouse, not a region-routing
 operation.
-
-_Revisit if_ `pipe` ever grows a source-specific sink for another reason, at which point the grammar is already
-source-dependent and this carve-out is free.
 
 ### Tags
 
@@ -946,9 +910,6 @@ OSC 133 marks) and `foreground` (the `comm` of the PTY foreground process group 
 process table by pid, not the shell's output; principle-4 clean). Both are read-side only; tags remain the one
 write-path label.
 
-_Revisit:_ a real consumer needs a label felis itself must act on (e.g. tag-scoped reap policy), at which point the
-daemon would interpret a tag, and this "never interprets" line is what gets reopened.
-
 #### The tag set is bounded
 
 The label set is **bounded** (32 tags per session, 128 bytes per tag; the caps live in `felis-protocol` next to the
@@ -960,8 +921,6 @@ applied, so the reply's `tags` snapshot stays honest.
 Classifying tags as an unbounded trusted-user store is the rejected alternative: same-UID trust already gates the
 socket, but "trusted" is an argument about _who_, not about what the roster surface can absorb per read.
 
-_Revisit:_ a real picker workflow that needs labels past the caps.
-
 #### The `tag` verb and the `--tag` filter share one word by design
 
 `sessions tag <id> <t…>` (a mutator) and `sessions list --tag <t>` (a read-side filter) intentionally spell the concept
@@ -969,9 +928,6 @@ the same way; grammar position disambiguates (a verb slot versus a flag slot) th
 `gh issue list --label`, or `docker tag` and a `docker images --filter`, reuse one noun across a mutator and a query.
 Renaming the filter (`--tagged` / `--with-tag` are the candidates) would split the one concept across two word forms and
 decouple it from the `tags` field and `OpsToDaemonMsg::Tag` that back both surfaces.
-
-_Revisit if_ a tag-related verb and a tag-related flag ever land on the **same** subcommand, where the shared word would
-then be genuinely ambiguous.
 
 #### One `tag` verb: adds positional, removes behind `--remove`
 
@@ -1037,9 +993,6 @@ A `--submit` convenience alias for `--key enter` is rejected too: two spellings 
 duplicate-surface shape the one-verb-per-operation rule exists to refuse, and the general form already reads as the
 intent.
 
-_Revisit if_ a surface appears that must encode a keystroke with no daemon in reach, which would argue for a client-side
-encoder.
-
 #### `send --mouse` refuses an event the program would not see
 
 `send --mouse` sends `InputMsg::Mouse` for the same stale-mode reason: a hand-encoded `--raw` report guesses between
@@ -1055,9 +1008,6 @@ Closing it would need a per-event outcome on the fence, a wire change no consume
 mouse modes once at start-up.
 
 Cells are 0-based, as `search`'s `col_spans` and `capture`'s rows are, so a match is clicked without arithmetic.
-
-_Revisit if_ a program is found that toggles mouse reporting around the input it is waiting for, which would make the
-check's residual window a real failure and earn the per-event outcome.
 
 #### `send` is one typed operation
 

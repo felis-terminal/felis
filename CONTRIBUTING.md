@@ -114,8 +114,8 @@ the batch case.
 
 - `docs/README.md` defines the Diataxis quadrants and twin pairs (reference vs. explanation). Follow it when adding or
   moving a page.
-- Record design decisions inline in the owning explanation doc (rationale, rejected alternatives, "Revisit if ...").
-  Reference (`docs/reference/...`) holds only normative facts.
+- Record design decisions inline in the owning explanation doc (rationale, rejected alternatives). Reference
+  (`docs/reference/...`) holds only normative facts.
 - History belongs to `git log` (and `CHANGELOG.md` for user-affecting surfaces), never to the docs.
 - Run the `doc-cascade` checklist before declaring a doc change done: update the twin, grep the changed term across
   `docs/`, regenerate schemas/contracts when touched, and check the non-doc mirrors (`README.md`, `skills/felis/`,

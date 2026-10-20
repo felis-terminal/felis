@@ -31,9 +31,9 @@ A page that mixes quadrants gets split, not grown.
 Every doc failure in felis has come from crossing these five borders:
 
 1. **Trap 1: Narrative Retelling (Explanation → Reference)**. When reference already carries a fact operationally (a
-   table row, a knob list, a wire field), explanation keeps only the decision, its rejected alternatives, and its
-   revisit trigger: never a prose re-tell of the same facts. An explanation section that argues what a reference table
-   already states forces every future change to edit two places.
+   table row, a knob list, a wire field), explanation keeps only the decision and its rejected alternatives: never a
+   prose re-tell of the same facts. An explanation section that argues what a reference table already states forces
+   every future change to edit two places.
 2. **Trap 2: Status Matrices in Explanation**. Checklists of feature status (such as ✅/🟡/⚪/❌ tables) belong in
    Reference (`docs/reference/protocols/support-matrix.md`). Explanation argues how and why a boundary is drawn, never
    the per-feature inventory. When an explanation page grows a feature matrix, compress it to the governing boundary
@@ -51,11 +51,16 @@ Every doc failure in felis has come from crossing these five borders:
 
 Every change carries a why, and the commit body is where that why lives. An explanation page records a decision only
 when both hold: a competent contributor would plausibly re-propose the rejected alternative, and the reference facts
-alone do not show why it fails. Field shapes, names, and any behavior a test pins fail that gate.
+alone do not show why it fails. Field shapes, names, and any behavior a test pins fail that gate. Test: if the section
+argues each field of a struct or each row of a table in turn, it is a commit body in the wrong file; keep the one
+decision that covers them.
 
-A _Revisit if_ trigger earns its line only when it names something observable from outside (a producer that appears, a
-platform that changes), never "if this turns out to be wrong". Test: if the section argues each field of a struct or
-each row of a table in turn, it is a commit body in the wrong file; keep the one decision that covers them.
+A _Revisit if_ trigger is not part of a decision record by default. A rationale that states its premise already tells
+the reader when to reopen it, so a trigger that negates the premise ("tokio's `UnixStream` is `cfg(unix)`" → "revisit if
+tokio ships async AF_UNIX on Windows") or restates a limit the section just named ("revisit if a producer meets the
+cap") says the same thing twice. Write one only when it adds what the rationale does not: an outside, observable
+condition that is not the premise's negation, or what the design becomes when it fires ("then gate on the momentum phase
+instead of the idle gap"). Never "if this turns out to be wrong".
 
 ## 4. History is not doc content
 
@@ -63,7 +68,7 @@ Every page describes the current design as if it had always been this way: no `p
 `the old one`, no schema-version bump stamps, and no two-ways-where-one-is-the-old-way. The past has exactly two homes:
 `git log`, and, for a user-affecting surface change (CLI verb, config key, keybinding, wire, default, platform), a
 `CHANGELOG.md` entry. What does stay in an explanation page, argued in the present tense: rejected alternatives,
-_Revisit if_ triggers, VT terms of art ("legacy xterm encoding"), third-party version facts, and recorded
+_Revisit if_ triggers that pass §3, VT terms of art ("legacy xterm encoding"), third-party version facts, and recorded
 post-publication policy.
 
 ## 5. Requirements

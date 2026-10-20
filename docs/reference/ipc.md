@@ -1902,8 +1902,7 @@ A schema change that is not additive carries no row: no "older peer" cell could 
 the compatibility freeze such a change rides the pre-release rule instead, acknowledged for the wire gate in
 `crates/felis-protocol/proto/BREAKING.md`; past the freeze it is a major. The same holds for a tightened admission check
 under "Semantic limits", which adds and moves nothing and so is neither a row nor, under REQ-104b, a major. Both rules
-and their revisit trigger are argued in
-[the IPC design explanation](../explanation/architecture/ipc.md#the-ledger-is-the-review-gate).
+are argued in [the IPC design explanation](../explanation/architecture/ipc.md#the-ledger-is-the-review-gate).
 
 ### Handshake
 

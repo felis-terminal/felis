@@ -67,7 +67,7 @@ felis does not fold GB9c, the Indic conjunct (`क्ख`). Each consonant keeps
 applications that sum per-scalar widths, at the cost of the client shaping the consonants apart rather than as one
 conjunct. Folding would need a width for the whole conjunct, and none fits: a chain such as `स्त्र` is three columns to
 `wcswidth`, past the two-cell cluster cap, and the terminals that fold disagree (Ghostty, Windows Terminal and WezTerm
-cap it at 2, Kitty uses 1). Revisit if a width convention for conjuncts settles across terminals.
+cap it at 2, Kitty uses 1).
 
 A bidi override is the one zero-width scalar that outlives a missing owner. At column 0 or after an empty cell the grid
 holds it and folds it into the next character printed, after that character's own scalar, and a regional indicator
@@ -180,8 +180,7 @@ A **snapshot-scoped dictionary** inside the row codec reaches the same ordering 
 payload would carry the entries its own rows name, so a snapshot arrives self-contained and no delivery state is needed
 at all. It is rejected as the larger change for the same result: the codec would grow a second way to address a cluster,
 and the delta path would split, because a live `RowDelta` names ids minted long before it that no snapshot dictionary
-carries. Both mechanisms would then run where the causal rule covers snapshots and deltas in one statement. _Revisit if_
-the lazy backfill proves racy in practice; a snapshot that carries its own entries is what would answer such a race.
+carries. Both mechanisms would then run where the causal rule covers snapshots and deltas in one statement.
 
 #### Why the cluster table is capped
 
@@ -221,11 +220,9 @@ GB from one message. An id past the cap is one a daemon honoring the same cap ne
 the attachment ends, the same answer `MAX_GRID_ROWS` gives a `RowDelta`'s row
 ([ipc.md "Grid admission"](../../reference/ipc.md#grid-admission)).
 
-_Revisit if_ a real workload is refused, or a real script legitimately needs a longer cluster: raise the cap rather than
-adding eviction, and re-measure the per-entry cost first, since the numbers are set against what the scrollback beside
-them costs. If the worst case rather than the typical one starts to matter, charge each entry's real footprint against a
-byte budget the way the image store does; the count cap is what bounds the id space, so a byte budget would sit beside
-it, not replace it. If a second consumer needs cluster text without a grid or shadow in hand, reconsider an inline or
+If the worst case rather than the typical one starts to matter, charge each entry's real footprint against a byte budget
+the way the image store does; the count cap is what bounds the id space, so a byte budget would sit beside it, not
+replace it. If a second consumer needs cluster text without a grid or shadow in hand, reconsider an inline or
 shared-arena representation.
 
 ### Hyperlink interning
@@ -273,9 +270,8 @@ then sends. It does hold each entry to the text cap and to the byte budget, both
 refused entry leaves neither a charge nor a gap), since one message can otherwise carry a URI as long as the frame
 allows.
 
-_Revisit if_ a producer legitimately outgrows either bound. The count is the handle type, so raising it is a wire change
-(`Cell.link` and every `Hyperlink` id); the budget is a constant, so raise that first and re-measure what the table then
-costs against the grid beside it.
+Of the two bounds, the budget is the one to raise first: it is a constant, while the count is the handle type, so
+raising it is a wire change (`Cell.link` and every `Hyperlink` id).
 
 ### Attributes
 
@@ -406,14 +402,9 @@ Rejected alternatives:
 
 Revisit if: the sweep shows up on a real truecolor workload, in which case the next step is incremental compaction
 rather than more headroom (the headroom divisor trades residency for parse time and sixteen is already where the two
-meet); or the truecolor parse floor becomes a ceiling, in which case the next lever is the `intern` probe itself, not
-its hash: a direct-mapped pen cache in front of the dedup map. foldhash already covers the hash cost, and a last-hit
-cache measures useless because consecutive truecolor pens differ. Or a collision flood against the fixed seed is
-demonstrated to cost more than the hash saves, in which case the lever is the standard library's random-seeded
-SipHash-1-3: no seeding makes foldhash's fast variant collision-resistant, so the choice is the measured ~25 % floor
-against a flood that a fixed seed lets an attacker precompute. Or residency is still the ceiling after interning, in
-which case pack `Grapheme` to a `u32` (cell 16 → 12). That one is deferred: it needs a wire-repr conversion layer
-(`Vec<Grapheme>` is serialized directly) and shrinks the cluster id space, so it should A/B on its own.
+meet); or residency is still the ceiling after interning, in which case pack `Grapheme` to a `u32` (cell 16 → 12). That
+one is deferred: it needs a wire-repr conversion layer (`Vec<Grapheme>` is serialized directly) and shrinks the cluster
+id space, so it should A/B on its own.
 
 ### Sizing handle
 

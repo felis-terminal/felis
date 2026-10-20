@@ -82,10 +82,6 @@ Two fidelity shortcuts are deliberate. The scan code is sent as `0`: felis encod
 scan code cannot be derived without the physical key position; ConPTY and PSReadLine key off `Vk` + `Uc`, so `0` costs
 nothing for the target workflow. And the `ENHANCED_KEY` control-state bit is never set.
 
-_Revisit if_ a target program is found to depend on the scan code or the enhanced-key bit (e.g. a console app
-distinguishing the numpad Enter from the main Enter); recovering either means threading the client's physical `KeyCode`
-through the encoder.
-
 ### Action mapping
 
 The client config maps key combinations to a closed set of `Action` values. Variants take typed parameters but do not
@@ -247,8 +243,6 @@ by pid liveness, not by its own name: a starting run's own directory does not ex
 a different, dead pid. A directory whose pid still runs is spared (another window is reading the regions it staged), and
 so is one the platform will not let felis test, which on a shared `/tmp` is another user's client.
 
-_Revisit if_ felis grows such a filter mode; the interactive consumer it spawns stays on the temp file.
-
 #### Which daemon runs the command
 
 A daemon spawns, not the client: the client is a wgpu window, not a PTY host, so a daemon holds the transient's PTY
@@ -297,9 +291,6 @@ Three alternatives are rejected or moot:
   a new extension surface.
 - **A daemon-side name-to-argv mapping** is moot for the same reason: the executing host is the one whose config named
   the argv.
-
-_Revisit if_ the carrier round trip on every transient exit (each return from a remote-attached window re-dials the
-remote; OpenSSH ControlMaster amortizes it) proves unusable on high-latency links.
 
 #### Opening the pager where the user was looking
 
@@ -450,9 +441,6 @@ The cost of an animator is a timer that redraws while the user's hands are still
 scroll costs more frames than a caret, so it has to be tuned well enough to beat the current one-gesture-one-jump feel
 before it is worth those frames.
 
-_Revisit if_ the compositor stack grows a momentum phase (making it adoptable rather than synthesized), or if the
-animator is prototyped and measurably beats the current feel on a touchpad.
-
 ## Selection
 
 The selection model is client-side pure data
@@ -500,8 +488,6 @@ copying it would yield that other text. The alternative is to anchor the range t
 preserved across the swap, restored when the primary screen comes back), which needs coordinates that outlive the
 visible rows, the same grid-relative anchoring daemon-side selection would need.
 
-_Revisit if_ that anchoring lands: the clear on swap becomes a restore, and the scrollback clear goes with it.
-
 ## Clipboard
 
 OSC 52 clipboard access from the shell is gated, and the two directions are not symmetric. The **write** to the system
@@ -544,8 +530,6 @@ Two alternatives are rejected:
   platform dependency to ask a yes/no question the bar answers with one keystroke, and a modal that steals focus from a
   terminal is exactly the interruption a default-deny single-key bar avoids.
 - **Enter confirms**, for the reason above.
-
-_Revisit if_ a third destructive gate needs a payload the one-line label cannot state.
 
 ## Link preview
 
@@ -605,9 +589,6 @@ activating a link is not a destructive action, and painting it in the warning co
 A third tint of its own is rejected: it would ask the user to learn a color code for a bar that appears and vanishes
 under the pointer, for no distinction the two existing registers do not already draw (informational versus destructive).
 
-_Revisit if_ the preview ever has to report a refusal rather than a target: a rejected activation is a warning, and
-today it shows nothing at all.
-
 ## Drag-and-drop
 
 Dropping a file on the window inserts its path as input, the universal terminal convention. The path is inserted without
@@ -653,6 +634,3 @@ policy inside an encoder that is deliberately platform-free and shared by every 
 legitimate U+00A5 that Option+Y produces on the ABC layout, so the terminal would gain a character with no way left to
 type it. The remedy is a `[keymap]` entry binding the key to `send_string`, which states the substitution where the rest
 of the user's key policy already lives.
-
-_Revisit if_ winit forwards `insertText:` for unmarked input, which would make the keyboard layer's own answer reach
-felis and retire the binding.

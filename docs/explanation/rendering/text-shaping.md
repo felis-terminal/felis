@@ -166,15 +166,14 @@ emoji base; after a base such as `#` the VS16 is shaped as a `.notdef` with a fu
 ligature into three glyphs. A selector the face maps directly is kept. Dropping a selector does not lose the variant it
 names: felis looks the pair up in the face's format 14 subtable itself and draws that glyph in place of the base's
 default one. A cluster that also carries a combining mark keeps the default glyph, because swash positioned the mark
-against it. Revisit if swash starts mapping variation sequences.
+against it.
 
 So whether `葛󠄀` (U+845B U+E0100) draws its variant depends on the face that covers `葛`: a variation sequence never
 moves a cluster to another face. A primary that covers `葛` without variant data (Moralerspace, for one) draws the
 default glyph even when a CJK fallback has the variant. Rejected: **prefer a fallback face that defines the sequence.**
 It would draw that one character in a second face's design and metrics, inside text the primary draws. None of WezTerm,
 foot, kitty, Ghostty, or Alacritty consults a face's variation-sequence data when choosing it; WezTerm and foot let
-HarfBuzz apply the sequence on the face picked for the base. Revisit if a peer starts choosing faces by variation
-sequence.
+HarfBuzz apply the sequence on the face picked for the base.
 
 The stack is queried per codepoint: `resolve(c)` returns the first font whose charmap covers `c` (the first color one
 for an emoji-presentation character), falling back to the primary (which then renders its `.notdef` box) when nothing
@@ -235,8 +234,6 @@ declared. A named instance is a complete position, and it is also what WezTerm r
 enumerates for Ghostty, foot and Alacritty. A fixed slant angle was rejected because felis would pick a design value the
 font did not name, and the shear those terminals fall back to is synthesis, rejected above.
 
-_Revisit if_ a font users report ships its italic only as STAT labels, with no named italic instance.
-
 **One fallback chain, styled per entry.** Each fallback entry is drawn in the cell's style from its own family, resolved
 the way the primary's styled faces are: a separate bold or italic file, else the variable file moved along its axes,
 else the entry's regular face (no synthesis). The regular face of a variable entry is set to `wght` 400 like the regular
@@ -251,8 +248,6 @@ outcome for a family with no bold at all. Rejected: **draw a styled-face miss fr
 handle**, which keeps bold for the glyphs such a family does cover but needs a second id space in the sizing-key font id
 and a fourth case in every resolver, for a family shape not seen in practice. A per-script styled cascade (kitty's
 configurable per-script chains) stays out of scope for felis's one-flat-chain model.
-
-_Revisit if_ a real fallback family's styled face fails the coverage check, so a style users expect draws regular.
 
 **Shared metrics.** Cell metrics also come from the _regular_ primary only (the four faces must share an advance width
 or the monospace grid would break), so only codepoint coverage and the rasterized outline differ per style, never the
@@ -315,9 +310,8 @@ Rejected alternatives:
   the OS but leaves the live kept faces on the heap: treats the malloc-retention symptom, not the heap-copying cause.
 
 Revisit if: an `unsafe` block outside these sites is ever proposed in `felis-shaping` (widen the relaxation
-deliberately, not silently); a **safe** API for persistent mapped sources appears (then drop the mapping's `unsafe`); or
-a platform appears where mapping system fonts is unsafe in practice (fonts mutated in place, or no mmap support): fall
-back to `fs::read` there behind `cfg`.
+deliberately, not silently); or a platform appears where mapping system fonts is unsafe in practice (fonts mutated in
+place, or no mmap support): fall back to `fs::read` there behind `cfg`.
 
 ## Atlas integration
 
@@ -384,10 +378,6 @@ px cell, where kitty, alacritty and ghostty size 16 (CoreText sets Menlo's lines
 metric, ghostty rounds the sum). Rounding the descent would reach 16 on macOS, but it turns DejaVu Sans Mono's 4.40 px
 descent at 14 pt on Linux into 4 and the cell into 22 px, one row short of the 23 px kitty, alacritty and foot all size.
 The separate ceil keeps Linux parity and costs macOS one row.
-
-Revisit if: the cell width reads a hinted advance (it then arrives whole, and the width rule stops mattering), or the
-renderer clips glyph quads to the cell box or paints a cell's background after its neighbor's glyph (the overlap
-rounding allows then loses ink).
 
 ## Compositing a multi-codepoint cluster
 

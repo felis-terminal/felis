@@ -100,8 +100,6 @@ tell an `EINVAL` from shell output, so the extra reply rescues only a producer t
 every other producer stray bytes in the shell. A reassembly overflow is still answered, because it fails a transfer
 whose first chunk carried the ids.
 
-_Revisit if_ a producer in real use waits for a reply that kitty does not send.
-
 The silence for a non-`G` APC body is the load-bearing edge. felis answers only the Kitty graphics dialect
 (`ESC _ G …`); another APC dialect (a `felis-vt` non-graphics APC, or a different terminal's extension a producer probes
 for) is not felis's to answer. Emitting a Kitty `EINVAL` into it would inject bytes into a protocol felis does not
@@ -134,8 +132,8 @@ command that opened its object but then failed to store the image: felis will no
 belongs to a same-UID producer that can delete it itself, and the OS bounds the total, so the trade is worth the far
 larger hole it closes.
 
-_Revisit if_ a real producer legitimately rotates more than `ShmDeferral::CAP` live segment names at once: the symptom
-would be that producer seeing its own segments disappear mid-stream, which means raising the cap, not removing it.
+A real producer that legitimately rotates more than `ShmDeferral::CAP` live segment names at once would see its own
+segments disappear mid-stream; the remedy is raising the cap, not removing it.
 
 **Why the leading slash is restored off Linux.** mpv creates `/mpv-kitty-<ptr>` yet transmits the base64 of
 `shm_path + 1` (the slash stripped). On Linux glibc maps a slashed and slash-less name to the same `/dev/shm` inode, so
@@ -168,8 +166,7 @@ data to the same reply matters as much as the open errors, since any decode erro
 
 A root allowlist (only the runtime or temp directories) is the rejected alternative: kitty's `icat` and other producers
 send the path of the image where it already lives, so an allowlist breaks them, and kitty enforces none. What the one
-reply cannot hide is success itself: a path that decodes still answers `OK`. Revisit if kitty narrows its own reach, or
-producers converge on sending files only from the temp directories, where an allowlist would cost nothing.
+reply cannot hide is success itself: a path that decodes still answers `OK`.
 
 ## Windows takes `t=d` only
 
@@ -190,9 +187,8 @@ Two properties of the rejection carry the weight:
   "`O_CLOEXEC` + `O_NOFOLLOW` audit (standing)" records the Unix sites it would have to match), and no producer has
   asked for one. Carrying the shim costs three `const fn`s.
 
-_Revisit if_ a real producer needs `t=f` / `t=t` / `t=s` on Windows; demand is the trigger, not infrastructure. The
-Windows runtime gate ([workspace.md](../../reference/workspace.md#build-and-platform-matrix)) is a prerequisite for
-acting on that trigger, since the port would need a gate to prove it; it is not itself a reason to do the work.
+The Windows runtime gate ([workspace.md](../../reference/workspace.md#build-and-platform-matrix)) is a prerequisite for
+a port, since the port would need a gate to prove it; it is not itself a reason to do the work.
 
 ## Frame storage: pre-coalesced
 
@@ -203,8 +199,7 @@ renderer treat every frame as "upload this pixel buffer to an atlas slot" keyed 
 dumb pixel pipe with no base-frame reference graph for a cross-host or non-Rust grid consumer to replicate: the geometry
 alone states how many bytes each frame's transfer must deliver. The cost is memory: N frames cost N full canvases even
 when each `a=f` touches a small rectangle; the per-screen image byte cap bounds it (storage details in
-[`image-store.md`](../data-model/image-store.md)). Revisit with lazy coalescing, as kitty does, if a real producer (say
-a spinner editing a tiny region across hundreds of frames) is starved by the cap where kitty would not be.
+[`image-store.md`](../data-model/image-store.md)).
 
 The rectangle compositor (`a=f` base + rectangle, `a=c` region copy, `C=` replace vs alpha-blend) is
 `felis-daemon::graphics::compose`, beside the decoder and reusing its zip-bomb budget; the grid never composites.
@@ -271,9 +266,6 @@ The survivors of a region scroll are re-sent one `Placement` each, the shape the
 scrolls: a region scroll moves only some placements and changes the extent and source rectangle of a clipped one, which
 a uniform shift cannot express.
 
-Revisit if kitty's region path starts carrying placements into history, or its full-screen path stops moving history
-placements on a reverse scroll: follow upstream again.
-
 ## Anonymous transmits
 
 A transmit may omit `i=`/`I=`; felis then allocates the id itself (the rule is in the
@@ -315,8 +307,7 @@ producer-controlled glyph and decoration quad, which can reach into the row from
 Clipping the quads rather than moving the chrome into a pass of its own after the images keeps the image order against
 the terminal's own content exactly as specified above; a fourth pass would be a second place where that order is
 decided. Rejected: **letting the chrome lose the row**, on the argument that the producer owns the screen. It does not
-own the client's chrome, and the bars appear only in response to the user's own action. Revisit if felis grows chrome
-that is not confined to whole rows, where clipping stops being expressible as a `max_y`.
+own the client's chrome, and the bars appear only in response to the user's own action.
 
 ## Eviction under the byte cap
 
@@ -348,9 +339,6 @@ silently rewrite the thing being played, with nothing in the protocol to tell th
 reuses `ENOTSUP` because kitty's status codes are a closed set with no `ENOSPC`, and the producer's remedy is the byte
 cap's anyway: delete frames, or split the animation across ids.
 
-**Revisit if** a real producer meets 4096 (a long GIF re-encoded frame-per-frame under one id is the plausible case), or
-if per-frame cost stops being dominated by the frame vector's slot.
-
 The cap bounds the count; it does not pay for it. A four-byte image appended to 4096 frames holds 16 KiB of pixels in
 128 KiB of records, so a budget counting pixels alone bills an eighth of what the mirror holds: the tiny-image flood
 again, one level down. So `ImageShadow` charges its aggregate in the same unit the store's `ImageEntry::byte_len` uses
@@ -371,8 +359,6 @@ A put past the cap evicts the screen's oldest placement rather than being refuse
 is a whole placement, which the producer can notice and put again, whereas a refusal would leave a long-running program
 unable to show anything new until it found something of its own to delete. The frame cap refuses for the opposite
 reason, since dropping frames would silently rewrite an animation in place.
-
-**Revisit if** a real producer meets the cap.
 
 ## The live outbox carries markers, not pixels
 
@@ -410,9 +396,7 @@ what makes reordering pixels around it safe.
 
 Rejected: making the whole outbox a dirty-_set_ (one entry per changed id, materialized entirely from current state),
 which would bound the control events too. It cannot work while `PlacementsShifted` exists, because a delta has no
-current state to read back; materializing shifted anchors _and_ replaying the shift directive would double it. Revisit
-if the placement mirror ever moves to whole-table replacement, at which point the delta disappears and the set becomes
-expressible.
+current state to read back; materializing shifted anchors _and_ replaying the shift directive would double it.
 
 ## Why the budget counts more than pixels
 
@@ -432,9 +416,8 @@ The cached total is not serialized either: it is a derived value, and a restored
 entries would carry a cap that bounds nothing. `ImageStore` recomputes it on deserialization, so a dump, stale or
 tampered, cannot weaken the budget.
 
-_Revisit if_ the fixed charge ever becomes visible to a legitimate producer (a real workload rejected while far under
-the nominal cap). The fix then is a larger cap, not a cheaper accounting: the point is that the number in the config
-means something.
+If the fixed charge ever rejects a legitimate workload far under the nominal cap, the fix is a larger cap, not a cheaper
+accounting: the point is that the number in the config means something.
 
 ## Why `a=a` / `a=d` are never acknowledged
 

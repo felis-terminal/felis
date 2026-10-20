@@ -50,12 +50,11 @@ distinguishes. They must not be conflated:
 - **Inbound activation/close _reports_: deferred, not impossible.** There is no architectural blocker: the daemon
   already injects input on the CLI surface, so synthesizing `OSC 99 ; i=<id> ; <event> ST` into a session's PTY is
   trivial. The real cost is on the _helper_, which would graduate to a stateful D-Bus client round-tripping freedesktop
-  `ActionInvoked`/`NotificationClosed` signals; the toast is still drawn outside felis. Revisit when a real consumer
-  needs the reports; when built, the inject path **must** be constrained to well-formed OSC-99 reports referencing an
-  `i=` the daemon actually relayed, not a general injection backdoor.
+  `ActionInvoked`/`NotificationClosed` signals; the toast is still drawn outside felis. When built, the inject path
+  **must** be constrained to well-formed OSC-99 reports referencing an `i=` the daemon actually relayed, not a general
+  injection backdoor.
 
-Icons / sound / auto-expire (`n/g/s/w`) have no surface to honor them; revisit if a producer needs them surfaced rather
-than accepted-and-ignored.
+Icons / sound / auto-expire (`n/g/s/w`) have no surface to honor them.
 
 The `p=?` capability reply is static: it does not check whether a subscriber is actually running. An app thus learns not
 to wait for activation reports it will never receive, rather than inferring support from silence. Revisit gating the
@@ -71,8 +70,7 @@ subscribe stream (the working recipe lives in [Enable notifications](../../how-t
 auto-spawns the helper, felis is a notification daemon again.
 
 The wire shape the helper consumes (`NotifyToDaemonMsg::Subscribe`, `NotifyToClientMsg::Event`, and the `Observer`
-connection mode that admits them) lives in [`ipc.md`](../../reference/ipc.md); revisit it if a non-Rust client cannot
-reuse the observer connection.
+connection mode that admits them) lives in [`ipc.md`](../../reference/ipc.md).
 
 ### The opt-in home-manager relay
 

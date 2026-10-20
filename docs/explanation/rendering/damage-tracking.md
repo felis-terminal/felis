@@ -101,8 +101,7 @@ screens, but the row bitset already collapses the hot operations to single-word 
 rebuild does, makes a row's position depend on the instance counts of every row above it, and those counts change with
 the content: an echoed character adds a glyph to its row. One new glyph near the top would then shift and re-upload
 every later row. A slot per row, sized for the widest row with headroom, pins every row's offset so a changed row is one
-ranged write, at the cost of drawing the empty slot entries as zero-sized quads. _Revisit if_ the vertex cost of the
-padding shows in a GPU profile.
+ranged write, at the cost of drawing the empty slot entries as zero-sized quads.
 
 **Collapse threshold: none.** Kitty and WezTerm collapse to a full redraw at ~80% dirty cells, Ghostty at ~75%, because
 tracking that many cells separately costs more than redrawing everything. felis has no threshold: partial updates ship
@@ -129,12 +128,11 @@ same directive.
 directive whose band ends up owed in full is dropped, since the rows then restate everything it would move. Shifts of
 different bands (vim's `DL` band and a full-screen line feed in one cycle) each keep their directive rather than
 collapsing into a replay past some count: a directive is a few bytes against a row that costs about two bytes per
-column. The per-subscriber queue stops at 1024 directives, past which a band ships as rows. _Revisit if_ a producer
-interleaves enough distinct bands per frame for the directive count to show in the wire bytes.
+column. The per-subscriber queue stops at 1024 directives, past which a band ships as rows.
 
 **A DECSLRM band ships as rows.** A scroll inside left and right margins narrower than the grid moves part of each row,
 and `Scrolled` names whole rows. Carrying column bounds would widen the wire message for a mode no measured workload
-scrolls per frame. _Revisit if_ such a producer appears.
+scrolls per frame.
 
 **A vacated row is restated through a blank.** The shadow's rotation leaves the rotated-out cells in the storage of the
 vacated rows, past each row's occupancy watermark, where nothing reads them. A 0.1.0 client's row write compares the
@@ -142,8 +140,7 @@ incoming cells with that storage and skips a write that matches, which leaves th
 whose new line always matches the line that scrolled out, would blank every new line. The daemon therefore precedes the
 restatement of a vacated row that is not blank with an entry of default cells for the same row: whatever the storage
 held, one of the two entries differs from it and lands. Fixing only the client was rejected because it leaves every
-0.1.0 client showing blank rows. The cost is one blank entry per such row per cycle, about one byte per column. _Revisit
-if_ the protocol gains a way to tell a client whose row write compares only up to the watermark from one that does not.
+0.1.0 client showing blank rows. The cost is one blank entry per such row per cycle, about one byte per column.
 
 **Images, selection, cursor: not damage at all.** Other terminals mark dirty cells for image bounding boxes,
 selection-rectangle diffs, and cursor old/new positions. felis tracks none of these: image placements live in a side
@@ -153,4 +150,4 @@ rebuilt every frame, a selection change rebuilds every row, and the renderer reb
 itself.
 
 **Compositor partial-frame: rejected.** foot submits Wayland `wp_damage` rectangles so the compositor can skip unchanged
-regions; felis always presents the full surface. Revisit for foot-class power optimization on battery.
+regions; felis always presents the full surface.
