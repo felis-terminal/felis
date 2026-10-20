@@ -92,6 +92,8 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 - A Kitty graphics image drawn through Unicode-placeholder cells now sits between the cell backgrounds and the text,
   whatever `z=` it was placed with, as in kitty. An image re-sent under the same id disappears until the new data has
   arrived, rather than showing the old picture meanwhile.
+- XTGETTCAP, OSC 52, and OSC 99 replies no longer repeat query bytes outside the protocol's alphabet: an undecodable
+  XTGETTCAP cap name is answered empty, and an OSC 52 selector or OSC 99 `i=` with such a byte gets no reply.
 
 ## [0.2.0] - 2026-10-14
 

@@ -162,7 +162,7 @@ The rectangle checksum query, DECRQCRA, shares this bounds model; its reply is s
 - `OSC 52`: clipboard write and query. The **write** to the system clipboard is the config-gated part (off by default;
   see [input.md](../../explanation/input.md)). A `?` **query** never reads the OS clipboard (that read is not
   implemented, REQ-802); it answers only from a daemon-local mirror holding the values the session itself most recently
-  wrote.
+  wrote. A query whose selector has a character outside xterm's `cpqs0-7` gets no reply.
 - `OSC 22`: mouse pointer shape (a CSS cursor keyword; the kitty form), including the stack: `> name` pushes and makes
   the shape live, `<` pops back to the pushed shape (a pop on an empty stack resets to the default arrow). A
   comma-separated fallback list takes its first well-formed keyword: the daemon cannot know which shapes the client's
@@ -220,8 +220,9 @@ The rectangle checksum query, DECRQCRA, shares this bounds model; its reply is s
 - XTGETTCAP (`DCS + q`): answers four caps, each under its short and long name: `Co` / `colors` (`256`), `TN` / `name`
   (the `TERM` the session's program was spawned with, `xterm-felis` unless `FELIS_TERM` or the spawn request names
   another; see [terminal-identity.md](../terminal-identity.md)), and `co` / `cols` and `li` / `lines`, which report the
-  live grid dimensions rather than a hardcoded `80` / `24`. Any other cap is answered as unknown (`DCS 0 + r`). The
-  `;`-joined query body is bounded at 512 bytes so a multi-cap request is not truncated into an unanswerable form.
+  live grid dimensions rather than a hardcoded `80` / `24`. Any other cap is answered as unknown (`DCS 0 + r`), and a
+  name that is not valid hex is answered empty in its position. The `;`-joined query body is bounded at 512 bytes so a
+  multi-cap request is not truncated into an unanswerable form.
 - DSR (`CSI 5 n`, `CSI 6 n`): replies `CSI 0 n` (status OK) and `CSI <row> ; <col> R` (cursor position, 1-based and
   respecting DECOM).
 - Private DSR (`CSI ? Ps n`): felis has no printer, no user-defined keys, no locator and no macro store, so each reply

@@ -88,7 +88,10 @@ Three sources reach the reflective class, and no fourth does: what a program on 
 modes, cursor position, title and icon name, the clipboard mirror), the cell and pixel geometry the session's attached
 clients set, and the two presentation facets below. The title and icon name are the one place producer text is repeated
 rather than reformatted, and the control bytes that could break out of the reply frame never enter that state, because
-an OSC string value carrying one is rejected whole (REQ-901).
+an OSC string value carrying one is rejected whole (REQ-901). A query's own key (an XTGETTCAP cap name, an OSC 52
+selector, an OSC 99 `i=`) is repeated only when every byte falls in that protocol's alphabet: hex digits, `cpqs0-7`, and
+`[a-zA-Z0-9_+.-]` respectively. A cap name that does not decode is answered empty, and an OSC 52 or OSC 99 query with an
+out-of-alphabet key is not answered.
 
 State that reached felis from the window manager or the OS has no query that reports it, which is what keeps the
 reflective class from becoming an exfiltration channel. There is no font readback and no OS-clipboard read, and the

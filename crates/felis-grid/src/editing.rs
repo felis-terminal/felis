@@ -2069,8 +2069,11 @@ impl Grid {
     pub(crate) fn xtgettcap_reply(&mut self, body: &[u8]) {
         let mut parts: Vec<(Vec<u8>, Option<Vec<u8>>)> = Vec::new();
         for hex in body.split(|b| *b == b';') {
+            // An undecodable name is answered empty, never echoed: the
+            // reply is written to the PTY as input, so producer bytes
+            // there would reach the shell as keystrokes.
             let Some(name) = hex_to_ascii(hex) else {
-                parts.push((hex.to_vec(), None));
+                parts.push((Vec::new(), None));
                 continue;
             };
             // `co` / `li` answer from the live grid, not the terminfo
