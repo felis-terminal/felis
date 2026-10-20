@@ -20,8 +20,7 @@ allowed-tools:
 Use this when choosing how to test a function, when asked to "verify" / "prove" / "model-check" something, or when
 adding a Kani proof. The governing decision is recorded in
 [docs/explanation/testing.md "Which functions get a Kani proof"](../../../docs/explanation/testing.md), and
-[docs/reference/testing.md "Kani proof inventory"](../../../docs/reference/testing.md) lists the proofs; this skill is
-the operational how-to.
+`grep -rn 'kani::proof' crates` lists the proofs; this skill is the operational how-to.
 
 ## The four layers and who owns what
 
@@ -97,9 +96,9 @@ mod kani_proofs {
 
 ## Where the coverage record lives
 
-The docs own the inventory; do not mirror it here:
+The inventory lives elsewhere; do not mirror it here:
 
-- `docs/reference/testing.md` "Kani proof inventory": the current proofs, per crate and file.
+- `grep -rn 'kani::proof' crates`: the current proofs, per crate and file.
 - `docs/explanation/testing.md`: what is deliberately _not_ verified with Kani, and why.
 - Forgejo issues: candidate kernels not yet proven.
 

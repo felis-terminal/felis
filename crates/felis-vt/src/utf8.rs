@@ -80,8 +80,7 @@ impl Decoder {
     }
 }
 
-// Kani proofs (`docs/reference/testing.md` "Kani proof inventory") live
-// here rather than in the crate-root `kani_proofs` because they read
+// Kani proofs live here rather than in the crate-root `kani_proofs` because they read
 // `Decoder`'s private fields.
 #[cfg(kani)]
 mod kani_proofs {

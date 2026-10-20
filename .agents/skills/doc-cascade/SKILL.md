@@ -21,7 +21,9 @@ Route by reader activity per `docs/README.md`. The felis-specific exclusions are
 
 - **Tutorials (`docs/tutorials/`)**: no theory, no alternative branches, no reference tables.
 - **How-to guides (`docs/how-to/`)**: no foundational concept lessons, no comprehensive schema tables.
-- **Reference (`docs/reference/`)**: no design rationale, no apologies.
+- **Reference (`docs/reference/`)**: no design rationale, no apologies, no copy of what the code already lists (test
+  names, file paths, bench or fuzz targets, counts, probe knobs) and no step-by-step narration of a script or workflow:
+  state the contract and name the source.
 - **Explanation (`docs/explanation/`)**: no retelling of reference facts, no status inventories.
 
 A page that mixes quadrants gets split, not grown.

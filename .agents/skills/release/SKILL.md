@@ -8,8 +8,10 @@ description:
 
 # Cutting a release
 
-What the gate checks and what each workflow publishes is `docs/reference/workspace.md` "Release gate"; the version rules
-are its "Versioning". This skill is the order of operations.
+The release contract is `docs/reference/workspace.md` "Release gate" and the version axes its "Versioning". What each
+check refuses is the `--help` of `tools/release/verify.py` and `tools/release/crates.py`; what each job runs and
+publishes is `.forgejo/workflows/release.yml` and `.github/workflows/release-mirror.yml`. This skill is the order of
+operations.
 
 ## 1. Release PR
 

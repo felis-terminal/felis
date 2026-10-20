@@ -15,39 +15,26 @@ in [implementation.md](../explanation/implementation.md).
 
 felis is a virtual Cargo workspace. Twelve `felis-*` crates sit under `crates/` (the prefix keeps the crates.io
 namespace consistent); the thirteenth member, `tests/`, is a test-only package outside that tree ("Workspace guards"
-below). Both dependency columns are normative and `just deny` enforces them: `deny.toml` admits each crate only as a
-direct dependency of the crates whose row names it (plus the dev-dependency parents listed under the table), and
-`tools/dep_bans.py` checks each crate's production closure against its "MUST NOT depend on" cell.
+below). Each crate's `Cargo.toml` is the source for its direct dependencies. `just deny` enforces the map: `deny.toml`
+admits each felis crate only as a direct dependency of the crates allowed to use it, and `tools/dep_bans.py` checks each
+crate's production closure against its "MUST NOT depend on" cell, which is normative.
 
 ### Per-crate contracts
 
-| Crate               | Type      | Owns                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | Depends on (felis-\*)                                                                                            | MUST NOT depend on                                           |
-| ------------------- | --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
-| `felis-protocol`    | lib       | the `felis.proto` schema and its generated types, IPC frame layout, message families, connection modes, the frozen preface and the protocol version constants                                                                                                                                                                                                                                                                                                                                                        | — (none)                                                                                                         | `tokio`, anything OS-specific, anything graphical            |
-| `felis-vt`          | lib       | hand-rolled VT state machine, UTF-8/grapheme handling, Kitty graphics/text-sizing/keyboard dispatch                                                                                                                                                                                                                                                                                                                                                                                                                  | `felis-protocol`                                                                                                 | `tokio`, OS-specific I/O, the grid crate                     |
-| `felis-grid`        | lib       | cells, attributes, primary+alt grids, scrollback ring, image store, reflow, daemon-side selection, the row codec (`wire.rs`, implementing [row-codec.md](row-codec.md))                                                                                                                                                                                                                                                                                                                                              | `felis-protocol`, `felis-vt`                                                                                     | `tokio`, graphics, fonts                                     |
-| `felis-pty`         | lib       | self-hosted PTY backends (openpty / ConPTY) + async bridge                                                                                                                                                                                                                                                                                                                                                                                                                                                           | — (none)                                                                                                         | `felis-vt`, `felis-grid`, protocol/transport                 |
-| `felis-transport`   | lib       | framing, local carrier (Unix socket / Windows named pipe), peer-identity verification, SSH-stdio carrier, connect retry/backoff policy (shared by client autospawn and the relay), the shared typed connection driver (phase / direction / correlation, run by the daemon and by every client), shared process plumbing (socket-path policy, logging bootstrap)                                                                                                                                                      | `felis-protocol`                                                                                                 | `felis-vt`, `felis-grid`, daemon logic                       |
-| `felis-daemon`      | bin + lib | session pool, per-session owner tasks, IPC server loop, keyboard / mouse input encoding, `serve`/`relay` CLI                                                                                                                                                                                                                                                                                                                                                                                                         | `felis-protocol`, `felis-vt`, `felis-grid`, `felis-pty`, `felis-transport`                                       | anything graphical                                           |
-| `felis-client-core` | lib       | shadow screen, redraw scheduler (boolean redraw flag, not damage tracking), action enum, IPC client connector, OS-clipboard trait, shared `config.toml` schema + loader, keymap chord grammar, frontend-neutral client policy (redraw/pull/blink pacing, session roster + id resolution, viewport math, paste framing, the renderer effect of each grid message)                                                                                                                                                     | `felis-protocol`, `felis-grid`, `felis-transport`                                                                | `swash`, `wgpu`, `winit` (must run a headless attach)        |
-| `felis-shaping`     | lib       | `swash` shaper, font fallback chain, shape cache, rasterization                                                                                                                                                                                                                                                                                                                                                                                                                                                      | — (none)                                                                                                         | `wgpu`, `winit`                                              |
-| `felis-render-core` | lib       | the renderer-neutral half of the native renderer: palette and theme resolution, cell appearance resolution over a row of cells, box-drawing rasterizer, glyph index (shape memo, rasterization, glyph slots and their pending atlas uploads) over the shelf atlas packer, the cell painter (cursor, selection, reverse video, faint, decorations, the overlays and bottom bars, chrome clipping) and the per-row display list it emits in physical pixels, selection and frame overlay types, the image-source trait | `felis-protocol`, `felis-grid`, `felis-shaping`                                                                  | `wgpu`, `winit`                                              |
-| `felis-render-wgpu` | lib       | wgpu pipeline, the instance records and their encoding from the display list, the per-row instance cache, glyph atlas textures, image atlas, decoration shader                                                                                                                                                                                                                                                                                                                                                       | `felis-protocol`, `felis-grid`, `felis-shaping`, `felis-render-core`                                             | `winit` (surface comes from a caller-supplied window handle) |
-| `felis-cli`         | bin       | the `felis` front-door: headless verbs (`sessions`, `notifications`, `config`, `fonts`, `doctor`, `version`, `daemon`, `completions`), the `bridge` JSONL stdio subcommand, exec of the GUI frontend and of `felis-<name>` external commands                                                                                                                                                                                                                                                                         | `felis-protocol`, `felis-transport`, `felis-client-core`, `felis-grid`                                           | `swash`, `wgpu`, `winit` (must stay GPU-free)                |
-| `felis-client`      | bin       | GUI frontend the front-door execs: winit event loop, OS clipboard, font picker; wires winit + wgpu                                                                                                                                                                                                                                                                                                                                                                                                                   | `felis-protocol`, `felis-grid`, `felis-transport`, `felis-client-core`, `felis-render-core`, `felis-render-wgpu` | —                                                            |
-
-The "Depends on" column lists runtime (non-dev) dependencies only. `felis-client-core`'s `felis-transport` edge sits
-behind its default `native` feature, and `felis-render-core`'s `felis-shaping` edge behind its default `glyphs` feature
-(the glyph index, box drawing and the cell painter); a wasm32 build turns both off. One extraction-relevant set of edges
-differs from the idealized contracts:
-
-- A few crates pull other workspace crates only as **dev-dependencies** for in-process integration tests and benches:
-  `felis-cli` tests against `felis-daemon`/`felis-pty`, `felis-client-core` against
-  `felis-daemon`/`felis-pty`/`felis-vt`, `felis-daemon` against `felis-client-core`, `felis-pty` against
-  `felis-vt`/`felis-grid`, and `felis-render-core` and `felis-render-wgpu` against `felis-vt`. These do not appear in
-  the runtime graph below. A published package keeps them, so its tests build against the crates.io releases, except
-  `felis-client-core`'s tests against `felis-daemon`: that edge would close a cycle, and the package leaves those tests
-  out (its `daemon-tests` feature).
+| Crate               | Type      | Owns                                                                                                                | MUST NOT depend on                                           |
+| ------------------- | --------- | ------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| `felis-protocol`    | lib       | the `felis.proto` schema and its generated types, the IPC frame layout, the preface and protocol version constants  | `tokio`, anything OS-specific, anything graphical            |
+| `felis-vt`          | lib       | the hand-rolled VT state machine and the Kitty graphics, text-sizing and keyboard dispatch                          | `tokio`, OS-specific I/O, the grid crate                     |
+| `felis-grid`        | lib       | cells, grids, scrollback, the image store, reflow, selection, and the row codec ([row-codec.md](row-codec.md))      | `tokio`, graphics, fonts                                     |
+| `felis-pty`         | lib       | the self-hosted PTY backends (openpty / ConPTY) and their async bridge                                              | `felis-vt`, `felis-grid`, protocol/transport                 |
+| `felis-transport`   | lib       | framing, the local and SSH-stdio carriers, peer identity, the shared connection driver, and process plumbing        | `felis-vt`, `felis-grid`, daemon logic                       |
+| `felis-daemon`      | bin + lib | the session pool, per-session owner tasks, the IPC server, input encoding, and the `serve`/`relay` CLI              | anything graphical                                           |
+| `felis-client-core` | lib       | the shadow screen, the action enum, the IPC connector, the `config.toml` schema, and frontend-neutral client policy | `swash`, `wgpu`, `winit` (must run a headless attach)        |
+| `felis-shaping`     | lib       | `swash` shaping, the font fallback chain, and rasterization                                                         | `wgpu`, `winit`                                              |
+| `felis-render-core` | lib       | the renderer-neutral half of the renderer: palette, cell appearance, glyph index, and the per-row display list      | `wgpu`, `winit`                                              |
+| `felis-render-wgpu` | lib       | the wgpu pipeline that draws the display list, and the glyph and image atlases                                      | `winit` (surface comes from a caller-supplied window handle) |
+| `felis-cli`         | bin       | the `felis` front door: headless verbs, `felis bridge`, and exec of the GUI and of `felis-<name>` commands          | `swash`, `wgpu`, `winit` (must stay GPU-free)                |
+| `felis-client`      | bin       | the GUI frontend the front door execs: the winit event loop and OS clipboard, wiring winit and wgpu                 | —                                                            |
 
 felis hand-rolls the VT engine in `felis-vt`: it does **not** depend on `vte`, `alacritty_terminal`, or `libghostty`.
 Those upstreams are read as reference only; the rationale is in [implementation.md](../explanation/implementation.md)
@@ -67,8 +54,7 @@ against another are the opposite case: they live in the `tests/` directory of th
 ## Dependency direction
 
 Runtime edges only; no cycles. An arrow points from a crate to a crate that depends on it. An edge that a longer path
-already implies, such as `felis-daemon`'s direct `felis-vt` dependency, is not drawn again; the "Depends on" column
-above lists every direct edge.
+already implies, such as `felis-daemon`'s direct `felis-vt` dependency, is not drawn again.
 
 ```
 felis-protocol  ← depended on by every crate except felis-pty and felis-shaping
@@ -131,31 +117,17 @@ as nothing at all.
 Five shared wire facilities support external satellite clients (see
 [overview.md](../explanation/architecture/overview.md) for architectural tradeoffs):
 
-- **Grid→ANSI re-encoding:** `felis-grid::ansi` (`row_ansi`, `row_ansi_with`, `sgr_set`) reconstructs SGR and OSC 8 from
-  stored cell state for the pipe action, `felis sessions capture --ansi`, and any client painting into a host terminal.
-  Host-specific emission (256-color down-map, clip and pad to a column count, blanking Kitty Unicode-placeholder cells)
-  is passed in via `RowAnsiOptions`, whose `Default` is the full-fidelity text form. A round-trip test through the real
-  parser keeps it honest in-repo.
-- **Structural session JSON:** `felis-grid::json_v1` (behind the `json` feature) is the `felis-json` v1 format: an
-  in-band `felis_json` version and dedicated DTOs for the `Grid`, `Image`, `Conn`, `Session` and `Input` families, down
-  to the cells of a dirty row, which it recodes through `felis-grid::wire`. Its schema is
-  `crates/felis-grid/schemas/felis-json-v1.schema.json` and its golden frames are
-  `crates/felis-grid/tests/golden/json-v1/`, regenerated by `just schema` and `just golden`; a `json → protobuf → json`
-  round-trip keeps them honest in-repo. The format serves the out-of-repo consumers that mirror a grid ("Structural
-  session JSON" in [ipc.md](ipc.md)); what `felis bridge` writes is the CLI contract instead, spelled in `felis-cli`.
-- **Kitty image layout:** `felis-grid::image_layout` (`ImageLayout::rebuild`) turns placements and Unicode-placeholder
-  cells into draws, each an image-pixel source rectangle and a screen-pixel destination, per layer in paint order, at
-  the caller's cell size. A frontend paints them with its own primitive; client chrome clipping stays with the frontend.
-  `felis-client-core::ImageShadow::layout_into` feeds it the mirror, and `ClientImage::write_rgba8` and
-  `ClientImage::generation` serve a frontend that converts pixels asynchronously.
-- **Cross-language wire contract:** `felis.proto` itself. There is no committed contract manifest beside it and none is
-  needed: the message and enum shapes, the frame-kind numbering, the preface constants, and each oneof arm's routing row
-  are all declared in the schema, with the Rust values generated from it or tests asserting they match, so a non-Rust
-  client generates its codec from the one file the daemon is built from. Routing rides the descriptor as field options
-  on each arm ([ipc.md](ipc.md#the-arm-table)), which is why a client needs no second source for direction, correlation,
-  modes, phases, or introducing minor. The interior of the row payload is the single hand-off, to
-  [row-codec.md](row-codec.md); the keyboard and capability bit tables stay in [ipc.md](ipc.md) (the manifest's
-  adopt/reject record is in the architecture overview).
+- **Grid→ANSI re-encoding:** `felis-grid::ansi` reconstructs SGR and OSC 8 from stored cell state, for the pipe action,
+  `felis sessions capture --ansi`, and any client painting into a host terminal; host-specific emission is a caller
+  option.
+- **Structural session JSON:** `felis-grid::json_v1` (behind the `json` feature) is the `felis-json` v1 format that
+  out-of-repo grid mirrors consume ("Structural session JSON" in [ipc.md](ipc.md)); its schema and golden frames are
+  regenerated by `just schema` and `just golden`. What `felis bridge` writes is the CLI contract instead.
+- **Kitty image layout:** `felis-grid::image_layout` turns placements and Unicode-placeholder cells into per-layer
+  source and destination rectangles at the caller's cell size, which a frontend paints with its own primitive.
+- **Cross-language wire contract:** `felis.proto` itself, with each oneof arm's routing declared as field options
+  ([ipc.md](ipc.md#the-arm-table)), so a non-Rust client needs no second source. The row payload's interior is the one
+  hand-off, to [row-codec.md](row-codec.md).
 - **Server-side handshake helpers:** the daemon's `Hello → Welcome → attach-ack` sequence is a shared function (no
   `felis-server-core` crate; [overview.md](../explanation/architecture/overview.md) "Shared wire knowledge across the
   satellite clients" records why not).
@@ -169,47 +141,29 @@ Until the compatibility freeze the dev wire carries no promise, and a break chan
 burning a number.
 
 The **crate** version is Cargo's, and it carries no wire information. The three binary crates (felis-cli, felis-client,
-felis-daemon) inherit `[workspace.package] version` in the root `Cargo.toml` with `version.workspace = true`: that is
-the app version, the one a release tag and `felis version` name. Every library crate declares its own version, starting
-at 0.1.0, which Cargo's semver rules govern for its Rust API; the root `[workspace.dependencies]` entries name the same
-versions next to their paths. A release bumps a library whose package differs from its newest crates.io version, a minor
-for a breaking change and a patch otherwise, raises every requirement on it, and leaves an unchanged library at its
-version ("Release gate" below). Every crate under `crates/` is publishable to crates.io; the `tests/` member is not.
+felis-daemon) inherit `[workspace.package] version`: that is the app version, the one a release tag and `felis version`
+name. Every library crate declares its own version, which Cargo's semver rules govern for its Rust API. Every crate
+under `crates/` is publishable to crates.io; the `tests/` member is not.
 `cargo install felis-cli felis-client felis-daemon` is unsupported: it installs only the three binaries, while the
 packages in [install.md](../how-to/install.md) also ship the terminfo entry, desktop entry, man pages and shell
-completions. The READMEs of the crates that speak the IPC wire point to the wire contract below. A wire-schema change is
-recorded where a peer can act on it (`PROTOCOL_MINOR` and the minor ledger in [ipc.md](ipc.md) "The minor ledger", one
-row per addition), and `felis-protocol`'s crate version is not bumped alongside it
+completions. A wire-schema change is recorded where a peer can act on it (`PROTOCOL_MINOR` and [ipc.md](ipc.md) "The
+minor ledger"), and `felis-protocol`'s crate version is not bumped alongside it
 ([implementation.md](../explanation/implementation.md) "Why the crate version carries no wire information").
 
 A third axis names the _build_ rather than either contract: the `BuildIdentity` in `felis-protocol`, holding a semver,
 the full git revision the binary was compiled from, and a `dirty` flag for a revision whose tracked working tree had
 uncommitted changes. Its canonical rendering is `<semver> (<revision>[-dirty])`, which `felis-client` and `felis-daemon`
 emit from `--version` and which `felis version` parses back out of them (`felis --version` and the human tables
-abbreviate the revision to twelve digits; the abbreviation is not a parse target).
-
-The binaries take the revision from `FELIS_GIT_HASH` at compile time, so a build carries one only when that variable is
-set. `flake.nix` passes `self.rev` (clean) or `self.dirtyRev` (dirty), evaluated per build, and the Windows CI jobs pass
-the checkout's revision; the release artifacts come from those two paths. A build without it, such as a bare
-`cargo build` or a registry install, reports `unknown`. A dirty _release_ is refused by the tag workflow ("Release gate"
-below).
+abbreviate the revision to twelve digits; the abbreviation is not a parse target). The revision comes from
+`FELIS_GIT_HASH` at compile time, which the flake and the Windows CI jobs set; a build without it, such as a bare
+`cargo build` or a registry install, reports `unknown`.
 
 ## Cargo configuration
 
 The workspace root `Cargo.toml` is the source of truth for `[workspace]`, `[workspace.package]`, and
-`[workspace.dependencies]`. The load-bearing rules:
-
-- The workspace is virtual (no root package), and `resolver = "3"` is set explicitly so it inherits the resolver (Cargo
-  1.84+ default for edition 2024 packages).
-- Every external dependency enters through `[workspace.dependencies]` (Cargo 1.64+); `[workspace.lints]` (1.74+) shares
-  the lint config the same way.
-- Member crates pull metadata via `{key}.workspace = true` per the upstream inheritance pattern
-  (<https://doc.rust-lang.org/cargo/reference/workspaces.html>).
-
-The baseline crate picks follow the Rust ecosystem recommendations at <https://blessed.rs/crates>: `serde` for
-serialization, `tokio` for the async runtime, `thiserror` / `anyhow` for errors, `clap` for the CLIs. Library crates
-take `thiserror` and must not depend on `anyhow`; the binaries (`felis-daemon`, `felis-cli`, `felis-client`) pass
-library error types through `anyhow::Context` rather than re-wrapping them.
+`[workspace.dependencies]`. Library crates take `thiserror` and must not depend on `anyhow`; the binaries
+(`felis-daemon`, `felis-cli`, `felis-client`) pass library error types through `anyhow::Context` rather than re-wrapping
+them.
 
 ## Lint policy, edition, and MSRV
 
@@ -229,24 +183,17 @@ The slots felis uses:
 - **Config:** `ProjectDirs::config_dir()`. felis reads its single TOML config from this directory.
 - **Cache:** `ProjectDirs::cache_dir()`. Reserved for regenerable data such as atlas dumps; nothing writes here today.
   Scrollback never lands here: it is RAM-only (REQ-609).
-- **Runtime / daemon socket:** `/tmp/felis.<uid>/`, derived from the uid alone, so felis does not use
-  `ProjectDirs::runtime_dir()` here ([cli.md](cli.md#carrier-and-connection-lifetime) "Carrier and connection lifetime"
-  states the rule). No environment variable takes part, which is what lets an SSH login, a relay and a desktop session
-  reach one daemon ([how-to: attach over SSH](../how-to/attach-over-ssh.md) "Operational notes"). The directory holds
+- **Runtime / daemon socket:** `/tmp/felis.<uid>/`, derived from the uid alone rather than from
+  `ProjectDirs::runtime_dir()` or any environment variable, so an SSH login, a relay and a desktop session reach one
+  daemon ([cli.md](cli.md#carrier-and-connection-lifetime) "Carrier and connection lifetime" states the rule). It holds
   `daemon.sock` and the `daemon.sock.agent` symlink; the daemon creates it `0700` and refuses anything else there. Why
   `/tmp` rather than a runtime directory is argued in
   [ipc.md](../explanation/architecture/ipc.md#cross-host-attach-ssh-stdio). Windows uses named pipes
   (`\\.\pipe\felis.<sid>.daemon`) rather than filesystem sockets; see
   [security-model.md](../explanation/security-model.md) "Daemon IPC" and [ipc.md](ipc.md).
-- **Logs:** `ProjectDirs::state_dir()` (`$XDG_STATE_HOME/felis/`, falling back to `data_local_dir()` on Windows, which
-  has no state slot and lands at `%LOCALAPPDATA%\felis\data\`, the same extra segment `directories` appends to the
-  config path there). `directories` exposes no log directory at all and leaves `state_dir()` empty on macOS, so the
-  macOS rule (`~/Library/Logs/felis/`, the platform's user-log home) is spelled out in `felis-daemon`'s `logging` module
-  rather than delegated. Per-binary file names and rotation are in [cli.md](cli.md) "Log files".
-
-Every call passes an empty qualifier and organization (`ProjectDirs::from("", "", "felis")`). Linux discards both, but
-macOS joins them into a bundle id, so any other spelling would move the config directory to
-`Library/Application Support/dev.felis.felis` and contradict the path documented in [config.md](config.md).
+- **Logs:** `ProjectDirs::state_dir()` (`$XDG_STATE_HOME/felis/`), `data_local_dir()` on Windows, and
+  `~/Library/Logs/felis/` on macOS, where `directories` has no log or state slot. Per-binary file names and rotation are
+  in [cli.md](cli.md) "Log files".
 
 The directory mode (`0700`) and socket mode (`0600`) rules from [security-model.md](../explanation/security-model.md)
 "Daemon IPC" apply on every platform that exposes filesystem permissions. Abstract sockets on Linux are not used.
@@ -256,32 +203,29 @@ The directory mode (`0700`) and socket mode (`0600`) rules from [security-model.
 Four targets are committed, named by exact identifier (Nix system ids for the Unix three, a Rust target triple for
 Windows):
 
-| Target                   | GPU backend | Runtime gate                                                                                                                                                                                                                                                                                                                                                                                                | Published artifact                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| ------------------------ | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `x86_64-linux`           | Vulkan      | **passed**. `pr.yml` builds and tests on the `x86_64-linux` runner and runs the frontend smoke there against `nix build .#felis` (a pull request drives the debug Cargo build instead), headless: Xvfb in front of winit's X11 backend and mesa's lavapipe behind wgpu's Vulkan backend, both out of the flake's `smoke` shell. What that run does not witness is a hardware driver or a Wayland compositor | the flake package, pushed to the niks3 binary cache (`nix-cache.natsukium.com`, which the flake's `nixConfig` advertises) by `pr.yml` as each `main` revision builds, and by `release.yml` on each tag. The tag build is the supported artifact; a `main` build is a preview of the next one. Each tag also attaches `felis-x86_64-linux.tar.gz`, the same build relocated to run on a host without Nix, which the release gate below unpacks and exercises in a container before it is attached ([install.md](../how-to/install.md) "The Linux archive") |
-| `aarch64-linux`          | Vulkan      | none; packaged by the flake, run by no CI                                                                                                                                                                                                                                                                                                                                                                   | none                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| `aarch64-darwin`         | Metal       | no window gate in CI; `darwin.yml` builds on the `aarch64-darwin` runner and runs the release archive's headless checks there, and the package sets `doCheck = false`. The window claim rests instead on the maintainer's daily use of the build ([testing.md](../explanation/testing.md) "Maintainer use, for `aarch64-darwin`")                                                                           | the flake package, pushed to the same niks3 cache by `darwin.yml` as each `main` revision builds, and by `release.yml` on each tag. Each tag also attaches `felis-aarch64-darwin.tar.gz`, the same build with its Mach-O load commands rewritten and ad-hoc signed to run on a host without Nix, which the release gate below unpacks, verifies against `codesign` and runs on the `aarch64-darwin` runner before it is attached ([install.md](../how-to/install.md) "The macOS archive")                                                                 |
-| `x86_64-pc-windows-msvc` | DX12        | **passed**. `windows.yml` runs the suite and the frontend smoke on the `x86_64-windows` runner (the release build on `main`, the debug build on a pull request; a real desktop session: DX12 needs a surface, which a session-0 service never has), and a mingw cross-compile lints `x86_64-pc-windows-gnu`                                                                                                 | `felis-x86_64-pc-windows-msvc.zip`, attached to the release page by `release.yml` after that tag's own Windows suite and smoke pass. `windows.yml` uploads the same zip per `main` revision as a run artifact ([install.md](../how-to/install.md) "The Windows deliverable")                                                                                                                                                                                                                                                                              |
+| Target                   | GPU backend | Runtime gate                                                                                                                                                                                    | Published artifact                                                                                                                     |
+| ------------------------ | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `x86_64-linux`           | Vulkan      | **passed**: `pr.yml` runs the suite and a headless frontend smoke (Xvfb, mesa lavapipe) against the flake package; no hardware driver or Wayland compositor is witnessed                        | the flake package through the binary cache, and `felis-x86_64-linux.tar.gz` ([install.md](../how-to/install.md) "The Linux archive")   |
+| `aarch64-linux`          | Vulkan      | none; packaged by the flake, run by no CI                                                                                                                                                       | none                                                                                                                                   |
+| `aarch64-darwin`         | Metal       | no window gate: `darwin.yml` builds and runs the archive's headless checks; the window rests on maintainer use ([testing.md](../explanation/testing.md) "Maintainer use, for `aarch64-darwin`") | the flake package through the binary cache, and `felis-aarch64-darwin.tar.gz` ([install.md](../how-to/install.md) "The macOS archive") |
+| `x86_64-pc-windows-msvc` | DX12        | **passed**: `windows.yml` runs the suite and the frontend smoke on the `x86_64-windows` runner in a real desktop session                                                                        | `felis-x86_64-pc-windows-msvc.zip` ([install.md](../how-to/install.md) "The Windows deliverable")                                      |
 
 Committed is a roadmap category, not a support tier: a committed target with no evidence behind it carries no support
 claim and publishes no artifact, though the flake's source build may still expose it. A release is published per tag and
-behind every job of that tag's own chains ("Release gate" below); `windows.yml` likewise uploads a `main` revision's zip
-only after that revision's Windows suite and smoke pass. The binary cache is not gated: it receives each `main` and tag
-build of `x86_64-linux` and `aarch64-darwin` as the build finishes. Why the evidence rule is shaped this way is in
-[testing.md](../explanation/testing.md) "Why a support claim needs a passed gate".
+only after every job of that tag's own chains passes ("Release gate" below). The binary cache
+(`nix-cache.natsukium.com`, advertised by the flake's `nixConfig`) is not gated: it receives each `main` and tag build
+of `x86_64-linux` and `aarch64-darwin`, and the tag build is the supported artifact. Why the evidence rule is shaped
+this way is in [testing.md](../explanation/testing.md) "Why a support claim needs a passed gate".
 
 A runtime gate is: the test suite on the real target, plus a frontend smoke that launches the packaged artifact, opens a
 real winit window and wgpu surface on the platform backend, attaches a PTY, drives input, and verifies a rendered frame.
 Cargo tests alone do not constitute one (the suite deliberately leaves pixel verification out,
 [testing.md](testing.md)), and emulation does not, since it cannot validate the production GPU and window stack. The
-smoke exists as a mode of `felis-client` itself, armed by `FELIS_SMOKE_MARKER` ([testing.md](testing.md) "CI shape"), so
-every target's `main` and tag job drives the shipped binary rather than a stand-in; a pull request's smoke drives the
-debug build and is not part of the gate. Two targets have a passed gate, `x86_64-linux` and `x86_64-pc-windows-msvc`,
-and both carry the support claim, since P-2 makes a durable distribution part of the claim and each has one. Every
-supported target's distribution is an archive attached to the release, so a user without Nix gets the same build the
-cache serves. `aarch64-darwin` carries the claim on the maintainer's use of the build instead
-([testing.md](../explanation/testing.md) "Maintainer use, for `aarch64-darwin`"). `aarch64-linux` carries no claim, and
-it moves on that target's first green run, not on this table.
+smoke is a mode of `felis-client` itself, armed by `FELIS_SMOKE_MARKER` ([testing.md](testing.md) "CI shape"), so a
+`main` or tag job drives the shipped binary; a pull request's smoke drives the debug build and is not part of the gate.
+`x86_64-linux` and `x86_64-pc-windows-msvc` have a passed gate and carry the support claim, since P-2 makes a durable
+distribution part of the claim and each has one. `aarch64-darwin` carries the claim on the maintainer's use of the build
+instead. `aarch64-linux` carries no claim, and it moves on that target's first green run, not on this table.
 
 `x86_64-darwin` is **not** committed: no flake package, no test coverage, no claim. `meta.platforms` in
 `nix/package.nix` names the three Nix systems above rather than `lib.platforms.unix`, whose extra members (the BSDs,
@@ -290,110 +234,15 @@ ARM, or FreeBSD.
 
 ### Release gate
 
-A release is a tag, and `.forgejo/workflows/release.yml` is what turns one into a published artifact. It triggers on
-`push: tags: ['v*']`, serializes through `concurrency: felis-release` with cancellation off, and runs the whole gate
-against the tag's own revision rather than trusting an earlier green run on `main`
-([testing.md](../explanation/testing.md) "Why a support claim needs a passed gate").
-
-A tag check runs first and everything else waits on it. It runs `tools/release/verify.py` (`just release-check <tag>`
-locally, and its own self-test first) on a full-history checkout, asserting:
-
-1. the tag name is `v<major>.<minor>.<patch>`, optionally with an `-rc.<n>` prerelease suffix and nothing else;
-2. the tag is annotated, not lightweight;
-3. it points at the commit the run is publishing (`github.sha`);
-4. the tag's core semver, with any prerelease suffix stripped, equals the root manifest's `[workspace.package] version`
-   (the source `nix/package.nix` reads the package version from), and the three binary crates (felis-cli, felis-client,
-   felis-daemon) inherit that version rather than pinning one of their own;
-5. a final tag has a `## [<core semver>] - <date>` section in `CHANGELOG.md`; a candidate does not, since its entries
-   are still accruing under Unreleased;
-6. the working tree is clean.
-
-The same job then runs `tools/release/crates.py check`, which needs crates.io, and refuses the tag when a library's
-version is not ready to publish:
-
-1. a `[workspace.dependencies]` entry's `version` differs from that crate's own version, or a member names a felis crate
-   without inheriting that entry, except felis-client-core's dev-dependencies on felis-daemon and on itself, which name
-   `path` alone;
-2. `cargo semver-checks` fails for a library, or for felis-daemon's library target, against its newest crates.io
-   version: the bump is smaller than the API change requires (for felis-daemon, the bump is the app version's);
-3. `release-plz update` (configured by `release-plz.toml`) would change the tree, that is, a library whose package
-   differs from its newest crates.io version was not bumped, or a requirement on a bumped library was not raised.
-
-A crate with no crates.io version skips 2 and 3. `just release-prepare` runs the same `release-plz update` to make those
-bumps before the tag.
-
-Behind it the tag reruns `nix flake check`, the Cargo suite with clippy and `cargo deny` plus `just package-tests`
-(every crate's tests build from its extracted package, against the other felis packages), the wire gate on its tag path
-(`buf breaking` against the newest published final release, [testing.md](testing.md) "Wire compatibility gates"), and
-the Linux frontend smoke, and the release page waits on all of them. The Linux smoke pushes the store path to the niks3
-cache as soon as it builds, and it checks the built binary before it does: `felis version --format json` must report the
-tag's core semver, the tag's full revision, and `dirty: false`. That comparison reads the JSON object, never the
-`felis --version` line, whose revision is abbreviated for a reader and so is not a parse target ("Versioning" above).
-
-The Linux chain then builds `felis-dist`, the relocated archive, and proves it off Nix before it can be attached: it
-unpacks the tarball, checks that the tree carries the binaries, libraries, terminfo, desktop entry, completions and man
-pages and that no launcher or data file names a store path, and runs the archive in an `ubuntu:24.04` container that has
-no `/nix`, where the CLI runs, the client passes the frontend marker smoke through the host's Vulkan stack, the daemon
-it spawns is the archive's own, a PTY child's environment carries no loader or locale override, and a session started
-through a symbolic link to `bin/felis` resolves `TERM=xterm-felis` from the archive's terminfo. The same identity check
-runs once more against `bin/felis` from the unpacked tree, so the archive is tied to the tag and not only the store path
-is.
-
-The other two supported targets run their own chains on the same revision. The macOS chain builds on the
-`aarch64-darwin` runner, applies the same identity check, pushes to the cache, and then builds and proves its own
-`felis-dist`: it unpacks the tarball, checks the manifest and that no Mach-O load command or rpath under `felis.app`
-names a store path, verifies the ad-hoc signature with Apple's own `codesign --verify --strict --deep`, runs the bundled
-client directly with `--version`, spawns a daemon from the extracted tree and confirms it is the bundle's own, checks
-that a session started through a symbolic link to `bin/felis` resolves `TERM=xterm-felis` with the system `tput`, and
-applies the identity check once more to `bin/felis`. The runner has no Aqua session and cannot open a window, so the
-direct `--version` run is what catches a library dyld cannot resolve; the window rests on maintainer use
-([testing.md](../explanation/testing.md) "Maintainer use, for `aarch64-darwin`"). It uploads the tarball as a run
-artifact because jobs have separate workspaces and the Linux publishing step cannot rebuild a darwin archive. The
-Windows chain repeats `windows.yml`'s suite and smoke on the tag, since a tag may point at a revision that never had a
-green `main` run, and zips the binaries the smoke drove. A runner that is down fails the release, which is the outcome a
-claimed target asks for.
-
-A final step then downloads those run artifacts and, through `tools/release/publish.py` (which runs its own self-test
-first), creates the Forgejo release on the tag through the repository API as a **draft**, attaches five files, re-reads
-the draft to confirm all five arrived, and only then flips it to published. A release page is visible from the moment it
-exists, so an upload that failed halfway would otherwise leave a public release claiming a build nobody can trace. A
-rerun deletes an unfinished draft for the tag and cuts it again; a tag whose release is already published stops the job
-instead, since publication is the one step the workflow cannot take back. The five files:
-
-| Asset                              | What it pins                                                                                                                                                                                         |
-| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `felis-x86_64-linux.tar.gz`        | the three binaries, the loader and libraries they need, terminfo, a desktop entry, completions, man pages, the README and the license, relocated to run on a host without Nix                        |
-| `felis-aarch64-darwin.tar.gz`      | `felis.app` with the client, the daemon, the CLI and terminfo inside it, a `bin/felis` launcher, terminfo, completions, man pages, the README and the license, ad-hoc signed and free of store paths |
-| `felis-x86_64-pc-windows-msvc.zip` | `felis.exe`, `felis-client.exe`, `felis-daemon.exe`, the README and the license, built from the tag's revision                                                                                       |
-| `felis-config.schema.json`         | the config keys that build accepts                                                                                                                                                                   |
-| `felis.proto`                      | the wire schema that build speaks                                                                                                                                                                    |
-
-The release body says how to install each asset and through Nix, and for a final tag through Homebrew, pointing at the
-GitHub repository, names the three supported targets, says `aarch64-linux` is not supported, and ends with the version's
-CHANGELOG section when that section has entries. A tag with a prerelease suffix publishes with `prerelease: true`.
-
-The GitHub repository is the public face and a push mirror of Forgejo, and a push mirror carries refs but not release
-pages. `.github/workflows/release-mirror.yml`, the one GitHub workflow, fires when the mirror delivers a `v*` tag and
-runs `tools/release/mirror.py` (`just release-mirror-test` is its self-test). It waits, for up to five hours, until the
-Forgejo release for the tag is published, which is only after all five assets are attached. It then downloads each
-asset, checks its size against the Forgejo listing, and cuts the GitHub release with the same body, prerelease flag and
-assets, by the same draft-then-publish sequence. It never gates or builds anything: a tag whose Forgejo release never
-publishes leaves GitHub without one. A rerun deletes an unfinished GitHub draft for the tag, and it leaves a published
-GitHub release that already carries every asset alone.
-
-Once the GitHub release exists, the workflow's `homebrew` job runs `tools/release/homebrew.py`
-(`just release-homebrew-test` is its self-test). For a tag without a prerelease suffix it opens a pull request on
-`felis-terminal/homebrew-tap` that moves the formula to the tag's source archive. The pull request is a draft, which the
-tap does not publish on its own, when `nix/package.nix`, `nix/make-macos-app.sh`, `nix/compile-terminfo.sh`,
-`crates/felis-daemon/terminfo/` or `share/` changed since the previous final tag.
-
-Beside it, the `crates` job publishes to crates.io for a tag without a prerelease suffix.
-`tools/release/crates.py publish-plan` lists the crates whose version is not on crates.io; with none, the job ends
-there. A crate that was never published fails it, since crates.io creates a crate only from an API token, never through
-trusted publishing. Otherwise `cargo publish --dry-run` builds the listed packages with no credential present, then
-`rust-lang/crates-io-auth-action` exchanges the job's OIDC token for a short-lived crates.io token, which each crate's
-trusted publisher grants only to this workflow in the `crates-io` environment, and `cargo publish --no-verify` uploads
-them in dependency order. A rerun publishes what is still missing.
+A release is an annotated `v*` tag. `.forgejo/workflows/release.yml` reruns the whole gate on the tag's own revision
+rather than trusting an earlier green run on `main` ([testing.md](../explanation/testing.md) "Why a support claim needs
+a passed gate"): a tag check (`just release-check <tag>`), the Cargo suite, the wire gate ([testing.md](testing.md)
+"Wire compatibility gates"), and every supported target's chain, each of which checks that the built binaries report the
+tag's version and clean revision and proves its archive off Nix. The Forgejo release page is created as a draft and
+flipped to published only once every asset is attached. The GitHub mirror republishes it, and for a final tag crates.io
+and the Homebrew tap follow. The checks and steps are those scripts: `.forgejo/workflows/release.yml`,
+`.github/workflows/release-mirror.yml`, and `tools/release/`; the maintainer's order of operations is the `release`
+skill.
 
 [non-goals.md](../explanation/non-goals.md) "Cross-platform constraints" states: "Where a feature is not uniformly
 implementable across macOS, Linux, and Windows, it is omitted rather than gated."

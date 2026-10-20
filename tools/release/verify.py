@@ -12,6 +12,16 @@ from pathlib import Path
 USAGE = """usage: tools/release/verify.py <tag> [<commit>]
        tools/release/verify.py --identity [--bundled-client] <tag> <commit> <version-json>
        tools/release/verify.py --self-test
+
+<tag> [<commit>]: refuses a tag that is not `v<major>.<minor>.<patch>` with an
+optional `-rc.<n>`, is lightweight, or does not point at <commit> (default
+HEAD); a root `[workspace.package] version` other than the tag's core semver,
+or a binary crate that does not inherit it; a final tag without its dated
+CHANGELOG.md section; and a dirty working tree.
+
+--identity: refuses a `felis version --format json` report whose version,
+revision or dirty flag does not match <tag> at <commit>; --bundled-client
+also requires the bundled client to report the same identity.
 """
 TAG_RE = re.compile(
     r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-rc\.[1-9][0-9]*)?"

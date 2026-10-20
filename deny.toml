@@ -40,8 +40,9 @@ deny = [
   { crate = "swash", wrappers = [
     "felis-shaping",
   ], reason = "only felis-shaping shapes text" },
-  # The crate map (docs/reference/workspace.md "Crate map"): each felis-*
-  # library is admitted only as a direct dependency of the rows that list it.
+  # The crate graph (docs/reference/workspace.md "Dependency direction"): each
+  # felis-* library is admitted only as a direct dependency of the parents
+  # listed here.
   # Parents after `# dev` are dev-dependency edges, which cargo-deny's graph
   # includes; promoting one to a normal edge passes here.
   { crate = "felis-protocol", wrappers = [

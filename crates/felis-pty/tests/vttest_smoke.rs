@@ -228,7 +228,7 @@ async fn da1_reply_round_trips_through_terminal_reports_menu() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "diagnostic probe — dumps a four-level submenu screen N.M.K.L"]
+#[ignore = "diagnostic probe — dumps the four-level submenu screen VTTEST_PATH=N.M.K.L"]
 async fn dump_four_level_screen() {
     let session = VttestSession::open();
     let path: Vec<String> = std::env::var("VTTEST_PATH")
@@ -258,7 +258,7 @@ async fn dump_four_level_screen() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "diagnostic probe — dumps a sub-sub-menu screen N.M.K"]
+#[ignore = "diagnostic probe — dumps the sub-sub-menu screen VTTEST_OUTER.VTTEST_INNER.VTTEST_LEAF"]
 async fn dump_subsubmenu_screen() {
     let session = VttestSession::open();
     let outer = std::env::var("VTTEST_OUTER").unwrap_or_else(|_| "11".into());
@@ -287,7 +287,7 @@ async fn dump_subsubmenu_screen() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "diagnostic probe — dumps a sub-menu screen N.M"]
+#[ignore = "diagnostic probe — dumps the sub-menu screen VTTEST_OUTER.VTTEST_INNER"]
 async fn dump_submenu_screen() {
     let session = VttestSession::open();
     let outer = std::env::var("VTTEST_OUTER").unwrap_or_else(|_| "11".into());
@@ -313,7 +313,7 @@ async fn dump_submenu_screen() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "diagnostic probe — walks menu N forward by RETURNs"]
+#[ignore = "diagnostic probe — walks menu VTTEST_MENU forward by VTTEST_STEPS RETURNs"]
 async fn dump_menu_walk() {
     let session = VttestSession::open();
     let menu = std::env::var("VTTEST_MENU").unwrap_or_else(|_| "2".into());
@@ -362,7 +362,7 @@ async fn dump_main_menu() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "diagnostic probe — prints a menu screen to stderr"]
+#[ignore = "diagnostic probe — prints menu VTTEST_MENU's screen to stderr"]
 async fn dump_menu_screen() {
     let session = VttestSession::open();
     let menu = std::env::var("VTTEST_MENU").unwrap_or_else(|_| "1".into());
