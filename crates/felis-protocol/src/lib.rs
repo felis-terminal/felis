@@ -1,7 +1,4 @@
-//! `felis-protocol`: version preface, IPC frames, message families, and connection modes.
-//!
-//! Protocol specification is in `docs/reference/ipc.md`.
-
+#![doc = include_str!("../README.md")]
 #![cfg_attr(not(test), forbid(unsafe_code))]
 
 pub mod base64;

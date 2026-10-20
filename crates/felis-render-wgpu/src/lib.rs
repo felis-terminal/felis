@@ -1,9 +1,5 @@
 #![recursion_limit = "256"]
-
-//! `felis-render-wgpu`: wgpu pipeline, glyph and image atlases, decorations.
-//!
-//! The surface is built from a `RawWindowHandle`-bearing handle the
-//! caller supplies; this crate has no `winit` dependency.
+#![doc = include_str!("../README.md")]
 
 use std::{
     collections::{BTreeMap, HashSet},

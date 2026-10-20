@@ -1,5 +1,4 @@
-//! `felis-grid`: cells, cursor, damage tracker, scrollback, image store.
-
+#![doc = include_str!("../README.md")]
 #![cfg_attr(not(test), forbid(unsafe_code))]
 
 use std::{

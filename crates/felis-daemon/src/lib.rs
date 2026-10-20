@@ -1,9 +1,4 @@
-//! `felis-daemon`: session pool, IPC server, signal handling.
-//!
-//! The library half exposes the daemon's plumbing so an embedder (a test
-//! harness or a future cross-process spawner) can drive it without the
-//! binary's CLI.
-
+#![doc = include_str!("../README.md")]
 // `deny`, not `forbid`: `forbid` cannot be relaxed at the audited
 // `#[allow(unsafe_code)]` sites (`graphics::image_decode`'s shm
 // reader, `foreground`'s `proc_pidpath` lookup).

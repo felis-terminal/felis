@@ -1,9 +1,4 @@
-//! Williams DFA terminal parser and Kitty extension dispatchers.
-//!
-//! Fixed-capacity slabs overflow to an "ignore" path without per-byte
-//! allocations. Not a `vte` wrapper: Kitty graphics APC framing and keyboard
-//! protocol need first-class state in the table.
-
+#![doc = include_str!("../README.md")]
 #![cfg_attr(not(test), forbid(unsafe_code))]
 // Handlers take `&mut self` and `&mut S` uniformly so the dispatch table
 // inlines without per-arm coercions.
