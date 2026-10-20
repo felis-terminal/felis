@@ -33,39 +33,28 @@ is covered under "wgpu" below.
 
 ### Tokio (multi-thread)
 
-Source: <https://docs.rs/tokio/latest/tokio/runtime/index.html>.
-
-The async runtime is Tokio. [ipc.md](../reference/ipc.md) uses `tokio::net::UnixStream` for the v1 transport;
-[pipeline.md](rendering/pipeline.md) mentions "the IPC reader pulls grid / image / control frames from the daemon on a
-tokio task."
-
-Both binaries run the **multi-thread** scheduler, which the Tokio docs describe as: "Executes futures on a thread pool,
-using a work-stealing strategy. By default, it will start a worker thread for each CPU core." The daemon builds it with
-`tokio::runtime::Builder::new_multi_thread()` (`crates/felis-daemon/src/main.rs`). The client binaries do the same: the
-CLI front-door for headless verbs (`crates/felis-cli/src/main.rs`) and the GUI runtime for window sessions
-(`crates/felis-client/src/main.rs`). This follows the Tokio docs guide: "Most applications should use the multi-thread
-scheduler, except in some niche use-cases."
-
-Multi-thread suits the daemon because PTY reads, parsing, IPC writes, and animation timers are independent and can
-overlap. The client uses the same flavor for uniformity; its winit event loop owns the renderer and shadow-grid read
-side while the IPC reader runs on a tokio task (see [pipeline.md](rendering/pipeline.md) "Process model").
+The async runtime is Tokio, and every binary runs its **multi-thread** scheduler
+(<https://docs.rs/tokio/latest/tokio/runtime/index.html>). Multi-thread suits the daemon because PTY reads, parsing, IPC
+writes, and animation timers are independent and can overlap. The client uses the same flavor for uniformity; its winit
+event loop owns the renderer and shadow-grid read side while the IPC reader runs on a tokio task (see
+[pipeline.md](rendering/pipeline.md) "Process model").
 
 One overlap is deliberate and load-bearing on the daemon: **the VT parse does not run on a tokio task.** Each session's
 PTY master has two dedicated OS threads in `felis-pty`: a reader that stays on the PTY, and a parse thread that advances
-the grid via a sink closure (`felis_daemon::parse_sink`), consuming whole swap-buffer accumulations. The macOS PTY line
-discipline delivers output in ~1 KiB chunks, so a 150 MB `cat` is ~156K reads. Two alternatives are rejected by
-measurement. Handing each chunk to a tokio task to parse costs one cross-thread wake plus a cache-line bounce per chunk,
-~45% of the `cat`'s wall-clock (0.87 s against 0.48 s with the parse on the reader thread). Parsing inline on the reader
-thread instead holds a child's synchronous `write(2)` hostage to parse cost: the kernel drains a bulk write in a ~1 KiB
-lockstep (wake the reader, hand over a chunk, wake the writer to refill), so the queue drains at 1 KiB/(read+parse) and
-a DOOM-fire-style sim+write loop caps at ~628 fps. The reader/parse split with a condvar-only-when-parked handoff plus a
-short non-blocking spin in the macOS reader (`felis-pty`'s sink-mode doc owns the numbers, including why neither half
-works alone) reaches ~666 fps, and bulk accept reaches 250 MB/s against the inline path's 210. The session's owner task
-keeps only what is downstream of the parse (effect replay, diff compose, fan-out), reaching the shared parser+grid unit
-(`pool::ParseCore`) through a `parking_lot::Mutex` whose `!Send` guard makes holding it across an `await` a compile
-error. The owner task coalesces its per-chunk work under a flood so it does not contend the parse thread off that lock,
-takes the lock once per cycle, and the lock hands off to a waiting owner task so the parse thread cannot starve it off
-in turn (see [pipeline.md](rendering/pipeline.md) "Demand-driven emission", which argues the choice of lock).
+the grid via a sink closure, consuming whole swap-buffer accumulations. The macOS PTY line discipline delivers output in
+~1 KiB chunks, so a 150 MB `cat` is ~156K reads. Two alternatives are rejected by measurement. Handing each chunk to a
+tokio task to parse costs one cross-thread wake plus a cache-line bounce per chunk, ~45% of the `cat`'s wall-clock (0.87
+s against 0.48 s with the parse on the reader thread). Parsing inline on the reader thread instead holds a child's
+synchronous `write(2)` hostage to parse cost: the kernel drains a bulk write in a ~1 KiB lockstep (wake the reader, hand
+over a chunk, wake the writer to refill), so the queue drains at 1 KiB/(read+parse) and a DOOM-fire-style sim+write loop
+caps at ~628 fps. The reader/parse split with a condvar-only-when-parked handoff plus a short non-blocking spin in the
+macOS reader (`felis-pty`'s sink-mode doc owns the numbers, including why neither half works alone) reaches ~666 fps,
+and bulk accept reaches 250 MB/s against the inline path's 210. The session's owner task keeps only what is downstream
+of the parse (effect replay, diff compose, fan-out), reaching the shared parser+grid unit through a `parking_lot::Mutex`
+whose `!Send` guard makes holding it across an `await` a compile error. The owner task coalesces its per-chunk work
+under a flood so it does not contend the parse thread off that lock, takes the lock once per cycle, and the lock hands
+off to a waiting owner task so the parse thread cannot starve it off in turn (see [pipeline.md](rendering/pipeline.md)
+"Demand-driven emission", which argues the choice of lock).
 
 Linux's PTY queue holds ~68 KiB (64 KiB of flip buffers plus the line discipline's 4 KiB read buffer), so the writer is
 not held to the reader chunk by chunk, and there the spin moves no DOOM-fire frame rate while costing 1.4 to 2.1 s of
@@ -78,7 +67,7 @@ at 82x212), and a felis build whose reader waits like that runs the bench harnes
 The reader's CPU would be bought back with exactly the throughput those rows measure.
 
 The split costs one ordering rule at the end of the stream: the reader thread signals EOF to the parse thread, then
-waits for it to finish before letting the lifecycle `PtyReader` report end-of-stream. Without that wait the two events
+waits for it to finish before letting the session's PTY reader report end-of-stream. Without that wait the two events
 race, and the session task treats EOF as "the child is done" (it stamps the exit, flushes, and evicts subscribers), so
 an attached client could lose the tail an exiting shell writes, the part users most want to read. Alternatives rejected:
 making the owner task poll the grid after EOF (a retry loop with no correct bound), and routing a completion signal
@@ -86,18 +75,14 @@ through the owner task (the same join, paid on the hot task instead of the threa
 wait is unbounded on purpose: a sink wedged long enough to matter has already stalled the pipeline through backpressure,
 so a deadline here would only convert a visible hang into silent truncation.
 
-Cooperative scheduling note from the Tokio docs: "If the total number of tasks does not grow without bound, and no task
-is blocking the thread, then it is guaranteed that tasks are scheduled fairly."
-
 ## GPU and windowing
 
 ### wgpu
 
 Source: <https://www.w3.org/TR/webgpu/>.
 
-wgpu is the GPU layer, with the Rust crate as the implementation (pinned to `wgpu = "30"` in
-`[workspace.dependencies]`). It is a single backend abstraction over Metal (macOS), Vulkan (Linux), and DX12 (Windows)
-sharing one WGSL shader: one codebase, three platforms. The render path draws cells as instanced quads (see
+wgpu is the GPU layer. It is a single backend abstraction over Metal (macOS), Vulkan (Linux), and DX12 (Windows) sharing
+one WGSL shader: one codebase, three platforms. The render path draws cells as instanced quads (see
 [rendering/pipeline.md](rendering/pipeline.md)).
 
 - Rejected: raw Metal / Vulkan / DX12 backends, the solo-developer tripling cost again (see "Language and runtime"
@@ -115,9 +100,9 @@ workloads do not notice.
 
 Source: [input.md](input.md).
 
-winit is the windowing/input library (pinned to `winit = "0.30"`): the de facto standard, well-maintained, handling the
-per-platform messy bits (IME, DPI, multi-monitor, focus events) once instead of three times. [input.md](input.md) uses
-it as the source of OS event translation (keyboard, mouse, IME, focus).
+winit is the windowing/input library: the de facto standard, well-maintained, handling the per-platform messy bits (IME,
+DPI, multi-monitor, focus events) once instead of three times. [input.md](input.md) uses it as the source of OS event
+translation (keyboard, mouse, IME, focus).
 
 ### Wayland fractional scaling
 
@@ -153,28 +138,23 @@ The prior art, and why each is rejected:
 
 The parser layer follows Paul Flo Williams's VT500-series state diagram (<https://vt100.net/emu/dec_ansi_parser>) as
 published, including its ESC/CAN/SUB cancel semantics. The diagram does not address UTF-8; that layer sits above the DFA
-in felis's design ("Prior art: existing VT parsers" below).
+in felis's design ("Dispatch and UTF-8 above the DFA" below).
 
 ### Pre-scan for printable runs
 
-Source: the Williams DFA spec (<https://vt100.net/emu/dec_ansi_parser>).
-
-The Williams DFA processes one byte per state-table lookup. felis's parser adds a SIMD pre-scan ahead of the DFA for the
-printable fast path, surveyed under "Prior art: existing VT parsers" below.
+The Williams DFA processes one byte per state-table lookup. felis's parser adds a pre-scan ahead of the DFA for the
+printable fast path.
 
 The pre-scan is a stable `u64` **SWAR** (SIMD-within-a-register), not `std::simd`: the portable SIMD API is nightly-only
-and would drag the MSRV (declared in `Cargo.toml`'s `[workspace.package]`) down to nightly. The `u64` form
-(`scan_printable_run` / `nonprintable_mask` in `crates/felis-vt/src/lib.rs`) tests 8 bytes per iteration with a
-branchless mask, stays on stable, keeps `felis-vt`'s `forbid(unsafe_code)`, and delivers the win (~3.8× on plaintext,
-measured by the `parser_throughput` criterion bench).
+and would drag the MSRV (declared in `Cargo.toml`) down to nightly. The `u64` form tests 8 bytes per iteration with a
+branchless mask, stays on stable, keeps `felis-vt` free of `unsafe`, and delivers the win (~3.8× on plaintext in the
+parser's criterion bench).
 
-A wider stride buys nothing end to end. The scan is about 2–3% of the ASCII print path: the `NoopSink`
-`parser_throughput` bench dispatches ASCII at ~20 GiB/s, while the parse into the grid takes the same bytes at 430–590
-MiB/s (`ascii_throughput`, bare `\n` and `\r\n` line endings). That gap is the grid write, not the scan: `print_str`'s
-per-cell store and the per-row damage and occupancy bookkeeping (`crates/felis-grid/src/sink.rs`) are where ASCII
-throughput is spent. Both wider-stride options also carry a cost the shipped `u64` SWAR avoids: the `unsafe` line the
-workspace `unsafe_code` lint (`Cargo.toml` `[workspace.lints]`) guards for `std::arch` AVX2 / NEON, and the nightly pin
-for `std::simd`.
+A wider stride (`std::arch` AVX2 / NEON, as Kitty does, or `std::simd`) buys nothing end to end. The scan is about 2–3%
+of the ASCII print path: the parser alone dispatches ASCII at ~20 GiB/s, while the parse into the grid takes the same
+bytes at 430–590 MiB/s. That gap is the grid write, not the scan: the per-cell store and the per-row damage and
+occupancy bookkeeping are where ASCII throughput is spent. Both wider options also carry a cost the `u64` SWAR avoids:
+an `unsafe` relaxation against the workspace lint for `std::arch`, and the nightly pin for `std::simd`.
 
 ### Grapheme clustering
 
@@ -186,26 +166,15 @@ arrive across PTY reads, so a whole-string segmenter (the `unicode-segmentation`
 reference) would have to re-segment a growing buffer on every print. The full rule set is in
 [grid-and-cells.md](data-model/grid-and-cells.md) "Building a cluster".
 
-### Prior art: existing VT parsers
+### Dispatch and UTF-8 above the DFA
 
-The Williams DFA is the shared base; terminals differ in what they layer on top for throughput.
-
-| Parser            | Pre-scan      | Action dispatch                        | Cluster lib                   |
-| ----------------- | ------------- | -------------------------------------- | ----------------------------- |
-| `vte` (Alacritty) | none          | `Perform` trait (devirtualized)        | `unicode-segmentation`        |
-| Kitty             | AVX2 / NEON   | function pointer                       | hand-rolled                   |
-| libghostty-vt     | comptime SIMD | comptime                               | hand-rolled                   |
-| WezTerm           | `memchr`      | enum                                   | `unicode-segmentation`        |
-| foot              | scalar        | `switch`                               | hand-rolled subset            |
-| felis             | `u64` SWAR    | `Sink` trait, compile-time specialized | hand-rolled (`unicode-width`) |
-
-Beyond the SWAR pre-scan above, felis diverges from the reference `vte` in dispatch: actions are specialized over a
-`Sink` trait so the compiler inlines call sites a function pointer or virtual call would block, and the print fast path
-batches contiguous same-SGR runs into one grid mutation, stamping a packed pen template per cell and flushing at an SGR
-change or row boundary. Rejected: a hand-rolled DFA layout beyond the Williams diagram (the diagram is correct;
-reinventing it would be cosmetic), and a bytewise in-DFA UTF-8 decoder (more parser states; felis instead buffers the ≤
-3-byte tail across PTY reads, simpler and bounded). Malformed sequences are dropped and resynced, never repaired by
-heuristic inference.
+The Williams DFA is the common base of the major terminal parsers; what felis layers on top is its own. Actions are
+specialized over a `Sink` trait so the compiler inlines call sites a function pointer (Kitty) or a `switch` (foot) would
+block, and the print fast path batches contiguous same-SGR runs into one grid mutation, stamping a packed pen template
+per cell and flushing at an SGR change or row boundary. Rejected: a hand-rolled DFA layout beyond the Williams diagram
+(the diagram is correct; reinventing it would be cosmetic), and a bytewise in-DFA UTF-8 decoder (more parser states;
+felis instead buffers the ≤ 3-byte tail across PTY reads, simpler and bounded). Malformed sequences are dropped and
+resynced, never repaired by heuristic inference.
 
 ## PTY abstraction
 
@@ -252,75 +221,31 @@ the shim living in `felis-pty`.
 
 ### swash
 
-felis shapes and rasterizes with swash (`crates/felis-shaping`, swash-only: no rustybuzz / cosmic-text / HarfBuzz;
-pinned to `swash = "0.2"`, <https://github.com/dfrg/swash>); the choice rationale and the cache shape are in
-[text-shaping.md](rendering/text-shaping.md). swash is dual Apache-2.0 / MIT, compatible with felis's Apache-2.0, whose
-canonical text is `LICENSE` at the repo root.
+felis shapes and rasterizes with swash alone (<https://github.com/dfrg/swash>), with no rustybuzz, cosmic-text, or
+HarfBuzz; the choice rationale is in [text-shaping.md](rendering/text-shaping.md) "Prior art and alternatives
+considered". swash is dual Apache-2.0 / MIT, compatible with felis's Apache-2.0.
 
 ## IPC encoding
 
-Source: [ipc.md](../reference/ipc.md) "Application messages", which specifies the frame layer and the one encoding a
-frame body carries: prost-generated Protocol Buffers over the `felis.v1` schema
-(`crates/felis-protocol/proto/felis.proto`, <https://protobuf.dev/>). The schema is the authority for the shapes; the
-hand-written types in `messages/` are validated domain constructors over them, not a second contract, and `convert/` is
-the validator between the two, checking what proto3 cannot state. Row payloads are the one exception the schema hands
-off explicitly: an opaque `bytes` field whose interior is specified by [row-codec.md](../reference/row-codec.md) and
-implemented by hand in `felis-grid`.
+A frame body carries one encoding, Protocol Buffers over the `felis.v1` schema
+(`crates/felis-protocol/proto/felis.proto`, <https://protobuf.dev/>), generated with prost. The schema is the authority
+for the shapes; felis's hand-written message types are validated constructors over them, not a second contract. A
+consumer whose language has no protobuf runtime reaches the daemon through `felis bridge` (JSON lines on its stdio)
+rather than through a second wire encoding. [ipc.md](architecture/ipc.md) "Why protobuf" records the rejected encodings;
+the wire contract is [ipc.md](../reference/ipc.md).
 
-A consumer whose language has no protobuf runtime reaches the daemon through `felis bridge`
-(`crates/felis-cli/src/cli_bridge.rs`), which speaks protobuf on the socket and JSON lines on its own stdio, rather than
-through a second wire encoding. [ipc.md](architecture/ipc.md) "Why protobuf" records why postcard, a second JSON wire,
-MessagePack / CBOR, and a hand-rolled TLV are rejected. Authentication (peer UID via `SO_PEERCRED` / `getpeereid`) is
-fixed by [security-model.md](security-model.md) "Daemon IPC".
+## Peer-UID lookup
 
-## Diagnostics
-
-The daemon emits diagnostics through `tracing`
-([feature-baseline.md](feature-baseline.md#diagnostics-and-performance-budgets) "Diagnostics and performance budgets");
-the subscriber's filter enforces the no-payload-bytes rule ([security-model.md](security-model.md) "Logging and
-persistence").
-
-## Security-related implementation details
-
-### File-descriptor hygiene
-
-Source: [security-model.md](security-model.md) "Process and environment boundary".
-
-- `O_CLOEXEC` on every fd opened by the daemon (sockets, log files, image temp files). This is a Linux-side flag
-  (`man 2 open`); macOS exposes the same via `O_CLOEXEC` since 10.7.
-- File-bearing image transmissions (`t=f`, `t=t` per the Kitty graphics protocol) open the final path component with
-  `O_NOFOLLOW` (through `openat(2)` from a parent directory walked down from `/` without following links) to defeat
-  symlink-race attacks, and `O_NONBLOCK` so a FIFO is refused rather than waited on. `O_NOFOLLOW` is POSIX.1-2008.
-- Path-named SHM (`t=s`) is name-validated, opened read-only with `O_NOFOLLOW`, size-capped, and copied out
-  (`crates/felis-daemon/src/graphics/image_decode.rs`). Fd passing is not expressible in the Kitty protocol (producers
-  speak over the PTY, not the daemon socket), so the name is the handle; the containment argument is in
-  [security-model.md](security-model.md) "Kitty graphics".
-
-### Peer-UID verification
-
-Source: [security-model.md](security-model.md) "Daemon IPC".
-
-- Linux: `SO_PEERCRED` (`man 7 socket`) returns peer credentials on a connected `AF_UNIX` socket.
-- macOS and the BSDs: `getpeereid(3)`, one contract for both.
-
-These are the OS interfaces both sides of a local dial depend on: the daemon checks its peer on accept, and the dialer
-checks the listener's uid after the connect and before the preface. felis takes `SO_PEERCRED` from `rustix`, which wraps
-it safely, and calls `getpeereid(3)` through `libc` behind an audited `unsafe` site: `rustix` does not wrap the BSD
-path, and a wrapper crate carried for one call is the heavier of the two costs.
-
-### Fuzzing
-
-Fuzzing owns totality over unbounded input length, which no bounded layer can claim: the parser, the Kitty graphics
-command parser, and the IPC frame decoder all accept attacker-shaped bytes ([security-model.md](security-model.md)
-"Parser robustness", "Kitty graphics"). The targets, the cadence and the acceptance bar are in
-[testing.md](../reference/testing.md) "Fuzzing".
+The peer-UID check ([security-model.md](security-model.md) "Daemon IPC") takes `SO_PEERCRED` from `rustix`, which wraps
+it safely, and calls `getpeereid(3)` through `libc` behind an audited `unsafe` site on macOS and the BSDs: `rustix` does
+not wrap that call, and a wrapper crate carried for one call costs more than one audited site.
 
 ## Workspace, build, and platform facts
 
 Workspace and platform facts live in [workspace.md](../reference/workspace.md); the crate-boundary record is in
 [architecture/overview.md](architecture/overview.md) "Workspace: the crate-boundary decision record", and the evidence a
-support claim rests on is in [testing.md](testing.md) "Why a support claim needs a passed gate". One decision sits on
-top of them.
+support claim rests on is in [testing.md](testing.md) "Why a support claim needs a passed gate". The decisions below sit
+on top of them.
 
 ### Why the crate version carries no wire information
 
@@ -339,11 +264,12 @@ minor release, and every app release would bump libraries whose package did not 
 re-check an API that did not move. The binary crates stay on the app version because the release tag, the archives and
 `felis version` already name it, and felis-daemon's library API, which embedders use, changes with the app.
 
+### Why crates publish from GitHub with no stored credential
+
 Publishing runs on GitHub, after the Forgejo release, through crates.io trusted publishing: each run gets a short-lived
 token bound to one workflow and environment, so no publish credential is stored anywhere, least of all on the
 self-hosted runner that also builds pull requests. The gate stays on Forgejo; the GitHub job only uploads what the tag
-already passed. release-plz prepares the bumps and checks them but does not publish: its `release` cannot publish the
-binary crates it must leave alone (a processed crate that inherits the workspace version would move the app version) and
-asks for a forge token the upload does not need. What the check leaves to the release procedure, a break that reaches a
-dependent's consumers through a library's types and a change to a platform-only public item, is rare enough that
-automating it costs more than the review it replaces.
+already passed. release-plz prepares and checks the bumps but does not publish: its `release` cannot publish the binary
+crates it must leave alone (a processed crate that inherits the workspace version would move the app version) and asks
+for a forge token the upload does not need. The semver cases the check misses stay a manual step of the release
+procedure, because they are rare enough that automating them costs more than the review it replaces.
