@@ -584,3 +584,65 @@ fn a_cell_naming_no_placement_takes_the_image_s_first_virtual_placement() {
     };
     assert_eq!(tile.dst, [0.0, 4.0, 8.0, 8.0]);
 }
+
+fn layout_of(images: &Sizes, placements: &[ClientPlacement]) -> ImageLayout {
+    let grid = Grid::new(10, 10);
+    let mut layout = ImageLayout::new();
+    layout.rebuild(grid.screen(), images, placements, &[], (8.0, 16.0), 0);
+    layout
+}
+
+/// mpv's `--vo=kitty` shape: each frame a new image placed over the
+/// last in the same cells.
+#[test]
+fn an_opaque_image_stacked_over_another_occludes_it() {
+    let images = Sizes::default().with(1, 16, 32).with(2, 16, 32);
+    let layout = layout_of(&images, &[placed(1, 1, 1, 2, 2), placed(2, 1, 1, 2, 2)]);
+    assert!(layout.occluded(ImageId(1), |_| true));
+    assert!(!layout.occluded(ImageId(2), |_| true));
+}
+
+#[test]
+fn a_cover_that_is_not_opaque_leaves_the_image_under_it_visible() {
+    let images = Sizes::default().with(1, 16, 32).with(2, 16, 32);
+    let layout = layout_of(&images, &[placed(1, 1, 1, 2, 2), placed(2, 1, 1, 2, 2)]);
+    assert!(!layout.occluded(ImageId(1), |id| id != ImageId(2)));
+}
+
+#[test]
+fn a_cover_smaller_than_the_image_leaves_it_visible() {
+    let images = Sizes::default().with(1, 16, 32).with(2, 8, 16);
+    let layout = layout_of(&images, &[placed(1, 1, 1, 2, 2), placed(2, 1, 1, 1, 1)]);
+    assert!(!layout.occluded(ImageId(1), |_| true));
+}
+
+#[test]
+fn an_opaque_image_painted_underneath_hides_nothing() {
+    let images = Sizes::default().with(1, 16, 32).with(2, 16, 32);
+    let layout = layout_of(
+        &images,
+        &[placed(1, 1, 1, 2, 2), with_z(placed(2, 1, 1, 2, 2), -3)],
+    );
+    assert!(!layout.occluded(ImageId(1), |_| true));
+}
+
+#[test]
+fn one_uncovered_draw_keeps_an_image_visible() {
+    let images = Sizes::default().with(1, 16, 32).with(2, 16, 32);
+    let layout = layout_of(
+        &images,
+        &[
+            placed(1, 1, 1, 2, 2),
+            placed(1, 5, 5, 2, 2),
+            placed(2, 1, 1, 2, 2),
+        ],
+    );
+    assert!(!layout.occluded(ImageId(1), |_| true));
+}
+
+#[test]
+fn an_image_with_no_draw_is_occluded() {
+    let images = Sizes::default().with(1, 16, 32);
+    let layout = layout_of(&images, &[placed(1, 1, 1, 2, 2)]);
+    assert!(layout.occluded(ImageId(9), |_| true));
+}

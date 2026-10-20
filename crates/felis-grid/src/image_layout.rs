@@ -135,6 +135,27 @@ impl ImageLayout {
         &self.live
     }
 
+    /// Whether every draw of `id` lies wholly under a later draw of
+    /// another image that `opaque` vouches for, so its pixels cannot
+    /// reach the screen this frame. An image with no draw is occluded.
+    #[must_use]
+    pub fn occluded(&self, id: ImageId, opaque: impl Fn(ImageId) -> bool) -> bool {
+        let paint_order = || {
+            self.under_bg
+                .iter()
+                .chain(&self.under_text)
+                .chain(&self.above_text)
+        };
+        paint_order()
+            .enumerate()
+            .filter(|(_, d)| d.image_id == id)
+            .all(|(i, d)| {
+                paint_order().skip(i + 1).any(|over| {
+                    over.image_id != id && covers(over.dst, d.dst) && opaque(over.image_id)
+                })
+            })
+    }
+
     #[must_use]
     pub const fn placeholder_stats(&self) -> PlaceholderStats {
         self.placeholder_stats
@@ -289,6 +310,12 @@ impl ImageLayout {
             }
         }
     }
+}
+
+fn covers([ox, oy, ow, oh]: [f32; 4], [ux, uy, uw, uh]: [f32; 4]) -> bool {
+    let (over_right, over_bottom) = (ox + ow, oy + oh);
+    let (under_right, under_bottom) = (ux + uw, uy + uh);
+    ox <= ux && oy <= uy && over_right >= under_right && over_bottom >= under_bottom
 }
 
 /// kitty's destination rectangle: a requested axis spans its cells, an
