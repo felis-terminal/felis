@@ -8997,3 +8997,28 @@ async fn pty_eof_expires_transient_records_and_keeps_progress_after_the_final_re
         ]
     );
 }
+
+#[test]
+fn a_bracketed_paste_body_keeps_tab_newline_and_return_and_drops_other_controls() {
+    assert_eq!(
+        frame_paste(true, b"a\tb\nc\rd\x1b[201~e\x00\x03\x7f".to_vec()),
+        b"\x1b[200~a\tb\nc\rd[201~e\x7f\x1b[201~",
+    );
+}
+
+#[test]
+fn an_unbracketed_paste_is_written_unchanged() {
+    assert_eq!(frame_paste(false, b"a\x1bb\x03".to_vec()), b"a\x1bb\x03");
+}
+
+proptest::proptest! {
+    /// The only `ESC` in a bracketed paste is in its two brackets.
+    #[test]
+    fn a_bracketed_paste_carries_no_escape_inside_its_brackets(
+        body in proptest::collection::vec(proptest::prelude::any::<u8>(), 0..256),
+    ) {
+        let framed = frame_paste(true, body);
+        let inner = &framed[6..framed.len() - 6];
+        proptest::prop_assert!(!inner.contains(&0x1b));
+    }
+}

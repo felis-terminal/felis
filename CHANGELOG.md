@@ -102,6 +102,8 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
   before opening it, and a FIFO without waiting on it, as kitty does. Once a `t=f`, `t=t`, or `t=s` command passes the
   checks on its own bytes, every failure, data that does not decode included, answers `EBADF:Failed to read image file`
   instead of a code naming the cause.
+- A bracketed paste drops every control byte but tab, LF, and CR before framing, as xterm and kitty do, so pasted text
+  can no longer end the bracket early.
 
 ## [0.2.0] - 2026-10-14
 

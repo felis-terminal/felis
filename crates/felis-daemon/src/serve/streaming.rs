@@ -1293,17 +1293,23 @@ pub(crate) fn write_paste(
     bytes: Vec<u8>,
     reservation: Option<felis_pty::WriteReservation>,
 ) -> Result<(), ConnError> {
-    let payload = if bracketed {
-        let mut framed =
-            Vec::with_capacity(bytes.len() + felis_protocol::limits::PASTE_BRACKET_OVERHEAD);
-        framed.extend_from_slice(b"\x1b[200~");
-        framed.extend_from_slice(&bytes);
-        framed.extend_from_slice(b"\x1b[201~");
-        framed
-    } else {
-        bytes
-    };
-    write_pty_reserved(writer, payload, reservation)
+    write_pty_reserved(writer, frame_paste(bracketed, bytes), reservation)
+}
+
+/// Bracketed, the body loses every C0 control but `\t`, `\n` and `\r`,
+/// as in xterm and kitty: an `ESC` would let the body close the bracket
+/// early and have the rest read as typed input.
+pub(crate) fn frame_paste(bracketed: bool, mut bytes: Vec<u8>) -> Vec<u8> {
+    if !bracketed {
+        return bytes;
+    }
+    bytes.retain(|&b| b >= 0x20 || matches!(b, b'\t' | b'\n' | b'\r'));
+    let mut framed =
+        Vec::with_capacity(bytes.len() + felis_protocol::limits::PASTE_BRACKET_OVERHEAD);
+    framed.extend_from_slice(b"\x1b[200~");
+    framed.extend_from_slice(&bytes);
+    framed.extend_from_slice(b"\x1b[201~");
+    framed
 }
 
 /// Admitted input: the connection acquired the bytes against the

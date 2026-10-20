@@ -610,14 +610,16 @@ today it shows nothing at all.
 
 ## Drag-and-drop
 
-Dropping a file on the window inserts its path as input, the universal terminal convention. The path is inserted
-**verbatim**: no quoting, no space-escaping, no `file://` decoding. Adding any of those would parse intent into the path
-string, which is shell _content_, and "Explicit over heuristic" ([principles](principles.md) principle 4) pushes that
-out. A user who needs a quoted path quotes it; the shell, not the terminal, owns that.
+Dropping a file on the window inserts its path as input, the universal terminal convention. The path is inserted without
+interpretation: no quoting, no space-escaping, no `file://` decoding (the bracketed-paste filter below is the one change
+it can see). Adding any of those would parse intent into the path string, which is shell _content_, and "Explicit over
+heuristic" ([principles](principles.md) principle 4) pushes that out. A user who needs a quoted path quotes it; the
+shell, not the terminal, owns that.
 
-The drop is ferried through the same path as a clipboard paste, so bracketed-paste mode and its control-code guard
-apply: a path carrying embedded control bytes is framed, not executed. One file is delivered per drop event, so each
-path is followed by a single space; this separates a multi-file drop and is harmless on a lone drop.
+The drop is ferried through the same path as a clipboard paste, so bracketed-paste mode and its control-code filter
+apply: under `?2004` a path's embedded control bytes other than HT, LF and CR are removed before framing. One file is
+delivered per drop event, so each path is followed by a single space; this separates a multi-file drop and is harmless
+on a lone drop.
 
 felis does **not** implement Kitty's OSC 72 drag-and-drop protocol (the structured variant where a TUI negotiates MIME
 types and receives the file _bytes_ over an escape sequence). It is a Kitty extension, not a shared standard, and no

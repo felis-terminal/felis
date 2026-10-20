@@ -301,25 +301,25 @@ and `list` exits `0` on an empty roster.
   `--host` included ("Auto-spawning").
 - **`send`**: one operation, and three constraints are its whole grammar: at least one of TEXT, `--key`, `--mouse` or
   `--wait`; `--raw` requires TEXT; `--timeout` requires `--wait`. Each unmet constraint is a usage error (exit `2`). It
-  pastes text; `--raw` sends literal bytes without bracketed paste; `-` reads stdin. `--key <chord>` (repeatable)
-  presses keys after text (`up`, `escape`, `ctrl+c`, `enter`). A chord travels as the keystroke itself and the daemon
-  encodes it against the session's current keyboard modes, so it needs no knowledge of them from the caller. A chord's
-  character is capped at 32 UTF-8 bytes (REQ-105a); past it the verb exits `1` under `invalid_request`.
-  `--mouse <event>` (repeatable) sends a mouse event, `[MODS+]ACTION[-BUTTON]:COL,ROW`: ACTION is `click` (press then
-  release), `press`, `drag`, `release`, `wheel-up`, `wheel-down`, `wheel-left` or `wheel-right`; BUTTON is `left` (the
-  default), `middle` or `right`, and a wheel action takes none; MODS are `shift`, `alt` and `ctrl` in the chord
-  spelling. COL and ROW are 0-based, as `search`'s `col_spans` and `capture`'s rows are, so `--mouse click:12,4` clicks
-  a match that starts at column 12 of row 4. The daemon encodes each event against the session's current mouse modes;
-  under SGR-pixels (`?1016`) it reports the middle of the cell. Before writing anything the verb checks every event
-  against the mouse reporting the program has on and against the grid, and refuses the whole command under
-  `invalid_request` (exit `1`) when the program would drop one (no reporting at all, or a `drag` under `?1000` alone) or
-  a cell is off the grid. A malformed event is a usage error (exit `2`). `--key` and `--mouse` go out after the text in
-  command-line order. `--wait` blocks until the session emits an OSC 133 `D` mark and prints its exit code, or `-` for a
-  bare `D` that carries none, so `felis sessions send <id> --wait` watches a command someone else started.
-  `--timeout <secs>` bounds everything past the writes: the daemon's admission of the input and the mark watch alike. An
-  unbounded `--wait` waits indefinitely, and `--timeout 0` is a deadline already past, so neither wait gets a chance to
-  finish and the verb exits `1` under `timeout`. Payload cap is 16 MiB minus 64 bytes of text, 16 MiB with `--raw`
-  (REQ-105a).
+  pastes text, which loses its C0 controls but HT, LF and CR when the program enabled bracketed paste; `--raw` sends
+  literal bytes without bracketed paste; `-` reads stdin. `--key <chord>` (repeatable) presses keys after text (`up`,
+  `escape`, `ctrl+c`, `enter`). A chord travels as the keystroke itself and the daemon encodes it against the session's
+  current keyboard modes, so it needs no knowledge of them from the caller. A chord's character is capped at 32 UTF-8
+  bytes (REQ-105a); past it the verb exits `1` under `invalid_request`. `--mouse <event>` (repeatable) sends a mouse
+  event, `[MODS+]ACTION[-BUTTON]:COL,ROW`: ACTION is `click` (press then release), `press`, `drag`, `release`,
+  `wheel-up`, `wheel-down`, `wheel-left` or `wheel-right`; BUTTON is `left` (the default), `middle` or `right`, and a
+  wheel action takes none; MODS are `shift`, `alt` and `ctrl` in the chord spelling. COL and ROW are 0-based, as
+  `search`'s `col_spans` and `capture`'s rows are, so `--mouse click:12,4` clicks a match that starts at column 12 of
+  row 4. The daemon encodes each event against the session's current mouse modes; under SGR-pixels (`?1016`) it reports
+  the middle of the cell. Before writing anything the verb checks every event against the mouse reporting the program
+  has on and against the grid, and refuses the whole command under `invalid_request` (exit `1`) when the program would
+  drop one (no reporting at all, or a `drag` under `?1000` alone) or a cell is off the grid. A malformed event is a
+  usage error (exit `2`). `--key` and `--mouse` go out after the text in command-line order. `--wait` blocks until the
+  session emits an OSC 133 `D` mark and prints its exit code, or `-` for a bare `D` that carries none, so
+  `felis sessions send <id> --wait` watches a command someone else started. `--timeout <secs>` bounds everything past
+  the writes: the daemon's admission of the input and the mark watch alike. An unbounded `--wait` waits indefinitely,
+  and `--timeout 0` is a deadline already past, so neither wait gets a chance to finish and the verb exits `1` under
+  `timeout`. Payload cap is 16 MiB minus 64 bytes of text, 16 MiB with `--raw` (REQ-105a).
 - **`capture`**: `--source <visible|scrollback|command-output|last-command>` picks the region; `scrollback` streams
   retained history oldest-first, `command-output` and `last-command` the output bounded by OSC 133 prompt marks.
   `--lines N` limits output to the last N rows, and under `--source scrollback` the daemon transmits that tail alone
