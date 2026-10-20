@@ -96,6 +96,12 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
   XTGETTCAP cap name is answered empty, and an OSC 52 selector or OSC 99 `i=` with such a byte gets no reply.
 - On Windows, a client refuses a daemon pipe whose server runs as another user before sending anything, as the Unix
   dialer already did with the listener's uid.
+- A Kitty graphics `t=t` transmission deletes its file only when the file sits under `/tmp`, `/dev/shm`, or `$TMPDIR`
+  and its path contains `tty-graphics-protocol`, as kitty does; any other path is read and left in place.
+- Kitty graphics `t=f` and `t=t` refuse a path under `/proc`, `/sys`, or `/dev` (other than a file under `/dev/shm`)
+  before opening it, and a FIFO without waiting on it, as kitty does. Once a `t=f`, `t=t`, or `t=s` command passes the
+  checks on its own bytes, every failure, data that does not decode included, answers `EBADF:Failed to read image file`
+  instead of a code naming the cause.
 
 ## [0.2.0] - 2026-10-14
 

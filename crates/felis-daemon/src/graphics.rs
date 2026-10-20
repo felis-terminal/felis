@@ -30,6 +30,9 @@ mod image_decode;
 pub use image_decode::{
     DecodeError, MAX_DECODED_BYTES, ShmDeferral, decode_image, shm_segment_name, unlink_shm_segment,
 };
+use image_decode::{MEDIUM_READ_FAILED, file_backed};
+#[cfg(all(test, unix))]
+use image_decode::{deletable_path, open_resolved_dir, readable_location};
 
 /// One queued change to a session's image state.
 ///
@@ -907,7 +910,19 @@ fn transmit_image(
     }
     match insert_into_store(images, placements, events, id, entry) {
         ActionOutcome::Ok => Ok(id),
-        err @ ActionOutcome::Err(..) => Err(err),
+        err @ ActionOutcome::Err(..) => Err(after_file_read(complete, err)),
+    }
+}
+
+/// A failure past a file-backed source's decode depends on what the file
+/// held, so it takes the same reply as one that could not be read
+/// (REQ-907a).
+fn after_file_read(complete: &CompleteCommand, outcome: ActionOutcome) -> ActionOutcome {
+    match outcome {
+        ActionOutcome::Err(..) if file_backed(complete) => {
+            decode_error_to_outcome(MEDIUM_READ_FAILED)
+        }
+        outcome => outcome,
     }
 }
 
@@ -1748,12 +1763,33 @@ fn handle_animation_frame(
         Some(e) => (e.width, e.height, e.format, e.frame_count()),
         None => return ActionOutcome::error(ErrorCode::NotFound, "a=f: image not in store"),
     };
-    let img_bpp = format.bytes_per_pixel();
 
     let data = match decode_image(complete) {
         Ok(d) => d,
         Err(err) => return decode_error_to_outcome(err),
     };
+    let outcome = store_frame(
+        images,
+        placements,
+        events,
+        complete,
+        id,
+        (img_w, img_h, format, frame_count),
+        &data,
+    );
+    after_file_read(complete, outcome)
+}
+
+fn store_frame(
+    images: &mut felis_grid::images::ImageStore,
+    placements: &mut felis_grid::images::Placements,
+    events: &mut Vec<ImageEvent>,
+    complete: &CompleteCommand,
+    id: ImageId,
+    (img_w, img_h, format, frame_count): (u32, u32, ImageFormat, usize),
+    data: &ImageEntry,
+) -> ActionOutcome {
+    let img_bpp = format.bytes_per_pixel();
     let off_x = control_u32(complete, b'x').unwrap_or(0);
     let off_y = control_u32(complete, b'y').unwrap_or(0);
     if off_x.saturating_add(data.width) > img_w || off_y.saturating_add(data.height) > img_h {

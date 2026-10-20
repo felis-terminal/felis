@@ -148,23 +148,28 @@ not.
 **Why trailing padding is trimmed.** mpv sends raw (`f=24`) frames with no `S=`, sizing the segment with
 `ftruncate(w*h*3)`. Linux tmpfs makes that object _exactly_ `s × v × bpp`, but macOS rounds an shm object up to the page
 boundary, so the bytes read back are longer than the frame. felis accepts a raw payload `≥ s × v × bpp` and keeps the
-leading `s × v × bpp`; kitty does the same (`mapped_file_sz < data_sz` is the only rejection). A _short_ payload stays
-an `EINVAL` (an under-declared frame). Without this, every macOS `t=s` frame would be rejected even once the segment
-opened.
+leading `s × v × bpp`; kitty does the same (`mapped_file_sz < data_sz` is the only rejection). A _short_ payload stays a
+failure (an under-declared frame), answered with the one file-medium reply. Without this, every macOS `t=s` frame would
+be rejected even once the segment opened.
 
 **Why the byte-copy is platform-split.** Linux uses `pread` (no `unsafe`, and on a concurrent `ftruncate`-shrink it
 merely short-reads); macOS uses `mmap` because Apple shm fds reject `pread`. The `mmap` path is an audited `unsafe` site
 in `felis-daemon` and carries the same shrink-`SIGBUS` caveat kitty has on every platform (mpv's constant-size reuse
 never triggers it).
 
-## File-path allowlist (`t=f`)
+## File-path reach (`t=f`)
 
-`t=f` opens any absolute path the daemon's UID can read; the root allowlist [`security-model.md`](../security-model.md)
-prescribes (default: the user's runtime dir) is not enforced. The reason enforcement can wait: the daemon runs under the
-user's own UID, so its filesystem reach equals the producer's, and the checks that _are_ enforced (absolute path, no
-`..`, `O_NOFOLLOW` on the final component, `t=t` opened by `openat` under a pinned parent, regular files only) close the
-races rather than the reach. Revisit when the allowlist config key lands (enforce it in the same change), or if a
-producer routinely feeds paths outside the runtime dir and the equal-reach argument stops covering the exposure.
+`t=f` reads any absolute path the daemon's UID can read, except under `/proc`, `/sys` and `/dev` (a file under
+`/dev/shm` aside), and every failure past the request's own checks gets one reply. Both are kitty's rules, and they
+answer what a read can still leak: the pixels never return to the producer, but the reply does, and a reply that named
+the cause would tell the producer whether a path exists, what kind of file it is and how large; opening a kernel
+interface file can have effects of its own, so that check runs on the resolved path before the open. Mapping undecodable
+data to the same reply matters as much as the open errors, since any decode error proves the read succeeded.
+
+A root allowlist (only the runtime or temp directories) is the rejected alternative: kitty's `icat` and other producers
+send the path of the image where it already lives, so an allowlist breaks them, and kitty enforces none. What the one
+reply cannot hide is success itself: a path that decodes still answers `OK`. Revisit if kitty narrows its own reach, or
+producers converge on sending files only from the temp directories, where an allowlist would cost nothing.
 
 ## Windows takes `t=d` only
 

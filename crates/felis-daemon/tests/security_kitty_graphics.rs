@@ -107,11 +107,28 @@ fn t_eq_f_with_symlink_to_real_file_returns_ebadf_under_nofollow() {
 
 #[cfg(unix)]
 #[test]
+fn t_eq_t_leaves_a_file_without_the_protocol_marker_in_place() {
+    let mut s = State::new(SECURITY_TEST_STORE_CAP);
+    let f = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(f.path(), b"ab").unwrap();
+    s.dispatch(&body(
+        "Ga=t,i=5,t=t,f=32,s=1,v=1",
+        &b64(f.path().to_str().unwrap().as_bytes()),
+    ))
+    .unwrap();
+    assert!(f.path().exists());
+}
+
+#[cfg(unix)]
+#[test]
 fn t_eq_t_unlinks_temp_file_even_when_decode_fails() {
     // A leftover file would let a producer fill /tmp by retrying a bad
     // path.
     let mut s = State::new(SECURITY_TEST_STORE_CAP);
-    let f = tempfile::NamedTempFile::new().unwrap();
+    let f = tempfile::Builder::new()
+        .prefix("tty-graphics-protocol-")
+        .tempfile()
+        .unwrap();
     // Short, not long: `decode_raw` truncates over-long payloads
     // (page-rounded shm), so only a short one fails to decode.
     std::fs::write(f.path(), b"ab").unwrap();
@@ -128,8 +145,8 @@ fn t_eq_t_unlinks_temp_file_even_when_decode_fails() {
         ))
         .unwrap();
     assert!(
-        response.starts_with(b"\x1b_Gi=4;ENODATA"),
-        "raw payload length mismatch → ENODATA, got: {response:?}",
+        response.starts_with(b"\x1b_Gi=4;EBADF:Failed to read image file"),
+        "a file that does not decode gets the one file-medium reply, got: {response:?}",
     );
     assert!(
         !path.exists(),

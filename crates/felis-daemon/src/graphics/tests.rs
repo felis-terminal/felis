@@ -1707,6 +1707,48 @@ fn delete_frame_removes_it_and_reships_the_image() {
     );
 }
 
+/// A frame too large for its image is `EINVAL` when carried, but from a
+/// file the bounds check judges what the file held.
+#[cfg(unix)]
+#[test]
+fn an_oversized_frame_from_a_file_gets_the_file_medium_reply() {
+    let (mut grid, mut images, mut placements) = handler_state();
+    transmit_root(&mut grid, &mut images, &mut placements, b"1");
+    let pixels = [0x11; 8];
+    let file = tempfile_with_bytes(&pixels);
+    let path = b64(file.path().to_str().unwrap().as_bytes());
+    let carried = b64(&pixels);
+    let mut reply = |medium: &'static [u8], payload: &[u8]| {
+        let ctrls: [(u8, &[u8]); 6] = [
+            (b'a', b"f"),
+            (b'i', b"1"),
+            (b'f', b"32"),
+            (b's', b"2"),
+            (b'v', b"1"),
+            (b't', medium),
+        ];
+        handle_complete(
+            &mut ApcCtx {
+                grid: &mut grid,
+                images: &mut images,
+                placements: &mut placements,
+                events: &mut Vec::new(),
+                shm: &mut ShmDeferral::default(),
+                cell_pixel_w: 0,
+                cell_pixel_h: 0,
+                anchor_cursor: None,
+            },
+            &complete(&ctrls, payload),
+        )
+        .expect("error response emitted")
+    };
+    assert!(reply(b"d", &carried).starts_with(b"\x1b_Gi=1;EINVAL"));
+    assert_eq!(
+        reply(b"f", &path),
+        b"\x1b_Gi=1;EBADF:Failed to read image file\x1b\\"
+    );
+}
+
 #[test]
 fn animation_frame_on_missing_image_is_not_found() {
     let (mut grid, mut images, mut placements) = handler_state();
@@ -2195,6 +2237,20 @@ fn tempfile_with_bytes(bytes: &[u8]) -> tempfile::NamedTempFile {
     f
 }
 
+/// A temp file kitty's `t=t` deletion rule admits: under the temp
+/// directory, with `tty-graphics-protocol` in its name.
+#[cfg(unix)]
+fn graphics_tempfile_with_bytes(bytes: &[u8]) -> std::path::PathBuf {
+    use std::io::Write;
+    let mut f = tempfile::Builder::new()
+        .prefix("tty-graphics-protocol-")
+        .tempfile()
+        .expect("tempfile");
+    f.write_all(bytes).expect("write");
+    f.flush().expect("flush");
+    f.into_temp_path().keep().expect("keep")
+}
+
 #[cfg(unix)] // t=f/t=t file transmission is Unix-only (Windows declines with ENOTSUP)
 #[test]
 fn transmit_via_file_path_reads_bytes_from_disk() {
@@ -2255,7 +2311,7 @@ fn file_transmissions_read_the_offset_and_size_they_name() {
         ranged(b"f", f.path()).unwrap().pixels(),
         [0xDE, 0xAD, 0xBE, 0xEF]
     );
-    let t = tempfile_with_bytes(&bytes).into_temp_path().keep().unwrap();
+    let t = graphics_tempfile_with_bytes(&bytes);
     assert_eq!(ranged(b"t", &t).unwrap().pixels(), [0xDE, 0xAD, 0xBE, 0xEF]);
     assert!(!t.exists());
 }
@@ -2263,10 +2319,7 @@ fn file_transmissions_read_the_offset_and_size_they_name() {
 #[cfg(unix)]
 #[test]
 fn a_temp_file_range_past_its_end_is_refused_and_still_unlinked() {
-    let t = tempfile_with_bytes(&[0; 4])
-        .into_temp_path()
-        .keep()
-        .unwrap();
+    let t = graphics_tempfile_with_bytes(&[0; 4]);
     let result = decode_image(&complete(
         &[
             (b't', b"t"),
@@ -2277,7 +2330,7 @@ fn a_temp_file_range_past_its_end_is_refused_and_still_unlinked() {
         ],
         &b64(t.to_str().unwrap().as_bytes()),
     ));
-    assert!(matches!(result, Err(DecodeError::InvalidValue(_))));
+    assert!(matches!(result, Err(DecodeError::IoError(_))));
     assert!(!t.exists());
 }
 
@@ -2414,7 +2467,7 @@ fn transmit_via_file_path_rejects_symlink_with_nofollow() {
 
 #[cfg(unix)] // t=f/t=t file transmission is Unix-only (Windows declines with ENOTSUP)
 #[test]
-fn transmit_via_file_path_rejects_directory_target() {
+fn transmit_via_file_path_rejects_directory_target_with_ebadf() {
     let (mut grid, mut images, mut placements) = handler_state();
     let dir = tempfile::tempdir().expect("tempdir");
     let path_b64 = b64(dir.path().to_str().unwrap().as_bytes());
@@ -2437,8 +2490,8 @@ fn transmit_via_file_path_rejects_directory_target() {
     )
     .unwrap();
     assert!(
-        response.starts_with(b"\x1b_Gi=105;EINVAL"),
-        "directory target → EINVAL, got: {response:?}",
+        response.starts_with(b"\x1b_Gi=105;EBADF:Failed to read image file"),
+        "a directory gets the one file-medium reply, got: {response:?}",
     );
 }
 
@@ -2447,12 +2500,7 @@ fn transmit_via_file_path_rejects_directory_target() {
 fn transmit_via_temp_file_reads_then_unlinks() {
     let (mut grid, mut images, mut placements) = handler_state();
     let pixels = [0xFE, 0xED, 0xFA, 0xCE];
-    let f = tempfile_with_bytes(&pixels);
-    let path = f.path().to_owned();
-    // Keep the guard alive but off the file, so its Drop cannot race the
-    // dispatcher's `unlinkat`.
-    let _keep_dir_alive = f.into_temp_path();
-    std::fs::write(&path, pixels).expect("rewrite for t=t test");
+    let path = graphics_tempfile_with_bytes(&pixels);
     let path_b64 = b64(path.to_str().unwrap().as_bytes());
     let cmd = complete(
         &[
@@ -2485,6 +2533,154 @@ fn transmit_via_temp_file_reads_then_unlinks() {
         !path.exists(),
         "t=t must unlink the temp file after reading",
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_marked_temp_file_in_a_nested_temp_directory_is_unlinked() {
+    let dir = tempfile::Builder::new()
+        .prefix("tty-graphics-protocol-")
+        .tempdir()
+        .unwrap();
+    let nested = dir.path().join("a").join("b");
+    std::fs::create_dir_all(&nested).unwrap();
+    let t = nested.join("image");
+    std::fs::write(&t, [0xFE, 0xED, 0xFA, 0xCE]).unwrap();
+    decode_image(&complete(
+        &[(b't', b"t"), (b'f', b"32"), (b's', b"1"), (b'v', b"1")],
+        &b64(t.to_str().unwrap().as_bytes()),
+    ))
+    .expect("decoded");
+    assert!(!t.exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_temp_file_without_the_protocol_marker_is_read_but_kept() {
+    let t = tempfile_with_bytes(&[0xFE, 0xED, 0xFA, 0xCE]);
+    let image = decode_image(&complete(
+        &[(b't', b"t"), (b'f', b"32"), (b's', b"1"), (b'v', b"1")],
+        &b64(t.path().to_str().unwrap().as_bytes()),
+    ))
+    .expect("decoded");
+    assert_eq!(image.pixels(), [0xFE, 0xED, 0xFA, 0xCE]);
+    assert!(t.path().exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_temp_file_outside_the_temp_directories_is_not_deletable() {
+    let marked = "/etc/tty-graphics-protocol-x";
+    assert!(!deletable_path(std::path::Path::new("/etc"), marked));
+    let tmp = std::fs::canonicalize(std::env::temp_dir()).unwrap();
+    let in_tmp = format!("{}/tty-graphics-protocol-x", tmp.display());
+    assert!(deletable_path(&tmp, &in_tmp));
+    assert!(!deletable_path(&tmp, &format!("{}/x", tmp.display())));
+}
+
+#[cfg(unix)]
+#[test]
+fn kernel_interfaces_and_devices_are_not_readable_locations() {
+    let readable = |p: &str| readable_location(std::path::Path::new(p));
+    assert!(!readable("/proc/self/environ"));
+    assert!(!readable("/sys/kernel/notes"));
+    assert!(!readable("/dev/null"));
+    assert!(!readable("/dev/shm"));
+    assert!(readable("/dev/shm/tty-graphics-protocol-x"));
+    assert!(readable("/tmp/image.png"));
+    assert!(readable("/home/user/procfile"));
+}
+
+#[cfg(unix)]
+fn file_command(medium: &'static [u8], path: &std::path::Path) -> CompleteCommand {
+    complete(
+        &[(b't', medium), (b'f', b"32"), (b's', b"1"), (b'v', b"1")],
+        &b64(path.to_str().unwrap().as_bytes()),
+    )
+}
+
+/// Missing, not regular, out of range or undecodable: a producer told
+/// any of these apart would learn what the path holds.
+#[cfg(unix)]
+#[test]
+fn every_file_medium_failure_gets_the_same_error() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let short = tempfile_with_bytes(b"ab");
+    let ranged = tempfile_with_bytes(&[0; 4]);
+    let failures = [
+        decode_image(&file_command(b"f", &dir.path().join("missing"))),
+        decode_image(&file_command(b"f", dir.path())),
+        decode_image(&file_command(b"f", short.path())),
+        decode_image(&complete(
+            &[
+                (b't', b"f"),
+                (b'f', b"32"),
+                (b's', b"1"),
+                (b'v', b"1"),
+                (b'O', b"8"),
+            ],
+            &b64(ranged.path().to_str().unwrap().as_bytes()),
+        )),
+        decode_image(&file_command(b"t", &dir.path().join("missing"))),
+        decode_image(&file_command(b"t", short.path())),
+    ];
+    for failure in &failures {
+        assert_eq!(failure, &failures[0]);
+    }
+    assert!(matches!(failures[0], Err(DecodeError::IoError(_))));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn file_media_refuse_proc_even_through_a_symlinked_parent() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let link = dir.path().join("self");
+    std::os::unix::fs::symlink("/proc/self", &link).expect("symlink");
+    for path in [
+        std::path::Path::new("/proc/self/status"),
+        &link.join("status"),
+    ] {
+        for medium in [&b"f"[..], b"t"] {
+            assert!(
+                matches!(
+                    decode_image(&file_command(medium, path)),
+                    Err(DecodeError::IoError(_))
+                ),
+                "{path:?} must not be read",
+            );
+        }
+    }
+}
+
+/// A resolved parent is walked without following links, so a component
+/// that became a symlink after the canonicalize is refused.
+#[cfg(unix)]
+#[test]
+fn the_resolved_parent_walk_refuses_a_symlinked_component() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let real = std::fs::canonicalize(dir.path()).expect("canonicalize");
+    std::fs::create_dir(real.join("sub")).expect("mkdir");
+    std::os::unix::fs::symlink(real.join("sub"), real.join("link")).expect("symlink");
+    assert!(open_resolved_dir(&real.join("sub")).is_ok());
+    assert!(open_resolved_dir(&real.join("link")).is_err());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_fifo_is_refused_without_waiting_for_a_writer() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let fifo = dir.path().join("tty-graphics-protocol-fifo");
+    let status = std::process::Command::new("mkfifo")
+        .arg(&fifo)
+        .status()
+        .expect("run mkfifo");
+    assert!(status.success());
+    for medium in [&b"f"[..], b"t"] {
+        assert!(matches!(
+            decode_image(&file_command(medium, &fifo)),
+            Err(DecodeError::IoError(_))
+        ));
+    }
 }
 
 #[cfg(unix)] // symlink NOFOLLOW guard is POSIX-only
@@ -2563,7 +2759,7 @@ fn transmit_via_temp_file_rejects_relative_path() {
 
 #[cfg(unix)] // t=f/t=t file transmission is Unix-only (Windows declines with ENOTSUP)
 #[test]
-fn transmit_via_file_path_oversize_file_returns_overbudget() {
+fn transmit_via_file_path_oversize_file_returns_ebadf() {
     // `set_len` is sparse on macOS and Linux, so the file costs no disk.
     let (mut grid, mut images, mut placements) = handler_state();
     let f = tempfile::NamedTempFile::new().expect("tempfile");
@@ -2596,8 +2792,8 @@ fn transmit_via_file_path_oversize_file_returns_overbudget() {
     )
     .unwrap();
     assert!(
-        response.starts_with(b"\x1b_Gi=106;ENOTSUP"),
-        "oversize → ENOTSUP (per OverBudget mapping), got: {response:?}",
+        response.starts_with(b"\x1b_Gi=106;EBADF:Failed to read image file"),
+        "an oversize file gets the one file-medium reply, got: {response:?}",
     );
 }
 
@@ -2701,7 +2897,7 @@ fn shm_offset_and_size_select_subrange() {
 
 #[test]
 #[cfg(target_os = "linux")]
-fn shm_range_past_end_is_invalid_and_leaves_name_for_teardown() {
+fn shm_range_past_end_is_refused_and_leaves_name_for_teardown() {
     // Pins: the error path leaves the segment in place too, so a
     // retrying producer reusing the name keeps a stable inode.
     let name = shm_with_bytes("overrange", &[0u8; 4]);
@@ -2709,10 +2905,7 @@ fn shm_range_past_end_is_invalid_and_leaves_name_for_teardown() {
         &[(b't', b"s"), (b'f', b"32"), (b'S', b"16")],
         &b64(name.as_bytes()),
     );
-    assert!(matches!(
-        decode_image(&cmd),
-        Err(DecodeError::InvalidValue(_))
-    ));
+    assert!(matches!(decode_image(&cmd), Err(DecodeError::IoError(_))));
     assert!(
         shm_exists(&name),
         "failed t=s reads must not unlink (teardown owns it)",
@@ -2733,7 +2926,7 @@ fn shm_over_budget_leaves_name_for_teardown() {
         &[(b't', b"s"), (b'f', b"32"), (b's', b"1"), (b'v', b"1")],
         &b64(name.as_bytes()),
     );
-    assert!(matches!(decode_image(&cmd), Err(DecodeError::OverBudget)));
+    assert!(matches!(decode_image(&cmd), Err(DecodeError::IoError(_))));
     assert!(
         shm_exists(&name),
         "over-budget t=s must not unlink (teardown owns it)",

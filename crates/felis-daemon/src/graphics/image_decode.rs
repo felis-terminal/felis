@@ -53,8 +53,26 @@ pub enum DecodeError {
 /// and pixel format decoding by value to avoid per-frame buffer copies.
 pub fn decode_image(complete: &CompleteCommand) -> Result<ImageEntry, DecodeError> {
     let raw = bytes_from_transmission(complete)?;
-    let maybe_inflated = inflate_if_zlib(raw, complete)?;
-    decode_format(maybe_inflated, complete)
+    let decoded = inflate_if_zlib(raw, complete).and_then(|bytes| decode_format(bytes, complete));
+    if !file_backed(complete) {
+        return decoded;
+    }
+    // Any other code here would tell the producer the source was read.
+    decoded.map_err(|err| {
+        tracing::debug!(?err, "file-backed graphics transmission did not decode");
+        MEDIUM_READ_FAILED
+    })
+}
+
+/// kitty's one reply for a `t=f` / `t=t` / `t=s` source that fails past
+/// the request's own checks, so the reply does not tell the producer
+/// what exists on disk or why it could not be read.
+pub(super) const MEDIUM_READ_FAILED: DecodeError =
+    DecodeError::IoError("Failed to read image file");
+
+/// `t=f`, `t=t` or `t=s`: the source is named, not carried.
+pub(super) fn file_backed(complete: &CompleteCommand) -> bool {
+    matches!(control_byte(complete, b't'), Some(b'f' | b't' | b's'))
 }
 
 fn bytes_from_transmission(complete: &CompleteCommand) -> Result<Vec<u8>, DecodeError> {
@@ -68,53 +86,127 @@ fn bytes_from_transmission(complete: &CompleteCommand) -> Result<Vec<u8>, Decode
     }
 }
 
-/// `t=f`: read the file at the base64-encoded path.
-///
-/// Decoded paths must be absolute and free of `..`, opened with `NOFOLLOW`
-/// on the final component, and capped at `MAX_DECODED_BYTES`
-/// (`docs/explanation/security-model.md`).
+/// The path a `t=f` / `t=t` command names, with its parent resolved.
 #[cfg(unix)]
-fn read_file_payload(complete: &CompleteCommand, cap: usize) -> Result<Vec<u8>, DecodeError> {
+struct FilePath {
+    requested: String,
+    parent: std::path::PathBuf,
+    name: std::ffi::OsString,
+}
+
+/// Only the syntax checks answer with their own code, since they depend
+/// on the request alone; the location check runs before any open, as
+/// opening some files has side effects (`docs/explanation/security-model.md`).
+#[cfg(unix)]
+fn resolve_file_path(complete: &CompleteCommand) -> Result<FilePath, DecodeError> {
     let path_bytes = base64::decode(&complete.payload)
         .ok_or(DecodeError::InvalidValue("malformed base64 path"))?;
-    let path_str = std::str::from_utf8(&path_bytes)
-        .map_err(|_| DecodeError::InvalidValue("t=f path is not valid UTF-8"))?;
-    let path = std::path::Path::new(path_str);
+    let requested = String::from_utf8(path_bytes)
+        .map_err(|_| DecodeError::InvalidValue("file path is not valid UTF-8"))?;
+    let path = std::path::Path::new(&requested);
     if !path.is_absolute() {
-        return Err(DecodeError::InvalidValue("t=f path must be absolute"));
+        return Err(DecodeError::InvalidValue("file path must be absolute"));
     }
     if path
         .components()
         .any(|c| matches!(c, std::path::Component::ParentDir))
     {
         return Err(DecodeError::InvalidValue(
-            "t=f path must not contain '..' components",
+            "file path must not contain '..' components",
         ));
     }
-    let fd = rustix::fs::open(
-        path,
-        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-        Mode::empty(),
-    )
-    .map_err(|_| DecodeError::IoError("could not open t=f path"))?;
-    let meta =
-        rustix::fs::fstat(&fd).map_err(|_| DecodeError::IoError("could not stat t=f path"))?;
-    let size = usize::try_from(meta.st_size).unwrap_or(usize::MAX);
-    let (offset, len) = requested_range(complete, size)?;
-    if len > cap {
-        return Err(DecodeError::OverBudget);
+    let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
+        return Err(DecodeError::InvalidValue("file path must name a file"));
+    };
+    let name = name.to_owned();
+    let parent = std::fs::canonicalize(parent).map_err(|_| MEDIUM_READ_FAILED)?;
+    if !readable_location(&parent.join(&name)) {
+        return Err(MEDIUM_READ_FAILED);
     }
-    // Devices / FIFOs could block the read. `From`, not `try_from`:
-    // `st_mode` is `u16` on macOS and `u32` on Linux; `allow` not
-    // `expect` because the conversion is useless on Linux alone.
+    Ok(FilePath {
+        requested,
+        parent,
+        name,
+    })
+}
+
+/// kitty's `is_ok_to_read_image_path`: nothing under `/proc`, `/sys` or
+/// `/dev`, except a file under `/dev/shm`.
+#[cfg(unix)]
+pub(super) fn readable_location(path: &std::path::Path) -> bool {
+    let mut parts = path.iter().skip(1);
+    match parts.next().and_then(std::ffi::OsStr::to_str) {
+        Some("proc" | "sys") => false,
+        Some("dev") => parts.next() == Some("shm".as_ref()) && parts.next().is_some(),
+        _ => true,
+    }
+}
+
+/// `NONBLOCK` so a FIFO is refused by the regular-file check instead of
+/// stalling the open until a writer appears.
+#[cfg(unix)]
+const SOURCE_FLAGS: OFlags = OFlags::RDONLY
+    .union(OFlags::NOFOLLOW)
+    .union(OFlags::NONBLOCK)
+    .union(OFlags::CLOEXEC);
+
+/// `t=f`: read the file at the base64-encoded path, final component
+/// `NOFOLLOW`, capped at `MAX_DECODED_BYTES`
+/// (`docs/explanation/security-model.md`).
+#[cfg(unix)]
+fn read_file_payload(complete: &CompleteCommand, cap: usize) -> Result<Vec<u8>, DecodeError> {
+    let path = resolve_file_path(complete)?;
+    let dir = open_resolved_dir(&path.parent)?;
+    let fd = rustix::fs::openat(&dir, &path.name, SOURCE_FLAGS, Mode::empty())
+        .map_err(|_| MEDIUM_READ_FAILED)?;
+    read_regular_file(&fd, complete, cap)
+}
+
+/// Walks down from `/` without following a link, so the directory opened
+/// is the one the location and deletion rules judged even if a component
+/// is swapped after the canonicalize.
+#[cfg(unix)]
+pub(super) fn open_resolved_dir(
+    canonical: &std::path::Path,
+) -> Result<rustix::fd::OwnedFd, DecodeError> {
+    // `O_PATH` needs no read permission on a search-only directory;
+    // elsewhere `RDONLY` is the closest rustix offers.
+    #[cfg(target_os = "linux")]
+    let access = OFlags::PATH;
+    #[cfg(not(target_os = "linux"))]
+    let access = OFlags::RDONLY;
+    let flags = access | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+    let mut dir = rustix::fs::open("/", flags, Mode::empty()).map_err(|_| MEDIUM_READ_FAILED)?;
+    for component in canonical.components().skip(1) {
+        dir = rustix::fs::openat(&dir, component.as_os_str(), flags, Mode::empty())
+            .map_err(|_| MEDIUM_READ_FAILED)?;
+    }
+    Ok(dir)
+}
+
+/// The regular-file check, the `O=` / `S=` range and the budget, then the
+/// read; every failure is [`MEDIUM_READ_FAILED`].
+#[cfg(unix)]
+fn read_regular_file(
+    fd: &rustix::fd::OwnedFd,
+    complete: &CompleteCommand,
+    cap: usize,
+) -> Result<Vec<u8>, DecodeError> {
+    let meta = rustix::fs::fstat(fd).map_err(|_| MEDIUM_READ_FAILED)?;
+    // `From`, not `try_from`: `st_mode` is `u16` on macOS and `u32` on
+    // Linux; `allow` not `expect` because the conversion is useless on
+    // Linux alone.
     #[allow(clippy::useless_conversion)]
     let mode: u32 = meta.st_mode.into();
     if mode & libc_s_ifmt() != libc_s_ifreg() {
-        return Err(DecodeError::InvalidValue(
-            "t=f path must point at a regular file",
-        ));
+        return Err(MEDIUM_READ_FAILED);
     }
-    read_range(&fd, offset, len, "read failed on t=f file")
+    let size = usize::try_from(meta.st_size).unwrap_or(usize::MAX);
+    let (offset, len) = requested_range(complete, size).map_err(|_| MEDIUM_READ_FAILED)?;
+    if len > cap {
+        return Err(MEDIUM_READ_FAILED);
+    }
+    read_range(fd, offset, len).map_err(|_| MEDIUM_READ_FAILED)
 }
 
 /// `t=f` needs the `O_NOFOLLOW` open, which has no Windows equivalent
@@ -132,87 +224,48 @@ const fn read_file_payload(
     ))
 }
 
-/// `t=t`: read the temp file and unlink it.
-///
-/// Unlinking is enforced by felis; if unlinking fails the image is dropped.
-/// Reading uses `openat(NOFOLLOW)` and `unlinkat` from the pinned parent
-/// directory to resist TOCTOU symlink swaps.
+/// `t=t`: read the temp file like `t=f`, unlinking it when
+/// [`deletable_path`] admits it; a failed admitted unlink drops the image.
+/// `openat(NOFOLLOW)` and `unlinkat` share the walked parent.
 #[cfg(unix)]
 fn read_temp_file_payload(complete: &CompleteCommand, cap: usize) -> Result<Vec<u8>, DecodeError> {
-    let path_bytes = base64::decode(&complete.payload)
-        .ok_or(DecodeError::InvalidValue("malformed base64 path"))?;
-    let path_str = std::str::from_utf8(&path_bytes)
-        .map_err(|_| DecodeError::InvalidValue("t=t path is not valid UTF-8"))?;
-    let path = std::path::Path::new(path_str);
-    if !path.is_absolute() {
-        return Err(DecodeError::InvalidValue("t=t path must be absolute"));
-    }
-    if path
-        .components()
-        .any(|c| matches!(c, std::path::Component::ParentDir))
-    {
-        return Err(DecodeError::InvalidValue(
-            "t=t path must not contain '..' components",
-        ));
-    }
-    let parent = path.parent().ok_or(DecodeError::InvalidValue(
-        "t=t path must have a parent directory",
-    ))?;
-    let name = path
-        .file_name()
-        .ok_or(DecodeError::InvalidValue("t=t path must end in a filename"))?;
-
-    // `RDONLY | DIRECTORY` rather than `O_PATH`, which is Linux-only.
-    let dir = rustix::fs::open(
-        parent,
-        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
-        Mode::empty(),
-    )
-    .map_err(|_| DecodeError::IoError("could not open t=t parent directory"))?;
-
-    let fd = rustix::fs::openat(
-        &dir,
-        name,
-        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-        Mode::empty(),
-    )
-    .map_err(|_| DecodeError::IoError("could not open t=t path"))?;
-    let meta =
-        rustix::fs::fstat(&fd).map_err(|_| DecodeError::IoError("could not stat t=t path"))?;
-    let size = usize::try_from(meta.st_size).unwrap_or(usize::MAX);
-    // Still unlink on every early return: a temp file left behind leaks
-    // disk per retry.
-    let (offset, len) = match requested_range(complete, size) {
-        Ok(range) => range,
-        Err(err) => {
-            let _ = rustix::fs::unlinkat(&dir, name, rustix::fs::AtFlags::empty());
-            return Err(err);
-        }
-    };
-    if len > cap {
-        let _ = rustix::fs::unlinkat(&dir, name, rustix::fs::AtFlags::empty());
-        return Err(DecodeError::OverBudget);
-    }
-    // See `read_file_payload` for the `allow`.
-    #[allow(clippy::useless_conversion)]
-    let mode: u32 = meta.st_mode.into();
-    if mode & libc_s_ifmt() != libc_s_ifreg() {
-        let _ = rustix::fs::unlinkat(&dir, name, rustix::fs::AtFlags::empty());
-        return Err(DecodeError::InvalidValue(
-            "t=t path must point at a regular file",
-        ));
-    }
-
-    let Ok(buf) = read_range(&fd, offset, len, "read failed on t=t file") else {
-        let _ = rustix::fs::unlinkat(&dir, name, rustix::fs::AtFlags::empty());
-        return Err(DecodeError::IoError("read failed on t=t file"));
-    };
+    let path = resolve_file_path(complete)?;
+    let deletable = deletable_path(&path.parent, &path.requested);
+    let dir = open_resolved_dir(&path.parent)?;
+    let fd = rustix::fs::openat(&dir, &path.name, SOURCE_FLAGS, Mode::empty())
+        .map_err(|_| MEDIUM_READ_FAILED)?;
+    let read = read_regular_file(&fd, complete, cap);
     drop(fd);
+    // Unlinked on failure too: a temp file left behind leaks disk per
+    // retry.
+    if deletable {
+        let unlinked = rustix::fs::unlinkat(&dir, &path.name, rustix::fs::AtFlags::empty());
+        if unlinked.is_err() && read.is_ok() {
+            return Err(MEDIUM_READ_FAILED);
+        }
+    }
+    read
+}
 
-    rustix::fs::unlinkat(&dir, name, rustix::fs::AtFlags::empty())
-        .map_err(|_| DecodeError::IoError("could not unlink t=t file after read"))?;
-
-    Ok(buf)
+/// kitty's rule for deleting a `t=t` file: its parent resolves under a
+/// temp directory and its path names `tty-graphics-protocol`
+/// (docs/explanation/security-model.md "Kitty graphics").
+#[cfg(unix)]
+pub(super) fn deletable_path(canonical_parent: &std::path::Path, path: &str) -> bool {
+    if !path.contains("tty-graphics-protocol") {
+        return false;
+    }
+    let tmpdir = std::env::var_os("TMPDIR").map(std::path::PathBuf::from);
+    [
+        Some(std::path::PathBuf::from("/tmp")),
+        Some(std::path::PathBuf::from("/dev/shm")),
+        tmpdir,
+        Some(std::env::temp_dir()),
+    ]
+    .into_iter()
+    .flatten()
+    .filter_map(|dir| std::fs::canonicalize(dir).ok())
+    .any(|dir| canonical_parent.starts_with(dir))
 }
 
 /// Windows shim for `t=t`: see [`read_file_payload`]'s Windows shim.
@@ -252,10 +305,10 @@ fn read_shm_payload(complete: &CompleteCommand, cap: usize) -> Result<Vec<u8>, D
                 "t=s name is not a valid shm name",
             ));
         }
-        Err(_) => return Err(DecodeError::IoError("could not open t=s shm object")),
+        Err(_) => return Err(MEDIUM_READ_FAILED),
     };
 
-    let result = read_shm_range(&fd, complete, cap);
+    let result = read_shm_range(&fd, complete, cap).map_err(|_| MEDIUM_READ_FAILED);
     drop(fd);
     result
 }
@@ -384,7 +437,7 @@ fn read_shm_range(
     }
     #[cfg(target_os = "linux")]
     {
-        read_range(fd, offset, len, "read failed on t=s shm object")
+        read_range(fd, offset, len)
     }
     #[cfg(not(target_os = "linux"))]
     {
@@ -419,17 +472,12 @@ fn requested_range(complete: &CompleteCommand, size: usize) -> Result<(usize, us
 /// mpv frame is >10 MiB at 24-30 fps, and the zero fill would touch
 /// every page twice.
 #[cfg(unix)]
-fn read_range(
-    fd: &rustix::fd::OwnedFd,
-    offset: usize,
-    len: usize,
-    failure: &'static str,
-) -> Result<Vec<u8>, DecodeError> {
+fn read_range(fd: &rustix::fd::OwnedFd, offset: usize, len: usize) -> Result<Vec<u8>, DecodeError> {
     let mut buf = Vec::with_capacity(len);
     while buf.len() < len {
         let pos = (offset + buf.len()) as u64;
         let n = rustix::io::pread(fd, rustix::buffer::spare_capacity(&mut buf), pos)
-            .map_err(|_| DecodeError::IoError(failure))?;
+            .map_err(|_| MEDIUM_READ_FAILED)?;
         if n == 0 {
             // A concurrent truncate shrank the source; the format layer
             // judges what arrived.
@@ -710,7 +758,7 @@ mod mmap_tests {
         let fd = open_ro(&name);
         for &(o, l) in &[(0usize, 20_000usize), (100, 5000), (8191, 4096)] {
             let via_mmap = copy_shm_range_mmap(&fd, o, l).expect("mmap");
-            let via_pread = read_range(&fd, o, l, "pread").expect("pread");
+            let via_pread = read_range(&fd, o, l).expect("pread");
             assert_eq!(via_mmap, via_pread, "offset={o} len={l}");
         }
         let _ = rustix::shm::unlink(&name);
