@@ -64,7 +64,7 @@ or the end of the session.
 
 `felis sessions list --format json` and `felis sessions info` show it as `terminal_progress`, and the human `info` reads
 `progress: <state>[ <value>%]` ([cli.md](../cli.md)). The bridge and IPC carry it as `SessionInfo.terminal_progress`
-([ipc.md](../ipc.md) "Ops (kind = 5)"). It is absent when the session holds none, and otherwise is:
+(`crates/felis-protocol/proto/felis.proto`). It is absent when the session holds none, and otherwise is:
 
 | Field   | Type                           | Meaning                                                         |
 | ------- | ------------------------------ | --------------------------------------------------------------- |

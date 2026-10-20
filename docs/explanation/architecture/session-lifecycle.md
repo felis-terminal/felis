@@ -51,9 +51,10 @@ Connections never take ownership of a session; they register as subscribers over
 A session is created one of two ways, and which one a caller picks is decided by whether it wants a window.
 `SessionToDaemonMsg::Create` creates _and_ attaches the requesting connection in one step; `OpsToDaemonMsg::Spawn`
 creates a session nobody attaches to, which is what a scripted caller wants and what the GUI never does. The message
-shapes, the argument record, and every refusal variant are in [reference/ipc.md](../../reference/ipc.md) "Message
-families"; [ipc.md](ipc.md) "Creating a session" argues why the split runs this way. Session IDs are not human-named
-(see [non-goals.md](../non-goals.md) on user-namespaced session catalogs).
+shapes, the argument record, and every refusal variant are in `crates/felis-protocol/proto/felis.proto`, and the
+conversation is in [reference/ipc.md](../../reference/ipc.md) "Session (kind = 4)"; [ipc.md](ipc.md) "Creating a
+session" argues why the split runs this way. Session IDs are not human-named (see [non-goals.md](../non-goals.md) on
+user-namespaced session catalogs).
 
 Both take the same arguments and run the same sequence, differing only in whether a subscription follows it. The order
 of that sequence is the part that is a decision.

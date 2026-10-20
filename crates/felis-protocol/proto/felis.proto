@@ -288,12 +288,12 @@ enum RefusalReason {
   REFUSAL_REASON_UNSPECIFIED = 0;
   // The frame's family is one the peer's connection mode does not admit.
   REFUSAL_REASON_ROLE = 1;
-  // The daemon is already serving max_connections and admitted no
-  // further one. Retryable once a connection frees: nothing about the
-  // peer or its request was wrong.
+  // The daemon is already serving MAX_CONNECTIONS and admitted
+  // no further one. Retryable once a connection frees; `detail` names
+  // the admitted count and the limit.
   REFUSAL_REASON_AT_CAPACITY = 2;
   // ConnHello named a ConnectionMode this daemon does not define: the
-  // peer is newer. Not retryable against this daemon.
+  // peer is newer. Not retryable here; `detail` names the mode number.
   REFUSAL_REASON_UNKNOWN_MODE = 3;
 }
 
@@ -419,7 +419,8 @@ enum MouseProtocol {
   MOUSE_PROTOCOL_ANY_MOTION = 4;
 }
 
-// xterm modifyOtherKeys level (CSI > 4 ; Pv m).
+// xterm modifyOtherKeys level (CSI > 4 ; Pv m); a Pv above 2 parses as
+// LEVEL2.
 enum ModifyOtherKeys {
   MODIFY_OTHER_KEYS_UNSPECIFIED = 0;
   MODIFY_OTHER_KEYS_OFF = 1;
@@ -513,7 +514,10 @@ enum KeyEventKind {
 // What made a GridAttention fire: a BEL, or a desktop notification.
 enum AttentionSource {
   ATTENTION_SOURCE_UNSPECIFIED = 0;
+  // BEL events, coalesced to one per cycle.
   ATTENTION_SOURCE_BELL = 1;
+  // A notification on this attached session; window subscribers only.
+  // Its content goes to observers as NotifyEvent.
   ATTENTION_SOURCE_NOTIFICATION = 2;
 }
 
@@ -611,9 +615,9 @@ message EnvPair {
 }
 
 // Native-representation (bytes, bytes) pair in SpawnArgs.env_base (raw
-// bytes on Unix, little-endian uint16 code units on Windows). Inherited
-// OS state is not guaranteed UTF-8; REQ-912 requires preserving non-UTF-8
-// entries like paths without silent drops (see EnvBase).
+// bytes on Unix, whole little-endian uint16 code units on Windows).
+// Inherited OS state is not guaranteed UTF-8; REQ-912 requires
+// preserving non-UTF-8 entries like paths without silent drops.
 message EnvBytesPair {
   bytes key = 1;
   bytes value = 2;
@@ -621,8 +625,9 @@ message EnvBytesPair {
 
 // Captured environment snapshot for SpawnArgs.env_base. Wrapped in a
 // message so presence is distinguishable on the wire from an omitted
-// base. Bounded by MAX_ENV_BASE_ENTRIES entries and MAX_ENV_BASE_BYTES
-// total bytes (docs/reference/ipc.md).
+// base: a present, empty snapshot is an empty base. Bounded by
+// MAX_ENV_BASE_ENTRIES and MAX_ENV_BASE_BYTES, checked in the spawn
+// path rather than at decode (docs/reference/ipc.md "Semantic limits").
 message EnvBase {
   repeated EnvBytesPair entries = 1;
 }
@@ -669,17 +674,19 @@ message SourceRect {
   uint32 height = 4;
 }
 
-// Typed spawn parameters, shared by SessionCreate and OpsSpawn.
-//
-// command, args, and cwd are UTF-8, unlike env_base, which is bytes. A
-// client refuses a native value that is not valid UTF-8 before the wire
-// rather than substituting U+FFFD (REQ-105b).
+// Typed spawn parameters, shared by SessionCreate and OpsSpawn. Each
+// field falls back to its default independently. command, args, and cwd
+// are UTF-8, unlike env_base: a client refuses a native value that is
+// not valid UTF-8 before the wire rather than substituting U+FFFD
+// (REQ-105b).
 message SpawnArgs {
-  // Program to exec. Empty → default ($SHELL). UTF-8.
+  // Program to exec. Empty → default ($SHELL from the resolved base).
   string command = 1;
   // Argv after the program (excludes the program name). UTF-8.
   repeated string args = 2;
-  // Working directory. Empty → inherit the daemon's cwd. UTF-8.
+  // Working directory; non-empty must be absolute. Empty → the daemon's
+  // cwd. An unusable one fails the spawn when command is set; a default
+  // shell falls back to the daemon's cwd instead.
   string cwd = 3;
   // Extra env pairs, applied last: over the resolved base and over
   // the daemon's identity stamps (REQ-912).
@@ -687,15 +694,15 @@ message SpawnArgs {
   // Initial geometry. Absent asks for the daemon default (24x80);
   // present must name rows and cols inside the REQ-605a bounds
   // (1..=2048, so 0 is refused rather than defaulted), or the create is
-  // refused with ATTACH_FAILURE_GEOMETRY_OUT_OF_RANGE. Only the pixel
+  // refused with CREATE_FAILURE_GEOMETRY_OUT_OF_RANGE. Only the pixel
   // axes keep 0 = unknown.
   optional GridDims dims = 5;
-  // Opaque labels applied at creation (as OpsTag would afterwards).
+  // Opaque labels applied at creation, normalized as OpsTag's are.
   repeated string tags = 6;
-  // Replaces child base environment (no overlay). Injected only when
-  // the carrier to the target daemon is a local socket, since over an
-  // SSH stdio relay the dialer environment names the wrong host.
-  // Absent falls back to relay snapshot or daemon birth env.
+  // Replaces the child's base environment (no overlay). Filled by the
+  // dialing process just before it sends, and only when its carrier to
+  // the target daemon is a local socket; omitted when it breaks a cap.
+  // Absent falls back to the relay carrier block, else the daemon's own.
   optional EnvBase env_base = 7;
 }
 
@@ -725,7 +732,7 @@ message SessionInfo {
   // Daemon-assigned session id (u128 → 16 bytes, big-endian).
   bytes id = 1;
   GridDims dims = 2;
-  // Most recent OSC 0/2 window title, if any.
+  // Most recent OSC 0/2 window title; absent until a program sets one.
   optional string title = 3;
   // Most recent OSC 7 cwd, if any.
   optional string cwd = 4;
@@ -735,15 +742,19 @@ message SessionInfo {
   optional uint64 idle_seconds = 5;
   // Opaque user-supplied labels (OpsTag). Empty when untagged.
   repeated string tags = 6;
-  // Most recent decoded desktop notification, if any.
+  // Most recent decoded desktop notification (OSC 9/99/777), kept while
+  // the session is parked too; absent if none.
   SessionNotification last_notification = 7;
-  // Foreground program comm, if resolvable.
+  // The comm of the PTY's foreground process group, read from the OS
+  // process table at list-build time, if resolvable.
   optional string foreground = 8;
-  // Shell exited; session lingers in the post-exit grace. Exit-driven
+  // Shell exited; session lingers in the post-exit grace (5 s from the
+  // last detach). Exit-driven
   // switches must skip it (attaching blocks the reap forever).
   bool exited = 9;
   // Exit code of the most recent completed command (youngest retained
-  // OSC 133 D mark), if any.
+  // OSC 133 D mark). Absent when that mark carried none: an older mark's
+  // code is never substituted.
   optional uint32 last_exit_code = 10;
   // The session's live window attachments, oldest first. Empty for a
   // parked session and for one only scripted Ops readers are on: an Ops
@@ -811,11 +822,10 @@ message Attachment {
   // environment: a PTY environment is fixed at spawn and shared by
   // every mirror and every later re-attach.
   uint64 id = 1;
-  // When the attach landed, on the daemon's clock. Absolute where the
-  // roster's other stamps are ages: the daemon owns the clock this is
-  // measured against, and a cross-host reader cannot re-derive an attach
-  // instant from its own. Typed rather than formatted, so the range is
-  // the type's and not a convention a reader has to parse.
+  // When the attach landed, on the daemon's clock: absolute where the
+  // roster's other stamps are ages, since a cross-host reader cannot
+  // re-derive the instant from its own clock. A value outside the
+  // Timestamp range (years 0001-9999, nanos 0..1e9) fails the decode.
   google.protobuf.Timestamp attached_at = 2;
   // This attachment is the session's last window input owner: the
   // target a default-scope OpsSwitch resolves to. Exactly one
@@ -929,12 +939,13 @@ message ConnHello {
   bool pull_paced = 2;
 }
 
-// Daemon → client. Reply to ConnHello. It echoes nothing back: version
-// selection is the preface's, and a Hello answered with this one named
-// a mode the daemon defines.
+// Daemon → client. Reply to ConnHello. It echoes nothing back and
+// carries no session roster (that is OpsList): version selection is
+// the preface's, and a Hello answered with this one named a mode the
+// daemon defines.
 message ConnWelcome {
-  // The daemon's build, typed: semver, full revision, dirty flag.
-  // Purely informational; the version gate is the preface, never this.
+  // The running daemon's build, which may differ from the binary on
+  // disk. Informational only; the version gate is the preface.
   BuildIdentity identity = 1;
 }
 
@@ -975,8 +986,9 @@ message ConnCancel {
 // terminal after it is corruption.
 message ConnEnd {
   uint64 stream_id = 1;
-  // Items that preceded this terminator. 0 is normal (no hits, an empty
-  // region); the terminal is what says the stream ended cleanly.
+  // Results that preceded this terminator: rows, matches, events, never
+  // acks, loss markers or trailers (NotifySubscribed, NotifyLagged,
+  // RegionRowsDone). 0 is normal (no hits, an empty region).
   uint32 count = 2;
 }
 
@@ -1006,7 +1018,8 @@ message InputMsg {
   // envelope's wire-wide slot, reserved so nothing else claims it.
   reserved 100;
   oneof msg {
-    // KeyBytes(Vec<u8>): already-encoded keystroke bytes.
+    // Literal bytes forwarded to the PTY verbatim, at most
+    // MAX_RAW_INPUT_BYTES. A physical keystroke rides `key` instead.
     bytes key_bytes = 1 [(felis.v1.arm) = {
       direction: DIRECTION_TO_DAEMON
       correlation: CORRELATION_UNCORRELATED
@@ -1014,7 +1027,8 @@ message InputMsg {
       modes: MODE_OPS
       phases: PHASE_ATTACHED
     }];
-    // Paste(Vec<u8>): bracketed-paste payload.
+    // Paste payload, at most MAX_PASTE_BYTES; the daemon brackets it
+    // when the session has ?2004 set.
     bytes paste = 2 [(felis.v1.arm) = {
       direction: DIRECTION_TO_DAEMON
       correlation: CORRELATION_UNCORRELATED
@@ -1071,8 +1085,8 @@ message InputMsg {
       modes: MODE_OPS
       phases: PHASE_ATTACHED
     }];
-    // Key(KeyEvent): a physical key event the daemon encodes against
-    // the keyboard modes it owns.
+    // A physical key event the daemon encodes against the keyboard
+    // modes it has parsed, not the client's mirror of them.
     InputKeyEvent key = 10 [(felis.v1.arm) = {
       direction: DIRECTION_TO_DAEMON
       correlation: CORRELATION_UNCORRELATED
@@ -1098,14 +1112,15 @@ message InputMouseEvent {
   // Unset when action is MOUSE_ACTION_MOTION (no button involved).
   MouseButton button = 1;
   MouseAction action = 2;
-  // InputMods bitflags (u8): raw bits; see messages.rs (SHIFT/ALT/CTRL).
+  // InputMods bits, the xterm triple: shift 1, alt 2, ctrl 4. No super.
   uint32 mods = 3;
-  // Cell column, 1-based.
+  // Cell column, 1-based. Motion reports at cell granularity.
   uint32 x = 4;
   // Cell row, 1-based.
   uint32 y = 5;
   // Pixel column within the text area, 1-based (?1016 SGR-pixels); 0 asks
-  // the daemon to place it at the middle of the cell.
+  // the daemon for the middle of the cell's pixels at the PTY winsize's
+  // pixel-per-cell ratio.
   uint32 px = 6;
   // Pixel row within the text area, 1-based; 0 as for px.
   uint32 py = 7;
@@ -1119,8 +1134,8 @@ message InputKeyEvent {
   // MAX_KEY_TEXT_BYTES of UTF-8. Optional because an empty composition
   // is not an absent one.
   optional string text = 2;
-  // KeyMods bitflags (u8): raw bits; see messages.rs
-  // (CTRL/SHIFT/ALT/SUPER). Wider than InputMods by SUPER.
+  // KeyMods bits: ctrl 1, shift 2, alt 4, super 8. Ordered unlike
+  // InputMods, and wider by super.
   uint32 mods = 3;
   KeyEventKind kind = 4;
   KeyLocation location = 5;
@@ -1129,11 +1144,13 @@ message InputKeyEvent {
 // Window resize: drives SIGWINCH. Carries GridDims rather than loose
 // row/col/pixel fields: GridDims is the one geometry vocabulary.
 message InputResize {
-  // Clamped into the REQ-605a bounds on receipt; never refused.
+  // Clamped into the REQ-605a bounds on receipt, over the whole uint32
+  // domain; never refused. A pixel axis of 0 stays 0 (unknown).
   GridDims dims = 1;
 }
 
-// Window-focus change.
+// This window's own OS focus. The daemon reduces every window's report
+// to one session-level fact (focused iff any window is).
 message InputFocusChange {
   bool focused = 1;
 }
@@ -1145,7 +1162,8 @@ message InputColorScheme {
 
 // Scrollback viewport request.
 message InputViewport {
-  // Scrollback rows to lift the visible window by; 0 tracks live bottom.
+  // Scrollback rows to lift the visible window by; 0 is the live bottom
+  // whatever the anchor, and is sent without one.
   uint32 lines_from_bottom = 1;
   // The anchor of the browsing GridViewportState this offset was
   // computed from, echoed verbatim. Unset reads the offset against the
@@ -1157,14 +1175,16 @@ message InputViewport {
 }
 
 // Relative scrollback step, applied to the viewport the daemon holds
-// for this subscriber when it handles the frame.
+// for this subscriber when it handles the frame. A step that moves the
+// view earns a GridViewportState; one clamped at either end earns none.
 message InputViewportStep {
   // Rows toward history; negative toward the live bottom. The result
   // clamps to the retained scrollback.
   sint32 rows = 1;
 }
 
-// Prompt-jump request.
+// Prompt-jump request: the daemon resolves the previous or next OSC 133
+// prompt-start mark and answers with a GridViewportState.
 message InputJumpPrompt {
   PromptJump direction = 1;
 }
@@ -1341,22 +1361,27 @@ message GridMsg {
 // there is nothing to correlate against.
 message GridCycleEnd {}
 
-// Start of a fresh-attach rehydration.
+// Start of a fresh-attach rehydration. The client blanks its mirror at
+// the geometry already announced; the burst restates none.
 message GridRehydrateBegin {}
 
 // End of the rehydration burst.
 message GridRehydrateEnd {}
 
 // One cycle's worth of dirty-row cell data. A single dirty row is a
-// one-entry batch.
+// one-entry batch; entries apply in order, a later one for a row
+// overriding an earlier. A cycle near the frame cap splits across
+// consecutive frames, which apply independently.
 message GridRowDelta {
   repeated RowEntry rows = 1;
 }
 
-// Scroll directive for a region of the grid.
+// Whole-row shift of the band region_top..=region_bottom; the vacated
+// rows fill with default cells.
 message GridScrolled {
   uint32 region_top = 1;
   uint32 region_bottom = 2;
+  // At least 1.
   uint32 n_rows = 3;
   ScrollDirection direction = 4;
 }
@@ -1367,8 +1392,10 @@ message GridScrolled {
 // (permuted, with holes a later message fills) rather than as a dense
 // table ahead of the first row.
 message GridCluster {
-  // 1-based id matching a Grapheme::Cluster handle.
+  // 1-based id matching a Grapheme::Cluster handle, at most
+  // CLUSTER_TABLE_CAP (131 072).
   uint32 id = 1;
+  // At most ClusterText::CAP bytes (the daemon's fold cap).
   string text = 2;
 }
 
@@ -1382,10 +1409,12 @@ message GridHyperlink {
   string uri = 3;
 }
 
-// Cursor update.
+// Cursor update. The position stays inside the announced grid even
+// while the cursor is hidden.
 message GridCursorState {
   uint32 row = 1;
   uint32 col = 2;
+  // DECTCEM.
   bool visible = 3;
   CursorStyle style = 4;
   bool blink = 5;
@@ -1393,11 +1422,15 @@ message GridCursorState {
 
 // Scrollback-viewport mirror.
 message GridViewportState {
+  // At most max. A browsing offset grows by the rows pushed into
+  // scrollback, clamped to retained history; a resize, CSI 3 J or a
+  // screen switch returns it to 0, the live bottom.
   uint32 lines_from_bottom = 1;
   // Total composable rows = retained scrollback + live row count.
   uint32 max = 2;
   // The history point a non-zero lines_from_bottom is expressed
-  // against. Unset at the live bottom.
+  // against. Unset at the live bottom; a new one ships whenever it
+  // changes, an eviction that leaves both numbers unchanged included.
   ViewportAnchor anchor = 3 [(felis.v1.field_since) = {
     minor: 2
     skippable: true
@@ -1410,7 +1443,9 @@ message ViewportAnchor {
   uint64 generation = 2;
 }
 
-// Authoritative grid dimensions changed mid-stream.
+// Authoritative (post-clamp) grid dimensions, sent when they change
+// mid-stream or to overrule this client's InputResize when another
+// mirror owns the size. Cell content follows as GridRowDelta replay.
 message GridSize {
   GridDims dims = 1;
 }
@@ -1449,7 +1484,8 @@ message GridThemeColor {
 message ThemeReset {}
 
 // One indexed-palette slot changed: OSC 4 set or OSC 104 per-index
-// reset.
+// reset. An OSC 4 naming several slots emits one message per slot, and
+// rehydrate replays the override layer ascending by index.
 message GridPaletteColor {
   // Palette index, 0..=255. Wider values are rejected on decode.
   uint32 index = 1;
@@ -1484,11 +1520,15 @@ message GridKittyKbdFlags {
 
 // Mode-bit mirror.
 message GridModeFlags {
+  // ?2004.
   bool bracketed_paste = 1;
+  // ?1049.
   bool alt_screen = 2;
   MouseProtocol mouse_protocol = 3;
+  // ?1 DECCKM.
   bool application_cursor = 4;
   ModifyOtherKeys modify_other_keys = 5;
+  // ESC = / ESC > (DECKPAM / DECKPNM).
   bool application_keypad = 6;
   // ?9001 win32-input-mode: client emits win32-input key records so a
   // Windows daemon's ConPTY can rebuild faithful INPUT_RECORDs.
@@ -1503,9 +1543,11 @@ message GridAttention {
   AttentionSource source = 1;
 }
 
-// OSC 52 clipboard write.
+// A program's OSC 52 clipboard write, sent to the initiating (active)
+// subscriber only, never broadcast.
 message GridClipboardSet {
-  // ClipboardSelection bitmap of OS targets (u8 bits: c=1, p=2).
+  // ClipboardSelection bitmap: bit 0 `c` (system clipboard), bit 1 `p`
+  // (X11 PRIMARY). Unknown bits are dropped on decode.
   uint32 selection = 1;
   bytes data = 2;
 }
@@ -1635,7 +1677,8 @@ message ImageComplete {
   uint32 id = 1;
 }
 
-// Drop an image and any placements referencing it.
+// Drop an image and any placements referencing it, also announcing the
+// daemon's own store evictions. Aborts a transfer open on this id.
 message ImageDelete {
   uint32 id = 1;
 }
@@ -1683,7 +1726,9 @@ message ImagePlacementRemoved {
   optional uint32 placement_id = 2;
 }
 
-// A Kitty Unicode-placeholder virtual placement (U=1).
+// A Kitty Unicode-placeholder virtual placement (U=1): not grid-anchored,
+// so it carries only the cell extent the placeholder tiles are sized by.
+// An upsert under (image_id, placement_id).
 message ImageVirtualPlacement {
   uint32 image_id = 1;
   uint32 cols = 2;
@@ -1691,8 +1736,9 @@ message ImageVirtualPlacement {
   // Z-index from z= (i32).
   sint32 z_index = 4;
   // The producer's p=, or an id the daemon assigned to a put without
-  // one; a placeholder cell names it in its underline color. Unset
-  // keys the placement by image alone.
+  // one; a placeholder cell names it in its underline color. Shares
+  // ImagePlacement's key space, so ImagePlacementRemoved removes it
+  // too. Unset keys the placement by image alone.
   optional uint32 placement_id = 5 [(felis.v1.field_since) = {
     minor: 1
     skippable: true
@@ -1700,13 +1746,17 @@ message ImageVirtualPlacement {
 }
 
 // Display frame `number` of image id now, in the same 1-based
-// numbering ImageFrame uses.
+// numbering ImageFrame uses: one per animation advance, and one on
+// reattach. Unlike the transfer messages, it tolerates a frame the
+// receiver does not hold.
 message ImageShowFrame {
   uint32 id = 1;
   uint32 number = 2;
 }
 
-// Every placement's anchor shifted up by `lines`.
+// Every placement's anchor shifted up by `lines`, the rows the live
+// region pushed into scrollback. A placement whose anchor leaves the
+// retained scrollback gets its own ImagePlacementRemoved.
 message ImagePlacementsShifted {
   uint32 lines = 1;
 }
@@ -1808,16 +1858,16 @@ message SessionAttach {
   oneof target {
     // Session id (u128 → 16 bytes, big-endian).
     bytes id = 1;
-    // Lowercase hex session-id prefix (1-32 digits), resolved in the
-    // same step that takes the session handle, so nothing slips
-    // between the resolution and the attach.
+    // Session-id prefix (docs/reference/ipc.md "Ops (kind = 5)" has the
+    // grammar), resolved in the step that takes the session handle;
+    // SessionAttached.info.id carries the full id back.
     string id_prefix = 3;
   }
   // Refuse this attach if the session's shell has already exited: the
   // form every *system-selected* landing uses, checked inside the
   // session actor so the answer cannot race the exit. A deliberate
-  // attach leaves it false and may land on a corpse (`ipc.md`
-  // "Session (kind = 4)").
+  // attach leaves it false and may land on a corpse
+  // (docs/explanation/architecture/session-lifecycle.md).
   bool live_only = 2;
 }
 
@@ -1833,9 +1883,9 @@ message SessionCreate {
 // Client → daemon. The window is closing; the session lives on.
 message SessionDetach {}
 
-// Client → daemon. Report the client's configured theme colors and
-// palette. Each channel is present when set, absent to leave the
-// renderer/xterm default.
+// Client → daemon, right after attach. The client's configured colors
+// and palette, which OSC 10/11/12 and OSC 4 queries answer. Each
+// channel is present when set, absent to leave the renderer default.
 message SessionConfigureTheme {
   // Configured default foreground (OSC 10).
   Rgb fg = 1;
@@ -1869,7 +1919,7 @@ message SessionAttached {
 
 // Daemon → client. A SessionCreate landed: the session exists and this
 // connection is already subscribed, so the rehydrate burst follows
-// exactly as after SessionAttached.
+// exactly as after SessionAttached. info.dims is the resolved geometry.
 message SessionCreated {
   SessionInfo info = 1;
 }
@@ -1893,8 +1943,9 @@ message SessionAttachFailed {
     AttachFailure attach = 1;
     CreateFailure create = 2;
   }
-  // Human-readable specifics (the exec error behind a SPAWN_FAILED).
-  // Empty for the reasons that carry no dynamic value. Never parsed.
+  // Human-readable specifics, set for every reason: the exec error, the
+  // offending axis and bound, the admitted count and limit, or the
+  // session id. Never parsed.
   string detail = 3;
 }
 
@@ -2139,12 +2190,15 @@ message OpsInfoAmbiguous {
 // Client → daemon. Request the daemon's current session roster.
 message OpsList {}
 
-// Daemon → client. Reply to OpsList.
+// Daemon → client. Reply to OpsList: every pooled session, attached or
+// idle, in the daemon's recency order (SessionInfo.sequence is the
+// creation order).
 message OpsListed {
   repeated SessionInfo sessions = 1;
 }
 
-// Client → daemon. Remove the named session from the pool.
+// Client → daemon. Remove the named session from the pool and end the
+// program running in it.
 message OpsDestroy {
   // Lowercase hex session-id prefix (1-32 digits), resolved against
   // the pool daemon-side, never a full id the client pre-resolved
@@ -2158,7 +2212,8 @@ message OpsDestroyed {
   ResolvedId resolved = 1;
 }
 
-// Client → daemon. Force-detach the client attached to the named session.
+// Client → daemon. Return the named session to the idle pool: every
+// client streaming it receives PushEvicted before the reply.
 message OpsForceDetach {
   string id_prefix = 1;
 }
@@ -2166,10 +2221,13 @@ message OpsForceDetach {
 // Daemon → client. Reply to OpsForceDetach.
 message OpsDetached {
   ResolvedId resolved = 1;
+  // False when the session was already idle.
   bool was_attached = 2;
 }
 
-// Client → daemon. Ask subscribers of `from` to move to `target`.
+// Client → daemon. Ask window subscribers of `from` to move to
+// `target`. A session target resolving to `from` itself is answered
+// at once (queued 0, no denial) without resolving the scope.
 message OpsSwitch {
   string from_prefix = 1;
   SwitchTarget target = 2;
@@ -2302,7 +2360,8 @@ message SwitchDenied {
 }
 message SwitchNoInputOwner {}
 
-// Client → daemon. Add and/or remove opaque labels on the named session.
+// Client → daemon. Add and/or remove opaque labels on the named
+// session: adds apply before removes.
 message OpsTag {
   string id_prefix = 1;
   repeated string add = 2;
@@ -2364,6 +2423,7 @@ message StopRefused {
 }
 
 message StopDraining {
+  // Counted as StopRefused.sessions is.
   uint32 sessions = 1;
 }
 
@@ -2401,7 +2461,7 @@ message UpgradeRefused {
 // so the remedy is the same for each: drain and restart.
 enum UpgradeRefusal {
   UPGRADE_REFUSAL_UNSPECIFIED = 0;
-  // This platform has no in-place upgrade.
+  // This platform has no in-place upgrade (Windows).
   UPGRADE_REFUSAL_UNSUPPORTED = 1 [(felis.v1.value_since) = 1];
   // The successor cannot read this daemon's dump version.
   UPGRADE_REFUSAL_DUMP_VERSION = 2 [(felis.v1.value_since) = 1];
@@ -2445,7 +2505,8 @@ message OpsStatusReply {
 message ResourceReport {
   ResourceKind resource = 1;
   ResourceUnit unit = 2;
-  // Summed over every subject, at reply-build time.
+  // Summed over every subject, each sampled once while the reply is
+  // built: a set of samples, not one daemon-wide instant.
   uint64 total_used = 3;
   // What one subject is, and the numbers that only that answer makes
   // meaningful. An UNSET scope is malformed and is refused at decode.
@@ -2584,8 +2645,9 @@ message RegionToClientMsg {
   Correlation correlation = 100;
 }
 
-// Client → daemon. Serialize a region of the attached session's buffer.
-// The sink never travels: the requester routes the reply on its own host.
+// Client → daemon. Serialize a region of the attached session's buffer,
+// soft-wrapped rows stitched into logical lines. The sink never
+// travels: the requester routes the reply on its own host.
 message RegionRequest {
   RegionSource source = 1;
   // Reconstruct SGR color/style (true) or plain text (false).
@@ -2596,9 +2658,11 @@ message RegionRequest {
 message RegionReply {
   // Empty means the region was absent or empty.
   bytes data = 1;
-  // Unset for a region with no viewport anchor (the OSC 133 sources).
+  // Unset for a region with no viewport anchor (the OSC 133 sources),
+  // and for a reply trimmed to MAX_REGION_REPLY_BYTES.
   optional RegionPosition position = 2;
-  // Exit code of the youngest OSC 133 D mark, if it carried one.
+  // Exit code of the youngest OSC 133 D mark, whenever a region
+  // resolved and that mark carried one.
   optional uint32 exit_code = 3;
 }
 
@@ -2630,11 +2694,10 @@ message RegionRow {
   bool soft_wrap_continued = 4;
 }
 
-// Daemon → client. The last item of a RegionRows stream, after the last
-// RegionRow. It is an item, not the terminator: the stream's one
-// terminal is the shared ConnEnd / ConnError, and this still ships
-// because the exit code is region data a family-agnostic terminal has
-// no business carrying.
+// Daemon → client. The last item of a RegionRows stream, after the
+// last RegionRow, even for an empty or unresolved region. An item, not
+// the terminator: the shared ConnEnd / ConnError still closes the
+// stream, and does not count this trailer.
 message RegionRowsDone {
   // Exit code of the range-closing OSC 133 D mark (mark-range sources).
   optional uint32 exit_code = 1;
@@ -2717,12 +2780,14 @@ message NotifyLagged {
   uint64 missed = 1;
 }
 
-// Daemon → observer. One decoded desktop notification.
+// Daemon → observer. One decoded desktop notification (OSC 9 / 99 /
+// 777) from any pooled session.
 message NotifyEvent {
   // Session the notification fired on (u128 → 16 bytes, big-endian).
   bytes session_id = 1;
   Notification notification = 2;
-  // Producer's OSC 99 i= identifier, if any.
+  // Producer's OSC 99 i= identifier, if any; the CLI's JSON spells it
+  // notification_id.
   optional string notify_id = 3;
   // The session's window title (OSC 0/2).
   optional string session_title = 4;
@@ -2777,18 +2842,22 @@ message PushEvicted {
   string reason = 1;
 }
 
-// Daemon → client. Re-attach to the named session (relay of OpsSwitch).
+// Daemon → client. Re-attach to the named session (relay of OpsSwitch);
+// the client runs its ordinary switch path.
 message PushReattach {
   bytes id = 1;
 }
 
-// Daemon → client. The session's shell exited cleanly (PTY EOF).
+// Daemon → client. The session's shell exited (PTY EOF), sent just
+// before the subscription drops so a window reads the close as an
+// ending rather than a lost transport.
 message PushSessionExited {
   bytes id = 1;
 }
 
-// Daemon → client. Re-dial a different daemon (relay of OpsSwitch
-// with retarget set: the window retarget verb).
+// Daemon → client. Re-dial a different daemon (relay of an OpsSwitch
+// carrier target). The daemon relays `target` verbatim and never
+// inspects it; its validity is the client's post-dial concern.
 message PushRetargetHost {
   RetargetTarget target = 1;
 }
@@ -2836,16 +2905,18 @@ message SearchQuery {
   // Literal substring, or a regex when options.regex is set.
   string query = 1;
   SearchOptions options = 2;
-  // Absent means SEARCH_SOURCE_SCROLLBACK. A daemon below minor 1
-  // ignores the field and walks scrollback, so a present value is
-  // withheld from it.
+  // Absent means SEARCH_SOURCE_SCROLLBACK; UNSPECIFIED is refused at
+  // decode. A daemon below minor 1 ignores the field and walks
+  // scrollback, so a present value is withheld from it.
   optional SearchSource source = 3 [(felis.v1.field_since) = {minor: 1}];
 }
 
 // One logical line of the active search returning a hit.
 message SearchMatch {
-  // Row index of the logical line's topmost row; negative = scrollback.
+  // Row index of the logical line's topmost row: -1 the youngest
+  // scrollback row, -N older, a live row its grid index (REQ-608).
   sint64 line_index = 1;
+  // The stitched logical line.
   string text = 2;
   // Half-open byte ranges into text where matches fired.
   repeated ByteSpan byte_spans = 3;

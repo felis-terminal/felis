@@ -106,7 +106,7 @@ json_dto! {
         pub key: KeyJson,
         pub text: Option<String>,
         /// Bits 0–3: ctrl, shift, alt, super
-        /// (`docs/reference/ipc.md` "Input (kind = 1)").
+        /// (`felis.proto` `InputKeyEvent.mods`).
         #[cfg_attr(feature = "schema", schemars(range(max = KEY_MODS_MAX)))]
         pub mods: u8,
         pub kind: KeyEventKindJson,
