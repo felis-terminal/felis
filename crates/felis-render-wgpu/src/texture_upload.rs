@@ -1,21 +1,22 @@
-//! Atlas texture writes. In mapped mode they are drawn into the atlas at
-//! the head of the next frame instead of copied by the queue (see
+//! Atlas texture writes, recorded into the next frame's encoder. In
+//! mapped mode they are drawn into the atlas instead of copied (see
 //! `buffer_ring` for why a copy is avoided).
 
 use bytemuck::{Pod, Zeroable, cast_slice};
 use wgpu::{
     BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayout, BindGroupLayoutDescriptor,
     BindGroupLayoutEntry, BindingType, Buffer, BufferAddress, BufferBindingType, BufferDescriptor,
-    BufferUsages, ColorTargetState, ColorWrites, CommandEncoder, Device, Extent3d, FragmentState,
-    LoadOp, MultisampleState, Operations, Origin3d, PipelineLayoutDescriptor, PrimitiveState,
-    PrimitiveTopology, Queue, RenderPassColorAttachment, RenderPassDescriptor, RenderPipeline,
+    BufferSize, BufferUsages, COPY_BUFFER_ALIGNMENT, COPY_BYTES_PER_ROW_ALIGNMENT,
+    ColorTargetState, ColorWrites, CommandEncoder, Device, Extent3d, FragmentState, LoadOp,
+    MultisampleState, Operations, Origin3d, PipelineLayoutDescriptor, PrimitiveState,
+    PrimitiveTopology, RenderPassColorAttachment, RenderPassDescriptor, RenderPipeline,
     RenderPipelineDescriptor, ShaderModuleDescriptor, ShaderSource, ShaderStages, StoreOp,
-    TexelCopyBufferLayout, TexelCopyTextureInfo, Texture, TextureAspect, TextureFormat,
-    TextureUsages, TextureViewDescriptor, VertexAttribute, VertexBufferLayout, VertexFormat,
-    VertexState, VertexStepMode,
+    TexelCopyBufferInfo, TexelCopyBufferLayout, TexelCopyTextureInfo, Texture, TextureAspect,
+    TextureFormat, TextureUsages, TextureViewDescriptor, VertexAttribute, VertexBufferLayout,
+    VertexFormat, VertexState, VertexStepMode, util::StagingBelt,
 };
 
-use crate::buffer_ring::UploadMode;
+use crate::{buffer_ring::UploadMode, image_atlas::expand_rgb};
 
 const SHADER_SOURCE: &str = include_str!("texture_upload.wgsl");
 
@@ -74,6 +75,51 @@ pub(crate) const fn atlas_view_formats(
     }
 }
 
+/// An upload's source rows.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Texels<'a> {
+    /// Rows already in the target's layout, `bytes_per_row` apart.
+    Packed { bytes: &'a [u8], bytes_per_row: u32 },
+    /// Tightly packed RGB rows, widened to opaque RGBA as they are staged,
+    /// so a video frame is not expanded into a frame-sized buffer first.
+    Rgb(&'a [u8]),
+}
+
+impl<'a> Texels<'a> {
+    fn row<'s>(self, row: usize, row_bytes: usize, scratch: &'s mut Vec<u8>) -> &'s [u8]
+    where
+        'a: 's,
+    {
+        match self {
+            Self::Packed {
+                bytes,
+                bytes_per_row,
+            } => {
+                let from = row * bytes_per_row as usize;
+                &bytes[from..from + row_bytes]
+            }
+            Self::Rgb(bytes) => {
+                let from = row * row_bytes / 4 * 3;
+                scratch.resize(row_bytes, 0);
+                expand_rgb(bytes.get(from..).unwrap_or_default(), scratch);
+                scratch
+            }
+        }
+    }
+
+    /// Whether the source holds every row of the extent; an `Rgb` source
+    /// always does, since [`expand_rgb`] pads a short one.
+    const fn covers(self, row_bytes: usize, height: usize) -> bool {
+        match self {
+            Self::Packed {
+                bytes,
+                bytes_per_row,
+            } => bytes.len() >= (height - 1) * bytes_per_row as usize + row_bytes,
+            Self::Rgb(_) => true,
+        }
+    }
+}
+
 struct Op {
     target: Texture,
     layout: TexelLayout,
@@ -88,11 +134,37 @@ struct Pipelines {
 }
 
 pub(crate) struct TextureUploader {
-    queue: Queue,
+    device: Device,
     pipelines: Option<Pipelines>,
     staging: Staging,
     ops: Vec<Op>,
+    /// Staged mode's source buffers. `Queue::write_texture` allocates a
+    /// fresh staging buffer per call, which on a discrete GPU costs a
+    /// driver allocation and unmap per write: a video producer pays it
+    /// for a multi-megabyte frame every tick.
+    belt: Option<StagingBelt>,
+    copies: Vec<StagedCopy>,
+    idle_encodes: u32,
+    row_scratch: Vec<u8>,
 }
+
+struct StagedCopy {
+    buffer: Buffer,
+    offset: BufferAddress,
+    bytes_per_row: u32,
+    target: Texture,
+    origin: [u32; 2],
+    extent: [u32; 2],
+}
+
+/// Large enough that a frame's glyph uploads share one chunk; a larger
+/// write gets a chunk of its own size, which the next same-size write
+/// reuses.
+const BELT_CHUNK: BufferAddress = 1 << 20;
+
+/// Upload-free encodes after which the belt is dropped, so a one-off
+/// large image or a video that stopped leaves no resident staging.
+const BELT_IDLE_ENCODES: u32 = 120;
 
 /// Rows repacked to a 4-byte stride, split into batches that each fit one
 /// storage binding.
@@ -116,10 +188,10 @@ struct Chunk {
 impl Staging {
     fn push_rows(
         &mut self,
-        src: &[u8],
-        src_stride: usize,
+        texels: Texels<'_>,
         row_bytes: usize,
         height: usize,
+        scratch: &mut Vec<u8>,
     ) -> Vec<Chunk> {
         let stride = align4(row_bytes);
         let rows_per_chunk = (self.limit / stride).max(1);
@@ -137,8 +209,8 @@ impl Staging {
             let start = self.batch_starts.last().copied().unwrap_or(0);
             let src_offset = self.bytes.len() - start;
             for r in first_row..first_row + rows {
-                let from = r * src_stride;
-                self.bytes.extend_from_slice(&src[from..from + row_bytes]);
+                self.bytes
+                    .extend_from_slice(texels.row(r, row_bytes, scratch));
                 self.bytes.resize(self.bytes.len() + stride - row_bytes, 0);
             }
             chunks.push(Chunk {
@@ -181,14 +253,14 @@ const fn align4(n: usize) -> usize {
 }
 
 impl TextureUploader {
-    pub(crate) fn new(device: &Device, queue: &Queue, mode: UploadMode) -> Self {
+    pub(crate) fn new(device: &Device, mode: UploadMode) -> Self {
         let limits = device.limits();
         let batch_limit = limits
             .max_storage_buffer_binding_size
             .min(limits.max_buffer_size);
         let batch_limit = usize::try_from(batch_limit).unwrap_or(usize::MAX) & !3;
         Self {
-            queue: queue.clone(),
+            device: device.clone(),
             pipelines: (mode == UploadMode::Mapped).then(|| build_pipelines(device)),
             staging: Staging {
                 bytes: Vec::new(),
@@ -196,62 +268,37 @@ impl TextureUploader {
                 limit: batch_limit,
             },
             ops: Vec::new(),
+            belt: None,
+            copies: Vec::new(),
+            idle_encodes: 0,
+            row_scratch: Vec::new(),
         }
     }
 
-    /// `bytes` holds `height` rows of `width` texels, `bytes_per_row` apart.
     pub(crate) fn write(
         &mut self,
         target: &Texture,
         layout: TexelLayout,
         origin: [u32; 2],
         extent: [u32; 2],
-        bytes: &[u8],
-        bytes_per_row: u32,
+        texels: Texels<'_>,
     ) {
         let [width, height] = extent;
         if width == 0 || height == 0 {
             return;
         }
         let row_bytes = (width * layout.bytes()) as usize;
-        if bytes.len() < (height as usize - 1) * bytes_per_row as usize + row_bytes {
-            tracing::warn!(
-                width,
-                height,
-                len = bytes.len(),
-                "atlas upload shorter than its extent"
-            );
+        if !texels.covers(row_bytes, height as usize) {
+            tracing::warn!(width, height, "atlas upload shorter than its extent");
             return;
         }
         if self.pipelines.is_none() {
-            self.queue.write_texture(
-                TexelCopyTextureInfo {
-                    texture: target,
-                    mip_level: 0,
-                    origin: Origin3d {
-                        x: origin[0],
-                        y: origin[1],
-                        z: 0,
-                    },
-                    aspect: TextureAspect::All,
-                },
-                bytes,
-                TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(bytes_per_row),
-                    rows_per_image: Some(height),
-                },
-                Extent3d {
-                    width,
-                    height,
-                    depth_or_array_layers: 1,
-                },
-            );
+            self.stage_copy(target, origin, extent, texels, row_bytes);
             return;
         }
         for chunk in
             self.staging
-                .push_rows(bytes, bytes_per_row as usize, row_bytes, height as usize)
+                .push_rows(texels, row_bytes, height as usize, &mut self.row_scratch)
         {
             self.ops.push(Op {
                 target: target.clone(),
@@ -267,10 +314,95 @@ impl TextureUploader {
         }
     }
 
+    fn stage_copy(
+        &mut self,
+        target: &Texture,
+        origin: [u32; 2],
+        extent: [u32; 2],
+        texels: Texels<'_>,
+        row_bytes: usize,
+    ) {
+        let stride = row_bytes.next_multiple_of(COPY_BYTES_PER_ROW_ALIGNMENT as usize);
+        let (Some(size), Some(align)) = (
+            BufferSize::new((stride * extent[1] as usize) as BufferAddress),
+            BufferSize::new(COPY_BUFFER_ALIGNMENT),
+        ) else {
+            return;
+        };
+        let device = &self.device;
+        let belt = self
+            .belt
+            .get_or_insert_with(|| StagingBelt::new(device.clone(), BELT_CHUNK));
+        let slice = belt.allocate(size, align);
+        let (buffer, offset) = (slice.buffer().clone(), slice.offset());
+        let mut view = match slice.get_mapped_range_mut() {
+            Ok(view) => view,
+            Err(err) => {
+                tracing::warn!(?err, "atlas upload: mapping refused");
+                return;
+            }
+        };
+        for row in 0..extent[1] as usize {
+            view.slice(row * stride..row * stride + row_bytes)
+                .copy_from_slice(texels.row(row, row_bytes, &mut self.row_scratch));
+        }
+        drop(view);
+        self.copies.push(StagedCopy {
+            buffer,
+            offset,
+            bytes_per_row: stride as u32,
+            target: target.clone(),
+            origin,
+            extent,
+        });
+    }
+
+    fn encode_staged(&mut self, encoder: &mut CommandEncoder) {
+        if self.copies.is_empty() {
+            self.idle_encodes = self.idle_encodes.saturating_add(1);
+            if self.idle_encodes >= BELT_IDLE_ENCODES {
+                self.belt = None;
+            }
+            return;
+        }
+        self.idle_encodes = 0;
+        for copy in self.copies.drain(..) {
+            encoder.copy_buffer_to_texture(
+                TexelCopyBufferInfo {
+                    buffer: &copy.buffer,
+                    layout: TexelCopyBufferLayout {
+                        offset: copy.offset,
+                        bytes_per_row: Some(copy.bytes_per_row),
+                        rows_per_image: Some(copy.extent[1]),
+                    },
+                },
+                TexelCopyTextureInfo {
+                    texture: &copy.target,
+                    mip_level: 0,
+                    origin: Origin3d {
+                        x: copy.origin[0],
+                        y: copy.origin[1],
+                        z: 0,
+                    },
+                    aspect: TextureAspect::All,
+                },
+                Extent3d {
+                    width: copy.extent[0],
+                    height: copy.extent[1],
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
+        if let Some(belt) = self.belt.as_mut() {
+            belt.finish_and_recall_on_submit(encoder);
+        }
+    }
+
     /// Draws every write recorded since the last call into `encoder`,
     /// ahead of whatever the caller encodes next.
     pub(crate) fn encode(&mut self, device: &Device, encoder: &mut CommandEncoder) {
         let Some(pipelines) = self.pipelines.as_ref() else {
+            self.encode_staged(encoder);
             return;
         };
         if self.ops.is_empty() {
@@ -467,11 +599,34 @@ mod tests {
         }
     }
 
+    fn packed(bytes: &[u8], bytes_per_row: u32) -> Texels<'_> {
+        Texels::Packed {
+            bytes,
+            bytes_per_row,
+        }
+    }
+
+    #[test]
+    fn rgb_rows_stage_as_opaque_rgba_and_a_short_source_stages_transparent_black() {
+        let mut st = staging(1 << 20);
+        // Two 2-texel rows; the second row's last texel is missing.
+        st.push_rows(
+            Texels::Rgb(&[1, 2, 3, 4, 5, 6, 7, 8, 9]),
+            8,
+            2,
+            &mut Vec::new(),
+        );
+        assert_eq!(
+            st.bytes,
+            vec![1, 2, 3, 255, 4, 5, 6, 255, 7, 8, 9, 255, 0, 0, 0, 0]
+        );
+    }
+
     #[test]
     fn rows_are_padded_to_a_four_byte_stride_and_drop_source_padding() {
         let mut st = staging(1 << 20);
         // Two 3-byte rows, 5 bytes apart in the source.
-        let chunks = st.push_rows(&[1, 2, 3, 9, 9, 4, 5, 6], 5, 3, 2);
+        let chunks = st.push_rows(packed(&[1, 2, 3, 9, 9, 4, 5, 6], 5), 3, 2, &mut Vec::new());
         assert_eq!(
             chunks,
             vec![Chunk {
@@ -489,7 +644,7 @@ mod tests {
     fn a_write_larger_than_the_limit_splits_by_rows_across_batches() {
         let mut st = staging(8);
         let src: Vec<u8> = (0..12).collect();
-        let chunks = st.push_rows(&src, 4, 4, 3);
+        let chunks = st.push_rows(packed(&src, 4), 4, 3, &mut Vec::new());
         assert_eq!(chunks.len(), 2);
         assert_eq!(
             (chunks[0].batch, chunks[0].first_row, chunks[0].rows),
@@ -510,17 +665,17 @@ mod tests {
     #[test]
     fn a_later_write_opens_a_batch_only_when_the_current_one_is_full() {
         let mut st = staging(8);
-        st.push_rows(&[1; 4], 4, 4, 1);
-        let second = st.push_rows(&[2; 4], 4, 4, 1);
+        st.push_rows(packed(&[1; 4], 4), 4, 1, &mut Vec::new());
+        let second = st.push_rows(packed(&[2; 4], 4), 4, 1, &mut Vec::new());
         assert_eq!((second[0].batch, second[0].src_offset), (0, 4));
-        let third = st.push_rows(&[3; 4], 4, 4, 1);
+        let third = st.push_rows(packed(&[3; 4], 4), 4, 1, &mut Vec::new());
         assert_eq!((third[0].batch, third[0].src_offset), (1, 0));
     }
 
     #[test]
     fn a_row_wider_than_the_limit_still_travels_alone() {
         let mut st = staging(4);
-        let chunks = st.push_rows(&[7; 16], 8, 8, 2);
+        let chunks = st.push_rows(packed(&[7; 16], 8), 8, 2, &mut Vec::new());
         assert_eq!(
             chunks.iter().map(|c| c.batch).collect::<Vec<_>>(),
             vec![0, 1]
@@ -530,10 +685,10 @@ mod tests {
     #[test]
     fn clear_releases_capacity_a_much_smaller_frame_does_not_need() {
         let mut st = staging(1 << 20);
-        st.push_rows(&[0; 4096], 4096, 4096, 1);
+        st.push_rows(packed(&[0; 4096], 4096), 4096, 1, &mut Vec::new());
         st.clear();
         let big = st.bytes.capacity();
-        st.push_rows(&[0; 4], 4, 4, 1);
+        st.push_rows(packed(&[0; 4], 4), 4, 1, &mut Vec::new());
         st.clear();
         assert!(st.bytes.capacity() < big);
         assert_eq!(st.batch_starts, [0_usize; 0]);

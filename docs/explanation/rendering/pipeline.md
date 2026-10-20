@@ -34,8 +34,9 @@ redraw request, so a burst of frames costs one paint ([damage-tracking.md](damag
    fast path applies, a single cell otherwise (text-shaping.md).
    Shaped runs are memoized.
 4. New glyphs land in the glyph atlas; images whose pixels
-   changed are uploaded into the image atlas, and every image a
-   live placement references after an atlas reset.
+   changed are uploaded into the image atlas once a draw of
+   theirs shows, and after an atlas reset every shown image a
+   live placement references.
 5. The renderer issues draw calls inside one render pass, in the
    layered order:
      a. clear (load op) + images z below the bg tier
@@ -125,6 +126,9 @@ workload that meets new glyphs keeps that set resident (measured on an M4: a foc
 draws the frame's working set already covers.
 
 A discrete GPU keeps the staged path, since a mappable buffer there lives in host memory the GPU reads across the bus.
+Its texels go through a staging belt the renderer reuses across frames and copies from in the frame's encoder, not
+through `Queue::write_texture`, which allocates a staging buffer per call: on a discrete NVIDIA GPU that allocation and
+its unmap cost a 2500 × 1400 video frame more than the copy itself.
 
 ### Image quad sizing
 
@@ -492,8 +496,8 @@ _Revisit if_ a real consumer needs the vertex stage, multi-pass composition, or 
 
 ## Performance principles
 
-- **No allocation in the inner draw loop.** All buffers are pooled, including the scratch that images are converted
-  through, because a video producer re-uploads a multi-megabyte frame 24-30 times a second.
+- **No allocation in the inner draw loop.** All buffers are pooled, including the staging an RGB image is widened into
+  row by row, because a video producer uploads a multi-megabyte frame 24-60 times a second.
 - **Uploads are deferred to one flush point per frame.** A glyph rasterized during the populate walk is queued and
   written after the walk, one upload per new entry, so the walk never interleaves texture writes with reads of the
   packer.
@@ -594,9 +598,15 @@ the first Kitty-graphics upload so an image-free session pays no GPU memory. Kit
 fragmentation felis accepts; one texture keeps batching simple. The atlas is the client's; the daemon owns the image
 bytes and reships them on rehydration.
 
-There is no per-image eviction. A sheet that fills is recycled whole, and every image a live placement references is
-re-uploaded before the same frame is built; the client already holds every live image's pixels in its image shadow, so
-recovery costs an upload, not a round trip. The alternative, letting the dropped images reappear whenever their producer
-retransmits, is not a policy at all: a producer has no reason to re-send an image it already delivered, so those
-placements would draw nothing indefinitely. An image too large for even an empty sheet is skipped (logged once);
+An image is uploaded only once one of its draws shows: a draw wholly under a later draw of an opaque (`f=24`) image does
+not. mpv's `--vo=kitty` places each video frame as a new image over the last, so uploading every image that arrived
+since the previous redraw sends frames nobody sees, and a redraw slowed by them lets more pile up for the next; at a
+2500 × 1400 frame that spiral held the window to a few redraws a second. A hidden image stays pending until a draw of it
+is uncovered. An `f=32` image never hides another, since proving it opaque would mean scanning its alpha.
+
+There is no per-image eviction. A sheet that fills is recycled whole, and every shown image a live placement references
+is re-uploaded before the same frame is built; the client already holds every live image's pixels in its image shadow,
+so recovery costs an upload, not a round trip. The alternative, letting the dropped images reappear whenever their
+producer retransmits, is not a policy at all: a producer has no reason to re-send an image it already delivered, so
+those placements would draw nothing indefinitely. An image too large for even an empty sheet is skipped (logged once);
 resetting again would free nothing it could use.

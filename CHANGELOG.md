@@ -68,6 +68,9 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 
 ### Fixed
 
+- Video through Kitty graphics (`mpv --vo=kitty`) no longer stutters in a large window: the window uploads only the
+  newest frame instead of every frame that arrived since its last redraw, and on a discrete GPU reuses its upload
+  buffers. A 2500 × 1400 frame at 30 fps now paints every frame, where it painted about one in six.
 - When the daemon dies, open windows close without starting a new daemon on their way out. That replacement could only
   report the session gone, and on Linux, while the dead daemon's systemd unit was still shutting down, it started inside
   a window's own unit, where an out-of-memory kill of one shell later took it and every session down.

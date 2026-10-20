@@ -1,19 +1,17 @@
 #![recursion_limit = "256"]
 #![doc = include_str!("../README.md")]
 
-use std::{
-    collections::{BTreeMap, HashSet},
-    num::NonZeroU32,
-    path::PathBuf,
-    sync::Arc,
-};
+use std::{collections::BTreeMap, num::NonZeroU32, path::PathBuf, sync::Arc};
 
 use bytemuck::cast_slice;
 use felis_grid::{
     ScreenBuffer,
     image_layout::{ImageDraw, ImageLayout},
 };
-use felis_protocol::{ImageId, messages::ThemeChannel};
+use felis_protocol::{
+    ImageId,
+    messages::{ImageFormat, ThemeChannel},
+};
 use felis_render_core::{
     ImageSource, SelectionRange,
     glyphs::{GLYPH_ATLAS_SIDE, ShapeFrame},
@@ -92,17 +90,13 @@ pub enum SurfaceError {
     Other(String),
 }
 
-/// The recovery set after an atlas reset, deduped in first-mention
-/// order. Anything a live placement names must be in it: a producer
-/// never retransmits an image it already delivered.
-fn live_image_ids(dirty_images: &[ImageId], live: &[ImageId]) -> Vec<ImageId> {
-    let mut seen = HashSet::new();
-    dirty_images
-        .iter()
-        .chain(live)
-        .copied()
-        .filter(|id| seen.insert(*id))
-        .collect()
+/// Opaque pixels hide whatever an image draws over, which is what lets
+/// an occluded image skip its upload. Only `Rgb24` qualifies: proving an
+/// `Rgba32` image opaque would cost a scan of every pixel.
+fn opaque(images: &impl ImageSource, id: ImageId) -> bool {
+    images
+        .image_data(id)
+        .is_some_and(|d| d.format == ImageFormat::Rgb24)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -272,6 +266,8 @@ pub struct Renderer {
     glyph_repaint_pending: bool,
     glyph_atlas_thrash_logged: bool,
     image_atlas_overflow_logged: bool,
+    /// Images whose current pixels are not in the atlas.
+    image_pending: Vec<ImageId>,
     /// Defaults to `true`: winit creates the window focused on every
     /// target platform.
     window_focused: bool,
@@ -712,7 +708,7 @@ impl Renderer {
             glyph_side,
         );
         let images = ImageAtlas::new(&device, upload_mode, &atlas_bgl, image_side);
-        let uploader = TextureUploader::new(&device, &queue, upload_mode);
+        let uploader = TextureUploader::new(&device, upload_mode);
 
         // Logged on `felis::mem`, the target the client logs its RSS
         // milestones on.
@@ -767,6 +763,7 @@ impl Renderer {
             glyph_repaint_pending: false,
             glyph_atlas_thrash_logged: false,
             image_atlas_overflow_logged: false,
+            image_pending: Vec::new(),
             window_focused: true,
             cursor_blink_visible: true,
             selection: None,
@@ -1084,7 +1081,7 @@ impl Renderer {
                 self.glyph_repaint_pending = true;
             }
         }
-        self.upload_dirty_images(dirty_images, images, layout.live_images());
+        self.upload_dirty_images(dirty_images, images, layout);
 
         let metrics = self.glyphs.cell_metrics();
         self.build_cell_instances(screen, metrics, viewport, viewport_max);
@@ -1204,49 +1201,71 @@ impl Renderer {
         std::mem::replace(&mut self.glyph_repaint_pending, false)
     }
 
-    /// A full sheet is recycled wholesale (the shelf packer does not
-    /// defragment), which drops every slot; the live set is re-uploaded
-    /// here rather than left to producers, which never re-send an image
-    /// they already delivered.
+    /// Uploads only images a draw shows, and restores them when a full
+    /// sheet is recycled; a hidden one waits in `image_pending` until a
+    /// draw of it is uncovered (pipeline.md "Image atlas").
     fn upload_dirty_images(
         &mut self,
         dirty_images: &[ImageId],
         images: &impl ImageSource,
-        live: &[ImageId],
+        layout: &ImageLayout,
     ) {
-        for id in dirty_images {
-            if self.try_upload_image(*id, images) == UploadOutcome::SheetFull {
-                self.images.reset();
-                self.reupload_live_images(dirty_images, images, live);
-                return;
-            }
+        self.queue_pending_images(dirty_images, images);
+        if self.upload_visible_pending(images, layout, true).is_empty() {
+            return;
         }
-    }
-
-    /// At most once per frame: a second full sheet means the live set
-    /// does not fit even an empty atlas.
-    fn reupload_live_images(
-        &mut self,
-        dirty_images: &[ImageId],
-        images: &impl ImageSource,
-        live: &[ImageId],
-    ) {
-        let mut skipped = 0usize;
-        for id in live_image_ids(dirty_images, live) {
-            if self.try_upload_image(id, images) == UploadOutcome::SheetFull {
-                skipped += 1;
-            }
-        }
-        if skipped > 0 && !self.image_atlas_overflow_logged {
+        self.images.reset();
+        self.queue_pending_images(layout.live_images(), images);
+        // At most one reset per frame: what misses an empty sheet would
+        // miss it again next frame, so it is dropped rather than retried.
+        let skipped = self.upload_visible_pending(images, layout, false);
+        self.image_pending.retain(|id| !skipped.contains(id));
+        if !skipped.is_empty() && !self.image_atlas_overflow_logged {
             // Once per renderer; a per-frame warning at vsync would bury
             // the log.
             self.image_atlas_overflow_logged = true;
             tracing::warn!(
-                skipped,
+                skipped = skipped.len(),
                 side = self.images.atlas_side(),
                 "images do not fit the atlas even when empty; their placements paint nothing"
             );
         }
+    }
+
+    /// Deduped in first-mention order: the atlas packs in upload order.
+    fn queue_pending_images(&mut self, ids: &[ImageId], images: &impl ImageSource) {
+        for &id in ids {
+            if !self.image_pending.contains(&id) {
+                self.image_pending.push(id);
+            }
+        }
+        self.image_pending
+            .retain(|id| images.image_data(*id).is_some());
+    }
+
+    /// Returns the visible images the sheet had no room for; they stay
+    /// pending. With `stop_when_full`, the first miss ends the pass, since
+    /// the caller resets and retries everything.
+    fn upload_visible_pending(
+        &mut self,
+        images: &impl ImageSource,
+        layout: &ImageLayout,
+        stop_when_full: bool,
+    ) -> Vec<ImageId> {
+        let mut missed = Vec::new();
+        for id in std::mem::take(&mut self.image_pending) {
+            let visible = !layout.occluded(id, |over| opaque(images, over));
+            if visible {
+                if (missed.is_empty() || !stop_when_full)
+                    && self.try_upload_image(id, images) != UploadOutcome::SheetFull
+                {
+                    continue;
+                }
+                missed.push(id);
+            }
+            self.image_pending.push(id);
+        }
+        missed
     }
 
     /// `Missing` is not an atlas condition and must not trigger the
@@ -1776,7 +1795,6 @@ mod tests {
         )
     )]
 
-    use felis_protocol::messages::ImageFormat;
     use felis_render_core::{ImageData, palette::srgb_to_linear_rgba};
 
     use super::*;
@@ -1880,14 +1898,6 @@ mod tests {
             height: 0,
         };
         assert!(instance_for_draw(&draw([0.0; 4], [0, 0]), degenerate).is_none());
-    }
-
-    /// The recovery set covers every placed image, not just the dirty
-    /// ids; a producer never retransmits an image it already delivered.
-    #[test]
-    fn recovery_set_covers_dirty_plus_every_placed_image_once() {
-        let ids = live_image_ids(&[ImageId(1)], &[ImageId(2), ImageId(1), ImageId(3)]);
-        assert_eq!(ids, vec![ImageId(1), ImageId(2), ImageId(3)]);
     }
 
     #[test]
@@ -2088,6 +2098,18 @@ mod tests {
     }
 
     fn offscreen_on(instance: &Instance, width: u32, height: u32, cfg: RendererConfig) -> Renderer {
+        offscreen_in_mode(instance, None, width, height, cfg)
+    }
+
+    /// `mode` overrides the adapter's own choice, so a software adapter
+    /// can exercise the discrete-GPU (`Staged`) upload path too.
+    fn offscreen_in_mode(
+        instance: &Instance,
+        mode: Option<UploadMode>,
+        width: u32,
+        height: u32,
+        cfg: RendererConfig,
+    ) -> Renderer {
         let font = felis_shaping::Font::load_test_font();
         let cfg = offscreen_config(cfg).expect("no post shader configured");
         warmup::block_on(async {
@@ -2096,7 +2118,7 @@ mod tests {
             Renderer::build_offscreen(
                 device,
                 queue,
-                UploadMode::for_adapter(&adapter),
+                mode.unwrap_or_else(|| UploadMode::for_adapter(&adapter)),
                 width,
                 height,
                 &cfg,
@@ -2331,5 +2353,120 @@ mod tests {
         }
         bad.truncate(20);
         assert!(bad.is_empty(), "cell {m:?}, off-red pixels: {bad:?}");
+    }
+
+    const RGB_SIDE: u32 = 16;
+
+    /// Solid `RGB_SIDE`-square RGB images, ranked by id.
+    struct RgbImages(Vec<(ImageId, Vec<u8>)>);
+
+    impl RgbImages {
+        fn new(colors: &[(u32, [u8; 3])]) -> Self {
+            let texels = (RGB_SIDE * RGB_SIDE) as usize;
+            Self(
+                colors
+                    .iter()
+                    .map(|&(id, rgb)| (ImageId(id), rgb.repeat(texels)))
+                    .collect(),
+            )
+        }
+
+        fn pixels(&self, id: ImageId) -> Option<&[u8]> {
+            self.0.iter().find(|(i, _)| *i == id).map(|(_, p)| &p[..])
+        }
+    }
+
+    impl ImageSource for RgbImages {
+        fn image_data(&self, id: ImageId) -> Option<ImageData<'_>> {
+            self.pixels(id).map(|pixels| ImageData {
+                width: RGB_SIDE,
+                height: RGB_SIDE,
+                format: ImageFormat::Rgb24,
+                pixels,
+            })
+        }
+    }
+
+    impl felis_grid::image_layout::LayoutImages for RgbImages {
+        fn drawable_size(&self, id: ImageId) -> Option<(u32, u32)> {
+            self.pixels(id).map(|_| (RGB_SIDE, RGB_SIDE))
+        }
+
+        fn stack_rank(&self, id: ImageId) -> u64 {
+            u64::from(id.0)
+        }
+    }
+
+    fn placed_at_origin(id: u32) -> felis_grid::images::ClientPlacement {
+        felis_grid::images::ClientPlacement {
+            image_id: ImageId(id),
+            placement_id: None,
+            anchor_row: 1,
+            anchor_col: 1,
+            cols: 0,
+            rows: 0,
+            source: None,
+            z_index: 0,
+            requested: None,
+            serial: None,
+        }
+    }
+
+    /// The pixel at the middle of the image placed at the grid origin.
+    fn image_center(renderer: &mut Renderer, frame_width: u32) -> [u8; 4] {
+        let mut out = Vec::new();
+        renderer.read_frame(&mut out).expect("readback");
+        let mid = RGB_SIDE / 2;
+        let i = ((mid * frame_width + mid) * 4) as usize;
+        [out[i], out[i + 1], out[i + 2], out[i + 3]]
+    }
+
+    /// mpv's `--vo=kitty` stacks each frame over the last: the hidden one
+    /// is not uploaded, yet paints once whatever covered it goes away.
+    #[cfg(not(windows))]
+    #[test]
+    #[ignore = "needs a GPU adapter; `just test-gpu` runs it on lavapipe"]
+    fn an_rgb_image_hidden_on_arrival_paints_once_uncovered() {
+        for mode in [None, Some(UploadMode::Staged)] {
+            let (cols, rows) = (8u16, 4u16);
+            let mut renderer =
+                offscreen_in_mode(&new_instance(), mode, 8, 8, RendererConfig::default());
+            let m = renderer.cell_metrics();
+            let width = u32::from(cols) * m.width;
+            renderer.resize(width, u32::from(rows) * m.height);
+            let mut grid = felis_grid::Grid::new(rows, cols);
+            felis_vt::Parser::new().advance(&mut grid, b"\x1b[?25l");
+            let images = RgbImages::new(&[(1, [0, 0, 0xFF]), (2, [0xFF, 0, 0])]);
+            let cell = (m.width as f32, m.height as f32);
+            let mut layout = ImageLayout::new();
+
+            let stacked = [placed_at_origin(1), placed_at_origin(2)];
+            layout.rebuild(grid.screen(), &images, &stacked, &[], cell, 0);
+            renderer
+                .render(
+                    grid.screen(),
+                    &[ImageId(1), ImageId(2)],
+                    &images,
+                    &layout,
+                    0,
+                    0,
+                )
+                .expect("an offscreen render has no surface to lose");
+            assert_eq!(
+                image_center(&mut renderer, width),
+                [0xFF, 0, 0, 0xFF],
+                "{mode:?}"
+            );
+
+            layout.rebuild(grid.screen(), &images, &stacked[..1], &[], cell, 0);
+            renderer
+                .render(grid.screen(), &[], &images, &layout, 0, 0)
+                .expect("an offscreen render has no surface to lose");
+            assert_eq!(
+                image_center(&mut renderer, width),
+                [0, 0, 0xFF, 0xFF],
+                "{mode:?}"
+            );
+        }
     }
 }

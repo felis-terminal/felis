@@ -17,7 +17,7 @@ use wgpu::{BindGroup, BindGroupLayout, Device, Texture, TextureFormat, TextureVi
 use crate::{
     buffer_ring::UploadMode,
     gpu_resources,
-    texture_upload::{TexelLayout, TextureUploader},
+    texture_upload::{TexelLayout, Texels, TextureUploader},
 };
 
 pub struct GlyphCache {
@@ -193,8 +193,10 @@ impl GlyphCache {
                 layout,
                 [upload.alloc.x, upload.alloc.y],
                 [upload.alloc.width, upload.alloc.height],
-                upload.pixels.as_bytes(),
-                bytes_per_row,
+                Texels::Packed {
+                    bytes: upload.pixels.as_bytes(),
+                    bytes_per_row,
+                },
             );
         }
     }

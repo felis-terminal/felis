@@ -15,7 +15,7 @@ use wgpu::{
 use crate::{
     buffer_ring::UploadMode,
     gpu_resources,
-    texture_upload::{TexelLayout, TextureUploader},
+    texture_upload::{TexelLayout, Texels, TextureUploader},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -125,10 +125,6 @@ pub struct ImageAtlas {
     sampler: Sampler,
     gpu: Option<ImageAtlasGpu>,
     upload_mode: UploadMode,
-    /// Reused across frames: a video producer (mpv `t=s`) re-uploads a
-    /// multi-megabyte frame 24-30 times a second, and a fresh `Vec` per
-    /// frame page-faults ~15 MiB each time.
-    upload_scratch: Vec<u8>,
 }
 
 impl ImageAtlas {
@@ -145,7 +141,6 @@ impl ImageAtlas {
             sampler,
             gpu: None,
             upload_mode,
-            upload_scratch: Vec::new(),
         }
     }
 
@@ -240,13 +235,19 @@ impl ImageAtlas {
             // pass re-uploads).
             return Some(slot);
         };
+        let texels = match format {
+            ImageFormat::Rgb24 => Texels::Rgb(pixels),
+            ImageFormat::Rgba32 => Texels::Packed {
+                bytes: pixels,
+                bytes_per_row: width * 4,
+            },
+        };
         uploader.write(
             &gpu.texture,
             TexelLayout::Rgba8,
             [origin_x, origin_y],
             [width, height],
-            rgba_pixels(format, width, height, pixels, &mut self.upload_scratch),
-            width * 4,
+            texels,
         );
         Some(slot)
     }
@@ -258,42 +259,22 @@ impl ImageAtlas {
     }
 }
 
-/// `src` as `Rgba32`: `Rgb24` expands into `scratch` with `α = 0xFF`, and `Rgba32` is
-/// borrowed as is.
+/// One opaque RGBA texel in `dst` per RGB triple of `src`; texels past
+/// the end of `src` are transparent black, so a truncated frame shows
+/// black instead of panicking.
 ///
-/// Uses fixed-stride chunks to vectorize. A payload shorter than `width * height * 3` leaves
-/// the tail zero-filled so truncated frames show black instead of panicking.
-pub fn rgba_pixels<'a>(
-    format: ImageFormat,
-    width: u32,
-    height: u32,
-    src: &'a [u8],
-    scratch: &'a mut Vec<u8>,
-) -> &'a [u8] {
-    const RGB: usize = ImageFormat::Rgb24.bytes_per_pixel();
-    const RGBA: usize = ImageFormat::Rgba32.bytes_per_pixel();
-
-    match format {
-        ImageFormat::Rgba32 => src,
-        ImageFormat::Rgb24 => {
-            let pixel_count = (width as usize) * (height as usize);
-            scratch.clear();
-            scratch.resize(pixel_count * RGBA, 0);
-            for (s, d) in src
-                .as_chunks::<RGB>()
-                .0
-                .iter()
-                .zip(scratch.as_chunks_mut::<RGBA>().0)
-                .take(pixel_count)
-            {
-                d[0] = s[0];
-                d[1] = s[1];
-                d[2] = s[2];
-                d[3] = 0xFF;
-            }
-            scratch
-        }
+/// Fixed-stride chunks let the loop vectorize.
+pub fn expand_rgb(src: &[u8], dst: &mut [u8]) {
+    let (dst, _) = dst.as_chunks_mut::<4>();
+    let (src, _) = src.as_chunks::<3>();
+    let n = src.len().min(dst.len());
+    for (d, s) in dst[..n].iter_mut().zip(src) {
+        d[0] = s[0];
+        d[1] = s[1];
+        d[2] = s[2];
+        d[3] = 0xFF;
     }
+    dst[n..].fill([0; 4]);
 }
 
 #[cfg(test)]
@@ -427,11 +408,10 @@ mod tests {
         assert_eq!(slot.uv_min, slot.uv_max);
     }
 
-    /// The reference expansion: one RGBA pixel per cell of the declared
-    /// `width * height`, with a short payload's tail left transparent
-    /// black rather than panicking.
-    fn expand_rgb(width: u32, height: u32, src: &[u8]) -> Vec<u8> {
-        let mut out = vec![0u8; (width as usize) * (height as usize) * 4];
+    /// The reference expansion: one RGBA pixel per destination texel,
+    /// with a short payload's tail left transparent black.
+    fn reference_expand(texels: usize, src: &[u8]) -> Vec<u8> {
+        let mut out = vec![0u8; texels * 4];
         for (px, chunk) in out
             .as_chunks_mut::<4>()
             .0
@@ -445,23 +425,14 @@ mod tests {
 
     proptest! {
         #[test]
-        fn rgba_pixels_expands_rgb_and_passes_rgba_through(
-            width in 0u32..8,
-            height in 0u32..8,
+        fn expand_rgb_widens_to_opaque_rgba_over_any_prior_contents(
+            texels in 0usize..64,
             src in prop::collection::vec(any::<u8>(), 0..96),
-            dirty in prop::collection::vec(any::<u8>(), 0..96),
+            dirty in any::<u8>(),
         ) {
-            let mut scratch = dirty;
-            prop_assert_eq!(
-                rgba_pixels(ImageFormat::Rgba32, width, height, &src, &mut scratch),
-                &src[..]
-            );
-
-            let mut scratch = vec![0xAAu8; 7];
-            prop_assert_eq!(
-                rgba_pixels(ImageFormat::Rgb24, width, height, &src, &mut scratch),
-                &expand_rgb(width, height, &src)[..]
-            );
+            let mut dst = vec![dirty; texels * 4];
+            expand_rgb(&src, &mut dst);
+            prop_assert_eq!(dst, reference_expand(texels, &src));
         }
     }
 }
