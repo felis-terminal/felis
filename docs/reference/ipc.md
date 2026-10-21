@@ -830,7 +830,8 @@ later entry winning. Anything invalid, and a breach of the `env_base` caps ("Sem
 after attach, reports the window's configured colors and palette slots. The daemon stores each report against its
 subscriber and answers a query from the first window in the candidate chain that has sent one: the last window input
 owner, then the remaining windows in reverse attach order, scripted `Ops` subscribers never. The chain is re-resolved
-after every report, attach, detach, and ownership transfer, and an empty chain answers with the compiled-in fallback
+after every report, attach, detach, and ownership transfer; a facet no candidate has reported keeps its last resolved
+value, so only a session no window has ever reported to answers with the compiled-in fallback
 ([session-lifecycle.md "Client-derived presentation state"](../explanation/architecture/session-lifecycle.md)).
 
 `InputFence` is a barrier over this connection's earlier `Input` frames, answered by `InputAccepted` on the fence's own

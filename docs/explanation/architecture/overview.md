@@ -340,7 +340,7 @@ configured palette slots on attach (`SessionToDaemonMsg::ConfigureTheme`) and it
 `DSR ? 996 n` must answer with the colors the window paints, and the program talks to the daemon, not the client. The
 daemon stores the reports opaquely (it still never interprets a color) and **per window**, then resolves the one answer
 a query gets along a fixed candidate chain. Which mirror's colors a program sees is therefore a property of the chain,
-not of whose attach frame landed last, and an empty chain answers with the compiled-in fallback
+not of whose attach frame landed last, and a parked session keeps answering what the chain last resolved
 ([session-lifecycle.md](session-lifecycle.md) "Client-derived presentation state").
 
 #### The daemon is font-blind

@@ -156,9 +156,10 @@ The rectangle checksum query, DECRQCRA, shares this bounds model; its reply is s
   SUB are the exception: they cancel the sequence before it is dispatched, as they cancel any other, so the pen keeps
   its link.
 - `OSC 10 / 11 / 12`: default fg / bg / cursor color. A `?` query reports the attached client's configured color (so a
-  background detector reads felis's real surface, not the xterm baseline); a running program's set still wins, and a
-  bare daemon with no client attached falls back to xterm's default pair (fg/cursor black, bg white). See
-  [`session-lifecycle.md`](../../explanation/architecture/session-lifecycle.md) "Attach".
+  background detector reads felis's real surface, not the xterm baseline); a running program's set still wins, a parked
+  session keeps answering the configured colors it last resolved, and a session no client has reported to falls back to
+  xterm's default pair (fg/cursor black, bg white). See
+  [`session-lifecycle.md`](../../explanation/architecture/session-lifecycle.md) "Client-derived presentation state".
 - `OSC 52`: clipboard write and query. The **write** to the system clipboard is the config-gated part (off by default;
   see [input.md](../../explanation/input.md)). A `?` **query** never reads the OS clipboard (that read is not
   implemented, REQ-802); it answers only from a daemon-local mirror holding the values the session itself most recently

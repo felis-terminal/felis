@@ -877,8 +877,8 @@ fn resolve_post_shader(cfg: &config::EffectiveConfig) -> Option<String> {
 }
 
 /// Sent right after every attach: the daemon answers `OSC 4 ; n ; ?` and
-/// `OSC 10/11/12 ; ?` from it, and clears it with the last detach, so a
-/// session switch re-reports it to the new session's grid.
+/// `OSC 10/11/12 ; ?` from it per session, so a session switch re-reports
+/// it to the new session's grid.
 pub(crate) fn configure_theme_frame(
     cfg: &RendererConfig,
 ) -> Result<OutgoingFrame, felis_transport::TransportError> {

@@ -10,6 +10,12 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 
 ## [Unreleased]
 
+### Fixed
+
+- A program that follows the OS light/dark preference, such as Neovim, no longer switches to its light theme while its
+  session has no window attached, for example behind a session picker. A session without a window keeps answering color
+  queries with the colors and preference it last answered with.
+
 ## [0.3.0] - 2026-10-20
 
 Every felis crate is now on crates.io, sessions report more about what runs in them, and fonts and scrollback behave as
