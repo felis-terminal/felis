@@ -33,6 +33,7 @@ struct Scenario {
     search: Option<SearchOverlay>,
     confirm: Option<ConfirmOverlay>,
     link_preview: Option<LinkPreviewOverlay>,
+    minimum_contrast: Option<f32>,
 }
 
 /// The overlay priming `Renderer::populate_overlay_glyphs` does against
@@ -91,7 +92,10 @@ fn paint(s: &Scenario) -> InstanceBuffers {
         link_preview: s.link_preview.as_ref(),
     };
     let mut cache = RowCache::new(1 << 28);
-    let theme = ResolvedTheme::new(&Theme::default());
+    let theme = ResolvedTheme::new(&Theme {
+        minimum_contrast: s.minimum_contrast.unwrap_or(1.0),
+        ..Theme::default()
+    });
     let metrics = index.cell_metrics();
     let (out, _) = cache.paint_frame(screen, metrics, &theme, &index, &shape_frame, &frame);
     InstanceBuffers {
@@ -176,26 +180,33 @@ fn assert_golden(name: &str, s: &Scenario) {
 
 #[test]
 fn sgr_colors_faint_conceal_reverse_and_a_linear_selection_paint_as_pinned() {
-    assert_golden(
-        "sgr_colors",
-        &Scenario {
-            rows: 5,
-            cols: 16,
-            input: concat!(
-                "plain \x1b[31mred\x1b[42mgrn\x1b[0m \x1b[91mbri\x1b[0m\r\n",
-                "\x1b[38;5;196;48;5;21m256\x1b[0m \x1b[38;2;10;200;30;48;2;90;0;90mtrue\x1b[0m\r\n",
-                "\x1b[7mrev\x1b[27m \x1b[2mfaint\x1b[22m \x1b[8mhide\x1b[0m\r\n",
-                "\x1b[1mbold\x1b[0m \x1b[3mital\x1b[0m \x1b[2;7mfr\x1b[0m\r\n",
-                "\x1b[2 qblock",
-            ),
-            selection: Some(SelectionRange {
-                start: (2, 8),
-                end: (3, 3),
-                rectangle: false,
-            }),
-            ..Scenario::default()
-        },
-    );
+    assert_golden("sgr_colors", &sgr_colors(None));
+}
+
+#[test]
+fn the_sgr_colors_screen_at_a_minimum_contrast_of_4_5_paints_as_pinned() {
+    assert_golden("sgr_colors_minimum_contrast", &sgr_colors(Some(4.5)));
+}
+
+fn sgr_colors(minimum_contrast: Option<f32>) -> Scenario {
+    Scenario {
+        rows: 5,
+        cols: 16,
+        input: concat!(
+            "plain \x1b[31mred\x1b[42mgrn\x1b[0m \x1b[91mbri\x1b[0m\r\n",
+            "\x1b[38;5;196;48;5;21m256\x1b[0m \x1b[38;2;10;200;30;48;2;90;0;90mtrue\x1b[0m\r\n",
+            "\x1b[7mrev\x1b[27m \x1b[2mfaint\x1b[22m \x1b[8mhide\x1b[0m\r\n",
+            "\x1b[1mbold\x1b[0m \x1b[3mital\x1b[0m \x1b[2;7mfr\x1b[0m\r\n",
+            "\x1b[2 qblock",
+        ),
+        selection: Some(SelectionRange {
+            start: (2, 8),
+            end: (3, 3),
+            rectangle: false,
+        }),
+        minimum_contrast,
+        ..Scenario::default()
+    }
 }
 
 #[test]

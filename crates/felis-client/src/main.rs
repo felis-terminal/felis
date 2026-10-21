@@ -830,6 +830,10 @@ fn renderer_config_from(cfg: &config::EffectiveConfig) -> RendererConfig {
             let a = cfg.window.clamped_opacity();
             (a < 1.0).then_some(a)
         },
+        theme_minimum_contrast: {
+            let ratio = cfg.theme.clamped_minimum_contrast();
+            (ratio > 1.0).then_some(ratio)
+        },
         post_shader_wgsl: resolve_post_shader(cfg),
         font_files: Vec::new(),
     }
