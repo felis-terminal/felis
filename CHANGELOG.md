@@ -14,7 +14,8 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 
 - **Shell integration**: `share/felis/shell-integration/ssh.bash`, `ssh.zsh` and `ssh.fish` define an `ssh` function
   that installs the `xterm-felis` terminfo entry on the remote host before each interactive login, and logs in with
-  `TERM=xterm-256color` after a warning where it cannot.
+  `TERM=xterm-256color` after a warning where it cannot. The home-manager module sources it with
+  `programs.felis.enableSshIntegration`.
 
 ### Fixed
 

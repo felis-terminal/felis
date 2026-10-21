@@ -96,6 +96,15 @@ in
       '';
     };
 
+    enableSshIntegration = lib.mkEnableOption "" // {
+      description = ''
+        Sources the package's `ssh` function in bash, zsh and fish, which
+        installs the `xterm-felis` terminfo entry on the remote host before
+        each interactive login from a felis session. See
+        {file}`docs/how-to/fix-terminfo-problems.md`.
+      '';
+    };
+
     settings = lib.mkOption {
       type = tomlFormat.type;
       default = { };
@@ -215,11 +224,23 @@ in
       };
 
       # After the default order, where prompt themes rebuild `PS1`: the script's marks must wrap the theme's prompt.
-      programs.zsh.initContent = lib.mkIf cfg.enableZshIntegration (
-        lib.mkOrder 1500 ''
-          source ${cfg.package}/share/felis/shell-integration/felis.zsh
-        ''
-      );
+      programs.zsh.initContent = lib.mkMerge [
+        (lib.mkIf cfg.enableZshIntegration (
+          lib.mkOrder 1500 ''
+            source ${cfg.package}/share/felis/shell-integration/felis.zsh
+          ''
+        ))
+        (lib.mkIf cfg.enableSshIntegration ''
+          source ${cfg.package}/share/felis/shell-integration/ssh.zsh
+        '')
+      ];
+
+      programs.bash.initExtra = lib.mkIf cfg.enableSshIntegration ''
+        source ${cfg.package}/share/felis/shell-integration/ssh.bash
+      '';
+      programs.fish.interactiveShellInit = lib.mkIf cfg.enableSshIntegration ''
+        source ${cfg.package}/share/felis/shell-integration/ssh.fish
+      '';
     })
 
     (lib.mkIf (ncfg.enable && pkgs.stdenv.hostPlatform.isDarwin) {

@@ -218,8 +218,8 @@
         # Evaluates module options during `nix flake check`.
         # `package` is stubbed so this check evaluates the module rather than
         # building felis (gated by packages.felis; the cargo work here is msrv's).
-        # `settings`, `notifications` and the zsh integration are populated to exercise TOML generation,
-        # systemd/launchd units and the generated .zshrc.
+        # `settings`, `notifications` and the shell integrations are populated to exercise TOML generation,
+        # systemd/launchd units and the generated shell startup files.
         # stylix stays out to avoid carrying a Stylix flake input for an optional target.
         home-manager-module =
           (inputs.home-manager.lib.homeManagerConfiguration {
@@ -246,8 +246,11 @@
                   };
                   notifications.enable = true;
                   enableZshIntegration = true;
+                  enableSshIntegration = true;
                 };
                 programs.zsh.enable = true;
+                programs.bash.enable = true;
+                programs.fish.enable = true;
               }
             ];
           }).activationPackage;

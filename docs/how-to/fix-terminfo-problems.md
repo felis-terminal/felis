@@ -66,6 +66,9 @@ if command -q felis
 end
 ```
 
+With the home-manager module, set `programs.felis.enableSshIntegration = true;` instead; it sources the file in each
+shell home-manager configures.
+
 From then on, `ssh <host>` in a felis window opens a short second connection that compiles the entry into the remote
 `~/.terminfo`, then logs in as usual. Where that fails, for example on a host without `tic`, it prints a warning and
 logs in with `TERM=xterm-256color`. Commands such as `ssh <host> make` and `scp` run unchanged; the exact conditions are
