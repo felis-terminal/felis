@@ -617,9 +617,10 @@ impl App {
         if !self.admit_paste(bytes.len()) {
             return;
         }
-        // REQ-804: a multi-line paste with bracketed-paste off is a
-        // shell-injection vector. The shadow's mirror of `?2004` is the
-        // gate: under bracketed paste the text arrives framed and inert.
+        // REQ-804: with bracketed-paste off, a line break or other control
+        // byte in the paste acts as a typed key. The shadow's mirror of
+        // `?2004` is the gate: under bracketed paste the text arrives
+        // framed and inert.
         if felis_client_core::confirm::paste_needs_confirmation(
             self.shadow.bracketed_paste(),
             bytes,

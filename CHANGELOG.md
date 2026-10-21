@@ -19,6 +19,9 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 
 ### Fixed
 
+- A paste into a program that has not enabled bracketed paste now asks for confirmation when it contains any C0 control
+  character other than tab, such as `^O`, `^C` or `ESC`, not only when it contains a line break. Those bytes act as
+  typed keys, and some run the shell's command line without a newline.
 - A program that follows the OS light/dark preference, such as Neovim, no longer switches to its light theme while its
   session has no window attached, for example behind a session picker. A session without a window keeps answering color
   queries with the colors and preference it last answered with.

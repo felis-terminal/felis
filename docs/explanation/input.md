@@ -130,9 +130,9 @@ byte-for-byte mode exists for the binding whose payload _is_ a backslash. An unr
 binding instead of reaching the PTY as its own spelling, so a typo fails where the user can see it.
 
 Beyond that decoding there is no shell expansion, no command substitution, and no nested binding. Bracketed-paste
-wrapping is not applied either: the bytes look like a typed sequence to the running program, and a multi-line
-`send_string` does not arm the paste confirmation bar, whose threat model is hostile output rather than the user's own
-keymap.
+wrapping is not applied either: the bytes look like a typed sequence to the running program, and a `send_string` with a
+line break or control byte does not arm the paste confirmation bar, whose threat model is hostile output rather than the
+user's own keymap.
 
 #### `Ipc` dispatches to a closed set of daemon operations
 
@@ -501,16 +501,22 @@ empty is not one the user can predict.
 
 ## Confirmation bar
 
-The two destructive gates, the `kill_session` chord and the multi-line unbracketed paste (REQ-804), share one dialog
-surface: a one-line question along the window's bottom edge, on the same chrome row the search bar uses, tinted to the
-warning register so it never reads as a search. Its key handling is [keybindings](../reference/keybindings.md) §
+The two destructive gates, the `kill_session` chord and the unbracketed paste of control bytes (REQ-804), share one
+dialog surface: a one-line question along the window's bottom edge, on the same chrome row the search bar uses, tinted
+to the warning register so it never reads as a search. Its key handling is [keybindings](../reference/keybindings.md) §
 "Confirmation bar". Enter deliberately cancels rather than confirms: the prompt interrupts typing, and the likeliest
 in-flight keystroke at a paste prompt is the newline the dialog exists to intercept. A session switch clears a pending
 question, since the question the user read would not be the question `y` answers.
 
 The paste gate reads the shadow screen's mirror of `?2004`. Under bracketed paste the application receives the text
-framed and inert, so no dialog interrupts; with the mode off, a line break in the pasted text (`\n` or `\r`) acts as
-Enter at the shell, which is the injection the question exists to catch. The parked bytes ship verbatim on confirm.
+framed and inert, so no dialog interrupts; with the mode off, every byte arrives as a typed key. A line break (`\n` or
+`\r`) acts as Enter at the shell, and other C0 controls are just as live: `^O` runs the line in bash and zsh, `^C` and
+`^D` cancel or exit, and `ESC` starts a key sequence. The question therefore fires on any C0 control except HT, which
+pasted code is full of and which only triggers completion. The parked bytes ship verbatim on confirm.
+
+Stripping the controls instead of asking is rejected: the bytes are the user's clipboard, and a silent edit would change
+what a deliberate paste of a control sequence does. The daemon's unbracketed framing stays a pass-through as well, so
+`felis sessions send` delivers exactly the bytes a script wrote.
 
 The same row carries the window's one-shot refusal notices, such as a paste past `MAX_PASTE_BYTES`
 ([ipc.md](../reference/ipc.md) "Semantic limits"). A refusal that only reaches the log is invisible where it matters:

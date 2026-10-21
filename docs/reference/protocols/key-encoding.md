@@ -150,8 +150,8 @@ so Option-arrow word motions still work in shells while Cmd-W still closes the w
 - Bracketed paste (`?2004h`) is supported and starts off; `CSI ? 2004 h` turns it on. Pasted text is wrapped in
   `ESC [ 200~ ... ESC [ 201~`, and every C0 control in it except HT, LF and CR is removed first, so the text cannot
   close the bracket itself.
-- With bracketed-paste mode off, pasted text is sent unframed. (The multi-line paste confirmation policy is client-side;
-  see [input.md](../../explanation/input.md).)
+- With bracketed-paste mode off, pasted text is sent unframed. (The confirmation for a paste carrying control bytes is
+  client-side; see [input.md](../../explanation/input.md).)
 
 ## Limits
 
