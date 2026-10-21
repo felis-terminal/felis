@@ -99,6 +99,7 @@
       "default": {
         "backdrop": "none",
         "decorations": true,
+        "macos_option_as_alt": false,
         "opacity": 1.0,
         "title_prefix": null
       }
@@ -1078,6 +1079,11 @@
           "description": "Whether the OS-drawn window chrome (title bar, borders, system buttons)\nis shown. `true` (default) keeps native decorations; `false` strips them.\nOn macOS the window keeps its rounded corners and shadow. The terminal\npaints no replacement chrome.",
           "type": "boolean",
           "default": true
+        },
+        "macos_option_as_alt": {
+          "description": "macOS: whether Option acts as Alt (`false` by default). `false`\nlets Option compose characters (German Option+L types `@`) and\nsends them without Alt; `true` sends Option+B as Alt+B (`ESC b`)\nand gives up those characters. Ignored on other platforms.",
+          "type": "boolean",
+          "default": false
         },
         "opacity": {
           "description": "Background opacity in `0.0..=1.0` (`1.0` default).\n\nOnly the default background bleeds through; explicit cell backgrounds\nstay solid. Decided once at startup: changing between opaque and\ntranslucent requires a restart. Clamped to `0.0..=1.0`.",

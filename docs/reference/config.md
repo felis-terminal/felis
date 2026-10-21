@@ -187,6 +187,12 @@ opacity = 0.95
 #   "tabbed"   (Windows DWMSBT_TABBEDWINDOW)
 backdrop = "none"
 
+# macOS: Option acts as Alt. Default: false, where Option composes the
+# layout's characters (German Option+L types "@") and reaches the
+# program without Alt. true sends Option+B as Alt+B (ESC b) and gives
+# up those characters. Ignored on other platforms.
+macos_option_as_alt = false
+
 [theme.palette]
 # Base 16 ANSI color overrides (#rrggbb).
 black          = "#1d1d22"
@@ -348,20 +354,21 @@ changes. Reloading may also be triggered via `Ctrl+Shift+R` (`reload` action).
 
 Live application by property:
 
-| Key                       | Live reload behavior                                                           |
-| ------------------------- | ------------------------------------------------------------------------------ |
-| `font.*`                  | Re-measures metrics and reflows grid. Resets active Ctrl+Wheel zoom.           |
-| `theme.*`, `cursor.color` | Repaints surface and updates presentation state.                               |
-| `cursor.blink*`           | Restarts blink timer immediately.                                              |
-| `mouse.scroll_multiplier` | Takes effect on next wheel event.                                              |
-| `shader.*`                | Rebuilds post-process pipeline.                                                |
-| `clipboard.*`             | Rebuilds clipboard subsystem.                                                  |
-| `window.title_prefix`     | Updates window title immediately.                                              |
-| `window.decorations`      | Toggles OS title bar and borders.                                              |
-| `window.opacity`          | Applies live within `< 1.0`. Toggling opaque vs translucent requires relaunch. |
-| `window.backdrop`         | Re-applies backdrop material on host window.                                   |
-| `[keymap]`                | Rebuilds active keybinding lookup tables.                                      |
-| `[client.<name>]`         | Re-applies keys modified in the active client overlay.                         |
+| Key                          | Live reload behavior                                                           |
+| ---------------------------- | ------------------------------------------------------------------------------ |
+| `font.*`                     | Re-measures metrics and reflows grid. Resets active Ctrl+Wheel zoom.           |
+| `theme.*`, `cursor.color`    | Repaints surface and updates presentation state.                               |
+| `cursor.blink*`              | Restarts blink timer immediately.                                              |
+| `mouse.scroll_multiplier`    | Takes effect on next wheel event.                                              |
+| `shader.*`                   | Rebuilds post-process pipeline.                                                |
+| `clipboard.*`                | Rebuilds clipboard subsystem.                                                  |
+| `window.title_prefix`        | Updates window title immediately.                                              |
+| `window.decorations`         | Toggles OS title bar and borders.                                              |
+| `window.opacity`             | Applies live within `< 1.0`. Toggling opaque vs translucent requires relaunch. |
+| `window.backdrop`            | Re-applies backdrop material on host window.                                   |
+| `window.macos_option_as_alt` | Takes effect on the next key press.                                            |
+| `[keymap]`                   | Rebuilds active keybinding lookup tables.                                      |
+| `[client.<name>]`            | Re-applies keys modified in the active client overlay.                         |
 
 On syntax errors during save, live reload preserves the previous valid in-memory configuration and logs warnings without
 crashing.

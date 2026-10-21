@@ -1781,6 +1781,26 @@ mod tests {
     }
 
     #[test]
+    fn option_composed_characters_arrive_as_typed_text() {
+        let none = Modifiers::empty();
+        for flags in [KittyKbdFlags::empty(), KittyKbdFlags::DISAMBIGUATE] {
+            for typed in ["@", "{", "\u{a0}"] {
+                let bytes = encode_no_app_cursor(&lit(typed), Some(typed), none, true, flags);
+                assert_eq!(
+                    bytes,
+                    Some(typed.as_bytes().to_vec()),
+                    "{typed:?} {flags:?}"
+                );
+            }
+        }
+        let flags = KittyKbdFlags::REPORT_ALL_AS_ESCAPES | KittyKbdFlags::REPORT_EVENT_TYPES;
+        let press = encode_no_app_cursor(&lit("@"), Some("@"), none, true, flags);
+        let release = encode_no_app_cursor(&lit("@"), None, none, false, flags);
+        assert_eq!(press, Some(b"\x1b[64u".to_vec()));
+        assert_eq!(release, Some(b"\x1b[64;1:3u".to_vec()));
+    }
+
+    #[test]
     fn multi_codepoint_associated_text_uses_colon_separator() {
         let flags = KittyKbdFlags::DISAMBIGUATE | KittyKbdFlags::REPORT_ASSOCIATED_TEXT;
         let bytes = encode_no_app_cursor(&lit("a"), Some("AB"), Modifiers::CONTROL, true, flags);

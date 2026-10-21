@@ -8,17 +8,18 @@ use felis_client_core::{
 use super::{
     ActiveEventLoop, App, AppEvent, ApplicationHandler, Arc, ClosedOutcome, ControlFlow, DragState,
     Duration, ElementState, GridMsg, ImageData, ImageId, ImageMsg, ImageSource, InputMsg, Instant,
-    KeyEvent, ModifiersState, MouseAction, MouseButton, MouseScrollDelta, OutgoingSender,
-    PipeState, PressRouting, Renderer, SearchDirection, SearchHitRecord, SearchToClientMsg,
-    SearchUiMode, Selection, SelectionMode, SessionHex, Surface, SurfaceError, SwitchState,
-    UserAttentionType, WheelEncoding, WindowEvent, WindowId, WinitMouseButton,
-    activation_matches_preview, activation_target, apply_window_backdrop, compose_window_title,
+    ModifiersState, MouseAction, MouseButton, MouseScrollDelta, OutgoingSender, PipeState,
+    PressRouting, Renderer, SearchDirection, SearchHitRecord, SearchToClientMsg, SearchUiMode,
+    Selection, SelectionMode, SessionHex, Surface, SurfaceError, SwitchState, UserAttentionType,
+    WheelEncoding, WindowEvent, WindowId, WinitMouseButton, activation_matches_preview,
+    activation_target, apply_option_as_alt, apply_window_backdrop, compose_window_title,
     daemon_closed_outcome, error, forwarded_press_dismisses_selection,
     grid_change_invalidates_selection, grid_msg_moves_hover_target, ime_commit_bytes, info, input,
     map_button, mem, open_url, should_start_selection, warn, wheel_arrow_bytes, wheel_buttons,
     wheel_encoding_for, wheel_pixels_to_rows, wheel_starts_new_stream, wheel_y_ticks,
     wheel_zoom_delta_px, window_attributes,
 };
+use crate::option_compose;
 
 fn apply_renderer_effect(renderer: &mut Renderer, effect: RendererEffect) {
     match effect {
@@ -73,6 +74,7 @@ impl ApplicationHandler<AppEvent> for App {
         // `macos_window`'s zPosition fix is what keeps the terminal above
         // the backdrop.
         apply_window_backdrop(window.as_ref(), self.backdrop, self.transparent);
+        apply_option_as_alt(window.as_ref(), self.macos_option_as_alt);
         let size = window.inner_size();
         // Before building the renderer, so `font_size_physical_px` already
         // reflects it: otherwise a Retina display rasterizes glyphs at half
@@ -208,6 +210,7 @@ impl ApplicationHandler<AppEvent> for App {
                 // us, leaving modifiers stuck.
                 if !focused {
                     self.modifiers = ModifiersState::empty();
+                    self.key_presses.clear();
                     self.update_mouse_cursor_icon();
                 }
                 self.redraw.request();
@@ -274,19 +277,21 @@ impl ApplicationHandler<AppEvent> for App {
                 ..
             } => self.on_mouse_input(state, winit_btn),
             WindowEvent::MouseWheel { delta, .. } => self.on_wheel(delta),
-            WindowEvent::KeyboardInput {
-                event:
-                    KeyEvent {
-                        logical_key,
-                        state,
-                        text,
-                        location,
-                        repeat,
-                        ..
-                    },
-                ..
-            } => {
-                let is_press = matches!(state, ElementState::Pressed);
+            WindowEvent::KeyboardInput { event, .. } => {
+                let is_press = matches!(event.state, ElementState::Pressed);
+                let kind = input::event_kind(event.state, event.repeat);
+                let Some(stroke) = self.key_presses.resolve(
+                    event.physical_key,
+                    kind,
+                    &event.logical_key,
+                    event.text.as_deref(),
+                    option_compose::text_with_all_modifiers(&event),
+                    self.modifiers,
+                ) else {
+                    return;
+                };
+                let key = &stroke.key;
+                let text = stroke.text.as_deref();
                 // A notice reports the previous keypress, so it dies with
                 // this one: cleared before dispatch, since the handlers
                 // below may raise a new one for the key being pressed.
@@ -298,17 +303,17 @@ impl ApplicationHandler<AppEvent> for App {
                 // An open confirmation bar owns the keyboard outright,
                 // chords included, so re-pressing `kill_session` or a paste
                 // chord can't stack a second question under the first.
-                if is_press && self.handle_confirm_key(&logical_key, text.as_deref()) {
+                if is_press && self.handle_confirm_key(key, text) {
                     return;
                 }
-                if is_press && self.dispatch_chord(&logical_key) {
+                if is_press && self.dispatch_chord(key, stroke.mods) {
                     return;
                 }
                 // Before the input encoder so the keys hit the search bar,
                 // not the program (REQ-607).
                 if is_press
                     && self.search.mode == SearchUiMode::Composing
-                    && self.handle_search_compose_key(&logical_key, text.as_deref())
+                    && self.handle_search_compose_key(key, text)
                 {
                     return;
                 }
@@ -316,16 +321,16 @@ impl ApplicationHandler<AppEvent> for App {
                 // they don't leak to the program.
                 if is_press
                     && self.search.mode == SearchUiMode::Active
-                    && self.handle_search_active_key(&logical_key, text.as_deref())
+                    && self.handle_search_active_key(key, text)
                 {
                     return;
                 }
                 self.ferry_key(input::key_event(
-                    &logical_key,
-                    text.as_deref(),
-                    self.modifiers,
-                    input::event_kind(state, repeat),
-                    location,
+                    key,
+                    text,
+                    stroke.mods,
+                    kind,
+                    event.location,
                 ));
             }
             WindowEvent::Ime(ime) => {

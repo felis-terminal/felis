@@ -51,6 +51,12 @@ user's next key. Encoding where the modes are authoritative removes the window r
 The byte-level forms of both modes and the modifier convention per platform are specified in
 [key-encoding](../reference/protocols/key-encoding.md).
 
+Whether macOS Option was Alt for a key press is the client's call, made before the press crosses the wire. Only the
+client sees whether the OS composed a character from Option; the encoder, given Alt and an ASCII character, rightly
+emits `ESC` and the character, which turns German Option+L into `ESC @`. Composing is the default because a layout that
+puts `@` or `{` behind Option has no other way to type it, and every peer macOS terminal composes by default; Option as
+meta for readline is the opt-in.
+
 Literal bytes keep their own message. `InputMsg::KeyBytes` carries what a caller means byte for byte:
 `sessions send --raw`, the `send_string` action, and a committed IME string. A paste has its own arm, because the daemon
 frames it under `?2004`, and a file drop's path takes that arm too: the path is inserted text, and the bracketed-paste
