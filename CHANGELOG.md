@@ -10,6 +10,12 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 
 ## [Unreleased]
 
+### Added
+
+- **Shell integration**: `share/felis/shell-integration/ssh.bash`, `ssh.zsh` and `ssh.fish` define an `ssh` function
+  that installs the `xterm-felis` terminfo entry on the remote host before each interactive login, and logs in with
+  `TERM=xterm-256color` after a warning where it cannot.
+
 ### Fixed
 
 - A program that follows the OS light/dark preference, such as Neovim, no longer switches to its light theme while its

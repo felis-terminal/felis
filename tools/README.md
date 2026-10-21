@@ -35,6 +35,8 @@ Each tool's tests sit beside it as `<tool>_test.py`; `just test-tools` runs them
   (`crates/felis-grid/src/uax29/tables.rs`, `crates/felis-shaping/src/presentation/tables.rs`) from the UCD the dev
   shell pins, behind `just unicode-tables` and its pre-commit hook. A Unicode bump changes that pin and unicode-width
   together; the cross-checks in the crates' tests catch a skew.
+- `tools/shell_integration/ssh_test.py` tests the shipped `ssh` function (`share/felis/shell-integration/ssh.*`) against
+  stub `ssh`, `infocmp`, and `tic` executables.
 - `tools/bench/criterion.py` drives Criterion runs for `just bench*` and the performance CI gate.
 - `tools/bench/crossterm.py` orchestrates cross-terminal measurements: it resolves the field, records provenance, runs
   suites, and writes the report.
