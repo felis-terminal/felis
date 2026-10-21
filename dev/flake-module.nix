@@ -129,6 +129,8 @@
         ) "dev/packages/gungraun-runner.nix pins ${runner.version} but Cargo.lock has gungraun ${locked}";
         runner;
 
+      toolsPython = pkgs.python3.withPackages (ps: [ ps.pytest ]);
+
       devTools =
         with pkgs;
         [
@@ -156,7 +158,7 @@
           zsh
           less
           neovim
-          python3
+          toolsPython
           yq-go
           buf
           protoc-gen-prost
@@ -406,16 +408,16 @@
             files = "^(dev/flake-module\\.nix|tools/unicode/gen_tables\\.py|crates/felis-grid/src/uax29/tables\\.rs|crates/felis-shaping/src/presentation/tables\\.rs)$";
             pass_filenames = false;
           };
-          prose-check-self-test = {
+          prose-check-tests = {
             enable = true;
-            name = "prose check self-test";
+            name = "prose check tests";
             description = "exercise every prose rule against its fixture when the checker changes";
             entry = toString (
-              pkgs.writeShellScript "felis-prose-check-self-test" ''
-                exec ${pkgs.python3}/bin/python3 tools/prose_check.py --self-test
+              pkgs.writeShellScript "felis-prose-check-tests" ''
+                exec ${toolsPython}/bin/python3 -m pytest -q tools/prose_check_test.py
               ''
             );
-            files = "^tools/prose_check\\.py$";
+            files = "^tools/prose_check(_test)?\\.py$";
             pass_filenames = false;
           };
         };
@@ -484,7 +486,7 @@
             pkgs.niks3
             pkgs.curl
             pkgs.jq
-            pkgs.python3
+            toolsPython
           ];
         };
       }

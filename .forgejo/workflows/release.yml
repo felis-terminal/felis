@@ -30,9 +30,8 @@ jobs:
         # it points at, neither of which a depth-1 checkout carries.
         with:
           fetch-depth: 0
-      - name: the gate tells a good tag from a bad one (self-test)
-        run: nix develop -c python3 tools/release/verify.py --self-test
-      - run: nix develop -c python3 tools/release/crates.py --self-test
+      - name: the gate tells a good tag from a bad one
+        run: nix develop -c pytest tools/release/verify_test.py tools/release/crates_test.py
       - name: the tag is annotated, clean, and agrees with the manifests
         run: nix develop -c python3 tools/release/verify.py "$GITHUB_REF_NAME" "$GITHUB_SHA"
       - uses: ./.forgejo/actions/cargo-env
@@ -87,8 +86,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - name: the gate tells additive from breaking (self-test)
-        run: nix develop -c python3 tools/proto/compat.py --self-test
+      - name: the gate tells additive from breaking
+        run: nix develop -c pytest tools/proto/compat_test.py
       - name: buf breaking against the newest release
         run: nix develop -c python3 tools/proto/compat.py
 
@@ -452,8 +451,8 @@ jobs:
             fi
           } > release-notes.md
           cat release-notes.md
-      - name: the release publisher behaves (self-test)
-        run: nix develop .#publish -c python3 tools/release/publish.py --self-test
+      - name: the release publisher behaves
+        run: nix develop .#publish -c pytest tools/release/publish_test.py
       - name: create the release and attach its assets
         env:
           RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}

@@ -13,7 +13,6 @@ import urllib.parse
 from pathlib import Path
 
 USAGE = """usage: tools/release/homebrew.py <tag>
-       tools/release/homebrew.py --self-test
 
 Opens the pull request that moves the Homebrew formula in HOMEBREW_TAP to the
 source archive of <tag>, as a draft when the packaging changed since the
@@ -246,9 +245,6 @@ def bump(tap: Tap, tag: str, url: str, sha256: str, body: str, draft: bool) -> N
 
 
 def main(argv: list[str]) -> int:
-    if argv == ["--self-test"]:
-        test = Path(__file__).with_name("homebrew_test.py")
-        os.execv(sys.executable, [sys.executable, str(test)])
     if len(argv) != 1 or argv[0].startswith("-"):
         print(USAGE, file=sys.stderr, end="")
         return 64

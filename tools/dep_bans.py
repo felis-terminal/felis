@@ -9,7 +9,6 @@ from pathlib import Path
 USAGE = """usage: tools/dep_bans.py
   checks every crate's production dependency closure against the
   "MUST NOT depend on" column of docs/reference/workspace.md
-  --self-test   run the hermetic fixture suite
 """
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -133,43 +132,7 @@ def check() -> int:
     return 0
 
 
-FIXTURE = """\
-felis-protocol v0.2.0 (/src/crates/felis-protocol)
-bytes v1.12.1
-serde v1.0.229
-serde_derive v1.0.229 (proc-macro)
-[build-dependencies]
-prost-build v0.14.4
-windows-sys v0.61.2
-libc v0.2.190
-libc v0.2.190 (*)
-"""
-
-
-def self_test() -> int:
-    failures = []
-    cases = (
-        ("ban hits across normal and build sections", OS, ["libc", "windows-sys"]),
-        ("crate root is not its own dependency", ("felis-protocol",), []),
-        ("names match exactly, not by prefix", ("serde_der", "windows"), []),
-        ("section headers are not crate names", ("[build-dependencies]",), []),
-    )
-    for name, bans, expected in cases:
-        got = violations(bans, FIXTURE)
-        if got != expected:
-            failures.append(f"{name}: expected {expected}, got {got}")
-    unknown = sorted(set(BANS) - {p.name for p in (ROOT / "crates").glob("felis-*")})
-    if unknown:
-        failures.append(f"BANS names crates absent from crates/: {unknown}")
-    for failure in failures:
-        print(f"FAIL {failure}")
-    print("dep-bans self-test: " + ("FAILED" if failures else "ok"))
-    return 1 if failures else 0
-
-
 def main(argv: list[str]) -> int:
-    if argv == ["--self-test"]:
-        return self_test()
     if argv:
         sys.stderr.write(USAGE)
         return 2

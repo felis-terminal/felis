@@ -11,7 +11,6 @@ import urllib.parse
 from pathlib import Path
 
 USAGE = """usage: tools/release/mirror.py <tag>
-       tools/release/mirror.py --self-test
 
 Waits for the Forgejo release of <tag> under MIRROR_SOURCE (a repository API
 base) and republishes its notes and assets on GitHub. Reads MIRROR_SOURCE,
@@ -203,9 +202,6 @@ def mirror(github: GitHub, source: dict, assets: list[Path]) -> None:
 
 
 def main(argv: list[str]) -> int:
-    if argv == ["--self-test"]:
-        test = Path(__file__).with_name("mirror_test.py")
-        os.execv(sys.executable, [sys.executable, str(test)])
     if len(argv) != 1 or argv[0].startswith("-"):
         print(USAGE, file=sys.stderr, end="")
         return 64

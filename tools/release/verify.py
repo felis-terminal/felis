@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 import subprocess
 import sys
@@ -11,7 +10,6 @@ from pathlib import Path
 
 USAGE = """usage: tools/release/verify.py <tag> [<commit>]
        tools/release/verify.py --identity [--bundled-client] <tag> <commit> <version-json>
-       tools/release/verify.py --self-test
 
 <tag> [<commit>]: refuses a tag that is not `v<major>.<minor>.<patch>` with an
 optional `-rc.<n>`, is lightweight, or does not point at <commit> (default
@@ -224,9 +222,6 @@ def main(argv: list[str]) -> int:
     if argv and argv[0] in {"-h", "--help"}:
         print(USAGE, file=sys.stderr, end="")
         return 64
-    if argv == ["--self-test"]:
-        test = Path(__file__).with_name("verify_test.py")
-        os.execv(sys.executable, [sys.executable, str(test)])
 
     identity = bool(argv and argv[0] == "--identity")
     bundled_client = identity and argv[1:2] == ["--bundled-client"]

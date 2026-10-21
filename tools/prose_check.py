@@ -376,97 +376,6 @@ def report(hits: list[Hit]) -> int:
     return 1 if hits else 0
 
 
-MD_FIXTURE = """# Sample page
-
-This line has an em dash — right here.
-
-Previously the daemon owned the grid.
-
-It's important to note that the socket is per user.
-
-See https://example.com/a/very/long/url/that/runs/past/eighty/columns/for/sure/really/ok
-
-| col | a -- b |
-
-```
-previously this was different
-```
-
-An `a — b` code span is fine.
-
-- **Term** — a glossary entry keeps its separator.
-
-<!-- prose-check: off -->
-previously — it is important to note
-<!-- prose-check: on -->
-
-This mentions previously but is skipped. prose-check: ignore
-"""
-
-RS_FIXTURE = """// Previously the client owned the buffer.
-fn a() {}
-/* this is safe because the lock is held */
-// an em dash — in a comment
-// for now, keep the retry loop
-// a `felis -- cmd` code span is fine
-let s = "previously — really";
-// temporary shim. prose-check: ignore
-fn z() {}
-// one
-// two
-// three
-// four
-// five
-// six
-fn b() {}
-// SAFETY: one
-// two
-// three
-// four
-// five
-// six
-fn c() {}
-/// one
-/// two
-/// three
-/// four
-/// five
-fn d() {}
-"""
-
-MD_EXPECTED = {
-    (3, "em-dash"),
-    (5, "history"),
-    (7, "filler"),
-}
-RS_EXPECTED = {
-    (1, "comment-history"),
-    (3, "comment-history"),
-    (4, "em-dash"),
-    (5, "comment-history"),
-    (10, "comment-length"),
-}
-
-
-def self_test() -> int:
-    failures = []
-    for name, kind, fixture, expected in (
-        ("markdown", "markdown", MD_FIXTURE, MD_EXPECTED),
-        ("rust", "rust", RS_FIXTURE, RS_EXPECTED),
-    ):
-        hits = check_file(name, kind, fixture.splitlines(), None)
-        got = {(hit.line, hit.rule) for hit in hits}
-        for missing in sorted(expected - got):
-            failures.append(f"{name}: expected {missing} and got no hit")
-        for extra in sorted(got - expected):
-            failures.append(f"{name}: unexpected hit {extra}")
-        print(f"{name} fixture: {len(got)} hit(s), {len(expected)} expected")
-    for failure in failures:
-        print(f"FAIL {failure}")
-    print("prose-check self-test: " + ("FAILED" if failures else "ok"))
-    return 1 if failures else 0
-
-
 def main(argv: list[str]) -> int:
     if os.environ.get("FELIS_PROSE_CHECK_SKIP") == "1":
         return 0
@@ -476,12 +385,8 @@ def main(argv: list[str]) -> int:
     parser.add_argument(
         "--all", action="store_true", help="check every line of the given files"
     )
-    parser.add_argument("--self-test", action="store_true", dest="self_test")
     parser.add_argument("files", nargs="*")
     args = parser.parse_args(argv)
-
-    if args.self_test:
-        return self_test()
 
     hits: list[Hit] = []
 

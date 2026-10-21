@@ -12,7 +12,6 @@ import urllib.request
 from pathlib import Path
 
 USAGE = """usage: tools/proto/compat.py [<base revision>]
-  --self-test   run the hermetic exit-code suite (tools/proto/compat_test.py)
 """
 NULL_SHA = "0" * 40
 ACK_SHA = re.compile(r"base: ([0-9a-f]{40})\s*")
@@ -50,7 +49,7 @@ class RefuseRedirects(urllib.request.HTTPRedirectHandler):
 
 
 def fetch_url(url: str, credential_origin: str) -> bytes:
-    """Read a URL, or raise. The self-test replaces this to stay offline."""
+    """Read a URL, or raise. The tests replace this to stay offline."""
     headers = {"User-Agent": USER_AGENT, "Accept": "*/*"}
     token = os.environ.get("FORGEJO_TOKEN")
     if token and origin_of(url) == credential_origin:
@@ -397,12 +396,6 @@ def main(argv: list[str]) -> int:
     if argv and argv[0] in {"-h", "--help"}:
         print(USAGE, file=sys.stderr, end="")
         return 64
-    if argv and argv[0] == "--self-test":
-        if len(argv) != 1:
-            print(USAGE, file=sys.stderr, end="")
-            return 64
-        test = Path(__file__).with_name("compat_test.py")
-        os.execv(sys.executable, [sys.executable, str(test)])
     if len(argv) > 1:
         print(USAGE, file=sys.stderr, end="")
         return 64

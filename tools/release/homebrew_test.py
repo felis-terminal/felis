@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Exit-code tests for tools/release/homebrew.py against a throwaway repo and a local fake GitHub."""
 
 from __future__ import annotations
@@ -11,10 +10,11 @@ import os
 import re
 import subprocess
 import sys
-import tempfile
 import threading
 import urllib.parse
 from pathlib import Path
+
+import pytest
 
 BUMP = Path(__file__).with_name("homebrew.py")
 REPOSITORY = "felis-terminal/felis"
@@ -86,7 +86,10 @@ class FakeGitHub:
         self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self.server.daemon_threads = True
         self.origin = "http://127.0.0.1:%d" % self.server.server_address[1]
-        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        # shutdown() waits out one poll interval, 0.5 s by default, on every teardown.
+        self.thread = threading.Thread(
+            target=self.server.serve_forever, args=(0.01,), daemon=True
+        )
         self.thread.start()
 
     def close(self) -> None:
@@ -170,274 +173,232 @@ class FakeGitHub:
         h.reply(404, {"message": "no route"})
 
 
-class Suite:
-    def __init__(self) -> None:
-        self.temporary = tempfile.TemporaryDirectory()
-        self.root = Path(self.temporary.name)
-        self.repo = self.root / "repo"
-        self.repo.mkdir()
-        self.failures = 0
-        self.cases = 0
-        self.github = FakeGitHub()
-        self.out = ""
+@pytest.fixture(scope="module")
+def repo(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    repo = tmp_path_factory.mktemp("repo")
 
-    def close(self) -> None:
-        self.github.close()
-        self.temporary.cleanup()
-
-    def git(self, *args: str) -> None:
+    def git(*args: str) -> None:
         subprocess.run(
-            ["git", "-C", str(self.repo), *args],
-            check=True,
-            stdout=subprocess.DEVNULL,
+            ["git", "-C", str(repo), *args], check=True, stdout=subprocess.DEVNULL
         )
 
-    def commit(self, path: str, text: str, *tags: str) -> None:
-        file = self.repo / path
+    def commit(path: str, text: str, tag: str) -> None:
+        file = repo / path
         file.parent.mkdir(parents=True, exist_ok=True)
         file.write_text(text)
-        self.git("add", path)
-        self.git("commit", "-q", "-m", f"change {path}")
-        for tag in tags:
-            self.git("tag", "-m", tag, tag)
+        git("add", path)
+        git("commit", "-q", "-m", f"change {path}")
+        git("tag", "-m", tag, tag)
 
-    def build_history(self) -> None:
-        self.git("init", "-q")
-        self.git("config", "user.email", "release@example.invalid")
-        self.git("config", "user.name", "release test")
-        self.git("config", "commit.gpgSign", "false")
-        self.git("config", "tag.gpgSign", "false")
-        self.commit("nix/package.nix", "{ }\n", "v0.1.0")
-        self.commit("crates/core.rs", "fn a() {}\n", "v0.1.1")
-        self.commit(
-            "share/applications/felis.desktop", "[Desktop Entry]\n", "v0.2.0-rc.1"
-        )
-        self.commit("crates/core.rs", "fn b() {}\n", "v0.2.0")
-        self.commit(
-            "crates/felis-daemon/terminfo/felis.terminfo", "xterm-felis|\n", "v0.2.1"
-        )
+    git("init", "-q")
+    git("config", "user.email", "release@example.invalid")
+    git("config", "user.name", "release test")
+    git("config", "commit.gpgSign", "false")
+    git("config", "tag.gpgSign", "false")
+    commit("nix/package.nix", "{ }\n", "v0.1.0")
+    commit("crates/core.rs", "fn a() {}\n", "v0.1.1")
+    commit("share/applications/felis.desktop", "[Desktop Entry]\n", "v0.2.0-rc.1")
+    commit("crates/core.rs", "fn b() {}\n", "v0.2.0")
+    commit("crates/felis-daemon/terminfo/felis.terminfo", "xterm-felis|\n", "v0.2.1")
+    return repo
 
-    def reset(self, formula: str = FORMULA) -> None:
-        self.github.branches = {"main": formula}
-        self.github.commits.clear()
-        self.github.pulls.clear()
-        self.github.archive_missing = False
-        self.github.seen.clear()
 
-    def record(self, passed: bool, name: str) -> None:
-        self.cases += 1
-        if passed:
-            print(f"  ok   {name}")
-            return
-        self.failures += 1
-        print(f"  FAIL {name}")
-        for line in self.out.splitlines():
-            print(f"       | {line}")
+@pytest.fixture
+def github():
+    github = FakeGitHub()
+    github.branches = {"main": FORMULA}
+    yield github
+    github.close()
 
-    def run_bump(self, *args: str, environment: dict[str, str] | None = None) -> int:
+
+@pytest.fixture
+def run_bump(github: FakeGitHub, repo: Path, tmp_path: Path):
+    def run(
+        *args: str, environment: dict[str, str] | None = None
+    ) -> subprocess.CompletedProcess[str]:
         env = os.environ.copy()
         env.update(
             {
                 "HOMEBREW_TAP": "felis-terminal/homebrew-tap",
-                "GITHUB_SERVER_URL": self.github.origin,
-                "GITHUB_API_URL": self.github.origin,
+                "GITHUB_SERVER_URL": github.origin,
+                "GITHUB_API_URL": github.origin,
                 "GITHUB_REPOSITORY": REPOSITORY,
                 "GH_TOKEN": TOKEN,
-                "RUNNER_TEMP": str(self.root),
+                "RUNNER_TEMP": str(tmp_path),
             }
         )
         env.update(environment or {})
-        result = subprocess.run(
+        return subprocess.run(
             [sys.executable, str(BUMP), *args],
-            cwd=self.repo,
+            cwd=repo,
             env=env,
             check=False,
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
         )
-        self.out = result.stdout
-        return result.returncode
 
-    def bumped(self, branch: str, tag: str) -> bool:
-        text = self.github.branches.get(branch, "")
-        url = f"{self.github.origin}/{REPOSITORY}/archive/refs/tags/{tag}.tar.gz"
-        return (
-            f'  url "{url}"\n' in text
-            and f'  sha256 "{ARCHIVE_SHA}"\n' in text
-            and "revision" not in text
-            and "bottle do" in text
+    return run
+
+
+def context(result: subprocess.CompletedProcess[str], github: FakeGitHub) -> str:
+    seen = "\n".join(f"  {method} {path}" for method, path, _ in github.seen)
+    return (
+        f"exit {result.returncode}\n{result.stdout}\nrequests:\n{seen}\n"
+        f"pulls: {github.pulls}\nbranches: {list(github.branches)}"
+    )
+
+
+def assert_bumped(github: FakeGitHub, branch: str, tag: str) -> None:
+    text = github.branches.get(branch, "")
+    url = f"{github.origin}/{REPOSITORY}/archive/refs/tags/{tag}.tar.gz"
+    assert f'  url "{url}"\n' in text, text
+    assert f'  sha256 "{ARCHIVE_SHA}"\n' in text, text
+    assert "revision" not in text, text
+    assert "bottle do" in text, text
+
+
+def formula_on_release(github: FakeGitHub, tag: str) -> str:
+    current = f"{github.origin}/{REPOSITORY}/archive/refs/tags/{tag}.tar.gz"
+    text = re.sub(r'(?m)^  url "[^"]*"$', f'  url "{current}"', FORMULA)
+    text = re.sub(r'(?m)^  sha256 "[0-9a-f]{64}"$', f'  sha256 "{ARCHIVE_SHA}"', text)
+    return text.replace("  revision 1\n", "")
+
+
+def assert_tap_untouched(
+    github: FakeGitHub, result: subprocess.CompletedProcess[str]
+) -> None:
+    assert not github.pulls, context(result, github)
+    assert list(github.branches) == ["main"], context(result, github)
+
+
+def test_a_release_without_packaging_changes_opens_a_ready_pull_request(
+    github, run_bump
+):
+    result = run_bump("v0.1.1")
+    assert result.returncode == 0, context(result, github)
+    assert_bumped(github, "bump-felis-0.1.1", "v0.1.1")
+    assert github.commits == [("bump-felis-0.1.1", "felis 0.1.1")]
+    assert len(github.pulls) == 1, context(result, github)
+    pull = github.pulls[0]
+    assert pull["title"] == "felis 0.1.1"
+    assert pull["base"] == "main"
+    assert pull["draft"] is False
+    assert github.branches["main"] == FORMULA
+
+
+def test_the_token_reaches_the_tap_api_and_never_the_log(github, run_bump):
+    result = run_bump("v0.1.1")
+    assert result.returncode == 0, context(result, github)
+    assert all(
+        auth == f"Bearer {TOKEN}"
+        for _, path, auth in github.seen
+        if path.startswith(TAP_API)
+    ), github.seen
+    assert TOKEN not in result.stdout, result.stdout
+
+
+def test_a_rerun_finds_the_open_pull_request_and_changes_nothing(github, run_bump):
+    first = run_bump("v0.1.1")
+    assert first.returncode == 0, context(first, github)
+    result = run_bump("v0.1.1")
+    assert result.returncode == 0, context(result, github)
+    assert len(github.pulls) == 1, context(result, github)
+    assert len(github.commits) == 1, context(result, github)
+
+
+def test_a_packaging_change_since_the_previous_final_release_opens_a_draft(
+    github, run_bump
+):
+    result = run_bump("v0.2.0")
+    assert result.returncode == 0, context(result, github)
+    assert_bumped(github, "bump-felis-0.2.0", "v0.2.0")
+    assert len(github.pulls) == 1, context(result, github)
+    pull = github.pulls[0]
+    assert pull["draft"] is True
+    assert "v0.1.1" in pull["body"], pull["body"]
+    assert "share/applications/felis.desktop" in pull["body"], pull["body"]
+
+
+def test_a_change_to_the_terminfo_source_the_formula_compiles_opens_a_draft(
+    github, run_bump
+):
+    result = run_bump("v0.2.1")
+    assert result.returncode == 0, context(result, github)
+    assert len(github.pulls) == 1, context(result, github)
+    pull = github.pulls[0]
+    assert pull["draft"] is True
+    assert "crates/felis-daemon/terminfo/felis.terminfo" in pull["body"], pull["body"]
+
+
+def test_a_branch_left_by_a_failed_run_is_finished_not_duplicated(github, run_bump):
+    github.branches["bump-felis-0.1.1"] = FORMULA
+    result = run_bump("v0.1.1")
+    assert result.returncode == 0, context(result, github)
+    assert_bumped(github, "bump-felis-0.1.1", "v0.1.1")
+    assert len(github.pulls) == 1, context(result, github)
+
+
+def test_the_first_release_has_nothing_to_compare_against_and_opens_a_ready_pull_request(
+    github, run_bump
+):
+    result = run_bump("v0.1.0")
+    assert result.returncode == 0, context(result, github)
+    assert len(github.pulls) == 1, context(result, github)
+    assert github.pulls[0]["draft"] is False
+
+
+def test_a_formula_already_on_the_release_is_left_alone(github, run_bump):
+    github.branches = {"main": formula_on_release(github, "v0.1.1")}
+    result = run_bump("v0.1.1")
+    assert result.returncode == 0, context(result, github)
+    assert_tap_untouched(github, result)
+
+
+def test_rerunning_an_older_release_never_moves_the_formula_back(github, run_bump):
+    github.branches = {"main": formula_on_release(github, "v0.1.1")}
+    result = run_bump("v0.1.0")
+    assert result.returncode == 0, context(result, github)
+    assert_tap_untouched(github, result)
+
+
+def test_rerunning_the_release_keeps_a_revision_the_tap_added_since(github, run_bump):
+    github.branches = {
+        "main": formula_on_release(github, "v0.1.1").replace(
+            '  license "Apache-2.0"\n', '  license "Apache-2.0"\n  revision 2\n'
         )
-
-    def cases_run(self) -> None:
-        self.build_history()
-
-        self.reset()
-        code = self.run_bump("v0.1.1")
-        pulls = self.github.pulls
-        self.record(
-            code == 0
-            and self.bumped("bump-felis-0.1.1", "v0.1.1")
-            and self.github.commits == [("bump-felis-0.1.1", "felis 0.1.1")]
-            and len(pulls) == 1
-            and pulls[0]["title"] == "felis 0.1.1"
-            and pulls[0]["base"] == "main"
-            and pulls[0]["draft"] is False
-            and self.github.branches["main"] == FORMULA,
-            f"a release without packaging changes opens a ready pull request (exit {code})",
-        )
-        self.record(
-            all(
-                auth == f"Bearer {TOKEN}"
-                for _, path, auth in self.github.seen
-                if path.startswith(TAP_API)
-            )
-            and all(TOKEN not in line for line in self.out.splitlines()),
-            "the token reaches the tap API and never the log",
-        )
-
-        code = self.run_bump("v0.1.1")
-        self.record(
-            code == 0 and len(self.github.pulls) == 1 and len(self.github.commits) == 1,
-            f"a rerun finds the open pull request and changes nothing (exit {code})",
-        )
-
-        self.reset()
-        code = self.run_bump("v0.2.0")
-        pulls = self.github.pulls
-        self.record(
-            code == 0
-            and self.bumped("bump-felis-0.2.0", "v0.2.0")
-            and len(pulls) == 1
-            and pulls[0]["draft"] is True
-            and "v0.1.1" in pulls[0]["body"]
-            and "share/applications/felis.desktop" in pulls[0]["body"],
-            f"a packaging change since the previous final release opens a draft (exit {code})",
-        )
-
-        self.reset()
-        code = self.run_bump("v0.2.1")
-        pulls = self.github.pulls
-        self.record(
-            code == 0
-            and len(pulls) == 1
-            and pulls[0]["draft"] is True
-            and "crates/felis-daemon/terminfo/felis.terminfo" in pulls[0]["body"],
-            f"a change to the terminfo source the formula compiles opens a draft (exit {code})",
-        )
-
-        self.reset()
-        self.github.branches["bump-felis-0.1.1"] = FORMULA
-        code = self.run_bump("v0.1.1")
-        self.record(
-            code == 0
-            and self.bumped("bump-felis-0.1.1", "v0.1.1")
-            and len(self.github.pulls) == 1,
-            f"a branch left by a failed run is finished, not duplicated (exit {code})",
-        )
-
-        self.reset()
-        code = self.run_bump("v0.1.0")
-        self.record(
-            code == 0
-            and len(self.github.pulls) == 1
-            and self.github.pulls[0]["draft"] is False,
-            f"the first release has nothing to compare against and opens a ready pull request (exit {code})",
-        )
-
-        self.reset()
-        current = f"{self.github.origin}/{REPOSITORY}/archive/refs/tags/v0.1.1.tar.gz"
-        on_main = re.sub(r'(?m)^  url "[^"]*"$', f'  url "{current}"', FORMULA)
-        on_main = re.sub(
-            r'(?m)^  sha256 "[0-9a-f]{64}"$', f'  sha256 "{ARCHIVE_SHA}"', on_main
-        )
-        on_main = on_main.replace("  revision 1\n", "")
-        self.reset(on_main)
-        code = self.run_bump("v0.1.1")
-        self.record(
-            code == 0
-            and not self.github.pulls
-            and list(self.github.branches) == ["main"],
-            f"a formula already on the release is left alone (exit {code})",
-        )
-
-        self.reset(on_main)
-        code = self.run_bump("v0.1.0")
-        self.record(
-            code == 0
-            and not self.github.pulls
-            and list(self.github.branches) == ["main"],
-            f"rerunning an older release never moves the formula back (exit {code})",
-        )
-
-        self.reset(
-            on_main.replace(
-                '  license "Apache-2.0"\n', '  license "Apache-2.0"\n  revision 2\n'
-            )
-        )
-        code = self.run_bump("v0.1.1")
-        self.record(
-            code == 0
-            and not self.github.pulls
-            and list(self.github.branches) == ["main"],
-            f"rerunning the release keeps a revision the tap added since (exit {code})",
-        )
-
-        self.reset()
-        code = self.run_bump("v0.2.0-rc.1")
-        self.record(
-            code == 0 and not self.github.seen,
-            f"a prerelease never reaches GitHub (exit {code})",
-        )
-
-        self.reset()
-        self.github.archive_missing = True
-        code = self.run_bump("v0.1.1")
-        self.record(
-            code == 1
-            and not self.github.pulls
-            and list(self.github.branches) == ["main"],
-            f"a missing source archive fails before the tap is touched (exit {code})",
-        )
-
-        self.reset(FORMULA.replace('  url "', '  # url "'))
-        code = self.run_bump("v0.1.1")
-        self.record(
-            code == 1
-            and not self.github.pulls
-            and list(self.github.branches) == ["main"],
-            f"a formula without one top-level url line is refused (exit {code})",
-        )
-
-        self.reset()
-        code = self.run_bump("v0.1.1", environment={"GH_TOKEN": ""})
-        self.record(
-            code == 1 and not self.github.seen,
-            f"a missing token fails (exit {code})",
-        )
-
-        code = self.run_bump()
-        self.record(code == 64, f"no tag prints usage (exit {code})")
-
-    def run(self) -> int:
-        self.cases_run()
-        if self.failures == 0:
-            print(f"release-homebrew self-test: all {self.cases} cases passed")
-            return 0
-        print(
-            f"release-homebrew self-test: {self.failures} of {self.cases} case(s) failed",
-            file=sys.stderr,
-        )
-        return 1
+    }
+    result = run_bump("v0.1.1")
+    assert result.returncode == 0, context(result, github)
+    assert_tap_untouched(github, result)
 
 
-def main() -> int:
-    suite = Suite()
-    try:
-        return suite.run()
-    finally:
-        suite.close()
+def test_a_prerelease_never_reaches_github(github, run_bump):
+    result = run_bump("v0.2.0-rc.1")
+    assert result.returncode == 0, context(result, github)
+    assert not github.seen, context(result, github)
 
 
-if __name__ == "__main__":
-    raise SystemExit(main())
+def test_a_missing_source_archive_fails_before_the_tap_is_touched(github, run_bump):
+    github.archive_missing = True
+    result = run_bump("v0.1.1")
+    assert result.returncode == 1, context(result, github)
+    assert_tap_untouched(github, result)
+
+
+def test_a_formula_without_one_top_level_url_line_is_refused(github, run_bump):
+    github.branches = {"main": FORMULA.replace('  url "', '  # url "')}
+    result = run_bump("v0.1.1")
+    assert result.returncode == 1, context(result, github)
+    assert_tap_untouched(github, result)
+
+
+def test_a_missing_token_fails(github, run_bump):
+    result = run_bump("v0.1.1", environment={"GH_TOKEN": ""})
+    assert result.returncode == 1, context(result, github)
+    assert not github.seen, context(result, github)
+
+
+def test_no_tag_prints_usage(github, run_bump):
+    result = run_bump()
+    assert result.returncode == 64, context(result, github)

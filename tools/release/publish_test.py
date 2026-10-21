@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Exit-code tests for tools/release/publish.py against a local fake forge."""
 
 from __future__ import annotations
@@ -9,10 +8,11 @@ import os
 import re
 import subprocess
 import sys
-import tempfile
 import threading
 import urllib.parse
 from pathlib import Path
+
+import pytest
 
 PUBLISH = Path(__file__).with_name("publish.py")
 REPOSITORY = "felis-terminal/felis"
@@ -68,7 +68,10 @@ class FakeForge:
         self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self.server.daemon_threads = True
         self.origin = "http://127.0.0.1:%d" % self.server.server_address[1]
-        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        # shutdown() waits out one poll interval, 0.5 s by default, on every teardown.
+        self.thread = threading.Thread(
+            target=self.server.serve_forever, args=(0.01,), daemon=True
+        )
         self.thread.start()
 
     def close(self) -> None:
@@ -189,220 +192,181 @@ class FakeForge:
         h.reply(404, {"message": "no route"})
 
 
-class Suite:
-    def __init__(self) -> None:
-        self.temporary = tempfile.TemporaryDirectory()
-        self.root = Path(self.temporary.name)
-        self.failures = 0
-        self.cases = 0
-        self.forge = FakeForge()
-        self.out = ""
+ASSETS = ["artifacts/felis-x86_64-linux.tar.gz", "artifacts/felis.proto"]
 
-    def close(self) -> None:
-        self.forge.close()
-        self.temporary.cleanup()
 
-    def record(self, passed: bool, name: str) -> None:
-        self.cases += 1
-        if passed:
-            print(f"  ok   {name}")
-            return
-        self.failures += 1
-        print(f"  FAIL {name}")
-        for line in self.out.splitlines():
-            print(f"       | {line}")
+@pytest.fixture
+def forge():
+    forge = FakeForge()
+    yield forge
+    forge.close()
 
-    def run_publish(
-        self, cwd: Path, *args: str, environment: dict[str, str] | None = None
-    ) -> int:
+
+@pytest.fixture
+def work(tmp_path: Path) -> Path:
+    work = tmp_path / "release"
+    (work / "artifacts").mkdir(parents=True)
+    (work / "release-notes.md").write_text("felis notes\n", encoding="utf-8")
+    for asset in ASSETS:
+        name = Path(asset).name
+        (work / asset).write_bytes(f"{name} bytes\r\n".encode())
+    return work
+
+
+@pytest.fixture
+def run_publish(forge: FakeForge, work: Path, tmp_path: Path):
+    def run(
+        *args: str, environment: dict[str, str] | None = None
+    ) -> subprocess.CompletedProcess[str]:
         env = os.environ.copy()
-        for key in ("FORGEJO_SERVER_URL", "GITHUB_REPOSITORY", "RELEASE_TOKEN"):
-            env.pop(key, None)
         env.update(
             {
-                "FORGEJO_SERVER_URL": self.forge.origin,
+                "FORGEJO_SERVER_URL": forge.origin,
                 "GITHUB_REPOSITORY": REPOSITORY,
                 "RELEASE_TOKEN": TOKEN,
-                "RUNNER_TEMP": str(self.root),
+                "RUNNER_TEMP": str(tmp_path),
             }
         )
         env.update(environment or {})
-        result = subprocess.run(
+        return subprocess.run(
             [sys.executable, str(PUBLISH), *args],
-            cwd=cwd,
+            cwd=work,
             env=env,
             check=False,
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
         )
-        self.out = result.stdout
-        return result.returncode
 
-    def reset_forge(self) -> None:
-        self.forge.releases.clear()
-        self.forge.files.clear()
-        self.forge.seen.clear()
-        self.forge.drop_upload = ""
-        self.forge.fail_upload = ""
-        self.forge.fail_lookup = False
-
-    # -- release ----------------------------------------------------------
-
-    def release_fixture(self) -> tuple[Path, list[str]]:
-        work = self.root / "release"
-        (work / "artifacts").mkdir(parents=True, exist_ok=True)
-        (work / "release-notes.md").write_text("felis notes\n", encoding="utf-8")
-        assets = []
-        for name in ("felis-x86_64-linux.tar.gz", "felis.proto"):
-            (work / "artifacts" / name).write_bytes(f"{name} bytes\r\n".encode())
-            assets.append(f"artifacts/{name}")
-        return work, assets
-
-    def release_of(self, tag: str) -> dict | None:
-        found = [r for r in self.forge.releases.values() if r["tag_name"] == tag]
-        return found[0] if found else None
-
-    def expect_release(self, wanted: int, name: str, tag: str, check) -> None:  # type: ignore[no-untyped-def]
-        work, assets = self.release_fixture()
-        code = self.run_publish(work, "release", tag, "release-notes.md", *assets)
-        passed = code == wanted and check(self.release_of(tag))
-        self.record(passed, f"{name} (exit {code}, wanted {wanted})")
-
-    def release_cases(self) -> None:
-        def published(release: dict | None) -> bool:
-            return (
-                release is not None
-                and release["draft"] is False
-                and release["prerelease"] is False
-                and release["body"] == "felis notes\n"
-                and {a["name"] for a in release["assets"]}
-                == {"felis-x86_64-linux.tar.gz", "felis.proto"}
-                and self.forge.files[f"/attachments/{release['id']}/felis.proto"]
-                == b"felis.proto bytes\r\n"
-            )
-
-        self.reset_forge()
-        self.expect_release(
-            0, "a fresh tag is published with every asset", "v0.1.0", published
-        )
-        self.record(
-            all(auth == f"token {TOKEN}" for _, _, auth in self.forge.seen),
-            "every forge request carries the token",
-        )
-        methods = [method for method, *_ in self.forge.seen]
-        self.record(
-            methods.index("PATCH") == len(methods) - 1
-            and methods.index("POST") < methods.index("PATCH"),
-            "the release is created as a draft and published last",
-        )
-
-        self.reset_forge()
-        self.expect_release(
-            0,
-            "a candidate tag is published as a prerelease",
-            "v0.1.0-rc.1",
-            lambda r: r is not None and r["prerelease"] is True and not r["draft"],
-        )
-
-        self.reset_forge()
-        stale = self.forge.add_release("v0.1.0", draft=True)
-        self.expect_release(
-            0,
-            "a rerun deletes the unfinished draft and cuts the release again",
-            "v0.1.0",
-            lambda r: published(r) and r["id"] != stale["id"],
-        )
-
-        self.reset_forge()
-        done = self.forge.add_release("v0.1.0")
-        self.expect_release(
-            1,
-            "a published release is never replaced",
-            "v0.1.0",
-            lambda r: (
-                r is done
-                and not any(
-                    m in {"POST", "DELETE", "PATCH"} for m, *_ in self.forge.seen
-                )
-            ),
-        )
-
-        self.reset_forge()
-        self.forge.drop_upload = "felis.proto"
-        self.expect_release(
-            1,
-            "a draft missing an asset stays a draft",
-            "v0.1.0",
-            lambda r: r is not None and r["draft"] is True,
-        )
-
-        self.reset_forge()
-        self.forge.fail_upload = "felis-x86_64-linux.tar.gz"
-        self.expect_release(
-            1,
-            "a failed upload leaves the draft unpublished",
-            "v0.1.0",
-            lambda r: r is not None and r["draft"] is True,
-        )
-
-        self.reset_forge()
-        self.forge.fail_lookup = True
-        self.expect_release(
-            1,
-            "a failed lookup of the tag's release is not read as no release",
-            "v0.1.0",
-            lambda r: r is None,
-        )
-
-        self.reset_forge()
-        work, assets = self.release_fixture()
-        code = self.run_publish(
-            work,
-            "release",
-            "v0.1.0",
-            "release-notes.md",
-            *assets,
-            "artifacts/absent.zip",
-        )
-        self.record(
-            code == 1 and not self.forge.seen,
-            f"an absent asset file fails before the forge is touched (exit {code})",
-        )
-
-        code = self.run_publish(
-            work,
-            "release",
-            "v0.1.0",
-            "release-notes.md",
-            *assets,
-            environment={"RELEASE_TOKEN": ""},
-        )
-        self.record(code == 1, f"a missing token fails (exit {code})")
-        code = self.run_publish(work, "release", "v0.1.0")
-        self.record(
-            code == 64, f"a release with no assets is a usage error (exit {code})"
-        )
-
-    def run(self) -> int:
-        self.release_cases()
-        if self.failures == 0:
-            print(f"release-publish self-test: all {self.cases} cases passed")
-            return 0
-        print(
-            f"release-publish self-test: {self.failures} of {self.cases} case(s) failed",
-            file=sys.stderr,
-        )
-        return 1
+    return run
 
 
-def main() -> int:
-    suite = Suite()
-    try:
-        return suite.run()
-    finally:
-        suite.close()
+@pytest.fixture
+def release(run_publish):
+    def run(tag: str, *extra: str) -> subprocess.CompletedProcess[str]:
+        return run_publish("release", tag, "release-notes.md", *ASSETS, *extra)
+
+    return run
 
 
-if __name__ == "__main__":
-    raise SystemExit(main())
+def release_of(forge: FakeForge, tag: str) -> dict | None:
+    found = [r for r in forge.releases.values() if r["tag_name"] == tag]
+    return found[0] if found else None
+
+
+def context(result: subprocess.CompletedProcess[str], forge: FakeForge) -> str:
+    seen = "\n".join(f"  {method} {path}" for method, path, _ in forge.seen)
+    return f"exit {result.returncode}\n{result.stdout}\nrequests:\n{seen}"
+
+
+def assert_published(forge: FakeForge, release: dict | None) -> None:
+    assert release is not None
+    assert release["draft"] is False
+    assert release["prerelease"] is False
+    assert release["body"] == "felis notes\n"
+    assert {a["name"] for a in release["assets"]} == {
+        "felis-x86_64-linux.tar.gz",
+        "felis.proto",
+    }
+    assert (
+        forge.files[f"/attachments/{release['id']}/felis.proto"]
+        == b"felis.proto bytes\r\n"
+    )
+
+
+def test_a_fresh_tag_is_published_with_every_asset(forge, release):
+    result = release("v0.1.0")
+    assert result.returncode == 0, context(result, forge)
+    assert_published(forge, release_of(forge, "v0.1.0"))
+
+
+def test_every_forge_request_carries_the_token(forge, release):
+    result = release("v0.1.0")
+    assert result.returncode == 0, context(result, forge)
+    assert forge.seen
+    assert all(auth == f"token {TOKEN}" for _, _, auth in forge.seen), context(
+        result, forge
+    )
+
+
+def test_the_release_is_created_as_a_draft_and_published_last(forge, release):
+    result = release("v0.1.0")
+    assert result.returncode == 0, context(result, forge)
+    methods = [method for method, *_ in forge.seen]
+    assert methods.index("PATCH") == len(methods) - 1, context(result, forge)
+    assert methods.index("POST") < methods.index("PATCH"), context(result, forge)
+
+
+def test_a_candidate_tag_is_published_as_a_prerelease(forge, release):
+    result = release("v0.1.0-rc.1")
+    assert result.returncode == 0, context(result, forge)
+    published = release_of(forge, "v0.1.0-rc.1")
+    assert published is not None
+    assert published["prerelease"] is True
+    assert not published["draft"]
+
+
+def test_a_rerun_deletes_the_unfinished_draft_and_cuts_the_release_again(
+    forge, release
+):
+    stale = forge.add_release("v0.1.0", draft=True)
+    result = release("v0.1.0")
+    assert result.returncode == 0, context(result, forge)
+    published = release_of(forge, "v0.1.0")
+    assert_published(forge, published)
+    assert published["id"] != stale["id"]
+
+
+def test_a_published_release_is_never_replaced(forge, release):
+    done = forge.add_release("v0.1.0")
+    result = release("v0.1.0")
+    assert result.returncode == 1, context(result, forge)
+    assert release_of(forge, "v0.1.0") is done
+    assert not any(m in {"POST", "DELETE", "PATCH"} for m, *_ in forge.seen), context(
+        result, forge
+    )
+
+
+def test_a_draft_missing_an_asset_stays_a_draft(forge, release):
+    forge.drop_upload = "felis.proto"
+    result = release("v0.1.0")
+    assert result.returncode == 1, context(result, forge)
+    draft = release_of(forge, "v0.1.0")
+    assert draft is not None and draft["draft"] is True, context(result, forge)
+
+
+def test_a_failed_upload_leaves_the_draft_unpublished(forge, release):
+    forge.fail_upload = "felis-x86_64-linux.tar.gz"
+    result = release("v0.1.0")
+    assert result.returncode == 1, context(result, forge)
+    draft = release_of(forge, "v0.1.0")
+    assert draft is not None and draft["draft"] is True, context(result, forge)
+
+
+def test_a_failed_lookup_of_the_tags_release_is_not_read_as_no_release(forge, release):
+    forge.fail_lookup = True
+    result = release("v0.1.0")
+    assert result.returncode == 1, context(result, forge)
+    assert release_of(forge, "v0.1.0") is None, context(result, forge)
+
+
+def test_an_absent_asset_file_fails_before_the_forge_is_touched(forge, release):
+    result = release("v0.1.0", "artifacts/absent.zip")
+    assert result.returncode == 1, context(result, forge)
+    assert not forge.seen, context(result, forge)
+
+
+def test_a_missing_token_fails(forge, run_publish):
+    result = run_publish(
+        "release",
+        "v0.1.0",
+        "release-notes.md",
+        *ASSETS,
+        environment={"RELEASE_TOKEN": ""},
+    )
+    assert result.returncode == 1, context(result, forge)
+
+
+def test_a_release_with_no_assets_is_a_usage_error(forge, run_publish):
+    result = run_publish("release", "v0.1.0")
+    assert result.returncode == 64, context(result, forge)

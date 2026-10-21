@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Exit-code tests for tools/release/mirror.py against a local fake Forgejo and GitHub."""
 
 from __future__ import annotations
@@ -9,10 +8,11 @@ import os
 import re
 import subprocess
 import sys
-import tempfile
 import threading
 import urllib.parse
 from pathlib import Path
+
+import pytest
 
 MIRROR = Path(__file__).with_name("mirror.py")
 SOURCE_API = "/api/v1/repos/felis-terminal/felis"
@@ -71,7 +71,10 @@ class FakeForges:
         self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self.server.daemon_threads = True
         self.origin = "http://127.0.0.1:%d" % self.server.server_address[1]
-        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        # shutdown() waits out one poll interval, 0.5 s by default, on every teardown.
+        self.thread = threading.Thread(
+            target=self.server.serve_forever, args=(0.01,), daemon=True
+        )
         self.thread.start()
 
     def close(self) -> None:
@@ -188,54 +191,32 @@ class FakeForges:
         h.reply(404, {"message": "no route"})
 
 
-class Suite:
-    def __init__(self) -> None:
-        self.temporary = tempfile.TemporaryDirectory()
-        self.root = Path(self.temporary.name)
-        self.failures = 0
-        self.cases = 0
-        self.forges = FakeForges()
-        self.out = ""
+@pytest.fixture
+def forges():
+    forges = FakeForges()
+    yield forges
+    forges.close()
 
-    def close(self) -> None:
-        self.forges.close()
-        self.temporary.cleanup()
 
-    def reset(self) -> None:
-        self.forges.source = None
-        self.forges.source_404s = 0
-        self.forges.files.clear()
-        self.forges.short_file = ""
-        self.forges.releases.clear()
-        self.forges.uploaded.clear()
-        self.forges.fail_upload = ""
-        self.forges.seen.clear()
-
-    def record(self, passed: bool, name: str) -> None:
-        self.cases += 1
-        if passed:
-            print(f"  ok   {name}")
-            return
-        self.failures += 1
-        print(f"  FAIL {name}")
-        for line in self.out.splitlines():
-            print(f"       | {line}")
-
-    def run_mirror(self, *args: str, environment: dict[str, str] | None = None) -> int:
+@pytest.fixture
+def run_mirror(forges: FakeForges, tmp_path: Path):
+    def run(
+        *args: str, environment: dict[str, str] | None = None
+    ) -> subprocess.CompletedProcess[str]:
         env = os.environ.copy()
         env.update(
             {
-                "MIRROR_SOURCE": f"{self.forges.origin}{SOURCE_API}",
-                "GITHUB_API_URL": self.forges.origin,
+                "MIRROR_SOURCE": f"{forges.origin}{SOURCE_API}",
+                "GITHUB_API_URL": forges.origin,
                 "GITHUB_REPOSITORY": "felis-terminal/felis",
                 "GH_TOKEN": TOKEN,
                 "MIRROR_TIMEOUT": "5",
                 "MIRROR_INTERVAL": "0",
-                "RUNNER_TEMP": str(self.root),
+                "RUNNER_TEMP": str(tmp_path),
             }
         )
         env.update(environment or {})
-        result = subprocess.run(
+        return subprocess.run(
             [sys.executable, str(MIRROR), *args],
             env=env,
             check=False,
@@ -243,177 +224,157 @@ class Suite:
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
         )
-        self.out = result.stdout
-        return result.returncode
 
-    def published(self) -> list[dict]:
-        return [r for r in self.forges.releases.values() if not r["draft"]]
-
-    def mirrored_intact(self, *, prerelease: bool) -> bool:
-        releases = self.published()
-        if len(releases) != 1 or len(self.forges.releases) != 1:
-            return False
-        release = releases[0]
-        return (
-            release["body"] == "felis notes\n"
-            and release["prerelease"] is prerelease
-            and release["make_latest"] == "legacy"
-            and {
-                name: data
-                for (number, name), data in self.forges.uploaded.items()
-                if number == release["id"]
-            }
-            == ASSETS
-        )
-
-    def cases_run(self) -> None:
-        self.reset()
-        self.forges.publish_source()
-        code = self.run_mirror(TAG)
-        self.record(
-            code == 0 and self.mirrored_intact(prerelease=False),
-            f"a published Forgejo release is mirrored byte for byte (exit {code})",
-        )
-        forgejo_auth = [
-            auth
-            for _, path, auth in self.forges.seen
-            if path.startswith(SOURCE_API) or path.startswith(("/download/", "/files/"))
-        ]
-        github_auth = [
-            auth
-            for _, path, auth in self.forges.seen
-            if path.startswith((GITHUB_API, "/uploads/"))
-        ]
-        self.record(
-            forgejo_auth
-            and not any(forgejo_auth)
-            and github_auth
-            and all(auth == f"Bearer {TOKEN}" for auth in github_auth),
-            "the GitHub token reaches GitHub and never Forgejo",
-        )
-        self.record(
-            all(TOKEN not in line for line in self.out.splitlines()),
-            "the token never reaches the log",
-        )
-
-        self.reset()
-        self.forges.publish_source(prerelease=True)
-        code = self.run_mirror(TAG)
-        self.record(
-            code == 0 and self.mirrored_intact(prerelease=True),
-            f"a prerelease stays a prerelease (exit {code})",
-        )
-
-        self.reset()
-        self.forges.publish_source()
-        self.forges.source_404s = 3
-        code = self.run_mirror(TAG)
-        self.record(
-            code == 0 and self.mirrored_intact(prerelease=False),
-            f"a Forgejo release that appears later is waited for (exit {code})",
-        )
-
-        self.reset()
-        code = self.run_mirror(TAG, environment={"MIRROR_TIMEOUT": "0.5"})
-        self.record(
-            code == 1 and not self.forges.releases,
-            f"a Forgejo release that never appears times out with nothing on GitHub (exit {code})",
-        )
-
-        self.reset()
-        self.forges.publish_source(draft=True)
-        code = self.run_mirror(TAG, environment={"MIRROR_TIMEOUT": "0.5"})
-        self.record(
-            code == 1 and not self.forges.releases,
-            f"a Forgejo draft is not mirrored (exit {code})",
-        )
-
-        self.reset()
-        self.forges.publish_source()
-        self.forges.short_file = "felis.proto"
-        code = self.run_mirror(TAG)
-        self.record(
-            code == 1 and not self.forges.releases,
-            f"an asset shorter than Forgejo lists fails before GitHub is touched (exit {code})",
-        )
-
-        self.reset()
-        self.forges.publish_source()
-        assert self.forges.source is not None
-        self.forges.source["assets"][0]["name"] = "../escape"
-        code = self.run_mirror(TAG)
-        self.record(
-            code == 1 and not self.forges.releases,
-            f"an asset name with a path is refused (exit {code})",
-        )
-
-        self.reset()
-        self.forges.publish_source()
-        self.forges.fail_upload = "felis.proto"
-        code = self.run_mirror(TAG)
-        self.record(
-            code == 1 and not self.published(),
-            f"a failed upload leaves the GitHub release a draft (exit {code})",
-        )
-
-        self.reset()
-        self.forges.publish_source()
-        self.forges.add_release(draft=True, names=["felis.proto"])
-        code = self.run_mirror(TAG)
-        self.record(
-            code == 0 and self.mirrored_intact(prerelease=False),
-            f"a leftover GitHub draft is replaced (exit {code})",
-        )
-
-        self.reset()
-        self.forges.publish_source()
-        self.forges.add_release(draft=False, names=list(ASSETS))
-        code = self.run_mirror(TAG)
-        posts = [m for m, p, _ in self.forges.seen if m == "POST"]
-        self.record(
-            code == 0 and not posts,
-            f"a complete GitHub release is left alone (exit {code})",
-        )
-
-        self.reset()
-        self.forges.publish_source()
-        self.forges.add_release(draft=False, names=["felis.proto"])
-        code = self.run_mirror(TAG)
-        self.record(
-            code == 1 and len(self.forges.releases) == 1,
-            f"an incomplete published GitHub release is refused, not replaced (exit {code})",
-        )
-
-        self.reset()
-        self.forges.publish_source()
-        code = self.run_mirror(TAG, environment={"GH_TOKEN": ""})
-        self.record(
-            code == 1 and not self.forges.releases,
-            f"a missing token fails (exit {code})",
-        )
-
-        code = self.run_mirror()
-        self.record(code == 64, f"no tag prints usage (exit {code})")
-
-    def run(self) -> int:
-        self.cases_run()
-        if self.failures == 0:
-            print(f"release-mirror self-test: all {self.cases} cases passed")
-            return 0
-        print(
-            f"release-mirror self-test: {self.failures} of {self.cases} case(s) failed",
-            file=sys.stderr,
-        )
-        return 1
+    return run
 
 
-def main() -> int:
-    suite = Suite()
-    try:
-        return suite.run()
-    finally:
-        suite.close()
+def context(result: subprocess.CompletedProcess[str], forges: FakeForges) -> str:
+    seen = "\n".join(f"  {method} {path}" for method, path, _ in forges.seen)
+    return f"exit {result.returncode}\n{result.stdout}\nrequests:\n{seen}"
 
 
-if __name__ == "__main__":
-    raise SystemExit(main())
+def published(forges: FakeForges) -> list[dict]:
+    return [r for r in forges.releases.values() if not r["draft"]]
+
+
+def assert_mirrored_intact(
+    forges: FakeForges, result: subprocess.CompletedProcess[str], *, prerelease: bool
+) -> None:
+    assert result.returncode == 0, context(result, forges)
+    releases = published(forges)
+    assert len(releases) == 1 and len(forges.releases) == 1, context(result, forges)
+    release = releases[0]
+    assert release["body"] == "felis notes\n"
+    assert release["prerelease"] is prerelease
+    assert release["make_latest"] == "legacy"
+    uploaded = {
+        name: data
+        for (number, name), data in forges.uploaded.items()
+        if number == release["id"]
+    }
+    assert uploaded == ASSETS
+
+
+def test_a_published_forgejo_release_is_mirrored_byte_for_byte(forges, run_mirror):
+    forges.publish_source()
+    result = run_mirror(TAG)
+    assert_mirrored_intact(forges, result, prerelease=False)
+
+
+def test_the_github_token_reaches_github_and_never_forgejo(forges, run_mirror):
+    forges.publish_source()
+    result = run_mirror(TAG)
+    assert result.returncode == 0, context(result, forges)
+    forgejo_auth = [
+        auth
+        for _, path, auth in forges.seen
+        if path.startswith(SOURCE_API) or path.startswith(("/download/", "/files/"))
+    ]
+    github_auth = [
+        auth
+        for _, path, auth in forges.seen
+        if path.startswith((GITHUB_API, "/uploads/"))
+    ]
+    assert forgejo_auth and not any(forgejo_auth), forges.seen
+    assert github_auth and all(auth == f"Bearer {TOKEN}" for auth in github_auth), (
+        forges.seen
+    )
+
+
+def test_the_token_never_reaches_the_log(forges, run_mirror):
+    forges.publish_source()
+    result = run_mirror(TAG)
+    assert result.returncode == 0, context(result, forges)
+    assert TOKEN not in result.stdout, result.stdout
+
+
+def test_a_prerelease_stays_a_prerelease(forges, run_mirror):
+    forges.publish_source(prerelease=True)
+    result = run_mirror(TAG)
+    assert_mirrored_intact(forges, result, prerelease=True)
+
+
+def test_a_forgejo_release_that_appears_later_is_waited_for(forges, run_mirror):
+    forges.publish_source()
+    forges.source_404s = 3
+    result = run_mirror(TAG)
+    assert_mirrored_intact(forges, result, prerelease=False)
+
+
+def test_a_forgejo_release_that_never_appears_times_out_with_nothing_on_github(
+    forges, run_mirror
+):
+    result = run_mirror(TAG, environment={"MIRROR_TIMEOUT": "0.5"})
+    assert result.returncode == 1, context(result, forges)
+    assert not forges.releases, context(result, forges)
+
+
+def test_a_forgejo_draft_is_not_mirrored(forges, run_mirror):
+    forges.publish_source(draft=True)
+    result = run_mirror(TAG, environment={"MIRROR_TIMEOUT": "0.5"})
+    assert result.returncode == 1, context(result, forges)
+    assert not forges.releases, context(result, forges)
+
+
+def test_an_asset_shorter_than_forgejo_lists_fails_before_github_is_touched(
+    forges, run_mirror
+):
+    forges.publish_source()
+    forges.short_file = "felis.proto"
+    result = run_mirror(TAG)
+    assert result.returncode == 1, context(result, forges)
+    assert not forges.releases, context(result, forges)
+
+
+def test_an_asset_name_with_a_path_is_refused(forges, run_mirror):
+    forges.publish_source()
+    assert forges.source is not None
+    forges.source["assets"][0]["name"] = "../escape"
+    result = run_mirror(TAG)
+    assert result.returncode == 1, context(result, forges)
+    assert not forges.releases, context(result, forges)
+
+
+def test_a_failed_upload_leaves_the_github_release_a_draft(forges, run_mirror):
+    forges.publish_source()
+    forges.fail_upload = "felis.proto"
+    result = run_mirror(TAG)
+    assert result.returncode == 1, context(result, forges)
+    assert not published(forges), context(result, forges)
+
+
+def test_a_leftover_github_draft_is_replaced(forges, run_mirror):
+    forges.publish_source()
+    forges.add_release(draft=True, names=["felis.proto"])
+    result = run_mirror(TAG)
+    assert_mirrored_intact(forges, result, prerelease=False)
+
+
+def test_a_complete_github_release_is_left_alone(forges, run_mirror):
+    forges.publish_source()
+    forges.add_release(draft=False, names=list(ASSETS))
+    result = run_mirror(TAG)
+    assert result.returncode == 0, context(result, forges)
+    assert not [m for m, _, _ in forges.seen if m == "POST"], context(result, forges)
+
+
+def test_an_incomplete_published_github_release_is_refused_not_replaced(
+    forges, run_mirror
+):
+    forges.publish_source()
+    forges.add_release(draft=False, names=["felis.proto"])
+    result = run_mirror(TAG)
+    assert result.returncode == 1, context(result, forges)
+    assert len(forges.releases) == 1, context(result, forges)
+
+
+def test_a_missing_token_fails(forges, run_mirror):
+    forges.publish_source()
+    result = run_mirror(TAG, environment={"GH_TOKEN": ""})
+    assert result.returncode == 1, context(result, forges)
+    assert not forges.releases, context(result, forges)
+
+
+def test_no_tag_prints_usage(forges, run_mirror):
+    result = run_mirror()
+    assert result.returncode == 64, context(result, forges)

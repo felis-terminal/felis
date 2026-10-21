@@ -10,7 +10,6 @@ import urllib.parse
 from pathlib import Path
 
 USAGE = """usage: tools/release/publish.py release <tag> <notes-file> <asset>...
-       tools/release/publish.py --self-test
 
 Reads FORGEJO_SERVER_URL, GITHUB_REPOSITORY and RELEASE_TOKEN from the environment.
 """
@@ -168,9 +167,6 @@ def main(argv: list[str]) -> int:
     if argv and argv[0] in {"-h", "--help"}:
         print(USAGE, file=sys.stderr, end="")
         return 64
-    if argv == ["--self-test"]:
-        test = Path(__file__).with_name("publish_test.py")
-        os.execv(sys.executable, [sys.executable, str(test)])
     if not (len(argv) >= 4 and argv[0] == "release"):
         print(USAGE, file=sys.stderr, end="")
         return 64
