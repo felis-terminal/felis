@@ -351,8 +351,19 @@ def unpacked_packages(registry_src: Path, crates: list[Crate]) -> list[Path]:
 
 
 def publish_dry_run(root: Path) -> None:
+    import fcntl
+
     _, crates = workspace(root)
     cargo_home = Path(os.environ.get("CARGO_HOME") or Path.home() / ".cargo")
+    cargo_home.mkdir(parents=True, exist_ok=True)
+    # Cargo's own locks do not cover the deletion, so a second dry run on the
+    # same CARGO_HOME could remove an unpack the first one is building from.
+    with open(cargo_home / ".felis-publish-dry-run.lock", "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        fresh_dry_run(root, crates, cargo_home)
+
+
+def fresh_dry_run(root: Path, crates: list[Crate], cargo_home: Path) -> None:
     for path in unpacked_packages(cargo_home / "registry" / "src", crates):
         shutil.rmtree(path)
     target = (
