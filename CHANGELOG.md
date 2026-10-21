@@ -20,6 +20,10 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
   `programs.felis.enableSshIntegration`.
 - **Config**: `window.macos_option_as_alt` (default `false`) makes macOS Option act as Alt for every key, so Option+B
   sends `ESC b`, at the cost of the characters the layout puts behind Option.
+- **Keymap**: `background = true` on a `run` binding spawns the command without a transient session, so the window stays
+  usable while it runs. The command still sees `FELIS_ORIGIN_SESSION_ID`, `FELIS_HOST` and `FELIS_CWD` and starts in the
+  session's directory. A chord can now open another window, or a second window on the same session, without `open -n` or
+  another launcher that returns at once.
 
 ### Fixed
 

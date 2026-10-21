@@ -456,7 +456,7 @@ impl KeymapConfig {
             };
             // serde only enforces the field's presence; an empty argv
             // would swallow the chord and launch nothing.
-            if matches!(&binding, BindingValue::Run { command } if command.is_empty()) {
+            if matches!(&binding, BindingValue::Run { command, .. } if command.is_empty()) {
                 on_dropped(
                     chord_str,
                     "`run` with an empty command, dropping".to_owned(),
@@ -1540,6 +1540,7 @@ mod tests {
                 .into_action(),
             Some(Action::RunCommand {
                 command: vec!["felis-session-picker".into()],
+                background: false,
             }),
         );
     }

@@ -312,3 +312,108 @@ fn the_startup_sweep_reclaims_a_dead_run_and_spares_a_live_one() {
     assert!(!dead.exists(), "a dead run's staging must be reclaimed");
     assert!(live_survived, "a live run's staging must be left alone");
 }
+
+fn exported(command: &std::process::Command, key: &str) -> Option<String> {
+    command
+        .get_envs()
+        .find(|(name, _)| *name == key)
+        .and_then(|(_, value)| value.map(|v| v.to_string_lossy().into_owned()))
+}
+
+fn removed(command: &std::process::Command, key: &str) -> bool {
+    command
+        .get_envs()
+        .any(|(name, value)| name == key && value.is_none())
+}
+
+#[test]
+fn a_background_command_removes_every_origin_variable_the_origin_lacks() {
+    let origin = Origin {
+        session_id: 0xabc,
+        host: None,
+        osc7: None,
+    };
+    let command = background_command(&["felis".to_owned()], &origin).unwrap();
+    assert_eq!(
+        exported(&command, ORIGIN_SESSION_ENV),
+        Some(SessionHex(0xabc).to_string())
+    );
+    for key in ORIGIN_ENV_KEYS
+        .into_iter()
+        .filter(|k| *k != ORIGIN_SESSION_ENV)
+    {
+        assert!(removed(&command, key), "{key} must be removed");
+    }
+}
+
+#[test]
+fn a_background_command_exports_the_origin_it_has() {
+    let origin = Origin {
+        session_id: 1,
+        host: Some("user@devbox".to_owned()),
+        osc7: Some("file://devbox/srv/app".to_owned()),
+    };
+    let command = background_command(&["felis".to_owned()], &origin).unwrap();
+    assert_eq!(exported(&command, HOST_ENV).as_deref(), Some("user@devbox"));
+    assert_eq!(
+        exported(&command, CWD_ENV).as_deref(),
+        Some("file://devbox/srv/app")
+    );
+}
+
+#[test]
+fn a_background_command_runs_in_the_local_osc7_directory_else_home() {
+    let dir = tempfile::tempdir().unwrap();
+    let here = Origin {
+        session_id: 1,
+        host: None,
+        osc7: Some(format!("file://localhost{}", url_path_of(dir.path()))),
+    };
+    let command = background_command(&["felis".to_owned()], &here).unwrap();
+    assert_eq!(command.get_current_dir(), Some(dir.path()));
+
+    let foreign = Origin {
+        osc7: Some("file://devbox/srv/app".to_owned()),
+        ..here
+    };
+    let home = directories::BaseDirs::new().map(|d| d.home_dir().to_owned());
+    let command = background_command(&["felis".to_owned()], &foreign).unwrap();
+    assert_eq!(command.get_current_dir(), home.as_deref());
+}
+
+#[test]
+fn a_background_command_needs_a_program() {
+    assert!(background_command(&[], &Origin::default()).is_none());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_background_spawn_returns_before_the_command_finishes() {
+    let dir = tempfile::tempdir().unwrap();
+    let marker = dir.path().join("done");
+    let origin = Origin {
+        session_id: 7,
+        host: None,
+        osc7: Some(format!("file://localhost{}", url_path_of(dir.path()))),
+    };
+    let argv = [
+        "/bin/sh".to_owned(),
+        "-c".to_owned(),
+        "sleep 0.3; printf %s \"$FELIS_ORIGIN_SESSION_ID\" > done".to_owned(),
+    ];
+    spawn_background(&argv, &origin).unwrap();
+    assert!(!marker.exists(), "the spawn must not wait for the command");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !marker.exists() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the command never ran"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    assert_eq!(
+        std::fs::read_to_string(&marker).unwrap(),
+        SessionHex(7).to_string()
+    );
+}

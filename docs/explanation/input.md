@@ -187,9 +187,9 @@ same semantic sources ([control-surfaces](architecture/control-surfaces.md)).
 
 #### `run` launches a command with no region
 
-The **`run`** token launches an argv in a transient session sized to the live grid, fed no region. The command is the
-subject. It shares `pipe`'s transient-session spawn (the client switches in and back on exit) but carries no
-`source`/`target` (a separate, simpler wire message), so a `run` binding can never spell a region/sink combination.
+The **`run`** token launches an argv fed no region, by default in a transient session sized to the live grid. The
+command is the subject. It shares `pipe`'s transient-session spawn (the client switches in and back on exit) but carries
+no `source`/`target` (a separate, simpler wire message), so a `run` binding can never spell a region/sink combination.
 
 `command` is required and non-empty: unlike `pipe`, `run` has no default command to fall back to, so an empty argv is a
 binding that eats the chord and launches nothing; the loader drops it with a warning rather than installing it.
@@ -214,8 +214,14 @@ host, where the transient runs. A report from an `ssh` inside the session (or fr
 describes somewhere this command cannot go, so the local daemon's cwd applies instead. The report still reaches the
 command as `FELIS_CWD`, for a script that knows how to get there ([keybindings.md](../reference/keybindings.md)).
 
+The two needs are separable, and `background = true` asks for (b) alone: no transient session, so a command such as a
+window launch that runs for as long as the new window does neither covers the origin window nor holds it until exit.
+
 A command needing neither gains nothing here. felis does not sniff or restrict the argv to enforce that (that would be a
 principle-4 content heuristic), so an unrelated command is _not recommended but not prevented_.
+
+Background mode makes such commands easier to bind, and the same test still sorts them: a binding that reads the
+session's id or cwd passes (b), and one that reads neither is a WM hotkey under another name.
 
 _Revisit if_ real bindings drift to felis-unrelated background commands a WM hotkey handles equally well: then `run` is
 paying for itself in the wrong currency and the keymap token should be cut.
@@ -252,8 +258,9 @@ so is one the platform will not let felis test, which on a shared `/tmp` is anot
 #### Which daemon runs the command
 
 A daemon spawns, not the client: the client is a wgpu window, not a PTY host, so a daemon holds the transient's PTY
-whichever host runs the command. The question is _which_ daemon, and the answer is the client's own, never the attached
-one. Three arguments settle it:
+whichever host runs the command. A background `run` has no PTY and no transient, so the client spawns it directly; the
+arguments below still place it on the client's machine. The question is _which_ daemon, and the answer is the client's
+own, never the attached one. Three arguments settle it:
 
 - The keymap is client config, and the models for this action surface (foot's `pipe-*` family, Ghostty's
   `write_scrollback_file`) run the command where the config lives, so a user reads a binding's argv as naming a program

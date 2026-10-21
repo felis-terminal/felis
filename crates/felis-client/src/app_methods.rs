@@ -1014,8 +1014,11 @@ impl App {
             } => {
                 self.start_pipe(source, target, ansi);
             }
-            Action::RunCommand { command } => {
-                self.start_run(&command);
+            Action::RunCommand {
+                command,
+                background,
+            } => {
+                self.start_run(&command, background);
             }
             Action::Scroll(step) => {
                 // Bare `End` at the live bottom falls through to the
@@ -1160,7 +1163,7 @@ impl App {
     }
 
     /// docs/explanation/input.md "Action mapping".
-    pub(crate) fn start_run(&mut self, command: &[String]) {
+    pub(crate) fn start_run(&mut self, command: &[String], background: bool) {
         if self.refuse_nested_visit("run") || self.is_busy() {
             tracing::debug!("run or switch already in progress; ignoring chord");
             return;
@@ -1169,8 +1172,25 @@ impl App {
             tracing::debug!("run: empty command; ignoring");
             return;
         }
+        if background {
+            if let Err(err) = felis_client_core::pipe::spawn_background(command, &self.origin()) {
+                warn!(%err, program = %command[0], "run: could not spawn the background command");
+            }
+            return;
+        }
         let viewport = self.viewport_position();
         self.enter_transient(None, command, None, viewport);
+    }
+
+    fn origin(&self) -> felis_client_core::pipe::Origin {
+        felis_client_core::pipe::Origin {
+            session_id: self.current_session_id,
+            host: match &self.reconnector.carrier {
+                Carrier::Ssh { destination, .. } => Some(destination.clone()),
+                Carrier::Local(_) => None,
+            },
+            osc7: self.shadow.cwd().map(str::to_owned),
+        }
     }
 
     /// Spawn `argv` as a transient session on this client's local daemon.
@@ -1184,14 +1204,7 @@ impl App {
         position: Option<RegionPosition>,
         viewport: ViewportPosition,
     ) {
-        let origin = felis_client_core::pipe::Origin {
-            session_id: self.current_session_id,
-            host: match &self.reconnector.carrier {
-                Carrier::Ssh { destination, .. } => Some(destination.clone()),
-                Carrier::Local(_) => None,
-            },
-            osc7: self.shadow.cwd().map(str::to_owned),
-        };
+        let origin = self.origin();
         let dims = GridDims {
             rows: self.shadow.screen().rows(),
             cols: self.shadow.screen().cols(),

@@ -60,27 +60,28 @@ Every `[keymap]` value is a table tagged by `kind`. The set is closed: an unreco
 binding, a value outside the vocabulary below, or a missing required field drops that entry with a warning
 ([config.md](config.md) § "Behavior on missing / malformed values").
 
-| `kind`                   | Fields    | Accepted values                                                                       | Default           |
-| ------------------------ | --------- | ------------------------------------------------------------------------------------- | ----------------- |
-| `unbind`                 | —         | —                                                                                     | —                 |
-| `send_string`            | `text`    | Any string; backslashes read per `escapes`                                            | Required          |
-|                          | `escapes` | `c_style`, `none`                                                                     | `c_style`         |
-| `paste`                  | `from`    | `system`, `primary`                                                                   | Required          |
-| `copy`                   | `what`    | `system`, `primary`                                                                   | Required          |
-| `reload`                 | —         | —                                                                                     | —                 |
-| `detach`                 | —         | —                                                                                     | —                 |
-| `toggle_fullscreen`      | —         | —                                                                                     | —                 |
-| `font_size`              | `step`    | `increase`, `decrease`, `reset`                                                       | Required          |
-| `scroll`                 | `step`    | `line_up`, `line_down`, `half_page_up`, `half_page_down`, `home`, `end`               | Required          |
-| `scroll_to_prompt`       | `to`      | `previous`, `next`                                                                    | Required          |
-| `open_scrollback_search` | —         | —                                                                                     | —                 |
-| `switch_session`         | `to`      | `previous`, `next`                                                                    | Required          |
-| `new_session`            | —         | —                                                                                     | —                 |
-| `kill_session`           | —         | —                                                                                     | —                 |
-| `pipe`                   | `source`  | `scrollback`, `visible`, `selection`, `command_output`, `last_command`                | Required          |
-|                          | `target`  | `"clipboard"`, `"temp_file"`, `"paste"`, `{ command = [...] }`, `{ file = "<path>" }` | The default pager |
-|                          | `ansi`    | `true`, `false`                                                                       | `false`           |
-| `run`                    | `command` | Argv array of strings, non-empty; never a shell string                                | Required          |
+| `kind`                   | Fields       | Accepted values                                                                       | Default           |
+| ------------------------ | ------------ | ------------------------------------------------------------------------------------- | ----------------- |
+| `unbind`                 | —            | —                                                                                     | —                 |
+| `send_string`            | `text`       | Any string; backslashes read per `escapes`                                            | Required          |
+|                          | `escapes`    | `c_style`, `none`                                                                     | `c_style`         |
+| `paste`                  | `from`       | `system`, `primary`                                                                   | Required          |
+| `copy`                   | `what`       | `system`, `primary`                                                                   | Required          |
+| `reload`                 | —            | —                                                                                     | —                 |
+| `detach`                 | —            | —                                                                                     | —                 |
+| `toggle_fullscreen`      | —            | —                                                                                     | —                 |
+| `font_size`              | `step`       | `increase`, `decrease`, `reset`                                                       | Required          |
+| `scroll`                 | `step`       | `line_up`, `line_down`, `half_page_up`, `half_page_down`, `home`, `end`               | Required          |
+| `scroll_to_prompt`       | `to`         | `previous`, `next`                                                                    | Required          |
+| `open_scrollback_search` | —            | —                                                                                     | —                 |
+| `switch_session`         | `to`         | `previous`, `next`                                                                    | Required          |
+| `new_session`            | —            | —                                                                                     | —                 |
+| `kill_session`           | —            | —                                                                                     | —                 |
+| `pipe`                   | `source`     | `scrollback`, `visible`, `selection`, `command_output`, `last_command`                | Required          |
+|                          | `target`     | `"clipboard"`, `"temp_file"`, `"paste"`, `{ command = [...] }`, `{ file = "<path>" }` | The default pager |
+|                          | `ansi`       | `true`, `false`                                                                       | `false`           |
+| `run`                    | `command`    | Argv array of strings, non-empty; never a shell string                                | Required          |
+|                          | `background` | `true`, `false`                                                                       | `false`           |
 
 `escapes = "c_style"` recognizes `\n`, `\r`, `\t`, `\\`, `\0`, `\e`, and `\xNN` (exactly two hex digits); any other
 backslash sequence, and a trailing backslash, drop the binding with a warning. `escapes = "none"` sends `text`
@@ -111,7 +112,21 @@ Session and utility actions ship without default chords. Bind them in the `[keym
 - **`detach`**: Detaches and closes the window; the session continues running in the background (identical to the window
   close button).
 - **`toggle_fullscreen`**: Toggles native window fullscreen state.
-- **`run`**: Launches a command in a transient session over the live grid (e.g. an interactive session picker).
+- **`run`**: Launches a command in a transient session over the live grid (e.g. an interactive session picker). With
+  `background = true` there is no transient: the client spawns the command detached, with no terminal and its output
+  discarded, and the window stays usable while it runs. A spawn failure or a non-zero exit is logged. The origin
+  variables below are exported as for a transient. The command runs in the origin session's `OSC 7` directory when that
+  names one on this machine, else in the home directory, where a transient would take the local daemon's.
+
+```toml
+[keymap]
+# Another window in this session's directory.
+"super+n" = { kind = "run", background = true, command = ["/path/to/felis"] }
+```
+
+The window opens on the local daemon `felis` resolves by itself: `FELIS_SOCKET` when the client inherited one, else the
+default. The command does not carry over the window's `--host`, `--socket` or `--config`.
+
 - **`pipe`**: Extracts buffer text and sends it to a configured sink:
 
 ```toml

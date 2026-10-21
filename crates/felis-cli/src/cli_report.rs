@@ -635,7 +635,7 @@ fn project_binding(raw: &toml::Table, parsed: &BindingValue) -> toml::Table {
                 (&["source", "ansi", "target"], &[])
             }
         },
-        BindingValue::Run { .. } => (&[], &["command"]),
+        BindingValue::Run { .. } => (&["background"], &["command"]),
     };
     let mut projected = toml::Table::new();
     for field in std::iter::once(&"kind").chain(shown) {
