@@ -17,6 +17,7 @@ from verify import BINARY_CRATES
 USAGE = """usage: tools/release/crates.py check
        tools/release/crates.py publish-plan
        tools/release/crates.py package-tests
+       tools/release/crates.py publish-dry-run
 
 check: refuses a tree whose library versions are not ready to publish: a
 changed crate left unbumped (`release-plz update` would edit the tree), a bump
@@ -30,6 +31,10 @@ trusted publishing cannot create a crate.
 package-tests: packages every publishable crate and builds each package's
 tests from the extracted tree, the way a crates.io consumer would, with the
 other felis packages patched in for their unpublished versions.
+
+publish-dry-run: runs `cargo publish --workspace --dry-run`, which packages
+every publishable crate and builds each against the others, from a fresh
+unpack of this tree's packages.
 
 FELIS_CRATES_INDEX overrides the sparse index base (default
 https://index.crates.io).
@@ -330,8 +335,65 @@ def package_tests(root: Path) -> None:
     note(f"the packaged tests build for {', '.join(extracted)}")
 
 
+# Cargo names a local registry's source directory with an empty host, so the
+# overlay `cargo publish --workspace` builds against is `-<hash>` (crates.io's
+# starts with `index.`). An overlay crate is neither unpacked again nor rebuilt
+# while its name and version stand, so a library changed without a bump would
+# build as whichever tree first packaged that version.
+def unpacked_packages(registry_src: Path, crates: list[Crate]) -> list[Path]:
+    wanted = {f"{crate.name}-{crate.version}" for crate in crates if crate.publishable}
+    return sorted(
+        path
+        for overlay in registry_src.glob("-*")
+        for path in overlay.iterdir()
+        if path.name in wanted
+    )
+
+
+def publish_dry_run(root: Path) -> None:
+    _, crates = workspace(root)
+    cargo_home = Path(os.environ.get("CARGO_HOME") or Path.home() / ".cargo")
+    for path in unpacked_packages(cargo_home / "registry" / "src", crates):
+        shutil.rmtree(path)
+    target = (
+        Path(
+            json.loads(
+                output(
+                    ["cargo", "metadata", "--format-version", "1", "--no-deps"],
+                    cwd=root,
+                )
+            )["target_directory"]
+        )
+        / "publish-dry-run"
+    )
+    # Its own target directory: cleaning the felis units out of the shared one
+    # would throw away the test build of every crate.
+    clean = ["cargo", "clean", "--target-dir", str(target)]
+    for crate in crates:
+        if crate.publishable:
+            clean += ["-p", crate.name]
+    run(clean, cwd=root)
+    run(
+        [
+            "cargo",
+            "publish",
+            "--workspace",
+            "--dry-run",
+            "--allow-dirty",
+            "--target-dir",
+            str(target),
+        ],
+        cwd=root,
+    )
+
+
 def main(argv: list[str]) -> int:
-    if len(argv) != 1 or argv[0] not in {"check", "publish-plan", "package-tests"}:
+    if len(argv) != 1 or argv[0] not in {
+        "check",
+        "publish-plan",
+        "package-tests",
+        "publish-dry-run",
+    }:
         print(USAGE, file=sys.stderr, end="")
         return 64
     root = Path.cwd()
@@ -340,6 +402,8 @@ def main(argv: list[str]) -> int:
             check(root)
         elif argv[0] == "package-tests":
             package_tests(root)
+        elif argv[0] == "publish-dry-run":
+            publish_dry_run(root)
         else:
             for name in publish_plan(root):
                 print(name)

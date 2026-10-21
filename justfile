@@ -177,7 +177,7 @@ deny:
 # Package every crate and build each against the others, in publish order, without uploading (pr.yml's build job runs this).
 [group('lint')]
 publish-dry-run:
-    cargo publish --workspace --dry-run --allow-dirty
+    python3 tools/release/crates.py publish-dry-run
 
 # Source-based unused-dependency scan.
 [group('lint')]
