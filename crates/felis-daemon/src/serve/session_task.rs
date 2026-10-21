@@ -1653,12 +1653,14 @@ impl SessionTask {
     fn recompute_presentation(&mut self) {
         let theme = self
             .presentation_chain()
-            .find_map(|s| s.presentation.theme.as_ref());
-        let channels = theme.map_or([None; 3], |t| t.channels);
-        let mut palette = [None; 256];
-        for (&index, &rgb) in theme.iter().flat_map(|t| &t.palette) {
-            palette[usize::from(index)] = Some(rgb);
-        }
+            .find_map(|s| s.presentation.theme.as_ref())
+            .map(|t| {
+                let mut palette = [None; 256];
+                for (&index, &rgb) in &t.palette {
+                    palette[usize::from(index)] = Some(rgb);
+                }
+                (t.channels, palette)
+            });
         let os_dark = self
             .presentation_chain()
             .find_map(|s| s.presentation.os_dark);
@@ -1668,27 +1670,28 @@ impl SessionTask {
         // question about the last answer the program was given, which
         // only the reconcile can tell (two recomputes in one pass may
         // leave and re-enter dark).
-        for channel in [
-            ThemeChannel::Foreground,
-            ThemeChannel::Background,
-            ThemeChannel::Cursor,
-        ] {
-            grid.set_theme_config_default(channel, channels[channel as usize]);
+        if let Some((channels, palette)) = theme {
+            for channel in [
+                ThemeChannel::Foreground,
+                ThemeChannel::Background,
+                ThemeChannel::Cursor,
+            ] {
+                grid.set_theme_config_default(channel, channels[channel as usize]);
+            }
+            for (index, rgb) in (0..=u8::MAX).zip(palette) {
+                grid.set_palette_config_default(index, rgb);
+            }
         }
-        for (index, rgb) in (0..=u8::MAX).zip(palette) {
-            grid.set_palette_config_default(index, rgb);
-        }
-        match os_dark {
-            Some(dark) => grid.set_os_dark(dark),
-            None => grid.clear_os_dark(),
+        if let Some(dark) = os_dark {
+            grid.set_os_dark(dark);
         }
         drop(core);
         self.scheme_dirty = true;
     }
 
     /// Compared on the answer the program can observe, not the stored
-    /// `Option`: an unset preference answers light, so a light reporter
-    /// leaving changes nothing the program could see. The mode is read
+    /// `Option`: an unset preference answers light, so a first light
+    /// report changes nothing the program could see. The mode is read
     /// at write time, so a program enabling `DECSET 2031` after the
     /// change queries rather than receiving a stale unsolicited report.
     fn sync_color_scheme_to_pty(&mut self) -> Option<EndReason> {
@@ -3639,10 +3642,10 @@ mod tests {
         )
     }
 
-    /// Client-reported theme and OS scheme die with the last window; an
-    /// `Ops` reader still attached does not keep them alive.
+    /// The last window's theme and OS scheme outlive it, and an `Ops`
+    /// reader still attached never takes them over.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn last_window_detach_clears_client_reported_theme_and_scheme() {
+    async fn last_window_detach_keeps_the_last_resolved_theme_and_scheme() {
         let mut task = SessionTask::for_tests(session_with("read _x"));
         let (win, _rx) = attach_sub(&mut task, false);
         let (ops, _rx_ops) = attach_ops_sub(&mut task);
@@ -3655,22 +3658,40 @@ mod tests {
 
         task.remove_sub(win);
 
-        let core = task.session.lock_core();
-        for channel in [
-            ThemeChannel::Foreground,
-            ThemeChannel::Background,
-            ThemeChannel::Cursor,
-        ] {
-            assert_eq!(
-                core.grid.theme_config_default(channel),
-                None,
-                "theme must not outlive the last window",
-            );
-        }
+        assert_eq!(effective_bg(&task), Some((0x0D, 0x0D, 0x12)));
         assert_eq!(
-            core.grid.color_scheme_report_bytes(),
-            b"\x1b[?997;2n",
-            "a cleared OS preference answers the no-report default (light)",
+            task.session.lock_core().grid.color_scheme_report_bytes(),
+            b"\x1b[?997;1n",
+            "the parked session keeps answering the departed window's dark",
+        );
+    }
+
+    /// A window that has attached but not yet reported resolves nothing,
+    /// so the parked scheme holds until its report lands.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_reattach_to_a_parked_session_notifies_nothing_before_or_after_its_report() {
+        let mut task = SessionTask::for_tests(session_with("read _x"));
+        {
+            let mut core = task.session.lock_core();
+            let mut parser = felis_vt::Parser::new();
+            parser.advance(&mut core.grid, b"\x1b[?2031h");
+        }
+        let (a, _rx_a) = attach_sub(&mut task, false);
+        report_scheme(&mut task, a, true);
+        assert_eq!(task.pty_steps, [PtyStep::SchemeReport]);
+
+        task.remove_sub(a);
+        assert!(task.sync_color_scheme_to_pty().is_none());
+        let (b, _rx_b) = attach_sub(&mut task, false);
+        assert!(task.sync_color_scheme_to_pty().is_none());
+        assert!(effective_dark(&task), "the unreported window moved nothing");
+        report_scheme(&mut task, b, true);
+
+        assert_eq!(
+            task.pty_steps,
+            [PtyStep::SchemeReport],
+            "detach, attach, and a same-scheme report owe the program nothing: {:?}",
+            task.pty_steps,
         );
     }
 
@@ -3741,9 +3762,10 @@ mod tests {
         task.remove_sub(b);
         assert_eq!(
             effective_palette(&task, 1),
-            None,
-            "the palette must not outlive the last window",
+            Some((0x22, 0x00, 0x00)),
+            "the last resolved palette outlives the last window",
         );
+        assert_eq!(effective_palette(&task, 2), Some((0x00, 0x22, 0x00)));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -3997,7 +4019,7 @@ mod tests {
         assert_eq!(
             task.pty_steps,
             [PtyStep::SchemeReport, PtyStep::SchemeReport],
-            "clearing the last light report still answers light, which the program was already told: {:?}",
+            "the last window leaving keeps the light the program was already told: {:?}",
             task.pty_steps,
         );
     }
@@ -4012,13 +4034,16 @@ mod tests {
         }
         let (a, _rx_a) = attach_sub(&mut task, false);
         let (b, _rx_b) = attach_sub(&mut task, false);
-        take_input_ownership(&mut task, a);
+        let (c, _rx_c) = attach_sub(&mut task, false);
+        take_input_ownership(&mut task, c);
+        report_scheme(&mut task, c, false);
         report_scheme(&mut task, a, false);
         report_scheme(&mut task, b, true);
         assert!(!effective_dark(&task), "the owner answers light");
         assert!(task.pty_steps.is_empty(), "light was already the answer");
 
-        task.remove_sub(a);
+        task.remove_sub(c);
+        assert!(effective_dark(&task), "the latest attach answers dark");
         task.remove_sub(b);
 
         let end = task.sync_color_scheme_to_pty();

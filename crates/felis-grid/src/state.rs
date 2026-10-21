@@ -611,6 +611,34 @@ impl ScreenDump {
     }
 }
 
+/// Sparse `(index, rgb)` pairs: serde derives no array past 32 slots.
+pub(crate) mod palette_config {
+    use super::{Deserialize, Deserializer, Serialize, Serializer};
+
+    type Slots = [Option<(u8, u8, u8)>; 256];
+
+    pub(crate) fn serialize<S: Serializer>(
+        slots: &Slots,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        (0..=u8::MAX)
+            .zip(slots)
+            .filter_map(|(index, rgb)| rgb.map(|rgb| (index, rgb)))
+            .collect::<Vec<_>>()
+            .serialize(serializer)
+    }
+
+    pub(crate) fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Slots, D::Error> {
+        let mut slots = [None; 256];
+        for (index, rgb) in Vec::<(u8, (u8, u8, u8))>::deserialize(deserializer)? {
+            slots[usize::from(index)] = Some(rgb);
+        }
+        Ok(slots)
+    }
+}
+
 pub(crate) mod screen {
     use super::{Deserialize, Deserializer, ScreenBuffer, ScreenDump, Serialize, Serializer};
     use serde::{de::Error as _, ser::Error as _};

@@ -138,15 +138,18 @@ fn an_owed_prompt_expiry_survives_the_hop() {
     assert_eq!(grid.take_pty_effects(), [PtyEffect::PromptStarted]);
 }
 
-/// The configured palette is the windows' to report again, so a restored
-/// session starts without one rather than answering a departed window's.
+/// A parked session crosses the hop answering the same configured
+/// palette as its configured trio and OS preference.
 #[test]
-fn a_configured_palette_does_not_survive_the_hop() {
+fn the_configured_palette_survives_the_hop() {
     let parser = Parser::new();
     let mut grid = Grid::new(2, 8);
     grid.set_palette_config_default(1, Some((0xFF, 0x55, 0x55)));
+    grid.set_palette_config_default(255, Some((0x01, 0x02, 0x03)));
     let (_, grid) = hop(&parser, &grid);
-    assert_eq!(grid.palette_config_default(1), None);
+    assert_eq!(grid.palette_config_default(1), Some((0xFF, 0x55, 0x55)));
+    assert_eq!(grid.palette_config_default(255), Some((0x01, 0x02, 0x03)));
+    assert_eq!(grid.palette_config_default(2), None);
 }
 
 #[test]

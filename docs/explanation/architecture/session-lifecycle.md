@@ -307,9 +307,14 @@ only its own stored entry, and a channel a program's own `OSC 11` currently over
 new value: an ownership transfer that hands the facet to a window on the other OS theme is as much a change as a fresh
 report.
 
-When the last window detaches the chain is empty, which is the whole of the lifecycle rule: the client-derived layer
-resolves back to the compiled-in fallback, and a parked session never answers with a departed window's colors. Nothing
-clears anything as a separate step.
+A facet no candidate has reported keeps the value it last resolved to. The last detach empties the chain, so a parked
+session goes on answering the colors and OS scheme its program last saw, and a window that attaches moves nothing until
+its own report lands. Only a session no window has ever reported to answers the compiled-in fallback and light.
+
+Falling back to the compiled-in layer on the last detach would describe no window either, while the program has already
+adapted to the last one. Under `DECSET 2031` the fallback is also an event: the program is told "light", repaints a
+screen no window shows (which a session picker's capture preview then displays), and repaints back when a window
+returns.
 
 #### Ownership transfer has a frozen order
 

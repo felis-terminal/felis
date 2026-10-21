@@ -689,7 +689,8 @@ pub struct Grid {
     /// The PTY winsize's pixel extents, `(width, height)`, which the
     /// daemon sets; `0` where unknown. The grid's own size is in cells.
     winsize_pixels: (u16, u16),
-    /// Last OS color preference the client reported (`true` = dark);
+    /// The OS color preference (`true` = dark) the daemon last resolved
+    /// from a window's report, kept while no window reports one;
     /// `DSR ? 996 n` before any report answers with the light default.
     os_dark: Option<bool>,
     /// `OSC 133` marks, oldest first, front-pruned once a mark falls
@@ -747,15 +748,16 @@ pub struct Grid {
     /// `ThemeChannel as usize`; `None` means "renderer default".
     theme_overrides: [Option<(u8, u8, u8)>; 3],
     theme_dirty: [bool; 3],
-    /// Attached client's configured `[fg, bg, cursor]`, set on attach.
-    /// Consulted by `OSC 10/11/12 ; ?` before xterm fallback so background
-    /// detectors see actual surface colors. Not VT state (not saved/reset).
+    /// A window's configured `[fg, bg, cursor]` as the daemon last
+    /// resolved it, kept while no window reports one. Consulted by
+    /// `OSC 10/11/12 ; ?` before xterm fallback so background detectors
+    /// see actual surface colors. Not VT state (not saved/reset).
     theme_config_defaults: [Option<(u8, u8, u8)>; 3],
-    /// Attached client's configured palette, the layer an `OSC 4 ; n ; ?`
+    /// The configured palette resolved together with
+    /// [`Self::theme_config_defaults`], the layer an `OSC 4 ; n ; ?`
     /// answers between [`Self::palette_overrides`] and
-    /// [`default_palette_color`]. Not VT state (not saved/reset), and
-    /// not dumped: a restored session re-resolves it from its windows.
-    #[cfg_attr(feature = "state-dump", serde(skip, default = "no_palette_config"))]
+    /// [`default_palette_color`]. Not VT state (not saved/reset).
+    #[cfg_attr(feature = "state-dump", serde(with = "state::palette_config"))]
     palette_config_defaults: [Option<(u8, u8, u8)>; 256],
     /// `OSC 4` overrides, sparse over [`default_palette_color`]. Answers
     /// OSC 4 queries (REQ-203) and, mirrored via `GridMsg::PaletteColor`,
@@ -1524,19 +1526,12 @@ impl Grid {
         self.os_dark = Some(dark);
     }
 
-    /// `None` when no client has reported one. The daemon uses it to
+    /// `None` until a window has reported one. The daemon uses it to
     /// tell an effective change (which owes the program a `DECSET 2031`
     /// notification) from a re-resolution landing on the same answer.
     #[must_use]
     pub const fn os_dark(&self) -> Option<bool> {
         self.os_dark
-    }
-
-    /// Called by the daemon whenever its chain resolves to no reporting
-    /// window, the last detach included: a parked session must not keep
-    /// answering `DSR ? 996 n` with a departed window's OS setting.
-    pub const fn clear_os_dark(&mut self) {
-        self.os_dark = None;
     }
 
     /// `CSI ? 997 ; Ps n` (`Ps = 1` dark, `2` light), shared by the
@@ -2993,11 +2988,6 @@ const fn special_slot_from_osc4_alias(idx: u16) -> Option<usize> {
     } else {
         None
     }
-}
-
-#[cfg(feature = "state-dump")]
-const fn no_palette_config() -> [Option<(u8, u8, u8)>; 256] {
-    [None; 256]
 }
 
 /// Default xterm-256color palette entry: 0..=7 classic ANSI (`0xCD` /
