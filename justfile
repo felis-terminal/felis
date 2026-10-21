@@ -59,7 +59,7 @@ test:
 # Run the hermetic tests of the Python tools under tools/ (pr.yml's build job runs this).
 [group('test')]
 test-tools *args:
-    pytest tools {{ args }}
+    pytest -n auto {{ if args == "" { "tools" } else { args } }}
 
 # Drive the frontend smoke on this display (uses cat so marker reaches screen via tty echo).
 [group('test')]

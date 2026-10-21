@@ -129,7 +129,10 @@
         ) "dev/packages/gungraun-runner.nix pins ${runner.version} but Cargo.lock has gungraun ${locked}";
         runner;
 
-      toolsPython = pkgs.python3.withPackages (ps: [ ps.pytest ]);
+      toolsPython = pkgs.python3.withPackages (ps: [
+        ps.pytest
+        ps.pytest-xdist
+      ]);
 
       devTools =
         with pkgs;

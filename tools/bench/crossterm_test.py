@@ -1409,6 +1409,10 @@ class TestMemoryLeg:
         assert not (results / "kitty.flooded").exists()
 
 
+# The forked child only execs, so it takes no lock a sibling thread could hold.
+@pytest.mark.filterwarnings(
+    "ignore:.*use of forkpty\\(\\) may lead to deadlocks:DeprecationWarning"
+)
 @pytest.mark.usefixtures("presenting")
 class TestWrapperHandshake:
     """The wrapper's half of the pin, run for real under a PTY.
