@@ -24,13 +24,9 @@ hurt UX for no functional gain, while feature _selection_ happens through termin
 verified-only), not through DA1's coarse class bits. What DA1 must be is constant and version-independent (the
 identity-class query rule in [security-model.md](../security-model.md)); accuracy per bit is terminfo's job.
 
-The two costs this design carries are accepted deliberately:
-
-- Requiring a `tic` install for `xterm-felis` is tolerable because the escape hatch (`FELIS_TERM=xterm-256color`) is a
-  one-variable fallback on hosts without the entry.
-- The entry not being reconstructable from `infocmp` on a remote host (the price of `use=xterm-256color` over kitty's
-  standalone entry) is acceptable because felis cross-host work goes through the daemon ([ipc.md](ipc.md)), not TERM
-  propagation.
+Requiring a `tic` install for `xterm-felis` on a host that runs no felis is a cost accepted deliberately: the escape
+hatch (`FELIS_TERM=xterm-256color`) is a one-variable fallback, and a host reached by `ssh` gets the entry from the
+shipped shell function ("Why the entry reaches ssh hosts through a shell function" below).
 
 ## Why the entry is trimmed and 16-bit
 
@@ -74,6 +70,25 @@ rejected:
   commands they run in-process, `felis doctor` among them.
 - **Add it in the client.** Sessions are also created by `felis sessions spawn` and any other IPC client, and a daemon
   started by one install serves the clients of another; only the daemon sees every spawn.
+
+## Why the entry reaches ssh hosts through a shell function
+
+A plain `ssh` from a session carries `TERM=xterm-felis` to a host without the entry. Putting the entry there before the
+login is the shell's job (Principle 1), so felis ships it as a shell function beside `felis.zsh`, not as a felis verb
+([the reference twin](../../reference/terminal-identity.md#hosts-reached-by-ssh) states its contract). Four alternatives
+are rejected:
+
+- **A felis verb that wraps ssh**, as kitty's `kitten ssh` is: the product would own ssh's argument grammar for nothing
+  a shell function cannot do.
+- **Delivering the entry inside the login session**, as `kitten ssh` does: the session's remote command becomes a
+  bootstrap that re-executes the login shell, so the shell the user configured is started by that bootstrap instead of
+  sshd. The function sends the entry over a separate connection and leaves the login to sshd.
+- **A local cache of hosts already served**, as Ghostty's `+ssh` keeps: a rebuilt VM, or another machine reached under
+  the same name, keeps its cache line and lacks the entry. The function installs on every connect, which also replaces
+  an entry an older felis left.
+- **One shared connection through an injected `ControlMaster`**: the install connection would claim a socket the user
+  meant for the session, override an explicit `ControlPath none`, and keep the session's forwardings alive past its end.
+  Without the user's own multiplexing, a connect therefore authenticates twice.
 
 ## Why the escape hatch is an environment variable
 

@@ -70,7 +70,9 @@ yourself.
 
 For zsh, `enableZshIntegration` sources the prompt-marking script from the generated `.zshrc`, after the default-order
 setup where prompt themes load; it defaults to `home.shell.enableZshIntegration`. See
-[Mark shell prompts](mark-shell-prompts.md) for what the marks enable.
+[Mark shell prompts](mark-shell-prompts.md) for what the marks enable. `enableSshIntegration` (default `false`) sources
+the `ssh` function that installs the `xterm-felis` entry on hosts you reach with `ssh`, in bash, zsh and fish; see
+[Fix terminfo problems](fix-terminfo-problems.md#a-host-reached-by-ssh-reports-an-unknown-terminal).
 
 The module can also run a notification subscriber as a user service; see
 [Get notified when a job finishes](enable-notifications.md).

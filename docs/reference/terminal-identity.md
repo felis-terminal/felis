@@ -97,7 +97,38 @@ never compiles the entry itself.
 
 On systems where `xterm-felis` is not yet installed in the system terminfo database
 (`tic -x crates/felis-daemon/terminfo/felis.terminfo`), applications may fail terminfo lookups. Users can fall back to
-standard profiles via `FELIS_TERM=xterm-256color`.
+standard profiles via `FELIS_TERM=xterm-256color`; a host reached by `ssh` gets the entry from the function in "Hosts
+reached by ssh".
+
+## Hosts reached by ssh
+
+`share/felis/shell-integration/ssh.bash`, `ssh.zsh` and `ssh.fish` each define an `ssh` function that runs
+`share/felis/shell-integration/ssh.sh` with `sh`. It runs `ssh` with the arguments unchanged unless `TERM` is
+`xterm-felis` and the invocation is an interactive login: one destination, no remote command, and none of `-f`, `-G`,
+`-M`, `-N`, `-O`, `-Q`, `-S`, `-s`, `-T`, `-t`, `-V`, `-W`, `-w`. It also leaves the arguments unchanged when `ssh -G`
+reports any of these:
+
+- a `RemoteCommand`, a `RequestTTY` other than `auto`, or a `SessionType` other than `default`;
+- `StdinNull`, `ForkAfterAuthentication`, `PermitLocalCommand`, or a `Tunnel`;
+- a `ControlMaster` other than `no` or `auto`;
+- a `TERM` under `SetEnv`;
+- an install connection whose configuration differs from the login's in anything beyond the options it sets itself
+  (`Match command` and `Match sessiontype` can route it elsewhere).
+
+Otherwise it first opens an install connection: the same arguments plus `-T`, `RequestTTY=no`, `RemoteCommand=none` and
+`ClearAllForwardings=yes`, fed the local `infocmp -x xterm-felis` output, with a remote `sh` that compiles it with
+`tic -x` into `~/.terminfo`. A remote without `tic` counts as installed when it already resolves `xterm-felis`. The
+function adds no multiplexing options, so the install connection uses the user's own `ControlMaster` when one is
+configured.
+
+| Install connection                       | Login                                                                                                                              |
+| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| Exits 0                                  | `ssh` with the arguments unchanged                                                                                                 |
+| Exits 255 (ssh's own failure)            | None; the function exits 255                                                                                                       |
+| Exits otherwise, or no local entry found | `felis: xterm-felis is not available on <destination>; using TERM=xterm-256color` on stderr, then `ssh` with `TERM=xterm-256color` |
+
+The function exits with the login's status. `SetEnv TERM=xterm-256color` in a host's `~/.ssh/config` block excludes that
+host, which suits one whose server-side forced command must not run for the install connection.
 
 ## The escape hatch: `FELIS_TERM` / `FELIS_TERM_PROGRAM`
 

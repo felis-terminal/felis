@@ -21,10 +21,10 @@ reports an unknown terminal, run `echo $TERMINFO_DIRS` in that session. If it do
 installed, the session belongs to a daemon from another install or an older build: stop it with `felis daemon stop` and
 open a new window. If it does, the first line of `infocmp xterm-felis` names the file that answers, which is how a stale
 copy under `TERMINFO` or `~/.terminfo` shows itself; an error instead means no directory in the search holds an entry
-that reader can parse. On a system built from source, or a remote host reached over SSH, compile the entry with `tic` as
-shown in [Install](install.md#build-from-source). Because `~/.terminfo` takes precedence over `TERMINFO_DIRS`, an entry
-compiled there by hand shadows later updates to the packaged one, so leave that directory alone on a system where Nix
-manages felis.
+that reader can parse. On a system built from source, compile the entry with `tic` as shown in
+[Install](install.md#build-from-source); for a remote host, see the next section. Because `~/.terminfo` takes precedence
+over `TERMINFO_DIRS`, an entry compiled there by hand shadows later updates to the packaged one, so leave that directory
+alone on a system where Nix manages felis.
 
 If you cannot install terminfo entries on a remote system, configure the daemon to advertise a compatible generic
 terminal identifier:
@@ -34,6 +34,69 @@ export FELIS_TERM=xterm-256color
 ```
 
 For capability implications of fallback terminal names, see [terminal-identity.md](../reference/terminal-identity.md).
+
+## A host reached by ssh reports an unknown terminal
+
+`ssh` passes `TERM=xterm-felis` to the remote host, which usually has no such entry. felis ships an `ssh` function that
+installs the entry on the remote before each interactive login. Source the file for your shell from its startup file:
+
+```bash
+# ~/.bashrc
+if felis_bin=$(command -v felis); then
+  while [ -L "$felis_bin" ]; do
+    link=$(readlink "$felis_bin")
+    case $link in /*) felis_bin=$link ;; *) felis_bin=${felis_bin%/*}/$link ;; esac
+  done
+  source "${felis_bin%/*/*}/share/felis/shell-integration/ssh.bash"
+  unset felis_bin link
+fi
+```
+
+```zsh
+# ~/.zshrc
+if (( $+commands[felis] )); then
+  source ${commands[felis]:A:h:h}/share/felis/shell-integration/ssh.zsh
+fi
+```
+
+```fish
+# ~/.config/fish/config.fish
+if command -q felis
+    source (path resolve (command -s felis) | path dirname | path dirname)/share/felis/shell-integration/ssh.fish
+end
+```
+
+With the home-manager module, set `programs.felis.enableSshIntegration = true;` instead; it sources the file in each
+shell home-manager configures.
+
+From then on, `ssh <host>` in a felis window opens a short second connection that compiles the entry into the remote
+`~/.terminfo`, then logs in as usual. Where that fails, for example on a host without `tic`, it prints a warning and
+logs in with `TERM=xterm-256color`. Commands such as `ssh <host> make` and `scp` run unchanged; the exact conditions are
+in [terminal-identity.md](../reference/terminal-identity.md#hosts-reached-by-ssh).
+
+The second connection authenticates like the first, so password logins are asked twice. Let the two connections share
+one with multiplexing in `~/.ssh/config`:
+
+```
+Host *
+  ControlMaster auto
+  ControlPath ~/.ssh/control-%C
+  ControlPersist 10m
+```
+
+To exclude a host, such as one whose `authorized_keys` forces a command that must not run twice, give it a fixed
+terminal type:
+
+```
+Host backup
+  SetEnv TERM=xterm-256color
+```
+
+Without the function, install the entry on a host once by hand:
+
+```sh
+infocmp -x xterm-felis | ssh <host> -- tic -x -
+```
 
 ## On macOS, /usr/bin programs say unknown terminal but Nix ones work
 
