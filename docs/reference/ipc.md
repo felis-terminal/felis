@@ -807,7 +807,7 @@ The daemon builds the child's environment in one frozen order:
 
 1. the base: `env_base` when present, which replaces it outright; else the connection's relay carrier block; else the
    daemon's own environment;
-2. the daemon's denylist scrub;
+2. the daemon's denylist scrub, which also removes the keymap-command origin variables;
 3. the forced identity stamps;
 4. on macOS only, `LANG` from the host's current region, when the base sets none of `LANG`, `LC_ALL` and `LC_CTYPE` to a
    non-empty value;

@@ -115,6 +115,19 @@ const ENV_DENYLIST: &[&str] = &[
     "FELIS_TERM_PROGRAM",
 ];
 
+/// Keymap-command origin variables (`docs/reference/keybindings.md`),
+/// scrubbed from every base like the denylist but not reserved: the
+/// chord that spawns a command sets the current values through
+/// `SpawnArgs.env`, which lands after the scrub.
+const ORIGIN_ENV: [&str; 6] = [
+    "FELIS_ORIGIN_SESSION_ID",
+    "FELIS_HOST",
+    "FELIS_CWD",
+    "FELIS_INPUT_LINE_NUMBER",
+    "FELIS_CURSOR_LINE",
+    "FELIS_CURSOR_COLUMN",
+];
+
 /// Keys forbidden in `SpawnArgs.env` (REQ-912) and scrubbed from inherited base.
 ///
 /// Ensures explicit config validation and base sanitization agree, while
@@ -286,7 +299,7 @@ pub fn apply_env_policy(
     endpoint: Option<&std::ffi::OsStr>,
     lang: Option<&str>,
 ) {
-    for &key in ENV_DENYLIST {
+    for &key in ENV_DENYLIST.iter().chain(&ORIGIN_ENV) {
         cmd.env_remove(key);
     }
     let (term, term_program) =
@@ -675,6 +688,33 @@ mod tests {
         assert!(!text.contains("DESKTOP_STARTUP_ID"), "got: {text}");
         assert!(!text.contains("VTE_VERSION"), "got: {text}");
         assert!(!text.contains("NOTIFY_SOCKET"), "got: {text}");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn apply_env_policy_strips_inherited_origin_variables() {
+        let text = read_child_env(None, |cmd| {
+            for key in ORIGIN_ENV {
+                cmd.env(key, "stale-origin");
+            }
+        })
+        .await;
+        assert!(!text.contains("stale-origin"), "got: {text}");
+    }
+
+    #[test]
+    fn the_scrubbed_origin_variables_are_the_ones_the_client_sets() {
+        let mut daemon = ORIGIN_ENV.to_vec();
+        let mut client = felis_client_core::pipe::ORIGIN_ENV_KEYS.to_vec();
+        daemon.sort_unstable();
+        client.sort_unstable();
+        assert_eq!(daemon, client);
+    }
+
+    #[test]
+    fn origin_variables_stay_settable_through_spawn_args() {
+        for key in ORIGIN_ENV {
+            assert!(!reserved_env_keys().contains(&key), "{key} is reserved");
+        }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

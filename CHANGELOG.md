@@ -15,6 +15,9 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 - A program that follows the OS light/dark preference, such as Neovim, no longer switches to its light theme while its
   session has no window attached, for example behind a session picker. A session without a window keeps answering color
   queries with the colors and preference it last answered with.
+- A keymap command no longer sees `FELIS_HOST`, `FELIS_CWD` or another origin variable left over from an earlier chord.
+  Before, a window launched from a `run` command passed that command's values on to its own chords and new sessions, so
+  a local window opened from a `--host` window kept reporting the remote host.
 
 ## [0.3.0] - 2026-10-20
 

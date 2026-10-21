@@ -152,6 +152,10 @@ Commands run with origin environment variables:
 | `FELIS_HOST`              | Window SSH destination; unset for local windows                             |
 | `FELIS_CWD`               | Origin session `OSC 7` working directory URI (`file://host/path`), verbatim |
 
+Each value is the current chord's: a variable the origin lacks is unset, never inherited from an earlier chord's command
+that launched this window or its daemon. Every session the daemon creates starts with these and the viewport anchor
+variables below removed from its base.
+
 ### Viewport anchor variables
 
 Command sinks fed `scrollback` or `visible` export viewport line anchors to the environment:

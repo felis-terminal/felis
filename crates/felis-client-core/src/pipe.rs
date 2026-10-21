@@ -28,6 +28,21 @@ pub const HOST_ENV: &str = "FELIS_HOST";
 /// The verbatim `OSC 7` report; the command runs here, the path may name
 /// somewhere else.
 pub const CWD_ENV: &str = "FELIS_CWD";
+pub const TOP_LINE_ENV: &str = "FELIS_INPUT_LINE_NUMBER";
+pub const CURSOR_LINE_ENV: &str = "FELIS_CURSOR_LINE";
+pub const CURSOR_COLUMN_ENV: &str = "FELIS_CURSOR_COLUMN";
+
+/// Every variable [`prepare_spawn`] may set. Each describes one chord, so
+/// the daemon scrubs all of them from an inherited base and a stale value
+/// never outlives the origin it named.
+pub const ORIGIN_ENV_KEYS: [&str; 6] = [
+    ORIGIN_SESSION_ENV,
+    HOST_ENV,
+    CWD_ENV,
+    TOP_LINE_ENV,
+    CURSOR_LINE_ENV,
+    CURSOR_COLUMN_ENV,
+];
 
 /// A region file staged for a transient, unlinked on drop. A guard rather
 /// than a path so the failure paths that end the handoff (a switch that
@@ -138,12 +153,9 @@ fn child_env(position: Option<RegionPosition>, origin: &Origin) -> Vec<(String, 
 fn position_env(position: Option<RegionPosition>) -> Vec<(String, String)> {
     position.map_or_else(Vec::new, |p| {
         vec![
-            ("FELIS_INPUT_LINE_NUMBER".to_owned(), p.top_line.to_string()),
-            ("FELIS_CURSOR_LINE".to_owned(), p.cursor_line.to_string()),
-            (
-                "FELIS_CURSOR_COLUMN".to_owned(),
-                p.cursor_column.to_string(),
-            ),
+            (TOP_LINE_ENV.to_owned(), p.top_line.to_string()),
+            (CURSOR_LINE_ENV.to_owned(), p.cursor_line.to_string()),
+            (CURSOR_COLUMN_ENV.to_owned(), p.cursor_column.to_string()),
         ]
     })
 }

@@ -617,6 +617,10 @@ The scrub and the explicit-pair check consult one list, **derived** from the den
 than written out beside it: two lists would let a key be added to one and forgotten in the other, reaching the child
 neither scrubbed nor refused with REQ-912 nominally satisfied.
 
+The keymap-command origin variables (`FELIS_ORIGIN_SESSION_ID`, `FELIS_HOST`, `FELIS_CWD`, the viewport anchors) are
+scrubbed by a second list the explicit-pair check does not consult. Each describes one chord, so an inherited value
+names an origin that is gone, while the chord's own values arrive as explicit pairs and must not be refused.
+
 ### Any same-UID process that reaches the socket can repoint the stable agent link
 
 The daemon hands relay-chain children one `SSH_AUTH_SOCK` symlink of its own

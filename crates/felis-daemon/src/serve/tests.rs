@@ -4620,10 +4620,12 @@ fn spawn_args_command_inherits_daemon_env_with_user_overrides_last() {
     ];
     for (key, val) in std::env::vars_os() {
         let name = fold(&key);
-        if crate::ENV_DENYLIST.contains(&name.as_str()) {
+        if crate::ENV_DENYLIST.contains(&name.as_str())
+            || crate::ORIGIN_ENV.contains(&name.as_str())
+        {
             assert!(
                 !envs.contains_key(&name),
-                "denylisted var {name} leaked into the built command",
+                "scrubbed var {name} leaked into the built command",
             );
         } else if !stamped.contains(&name.as_str()) {
             assert_eq!(
@@ -4646,6 +4648,28 @@ fn spawn_args_command_inherits_daemon_env_with_user_overrides_last() {
         !envs.contains_key("FELIS_SOCKET"),
         "FELIS_SOCKET must not leak from the parent when the daemon has no endpoint",
     );
+}
+
+#[test]
+fn spawn_args_set_the_current_origin_over_a_stale_inherited_one() {
+    let mut cmd = Command::new("true");
+    cmd.env("FELIS_HOST", "stale@remote");
+    cmd.env("FELIS_CWD", "file://remote/stale");
+    cmd.env("FELIS_ORIGIN_SESSION_ID", "stale");
+    apply_spawn_posture(
+        &mut cmd,
+        1,
+        None,
+        &ResolvedEnv::birth(),
+        &[("FELIS_ORIGIN_SESSION_ID".to_owned(), "current".to_owned())],
+        None,
+    );
+    assert_eq!(
+        env_of(&cmd, "FELIS_ORIGIN_SESSION_ID").as_deref(),
+        Some("current")
+    );
+    assert_eq!(env_of(&cmd, "FELIS_HOST"), None);
+    assert_eq!(env_of(&cmd, "FELIS_CWD"), None);
 }
 
 #[cfg(unix)]
@@ -5026,6 +5050,39 @@ fn only_a_relay_base_is_repointed_at_the_stable_agent_path() {
         Some("/tmp/ssh-abc/agent.42"),
         "a local dial's own agent path is left alone"
     );
+}
+
+#[test]
+fn a_snapshot_or_relay_base_loses_its_stale_origin_variables() {
+    let factory: SessionFactory =
+        Arc::new(|_| panic!("a named command must not reach the default-program factory"));
+    let base: Vec<_> = crate::ORIGIN_ENV
+        .iter()
+        .map(|key| entry(key, "stale"))
+        .collect();
+    let current: Vec<_> = crate::ORIGIN_ENV
+        .iter()
+        .map(|key| ((*key).to_owned(), format!("current-{key}")))
+        .collect();
+    for source in [EnvBaseSource::Request(&base), EnvBaseSource::Relay(&base)] {
+        let resolved =
+            resolve_env_base(source, None, None, crate::child_env::TARGET_IS_WINDOWS).unwrap();
+        for explicit in [Vec::new(), current.clone()] {
+            let args = felis_protocol::messages::SpawnArgs {
+                command: "printenv".to_owned(),
+                env: explicit.clone(),
+                ..Default::default()
+            };
+            let cmd = command_from_args(&args, &factory, 0, None, &resolved, None);
+            for key in crate::ORIGIN_ENV {
+                let want = explicit
+                    .iter()
+                    .find(|(name, _)| name == key)
+                    .map(|(_, value)| value.clone());
+                assert_eq!(env_of(&cmd, key), want, "{key} from {source:?}");
+            }
+        }
+    }
 }
 
 /// The link may only name what a child could have inherited: the same

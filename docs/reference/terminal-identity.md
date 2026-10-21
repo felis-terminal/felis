@@ -30,7 +30,8 @@ Environment construction resolves in the following sequence:
 
 1. Base environment: `SpawnArgs.env_base` (when provided via local socket), the connection relay snapshot, or the daemon
    process environment ([ipc.md](ipc.md) § "Session (kind = 4)").
-2. Denylist scrub: Keys matching security filtering rules are removed.
+2. Denylist scrub: Keys matching security filtering rules are removed, and so are the keymap-command origin variables
+   ([keybindings.md](keybindings.md)), which, unlike denylisted keys, `SpawnArgs.env` may still set.
 3. Identity and addressing stamps: The variables from the table above are injected. Five are unconditional;
    `FELIS_SOCKET` is stamped only when the daemon serves an endpoint, and a daemon serving none removes an inherited
    value rather than letting a child address the daemon it was launched from.
