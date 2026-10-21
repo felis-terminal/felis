@@ -13,6 +13,7 @@ workflows that gate them. The strategy behind the layers is in [testing.md](../e
 | ---------------------- | --------------------------------------------- | -------------------------------------------------------------- |
 | Principle invariants   | Encode the "Test:" lines from `principles.md` | [principles.md](../explanation/principles.md)                  |
 | Workspace guards       | Invariants of the workspace itself            | Rust `#[test]`, `lychee`, and `cargo-deny`                     |
+| Tool tests             | The repository tools under `tools/`           | pytest                                                         |
 | Unit tests             | Component-internal correctness                | Rust `#[test]`                                                 |
 | Property tests         | Algebraic invariants of parser, grid, reflow  | proptest                                                       |
 | Fuzzing                | Robustness against hostile bytes              | cargo-fuzz over libFuzzer                                      |
@@ -49,6 +50,13 @@ that enforces it.
 citation of a Rust source file under `crates/` resolves, so a path cited after a rename fails
 `cargo nextest run --workspace`. Markdown links are checked separately by `just docs-links`, which runs `lychee` without
 network access.
+
+## Tool tests
+
+The Python tools under `tools/` (release and wire-compatibility gates, bench orchestrators, prose and dependency checks)
+are tested by pytest, which collects every `*_test.py` beside the tool it tests. The suites are hermetic: git
+repositories are throwaway and forges are local fakes. `just test-tools` runs them all, and `pr.yml` runs that recipe on
+every pull request.
 
 ## Unit tests
 
@@ -175,7 +183,7 @@ adding one to a crate's `Cargo.toml` is all it takes to enter `just bench-all`.
 | Generate Markdown report          | `just bench-report`                                                                                 |
 | Check regression against baseline | `just bench --save-baseline before`, modify code, `just bench --baseline before`, `just bench-gate` |
 | Instruction-count gate            | `just bench-gate-ir [base]` (base revision, `origin/main` by default)                               |
-| Orchestrator and gate self-tests  | `just bench-selftest`                                                                               |
+| Orchestrator and gate tests       | `just test-tools tools/bench`                                                                       |
 
 `just bench-gate` fails if a benchmark's mean wall-clock change exceeds the threshold (15% by default). It has no CI
 caller; the pull-request gate is the instruction-count gate below.
@@ -276,7 +284,7 @@ published Forgejo release to GitHub, crates.io, and the Homebrew tap ([workspace
 
 | Workflow      | Triggers                  | Purpose                                                                                                        |
 | ------------- | ------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `pr.yml`      | Push, PR                  | `nix flake check`, the Cargo suite (clippy, nextest, `just deny`, self-tests), the wire check, Linux smoke.    |
+| `pr.yml`      | Push, PR                  | `nix flake check`, the Cargo suite (clippy, nextest, `just deny`, tool tests), the wire check, Linux smoke.    |
 | `windows.yml` | Push, PR                  | Windows clippy, nextest, headless smoke, and package artifact.                                                 |
 | `darwin.yml`  | Push, PR                  | aarch64-darwin package and release-archive build, with the archive's manifest, signature, and smoke checks.    |
 | `fuzz.yml`    | Push, PR, Nightly, Manual | Fuzz smoke on push and PR; the nightly long run with corpus minification.                                      |

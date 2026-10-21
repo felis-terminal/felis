@@ -17,7 +17,6 @@ from verify import BINARY_CRATES
 USAGE = """usage: tools/release/crates.py check
        tools/release/crates.py publish-plan
        tools/release/crates.py package-tests
-       tools/release/crates.py --self-test
 
 check: refuses a tree whose library versions are not ready to publish: a
 changed crate left unbumped (`release-plz update` would edit the tree), a bump
@@ -332,9 +331,6 @@ def package_tests(root: Path) -> None:
 
 
 def main(argv: list[str]) -> int:
-    if argv == ["--self-test"]:
-        test = Path(__file__).with_name("crates_test.py")
-        os.execv(sys.executable, [sys.executable, str(test)])
     if len(argv) != 1 or argv[0] not in {"check", "publish-plan", "package-tests"}:
         print(USAGE, file=sys.stderr, end="")
         return 64

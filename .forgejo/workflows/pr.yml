@@ -40,7 +40,7 @@ jobs:
       # Here rather than beside each tool's own job: the release gate runs
       # only on tags and the bench orchestrators only on bench-relevant
       # paths, so a PR that broke either would surface far from its cause.
-      - run: nix develop -c just selftest
+      - run: nix develop -c just test-tools
       - uses: ./.forgejo/actions/cargo-env/done
         if: always()
 

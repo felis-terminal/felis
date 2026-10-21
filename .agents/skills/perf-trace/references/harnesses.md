@@ -35,7 +35,7 @@ The charts read the suite artifacts directly (`*.dat`, `tb`'s JSON, hyperfine's 
 `*.res.json`), so `just bench-vs-report <root>` re-charts any results dir, including one produced by running a harness
 by hand. That recipe enters `.#bench` even though it launches no terminal: the charts are matplotlib, which only that
 shell carries. Parsers, scales and the provenance block are pinned by `tools/bench/crossterm_test.py`
-(`just bench-vs-selftest`): change an artifact's shape and update both.
+(`just test-tools tools/bench`): change an artifact's shape and update both.
 
 **`just bench-vs` enters `nix develop .#bench` for you.** That shell (`dev/bench/devshell.nix`) is the only way the
 field is reproducible; invoking `crossterm.py run` by hand outside it takes every terminal from the host, and the report

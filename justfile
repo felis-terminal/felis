@@ -56,6 +56,11 @@ build-windows-msvc:
 test:
     cargo nextest run --workspace --all-features
 
+# Run the hermetic tests of the Python tools under tools/ (pr.yml's build job runs this).
+[group('test')]
+test-tools *args:
+    pytest -n auto {{ if args == "" { "tools" } else { args } }}
+
 # Drive the frontend smoke on this display (uses cat so marker reaches screen via tty echo).
 [group('test')]
 smoke marker="felis-smoke-local": (_smoke marker "")
@@ -128,11 +133,6 @@ proto:
 proto-compat base="":
     python3 tools/proto/compat.py {{ base }}
 
-# Self-test the wire-compatibility gate on a throwaway repo.
-[group('lint')]
-proto-compat-test:
-    python3 tools/proto/compat.py --self-test
-
 # Regenerate the Unicode property tables from the pinned UCD (dev shell).
 # The unicode-tables pre-commit hook runs this and fails on a stale committed copy.
 [group('lint')]
@@ -144,11 +144,6 @@ unicode-tables:
 [group('lint')]
 prose-check range="origin/main...HEAD":
     python3 tools/prose_check.py --range {{ range }}
-
-# Exercise every prose rule against its fixture.
-[group('lint')]
-prose-check-selftest:
-    python3 tools/prose_check.py --self-test
 
 # Mechanical prose norms across all files.
 [group('lint')]
@@ -184,11 +179,6 @@ deny:
 publish-dry-run:
     cargo publish --workspace --dry-run --allow-dirty
 
-# Self-test the closure-ban checker against its fixture.
-[group('lint')]
-dep-bans-selftest:
-    python3 tools/dep_bans.py --self-test
-
 # Source-based unused-dependency scan.
 [group('lint')]
 machete:
@@ -199,13 +189,9 @@ machete:
 docs-links:
     lychee --offline --no-progress 'docs/**/*.md'
 
-# Hermetic self-tests of every Python tool under tools/ (pr.yml's build job runs this).
+# Run full check suite: fmt-check + lint + portable core + prose + skills + test + docs links + deny + publish dry-run + proto-compat + tool tests.
 [group('lint')]
-selftest: prose-check-selftest dep-bans-selftest proto-compat-test release-check-test release-mirror-test release-homebrew-test bench-selftest bench-vs-selftest
-
-# Run full check suite: fmt-check + lint + portable core + prose + skills + test + docs links + deny + publish dry-run + proto-compat + tool self-tests.
-[group('lint')]
-check: fmt-check lint check-portable prose-check skill-check test docs-links deny publish-dry-run proto-compat selftest
+check: fmt-check lint check-portable prose-check skill-check test docs-links deny publish-dry-run proto-compat test-tools
 
 # ── Release ────────────────────────────────────────────────────────
 
@@ -224,27 +210,6 @@ package-tests:
 [group('release')]
 release-prepare:
     release-plz update
-
-# Self-test the release identity gate on a throwaway repo, and the crate checks on fixtures.
-[group('release')]
-release-check-test:
-    python3 tools/release/verify.py --self-test
-    python3 tools/release/crates.py --self-test
-
-# Self-test the release page publisher against a local fake forge.
-[group('release')]
-release-publish-test:
-    python3 tools/release/publish.py --self-test
-
-# Self-test the GitHub release mirror against a local fake Forgejo and GitHub.
-[group('release')]
-release-mirror-test:
-    python3 tools/release/mirror.py --self-test
-
-# Self-test the Homebrew tap bump against a throwaway repo and a local fake GitHub.
-[group('release')]
-release-homebrew-test:
-    python3 tools/release/homebrew.py --self-test
 
 # ── Bench (tools/bench/criterion.py runs the wall-clock Criterion benches) ──
 # Runs through the orchestrator rather than bare cargo bench so every A/B run uses one set of flags.
@@ -274,12 +239,6 @@ bench-gate:
 bench-gate-ir base="origin/main":
     python3 tools/bench/gungraun.py gate --base {{ base }}
 
-# Self-tests for the bench orchestrator and the instruction-count gate (hermetic, no cargo).
-[group('bench')]
-bench-selftest:
-    python3 tools/bench/criterion_test.py
-    python3 tools/bench/gungraun_test.py
-
 # ── Cross-terminal comparison (not a CI gate) ───────────────────────
 # Note: latency suite drives active window; leave keyboard untouched while running.
 
@@ -292,11 +251,6 @@ bench-vs *suites:
 [group('bench')]
 bench-vs-report dir:
     nix develop .#bench -c python3 tools/bench/crossterm.py report {{ dir }}
-
-# Self-tests for the cross-terminal orchestrator (hermetic, no windows).
-[group('bench')]
-bench-vs-selftest:
-    python3 tools/bench/crossterm_test.py
 
 # Fetch ghostty's daily tip pre-release for field benchmarking.
 [group('bench')]

@@ -12,7 +12,7 @@ wgpu/winit, formatter, and pre-commit hook). The rationale lives with the config
 ```sh
 nix develop          # dev shell — installs .git/hooks/pre-commit automatically
 nix fmt              # treefmt
-just check           # local PR gate: fmt-check + clippy (native, plus wasm32 for the client-core and render-core portable cores) + prose + skills + nextest + docs links + dependency bans + publish dry-run + proto-compat + tool self-tests
+just check           # local PR gate: fmt-check + clippy (native, plus wasm32 for the client-core and render-core portable cores) + prose + skills + nextest + docs links + dependency bans + publish dry-run + proto-compat + tool tests
 just --list          # all recipes (fuzz, kani, bench, snapshot, …)
 ```
 
