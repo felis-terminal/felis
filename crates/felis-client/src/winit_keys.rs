@@ -1,6 +1,7 @@
-//! Shared winit → `felis-client-core` key conversions, so
-//! [`keymap_adapter`](crate::keymap_adapter) and [`input`](crate::input)
-//! cannot drift on which keys / modifiers they recognize.
+//! winit → `felis-client-core` key and modifier conversions, shared by
+//! the keyboard adapter ([`input`](crate::input)) and the `window_event`
+//! translation, so the two cannot drift on which keys / modifiers they
+//! recognize.
 
 use felis_client_core::{FKey, Modifiers, NamedKey};
 use winit::keyboard::{ModifiersState, NamedKey as WinitNamedKey};

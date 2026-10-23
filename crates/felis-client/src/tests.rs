@@ -175,9 +175,9 @@ mod wheel {
 
     #[test]
     fn wheel_arrow_bytes_line_delta_emits_csi_arrow_per_tick() {
-        let three_up = wheel_arrow_bytes(MouseScrollDelta::LineDelta(0.0, 3.0), false);
+        let three_up = wheel_arrow_bytes(WheelDelta::Lines(0.0, 3.0), false);
         assert_eq!(three_up, b"\x1b[A\x1b[A\x1b[A".to_vec());
-        let two_down = wheel_arrow_bytes(MouseScrollDelta::LineDelta(0.0, -2.0), false);
+        let two_down = wheel_arrow_bytes(WheelDelta::Lines(0.0, -2.0), false);
         assert_eq!(two_down, b"\x1b[B\x1b[B".to_vec());
     }
 
@@ -185,15 +185,9 @@ mod wheel {
     fn wheel_arrow_bytes_pixel_delta_collapses_to_one_arrow() {
         // Pins: per-pixel deltas collapse to one arrow, the way
         // `wheel_buttons` counts a notch.
-        let down = wheel_arrow_bytes(
-            MouseScrollDelta::PixelDelta(PhysicalPosition::new(0.0, -42.0)),
-            false,
-        );
+        let down = wheel_arrow_bytes(WheelDelta::Pixels(0.0, -42.0), false);
         assert_eq!(down, b"\x1b[B".to_vec());
-        let up = wheel_arrow_bytes(
-            MouseScrollDelta::PixelDelta(PhysicalPosition::new(0.0, 7.0)),
-            false,
-        );
+        let up = wheel_arrow_bytes(WheelDelta::Pixels(0.0, 7.0), false);
         assert_eq!(up, b"\x1b[A".to_vec());
     }
 
@@ -201,14 +195,11 @@ mod wheel {
     fn wheel_arrow_bytes_zero_delta_is_silent() {
         // A pure horizontal scroll over a pager must not eat the wheel.
         assert_eq!(
-            wheel_arrow_bytes(MouseScrollDelta::LineDelta(0.0, 0.0), false),
+            wheel_arrow_bytes(WheelDelta::Lines(0.0, 0.0), false),
             Vec::<u8>::new()
         );
         assert_eq!(
-            wheel_arrow_bytes(
-                MouseScrollDelta::PixelDelta(PhysicalPosition::new(50.0, 0.0)),
-                false
-            ),
+            wheel_arrow_bytes(WheelDelta::Pixels(50.0, 0.0), false),
             Vec::<u8>::new()
         );
     }
@@ -216,7 +207,7 @@ mod wheel {
     #[test]
     fn wheel_arrow_bytes_ignores_horizontal_axis() {
         // No pager interprets `ESC [ C` / `ESC [ D` as scroll.
-        let diag = wheel_arrow_bytes(MouseScrollDelta::LineDelta(2.0, 1.0), false);
+        let diag = wheel_arrow_bytes(WheelDelta::Lines(2.0, 1.0), false);
         assert_eq!(diag, b"\x1b[A".to_vec(), "horizontal axis must not leak");
     }
 
@@ -224,7 +215,7 @@ mod wheel {
     fn wheel_arrow_bytes_uses_csi_form_not_app_cursor_form() {
         // Pins: `ESC [ A` regardless of DECCKM, like `encode_named`, so
         // wheel-up and ArrowUp never differ.
-        let one = wheel_arrow_bytes(MouseScrollDelta::LineDelta(0.0, 1.0), false);
+        let one = wheel_arrow_bytes(WheelDelta::Lines(0.0, 1.0), false);
         assert_eq!(one, b"\x1b[A".to_vec());
         assert_ne!(one, b"\x1bOA".to_vec());
     }
@@ -232,41 +223,31 @@ mod wheel {
     #[test]
     fn wheel_arrow_bytes_shift_held_emits_pageup_pagedown() {
         // Matches `encode_named`'s PageUp / PageDown bytes.
-        let pgup = wheel_arrow_bytes(MouseScrollDelta::LineDelta(0.0, 1.0), true);
+        let pgup = wheel_arrow_bytes(WheelDelta::Lines(0.0, 1.0), true);
         assert_eq!(pgup, b"\x1b[5~".to_vec());
-        let pgdn = wheel_arrow_bytes(MouseScrollDelta::LineDelta(0.0, -1.0), true);
+        let pgdn = wheel_arrow_bytes(WheelDelta::Lines(0.0, -1.0), true);
         assert_eq!(pgdn, b"\x1b[6~".to_vec());
     }
 
     #[test]
     fn wheel_arrow_bytes_shift_held_count_matches_unshifted() {
-        let delta = MouseScrollDelta::LineDelta(0.0, 3.0);
+        let delta = WheelDelta::Lines(0.0, 3.0);
         assert_eq!(wheel_arrow_bytes(delta, false), b"\x1b[A".repeat(3));
         assert_eq!(wheel_arrow_bytes(delta, true), b"\x1b[5~".repeat(3));
     }
 
     #[test]
     fn wheel_arrow_bytes_shift_held_pixel_delta_still_collapses_to_one() {
-        let down = wheel_arrow_bytes(
-            MouseScrollDelta::PixelDelta(PhysicalPosition::new(0.0, -42.0)),
-            true,
-        );
+        let down = wheel_arrow_bytes(WheelDelta::Pixels(0.0, -42.0), true);
         assert_eq!(down, b"\x1b[6~".to_vec());
     }
 
     #[test]
     fn wheel_zoom_delta_px_matches_browser_one_notch_one_pixel() {
         // Browser / kitty / alacritty convention: one notch = +-1 px.
-        assert!(
-            (wheel_zoom_delta_px(MouseScrollDelta::LineDelta(0.0, 1.0)) - 1.0).abs() < f32::EPSILON
-        );
-        assert!(
-            (wheel_zoom_delta_px(MouseScrollDelta::LineDelta(0.0, -1.0)) + 1.0).abs()
-                < f32::EPSILON
-        );
-        assert!(
-            (wheel_zoom_delta_px(MouseScrollDelta::LineDelta(0.0, 3.0)) - 3.0).abs() < f32::EPSILON
-        );
+        assert!((wheel_zoom_delta_px(WheelDelta::Lines(0.0, 1.0)) - 1.0).abs() < f32::EPSILON);
+        assert!((wheel_zoom_delta_px(WheelDelta::Lines(0.0, -1.0)) + 1.0).abs() < f32::EPSILON);
+        assert!((wheel_zoom_delta_px(WheelDelta::Lines(0.0, 3.0)) - 3.0).abs() < f32::EPSILON);
     }
 
     #[test]
@@ -295,14 +276,8 @@ mod wheel {
 
     #[test]
     fn wheel_zoom_delta_px_zero_motion_produces_no_zoom() {
-        assert!(wheel_zoom_delta_px(MouseScrollDelta::LineDelta(0.0, 0.0)).abs() < f32::EPSILON);
-        assert!(
-            wheel_zoom_delta_px(MouseScrollDelta::PixelDelta(PhysicalPosition::new(
-                50.0, 0.0
-            )))
-            .abs()
-                < f32::EPSILON
-        );
+        assert!(wheel_zoom_delta_px(WheelDelta::Lines(0.0, 0.0)).abs() < f32::EPSILON);
+        assert!(wheel_zoom_delta_px(WheelDelta::Pixels(50.0, 0.0)).abs() < f32::EPSILON);
     }
 
     proptest::proptest! {
@@ -313,7 +288,7 @@ mod wheel {
         x in proptest::num::f32::NORMAL,
         y in -1024.0_f32..=1024.0_f32,
     ) {
-        let ticks = wheel_y_ticks(MouseScrollDelta::LineDelta(x, y));
+        let ticks = wheel_y_ticks(WheelDelta::Lines(x, y));
         if y > 0.0 {
             proptest::prop_assert!(ticks > 0, "y={} should produce up-ticks, got {}", y, ticks);
         } else if y < 0.0 {
@@ -331,9 +306,7 @@ mod wheel {
         px in -10_000.0_f64..=10_000.0_f64,
         py in -10_000.0_f64..=10_000.0_f64,
     ) {
-        let ticks = wheel_y_ticks(MouseScrollDelta::PixelDelta(
-            PhysicalPosition::new(px, py),
-        ));
+        let ticks = wheel_y_ticks(WheelDelta::Pixels(px, py));
         let expected = if py > 0.0 { 1 } else if py < 0.0 { -1 } else { 0 };
         proptest::prop_assert_eq!(ticks, expected, "px={} py={}", px, py);
     }
@@ -343,8 +316,8 @@ mod wheel {
         y in -1024.0_f32..=1024.0_f32,
         shift_held in proptest::bool::ANY,
     ) {
-        let bytes = wheel_arrow_bytes(MouseScrollDelta::LineDelta(0.0, y), shift_held);
-        let ticks = wheel_y_ticks(MouseScrollDelta::LineDelta(0.0, y));
+        let bytes = wheel_arrow_bytes(WheelDelta::Lines(0.0, y), shift_held);
+        let ticks = wheel_y_ticks(WheelDelta::Lines(0.0, y));
         let seq_len: usize = match (ticks > 0, shift_held) {
             (_, false) => 3,                 // ESC [ A   or   ESC [ B
             (_, true) => 4,                  // ESC [ 5 ~ or   ESC [ 6 ~
@@ -367,7 +340,7 @@ mod wheel {
         for dy in deltas {
             let pending = accum + dy;
             let rows = wheel_pixels_to_rows(
-                MouseScrollDelta::PixelDelta(PhysicalPosition::new(0.0, dy)),
+                WheelDelta::Pixels(0.0, dy),
                 cell_h,
                 17.0,
                 &mut accum,
@@ -409,7 +382,7 @@ mod wheel {
     ) {
         let mut accum = residue;
         let rows = wheel_pixels_to_rows(
-            MouseScrollDelta::LineDelta(0.0, y),
+            WheelDelta::Lines(0.0, y),
             cell_h,
             multiplier,
             &mut accum,
@@ -438,13 +411,13 @@ mod wheel {
     ) {
         let (delta, transposed) = if pixel_delta {
             (
-                MouseScrollDelta::PixelDelta(PhysicalPosition::new(f64::from(x), f64::from(y))),
-                MouseScrollDelta::PixelDelta(PhysicalPosition::new(f64::from(y), f64::from(x))),
+                WheelDelta::Pixels(f64::from(x), f64::from(y)),
+                WheelDelta::Pixels(f64::from(y), f64::from(x)),
             )
         } else {
             (
-                MouseScrollDelta::LineDelta(x, y),
-                MouseScrollDelta::LineDelta(y, x),
+                WheelDelta::Lines(x, y),
+                WheelDelta::Lines(y, x),
             )
         };
         let y_ticks = wheel_y_ticks(delta);
@@ -1579,7 +1552,7 @@ mod selection_invalidation {
 
 #[test]
 fn ime_commit_forwards_japanese_text_as_utf8_bytes() {
-    let bytes = ime_commit_bytes(&Ime::Commit("こんにちは".to_owned()))
+    let bytes = ime_commit_bytes(&ImeInput::Commit("こんにちは".to_owned()))
         .expect("non-empty commit must forward bytes");
     assert_eq!(bytes, "こんにちは".as_bytes());
 }
@@ -1587,13 +1560,16 @@ fn ime_commit_forwards_japanese_text_as_utf8_bytes() {
 #[test]
 fn empty_ime_commit_is_dropped() {
     // Some IMEs send an empty Commit on cancel.
-    assert_eq!(ime_commit_bytes(&Ime::Commit(String::new())), None);
+    assert_eq!(ime_commit_bytes(&ImeInput::Commit(String::new())), None);
 }
 
 #[test]
 fn preedit_from_ime_anchors_at_cursor_cell_with_text() {
-    let overlay =
-        preedit_from_ime(&Ime::Preedit("こん".to_owned(), Some((6, 6))), at(3, 5)).unwrap();
+    let overlay = preedit_from_ime(
+        &ImeInput::Preedit("こん".to_owned(), Some((6, 6))),
+        at(3, 5),
+    )
+    .unwrap();
     assert_eq!(overlay.anchor, (3, 5));
     assert_eq!(overlay.text, "こん");
     assert_eq!(overlay.cursor, Some((6, 6)));
@@ -1602,23 +1578,23 @@ fn preedit_from_ime_anchors_at_cursor_cell_with_text() {
 #[test]
 fn preedit_from_ime_empty_string_clears_overlay() {
     // Platform IMEs send an empty Preedit when composition ends without commit.
-    assert!(preedit_from_ime(&Ime::Preedit(String::new(), None), at(0, 0)).is_none());
+    assert!(preedit_from_ime(&ImeInput::Preedit(String::new(), None), at(0, 0)).is_none());
 }
 
 #[test]
 fn preedit_from_ime_commit_event_clears_overlay() {
-    assert!(preedit_from_ime(&Ime::Commit("hello".to_owned()), at(0, 0)).is_none());
-    assert!(preedit_from_ime(&Ime::Enabled, at(0, 0)).is_none());
-    assert!(preedit_from_ime(&Ime::Disabled, at(0, 0)).is_none());
+    assert!(preedit_from_ime(&ImeInput::Commit("hello".to_owned()), at(0, 0)).is_none());
+    assert!(preedit_from_ime(&ImeInput::Enabled, at(0, 0)).is_none());
+    assert!(preedit_from_ime(&ImeInput::Disabled, at(0, 0)).is_none());
 }
 
 #[test]
 fn ime_preedit_enabled_disabled_carry_no_bytes_today() {
     // Pre-edit text rides the renderer overlay, never the PTY.
-    assert_eq!(ime_commit_bytes(&Ime::Enabled), None);
-    assert_eq!(ime_commit_bytes(&Ime::Disabled), None);
+    assert_eq!(ime_commit_bytes(&ImeInput::Enabled), None);
+    assert_eq!(ime_commit_bytes(&ImeInput::Disabled), None);
     assert_eq!(
-        ime_commit_bytes(&Ime::Preedit("こん".to_owned(), Some((2, 2)))),
+        ime_commit_bytes(&ImeInput::Preedit("こん".to_owned(), Some((2, 2)))),
         None,
     );
 }
@@ -1941,8 +1917,7 @@ mod lifecycle {
 
     /// The latch `App::on_daemon_closed` sets on a close that arrives
     /// mid-landing; the classifier's verdict is pinned in
-    /// `daemon_closed`. Driving the handler itself needs a live winit
-    /// event loop.
+    /// `daemon_closed`.
     #[test]
     fn the_lost_latch_starts_clear_and_stays_set_once_marked() {
         let (outgoing, _rx) = outgoing_channel();
@@ -2018,5 +1993,545 @@ fn test_place(socket: &str, session_id: u128) -> exit_ladder::Place {
             offer: Offer::window(true),
         },
         session_id,
+    }
+}
+
+/// `App` driven through [`App::on_app_event`] with no event loop, no
+/// GPU and no daemon: the daemon's side is played by hand, every event
+/// the window posts to itself lands in [`AppHarness::posted`], and every
+/// window effect in [`AppHarness::window`].
+mod app_events {
+    use std::sync::mpsc;
+
+    use super::*;
+    use crate::window_input::{KeyPress, PressedKey, WindowInput};
+
+    #[derive(Default)]
+    struct RecordedWindow {
+        titles: Mutex<Vec<String>>,
+        attention_requests: Mutex<u32>,
+    }
+
+    impl RecordedWindow {
+        fn last_title(&self) -> Option<String> {
+            self.titles
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .last()
+                .cloned()
+        }
+
+        fn attention_requests(&self) -> u32 {
+            *self
+                .attention_requests
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+        }
+    }
+
+    impl WindowHost for RecordedWindow {
+        fn set_title(&self, title: &str) {
+            self.titles
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(title.to_owned());
+        }
+        fn set_cursor(&self, _: winit::window::CursorIcon) {}
+        fn request_attention(&self) {
+            *self
+                .attention_requests
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner) += 1;
+        }
+        fn request_redraw(&self) {}
+        fn set_ime_cursor_area(&self, _: PhysicalPosition<f64>, _: PhysicalSize<u32>) {}
+        fn inner_size(&self) -> PhysicalSize<u32> {
+            PhysicalSize::new(960, 600)
+        }
+        fn prefers_dark(&self) -> Option<bool> {
+            None
+        }
+        fn toggle_fullscreen(&self) {}
+        fn set_decorations(&self, _: bool) {}
+        fn set_option_as_alt(&self, _: bool) {}
+        fn apply_backdrop(&self, _: Backdrop, _: bool) {}
+        fn repair_translucent_chrome(&self) {}
+        fn refresh_interval(&self) -> Duration {
+            Duration::from_millis(16)
+        }
+    }
+
+    struct AppHarness {
+        app: App,
+        posted: mpsc::Receiver<AppEvent>,
+        window: Arc<RecordedWindow>,
+        outgoing: OutgoingReceiver,
+    }
+
+    impl AppHarness {
+        /// Drains what the window queued for the daemon since the last
+        /// call, as the writer task would.
+        fn sent(&self) -> Vec<felis_transport::CheckedFrame> {
+            let mut queue = self
+                .outgoing
+                .shared
+                .queue
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            std::iter::from_fn(|| queue.pop())
+                .map(|frame| frame.frame().clone())
+                .collect()
+        }
+
+        /// Blocks for a background dial's outcome, which is what the
+        /// winit loop would deliver next.
+        fn next_posted(&self) -> AppEvent {
+            self.posted
+                .recv_timeout(Duration::from_secs(10))
+                .expect("the window posted an event")
+        }
+    }
+
+    /// A socket no daemon listens on, so a dial to it fails at connect
+    /// without leaving the machine.
+    fn absent_daemon(tag: &str) -> Reconnector {
+        let pid = std::process::id();
+        #[cfg(unix)]
+        let path = std::env::temp_dir().join(format!("felis-test-absent-{pid}-{tag}.sock"));
+        #[cfg(windows)]
+        let path = PathBuf::from(format!(r"\\.\pipe\felis-test-absent-{pid}-{tag}"));
+        Reconnector {
+            carrier: Carrier::Local(path.into()),
+            offer: Offer::window(true),
+        }
+    }
+
+    fn session(id: u128) -> SessionInfo {
+        SessionInfo {
+            id,
+            dims: felis_protocol::messages::GridDims {
+                rows: 24,
+                cols: 80,
+                pixel_w: 0,
+                pixel_h: 0,
+            },
+            title: None,
+            cwd: None,
+            spawn_cwd: None,
+            terminal_progress: None,
+            idle_seconds: None,
+            tags: Vec::new(),
+            last_notification: None,
+            foreground: None,
+            exited: false,
+            last_exit_code: None,
+            attachments: Vec::new(),
+            sequence: std::num::NonZeroU64::MIN,
+            program_status: Vec::new(),
+        }
+    }
+
+    fn app_on(runtime: &tokio::runtime::Runtime, reconnector: Reconnector, id: u128) -> AppHarness {
+        let (tx, posted) = mpsc::channel();
+        let tx = Mutex::new(tx);
+        let events = EventSink::new(move |event| {
+            tx.lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .send(event)
+                .is_ok()
+        });
+        let cfg = config::EffectiveConfig::default();
+        let startup = ClientStartup {
+            warmup: None,
+            renderer_cfg: renderer_config_from(&cfg),
+            font_size_logical_px: configured_font_size_logical_px(&cfg),
+            clipboard_cfg: config::ClipboardConfig {
+                use_os_clipboard: false,
+                ..cfg.clipboard
+            },
+            window_cfg: cfg.window,
+            cursor_cfg: cfg.cursor,
+            shader_cfg: cfg.shader.clone(),
+            mouse_cfg: cfg.mouse,
+            keymap: Keymap::default_for_platform(),
+            config_source: ConfigSource::Default,
+        };
+        let (outgoing, outgoing_rx) = outgoing_channel();
+        let link = AppLink {
+            runtime: runtime.handle().clone(),
+            events,
+            reconnector,
+            outgoing,
+            pump: None,
+            driver: Arc::new(Mutex::new(ClientDriver::client(Offer::window(true).mode))),
+            effective_minor: 0,
+            pull_enabled: true,
+        };
+        let window = Arc::new(RecordedWindow::default());
+        let mut app = App::new(startup, &session(id), link);
+        let host: Arc<dyn WindowHost> = window.clone();
+        app.window = Some(host);
+        AppHarness {
+            app,
+            posted,
+            window,
+            outgoing: outgoing_rx,
+        }
+    }
+
+    fn runtime() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .expect("test runtime")
+    }
+
+    /// Pins the parked-push contract on `App::pending_reattach`: the
+    /// daemon already told the CLI the switch succeeded, so a push that
+    /// arrives mid-switch must run once that switch fails, not vanish.
+    #[test]
+    fn a_reattach_parked_behind_a_failing_switch_runs_when_it_fails() {
+        let runtime = runtime();
+        let mut harness = app_on(&runtime, absent_daemon("home"), 0xa);
+
+        harness.app.on_app_event(AppEvent::ReattachRequested {
+            reconnector: absent_daemon("first"),
+            id: 0xb,
+        });
+        assert!(harness.app.switch_state.in_flight());
+
+        harness.app.on_app_event(AppEvent::ReattachRequested {
+            reconnector: absent_daemon("second"),
+            id: 0xc,
+        });
+        assert_eq!(
+            harness
+                .app
+                .pending_reattach
+                .as_ref()
+                .map(|pending| pending.id),
+            Some(0xc),
+            "a push during a switch is parked"
+        );
+
+        let failed = harness.next_posted();
+        assert!(matches!(failed, AppEvent::SessionSwitchFailed { .. }));
+        harness.app.on_app_event(failed);
+        assert!(
+            harness.app.pending_reattach.is_none(),
+            "the parked push left the slot"
+        );
+        assert!(
+            harness.app.switch_state.in_flight(),
+            "the parked push is dialing"
+        );
+
+        let failed = harness.next_posted();
+        assert!(matches!(failed, AppEvent::SessionSwitchFailed { .. }));
+        harness.app.on_app_event(failed);
+        assert_eq!(harness.app.switch_state, SwitchState::Idle);
+        assert_eq!(harness.app.current_place().session_id, 0xa);
+        assert!(!harness.app.exit_requested);
+    }
+
+    /// Pins the criterion "retry bounds are visible": a drop with
+    /// nothing in flight keeps the window and says so in its title.
+    #[test]
+    fn a_dropped_connection_marks_the_window_disconnected() {
+        let runtime = runtime();
+        let mut harness = app_on(&runtime, absent_daemon("home"), 0xa);
+
+        let live = harness.app.conn_gen;
+        harness
+            .app
+            .on_app_event(AppEvent::DaemonClosed { conn_gen: live });
+
+        assert!(harness.app.reconnecting);
+        assert_eq!(
+            harness.window.last_title().as_deref(),
+            Some("felis \u{2014} disconnected")
+        );
+        assert!(!harness.app.exit_requested);
+    }
+
+    /// Pins the `conn_gen` stamp: a BEL stamped by any connection but
+    /// the live one must not flash the window.
+    #[test]
+    fn only_the_live_connection_rings_the_bell() {
+        let runtime = runtime();
+        let mut harness = app_on(&runtime, absent_daemon("home"), 0xa);
+        let bell = || GridMsg::Attention {
+            source: felis_protocol::messages::AttentionSource::Bell,
+        };
+
+        let live = harness.app.conn_gen;
+        harness.app.on_app_event(AppEvent::GridFrame {
+            msg: bell(),
+            conn_gen: live + 1,
+        });
+        assert_eq!(harness.window.attention_requests(), 0);
+
+        harness.app.on_app_event(AppEvent::GridFrame {
+            msg: bell(),
+            conn_gen: live,
+        });
+        assert_eq!(harness.window.attention_requests(), 1);
+    }
+
+    fn press(key: PressedKey, text: Option<&str>, mods: Modifiers) -> KeyPress {
+        KeyPress {
+            key,
+            text: text.map(str::to_owned),
+            mods,
+            kind: felis_protocol::messages::KeyEventKind::Press,
+            location: felis_protocol::messages::KeyLocation::Standard,
+        }
+    }
+
+    fn input_frame(msg: &InputMsg) -> felis_transport::CheckedFrame {
+        OutgoingFrame::input(msg).expect("encodes").frame().clone()
+    }
+
+    /// Pins `input::snaps_to_live` at the window: Cmd alone must not
+    /// drop a scrolled-back view before Cmd+C can copy from it, and the
+    /// next typed key must.
+    #[test]
+    fn a_bare_modifier_keeps_the_scrollback_view_and_a_typed_key_leaves_it() {
+        let runtime = runtime();
+        let mut harness = app_on(&runtime, absent_daemon("home"), 0xa);
+        let live = harness.app.conn_gen;
+        harness.app.on_app_event(AppEvent::GridFrame {
+            msg: GridMsg::ViewportState {
+                lines_from_bottom: 5,
+                max: 100,
+                anchor: None,
+            },
+            conn_gen: live,
+        });
+        assert!(!harness.app.viewport_live());
+        harness.sent();
+
+        let cmd = press(PressedKey::Modifier, None, Modifiers::SUPER);
+        harness.app.on_window_input(WindowInput::Key(cmd.clone()));
+        assert_eq!(
+            harness.sent(),
+            vec![input_frame(&InputMsg::Key(cmd.to_wire()))]
+        );
+
+        let a = press(
+            PressedKey::Character("a".into()),
+            Some("a"),
+            Modifiers::empty(),
+        );
+        harness.app.on_window_input(WindowInput::Key(a.clone()));
+        assert_eq!(
+            harness.sent(),
+            vec![
+                input_frame(&InputMsg::Viewport {
+                    lines_from_bottom: 0,
+                    anchor: None,
+                }),
+                input_frame(&InputMsg::Key(a.to_wire())),
+            ]
+        );
+    }
+
+    /// Pins the confirmation bar's key contract (docs/explanation/input.md
+    /// "Confirmation bar"): Shift on the way to `Y` leaves the question
+    /// open, and `Y` sends the paste it held.
+    #[test]
+    fn a_held_paste_waits_through_a_bare_modifier_and_goes_out_on_yes() {
+        let runtime = runtime();
+        let mut harness = app_on(&runtime, absent_daemon("home"), 0xa);
+        let paste = b"rm -rf build\n".to_vec();
+
+        harness.app.ferry_paste(&paste);
+        assert!(harness.app.pending_confirm.is_some());
+        assert!(
+            harness.sent().is_empty(),
+            "nothing goes out before the answer"
+        );
+
+        let shift = press(PressedKey::Modifier, None, Modifiers::SHIFT);
+        harness.app.on_window_input(WindowInput::Key(shift));
+        assert!(harness.app.pending_confirm.is_some());
+        assert!(harness.sent().is_empty(), "the modifier is not forwarded");
+
+        let yes = press(
+            PressedKey::Character("Y".into()),
+            Some("Y"),
+            Modifiers::SHIFT,
+        );
+        harness.app.on_window_input(WindowInput::Key(yes));
+        assert!(harness.app.pending_confirm.is_none());
+        assert_eq!(harness.sent(), vec![input_frame(&InputMsg::Paste(paste))]);
+    }
+
+    /// The other half of the contract: any key but a bare modifier
+    /// answers, a dead key and an unbound named key included, and the
+    /// answering key is consumed rather than typed.
+    #[test]
+    fn a_dead_key_or_an_unbound_key_cancels_a_held_paste() {
+        let runtime = runtime();
+        let mut harness = app_on(&runtime, absent_daemon("home"), 0xa);
+        for answer in [
+            press(PressedKey::Other, None, Modifiers::empty()),
+            press(
+                PressedKey::Named(felis_client_core::NamedKey::Escape),
+                None,
+                Modifiers::empty(),
+            ),
+        ] {
+            harness.app.ferry_paste(b"make\n");
+            assert!(harness.app.pending_confirm.is_some());
+
+            harness
+                .app
+                .on_window_input(WindowInput::Key(answer.clone()));
+            assert!(harness.app.pending_confirm.is_none(), "{answer:?} answers");
+            assert!(
+                harness.sent().is_empty(),
+                "{answer:?} cancels and is consumed"
+            );
+        }
+    }
+
+    fn retarget_target() -> RetargetTarget {
+        RetargetTarget {
+            carrier: felis_protocol::messages::RetargetCarrier::LocalEndpoint(
+                "/nonexistent/felis-test-retarget.sock".into(),
+            ),
+            landing: felis_protocol::messages::RetargetLanding::Attach("b".into()),
+        }
+    }
+
+    /// Pins the one-slot rule on `App::pending_reattach` and
+    /// `App::pending_retarget`: whichever push arrived last is the one a
+    /// landing runs.
+    #[test]
+    fn the_last_push_parked_during_a_switch_is_the_one_kept() {
+        let runtime = runtime();
+        let mut harness = app_on(&runtime, absent_daemon("home"), 0xa);
+        harness.app.on_app_event(AppEvent::ReattachRequested {
+            reconnector: absent_daemon("first"),
+            id: 0xb,
+        });
+        assert!(harness.app.is_busy());
+
+        harness.app.on_app_event(AppEvent::ReattachRequested {
+            reconnector: absent_daemon("second"),
+            id: 0xc,
+        });
+        harness.app.on_app_event(AppEvent::RetargetRequested {
+            target: retarget_target(),
+        });
+        assert!(harness.app.pending_reattach.is_none());
+        assert_eq!(harness.app.pending_retarget, Some(retarget_target()));
+
+        harness.app.on_app_event(AppEvent::ReattachRequested {
+            reconnector: absent_daemon("third"),
+            id: 0xd,
+        });
+        assert!(harness.app.pending_retarget.is_none());
+        assert_eq!(
+            harness
+                .app
+                .pending_reattach
+                .as_ref()
+                .map(|pending| pending.id),
+            Some(0xd)
+        );
+    }
+
+    /// The daemon declines a same-session switch, so a push naming the
+    /// window's own place is one the window reached while it was in
+    /// flight; re-attaching would rehydrate onto the same grid.
+    #[test]
+    fn a_reattach_push_to_the_current_place_dials_nothing() {
+        let runtime = runtime();
+        let home = absent_daemon("home");
+        let mut harness = app_on(&runtime, home.clone(), 0xa);
+
+        harness.app.on_app_event(AppEvent::ReattachRequested {
+            reconnector: home,
+            id: 0xa,
+        });
+
+        assert_eq!(harness.app.switch_state, SwitchState::Idle);
+        assert!(harness.app.pending_reattach.is_none());
+    }
+
+    /// Pins `SwitchState::carry_exit` at the window: a shell exit during a
+    /// landing starts no exit ladder of its own (it would dial beside the
+    /// landing), and the ladder starts when that landing fails, ending in
+    /// a close once every rung is spent.
+    #[test]
+    fn a_shell_exit_during_a_switch_waits_for_the_landing_then_unwinds_to_a_close() {
+        let runtime = runtime();
+        let mut harness = app_on(&runtime, absent_daemon("home"), 0xa);
+        harness.app.on_app_event(AppEvent::ReattachRequested {
+            reconnector: absent_daemon("elsewhere"),
+            id: 0xb,
+        });
+
+        let live = harness.app.conn_gen;
+        let place = harness.app.current_place();
+        harness.app.on_app_event(AppEvent::SessionExited {
+            conn_gen: live,
+            place,
+        });
+        assert!(harness.app.switch_state.session_gone());
+        assert!(
+            harness.app.exit_ladder.is_none(),
+            "the landing carries the exit"
+        );
+
+        // Every rung dials a daemon nobody runs; each failure is the
+        // next rung's cue, and the ladder's rungs are finite.
+        for _ in 0..8 {
+            if harness.app.exit_requested {
+                break;
+            }
+            let failed = harness.next_posted();
+            assert!(matches!(failed, AppEvent::SessionSwitchFailed { .. }));
+            harness.app.on_app_event(failed);
+        }
+        assert!(harness.app.exit_requested);
+    }
+
+    /// A refusal nobody cleared would leave the pending-switch slot armed,
+    /// and every later chord queued behind it for the rest of the
+    /// connection; one stamped by another connection is not this fetch's.
+    #[test]
+    fn a_refused_roster_fetch_frees_the_next_switch_chord() {
+        let runtime = runtime();
+        let mut harness = app_on(&runtime, absent_daemon("home"), 0xa);
+        harness.app.switch_session(SwitchDirection::Next);
+        let request = felis_protocol::messages::RequestId::new(1).expect("nonzero");
+        assert!(harness.app.pending_switch.awaiting(request));
+
+        let live = harness.app.conn_gen;
+        harness.app.on_app_event(AppEvent::RequestRefused {
+            request,
+            detail: "stale".into(),
+            conn_gen: live + 1,
+        });
+        assert!(
+            harness.app.is_busy(),
+            "another connection's refusal is ignored"
+        );
+
+        harness.app.on_app_event(AppEvent::RequestRefused {
+            request,
+            detail: "refused".into(),
+            conn_gen: live,
+        });
+        assert!(!harness.app.is_busy());
+
+        harness.sent();
+        harness.app.switch_session(SwitchDirection::Next);
+        assert!(harness.app.is_busy(), "the next chord fetches again");
+        assert_eq!(harness.sent().len(), 1, "with a roster request of its own");
     }
 }

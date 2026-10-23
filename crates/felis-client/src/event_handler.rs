@@ -7,19 +7,21 @@ use felis_client_core::{
 
 use super::{
     ActiveEventLoop, App, AppEvent, ApplicationHandler, Arc, ClosedOutcome, ControlFlow, DragState,
-    Duration, ElementState, GridMsg, ImageData, ImageId, ImageMsg, ImageSource, InputMsg, Instant,
-    ModifiersState, MouseAction, MouseButton, MouseScrollDelta, OutgoingSender, PipeState,
-    PressRouting, Renderer, SearchDirection, SearchHitRecord, SearchToClientMsg, SearchUiMode,
-    Selection, SelectionMode, SessionHex, Surface, SurfaceError, SwitchState, UserAttentionType,
-    WheelEncoding, WindowEvent, WindowId, WinitMouseButton, activation_matches_preview,
-    activation_target, apply_option_as_alt, apply_window_backdrop, compose_window_title,
-    daemon_closed_outcome, error, forwarded_press_dismisses_selection,
-    grid_change_invalidates_selection, grid_msg_moves_hover_target, ime_commit_bytes, info, input,
-    map_button, mem, open_url, should_start_selection, warn, wheel_arrow_bytes, wheel_buttons,
-    wheel_encoding_for, wheel_pixels_to_rows, wheel_starts_new_stream, wheel_y_ticks,
-    wheel_zoom_delta_px, window_attributes,
+    Duration, ElementState, GridMsg, ImageData, ImageId, ImageMsg, ImageSource, Ime, InputMsg,
+    Instant, KeyEvent, Modifiers, MouseAction, MouseButton, MouseScrollDelta, OutgoingSender,
+    PipeState, PressRouting, Renderer, SearchDirection, SearchHitRecord, SearchToClientMsg,
+    SearchUiMode, Selection, SelectionMode, SessionHex, SurfaceError, SwitchState, WheelEncoding,
+    WindowEvent, WindowId, activation_matches_preview, activation_target, apply_option_as_alt,
+    apply_window_backdrop, compose_window_title, daemon_closed_outcome, error,
+    forwarded_press_dismisses_selection, grid_change_invalidates_selection,
+    grid_msg_moves_hover_target, ime_commit_bytes, info, input, map_button, mem, open_url,
+    should_start_selection, warn, wheel_arrow_bytes, wheel_buttons, wheel_encoding_for,
+    wheel_pixels_to_rows, wheel_starts_new_stream, wheel_y_ticks, wheel_zoom_delta_px,
+    window_attributes,
 };
 use crate::option_compose;
+use crate::window_input::{ImeInput, KeyPress, WheelDelta, WindowInput};
+use crate::winit_keys;
 
 fn apply_renderer_effect(renderer: &mut Renderer, effect: RendererEffect) {
     match effect {
@@ -53,7 +55,7 @@ impl ImageSource for ShadowImages<'_> {
 
 impl ApplicationHandler<AppEvent> for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        if self.surface.is_some() {
+        if self.renderer.is_some() {
             return;
         }
         let attrs = window_attributes(
@@ -121,7 +123,7 @@ impl ApplicationHandler<AppEvent> for App {
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
         {
-            let proxy = self.proxy.clone();
+            let events = self.events.clone();
             std::thread::spawn(move || {
                 std::thread::sleep(Duration::from_millis(ms));
                 // RSS is process-wide, so the timer thread's sample is as
@@ -130,7 +132,7 @@ impl ApplicationHandler<AppEvent> for App {
                 // Graceful exit first so `dhat-heap` flushes its JSON. macOS
                 // only pumps `EventLoopProxy` user events when the app is
                 // frontmost, so force-exit as a backstop after a grace.
-                drop(proxy.send_event(AppEvent::StartupExit));
+                events.send(AppEvent::StartupExit);
                 std::thread::sleep(Duration::from_secs(2));
                 std::process::exit(0);
             });
@@ -138,7 +140,8 @@ impl ApplicationHandler<AppEvent> for App {
         // Per implementation.md "winit", this single switch turns on
         // zwp_text_input_v3, XIM, AppKit, and TSF composition.
         window.set_ime_allowed(true);
-        self.surface = Some(Surface { window, renderer });
+        self.window = Some(window);
+        self.renderer = Some(renderer);
         // A fresh window starts on the platform default arrow, so the
         // remembered icon would suppress the first `set_cursor` that
         // matches it.
@@ -163,44 +166,170 @@ impl ApplicationHandler<AppEvent> for App {
                 // crisp and the next `pixel_w/pixel_h` matches the display.
                 self.scale_factor = scale_factor;
                 let physical = self.font_size_physical_px();
-                if let Some(surface) = self.surface.as_mut() {
-                    surface.renderer.reload_font_size(physical);
+                if let Some(renderer) = self.renderer.as_mut() {
+                    renderer.reload_font_size(physical);
                 }
                 self.reflow_to_window(true);
                 self.redraw.request();
                 info!(scale_factor, "DPR changed; font rebuilt");
             }
             WindowEvent::Resized(size) => {
-                if let Some(surface) = self.surface.as_mut() {
-                    surface.renderer.resize(size.width, size.height);
+                if let Some(renderer) = self.renderer.as_mut() {
+                    renderer.resize(size.width, size.height);
                 }
                 // wgpu reconfigures the CAMetalLayer on resize and AppKit
                 // rebuilds the root backing layer on layout, both dropping
                 // the corner radius. See `macos_window`.
-                #[cfg(target_os = "macos")]
                 if self.transparent
-                    && let Some(surface) = self.surface.as_ref()
+                    && let Some(window) = self.window.as_ref()
                 {
-                    crate::macos_window::fix_translucent_layer_stack(surface.window.as_ref());
+                    window.repair_translucent_chrome();
                 }
                 self.after_metric_change(size);
             }
-            WindowEvent::ModifiersChanged(state) => {
-                self.modifiers = state.state();
+            WindowEvent::Occluded(false) => self.present_retry.wake(Instant::now()),
+            // A cycle in flight is a screen state the daemon has not
+            // finished describing, so no redraw source paints it: a
+            // blink or an animation frame landing between a `Scrolled`
+            // and its rows would put the shifted grid on screen without
+            // the content that follows it.
+            WindowEvent::RedrawRequested
+                if may_paint_grid(
+                    self.renderer.is_some(),
+                    self.shadow.is_rehydrating(),
+                    self.pull.cycle_open(),
+                ) =>
+            {
+                self.on_redraw(event_loop);
+            }
+            other => {
+                if let Some(input) = self.window_input(other) {
+                    self.on_window_input(input);
+                }
+            }
+        }
+    }
+
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: AppEvent) {
+        self.on_app_event(event);
+        if self.exit_requested {
+            event_loop.exit();
+        }
+    }
+
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        // Before the redraw flush so a phase toggle's repaint rides this
+        // iteration. A hidden cursor arms no timer, so the window stays
+        // idle (ControlFlow::Wait).
+        let blink_wants = {
+            let grid = self.shadow.screen();
+            let cur = grid.cursor();
+            // A blinking caret on a disconnected window reads as a live
+            // shell waiting for input.
+            let shown = cur.visible
+                && !self.reconnecting
+                && self.window_focused
+                && self.shadow.viewport() == 0
+                && cur.row < grid.rows()
+                && cur.col < grid.cols();
+            shown && grid.cursor_blink()
+        };
+        let now = Instant::now();
+        if self.cursor_blink.tick(now, blink_wants) {
+            if let Some(renderer) = self.renderer.as_mut() {
+                renderer.set_cursor_blink_visible(self.cursor_blink.visible());
+            }
+            self.redraw.request();
+        }
+        // With no shader the clock would arm wake-ups for an animation no
+        // pass draws.
+        let trail_deadline = self.tick_cursor_trail(now);
+        // Nothing arms this clock, so the predicate is the whole guard.
+        let shader_animating = self.window_focused
+            && self
+                .renderer
+                .as_ref()
+                .is_some_and(Renderer::has_post_shader);
+        if self.shader_clock.tick(now, shader_animating) {
+            self.redraw.request();
+        }
+        let shader_deadline = self.shader_clock.next_deadline(shader_animating);
+        let turn = self.present_retry.turn(now);
+        if turn == RedrawTurn::Retry {
+            self.redraw.request();
+        }
+        // winit also coalesces per vsync, but one site keeps the request vs
+        // flush counters observable and stops a new event source
+        // sidestepping the coalescer.
+        if turn != RedrawTurn::Hold
+            && self.redraw.flush()
+            && let Some(window) = self.window.as_ref()
+        {
+            window.request_redraw();
+            // `--trace-perf` users see how many events one paint collapsed.
+            let stats = self.redraw.stats();
+            tracing::trace!(
+                target: "felis::redraw",
+                requested = stats.requested,
+                flushed = stats.flushed,
+                "redraw flush",
+            );
+        }
+        // The next-frame pull is NOT re-armed here: `about_to_wait` runs
+        // once per inbound frame during a burst, far faster than vsync, so
+        // pacing would become a tight request→reply loop that floods the
+        // daemon with pulls (starving the PTY drain). It re-arms in
+        // `RedrawRequested`, once per painted frame.
+
+        // A steady or hidden cursor leaves `ControlFlow::Wait` untouched so
+        // an idle window burns no CPU; the loop wakes at whichever clock is
+        // due first.
+        // While stalled the other clocks' redraws are held, so waking for
+        // them would only spin the loop.
+        let deadline = if self.present_retry.stalled() {
+            self.present_retry.next_deadline()
+        } else {
+            [
+                self.cursor_blink.next_deadline(blink_wants),
+                trail_deadline,
+                shader_deadline,
+            ]
+            .into_iter()
+            .flatten()
+            .min()
+        };
+        match deadline {
+            Some(deadline) => event_loop.set_control_flow(ControlFlow::WaitUntil(deadline)),
+            None => event_loop.set_control_flow(ControlFlow::Wait),
+        }
+    }
+
+    fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        self.outgoing.take();
+        self.renderer.take();
+        self.window.take();
+    }
+}
+
+impl App {
+    /// Every input `window_event` hands `App`, minus winit, so a test
+    /// can drive it.
+    pub(crate) fn on_window_input(&mut self, input: WindowInput) {
+        match input {
+            WindowInput::Modifiers(mods) => {
+                self.modifiers = mods;
                 // Re-evaluate Ctrl+hover now, not on the next CursorMoved.
                 self.update_mouse_cursor_icon();
             }
-            WindowEvent::ThemeChanged(theme) => {
+            WindowInput::ColorScheme { dark } => {
                 // felis's own colors are config/OSC-driven and unaffected.
-                self.send_input(&InputMsg::ColorScheme {
-                    dark: theme == winit::window::Theme::Dark,
-                });
+                self.send_input(&InputMsg::ColorScheme { dark });
             }
-            WindowEvent::Focused(focused) => {
+            WindowInput::Focused(focused) => {
                 self.send_input(&InputMsg::FocusChange { focused });
                 self.window_focused = focused;
-                if let Some(surface) = self.surface.as_mut() {
-                    surface.renderer.set_window_focused(focused);
+                if let Some(renderer) = self.renderer.as_mut() {
+                    renderer.set_window_focused(focused);
                 }
                 // Solid-on so a re-focused window shows the caret at once.
                 if focused {
@@ -209,14 +338,13 @@ impl ApplicationHandler<AppEvent> for App {
                 // Release events while another app has focus never reach
                 // us, leaving modifiers stuck.
                 if !focused {
-                    self.modifiers = ModifiersState::empty();
+                    self.modifiers = Modifiers::empty();
                     self.key_presses.clear();
                     self.update_mouse_cursor_icon();
                 }
                 self.redraw.request();
             }
-            WindowEvent::Occluded(false) => self.present_retry.wake(Instant::now()),
-            WindowEvent::CursorLeft { .. } => {
+            WindowInput::PointerLeft => {
                 // A re-entry's first CursorMoved must count as "new cell".
                 self.cursor_cell = None;
                 self.cursor_px = None;
@@ -224,7 +352,7 @@ impl ApplicationHandler<AppEvent> for App {
                 self.update_post_mouse_state();
                 self.update_mouse_cursor_icon();
             }
-            WindowEvent::CursorMoved { position, .. } => {
+            WindowInput::PointerMoved(position) => {
                 // Before the cell test returns early: sub-cell motion still
                 // moves a pointer-reactive shader.
                 self.pointer_px = Some(position);
@@ -271,69 +399,10 @@ impl ApplicationHandler<AppEvent> for App {
                 let button = self.held_buttons.last();
                 self.emit_mouse(button, action, cell);
             }
-            WindowEvent::MouseInput {
-                state,
-                button: winit_btn,
-                ..
-            } => self.on_mouse_input(state, winit_btn),
-            WindowEvent::MouseWheel { delta, .. } => self.on_wheel(delta),
-            WindowEvent::KeyboardInput { event, .. } => {
-                let is_press = matches!(event.state, ElementState::Pressed);
-                let kind = input::event_kind(event.state, event.repeat);
-                let Some(stroke) = self.key_presses.resolve(
-                    event.physical_key,
-                    kind,
-                    &event.logical_key,
-                    event.text.as_deref(),
-                    option_compose::text_with_all_modifiers(&event),
-                    self.modifiers,
-                ) else {
-                    return;
-                };
-                let key = &stroke.key;
-                let text = stroke.text.as_deref();
-                // A notice reports the previous keypress, so it dies with
-                // this one: cleared before dispatch, since the handlers
-                // below may raise a new one for the key being pressed.
-                if is_press {
-                    self.clear_notice();
-                }
-                // Keymap dispatch (docs/explanation/input.md): a hit consumes
-                // the keypress, a miss falls through to the input encoder.
-                // An open confirmation bar owns the keyboard outright,
-                // chords included, so re-pressing `kill_session` or a paste
-                // chord can't stack a second question under the first.
-                if is_press && self.handle_confirm_key(key, text) {
-                    return;
-                }
-                if is_press && self.dispatch_chord(key, stroke.mods) {
-                    return;
-                }
-                // Before the input encoder so the keys hit the search bar,
-                // not the program (REQ-607).
-                if is_press
-                    && self.search.mode == SearchUiMode::Composing
-                    && self.handle_search_compose_key(key, text)
-                {
-                    return;
-                }
-                // Esc dismisses, `n` / `N` navigate; before the encoder so
-                // they don't leak to the program.
-                if is_press
-                    && self.search.mode == SearchUiMode::Active
-                    && self.handle_search_active_key(key, text)
-                {
-                    return;
-                }
-                self.ferry_key(input::key_event(
-                    key,
-                    text,
-                    stroke.mods,
-                    kind,
-                    event.location,
-                ));
-            }
-            WindowEvent::Ime(ime) => {
+            WindowInput::Button { pressed, button } => self.on_mouse_input(pressed, button),
+            WindowInput::Wheel(delta) => self.on_wheel(delta),
+            WindowInput::Key(press) => self.on_key(&press),
+            WindowInput::Ime(ime) => {
                 // The commit string is finalized UTF-8; the encoder's
                 // modifier / disambiguation logic doesn't apply, so the bytes
                 // ferry raw (like a paste). Pre-edit text routes to the
@@ -343,21 +412,7 @@ impl ApplicationHandler<AppEvent> for App {
                     self.ferry_key_bytes(bytes);
                 }
             }
-            // A cycle in flight is a screen state the daemon has not
-            // finished describing, so no redraw source paints it: a
-            // blink or an animation frame landing between a `Scrolled`
-            // and its rows would put the shifted grid on screen without
-            // the content that follows it.
-            WindowEvent::RedrawRequested
-                if may_paint_grid(
-                    self.surface.is_some(),
-                    self.shadow.is_rehydrating(),
-                    self.pull.cycle_open(),
-                ) =>
-            {
-                self.on_redraw(event_loop);
-            }
-            WindowEvent::DroppedFile(path) => {
+            WindowInput::DroppedFile(path) => {
                 // Not OSC 72 (docs/explanation/input.md "Drag-and-drop"); no shell-aware
                 // quoting (principle 4). Routed through the paste path so bracketed-paste
                 // guards apply. Trailing space separates successive file drops.
@@ -366,11 +421,104 @@ impl ApplicationHandler<AppEvent> for App {
                 tracing::debug!(target: "felis::input", ?path, "file dropped");
                 self.ferry_paste(&bytes);
             }
-            _ => {}
         }
     }
 
-    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: AppEvent) {
+    fn on_key(&mut self, press: &KeyPress) {
+        let is_press = press.is_press();
+        let key = &press.key;
+        let text = press.text.as_deref();
+        // A notice reports the previous keypress, so it dies with
+        // this one: cleared before dispatch, since the handlers
+        // below may raise a new one for the key being pressed.
+        if is_press {
+            self.clear_notice();
+        }
+        // Keymap dispatch (docs/explanation/input.md): a hit consumes
+        // the keypress, a miss falls through to the input encoder.
+        // An open confirmation bar owns the keyboard outright,
+        // chords included, so re-pressing `kill_session` or a paste
+        // chord can't stack a second question under the first.
+        if is_press && self.handle_confirm_key(key, text) {
+            return;
+        }
+        if is_press && self.dispatch_chord(key, press.mods) {
+            return;
+        }
+        // Before the input encoder so the keys hit the search bar,
+        // not the program (REQ-607).
+        if is_press
+            && self.search.mode == SearchUiMode::Composing
+            && self.handle_search_compose_key(key, text)
+        {
+            return;
+        }
+        // Esc dismisses, `n` / `N` navigate; before the encoder so
+        // they don't leak to the program.
+        if is_press
+            && self.search.mode == SearchUiMode::Active
+            && self.handle_search_active_key(key, text)
+        {
+            return;
+        }
+        self.ferry_key(press.to_wire());
+    }
+
+    /// `None` drops the event (see `option_compose::KeyPresses::resolve`).
+    fn key_press(&mut self, event: &KeyEvent) -> Option<KeyPress> {
+        let kind = input::event_kind(event.state, event.repeat);
+        let stroke = self.key_presses.resolve(
+            event.physical_key,
+            kind,
+            &event.logical_key,
+            event.text.as_deref(),
+            option_compose::text_with_all_modifiers(event),
+            self.modifiers,
+        )?;
+        Some(KeyPress {
+            key: input::pressed_key(&stroke.key),
+            text: stroke.text,
+            mods: stroke.mods,
+            kind,
+            location: input::location(event.location),
+        })
+    }
+
+    /// `None` for an event that is not input, or a button no encoding
+    /// can name.
+    fn window_input(&mut self, event: WindowEvent) -> Option<WindowInput> {
+        Some(match event {
+            WindowEvent::ModifiersChanged(state) => {
+                WindowInput::Modifiers(winit_keys::mods(state.state()))
+            }
+            WindowEvent::ThemeChanged(theme) => WindowInput::ColorScheme {
+                dark: theme == winit::window::Theme::Dark,
+            },
+            WindowEvent::Focused(focused) => WindowInput::Focused(focused),
+            WindowEvent::CursorLeft { .. } => WindowInput::PointerLeft,
+            WindowEvent::CursorMoved { position, .. } => WindowInput::PointerMoved(position),
+            WindowEvent::MouseInput { state, button, .. } => WindowInput::Button {
+                pressed: state == ElementState::Pressed,
+                button: map_button(button)?,
+            },
+            WindowEvent::MouseWheel { delta, .. } => WindowInput::Wheel(match delta {
+                MouseScrollDelta::LineDelta(x, y) => WheelDelta::Lines(x, y),
+                MouseScrollDelta::PixelDelta(p) => WheelDelta::Pixels(p.x, p.y),
+            }),
+            WindowEvent::KeyboardInput { event, .. } => WindowInput::Key(self.key_press(&event)?),
+            WindowEvent::Ime(ime) => WindowInput::Ime(match ime {
+                Ime::Enabled => ImeInput::Enabled,
+                Ime::Preedit(text, cursor) => ImeInput::Preedit(text, cursor),
+                Ime::Commit(text) => ImeInput::Commit(text),
+                Ime::Disabled => ImeInput::Disabled,
+            }),
+            WindowEvent::DroppedFile(path) => WindowInput::DroppedFile(path),
+            _ => return None,
+        })
+    }
+
+    /// The whole of `user_event`, minus the loop, so a test can drive it.
+    pub(crate) fn on_app_event(&mut self, event: AppEvent) {
         match event {
             AppEvent::GridFrame { msg, conn_gen } => {
                 if conn_gen != self.conn_gen {
@@ -389,7 +537,7 @@ impl ApplicationHandler<AppEvent> for App {
                     // is legal in its own field. Applying it would paint a
                     // screen the daemon never composed.
                     warn!(?err, "grid frame refused; closing the connection");
-                    self.close_daemon_connection(event_loop, conn_gen);
+                    self.close_daemon_connection(conn_gen);
                     return;
                 }
                 if self.shadow.take_title_dirty().is_some() {
@@ -423,9 +571,9 @@ impl ApplicationHandler<AppEvent> for App {
                     }
                 }
                 if let Some(effect) = renderer_effect(&msg)
-                    && let Some(surface) = self.surface.as_mut()
+                    && let Some(renderer) = self.renderer.as_mut()
                 {
-                    apply_renderer_effect(&mut surface.renderer, effect);
+                    apply_renderer_effect(renderer, effect);
                 }
                 match &msg {
                     GridMsg::CursorState { .. } => {
@@ -437,10 +585,8 @@ impl ApplicationHandler<AppEvent> for App {
                     // flashes the same way BEL does: felis never draws a
                     // popup, and the content went to observer connections.
                     GridMsg::Attention { .. } => {
-                        if let Some(surface) = self.surface.as_ref() {
-                            surface
-                                .window
-                                .request_user_attention(Some(UserAttentionType::Informational));
+                        if let Some(window) = self.window.as_ref() {
+                            window.request_attention();
                         }
                     }
                     _ => {}
@@ -577,24 +723,24 @@ impl ApplicationHandler<AppEvent> for App {
                     // allocation it is not entitled to has already
                     // stopped being the authority the mirror trusts.
                     warn!(?err, "image claim refused; closing the connection");
-                    self.close_daemon_connection(event_loop, conn_gen);
+                    self.close_daemon_connection(conn_gen);
                     return;
                 }
                 if needs_redraw {
                     self.redraw.request();
                 }
             }
-            AppEvent::DaemonClosed { conn_gen } => self.on_daemon_closed(event_loop, conn_gen),
+            AppEvent::DaemonClosed { conn_gen } => self.on_daemon_closed(conn_gen),
             AppEvent::Detached => {
                 info!("detached from session; exiting (session survives)");
-                event_loop.exit();
+                self.exit_requested = true;
             }
             AppEvent::StartupExit => {
                 // Unwind the loop cleanly so a `dhat-heap` build flushes its
                 // JSON; only reached when macOS pumps the user event, else
                 // the timer thread's force-exit backstop fires.
                 info!("FELIS_STARTUP_EXIT_MS elapsed; exiting after startup measurement");
-                event_loop.exit();
+                self.exit_requested = true;
             }
             AppEvent::ConfigReloaded => {
                 self.reload_config();
@@ -640,7 +786,7 @@ impl ApplicationHandler<AppEvent> for App {
                     warn!(%detail, "the reconnect found the session gone; taking the exit ladder");
                     self.trail.prune(&self.current_place());
                     if self.begin_exit_ladder("the reconnect found the session gone") {
-                        event_loop.exit();
+                        self.exit_requested = true;
                     }
                     return;
                 };
@@ -648,7 +794,7 @@ impl ApplicationHandler<AppEvent> for App {
                 // Read after the loop unwinds; the window closes either
                 // way, so the status is all that is left to say it with.
                 self.terminal_exit = Some(reason);
-                event_loop.exit();
+                self.exit_requested = true;
             }
             AppEvent::SessionSwitchFailed {
                 reason,
@@ -674,7 +820,7 @@ impl ApplicationHandler<AppEvent> for App {
                     // an exit the landing may have outlived.
                     warn!(reason, "the session is gone and the landing failed");
                     if self.begin_exit_ladder("the landing failed") {
-                        event_loop.exit();
+                        self.exit_requested = true;
                     }
                 } else {
                     match std::mem::replace(&mut self.pipe_state, PipeState::Idle) {
@@ -701,7 +847,7 @@ impl ApplicationHandler<AppEvent> for App {
                 // with the switch out of the way.
                 if self.outgoing.as_ref().is_some_and(OutgoingSender::is_lost) {
                     warn!("the connection behind the failed switch is gone; closing it");
-                    self.on_daemon_closed(event_loop, self.conn_gen);
+                    self.on_daemon_closed(self.conn_gen);
                 }
                 self.run_pending_push();
                 // A failed continuation is still a continuation ending:
@@ -819,7 +965,7 @@ impl ApplicationHandler<AppEvent> for App {
                     info!("run/pipe transient exited; returning to originating session");
                     self.park_pipe_return(viewport);
                     if self.begin_exit_ladder("the pipe/run transient exited") {
-                        event_loop.exit();
+                        self.exit_requested = true;
                     }
                 } else {
                     // A chord's fetch on the wire rides the connection this
@@ -834,111 +980,15 @@ impl ApplicationHandler<AppEvent> for App {
                     // presented before the window goes.
                     self.redraw.request();
                     if self.begin_exit_ladder("shell exited") {
-                        event_loop.exit();
+                        self.exit_requested = true;
                     }
                 }
             }
         }
     }
 
-    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        // Before the redraw flush so a phase toggle's repaint rides this
-        // iteration. A hidden cursor arms no timer, so the window stays
-        // idle (ControlFlow::Wait).
-        let blink_wants = {
-            let grid = self.shadow.screen();
-            let cur = grid.cursor();
-            // A blinking caret on a disconnected window reads as a live
-            // shell waiting for input.
-            let shown = cur.visible
-                && !self.reconnecting
-                && self.window_focused
-                && self.shadow.viewport() == 0
-                && cur.row < grid.rows()
-                && cur.col < grid.cols();
-            shown && grid.cursor_blink()
-        };
-        let now = Instant::now();
-        if self.cursor_blink.tick(now, blink_wants) {
-            if let Some(surface) = self.surface.as_mut() {
-                surface
-                    .renderer
-                    .set_cursor_blink_visible(self.cursor_blink.visible());
-            }
-            self.redraw.request();
-        }
-        // With no shader the clock would arm wake-ups for an animation no
-        // pass draws.
-        let trail_deadline = self.tick_cursor_trail(now);
-        // Nothing arms this clock, so the predicate is the whole guard.
-        let shader_animating = self.window_focused
-            && self
-                .surface
-                .as_ref()
-                .is_some_and(|surface| surface.renderer.has_post_shader());
-        if self.shader_clock.tick(now, shader_animating) {
-            self.redraw.request();
-        }
-        let shader_deadline = self.shader_clock.next_deadline(shader_animating);
-        let turn = self.present_retry.turn(now);
-        if turn == RedrawTurn::Retry {
-            self.redraw.request();
-        }
-        // winit also coalesces per vsync, but one site keeps the request vs
-        // flush counters observable and stops a new event source
-        // sidestepping the coalescer.
-        if turn != RedrawTurn::Hold
-            && self.redraw.flush()
-            && let Some(surface) = self.surface.as_ref()
-        {
-            surface.window.request_redraw();
-            // `--trace-perf` users see how many events one paint collapsed.
-            let stats = self.redraw.stats();
-            tracing::trace!(
-                target: "felis::redraw",
-                requested = stats.requested,
-                flushed = stats.flushed,
-                "redraw flush",
-            );
-        }
-        // The next-frame pull is NOT re-armed here: `about_to_wait` runs
-        // once per inbound frame during a burst, far faster than vsync, so
-        // pacing would become a tight request→reply loop that floods the
-        // daemon with pulls (starving the PTY drain). It re-arms in
-        // `RedrawRequested`, once per painted frame.
-
-        // A steady or hidden cursor leaves `ControlFlow::Wait` untouched so
-        // an idle window burns no CPU; the loop wakes at whichever clock is
-        // due first.
-        // While stalled the other clocks' redraws are held, so waking for
-        // them would only spin the loop.
-        let deadline = if self.present_retry.stalled() {
-            self.present_retry.next_deadline()
-        } else {
-            [
-                self.cursor_blink.next_deadline(blink_wants),
-                trail_deadline,
-                shader_deadline,
-            ]
-            .into_iter()
-            .flatten()
-            .min()
-        };
-        match deadline {
-            Some(deadline) => event_loop.set_control_flow(ControlFlow::WaitUntil(deadline)),
-            None => event_loop.set_control_flow(ControlFlow::Wait),
-        }
-    }
-
-    fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
-        self.outgoing.take();
-        self.surface.take();
-    }
-}
-
-impl App {
     /// Whether the daemon closed it or this window did.
-    fn on_daemon_closed(&mut self, event_loop: &ActiveEventLoop, conn_gen: u64) {
+    fn on_daemon_closed(&mut self, conn_gen: u64) {
         let outcome = daemon_closed_outcome(
             conn_gen,
             self.conn_gen,
@@ -965,7 +1015,7 @@ impl App {
                 info!("pipe command exited; returning to originating session");
                 self.park_pipe_return(viewport);
                 if self.begin_exit_ladder("the pipe/run transient's channel closed") {
-                    event_loop.exit();
+                    self.exit_requested = true;
                 }
             }
             ClosedOutcome::Reconnect => self.begin_reconnect(),
@@ -974,18 +1024,15 @@ impl App {
 
     /// `abort` is best-effort, so the generation bump inside
     /// `install_new_session` remains what holds the line on reconnect.
-    fn close_daemon_connection(&mut self, event_loop: &ActiveEventLoop, conn_gen: u64) {
+    fn close_daemon_connection(&mut self, conn_gen: u64) {
         if let Some(pump) = self.pump.as_ref() {
             pump.abort_reader();
         }
-        self.on_daemon_closed(event_loop, conn_gen);
+        self.on_daemon_closed(conn_gen);
     }
 
-    fn on_mouse_input(&mut self, state: ElementState, winit_btn: WinitMouseButton) {
-        let Some(button) = map_button(winit_btn) else {
-            return;
-        };
-        if state == ElementState::Pressed && button == MouseButton::Left {
+    fn on_mouse_input(&mut self, pressed: bool, button: MouseButton) {
+        if pressed && button == MouseButton::Left {
             self.last_press_px = self.pointer_px;
         }
         self.update_post_mouse_state();
@@ -993,7 +1040,7 @@ impl App {
         // Ctrl+Left on an armed OSC 8 cell opens the URL without program forwarding.
         // Recomputed here rather than read from `hover_target` so the press acts on
         // the cell it landed in rather than the last hovered cell.
-        if state == ElementState::Pressed
+        if pressed
             && button == MouseButton::Left
             && let Some(target) = activation_target(
                 &self.shadow,
@@ -1018,14 +1065,14 @@ impl App {
                 // Clear Ctrl because the launched browser steals focus before release events
                 // arrive, which would otherwise leave the Pointer icon stuck. Confined to
                 // successful launches so modifiers stay consistent on failure.
-                self.modifiers.remove(ModifiersState::CONTROL);
+                self.modifiers.remove(Modifiers::CONTROL);
                 self.update_mouse_cursor_icon();
             }
             return;
         }
         // A release takes the path its own press took; the mouse-mode /
         // Shift predicate can flip while the button is down.
-        if state == ElementState::Released {
+        if !pressed {
             match self.held_buttons.release(button) {
                 Some(PressRouting::Grabbed) => {
                     // A click that never dragged leaves a stranded anchor.
@@ -1108,7 +1155,7 @@ impl App {
         self.emit_mouse(Some(button), MouseAction::Press, cell);
     }
 
-    fn on_wheel(&mut self, delta: MouseScrollDelta) {
+    fn on_wheel(&mut self, delta: WheelDelta) {
         let Some(cell) = self.cursor_cell else { return };
         // macOS delivers inertia as ordinary MouseWheel events and winit
         // 0.30 cannot flag them (`wheel_starts_new_stream`), so without
@@ -1173,9 +1220,9 @@ impl App {
                     }
                 } else {
                     let cell_h = self
-                        .surface
+                        .renderer
                         .as_ref()
-                        .map_or(20.0, |s| f64::from(s.renderer.cell_metrics().height));
+                        .map_or(20.0, |renderer| f64::from(renderer.cell_metrics().height));
                     let rows = wheel_pixels_to_rows(
                         delta,
                         cell_h,
@@ -1206,10 +1253,9 @@ impl App {
             .as_ref()
             .and_then(|_| self.hover_target.clone());
         // Borrowed this late: the overlay builders need `&self` as a whole.
-        let Some(surface) = self.surface.as_mut() else {
+        let (Some(window), Some(renderer)) = (self.window.as_ref(), self.renderer.as_mut()) else {
             return;
         };
-        let renderer = &mut surface.renderer;
         let metrics = renderer.cell_metrics();
         self.image_shadow.layout_into(
             &mut self.image_layout,
@@ -1239,7 +1285,7 @@ impl App {
             self.redraw.painted();
             self.present_retry.presented();
         } else {
-            let interval = refresh_interval(&surface.window);
+            let interval = window.refresh_interval();
             self.present_retry.unpresented(Instant::now(), interval);
         }
         if let Err(err) = outcome {
@@ -1291,16 +1337,6 @@ impl App {
         // Last in the frame: the run's evidence is the frame just painted.
         self.smoke_step();
     }
-}
-
-/// A monitor that reports no rate falls back to 60 Hz.
-fn refresh_interval(window: &winit::window::Window) -> Duration {
-    let millihertz = window
-        .current_monitor()
-        .and_then(|monitor| monitor.refresh_rate_millihertz())
-        .filter(|&mhz| mhz > 0)
-        .unwrap_or(60_000);
-    Duration::from_micros(1_000_000_000 / u64::from(millihertz))
 }
 
 /// Whether a `RedrawRequested` may paint. The source of the request is

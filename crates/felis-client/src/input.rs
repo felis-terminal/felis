@@ -1,33 +1,17 @@
-//! Keyboard → wire translation: the winit adapter over the structured
-//! key event `InputMsg::Key` carries. The winit→wire mapping lives here
-//! so `felis-client-core` stays free of any windowing crate
+//! The winit keyboard adapter: winit key events become a
+//! [`KeyPress`](crate::window_input::KeyPress). The mapping lives here so
+//! `felis-client-core` stays free of any windowing crate
 //! (docs/explanation/architecture/overview.md
 //! "Workspace: the crate-boundary decision record").
 
 use felis_protocol::messages::{Key, KeyEvent, KeyEventKind, KeyLocation};
 use winit::event::ElementState;
-use winit::keyboard::{Key as WinitKey, KeyLocation as WinitKeyLocation, ModifiersState};
+use winit::keyboard::{
+    Key as WinitKey, KeyLocation as WinitKeyLocation, NamedKey as WinitNamedKey,
+};
 
+use crate::window_input::PressedKey;
 use crate::winit_keys;
-
-/// The wire form of one winit key event. The bytes it reaches the child
-/// as are the daemon's to decide, against the keyboard modes it owns
-/// (docs/explanation/input.md "Keyboard").
-pub(crate) fn key_event(
-    key: &WinitKey,
-    text: Option<&str>,
-    mods: ModifiersState,
-    kind: KeyEventKind,
-    location: WinitKeyLocation,
-) -> KeyEvent {
-    KeyEvent {
-        key: to_key(key),
-        text: text.map(str::to_owned),
-        mods: winit_keys::mods(mods),
-        kind,
-        location: to_location(location),
-    }
-}
 
 pub(crate) const fn event_kind(state: ElementState, repeat: bool) -> KeyEventKind {
     match state {
@@ -45,18 +29,29 @@ pub(crate) fn snaps_to_live(event: &KeyEvent) -> bool {
     event.kind != KeyEventKind::Release && (event.key != Key::Other || event.text.is_some())
 }
 
-/// Unrecognized named keys and every non-character key (dead keys, bare
-/// modifiers, media keys) collapse to [`Key::Other`], which the daemon
-/// routes to the `text` passthrough.
-fn to_key(key: &WinitKey) -> Key {
+/// Unrecognized named keys and every non-character key (dead keys, media
+/// keys) collapse to [`PressedKey::Other`], which the daemon routes to
+/// the `text` passthrough.
+pub(crate) fn pressed_key(key: &WinitKey) -> PressedKey {
     match key {
-        WinitKey::Named(named) => winit_keys::named(*named).map_or(Key::Other, Key::Named),
-        WinitKey::Character(s) => Key::Character(s.as_str().to_owned()),
-        _ => Key::Other,
+        WinitKey::Named(
+            WinitNamedKey::Shift
+            | WinitNamedKey::Control
+            | WinitNamedKey::Alt
+            | WinitNamedKey::AltGraph
+            | WinitNamedKey::Super
+            | WinitNamedKey::Meta
+            | WinitNamedKey::CapsLock,
+        ) => PressedKey::Modifier,
+        WinitKey::Named(named) => {
+            winit_keys::named(*named).map_or(PressedKey::Other, PressedKey::Named)
+        }
+        WinitKey::Character(s) => PressedKey::Character(s.as_str().to_owned()),
+        _ => PressedKey::Other,
     }
 }
 
-const fn to_location(loc: WinitKeyLocation) -> KeyLocation {
+pub(crate) const fn location(loc: WinitKeyLocation) -> KeyLocation {
     match loc {
         WinitKeyLocation::Standard => KeyLocation::Standard,
         WinitKeyLocation::Left => KeyLocation::Left,
@@ -67,28 +62,30 @@ const fn to_location(loc: WinitKeyLocation) -> KeyLocation {
 
 #[cfg(test)]
 mod tests {
-    use felis_client_core::{FKey, NamedKey};
-    use winit::keyboard::NamedKey as WinitNamedKey;
+    use felis_client_core::{FKey, Modifiers, NamedKey};
 
     use super::*;
+    use crate::window_input::KeyPress;
 
     #[test]
     fn maps_named_character_and_other_keys() {
         assert_eq!(
-            to_key(&WinitKey::Named(WinitNamedKey::Enter)),
-            Key::Named(NamedKey::Enter),
+            pressed_key(&WinitKey::Named(WinitNamedKey::Enter)),
+            PressedKey::Named(NamedKey::Enter),
         );
         assert_eq!(
-            to_key(&WinitKey::Named(WinitNamedKey::F7)),
-            Key::Named(NamedKey::F(FKey::lit(7))),
+            pressed_key(&WinitKey::Named(WinitNamedKey::F7)),
+            PressedKey::Named(NamedKey::F(FKey::lit(7))),
         );
         assert_eq!(
-            to_key(&WinitKey::Character("a".into())),
-            Key::Character("a".into()),
+            pressed_key(&WinitKey::Character("a".into())),
+            PressedKey::Character("a".into()),
         );
-        // A bare modifier must collapse to `Other` so the daemon defers
-        // to the (absent) text passthrough.
-        assert_eq!(to_key(&WinitKey::Named(WinitNamedKey::Shift)), Key::Other);
+        assert_eq!(
+            pressed_key(&WinitKey::Named(WinitNamedKey::Shift)),
+            PressedKey::Modifier
+        );
+        assert_eq!(pressed_key(&WinitKey::Dead(Some('´'))), PressedKey::Other);
     }
 
     #[test]
@@ -111,27 +108,44 @@ mod tests {
 
     #[test]
     fn a_key_event_carries_the_facts_the_daemon_encodes_from() {
-        let event = key_event(
-            &WinitKey::Character("a".into()),
-            Some("a"),
-            ModifiersState::CONTROL,
-            KeyEventKind::Press,
-            WinitKeyLocation::Numpad,
-        );
+        let event = KeyPress {
+            key: pressed_key(&WinitKey::Character("a".into())),
+            text: Some("a".into()),
+            mods: Modifiers::CONTROL,
+            kind: KeyEventKind::Press,
+            location: location(WinitKeyLocation::Numpad),
+        }
+        .to_wire();
         assert_eq!(event.key, Key::Character("a".into()));
         assert_eq!(event.text.as_deref(), Some("a"));
         assert!(event.mods.control_key());
         assert_eq!(event.location, KeyLocation::Numpad);
     }
 
+    /// A bare modifier must reach the wire as `Other` so the daemon
+    /// defers to the (absent) text passthrough.
+    #[test]
+    fn a_bare_modifier_reaches_the_wire_as_other() {
+        assert_eq!(
+            event(
+                &WinitKey::Named(WinitNamedKey::Shift),
+                None,
+                KeyEventKind::Press
+            )
+            .key,
+            Key::Other
+        );
+    }
+
     fn event(key: &WinitKey, text: Option<&str>, kind: KeyEventKind) -> KeyEvent {
-        key_event(
-            key,
-            text,
-            ModifiersState::empty(),
+        KeyPress {
+            key: pressed_key(key),
+            text: text.map(str::to_owned),
+            mods: Modifiers::empty(),
             kind,
-            WinitKeyLocation::Standard,
-        )
+            location: KeyLocation::Standard,
+        }
+        .to_wire()
     }
 
     #[test]
