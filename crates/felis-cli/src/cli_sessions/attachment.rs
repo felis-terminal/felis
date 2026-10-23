@@ -7,6 +7,7 @@ use felis_protocol::SessionHex;
 use felis_protocol::messages::{
     RetargetCarrier, RetargetLanding, RetargetTarget, SwitchDenied, SwitchScope,
 };
+use felis_transport::env::SESSION_ID_ENV;
 use tokio::io::{AsyncRead, AsyncWrite};
 
 use super::{AttachmentTarget, refuse_over_limit, require_resolved};
@@ -156,7 +157,7 @@ pub(super) fn retarget_from_args(args: RetargetArgs) -> RetargetTarget {
 /// window exports into its child env).
 fn resolve_switch_from(from: Option<&str>) -> Option<String> {
     from.map(str::to_owned).or_else(|| {
-        std::env::var("FELIS_SESSION_ID")
+        std::env::var(SESSION_ID_ENV)
             .ok()
             .and_then(|raw| crate::validate_session_id_prefix(&raw).ok())
     })

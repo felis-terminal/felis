@@ -6,9 +6,7 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
-/// Written by `felis_daemon::apply_env_policy`, which reserves it so no
-/// caller can supply it.
-pub const SOCKET_ENV: &str = "FELIS_SOCKET";
+pub use felis_transport::env::SOCKET_ENV;
 
 /// Which of the three sources named the socket. Path equality is no
 /// substitute: an explicit or stamped path can name the platform

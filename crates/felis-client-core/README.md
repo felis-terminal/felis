@@ -6,6 +6,9 @@ connector, the clipboard trait and the shared config.
 
 With `default-features = false` it builds for wasm32.
 
+The `attach` example (`examples/attach.rs`) is the smallest headless client: it attaches to a running session, applies
+the replayed grid to a `ShadowScreen` through the connection's driver, and prints the screen as text.
+
 Wire compatibility follows `PROTOCOL_MINOR` and the
 [minor ledger](https://github.com/felis-terminal/felis/blob/main/docs/reference/ipc.md#the-minor-ledger), independent of
 the crate version.

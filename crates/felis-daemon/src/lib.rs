@@ -9,6 +9,7 @@ use std::sync::{Arc, LazyLock};
 
 use felis_protocol::SessionHex;
 use felis_pty::{ChildHandle, Command, PtyError, PtyReader, PtyWriter, Resizer, Size};
+use felis_transport::env::{SESSION_ID_ENV, SOCKET_ENV};
 
 use crate::parse_sink::ParseSignals;
 use crate::pool::ParseCore;
@@ -145,11 +146,11 @@ const RESERVED_ENV_KEYS: [&str; ENV_DENYLIST.len() + ADDRESSING_ENV.len()] =
 
 /// Stamped unconditionally and reserved: a value the child did not get
 /// from felis names something other than where it is running.
-const ADDRESSING_ENV: [&str; 2] = ["FELIS_SESSION_ID", SOCKET_ENV];
+const ADDRESSING_ENV: [&str; 2] = [SESSION_ID_ENV, SOCKET_ENV];
 
 const fn reserved_env_keys_from_denylist()
 -> [&'static str; ENV_DENYLIST.len() + ADDRESSING_ENV.len()] {
-    let mut keys = ["FELIS_SESSION_ID"; ENV_DENYLIST.len() + ADDRESSING_ENV.len()];
+    let mut keys = [SESSION_ID_ENV; ENV_DENYLIST.len() + ADDRESSING_ENV.len()];
     let mut at = 0;
     while at < ADDRESSING_ENV.len() {
         keys[at] = ADDRESSING_ENV[at];
@@ -167,10 +168,6 @@ const fn reserved_env_keys_from_denylist()
 /// service. A child that inherited it could report this daemon ready,
 /// or stopped, in its place.
 pub(crate) const NOTIFY_SOCKET_ENV: &str = "NOTIFY_SOCKET";
-
-/// The endpoint this daemon serves; the client half of the contract is
-/// `felis_client_core::local_socket` (docs/reference/terminal-identity.md).
-const SOCKET_ENV: &str = "FELIS_SOCKET";
 
 /// Must match the entry name in [`TERMINFO_SOURCE`]
 /// (docs/reference/terminal-identity.md).
@@ -308,7 +305,7 @@ pub fn apply_env_policy(
     cmd.env("COLORTERM", "truecolor");
     cmd.env("TERM_PROGRAM", term_program);
     cmd.env("TERM_PROGRAM_VERSION", env!("CARGO_PKG_VERSION"));
-    cmd.env("FELIS_SESSION_ID", SessionHex(session_id).to_string());
+    cmd.env(SESSION_ID_ENV, SessionHex(session_id).to_string());
     match endpoint {
         Some(endpoint) => cmd.env(SOCKET_ENV, endpoint),
         None => cmd.env_remove(SOCKET_ENV),
