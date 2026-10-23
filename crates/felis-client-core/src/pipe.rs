@@ -355,5 +355,75 @@ fn remove_temp_file(path: &Path) {
     }
 }
 
+/// A background `run` (`docs/reference/keybindings.md`): no PTY, so the
+/// client spawns the argv itself and only reaps it. `None` for an empty
+/// argv, which the loader already drops.
+#[must_use]
+pub fn background_command(argv: &[String], origin: &Origin) -> Option<std::process::Command> {
+    use std::process::Stdio;
+    let (program, args) = argv.split_first()?;
+    let mut command = std::process::Command::new(program);
+    command
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    if let Some(dir) = background_cwd(origin) {
+        command.current_dir(dir);
+    }
+    for key in ORIGIN_ENV_KEYS {
+        command.env_remove(key);
+    }
+    command.envs(child_env(None, origin));
+    detach(&mut command);
+    Some(command)
+}
+
+/// Home rather than the client's own cwd, which is `/` for a window
+/// macOS launched, the same fallback a window launch takes.
+fn background_cwd(origin: &Origin) -> Option<PathBuf> {
+    let local = local_cwd_from_osc7(origin.osc7.as_deref().unwrap_or_default());
+    if local.is_empty() {
+        directories::BaseDirs::new().map(|dirs| dirs.home_dir().to_owned())
+    } else {
+        Some(PathBuf::from(local))
+    }
+}
+
+#[cfg(unix)]
+fn detach(command: &mut std::process::Command) {
+    use std::os::unix::process::CommandExt as _;
+    command.process_group(0);
+}
+
+#[cfg(windows)]
+fn detach(command: &mut std::process::Command) {
+    use std::os::windows::process::CommandExt as _;
+    const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    command.creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW);
+}
+
+/// Reaped on a thread of its own, so a long-lived command (a window
+/// launch) neither leaves a zombie nor holds the event loop.
+///
+/// # Errors
+/// The spawn's own error: a missing program, a cwd that vanished.
+pub fn spawn_background(argv: &[String], origin: &Origin) -> std::io::Result<()> {
+    let Some(mut command) = background_command(argv, origin) else {
+        return Ok(());
+    };
+    let mut child = command.spawn()?;
+    let program = argv[0].clone();
+    std::thread::Builder::new()
+        .name("felis-run-reaper".to_owned())
+        .spawn(move || match child.wait() {
+            Ok(status) if status.success() => {}
+            Ok(status) => tracing::warn!(%program, %status, "background run exited unsuccessfully"),
+            Err(err) => tracing::warn!(%program, %err, "background run could not be reaped"),
+        })?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests;

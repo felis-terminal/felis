@@ -405,9 +405,14 @@
           ]
         },
         {
-          "description": "Launch an external command in a transient session sized to the\nlive grid, with no piped region (for tools that supply their own data).\nRuns with `FELIS_ORIGIN_SESSION_ID`, `FELIS_HOST`, and `FELIS_CWD`\nexported, in the focused session's `OSC 7` directory when that\nnames a directory on this machine.",
+          "description": "Launch an external command fed no region: in a transient session\nsized to the live grid, or detached when `background` is set. It\nsees `FELIS_ORIGIN_SESSION_ID`, `FELIS_HOST`, and `FELIS_CWD`, and\nstarts in the focused session's `OSC 7` directory when local.",
           "type": "object",
           "properties": {
+            "background": {
+              "description": "Spawn without a transient session and return at once: for a\ncommand that needs the session's context but not the grid,\nsuch as opening another window. Default `false`.",
+              "type": "boolean",
+              "default": false
+            },
             "command": {
               "description": "Argv for the external command: a required, non-empty list\nof strings, never a shell string (wrap a pipeline in your\nown script).",
               "type": "array",

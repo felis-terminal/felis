@@ -145,16 +145,20 @@ pub enum BindingValue {
         #[serde(default)]
         ansi: bool,
     },
-    /// Launch an external command in a transient session sized to the
-    /// live grid, with no piped region (for tools that supply their own data).
-    /// Runs with `FELIS_ORIGIN_SESSION_ID`, `FELIS_HOST`, and `FELIS_CWD`
-    /// exported, in the focused session's `OSC 7` directory when that
-    /// names a directory on this machine.
+    /// Launch an external command fed no region: in a transient session
+    /// sized to the live grid, or detached when `background` is set. It
+    /// sees `FELIS_ORIGIN_SESSION_ID`, `FELIS_HOST`, and `FELIS_CWD`, and
+    /// starts in the focused session's `OSC 7` directory when local.
     Run {
         /// Argv for the external command: a required, non-empty list
         /// of strings, never a shell string (wrap a pipeline in your
         /// own script).
         command: Vec<String>,
+        /// Spawn without a transient session and return at once: for a
+        /// command that needs the session's context but not the grid,
+        /// such as opening another window. Default `false`.
+        #[serde(default)]
+        background: bool,
     },
 }
 
@@ -186,7 +190,13 @@ impl BindingValue {
                 target: target.into_target(),
                 ansi,
             }),
-            Self::Run { command } => Some(Action::RunCommand { command }),
+            Self::Run {
+                command,
+                background,
+            } => Some(Action::RunCommand {
+                command,
+                background,
+            }),
         }
     }
 }
@@ -541,9 +551,11 @@ mod tests {
                 "run",
                 BindingValue::Run {
                     command: vec!["felis-session-picker".into()],
+                    background: true,
                 },
                 Action::RunCommand {
                     command: vec!["felis-session-picker".into()],
+                    background: true,
                 },
             ),
         ] {

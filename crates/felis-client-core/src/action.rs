@@ -255,6 +255,8 @@ pub enum Action {
     /// region. Argv, never a shell string (principle 1).
     RunCommand {
         command: Vec<String>,
+        /// No transient: the client spawns and reaps the argv itself.
+        background: bool,
     },
 }
 
