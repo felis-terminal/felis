@@ -10,7 +10,13 @@ description = "felis headless client: shadow screen, action enum, IPC client con
 [features]
 default = ["native"]
 # Split into a feature so crate compiles for wasm32 with default-features = false without pulling tokio.
-native = ["dep:tokio", "dep:felis-transport", "dep:directories"]
+native = [
+  "dep:tokio",
+  "dep:felis-transport",
+  "dep:directories",
+  "dep:serde_ignored",
+  "dep:toml",
+]
 # Default-off so shipping binaries stay schemars-free; enabled for schema sync test.
 schema = ["dep:schemars", "felis-protocol/schema"]
 # The tests that serve a real felis-daemon. felis-daemon dev-depends on this
@@ -26,10 +32,10 @@ tokio = { workspace = true, optional = true }
 tracing = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }
-serde_ignored = { workspace = true }
+serde_ignored = { workspace = true, optional = true }
 schemars = { workspace = true, optional = true }
 bitflags = { workspace = true }
-toml = { workspace = true }
+toml = { workspace = true, optional = true }
 directories = { workspace = true, optional = true }
 
 [target.'cfg(unix)'.dependencies]
