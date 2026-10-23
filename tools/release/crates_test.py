@@ -177,3 +177,24 @@ def test_a_never_published_crate_fails_the_plan(tmp_path: Path) -> None:
 
 def test_an_unknown_verb_is_a_usage_error(tmp_path: Path) -> None:
     assert_result(run(make_tree(tmp_path), "publish"), 64)
+
+
+def test_the_dry_run_drops_only_overlay_unpacks_of_workspace_versions(
+    tmp_path: Path,
+) -> None:
+    _, workspace_crates = crates.workspace(make_tree(tmp_path))
+    src = tmp_path / "registry" / "src"
+    for directory in [
+        "-40aaa648e93ba819/felis-protocol-0.1.1",
+        "-40aaa648e93ba819/felis-grid-0.1.0",
+        "-40aaa648e93ba819/felis-grid-0.0.9",
+        "-47ed19097133e039/felis-daemon-0.3.0",
+        "index.crates.io-1949cf8c6b5b557f/felis-protocol-0.1.1",
+        "index.crates.io-1949cf8c6b5b557f/serde-1.0.0",
+    ]:
+        (src / directory).mkdir(parents=True)
+    assert crates.unpacked_packages(src, workspace_crates) == [
+        src / "-40aaa648e93ba819/felis-grid-0.1.0",
+        src / "-40aaa648e93ba819/felis-protocol-0.1.1",
+        src / "-47ed19097133e039/felis-daemon-0.3.0",
+    ]
