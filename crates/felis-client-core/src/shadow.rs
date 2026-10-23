@@ -156,8 +156,8 @@ impl ShadowScreen {
 
     /// `?2004`. The framing itself is the daemon's: it wraps every
     /// `InputMsg::Paste` against its own grid, so no client reads this
-    /// to decide the wrapping. It gates REQ-804's multi-line-paste
-    /// confirmation, which only appears with bracketed paste off.
+    /// to decide the wrapping. It gates REQ-804's paste confirmation,
+    /// which only appears with bracketed paste off.
     #[must_use]
     pub const fn bracketed_paste(&self) -> bool {
         self.bracketed_paste

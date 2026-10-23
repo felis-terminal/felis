@@ -179,10 +179,11 @@ Design rationale for unbound defaults is discussed in [input.md](../explanation/
 
 Two actions park themselves behind a one-line question on the window's bottom edge:
 
-| Trigger                                                                        | Question                                                                 |
-| ------------------------------------------------------------------------------ | ------------------------------------------------------------------------ |
-| The `kill_session` binding                                                     | `Kill this session? The program running in it will be terminated. [y/N]` |
-| Pasting text containing `\n` or `\r` while the program has not enabled `?2004` | `Paste N lines? The program did not request bracketed paste. [y/N]`      |
+| Trigger                                                                        | Question                                                                                       |
+| ------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------- |
+| The `kill_session` binding                                                     | `Kill this session? The program running in it will be terminated. [y/N]`                       |
+| Pasting text containing `\n` or `\r` while the program has not enabled `?2004` | `Paste N lines? The program did not request bracketed paste. [y/N]`                            |
+| Pasting one line containing another C0 control except HT while `?2004` is off  | `Paste text containing control characters? The program did not request bracketed paste. [y/N]` |
 
 While the bar is open it owns the keyboard, chords included: `y` or `Y` runs the parked action, every other key cancels
 (Enter included), and bare modifier presses are ignored. One question stands at a time, and a session switch clears a
