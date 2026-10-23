@@ -71,9 +71,7 @@ use tracing::{debug, error, info, warn};
 use winit::{
     application::ApplicationHandler,
     dpi::{PhysicalPosition, PhysicalSize},
-    event::{
-        ElementState, Ime, KeyEvent, MouseButton as WinitMouseButton, MouseScrollDelta, WindowEvent,
-    },
+    event::{ElementState, Ime, MouseButton as WinitMouseButton, MouseScrollDelta, WindowEvent},
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy},
     keyboard::{Key, ModifiersState, NamedKey},
     window::{UserAttentionType, Window, WindowAttributes, WindowId},
@@ -89,6 +87,7 @@ mod keymap_adapter;
 mod macos_window;
 mod mem;
 mod navigation;
+mod option_compose;
 mod os_clipboard;
 mod smoke;
 mod switch_intent;
@@ -663,6 +662,19 @@ fn window_attributes(title: String, decorations: bool, transparent: bool) -> Win
     attrs.with_decorations(decorations)
 }
 
+#[cfg(target_os = "macos")]
+fn apply_option_as_alt(window: &Window, option_as_alt: bool) {
+    use winit::platform::macos::{OptionAsAlt, WindowExtMacOS};
+    window.set_option_as_alt(if option_as_alt {
+        OptionAsAlt::Both
+    } else {
+        OptionAsAlt::None
+    });
+}
+
+#[cfg(not(target_os = "macos"))]
+const fn apply_option_as_alt(_: &Window, _: bool) {}
+
 /// Applies the OS-native window backdrop (docs/reference/config.md).
 /// macOS hosts an `NSVisualEffectView` when translucent; Windows sets DWM
 /// system backdrops; Linux compositors blur independently. Each platform
@@ -1082,6 +1094,8 @@ fn drive(
         decorations: window_cfg.decorations,
         transparent: window_cfg.clamped_opacity() < 1.0,
         backdrop: window_cfg.backdrop,
+        macos_option_as_alt: window_cfg.macos_option_as_alt,
+        key_presses: option_compose::KeyPresses::for_platform(window_cfg.macos_option_as_alt),
         scroll_pixel_accum_y: 0.0,
         last_wheel_at: None,
         wheel_zoom_latched: false,
@@ -1363,6 +1377,8 @@ struct App {
     /// `blur` is inert unless [`Self::transparent`]; the DWM materials
     /// apply regardless. Every material is a no-op off its own platform.
     backdrop: Backdrop,
+    macos_option_as_alt: bool,
+    key_presses: option_compose::KeyPresses,
     /// Sub-row residue from touchpad `PixelDelta` events; without it every
     /// pixel event collapses to ±1 row, so slow gestures lose sub-row
     /// resolution and fast flicks cap at one row.

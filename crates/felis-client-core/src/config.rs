@@ -529,6 +529,11 @@ pub struct WindowConfig {
     /// compositor. Unsupported backdrops log a note and leave the window plain.
     #[serde(deserialize_with = "deserialize_lenient_enum")]
     pub backdrop: Backdrop,
+    /// macOS: whether Option acts as Alt (`false` by default). `false`
+    /// lets Option compose characters (German Option+L types `@`) and
+    /// sends them without Alt; `true` sends Option+B as Alt+B (`ESC b`)
+    /// and gives up those characters. Ignored on other platforms.
+    pub macos_option_as_alt: bool,
 }
 
 /// The OS-native backdrop behind the window (`window.backdrop`).
@@ -564,6 +569,7 @@ impl Default for WindowConfig {
             decorations: true,
             opacity: 1.0,
             backdrop: Backdrop::None,
+            macos_option_as_alt: false,
         }
     }
 }
@@ -1905,6 +1911,16 @@ mod tests {
                 toml::from_str(&format!("[window]\nbackdrop = \"{toml_value}\"\n")).unwrap();
             assert_eq!(cfg.window.backdrop, expected);
         }
+    }
+
+    #[test]
+    fn macos_option_as_alt_defaults_to_composing() {
+        assert!(!EffectiveConfig::default().window.macos_option_as_alt);
+        let cfg: EffectiveConfig = toml::from_str("[window]").unwrap();
+        assert!(!cfg.window.macos_option_as_alt);
+        let cfg: EffectiveConfig =
+            toml::from_str("[window]\nmacos_option_as_alt = true\n").unwrap();
+        assert!(cfg.window.macos_option_as_alt);
     }
 
     #[test]

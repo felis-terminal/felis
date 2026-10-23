@@ -9,11 +9,11 @@ use super::{
     RegionToDaemonMsg, Renderer, SearchDirection, SearchHitRecord, SearchHitSpan, SearchOverlay,
     SearchToDaemonMsg, SearchUi, SearchUiMode, Selection, SessionInfo, SessionToDaemonMsg,
     SharedDriver, SwitchState, TrailRecord, TrailState, ViewportPosition, activation_target,
-    apply_window_backdrop, codec, compose_window_title, composed_row_for_line, config,
-    configured_font_size_logical_px, cursor_trail, dial_and_land, error, font_features_differ,
-    font_settings_differ, font_stack_inputs_differ, ime_cursor_area_pixels, info, keymap_adapter,
-    launch_args, pointer_icon, preedit_from_ime, renderer_config_from, reported_theme_differs,
-    resolve_local_socket, viewport_for_hit, warn,
+    apply_option_as_alt, apply_window_backdrop, codec, compose_window_title, composed_row_for_line,
+    config, configured_font_size_logical_px, cursor_trail, dial_and_land, error,
+    font_features_differ, font_settings_differ, font_stack_inputs_differ, ime_cursor_area_pixels,
+    info, keymap_adapter, launch_args, pointer_icon, preedit_from_ime, renderer_config_from,
+    reported_theme_differs, resolve_local_socket, viewport_for_hit, warn,
 };
 use crate::winit_keys;
 use felis_client_core::confirm::{ConfirmDecision, PendingConfirm, decide_confirm_key};
@@ -543,6 +543,13 @@ impl App {
                 "window.opacity crossed the opaque/translucent boundary; restart felis for this to take effect"
             );
         }
+        if cfg.window.macos_option_as_alt != self.macos_option_as_alt {
+            self.macos_option_as_alt = cfg.window.macos_option_as_alt;
+            self.key_presses.set_option_as_alt(self.macos_option_as_alt);
+            if let Some(surface) = self.surface.as_ref() {
+                apply_option_as_alt(surface.window.as_ref(), self.macos_option_as_alt);
+            }
+        }
         // Gated on `self.transparent` (the surface's live transparency),
         // not `new_transparent`: that is what the macOS effect view can
         // show through until a restart lands the opacity change.
@@ -948,8 +955,8 @@ impl App {
 
     /// `false` when no binding matched or a contextual gate (bare-End at
     /// the live view) declined; the caller falls through to the encoder.
-    pub(crate) fn dispatch_chord(&mut self, key: &Key) -> bool {
-        let Some(chord) = keymap_adapter::winit_to_chord(key, self.modifiers) else {
+    pub(crate) fn dispatch_chord(&mut self, key: &Key, mods: ModifiersState) -> bool {
+        let Some(chord) = keymap_adapter::winit_to_chord(key, mods) else {
             return false;
         };
         let Some(action) = self.keymap.resolve(&chord).cloned() else {
@@ -1014,7 +1021,7 @@ impl App {
                 // Bare `End` at the live bottom falls through to the
                 // encoder so pagers / vim still see `kend`.
                 let bare_end_at_live = matches!(key, Key::Named(NamedKey::End))
-                    && self.modifiers == ModifiersState::empty()
+                    && mods == ModifiersState::empty()
                     && self.viewport_live();
                 if bare_end_at_live {
                     return false;

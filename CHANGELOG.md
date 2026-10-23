@@ -14,17 +14,23 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 
 - **Config**: `theme.minimum_contrast` raises text whose color is too close to its background to a WCAG 2 contrast
   ratio, keeping its hue. The default of 1 leaves colors as programs set them.
-
 - **Shell integration**: `share/felis/shell-integration/ssh.bash`, `ssh.zsh` and `ssh.fish` define an `ssh` function
   that installs the `xterm-felis` terminfo entry on the remote host before each interactive login, and logs in with
   `TERM=xterm-256color` after a warning where it cannot. The home-manager module sources it with
   `programs.felis.enableSshIntegration`.
+- **Config**: `window.macos_option_as_alt` (default `false`) makes macOS Option act as Alt for every key, so Option+B
+  sends `ESC b`, at the cost of the characters the layout puts behind Option.
 
 ### Fixed
 
 - A paste into a program that has not enabled bracketed paste now asks for confirmation when it contains any C0 control
   character other than tab, such as `^O`, `^C` or `ESC`, not only when it contains a line break. Those bytes act as
   typed keys, and some run the shell's command line without a newline.
+- On macOS, a character typed with Option reaches the program as that character. Before, one that came out as ASCII
+  arrived with Alt still set: German Option+L sent `ESC @` instead of `@`, Option+8 `ESC {`, and under the Kitty
+  keyboard protocol Option+L reported Alt+@. Option+Space now types its composed character (U+00A0 on the US layout)
+  instead of Alt+Space, and the release of a key whose press went into a dead-key composition no longer reaches the
+  program on its own.
 - A program that follows the OS light/dark preference, such as Neovim, no longer switches to its light theme while its
   session has no window attached, for example behind a session picker. A session without a window keeps answering color
   queries with the colors and preference it last answered with.
