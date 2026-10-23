@@ -88,6 +88,10 @@ harness = false
 name = "gungraun_gate"
 harness = false
 
+[[example]]
+name = "attach"
+required-features = ["native"]
+
 [[test]]
 name = "transient_spawn"
 required-features = ["daemon-tests"]
