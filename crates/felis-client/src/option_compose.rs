@@ -4,16 +4,17 @@
 
 use std::collections::HashMap;
 
+use felis_client_core::Modifiers;
 use felis_protocol::messages::KeyEventKind;
 use winit::event::KeyEvent;
-use winit::keyboard::{Key, ModifiersState, NamedKey, PhysicalKey};
+use winit::keyboard::{Key, NamedKey, PhysicalKey};
 
 /// What keymap matching and the wire event both see for one key event.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Keystroke {
     pub(crate) key: Key,
     pub(crate) text: Option<String>,
-    pub(crate) mods: ModifiersState,
+    pub(crate) mods: Modifiers,
 }
 
 /// The press a held key started, keyed by its physical key so repeats and
@@ -34,10 +35,10 @@ struct Held {
 }
 
 impl Held {
-    fn stroke(&self, mods: ModifiersState, text: Option<String>) -> Keystroke {
+    fn stroke(&self, mods: Modifiers, text: Option<String>) -> Keystroke {
         let mut mods = mods;
         if self.composed {
-            mods.remove(ModifiersState::ALT);
+            mods.remove(Modifiers::ALT);
         }
         Keystroke {
             key: self.key.clone(),
@@ -81,7 +82,7 @@ impl KeyPresses {
         key: &Key,
         text: Option<&str>,
         text_with_all_modifiers: Option<&str>,
-        mods: ModifiersState,
+        mods: Modifiers,
     ) -> Option<Keystroke> {
         if !self.track {
             return Some(Keystroke {
@@ -138,7 +139,7 @@ impl KeyPresses {
 fn option_composed_key(
     key: &Key,
     text_with_all_modifiers: Option<&str>,
-    mods: ModifiersState,
+    mods: Modifiers,
 ) -> Option<Key> {
     if !mods.alt_key() || mods.control_key() || mods.super_key() {
         return None;
@@ -169,7 +170,7 @@ mod tests {
 
     use super::*;
 
-    const ALT: ModifiersState = ModifiersState::ALT;
+    const ALT: Modifiers = Modifiers::ALT;
     const NBSP: &str = "\u{a0}";
 
     fn composing() -> KeyPresses {
@@ -184,7 +185,7 @@ mod tests {
         Key::Named(NamedKey::Space)
     }
 
-    fn stroke(key: Key, text: Option<&str>, mods: ModifiersState) -> Keystroke {
+    fn stroke(key: Key, text: Option<&str>, mods: Modifiers) -> Keystroke {
         Keystroke {
             key,
             text: text.map(str::to_owned),
@@ -198,7 +199,7 @@ mod tests {
         key: &Key,
         text: Option<&str>,
         all: Option<&str>,
-        mods: ModifiersState,
+        mods: Modifiers,
     ) -> Option<Keystroke> {
         presses.resolve(
             PhysicalKey::Code(code),
@@ -214,7 +215,7 @@ mod tests {
         presses: &mut KeyPresses,
         code: KeyCode,
         key: &Key,
-        mods: ModifiersState,
+        mods: Modifiers,
     ) -> Option<Keystroke> {
         presses.resolve(
             PhysicalKey::Code(code),
@@ -237,15 +238,12 @@ mod tests {
             Some("@"),
             ALT,
         );
-        assert_eq!(
-            got,
-            Some(stroke(ch("@"), Some("@"), ModifiersState::empty()))
-        );
+        assert_eq!(got, Some(stroke(ch("@"), Some("@"), Modifiers::empty())));
     }
 
     #[test]
     fn option_composed_character_keeps_shift() {
-        let mods = ALT | ModifiersState::SHIFT;
+        let mods = ALT | Modifiers::SHIFT;
         let got = press(
             &mut composing(),
             KeyCode::KeyL,
@@ -254,7 +252,7 @@ mod tests {
             Some("Ò"),
             mods,
         );
-        assert_eq!(got.unwrap().mods, ModifiersState::SHIFT);
+        assert_eq!(got.unwrap().mods, Modifiers::SHIFT);
     }
 
     #[test]
@@ -267,10 +265,7 @@ mod tests {
             Some(NBSP),
             ALT,
         );
-        assert_eq!(
-            got,
-            Some(stroke(ch(NBSP), Some(NBSP), ModifiersState::empty()))
-        );
+        assert_eq!(got, Some(stroke(ch(NBSP), Some(NBSP), Modifiers::empty())));
     }
 
     #[test]
@@ -303,7 +298,7 @@ mod tests {
 
     #[test]
     fn option_under_control_or_command_keeps_alt() {
-        for extra in [ModifiersState::CONTROL, ModifiersState::SUPER] {
+        for extra in [Modifiers::CONTROL, Modifiers::SUPER] {
             let mods = ALT | extra;
             let got = press(
                 &mut composing(),
@@ -328,7 +323,7 @@ mod tests {
 
     #[test]
     fn a_character_without_option_is_untouched() {
-        let mods = ModifiersState::CONTROL;
+        let mods = Modifiers::CONTROL;
         let got = press(
             &mut composing(),
             KeyCode::KeyC,
@@ -385,7 +380,7 @@ mod tests {
             Some("@"),
             ALT,
         );
-        assert_eq!(got.unwrap().mods, ModifiersState::empty());
+        assert_eq!(got.unwrap().mods, Modifiers::empty());
     }
 
     #[test]
@@ -407,16 +402,13 @@ mod tests {
             Some(NBSP),
             ALT,
         );
-        assert_eq!(
-            got,
-            Some(stroke(ch(NBSP), Some(NBSP), ModifiersState::empty()))
-        );
+        assert_eq!(got, Some(stroke(ch(NBSP), Some(NBSP), Modifiers::empty())));
     }
 
     #[test]
     fn a_repeat_of_an_uncomposed_press_reports_its_own_key_and_text() {
         let mut presses = composing();
-        let none = ModifiersState::empty();
+        let none = Modifiers::empty();
         press(
             &mut presses,
             KeyCode::KeyA,
@@ -425,7 +417,7 @@ mod tests {
             Some("a"),
             none,
         );
-        let shift = ModifiersState::SHIFT;
+        let shift = Modifiers::SHIFT;
         let got = presses.resolve(
             PhysicalKey::Code(KeyCode::KeyA),
             KeyEventKind::Repeat,
@@ -448,13 +440,8 @@ mod tests {
             Some("@"),
             ALT,
         );
-        let got = release(
-            &mut presses,
-            KeyCode::KeyL,
-            &ch("l"),
-            ModifiersState::empty(),
-        );
-        assert_eq!(got, Some(stroke(ch("@"), None, ModifiersState::empty())));
+        let got = release(&mut presses, KeyCode::KeyL, &ch("l"), Modifiers::empty());
+        assert_eq!(got, Some(stroke(ch("@"), None, Modifiers::empty())));
     }
 
     #[test]
@@ -469,7 +456,7 @@ mod tests {
             ALT,
         );
         let got = release(&mut presses, KeyCode::KeyL, &ch("@"), ALT);
-        assert_eq!(got, Some(stroke(ch("@"), None, ModifiersState::empty())));
+        assert_eq!(got, Some(stroke(ch("@"), None, Modifiers::empty())));
     }
 
     #[test]
@@ -490,24 +477,11 @@ mod tests {
             &ch("a"),
             Some("a"),
             Some("a"),
-            ModifiersState::empty(),
+            Modifiers::empty(),
         );
-        assert!(
-            release(
-                &mut presses,
-                KeyCode::KeyA,
-                &ch("a"),
-                ModifiersState::empty()
-            )
-            .is_some()
-        );
+        assert!(release(&mut presses, KeyCode::KeyA, &ch("a"), Modifiers::empty()).is_some());
         assert_eq!(
-            release(
-                &mut presses,
-                KeyCode::KeyA,
-                &ch("a"),
-                ModifiersState::empty()
-            ),
+            release(&mut presses, KeyCode::KeyA, &ch("a"), Modifiers::empty()),
             None
         );
     }
@@ -518,7 +492,7 @@ mod tests {
             &mut composing(),
             KeyCode::KeyE,
             &ch("e"),
-            ModifiersState::empty(),
+            Modifiers::empty(),
         );
         assert_eq!(got, None);
     }
@@ -532,16 +506,11 @@ mod tests {
             &ch("a"),
             Some("a"),
             Some("a"),
-            ModifiersState::empty(),
+            Modifiers::empty(),
         );
         presses.clear();
         assert_eq!(
-            release(
-                &mut presses,
-                KeyCode::KeyA,
-                &ch("a"),
-                ModifiersState::empty()
-            ),
+            release(&mut presses, KeyCode::KeyA, &ch("a"), Modifiers::empty()),
             None
         );
     }

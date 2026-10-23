@@ -1,31 +1,30 @@
-//! winit `Key` + `ModifiersState` to `felis_client_core::Chord` adapter.
+//! [`PressedKey`] + [`Modifiers`] to `felis_client_core::Chord` adapter.
 //!
 //! Normalizes ASCII letters to lowercase + Shift (`docs/reference/keybindings.md`) so
 //! bindings have one canonical spelling regardless of how winit reports case.
 
 use felis_client_core::keymap::{Chord, KeyCode, Modifiers};
-use winit::keyboard::{Key, ModifiersState};
 
-use crate::winit_keys;
+use crate::window_input::PressedKey;
 
 /// `None` when the key is outside the chord-bindable subset (composite
-/// IME strings, dead keys, unidentified keys, unhandled named keys); the
+/// IME strings, dead keys, bare modifiers, unhandled named keys); the
 /// input-encoding path keeps owning those.
 #[must_use]
-pub(crate) fn winit_to_chord(key: &Key, mods: ModifiersState) -> Option<Chord> {
-    let key_code = winit_key_to_keycode(key)?;
+pub(crate) fn chord_for(key: &PressedKey, mods: Modifiers) -> Option<Chord> {
+    let key_code = key_code(key)?;
     let (key_code, lifted_shift) = lift_uppercase_letter(key_code);
-    let mut chord_mods = winit_keys::mods(mods);
+    let mut chord_mods = mods;
     if lifted_shift {
         chord_mods |= Modifiers::SHIFT;
     }
     Some(Chord::with_mods(chord_mods, key_code))
 }
 
-fn winit_key_to_keycode(key: &Key) -> Option<KeyCode> {
+fn key_code(key: &PressedKey) -> Option<KeyCode> {
     match key {
-        Key::Named(named) => winit_keys::named(*named).map(KeyCode::Named),
-        Key::Character(s) => {
+        PressedKey::Named(named) => Some(KeyCode::Named(*named)),
+        PressedKey::Character(s) => {
             // Composite IME strings and dead-key chains (more than one
             // codepoint) route back to the encoder path.
             let mut chars = s.chars();
@@ -35,7 +34,7 @@ fn winit_key_to_keycode(key: &Key) -> Option<KeyCode> {
             }
             Some(KeyCode::Character(first.to_string()))
         }
-        _ => None,
+        PressedKey::Modifier | PressedKey::Other => None,
     }
 }
 
@@ -61,9 +60,18 @@ fn lift_uppercase_letter(key: KeyCode) -> (KeyCode, bool) {
 
 #[cfg(test)]
 mod tests {
-    use winit::keyboard::NamedKey;
+    use winit::keyboard::{Key, ModifiersState, NamedKey};
 
     use super::*;
+
+    /// End to end from winit, so a future winit version can't rename a
+    /// variant unnoticed.
+    fn winit_to_chord(key: &Key, mods: ModifiersState) -> Option<Chord> {
+        chord_for(
+            &crate::input::pressed_key(key),
+            crate::winit_keys::mods(mods),
+        )
+    }
 
     fn ctrl_shift() -> ModifiersState {
         ModifiersState::CONTROL | ModifiersState::SHIFT

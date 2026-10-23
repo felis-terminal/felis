@@ -7,11 +7,11 @@ use felis_client_core::{
 
 use super::{
     ActiveEventLoop, App, AppEvent, ApplicationHandler, Arc, ClosedOutcome, ControlFlow, DragState,
-    Duration, ElementState, GridMsg, ImageData, ImageId, ImageMsg, ImageSource, InputMsg, Instant,
-    ModifiersState, MouseAction, MouseButton, MouseScrollDelta, OutgoingSender, PipeState,
-    PressRouting, Renderer, SearchDirection, SearchHitRecord, SearchToClientMsg, SearchUiMode,
-    Selection, SelectionMode, SessionHex, SurfaceError, SwitchState, WheelEncoding, WindowEvent,
-    WindowId, WinitMouseButton, activation_matches_preview, activation_target, apply_option_as_alt,
+    Duration, ElementState, GridMsg, ImageData, ImageId, ImageMsg, ImageSource, Ime, InputMsg,
+    Instant, KeyEvent, Modifiers, MouseAction, MouseButton, MouseScrollDelta, OutgoingSender,
+    PipeState, PressRouting, Renderer, SearchDirection, SearchHitRecord, SearchToClientMsg,
+    SearchUiMode, Selection, SelectionMode, SessionHex, SurfaceError, SwitchState, WheelEncoding,
+    WindowEvent, WindowId, activation_matches_preview, activation_target, apply_option_as_alt,
     apply_window_backdrop, compose_window_title, daemon_closed_outcome, error,
     forwarded_press_dismisses_selection, grid_change_invalidates_selection,
     grid_msg_moves_hover_target, ime_commit_bytes, info, input, map_button, mem, open_url,
@@ -20,6 +20,8 @@ use super::{
     window_attributes,
 };
 use crate::option_compose;
+use crate::window_input::{ImeInput, KeyPress, WheelDelta, WindowInput};
+use crate::winit_keys;
 
 fn apply_renderer_effect(renderer: &mut Renderer, effect: RendererEffect) {
     match effect {
@@ -185,164 +187,7 @@ impl ApplicationHandler<AppEvent> for App {
                 }
                 self.after_metric_change(size);
             }
-            WindowEvent::ModifiersChanged(state) => {
-                self.modifiers = state.state();
-                // Re-evaluate Ctrl+hover now, not on the next CursorMoved.
-                self.update_mouse_cursor_icon();
-            }
-            WindowEvent::ThemeChanged(theme) => {
-                // felis's own colors are config/OSC-driven and unaffected.
-                self.send_input(&InputMsg::ColorScheme {
-                    dark: theme == winit::window::Theme::Dark,
-                });
-            }
-            WindowEvent::Focused(focused) => {
-                self.send_input(&InputMsg::FocusChange { focused });
-                self.window_focused = focused;
-                if let Some(renderer) = self.renderer.as_mut() {
-                    renderer.set_window_focused(focused);
-                }
-                // Solid-on so a re-focused window shows the caret at once.
-                if focused {
-                    self.restart_blink();
-                }
-                // Release events while another app has focus never reach
-                // us, leaving modifiers stuck.
-                if !focused {
-                    self.modifiers = ModifiersState::empty();
-                    self.key_presses.clear();
-                    self.update_mouse_cursor_icon();
-                }
-                self.redraw.request();
-            }
             WindowEvent::Occluded(false) => self.present_retry.wake(Instant::now()),
-            WindowEvent::CursorLeft { .. } => {
-                // A re-entry's first CursorMoved must count as "new cell".
-                self.cursor_cell = None;
-                self.cursor_px = None;
-                self.pointer_px = None;
-                self.update_post_mouse_state();
-                self.update_mouse_cursor_icon();
-            }
-            WindowEvent::CursorMoved { position, .. } => {
-                // Before the cell test returns early: sub-cell motion still
-                // moves a pointer-reactive shader.
-                self.pointer_px = Some(position);
-                self.update_post_mouse_state();
-                let Some(cell) = self.position_to_cell(position) else {
-                    return;
-                };
-                // Even within the same cell, so a button / wheel event
-                // reports fresh sub-cell pixels under `?1016`.
-                self.cursor_px = self.position_to_pixel(position);
-                if self.cursor_cell == Some(cell) {
-                    return;
-                }
-                self.cursor_cell = Some(cell);
-                self.update_mouse_cursor_icon();
-                // A selection drag stops before the mouse-to-PTY path so the
-                // program doesn't also see it.
-                let drag_button_held = self.held_buttons.is_held(MouseButton::Left)
-                    || self.held_buttons.is_held(MouseButton::Right);
-                if drag_button_held && let DragState::Selected(sel) = &mut self.drag {
-                    sel.extend(cell);
-                    self.update_renderer_selection();
-                    return;
-                }
-                // CursorMoved only reaches here once the cursor crossed into
-                // a new cell, so this is a genuine drag, not the click.
-                if self.held_buttons.is_held(MouseButton::Left)
-                    && let DragState::Pending(anchor, mode) = self.drag
-                {
-                    let mut sel = match mode {
-                        SelectionMode::Linear => Selection::new(anchor),
-                        SelectionMode::Rectangle => Selection::new_rectangle(anchor),
-                    };
-                    sel.extend(cell);
-                    self.drag = DragState::Selected(sel);
-                    self.update_renderer_selection();
-                    return;
-                }
-                let action = if self.held_buttons.is_empty() {
-                    MouseAction::Motion
-                } else {
-                    MouseAction::Drag
-                };
-                let button = self.held_buttons.last();
-                self.emit_mouse(button, action, cell);
-            }
-            WindowEvent::MouseInput {
-                state,
-                button: winit_btn,
-                ..
-            } => self.on_mouse_input(state, winit_btn),
-            WindowEvent::MouseWheel { delta, .. } => self.on_wheel(delta),
-            WindowEvent::KeyboardInput { event, .. } => {
-                let is_press = matches!(event.state, ElementState::Pressed);
-                let kind = input::event_kind(event.state, event.repeat);
-                let Some(stroke) = self.key_presses.resolve(
-                    event.physical_key,
-                    kind,
-                    &event.logical_key,
-                    event.text.as_deref(),
-                    option_compose::text_with_all_modifiers(&event),
-                    self.modifiers,
-                ) else {
-                    return;
-                };
-                let key = &stroke.key;
-                let text = stroke.text.as_deref();
-                // A notice reports the previous keypress, so it dies with
-                // this one: cleared before dispatch, since the handlers
-                // below may raise a new one for the key being pressed.
-                if is_press {
-                    self.clear_notice();
-                }
-                // Keymap dispatch (docs/explanation/input.md): a hit consumes
-                // the keypress, a miss falls through to the input encoder.
-                // An open confirmation bar owns the keyboard outright,
-                // chords included, so re-pressing `kill_session` or a paste
-                // chord can't stack a second question under the first.
-                if is_press && self.handle_confirm_key(key, text) {
-                    return;
-                }
-                if is_press && self.dispatch_chord(key, stroke.mods) {
-                    return;
-                }
-                // Before the input encoder so the keys hit the search bar,
-                // not the program (REQ-607).
-                if is_press
-                    && self.search.mode == SearchUiMode::Composing
-                    && self.handle_search_compose_key(key, text)
-                {
-                    return;
-                }
-                // Esc dismisses, `n` / `N` navigate; before the encoder so
-                // they don't leak to the program.
-                if is_press
-                    && self.search.mode == SearchUiMode::Active
-                    && self.handle_search_active_key(key, text)
-                {
-                    return;
-                }
-                self.ferry_key(input::key_event(
-                    key,
-                    text,
-                    stroke.mods,
-                    kind,
-                    event.location,
-                ));
-            }
-            WindowEvent::Ime(ime) => {
-                // The commit string is finalized UTF-8; the encoder's
-                // modifier / disambiguation logic doesn't apply, so the bytes
-                // ferry raw (like a paste). Pre-edit text routes to the
-                // renderer overlay.
-                self.apply_ime_event(&ime);
-                if let Some(bytes) = ime_commit_bytes(&ime) {
-                    self.ferry_key_bytes(bytes);
-                }
-            }
             // A cycle in flight is a screen state the daemon has not
             // finished describing, so no redraw source paints it: a
             // blink or an animation frame landing between a `Scrolled`
@@ -357,16 +202,11 @@ impl ApplicationHandler<AppEvent> for App {
             {
                 self.on_redraw(event_loop);
             }
-            WindowEvent::DroppedFile(path) => {
-                // Not OSC 72 (docs/explanation/input.md "Drag-and-drop"); no shell-aware
-                // quoting (principle 4). Routed through the paste path so bracketed-paste
-                // guards apply. Trailing space separates successive file drops.
-                let mut bytes = dropped_path_bytes(&path);
-                bytes.push(b' ');
-                tracing::debug!(target: "felis::input", ?path, "file dropped");
-                self.ferry_paste(&bytes);
+            other => {
+                if let Some(input) = self.window_input(other) {
+                    self.on_window_input(input);
+                }
             }
-            _ => {}
         }
     }
 
@@ -472,6 +312,211 @@ impl ApplicationHandler<AppEvent> for App {
 }
 
 impl App {
+    /// Every input `window_event` hands `App`, minus winit, so a test
+    /// can drive it.
+    pub(crate) fn on_window_input(&mut self, input: WindowInput) {
+        match input {
+            WindowInput::Modifiers(mods) => {
+                self.modifiers = mods;
+                // Re-evaluate Ctrl+hover now, not on the next CursorMoved.
+                self.update_mouse_cursor_icon();
+            }
+            WindowInput::ColorScheme { dark } => {
+                // felis's own colors are config/OSC-driven and unaffected.
+                self.send_input(&InputMsg::ColorScheme { dark });
+            }
+            WindowInput::Focused(focused) => {
+                self.send_input(&InputMsg::FocusChange { focused });
+                self.window_focused = focused;
+                if let Some(renderer) = self.renderer.as_mut() {
+                    renderer.set_window_focused(focused);
+                }
+                // Solid-on so a re-focused window shows the caret at once.
+                if focused {
+                    self.restart_blink();
+                }
+                // Release events while another app has focus never reach
+                // us, leaving modifiers stuck.
+                if !focused {
+                    self.modifiers = Modifiers::empty();
+                    self.key_presses.clear();
+                    self.update_mouse_cursor_icon();
+                }
+                self.redraw.request();
+            }
+            WindowInput::PointerLeft => {
+                // A re-entry's first CursorMoved must count as "new cell".
+                self.cursor_cell = None;
+                self.cursor_px = None;
+                self.pointer_px = None;
+                self.update_post_mouse_state();
+                self.update_mouse_cursor_icon();
+            }
+            WindowInput::PointerMoved(position) => {
+                // Before the cell test returns early: sub-cell motion still
+                // moves a pointer-reactive shader.
+                self.pointer_px = Some(position);
+                self.update_post_mouse_state();
+                let Some(cell) = self.position_to_cell(position) else {
+                    return;
+                };
+                // Even within the same cell, so a button / wheel event
+                // reports fresh sub-cell pixels under `?1016`.
+                self.cursor_px = self.position_to_pixel(position);
+                if self.cursor_cell == Some(cell) {
+                    return;
+                }
+                self.cursor_cell = Some(cell);
+                self.update_mouse_cursor_icon();
+                // A selection drag stops before the mouse-to-PTY path so the
+                // program doesn't also see it.
+                let drag_button_held = self.held_buttons.is_held(MouseButton::Left)
+                    || self.held_buttons.is_held(MouseButton::Right);
+                if drag_button_held && let DragState::Selected(sel) = &mut self.drag {
+                    sel.extend(cell);
+                    self.update_renderer_selection();
+                    return;
+                }
+                // CursorMoved only reaches here once the cursor crossed into
+                // a new cell, so this is a genuine drag, not the click.
+                if self.held_buttons.is_held(MouseButton::Left)
+                    && let DragState::Pending(anchor, mode) = self.drag
+                {
+                    let mut sel = match mode {
+                        SelectionMode::Linear => Selection::new(anchor),
+                        SelectionMode::Rectangle => Selection::new_rectangle(anchor),
+                    };
+                    sel.extend(cell);
+                    self.drag = DragState::Selected(sel);
+                    self.update_renderer_selection();
+                    return;
+                }
+                let action = if self.held_buttons.is_empty() {
+                    MouseAction::Motion
+                } else {
+                    MouseAction::Drag
+                };
+                let button = self.held_buttons.last();
+                self.emit_mouse(button, action, cell);
+            }
+            WindowInput::Button { pressed, button } => self.on_mouse_input(pressed, button),
+            WindowInput::Wheel(delta) => self.on_wheel(delta),
+            WindowInput::Key(press) => self.on_key(&press),
+            WindowInput::Ime(ime) => {
+                // The commit string is finalized UTF-8; the encoder's
+                // modifier / disambiguation logic doesn't apply, so the bytes
+                // ferry raw (like a paste). Pre-edit text routes to the
+                // renderer overlay.
+                self.apply_ime_event(&ime);
+                if let Some(bytes) = ime_commit_bytes(&ime) {
+                    self.ferry_key_bytes(bytes);
+                }
+            }
+            WindowInput::DroppedFile(path) => {
+                // Not OSC 72 (docs/explanation/input.md "Drag-and-drop"); no shell-aware
+                // quoting (principle 4). Routed through the paste path so bracketed-paste
+                // guards apply. Trailing space separates successive file drops.
+                let mut bytes = dropped_path_bytes(&path);
+                bytes.push(b' ');
+                tracing::debug!(target: "felis::input", ?path, "file dropped");
+                self.ferry_paste(&bytes);
+            }
+        }
+    }
+
+    fn on_key(&mut self, press: &KeyPress) {
+        let is_press = press.is_press();
+        let key = &press.key;
+        let text = press.text.as_deref();
+        // A notice reports the previous keypress, so it dies with
+        // this one: cleared before dispatch, since the handlers
+        // below may raise a new one for the key being pressed.
+        if is_press {
+            self.clear_notice();
+        }
+        // Keymap dispatch (docs/explanation/input.md): a hit consumes
+        // the keypress, a miss falls through to the input encoder.
+        // An open confirmation bar owns the keyboard outright,
+        // chords included, so re-pressing `kill_session` or a paste
+        // chord can't stack a second question under the first.
+        if is_press && self.handle_confirm_key(key, text) {
+            return;
+        }
+        if is_press && self.dispatch_chord(key, press.mods) {
+            return;
+        }
+        // Before the input encoder so the keys hit the search bar,
+        // not the program (REQ-607).
+        if is_press
+            && self.search.mode == SearchUiMode::Composing
+            && self.handle_search_compose_key(key, text)
+        {
+            return;
+        }
+        // Esc dismisses, `n` / `N` navigate; before the encoder so
+        // they don't leak to the program.
+        if is_press
+            && self.search.mode == SearchUiMode::Active
+            && self.handle_search_active_key(key, text)
+        {
+            return;
+        }
+        self.ferry_key(press.to_wire());
+    }
+
+    /// `None` drops the event (see `option_compose::KeyPresses::resolve`).
+    fn key_press(&mut self, event: &KeyEvent) -> Option<KeyPress> {
+        let kind = input::event_kind(event.state, event.repeat);
+        let stroke = self.key_presses.resolve(
+            event.physical_key,
+            kind,
+            &event.logical_key,
+            event.text.as_deref(),
+            option_compose::text_with_all_modifiers(event),
+            self.modifiers,
+        )?;
+        Some(KeyPress {
+            key: input::pressed_key(&stroke.key),
+            text: stroke.text,
+            mods: stroke.mods,
+            kind,
+            location: input::location(event.location),
+        })
+    }
+
+    /// `None` for an event that is not input, or a button no encoding
+    /// can name.
+    fn window_input(&mut self, event: WindowEvent) -> Option<WindowInput> {
+        Some(match event {
+            WindowEvent::ModifiersChanged(state) => {
+                WindowInput::Modifiers(winit_keys::mods(state.state()))
+            }
+            WindowEvent::ThemeChanged(theme) => WindowInput::ColorScheme {
+                dark: theme == winit::window::Theme::Dark,
+            },
+            WindowEvent::Focused(focused) => WindowInput::Focused(focused),
+            WindowEvent::CursorLeft { .. } => WindowInput::PointerLeft,
+            WindowEvent::CursorMoved { position, .. } => WindowInput::PointerMoved(position),
+            WindowEvent::MouseInput { state, button, .. } => WindowInput::Button {
+                pressed: state == ElementState::Pressed,
+                button: map_button(button)?,
+            },
+            WindowEvent::MouseWheel { delta, .. } => WindowInput::Wheel(match delta {
+                MouseScrollDelta::LineDelta(x, y) => WheelDelta::Lines(x, y),
+                MouseScrollDelta::PixelDelta(p) => WheelDelta::Pixels(p.x, p.y),
+            }),
+            WindowEvent::KeyboardInput { event, .. } => WindowInput::Key(self.key_press(&event)?),
+            WindowEvent::Ime(ime) => WindowInput::Ime(match ime {
+                Ime::Enabled => ImeInput::Enabled,
+                Ime::Preedit(text, cursor) => ImeInput::Preedit(text, cursor),
+                Ime::Commit(text) => ImeInput::Commit(text),
+                Ime::Disabled => ImeInput::Disabled,
+            }),
+            WindowEvent::DroppedFile(path) => WindowInput::DroppedFile(path),
+            _ => return None,
+        })
+    }
+
     /// The whole of `user_event`, minus the loop, so a test can drive it.
     pub(crate) fn on_app_event(&mut self, event: AppEvent) {
         match event {
@@ -986,11 +1031,8 @@ impl App {
         self.on_daemon_closed(conn_gen);
     }
 
-    fn on_mouse_input(&mut self, state: ElementState, winit_btn: WinitMouseButton) {
-        let Some(button) = map_button(winit_btn) else {
-            return;
-        };
-        if state == ElementState::Pressed && button == MouseButton::Left {
+    fn on_mouse_input(&mut self, pressed: bool, button: MouseButton) {
+        if pressed && button == MouseButton::Left {
             self.last_press_px = self.pointer_px;
         }
         self.update_post_mouse_state();
@@ -998,7 +1040,7 @@ impl App {
         // Ctrl+Left on an armed OSC 8 cell opens the URL without program forwarding.
         // Recomputed here rather than read from `hover_target` so the press acts on
         // the cell it landed in rather than the last hovered cell.
-        if state == ElementState::Pressed
+        if pressed
             && button == MouseButton::Left
             && let Some(target) = activation_target(
                 &self.shadow,
@@ -1023,14 +1065,14 @@ impl App {
                 // Clear Ctrl because the launched browser steals focus before release events
                 // arrive, which would otherwise leave the Pointer icon stuck. Confined to
                 // successful launches so modifiers stay consistent on failure.
-                self.modifiers.remove(ModifiersState::CONTROL);
+                self.modifiers.remove(Modifiers::CONTROL);
                 self.update_mouse_cursor_icon();
             }
             return;
         }
         // A release takes the path its own press took; the mouse-mode /
         // Shift predicate can flip while the button is down.
-        if state == ElementState::Released {
+        if !pressed {
             match self.held_buttons.release(button) {
                 Some(PressRouting::Grabbed) => {
                     // A click that never dragged leaves a stranded anchor.
@@ -1113,7 +1155,7 @@ impl App {
         self.emit_mouse(Some(button), MouseAction::Press, cell);
     }
 
-    fn on_wheel(&mut self, delta: MouseScrollDelta) {
+    fn on_wheel(&mut self, delta: WheelDelta) {
         let Some(cell) = self.cursor_cell else { return };
         // macOS delivers inertia as ordinary MouseWheel events and winit
         // 0.30 cannot flag them (`wheel_starts_new_stream`), so without

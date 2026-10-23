@@ -3,25 +3,24 @@
 use super::{
     Action, ActivationTarget, App, AppEvent, CarrierReader, CarrierWriter, ClipboardScope,
     ConnToDaemonMsg, Correlation, DEFAULT_FONT_SIZE_LOGICAL_PX, DragState, FrameReader,
-    FrameWriter, GridPos, ImageShadow, Ime, InputMsg, Instant, IpcAction, Key, Keymap, Landing,
-    ModifiersState, MouseAction, MouseButton, MouseEvent, MouseState, NamedKey, Offer,
-    OutgoingFrame, PhysicalPosition, PhysicalSize, PipeState, Pumps, Reconnector,
-    RegionToDaemonMsg, Renderer, SearchDirection, SearchHitRecord, SearchHitSpan, SearchOverlay,
-    SearchToDaemonMsg, SearchUi, SearchUiMode, Selection, SessionInfo, SessionToDaemonMsg,
-    SharedDriver, SwitchState, TrailRecord, TrailState, ViewportPosition, activation_target, codec,
-    compose_window_title, composed_row_for_line, config, configured_font_size_logical_px,
-    cursor_trail, dial_and_land, error, font_features_differ, font_settings_differ,
-    font_stack_inputs_differ, ime_cursor_area_pixels, info, keymap_adapter, launch_args,
-    pointer_icon, preedit_from_ime, renderer_config_from, reported_theme_differs,
-    resolve_local_socket, viewport_for_hit, warn,
+    FrameWriter, GridPos, ImageShadow, ImeInput, InputMsg, Instant, IpcAction, Keymap, Landing,
+    Modifiers, MouseAction, MouseButton, MouseEvent, MouseState, Offer, OutgoingFrame,
+    PhysicalPosition, PhysicalSize, PipeState, Pumps, Reconnector, RegionToDaemonMsg, Renderer,
+    SearchDirection, SearchHitRecord, SearchHitSpan, SearchOverlay, SearchToDaemonMsg, SearchUi,
+    SearchUiMode, Selection, SessionInfo, SessionToDaemonMsg, SharedDriver, SwitchState,
+    TrailRecord, TrailState, ViewportPosition, activation_target, codec, compose_window_title,
+    composed_row_for_line, config, configured_font_size_logical_px, cursor_trail, dial_and_land,
+    error, font_features_differ, font_settings_differ, font_stack_inputs_differ,
+    ime_cursor_area_pixels, info, keymap_adapter, launch_args, pointer_icon, preedit_from_ime,
+    renderer_config_from, reported_theme_differs, resolve_local_socket, viewport_for_hit, warn,
 };
-use crate::winit_keys;
+use crate::window_input::PressedKey;
 use felis_client_core::confirm::{ConfirmDecision, PendingConfirm, decide_confirm_key};
 use felis_client_core::connector::{Carrier, RemoteSpawn, connect_carrier};
 use felis_client_core::pipe::write_region_file;
 use felis_client_core::roster::RingKey;
 use felis_client_core::viewport::{ViewportIntent, step_request};
-use felis_client_core::{FontSizeStep, PipeRegionSource, PipeTarget};
+use felis_client_core::{FontSizeStep, NamedKey, PipeRegionSource, PipeTarget};
 use felis_protocol::messages::{GridDims, RegionPosition, RequestedDims, ViewportAnchor};
 
 impl App {
@@ -233,7 +232,7 @@ impl App {
             })
     }
 
-    pub(crate) fn apply_ime_event(&mut self, ime: &Ime) {
+    pub(crate) fn apply_ime_event(&mut self, ime: &ImeInput) {
         let cursor = self.shadow.screen().cursor();
         let new = preedit_from_ime(
             ime,
@@ -668,22 +667,11 @@ impl App {
     /// `false` (fall through) when no bar is open. While one is, every key
     /// is consumed except a bare modifier press, so Shift on the way to
     /// `Y` doesn't dismiss the prompt.
-    pub(crate) fn handle_confirm_key(&mut self, key: &Key, text: Option<&str>) -> bool {
+    pub(crate) fn handle_confirm_key(&mut self, key: &PressedKey, text: Option<&str>) -> bool {
         if self.pending_confirm.is_none() {
             return false;
         }
-        if matches!(
-            key,
-            Key::Named(
-                NamedKey::Shift
-                    | NamedKey::Control
-                    | NamedKey::Alt
-                    | NamedKey::AltGraph
-                    | NamedKey::Super
-                    | NamedKey::Meta
-                    | NamedKey::CapsLock
-            )
-        ) {
+        if *key == PressedKey::Modifier {
             return true;
         }
         let Some(pending) = self.pending_confirm.take() else {
@@ -790,13 +778,17 @@ impl App {
     }
 
     /// `true` when the search bar consumed the key.
-    pub(crate) fn handle_search_compose_key(&mut self, key: &Key, text: Option<&str>) -> bool {
+    pub(crate) fn handle_search_compose_key(
+        &mut self,
+        key: &PressedKey,
+        text: Option<&str>,
+    ) -> bool {
         match key {
-            Key::Named(NamedKey::Escape) => {
+            PressedKey::Named(NamedKey::Escape) => {
                 self.cancel_search();
                 true
             }
-            Key::Named(NamedKey::Enter) => {
+            PressedKey::Named(NamedKey::Enter) => {
                 if self.search.query.is_empty() {
                     // The daemon would reject an empty needle anyway.
                     self.cancel_search();
@@ -805,7 +797,7 @@ impl App {
                 }
                 true
             }
-            Key::Named(NamedKey::Backspace) => {
+            PressedKey::Named(NamedKey::Backspace) => {
                 self.search.query.pop();
                 self.redraw.request();
                 true
@@ -828,12 +820,16 @@ impl App {
 
     /// n / N (vim convention: `n` = deeper into scrollback, `N` = back
     /// toward live) and Esc. `true` when consumed.
-    pub(crate) fn handle_search_active_key(&mut self, key: &Key, text: Option<&str>) -> bool {
-        if matches!(key, Key::Named(NamedKey::Escape)) {
+    pub(crate) fn handle_search_active_key(
+        &mut self,
+        key: &PressedKey,
+        text: Option<&str>,
+    ) -> bool {
+        if matches!(key, PressedKey::Named(NamedKey::Escape)) {
             self.cancel_search();
             return true;
         }
-        // `n` / `N` arrive as `Key::Character`; winit hands upper-case via
+        // `n` / `N` arrive as `PressedKey::Character`; winit hands upper-case via
         // `text` when Shift is held.
         let Some(ch) = text.and_then(|s| s.chars().next()) else {
             return false;
@@ -946,8 +942,8 @@ impl App {
 
     /// `false` when no binding matched or a contextual gate (bare-End at
     /// the live view) declined; the caller falls through to the encoder.
-    pub(crate) fn dispatch_chord(&mut self, key: &Key, mods: ModifiersState) -> bool {
-        let Some(chord) = keymap_adapter::winit_to_chord(key, mods) else {
+    pub(crate) fn dispatch_chord(&mut self, key: &PressedKey, mods: Modifiers) -> bool {
+        let Some(chord) = keymap_adapter::chord_for(key, mods) else {
             return false;
         };
         let Some(action) = self.keymap.resolve(&chord).cloned() else {
@@ -1014,8 +1010,8 @@ impl App {
             Action::Scroll(step) => {
                 // Bare `End` at the live bottom falls through to the
                 // encoder so pagers / vim still see `kend`.
-                let bare_end_at_live = matches!(key, Key::Named(NamedKey::End))
-                    && mods == ModifiersState::empty()
+                let bare_end_at_live = matches!(key, PressedKey::Named(NamedKey::End))
+                    && mods == Modifiers::empty()
                     && self.viewport_live();
                 if bare_end_at_live {
                     return false;
@@ -1633,7 +1629,7 @@ impl App {
         let event = MouseEvent {
             button,
             action,
-            mods: winit_keys::mods(self.modifiers).to_input_mods(),
+            mods: self.modifiers.to_input_mods(),
             x: cell.col.saturating_add(1),
             y: cell.row.saturating_add(1),
             px,

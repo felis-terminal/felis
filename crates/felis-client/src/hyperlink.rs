@@ -5,10 +5,10 @@
 #[cfg(not(target_os = "windows"))]
 use std::process::{Command, Stdio};
 
-use felis_client_core::{ActivationTarget, ShadowScreen};
+use felis_client_core::{ActivationTarget, Modifiers, ShadowScreen};
+use winit::window::CursorIcon;
 
 use crate::GridPos;
-use winit::{keyboard::ModifiersState, window::CursorIcon};
 
 /// `None` for cells without a link or when the link table lacks the entry
 /// (mid-rehydrate edge).
@@ -28,7 +28,7 @@ pub fn url_at(shadow: &ShadowScreen, cell: GridPos) -> Option<&str> {
 pub fn activation_target(
     shadow: &ShadowScreen,
     cell: Option<GridPos>,
-    mods: ModifiersState,
+    mods: Modifiers,
     preview_row_free: bool,
 ) -> Option<ActivationTarget> {
     if !mods.control_key() || !preview_row_free {
@@ -352,9 +352,9 @@ mod tests {
         GridPos { row, col }
     }
 
-    fn ctrl() -> ModifiersState {
-        let mut m = ModifiersState::empty();
-        m |= ModifiersState::CONTROL;
+    fn ctrl() -> Modifiers {
+        let mut m = Modifiers::empty();
+        m |= Modifiers::CONTROL;
         m
     }
 
@@ -365,7 +365,7 @@ mod tests {
     fn icon_for(
         shadow: &ShadowScreen,
         cell: Option<GridPos>,
-        mods: ModifiersState,
+        mods: Modifiers,
         preview_row_free: bool,
     ) -> CursorIcon {
         pointer_icon(
@@ -380,7 +380,7 @@ mod tests {
         // see Pointer wherever a shell printed an OSC 8 cell.
         let shadow = shadow_with_link();
         assert_eq!(
-            icon_for(&shadow, Some(at(0, 0)), ModifiersState::empty(), true),
+            icon_for(&shadow, Some(at(0, 0)), Modifiers::empty(), true),
             CursorIcon::Default
         );
     }
@@ -403,7 +403,7 @@ mod tests {
             })
             .unwrap();
         assert_eq!(
-            icon_for(&shadow, Some(at(0, 1)), ModifiersState::empty(), true),
+            icon_for(&shadow, Some(at(0, 1)), Modifiers::empty(), true),
             CursorIcon::Text
         );
     }
@@ -433,7 +433,7 @@ mod tests {
             .unwrap();
         shadow.apply(&GridMsg::PointerShape { name: None }).unwrap();
         assert_eq!(
-            icon_for(&shadow, Some(at(0, 1)), ModifiersState::empty(), true),
+            icon_for(&shadow, Some(at(0, 1)), Modifiers::empty(), true),
             CursorIcon::Default
         );
     }

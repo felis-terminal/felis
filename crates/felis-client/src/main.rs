@@ -23,7 +23,7 @@ pub(crate) use felis_client_core::local_socket::resolve_local_socket;
 use felis_client_core::{
     ActivationTarget, Carrier, Clipboard, ConfigSource, DialError, DialedConnection, GridPos,
     ImageId, ImageLayout, ImageShadow, InMemoryClipboard, Keymap, LANDING_REMOTE_SPAWN, Landing,
-    Offer, Reconnector, Selection, SelectionMode, ShadowScreen,
+    Modifiers, Offer, Reconnector, Selection, SelectionMode, ShadowScreen,
     action::{Action, ClipboardScope, IpcAction, SwitchDirection},
     config,
     config::{Backdrop, BuiltinShader, GUI_CLIENT_ID, PostShaderChoice, compose_window_title},
@@ -71,9 +71,10 @@ use tracing::{debug, error, info, warn};
 use winit::{
     application::ApplicationHandler,
     dpi::{PhysicalPosition, PhysicalSize},
-    event::{ElementState, Ime, MouseButton as WinitMouseButton, MouseScrollDelta, WindowEvent},
+    event::{
+        ElementState, Ime, KeyEvent, MouseButton as WinitMouseButton, MouseScrollDelta, WindowEvent,
+    },
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
-    keyboard::{Key, ModifiersState, NamedKey},
     window::{Window, WindowAttributes, WindowId},
 };
 
@@ -93,6 +94,7 @@ mod os_clipboard;
 mod smoke;
 mod switch_intent;
 mod window_host;
+mod window_input;
 mod winit_keys;
 
 #[cfg(feature = "dhat-heap")]
@@ -105,6 +107,7 @@ use hyperlink::{
     pointer_icon,
 };
 use window_host::WindowHost;
+use window_input::{ImeInput, WheelDelta};
 
 /// User events posted from the IPC reader task to the winit loop.
 ///
@@ -1241,7 +1244,7 @@ struct App {
     shadow: ShadowScreen,
     image_shadow: ImageShadow,
     image_layout: ImageLayout,
-    modifiers: ModifiersState,
+    modifiers: Modifiers,
     /// Updated atomically with the pump swap in `install_new_session`.
     current_session_id: u128,
     /// With [`Self::current_session_id`], this window's [`RingKey`]. A
@@ -1448,7 +1451,7 @@ impl App {
             shadow: ShadowScreen::new(attached_dims.rows, attached_dims.cols),
             image_shadow: ImageShadow::new(),
             image_layout: ImageLayout::new(),
-            modifiers: ModifiersState::empty(),
+            modifiers: Modifiers::empty(),
             current_session_id: anchor.id,
             current_sequence: anchor.sequence,
             switch_state: SwitchState::Idle,
@@ -1806,23 +1809,27 @@ struct SearchHitRecord {
 /// `Some(bytes)` only on a non-empty `Ime::Commit`; pre-edit text rides
 /// the renderer overlay via `preedit_from_ime`. Empty `Commit` strings
 /// are dropped: some IMEs send one on cancel (Escape).
-fn ime_commit_bytes(ime: &Ime) -> Option<Vec<u8>> {
+fn ime_commit_bytes(ime: &ImeInput) -> Option<Vec<u8>> {
     match ime {
-        Ime::Commit(s) if !s.is_empty() => Some(s.as_bytes().to_vec()),
-        Ime::Commit(_) | Ime::Preedit { .. } | Ime::Enabled | Ime::Disabled => None,
+        ImeInput::Commit(s) if !s.is_empty() => Some(s.as_bytes().to_vec()),
+        ImeInput::Commit(_) | ImeInput::Preedit { .. } | ImeInput::Enabled | ImeInput::Disabled => {
+            None
+        }
     }
 }
 
-/// `Some(overlay)` only for a non-empty `Ime::Preedit`, anchored at the
+/// `Some(overlay)` only for a non-empty `ImeInput::Preedit`, anchored at the
 /// shadow screen's cursor cell; everything else clears the overlay.
-fn preedit_from_ime(ime: &Ime, cursor_cell: GridPos) -> Option<PreeditOverlay> {
+fn preedit_from_ime(ime: &ImeInput, cursor_cell: GridPos) -> Option<PreeditOverlay> {
     match ime {
-        Ime::Preedit(text, cursor) if !text.is_empty() => Some(PreeditOverlay {
+        ImeInput::Preedit(text, cursor) if !text.is_empty() => Some(PreeditOverlay {
             anchor: (cursor_cell.row, cursor_cell.col),
             text: text.clone(),
             cursor: *cursor,
         }),
-        Ime::Preedit(_, _) | Ime::Commit(_) | Ime::Enabled | Ime::Disabled => None,
+        ImeInput::Preedit(_, _) | ImeInput::Commit(_) | ImeInput::Enabled | ImeInput::Disabled => {
+            None
+        }
     }
 }
 
@@ -2060,10 +2067,10 @@ fn signum_or_zero(v: f64) -> f64 {
 /// synthesize a swarm of events per swipe. Shared by
 /// [`wheel_arrow_bytes`] and the Ctrl+wheel zoom so both count a notch
 /// the same way.
-fn wheel_y_ticks(delta: MouseScrollDelta) -> i32 {
+fn wheel_y_ticks(delta: WheelDelta) -> i32 {
     let dy = match delta {
-        MouseScrollDelta::LineDelta(_, y) => f64::from(y),
-        MouseScrollDelta::PixelDelta(p) => signum_or_zero(p.y),
+        WheelDelta::Lines(_, y) => f64::from(y),
+        WheelDelta::Pixels(_, py) => signum_or_zero(py),
     };
     let mag = dy.abs();
     if mag == 0.0 {
@@ -2078,19 +2085,19 @@ fn wheel_y_ticks(delta: MouseScrollDelta) -> i32 {
 /// `PixelDelta` ignores the multiplier (touchpad deltas are already
 /// velocity-scaled) and accumulates sub-cell pixels across events.
 fn wheel_pixels_to_rows(
-    delta: MouseScrollDelta,
+    delta: WheelDelta,
     cell_height_px: f64,
     line_multiplier: f64,
     pixel_accum_y: &mut f64,
 ) -> i32 {
     let cell_height_px = cell_height_px.max(1.0);
     match delta {
-        MouseScrollDelta::LineDelta(_, y) => {
+        WheelDelta::Lines(_, y) => {
             *pixel_accum_y = 0.0;
             (f64::from(y) * line_multiplier).round() as i32
         }
-        MouseScrollDelta::PixelDelta(p) => {
-            *pixel_accum_y += p.y;
+        WheelDelta::Pixels(_, py) => {
+            *pixel_accum_y += py;
             let rows = (*pixel_accum_y / cell_height_px).trunc() as i32;
             *pixel_accum_y = f64::mul_add(f64::from(rows), -cell_height_px, *pixel_accum_y);
             rows
@@ -2102,7 +2109,7 @@ fn wheel_pixels_to_rows(
 /// alacritty, and kitty do. Always CSI form regardless of DECCKM,
 /// matching `encode_named`, so wheel- and key-driven arrows produce
 /// identical bytes.
-fn wheel_arrow_bytes(delta: MouseScrollDelta, shift_held: bool) -> Vec<u8> {
+fn wheel_arrow_bytes(delta: WheelDelta, shift_held: bool) -> Vec<u8> {
     let ticks = wheel_y_ticks(delta);
     if ticks == 0 {
         return Vec::new();
@@ -2118,7 +2125,7 @@ fn wheel_arrow_bytes(delta: MouseScrollDelta, shift_held: bool) -> Vec<u8> {
 
 /// Browser / kitty / alacritty convention: one notch = ±1 px. `0.0` when
 /// there is no vertical motion, so the modifier alone never zooms.
-fn wheel_zoom_delta_px(delta: MouseScrollDelta) -> f32 {
+fn wheel_zoom_delta_px(delta: WheelDelta) -> f32 {
     wheel_y_ticks(delta) as f32
 }
 
@@ -2134,12 +2141,12 @@ fn wheel_starts_new_stream(since_prev: Option<Duration>) -> bool {
     since_prev.is_none_or(|gap| gap >= WHEEL_STREAM_IDLE)
 }
 
-fn wheel_buttons(delta: MouseScrollDelta) -> Vec<MouseButton> {
+fn wheel_buttons(delta: WheelDelta) -> Vec<MouseButton> {
     // xterm's encoding is one button per tick: N events for line-deltas
     // ≥ 1.0, a single event for pixel-deltas.
     let (x, y) = match delta {
-        MouseScrollDelta::LineDelta(x, y) => (f64::from(x), f64::from(y)),
-        MouseScrollDelta::PixelDelta(p) => (signum_or_zero(p.x), signum_or_zero(p.y)),
+        WheelDelta::Lines(x, y) => (f64::from(x), f64::from(y)),
+        WheelDelta::Pixels(px, py) => (signum_or_zero(px), signum_or_zero(py)),
     };
     let mut out = Vec::new();
     let yticks = y.abs().round() as u32;

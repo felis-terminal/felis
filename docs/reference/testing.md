@@ -151,8 +151,10 @@ drive an external tool (sshd and ssh, `less`, `nvim`, vttest and esctest, fish a
 fail without them. They compile on Unix only, so the native Windows job does not run them.
 
 REQ-1206 ([spec.md](spec.md)) states the exit criteria for this layer, and part of it is met by hand rather than by a
-test: an editor or file-manager session driven end to end through the GUI client. The automated coverage of the client
-itself is the headless frontend smoke ("CI shape" below), which drives one window, one keystroke and one rendered frame.
+test: an editor or file-manager session driven end to end through the GUI client. The client's window state machines are
+unit-tested without a window or a daemon, through the felis-owned event, input and window-effect types the winit adapter
+translates to; the client as a whole is covered by the headless frontend smoke ("CI shape" below), which drives one
+window, one keystroke and one rendered frame.
 
 ## Machine-surface schemas
 

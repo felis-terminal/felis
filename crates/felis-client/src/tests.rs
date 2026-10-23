@@ -175,9 +175,9 @@ mod wheel {
 
     #[test]
     fn wheel_arrow_bytes_line_delta_emits_csi_arrow_per_tick() {
-        let three_up = wheel_arrow_bytes(MouseScrollDelta::LineDelta(0.0, 3.0), false);
+        let three_up = wheel_arrow_bytes(WheelDelta::Lines(0.0, 3.0), false);
         assert_eq!(three_up, b"\x1b[A\x1b[A\x1b[A".to_vec());
-        let two_down = wheel_arrow_bytes(MouseScrollDelta::LineDelta(0.0, -2.0), false);
+        let two_down = wheel_arrow_bytes(WheelDelta::Lines(0.0, -2.0), false);
         assert_eq!(two_down, b"\x1b[B\x1b[B".to_vec());
     }
 
@@ -185,15 +185,9 @@ mod wheel {
     fn wheel_arrow_bytes_pixel_delta_collapses_to_one_arrow() {
         // Pins: per-pixel deltas collapse to one arrow, the way
         // `wheel_buttons` counts a notch.
-        let down = wheel_arrow_bytes(
-            MouseScrollDelta::PixelDelta(PhysicalPosition::new(0.0, -42.0)),
-            false,
-        );
+        let down = wheel_arrow_bytes(WheelDelta::Pixels(0.0, -42.0), false);
         assert_eq!(down, b"\x1b[B".to_vec());
-        let up = wheel_arrow_bytes(
-            MouseScrollDelta::PixelDelta(PhysicalPosition::new(0.0, 7.0)),
-            false,
-        );
+        let up = wheel_arrow_bytes(WheelDelta::Pixels(0.0, 7.0), false);
         assert_eq!(up, b"\x1b[A".to_vec());
     }
 
@@ -201,14 +195,11 @@ mod wheel {
     fn wheel_arrow_bytes_zero_delta_is_silent() {
         // A pure horizontal scroll over a pager must not eat the wheel.
         assert_eq!(
-            wheel_arrow_bytes(MouseScrollDelta::LineDelta(0.0, 0.0), false),
+            wheel_arrow_bytes(WheelDelta::Lines(0.0, 0.0), false),
             Vec::<u8>::new()
         );
         assert_eq!(
-            wheel_arrow_bytes(
-                MouseScrollDelta::PixelDelta(PhysicalPosition::new(50.0, 0.0)),
-                false
-            ),
+            wheel_arrow_bytes(WheelDelta::Pixels(50.0, 0.0), false),
             Vec::<u8>::new()
         );
     }
@@ -216,7 +207,7 @@ mod wheel {
     #[test]
     fn wheel_arrow_bytes_ignores_horizontal_axis() {
         // No pager interprets `ESC [ C` / `ESC [ D` as scroll.
-        let diag = wheel_arrow_bytes(MouseScrollDelta::LineDelta(2.0, 1.0), false);
+        let diag = wheel_arrow_bytes(WheelDelta::Lines(2.0, 1.0), false);
         assert_eq!(diag, b"\x1b[A".to_vec(), "horizontal axis must not leak");
     }
 
@@ -224,7 +215,7 @@ mod wheel {
     fn wheel_arrow_bytes_uses_csi_form_not_app_cursor_form() {
         // Pins: `ESC [ A` regardless of DECCKM, like `encode_named`, so
         // wheel-up and ArrowUp never differ.
-        let one = wheel_arrow_bytes(MouseScrollDelta::LineDelta(0.0, 1.0), false);
+        let one = wheel_arrow_bytes(WheelDelta::Lines(0.0, 1.0), false);
         assert_eq!(one, b"\x1b[A".to_vec());
         assert_ne!(one, b"\x1bOA".to_vec());
     }
@@ -232,41 +223,31 @@ mod wheel {
     #[test]
     fn wheel_arrow_bytes_shift_held_emits_pageup_pagedown() {
         // Matches `encode_named`'s PageUp / PageDown bytes.
-        let pgup = wheel_arrow_bytes(MouseScrollDelta::LineDelta(0.0, 1.0), true);
+        let pgup = wheel_arrow_bytes(WheelDelta::Lines(0.0, 1.0), true);
         assert_eq!(pgup, b"\x1b[5~".to_vec());
-        let pgdn = wheel_arrow_bytes(MouseScrollDelta::LineDelta(0.0, -1.0), true);
+        let pgdn = wheel_arrow_bytes(WheelDelta::Lines(0.0, -1.0), true);
         assert_eq!(pgdn, b"\x1b[6~".to_vec());
     }
 
     #[test]
     fn wheel_arrow_bytes_shift_held_count_matches_unshifted() {
-        let delta = MouseScrollDelta::LineDelta(0.0, 3.0);
+        let delta = WheelDelta::Lines(0.0, 3.0);
         assert_eq!(wheel_arrow_bytes(delta, false), b"\x1b[A".repeat(3));
         assert_eq!(wheel_arrow_bytes(delta, true), b"\x1b[5~".repeat(3));
     }
 
     #[test]
     fn wheel_arrow_bytes_shift_held_pixel_delta_still_collapses_to_one() {
-        let down = wheel_arrow_bytes(
-            MouseScrollDelta::PixelDelta(PhysicalPosition::new(0.0, -42.0)),
-            true,
-        );
+        let down = wheel_arrow_bytes(WheelDelta::Pixels(0.0, -42.0), true);
         assert_eq!(down, b"\x1b[6~".to_vec());
     }
 
     #[test]
     fn wheel_zoom_delta_px_matches_browser_one_notch_one_pixel() {
         // Browser / kitty / alacritty convention: one notch = +-1 px.
-        assert!(
-            (wheel_zoom_delta_px(MouseScrollDelta::LineDelta(0.0, 1.0)) - 1.0).abs() < f32::EPSILON
-        );
-        assert!(
-            (wheel_zoom_delta_px(MouseScrollDelta::LineDelta(0.0, -1.0)) + 1.0).abs()
-                < f32::EPSILON
-        );
-        assert!(
-            (wheel_zoom_delta_px(MouseScrollDelta::LineDelta(0.0, 3.0)) - 3.0).abs() < f32::EPSILON
-        );
+        assert!((wheel_zoom_delta_px(WheelDelta::Lines(0.0, 1.0)) - 1.0).abs() < f32::EPSILON);
+        assert!((wheel_zoom_delta_px(WheelDelta::Lines(0.0, -1.0)) + 1.0).abs() < f32::EPSILON);
+        assert!((wheel_zoom_delta_px(WheelDelta::Lines(0.0, 3.0)) - 3.0).abs() < f32::EPSILON);
     }
 
     #[test]
@@ -295,14 +276,8 @@ mod wheel {
 
     #[test]
     fn wheel_zoom_delta_px_zero_motion_produces_no_zoom() {
-        assert!(wheel_zoom_delta_px(MouseScrollDelta::LineDelta(0.0, 0.0)).abs() < f32::EPSILON);
-        assert!(
-            wheel_zoom_delta_px(MouseScrollDelta::PixelDelta(PhysicalPosition::new(
-                50.0, 0.0
-            )))
-            .abs()
-                < f32::EPSILON
-        );
+        assert!(wheel_zoom_delta_px(WheelDelta::Lines(0.0, 0.0)).abs() < f32::EPSILON);
+        assert!(wheel_zoom_delta_px(WheelDelta::Pixels(50.0, 0.0)).abs() < f32::EPSILON);
     }
 
     proptest::proptest! {
@@ -313,7 +288,7 @@ mod wheel {
         x in proptest::num::f32::NORMAL,
         y in -1024.0_f32..=1024.0_f32,
     ) {
-        let ticks = wheel_y_ticks(MouseScrollDelta::LineDelta(x, y));
+        let ticks = wheel_y_ticks(WheelDelta::Lines(x, y));
         if y > 0.0 {
             proptest::prop_assert!(ticks > 0, "y={} should produce up-ticks, got {}", y, ticks);
         } else if y < 0.0 {
@@ -331,9 +306,7 @@ mod wheel {
         px in -10_000.0_f64..=10_000.0_f64,
         py in -10_000.0_f64..=10_000.0_f64,
     ) {
-        let ticks = wheel_y_ticks(MouseScrollDelta::PixelDelta(
-            PhysicalPosition::new(px, py),
-        ));
+        let ticks = wheel_y_ticks(WheelDelta::Pixels(px, py));
         let expected = if py > 0.0 { 1 } else if py < 0.0 { -1 } else { 0 };
         proptest::prop_assert_eq!(ticks, expected, "px={} py={}", px, py);
     }
@@ -343,8 +316,8 @@ mod wheel {
         y in -1024.0_f32..=1024.0_f32,
         shift_held in proptest::bool::ANY,
     ) {
-        let bytes = wheel_arrow_bytes(MouseScrollDelta::LineDelta(0.0, y), shift_held);
-        let ticks = wheel_y_ticks(MouseScrollDelta::LineDelta(0.0, y));
+        let bytes = wheel_arrow_bytes(WheelDelta::Lines(0.0, y), shift_held);
+        let ticks = wheel_y_ticks(WheelDelta::Lines(0.0, y));
         let seq_len: usize = match (ticks > 0, shift_held) {
             (_, false) => 3,                 // ESC [ A   or   ESC [ B
             (_, true) => 4,                  // ESC [ 5 ~ or   ESC [ 6 ~
@@ -367,7 +340,7 @@ mod wheel {
         for dy in deltas {
             let pending = accum + dy;
             let rows = wheel_pixels_to_rows(
-                MouseScrollDelta::PixelDelta(PhysicalPosition::new(0.0, dy)),
+                WheelDelta::Pixels(0.0, dy),
                 cell_h,
                 17.0,
                 &mut accum,
@@ -409,7 +382,7 @@ mod wheel {
     ) {
         let mut accum = residue;
         let rows = wheel_pixels_to_rows(
-            MouseScrollDelta::LineDelta(0.0, y),
+            WheelDelta::Lines(0.0, y),
             cell_h,
             multiplier,
             &mut accum,
@@ -438,13 +411,13 @@ mod wheel {
     ) {
         let (delta, transposed) = if pixel_delta {
             (
-                MouseScrollDelta::PixelDelta(PhysicalPosition::new(f64::from(x), f64::from(y))),
-                MouseScrollDelta::PixelDelta(PhysicalPosition::new(f64::from(y), f64::from(x))),
+                WheelDelta::Pixels(f64::from(x), f64::from(y)),
+                WheelDelta::Pixels(f64::from(y), f64::from(x)),
             )
         } else {
             (
-                MouseScrollDelta::LineDelta(x, y),
-                MouseScrollDelta::LineDelta(y, x),
+                WheelDelta::Lines(x, y),
+                WheelDelta::Lines(y, x),
             )
         };
         let y_ticks = wheel_y_ticks(delta);
@@ -1579,7 +1552,7 @@ mod selection_invalidation {
 
 #[test]
 fn ime_commit_forwards_japanese_text_as_utf8_bytes() {
-    let bytes = ime_commit_bytes(&Ime::Commit("こんにちは".to_owned()))
+    let bytes = ime_commit_bytes(&ImeInput::Commit("こんにちは".to_owned()))
         .expect("non-empty commit must forward bytes");
     assert_eq!(bytes, "こんにちは".as_bytes());
 }
@@ -1587,13 +1560,16 @@ fn ime_commit_forwards_japanese_text_as_utf8_bytes() {
 #[test]
 fn empty_ime_commit_is_dropped() {
     // Some IMEs send an empty Commit on cancel.
-    assert_eq!(ime_commit_bytes(&Ime::Commit(String::new())), None);
+    assert_eq!(ime_commit_bytes(&ImeInput::Commit(String::new())), None);
 }
 
 #[test]
 fn preedit_from_ime_anchors_at_cursor_cell_with_text() {
-    let overlay =
-        preedit_from_ime(&Ime::Preedit("こん".to_owned(), Some((6, 6))), at(3, 5)).unwrap();
+    let overlay = preedit_from_ime(
+        &ImeInput::Preedit("こん".to_owned(), Some((6, 6))),
+        at(3, 5),
+    )
+    .unwrap();
     assert_eq!(overlay.anchor, (3, 5));
     assert_eq!(overlay.text, "こん");
     assert_eq!(overlay.cursor, Some((6, 6)));
@@ -1602,23 +1578,23 @@ fn preedit_from_ime_anchors_at_cursor_cell_with_text() {
 #[test]
 fn preedit_from_ime_empty_string_clears_overlay() {
     // Platform IMEs send an empty Preedit when composition ends without commit.
-    assert!(preedit_from_ime(&Ime::Preedit(String::new(), None), at(0, 0)).is_none());
+    assert!(preedit_from_ime(&ImeInput::Preedit(String::new(), None), at(0, 0)).is_none());
 }
 
 #[test]
 fn preedit_from_ime_commit_event_clears_overlay() {
-    assert!(preedit_from_ime(&Ime::Commit("hello".to_owned()), at(0, 0)).is_none());
-    assert!(preedit_from_ime(&Ime::Enabled, at(0, 0)).is_none());
-    assert!(preedit_from_ime(&Ime::Disabled, at(0, 0)).is_none());
+    assert!(preedit_from_ime(&ImeInput::Commit("hello".to_owned()), at(0, 0)).is_none());
+    assert!(preedit_from_ime(&ImeInput::Enabled, at(0, 0)).is_none());
+    assert!(preedit_from_ime(&ImeInput::Disabled, at(0, 0)).is_none());
 }
 
 #[test]
 fn ime_preedit_enabled_disabled_carry_no_bytes_today() {
     // Pre-edit text rides the renderer overlay, never the PTY.
-    assert_eq!(ime_commit_bytes(&Ime::Enabled), None);
-    assert_eq!(ime_commit_bytes(&Ime::Disabled), None);
+    assert_eq!(ime_commit_bytes(&ImeInput::Enabled), None);
+    assert_eq!(ime_commit_bytes(&ImeInput::Disabled), None);
     assert_eq!(
-        ime_commit_bytes(&Ime::Preedit("こん".to_owned(), Some((2, 2)))),
+        ime_commit_bytes(&ImeInput::Preedit("こん".to_owned(), Some((2, 2)))),
         None,
     );
 }
@@ -2028,6 +2004,7 @@ mod app_events {
     use std::sync::mpsc;
 
     use super::*;
+    use crate::window_input::{KeyPress, PressedKey, WindowInput};
 
     #[derive(Default)]
     struct RecordedWindow {
@@ -2088,9 +2065,24 @@ mod app_events {
         app: App,
         posted: mpsc::Receiver<AppEvent>,
         window: Arc<RecordedWindow>,
+        outgoing: OutgoingReceiver,
     }
 
     impl AppHarness {
+        /// Drains what the window queued for the daemon since the last
+        /// call, as the writer task would.
+        fn sent(&self) -> Vec<felis_transport::CheckedFrame> {
+            let mut queue = self
+                .outgoing
+                .shared
+                .queue
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            std::iter::from_fn(|| queue.pop())
+                .map(|frame| frame.frame().clone())
+                .collect()
+        }
+
         /// Blocks for a background dial's outcome, which is what the
         /// winit loop would deliver next.
         fn next_posted(&self) -> AppEvent {
@@ -2164,7 +2156,7 @@ mod app_events {
             keymap: Keymap::default_for_platform(),
             config_source: ConfigSource::Default,
         };
-        let (outgoing, _) = outgoing_channel();
+        let (outgoing, outgoing_rx) = outgoing_channel();
         let link = AppLink {
             runtime: runtime.handle().clone(),
             events,
@@ -2183,6 +2175,7 @@ mod app_events {
             app,
             posted,
             window,
+            outgoing: outgoing_rx,
         }
     }
 
@@ -2284,5 +2277,63 @@ mod app_events {
             conn_gen: live,
         });
         assert_eq!(harness.window.attention_requests(), 1);
+    }
+
+    fn press(key: PressedKey, text: Option<&str>, mods: Modifiers) -> KeyPress {
+        KeyPress {
+            key,
+            text: text.map(str::to_owned),
+            mods,
+            kind: felis_protocol::messages::KeyEventKind::Press,
+            location: felis_protocol::messages::KeyLocation::Standard,
+        }
+    }
+
+    fn input_frame(msg: &InputMsg) -> felis_transport::CheckedFrame {
+        OutgoingFrame::input(msg).expect("encodes").frame().clone()
+    }
+
+    /// Pins `input::snaps_to_live` at the window: Cmd alone must not
+    /// drop a scrolled-back view before Cmd+C can copy from it, and the
+    /// next typed key must.
+    #[test]
+    fn a_bare_modifier_keeps_the_scrollback_view_and_a_typed_key_leaves_it() {
+        let runtime = runtime();
+        let mut harness = app_on(&runtime, absent_daemon("home"), 0xa);
+        let live = harness.app.conn_gen;
+        harness.app.on_app_event(AppEvent::GridFrame {
+            msg: GridMsg::ViewportState {
+                lines_from_bottom: 5,
+                max: 100,
+                anchor: None,
+            },
+            conn_gen: live,
+        });
+        assert!(!harness.app.viewport_live());
+        harness.sent();
+
+        let cmd = press(PressedKey::Modifier, None, Modifiers::SUPER);
+        harness.app.on_window_input(WindowInput::Key(cmd.clone()));
+        assert_eq!(
+            harness.sent(),
+            vec![input_frame(&InputMsg::Key(cmd.to_wire()))]
+        );
+
+        let a = press(
+            PressedKey::Character("a".into()),
+            Some("a"),
+            Modifiers::empty(),
+        );
+        harness.app.on_window_input(WindowInput::Key(a.clone()));
+        assert_eq!(
+            harness.sent(),
+            vec![
+                input_frame(&InputMsg::Viewport {
+                    lines_from_bottom: 0,
+                    anchor: None,
+                }),
+                input_frame(&InputMsg::Key(a.to_wire())),
+            ]
+        );
     }
 }
