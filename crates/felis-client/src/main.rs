@@ -72,13 +72,14 @@ use winit::{
     application::ApplicationHandler,
     dpi::{PhysicalPosition, PhysicalSize},
     event::{ElementState, Ime, MouseButton as WinitMouseButton, MouseScrollDelta, WindowEvent},
-    event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy},
+    event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
     keyboard::{Key, ModifiersState, NamedKey},
     window::{UserAttentionType, Window, WindowAttributes, WindowId},
 };
 
 mod app_methods;
 mod event_handler;
+mod event_sink;
 mod exit_ladder;
 mod hyperlink;
 mod input;
@@ -97,6 +98,7 @@ mod winit_keys;
 #[global_allocator]
 static ALLOC: dhat::Alloc = dhat::Alloc;
 
+use event_sink::EventSink;
 use hyperlink::{
     activation_matches_preview, activation_target, grid_msg_moves_hover_target, open_url,
     pointer_icon,
@@ -148,7 +150,7 @@ enum AppEvent {
     ConfigReloaded,
     /// A fresh daemon connection finished its handshake and attached. The
     /// handler builds the new [`Pumps`] itself: building it in the task
-    /// would race the reader against this event on the proxy queue.
+    /// would race the reader against this event on the loop's queue.
     SessionSwitchReady {
         reader: FrameReader<CarrierReader>,
         writer: FrameWriter<CarrierWriter>,
@@ -439,7 +441,7 @@ fn main() -> Result<ExitCode> {
     let startup = ClientStartup {
         // Before the dial: on a cold start the GPU work hides the daemon
         // spawn, and it needs neither the window nor the session.
-        warmup: Warmup::start_gpu(),
+        warmup: Some(Warmup::start_gpu()),
         renderer_cfg: renderer_config_from(&cfg),
         font_size_logical_px: configured_font_size_logical_px(&cfg),
         clipboard_cfg: cfg.clipboard,
@@ -963,7 +965,8 @@ async fn attach_for_mode(
 }
 
 struct ClientStartup {
-    warmup: Warmup,
+    /// `None` only in tests, which build an [`App`] with no window.
+    warmup: Option<Warmup>,
     renderer_cfg: RendererConfig,
     /// Logical pixels; the renderer takes a physical size, and the scale
     /// factor only exists once the window does.
@@ -989,27 +992,17 @@ fn drive(
     ),
     reconnector: Reconnector,
     pull_enabled: bool,
-    startup: ClientStartup,
+    mut startup: ClientStartup,
 ) -> Result<ExitCode> {
-    let ClientStartup {
-        mut warmup,
-        renderer_cfg,
-        font_size_logical_px,
-        clipboard_cfg,
-        window_cfg,
-        cursor_cfg,
-        shader_cfg,
-        mouse_cfg,
-        keymap,
-        config_source,
-    } = startup;
     info!(
         id = format!("{:#x}", attach.id),
         rows = attach.dims.rows,
         cols = attach.dims.cols,
         "session attached"
     );
-    warmup.start_fonts(&renderer_cfg);
+    if let Some(warmup) = startup.warmup.as_mut() {
+        warmup.start_fonts(&startup.renderer_cfg);
+    }
 
     // Region files orphaned by a prior client's crash: this process owns
     // the directory (pid-namespaced), so nothing else clears it.
@@ -1020,13 +1013,13 @@ fn drive(
         .context("build winit event loop")?;
     event_loop.set_control_flow(ControlFlow::Wait);
 
-    let proxy = event_loop.create_proxy();
+    let events = EventSink::from_proxy(event_loop.create_proxy());
 
     // Skips silently when the platform has no resolvable config dir.
-    if let Some(path) = config_source.path() {
-        let watcher_proxy = proxy.clone();
+    if let Some(path) = startup.config_source.path() {
+        let watcher_events = events.clone();
         config_watcher::spawn(runtime.handle(), path, move || {
-            watcher_proxy.send_event(AppEvent::ConfigReloaded).is_ok()
+            watcher_events.send(AppEvent::ConfigReloaded)
         });
     }
 
@@ -1037,94 +1030,31 @@ fn drive(
         writer,
         input_rx,
         Arc::clone(&driver),
-        proxy.clone(),
+        events.clone(),
         FIRST_CONN_GEN,
         reconnector.clone(),
     );
 
     // First client→daemon frame: otherwise the daemon answers `OSC 11 ; ?`
     // with xterm white (the "neovim colors look inverted" bug).
-    if let Ok(frame) = configure_theme_frame(&renderer_cfg) {
+    if let Ok(frame) = configure_theme_frame(&startup.renderer_cfg) {
         let _ = input_tx.send(frame);
     }
 
-    let initial_font_size = font_size_logical_px.unwrap_or(DEFAULT_FONT_SIZE_LOGICAL_PX);
-    let attached_dims = attach.dims;
-    let anchor = RingKey::of(attach);
-    let mut app = App {
-        config_source,
-        runtime: runtime.handle().clone(),
-        proxy,
-        reconnector,
-        surface: None,
-        warmup: Some(warmup),
-        renderer_cfg,
-        outgoing: Some(input_tx),
-        pump: Some(pump),
-        driver,
-        conn_gen: FIRST_CONN_GEN,
-        effective_minor,
-        viewport_intent: Cell::default(),
-        shadow: ShadowScreen::new(attached_dims.rows, attached_dims.cols),
-        image_shadow: ImageShadow::new(),
-        image_layout: ImageLayout::new(),
-        modifiers: ModifiersState::empty(),
-        current_session_id: anchor.id,
-        current_sequence: anchor.sequence,
-        switch_state: SwitchState::Idle,
-        trail: exit_ladder::Trail::default(),
-        exit_ladder: None,
-        on_transient: false,
-        pending_switch: switch_intent::PendingSwitch::default(),
-        reconnecting: false,
-        terminal_exit: None,
-        cursor_cell: None,
-        hover_target: None,
-        presented_link_target: None,
-        cursor_icon: None,
-        cursor_px: None,
-        held_buttons: HeldButtons::default(),
-        clipboard: build_clipboard(&clipboard_cfg),
-        clipboard_cfg: clipboard_cfg.clone(),
-        drag: DragState::Idle,
-        click_streak: ClickStreak::new(),
-        configured_font_size_logical_px: font_size_logical_px,
-        current_font_size_logical_px: initial_font_size,
-        title_prefix: window_cfg.title_prefix.clone(),
-        decorations: window_cfg.decorations,
-        transparent: window_cfg.clamped_opacity() < 1.0,
-        backdrop: window_cfg.backdrop,
-        macos_option_as_alt: window_cfg.macos_option_as_alt,
-        key_presses: option_compose::KeyPresses::for_platform(window_cfg.macos_option_as_alt),
-        scroll_pixel_accum_y: 0.0,
-        last_wheel_at: None,
-        wheel_zoom_latched: false,
-        scroll_multiplier: mouse_cfg.clamped_scroll_multiplier(),
-        // Set from the platform in `resumed` once the window exists.
-        scale_factor: 1.0,
-        redraw: redraw::RedrawScheduler::new(),
-        pull: pull::PullScheduler::new(pull_enabled),
-        present_retry: pull::PresentRetry::default(),
-        search: SearchUi::default(),
-        pending_confirm: None,
-        notice: None,
-        keymap,
-        pipe_state: PipeState::default(),
-        pending_reattach: None,
-        pending_retarget: None,
-        window_focused: true,
-        cursor_blink: cursor_blink::BlinkClock::new(
-            cursor_cfg.blink,
-            cursor_cfg.blink_interval_ms,
-            Instant::now(),
-        ),
-        cursor_cfg,
-        cursor_trail: cursor_trail::TrailClock::new(Instant::now()),
-        shader_clock: shader_clock::ShaderClock::new(shader_cfg.animate, Instant::now()),
-        pointer_px: None,
-        last_press_px: None,
-        smoke: smoke::Smoke::from_env(),
-    };
+    let mut app = App::new(
+        startup,
+        attach,
+        AppLink {
+            runtime: runtime.handle().clone(),
+            events,
+            reconnector,
+            outgoing: input_tx,
+            pump: Some(pump),
+            driver,
+            effective_minor,
+            pull_enabled,
+        },
+    );
 
     // Armed before the loop: the failures that never reach a frame (no
     // adapter, no window, no session) are the ones a gate must catch.
@@ -1285,7 +1215,7 @@ struct App {
     /// `Some` only under the smoke environment variable.
     smoke: Option<smoke::Smoke>,
     runtime: tokio::runtime::Handle,
-    proxy: EventLoopProxy<AppEvent>,
+    events: EventSink,
     /// The carrier this window is on plus the offer it re-declares on
     /// every re-dial.
     reconnector: Reconnector,
@@ -1474,6 +1404,112 @@ struct App {
     /// Recorded before `event_loop.exit()` so the process status names
     /// what the log line does; `None` for every ordinary close.
     terminal_exit: Option<ExitReason>,
+    /// Handlers set this instead of calling `ActiveEventLoop::exit`, so
+    /// they run without a loop; the winit adapter forwards it.
+    exit_requested: bool,
+}
+
+/// What ties an [`App`] to its loop and its first connection.
+struct AppLink {
+    runtime: tokio::runtime::Handle,
+    events: EventSink,
+    reconnector: Reconnector,
+    outgoing: OutgoingSender,
+    /// `None` when nothing reads the connection, as in a test that plays
+    /// the daemon's part through [`AppEvent`]s.
+    pump: Option<Pumps>,
+    driver: SharedDriver,
+    effective_minor: u16,
+    pull_enabled: bool,
+}
+
+impl App {
+    fn new(startup: ClientStartup, attach: &SessionInfo, link: AppLink) -> Self {
+        let initial_font_size = startup
+            .font_size_logical_px
+            .unwrap_or(DEFAULT_FONT_SIZE_LOGICAL_PX);
+        let attached_dims = attach.dims;
+        let anchor = RingKey::of(attach);
+        let window_cfg = startup.window_cfg;
+        Self {
+            config_source: startup.config_source,
+            runtime: link.runtime,
+            events: link.events,
+            reconnector: link.reconnector,
+            surface: None,
+            warmup: startup.warmup,
+            renderer_cfg: startup.renderer_cfg,
+            outgoing: Some(link.outgoing),
+            pump: link.pump,
+            driver: link.driver,
+            conn_gen: FIRST_CONN_GEN,
+            effective_minor: link.effective_minor,
+            viewport_intent: Cell::default(),
+            shadow: ShadowScreen::new(attached_dims.rows, attached_dims.cols),
+            image_shadow: ImageShadow::new(),
+            image_layout: ImageLayout::new(),
+            modifiers: ModifiersState::empty(),
+            current_session_id: anchor.id,
+            current_sequence: anchor.sequence,
+            switch_state: SwitchState::Idle,
+            trail: exit_ladder::Trail::default(),
+            exit_ladder: None,
+            on_transient: false,
+            pending_switch: switch_intent::PendingSwitch::default(),
+            reconnecting: false,
+            terminal_exit: None,
+            exit_requested: false,
+            cursor_cell: None,
+            hover_target: None,
+            presented_link_target: None,
+            cursor_icon: None,
+            cursor_px: None,
+            held_buttons: HeldButtons::default(),
+            clipboard: build_clipboard(&startup.clipboard_cfg),
+            clipboard_cfg: startup.clipboard_cfg,
+            drag: DragState::Idle,
+            click_streak: ClickStreak::new(),
+            configured_font_size_logical_px: startup.font_size_logical_px,
+            current_font_size_logical_px: initial_font_size,
+            decorations: window_cfg.decorations,
+            transparent: window_cfg.clamped_opacity() < 1.0,
+            title_prefix: window_cfg.title_prefix,
+            backdrop: window_cfg.backdrop,
+            macos_option_as_alt: window_cfg.macos_option_as_alt,
+            key_presses: option_compose::KeyPresses::for_platform(window_cfg.macos_option_as_alt),
+            scroll_pixel_accum_y: 0.0,
+            last_wheel_at: None,
+            wheel_zoom_latched: false,
+            scroll_multiplier: startup.mouse_cfg.clamped_scroll_multiplier(),
+            // Set from the platform in `resumed` once the window exists.
+            scale_factor: 1.0,
+            redraw: redraw::RedrawScheduler::new(),
+            pull: pull::PullScheduler::new(link.pull_enabled),
+            present_retry: pull::PresentRetry::default(),
+            search: SearchUi::default(),
+            pending_confirm: None,
+            notice: None,
+            keymap: startup.keymap,
+            pipe_state: PipeState::default(),
+            pending_reattach: None,
+            pending_retarget: None,
+            window_focused: true,
+            cursor_blink: cursor_blink::BlinkClock::new(
+                startup.cursor_cfg.blink,
+                startup.cursor_cfg.blink_interval_ms,
+                Instant::now(),
+            ),
+            cursor_cfg: startup.cursor_cfg,
+            cursor_trail: cursor_trail::TrailClock::new(Instant::now()),
+            shader_clock: shader_clock::ShaderClock::new(
+                startup.shader_cfg.animate,
+                Instant::now(),
+            ),
+            pointer_px: None,
+            last_press_px: None,
+            smoke: smoke::Smoke::from_env(),
+        }
+    }
 }
 
 /// Why a window closed with no session to hand back. The window is the
@@ -2153,16 +2189,15 @@ impl Pumps {
         mut writer: FrameWriter<CarrierWriter>,
         input_rx: OutgoingReceiver,
         driver: SharedDriver,
-        proxy: EventLoopProxy<AppEvent>,
+        events: EventSink,
         conn_gen: u64,
         reconnector: Reconnector,
     ) -> Self {
-        let reader_proxy = proxy;
         let reader_task = tokio::spawn(async move {
             loop {
                 match reader.next_frame().await {
                     Ok(Some(frame)) => {
-                        if !forward_frame(&driver, &frame, &reader_proxy, conn_gen, &reconnector) {
+                        if !forward_frame(&driver, &frame, &events, conn_gen, &reconnector) {
                             break;
                         }
                     }
@@ -2173,7 +2208,7 @@ impl Pumps {
                     }
                 }
             }
-            drop(reader_proxy.send_event(AppEvent::DaemonClosed { conn_gen }));
+            events.send(AppEvent::DaemonClosed { conn_gen });
         });
 
         let writer_task = tokio::spawn(async move {
@@ -2229,7 +2264,7 @@ impl Pumps {
 fn forward_frame(
     driver: &SharedDriver,
     frame: &OwnedFrame,
-    proxy: &EventLoopProxy<AppEvent>,
+    events: &EventSink,
     conn_gen: u64,
     reconnector: &Reconnector,
 ) -> bool {
@@ -2245,13 +2280,11 @@ fn forward_frame(
         // The search bar is the only stream this window opens.
         Incoming::Control(ConnToClientMsg::End { stream_id, count }) => {
             drop(guard);
-            return proxy
-                .send_event(AppEvent::SearchEnded {
-                    stream_id,
-                    outcome: Ok(count),
-                    conn_gen,
-                })
-                .is_ok();
+            return events.send(AppEvent::SearchEnded {
+                stream_id,
+                outcome: Ok(count),
+                conn_gen,
+            });
         }
         Incoming::Control(ConnToClientMsg::Error {
             subject: Subject::Stream(stream_id),
@@ -2259,13 +2292,11 @@ fn forward_frame(
             detail,
         }) => {
             drop(guard);
-            return proxy
-                .send_event(AppEvent::SearchEnded {
-                    stream_id,
-                    outcome: Err(format!("{}: {detail}", reason.as_str())),
-                    conn_gen,
-                })
-                .is_ok();
+            return events.send(AppEvent::SearchEnded {
+                stream_id,
+                outcome: Err(format!("{}: {detail}", reason.as_str())),
+                conn_gen,
+            });
         }
         // A-5 makes a typed refusal the request's answer, not the
         // connection's end; the id tells the pipe region request from the
@@ -2276,13 +2307,11 @@ fn forward_frame(
             detail,
         }) => {
             drop(guard);
-            return proxy
-                .send_event(AppEvent::RequestRefused {
-                    request,
-                    detail: format!("{}: {detail}", reason.as_str()),
-                    conn_gen,
-                })
-                .is_ok();
+            return events.send(AppEvent::RequestRefused {
+                request,
+                detail: format!("{}: {detail}", reason.as_str()),
+                conn_gen,
+            });
         }
         // The handshake arms are refused by phase, and `Conn::Refused` is
         // written only before an attach; A-7 leaves no skip arm.
@@ -2314,23 +2343,17 @@ fn forward_frame(
         MessageKind::Grid => {
             let msg = decoded!(GridMsg).msg;
             drop(guard);
-            proxy
-                .send_event(AppEvent::GridFrame { msg, conn_gen })
-                .is_ok()
+            events.send(AppEvent::GridFrame { msg, conn_gen })
         }
         MessageKind::Search => {
             let msg = decoded!(SearchToClientMsg).msg;
             drop(guard);
-            proxy
-                .send_event(AppEvent::SearchFrame { msg, conn_gen })
-                .is_ok()
+            events.send(AppEvent::SearchFrame { msg, conn_gen })
         }
         MessageKind::Image => {
             let msg = decoded!(ImageMsg).msg;
             drop(guard);
-            proxy
-                .send_event(AppEvent::ImageFrame { msg, conn_gen })
-                .is_ok()
+            events.send(AppEvent::ImageFrame { msg, conn_gen })
         }
         MessageKind::Region => {
             // The decode retires the id a `Reply` names: left
@@ -2339,9 +2362,9 @@ fn forward_frame(
             let msg = decoded!(RegionToClientMsg).msg;
             drop(guard);
             match msg {
-                RegionToClientMsg::Reply { data, position, .. } => proxy
-                    .send_event(AppEvent::PipeRegionReady { data, position })
-                    .is_ok(),
+                RegionToClientMsg::Reply { data, position, .. } => {
+                    events.send(AppEvent::PipeRegionReady { data, position })
+                }
                 // A row belongs to a `Rows` stream this window never
                 // opened; A-7 leaves no skip arm.
                 other => {
@@ -2356,37 +2379,31 @@ fn forward_frame(
             match msg {
                 PushMsg::Evicted { reason } => {
                     tracing::info!(%reason, "evicted by `felis sessions evict`; window closing");
-                    proxy.send_event(AppEvent::Detached).is_ok()
+                    events.send(AppEvent::Detached)
                 }
                 PushMsg::Reattach { id } => {
                     tracing::info!(id = %SessionHex(id), "reattach push from daemon");
-                    proxy
-                        .send_event(AppEvent::ReattachRequested {
-                            reconnector: reconnector.clone(),
-                            id,
-                        })
-                        .is_ok()
+                    events.send(AppEvent::ReattachRequested {
+                        reconnector: reconnector.clone(),
+                        id,
+                    })
                 }
                 PushMsg::SessionExited { id } => {
                     tracing::info!(id = %SessionHex(id), "shell exited; session ended");
-                    proxy
-                        .send_event(AppEvent::SessionExited {
-                            conn_gen,
-                            place: exit_ladder::Place {
-                                reconnector: reconnector.clone(),
-                                session_id: id,
-                            },
-                        })
-                        .is_ok()
+                    events.send(AppEvent::SessionExited {
+                        conn_gen,
+                        place: exit_ladder::Place {
+                            reconnector: reconnector.clone(),
+                            session_id: id,
+                        },
+                    })
                 }
                 PushMsg::RetargetHost { target, .. } => {
                     tracing::info!(
                         carrier = target.carrier.label(),
                         "retarget push from daemon"
                     );
-                    proxy
-                        .send_event(AppEvent::RetargetRequested { target })
-                        .is_ok()
+                    events.send(AppEvent::RetargetRequested { target })
                 }
             }
         }
@@ -2400,13 +2417,11 @@ fn forward_frame(
             let request = delivered.request();
             drop(guard);
             match delivered.msg {
-                OpsToClientMsg::Listed { sessions } => proxy
-                    .send_event(AppEvent::RosterListed {
-                        request,
-                        sessions,
-                        conn_gen,
-                    })
-                    .is_ok(),
+                OpsToClientMsg::Listed { sessions } => events.send(AppEvent::RosterListed {
+                    request,
+                    sessions,
+                    conn_gen,
+                }),
                 // `List` is the only Ops verb a window issues; A-7 leaves
                 // no skip arm.
                 other => {

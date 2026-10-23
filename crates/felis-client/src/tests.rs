@@ -1941,8 +1941,7 @@ mod lifecycle {
 
     /// The latch `App::on_daemon_closed` sets on a close that arrives
     /// mid-landing; the classifier's verdict is pinned in
-    /// `daemon_closed`. Driving the handler itself needs a live winit
-    /// event loop.
+    /// `daemon_closed`.
     #[test]
     fn the_lost_latch_starts_clear_and_stays_set_once_marked() {
         let (outgoing, _rx) = outgoing_channel();
@@ -2018,5 +2017,166 @@ fn test_place(socket: &str, session_id: u128) -> exit_ladder::Place {
             offer: Offer::window(true),
         },
         session_id,
+    }
+}
+
+/// `App` driven through [`App::on_app_event`] with no window and no
+/// daemon: the daemon's side is played by hand, and every event the
+/// window posts to itself lands in [`AppHarness::posted`].
+mod app_events {
+    use std::sync::mpsc;
+
+    use super::*;
+
+    struct AppHarness {
+        app: App,
+        posted: mpsc::Receiver<AppEvent>,
+    }
+
+    impl AppHarness {
+        /// Blocks for a background dial's outcome, which is what the
+        /// winit loop would deliver next.
+        fn next_posted(&self) -> AppEvent {
+            self.posted
+                .recv_timeout(Duration::from_secs(10))
+                .expect("the window posted an event")
+        }
+    }
+
+    /// A socket no daemon listens on, so a dial to it fails at connect
+    /// without leaving the machine.
+    fn absent_daemon(tag: &str) -> Reconnector {
+        let pid = std::process::id();
+        #[cfg(unix)]
+        let path = std::env::temp_dir().join(format!("felis-test-absent-{pid}-{tag}.sock"));
+        #[cfg(windows)]
+        let path = PathBuf::from(format!(r"\\.\pipe\felis-test-absent-{pid}-{tag}"));
+        Reconnector {
+            carrier: Carrier::Local(path.into()),
+            offer: Offer::window(true),
+        }
+    }
+
+    fn session(id: u128) -> SessionInfo {
+        SessionInfo {
+            id,
+            dims: felis_protocol::messages::GridDims {
+                rows: 24,
+                cols: 80,
+                pixel_w: 0,
+                pixel_h: 0,
+            },
+            title: None,
+            cwd: None,
+            spawn_cwd: None,
+            terminal_progress: None,
+            idle_seconds: None,
+            tags: Vec::new(),
+            last_notification: None,
+            foreground: None,
+            exited: false,
+            last_exit_code: None,
+            attachments: Vec::new(),
+            sequence: std::num::NonZeroU64::MIN,
+            program_status: Vec::new(),
+        }
+    }
+
+    fn app_on(runtime: &tokio::runtime::Runtime, reconnector: Reconnector, id: u128) -> AppHarness {
+        let (tx, posted) = mpsc::channel();
+        let tx = Mutex::new(tx);
+        let events = EventSink::new(move |event| {
+            tx.lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .send(event)
+                .is_ok()
+        });
+        let cfg = config::EffectiveConfig::default();
+        let startup = ClientStartup {
+            warmup: None,
+            renderer_cfg: renderer_config_from(&cfg),
+            font_size_logical_px: configured_font_size_logical_px(&cfg),
+            clipboard_cfg: config::ClipboardConfig {
+                use_os_clipboard: false,
+                ..cfg.clipboard
+            },
+            window_cfg: cfg.window,
+            cursor_cfg: cfg.cursor,
+            shader_cfg: cfg.shader.clone(),
+            mouse_cfg: cfg.mouse,
+            keymap: Keymap::default_for_platform(),
+            config_source: ConfigSource::Default,
+        };
+        let (outgoing, _) = outgoing_channel();
+        let link = AppLink {
+            runtime: runtime.handle().clone(),
+            events,
+            reconnector,
+            outgoing,
+            pump: None,
+            driver: Arc::new(Mutex::new(ClientDriver::client(Offer::window(true).mode))),
+            effective_minor: 0,
+            pull_enabled: true,
+        };
+        AppHarness {
+            app: App::new(startup, &session(id), link),
+            posted,
+        }
+    }
+
+    fn runtime() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .expect("test runtime")
+    }
+
+    /// Pins the parked-push contract on `App::pending_reattach`: the
+    /// daemon already told the CLI the switch succeeded, so a push that
+    /// arrives mid-switch must run once that switch fails, not vanish.
+    #[test]
+    fn a_reattach_parked_behind_a_failing_switch_runs_when_it_fails() {
+        let runtime = runtime();
+        let mut harness = app_on(&runtime, absent_daemon("home"), 0xa);
+
+        harness.app.on_app_event(AppEvent::ReattachRequested {
+            reconnector: absent_daemon("first"),
+            id: 0xb,
+        });
+        assert!(harness.app.switch_state.in_flight());
+
+        harness.app.on_app_event(AppEvent::ReattachRequested {
+            reconnector: absent_daemon("second"),
+            id: 0xc,
+        });
+        assert_eq!(
+            harness
+                .app
+                .pending_reattach
+                .as_ref()
+                .map(|pending| pending.id),
+            Some(0xc),
+            "a push during a switch is parked"
+        );
+
+        let failed = harness.next_posted();
+        assert!(matches!(failed, AppEvent::SessionSwitchFailed { .. }));
+        harness.app.on_app_event(failed);
+        assert!(
+            harness.app.pending_reattach.is_none(),
+            "the parked push left the slot"
+        );
+        assert!(
+            harness.app.switch_state.in_flight(),
+            "the parked push is dialing"
+        );
+
+        let failed = harness.next_posted();
+        assert!(matches!(failed, AppEvent::SessionSwitchFailed { .. }));
+        harness.app.on_app_event(failed);
+        assert_eq!(harness.app.switch_state, SwitchState::Idle);
+        assert_eq!(harness.app.current_place().session_id, 0xa);
+        assert!(!harness.app.exit_requested);
     }
 }

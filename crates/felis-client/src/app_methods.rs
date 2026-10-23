@@ -408,13 +408,11 @@ impl App {
     }
 
     /// The one implementation behind the `detach` chord and the
-    /// window-close button. The exit rides the proxy rather than
-    /// `ActiveEventLoop::exit` because the chord dispatcher has no event
-    /// loop to call it on.
+    /// window-close button.
     pub(crate) fn request_detach(&self, reason: &'static str) {
         info!(reason, "detaching; the session survives in the daemon");
         self.send_control(&SessionToDaemonMsg::Detach);
-        drop(self.proxy.send_event(AppEvent::Detached));
+        self.events.send(AppEvent::Detached);
     }
 
     pub(crate) fn adjust_font_size(&mut self, delta: f32) {
@@ -1382,7 +1380,7 @@ impl App {
             writer,
             rx,
             driver,
-            self.proxy.clone(),
+            self.events.clone(),
             self.conn_gen,
             self.reconnector.clone(),
         ));
@@ -1585,9 +1583,9 @@ impl App {
                 cap = full.cap,
                 "outgoing queue full; treating the carrier as lost"
             );
-            drop(self.proxy.send_event(AppEvent::DaemonClosed {
+            self.events.send(AppEvent::DaemonClosed {
                 conn_gen: self.conn_gen,
-            }));
+            });
         }
     }
 

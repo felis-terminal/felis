@@ -121,7 +121,7 @@ impl ApplicationHandler<AppEvent> for App {
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
         {
-            let proxy = self.proxy.clone();
+            let events = self.events.clone();
             std::thread::spawn(move || {
                 std::thread::sleep(Duration::from_millis(ms));
                 // RSS is process-wide, so the timer thread's sample is as
@@ -130,7 +130,7 @@ impl ApplicationHandler<AppEvent> for App {
                 // Graceful exit first so `dhat-heap` flushes its JSON. macOS
                 // only pumps `EventLoopProxy` user events when the app is
                 // frontmost, so force-exit as a backstop after a grace.
-                drop(proxy.send_event(AppEvent::StartupExit));
+                events.send(AppEvent::StartupExit);
                 std::thread::sleep(Duration::from_secs(2));
                 std::process::exit(0);
             });
@@ -371,6 +371,110 @@ impl ApplicationHandler<AppEvent> for App {
     }
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: AppEvent) {
+        self.on_app_event(event);
+        if self.exit_requested {
+            event_loop.exit();
+        }
+    }
+
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        // Before the redraw flush so a phase toggle's repaint rides this
+        // iteration. A hidden cursor arms no timer, so the window stays
+        // idle (ControlFlow::Wait).
+        let blink_wants = {
+            let grid = self.shadow.screen();
+            let cur = grid.cursor();
+            // A blinking caret on a disconnected window reads as a live
+            // shell waiting for input.
+            let shown = cur.visible
+                && !self.reconnecting
+                && self.window_focused
+                && self.shadow.viewport() == 0
+                && cur.row < grid.rows()
+                && cur.col < grid.cols();
+            shown && grid.cursor_blink()
+        };
+        let now = Instant::now();
+        if self.cursor_blink.tick(now, blink_wants) {
+            if let Some(surface) = self.surface.as_mut() {
+                surface
+                    .renderer
+                    .set_cursor_blink_visible(self.cursor_blink.visible());
+            }
+            self.redraw.request();
+        }
+        // With no shader the clock would arm wake-ups for an animation no
+        // pass draws.
+        let trail_deadline = self.tick_cursor_trail(now);
+        // Nothing arms this clock, so the predicate is the whole guard.
+        let shader_animating = self.window_focused
+            && self
+                .surface
+                .as_ref()
+                .is_some_and(|surface| surface.renderer.has_post_shader());
+        if self.shader_clock.tick(now, shader_animating) {
+            self.redraw.request();
+        }
+        let shader_deadline = self.shader_clock.next_deadline(shader_animating);
+        let turn = self.present_retry.turn(now);
+        if turn == RedrawTurn::Retry {
+            self.redraw.request();
+        }
+        // winit also coalesces per vsync, but one site keeps the request vs
+        // flush counters observable and stops a new event source
+        // sidestepping the coalescer.
+        if turn != RedrawTurn::Hold
+            && self.redraw.flush()
+            && let Some(surface) = self.surface.as_ref()
+        {
+            surface.window.request_redraw();
+            // `--trace-perf` users see how many events one paint collapsed.
+            let stats = self.redraw.stats();
+            tracing::trace!(
+                target: "felis::redraw",
+                requested = stats.requested,
+                flushed = stats.flushed,
+                "redraw flush",
+            );
+        }
+        // The next-frame pull is NOT re-armed here: `about_to_wait` runs
+        // once per inbound frame during a burst, far faster than vsync, so
+        // pacing would become a tight request→reply loop that floods the
+        // daemon with pulls (starving the PTY drain). It re-arms in
+        // `RedrawRequested`, once per painted frame.
+
+        // A steady or hidden cursor leaves `ControlFlow::Wait` untouched so
+        // an idle window burns no CPU; the loop wakes at whichever clock is
+        // due first.
+        // While stalled the other clocks' redraws are held, so waking for
+        // them would only spin the loop.
+        let deadline = if self.present_retry.stalled() {
+            self.present_retry.next_deadline()
+        } else {
+            [
+                self.cursor_blink.next_deadline(blink_wants),
+                trail_deadline,
+                shader_deadline,
+            ]
+            .into_iter()
+            .flatten()
+            .min()
+        };
+        match deadline {
+            Some(deadline) => event_loop.set_control_flow(ControlFlow::WaitUntil(deadline)),
+            None => event_loop.set_control_flow(ControlFlow::Wait),
+        }
+    }
+
+    fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        self.outgoing.take();
+        self.surface.take();
+    }
+}
+
+impl App {
+    /// The whole of `user_event`, minus the loop, so a test can drive it.
+    pub(crate) fn on_app_event(&mut self, event: AppEvent) {
         match event {
             AppEvent::GridFrame { msg, conn_gen } => {
                 if conn_gen != self.conn_gen {
@@ -389,7 +493,7 @@ impl ApplicationHandler<AppEvent> for App {
                     // is legal in its own field. Applying it would paint a
                     // screen the daemon never composed.
                     warn!(?err, "grid frame refused; closing the connection");
-                    self.close_daemon_connection(event_loop, conn_gen);
+                    self.close_daemon_connection(conn_gen);
                     return;
                 }
                 if self.shadow.take_title_dirty().is_some() {
@@ -577,24 +681,24 @@ impl ApplicationHandler<AppEvent> for App {
                     // allocation it is not entitled to has already
                     // stopped being the authority the mirror trusts.
                     warn!(?err, "image claim refused; closing the connection");
-                    self.close_daemon_connection(event_loop, conn_gen);
+                    self.close_daemon_connection(conn_gen);
                     return;
                 }
                 if needs_redraw {
                     self.redraw.request();
                 }
             }
-            AppEvent::DaemonClosed { conn_gen } => self.on_daemon_closed(event_loop, conn_gen),
+            AppEvent::DaemonClosed { conn_gen } => self.on_daemon_closed(conn_gen),
             AppEvent::Detached => {
                 info!("detached from session; exiting (session survives)");
-                event_loop.exit();
+                self.exit_requested = true;
             }
             AppEvent::StartupExit => {
                 // Unwind the loop cleanly so a `dhat-heap` build flushes its
                 // JSON; only reached when macOS pumps the user event, else
                 // the timer thread's force-exit backstop fires.
                 info!("FELIS_STARTUP_EXIT_MS elapsed; exiting after startup measurement");
-                event_loop.exit();
+                self.exit_requested = true;
             }
             AppEvent::ConfigReloaded => {
                 self.reload_config();
@@ -640,7 +744,7 @@ impl ApplicationHandler<AppEvent> for App {
                     warn!(%detail, "the reconnect found the session gone; taking the exit ladder");
                     self.trail.prune(&self.current_place());
                     if self.begin_exit_ladder("the reconnect found the session gone") {
-                        event_loop.exit();
+                        self.exit_requested = true;
                     }
                     return;
                 };
@@ -648,7 +752,7 @@ impl ApplicationHandler<AppEvent> for App {
                 // Read after the loop unwinds; the window closes either
                 // way, so the status is all that is left to say it with.
                 self.terminal_exit = Some(reason);
-                event_loop.exit();
+                self.exit_requested = true;
             }
             AppEvent::SessionSwitchFailed {
                 reason,
@@ -674,7 +778,7 @@ impl ApplicationHandler<AppEvent> for App {
                     // an exit the landing may have outlived.
                     warn!(reason, "the session is gone and the landing failed");
                     if self.begin_exit_ladder("the landing failed") {
-                        event_loop.exit();
+                        self.exit_requested = true;
                     }
                 } else {
                     match std::mem::replace(&mut self.pipe_state, PipeState::Idle) {
@@ -701,7 +805,7 @@ impl ApplicationHandler<AppEvent> for App {
                 // with the switch out of the way.
                 if self.outgoing.as_ref().is_some_and(OutgoingSender::is_lost) {
                     warn!("the connection behind the failed switch is gone; closing it");
-                    self.on_daemon_closed(event_loop, self.conn_gen);
+                    self.on_daemon_closed(self.conn_gen);
                 }
                 self.run_pending_push();
                 // A failed continuation is still a continuation ending:
@@ -819,7 +923,7 @@ impl ApplicationHandler<AppEvent> for App {
                     info!("run/pipe transient exited; returning to originating session");
                     self.park_pipe_return(viewport);
                     if self.begin_exit_ladder("the pipe/run transient exited") {
-                        event_loop.exit();
+                        self.exit_requested = true;
                     }
                 } else {
                     // A chord's fetch on the wire rides the connection this
@@ -834,111 +938,15 @@ impl ApplicationHandler<AppEvent> for App {
                     // presented before the window goes.
                     self.redraw.request();
                     if self.begin_exit_ladder("shell exited") {
-                        event_loop.exit();
+                        self.exit_requested = true;
                     }
                 }
             }
         }
     }
 
-    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        // Before the redraw flush so a phase toggle's repaint rides this
-        // iteration. A hidden cursor arms no timer, so the window stays
-        // idle (ControlFlow::Wait).
-        let blink_wants = {
-            let grid = self.shadow.screen();
-            let cur = grid.cursor();
-            // A blinking caret on a disconnected window reads as a live
-            // shell waiting for input.
-            let shown = cur.visible
-                && !self.reconnecting
-                && self.window_focused
-                && self.shadow.viewport() == 0
-                && cur.row < grid.rows()
-                && cur.col < grid.cols();
-            shown && grid.cursor_blink()
-        };
-        let now = Instant::now();
-        if self.cursor_blink.tick(now, blink_wants) {
-            if let Some(surface) = self.surface.as_mut() {
-                surface
-                    .renderer
-                    .set_cursor_blink_visible(self.cursor_blink.visible());
-            }
-            self.redraw.request();
-        }
-        // With no shader the clock would arm wake-ups for an animation no
-        // pass draws.
-        let trail_deadline = self.tick_cursor_trail(now);
-        // Nothing arms this clock, so the predicate is the whole guard.
-        let shader_animating = self.window_focused
-            && self
-                .surface
-                .as_ref()
-                .is_some_and(|surface| surface.renderer.has_post_shader());
-        if self.shader_clock.tick(now, shader_animating) {
-            self.redraw.request();
-        }
-        let shader_deadline = self.shader_clock.next_deadline(shader_animating);
-        let turn = self.present_retry.turn(now);
-        if turn == RedrawTurn::Retry {
-            self.redraw.request();
-        }
-        // winit also coalesces per vsync, but one site keeps the request vs
-        // flush counters observable and stops a new event source
-        // sidestepping the coalescer.
-        if turn != RedrawTurn::Hold
-            && self.redraw.flush()
-            && let Some(surface) = self.surface.as_ref()
-        {
-            surface.window.request_redraw();
-            // `--trace-perf` users see how many events one paint collapsed.
-            let stats = self.redraw.stats();
-            tracing::trace!(
-                target: "felis::redraw",
-                requested = stats.requested,
-                flushed = stats.flushed,
-                "redraw flush",
-            );
-        }
-        // The next-frame pull is NOT re-armed here: `about_to_wait` runs
-        // once per inbound frame during a burst, far faster than vsync, so
-        // pacing would become a tight request→reply loop that floods the
-        // daemon with pulls (starving the PTY drain). It re-arms in
-        // `RedrawRequested`, once per painted frame.
-
-        // A steady or hidden cursor leaves `ControlFlow::Wait` untouched so
-        // an idle window burns no CPU; the loop wakes at whichever clock is
-        // due first.
-        // While stalled the other clocks' redraws are held, so waking for
-        // them would only spin the loop.
-        let deadline = if self.present_retry.stalled() {
-            self.present_retry.next_deadline()
-        } else {
-            [
-                self.cursor_blink.next_deadline(blink_wants),
-                trail_deadline,
-                shader_deadline,
-            ]
-            .into_iter()
-            .flatten()
-            .min()
-        };
-        match deadline {
-            Some(deadline) => event_loop.set_control_flow(ControlFlow::WaitUntil(deadline)),
-            None => event_loop.set_control_flow(ControlFlow::Wait),
-        }
-    }
-
-    fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
-        self.outgoing.take();
-        self.surface.take();
-    }
-}
-
-impl App {
     /// Whether the daemon closed it or this window did.
-    fn on_daemon_closed(&mut self, event_loop: &ActiveEventLoop, conn_gen: u64) {
+    fn on_daemon_closed(&mut self, conn_gen: u64) {
         let outcome = daemon_closed_outcome(
             conn_gen,
             self.conn_gen,
@@ -965,7 +973,7 @@ impl App {
                 info!("pipe command exited; returning to originating session");
                 self.park_pipe_return(viewport);
                 if self.begin_exit_ladder("the pipe/run transient's channel closed") {
-                    event_loop.exit();
+                    self.exit_requested = true;
                 }
             }
             ClosedOutcome::Reconnect => self.begin_reconnect(),
@@ -974,11 +982,11 @@ impl App {
 
     /// `abort` is best-effort, so the generation bump inside
     /// `install_new_session` remains what holds the line on reconnect.
-    fn close_daemon_connection(&mut self, event_loop: &ActiveEventLoop, conn_gen: u64) {
+    fn close_daemon_connection(&mut self, conn_gen: u64) {
         if let Some(pump) = self.pump.as_ref() {
             pump.abort_reader();
         }
-        self.on_daemon_closed(event_loop, conn_gen);
+        self.on_daemon_closed(conn_gen);
     }
 
     fn on_mouse_input(&mut self, state: ElementState, winit_btn: WinitMouseButton) {

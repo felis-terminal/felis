@@ -90,7 +90,7 @@ impl App {
             id = %SessionHex(id),
             "daemon connection lost; reconnecting to the same session"
         );
-        let proxy = self.proxy.clone();
+        let events = self.events.clone();
         self.runtime.spawn(async move {
             let event = match redial_session(carrier, offer, id).await {
                 Ok(dialed) => switch_ready_event(dialed, None, TrailRecord::Reconnect),
@@ -99,7 +99,7 @@ impl App {
                     detail: format!("{:#}", anyhow::Error::new(err)),
                 },
             };
-            drop(proxy.send_event(event));
+            events.send(event);
         });
     }
 
@@ -147,11 +147,11 @@ impl App {
     /// The timer always fires; the handler decides whether it still means
     /// anything (hence the request id).
     fn arm_roster_deadline(&self, request: RequestId) {
-        let proxy = self.proxy.clone();
+        let events = self.events.clone();
         let conn_gen = self.conn_gen;
         self.runtime.spawn(async move {
             tokio::time::sleep(ROSTER_FETCH_TIMEOUT).await;
-            drop(proxy.send_event(AppEvent::RosterFetchTimedOut { request, conn_gen }));
+            events.send(AppEvent::RosterFetchTimedOut { request, conn_gen });
         });
     }
 
@@ -409,7 +409,7 @@ impl App {
         retargeted: Option<Reconnector>,
         record: TrailRecord,
     ) {
-        let proxy = self.proxy.clone();
+        let events = self.events.clone();
         self.runtime.spawn(async move {
             let event = match dial.await {
                 Ok(dialed) => switch_ready_event(dialed, retargeted, record),
@@ -422,7 +422,7 @@ impl App {
                     reason: format!("{:#}", anyhow::Error::new(err)),
                 },
             };
-            drop(proxy.send_event(event));
+            events.send(event);
         });
     }
 
