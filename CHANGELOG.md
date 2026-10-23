@@ -10,6 +10,11 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-10-24
+
+macOS Option types what the layout puts behind it, low-contrast text can be raised to a readable ratio, `ssh` brings the
+terminfo entry along, and a pasted control byte no longer runs a command unasked.
+
 ### Added
 
 - **Config**: `theme.minimum_contrast` raises text whose color is too close to its background to a WCAG 2 contrast

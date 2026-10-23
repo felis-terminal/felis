@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/*", "tests"]
 
 [workspace.package]
-version = "0.3.0"
+version = "0.3.1"
 edition = "2024"
 # 1.88 over 1.85 edition floor: felis-grid uses let-chains stabilized in 1.88.
 rust-version = "1.88"
@@ -17,14 +17,14 @@ repository = "https://github.com/felis-terminal/felis"
 # (see its manifest).
 felis-protocol = { path = "crates/felis-protocol", version = "0.1.0" }
 felis-vt = { path = "crates/felis-vt", version = "0.1.0" }
-felis-grid = { path = "crates/felis-grid", version = "0.1.0" }
-felis-pty = { path = "crates/felis-pty", version = "0.1.0" }
+felis-grid = { path = "crates/felis-grid", version = "0.2.0" }
+felis-pty = { path = "crates/felis-pty", version = "0.1.1" }
 felis-transport = { path = "crates/felis-transport", version = "0.1.0" }
-felis-client-core = { path = "crates/felis-client-core", version = "0.1.0" }
+felis-client-core = { path = "crates/felis-client-core", version = "0.2.0" }
 felis-shaping = { path = "crates/felis-shaping", version = "0.1.0" }
-felis-render-core = { path = "crates/felis-render-core", version = "0.1.0" }
-felis-render-wgpu = { path = "crates/felis-render-wgpu", version = "0.1.0" }
-felis-daemon = { path = "crates/felis-daemon", version = "0.3.0" }
+felis-render-core = { path = "crates/felis-render-core", version = "0.2.0" }
+felis-render-wgpu = { path = "crates/felis-render-wgpu", version = "0.2.0" }
+felis-daemon = { path = "crates/felis-daemon", version = "0.3.1" }
 
 # External — version-pinned in one place via workspace inheritance.
 tokio = { version = "1", features = [

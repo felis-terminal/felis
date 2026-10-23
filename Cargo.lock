@@ -939,7 +939,7 @@ dependencies = [
 
 [[package]]
 name = "felis-cli"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "boon",
@@ -967,7 +967,7 @@ dependencies = [
 
 [[package]]
 name = "felis-client"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "arboard",
@@ -995,7 +995,7 @@ dependencies = [
 
 [[package]]
 name = "felis-client-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "bitflags 2.13.2",
  "criterion",
@@ -1026,7 +1026,7 @@ dependencies = [
 
 [[package]]
 name = "felis-daemon"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "bytes",
@@ -1055,7 +1055,7 @@ dependencies = [
 
 [[package]]
 name = "felis-grid"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "bitflags 2.13.2",
  "boon",
@@ -1095,7 +1095,7 @@ dependencies = [
 
 [[package]]
 name = "felis-pty"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "felis-grid",
  "felis-vt",
@@ -1109,7 +1109,7 @@ dependencies = [
 
 [[package]]
 name = "felis-render-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "criterion",
  "felis-grid",
@@ -1123,7 +1123,7 @@ dependencies = [
 
 [[package]]
 name = "felis-render-wgpu"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "bytemuck",
  "criterion",
@@ -1193,7 +1193,7 @@ dependencies = [
 
 [[package]]
 name = "felis-workspace-tests"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "felis-protocol",
 ]
