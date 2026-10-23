@@ -55,6 +55,7 @@ pub(super) fn run(
 ) {
     font_size(config, origin, diagnostics);
     window_opacity(config, origin, diagnostics);
+    minimum_contrast(config, origin, diagnostics);
     mouse_scroll_multiplier(config, origin, diagnostics);
     fallback_chain(document, origin, diagnostics);
     palette(config, origin, diagnostics);
@@ -198,6 +199,21 @@ fn window_opacity(
         DiagnosticKind::Value,
         Some(origin.attribute(&["window", "opacity"], "window.opacity")),
         issue.message("[0.0, 1.0]"),
+    );
+}
+
+fn minimum_contrast(
+    config: &EffectiveConfig,
+    origin: &KeyOrigin<'_>,
+    diagnostics: &mut ConfigDiagnostics,
+) {
+    let Some(issue) = config.theme.minimum_contrast_issue() else {
+        return;
+    };
+    diagnostics.warning(
+        DiagnosticKind::Value,
+        Some(origin.attribute(&["theme", "minimum_contrast"], "theme.minimum_contrast")),
+        issue.message("[1.0, 21.0]"),
     );
 }
 

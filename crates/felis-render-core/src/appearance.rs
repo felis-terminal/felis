@@ -1,5 +1,6 @@
 //! How a cell looks: its colors after reverse video, the cursor, the
-//! bidi warning, selection and faint, and which decorations it carries.
+//! bidi warning, selection, faint and minimum contrast, and which
+//! decorations it carries.
 //! Resolved per row of cells, so a client holding only decoded
 //! scrollback rows resolves them the same way the cell painter does.
 
@@ -10,6 +11,7 @@ use felis_grid::{
 
 use crate::{
     SelectionRange,
+    contrast::ensure_contrast,
     palette::{
         BIDI_MARKER_BG, BIDI_MARKER_FG, LINK_UNDERLINE, ResolvedTheme, SELECTION_BG, resolve_bg,
         resolve_fg,
@@ -271,11 +273,19 @@ pub fn resolve_cell(
             bg = SELECTION_BG;
         }
     }
+    // Text drawn in its own bg color is hidden on purpose. Decided before
+    // faint, whose mix toward a premultiplied bg would split the pair.
+    let hidden = theme.minimum_contrast > 1.0
+        && theme.contrast_ground(fg)[..3] == theme.contrast_ground(bg)[..3];
     // After cursor / bidi / selection so it dims the effective fg,
     // and never the bidi warning.
     let faint = attrs.flags.contains(AttrFlags::FAINT) && !is_bidi;
     if faint {
         fg = dim_toward_bg(fg, bg);
+    }
+    // Last, so it judges the colors the cell is painted with.
+    if !is_bidi && !hidden {
+        fg = ensure_contrast(fg, theme.contrast_ground(bg), theme.minimum_contrast);
     }
     let block_cursor = cursor.is_some_and(|cursor| cursor.style == CursorStyle::Block);
     // The decoration pass draws after the glyph pass, so precedence
@@ -457,7 +467,7 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
-    use crate::palette::Theme;
+    use crate::{contrast::contrast_ratio, palette::Theme};
 
     fn drive(rows: u16, cols: u16, bytes: &[u8]) -> Grid {
         let mut g = Grid::new(rows, cols);
@@ -639,6 +649,134 @@ mod tests {
         let g = drive(1, 4, "\x1b[2mA\u{202E}".as_bytes());
         let look = resolve_at(&g, &RowFrame::plain(false), 0, 0);
         assert_eq!(look.fg, BIDI_MARKER_FG);
+    }
+
+    fn contrast_theme(minimum_contrast: f32) -> ResolvedTheme {
+        ResolvedTheme::new(&Theme {
+            minimum_contrast,
+            ..Theme::default()
+        })
+    }
+
+    fn resolve_with(theme: &ResolvedTheme, g: &Grid, frame: &RowFrame, col: u16) -> CellAppearance {
+        resolve_cell(
+            &RowCells::of_screen(g.screen(), 0).unwrap(),
+            frame,
+            theme,
+            col,
+        )
+    }
+
+    #[test]
+    fn minimum_contrast_of_one_resolves_every_cell_as_without_it() {
+        let g = drive(
+            1,
+            8,
+            b"\x1b[34mA\x1b[2;90mB\x1b[7;94mC\x1b[m\x1b[38;2;20;20;30mD",
+        );
+        let frame = RowFrame::plain(false);
+        for col in 0..8 {
+            assert_eq!(
+                resolve_with(&contrast_theme(1.0), &g, &frame, col),
+                resolve_with(&theme(), &g, &frame, col),
+                "col {col}"
+            );
+        }
+    }
+
+    #[test]
+    fn minimum_contrast_raises_a_failing_fg_and_leaves_a_passing_one() {
+        let theme = contrast_theme(4.5);
+        let g = drive(1, 4, b"\x1b[34mA\x1b[mB");
+        let frame = RowFrame::plain(false);
+        let blue = resolve_with(&theme, &g, &frame, 0);
+        assert!(contrast_ratio(resolve_fg(Color::Indexed(4), &theme), theme.bg) < 4.5);
+        assert!(contrast_ratio(blue.fg, blue.bg) >= 4.5);
+        assert_eq!(resolve_with(&theme, &g, &frame, 1).fg, theme.fg);
+    }
+
+    #[test]
+    fn minimum_contrast_judges_the_selection_and_reverse_video_bg() {
+        let theme = contrast_theme(7.0);
+        let g = drive(
+            1,
+            4,
+            b"\x1b[38;2;40;60;120mA\x1b[7;48;2;220;220;220;38;2;200;200;200mB",
+        );
+        let frame = RowFrame {
+            selection: Some((0, 0)),
+            ..RowFrame::plain(false)
+        };
+        for col in 0..2 {
+            let look = resolve_with(&theme, &g, &frame, col);
+            assert!(contrast_ratio(look.fg, look.bg) >= 7.0, "col {col}");
+        }
+        assert_eq!(resolve_with(&theme, &g, &frame, 0).bg, SELECTION_BG);
+    }
+
+    #[test]
+    fn minimum_contrast_spares_hidden_text_and_the_bidi_warning() {
+        let theme = contrast_theme(21.0);
+        let frame = RowFrame::plain(false);
+        let g = drive(1, 4, b"\x1b[34;44mA");
+        let hidden = resolve_with(&theme, &g, &frame, 0);
+        assert_eq!(hidden.fg, hidden.bg);
+        let g = drive(1, 4, "\x1b[34mA\u{202E}".as_bytes());
+        assert_eq!(resolve_with(&theme, &g, &frame, 0).fg, BIDI_MARKER_FG);
+    }
+
+    #[test]
+    fn minimum_contrast_spares_text_in_the_straight_bg_color_on_a_translucent_window() {
+        let white = [1.0, 1.0, 1.0, 1.0];
+        let straight = Theme {
+            fg: [0.0, 0.0, 0.0, 1.0],
+            bg: [1.0, 1.0, 1.0, 0.5],
+            minimum_contrast: 4.5,
+            ..Theme::default()
+        };
+        let premultiplied = Theme {
+            bg: [0.5, 0.5, 0.5, 0.5],
+            ..straight
+        };
+        let theme = ResolvedTheme::new(&premultiplied).with_straight_bg(straight.bg);
+        let off = ResolvedTheme::new(&Theme {
+            minimum_contrast: 1.0,
+            ..premultiplied
+        });
+        let frame = RowFrame::plain(false);
+        for input in ["\x1b[38;2;255;255;255mA", "\x1b[2;38;2;255;255;255mA"] {
+            let g = drive(1, 2, input.as_bytes());
+            let plain = resolve_with(&off, &g, &frame, 0);
+            assert_eq!(
+                resolve_with(&theme, &g, &frame, 0).fg,
+                plain.fg,
+                "{input:?}"
+            );
+        }
+        let g = drive(1, 2, b"\x1b[7;38;2;255;255;255mA");
+        let look = resolve_with(&theme, &g, &frame, 0);
+        assert_eq!((look.fg, look.bg), (premultiplied.bg, white));
+    }
+
+    /// A fully transparent default bg premultiplies to black; judging
+    /// against that would lighten text that is already light enough on
+    /// the configured light bg.
+    #[test]
+    fn minimum_contrast_judges_a_premultiplied_default_bg_by_its_straight_color() {
+        let straight = Theme {
+            fg: [0.0, 0.0, 0.0, 1.0],
+            bg: [1.0, 1.0, 1.0, 0.0],
+            minimum_contrast: 4.5,
+            ..Theme::default()
+        };
+        let premultiplied = Theme {
+            bg: [0.0, 0.0, 0.0, 0.0],
+            ..straight
+        };
+        let theme = ResolvedTheme::new(&premultiplied).with_straight_bg(straight.bg);
+        let g = drive(1, 2, b"A");
+        let look = resolve_with(&theme, &g, &RowFrame::plain(false), 0);
+        assert_eq!(look.fg, straight.fg);
     }
 
     #[test]

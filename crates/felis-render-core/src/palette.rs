@@ -22,6 +22,9 @@ pub struct Theme {
     /// `None` means reverse video (the cursor cell's bg painted with
     /// its original fg).
     pub cursor: Option<[f32; 4]>,
+    /// WCAG 2 ratio every cell's fg is raised to against its bg; `1.0`
+    /// leaves colors as resolved.
+    pub minimum_contrast: f32,
 }
 
 /// Single source for [`Theme::default`] and [`configured_theme_report`],
@@ -39,6 +42,7 @@ impl Default for Theme {
             bg: srgb_to_linear_rgba(DEFAULT_BG_SRGB, 1.0),
             palette: [None; 256],
             cursor: None,
+            minimum_contrast: 1.0,
         }
     }
 }
@@ -327,6 +331,8 @@ pub struct ResolvedTheme {
     pub bg: [f32; 4],
     pub cursor: Option<[f32; 4]>,
     pub palette: [[f32; 4]; 256],
+    pub minimum_contrast: f32,
+    straight_bg: [f32; 4],
     srgb_linear: [f32; 256],
 }
 
@@ -352,8 +358,30 @@ impl ResolvedTheme {
             bg: base.bg,
             cursor: base.cursor,
             palette,
+            minimum_contrast: base.minimum_contrast,
+            straight_bg: base.bg,
             srgb_linear,
         }
+    }
+
+    /// Names the straight-alpha color a premultiplied `bg` was made
+    /// from: contrast is judged against the color the user configured,
+    /// and a fully transparent `bg` premultiplies to black.
+    #[must_use]
+    pub const fn with_straight_bg(mut self, straight_bg: [f32; 4]) -> Self {
+        self.straight_bg = straight_bg;
+        self
+    }
+
+    /// The color `bg` is judged against for contrast: the straight
+    /// default background where `bg` is the default background.
+    #[must_use]
+    #[allow(
+        clippy::float_cmp,
+        reason = "identity with the theme's own bg value, not a numeric closeness test"
+    )]
+    pub fn contrast_ground(&self, bg: [f32; 4]) -> [f32; 4] {
+        if bg == self.bg { self.straight_bg } else { bg }
     }
 
     fn linear_rgb(&self, rgb: [u8; 3]) -> [f32; 4] {

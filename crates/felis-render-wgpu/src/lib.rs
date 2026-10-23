@@ -14,6 +14,7 @@ use felis_protocol::{
 };
 use felis_render_core::{
     ImageSource, SelectionRange,
+    contrast::MAX_CONTRAST_RATIO,
     glyphs::{GLYPH_ATLAS_SIDE, ShapeFrame},
     overlay::{ConfirmOverlay, LinkPreviewOverlay, PreeditOverlay, SearchOverlay},
     painter::{BAR_ELLIPSIS, cursor_rect_px},
@@ -156,6 +157,8 @@ pub struct RendererConfig {
     /// caller must also create the window with `with_transparent(true)`
     /// or the OS ignores the alpha.
     pub background_opacity: Option<f32>,
+    /// `theme.minimum_contrast`; `None` leaves colors as resolved.
+    pub theme_minimum_contrast: Option<f32>,
     /// WGSL source, already resolved from `shader.post` by the caller
     /// (this crate takes no paths). `None` keeps the single-pass path.
     pub post_shader_wgsl: Option<String>,
@@ -742,7 +745,7 @@ impl Renderer {
         });
 
         let theme = Self::theme_from_config(cfg);
-        let resolved_theme = ResolvedTheme::new(&premultiplied_bg(theme, bg_premultiplied));
+        let resolved_theme = resolve_for_surface(&theme, bg_premultiplied);
         let clear_color = clear_color_for_theme(&resolved_theme, false);
 
         let cells = RowCache::new(device.limits().max_buffer_size);
@@ -940,10 +943,10 @@ impl Renderer {
     }
 
     fn refresh_theme(&mut self) {
-        self.resolved_theme = ResolvedTheme::new(&premultiplied_bg(
-            effective_theme(&self.theme, &self.runtime_theme, &self.runtime_palette),
+        self.resolved_theme = resolve_for_surface(
+            &effective_theme(&self.theme, &self.runtime_theme, &self.runtime_palette),
             self.bg_premultiplied,
-        ));
+        );
         self.clear_color = clear_color_for_theme(&self.resolved_theme, self.reverse_video);
         self.cells.invalidate();
     }
@@ -998,6 +1001,9 @@ impl Renderer {
         // kitty's `background_opacity` model.
         if let Some(a) = cfg.background_opacity {
             theme.bg[3] = a.clamp(0.0, 1.0);
+        }
+        if let Some(ratio) = cfg.theme_minimum_contrast {
+            theme.minimum_contrast = ratio.clamp(1.0, MAX_CONTRAST_RATIO);
         }
         theme
     }
@@ -1675,6 +1681,10 @@ fn premultiplied_bg(mut theme: Theme, premultiply: bool) -> Theme {
     theme
 }
 
+fn resolve_for_surface(theme: &Theme, premultiply: bool) -> ResolvedTheme {
+    ResolvedTheme::new(&premultiplied_bg(*theme, premultiply)).with_straight_bg(theme.bg)
+}
+
 /// Computes letterbox origin for screen mirroring (`docs/explanation/architecture/session-lifecycle.md`).
 ///
 /// Surpluses of at least one cell center the content on whole pixels; sub-cell remainders
@@ -1967,6 +1977,21 @@ mod tests {
             ..Default::default()
         });
         assert_eq!(high.bg[3], 1.0);
+    }
+
+    #[test]
+    fn theme_from_config_clamps_minimum_contrast_into_the_wcag_range() {
+        let ratio = |r: Option<f32>| {
+            Renderer::theme_from_config(&RendererConfig {
+                theme_minimum_contrast: r,
+                ..Default::default()
+            })
+            .minimum_contrast
+        };
+        assert_eq!(ratio(None), 1.0);
+        assert_eq!(ratio(Some(4.5)), 4.5);
+        assert_eq!(ratio(Some(0.5)), 1.0);
+        assert_eq!(ratio(Some(40.0)), MAX_CONTRAST_RATIO);
     }
 
     #[test]

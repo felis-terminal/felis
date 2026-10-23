@@ -58,13 +58,14 @@ nothing occludes anything. A bar a producer can paint over guarantees nothing; s
 [the security model](../security-model.md) "OSC 8 hyperlinks and OSC 7 CWD" for what rests on that guarantee.
 
 How a cell looks is decided before any instance exists. The cell painter in `felis-render-core` resolves each cell's
-colors (reverse video, cursor, selection, the bidi warning, faint), its decorations, the overlays and bottom bars, and
-the chrome clip, and emits each row as a display list of rectangles, glyph draws and decorations in physical pixels. The
-per-cell part of that is a row-level function over a slice of cells, built without felis-shaping, so a client that draws
-text with its own fonts (a DOM or canvas view) can call it and paint a cell's colors and decorations by the same rules.
-`felis-render-wgpu` encodes that list into the instance records of the tiers below and caches the encoded rows. The
-display list is the seam a backend other than wgpu draws from; why it is data rather than a trait the painter calls is
-recorded in [the architecture overview](../architecture/overview.md) "Workspace: the crate-boundary decision record".
+colors (reverse video, cursor, selection, the bidi warning, faint, minimum contrast), its decorations, the overlays and
+bottom bars, and the chrome clip, and emits each row as a display list of rectangles, glyph draws and decorations in
+physical pixels. The per-cell part of that is a row-level function over a slice of cells, built without felis-shaping,
+so a client that draws text with its own fonts (a DOM or canvas view) can call it and paint a cell's colors and
+decorations by the same rules. `felis-render-wgpu` encodes that list into the instance records of the tiers below and
+caches the encoded rows. The display list is the seam a backend other than wgpu draws from; why it is data rather than a
+trait the painter calls is recorded in [the architecture overview](../architecture/overview.md) "Workspace: the
+crate-boundary decision record".
 
 ## wgpu surface and resources
 
@@ -535,6 +536,11 @@ same for curly underlines.
 
 `FAINT` dims the foreground toward the background and `CONCEAL` drops the glyph entirely: a concealed cell (a shell's
 password echo) must leave no ink, so conceal is a rendering guarantee, not a cosmetic attribute.
+
+`theme.minimum_contrast` treats box-drawing, block and Powerline glyphs like any text, though a half-block image or a
+graph drawn in near-background colors can shift with it. Exempting them would choose the behavior by the characters a
+program printed, which [principle 4](../principles.md)'s Test rejects; a user who draws with such glyphs leaves the
+ratio low.
 
 ### SGR blink is never drawn
 

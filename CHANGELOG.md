@@ -12,6 +12,9 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 
 ### Added
 
+- **Config**: `theme.minimum_contrast` raises text whose color is too close to its background to a WCAG 2 contrast
+  ratio, keeping its hue. The default of 1 leaves colors as programs set them.
+
 - **Shell integration**: `share/felis/shell-integration/ssh.bash`, `ssh.zsh` and `ssh.fish` define an `ssh` function
   that installs the `xterm-felis` terminfo entry on the remote host before each interactive login, and logs in with
   `TERM=xterm-256color` after a warning where it cannot. The home-manager module sources it with

@@ -695,7 +695,7 @@ pub(super) fn fallback_entry(value: toml::Value) -> Result<FontStyleConfig, toml
 /// Every hex string field here is `#rrggbb`. A malformed value logs a
 /// warning and falls back to its default; the rest of the theme is unaffected.
 #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Debug, Default, Clone, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(default)]
 pub struct ThemeConfig {
@@ -705,6 +705,45 @@ pub struct ThemeConfig {
     pub background: Option<String>,
     /// Per-slot overrides for the SGR 16-color palette.
     pub palette: PaletteConfig,
+    /// WCAG 2 contrast ratio every cell's text color is raised to against
+    /// its background. `1` (default) leaves colors as programs set them.
+    /// Clamped to `[1.0, 21.0]` with a warning; `nan` uses the default.
+    pub minimum_contrast: f32,
+}
+
+const DEFAULT_MINIMUM_CONTRAST: f32 = 1.0;
+const MAX_MINIMUM_CONTRAST: f32 = 21.0;
+
+impl Default for ThemeConfig {
+    fn default() -> Self {
+        Self {
+            foreground: None,
+            background: None,
+            palette: PaletteConfig::default(),
+            minimum_contrast: DEFAULT_MINIMUM_CONTRAST,
+        }
+    }
+}
+
+impl ThemeConfig {
+    #[must_use]
+    pub const fn clamped_minimum_contrast(&self) -> f32 {
+        if self.minimum_contrast.is_nan() {
+            DEFAULT_MINIMUM_CONTRAST
+        } else {
+            self.minimum_contrast
+                .clamp(DEFAULT_MINIMUM_CONTRAST, MAX_MINIMUM_CONTRAST)
+        }
+    }
+
+    pub(super) fn minimum_contrast_issue(&self) -> Option<RangeIssue> {
+        RangeIssue::detect(
+            f64::from(self.minimum_contrast),
+            f64::from(DEFAULT_MINIMUM_CONTRAST),
+            f64::from(MAX_MINIMUM_CONTRAST),
+            f64::from(DEFAULT_MINIMUM_CONTRAST),
+        )
+    }
 }
 
 /// Per-slot overrides for the 256-color palette.
@@ -1816,6 +1855,34 @@ mod tests {
             scroll_multiplier: f64::NAN,
         };
         assert_eq!(nan.clamped_scroll_multiplier(), DEFAULT_SCROLL_MULTIPLIER);
+        let nan = ThemeConfig {
+            minimum_contrast: f32::NAN,
+            ..ThemeConfig::default()
+        };
+        assert_eq!(nan.clamped_minimum_contrast(), DEFAULT_MINIMUM_CONTRAST);
+    }
+
+    #[test]
+    fn theme_minimum_contrast_parses_and_defaults_to_one() {
+        assert_eq!(EffectiveConfig::default().theme.minimum_contrast, 1.0);
+        let cfg: EffectiveConfig = toml::from_str("[theme]\nminimum_contrast = 4.5\n").unwrap();
+        assert_eq!(cfg.theme.clamped_minimum_contrast(), 4.5);
+    }
+
+    #[test]
+    fn resolve_reports_an_out_of_range_minimum_contrast_as_clamped() {
+        let document = ConfigDocument::parse("[theme]\nminimum_contrast = 30\n", None).unwrap();
+        let (cfg, diagnostics) = document.resolve("felis");
+        let clamped = cfg.theme.clamped_minimum_contrast();
+        assert_eq!(clamped, 21.0);
+        let warning = diagnostics.warnings().next().expect("one warning");
+        assert_eq!(warning.kind, DiagnosticKind::Value);
+        assert_eq!(warning.key.as_deref(), Some("theme.minimum_contrast"));
+        assert!(
+            warning.message.contains(&format!("clamped to {clamped}")),
+            "the warning names the clamped value: {}",
+            warning.message,
+        );
     }
 
     #[test]
@@ -2720,6 +2787,15 @@ mod tests {
             proptest::prop_assert_eq!(
                 cfg.clamped_opacity(),
                 banded(opacity, MIN_OPACITY, MAX_OPACITY),
+            );
+        }
+
+        #[test]
+        fn clamped_minimum_contrast_is_its_raw_value_banded(minimum_contrast in -1e3_f32..=1e3_f32) {
+            let cfg = ThemeConfig { minimum_contrast, ..ThemeConfig::default() };
+            proptest::prop_assert_eq!(
+                cfg.clamped_minimum_contrast(),
+                banded(minimum_contrast, DEFAULT_MINIMUM_CONTRAST, MAX_MINIMUM_CONTRAST),
             );
         }
 

@@ -126,6 +126,14 @@ features = []
 foreground = "#e5e5e5"
 background = "#0d0d12"
 
+# WCAG 2 contrast ratio in [1.0, 21.0] each cell's text color is raised
+# to against its background, keeping its hue and turning black or white
+# when the ratio is out of reach. Text drawn in its own background color
+# and the bidi warning are left alone; color emoji and images are never
+# adjusted. A translucent window is judged by the configured background.
+# Default: 1.0 (colors as programs set them).
+minimum_contrast = 4.5
+
 [cursor]
 # Cursor block color (#rrggbb). When unset, paints in reverse video.
 color = "#ffaa00"
@@ -304,6 +312,8 @@ Diagnostics surface at two stages:
 | Malformed keymap chord, binding, or binding argument     | Skips entry and logs warning; remaining keybindings apply.          | load   |
 | `mouse.scroll_multiplier` outside `[0.1, 100.0]`         | Clamped into valid range with warning.                              | load   |
 | `mouse.scroll_multiplier` not a number (`nan`)           | Falls back to default with warning.                                 | load   |
+| `theme.minimum_contrast` outside `[1.0, 21.0]`           | Clamped into valid range with warning.                              | load   |
+| `theme.minimum_contrast` not a number (`nan`)            | Falls back to default with warning.                                 | load   |
 
 A load-stage row that names a warning is one `felis config check` reports; rows that name none are silent. Every warning
 the check can report appears above, either as a row in this table or, for a nested overlay, under the merge rules.

@@ -1127,6 +1127,7 @@ fn renderer_config_from_full_config_carries_every_field_through() {
                 )]),
                 ..Default::default()
             },
+            minimum_contrast: 4.5,
         },
         ..Default::default()
     };
@@ -1151,6 +1152,12 @@ fn renderer_config_from_full_config_carries_every_field_through() {
     assert_eq!(rc.theme_fg.as_deref(), Some("#cdcdcd"));
     assert_eq!(rc.theme_bg.as_deref(), Some("#101010"));
     assert_eq!(rc.theme_cursor.as_deref(), Some("#ffaa00"));
+    assert_eq!(rc.theme_minimum_contrast, Some(4.5));
+    assert_eq!(
+        renderer_config_from(&config::EffectiveConfig::default()).theme_minimum_contrast,
+        None,
+        "the default ratio of 1 maps to no adjustment"
+    );
     // `PaletteConfig::into_overrides` lays out by SGR index: slot 1 is
     // red, 12 is bright_blue, and `indexed` carries cube slot 16.
     assert_eq!(

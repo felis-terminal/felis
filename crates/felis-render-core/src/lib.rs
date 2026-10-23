@@ -6,6 +6,7 @@ pub mod appearance;
 pub mod atlas;
 #[cfg(feature = "glyphs")]
 pub mod box_drawing;
+pub mod contrast;
 pub mod display_list;
 #[cfg(feature = "glyphs")]
 pub mod glyphs;

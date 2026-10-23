@@ -71,6 +71,7 @@
       "default": {
         "background": null,
         "foreground": null,
+        "minimum_contrast": 1.0,
         "palette": {
           "black": null,
           "blue": null,
@@ -1032,6 +1033,12 @@
             "null"
           ],
           "default": null
+        },
+        "minimum_contrast": {
+          "description": "WCAG 2 contrast ratio every cell's text color is raised to against\nits background. `1` (default) leaves colors as programs set them.\nClamped to `[1.0, 21.0]` with a warning; `nan` uses the default.",
+          "type": "number",
+          "format": "float",
+          "default": 1.0
         },
         "palette": {
           "description": "Per-slot overrides for the SGR 16-color palette.",
