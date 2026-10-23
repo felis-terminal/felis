@@ -11,11 +11,10 @@ description = "Self-hosted async PTY layer (openpty on Unix, ConPTY on Windows)"
 tokio = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
-rustix = { workspace = true, features = ["termios"] }
 
 # libc for tcgetpgrp: rustix's wrapper asserts pgid > 0, failing on a dead session leader.
 [target.'cfg(unix)'.dependencies]
-rustix = { workspace = true, features = ["event", "pipe"] }
+rustix = { workspace = true, features = ["event", "pipe", "termios"] }
 libc = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
