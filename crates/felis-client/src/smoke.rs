@@ -152,9 +152,9 @@ impl App {
     /// anything else leaves the process with a nonzero status.
     fn smoke_verdict(&mut self) {
         let capture = self
-            .surface
+            .renderer
             .as_ref()
-            .and_then(|surface| surface.renderer.capture_last_frame());
+            .and_then(felis_render_wgpu::Renderer::capture_last_frame);
         let Some(capture) = capture else {
             error!("frontend smoke: the frame could not be read back from the GPU");
             std::process::exit(EXIT_NO_EVIDENCE);

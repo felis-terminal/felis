@@ -2020,17 +2020,74 @@ fn test_place(socket: &str, session_id: u128) -> exit_ladder::Place {
     }
 }
 
-/// `App` driven through [`App::on_app_event`] with no window and no
-/// daemon: the daemon's side is played by hand, and every event the
-/// window posts to itself lands in [`AppHarness::posted`].
+/// `App` driven through [`App::on_app_event`] with no event loop, no
+/// GPU and no daemon: the daemon's side is played by hand, every event
+/// the window posts to itself lands in [`AppHarness::posted`], and every
+/// window effect in [`AppHarness::window`].
 mod app_events {
     use std::sync::mpsc;
 
     use super::*;
 
+    #[derive(Default)]
+    struct RecordedWindow {
+        titles: Mutex<Vec<String>>,
+        attention_requests: Mutex<u32>,
+    }
+
+    impl RecordedWindow {
+        fn last_title(&self) -> Option<String> {
+            self.titles
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .last()
+                .cloned()
+        }
+
+        fn attention_requests(&self) -> u32 {
+            *self
+                .attention_requests
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+        }
+    }
+
+    impl WindowHost for RecordedWindow {
+        fn set_title(&self, title: &str) {
+            self.titles
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(title.to_owned());
+        }
+        fn set_cursor(&self, _: winit::window::CursorIcon) {}
+        fn request_attention(&self) {
+            *self
+                .attention_requests
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner) += 1;
+        }
+        fn request_redraw(&self) {}
+        fn set_ime_cursor_area(&self, _: PhysicalPosition<f64>, _: PhysicalSize<u32>) {}
+        fn inner_size(&self) -> PhysicalSize<u32> {
+            PhysicalSize::new(960, 600)
+        }
+        fn prefers_dark(&self) -> Option<bool> {
+            None
+        }
+        fn toggle_fullscreen(&self) {}
+        fn set_decorations(&self, _: bool) {}
+        fn set_option_as_alt(&self, _: bool) {}
+        fn apply_backdrop(&self, _: Backdrop, _: bool) {}
+        fn repair_translucent_chrome(&self) {}
+        fn refresh_interval(&self) -> Duration {
+            Duration::from_millis(16)
+        }
+    }
+
     struct AppHarness {
         app: App,
         posted: mpsc::Receiver<AppEvent>,
+        window: Arc<RecordedWindow>,
     }
 
     impl AppHarness {
@@ -2118,9 +2175,14 @@ mod app_events {
             effective_minor: 0,
             pull_enabled: true,
         };
+        let window = Arc::new(RecordedWindow::default());
+        let mut app = App::new(startup, &session(id), link);
+        let host: Arc<dyn WindowHost> = window.clone();
+        app.window = Some(host);
         AppHarness {
-            app: App::new(startup, &session(id), link),
+            app,
             posted,
+            window,
         }
     }
 
@@ -2178,5 +2240,49 @@ mod app_events {
         assert_eq!(harness.app.switch_state, SwitchState::Idle);
         assert_eq!(harness.app.current_place().session_id, 0xa);
         assert!(!harness.app.exit_requested);
+    }
+
+    /// Pins the criterion "retry bounds are visible": a drop with
+    /// nothing in flight keeps the window and says so in its title.
+    #[test]
+    fn a_dropped_connection_marks_the_window_disconnected() {
+        let runtime = runtime();
+        let mut harness = app_on(&runtime, absent_daemon("home"), 0xa);
+
+        let live = harness.app.conn_gen;
+        harness
+            .app
+            .on_app_event(AppEvent::DaemonClosed { conn_gen: live });
+
+        assert!(harness.app.reconnecting);
+        assert_eq!(
+            harness.window.last_title().as_deref(),
+            Some("felis \u{2014} disconnected")
+        );
+        assert!(!harness.app.exit_requested);
+    }
+
+    /// Pins the `conn_gen` stamp: a BEL stamped by any connection but
+    /// the live one must not flash the window.
+    #[test]
+    fn only_the_live_connection_rings_the_bell() {
+        let runtime = runtime();
+        let mut harness = app_on(&runtime, absent_daemon("home"), 0xa);
+        let bell = || GridMsg::Attention {
+            source: felis_protocol::messages::AttentionSource::Bell,
+        };
+
+        let live = harness.app.conn_gen;
+        harness.app.on_app_event(AppEvent::GridFrame {
+            msg: bell(),
+            conn_gen: live + 1,
+        });
+        assert_eq!(harness.window.attention_requests(), 0);
+
+        harness.app.on_app_event(AppEvent::GridFrame {
+            msg: bell(),
+            conn_gen: live,
+        });
+        assert_eq!(harness.window.attention_requests(), 1);
     }
 }

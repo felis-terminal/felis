@@ -106,11 +106,11 @@ impl App {
     /// The disconnected indicator is client-local presentation
     /// (principle 3): no daemon message says a window is offline.
     pub(crate) fn refresh_window_title(&self) {
-        let Some(surface) = self.surface.as_ref() else {
+        let Some(window) = self.window.as_ref() else {
             return;
         };
         let shell_title = self.shadow.title().unwrap_or("felis");
-        surface.window.set_title(&window_title_for(
+        window.set_title(&window_title_for(
             self.title_prefix.as_deref(),
             shell_title,
             self.reconnecting,

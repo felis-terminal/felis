@@ -74,7 +74,7 @@ use winit::{
     event::{ElementState, Ime, MouseButton as WinitMouseButton, MouseScrollDelta, WindowEvent},
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
     keyboard::{Key, ModifiersState, NamedKey},
-    window::{UserAttentionType, Window, WindowAttributes, WindowId},
+    window::{Window, WindowAttributes, WindowId},
 };
 
 mod app_methods;
@@ -92,6 +92,7 @@ mod option_compose;
 mod os_clipboard;
 mod smoke;
 mod switch_intent;
+mod window_host;
 mod winit_keys;
 
 #[cfg(feature = "dhat-heap")]
@@ -103,6 +104,7 @@ use hyperlink::{
     activation_matches_preview, activation_target, grid_msg_moves_hover_target, open_url,
     pointer_icon,
 };
+use window_host::WindowHost;
 
 /// User events posted from the IPC reader task to the winit loop.
 ///
@@ -667,11 +669,12 @@ fn window_attributes(title: String, decorations: bool, transparent: bool) -> Win
 #[cfg(target_os = "macos")]
 fn apply_option_as_alt(window: &Window, option_as_alt: bool) {
     use winit::platform::macos::{OptionAsAlt, WindowExtMacOS};
-    window.set_option_as_alt(if option_as_alt {
+    let mode = if option_as_alt {
         OptionAsAlt::Both
     } else {
         OptionAsAlt::None
-    });
+    };
+    WindowExtMacOS::set_option_as_alt(window, mode);
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -1197,13 +1200,6 @@ impl OutgoingReceiver {
     }
 }
 
-/// `resumed` creates both together and `exiting` drops both together:
-/// they are never independently `Some`.
-struct Surface {
-    window: Arc<Window>,
-    renderer: Renderer,
-}
-
 #[expect(
     clippy::struct_excessive_bools,
     reason = "independent event-loop flags, not a modelable state machine"
@@ -1219,7 +1215,10 @@ struct App {
     /// The carrier this window is on plus the offer it re-declares on
     /// every re-dial.
     reconnector: Reconnector,
-    surface: Option<Surface>,
+    /// Set together with [`Self::renderer`] by the first `resumed`; a
+    /// test sets only this one.
+    window: Option<Arc<dyn WindowHost>>,
+    renderer: Option<Renderer>,
     /// Taken by the first `resumed`.
     warmup: Option<Warmup>,
     renderer_cfg: RendererConfig,
@@ -1436,7 +1435,8 @@ impl App {
             runtime: link.runtime,
             events: link.events,
             reconnector: link.reconnector,
-            surface: None,
+            window: None,
+            renderer: None,
             warmup: startup.warmup,
             renderer_cfg: startup.renderer_cfg,
             outgoing: Some(link.outgoing),

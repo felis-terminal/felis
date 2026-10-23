@@ -10,14 +10,14 @@ use super::{
     Duration, ElementState, GridMsg, ImageData, ImageId, ImageMsg, ImageSource, InputMsg, Instant,
     ModifiersState, MouseAction, MouseButton, MouseScrollDelta, OutgoingSender, PipeState,
     PressRouting, Renderer, SearchDirection, SearchHitRecord, SearchToClientMsg, SearchUiMode,
-    Selection, SelectionMode, SessionHex, Surface, SurfaceError, SwitchState, UserAttentionType,
-    WheelEncoding, WindowEvent, WindowId, WinitMouseButton, activation_matches_preview,
-    activation_target, apply_option_as_alt, apply_window_backdrop, compose_window_title,
-    daemon_closed_outcome, error, forwarded_press_dismisses_selection,
-    grid_change_invalidates_selection, grid_msg_moves_hover_target, ime_commit_bytes, info, input,
-    map_button, mem, open_url, should_start_selection, warn, wheel_arrow_bytes, wheel_buttons,
-    wheel_encoding_for, wheel_pixels_to_rows, wheel_starts_new_stream, wheel_y_ticks,
-    wheel_zoom_delta_px, window_attributes,
+    Selection, SelectionMode, SessionHex, SurfaceError, SwitchState, WheelEncoding, WindowEvent,
+    WindowId, WinitMouseButton, activation_matches_preview, activation_target, apply_option_as_alt,
+    apply_window_backdrop, compose_window_title, daemon_closed_outcome, error,
+    forwarded_press_dismisses_selection, grid_change_invalidates_selection,
+    grid_msg_moves_hover_target, ime_commit_bytes, info, input, map_button, mem, open_url,
+    should_start_selection, warn, wheel_arrow_bytes, wheel_buttons, wheel_encoding_for,
+    wheel_pixels_to_rows, wheel_starts_new_stream, wheel_y_ticks, wheel_zoom_delta_px,
+    window_attributes,
 };
 use crate::option_compose;
 
@@ -53,7 +53,7 @@ impl ImageSource for ShadowImages<'_> {
 
 impl ApplicationHandler<AppEvent> for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        if self.surface.is_some() {
+        if self.renderer.is_some() {
             return;
         }
         let attrs = window_attributes(
@@ -138,7 +138,8 @@ impl ApplicationHandler<AppEvent> for App {
         // Per implementation.md "winit", this single switch turns on
         // zwp_text_input_v3, XIM, AppKit, and TSF composition.
         window.set_ime_allowed(true);
-        self.surface = Some(Surface { window, renderer });
+        self.window = Some(window);
+        self.renderer = Some(renderer);
         // A fresh window starts on the platform default arrow, so the
         // remembered icon would suppress the first `set_cursor` that
         // matches it.
@@ -163,25 +164,24 @@ impl ApplicationHandler<AppEvent> for App {
                 // crisp and the next `pixel_w/pixel_h` matches the display.
                 self.scale_factor = scale_factor;
                 let physical = self.font_size_physical_px();
-                if let Some(surface) = self.surface.as_mut() {
-                    surface.renderer.reload_font_size(physical);
+                if let Some(renderer) = self.renderer.as_mut() {
+                    renderer.reload_font_size(physical);
                 }
                 self.reflow_to_window(true);
                 self.redraw.request();
                 info!(scale_factor, "DPR changed; font rebuilt");
             }
             WindowEvent::Resized(size) => {
-                if let Some(surface) = self.surface.as_mut() {
-                    surface.renderer.resize(size.width, size.height);
+                if let Some(renderer) = self.renderer.as_mut() {
+                    renderer.resize(size.width, size.height);
                 }
                 // wgpu reconfigures the CAMetalLayer on resize and AppKit
                 // rebuilds the root backing layer on layout, both dropping
                 // the corner radius. See `macos_window`.
-                #[cfg(target_os = "macos")]
                 if self.transparent
-                    && let Some(surface) = self.surface.as_ref()
+                    && let Some(window) = self.window.as_ref()
                 {
-                    crate::macos_window::fix_translucent_layer_stack(surface.window.as_ref());
+                    window.repair_translucent_chrome();
                 }
                 self.after_metric_change(size);
             }
@@ -199,8 +199,8 @@ impl ApplicationHandler<AppEvent> for App {
             WindowEvent::Focused(focused) => {
                 self.send_input(&InputMsg::FocusChange { focused });
                 self.window_focused = focused;
-                if let Some(surface) = self.surface.as_mut() {
-                    surface.renderer.set_window_focused(focused);
+                if let Some(renderer) = self.renderer.as_mut() {
+                    renderer.set_window_focused(focused);
                 }
                 // Solid-on so a re-focused window shows the caret at once.
                 if focused {
@@ -350,7 +350,7 @@ impl ApplicationHandler<AppEvent> for App {
             // the content that follows it.
             WindowEvent::RedrawRequested
                 if may_paint_grid(
-                    self.surface.is_some(),
+                    self.renderer.is_some(),
                     self.shadow.is_rehydrating(),
                     self.pull.cycle_open(),
                 ) =>
@@ -396,10 +396,8 @@ impl ApplicationHandler<AppEvent> for App {
         };
         let now = Instant::now();
         if self.cursor_blink.tick(now, blink_wants) {
-            if let Some(surface) = self.surface.as_mut() {
-                surface
-                    .renderer
-                    .set_cursor_blink_visible(self.cursor_blink.visible());
+            if let Some(renderer) = self.renderer.as_mut() {
+                renderer.set_cursor_blink_visible(self.cursor_blink.visible());
             }
             self.redraw.request();
         }
@@ -409,9 +407,9 @@ impl ApplicationHandler<AppEvent> for App {
         // Nothing arms this clock, so the predicate is the whole guard.
         let shader_animating = self.window_focused
             && self
-                .surface
+                .renderer
                 .as_ref()
-                .is_some_and(|surface| surface.renderer.has_post_shader());
+                .is_some_and(Renderer::has_post_shader);
         if self.shader_clock.tick(now, shader_animating) {
             self.redraw.request();
         }
@@ -425,9 +423,9 @@ impl ApplicationHandler<AppEvent> for App {
         // sidestepping the coalescer.
         if turn != RedrawTurn::Hold
             && self.redraw.flush()
-            && let Some(surface) = self.surface.as_ref()
+            && let Some(window) = self.window.as_ref()
         {
-            surface.window.request_redraw();
+            window.request_redraw();
             // `--trace-perf` users see how many events one paint collapsed.
             let stats = self.redraw.stats();
             tracing::trace!(
@@ -468,7 +466,8 @@ impl ApplicationHandler<AppEvent> for App {
 
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
         self.outgoing.take();
-        self.surface.take();
+        self.renderer.take();
+        self.window.take();
     }
 }
 
@@ -527,9 +526,9 @@ impl App {
                     }
                 }
                 if let Some(effect) = renderer_effect(&msg)
-                    && let Some(surface) = self.surface.as_mut()
+                    && let Some(renderer) = self.renderer.as_mut()
                 {
-                    apply_renderer_effect(&mut surface.renderer, effect);
+                    apply_renderer_effect(renderer, effect);
                 }
                 match &msg {
                     GridMsg::CursorState { .. } => {
@@ -541,10 +540,8 @@ impl App {
                     // flashes the same way BEL does: felis never draws a
                     // popup, and the content went to observer connections.
                     GridMsg::Attention { .. } => {
-                        if let Some(surface) = self.surface.as_ref() {
-                            surface
-                                .window
-                                .request_user_attention(Some(UserAttentionType::Informational));
+                        if let Some(window) = self.window.as_ref() {
+                            window.request_attention();
                         }
                     }
                     _ => {}
@@ -1181,9 +1178,9 @@ impl App {
                     }
                 } else {
                     let cell_h = self
-                        .surface
+                        .renderer
                         .as_ref()
-                        .map_or(20.0, |s| f64::from(s.renderer.cell_metrics().height));
+                        .map_or(20.0, |renderer| f64::from(renderer.cell_metrics().height));
                     let rows = wheel_pixels_to_rows(
                         delta,
                         cell_h,
@@ -1214,10 +1211,9 @@ impl App {
             .as_ref()
             .and_then(|_| self.hover_target.clone());
         // Borrowed this late: the overlay builders need `&self` as a whole.
-        let Some(surface) = self.surface.as_mut() else {
+        let (Some(window), Some(renderer)) = (self.window.as_ref(), self.renderer.as_mut()) else {
             return;
         };
-        let renderer = &mut surface.renderer;
         let metrics = renderer.cell_metrics();
         self.image_shadow.layout_into(
             &mut self.image_layout,
@@ -1247,7 +1243,7 @@ impl App {
             self.redraw.painted();
             self.present_retry.presented();
         } else {
-            let interval = refresh_interval(&surface.window);
+            let interval = window.refresh_interval();
             self.present_retry.unpresented(Instant::now(), interval);
         }
         if let Err(err) = outcome {
@@ -1299,16 +1295,6 @@ impl App {
         // Last in the frame: the run's evidence is the frame just painted.
         self.smoke_step();
     }
-}
-
-/// A monitor that reports no rate falls back to 60 Hz.
-fn refresh_interval(window: &winit::window::Window) -> Duration {
-    let millihertz = window
-        .current_monitor()
-        .and_then(|monitor| monitor.refresh_rate_millihertz())
-        .filter(|&mhz| mhz > 0)
-        .unwrap_or(60_000);
-    Duration::from_micros(1_000_000_000 / u64::from(millihertz))
 }
 
 /// Whether a `RedrawRequested` may paint. The source of the request is

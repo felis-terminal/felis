@@ -8,12 +8,12 @@ use super::{
     OutgoingFrame, PhysicalPosition, PhysicalSize, PipeState, Pumps, Reconnector,
     RegionToDaemonMsg, Renderer, SearchDirection, SearchHitRecord, SearchHitSpan, SearchOverlay,
     SearchToDaemonMsg, SearchUi, SearchUiMode, Selection, SessionInfo, SessionToDaemonMsg,
-    SharedDriver, SwitchState, TrailRecord, TrailState, ViewportPosition, activation_target,
-    apply_option_as_alt, apply_window_backdrop, codec, compose_window_title, composed_row_for_line,
-    config, configured_font_size_logical_px, cursor_trail, dial_and_land, error,
-    font_features_differ, font_settings_differ, font_stack_inputs_differ, ime_cursor_area_pixels,
-    info, keymap_adapter, launch_args, pointer_icon, preedit_from_ime, renderer_config_from,
-    reported_theme_differs, resolve_local_socket, viewport_for_hit, warn,
+    SharedDriver, SwitchState, TrailRecord, TrailState, ViewportPosition, activation_target, codec,
+    compose_window_title, composed_row_for_line, config, configured_font_size_logical_px,
+    cursor_trail, dial_and_land, error, font_features_differ, font_settings_differ,
+    font_stack_inputs_differ, ime_cursor_area_pixels, info, keymap_adapter, launch_args,
+    pointer_icon, preedit_from_ime, renderer_config_from, reported_theme_differs,
+    resolve_local_socket, viewport_for_hit, warn,
 };
 use crate::winit_keys;
 use felis_client_core::confirm::{ConfirmDecision, PendingConfirm, decide_confirm_key};
@@ -35,10 +35,10 @@ impl App {
     /// Resizes the shadow locally so the renderer sees the new dimensions
     /// before the daemon's burst lands.
     pub(crate) fn reflow(&mut self, size: PhysicalSize<u32>) {
-        let Some(surface) = self.surface.as_ref() else {
+        let Some(renderer) = self.renderer.as_ref() else {
             return;
         };
-        let metrics = surface.renderer.cell_metrics();
+        let metrics = renderer.cell_metrics();
         let cw = metrics.width.max(1);
         let ch = metrics.height.max(1);
         let cols = (size.width / cw).clamp(1, u16::MAX as u32) as u16;
@@ -102,7 +102,7 @@ impl App {
     /// switch landing wants mid-handshake, before there is a fresh cursor
     /// to anchor to.
     pub(crate) fn reflow_to_window(&mut self, anchor_ime: bool) {
-        let Some(size) = self.surface.as_ref().map(|s| s.window.inner_size()) else {
+        let Some(size) = self.window.as_ref().map(|window| window.inner_size()) else {
             return;
         };
         if anchor_ime {
@@ -116,18 +116,17 @@ impl App {
     /// next `about_to_wait` tick.
     pub(crate) fn restart_blink(&mut self) {
         self.cursor_blink.reset(Instant::now());
-        if let Some(surface) = self.surface.as_mut() {
-            surface.renderer.set_cursor_blink_visible(true);
+        if let Some(renderer) = self.renderer.as_mut() {
+            renderer.set_cursor_blink_visible(true);
         }
     }
 
     /// Without this the platform IME anchors its pre-edit panel at the
     /// window's top-left.
     pub(crate) fn update_ime_cursor_area(&self) {
-        let Some(surface) = self.surface.as_ref() else {
+        let (Some(window), Some(renderer)) = (self.window.as_ref(), self.renderer.as_ref()) else {
             return;
         };
-        let (window, renderer) = (&surface.window, &surface.renderer);
         let metrics = renderer.cell_metrics();
         let cursor = self.shadow.screen().cursor();
         let (x, y, w, h) =
@@ -180,10 +179,10 @@ impl App {
         if self.cursor_icon == Some(icon) {
             return;
         }
-        let Some(surface) = self.surface.as_ref() else {
+        let Some(window) = self.window.as_ref() else {
             return;
         };
-        surface.window.set_cursor(icon);
+        window.set_cursor(icon);
         self.cursor_icon = Some(icon);
     }
 
@@ -211,10 +210,7 @@ impl App {
             .pending_confirm
             .as_ref()
             .is_some_and(|p| !p.label().is_empty());
-        let preedit_active = self
-            .surface
-            .as_ref()
-            .is_some_and(|s| s.renderer.preedit_active());
+        let preedit_active = self.renderer.as_ref().is_some_and(Renderer::preedit_active);
         felis_render_core::painter::bottom_bar_claim(
             felis_render_core::painter::ChromeBar::from_flags(search_active, confirm_active),
             preedit_active,
@@ -246,8 +242,8 @@ impl App {
                 col: cursor.col,
             },
         );
-        if let Some(surface) = self.surface.as_mut() {
-            surface.renderer.set_preedit(new);
+        if let Some(renderer) = self.renderer.as_mut() {
+            renderer.set_preedit(new);
         }
         self.redraw.request();
     }
@@ -268,8 +264,8 @@ impl App {
                 rectangle: matches!(sel.mode(), felis_client_core::SelectionMode::Rectangle),
             }
         });
-        if let Some(surface) = self.surface.as_mut() {
-            surface.renderer.set_selection(range);
+        if let Some(renderer) = self.renderer.as_mut() {
+            renderer.set_selection(range);
         }
         self.redraw.request();
     }
@@ -278,8 +274,7 @@ impl App {
     /// Skipped entirely without a post-process shader: with no pass to
     /// read the eased corners this must cost nothing.
     pub(crate) fn tick_cursor_trail(&mut self, now: Instant) -> Option<Instant> {
-        let surface = self.surface.as_mut()?;
-        let renderer = &mut surface.renderer;
+        let renderer = self.renderer.as_mut()?;
         if !renderer.has_post_shader() {
             return None;
         }
@@ -323,10 +318,9 @@ impl App {
         // The contract's "pointer is not here", as kitty defines it.
         const OUTSIDE: [f32; 2] = [-1.0, -1.0];
 
-        let Some(surface) = self.surface.as_mut() else {
+        let Some(renderer) = self.renderer.as_mut() else {
             return;
         };
-        let renderer = &mut surface.renderer;
         if !renderer.has_post_shader() {
             return;
         }
@@ -441,10 +435,10 @@ impl App {
     pub(crate) fn apply_live_font_size(&mut self, reason: &'static str) {
         let size = self.current_font_size_logical_px;
         let physical = self.font_size_physical_px();
-        let Some(surface) = self.surface.as_mut() else {
+        let Some(renderer) = self.renderer.as_mut() else {
             return;
         };
-        surface.renderer.reload_font_size(physical);
+        renderer.reload_font_size(physical);
         self.reflow_to_window(true);
         self.redraw.request();
         info!(size_px = size, reason, "font size changed");
@@ -478,8 +472,7 @@ impl App {
         // The next `about_to_wait` arms or drops the animation wake-up off
         // the new policy.
         self.shader_clock.set_mode(cfg.shader.animate);
-        if let Some(surface) = self.surface.as_mut() {
-            let renderer = &mut surface.renderer;
+        if let Some(renderer) = self.renderer.as_mut() {
             renderer.set_theme(&Renderer::theme_from_config(&new_renderer_cfg));
             // Swap only on a real change: rebuilding the pipeline would
             // recompile the shader for an unrelated font edit. A refused
@@ -544,8 +537,8 @@ impl App {
         if cfg.window.macos_option_as_alt != self.macos_option_as_alt {
             self.macos_option_as_alt = cfg.window.macos_option_as_alt;
             self.key_presses.set_option_as_alt(self.macos_option_as_alt);
-            if let Some(surface) = self.surface.as_ref() {
-                apply_option_as_alt(surface.window.as_ref(), self.macos_option_as_alt);
+            if let Some(window) = self.window.as_ref() {
+                window.set_option_as_alt(self.macos_option_as_alt);
             }
         }
         // Gated on `self.transparent` (the surface's live transparency),
@@ -553,10 +546,10 @@ impl App {
         // show through until a restart lands the opacity change.
         let new_backdrop = cfg.window.backdrop;
         if new_backdrop != self.backdrop
-            && let Some(surface) = self.surface.as_ref()
+            && let Some(window) = self.window.as_ref()
         {
             self.backdrop = new_backdrop;
-            apply_window_backdrop(surface.window.as_ref(), self.backdrop, self.transparent);
+            window.apply_backdrop(self.backdrop, self.transparent);
         }
         let new_prefix = cfg.window.title_prefix;
         if new_prefix != self.title_prefix {
@@ -569,10 +562,10 @@ impl App {
         // appears or disappears; unavoidable.
         let new_decorations = cfg.window.decorations;
         if new_decorations != self.decorations
-            && let Some(surface) = self.surface.as_ref()
+            && let Some(window) = self.window.as_ref()
         {
             self.decorations = new_decorations;
-            surface.window.set_decorations(new_decorations);
+            window.set_decorations(new_decorations);
         }
         // `reconfigure` restarts the clock solid-on so a toggle shows
         // immediately; the next `about_to_wait` re-arms off the new policy.
@@ -1045,13 +1038,8 @@ impl App {
                 Err(err) => warn!(error = %err, "send_string: undecodable escape"),
             },
             Action::ToggleFullscreen => {
-                if let Some(surface) = self.surface.as_ref() {
-                    let next = if surface.window.fullscreen().is_some() {
-                        None
-                    } else {
-                        Some(winit::window::Fullscreen::Borderless(None))
-                    };
-                    surface.window.set_fullscreen(next);
+                if let Some(window) = self.window.as_ref() {
+                    window.toggle_fullscreen();
                 }
             }
             // docs/explanation/input.md "Confirmation bar".
@@ -1411,15 +1399,14 @@ impl App {
     /// contour convention). winit returns `None` when the platform can't
     /// report a preference; skip rather than guess.
     pub(crate) fn report_color_scheme(&self) {
-        let Some(surface) = self.surface.as_ref() else {
+        let Some(dark) = self
+            .window
+            .as_ref()
+            .and_then(|window| window.prefers_dark())
+        else {
             return;
         };
-        let Some(theme) = surface.window.theme() else {
-            return;
-        };
-        self.send_input(&InputMsg::ColorScheme {
-            dark: theme == winit::window::Theme::Dark,
-        });
+        self.send_input(&InputMsg::ColorScheme { dark });
     }
 
     /// The one path that coalesces: [`coalesce_key`] decides from the
@@ -1605,7 +1592,7 @@ impl App {
     /// Returns `None` only before the renderer is ready; clamping is
     /// [`cell_for_position`]'s.
     pub(crate) fn position_to_cell(&self, position: PhysicalPosition<f64>) -> Option<GridPos> {
-        let renderer = &self.surface.as_ref()?.renderer;
+        let renderer = self.renderer.as_ref()?;
         let metrics = renderer.cell_metrics();
         Some(cell_for_position(
             position,
@@ -1624,7 +1611,7 @@ impl App {
     /// `None` before the renderer is ready; the convention is
     /// [`pixel_for_position`]'s.
     pub(crate) fn position_to_pixel(&self, position: PhysicalPosition<f64>) -> Option<(u16, u16)> {
-        let renderer = &self.surface.as_ref()?.renderer;
+        let renderer = self.renderer.as_ref()?;
         Some(pixel_for_position(position, renderer.content_origin_px()))
     }
 
@@ -1799,8 +1786,7 @@ pub(crate) fn pixel_for_position(
 }
 
 /// `Some(notice)` for a paste past [`MAX_PASTE_BYTES`], `None` for one
-/// the window may send. Free-standing so the boundary is testable
-/// without an `App`, which owns a surface and a GPU device.
+/// the window may send.
 ///
 /// [`MAX_PASTE_BYTES`]: felis_protocol::messages::MAX_PASTE_BYTES
 pub(crate) fn paste_refusal(len: usize) -> Option<String> {
