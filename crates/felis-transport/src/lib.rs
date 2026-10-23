@@ -6,6 +6,7 @@
 #![cfg_attr(windows, allow(unsafe_code))]
 
 pub mod driver;
+pub mod env;
 pub mod framing;
 #[cfg(unix)]
 pub mod inherit;

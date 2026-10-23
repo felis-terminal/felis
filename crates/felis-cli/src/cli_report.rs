@@ -10,6 +10,7 @@ use felis_client_core::config::{GUI_CLIENT_ID, KeymapConfig};
 use felis_client_core::doctor::{FontsProbe, ProbeReport};
 use felis_client_core::{BindingValue, ConfigSource, EffectiveConfig, PipeSink};
 use felis_protocol::BuildIdentity;
+use felis_transport::env::SESSION_ID_ENV;
 
 use crate::cli_output::{
     BuildsObject, ConfigObject, DisplayObject, DoctorReportResult, EnvironmentObject, FontsObject,
@@ -70,7 +71,7 @@ pub(crate) fn environment(
             lc_ctype: var("LC_CTYPE"),
         },
         shell: ShellObject {
-            inside_felis: var("FELIS_SESSION_ID").is_some(),
+            inside_felis: var(SESSION_ID_ENV).is_some(),
             term: var("TERM"),
             term_program: var("TERM_PROGRAM"),
             term_program_version: var("TERM_PROGRAM_VERSION"),
