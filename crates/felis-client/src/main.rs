@@ -62,8 +62,8 @@ use felis_render_core::{
     overlay::{PreeditOverlay, SearchHitSpan, SearchOverlay},
 };
 use felis_render_wgpu::{
-    DEFAULT_FONT_SIZE_LOGICAL_PX, FaceSpec, MouseState, Renderer, RendererConfig, SurfaceError,
-    TRAIL_SHADER_SOURCE, TrailState, Warmup, validate_post_shader,
+    DEFAULT_FONT_SIZE_LOGICAL_PX, FaceSpec, MouseState, PostStageSource, Renderer, RendererConfig,
+    SurfaceError, TRAIL_SHADER_SOURCE, TrailState, Warmup,
 };
 use felis_transport::{ClientDriver, Delivery, FrameReader, FrameWriter, Incoming, OwnedFrame};
 use std::sync::{Mutex, PoisonError};
@@ -854,7 +854,7 @@ fn renderer_config_from(cfg: &config::EffectiveConfig) -> RendererConfig {
             let ratio = cfg.theme.clamped_minimum_contrast();
             (ratio > 1.0).then_some(ratio)
         },
-        post_shader_wgsl: resolve_post_shader(cfg),
+        post_stages: resolve_post_stages(cfg),
         font_files: Vec::new(),
     }
 }
@@ -866,38 +866,38 @@ fn face_spec(c: &config::FontStyleConfig) -> FaceSpec {
     }
 }
 
-/// A named shader that cannot be loaded or does not validate is refused
-/// here, before the device sees it: felis renders normally instead of
+/// A stage whose file cannot be read is left out here; one that does not
+/// validate is refused by the renderer, before the device sees it. Either
+/// way the remaining stages run and felis renders normally instead of
 /// blacking the window (docs/explanation/rendering/pipeline.md "Loading
 /// and failure").
-fn resolve_post_shader(cfg: &config::EffectiveConfig) -> Option<String> {
-    match cfg.post_shader_choice() {
-        PostShaderChoice::None => None,
-        PostShaderChoice::Builtin(BuiltinShader::Trail) => Some(TRAIL_SHADER_SOURCE.to_owned()),
-        PostShaderChoice::File(path) => {
-            let source = match std::fs::read_to_string(&path) {
-                Ok(source) => source,
+fn resolve_post_stages(cfg: &config::EffectiveConfig) -> Vec<PostStageSource> {
+    cfg.post_stages()
+        .into_iter()
+        .filter_map(|stage| match stage.shader {
+            PostShaderChoice::Builtin(BuiltinShader::Trail) => Some(PostStageSource {
+                label: "builtin trail".to_owned(),
+                wgsl: TRAIL_SHADER_SOURCE.to_owned(),
+            }),
+            PostShaderChoice::File(path) => match std::fs::read_to_string(&path) {
+                Ok(wgsl) => Some(PostStageSource {
+                    label: path.display().to_string(),
+                    wgsl,
+                }),
                 // The load already reported a missing path as a warning;
                 // repeating it at `ERROR` would contradict the documented
                 // severity.
                 Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                    debug!(?path, "shader.post file is not there; rendering without it");
-                    return None;
-                }
-                Err(err) => {
-                    error!(?path, %err, "read shader.post failed; rendering without it");
-                    return None;
-                }
-            };
-            match validate_post_shader(&source) {
-                Ok(()) => Some(source),
-                Err(err) => {
-                    error!(?path, %err, "shader.post rejected; rendering without it");
+                    debug!(?path, "shader.post file is not there; skipping the stage");
                     None
                 }
-            }
-        }
-    }
+                Err(err) => {
+                    error!(?path, %err, "read shader.post failed; skipping the stage");
+                    None
+                }
+            },
+        })
+        .collect()
 }
 
 /// Sent right after every attach: the daemon answers `OSC 4 ; n ; ?` and

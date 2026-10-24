@@ -3,13 +3,12 @@
 
 use std::path::Path;
 
-use serde::Deserialize as _;
 use serde::de::DeserializeOwned;
 
 use super::{
     Backdrop, ConfigDiagnostics, CursorBlinkMode, DiagnosticKind, EffectiveConfig, FontSizeIssue,
-    IndexedSlotError, Osc52Policy, PostShader, RangeIssue, ShaderAnimation, fallback_entry,
-    indexed_slot, unknown_post_shader_token,
+    IndexedSlotError, MAX_POST_STAGES, Osc52Policy, PostShader, RangeIssue, ShaderAnimation,
+    StageParse, fallback_entry, indexed_slot, parse_stage, post_stage_entries,
 };
 
 /// Which half of the document a merged value came from. The merged table
@@ -60,7 +59,7 @@ pub(super) fn run(
     fallback_chain(document, origin, diagnostics);
     palette(config, origin, diagnostics);
     keymap(config, origin, diagnostics);
-    shader(config, origin, diagnostics);
+    post_stages(config, document, origin, diagnostics);
     closed_enums(document, origin, diagnostics);
 }
 
@@ -100,7 +99,6 @@ fn closed_enums(
         origin,
         diagnostics,
     );
-    post_shader_token(document, origin, diagnostics);
 }
 
 fn enum_token<T: DeserializeOwned>(
@@ -125,40 +123,6 @@ fn enum_token<T: DeserializeOwned>(
         DiagnosticKind::Value,
         Some(origin.attribute(path, &path.join("."))),
         format!("unknown value `{token}`; using the default `{fallback}`"),
-    );
-}
-
-fn post_shader_token(
-    document: &toml::Table,
-    origin: &KeyOrigin<'_>,
-    diagnostics: &mut ConfigDiagnostics,
-) {
-    let path = ["shader", "post"];
-    let Some(value) = lookup(document, &path) else {
-        return;
-    };
-    if PostShader::deserialize(value.clone()).is_ok() || !unknown_post_shader_token(value) {
-        return;
-    }
-    let Some((tag, payload)) = value.as_table().and_then(|table| table.iter().next()) else {
-        return;
-    };
-    let (written, message) = if tag == "builtin" {
-        let token = payload.as_str().unwrap_or_default();
-        (
-            "shader.post.builtin",
-            format!("unknown builtin shader `{token}`; no post-process pass"),
-        )
-    } else {
-        (
-            "shader.post",
-            format!("unknown shader selector `{tag}`; no post-process pass"),
-        )
-    };
-    diagnostics.warning(
-        DiagnosticKind::Value,
-        Some(origin.attribute(&path, written)),
-        message,
     );
 }
 
@@ -302,21 +266,73 @@ fn keymap(config: &EffectiveConfig, origin: &KeyOrigin<'_>, diagnostics: &mut Co
     );
 }
 
-/// A missing shader file is a warning, not an error: the document may be
-/// shared with a machine where the file exists.
-fn shader(config: &EffectiveConfig, origin: &KeyOrigin<'_>, diagnostics: &mut ConfigDiagnostics) {
-    let Some(PostShader::File(raw)) = &config.shader.post else {
+/// Re-reads the document rather than [`EffectiveConfig`]: a skipped stage
+/// leaves nothing behind there, and the stage paths must count the entries
+/// as written. A missing shader file is a warning, not an error: the
+/// document may be shared with a machine where the file exists.
+fn post_stages(
+    config: &EffectiveConfig,
+    document: &toml::Table,
+    origin: &KeyOrigin<'_>,
+    diagnostics: &mut ConfigDiagnostics,
+) {
+    let path = ["shader", "post"];
+    let Some(value) = lookup(document, &path) else {
         return;
     };
-    let resolved = super::resolve_path(Path::new(raw), config.source_dir.as_deref());
-    if !resolved.is_file() {
+    // A shape error failed the document parse, which reported itself.
+    let Ok(super::PostStageEntries { entries, excess }) = post_stage_entries(value) else {
+        return;
+    };
+    if excess > 0 {
         diagnostics.warning(
-            DiagnosticKind::MissingFile,
-            Some(origin.attribute(&["shader", "post"], "shader.post.file")),
+            DiagnosticKind::Value,
+            Some(origin.attribute(&path, "shader.post")),
             format!(
-                "no such file: {} (resolved from `{raw}`); no post-process pass",
-                resolved.display()
+                "{} stages; only the first {MAX_POST_STAGES} run",
+                MAX_POST_STAGES + excess
             ),
         );
+    }
+    for (index, entry) in entries {
+        let written =
+            index.map_or_else(|| "shader.post".to_owned(), |i| format!("shader.post[{i}]"));
+        match parse_stage(entry) {
+            Ok(StageParse::Loaded {
+                stage,
+                unknown_keys,
+            }) => {
+                for key in unknown_keys {
+                    diagnostics.warning(
+                        DiagnosticKind::UnknownKey,
+                        Some(origin.attribute(&path, &format!("{written}.{key}"))),
+                        "unknown key ignored (typo, or written for another client?)",
+                    );
+                }
+                if let PostShader::File(raw) = &stage.shader {
+                    let resolved =
+                        super::resolve_path(Path::new(raw), config.source_dir.as_deref());
+                    if !resolved.is_file() {
+                        diagnostics.warning(
+                            DiagnosticKind::MissingFile,
+                            Some(origin.attribute(&path, &format!("{written}.file"))),
+                            format!(
+                                "no such file: {} (resolved from `{raw}`); stage skipped",
+                                resolved.display()
+                            ),
+                        );
+                    }
+                }
+            }
+            Ok(StageParse::UnknownToken {
+                key_suffix,
+                message,
+            }) => diagnostics.warning(
+                DiagnosticKind::Value,
+                Some(origin.attribute(&path, &format!("{written}{key_suffix}"))),
+                message,
+            ),
+            Err(_) => {}
+        }
     }
 }

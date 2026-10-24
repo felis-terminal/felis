@@ -48,6 +48,7 @@ pub mod image_atlas;
 #[doc(hidden)]
 pub mod pipeline;
 pub mod post;
+mod post_chain;
 pub mod probe;
 #[doc(hidden)]
 pub mod row_cache;
@@ -56,8 +57,8 @@ mod warmup;
 
 pub use crate::capture::{FrameCapture, ReadFrameError};
 pub use crate::post::{
-    CONTRACT_VERSION, MouseState, PostShaderError, PostUniforms, TRAIL_SHADER_SOURCE, TrailState,
-    validate_post_shader,
+    CONTRACT_VERSION, MouseState, PostShaderError, PostStageSource, PostUniforms,
+    TRAIL_SHADER_SOURCE, TrailState, validate_post_shader,
 };
 pub use crate::warmup::Warmup;
 use crate::{
@@ -70,7 +71,8 @@ use crate::{
         decoration_instance_layout, fg_instance_layout, glyph_bind_group_layout_entries,
         img_instance_layout, viewport_bind_group_layout_entries,
     },
-    post::{PostClock, PostFrame, PostStage, StageInputs},
+    post::{PostClock, PostFrame, StageInputs},
+    post_chain::{PostChain, Refused},
     row_cache::{CellFrame, RowCache},
     texture_upload::TextureUploader,
 };
@@ -159,9 +161,9 @@ pub struct RendererConfig {
     pub background_opacity: Option<f32>,
     /// `theme.minimum_contrast`; `None` leaves colors as resolved.
     pub theme_minimum_contrast: Option<f32>,
-    /// WGSL source, already resolved from `shader.post` by the caller
-    /// (this crate takes no paths). `None` keeps the single-pass path.
-    pub post_shader_wgsl: Option<String>,
+    /// The stages resolved from `shader.post` by the caller (this crate
+    /// takes no paths), in chain order. Empty keeps the single-pass path.
+    pub post_stages: Vec<PostStageSource>,
     /// Font files that replace the system's fonts for every face lookup
     /// (primary, styles, fallbacks); empty uses the system's. Fixed at
     /// construction: [`Renderer::reload_font`] keeps the renderer's own.
@@ -309,7 +311,7 @@ pub struct Renderer {
     image_scratch_under_bg: Vec<ImgInstance>,
     image_scratch_under_text: Vec<ImgInstance>,
     image_scratch_above: Vec<ImgInstance>,
-    post: Option<PostStage>,
+    post: Option<PostChain>,
     post_clock: PostClock,
     /// Kept even with no stage, so a shader enabled by a live reload
     /// starts from the current state rather than the origin.
@@ -387,8 +389,44 @@ struct Parts {
     bg_premultiplied: bool,
 }
 
+#[cfg(test)]
+#[cfg(not(windows))]
+pub(crate) mod test_gpu {
+    use super::{Backends, Device, Instance, InstanceDescriptor, Queue, UploadMode, warmup};
+
+    /// wgpu-core validates pipelines, bind groups and passes on the noop
+    /// backend too, so a mismatch fails here without a GPU.
+    pub(crate) fn noop_device() -> (Device, Queue, UploadMode) {
+        let mut desc = InstanceDescriptor {
+            backends: Backends::NOOP,
+            ..InstanceDescriptor::new_without_display_handle()
+        };
+        desc.backend_options.noop = wgpu::NoopBackendOptions {
+            enable: true,
+            ..wgpu::NoopBackendOptions::default()
+        };
+        let instance = Instance::new(desc);
+        warmup::block_on(async {
+            let adapter = super::request_adapter(&instance, None)
+                .await
+                .expect("noop adapter");
+            let (device, queue) = super::request_device(&adapter).await.expect("device");
+            (device, queue, UploadMode::for_adapter(&adapter))
+        })
+    }
+}
+
+fn log_refused_stage(refused: &Refused<'_>) {
+    tracing::error!(
+        stage = refused.source_index,
+        label = refused.label,
+        err = %refused.error,
+        "post-process stage refused; the chain runs without it",
+    );
+}
+
 fn offscreen_config(mut cfg: RendererConfig) -> Result<RendererConfig, RendererError> {
-    if cfg.post_shader_wgsl.is_some() {
+    if !cfg.post_stages.is_empty() {
         return Err(RendererError::OffscreenPostShader);
     }
     cfg.background_opacity = None;
@@ -733,17 +771,16 @@ impl Renderer {
             "GPU atlas allocation budget",
         );
 
-        // A refused shader is not a refused window: keep the single-pass
-        // path, as a live reload does.
-        let post = cfg.post_shader_wgsl.as_deref().and_then(|src| {
-            match PostStage::new(&device, upload_mode, format, width, height, src) {
-                Ok(stage) => Some(stage),
-                Err(err) => {
-                    tracing::error!(%err, "post-process shader refused; rendering without it");
-                    None
-                }
-            }
-        });
+        // A refused shader is not a refused window: drop that stage, as a
+        // live reload does.
+        let post = PostChain::new(
+            &device,
+            format,
+            upload_mode,
+            (width, height),
+            &cfg.post_stages,
+            &mut log_refused_stage,
+        );
 
         let theme = Self::theme_from_config(cfg);
         let resolved_theme = resolve_for_surface(&theme, bg_premultiplied);
@@ -839,32 +876,30 @@ impl Renderer {
             }
         }
         if let Some(post) = self.post.as_mut() {
-            post.resize(&self.device, self.format, self.width, self.height);
+            post.resize(&self.device, self.width, self.height);
         }
     }
 
-    pub fn set_post_shader(&mut self, wgsl: Option<&str>) -> Result<(), PostShaderError> {
-        match wgsl {
-            None => {
-                self.post = None;
-                Ok(())
-            }
-            Some(_) if matches!(self.target, Target::Offscreen(_)) => {
-                Err(PostShaderError::Offscreen)
-            }
-            Some(src) => {
-                let stage = PostStage::new(
-                    &self.device,
-                    self.upload_mode,
-                    self.format,
-                    self.width,
-                    self.height,
-                    src,
-                )?;
-                self.post = Some(stage);
-                Ok(())
-            }
+    /// Rebuilds the whole chain. A stage that fails validation is logged
+    /// and dropped while the rest still run, so the chain is the stages
+    /// that loaded, in order.
+    pub fn set_post_stages(&mut self, stages: &[PostStageSource]) -> Result<(), PostShaderError> {
+        if stages.is_empty() {
+            self.post = None;
+            return Ok(());
         }
+        if matches!(self.target, Target::Offscreen(_)) {
+            return Err(PostShaderError::Offscreen);
+        }
+        self.post = PostChain::new(
+            &self.device,
+            self.format,
+            self.upload_mode,
+            (self.width, self.height),
+            stages,
+            &mut log_refused_stage,
+        );
+        Ok(())
     }
 
     #[must_use]
@@ -1126,7 +1161,7 @@ impl Renderer {
             }
             Target::Offscreen(offscreen) => (None, offscreen.view.clone()),
         };
-        let cell_target = self.post.as_ref().map_or(&view, PostStage::target_view);
+        let cell_target = self.post.as_ref().map_or(&view, PostChain::cell_target);
         let mut encoder = self
             .device
             .create_command_encoder(&CommandEncoderDescriptor {
@@ -2174,7 +2209,7 @@ mod tests {
     #[test]
     fn new_offscreen_refuses_a_configured_post_shader() {
         let cfg = RendererConfig {
-            post_shader_wgsl: Some(TRAIL_SHADER_SOURCE.to_owned()),
+            post_stages: vec![trail_stage()],
             ..RendererConfig::default()
         };
         let result = warmup::block_on(Renderer::new_offscreen(8, 8, cfg, None));
@@ -2195,14 +2230,21 @@ mod tests {
 
     #[cfg(not(windows))]
     #[test]
-    fn set_post_shader_refuses_an_offscreen_target() {
+    fn set_post_stages_refuses_an_offscreen_target() {
         let mut renderer = offscreen_on(&noop_instance(), 8, 8, RendererConfig::default());
         assert!(matches!(
-            renderer.set_post_shader(Some(TRAIL_SHADER_SOURCE)),
+            renderer.set_post_stages(&[trail_stage()]),
             Err(PostShaderError::Offscreen)
         ));
         assert!(!renderer.has_post_shader());
-        assert!(renderer.set_post_shader(None).is_ok());
+        assert!(renderer.set_post_stages(&[]).is_ok());
+    }
+
+    fn trail_stage() -> PostStageSource {
+        PostStageSource {
+            label: "trail".to_owned(),
+            wgsl: TRAIL_SHADER_SOURCE.to_owned(),
+        }
     }
 
     /// 37 px rows are 148 bytes, padded to 256 for the copy: the

@@ -404,7 +404,7 @@ fn neither_rendering_prints_the_home_directory() {
     assert!(!json.contains(&full), "{json}");
     assert_eq!(object["environment"]["shell"]["term_program"], "~/bin/term");
     assert_eq!(
-        object["environment"]["config"]["diff"]["shader"]["post"]["file"],
+        object["environment"]["config"]["diff"]["shader"]["post"][0]["file"],
         "~/crt.wgsl"
     );
     let config_row = object["checks"]

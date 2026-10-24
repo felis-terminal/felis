@@ -54,6 +54,8 @@ pub enum PostShaderError {
     MissingEntryPoint,
     #[error("binding: {0}")]
     Binding(String),
+    #[error("device rejected the stage: {0}")]
+    Device(String),
     #[error("an offscreen renderer has no post-process stage")]
     Offscreen,
 }
@@ -301,31 +303,25 @@ pub struct PostFrame<'a> {
     pub focused: bool,
 }
 
-pub struct PostStage {
-    pipeline: RenderPipeline,
-    bind_group_layout: BindGroupLayout,
-    uniforms_ring: UniformRing,
-    sampler: Sampler,
-    target: Texture,
-    target_view: TextureView,
-    uniforms: PostUniforms,
+/// One entry of the chain the client resolved from `shader.post`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PostStageSource {
+    /// What the logs call the stage (a path, or the builtin's name).
+    pub label: String,
+    pub wgsl: String,
 }
 
-impl PostStage {
-    /// Validation runs before the device sees the source: wgpu turns a
-    /// shader-compilation failure into a panic on the device error
-    /// scope, so a bad user file has to be caught here to stay
-    /// recoverable.
-    pub(crate) fn new(
-        device: &Device,
-        upload_mode: UploadMode,
-        format: TextureFormat,
-        width: u32,
-        height: u32,
-        fragment_wgsl: &str,
-    ) -> Result<Self, PostShaderError> {
-        validate_post_shader(fragment_wgsl)?;
+/// What every stage of a chain shares.
+pub(crate) struct PostShared {
+    bind_group_layout: BindGroupLayout,
+    vertex_module: ShaderModule,
+    sampler: Sampler,
+    format: TextureFormat,
+    upload_mode: UploadMode,
+}
 
+impl PostShared {
+    pub(crate) fn new(device: &Device, format: TextureFormat, upload_mode: UploadMode) -> Self {
         let bind_group_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("felis post bgl"),
             entries: &post_bind_group_layout_entries(),
@@ -334,19 +330,6 @@ impl PostStage {
             label: Some("felis post vertex"),
             source: ShaderSource::Wgsl(POST_VERTEX_SOURCE.into()),
         });
-        let fragment_module = device.create_shader_module(ShaderModuleDescriptor {
-            label: Some("felis post fragment"),
-            source: ShaderSource::Wgsl(fragment_wgsl.into()),
-        });
-        let pipeline = build_post_pipeline(
-            device,
-            &bind_group_layout,
-            &vertex_module,
-            &fragment_module,
-            format,
-        );
-
-        let uniforms_ring = UniformRing::new("felis post uniforms", upload_mode);
         // Clamped, not repeating: an effect that samples a neighborhood
         // near an edge must not wrap the opposite side of the screen in.
         let sampler = device.create_sampler(&SamplerDescriptor {
@@ -358,15 +341,63 @@ impl PostStage {
             min_filter: FilterMode::Linear,
             ..Default::default()
         });
-        let (target, target_view) = create_target(device, format, width, height);
+        Self {
+            bind_group_layout,
+            vertex_module,
+            sampler,
+            format,
+            upload_mode,
+        }
+    }
 
+    pub(crate) const fn format(&self) -> TextureFormat {
+        self.format
+    }
+}
+
+/// The views one stage reads and writes this frame.
+#[derive(Clone, Copy)]
+pub(crate) struct StageIo<'a> {
+    pub(crate) input: &'a TextureView,
+    pub(crate) output: &'a TextureView,
+    pub(crate) resolution_px: [f32; 2],
+}
+
+pub(crate) struct PostStage {
+    pipeline: RenderPipeline,
+    uniforms_ring: UniformRing,
+    uniforms: PostUniforms,
+}
+
+impl PostStage {
+    /// The device is the final gate: the checks before it cannot know the
+    /// device's enabled features or match the fragment interface against
+    /// the fixed vertex stage, and an uncaptured device error panics, so
+    /// the module and pipeline are created inside a validation scope.
+    pub(crate) fn new(
+        device: &Device,
+        shared: &PostShared,
+        source: &PostStageSource,
+    ) -> Result<Self, PostShaderError> {
+        validate_post_shader(&source.wgsl)?;
+        let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let fragment_module = device.create_shader_module(ShaderModuleDescriptor {
+            label: Some("felis post fragment"),
+            source: ShaderSource::Wgsl(source.wgsl.as_str().into()),
+        });
+        let pipeline = build_post_pipeline(
+            device,
+            &shared.bind_group_layout,
+            &shared.vertex_module,
+            &fragment_module,
+            shared.format,
+        );
+        if let Some(error) = crate::warmup::block_on(scope.pop()) {
+            return Err(PostShaderError::Device(error.to_string()));
+        }
         Ok(Self {
             pipeline,
-            bind_group_layout,
-            uniforms_ring,
-            sampler,
-            target,
-            target_view,
+            uniforms_ring: UniformRing::new("felis post uniforms", shared.upload_mode),
             uniforms: PostUniforms::default(),
         })
     }
@@ -375,18 +406,9 @@ impl PostStage {
         self.uniforms_ring.submitted(index);
     }
 
-    pub const fn target_view(&self) -> &TextureView {
-        &self.target_view
-    }
-
-    pub fn resize(&mut self, device: &Device, format: TextureFormat, width: u32, height: u32) {
-        if self.target.width() == width.max(1) && self.target.height() == height.max(1) {
-            return;
-        }
-        let (target, target_view) = create_target(device, format, width, height);
+    /// After a view the bind group holds was replaced.
+    pub(crate) fn invalidate_bind_group(&mut self) {
         self.uniforms_ring.invalidate();
-        self.target = target;
-        self.target_view = target_view;
     }
 
     pub(crate) fn encode(
@@ -394,18 +416,16 @@ impl PostStage {
         encoder: &mut CommandEncoder,
         device: &Device,
         queue: &Queue,
-        output: &TextureView,
+        shared: &PostShared,
+        io: StageIo<'_>,
         inputs: StageInputs<'_>,
     ) {
-        self.uniforms.write_frame(
-            [self.target.width() as f32, self.target.height() as f32],
-            &inputs,
-        );
+        self.uniforms.write_frame(io.resolution_px, &inputs);
         self.uniforms_ring
             .write(device, queue, bytemuck::bytes_of(&self.uniforms));
-        let (layout, view, sampler) = (&self.bind_group_layout, &self.target_view, &self.sampler);
+        let (layout, sampler) = (&shared.bind_group_layout, &shared.sampler);
         self.uniforms_ring
-            .prepare_bind_group(|buf| create_bind_group(device, layout, buf, view, sampler));
+            .prepare_bind_group(|buf| create_bind_group(device, layout, buf, io.input, sampler));
         let Some(bind_group) = self.uniforms_ring.bind_group() else {
             return;
         };
@@ -413,7 +433,7 @@ impl PostStage {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("felis post pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: output,
+                view: io.output,
                 depth_slice: None,
                 resolve_target: None,
                 ops: Operations {
@@ -523,9 +543,8 @@ pub const fn post_bind_group_layout_entries() -> [BindGroupLayoutEntry; 3] {
     ]
 }
 
-/// Device-side compilation reports a missing entry point as a
-/// pipeline-creation panic rather than a value, hence the explicit
-/// entry-point check.
+/// Needs no device, so a missing entry point is reported by name rather
+/// than as the device's pipeline-creation error.
 pub fn validate_post_shader(source: &str) -> Result<(), PostShaderError> {
     let module = wgsl::parse_str(source).map_err(|e| PostShaderError::Parse(e.to_string()))?;
     Validator::new(ValidationFlags::all(), Capabilities::all())
@@ -542,9 +561,9 @@ pub fn validate_post_shader(source: &str) -> Result<(), PostShaderError> {
 }
 
 /// naga validates a module on its own, never against a pipeline layout, so
-/// a well-formed shader whose resources disagree with
-/// [`post_bind_group_layout_entries`] would reach pipeline creation and
-/// panic on the device error scope.
+/// a resource that disagrees with [`post_bind_group_layout_entries`] is
+/// otherwise reported only as the device's pipeline error, which does not
+/// name the binding.
 fn check_bindings(module: &Module) -> Result<(), PostShaderError> {
     for (_, var) in module.global_variables.iter() {
         if matches!(var.space, AddressSpace::Private | AddressSpace::WorkGroup) {
@@ -604,7 +623,7 @@ const fn is_sampled_float_2d(inner: &TypeInner) -> bool {
     )
 }
 
-fn build_post_pipeline(
+pub(crate) fn build_post_pipeline(
     device: &Device,
     bind_group_layout: &BindGroupLayout,
     vertex_module: &ShaderModule,
@@ -645,14 +664,14 @@ fn build_post_pipeline(
     })
 }
 
-fn create_target(
+pub(crate) fn create_target(
     device: &Device,
     format: TextureFormat,
     width: u32,
     height: u32,
 ) -> (Texture, TextureView) {
     let texture = device.create_texture(&TextureDescriptor {
-        label: Some("felis post target"),
+        label: Some("felis post texture"),
         size: Extent3d {
             width: width.max(1),
             height: height.max(1),
@@ -875,6 +894,33 @@ mod tests {
             "{globals}\n@fragment fn fs_post(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> \
              {{ return vec4<f32>(uv, 0.0, 1.0); }}"
         )
+    }
+
+    /// The negative control for the noop-device chain tests: the device
+    /// does compare a module against the layout, so a clean frame there
+    /// means the bindings agreed.
+    #[cfg(not(windows))]
+    #[test]
+    fn the_noop_device_rejects_a_pipeline_whose_bindings_disagree_with_the_layout() {
+        let (device, _queue, mode) = crate::test_gpu::noop_device();
+        let shared = PostShared::new(&device, TextureFormat::Rgba8UnormSrgb, mode);
+        let src = shader_with_globals("@group(0) @binding(1) var s: sampler;").replace(
+            "return vec4<f32>(uv, 0.0, 1.0);",
+            "_ = s; return vec4<f32>(uv, 0.0, 1.0);",
+        );
+        let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let module = device.create_shader_module(ShaderModuleDescriptor {
+            label: None,
+            source: ShaderSource::Wgsl(src.into()),
+        });
+        let _pipeline = build_post_pipeline(
+            &device,
+            &shared.bind_group_layout,
+            &shared.vertex_module,
+            &module,
+            shared.format,
+        );
+        assert!(crate::warmup::block_on(scope.pop()).is_some());
     }
 
     #[test]

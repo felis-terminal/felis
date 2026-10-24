@@ -62,7 +62,7 @@
       "$ref": "#/$defs/ShaderConfig",
       "default": {
         "animate": "never",
-        "post": null
+        "post": []
       }
     },
     "theme": {
@@ -887,8 +887,9 @@
         }
       ]
     },
-    "PostShader": {
-      "description": "What `shader.post` names: a shader felis ships, or a file.",
+    "PostStageConfig": {
+      "description": "One `shader.post` stage.",
+      "type": "object",
       "oneOf": [
         {
           "description": "A shader felis carries in the binary.",
@@ -898,7 +899,6 @@
               "$ref": "#/$defs/BuiltinShader"
             }
           },
-          "additionalProperties": false,
           "required": [
             "builtin"
           ]
@@ -911,10 +911,23 @@
               "type": "string"
             }
           },
-          "additionalProperties": false,
           "required": [
             "file"
           ]
+        }
+      ]
+    },
+    "PostStagesSchema": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/PostStageConfig"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PostStageConfig"
+          },
+          "maxItems": 16
         }
       ]
     },
@@ -993,16 +1006,9 @@
           "default": "never"
         },
         "post": {
-          "description": "Post-process shader, absent by default (no extra pass).\n`{ builtin = \"trail\" }` selects a shader felis ships;\n`{ file = \"…\" }` a WGSL file of your own. felis never scans a\ndirectory: what runs is what the config named.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/PostShader"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
+          "description": "Post-process stages, absent by default (no extra pass). One stage\ntable, or an array of them run in order, each sampling the one\nbefore it (at most 16). `{ builtin = \"trail\" }` selects a shader\nfelis ships; `{ file = \"…\" }` a WGSL file of your own. felis never\nscans a directory: what runs is what the config named.",
+          "$ref": "#/$defs/PostStagesSchema",
+          "default": []
         }
       }
     },

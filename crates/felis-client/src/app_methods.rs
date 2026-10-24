@@ -466,21 +466,18 @@ impl App {
         let stack_inputs_changed = font_stack_inputs_differ(&self.renderer_cfg, &new_renderer_cfg);
         let features_changed = font_features_differ(&self.renderer_cfg, &new_renderer_cfg);
         let reported_theme_changed = reported_theme_differs(&self.renderer_cfg, &new_renderer_cfg);
-        let post_shader_changed =
-            self.renderer_cfg.post_shader_wgsl != new_renderer_cfg.post_shader_wgsl;
+        let post_stages_changed = self.renderer_cfg.post_stages != new_renderer_cfg.post_stages;
         // The next `about_to_wait` arms or drops the animation wake-up off
         // the new policy.
         self.shader_clock.set_mode(cfg.shader.animate);
         if let Some(renderer) = self.renderer.as_mut() {
             renderer.set_theme(&Renderer::theme_from_config(&new_renderer_cfg));
-            // Swap only on a real change: rebuilding the pipeline would
-            // recompile the shader for an unrelated font edit. A refused
-            // shader keeps whatever is loaded.
-            if post_shader_changed
-                && let Err(err) =
-                    renderer.set_post_shader(new_renderer_cfg.post_shader_wgsl.as_deref())
+            // Rebuild only on a real change: rebuilding the chain would
+            // recompile every stage for an unrelated font edit.
+            if post_stages_changed
+                && let Err(err) = renderer.set_post_stages(&new_renderer_cfg.post_stages)
             {
-                error!(%err, "post-process shader refused; keeping the previous one");
+                error!(%err, "post-process stages refused");
             }
             if font_changed {
                 let logical = new_font_size.unwrap_or(DEFAULT_FONT_SIZE_LOGICAL_PX);
