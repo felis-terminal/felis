@@ -90,6 +90,8 @@ Information-oriented lookup; consulted, not read in order.
   the deferred- and rejected-cluster lists accounting for every remaining failure.
 - [Benchmarks](reference/benchmarks.md) — cross-terminal comparison harness, suite specifications, and published results
   on macOS and Linux against kitty, alacritty, wezterm, ghostty and foot.
+- [Accessibility tree](reference/accessibility.md) — the nodes each platform's screen reader sees, how grid rows map to
+  text, the caret and selection, and when the client sends updates.
 
 Protocols:
 
@@ -126,6 +128,8 @@ Understanding-oriented: the design record. Reading order, top to bottom.
 - [Input](explanation/input.md) — the input layers, keybinding design, the `pipe` action's carrier and transient
   session, "why pipe, not a copy mode", mouse and selection, the clipboard gates, and the bars that share the bottom
   chrome row.
+- [Accessibility](explanation/accessibility.md) — why felis exposes the terminal to screen readers on every platform,
+  why through AccessKit, and what it leaves to the screen reader.
 
 Architecture:
 
