@@ -1,8 +1,8 @@
 //! Windows named-pipe backend for the [`crate::local`] carrier facade.
 //!
-//! Enforces DACL per-instance and validates client SID before `Hello` (REQ-106)
-//! via `GetNamedPipeClientProcessId` and `OpenProcessToken`; a dialer checks
-//! the server's SID the same way through `GetNamedPipeServerProcessId`.
+//! Enforces DACL and label per-instance and validates the client's SID and
+//! integrity level before `Hello` (REQ-106) via `GetNamedPipeClientProcessId`;
+//! a dialer checks the server the same way via `GetNamedPipeServerProcessId`.
 
 use std::ffi::c_void;
 use std::io;
@@ -22,8 +22,8 @@ use windows_sys::Win32::Security::Authorization::{
     ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
 };
 use windows_sys::Win32::Security::{
-    GetTokenInformation, PSECURITY_DESCRIPTOR, PSID, SECURITY_ATTRIBUTES, TOKEN_QUERY, TOKEN_USER,
-    TokenUser,
+    GetTokenInformation, PSECURITY_DESCRIPTOR, PSID, SECURITY_ATTRIBUTES, SID_AND_ATTRIBUTES,
+    TOKEN_INFORMATION_CLASS, TOKEN_QUERY, TokenIntegrityLevel, TokenUser,
 };
 use windows_sys::Win32::System::Pipes::{GetNamedPipeClientProcessId, GetNamedPipeServerProcessId};
 use windows_sys::Win32::System::Threading::{
@@ -112,12 +112,28 @@ fn sid_to_string(psid: PSID) -> io::Result<String> {
     Ok(s)
 }
 
-fn token_user_sid_string(token: HANDLE) -> io::Result<String> {
+/// Who a process runs as. The integrity level is part of it because UAC
+/// gives the filtered and the elevated token of one login the same user
+/// SID: comparing SIDs alone would let a non-elevated process drive an
+/// elevated daemon.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Identity {
+    /// User SID, in SDDL string form (`S-1-5-…`).
+    pub(crate) sid: String,
+    /// Mandatory-label SID, in SDDL string form (`S-1-16-<rid>`).
+    pub(crate) integrity: String,
+}
+
+const MEDIUM_INTEGRITY: &str = "S-1-16-8192";
+
+/// Reads the SID heading a `TOKEN_USER` or `TOKEN_MANDATORY_LABEL`, both
+/// of which are a lone `SID_AND_ATTRIBUTES`.
+fn token_sid_string(token: HANDLE, class: TOKEN_INFORMATION_CLASS) -> io::Result<String> {
     let mut len: u32 = 0;
     // SAFETY: passing a null buffer with length 0 is the documented
     // size-probe form; `len` is a valid out-pointer.
     unsafe {
-        GetTokenInformation(token, TokenUser, ptr::null_mut(), 0, &raw mut len);
+        GetTokenInformation(token, class, ptr::null_mut(), 0, &raw mut len);
     }
     if len == 0 {
         return Err(io::Error::last_os_error());
@@ -125,24 +141,28 @@ fn token_user_sid_string(token: HANDLE) -> io::Result<String> {
     let mut buf = vec![0u8; len as usize];
     // SAFETY: `buf` is `len` bytes, exactly what the probe asked for;
     // the token handle is valid and opened with TOKEN_QUERY.
-    let ok = unsafe {
-        GetTokenInformation(token, TokenUser, buf.as_mut_ptr().cast(), len, &raw mut len)
-    };
+    let ok =
+        unsafe { GetTokenInformation(token, class, buf.as_mut_ptr().cast(), len, &raw mut len) };
     if ok == 0 {
         return Err(io::Error::last_os_error());
     }
-    // SAFETY: on success `buf` holds a TOKEN_USER followed by the SID
-    // bytes it points into; the struct's `User.Sid` is valid for the
-    // lifetime of `buf`, which outlives the sid_to_string call. Read
-    // unaligned because a `Vec<u8>` buffer carries no `TOKEN_USER`
-    // alignment guarantee; `User.Sid` still points into `buf`.
-    let psid = unsafe { buf.as_ptr().cast::<TOKEN_USER>().read_unaligned() }
-        .User
-        .Sid;
+    // SAFETY: on success `buf` holds the SID_AND_ATTRIBUTES both classes
+    // begin with, followed by the SID bytes its `Sid` points into; that
+    // pointer is valid for the lifetime of `buf`, which outlives the
+    // sid_to_string call. Read unaligned because a `Vec<u8>` buffer
+    // carries no alignment guarantee; `Sid` still points into `buf`.
+    let psid = unsafe { buf.as_ptr().cast::<SID_AND_ATTRIBUTES>().read_unaligned() }.Sid;
     sid_to_string(psid)
 }
 
-fn current_user_sid_string() -> io::Result<String> {
+fn token_identity(token: HANDLE) -> io::Result<Identity> {
+    Ok(Identity {
+        sid: token_sid_string(token, TokenUser)?,
+        integrity: token_sid_string(token, TokenIntegrityLevel)?,
+    })
+}
+
+fn current_identity() -> io::Result<Identity> {
     let mut token: HANDLE = ptr::null_mut();
     // SAFETY: GetCurrentProcess returns a pseudo-handle that needs no
     // closing; OpenProcessToken fills `token` with a real handle we
@@ -152,13 +172,16 @@ fn current_user_sid_string() -> io::Result<String> {
         return Err(io::Error::last_os_error());
     }
     let token = OwnedHandle(token);
-    token_user_sid_string(token.0)
+    token_identity(token.0)
 }
 
-fn security_descriptor_for(sid: &str) -> io::Result<SecurityDescriptor> {
+fn security_descriptor_for(identity: &Identity) -> io::Result<SecurityDescriptor> {
     // A protected (`P`) DACL whose lone allow-ACE implicitly denies
-    // everyone else.
-    let sddl = to_wide(&format!("D:P(A;;GA;;;{sid})"));
+    // everyone else, and a label refusing opens from below the owner's
+    // integrity level: without one the pipe is implicitly Medium, so an
+    // elevated daemon's pipe would admit a non-elevated open.
+    let Identity { sid, integrity } = identity;
+    let sddl = to_wide(&format!("D:P(A;;GA;;;{sid})S:(ML;;NWNR;;;{integrity})"));
     let mut psd: PSECURITY_DESCRIPTOR = ptr::null_mut();
     // SAFETY: `sddl` is a valid NUL-terminated wide string; `psd` is a
     // valid out-pointer; size out-pointer is null (we don't need it).
@@ -178,7 +201,7 @@ fn security_descriptor_for(sid: &str) -> io::Result<SecurityDescriptor> {
     Ok(SecurityDescriptor(psd))
 }
 
-fn client_sid_string(server: &NamedPipeServer) -> io::Result<String> {
+fn client_identity(server: &NamedPipeServer) -> io::Result<Identity> {
     let handle = server.as_raw_handle() as HANDLE;
     let mut pid: u32 = 0;
     // SAFETY: `handle` is the live server end of a connected pipe;
@@ -187,11 +210,11 @@ fn client_sid_string(server: &NamedPipeServer) -> io::Result<String> {
     if ok == 0 {
         return Err(io::Error::last_os_error());
     }
-    process_sid_string(pid)
+    process_identity(pid)
 }
 
-/// The dialer's twin of [`client_sid_string`] (REQ-106a).
-fn server_sid_string(client: &NamedPipeClient) -> io::Result<String> {
+/// The dialer's twin of [`client_identity`] (REQ-106a).
+fn server_identity(client: &NamedPipeClient) -> io::Result<Identity> {
     let handle = client.as_raw_handle() as HANDLE;
     let mut pid: u32 = 0;
     // SAFETY: `handle` is the live client end of a connected pipe;
@@ -200,10 +223,10 @@ fn server_sid_string(client: &NamedPipeClient) -> io::Result<String> {
     if ok == 0 {
         return Err(io::Error::last_os_error());
     }
-    process_sid_string(pid)
+    process_identity(pid)
 }
 
-fn process_sid_string(pid: u32) -> io::Result<String> {
+fn process_identity(pid: u32) -> io::Result<Identity> {
     // SAFETY: opening another process for limited query is sound; the
     // returned handle is wrapped in OwnedHandle and closed on drop.
     //
@@ -229,15 +252,35 @@ fn process_sid_string(pid: u32) -> io::Result<String> {
         return Err(io::Error::last_os_error());
     }
     let token = OwnedHandle(token);
-    token_user_sid_string(token.0)
+    token_identity(token.0)
 }
 
-/// `\\.\pipe\felis.<sid>.daemon`. The SID rather than a session id:
-/// stable across logins, and a per-user name keeps two users' daemons
-/// from colliding on `first_pipe_instance`.
+/// `\\.\pipe\felis.<sid>.daemon`, or `felis.<sid>.<level>.daemon` off
+/// Medium integrity. The SID rather than a session id: stable across
+/// logins, and a per-user name keeps two users' daemons from colliding on
+/// `first_pipe_instance`. The level keeps an elevated and a non-elevated
+/// daemon apart for the same reason.
 pub fn default_pipe_name() -> io::Result<String> {
-    let sid = current_user_sid_string()?;
-    Ok(format!(r"\\.\pipe\felis.{sid}.daemon"))
+    Ok(pipe_name_for(&current_identity()?))
+}
+
+fn pipe_name_for(identity: &Identity) -> String {
+    let sid = &identity.sid;
+    match integrity_tag(&identity.integrity) {
+        None => format!(r"\\.\pipe\felis.{sid}.daemon"),
+        Some(level) => format!(r"\\.\pipe\felis.{sid}.{level}.daemon"),
+    }
+}
+
+fn integrity_tag(integrity: &str) -> Option<String> {
+    let tag = match integrity {
+        MEDIUM_INTEGRITY => return None,
+        "S-1-16-4096" => "low".to_owned(),
+        "S-1-16-12288" => "high".to_owned(),
+        "S-1-16-16384" => "system".to_owned(),
+        other => format!("il{}", other.rsplit('-').next().unwrap_or(other)),
+    };
+    Some(tag)
 }
 
 /// Retries only `ERROR_PIPE_BUSY` (the documented client pattern); any
@@ -267,22 +310,22 @@ pub(crate) async fn connect(pipe_name: &str) -> io::Result<NamedPipeClient> {
     }
 }
 
-/// Refuses a pipe whose server runs as another user, before the caller
-/// writes its first byte (REQ-106).
+/// Refuses a pipe whose server runs as another user or at another
+/// integrity level, before the caller writes its first byte (REQ-106).
 pub(crate) fn verify_server(client: &NamedPipeClient) -> io::Result<()> {
-    verify_server_as(client, &current_user_sid_string()?)
+    verify_server_as(client, &current_identity()?)
 }
 
-/// [`verify_server`] against a given SID, so a single-account runner can
-/// still drive the reject arm.
-fn verify_server_as(client: &NamedPipeClient, expected: &str) -> io::Result<()> {
-    let peer = server_sid_string(client)?;
+/// [`verify_server`] against a given identity, so a single-account runner
+/// can still drive the reject arm.
+fn verify_server_as(client: &NamedPipeClient, expected: &Identity) -> io::Result<()> {
+    let peer = server_identity(client)?;
     admit(peer, expected).map_err(|err| io::Error::new(io::ErrorKind::PermissionDenied, err))
 }
 
 pub(crate) struct Listener {
     pipe_name: String,
-    expected_sid: String,
+    expected: Identity,
     security: SecurityDescriptor,
     /// Exactly one instance is always listening: `accept` creates the
     /// next before returning the connected one.
@@ -292,12 +335,12 @@ pub(crate) struct Listener {
 impl Listener {
     pub(crate) fn bind(endpoint: &Endpoint) -> Result<Self, BindError> {
         let pipe_name = endpoint.pipe_name().to_owned();
-        let expected_sid = current_user_sid_string().map_err(BindError::Io)?;
-        let security = security_descriptor_for(&expected_sid).map_err(BindError::Io)?;
+        let expected = current_identity().map_err(BindError::Io)?;
+        let security = security_descriptor_for(&expected).map_err(BindError::Io)?;
         let first = create_instance(&pipe_name, &security, true).map_err(BindError::Io)?;
         Ok(Self {
             pipe_name,
-            expected_sid,
+            expected,
             security,
             pending: Mutex::new(first),
         })
@@ -311,8 +354,8 @@ impl Listener {
         let connected = std::mem::replace(&mut *guard, next);
         drop(guard);
 
-        match client_sid_string(&connected) {
-            Ok(peer) => admit(peer, &self.expected_sid)
+        match client_identity(&connected) {
+            Ok(peer) => admit(peer, &self.expected)
                 .map(|()| connected)
                 .map_err(AcceptError::Peer),
             Err(e) => Err(AcceptError::Peer(PeerError::Sockopt(e))),
@@ -327,15 +370,26 @@ impl Listener {
 
 /// Free-standing so the reject arm is testable: a test can only connect
 /// as the user running it.
-fn admit(peer: String, expected: &str) -> Result<(), PeerError> {
-    if peer == expected {
-        return Ok(());
+fn admit(peer: Identity, expected: &Identity) -> Result<(), PeerError> {
+    if peer.sid != expected.sid {
+        warn!(peer = %peer.sid, expected = %expected.sid, "rejecting pipe peer with mismatched SID");
+        return Err(PeerError::SidMismatch {
+            peer: peer.sid,
+            expected: expected.sid.clone(),
+        });
     }
-    warn!(%peer, %expected, "rejecting pipe client with mismatched SID");
-    Err(PeerError::SidMismatch {
-        peer,
-        expected: expected.to_owned(),
-    })
+    if peer.integrity != expected.integrity {
+        warn!(
+            peer = %peer.integrity,
+            expected = %expected.integrity,
+            "rejecting pipe peer with mismatched integrity level"
+        );
+        return Err(PeerError::IntegrityMismatch {
+            peer: peer.integrity,
+            expected: expected.integrity.clone(),
+        });
+    }
+    Ok(())
 }
 
 /// `first` sets `first_pipe_instance`, so the create fails when another
@@ -370,14 +424,38 @@ mod tests {
     use windows_sys::Win32::Security::{
         ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, ACL_SIZE_INFORMATION, AclSizeInformation,
         DACL_SECURITY_INFORMATION, EqualSid, GetAce, GetAclInformation, GetLengthSid,
-        GetSecurityDescriptorControl, INHERITED_ACE, SE_DACL_PRESENT, SE_DACL_PROTECTED,
+        GetSecurityDescriptorControl, INHERITED_ACE, LABEL_SECURITY_INFORMATION, SE_DACL_PRESENT,
+        SE_DACL_PROTECTED, SYSTEM_MANDATORY_LABEL_ACE, TOKEN_USER,
     };
 
     use super::*;
 
-    /// `windows-sys` exports this only under `Win32_System_SystemServices`,
-    /// a feature not enabled for one `u8`.
+    /// `windows-sys` exports these only under `Win32_System_SystemServices`,
+    /// a feature not enabled for a few constants.
     const ACCESS_ALLOWED_ACE_TYPE: u8 = 0;
+    const SYSTEM_MANDATORY_LABEL_ACE_TYPE: u8 = 0x11;
+    const SYSTEM_MANDATORY_LABEL_NO_WRITE_UP: u32 = 0x1;
+    const SYSTEM_MANDATORY_LABEL_NO_READ_UP: u32 = 0x2;
+
+    const FOREIGN_SID: &str = "S-1-5-21-1111111111-2222222222-3333333333-1001";
+    const HIGH_INTEGRITY: &str = "S-1-16-12288";
+
+    fn identity(sid: &str, integrity: &str) -> Identity {
+        Identity {
+            sid: sid.to_owned(),
+            integrity: integrity.to_owned(),
+        }
+    }
+
+    /// The other side of the Medium/High line from this process, so the
+    /// mismatch is one UAC actually produces.
+    fn other_integrity() -> &'static str {
+        if current_identity().unwrap().integrity == HIGH_INTEGRITY {
+            MEDIUM_INTEGRITY
+        } else {
+            HIGH_INTEGRITY
+        }
+    }
 
     fn unique_pipe_name(tag: &str) -> String {
         static NEXT: AtomicU32 = AtomicU32::new(0);
@@ -603,7 +681,113 @@ mod tests {
         );
     }
 
-    /// REQ-106a, the `SO_PEERCRED` half: the SID compared is the
+    #[derive(Debug)]
+    struct LabelFacts {
+        ace_count: u32,
+        ace_type: u8,
+        mask: u32,
+        level: String,
+    }
+
+    fn label_facts_of(handle: HANDLE) -> LabelFacts {
+        let mut psd: PSECURITY_DESCRIPTOR = ptr::null_mut();
+        let mut psacl: *mut ACL = ptr::null_mut();
+        // SAFETY: as in `dacl_facts_of`; reading the label needs only
+        // READ_CONTROL, unlike the rest of the SACL.
+        let status = unsafe {
+            GetSecurityInfo(
+                handle,
+                SE_KERNEL_OBJECT,
+                LABEL_SECURITY_INFORMATION,
+                ptr::null_mut(),
+                ptr::null_mut(),
+                ptr::null_mut(),
+                &raw mut psacl,
+                &raw mut psd,
+            )
+        };
+        assert_eq!(status, 0, "GetSecurityInfo(LABEL) returned {status}");
+        assert!(!psacl.is_null(), "the pipe carries no label ACL at all");
+
+        let mut size = ACL_SIZE_INFORMATION {
+            AceCount: 0,
+            AclBytesInUse: 0,
+            AclBytesFree: 0,
+        };
+        // SAFETY: `psacl` is a valid ACL inside `psd`; the buffer/length
+        // pair describes the matching struct for AclSizeInformation.
+        let ok = unsafe {
+            GetAclInformation(
+                psacl,
+                (&raw mut size).cast(),
+                size_of::<ACL_SIZE_INFORMATION>() as u32,
+                AclSizeInformation,
+            )
+        };
+        assert_ne!(ok, 0, "GetAclInformation: {}", io::Error::last_os_error());
+        assert!(size.AceCount > 0, "the label ACL is empty");
+
+        let mut pace: *mut c_void = ptr::null_mut();
+        // SAFETY: `psacl` holds at least one ACE; `pace` receives a
+        // borrow into it.
+        let ok = unsafe { GetAce(psacl, 0, &raw mut pace) };
+        assert_ne!(ok, 0, "GetAce(0): {}", io::Error::last_os_error());
+        // SAFETY: every ACE begins with an ACE_HEADER; unaligned for the
+        // reason given in `ace_facts`.
+        let header = unsafe { pace.cast::<ACE_HEADER>().read_unaligned() };
+        // SAFETY: a label ACE is a SYSTEM_MANDATORY_LABEL_ACE (the type
+        // is asserted by the caller); the reads are field-address
+        // computations into the live ACE inside `psd`.
+        let (mask, level) = unsafe {
+            let ace = pace.cast::<SYSTEM_MANDATORY_LABEL_ACE>();
+            let mask = (&raw const (*ace).Mask).read_unaligned();
+            let sid: PSID = (&raw mut (*ace).SidStart).cast();
+            (mask, sid_to_string(sid).unwrap())
+        };
+
+        // SAFETY: `psd` came from GetSecurityInfo, whose documented
+        // deallocator is LocalFree; freed once, after the last read.
+        unsafe {
+            LocalFree(psd.cast());
+        }
+        LabelFacts {
+            ace_count: size.AceCount,
+            ace_type: header.AceType,
+            mask,
+            level,
+        }
+    }
+
+    /// The OS-enforced half of the integrity check: a lower-integrity
+    /// process cannot open the pipe for reading or writing at all.
+    #[tokio::test]
+    async fn the_pipe_label_refuses_opens_from_below_the_owners_integrity_level() {
+        let name = unique_pipe_name("label");
+        let listener = Listener::bind(&Endpoint::pipe(name)).unwrap();
+
+        let facts = {
+            let pending = listener.pending.lock().await;
+            label_facts_of(pending.as_raw_handle() as HANDLE)
+        };
+
+        assert_eq!(facts.ace_count, 1, "exactly one label ACE: {facts:?}");
+        assert_eq!(
+            facts.ace_type, SYSTEM_MANDATORY_LABEL_ACE_TYPE,
+            "the ACE must be a mandatory label: {facts:?}"
+        );
+        assert_eq!(
+            facts.mask,
+            SYSTEM_MANDATORY_LABEL_NO_WRITE_UP | SYSTEM_MANDATORY_LABEL_NO_READ_UP,
+            "the label must refuse both reads and writes from below: {facts:?}"
+        );
+        assert_eq!(
+            facts.level,
+            current_identity().unwrap().integrity,
+            "the label must sit at the owner's integrity level: {facts:?}"
+        );
+    }
+
+    /// REQ-106a, the `SO_PEERCRED` half: the identity compared is the
     /// connecting process's real one.
     #[tokio::test]
     async fn a_same_user_client_is_admitted_and_its_sid_is_the_one_checked() {
@@ -616,7 +800,7 @@ mod tests {
             server.read_exact(&mut buf).await.unwrap();
             assert_eq!(&buf, b"ping");
             server.write_all(b"pong").await.unwrap();
-            client_sid_string(&server).unwrap()
+            client_identity(&server).unwrap()
         });
 
         let mut client = connect(&name).await.unwrap();
@@ -628,8 +812,8 @@ mod tests {
         let observed = server_task.await.unwrap();
         assert_eq!(
             observed,
-            current_user_sid_string().unwrap(),
-            "the accept path must have resolved this process's own SID"
+            current_identity().unwrap(),
+            "the accept path must have resolved this process's own SID and integrity level"
         );
     }
 
@@ -667,8 +851,31 @@ mod tests {
         });
 
         let client = connect(&name).await.unwrap();
-        let err = verify_server_as(&client, "S-1-5-21-1111111111-2222222222-3333333333-1001")
+        let own = current_identity().unwrap();
+        let err = verify_server_as(&client, &identity(FOREIGN_SID, &own.integrity))
             .expect_err("a foreign server SID must be refused");
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+        drop(client);
+        assert_eq!(server_task.await.unwrap(), Vec::<u8>::new());
+    }
+
+    /// A same-user server at another integrity level is refused the same
+    /// way: an elevated client must not land in a non-elevated daemon.
+    #[tokio::test]
+    async fn a_server_at_another_integrity_level_is_refused_before_any_byte() {
+        let name = unique_pipe_name("dial-integrity");
+        let listener = Listener::bind(&Endpoint::pipe(name.clone())).unwrap();
+        let server_task = tokio::spawn(async move {
+            let mut server = listener.accept().await.unwrap();
+            let mut buf = Vec::new();
+            server.read_to_end(&mut buf).await.ok();
+            buf
+        });
+
+        let client = connect(&name).await.unwrap();
+        let own = current_identity().unwrap();
+        let err = verify_server_as(&client, &identity(&own.sid, other_integrity()))
+            .expect_err("a server at another integrity level must be refused");
         assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
         drop(client);
         assert_eq!(server_task.await.unwrap(), Vec::<u8>::new());
@@ -680,9 +887,13 @@ mod tests {
     #[test]
     fn a_mismatched_client_sid_is_rejected_naming_both_sids() {
         let peer = "S-1-5-21-1111111111-2222222222-3333333333-1002";
-        let expected = "S-1-5-21-1111111111-2222222222-3333333333-1001";
+        let expected = FOREIGN_SID;
 
-        let err = admit(peer.to_owned(), expected).expect_err("a foreign SID must be rejected");
+        let err = admit(
+            identity(peer, MEDIUM_INTEGRITY),
+            &identity(expected, MEDIUM_INTEGRITY),
+        )
+        .expect_err("a foreign SID must be rejected");
 
         match err {
             PeerError::SidMismatch {
@@ -696,11 +907,29 @@ mod tests {
         }
     }
 
+    /// The UAC case: one user SID, a filtered and an elevated token.
+    #[test]
+    fn a_same_user_client_at_another_integrity_level_is_rejected_naming_both_levels() {
+        let err = admit(
+            identity(FOREIGN_SID, MEDIUM_INTEGRITY),
+            &identity(FOREIGN_SID, HIGH_INTEGRITY),
+        )
+        .expect_err("a lower-integrity client of the same user must be rejected");
+
+        match err {
+            PeerError::IntegrityMismatch { peer, expected } => {
+                assert_eq!(peer, MEDIUM_INTEGRITY);
+                assert_eq!(expected, HIGH_INTEGRITY);
+            }
+            other => panic!("expected PeerError::IntegrityMismatch, got {other:?}"),
+        }
+    }
+
     /// Pinned separately so a rule rejecting everything fails here.
     #[test]
-    fn a_matching_client_sid_is_admitted() {
-        let sid = current_user_sid_string().unwrap();
-        assert!(admit(sid.clone(), &sid).is_ok());
+    fn a_matching_client_identity_is_admitted() {
+        let own = current_identity().unwrap();
+        assert!(admit(own.clone(), &own).is_ok());
     }
 
     #[tokio::test]
@@ -719,7 +948,7 @@ mod tests {
     #[test]
     fn the_default_pipe_name_carries_the_user_sid() {
         let name = default_pipe_name().unwrap();
-        let sid = current_user_sid_string().unwrap();
+        let sid = current_identity().unwrap().sid;
         assert!(
             name.starts_with(r"\\.\pipe\felis.") && name.ends_with(".daemon"),
             "unexpected default pipe name: {name}"
@@ -727,9 +956,35 @@ mod tests {
         assert!(name.contains(&sid), "{name} must carry the user SID {sid}");
     }
 
+    /// The common non-elevated name stays what it always was, so a
+    /// daemon that predates the integrity split is still found.
+    #[test]
+    fn a_medium_integrity_pipe_name_carries_no_level() {
+        assert_eq!(
+            pipe_name_for(&identity(FOREIGN_SID, MEDIUM_INTEGRITY)),
+            format!(r"\\.\pipe\felis.{FOREIGN_SID}.daemon")
+        );
+    }
+
+    #[test]
+    fn an_elevated_pipe_name_differs_from_the_non_elevated_one() {
+        assert_eq!(
+            pipe_name_for(&identity(FOREIGN_SID, HIGH_INTEGRITY)),
+            format!(r"\\.\pipe\felis.{FOREIGN_SID}.high.daemon")
+        );
+    }
+
+    #[test]
+    fn an_unnamed_integrity_level_is_spelled_by_its_rid() {
+        assert_eq!(
+            pipe_name_for(&identity(FOREIGN_SID, "S-1-16-8448")),
+            format!(r"\\.\pipe\felis.{FOREIGN_SID}.il8448.daemon")
+        );
+    }
+
     /// A descriptor with no DACL would admit everyone.
     #[test]
     fn a_malformed_sid_fails_the_descriptor_build() {
-        assert!(security_descriptor_for("not-a-sid").is_err());
+        assert!(security_descriptor_for(&identity("not-a-sid", MEDIUM_INTEGRITY)).is_err());
     }
 }

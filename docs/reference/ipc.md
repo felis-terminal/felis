@@ -47,10 +47,11 @@ The OS-specific local carrier is named in one place, `felis-transport`'s `local`
 - **Windows:** a named pipe. Pipes live in `\\.\pipe\`, not the filesystem
   (<https://learn.microsoft.com/en-us/windows/win32/ipc/pipe-names>), so the Unix `0700`-dir and stale-socket cleanup do
   not apply: a pipe vanishes when its last instance handle closes. The default endpoint is
-  `\\.\pipe\felis.<sid>.daemon`, disambiguated per user by SID string (stable, unlike a volatile session id). Peer
-  authentication is a per-instance DACL plus an active SID check by both sides (the daemon on the client, the dialer on
-  the server): the named-pipe analogue of the Unix `0600` + peer-UID pair; see
-  [security-model.md](../explanation/security-model.md) "Daemon IPC".
+  `\\.\pipe\felis.<sid>.daemon`, disambiguated per user by SID string (stable, unlike a volatile session id). A process
+  off Medium integrity inserts its level before `.daemon` (`high`, `low`, `system`, or `il<rid>`), so an elevated and a
+  non-elevated daemon of one user coexist. Peer authentication is a per-instance DACL and mandatory label plus an active
+  SID and integrity-level check by both sides (the daemon on the client, the dialer on the server): the named-pipe
+  analogue of the Unix `0600` + peer-UID pair; see [security-model.md](../explanation/security-model.md) "Daemon IPC".
 
 For Windows carrier design rationale and rejected alternatives, see
 [ipc.md](../explanation/architecture/ipc.md#carrier-choices).

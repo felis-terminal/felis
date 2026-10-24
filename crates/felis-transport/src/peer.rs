@@ -1,6 +1,6 @@
 //! Peer-identity verification per `docs/explanation/security-model.md`
-//! "Daemon IPC". Windows verifies the pipe client's token SID in
-//! `crate::windows` instead.
+//! "Daemon IPC". Windows verifies the pipe client's token SID and
+//! integrity level in `crate::windows` instead.
 
 use thiserror::Error;
 
@@ -20,6 +20,13 @@ pub enum PeerError {
     #[error("peer SID {peer} does not match expected SID {expected}")]
     SidMismatch {
         /// Reported peer SID, in SDDL string form (`S-1-5-…`).
+        peer: String,
+        expected: String,
+    },
+    #[cfg(windows)]
+    #[error("peer integrity level {peer} does not match expected integrity level {expected}")]
+    IntegrityMismatch {
+        /// Reported peer mandatory label, in SDDL string form (`S-1-16-…`).
         peer: String,
         expected: String,
     },
