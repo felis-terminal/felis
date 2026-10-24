@@ -13,7 +13,8 @@ use wgpu::{
 
 use crate::buffer_ring::UploadMode;
 use crate::post::{
-    PostShaderError, PostShared, PostStage, PostStageSource, StageInputs, StageIo, create_target,
+    AnimationRun, PostShaderError, PostShared, PostStage, PostStageSource, StageInputs, StageIo,
+    create_target,
 };
 
 /// Copies the final stage's own texture to the swapchain when that stage
@@ -240,7 +241,7 @@ impl PostChain {
             .iter()
             .enumerate()
             .filter_map(|(source_index, source)| {
-                PostStage::new(device, &shared, source)
+                PostStage::new(device, &shared, source_index, source)
                     .map_err(|error| {
                         refused(&Refused {
                             source_index,
@@ -298,6 +299,25 @@ impl PostChain {
         }
         if let Some(blit) = self.blit.as_mut() {
             blit.bind_group = None;
+        }
+    }
+
+    /// `false` when the stage at `source_index` did not load.
+    pub(crate) fn start_animation(&mut self, source_index: usize, run: AnimationRun) -> bool {
+        self.stages
+            .iter_mut()
+            .find(|stage| stage.source_index() == source_index)
+            .map(|stage| stage.start_animation(run))
+            .is_some()
+    }
+
+    pub(crate) fn stop_animation(&mut self, source_index: usize) {
+        if let Some(stage) = self
+            .stages
+            .iter_mut()
+            .find(|stage| stage.source_index() == source_index)
+        {
+            stage.stop_animation();
         }
     }
 
@@ -525,6 +545,19 @@ mod tests {
             .expect("two stages load");
             assert_eq!(refused, [(1, "broken".to_owned())]);
             assert_eq!(chain.stages.len(), 2);
+            let run = AnimationRun {
+                start: Instant::now(),
+                duration: std::time::Duration::from_millis(300),
+            };
+            let mut chain = chain;
+            assert!(
+                chain.start_animation(2, run),
+                "a loaded stage keeps its source index"
+            );
+            assert!(
+                !chain.start_animation(1, run),
+                "the refused stage takes no run"
+            );
         }
 
         #[test]
@@ -565,6 +598,23 @@ mod tests {
                 encode_one_frame(&device, &queue, &mut chain).map(|e| e.to_string()),
                 None
             );
+        }
+
+        #[test]
+        fn stopping_a_stage_drops_only_its_run() {
+            let (device, _queue, mode) = noop_device();
+            let sources = [source("a", PASSTHROUGH), source("b", PASSTHROUGH)];
+            let mut chain = PostChain::new(&device, FORMAT, mode, (16, 8), &sources, &mut |_| {})
+                .expect("loads");
+            let run = AnimationRun {
+                start: Instant::now(),
+                duration: std::time::Duration::from_millis(300),
+            };
+            assert!(chain.start_animation(0, run));
+            assert!(chain.start_animation(1, run));
+            chain.stop_animation(1);
+            let runs: Vec<_> = chain.stages.iter().map(PostStage::animation).collect();
+            assert_eq!(runs, [Some(run), None]);
         }
 
         #[test]

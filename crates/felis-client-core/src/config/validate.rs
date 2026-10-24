@@ -8,7 +8,7 @@ use serde::de::DeserializeOwned;
 use super::{
     Backdrop, ConfigDiagnostics, CursorBlinkMode, DiagnosticKind, EffectiveConfig, FontSizeIssue,
     IndexedSlotError, MAX_POST_STAGES, Osc52Policy, PostShader, RangeIssue, ShaderAnimation,
-    StageParse, fallback_entry, indexed_slot, parse_stage, post_stage_entries,
+    ShaderEvent, StageParse, fallback_entry, indexed_slot, parse_stage, post_stage_entries,
 };
 
 /// Which half of the document a merged value came from. The merged table
@@ -60,6 +60,7 @@ pub(super) fn run(
     palette(config, origin, diagnostics);
     keymap(config, origin, diagnostics);
     post_stages(config, document, origin, diagnostics);
+    unheard_shader_events(config, origin, diagnostics);
     closed_enums(document, origin, diagnostics);
 }
 
@@ -266,6 +267,34 @@ fn keymap(config: &EffectiveConfig, origin: &KeyOrigin<'_>, diagnostics: &mut Co
     );
 }
 
+/// A `shader_event` binding no stage listens for is a no-op at runtime,
+/// which a typo in either name would otherwise leave silent.
+fn unheard_shader_events(
+    config: &EffectiveConfig,
+    origin: &KeyOrigin<'_>,
+    diagnostics: &mut ConfigDiagnostics,
+) {
+    for (chord, name) in config.keymap.shader_event_names() {
+        let heard = config
+            .shader
+            .post
+            .iter()
+            .filter_map(|stage| stage.animation.as_ref())
+            .flat_map(|animation| &animation.on)
+            .any(|event| matches!(event, ShaderEvent::User(user) if *user == name));
+        if !heard {
+            diagnostics.warning(
+                DiagnosticKind::Value,
+                Some(origin.attribute(&["keymap", chord], &format!("keymap.\"{chord}\""))),
+                format!(
+                    "no `shader.post` stage lists `user:{name}` in `animation.on`; the binding \
+                     does nothing"
+                ),
+            );
+        }
+    }
+}
+
 /// Re-reads the document rather than [`EffectiveConfig`]: a skipped stage
 /// leaves nothing behind there, and the stage paths must count the entries
 /// as written. A missing shader file is a warning, not an error: the
@@ -301,7 +330,15 @@ fn post_stages(
             Ok(StageParse::Loaded {
                 stage,
                 unknown_keys,
+                animation_issue,
             }) => {
+                if let Some(issue) = animation_issue {
+                    diagnostics.warning(
+                        DiagnosticKind::Value,
+                        Some(origin.attribute(&path, &format!("{written}.animation"))),
+                        format!("{issue}; the stage loads without animation"),
+                    );
+                }
                 for key in unknown_keys {
                     diagnostics.warning(
                         DiagnosticKind::UnknownKey,

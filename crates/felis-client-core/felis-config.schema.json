@@ -430,6 +430,25 @@
             "kind",
             "command"
           ]
+        },
+        {
+          "description": "Fire the `user:<name>` event: every post-process stage whose\n`animation.on` lists it starts its animation.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "shader_event"
+            },
+            "name": {
+              "description": "1 to 63 of `A-Z a-z 0-9 _ . -`.",
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "name"
+          ]
         }
       ]
     },
@@ -907,6 +926,17 @@
       "description": "One `shader.post` stage.",
       "type": "object",
       "properties": {
+        "animation": {
+          "description": "Play the stage's animation once per matching event:\n`animation_progress` runs from 0 to 1 over `duration_ms`, while felis\ndraws frames, then holds at 1. An invalid table leaves the stage\nloaded without animation and warns.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StageAnimation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "params": {
           "description": "Values for the shader's WGSL `override` declarations, keyed by the\noverride's name: a boolean, an integer, or a float, checked\nagainst the declared type when the stage loads.",
           "type": "object",
@@ -1036,6 +1066,36 @@
           "default": []
         }
       }
+    },
+    "ShaderEvent": {
+      "description": "`bell`, `focus_in`, `focus_out`, `left_press`, or `user:<name>` for a `shader_event` keymap binding of that name.",
+      "type": "string",
+      "pattern": "^(bell|focus_in|focus_out|left_press|user:[A-Za-z0-9_.-]{1,63})$"
+    },
+    "StageAnimation": {
+      "description": "A stage's `animation` table.",
+      "type": "object",
+      "properties": {
+        "duration_ms": {
+          "description": "How long one run takes, in `1..=10000` milliseconds.",
+          "type": "integer",
+          "format": "uint32",
+          "maximum": 10000,
+          "minimum": 1
+        },
+        "on": {
+          "description": "The events that (re)start the animation.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ShaderEvent"
+          },
+          "minItems": 1
+        }
+      },
+      "required": [
+        "on",
+        "duration_ms"
+      ]
     },
     "SwitchDirection": {
       "oneOf": [

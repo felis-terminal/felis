@@ -37,6 +37,8 @@ pub mod selection;
 pub mod session_id;
 #[cfg(feature = "native")]
 pub mod shader_clock;
+#[cfg(feature = "native")]
+pub mod shader_events;
 pub mod shadow;
 #[cfg(feature = "native")]
 pub mod spawn;

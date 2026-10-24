@@ -1,7 +1,13 @@
 #![recursion_limit = "256"]
 #![doc = include_str!("../README.md")]
 
-use std::{collections::BTreeMap, num::NonZeroU32, path::PathBuf, sync::Arc, time::Instant};
+use std::{
+    collections::BTreeMap,
+    num::NonZeroU32,
+    path::PathBuf,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use bytemuck::cast_slice;
 use felis_grid::{
@@ -71,7 +77,7 @@ use crate::{
         decoration_instance_layout, fg_instance_layout, glyph_bind_group_layout_entries,
         img_instance_layout, viewport_bind_group_layout_entries,
     },
-    post::{PostClock, PostFrame, StageInputs},
+    post::{AnimationRun, PostClock, PostFrame, StageInputs},
     post_chain::{PostChain, Refused},
     row_cache::{CellFrame, RowCache},
     texture_upload::TextureUploader,
@@ -900,6 +906,28 @@ impl Renderer {
             &mut log_refused_stage,
         );
         Ok(())
+    }
+
+    /// (Re)starts the animation of the stage at `stage` in the slice
+    /// [`Self::set_post_stages`] was given, from `at`. `false` when that
+    /// stage did not load, so nothing will draw the run.
+    pub fn start_post_animation(&mut self, stage: usize, at: Instant, duration: Duration) -> bool {
+        self.post.as_mut().is_some_and(|chain| {
+            chain.start_animation(
+                stage,
+                AnimationRun {
+                    start: at,
+                    duration,
+                },
+            )
+        })
+    }
+
+    /// Drops the run of the stage at `stage`, which then reads as idle.
+    pub fn stop_post_animation(&mut self, stage: usize) {
+        if let Some(chain) = self.post.as_mut() {
+            chain.stop_animation(stage);
+        }
     }
 
     #[must_use]

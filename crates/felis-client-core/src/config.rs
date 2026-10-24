@@ -226,6 +226,125 @@ pub struct PostStageConfig {
     /// against the declared type when the stage loads.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub params: BTreeMap<String, PostParamValue>,
+    /// Play the stage's animation once per matching event:
+    /// `animation_progress` runs from 0 to 1 over `duration_ms`, while felis
+    /// draws frames, then holds at 1. An invalid table leaves the stage
+    /// loaded without animation and warns.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub animation: Option<StageAnimation>,
+}
+
+/// A stage's `animation` table.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct StageAnimation {
+    /// The events that (re)start the animation.
+    #[cfg_attr(feature = "schema", schemars(length(min = 1)))]
+    pub on: Vec<ShaderEvent>,
+    /// How long one run takes, in `1..=10000` milliseconds.
+    #[cfg_attr(feature = "schema", schemars(range(min = 1, max = 10000)))]
+    pub duration_ms: u32,
+}
+
+/// Longest `animation.duration_ms`, so an animation stays a bounded
+/// redraw burst rather than a slow continuous loop.
+pub const MAX_ANIMATION_MS: u32 = 10_000;
+
+/// What starts a stage's animation (`animation.on`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ShaderEvent {
+    /// A bell from the attached session.
+    Bell,
+    FocusIn,
+    FocusOut,
+    /// A left mouse press inside the window, whether or not the program
+    /// reports the mouse.
+    LeftPress,
+    /// Fired by a `shader_event` keymap binding with this name.
+    User(String),
+}
+
+impl ShaderEvent {
+    fn parse(token: &str) -> Option<Self> {
+        match token {
+            "bell" => Some(Self::Bell),
+            "focus_in" => Some(Self::FocusIn),
+            "focus_out" => Some(Self::FocusOut),
+            "left_press" => Some(Self::LeftPress),
+            _ => token
+                .strip_prefix("user:")
+                .filter(|name| crate::action::is_shader_event_name(name))
+                .map(|name| Self::User(name.to_owned())),
+        }
+    }
+}
+
+impl std::fmt::Display for ShaderEvent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Bell => f.write_str("bell"),
+            Self::FocusIn => f.write_str("focus_in"),
+            Self::FocusOut => f.write_str("focus_out"),
+            Self::LeftPress => f.write_str("left_press"),
+            Self::User(name) => write!(f, "user:{name}"),
+        }
+    }
+}
+
+impl Serialize for ShaderEvent {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for ShaderEvent {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "ShaderEvent".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "description": "`bell`, `focus_in`, `focus_out`, `left_press`, or `user:<name>` for a `shader_event` keymap binding of that name.",
+            "type": "string",
+            "pattern": "^(bell|focus_in|focus_out|left_press|user:[A-Za-z0-9_.-]{1,63})$",
+        })
+    }
+}
+
+/// A stage's `animation` table; `Err` says why it was set aside.
+fn parse_animation(value: &toml::Value) -> Result<StageAnimation, String> {
+    let table = value
+        .as_table()
+        .ok_or_else(|| "`animation` takes a table with `on` and `duration_ms`".to_owned())?;
+    let duration_ms = match table.get("duration_ms") {
+        None => return Err("`duration_ms` is required".to_owned()),
+        Some(toml::Value::Integer(ms)) => u32::try_from(*ms)
+            .ok()
+            .filter(|ms| (1..=MAX_ANIMATION_MS).contains(ms))
+            .ok_or_else(|| format!("`duration_ms` {ms} is outside 1..={MAX_ANIMATION_MS}"))?,
+        Some(_) => return Err("`duration_ms` takes an integer".to_owned()),
+    };
+    let on = match table.get("on") {
+        None => return Err("`on` is required".to_owned()),
+        Some(toml::Value::Array(events)) if !events.is_empty() => events
+            .iter()
+            .map(|event| {
+                event
+                    .as_str()
+                    .and_then(ShaderEvent::parse)
+                    .ok_or_else(|| format!("`on` entry {event} is not a known event"))
+            })
+            .collect::<Result<Vec<_>, _>>()?,
+        Some(_) => return Err("`on` takes a non-empty array of events".to_owned()),
+    };
+    if let Some(key) = table
+        .keys()
+        .find(|key| !matches!(key.as_str(), "on" | "duration_ms"))
+    {
+        return Err(format!("unknown key `{key}`"));
+    }
+    Ok(StageAnimation { on, duration_ms })
 }
 
 /// A `params` value. Only scalars: WGSL overrides are scalars.
@@ -286,6 +405,7 @@ pub enum PostShaderChoice {
 pub struct ResolvedPostStage {
     pub shader: PostShaderChoice,
     pub params: BTreeMap<String, PostParamValue>,
+    pub animation: Option<StageAnimation>,
 }
 
 impl ShaderConfig {
@@ -301,6 +421,7 @@ impl ShaderConfig {
                     }
                 },
                 params: stage.params.clone(),
+                animation: stage.animation.clone(),
             })
             .collect()
     }
@@ -377,13 +498,15 @@ pub(super) fn post_stage_entries(
 }
 
 /// Keys a stage table carries besides its selector.
-const STAGE_KEYS: [&str; 1] = ["params"];
+const STAGE_KEYS: [&str; 2] = ["params", "animation"];
 
 pub(super) enum StageParse {
     Loaded {
         stage: PostStageConfig,
         /// Keys the stage table has that this build does not know.
         unknown_keys: Vec<String>,
+        /// Why the stage's `animation` table was set aside, if it was.
+        animation_issue: Option<String>,
     },
     /// A selector or builtin this build does not know, or a param value
     /// no override can take: the stage is dropped. `key_suffix` extends
@@ -466,9 +589,19 @@ pub(super) fn parse_stage(value: &toml::Value) -> Result<StageParse, String> {
         }
         Some(_) => return Err("`params` takes a table of override values".to_owned()),
     };
+    let (animation, animation_issue) = match table.get("animation").map(parse_animation) {
+        None => (None, None),
+        Some(Ok(animation)) => (Some(animation), None),
+        Some(Err(issue)) => (None, Some(issue)),
+    };
     Ok(StageParse::Loaded {
-        stage: PostStageConfig { shader, params },
+        stage: PostStageConfig {
+            shader,
+            params,
+            animation,
+        },
         unknown_keys,
+        animation_issue,
     })
 }
 
@@ -626,6 +759,17 @@ impl KeymapConfig {
                 );
                 continue;
             }
+            if let BindingValue::ShaderEvent { name } = &binding
+                && !crate::action::is_shader_event_name(name)
+            {
+                on_dropped(
+                    chord_str,
+                    format!(
+                        "`shader_event` name `{name}` is not 1-63 of `A-Z a-z 0-9 _ . -`, dropping"
+                    ),
+                );
+                continue;
+            }
             // An unrecognized backslash sequence is a config error
             // (docs/explanation/input.md "Action mapping"), never sent
             // literally by the dispatcher.
@@ -641,6 +785,24 @@ impl KeymapConfig {
             out.push((chord, resolve_binding_paths(binding, base_dir)));
         }
         out
+    }
+}
+
+impl KeymapConfig {
+    /// `(chord as written, name)` for each well-formed `shader_event`
+    /// binding.
+    pub(super) fn shader_event_names(&self) -> Vec<(&str, String)> {
+        self.entries
+            .iter()
+            .filter_map(|(chord, value)| match value.clone().try_into() {
+                Ok(BindingValue::ShaderEvent { name })
+                    if crate::action::is_shader_event_name(&name) =>
+                {
+                    Some((chord.as_str(), name))
+                }
+                _ => None,
+            })
+            .collect()
     }
 }
 
@@ -1381,6 +1543,133 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn an_animation_table_names_its_events_and_duration() {
+        let cfg: EffectiveConfig = toml::from_str(
+            "[shader]\npost = { builtin = \"trail\", animation = { on = [\"bell\", \"focus_in\", \"focus_out\", \"left_press\", \"user:glow.v2\"], duration_ms = 300 } }\n",
+        )
+        .unwrap();
+        assert_eq!(
+            cfg.shader.post[0].animation,
+            Some(StageAnimation {
+                on: vec![
+                    ShaderEvent::Bell,
+                    ShaderEvent::FocusIn,
+                    ShaderEvent::FocusOut,
+                    ShaderEvent::LeftPress,
+                    ShaderEvent::User("glow.v2".to_owned()),
+                ],
+                duration_ms: 300,
+            })
+        );
+        let json = serde_json::to_string(&cfg).unwrap();
+        assert!(json.contains("\"user:glow.v2\""), "{json}");
+        let back: EffectiveConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, cfg);
+    }
+
+    #[test]
+    fn an_invalid_animation_table_loads_the_stage_without_animation_and_warns() {
+        for animation in [
+            "{ on = [\"bell\"], duration_ms = 0 }",
+            "{ on = [\"bell\"], duration_ms = 10001 }",
+            "{ on = [\"bell\"], duration_ms = -5 }",
+            "{ on = [\"bell\"], duration_ms = 1.5 }",
+            "{ on = [\"bell\"] }",
+            "{ duration_ms = 300 }",
+            "{ on = [], duration_ms = 300 }",
+            "{ on = [\"\"], duration_ms = 300 }",
+            "{ on = [\"beep\"], duration_ms = 300 }",
+            "{ on = [\"user:\"], duration_ms = 300 }",
+            "{ on = [\"user:has space\"], duration_ms = 300 }",
+            "{ on = [\"bell\"], duration_ms = 300, loop = true }",
+            "\"bell\"",
+        ] {
+            let (cfg, diagnostics) = ConfigDocument::parse(
+                &format!("[shader]\npost = {{ builtin = \"trail\", animation = {animation} }}\n"),
+                None,
+            )
+            .unwrap()
+            .resolve("felis");
+            assert_eq!(cfg.shader.post.len(), 1, "{animation}");
+            assert_eq!(cfg.shader.post[0].animation, None, "{animation}");
+            let warning = only_warning(&diagnostics);
+            assert_eq!(
+                warning.key.as_deref(),
+                Some("shader.post.animation"),
+                "{animation}"
+            );
+            assert!(warning.message.contains("without animation"), "{warning:?}");
+        }
+    }
+
+    #[test]
+    fn the_longest_and_shortest_durations_are_accepted_unclamped() {
+        for ms in [1, MAX_ANIMATION_MS] {
+            let cfg: EffectiveConfig = toml::from_str(&format!(
+                "[shader]\npost = {{ builtin = \"trail\", animation = {{ on = [\"bell\"], duration_ms = {ms} }} }}\n"
+            ))
+            .unwrap();
+            assert_eq!(
+                cfg.shader.post[0].animation.as_ref().map(|a| a.duration_ms),
+                Some(ms)
+            );
+        }
+    }
+
+    #[test]
+    fn a_shader_event_binding_compiles_to_its_action() {
+        let (cfg, diagnostics) = ConfigDocument::parse(
+            concat!(
+                "[shader]\npost = { builtin = \"trail\", animation = { on = [\"user:glow\"], duration_ms = 300 } }\n",
+                "[keymap]\n\"ctrl+shift+g\" = { kind = \"shader_event\", name = \"glow\" }\n",
+            ),
+            None,
+        )
+        .unwrap()
+        .resolve("felis");
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        let compiled = cfg.keymap.compile(None);
+        assert_eq!(
+            compiled[0].1.clone().into_action(),
+            Some(Action::ShaderEvent {
+                name: "glow".to_owned()
+            })
+        );
+    }
+
+    #[test]
+    fn a_shader_event_binding_with_a_malformed_name_is_dropped() {
+        let (cfg, diagnostics) = ConfigDocument::parse(
+            "[keymap]\n\"ctrl+shift+g\" = { kind = \"shader_event\", name = \"two words\" }\n",
+            None,
+        )
+        .unwrap()
+        .resolve("felis");
+        assert_eq!(
+            cfg.keymap.compile(None),
+            Vec::<(Chord, BindingValue)>::new()
+        );
+        let warning = only_warning(&diagnostics);
+        assert_eq!(warning.key.as_deref(), Some("keymap.\"ctrl+shift+g\""));
+    }
+
+    #[test]
+    fn a_shader_event_no_stage_listens_for_warns() {
+        let (_, diagnostics) = ConfigDocument::parse(
+            concat!(
+                "[shader]\npost = { builtin = \"trail\", animation = { on = [\"user:glow\"], duration_ms = 300 } }\n",
+                "[keymap]\n\"ctrl+shift+g\" = { kind = \"shader_event\", name = \"gloww\" }\n",
+            ),
+            None,
+        )
+        .unwrap()
+        .resolve("felis");
+        let warning = only_warning(&diagnostics);
+        assert_eq!(warning.key.as_deref(), Some("keymap.\"ctrl+shift+g\""));
+        assert!(warning.message.contains("user:gloww"), "{warning:?}");
     }
 
     #[test]

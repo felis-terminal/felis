@@ -4,7 +4,7 @@
 //! shader's declaration, so older shaders continue validating. Never reorder or resize fields.
 
 use std::num::NonZeroU64;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use bytemuck::{Pod, Zeroable};
 
@@ -221,6 +221,7 @@ impl PostClock {
     pub(crate) fn tick(&mut self, now: Instant) -> FrameTime {
         let since = now.saturating_duration_since(self.origin);
         let time = FrameTime {
+            origin: self.origin,
             now,
             time_s: since.as_secs_f32(),
             time_whole_s: u32::try_from(since.as_secs()).unwrap_or(u32::MAX),
@@ -241,6 +242,7 @@ impl PostClock {
 /// [`PostClock`]'s reading for one frame, shared by every stage in it.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct FrameTime {
+    pub(crate) origin: Instant,
     pub(crate) now: Instant,
     pub(crate) time_s: f32,
     pub(crate) time_whole_s: u32,
@@ -398,6 +400,38 @@ pub(crate) struct PostStage {
     uniforms_ring: UniformRing,
     uniforms: PostUniforms,
     history: bool,
+    /// Position in the sources the chain was built from, which is how the
+    /// client names the stage.
+    source_index: usize,
+    animation: Option<AnimationRun>,
+}
+
+/// One run of a stage's event animation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct AnimationRun {
+    pub(crate) start: Instant,
+    pub(crate) duration: Duration,
+}
+
+impl AnimationRun {
+    /// `(animation_start_s, animation_progress)`: progress is linear and
+    /// holds 1 after the end; both are 0 before any run.
+    fn fields(run: Option<Self>, time: &FrameTime) -> (f32, f32) {
+        let Some(run) = run else {
+            return (0.0, 0.0);
+        };
+        let start_s = run
+            .start
+            .saturating_duration_since(time.origin)
+            .as_secs_f32();
+        let elapsed = time.now.saturating_duration_since(run.start);
+        let progress = if run.duration.is_zero() {
+            1.0
+        } else {
+            (elapsed.as_secs_f64() / run.duration.as_secs_f64()).min(1.0) as f32
+        };
+        (start_s, progress)
+    }
 }
 
 impl PostStage {
@@ -408,6 +442,7 @@ impl PostStage {
     pub(crate) fn new(
         device: &Device,
         shared: &PostShared,
+        source_index: usize,
         source: &PostStageSource,
     ) -> Result<Self, PostShaderError> {
         let checked = check_post_stage(source)?;
@@ -442,7 +477,27 @@ impl PostStage {
             uniforms_ring: UniformRing::new("felis post uniforms", shared.upload_mode),
             uniforms: PostUniforms::default(),
             history: checked.history,
+            source_index,
+            animation: None,
         })
+    }
+
+    pub(crate) const fn source_index(&self) -> usize {
+        self.source_index
+    }
+
+    pub(crate) const fn start_animation(&mut self, run: AnimationRun) {
+        self.animation = Some(run);
+    }
+
+    pub(crate) const fn stop_animation(&mut self) {
+        self.animation = None;
+    }
+
+    #[cfg(test)]
+    #[cfg(not(windows))]
+    pub(crate) const fn animation(&self) -> Option<AnimationRun> {
+        self.animation
     }
 
     pub(crate) const fn has_history(&self) -> bool {
@@ -468,6 +523,10 @@ impl PostStage {
         inputs: StageInputs<'_>,
     ) {
         self.uniforms.write_frame(io.resolution_px, &inputs);
+        (
+            self.uniforms.animation_start_s,
+            self.uniforms.animation_progress,
+        ) = AnimationRun::fields(self.animation, &inputs.time);
         self.uniforms_ring
             .write(device, queue, bytemuck::bytes_of(&self.uniforms));
         let layout = if self.history {
@@ -1352,13 +1411,13 @@ mod tests {
     fn the_clock_splits_time_into_exact_whole_seconds_and_a_fraction_below_one() {
         let origin = Instant::now();
         let mut clock = PostClock::new(origin);
-        let at = origin + std::time::Duration::new(100_000, 999_999_999);
+        let at = origin + Duration::new(100_000, 999_999_999);
         let time = clock.tick(at);
         assert_eq!(time.time_whole_s, 100_000);
         assert!(time.time_fract_s < 1.0, "{}", time.time_fract_s);
         assert!(time.time_fract_s > 0.999, "{}", time.time_fract_s);
 
-        let time = clock.tick(origin + std::time::Duration::new(3, 250_000_000));
+        let time = clock.tick(origin + Duration::new(3, 250_000_000));
         assert_eq!((time.time_whole_s, time.time_fract_s), (3, 0.25));
     }
 
@@ -1366,9 +1425,9 @@ mod tests {
     fn the_clock_counts_frames_and_their_spacing() {
         let origin = Instant::now();
         let mut clock = PostClock::new(origin);
-        let first = clock.tick(origin + std::time::Duration::from_millis(500));
+        let first = clock.tick(origin + Duration::from_millis(500));
         assert_eq!((first.frame, first.time_delta_s), (0, 0.5));
-        let second = clock.tick(origin + std::time::Duration::from_millis(750));
+        let second = clock.tick(origin + Duration::from_millis(750));
         assert_eq!((second.frame, second.time_delta_s), (1, 0.25));
         assert_eq!(second.time_s, 0.75);
     }
@@ -1378,9 +1437,37 @@ mod tests {
         let origin = Instant::now();
         let mut clock = PostClock::new(origin);
         assert_eq!(clock.tick(origin).focus_change_time_s, 0.0);
-        clock.focus_changed(origin + std::time::Duration::from_secs(2));
-        let time = clock.tick(origin + std::time::Duration::from_secs(5));
+        clock.focus_changed(origin + Duration::from_secs(2));
+        let time = clock.tick(origin + Duration::from_secs(5));
         assert_eq!(time.focus_change_time_s, 2.0);
+    }
+
+    #[test]
+    fn animation_progress_is_zero_before_a_run_linear_during_it_and_holds_one_after() {
+        let origin = Instant::now();
+        let mut clock = PostClock::new(origin);
+        let at = |ms| origin + Duration::from_millis(ms);
+        assert_eq!(AnimationRun::fields(None, &clock.tick(at(500))), (0.0, 0.0));
+        let run = Some(AnimationRun {
+            start: at(1_000),
+            duration: Duration::from_millis(400),
+        });
+        assert_eq!(
+            AnimationRun::fields(run, &clock.tick(at(1_000))),
+            (1.0, 0.0)
+        );
+        assert_eq!(
+            AnimationRun::fields(run, &clock.tick(at(1_100))),
+            (1.0, 0.25)
+        );
+        assert_eq!(
+            AnimationRun::fields(run, &clock.tick(at(1_400))),
+            (1.0, 1.0)
+        );
+        assert_eq!(
+            AnimationRun::fields(run, &clock.tick(at(9_000))),
+            (1.0, 1.0)
+        );
     }
 
     #[test]
@@ -1388,12 +1475,12 @@ mod tests {
         let theme = ResolvedTheme::new(&felis_render_core::palette::Theme::default());
         let origin = Instant::now();
         let mut clock = PostClock::new(origin);
-        clock.focus_changed(origin + std::time::Duration::from_secs(1));
+        clock.focus_changed(origin + Duration::from_secs(1));
         let mut uniforms = PostUniforms::default();
         uniforms.write_frame(
             [640.0, 480.0],
             &StageInputs {
-                time: clock.tick(origin + std::time::Duration::from_millis(7_500)),
+                time: clock.tick(origin + Duration::from_millis(7_500)),
                 frame: PostFrame {
                     cell_size_px: [8.0, 16.0],
                     theme: &theme,

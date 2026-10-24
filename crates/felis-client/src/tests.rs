@@ -2141,6 +2141,7 @@ mod app_events {
         let startup = ClientStartup {
             warmup: None,
             renderer_cfg: renderer_config_from(&cfg),
+            post_animations: Vec::new(),
             font_size_logical_px: configured_font_size_logical_px(&cfg),
             clipboard_cfg: config::ClipboardConfig {
                 use_os_clipboard: false,

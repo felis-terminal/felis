@@ -216,6 +216,16 @@ pub enum SwitchDirection {
     Next,
 }
 
+/// Whether `name` can name a `shader_event` binding and the `user:<name>`
+/// event it fires: 1 to 63 ASCII letters, digits, `_`, `.`, or `-`.
+#[must_use]
+pub fn is_shader_event_name(name: &str) -> bool {
+    (1..=63).contains(&name.len())
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'-'))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
     /// Bracketed-paste wrapping is not applied: a typed sequence, not a
@@ -257,6 +267,11 @@ pub enum Action {
         command: Vec<String>,
         /// No transient: the client spawns and reaps the argv itself.
         background: bool,
+    },
+    /// Starts the animation of every post stage whose `animation.on`
+    /// lists `user:<name>`; nothing else listens.
+    ShaderEvent {
+        name: String,
     },
 }
 
@@ -319,6 +334,16 @@ mod tests {
             Escapes::CStyle.decode(r"\x1"),
             Err(EscapeError::BadHexEscape)
         );
+    }
+
+    #[test]
+    fn a_shader_event_name_is_1_to_63_of_the_allowed_characters() {
+        for name in ["flash", "a", "glow.v2", "my-fx_1", &"x".repeat(63)] {
+            assert!(is_shader_event_name(name), "{name}");
+        }
+        for name in ["", "with space", "user:flash", "ü", &"x".repeat(64)] {
+            assert!(!is_shader_event_name(name), "{name}");
+        }
     }
 
     #[test]
