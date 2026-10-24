@@ -314,6 +314,9 @@ pub struct PostStageSource {
 /// What every stage of a chain shares.
 pub(crate) struct PostShared {
     bind_group_layout: BindGroupLayout,
+    /// [`Self::bind_group_layout`] plus binding 3, for a stage that
+    /// declares `history`.
+    history_layout: BindGroupLayout,
     vertex_module: ShaderModule,
     sampler: Sampler,
     format: TextureFormat,
@@ -322,9 +325,14 @@ pub(crate) struct PostShared {
 
 impl PostShared {
     pub(crate) fn new(device: &Device, format: TextureFormat, upload_mode: UploadMode) -> Self {
+        let entries = post_bind_group_layout_entries();
         let bind_group_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("felis post bgl"),
-            entries: &post_bind_group_layout_entries(),
+            entries: &entries[..3],
+        });
+        let history_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("felis post history bgl"),
+            entries: &entries,
         });
         let vertex_module = device.create_shader_module(ShaderModuleDescriptor {
             label: Some("felis post vertex"),
@@ -343,6 +351,7 @@ impl PostShared {
         });
         Self {
             bind_group_layout,
+            history_layout,
             vertex_module,
             sampler,
             format,
@@ -353,12 +362,19 @@ impl PostShared {
     pub(crate) const fn format(&self) -> TextureFormat {
         self.format
     }
+
+    pub(crate) const fn vertex_module(&self) -> &ShaderModule {
+        &self.vertex_module
+    }
 }
 
 /// The views one stage reads and writes this frame.
 #[derive(Clone, Copy)]
 pub(crate) struct StageIo<'a> {
     pub(crate) input: &'a TextureView,
+    /// The stage's own output from the frame before; `Some` exactly when
+    /// the stage declares binding 3.
+    pub(crate) history: Option<&'a TextureView>,
     pub(crate) output: &'a TextureView,
     pub(crate) resolution_px: [f32; 2],
 }
@@ -367,6 +383,7 @@ pub(crate) struct PostStage {
     pipeline: RenderPipeline,
     uniforms_ring: UniformRing,
     uniforms: PostUniforms,
+    history: bool,
 }
 
 impl PostStage {
@@ -379,15 +396,20 @@ impl PostStage {
         shared: &PostShared,
         source: &PostStageSource,
     ) -> Result<Self, PostShaderError> {
-        validate_post_shader(&source.wgsl)?;
+        let checked = check_post_shader(&source.wgsl)?;
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let fragment_module = device.create_shader_module(ShaderModuleDescriptor {
             label: Some("felis post fragment"),
             source: ShaderSource::Wgsl(source.wgsl.as_str().into()),
         });
+        let layout = if checked.history {
+            &shared.history_layout
+        } else {
+            &shared.bind_group_layout
+        };
         let pipeline = build_post_pipeline(
             device,
-            &shared.bind_group_layout,
+            layout,
             &shared.vertex_module,
             &fragment_module,
             shared.format,
@@ -399,7 +421,12 @@ impl PostStage {
             pipeline,
             uniforms_ring: UniformRing::new("felis post uniforms", shared.upload_mode),
             uniforms: PostUniforms::default(),
+            history: checked.history,
         })
+    }
+
+    pub(crate) const fn has_history(&self) -> bool {
+        self.history
     }
 
     pub(crate) fn submitted(&mut self, index: &wgpu::SubmissionIndex) {
@@ -423,9 +450,14 @@ impl PostStage {
         self.uniforms.write_frame(io.resolution_px, &inputs);
         self.uniforms_ring
             .write(device, queue, bytemuck::bytes_of(&self.uniforms));
-        let (layout, sampler) = (&shared.bind_group_layout, &shared.sampler);
+        let layout = if self.history {
+            &shared.history_layout
+        } else {
+            &shared.bind_group_layout
+        };
+        let sampler = &shared.sampler;
         self.uniforms_ring
-            .prepare_bind_group(|buf| create_bind_group(device, layout, buf, io.input, sampler));
+            .prepare_bind_group(|buf| create_bind_group(device, layout, buf, &io, sampler));
         let Some(bind_group) = self.uniforms_ring.bind_group() else {
             return;
         };
@@ -509,10 +541,17 @@ impl PostUniforms {
     }
 }
 
+const SAMPLED_FLOAT_2D: BindingType = BindingType::Texture {
+    sample_type: TextureSampleType::Float { filterable: true },
+    view_dimension: TextureViewDimension::D2,
+    multisampled: false,
+};
+
 /// `@group(0)` of the post pass: uniform block (0), offscreen
-/// backbuffer (1), sampler (2).
+/// backbuffer (1), sampler (2), and the stage's previous output (3),
+/// which only a stage declaring it is given.
 #[must_use]
-pub const fn post_bind_group_layout_entries() -> [BindGroupLayoutEntry; 3] {
+pub const fn post_bind_group_layout_entries() -> [BindGroupLayoutEntry; 4] {
     [
         BindGroupLayoutEntry {
             binding: 0,
@@ -527,11 +566,7 @@ pub const fn post_bind_group_layout_entries() -> [BindGroupLayoutEntry; 3] {
         BindGroupLayoutEntry {
             binding: 1,
             visibility: ShaderStages::FRAGMENT,
-            ty: BindingType::Texture {
-                sample_type: TextureSampleType::Float { filterable: true },
-                view_dimension: TextureViewDimension::D2,
-                multisampled: false,
-            },
+            ty: SAMPLED_FLOAT_2D,
             count: None,
         },
         BindGroupLayoutEntry {
@@ -540,12 +575,28 @@ pub const fn post_bind_group_layout_entries() -> [BindGroupLayoutEntry; 3] {
             ty: BindingType::Sampler(SamplerBindingType::Filtering),
             count: None,
         },
+        BindGroupLayoutEntry {
+            binding: 3,
+            visibility: ShaderStages::FRAGMENT,
+            ty: SAMPLED_FLOAT_2D,
+            count: None,
+        },
     ]
+}
+
+/// What loading a stage needs to know about its module beyond its validity.
+pub(crate) struct CheckedShader {
+    /// The module declares binding 3.
+    pub(crate) history: bool,
 }
 
 /// Needs no device, so a missing entry point is reported by name rather
 /// than as the device's pipeline-creation error.
 pub fn validate_post_shader(source: &str) -> Result<(), PostShaderError> {
+    check_post_shader(source).map(drop)
+}
+
+pub(crate) fn check_post_shader(source: &str) -> Result<CheckedShader, PostShaderError> {
     let module = wgsl::parse_str(source).map_err(|e| PostShaderError::Parse(e.to_string()))?;
     Validator::new(ValidationFlags::all(), Capabilities::all())
         .validate(&module)
@@ -557,14 +608,17 @@ pub fn validate_post_shader(source: &str) -> Result<(), PostShaderError> {
     if !has_entry {
         return Err(PostShaderError::MissingEntryPoint);
     }
-    check_bindings(&module)
+    Ok(CheckedShader {
+        history: check_bindings(&module)?,
+    })
 }
 
 /// naga validates a module on its own, never against a pipeline layout, so
 /// a resource that disagrees with [`post_bind_group_layout_entries`] is
 /// otherwise reported only as the device's pipeline error, which does not
-/// name the binding.
-fn check_bindings(module: &Module) -> Result<(), PostShaderError> {
+/// name the binding. `Ok(true)` when the module declares binding 3.
+fn check_bindings(module: &Module) -> Result<bool, PostShaderError> {
+    let mut history = false;
     for (_, var) in module.global_variables.iter() {
         if matches!(var.space, AddressSpace::Private | AddressSpace::WorkGroup) {
             continue;
@@ -582,7 +636,7 @@ fn check_bindings(module: &Module) -> Result<(), PostShaderError> {
                     && matches!(inner, TypeInner::Struct { span, .. }
                         if *span as usize <= size_of::<PostUniforms>())
             }
-            1 => var.space == AddressSpace::Handle && is_sampled_float_2d(inner),
+            1 | 3 => var.space == AddressSpace::Handle && is_sampled_float_2d(inner),
             2 => {
                 var.space == AddressSpace::Handle
                     && matches!(inner, TypeInner::Sampler { comparison: false })
@@ -599,14 +653,16 @@ fn check_bindings(module: &Module) -> Result<(), PostShaderError> {
                 BINDING_DECLARATIONS[binding as usize]
             )));
         }
+        history |= binding == 3;
     }
-    Ok(())
+    Ok(history)
 }
 
-const BINDING_DECLARATIONS: [&str; 3] = [
+const BINDING_DECLARATIONS: [&str; 4] = [
     "a `var<uniform>` struct no larger than `FelisPostUniforms`",
     "a `texture_2d<f32>`",
     "a filtering `sampler`",
+    "a `texture_2d<f32>`",
 ];
 
 const fn is_sampled_float_2d(inner: &TypeInner) -> bool {
@@ -681,7 +737,12 @@ pub(crate) fn create_target(
         sample_count: 1,
         dimension: TextureDimension::D2,
         format,
-        usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING,
+        // Copy usage serves the history pair, whose output is copied into
+        // the texture the next frame reads.
+        usage: TextureUsages::RENDER_ATTACHMENT
+            | TextureUsages::TEXTURE_BINDING
+            | TextureUsages::COPY_SRC
+            | TextureUsages::COPY_DST,
         view_formats: &[],
     });
     let view = texture.create_view(&TextureViewDescriptor::default());
@@ -692,26 +753,33 @@ fn create_bind_group(
     device: &Device,
     layout: &BindGroupLayout,
     uniform_buffer: &Buffer,
-    target_view: &TextureView,
+    io: &StageIo<'_>,
     sampler: &Sampler,
 ) -> BindGroup {
+    let mut entries = vec![
+        BindGroupEntry {
+            binding: 0,
+            resource: uniform_buffer.as_entire_binding(),
+        },
+        BindGroupEntry {
+            binding: 1,
+            resource: BindingResource::TextureView(io.input),
+        },
+        BindGroupEntry {
+            binding: 2,
+            resource: BindingResource::Sampler(sampler),
+        },
+    ];
+    if let Some(history) = io.history {
+        entries.push(BindGroupEntry {
+            binding: 3,
+            resource: BindingResource::TextureView(history),
+        });
+    }
     device.create_bind_group(&BindGroupDescriptor {
         label: Some("felis post bg"),
         layout,
-        entries: &[
-            BindGroupEntry {
-                binding: 0,
-                resource: uniform_buffer.as_entire_binding(),
-            },
-            BindGroupEntry {
-                binding: 1,
-                resource: BindingResource::TextureView(target_view),
-            },
-            BindGroupEntry {
-                binding: 2,
-                resource: BindingResource::Sampler(sampler),
-            },
-        ],
+        entries: &entries,
     })
 }
 
@@ -958,6 +1026,19 @@ mod tests {
     }
 
     #[test]
+    fn declaring_binding_3_as_a_texture_asks_for_history() {
+        let with = shader_with_globals("@group(0) @binding(3) var history: texture_2d<f32>;");
+        assert!(check_post_shader(&with).expect("history loads").history);
+        let without = shader_with_globals("@group(0) @binding(1) var backbuffer: texture_2d<f32>;");
+        assert!(!check_post_shader(&without).expect("loads").history);
+        let wrong = shader_with_globals("@group(0) @binding(3) var history: sampler;");
+        assert!(matches!(
+            validate_post_shader(&wrong),
+            Err(PostShaderError::Binding(_))
+        ));
+    }
+
+    #[test]
     fn a_resource_outside_group_0_or_its_bindings_is_refused() {
         for globals in [
             "@group(1) @binding(0) var t: texture_2d<f32>;",
@@ -1100,7 +1181,7 @@ mod tests {
     #[test]
     fn post_bgl_pins_the_uniform_minimum_size() {
         let entries = post_bind_group_layout_entries();
-        assert_eq!(entries.len(), 3);
+        assert_eq!(entries.len(), 4);
         match entries[0].ty {
             BindingType::Buffer {
                 min_binding_size, ..
