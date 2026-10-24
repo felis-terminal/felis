@@ -82,6 +82,7 @@ binding, a value outside the vocabulary below, or a missing required field drops
 |                          | `ansi`       | `true`, `false`                                                                       | `false`           |
 | `run`                    | `command`    | Argv array of strings, non-empty; never a shell string                                | Required          |
 |                          | `background` | `true`, `false`                                                                       | `false`           |
+| `shader_event`           | `name`       | 1 to 63 of `A-Z`, `a-z`, `0-9`, `_`, `.`, `-`                                         | Required          |
 
 `escapes = "c_style"` recognizes `\n`, `\r`, `\t`, `\\`, `\0`, `\e`, and `\xNN` (exactly two hex digits); any other
 backslash sequence, and a trailing backslash, drop the binding with a warning. `escapes = "none"` sends `text`
@@ -123,6 +124,10 @@ Session and utility actions ship without default chords. Bind them in the `[keym
 # Another window in this session's directory.
 "super+n" = { kind = "run", background = true, command = ["/path/to/felis"] }
 ```
+
+- **`shader_event`**: Fires the `user:<name>` event, which starts the animation of every post-process stage whose
+  `animation.on` lists it ([shaders.md](shaders.md#event-animation)). A name no stage lists does nothing, and
+  `felis config check` warns about it.
 
 The window opens on the local daemon `felis` resolves by itself: `FELIS_SOCKET` when the client inherited one, else the
 default. The command does not carry over the window's `--host`, `--socket` or `--config`.

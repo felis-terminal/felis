@@ -10,6 +10,32 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 
 ## [Unreleased]
 
+### Added
+
+- **Config**: `shader.post` takes an array of up to 16 stage tables that run in order, each sampling the output of the
+  one before, so an effect can run on top of the bundled trail. A single table keeps working. A stage that fails to load
+  is skipped and the rest still run.
+- **Config**: a `shader.post` stage's `params` table sets the shader's WGSL `override` constants, checked against each
+  override's declared type, so one shader file serves several strengths.
+- **Config**: a `shader.post` stage's `animation = { on = [...], duration_ms = ... }` plays the stage's animation once
+  per bell, focus change, left press, or `shader_event` binding, drawing frames only until it ends, focused or not.
+- **Keymap**: the `shader_event` binding kind fires a named event for `shader.post` animations.
+- **Shaders**: uniform contract v2 appends `time_whole_s`, `time_fract_s`, `focus_change_time_s`, `stage_index`,
+  `animation_start_s` and `animation_progress`; a shader written against v1 loads unchanged. Binding 3 gives a stage its
+  own output from the previous frame, for afterglow and motion blur.
+
+### Changed
+
+- A post-process shader's `time_s` counts from when the window's renderer started and no longer restarts when a live
+  reload rebuilds the shader.
+- `felis config show-effective` and the `felis doctor report` config diff print `shader.post` as an array of stages,
+  whichever form the config wrote.
+
+### Fixed
+
+- A post-process shader that declares a resource the bind layout does not have, or at the wrong type, is refused with an
+  error instead of crashing the client at pipeline creation.
+
 ## [0.3.1] - 2026-10-24
 
 macOS Option types what the layout puts behind it, low-contrast text can be raised to a readable ratio, `ssh` brings the

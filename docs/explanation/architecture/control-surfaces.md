@@ -670,7 +670,7 @@ the user starts from a launcher, a terminal, or a WM keybinding, so the working 
 same file would load a shader from one and not the other. It also makes a config unmovable between machines, since a
 relative path only works from one place.
 
-A missing shader file stays a **warning**: felis renders without the pass, matching the fall-back-and-warn rule for
+A missing shader file stays a **warning**: felis renders without that stage, matching the fall-back-and-warn rule for
 every other malformed value, and the same document may legitimately be shared with a machine where the file exists.
 
 ### `font.size_px` is logical pixels, and the code says so at the DPI boundary
