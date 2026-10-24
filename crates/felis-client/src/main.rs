@@ -78,6 +78,7 @@ use winit::{
     window::{Window, WindowAttributes, WindowId},
 };
 
+mod a11y;
 mod app_methods;
 mod event_handler;
 mod event_sink;
@@ -115,6 +116,9 @@ use window_input::{ImeInput, WheelDelta};
 /// across session switches; window-scoped variants carry no stamp to avoid
 /// losing events that arrived just before a switch.
 enum AppEvent {
+    /// The platform's assistive technology asked for the tree, acted on
+    /// it, or went away.
+    Accessibility(accesskit_winit::WindowEvent),
     GridFrame {
         msg: GridMsg,
         conn_gen: u64,
@@ -645,7 +649,9 @@ fn window_attributes(title: String, decorations: bool, transparent: bool) -> Win
     let attrs = Window::default_attributes()
         .with_title(title)
         .with_transparent(transparent)
-        .with_inner_size(PhysicalSize::new(960u32, 600u32));
+        .with_inner_size(PhysicalSize::new(960u32, 600u32))
+        // `resumed` shows it once the accessibility adapter is attached.
+        .with_visible(false);
 
     // Wayland's app_id and X11's WM_CLASS share one winit field, so the
     // Wayland setter covers both backends. It must match
@@ -1092,6 +1098,7 @@ fn drive(
         let _ = input_tx.send(frame);
     }
 
+    let a11y_proxy = event_loop.create_proxy();
     let mut app = App::new(
         startup,
         attach,
@@ -1106,6 +1113,8 @@ fn drive(
             pull_enabled,
         },
     );
+
+    app.a11y = a11y::A11yTree::with_proxy(a11y_proxy);
 
     // Armed before the loop: the failures that never reach a frame (no
     // adapter, no window, no session) are the ones a gate must catch.
@@ -1127,6 +1136,12 @@ fn drive(
     Ok(terminal_exit.map_or(ExitCode::SUCCESS, |reason| {
         ExitCode::from(reason.code().get())
     }))
+}
+
+impl From<accesskit_winit::Event> for AppEvent {
+    fn from(event: accesskit_winit::Event) -> Self {
+        Self::Accessibility(event.window_event)
+    }
 }
 
 /// The event loop's half of the send queue. Pushing never awaits and
@@ -1426,6 +1441,7 @@ struct App {
     /// Mirrors the renderer's flag so the blink clock can stop (and the
     /// loop park on `ControlFlow::Wait`) while the cursor is hidden.
     window_focused: bool,
+    a11y: a11y::A11yTree,
     cursor_blink: cursor_blink::BlinkClock,
     /// Retained so a live `reload_config` can reconfigure `cursor_blink`.
     cursor_cfg: config::CursorConfig,
@@ -1545,6 +1561,7 @@ impl App {
             pending_reattach: None,
             pending_retarget: None,
             window_focused: true,
+            a11y: a11y::A11yTree::default(),
             cursor_blink: cursor_blink::BlinkClock::new(
                 startup.cursor_cfg.blink,
                 startup.cursor_cfg.blink_interval_ms,

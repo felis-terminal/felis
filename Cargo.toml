@@ -95,6 +95,13 @@ memmap2 = "0.9"
 yeslogic-fontconfig-sys = { version = "6.0.1", features = ["dlopen"] }
 wgpu = "30"
 winit = "0.30"
+# accesskit_winit's default async-io executor would add a second async runtime; tokio is already in the graph.
+accesskit = "0.25"
+accesskit_winit = { version = "0.34", default-features = false, features = [
+  "accesskit_unix",
+  "tokio",
+  "rwh_06",
+] }
 # default-features = false avoids dragging in the image crate with TIFF/JPEG decoders for text-only clipboard.
 arboard = { version = "3.6.1", default-features = false }
 # OS-native background blur (felis-client, macOS/Windows only).

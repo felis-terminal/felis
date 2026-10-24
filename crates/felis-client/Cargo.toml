@@ -26,6 +26,8 @@ felis-client-core = { workspace = true }
 felis-render-core = { workspace = true }
 felis-render-wgpu = { workspace = true }
 winit = { workspace = true }
+accesskit = { workspace = true }
+accesskit_winit = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 clap = { workspace = true }
@@ -51,6 +53,7 @@ objc2-quartz-core = { workspace = true }
 objc2-foundation = { workspace = true }
 
 [dev-dependencies]
+felis-vt = { workspace = true }
 proptest = { workspace = true }
 
 [lints]

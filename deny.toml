@@ -36,6 +36,10 @@ deny = [
   ], reason = "only felis-render-wgpu talks to the GPU" },
   { crate = "winit", wrappers = [
     "felis-client",
+    "accesskit_winit",
+  ], reason = "only felis-client owns a window" },
+  { crate = "accesskit_winit", wrappers = [
+    "felis-client",
   ], reason = "only felis-client owns a window" },
   { crate = "swash", wrappers = [
     "felis-shaping",
@@ -62,6 +66,7 @@ deny = [
     "felis-grid",
     "felis-daemon",
     # dev
+    "felis-client",
     "felis-client-core",
     "felis-pty",
     "felis-render-core",
