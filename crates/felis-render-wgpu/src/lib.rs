@@ -1,7 +1,7 @@
 #![recursion_limit = "256"]
 #![doc = include_str!("../README.md")]
 
-use std::{collections::BTreeMap, num::NonZeroU32, path::PathBuf, sync::Arc};
+use std::{collections::BTreeMap, num::NonZeroU32, path::PathBuf, sync::Arc, time::Instant};
 
 use bytemuck::cast_slice;
 use felis_grid::{
@@ -70,7 +70,7 @@ use crate::{
         decoration_instance_layout, fg_instance_layout, glyph_bind_group_layout_entries,
         img_instance_layout, viewport_bind_group_layout_entries,
     },
-    post::{PostFrame, PostStage},
+    post::{PostClock, PostFrame, PostStage, StageInputs},
     row_cache::{CellFrame, RowCache},
     texture_upload::TextureUploader,
 };
@@ -310,6 +310,7 @@ pub struct Renderer {
     image_scratch_under_text: Vec<ImgInstance>,
     image_scratch_above: Vec<ImgInstance>,
     post: Option<PostStage>,
+    post_clock: PostClock,
     /// Kept even with no stage, so a shader enabled by a live reload
     /// starts from the current state rather than the origin.
     trail_state: TrailState,
@@ -811,6 +812,7 @@ impl Renderer {
             image_scratch_under_text: Vec::new(),
             image_scratch_above: Vec::new(),
             post,
+            post_clock: PostClock::new(Instant::now()),
             trail_state: TrailState::default(),
             mouse_state: MouseState::default(),
             last_counts: None,
@@ -1008,7 +1010,10 @@ impl Renderer {
         theme
     }
 
-    pub const fn set_window_focused(&mut self, focused: bool) {
+    pub fn set_window_focused(&mut self, focused: bool) {
+        if self.window_focused != focused {
+            self.post_clock.focus_changed(Instant::now());
+        }
         self.window_focused = focused;
     }
 
@@ -1571,6 +1576,7 @@ impl Renderer {
         viewport: u32,
     ) {
         let theme = &self.resolved_theme;
+        let time = self.post_clock.tick(Instant::now());
         if let Some(post) = self.post.as_mut() {
             let cursor = screen.cursor();
             let cursor_visible = cursor.visible
@@ -1584,19 +1590,23 @@ impl Renderer {
                 &self.device,
                 &self.queue,
                 view,
-                PostFrame {
-                    cell_size_px: [metrics.width as f32, metrics.height as f32],
-                    theme,
-                    // The cell pass resolves the cursor against the
-                    // cell's fg under reverse video; the contract
-                    // reports the theme-level color.
-                    cursor_color: theme.cursor.unwrap_or(theme.fg),
-                    cursor_style: screen.cursor_style(),
-                    cursor_visible,
-                    focused: self.window_focused,
+                StageInputs {
+                    time,
+                    frame: PostFrame {
+                        cell_size_px: [metrics.width as f32, metrics.height as f32],
+                        theme,
+                        // The cell pass resolves the cursor against the
+                        // cell's fg under reverse video; the contract
+                        // reports the theme-level color.
+                        cursor_color: theme.cursor.unwrap_or(theme.fg),
+                        cursor_style: screen.cursor_style(),
+                        cursor_visible,
+                        focused: self.window_focused,
+                    },
+                    trail: self.trail_state,
+                    mouse: self.mouse_state,
+                    stage_index: 0,
                 },
-                self.trail_state,
-                self.mouse_state,
             );
         }
     }
