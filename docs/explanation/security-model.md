@@ -240,7 +240,8 @@ The daemon socket is the second-largest attack surface after the parser. Rules i
 
 - **The carrier admits only the daemon's own user, enforced by the OS.** On Unix that is a `0600` socket in a `0700`
   directory, created with an explicit `umask` rather than an inherited one; on Windows it is a named pipe whose DACL
-  names the daemon's user SID alone, so a foreign user cannot open it. The endpoints and their modes are
+  names the daemon's user SID alone and whose mandatory label sits at the daemon's integrity level, so neither a foreign
+  user nor a lower-integrity process of the same user can open it. The endpoints and their modes are
   [the IPC reference's](../reference/ipc.md#stream-layer). What matters here is that both are OS-enforced before any
   felis code runs, so a peer that reaches the handshake has already passed a check felis cannot get wrong.
 - **No abstract sockets.** Linux abstract namespace sockets bypass filesystem permissions. felis only uses pathname
@@ -308,11 +309,13 @@ pathname connect is safe whatever a cleaner or another uid did to the path in be
 keeps the relay's carrier block (its whole environment) from ever reaching a foreign listener, and it is why felis needs
 no equivalent of Linux's `fs.protected_symlinks` on macOS.
 
-On Windows it is the user SID of the process at the other end, resolved from the pipe's client or server process. The
-daemon resolves the client's rather than calling `ImpersonateNamedPipeClient`, which is unreliable until the client has
-written bytes and the reject-before-`Hello` contract means it has not. The dialer resolves the server's before the first
-byte of the preface, because the DACL describes only instances the daemon created: a successful open says nothing about
-who created the instance it reached.
+On Windows it is the user SID and the integrity level of the process at the other end, resolved from the pipe's client
+or server process. The integrity level is part of the identity because UAC gives one login's filtered and elevated
+tokens the same SID: an elevated and a non-elevated felis are different principals that happen to share an account, so
+each level gets its own endpoint and neither side admits the other. The daemon resolves the client's rather than calling
+`ImpersonateNamedPipeClient`, which is unreliable until the client has written bytes and the reject-before-`Hello`
+contract means it has not. The dialer resolves the server's before the first byte of the preface, because the DACL
+describes only instances the daemon created: a successful open says nothing about who created the instance it reached.
 
 The cross-host carrier changes nothing: the relay is an ordinary local client on the remote host, running as the
 SSH-authenticated user, so SSH is the network auth boundary and does not bypass the local one.
@@ -325,8 +328,9 @@ already admits (an account the DACL excludes cannot open the pipe to start the r
 foreign server would need its creator's pid to be reused by one of the user's own processes while the pipe stays open, a
 reuse it cannot steer. Both windows are recorded here rather than chased.
 
-The DACL and the same-user admit have runtime tests on the `x86_64-windows` runner (REQ-106a); the mismatch path is
-pinned through the `admit` seam, since a single-account runner can never present a foreign SID to `accept`.
+The DACL, the label, and the same-user admit have runtime tests on the `x86_64-windows` runner (REQ-106a); the SID and
+integrity mismatch paths are pinned through the `admit` seam, since a single-account runner can never present a foreign
+identity to `accept`.
 
 #### The `RetargetHost` push relays existing authority, not new
 

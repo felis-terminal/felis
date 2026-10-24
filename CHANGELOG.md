@@ -33,6 +33,8 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
   reload rebuilds the shader.
 - `felis config show-effective` and the `felis doctor report` config diff print `shader.post` as an array of stages,
   whichever form the config wrote.
+- On Windows, an elevated felis runs its own daemon at `\\.\pipe\felis.<sid>.high.daemon` instead of sharing the
+  non-elevated one, and each daemon only admits clients at its own integrity level.
 
 ### Fixed
 

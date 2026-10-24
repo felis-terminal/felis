@@ -749,13 +749,13 @@ built-in verb takes is reachable only by its own name. An external command reads
   platform default, and anchors a relative path to the caller's working directory. `--host` uses SSH exclusively and
   ignores local socket variables.
 
-  The platform default is derived from the uid alone:
+  The platform default is derived from the process identity alone (the uid; on Windows the SID and integrity level):
 
-  | OS      | Default endpoint                                           |
-  | ------- | ---------------------------------------------------------- |
-  | Linux   | `/tmp/felis.<uid>/daemon.sock`                             |
-  | macOS   | `/tmp/felis.<uid>/daemon.sock`                             |
-  | Windows | `\\.\pipe\felis.<sid>.daemon`, derived from the user's SID |
+  | OS      | Default endpoint                                                                                    |
+  | ------- | --------------------------------------------------------------------------------------------------- |
+  | Linux   | `/tmp/felis.<uid>/daemon.sock`                                                                      |
+  | macOS   | `/tmp/felis.<uid>/daemon.sock`                                                                      |
+  | Windows | `\\.\pipe\felis.<sid>.daemon`, derived from the user's SID; `felis.<sid>.high.daemon` when elevated |
 
   No environment variable takes part: `$XDG_RUNTIME_DIR`, `$TMPDIR` and `/run/user/<uid>` are not consulted
   ([ipc.md](../explanation/architecture/ipc.md#cross-host-attach-ssh-stdio)).
