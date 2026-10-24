@@ -62,7 +62,7 @@
       "$ref": "#/$defs/ShaderConfig",
       "default": {
         "animate": "never",
-        "post": null
+        "post": []
       }
     },
     "theme": {
@@ -429,6 +429,25 @@
           "required": [
             "kind",
             "command"
+          ]
+        },
+        {
+          "description": "Fire the `user:<name>` event: every post-process stage whose\n`animation.on` lists it starts its animation.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "shader_event"
+            },
+            "name": {
+              "description": "1 to 63 of `A-Z a-z 0-9 _ . -`.",
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "name"
           ]
         }
       ]
@@ -887,8 +906,45 @@
         }
       ]
     },
-    "PostShader": {
-      "description": "What `shader.post` names: a shader felis ships, or a file.",
+    "PostParamValue": {
+      "description": "A `params` value. Only scalars: WGSL overrides are scalars.",
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "integer",
+          "format": "int64"
+        },
+        {
+          "type": "number",
+          "format": "double"
+        }
+      ]
+    },
+    "PostStageConfig": {
+      "description": "One `shader.post` stage.",
+      "type": "object",
+      "properties": {
+        "animation": {
+          "description": "Play the stage's animation once per matching event:\n`animation_progress` runs from 0 to 1 over `duration_ms`, while felis\ndraws frames, then holds at 1. An invalid table leaves the stage\nloaded without animation and warns.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StageAnimation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "params": {
+          "description": "Values for the shader's WGSL `override` declarations, keyed by the\noverride's name: a boolean, an integer, or a float, checked\nagainst the declared type when the stage loads.",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/PostParamValue"
+          }
+        }
+      },
       "oneOf": [
         {
           "description": "A shader felis carries in the binary.",
@@ -898,7 +954,6 @@
               "$ref": "#/$defs/BuiltinShader"
             }
           },
-          "additionalProperties": false,
           "required": [
             "builtin"
           ]
@@ -911,10 +966,23 @@
               "type": "string"
             }
           },
-          "additionalProperties": false,
           "required": [
             "file"
           ]
+        }
+      ]
+    },
+    "PostStagesSchema": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/PostStageConfig"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PostStageConfig"
+          },
+          "maxItems": 16
         }
       ]
     },
@@ -993,18 +1061,41 @@
           "default": "never"
         },
         "post": {
-          "description": "Post-process shader, absent by default (no extra pass).\n`{ builtin = \"trail\" }` selects a shader felis ships;\n`{ file = \"…\" }` a WGSL file of your own. felis never scans a\ndirectory: what runs is what the config named.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/PostShader"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
+          "description": "Post-process stages, absent by default (no extra pass). One stage\ntable, or an array of them run in order, each sampling the one\nbefore it (at most 16). `{ builtin = \"trail\" }` selects a shader\nfelis ships; `{ file = \"…\" }` a WGSL file of your own. felis never\nscans a directory: what runs is what the config named.",
+          "$ref": "#/$defs/PostStagesSchema",
+          "default": []
         }
       }
+    },
+    "ShaderEvent": {
+      "description": "`bell`, `focus_in`, `focus_out`, `left_press`, or `user:<name>` for a `shader_event` keymap binding of that name.",
+      "type": "string",
+      "pattern": "^(bell|focus_in|focus_out|left_press|user:[A-Za-z0-9_.-]{1,63})$"
+    },
+    "StageAnimation": {
+      "description": "A stage's `animation` table.",
+      "type": "object",
+      "properties": {
+        "duration_ms": {
+          "description": "How long one run takes, in `1..=10000` milliseconds.",
+          "type": "integer",
+          "format": "uint32",
+          "maximum": 10000,
+          "minimum": 1
+        },
+        "on": {
+          "description": "The events that (re)start the animation.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ShaderEvent"
+          },
+          "minItems": 1
+        }
+      },
+      "required": [
+        "on",
+        "duration_ms"
+      ]
     },
     "SwitchDirection": {
       "oneOf": [

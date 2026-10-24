@@ -4,7 +4,7 @@
 //! shader's declaration, so older shaders continue validating. Never reorder or resize fields.
 
 use std::num::NonZeroU64;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use bytemuck::{Pod, Zeroable};
 
@@ -20,6 +20,9 @@ use wgpu::{
     Texture, TextureDescriptor, TextureDimension, TextureFormat, TextureSampleType, TextureUsages,
     TextureView, TextureViewDescriptor, TextureViewDimension, VertexState,
     naga::{
+        AddressSpace, ImageClass, ImageDimension, Module, ResourceBinding, Scalar, ScalarKind,
+        ShaderStage, TypeInner,
+        back::{PipelineConstants, pipeline_constants::process_overrides},
         front::wgsl,
         valid::{Capabilities, ValidationFlags, Validator},
     },
@@ -29,7 +32,7 @@ use felis_render_core::palette::ResolvedTheme;
 
 /// Reported to the shader as `contract_version` so an effect can branch
 /// on a field it is unsure of rather than fail to load.
-pub const CONTRACT_VERSION: u32 = 1;
+pub const CONTRACT_VERSION: u32 = 2;
 
 /// Fragment entry point every post-process shader must define.
 pub const POST_ENTRY_POINT: &str = "fs_post";
@@ -51,6 +54,12 @@ pub enum PostShaderError {
     Validate(String),
     #[error("missing `@fragment fn {POST_ENTRY_POINT}`")]
     MissingEntryPoint,
+    #[error("binding: {0}")]
+    Binding(String),
+    #[error("params: {0}")]
+    Param(String),
+    #[error("device rejected the stage: {0}")]
+    Device(String),
     #[error("an offscreen renderer has no post-process stage")]
     Offscreen,
 }
@@ -112,6 +121,23 @@ pub struct PostUniforms {
     pub selection_bg: [f32; 4],
     /// The effective 256-color palette (linear RGBA).
     pub palette: [[f32; 4]; 256],
+    /// Whole seconds of [`Self::time_s`], exact long after `time_s` has
+    /// lost sub-millisecond precision.
+    pub time_whole_s: u32,
+    /// The fractional second, in `[0, 1)`.
+    pub time_fract_s: f32,
+    /// `time_s` at the last focus gain or loss; `0` before any.
+    pub focus_change_time_s: f32,
+    /// This stage's 0-based position in the chain.
+    pub stage_index: u32,
+    /// `time_s` when this stage's animation last started; `0` before any.
+    pub animation_start_s: f32,
+    /// Linear progress of this stage's animation: `0` before any start,
+    /// holding `1` after its end.
+    pub animation_progress: f32,
+    /// WGSL `_reserved`: pads the struct to the 16-byte multiple WGSL rounds
+    /// it to; always 0.
+    pub reserved: [u32; 2],
 }
 
 // `docs/reference/shaders.md` documents these numbers; a `CursorStyle`
@@ -147,8 +173,83 @@ impl Default for PostUniforms {
             foreground: [0.0; 4],
             selection_bg: [0.0; 4],
             palette: [[0.0; 4]; 256],
+            time_whole_s: 0,
+            time_fract_s: 0.0,
+            focus_change_time_s: 0.0,
+            stage_index: 0,
+            animation_start_s: 0.0,
+            animation_progress: 0.0,
+            reserved: [0; 2],
         }
     }
+}
+
+/// One origin for every stage, owned by the renderer: a stage rebuilt by a
+/// live reload keeps the chain's timeline instead of restarting its effects
+/// at zero.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PostClock {
+    origin: Instant,
+    last_frame: Instant,
+    frame: u32,
+    focus_changed_at: Option<Instant>,
+}
+
+/// The largest `f32` below `1.0`: a subsecond of 999 999 999 ns rounds up
+/// to exactly `1.0` in `f32`, outside the documented `[0, 1)`.
+const BELOW_ONE: f32 = 1.0 - f32::EPSILON / 2.0;
+
+impl PostClock {
+    pub(crate) const fn new(origin: Instant) -> Self {
+        Self {
+            origin,
+            last_frame: origin,
+            frame: 0,
+            focus_changed_at: None,
+        }
+    }
+
+    pub(crate) const fn focus_changed(&mut self, at: Instant) {
+        self.focus_changed_at = Some(at);
+    }
+
+    /// Seconds from the origin on `time_s`'s scale.
+    pub(crate) fn offset_s(&self, at: Instant) -> f32 {
+        at.saturating_duration_since(self.origin).as_secs_f32()
+    }
+
+    pub(crate) fn tick(&mut self, now: Instant) -> FrameTime {
+        let since = now.saturating_duration_since(self.origin);
+        let time = FrameTime {
+            origin: self.origin,
+            now,
+            time_s: since.as_secs_f32(),
+            time_whole_s: u32::try_from(since.as_secs()).unwrap_or(u32::MAX),
+            time_fract_s: (f64::from(since.subsec_nanos()) / 1e9) as f32,
+            time_delta_s: now.saturating_duration_since(self.last_frame).as_secs_f32(),
+            frame: self.frame,
+            focus_change_time_s: self.focus_changed_at.map_or(0.0, |at| self.offset_s(at)),
+        };
+        self.last_frame = now;
+        self.frame = self.frame.wrapping_add(1);
+        FrameTime {
+            time_fract_s: time.time_fract_s.min(BELOW_ONE),
+            ..time
+        }
+    }
+}
+
+/// [`PostClock`]'s reading for one frame, shared by every stage in it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct FrameTime {
+    pub(crate) origin: Instant,
+    pub(crate) now: Instant,
+    pub(crate) time_s: f32,
+    pub(crate) time_whole_s: u32,
+    pub(crate) time_fract_s: f32,
+    pub(crate) time_delta_s: f32,
+    pub(crate) frame: u32,
+    pub(crate) focus_change_time_s: f32,
 }
 
 /// Out of `[0, 1]` on both axes, per the contract.
@@ -208,55 +309,51 @@ pub struct PostFrame<'a> {
     pub focused: bool,
 }
 
-pub struct PostStage {
-    pipeline: RenderPipeline,
-    bind_group_layout: BindGroupLayout,
-    uniforms_ring: UniformRing,
-    sampler: Sampler,
-    target: Texture,
-    target_view: TextureView,
-    uniforms: PostUniforms,
-    frame_counter: u32,
-    start: Instant,
-    last_frame: Instant,
+/// One entry of the chain the client resolved from `shader.post`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PostStageSource {
+    /// What the logs call the stage (a path, or the builtin's name).
+    pub label: String,
+    pub wgsl: String,
+    /// Values for the module's `override` declarations, by WGSL name.
+    pub params: Vec<(String, PostParam)>,
 }
 
-impl PostStage {
-    /// Validation runs before the device sees the source: wgpu turns a
-    /// shader-compilation failure into a panic on the device error
-    /// scope, so a bad user file has to be caught here to stay
-    /// recoverable.
-    pub(crate) fn new(
-        device: &Device,
-        upload_mode: UploadMode,
-        format: TextureFormat,
-        width: u32,
-        height: u32,
-        fragment_wgsl: &str,
-    ) -> Result<Self, PostShaderError> {
-        validate_post_shader(fragment_wgsl)?;
+/// A `shader.post` param value, as the config spelled it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PostParam {
+    Bool(bool),
+    Int(i64),
+    Float(f64),
+}
 
+/// What every stage of a chain shares.
+pub(crate) struct PostShared {
+    bind_group_layout: BindGroupLayout,
+    /// [`Self::bind_group_layout`] plus binding 3, for a stage that
+    /// declares `history`.
+    history_layout: BindGroupLayout,
+    vertex_module: ShaderModule,
+    sampler: Sampler,
+    format: TextureFormat,
+    upload_mode: UploadMode,
+}
+
+impl PostShared {
+    pub(crate) fn new(device: &Device, format: TextureFormat, upload_mode: UploadMode) -> Self {
+        let entries = post_bind_group_layout_entries();
         let bind_group_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("felis post bgl"),
-            entries: &post_bind_group_layout_entries(),
+            entries: &entries[..3],
+        });
+        let history_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("felis post history bgl"),
+            entries: &entries,
         });
         let vertex_module = device.create_shader_module(ShaderModuleDescriptor {
             label: Some("felis post vertex"),
             source: ShaderSource::Wgsl(POST_VERTEX_SOURCE.into()),
         });
-        let fragment_module = device.create_shader_module(ShaderModuleDescriptor {
-            label: Some("felis post fragment"),
-            source: ShaderSource::Wgsl(fragment_wgsl.into()),
-        });
-        let pipeline = build_post_pipeline(
-            device,
-            &bind_group_layout,
-            &vertex_module,
-            &fragment_module,
-            format,
-        );
-
-        let uniforms_ring = UniformRing::new("felis post uniforms", upload_mode);
         // Clamped, not repeating: an effect that samples a neighborhood
         // near an edge must not wrap the opposite side of the screen in.
         let sampler = device.create_sampler(&SamplerDescriptor {
@@ -268,39 +365,152 @@ impl PostStage {
             min_filter: FilterMode::Linear,
             ..Default::default()
         });
-        let (target, target_view) = create_target(device, format, width, height);
+        Self {
+            bind_group_layout,
+            history_layout,
+            vertex_module,
+            sampler,
+            format,
+            upload_mode,
+        }
+    }
 
-        let now = Instant::now();
+    pub(crate) const fn format(&self) -> TextureFormat {
+        self.format
+    }
+
+    pub(crate) const fn vertex_module(&self) -> &ShaderModule {
+        &self.vertex_module
+    }
+}
+
+/// The views one stage reads and writes this frame.
+#[derive(Clone, Copy)]
+pub(crate) struct StageIo<'a> {
+    pub(crate) input: &'a TextureView,
+    /// The stage's own output from the frame before; `Some` exactly when
+    /// the stage declares binding 3.
+    pub(crate) history: Option<&'a TextureView>,
+    pub(crate) output: &'a TextureView,
+    pub(crate) resolution_px: [f32; 2],
+}
+
+pub(crate) struct PostStage {
+    pipeline: RenderPipeline,
+    uniforms_ring: UniformRing,
+    uniforms: PostUniforms,
+    history: bool,
+    /// Position in the sources the chain was built from, which is how the
+    /// client names the stage.
+    source_index: usize,
+    animation: Option<AnimationRun>,
+}
+
+/// One run of a stage's event animation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct AnimationRun {
+    pub(crate) start: Instant,
+    pub(crate) duration: Duration,
+}
+
+impl AnimationRun {
+    /// `(animation_start_s, animation_progress)`: progress is linear and
+    /// holds 1 after the end; both are 0 before any run.
+    fn fields(run: Option<Self>, time: &FrameTime) -> (f32, f32) {
+        let Some(run) = run else {
+            return (0.0, 0.0);
+        };
+        let start_s = run
+            .start
+            .saturating_duration_since(time.origin)
+            .as_secs_f32();
+        let elapsed = time.now.saturating_duration_since(run.start);
+        let progress = if run.duration.is_zero() {
+            1.0
+        } else {
+            (elapsed.as_secs_f64() / run.duration.as_secs_f64()).min(1.0) as f32
+        };
+        (start_s, progress)
+    }
+}
+
+impl PostStage {
+    /// The device is the final gate: the checks before it cannot know the
+    /// device's enabled features or match the fragment interface against
+    /// the fixed vertex stage, and an uncaptured device error panics, so
+    /// the module and pipeline are created inside a validation scope.
+    pub(crate) fn new(
+        device: &Device,
+        shared: &PostShared,
+        source_index: usize,
+        source: &PostStageSource,
+    ) -> Result<Self, PostShaderError> {
+        let checked = check_post_stage(source)?;
+        let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let fragment_module = device.create_shader_module(ShaderModuleDescriptor {
+            label: Some("felis post fragment"),
+            source: ShaderSource::Wgsl(source.wgsl.as_str().into()),
+        });
+        let layout = if checked.history {
+            &shared.history_layout
+        } else {
+            &shared.bind_group_layout
+        };
+        let constants: Vec<(&str, f64)> = checked
+            .constants
+            .iter()
+            .map(|(key, value)| (key.as_str(), *value))
+            .collect();
+        let pipeline = build_post_pipeline(
+            device,
+            layout,
+            &shared.vertex_module,
+            &fragment_module,
+            shared.format,
+            &constants,
+        );
+        if let Some(error) = crate::warmup::block_on(scope.pop()) {
+            return Err(PostShaderError::Device(error.to_string()));
+        }
         Ok(Self {
             pipeline,
-            bind_group_layout,
-            uniforms_ring,
-            sampler,
-            target,
-            target_view,
+            uniforms_ring: UniformRing::new("felis post uniforms", shared.upload_mode),
             uniforms: PostUniforms::default(),
-            frame_counter: 0,
-            start: now,
-            last_frame: now,
+            history: checked.history,
+            source_index,
+            animation: None,
         })
+    }
+
+    pub(crate) const fn source_index(&self) -> usize {
+        self.source_index
+    }
+
+    pub(crate) const fn start_animation(&mut self, run: AnimationRun) {
+        self.animation = Some(run);
+    }
+
+    pub(crate) const fn stop_animation(&mut self) {
+        self.animation = None;
+    }
+
+    #[cfg(test)]
+    #[cfg(not(windows))]
+    pub(crate) const fn animation(&self) -> Option<AnimationRun> {
+        self.animation
+    }
+
+    pub(crate) const fn has_history(&self) -> bool {
+        self.history
     }
 
     pub(crate) fn submitted(&mut self, index: &wgpu::SubmissionIndex) {
         self.uniforms_ring.submitted(index);
     }
 
-    pub const fn target_view(&self) -> &TextureView {
-        &self.target_view
-    }
-
-    pub fn resize(&mut self, device: &Device, format: TextureFormat, width: u32, height: u32) {
-        if self.target.width() == width.max(1) && self.target.height() == height.max(1) {
-            return;
-        }
-        let (target, target_view) = create_target(device, format, width, height);
+    /// After a view the bind group holds was replaced.
+    pub(crate) fn invalidate_bind_group(&mut self) {
         self.uniforms_ring.invalidate();
-        self.target = target;
-        self.target_view = target_view;
     }
 
     pub(crate) fn encode(
@@ -308,49 +518,25 @@ impl PostStage {
         encoder: &mut CommandEncoder,
         device: &Device,
         queue: &Queue,
-        output: &TextureView,
-        frame: PostFrame<'_>,
-        trail: TrailState,
-        mouse: MouseState,
+        shared: &PostShared,
+        io: StageIo<'_>,
+        inputs: StageInputs<'_>,
     ) {
-        let now = Instant::now();
-        let time_s = now.duration_since(self.start).as_secs_f32();
-        self.uniforms.time_delta_s = now.duration_since(self.last_frame).as_secs_f32();
-        self.last_frame = now;
-        self.uniforms.time_s = time_s;
-        self.uniforms.frame = self.frame_counter;
-        self.frame_counter = self.frame_counter.wrapping_add(1);
-        self.uniforms.contract_version = CONTRACT_VERSION;
-        self.uniforms.resolution_px = [self.target.width() as f32, self.target.height() as f32];
-        self.uniforms.cell_size_px = frame.cell_size_px;
-        self.uniforms.cursor_rect = trail.cursor_rect;
-        self.uniforms.prev_cursor_rect = trail.prev_cursor_rect;
-        self.uniforms.trail_corners_x = trail.corners_x;
-        self.uniforms.trail_corners_y = trail.corners_y;
-        // The client reports an age, not a timestamp, so the two
-        // processes' clocks stay out of the contract.
-        self.uniforms.cursor_change_time_s = time_s - trail.seconds_since_change;
-        self.uniforms.cursor_color = frame.cursor_color;
-        self.uniforms.trail_color = frame.cursor_color;
-        self.uniforms.cursor_style = frame.cursor_style as u32;
-        self.uniforms.cursor_visible = u32::from(frame.cursor_visible);
-        self.uniforms.focused = u32::from(frame.focused);
-        self.uniforms.mouse_pos = [
-            mouse.pos_uv[0],
-            mouse.pos_uv[1],
-            mouse.last_press_uv[0],
-            mouse.last_press_uv[1],
-        ];
-        self.uniforms.mouse_buttons = mouse.buttons;
-        self.uniforms.background = frame.theme.bg;
-        self.uniforms.foreground = frame.theme.fg;
-        self.uniforms.selection_bg = felis_render_core::palette::SELECTION_BG;
-        self.uniforms.palette = frame.theme.palette;
+        self.uniforms.write_frame(io.resolution_px, &inputs);
+        (
+            self.uniforms.animation_start_s,
+            self.uniforms.animation_progress,
+        ) = AnimationRun::fields(self.animation, &inputs.time);
         self.uniforms_ring
             .write(device, queue, bytemuck::bytes_of(&self.uniforms));
-        let (layout, view, sampler) = (&self.bind_group_layout, &self.target_view, &self.sampler);
+        let layout = if self.history {
+            &shared.history_layout
+        } else {
+            &shared.bind_group_layout
+        };
+        let sampler = &shared.sampler;
         self.uniforms_ring
-            .prepare_bind_group(|buf| create_bind_group(device, layout, buf, view, sampler));
+            .prepare_bind_group(|buf| create_bind_group(device, layout, buf, &io, sampler));
         let Some(bind_group) = self.uniforms_ring.bind_group() else {
             return;
         };
@@ -358,7 +544,7 @@ impl PostStage {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("felis post pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: output,
+                view: io.output,
                 depth_slice: None,
                 resolve_target: None,
                 ops: Operations {
@@ -379,10 +565,72 @@ impl PostStage {
     }
 }
 
+/// What one stage's uniforms are built from, beyond its own state.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct StageInputs<'a> {
+    pub(crate) time: FrameTime,
+    pub(crate) frame: PostFrame<'a>,
+    pub(crate) trail: TrailState,
+    pub(crate) mouse: MouseState,
+    pub(crate) stage_index: u32,
+}
+
+impl PostUniforms {
+    fn write_frame(&mut self, resolution_px: [f32; 2], inputs: &StageInputs<'_>) {
+        let StageInputs {
+            time,
+            frame,
+            trail,
+            mouse,
+            stage_index,
+        } = *inputs;
+        self.resolution_px = resolution_px;
+        self.time_s = time.time_s;
+        self.time_delta_s = time.time_delta_s;
+        self.frame = time.frame;
+        self.contract_version = CONTRACT_VERSION;
+        self.cell_size_px = frame.cell_size_px;
+        self.cursor_rect = trail.cursor_rect;
+        self.prev_cursor_rect = trail.prev_cursor_rect;
+        self.trail_corners_x = trail.corners_x;
+        self.trail_corners_y = trail.corners_y;
+        // The client reports an age, not a timestamp, so the two
+        // processes' clocks stay out of the contract.
+        self.cursor_change_time_s = time.time_s - trail.seconds_since_change;
+        self.cursor_color = frame.cursor_color;
+        self.trail_color = frame.cursor_color;
+        self.cursor_style = frame.cursor_style as u32;
+        self.cursor_visible = u32::from(frame.cursor_visible);
+        self.focused = u32::from(frame.focused);
+        self.mouse_pos = [
+            mouse.pos_uv[0],
+            mouse.pos_uv[1],
+            mouse.last_press_uv[0],
+            mouse.last_press_uv[1],
+        ];
+        self.mouse_buttons = mouse.buttons;
+        self.background = frame.theme.bg;
+        self.foreground = frame.theme.fg;
+        self.selection_bg = felis_render_core::palette::SELECTION_BG;
+        self.palette = frame.theme.palette;
+        self.time_whole_s = time.time_whole_s;
+        self.time_fract_s = time.time_fract_s;
+        self.focus_change_time_s = time.focus_change_time_s;
+        self.stage_index = stage_index;
+    }
+}
+
+const SAMPLED_FLOAT_2D: BindingType = BindingType::Texture {
+    sample_type: TextureSampleType::Float { filterable: true },
+    view_dimension: TextureViewDimension::D2,
+    multisampled: false,
+};
+
 /// `@group(0)` of the post pass: uniform block (0), offscreen
-/// backbuffer (1), sampler (2).
+/// backbuffer (1), sampler (2), and the stage's previous output (3),
+/// which only a stage declaring it is given.
 #[must_use]
-pub const fn post_bind_group_layout_entries() -> [BindGroupLayoutEntry; 3] {
+pub const fn post_bind_group_layout_entries() -> [BindGroupLayoutEntry; 4] {
     [
         BindGroupLayoutEntry {
             binding: 0,
@@ -397,11 +645,7 @@ pub const fn post_bind_group_layout_entries() -> [BindGroupLayoutEntry; 3] {
         BindGroupLayoutEntry {
             binding: 1,
             visibility: ShaderStages::FRAGMENT,
-            ty: BindingType::Texture {
-                sample_type: TextureSampleType::Float { filterable: true },
-                view_dimension: TextureViewDimension::D2,
-                multisampled: false,
-            },
+            ty: SAMPLED_FLOAT_2D,
             count: None,
         },
         BindGroupLayoutEntry {
@@ -410,34 +654,208 @@ pub const fn post_bind_group_layout_entries() -> [BindGroupLayoutEntry; 3] {
             ty: BindingType::Sampler(SamplerBindingType::Filtering),
             count: None,
         },
+        BindGroupLayoutEntry {
+            binding: 3,
+            visibility: ShaderStages::FRAGMENT,
+            ty: SAMPLED_FLOAT_2D,
+            count: None,
+        },
     ]
 }
 
-/// Device-side compilation reports a missing entry point as a
-/// pipeline-creation panic rather than a value, hence the explicit
-/// entry-point check.
+/// What loading a stage needs to know about its module beyond its validity.
+pub(crate) struct CheckedShader {
+    /// The module declares binding 3.
+    pub(crate) history: bool,
+    /// The pipeline constants the params set, keyed as wgpu expects.
+    pub(crate) constants: Vec<(String, f64)>,
+}
+
+/// Needs no device, so a missing entry point is reported by name rather
+/// than as the device's pipeline-creation error.
 pub fn validate_post_shader(source: &str) -> Result<(), PostShaderError> {
+    check_post_shader(source, &[]).map(drop)
+}
+
+pub(crate) fn check_post_stage(source: &PostStageSource) -> Result<CheckedShader, PostShaderError> {
+    check_post_shader(&source.wgsl, &source.params)
+}
+
+fn check_post_shader(
+    source: &str,
+    params: &[(String, PostParam)],
+) -> Result<CheckedShader, PostShaderError> {
     let module = wgsl::parse_str(source).map_err(|e| PostShaderError::Parse(e.to_string()))?;
-    Validator::new(ValidationFlags::all(), Capabilities::all())
+    let info = Validator::new(ValidationFlags::all(), Capabilities::all())
         .validate(&module)
         .map_err(|e| PostShaderError::Validate(e.to_string()))?;
     let has_entry = module
         .entry_points
         .iter()
-        .any(|ep| ep.name == POST_ENTRY_POINT && ep.stage == wgpu::naga::ShaderStage::Fragment);
-    if has_entry {
-        Ok(())
-    } else {
-        Err(PostShaderError::MissingEntryPoint)
+        .any(|ep| ep.name == POST_ENTRY_POINT && ep.stage == ShaderStage::Fragment);
+    if !has_entry {
+        return Err(PostShaderError::MissingEntryPoint);
+    }
+    let history = check_bindings(&module)?;
+    let constants = override_constants(&module, params)?;
+    // The substitution and re-validation wgpu runs at pipeline creation,
+    // run here so the failure is reported as the params' fault: an override
+    // left without a default, or an override expression that fails to
+    // evaluate.
+    let map: PipelineConstants = constants.iter().cloned().collect();
+    process_overrides(
+        &module,
+        &info,
+        Some((ShaderStage::Fragment, POST_ENTRY_POINT)),
+        &map,
+    )
+    .map_err(|e| PostShaderError::Param(e.to_string()))?;
+    Ok(CheckedShader { history, constants })
+}
+
+/// Checks each param against its `override`'s declared type before the
+/// value becomes the `f64` wgpu takes, because naga's conversion from that
+/// `f64` truncates silently (a float into an integer override, say).
+/// `@id(n)` overrides are keyed by `"n"`, which is how wgpu looks them up.
+fn override_constants(
+    module: &Module,
+    params: &[(String, PostParam)],
+) -> Result<Vec<(String, f64)>, PostShaderError> {
+    params
+        .iter()
+        .map(|(name, value)| {
+            let declared = module
+                .overrides
+                .iter()
+                .map(|(_, o)| o)
+                .find(|o| o.name.as_deref() == Some(name.as_str()))
+                .ok_or_else(|| {
+                    PostShaderError::Param(format!("the shader declares no `override {name}`"))
+                })?;
+            let TypeInner::Scalar(scalar) = module.types[declared.ty].inner else {
+                return Err(PostShaderError::Param(format!(
+                    "`{name}` is not a scalar override"
+                )));
+            };
+            let converted = param_value(scalar, *value).ok_or_else(|| {
+                PostShaderError::Param(format!(
+                    "`{name}` is {}; {} does not fit it",
+                    scalar_name(scalar),
+                    param_name(*value),
+                ))
+            })?;
+            let key = declared
+                .id
+                .map_or_else(|| name.clone(), |id| id.to_string());
+            Ok((key, converted))
+        })
+        .collect()
+}
+
+fn param_value(scalar: Scalar, value: PostParam) -> Option<f64> {
+    match (scalar, value) {
+        (Scalar::BOOL, PostParam::Bool(b)) => Some(if b { 1.0 } else { 0.0 }),
+        (Scalar::I32, PostParam::Int(i)) => i32::try_from(i).ok().map(f64::from),
+        (Scalar::U32, PostParam::Int(i)) => u32::try_from(i).ok().map(f64::from),
+        (Scalar::F32, PostParam::Int(i)) => Some(i as f64),
+        (Scalar::F32, PostParam::Float(f)) => {
+            (f.is_finite() && f.abs() <= f64::from(f32::MAX)).then_some(f)
+        }
+        _ => None,
     }
 }
 
-fn build_post_pipeline(
+const fn scalar_name(scalar: Scalar) -> &'static str {
+    match scalar {
+        Scalar::BOOL => "a `bool` override",
+        Scalar::I32 => "an `i32` override",
+        Scalar::U32 => "a `u32` override",
+        Scalar::F32 => "an `f32` override",
+        _ => "an override of a type params cannot set",
+    }
+}
+
+fn param_name(value: PostParam) -> String {
+    match value {
+        PostParam::Bool(b) => format!("the boolean `{b}`"),
+        PostParam::Int(i) => format!("the integer `{i}`"),
+        PostParam::Float(f) => format!("the float `{f}`"),
+    }
+}
+
+/// naga validates a module on its own, never against a pipeline layout, so
+/// a resource that disagrees with [`post_bind_group_layout_entries`] is
+/// otherwise reported only as the device's pipeline error, which does not
+/// name the binding. `Ok(true)` when the module declares binding 3.
+fn check_bindings(module: &Module) -> Result<bool, PostShaderError> {
+    let mut history = false;
+    for (_, var) in module.global_variables.iter() {
+        if matches!(var.space, AddressSpace::Private | AddressSpace::WorkGroup) {
+            continue;
+        }
+        let name = var.name.as_deref().unwrap_or("<unnamed>");
+        let Some(ResourceBinding { group: 0, binding }) = var.binding else {
+            return Err(PostShaderError::Binding(format!(
+                "`{name}` is not in `@group(0)`"
+            )));
+        };
+        let inner = &module.types[var.ty].inner;
+        let matches_layout = match binding {
+            0 => {
+                var.space == AddressSpace::Uniform
+                    && matches!(inner, TypeInner::Struct { span, .. }
+                        if *span as usize <= size_of::<PostUniforms>())
+            }
+            1 | 3 => var.space == AddressSpace::Handle && is_sampled_float_2d(inner),
+            2 => {
+                var.space == AddressSpace::Handle
+                    && matches!(inner, TypeInner::Sampler { comparison: false })
+            }
+            _ => {
+                return Err(PostShaderError::Binding(format!(
+                    "`{name}` uses `@binding({binding})`, which the post-process layout does not have"
+                )));
+            }
+        };
+        if !matches_layout {
+            return Err(PostShaderError::Binding(format!(
+                "`{name}` at `@binding({binding})` must be {}",
+                BINDING_DECLARATIONS[binding as usize]
+            )));
+        }
+        history |= binding == 3;
+    }
+    Ok(history)
+}
+
+const BINDING_DECLARATIONS: [&str; 4] = [
+    "a `var<uniform>` struct no larger than `FelisPostUniforms`",
+    "a `texture_2d<f32>`",
+    "a filtering `sampler`",
+    "a `texture_2d<f32>`",
+];
+
+const fn is_sampled_float_2d(inner: &TypeInner) -> bool {
+    matches!(
+        inner,
+        TypeInner::Image {
+            dim: ImageDimension::D2,
+            arrayed: false,
+            class: ImageClass::Sampled {
+                kind: ScalarKind::Float,
+                multi: false,
+            },
+        }
+    )
+}
+
+pub(crate) fn build_post_pipeline(
     device: &Device,
     bind_group_layout: &BindGroupLayout,
     vertex_module: &ShaderModule,
     fragment_module: &ShaderModule,
     format: TextureFormat,
+    constants: &[(&str, f64)],
 ) -> RenderPipeline {
     let layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
         label: Some("felis post pipeline layout"),
@@ -463,7 +881,10 @@ fn build_post_pipeline(
                 blend: Some(BlendState::REPLACE),
                 write_mask: ColorWrites::ALL,
             })],
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            compilation_options: wgpu::PipelineCompilationOptions {
+                constants,
+                ..wgpu::PipelineCompilationOptions::default()
+            },
         }),
         primitive: PrimitiveState::default(),
         depth_stencil: None,
@@ -473,14 +894,14 @@ fn build_post_pipeline(
     })
 }
 
-fn create_target(
+pub(crate) fn create_target(
     device: &Device,
     format: TextureFormat,
     width: u32,
     height: u32,
 ) -> (Texture, TextureView) {
     let texture = device.create_texture(&TextureDescriptor {
-        label: Some("felis post target"),
+        label: Some("felis post texture"),
         size: Extent3d {
             width: width.max(1),
             height: height.max(1),
@@ -490,7 +911,12 @@ fn create_target(
         sample_count: 1,
         dimension: TextureDimension::D2,
         format,
-        usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING,
+        // Copy usage serves the history pair, whose output is copied into
+        // the texture the next frame reads.
+        usage: TextureUsages::RENDER_ATTACHMENT
+            | TextureUsages::TEXTURE_BINDING
+            | TextureUsages::COPY_SRC
+            | TextureUsages::COPY_DST,
         view_formats: &[],
     });
     let view = texture.create_view(&TextureViewDescriptor::default());
@@ -501,26 +927,33 @@ fn create_bind_group(
     device: &Device,
     layout: &BindGroupLayout,
     uniform_buffer: &Buffer,
-    target_view: &TextureView,
+    io: &StageIo<'_>,
     sampler: &Sampler,
 ) -> BindGroup {
+    let mut entries = vec![
+        BindGroupEntry {
+            binding: 0,
+            resource: uniform_buffer.as_entire_binding(),
+        },
+        BindGroupEntry {
+            binding: 1,
+            resource: BindingResource::TextureView(io.input),
+        },
+        BindGroupEntry {
+            binding: 2,
+            resource: BindingResource::Sampler(sampler),
+        },
+    ];
+    if let Some(history) = io.history {
+        entries.push(BindGroupEntry {
+            binding: 3,
+            resource: BindingResource::TextureView(history),
+        });
+    }
     device.create_bind_group(&BindGroupDescriptor {
         label: Some("felis post bg"),
         layout,
-        entries: &[
-            BindGroupEntry {
-                binding: 0,
-                resource: uniform_buffer.as_entire_binding(),
-            },
-            BindGroupEntry {
-                binding: 1,
-                resource: BindingResource::TextureView(target_view),
-            },
-            BindGroupEntry {
-                binding: 2,
-                resource: BindingResource::Sampler(sampler),
-            },
-        ],
+        entries: &entries,
     })
 }
 
@@ -528,67 +961,82 @@ fn create_bind_group(
 mod tests {
     use std::mem::offset_of;
 
-    use wgpu::naga::{StructMember, TypeInner};
+    use wgpu::naga::StructMember;
 
     use super::*;
 
-    /// Paired positionally with the members parsed out of `trail.wgsl`,
-    /// so a retype on either side fails the prefix test.
-    const CONTRACT_WGSL_TYPES: [&str; 22] = [
-        "vec2<f32>",
-        "vec2<f32>",
-        "f32",
-        "f32",
-        "u32",
-        "u32",
-        "vec4<f32>",
-        "vec4<f32>",
-        "vec4<f32>",
-        "vec4<f32>",
-        "vec4<f32>",
-        "vec4<f32>",
-        "f32",
-        "u32",
-        "u32",
-        "u32",
-        "vec4<f32>",
-        "vec4<f32>",
-        "vec4<f32>",
-        "vec4<f32>",
-        "vec4<f32>",
-        "array<vec4<f32>, 256>",
+    /// The contract as `(field, WGSL type, byte offset)`. Append-only: an
+    /// existing row must never change.
+    const CONTRACT: [(&str, &str, usize); 29] = [
+        ("resolution_px", "vec2<f32>", 0),
+        ("cell_size_px", "vec2<f32>", 8),
+        ("time_s", "f32", 16),
+        ("time_delta_s", "f32", 20),
+        ("frame", "u32", 24),
+        ("contract_version", "u32", 28),
+        ("cursor_rect", "vec4<f32>", 32),
+        ("prev_cursor_rect", "vec4<f32>", 48),
+        ("cursor_color", "vec4<f32>", 64),
+        ("trail_color", "vec4<f32>", 80),
+        ("trail_corners_x", "vec4<f32>", 96),
+        ("trail_corners_y", "vec4<f32>", 112),
+        ("cursor_change_time_s", "f32", 128),
+        ("cursor_style", "u32", 132),
+        ("cursor_visible", "u32", 136),
+        ("focused", "u32", 140),
+        ("mouse_pos", "vec4<f32>", 144),
+        ("mouse_buttons", "vec4<f32>", 160),
+        ("background", "vec4<f32>", 176),
+        ("foreground", "vec4<f32>", 192),
+        ("selection_bg", "vec4<f32>", 208),
+        ("palette", "array<vec4<f32>, 256>", 224),
+        ("time_whole_s", "u32", 4320),
+        ("time_fract_s", "f32", 4324),
+        ("focus_change_time_s", "f32", 4328),
+        ("stage_index", "u32", 4332),
+        ("animation_start_s", "f32", 4336),
+        ("animation_progress", "f32", 4340),
+        ("_reserved", "vec2<u32>", 4344),
     ];
 
+    const CONTRACT_SIZE: usize = 4352;
+
     fn uniform_members(source: &str) -> Vec<StructMember> {
+        uniform_struct(source).0
+    }
+
+    fn uniform_struct(source: &str) -> (Vec<StructMember>, u32) {
         let module = wgsl::parse_str(source).expect("WGSL parse");
         module
             .types
             .iter()
             .find_map(|(_, ty)| match (&ty.name, &ty.inner) {
-                (Some(name), TypeInner::Struct { members, .. }) if name == "FelisPostUniforms" => {
-                    Some(members.clone())
+                (Some(name), TypeInner::Struct { members, span })
+                    if name == "FelisPostUniforms" =>
+                {
+                    Some((members.clone(), *span))
                 }
                 _ => None,
             })
             .expect("source declares FelisPostUniforms")
     }
 
-    /// A shader declaring only the first `fields` members of the
-    /// contract.
-    fn prefix_shader(full: &[StructMember], fields: usize) -> String {
+    /// A shader declaring the first `fields` members of the contract and
+    /// returning `body`.
+    fn contract_shader(fields: usize, body: &str) -> String {
         use std::fmt::Write as _;
 
         let mut src = String::from("struct FelisPostUniforms {\n");
-        for (member, ty) in full.iter().zip(CONTRACT_WGSL_TYPES).take(fields) {
-            let name = member.name.as_deref().expect("contract fields are named");
+        for (name, ty, _) in CONTRACT.iter().take(fields) {
             writeln!(src, "    {name}: {ty},").expect("writing to a String cannot fail");
         }
         src.push_str("}\n@group(0) @binding(0) var<uniform> u: FelisPostUniforms;\n");
-        // Reads field 0 so the uniform is not an unused global.
-        src.push_str(
-            "@fragment\nfn fs_post(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {\n    \
-             return vec4<f32>(u.resolution_px, uv);\n}\n",
-        );
+        write!(
+            src,
+            "@fragment\nfn fs_post(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {{\n    \
+             return {body};\n}}\n"
+        )
+        .expect("writing to a String cannot fail");
         src
     }
 
@@ -598,26 +1046,41 @@ mod tests {
     /// because the `f32` / `u32` runs only misalign when last.
     #[test]
     fn a_shader_declaring_a_prefix_of_the_uniform_struct_keeps_the_offsets() {
-        let full = uniform_members(TRAIL_SHADER_SOURCE);
-        assert_eq!(
-            full.len(),
-            CONTRACT_WGSL_TYPES.len(),
-            "the WGSL type list must cover every contract field",
-        );
-        for fields in 1..=full.len() {
-            let source = prefix_shader(&full, fields);
+        for fields in 1..=CONTRACT.len() {
+            // Reads field 0 so the uniform is not an unused global.
+            let source = contract_shader(fields, "vec4<f32>(u.resolution_px, uv)");
             validate_post_shader(&source)
                 .unwrap_or_else(|e| panic!("prefix of {fields} fields must still load: {e}"));
             let prefix = uniform_members(&source);
             assert_eq!(prefix.len(), fields);
-            for (declared, contract) in prefix.iter().zip(&full) {
-                assert_eq!(declared.name, contract.name);
+            for (declared, (name, _, offset)) in prefix.iter().zip(CONTRACT) {
+                assert_eq!(declared.name.as_deref(), Some(name));
                 assert_eq!(
-                    declared.offset, contract.offset,
-                    "prefix of {fields} fields moved {:?}",
-                    contract.name,
+                    declared.offset as usize, offset,
+                    "prefix of {fields} fields moved {name}",
                 );
             }
+        }
+    }
+
+    #[test]
+    fn a_shader_declaring_the_full_v2_struct_loads_and_reads_the_animation_progress() {
+        let source = contract_shader(
+            CONTRACT.len(),
+            "vec4<f32>(uv, u.animation_progress, f32(u.stage_index))",
+        );
+        validate_post_shader(&source).expect("the full v2 struct loads");
+        let (_, span) = uniform_struct(&source);
+        assert_eq!(span as usize, CONTRACT_SIZE);
+    }
+
+    #[test]
+    fn the_bundled_trail_declares_a_prefix_of_the_contract() {
+        let members = uniform_members(TRAIL_SHADER_SOURCE);
+        assert!(members.len() <= CONTRACT.len());
+        for (member, (name, _, offset)) in members.iter().zip(CONTRACT) {
+            assert_eq!(member.name.as_deref(), Some(name));
+            assert_eq!(member.offset as usize, offset, "trail.wgsl moved {name}");
         }
     }
 
@@ -668,93 +1131,380 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn uniform_contract_offsets_agree_between_rust_and_wgsl() {
-        // The literal offsets are the v1 contract; append-only, so an
-        // entry must never change.
-        let contract = [
-            ("resolution_px", 0, offset_of!(PostUniforms, resolution_px)),
-            ("cell_size_px", 8, offset_of!(PostUniforms, cell_size_px)),
-            ("time_s", 16, offset_of!(PostUniforms, time_s)),
-            ("time_delta_s", 20, offset_of!(PostUniforms, time_delta_s)),
-            ("frame", 24, offset_of!(PostUniforms, frame)),
-            (
-                "contract_version",
-                28,
-                offset_of!(PostUniforms, contract_version),
-            ),
-            ("cursor_rect", 32, offset_of!(PostUniforms, cursor_rect)),
-            (
-                "prev_cursor_rect",
-                48,
-                offset_of!(PostUniforms, prev_cursor_rect),
-            ),
-            ("cursor_color", 64, offset_of!(PostUniforms, cursor_color)),
-            ("trail_color", 80, offset_of!(PostUniforms, trail_color)),
-            (
-                "trail_corners_x",
-                96,
-                offset_of!(PostUniforms, trail_corners_x),
-            ),
-            (
-                "trail_corners_y",
-                112,
-                offset_of!(PostUniforms, trail_corners_y),
-            ),
-            (
-                "cursor_change_time_s",
-                128,
-                offset_of!(PostUniforms, cursor_change_time_s),
-            ),
-            ("cursor_style", 132, offset_of!(PostUniforms, cursor_style)),
-            (
-                "cursor_visible",
-                136,
-                offset_of!(PostUniforms, cursor_visible),
-            ),
-            ("focused", 140, offset_of!(PostUniforms, focused)),
-            ("mouse_pos", 144, offset_of!(PostUniforms, mouse_pos)),
-            (
-                "mouse_buttons",
-                160,
-                offset_of!(PostUniforms, mouse_buttons),
-            ),
-            ("background", 176, offset_of!(PostUniforms, background)),
-            ("foreground", 192, offset_of!(PostUniforms, foreground)),
-            ("selection_bg", 208, offset_of!(PostUniforms, selection_bg)),
-            ("palette", 224, offset_of!(PostUniforms, palette)),
-        ];
-        for (name, contract_offset, rust_offset) in contract {
-            assert_eq!(rust_offset, contract_offset, "PostUniforms::{name}");
-        }
-        assert_eq!(size_of::<PostUniforms>() % 16, 0);
+    fn shader_with_globals(globals: &str) -> String {
+        format!(
+            "{globals}\n@fragment fn fs_post(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> \
+             {{ return vec4<f32>(uv, 0.0, 1.0); }}"
+        )
+    }
 
-        let module = wgsl::parse_str(TRAIL_SHADER_SOURCE).expect("WGSL parse");
-        let members = module
-            .types
+    /// The negative control for the noop-device chain tests: the device
+    /// does compare a module against the layout, so a clean frame there
+    /// means the bindings agreed.
+    #[cfg(not(windows))]
+    #[test]
+    fn the_noop_device_rejects_a_pipeline_whose_bindings_disagree_with_the_layout() {
+        let (device, _queue, mode) = crate::test_gpu::noop_device();
+        let shared = PostShared::new(&device, TextureFormat::Rgba8UnormSrgb, mode);
+        let src = shader_with_globals("@group(0) @binding(1) var s: sampler;").replace(
+            "return vec4<f32>(uv, 0.0, 1.0);",
+            "_ = s; return vec4<f32>(uv, 0.0, 1.0);",
+        );
+        let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let module = device.create_shader_module(ShaderModuleDescriptor {
+            label: None,
+            source: ShaderSource::Wgsl(src.into()),
+        });
+        let _pipeline = build_post_pipeline(
+            &device,
+            &shared.bind_group_layout,
+            &shared.vertex_module,
+            &module,
+            shared.format,
+            &[],
+        );
+        assert!(crate::warmup::block_on(scope.pop()).is_some());
+    }
+
+    #[test]
+    fn the_documented_bindings_pass_the_binding_check() {
+        let src = shader_with_globals(
+            "struct U { resolution_px: vec2<f32> }\n\
+             @group(0) @binding(0) var<uniform> u: U;\n\
+             @group(0) @binding(1) var backbuffer: texture_2d<f32>;\n\
+             @group(0) @binding(2) var backbuffer_sampler: sampler;\n\
+             var<private> scratch: f32;",
+        );
+        validate_post_shader(&src).expect("the documented layout loads");
+    }
+
+    #[test]
+    fn a_resource_at_the_wrong_type_for_its_binding_is_refused() {
+        for globals in [
+            "@group(0) @binding(1) var s: sampler;",
+            "@group(0) @binding(2) var t: texture_2d<f32>;",
+            "@group(0) @binding(2) var s: sampler_comparison;",
+            "@group(0) @binding(1) var t: texture_2d<u32>;",
+            "@group(0) @binding(1) var t: texture_2d_array<f32>;",
+            "@group(0) @binding(1) var t: texture_multisampled_2d<f32>;",
+            "@group(0) @binding(0) var<uniform> u: vec4<f32>;",
+            "struct U { x: f32 }\n@group(0) @binding(0) var<storage> u: U;",
+        ] {
+            assert!(
+                matches!(
+                    validate_post_shader(&shader_with_globals(globals)),
+                    Err(PostShaderError::Binding(_))
+                ),
+                "{globals}",
+            );
+        }
+    }
+
+    fn with_params(
+        globals: &str,
+        params: &[(&str, PostParam)],
+    ) -> Result<Vec<(String, f64)>, PostShaderError> {
+        let params: Vec<(String, PostParam)> = params
             .iter()
-            .find_map(|(_, ty)| match (&ty.name, &ty.inner) {
-                (Some(name), TypeInner::Struct { members, .. }) if name == "FelisPostUniforms" => {
-                    Some(members.clone())
-                }
-                _ => None,
-            })
-            .expect("trail.wgsl declares FelisPostUniforms");
-        assert_eq!(members.len(), contract.len(), "WGSL field count");
-        for (member, (name, contract_offset, _)) in members.iter().zip(contract) {
-            assert_eq!(member.name.as_deref(), Some(name));
-            assert_eq!(
-                usize::try_from(member.offset).expect("offset fits usize"),
-                contract_offset,
-                "FelisPostUniforms.{name}",
+            .map(|(name, value)| ((*name).to_owned(), *value))
+            .collect();
+        check_post_shader(&shader_with_globals(globals), &params).map(|checked| checked.constants)
+    }
+
+    const ALL_OVERRIDES: &str = "override flag: bool = false;\n\
+        override count: i32 = 0;\n\
+        override steps: u32 = 0u;\n\
+        override strength: f32 = 0.5;";
+
+    #[test]
+    fn each_scalar_override_takes_the_matching_toml_value() {
+        let constants = with_params(
+            ALL_OVERRIDES,
+            &[
+                ("flag", PostParam::Bool(true)),
+                ("count", PostParam::Int(-3)),
+                ("steps", PostParam::Int(i64::from(u32::MAX))),
+                ("strength", PostParam::Float(0.25)),
+            ],
+        )
+        .expect("every value fits its override");
+        assert_eq!(
+            constants,
+            [
+                ("flag".to_owned(), 1.0),
+                ("count".to_owned(), -3.0),
+                ("steps".to_owned(), f64::from(u32::MAX)),
+                ("strength".to_owned(), 0.25),
+            ]
+        );
+        assert_eq!(
+            with_params(ALL_OVERRIDES, &[("strength", PostParam::Int(2))])
+                .expect("an integer is an f32"),
+            [("strength".to_owned(), 2.0)]
+        );
+    }
+
+    #[test]
+    fn a_param_that_does_not_fit_its_override_rejects_the_stage() {
+        for (name, value) in [
+            ("count", PostParam::Float(1.5)),
+            ("count", PostParam::Int(i64::from(i32::MAX) + 1)),
+            ("steps", PostParam::Int(-1)),
+            ("steps", PostParam::Bool(true)),
+            ("flag", PostParam::Int(1)),
+            ("strength", PostParam::Bool(false)),
+            ("strength", PostParam::Float(f64::INFINITY)),
+            ("strength", PostParam::Float(f64::NAN)),
+            ("strength", PostParam::Float(1e39)),
+        ] {
+            assert!(
+                matches!(
+                    with_params(ALL_OVERRIDES, &[(name, value)]),
+                    Err(PostShaderError::Param(_))
+                ),
+                "{name} = {value:?}",
             );
         }
     }
 
     #[test]
+    fn a_param_naming_no_override_rejects_the_stage() {
+        assert!(matches!(
+            with_params(ALL_OVERRIDES, &[("strenght", PostParam::Float(1.0))]),
+            Err(PostShaderError::Param(_))
+        ));
+    }
+
+    #[test]
+    fn an_override_with_an_id_is_keyed_by_the_id_but_set_by_its_name() {
+        assert_eq!(
+            with_params(
+                "@id(7) override strength: f32 = 0.5;",
+                &[("strength", PostParam::Float(0.75))]
+            )
+            .expect("loads"),
+            [("7".to_owned(), 0.75)]
+        );
+    }
+
+    #[test]
+    fn an_override_without_a_default_must_be_set() {
+        let globals = "override strength: f32;\n\
+            @group(0) @binding(1) var backbuffer: texture_2d<f32>;";
+        let src = shader_with_globals(globals).replace(
+            "return vec4<f32>(uv, 0.0, 1.0);",
+            "return vec4<f32>(uv, strength, 1.0);",
+        );
+        assert!(matches!(
+            check_post_shader(&src, &[]),
+            Err(PostShaderError::Param(_))
+        ));
+        assert!(check_post_shader(&src, &[("strength".to_owned(), PostParam::Float(1.0))]).is_ok());
+    }
+
+    #[test]
+    fn an_override_expression_that_fails_to_evaluate_rejects_the_stage() {
+        let globals = "override divisor: i32 = 1;\noverride ratio: i32 = 10 / divisor;";
+        let src = shader_with_globals(globals).replace(
+            "return vec4<f32>(uv, 0.0, 1.0);",
+            "return vec4<f32>(uv, f32(ratio), 1.0);",
+        );
+        assert!(check_post_shader(&src, &[]).is_ok());
+        assert!(matches!(
+            check_post_shader(&src, &[("divisor".to_owned(), PostParam::Int(0))]),
+            Err(PostShaderError::Param(_))
+        ));
+    }
+
+    #[test]
+    fn declaring_binding_3_as_a_texture_asks_for_history() {
+        let with = shader_with_globals("@group(0) @binding(3) var history: texture_2d<f32>;");
+        assert!(
+            check_post_shader(&with, &[])
+                .expect("history loads")
+                .history
+        );
+        let without = shader_with_globals("@group(0) @binding(1) var backbuffer: texture_2d<f32>;");
+        assert!(!check_post_shader(&without, &[]).expect("loads").history);
+        let wrong = shader_with_globals("@group(0) @binding(3) var history: sampler;");
+        assert!(matches!(
+            validate_post_shader(&wrong),
+            Err(PostShaderError::Binding(_))
+        ));
+    }
+
+    #[test]
+    fn a_resource_outside_group_0_or_its_bindings_is_refused() {
+        for globals in [
+            "@group(1) @binding(0) var t: texture_2d<f32>;",
+            "@group(0) @binding(7) var t: texture_2d<f32>;",
+        ] {
+            assert!(
+                matches!(
+                    validate_post_shader(&shader_with_globals(globals)),
+                    Err(PostShaderError::Binding(_))
+                ),
+                "{globals}",
+            );
+        }
+    }
+
+    #[test]
+    fn a_uniform_struct_larger_than_the_contract_is_refused() {
+        let globals = format!(
+            "struct U {{ big: array<vec4<f32>, {}> }}\n\
+             @group(0) @binding(0) var<uniform> u: U;",
+            size_of::<PostUniforms>() / 16 + 1
+        );
+        assert!(matches!(
+            validate_post_shader(&shader_with_globals(&globals)),
+            Err(PostShaderError::Binding(_))
+        ));
+    }
+
+    #[test]
+    fn uniform_contract_offsets_agree_between_rust_and_wgsl() {
+        let rust = [
+            offset_of!(PostUniforms, resolution_px),
+            offset_of!(PostUniforms, cell_size_px),
+            offset_of!(PostUniforms, time_s),
+            offset_of!(PostUniforms, time_delta_s),
+            offset_of!(PostUniforms, frame),
+            offset_of!(PostUniforms, contract_version),
+            offset_of!(PostUniforms, cursor_rect),
+            offset_of!(PostUniforms, prev_cursor_rect),
+            offset_of!(PostUniforms, cursor_color),
+            offset_of!(PostUniforms, trail_color),
+            offset_of!(PostUniforms, trail_corners_x),
+            offset_of!(PostUniforms, trail_corners_y),
+            offset_of!(PostUniforms, cursor_change_time_s),
+            offset_of!(PostUniforms, cursor_style),
+            offset_of!(PostUniforms, cursor_visible),
+            offset_of!(PostUniforms, focused),
+            offset_of!(PostUniforms, mouse_pos),
+            offset_of!(PostUniforms, mouse_buttons),
+            offset_of!(PostUniforms, background),
+            offset_of!(PostUniforms, foreground),
+            offset_of!(PostUniforms, selection_bg),
+            offset_of!(PostUniforms, palette),
+            offset_of!(PostUniforms, time_whole_s),
+            offset_of!(PostUniforms, time_fract_s),
+            offset_of!(PostUniforms, focus_change_time_s),
+            offset_of!(PostUniforms, stage_index),
+            offset_of!(PostUniforms, animation_start_s),
+            offset_of!(PostUniforms, animation_progress),
+            offset_of!(PostUniforms, reserved),
+        ];
+        for ((name, _, contract_offset), rust_offset) in CONTRACT.iter().zip(rust) {
+            assert_eq!(rust_offset, *contract_offset, "PostUniforms::{name}");
+        }
+        assert_eq!(size_of::<PostUniforms>(), CONTRACT_SIZE);
+
+        let (members, span) = uniform_struct(&contract_shader(CONTRACT.len(), "vec4<f32>(uv, uv)"));
+        assert_eq!(span as usize, size_of::<PostUniforms>());
+        for (member, (name, _, offset)) in members.iter().zip(CONTRACT) {
+            assert_eq!(member.offset as usize, offset, "FelisPostUniforms.{name}");
+        }
+    }
+
+    #[test]
+    fn the_clock_splits_time_into_exact_whole_seconds_and_a_fraction_below_one() {
+        let origin = Instant::now();
+        let mut clock = PostClock::new(origin);
+        let at = origin + Duration::new(100_000, 999_999_999);
+        let time = clock.tick(at);
+        assert_eq!(time.time_whole_s, 100_000);
+        assert!(time.time_fract_s < 1.0, "{}", time.time_fract_s);
+        assert!(time.time_fract_s > 0.999, "{}", time.time_fract_s);
+
+        let time = clock.tick(origin + Duration::new(3, 250_000_000));
+        assert_eq!((time.time_whole_s, time.time_fract_s), (3, 0.25));
+    }
+
+    #[test]
+    fn the_clock_counts_frames_and_their_spacing() {
+        let origin = Instant::now();
+        let mut clock = PostClock::new(origin);
+        let first = clock.tick(origin + Duration::from_millis(500));
+        assert_eq!((first.frame, first.time_delta_s), (0, 0.5));
+        let second = clock.tick(origin + Duration::from_millis(750));
+        assert_eq!((second.frame, second.time_delta_s), (1, 0.25));
+        assert_eq!(second.time_s, 0.75);
+    }
+
+    #[test]
+    fn the_focus_change_time_is_zero_until_focus_changes_then_on_the_time_scale() {
+        let origin = Instant::now();
+        let mut clock = PostClock::new(origin);
+        assert_eq!(clock.tick(origin).focus_change_time_s, 0.0);
+        clock.focus_changed(origin + Duration::from_secs(2));
+        let time = clock.tick(origin + Duration::from_secs(5));
+        assert_eq!(time.focus_change_time_s, 2.0);
+    }
+
+    #[test]
+    fn animation_progress_is_zero_before_a_run_linear_during_it_and_holds_one_after() {
+        let origin = Instant::now();
+        let mut clock = PostClock::new(origin);
+        let at = |ms| origin + Duration::from_millis(ms);
+        assert_eq!(AnimationRun::fields(None, &clock.tick(at(500))), (0.0, 0.0));
+        let run = Some(AnimationRun {
+            start: at(1_000),
+            duration: Duration::from_millis(400),
+        });
+        assert_eq!(
+            AnimationRun::fields(run, &clock.tick(at(1_000))),
+            (1.0, 0.0)
+        );
+        assert_eq!(
+            AnimationRun::fields(run, &clock.tick(at(1_100))),
+            (1.0, 0.25)
+        );
+        assert_eq!(
+            AnimationRun::fields(run, &clock.tick(at(1_400))),
+            (1.0, 1.0)
+        );
+        assert_eq!(
+            AnimationRun::fields(run, &clock.tick(at(9_000))),
+            (1.0, 1.0)
+        );
+    }
+
+    #[test]
+    fn a_frame_writes_the_v2_fields_and_the_contract_version() {
+        let theme = ResolvedTheme::new(&felis_render_core::palette::Theme::default());
+        let origin = Instant::now();
+        let mut clock = PostClock::new(origin);
+        clock.focus_changed(origin + Duration::from_secs(1));
+        let mut uniforms = PostUniforms::default();
+        uniforms.write_frame(
+            [640.0, 480.0],
+            &StageInputs {
+                time: clock.tick(origin + Duration::from_millis(7_500)),
+                frame: PostFrame {
+                    cell_size_px: [8.0, 16.0],
+                    theme: &theme,
+                    cursor_color: [1.0; 4],
+                    cursor_style: CursorStyle::Bar,
+                    cursor_visible: true,
+                    focused: true,
+                },
+                trail: TrailState::default(),
+                mouse: MouseState::default(),
+                stage_index: 3,
+            },
+        );
+        assert_eq!(uniforms.contract_version, 2);
+        assert_eq!((uniforms.time_whole_s, uniforms.time_fract_s), (7, 0.5));
+        assert_eq!(uniforms.focus_change_time_s, 1.0);
+        assert_eq!(uniforms.stage_index, 3);
+        assert_eq!(uniforms.reserved, [0; 2]);
+    }
+
+    #[test]
     fn post_bgl_pins_the_uniform_minimum_size() {
         let entries = post_bind_group_layout_entries();
-        assert_eq!(entries.len(), 3);
+        assert_eq!(entries.len(), 4);
         match entries[0].ty {
             BindingType::Buffer {
                 min_binding_size, ..

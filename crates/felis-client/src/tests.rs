@@ -30,10 +30,7 @@ mod cli {
     fn cli_flags_before_double_dash_do_not_leak_into_command() {
         let cli = Cli::try_parse_from(["felis", "--socket", "/tmp/s.sock", "--", "ls"])
             .expect("parses felis --socket P -- ls");
-        assert_eq!(
-            cli.socket.as_deref(),
-            Some(std::path::Path::new("/tmp/s.sock"))
-        );
+        assert_eq!(cli.socket.as_deref(), Some(Path::new("/tmp/s.sock")));
         assert_eq!(cli.command, vec!["ls"]);
     }
 
@@ -2144,6 +2141,7 @@ mod app_events {
         let startup = ClientStartup {
             warmup: None,
             renderer_cfg: renderer_config_from(&cfg),
+            post_animations: Vec::new(),
             font_size_logical_px: configured_font_size_logical_px(&cfg),
             clipboard_cfg: config::ClipboardConfig {
                 use_os_clipboard: false,

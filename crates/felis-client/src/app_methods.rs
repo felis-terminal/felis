@@ -12,9 +12,11 @@ use super::{
     composed_row_for_line, config, configured_font_size_logical_px, cursor_trail, dial_and_land,
     error, font_features_differ, font_settings_differ, font_stack_inputs_differ,
     ime_cursor_area_pixels, info, keymap_adapter, launch_args, pointer_icon, preedit_from_ime,
-    renderer_config_from, reported_theme_differs, resolve_local_socket, viewport_for_hit, warn,
+    renderer_config_with, reported_theme_differs, resolve_local_socket, resolve_post_chain,
+    shader_events, viewport_for_hit, warn,
 };
 use crate::window_input::PressedKey;
+use felis_client_core::config::ShaderEvent;
 use felis_client_core::confirm::{ConfirmDecision, PendingConfirm, decide_confirm_key};
 use felis_client_core::connector::{Carrier, RemoteSpawn, connect_carrier};
 use felis_client_core::pipe::write_region_file;
@@ -311,6 +313,26 @@ impl App {
         self.cursor_trail.next_deadline()
     }
 
+    /// Starts the animation of every stage listening for `event`. A stage
+    /// the renderer did not load is dropped from the clock, so it arms no
+    /// frames nothing would draw.
+    pub(crate) fn fire_shader_event(&mut self, event: &ShaderEvent) {
+        let now = Instant::now();
+        let started = self.stage_animations.fire(event, now);
+        if started.is_empty() {
+            return;
+        }
+        for start in started {
+            let drawn = self.renderer.as_mut().is_some_and(|renderer| {
+                renderer.start_post_animation(start.stage, now, start.duration)
+            });
+            if !drawn {
+                self.stage_animations.cancel(start.stage);
+            }
+        }
+        self.redraw.request();
+    }
+
     /// Input-driven by construction: a still pointer produces no events
     /// and therefore no frames.
     pub(crate) fn update_post_mouse_state(&mut self) {
@@ -458,7 +480,8 @@ impl App {
             warn!("config reload failed; keeping previous live state");
             return;
         };
-        let new_renderer_cfg = renderer_config_from(&cfg);
+        let post_chain = resolve_post_chain(&cfg);
+        let new_renderer_cfg = renderer_config_with(&cfg, post_chain.sources);
         let new_font_size = configured_font_size_logical_px(&cfg);
         let size_changed = new_font_size != self.configured_font_size_logical_px;
         let font_changed =
@@ -466,21 +489,31 @@ impl App {
         let stack_inputs_changed = font_stack_inputs_differ(&self.renderer_cfg, &new_renderer_cfg);
         let features_changed = font_features_differ(&self.renderer_cfg, &new_renderer_cfg);
         let reported_theme_changed = reported_theme_differs(&self.renderer_cfg, &new_renderer_cfg);
-        let post_shader_changed =
-            self.renderer_cfg.post_shader_wgsl != new_renderer_cfg.post_shader_wgsl;
+        let post_stages_changed = self.renderer_cfg.post_stages != new_renderer_cfg.post_stages;
         // The next `about_to_wait` arms or drops the animation wake-up off
         // the new policy.
         self.shader_clock.set_mode(cfg.shader.animate);
+        // A rebuilt chain drops every renderer-side run, so the client
+        // timers go with it; a kept chain keeps both sides' runs except
+        // where a stage's table changed.
+        let stopped = if post_stages_changed {
+            self.stage_animations =
+                shader_events::StageAnimations::new(post_chain.animations, Instant::now());
+            Vec::new()
+        } else {
+            self.stage_animations.reconfigure(post_chain.animations)
+        };
         if let Some(renderer) = self.renderer.as_mut() {
+            for stage in stopped {
+                renderer.stop_post_animation(stage);
+            }
             renderer.set_theme(&Renderer::theme_from_config(&new_renderer_cfg));
-            // Swap only on a real change: rebuilding the pipeline would
-            // recompile the shader for an unrelated font edit. A refused
-            // shader keeps whatever is loaded.
-            if post_shader_changed
-                && let Err(err) =
-                    renderer.set_post_shader(new_renderer_cfg.post_shader_wgsl.as_deref())
+            // Rebuild only on a real change: rebuilding the chain would
+            // recompile every stage for an unrelated font edit.
+            if post_stages_changed
+                && let Err(err) = renderer.set_post_stages(&new_renderer_cfg.post_stages)
             {
-                error!(%err, "post-process shader refused; keeping the previous one");
+                error!(%err, "post-process stages refused");
             }
             if font_changed {
                 let logical = new_font_size.unwrap_or(DEFAULT_FONT_SIZE_LOGICAL_PX);
@@ -1006,6 +1039,9 @@ impl App {
                 background,
             } => {
                 self.start_run(&command, background);
+            }
+            Action::ShaderEvent { name } => {
+                self.fire_shader_event(&ShaderEvent::User(name));
             }
             Action::Scroll(step) => {
                 // Bare `End` at the live bottom falls through to the

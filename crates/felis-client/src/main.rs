@@ -8,7 +8,7 @@
 use std::{
     cell::Cell,
     num::NonZeroU8,
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::ExitCode,
     sync::{
         Arc, LazyLock,
@@ -36,7 +36,7 @@ use felis_client_core::{
     pull, reconnector_for_target, redraw,
     roster::{RingKey, pick_switch_target},
     session_id::validate_session_id_prefix,
-    shader_clock,
+    shader_clock, shader_events,
     viewport::{ViewportIntent, composed_row_for_line, viewport_for_hit},
 };
 use felis_client_core::{CarrierReader, CarrierWriter};
@@ -62,8 +62,8 @@ use felis_render_core::{
     overlay::{PreeditOverlay, SearchHitSpan, SearchOverlay},
 };
 use felis_render_wgpu::{
-    DEFAULT_FONT_SIZE_LOGICAL_PX, FaceSpec, MouseState, Renderer, RendererConfig, SurfaceError,
-    TRAIL_SHADER_SOURCE, TrailState, Warmup, validate_post_shader,
+    DEFAULT_FONT_SIZE_LOGICAL_PX, FaceSpec, MouseState, PostParam, PostStageSource, Renderer,
+    RendererConfig, SurfaceError, TRAIL_SHADER_SOURCE, TrailState, Warmup,
 };
 use felis_transport::{ClientDriver, Delivery, FrameReader, FrameWriter, Incoming, OwnedFrame};
 use std::sync::{Mutex, PoisonError};
@@ -443,11 +443,13 @@ fn main() -> Result<ExitCode> {
         source = ?config_source.path(),
         "config loaded"
     );
+    let post_chain = resolve_post_chain(&cfg);
     let startup = ClientStartup {
         // Before the dial: on a cold start the GPU work hides the daemon
         // spawn, and it needs neither the window nor the session.
         warmup: Some(Warmup::start_gpu()),
-        renderer_cfg: renderer_config_from(&cfg),
+        renderer_cfg: renderer_config_with(&cfg, post_chain.sources),
+        post_animations: post_chain.animations,
         font_size_logical_px: configured_font_size_logical_px(&cfg),
         clipboard_cfg: cfg.clipboard,
         window_cfg: cfg.window,
@@ -828,9 +830,16 @@ fn configured_font_size_logical_px(cfg: &config::EffectiveConfig) -> Option<f32>
     cfg.font.sanitized_font_size_logical_px()
 }
 
+fn renderer_config_from(cfg: &config::EffectiveConfig) -> RendererConfig {
+    renderer_config_with(cfg, resolve_post_chain(cfg).sources)
+}
+
 /// The font size is left `None`: it is physical pixels, and the scale
 /// factor only exists once the window does.
-fn renderer_config_from(cfg: &config::EffectiveConfig) -> RendererConfig {
+fn renderer_config_with(
+    cfg: &config::EffectiveConfig,
+    post_stages: Vec<PostStageSource>,
+) -> RendererConfig {
     RendererConfig {
         font_family: cfg.font.family.clone(),
         font_size_physical_px: None,
@@ -854,7 +863,7 @@ fn renderer_config_from(cfg: &config::EffectiveConfig) -> RendererConfig {
             let ratio = cfg.theme.clamped_minimum_contrast();
             (ratio > 1.0).then_some(ratio)
         },
-        post_shader_wgsl: resolve_post_shader(cfg),
+        post_stages,
         font_files: Vec::new(),
     }
 }
@@ -866,36 +875,70 @@ fn face_spec(c: &config::FontStyleConfig) -> FaceSpec {
     }
 }
 
-/// A named shader that cannot be loaded or does not validate is refused
-/// here, before the device sees it: felis renders normally instead of
+/// A stage whose file cannot be read is left out here; one that does not
+/// validate is refused by the renderer, before the device sees it. Either
+/// way the remaining stages run and felis renders normally instead of
 /// blacking the window (docs/explanation/rendering/pipeline.md "Loading
 /// and failure").
-fn resolve_post_shader(cfg: &config::EffectiveConfig) -> Option<String> {
-    match cfg.post_shader_choice() {
-        PostShaderChoice::None => None,
-        PostShaderChoice::Builtin(BuiltinShader::Trail) => Some(TRAIL_SHADER_SOURCE.to_owned()),
-        PostShaderChoice::File(path) => {
-            let source = match std::fs::read_to_string(&path) {
-                Ok(source) => source,
-                // The load already reported a missing path as a warning;
-                // repeating it at `ERROR` would contradict the documented
-                // severity.
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                    debug!(?path, "shader.post file is not there; rendering without it");
-                    return None;
-                }
-                Err(err) => {
-                    error!(?path, %err, "read shader.post failed; rendering without it");
-                    return None;
-                }
+fn resolve_post_chain(cfg: &config::EffectiveConfig) -> PostChainConfig {
+    let (sources, animations) = cfg
+        .post_stages()
+        .into_iter()
+        .filter_map(|stage| {
+            let params: Vec<(String, PostParam)> = stage
+                .params
+                .into_iter()
+                .map(|(name, value)| (name, post_param(value)))
+                .collect();
+            let source = match stage.shader {
+                PostShaderChoice::Builtin(BuiltinShader::Trail) => Some(PostStageSource {
+                    label: "builtin trail".to_owned(),
+                    wgsl: TRAIL_SHADER_SOURCE.to_owned(),
+                    params,
+                }),
+                PostShaderChoice::File(path) => read_post_stage(&path, params),
             };
-            match validate_post_shader(&source) {
-                Ok(()) => Some(source),
-                Err(err) => {
-                    error!(?path, %err, "shader.post rejected; rendering without it");
-                    None
-                }
-            }
+            source.map(|source| (source, stage.animation))
+        })
+        .unzip();
+    PostChainConfig {
+        sources,
+        animations,
+    }
+}
+
+/// The stages handed to the renderer and, index for index, their
+/// animations, which the client clocks.
+pub(crate) struct PostChainConfig {
+    pub(crate) sources: Vec<PostStageSource>,
+    pub(crate) animations: Vec<Option<config::StageAnimation>>,
+}
+
+const fn post_param(value: config::PostParamValue) -> PostParam {
+    match value {
+        config::PostParamValue::Bool(b) => PostParam::Bool(b),
+        config::PostParamValue::Int(i) => PostParam::Int(i),
+        config::PostParamValue::Float(f) => PostParam::Float(f),
+    }
+}
+
+fn read_post_stage(path: &Path, params: Vec<(String, PostParam)>) -> Option<PostStageSource> {
+    match std::fs::read_to_string(path) {
+        Ok(wgsl) => Some(PostStageSource {
+            label: path.display().to_string(),
+            wgsl,
+            params,
+        }),
+        // The load already reported a missing path as a warning;
+        // repeating it at `ERROR` would contradict the documented
+        // severity.
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            debug!(?path, "shader.post file is not there; skipping the stage");
+            None
+        }
+        Err(err) => {
+            error!(?path, %err, "read shader.post failed; skipping the stage");
+            None
         }
     }
 }
@@ -974,6 +1017,8 @@ struct ClientStartup {
     /// `None` only in tests, which build an [`App`] with no window.
     warmup: Option<Warmup>,
     renderer_cfg: RendererConfig,
+    /// Indexed like `renderer_cfg.post_stages`.
+    post_animations: Vec<Option<config::StageAnimation>>,
     /// Logical pixels; the renderer takes a physical size, and the scale
     /// factor only exists once the window does.
     font_size_logical_px: Option<f32>,
@@ -1391,6 +1436,9 @@ struct App {
     /// Off unless `shader.animate`; see `shader_clock.rs` for why this is
     /// the one clock nothing arms.
     shader_clock: shader_clock::ShaderClock,
+    /// Event-bounded post-stage animations; runs focused or not, but only
+    /// until each run's known end.
+    stage_animations: shader_events::StageAnimations,
     /// Physical window pixels, `None` outside the window. Distinct from
     /// [`Self::cursor_px`]: the shader contract wants the window, not the
     /// grid.
@@ -1506,6 +1554,10 @@ impl App {
             cursor_trail: cursor_trail::TrailClock::new(Instant::now()),
             shader_clock: shader_clock::ShaderClock::new(
                 startup.shader_cfg.animate,
+                Instant::now(),
+            ),
+            stage_animations: shader_events::StageAnimations::new(
+                startup.post_animations,
                 Instant::now(),
             ),
             pointer_px: None,

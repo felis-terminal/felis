@@ -67,8 +67,8 @@ Information-oriented lookup; consulted, not read in order.
   range, and the loader's behavior on missing / malformed values.
 - [Keybindings and mouse](reference/keybindings.md) — every default chord per platform, mouse gestures, chord grammar,
   and the actions that ship unbound.
-- [Post-process shaders](reference/shaders.md) — what `shader.post` can name, the `fs_post` entry point and bind layout,
-  and every field of the uniform contract.
+- [Post-process shaders](reference/shaders.md) — what a `shader.post` stage can name, chaining, params, event animation,
+  the `fs_post` entry point and bind layout, and every field of the uniform contract.
 - [IPC wire specification](reference/ipc.md) — stream / frame / application layers, message families and kind numbers,
   what the row payload carries, scrollback capture and search replies, the frozen preface, correlation and stream
   lifecycle, versioning.

@@ -160,6 +160,12 @@ pub enum BindingValue {
         #[serde(default)]
         background: bool,
     },
+    /// Fire the `user:<name>` event: every post-process stage whose
+    /// `animation.on` lists it starts its animation.
+    ShaderEvent {
+        /// 1 to 63 of `A-Z a-z 0-9 _ . -`.
+        name: String,
+    },
 }
 
 impl BindingValue {
@@ -197,6 +203,7 @@ impl BindingValue {
                 command,
                 background,
             }),
+            Self::ShaderEvent { name } => Some(Action::ShaderEvent { name }),
         }
     }
 }

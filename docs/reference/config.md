@@ -25,10 +25,11 @@ overrides no platform's answer. The reasoning and the rejected alternatives are 
 `felis --config <path>` overrides discovery for a single invocation and window. An explicitly selected path that does
 not exist produces an error. A missing file at the default path falls back to built-in defaults.
 
-Two settings take a path: `shader.post.file` ([shaders.md](shaders.md)) and a `pipe` binding's `{ file = "<path>" }`
-sink ([keybindings.md](keybindings.md) § "Unbound by default"). Both resolve relative to the `config.toml` containing
-them, unless absolute or prefixed with `~/`. A config with no file behind it, which is a document parsed from text
-rather than read from a path, resolves a relative path against the process's working directory.
+Two settings take a path: a `shader.post` stage's `file` ([shaders.md](shaders.md)) and a `pipe` binding's
+`{ file = "<path>" }` sink ([keybindings.md](keybindings.md) § "Unbound by default"). Both resolve relative to the
+`config.toml` containing them, unless absolute or prefixed with `~/`. A config with no file behind it, which is a
+document parsed from text rather than read from a path, resolves a relative path against the process's working
+directory.
 
 The configuration schema is additive: unknown keys produce warnings and are ignored, allowing forward-compatible files
 across versions. Six keys take a token from a closed set and carry a documented default: `cursor.blink`,
@@ -146,7 +147,9 @@ blink = "program"
 blink_interval_ms = 530
 
 [shader]
-# Post-process shader: { builtin = "trail" } or { file = "path.wgsl" }.
+# Post-process stages: one { builtin = "trail" } or { file = "path.wgsl" }
+# table, or an array of up to 16 run in order. A stage also takes
+# `params` and `animation` (see shaders.md).
 post = { builtin = "trail" }
 
 # Shader animation pacing: "never" (default, dirty-only) or
@@ -295,7 +298,11 @@ Diagnostics surface at two stages:
 | Config file unreadable or malformed                      | Uses defaults and logs error. Refuses if specified via `--config`.  | load   |
 | Unknown field in root or overlay                         | Skips field and logs warning; remaining configuration applies.      | load   |
 | Unknown token for a closed-enum key listed above         | Falls back to that field's default with warning; the rest applies.  | load   |
-| Unknown `shader.post` selector or `builtin` name         | No post-process pass, with warning; the rest applies.               | load   |
+| Unknown `shader.post` selector or `builtin` name         | Skips that stage with warning; the rest applies.                    | load   |
+| More than 16 `shader.post` stages                        | Runs the first 16, with warning.                                    | load   |
+| `shader.post` `params` value not a boolean or number     | Skips that stage with warning.                                      | load   |
+| Invalid `shader.post` `animation` table                  | Loads the stage without animation, with warning.                    | load   |
+| `shader_event` binding no stage's `animation.on` lists   | Keeps the binding, which does nothing, with warning.                | load   |
 | Non-table `[client.<name>]`                              | Skips overlay with warning; base configuration applies.             | load   |
 | `[client.<name>]` for other client                       | Ignored without warning, whatever it contains.                      | load   |
 | `clipboard.osc_52` with OS clipboard disabled            | Inert; logs notice at startup.                                      | window |
@@ -360,7 +367,7 @@ Live application by property:
 | `theme.*`, `cursor.color`    | Repaints surface and updates presentation state.                               |
 | `cursor.blink*`              | Restarts blink timer immediately.                                              |
 | `mouse.scroll_multiplier`    | Takes effect on next wheel event.                                              |
-| `shader.*`                   | Rebuilds post-process pipeline.                                                |
+| `shader.*`                   | Rebuilds the chain when a stage's shader or params change; history restarts.   |
 | `clipboard.*`                | Rebuilds clipboard subsystem.                                                  |
 | `window.title_prefix`        | Updates window title immediately.                                              |
 | `window.decorations`         | Toggles OS title bar and borders.                                              |

@@ -637,6 +637,7 @@ fn project_binding(raw: &toml::Table, parsed: &BindingValue) -> toml::Table {
             }
         },
         BindingValue::Run { .. } => (&["background"], &["command"]),
+        BindingValue::ShaderEvent { .. } => (&[], &["name"]),
     };
     let mut projected = toml::Table::new();
     for field in std::iter::once(&"kind").chain(shown) {

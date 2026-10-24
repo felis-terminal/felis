@@ -100,9 +100,10 @@ impl PartialEq for EffectiveConfig {
 }
 
 impl EffectiveConfig {
+    /// `shader.post` in chain order, file paths resolved.
     #[must_use]
-    pub fn post_shader_choice(&self) -> PostShaderChoice {
-        self.shader.post_choice(self.source_dir.as_deref())
+    pub fn post_stages(&self) -> Vec<ResolvedPostStage> {
+        self.shader.resolved_stages(self.source_dir.as_deref())
     }
 }
 
@@ -171,16 +172,19 @@ pub enum CursorBlinkMode {
 /// `[shader]` section: an optional WGSL post-process pass applied to
 /// the rendered frame. Clients that draw no pixels ignore this
 /// section.
-#[derive(Debug, Default, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Debug, Default, Clone, Deserialize, Serialize, PartialEq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(default)]
 pub struct ShaderConfig {
-    /// Post-process shader, absent by default (no extra pass).
-    /// `{ builtin = "trail" }` selects a shader felis ships;
-    /// `{ file = "…" }` a WGSL file of your own. felis never scans a
-    /// directory: what runs is what the config named.
-    #[serde(deserialize_with = "deserialize_lenient_post_shader")]
-    pub post: Option<PostShader>,
+    /// Post-process stages, absent by default (no extra pass). One stage
+    /// table, or an array of them run in order, each sampling the one
+    /// before it (at most 16). `{ builtin = "trail" }` selects a shader
+    /// felis ships; `{ file = "…" }` a WGSL file of your own. felis never
+    /// scans a directory: what runs is what the config named.
+    #[serde(deserialize_with = "deserialize_post_stages")]
+    #[cfg_attr(feature = "schema", schemars(with = "PostStagesSchema"))]
+    pub post: Vec<PostStageConfig>,
     /// Whether the shader gets frames of its own. Default `never`:
     /// felis draws when something changed, and the shader sees those
     /// frames. `focused` adds a continuous redraw clock for effects
@@ -205,6 +209,161 @@ pub enum ShaderAnimation {
     /// still. There is deliberately no variant that animates unfocused
     /// windows: a background window must never burn CPU.
     Focused,
+}
+
+/// Most stages one chain runs; entries past it are ignored with a warning.
+pub const MAX_POST_STAGES: usize = 16;
+
+/// One `shader.post` stage.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct PostStageConfig {
+    /// Which shader the stage runs.
+    #[serde(flatten)]
+    pub shader: PostShader,
+    /// Values for the shader's WGSL `override` declarations, keyed by the
+    /// override's name: a boolean, an integer, or a float, checked
+    /// against the declared type when the stage loads.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub params: BTreeMap<String, PostParamValue>,
+    /// Play the stage's animation once per matching event:
+    /// `animation_progress` runs from 0 to 1 over `duration_ms`, while felis
+    /// draws frames, then holds at 1. An invalid table leaves the stage
+    /// loaded without animation and warns.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub animation: Option<StageAnimation>,
+}
+
+/// A stage's `animation` table.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct StageAnimation {
+    /// The events that (re)start the animation.
+    #[cfg_attr(feature = "schema", schemars(length(min = 1)))]
+    pub on: Vec<ShaderEvent>,
+    /// How long one run takes, in `1..=10000` milliseconds.
+    #[cfg_attr(feature = "schema", schemars(range(min = 1, max = 10000)))]
+    pub duration_ms: u32,
+}
+
+/// Longest `animation.duration_ms`, so an animation stays a bounded
+/// redraw burst rather than a slow continuous loop.
+pub const MAX_ANIMATION_MS: u32 = 10_000;
+
+/// What starts a stage's animation (`animation.on`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ShaderEvent {
+    /// A bell from the attached session.
+    Bell,
+    FocusIn,
+    FocusOut,
+    /// A left mouse press inside the window, whether or not the program
+    /// reports the mouse.
+    LeftPress,
+    /// Fired by a `shader_event` keymap binding with this name.
+    User(String),
+}
+
+impl ShaderEvent {
+    fn parse(token: &str) -> Option<Self> {
+        match token {
+            "bell" => Some(Self::Bell),
+            "focus_in" => Some(Self::FocusIn),
+            "focus_out" => Some(Self::FocusOut),
+            "left_press" => Some(Self::LeftPress),
+            _ => token
+                .strip_prefix("user:")
+                .filter(|name| crate::action::is_shader_event_name(name))
+                .map(|name| Self::User(name.to_owned())),
+        }
+    }
+}
+
+impl std::fmt::Display for ShaderEvent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Bell => f.write_str("bell"),
+            Self::FocusIn => f.write_str("focus_in"),
+            Self::FocusOut => f.write_str("focus_out"),
+            Self::LeftPress => f.write_str("left_press"),
+            Self::User(name) => write!(f, "user:{name}"),
+        }
+    }
+}
+
+impl Serialize for ShaderEvent {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for ShaderEvent {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "ShaderEvent".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "description": "`bell`, `focus_in`, `focus_out`, `left_press`, or `user:<name>` for a `shader_event` keymap binding of that name.",
+            "type": "string",
+            "pattern": "^(bell|focus_in|focus_out|left_press|user:[A-Za-z0-9_.-]{1,63})$",
+        })
+    }
+}
+
+/// A stage's `animation` table; `Err` says why it was set aside.
+fn parse_animation(value: &toml::Value) -> Result<StageAnimation, String> {
+    let table = value
+        .as_table()
+        .ok_or_else(|| "`animation` takes a table with `on` and `duration_ms`".to_owned())?;
+    let duration_ms = match table.get("duration_ms") {
+        None => return Err("`duration_ms` is required".to_owned()),
+        Some(toml::Value::Integer(ms)) => u32::try_from(*ms)
+            .ok()
+            .filter(|ms| (1..=MAX_ANIMATION_MS).contains(ms))
+            .ok_or_else(|| format!("`duration_ms` {ms} is outside 1..={MAX_ANIMATION_MS}"))?,
+        Some(_) => return Err("`duration_ms` takes an integer".to_owned()),
+    };
+    let on = match table.get("on") {
+        None => return Err("`on` is required".to_owned()),
+        Some(toml::Value::Array(events)) if !events.is_empty() => events
+            .iter()
+            .map(|event| {
+                event
+                    .as_str()
+                    .and_then(ShaderEvent::parse)
+                    .ok_or_else(|| format!("`on` entry {event} is not a known event"))
+            })
+            .collect::<Result<Vec<_>, _>>()?,
+        Some(_) => return Err("`on` takes a non-empty array of events".to_owned()),
+    };
+    if let Some(key) = table
+        .keys()
+        .find(|key| !matches!(key.as_str(), "on" | "duration_ms"))
+    {
+        return Err(format!("unknown key `{key}`"));
+    }
+    Ok(StageAnimation { on, duration_ms })
+}
+
+/// A `params` value. Only scalars: WGSL overrides are scalars.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(untagged)]
+pub enum PostParamValue {
+    Bool(bool),
+    Int(i64),
+    Float(f64),
+}
+
+#[cfg(feature = "schema")]
+#[derive(schemars::JsonSchema)]
+#[serde(untagged)]
+#[allow(dead_code)]
+enum PostStagesSchema {
+    One(PostStageConfig),
+    Many(#[schemars(length(max = 16))] Vec<PostStageConfig>),
 }
 
 /// What `shader.post` names: a shader felis ships, or a file.
@@ -233,25 +392,38 @@ pub enum BuiltinShader {
     Trail,
 }
 
-/// [`ShaderConfig::post`] with its file path resolved.
+/// [`PostShader`] with its file path resolved.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PostShaderChoice {
-    None,
     /// The caller supplies the source.
     Builtin(BuiltinShader),
     File(PathBuf),
 }
 
+/// One [`ShaderConfig::post`] stage, ready for the client to load.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedPostStage {
+    pub shader: PostShaderChoice,
+    pub params: BTreeMap<String, PostParamValue>,
+    pub animation: Option<StageAnimation>,
+}
+
 impl ShaderConfig {
     #[must_use]
-    pub fn post_choice(&self, base_dir: Option<&Path>) -> PostShaderChoice {
-        match &self.post {
-            None => PostShaderChoice::None,
-            Some(PostShader::Builtin(builtin)) => PostShaderChoice::Builtin(*builtin),
-            Some(PostShader::File(path)) => {
-                PostShaderChoice::File(resolve_path(Path::new(path), base_dir))
-            }
-        }
+    pub fn resolved_stages(&self, base_dir: Option<&Path>) -> Vec<ResolvedPostStage> {
+        self.post
+            .iter()
+            .map(|stage| ResolvedPostStage {
+                shader: match &stage.shader {
+                    PostShader::Builtin(builtin) => PostShaderChoice::Builtin(*builtin),
+                    PostShader::File(path) => {
+                        PostShaderChoice::File(resolve_path(Path::new(path), base_dir))
+                    }
+                },
+                params: stage.params.clone(),
+                animation: stage.animation.clone(),
+            })
+            .collect()
     }
 }
 
@@ -275,38 +447,162 @@ where
     })
 }
 
-/// [`deserialize_lenient_enum`] for `shader.post`, whose unknown token
-/// can be the outer selector or the builtin's name, and whose
-/// documented default is no post-process pass.
-fn deserialize_lenient_post_shader<'de, D>(deserializer: D) -> Result<Option<PostShader>, D::Error>
+/// `shader.post` leniently: a stage naming a selector or builtin this build
+/// does not know is dropped (`validate` warns with its path), as an unknown
+/// closed-enum token degrades its field; a malformed stage fails the
+/// document.
+fn deserialize_post_stages<'de, D>(deserializer: D) -> Result<Vec<PostStageConfig>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
     let value = toml::Value::deserialize(deserializer)?;
-    match PostShader::deserialize(value.clone()) {
-        Ok(shader) => Ok(Some(shader)),
-        Err(_) if unknown_post_shader_token(&value) => Ok(None),
-        Err(err) => Err(serde::de::Error::custom(err)),
+    let entries = post_stage_entries(&value).map_err(serde::de::Error::custom)?;
+    let mut stages = Vec::with_capacity(entries.entries.len());
+    for (_, entry) in entries.entries {
+        if let StageParse::Loaded { stage, .. } =
+            parse_stage(entry).map_err(serde::de::Error::custom)?
+        {
+            stages.push(stage);
+        }
+    }
+    Ok(stages)
+}
+
+/// The stage values `shader.post` holds, capped at [`MAX_POST_STAGES`].
+pub(super) struct PostStageEntries<'a> {
+    /// Each with its array index, `None` for the single-table form.
+    pub(super) entries: Vec<(Option<usize>, &'a toml::Value)>,
+    /// How many entries the cap left out.
+    pub(super) excess: usize,
+}
+
+pub(super) fn post_stage_entries(
+    value: &toml::Value,
+) -> Result<PostStageEntries<'_>, &'static str> {
+    match value {
+        toml::Value::Table(_) => Ok(PostStageEntries {
+            entries: vec![(None, value)],
+            excess: 0,
+        }),
+        toml::Value::Array(entries) => Ok(PostStageEntries {
+            entries: entries
+                .iter()
+                .take(MAX_POST_STAGES)
+                .enumerate()
+                .map(|(index, entry)| (Some(index), entry))
+                .collect(),
+            excess: entries.len().saturating_sub(MAX_POST_STAGES),
+        }),
+        _ => Err("`shader.post` takes a stage table or an array of them"),
     }
 }
 
-/// Whether a rejected `shader.post` names something this build does not
-/// know rather than being malformed: a selector felis has no variant
-/// for, or `builtin` naming a shader it does not ship. A bad payload
-/// under a known selector (`file = 3`) is not a token.
-pub(super) fn unknown_post_shader_token(value: &toml::Value) -> bool {
-    let Some(table) = value.as_table() else {
-        return false;
-    };
-    let mut entries = table.iter();
-    let (Some((tag, payload)), None) = (entries.next(), entries.next()) else {
-        return false;
-    };
-    match tag.as_str() {
-        "builtin" => payload.is_str(),
-        "file" => false,
-        _ => true,
+/// Keys a stage table carries besides its selector.
+const STAGE_KEYS: [&str; 2] = ["params", "animation"];
+
+pub(super) enum StageParse {
+    Loaded {
+        stage: PostStageConfig,
+        /// Keys the stage table has that this build does not know.
+        unknown_keys: Vec<String>,
+        /// Why the stage's `animation` table was set aside, if it was.
+        animation_issue: Option<String>,
+    },
+    /// A selector or builtin this build does not know, or a param value
+    /// no override can take: the stage is dropped. `key_suffix` extends
+    /// the stage's path to the offending key.
+    Skipped { key_suffix: String, message: String },
+}
+
+pub(super) fn parse_stage(value: &toml::Value) -> Result<StageParse, String> {
+    let table = value.as_table().ok_or_else(|| {
+        "a `shader.post` stage is a table such as `{ builtin = \"trail\" }`".to_owned()
+    })?;
+    let mut selectors = Vec::new();
+    let mut unknown_keys = Vec::new();
+    for (key, payload) in table {
+        match key.as_str() {
+            "builtin" | "file" => selectors.push((key.as_str(), payload)),
+            known if STAGE_KEYS.contains(&known) => {}
+            _ => unknown_keys.push(key.clone()),
+        }
     }
+    let shader = match selectors.as_slice() {
+        [("file", payload)] => PostShader::File(
+            payload
+                .as_str()
+                .ok_or_else(|| "`file` takes a path string".to_owned())?
+                .to_owned(),
+        ),
+        [(_, payload)] => {
+            let name = payload
+                .as_str()
+                .ok_or_else(|| "`builtin` takes a shader name".to_owned())?;
+            match BuiltinShader::deserialize((*payload).clone()) {
+                Ok(builtin) => PostShader::Builtin(builtin),
+                Err(_) => {
+                    return Ok(StageParse::Skipped {
+                        key_suffix: ".builtin".to_owned(),
+                        message: format!("unknown builtin shader `{name}`; stage skipped"),
+                    });
+                }
+            }
+        }
+        [] if unknown_keys.len() == 1 => {
+            return Ok(StageParse::Skipped {
+                key_suffix: String::new(),
+                message: format!(
+                    "unknown shader selector `{}`; stage skipped",
+                    unknown_keys[0]
+                ),
+            });
+        }
+        [] => return Err("a `shader.post` stage names `builtin` or `file`".to_owned()),
+        _ => {
+            return Err(
+                "a `shader.post` stage names one of `builtin` and `file`, not both".to_owned(),
+            );
+        }
+    };
+    let params = match table.get("params") {
+        None => BTreeMap::new(),
+        Some(toml::Value::Table(params)) => {
+            let mut values = BTreeMap::new();
+            for (name, value) in params {
+                let value = match value {
+                    toml::Value::Boolean(b) => PostParamValue::Bool(*b),
+                    toml::Value::Integer(i) => PostParamValue::Int(*i),
+                    toml::Value::Float(f) => PostParamValue::Float(*f),
+                    other => {
+                        return Ok(StageParse::Skipped {
+                            key_suffix: format!(".params.{name}"),
+                            message: format!(
+                                "a {}, but a param is a boolean, integer or float; stage skipped",
+                                other.type_str()
+                            ),
+                        });
+                    }
+                };
+                values.insert(name.clone(), value);
+            }
+            values
+        }
+        Some(_) => return Err("`params` takes a table of override values".to_owned()),
+    };
+    let (animation, animation_issue) = match table.get("animation").map(parse_animation) {
+        None => (None, None),
+        Some(Ok(animation)) => (Some(animation), None),
+        Some(Err(issue)) => (None, Some(issue)),
+    };
+    Ok(StageParse::Loaded {
+        stage: PostStageConfig {
+            shader,
+            params,
+            animation,
+        },
+        unknown_keys,
+        animation_issue,
+    })
 }
 
 /// Relative paths resolve against the config file's directory, not the
@@ -463,6 +759,17 @@ impl KeymapConfig {
                 );
                 continue;
             }
+            if let BindingValue::ShaderEvent { name } = &binding
+                && !crate::action::is_shader_event_name(name)
+            {
+                on_dropped(
+                    chord_str,
+                    format!(
+                        "`shader_event` name `{name}` is not 1-63 of `A-Z a-z 0-9 _ . -`, dropping"
+                    ),
+                );
+                continue;
+            }
             // An unrecognized backslash sequence is a config error
             // (docs/explanation/input.md "Action mapping"), never sent
             // literally by the dispatcher.
@@ -478,6 +785,24 @@ impl KeymapConfig {
             out.push((chord, resolve_binding_paths(binding, base_dir)));
         }
         out
+    }
+}
+
+impl KeymapConfig {
+    /// `(chord as written, name)` for each well-formed `shader_event`
+    /// binding.
+    pub(super) fn shader_event_names(&self) -> Vec<(&str, String)> {
+        self.entries
+            .iter()
+            .filter_map(|(chord, value)| match value.clone().try_into() {
+                Ok(BindingValue::ShaderEvent { name })
+                    if crate::action::is_shader_event_name(&name) =>
+                {
+                    Some((chord.as_str(), name))
+                }
+                _ => None,
+            })
+            .collect()
     }
 }
 
@@ -1052,8 +1377,8 @@ mod tests {
     #[test]
     fn absent_shader_section_means_no_post_pass() {
         let cfg: EffectiveConfig = toml::from_str("").unwrap();
-        assert_eq!(cfg.shader.post, None);
-        assert_eq!(cfg.post_shader_choice(), PostShaderChoice::None);
+        assert_eq!(cfg.shader.post, Vec::<PostStageConfig>::new());
+        assert_eq!(cfg.post_stages(), Vec::<ResolvedPostStage>::new());
     }
 
     #[test]
@@ -1070,8 +1395,8 @@ mod tests {
         let cfg: EffectiveConfig =
             toml::from_str("[shader]\npost = { builtin = \"trail\" }\n").unwrap();
         assert_eq!(
-            cfg.post_shader_choice(),
-            PostShaderChoice::Builtin(BuiltinShader::Trail),
+            shader_choices(&cfg),
+            [PostShaderChoice::Builtin(BuiltinShader::Trail)],
         );
     }
 
@@ -1080,14 +1405,14 @@ mod tests {
         let cfg: EffectiveConfig =
             toml::from_str("[shader]\npost = { file = \"/opt/fx/glow.wgsl\" }\n").unwrap();
         assert_eq!(
-            cfg.post_shader_choice(),
-            PostShaderChoice::File(PathBuf::from("/opt/fx/glow.wgsl")),
+            shader_choices(&cfg),
+            [PostShaderChoice::File(PathBuf::from("/opt/fx/glow.wgsl"))],
         );
         let cfg: EffectiveConfig =
             toml::from_str("[shader]\npost = { file = \"fx/glow.wgsl\" }\n").unwrap();
         assert_eq!(
-            cfg.post_shader_choice(),
-            PostShaderChoice::File(PathBuf::from("fx/glow.wgsl")),
+            shader_choices(&cfg),
+            [PostShaderChoice::File(PathBuf::from("fx/glow.wgsl"))],
             "with no config file to be relative to, the path stays as written",
         );
         let document = ConfigDocument::parse(
@@ -1097,9 +1422,265 @@ mod tests {
         .unwrap();
         let (cfg, _) = document.resolve("felis");
         assert_eq!(
-            cfg.post_shader_choice(),
-            PostShaderChoice::File(PathBuf::from("/home/u/.config/felis/fx/glow.wgsl")),
+            shader_choices(&cfg),
+            [PostShaderChoice::File(PathBuf::from(
+                "/home/u/.config/felis/fx/glow.wgsl"
+            ))],
         );
+    }
+
+    fn shader_choices(cfg: &EffectiveConfig) -> Vec<PostShaderChoice> {
+        cfg.post_stages()
+            .into_iter()
+            .map(|stage| stage.shader)
+            .collect()
+    }
+
+    #[test]
+    fn an_array_of_stages_is_a_chain_in_written_order() {
+        let cfg: EffectiveConfig = toml::from_str(
+            "[shader]\npost = [{ builtin = \"trail\" }, { file = \"/fx/a.wgsl\" }, { file = \"/fx/b.wgsl\" }]\n",
+        )
+        .unwrap();
+        assert_eq!(
+            shader_choices(&cfg),
+            [
+                PostShaderChoice::Builtin(BuiltinShader::Trail),
+                PostShaderChoice::File(PathBuf::from("/fx/a.wgsl")),
+                PostShaderChoice::File(PathBuf::from("/fx/b.wgsl")),
+            ],
+        );
+    }
+
+    #[test]
+    fn stages_past_the_cap_are_ignored_with_a_warning() {
+        let entries = vec!["{ builtin = \"trail\" }"; MAX_POST_STAGES + 2].join(", ");
+        let (cfg, diagnostics) =
+            ConfigDocument::parse(&format!("[shader]\npost = [{entries}]\n"), None)
+                .unwrap()
+                .resolve("felis");
+        assert_eq!(cfg.shader.post.len(), MAX_POST_STAGES);
+        assert!(!diagnostics.has_errors(), "{diagnostics:?}");
+        let warning = only_warning(&diagnostics);
+        assert_eq!(warning.key.as_deref(), Some("shader.post"));
+        assert!(warning.message.contains("18 stages"), "{warning:?}");
+    }
+
+    #[test]
+    fn an_unknown_builtin_in_a_chain_skips_that_stage_only() {
+        let (cfg, diagnostics) = ConfigDocument::parse(
+            "[shader]\npost = [{ file = \"/fx/a.wgsl\" }, { builtin = \"rain\" }, { builtin = \"trail\" }]\n",
+            None,
+        )
+        .unwrap()
+        .resolve("felis");
+        assert_eq!(
+            shader_choices(&cfg),
+            [
+                PostShaderChoice::File(PathBuf::from("/fx/a.wgsl")),
+                PostShaderChoice::Builtin(BuiltinShader::Trail),
+            ],
+        );
+        let keys: Vec<_> = diagnostics
+            .warnings()
+            .filter_map(|d| d.key.clone())
+            .collect();
+        assert!(
+            keys.contains(&"shader.post[1].builtin".to_owned()),
+            "{keys:?}"
+        );
+        assert!(keys.contains(&"shader.post[0].file".to_owned()), "{keys:?}");
+    }
+
+    #[test]
+    fn an_unknown_key_in_a_stage_warns_and_the_stage_still_loads() {
+        let (cfg, diagnostics) = ConfigDocument::parse(
+            "[shader]\npost = { builtin = \"trail\", strenght = 1 }\n",
+            None,
+        )
+        .unwrap()
+        .resolve("felis");
+        assert_eq!(cfg.shader.post.len(), 1);
+        let warning = only_warning(&diagnostics);
+        assert_eq!(warning.kind, DiagnosticKind::UnknownKey);
+        assert_eq!(warning.key.as_deref(), Some("shader.post.strenght"));
+    }
+
+    #[test]
+    fn params_carry_scalar_values_by_override_name() {
+        let cfg: EffectiveConfig = toml::from_str(
+            "[shader]\npost = { file = \"/fx/flash.wgsl\", params = { strength = 0.6, steps = 4, on = true } }\n",
+        )
+        .unwrap();
+        let params = &cfg.post_stages()[0].params;
+        assert_eq!(params.get("strength"), Some(&PostParamValue::Float(0.6)));
+        assert_eq!(params.get("steps"), Some(&PostParamValue::Int(4)));
+        assert_eq!(params.get("on"), Some(&PostParamValue::Bool(true)));
+        let json = serde_json::to_string(&cfg).unwrap();
+        let back: EffectiveConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, cfg, "{json}");
+    }
+
+    #[test]
+    fn a_non_scalar_param_skips_the_stage_with_a_warning() {
+        let (cfg, diagnostics) = ConfigDocument::parse(
+            "[shader]\npost = [{ builtin = \"trail\", params = { tint = \"red\" } }, { builtin = \"trail\" }]\n",
+            None,
+        )
+        .unwrap()
+        .resolve("felis");
+        assert_eq!(cfg.shader.post.len(), 1);
+        let warning = only_warning(&diagnostics);
+        assert_eq!(warning.key.as_deref(), Some("shader.post[0].params.tint"));
+        assert!(warning.message.contains("string"), "{warning:?}");
+    }
+
+    #[test]
+    fn params_that_are_not_a_table_are_a_type_error() {
+        assert!(
+            toml::from_str::<EffectiveConfig>(
+                "[shader]\npost = { builtin = \"trail\", params = 3 }\n"
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn an_animation_table_names_its_events_and_duration() {
+        let cfg: EffectiveConfig = toml::from_str(
+            "[shader]\npost = { builtin = \"trail\", animation = { on = [\"bell\", \"focus_in\", \"focus_out\", \"left_press\", \"user:glow.v2\"], duration_ms = 300 } }\n",
+        )
+        .unwrap();
+        assert_eq!(
+            cfg.shader.post[0].animation,
+            Some(StageAnimation {
+                on: vec![
+                    ShaderEvent::Bell,
+                    ShaderEvent::FocusIn,
+                    ShaderEvent::FocusOut,
+                    ShaderEvent::LeftPress,
+                    ShaderEvent::User("glow.v2".to_owned()),
+                ],
+                duration_ms: 300,
+            })
+        );
+        let json = serde_json::to_string(&cfg).unwrap();
+        assert!(json.contains("\"user:glow.v2\""), "{json}");
+        let back: EffectiveConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, cfg);
+    }
+
+    #[test]
+    fn an_invalid_animation_table_loads_the_stage_without_animation_and_warns() {
+        for animation in [
+            "{ on = [\"bell\"], duration_ms = 0 }",
+            "{ on = [\"bell\"], duration_ms = 10001 }",
+            "{ on = [\"bell\"], duration_ms = -5 }",
+            "{ on = [\"bell\"], duration_ms = 1.5 }",
+            "{ on = [\"bell\"] }",
+            "{ duration_ms = 300 }",
+            "{ on = [], duration_ms = 300 }",
+            "{ on = [\"\"], duration_ms = 300 }",
+            "{ on = [\"beep\"], duration_ms = 300 }",
+            "{ on = [\"user:\"], duration_ms = 300 }",
+            "{ on = [\"user:has space\"], duration_ms = 300 }",
+            "{ on = [\"bell\"], duration_ms = 300, loop = true }",
+            "\"bell\"",
+        ] {
+            let (cfg, diagnostics) = ConfigDocument::parse(
+                &format!("[shader]\npost = {{ builtin = \"trail\", animation = {animation} }}\n"),
+                None,
+            )
+            .unwrap()
+            .resolve("felis");
+            assert_eq!(cfg.shader.post.len(), 1, "{animation}");
+            assert_eq!(cfg.shader.post[0].animation, None, "{animation}");
+            let warning = only_warning(&diagnostics);
+            assert_eq!(
+                warning.key.as_deref(),
+                Some("shader.post.animation"),
+                "{animation}"
+            );
+            assert!(warning.message.contains("without animation"), "{warning:?}");
+        }
+    }
+
+    #[test]
+    fn the_longest_and_shortest_durations_are_accepted_unclamped() {
+        for ms in [1, MAX_ANIMATION_MS] {
+            let cfg: EffectiveConfig = toml::from_str(&format!(
+                "[shader]\npost = {{ builtin = \"trail\", animation = {{ on = [\"bell\"], duration_ms = {ms} }} }}\n"
+            ))
+            .unwrap();
+            assert_eq!(
+                cfg.shader.post[0].animation.as_ref().map(|a| a.duration_ms),
+                Some(ms)
+            );
+        }
+    }
+
+    #[test]
+    fn a_shader_event_binding_compiles_to_its_action() {
+        let (cfg, diagnostics) = ConfigDocument::parse(
+            concat!(
+                "[shader]\npost = { builtin = \"trail\", animation = { on = [\"user:glow\"], duration_ms = 300 } }\n",
+                "[keymap]\n\"ctrl+shift+g\" = { kind = \"shader_event\", name = \"glow\" }\n",
+            ),
+            None,
+        )
+        .unwrap()
+        .resolve("felis");
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        let compiled = cfg.keymap.compile(None);
+        assert_eq!(
+            compiled[0].1.clone().into_action(),
+            Some(Action::ShaderEvent {
+                name: "glow".to_owned()
+            })
+        );
+    }
+
+    #[test]
+    fn a_shader_event_binding_with_a_malformed_name_is_dropped() {
+        let (cfg, diagnostics) = ConfigDocument::parse(
+            "[keymap]\n\"ctrl+shift+g\" = { kind = \"shader_event\", name = \"two words\" }\n",
+            None,
+        )
+        .unwrap()
+        .resolve("felis");
+        assert_eq!(
+            cfg.keymap.compile(None),
+            Vec::<(Chord, BindingValue)>::new()
+        );
+        let warning = only_warning(&diagnostics);
+        assert_eq!(warning.key.as_deref(), Some("keymap.\"ctrl+shift+g\""));
+    }
+
+    #[test]
+    fn a_shader_event_no_stage_listens_for_warns() {
+        let (_, diagnostics) = ConfigDocument::parse(
+            concat!(
+                "[shader]\npost = { builtin = \"trail\", animation = { on = [\"user:glow\"], duration_ms = 300 } }\n",
+                "[keymap]\n\"ctrl+shift+g\" = { kind = \"shader_event\", name = \"gloww\" }\n",
+            ),
+            None,
+        )
+        .unwrap()
+        .resolve("felis");
+        let warning = only_warning(&diagnostics);
+        assert_eq!(warning.key.as_deref(), Some("keymap.\"ctrl+shift+g\""));
+        assert!(warning.message.contains("user:gloww"), "{warning:?}");
+    }
+
+    #[test]
+    fn a_stage_naming_both_selectors_or_neither_is_a_type_error() {
+        for text in [
+            "[shader]\npost = { builtin = \"trail\", file = \"a.wgsl\" }\n",
+            "[shader]\npost = {}\n",
+            "[shader]\npost = [\"trail\"]\n",
+        ] {
+            assert!(toml::from_str::<EffectiveConfig>(text).is_err(), "{text}");
+        }
     }
 
     #[test]
@@ -1123,7 +1704,7 @@ mod tests {
             ConfigDocument::parse("[shader]\npost = { builtin = \"trial\" }\n", None)
                 .unwrap()
                 .resolve("felis");
-        assert_eq!(cfg.shader.post, None);
+        assert_eq!(cfg.shader.post, Vec::<PostStageConfig>::new());
         assert!(!diagnostics.has_errors(), "{diagnostics:?}");
         let warning = only_warning(&diagnostics);
         assert_eq!(warning.kind, DiagnosticKind::Value);
@@ -1137,7 +1718,7 @@ mod tests {
             ConfigDocument::parse("[shader]\npost = { procedural = \"rain\" }\n", None)
                 .unwrap()
                 .resolve("felis");
-        assert_eq!(cfg.shader.post, None);
+        assert_eq!(cfg.shader.post, Vec::<PostStageConfig>::new());
         assert!(!diagnostics.has_errors(), "{diagnostics:?}");
         let warning = only_warning(&diagnostics);
         assert_eq!(warning.key.as_deref(), Some("shader.post"));
@@ -2396,8 +2977,8 @@ mod tests {
         let cfg = EffectiveConfig::try_load_from(&path, "felis")
             .expect("a missing shader must not fail the load");
         assert_eq!(
-            cfg.post_shader_choice(),
-            PostShaderChoice::File(dir.path().join("fx/glow.wgsl")),
+            shader_choices(&cfg),
+            [PostShaderChoice::File(dir.path().join("fx/glow.wgsl"))],
         );
 
         let (_, diagnostics) = EffectiveConfig::diagnose(&path, "felis");
@@ -2418,8 +2999,8 @@ mod tests {
         let (cfg, diagnostics) = EffectiveConfig::diagnose(&path, "felis");
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
         assert_eq!(
-            cfg.post_shader_choice(),
-            PostShaderChoice::File(dir.path().join("fx/glow.wgsl")),
+            shader_choices(&cfg),
+            [PostShaderChoice::File(dir.path().join("fx/glow.wgsl"))],
         );
     }
 
@@ -2435,7 +3016,7 @@ mod tests {
         );
         std::fs::write(&path, toml).unwrap();
         let (cfg, _) = EffectiveConfig::diagnose(&path, "felis");
-        assert_eq!(cfg.post_shader_choice(), PostShaderChoice::File(elsewhere));
+        assert_eq!(shader_choices(&cfg), [PostShaderChoice::File(elsewhere)]);
     }
 
     fn pipe_target(cfg: &EffectiveConfig, chord: &str) -> crate::action::PipeTarget {

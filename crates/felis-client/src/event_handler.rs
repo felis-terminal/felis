@@ -1,9 +1,11 @@
 //! The winit `ApplicationHandler` implementation for `App`.
 
 use felis_client_core::{
+    config::ShaderEvent,
     pull::RedrawTurn,
     renderer_effect::{RendererEffect, renderer_effect},
 };
+use felis_protocol::messages::AttentionSource;
 
 use super::{
     ActiveEventLoop, App, AppEvent, ApplicationHandler, Arc, ClosedOutcome, ControlFlow, DragState,
@@ -254,6 +256,10 @@ impl ApplicationHandler<AppEvent> for App {
             self.redraw.request();
         }
         let shader_deadline = self.shader_clock.next_deadline(shader_animating);
+        if self.stage_animations.tick(now) {
+            self.redraw.request();
+        }
+        let stage_animation_deadline = self.stage_animations.next_deadline();
         let turn = self.present_retry.turn(now);
         if turn == RedrawTurn::Retry {
             self.redraw.request();
@@ -293,6 +299,7 @@ impl ApplicationHandler<AppEvent> for App {
                 self.cursor_blink.next_deadline(blink_wants),
                 trail_deadline,
                 shader_deadline,
+                stage_animation_deadline,
             ]
             .into_iter()
             .flatten()
@@ -335,6 +342,11 @@ impl App {
                 if focused {
                     self.restart_blink();
                 }
+                self.fire_shader_event(if focused {
+                    &ShaderEvent::FocusIn
+                } else {
+                    &ShaderEvent::FocusOut
+                });
                 // Release events while another app has focus never reach
                 // us, leaving modifiers stuck.
                 if !focused {
@@ -584,9 +596,12 @@ impl App {
                     // A notification (docs/reference/protocols/notifications.md)
                     // flashes the same way BEL does: felis never draws a
                     // popup, and the content went to observer connections.
-                    GridMsg::Attention { .. } => {
+                    GridMsg::Attention { source } => {
                         if let Some(window) = self.window.as_ref() {
                             window.request_attention();
+                        }
+                        if *source == AttentionSource::Bell {
+                            self.fire_shader_event(&ShaderEvent::Bell);
                         }
                     }
                     _ => {}
@@ -1034,6 +1049,7 @@ impl App {
     fn on_mouse_input(&mut self, pressed: bool, button: MouseButton) {
         if pressed && button == MouseButton::Left {
             self.last_press_px = self.pointer_px;
+            self.fire_shader_event(&ShaderEvent::LeftPress);
         }
         self.update_post_mouse_state();
         let Some(cell) = self.cursor_cell else { return };

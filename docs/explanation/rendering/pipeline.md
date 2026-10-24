@@ -5,7 +5,7 @@ sidebar:
 ---
 
 The client owns all rendering. This page covers how that rendering is organized: the process model and the per-frame
-flow, the GPU resources, how frames are paced across the IPC boundary, window chrome, the optional post-process stage,
+flow, the GPU resources, how frames are paced across the IPC boundary, window chrome, the optional post-process chain,
 and the prior art behind the draw and atlas choices.
 
 ## Process model
@@ -89,7 +89,7 @@ each frame back as RGBA, such as a recording-to-video converter or a screenshot 
 `Rgba8UnormSrgb`, because there is no surface to negotiate one with, and `background_opacity` is ignored, because no
 compositor places the result behind anything.
 
-An offscreen renderer has no post-process stage and refuses a configured shader. The stage's time uniforms read the host
+An offscreen renderer has no post-process chain and refuses a configured shader. The stages' time uniforms read the host
 clock, and the bundled trail shader paints the whole frame until the client's easing loop has driven the trail state, so
 an offscreen frame would depend on when it was rendered rather than on the screen it shows.
 
@@ -388,13 +388,13 @@ strength would need a companion key, since `backdrop` names materials).
 
 ## Cursor trail and user post-process shaders
 
-felis has one optional post-process stage: when `shader.post` names a shader, the cell pass renders to an offscreen
-texture instead of the swapchain, and a fullscreen pass samples it back through a user-replaceable fragment shader
-driven by a versioned uniform contract. The first consumer is a **cursor trail**, shipped as a bundled WGSL shader on
-that contract; a user may substitute their own. There is no built-in-only code path: the bundled trail exercises the
-same contract users get. With no shader configured the stage does not exist and the pipeline stays single-pass. The
-normative surface (the resolution rules, the entry point, and every uniform) is the reference twin,
-[shaders.md](../../reference/shaders.md); this section holds the argument.
+felis has one optional post-process chain: when `shader.post` names one or more stages, the cell pass renders to an
+offscreen texture instead of the swapchain, and each stage is a fullscreen pass that samples the output before it
+through a user-replaceable fragment shader driven by a versioned uniform contract. The first consumer is a **cursor
+trail**, shipped as a bundled WGSL shader on that contract; a user may substitute their own. There is no built-in-only
+code path: the bundled trail exercises the same contract users get. With no shader configured the chain does not exist
+and the pipeline stays single-pass. The normative surface (the resolution rules, the entry point, and every uniform) is
+the reference twin, [shaders.md](../../reference/shaders.md); this section holds the argument.
 
 ### Relation to the evaluator ban
 
@@ -425,7 +425,8 @@ is second-class and is not accepted.
 
 Source compatibility with kitty or ghostty shaders is a non-goal, but the uniform vocabulary those two converged on
 independently (cursor current/previous geometry, cursor change time, time and frame, theme colors) is kept semantically
-aligned, so a port is a mechanical GLSL-to-WGSL rewrite plus a uniform rename.
+aligned, so a port is a mechanical GLSL-to-WGSL rewrite plus a uniform rename, and a flip of the vertical axis: both
+source dialects count fragment coordinates from the bottom-left (GLSL's `gl_FragCoord`), felis's UV from the top-left.
 
 ### Idle-zero under animation
 
@@ -455,6 +456,19 @@ turn on a redraw loop by being installed would put the invariant back in the sha
 There is deliberately no unfocused variant (ghostty's `custom-shader-animation = always`). A background window burning a
 core is the case the invariant most obviously exists to prevent, and the effect is not on screen to be watched.
 
+A one-shot effect (a bell flash, a focus glow) is the trail's shape again, with the event as the arm: a stage's
+`animation` names the events that start it and a duration, and the client draws until that duration ends, plus the one
+frame that shows it finished. The host knows every end, so idle still means zero frames, and the bound is the duration
+rather than focus, which is why such a run plays in an unfocused window where `shader.animate` does not: a bell in a
+background window has to be able to flash, and a `focus_out` effect is unfocused by definition. The ten-second ceiling
+on `duration_ms` keeps a run a short burst, so a continuous loop still has to be asked for through `shader.animate`. The
+shader receives linear progress; an easing curve is a pure function it applies itself, so felis carries no curve
+vocabulary (kitty's `animation_start` directives carry one).
+
+A stage's history texture adds no frames either. An afterglow fades only on frames that happen for one of the reasons
+above, and `time_delta_s` lets it fade by elapsed time rather than by frame count, so an idle window holds the last
+frame instead of decaying in the background.
+
 The SGR-blink rejection below rests on who triggers the flashing: a remote program can set blink on content, and the
 user has no lever. A shader flashes only if the user installs one that does, in their own config. The two decisions
 share the axis and do not conflict.
@@ -468,10 +482,12 @@ user wrote, which principle 4 rules out ([principles.md](../principles.md)), and
 since a file named `trail.wgsl` becomes unreachable and a shader sitting in the config directory cannot be spelled as
 the path it is. What it buys, typing `"glow"` for a file under a directory felis picked, does not pay for either.
 
-A shader that fails validation drops the post-process pass rather than falling back to the bundled one: substituting a
-cursor trail for the effect the user asked for is a silent change of behavior, where an absent pass reads as "your
-shader did not run". Validation runs before the device sees the source, so the window keeps painting either way; the
-failure rows are in [shaders.md](../../reference/shaders.md) "Failure handling". ghostty's failure mode is the
+A shader that fails validation drops its stage rather than falling back to the bundled one: substituting a cursor trail
+for the effect the user asked for is a silent change of behavior, where an absent pass reads as "your shader did not
+run". The rest of a chain still runs, since each stage reads only what the stage before it produced. A stage is created
+inside a device validation scope, so a shader the device refuses (a feature it did not enable, a fragment interface that
+does not match the fixed vertex stage) drops its stage like one naga refuses, and the window keeps painting either way;
+the failure rows are in [shaders.md](../../reference/shaders.md) "Failure handling". ghostty's failure mode is the
 counterexample: an invalid shader can black the window and the error reaches only the log (ghostty
 `src/config/Config.zig`, the `custom-shader` doc comment).
 
@@ -491,9 +507,16 @@ counterexample: an invalid shader can black the window and the error reaches onl
 - **Source compatibility with kitty `.slang` or ghostty Shadertoy GLSL.** Would chain the contract to two moving
   external vocabularies and require exactly the in-process compilers rejected above. Semantic alignment of the uniform
   vocabulary is kept instead.
+- **A render graph instead of a linear chain** (kitty's `.pipeline` groups with named scratch textures and per-group
+  viewports). The target effects (an effect over the bundled trail, an afterglow, a motion blur) each need only the
+  output before them and their own previous frame, which a chain plus a per-stage history texture provides. A graph
+  would put a wiring language in the config and resources in the contract that no consumer reads.
+- **Params through the uniform block or by rewriting the source.** A uniform block would grow the shared contract for
+  one stage's knobs, and substituting text into the user's file is felis editing code it then validates. WGSL `override`
+  constants are the language's own mechanism: typed by the declaration, set at pipeline creation, and invisible to a
+  stage that declares none.
 
-_Revisit if_ a real consumer needs the vertex stage, multi-pass composition, or a persistent texture (kitty's
-`.pipeline` groups and `persist` texture are the shape to study).
+_Revisit if_ a real consumer needs the vertex stage.
 
 ## Performance principles
 

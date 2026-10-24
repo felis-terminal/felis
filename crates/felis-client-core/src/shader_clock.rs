@@ -10,7 +10,7 @@ use crate::config::ShaderAnimation;
 
 /// 60 Hz rather than the panel's refresh: winit exposes no portable
 /// refresh rate.
-const FRAME_INTERVAL: Duration = Duration::from_millis(16);
+pub(crate) const FRAME_INTERVAL: Duration = Duration::from_millis(16);
 
 #[derive(Debug)]
 pub struct ShaderClock {
