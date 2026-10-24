@@ -887,9 +887,34 @@
         }
       ]
     },
+    "PostParamValue": {
+      "description": "A `params` value. Only scalars: WGSL overrides are scalars.",
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "integer",
+          "format": "int64"
+        },
+        {
+          "type": "number",
+          "format": "double"
+        }
+      ]
+    },
     "PostStageConfig": {
       "description": "One `shader.post` stage.",
       "type": "object",
+      "properties": {
+        "params": {
+          "description": "Values for the shader's WGSL `override` declarations, keyed by the\noverride's name: a boolean, an integer, or a float, checked\nagainst the declared type when the stage loads.",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/PostParamValue"
+          }
+        }
+      },
       "oneOf": [
         {
           "description": "A shader felis carries in the binary.",

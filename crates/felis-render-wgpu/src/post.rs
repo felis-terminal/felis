@@ -20,7 +20,9 @@ use wgpu::{
     Texture, TextureDescriptor, TextureDimension, TextureFormat, TextureSampleType, TextureUsages,
     TextureView, TextureViewDescriptor, TextureViewDimension, VertexState,
     naga::{
-        AddressSpace, ImageClass, ImageDimension, Module, ResourceBinding, ScalarKind, TypeInner,
+        AddressSpace, ImageClass, ImageDimension, Module, ResourceBinding, Scalar, ScalarKind,
+        ShaderStage, TypeInner,
+        back::{PipelineConstants, pipeline_constants::process_overrides},
         front::wgsl,
         valid::{Capabilities, ValidationFlags, Validator},
     },
@@ -54,6 +56,8 @@ pub enum PostShaderError {
     MissingEntryPoint,
     #[error("binding: {0}")]
     Binding(String),
+    #[error("params: {0}")]
+    Param(String),
     #[error("device rejected the stage: {0}")]
     Device(String),
     #[error("an offscreen renderer has no post-process stage")]
@@ -304,11 +308,21 @@ pub struct PostFrame<'a> {
 }
 
 /// One entry of the chain the client resolved from `shader.post`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PostStageSource {
     /// What the logs call the stage (a path, or the builtin's name).
     pub label: String,
     pub wgsl: String,
+    /// Values for the module's `override` declarations, by WGSL name.
+    pub params: Vec<(String, PostParam)>,
+}
+
+/// A `shader.post` param value, as the config spelled it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PostParam {
+    Bool(bool),
+    Int(i64),
+    Float(f64),
 }
 
 /// What every stage of a chain shares.
@@ -396,7 +410,7 @@ impl PostStage {
         shared: &PostShared,
         source: &PostStageSource,
     ) -> Result<Self, PostShaderError> {
-        let checked = check_post_shader(&source.wgsl)?;
+        let checked = check_post_stage(source)?;
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let fragment_module = device.create_shader_module(ShaderModuleDescriptor {
             label: Some("felis post fragment"),
@@ -407,12 +421,18 @@ impl PostStage {
         } else {
             &shared.bind_group_layout
         };
+        let constants: Vec<(&str, f64)> = checked
+            .constants
+            .iter()
+            .map(|(key, value)| (key.as_str(), *value))
+            .collect();
         let pipeline = build_post_pipeline(
             device,
             layout,
             &shared.vertex_module,
             &fragment_module,
             shared.format,
+            &constants,
         );
         if let Some(error) = crate::warmup::block_on(scope.pop()) {
             return Err(PostShaderError::Device(error.to_string()));
@@ -588,29 +608,120 @@ pub const fn post_bind_group_layout_entries() -> [BindGroupLayoutEntry; 4] {
 pub(crate) struct CheckedShader {
     /// The module declares binding 3.
     pub(crate) history: bool,
+    /// The pipeline constants the params set, keyed as wgpu expects.
+    pub(crate) constants: Vec<(String, f64)>,
 }
 
 /// Needs no device, so a missing entry point is reported by name rather
 /// than as the device's pipeline-creation error.
 pub fn validate_post_shader(source: &str) -> Result<(), PostShaderError> {
-    check_post_shader(source).map(drop)
+    check_post_shader(source, &[]).map(drop)
 }
 
-pub(crate) fn check_post_shader(source: &str) -> Result<CheckedShader, PostShaderError> {
+pub(crate) fn check_post_stage(source: &PostStageSource) -> Result<CheckedShader, PostShaderError> {
+    check_post_shader(&source.wgsl, &source.params)
+}
+
+fn check_post_shader(
+    source: &str,
+    params: &[(String, PostParam)],
+) -> Result<CheckedShader, PostShaderError> {
     let module = wgsl::parse_str(source).map_err(|e| PostShaderError::Parse(e.to_string()))?;
-    Validator::new(ValidationFlags::all(), Capabilities::all())
+    let info = Validator::new(ValidationFlags::all(), Capabilities::all())
         .validate(&module)
         .map_err(|e| PostShaderError::Validate(e.to_string()))?;
     let has_entry = module
         .entry_points
         .iter()
-        .any(|ep| ep.name == POST_ENTRY_POINT && ep.stage == wgpu::naga::ShaderStage::Fragment);
+        .any(|ep| ep.name == POST_ENTRY_POINT && ep.stage == ShaderStage::Fragment);
     if !has_entry {
         return Err(PostShaderError::MissingEntryPoint);
     }
-    Ok(CheckedShader {
-        history: check_bindings(&module)?,
-    })
+    let history = check_bindings(&module)?;
+    let constants = override_constants(&module, params)?;
+    // The substitution and re-validation wgpu runs at pipeline creation,
+    // run here so the failure is reported as the params' fault: an override
+    // left without a default, or an override expression that fails to
+    // evaluate.
+    let map: PipelineConstants = constants.iter().cloned().collect();
+    process_overrides(
+        &module,
+        &info,
+        Some((ShaderStage::Fragment, POST_ENTRY_POINT)),
+        &map,
+    )
+    .map_err(|e| PostShaderError::Param(e.to_string()))?;
+    Ok(CheckedShader { history, constants })
+}
+
+/// Checks each param against its `override`'s declared type before the
+/// value becomes the `f64` wgpu takes, because naga's conversion from that
+/// `f64` truncates silently (a float into an integer override, say).
+/// `@id(n)` overrides are keyed by `"n"`, which is how wgpu looks them up.
+fn override_constants(
+    module: &Module,
+    params: &[(String, PostParam)],
+) -> Result<Vec<(String, f64)>, PostShaderError> {
+    params
+        .iter()
+        .map(|(name, value)| {
+            let declared = module
+                .overrides
+                .iter()
+                .map(|(_, o)| o)
+                .find(|o| o.name.as_deref() == Some(name.as_str()))
+                .ok_or_else(|| {
+                    PostShaderError::Param(format!("the shader declares no `override {name}`"))
+                })?;
+            let TypeInner::Scalar(scalar) = module.types[declared.ty].inner else {
+                return Err(PostShaderError::Param(format!(
+                    "`{name}` is not a scalar override"
+                )));
+            };
+            let converted = param_value(scalar, *value).ok_or_else(|| {
+                PostShaderError::Param(format!(
+                    "`{name}` is {}; {} does not fit it",
+                    scalar_name(scalar),
+                    param_name(*value),
+                ))
+            })?;
+            let key = declared
+                .id
+                .map_or_else(|| name.clone(), |id| id.to_string());
+            Ok((key, converted))
+        })
+        .collect()
+}
+
+fn param_value(scalar: Scalar, value: PostParam) -> Option<f64> {
+    match (scalar, value) {
+        (Scalar::BOOL, PostParam::Bool(b)) => Some(if b { 1.0 } else { 0.0 }),
+        (Scalar::I32, PostParam::Int(i)) => i32::try_from(i).ok().map(f64::from),
+        (Scalar::U32, PostParam::Int(i)) => u32::try_from(i).ok().map(f64::from),
+        (Scalar::F32, PostParam::Int(i)) => Some(i as f64),
+        (Scalar::F32, PostParam::Float(f)) => {
+            (f.is_finite() && f.abs() <= f64::from(f32::MAX)).then_some(f)
+        }
+        _ => None,
+    }
+}
+
+const fn scalar_name(scalar: Scalar) -> &'static str {
+    match scalar {
+        Scalar::BOOL => "a `bool` override",
+        Scalar::I32 => "an `i32` override",
+        Scalar::U32 => "a `u32` override",
+        Scalar::F32 => "an `f32` override",
+        _ => "an override of a type params cannot set",
+    }
+}
+
+fn param_name(value: PostParam) -> String {
+    match value {
+        PostParam::Bool(b) => format!("the boolean `{b}`"),
+        PostParam::Int(i) => format!("the integer `{i}`"),
+        PostParam::Float(f) => format!("the float `{f}`"),
+    }
 }
 
 /// naga validates a module on its own, never against a pipeline layout, so
@@ -685,6 +796,7 @@ pub(crate) fn build_post_pipeline(
     vertex_module: &ShaderModule,
     fragment_module: &ShaderModule,
     format: TextureFormat,
+    constants: &[(&str, f64)],
 ) -> RenderPipeline {
     let layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
         label: Some("felis post pipeline layout"),
@@ -710,7 +822,10 @@ pub(crate) fn build_post_pipeline(
                 blend: Some(BlendState::REPLACE),
                 write_mask: ColorWrites::ALL,
             })],
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            compilation_options: wgpu::PipelineCompilationOptions {
+                constants,
+                ..wgpu::PipelineCompilationOptions::default()
+            },
         }),
         primitive: PrimitiveState::default(),
         depth_stencil: None,
@@ -987,6 +1102,7 @@ mod tests {
             &shared.vertex_module,
             &module,
             shared.format,
+            &[],
         );
         assert!(crate::warmup::block_on(scope.pop()).is_some());
     }
@@ -1025,12 +1141,132 @@ mod tests {
         }
     }
 
+    fn with_params(
+        globals: &str,
+        params: &[(&str, PostParam)],
+    ) -> Result<Vec<(String, f64)>, PostShaderError> {
+        let params: Vec<(String, PostParam)> = params
+            .iter()
+            .map(|(name, value)| ((*name).to_owned(), *value))
+            .collect();
+        check_post_shader(&shader_with_globals(globals), &params).map(|checked| checked.constants)
+    }
+
+    const ALL_OVERRIDES: &str = "override flag: bool = false;\n\
+        override count: i32 = 0;\n\
+        override steps: u32 = 0u;\n\
+        override strength: f32 = 0.5;";
+
+    #[test]
+    fn each_scalar_override_takes_the_matching_toml_value() {
+        let constants = with_params(
+            ALL_OVERRIDES,
+            &[
+                ("flag", PostParam::Bool(true)),
+                ("count", PostParam::Int(-3)),
+                ("steps", PostParam::Int(i64::from(u32::MAX))),
+                ("strength", PostParam::Float(0.25)),
+            ],
+        )
+        .expect("every value fits its override");
+        assert_eq!(
+            constants,
+            [
+                ("flag".to_owned(), 1.0),
+                ("count".to_owned(), -3.0),
+                ("steps".to_owned(), f64::from(u32::MAX)),
+                ("strength".to_owned(), 0.25),
+            ]
+        );
+        assert_eq!(
+            with_params(ALL_OVERRIDES, &[("strength", PostParam::Int(2))])
+                .expect("an integer is an f32"),
+            [("strength".to_owned(), 2.0)]
+        );
+    }
+
+    #[test]
+    fn a_param_that_does_not_fit_its_override_rejects_the_stage() {
+        for (name, value) in [
+            ("count", PostParam::Float(1.5)),
+            ("count", PostParam::Int(i64::from(i32::MAX) + 1)),
+            ("steps", PostParam::Int(-1)),
+            ("steps", PostParam::Bool(true)),
+            ("flag", PostParam::Int(1)),
+            ("strength", PostParam::Bool(false)),
+            ("strength", PostParam::Float(f64::INFINITY)),
+            ("strength", PostParam::Float(f64::NAN)),
+            ("strength", PostParam::Float(1e39)),
+        ] {
+            assert!(
+                matches!(
+                    with_params(ALL_OVERRIDES, &[(name, value)]),
+                    Err(PostShaderError::Param(_))
+                ),
+                "{name} = {value:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn a_param_naming_no_override_rejects_the_stage() {
+        assert!(matches!(
+            with_params(ALL_OVERRIDES, &[("strenght", PostParam::Float(1.0))]),
+            Err(PostShaderError::Param(_))
+        ));
+    }
+
+    #[test]
+    fn an_override_with_an_id_is_keyed_by_the_id_but_set_by_its_name() {
+        assert_eq!(
+            with_params(
+                "@id(7) override strength: f32 = 0.5;",
+                &[("strength", PostParam::Float(0.75))]
+            )
+            .expect("loads"),
+            [("7".to_owned(), 0.75)]
+        );
+    }
+
+    #[test]
+    fn an_override_without_a_default_must_be_set() {
+        let globals = "override strength: f32;\n\
+            @group(0) @binding(1) var backbuffer: texture_2d<f32>;";
+        let src = shader_with_globals(globals).replace(
+            "return vec4<f32>(uv, 0.0, 1.0);",
+            "return vec4<f32>(uv, strength, 1.0);",
+        );
+        assert!(matches!(
+            check_post_shader(&src, &[]),
+            Err(PostShaderError::Param(_))
+        ));
+        assert!(check_post_shader(&src, &[("strength".to_owned(), PostParam::Float(1.0))]).is_ok());
+    }
+
+    #[test]
+    fn an_override_expression_that_fails_to_evaluate_rejects_the_stage() {
+        let globals = "override divisor: i32 = 1;\noverride ratio: i32 = 10 / divisor;";
+        let src = shader_with_globals(globals).replace(
+            "return vec4<f32>(uv, 0.0, 1.0);",
+            "return vec4<f32>(uv, f32(ratio), 1.0);",
+        );
+        assert!(check_post_shader(&src, &[]).is_ok());
+        assert!(matches!(
+            check_post_shader(&src, &[("divisor".to_owned(), PostParam::Int(0))]),
+            Err(PostShaderError::Param(_))
+        ));
+    }
+
     #[test]
     fn declaring_binding_3_as_a_texture_asks_for_history() {
         let with = shader_with_globals("@group(0) @binding(3) var history: texture_2d<f32>;");
-        assert!(check_post_shader(&with).expect("history loads").history);
+        assert!(
+            check_post_shader(&with, &[])
+                .expect("history loads")
+                .history
+        );
         let without = shader_with_globals("@group(0) @binding(1) var backbuffer: texture_2d<f32>;");
-        assert!(!check_post_shader(&without).expect("loads").history);
+        assert!(!check_post_shader(&without, &[]).expect("loads").history);
         let wrong = shader_with_globals("@group(0) @binding(3) var history: sampler;");
         assert!(matches!(
             validate_post_shader(&wrong),

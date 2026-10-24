@@ -324,7 +324,7 @@ fn post_stages(
                     }
                 }
             }
-            Ok(StageParse::UnknownToken {
+            Ok(StageParse::Skipped {
                 key_suffix,
                 message,
             }) => diagnostics.warning(

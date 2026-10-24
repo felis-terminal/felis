@@ -30,10 +30,7 @@ mod cli {
     fn cli_flags_before_double_dash_do_not_leak_into_command() {
         let cli = Cli::try_parse_from(["felis", "--socket", "/tmp/s.sock", "--", "ls"])
             .expect("parses felis --socket P -- ls");
-        assert_eq!(
-            cli.socket.as_deref(),
-            Some(std::path::Path::new("/tmp/s.sock"))
-        );
+        assert_eq!(cli.socket.as_deref(), Some(Path::new("/tmp/s.sock")));
         assert_eq!(cli.command, vec!["ls"]);
     }
 

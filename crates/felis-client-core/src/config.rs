@@ -172,7 +172,8 @@ pub enum CursorBlinkMode {
 /// `[shader]` section: an optional WGSL post-process pass applied to
 /// the rendered frame. Clients that draw no pixels ignore this
 /// section.
-#[derive(Debug, Default, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Debug, Default, Clone, Deserialize, Serialize, PartialEq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(default)]
 pub struct ShaderConfig {
@@ -214,12 +215,27 @@ pub enum ShaderAnimation {
 pub const MAX_POST_STAGES: usize = 16;
 
 /// One `shader.post` stage.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct PostStageConfig {
     /// Which shader the stage runs.
     #[serde(flatten)]
     pub shader: PostShader,
+    /// Values for the shader's WGSL `override` declarations, keyed by the
+    /// override's name: a boolean, an integer, or a float, checked
+    /// against the declared type when the stage loads.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub params: BTreeMap<String, PostParamValue>,
+}
+
+/// A `params` value. Only scalars: WGSL overrides are scalars.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(untagged)]
+pub enum PostParamValue {
+    Bool(bool),
+    Int(i64),
+    Float(f64),
 }
 
 #[cfg(feature = "schema")]
@@ -266,9 +282,10 @@ pub enum PostShaderChoice {
 }
 
 /// One [`ShaderConfig::post`] stage, ready for the client to load.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedPostStage {
     pub shader: PostShaderChoice,
+    pub params: BTreeMap<String, PostParamValue>,
 }
 
 impl ShaderConfig {
@@ -283,6 +300,7 @@ impl ShaderConfig {
                         PostShaderChoice::File(resolve_path(Path::new(path), base_dir))
                     }
                 },
+                params: stage.params.clone(),
             })
             .collect()
     }
@@ -359,7 +377,7 @@ pub(super) fn post_stage_entries(
 }
 
 /// Keys a stage table carries besides its selector.
-const STAGE_KEYS: [&str; 0] = [];
+const STAGE_KEYS: [&str; 1] = ["params"];
 
 pub(super) enum StageParse {
     Loaded {
@@ -367,12 +385,10 @@ pub(super) enum StageParse {
         /// Keys the stage table has that this build does not know.
         unknown_keys: Vec<String>,
     },
-    /// A selector or builtin this build does not know: the stage is
-    /// dropped. `key_suffix` extends the stage's path to the offending key.
-    UnknownToken {
-        key_suffix: &'static str,
-        message: String,
-    },
+    /// A selector or builtin this build does not know, or a param value
+    /// no override can take: the stage is dropped. `key_suffix` extends
+    /// the stage's path to the offending key.
+    Skipped { key_suffix: String, message: String },
 }
 
 pub(super) fn parse_stage(value: &toml::Value) -> Result<StageParse, String> {
@@ -402,16 +418,16 @@ pub(super) fn parse_stage(value: &toml::Value) -> Result<StageParse, String> {
             match BuiltinShader::deserialize((*payload).clone()) {
                 Ok(builtin) => PostShader::Builtin(builtin),
                 Err(_) => {
-                    return Ok(StageParse::UnknownToken {
-                        key_suffix: ".builtin",
+                    return Ok(StageParse::Skipped {
+                        key_suffix: ".builtin".to_owned(),
                         message: format!("unknown builtin shader `{name}`; stage skipped"),
                     });
                 }
             }
         }
         [] if unknown_keys.len() == 1 => {
-            return Ok(StageParse::UnknownToken {
-                key_suffix: "",
+            return Ok(StageParse::Skipped {
+                key_suffix: String::new(),
                 message: format!(
                     "unknown shader selector `{}`; stage skipped",
                     unknown_keys[0]
@@ -425,8 +441,33 @@ pub(super) fn parse_stage(value: &toml::Value) -> Result<StageParse, String> {
             );
         }
     };
+    let params = match table.get("params") {
+        None => BTreeMap::new(),
+        Some(toml::Value::Table(params)) => {
+            let mut values = BTreeMap::new();
+            for (name, value) in params {
+                let value = match value {
+                    toml::Value::Boolean(b) => PostParamValue::Bool(*b),
+                    toml::Value::Integer(i) => PostParamValue::Int(*i),
+                    toml::Value::Float(f) => PostParamValue::Float(*f),
+                    other => {
+                        return Ok(StageParse::Skipped {
+                            key_suffix: format!(".params.{name}"),
+                            message: format!(
+                                "a {}, but a param is a boolean, integer or float; stage skipped",
+                                other.type_str()
+                            ),
+                        });
+                    }
+                };
+                values.insert(name.clone(), value);
+            }
+            values
+        }
+        Some(_) => return Err("`params` takes a table of override values".to_owned()),
+    };
     Ok(StageParse::Loaded {
-        stage: PostStageConfig { shader },
+        stage: PostStageConfig { shader, params },
         unknown_keys,
     })
 }
@@ -1301,6 +1342,45 @@ mod tests {
         let warning = only_warning(&diagnostics);
         assert_eq!(warning.kind, DiagnosticKind::UnknownKey);
         assert_eq!(warning.key.as_deref(), Some("shader.post.strenght"));
+    }
+
+    #[test]
+    fn params_carry_scalar_values_by_override_name() {
+        let cfg: EffectiveConfig = toml::from_str(
+            "[shader]\npost = { file = \"/fx/flash.wgsl\", params = { strength = 0.6, steps = 4, on = true } }\n",
+        )
+        .unwrap();
+        let params = &cfg.post_stages()[0].params;
+        assert_eq!(params.get("strength"), Some(&PostParamValue::Float(0.6)));
+        assert_eq!(params.get("steps"), Some(&PostParamValue::Int(4)));
+        assert_eq!(params.get("on"), Some(&PostParamValue::Bool(true)));
+        let json = serde_json::to_string(&cfg).unwrap();
+        let back: EffectiveConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, cfg, "{json}");
+    }
+
+    #[test]
+    fn a_non_scalar_param_skips_the_stage_with_a_warning() {
+        let (cfg, diagnostics) = ConfigDocument::parse(
+            "[shader]\npost = [{ builtin = \"trail\", params = { tint = \"red\" } }, { builtin = \"trail\" }]\n",
+            None,
+        )
+        .unwrap()
+        .resolve("felis");
+        assert_eq!(cfg.shader.post.len(), 1);
+        let warning = only_warning(&diagnostics);
+        assert_eq!(warning.key.as_deref(), Some("shader.post[0].params.tint"));
+        assert!(warning.message.contains("string"), "{warning:?}");
+    }
+
+    #[test]
+    fn params_that_are_not_a_table_are_a_type_error() {
+        assert!(
+            toml::from_str::<EffectiveConfig>(
+                "[shader]\npost = { builtin = \"trail\", params = 3 }\n"
+            )
+            .is_err()
+        );
     }
 
     #[test]

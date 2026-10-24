@@ -8,7 +8,7 @@
 use std::{
     cell::Cell,
     num::NonZeroU8,
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::ExitCode,
     sync::{
         Arc, LazyLock,
@@ -62,8 +62,8 @@ use felis_render_core::{
     overlay::{PreeditOverlay, SearchHitSpan, SearchOverlay},
 };
 use felis_render_wgpu::{
-    DEFAULT_FONT_SIZE_LOGICAL_PX, FaceSpec, MouseState, PostStageSource, Renderer, RendererConfig,
-    SurfaceError, TRAIL_SHADER_SOURCE, TrailState, Warmup,
+    DEFAULT_FONT_SIZE_LOGICAL_PX, FaceSpec, MouseState, PostParam, PostStageSource, Renderer,
+    RendererConfig, SurfaceError, TRAIL_SHADER_SOURCE, TrailState, Warmup,
 };
 use felis_transport::{ClientDriver, Delivery, FrameReader, FrameWriter, Incoming, OwnedFrame};
 use std::sync::{Mutex, PoisonError};
@@ -874,30 +874,51 @@ fn face_spec(c: &config::FontStyleConfig) -> FaceSpec {
 fn resolve_post_stages(cfg: &config::EffectiveConfig) -> Vec<PostStageSource> {
     cfg.post_stages()
         .into_iter()
-        .filter_map(|stage| match stage.shader {
-            PostShaderChoice::Builtin(BuiltinShader::Trail) => Some(PostStageSource {
-                label: "builtin trail".to_owned(),
-                wgsl: TRAIL_SHADER_SOURCE.to_owned(),
-            }),
-            PostShaderChoice::File(path) => match std::fs::read_to_string(&path) {
-                Ok(wgsl) => Some(PostStageSource {
-                    label: path.display().to_string(),
-                    wgsl,
+        .filter_map(|stage| {
+            let params: Vec<(String, PostParam)> = stage
+                .params
+                .into_iter()
+                .map(|(name, value)| (name, post_param(value)))
+                .collect();
+            match stage.shader {
+                PostShaderChoice::Builtin(BuiltinShader::Trail) => Some(PostStageSource {
+                    label: "builtin trail".to_owned(),
+                    wgsl: TRAIL_SHADER_SOURCE.to_owned(),
+                    params,
                 }),
-                // The load already reported a missing path as a warning;
-                // repeating it at `ERROR` would contradict the documented
-                // severity.
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                    debug!(?path, "shader.post file is not there; skipping the stage");
-                    None
-                }
-                Err(err) => {
-                    error!(?path, %err, "read shader.post failed; skipping the stage");
-                    None
-                }
-            },
+                PostShaderChoice::File(path) => read_post_stage(&path, params),
+            }
         })
         .collect()
+}
+
+const fn post_param(value: config::PostParamValue) -> PostParam {
+    match value {
+        config::PostParamValue::Bool(b) => PostParam::Bool(b),
+        config::PostParamValue::Int(i) => PostParam::Int(i),
+        config::PostParamValue::Float(f) => PostParam::Float(f),
+    }
+}
+
+fn read_post_stage(path: &Path, params: Vec<(String, PostParam)>) -> Option<PostStageSource> {
+    match std::fs::read_to_string(path) {
+        Ok(wgsl) => Some(PostStageSource {
+            label: path.display().to_string(),
+            wgsl,
+            params,
+        }),
+        // The load already reported a missing path as a warning;
+        // repeating it at `ERROR` would contradict the documented
+        // severity.
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            debug!(?path, "shader.post file is not there; skipping the stage");
+            None
+        }
+        Err(err) => {
+            error!(?path, %err, "read shader.post failed; skipping the stage");
+            None
+        }
+    }
 }
 
 /// Sent right after every attach: the daemon answers `OSC 4 ; n ; ?` and

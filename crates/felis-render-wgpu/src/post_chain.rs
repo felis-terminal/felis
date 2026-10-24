@@ -400,6 +400,7 @@ mod tests {
             PostStageSource {
                 label: label.to_owned(),
                 wgsl: wgsl.to_owned(),
+                params: Vec::new(),
             }
         }
 

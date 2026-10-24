@@ -57,7 +57,7 @@ mod warmup;
 
 pub use crate::capture::{FrameCapture, ReadFrameError};
 pub use crate::post::{
-    CONTRACT_VERSION, MouseState, PostShaderError, PostStageSource, PostUniforms,
+    CONTRACT_VERSION, MouseState, PostParam, PostShaderError, PostStageSource, PostUniforms,
     TRAIL_SHADER_SOURCE, TrailState, validate_post_shader,
 };
 pub use crate::warmup::Warmup;
@@ -2244,6 +2244,7 @@ mod tests {
         PostStageSource {
             label: "trail".to_owned(),
             wgsl: TRAIL_SHADER_SOURCE.to_owned(),
+            params: Vec::new(),
         }
     }
 
