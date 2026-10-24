@@ -77,6 +77,8 @@ impl ApplicationHandler<AppEvent> for App {
         // AppKit re-sorts the sibling order on every layout pass, so
         // `macos_window`'s zPosition fix is what keeps the terminal above
         // the backdrop.
+        self.a11y.attach(event_loop, &window);
+        window.set_visible(true);
         apply_window_backdrop(window.as_ref(), self.backdrop, self.transparent);
         apply_option_as_alt(window.as_ref(), self.macos_option_as_alt);
         let size = window.inner_size();
@@ -161,6 +163,7 @@ impl ApplicationHandler<AppEvent> for App {
         _window_id: WindowId,
         event: WindowEvent,
     ) {
+        self.a11y.process_event(&event);
         match event {
             WindowEvent::CloseRequested => self.request_detach("window close requested"),
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
@@ -532,6 +535,7 @@ impl App {
     /// The whole of `user_event`, minus the loop, so a test can drive it.
     pub(crate) fn on_app_event(&mut self, event: AppEvent) {
         match event {
+            AppEvent::Accessibility(event) => self.on_accessibility(&event),
             AppEvent::GridFrame { msg, conn_gen } => {
                 if conn_gen != self.conn_gen {
                     // Applying it would paint the previous session's content
@@ -621,6 +625,7 @@ impl App {
                 // A compose-cycle frame answers the outstanding pull (facet
                 // pushes ship outside the gate, `pull::answers_pull`).
                 self.pull.on_frame(&msg);
+                self.a11y.mark_changed();
                 self.redraw.request();
             }
             AppEvent::SearchFrame { msg, conn_gen } => {
@@ -1339,6 +1344,9 @@ impl App {
         if painted && !glyphs_incomplete {
             self.presented_link_target = painted_target;
         }
+        // Whatever the present's outcome: the tree reads the shadow, not
+        // the surface, and follows exactly the screens this gate paints.
+        self.flush_accessibility();
         // Demand-driven emission (docs/explanation/rendering/pipeline.md):
         // once per presented frame, which the present paces at vsync, so
         // the daemon ships at most one coalesced diff per vsync.

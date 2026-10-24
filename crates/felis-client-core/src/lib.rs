@@ -1,6 +1,7 @@
 #![doc = include_str!("../README.md")]
 #![cfg_attr(not(test), forbid(unsafe_code))]
 
+pub mod a11y_text;
 pub mod action;
 pub mod clipboard;
 #[cfg(feature = "native")]

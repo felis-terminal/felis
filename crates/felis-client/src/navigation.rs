@@ -105,7 +105,8 @@ impl App {
 
     /// The disconnected indicator is client-local presentation
     /// (principle 3): no daemon message says a window is offline.
-    pub(crate) fn refresh_window_title(&self) {
+    pub(crate) fn refresh_window_title(&mut self) {
+        self.accessibility_changed();
         let Some(window) = self.window.as_ref() else {
             return;
         };

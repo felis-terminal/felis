@@ -36,6 +36,8 @@ impl App {
     /// Resizes the shadow locally so the renderer sees the new dimensions
     /// before the daemon's burst lands.
     pub(crate) fn reflow(&mut self, size: PhysicalSize<u32>) {
+        // Cell metrics and the letterbox origin move every run's bounds.
+        self.accessibility_changed();
         let Some(renderer) = self.renderer.as_ref() else {
             return;
         };
@@ -256,6 +258,47 @@ impl App {
         }
     }
 
+    pub(crate) fn on_accessibility(&mut self, event: &accesskit_winit::WindowEvent) {
+        match event {
+            // An idle window would otherwise never reach the flush.
+            accesskit_winit::WindowEvent::InitialTreeRequested => {
+                self.a11y.activate();
+                self.redraw.request();
+            }
+            accesskit_winit::WindowEvent::AccessibilityDeactivated => self.a11y.deactivate(),
+            // Focus is a no-op (the terminal is the only focusable node);
+            // the rest act on state felis does not expose yet.
+            accesskit_winit::WindowEvent::ActionRequested(_) => {}
+        }
+    }
+
+    /// For a change that does not repaint by itself.
+    pub(crate) const fn accessibility_changed(&mut self) {
+        if self.a11y.mark_changed() {
+            self.redraw.request();
+        }
+    }
+
+    pub(crate) fn flush_accessibility(&mut self) {
+        let Some(renderer) = self.renderer.as_ref() else {
+            return;
+        };
+        let metrics = renderer.cell_metrics();
+        let title = window_title_for(
+            self.title_prefix.as_deref(),
+            self.shadow.title().unwrap_or("felis"),
+            self.reconnecting,
+        );
+        self.a11y.flush(&crate::a11y::TreeSource {
+            screen: self.shadow.screen(),
+            viewport: self.shadow.viewport(),
+            selection: self.selection(),
+            title: &title,
+            cell_px: (metrics.width as f32, metrics.height as f32),
+            origin_px: renderer.content_origin_px(),
+        });
+    }
+
     pub(crate) fn update_renderer_selection(&mut self) {
         let range = self.selection().map(|sel| {
             let (start, end) = sel.range();
@@ -268,6 +311,7 @@ impl App {
         if let Some(renderer) = self.renderer.as_mut() {
             renderer.set_selection(range);
         }
+        self.a11y.mark_changed();
         self.redraw.request();
     }
 

@@ -2185,6 +2185,21 @@ mod app_events {
             .expect("test runtime")
     }
 
+    /// Pins: an assistive technology's first query on an idle window
+    /// still reaches the redraw that carries the initial tree.
+    #[test]
+    fn an_initial_tree_request_on_an_idle_window_requests_a_redraw() {
+        let runtime = runtime();
+        let mut harness = app_on(&runtime, absent_daemon("a11y"), 0xa);
+        let _ = harness.app.redraw.flush();
+        assert!(!harness.app.redraw.flush());
+
+        harness.app.on_app_event(AppEvent::Accessibility(
+            accesskit_winit::WindowEvent::InitialTreeRequested,
+        ));
+        assert!(harness.app.redraw.flush());
+    }
+
     /// Pins the parked-push contract on `App::pending_reattach`: the
     /// daemon already told the CLI the switch succeeded, so a push that
     /// arrives mid-switch must run once that switch fails, not vanish.

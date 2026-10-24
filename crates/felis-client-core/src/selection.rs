@@ -98,6 +98,18 @@ impl Selection {
         }
     }
 
+    /// The cell the selection started from; [`Self::range`] loses which
+    /// end it was.
+    #[must_use]
+    pub const fn anchor(self) -> GridPos {
+        self.anchor
+    }
+
+    #[must_use]
+    pub const fn extent(self) -> GridPos {
+        self.extent
+    }
+
     #[must_use]
     pub const fn mode(self) -> SelectionMode {
         self.mode
@@ -227,7 +239,7 @@ impl Selection {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum WordClass {
+pub(crate) enum WordClass {
     Word,
     Whitespace,
     Punct,
@@ -268,7 +280,7 @@ fn classify_grapheme(screen: &ScreenBuffer, row: u16, col: u16, g: Grapheme) -> 
     }
 }
 
-fn classify_char(c: char) -> WordClass {
+pub(crate) fn classify_char(c: char) -> WordClass {
     if c == '_' || c.is_alphanumeric() {
         WordClass::Word
     } else if c.is_whitespace() {
