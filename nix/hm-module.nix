@@ -128,7 +128,7 @@ in
         {file}`~/Library/Application Support/felis/config.toml` on
         macOS. See {file}`docs/reference/config.md` for the full schema
         (`[font]`, `[theme]`, `[theme.palette]`, `[clipboard]`,
-        `[window]`, `[keymap]`, `[cursor]`, `[mouse]`, `[shader]`).
+        `[window]`, `[keymap]`, `[cursor]`, `[mouse]`, `[shader]`, `[shell]`).
 
         A launch started with `felis --config PATH` reads that file
         instead, so a one-off profile needs no change here.

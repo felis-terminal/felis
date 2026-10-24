@@ -655,6 +655,7 @@ impl App {
             self.restart_blink();
         }
         self.scroll_multiplier = cfg.mouse.clamped_scroll_multiplier();
+        self.shell_cfg = cfg.shell;
         // Only on a `[clipboard]` change: recreating the arboard handle
         // every reload would re-log the headless fallback, and neither
         // `use_os_clipboard` nor `osc_52` is mutable on the live
@@ -1349,7 +1350,7 @@ impl App {
         // A local carrier resolves the same cwd fallback as the initial
         // window; an SSH-attached window must not ship this host's paths
         // across (see `launch_args`).
-        let args = match launch_args(Vec::new(), &carrier) {
+        let args = match launch_args(Vec::new(), &self.shell_cfg, &carrier) {
             Ok(args) => args,
             Err(err) => {
                 // On the bar, not only in a log: a chord that fails silently

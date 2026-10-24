@@ -161,6 +161,15 @@ animate = "never"
 # with a warning. Default: 3.0.
 scroll_multiplier = 3.0
 
+[shell]
+# Argv a window launched without a command runs, sent verbatim: no -l
+# is added and nothing is split. Applies to `felis`, `felis-client` and
+# the new_session keybinding on the local daemon; `--host`, `felis ssh`
+# and the headless verbs keep the daemon's default. Default: [] (the
+# daemon's default: `$SHELL -l` on Unix, `$SHELL` or powershell.exe on
+# Windows). A WSL distro, say: ["wsl.exe", "-d", "Ubuntu"].
+command = []
+
 [clipboard]
 # Back clipboard operations with OS clipboard. Default: true.
 # When false, uses an in-process clipboard.
@@ -367,6 +376,7 @@ Live application by property:
 | `theme.*`, `cursor.color`    | Repaints surface and updates presentation state.                               |
 | `cursor.blink*`              | Restarts blink timer immediately.                                              |
 | `mouse.scroll_multiplier`    | Takes effect on next wheel event.                                              |
+| `shell.command`              | Takes effect on the next `new_session`; running sessions keep their shell.     |
 | `shader.*`                   | Rebuilds the chain when a stage's shader or params change; history restarts.   |
 | `clipboard.*`                | Rebuilds clipboard subsystem.                                                  |
 | `window.title_prefix`        | Updates window title immediately.                                              |

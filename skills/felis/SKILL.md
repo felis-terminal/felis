@@ -79,10 +79,12 @@ prefix. The mutating verbs see no roster, so their replies carry `id` alone; fee
 #    A local child inherits YOUR environment; --env adds or overrides
 #    but cannot remove, so drop a variable with env -u (it matters when
 #    you drive a copy of yourself and inherit your own session markers).
-#    Bare spawn runs the shell a new window would, with the user's rc
-#    files and so their shell integration; `-- <cmd>` runs a program
-#    instead (a REPL, a TUI), and a shell named there may lack the
-#    integration `send --wait` needs.
+#    Bare spawn runs the daemon's default shell ($SHELL, else /bin/sh
+#    or powershell.exe; never the config's shell.command, which only
+#    windows read), with the user's rc files and so their shell
+#    integration; `-- <cmd>` runs a program instead (a REPL, a TUI),
+#    and a shell named there may lack the integration `send --wait`
+#    needs.
 ID=$(felis sessions spawn)
 ID=$(felis sessions spawn --rows 50 --cols 132)
 ID=$(env -u SOME_PARENT_MARKER felis sessions spawn --env KEY=VAL)

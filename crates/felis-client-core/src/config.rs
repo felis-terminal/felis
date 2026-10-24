@@ -56,6 +56,8 @@ pub struct EffectiveConfig {
     pub mouse: MouseConfig,
     /// Post-process shader selection.
     pub shader: ShaderConfig,
+    /// The command a new window runs when it is given none.
+    pub shell: ShellConfig,
     /// Per-client overlays: `[client.<name>]` is deep-merged over the top level.
     /// Sections for other clients are carried untouched (never validated, never
     /// warned about) so one file can serve clients whose schemas differ.
@@ -84,6 +86,7 @@ impl PartialEq for EffectiveConfig {
             cursor,
             mouse,
             shader,
+            shell,
             client,
             source_dir: _,
         } = self;
@@ -95,6 +98,7 @@ impl PartialEq for EffectiveConfig {
             && *cursor == other.cursor
             && *mouse == other.mouse
             && *shader == other.shader
+            && *shell == other.shell
             && *client == other.client
     }
 }
@@ -621,6 +625,30 @@ pub(super) fn resolve_path(name: &Path, base_dir: Option<&Path>) -> PathBuf {
     match base_dir {
         Some(base) if name.is_relative() => base.join(name),
         _ => name.to_path_buf(),
+    }
+}
+
+/// `[shell]` section: what a new window runs when it is given no command.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(default)]
+pub struct ShellConfig {
+    /// Argv a window launched without a command runs on the local daemon,
+    /// verbatim: no `-l` is added and nothing is split. `[]` (the default)
+    /// leaves the choice to the daemon: `$SHELL -l` on Unix, `$SHELL` or
+    /// `powershell.exe` on Windows.
+    pub command: Vec<String>,
+}
+
+impl ShellConfig {
+    /// `None` when unset, and when the first element names no program,
+    /// which the daemon would refuse.
+    #[must_use]
+    pub fn argv(&self) -> Option<&[String]> {
+        match self.command.first() {
+            Some(program) if !program.is_empty() => Some(&self.command),
+            _ => None,
+        }
     }
 }
 
@@ -2570,6 +2598,28 @@ mod tests {
         assert!(
             toml::from_str::<EffectiveConfig>("[cursor]\nblink = { mode = \"never\" }\n").is_err()
         );
+    }
+
+    #[test]
+    fn shell_command_parses_and_defaults_to_the_daemons_choice() {
+        let cfg: EffectiveConfig = toml::from_str("").unwrap();
+        assert_eq!(cfg.shell.argv(), None, "absent section");
+        let cfg: EffectiveConfig =
+            toml::from_str("[shell]\ncommand = [\"wsl.exe\", \"-d\", \"Ubuntu\"]\n").unwrap();
+        assert_eq!(
+            cfg.shell.argv(),
+            Some(&["wsl.exe".to_owned(), "-d".into(), "Ubuntu".into()][..])
+        );
+    }
+
+    #[test]
+    fn resolve_warns_on_a_shell_command_naming_no_program() {
+        let document = ConfigDocument::parse("[shell]\ncommand = [\"\", \"-l\"]\n", None).unwrap();
+        let (cfg, diagnostics) = document.resolve("felis");
+        assert_eq!(cfg.shell.argv(), None);
+        let warning = only_warning(&diagnostics);
+        assert_eq!(warning.kind, DiagnosticKind::Value);
+        assert_eq!(warning.key.as_deref(), Some("shell.command"));
     }
 
     #[test]

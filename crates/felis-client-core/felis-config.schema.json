@@ -65,6 +65,13 @@
         "post": []
       }
     },
+    "shell": {
+      "description": "The command a new window runs when it is given none.",
+      "$ref": "#/$defs/ShellConfig",
+      "default": {
+        "command": []
+      }
+    },
     "theme": {
       "description": "Default foreground / background and the 16-color palette.",
       "$ref": "#/$defs/ThemeConfig",
@@ -1071,6 +1078,20 @@
       "description": "`bell`, `focus_in`, `focus_out`, `left_press`, or `user:<name>` for a `shader_event` keymap binding of that name.",
       "type": "string",
       "pattern": "^(bell|focus_in|focus_out|left_press|user:[A-Za-z0-9_.-]{1,63})$"
+    },
+    "ShellConfig": {
+      "description": "`[shell]` section: what a new window runs when it is given no command.",
+      "type": "object",
+      "properties": {
+        "command": {
+          "description": "Argv a window launched without a command runs on the local daemon,\nverbatim: no `-l` is added and nothing is split. `[]` (the default)\nleaves the choice to the daemon: `$SHELL -l` on Unix, `$SHELL` or\n`powershell.exe` on Windows.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        }
+      }
     },
     "StageAnimation": {
       "description": "A stage's `animation` table.",

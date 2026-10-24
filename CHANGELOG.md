@@ -22,6 +22,8 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
   override's declared type, so one shader file serves several strengths.
 - **Config**: a `shader.post` stage's `animation = { on = [...], duration_ms = ... }` plays the stage's animation once
   per bell, focus change, left press, or `shader_event` binding, drawing frames only until it ends, focused or not.
+- **Config**: `shell.command` sets the argv a window launched without a command runs (bare `felis`, `new_session`) on
+  the local daemon, in place of `$SHELL` or `powershell.exe`, without changing either for other programs.
 - **Keymap**: the `shader_event` binding kind fires a named event for `shader.post` animations.
 - **Shaders**: uniform contract v2 appends `time_whole_s`, `time_fract_s`, `focus_change_time_s`, `stage_index`,
   `animation_start_s` and `animation_progress`; a shader written against v1 loads unchanged. Binding 3 gives a stage its

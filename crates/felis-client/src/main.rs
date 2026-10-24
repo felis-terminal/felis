@@ -460,6 +460,7 @@ fn main() -> Result<ExitCode> {
         cursor_cfg: cfg.cursor,
         shader_cfg: cfg.shader.clone(),
         mouse_cfg: cfg.mouse,
+        shell_cfg: cfg.shell.clone(),
         keymap: Keymap::default_for_platform().with_overrides(compiled_keymap),
         config_source,
     };
@@ -489,7 +490,7 @@ fn main() -> Result<ExitCode> {
 
     let mode = match attach_target {
         Some(id) => AttachMode::Attach(id),
-        None => AttachMode::Create(launch_args(cli.command, &reconnector.carrier)?),
+        None => AttachMode::Create(launch_args(cli.command, &cfg.shell, &reconnector.carrier)?),
     };
     run_client(&runtime, startup, mode, reconnector)
 }
@@ -1033,6 +1034,7 @@ struct ClientStartup {
     cursor_cfg: config::CursorConfig,
     shader_cfg: config::ShaderConfig,
     mouse_cfg: config::MouseConfig,
+    shell_cfg: config::ShellConfig,
     keymap: Keymap,
     /// Carried into [`App`] so a live reload re-reads the document this
     /// window started from, not whatever platform discovery now finds.
@@ -1386,6 +1388,8 @@ struct App {
     /// scroll acceleration; touchpad pixel-deltas are velocity-scaled
     /// already and are left untouched.
     scroll_multiplier: f64,
+    /// Read at each `new_session`, so a reload reaches the next one.
+    shell_cfg: config::ShellConfig,
     /// Multiplying at every renderer-bound font-size call keeps the
     /// configured logical size stable across display swaps and yields the
     /// `ws_xpixel/ws_ypixel` TIOCGWINSZ values Kitty graphics producers
@@ -1548,6 +1552,7 @@ impl App {
             last_wheel_at: None,
             wheel_zoom_latched: false,
             scroll_multiplier: startup.mouse_cfg.clamped_scroll_multiplier(),
+            shell_cfg: startup.shell_cfg,
             // Set from the platform in `resumed` once the window exists.
             scale_factor: 1.0,
             redraw: redraw::RedrawScheduler::new(),

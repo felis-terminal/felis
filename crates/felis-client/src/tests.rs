@@ -2151,6 +2151,7 @@ mod app_events {
             cursor_cfg: cfg.cursor,
             shader_cfg: cfg.shader.clone(),
             mouse_cfg: cfg.mouse,
+            shell_cfg: cfg.shell.clone(),
             keymap: Keymap::default_for_platform(),
             config_source: ConfigSource::Default,
         };
