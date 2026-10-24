@@ -172,11 +172,12 @@ reply cannot hide is success itself: a path that decodes still answers `OK`.
 
 ## Windows takes `t=d` only
 
-`t=f`, `t=t` and `t=s` are rejected on `x86_64-pc-windows-msvc` with `ENOTSUP`. This is recorded as an **allowed
-platform shim**: terminal protocol compatibility may carry OS-specific transmission differences, because the protocol's
-own fallback covers it. A producer's `a=q` probe runs the real decode path, so it learns the gap before transmitting and
-drops to `t=d`, the same negotiation it already performs against a terminal that never implemented the file methods.
-Nothing a user sees is lost; only the copy that `t=s` avoids comes back.
+`t=f`, `t=t` and `t=s` are rejected on `x86_64-pc-windows-msvc` with `ENOTSUP`. This is an **allowed
+[platform shim](../non-goals.md#cross-platform-constraints)**: terminal protocol compatibility may carry OS-specific
+transmission differences, because the protocol's own fallback covers it. A producer's `a=q` probe runs the real decode
+path, so it learns the gap before transmitting and drops to `t=d`, the same negotiation it already performs against a
+terminal that never implemented the file methods. Nothing a user sees is lost; only the copy that `t=s` avoids comes
+back.
 
 Two properties of the rejection carry the weight:
 

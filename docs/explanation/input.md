@@ -79,10 +79,10 @@ per-session flag, and the encoder emits win32-input records while it is set. The
 
 This is the **input half of the ConPTY shim**, not an OS-gated feature: the intent ("keystrokes reach the shell
 faithfully") is uniform, and only the ConPTY mechanism forces the Windows-specific encoding. That is the
-[non-goals](non-goals.md) cross-platform carve-out already covering the ConPTY-vs-`/dev/ptmx` PTY shim. The encoder
-stays platform-free (not `cfg(windows)`) on purpose: a Windows daemon reached over SSH stdio from a Linux or macOS
-client encodes win32-input records for a key that client captured, so the logical-key → Windows-`VK` mapping is shared
-data, activated only by the runtime flag that no non-ConPTY producer ever sets.
+[non-goals](non-goals.md#cross-platform-constraints) platform-shim rule, the one the ConPTY-vs-`/dev/ptmx` PTY
+abstraction falls under. The encoder stays platform-free (not `cfg(windows)`) on purpose: a Windows daemon reached over
+SSH stdio from a Linux or macOS client encodes win32-input records for a key that client captured, so the logical-key →
+Windows-`VK` mapping is shared data, activated only by the runtime flag that no non-ConPTY producer ever sets.
 
 Two fidelity shortcuts are deliberate. The scan code is sent as `0`: felis encodes from the _logical_ key, and a layout
 scan code cannot be derived without the physical key position; ConPTY and PSReadLine key off `Vk` + `Uc`, so `0` costs

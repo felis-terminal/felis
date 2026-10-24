@@ -359,7 +359,8 @@ opaque↔translucent boundary needs a relaunch, not a live reload.
 
 The OS-native backdrop is one key, `window.backdrop`, whose materials are per-OS. The user's intent (frost the window)
 is one intent, so it gets one key; only the vocabulary of materials is platform-specific, because the OSes name theirs
-differently.
+differently. Honoring it only where the OS puts the material on the application rather than the compositor is a
+[platform shim](../non-goals.md#cross-platform-constraints), not an OS-gated feature.
 
 A key per platform (a macOS blur bool beside a Windows material enum) is the rejected alternative, and it buys nothing.
 Two such keys are mutually exclusive in practice, since no window hosts both, so the pair can spell a state the domain

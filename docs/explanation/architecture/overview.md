@@ -163,7 +163,9 @@ felis therefore hands the daemon to the user manager where one is reachable: a l
 `user@<uid>.service` runs `systemd-run --user` on **its own `felis-daemon` binary and its own resolved socket path**.
 The unit's shape is in [cli.md](../../reference/cli.md#auto-spawning). Where the hand-off succeeds, the placement is a
 property of felis rather than of the window that dialed first, and the failure that motivated all of this cannot happen
-to that daemon: its cgroup is its own.
+to that daemon: its cgroup is its own. Asking an init system only on Linux is a
+[platform shim](../non-goals.md#cross-platform-constraints): the intent (no window's unit holds power over the daemon)
+is uniform, and only Linux puts a launcher's cgroup in the daemon's way.
 
 #### Best effort, with the fork as the fallback
 

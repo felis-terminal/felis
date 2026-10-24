@@ -127,19 +127,9 @@ Single-user SSH stdio attach is implemented, and the protocol is transport-plugg
 
 - **macOS-only or Linux-only features.** Where a feature is not uniformly implementable across macOS, Linux, and
   Windows, it is omitted rather than gated. The exception is a duty whose _intent_ is uniform but whose _mechanism_ the
-  OS forces to differ. That is a platform shim rather than a gated feature, and felis takes four of them:
-
-- **The PTY abstraction** over ConPTY and `/dev/ptmx`, whose keyboard-input half is win32-input-mode (`?9001`)
-  ([input.md](input.md#windows-win32-input-mode)).
-- **Background blur**, discharged only on the platforms whose OS puts it on the application rather than the compositor,
-  through `window.backdrop`'s per-OS value set ([config.md](../reference/config.md#complete-annotated-example)).
-- **Kitty graphics transmission methods**, where Windows implements `t=d` alone and the protocol's own `a=q` probe
-  carries the fallback ([protocols/kitty-graphics.md](protocols/kitty-graphics.md#windows-takes-td-only)).
-- **Daemon supervision at auto-spawn**, asked of an init system only on Linux, where systemd's user manager would
-  otherwise give the launching window's `OOMPolicy` power over the daemon
-  ([overview.md](architecture/overview.md#where-an-auto-spawned-daemon-lands)).
-
-None of the four is a precedent for OS-gated _convenience_: each meets the same intent on every target.
+  OS forces to differ. That is a platform shim rather than a gated feature; the page that adopts one argues the case
+  there and links this rule. A shim is no precedent for OS-gated _convenience_: it meets the same intent on every
+  target.
 
 The in-place daemon upgrade is not a gated feature either, though it is not yet a shim. Its intent, an update that keeps
 the sessions, is felis's on every platform, and only the mechanism has reached Unix: Windows keeps drain-and-restart
