@@ -20,6 +20,7 @@ use wgpu::{
     Texture, TextureDescriptor, TextureDimension, TextureFormat, TextureSampleType, TextureUsages,
     TextureView, TextureViewDescriptor, TextureViewDimension, VertexState,
     naga::{
+        AddressSpace, ImageClass, ImageDimension, Module, ResourceBinding, ScalarKind, TypeInner,
         front::wgsl,
         valid::{Capabilities, ValidationFlags, Validator},
     },
@@ -51,6 +52,8 @@ pub enum PostShaderError {
     Validate(String),
     #[error("missing `@fragment fn {POST_ENTRY_POINT}`")]
     MissingEntryPoint,
+    #[error("binding: {0}")]
+    Binding(String),
     #[error("an offscreen renderer has no post-process stage")]
     Offscreen,
 }
@@ -425,11 +428,73 @@ pub fn validate_post_shader(source: &str) -> Result<(), PostShaderError> {
         .entry_points
         .iter()
         .any(|ep| ep.name == POST_ENTRY_POINT && ep.stage == wgpu::naga::ShaderStage::Fragment);
-    if has_entry {
-        Ok(())
-    } else {
-        Err(PostShaderError::MissingEntryPoint)
+    if !has_entry {
+        return Err(PostShaderError::MissingEntryPoint);
     }
+    check_bindings(&module)
+}
+
+/// naga validates a module on its own, never against a pipeline layout, so
+/// a well-formed shader whose resources disagree with
+/// [`post_bind_group_layout_entries`] would reach pipeline creation and
+/// panic on the device error scope.
+fn check_bindings(module: &Module) -> Result<(), PostShaderError> {
+    for (_, var) in module.global_variables.iter() {
+        if matches!(var.space, AddressSpace::Private | AddressSpace::WorkGroup) {
+            continue;
+        }
+        let name = var.name.as_deref().unwrap_or("<unnamed>");
+        let Some(ResourceBinding { group: 0, binding }) = var.binding else {
+            return Err(PostShaderError::Binding(format!(
+                "`{name}` is not in `@group(0)`"
+            )));
+        };
+        let inner = &module.types[var.ty].inner;
+        let matches_layout = match binding {
+            0 => {
+                var.space == AddressSpace::Uniform
+                    && matches!(inner, TypeInner::Struct { span, .. }
+                        if *span as usize <= size_of::<PostUniforms>())
+            }
+            1 => var.space == AddressSpace::Handle && is_sampled_float_2d(inner),
+            2 => {
+                var.space == AddressSpace::Handle
+                    && matches!(inner, TypeInner::Sampler { comparison: false })
+            }
+            _ => {
+                return Err(PostShaderError::Binding(format!(
+                    "`{name}` uses `@binding({binding})`, which the post-process layout does not have"
+                )));
+            }
+        };
+        if !matches_layout {
+            return Err(PostShaderError::Binding(format!(
+                "`{name}` at `@binding({binding})` must be {}",
+                BINDING_DECLARATIONS[binding as usize]
+            )));
+        }
+    }
+    Ok(())
+}
+
+const BINDING_DECLARATIONS: [&str; 3] = [
+    "a `var<uniform>` struct no larger than `FelisPostUniforms`",
+    "a `texture_2d<f32>`",
+    "a filtering `sampler`",
+];
+
+const fn is_sampled_float_2d(inner: &TypeInner) -> bool {
+    matches!(
+        inner,
+        TypeInner::Image {
+            dim: ImageDimension::D2,
+            arrayed: false,
+            class: ImageClass::Sampled {
+                kind: ScalarKind::Float,
+                multi: false,
+            },
+        }
+    )
 }
 
 fn build_post_pipeline(
@@ -528,7 +593,7 @@ fn create_bind_group(
 mod tests {
     use std::mem::offset_of;
 
-    use wgpu::naga::{StructMember, TypeInner};
+    use wgpu::naga::StructMember;
 
     use super::*;
 
@@ -665,6 +730,76 @@ mod tests {
         assert!(matches!(
             validate_post_shader(src),
             Err(PostShaderError::Validate(_))
+        ));
+    }
+
+    fn shader_with_globals(globals: &str) -> String {
+        format!(
+            "{globals}\n@fragment fn fs_post(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> \
+             {{ return vec4<f32>(uv, 0.0, 1.0); }}"
+        )
+    }
+
+    #[test]
+    fn the_documented_bindings_pass_the_binding_check() {
+        let src = shader_with_globals(
+            "struct U { resolution_px: vec2<f32> }\n\
+             @group(0) @binding(0) var<uniform> u: U;\n\
+             @group(0) @binding(1) var backbuffer: texture_2d<f32>;\n\
+             @group(0) @binding(2) var backbuffer_sampler: sampler;\n\
+             var<private> scratch: f32;",
+        );
+        validate_post_shader(&src).expect("the documented layout loads");
+    }
+
+    #[test]
+    fn a_resource_at_the_wrong_type_for_its_binding_is_refused() {
+        for globals in [
+            "@group(0) @binding(1) var s: sampler;",
+            "@group(0) @binding(2) var t: texture_2d<f32>;",
+            "@group(0) @binding(2) var s: sampler_comparison;",
+            "@group(0) @binding(1) var t: texture_2d<u32>;",
+            "@group(0) @binding(1) var t: texture_2d_array<f32>;",
+            "@group(0) @binding(1) var t: texture_multisampled_2d<f32>;",
+            "@group(0) @binding(0) var<uniform> u: vec4<f32>;",
+            "struct U { x: f32 }\n@group(0) @binding(0) var<storage> u: U;",
+        ] {
+            assert!(
+                matches!(
+                    validate_post_shader(&shader_with_globals(globals)),
+                    Err(PostShaderError::Binding(_))
+                ),
+                "{globals}",
+            );
+        }
+    }
+
+    #[test]
+    fn a_resource_outside_group_0_or_its_bindings_is_refused() {
+        for globals in [
+            "@group(1) @binding(0) var t: texture_2d<f32>;",
+            "@group(0) @binding(7) var t: texture_2d<f32>;",
+        ] {
+            assert!(
+                matches!(
+                    validate_post_shader(&shader_with_globals(globals)),
+                    Err(PostShaderError::Binding(_))
+                ),
+                "{globals}",
+            );
+        }
+    }
+
+    #[test]
+    fn a_uniform_struct_larger_than_the_contract_is_refused() {
+        let globals = format!(
+            "struct U {{ big: array<vec4<f32>, {}> }}\n\
+             @group(0) @binding(0) var<uniform> u: U;",
+            size_of::<PostUniforms>() / 16 + 1
+        );
+        assert!(matches!(
+            validate_post_shader(&shader_with_globals(&globals)),
+            Err(PostShaderError::Binding(_))
         ));
     }
 
