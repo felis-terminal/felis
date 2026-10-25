@@ -19,6 +19,11 @@ libc = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true }
+conpty-bin-vendored = { workspace = true }
+directories = { workspace = true }
+
+[target.'cfg(windows)'.dev-dependencies]
+tempfile = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "io-util", "time"] }

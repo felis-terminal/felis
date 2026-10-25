@@ -24,6 +24,12 @@
       matchPackageNames: ["windows", "windows-core"],
       groupName: "windows-rs",
     },
+    {
+      // A new ConPTY host can change what shells see in ways the tests do
+      // not cover: read the Windows Terminal release notes before merging.
+      matchPackageNames: ["conpty-bin-vendored"],
+      automerge: false,
+    },
   ],
   nix: {
     enabled: true,

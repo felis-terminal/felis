@@ -184,6 +184,11 @@ jobs:
           Copy-Item "$env:SMOKE_BIN_DIR\felis-daemon.exe" $stage
           Copy-Item README.md                              $stage
           Copy-Item LICENSE                                $stage
+          # felis-daemon.exe embeds Microsoft's ConPTY, whose notice must ship with it.
+          $meta = cargo metadata --locked --format-version 1 --filter-platform x86_64-pc-windows-msvc | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $conpty = $meta.packages | Where-Object { $_.name -eq "conpty-bin-vendored" }
+          Copy-Item (Join-Path (Split-Path $conpty.manifest_path) "LICENSE-MICROSOFT") "$stage\LICENSE-conpty.txt"
           Compress-Archive -Path "$stage\*" -DestinationPath dist\felis-x86_64-pc-windows-msvc.zip -Force
       # Forgejo fork rather than upstream actions/upload-artifact: upstream rejects non-github.com runners.
       - uses: https://code.forgejo.org/forgejo/upload-artifact@cb8afe72b42edc798abfb8fcb556cf660d894245 # v5 (upstream v4 API, GHES check disabled)

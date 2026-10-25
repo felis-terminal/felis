@@ -907,6 +907,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "conpty-bin-vendored"
+version = "1.25.2609300030"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "daa0dd037769bb46a68d776940d3d867baad4d04c32ffba4c83dfe89716b153c"
+
+[[package]]
 name = "console"
 version = "0.16.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1434,10 +1440,13 @@ dependencies = [
 name = "felis-pty"
 version = "0.1.1"
 dependencies = [
+ "conpty-bin-vendored",
+ "directories",
  "felis-grid",
  "felis-vt",
  "libc",
  "rustix 1.1.5",
+ "tempfile",
  "thiserror 2.0.21",
  "tokio",
  "tracing",
