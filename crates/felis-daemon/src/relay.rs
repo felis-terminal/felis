@@ -159,8 +159,8 @@ fn daemon_program(current_exe: &Path) -> PathBuf {
 /// Spawn `felis-daemon serve --socket <socket>` as a detached child.
 ///
 /// Resolves the daemon beside `current_exe` to match relay build version
-/// and isolates the process group on Unix so SSH disconnect SIGHUP does
-/// not kill the daemon.
+/// and isolates the process group on Unix (the console on Windows) so an
+/// SSH disconnect does not kill the daemon.
 fn spawn_persistent_daemon(socket: &Path) -> io::Result<()> {
     use std::process::{Command, Stdio};
     let program = daemon_program(&std::env::current_exe()?);
@@ -181,6 +181,14 @@ fn spawn_persistent_daemon(socket: &Path) -> io::Result<()> {
     {
         use std::os::unix::process::CommandExt;
         cmd.process_group(0);
+    }
+    // A console of its own, off the relay's: `CREATE_NEW_PROCESS_GROUP`
+    // would disable Ctrl+C in every shell the daemon spawns.
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
     }
     cmd.spawn()?;
     Ok(())
