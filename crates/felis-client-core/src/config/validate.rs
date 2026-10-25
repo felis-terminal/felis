@@ -56,6 +56,7 @@ pub(super) fn run(
     window_opacity(config, origin, diagnostics);
     minimum_contrast(config, origin, diagnostics);
     mouse_scroll_multiplier(config, origin, diagnostics);
+    shell_command(config, origin, diagnostics);
     fallback_chain(document, origin, diagnostics);
     palette(config, origin, diagnostics);
     keymap(config, origin, diagnostics);
@@ -194,6 +195,21 @@ fn mouse_scroll_multiplier(
         DiagnosticKind::Value,
         Some(origin.attribute(&["mouse", "scroll_multiplier"], "mouse.scroll_multiplier")),
         issue.message("[0.1, 100.0]"),
+    );
+}
+
+fn shell_command(
+    config: &EffectiveConfig,
+    origin: &KeyOrigin<'_>,
+    diagnostics: &mut ConfigDiagnostics,
+) {
+    if config.shell.command.is_empty() || config.shell.argv().is_some() {
+        return;
+    }
+    diagnostics.warning(
+        DiagnosticKind::Value,
+        Some(origin.attribute(&["shell", "command"], "shell.command")),
+        "names no program; using the daemon's default shell",
     );
 }
 

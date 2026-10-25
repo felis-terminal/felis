@@ -10,6 +10,7 @@ use felis_protocol::messages::{RetargetCarrier, RetargetTarget, SpawnArgs};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncWrite};
 
+use crate::config::ShellConfig;
 use crate::connector::{
     AttachIntent, Carrier, CarrierConnection, ConnectError, Connection, Offer, RemoteSpawn,
     connect_carrier,
@@ -292,10 +293,19 @@ pub(crate) fn local_launch_args(command: Vec<String>) -> Result<SpawnArgs, Launc
     })
 }
 
-/// No cwd for a remote daemon: it chdirs into whatever cwd it is sent,
-/// so a local path shipped across fails the spawn outright.
-pub fn launch_args(command: Vec<String>, carrier: &Carrier) -> Result<SpawnArgs, LaunchCwdError> {
+/// No cwd and no configured shell for a remote daemon: it chdirs into
+/// whatever cwd it is sent, so a local path shipped across fails the
+/// spawn outright, and the shell names a program on this host.
+pub fn launch_args(
+    command: Vec<String>,
+    shell: &ShellConfig,
+    carrier: &Carrier,
+) -> Result<SpawnArgs, LaunchCwdError> {
     let args = if matches!(carrier, Carrier::Local(_)) {
+        let command = match shell.argv() {
+            Some(argv) if command.is_empty() => argv.to_vec(),
+            _ => command,
+        };
         local_launch_args(command)?
     } else {
         spawn_args_from_cli(command)
@@ -983,6 +993,39 @@ mod tests {
             spawn_args_from_cli(vec!["bash".to_string(), "-c".to_string(), "ls".to_string()]);
         assert_eq!(many.command, "bash");
         assert_eq!(many.args, vec!["-c", "ls"]);
+    }
+
+    #[test]
+    fn a_local_launch_without_a_command_runs_the_configured_shell() {
+        let shell = ShellConfig {
+            command: vec!["pwsh.exe".into(), "-NoLogo".into()],
+        };
+        let local = Carrier::Local(PathBuf::from("felis.sock").into());
+
+        let args = launch_args(Vec::new(), &shell, &local).unwrap();
+        assert_eq!(
+            (args.command.as_str(), args.args.as_slice()),
+            ("pwsh.exe", &["-NoLogo".to_owned()][..])
+        );
+
+        let args = launch_args(vec!["htop".into()], &shell, &local).unwrap();
+        assert_eq!(args.command, "htop", "an explicit command wins");
+
+        let args = launch_args(Vec::new(), &ShellConfig::default(), &local).unwrap();
+        assert_eq!(args.command, "", "unset leaves the daemon's default");
+    }
+
+    #[test]
+    fn a_remote_launch_ignores_the_configured_shell() {
+        let shell = ShellConfig {
+            command: vec!["pwsh.exe".into()],
+        };
+        let ssh = Carrier::Ssh {
+            destination: "host".into(),
+            ssh_args: Vec::new(),
+        };
+        let args = launch_args(Vec::new(), &shell, &ssh).unwrap();
+        assert_eq!(args.command, "");
     }
 
     /// Real cwd, else `$HOME` (also for `/`), else empty so the daemon's
