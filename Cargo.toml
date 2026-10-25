@@ -83,7 +83,7 @@ unicode-segmentation = "1.13"
 simdutf8 = "0.1"
 swash = "0.2"
 # The version swash 0.2 pulls in, so no duplicate.
-skrifa = { version = "0.48", default-features = false, features = ["std"] }
+skrifa = { version = "0.49", default-features = false, features = ["std"] }
 zeno = "0.3"
 # `felis-shaping` maps the faces it draws rather than reading them onto
 # the heap (~190 MB live for the emoji + CJK faces). The map call is
