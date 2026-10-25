@@ -27,7 +27,7 @@ pub const LANDING_REMOTE_SPAWN: RemoteSpawn = RemoteSpawn::Allow;
 
 #[derive(Debug, Error)]
 pub enum DialError {
-    #[error("could not reach felis-daemon at {socket} after auto-spawn")]
+    #[error("could not reach felis-daemon at {socket}")]
     SpawnDaemon {
         socket: String,
         #[source]
@@ -127,7 +127,9 @@ impl DialError {
             // one refusal it never spawns over: a full daemon answers
             // differently once a peer leaves, so the ladder keeps it.
             Self::SpawnDaemon { source, .. } => match source {
-                SpawnConnectError::Connect(source) => source.is_transient(),
+                SpawnConnectError::Connect(source) | SpawnConnectError::Spawned(source) => {
+                    source.is_transient()
+                }
                 SpawnConnectError::Spawn(_) => false,
             },
             Self::NoLiveSession => false,
@@ -720,6 +722,30 @@ mod tests {
             classify_reconnect(1, no_binary),
             ReconnectError::Refused(_)
         ));
+    }
+
+    #[test]
+    fn a_dial_error_mentions_the_autospawn_only_when_one_ran() {
+        fn chain(err: &(dyn std::error::Error + 'static)) -> String {
+            std::iter::successors(Some(err), |e| e.source())
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(": ")
+        }
+        let refused = || ConnectError::Refused {
+            reason: felis_protocol::messages::RefusalReason::AtCapacity,
+            detail: String::new(),
+        };
+        let before = DialError::SpawnDaemon {
+            socket: "/run/felis.sock".to_owned(),
+            source: SpawnConnectError::Connect(refused()),
+        };
+        assert!(!chain(&before).contains("auto-spawn"), "{}", chain(&before));
+        let after = DialError::SpawnDaemon {
+            socket: "/run/felis.sock".to_owned(),
+            source: SpawnConnectError::Spawned(refused()),
+        };
+        assert!(chain(&after).contains("auto-spawned"), "{}", chain(&after));
     }
 
     /// The window is unusable while the ladder runs, so the schedule is

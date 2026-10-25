@@ -22,8 +22,11 @@ mod systemd;
 pub enum SpawnConnectError {
     #[error("spawn felis-daemon (is it on PATH?): {0}")]
     Spawn(#[source] std::io::Error),
+    /// The endpoint refused or failed the dial, and nothing was spawned.
     #[error(transparent)]
     Connect(#[from] ConnectError),
+    #[error("the auto-spawned felis-daemon did not answer")]
+    Spawned(#[source] ConnectError),
 }
 
 /// Autospawn covers a cold socket and a daemon that vanished
@@ -46,16 +49,17 @@ pub async fn connect_or_spawn_daemon(
     #[cfg(target_os = "linux")]
     match hand_off_to_user_manager(socket, offer).await {
         HandOff::Connected(connection) => return Ok(*connection),
-        HandOff::Undialable(err) => return Err(err.into()),
+        HandOff::Undialable(err) => return Err(SpawnConnectError::Spawned(err)),
         HandOff::Fork => {}
     }
     spawn_daemon_child(socket).map_err(SpawnConnectError::Spawn)?;
-    Ok(connect_carrier_with_retry(
+    connect_carrier_with_retry(
         Carrier::Local(socket.into()),
         offer,
         RetryPolicy::DAEMON_BOOT,
     )
-    .await?)
+    .await
+    .map_err(SpawnConnectError::Spawned)
 }
 
 /// The child is not killed on this binary's exit; it outlives the window.
