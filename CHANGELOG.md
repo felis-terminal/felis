@@ -40,6 +40,8 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 
 ### Fixed
 
+- On Windows, closing the console a window was launched from, or pressing Ctrl+C in it, no longer stops the daemon that
+  window started, which ended every session.
 - A post-process shader that declares a resource the bind layout does not have, or at the wrong type, is refused with an
   error instead of crashing the client at pipeline creation.
 

@@ -113,7 +113,19 @@ fn daemon_command(program: &OsStr, socket: &Path) -> std::process::Command {
         // endpoint to the daemon it forks: `serve` acts on the variable,
         // and the manager would read this daemon as that unit's readiness.
         .env_remove("NOTIFY_SOCKET");
+    #[cfg(windows)]
+    detach_from_console(&mut command);
     command
+}
+
+/// A daemon on the launcher's console dies when that console closes or
+/// takes a Ctrl+C. `CREATE_NO_WINDOW` gives it a hidden console of its own;
+/// `CREATE_NEW_PROCESS_GROUP` would disable Ctrl+C in every shell it spawns.
+#[cfg(windows)]
+fn detach_from_console(command: &mut std::process::Command) {
+    use std::os::windows::process::CommandExt as _;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    command.creation_flags(CREATE_NO_WINDOW);
 }
 
 /// Asks the systemd user manager to run the daemon as a transient
