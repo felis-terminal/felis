@@ -194,6 +194,12 @@ The slots felis uses:
 - **Logs:** `ProjectDirs::state_dir()` (`$XDG_STATE_HOME/felis/`), `data_local_dir()` on Windows, and
   `~/Library/Logs/felis/` on macOS, where `directories` has no log or state slot. Per-binary file names and rotation are
   in [cli.md](cli.md) "Log files".
+- **ConPTY host (Windows):** `data_local_dir()\conpty\<version>\`, where `<version>` is the embedded
+  `Microsoft.Windows.Console.ConPTY` package version. A daemon at Medium integrity writes `conpty.dll`,
+  `OpenConsole.exe` and `LICENSE-conpty.txt` there unless present, refuses every spawn when a file differs from the copy
+  embedded in `felis-daemon.exe` or the host fails to load, and keeps the two binaries open, so they cannot be replaced
+  or deleted, while it runs. A daemon at any other integrity level uses the ConPTY built into Windows and neither
+  creates nor reads the directory. felis never removes a version directory (REQ-009f).
 
 The directory mode (`0700`) and socket mode (`0600`) rules from [security-model.md](../explanation/security-model.md)
 "Daemon IPC" apply on every platform that exposes filesystem permissions. Abstract sockets on Linux are not used.
@@ -250,4 +256,5 @@ implementable across macOS, Linux, and Windows, it is omitted rather than gated.
 The PTY layer is self-hosted in `felis-pty` (see [implementation.md](../explanation/implementation.md) "PTY layer
 (self-hosted)"), so its platform reach is bounded by `rustix` / `windows-sys` rather than a PTY crate's support list.
 The Windows backend (ConPTY) is lint-checked by cross-compilation (`just check-windows`) and exercised for real by the
-`x86_64-windows` runner's job, which runs it green against real conhost.
+`x86_64-windows` runner's job against both ConPTY hosts, the inbox conhost and the embedded one
+([implementation.md](../explanation/implementation.md) "ConPTY host").

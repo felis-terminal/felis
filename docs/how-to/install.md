@@ -248,9 +248,16 @@ Shell completions are under `share/bash-completion`, `share/zsh` and `share/fish
 Windows binaries ship as a release asset:
 
 1. Open the [release page](https://github.com/felis-terminal/felis/releases) for the version you want.
-2. Download `felis-x86_64-pc-windows-msvc.zip`, which contains `felis.exe`, `felis-client.exe`, and `felis-daemon.exe`.
+2. Download `felis-x86_64-pc-windows-msvc.zip`, which contains `felis.exe`, `felis-client.exe`, and `felis-daemon.exe`,
+   plus `LICENSE-conpty.txt`, the license of the Microsoft ConPTY that `felis-daemon.exe` embeds.
 3. Unpack all three executables into a single directory on your `PATH`. The front door locates `felis-client.exe` and
    `felis-daemon.exe` as siblings of itself.
+
+The daemon extracts its ConPTY into `%LOCALAPPDATA%\felis\data\conpty\<version>\` when it starts its first shell
+([workspace.md "Filesystem layout"](../reference/workspace.md#filesystem-layout)). A felis release with a newer ConPTY
+adds a directory beside the existing ones; delete those of earlier versions while no felis daemon runs. A policy that
+blocks running programs from `%LOCALAPPDATA%` (AppLocker, WDAC) makes every shell fail to start, with an error in the
+daemon log.
 
 For a build newer than the last release, the `windows` workflow uploads the same zip as a run artifact for each passing
 commit on `main`. Alternatively, build from source on Windows with `cargo build --release`.

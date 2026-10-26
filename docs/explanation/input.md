@@ -73,9 +73,8 @@ A terminal that ignores the request and keeps sending plain VT leaves PSReadLine
 PowerShell, the default Windows shell) unable to receive keystrokes, while `cmd.exe` (which never enables the mode) is
 unaffected.
 
-So felis adopts it: the ConPTY is created with `PSEUDOCONSOLE_WIN32_INPUT_MODE`, the daemon parses `?9001` into a
-per-session flag, and the encoder emits win32-input records while it is set. The byte-level form is in
-[key-encoding](../reference/protocols/key-encoding.md) (REQ-507).
+So felis adopts it: the daemon parses `?9001` into a per-session flag, and the encoder emits win32-input records while
+it is set. The byte-level form is in [key-encoding](../reference/protocols/key-encoding.md) (REQ-507).
 
 This is the **input half of the ConPTY shim**, not an OS-gated feature: the intent ("keystrokes reach the shell
 faithfully") is uniform, and only the ConPTY mechanism forces the Windows-specific encoding. That is the

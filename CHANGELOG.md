@@ -31,6 +31,10 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 
 ### Changed
 
+- **Windows**: the daemon runs shells on Windows Terminal's ConPTY, embedded in `felis-daemon.exe` and extracted under
+  `%LOCALAPPDATA%\felis\data\conpty\`, instead of the conhost built into Windows, so every Windows install,
+  `cargo install` included, gets the same tested host, which measures text widths by grapheme cluster like felis does.
+  An elevated daemon keeps the built-in one. The zip adds `LICENSE-conpty.txt`.
 - A post-process shader's `time_s` counts from when the window's renderer started and no longer restarts when a live
   reload rebuilds the shader.
 - `felis config show-effective` and the `felis doctor report` config diff print `shader.post` as an array of stages,

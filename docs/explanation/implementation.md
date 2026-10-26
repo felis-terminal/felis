@@ -202,7 +202,7 @@ Costs, accepted deliberately: three audited `unsafe` relaxations (the Unix `pre_
 `foreground_pgrp`, and the ConPTY FFI module; each is an `#[allow(unsafe_code)]` site in `crates/felis-pty/src/unix.rs`
 or `crates/felis-pty/src/windows.rs` carrying `// SAFETY:` comments), and the Windows backend is lint-checked by
 cross-compilation (`just check-windows`) with its runtime behavior exercised by the `x86_64-windows` runner's job
-against real conhost; its known behavioral gap is recorded in `crates/felis-pty/src/windows.rs`.
+against both ConPTY hosts; its known behavioral gap is recorded in `crates/felis-pty/src/windows.rs`.
 
 - Rejected: `portable-pty` (WezTerm's cross-platform PTY crate, <https://docs.rs/portable-pty/latest/portable_pty/>). It
   buys the five wrappers at the price of `nix` (0.28), which the workspace otherwise does not carry at all, a second
@@ -216,6 +216,36 @@ against real conhost; its known behavioral gap is recorded in `crates/felis-pty/
 
 The [non-goals.md](non-goals.md#cross-platform-constraints) platform-shim carve-out (ConPTY vs. `/dev/ptmx`) holds, with
 the shim living in `felis-pty`.
+
+### ConPTY host
+
+A Medium-integrity daemon runs every shell on Windows Terminal's out-of-band ConPTY (`conpty.dll` and its
+`OpenConsole.exe` host, Microsoft's `Microsoft.Windows.Console.ConPTY` package,
+<https://github.com/microsoft/terminal>), embedded in `felis-daemon.exe` through the `conpty-bin-vendored` crate and
+extracted on first use; the contract is [workspace.md "Filesystem layout"](../reference/workspace.md#filesystem-layout).
+The inbox ConPTY is whatever conhost each machine's Windows build carries, so a fix or a regression in it reaches felis
+users on Microsoft's schedule and differs between machines. The embedded host is one version felis pins and tests, and
+it measures text by grapheme cluster, matching the grid's permanently set `?2027`. Embedding rather than shipping the
+files gives a `cargo install` build the same host as the release zip, and a directory per version lets daemons of
+different versions run side by side.
+
+A host that cannot be extracted, verified or loaded refuses spawns rather than falling back, because a fallback would
+put shells on an untested host without telling anyone; `conpty.dll` itself answers a missing `OpenConsole.exe` by
+silently starting conhost, which is why the daemon keeps both files open.
+
+Only a Medium daemon runs it. Any Medium process of the user can write the directory, and `OpenConsole.exe` imports DLLs
+that are not `KnownDLLs`, so such a process could plant one beside it: harmless to a Medium daemon, code execution in an
+elevated one. A daemon at any other level therefore uses the inbox ConPTY. felis-pty's tests choose the host explicitly
+so that the elevated CI runner covers both, which loads the embedded host elevated there; accepted, since the runner
+already runs the change under test at that level.
+
+- Rejected: inbox only. It leaves the host version to each machine's Windows build.
+- Rejected: loading a `conpty.dll` only when the user supplies one (Alacritty's approach). The tested host would be the
+  exception rather than the default.
+- Rejected: shipping the files beside the executable. A `cargo install` build has no way to get them.
+- Rejected: giving an elevated daemon the embedded host from `%ProgramFiles%` or from a directory validated as
+  admin-only (owner, DACL, reparse points). Proving that no Medium process can add a file beside `OpenConsole.exe` takes
+  security-API code that a rarely used configuration does not earn.
 
 ## Text shaping and rasterization
 
