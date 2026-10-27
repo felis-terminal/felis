@@ -1455,6 +1455,9 @@ struct App {
     /// loop park on `ControlFlow::Wait`) while the cursor is hidden.
     window_focused: bool,
     a11y: a11y::A11yTree,
+    /// [`a11y::ANNOUNCES_OUTPUT`]; a field so tests on any platform can
+    /// drive the opt-in.
+    announce_output: bool,
     cursor_blink: cursor_blink::BlinkClock,
     /// Retained so a live `reload_config` can reconfigure `cursor_blink`.
     cursor_cfg: config::CursorConfig,
@@ -1576,6 +1579,7 @@ impl App {
             pending_retarget: None,
             window_focused: true,
             a11y: a11y::A11yTree::default(),
+            announce_output: a11y::ANNOUNCES_OUTPUT,
             cursor_blink: cursor_blink::BlinkClock::new(
                 startup.cursor_cfg.blink,
                 startup.cursor_cfg.blink_interval_ms,

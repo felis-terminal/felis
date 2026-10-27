@@ -263,12 +263,27 @@ impl App {
             // An idle window would otherwise never reach the flush.
             accesskit_winit::WindowEvent::InitialTreeRequested => {
                 self.a11y.activate();
+                self.send_announce_output(true);
                 self.redraw.request();
             }
-            accesskit_winit::WindowEvent::AccessibilityDeactivated => self.a11y.deactivate(),
+            accesskit_winit::WindowEvent::AccessibilityDeactivated => {
+                self.a11y.deactivate();
+                self.send_announce_output(false);
+            }
             // Focus is a no-op (the terminal is the only focusable node);
             // the rest act on state felis does not expose yet.
             accesskit_winit::WindowEvent::ActionRequested(_) => {}
+        }
+    }
+
+    /// A fresh attachment starts disabled, so a landing while active
+    /// sends this again.
+    pub(crate) fn send_announce_output(&self, enabled: bool) {
+        if !self.announce_output {
+            return;
+        }
+        if let Some(msg) = crate::a11y::announce_output_request(enabled, self.effective_minor) {
+            self.send_input(&msg);
         }
     }
 
@@ -1461,6 +1476,9 @@ impl App {
         self.send_configure_theme();
         // Likewise for DECSET 2031 programs.
         self.report_color_scheme();
+        if self.a11y.is_active() {
+            self.send_announce_output(true);
+        }
         self.switch_state = SwitchState::Idle;
         // The daemon started this session at whatever geometry it last
         // knew; the shell needs the right SIGWINCH before the user types.

@@ -15,6 +15,9 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 - **Platform**: screen readers can read the window. The GUI client exposes the visible rows, the cursor as the caret,
   and the selection through UI Automation (Windows), NSAccessibility (macOS), and AT-SPI (Linux), building nothing until
   a screen reader first asks.
+- **Platform**: on Windows and macOS, a screen reader speaks the output of each finished shell command. A shell that
+  emits `OSC 133` marks (fish 4, or another shell's integration) delimits it; the focused window announces at most the
+  last 256 rows. Protocol minor 3 adds the window's opt-in and the daemon's output message.
 - **Config**: `shader.post` takes an array of up to 16 stage tables that run in order, each sampling the output of the
   one before, so an effect can run on top of the bundled trail. A single table keeps working. A stage that fails to load
   is skipped and the rest still run.

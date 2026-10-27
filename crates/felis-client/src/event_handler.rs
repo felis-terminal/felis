@@ -263,6 +263,9 @@ impl ApplicationHandler<AppEvent> for App {
             self.redraw.request();
         }
         let stage_animation_deadline = self.stage_animations.next_deadline();
+        if self.a11y.tick(now) {
+            self.redraw.request();
+        }
         let turn = self.present_retry.turn(now);
         if turn == RedrawTurn::Retry {
             self.redraw.request();
@@ -303,6 +306,7 @@ impl ApplicationHandler<AppEvent> for App {
                 trail_deadline,
                 shader_deadline,
                 stage_animation_deadline,
+                self.a11y.announcement_deadline(),
             ]
             .into_iter()
             .flatten()
@@ -338,6 +342,10 @@ impl App {
             WindowInput::Focused(focused) => {
                 self.send_input(&InputMsg::FocusChange { focused });
                 self.window_focused = focused;
+                // A reply must not speak after the user switched away.
+                if !focused {
+                    self.a11y.drop_pending_announcements();
+                }
                 if let Some(renderer) = self.renderer.as_mut() {
                     renderer.set_window_focused(focused);
                 }
@@ -606,6 +614,13 @@ impl App {
                         }
                         if *source == AttentionSource::Bell {
                             self.fire_shader_event(&ShaderEvent::Bell);
+                        }
+                    }
+                    GridMsg::CommandOutput { text, omitted } => {
+                        if self.window_focused
+                            && let Some(text) = crate::a11y::announcement_text(text, *omitted)
+                        {
+                            self.a11y.announce(text, Instant::now());
                         }
                     }
                     _ => {}

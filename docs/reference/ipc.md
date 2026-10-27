@@ -1072,10 +1072,10 @@ observers ("Notify (kind = 7)" above); the client answers either with the same n
 distinct from a `Region::Reply` a `pipe → clipboard` chord asked for, which is the user's own action.
 
 **Command output.** `CommandOutput` carries the text of a finished shell command, cut at its `OSC 133 ; D` mark, and how
-much of it was omitted: a count of rows, or an unknown amount. It goes only to the windows that turned it on with
-`Input::AnnounceOutput`, ships with the next cycle like the facets, and is an event, not state: no rehydrate burst
-replays it. The daemon holds at most 8 per window that has not pulled them, dropping the oldest, and the text is at most
-`MAX_ANNOUNCE_BYTES` (64 KiB).
+much of it was omitted: a count of rows, or an unknown amount ([accessibility.md](accessibility.md#announcements)). It
+goes only to the windows that turned it on with `Input::AnnounceOutput`, ships with the next cycle like the facets, and
+is an event, not state: no rehydrate burst replays it. The daemon holds at most 8 per window that has not pulled them,
+dropping the oldest, and the text is at most `MAX_ANNOUNCE_BYTES` (64 KiB).
 
 #### Registry delivery
 
