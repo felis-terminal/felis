@@ -57,7 +57,7 @@ impl From<Size> for conpty::Coord {
 /// Unwrap `HRESULT_FROM_WIN32` (`0x8007_xxxx`) to bare Win32 codes so
 /// `io::Error::from_raw_os_error` formats known error descriptions.
 #[allow(clippy::cast_possible_wrap)]
-fn hresult_error(hr: HRESULT) -> io::Error {
+pub(crate) fn hresult_error(hr: HRESULT) -> io::Error {
     // HRESULT_FROM_WIN32(code) == 0x8007_0000 | (code & 0xFFFF).
     const FACILITY_WIN32: HRESULT = 0x8007_0000_u32 as HRESULT;
     let code = if hr & (0xFFFF_0000_u32 as HRESULT) == FACILITY_WIN32 {
@@ -152,7 +152,7 @@ fn integrity_rid() -> io::Result<u32> {
 }
 
 /// The host this process runs every shell on.
-fn process_host() -> Result<Host, PtyError> {
+pub(crate) fn process_host() -> Result<Host, PtyError> {
     static HOST: OnceLock<Result<Host, String>> = OnceLock::new();
     HOST.get_or_init(|| {
         let host = integrity_rid()
@@ -171,10 +171,13 @@ fn process_host() -> Result<Host, PtyError> {
 
 /// The functions of one `ConPTY` implementation. A pseudoconsole's
 /// resize and close must go to the implementation that created it.
-struct Api {
-    create: conpty::ConptyCreatePseudoConsoleFn,
-    resize: conpty::ConptyResizePseudoConsoleFn,
-    close: conpty::ConptyClosePseudoConsoleFn,
+pub(crate) struct Api {
+    pub(crate) create: conpty::ConptyCreatePseudoConsoleFn,
+    pub(crate) resize: conpty::ConptyResizePseudoConsoleFn,
+    pub(crate) close: conpty::ConptyClosePseudoConsoleFn,
+    /// Only the bundled host can rebuild a pseudoconsole from its
+    /// handles, which is what an in-place upgrade's successor does.
+    pub(crate) pack: Option<conpty::ConptyPackPseudoConsoleFn>,
 }
 
 // Declared with the crate's types so both hosts fill one `Api`:
@@ -196,6 +199,7 @@ static INBOX: Api = Api {
     create: CreatePseudoConsole,
     resize: ResizePseudoConsole,
     close: ClosePseudoConsole,
+    pack: None,
 };
 
 const DLL: &str = "conpty.dll";
@@ -280,6 +284,12 @@ fn load_bundle(dir: PathBuf) -> Result<Bundle, String> {
                 unsafe extern "system" fn() -> isize,
                 conpty::ConptyClosePseudoConsoleFn,
             >(resolve(conpty::export::ConptyClosePseudoConsole)?),
+            pack: Some(mem::transmute::<
+                unsafe extern "system" fn() -> isize,
+                conpty::ConptyPackPseudoConsoleFn,
+            >(resolve(
+                conpty::export::ConptyPackPseudoConsole,
+            )?)),
         }
     };
     Ok(Bundle {
@@ -373,7 +383,7 @@ fn write_and_move(mut file: File, bytes: &[u8], tmp: &Path, path: &Path) -> io::
     Ok(())
 }
 
-fn api(host: Host) -> Result<&'static Api, PtyError> {
+pub(crate) fn api(host: Host) -> Result<&'static Api, PtyError> {
     match host {
         Host::Inbox => Ok(&INBOX),
         Host::Bundled => bundle().map(|bundle| &bundle.api),
@@ -386,12 +396,12 @@ fn api(host: Host) -> Result<&'static Api, PtyError> {
 /// flushes pending output and then breaks the output pipe, the break
 /// the reader thread sees as EOF. The pipe handles close afterwards.
 pub(crate) struct Master {
-    api: &'static Api,
-    hpc: conpty::Hpcon,
+    pub(crate) api: &'static Api,
+    pub(crate) hpc: conpty::Hpcon,
     /// Read end of the `ConPTY` output pipe (`ConPTY` writes VT here).
-    output: OwnedHandle,
+    pub(crate) output: OwnedHandle,
     /// Write end of the `ConPTY` input pipe (keystrokes go here).
-    input: OwnedHandle,
+    pub(crate) input: OwnedHandle,
 }
 
 // SAFETY: `hpc` is an opaque handle the pseudoconsole functions accept
@@ -461,7 +471,7 @@ impl Read for MasterReader {
 }
 
 pub(crate) struct Child {
-    process: OwnedHandle,
+    pub(crate) process: OwnedHandle,
 }
 
 impl Child {
@@ -538,7 +548,7 @@ fn pipe() -> Result<(OwnedHandle, OwnedHandle), PtyError> {
 
 /// Quote one argument per the `CommandLineToArgvW` / MSVCRT parsing
 /// rules, appending to the wide command line.
-fn append_quoted(arg: &OsStr, out: &mut Vec<u16>) {
+pub(crate) fn append_quoted(arg: &OsStr, out: &mut Vec<u16>) {
     let wide: Vec<u16> = arg.encode_wide().collect();
     let needs_quotes = wide.is_empty()
         || wide

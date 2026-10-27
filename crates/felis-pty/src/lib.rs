@@ -15,6 +15,8 @@ use tokio::{
 };
 
 mod command;
+#[cfg(windows)]
+pub mod handover;
 mod quiesce;
 #[cfg(unix)]
 mod unix;
@@ -1186,7 +1188,6 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     async fn wait_for_exit(child: &ChildHandle) -> bool {
         for _ in 0..100 {
             if child.try_wait().expect("try_wait").is_some() {
@@ -1893,5 +1894,55 @@ mod tests {
         );
         quiescer.resume().expect("resume");
         child.kill().expect("kill");
+    }
+
+    /// A session handed over within one process: the adopted copy reads
+    /// the same console and writes to the same child.
+    #[cfg(windows)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_adopted_console_reaches_the_same_child() {
+        let (_collected, sink) = collector();
+        let session = spawn_bundled(&idle_cmd(), sink);
+        let quiescer = session.quiescer();
+        let (_reader, _writer, child, resizer) = session.split();
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        quiescer.park(Duration::from_secs(2)).expect("park");
+
+        let handover = handover::Handover::of(&resizer, &child).expect("take the handles");
+        let values = handover
+            .values_in(&handover::Process::current().expect("this process"))
+            .expect("duplicate the handles");
+        let adopted = handover::prepare_adopt(&values).expect("adopt");
+        let (adopted_collected, adopted_sink) = collector();
+        let adopted = adopted.start(adopted_sink).expect("start");
+        let (_reader, writer, adopted_child, adopted_resizer) = adopted.split();
+
+        adopted_resizer
+            .resize(Size {
+                rows: 30,
+                cols: 100,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .expect("the packed pseudoconsole resizes");
+        assert!(
+            writer
+                .write_owned(b"echo through-adoption\r".to_vec(), None)
+                .expect("queue")
+                .queued()
+        );
+        assert!(
+            sink_until(&adopted_collected, "through-adoption")
+                .await
+                .contains("through-adoption")
+        );
+        assert!(
+            adopted_child.kill().expect("kill"),
+            "the adopted child is live"
+        );
+        assert!(
+            wait_for_exit(&child).await,
+            "the original handle sees it end"
+        );
     }
 }
