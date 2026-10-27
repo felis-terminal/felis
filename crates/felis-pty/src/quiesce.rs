@@ -18,6 +18,10 @@ pub(crate) struct QuiesceShared {
     resume: Condvar,
     #[cfg(unix)]
     wake: crate::platform::WakePipe,
+    /// The reader thread, whose blocking `ReadFile` only a
+    /// `CancelSynchronousIo` on that thread wakes.
+    #[cfg(windows)]
+    reader: std::sync::OnceLock<std::os::windows::io::OwnedHandle>,
 }
 
 #[derive(Default)]
@@ -44,7 +48,32 @@ impl QuiesceShared {
             resume: Condvar::new(),
             #[cfg(unix)]
             wake: crate::platform::WakePipe::new()?,
+            #[cfg(windows)]
+            reader: std::sync::OnceLock::new(),
         })
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn set_reader_thread(&self, thread: std::os::windows::io::OwnedHandle) {
+        let _already = self.reader.set(thread);
+    }
+
+    /// Cancels the read the reader thread is blocked in, if any. A
+    /// cancel that lands before the thread enters `ReadFile` cancels
+    /// nothing, so the park loop repeats it; a cancel never consumes
+    /// bytes from the pipe.
+    #[cfg(windows)]
+    #[allow(unsafe_code)]
+    fn cancel_read(&self) {
+        use std::os::windows::io::AsRawHandle as _;
+        if let Some(thread) = self.reader.get() {
+            // SAFETY: `thread` is a live thread handle this struct owns.
+            // A failure (`ERROR_NOT_FOUND`: no read pending) is the
+            // no-op the loop expects.
+            unsafe {
+                windows_sys::Win32::System::IO::CancelSynchronousIo(thread.as_raw_handle());
+            }
+        }
     }
 
     pub(crate) fn requested(&self) -> bool {
@@ -127,12 +156,8 @@ impl Quiescer {
     /// Parks the reader, waits for the parser to consume what was read, and
     /// parks the writer within `timeout`, else resumes them with `TimedOut`.
     /// The caller stops queueing input first: a write queued while parking is
-    /// parked, not refused. Windows reports `Unsupported`: nothing wakes its
-    /// reader's blocking `ReadFile`.
+    /// parked, not refused.
     pub fn park(&self, timeout: Duration) -> io::Result<Parked> {
-        if cfg!(windows) {
-            return Err(io::Error::from(io::ErrorKind::Unsupported));
-        }
         self.shared.requested.store(true, Ordering::Release);
         #[cfg(unix)]
         if let Err(err) = self.shared.wake.signal() {
@@ -141,6 +166,10 @@ impl Quiescer {
         }
         let deadline = Instant::now() + timeout;
         loop {
+            #[cfg(windows)]
+            if !self.reader_parked()? {
+                self.shared.cancel_read();
+            }
             if let Some(parked) = self.try_parked()? {
                 return Ok(parked);
             }
@@ -163,6 +192,12 @@ impl Quiescer {
         drop(state);
         self.shared.resume.notify_all();
         Ok(())
+    }
+
+    #[cfg(windows)]
+    fn reader_parked(&self) -> io::Result<bool> {
+        let eof = self.sink.state.lock().map_err(poison)?.eof;
+        Ok(eof || self.shared.state.lock().map_err(poison)?.reader_parked)
     }
 
     fn try_parked(&self) -> io::Result<Option<Parked>> {

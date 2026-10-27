@@ -21,7 +21,10 @@ use std::{
 
 use conpty_bin_vendored as conpty;
 use windows_sys::Win32::{
-    Foundation::{HANDLE, INVALID_HANDLE_VALUE, S_OK, WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT},
+    Foundation::{
+        ERROR_OPERATION_ABORTED, HANDLE, INVALID_HANDLE_VALUE, S_OK, WAIT_FAILED, WAIT_OBJECT_0,
+        WAIT_TIMEOUT,
+    },
     Security::{
         GetSidSubAuthority, GetSidSubAuthorityCount, GetTokenInformation, TOKEN_MANDATORY_LABEL,
         TOKEN_QUERY, TokenIntegrityLevel,
@@ -440,13 +443,18 @@ impl Master {
 }
 
 /// Master-side `Read` that reports end-of-stream instead of
-/// `ERROR_BROKEN_PIPE`, which is what a closed pseudoconsole produces.
+/// `ERROR_BROKEN_PIPE`, which is what a closed pseudoconsole produces,
+/// and a read the quiesce cancelled as interrupted, so the reader
+/// retries it from its park point.
 pub(crate) struct MasterReader(File);
 
 impl Read for MasterReader {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         match self.0.read(buf) {
             Err(err) if err.kind() == io::ErrorKind::BrokenPipe => Ok(0),
+            Err(err) if err.raw_os_error() == Some(ERROR_OPERATION_ABORTED.cast_signed()) => {
+                Err(io::Error::from(io::ErrorKind::Interrupted))
+            }
             other => other,
         }
     }
@@ -646,7 +654,7 @@ pub(crate) fn open_and_spawn(command: &Command, size: Size) -> Result<(Master, C
 // The `cb` truncation cast is the API's own contract: the struct size
 // fits u32 by definition.
 #[allow(clippy::cast_possible_truncation)]
-fn open_and_spawn_on(
+pub(crate) fn open_and_spawn_on(
     host: Host,
     command: &Command,
     size: Size,

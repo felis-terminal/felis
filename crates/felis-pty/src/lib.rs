@@ -600,6 +600,12 @@ fn spawn_io_threads(
             thread: "reader",
             source,
         })?;
+    #[cfg(windows)]
+    quiesce.set_reader_thread(
+        std::os::windows::io::AsHandle::as_handle(&reader_handle)
+            .try_clone_to_owned()
+            .map_err(|e| PtyError::OpenPty(format!("duplicate the reader thread: {e}")))?,
+    );
 
     let writer = spawn_writer_with(sync_writer, Arc::clone(&quiesce))?;
     let quiescer = Quiescer {
@@ -1771,6 +1777,121 @@ mod tests {
             "nothing is sent to a reaped pid"
         );
         assert!(adopted_child.try_wait().expect("try_wait").is_some());
+        child.kill().expect("kill");
+    }
+
+    #[cfg(windows)]
+    fn spawn_bundled(command: &Command, sink: ByteSink) -> PtySession {
+        let (master, child) =
+            platform::open_and_spawn_on(platform::Host::Bundled, command, small_size())
+                .expect("spawn on the bundled host");
+        session_over(master, child, sink).expect("start the session")
+    }
+
+    /// `cmd` waiting at its prompt: the reader is blocked in a `ReadFile`
+    /// on a pipe that stays silent.
+    #[cfg(windows)]
+    fn idle_cmd() -> Command {
+        let mut cmd = Command::new(comspec());
+        cmd.args(["/q", "/k", "echo ready"]);
+        cmd
+    }
+
+    #[cfg(windows)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn park_wakes_a_reader_blocked_on_an_idle_console_and_resume_keeps_it_working() {
+        let (collected, sink) = collector();
+        let session = spawn_bundled(&idle_cmd(), sink);
+        let quiescer = session.quiescer();
+        let (_reader, writer, child, _resizer) = session.split();
+        assert!(sink_until(&collected, "ready").await.contains("ready"));
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        let parked = quiescer
+            .park(Duration::from_secs(2))
+            .expect("park an idle session");
+        assert_eq!(parked, Parked::default(), "an idle session holds no input");
+        quiescer.resume().expect("resume");
+
+        assert!(
+            writer
+                .write_owned(b"echo after-resume\r".to_vec(), None)
+                .expect("queue")
+                .queued()
+        );
+        assert!(
+            sink_until(&collected, "after-resume")
+                .await
+                .contains("after-resume")
+        );
+        child.kill().expect("kill");
+    }
+
+    /// Parking again and again while the child writes loses nothing and
+    /// repeats nothing: a cancelled read takes no bytes from the pipe.
+    #[cfg(windows)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn repeated_parks_while_the_child_writes_lose_and_repeat_no_line() {
+        const LINES: u32 = 400;
+        let (collected, sink) = collector();
+        let mut cmd = Command::new(comspec());
+        cmd.args([
+            "/q",
+            "/c",
+            &format!("for /l %i in (1,1,{LINES}) do @echo line-%i-end"),
+        ]);
+        let session = spawn_bundled(&cmd, sink);
+        let quiescer = session.quiescer();
+        let (_reader, _writer, child, _resizer) = session.split();
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        while child.try_wait().expect("try_wait").is_none() {
+            assert!(std::time::Instant::now() < deadline, "the child finishes");
+            quiescer.park(Duration::from_secs(2)).expect("park");
+            tokio::time::sleep(Duration::from_millis(3)).await;
+            quiescer.resume().expect("resume");
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+        let text = sink_until(&collected, &format!("line-{LINES}-end")).await;
+        let mut next = 1;
+        for found in text.split("line-").skip(1) {
+            let Some((n, _)) = found.split_once("-end") else {
+                continue;
+            };
+            let n: u32 = n.parse().expect("a line number");
+            assert_eq!(n, next, "lines arrive once each, in order");
+            next += 1;
+        }
+        assert_eq!(next, LINES + 1, "every line arrived");
+    }
+
+    /// A child that never reads its console input does not keep the
+    /// writer from parking: the console host drains its input pipe.
+    #[cfg(windows)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn park_completes_while_a_child_reads_no_input() {
+        let (collected, sink) = collector();
+        let mut cmd = Command::new(comspec());
+        cmd.args(["/q", "/c", "echo ready & ping -n 600 127.0.0.1 >nul"]);
+        let session = spawn_bundled(&cmd, sink);
+        let quiescer = session.quiescer();
+        let (_reader, writer, child, _resizer) = session.split();
+        assert!(sink_until(&collected, "ready").await.contains("ready"));
+
+        let payload: Vec<u8> = (0..1024 * 1024).map(|i| b'a' + (i % 26) as u8).collect();
+        assert!(
+            writer
+                .write_owned(payload.clone(), Some(Box::new(())))
+                .expect("queue")
+                .queued()
+        );
+        let parked = quiescer
+            .park(Duration::from_secs(5))
+            .expect("park with input queued");
+        assert!(
+            payload.ends_with(&parked.unwritten),
+            "the unwritten bytes are the payload's untaken tail"
+        );
+        quiescer.resume().expect("resume");
         child.kill().expect("kill");
     }
 }
