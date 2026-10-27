@@ -6335,6 +6335,7 @@ async fn status_sums_every_subscriber_backlog_and_names_the_deepest() {
                 .send(SessionCmd::Subscribe(SubscribeReq {
                     mode: ConnectionMode::Window,
                     pull_paced: false,
+                    minor: preface::PROTOCOL_MINOR,
                     live_only: false,
                     tx,
                     buffered: Arc::clone(&buffered),

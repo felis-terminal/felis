@@ -1002,6 +1002,10 @@ so the re-report every client sends on attach reaches no program. A session whos
 the resolution still answers later queries, but no report the daemon sends on its own initiative is written to a PTY
 past end of file. Input a user types still reaches the PTY, and a write that fails there still ends the session.
 
+**Announcements.** `AnnounceOutput` turns on or off, for this window only, delivery of `Grid::CommandOutput` ("Grid
+(kind = 2)" below); an attachment starts with it off. The daemon applies the change after the output of every command
+already finished, so a window never receives output whose `D` mark arrived before it asked.
+
 **Viewport.** `Viewport` requests an absolute scrollback offset, `ViewportStep` a relative one, and `JumpPrompt` the
 previous or next prompt-start mark; each is answered, when the view moves, through `Grid::ViewportState`. A `Viewport`
 echoes the anchor of the `ViewportState` its offset was computed from, and the daemon re-expresses the offset by the
@@ -1066,6 +1070,12 @@ observers ("Notify (kind = 7)" above); the client answers either with the same n
 `ClipboardSet`, a program's `OSC 52` write, is the one facet not broadcast: the daemon sends it to the initiating
 (active) subscriber only, per-client clipboard scope ([security-model.md](../explanation/security-model.md)). It is
 distinct from a `Region::Reply` a `pipe → clipboard` chord asked for, which is the user's own action.
+
+**Command output.** `CommandOutput` carries the text of a finished shell command, cut at its `OSC 133 ; D` mark, and how
+much of it was omitted: a count of rows, or an unknown amount. It goes only to the windows that turned it on with
+`Input::AnnounceOutput`, ships with the next cycle like the facets, and is an event, not state: no rehydrate burst
+replays it. The daemon holds at most 8 per window that has not pulled them, dropping the oldest, and the text is at most
+`MAX_ANNOUNCE_BYTES` (64 KiB).
 
 #### Registry delivery
 
@@ -1566,7 +1576,8 @@ carrier dead; it has to clear it with room to spare, or the next keystroke typed
 rules apply, by message kind and never by payload:
 
 - **Ordered** — `Input::KeyBytes`, `Input::Paste`, `Input::JumpPrompt`, `Input::NextGridFrame`, `Input::Key`,
-  `Input::ViewportStep`, and every non-`Input` family: appended, never replaced, never reordered.
+  `Input::ViewportStep`, `Input::AnnounceOutput`, and every non-`Input` family: appended, never replaced, never
+  reordered.
 - **Replaceable** — `Input::Resize`, `Input::FocusChange`, `Input::ColorScheme`, `Input::Viewport`, and a buttonless
   `Input::Mouse` motion: a newer one overwrites the queued frame of the same kind **in its slot**, so a `Resize` queued
   ahead of a keystroke still leaves ahead of that keystroke after a later `Resize` replaces it. A drag carries a button

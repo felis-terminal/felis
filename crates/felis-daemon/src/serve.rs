@@ -904,10 +904,14 @@ impl SubscribeFailure {
 /// Subscribe this connection to a session task.
 async fn subscribe_to(
     cmd: &mpsc::Sender<SessionCmd>,
-    mode: ConnectionMode,
-    pull_paced: bool,
+    params: ConnParams,
     live_only: bool,
 ) -> Result<Subscription, SubscribeFailure> {
+    let ConnParams {
+        mode,
+        pull_paced,
+        effective_minor,
+    } = params;
     let (tx, out_rx) = mpsc::unbounded_channel();
     let out = tx.downgrade();
     let buffered = Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -915,6 +919,7 @@ async fn subscribe_to(
     let req = SubscribeReq {
         mode,
         pull_paced,
+        minor: effective_minor,
         live_only,
         tx,
         buffered: Arc::clone(&buffered),
@@ -1153,9 +1158,7 @@ async fn wait_for_attach<R: tokio::io::AsyncRead + Unpin, W: tokio::io::AsyncWri
     pool: &Arc<Mutex<SessionPool>>,
     factory: &SessionFactory,
 ) -> Result<Option<(AttachedSub, mpsc::UnboundedReceiver<OutEvent>, Ack)>, ConnError> {
-    let ConnParams {
-        mode, pull_paced, ..
-    } = params;
+    let ConnParams { mode, .. } = params;
     // Every pre-attach frame is deadline-bounded for modes that do not idle
     // before operations. This prevents peers that query metadata from holding
     // connection permits indefinitely.
@@ -1233,7 +1236,7 @@ async fn wait_for_attach<R: tokio::io::AsyncRead + Unpin, W: tokio::io::AsyncWri
                     // Not live-only: `felis -- true` exits before the subscribe
                     // lands, and a live-only create would refuse the window its
                     // own command's output.
-                    let subscribed = subscribe_to(&registered.cmd, mode, pull_paced, false).await;
+                    let subscribed = subscribe_to(&registered.cmd, params, false).await;
                     let id = registered.id;
                     let Subscription {
                         ok,
@@ -1280,7 +1283,7 @@ async fn wait_for_attach<R: tokio::io::AsyncRead + Unpin, W: tokio::io::AsyncWri
                             return Ok(None);
                         }
                     };
-                    let subscribed = subscribe_to(&handle.cmd, mode, pull_paced, live_only).await;
+                    let subscribed = subscribe_to(&handle.cmd, params, live_only).await;
                     let Subscription {
                         ok,
                         out_rx,
