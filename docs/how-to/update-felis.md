@@ -5,9 +5,9 @@ sidebar:
 ---
 
 Upgrade the felis package, then switch the running daemon to the new binary. Upgrading replaces the binary on disk; the
-daemon already in memory keeps serving its sessions on the build it started from until you switch it. On Linux and macOS
-`felis daemon upgrade` switches it in place and every session survives; on Windows, or when the daemon refuses, drain
-the sessions and restart the daemon instead.
+daemon already in memory keeps serving its sessions on the build it started from until you switch it.
+`felis daemon upgrade` switches it in place and every session survives; when the daemon refuses, drain the sessions and
+restart the daemon instead.
 
 Wire protocol changes across minor versions are backward-compatible, so an old daemon keeps working with a new client
 until you switch. `felis doctor` notes when the running daemon is not the installed build.
@@ -52,16 +52,16 @@ Remove the tree you replaced once the daemon has switched to the new one.
 
 ## Switch the daemon in place
 
-On Linux and macOS, run the upgrade from the newly installed `felis` while you are not using any session:
+Run the upgrade from the newly installed `felis` while you are not using any session:
 
 ```sh
 felis daemon upgrade
 ```
 
-The daemon replaces its own binary with the `felis-daemon` installed beside that `felis` and keeps its sessions: every
-shell keeps running with its screen and scrollback. Open windows lose their connection once and re-attach on their own.
-Do it while idle because a few things in flight do not cross the switch: keystrokes typed during it are dropped, a
-running `felis sessions send --wait` reports the session ended, and `felis notifications subscribe` streams end and need
+The daemon hands over to the `felis-daemon` installed beside that `felis` and keeps its sessions: every shell keeps
+running with its screen and scrollback. Open windows lose their connection once and re-attach on their own. Do it while
+idle because a few things in flight do not cross the switch: keystrokes typed during it are dropped, a running
+`felis sessions send --wait` reports the session ended, and `felis notifications subscribe` streams end and need
 restarting.
 
 An accepted upgrade prints `the daemon is switching to <path>` and exits `0`. To confirm the switch, run `felis doctor`:
@@ -76,8 +76,8 @@ drain and restart below.
 
 ## Drain your sessions
 
-On Windows, or after a refused upgrade, restart the daemon instead. A restart ends every running session, so save your
-work first. List what is running:
+After a refused upgrade, restart the daemon instead. A restart ends every running session, so save your work first. List
+what is running:
 
 ```sh
 felis sessions list

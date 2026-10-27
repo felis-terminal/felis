@@ -34,7 +34,7 @@ use crate::local::{AcceptError, BindError, Endpoint};
 use crate::peer::PeerError;
 use crate::retry::{RetryPolicy, nonzero, retry_with_backoff};
 
-struct SecurityDescriptor(PSECURITY_DESCRIPTOR);
+pub(crate) struct SecurityDescriptor(pub(crate) PSECURITY_DESCRIPTOR);
 
 // SAFETY: the pointer is an owned, self-contained security descriptor
 // allocated by the OS; it is not aliased and is freed exactly once on
@@ -162,7 +162,7 @@ fn token_identity(token: HANDLE) -> io::Result<Identity> {
     })
 }
 
-fn current_identity() -> io::Result<Identity> {
+pub(crate) fn current_identity() -> io::Result<Identity> {
     let mut token: HANDLE = ptr::null_mut();
     // SAFETY: GetCurrentProcess returns a pseudo-handle that needs no
     // closing; OpenProcessToken fills `token` with a real handle we
@@ -175,7 +175,7 @@ fn current_identity() -> io::Result<Identity> {
     token_identity(token.0)
 }
 
-fn security_descriptor_for(identity: &Identity) -> io::Result<SecurityDescriptor> {
+pub(crate) fn security_descriptor_for(identity: &Identity) -> io::Result<SecurityDescriptor> {
     // A protected (`P`) DACL whose lone allow-ACE implicitly denies
     // everyone else, and a label refusing opens from below the owner's
     // integrity level: without one the pipe is implicitly Medium, so an
@@ -334,10 +334,21 @@ pub(crate) struct Listener {
 
 impl Listener {
     pub(crate) fn bind(endpoint: &Endpoint) -> Result<Self, BindError> {
+        Self::create(endpoint, true)
+    }
+
+    /// Adds an instance to a name this user's daemon already holds:
+    /// the successor of an in-place upgrade listens before its
+    /// predecessor lets go, so the name never lapses for a rival to take.
+    pub(crate) fn join(endpoint: &Endpoint) -> Result<Self, BindError> {
+        Self::create(endpoint, false)
+    }
+
+    fn create(endpoint: &Endpoint, first: bool) -> Result<Self, BindError> {
         let pipe_name = endpoint.pipe_name().to_owned();
         let expected = current_identity().map_err(BindError::Io)?;
         let security = security_descriptor_for(&expected).map_err(BindError::Io)?;
-        let first = create_instance(&pipe_name, &security, true).map_err(BindError::Io)?;
+        let first = create_instance(&pipe_name, &security, first).map_err(BindError::Io)?;
         Ok(Self {
             pipe_name,
             expected,

@@ -422,10 +422,10 @@ pub async fn serve_unix_with_factory(
 }
 
 /// Serves the listening socket a predecessor carried across an in-place
-/// upgrade. The predecessor already cleared stale links and told the
-/// service manager it was ready, and the socket path is still its.
+/// upgrade (on Windows, the pipe instance the successor joined). The
+/// predecessor already cleared stale links and told the service manager
+/// it was ready, and the endpoint is still its.
 #[doc(hidden)]
-#[cfg(unix)]
 pub async fn serve_resumed(
     server: Listener,
     endpoint: Endpoint,
@@ -468,6 +468,8 @@ async fn accept_loop(
             "the listening socket cannot be kept for an in-place upgrade"
         );
     }
+    #[cfg(windows)]
+    caps.upgrade.set_listener(endpoint.pipe_name());
     loop {
         if caps.upgrade.gate.is_closed() {
             tokio::select! {
@@ -519,7 +521,6 @@ async fn accept_loop(
             }
         }
     }
-    #[cfg(unix)]
     caps.upgrade.clear_listener();
     info!(endpoint = %endpoint, "felis-daemon stopping");
     // Nothing unlinks the path, here or in `Drop` (REQ-009d): an
@@ -1736,8 +1737,8 @@ async fn stop_daemon(
 }
 
 /// Answers an `Ops::Upgrade` (`docs/reference/cli.md` "Daemon upgrade"):
-/// `Upgrading` goes out before the exec, which closes this connection
-/// with every other.
+/// `Upgrading` goes out before the exec (on Windows, before the commit),
+/// which closes this connection with every other.
 async fn upgrade_connection<W>(
     writer: &mut FrameWriter<W>,
     correlation: Correlation,
@@ -1773,18 +1774,50 @@ where
         error!(%refusal, "upgrade: the exec failed after it was announced; serving on");
         Ok(())
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
     {
-        let _ = (successor, pool, caps);
-        let reply = OpsToClientMsg::UpgradeReply {
-            outcome: crate::upgrade::refused(&crate::upgrade::Refusal::Unsupported(
-                "this platform drains and restarts instead".to_owned(),
-            )),
+        let ready = crate::upgrade::prepare(PathBuf::from(successor), pool, &caps.upgrade).await;
+        let ready = match ready {
+            Ok(ready) => ready,
+            Err(refusal) => {
+                warn!(%refusal, "upgrade refused");
+                let reply = OpsToClientMsg::UpgradeReply {
+                    outcome: crate::upgrade::refused(&refusal),
+                };
+                writer.send_correlated(&reply, correlation).await?;
+                return Ok(());
+            }
         };
-        writer.send_correlated(&reply, correlation).await?;
+        let reply = OpsToClientMsg::UpgradeReply {
+            outcome: felis_protocol::messages::UpgradeOutcome::Upgrading,
+        };
+        let sent = tokio::time::timeout(
+            UPGRADE_REPLY_BOUND,
+            writer.send_correlated(&reply, correlation),
+        )
+        .await;
+        match sent {
+            Ok(Ok(())) => {}
+            Ok(Err(err)) => {
+                ready.abandon().await;
+                return Err(err.into());
+            }
+            Err(_elapsed) => {
+                ready.abandon().await;
+                warn!("upgrade: the requester did not take the reply; resumed");
+                return Ok(());
+            }
+        }
+        let refusal = ready.commit().await;
+        error!(%refusal, "upgrade: the hand-over failed after it was announced; serving on");
         Ok(())
     }
 }
+
+/// Every session stays parked until the commit that follows this reply,
+/// so a requester that stops reading must not hold them there.
+#[cfg(windows)]
+const UPGRADE_REPLY_BOUND: Duration = Duration::from_secs(2);
 
 /// Saturates rather than wraps: the cap is far below `u32::MAX`, and a
 /// count that wrapped would report an empty daemon.

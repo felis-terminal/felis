@@ -334,16 +334,18 @@ pub enum UpgradeOutcome {
 /// drain-and-restart.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum UpgradeRefusal {
-    /// This platform has no in-place upgrade.
+    /// This daemon cannot hand over its sessions (on Windows, one on
+    /// the inbox console host).
     Unsupported,
     /// The successor cannot read this daemon's dump version.
     DumpVersion,
     /// The successor does not serve a connected client's protocol
     /// major.
     ProtocolMajor,
-    /// A step before the exec ran out of time.
+    /// A step before the exec or the commit ran out of time.
     Timeout,
-    /// The successor rejected the dump's contents, or the exec failed.
+    /// The successor rejected the dump's contents or failed to take
+    /// over, or the exec failed.
     ProbeFailed,
     /// An upgrade is already running.
     Busy,

@@ -207,6 +207,13 @@ impl Listener {
         backend::Listener::bind(endpoint).map(Self)
     }
 
+    /// Listens on a pipe name the running daemon holds, for an in-place
+    /// upgrade's successor.
+    #[cfg(windows)]
+    pub fn join(endpoint: &Endpoint) -> Result<Self, BindError> {
+        backend::Listener::join(endpoint).map(Self)
+    }
+
     /// Wraps the listening socket an in-place upgrade's `execve` carried
     /// over, without the probe-unlink-bind `bind` runs.
     #[cfg(unix)]

@@ -44,8 +44,8 @@ closing the window leaves the session and its PTY running for the next attach
 
 ## Daemon process lifecycle
 
-On Linux and macOS the daemon is upgraded in place: every session keeps its shell and its state while the daemon process
-switches to the newly installed binary. On Windows it is replaced: the procedure is drain the sessions, then restart
+The daemon is upgraded in place: every session keeps its shell and its state while the daemon switches to the newly
+installed binary. Where an upgrade refuses, the procedure is drain the sessions, then restart
 ([update-felis](../../how-to/update-felis.md); the stop postures that carry the drain are argued in
 [control-surfaces.md](control-surfaces.md) "Stopping the daemon"). Most skew needs neither. A new daemon and an old
 client settle on the lower of the two minors ([ipc.md](../../reference/ipc.md) "Versioning"), so only a daemon-_binary_
@@ -59,12 +59,13 @@ The daemon binary changes in most releases, because the grid, the parser, and th
 drain-and-restart each of those releases ends every session, and the sessions that cost the most to lose are the
 long-lived ones the daemon exists to keep (principle 3).
 
-So the upgrade crosses `execve` rather than a process boundary. The daemon keeps its PID, which keeps every shell its
-child (reaping still works) and keeps the systemd user unit's main process unchanged. Three things pass through the
-exec: the listen socket and each PTY master as inherited file descriptors, and the session state as a structured dump in
-an anonymous memory file. The successor restores the grid, scrollback, images, and parser state directly from the dump
-and never re-derives them by feeding synthetic escape sequences through its own parser ([design.md](../design.md)
-"Correct by construction, not by replay"); it sets close-on-exec again on each descriptor as it adopts it.
+So on Linux and macOS the upgrade crosses `execve` rather than a process boundary. The daemon keeps its PID, which keeps
+every shell its child (reaping still works) and keeps the systemd user unit's main process unchanged. Three things pass
+through the exec: the listen socket and each PTY master as inherited file descriptors, and the session state as a
+structured dump in an anonymous memory file. The successor restores the grid, scrollback, images, and parser state
+directly from the dump and never re-derives them by feeding synthetic escape sequences through its own parser
+([design.md](../design.md) "Correct by construction, not by replay"); it sets close-on-exec again on each descriptor as
+it adopts it.
 
 The upgrade is an operation the user runs on purpose, rarely, and while nothing else is happening, and the design is
 drawn along that line. A hazard the user can avoid by not working while it runs is accepted and stated in the update
@@ -133,12 +134,42 @@ restores the session registry before it accepts, so a window re-attaching its se
 notification stream ends. Telling those clients the close was an upgrade would take a new announcement on the wire and a
 new outcome in every stream verb, to cover a case the update procedure already tells the user to avoid.
 
-Windows has no exec to survive. A ConPTY pseudoconsole belongs to the process that created it, no supported API hands it
-to another process, and closing it ends the console's children; so Windows keeps drain-and-restart for now. That is a
-gap felis means to close, not a line it draws: an update that keeps the sessions is the same intent on every platform
-([non-goals.md](../non-goals.md) "Cross-platform constraints"). The one route known today is a long-lived process that
-holds the pseudoconsoles in front of the daemon, so that the daemon can be replaced while the consoles live on; it is a
-third process with its own lifetime and protocol, and nothing in this design pays for it yet.
+#### On Windows
+
+Windows has no exec to survive, so there the upgrade does cross a process boundary: the successor is a new process with
+a new PID, and the sessions are handed to it. A ConPTY pseudoconsole lives for as long as some process holds its signal
+pipe, and the embedded host ("ConPTY host" in [implementation.md](../implementation.md)) rebuilds a pseudoconsole from
+its handles in another process (`ConptyPackPseudoConsole`). The barrier, the quiesce, and the dump run as above. The
+predecessor then starts the successor, duplicates into it each session's console handles, the two pipe ends it reads and
+writes, and the child's process handle, and sends it the dump over a private pipe. Nothing is inherited, so no other
+child can come to hold a handle the upgrade carries. The successor adopts everything without starting any of it (no
+read, no write, no resize), joins the daemon's pipe name, and reports ready; only after the predecessor's commit and its
+exit does it start the sessions and accept.
+
+The hand-over is reversible up to that commit, which `execve` is not, so the dump probe becomes the successor's own
+adoption, and the commit is the single point that settles which side may end the other. Before it, only the predecessor
+may: a successor that fails, answers out of turn, or runs out of time is ended and awaited, and the parked sessions
+resume with every byte of output still in their pipes, since the successor read none. From it on, only the successor
+may: a predecessor that has not exited within a bound is ended, and the successor serves only once it is gone. So two
+processes never serve at once, and the two never both decide to end the other. A failure after the commit costs the
+sessions as one after the exec does, ending each the way a destroyed one ends; the successor holds each child's process
+handle, so the end reaches the right process.
+
+The successor joins the pipe name before the predecessor lets go of it, so the name never lapses for another process to
+bind, and a window re-dialing after the predecessor's exit finds the successor. A dial that finds every instance busy is
+retried by the window's reconnect ladder, which treats a busy pipe as transient. The new PID needs one hold. A client
+checks the server's user and integrity level on every connection by opening the process the pipe reports as its server,
+and Windows reports the process that created the pipe name for as long as any instance lives, not the one that answered.
+Each successor therefore holds that first daemon's process handle, passed down with the dump: the PID stays reserved and
+its identity readable, so the check keeps reading the right user and level after the first daemon exits. No pidfile
+names the daemon. A client that dials _during_ the upgrade connects to the predecessor and is dropped at its exit, where
+on Unix it would wait in the accept queue; it is one the user started while the upgrade ran.
+
+Only the embedded host can rebuild a pseudoconsole, so a daemon on the inbox host, any daemon not at Medium integrity,
+refuses the upgrade and keeps drain-and-restart. Nothing exports a pseudoconsole's handles, so the predecessor reads
+them from the struct the pinned `conpty.dll` allocates, whose layout a test pins against what `ConptyPackPseudoConsole`
+stores. A long-lived process holding the pseudoconsoles in front of the daemon is rejected: it is a third process with
+its own lifetime and protocol, and the hand-over needs nothing to outlive the daemon but its successor.
 
 Running each upgrade as a new daemon generation on its own endpoint, with its predecessor serving its sessions until
 they end, is rejected. It needs no dump, but it leaves exactly the long-lived sessions on the predecessor's binary for

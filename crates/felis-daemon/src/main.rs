@@ -52,10 +52,14 @@ enum Cmd {
         #[cfg(unix)]
         #[arg(long, hide = true)]
         resume_fd: Option<i32>,
+        /// The pipe an in-place upgrade's predecessor hands over on;
+        /// set only by the predecessor daemon.
+        #[cfg(windows)]
+        #[arg(long, hide = true)]
+        resume: Option<String>,
     },
     /// Asked by a running daemon before an in-place upgrade: whether
     /// this binary can take over. Answers by exit code.
-    #[cfg(unix)]
     #[command(hide = true)]
     UpgradeProbe {
         #[arg(long)]
@@ -64,6 +68,7 @@ enum Cmd {
         #[arg(long, value_parser = parse_majors)]
         majors: (u16, u16),
         /// Read the dump from stdin and validate it.
+        #[cfg(unix)]
         #[arg(long)]
         check_dump: bool,
     },
@@ -103,6 +108,8 @@ fn main() -> Result<()> {
             trace_perf,
             #[cfg(unix)]
             resume_fd,
+            #[cfg(windows)]
+            resume,
         } => {
             // Only `serve` tees into the log file: a relay teeing into the same
             // file would race the serving daemon's rotation.
@@ -119,17 +126,24 @@ fn main() -> Result<()> {
             if let Some(resume_fd) = resume_fd {
                 return build_runtime()?.block_on(run_resumed(socket, resume_fd));
             }
+            #[cfg(windows)]
+            if let Some(channel) = resume {
+                return build_runtime()?.block_on(run_taken_over(socket, &channel));
+            }
             build_runtime()?.block_on(run_serve_unix(socket))
         }
-        #[cfg(unix)]
         Cmd::UpgradeProbe {
             dump_version,
             majors,
+            #[cfg(unix)]
             check_dump,
         } => std::process::exit(felis_daemon::upgrade::probe::answer(
             dump_version,
             majors,
+            #[cfg(unix)]
             check_dump,
+            #[cfg(not(unix))]
+            false,
         )),
         Cmd::Relay { socket, no_spawn } => {
             logging::init(Console::Stderr, None, log_filter_directive(false));
@@ -176,6 +190,33 @@ async fn run_resumed(socket_override: Option<PathBuf>, resume_fd: i32) -> Result
     )
 }
 
+#[cfg(windows)]
+async fn run_taken_over(socket_override: Option<PathBuf>, channel: &str) -> Result<()> {
+    let socket = socket_or_default(socket_override)?;
+    info!(pipe = %socket.display(), "felis-daemon taking over after an upgrade");
+    let pool = Arc::new(Mutex::new(SessionPool::new()));
+    let caps = daemon_caps();
+    let listener = felis_daemon::upgrade::takeover::take_over(
+        channel,
+        &socket,
+        &pool,
+        caps.idle,
+        &caps.upgrade,
+    )
+    .await
+    .context("take over after an in-place upgrade")?;
+    serve_outcome(
+        felis_daemon::serve::serve_resumed(
+            listener,
+            felis_transport::Endpoint::from(socket),
+            caps,
+            pool,
+            felis_daemon::serve::default_session_factory(),
+        )
+        .await,
+    )
+}
+
 fn daemon_caps() -> DaemonCaps {
     DaemonCaps {
         upgrade: felis_daemon::upgrade::UpgradeState::replaceable(),
@@ -183,7 +224,6 @@ fn daemon_caps() -> DaemonCaps {
     }
 }
 
-#[cfg(unix)]
 fn parse_majors(text: &str) -> Result<(u16, u16), String> {
     let (min, max) = text.split_once('-').ok_or("expected MIN-MAX")?;
     let min = min.parse().map_err(|err| format!("{err}"))?;

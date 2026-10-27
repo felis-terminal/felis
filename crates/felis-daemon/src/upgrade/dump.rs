@@ -23,6 +23,12 @@ pub struct Dump {
     pub version: u32,
     /// The listening socket's descriptor number across the exec.
     pub listen_fd: i32,
+    /// Windows: the predecessor's own process handle in the successor,
+    /// which the successor waits on before it serves.
+    pub predecessor: u64,
+    /// Windows: the process that created the pipe name, in the
+    /// successor, which holds it for its lifetime.
+    pub creator: u64,
     /// The next creation sequence, so the successor never reuses one a
     /// window may hold.
     pub next_sequence: u64,
@@ -42,6 +48,9 @@ pub struct SessionDump {
     pub sequence: u64,
     pub child: ChildDump,
     pub master_fd: i32,
+    /// Windows: the handles keeping the pseudoconsole and its child
+    /// alive, as values in the successor.
+    pub conpty: Option<ConptyDump>,
     /// Input the writer had not handed to the OS, from the exact byte
     /// its last write ended at.
     pub unwritten: Vec<u8>,
@@ -165,6 +174,31 @@ pub struct ChildDump {
     pub exit_status: Option<i32>,
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ConptyDump {
+    pub signal: u64,
+    pub reference: u64,
+    pub host_process: u64,
+    pub output: u64,
+    pub input: u64,
+    pub child: u64,
+}
+
+#[cfg(windows)]
+impl ConptyDump {
+    const fn all(&self) -> [u64; 6] {
+        [
+            self.signal,
+            self.reference,
+            self.host_process,
+            self.output,
+            self.input,
+            self.child,
+        ]
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum DumpError {
     #[error("dump version {found} is not the version {DUMP_VERSION} this daemon reads")]
@@ -201,22 +235,23 @@ impl Dump {
     }
 
     fn validate(&self) -> Result<(), DumpError> {
-        let mut fds = std::collections::HashSet::new();
-        if self.listen_fd < 0 || !fds.insert(self.listen_fd) {
+        let mut carried = std::collections::HashSet::new();
+        #[cfg(unix)]
+        if self.listen_fd < 0 || !carried.insert(i64::from(self.listen_fd)) {
             return Err(DumpError::Invalid("listen descriptor".to_owned()));
+        }
+        #[cfg(windows)]
+        if !fresh_handle(&mut carried, self.predecessor) {
+            return Err(DumpError::Invalid("predecessor handle".to_owned()));
+        }
+        #[cfg(windows)]
+        if !fresh_handle(&mut carried, self.creator) {
+            return Err(DumpError::Invalid("creator handle".to_owned()));
         }
         for session in &self.sessions {
             parse_session_id(&session.id)
                 .ok_or_else(|| DumpError::Invalid(format!("session id {:?}", session.id)))?;
-            if session.master_fd < 0 || !fds.insert(session.master_fd) {
-                return Err(DumpError::Invalid(format!(
-                    "master descriptor of session {}",
-                    session.id
-                )));
-            }
-            if session.child.pid <= 0 {
-                return Err(DumpError::Invalid(format!("pid of session {}", session.id)));
-            }
+            Self::validate_carried(session, &mut carried)?;
             if session.sequence == 0 || session.sequence >= self.next_sequence {
                 return Err(DumpError::Invalid(format!(
                     "sequence of session {}",
@@ -231,6 +266,54 @@ impl Dump {
         }
         Ok(())
     }
+}
+
+impl Dump {
+    #[cfg(unix)]
+    fn validate_carried(
+        session: &SessionDump,
+        carried: &mut std::collections::HashSet<i64>,
+    ) -> Result<(), DumpError> {
+        if session.master_fd < 0 || !carried.insert(i64::from(session.master_fd)) {
+            return Err(DumpError::Invalid(format!(
+                "master descriptor of session {}",
+                session.id
+            )));
+        }
+        if session.child.pid <= 0 {
+            return Err(DumpError::Invalid(format!("pid of session {}", session.id)));
+        }
+        if session.conpty.is_some() {
+            return Err(DumpError::Invalid(format!(
+                "console handles of session {}",
+                session.id
+            )));
+        }
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    fn validate_carried(
+        session: &SessionDump,
+        carried: &mut std::collections::HashSet<i64>,
+    ) -> Result<(), DumpError> {
+        let valid = session
+            .conpty
+            .is_some_and(|conpty| conpty.all().iter().all(|&h| fresh_handle(carried, h)));
+        if !valid {
+            return Err(DumpError::Invalid(format!(
+                "console handles of session {}",
+                session.id
+            )));
+        }
+        Ok(())
+    }
+}
+
+/// A non-zero handle value no other carried handle shares.
+#[cfg(windows)]
+fn fresh_handle(carried: &mut std::collections::HashSet<i64>, value: u64) -> bool {
+    value != 0 && i64::try_from(value).is_ok_and(|value| carried.insert(value))
 }
 
 /// Whether this build reads a dump written at `version`.
@@ -259,6 +342,8 @@ mod tests {
         Dump {
             version: DUMP_VERSION,
             listen_fd: 3,
+            predecessor: if cfg!(windows) { 0x400 } else { 0 },
+            creator: if cfg!(windows) { 0x41c } else { 0 },
             next_sequence: 3,
             next_attachment_id: 7,
             anim_clock_ms: 0,
@@ -270,6 +355,14 @@ mod tests {
                     exit_status: None,
                 },
                 master_fd: 9,
+                conpty: cfg!(windows).then_some(ConptyDump {
+                    signal: 0x404,
+                    reference: 0x408,
+                    host_process: 0x40c,
+                    output: 0x410,
+                    input: 0x414,
+                    child: 0x418,
+                }),
                 unwritten: b"queued input".to_vec(),
                 rows: 24,
                 cols: 80,
@@ -303,6 +396,7 @@ mod tests {
         ));
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_descriptor_named_twice_is_refused() {
         let mut dump = sample();
@@ -311,6 +405,27 @@ mod tests {
             Dump::decode(&dump.encode()),
             Err(DumpError::Invalid(_))
         ));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_handle_named_twice_or_missing_is_refused() {
+        let mut twice = sample();
+        twice.sessions[0].conpty.as_mut().unwrap().input = twice.predecessor;
+        let mut missing = sample();
+        missing.sessions[0].conpty = None;
+        let mut null = sample();
+        null.sessions[0].conpty.as_mut().unwrap().signal = 0;
+        let mut creator_twice = sample();
+        creator_twice.creator = creator_twice.predecessor;
+        let mut no_creator = sample();
+        no_creator.creator = 0;
+        for dump in [twice, missing, null, creator_twice, no_creator] {
+            assert!(matches!(
+                Dump::decode(&dump.encode()),
+                Err(DumpError::Invalid(_))
+            ));
+        }
     }
 
     #[test]

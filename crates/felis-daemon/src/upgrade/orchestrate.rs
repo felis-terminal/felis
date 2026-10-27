@@ -1,23 +1,31 @@
-//! The predecessor's half: barrier, quiesce, dump, probe, exec.
+//! The predecessor's half: barrier, quiesce, dump, then the platform's
+//! hand-over (on Unix the probe and the exec here, on Windows
+//! [`super::handover`]).
 
+#[cfg(unix)]
 use std::{
-    os::fd::{AsFd as _, AsRawFd as _, OwnedFd, RawFd},
+    os::fd::{AsFd as _, AsRawFd as _, OwnedFd},
     os::unix::process::{CommandExt as _, ExitStatusExt as _},
     path::PathBuf,
+};
+use std::{
+    path::Path,
     sync::{Arc, atomic::Ordering},
     time::Duration,
 };
 
-use felis_pty::{Parked, Quiescer};
+use felis_pty::{Parked, Quiescer, Resizer};
 use tokio::{
     sync::{Mutex, mpsc, oneshot},
     task::JoinHandle,
 };
 use tracing::{info, warn};
 
+#[cfg(unix)]
+use super::carrier;
 use super::{
-    Refusal, UpgradeState, carrier,
-    dump::{ChildDump, DUMP_VERSION, Dump, SessionDump, SessionState, format_session_id},
+    Refusal, UpgradeState,
+    dump::{DUMP_VERSION, Dump, SessionDump, SessionState, format_session_id},
     probe,
 };
 use crate::{
@@ -31,6 +39,7 @@ const PARK_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// An upgrade ready to exec: the sessions are parked and the successor
 /// has read the dump. Dropped without an exec, it resumes the daemon.
+#[cfg(unix)]
 pub struct Prepared {
     successor: PathBuf,
     socket: PathBuf,
@@ -38,14 +47,14 @@ pub struct Prepared {
     /// names, plus the dump's own file. Close-on-exec comes off these
     /// copies only, and only at the exec.
     carried: Vec<OwnedFd>,
-    carrier_fd: RawFd,
+    carrier_fd: std::os::fd::RawFd,
     undo: Undo,
 }
 
 /// One upgrade's hold on the daemon. A second request is refused
 /// before it forks a probe, which could otherwise run while the first
 /// has close-on-exec off the descriptors it carries across the exec.
-struct Claim(Arc<UpgradeState>);
+pub(super) struct Claim(Arc<UpgradeState>);
 
 impl Claim {
     fn take(state: &Arc<UpgradeState>) -> Option<Self> {
@@ -66,7 +75,7 @@ impl Drop for Claim {
 /// Armed from the moment the pool stops admitting: a refusal runs it,
 /// and so does a drop, so a cancelled or panicking upgrade still
 /// leaves the daemon serving.
-struct Undo {
+pub(super) struct Undo {
     pool: Arc<Mutex<SessionPool>>,
     state: Arc<UpgradeState>,
     parked: Vec<Quiescer>,
@@ -92,7 +101,7 @@ impl Undo {
         }
     }
 
-    async fn run(mut self) {
+    pub(super) async fn run(mut self) {
         self.resume_sessions();
         self.pool.lock().await.end_upgrade();
         self.state.gate.open();
@@ -151,28 +160,31 @@ impl Drop for Undo {
     }
 }
 
-/// Runs every step before the exec. A refusal has already undone what
-/// it did.
-pub async fn prepare(
-    successor: PathBuf,
+/// Refused for a process embedding the daemon library, such as a
+/// test, which would be replaced by a daemon it never meant to become.
+pub(super) fn check_replaceable(state: &UpgradeState) -> Result<(), Refusal> {
+    if state.replaceable {
+        Ok(())
+    } else {
+        Err(Refusal::Unsupported(
+            "this process embeds the daemon and cannot be replaced by felis-daemon".to_owned(),
+        ))
+    }
+}
+
+/// The steps up to and including the barrier, each refusal before the
+/// barrier leaving nothing stopped. The returned [`Undo`] resumes the
+/// daemon when run or dropped.
+pub(super) async fn begin(
+    successor: &Path,
     pool: &Arc<Mutex<SessionPool>>,
     state: &Arc<UpgradeState>,
-) -> Result<Prepared, Refusal> {
-    if !state.replaceable {
-        return Err(Refusal::Unsupported(
-            "this process embeds the daemon and cannot be replaced by felis-daemon".to_owned(),
-        ));
-    }
-    let Some((listen, socket)) = state.listener() else {
-        return Err(Refusal::Unsupported(
-            "this daemon serves no listening socket to carry".to_owned(),
-        ));
-    };
+) -> Result<Undo, Refusal> {
     let claim = Claim::take(state).ok_or(Refusal::Busy)?;
     if pool.lock().await.draining() {
         return Err(Refusal::Draining);
     }
-    probe::ask(&successor, None).await?;
+    probe::ask_version(successor).await?;
     {
         let mut guard = pool.lock().await;
         if guard.draining() {
@@ -182,7 +194,7 @@ pub async fn prepare(
             return Err(Refusal::Busy);
         }
     }
-    let mut undo = Undo::new(pool, state, claim);
+    let undo = Undo::new(pool, state, claim);
     // A frame already dispatched may hold its permit for as long as its
     // verb runs (a stop waiting for sessions to end), so closing is
     // bounded like every other wait behind the barrier.
@@ -200,7 +212,25 @@ pub async fn prepare(
         }
     }
     info!(successor = %successor.display(), "upgrade: barrier closed");
-    match quiesce_and_dump(pool, listen.as_raw_fd(), &mut undo).await {
+    Ok(undo)
+}
+
+/// Runs every step before the exec. A refusal has already undone what
+/// it did.
+#[cfg(unix)]
+pub async fn prepare(
+    successor: PathBuf,
+    pool: &Arc<Mutex<SessionPool>>,
+    state: &Arc<UpgradeState>,
+) -> Result<Prepared, Refusal> {
+    check_replaceable(state)?;
+    let Some((listen, socket)) = state.listener() else {
+        return Err(Refusal::Unsupported(
+            "this daemon serves no listening socket to carry".to_owned(),
+        ));
+    };
+    let mut undo = begin(&successor, pool, state).await?;
+    match quiesce_and_dump(pool, listen.as_raw_fd(), &mut undo, carry_master).await {
         Ok((dump, masters)) => {
             let carried = carrier::create(&dump.encode());
             let carried = match carried {
@@ -210,7 +240,7 @@ pub async fn prepare(
                     return Err(Refusal::ProbeFailed(format!("write the dump: {err}")));
                 }
             };
-            if let Err(refusal) = probe::ask(&successor, Some(&carried)).await {
+            if let Err(refusal) = probe::ask_dump(&successor, &carried).await {
                 undo.run().await;
                 return Err(refusal);
             }
@@ -234,11 +264,15 @@ pub async fn prepare(
     }
 }
 
-async fn quiesce_and_dump(
+/// Parks every session and dumps it. `carry` takes what the platform
+/// hands over for one parked session and records it in that session's
+/// dump.
+pub(super) async fn quiesce_and_dump<C>(
     pool: &Arc<Mutex<SessionPool>>,
-    listen_fd: RawFd,
+    listen_fd: i32,
     undo: &mut Undo,
-) -> Result<(Dump, Vec<OwnedFd>), Refusal> {
+    mut carry: impl FnMut(&Resizer, &UpgradeParts, &mut SessionDump) -> Result<C, Refusal>,
+) -> Result<(Dump, Vec<C>), Refusal> {
     // Settling runs commands queued before the barrier, which can start
     // a teardown or finish a spawn, so the set is taken again until
     // settling changes nothing.
@@ -266,7 +300,7 @@ async fn quiesce_and_dump(
         }
     };
     let mut sessions = Vec::with_capacity(handles.len());
-    let mut masters = Vec::with_capacity(handles.len());
+    let mut carried = Vec::with_capacity(handles.len());
     for (id, handle) in handles {
         let (Some(parts), Some(resizer)) = (handle.upgrade.clone(), handle.resizer.clone()) else {
             return Err(Refusal::Unsupported(format!(
@@ -288,26 +322,23 @@ async fn quiesce_and_dump(
                 ))
             })?;
         undo.parked.push(parts.quiescer.clone());
-        let master = resizer
-            .master_fd()
-            .try_clone_to_owned()
-            .map_err(|err| Refusal::ProbeFailed(format!("duplicate a PTY master: {err}")))?;
-        let state = capture(&handle).await?;
-        let mut dumped = session_dump(id.0, &handle, &parts, master.as_raw_fd(), parked.unwritten)?;
-        dumped.state = state;
+        let mut dumped = session_dump(id.0, &handle, parked.unwritten);
+        carried.push(carry(&resizer, &parts, &mut dumped)?);
+        dumped.state = capture(&handle).await?;
         sessions.push(dumped);
-        masters.push(master);
     }
     Ok((
         Dump {
             version: DUMP_VERSION,
             listen_fd,
+            predecessor: 0,
+            creator: 0,
             next_sequence,
             next_attachment_id,
             anim_clock_ms: crate::graphics::anim_now_ms(),
             sessions,
         },
-        masters,
+        carried,
     ))
 }
 
@@ -362,31 +393,11 @@ async fn capture(handle: &SessionHandle) -> Result<Option<Box<SessionState>>, Re
         .map_err(|_elapsed| Refusal::Timeout("a session did not hand over its state".into()))
 }
 
-fn session_dump(
-    id: u128,
-    handle: &SessionHandle,
-    parts: &UpgradeParts,
-    master_fd: RawFd,
-    unwritten: Vec<u8>,
-) -> Result<SessionDump, Refusal> {
-    let child_failed =
-        |err: std::io::Error| Refusal::ProbeFailed(format!("read a session child: {err}"));
-    let pid = parts
-        .child
-        .process_id()
-        .map_err(child_failed)?
-        .ok_or_else(|| Refusal::ProbeFailed("a session child has no pid".into()))?;
-    let exit_status = parts
-        .child
-        .try_wait()
-        .map_err(child_failed)?
-        .map(std::process::ExitStatus::into_raw);
+fn session_dump(id: u128, handle: &SessionHandle, unwritten: Vec<u8>) -> SessionDump {
     let meta = handle.meta_snapshot();
-    Ok(SessionDump {
+    SessionDump {
         id: format_session_id(id),
         sequence: meta.sequence.get(),
-        child: ChildDump { pid, exit_status },
-        master_fd,
         unwritten,
         rows: meta.rows,
         cols: meta.cols,
@@ -396,11 +407,60 @@ fn session_dump(
         cwd: meta.cwd,
         spawn_cwd: meta.spawn_cwd,
         tags: meta.tags.into_iter().collect(),
-        exited: meta.exited || exit_status.is_some(),
-        state: None,
-    })
+        exited: meta.exited,
+        ..SessionDump::default()
+    }
 }
 
+fn child_failed(err: &std::io::Error) -> Refusal {
+    Refusal::ProbeFailed(format!("read a session child: {err}"))
+}
+
+/// The PTY master, with the child the successor will wait for.
+#[cfg(unix)]
+fn carry_master(
+    resizer: &Resizer,
+    parts: &UpgradeParts,
+    dumped: &mut SessionDump,
+) -> Result<OwnedFd, Refusal> {
+    let master = resizer
+        .master_fd()
+        .try_clone_to_owned()
+        .map_err(|err| Refusal::ProbeFailed(format!("duplicate a PTY master: {err}")))?;
+    let pid = parts
+        .child
+        .process_id()
+        .map_err(|err| child_failed(&err))?
+        .ok_or_else(|| Refusal::ProbeFailed("a session child has no pid".into()))?;
+    let exit_status = parts
+        .child
+        .try_wait()
+        .map_err(|err| child_failed(&err))?
+        .map(std::process::ExitStatus::into_raw);
+    dumped.master_fd = master.as_raw_fd();
+    dumped.child = super::dump::ChildDump { pid, exit_status };
+    dumped.exited |= exit_status.is_some();
+    Ok(master)
+}
+
+/// The pseudoconsole's handles and the child's. Their values in the
+/// successor are written once it exists.
+#[cfg(windows)]
+pub(super) fn carry_console(
+    resizer: &Resizer,
+    parts: &UpgradeParts,
+    dumped: &mut SessionDump,
+) -> Result<felis_pty::handover::Handover, Refusal> {
+    dumped.exited |= parts
+        .child
+        .try_wait()
+        .map_err(|err| child_failed(&err))?
+        .is_some();
+    felis_pty::handover::Handover::of(resizer, &parts.child)
+        .map_err(|err| Refusal::Unsupported(format!("hand over a session's console: {err}")))
+}
+
+#[cfg(unix)]
 impl Prepared {
     /// Replaces this process with the successor. Returns only when the
     /// exec failed, after undoing everything, with the refusal to report.
@@ -432,6 +492,7 @@ impl Prepared {
     }
 }
 
+#[cfg(unix)]
 fn set_all(fds: &[OwnedFd], inheritable: bool) -> std::io::Result<()> {
     for fd in fds {
         felis_transport::inherit::set_inheritable(fd.as_fd(), inheritable)?;
@@ -461,6 +522,7 @@ mod tests {
         assert!(Claim::take(&state).is_some(), "the claim was released");
     }
 
+    #[cfg(unix)]
     /// A successor path no probe can run: a refusal other than the one
     /// asserted means the probe was attempted.
     async fn prepare_with_a_listener(
@@ -474,6 +536,7 @@ mod tests {
         prepare(PathBuf::from("/nonexistent/felis-daemon"), pool, state).await
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn a_second_upgrade_is_busy_before_it_probes() {
         let pool = Arc::new(Mutex::new(SessionPool::new()));
@@ -483,6 +546,7 @@ mod tests {
         assert_eq!(refusal, Some(Refusal::Busy));
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn a_draining_daemon_refuses_before_it_probes() {
         let pool = Arc::new(Mutex::new(SessionPool::new()));
@@ -496,6 +560,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn a_failed_version_probe_releases_the_claim() {
         let pool = Arc::new(Mutex::new(SessionPool::new()));

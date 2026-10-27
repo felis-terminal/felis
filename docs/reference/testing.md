@@ -148,7 +148,9 @@ the per-feature verdict is [protocols/support-matrix.md](protocols/support-matri
 Integration tests run the daemon against real children on a real PTY: shells, pagers and editors, captured producer byte
 streams, detach and reattach, the `felis bridge` binary, and shell completions under real interpreters. The tests that
 drive an external tool (sshd and ssh, `less`, `nvim`, vttest and esctest, fish and zsh) need the dev shell's tools and
-fail without them. They compile on Unix only, so the native Windows job does not run them.
+fail without them. They compile on Unix only, so the native Windows job does not run them. The Windows in-place upgrade
+tests are the exception: the native Windows job runs them, each rerunning itself at Medium integrity so that the daemon
+uses the embedded ConPTY host.
 
 REQ-1206 ([spec.md](spec.md)) states the exit criteria for this layer, and part of it is met by hand rather than by a
 test: an editor or file-manager session driven end to end through the GUI client. The client's window state machines are

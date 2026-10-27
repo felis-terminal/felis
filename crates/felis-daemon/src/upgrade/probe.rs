@@ -1,17 +1,15 @@
 //! The successor answering, before anything stops and again over the
 //! dump itself, whether it can take this daemon's place.
 
-use std::{
-    io::Write as _,
-    os::fd::{AsFd as _, OwnedFd},
-    path::Path,
-    process::Stdio,
-    time::Duration,
-};
+#[cfg(unix)]
+use std::os::fd::{AsFd as _, OwnedFd};
+use std::{io::Write as _, path::Path, process::Stdio, time::Duration};
 
 use felis_protocol::preface::{SUPPORTED_MAJOR_MAX, SUPPORTED_MAJOR_MIN};
 
-use super::{Refusal, carrier, dump};
+#[cfg(unix)]
+use super::carrier;
+use super::{Refusal, dump};
 
 pub const EXIT_OK: i32 = 0;
 pub const EXIT_DUMP_VERSION: i32 = 3;
@@ -21,8 +19,8 @@ pub const EXIT_DUMP_INVALID: i32 = 5;
 const PROBE_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// The successor's side: `felis-daemon upgrade-probe`. With
-/// `check_dump`, the dump arrives on standard input and is decoded and
-/// validated whole.
+/// `check_dump` (Unix), the dump arrives on standard input and is
+/// decoded and validated whole.
 #[must_use]
 pub fn answer(dump_version: u32, majors: (u16, u16), check_dump: bool) -> i32 {
     if !dump::reads_version(dump_version) {
@@ -44,6 +42,9 @@ pub fn answer(dump_version: u32, majors: (u16, u16), check_dump: bool) -> i32 {
             ),
         );
     }
+    #[cfg(not(unix))]
+    let _ = check_dump;
+    #[cfg(unix)]
     if check_dump {
         let stdin = std::io::stdin();
         let bytes = match carrier::read(stdin.as_fd()) {
@@ -68,9 +69,30 @@ fn refuse(code: i32, detail: &str) -> i32 {
     code
 }
 
-/// The predecessor's side. The majors asked for are every major this
-/// daemon serves: any of them may be a connected client's.
-pub async fn ask(successor: &Path, dump: Option<&OwnedFd>) -> Result<(), Refusal> {
+/// The predecessor's side, before anything stops: whether the successor
+/// reads this daemon's dump version and serves its protocol majors.
+pub async fn ask_version(successor: &Path) -> Result<(), Refusal> {
+    let mut cmd = command(successor);
+    cmd.stdin(Stdio::null());
+    finish(successor, cmd).await
+}
+
+/// The predecessor's side over a dump it has written: whether the
+/// successor reads all of it.
+#[cfg(unix)]
+pub async fn ask_dump(successor: &Path, dump: &OwnedFd) -> Result<(), Refusal> {
+    let mut cmd = command(successor);
+    cmd.arg("--check-dump").stdin(
+        carrier::probe_stdin(dump).map_err(|err| {
+            Refusal::ProbeFailed(format!("hand the dump to the successor: {err}"))
+        })?,
+    );
+    finish(successor, cmd).await
+}
+
+/// The majors asked for are every major this daemon serves: any of them
+/// may be a connected client's.
+fn command(successor: &Path) -> tokio::process::Command {
     let mut cmd = tokio::process::Command::new(successor);
     cmd.arg("upgrade-probe")
         .arg("--dump-version")
@@ -80,17 +102,10 @@ pub async fn ask(successor: &Path, dump: Option<&OwnedFd>) -> Result<(), Refusal
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    match dump {
-        Some(fd) => {
-            cmd.arg("--check-dump")
-                .stdin(carrier::probe_stdin(fd).map_err(|err| {
-                    Refusal::ProbeFailed(format!("hand the dump to the successor: {err}"))
-                })?);
-        }
-        None => {
-            cmd.stdin(Stdio::null());
-        }
-    }
+    cmd
+}
+
+async fn finish(successor: &Path, mut cmd: tokio::process::Command) -> Result<(), Refusal> {
     let child = cmd
         .spawn()
         .map_err(|err| Refusal::ProbeFailed(format!("run {}: {err}", successor.display())))?;

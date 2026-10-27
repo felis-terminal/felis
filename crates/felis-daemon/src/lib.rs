@@ -264,6 +264,21 @@ impl SpawnedPty {
         Ok(Self::from_session(session, core, signals))
     }
 
+    /// Starts a session a Windows upgrade handed over, once the
+    /// predecessor is gone: the pseudoconsole and the child are already
+    /// this process's, and `core` is the predecessor's terminal state.
+    #[cfg(windows)]
+    pub fn adopt(
+        adopted: felis_pty::handover::Adopted,
+        core: ParseCore,
+    ) -> Result<Self, SessionError> {
+        let core = Arc::new(parking_lot::Mutex::new(core));
+        let signals = Arc::new(ParseSignals::new());
+        let sink = parse_sink::build_sink(Arc::clone(&core), Arc::clone(&signals));
+        let session = adopted.start(sink)?;
+        Ok(Self::from_session(session, core, signals))
+    }
+
     fn from_session(
         session: felis_pty::PtySession,
         core: Arc<parking_lot::Mutex<ParseCore>>,
