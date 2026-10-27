@@ -38,6 +38,8 @@
       "default": {
         "bold": {},
         "bold_italic": {},
+        "cell_height_scale": null,
+        "cell_width_scale": null,
         "fallback": [],
         "family": null,
         "features": [],
@@ -574,6 +576,24 @@
           "description": "`[font.bold_italic]`: the face for bold+italic cells (kitty's\n`bold_italic_font`).",
           "$ref": "#/$defs/FontStyleConfig",
           "default": {}
+        },
+        "cell_height_scale": {
+          "description": "Factor on the cell height, split evenly above and below each\nglyph, like `cell_width_scale`.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "float",
+          "default": null
+        },
+        "cell_width_scale": {
+          "description": "Factor on the cell width the font's metrics give; the extra space\nis split evenly left and right of each glyph. Clamped into\n`[0.5, 3.0]` with a warning; omitted or NaN means 1.0.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "float",
+          "default": null
         },
         "fallback": {
           "description": "Explicit per-grapheme fallback chain, tried in declared order\n(missing families warn and are skipped) before the host's fallback:\nfontconfig's on Linux, the platform's per-character lookup on macOS\nand Windows. Each entry is `{ family = \"...\", features = [...] }`, where an\nomitted `features` inherits `font.features` (docs/reference/config.md).",

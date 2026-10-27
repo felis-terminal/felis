@@ -28,6 +28,8 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
   Linux and macOS. The successor is a new process; a daemon on the inbox ConPTY (an elevated one) still refuses with
   `unsupported`.
 - **Keymap**: the `shader_event` binding kind fires a named event for `shader.post` animations.
+- **Config**: `font.cell_width_scale` and `font.cell_height_scale` widen or narrow the cell by a factor, keeping each
+  glyph centered in it; box-drawing and block characters stretch to fill the new cell.
 - **Shaders**: uniform contract v2 appends `time_whole_s`, `time_fract_s`, `focus_change_time_s`, `stage_index`,
   `animation_start_s` and `animation_progress`; a shader written against v1 loads unchanged. Binding 3 gives a stage its
   own output from the previous frame, for afterglow and motion blur.

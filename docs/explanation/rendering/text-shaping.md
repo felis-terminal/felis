@@ -379,6 +379,14 @@ metric, ghostty rounds the sum). Rounding the descent would reach 16 on macOS, b
 descent at 14 pt on Linux into 4 and the cell into 22 px, one row short of the 23 px kitty, alacritty and foot all size.
 The separate ceil keeps Linux parity and costs macOS one row.
 
+**Cell scale: padding around the font's own cell.** `font.cell_width_scale` / `cell_height_scale` resize the cell the
+rules above compute and split the difference evenly around that unscaled cell, the glyph box, so text stays centered and
+the baseline moves by the top half. Box-drawing, block and Powerline glyphs rasterize to the scaled cell so neighbors
+still join; font glyphs are never stretched, which would be synthesis. Fitting measures against the glyph box, not the
+scaled cell: measured against a shrunk cell every glyph would overrun and shrink, so below 1.0 glyphs keep their size
+and overlap their neighbors, the overlap rounding already accepts. Rejected: a pixel delta (kitty's `2px`, Ghostty's
+integer form), which drifts out of proportion under zoom.
+
 ## Compositing a multi-codepoint cluster
 
 A grapheme that occupies one cell but spans several codepoints (a base letter plus stacked combining marks, an emoji ZWJ

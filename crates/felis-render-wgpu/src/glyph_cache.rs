@@ -22,6 +22,7 @@ use crate::{
 
 pub struct GlyphCache {
     index: GlyphIndex,
+    cell_scale: [f32; 2],
     texture: Texture,
     /// Allocated eagerly so the fg bind group is valid from frame one; a
     /// lazy texture would force a bind-group rebuild on the first emoji.
@@ -37,6 +38,7 @@ impl GlyphCache {
         layout: &BindGroupLayout,
         stack: FontStack,
         font_size_physical_px: f32,
+        cell_scale: [f32; 2],
         atlas_side: NonZeroU32,
     ) -> Self {
         let texture = gpu_resources::create_atlas_texture(
@@ -68,7 +70,9 @@ impl GlyphCache {
             "felis atlas bind group",
         );
         Self {
-            index: GlyphIndex::new(stack, font_size_physical_px, atlas_side),
+            index: GlyphIndex::new(stack, font_size_physical_px, atlas_side)
+                .with_cell_scale(cell_scale),
+            cell_scale,
             texture,
             color_texture,
             bind_group,
@@ -108,9 +112,18 @@ impl GlyphCache {
         self.rebuild_index_with(stack, font_size_physical_px);
     }
 
+    /// Every slot carries the old `pad`, so the index rebuilds as on a
+    /// size change.
+    pub fn set_cell_scale(&mut self, cell_scale: [f32; 2]) {
+        self.cell_scale = cell_scale;
+        let stack = self.index.stack().clone();
+        self.rebuild_index_with(stack, self.index.font_size_physical_px());
+    }
+
     fn rebuild_index_with(&mut self, stack: FontStack, font_size_physical_px: f32) {
         let atlas_side = NonZeroU32::new(self.index.atlas_side()).unwrap_or(NonZeroU32::MIN);
-        self.index = GlyphIndex::new(stack, font_size_physical_px, atlas_side);
+        self.index = GlyphIndex::new(stack, font_size_physical_px, atlas_side)
+            .with_cell_scale(self.cell_scale);
     }
 
     #[must_use]

@@ -791,7 +791,8 @@ fn apply_window_backdrop(window: &Window, backdrop: Backdrop, transparent: bool)
 /// filled in per window from the scale factor, so the configured logical
 /// baseline is compared on its own in `reload_config`.
 fn font_settings_differ(a: &RendererConfig, b: &RendererConfig) -> bool {
-    a.font_family != b.font_family
+    a.cell_scale != b.cell_scale
+        || a.font_family != b.font_family
         || a.font_fallbacks != b.font_fallbacks
         || a.font_features != b.font_features
         || styled_faces_differ(a, b)
@@ -857,6 +858,7 @@ fn renderer_config_with(
     RendererConfig {
         font_family: cfg.font.family.clone(),
         font_size_physical_px: None,
+        cell_scale: Some(cfg.font.cell_scale()),
         theme_fg: cfg.theme.foreground.clone(),
         theme_bg: cfg.theme.background.clone(),
         theme_palette: cfg.theme.palette.clone().into_overrides(),

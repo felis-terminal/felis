@@ -1060,6 +1060,8 @@ fn renderer_config_from_full_config_carries_every_field_through() {
         font: config::FontConfig {
             family: Some("JetBrains Mono".to_owned()),
             size_px: Some(15.0),
+            cell_width_scale: Some(1.1),
+            cell_height_scale: Some(1.25),
             fallback: vec![
                 config::FontStyleConfig {
                     family: Some("Noto Sans CJK JP".to_owned()),
@@ -1103,6 +1105,7 @@ fn renderer_config_from_full_config_carries_every_field_through() {
     };
     let rc = renderer_config_from(&cfg);
     assert_eq!(rc.font_family.as_deref(), Some("JetBrains Mono"));
+    assert_eq!(rc.cell_scale, Some([1.1, 1.25]));
     // Inherit (no features) vs opt-out (empty list) must survive the mapping.
     assert_eq!(
         rc.font_fallbacks,
@@ -1233,6 +1236,13 @@ mod font_differs {
         bold.font_bold = FaceSpec::named("Iosevka");
         assert!(font_settings_differ(&base, &bold));
         assert!(font_stack_inputs_differ(&base, &bold));
+        let mut cell = base.clone();
+        cell.cell_scale = Some([1.0, 1.2]);
+        assert!(font_settings_differ(&base, &cell));
+        assert!(
+            !font_stack_inputs_differ(&base, &cell),
+            "a cell-scale edit keeps the faces",
+        );
         assert!(!font_settings_differ(&base, &base));
         assert!(!font_stack_inputs_differ(&base, &base));
     }

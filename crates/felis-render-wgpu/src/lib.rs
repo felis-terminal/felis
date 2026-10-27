@@ -148,6 +148,9 @@ pub struct RendererConfig {
     /// the window scale factor. `None` rasterizes at the default logical
     /// size at scale 1.
     pub font_size_physical_px: Option<f32>,
+    /// `[font.cell_width_scale, font.cell_height_scale]`; `None` keeps
+    /// the cell the font's metrics give.
+    pub cell_scale: Option<[f32; 2]>,
     pub theme_fg: Option<String>,
     pub theme_bg: Option<String>,
     /// Sparse `[theme.palette]` overrides by index; absent indices keep
@@ -753,6 +756,7 @@ impl Renderer {
             &glyph_bgl,
             stack,
             font_size_physical_px,
+            cfg.cell_scale.unwrap_or([1.0, 1.0]),
             glyph_side,
         );
         let images = ImageAtlas::new(&device, upload_mode, &atlas_bgl, image_side);
@@ -1042,6 +1046,12 @@ impl Renderer {
     /// budget and stutters while the chord is held.
     pub fn reload_font_size(&mut self, size_physical_px: f32) -> CellMetrics {
         self.glyphs.reload_font_size(size_physical_px);
+        self.cells.invalidate();
+        self.glyphs.cell_metrics()
+    }
+
+    pub fn set_cell_scale(&mut self, cell_scale: [f32; 2]) -> CellMetrics {
+        self.glyphs.set_cell_scale(cell_scale);
         self.cells.invalidate();
         self.glyphs.cell_metrics()
     }

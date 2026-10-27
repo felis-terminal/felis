@@ -53,6 +53,7 @@ pub(super) fn run(
     diagnostics: &mut ConfigDiagnostics,
 ) {
     font_size(config, origin, diagnostics);
+    cell_scale(config, origin, diagnostics);
     window_opacity(config, origin, diagnostics);
     minimum_contrast(config, origin, diagnostics);
     mouse_scroll_multiplier(config, origin, diagnostics);
@@ -150,6 +151,27 @@ fn font_size(
                 super::MAX_FONT_SIZE_LOGICAL_PX,
             ),
         ),
+    }
+}
+
+fn cell_scale(
+    config: &EffectiveConfig,
+    origin: &KeyOrigin<'_>,
+    diagnostics: &mut ConfigDiagnostics,
+) {
+    for (field, issue) in config.font.cell_scale_issues() {
+        let Some(issue) = issue else {
+            continue;
+        };
+        diagnostics.warning(
+            DiagnosticKind::Value,
+            Some(origin.attribute(&["font", field], &format!("font.{field}"))),
+            issue.message(&format!(
+                "[{}, {}]",
+                super::MIN_CELL_SCALE,
+                super::MAX_CELL_SCALE
+            )),
+        );
     }
 }
 

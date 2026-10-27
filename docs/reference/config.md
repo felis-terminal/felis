@@ -84,6 +84,14 @@ family = "JetBrainsMono Nerd Font"
 # Either TOML spelling is accepted: 14 and 14.0 are the same size.
 size_px = 14
 
+# Factors on the cell width and height the primary face's metrics give.
+# The difference is split evenly around each glyph (the odd pixel goes
+# right and below); box-drawing and block characters and the cursor fill
+# the whole cell. Below 1.0 glyphs overlap their neighbors and keep
+# their size. Clamped to [0.5, 3.0]. Default: 1.0.
+cell_width_scale = 1.0
+cell_height_scale = 1.2
+
 # Explicit font fallback chain resolved per codepoint, tried in
 # declared order before the host's fallback, which covers what the
 # entries miss. Default: [] (the host's fallback alone).

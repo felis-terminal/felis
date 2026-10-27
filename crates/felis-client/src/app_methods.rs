@@ -582,6 +582,9 @@ impl App {
                         renderer.reload_font_features(&new_renderer_cfg.font_features);
                     }
                 }
+                if self.renderer_cfg.cell_scale != new_renderer_cfg.cell_scale {
+                    renderer.set_cell_scale(new_renderer_cfg.cell_scale.unwrap_or([1.0, 1.0]));
+                }
             }
         }
         self.renderer_cfg = new_renderer_cfg;
