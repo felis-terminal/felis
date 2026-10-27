@@ -171,6 +171,18 @@ impl From<&messages::GridMsg> for v1::GridMsg {
             }),
             G::PaletteResetAll => Msg::PaletteResetAll(v1::GridPaletteResetAll {}),
             G::CycleEnd => Msg::CycleEnd(v1::GridCycleEnd {}),
+            G::CommandOutput { text, omitted } => Msg::CommandOutput(v1::GridCommandOutput {
+                text: text.clone(),
+                omitted: Some(match omitted {
+                    messages::OmittedOutput::None => {
+                        v1::grid_command_output::Omitted::Nothing(v1::OmittedNothing {})
+                    }
+                    messages::OmittedOutput::Rows(n) => v1::grid_command_output::Omitted::Rows(*n),
+                    messages::OmittedOutput::Unknown => {
+                        v1::grid_command_output::Omitted::Unknown(v1::OmittedUnknown {})
+                    }
+                }),
+            }),
             G::PointerShape { name } => {
                 Msg::PointerShape(v1::GridPointerShape { name: name.clone() })
             }
@@ -285,6 +297,19 @@ impl TryFrom<v1::GridMsg> for messages::GridMsg {
             },
             Msg::PaletteResetAll(_) => Self::PaletteResetAll,
             Msg::CycleEnd(_) => Self::CycleEnd,
+            Msg::CommandOutput(c) => Self::CommandOutput {
+                text: c.text,
+                omitted: match c
+                    .omitted
+                    .ok_or(WireError::MissingOneof("GridCommandOutput.omitted"))?
+                {
+                    v1::grid_command_output::Omitted::Nothing(_) => messages::OmittedOutput::None,
+                    v1::grid_command_output::Omitted::Rows(n) => messages::OmittedOutput::Rows(n),
+                    v1::grid_command_output::Omitted::Unknown(_) => {
+                        messages::OmittedOutput::Unknown
+                    }
+                },
+            },
             Msg::PointerShape(p) => Self::PointerShape { name: p.name },
             Msg::KittyKbdFlags(k) => Self::KittyKbdFlags {
                 flags: KittyKbdFlags::from_bits_truncate(narrow("KittyKbdFlags.flags", k.flags)?),

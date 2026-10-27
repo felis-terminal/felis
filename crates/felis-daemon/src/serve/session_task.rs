@@ -3,7 +3,7 @@
 //! Slow subscribers past `SUBSCRIBER_BUFFER_CAP` are evicted rather than
 //! backpressuring the shared PTY (session-lifecycle.md "Same-user mirroring").
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::sync::{
     Arc, Mutex as StdMutex, Weak,
     atomic::{AtomicUsize, Ordering},
@@ -15,7 +15,7 @@ use felis_protocol::messages::{
     RequestedDims, SpawnOutcome, ThemeChannel,
 };
 use felis_protocol::{
-    ConnectionMode,
+    ConnectionMode, MinorGated as _,
     messages::{
         Attachment, ConnToClientMsg, Correlation, GridDims, GridMsg, ImageMsg, InputMsg,
         NotifyToClientMsg, OpsToClientMsg, PushMsg, RegionToClientMsg, RequestId,
@@ -66,6 +66,11 @@ pub struct SessionStats {
 /// any push reports against the backlog gauge.
 const WIRE_LEN_OVERHEAD: usize = 64;
 
+/// `GridMsg::CommandOutput` frames one subscriber holds between its
+/// diff cycles; past it the oldest drops, so a window that stops
+/// pulling holds no more.
+const ANNOUNCE_QUEUE_CAP: usize = 8;
+
 /// Small on purpose: the channel backpressures a connection that
 /// outruns the task, the same way the PTY would.
 const CMD_CHANNEL_CAPACITY: usize = 64;
@@ -114,6 +119,7 @@ impl OutEvent {
             Self::Grid(GridMsg::RowDelta { rows }) => {
                 rows.iter().map(|(_, b)| b.0.len()).sum::<usize>() + WIRE_LEN_OVERHEAD
             }
+            Self::Grid(GridMsg::CommandOutput { text, .. }) => text.len() + WIRE_LEN_OVERHEAD,
             Self::Image(ImageMsg::Chunk { bytes, .. }) => bytes.len() + WIRE_LEN_OVERHEAD,
             Self::Region {
                 msg: RegionToClientMsg::Reply { data, .. },
@@ -292,6 +298,9 @@ pub struct SubscribeReq {
     /// `Hello.pull_paced`: the grid stream ships against per-vsync
     /// `NextGridFrame` pulls.
     pub pull_paced: bool,
+    /// The connection's effective minor: no arm a later minor added
+    /// may be queued for it.
+    pub minor: u16,
     pub tx: mpsc::UnboundedSender<OutEvent>,
     /// Bytes pushed but not yet written; the connection pump decrements
     /// as it writes (see `SUBSCRIBER_BUFFER_CAP`).
@@ -708,7 +717,7 @@ async fn spawn_task(
         meta_title_epoch: title_epoch,
         meta_cwd_epoch: cwd_epoch,
         meta_status_generation,
-        pending_chunks: std::collections::VecDeque::new(),
+        pending_chunks: VecDeque::new(),
         upgrade_hold: false,
     };
     if let Some(carried) = carried {
@@ -804,6 +813,12 @@ struct Subscriber {
     /// pending `NextGridFrame` pull.
     pull_pacing: bool,
     pull_pending: bool,
+    minor: u16,
+    /// `InputMsg::AnnounceOutput`; a fresh attachment starts without it.
+    announce_output: bool,
+    /// Shipped with this subscriber's next diff cycle, never in a
+    /// rehydrate burst.
+    command_outputs: VecDeque<GridMsg>,
     tx: mpsc::UnboundedSender<OutEvent>,
     buffered: Arc<AtomicUsize>,
     stream: streaming::SubscriberStream,
@@ -935,7 +950,7 @@ struct SessionTask {
     /// An in-task queue rather than a self-addressed `SessionCmd`: the
     /// command channel is bounded, so a producer re-queueing through it
     /// could block while holding the only thread that drains it.
-    pending_chunks: std::collections::VecDeque<(SubscriberId, StreamId)>,
+    pending_chunks: VecDeque<(SubscriberId, StreamId)>,
     /// See [`SessionCmd::Settle`].
     upgrade_hold: bool,
 }
@@ -1487,6 +1502,9 @@ impl SessionTask {
             attached_at: SystemTime::now(),
             pull_pacing: req.pull_paced,
             pull_pending: false,
+            minor: req.minor,
+            announce_output: false,
+            command_outputs: VecDeque::new(),
             tx: req.tx,
             buffered: req.buffered,
             stream,
@@ -1533,6 +1551,13 @@ impl SessionTask {
             let was_window = self.subs[i].is_window;
             let sub = self.subs.remove(i);
             close_open_streams(&sub, "the subscription ended");
+            if sub.announce_output {
+                let capture = self.announces_output();
+                self.session
+                    .lock_core()
+                    .grid
+                    .set_capture_command_output(capture);
+            }
             drop(sub);
             debug!(id = ?self.id, sub = id.0, left = self.subs.len(), "subscriber detached");
             self.attachments_dirty = true;
@@ -1554,6 +1579,10 @@ impl SessionTask {
         // head the chain it is being removed from.
         self.recompute_presentation();
         self.refresh_meta();
+    }
+
+    fn announces_output(&self) -> bool {
+        self.subs.iter().any(|s| s.announce_output)
     }
 
     /// The OR, not last-writer: a background mirror blurring must not
@@ -1996,7 +2025,23 @@ impl SessionTask {
         if resize_notify_key(&core.grid) != self.reported_resize {
             self.resize_notify_dirty = true;
         }
+        self.queue_command_outputs();
         drained
+    }
+
+    fn queue_command_outputs(&mut self) {
+        for msg in std::mem::take(&mut self.session.command_outputs) {
+            let minor = msg.requires().minor;
+            for sub in &mut self.subs {
+                if !sub.announce_output || sub.minor < minor {
+                    continue;
+                }
+                if sub.command_outputs.len() == ANNOUNCE_QUEUE_CAP {
+                    sub.command_outputs.pop_front();
+                }
+                sub.command_outputs.push_back(msg.clone());
+            }
+        }
     }
 
     fn drain_and_fan(&mut self) -> Result<(), ConnError> {
@@ -2240,8 +2285,12 @@ impl SessionTask {
             &mut sub.stream,
             &mut self.row_cache,
             &mut out,
-        );
-        Some((sub.id, composed.map(|()| out)))
+        )
+        .map(|()| {
+            out.extend(sub.command_outputs.drain(..).map(OutEvent::Grid));
+            out
+        });
+        Some((sub.id, composed))
     }
 
     /// Demand-driven pacing (docs/explanation/rendering/pipeline.md): a
@@ -2463,6 +2512,26 @@ impl SessionTask {
             InputMsg::NextGridFrame => {
                 self.subs[i].pull_pending = true;
                 trace!(target: "felis_daemon::serve", "grid frame pull");
+            }
+            InputMsg::AnnounceOutput { enabled } => {
+                // Pending output is handed out before the flag changes,
+                // so a window opting in never receives output whose `D`
+                // preceded its request.
+                let core = Arc::clone(&self.session.core);
+                let mut guard = core.lock();
+                let drained = self.drain_effects_under(&mut guard);
+                let sub = &mut self.subs[i];
+                sub.announce_output = enabled;
+                if !enabled {
+                    sub.command_outputs.clear();
+                }
+                guard
+                    .grid
+                    .set_capture_command_output(self.announces_output());
+                drop(guard);
+                if let Some(reason) = pty_write_outcome(drained) {
+                    return Some(reason);
+                }
             }
         }
         // Ship after every input, not only on the PTY arm: a Viewport
@@ -3106,7 +3175,7 @@ impl SessionTask {
             reported_resize: None,
             pty_steps: Vec::new(),
             pty_resized_over: Vec::new(),
-            pending_chunks: std::collections::VecDeque::new(),
+            pending_chunks: VecDeque::new(),
             upgrade_hold: false,
             meta_title_epoch: 0,
             meta_cwd_epoch: 0,
@@ -3215,6 +3284,7 @@ mod tests {
         task.subscribe(SubscribeReq {
             mode,
             pull_paced,
+            minor: felis_protocol::preface::PROTOCOL_MINOR,
             live_only: false,
             tx,
             buffered: Arc::new(AtomicUsize::new(0)),
@@ -3237,6 +3307,7 @@ mod tests {
         task.subscribe(SubscribeReq {
             mode,
             pull_paced: false,
+            minor: felis_protocol::preface::PROTOCOL_MINOR,
             live_only: false,
             tx,
             buffered: Arc::new(AtomicUsize::new(0)),
@@ -7608,6 +7679,7 @@ mod tests {
             .send(SessionCmd::Subscribe(SubscribeReq {
                 mode: ConnectionMode::Window,
                 pull_paced: false,
+                minor: felis_protocol::preface::PROTOCOL_MINOR,
                 live_only: false,
                 tx,
                 buffered: Arc::new(AtomicUsize::new(0)),
@@ -7691,5 +7763,164 @@ mod tests {
             "the sibling field is every outbox summed, not the deepest one"
         );
         assert_eq!(stats.max_subscriber_backlog, deep_now);
+    }
+
+    fn announce(task: &mut SessionTask, sub: SubscriberId, enabled: bool) {
+        assert!(
+            task.handle_input(sub, InputMsg::AnnounceOutput { enabled })
+                .is_none()
+        );
+    }
+
+    fn run_command(task: &SessionTask, output: &str) {
+        write_to_grid(
+            task,
+            format!("\x1b]133;C\x07{output}\r\n\x1b]133;D;0\x07").as_bytes(),
+        );
+    }
+
+    fn announced(events: &[OutEvent]) -> Vec<String> {
+        events
+            .iter()
+            .filter_map(|ev| match ev {
+                OutEvent::Grid(GridMsg::CommandOutput { text, .. }) => Some(text.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn captures(task: &SessionTask) -> bool {
+        task.session.lock_core().grid.capture_command_output()
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn command_output_is_charged_its_text_against_the_backlog_cap() {
+        let mut task = SessionTask::for_tests(session_with("read _x"));
+        let (on, _rx) = attach_sub(&mut task, false);
+        announce(&mut task, on, true);
+        let text = "x".repeat(felis_protocol::messages::MAX_ANNOUNCE_BYTES);
+        let ev = OutEvent::Grid(GridMsg::CommandOutput {
+            text: text.clone(),
+            omitted: felis_protocol::messages::OmittedOutput::None,
+        });
+        assert_eq!(ev.approx_wire_len(), text.len() + WIRE_LEN_OVERHEAD);
+
+        let idx = task.sub_index(on).expect("subscriber present");
+        task.subs[idx]
+            .buffered
+            .store(SUBSCRIBER_BUFFER_CAP - text.len(), Ordering::Relaxed);
+        assert!(
+            !task.subs[idx].push(ev),
+            "an announcement past the backlog cap evicts like any bulk frame"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn grid_capture_follows_whether_any_subscriber_announces() {
+        let mut task = SessionTask::for_tests(session_with("read _x"));
+        let (a, _rx_a) = attach_sub(&mut task, false);
+        let (b, _rx_b) = attach_sub(&mut task, false);
+        assert!(!captures(&task), "a fresh attachment does not announce");
+
+        announce(&mut task, a, true);
+        assert!(captures(&task));
+        announce(&mut task, b, true);
+        announce(&mut task, a, false);
+        assert!(captures(&task), "b still announces");
+        task.remove_sub(b);
+        assert!(!captures(&task), "the last announcing subscriber left");
+
+        announce(&mut task, a, true);
+        assert!(captures(&task));
+        task.remove_sub(a);
+        assert!(!captures(&task));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn command_output_reaches_only_announcing_subscribers_at_their_minor() {
+        let mut task = SessionTask::for_tests(session_with("read _x"));
+        let (on, mut rx_on) = attach_sub(&mut task, false);
+        let (_off, mut rx_off) = attach_sub(&mut task, false);
+        let (old, mut rx_old) = attach_sub(&mut task, false);
+        announce(&mut task, on, true);
+        announce(&mut task, old, true);
+        let old_idx = task.sub_index(old).expect("old subscriber present");
+        task.subs[old_idx].minor = GridMsg::CommandOutput {
+            text: String::new(),
+            omitted: felis_protocol::messages::OmittedOutput::None,
+        }
+        .requires()
+        .minor
+            - 1;
+        for rx in [&mut rx_on, &mut rx_off, &mut rx_old] {
+            drain_events(rx);
+        }
+
+        run_command(&task, "hello");
+        task.drain_and_fan().expect("effects drain");
+
+        assert_eq!(announced(&drain_events(&mut rx_on)), ["hello"]);
+        assert!(
+            announced(&drain_events(&mut rx_off)).is_empty(),
+            "a subscriber that did not opt in is never sent it"
+        );
+        assert!(
+            announced(&drain_events(&mut rx_old)).is_empty(),
+            "a connection below the arm's minor is never sent it"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_attach_replays_no_past_command_output() {
+        let mut task = SessionTask::for_tests(session_with("read _x"));
+        let (on, _rx_on) = attach_sub(&mut task, true);
+        announce(&mut task, on, true);
+        run_command(&task, "hello");
+        task.drain_and_fan().expect("effects drain");
+
+        let burst = attach_burst(&mut task, ConnectionMode::Window);
+        assert!(
+            announced(&burst).is_empty(),
+            "an announcement is an event, not rehydrated state"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_unpulled_subscriber_keeps_only_the_youngest_command_outputs() {
+        let mut task = SessionTask::for_tests(session_with("read _x"));
+        let (on, mut rx) = attach_sub(&mut task, true);
+        announce(&mut task, on, true);
+        drain_events(&mut rx);
+
+        for n in 0..ANNOUNCE_QUEUE_CAP + 2 {
+            run_command(&task, &n.to_string());
+            task.drain_and_fan().expect("effects drain");
+        }
+        assert!(
+            announced(&drain_events(&mut rx)).is_empty(),
+            "nothing ships before the pull"
+        );
+        assert!(task.handle_input(on, InputMsg::NextGridFrame).is_none());
+
+        let expected: Vec<String> = (2..ANNOUNCE_QUEUE_CAP + 2).map(|n| n.to_string()).collect();
+        assert_eq!(announced(&drain_events(&mut rx)), expected);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn opting_in_excludes_output_finished_before_the_request() {
+        let mut task = SessionTask::for_tests(session_with("read _x"));
+        let (early, mut rx_early) = attach_sub(&mut task, false);
+        let (late, mut rx_late) = attach_sub(&mut task, false);
+        announce(&mut task, early, true);
+        drain_events(&mut rx_early);
+        drain_events(&mut rx_late);
+
+        run_command(&task, "before");
+        announce(&mut task, late, true);
+        run_command(&task, "after");
+        task.drain_and_fan().expect("effects drain");
+
+        assert_eq!(announced(&drain_events(&mut rx_early)), ["before", "after"]);
+        assert_eq!(announced(&drain_events(&mut rx_late)), ["after"]);
     }
 }

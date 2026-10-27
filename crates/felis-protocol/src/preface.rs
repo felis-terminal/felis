@@ -19,7 +19,7 @@ pub const PROTOCOL_MAJOR: u16 = 1;
 /// Protocol minor this build speaks: additive schema growth only, each
 /// addition with defined old-peer behavior (`docs/reference/ipc.md`
 /// "The minor ledger").
-pub const PROTOCOL_MINOR: u16 = 2;
+pub const PROTOCOL_MINOR: u16 = 3;
 
 /// Lowest protocol major this build can serve.
 pub const SUPPORTED_MAJOR_MIN: u16 = PROTOCOL_MAJOR;
@@ -573,7 +573,7 @@ mod tests {
         assert_eq!(bytes, [b'F', b'L', b'I', b'S', 0x01, 0x02, 0x03, 0x04]);
         assert_eq!(
             ClientPreface::CURRENT.encode(),
-            [b'F', b'L', b'I', b'S', 0x00, 0x01, 0x00, 0x02]
+            [b'F', b'L', b'I', b'S', 0x00, 0x01, 0x00, 0x03]
         );
     }
 
@@ -597,7 +597,7 @@ mod tests {
         );
         assert_eq!(
             DaemonPreface::from(DaemonAccept::select(ClientPreface::CURRENT).unwrap()).encode(),
-            [b'F', b'L', b'I', b'S', 0x00, 0x00, 0x00, 0x01, 0x00, 0x02]
+            [b'F', b'L', b'I', b'S', 0x00, 0x00, 0x00, 0x01, 0x00, 0x03]
         );
         assert_eq!(
             DaemonPreface::from(DaemonRefuse::CURRENT).encode(),

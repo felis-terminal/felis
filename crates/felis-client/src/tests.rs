@@ -2300,13 +2300,23 @@ mod app_events {
         harness: &mut AppHarness,
         id: u128,
     ) -> tokio::net::UnixStream {
+        land_switch_at(runtime, harness, id, 0)
+    }
+
+    #[cfg(unix)]
+    fn land_switch_at(
+        runtime: &tokio::runtime::Runtime,
+        harness: &mut AppHarness,
+        id: u128,
+        effective_minor: u16,
+    ) -> tokio::net::UnixStream {
         let _entered = runtime.enter();
         let (near, far) = tokio::net::UnixStream::pair().expect("socket pair");
         let (read, write) = near.into_split();
         let driver = Arc::clone(&harness.app.driver);
         harness.app.install_new_session(
             FrameReader::new(CarrierReader::Local(read)),
-            FrameWriter::new(CarrierWriter::Local(write), 0),
+            FrameWriter::new(CarrierWriter::Local(write), effective_minor),
             driver,
             &session(id),
             true,
@@ -2636,5 +2646,133 @@ mod app_events {
         harness.app.switch_session(SwitchDirection::Next);
         assert!(harness.app.is_busy(), "the next chord fetches again");
         assert_eq!(harness.sent().len(), 1, "with a roster request of its own");
+    }
+
+    fn announce_minor() -> u16 {
+        use felis_protocol::minor::MinorGated as _;
+        InputMsg::AnnounceOutput { enabled: true }.requires().minor
+    }
+
+    /// A harness on a platform that announces, against a daemon that
+    /// knows the opt-in.
+    fn announcing_app(runtime: &tokio::runtime::Runtime) -> AppHarness {
+        let mut harness = app_on(runtime, absent_daemon("announce"), 0xa);
+        harness.app.announce_output = true;
+        harness.app.effective_minor = announce_minor();
+        harness
+    }
+
+    fn command_output(text: &str) -> GridMsg {
+        GridMsg::CommandOutput {
+            text: text.to_owned(),
+            omitted: felis_protocol::messages::OmittedOutput::None,
+        }
+    }
+
+    #[test]
+    fn the_announcement_opt_in_follows_the_tree_activity() {
+        let runtime = runtime();
+        let mut harness = announcing_app(&runtime);
+        harness.sent();
+
+        harness.app.on_app_event(AppEvent::Accessibility(
+            accesskit_winit::WindowEvent::InitialTreeRequested,
+        ));
+        assert_eq!(
+            harness.sent(),
+            vec![input_frame(&InputMsg::AnnounceOutput { enabled: true })]
+        );
+
+        harness.app.on_app_event(AppEvent::Accessibility(
+            accesskit_winit::WindowEvent::AccessibilityDeactivated,
+        ));
+        assert_eq!(
+            harness.sent(),
+            vec![input_frame(&InputMsg::AnnounceOutput { enabled: false })]
+        );
+    }
+
+    #[test]
+    fn a_platform_without_announcements_never_opts_in() {
+        let runtime = runtime();
+        let mut harness = announcing_app(&runtime);
+        harness.app.announce_output = false;
+        harness.sent();
+
+        harness.app.on_app_event(AppEvent::Accessibility(
+            accesskit_winit::WindowEvent::InitialTreeRequested,
+        ));
+        assert_eq!(harness.sent(), vec![]);
+    }
+
+    #[test]
+    fn announcements_are_enabled_only_on_windows_and_macos() {
+        let runtime = runtime();
+        let harness = app_on(&runtime, absent_daemon("platform"), 0xa);
+        assert_eq!(
+            harness.app.announce_output,
+            cfg!(any(windows, target_os = "macos"))
+        );
+    }
+
+    /// Lands while the tree is active, so the new attachment, which
+    /// starts disabled, must be told again.
+    #[cfg(unix)]
+    #[test]
+    fn a_landing_while_active_sends_the_opt_in_again() {
+        let runtime = runtime();
+        let mut harness = announcing_app(&runtime);
+        harness.app.on_app_event(AppEvent::Accessibility(
+            accesskit_winit::WindowEvent::InitialTreeRequested,
+        ));
+
+        let far = land_switch_at(&runtime, &mut harness, 0xb, announce_minor());
+
+        let expected = input_frame(&InputMsg::AnnounceOutput { enabled: true });
+        let mut reader = FrameReader::new(far);
+        let found = runtime.block_on(async {
+            tokio::time::timeout(Duration::from_secs(10), async {
+                while let Ok(Some(frame)) = reader.next_frame().await {
+                    if frame.kind == expected.kind() && frame.body[..] == *expected.body() {
+                        return true;
+                    }
+                }
+                false
+            })
+            .await
+            .unwrap_or(false)
+        });
+        assert!(found, "the new connection carries the opt-in");
+    }
+
+    #[test]
+    fn command_output_is_announced_only_in_a_focused_window() {
+        let runtime = runtime();
+        let mut harness = announcing_app(&runtime);
+        harness.app.on_app_event(AppEvent::Accessibility(
+            accesskit_winit::WindowEvent::InitialTreeRequested,
+        ));
+        let live = harness.app.conn_gen;
+
+        harness.app.on_app_event(AppEvent::GridFrame {
+            msg: command_output("a\n\nb"),
+            conn_gen: live,
+        });
+        assert_eq!(harness.app.a11y.pending_announcements(), ["a\nb"]);
+
+        harness.app.on_window_input(WindowInput::Focused(false));
+        assert!(
+            harness.app.a11y.pending_announcements().is_empty(),
+            "a focus loss drops what was not yet flushed"
+        );
+
+        harness.app.on_app_event(AppEvent::GridFrame {
+            msg: command_output("c"),
+            conn_gen: live,
+        });
+        assert_eq!(
+            harness.app.a11y.pending_announcements(),
+            <&[String]>::default()
+        );
     }
 }

@@ -398,6 +398,32 @@ mod tests {
         }
     }
 
+    /// The announcement pair costs minor 3 whichever way it is set, so a
+    /// window never opts in on an older daemon and a daemon never ships
+    /// output to an older window.
+    #[test]
+    fn the_announcement_pair_costs_minor_three() {
+        use crate::messages::{InputMsg, OmittedOutput};
+
+        for enabled in [true, false] {
+            assert_eq!(
+                InputMsg::AnnounceOutput { enabled }.requires(),
+                Requires::new(3, "Input::AnnounceOutput")
+            );
+        }
+        for omitted in [
+            OmittedOutput::None,
+            OmittedOutput::Rows(4),
+            OmittedOutput::Unknown,
+        ] {
+            let output = GridMsg::CommandOutput {
+                text: "done".into(),
+                omitted,
+            };
+            assert_eq!(output.requires(), Requires::new(3, "Grid::CommandOutput"));
+        }
+    }
+
     /// A `Hello` costs the minor that defined the mode it names, so a
     /// mode added later cannot reach a daemon that predates it. Every
     /// shipped mode is a base-schema one, so the pinning case is the

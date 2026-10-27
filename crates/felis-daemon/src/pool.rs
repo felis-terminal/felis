@@ -147,6 +147,9 @@ pub struct Session {
     /// [`felis_grid::PtyEffect`] queue with the placement effects (a
     /// scroll before an `a=T` shifts a placement the same burst creates).
     pub scroll_ops: Vec<crate::serve::streaming::QueuedScroll>,
+    /// `GridMsg::CommandOutput` frames the effect replay parked this
+    /// drain cycle for the opted-in subscribers.
+    pub command_outputs: Vec<felis_protocol::messages::GridMsg>,
     /// OSC 7501 records, applied in byte order by the effect replay.
     pub program_status: crate::program_status::ProgramStatusStore,
     /// The last `OSC 9 ; 4` report, applied in byte order like
@@ -201,6 +204,7 @@ impl Session {
             graphics_reassembler: Reassembler::new(),
             image_events: Vec::new(),
             scroll_ops: Vec::new(),
+            command_outputs: Vec::new(),
             program_status: crate::program_status::ProgramStatusStore::default(),
             terminal_progress: None,
             cell_pixel_w: 0,

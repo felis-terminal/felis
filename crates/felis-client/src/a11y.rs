@@ -5,14 +5,17 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use accesskit::{
-    Node, NodeId, Rect, Role, TextDirection, TextPosition, TextSelection, TreeId, TreeInfo,
+    Live, Node, NodeId, Rect, Role, TextDirection, TextPosition, TextSelection, TreeId, TreeInfo,
     TreeUpdate,
 };
 use felis_client_core::a11y_text::{RUN_CAP, RowText};
 use felis_client_core::selection::{GridPos, Selection, SelectionMode};
 use felis_grid::ScreenBuffer;
+use felis_protocol::messages::{InputMsg, OmittedOutput};
+use felis_protocol::minor::MinorGated as _;
 use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, EventLoopProxy};
 use winit::window::Window;
@@ -26,6 +29,47 @@ const FIRST_RUN_ID: u64 = 2;
 /// not just the admitted maximum, because `reflow` resizes the shadow
 /// optimistically before the daemon answers. The `+ 1` is the line break.
 const RUNS_PER_ROW: u64 = (u16::MAX as u64 + 1).div_ceil(RUN_CAP as u64);
+const FIRST_ANNOUNCEMENT_ID: u64 = FIRST_RUN_ID + (u16::MAX as u64 + 1) * RUNS_PER_ROW;
+
+/// Orca already speaks the AT-SPI terminal role's text-changed events,
+/// so announcing there would read output twice
+/// (`docs/explanation/accessibility.md`).
+pub(crate) const ANNOUNCES_OUTPUT: bool = cfg!(any(windows, target_os = "macos"));
+
+/// How long command output must stay quiet before its announcement is
+/// made (`docs/explanation/accessibility.md`).
+pub(crate) const ANNOUNCE_QUIET: Duration = Duration::from_millis(200);
+/// The longest an announcement waits for output to go quiet.
+pub(crate) const ANNOUNCE_MAX_DELAY: Duration = Duration::from_secs(1);
+
+/// `None` when the daemon predates the message.
+pub(crate) fn announce_output_request(enabled: bool, effective_minor: u16) -> Option<InputMsg> {
+    let msg = InputMsg::AnnounceOutput { enabled };
+    (msg.requires().minor <= effective_minor).then_some(msg)
+}
+
+/// What a screen reader speaks for one finished command, or `None` when
+/// it printed nothing but blank lines.
+pub(crate) fn announcement_text(text: &str, omitted: OmittedOutput) -> Option<String> {
+    let mut lines = text
+        .split('\n')
+        .filter(|line| !line.trim().is_empty())
+        .peekable();
+    lines.peek()?;
+    let notice = match omitted {
+        OmittedOutput::None | OmittedOutput::Rows(0) => None,
+        OmittedOutput::Rows(n) => Some(format!("{n} rows omitted")),
+        OmittedOutput::Unknown => Some("earlier output omitted".to_owned()),
+    };
+    let mut out = notice.unwrap_or_default();
+    for line in lines {
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(line);
+    }
+    Some(out)
+}
 
 /// The platform side: AccessKit's winit adapter in a window build, a
 /// recorder in tests.
@@ -66,6 +110,13 @@ pub(crate) struct A11yTree {
     active: bool,
     changed: bool,
     sent: HashMap<NodeId, Node>,
+    /// Announcement texts not yet published, in arrival order.
+    pending: Vec<String>,
+    first_arrival: Option<Instant>,
+    last_arrival: Option<Instant>,
+    announcement_due: bool,
+    announcement: Option<(NodeId, Node)>,
+    announcements_made: u64,
 }
 
 impl A11yTree {
@@ -110,11 +161,63 @@ impl A11yTree {
         self.active = true;
         self.changed = true;
         self.sent.clear();
+        self.drop_pending_announcements();
+        self.announcement = None;
     }
 
     pub(crate) fn deactivate(&mut self) {
         self.active = false;
         self.sent = HashMap::new();
+        self.drop_pending_announcements();
+        self.pending = Vec::new();
+        self.announcement = None;
+    }
+
+    pub(crate) const fn is_active(&self) -> bool {
+        self.active
+    }
+
+    /// Held until [`Self::tick`] finds it due.
+    pub(crate) fn announce(&mut self, text: String, now: Instant) {
+        if !self.active {
+            return;
+        }
+        self.pending.push(text);
+        self.first_arrival.get_or_insert(now);
+        self.last_arrival = Some(now);
+    }
+
+    /// When the pending announcements come due, or `None` with nothing
+    /// waiting.
+    pub(crate) fn announcement_deadline(&self) -> Option<Instant> {
+        let (first, last) = self.first_arrival.zip(self.last_arrival)?;
+        Some((last + ANNOUNCE_QUIET).min(first + ANNOUNCE_MAX_DELAY))
+    }
+
+    /// Returns whether the pending announcements came due at `now`, so
+    /// the caller can request the redraw whose flush publishes them.
+    /// True once per deadline: a flush held back by an open cycle must
+    /// not turn into a redraw request every loop iteration.
+    pub(crate) fn tick(&mut self, now: Instant) -> bool {
+        if self.announcement_deadline().is_none_or(|due| now < due) {
+            return false;
+        }
+        self.first_arrival = None;
+        self.last_arrival = None;
+        self.announcement_due = true;
+        self.mark_changed()
+    }
+
+    pub(crate) fn drop_pending_announcements(&mut self) {
+        self.pending.clear();
+        self.first_arrival = None;
+        self.last_arrival = None;
+        self.announcement_due = false;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pending_announcements(&self) -> &[String] {
+        &self.pending
     }
 
     /// Returns whether a flush will follow, so the caller can request
@@ -131,10 +234,24 @@ impl A11yTree {
             return;
         }
         self.changed = false;
+        if self.announcement_due {
+            // A fresh id each time: a label change on a kept node would
+            // stay silent when two outputs are identical.
+            let id = NodeId(FIRST_ANNOUNCEMENT_ID + self.announcements_made);
+            self.announcements_made += 1;
+            let mut node = Node::new(Role::Status);
+            node.set_live(Live::Polite);
+            node.set_label(self.pending.join("\n"));
+            self.announcement = Some((id, node));
+            self.drop_pending_announcements();
+        }
         let Some(adapter) = self.adapter.as_mut() else {
             return;
         };
-        let nodes = build_nodes(source);
+        let mut nodes = build_nodes(source, self.announcement.as_ref().map(|(id, _)| *id));
+        if let Some(announcement) = &self.announcement {
+            nodes.push(announcement.clone());
+        }
         let mut changed = Vec::new();
         let mut sent = HashMap::with_capacity(nodes.len());
         for (id, node) in nodes {
@@ -235,7 +352,7 @@ fn selection_of(
     })
 }
 
-fn build_nodes(source: &TreeSource<'_>) -> Vec<(NodeId, Node)> {
+fn build_nodes(source: &TreeSource<'_>, announcement: Option<NodeId>) -> Vec<(NodeId, Node)> {
     let screen = source.screen;
     let (cw, ch) = (f64::from(source.cell_px.0), f64::from(source.cell_px.1));
     let (ox, oy) = (f64::from(source.origin_px.0), f64::from(source.origin_px.1));
@@ -324,7 +441,11 @@ fn build_nodes(source: &TreeSource<'_>) -> Vec<(NodeId, Node)> {
 
     let mut root = Node::new(Role::Window);
     root.set_label(source.title);
-    root.set_children(vec![TERMINAL_ID]);
+    root.set_children(
+        std::iter::once(TERMINAL_ID)
+            .chain(announcement)
+            .collect::<Vec<_>>(),
+    );
     nodes.push((ROOT_ID, root));
     nodes
 }
@@ -335,6 +456,7 @@ mod tests {
     use std::rc::Rc;
 
     use felis_grid::Grid;
+    use proptest::prelude::*;
 
     use super::*;
 
@@ -493,7 +615,7 @@ mod tests {
     #[test]
     fn a_long_row_is_chained_runs_of_at_most_255_characters() {
         let g = grid_with(1, 600, &[b'x'; 600]);
-        let nodes = build_nodes(&source(g.screen(), None));
+        let nodes = build_nodes(&source(g.screen(), None), None);
         let runs: Vec<&Node> = nodes
             .iter()
             .filter(|(_, n)| n.role() == Role::TextRun)
@@ -508,5 +630,268 @@ mod tests {
         assert_eq!(runs[0].word_starts(), &[0]);
         assert_eq!(runs[1].word_starts(), <&[u8]>::default());
         assert_eq!(runs[2].word_starts(), &[90]);
+    }
+
+    fn announcements(update: &TreeUpdate) -> Vec<(NodeId, &Node)> {
+        update
+            .nodes
+            .iter()
+            .filter(|(_, n)| n.role() == Role::Status)
+            .map(|(id, n)| (*id, n))
+            .collect()
+    }
+
+    fn root(update: &TreeUpdate) -> &Node {
+        &update
+            .nodes
+            .iter()
+            .find(|(id, _)| *id == ROOT_ID)
+            .unwrap()
+            .1
+    }
+
+    fn omitted_output() -> impl Strategy<Value = OmittedOutput> {
+        prop_oneof![
+            Just(OmittedOutput::None),
+            Just(OmittedOutput::Rows(0)),
+            any::<u32>().prop_map(OmittedOutput::Rows),
+            Just(OmittedOutput::Unknown),
+        ]
+    }
+
+    proptest! {
+        /// The announcement is the output's non-blank lines in order,
+        /// after one notice line exactly when rows were omitted; output
+        /// with no such line announces nothing.
+        #[test]
+        fn an_announcement_is_the_non_blank_lines_after_an_omission_notice(
+            text in "[ab \t\n]{0,24}",
+            omitted in omitted_output(),
+        ) {
+            let lines: Vec<&str> = text.split('\n').filter(|l| !l.trim().is_empty()).collect();
+            let Some(announced) = announcement_text(&text, omitted) else {
+                prop_assert!(lines.is_empty());
+                return Ok(());
+            };
+            let notice = !matches!(omitted, OmittedOutput::None | OmittedOutput::Rows(0));
+            let announced: Vec<&str> = announced.split('\n').collect();
+            prop_assert_eq!(&announced[usize::from(notice)..], lines.as_slice());
+            if notice {
+                let alone = announcement_text("x", omitted).unwrap();
+                prop_assert_eq!(Some(announced[0]), alone.split('\n').next());
+            }
+        }
+    }
+
+    #[test]
+    fn omitted_output_is_announced_as_a_leading_notice() {
+        assert_eq!(
+            announcement_text("tail", OmittedOutput::Rows(744)).as_deref(),
+            Some("744 rows omitted\ntail")
+        );
+        assert_eq!(
+            announcement_text("tail", OmittedOutput::Unknown).as_deref(),
+            Some("earlier output omitted\ntail")
+        );
+    }
+
+    #[test]
+    fn the_opt_in_is_sent_only_to_a_daemon_that_knows_it() {
+        let msg = InputMsg::AnnounceOutput { enabled: true };
+        let minor = msg.requires().minor;
+        assert_eq!(announce_output_request(true, minor), Some(msg));
+        assert_eq!(
+            announce_output_request(false, minor),
+            Some(InputMsg::AnnounceOutput { enabled: false })
+        );
+        assert_eq!(announce_output_request(true, minor - 1), None);
+    }
+
+    /// An active tree with its first update already sent.
+    fn announcing_tree() -> (Recorder, A11yTree, Grid) {
+        let rec = Recorder::default();
+        let mut tree = A11yTree::with_adapter(Box::new(rec.clone()));
+        let g = grid_with(2, 8, b"$ ");
+        tree.activate();
+        tree.flush(&source(g.screen(), None));
+        (rec, tree, g)
+    }
+
+    fn ms(n: u64) -> Duration {
+        Duration::from_millis(n)
+    }
+
+    #[test]
+    fn an_inactive_tree_announces_nothing() {
+        let rec = Recorder::default();
+        let mut tree = A11yTree::with_adapter(Box::new(rec.clone()));
+        let t0 = Instant::now();
+        tree.announce("done".to_owned(), t0);
+        assert_eq!(tree.pending_announcements(), <&[String]>::default());
+        assert_eq!(tree.announcement_deadline(), None);
+        assert!(!tree.tick(t0 + ANNOUNCE_MAX_DELAY));
+        let g = grid_with(2, 8, b"$ ");
+        tree.activate();
+        tree.flush(&source(g.screen(), None));
+        assert_eq!(announcements(&rec.0.borrow()[0]), vec![]);
+    }
+
+    #[test]
+    fn outputs_arriving_within_the_quiet_period_become_one_polite_status_node_under_the_root() {
+        let (rec, mut tree, g) = announcing_tree();
+        let t0 = Instant::now();
+        tree.announce("first".to_owned(), t0);
+        assert!(!tree.tick(t0 + ms(9)));
+        tree.mark_changed();
+        tree.flush(&source(g.screen(), None));
+        tree.announce("second".to_owned(), t0 + ms(9));
+        assert!(tree.tick(t0 + ms(9) + ANNOUNCE_QUIET));
+        tree.flush(&source(g.screen(), None));
+
+        let updates = rec.0.borrow();
+        assert_eq!(updates.len(), 2);
+        let status = announcements(&updates[1]);
+        assert_eq!(status.len(), 1);
+        let (id, node) = status[0];
+        assert_eq!(node.label(), Some("first\nsecond"));
+        assert_eq!(node.live(), Some(Live::Polite));
+        assert!(!node.is_hidden());
+        assert_eq!(root(&updates[1]).children(), &[TERMINAL_ID, id]);
+    }
+
+    #[test]
+    fn a_flush_before_the_output_goes_quiet_publishes_nothing() {
+        let (rec, mut tree, g) = announcing_tree();
+        let t0 = Instant::now();
+        tree.announce("done".to_owned(), t0 + ms(1));
+        assert!(!tree.tick(t0 + ANNOUNCE_QUIET));
+        tree.mark_changed();
+        tree.flush(&source(g.screen(), None));
+        assert_eq!(rec.0.borrow().len(), 1);
+        assert_eq!(tree.pending_announcements(), ["done"]);
+    }
+
+    #[test]
+    fn an_announcement_is_published_once_the_output_has_been_quiet() {
+        let (rec, mut tree, g) = announcing_tree();
+        let t0 = Instant::now();
+        tree.announce("done".to_owned(), t0);
+        assert!(tree.tick(t0 + ANNOUNCE_QUIET));
+        tree.flush(&source(g.screen(), None));
+        let updates = rec.0.borrow();
+        assert_eq!(announcements(&updates[1])[0].1.label(), Some("done"));
+        assert_eq!(tree.announcement_deadline(), None);
+    }
+
+    #[test]
+    fn continuous_output_is_published_by_the_maximum_delay() {
+        let (rec, mut tree, g) = announcing_tree();
+        let t0 = Instant::now();
+        let start = t0 + ms(1);
+        let step = ANNOUNCE_QUIET * 3 / 4;
+        let mut at = start;
+        let mut sent = Vec::new();
+        while at < start + ANNOUNCE_MAX_DELAY {
+            assert!(!tree.tick(at), "the output never went quiet");
+            sent.push(format!("{}", sent.len()));
+            tree.announce(sent.last().unwrap().clone(), at);
+            at += step;
+        }
+        assert!(!tree.tick(t0 + ANNOUNCE_MAX_DELAY));
+        assert!(tree.tick(start + ANNOUNCE_MAX_DELAY));
+        tree.flush(&source(g.screen(), None));
+        let updates = rec.0.borrow();
+        assert_eq!(
+            announcements(&updates[1])[0].1.label(),
+            Some(sent.join("\n").as_str())
+        );
+    }
+
+    #[test]
+    fn the_deadline_is_the_quiet_period_after_the_last_arrival_capped_by_the_first() {
+        let (_rec, mut tree, _g) = announcing_tree();
+        assert_eq!(tree.announcement_deadline(), None);
+        let t0 = Instant::now();
+        tree.announce("a".to_owned(), t0);
+        assert_eq!(tree.announcement_deadline(), Some(t0 + ANNOUNCE_QUIET));
+        tree.announce("b".to_owned(), t0 + ms(100));
+        assert_eq!(
+            tree.announcement_deadline(),
+            Some(t0 + ms(100) + ANNOUNCE_QUIET)
+        );
+        tree.announce("c".to_owned(), t0 + ANNOUNCE_MAX_DELAY);
+        assert_eq!(tree.announcement_deadline(), Some(t0 + ANNOUNCE_MAX_DELAY));
+        assert!(tree.tick(t0 + ANNOUNCE_MAX_DELAY));
+        assert_eq!(
+            tree.announcement_deadline(),
+            None,
+            "a due announcement arms no further wake-up"
+        );
+        assert!(!tree.tick(t0 + ANNOUNCE_MAX_DELAY + ms(1)));
+    }
+
+    #[test]
+    fn the_next_announcement_replaces_the_last_with_a_fresh_node() {
+        let (rec, mut tree, g) = announcing_tree();
+        let t0 = Instant::now();
+        tree.announce("same".to_owned(), t0);
+        tree.tick(t0 + ANNOUNCE_QUIET);
+        tree.flush(&source(g.screen(), None));
+        let t1 = t0 + ANNOUNCE_MAX_DELAY;
+        tree.announce("same".to_owned(), t1);
+        tree.tick(t1 + ANNOUNCE_QUIET);
+        tree.flush(&source(g.screen(), None));
+
+        let updates = rec.0.borrow();
+        let (first, _) = announcements(&updates[1])[0];
+        let (second, node) = announcements(&updates[2])[0];
+        assert_ne!(first, second);
+        assert_eq!(node.label(), Some("same"));
+        assert_eq!(root(&updates[2]).children(), &[TERMINAL_ID, second]);
+    }
+
+    #[test]
+    fn announcement_ids_never_collide_with_run_ids() {
+        let last_run = run_id(u16::MAX, (RUNS_PER_ROW - 1) as usize);
+        assert!(last_run.0 < FIRST_ANNOUNCEMENT_ID);
+    }
+
+    #[test]
+    fn activation_resends_the_tree_without_the_last_announcement() {
+        let (rec, mut tree, g) = announcing_tree();
+        let t0 = Instant::now();
+        tree.announce("done".to_owned(), t0);
+        tree.tick(t0 + ANNOUNCE_QUIET);
+        tree.flush(&source(g.screen(), None));
+
+        tree.activate();
+        tree.flush(&source(g.screen(), None));
+        let update = rec.0.borrow()[2].clone();
+        assert_eq!(announcements(&update), vec![]);
+        assert_eq!(root(&update).children(), &[TERMINAL_ID]);
+    }
+
+    #[test]
+    fn announcements_dropped_while_waiting_are_never_sent() {
+        let (rec, mut tree, g) = announcing_tree();
+        let t0 = Instant::now();
+        tree.announce("done".to_owned(), t0);
+        tree.drop_pending_announcements();
+        assert_eq!(tree.announcement_deadline(), None);
+        assert!(!tree.tick(t0 + ANNOUNCE_MAX_DELAY));
+        tree.mark_changed();
+        tree.flush(&source(g.screen(), None));
+        assert_eq!(rec.0.borrow().len(), 1);
+    }
+
+    #[test]
+    fn announcements_dropped_after_coming_due_are_never_sent() {
+        let (rec, mut tree, g) = announcing_tree();
+        let t0 = Instant::now();
+        tree.announce("done".to_owned(), t0);
+        assert!(tree.tick(t0 + ANNOUNCE_QUIET));
+        tree.drop_pending_announcements();
+        tree.flush(&source(g.screen(), None));
+        assert_eq!(rec.0.borrow().len(), 1);
     }
 }

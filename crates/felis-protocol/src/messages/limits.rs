@@ -5,9 +5,9 @@
 
 use crate::convert::WireError;
 use crate::messages::{
-    AttachTarget, InputMsg, Key, MAX_ENV_BASE_BYTES, MAX_ENV_BASE_ENTRIES, MAX_SESSION_TAGS,
-    MAX_TAG_BYTES, OpsToDaemonMsg, PushMsg, RetargetCarrier, RetargetLanding, RetargetTarget,
-    SearchToDaemonMsg, SessionToDaemonMsg, SpawnArgs, SwitchTarget,
+    AttachTarget, GridMsg, InputMsg, Key, MAX_ENV_BASE_BYTES, MAX_ENV_BASE_ENTRIES,
+    MAX_SESSION_TAGS, MAX_TAG_BYTES, OpsToDaemonMsg, PushMsg, RetargetCarrier, RetargetLanding,
+    RetargetTarget, SearchToDaemonMsg, SessionToDaemonMsg, SpawnArgs, SwitchTarget,
 };
 use crate::session_prefix::validate_session_id_prefix;
 
@@ -64,6 +64,10 @@ pub const MAX_BRIDGE_LINE_BYTES: usize = 8 * MAX_PASTE_BYTES;
 // not drift apart: a later paste cap raises this one with it.
 const _: () = assert!(MAX_BRIDGE_LINE_BYTES > 6 * MAX_PASTE_BYTES);
 
+/// Bytes the text of one [`GridMsg::CommandOutput`] may carry: the
+/// daemon keeps the youngest output that fits.
+pub const MAX_ANNOUNCE_BYTES: usize = 64 * 1024;
+
 /// Sender-side ceiling for [`crate::messages::RegionToClientMsg::Reply`] bytes.
 ///
 /// Sized to half the framing backstop. Senders trim replies to keep the youngest
@@ -100,6 +104,7 @@ const _: () = {
     assert!(MAX_SPAWN_PATH_BYTES < backstop);
     assert!(MAX_RETARGET_DESCRIPTOR_BYTES < backstop);
     assert!(MAX_REGION_REPLY_BYTES < backstop);
+    assert!(MAX_ANNOUNCE_BYTES < backstop);
     assert!(MAX_ENV_BASE_BYTES < backstop);
     // The count limits (argv and env entries) are bounded through the
     // byte limit that accompanies each; tags have only a per-entry
@@ -258,6 +263,17 @@ impl Validate for InputMsg {
     }
 }
 
+impl Validate for GridMsg {
+    fn validate(&self) -> Result<(), WireError> {
+        match self {
+            Self::CommandOutput { text, .. } => {
+                check_limit("Grid::CommandOutput.text", text.len(), MAX_ANNOUNCE_BYTES)
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
 impl Validate for SearchToDaemonMsg {
     fn validate(&self) -> Result<(), WireError> {
         match self {
@@ -328,7 +344,6 @@ macro_rules! nothing_to_bound {
 nothing_to_bound!(
     crate::messages::ConnToDaemonMsg,
     crate::messages::ConnToClientMsg,
-    crate::messages::GridMsg,
     crate::messages::ImageMsg,
     crate::messages::SessionToClientMsg,
     crate::messages::OpsToClientMsg,
@@ -394,6 +409,12 @@ mod tests {
             &ssh(MAX_RETARGET_DESCRIPTOR_BYTES),
             &ssh(MAX_RETARGET_DESCRIPTOR_BYTES + 1),
         );
+
+        let output = |n: usize| GridMsg::CommandOutput {
+            text: "a".repeat(n),
+            omitted: crate::messages::OmittedOutput::None,
+        };
+        assert_pair(&output(MAX_ANNOUNCE_BYTES), &output(MAX_ANNOUNCE_BYTES + 1));
     }
 
     /// At the limit: sends and decodes. One past: refused by both,

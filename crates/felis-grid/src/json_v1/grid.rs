@@ -7,8 +7,9 @@ use crate::StyleTable;
 use felis_protocol::RowPayload;
 use felis_protocol::kitty_keyboard::KittyKbdFlags;
 use felis_protocol::messages::{
-    AttentionSource, ClipboardSelection, ClipboardWrite, CursorStyle, GridMsg, ModifyOtherKeys,
-    MouseProtocol, PaletteAction, PromptKind, ScrollDirection, ThemeAction, ThemeChannel,
+    AttentionSource, ClipboardSelection, ClipboardWrite, CursorStyle, Directed as _, GridMsg,
+    ModifyOtherKeys, MouseProtocol, PaletteAction, PromptKind, ScrollDirection, ThemeAction,
+    ThemeChannel,
 };
 
 /// Every clipboard selector this build defines.
@@ -416,6 +417,10 @@ impl TryFrom<GridMsg> for GridJson {
                 write: write.into(),
             },
             GridMsg::CycleEnd => Self::CycleEnd,
+            // A new variant inside `felis_json: 1` is a format break.
+            ref outside @ GridMsg::CommandOutput { .. } => {
+                return Err(JsonError::Outside(outside.variant()));
+            }
         })
     }
 }
@@ -531,6 +536,18 @@ impl TryFrom<GridJson> for GridMsg {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_command_output_is_refused_as_outside_the_format() {
+        let msg = GridMsg::CommandOutput {
+            text: "out".to_owned(),
+            omitted: felis_protocol::messages::OmittedOutput::None,
+        };
+        assert!(matches!(
+            GridJson::try_from(msg),
+            Err(JsonError::Outside(_))
+        ));
+    }
 
     /// A selector this build does not define must not decode as the
     /// selection with that bit dropped, which would re-encode as a

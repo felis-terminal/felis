@@ -125,6 +125,9 @@ struct ShellPrompt {
     /// prompt sharing its first row with output that lacked a final
     /// newline cannot be blanked without erasing that output.
     start: Option<u64>,
+    /// Where the open command's output began: set by every `C`, taken
+    /// by `D`.
+    output_start: Option<command_output::OutputStart>,
 }
 
 impl ShellPrompt {
@@ -135,6 +138,7 @@ impl ShellPrompt {
             at_prompt: false,
             redraw: PromptRedraw::Full,
             start: None,
+            output_start: None,
         }
     }
 
@@ -274,6 +278,12 @@ pub enum PtyEffect {
     PromptStarted,
     /// A terminated `ConEmu` `OSC 9 ; 4` report; `None` clears.
     TerminalProgress(felis_vt::progress::ProgressReport),
+    /// The text of a finished command's output, cut at its primary-screen
+    /// `OSC 133 ; D` while [`Grid::set_capture_command_output`] is on.
+    CommandOutput {
+        text: String,
+        omitted: felis_protocol::messages::OmittedOutput,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -290,6 +300,7 @@ pub enum ProgramStatusEffect {
 /// capture --ansi`, and the host-terminal clients.
 pub mod ansi;
 mod cluster_table;
+mod command_output;
 mod damage;
 mod editing;
 pub mod image_layout;
@@ -330,6 +341,7 @@ pub use ansi::{
 #[doc(hidden)]
 pub use cluster_table::CLUSTER_TABLE_CAP;
 pub use cluster_table::ClusterTable;
+pub use command_output::{MAX_ANNOUNCE_BYTES, MAX_ANNOUNCE_ROWS};
 pub use damage::Damage;
 #[doc(hidden)]
 pub use link_table::LINK_TABLE_BYTE_CAP;
@@ -703,6 +715,11 @@ pub struct Grid {
     /// `prompt_marks_pruned + i`. Saturating.
     prompt_marks_pruned: u64,
     shell_prompt: ShellPrompt,
+    /// Set by the daemon while a window wants finished commands' output
+    /// ([`PtyEffect::CommandOutput`]); not VT state, so RIS keeps it and
+    /// a restoring daemon sets its own.
+    #[cfg_attr(feature = "state-dump", serde(skip))]
+    capture_command_output: bool,
     /// Cumulative rows ever pushed into scrollback: the absolute-line
     /// origin for [`PromptMark`] (docs/explanation/data-model/scrollback.md).
     /// Never drained (contrast [`Self::scrolled_into_scrollback`]).
@@ -1075,6 +1092,7 @@ impl Grid {
             prompt_marks: Vec::new(),
             prompt_marks_pruned: 0,
             shell_prompt: ShellPrompt::new(),
+            capture_command_output: false,
             scrollback_total_pushed: 0,
             history_epoch: 0,
             xterm_save_slots: HashMap::new(),
@@ -1355,6 +1373,8 @@ impl Grid {
                 .prompt_marks_pruned
                 .saturating_add(u64::try_from(keep_from).unwrap_or(u64::MAX));
         }
+        self.shell_prompt
+            .evict_output_start_below(oldest_retained, self.screen.cols);
     }
 
     #[must_use]
@@ -2264,6 +2284,10 @@ impl Grid {
                     base_abs.saturating_add(u64::try_from(new_line_start[li]).unwrap_or(u64::MAX));
             }
         }
+        self.shell_prompt
+            .remap_output_start(base_abs, &continued, |j| {
+                line_of_row.get(j).map(|&li| new_line_start[li])
+            });
         self.prune_evicted_marks();
 
         self.screen.retrack_geometry(rows, cols);

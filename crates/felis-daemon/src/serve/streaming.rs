@@ -25,8 +25,8 @@ use crate::graphics::ImageEvent;
 /// Replay the side-effects the parse queued into the grid: query and
 /// graphics responses back to the PTY, placement shifts and evictions,
 /// alt-screen save/restore. Never touches a subscriber: it leaves the
-/// grid and `session.image_events` / `session.scroll_ops` for the
-/// session task to fan out.
+/// grid and `session.image_events` / `session.scroll_ops` /
+/// `session.command_outputs` for the session task to fan out.
 pub(crate) fn drain_effects(
     session: &mut crate::pool::Session,
     core: &mut crate::pool::ParseCore,
@@ -195,6 +195,9 @@ fn replay_effects(
                 session.terminal_progress = None;
             }
             PtyEffect::TerminalProgress(report) => session.terminal_progress = report,
+            PtyEffect::CommandOutput { text, omitted } => session
+                .command_outputs
+                .push(GridMsg::CommandOutput { text, omitted }),
         }
     }
 }

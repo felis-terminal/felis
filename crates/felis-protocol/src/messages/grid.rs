@@ -202,6 +202,15 @@ pub enum GridMsg {
     /// (`docs/reference/ipc.md` "Grid (kind = 2)"). An empty cycle
     /// ships nothing at all, this marker included.
     CycleEnd,
+    /// The output of one finished command (`OSC 133` `C` to `D`), sent
+    /// only to a subscriber that enabled
+    /// [`InputMsg::AnnounceOutput`](super::InputMsg::AnnounceOutput).
+    /// An event, not state: no rehydrate burst replays it.
+    CommandOutput {
+        /// At most [`MAX_ANNOUNCE_BYTES`](super::MAX_ANNOUNCE_BYTES).
+        text: String,
+        omitted: OmittedOutput,
+    },
 }
 
 impl Directed for GridMsg {
@@ -230,6 +239,7 @@ impl Directed for GridMsg {
             Self::PaletteColor { .. } => 18,
             Self::PaletteResetAll => 19,
             Self::CycleEnd => 20,
+            Self::CommandOutput { .. } => 21,
         }
     }
 }
@@ -240,6 +250,20 @@ pub struct ClipboardWrite {
     pub selection: ClipboardSelection,
     /// Decoded bytes (post-base64); the spec does not constrain charset.
     pub data: Vec<u8>,
+}
+
+/// How much of a command's output [`GridMsg::CommandOutput`] leaves out
+/// of its `text`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum OmittedOutput {
+    /// The text is the whole output.
+    None,
+    /// This many whole screen rows were dropped from the start, and
+    /// nothing else.
+    Rows(u32),
+    /// Output was lost in an amount the daemon cannot count: the start
+    /// left scrollback, or the youngest row was itself cut.
+    Unknown,
 }
 
 /// What made a [`GridMsg::Attention`] fire.
@@ -610,6 +634,26 @@ pub(crate) mod tests {
                     selection: ClipboardSelection::empty(),
                     data: vec![],
                 },
+            },
+            GridMsg::CommandOutput {
+                text: "total 0\nREADME.md".into(),
+                omitted: OmittedOutput::None,
+            },
+            GridMsg::CommandOutput {
+                text: String::new(),
+                omitted: OmittedOutput::None,
+            },
+            GridMsg::CommandOutput {
+                text: "tail".into(),
+                omitted: OmittedOutput::Rows(0),
+            },
+            GridMsg::CommandOutput {
+                text: "\u{e9}".repeat(4),
+                omitted: OmittedOutput::Rows(u32::MAX),
+            },
+            GridMsg::CommandOutput {
+                text: "a".repeat(crate::messages::MAX_ANNOUNCE_BYTES),
+                omitted: OmittedOutput::Unknown,
             },
         ]
     }

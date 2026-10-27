@@ -53,7 +53,7 @@ import "google/protobuf/timestamp.proto";
 // below and asserts the Rust values equal them, so editing one here
 // without the other fails the build; prose-check: ignore):
 //   PROTOCOL_MAJOR = 1
-//   PROTOCOL_MINOR = 2
+//   PROTOCOL_MINOR = 3
 //
 // Kind or arm: a frame kind is a *surface*, so a message addressing a
 // surface no existing kind owns earns a kind, as does one whose
@@ -1104,6 +1104,16 @@ message InputMsg {
       },
       (felis.v1.field_since) = {minor: 2}
     ];
+    InputAnnounceOutput announce_output = 12 [
+      (felis.v1.arm) = {
+        direction: DIRECTION_TO_DAEMON
+        correlation: CORRELATION_UNCORRELATED
+        modes: MODE_WINDOW
+        modes: MODE_OPS
+        phases: PHASE_ATTACHED
+      },
+      (felis.v1.field_since) = {minor: 3}
+    ];
   }
 }
 
@@ -1153,6 +1163,14 @@ message InputResize {
 // to one session-level fact (focused iff any window is).
 message InputFocusChange {
   bool focused = 1;
+}
+
+// This window's opt-in to GridCommandOutput: while enabled, the daemon
+// ships the output of each command that finishes on the session to
+// this subscriber. Per subscriber, like InputFocusChange; a fresh
+// attachment starts disabled.
+message InputAnnounceOutput {
+  bool enabled = 1;
 }
 
 // OS color-scheme report. true = dark, false = light.
@@ -1352,8 +1370,44 @@ message GridMsg {
       modes: MODE_OPS
       phases: PHASE_ATTACHED
     }];
+    GridCommandOutput command_output = 22 [
+      (felis.v1.arm) = {
+        direction: DIRECTION_TO_CLIENT
+        correlation: CORRELATION_UNCORRELATED
+        modes: MODE_WINDOW
+        modes: MODE_OPS
+        phases: PHASE_ATTACHED
+      },
+      (felis.v1.field_since) = {minor: 3}
+    ];
   }
 }
+
+// The output of one finished command (OSC 133 C to D), sent only to a
+// subscriber that enabled InputAnnounceOutput. An event, not state: a
+// rehydrate burst replays none.
+message GridCommandOutput {
+  // The output's text, at most MAX_ANNOUNCE_BYTES (65 536) of UTF-8.
+  string text = 1;
+  // How much earlier output the cap left out of text. Explicit rather
+  // than "absent means nothing omitted", so a truncated value fails the
+  // decode.
+  oneof omitted {
+    OmittedNothing nothing = 2;
+    // Whole screen rows dropped from the start of the output; nothing
+    // else was lost.
+    uint32 rows = 3;
+    // Output was lost in an amount the daemon cannot count: the start
+    // left scrollback, or the youngest row was itself cut.
+    OmittedUnknown unknown = 4;
+  }
+}
+
+// The nothing arm of GridCommandOutput.omitted.
+message OmittedNothing {}
+
+// The unknown arm of GridCommandOutput.omitted.
+message OmittedUnknown {}
 
 // End of one pull-paced compose cycle: every message composed for that
 // pull precedes it. Empty: the cycle it closes is the one the ordered

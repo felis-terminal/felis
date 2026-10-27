@@ -412,6 +412,9 @@ impl ShadowScreen {
             // observers, not the shadow
             // (docs/reference/protocols/notifications.md).
             GridMsg::Attention { .. } => {}
+            // An event for the window's accessibility tree, read by the
+            // App after `apply`.
+            GridMsg::CommandOutput { .. } => {}
             GridMsg::ModeFlags {
                 bracketed_paste,
                 alt_screen,

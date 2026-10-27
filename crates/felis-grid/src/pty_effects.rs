@@ -23,12 +23,19 @@ const _: () = assert!(APC_OUTBOX_BYTES >= felis_vt::APC_BUFFER_LIMIT);
 /// the daemon's state must match what the producer sent.
 pub const STATUS_OUTBOX_YIELD: usize = 64;
 
+/// [`CommandOutput`](crate::PtyEffect::CommandOutput) effects buffered
+/// between drains before the parse yields; with
+/// [`MAX_ANNOUNCE_BYTES`](crate::MAX_ANNOUNCE_BYTES) this bounds the text
+/// waiting in the queue. None is dropped.
+pub const COMMAND_OUTPUT_YIELD: usize = 4;
+
 #[derive(Debug, Clone, Default)]
 pub struct PtyEffectQueue {
     effects: Vec<PtyEffect>,
     apc_len: usize,
     apc_bytes: usize,
     status_len: usize,
+    command_output_len: usize,
 }
 
 impl PartialEq for PtyEffectQueue {
@@ -54,6 +61,9 @@ impl PtyEffectQueue {
             PtyEffect::ProgramStatus(_) | PtyEffect::PromptStarted | PtyEffect::TerminalProgress(_)
         ) {
             self.status_len += 1;
+        }
+        if matches!(effect, PtyEffect::CommandOutput { .. }) {
+            self.command_output_len += 1;
         }
         self.effects.push(effect);
         true
@@ -169,11 +179,16 @@ impl PtyEffectQueue {
         self.status_len >= STATUS_OUTBOX_YIELD
     }
 
-    /// The only drain; it refills both budgets.
+    pub const fn command_output_budget_spent(&self) -> bool {
+        self.command_output_len >= COMMAND_OUTPUT_YIELD
+    }
+
+    /// The only drain; it refills every budget.
     pub fn take(&mut self) -> Vec<PtyEffect> {
         self.apc_len = 0;
         self.apc_bytes = 0;
         self.status_len = 0;
+        self.command_output_len = 0;
         std::mem::take(&mut self.effects)
     }
 
@@ -223,11 +238,16 @@ impl<'de> serde::Deserialize<'de> for PtyEffectQueue {
                 )
             })
             .count();
+        let command_output_len = effects
+            .iter()
+            .filter(|effect| matches!(effect, PtyEffect::CommandOutput { .. }))
+            .count();
         Ok(Self {
             effects,
             apc_len,
             apc_bytes,
             status_len,
+            command_output_len,
         })
     }
 }

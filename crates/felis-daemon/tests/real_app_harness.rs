@@ -206,6 +206,7 @@ impl RealAppSession {
                         GridMsg::Scrolled { .. } => ("Scrolled", 0),
                         GridMsg::Size { .. } => ("Size", 0),
                         GridMsg::CycleEnd => ("CycleEnd", 0),
+                        GridMsg::CommandOutput { .. } => ("CommandOutput", 0),
                     };
                     *c.by_variant.entry(name).or_insert(0) += 1;
                     c.total_dirty_rows += dirty_inc;

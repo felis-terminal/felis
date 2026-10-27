@@ -22,8 +22,8 @@ pub(crate) use arm::{arms_are_uniform, fold_modes, fold_phases};
 pub use conn::{ConnToClientMsg, ConnToDaemonMsg, RefusalReason};
 pub use grid::{
     AttentionSource, ClipboardSelection, ClipboardWrite, CursorStyle, GridMsg, ModifyOtherKeys,
-    MouseProtocol, PaletteAction, PromptKind, ScrollDirection, ThemeAction, ThemeChannel,
-    ViewportAnchor,
+    MouseProtocol, OmittedOutput, PaletteAction, PromptKind, ScrollDirection, ThemeAction,
+    ThemeChannel, ViewportAnchor,
 };
 pub use image::{
     ImageFormat, ImageMsg, ImageTarget, MAX_IMAGE_CHUNK_PAYLOAD, RequestedExtent, SourceRect,
@@ -33,11 +33,11 @@ pub use input::{
     MouseButton, MouseEvent, NamedKey, PromptJump,
 };
 pub use limits::{
-    MAX_BRIDGE_LINE_BYTES, MAX_IMAGE_BYTES, MAX_IMAGE_FRAMES, MAX_KEY_CHARACTER_BYTES,
-    MAX_KEY_TEXT_BYTES, MAX_PASTE_BYTES, MAX_RAW_INPUT_BYTES, MAX_REGION_REPLY_BYTES,
-    MAX_RETARGET_DESCRIPTOR_BYTES, MAX_SEARCH_PATTERN_BYTES, MAX_SESSION_IMAGE_BYTES,
-    MAX_SPAWN_ARGV_BYTES, MAX_SPAWN_ARGV_ENTRIES, MAX_SPAWN_PATH_BYTES, Validate, check_claim,
-    check_count, check_limit,
+    MAX_ANNOUNCE_BYTES, MAX_BRIDGE_LINE_BYTES, MAX_IMAGE_BYTES, MAX_IMAGE_FRAMES,
+    MAX_KEY_CHARACTER_BYTES, MAX_KEY_TEXT_BYTES, MAX_PASTE_BYTES, MAX_RAW_INPUT_BYTES,
+    MAX_REGION_REPLY_BYTES, MAX_RETARGET_DESCRIPTOR_BYTES, MAX_SEARCH_PATTERN_BYTES,
+    MAX_SESSION_IMAGE_BYTES, MAX_SPAWN_ARGV_BYTES, MAX_SPAWN_ARGV_ENTRIES, MAX_SPAWN_PATH_BYTES,
+    Validate, check_claim, check_count, check_limit,
 };
 pub use notify::{NotifyToClientMsg, NotifyToDaemonMsg};
 pub use ops::{
@@ -892,6 +892,7 @@ pub(crate) mod tests {
         "KeyId.key: named function character other",
         "Correlation.id: request_id stream_id",
         "ConnError.subject: request_id stream_id",
+        "GridCommandOutput.omitted: nothing rows unknown",
         "GridThemeColor.action: set reset",
         "GridPaletteColor.action: set reset",
         "ImageHeader.target: image frame",
