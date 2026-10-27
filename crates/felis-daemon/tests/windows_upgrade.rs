@@ -395,10 +395,16 @@ fn a_failed_hand_over_leaves_the_daemon_serving(
             );
             let before = lines(&ticks);
             wait_for_more_lines(&ticks, before).await;
-            assert!(
-                after.spawn_session(SpawnArgs::default()).await.is_ok(),
-                "the daemon admits creates again"
-            );
+            let created = after
+                .spawn_session(SpawnArgs::default())
+                .await
+                .expect("the daemon admits creates again");
+            // A daemon killed while a console host is still starting
+            // leaves that host and its shell running.
+            after
+                .destroy_session(felis_protocol::SessionHex(created.id).to_string())
+                .await
+                .unwrap();
         });
     });
 }
