@@ -11,9 +11,14 @@ use std::{
     sync::{Arc, Mutex, OnceLock, PoisonError},
 };
 
-use skrifa::raw::{
-    FontData, FontRead,
-    tables::cmap::{Cmap, CmapSubtable, MapVariant},
+use skrifa::{
+    MetadataProvider,
+    instance::{LocationRef, Size},
+    raw::{
+        FontData, FontRead,
+        tables::cmap::{Cmap, CmapSubtable, MapVariant},
+        types::F2Dot14,
+    },
 };
 pub use swash::GlyphId;
 use swash::{
@@ -100,6 +105,7 @@ impl FontStyle {
 
 pub struct Font {
     bytes: FontBytes,
+    index: u32,
     offset: u32,
     /// Generated once at load: swash keys its per-font shape and scale
     /// caches on this, so a fresh key per `font_ref()` call would rebuild
@@ -201,6 +207,7 @@ impl Font {
         };
         let font = Self {
             bytes,
+            index: face_index,
             offset,
             key: swash::CacheKey::new(),
             color,
@@ -242,6 +249,7 @@ impl Font {
     fn with_coords(&self, coords: Vec<NormalizedCoord>, position: Vec<(swash::Tag, f32)>) -> Self {
         Self {
             bytes: self.bytes.clone(),
+            index: self.index,
             offset: self.offset,
             key: swash::CacheKey::new(),
             color: self.color,
@@ -335,13 +343,21 @@ impl Font {
     /// `None` when the face does not map `c`.
     #[must_use]
     pub fn advance_px(&self, c: char, px: f32) -> Option<f32> {
-        let face = self.font_ref();
-        let glyph_id = face.charmap().map(c);
-        (glyph_id != 0).then(|| {
-            face.glyph_metrics(&self.coords)
-                .scale(px)
-                .advance_width(glyph_id)
-        })
+        let glyph_id = self.font_ref().charmap().map(c);
+        if glyph_id == 0 {
+            return None;
+        }
+        self.advance_width(glyph_id, px)
+    }
+
+    /// swash reads a varied advance from `HVAR` alone; skrifa falls back
+    /// to `gvar`'s phantom points, which a face without `HVAR` (Monaspace's
+    /// variable builds) varies its width through.
+    fn advance_width(&self, glyph_id: GlyphId, px: f32) -> Option<f32> {
+        let font = skrifa::FontRef::from_index(self.bytes.as_ref().as_ref(), self.index).ok()?;
+        let coords: Vec<F2Dot14> = self.coords.iter().map(|&c| F2Dot14::from_bits(c)).collect();
+        font.glyph_metrics(Size::new(px), LocationRef::new(&coords))
+            .advance_width(glyph_id.into())
     }
 
     /// The glyph the face's cmap format 14 subtable names for `base`
@@ -430,14 +446,7 @@ impl Font {
     pub fn cell_metrics(&self, px: f32) -> CellMetrics {
         let face = self.font_ref();
         let metrics = face.metrics(&self.coords).scale(px);
-        let glyph_id = face.charmap().map('M');
-        let width = if glyph_id != 0 {
-            face.glyph_metrics(&self.coords)
-                .scale(px)
-                .advance_width(glyph_id)
-        } else {
-            px * 0.6
-        };
+        let width = self.advance_px('M', px).unwrap_or(px * 0.6);
         CellMetrics::from_scaled(width, metrics.ascent, metrics.descent, metrics.leading)
     }
 }
@@ -3428,6 +3437,27 @@ mod tests {
         assert_eq!(
             axis_coord(&light, *b"wght"),
             design_value(&light, WGHT, 300.0)
+        );
+    }
+
+    /// The pinned variable face has no `HVAR`; its `wdth` axis varies the
+    /// advance through `gvar` phantom points alone.
+    #[cfg(not(windows))]
+    #[test]
+    fn a_width_axis_without_hvar_widens_the_cell() {
+        let files = pinned_files(&["truetype/Monaspace Neon Var.ttf"]);
+        let mut db = FileSet::default();
+        db.add_file(&files[0]).expect("the variable face reads");
+        let default = Font::try_load_with(&db, "Monaspace Neon Var").expect("the face loads");
+        let wide = default
+            .regular_view(None, &[setting(*b"wdth", 125.0)])
+            .expect("wdth moves");
+        let (narrow, wide) = (default.cell_metrics(20.0), wide.cell_metrics(20.0));
+        assert!(
+            wide.width > narrow.width,
+            "{} must exceed {}",
+            wide.width,
+            narrow.width
         );
     }
 
