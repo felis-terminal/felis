@@ -74,6 +74,8 @@ impl FontInputs {
             &self.features,
             &self.fallbacks,
             &felis_shaping::StyleFaces {
+                regular_weight: None,
+                regular_axes: &[],
                 bold: &self.bold,
                 italic: &self.italic,
                 bold_italic: &self.bold_italic,

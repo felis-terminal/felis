@@ -636,8 +636,8 @@ impl FaceProvider for Fontconfig {
         Some(self.record(found))
     }
 
-    fn default_monospace(&self) -> Result<(usize, String), ShapingError> {
-        let query = self.query("monospace", REGULAR_WEIGHT, false);
+    fn default_monospace(&self, weight: u16) -> Result<(usize, String), ShapingError> {
+        let query = self.query("monospace", weight, false);
         let face = self
             .best_match(&query)
             .and_then(|m| self.face_of(m.raw))
@@ -1061,7 +1061,9 @@ ENDFONT
             &StyleFaces::default(),
         )
         .expect("the monospace face loads");
-        let (_, monospace) = fc.default_monospace().expect("a monospace face");
+        let (_, monospace) = fc
+            .default_monospace(REGULAR_WEIGHT)
+            .expect("a monospace face");
         assert!(stack.primary().display_name().starts_with(&monospace));
     }
 
@@ -1143,7 +1145,9 @@ ENDFONT
         ) else {
             return;
         };
-        let (_, family) = fc.default_monospace().expect("a monospace face");
+        let (_, family) = fc
+            .default_monospace(REGULAR_WEIGHT)
+            .expect("a monospace face");
         assert_eq!(family, "Monaspace Xenon");
     }
 

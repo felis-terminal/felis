@@ -183,6 +183,8 @@ impl RendererConfig {
     #[must_use]
     pub const fn style_faces(&self) -> StyleFaces<'_> {
         StyleFaces {
+            regular_weight: None,
+            regular_axes: &[],
             bold: &self.font_bold,
             italic: &self.font_italic,
             bold_italic: &self.font_bold_italic,

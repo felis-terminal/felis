@@ -22,8 +22,8 @@ use swash::{FontDataRef, StringId, Style};
 use tracing::debug;
 
 use super::{
-    FaceProvider, FaceSource, MONOSPACE_FALLBACK_FAMILIES, REGULAR_WEIGHT, ResolvedFace,
-    SystemFallback, ascii_is_fixed_pitch, closest_style, fallback_language,
+    FaceProvider, FaceSource, MONOSPACE_FALLBACK_FAMILIES, ResolvedFace, SystemFallback,
+    ascii_is_fixed_pitch, closest_style, fallback_language,
 };
 use crate::{
     FaceStyle, FontStyle, InstalledFamily, ShapingError, WGHT, has_italic_token, map_face_file,
@@ -201,7 +201,7 @@ impl FaceProvider for CoreText {
     }
 
     /// The user's fixed-pitch font, Menlo unless they changed it.
-    fn default_monospace(&self) -> Result<(usize, String), ShapingError> {
+    fn default_monospace(&self, weight: u16) -> Result<(usize, String), ShapingError> {
         // SAFETY: `None` asks for the user's own language.
         let font = unsafe {
             CTFont::new_ui_font_for_language(CTFontUIFontType::UserFixedPitch, 0.0, None)
@@ -212,7 +212,7 @@ impl FaceProvider for CoreText {
             .map(String::as_str)
             .chain(MONOSPACE_FALLBACK_FAMILIES.iter().copied())
             .find_map(|family| {
-                let id = self.find_face(family, REGULAR_WEIGHT, false)?;
+                let id = self.find_face(family, weight, false)?;
                 Some((id, family.to_owned()))
             })
             .ok_or(ShapingError::NoFont)
@@ -463,7 +463,7 @@ fn family_names(path: &Path, index: u32) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{BOLD_WEIGHT, FontStack, StyleFaces};
+    use crate::{BOLD_WEIGHT, FontStack, REGULAR_WEIGHT, StyleFaces};
 
     #[test]
     fn a_listed_family_resolves_and_an_unknown_one_does_not() {
@@ -509,7 +509,7 @@ mod tests {
     fn the_default_monospace_is_a_fixed_pitch_face() {
         let ct = CoreText::system();
         let (id, family) = ct
-            .default_monospace()
+            .default_monospace(REGULAR_WEIGHT)
             .expect("macOS has a fixed-pitch font");
         let face = ct.face(id).expect("recorded");
         let data = map_face_file(&face.path).expect("the face maps");

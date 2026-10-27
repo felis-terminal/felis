@@ -1114,6 +1114,7 @@ fn renderer_config_from_full_config_carries_every_field_through() {
             FaceSpec {
                 family: Some("Noto Color Emoji".to_owned()),
                 features: Some(Vec::new()),
+                ..FaceSpec::default()
             },
         ],
     );

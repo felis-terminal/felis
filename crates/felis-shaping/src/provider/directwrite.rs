@@ -191,11 +191,11 @@ impl FaceProvider for DirectWrite {
 
     /// DirectWrite names no default monospace face; Windows Terminal's
     /// is tried first.
-    fn default_monospace(&self) -> Result<(usize, String), ShapingError> {
+    fn default_monospace(&self, weight: u16) -> Result<(usize, String), ShapingError> {
         std::iter::once(DEFAULT_MONOSPACE)
             .chain(MONOSPACE_FALLBACK_FAMILIES.iter().copied())
             .find_map(|family| {
-                let id = self.find_face(family, REGULAR_WEIGHT, false)?;
+                let id = self.find_face(family, weight, false)?;
                 Some((id, family.to_owned()))
             })
             .ok_or(ShapingError::NoFont)
@@ -621,7 +621,7 @@ mod tests {
     fn the_default_monospace_is_a_fixed_pitch_face_on_disk() {
         let dw = DirectWrite::system().expect("DirectWrite loads");
         let (id, family) = dw
-            .default_monospace()
+            .default_monospace(REGULAR_WEIGHT)
             .expect("Windows has a fixed-pitch font");
         let face = dw.face(id).expect("recorded");
         let data = map_face_file(&face.path).expect("the face maps");
@@ -634,7 +634,7 @@ mod tests {
     fn a_fallback_answer_loads_and_covers_the_scalar() {
         let dw = DirectWrite::system().expect("DirectWrite loads");
         let (id, _) = dw
-            .default_monospace()
+            .default_monospace(REGULAR_WEIGHT)
             .expect("Windows has a fixed-pitch font");
         let fallback = dw.system_fallback(id).expect("DirectWrite has a fallback");
         for query in ["\u{23FA}", "\u{1F600}\u{FE0F}", "\u{6F22}", "\u{0915}"] {
@@ -661,7 +661,7 @@ mod tests {
             return;
         }
         let (id, _) = dw
-            .default_monospace()
+            .default_monospace(REGULAR_WEIGHT)
             .expect("Windows has a fixed-pitch font");
         let answer = |language: &str| {
             let fallback = Fallback {

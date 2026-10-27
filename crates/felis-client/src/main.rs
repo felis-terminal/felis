@@ -888,6 +888,7 @@ fn face_spec(c: &config::FontStyleConfig) -> FaceSpec {
     FaceSpec {
         family: c.family.clone(),
         features: c.features.clone(),
+        ..FaceSpec::default()
     }
 }
 
