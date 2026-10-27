@@ -801,8 +801,9 @@ next window; and systemd's default `KillMode=control-group`, which felis does no
 makes to the manager is bounded, so a manager that stops answering delays a window by seconds rather than holding it.
 Every other launcher (a login-session shell, macOS, Windows, a host without systemd), and any hand-off that does not
 yield a reachable daemon, starts it as a detached child instead, which stays in the launching process's control group.
-On Windows every auto-spawned daemon, the relay's included, gets a hidden console of its own, so neither the launching
-console closing nor a Ctrl+C typed there reaches it.
+On Unix that child leads a process group of its own, so neither a Ctrl+C typed in the launching terminal nor that
+terminal closing reaches it. On Windows every auto-spawned daemon, the relay's included, gets a hidden console of its
+own, so neither the launching console closing nor a Ctrl+C typed there reaches it.
 
 The two kinds then differ in how long the process lives, which is the host's policy rather than anything felis holds. A
 transient unit lives as long as `user@<uid>.service`, which logind stops `UserStopDelaySec` (10 s by default) after the

@@ -113,6 +113,13 @@ fn daemon_command(program: &OsStr, socket: &Path) -> std::process::Command {
         // endpoint to the daemon it forks: `serve` acts on the variable,
         // and the manager would read this daemon as that unit's readiness.
         .env_remove("NOTIFY_SOCKET");
+    // A daemon left in the launcher's process group takes the Ctrl+C and
+    // hangup its terminal delivers to that group.
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt as _;
+        command.process_group(0);
+    }
     #[cfg(windows)]
     detach_from_console(&mut command);
     command
@@ -272,6 +279,28 @@ mod tests {
                 .get_envs()
                 .any(|(key, value)| key == "NOTIFY_SOCKET" && value.is_none()),
             "the fork must clear NOTIFY_SOCKET, not pass the launcher's",
+        );
+    }
+
+    #[test]
+    fn the_forked_daemon_leads_its_own_process_group() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let tmp = tempfile::tempdir().unwrap();
+        let program = tmp.path().join("felis-daemon");
+        std::fs::write(&program, "#!/bin/sh\nexec sleep 30\n").unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let mut child = daemon_command(program.as_os_str(), &tmp.path().join("daemon.sock"))
+            .spawn()
+            .unwrap();
+        let pid = rustix::process::Pid::from_child(&child);
+        let group = rustix::process::getpgid(Some(pid));
+        child.kill().unwrap();
+        child.wait().unwrap();
+        assert_eq!(
+            group.unwrap(),
+            pid,
+            "the daemon must not share the launcher's (the terminal's) process group",
         );
     }
 
