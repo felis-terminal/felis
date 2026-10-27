@@ -82,6 +82,7 @@ family = "JetBrainsMono Nerd Font"
 # Logical pixel size for cell metrics and rasterization.
 # Clamped to [4.0, 72.0]. Default: 14.0.
 # Either TOML spelling is accepted: 14 and 14.0 are the same size.
+# From a point size: ×4/3 on Linux and Windows, ×1 on macOS.
 size_px = 14
 
 # Factors on the cell width and height the primary face's metrics give.
