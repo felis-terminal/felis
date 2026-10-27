@@ -8,6 +8,8 @@
 pub mod driver;
 pub mod env;
 pub mod framing;
+#[cfg(windows)]
+pub mod handover;
 #[cfg(unix)]
 pub mod inherit;
 pub mod local;
