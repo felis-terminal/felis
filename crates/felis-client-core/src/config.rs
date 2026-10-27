@@ -966,6 +966,13 @@ pub struct FontConfig {
     /// (the Ctrl+Wheel zoom band) with a warning; non-positive,
     /// non-finite, and omitted values use the built-in default.
     pub size_px: Option<f32>,
+    /// Factor on the cell width the font's metrics give; the extra space
+    /// is split evenly left and right of each glyph. Clamped into
+    /// `[0.5, 3.0]` with a warning; omitted or NaN means 1.0.
+    pub cell_width_scale: Option<f32>,
+    /// Factor on the cell height, split evenly above and below each
+    /// glyph, like `cell_width_scale`.
+    pub cell_height_scale: Option<f32>,
     /// Explicit per-grapheme fallback chain, tried in declared order
     /// (missing families warn and are skipped) before the host's fallback:
     /// fontconfig's on Linux, the platform's per-character lookup on macOS
@@ -1269,6 +1276,9 @@ impl Default for ClipboardConfig {
 pub const MIN_FONT_SIZE_LOGICAL_PX: f32 = 4.0;
 pub const MAX_FONT_SIZE_LOGICAL_PX: f32 = 72.0;
 
+pub const MIN_CELL_SCALE: f32 = 0.5;
+pub const MAX_CELL_SCALE: f32 = 3.0;
+
 pub(super) enum FontSizeIssue {
     NotPositiveFinite(f32),
     Clamped { raw: f32, clamped: f32 },
@@ -1292,6 +1302,30 @@ impl FontConfig {
             return None;
         }
         Some(raw.clamp(MIN_FONT_SIZE_LOGICAL_PX, MAX_FONT_SIZE_LOGICAL_PX))
+    }
+
+    /// `[width, height]` factors for the renderer's cell, 1.0 where unset.
+    #[must_use]
+    pub fn cell_scale(&self) -> [f32; 2] {
+        [self.cell_width_scale, self.cell_height_scale].map(|raw| match raw {
+            Some(raw) if !raw.is_nan() => raw.clamp(MIN_CELL_SCALE, MAX_CELL_SCALE),
+            _ => 1.0,
+        })
+    }
+
+    pub(super) fn cell_scale_issues(&self) -> [(&'static str, Option<RangeIssue>); 2] {
+        let issue = |raw: Option<f32>| {
+            RangeIssue::detect(
+                f64::from(raw?),
+                f64::from(MIN_CELL_SCALE),
+                f64::from(MAX_CELL_SCALE),
+                1.0,
+            )
+        };
+        [
+            ("cell_width_scale", issue(self.cell_width_scale)),
+            ("cell_height_scale", issue(self.cell_height_scale)),
+        ]
     }
 
     pub(super) fn font_size_issue(&self) -> Option<FontSizeIssue> {
@@ -2926,6 +2960,45 @@ mod tests {
         let warning = diagnostics.warnings().next().expect("one warning");
         assert_eq!(warning.kind, DiagnosticKind::Value);
         assert_eq!(warning.key.as_deref(), Some("font.size_px"));
+    }
+
+    #[test]
+    fn cell_scale_defaults_to_one_and_reads_each_axis() {
+        assert_eq!(EffectiveConfig::default().font.cell_scale(), [1.0, 1.0]);
+        let document = ConfigDocument::parse("[font]\ncell_height_scale = 1.2\n", None).unwrap();
+        let (cfg, diagnostics) = document.resolve("felis");
+        assert_eq!(cfg.font.cell_scale(), [1.0, 1.2]);
+        assert_eq!(diagnostics.warnings().count(), 0);
+    }
+
+    #[test]
+    fn an_out_of_range_cell_scale_clamps_with_a_warning_at_its_own_key() {
+        let document = ConfigDocument::parse(
+            "[font]\ncell_width_scale = 0.1\n[client.felis.font]\ncell_height_scale = 9\n",
+            None,
+        )
+        .unwrap();
+        let (cfg, diagnostics) = document.resolve("felis");
+        assert_eq!(cfg.font.cell_scale(), [MIN_CELL_SCALE, MAX_CELL_SCALE]);
+        let keys: Vec<_> = diagnostics
+            .warnings()
+            .filter_map(|d| d.key.as_deref())
+            .collect();
+        assert_eq!(
+            keys,
+            [
+                "font.cell_width_scale",
+                "client.felis.font.cell_height_scale"
+            ],
+        );
+    }
+
+    #[test]
+    fn a_nan_cell_scale_falls_back_to_one_with_a_warning() {
+        let document = ConfigDocument::parse("[font]\ncell_width_scale = nan\n", None).unwrap();
+        let (cfg, diagnostics) = document.resolve("felis");
+        assert_eq!(cfg.font.cell_scale(), [1.0, 1.0]);
+        assert_eq!(diagnostics.warnings().count(), 1);
     }
 
     #[test]

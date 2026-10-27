@@ -791,7 +791,8 @@ fn apply_window_backdrop(window: &Window, backdrop: Backdrop, transparent: bool)
 /// filled in per window from the scale factor, so the configured logical
 /// baseline is compared on its own in `reload_config`.
 fn font_settings_differ(a: &RendererConfig, b: &RendererConfig) -> bool {
-    a.font_family != b.font_family
+    a.cell_scale != b.cell_scale
+        || a.font_family != b.font_family
         || a.font_fallbacks != b.font_fallbacks
         || a.font_features != b.font_features
         || styled_faces_differ(a, b)
@@ -831,6 +832,13 @@ fn reported_theme_differs(a: &RendererConfig, b: &RendererConfig) -> bool {
         || a.theme_palette != b.theme_palette
 }
 
+/// A reload drops any in-flight zoom, so the renderer is resized
+/// whenever its live size is not the one the reload lands on, an
+/// unchanged `font.size_px` included.
+fn live_font_size_differs(live_logical: f32, reload_logical: f32) -> bool {
+    (live_logical - reload_logical).abs() >= f32::EPSILON
+}
+
 /// What the zoom chords start from and Ctrl+Shift+0 returns to; sanitized
 /// so a NaN or a 200-px typo never reaches the shaper.
 fn configured_font_size_logical_px(cfg: &config::EffectiveConfig) -> Option<f32> {
@@ -850,6 +858,7 @@ fn renderer_config_with(
     RendererConfig {
         font_family: cfg.font.family.clone(),
         font_size_physical_px: None,
+        cell_scale: Some(cfg.font.cell_scale()),
         theme_fg: cfg.theme.foreground.clone(),
         theme_bg: cfg.theme.background.clone(),
         theme_palette: cfg.theme.palette.clone().into_overrides(),

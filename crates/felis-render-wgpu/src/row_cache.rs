@@ -433,6 +433,7 @@ mod tests {
                 size_px: [6, 10],
                 offset_px: [1, 10],
                 is_color: false,
+                fills_cell: false,
             })
         }
 
@@ -655,11 +656,7 @@ mod tests {
             let atlas = Atlas(self.atlas);
             let frame = ShapeFrame::empty();
             let (height, rows) = (self.height, self.screen.rows());
-            let metrics = CellMetrics {
-                width: 8,
-                height,
-                ascent: height - 4,
-            };
+            let metrics = CellMetrics::unscaled(8, height, height - 4);
             let painter = CellPainter::new(&self.screen, metrics, &theme, &atlas, &frame)
                 .with_cursor_visible(self.focused)
                 .with_selection(self.selection)

@@ -333,7 +333,9 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
             .unwrap_or_default();
         let base_sizing = sizing_key_from(sizing).with_style(font_style_of(at.attrs.flags));
         let glyph_scale = sizing_glyph_scale(sizing);
-        let scaled_ascent = self.ascent * glyph_scale;
+        let scaled_ascent = self
+            .metrics
+            .baseline(glyph_scale, sizing_scale_for_layout(sizing));
         let pen = ClusterPen {
             glyphs: self.shape_frame.cluster_slice(start, len),
             base_sizing,
@@ -370,11 +372,14 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
         sizing: Sizing,
     ) -> [f32; 2] {
         let fitted = pen.fit_px > 0;
+        let layout_scale = sizing_scale_for_layout(sizing);
+        let block_cols = cluster_block_cols(self.screen, at.row, at.col);
+        let span_pad = self.span_pad(f32::from(block_cols), layout_scale);
         if !fitted
             && matches!(sizing.halign(), HAlign::Left)
             && matches!(sizing.valign(), VAlign::Top)
         {
-            return [0.0, 0.0];
+            return [span_pad, 0.0];
         }
         let Some([ink_x0, ink_y0, ink_x1, ink_y1]) =
             cluster_ink_box(self.atlas, self.metrics.height, pen)
@@ -383,25 +388,38 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
         };
         let ink_w = ink_x1 - ink_x0;
         let ink_h = ink_y1 - ink_y0;
-        let layout_scale = sizing_scale_for_layout(sizing);
-        let block_w =
-            self.cw * f32::from(cluster_block_cols(self.screen, at.row, at.col)) * layout_scale;
+        let block_w = self.cw * f32::from(block_cols) * layout_scale;
         let block_h = self.ch * layout_scale;
         let centre_x = (block_w - ink_w) / 2.0 - ink_x0;
         let centre_y = (block_h - ink_h) / 2.0 - ink_y0;
+        let [inset_right, inset_bottom] = self.content_insets(layout_scale);
         let shift_x = match sizing.halign() {
             HAlign::Left if fitted => centre_x,
-            HAlign::Left => 0.0,
-            HAlign::Right => block_w - ink_x1,
+            HAlign::Left => span_pad,
+            HAlign::Right => block_w - ink_x1 - inset_right,
             HAlign::Center => centre_x,
         };
         let shift_y = match sizing.valign() {
             VAlign::Top if fitted => centre_y,
             VAlign::Top => 0.0,
-            VAlign::Bottom => block_h - ink_y1,
+            VAlign::Bottom => block_h - ink_y1 - inset_bottom,
             VAlign::Center => centre_y,
         };
         [shift_x, shift_y]
+    }
+
+    /// The slot carries one cell's `pad`; a glyph spanning more cells sits
+    /// in their joint glyph box, which every cell widens by `pad`.
+    fn span_pad(&self, cells: f32, layout_scale: f32) -> f32 {
+        (cells - 1.0).max(0.0) * self.metrics.pad[0] as f32 * layout_scale
+    }
+
+    /// The OSC 66 block's right and bottom padding: never negative, so an
+    /// aligned glyph stays inside its block when a scale shrinks cells.
+    fn content_insets(&self, layout_scale: f32) -> [f32; 2] {
+        self.metrics
+            .trailing_pad()
+            .map(|pad| pad.max(0) as f32 * layout_scale)
     }
 
     fn push_char_cell(
@@ -469,7 +487,7 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
         // swash rasterized against and scales the baseline.
         let layout_scale = sizing_scale_for_layout(sizing);
         let glyph_scale = sizing_glyph_scale(sizing);
-        let scaled_ascent = self.ascent * glyph_scale;
+        let scaled_ascent = self.metrics.baseline(glyph_scale, layout_scale);
         let bitmap_w = slot.size_px[0] as f32;
         let bitmap_h = slot.size_px[1] as f32;
         // `w == 0` falls back to the char's natural cell width.
@@ -480,16 +498,25 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
         };
         let block_w = self.cw * override_w * layout_scale;
         let block_h = self.ch * layout_scale;
+        let span = shape_primary.map_or(override_w, |(_, span_cols)| f32::from(span_cols));
+        let (span_pad, [inset_right, inset_bottom]) = if slot.fills_cell {
+            (0.0, [0.0, 0.0])
+        } else {
+            (
+                self.span_pad(span, layout_scale),
+                self.content_insets(layout_scale),
+            )
+        };
         // `Top` / `Left` are the spec defaults and must reproduce the
         // baseline + left-bearing math exactly.
         let h_offset = match sizing.halign() {
-            HAlign::Left => slot.offset_px[0] as f32,
-            HAlign::Right => block_w - bitmap_w,
+            HAlign::Left => slot.offset_px[0] as f32 + span_pad,
+            HAlign::Right => block_w - bitmap_w - inset_right,
             HAlign::Center => (block_w - bitmap_w) / 2.0,
         };
         let v_offset = match sizing.valign() {
             VAlign::Top => scaled_ascent - slot.offset_px[1] as f32,
-            VAlign::Bottom => block_h - bitmap_h,
+            VAlign::Bottom => block_h - bitmap_h - inset_bottom,
             VAlign::Center => (block_h - bitmap_h) / 2.0,
         };
         let origin = self.origin(at);
@@ -543,7 +570,10 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
         at: &CellRef<'_>,
         look: &CellAppearance,
     ) {
-        let thickness = decoration_thickness(self.ch);
+        let glyph_h = self.metrics.glyph_box[1] as f32;
+        let glyph_top = self.metrics.pad[1] as f32;
+        let glyph_ascent = self.metrics.glyph_ascent();
+        let thickness = decoration_thickness(glyph_h);
         let origin = self.origin(at);
         let ox = origin[0];
         let oy = origin[1];
@@ -562,7 +592,7 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
         if let Some((style, color)) = look.underline {
             // Clamped so a font whose ascent nearly fills the cell keeps
             // the line on-cell.
-            let descent_band = (self.ch - self.ascent).max(thickness);
+            let descent_band = (glyph_h - glyph_ascent).max(thickness);
             let underline_top = (oy + self.ascent + (descent_band * 0.3).round().max(1.0))
                 .min(oy + self.ch - thickness)
                 .max(oy);
@@ -609,11 +639,11 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
         }
         if let Some(color) = look.strikethrough {
             // 0.6 of the ascent reads as through the middle of most glyphs.
-            let strike_top = thickness.mul_add(-0.5, oy + (self.ascent * 0.6).round());
+            let strike_top = thickness.mul_add(-0.5, oy + glyph_top + (glyph_ascent * 0.6).round());
             solid(out, strike_top, color);
         }
         if let Some(color) = look.overline {
-            solid(out, oy, color);
+            solid(out, oy + glyph_top, color);
         }
     }
 
@@ -744,7 +774,7 @@ pub fn extend_preedit<A: AtlasView>(
         push_overlay_glyphs(
             atlas,
             metrics,
-            &overlay.text[cell.bytes],
+            (&overlay.text[cell.bytes], cell.width),
             origin,
             &mut out.glyphs,
         );
@@ -798,11 +828,13 @@ fn overlay_cells(text: &str, start: u16, grid_cols: u16) -> impl Iterator<Item =
 fn push_overlay_glyphs<A: AtlasView>(
     atlas: &A,
     metrics: CellMetrics,
-    cluster: &str,
+    (cluster, cols): (&str, u8),
     origin: [f32; 2],
     out: &mut Vec<GlyphDraw>,
 ) {
     let ascent = f32::from(u16::try_from(metrics.ascent).unwrap_or(u16::MAX));
+    let span_pad = f32::from(cols.saturating_sub(1)) * metrics.pad[0] as f32;
+    let origin = [origin[0] + span_pad, origin[1]];
     let mut chars = cluster.chars();
     let Some(base) = chars.next() else {
         return;
@@ -1221,7 +1253,13 @@ fn push_bottom_bar<A: AtlasView>(
     let first_glyph = out.glyphs.len();
     for cell in overlay_cells(label, 0, grid_cols) {
         let origin = [f32::from(cell.col) * cw, bar_origin_y];
-        push_overlay_glyphs(atlas, metrics, &label[cell.bytes], origin, &mut out.glyphs);
+        push_overlay_glyphs(
+            atlas,
+            metrics,
+            (&label[cell.bytes], cell.width),
+            origin,
+            &mut out.glyphs,
+        );
     }
     clip_fg_right_of(&mut out.glyphs, first_glyph, f32::from(grid_cols) * cw);
 }
@@ -1310,11 +1348,7 @@ mod tests {
     }
 
     fn metrics() -> CellMetrics {
-        CellMetrics {
-            width: 8,
-            height: 16,
-            ascent: 12,
-        }
+        CellMetrics::unscaled(8, 16, 12)
     }
 
     fn slot() -> GlyphSlot {
@@ -1323,6 +1357,7 @@ mod tests {
             size_px: [6, 10],
             offset_px: [1, 10],
             is_color: false,
+            fills_cell: false,
         }
     }
 
@@ -1366,11 +1401,7 @@ mod tests {
 
     #[test]
     fn cursor_rect_spans_both_columns_of_a_wide_character() {
-        let metrics = CellMetrics {
-            width: 10,
-            height: 20,
-            ascent: 16,
-        };
+        let metrics = CellMetrics::unscaled(10, 20, 16);
         let span = (3, 4);
         assert_eq!(
             cursor_rect_px(metrics, [5.0, 0.0], 1, span, CursorStyle::Block),
@@ -1444,6 +1475,145 @@ mod tests {
         assert_eq!(bottom.glyphs[0].origin_px, [1.0, 22.0]);
     }
 
+    /// The 8×16 cell grown to 12×24: 2 px of pad left and right, 4 above
+    /// and below.
+    fn grown_metrics() -> CellMetrics {
+        metrics().with_cell_scale([1.5, 1.5])
+    }
+
+    #[test]
+    fn osc_66_right_and_bottom_alignment_stay_inside_the_grown_cell_pad() {
+        // `w=3, h=1, v=1`: block 36×24, so the 6×10 bitmap sits at
+        // `(36 - 6 - 2, 24 - 10 - 4) = (28, 10)`.
+        let g = drive(1, 4, b"\x1b]66;w=3:h=1:v=1;A\x07");
+        let atlas = MockAtlas::full(slot());
+        let buffers = build_instances(g.screen(), grown_metrics(), &Theme::default(), &atlas);
+        assert_eq!(buffers.glyphs.len(), 1);
+        assert_eq!(buffers.glyphs[0].origin_px, [28.0, 10.0]);
+    }
+
+    #[test]
+    fn osc_66_alignment_ignores_the_negative_pad_of_a_shrunk_cell() {
+        // The 8×16 cell shrunk to 4×8: `w=3, h=1, v=1` aligns to the
+        // block's own edges at `(12 - 6, 8 - 10) = (6, -2)`.
+        let g = drive(1, 4, b"\x1b]66;w=3:h=1:v=1;A\x07");
+        let atlas = MockAtlas::full(slot());
+        let shrunk = metrics().with_cell_scale([0.5, 0.5]);
+        let buffers = build_instances(g.screen(), shrunk, &Theme::default(), &atlas);
+        assert_eq!(buffers.glyphs.len(), 1);
+        assert_eq!(buffers.glyphs[0].origin_px, [6.0, -2.0]);
+    }
+
+    #[test]
+    fn a_wide_char_takes_the_pad_of_every_cell_it_spans_but_the_first() {
+        // The slot's own offset (1) holds the first cell's pad; the
+        // second cell adds its 2 px so the glyph box stays centered
+        // across both.
+        let g = drive(1, 4, "中".as_bytes());
+        let mut atlas = MockAtlas::full(slot());
+        atlas.map.insert('中', slot());
+        let buffers = build_instances(g.screen(), grown_metrics(), &Theme::default(), &atlas);
+        assert_eq!(buffers.glyphs.len(), 1);
+        assert_eq!(buffers.glyphs[0].origin_px[0], 3.0);
+    }
+
+    #[test]
+    fn a_cell_filling_glyph_takes_no_pad_whatever_its_alignment() {
+        // `w=2, v=1` on a 12×24 cell: a box glyph sized to one scaled
+        // cell aligns right and bottom to the block's own edges.
+        let g = drive(1, 4, "\x1b]66;w=2:h=1:v=1;█\x07".as_bytes());
+        let mut atlas = MockAtlas::full(slot());
+        atlas.map.insert(
+            '█',
+            GlyphSlot {
+                atlas_px: [0, 0],
+                size_px: [12, 24],
+                offset_px: [0, 16],
+                is_color: false,
+                fills_cell: true,
+            },
+        );
+        let buffers = build_instances(g.screen(), grown_metrics(), &Theme::default(), &atlas);
+        assert_eq!(buffers.glyphs.len(), 1);
+        assert_eq!(buffers.glyphs[0].origin_px, [12.0, 0.0]);
+    }
+
+    #[test]
+    fn a_fractional_osc_66_scale_puts_the_top_pad_at_the_layout_scale() {
+        // `s=2:n=1:d=2` on the 12×24 cell: the font's 12 px ascent at glyph
+        // scale 1, below a 4 px pad at layout scale 2, so the baseline is
+        // at 20 and the bitmap top at 20 - 10.
+        let g = drive(2, 4, b"\x1b]66;s=2:n=1:d=2;A\x07");
+        let atlas = MockAtlas::full(slot());
+        let buffers = build_instances(g.screen(), grown_metrics(), &Theme::default(), &atlas);
+        assert_eq!(buffers.glyphs.len(), 1);
+        assert_eq!(buffers.glyphs[0].origin_px, [1.0, 10.0]);
+    }
+
+    #[test]
+    fn decorations_follow_the_glyph_box_down_by_the_top_pad() {
+        let tall = metrics().with_cell_scale([1.0, 3.0]);
+        let top = |sgr: &[u8], m: CellMetrics| {
+            let mut bytes = sgr.to_vec();
+            bytes.push(b'A');
+            let g = drive(1, 4, &bytes);
+            let atlas = MockAtlas::full(slot());
+            build_instances(g.screen(), m, &Theme::default(), &atlas).decos[0].origin_px[1]
+        };
+        let pad = tall.pad[1] as f32;
+        for sgr in [&b"\x1b[4m"[..], b"\x1b[9m", b"\x1b[53m"] {
+            assert_eq!(
+                top(sgr, tall),
+                top(sgr, metrics()) + pad,
+                "{:?}",
+                String::from_utf8_lossy(sgr)
+            );
+        }
+    }
+
+    #[test]
+    fn a_wide_cluster_and_a_wide_preedit_char_take_the_pad_of_their_second_cell() {
+        let g = drive(1, 4, "中".as_bytes());
+        let mut atlas = MockAtlas::full(slot());
+        atlas.gid_map.insert(7, slot());
+        let glyph = ClusterGlyph {
+            glyph_id: 7,
+            font_id: 0,
+            advance_px: 16.0,
+            x_offset_px: 0.0,
+            y_offset_px: 0.0,
+        };
+        let mut cells = vec![ShapedCell::None; 4];
+        cells[0] = ShapedCell::Cluster {
+            start: 0,
+            len: 1,
+            fit_px: 0,
+        };
+        let frame = ShapeFrame::from_cluster_cells(cells, 4, vec![glyph]);
+        let mut buffers = RowPaint::default();
+        CellPainter::new(
+            g.screen(),
+            grown_metrics(),
+            &ResolvedTheme::new(&Theme::default()),
+            &atlas,
+            &frame,
+        )
+        .with_viewport(0, 1)
+        .extend_screen(&mut buffers);
+        assert_eq!(buffers.glyphs[0].origin_px[0], 3.0, "cluster");
+
+        let mut out = RowPaint::default();
+        let mut atlas = MockAtlas::full(slot());
+        atlas.map.insert('あ', slot());
+        let overlay = PreeditOverlay {
+            anchor: (0, 0),
+            text: "あ".to_owned(),
+            cursor: None,
+        };
+        extend_preedit(&overlay, grown_metrics(), 5, 80, &atlas, &mut out);
+        assert_eq!(out.glyphs[0].origin_px[0], 3.0, "pre-edit");
+    }
+
     #[test]
     fn osc_66_sized_spacer_cells_emit_bg_but_not_fg() {
         // REQ-603: only the primary feeds the fg pass; the three
@@ -1474,6 +1644,7 @@ mod tests {
             size_px: [24, 10],
             offset_px: [left, 10],
             is_color: false,
+            fills_cell: false,
         }
     }
 
@@ -1709,6 +1880,7 @@ mod tests {
                 size_px: [10, 12],
                 offset_px: [0, 11],
                 is_color: false,
+                fills_cell: false,
             },
         );
         let glyphs = vec![

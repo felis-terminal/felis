@@ -1620,15 +1620,30 @@ fn undeclared_views<P: FaceProvider>(
     fallback_views_of(db, id, family).ok()
 }
 
-/// Pixel-space cell metrics at a given font size.
-#[derive(Debug, Clone, Copy)]
+/// Pixel-space cell metrics at a given font size. `glyph_box` is the
+/// cell before `font.cell_*_scale`; `pad` is its top-left corner inside
+/// the scaled cell, below zero when a scale shrinks the cell.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CellMetrics {
     pub width: u32,
     pub height: u32,
     pub ascent: u32,
+    pub glyph_box: [u32; 2],
+    pub pad: [i32; 2],
 }
 
 impl CellMetrics {
+    #[must_use]
+    pub const fn unscaled(width: u32, height: u32, ascent: u32) -> Self {
+        Self {
+            width,
+            height,
+            ascent,
+            glyph_box: [width, height],
+            pad: [0, 0],
+        }
+    }
+
     /// Ascent and descent ceil separately rather than rounding their
     /// sum, which clips the top row of a full-ascent glyph
     /// (`docs/explanation/rendering/text-shaping.md` "Atlas integration").
@@ -1636,11 +1651,59 @@ impl CellMetrics {
     pub fn from_scaled(width: f32, ascent: f32, descent: f32, leading: f32) -> Self {
         let ascent = ascent.ceil();
         let height = (ascent + descent.ceil() + leading.round()).max(1.0);
+        Self::unscaled(width.round().max(1.0) as u32, height as u32, ascent as u32)
+    }
+
+    /// Resizes the cell by `[width, height]` factors and splits the
+    /// difference evenly around the font's own cell, the top and left
+    /// halves taking the floor.
+    #[must_use]
+    pub fn with_cell_scale(self, scale: [f32; 2]) -> Self {
+        let [glyph_w, glyph_h] = self.glyph_box;
+        let resize = |side: u32, factor: f32| {
+            let scaled = (side as f32 * factor).round().max(1.0) as u32;
+            let extra = i64::from(scaled) - i64::from(side);
+            (scaled, i32::try_from(extra.div_euclid(2)).unwrap_or(0))
+        };
+        let (width, pad_x) = resize(glyph_w, scale[0]);
+        let (height, pad_y) = resize(glyph_h, scale[1]);
+        let glyph_ascent = i64::from(self.ascent) - i64::from(self.pad[1]);
+        let ascent = u32::try_from((glyph_ascent + i64::from(pad_y)).max(0)).unwrap_or(0);
         Self {
-            width: width.round().max(1.0) as u32,
-            height: height as u32,
-            ascent: ascent as u32,
+            width,
+            height,
+            ascent,
+            glyph_box: self.glyph_box,
+            pad: [pad_x, pad_y],
         }
+    }
+
+    /// The font's ascent inside the glyph box, before the top pad.
+    #[must_use]
+    pub fn glyph_ascent(self) -> f32 {
+        (i64::from(self.ascent) - i64::from(self.pad[1])) as f32
+    }
+
+    /// Cell top to baseline for a glyph drawn at `glyph_scale` in a block
+    /// laid out at `layout_scale`: the pad belongs to the layout cell, the
+    /// ascent to the glyph, and the two differ under OSC 66 `n/d`.
+    #[must_use]
+    pub fn baseline(self, glyph_scale: f32, layout_scale: f32) -> f32 {
+        self.glyph_ascent()
+            .mul_add(glyph_scale, self.pad[1] as f32 * layout_scale)
+    }
+
+    /// The padding right of and below the glyph box; negative on a
+    /// shrink, like `pad`.
+    #[must_use]
+    pub fn trailing_pad(self) -> [i32; 2] {
+        let trailing = |cell: u32, glyph: u32, lead: i32| {
+            i32::try_from(i64::from(cell) - i64::from(glyph) - i64::from(lead)).unwrap_or(0)
+        };
+        [
+            trailing(self.width, self.glyph_box[0], self.pad[0]),
+            trailing(self.height, self.glyph_box[1], self.pad[1]),
+        ]
     }
 }
 
@@ -2334,6 +2397,58 @@ mod tests {
                 "{case}"
             );
         }
+    }
+
+    #[test]
+    fn cell_scale_resizes_the_cell_and_centers_the_glyph_box_in_it() {
+        let base = CellMetrics::unscaled(10, 20, 15);
+        // (case, scale, (width, height, ascent), pad, trailing pad)
+        let cases = [
+            (
+                "unit scale keeps the cell",
+                [1.0, 1.0],
+                (10, 20, 15),
+                [0, 0],
+                [0, 0],
+            ),
+            (
+                "an odd growth puts the extra pixel below",
+                [1.0, 1.15],
+                (10, 23, 16),
+                [0, 1],
+                [0, 2],
+            ),
+            (
+                "an even growth splits evenly and lowers the baseline",
+                [1.2, 1.2],
+                (12, 24, 17),
+                [1, 2],
+                [1, 2],
+            ),
+            (
+                "a shrink pads negatively and raises the baseline",
+                [0.5, 0.85],
+                (5, 17, 13),
+                [-3, -2],
+                [-2, -1],
+            ),
+        ];
+        for (case, scale, cell, pad, trailing) in cases {
+            let m = base.with_cell_scale(scale);
+            assert_eq!((m.width, m.height, m.ascent), cell, "{case}");
+            assert_eq!(m.glyph_box, [10, 20], "{case}");
+            assert_eq!(m.pad, pad, "{case}");
+            assert_eq!(m.trailing_pad(), trailing, "{case}");
+        }
+    }
+
+    #[test]
+    fn cell_scale_applies_to_the_font_cell_not_a_scaled_one() {
+        let base = CellMetrics::unscaled(10, 20, 15);
+        assert_eq!(
+            base.with_cell_scale([1.5, 1.5]).with_cell_scale([1.2, 1.2]),
+            base.with_cell_scale([1.2, 1.2]),
+        );
     }
 
     #[cfg(not(windows))]

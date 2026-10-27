@@ -681,6 +681,11 @@ and the multiply is the one place they meet. A single `_px` name on both sides o
 spelling: it reads as correct at every site while a Retina window rasterizes glyphs at half size, which is the bug class
 the names make visible.
 
+Points were rejected. kitty, Ghostty, WezTerm and Alacritty size fonts in points, which reach pixels through a per-OS
+convention, 96 dpi on Linux and Windows and 72 on macOS, so their `14` is 18.67 px on Linux and 14 px on macOS. A
+logical pixel is one size on every OS. The cost is a conversion when copying a point size from another terminal, which
+the config reference states.
+
 ## Deliberate asymmetries
 
 Each coverage gap in the [name map](../../reference/control-surfaces.md) is recorded here with its reason. The gaps fall
