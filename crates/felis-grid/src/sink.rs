@@ -635,6 +635,7 @@ impl Sink for Grid {
                 let palette_config_defaults = self.palette_config_defaults;
                 let os_dark = self.os_dark;
                 let winsize_pixels = self.winsize_pixels;
+                let capture_command_output = self.capture_command_output;
                 let graphics_tracker = std::mem::take(&mut self.graphics_tracker);
                 let pty_effects = std::mem::take(&mut self.pty_effects);
                 let anchor_generation = self.viewport_anchor().generation;
@@ -654,6 +655,7 @@ impl Sink for Grid {
                 self.palette_config_defaults = palette_config_defaults;
                 self.os_dark = os_dark;
                 self.winsize_pixels = winsize_pixels;
+                self.capture_command_output = capture_command_output;
                 self.graphics_tracker = graphics_tracker;
                 self.pty_effects = pty_effects;
                 // The stashed primary placements go first, so the clear
@@ -784,6 +786,7 @@ impl Sink for Grid {
                             let at_column_0 =
                                 self.screen.cursor.col == 0 && !self.screen.cursor.pending_wrap;
                             self.shell_prompt.observe(&mark, ordinal, at_column_0);
+                            self.observe_command_output(mark.kind);
                         }
                         // The absolute line, not the screen row: the mark
                         // must stay resolvable after the content scrolls

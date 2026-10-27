@@ -1329,6 +1329,7 @@ fn pty_effects_drain_in_byte_stream_order() {
             PtyEffect::ProgramStatus(_) => "program_status",
             PtyEffect::PromptStarted => "prompt_started",
             PtyEffect::TerminalProgress(_) => "terminal_progress",
+            PtyEffect::CommandOutput { .. } => "command_output",
         })
         .collect();
     assert_eq!(

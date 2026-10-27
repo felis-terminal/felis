@@ -7,6 +7,7 @@ use super::{
     encode_sgr_color, encode_sgr_underline_color, hex_to_ascii, known_modifiable_dec_mode,
     permanently_reset_ansi, permanently_reset_dec_mode, permanently_set_dec_mode, xtgettcap_value,
 };
+use crate::command_output::CellsMoved;
 use crate::uax29::{is_extended_pictographic, is_grapheme_extend};
 
 /// Fitzpatrick modifiers (U+1F3FB..=U+1F3FF) are UAX#29 Extend, yet
@@ -533,6 +534,11 @@ impl Grid {
         let row_start = self.screen.idx(row, 0);
         let cursor = usize::from(self.screen.cursor.col);
         if cursor + n <= right_edge && cursor + n < right_edge {
+            self.note_cells_moved(CellsMoved::Columns {
+                top: row,
+                bottom: row,
+                first: self.screen.cursor.col,
+            });
             self.materialize_row_tail(row);
             self.erase_multirow_blocks_on(
                 row,
@@ -1036,6 +1042,17 @@ impl Grid {
         let to_scrollback = self.margins.top == 0 && self.screen.saved_primary.is_none();
         let full_screen = region_top == 0 && region_bottom + 1 == usize::from(self.screen.rows);
         let n_u16 = u16::try_from(n).unwrap_or(u16::MAX);
+        self.note_cells_moved(if to_scrollback {
+            CellsMoved::IntoHistory {
+                bottom: self.margins.bottom,
+                n: n_u16,
+            }
+        } else {
+            CellsMoved::Rows {
+                top: self.margins.top,
+                bottom: self.margins.bottom,
+            }
+        });
         self.erase_blocks_across_row_seams(
             &[
                 self.margins.top,
@@ -1105,6 +1122,10 @@ impl Grid {
         let region_height = region_bottom - region_top + 1;
         let n = usize::from(n).min(region_height);
         let n_u16 = u16::try_from(n).unwrap_or(u16::MAX);
+        self.note_cells_moved(CellsMoved::Rows {
+            top: self.margins.top,
+            bottom: self.margins.bottom,
+        });
         self.erase_blocks_across_row_seams(
             &[
                 self.margins.top,
@@ -1149,6 +1170,7 @@ impl Grid {
         if top > bottom {
             return;
         }
+        self.note_cells_moved(CellsMoved::Rows { top, bottom });
         let region_height = bottom - top + 1;
         let n = n_rows.min(region_height);
         let inner_seam = match direction {
@@ -1730,6 +1752,10 @@ impl Grid {
             }
         }
         let n = n.max(1);
+        self.note_cells_moved(CellsMoved::Rows {
+            top: self.screen.cursor.row,
+            bottom: self.margins.bottom,
+        });
         let band_top = usize::from(self.screen.cursor.row);
         let band_bottom = usize::from(self.margins.bottom);
         let band_height = band_bottom - band_top + 1;
@@ -1790,6 +1816,10 @@ impl Grid {
             }
         }
         let n = n.max(1);
+        self.note_cells_moved(CellsMoved::Rows {
+            top: self.screen.cursor.row,
+            bottom: self.margins.bottom,
+        });
         let band_top = usize::from(self.screen.cursor.row);
         let band_bottom = usize::from(self.margins.bottom);
         let band_height = band_bottom - band_top + 1;
@@ -1839,6 +1869,11 @@ impl Grid {
             return;
         }
         let row = self.screen.cursor.row;
+        self.note_cells_moved(CellsMoved::Columns {
+            top: row,
+            bottom: row,
+            first: self.screen.cursor.col,
+        });
         self.materialize_row_tail(row);
         let edge = right_inclusive + 1;
         let n = n.min(edge - cursor);
@@ -1877,6 +1912,11 @@ impl Grid {
             return;
         }
         let row = self.screen.cursor.row;
+        self.note_cells_moved(CellsMoved::Columns {
+            top: row,
+            bottom: row,
+            first: self.screen.cursor.col,
+        });
         self.materialize_row_tail(row);
         let edge = right_inclusive + 1;
         let n = n.min(edge - cursor);
@@ -1930,6 +1970,11 @@ impl Grid {
         let n = n.max(1);
         let cols = usize::from(self.screen.cols);
         let n = usize::from(n).min(cols);
+        self.note_cells_moved(CellsMoved::Columns {
+            top: self.margins.top,
+            bottom: self.margins.bottom,
+            first: 0,
+        });
         self.erase_blocks_across_row_seams(
             &[self.margins.top, self.margins.bottom + 1],
             0,
@@ -2723,6 +2768,11 @@ impl Grid {
         let edge = right_inclusive + 1;
         let region_top = self.margins.top;
         let region_bottom = self.margins.bottom;
+        self.note_cells_moved(CellsMoved::Columns {
+            top: region_top,
+            bottom: region_bottom,
+            first: cur_col,
+        });
         let blank = self.selective_blank_with_pen_bg();
         let n = n.min(edge - cur_col);
         let (cur, edge_u, n_u) = (usize::from(cur_col), usize::from(edge), usize::from(n));
@@ -2789,6 +2839,11 @@ impl Grid {
             HDir::Right => self.screen.cursor.col == left,
         };
         if in_col_band && in_row_band && at_margin {
+            self.note_cells_moved(CellsMoved::Columns {
+                top: self.margins.top,
+                bottom: self.margins.bottom,
+                first: left,
+            });
             let blank = self.selective_blank_with_pen_bg();
             let (l, r_incl) = (usize::from(left), usize::from(right));
             let seams = match dir {

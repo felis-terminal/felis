@@ -195,6 +195,7 @@ fn replay_effects(
                 session.terminal_progress = None;
             }
             PtyEffect::TerminalProgress(report) => session.terminal_progress = report,
+            PtyEffect::CommandOutput { .. } => {}
         }
     }
 }
