@@ -11,9 +11,9 @@ use super::{
     TrailRecord, TrailState, ViewportPosition, activation_target, codec, compose_window_title,
     composed_row_for_line, config, configured_font_size_logical_px, cursor_trail, dial_and_land,
     error, font_features_differ, font_settings_differ, font_stack_inputs_differ,
-    ime_cursor_area_pixels, info, keymap_adapter, launch_args, pointer_icon, preedit_from_ime,
-    renderer_config_with, reported_theme_differs, resolve_local_socket, resolve_post_chain,
-    shader_events, viewport_for_hit, warn,
+    ime_cursor_area_pixels, info, keymap_adapter, launch_args, live_font_size_differs,
+    pointer_icon, preedit_from_ime, renderer_config_with, reported_theme_differs,
+    resolve_local_socket, resolve_post_chain, shader_events, viewport_for_hit, warn,
 };
 use crate::window_input::PressedKey;
 use felis_client_core::config::ShaderEvent;
@@ -575,7 +575,7 @@ impl App {
                 } else {
                     // Size first so a combined size+features edit lands at
                     // the new metrics before the features pass resets again.
-                    if size_changed {
+                    if live_font_size_differs(self.current_font_size_logical_px, logical) {
                         renderer.reload_font_size(physical);
                     }
                     if features_changed {

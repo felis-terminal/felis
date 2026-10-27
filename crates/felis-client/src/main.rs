@@ -831,6 +831,13 @@ fn reported_theme_differs(a: &RendererConfig, b: &RendererConfig) -> bool {
         || a.theme_palette != b.theme_palette
 }
 
+/// A reload drops any in-flight zoom, so the renderer is resized
+/// whenever its live size is not the one the reload lands on, an
+/// unchanged `font.size_px` included.
+fn live_font_size_differs(live_logical: f32, reload_logical: f32) -> bool {
+    (live_logical - reload_logical).abs() >= f32::EPSILON
+}
+
 /// What the zoom chords start from and Ctrl+Shift+0 returns to; sanitized
 /// so a NaN or a 200-px typo never reaches the shaper.
 fn configured_font_size_logical_px(cfg: &config::EffectiveConfig) -> Option<f32> {

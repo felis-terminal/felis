@@ -1154,6 +1154,19 @@ mod font_differs {
     use super::*;
 
     #[test]
+    fn a_reload_after_zoom_resizes_the_font_even_with_the_size_unchanged() {
+        assert!(
+            live_font_size_differs(18.0, 14.0),
+            "zoomed in, size_px unchanged"
+        );
+        assert!(
+            live_font_size_differs(14.0, 16.0),
+            "size_px edited, no zoom"
+        );
+        assert!(!live_font_size_differs(14.0, 14.0), "neither");
+    }
+
+    #[test]
     fn a_size_only_edit_takes_the_size_only_reload_path() {
         // `App::reload_config` picks its renderer call from these
         // predicates; a size-only edit must land on `reload_font_size`,
