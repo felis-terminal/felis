@@ -51,6 +51,9 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
   window started, which ended every session.
 - A post-process shader that declares a resource the bind layout does not have, or at the wrong type, is refused with an
   error instead of crashing the client at pipeline creation.
+- Returning from the transient session of a `run` or `pipe` binding no longer drops the connection the window just
+  landed on and reconnects to the same session, which redrew the screen a second time and logged a false "outgoing queue
+  full".
 
 ## [0.3.1] - 2026-10-24
 

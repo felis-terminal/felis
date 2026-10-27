@@ -1396,9 +1396,14 @@ impl App {
             pump.abort_reader();
         }
         // The writer task picks this up before the sender drop closes the
-        // channel, so it reliably goes out.
-        self.send_control(&SessionToDaemonMsg::Detach);
-        self.outgoing.take();
+        // channel, so it reliably goes out. Not through `enqueue`: a
+        // refusal there posts `DaemonClosed` stamped with the generation
+        // bumped above, which reads as the new connection dropping.
+        if let Some(departing) = self.outgoing.take()
+            && let Ok(frame) = OutgoingFrame::ordered(&SessionToDaemonMsg::Detach)
+        {
+            let _ = departing.send(frame);
+        }
         // Dropped through `retire`, not by the take alone: the sender is
         // gone now, but a writer parked on a stalled carrier would never
         // notice, and a detached task holds its carrier forever.

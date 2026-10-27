@@ -2269,6 +2269,72 @@ mod app_events {
         assert!(!harness.app.exit_requested);
     }
 
+    /// Lands a switch on a fresh in-process carrier, holding the far end
+    /// so the new connection does not see EOF.
+    #[cfg(unix)]
+    fn land_switch(
+        runtime: &tokio::runtime::Runtime,
+        harness: &mut AppHarness,
+        id: u128,
+    ) -> tokio::net::UnixStream {
+        let _entered = runtime.enter();
+        let (near, far) = tokio::net::UnixStream::pair().expect("socket pair");
+        let (read, write) = near.into_split();
+        let driver = Arc::clone(&harness.app.driver);
+        harness.app.install_new_session(
+            FrameReader::new(CarrierReader::Local(read)),
+            FrameWriter::new(CarrierWriter::Local(write), 0),
+            driver,
+            &session(id),
+            true,
+        );
+        far
+    }
+
+    /// Pins the run/pipe return path: the transient's close, absorbed
+    /// while the return switch was in flight, must not tear down the
+    /// connection that switch lands on.
+    #[cfg(unix)]
+    #[test]
+    fn a_switch_landing_off_a_lost_connection_stays_on_the_new_one() {
+        let runtime = runtime();
+        let mut harness = app_on(&runtime, absent_daemon("home"), 0xa);
+        harness
+            .app
+            .outgoing
+            .as_ref()
+            .expect("the harness connection")
+            .mark_lost();
+
+        let _far = land_switch(&runtime, &mut harness, 0xb);
+
+        let live = harness.app.conn_gen;
+        while let Ok(event) = harness.posted.try_recv() {
+            assert!(
+                !matches!(event, AppEvent::DaemonClosed { conn_gen } if conn_gen == live),
+                "the departing connection's refused Detach reported the new connection closed"
+            );
+        }
+        assert!(!harness.app.reconnecting);
+        assert_eq!(harness.app.current_place().session_id, 0xb);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_switch_landing_detaches_the_departing_connection() {
+        let runtime = runtime();
+        let mut harness = app_on(&runtime, absent_daemon("home"), 0xa);
+        harness.sent();
+
+        let _far = land_switch(&runtime, &mut harness, 0xb);
+
+        let detach = OutgoingFrame::ordered(&SessionToDaemonMsg::Detach)
+            .expect("encodes")
+            .frame()
+            .clone();
+        assert_eq!(harness.sent(), vec![detach]);
+    }
+
     /// Pins the `conn_gen` stamp: a BEL stamped by any connection but
     /// the live one must not flash the window.
     #[test]
