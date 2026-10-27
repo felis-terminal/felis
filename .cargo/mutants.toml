@@ -24,3 +24,5 @@ exclude_re = ["kani_proofs"]
 
 # Excludes committed prost codegen to avoid equivalent mutants on generated code.
 exclude_globs = ["crates/felis-protocol/src/generated/**"]
+
+gitignore = true
