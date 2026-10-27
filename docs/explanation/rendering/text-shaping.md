@@ -218,14 +218,15 @@ disturbing it.
 **Variable fonts: a position the font names, never an angle felis picks.** A file set lists a variable font file once,
 at its default instance, so a weight or slant query returns that instance unchanged; fontconfig, CoreText and
 DirectWrite list each named instance as its own face, and felis draws a matched instance at its position. Either way
-felis sets the styled view itself, moving only the axes below and keeping the matched instance's others (`wdth`,
-`opsz`): `wght` to 400 for regular and 700 for bold, and, for an italic style whose matched file is upright, the
-`ital`/`slnt` axes to the font's own italic position. That position comes from an fvar named instance whose subfamily
-name has an "Italic" or "Oblique" token (`BoldItalic` counts), restricted to instances whose other axes (`wdth`, `opsz`)
-are at the defaults felis draws and taken nearest the target weight; both italic axes come from that one instance. A
-face with an `ital` axis but no such instance gets `ital` = 1, its registered meaning. Otherwise the italic draws
-upright, as a family without an italic face does. A separate italic file wins over an upright file's axes. Driving these
-axes is not synthesis: the instance is a design the font ships.
+felis sets the styled view itself, moving only the axes below and the style's configured `axes`, and keeping the matched
+instance's others (`wdth`, `opsz`): `wght` to the style's weight (700 for bold, and for regular 400 unless the provider
+matched a named instance, which keeps its own), and, for an italic style whose matched file is upright and that sets no
+`ital` or `slnt` of its own, the `ital`/`slnt` axes to the font's own italic position. That position comes from an fvar
+named instance whose subfamily name has an "Italic" or "Oblique" token (`BoldItalic` counts), restricted to instances
+whose other axes (`wdth`, `opsz`) are at the defaults felis draws and taken nearest the target weight; both italic axes
+come from that one instance. A face with an `ital` axis but no such instance gets `ital` = 1, its registered meaning.
+Otherwise the italic draws upright, as a family without an italic face does. A separate italic file wins over an upright
+file's axes. Driving these axes is not synthesis: the instance is a design the font ships.
 
 Named instances were chosen over the STAT table's axis labels, which kitty reads per axis. STAT names each axis's values
 separately, so building a position from it leaves felis to combine `ital` with `slnt`, choose among weight-specific
@@ -236,9 +237,10 @@ font did not name, and the shear those terminals fall back to is synthesis, reje
 
 **One fallback chain, styled per entry.** Each fallback entry is drawn in the cell's style from its own family, resolved
 the way the primary's styled faces are: a separate bold or italic file, else the variable file moved along its axes,
-else the entry's regular face (no synthesis). The regular face of a variable entry is set to `wght` 400 like the regular
-primary, because its default instance can be anywhere on the axis: Noto Sans CJK's variable file defaults to Thin. Color
-faces draw the same face in every style; emoji families ship no bold.
+else the entry's regular face (no synthesis), each at the style's configured weight. The regular face of a variable
+entry is set to the regular weight like the regular primary, because its default instance can be anywhere on the axis:
+Noto Sans CJK's variable file defaults to Thin. Color faces draw the same face in every style; emoji families ship no
+bold.
 
 Which entry draws a character is decided on the regular chain, and the style only picks that entry's face: an explicitly
 ordered `font.fallback` then lands on the same family in every style, even where some entry's bold file covers more than
@@ -248,6 +250,16 @@ outcome for a family with no bold at all. Rejected: **draw a styled-face miss fr
 handle**, which keeps bold for the glyphs such a family does cover but needs a second id space in the sizing-key font id
 and a fourth case in every resolver, for a family shape not seen in practice. A per-script styled cascade (kitty's
 configurable per-script chains) stays out of scope for felis's one-flat-chain model.
+
+**Configured weights reach the primary styles and `font.fallback`, not the system fallback.** A static face is matched
+at the configured weight by the provider's own path: fontconfig keeps its substituted query, so `fonts.conf` aliases and
+weight edits still decide, while CoreText, DirectWrite and a file set rank the family's faces by CSS font matching.
+Re-ranking fontconfig's answer by that CSS rule, for one tie-break on every platform, was rejected because it undoes the
+substitution a user wrote in `fonts.conf`. The per-character system fallback keeps its regular and bold query. Threading
+the weight into it was rejected: CoreText's cascade takes only a bold trait, so a weight cannot be asked of it, and
+re-selecting a sibling of the face the host picked can land on a file that lacks the scalar or its color glyph, which
+breaks the coverage and presentation the host chose for. A user who wants a CJK or symbol face at a matching weight
+names it in `font.fallback`, where it follows the configured weights.
 
 **Shared metrics.** Cell metrics also come from the _regular_ primary only (the four faces must share an advance width
 or the monospace grid would break), so only codepoint coverage and the rasterized outline differ per style, never the

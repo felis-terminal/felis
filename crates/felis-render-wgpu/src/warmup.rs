@@ -15,7 +15,7 @@ use std::{
 use felis_shaping::{FontStack, ShapingError};
 use wgpu::{Adapter, Device, Instance, Queue};
 
-use crate::{FaceSpec, RendererConfig};
+use crate::{AxisSetting, FaceSpec, RendererConfig};
 
 /// A driver that stalls must not stall an exit that never needed the
 /// GPU (an unreachable daemon), and returning from `main` while the
@@ -49,6 +49,8 @@ struct FontInputs {
     family: Option<String>,
     features: Vec<String>,
     fallbacks: Vec<FaceSpec>,
+    weight: Option<u16>,
+    axes: Vec<AxisSetting>,
     bold: FaceSpec,
     italic: FaceSpec,
     bold_italic: FaceSpec,
@@ -61,6 +63,8 @@ impl FontInputs {
             family: cfg.font_family.clone(),
             features: cfg.font_features.clone(),
             fallbacks: cfg.font_fallbacks.clone(),
+            weight: cfg.font_weight,
+            axes: cfg.font_axes.clone(),
             bold: cfg.font_bold.clone(),
             italic: cfg.font_italic.clone(),
             bold_italic: cfg.font_bold_italic.clone(),
@@ -74,8 +78,8 @@ impl FontInputs {
             &self.features,
             &self.fallbacks,
             &felis_shaping::StyleFaces {
-                regular_weight: None,
-                regular_axes: &[],
+                regular_weight: self.weight,
+                regular_axes: &self.axes,
                 bold: &self.bold,
                 italic: &self.italic,
                 bold_italic: &self.bold_italic,

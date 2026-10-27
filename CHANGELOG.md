@@ -33,6 +33,9 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 - **Keymap**: the `shader_event` binding kind fires a named event for `shader.post` animations.
 - **Config**: `font.cell_width_scale` and `font.cell_height_scale` widen or narrow the cell by a factor, keeping each
   glyph centered in it; box-drawing and block characters stretch to fill the new cell.
+- **Config**: `font.weight` and a `weight` in `[font.bold]`, `[font.italic]` and `[font.bold_italic]` pick each style's
+  weight (1–1000), and an `axes` table in the same four places sets variation-axis coordinates such as `wdth`. Unset
+  keys keep the faces drawn today; the per-character system fallback is unaffected.
 - **Shaders**: uniform contract v2 appends `time_whole_s`, `time_fract_s`, `focus_change_time_s`, `stage_index`,
   `animation_start_s` and `animation_progress`; a shader written against v1 loads unchanged. Binding 3 gives a stage its
   own output from the previous frame, for afterglow and motion blur.

@@ -26,8 +26,8 @@ use felis_render_core::{
     painter::{BAR_ELLIPSIS, cursor_rect_px},
     palette::{ResolvedTheme, Theme, effective_theme},
 };
+pub use felis_shaping::{AxisSetting, FaceSpec, installed_families};
 use felis_shaping::{CellMetrics, FontStack, ShapingError, StackDescription, StyleFaces};
-pub use felis_shaping::{FaceSpec, installed_families};
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use thiserror::Error;
 use wgpu::{
@@ -159,6 +159,9 @@ pub struct RendererConfig {
     /// `font.fallback`, tried before auto-discovery.
     pub font_fallbacks: Vec<FaceSpec>,
     pub font_features: Vec<String>,
+    /// `font.weight`; `None` draws the regular face as matched.
+    pub font_weight: Option<u16>,
+    pub font_axes: Vec<AxisSetting>,
     pub font_bold: FaceSpec,
     pub font_italic: FaceSpec,
     pub font_bold_italic: FaceSpec,
@@ -181,10 +184,10 @@ pub struct RendererConfig {
 
 impl RendererConfig {
     #[must_use]
-    pub const fn style_faces(&self) -> StyleFaces<'_> {
+    pub fn style_faces(&self) -> StyleFaces<'_> {
         StyleFaces {
-            regular_weight: None,
-            regular_axes: &[],
+            regular_weight: self.font_weight,
+            regular_axes: &self.font_axes,
             bold: &self.font_bold,
             italic: &self.font_italic,
             bold_italic: &self.font_bold_italic,

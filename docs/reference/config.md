@@ -79,6 +79,21 @@ A local repository path may also be referenced: `#:schema <path>/crates/felis-cl
 # `family` keys accept.
 family = "JetBrainsMono Nerd Font"
 
+# Regular weight, an integer in 1..=1000 on the OpenType scale; italic
+# takes it too. A variable face moves its `wght` axis there; a static
+# family is matched at it by the platform (fontconfig on Linux, CSS font
+# matching on macOS and Windows), so a weight between two installed
+# faces may land on a different neighbor per platform. Omitted: the
+# face as matched, a variable face at 400.
+weight = 400
+
+# Variation-axis coordinates of the regular face: a 4-character tag to a
+# number in [-32768, 32767]. `wght` is refused (set `weight`). A value
+# outside the face's range is clamped and a tag the face lacks is
+# ignored, each logged once at load. Styles that set no `family` inherit
+# these, less `ital` and `slnt`. Default: {}.
+axes = { wdth = 100 }
+
 # Logical pixel size for cell metrics and rasterization.
 # Clamped to [4.0, 72.0]. Default: 14.0.
 # Either TOML spelling is accepted: 14 and 14.0 are the same size.
@@ -120,9 +135,18 @@ fallback = [
 features = ["calt", "liga"]
 
 # Per-style face overrides for the primary. Derived from font.family
-# when omitted. Fallback entries take each style from their own family.
+# when omitted. Fallback entries take each style from their own family
+# at that style's weight; they take no `weight` or `axes` keys. The
+# host's per-character fallback stays at regular and bold, so a CJK or
+# symbol face meant to match a configured weight is named in
+# `font.fallback`.
+# `weight` defaults to 700 for bold; italic takes `font.weight` and
+# bold_italic takes bold's. `axes` merges per tag over the inherited
+# `font.axes`; a table that sets its own `family` inherits none, and an
+# explicit `ital` or `slnt` replaces the font's named italic position.
 [font.bold]
 family = "JetBrainsMono Nerd Font"
+weight = 700
 
 [font.italic]
 family = "Maple Mono"
@@ -338,6 +362,9 @@ Diagnostics surface at two stages:
 | `font.fallback` longer than 62 entries                   | Keeps the first 62 with warning.                                    | window |
 | `font.fallback` entry malformed                          | Skips entry with warning; remainder of chain applies.               | load   |
 | Font style sub-table omitted                             | Derived from `font.family` at matching weight and slant.            | window |
+| `weight` not an integer in `1..=1000`                    | Ignores that key with warning; the style keeps its default.         | load   |
+| `axes` entry with a bad tag, `wght`, or a bad value      | Ignores that entry with warning; the other entries apply.           | load   |
+| `axes` tag the face lacks or value outside its range     | Ignored or clamped to the face's range; logged once.                | window |
 | Color value malformed                                    | Keeps default color and logs warning.                               | window |
 | `theme.palette.indexed` key not an integer in `16..=255` | Ignores entry with warning; slots 0-15 have named fields.           | load   |
 | Malformed keymap chord, binding, or binding argument     | Skips entry and logs warning; remaining keybindings apply.          | load   |

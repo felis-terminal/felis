@@ -1062,24 +1062,29 @@ fn renderer_config_from_full_config_carries_every_field_through() {
             size_px: Some(15.0),
             cell_width_scale: Some(1.1),
             cell_height_scale: Some(1.25),
+            weight: Some(500),
+            axes: std::collections::BTreeMap::from([("wdth".to_owned(), 90.0)]),
             fallback: vec![
                 config::FontStyleConfig {
                     family: Some("Noto Sans CJK JP".to_owned()),
-                    features: None,
+                    ..Default::default()
                 },
                 config::FontStyleConfig {
                     family: Some("Noto Color Emoji".to_owned()),
                     features: Some(Vec::new()),
+                    ..Default::default()
                 },
             ],
             features: Vec::new(),
             bold: config::FontStyleConfig {
                 family: Some("Iosevka Bold".to_owned()),
                 features: Some(vec!["ss01".to_owned()]),
+                weight: Some(800),
+                axes: std::collections::BTreeMap::from([("GRAD".to_owned(), 50.0)]),
             },
             italic: config::FontStyleConfig {
                 family: Some("Victor Mono".to_owned()),
-                features: None,
+                ..Default::default()
             },
             bold_italic: config::FontStyleConfig::default(),
         },
@@ -1120,6 +1125,23 @@ fn renderer_config_from_full_config_carries_every_field_through() {
     );
     assert_eq!(rc.font_bold.family.as_deref(), Some("Iosevka Bold"));
     assert_eq!(rc.font_bold.features, Some(vec!["ss01".to_owned()]));
+    assert_eq!(rc.font_weight, Some(500));
+    assert_eq!(
+        rc.font_axes,
+        [AxisSetting {
+            tag: *b"wdth",
+            value: 90.0
+        }]
+    );
+    assert_eq!(rc.font_bold.weight, Some(800));
+    assert_eq!(
+        rc.font_bold.axes,
+        [AxisSetting {
+            tag: *b"GRAD",
+            value: 50.0
+        }]
+    );
+    assert_eq!(rc.font_italic.weight, None);
     assert_eq!(rc.font_italic.family.as_deref(), Some("Victor Mono"));
     assert_eq!(rc.font_italic.features, None);
     assert_eq!(rc.font_bold_italic.family, None);
@@ -1244,6 +1266,19 @@ mod font_differs {
             !font_stack_inputs_differ(&base, &cell),
             "a cell-scale edit keeps the faces",
         );
+        let mut weight = base.clone();
+        weight.font_weight = Some(500);
+        assert!(font_stack_inputs_differ(&base, &weight));
+        let mut axes = base.clone();
+        axes.font_axes = vec![AxisSetting {
+            tag: *b"wdth",
+            value: 90.0,
+        }];
+        assert!(font_stack_inputs_differ(&base, &axes));
+        let mut bold_weight = base.clone();
+        bold_weight.font_bold.weight = Some(800);
+        assert!(font_settings_differ(&base, &bold_weight));
+        assert!(font_stack_inputs_differ(&base, &bold_weight));
         assert!(!font_settings_differ(&base, &base));
         assert!(!font_stack_inputs_differ(&base, &base));
     }

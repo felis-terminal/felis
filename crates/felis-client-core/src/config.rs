@@ -960,6 +960,24 @@ pub struct FontConfig {
     /// Font family name (e.g. `"JetBrains Mono"`). Omitted ⇒ the
     /// system monospace font.
     pub family: Option<String>,
+    /// Regular weight, an integer on the OpenType 1–1000 scale; italic
+    /// inherits it. Omitted ⇒ the face as matched (a variable face at
+    /// 400).
+    #[serde(
+        deserialize_with = "deserialize_weight",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(feature = "schema", schemars(range(min = 1, max = 1000)))]
+    pub weight: Option<u16>,
+    /// Variation-axis coordinates of the regular face: 4-character tag →
+    /// number (`{ wdth = 90 }`). `wght` is set with `weight`. Styles
+    /// that derive from `font.family` inherit these, less `ital`/`slnt`.
+    #[serde(
+        deserialize_with = "deserialize_axes",
+        skip_serializing_if = "BTreeMap::is_empty"
+    )]
+    #[cfg_attr(feature = "schema", schemars(schema_with = "axes_schema"))]
+    pub axes: BTreeMap<String, f32>,
     /// Font size in logical pixels: the client multiplies it by the
     /// window's display scale, so one value holds across a high-DPI and
     /// a standard-DPI monitor. Positive values clamp into `[4.0, 72.0]`
@@ -979,6 +997,7 @@ pub struct FontConfig {
     /// and Windows. Each entry is `{ family = "...", features = [...] }`, where an
     /// omitted `features` inherits `font.features` (docs/reference/config.md).
     #[serde(deserialize_with = "deserialize_fallback_chain")]
+    #[cfg_attr(feature = "schema", schemars(with = "Vec<FallbackEntry>"))]
     pub fallback: Vec<FontStyleConfig>,
     /// OpenType feature tags applied to the primary face and inherited by
     /// fallback fonts. Use a 4-char tag to enable (`"calt"`) or leading `-`
@@ -1018,6 +1037,109 @@ pub struct FontStyleConfig {
     /// non-empty list replaces the base list.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub features: Option<Vec<String>>,
+    /// Weight, an integer on the OpenType 1–1000 scale. Omitted ⇒ 700
+    /// for bold; italic takes `font.weight` and bold italic
+    /// `font.bold.weight`.
+    #[serde(
+        deserialize_with = "deserialize_weight",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(feature = "schema", schemars(range(min = 1, max = 1000)))]
+    pub weight: Option<u16>,
+    /// Variation-axis coordinates, merged per tag over the `font.axes`
+    /// this style inherits when it sets no `family`.
+    #[serde(
+        deserialize_with = "deserialize_axes",
+        skip_serializing_if = "BTreeMap::is_empty"
+    )]
+    #[cfg_attr(feature = "schema", schemars(schema_with = "axes_schema"))]
+    pub axes: BTreeMap<String, f32>,
+}
+
+pub(super) const MIN_FONT_WEIGHT: u16 = 1;
+pub(super) const MAX_FONT_WEIGHT: u16 = 1000;
+/// The OpenType `Fixed` range an `fvar` coordinate takes.
+const MIN_AXIS_VALUE: f64 = -32768.0;
+const MAX_AXIS_VALUE: f64 = 32767.0;
+
+/// `None` for anything but an integer in 1..=1000, so a bad weight
+/// degrades that one key; `validate` reports it from the document.
+pub(super) fn font_weight(value: &toml::Value) -> Option<u16> {
+    value
+        .as_integer()
+        .and_then(|weight| u16::try_from(weight).ok())
+        .filter(|weight| (MIN_FONT_WEIGHT..=MAX_FONT_WEIGHT).contains(weight))
+}
+
+fn deserialize_weight<'de, D>(deserializer: D) -> Result<Option<u16>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(font_weight(&toml::Value::deserialize(deserializer)?))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum AxisIssue {
+    NotATable,
+    BadTag,
+    Weight,
+    BadValue,
+}
+
+/// One `axes` entry as the shaper takes it.
+pub(super) fn axis_value(tag: &str, value: &toml::Value) -> Result<f32, AxisIssue> {
+    if tag.len() != 4 || !tag.bytes().all(|b| (0x20..=0x7E).contains(&b)) {
+        return Err(AxisIssue::BadTag);
+    }
+    if tag == "wght" {
+        return Err(AxisIssue::Weight);
+    }
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "an integer outside the axis range is refused below either way"
+    )]
+    let number = match value {
+        toml::Value::Integer(n) => *n as f64,
+        toml::Value::Float(f) => *f,
+        _ => return Err(AxisIssue::BadValue),
+    };
+    if !(MIN_AXIS_VALUE..=MAX_AXIS_VALUE).contains(&number) {
+        return Err(AxisIssue::BadValue);
+    }
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "within the Fixed range, which f32 holds to the precision an axis uses"
+    )]
+    Ok(number as f32)
+}
+
+/// Per-entry lenient, as [`deserialize_fallback_chain`] is.
+fn deserialize_axes<'de, D>(deserializer: D) -> Result<BTreeMap<String, f32>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = toml::Value::deserialize(deserializer)?;
+    let Some(table) = value.as_table() else {
+        return Ok(BTreeMap::new());
+    };
+    Ok(table
+        .iter()
+        .filter_map(|(tag, value)| Some((tag.clone(), axis_value(tag, value).ok()?)))
+        .collect())
+}
+
+#[cfg(feature = "schema")]
+fn axes_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "type": "object",
+        "propertyNames": { "pattern": "^[\\x20-\\x7E]{4}$", "not": { "const": "wght" } },
+        "additionalProperties": {
+            "type": "number",
+            "minimum": MIN_AXIS_VALUE,
+            "maximum": MAX_AXIS_VALUE,
+        },
+        "default": {},
+    })
 }
 
 /// Per-entry lenient: a plain `Vec<FontStyleConfig>` would fail the whole
@@ -1035,15 +1157,18 @@ where
         .collect())
 }
 
-/// Unknown keys are rejected here because the loader's `serde_ignored`
-/// sweep cannot see inside this value-level parse: `{ familly = "…" }`
-/// would otherwise become an all-default entry and vanish silently.
-/// `family` is required, unlike the per-style overrides sharing
-/// [`FontStyleConfig`]: an entry with no family names no font.
+/// One `font.fallback` entry. It takes no `weight` or `axes`: it is
+/// drawn at the styles' weights, and axis tags are specific to one font.
 #[derive(Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+// The loader's `serde_ignored` sweep cannot see inside this value-level
+// parse, so `{ familly = "…" }` would otherwise vanish as an empty entry.
 #[serde(deny_unknown_fields)]
 struct FallbackEntry {
+    /// The family tried for a character the faces before it miss.
     family: String,
+    /// Feature override. Omitted ⇒ inherits `font.features`; `[]` opts
+    /// out.
     #[serde(default)]
     features: Option<Vec<String>>,
 }
@@ -1053,6 +1178,7 @@ pub(super) fn fallback_entry(value: toml::Value) -> Result<FontStyleConfig, toml
     Ok(FontStyleConfig {
         family: Some(family),
         features,
+        ..FontStyleConfig::default()
     })
 }
 
@@ -2473,6 +2599,148 @@ mod tests {
             fallback_families(&cfg),
             ["Noto Sans CJK JP", "Noto Color Emoji"],
         );
+    }
+
+    #[test]
+    fn font_weights_and_axes_default_to_unset() {
+        let font = EffectiveConfig::default().font;
+        assert_eq!(font.weight, None);
+        assert!(font.axes.is_empty());
+        for style in [&font.bold, &font.italic, &font.bold_italic] {
+            assert_eq!(style.weight, None);
+            assert!(style.axes.is_empty());
+        }
+        let cfg: EffectiveConfig = toml::from_str("[font]\n[font.bold]\n").unwrap();
+        assert_eq!(cfg, EffectiveConfig::default());
+    }
+
+    #[test]
+    fn font_weights_and_axes_parse_per_style() {
+        let (cfg, diagnostics) = ConfigDocument::parse(
+            r"
+            [font]
+            weight = 500
+            axes = { wdth = 90, GRAD = -25.5 }
+            [font.bold]
+            weight = 800
+            axes = { GRAD = 50 }
+        ",
+            None,
+        )
+        .unwrap()
+        .resolve("felis");
+        assert_eq!(diagnostics.iter().count(), 0, "{diagnostics:?}");
+        assert_eq!(cfg.font.weight, Some(500));
+        assert_eq!(
+            cfg.font.axes,
+            BTreeMap::from([("GRAD".to_owned(), -25.5), ("wdth".to_owned(), 90.0)])
+        );
+        assert_eq!(cfg.font.bold.weight, Some(800));
+        assert_eq!(
+            cfg.font.bold.axes,
+            BTreeMap::from([("GRAD".to_owned(), 50.0)])
+        );
+        assert_eq!(cfg.font.italic.weight, None);
+    }
+
+    #[test]
+    fn font_weights_and_axes_survive_show_effective() {
+        let cfg: EffectiveConfig = toml::from_str(
+            "[font]\nweight = 350\naxes = { wdth = 90 }\n[font.italic]\nweight = 300\n",
+        )
+        .unwrap();
+        let shown = toml::to_string(&cfg).unwrap();
+        assert_eq!(toml::from_str::<EffectiveConfig>(&shown).unwrap(), cfg);
+        let shown = toml::to_string(&EffectiveConfig::default()).unwrap();
+        assert!(
+            !shown.contains("weight") && !shown.contains("axes"),
+            "{shown}"
+        );
+    }
+
+    #[test]
+    fn a_refused_weight_or_axis_drops_that_key_with_its_path() {
+        for (text, key) in [
+            ("[font]\nweight = 0\n", "font.weight"),
+            ("[font]\nweight = 1001\n", "font.weight"),
+            ("[font]\nweight = 450.5\n", "font.weight"),
+            ("[font]\nweight = \"bold\"\n", "font.weight"),
+            (
+                "[font.bold_italic]\nweight = -1\n",
+                "font.bold_italic.weight",
+            ),
+            ("[font]\naxes = 5\n", "font.axes"),
+            ("[font]\naxes = { wd = 1 }\n", "font.axes.wd"),
+            ("[font]\naxes = { \"wdth \" = 1 }\n", "font.axes.\"wdth \""),
+            ("[font]\naxes = { wdth = 40000 }\n", "font.axes.wdth"),
+            ("[font]\naxes = { wdth = nan }\n", "font.axes.wdth"),
+            ("[font]\naxes = { wdth = inf }\n", "font.axes.wdth"),
+            ("[font]\naxes = { wdth = \"90\" }\n", "font.axes.wdth"),
+            (
+                "[font.italic]\naxes = { wght = 500 }\n",
+                "font.italic.axes.wght",
+            ),
+            (
+                "[client.felis.font]\nweight = 0\n",
+                "client.felis.font.weight",
+            ),
+            (
+                "[client.felis.font.bold]\naxes = { wght = 1 }\n",
+                "client.felis.font.bold.axes.wght",
+            ),
+        ] {
+            let (cfg, diagnostics) = ConfigDocument::parse(text, None).unwrap().resolve("felis");
+            assert!(!diagnostics.has_errors(), "{key}: {diagnostics:?}");
+            let warning = only_warning(&diagnostics);
+            assert_eq!(warning.kind, DiagnosticKind::Value, "{key}");
+            assert_eq!(warning.key.as_deref(), Some(key));
+            assert_eq!(cfg.font.weight, None, "{key}");
+            assert!(cfg.font.axes.is_empty(), "{key}");
+            assert_eq!(cfg.font.bold_italic.weight, None, "{key}");
+            assert!(cfg.font.italic.axes.is_empty(), "{key}");
+        }
+    }
+
+    #[test]
+    fn a_refused_axis_entry_keeps_its_neighbors() {
+        let (cfg, _) = ConfigDocument::parse("[font]\naxes = { wght = 700, wdth = 90 }\n", None)
+            .unwrap()
+            .resolve("felis");
+        assert_eq!(cfg.font.axes, BTreeMap::from([("wdth".to_owned(), 90.0)]));
+    }
+
+    #[test]
+    fn an_axes_wght_diagnostic_names_the_weight_key_of_its_style() {
+        let (_, diagnostics) = ConfigDocument::parse("[font.bold]\naxes = { wght = 800 }\n", None)
+            .unwrap()
+            .resolve("felis");
+        assert!(
+            only_warning(&diagnostics)
+                .message
+                .contains("`font.bold.weight`"),
+            "{diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn a_fallback_entry_with_weight_or_axes_is_skipped() {
+        for entry in [
+            "{ family = \"X\", weight = 500 }",
+            "{ family = \"X\", axes = { wdth = 90 } }",
+        ] {
+            let (cfg, diagnostics) = ConfigDocument::parse(
+                &format!("[font]\nfallback = [{entry}, {{ family = \"Y\" }}]\n"),
+                None,
+            )
+            .unwrap()
+            .resolve("felis");
+            assert_eq!(fallback_families(&cfg), ["Y"], "{entry}");
+            assert_eq!(
+                only_warning(&diagnostics).key.as_deref(),
+                Some("font.fallback[0]"),
+                "{entry}"
+            );
+        }
     }
 
     #[test]
