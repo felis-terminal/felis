@@ -2461,15 +2461,17 @@ message UpgradeRefused {
 // so the remedy is the same for each: drain and restart.
 enum UpgradeRefusal {
   UPGRADE_REFUSAL_UNSPECIFIED = 0;
-  // This platform has no in-place upgrade (Windows).
+  // This daemon cannot hand over its sessions (on Windows, one on the
+  // inbox ConPTY).
   UPGRADE_REFUSAL_UNSUPPORTED = 1 [(felis.v1.value_since) = 1];
   // The successor cannot read this daemon's dump version.
   UPGRADE_REFUSAL_DUMP_VERSION = 2 [(felis.v1.value_since) = 1];
   // The successor does not serve a connected client's protocol major.
   UPGRADE_REFUSAL_PROTOCOL_MAJOR = 3 [(felis.v1.value_since) = 1];
-  // A step before the exec ran out of time.
+  // A step before the exec or the commit ran out of time.
   UPGRADE_REFUSAL_TIMEOUT = 4 [(felis.v1.value_since) = 1];
-  // The successor rejected the dump's contents, or the exec failed.
+  // The successor rejected the dump's contents or failed to take over,
+  // or the exec failed.
   UPGRADE_REFUSAL_PROBE_FAILED = 5 [(felis.v1.value_since) = 1];
   // An upgrade is already running.
   UPGRADE_REFUSAL_BUSY = 6 [(felis.v1.value_since) = 1];

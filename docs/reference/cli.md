@@ -507,8 +507,9 @@ old to answer, in which case that daemon's own generation of instructions applie
 
 ## Daemon upgrade
 
-`felis daemon upgrade` replaces the running daemon's binary while the daemon keeps every session: the daemon execs a
-successor binary in place, and connected windows see one transport loss and re-attach. It never starts a daemon.
+`felis daemon upgrade` replaces the running daemon's binary while the daemon keeps every session: the daemon hands its
+sessions to a successor binary (an exec in place on Unix, a successor process on Windows), and connected windows see one
+transport loss and re-attach. It never starts a daemon.
 
 ```
 felis daemon upgrade [--format human|json]
@@ -523,15 +524,15 @@ under `--format json`, a remote exit `2` that wrote no error object comes from a
 verb, and is reported as an `unsupported` error, exit `2`. An `ssh` that cannot start, or a remote command that ends any
 other way (no `felis` on the remote `PATH`, a lost connection), is a `daemon_unreachable` error, exit `2`.
 
-An upgrade the daemon accepts reports the successor it execs:
+An upgrade the daemon accepts reports its successor:
 
 ```json
 { "v": 1, "outcome": "upgrading", "successor": "/usr/bin/felis-daemon" }
 ```
 
-The human line is `the daemon is switching to <path>`. The reply is written just before the exec, so exit `0` means the
-daemon accepted the upgrade and began it; whether the successor then restores every session is not observable from this
-invocation.
+The human line is `the daemon is switching to <path>`. The reply is written just before the exec (on Windows, just
+before the commit to the successor), so exit `0` means the daemon accepted the upgrade and began it; whether the
+successor then restores every session is not observable from this invocation.
 
 A refused upgrade leaves the daemon serving every session as before. It is an error object of kind `refused` carrying a
 `reason` key, the daemon's own reason:
@@ -540,15 +541,15 @@ A refused upgrade leaves the daemon serving every session as before. It is an er
 { "v": 1, "error": { "kind": "refused", "message": "...", "reason": "dump_version" } }
 ```
 
-| `reason`         | Meaning                                                                        |
-| ---------------- | ------------------------------------------------------------------------------ |
-| `unsupported`    | This platform has no in-place upgrade (Windows).                               |
-| `dump_version`   | The successor cannot read the running daemon's session state.                  |
-| `protocol_major` | The successor does not serve the protocol major of a connected client.         |
-| `timeout`        | A step before the exec ran out of time.                                        |
-| `probe_failed`   | The successor rejected the running daemon's session state, or the exec failed. |
-| `busy`           | An upgrade is already running.                                                 |
-| `draining`       | The daemon is draining after `felis daemon stop --when-empty`.                 |
+| `reason`         | Meaning                                                                                               |
+| ---------------- | ----------------------------------------------------------------------------------------------------- |
+| `unsupported`    | The daemon cannot hand over its sessions (Windows on the inbox ConPTY).                               |
+| `dump_version`   | The successor cannot read the running daemon's session state.                                         |
+| `protocol_major` | The successor does not serve the protocol major of a connected client.                                |
+| `timeout`        | A step before the exec or the commit ran out of time.                                                 |
+| `probe_failed`   | The successor rejected the running daemon's session state or failed to take over, or the exec failed. |
+| `busy`           | An upgrade is already running.                                                                        |
+| `draining`       | The daemon is draining after `felis daemon stop --when-empty`.                                        |
 
 Every refusal has the same remedy, which the message names: drain and restart with `felis daemon stop --when-empty`,
 then start a new daemon once the last session has ended.

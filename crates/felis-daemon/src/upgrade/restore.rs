@@ -1,25 +1,34 @@
 //! The successor's half: adopt what the exec carried and register the
-//! sessions under their own ids.
+//! sessions under their own ids. Registering is shared with the Windows
+//! hand-over ([`super::takeover`]).
 
 use std::{
     num::NonZeroU64,
-    os::fd::{AsFd as _, OwnedFd, RawFd},
-    path::Path,
     sync::Arc,
     time::{Duration, Instant},
 };
+#[cfg(unix)]
+use std::{
+    os::fd::{AsFd as _, OwnedFd, RawFd},
+    path::Path,
+};
 
+#[cfg(unix)]
 use felis_transport::{Endpoint, Listener, inherit::take_inherited};
+#[cfg(unix)]
 use rustix::process::{Pid, Signal, WaitId, WaitIdOptions, WaitOptions};
 use tokio::sync::Mutex;
+#[cfg(unix)]
 use tracing::{info, warn};
 
+use super::dump::{SessionDump, SessionState, parse_session_id};
+#[cfg(unix)]
 use super::{
     carrier,
-    dump::{Dump, DumpError, SessionDump, SessionState, parse_session_id},
+    dump::{Dump, DumpError},
 };
 use crate::{
-    SessionId, SessionPool, SpawnedPty,
+    SessionError, SessionId, SessionPool, SpawnedPty,
     graphics::ShmDeferral,
     pool::{ParseCore, Session, StoredNotification},
     program_status::ProgramStatusStore,
@@ -29,8 +38,10 @@ use crate::{
     },
 };
 
+#[cfg(unix)]
 const HANGUP_GRACE: Duration = Duration::from_secs(2);
 
+#[cfg(unix)]
 #[derive(Debug, thiserror::Error)]
 pub enum RestoreError {
     #[error("read the upgrade dump: {0}")]
@@ -44,6 +55,7 @@ pub enum RestoreError {
 /// Adopts the listening socket and every carried session. A session
 /// that cannot be adopted has its child ended; a failure that loses the
 /// socket ends every child, since nothing could reach them again.
+#[cfg(unix)]
 pub async fn restore(
     resume_fd: RawFd,
     socket: &Path,
@@ -90,11 +102,26 @@ pub async fn restore(
     Ok(listener)
 }
 
+#[cfg(unix)]
 async fn register(
     pool: &Arc<Mutex<SessionPool>>,
     policy: IdlePolicy,
     dump: &SessionDump,
     master: OwnedFd,
+) -> Result<(), String> {
+    register_with(pool, policy, dump, |core| {
+        SpawnedPty::adopt(master, dump.child.pid, dump.child.exit_status, core)
+    })
+    .await
+}
+
+/// Registers a carried session under its own id, its PTY started by
+/// `adopt` over the terminal state the dump carried.
+pub(super) async fn register_with(
+    pool: &Arc<Mutex<SessionPool>>,
+    policy: IdlePolicy,
+    dump: &SessionDump,
+    adopt: impl FnOnce(ParseCore) -> Result<SpawnedPty, SessionError>,
 ) -> Result<(), String> {
     let id = parse_session_id(&dump.id).ok_or("unparsable session id")?;
     let sequence = NonZeroU64::new(dump.sequence).ok_or("zero sequence")?;
@@ -127,8 +154,7 @@ async fn register(
         grid,
         table_gc,
     };
-    let spawned = SpawnedPty::adopt(master, dump.child.pid, dump.child.exit_status, core)
-        .map_err(|err| err.to_string())?;
+    let spawned = adopt(core).map_err(|err| err.to_string())?;
     let mut session = Session::from_spawned(spawned);
     session.images = images;
     session.placements = placements;
@@ -184,6 +210,7 @@ async fn register(
 /// every group and reaps. No leader is reaped before its group's last
 /// signal, so the group id cannot name anyone else yet; a child the
 /// predecessor already reaped is never signaled.
+#[cfg(unix)]
 async fn end_children<'a>(sessions: impl IntoIterator<Item = &'a SessionDump>) {
     let pids: Vec<Pid> = sessions
         .into_iter()
@@ -217,11 +244,13 @@ async fn end_children<'a>(sessions: impl IntoIterator<Item = &'a SessionDump>) {
 
 /// `true` once the child has exited or is not ours to wait for; leaves
 /// it unreaped.
+#[cfg(unix)]
 fn exited(pid: Pid) -> bool {
     let options = WaitIdOptions::EXITED | WaitIdOptions::NOHANG | WaitIdOptions::NOWAIT;
     !matches!(rustix::process::waitid(WaitId::Pid(pid), options), Ok(None))
 }
 
+#[cfg(unix)]
 #[cfg(test)]
 mod tests {
     use std::time::Duration;

@@ -3657,15 +3657,17 @@ impl AttentionSource {
 #[repr(i32)]
 pub enum UpgradeRefusal {
     Unspecified = 0,
-    /// This platform has no in-place upgrade (Windows).
+    /// This daemon cannot hand over its sessions (on Windows, one on the
+    /// inbox ConPTY).
     Unsupported = 1,
     /// The successor cannot read this daemon's dump version.
     DumpVersion = 2,
     /// The successor does not serve a connected client's protocol major.
     ProtocolMajor = 3,
-    /// A step before the exec ran out of time.
+    /// A step before the exec or the commit ran out of time.
     Timeout = 4,
-    /// The successor rejected the dump's contents, or the exec failed.
+    /// The successor rejected the dump's contents or failed to take over,
+    /// or the exec failed.
     ProbeFailed = 5,
     /// An upgrade is already running.
     Busy = 6,

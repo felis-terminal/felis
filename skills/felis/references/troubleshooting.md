@@ -47,9 +47,9 @@ against `cli.revision`. `felis --version` reports only this binary and dials not
 `--host`, `--socket`, and `--ssh-arg` at exit `2` rather than ignoring them.
 
 `felis daemon upgrade` replaces a stale daemon without losing sessions. It is a point verb, `--format json`, and never
-autospawns. The daemon execs the `felis-daemon` installed beside `felis` in place and keeps every session; it answers
-`{"outcome":"upgrading","successor":"<path>"}` at exit `0`, and attached windows re-attach on their own. A refusal is
-exit `1`, `{"error":{"kind":"refused","reason":…}}`, with the daemon still serving; the fallback is
+autospawns. The daemon switches to the `felis-daemon` installed beside `felis` in place and keeps every session; it
+answers `{"outcome":"upgrading","successor":"<path>"}` at exit `0`, and attached windows re-attach on their own. A
+refusal is exit `1`, `{"error":{"kind":"refused","reason":…}}`, with the daemon still serving; the fallback is
 `felis daemon stop --when-empty`. Exit `2` covers an unreachable daemon and one too old to answer (`unsupported`). With
 `--host`, the remote host's own `felis daemon upgrade` runs over `ssh` and its output passes through; a remote `felis`
 too old to have the verb is reported as `unsupported`, exit `2`.

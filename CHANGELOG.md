@@ -24,6 +24,9 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
   per bell, focus change, left press, or `shader_event` binding, drawing frames only until it ends, focused or not.
 - **Config**: `shell.command` sets the argv a window launched without a command runs (bare `felis`, `new_session`) on
   the local daemon, in place of `$SHELL` or `powershell.exe`, without changing either for other programs.
+- **Windows**: `felis daemon upgrade` switches the daemon to the installed binary in place, keeping every session, as on
+  Linux and macOS. The successor is a new process; a daemon on the inbox ConPTY (an elevated one) still refuses with
+  `unsupported`.
 - **Keymap**: the `shader_event` binding kind fires a named event for `shader.post` animations.
 - **Shaders**: uniform contract v2 appends `time_whole_s`, `time_fract_s`, `focus_change_time_s`, `stage_index`,
   `animation_start_s` and `animation_progress`; a shader written against v1 loads unchanged. Binding 3 gives a stage its

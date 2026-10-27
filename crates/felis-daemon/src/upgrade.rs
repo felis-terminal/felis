@@ -3,23 +3,30 @@
 
 #[cfg(unix)]
 mod carrier;
+#[cfg(any(windows, test))]
+mod channel;
 #[doc(hidden)]
 pub mod dump;
-#[cfg(unix)]
+#[cfg(windows)]
+mod handover;
 mod orchestrate;
 #[doc(hidden)]
-#[cfg(unix)]
 pub mod probe;
 #[doc(hidden)]
-#[cfg(unix)]
 pub mod restore;
+#[doc(hidden)]
+#[cfg(windows)]
+pub mod takeover;
 
-use std::sync::Arc;
 #[cfg(unix)]
-use std::{path::PathBuf, sync::Mutex};
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 use tokio::sync::{RwLock, RwLockReadGuard, watch};
 
+#[doc(hidden)]
+#[cfg(windows)]
+pub use handover::{Ready, prepare};
 #[doc(hidden)]
 #[cfg(unix)]
 pub use orchestrate::{Prepared, prepare};
@@ -92,18 +99,26 @@ pub fn refused(refusal: &Refusal) -> felis_protocol::messages::UpgradeOutcome {
 pub struct UpgradeState {
     #[doc(hidden)]
     pub gate: UpgradeGate,
-    /// Only the `felis-daemon` binary may exec its successor: a process
-    /// embedding the daemon library, such as a test, would be replaced
-    /// by a daemon it never meant to become.
-    #[cfg(unix)]
+    /// Only the `felis-daemon` binary may hand over to its successor: a
+    /// process embedding the daemon library, such as a test, would be
+    /// replaced by a daemon it never meant to become.
     replaceable: bool,
     /// A duplicate of the listening socket, so the upgrade owns what it
     /// hands across the exec without borrowing the serving loop's.
     #[cfg(unix)]
     listener: Mutex<Option<(std::os::fd::OwnedFd, PathBuf)>>,
+    /// The pipe name the serving loop listens on, which the successor
+    /// joins.
+    #[cfg(windows)]
+    listener: Mutex<Option<String>>,
+    /// The daemon that created the pipe name, held by each successor
+    /// after it. Every instance reports that process as its server for
+    /// as long as any instance lives, and a client opens it by pid to
+    /// check who serves, so the handle keeps the pid from being reused.
+    #[cfg(windows)]
+    creator: Mutex<Option<felis_pty::handover::Process>>,
     /// Held by one upgrade from before its first probe until its exec
     /// or refusal.
-    #[cfg(unix)]
     claimed: std::sync::atomic::AtomicBool,
 }
 
@@ -118,13 +133,10 @@ impl UpgradeState {
     #[doc(hidden)]
     #[must_use]
     pub fn replaceable() -> Arc<Self> {
-        #[cfg(unix)]
-        return Arc::new(Self {
+        Arc::new(Self {
             replaceable: true,
             ..Self::default()
-        });
-        #[cfg(not(unix))]
-        Self::new()
+        })
     }
 
     /// Records the listening socket until [`Self::clear_listener`].
@@ -146,10 +158,52 @@ impl UpgradeState {
         Ok(())
     }
 
+    /// Holds the pipe name's creator for this process's lifetime.
+    #[cfg(windows)]
+    fn set_creator(&self, creator: felis_pty::handover::Process) {
+        *self
+            .creator
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(creator);
+    }
+
+    /// The pipe name's creator, duplicated into `successor`: this
+    /// process unless it took the name over itself.
+    #[cfg(windows)]
+    fn creator_into(&self, successor: &felis_pty::handover::Process) -> std::io::Result<u64> {
+        match &*self
+            .creator
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        {
+            Some(creator) => creator.share_into(successor),
+            None => felis_pty::handover::Process::current_into(successor),
+        }
+    }
+
+    /// Records the pipe name until [`Self::clear_listener`].
+    #[doc(hidden)]
+    #[cfg(windows)]
+    pub fn set_listener(&self, pipe_name: &str) {
+        if self.replaceable {
+            *self
+                .listener
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(pipe_name.to_owned());
+        }
+    }
+
+    #[cfg(windows)]
+    fn listener(&self) -> Option<String> {
+        self.listener
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
     /// Closes the held copy: a daemon that stopped accepting must not
     /// leave dials queueing on a socket nobody accepts.
     #[doc(hidden)]
-    #[cfg(unix)]
     pub fn clear_listener(&self) {
         self.listener
             .lock()

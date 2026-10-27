@@ -907,11 +907,11 @@ answered. The reply is written before the shutdown fires and after the teardown 
 arrives only once every child is reaped. Unlike the rest of the family, `Stop` is admitted in the `Setup` phase alone:
 its reply is the last frame its connection writes.
 
-**Upgrade.** `Upgrade` asks this daemon to exec a successor binary in place while it keeps every session. Like `Stop` it
-is admitted in `Setup` alone. Its reply is `Upgrading`, the last frame before the exec closes the connection, or
-`Refused`, after which the daemon keeps serving every session and connection as before; every `UpgradeRefusal` has the
-same remedy, drain and restart. The pair is a minor-1 addition ("The minor ledger" below): a client refuses before
-sending `Upgrade` to a daemon whose effective minor is `0`.
+**Upgrade.** `Upgrade` asks this daemon to switch to a successor binary in place while it keeps every session. Like
+`Stop` it is admitted in `Setup` alone. Its reply is `Upgrading`, the last frame before the switch closes the
+connection, or `Refused`, after which the daemon keeps serving every session and connection as before; every
+`UpgradeRefusal` has the same remedy, drain and restart. The pair is a minor-1 addition ("The minor ledger" below): a
+client refuses before sending `Upgrade` to a daemon whose effective minor is `0`.
 
 ### Region (kind = 6)
 

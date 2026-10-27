@@ -51,11 +51,11 @@ Single-user SSH stdio attach is implemented, and the protocol is transport-plugg
 
 - **Restoring sessions or scrollback across reboot or daemon exit.** Daemon state is RAM-only. Closing a window does not
   kill the session, but terminating the daemon ends all sessions and drops their scrollback. Persisting scrollback to
-  disk or checkpointing shell processes across reboots is out of scope. An in-place upgrade does not exit the daemon:
-  its state crosses one `execve` in memory and is never written to disk ([overview.md](architecture/overview.md)
-  "In-place upgrade").
-- **Migrating sessions between daemon processes or hosts.** A session is pinned to the daemon process that spawned its
-  PTY. Live process migration (such as CRIU-style checkpoint and restore) is not supported.
+  disk or checkpointing shell processes across reboots is out of scope. An in-place upgrade does not lose that state: it
+  crosses to the successor in memory, through one `execve` on Unix and a hand-over on Windows, and is never written to
+  disk ([overview.md](architecture/overview.md) "In-place upgrade").
+- **Migrating sessions between daemon processes or hosts.** A session is pinned to its daemon; only that daemon's own
+  upgrade hands it on. Live process migration (such as CRIU-style checkpoint and restore) is not supported.
 - **Compression or disk-paging of scrollback.** Inactive scrollback stays in the unified in-memory ring until evicted by
   capacity bounds. Compressing old rows or paging them to disk adds search and traversal latency without saving enough
   memory to justify the complexity.
@@ -131,11 +131,9 @@ Single-user SSH stdio attach is implemented, and the protocol is transport-plugg
   there and links this rule. A shim is no precedent for OS-gated _convenience_: it meets the same intent on every
   target.
 
-The in-place daemon upgrade is not a gated feature either, though it is not yet a shim. Its intent, an update that keeps
-the sessions, is felis's on every platform, and only the mechanism has reached Unix: Windows keeps drain-and-restart
-because ConPTY offers no way to carry a console across a daemon replacement, not because felis reserves the upgrade for
-Unix. The omission rule above is about a feature felis would tie to one OS by choice; an unmet platform under a uniform
-intent is a gap to close ([overview.md](architecture/overview.md) "In-place upgrade").
+The in-place daemon upgrade is such a shim. Its intent, an update that keeps the sessions, is the same on every
+platform; Unix carries the state through `execve`, and Windows, which has no exec, hands it to a successor process
+([overview.md](architecture/overview.md) "In-place upgrade").
 
 ## Future revisits (require a recorded decision to lift)
 
