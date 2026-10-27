@@ -2464,6 +2464,7 @@ impl SessionTask {
                 self.subs[i].pull_pending = true;
                 trace!(target: "felis_daemon::serve", "grid frame pull");
             }
+            InputMsg::AnnounceOutput { .. } => {}
         }
         // Ship after every input, not only on the PTY arm: a Viewport
         // request into a quiet prompt would otherwise sit unrendered

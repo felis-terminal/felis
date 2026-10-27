@@ -316,7 +316,7 @@ impl TryFrom<InputMsg> for InputJson {
                 event: event.into(),
             },
             // A new variant inside `felis_json: 1` is a format break.
-            ref outside @ InputMsg::ViewportStep { .. } => {
+            ref outside @ (InputMsg::ViewportStep { .. } | InputMsg::AnnounceOutput { .. }) => {
                 return Err(JsonError::Outside(outside.variant()));
             }
         })
@@ -358,6 +358,14 @@ mod tests {
     fn a_viewport_step_is_refused_as_outside_the_format() {
         assert!(matches!(
             InputJson::try_from(InputMsg::ViewportStep { rows: 1 }),
+            Err(JsonError::Outside(_))
+        ));
+    }
+
+    #[test]
+    fn an_announce_output_opt_in_is_refused_as_outside_the_format() {
+        assert!(matches!(
+            InputJson::try_from(InputMsg::AnnounceOutput { enabled: true }),
             Err(JsonError::Outside(_))
         ));
     }

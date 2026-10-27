@@ -180,8 +180,16 @@ pub(crate) const INPUT_MSG_ARMS: &[ArmMeta] = &[
         phases: PhaseSet::NONE.union(PhaseSet::ATTACHED),
         since_minor: 2,
     },
+    ArmMeta {
+        name: "Input::AnnounceOutput",
+        direction: Direction::ToDaemon,
+        correlation: CorrelationClass::Uncorrelated,
+        modes: ModeSet::NONE.union(ModeSet::WINDOW).union(ModeSet::OPS),
+        phases: PhaseSet::NONE.union(PhaseSet::ATTACHED),
+        since_minor: 3,
+    },
 ];
-pub(crate) const INPUT_MSG_ARM_FIELDS: &[u32] = &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+pub(crate) const INPUT_MSG_ARM_FIELDS: &[u32] = &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
 
 pub(crate) const GRID_MSG_ARMS: &[ArmMeta] = &[
     ArmMeta {
@@ -352,9 +360,17 @@ pub(crate) const GRID_MSG_ARMS: &[ArmMeta] = &[
         phases: PhaseSet::NONE.union(PhaseSet::ATTACHED),
         since_minor: 0,
     },
+    ArmMeta {
+        name: "Grid::CommandOutput",
+        direction: Direction::ToClient,
+        correlation: CorrelationClass::Uncorrelated,
+        modes: ModeSet::NONE.union(ModeSet::WINDOW).union(ModeSet::OPS),
+        phases: PhaseSet::NONE.union(PhaseSet::ATTACHED),
+        since_minor: 3,
+    },
 ];
 pub(crate) const GRID_MSG_ARM_FIELDS: &[u32] = &[
-    1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21,
+    1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22,
 ];
 
 pub(crate) const IMAGE_MSG_ARMS: &[ArmMeta] = &[
@@ -866,6 +882,7 @@ pub(crate) const PAYLOAD_ONEOFS: &[&str] = &[
     "KeyId.key: named function character other",
     "Correlation.id: request_id stream_id",
     "ConnError.subject: request_id stream_id",
+    "GridCommandOutput.omitted: nothing rows unknown",
     "GridThemeColor.action: set reset",
     "GridPaletteColor.action: set reset",
     "ImageHeader.target: image frame",
@@ -907,6 +924,7 @@ pub const ADDITIONS: &[(&str, u16)] = &[
     ("Input::NextGridFrame", 0),
     ("Input::Key", 0),
     ("Input::ViewportStep", 2),
+    ("Input::AnnounceOutput", 3),
     ("Grid::RehydrateBegin", 0),
     ("Grid::RehydrateEnd", 0),
     ("Grid::RowDelta", 0),
@@ -928,6 +946,7 @@ pub const ADDITIONS: &[(&str, u16)] = &[
     ("Grid::PaletteColor", 0),
     ("Grid::PaletteResetAll", 0),
     ("Grid::CycleEnd", 0),
+    ("Grid::CommandOutput", 3),
     ("Image::Header", 0),
     ("Image::Chunk", 0),
     ("Image::Complete", 0),

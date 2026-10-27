@@ -778,7 +778,7 @@ pub mod conn_error {
 
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct InputMsg {
-    #[prost(oneof="input_msg::Msg", tags="1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11")]
+    #[prost(oneof="input_msg::Msg", tags="1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12")]
     pub msg: ::core::option::Option<input_msg::Msg>,
 }
 /// Nested message and enum types in `InputMsg`.
@@ -813,6 +813,8 @@ pub mod input_msg {
         Key(super::InputKeyEvent),
         #[prost(message, tag="11")]
         ViewportStep(super::InputViewportStep),
+        #[prost(message, tag="12")]
+        AnnounceOutput(super::InputAnnounceOutput),
     }
 }
 /// A single mouse event.
@@ -877,6 +879,15 @@ pub struct InputFocusChange {
     #[prost(bool, tag="1")]
     pub focused: bool,
 }
+/// This window's opt-in to GridCommandOutput: while enabled, the daemon
+/// ships the output of each command that finishes on the session to
+/// this subscriber. Per subscriber, like InputFocusChange; a fresh
+/// attachment starts disabled.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct InputAnnounceOutput {
+    #[prost(bool, tag="1")]
+    pub enabled: bool,
+}
 /// OS color-scheme report. true = dark, false = light.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct InputColorScheme {
@@ -925,7 +936,7 @@ pub struct InputNextGridFrame {
 
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GridMsg {
-    #[prost(oneof="grid_msg::Msg", tags="1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21")]
+    #[prost(oneof="grid_msg::Msg", tags="1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22")]
     pub msg: ::core::option::Option<grid_msg::Msg>,
 }
 /// Nested message and enum types in `GridMsg`.
@@ -974,7 +985,50 @@ pub mod grid_msg {
         PaletteResetAll(super::GridPaletteResetAll),
         #[prost(message, tag="21")]
         CycleEnd(super::GridCycleEnd),
+        #[prost(message, tag="22")]
+        CommandOutput(super::GridCommandOutput),
     }
+}
+/// The output of one finished command (OSC 133 C to D), sent only to a
+/// subscriber that enabled InputAnnounceOutput. An event, not state: a
+/// rehydrate burst replays none.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GridCommandOutput {
+    /// The output's text, at most MAX_ANNOUNCE_BYTES (65 536) of UTF-8.
+    #[prost(string, tag="1")]
+    pub text: ::prost::alloc::string::String,
+    /// How much earlier output the cap left out of text. Explicit rather
+    /// than "absent means nothing omitted", so a truncated value fails the
+    /// decode.
+    #[prost(oneof="grid_command_output::Omitted", tags="2, 3, 4")]
+    pub omitted: ::core::option::Option<grid_command_output::Omitted>,
+}
+/// Nested message and enum types in `GridCommandOutput`.
+pub mod grid_command_output {
+    /// How much earlier output the cap left out of text. Explicit rather
+    /// than "absent means nothing omitted", so a truncated value fails the
+    /// decode.
+    #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Omitted {
+        #[prost(message, tag="2")]
+        Nothing(super::OmittedNothing),
+        /// Whole screen rows dropped from the start of the output; nothing
+        /// else was lost.
+        #[prost(uint32, tag="3")]
+        Rows(u32),
+        /// Output was lost in an amount the daemon cannot count: the start
+        /// left scrollback, or the youngest row was itself cut.
+        #[prost(message, tag="4")]
+        Unknown(super::OmittedUnknown),
+    }
+}
+/// The nothing arm of GridCommandOutput.omitted.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct OmittedNothing {
+}
+/// The unknown arm of GridCommandOutput.omitted.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct OmittedUnknown {
 }
 /// End of one pull-paced compose cycle: every message composed for that
 /// pull precedes it. Empty: the cycle it closes is the one the ordered
@@ -2677,7 +2731,7 @@ pub struct SearchMatch {
 // below and asserts the Rust values equal them, so editing one here
 // without the other fails the build; prose-check: ignore):
 //    PROTOCOL_MAJOR = 1
-//    PROTOCOL_MINOR = 2
+//    PROTOCOL_MINOR = 3
 //
 // Kind or arm: a frame kind is a *surface*, so a message addressing a
 // surface no existing kind owns earns a kind, as does one whose

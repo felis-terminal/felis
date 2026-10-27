@@ -308,6 +308,10 @@ pub enum InputMsg {
     /// still counts from it. Positive is toward history; the result
     /// clamps to the retained scrollback.
     ViewportStep { rows: i32 },
+    /// This window's opt-in to
+    /// [`GridMsg::CommandOutput`](super::GridMsg::CommandOutput), held
+    /// per subscriber; a fresh attachment starts disabled.
+    AnnounceOutput { enabled: bool },
 }
 
 impl Directed for InputMsg {
@@ -326,6 +330,7 @@ impl Directed for InputMsg {
             Self::NextGridFrame => 8,
             Self::Key(_) => 9,
             Self::ViewportStep { .. } => 10,
+            Self::AnnounceOutput { .. } => 11,
         }
     }
 }
@@ -414,6 +419,8 @@ pub(crate) mod tests {
             },
             InputMsg::FocusChange { focused: true },
             InputMsg::FocusChange { focused: false },
+            InputMsg::AnnounceOutput { enabled: true },
+            InputMsg::AnnounceOutput { enabled: false },
             InputMsg::ColorScheme { dark: true },
             InputMsg::ColorScheme { dark: false },
             InputMsg::Viewport {

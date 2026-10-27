@@ -77,7 +77,8 @@ pub const fn renderer_effect(msg: &GridMsg) -> Option<RendererEffect> {
         | GridMsg::KittyKbdFlags { .. }
         | GridMsg::Attention { .. }
         | GridMsg::ClipboardSet { .. }
-        | GridMsg::CycleEnd => None,
+        | GridMsg::CycleEnd
+        | GridMsg::CommandOutput { .. } => None,
     }
 }
 
