@@ -59,5 +59,8 @@ miniz_oxide = { workspace = true }
 felis-client-core = { workspace = true }
 proptest = { workspace = true }
 
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys = { workspace = true }
+
 [lints]
 workspace = true

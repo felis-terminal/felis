@@ -11,6 +11,9 @@ use std::path::Path;
 use std::time::Duration;
 
 use felis_client_core::ShadowScreen;
+
+#[cfg(windows)]
+pub(crate) mod medium;
 use felis_grid::Grapheme;
 
 pub(crate) fn daemon_bin() -> String {
