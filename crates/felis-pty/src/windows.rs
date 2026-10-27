@@ -17,13 +17,14 @@ use std::{
     path::{Path, PathBuf},
     ptr,
     sync::OnceLock,
+    time::{Duration, Instant},
 };
 
 use conpty_bin_vendored as conpty;
 use windows_sys::Win32::{
     Foundation::{
-        ERROR_OPERATION_ABORTED, HANDLE, INVALID_HANDLE_VALUE, S_OK, WAIT_FAILED, WAIT_OBJECT_0,
-        WAIT_TIMEOUT,
+        ERROR_OPERATION_ABORTED, ERROR_SHARING_VIOLATION, HANDLE, INVALID_HANDLE_VALUE, S_OK,
+        WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT,
     },
     Security::{
         GetSidSubAuthority, GetSidSubAuthorityCount, GetTokenInformation, TOKEN_MANDATORY_LABEL,
@@ -338,11 +339,27 @@ fn place(dir: &Path, name: &str, bytes: &[u8]) -> Result<File, String> {
     Ok(file)
 }
 
+/// Opens `path` so that no process can replace or delete it while held.
+/// The process that just moved the file into place can still hold it
+/// open in a way this share mode refuses, so a sharing violation is
+/// retried briefly rather than reported.
 fn open_held(path: &Path) -> io::Result<File> {
-    fs::OpenOptions::new()
-        .read(true)
-        .share_mode(FILE_SHARE_READ)
-        .open(path)
+    let deadline = Instant::now() + Duration::from_secs(1);
+    loop {
+        match fs::OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ)
+            .open(path)
+        {
+            Err(err)
+                if err.raw_os_error() == Some(ERROR_SHARING_VIOLATION.cast_signed())
+                    && Instant::now() < deadline =>
+            {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            opened => return opened,
+        }
+    }
 }
 
 /// Writes `bytes` to a uniquely named `.tmp` file and moves it to
