@@ -59,6 +59,9 @@ pub struct GlyphSlot {
     pub offset_px: [i32; 2],
     /// True when the bitmap lives in the RGBA color atlas.
     pub is_color: bool,
+    /// A `box_drawing` bitmap sized to the whole scaled cell, which takes
+    /// none of the glyph-box padding.
+    pub fills_cell: bool,
 }
 
 pub trait AtlasView {
@@ -316,6 +319,14 @@ impl GlyphIndex {
         self.shaped_runs.iter().map(HashMap::len).sum()
     }
 
+    /// `font.cell_width_scale` / `font.cell_height_scale`; call before
+    /// the first `ensure`, whose slots it would leave mispadded.
+    #[must_use]
+    pub fn with_cell_scale(mut self, scale: [f32; 2]) -> Self {
+        self.metrics = self.metrics.with_cell_scale(scale);
+        self
+    }
+
     #[must_use]
     pub const fn cell_metrics(&self) -> CellMetrics {
         self.metrics
@@ -362,24 +373,31 @@ impl GlyphIndex {
             return false;
         }
         let scale = sizing.effective_scale();
-        let scaled = CellMetrics {
-            width: ((self.metrics.width as f32) * scale).round().max(1.0) as u32,
-            height: ((cell_height as f32) * scale).round().max(1.0) as u32,
-            ascent: ((self.metrics.ascent as f32) * scale).round() as u32,
-        };
+        let layout_scale = f32::from(sizing.scale().max(1));
+        let scaled = CellMetrics::unscaled(
+            ((self.metrics.width as f32) * scale).round().max(1.0) as u32,
+            ((cell_height as f32) * scale).round().max(1.0) as u32,
+            self.metrics.baseline(scale, layout_scale).round().max(0.0) as u32,
+        );
         if let Some(bitmap) = box_drawing::rasterize(glyph, scaled) {
-            let slot = self.allocate(bitmap);
+            let slot = self.allocate(bitmap).map(|slot| GlyphSlot {
+                fills_cell: true,
+                ..slot
+            });
             self.insert_slot(key, slot);
             return true;
         }
         let font = self.stack.resolve(glyph, sizing.style()).clone();
-        let bitmap = if let Some(bitmap) = self.fitted_bitmap(&font, glyph, cell_height, sizing) {
+        let bitmap = if let Some(bitmap) = self.fitted_bitmap(&font, glyph, sizing) {
             bitmap
         } else {
             let px = (self.font_size_physical_px * scale).round() as u32;
-            self.shape
+            let mut bitmap = self
+                .shape
                 .get_or_insert_sized(&font, glyph, px, sizing)
-                .clone()
+                .clone();
+            bitmap.left += self.pad_x(sizing);
+            bitmap
         };
         let slot = self.allocate(bitmap);
         self.insert_slot(key, slot);
@@ -393,7 +411,6 @@ impl GlyphIndex {
         &mut self,
         font: &Font,
         glyph: char,
-        cell_height: u32,
         sizing: SizingKey,
     ) -> Option<GlyphBitmap> {
         let glyph_scale = sizing.effective_scale();
@@ -402,7 +419,7 @@ impl GlyphIndex {
             0 => felis_grid::char_cell_width(glyph).max(1),
             w => w,
         };
-        let block = self.fit_block(cells.into(), cell_height, sizing);
+        let block = self.fit_block(cells.into(), sizing);
         if block.holds(font.advance_px(glyph, base_px)?) {
             return None;
         }
@@ -418,21 +435,29 @@ impl GlyphIndex {
             .shape
             .get_or_insert_sized(font, glyph, px, sizing)
             .clone();
-        bitmap.left = ((block.w - bitmap.width() as f32) / 2.0).round() as i32;
-        let ascent = self.metrics.ascent as f32 * glyph_scale;
+        bitmap.left = ((block.w - bitmap.width() as f32) / 2.0).round() as i32 + self.pad_x(sizing);
+        let ascent = self.metrics.glyph_ascent() * glyph_scale;
         bitmap.top = (ascent - (block.h - bitmap.height() as f32) / 2.0).round() as i32;
         Some(bitmap)
     }
 
-    /// `cells` cells at the integer scale `s`, whatever the fractional
-    /// glyph scale.
-    fn fit_block(&self, cells: u16, cell_height: u32, sizing: SizingKey) -> FitBlock {
+    /// `cells` glyph boxes at the integer scale `s`, whatever the
+    /// fractional glyph scale. The glyph box, not the scaled cell, so a
+    /// `font.cell_*_scale` shrink never shrinks ordinary text.
+    fn fit_block(&self, cells: u16, sizing: SizingKey) -> FitBlock {
         let layout_scale = f32::from(sizing.scale().max(1));
+        let [glyph_w, glyph_h] = self.metrics.glyph_box;
         FitBlock {
-            w: (self.metrics.width * u32::from(cells)) as f32 * layout_scale,
-            h: cell_height as f32 * layout_scale,
+            w: (glyph_w * u32::from(cells)) as f32 * layout_scale,
+            h: glyph_h as f32 * layout_scale,
             slack: layout_scale,
         }
+    }
+
+    /// Font glyphs sit in the glyph box, `pad` into the scaled cell;
+    /// `box_drawing` glyphs fill the cell and take none.
+    fn pad_x(&self, sizing: SizingKey) -> i32 {
+        self.metrics.pad[0] * i32::from(sizing.scale().max(1))
     }
 
     /// Glyph ids are face-relative: [`SizingKey::font_id`] names the
@@ -475,7 +500,8 @@ impl GlyphIndex {
             return false;
         }
         let font = self.stack.font_at(sizing.font_id(), sizing.style()).clone();
-        let bitmap = self.shape.rasterize_glyph_id(&font, glyph_id, px);
+        let mut bitmap = self.shape.rasterize_glyph_id(&font, glyph_id, px);
+        bitmap.left += self.pad_x(sizing);
         let slot = self.allocate(bitmap);
         self.insert_slot(key, slot);
         true
@@ -497,7 +523,7 @@ impl GlyphIndex {
         sizing: SizingKey,
     ) -> Option<u16> {
         let glyph_scale = sizing.effective_scale();
-        let block = self.fit_block(cols, self.metrics.height, sizing);
+        let block = self.fit_block(cols, sizing);
         let advance: f32 = glyphs.iter().map(|g| g.advance_px).sum::<f32>() * glyph_scale;
         if block.holds(advance) {
             return None;
@@ -735,6 +761,7 @@ impl GlyphIndex {
             size_px: [width, height],
             offset_px,
             is_color,
+            fills_cell: false,
         })
     }
 }
@@ -836,7 +863,7 @@ fn apply_shaped_run(
     shaped: &[ShapedGlyph],
 ) {
     let cell_height = index.cell_metrics().height;
-    let cell_width = index.cell_metrics().width as f32;
+    let cell_width = index.cell_metrics().glyph_box[0] as f32;
     // `CellPainter` rebuilds this same key from the cell, so the style
     // must ride it.
     let sizing = SizingKey::default().with_style(run.style);
@@ -1408,6 +1435,62 @@ mod tests {
         FontStack::new(Arc::new(Font::load_test_font()))
     }
 
+    fn slot_after_ensure(idx: &mut GlyphIndex, c: char, sizing: SizingKey) -> GlyphSlot {
+        let h = idx.cell_metrics().height;
+        idx.ensure(c, h, sizing);
+        idx.slot(c, h, sizing).expect("placed")
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn a_grown_cell_shifts_font_glyphs_by_the_left_pad() {
+        let plain = slot_after_ensure(
+            &mut GlyphIndex::new(stack(), 14.0, nz(256)),
+            'M',
+            SizingKey::default(),
+        );
+        let mut idx = GlyphIndex::new(stack(), 14.0, nz(256)).with_cell_scale([1.5, 1.5]);
+        let pad = idx.cell_metrics().pad;
+        assert!(pad[0] > 0 && pad[1] > 0);
+        let grown = slot_after_ensure(&mut idx, 'M', SizingKey::default());
+        assert_eq!(grown.offset_px[0], plain.offset_px[0] + pad[0]);
+        assert_eq!(
+            grown.offset_px[1], plain.offset_px[1],
+            "the baseline moves, the bearing does not"
+        );
+        assert_eq!(grown.size_px, plain.size_px);
+        let s2 = SizingKey::new(2, 0, 0, 0, 0, 0);
+        let plain_s2 = slot_after_ensure(&mut GlyphIndex::new(stack(), 14.0, nz(256)), 'M', s2);
+        let grown_s2 = slot_after_ensure(&mut idx, 'M', s2);
+        assert_eq!(grown_s2.offset_px[0], plain_s2.offset_px[0] + 2 * pad[0]);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn box_drawing_fills_the_scaled_cell_without_a_pad() {
+        for scale in [[1.5, 1.3], [0.6, 0.7]] {
+            let mut idx = GlyphIndex::new(stack(), 14.0, nz(256)).with_cell_scale(scale);
+            let m = idx.cell_metrics();
+            let slot = slot_after_ensure(&mut idx, '█', SizingKey::default());
+            assert_eq!(slot.size_px, [m.width, m.height], "{scale:?}");
+            assert_eq!(slot.offset_px[0], 0, "{scale:?}");
+        }
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn a_shrunk_cell_never_fits_primary_ascii() {
+        let font = Arc::new(Font::load_test_font());
+        let mut idx = GlyphIndex::new(FontStack::new(font.clone()), 14.0, nz(512))
+            .with_cell_scale([0.5, 0.5]);
+        for c in '!'..='~' {
+            assert!(
+                idx.fitted_bitmap(&font, c, SizingKey::default()).is_none(),
+                "{c:?}"
+            );
+        }
+    }
+
     #[cfg(not(windows))]
     #[test]
     fn an_overlay_cluster_is_shaped_and_its_glyphs_primed() {
@@ -1833,12 +1916,11 @@ mod tests {
         let font = Arc::new(Font::load_test_font());
         for px in [13.0, 18.67, 24.0, 29.33] {
             let mut idx = GlyphIndex::new(FontStack::new(font.clone()), px, nz(512));
-            let h = idx.cell_metrics().height;
             for s in 1..=7 {
                 let sk = SizingKey::new(s, 0, 0, 0, 0, 0);
                 for c in '!'..='~' {
                     assert!(
-                        idx.fitted_bitmap(&font, c, h, sk).is_none(),
+                        idx.fitted_bitmap(&font, c, sk).is_none(),
                         "{c:?} at {px} px, s={s}"
                     );
                 }
@@ -1872,7 +1954,7 @@ mod tests {
             .filter(|&c| felis_grid::char_cell_width(c) == 1)
         {
             let font = idx.stack().resolve(c, FontStyle::REGULAR).clone();
-            let Some(bitmap) = idx.fitted_bitmap(&font, c, m.height, SizingKey::default()) else {
+            let Some(bitmap) = idx.fitted_bitmap(&font, c, SizingKey::default()) else {
                 continue;
             };
             fitted += 1;
@@ -1930,16 +2012,10 @@ mod tests {
         let w1 = SizingKey::new(1, 1, 0, 0, 0, 0);
         let w2 = SizingKey::new(1, 2, 0, 0, 0, 0);
         let half_in_s2 = SizingKey::new(2, 0, 1, 2, 0, 0);
+        assert!(idx.fitted_bitmap(&font, c, w1).is_some(), "w=1 fits {c:?}");
+        assert!(idx.fitted_bitmap(&font, c, w2).is_none(), "w=2 holds {c:?}");
         assert!(
-            idx.fitted_bitmap(&font, c, m.height, w1).is_some(),
-            "w=1 fits {c:?}"
-        );
-        assert!(
-            idx.fitted_bitmap(&font, c, m.height, w2).is_none(),
-            "w=2 holds {c:?}"
-        );
-        assert!(
-            idx.fitted_bitmap(&font, c, m.height, half_in_s2).is_none(),
+            idx.fitted_bitmap(&font, c, half_in_s2).is_none(),
             "s=2 n=1 d=2 holds {c:?}"
         );
     }

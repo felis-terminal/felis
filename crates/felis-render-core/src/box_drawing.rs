@@ -1029,11 +1029,7 @@ mod tests {
     use super::*;
 
     const fn cell(width: u32, height: u32, ascent: u32) -> CellMetrics {
-        CellMetrics {
-            width,
-            height,
-            ascent,
-        }
+        CellMetrics::unscaled(width, height, ascent)
     }
 
     fn px(bitmap: &GlyphBitmap, x: u32, y: u32) -> u8 {
