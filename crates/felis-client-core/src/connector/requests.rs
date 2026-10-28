@@ -177,8 +177,8 @@ impl ControlRequest for CreateSessionReq {
     }
 }
 
-struct SpawnSessionReq {
-    args: SpawnArgs,
+pub(super) struct SpawnSessionReq {
+    pub(super) args: SpawnArgs,
 }
 
 impl CorrelatedRequest for SpawnSessionReq {}
@@ -208,8 +208,8 @@ impl ControlRequest for SpawnSessionReq {
     }
 }
 
-struct InfoReq {
-    id_prefix: String,
+pub(super) struct InfoReq {
+    pub(super) id_prefix: String,
 }
 
 impl CorrelatedRequest for InfoReq {}
@@ -254,7 +254,7 @@ impl ControlRequest for FenceReq {
     }
 }
 
-struct ListReq;
+pub(super) struct ListReq;
 
 impl CorrelatedRequest for ListReq {}
 
@@ -274,8 +274,8 @@ impl ControlRequest for ListReq {
     }
 }
 
-struct DestroySessionReq {
-    id_prefix: String,
+pub(super) struct DestroySessionReq {
+    pub(super) id_prefix: String,
 }
 
 impl CorrelatedRequest for DestroySessionReq {}

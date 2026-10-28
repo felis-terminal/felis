@@ -11,7 +11,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use clap::builder::TypedValueParser as _;
-use felis_client_core::ConnectError;
+use felis_client_core::{Closed, ConnectError};
 pub(crate) use felis_client_core::json::{
     AttachmentObject, LastNotificationObject, ListResult, ProgramStatusObject, SessionObject,
     SessionRef, TagResult, TerminalProgressObject,
@@ -317,6 +317,11 @@ impl ErrorKind {
             ConnectError::Refused { reason, .. } => Self::from_refusal(*reason),
             ConnectError::InvalidSessionPrefix { .. } => Self::InvalidRequest,
             ConnectError::MinorTooOld { .. } => Self::Unsupported,
+            ConnectError::ConnectionEnded(closed) => match closed {
+                Closed::Refused { reason, .. } => Self::from_refusal(*reason),
+                Closed::Protocol(_) => Self::Protocol,
+                Closed::Eof | Closed::Transport(_) | Closed::Dropped => Self::DaemonLost,
+            },
             ConnectError::Io(_)
             | ConnectError::Connect(_)
             | ConnectError::Transport(_)
