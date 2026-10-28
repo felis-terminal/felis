@@ -54,16 +54,6 @@ pub const MAX_SPAWN_PATH_BYTES: usize = 4 * 1024;
 /// an SSH destination plus its `--ssh-arg` tokens.
 pub const MAX_RETARGET_DESCRIPTOR_BYTES: usize = 64 * 1024;
 
-/// Maximum bytes for one request line of the CLI stdio bridge.
-///
-/// Sized to 8x [`MAX_PASTE_BYTES`] to allow for sixfold JSON unicode escaping
-/// of control bytes plus request envelope overhead.
-pub const MAX_BRIDGE_LINE_BYTES: usize = 8 * MAX_PASTE_BYTES;
-
-// The sixfold expansion is what fixes the multiplier, so the two must
-// not drift apart: a later paste cap raises this one with it.
-const _: () = assert!(MAX_BRIDGE_LINE_BYTES > 6 * MAX_PASTE_BYTES);
-
 /// Bytes the text of one [`GridMsg::CommandOutput`] may carry: the
 /// daemon keeps the youngest output that fits.
 pub const MAX_ANNOUNCE_BYTES: usize = 64 * 1024;
@@ -93,8 +83,7 @@ pub const MAX_SESSION_IMAGE_BYTES: usize = 256 * 1024 * 1024;
 pub const MAX_IMAGE_FRAMES: usize = 4096;
 
 // Invariant: frame body limits must stay below the framing backstop.
-// Stdio bridge lines use pipes rather than frame bodies; image limits bound
-// decoded pixel claims rather than single frame bodies.
+// Image limits bound decoded pixel claims rather than single frame bodies.
 const _: () = {
     let backstop = crate::frame::DEFAULT_MAX_BODY as usize;
     assert!(MAX_RAW_INPUT_BYTES < backstop);

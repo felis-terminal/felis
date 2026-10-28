@@ -62,8 +62,8 @@ impl ConnectionMode {
     /// Whether a connection in this mode is exempt from the first-operation
     /// deadline (`docs/reference/ipc.md` "Handshake").
     ///
-    /// Long-running operator connections like bridges dial at startup
-    /// and sit idle until requested.
+    /// Long-running operator connections, such as an editor's, dial at
+    /// startup and sit idle until requested.
     #[must_use]
     pub const fn idles_before_first_operation(self) -> bool {
         matches!(self, Self::Ops)

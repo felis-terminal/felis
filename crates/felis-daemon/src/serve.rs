@@ -140,8 +140,9 @@ pub enum ConnError {
     },
     /// A peer that opened a connection and then said nothing. Only the
     /// pre-attach phases are timed, and the first operation only in a
-    /// mode that must name its subject next: past one operation a
-    /// bridge idles between verbs and an observer idles for hours.
+    /// mode that must name its subject next: past one operation an
+    /// editor's ops connection idles between verbs and an observer
+    /// idles for hours.
     #[error("peer sent nothing before the {phase} deadline")]
     HandshakeTimeout { phase: HandshakePhase },
     /// An input payload past a ceiling the session's budget could never
@@ -697,9 +698,9 @@ fn refuse_over_capacity(stream: ServerStream, caps: &DaemonCaps) {
     });
 }
 
-/// The refusal is a frame, not a bare close: to `felis` and the bridge
-/// a closed socket is indistinguishable from a crashed daemon, and
-/// they must report `at_capacity` (retry) rather than `daemon` (exit
+/// The refusal is a frame, not a bare close: to a client a closed
+/// socket is indistinguishable from a crashed daemon, and it must
+/// report `at_capacity` (retry) rather than `daemon` (exit
 /// 2). The preface still runs: it is a fixed 8-byte exchange, and the
 /// peer must agree on a major before it can decode a refusal at all.
 async fn write_capacity_refusal(

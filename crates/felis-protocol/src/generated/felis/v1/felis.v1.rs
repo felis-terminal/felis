@@ -2887,8 +2887,7 @@ impl FrameKind {
 // ---------------------------------------------------------------------------
 
 // Protobuf binary is the only encoding a frame body ever carries, so no
-// per-connection encoding is negotiated and none is named here. A
-// non-Rust client reaches the daemon through the CLI's stdio bridge.
+// per-connection encoding is negotiated and none is named here.
 
 /// Connection purpose stated in ConnHello for routing and output shaping.
 /// The daemon admits only arms matching the mode's `modes=` list. The

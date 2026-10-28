@@ -5565,9 +5565,7 @@ async fn a_create_past_the_session_cap_is_refused_and_executes_nothing() {
 }
 
 /// Two spawns in flight on one connection: each reply carries its own
-/// `request_id` and its own session. This daemon serves a connection's
-/// requests in arrival order, so the reordered case is pinned against a
-/// controlled peer in `felis-cli`'s bridge suite instead.
+/// `request_id` and its own session.
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn concurrent_ops_spawns_are_attributed_by_request_id() {
@@ -6439,8 +6437,8 @@ where
     .await
 }
 
-/// Over-cap peers get a frame, not a bare close: to `felis` and the
-/// bridge a closed socket is indistinguishable from a crashed daemon.
+/// Over-cap peers get a frame, not a bare close: to a client a closed
+/// socket is indistinguishable from a crashed daemon.
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_dial_past_the_connection_cap_is_refused_at_capacity() {
@@ -6697,10 +6695,10 @@ async fn a_peer_that_never_attaches_is_cut_at_the_first_operation_deadline() {
     drop((reader, writer));
 }
 
-/// `felis bridge` dials its anchor at startup to prove the daemon is
-/// reachable and writes nothing until its editor asks for something, so
-/// the deadline that cut it would kill an idle bridge for working as
-/// documented.
+/// An editor client dials its ops connection at startup to prove the
+/// daemon is reachable and writes nothing until its user asks for
+/// something, so the deadline that cut it would kill an idle client
+/// for working as documented.
 #[cfg(unix)]
 #[tokio::test(start_paused = true)]
 async fn an_ops_connection_may_idle_before_its_first_verb() {
@@ -6735,7 +6733,7 @@ async fn an_ops_connection_may_idle_before_its_first_verb() {
     drop(server.await);
 }
 
-/// Only the *first* operation is timed: a bridge idles between verbs
+/// Only the *first* operation is timed: an ops client idles between verbs
 /// and an observer idles for hours, and cutting either would break the
 /// connection modes the daemon exists to serve.
 #[cfg(unix)]
