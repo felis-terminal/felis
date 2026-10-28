@@ -95,7 +95,7 @@ memmap2 = "0.9"
 yeslogic-fontconfig-sys = { version = "6.0.1", features = ["dlopen"] }
 # A test checks the fontconfig weight map against the host library's own;
 # already in the graph through the binding above.
-libloading = "0.8"
+libloading = "0.9"
 wgpu = "30"
 winit = "0.30"
 # accesskit_winit's default async-io executor would add a second async runtime; tokio is already in the graph.
