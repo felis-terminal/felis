@@ -55,6 +55,10 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 
 ### Fixed
 
+- On Linux, a family name that is not installed and that fontconfig resolves only to a generic family's face is reported
+  missing: `font.family` falls back to the default monospace face, a styled `family` to the regular face, and a
+  `font.fallback` entry is skipped. A typo such as `JetBrainsMono Nerd Fnt` or `Noto Sans Qwxyz` used to draw that face,
+  a proportional one included, with no warning. A `fonts.conf` alias to any other face still applies and is logged.
 - Closing the terminal a window was launched from, or pressing Ctrl+C in it, no longer stops the daemon that window
   started, which ended every session. This hit Windows and macOS, and Linux when the launcher was not under the systemd
   user manager.

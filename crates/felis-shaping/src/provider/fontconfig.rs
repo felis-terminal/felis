@@ -4,7 +4,7 @@
 
 use std::{
     cell::{OnceCell, RefCell},
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     ffi::{CStr, CString, c_int},
     mem::ManuallyDrop,
     os::unix::ffi::OsStrExt,
@@ -21,6 +21,8 @@ use fontconfig_sys::{
         FC_SLANT_ITALIC, FC_SLANT_ROMAN, FC_WEIGHT,
     },
 };
+
+use tracing::info;
 
 use super::{
     CascadeFace, FaceProvider, FaceSource, LoadedAs, REGULAR_WEIGHT, ResolvedFace,
@@ -41,9 +43,26 @@ const SONAME: &str = "libfontconfig.so.1";
 /// its default position (`fcfreetype.c`).
 const VARIABLE_DEFAULT_INSTANCE: u32 = 0x8000;
 
-/// A family no font declares; the config rules it picks up are the ones
-/// every name gets.
-const UNKNOWN_FAMILY: &str = "felis-unknown-family-sentinel";
+/// The generic names fontconfig's stock `48-guessfamily.conf` routes a
+/// family name containing one of them to. A name not installed that
+/// lands where one of these does was guessed, not mapped by an alias.
+const GENERIC_FAMILIES: [&str; 15] = [
+    "sans-serif",
+    "sans",
+    "serif",
+    "monospace",
+    "mono",
+    "cursive",
+    "fantasy",
+    "fangsong",
+    "emoji",
+    "math",
+    "system-ui",
+    "ui-sans-serif",
+    "ui-serif",
+    "ui-monospace",
+    "ui-rounded",
+];
 
 /// The `fontformat` of the sfnt containers the loader parses; fontconfig
 /// also lists PCF, BDF and Type 1 faces it cannot.
@@ -83,6 +102,19 @@ const WEIGHT_SCALE: [(f64, f64); 13] = [
     (900.0, 210.0),
     (1000.0, 215.0),
 ];
+
+/// Whether `name` is one of the generic names, compared as fontconfig
+/// compares family names: ignoring ASCII case and spaces.
+fn is_generic_name(name: &str) -> bool {
+    let fold = |s: &str| {
+        s.bytes()
+            .filter(|&b| b != b' ')
+            .map(|b| b.to_ascii_lowercase())
+            .collect::<Vec<u8>>()
+    };
+    let name = fold(name);
+    GENERIC_FAMILIES.iter().any(|generic| fold(generic) == name)
+}
 
 /// Interpolates `x` along `points` read as `(from, to)` pairs; `None`
 /// outside them.
@@ -129,9 +161,12 @@ pub(crate) struct Fontconfig {
     /// fallback's styles are matched among its family alone instead of
     /// against the whole font set once per style.
     families: OnceCell<HashMap<Vec<u8>, FontSet<'static>>>,
-    /// An unknown name's substituted query, less the name; keyed by
-    /// (weight, italic) since a rule can test either.
-    unknown: RefCell<HashMap<(u16, bool), Pattern<'static>>>,
+    /// The families the generic names match, keyed by (weight, italic)
+    /// since a rule can test either.
+    generic: RefCell<HashMap<(u16, bool), Vec<String>>>,
+    /// Names already logged as resolved by an alias, so each style's
+    /// lookup of the same name does not log it again.
+    aliased: RefCell<HashSet<String>>,
 }
 
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -275,7 +310,8 @@ impl Fontconfig {
             ids: RefCell::new(HashMap::new()),
             loadable: OnceCell::new(),
             families: OnceCell::new(),
-            unknown: RefCell::new(HashMap::new()),
+            generic: RefCell::new(HashMap::new()),
+            aliased: RefCell::new(HashSet::new()),
         }
     }
 
@@ -357,41 +393,21 @@ impl Fontconfig {
         }
     }
 
-    /// A copy of `query` with `name` taken out of its family list.
-    fn without_family(&self, query: &Pattern<'_>, name: &str) -> Pattern<'static> {
-        let lib = self.lib;
-        // SAFETY: `query` is live; the copy is owned by the returned guard.
-        let copy = Pattern {
-            lib,
-            raw: unsafe { (lib.FcPatternDuplicate)(query.raw) },
-        };
-        assert!(!copy.raw.is_null(), "FcPatternDuplicate failed");
-        while let Some(at) = (0..)
-            .map_while(|n| Some((n, self.string_at(copy.raw, FC_FAMILY, n)?)))
-            .find_map(|(n, f)| (f.to_bytes() == name.as_bytes()).then_some(n))
-        {
-            // SAFETY: `copy` is live and `at` indexes an existing value.
-            unsafe { (lib.FcPatternRemove)(copy.raw, FC_FAMILY.as_ptr(), at) };
-        }
-        copy
-    }
-
-    /// Whether config substitution treated `name` exactly as it treats a
-    /// name no rule mentions.
-    fn substitutes_as_unknown(
-        &self,
-        query: &Pattern<'_>,
-        name: &str,
-        weight: u16,
-        italic: bool,
-    ) -> bool {
-        let stripped = self.without_family(query, name);
-        let mut unknown = self.unknown.borrow_mut();
-        let sentinel = unknown.entry((weight, italic)).or_insert_with(|| {
-            self.without_family(&self.query(UNKNOWN_FAMILY, weight, italic), UNKNOWN_FAMILY)
-        });
-        // SAFETY: both patterns are live.
-        unsafe { (self.lib.FcPatternEqual)(stripped.raw, sentinel.raw) != FC_FALSE }
+    fn is_generic_match(&self, family: &str, weight: u16, italic: bool) -> bool {
+        let mut generic = self.generic.borrow_mut();
+        generic
+            .entry((weight, italic))
+            .or_insert_with(|| {
+                GENERIC_FAMILIES
+                    .iter()
+                    .filter_map(|name| {
+                        let matched = self.best_match(&self.query(name, weight, italic))?;
+                        Some(self.face_of(matched.raw)?.family)
+                    })
+                    .collect()
+            })
+            .iter()
+            .any(|generic| generic == family)
     }
 
     fn loadable(&self) -> &FontSet<'static> {
@@ -607,18 +623,25 @@ impl Drop for Fontconfig {
 impl FaceProvider for Fontconfig {
     type Id = usize;
 
-    /// A name no installed face carries is still accepted when a config
-    /// rule edits its query beyond what an unknown name gets, so an
-    /// `<alias>` in `fonts.conf` is honored rather than reported missing.
-    /// Comparing the matched face instead misfires when the alias target
-    /// is also where an unknown name lands.
+    /// A name no installed face carries is accepted only when it lands on
+    /// a family no generic name matches, so an `<alias>` in `fonts.conf`
+    /// is honored while a typo the stock rules route by a substring is
+    /// not (`docs/explanation/rendering/text-shaping.md` "Linux faces").
     fn find_face(&self, family: &str, weight: u16, italic: bool) -> Option<usize> {
         let query = self.query(family, weight, italic);
-        if !self.is_installed(family) && self.substitutes_as_unknown(&query, family, weight, italic)
-        {
-            return None;
-        }
         let found = self.face_of(self.best_match(&query)?.raw)?;
+        if !self.is_installed(family) && !is_generic_name(family) {
+            if self.is_generic_match(&found.family, weight, italic) {
+                return None;
+            }
+            if self.aliased.borrow_mut().insert(family.to_owned()) {
+                info!(
+                    family,
+                    resolved = found.family,
+                    "font family resolved by fontconfig alias"
+                );
+            }
+        }
         Some(self.record(found))
     }
 
@@ -1080,61 +1103,55 @@ ENDFONT
     fn a_config_alias_is_honored_rather_than_reported_missing() {
         let Some(fc) = pinned(
             r"<alias binding='same'><family>MyTerm</family>
-              <prefer><family>Monaspace Argon</family></prefer></alias>",
+              <prefer><family>Monaspace Neon</family></prefer></alias>",
         ) else {
             return;
         };
         let id = fc
             .find_face("MyTerm", REGULAR_WEIGHT, false)
             .expect("the alias maps it");
-        assert_eq!(family(&fc, id), "Monaspace Argon");
+        assert_eq!(family(&fc, id), "Monaspace Neon");
         let bold = fc
             .find_face("MyTerm", 700, false)
             .expect("the alias maps bold too");
         let face = fc.resolve_face(bold).expect("recorded");
         assert!(!face.slanted);
-        assert_ne!(bold, id, "bold resolves to Argon's bold file");
+        assert_ne!(bold, id, "bold resolves to Neon's bold file");
+    }
+
+    /// The stock `48-guessfamily.conf` shape: a name containing `mono`
+    /// gets `monospace` appended, which prefers Monaspace Xenon.
+    const GUESS_MONO: &str = r"<match target='pattern'>
+          <test name='family' compare='contains'><string>mono</string></test>
+          <edit name='family' mode='append_last'><string>monospace</string></edit></match>
+        <alias><family>monospace</family><prefer><family>Monaspace Xenon</family></prefer></alias>";
+
+    #[test]
+    fn a_name_a_rule_routes_to_a_generic_by_substring_is_reported_missing() {
+        let Some(fc) = pinned(GUESS_MONO) else { return };
+        for (weight, italic) in [(REGULAR_WEIGHT, false), (BOLD_WEIGHT, true)] {
+            assert_eq!(fc.find_face("Qwxyz Mono", weight, italic), None);
+        }
     }
 
     #[test]
-    fn an_alias_to_the_face_an_unknown_name_lands_on_is_still_honored() {
-        let Some(fc) = pinned("") else { return };
-        let query = fc.query(UNKNOWN_FAMILY, REGULAR_WEIGHT, false);
-        let landing = fc
-            .face_of(fc.best_match(&query).expect("a match").raw)
-            .expect("a face")
-            .family;
+    fn a_generic_name_resolves_to_its_generic_face() {
+        let Some(fc) = pinned(GUESS_MONO) else { return };
+        let id = fc
+            .find_face("Mono Space", REGULAR_WEIGHT, false)
+            .expect("a generic name is accepted");
+        assert_eq!(family(&fc, id), "Monaspace Xenon");
+    }
+
+    #[test]
+    fn an_alias_to_the_face_a_generic_name_matches_is_reported_missing() {
         let Some(fc) = pinned(&format!(
-            "<alias binding='same'><family>MyTerm</family>
-              <prefer><family>{landing}</family></prefer></alias>"
+            "{GUESS_MONO}<alias binding='same'><family>MyTerm</family>
+              <prefer><family>Monaspace Xenon</family></prefer></alias>"
         )) else {
             return;
         };
-        let id = fc
-            .find_face("MyTerm", REGULAR_WEIGHT, false)
-            .expect("the alias maps it");
-        assert_eq!(family(&fc, id), landing);
-    }
-
-    #[test]
-    fn a_rule_that_edits_only_the_weight_still_counts_as_known() {
-        let Some(fc) = pinned(
-            r"<match target='pattern'><test name='family'><string>MyTerm</string></test>
-              <edit name='weight' mode='assign'><const>bold</const></edit></match>",
-        ) else {
-            return;
-        };
-        let id = fc
-            .find_face("MyTerm", REGULAR_WEIGHT, false)
-            .expect("the rule names it");
-        let unknown = fc.query(UNKNOWN_FAMILY, BOLD_WEIGHT, false);
-        let unknown_bold = fc
-            .face_of(fc.best_match(&unknown).expect("a match").raw)
-            .expect("a face");
-        let FaceSource::File(path) = fc.resolve_face(id).expect("recorded").source else {
-            panic!("fontconfig faces are files");
-        };
-        assert_eq!(path, unknown_bold.key.path, "the weight edit applies");
+        assert_eq!(fc.find_face("MyTerm", REGULAR_WEIGHT, false), None);
     }
 
     #[test]

@@ -70,7 +70,9 @@ A local repository path may also be referenced: `#:schema <path>/crates/felis-cl
 # come from fontconfig less its bitmap (PCF, BDF) and Type 1 faces, so a
 # family with only such faces counts as not installed: the default is
 # its `monospace` match (`fc-match monospace`), and a name is resolved
-# through it, so `fonts.conf` aliases apply. On macOS the user's
+# through it, so `fonts.conf` aliases apply, except that a name not
+# installed whose match is also a generic name's (`monospace`, `sans`,
+# `emoji`, ...) counts as not installed. On macOS the user's
 # fixed-pitch font (Menlo unless changed); on Windows Cascadia Mono.
 # Failing that, the first installed of DejaVu Sans Mono, Liberation
 # Mono, Noto Sans Mono, Ubuntu Mono, Menlo, and Consolas. Names resolve

@@ -481,9 +481,12 @@ other rule, and on Debian names `FreeMono` (from `69-unifont.conf`) on a host th
 `fc-match` is rejected because a host with only `fontconfig-config` lacks the CLI. The library is dlopened from the host
 rather than linked or bundled, the way the Vulkan loader is: the host's library is the one that reads the host's
 `/etc/fonts` syntax and cache format, which a bundled copy of another version may not (kitty's Linux build ships it the
-same way, for distributions' differing config paths). A host without libfontconfig cannot open a window. A family the
-config does not know is detected by the config rules it picks up, not by comparing names, so an `<alias>` that maps a
-requested name elsewhere is honored. Faces in a format the loader cannot parse (fontconfig also lists PCF, BDF and
+same way, for distributions' differing config paths). A host without libfontconfig cannot open a window. A name no
+installed family carries is accepted when its best match is not a face a generic name (the ones the stock
+`48-guessfamily.conf` recognizes, `monospace` to `ui-rounded`) also matches, so an `<alias>` that maps it elsewhere is
+honored while a typo is reported. Comparing the substituted queries instead fails: stock rules that test part of a name
+(`mono`, `sans`, `emoji`) edit a typo's query as an alias would. The cost is an alias whose target is a generic's own
+face, which reads as not installed. Faces in a format the loader cannot parse (fontconfig also lists PCF, BDF and
 Type 1) are taken out of the font set before any match, so felis matches as if they were not installed. Asking for
 `scalable` in the query instead, as kitty does, does not work: fontconfig ranks it above the family, so a name whose
 only faces are bitmaps would draw another family without a warning.
