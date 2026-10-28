@@ -39,6 +39,8 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 - **Shaders**: uniform contract v2 appends `time_whole_s`, `time_fract_s`, `focus_change_time_s`, `stage_index`,
   `animation_start_s` and `animation_progress`; a shader written against v1 loads unchanged. Binding 3 gives a stage its
   own output from the previous frame, for afterglow and motion blur.
+- **Wire**: protocol minor 3 adds `PushSessionExited.status`, the session program's exit code or, on Unix, the signal
+  that terminated it. An older window skips it; a window facing an older daemon reads it as absent.
 
 ### Changed
 

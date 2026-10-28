@@ -17,8 +17,8 @@ use felis_protocol::messages::{
 use felis_protocol::{
     ConnectionMode, MinorGated as _,
     messages::{
-        Attachment, ConnToClientMsg, Correlation, GridDims, GridMsg, ImageMsg, InputMsg,
-        NotifyToClientMsg, OpsToClientMsg, PushMsg, RegionToClientMsg, RequestId,
+        Attachment, ConnToClientMsg, Correlation, ExitStatus, GridDims, GridMsg, ImageMsg,
+        InputMsg, NotifyToClientMsg, OpsToClientMsg, PushMsg, RegionToClientMsg, RequestId,
         SearchToClientMsg, SearchToDaemonMsg, SessionInfo, SessionToClientMsg, StreamErrorReason,
         StreamId, Subject, SwitchDenied, SwitchScope,
     },
@@ -1049,6 +1049,31 @@ impl Drop for SinkRelease {
 /// PTY drain throughput. 4 ms sits within a 16 ms vsync frame while keeping pulls fresh.
 const DRAIN_COALESCE: Duration = Duration::from_millis(4);
 
+/// Bounds how long a program that closed its terminal and kept running
+/// holds up `SessionExited`; that program's status is then unknown.
+const REAP_AFTER_EOF_TRIES: u32 = 20;
+const REAP_AFTER_EOF_STEP: Duration = Duration::from_millis(5);
+
+fn exit_status_to_wire(status: std::process::ExitStatus) -> Option<ExitStatus> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt as _;
+        if let Some(signal) = status.signal() {
+            return u32::try_from(signal).ok().map(ExitStatus::Signal);
+        }
+        status
+            .code()
+            .and_then(|code| u32::try_from(code).ok())
+            .map(ExitStatus::Code)
+    }
+    #[cfg(windows)]
+    {
+        status
+            .code()
+            .map(|code| ExitStatus::Code(code.cast_unsigned()))
+    }
+}
+
 async fn run_session(mut t: SessionTask, mut cmd_rx: mpsc::Receiver<SessionCmd>) {
     // Every way out, an unwinding panic included, releases a sink
     // waiting in `wait_for_drain`.
@@ -1151,7 +1176,8 @@ async fn run_session(mut t: SessionTask, mut cmd_rx: mpsc::Receiver<SessionCmd>)
                         }
                         t.session.program_status.expire_transient();
                         t.refresh_meta();
-                        t.notify_shell_exit();
+                        let status = t.reap_after_eof().await;
+                        t.notify_shell_exit(status);
                         t.evict_all(None);
                     }
                     Ok(_) => {
@@ -1855,12 +1881,38 @@ impl SessionTask {
     /// [`Self::evict_all`]; the connection pump (`serve.rs`) flushes
     /// buffered events before it observes the channel close, so the
     /// message lands ahead of the drop.
-    fn notify_shell_exit(&self) {
+    fn notify_shell_exit(&self, status: Option<ExitStatus>) {
         for sub in &self.subs {
             if sub.is_window {
-                let _ = sub.push(OutEvent::Push(PushMsg::SessionExited { id: self.id.0 }));
+                let _ = sub.push(OutEvent::Push(PushMsg::SessionExited {
+                    id: self.id.0,
+                    status,
+                }));
             }
         }
+    }
+
+    /// A child closes its PTY descriptors before the kernel makes it
+    /// waitable, so EOF can land a moment ahead of the status. Never
+    /// while held for an upgrade: the dump names this child unreaped.
+    async fn reap_after_eof(&mut self) -> Option<ExitStatus> {
+        if self.upgrade_hold {
+            return None;
+        }
+        for _ in 0..REAP_AFTER_EOF_TRIES {
+            match self.session.child.try_wait() {
+                Ok(Some(status)) => {
+                    self.child_exited = true;
+                    return exit_status_to_wire(status);
+                }
+                Ok(None) => tokio::time::sleep(REAP_AFTER_EOF_STEP).await,
+                Err(err) => {
+                    debug!(?err, "session task: reaping the child at EOF failed");
+                    return None;
+                }
+            }
+        }
+        None
     }
 
     fn stamp_exited_meta(&self) {
@@ -6507,6 +6559,22 @@ mod tests {
         assert_eq!(task.meta.lock().unwrap().subscribers, 0);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn exit_status_to_wire_separates_exit_codes_from_terminating_signals() {
+        use std::os::unix::process::ExitStatusExt as _;
+        let wire = |raw| exit_status_to_wire(std::process::ExitStatus::from_raw(raw));
+        assert_eq!(wire(0), Some(ExitStatus::Code(0)));
+        assert_eq!(wire(3 << 8), Some(ExitStatus::Code(3)));
+        assert_eq!(wire(255 << 8), Some(ExitStatus::Code(255)));
+        assert_eq!(wire(9), Some(ExitStatus::Signal(9)));
+        assert_eq!(
+            wire(15 | 0x80),
+            Some(ExitStatus::Signal(15)),
+            "a core dump is still a signal"
+        );
+    }
+
     /// Shell exit ships `SessionExited`, carrying the session's own id,
     /// to window subscribers only.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -6515,7 +6583,7 @@ mod tests {
         let (_window, mut rx_window) = attach_sub(&mut task, false);
         let (_ops, mut rx_ops) = attach_ops_sub(&mut task);
 
-        task.notify_shell_exit();
+        task.notify_shell_exit(Some(ExitStatus::Code(3)));
 
         let pushed: Vec<_> = drain_events(&mut rx_window)
             .into_iter()
@@ -6525,9 +6593,12 @@ mod tests {
         assert!(
             matches!(
                 pushed[0],
-                OutEvent::Push(PushMsg::SessionExited { id }) if id == task.id.0
+                OutEvent::Push(PushMsg::SessionExited {
+                    id,
+                    status: Some(ExitStatus::Code(3)),
+                }) if id == task.id.0
             ),
-            "SessionExited carries this session's id",
+            "SessionExited carries this session's id and the status it was given",
         );
         assert!(
             drain_events(&mut rx_ops).is_empty(),

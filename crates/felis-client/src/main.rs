@@ -2499,8 +2499,8 @@ fn forward_frame(
                         id,
                     })
                 }
-                PushMsg::SessionExited { id } => {
-                    tracing::info!(id = %SessionHex(id), "shell exited; session ended");
+                PushMsg::SessionExited { id, status } => {
+                    tracing::info!(id = %SessionHex(id), ?status, "shell exited; session ended");
                     events.send(AppEvent::SessionExited {
                         conn_gen,
                         place: exit_ladder::Place {

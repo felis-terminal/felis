@@ -1822,7 +1822,7 @@ fn a_refusal_is_the_one_transient_failure_no_spawn_answers() {
 async fn await_session_exited(
     conn: &mut Connection,
     deadline: tokio::time::Instant,
-) -> Option<u128> {
+) -> Option<(u128, Option<felis_protocol::messages::ExitStatus>)> {
     use felis_protocol::messages::PushMsg;
     while tokio::time::Instant::now() < deadline {
         // A quiet stretch is not an answer: the deadline above is the
@@ -1837,8 +1837,8 @@ async fn await_session_exited(
         if frame.kind != MessageKind::Push.as_u16() {
             continue;
         }
-        if let Ok(PushMsg::SessionExited { id }) = codec::decode::<PushMsg>(&frame.body) {
-            return Some(id);
+        if let Ok(PushMsg::SessionExited { id, status }) = codec::decode::<PushMsg>(&frame.body) {
+            return Some((id, status));
         }
     }
     None
@@ -1846,6 +1846,13 @@ async fn await_session_exited(
 
 #[cfg(all(unix, feature = "daemon-tests"))]
 async fn daemon_with_exiting_shell() -> (TempDir, PathBuf, tokio::task::JoinHandle<()>) {
+    daemon_running_script("printf bye; exit 0").await
+}
+
+#[cfg(all(unix, feature = "daemon-tests"))]
+async fn daemon_running_script(
+    script: &'static str,
+) -> (TempDir, PathBuf, tokio::task::JoinHandle<()>) {
     use felis_daemon::{serve::SessionFactory, serve::serve_unix_with_factory};
     use felis_pty::Command;
 
@@ -1853,9 +1860,9 @@ async fn daemon_with_exiting_shell() -> (TempDir, PathBuf, tokio::task::JoinHand
     let path = tmp.path().join("daemon.sock");
     let pool = Arc::new(Mutex::new(SessionPool::new()));
 
-    let factory: SessionFactory = Arc::new(|_| {
+    let factory: SessionFactory = Arc::new(move |_| {
         let mut cmd = Command::new("/bin/sh");
-        cmd.args(["-c", "printf bye; exit 0"]);
+        cmd.args(["-c", script]);
         cmd.env_clear();
         cmd.env("PATH", "/bin:/usr/bin");
         cmd
@@ -1883,12 +1890,59 @@ async fn window_client_hears_session_exited_when_shell_exits() {
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
     assert_eq!(
-        await_session_exited(&mut c, deadline).await,
+        await_session_exited(&mut c, deadline)
+            .await
+            .map(|(id, _)| id),
         Some(attach.id),
         "a window client must hear SessionExited for its own session on shell exit",
     );
 
     server.abort();
+}
+
+#[cfg(all(unix, feature = "daemon-tests"))]
+async fn session_exit_status_of(
+    script: &'static str,
+) -> Option<felis_protocol::messages::ExitStatus> {
+    let (_tmp, path, server) = daemon_running_script(script).await;
+    let mut c = connect(&path, Offer::window(false)).await.unwrap();
+    c.create_with(SpawnArgs::default()).await.unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    let exited = await_session_exited(&mut c, deadline).await;
+    server.abort();
+    exited.expect("the window must hear SessionExited").1
+}
+
+#[cfg(all(unix, feature = "daemon-tests"))]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn session_exited_carries_the_programs_exit_code() {
+    assert_eq!(
+        session_exit_status_of("exit 3").await,
+        Some(felis_protocol::messages::ExitStatus::Code(3)),
+    );
+}
+
+#[cfg(all(unix, feature = "daemon-tests"))]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn session_exited_carries_the_signal_that_killed_the_program() {
+    assert_eq!(
+        session_exit_status_of("kill -KILL $$").await,
+        Some(felis_protocol::messages::ExitStatus::Signal(9)),
+    );
+}
+
+#[cfg(all(unix, feature = "daemon-tests"))]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn session_exited_carries_no_status_when_the_program_outlives_its_pty() {
+    assert_eq!(
+        // The fixture's PATH has no `sleep` on every host, so a bounded
+        // builtin loop keeps the shell alive past the daemon's reap wait.
+        session_exit_status_of(
+            "exec </dev/null >/dev/null 2>&1; i=0; while [ \"$i\" -lt 3000000 ]; do i=$((i+1)); done"
+        )
+        .await,
+        None,
+    );
 }
 
 #[cfg(all(unix, feature = "daemon-tests"))]
