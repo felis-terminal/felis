@@ -73,6 +73,8 @@ Information-oriented lookup; consulted, not read in order.
   lifecycle, versioning.
 - [Row codec](reference/row-codec.md) — the normative, language-neutral spec of the `packed_cells` bytes: layout,
   integer widths, limits enforced before allocation, and the golden vectors every implementation must reproduce.
+- [JSON protocol](reference/json-protocol.md) — the protocol a browser view's relay speaks: version negotiation,
+  correlation and stream framing, requests, streams and their items.
 - [Control-surface name map](reference/control-surfaces.md) — one table mapping each operation across its planes:
   concept, CLI verb, keymap `kind`, `IpcAction`, wire message.
 - [Workspace](reference/workspace.md) — the canonical crate map, dependency direction, filesystem layout, build and

@@ -1,0 +1,12 @@
+{
+  "id": 5,
+  "result": {
+    "id": "0123456789abcdef0123456789abcdef",
+    "op": "tag",
+    "tags": [
+      "build",
+      "work"
+    ]
+  },
+  "type": "reply"
+}

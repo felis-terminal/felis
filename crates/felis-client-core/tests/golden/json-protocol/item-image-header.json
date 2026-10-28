@@ -1,0 +1,18 @@
+{
+  "id": 7,
+  "item": {
+    "item": "image",
+    "msg": {
+      "id": 9,
+      "target": {
+        "format": "rgba32",
+        "height": 32,
+        "serial": 2,
+        "target": "new",
+        "width": 64
+      },
+      "type": "header"
+    }
+  },
+  "type": "item"
+}

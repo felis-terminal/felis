@@ -1,0 +1,11 @@
+{
+  "id": 11,
+  "stream": {
+    "ansi": false,
+    "max_rows": 100,
+    "session": "0123456789abcdef0123456789abcdef",
+    "source": "command_output",
+    "stream": "capture"
+  },
+  "type": "open"
+}

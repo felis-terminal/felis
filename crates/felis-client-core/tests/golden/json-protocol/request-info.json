@@ -1,0 +1,8 @@
+{
+  "id": 2,
+  "request": {
+    "op": "info",
+    "session": "0123456789abcdef0123456789abcdef"
+  },
+  "type": "request"
+}

@@ -1,0 +1,15 @@
+{
+  "id": 12,
+  "item": {
+    "attached": false,
+    "body": "done",
+    "cwd": null,
+    "item": "notification",
+    "notification_id": null,
+    "session_id": "0123456789abcdef0123456789abcdef",
+    "session_title": "zsh",
+    "title": "build",
+    "urgency": "normal"
+  },
+  "type": "item"
+}

@@ -522,11 +522,11 @@ every later wire change. A script that needs only a verb's result runs the `feli
 shapes belong to the [CLI output contract](../../reference/cli.md) and version with it, so a wire minor lands without
 the script noticing.
 
-A consumer that mirrors a whole grid as JSON reads `felis-json` v1 instead, a named format with its own envelope, schema
-and compatibility policy ([ipc.md](../../reference/ipc.md) "Structural session JSON"), whose rows are spelled cell by
-cell rather than base64 over a packed structure, the property a second wire encoding never had. The record of why that
-format exists, and why it is owned where it is, lives in [overview.md](overview.md) "Shared wire knowledge across the
-satellite clients".
+A browser view that mirrors a whole grid as JSON reads the JSON protocol instead, a relay-facing protocol with its own
+negotiated version, schema and compatibility rule ([json-protocol.md](../../reference/json-protocol.md)), whose rows are
+spelled cell by cell rather than base64 over a packed structure, the property a second wire encoding never had. The
+record of why that protocol exists, and why it is owned where it is, lives in [overview.md](overview.md) "Shared wire
+knowledge across the satellite clients".
 
 ## Bulk payloads travel by reference
 

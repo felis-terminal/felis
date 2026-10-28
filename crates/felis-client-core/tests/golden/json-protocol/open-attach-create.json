@@ -1,0 +1,16 @@
+{
+  "id": 8,
+  "stream": {
+    "create": {
+      "args": [],
+      "command": "",
+      "cwd": "",
+      "dims": null,
+      "env": [],
+      "env_base": null,
+      "tags": []
+    },
+    "stream": "attach"
+  },
+  "type": "open"
+}

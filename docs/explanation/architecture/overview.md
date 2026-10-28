@@ -565,37 +565,39 @@ WebSocket relay that attaches natively, a session recorder with a replaying pseu
 and an editor client that speaks the daemon wire from a language without a protobuf runtime. Five pieces of wire
 knowledge recur across them; the sections below record where each belongs.
 
-#### Structural session JSON: adopt as a named format, `felis-json` v1 in `felis-grid`
+#### Session JSON for a browser view: adopt a negotiated protocol, in `felis-client-core`
 
-Two out-of-tree consumers mirror a whole session as JSON: a WebSocket relay decodes wire→JSON for a separately deployed
-browser view, and a recorder writes frame payloads into files and encodes JSON→wire to replay them. Both need the same
-two conversions, and both have to recode a `GridMsg`'s opaque row payload, since serde cannot transcode bytes
-`felis-grid` pre-encoded. So the conversion is shared, in `felis-grid::json_v1` behind the `json` feature, and it is a
-**named, versioned format** rather than a helper: an in-band `felis_json` version, dedicated DTOs, a generated schema
-and golden frames ([ipc.md](../../reference/ipc.md) "Structural session JSON").
+A browser view behind a WebSocket relay needs more of a session than its grid: the roster, a spawn, a send, search and
+capture, notifications. Each of those already has a wire family, and every one of them except the grid frames is a
+correlated request or stream, so the relay is a translator from correlated JSON to correlated wire messages. felis owns
+the JSON side as one protocol ([json-protocol.md](../../reference/json-protocol.md)): its payloads, its correlation and
+stream framing, its schema and golden messages. The relay owns the transport, authentication and host routing, which is
+why the protocol carries no host and the relay wraps it in an envelope of its own.
 
-The DTOs are the point, and they reach all the way down to a dirty row's cells. Publishing the daemon's own Rust serde
-shape would make every variant or field rename a silent downstream break, and leave validation and compatibility
-inherited from implementation types; an explicit DTO makes a rename fail the conversion to compile instead. It is also
-where the format refuses what it cannot represent: a reserved bit in a bitmap is an error rather than a bit the reader
-drops, which would otherwise re-encode as a different frame.
+The payloads are dedicated DTOs, down to a dirty row's cells. Publishing the daemon's own Rust serde shape would make
+every variant or field rename a silent downstream break, and leave validation and compatibility inherited from
+implementation types; an explicit DTO makes a rename fail the conversion to compile instead. It is also where the
+protocol refuses what it cannot represent: a reserved bit in a bitmap is an error rather than a bit the reader drops,
+which would otherwise re-encode as a different frame.
 
-It sits in `felis-grid`, not `felis-protocol`, because the row recode needs the row codec (`felis-grid::wire`) and
-`felis-protocol` is deliberately opaque to the per-cell layout; every consumer already links `felis-grid`, so it adds no
-dependency edge. Nothing in the module reaches a socket.
+The version is negotiated rather than fixed in band. A browser view is deployed apart from the relay feeding it, so a
+writer cannot assume what its reader knows; with a negotiated version a newer relay writes only what an older view
+agreed to, which makes a new message or variant a cheap version rather than a break. Inside a version only an optional
+field may be added, so the reader that negotiated it never meets a shape it cannot read. A rule fixed in band with no
+negotiation would protect the reader equally, but it cannot tell an old view from a new one, so every addition would
+cost every view a migration.
 
-The alternative was to keep the conversion an internal helper and let each outer format own its own envelope and DTOs.
-It is less code here, but it hands the same five message families to every satellite to re-describe, which is the drift
-a shared engine exists to prevent, and the two satellites that exist already depend on this conversion by git rev.
+The protocol lives in `felis-client-core` behind the `json` feature, and the row DTO in `felis-grid` beside the row
+codec. The row needs the codec to recode a packed row, and `felis-protocol` is deliberately opaque to the per-cell
+layout; the rest needs no tokio or OS dependency, so it builds for the wasm32 core the browser view already links, and
+the relay that drives a daemon connection with it can sit beside it in client-core. A crate of its own was rejected: it
+would sit above `felis-protocol` and `felis-grid` exactly where client-core already does, and add a published crate for
+one consumer.
 
-The compatibility rule the format carries is stricter than the wire's additive minor (REQ-104b): a socket peer
-negotiates an effective minor and can be told what the other side understands, while a `.fcast` file read two years
-later, and a browser view deployed separately from the gateway feeding it, can be told nothing. So inside a version the
-only permitted change is an optional field readers ignore, and everything wider is a version bump the reader refuses on
-sight.
-
-The other families (`Ops`, `Region`, `Notify`, `Push`, `Search`) are not in the format: what a JSON consumer reads of
-them is a CLI verb's result, under the CLI's own `v: 1` contract, which already publishes its schema.
+The alternative was to keep the protocol in the relay and export only DTOs. That leaves felis's own operations (the
+roster, tags, a send's validation and ordering, a search's paging) to be re-spelled out of tree, which is the drift a
+shared engine exists to prevent. A CLI verb's `--format json` output is not that protocol either: it is a process's
+result, without correlation or input, under the CLI's own contract.
 
 #### Grid→ANSI re-encoding: adopt, into `felis-grid`
 
@@ -611,8 +613,7 @@ Two alternatives are rejected:
 
 - **A per-client emitter.** Emitters drift: one that never learns underline styles, underline color, conceal, or
   overline renders those dimensions in the GUI client and drops them through the TUI.
-- **The feature gate its `json` sibling carries.** That gate exists to make `serde_json` optional, and ANSI emission
-  adds no dependency to save.
+- **A feature gate.** ANSI emission adds no dependency a gate would save.
 
 Client policy (per-host quirk tables, terminal-specific workarounds) belongs in the client, which composes it around the
 encoder rather than inside it.
