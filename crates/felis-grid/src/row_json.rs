@@ -1,16 +1,14 @@
-//! v1 DTO for one dirty row's cells. The packed bytes belong to
-//! `docs/reference/row-codec.md`; this is the JSON spelling of what
-//! they decode to, owned here so a change to how a `Cell` serializes
-//! cannot reshape the format.
+//! The JSON spelling of one packed row's cells. The packed bytes belong
+//! to `docs/reference/row-codec.md`; this is what they decode to, owned
+//! here beside the codec so a change to how a `Cell` serializes cannot
+//! reshape a JSON consumer's rows.
 
 use std::num::{NonZeroU16, NonZeroU32};
 
 use felis_protocol::RowPayload;
 use felis_protocol::kitty_text_sizing::{HAlign, Sizing, VAlign};
 
-use super::JsonError;
-use super::grid::plain_enum;
-use crate::wire::{self, DecodedRow, RowEncode};
+use crate::wire::{self, DecodedRow, RowCodecError, RowEncode};
 #[cfg(feature = "schema")]
 use crate::wire::{MAX_ATTR_RUNS, MAX_CELLS_PER_ROW, MAX_SIZED_CELLS};
 use crate::{AttrFlags, Attributes, Cell, Color, Grapheme, StyleTable, UnderlineStyle};
@@ -23,6 +21,58 @@ pub const ASCII_MIN: u8 = 0x20;
 
 /// Highest byte `Grapheme::Ascii` admits.
 pub const ASCII_MAX: u8 = 0x7E;
+
+/// Why a JSON row does not convert to a packed one.
+#[derive(Debug, thiserror::Error)]
+pub enum RowJsonError {
+    #[error("row codec: {0}")]
+    Codec(#[from] RowCodecError),
+    #[error("field `{field}`: {detail}")]
+    Field {
+        field: &'static str,
+        detail: &'static str,
+    },
+}
+
+impl RowJsonError {
+    const fn field(field: &'static str, detail: &'static str) -> Self {
+        Self::Field { field, detail }
+    }
+}
+
+macro_rules! json_dto {
+    ($(
+        $(#[$meta:meta])*
+        $vis:vis $kind:ident $name:ident $body:tt
+    )*) => {
+        $(
+            #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+            #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+            $(#[$meta])*
+            $vis $kind $name $body
+        )*
+    };
+}
+
+macro_rules! plain_enum {
+    ($json:ty, $domain:ty, $($variant:ident),+ $(,)?) => {
+        impl From<$domain> for $json {
+            fn from(value: $domain) -> Self {
+                match value {
+                    $(<$domain>::$variant => Self::$variant,)+
+                }
+            }
+        }
+
+        impl From<$json> for $domain {
+            fn from(value: $json) -> Self {
+                match value {
+                    $(<$json>::$variant => Self::$variant,)+
+                }
+            }
+        }
+    };
+}
 
 json_dto! {
     /// A row's cells. One encoding today: attribute runs over a flat
@@ -174,21 +224,21 @@ impl From<Grapheme> for GraphemeJson {
 }
 
 impl TryFrom<GraphemeJson> for Grapheme {
-    type Error = JsonError;
+    type Error = RowJsonError;
 
-    fn try_from(grapheme: GraphemeJson) -> Result<Self, JsonError> {
+    fn try_from(grapheme: GraphemeJson) -> Result<Self, RowJsonError> {
         Ok(match grapheme {
             GraphemeJson::Empty => Self::Empty,
             GraphemeJson::Ascii { byte } => {
                 if !(ASCII_MIN..=ASCII_MAX).contains(&byte) {
-                    return Err(JsonError::field("byte", "not printable ASCII"));
+                    return Err(RowJsonError::field("byte", "not printable ASCII"));
                 }
                 Self::Ascii(byte)
             }
             GraphemeJson::Char { ch } => Self::Char(ch),
             GraphemeJson::Cluster { id } => Self::Cluster(
                 NonZeroU32::new(id)
-                    .ok_or_else(|| JsonError::field("id", "a cluster handle is 1-based"))?,
+                    .ok_or_else(|| RowJsonError::field("id", "a cluster handle is 1-based"))?,
             ),
             GraphemeJson::Spacer => Self::Spacer,
             GraphemeJson::SizedSpacer => Self::SizedSpacer,
@@ -229,15 +279,15 @@ impl From<Attributes> for AttributesJson {
 }
 
 impl TryFrom<AttributesJson> for Attributes {
-    type Error = JsonError;
+    type Error = RowJsonError;
 
-    fn try_from(attrs: AttributesJson) -> Result<Self, JsonError> {
+    fn try_from(attrs: AttributesJson) -> Result<Self, RowJsonError> {
         Ok(Self {
             fg: attrs.fg.into(),
             bg: attrs.bg.into(),
             underline_color: attrs.underline_color.into(),
             flags: AttrFlags::from_bits(attrs.flags)
-                .ok_or_else(|| JsonError::field("flags", "a reserved SGR flag bit is set"))?,
+                .ok_or_else(|| RowJsonError::field("flags", "a reserved SGR flag bit is set"))?,
             underline_style: attrs.underline_style.into(),
         })
     }
@@ -257,9 +307,9 @@ impl From<Sizing> for SizingJson {
 }
 
 impl TryFrom<SizingJson> for Sizing {
-    type Error = JsonError;
+    type Error = RowJsonError;
 
-    fn try_from(sizing: SizingJson) -> Result<Self, JsonError> {
+    fn try_from(sizing: SizingJson) -> Result<Self, RowJsonError> {
         Self::new(
             sizing.scale,
             sizing.cell_width,
@@ -268,16 +318,37 @@ impl TryFrom<SizingJson> for Sizing {
             sizing.valign.into(),
             sizing.halign.into(),
         )
-        .ok_or_else(|| JsonError::field("sizing", "an OSC 66 field outside its spec range"))
+        .ok_or_else(|| RowJsonError::field("sizing", "an OSC 66 field outside its spec range"))
     }
 }
 
-/// Reads one packed row into its v1 form, run-length encoding the pens
-/// exactly as the packed row stores them.
-pub(super) fn from_payload(
+impl RowCellsJson {
+    /// Reads one packed row; the rows of one message share `styles`.
+    ///
+    /// # Errors
+    ///
+    /// When the payload is not a row the codec reads.
+    pub fn from_payload(
+        payload: &RowPayload,
+        styles: &mut StyleTable,
+    ) -> Result<Self, RowJsonError> {
+        from_payload(payload, styles)
+    }
+
+    /// Inverse of [`Self::from_payload`].
+    ///
+    /// # Errors
+    ///
+    /// When the row names a value the codec does not admit.
+    pub fn to_payload(&self, styles: &mut StyleTable) -> Result<RowPayload, RowJsonError> {
+        to_payload(self, styles)
+    }
+}
+
+fn from_payload(
     payload: &RowPayload,
     styles: &mut StyleTable,
-) -> Result<RowCellsJson, JsonError> {
+) -> Result<RowCellsJson, RowJsonError> {
     // Transcoding has no grid: the caller's table interns each run's pen
     // on decode and resolves it here, so the resolved `Attributes` are
     // identical across the recode.
@@ -297,11 +368,7 @@ pub(super) fn from_payload(
     })
 }
 
-/// Inverse of [`from_payload`].
-pub(super) fn to_payload(
-    cells: &RowCellsJson,
-    styles: &mut StyleTable,
-) -> Result<RowPayload, JsonError> {
+fn to_payload(cells: &RowCellsJson, styles: &mut StyleTable) -> Result<RowPayload, RowJsonError> {
     let RowCellsJson::Rle {
         graphemes,
         attr_runs,
@@ -314,12 +381,15 @@ pub(super) fn to_payload(
         let style = styles.intern(Attributes::try_from(run.attrs.clone())?);
         let link = link_handle(run.link)?;
         if run.len == 0 {
-            return Err(JsonError::field("len", "a run covers at least one column"));
+            return Err(RowJsonError::field(
+                "len",
+                "a run covers at least one column",
+            ));
         }
         for _ in 0..run.len {
             let grapheme = graphemes
                 .next()
-                .ok_or_else(|| JsonError::field("attr_runs", "the runs outrun the graphemes"))?;
+                .ok_or_else(|| RowJsonError::field("attr_runs", "the runs outrun the graphemes"))?;
             expanded.push(Cell {
                 grapheme: grapheme.clone().try_into()?,
                 style,
@@ -329,7 +399,7 @@ pub(super) fn to_payload(
         }
     }
     if graphemes.next().is_some() {
-        return Err(JsonError::field(
+        return Err(RowJsonError::field(
             "graphemes",
             "the graphemes outrun the attribute runs",
         ));
@@ -338,14 +408,14 @@ pub(super) fn to_payload(
         .iter()
         .map(|entry| {
             if usize::from(entry.col) >= expanded.len() {
-                return Err(JsonError::field(
+                return Err(RowJsonError::field(
                     "col",
                     "a sized cell names a column the row does not have",
                 ));
             }
             Ok((entry.col, Sizing::try_from(entry.sizing.clone())?))
         })
-        .collect::<Result<Vec<_>, JsonError>>()?;
+        .collect::<Result<Vec<_>, RowJsonError>>()?;
     let row = DecodedRow {
         cells: expanded,
         sized_cells: sized,
@@ -362,12 +432,12 @@ pub(super) fn to_payload(
     )?))
 }
 
-fn link_handle(link: Option<u16>) -> Result<Option<NonZeroU16>, JsonError> {
+fn link_handle(link: Option<u16>) -> Result<Option<NonZeroU16>, RowJsonError> {
     match link {
         None => Ok(None),
         Some(raw) => NonZeroU16::new(raw)
             .map(Some)
-            .ok_or_else(|| JsonError::field("link", "a hyperlink handle is 1-based")),
+            .ok_or_else(|| RowJsonError::field("link", "a hyperlink handle is 1-based")),
     }
 }
 
@@ -556,7 +626,7 @@ mod tests {
             assert!(
                 matches!(
                     to_payload(&cells, &mut StyleTable::new()),
-                    Err(JsonError::Field { field: "byte", .. })
+                    Err(RowJsonError::Field { field: "byte", .. })
                 ),
                 "byte {byte:#04x} must not cross",
             );
@@ -607,7 +677,7 @@ mod tests {
         };
         assert!(matches!(
             to_payload(&cells, &mut StyleTable::new()),
-            Err(JsonError::Field { field: "col", .. })
+            Err(RowJsonError::Field { field: "col", .. })
         ));
     }
 
@@ -618,7 +688,7 @@ mod tests {
         let reserved = ATTR_FLAGS_MAX + 1;
         assert!(matches!(
             to_payload(&rle(reserved), &mut StyleTable::new()),
-            Err(JsonError::Field { field: "flags", .. })
+            Err(RowJsonError::Field { field: "flags", .. })
         ));
     }
 
@@ -639,7 +709,7 @@ mod tests {
         };
         assert!(matches!(
             to_payload(&cells, &mut StyleTable::new()),
-            Err(JsonError::Field { field: "len", .. })
+            Err(RowJsonError::Field { field: "len", .. })
         ));
     }
 
@@ -658,7 +728,7 @@ mod tests {
         };
         assert!(matches!(
             to_payload(&cells, &mut StyleTable::new()),
-            Err(JsonError::Field {
+            Err(RowJsonError::Field {
                 field: "attr_runs",
                 ..
             })
@@ -676,7 +746,7 @@ mod tests {
         };
         assert!(matches!(
             to_payload(&cells, &mut StyleTable::new()),
-            Err(JsonError::Field {
+            Err(RowJsonError::Field {
                 field: "graphemes",
                 ..
             })
@@ -694,7 +764,7 @@ mod tests {
         };
         assert!(matches!(
             to_payload(&cells, &mut StyleTable::new()),
-            Err(JsonError::Field { field: "id", .. })
+            Err(RowJsonError::Field { field: "id", .. })
         ));
     }
 
@@ -725,7 +795,7 @@ mod tests {
         };
         assert!(matches!(
             to_payload(&cells, &mut StyleTable::new()),
-            Err(JsonError::Field {
+            Err(RowJsonError::Field {
                 field: "sizing",
                 ..
             })
@@ -748,7 +818,7 @@ mod tests {
         };
         assert!(matches!(
             to_payload(&cells, &mut StyleTable::new()),
-            Err(JsonError::Field { field: "link", .. })
+            Err(RowJsonError::Field { field: "link", .. })
         ));
     }
 }

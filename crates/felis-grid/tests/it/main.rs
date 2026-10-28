@@ -6,8 +6,6 @@ mod ansi_round_trip;
 mod common;
 mod damage_correctness;
 mod e2e_osc_66_producers;
-#[cfg(feature = "json")]
-mod json_v1;
 mod proptest_cluster;
 mod proptest_damage;
 mod proptest_decrqcra;
@@ -15,8 +13,6 @@ mod proptest_decrqm;
 mod proptest_decrqss;
 mod proptest_grid;
 mod proptest_image_store;
-#[cfg(feature = "json")]
-mod proptest_json_v1_row;
 mod proptest_mouse;
 mod proptest_osc;
 mod proptest_osc_52;
@@ -26,6 +22,7 @@ mod proptest_placements_model;
 mod proptest_print_fast_path;
 mod proptest_rect_ops;
 mod proptest_row_codec;
+mod proptest_row_json;
 mod proptest_sgr_hash;
 mod proptest_sync_output;
 mod protocol_coverage_matrix;

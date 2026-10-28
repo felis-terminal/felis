@@ -1402,7 +1402,6 @@ name = "felis-grid"
 version = "0.2.0"
 dependencies = [
  "bitflags 2.13.2",
- "boon",
  "bytes",
  "criterion",
  "felis-protocol",

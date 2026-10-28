@@ -1,19 +1,15 @@
-//! The felis-json v1 row DTO admits nothing the row codec refuses: a
-//! replay that gets a frame past `json_v1::decode` must not be able to
-//! hand the daemon bytes that kill the consuming client's connection.
+//! The JSON row DTO admits nothing the row codec refuses: a row that
+//! converts must not be able to hand the daemon bytes that kill the
+//! consuming client's connection.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
-#![cfg(feature = "json")]
 
-use felis_grid::json_v1::{
-    self, ASCII_MAX, ASCII_MIN, AttrRunJson, AttributesJson, ColorJson, GraphemeJson, HAlignJson,
+use felis_grid::row_json::{
+    ASCII_MAX, ASCII_MIN, AttrRunJson, AttributesJson, ColorJson, GraphemeJson, HAlignJson,
     RowCellsJson, SizedCellJson, SizingJson, UnderlineStyleJson, VAlignJson,
 };
 use felis_grid::{StyleTable, decode_row};
-use felis_protocol::messages::GridMsg;
-use felis_protocol::{MessageKind, codec};
 use proptest::prelude::*;
-use serde_json::{Value, json};
 
 fn color() -> impl Strategy<Value = ColorJson> {
     prop_oneof![
@@ -102,35 +98,23 @@ fn row_cells() -> impl Strategy<Value = RowCellsJson> {
         )
 }
 
-fn envelope(cells: &RowCellsJson) -> Value {
-    json!({
-        "felis_json": 1,
-        "kind": "grid",
-        "msg": {
-            "type": "row_delta",
-            "rows": [{ "row": 0, "cells": serde_json::to_value(cells).unwrap() }],
-        },
-    })
+/// What a consumer hands back: the row as it reads off the JSON text.
+fn reread(cells: &RowCellsJson) -> RowCellsJson {
+    serde_json::from_str(&serde_json::to_string(cells).unwrap()).unwrap()
 }
 
 proptest! {
-    /// Whatever the envelope accepts, the row codec accepts: the two
-    /// admission rules are one rule.
+    /// Whatever the DTO admits, the row codec accepts: the two admission
+    /// rules are one rule.
     #[test]
-    fn a_row_the_envelope_accepts_is_a_row_the_codec_accepts(cells in row_cells()) {
-        let Ok((kind, body)) = json_v1::decode(&envelope(&cells)) else {
+    fn a_row_the_dto_admits_is_a_row_the_codec_accepts(cells in row_cells()) {
+        let Ok(payload) = reread(&cells).to_payload(&mut StyleTable::new()) else {
             return Ok(());
         };
-        prop_assert_eq!(kind, MessageKind::Grid);
-        let GridMsg::RowDelta { rows } = codec::decode::<GridMsg>(&body).unwrap() else {
-            panic!("a row delta decodes as one");
-        };
-        for (_, payload) in rows {
-            prop_assert!(
-                decode_row(&payload.0, &mut StyleTable::new()).is_ok(),
-                "the envelope admitted a row the codec refuses: {cells:?}",
-            );
-        }
+        prop_assert!(
+            decode_row(&payload.0, &mut StyleTable::new()).is_ok(),
+            "the DTO admitted a row the codec refuses: {cells:?}",
+        );
     }
 
     /// The window is the row codec's, not a second one written here.
@@ -153,7 +137,7 @@ proptest! {
             soft_wrap_continued: false,
         };
         prop_assert_eq!(
-            json_v1::decode(&envelope(&cells)).is_ok(),
+            reread(&cells).to_payload(&mut StyleTable::new()).is_ok(),
             (ASCII_MIN..=ASCII_MAX).contains(&byte),
         );
     }

@@ -7,10 +7,10 @@ profile = "mutants"
 
 # Parallelism stays out of this file: the config schema rejects `jobs`,
 # so `just mutants` defaults CARGO_MUTANTS_JOBS=4 instead.
-# Enables the feature-gated code and its tests: the JSON row view (wire.rs)
-# and the upgrade state dump (state.rs, the check_restored validators).
+# Enables the feature-gated code and its tests: the upgrade state dump
+# (state.rs, the check_restored validators).
 # Without a feature its mutants still compile and pass, reported as missed.
-additional_cargo_args = ["--features", "felis-grid/json,felis-grid/state-dump"]
+additional_cargo_args = ["--features", "felis-grid/state-dump"]
 
 # Restricted to boundary logic: excludes async daemon, GPU renderer, and OS crates with poor signal-to-cost ratio.
 examine_globs = [

@@ -8,11 +8,9 @@ repository.workspace = true
 description = "felis grid model: cells, cursor, scrollback, image store, damage tracker"
 
 [features]
-# Off by default so daemon and GUI client avoid linking serde_json.
-json = ["dep:serde_json"]
-# Renders the published `felis-json` v1 schema; default-off so the
-# shipped binaries stay schemars-free.
-schema = ["json", "dep:schemars"]
+# Derives the row DTO's JSON Schema for the documents that embed it;
+# default-off so the shipped binaries stay schemars-free.
+schema = ["dep:schemars"]
 # Serde for the state an in-place daemon upgrade carries across exec;
 # only the daemon enables it.
 state-dump = ["felis-vt/state-dump"]
@@ -26,14 +24,12 @@ bitflags = { workspace = true }
 foldhash = { workspace = true }
 indexmap = { workspace = true }
 serde = { workspace = true }
-serde_json = { workspace = true, optional = true }
 schemars = { workspace = true, optional = true }
 thiserror = { workspace = true }
 unicode-width = { workspace = true }
 simdutf8 = { workspace = true }
 
 [dev-dependencies]
-boon = { workspace = true }
 proptest = { workspace = true }
 insta = { workspace = true }
 criterion = { workspace = true }
