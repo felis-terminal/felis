@@ -804,7 +804,7 @@ Within the shared ops, three differences are policy and are frozen with their re
 
 #### Any unknown first word runs `felis-<word>`
 
-`felis tui` runs `felis-tui`, git's and cargo's external-subcommand model. The commands it reaches are not only
+`felis picker` runs `felis-picker`, git's and cargo's external-subcommand model. The commands it reaches are not only
 frontends: session pickers and killers built on `felis sessions` are the same kind of tool, so a namespace word such as
 `felis frontend <name>` would either name one kind or be too vague to name any. The cost is that a typo can reach an
 exec, but only of a `felis-<typo>` someone installed: a word that finds nothing is a usage error naming the built-in

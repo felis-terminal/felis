@@ -100,19 +100,20 @@ extraction = `felis-protocol`, `felis-vt`, `felis-grid`, `felis-transport`, `fel
 own transport / renderer). felis core ships no `examples/` bridge crates: the reuse paths below are realized by the
 sibling repos in the ecosystem.
 
-| Client kind                         | Crates reused                                                                                             | Bridge required                                                                                   |
-| ----------------------------------- | --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| Native Rust GPU (this repo)         | all client-side crates                                                                                    | none                                                                                              |
-| Software-rendered native            | `felis-protocol`, `felis-transport`, `felis-client-core`, `felis-shaping`, `felis-render-core`            | pixel composer drawing the `felis-render-core` display list in place of `felis-render-wgpu`       |
-| Browser tab (`felis-web-component`) | `felis-client-core` + `felis-grid` compiled to wasm                                                       | `felis-web-gateway`, a native `felis-client-core` attach re-exposing the session over a WebSocket |
-| Emacs (`felis.el`)                  | none (pure Elisp): runs `felis bridge` as a subprocess and reads one JSON object per line from its stdout | `felis bridge`, which ships with the CLI                                                          |
-| Host-terminal TUI (`felis-tui`)     | `felis-client-core` + `felis-grid` (`ansi` for the re-encode)                                             | none; attaches over the Unix socket and repaints the host terminal                                |
+| Client kind                       | Crates reused                                                                                  | Bridge required                                                                             |
+| --------------------------------- | ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| Native Rust GPU (this repo)       | all client-side crates                                                                         | none                                                                                        |
+| Software-rendered native          | `felis-protocol`, `felis-transport`, `felis-client-core`, `felis-shaping`, `felis-render-core` | pixel composer drawing the `felis-render-core` display list in place of `felis-render-wgpu` |
+| Browser tab                       | `felis-client-core` + `felis-grid` compiled to wasm                                            | a WebSocket relay: a native `felis-client-core` attach re-exposing the session              |
+| Editor without a protobuf runtime | none: codec generated from `felis.proto` by a `protoc-gen-*` of its own                        | none; attaches over the Unix socket and speaks the daemon wire                              |
+| Host-terminal TUI                 | `felis-client-core` + `felis-grid` (`ansi` for the re-encode)                                  | none; attaches over the Unix socket and repaints the host terminal                          |
 
 Two mechanisms carry that column. A language with a protobuf runtime generates its codec from `felis.proto` and speaks
-the daemon wire directly, which is the only encoding the socket has ([ipc.md](ipc.md)). A language without one, Elisp,
-runs `felis bridge` instead: protobuf to the daemon, JSONL on the subprocess's stdin and stdout, with the line shapes
-belonging to the CLI output contract ([cli.md](cli.md)) rather than to the wire, so wire-minor growth reaches the editor
-as nothing at all.
+the daemon wire directly, which is the only encoding the socket has ([ipc.md](ipc.md)), and a language without one does
+the same with a generator of its own and the golden vectors in [row-codec.md](row-codec.md). A client that carries no
+codec at all runs `felis bridge` instead: protobuf to the daemon, JSONL on the subprocess's stdin and stdout, with the
+line shapes belonging to the CLI output contract ([cli.md](cli.md)) rather than to the wire, so wire-minor growth
+reaches it as nothing at all.
 
 Five shared wire facilities support external satellite clients (see
 [overview.md](../explanation/architecture/overview.md) for architectural tradeoffs):

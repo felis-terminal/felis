@@ -725,7 +725,7 @@ if window not found or descriptor over limit, `2` on invalid arguments or unreac
 ## External commands: `felis <name>`
 
 A first word that names no built-in verb runs `felis-<name>`, forwarding all remaining arguments verbatim:
-`felis tui attach 1a2b` runs `felis-tui attach 1a2b`. Built-in verbs always win, so a `felis-<name>` whose name a
+`felis picker --tag work` runs `felis-picker --tag work`. Built-in verbs always win, so a `felis-<name>` whose name a
 built-in verb takes is reachable only by its own name. An external command reads terminal state through this CLI or
 [ipc.md](ipc.md) like any other client; `felis` only launches it.
 

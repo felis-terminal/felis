@@ -385,11 +385,11 @@ and the dedup index rebuild.
 `StyleId`s are grid-local: the daemon and each client intern independently, so an id means nothing across the hop. The
 row codec (`wire.rs`) therefore ships the **resolved `Attributes`** per RLE run: the daemon resolves
 `StyleId → Attributes` on encode, and the shadow screen re-interns `Attributes → StyleId` into its own table on decode.
-Clients, the protobuf wire, and every out-of-repo consumer (felis-web-component, felis-fcast, felis.el) never see a
-`StyleId`; the id space exists only in each process's memory. Keeping ids off the wire is not merely convenience. An id
-space that a GC remaps cannot also be streamed incrementally the way the cluster and link tables are: a client holding a
-streamed id would see it invalidated under it. A remappable table and an incrementally streamed table are mutually
-exclusive, and only the monotonic tables can stream.
+Clients, the protobuf wire, and every out-of-tree consumer never see a `StyleId`; the id space exists only in each
+process's memory. Keeping ids off the wire is not merely convenience. An id space that a GC remaps cannot also be
+streamed incrementally the way the cluster and link tables are: a client holding a streamed id would see it invalidated
+under it. A remappable table and an incrementally streamed table are mutually exclusive, and only the monotonic tables
+can stream.
 
 Rejected alternatives:
 
