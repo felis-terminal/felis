@@ -12,6 +12,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use clap::builder::TypedValueParser as _;
 use felis_client_core::ConnectError;
+pub(crate) use felis_client_core::json::{
+    AttachmentObject, LastNotificationObject, ListResult, ProgramStatusObject, SessionObject,
+    SessionRef, TagResult, TerminalProgressObject,
+};
 use felis_protocol::SessionHex;
 use felis_protocol::messages::{
     AttachFailure, CreateFailure, RefusalReason, SessionInfo, StreamErrorReason,
@@ -642,213 +646,67 @@ pub(crate) fn short_id_alone(id: u128) -> String {
         .to_owned()
 }
 
-/// The body of a `sessions list` item and a `sessions info` result
-/// alike.
-#[derive(Debug, Serialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-pub(crate) struct SessionObject {
-    #[cfg_attr(feature = "schema", schemars(regex(pattern = r"^[0-9a-f]{32}$")))]
-    pub(crate) id: String,
-    pub(crate) short_id: String,
-    pub(crate) rows: u16,
-    pub(crate) cols: u16,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) idle_seconds: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) title: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) cwd: Option<String>,
-    /// The directory the child was started in; unlike `cwd`, it never
-    /// follows the program.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) spawn_cwd: Option<String>,
-    /// Always present, empty for an untagged session, so a `jq` picker
-    /// can rely on `.tags` being iterable.
-    pub(crate) tags: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) last_notification: Option<LastNotificationObject>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) foreground: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) last_exit_code: Option<u32>,
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
-    pub(crate) exited: bool,
-    /// Always present, like `tags`: a picker's `.attachments[]` must be
-    /// iterable on a parked session too.
-    pub(crate) attachments: Vec<AttachmentObject>,
-    /// OSC 7501 records, sorted by id. Always present, like `tags`.
-    pub(crate) program_status: Vec<ProgramStatusObject>,
-    /// The last `OSC 9 ; 4` progress the program reported and has not
-    /// cleared.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) terminal_progress: Option<TerminalProgressObject>,
+/// A single-session view passes the same roster the listing did, so
+/// both surfaces show one session the same `short_id`.
+pub(crate) fn session_object(s: &SessionInfo, roster: &[SessionInfo]) -> SessionObject {
+    session_object_with_short_id(s, short_id_in(s.id, roster))
 }
 
-/// One `OSC 9 ; 4` report. `state` is an open vocabulary, as
-/// [`ProgramStatusObject::state`] is.
-#[derive(Debug, Serialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-pub(crate) struct TerminalProgressObject {
-    pub(crate) state: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "schema", schemars(range(max = 100)))]
-    pub(crate) value: Option<u8>,
-}
-
-/// One OSC 7501 record, every value as the program sent it. `state` and
-/// `kind` are open vocabularies: a value this build does not list is a
-/// newer one, not an error.
-#[derive(Debug, Serialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-pub(crate) struct ProgramStatusObject {
-    /// `""` is the root record.
-    pub(crate) id: String,
-    pub(crate) state: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) kind: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "schema", schemars(range(max = 100)))]
-    pub(crate) progress: Option<u8>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) app: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) title: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) msg: Option<String>,
-}
-
-impl SessionObject {
-    /// A single-session view passes the same roster the listing did, so
-    /// both surfaces show one session the same `short_id`.
-    pub(crate) fn new(s: &SessionInfo, roster: &[SessionInfo]) -> Self {
-        Self::with_short_id(s, short_id_in(s.id, roster))
+/// The `Ops::Info` form: the daemon shortened the id against its
+/// own pool, so there is no roster here to shorten against.
+pub(crate) fn session_object_with_short_id(s: &SessionInfo, short_id: String) -> SessionObject {
+    SessionObject {
+        id: SessionHex(s.id).to_string(),
+        short_id,
+        rows: s.dims.rows,
+        cols: s.dims.cols,
+        idle_seconds: s.idle_seconds,
+        title: s.title.clone(),
+        cwd: s.cwd.clone(),
+        spawn_cwd: s.spawn_cwd.clone(),
+        tags: s.tags.clone(),
+        last_notification: s
+            .last_notification
+            .as_ref()
+            .map(|n| LastNotificationObject {
+                title: n.notification.title.clone(),
+                body: n.notification.body.clone(),
+                urgency: n.notification.urgency.as_str().to_owned(),
+                age_seconds: n.age_seconds,
+            }),
+        foreground: s.foreground.clone(),
+        last_exit_code: s.last_exit_code,
+        exited: s.exited,
+        attachments: s
+            .attachments
+            .iter()
+            .map(|a| AttachmentObject {
+                id: a.id.to_string(),
+                attached_at: crate::timestamp::rfc3339_utc(a.attached_at),
+                input_owner: a.input_owner,
+            })
+            .collect(),
+        program_status: s
+            .program_status
+            .iter()
+            .map(|r| ProgramStatusObject {
+                id: r.id.clone(),
+                state: r.state.clone(),
+                kind: r.kind.clone(),
+                progress: r.progress,
+                app: r.app.clone(),
+                title: r.title.clone(),
+                msg: r.msg.clone(),
+            })
+            .collect(),
+        terminal_progress: s
+            .terminal_progress
+            .as_ref()
+            .map(|p| TerminalProgressObject {
+                state: p.state.clone(),
+                value: p.value,
+            }),
     }
-
-    /// The `Ops::Info` form: the daemon shortened the id against its
-    /// own pool, so there is no roster here to shorten against.
-    pub(crate) fn with_short_id(s: &SessionInfo, short_id: String) -> Self {
-        Self {
-            id: SessionHex(s.id).to_string(),
-            short_id,
-            rows: s.dims.rows,
-            cols: s.dims.cols,
-            idle_seconds: s.idle_seconds,
-            title: s.title.clone(),
-            cwd: s.cwd.clone(),
-            spawn_cwd: s.spawn_cwd.clone(),
-            tags: s.tags.clone(),
-            last_notification: s
-                .last_notification
-                .as_ref()
-                .map(|n| LastNotificationObject {
-                    title: n.notification.title.clone(),
-                    body: n.notification.body.clone(),
-                    urgency: n.notification.urgency.as_str().to_owned(),
-                    age_seconds: n.age_seconds,
-                }),
-            foreground: s.foreground.clone(),
-            last_exit_code: s.last_exit_code,
-            exited: s.exited,
-            attachments: s
-                .attachments
-                .iter()
-                .map(|a| AttachmentObject {
-                    id: a.id.to_string(),
-                    attached_at: crate::timestamp::rfc3339_utc(a.attached_at),
-                    input_owner: a.input_owner,
-                })
-                .collect(),
-            program_status: s
-                .program_status
-                .iter()
-                .map(|r| ProgramStatusObject {
-                    id: r.id.clone(),
-                    state: r.state.clone(),
-                    kind: r.kind.clone(),
-                    progress: r.progress,
-                    app: r.app.clone(),
-                    title: r.title.clone(),
-                    msg: r.msg.clone(),
-                })
-                .collect(),
-            terminal_progress: s
-                .terminal_progress
-                .as_ref()
-                .map(|p| TerminalProgressObject {
-                    state: p.state.clone(),
-                    value: p.value,
-                }),
-        }
-    }
-}
-
-/// `sessions list`'s whole answer. The roster is bounded and arrives in
-/// one frame, so it is a point result: a stream framing would promise a
-/// source that can grow or arrive incrementally, and this one cannot
-/// (docs/explanation/architecture/control-surfaces.md).
-#[derive(Debug, Serialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-pub(crate) struct ListResult {
-    /// Always present, empty for an empty roster.
-    pub(crate) sessions: Vec<SessionObject>,
-}
-
-#[derive(Debug, Serialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-pub(crate) struct LastNotificationObject {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) title: Option<String>,
-    pub(crate) body: String,
-    pub(crate) urgency: String,
-    pub(crate) age_seconds: u64,
-}
-
-#[derive(Debug, Serialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-pub(crate) struct AttachmentObject {
-    /// A decimal **string**: the id is a `u64` counter, and a bare JSON
-    /// number past 2^53−1 silently rounds in common consumers.
-    /// `--attachment` accepts the same spelling.
-    #[cfg_attr(feature = "schema", schemars(regex(pattern = r"^[0-9]+$")))]
-    pub(crate) id: String,
-    /// RFC 3339, UTC.
-    pub(crate) attached_at: String,
-    /// Unconditional, unlike the optionals elsewhere: an omitted key
-    /// would read as "this daemon does not report it".
-    pub(crate) input_owner: bool,
-}
-
-#[derive(Debug, Serialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-pub(crate) struct SessionRef {
-    #[cfg_attr(feature = "schema", schemars(regex(pattern = r"^[0-9a-f]{32}$")))]
-    pub(crate) id: String,
-    /// `evict`'s flag; absent on other verbs.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) was_attached: Option<bool>,
-    /// `send --wait`'s observed mark code. Absent for a bare
-    /// `OSC 133 ; D`, and on the verbs that never wait.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) exit_code: Option<u32>,
-}
-
-impl SessionRef {
-    pub(crate) fn new(id: u128) -> Self {
-        Self {
-            id: SessionHex(id).to_string(),
-            was_attached: None,
-            exit_code: None,
-        }
-    }
-}
-
-#[derive(Debug, Serialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-pub(crate) struct TagResult {
-    #[cfg_attr(feature = "schema", schemars(regex(pattern = r"^[0-9a-f]{32}$")))]
-    pub(crate) id: String,
-    /// Sorted by the daemon and always present, matching `list` / `info`.
-    pub(crate) tags: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1522,7 +1380,7 @@ mod tests {
                 input_owner: true,
             }],
         );
-        let body = body_value(&SessionObject::new(&info, std::slice::from_ref(&info)));
+        let body = body_value(&session_object(&info, std::slice::from_ref(&info)));
         assert_eq!(
             body["attachments"][0]["attached_at"],
             "2026-09-01T08:15:00Z"
@@ -1535,7 +1393,7 @@ mod tests {
     #[test]
     fn a_just_detached_session_reads_the_same_in_both_framings() {
         let info = session(Some(0), Vec::new());
-        let body = body_value(&SessionObject::new(&info, std::slice::from_ref(&info)));
+        let body = body_value(&session_object(&info, std::slice::from_ref(&info)));
         assert_eq!(body["idle_seconds"], 0);
         assert_eq!(
             crate::format_session_line(&info, "0000cafe"),

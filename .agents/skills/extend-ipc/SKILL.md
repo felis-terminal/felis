@@ -102,9 +102,9 @@ A new message/verb typically touches, in dependency order:
 3. `crates/felis-client-core/src/connector/requests.rs` (and `roster.rs` / `pull.rs` where relevant): the headless
    client call.
 4. `crates/felis-cli`: the verb, its `--format` output (declare the class from step 0 by flattening `PointFormat` or
-   `StreamFormat`, and emit through the `Reporter`), and completions. Any change to `cli_output.rs` means running
-   `just schema`: the published bundle under `crates/felis-cli/schemas/` is generated from those types and CI fails on a
-   stale copy.
+   `StreamFormat`, and emit through the `Reporter`), and completions. Any change to `cli_output.rs` or to the session
+   result bodies it re-exports from client-core's `json` module means running `just schema`: the published bundle under
+   `crates/felis-cli/schemas/` is generated from those types and CI fails on a stale copy.
 
 ## 5. Tests
 

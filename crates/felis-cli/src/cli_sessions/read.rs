@@ -18,8 +18,8 @@ use super::{
     session_info_by_prefix,
 };
 use crate::cli_output::{
-    CaptureRow, ErrorKind, Format, ListResult, Reporter, SearchMatch, SessionObject, short_id_in,
-    stdoutln,
+    CaptureRow, ErrorKind, Format, ListResult, Reporter, SearchMatch, session_object,
+    session_object_with_short_id, short_id_in, stdoutln,
 };
 
 /// "No daemon" (exit 2) and "0 sessions" (exit 0) are distinct
@@ -47,9 +47,7 @@ where
         // filtered view: a prefix unique only within a `--tag` filter
         // would stop resolving as soon as the filter changed.
         out.result(&ListResult {
-            sessions: filtered()
-                .map(|s| SessionObject::new(s, &sessions))
-                .collect(),
+            sessions: filtered().map(|s| session_object(s, &sessions)).collect(),
         });
     } else {
         // A `--tag` filter that excludes everything prints nothing.
@@ -80,7 +78,7 @@ where
     };
     let session = &session;
     if out.machine() {
-        out.result(&SessionObject::with_short_id(session, short_id));
+        out.result(&session_object_with_short_id(session, short_id));
     } else {
         // No column alignment: free-form title/cwd would push the value
         // column past any sane width. `id:` first so `head -1` yields
