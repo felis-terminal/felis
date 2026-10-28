@@ -56,6 +56,7 @@ fn a_query() -> SearchToDaemonMsg {
         query: "needle".into(),
         options: SearchOptions::default(),
         source: felis_protocol::messages::SearchSource::Scrollback,
+        session: None,
     }
 }
 
@@ -688,6 +689,7 @@ fn a_mode_refuses_a_surface_it_never_asked_for() {
             query: "x".into(),
             options: SearchOptions::default(),
             source: felis_protocol::messages::SearchSource::Scrollback,
+            session: None,
         }))
         .unwrap_err();
     assert!(
@@ -1257,6 +1259,7 @@ fn a_region_rows() -> RegionToDaemonMsg {
         source: RegionSource::Scrollback,
         ansi: false,
         max_rows: None,
+        session: None,
     }
 }
 
@@ -1340,6 +1343,7 @@ fn an_envelope_of_the_wrong_class_closes_the_connection_on_every_family() {
                 &RegionToDaemonMsg::Request {
                     source: RegionSource::Scrollback,
                     ansi: false,
+                    session: None,
                 },
                 stream_envelope(),
             ),
@@ -1980,6 +1984,7 @@ fn every_streaming_family_shares_one_table() {
             source: RegionSource::Scrollback,
             ansi: false,
             max_rows: None,
+            session: None,
         },
         Correlation::stream(stream(1)),
     );
@@ -2029,6 +2034,7 @@ fn sample_of(kind: MessageKind) -> OwnedFrame {
         MessageKind::Region => frame(&RegionToDaemonMsg::Request {
             source: RegionSource::Visible,
             ansi: false,
+            session: None,
         }),
         MessageKind::Notify => frame(&NotifyToDaemonMsg::Subscribe {
             session_prefix: None,
@@ -2083,10 +2089,18 @@ fn the_kind_folds_are_the_matrix_the_reference_publishes() {
             &["setup", "attached"],
         ),
         (MessageKind::Ops, &["window", "ops"], &["setup", "attached"]),
-        (MessageKind::Region, &["window", "ops"], &["attached"]),
+        (
+            MessageKind::Region,
+            &["window", "ops"],
+            &["setup", "attached"],
+        ),
         (MessageKind::Notify, &["observer"], &["setup", "observing"]),
         (MessageKind::Push, &["window", "ops"], &["attached"]),
-        (MessageKind::Search, &["window", "ops"], &["attached"]),
+        (
+            MessageKind::Search,
+            &["window", "ops"],
+            &["setup", "attached"],
+        ),
     ];
     for (kind, modes, phases) in published {
         assert_eq!(kind.modes().tokens(), modes, "{kind} modes");

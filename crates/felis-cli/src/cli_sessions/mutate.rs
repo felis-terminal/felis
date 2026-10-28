@@ -3,15 +3,21 @@ use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use felis_client_core::{Carrier, ConnectError, Connection, Reconnector, spawn_args_from_cli};
-use felis_protocol::{SessionHex, messages::InputMsg};
+use felis_client_core::{
+    Carrier, ConnectError, Connection, Reconnector, check_session_addressed, spawn_args_from_cli,
+};
+use felis_protocol::{
+    SessionHex,
+    messages::{
+        InputMsg, OpsToClientMsg, SendOutcome, SendRefusal, SendStep as WireStep, StreamId,
+    },
+};
 use tokio::io::{AsyncRead, AsyncWrite};
 
 use super::mouse::MouseArg;
 use super::{
-    attach_by_prefix, detach,
     driver::{DrainTick, Drained, Stall, drain_frames},
-    require_resolved, session_info_by_prefix,
+    prefix_failure, require_resolved, session_info_by_prefix,
 };
 use crate::cli_output::{ErrorKind, Reporter, SessionRef, TagResult, stdoutln};
 
@@ -39,8 +45,7 @@ pub(super) async fn cmd_send<R, W>(
     mut conn: Connection<R, W>,
     out: &Reporter,
     id_prefix: &str,
-    bytes: Vec<u8>,
-    raw: bool,
+    (wire, origins): (Vec<WireStep>, Vec<StepOrigin>),
     steps: &[SendStep],
     wait: Option<WaitParams>,
 ) -> Result<i32>
@@ -48,21 +53,10 @@ where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
 {
-    use felis_protocol::messages::Validate as _;
-
-    // Refused here rather than on the wire: the daemon answers an
-    // over-budget input frame by closing the connection, which reaches
-    // the caller as `daemon_lost` (exit 2, "retry") when the condition
-    // is a permanent, request-level one this process can see before it
-    // writes a byte.
-    if let Some(code) = over_limit_payload(out, bytes.len(), raw) {
-        return Ok(code);
-    }
-
     // An empty payload still resolves the target, so a caller learns
-    // the full id; pasting nothing is a no-op, so the attach is
-    // skipped. `--key`, `--mouse` and `--wait` still take the full path.
-    if bytes.is_empty() && steps.is_empty() && wait.is_none() {
+    // the full id; pasting nothing is a no-op, so nothing is sent.
+    // `--key`, `--mouse` and `--wait` still take the full path.
+    if wire.is_empty() && wait.is_none() {
         let (session, _short_id) = match session_info_by_prefix(&mut conn, out, id_prefix).await {
             Ok(v) => v,
             Err(code) => return Ok(code),
@@ -71,181 +65,191 @@ where
         return Ok(0);
     }
 
-    let resolved = match attach_by_prefix(&mut conn, out, id_prefix).await {
-        Ok(v) => v,
+    if let Err(e) = check_session_addressed(conn.effective_minor) {
+        return Ok(out.fail(ErrorKind::Unsupported, format!("send: {e}")));
+    }
+    let wrote_input = !wire.is_empty();
+    let timeout_secs = wait.as_ref().and_then(|params| params.timeout);
+    let deadline = crate::timeout_deadline(timeout_secs);
+
+    let Some(params) = wait else {
+        let outcome = match conn.send_steps(id_prefix.to_owned(), wire).await {
+            Ok(outcome) => outcome,
+            Err(e) => {
+                return Ok(out.fail(ErrorKind::from_connect_error(&e), format!("send: {e}")));
+            }
+        };
+        return Ok(match outcome {
+            SendOutcome::Sent { id } => {
+                out.result(&SessionRef::new(id));
+                0
+            }
+            refused => report_refusal(out, id_prefix, &refused, &origins, steps),
+        });
+    };
+
+    // The daemon registers the watch before it writes the first step,
+    // so the `D` mark of even an instantly-finishing command reaches
+    // this stream.
+    let stream = match conn.open_send_and_wait(id_prefix.to_owned(), wire).await {
+        Ok(stream) => stream,
+        Err(e) => {
+            return Ok(out.fail(ErrorKind::from_connect_error(&e), format!("send: {e}")));
+        }
+    };
+    let outcome = match wait_for_command_end(&mut conn, out, stream, params.timeout, deadline).await
+    {
+        Ok(o) => o,
         Err(code) => return Ok(code),
     };
-    let reached = || SessionRef::new(resolved.id);
-    let mut dims = resolved.dims;
-    let mut mouse_protocol = felis_protocol::messages::MouseProtocol::Off;
+    Ok(match outcome {
+        WaitOutcome::Refused(refused) => report_refusal(out, id_prefix, &refused, &origins, steps),
+        WaitOutcome::NotTaken if wrote_input => out.fail(
+            ErrorKind::Timeout,
+            format!(
+                "send: the session did not take the input within {}s — its child \
+                 is not reading its stdin",
+                timeout_secs.unwrap_or(0)
+            ),
+        ),
+        // Nothing to take: the deadline only bounded the watch.
+        WaitOutcome::NotTaken => report_wait_outcome(
+            out,
+            &WaitEnd::TimedOut {
+                secs: timeout_secs.unwrap_or(0),
+            },
+        ),
+        WaitOutcome::Ended(end) => report_wait_outcome(out, &end),
+    })
+}
 
-    // Drain the rehydrate burst before injecting input: an unread outbox
-    // makes the daemon pump hit EPIPE mid-burst and drop the input frame.
-    {
-        use felis_protocol::messages::GridMsg;
-        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
-        let drained = drain_frames(
-            &mut conn,
-            None,
-            Some(deadline),
-            std::time::Duration::from_secs(1),
-            |tick| match tick {
-                DrainTick::DeadlineExceeded => Stall::Fail(out.fail(
-                    ErrorKind::DaemonLost,
-                    "send: the daemon did not finish syncing session state within 5s",
-                )),
-                DrainTick::TimedOut | DrainTick::Eof | DrainTick::Error(_) => {
-                    Stall::Fail(out.fail(
-                        ErrorKind::DaemonLost,
-                        "send: connection lost while syncing session state",
-                    ))
-                }
-                DrainTick::Corrupt(err) => Stall::Fail(out.fail(
-                    ErrorKind::Protocol,
-                    format!("send: daemon sent an unreadable frame: {err}"),
-                )),
-            },
-            |msg| {
-                // The burst opens no stream; `RehydrateEnd` is its only
-                // terminator.
-                let Drained::Item(msg) = msg else {
-                    return ControlFlow::Continue(());
-                };
-                match msg {
-                    GridMsg::RehydrateEnd => return ControlFlow::Break(()),
-                    GridMsg::ModeFlags {
-                        mouse_protocol: protocol,
-                        ..
-                    } => mouse_protocol = protocol,
-                    GridMsg::Size { dims: resized } => dims = resized,
-                    _ => {}
-                }
-                ControlFlow::Continue(())
-            },
-        )
-        .await;
-        if let Err(code) = drained {
-            return Ok(code);
-        }
+/// Which command-line argument a wire step came from, so a refusal
+/// names what the caller typed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum StepOrigin {
+    Payload,
+    /// An index into the `--key` / `--mouse` steps.
+    Arg(usize),
+}
+
+/// The payload, then each `--key` and `--mouse` argument as steps of
+/// its own: under `?2004` the daemon brackets a whole paste, and a
+/// keystroke inside the brackets is literal paste data. Built before
+/// dialing, so a request no daemon would take fails as one.
+pub(super) fn wire_steps(
+    out: &Reporter,
+    bytes: Vec<u8>,
+    raw: bool,
+    steps: &[SendStep],
+) -> Result<(Vec<WireStep>, Vec<StepOrigin>), i32> {
+    use felis_protocol::limits::MAX_SEND_STEPS;
+    use felis_protocol::messages::Validate as _;
+
+    if let Some(code) = over_limit_payload(out, bytes.len(), raw) {
+        return Err(code);
     }
 
-    // Built before any frame goes out: a chord the daemon would refuse
-    // at admission, or a mouse event the program would never see, must
-    // fail the whole command rather than deliver a truncated sequence.
-    let mut step_frames: Vec<InputMsg> = Vec::with_capacity(steps.len());
-    for step in steps {
+    let mut wire = Vec::new();
+    let mut origins = Vec::new();
+    if !bytes.is_empty() {
+        wire.push(if raw {
+            WireStep::Raw(bytes)
+        } else {
+            WireStep::Paste(bytes)
+        });
+        origins.push(StepOrigin::Payload);
+    }
+    for (index, step) in steps.iter().enumerate() {
         match step {
             SendStep::Key(chord) => {
-                let msg = InputMsg::Key(chord_key_event(chord));
-                if let Err(e) = msg.validate() {
-                    return Ok(out.fail(
+                let event = chord_key_event(chord);
+                // A chord the daemon would refuse fails here, with the
+                // chord as typed, before the request is written.
+                if let Err(e) = InputMsg::Key(event.clone()).validate() {
+                    return Err(out.fail(
                         ErrorKind::InvalidRequest,
                         format!("send: --key {chord}: {e}"),
                     ));
                 }
-                step_frames.push(msg);
+                wire.push(WireStep::Key(event));
+                origins.push(StepOrigin::Arg(index));
             }
             SendStep::Mouse(arg) => {
-                if let Err(why) = arg.check(mouse_protocol, dims) {
-                    return Ok(out.fail(
-                        ErrorKind::InvalidRequest,
-                        format!("send: --mouse {arg}: {why}"),
-                    ));
+                for event in arg.events() {
+                    wire.push(WireStep::Mouse(event));
+                    origins.push(StepOrigin::Arg(index));
                 }
-                step_frames.extend(arg.events().into_iter().map(InputMsg::Mouse));
             }
         }
     }
+    if wire.len() > MAX_SEND_STEPS {
+        return Err(out.fail(
+            ErrorKind::InvalidRequest,
+            format!(
+                "send: {} steps, past the daemon's {MAX_SEND_STEPS}-step limit",
+                wire.len()
+            ),
+        ));
+    }
+    Ok((wire, origins))
+}
 
-    let wrote_input = !bytes.is_empty() || !step_frames.is_empty();
-    if !bytes.is_empty() {
-        let msg = if raw {
-            InputMsg::KeyBytes(bytes)
-        } else {
-            InputMsg::Paste(bytes)
-        };
-        if let Err(e) = conn.writer.send_unflushed(&msg).await {
-            return Ok(out.fail(
-                ErrorKind::DaemonLost,
-                format!("send: write input frame: {e}"),
-            ));
+/// A send that wrote nothing: an unresolved prefix, or a request the
+/// daemon refused before its first step.
+fn report_refusal(
+    out: &Reporter,
+    id_prefix: &str,
+    outcome: &SendOutcome,
+    origins: &[StepOrigin],
+    steps: &[SendStep],
+) -> i32 {
+    let (reason, step, detail) = match outcome {
+        SendOutcome::NoMatch => {
+            return prefix_failure(
+                out,
+                &crate::SessionPrefixError::NoMatch {
+                    prefix: id_prefix.to_owned(),
+                },
+            );
         }
-    }
-
-    // Each chord rides its own frame *after* the paste frame, never
-    // appended to the paste payload: under `?2004` the daemon brackets
-    // the whole Paste body, and a keystroke inside the brackets is
-    // literal paste data (`--key enter` must run the line).
-    for msg in step_frames {
-        if let Err(e) = conn.writer.send_unflushed(&msg).await {
-            return Ok(out.fail(
-                ErrorKind::DaemonLost,
-                format!("send: write input frame: {e}"),
-            ));
+        SendOutcome::Ambiguous { matches } => {
+            return prefix_failure(
+                out,
+                &crate::SessionPrefixError::Ambiguous {
+                    prefix: id_prefix.to_owned(),
+                    matches: *matches as usize,
+                },
+            );
         }
-    }
-
-    // A `Session::InputFence` proves input passed admission before closing the
-    // socket; otherwise closing while the daemon pump is parked behind the byte
-    // budget abandons the input. `--timeout` bounds this confirmation so a
-    // wedged child does not hang.
-    let timeout_secs = wait.as_ref().and_then(|params| params.timeout);
-    let deadline = crate::timeout_deadline(timeout_secs);
-    if wrote_input {
-        let confirmed = match deadline {
-            // `timeout_at` polls its inner future before the expired
-            // timer, so an elapsed deadline is checked on its own: a
-            // reply already in the read-ahead would otherwise confirm
-            // an admission past the caller's deadline.
-            Some(at) if at <= tokio::time::Instant::now() => Err(()),
-            Some(at) => tokio::time::timeout_at(at, conn.input_fence())
-                .await
-                .map_err(|_elapsed| ()),
-            None => Ok(conn.input_fence().await),
-        };
-        match confirmed {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => {
-                return Ok(out.fail(
-                    ErrorKind::DaemonLost,
-                    format!("send: confirming the session took the input: {e}"),
-                ));
-            }
-            Err(()) => {
-                return Ok(out.fail(
-                    ErrorKind::Timeout,
-                    format!(
-                        "send: the session did not take the input within {}s — its child \
-                         is not reading its stdin",
-                        timeout_secs.unwrap_or(0)
-                    ),
-                ));
-            }
+        SendOutcome::Refused {
+            reason,
+            step,
+            detail,
+        } => (*reason, *step, detail),
+        // Not a refusal; no caller passes one.
+        SendOutcome::Sent { id } => {
+            out.result(&SessionRef::new(*id));
+            return 0;
         }
+    };
+    if reason == SendRefusal::SessionEnded {
+        return out.fail(
+            ErrorKind::SessionEnded,
+            "send: the session ended before it took the input",
+        );
     }
-
-    // This connection subscribed before the input frames went out, so
-    // the D mark of even an instantly-finishing command still streams
-    // here; a separately-connecting verb could not close that race.
-    if let Some(params) = wait {
-        let outcome = match wait_for_command_end(&mut conn, out, params.timeout, deadline).await {
-            Ok(o) => o,
-            Err(code) => return Ok(code),
-        };
-        let code = report_wait_outcome(out, &outcome, &reached);
-        if !matches!(outcome, WaitOutcome::SessionEnded) {
-            // Best-effort: the pool re-pools on drop anyway; detach
-            // skips the ~200 ms grace tick.
-            drop(detach(&mut conn).await);
-        }
-        return Ok(code);
-    }
-
-    if let Err(e) = detach(&mut conn).await {
-        return Ok(out.fail(ErrorKind::DaemonLost, format!("send: {e}")));
-    }
-    out.result(&reached());
-    Ok(0)
+    let arg = step
+        .and_then(|step| origins.get(step as usize))
+        .and_then(|origin| match origin {
+            StepOrigin::Arg(index) => steps.get(*index),
+            StepOrigin::Payload => None,
+        });
+    let message = match arg {
+        Some(SendStep::Mouse(arg)) => format!("send: --mouse {arg}: {detail}"),
+        Some(SendStep::Key(chord)) => format!("send: --key {chord}: {detail}"),
+        None => format!("send: {detail}"),
+    };
+    out.fail(ErrorKind::InvalidRequest, message)
 }
 
 pub(super) struct WaitParams {
@@ -389,8 +393,18 @@ pub(super) fn chord_key_event(
 }
 
 enum WaitOutcome {
+    Ended(WaitEnd),
+    /// The deadline passed before the session took the input.
+    NotTaken,
+    /// The daemon wrote nothing; the stream's first item says why.
+    Refused(SendOutcome),
+}
+
+/// How a wait on a send the session took ended.
+enum WaitEnd {
     /// `exit_code` is `None` for a bare `OSC 133 ; D`.
     Completed {
+        id: u128,
         exit_code: Option<u32>,
     },
     TimedOut {
@@ -399,13 +413,13 @@ enum WaitOutcome {
     SessionEnded,
 }
 
-/// Block until the next `CommandEnd` prompt mark.
-/// The caller must drain past `RehydrateEnd` so historical marks are skipped.
-/// `Err(code)` is transport failure; timeout and EOF are data. The caller's
-/// `deadline` bounds the entire post-write phase.
+/// Drain the `SendAndWait` stream to its `Mark`. `Err(code)` is
+/// transport failure; timeout and session end are data. The caller's
+/// `deadline` bounds the whole stream, the send's admission included.
 async fn wait_for_command_end<R, W>(
     conn: &mut Connection<R, W>,
     out: &Reporter,
+    stream: StreamId,
     timeout: Option<u64>,
     deadline: Option<tokio::time::Instant>,
 ) -> Result<WaitOutcome, i32>
@@ -413,14 +427,13 @@ where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
 {
-    use felis_protocol::messages::GridMsg;
-    use felis_protocol::messages::PromptKind;
-
-    let mut ended = false;
-    let mut completed: Option<WaitOutcome> = None;
+    let mut sent: Option<u128> = None;
+    let mut eof = false;
+    let mut failed = false;
+    let mut settled: Option<WaitOutcome> = None;
     drain_frames(
         conn,
-        None,
+        Some(stream),
         deadline,
         std::time::Duration::from_secs(1),
         |tick| match tick {
@@ -428,7 +441,7 @@ where
             DrainTick::TimedOut => Stall::Retry,
             DrainTick::DeadlineExceeded => Stall::Stop,
             DrainTick::Eof => {
-                ended = true;
+                eof = true;
                 Stall::Stop
             }
             DrainTick::Error(e) => Stall::Fail(out.fail(
@@ -440,33 +453,41 @@ where
                 format!("wait: daemon sent an unreadable frame: {err}"),
             )),
         },
-        // The watch opens no stream: only the `CommandEnd` mark or a
-        // stall ends it.
-        |msg| {
-            let Drained::Item(msg) = msg else {
-                return ControlFlow::Continue(());
-            };
-            if let GridMsg::PromptMark {
-                kind: PromptKind::CommandEnd,
-                exit_code,
-                ..
-            } = msg
-            {
-                completed = Some(WaitOutcome::Completed { exit_code });
-                ControlFlow::Break(())
-            } else {
+        |msg| match msg {
+            Drained::Item(OpsToClientMsg::WaitSent {
+                outcome: SendOutcome::Sent { id },
+            }) => {
+                sent = Some(id);
                 ControlFlow::Continue(())
+            }
+            Drained::Item(OpsToClientMsg::WaitSent { outcome }) => {
+                settled = Some(WaitOutcome::Refused(outcome));
+                ControlFlow::Break(())
+            }
+            Drained::Item(OpsToClientMsg::Mark { exit_code }) => {
+                settled = sent.map(|id| WaitOutcome::Ended(WaitEnd::Completed { id, exit_code }));
+                ControlFlow::Continue(())
+            }
+            Drained::Item(_) => ControlFlow::Continue(()),
+            Drained::End { .. } => ControlFlow::Break(()),
+            // The daemon ends the watch `Unavailable` when the session
+            // ends with no mark.
+            Drained::Failed { .. } => {
+                failed = true;
+                ControlFlow::Break(())
             }
         },
     )
     .await?;
-    Ok(completed.unwrap_or_else(|| {
-        if ended {
-            WaitOutcome::SessionEnded
+    Ok(settled.unwrap_or_else(|| {
+        if eof || failed {
+            WaitOutcome::Ended(WaitEnd::SessionEnded)
+        } else if sent.is_none() {
+            WaitOutcome::NotTaken
         } else {
-            WaitOutcome::TimedOut {
+            WaitOutcome::Ended(WaitEnd::TimedOut {
                 secs: timeout.unwrap_or(0),
-            }
+            })
         }
     }))
 }
@@ -475,17 +496,13 @@ where
 /// process's status), `1` timeout or session end. Human framing prints
 /// the code in decimal, `-` for a bare `D`; the result object carries
 /// `exit_code`, omitted for a bare `D`.
-fn report_wait_outcome(
-    out: &Reporter,
-    outcome: &WaitOutcome,
-    reached: &impl Fn() -> SessionRef,
-) -> i32 {
+fn report_wait_outcome(out: &Reporter, outcome: &WaitEnd) -> i32 {
     match outcome {
-        WaitOutcome::Completed { exit_code } => {
+        WaitEnd::Completed { id, exit_code } => {
             if out.machine() {
                 out.result(&SessionRef {
                     exit_code: *exit_code,
-                    ..reached()
+                    ..SessionRef::new(*id)
                 });
             } else {
                 match exit_code {
@@ -495,11 +512,11 @@ fn report_wait_outcome(
             }
             0
         }
-        WaitOutcome::TimedOut { secs } => out.fail(
+        WaitEnd::TimedOut { secs } => out.fail(
             ErrorKind::Timeout,
             format!("wait: no command completed within {secs}s"),
         ),
-        WaitOutcome::SessionEnded => out.fail(
+        WaitEnd::SessionEnded => out.fail(
             ErrorKind::SessionEnded,
             "wait: session ended before a command completed",
         ),

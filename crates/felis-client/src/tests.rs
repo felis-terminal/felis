@@ -541,6 +541,7 @@ fn refused_search_reports_the_limit_and_holds_no_stream() {
         query: query.clone(),
         options: SearchOptions::default(),
         source: felis_protocol::messages::SearchSource::Scrollback,
+        session: None,
     }
     .validate()
     .expect_err("a query over the pattern limit is refused before the wire");

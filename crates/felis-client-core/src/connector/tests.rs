@@ -683,6 +683,7 @@ async fn one_connection_answers_many_verbs_while_a_stream_runs() {
                     query: "needle-".to_owned(),
                     options: SearchOptions::default(),
                     source: felis_protocol::messages::SearchSource::Scrollback,
+                    session: None,
                 },
                 Correlation::stream(stream),
             )
@@ -704,6 +705,7 @@ async fn one_connection_answers_many_verbs_while_a_stream_runs() {
                 query: "needle-".to_owned(),
                 options: SearchOptions::default(),
                 source: felis_protocol::messages::SearchSource::Scrollback,
+                session: None,
             },
             Correlation::stream(stream),
         )
@@ -770,6 +772,7 @@ async fn sequential_streams_free_their_slot_on_the_daemon() {
                     query: "needle-".to_owned(),
                     options: SearchOptions::default(),
                     source: felis_protocol::messages::SearchSource::Scrollback,
+                    session: None,
                 },
                 Correlation::stream(stream),
             )
@@ -837,6 +840,7 @@ async fn cancelling_a_search_mid_stream_stops_it_and_leaves_the_connection_usabl
         query: "needle-".to_owned(),
         options: SearchOptions::default(),
         source: felis_protocol::messages::SearchSource::Scrollback,
+        session: None,
     };
 
     let full = conn.driver.open_stream().expect("the sequence is fresh");
@@ -908,6 +912,7 @@ async fn a_huge_scrollback_search_emits_before_the_walk_completes() {
                 query: "needle-".to_owned(),
                 options: SearchOptions::default(),
                 source: felis_protocol::messages::SearchSource::Scrollback,
+                session: None,
             },
             Correlation::stream(stream),
         )
@@ -2222,4 +2227,77 @@ async fn an_upgrade_against_a_minor_zero_daemon_is_refused_without_sending() {
         .await
         .expect("read the daemon side");
     assert!(sent.is_empty(), "nothing reached the daemon: {sent:?}");
+}
+
+/// One minor carried every session-addressed form, so below it each one
+/// is refused before a byte is written: a daemon from before it would
+/// read the search or capture as its own attached one and the send as
+/// an empty `Ops` oneof.
+#[tokio::test]
+async fn every_session_addressed_call_is_refused_unsent_on_the_previous_minor() {
+    use felis_protocol::messages::{
+        OpsToDaemonMsg, RegionSource, RegionToDaemonMsg, SearchOptions, SearchSource,
+        SearchToDaemonMsg, SendStep,
+    };
+    use felis_transport::{FrameReader, FrameWriter};
+    use tokio::io::AsyncReadExt as _;
+
+    let since = OpsToDaemonMsg::Send {
+        id_prefix: String::new(),
+        steps: Vec::new(),
+    }
+    .meta()
+    .since_minor;
+    let (client_side, mut daemon_side) = tokio::io::duplex(64 * 1024);
+    let (client_read, client_write) = tokio::io::split(client_side);
+    let mut conn = Connection::from_halves(
+        FrameReader::new(client_read),
+        FrameWriter::new(client_write, since - 1),
+        ConnectionMode::Ops,
+    );
+    let too_old = |result: Result<_, ConnectError>| {
+        assert!(
+            matches!(result, Err(ConnectError::MinorTooOld { needs, .. }) if needs == since),
+            "expected a local refusal",
+        );
+    };
+
+    too_old(
+        conn.open_session_stream(&SearchToDaemonMsg::Query {
+            query: "x".into(),
+            options: SearchOptions::default(),
+            source: SearchSource::Scrollback,
+            session: Some(1),
+        })
+        .await
+        .map(drop),
+    );
+    too_old(
+        conn.open_session_stream(&RegionToDaemonMsg::Rows {
+            source: RegionSource::Visible,
+            ansi: false,
+            max_rows: None,
+            session: Some(1),
+        })
+        .await
+        .map(drop),
+    );
+    too_old(
+        conn.send_steps("1".into(), vec![SendStep::Paste(b"x".to_vec())])
+            .await
+            .map(drop),
+    );
+    too_old(
+        conn.open_send_and_wait("1".into(), Vec::new())
+            .await
+            .map(drop),
+    );
+    drop(conn);
+
+    let mut sent = Vec::new();
+    daemon_side.read_to_end(&mut sent).await.unwrap();
+    assert!(
+        sent.is_empty(),
+        "nothing may reach the daemon, got {sent:?}"
+    );
 }

@@ -1,7 +1,7 @@
 use std::ops::ControlFlow;
 
 use anyhow::Result;
-use felis_client_core::{ConnectError, Connection, check_value_minor};
+use felis_client_core::{ConnectError, Connection, check_session_addressed, check_value_minor};
 use felis_protocol::messages::SessionInfo;
 use felis_protocol::{
     SessionHex,
@@ -13,8 +13,8 @@ use felis_protocol::{
 use tokio::io::{AsyncRead, AsyncWrite};
 
 use super::{
-    attach_by_prefix, checked_roster, detach,
-    driver::{DrainTick, Drained, Stall, drain_frames, drain_rehydrate},
+    checked_roster,
+    driver::{DrainTick, Drained, Stall, drain_frames},
     session_info_by_prefix,
 };
 use crate::cli_output::{
@@ -200,6 +200,7 @@ fn open_stream_failure(out: &Reporter, verb: &str, err: &ConnectError) -> i32 {
 async fn drain_region_rows<R, W>(
     conn: &mut Connection<R, W>,
     out: &Reporter,
+    session: u128,
     source: RegionSource,
     encoding: RowEncoding,
     max_rows: Option<u32>,
@@ -213,10 +214,11 @@ where
     // The client allocates the id, so the opening request already
     // names what a cancel or a terminal refers to.
     let stream = conn
-        .open_stream(&RegionToDaemonMsg::Rows {
+        .open_session_stream(&RegionToDaemonMsg::Rows {
             source,
             ansi: encoding.wants_ansi(),
             max_rows,
+            session: Some(session),
         })
         .await
         .map_err(|e| open_stream_failure(out, "capture", &e))?;
@@ -301,26 +303,20 @@ where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
 {
-    let _resolved = match attach_by_prefix(&mut conn, out, id_prefix).await {
+    // Before the prefix lookup: a daemon without session-addressed
+    // reads is refused with nothing written.
+    if let Err(e) = check_session_addressed(conn.effective_minor) {
+        return Ok(out.fail(ErrorKind::Unsupported, format!("capture: {e}")));
+    }
+    let (session, _short_id) = match session_info_by_prefix(&mut conn, out, id_prefix).await {
         Ok(v) => v,
         Err(code) => return Ok(code),
     };
-
-    if let Err(code) = drain_rehydrate(&mut conn, out).await {
-        return Ok(code);
-    }
     let (rows, exit_code, errored) =
-        match drain_region_rows(&mut conn, out, source, encoding, lines).await {
+        match drain_region_rows(&mut conn, out, session.id, source, encoding, lines).await {
             Ok(v) => v,
             Err(code) => return Ok(code),
         };
-
-    // A failed detach is the stream's failing terminal, not a bare `?`:
-    // a consumer blocked on the terminal would otherwise see neither
-    // the capture nor a close.
-    if let Err(e) = detach(&mut conn).await {
-        return Ok(out.fail(ErrorKind::DaemonLost, format!("capture: {e}")));
-    }
 
     print_capture(out, &rows, encoding);
     // A daemon-reported failure closes the stream as its failing
@@ -366,9 +362,8 @@ fn print_capture(out: &Reporter, rows: &[CapturedRow], encoding: RowEncoding) {
     }
 }
 
-/// `SearchToDaemonMsg::Query` is accepted only attached. Exit 0 with at least
-/// one match, 1 for none or session not found, 2 daemon-unreachable /
-/// protocol error.
+/// Exit 0 with at least one match, 1 for none or session not found, 2
+/// daemon-unreachable / protocol error.
 pub(super) async fn cmd_search<R, W>(
     mut conn: Connection<R, W>,
     out: &Reporter,
@@ -381,25 +376,28 @@ where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
 {
-    let query = SearchToDaemonMsg::Query {
+    let mut query = SearchToDaemonMsg::Query {
         query: pattern.to_string(),
         options,
         source,
+        session: None,
     };
-    // Before the attach: a daemon below the source's minor would ignore
-    // the field and answer a scrollback search in its place.
-    if let Err(e) = check_value_minor(&query, conn.effective_minor) {
+    // Before the prefix lookup: a daemon below the source's minor would
+    // ignore the field and answer a scrollback search in its place.
+    if let Err(e) = check_session_addressed(conn.effective_minor)
+        .and_then(|()| check_value_minor(&query, conn.effective_minor))
+    {
         return Ok(out.fail(ErrorKind::Unsupported, format!("search: {e}")));
     }
 
-    let _resolved = match attach_by_prefix(&mut conn, out, id_prefix).await {
+    let (info, _short_id) = match session_info_by_prefix(&mut conn, out, id_prefix).await {
         Ok(v) => v,
         Err(code) => return Ok(code),
     };
+    let SearchToDaemonMsg::Query { session, .. } = &mut query;
+    *session = Some(info.id);
 
-    // Rehydrate frames arrive in parallel on the Grid kind; the drain
-    // sees only the Search-kind ones and the stream's own terminal.
-    let opened = conn.open_stream(&query).await;
+    let opened = conn.open_session_stream(&query).await;
     let stream = match opened {
         Ok(stream) => stream,
         Err(e) => return Ok(open_stream_failure(out, "search", &e)),
@@ -462,16 +460,7 @@ where
     }
 
     if let Some((kind, err)) = errored {
-        drop(detach(&mut conn).await);
         return Ok(out.fail(kind, format!("search: {err}")));
-    }
-
-    // The stream's clean terminal already stands, so this bookend
-    // cannot change the answer; it only saves the ~200 ms re-pool grace.
-    // A failure here is a stderr diagnostic, never a second terminal or
-    // a disagreeing exit code.
-    if let Err(e) = detach(&mut conn).await {
-        eprintln!("search: {e}");
     }
     Ok(i32::from(total == 0))
 }

@@ -6,13 +6,14 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::{
     Arc, Mutex as StdMutex, Weak,
-    atomic::{AtomicUsize, Ordering},
+    atomic::{AtomicU64, AtomicUsize, Ordering},
 };
 use std::time::{Duration, Instant, SystemTime};
 
 use felis_protocol::messages::{
-    AttentionSource, InfoOutcome, KeyEvent, MAX_REGION_REPLY_BYTES, RegionPosition, RegionSource,
-    RequestedDims, SpawnOutcome, ThemeChannel,
+    AttentionSource, InfoOutcome, KeyEvent, MAX_REGION_REPLY_BYTES, MouseEvent, MouseProtocol,
+    PromptKind, RegionPosition, RegionSource, RequestedDims, SendOutcome, SpawnOutcome,
+    ThemeChannel,
 };
 use felis_protocol::{
     ConnectionMode, MinorGated as _,
@@ -25,7 +26,7 @@ use felis_protocol::{
 };
 use felis_pty::{ChildHandle, Size as PtySize};
 use tokio::io::AsyncReadExt as _;
-use tokio::sync::{Mutex, mpsc, oneshot, watch};
+use tokio::sync::{Mutex, Notify, mpsc, oneshot, watch};
 use tracing::{debug, error, info, trace, warn};
 
 use crate::{
@@ -284,6 +285,52 @@ impl SubscriberId {
     }
 }
 
+/// Daemon-global id of an unattached connection that addresses this
+/// session by id, never reused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct RequesterId(u64);
+
+impl RequesterId {
+    #[must_use]
+    pub fn next() -> Self {
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        Self(NEXT.fetch_add(1, Ordering::Relaxed))
+    }
+}
+
+/// Whose outbox a stream writes to: an attached subscriber, or an
+/// unattached connection that named the session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Owner {
+    Sub(SubscriberId),
+    Conn(RequesterId),
+}
+
+/// An unattached connection's outbox, as [`SessionCmd::AddRequester`]
+/// registers it with each session it addresses.
+pub struct RequesterHandle {
+    pub id: RequesterId,
+    pub tx: mpsc::UnboundedSender<OutEvent>,
+    /// Bytes queued and not yet written, settled by the connection's
+    /// writer as for a subscriber.
+    pub buffered: Arc<AtomicUsize>,
+    /// Notified when the outbox passes [`SUBSCRIBER_BUFFER_CAP`]: the
+    /// connection holds the outbox itself, so dropping it here would
+    /// not end the connection.
+    pub evict: Arc<Notify>,
+}
+
+/// What [`SessionCmd::PrepareSend`] found.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Prepared {
+    /// Nothing to refuse; a requested watch is registered.
+    Ready,
+    /// The program has exited; no watch was registered.
+    Ended,
+    /// The mouse step at `step` would not reach the program.
+    Unreported { step: u32, detail: String },
+}
+
 /// Close a pull-paced cycle after everything `compose_diffs` produced.
 fn push_cycle_end(out: &mut Vec<OutEvent>, pull_pacing: bool) {
     if pull_pacing {
@@ -344,15 +391,15 @@ pub enum SessionCmd {
         reservation: Option<InputReservation>,
     },
     Search {
-        sub: SubscriberId,
+        owner: Owner,
         msg: SearchToDaemonMsg,
         /// Client-allocated; stamped on every item and the terminal.
         stream: StreamId,
     },
     /// A `Conn::Cancel` the connection's driver already validated.
     CancelStream {
-        /// A subscriber cannot cancel another's stream.
-        sub: SubscriberId,
+        /// A connection cannot cancel another's stream.
+        owner: Owner,
         stream: StreamId,
     },
     /// The client's configured colors, so an `OSC 4/10/11/12 ; ?` query
@@ -374,7 +421,7 @@ pub enum SessionCmd {
     /// `RegionToDaemonMsg::Request` (docs/explanation/data-model/scrollback.md
     /// "Piping to an external command").
     Region {
-        sub: SubscriberId,
+        owner: Owner,
         source: RegionSource,
         ansi: bool,
         request: RequestId,
@@ -382,7 +429,7 @@ pub enum SessionCmd {
     /// `RegionToDaemonMsg::Rows`: the same region row by row
     /// (`Row` … `RowsDone`).
     RegionRows {
-        sub: SubscriberId,
+        owner: Owner,
         source: RegionSource,
         ansi: bool,
         /// Only the youngest `max_rows` rows (`--lines`).
@@ -410,6 +457,37 @@ pub enum SessionCmd {
         reply: oneshot::Sender<PushOutcome>,
     },
     Shutdown,
+    /// Before an unattached connection's first stream on this session.
+    AddRequester(RequesterHandle),
+    /// The connection ended: its streams end with it, unterminated.
+    DropRequester {
+        id: RequesterId,
+    },
+    /// Before an `Ops::Send` writes anything: refuse it on an exited
+    /// session or a mouse step the program would not see, and register
+    /// the `SendAndWait` watch in the same step.
+    PrepareSend {
+        watch: Option<(RequesterId, StreamId)>,
+        /// Each mouse step with its index among the request's steps.
+        mouse: Vec<(u32, MouseEvent)>,
+        reply: oneshot::Sender<Prepared>,
+    },
+    /// One `Ops::Send` step, admitted against the input budget by the
+    /// connection that carries it. No subscriber: it moves neither size
+    /// ownership nor the input owner.
+    RemoteInput {
+        msg: InputMsg,
+        reservation: Option<InputReservation>,
+    },
+    /// Queued behind an `Ops::Send`'s last step: answered `false` when
+    /// the program has exited. Releases a `SendAndWait` watch, whose
+    /// `WaitSent` item it queues itself, ahead of any held mark.
+    SendFence {
+        watch: Option<(RequesterId, StreamId)>,
+        /// The session's full id, for `WaitSent`.
+        id: u128,
+        reply: oneshot::Sender<bool>,
+    },
     /// Answered once every command queued ahead of it has run, so input
     /// admitted before an upgrade's barrier reaches the writer before it
     /// parks. Until [`SessionCmd::Resume`] the task drains only for a parse
@@ -693,6 +771,7 @@ async fn spawn_task(
         session,
         input_budget: Arc::clone(&input_budget),
         subs: Vec::new(),
+        requesters: Vec::new(),
         attachment_ids,
         meta,
         pool: Arc::downgrade(pool),
@@ -884,6 +963,73 @@ fn close_open_streams(sub: &Subscriber, detail: &str) {
     }
 }
 
+/// An unattached connection with streams on this session: its search
+/// and capture producers, which read at a fresh attach's viewpoint, and
+/// its `SendAndWait` watches.
+struct Requester {
+    id: RequesterId,
+    tx: mpsc::UnboundedSender<OutEvent>,
+    buffered: Arc<AtomicUsize>,
+    evict: Arc<Notify>,
+    producers: Vec<Producer>,
+    watches: Vec<MarkWatch>,
+}
+
+impl Requester {
+    /// As [`Subscriber::push`]; on `false` the caller drops the
+    /// requester, and the connection learns of it through `evict`.
+    fn push(&self, ev: OutEvent) -> bool {
+        let len = ev.approx_wire_len();
+        if self.buffered.fetch_add(len, Ordering::Relaxed) + len > SUBSCRIBER_BUFFER_CAP {
+            warn!(conn = self.id.0, "unattached outbox over cap; evicting");
+            self.evict.notify_one();
+            return false;
+        }
+        self.tx.send(ev).is_ok()
+    }
+
+    /// As [`Subscriber::force_push`].
+    fn force_push(&self, ev: OutEvent) -> bool {
+        self.buffered
+            .fetch_add(ev.approx_wire_len(), Ordering::Relaxed);
+        self.tx.send(ev).is_ok()
+    }
+
+    /// Every stream ends `Unavailable`: the session is going away.
+    fn close_all(&mut self, detail: &str) {
+        let streams = self
+            .producers
+            .drain(..)
+            .map(|p| p.stream)
+            .chain(self.watches.drain(..).map(|w| w.stream))
+            .collect::<Vec<_>>();
+        for stream in streams {
+            let _queued = self.force_push(OutEvent::Control(ConnToClientMsg::Error {
+                subject: Subject::Stream(stream),
+                reason: StreamErrorReason::Unavailable,
+                detail: detail.to_owned(),
+            }));
+        }
+    }
+}
+
+/// A `SendAndWait` watch: the first `OSC 133 ; D` from `from` on,
+/// shipped only once the send's fence released it, so its `Mark`
+/// follows the `WaitSent`.
+struct MarkWatch {
+    stream: StreamId,
+    /// Absolute prompt-mark ordinal the next scan starts at.
+    from: usize,
+    released: bool,
+    /// The mark found before the release.
+    held: Option<HeldMark>,
+}
+
+#[derive(Clone, Copy)]
+struct HeldMark {
+    exit_code: Option<u32>,
+}
+
 // Independent lifecycle/reporting flags, not an encodable state
 // machine: EOF, child exit, and the focus mirror vary freely.
 #[allow(clippy::struct_excessive_bools)]
@@ -894,6 +1040,7 @@ struct SessionTask {
     /// it only to report it (`felis daemon status`).
     input_budget: Arc<tokio::sync::Semaphore>,
     subs: Vec<Subscriber>,
+    requesters: Vec<Requester>,
     attachment_ids: AttachmentIds,
     meta: Arc<StdMutex<SessionMeta>>,
     /// Weak so a parked task keeps no pool alive.
@@ -950,7 +1097,7 @@ struct SessionTask {
     /// An in-task queue rather than a self-addressed `SessionCmd`: the
     /// command channel is bounded, so a producer re-queueing through it
     /// could block while holding the only thread that drains it.
-    pending_chunks: VecDeque<(SubscriberId, StreamId)>,
+    pending_chunks: VecDeque<(Owner, StreamId)>,
     /// See [`SessionCmd::Settle`].
     upgrade_hold: bool,
 }
@@ -1179,6 +1326,7 @@ async fn run_session(mut t: SessionTask, mut cmd_rx: mpsc::Receiver<SessionCmd>)
                         let status = t.reap_after_eof().await;
                         t.notify_shell_exit(status);
                         t.evict_all(None);
+                        t.end_watches();
                     }
                     Ok(_) => {
                         warn!("session task: unexpected data on the sink-mode reader");
@@ -1198,8 +1346,7 @@ async fn run_session(mut t: SessionTask, mut cmd_rx: mpsc::Receiver<SessionCmd>)
                 if !t.child_exited
                     && matches!(t.session.child.try_wait(), Ok(Some(_)))
                 {
-                    t.child_exited = true;
-                    t.stamp_exited_meta();
+                    t.on_child_exit();
                 }
                 if t.reap_due() {
                     break EndReason::Reaped;
@@ -1237,6 +1384,7 @@ async fn run_session(mut t: SessionTask, mut cmd_rx: mpsc::Receiver<SessionCmd>)
         EndReason::Reaped => info!(id = ?t.id, "session task: reaped post-exit idle session"),
     }
     t.evict_all(None);
+    t.close_requesters("the session ended");
     let teardown = if let Some(pool) = t.pool.upgrade() {
         let mut guard = pool.lock().await;
         let teardown = guard.begin_teardown();
@@ -1323,6 +1471,31 @@ pub(crate) async fn end_child(child: &ChildHandle) {
     }
 }
 
+/// Why `event` would never reach the program as a report: the
+/// encoder's own filter, plus the grid bounds. The texts are what
+/// `felis sessions send --mouse` prints.
+fn unreported_mouse(
+    event: MouseEvent,
+    protocol: MouseProtocol,
+    rows: u16,
+    cols: u16,
+) -> Option<String> {
+    if event.x == 0 || event.y == 0 || event.x > cols || event.y > rows {
+        return Some(format!(
+            "the cell is outside the {cols}x{rows} grid (COL and ROW are 0-based)"
+        ));
+    }
+    if felis_grid::mouse_event_reported(protocol, event.action) {
+        return None;
+    }
+    Some(if protocol == MouseProtocol::Off {
+        "the program has no mouse reporting on; nothing was sent".to_owned()
+    } else {
+        "the program reports clicks but not drags (?1000 without ?1002); nothing was sent"
+            .to_owned()
+    })
+}
+
 /// The keyboard modes come off the same locked core the mouse encoding
 /// reads, so a mode the child set is in effect for the very next key.
 /// Keys are encoded daemon-side so the bytes follow the modes this daemon
@@ -1401,9 +1574,33 @@ impl SessionTask {
                 msg,
                 reservation,
             } => self.handle_admitted_input(sub, msg, reservation),
-            SessionCmd::Search { sub, msg, stream } => self.handle_search(sub, msg, stream),
-            SessionCmd::CancelStream { sub, stream } => {
-                self.cancel_producer(sub, stream);
+            SessionCmd::Search { owner, msg, stream } => self.handle_search(owner, msg, stream),
+            SessionCmd::CancelStream { owner, stream } => {
+                self.cancel_producer(owner, stream);
+                None
+            }
+            SessionCmd::AddRequester(handle) => {
+                self.add_requester(handle);
+                None
+            }
+            SessionCmd::DropRequester { id } => {
+                self.remove_requester(id);
+                None
+            }
+            SessionCmd::PrepareSend {
+                watch,
+                mouse,
+                reply,
+            } => {
+                let prepared = self.prepare_send(watch, &mouse);
+                drop(reply.send(prepared));
+                None
+            }
+            SessionCmd::RemoteInput { msg, reservation } => {
+                self.handle_remote_input(msg, reservation)
+            }
+            SessionCmd::SendFence { watch, id, reply } => {
+                let _ = reply.send(self.send_fence(watch, id));
                 None
             }
             SessionCmd::ConfigureTheme {
@@ -1433,22 +1630,22 @@ impl SessionTask {
                 None
             }
             SessionCmd::Region {
-                sub,
+                owner,
                 source,
                 ansi,
                 request,
             } => {
-                self.handle_region(sub, source, ansi, request);
+                self.handle_region(owner, source, ansi, request);
                 None
             }
             SessionCmd::RegionRows {
-                sub,
+                owner,
                 source,
                 ansi,
                 max_rows,
                 stream,
             } => {
-                self.start_rows(sub, source, ansi, max_rows, stream);
+                self.start_rows(owner, source, ansi, max_rows, stream);
                 None
             }
             SessionCmd::Stats { reply } => {
@@ -1821,10 +2018,103 @@ impl SessionTask {
     /// Queued past the backlog cap: the terminal is the only frame that
     /// tells a reader "no more results" from "the connection ended",
     /// so the cap must not turn it into a bare EOF.
-    fn push_terminal(&mut self, sub_id: SubscriberId, i: usize, terminal: ConnToClientMsg) {
-        if !self.subs[i].force_push(OutEvent::Control(terminal)) {
-            self.remove_sub(sub_id);
+    fn push_terminal(&mut self, owner: Owner, terminal: ConnToClientMsg) {
+        let alive = match owner {
+            Owner::Sub(id) => match self.sub_index(id) {
+                Some(i) => self.subs[i].force_push(OutEvent::Control(terminal)),
+                None => return,
+            },
+            Owner::Conn(id) => match self.requester_index(id) {
+                Some(i) => self.requesters[i].force_push(OutEvent::Control(terminal)),
+                None => return,
+            },
+        };
+        if !alive {
+            self.remove_owner(owner);
         }
+    }
+
+    /// As [`Self::push_to`], for either kind of owner; `false` once the
+    /// owner is gone.
+    fn push_owner(&mut self, owner: Owner, ev: OutEvent) -> bool {
+        match owner {
+            Owner::Sub(id) => match self.sub_index(id) {
+                Some(i) => self.push_to(id, i, ev),
+                None => false,
+            },
+            Owner::Conn(id) => match self.requester_index(id) {
+                Some(i) => {
+                    if self.requesters[i].push(ev) {
+                        true
+                    } else {
+                        self.remove_requester(id);
+                        false
+                    }
+                }
+                None => false,
+            },
+        }
+    }
+
+    fn remove_owner(&mut self, owner: Owner) {
+        match owner {
+            Owner::Sub(id) => self.remove_sub(id),
+            Owner::Conn(id) => self.remove_requester(id),
+        }
+    }
+
+    fn producers_mut(&mut self, owner: Owner) -> Option<&mut Vec<Producer>> {
+        match owner {
+            Owner::Sub(id) => self
+                .subs
+                .iter_mut()
+                .find(|s| s.id == id)
+                .map(|s| &mut s.producers),
+            Owner::Conn(id) => self
+                .requesters
+                .iter_mut()
+                .find(|r| r.id == id)
+                .map(|r| &mut r.producers),
+        }
+    }
+
+    /// A subscriber reads where it scrolled; an unattached connection
+    /// reads where a fresh attach would land, the live bottom.
+    fn viewport_of(&self, owner: Owner) -> u32 {
+        match owner {
+            Owner::Sub(id) => self.subs.iter().find(|s| s.id == id).map_or(0, |s| {
+                s.stream.diff.viewport_now(&self.session.lock_core().grid)
+            }),
+            Owner::Conn(_) => 0,
+        }
+    }
+
+    fn requester_index(&self, id: RequesterId) -> Option<usize> {
+        self.requesters.iter().position(|r| r.id == id)
+    }
+
+    /// Streams end unterminated: the connection that would read the
+    /// terminals is gone or evicted.
+    fn remove_requester(&mut self, id: RequesterId) {
+        if let Some(i) = self.requester_index(id) {
+            self.requesters.remove(i);
+            self.pending_chunks
+                .retain(|(owner, _)| *owner != Owner::Conn(id));
+        }
+    }
+
+    fn add_requester(&mut self, handle: RequesterHandle) {
+        if self.requester_index(handle.id).is_some() {
+            return;
+        }
+        self.requesters.push(Requester {
+            id: handle.id,
+            tx: handle.tx,
+            buffered: handle.buffered,
+            evict: handle.evict,
+            producers: Vec::new(),
+            watches: Vec::new(),
+        });
     }
 
     fn resolve_scope(&self, scope: SwitchScope) -> Result<Vec<SubscriberId>, SwitchDenied> {
@@ -1926,13 +2216,15 @@ impl SessionTask {
         // One load per outbox feeding both numbers: two passes over
         // gauges the writer tasks are draining can report a max the
         // total does not contain.
-        let (max_subscriber_backlog, total_subscriber_backlog) =
-            self.subs
-                .iter()
-                .fold((0usize, 0usize), |(max, total), sub| {
-                    let queued = sub.buffered.load(Ordering::Relaxed);
-                    (max.max(queued), total.saturating_add(queued))
-                });
+        let (max_subscriber_backlog, total_subscriber_backlog) = self
+            .subs
+            .iter()
+            .map(|sub| &sub.buffered)
+            .chain(self.requesters.iter().map(|r| &r.buffered))
+            .fold((0usize, 0usize), |(max, total), buffered| {
+                let queued = buffered.load(Ordering::Relaxed);
+                (max.max(queued), total.saturating_add(queued))
+            });
         SessionStats {
             image_bytes: self.session.images.bytes_used()
                 + self
@@ -2117,6 +2409,7 @@ impl SessionTask {
         let cycle = self.compose_cycle(&mut guard);
         drop(guard);
         self.finish_cycle(cycle);
+        self.scan_watches();
         drained
     }
 
@@ -2592,17 +2885,237 @@ impl SessionTask {
         pty_write_outcome(self.grid_cycle_for(sub_id))
     }
 
+    /// `Ops::Send`'s checks against live state, before the connection
+    /// writes a step: a refusal here leaves the PTY untouched.
+    fn prepare_send(
+        &mut self,
+        watch: Option<(RequesterId, StreamId)>,
+        mouse: &[(u32, MouseEvent)],
+    ) -> Prepared {
+        if self.pty_eof || self.child_exited {
+            return Prepared::Ended;
+        }
+        {
+            let core = self.session.lock_core();
+            let (rows, cols) = (core.grid.rows(), core.grid.cols());
+            let protocol = core.grid.mouse_protocol();
+            for &(step, event) in mouse {
+                if let Some(detail) = unreported_mouse(event, protocol, rows, cols) {
+                    return Prepared::Unreported { step, detail };
+                }
+            }
+        }
+        if let Some((id, stream)) = watch {
+            let from = streaming::prompt_marks_ordinal_end(&self.session.lock_core().grid);
+            let Some(i) = self.requester_index(id) else {
+                return Prepared::Ended;
+            };
+            self.requesters[i].watches.push(MarkWatch {
+                stream,
+                from,
+                released: false,
+                held: None,
+            });
+        }
+        Prepared::Ready
+    }
+
+    /// One admitted `Ops::Send` step. Unlike a subscriber's input it
+    /// moves neither size ownership nor the input owner: an unattached
+    /// connection has no window to size or switch to.
+    fn handle_remote_input(
+        &mut self,
+        msg: InputMsg,
+        reservation: Option<InputReservation>,
+    ) -> Option<EndReason> {
+        let session = &mut self.session;
+        let written = match msg {
+            InputMsg::KeyBytes(bytes) => {
+                streaming::write_pty_reserved(&session.writer, bytes, reservation)
+            }
+            InputMsg::Paste(bytes) => {
+                let bracketed = session.lock_core().grid.bracketed_paste();
+                write_paste(&session.writer, bracketed, bytes, reservation)
+            }
+            msg @ (InputMsg::Mouse(_) | InputMsg::Key(_)) => {
+                let encoded = encode_input(&session.lock_core(), &msg);
+                encoded.map_or(Ok(()), |bytes| {
+                    streaming::write_pty_reserved(&session.writer, bytes, reservation)
+                })
+            }
+            _ => Ok(()),
+        };
+        pty_write_outcome(written)
+    }
+
+    /// `false` once the program has exited, whose watch the exit already
+    /// ended. Releasing a watch queues its `WaitSent` here, ahead of the
+    /// mark any later scan finds.
+    fn send_fence(&mut self, watch: Option<(RequesterId, StreamId)>, id: u128) -> bool {
+        if self.pty_eof || self.child_exited {
+            return false;
+        }
+        let Some((conn, stream)) = watch else {
+            return true;
+        };
+        self.scan_watches();
+        let Some(i) = self.requester_index(conn) else {
+            return true;
+        };
+        let Some(w) = self.requesters[i]
+            .watches
+            .iter()
+            .position(|w| w.stream == stream)
+        else {
+            return true;
+        };
+        let correlation = Correlation::stream(stream);
+        let sent = OutEvent::Ops {
+            msg: Box::new(OpsToClientMsg::WaitSent {
+                outcome: SendOutcome::Sent { id },
+            }),
+            correlation,
+        };
+        if !self.push_owner(Owner::Conn(conn), sent) {
+            return true;
+        }
+        let Some(i) = self.requester_index(conn) else {
+            return true;
+        };
+        let watch = &mut self.requesters[i].watches[w];
+        watch.released = true;
+        if let Some(mark) = watch.held {
+            self.finish_watch(conn, stream, mark.exit_code);
+        }
+        true
+    }
+
+    /// Finds each watch's first `OSC 133 ; D` since it registered. A
+    /// released watch ships it at once; an unreleased one holds it for
+    /// the fence.
+    fn scan_watches(&mut self) {
+        if self.requesters.iter().all(|r| r.watches.is_empty()) {
+            return;
+        }
+        let mut found = Vec::new();
+        {
+            let core = self.session.lock_core();
+            let marks = core.grid.prompt_marks();
+            let pruned = usize::try_from(core.grid.prompt_marks_pruned()).unwrap_or(usize::MAX);
+            let end = pruned.saturating_add(marks.len());
+            for requester in &mut self.requesters {
+                for watch in &mut requester.watches {
+                    if watch.held.is_some() {
+                        continue;
+                    }
+                    let start = watch.from.max(pruned);
+                    let hit = marks
+                        .get(start - pruned..)
+                        .unwrap_or_default()
+                        .iter()
+                        .find(|m| m.kind == PromptKind::CommandEnd);
+                    watch.from = end;
+                    if let Some(mark) = hit {
+                        watch.held = Some(HeldMark {
+                            exit_code: mark.exit_code,
+                        });
+                        if watch.released {
+                            found.push((requester.id, watch.stream, mark.exit_code));
+                        }
+                    }
+                }
+            }
+        }
+        for (conn, stream, exit_code) in found {
+            self.finish_watch(conn, stream, exit_code);
+        }
+    }
+
+    fn finish_watch(&mut self, conn: RequesterId, stream: StreamId, exit_code: Option<u32>) {
+        let Some(i) = self.requester_index(conn) else {
+            return;
+        };
+        self.requesters[i].watches.retain(|w| w.stream != stream);
+        let mark = OutEvent::Ops {
+            msg: Box::new(OpsToClientMsg::Mark { exit_code }),
+            correlation: Correlation::stream(stream),
+        };
+        if self.push_owner(Owner::Conn(conn), mark) {
+            self.push_terminal(
+                Owner::Conn(conn),
+                ConnToClientMsg::End {
+                    stream_id: stream,
+                    count: 1,
+                },
+            );
+        }
+    }
+
+    /// `true` when `stream` was a watch: it ends with no mark.
+    fn cancel_watch(&mut self, conn: RequesterId, stream: StreamId) -> bool {
+        let Some(i) = self.requester_index(conn) else {
+            return false;
+        };
+        let before = self.requesters[i].watches.len();
+        self.requesters[i].watches.retain(|w| w.stream != stream);
+        if self.requesters[i].watches.len() == before {
+            return false;
+        }
+        self.push_terminal(
+            Owner::Conn(conn),
+            ConnToClientMsg::End {
+                stream_id: stream,
+                count: 0,
+            },
+        );
+        true
+    }
+
+    /// Seen before EOF when a process the program left behind holds the
+    /// PTY open: no mark it owes a wait can come any more.
+    fn on_child_exit(&mut self) {
+        self.child_exited = true;
+        self.stamp_exited_meta();
+        if let Err(err) = self.drive_cycle() {
+            debug!(?err, "session task: effect drain at child exit failed");
+        }
+        self.end_watches();
+    }
+
+    /// At exit: no `OSC 133 ; D` can arrive any more. Searches and
+    /// captures keep reading the final screen.
+    fn end_watches(&mut self) {
+        for requester in &mut self.requesters {
+            for watch in std::mem::take(&mut requester.watches) {
+                let _queued = requester.force_push(OutEvent::Control(ConnToClientMsg::Error {
+                    subject: Subject::Stream(watch.stream),
+                    reason: StreamErrorReason::Unavailable,
+                    detail: "the session ended".to_owned(),
+                }));
+            }
+        }
+    }
+
+    fn close_requesters(&mut self, detail: &str) {
+        for mut requester in self.requesters.drain(..) {
+            requester.close_all(detail);
+        }
+        self.pending_chunks
+            .retain(|(owner, _)| matches!(owner, Owner::Sub(_)));
+    }
+
     fn handle_search(
         &mut self,
-        sub_id: SubscriberId,
+        owner: Owner,
         msg: SearchToDaemonMsg,
         stream: StreamId,
     ) -> Option<EndReason> {
-        let i = self.sub_index(sub_id)?;
+        self.producers_mut(owner)?;
         let SearchToDaemonMsg::Query {
             query,
             options,
             source,
+            session: _,
         } = msg;
         let compiled = match felis_grid::SearchQuery::new(&query, options) {
             Ok(q) => q,
@@ -2610,8 +3123,7 @@ impl SessionTask {
                 // The stream is already open on the wire, so it owes
                 // its one terminal even now.
                 self.push_terminal(
-                    sub_id,
-                    i,
+                    owner,
                     ConnToClientMsg::Error {
                         subject: Subject::Stream(stream),
                         reason: StreamErrorReason::InvalidRequest,
@@ -2622,7 +3134,7 @@ impl SessionTask {
             }
         };
         if source == felis_grid::SearchSource::Visible {
-            self.subs[i].producers.push(Producer {
+            self.producers_mut(owner)?.push(Producer {
                 stream,
                 canceled: false,
                 emitted: 0,
@@ -2631,7 +3143,7 @@ impl SessionTask {
                     row: 0,
                 },
             });
-            self.pending_chunks.push_back((sub_id, stream));
+            self.pending_chunks.push_back((owner, stream));
             return None;
         }
         // `lock_core` is not reentrant; one guard for both reads.
@@ -2640,7 +3152,7 @@ impl SessionTask {
             core.grid.scrollback().len() + usize::from(core.grid.rows())
         };
         let budget = SEARCH_CHUNK_LINES.max(total.div_ceil(MAX_SEARCH_CHUNKS));
-        self.subs[i].producers.push(Producer {
+        self.producers_mut(owner)?.push(Producer {
             stream,
             canceled: false,
             emitted: 0,
@@ -2650,7 +3162,7 @@ impl SessionTask {
                 budget,
             },
         });
-        self.pending_chunks.push_back((sub_id, stream));
+        self.pending_chunks.push_back((owner, stream));
         None
     }
 
@@ -2658,16 +3170,16 @@ impl SessionTask {
     /// empty stream rather than going silent.
     fn start_rows(
         &mut self,
-        sub_id: SubscriberId,
+        owner: Owner,
         source: RegionSource,
         ansi: bool,
         max_rows: Option<u32>,
         stream: StreamId,
     ) {
-        let Some(i) = self.sub_index(sub_id) else {
+        let Some(producers) = self.producers_mut(owner) else {
             return;
         };
-        self.subs[i].producers.push(Producer {
+        producers.push(Producer {
             stream,
             canceled: false,
             emitted: 0,
@@ -2678,79 +3190,72 @@ impl SessionTask {
                 offset: 0,
             },
         });
-        self.pending_chunks.push_back((sub_id, stream));
+        self.pending_chunks.push_back((owner, stream));
     }
 
     /// A canceled producer stays queued for one more turn: it still
     /// owes the stream its terminal.
-    fn cancel_producer(&mut self, sub_id: SubscriberId, stream: StreamId) {
-        let Some(i) = self.sub_index(sub_id) else {
+    fn cancel_producer(&mut self, owner: Owner, stream: StreamId) {
+        if let Owner::Conn(id) = owner
+            && self.cancel_watch(id, stream)
+        {
             return;
-        };
-        let Some(producer) = self.subs[i]
-            .producers
-            .iter_mut()
-            .find(|p| p.stream == stream)
+        }
+        let Some(producer) = self
+            .producers_mut(owner)
+            .and_then(|producers| producers.iter_mut().find(|p| p.stream == stream))
         else {
             // The terminal was already on the wire; the connection
             // driver treats this cancel as idempotent.
             return;
         };
         producer.canceled = true;
-        if !self.pending_chunks.contains(&(sub_id, stream)) {
-            self.pending_chunks.push_back((sub_id, stream));
+        if !self.pending_chunks.contains(&(owner, stream)) {
+            self.pending_chunks.push_back((owner, stream));
         }
     }
 
     /// One slice per run-loop turn, never looped: a cancel, a
     /// keystroke, and the PTY drain get a turn between slices.
     fn run_next_chunk(&mut self) {
-        let Some((sub_id, stream)) = self.pending_chunks.pop_front() else {
+        let Some((owner, stream)) = self.pending_chunks.pop_front() else {
             return;
         };
-        self.run_chunk(sub_id, stream);
+        self.run_chunk(owner, stream);
     }
 
     fn has_pending_chunks(&self) -> bool {
         !self.pending_chunks.is_empty()
     }
 
-    fn run_chunk(&mut self, sub_id: SubscriberId, stream: StreamId) {
-        let Some(i) = self.sub_index(sub_id) else {
-            return;
-        };
-        let Some(p) = self.subs[i]
-            .producers
+    fn producer_index(&mut self, owner: Owner, stream: StreamId) -> Option<usize> {
+        self.producers_mut(owner)?
             .iter()
             .position(|p| p.stream == stream)
-        else {
+    }
+
+    fn run_chunk(&mut self, owner: Owner, stream: StreamId) {
+        let Some(p) = self.producer_index(owner, stream) else {
             return;
         };
-        if self.subs[i].producers[p].canceled {
-            self.close_stream(sub_id, i, p, None);
+        if self.producers_mut(owner).is_some_and(|ps| ps[p].canceled) {
+            self.close_stream(owner, p, None);
             return;
         }
-        let (events, done, failure) = self.next_slice(i, p);
+        let (events, done, failure) = self.next_slice(owner, p);
         for ev in events {
-            if !self.push_to(sub_id, i, ev) {
+            if !self.push_owner(owner, ev) {
                 return;
             }
         }
-        // `push_to` may have evicted the subscriber.
-        let Some(i) = self.sub_index(sub_id) else {
-            return;
-        };
-        let Some(p) = self.subs[i]
-            .producers
-            .iter()
-            .position(|p| p.stream == stream)
-        else {
+        // `push_owner` may have evicted the owner.
+        let Some(p) = self.producer_index(owner, stream) else {
             return;
         };
         if done || failure.is_some() {
-            self.close_stream(sub_id, i, p, failure);
+            self.close_stream(owner, p, failure);
         } else {
-            self.pending_chunks.push_back((sub_id, stream));
+            self.pending_chunks.push_back((owner, stream));
         }
     }
 
@@ -2759,16 +3264,29 @@ impl SessionTask {
     #[allow(clippy::type_complexity)]
     fn next_slice(
         &mut self,
-        i: usize,
+        owner: Owner,
         p: usize,
     ) -> (Vec<OutEvent>, bool, Option<(StreamErrorReason, String)>) {
-        let stream = self.subs[i].producers[p].stream;
-        let correlation = Correlation::stream(stream);
-        let diff = &self.subs[i].stream.diff;
-        let viewport = diff.viewport_now(&self.session.lock_core().grid);
-        let mut out = Vec::new();
+        let viewport = self.viewport_of(owner);
         let session = &self.session;
-        let (done, results) = match &mut self.subs[i].producers[p].kind {
+        let producers = match owner {
+            Owner::Sub(id) => self
+                .subs
+                .iter_mut()
+                .find(|s| s.id == id)
+                .map(|s| &mut s.producers),
+            Owner::Conn(id) => self
+                .requesters
+                .iter_mut()
+                .find(|r| r.id == id)
+                .map(|r| &mut r.producers),
+        };
+        let Some(producer) = producers.and_then(|ps| ps.get_mut(p)) else {
+            return (Vec::new(), true, None);
+        };
+        let correlation = Correlation::stream(producer.stream);
+        let mut out = Vec::new();
+        let (done, results) = match &mut producer.kind {
             ProducerKind::Search {
                 query,
                 cursor,
@@ -2875,19 +3393,20 @@ impl SessionTask {
                 (done, u32::try_from(shipped).unwrap_or(u32::MAX))
             }
         };
-        self.subs[i].producers[p].emitted =
-            self.subs[i].producers[p].emitted.saturating_add(results);
+        producer.emitted = producer.emitted.saturating_add(results);
         (out, done, None)
     }
 
     fn close_stream(
         &mut self,
-        sub_id: SubscriberId,
-        i: usize,
+        owner: Owner,
         p: usize,
         failure: Option<(StreamErrorReason, String)>,
     ) {
-        let producer = self.subs[i].producers.remove(p);
+        let Some(producers) = self.producers_mut(owner) else {
+            return;
+        };
+        let producer = producers.remove(p);
         let terminal = match failure {
             Some((reason, detail)) => ConnToClientMsg::Error {
                 subject: Subject::Stream(producer.stream),
@@ -2899,7 +3418,7 @@ impl SessionTask {
                 count: producer.emitted,
             },
         };
-        self.push_terminal(sub_id, i, terminal);
+        self.push_terminal(owner, terminal);
     }
 
     fn promote_active(&mut self, sub_id: SubscriberId, i: usize) {
@@ -3139,17 +3658,17 @@ impl SessionTask {
     /// answers with empty bytes rather than silence.
     fn handle_region(
         &mut self,
-        sub_id: SubscriberId,
+        owner: Owner,
         source: RegionSource,
         ansi: bool,
         request: RequestId,
     ) {
-        let Some(i) = self.sub_index(sub_id) else {
+        if self.producers_mut(owner).is_none() {
             return;
-        };
+        }
+        let viewport = self.viewport_of(owner);
         let (data, position, exit_code) = {
             let core = self.session.lock_core();
-            let viewport = self.subs[i].stream.diff.viewport_now(&core.grid);
             let serialized = crate::serve::region::serialize_region_positioned(
                 &core.grid, viewport, source, ansi,
             );
@@ -3162,9 +3681,8 @@ impl SessionTask {
             (data, position, exit_code)
         };
         let (data, position) = trim_region_reply(data, position, MAX_REGION_REPLY_BYTES);
-        let _evicted = self.push_to(
-            sub_id,
-            i,
+        let _evicted = self.push_owner(
+            owner,
             OutEvent::Region {
                 msg: RegionToClientMsg::Reply {
                     data,
@@ -3208,6 +3726,7 @@ impl SessionTask {
             session,
             input_budget: crate::pool::new_input_budget(),
             subs: Vec::new(),
+            requesters: Vec::new(),
             attachment_ids: AttachmentIds::detached(),
             meta,
             pool: Weak::new(),
@@ -4832,11 +5351,12 @@ mod tests {
 
         let stream = test_stream(1);
         task.handle_search(
-            sub,
+            Owner::Sub(sub),
             SearchToDaemonMsg::Query {
                 query: "needle-".to_owned(),
                 options: felis_protocol::messages::SearchOptions::default(),
                 source: felis_protocol::messages::SearchSource::Scrollback,
+                session: None,
             },
             stream,
         );
@@ -4876,18 +5396,19 @@ mod tests {
 
         let stream = test_stream(1);
         task.handle_search(
-            sub,
+            Owner::Sub(sub),
             SearchToDaemonMsg::Query {
                 query: "needle-".to_owned(),
                 options: felis_protocol::messages::SearchOptions::default(),
                 source: felis_protocol::messages::SearchSource::Scrollback,
+                session: None,
             },
             stream,
         );
         task.run_next_chunk();
         drain_events(&mut rx);
 
-        task.cancel_producer(sub, stream);
+        task.cancel_producer(Owner::Sub(sub), stream);
         let mut turns = 0;
         while task.has_pending_chunks() {
             task.run_next_chunk();
@@ -4927,11 +5448,12 @@ mod tests {
 
         let mut hits = |source, id| {
             task.handle_search(
-                sub,
+                Owner::Sub(sub),
                 SearchToDaemonMsg::Query {
                     query: "on-alt".to_owned(),
                     options: SearchOptions::default(),
                     source,
+                    session: None,
                 },
                 test_stream(id),
             );
@@ -4973,11 +5495,12 @@ mod tests {
         }
 
         task.handle_search(
-            sub,
+            Owner::Sub(sub),
             SearchToDaemonMsg::Query {
                 query: "hit".to_owned(),
                 options: SearchOptions::default(),
                 source: SearchSource::Visible,
+                session: None,
             },
             test_stream(1),
         );
@@ -5018,11 +5541,12 @@ mod tests {
 
         let stream = test_stream(1);
         task.handle_search(
-            sub,
+            Owner::Sub(sub),
             SearchToDaemonMsg::Query {
                 query: String::new(),
                 options: felis_protocol::messages::SearchOptions::default(),
                 source: felis_protocol::messages::SearchSource::Scrollback,
+                session: None,
             },
             stream,
         );
@@ -5054,7 +5578,7 @@ mod tests {
         drain_events(&mut rx);
 
         let stream = test_stream(1);
-        task.start_rows(sub, RegionSource::Visible, false, None, stream);
+        task.start_rows(Owner::Sub(sub), RegionSource::Visible, false, None, stream);
         while task.has_pending_chunks() {
             task.run_next_chunk();
         }
@@ -5111,7 +5635,13 @@ mod tests {
         drain_events(&mut rx);
 
         let stream = test_stream(1);
-        task.start_rows(sub, RegionSource::LastCommand, false, None, stream);
+        task.start_rows(
+            Owner::Sub(sub),
+            RegionSource::LastCommand,
+            false,
+            None,
+            stream,
+        );
         while task.has_pending_chunks() {
             task.run_next_chunk();
         }
@@ -5140,11 +5670,12 @@ mod tests {
 
         let stream = test_stream(1);
         task.handle_search(
-            sub,
+            Owner::Sub(sub),
             SearchToDaemonMsg::Query {
                 query: "needle-".to_owned(),
                 options: felis_protocol::messages::SearchOptions::default(),
                 source: felis_protocol::messages::SearchSource::Scrollback,
+                session: None,
             },
             stream,
         );
@@ -5177,11 +5708,12 @@ mod tests {
 
         let stream = test_stream(1);
         task.handle_search(
-            sub,
+            Owner::Sub(sub),
             SearchToDaemonMsg::Query {
                 query: "needle-".to_owned(),
                 options: felis_protocol::messages::SearchOptions::default(),
                 source: felis_protocol::messages::SearchSource::Scrollback,
+                session: None,
             },
             stream,
         );
@@ -5222,7 +5754,12 @@ mod tests {
         let (_sub_b, mut rx_b) = attach_sub(&mut task, false);
         wait_for_grid_text(&task, "CLIPME").await;
 
-        task.handle_region(sub_a, RegionSource::Visible, false, test_request());
+        task.handle_region(
+            Owner::Sub(sub_a),
+            RegionSource::Visible,
+            false,
+            test_request(),
+        );
 
         let a = drain_events(&mut rx_a);
         let data = a
@@ -5495,7 +6032,12 @@ mod tests {
         let (sub, mut rx) = attach_sub(&mut task, false);
         drain_events(&mut rx);
 
-        task.handle_region(sub, RegionSource::LastCommand, false, test_request());
+        task.handle_region(
+            Owner::Sub(sub),
+            RegionSource::LastCommand,
+            false,
+            test_request(),
+        );
 
         let reply = drain_events(&mut rx)
             .into_iter()
@@ -7993,5 +8535,142 @@ mod tests {
 
         assert_eq!(announced(&drain_events(&mut rx_early)), ["before", "after"]);
         assert_eq!(announced(&drain_events(&mut rx_late)), ["after"]);
+    }
+
+    fn requester(task: &mut SessionTask) -> (RequesterId, mpsc::UnboundedReceiver<OutEvent>) {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let id = RequesterId::next();
+        task.add_requester(RequesterHandle {
+            id,
+            tx,
+            buffered: Arc::new(AtomicUsize::new(0)),
+            evict: Arc::new(Notify::new()),
+        });
+        (id, rx)
+    }
+
+    const fn click(action: felis_protocol::messages::MouseAction, x: u16, y: u16) -> MouseEvent {
+        MouseEvent {
+            button: Some(felis_protocol::messages::MouseButton::Left),
+            action,
+            mods: felis_protocol::messages::InputMods::empty(),
+            x,
+            y,
+            px: 0,
+            py: 0,
+        }
+    }
+
+    #[test]
+    fn the_last_cell_of_the_grid_is_in_bounds_and_the_next_is_not() {
+        use felis_protocol::messages::MouseAction::Press;
+        let any = MouseProtocol::AnyMotion;
+        assert_eq!(unreported_mouse(click(Press, 80, 24), any, 24, 80), None);
+        for (x, y) in [(81, 24), (80, 25), (0, 1), (1, 0)] {
+            assert_eq!(
+                unreported_mouse(click(Press, x, y), any, 24, 80).as_deref(),
+                Some("the cell is outside the 80x24 grid (COL and ROW are 0-based)"),
+                "{x},{y}",
+            );
+        }
+    }
+
+    #[test]
+    fn an_event_the_protocol_filters_is_refused() {
+        use felis_protocol::messages::MouseAction::{Drag, Press};
+        let refused = |action, protocol| unreported_mouse(click(action, 1, 1), protocol, 24, 80);
+        assert_eq!(
+            refused(Press, MouseProtocol::Off).as_deref(),
+            Some("the program has no mouse reporting on; nothing was sent"),
+        );
+        assert_eq!(
+            refused(Drag, MouseProtocol::ButtonEvents).as_deref(),
+            Some(
+                "the program reports clicks but not drags (?1000 without ?1002); nothing was sent"
+            ),
+        );
+        assert_eq!(refused(Press, MouseProtocol::ButtonEvents), None);
+        assert_eq!(refused(Drag, MouseProtocol::ButtonAndDrag), None);
+    }
+
+    #[tokio::test]
+    async fn a_fence_after_the_program_exited_reports_the_session_ended() {
+        let mut task = SessionTask::for_tests(session_with("read _x"));
+        let (conn, mut rx) = requester(&mut task);
+        let watch = Some((conn, test_stream(1)));
+        assert_eq!(task.prepare_send(watch, &[]), Prepared::Ready);
+        assert_eq!(task.prepare_send(None, &[]), Prepared::Ready);
+
+        task.pty_eof = true;
+        task.end_watches();
+        assert!(!task.send_fence(None, 1), "a plain send answers ended");
+        assert!(
+            !task.send_fence(watch, 1),
+            "the watch's stream already ended"
+        );
+        let events = drain_events(&mut rx);
+        assert!(
+            matches!(
+                events.as_slice(),
+                [OutEvent::Control(ConnToClientMsg::Error {
+                    subject: Subject::Stream(stream),
+                    reason: StreamErrorReason::Unavailable,
+                    ..
+                })] if *stream == test_stream(1)
+            ),
+            "the watch ends once, with no WaitSent: {events:?}"
+        );
+        assert_eq!(task.prepare_send(watch, &[]), Prepared::Ended);
+    }
+
+    #[tokio::test]
+    async fn a_child_exit_before_eof_ends_waits_and_refuses_the_fence() {
+        let mut task = SessionTask::for_tests(session_with("read _x"));
+        let (conn, mut rx) = requester(&mut task);
+        let released = Some((conn, test_stream(1)));
+        let pending = Some((conn, test_stream(2)));
+        assert_eq!(task.prepare_send(released, &[]), Prepared::Ready);
+        assert!(task.send_fence(released, 1));
+        assert_eq!(task.prepare_send(pending, &[]), Prepared::Ready);
+        drop(drain_events(&mut rx));
+
+        task.on_child_exit();
+        assert!(!task.pty_eof, "the PTY is still open");
+        assert!(!task.send_fence(None, 1), "a plain send answers ended");
+        assert!(!task.send_fence(pending, 1), "the pending wait ended");
+        let ended: Vec<_> = drain_events(&mut rx)
+            .into_iter()
+            .map(|ev| match ev {
+                OutEvent::Control(ConnToClientMsg::Error {
+                    subject: Subject::Stream(stream),
+                    reason: StreamErrorReason::Unavailable,
+                    ..
+                }) => stream,
+                other => panic!("expected a wait to end Unavailable, got {other:?}"),
+            })
+            .collect();
+        assert_eq!(ended, [test_stream(1), test_stream(2)]);
+        assert_eq!(task.prepare_send(None, &[]), Prepared::Ended);
+    }
+
+    #[tokio::test]
+    async fn a_dropped_requester_leaves_no_stream_running() {
+        let mut task = SessionTask::for_tests(session_with("read _x"));
+        let (conn, _rx) = requester(&mut task);
+        assert_eq!(
+            task.prepare_send(Some((conn, test_stream(1))), &[]),
+            Prepared::Ready
+        );
+        task.start_rows(
+            Owner::Conn(conn),
+            RegionSource::Visible,
+            false,
+            None,
+            test_stream(2),
+        );
+        assert!(task.has_pending_chunks());
+        task.handle_cmd(SessionCmd::DropRequester { id: conn });
+        assert!(task.requesters.is_empty());
+        assert!(!task.has_pending_chunks());
     }
 }

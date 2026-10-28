@@ -8,7 +8,10 @@ use serde::{Deserialize, Serialize};
 
 use super::{ArmMeta, Directed};
 
-use super::{CreateFailure, GridDims, Notification, RetargetTarget, SpawnArgs};
+use super::{
+    CreateFailure, GridDims, InputMsg, KeyEvent, MouseEvent, Notification, RetargetTarget,
+    SpawnArgs,
+};
 #[cfg(test)]
 use super::{RetargetCarrier, RetargetLanding};
 
@@ -200,6 +203,83 @@ pub enum OpsToDaemonMsg {
         /// executable is the one being replaced.
         successor: String,
     },
+    /// Replied by [`OpsToClientMsg::Sent`]. Writes `steps` to the
+    /// session's program in order, validating all of them against the
+    /// session's current modes and grid before writing any. A
+    /// connection carrying one carries nothing else.
+    Send {
+        /// Lowercase hex session-id prefix, resolved daemon-side.
+        id_prefix: String,
+        steps: Vec<SendStep>,
+    },
+    /// Opens a stream: [`OpsToClientMsg::WaitSent`], then one
+    /// [`OpsToClientMsg::Mark`] for the first `OSC 133 ; D` the session
+    /// emits after the watch starts, which is before the first step is
+    /// written. Empty `steps` only watch.
+    SendAndWait {
+        id_prefix: String,
+        steps: Vec<SendStep>,
+    },
+}
+
+/// One input step of an [`OpsToDaemonMsg::Send`]: the input a window's
+/// paste, raw bytes, keystroke or mouse event would carry.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SendStep {
+    Paste(Vec<u8>),
+    Raw(Vec<u8>),
+    Key(KeyEvent),
+    Mouse(MouseEvent),
+}
+
+impl SendStep {
+    /// The input message a window would send for the same input.
+    #[must_use]
+    pub fn into_input(self) -> InputMsg {
+        match self {
+            Self::Paste(bytes) => InputMsg::Paste(bytes),
+            Self::Raw(bytes) => InputMsg::KeyBytes(bytes),
+            Self::Key(event) => InputMsg::Key(event),
+            Self::Mouse(event) => InputMsg::Mouse(event),
+        }
+    }
+}
+
+/// How an [`OpsToDaemonMsg::Send`] ended: the reply, and the first item
+/// of an [`OpsToDaemonMsg::SendAndWait`] stream.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SendOutcome {
+    /// Every step was written and the session took the last one.
+    Sent {
+        /// The session's full id.
+        id: u128,
+    },
+    NoMatch,
+    Ambiguous {
+        matches: u32,
+    },
+    Refused {
+        reason: SendRefusal,
+        /// The 0-based step `reason` is about, when it is about one.
+        step: Option<u32>,
+        /// Human-readable specifics. Never parsed.
+        detail: String,
+    },
+}
+
+/// Why a send wrote nothing, or not everything.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SendRefusal {
+    /// A step carries more than its kind admits. Nothing was written.
+    InvalidStep,
+    /// A mouse step the program would not see at validation time.
+    /// Nothing was written.
+    Unreported,
+    /// Past [`crate::limits::MAX_SEND_STEPS`] or
+    /// [`crate::limits::MAX_SEND_BODY_BYTES`]. Nothing was written.
+    TooLarge,
+    /// The session ended before it took the last step.
+    SessionEnded,
 }
 
 /// The daemon's half of the ops family: one reply per
@@ -281,6 +361,19 @@ pub enum OpsToClientMsg {
     /// connection closes with the exec.
     UpgradeReply {
         outcome: UpgradeOutcome,
+    },
+    Sent {
+        outcome: SendOutcome,
+    },
+    /// Stream item: the send's outcome. Any outcome but
+    /// [`SendOutcome::Sent`] is followed by the stream's error terminal.
+    WaitSent {
+        outcome: SendOutcome,
+    },
+    /// Stream item: the watched `OSC 133 ; D` mark.
+    Mark {
+        /// `None` for a bare `D`.
+        exit_code: Option<u32>,
     },
 }
 
@@ -496,6 +589,8 @@ impl Directed for OpsToDaemonMsg {
             Self::Stop { .. } => 7,
             Self::Info { .. } => 8,
             Self::Upgrade { .. } => 9,
+            Self::Send { .. } => 10,
+            Self::SendAndWait { .. } => 11,
         }
     }
 }
@@ -515,6 +610,9 @@ impl Directed for OpsToClientMsg {
             Self::StopReply { .. } => 7,
             Self::InfoReply { .. } => 8,
             Self::UpgradeReply { .. } => 9,
+            Self::Sent { .. } => 10,
+            Self::WaitSent { .. } => 11,
+            Self::Mark { .. } => 12,
         }
     }
 }
@@ -738,6 +836,48 @@ pub(crate) mod tests {
             OpsToDaemonMsg::Upgrade {
                 successor: "/nix/store/x-felis/bin/felis-daemon".into(),
             },
+            OpsToDaemonMsg::Send {
+                id_prefix: "cafe".into(),
+                steps: sample_send_steps(),
+            },
+            OpsToDaemonMsg::Send {
+                id_prefix: "cafe".into(),
+                steps: Vec::new(),
+            },
+            OpsToDaemonMsg::SendAndWait {
+                id_prefix: "cafe".into(),
+                steps: sample_send_steps(),
+            },
+            OpsToDaemonMsg::SendAndWait {
+                id_prefix: "c".into(),
+                steps: Vec::new(),
+            },
+        ]
+    }
+
+    fn sample_send_steps() -> Vec<SendStep> {
+        use crate::messages::{
+            InputMods, Key, KeyEventKind, KeyLocation, KeyMods, MouseAction, MouseButton, NamedKey,
+        };
+        vec![
+            SendStep::Paste(b"echo hi".to_vec()),
+            SendStep::Raw(b"\x1b[A".to_vec()),
+            SendStep::Key(KeyEvent {
+                key: Key::Named(NamedKey::Enter),
+                text: None,
+                mods: KeyMods::empty(),
+                kind: KeyEventKind::Press,
+                location: KeyLocation::Standard,
+            }),
+            SendStep::Mouse(MouseEvent {
+                button: Some(MouseButton::Left),
+                action: MouseAction::Press,
+                mods: InputMods::CTRL,
+                x: 13,
+                y: 5,
+                px: 0,
+                py: 0,
+            }),
         ]
     }
 
@@ -918,6 +1058,41 @@ pub(crate) mod tests {
                     detail: String::new(),
                 },
             },
+            OpsToClientMsg::Sent {
+                outcome: SendOutcome::Sent { id: 0xCAFE },
+            },
+            OpsToClientMsg::Sent {
+                outcome: SendOutcome::NoMatch,
+            },
+            OpsToClientMsg::Sent {
+                outcome: SendOutcome::Ambiguous { matches: 2 },
+            },
+            OpsToClientMsg::Sent {
+                outcome: SendOutcome::Refused {
+                    reason: SendRefusal::Unreported,
+                    step: Some(3),
+                    detail: "the program has no mouse reporting on; nothing was sent".into(),
+                },
+            },
+            OpsToClientMsg::Sent {
+                outcome: SendOutcome::Refused {
+                    reason: SendRefusal::SessionEnded,
+                    step: None,
+                    detail: String::new(),
+                },
+            },
+            OpsToClientMsg::WaitSent {
+                outcome: SendOutcome::Sent { id: u128::MAX },
+            },
+            OpsToClientMsg::WaitSent {
+                outcome: SendOutcome::Refused {
+                    reason: SendRefusal::TooLarge,
+                    step: None,
+                    detail: "5000 steps".into(),
+                },
+            },
+            OpsToClientMsg::Mark { exit_code: Some(0) },
+            OpsToClientMsg::Mark { exit_code: None },
         ]
     }
 

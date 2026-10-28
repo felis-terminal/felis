@@ -7,8 +7,9 @@
 use crate::caps::ConnectionMode;
 use crate::messages::{
     AttachFailure, AttachRefusal, ConnToClientMsg, ConnToDaemonMsg, CreateFailure, GridMsg,
-    ImageMsg, OpsToClientMsg, OpsToDaemonMsg, PushMsg, RefusalReason, ResourceKind, SearchSource,
-    SearchToDaemonMsg, SessionToClientMsg, SessionToDaemonMsg, UpgradeRefusal,
+    ImageMsg, OpsToClientMsg, OpsToDaemonMsg, PushMsg, RefusalReason, RegionToDaemonMsg,
+    ResourceKind, SearchSource, SearchToDaemonMsg, SendOutcome, SendRefusal, SessionToClientMsg,
+    SessionToDaemonMsg, UpgradeRefusal,
 };
 use crate::row::RowPayload;
 
@@ -67,12 +68,47 @@ fn field_requires<T>(value: &T, fields: &[GatedField<T>]) -> Requires {
     })
 }
 
-const SEARCH_TO_DAEMON_FIELDS: &[GatedField<SearchToDaemonMsg>] = &[GatedField {
-    requires: crate::schema_meta::SEARCH_QUERY_SOURCE,
-    present: |msg| match msg {
-        SearchToDaemonMsg::Query { source, .. } => *source != SearchSource::Scrollback,
+const SEARCH_TO_DAEMON_FIELDS: &[GatedField<SearchToDaemonMsg>] = &[
+    GatedField {
+        requires: crate::schema_meta::SEARCH_QUERY_SOURCE,
+        present: |msg| match msg {
+            SearchToDaemonMsg::Query { source, .. } => *source != SearchSource::Scrollback,
+        },
     },
-}];
+    GatedField {
+        requires: crate::schema_meta::SEARCH_QUERY_SESSION,
+        present: |msg| match msg {
+            SearchToDaemonMsg::Query { session, .. } => session.is_some(),
+        },
+    },
+];
+
+const REGION_TO_DAEMON_FIELDS: &[GatedField<RegionToDaemonMsg>] = &[
+    GatedField {
+        requires: crate::schema_meta::REGION_REQUEST_SESSION,
+        present: |msg| {
+            matches!(
+                msg,
+                RegionToDaemonMsg::Request {
+                    session: Some(_),
+                    ..
+                }
+            )
+        },
+    },
+    GatedField {
+        requires: crate::schema_meta::REGION_ROWS_SESSION,
+        present: |msg| {
+            matches!(
+                msg,
+                RegionToDaemonMsg::Rows {
+                    session: Some(_),
+                    ..
+                }
+            )
+        },
+    },
+];
 
 /// A value whose send authorization is computed rather than branched
 /// on. The gate is the send boundary ([`felis-transport`'s
@@ -178,6 +214,13 @@ impl UpgradeRefusal {
     }
 }
 
+impl SendRefusal {
+    #[must_use]
+    pub const fn since_minor(self) -> u16 {
+        crate::convert::send_refusal_to_wire(self).since_minor()
+    }
+}
+
 impl MinorGated for ConnToDaemonMsg {
     fn requires(&self) -> Requires {
         let arm = arm_requires(self);
@@ -239,6 +282,12 @@ impl MinorGated for OpsToClientMsg {
             Self::UpgradeReply {
                 outcome: crate::messages::UpgradeOutcome::Refused { reason, .. },
             } => arm.max(Requires::new(reason.since_minor(), "UpgradeRefusal")),
+            Self::Sent {
+                outcome: SendOutcome::Refused { reason, .. },
+            }
+            | Self::WaitSent {
+                outcome: SendOutcome::Refused { reason, .. },
+            } => arm.max(Requires::new(reason.since_minor(), "SendRefusal")),
             _ => arm,
         }
     }
@@ -284,7 +333,6 @@ gated_by_arm!(
     crate::messages::InputMsg,
     crate::messages::NotifyToDaemonMsg,
     crate::messages::NotifyToClientMsg,
-    crate::messages::RegionToDaemonMsg,
     crate::messages::RegionToClientMsg,
     crate::messages::SearchToClientMsg,
 );
@@ -292,6 +340,12 @@ gated_by_arm!(
 impl MinorGated for SearchToDaemonMsg {
     fn requires(&self) -> Requires {
         arm_requires(self).max(field_requires(self, SEARCH_TO_DAEMON_FIELDS))
+    }
+}
+
+impl MinorGated for RegionToDaemonMsg {
+    fn requires(&self) -> Requires {
+        arm_requires(self).max(field_requires(self, REGION_TO_DAEMON_FIELDS))
     }
 }
 
@@ -352,6 +406,7 @@ mod tests {
             query: "needle".into(),
             options: SearchOptions::default(),
             source,
+            session: None,
         };
         assert_eq!(query(SearchSource::Scrollback).requires().minor, 0);
         assert_eq!(
@@ -518,6 +573,7 @@ mod tests {
         "RefusalReason",
         "ResourceKind",
         "UpgradeRefusal",
+        "SendRefusal",
         "ConnectionMode",
     ];
 
@@ -539,9 +595,10 @@ mod tests {
     /// requirement the schema states.
     #[test]
     fn every_gated_field_of_the_schema_has_a_presence_test() {
-        let gated: Vec<Requires> = SEARCH_TO_DAEMON_FIELDS
+        let gated: Vec<Requires> = REGION_TO_DAEMON_FIELDS
             .iter()
             .map(|field| field.requires)
+            .chain(SEARCH_TO_DAEMON_FIELDS.iter().map(|field| field.requires))
             .collect();
         assert_eq!(gated, crate::schema_meta::GATED_FIELDS);
     }

@@ -2,15 +2,15 @@ use felis_protocol::{
     codec::{self, WireCodec},
     messages::{
         AttachFailure, AttachRefusal, AttachTarget, Directed, InfoOutcome, NotifyToDaemonMsg,
-        OpsToClientMsg, OpsToDaemonMsg, ResolvedId, ResourceReport, RetargetTarget, SessionInfo,
-        SessionToClientMsg, SessionToDaemonMsg, SpawnArgs, SpawnOutcome, StopMode, StopOutcome,
-        StreamId, SwitchDenied, SwitchScope, SwitchTarget, UpgradeOutcome,
+        OpsToClientMsg, OpsToDaemonMsg, ResolvedId, ResourceReport, RetargetTarget, SendOutcome,
+        SendStep, SessionInfo, SessionToClientMsg, SessionToDaemonMsg, SpawnArgs, SpawnOutcome,
+        StopMode, StopOutcome, StreamId, SwitchDenied, SwitchScope, SwitchTarget, UpgradeOutcome,
     },
     minor::MinorGated,
 };
 use tokio::io::{AsyncRead, AsyncWrite};
 
-use super::{ConnectError, Connection, check_arm_minor};
+use super::{ConnectError, Connection, check_arm_minor, check_session_addressed};
 use crate::stream::OpenFrom;
 
 /// What was asked, as far as which refusals can answer it.
@@ -426,6 +426,32 @@ impl ControlRequest for StatusReq {
     }
 }
 
+struct SendReq {
+    id_prefix: String,
+    steps: Vec<SendStep>,
+}
+
+impl CorrelatedRequest for SendReq {}
+
+impl ControlRequest for SendReq {
+    type Msg = OpsToDaemonMsg;
+    type ReplyMsg = OpsToClientMsg;
+    type Reply = SendOutcome;
+    fn take_msg(&mut self) -> OpsToDaemonMsg {
+        OpsToDaemonMsg::Send {
+            id_prefix: std::mem::take(&mut self.id_prefix),
+            steps: std::mem::take(&mut self.steps),
+        }
+    }
+
+    fn interpret(&self, reply: OpsToClientMsg) -> Result<Self::Reply, ConnectError> {
+        match reply {
+            OpsToClientMsg::Sent { outcome } => Ok(outcome),
+            _ => Err(ConnectError::NotSessionAttached),
+        }
+    }
+}
+
 struct StopReq {
     mode: StopMode,
 }
@@ -523,6 +549,45 @@ where
             &NotifyToDaemonMsg::Subscribe { session_prefix },
         )
         .await
+    }
+
+    /// Open a search or capture stream that names its session.
+    ///
+    /// # Errors
+    /// As [`check_session_addressed`], otherwise as [`Self::open_stream`].
+    pub async fn open_session_stream<M>(&mut self, msg: &M) -> Result<StreamId, ConnectError>
+    where
+        M: codec::Correlated + MinorGated + Directed + Sync,
+    {
+        check_session_addressed(self.effective_minor)?;
+        self.open_stream_from(OpenFrom::Unattached, msg).await
+    }
+
+    /// Write `steps` into a session; the reply comes once it took them.
+    ///
+    /// # Errors
+    /// As [`check_session_addressed`], or connection errors.
+    pub async fn send_steps(
+        &mut self,
+        id_prefix: String,
+        steps: Vec<SendStep>,
+    ) -> Result<SendOutcome, ConnectError> {
+        check_session_addressed(self.effective_minor)?;
+        self.correlated_request(SendReq { id_prefix, steps }).await
+    }
+
+    /// As [`Self::send_steps`], opening a stream that reports the send
+    /// and then the next completed command.
+    ///
+    /// # Errors
+    /// As [`Self::open_session_stream`].
+    pub async fn open_send_and_wait(
+        &mut self,
+        id_prefix: String,
+        steps: Vec<SendStep>,
+    ) -> Result<StreamId, ConnectError> {
+        self.open_session_stream(&OpsToDaemonMsg::SendAndWait { id_prefix, steps })
+            .await
     }
 
     pub async fn list_sessions(&mut self) -> Result<Vec<SessionInfo>, ConnectError> {

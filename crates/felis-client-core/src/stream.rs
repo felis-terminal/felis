@@ -23,6 +23,9 @@ pub enum OpenFrom {
     /// before the opener is written: after the send, the transition
     /// would race the ack and refuse it as out of phase.
     Setup,
+    /// A session-addressed opener on an unattached `Ops` connection,
+    /// which stays in `Setup`.
+    Unattached,
 }
 
 /// Why an open never reached a live stream.
@@ -129,6 +132,7 @@ mod tests {
             source: RegionSource::Visible,
             ansi: false,
             max_rows: None,
+            session: None,
         }
     }
 
@@ -137,6 +141,7 @@ mod tests {
             query: "a".repeat(len),
             options: SearchOptions::default(),
             source: SearchSource::Scrollback,
+            session: None,
         }
     }
 
@@ -236,6 +241,7 @@ mod tests {
                 query: "needle".into(),
                 options: SearchOptions::default(),
                 source: SearchSource::Visible,
+                session: None,
             })
             .await
             .expect_err("minor 0 cannot carry a search source");

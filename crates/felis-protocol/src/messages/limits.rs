@@ -359,6 +359,7 @@ mod tests {
             query: "a".repeat(n),
             options: SearchOptions::default(),
             source: crate::messages::SearchSource::Scrollback,
+            session: None,
         };
         let argv = |n: usize| SessionToDaemonMsg::Create {
             args: SpawnArgs {

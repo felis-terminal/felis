@@ -6,7 +6,8 @@ use serde::{Deserialize, Serialize};
 use super::{ArmMeta, Directed};
 
 /// Scrollback-search requests ([`crate::MessageKind::Search`], kind 9,
-/// REQ-607), attached connections only.
+/// REQ-607): on an attached connection, or session-addressed on an
+/// unattached [`crate::ConnectionMode::Ops`] one.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SearchToDaemonMsg {
     /// Opens a stream of search hits over the rows `source` names.
@@ -22,6 +23,9 @@ pub enum SearchToDaemonMsg {
         /// [`SearchSource::Scrollback`] travels as an absent field, so
         /// only [`SearchSource::Visible`] needs the minor that defined it.
         source: SearchSource,
+        /// The session to search, required on an unattached connection
+        /// and absent on an attached one.
+        session: Option<u128>,
     },
 }
 
@@ -128,11 +132,13 @@ pub(crate) mod tests {
                 query: "needle".into(),
                 options: SearchOptions::default(),
                 source: SearchSource::Scrollback,
+                session: None,
             },
             SearchToDaemonMsg::Query {
                 query: "on screen".into(),
                 options: SearchOptions::default(),
                 source: SearchSource::Visible,
+                session: Some(0x0123_4567_89ab_cdef_0123_4567_89ab_cdef),
             },
             SearchToDaemonMsg::Query {
                 query: "(?i)foo|bar".into(),
@@ -141,6 +147,7 @@ pub(crate) mod tests {
                     case_insensitive: false,
                 },
                 source: SearchSource::Scrollback,
+                session: None,
             },
             SearchToDaemonMsg::Query {
                 query: "case insensitive plain".into(),
@@ -149,6 +156,7 @@ pub(crate) mod tests {
                     case_insensitive: true,
                 },
                 source: SearchSource::Scrollback,
+                session: Some(7),
             },
         ]
     }

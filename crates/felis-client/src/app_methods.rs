@@ -1004,6 +1004,7 @@ impl App {
             query: self.search.query.clone(),
             options: felis_protocol::messages::SearchOptions::default(),
             source: felis_protocol::messages::SearchSource::Scrollback,
+            session: None,
         };
         // Checked before `open_stream` rather than at send: opening advances
         // the client's stream counter, so a dropped frame desynchronizes stream
@@ -1190,6 +1191,7 @@ impl App {
             &RegionToDaemonMsg::Request {
                 source: wire_source,
                 ansi,
+                session: None,
             },
             Correlation::request(request),
         );

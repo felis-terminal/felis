@@ -1,7 +1,9 @@
 //! `SearchToDaemonMsg` / `SearchToClientMsg` <-> wire, with the byte/column span
 //! helpers.
 
-use super::{WireError, narrow, search_source_from_i32, search_source_to_i32};
+use super::{
+    WireError, id_from_bytes, id_to_bytes, narrow, search_source_from_i32, search_source_to_i32,
+};
 use crate::messages;
 use crate::wire::v1;
 
@@ -70,6 +72,7 @@ impl From<&messages::SearchToDaemonMsg> for v1::SearchToDaemonMsg {
                 query,
                 options,
                 source,
+                session,
             } => Msg::Query(v1::SearchQuery {
                 query: query.clone(),
                 options: Some((*options).into()),
@@ -77,6 +80,7 @@ impl From<&messages::SearchToDaemonMsg> for v1::SearchToDaemonMsg {
                     messages::SearchSource::Scrollback => None,
                     messages::SearchSource::Visible => Some(search_source_to_i32(*source)),
                 },
+                session: session.map(id_to_bytes),
             }),
         };
         Self {
@@ -128,6 +132,7 @@ impl TryFrom<v1::SearchToDaemonMsg> for messages::SearchToDaemonMsg {
                         Ok(messages::SearchSource::Scrollback),
                         search_source_from_i32,
                     )?,
+                    session: s.session.map(id_from_bytes).transpose()?,
                 },
             },
         )

@@ -402,7 +402,7 @@ mod search;
 mod session;
 
 pub(crate) use conn::{mode_to_wire, refusal_to_wire};
-pub(crate) use ops::{resource_kind_to_wire, upgrade_refusal_to_wire};
+pub(crate) use ops::{resource_kind_to_wire, send_refusal_to_wire, upgrade_refusal_to_wire};
 pub(crate) use session::{attach_failure_to_wire, create_failure_to_wire};
 
 #[cfg(test)]

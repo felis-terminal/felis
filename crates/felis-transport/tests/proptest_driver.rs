@@ -42,6 +42,7 @@ fn render(shape: &Shaped) -> OwnedFrame {
                 query: "needle".into(),
                 options: SearchOptions::default(),
                 source: felis_protocol::messages::SearchSource::Scrollback,
+                session: None,
             };
             // A generated 0 becomes the uncorrelated case.
             StreamId::new(*id).map_or_else(

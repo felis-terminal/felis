@@ -3,11 +3,6 @@
 //! than a separate `felisctl` (docs/reference/ipc.md "CLI clients"). Only
 //! `spawn` auto-spawns the daemon; every other verb exits 2 on a cold socket.
 
-#![expect(
-    clippy::print_stderr,
-    reason = "this module's job is printing to stderr"
-)]
-
 mod attachment;
 mod driver;
 mod mouse;
@@ -30,19 +25,19 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use clap::Subcommand;
 use clap::builder::TypedValueParser as _;
-use felis_client_core::{AttachIntent, CarrierConnection, ConnectError, Connection, Reconnector};
+use felis_client_core::{CarrierConnection, Connection, Reconnector};
 use felis_protocol::convert::WireError;
 use felis_protocol::messages::{
     InfoOutcome, MAX_PASTE_BYTES, MAX_RAW_INPUT_BYTES, MAX_SEARCH_PATTERN_BYTES, ResolvedId,
     SessionInfo, SwitchScope, Validate, check_limit,
 };
-use felis_protocol::messages::{RegionSource, SearchOptions, SearchSource, SessionToDaemonMsg};
+use felis_protocol::messages::{RegionSource, SearchOptions, SearchSource};
 use tokio::io::{AsyncRead, AsyncWrite};
 
 use self::attachment::{cmd_switch, require_switch_from};
 use self::mutate::{
     SendSteps, WaitParams, cmd_evict, cmd_kill, cmd_send, cmd_tag, collect_send_payload,
-    parse_env_pair, spawn_args_for, spawn_on,
+    parse_env_pair, spawn_args_for, spawn_on, wire_steps,
 };
 use self::read::{RowEncoding, cmd_capture, cmd_info, cmd_list, cmd_search};
 use crate::cli_output::{ErrorKind, Format, PointFormat, Reporter, StreamFormat};
@@ -121,60 +116,6 @@ where
             },
         )),
     }
-}
-
-/// Attach by prefix, resolved inside the daemon. Returns the full id
-/// the attach landed on.
-async fn attach_by_prefix<R, W>(
-    conn: &mut Connection<R, W>,
-    out: &Reporter,
-    id_prefix: &str,
-) -> Result<SessionInfo, i32>
-where
-    R: AsyncRead + Unpin,
-    W: AsyncWrite + Unpin,
-{
-    match conn
-        .attach_by_prefix(id_prefix.to_owned(), AttachIntent::Deliberate)
-        .await
-    {
-        Ok(info) => Ok(info),
-        // `NoMatch` carries no count, so it renders the resolver's own
-        // sentence; `Ambiguous` carries one only in `detail`, which is
-        // where the number a caller needs lives.
-        Err(ConnectError::AttachFailed {
-            reason: felis_protocol::messages::AttachFailure::NoMatch,
-            ..
-        }) => Err(prefix_failure(
-            out,
-            &crate::SessionPrefixError::NoMatch {
-                prefix: id_prefix.to_owned(),
-            },
-        )),
-        Err(ConnectError::AttachFailed { reason, detail }) => Err(out.fail(
-            ErrorKind::from_attach_failure(reason),
-            format!("attach session `{id_prefix}`: {detail}"),
-        )),
-        Err(e) => Err(out.fail(
-            ErrorKind::from_connect_error(&e),
-            format!("attach session `{id_prefix}`: {e}"),
-        )),
-    }
-}
-
-/// A socket close would re-pool too, but the connection-drop path
-/// takes ~200 ms (the post-exit grace tick); explicit Detach is
-/// immediate.
-async fn detach<R, W>(conn: &mut Connection<R, W>) -> Result<()>
-where
-    R: AsyncRead + Unpin,
-    W: AsyncWrite + Unpin,
-{
-    conn.writer
-        .send(&SessionToDaemonMsg::Detach)
-        .await
-        .context("write Detach")?;
-    Ok(())
 }
 
 #[derive(Debug, Subcommand)]
@@ -579,9 +520,13 @@ pub(crate) fn plan(op: SessionOp, target: &Reconnector) -> ControlFlow<i32, Plan
             if let Err(code) = refuse_breach(&out, "send", check_limit(field, len, cap)) {
                 return ControlFlow::Break(code);
             }
+            let built = match wire_steps(&out, bytes, raw, &steps.0) {
+                Ok(built) => built,
+                Err(code) => return ControlFlow::Break(code),
+            };
             let wait = wait.then_some(WaitParams { timeout });
             Plan::ops(out, move |conn| async move {
-                cmd_send(conn, &body, &id, bytes, raw, &steps.0, wait).await
+                cmd_send(conn, &body, &id, built, &steps.0, wait).await
             })
         }
         SessionOp::Kill { id, output } => {

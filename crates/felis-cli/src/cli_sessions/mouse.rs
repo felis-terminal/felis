@@ -4,9 +4,7 @@
 use std::fmt;
 use std::str::FromStr;
 
-use felis_protocol::messages::{
-    GridDims, InputMods, MouseAction, MouseButton, MouseEvent, MouseProtocol,
-};
+use felis_protocol::messages::{InputMods, MouseAction, MouseButton, MouseEvent};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Gesture {
@@ -175,31 +173,6 @@ impl fmt::Display for MouseArg {
     }
 }
 
-/// Why a `--mouse` event would not reach the program as a report.
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) enum Unreported {
-    OutsideGrid { rows: u16, cols: u16 },
-    NoMouseReporting,
-    NoDragReporting,
-}
-
-impl fmt::Display for Unreported {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::OutsideGrid { rows, cols } => write!(
-                f,
-                "the cell is outside the {cols}x{rows} grid (COL and ROW are 0-based)"
-            ),
-            Self::NoMouseReporting => {
-                f.write_str("the program has no mouse reporting on; nothing was sent")
-            }
-            Self::NoDragReporting => f.write_str(
-                "the program reports clicks but not drags (?1000 without ?1002); nothing was sent",
-            ),
-        }
-    }
-}
-
 impl MouseArg {
     /// The wire events this argument sends, in order, with 1-based
     /// cells and no pixels: the daemon places those at the cell's
@@ -225,28 +198,6 @@ impl MouseArg {
             Gesture::Wheel(wheel) => vec![event(wheel, MouseAction::Press)],
         }
     }
-
-    /// `Err` when the session as last seen would drop this argument's
-    /// events: the same filter the daemon's encoder applies, plus the
-    /// grid bounds.
-    pub(crate) fn check(self, protocol: MouseProtocol, dims: GridDims) -> Result<(), Unreported> {
-        if self.col >= dims.cols || self.row >= dims.rows {
-            return Err(Unreported::OutsideGrid {
-                rows: dims.rows,
-                cols: dims.cols,
-            });
-        }
-        for event in self.events() {
-            if !felis_grid::mouse_event_reported(protocol, event.action) {
-                return Err(if protocol == MouseProtocol::Off {
-                    Unreported::NoMouseReporting
-                } else {
-                    Unreported::NoDragReporting
-                });
-            }
-        }
-        Ok(())
-    }
 }
 
 #[cfg(test)]
@@ -255,15 +206,6 @@ mod tests {
 
     fn parse(s: &str) -> MouseArg {
         s.parse().unwrap_or_else(|e| panic!("{s}: {e}"))
-    }
-
-    fn dims(rows: u16, cols: u16) -> GridDims {
-        GridDims {
-            rows,
-            cols,
-            pixel_w: 0,
-            pixel_h: 0,
-        }
     }
 
     #[test]
@@ -372,39 +314,5 @@ mod tests {
         ] {
             assert_eq!(parse(arg).to_string(), arg);
         }
-    }
-
-    #[test]
-    fn the_last_cell_of_the_grid_is_in_bounds_and_the_next_is_not() {
-        let any = MouseProtocol::AnyMotion;
-        assert_eq!(parse("click:79,23").check(any, dims(24, 80)), Ok(()));
-        for arg in ["click:80,23", "click:79,24"] {
-            assert_eq!(
-                parse(arg).check(any, dims(24, 80)),
-                Err(Unreported::OutsideGrid { rows: 24, cols: 80 }),
-                "{arg}",
-            );
-        }
-    }
-
-    #[test]
-    fn an_event_the_protocol_filters_is_refused() {
-        let grid = dims(24, 80);
-        assert_eq!(
-            parse("wheel-up:0,0").check(MouseProtocol::Off, grid),
-            Err(Unreported::NoMouseReporting),
-        );
-        assert_eq!(
-            parse("drag:0,0").check(MouseProtocol::ButtonEvents, grid),
-            Err(Unreported::NoDragReporting),
-        );
-        assert_eq!(
-            parse("click:0,0").check(MouseProtocol::ButtonEvents, grid),
-            Ok(())
-        );
-        assert_eq!(
-            parse("drag:0,0").check(MouseProtocol::ButtonAndDrag, grid),
-            Ok(())
-        );
     }
 }

@@ -1,6 +1,7 @@
 //! Byte ceilings on the input path (`docs/reference/ipc.md` "Backpressure").
 //!
-//! Bounds unwritten input held by client send queues and daemon admission.
+//! Bounds unwritten input held by client send queues and daemon admission,
+//! and the size of one send request.
 
 /// Unwritten input bytes one session admits from its connections
 /// before the pump that carries them stops reading its socket. Large
@@ -66,3 +67,20 @@ pub const CLIENT_OUTGOING_CAP: usize =
     MAX_PASTE_BYTES + PASTE_BRACKET_OVERHEAD + CLIENT_BACKLOG_HEADROOM;
 
 const _: () = assert!(CLIENT_OUTGOING_CAP > MAX_PASTE_BYTES + PASTE_BRACKET_OVERHEAD);
+
+/// Steps one `Ops::Send` or `Ops::SendAndWait` may carry: far above
+/// any command line, and small enough that the decoded request stays a
+/// small multiple of its bounded body.
+pub const MAX_SEND_STEPS: usize = 4096;
+
+/// What a step may cost the body besides its payload: a key or mouse
+/// event's fields, or a payload's tag and length, with the request's
+/// own prefix spread across its steps.
+pub const SEND_STEP_ALLOWANCE: usize = 128;
+
+/// The largest encoded `Ops::Send` or `Ops::SendAndWait` body: one
+/// step's largest payload plus the allowance for every step. Checked,
+/// with [`MAX_SEND_STEPS`], before the body is decoded.
+pub const MAX_SEND_BODY_BYTES: usize = PTY_INPUT_BUDGET + MAX_SEND_STEPS * SEND_STEP_ALLOWANCE;
+
+const _: () = assert!(MAX_SEND_BODY_BYTES < crate::frame::DEFAULT_MAX_BODY as usize);

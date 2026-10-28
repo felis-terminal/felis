@@ -758,6 +758,7 @@ async fn a_region_request_ships_the_bytes_back_and_spawns_nothing() {
         &RegionToDaemonMsg::Request {
             source: felis_protocol::messages::RegionSource::Visible,
             ansi: false,
+            session: None,
         },
         1,
     )
@@ -4415,6 +4416,7 @@ fn request_halves_route_to_the_task_and_a_reply_half_closes_the_connection() {
             query: "needle".to_owned(),
             options: felis_protocol::messages::SearchOptions::default(),
             source: felis_protocol::messages::SearchSource::Scrollback,
+            session: None,
         },
         Correlation::stream(StreamId::new(1).unwrap()),
     );
@@ -4430,6 +4432,7 @@ fn request_halves_route_to_the_task_and_a_reply_half_closes_the_connection() {
         &RegionToDaemonMsg::Request {
             source: felis_protocol::messages::RegionSource::Scrollback,
             ansi: false,
+            session: None,
         },
         Correlation::request(RequestId::new(1).unwrap()),
     );
@@ -4446,6 +4449,7 @@ fn request_halves_route_to_the_task_and_a_reply_half_closes_the_connection() {
             source: felis_protocol::messages::RegionSource::Scrollback,
             ansi: false,
             max_rows: None,
+            session: None,
         },
         Correlation::stream(StreamId::new(2).unwrap()),
     );
@@ -4489,6 +4493,7 @@ fn an_uncorrelated_region_request_closes_the_connection() {
             body: codec::encode(&RegionToDaemonMsg::Request {
                 source: felis_protocol::messages::RegionSource::Scrollback,
                 ansi: false,
+                session: None,
             })
             .into(),
         },
@@ -9078,3 +9083,6 @@ proptest::proptest! {
         proptest::prop_assert!(!inner.contains(&0x1b));
     }
 }
+
+#[cfg(unix)]
+mod unattached;
