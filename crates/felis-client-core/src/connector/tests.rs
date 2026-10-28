@@ -1933,6 +1933,20 @@ async fn session_exited_carries_the_signal_that_killed_the_program() {
 
 #[cfg(all(unix, feature = "daemon-tests"))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn session_exited_carries_no_status_when_the_program_outlives_its_pty() {
+    assert_eq!(
+        // The fixture's PATH has no `sleep` on every host, so a bounded
+        // builtin loop keeps the shell alive past the daemon's reap wait.
+        session_exit_status_of(
+            "exec </dev/null >/dev/null 2>&1; i=0; while [ \"$i\" -lt 3000000 ]; do i=$((i+1)); done"
+        )
+        .await,
+        None,
+    );
+}
+
+#[cfg(all(unix, feature = "daemon-tests"))]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_ops_attach_gets_channel_close_without_session_exited() {
     use felis_protocol::messages::PushMsg;
 
