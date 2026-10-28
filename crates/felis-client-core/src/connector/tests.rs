@@ -589,7 +589,9 @@ async fn await_row_containing(
 }
 
 #[cfg(all(unix, feature = "daemon-tests"))]
-async fn daemon_running(script: &'static str) -> (TempDir, PathBuf, tokio::task::JoinHandle<()>) {
+pub(super) async fn daemon_running(
+    script: &'static str,
+) -> (TempDir, PathBuf, tokio::task::JoinHandle<()>) {
     use felis_daemon::{serve::SessionFactory, serve::serve_unix_with_factory};
     use felis_pty::Command;
 

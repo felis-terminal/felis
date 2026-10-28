@@ -86,6 +86,18 @@ pub fn encode_correlated<M: Correlated>(
     wire.encode_to_vec()
 }
 
+/// The length [`encode_correlated`] would return, without encoding.
+#[must_use]
+pub fn encoded_len_correlated<M: Correlated>(
+    msg: &M,
+    correlation: crate::messages::Correlation,
+) -> usize {
+    use prost::Message as _;
+    let mut wire = msg.to_wire();
+    M::set_correlation(&mut wire, correlation);
+    wire.encoded_len()
+}
+
 /// Field 100 correlation slot (`proto/felis.proto`).
 ///
 /// Held as raw repeated bytes to verify exactly which tags appeared;
@@ -539,6 +551,66 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Sized at the widest id, a correlated opener is exactly as long
+    /// as its encoding there and no shorter than at any other id.
+    #[test]
+    fn the_correlated_length_bounds_the_encoding_at_any_id() {
+        use crate::messages::{
+            Correlation, NotifyToDaemonMsg, OpsToDaemonMsg, RegionSource, RegionToDaemonMsg,
+            RequestId, SearchOptions, SearchSource, SearchToDaemonMsg, SpawnArgs, StreamId,
+        };
+
+        fn check<M: Correlated>(msg: &M, at: fn(u64) -> Correlation) {
+            let sized = encoded_len_correlated(msg, at(u64::MAX));
+            assert_eq!(sized, encode_correlated(msg, at(u64::MAX)).len());
+            assert!(sized >= encode_correlated(msg, at(1)).len());
+        }
+        let request = |id| Correlation::request(RequestId::new(id).unwrap());
+        let stream = |id| Correlation::stream(StreamId::new(id).unwrap());
+        let long = "x".repeat(1024);
+        for msg in [
+            OpsToDaemonMsg::List,
+            OpsToDaemonMsg::Spawn {
+                args: SpawnArgs {
+                    command: "/bin/sh".to_owned(),
+                    args: vec![long.clone()],
+                    ..SpawnArgs::default()
+                },
+            },
+            OpsToDaemonMsg::Tag {
+                id_prefix: "ab".to_owned(),
+                add: vec![long.clone()],
+                remove: vec!["y".to_owned()],
+            },
+        ] {
+            check(&msg, request);
+        }
+        check(
+            &SearchToDaemonMsg::Query {
+                query: long,
+                options: SearchOptions::default(),
+                source: SearchSource::Scrollback,
+                session: Some(u128::MAX),
+            },
+            stream,
+        );
+        check(
+            &RegionToDaemonMsg::Rows {
+                source: RegionSource::Visible,
+                ansi: true,
+                max_rows: Some(u32::MAX),
+                session: Some(u128::MAX),
+            },
+            stream,
+        );
+        check(
+            &NotifyToDaemonMsg::Subscribe {
+                session_prefix: Some("ab".to_owned()),
+            },
+            stream,
+        );
+    }
 
     /// Each family's `WireCodec::KIND` matches the frame-kind table in
     /// `docs/reference/ipc.md`.

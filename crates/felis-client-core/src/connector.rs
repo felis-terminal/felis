@@ -2,6 +2,7 @@
 //! frozen version preface, then run the `Hello` / `Welcome` handshake.
 
 mod carrier;
+mod correlated;
 mod requests;
 #[cfg(test)]
 mod tests;
@@ -10,6 +11,10 @@ pub(crate) use self::carrier::connect_carrier_with_retry;
 pub use self::carrier::{
     BoundedDialError, Carrier, CarrierConnection, CarrierReader, CarrierWriter, Offer, RemoteSpawn,
     connect, connect_carrier, dial_bounded,
+};
+pub use self::correlated::{
+    Closed, CorrelatedHandle, DEFAULT_STREAM_BUFFER, Family, Inbound, MAX_OUTSTANDING_REQUESTS,
+    MAX_QUEUED_BYTES, STREAM_BYTE_BUDGET, StreamEnd, StreamEvent, StreamReceiver,
 };
 pub use self::requests::{AttachIntent, DaemonStatus, SessionRefusalContext, SwitchReply, admits};
 
@@ -166,6 +171,10 @@ pub enum ConnectError {
     Driver(#[from] DriverError),
     #[error("peer closed mid-attach")]
     EofMidAttach,
+    /// The connection behind a [`CorrelatedHandle`] ended before the
+    /// answer came.
+    #[error("the connection ended: {0}")]
+    ConnectionEnded(Closed),
 }
 
 impl ConnectError {
@@ -175,7 +184,8 @@ impl ConnectError {
     #[must_use]
     pub fn refusal(&self) -> Option<(RefusalReason, &str)> {
         match self {
-            Self::Refused { reason, detail } => Some((*reason, detail)),
+            Self::Refused { reason, detail }
+            | Self::ConnectionEnded(Closed::Refused { reason, detail }) => Some((*reason, detail)),
             _ => None,
         }
     }
@@ -208,6 +218,7 @@ impl ConnectError {
             | Self::EofBeforeWelcome
             | Self::EofMidAttach
             | Self::Preface(PrefaceExchangeError::Io(_)) => true,
+            Self::ConnectionEnded(closed) => closed.is_transient(),
             // A malformed relay carrier block is a verdict too: a client
             // never writes one, so the peer is not a felis relay.
             Self::Preface(PrefaceExchangeError::Preface(_) | PrefaceExchangeError::Carrier(_))
@@ -243,7 +254,9 @@ impl ConnectError {
             // Never a dial of the endpoint: an `ssh` child that will
             // not start raises `NotFound` of its own, and a refusal
             // came from a daemon already holding the socket.
-            Self::Io(_) | Self::Refused { .. } => false,
+            Self::Io(_) | Self::Refused { .. } | Self::ConnectionEnded(Closed::Refused { .. }) => {
+                false
+            }
             other => other.is_transient(),
         }
     }
