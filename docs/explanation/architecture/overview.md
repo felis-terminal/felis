@@ -505,9 +505,10 @@ portable session logic: the shadow screen, the daemon connector and retry policy
 resolution, selection, the session roster, viewport state, daemon spawn, and config. `felis-client`
 (`crates/felis-client/src`) is the winit/wgpu shell around it: the event loop and window (`event_handler`,
 `macos_window`), the OS clipboard, and the render wiring. The seam exists because the session logic is reused by
-consumers that have no window or GPU: `felis-cli`'s headless verbs, the `felis-web-component` wasm core, and `felis-tui`
-all link the core and substitute their own front end. `connect_or_spawn_daemon` sits in the core for the same reason:
-both front-door binaries share one autospawn policy without dragging the daemon backend into the client extraction set.
+consumers that have no window or GPU: `felis-cli`'s headless verbs, a browser view's wasm core, and a host-terminal
+client all link the core and substitute their own front end. `connect_or_spawn_daemon` sits in the core for the same
+reason: both front-door binaries share one autospawn policy without dragging the daemon backend into the client
+extraction set.
 
 The same holds for the renderer state a grid message changes beyond the shadow (theme and palette overrides, reverse
 video): `renderer_effect` maps each message to a `RendererEffect` value that every frontend applies to its own renderer.
@@ -553,26 +554,25 @@ what keeps a shadow write from ever skipping its repaint.
 The concrete reuse-path table is in [reference/workspace.md](../../reference/workspace.md); what it records is a policy.
 felis core ships no `examples/` bridge crates: each reuse path is realized by a sibling repo in the ecosystem, built
 only because a real consumer exists (principle 1: add only what earns its place). A client whose language can generate a
-protobuf reader speaks the wire directly; one whose language cannot (`felis.el`, and any script in the same position)
-reaches the daemon through `felis bridge`, the CLI's JSONL stdio subcommand, instead of through a second wire encoding
-([ipc.md](ipc.md) "One encoding on the socket, JSON at a bridge").
+protobuf reader speaks the wire directly; a script that carries no codec reaches the daemon through `felis bridge`, the
+CLI's JSONL stdio subcommand, instead of through a second wire encoding ([ipc.md](ipc.md) "One encoding on the socket,
+JSON at a bridge").
 
 ### Shared wire knowledge across the satellite clients
 
-An ecosystem of downstream clients reads a felis session: `felis-web-component` (a wasm `felis-client-core` core plus
-the TS `<felis-terminal>` view) with `felis-web-gateway` in front of it (a native attach re-exposing a session over a
-WebSocket), `felis-fcast` (a `.fcast` recorder plus a `serve` pseudo-daemon), `felis-tui` (a host-terminal multiplexer),
-and `felis.el`, which reaches the daemon through `felis bridge` rather than the socket. Five pieces of wire knowledge
-recur across them; the sections below record where each belongs.
+Out-of-tree clients read a felis session in several shapes: a browser view (a wasm `felis-client-core` core) behind a
+WebSocket relay that attaches natively, a session recorder with a replaying pseudo-daemon, a host-terminal multiplexer,
+and an editor client that speaks the daemon wire from a language without a protobuf runtime. Five pieces of wire
+knowledge recur across them; the sections below record where each belongs.
 
 #### Structural session JSON: adopt as a named format, `felis-json` v1 in `felis-grid`
 
-Two out-of-repo consumers mirror a whole session as JSON: `felis-web-gateway` decodes wire→JSON for a separately
-deployed browser view, and `felis-fcast` writes frame payloads into `.fcast` files and encodes JSON→wire to replay them.
-Both need the same two conversions, and both have to recode a `GridMsg`'s opaque row payload, since serde cannot
-transcode bytes `felis-grid` pre-encoded. So the conversion is shared, in `felis-grid::json_v1` behind the `json`
-feature, and it is a **named, versioned format** rather than a helper: an in-band `felis_json` version, dedicated DTOs,
-a generated schema and golden frames ([ipc.md](../../reference/ipc.md) "Structural session JSON").
+Two out-of-tree consumers mirror a whole session as JSON: a WebSocket relay decodes wire→JSON for a separately deployed
+browser view, and a recorder writes frame payloads into files and encodes JSON→wire to replay them. Both need the same
+two conversions, and both have to recode a `GridMsg`'s opaque row payload, since serde cannot transcode bytes
+`felis-grid` pre-encoded. So the conversion is shared, in `felis-grid::json_v1` behind the `json` feature, and it is a
+**named, versioned format** rather than a helper: an in-band `felis_json` version, dedicated DTOs, a generated schema
+and golden frames ([ipc.md](../../reference/ipc.md) "Structural session JSON").
 
 The DTOs are the point, and they reach all the way down to a dirty row's cells. Publishing the daemon's own Rust serde
 shape would make every variant or field rename a silent downstream break, and leave validation and compatibility
@@ -600,13 +600,12 @@ in `felis-cli` under the CLI's own `v: 1` contract, which already publishes thei
 #### Grid→ANSI re-encoding: adopt, into `felis-grid`
 
 Turning stored cell state back into escape sequences recurs in three places: the daemon's pipe action,
-`felis sessions capture --ansi`, and any client painting into a host terminal (`felis-tui`). All of it lives in
-`felis-grid::ansi` (`row_ansi`, `row_ansi_with`, `sgr_set`), which sits there rather than in `felis-protocol` because it
-reads `Cell`, `StyleTable`, and the cluster and hyperlink tables, the per-cell layout `felis-protocol` is deliberately
-opaque to. The host-specific decisions (256-color down-map, clip and pad to a column count, blank the Kitty
-Unicode-placeholder cells the caller covers with an image) are caller-supplied options, so the daemon still makes no
-presentation choice (principle 3). A round-trip test driving the emitted bytes back through the real parser keeps it
-honest in-repo.
+`felis sessions capture --ansi`, and any client painting into a host terminal. All of it lives in `felis-grid::ansi`
+(`row_ansi`, `row_ansi_with`, `sgr_set`), which sits there rather than in `felis-protocol` because it reads `Cell`,
+`StyleTable`, and the cluster and hyperlink tables, the per-cell layout `felis-protocol` is deliberately opaque to. The
+host-specific decisions (256-color down-map, clip and pad to a column count, blank the Kitty Unicode-placeholder cells
+the caller covers with an image) are caller-supplied options, so the daemon still makes no presentation choice
+(principle 3). A round-trip test driving the emitted bytes back through the real parser keeps it honest in-repo.
 
 Two alternatives are rejected:
 
@@ -667,14 +666,14 @@ drifts.
 
 #### Server-side handshake reuse: adopt the functions, not a crate yet
 
-`felis-fcast`'s `serve` hand-copies the daemon's opening sequence: the frozen preface, then
+A replaying pseudo-daemon hand-copies the daemon's opening sequence: the frozen preface, then
 `Hello → Welcome → attach-ack` ([reference/ipc.md](../../reference/ipc.md) "Handshake"). That is the one surface where a
 pseudo-daemon's drift stays invisible until a real client refuses to connect, so the handshake helper is shared rather
 than copied.
 
 **Rejected for now:** a full `felis-server-core` crate mirroring `felis-client-core`. There is one server-side consumer
-today (`serve`); a whole crate for one consumer fails principle 1 ("if no real consumer needs it yet … the terminal does
-not implement it").
+today, that pseudo-daemon; a whole crate for one consumer fails principle 1 ("if no real consumer needs it yet … the
+terminal does not implement it").
 
 ### Revisit triggers
 

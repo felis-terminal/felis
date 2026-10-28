@@ -498,9 +498,9 @@ receiver to buy a concurrency the producer does not have.
 
 Protobuf binary is the only encoding a frame body ever carries. The alternative felis does not take is a **second wire
 encoding**: proto3-JSON advertised beside the binary leg, with each connection stating which one it speaks. The pressure
-for it is real, and it has a name: Elisp has no maintained protobuf runtime or code generator, so an Emacs client cannot
-generate a decoder the way a TypeScript or Go consumer can, and a self-describing text encoding is the only wire it
-could read without one.
+for it is real, and it has a name: Elisp has no maintained protobuf runtime or code generator, so an Emacs client must
+write its own generator before it can decode what a TypeScript or Go consumer gets for free, and a self-describing text
+encoding is the only wire it could read without one.
 
 A second encoding does not deliver that property, though, and it is expensive in the place that matters most. It does
 not deliver it because the row payload is opaque `bytes` in either encoding: a JSON frame still carries base64 wrapping
@@ -1367,8 +1367,8 @@ compatibility worth that client-side cost.
 
 ## Open extensibility considerations
 
-Non-GPU clients ship today: `felis-tui` renders in a host terminal, `felis-web-component` in a browser, `felis.el` in
-Emacs ([overview.md "Reuse paths for non-Rust clients"](overview.md#reuse-paths-for-non-rust-clients)). Rendering is not
+Non-GPU clients exist out of tree, rendering in a host terminal, a browser and an editor
+([overview.md "Reuse paths for non-Rust clients"](overview.md#reuse-paths-for-non-rust-clients)). Rendering is not
 negotiated for correctness: a client that cannot render a payload drops it client-side, and the daemon never down-maps
 color or sizing, which would put presentation in the daemon and breach principle 3
 ([the resulting facts are in the reference](../../reference/ipc.md#versioning)).

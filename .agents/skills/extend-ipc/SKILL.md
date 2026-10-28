@@ -72,9 +72,9 @@ The argument is in `docs/explanation/architecture/ipc.md`; these are the rules i
 
 `felis-protocol` is the cross-language reuse surface: **no tokio, no OS-specific code, no I/O**.
 `docs/reference/security-audits.md` has a standing "felis-protocol purity" checklist; run it over your diff. Non-Rust
-clients (felis.el) generate their codec straight from `felis.proto` via a `protoc-gen-*`; there is no in-repo wire
-manifest to regenerate. Framing/handshake constants a client can't get from the schema (frame header, the frozen preface
-layout) are documented in `docs/reference/ipc.md`.
+clients generate their codec straight from `felis.proto` via a `protoc-gen-*`; there is no in-repo wire manifest to
+regenerate. Framing/handshake constants a client can't get from the schema (frame header, the frozen preface layout) are
+documented in `docs/reference/ipc.md`.
 
 ## 4. Wiring path
 
