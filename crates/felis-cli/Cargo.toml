@@ -14,13 +14,13 @@ path = "src/main.rs"
 [features]
 # Default-off so the shipped binary stays schemars-free; enabled for the
 # machine-surface schema sync test.
-schema = ["dep:schemars", "felis-protocol/schema"]
+schema = ["dep:schemars", "felis-protocol/schema", "felis-client-core/schema"]
 
 [dependencies]
 felis-protocol = { workspace = true }
 felis-grid = { workspace = true }
 felis-transport = { workspace = true }
-felis-client-core = { workspace = true }
+felis-client-core = { workspace = true, features = ["json"] }
 tokio = { workspace = true }
 tracing = { workspace = true }
 clap = { workspace = true }

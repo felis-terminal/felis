@@ -164,6 +164,7 @@ lint:
 [group('lint')]
 check-portable:
     cargo clippy -p felis-client-core --no-default-features --target wasm32-unknown-unknown -- -D warnings
+    cargo clippy -p felis-client-core --no-default-features --features json --target wasm32-unknown-unknown -- -D warnings
     cargo clippy -p felis-render-core --no-default-features --target wasm32-unknown-unknown -- -D warnings
 
 # cargo-deny audit plus the crate map's closure bans (pr.yml's build job runs this).

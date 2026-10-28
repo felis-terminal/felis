@@ -22,6 +22,8 @@ pub mod env_base;
 pub mod font_families;
 pub mod hyperlink;
 pub mod image_shadow;
+#[cfg(feature = "json")]
+pub mod json;
 pub mod keymap;
 #[cfg(feature = "native")]
 pub mod local_socket;

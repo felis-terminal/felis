@@ -17,6 +17,7 @@ native = [
   "dep:serde_ignored",
   "dep:toml",
 ]
+json = []
 # Default-off so shipping binaries stay schemars-free; enabled for schema sync test.
 schema = ["dep:schemars", "felis-protocol/schema"]
 # The tests that serve a real felis-daemon. felis-daemon dev-depends on this
