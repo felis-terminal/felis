@@ -21,8 +21,6 @@ pub(crate) use self::attachment::RETARGET_DIAL;
 pub(crate) use self::attachment::{
     RetargetArgs, RetargetFlags, local_carrier, reject_global_carrier, run_retarget,
 };
-pub(crate) use self::mutate::tag_result;
-pub(crate) use self::read::search_match;
 
 use std::future::Future;
 use std::ops::ControlFlow;
@@ -458,50 +456,6 @@ impl From<SearchSourceArg> for SearchSource {
             SearchSourceArg::Visible => Self::Visible,
         }
     }
-}
-
-/// Every `SourceArg` spelling, in `value_variants` order, as `--source`
-/// and the bridge accept it.
-#[cfg(test)]
-pub(crate) fn source_names() -> Vec<String> {
-    value_names::<SourceArg>()
-}
-
-/// [`source_names`] for `search --source`.
-#[cfg(test)]
-pub(crate) fn search_source_names() -> Vec<String> {
-    value_names::<SearchSourceArg>()
-}
-
-fn value_names<T: clap::ValueEnum>() -> Vec<String> {
-    T::value_variants()
-        .iter()
-        .filter_map(|variant| Some(variant.to_possible_value()?.get_name().to_owned()))
-        .collect()
-}
-
-/// `felis bridge` takes the same vocabulary as a JSON string rather
-/// than through clap, so it spells the refusal out itself. The
-/// spellings come from the value enum: a literal list here would
-/// still name a variant that has since been renamed away.
-fn parse_source_value<T: clap::ValueEnum>(raw: &str) -> Result<T, String> {
-    T::from_str(raw, false).map_err(|_| {
-        let expected = match value_names::<T>().as_slice() {
-            [only] => only.clone(),
-            [first, second] => format!("{first} or {second}"),
-            [rest @ .., last] => format!("{}, or {last}", rest.join(", ")),
-            [] => String::new(),
-        };
-        format!("unknown source `{raw}` (expected {expected})")
-    })
-}
-
-pub(crate) fn parse_region_source(raw: &str) -> Result<RegionSource, String> {
-    parse_source_value::<SourceArg>(raw).map(RegionSource::from)
-}
-
-pub(crate) fn parse_search_source(raw: &str) -> Result<SearchSource, String> {
-    parse_source_value::<SearchSourceArg>(raw).map(SearchSource::from)
 }
 
 /// Exit codes per docs/reference/ipc.md "CLI clients": 0 success, 1

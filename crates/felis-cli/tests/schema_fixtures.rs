@@ -1,7 +1,7 @@
 //! The published bundle read as a consumer reads it: the objects the
 //! reference documents must validate, and the fixtures it must reject.
-//! `cli_sessions.rs` and `cli_bridge.rs` cover what a live run
-//! produces; what is left here is the malformed vocabulary it cannot.
+//! `cli_sessions.rs` covers what a live run produces; what is left
+//! here is the malformed vocabulary it cannot.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -30,93 +30,6 @@ fn every_invalid_output_fixture_fails_the_class_it_claims() {
         assert!(
             schema::cli_def_rejects(against, &fixture["instance"]),
             "{name} validated against `{against}` but must not",
-        );
-    }
-}
-
-/// Unknown top-level fields, unknown parameters, unknown ops, and
-/// integers past their bound are all refusals of the request grammar.
-#[test]
-fn every_invalid_request_fixture_fails_the_request_schema() {
-    for (name, line) in schema::invalid_fixtures("req-") {
-        assert!(
-            !schema::bridge_request_is_valid(&line),
-            "{name} validated as a request but must not",
-        );
-    }
-}
-
-/// The published request grammar is not merely strict: the lines the
-/// reference documents still pass it.
-#[test]
-fn the_documented_request_shapes_validate() {
-    let hex = "0123456789abcdef0123456789abcdef";
-    for request in [
-        json!({"v": 1, "id": "a", "op": "sessions.list"}),
-        json!({"v": 1, "id": 7, "op": "sessions.list", "params": {"tags": ["work"]}}),
-        json!({"v": 1, "id": "a", "op": "sessions.info", "params": {"session": "0123abcd"}}),
-        json!({"v": 1, "id": "a", "op": "sessions.spawn",
-               "params": {"cwd": "/tmp", "env": [["TERM", "xterm-felis"]], "rows": 24,
-                          "cols": 80, "tags": ["work"], "cmd": ["/bin/sh"]}}),
-        // An omitted optional may also be spelled `null`, which the
-        // bridge reads as absence.
-        json!({"v": 1, "id": "a", "op": "sessions.spawn",
-               "params": {"env": null, "rows": null, "cols": null}}),
-        json!({"v": 1, "id": "a", "op": "sessions.send",
-               "params": {"session": hex, "text": "ls\n", "raw": false}}),
-        json!({"v": 1, "id": "a", "op": "sessions.switch",
-               "params": {"to": hex, "from": "0x0123ABCD", "attachment": "7"}}),
-        json!({"v": 1, "id": "a", "op": "sessions.tag",
-               "params": {"session": hex, "add": ["x"], "remove": []}}),
-        json!({"v": 1, "id": "a", "op": "sessions.capture",
-               "params": {"session": hex, "source": "scrollback", "ansi": true, "lines": 40}}),
-        // `integer` counts `1.0` as the integer 1, and so does the
-        // bridge that answers these lines.
-        json!({"v": 1.0, "id": 1.0, "op": "sessions.capture",
-               "params": {"session": hex, "lines": 40.0}}),
-        json!({"v": 1, "id": "a", "op": "sessions.search",
-               "params": {"session": hex, "pattern": "boom", "regex": true,
-                          "case_insensitive": false}}),
-        json!({"v": 1, "id": "a", "op": "notifications.subscribe", "params": {}}),
-        json!({"v": 1, "id": "a", "op": "cancel", "params": {"target": "b"}}),
-    ] {
-        assert!(
-            schema::bridge_request_is_valid(&request),
-            "{request} is documented but does not validate",
-        );
-    }
-}
-
-/// Every region named by the CLI's `--source` and the wire validates.
-#[test]
-fn every_documented_capture_source_validates() {
-    let hex = "0123456789abcdef0123456789abcdef";
-    for source in ["visible", "scrollback", "command-output", "last-command"] {
-        let request = json!({"v": 1, "id": "a", "op": "sessions.capture",
-                             "params": {"session": hex, "source": source}});
-        assert!(
-            schema::bridge_request_is_valid(&request),
-            "`{source}` is a documented region but does not validate",
-        );
-    }
-}
-
-/// `rows` and `cols` travel together, and the grammar counts an
-/// explicit `null` as absence exactly as the bridge does: the two
-/// whole geometries pass, the two half ones do not.
-#[test]
-fn a_spawn_names_its_whole_grid_or_none_of_it() {
-    let spawn = |params| json!({"v": 1, "id": "a", "op": "sessions.spawn", "params": params});
-    for params in [json!({}), json!({"rows": null, "cols": null})] {
-        assert!(
-            schema::bridge_request_is_valid(&spawn(params.clone())),
-            "{params} names no grid and must validate",
-        );
-    }
-    for params in [json!({"rows": 24}), json!({"rows": null, "cols": 80})] {
-        assert!(
-            !schema::bridge_request_is_valid(&spawn(params.clone())),
-            "{params} is half a geometry and must not validate",
         );
     }
 }

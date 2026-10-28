@@ -125,7 +125,7 @@ const SESSION: &str = "session";
 const INPUT: &str = "input";
 
 /// Every frame kind v1 covers, in envelope spelling. The families this
-/// list omits are the CLI bridge's own contract, not this format's.
+/// list omits are outside this format.
 pub const KINDS: [&str; 5] = [GRID, IMAGE, CONN, SESSION, INPUT];
 
 impl Frame {

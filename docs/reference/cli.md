@@ -27,19 +27,19 @@ frontend's command line, `--config` in its absolute form), _read_ (this process 
 `config path` resolves it, the rest parse it), _dials_ (names the daemon the verb connects to), or _refused_ (a usage
 error, exit `2`).
 
-| Verb form                                                                  | `--config` | `--host`                | `--socket` | `--ssh-arg`             |
-| -------------------------------------------------------------------------- | ---------- | ----------------------- | ---------- | ----------------------- |
-| Window launch: bare `felis`, `felis -- <cmd>`, `attach`                    | forwarded  | forwarded               | forwarded  | forwarded               |
-| Headless verbs: `sessions`, `notifications`, `daemon`, `version`, `bridge` | refused    | dials                   | dials      | dials                   |
-| `daemon upgrade`                                                           | refused    | runs remote `felis`     | dials      | forwarded to `ssh`      |
-| `config path` / `check` / `show-effective`                                 | read       | refused                 | refused    | refused                 |
-| `fonts list`                                                               | refused    | refused                 | refused    | refused                 |
-| `doctor`, `doctor report`                                                  | read       | dials                   | dials      | dials                   |
-| `felis ssh`, `window retarget`                                             | refused    | refused                 | refused    | refused                 |
-| `<name>` (external command)                                                | refused    | refused                 | refused    | refused                 |
-| `completions <shell>`, `__mangen <dir>`                                    | refused    | refused                 | refused    | refused                 |
-| `__complete-sessions`                                                      | refused    | no candidates, exit `0` | dials      | no candidates, exit `0` |
-| `--version`                                                                | refused    | refused                 | refused    | refused                 |
+| Verb form                                                        | `--config` | `--host`                | `--socket` | `--ssh-arg`             |
+| ---------------------------------------------------------------- | ---------- | ----------------------- | ---------- | ----------------------- |
+| Window launch: bare `felis`, `felis -- <cmd>`, `attach`          | forwarded  | forwarded               | forwarded  | forwarded               |
+| Headless verbs: `sessions`, `notifications`, `daemon`, `version` | refused    | dials                   | dials      | dials                   |
+| `daemon upgrade`                                                 | refused    | runs remote `felis`     | dials      | forwarded to `ssh`      |
+| `config path` / `check` / `show-effective`                       | read       | refused                 | refused    | refused                 |
+| `fonts list`                                                     | refused    | refused                 | refused    | refused                 |
+| `doctor`, `doctor report`                                        | read       | dials                   | dials      | dials                   |
+| `felis ssh`, `window retarget`                                   | refused    | refused                 | refused    | refused                 |
+| `<name>` (external command)                                      | refused    | refused                 | refused    | refused                 |
+| `completions <shell>`, `__mangen <dir>`                          | refused    | refused                 | refused    | refused                 |
+| `__complete-sessions`                                            | refused    | no candidates, exit `0` | dials      | no candidates, exit `0` |
+| `--version`                                                      | refused    | refused                 | refused    | refused                 |
 
 `doctor` dials, so `--host` makes its daemon row report the remote daemon; every other row still describes this machine.
 `doctor report` follows the same rule: `--host` changes only the daemon row and the daemon build, and the environment
@@ -55,22 +55,20 @@ only the cells `--host` already selects.
 
 The exit code is a function of `error.kind` alone, apart from the exceptions the table names. `config check`, `doctor`,
 a `sessions search` that matched nothing, and a `notifications subscribe --once` whose stream the daemon ended first
-exit `1` without an error object, and `felis bridge` overrides the code its own pipe failure would otherwise carry:
+exit `1` without an error object:
 
-| Code | Verbs                                               | Meaning                                                                                                                                                                                                                    |
-| ---- | --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `0`  | all                                                 | Success.                                                                                                                                                                                                                   |
-| `1`  | all                                                 | Typed refusal: valid request, but refused on the merits (no such session, daemon at capacity, wait timed out).                                                                                                             |
-| `1`  | `config check`, `doctor`                            | Diagnostics were reported: the document has errors, or a check reported `fail`. Nothing was refused, and the result object still lands on stdout.                                                                          |
-| `1`  | `sessions search`, `notifications subscribe --once` | Nothing to report: the search matched nothing, or the daemon ended the stream before a matching notification arrived. The stream's clean terminal still lands; no error object is written.                                 |
-| `1`  | `felis bridge`                                      | The bridge's own stdin or stdout failed, or its first `Ops` dial was refused `at_capacity`. The kinds `input_failed` and `output_failed` exit `2` everywhere else; a stdout failure cannot carry its own correlated error. |
-| `2`  | all                                                 | Failure to ask: bad syntax, unreachable daemon, connection lost, protocol break, unsupported protocol major, or a frontend that cannot answer.                                                                             |
+| Code | Verbs                                               | Meaning                                                                                                                                                                                    |
+| ---- | --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `0`  | all                                                 | Success.                                                                                                                                                                                   |
+| `1`  | all                                                 | Typed refusal: valid request, but refused on the merits (no such session, daemon at capacity, wait timed out).                                                                             |
+| `1`  | `config check`, `doctor`                            | Diagnostics were reported: the document has errors, or a check reported `fail`. Nothing was refused, and the result object still lands on stdout.                                          |
+| `1`  | `sessions search`, `notifications subscribe --once` | Nothing to report: the search matched nothing, or the daemon ended the stream before a matching notification arrived. The stream's clean terminal still lands; no error object is written. |
+| `2`  | all                                                 | Failure to ask: bad syntax, unreachable daemon, connection lost, protocol break, unsupported protocol major, or a frontend that cannot answer.                                             |
 
 `config show-effective` is not one of the exceptions above: past a document error it refuses with `invalid_request`.
 
 A verb whose stdout reader has gone (`felis sessions capture <id> | head -1`) stops at the write that finds it gone and
-exits `0`, as if it had finished, adding nothing to stderr. `felis bridge` is the exception: a reader that has gone is a
-stdout failure, its exit `1` above.
+exits `0`, as if it had finished, adding nothing to stderr.
 
 ## Machine output
 
@@ -87,7 +85,7 @@ The `--format` flag selects machine-readable framing on supported verbs:
 | **Point**            | `human`, `json`   | Exactly one JSON object on stdout. Failures write one error object on stderr with exit code `1` or `2`.                                                                                                                                                              |
 | **Point-diagnostic** | `human`, `json`   | Point framing, but `1` reads as "the diagnostics the verb was asked for": a result object with the findings on `config check` and `doctor`, an `invalid_request` error object on `config show-effective`, which has no honest result to print past a document error. |
 | **Stream**           | `human`, `jsonl`  | One JSON object per line on stdout, ending in one terminal object. stderr carries human diagnostics only.                                                                                                                                                            |
-| **Exempt**           | _(none)_          | Fixed text or raw streaming (window launches, completions, bridge).                                                                                                                                                                                                  |
+| **Exempt**           | _(none)_          | Fixed text or raw streaming (window launches, completions).                                                                                                                                                                                                          |
 
 Classification by verb:
 
@@ -96,10 +94,9 @@ Classification by verb:
 | Point            | `sessions list`, `sessions info`, `sessions spawn`, `sessions send`, `sessions kill`, `sessions evict`, `sessions tag`, `sessions switch`, `felis ssh`, `window retarget`, `daemon status`, `daemon stop`, `daemon upgrade`, `config path`, `fonts list`, `version`, `doctor report` |
 | Point-diagnostic | `config check`, `config show-effective`, `doctor`                                                                                                                                                                                                                                    |
 | Stream           | `sessions capture`, `sessions search`, `notifications subscribe`                                                                                                                                                                                                                     |
-| Exempt           | `felis`, `felis attach`, `felis completions`, `felis bridge`, `felis <name>`                                                                                                                                                                                                         |
+| Exempt           | `felis`, `felis attach`, `felis completions`, `felis <name>`                                                                                                                                                                                                                         |
 
-A verb with no row in this table has no `--format` flag. `felis bridge` streams exactly the operations whose verb is a
-Stream here.
+A verb with no row in this table has no `--format` flag.
 
 Selecting an incompatible format (such as `sessions list --format jsonl`) is a clap usage error: it exits `2` with human
 text on stderr, no error object, and lists the values the verb takes. The `felis` binary's own tracing logs go to stderr
@@ -122,60 +119,48 @@ Every top-level JSON object carries `"v":1`:
 renamed or retyped without bumping `v`.
 
 `error.kind` is an additive vocabulary: `usage`, `no_match`, `ambiguous`, `timeout`, `no_input_owner`,
-`no_such_attachment`, `not_queued`, `session_ended`, `malformed_request`, `invalid_request`, `at_capacity`,
-`unsupported`, `daemon_unreachable`, `daemon_lost`, `refused`, `protocol`, `canceled`, `input_failed`, `output_failed`,
-`internal`. `error.message` is human-readable diagnostic prose.
+`no_such_attachment`, `not_queued`, `session_ended`, `invalid_request`, `at_capacity`, `unsupported`,
+`daemon_unreachable`, `daemon_lost`, `refused`, `protocol`, `input_failed`, `internal`. `error.message` is
+human-readable diagnostic prose.
 
 Stream verbs emit their terminal object even when failing before the first item. An EOF with no terminal object is a
 protocol failure (exit `2`).
 
 **Frozen for `v:1`.** The two format words and the class each binds to, the error object's shape, the `error.kind`
-spellings above with the exit codes the table gives them, and the two transports (the CLI's per-class stdout/stderr
-split, the bridge's single stdout correlated by `id`) hold for the whole epoch. The vocabulary still grows: new tokens
-land within `v:1`, existing ones are never respelled, remapped, or narrowed: a new token may not take over part of what
-an existing one already covers. The rationale is in
+spellings above with the exit codes the table gives them, and the per-class stdout/stderr split hold for the whole
+epoch. The vocabulary still grows: new tokens land within `v:1`, existing ones are never respelled, remapped, or
+narrowed: a new token may not take over part of what an existing one already covers. The rationale is in
 [control-surfaces.md](../explanation/architecture/control-surfaces.md).
 
 Framing begins once the arguments parse. A refusal clap states (an unknown flag, a `--format` value the verb's class
 does not take, a missing positional) is human text on stderr with exit `2`, before any format is chosen; from there
 every failure is framed, the steps that run before the verb body included: resolving `--config` (`usage`), resolving the
 daemon the verb dials (`daemon_unreachable`), building the runtime (`internal`), and reading a `-` payload from stdin
-(`input_failed`). On the bridge a shape failure is correlated whenever a valid `id` was recovered from the line, and
-carries `id: null` otherwise.
+(`input_failed`).
 
 ### JSON Schema
 
-Two JSON Schema (draft 2020-12) documents describe every machine object. Every output body is generated from the serde
-types the binary serializes; the bridge's per-operation request parameters are explicit schema types, held to the
-runtime's parameter table by a guard test. Both documents live in
-[crates/felis-cli/schemas](../../crates/felis-cli/schemas):
+One JSON Schema (draft 2020-12) document describes every machine object, generated from the serde types the binary
+serializes. It lives in [crates/felis-cli/schemas](../../crates/felis-cli/schemas):
+[`felis-cli-v1.schema.json`](https://raw.githubusercontent.com/felis-terminal/felis/main/crates/felis-cli/schemas/felis-cli-v1.schema.json).
+Its `$defs` name the classes of the table above: `point_result`, `point_error`, `stream_item`, `lag_event`,
+`end_terminal`, `error_terminal`.
 
-- [`felis-cli-v1.schema.json`](https://raw.githubusercontent.com/felis-terminal/felis/main/crates/felis-cli/schemas/felis-cli-v1.schema.json)
-  covers the objects above. Its `$defs` name the classes of the table: `point_result`, `point_error`, `stream_item`,
-  `lag_event`, `end_terminal`, `error_terminal`, plus the unversioned `point_body`, `stream_item_body` and `error_body`
-  that `felis bridge` reuses.
-- [`felis-bridge-v1.schema.json`](https://raw.githubusercontent.com/felis-terminal/felis/main/crates/felis-cli/schemas/felis-bridge-v1.schema.json)
-  covers the bridge. `$defs/request` is one stdin line; the remaining `$defs` are the six shapes stdout carries.
-
-The `v1` in each name is the epoch of `"v"`: a later epoch adds a file rather than rewriting one. Payload objects stay
+The `v1` in the name is the epoch of `"v"`: a later epoch adds a file rather than rewriting one. Payload objects stay
 open, because a field may be added within an epoch, and `error.kind` is an open string whose `x-known-values` annotation
 lists this epoch's tokens, so a validator does not reject a token minted after it was written.
 
-A request parameter whose vocabulary is finite is enumerated rather than typed as a bare string. Two constraints the
-grammar does not close: `attachment` is constrained by pattern, so it admits any decimal-digit string and one too large
-for a 64-bit id is still answered `malformed_request`; and a validator comparing JSON numbers as `f64` admits values
-within one `f64` step of a 64-bit `minimum` or `maximum`, about 2048 past an `i64` maximum and 4096 past a `u64` one.
-Every field carrying such a bound is annotated `x-bound-exceeds-f64-precision`, and the exact bound is read by parsing
-the number as a 64-bit integer.
+A validator comparing JSON numbers as `f64` admits values within one `f64` step of a 64-bit `minimum` or `maximum`,
+about 2048 past an `i64` maximum and 4096 past a `u64` one. Every field carrying such a bound is annotated
+`x-bound-exceeds-f64-precision`, and the exact bound is read by parsing the number as a 64-bit integer.
 
 The same precision limit fixes how integer ids are spelled, and the rule is frozen for the epoch: an id whose range
 exceeds what an `f64` holds exactly is a **decimal string** in every machine object, never a JSON number.
 `Attachment.id` is the one such id today; it is a `uint64` on the wire and a string here, while a session id is 32
 hexadecimal digits in both. A reader therefore never has to know which ids round.
 
-JSON Schema cannot state the lifecycle rules: exactly one terminal per stream, an id free again after its terminal,
-nothing after a terminal. Those are pinned by the golden conversations under `crates/felis-cli/tests/fixtures/bridge/`
-([testing.md](testing.md) "Machine-surface schemas").
+JSON Schema cannot state the lifecycle rule that a stream writes exactly one terminal and nothing after it; the stream
+verbs' end-to-end tests pin it ([testing.md](testing.md) "Machine-surface schemas").
 
 ### Session identity
 
@@ -745,7 +730,7 @@ built-in verb takes is reachable only by its own name. An external command reads
 ## Carrier and connection lifetime
 
 - **Connect, operate, disconnect**: CLI verbs connect, perform a single operation, and disconnect. Verbs do not keep
-  connections open, except for `felis bridge`.
+  connections open.
 - **Carrier resolution order**: local daemon socket resolution checks `--socket`, then `$FELIS_SOCKET`, then the
   platform default, and anchors a relative path to the caller's working directory. `--host` uses SSH exclusively and
   ignores local socket variables.
@@ -775,12 +760,12 @@ SSH the non-spawning forms dial `felis-daemon relay --no-spawn`, which reports "
 starting one; the spawning forms dial `relay` without that flag and let it apply the local spawn-then-retry policy on
 the remote side.
 
-| Form                                                                                                                                                                                                  | Local socket            | `--host`                                                  |
-| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------- | --------------------------------------------------------- |
-| `sessions spawn`, window launches (bare `felis`, `felis attach`, `felis -- <cmd>`)                                                                                                                    | starts a daemon         | the relay starts one                                      |
-| Read and drive verbs (`list`, `info`, `capture`, `search`, `send`, `kill`, `evict`, `tag`, `switch`, the retargets' source dial), `notifications subscribe`, `daemon status` / `stop`, `felis bridge` | unreachable, exit `2`   | `relay --no-spawn`, then exit `2`                         |
-| `daemon upgrade`                                                                                                                                                                                      | unreachable, exit `2`   | the remote `felis daemon upgrade`, which never starts one |
-| `version`, `doctor`                                                                                                                                                                                   | reported as not running | `relay --no-spawn`, reported as not running               |
+| Form                                                                                                                                                                                  | Local socket            | `--host`                                                  |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------- | --------------------------------------------------------- |
+| `sessions spawn`, window launches (bare `felis`, `felis attach`, `felis -- <cmd>`)                                                                                                    | starts a daemon         | the relay starts one                                      |
+| Read and drive verbs (`list`, `info`, `capture`, `search`, `send`, `kill`, `evict`, `tag`, `switch`, the retargets' source dial), `notifications subscribe`, `daemon status` / `stop` | unreachable, exit `2`   | `relay --no-spawn`, then exit `2`                         |
+| `daemon upgrade`                                                                                                                                                                      | unreachable, exit `2`   | the remote `felis daemon upgrade`, which never starts one |
+| `version`, `doctor`                                                                                                                                                                   | reported as not running | `relay --no-spawn`, reported as not running               |
 
 A **cold socket** is a connect that failed with `ENOENT` or `ECONNREFUSED` (`ERROR_FILE_NOT_FOUND` for an absent Windows
 pipe, which reports as not-found). Only that licenses a spawn, on the local dial, the systemd hand-off and the relay
@@ -838,83 +823,6 @@ Streams OSC 9 / 99 / 777 desktop notifications. A stream verb (`--format jsonl`)
   so no notification is waited for and the verb exits `1` under `timeout`.
 - Slow consumers receive `{"v":1,"event":"lag","dropped":N}` in-band events when events are dropped from the daemon ring
   buffer.
-
-### `felis bridge`
-
-Persistent JSON-lines helper on stdio for editors and non-Rust clients speaking the CLI contract. Its op set is closed
-to session automation: the `sessions.*` ops, `notifications.subscribe`, and `cancel`. Three verb groups are CLI-only,
-and a bridge client reaches them by running the point verb with `--format json`:
-
-- operator verbs: `daemon status`, `daemon stop`, `daemon upgrade`, `config path|check|show-effective`, `fonts list`,
-  `doctor`, `version`;
-- window launches: bare `felis`, `attach`, `ssh`, `window retarget`;
-- shell plumbing: `completions <shell>`, `__mangen`, `__complete-sessions`.
-
-The stdio contract:
-
-- Standard input: newline-delimited requests `{"v":1,"id":<id>,"op":"<op>","params":{...}}`. The only accepted top-level
-  keys are `v`, `id`, `op`, and `params`; `params` is an object or may be omitted. Unknown operation parameters are
-  refused rather than ignored. A line may contain at most `MAX_BRIDGE_LINE_BYTES` ([ipc.md](ipc.md#semantic-limits)
-  "Semantic limits"); an over-limit line is discarded through its newline and answered as `invalid_request` with
-  `id: null`.
-- A request `id` is either a string of at most 128 UTF-8 bytes or a non-negative integer no greater than
-  `9007199254740991` (the largest integer represented exactly by common JSON consumers). It remains in use until the
-  request's reply or stream terminal is published as a complete stdout line.
-- Standard output: responses, items, and terminal objects mirroring the CLI contract. At most 64 non-terminal objects
-  may be waiting for stdout; each of the at most 64 in-flight operations reserves separate capacity for its terminal.
-- Standard error: diagnostic log lines only. The request grammar is published as `$defs/request` of
-  `felis-bridge-v1.schema.json` ("JSON Schema" above); a line that fails its shape is answered `malformed_request`, with
-  two exceptions the grammar also states but the bridge charges to the request rather than to its spelling: the
-  `rows`/`cols` pairing below, and `sessions.switch`'s required `from`. Both answer `invalid_request`.
-- When a `cancel` op or stdin EOF cancels a stream, items that reach the bridge after the cancel are dropped, and a
-  clean `end` counts only the item lines the bridge wrote for that stream. A stream the daemon has not terminated by the
-  time a stdin-EOF shutdown gives up waiting ends with a `canceled` failing terminal instead.
-- Closing stdin cleanly cancels in-flight operations and exits `0`. A stdin read failure exits `1`. A stdout write or
-  flush failure stops every operation, closes every daemon link, and exits `1` without waiting for stdin EOF. A first
-  `Ops` dial the daemon refuses `at_capacity` is answered with `id: null` before any line is read, and exits `1` as that
-  kind does everywhere.
-- One bridge admits at most 64 concurrent operations and 32 auxiliary daemon links in addition to its long-lived ops
-  link. Each daemon stream queues at most 16 frames before applying backpressure to that link. Request shape, parameter
-  types, cross-field constraints, and payload limits are validated before admission. A valid request beyond an operation
-  or link limit is answered with `at_capacity` while the bridge continues serving admitted work. An auxiliary link holds
-  its permit, and its operation its in-flight entry, until detach and carrier shutdown finish, not until the stream's
-  terminal; terminal capacity is reserved at admission and held through the flush.
-
-Supported ops and their accepted parameters:
-
-| Op                                | Parameters                                                  |
-| --------------------------------- | ----------------------------------------------------------- |
-| `sessions.list`                   | `tags`                                                      |
-| `sessions.info`                   | `session`                                                   |
-| `sessions.spawn`                  | `cwd`, `env`, `rows`, `cols`, `tags`, `cmd`                 |
-| `sessions.send`                   | `session`, `text`, `raw`                                    |
-| `sessions.kill`, `sessions.evict` | `session`                                                   |
-| `sessions.switch`                 | `to`, `from`, `attachment`                                  |
-| `sessions.tag`                    | `session`, `add`, `remove`                                  |
-| `sessions.capture`                | `session`, `source`, `ansi`, `lines`                        |
-| `sessions.search`                 | `session`, `pattern`, `regex`, `case_insensitive`, `source` |
-| `notifications.subscribe`         | `session`                                                   |
-| `cancel`                          | `target` (an in-flight request id)                          |
-
-For a local daemon, a relative `sessions.spawn.params.cwd` is resolved against the bridge process's current directory,
-and the child's base environment is captured from the bridge process, both before the request is sent. Over an SSH relay
-the path passes through unchanged and no environment is captured. `rows` and `cols` are a pair, as they are on the flag:
-one without the other is answered `invalid_request` by the bridge itself, and neither asks for the daemon's default grid
-("Verb details"). A whole geometry travels at the wire's width, so one past the REQ-605a bounds is the daemon's refusal
-to make and comes back `invalid_request` from there.
-
-Three ops take less than their CLI verb, by policy rather than by a limit of the wire:
-
-- `sessions.send` requires `text` and takes none of the CLI's `--key` chords, `--mouse` events or `--wait`. Each would
-  be an additive optional parameter within `v:1`.
-- `notifications.subscribe` takes no `once` or `timeout`: `cancel` is how a bridge client ends a stream.
-- `sessions.switch` requires `from`, which the CLI defaults from `$FELIS_SESSION_ID`, because the bridge runs inside an
-  editor rather than a felis window. A switch that queued no window is a result carrying `"queued":0`, where the CLI
-  verb fails with `not_queued`.
-
-`sessions.capture.source` takes the four region names `sessions capture --source` takes, `sessions.search.source` the
-two `sessions search --source` takes (`visible` against a daemon too old for it is refused `unsupported`, as the flag
-is), and `sessions.switch.attachment` the decimal id `sessions info --format json` prints.
 
 ### `felis completions <shell>`
 

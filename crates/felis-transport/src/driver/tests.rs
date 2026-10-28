@@ -1605,8 +1605,8 @@ fn a_both_ids_envelope_closes_the_connection_in_every_order() {
 }
 
 /// A reader that discards a family still owes it the table. Every
-/// client drains traffic it has no use for (the CLI bridge drops the
-/// grid burst, a one-shot verb drops another family's frame), and
+/// client drains traffic it has no use for (a one-shot verb drops
+/// another family's frame), and
 /// matching on the kind to skip it would exempt exactly those frames
 /// from the checks `decode` is the only place to run.
 #[test]

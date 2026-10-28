@@ -403,9 +403,9 @@ Before `Hello` a peer has told the daemon nothing, so a socket that stays quiet 
 and the deadlines ([reference/ipc.md](../reference/ipc.md) "Handshake") close it. Once a mode is named the silence has a
 meaning, and a mode whose work is to wait is left alone.
 
-One blanket connection-lifetime deadline was the rejected alternative. It would cut the bridge anchor and the
-notification observer (the two shapes whose whole job is to hold still), and it would not buy the bound it looks like,
-because an `Ops` peer is exempt by design and can hold its slot in silence.
+One blanket connection-lifetime deadline was the rejected alternative. It would cut an editor client's idle `Ops`
+connection and the notification observer (the two shapes whose whole job is to hold still), and it would not buy the
+bound it looks like, because an `Ops` peer is exempt by design and can hold its slot in silence.
 
 What the first-operation deadline does bind, it binds to the attach itself: a `Window` that asks a pre-attach verb and
 stops is still cut, because a roster read is not the subject it owes. Against a hostile same-UID peer the count cap

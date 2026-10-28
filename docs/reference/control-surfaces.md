@@ -43,7 +43,6 @@ placement matrix in [cli.md](cli.md) "Global options".
 | check system and runtime health     | `doctor`                                                     | -                          | -                      | Read-side handshake and frontend probe ([cli.md](cli.md) "Doctor")                                    |
 | collect a bug report                | `doctor report`                                              | -                          | -                      | Read-side handshake and frontend probe ([cli.md](cli.md) "Doctor report")                             |
 | inspect configuration               | `config path` / `check` / `show-effective`                   | -                          | -                      | none (local client operation; [config.md](config.md))                                                 |
-| drive daemon from external client   | `bridge`                                                     | -                          | -                      | Persistent JSON-lines connection ([ipc.md](ipc.md))                                                   |
 
 ## Naming conventions
 

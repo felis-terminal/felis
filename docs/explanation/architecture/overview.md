@@ -554,9 +554,9 @@ what keeps a shadow write from ever skipping its repaint.
 The concrete reuse-path table is in [reference/workspace.md](../../reference/workspace.md); what it records is a policy.
 felis core ships no `examples/` bridge crates: each reuse path is realized by a sibling repo in the ecosystem, built
 only because a real consumer exists (principle 1: add only what earns its place). A client whose language can generate a
-protobuf reader speaks the wire directly; a script that carries no codec reaches the daemon through `felis bridge`, the
-CLI's JSONL stdio subcommand, instead of through a second wire encoding ([ipc.md](ipc.md) "One encoding on the socket,
-JSON at a bridge").
+protobuf reader speaks the wire directly, and so does one whose language cannot, with a reader of its own; a script that
+carries no codec runs the CLI verbs with `--format json` or, for a stream, `--format jsonl`. Neither path adds a second
+wire encoding ([ipc.md](ipc.md) "One encoding on the socket").
 
 ### Shared wire knowledge across the satellite clients
 
@@ -594,8 +594,8 @@ later, and a browser view deployed separately from the gateway feeding it, can b
 only permitted change is an optional field readers ignore, and everything wider is a version bump the reader refuses on
 sight.
 
-The families only `felis bridge` renders (`Ops`, `Region`, `Notify`, `Push`, `Search`) are not in the format: they live
-in `felis-cli` under the CLI's own `v: 1` contract, which already publishes their schemas.
+The other families (`Ops`, `Region`, `Notify`, `Push`, `Search`) are not in the format: what a JSON consumer reads of
+them is a CLI verb's result, under the CLI's own `v: 1` contract, which already publishes its schema.
 
 #### Grid→ANSI re-encoding: adopt, into `felis-grid`
 
@@ -660,9 +660,8 @@ Rejected: a hand-reflected manifest (`felis_protocol::contract` emitting a commi
 sections duplicate the proto and drift from the generated casing, and once shapes, kinds, and version constants all come
 from the schema, its only remaining job is the byte layouts above.
 
-_Revisit if_ a client appears that can neither run a `protoc-gen-*` nor reach the daemon through `felis bridge`; the
-answer then is to ship the `FileDescriptorSet` the schema already compiles to, not a hand-reflected manifest that
-drifts.
+_Revisit if_ a client appears that can run no `protoc-gen-*`, published or its own; the answer then is to ship the
+`FileDescriptorSet` the schema already compiles to, not a hand-reflected manifest that drifts.
 
 #### Server-side handshake reuse: adopt the functions, not a crate yet
 

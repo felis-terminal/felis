@@ -12,9 +12,6 @@ sidebar:
 
 - **Attach** — A client connection to an existing daemon session, triggering a state rehydration burst.
 
-- **Bridge** — `felis bridge`, the persistent JSON-lines stdio subcommand allowing non-Rust clients to interact with the
-  daemon over standard input and output ([ipc.md](ipc.md)).
-
 - **Cell** — The smallest addressable rendering unit on the grid. A cell stores one grapheme plus attributes; multi-cell
   glyphs span a primary cell and continuation cells ([grid-and-cells.md](../explanation/data-model/grid-and-cells.md)).
 

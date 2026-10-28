@@ -36,14 +36,12 @@ format is a usage error (exit `2`). The default `human` output is not a parse ta
 Every object carries `"v":1`. Fields may be added within an epoch; an existing field is never renamed or retyped without
 bumping `v`, so a parser keyed on `v1` shapes keeps working across a felis upgrade.
 
-Every shape is published as JSON Schema (draft 2020-12): [`felis-cli-v1.schema.json`][cli-schema] for these objects,
-[`felis-bridge-v1.schema.json`][bridge-schema] for the bridge's requests and replies. Payload objects stay open and
-`error.kind` is an open string, so a validator built from them does not reject a newer field or a newer token.
+Every shape is published as JSON Schema (draft 2020-12) in [`felis-cli-v1.schema.json`][cli-schema]. Payload objects
+stay open and `error.kind` is an open string, so a validator built from them does not reject a newer field or a newer
+token.
 
 [cli-schema]:
   https://raw.githubusercontent.com/felis-terminal/felis/main/crates/felis-cli/schemas/felis-cli-v1.schema.json
-[bridge-schema]:
-  https://raw.githubusercontent.com/felis-terminal/felis/main/crates/felis-cli/schemas/felis-bridge-v1.schema.json
 
 **A point verb's failure is one object on stderr**, `{"v":1,"error":{"kind":"no_match","message":"…"}}`, and stdout
 stays empty. Branch on `kind`, never on `message`; the `kind` vocabulary grows additively, so treat an unknown one as a
@@ -74,8 +72,7 @@ prefix. The mutating verbs see no roster, so their replies carry `id` alone; fee
 #    cwd). A --host spawn lets the remote daemon pick, and any --cwd
 #    must be absolute on the remote. The grid is the daemon's default
 #    24x80 unless you name it, and --rows/--cols travel as a pair:
-#    naming one alone is a usage error (exit 2), and the bridge's
-#    sessions.spawn answers half a geometry with invalid_request.
+#    naming one alone is a usage error (exit 2).
 #    A local child inherits YOUR environment; --env adds or overrides
 #    but cannot remove, so drop a variable with env -u (it matters when
 #    you drive a copy of yourself and inherit your own session markers).
@@ -150,13 +147,13 @@ add `exit_code` to the terminal when the closing D mark carried one.
 
 Load a reference file only when the task reaches it:
 
-| When                                                                     | Read                                                             |
-| ------------------------------------------------------------------------ | ---------------------------------------------------------------- |
-| Listing, tagging, or waiting on a session someone else started           | [references/watching.md](references/watching.md)                 |
-| A verb exits `1` or `2` and the `kind` does not say what to do           | [references/troubleshooting.md](references/troubleshooting.md)   |
-| Clicking on text, reading a fullscreen TUI, image placeholders           | [references/reading-the-grid.md](references/reading-the-grid.md) |
-| `--host`, or `felis` inside a session reaching an unexpected daemon      | [references/remote.md](references/remote.md)                     |
-| The bridge, window moves, keymap chords, `doctor` / `config` diagnostics | [references/other-surfaces.md](references/other-surfaces.md)     |
+| When                                                                | Read                                                             |
+| ------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| Listing, tagging, or waiting on a session someone else started      | [references/watching.md](references/watching.md)                 |
+| A verb exits `1` or `2` and the `kind` does not say what to do      | [references/troubleshooting.md](references/troubleshooting.md)   |
+| Clicking on text, reading a fullscreen TUI, image placeholders      | [references/reading-the-grid.md](references/reading-the-grid.md) |
+| `--host`, or `felis` inside a session reaching an unexpected daemon | [references/remote.md](references/remote.md)                     |
+| Window moves, keymap chords, `doctor` / `config` diagnostics        | [references/other-surfaces.md](references/other-surfaces.md)     |
 
 For a flag not shown here, `felis <verb> --help` and `man felis-<verb>` (for example `man felis-sessions-send`) ship
 with every install and work offline. The full contract is the

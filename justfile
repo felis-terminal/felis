@@ -111,11 +111,9 @@ schema:
     UPDATE_SCHEMA=1 cargo test -p felis-cli --features schema cli_schema
     UPDATE_SCHEMA=1 cargo test -p felis-grid --features schema json_v1::schema
 
-# Regenerate the golden `felis bridge` conversations from a live bridge,
-# the golden felis-json v1 frames, and the cell instance fixtures.
+# Regenerate the golden felis-json v1 frames and the cell instance fixtures.
 [group('lint')]
 golden:
-    UPDATE_GOLDEN=1 cargo nextest run -p felis-cli --test cli_bridge golden
     UPDATE_GOLDEN=1 cargo nextest run -p felis-grid --features json --test it json_v1::
     UPDATE_GOLDEN=1 cargo nextest run -p felis-render-wgpu row_cache::golden_tests
 

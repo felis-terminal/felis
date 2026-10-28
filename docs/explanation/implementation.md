@@ -260,9 +260,9 @@ considered". swash is dual Apache-2.0 / MIT, compatible with felis's Apache-2.0.
 A frame body carries one encoding, Protocol Buffers over the `felis.v1` schema
 (`crates/felis-protocol/proto/felis.proto`, <https://protobuf.dev/>), generated with prost. The schema is the authority
 for the shapes; felis's hand-written message types are validated constructors over them, not a second contract. A
-consumer whose language has no protobuf runtime reaches the daemon through `felis bridge` (JSON lines on its stdio)
-rather than through a second wire encoding. [ipc.md](architecture/ipc.md) "Why protobuf" records the rejected encodings;
-the wire contract is [ipc.md](../reference/ipc.md).
+consumer whose language has no protobuf runtime writes its own reader for it rather than reading a second wire encoding.
+[ipc.md](architecture/ipc.md) "Why protobuf" records the rejected encodings; the wire contract is
+[ipc.md](../reference/ipc.md).
 
 ## Peer-UID lookup
 

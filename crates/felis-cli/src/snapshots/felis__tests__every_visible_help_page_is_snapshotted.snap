@@ -20,7 +20,6 @@ Commands:
   attach         Open a window attached to an existing session
   window         Act on the window this command runs in
   ssh            Re-point this window at the daemon on another host, over SSH
-  bridge         Speak JSON lines on stdin/stdout for a non-Rust client
   completions    Print a shell completion script to stdout
   help           Print this message or the help of the given subcommand(s)
 
@@ -751,17 +750,6 @@ Options:
           [default: human]
           [possible values: human, json]
 
-  -h, --help
-          Print help (see a summary with '-h')
-
-$ felis bridge --help
-Speak JSON lines on stdin/stdout for a non-Rust client.
-
-Persistent stdio bridge relaying JSONL requests and replies to the daemon. Stderr carries log lines only, never protocol. Exits if daemon is unreachable.
-
-Usage: felis bridge
-
-Options:
   -h, --help
           Print help (see a summary with '-h')
 

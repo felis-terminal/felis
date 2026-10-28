@@ -575,8 +575,8 @@ where
 }
 
 /// `tags` is always present and arrives sorted from the daemon,
-/// matching `list`/`info`. Shared with the bridge's `sessions.tag`.
-pub(crate) fn tag_result(id: u128, tags: &[String]) -> TagResult {
+/// matching `list`/`info`.
+pub(super) fn tag_result(id: u128, tags: &[String]) -> TagResult {
     TagResult {
         id: SessionHex(id).to_string(),
         tags: tags.to_vec(),

@@ -61,8 +61,7 @@ Task-oriented; one goal per page.
 
 Information-oriented lookup; consulted, not read in order.
 
-- [CLI](reference/cli.md) — every `felis` verb, the window-launch forms, the `bridge` subcommand, `--format` and the
-  exit codes.
+- [CLI](reference/cli.md) — every `felis` verb, the window-launch forms, `--format` and the exit codes.
 - [Configuration](reference/config.md) — config file paths per platform, the JSON schema, every key with its default and
   range, and the loader's behavior on missing / malformed values.
 - [Keybindings and mouse](reference/keybindings.md) — every default chord per platform, mouse gestures, chord grammar,
