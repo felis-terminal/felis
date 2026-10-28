@@ -140,10 +140,17 @@ bespoke one ("Correlation rides in the body" below).
 
 Two other placements are rejected:
 
-- **Folding them into `Ops`.** An `Ops` one-shot addresses a _named other_ session with no attach state, but a region
-  reads the attached session's live grid at the requesting subscriber's own viewport, and search hits reference that
-  session's rows; both conversations are attach-scoped by data dependency, so they stay on the attached connection under
-  their own kinds.
+- **Folding them into `Ops`.** Each conversation runs in two forms: attached, reading the subscriber's session at that
+  subscriber's own viewport, and unattached, naming a session by id and reading it at a fresh attach's viewpoint, the
+  live bottom. The viewpoint is the only difference, so it is one optional field on the one surface; an `Ops` copy of
+  each would be a second definition of the same request and reply shapes that the two forms then have to keep in step.
+
+The session-addressed form exists so a reader or a sender never has to attach. An attach is a subscription: it pays a
+rehydrate burst and then carries traffic no request asked for (mode flags, prompt marks, image ticks, `Push`), and a
+connection attaches once. A client multiplexing many operations over one connection could attribute none of that traffic
+to a request and could reach only one session, so `Ops::Send`, `Ops::SendAndWait` and the session field on `Search` and
+`Region` carry the session in the request instead, and every frame the connection receives answers one.
+
 - **A separate capture kind beside the region family.** `felis sessions capture` reads the very regions the keymap
   `pipe` chord names, so the row-stream read is a second reply shape on `Region` (`Rows` / `Row` / `RowsDone`), not a
   parallel family; the daemon encodes each row to text itself, which keeps every cell codec out of the CLI and lets one
