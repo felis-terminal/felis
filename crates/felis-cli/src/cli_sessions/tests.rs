@@ -17,9 +17,8 @@ use super::{
         SendStep, SendSteps, chord_key_event, cmd_send, collect_send_payload, over_limit_payload,
         read_send_payload, resolve_spawn_cwd, tag_result,
     },
-    parse_region_source, parse_search_source, plan,
+    plan,
     read::{RowEncoding, cmd_search, session_passes_tag_filter},
-    search_source_names, source_names,
 };
 use crate::cli_output::{ErrorKind, Format, PointFormat, Reporter, SessionRef};
 
@@ -525,21 +524,6 @@ async fn a_visible_search_on_a_minor_zero_daemon_exits_two_unsent() {
 }
 
 #[test]
-fn the_search_source_refusal_names_exactly_the_current_vocabulary() {
-    let message = parse_search_source("command-output").unwrap_err();
-    assert_eq!(
-        message,
-        "unknown source `command-output` (expected scrollback or visible)",
-    );
-    for name in search_source_names() {
-        assert!(
-            message.contains(&name),
-            "`{name}` is missing from {message}"
-        );
-    }
-}
-
-#[test]
 fn an_unexpected_frame_kind_reports_a_protocol_failure() {
     assert_eq!(
         ErrorKind::from_connect_error(&ConnectError::UnexpectedKind { kind: 99 }),
@@ -735,24 +719,6 @@ fn a_shifted_letter_chord_sends_the_uppercase_letter() {
 
     let shift_digit = event("shift+1");
     assert_eq!(shift_digit.key, Key::Character("1".into()));
-}
-
-/// The refusal lists exactly today's vocabulary: a renamed or added
-/// `SourceArg` variant must not leave the bridge telling a machine
-/// client to send a spelling the parser now rejects.
-#[test]
-fn the_source_refusal_names_exactly_the_current_vocabulary() {
-    let message = parse_region_source("bogus").unwrap_err();
-    assert_eq!(
-        message,
-        "unknown source `bogus` (expected visible, scrollback, command-output, or last-command)",
-    );
-    for name in source_names() {
-        assert!(
-            message.contains(&name),
-            "`{name}` is missing from {message}"
-        );
-    }
 }
 
 fn mouse_mode(

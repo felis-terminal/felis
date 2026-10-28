@@ -505,7 +505,6 @@
         "no_such_attachment",
         "not_queued",
         "session_ended",
-        "malformed_request",
         "invalid_request",
         "at_capacity",
         "unsupported",
@@ -513,9 +512,7 @@
         "daemon_lost",
         "refused",
         "protocol",
-        "canceled",
         "input_failed",
-        "output_failed",
         "internal"
       ]
     },
@@ -1100,7 +1097,7 @@
       "type": "object"
     },
     "SessionObject": {
-      "description": "The body of a `sessions list` item and a `sessions info` result\nalike, and what `felis bridge` wraps.",
+      "description": "The body of a `sessions list` item and a `sessions info` result\nalike.",
       "properties": {
         "attachments": {
           "description": "Always present, like `tags`: a picker's `.attachments[]` must be\niterable on a parked session too.",
@@ -1447,17 +1444,6 @@
         }
       ]
     },
-    "error_body": {
-      "properties": {
-        "error": {
-          "$ref": "#/$defs/MachineError"
-        }
-      },
-      "required": [
-        "error"
-      ],
-      "type": "object"
-    },
     "error_terminal": {
       "allOf": [
         {
@@ -1475,7 +1461,15 @@
         {
           "allOf": [
             {
-              "$ref": "#/$defs/error_body"
+              "properties": {
+                "error": {
+                  "$ref": "#/$defs/MachineError"
+                }
+              },
+              "required": [
+                "error"
+              ],
+              "type": "object"
             },
             {
               "properties": {
@@ -1527,58 +1521,6 @@
         }
       ]
     },
-    "point_body": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/ListResult"
-        },
-        {
-          "$ref": "#/$defs/SessionObject"
-        },
-        {
-          "$ref": "#/$defs/SessionRef"
-        },
-        {
-          "$ref": "#/$defs/TagResult"
-        },
-        {
-          "$ref": "#/$defs/SwitchResult"
-        },
-        {
-          "$ref": "#/$defs/RetargetResult"
-        },
-        {
-          "$ref": "#/$defs/DaemonStatusResult"
-        },
-        {
-          "$ref": "#/$defs/DaemonStopResult"
-        },
-        {
-          "$ref": "#/$defs/DaemonUpgradeResult"
-        },
-        {
-          "$ref": "#/$defs/ConfigPathResult"
-        },
-        {
-          "$ref": "#/$defs/CheckResult"
-        },
-        {
-          "$ref": "#/$defs/EffectiveConfigResult"
-        },
-        {
-          "$ref": "#/$defs/DoctorResult"
-        },
-        {
-          "$ref": "#/$defs/DoctorReportResult"
-        },
-        {
-          "$ref": "#/$defs/VersionResult"
-        },
-        {
-          "$ref": "#/$defs/FontFamiliesResult"
-        }
-      ]
-    },
     "point_error": {
       "allOf": [
         {
@@ -1594,7 +1536,15 @@
           "type": "object"
         },
         {
-          "$ref": "#/$defs/error_body"
+          "properties": {
+            "error": {
+              "$ref": "#/$defs/MachineError"
+            }
+          },
+          "required": [
+            "error"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -1613,7 +1563,56 @@
           "type": "object"
         },
         {
-          "$ref": "#/$defs/point_body"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ListResult"
+            },
+            {
+              "$ref": "#/$defs/SessionObject"
+            },
+            {
+              "$ref": "#/$defs/SessionRef"
+            },
+            {
+              "$ref": "#/$defs/TagResult"
+            },
+            {
+              "$ref": "#/$defs/SwitchResult"
+            },
+            {
+              "$ref": "#/$defs/RetargetResult"
+            },
+            {
+              "$ref": "#/$defs/DaemonStatusResult"
+            },
+            {
+              "$ref": "#/$defs/DaemonStopResult"
+            },
+            {
+              "$ref": "#/$defs/DaemonUpgradeResult"
+            },
+            {
+              "$ref": "#/$defs/ConfigPathResult"
+            },
+            {
+              "$ref": "#/$defs/CheckResult"
+            },
+            {
+              "$ref": "#/$defs/EffectiveConfigResult"
+            },
+            {
+              "$ref": "#/$defs/DoctorResult"
+            },
+            {
+              "$ref": "#/$defs/DoctorReportResult"
+            },
+            {
+              "$ref": "#/$defs/VersionResult"
+            },
+            {
+              "$ref": "#/$defs/FontFamiliesResult"
+            }
+          ]
         }
       ]
     },
@@ -1632,20 +1631,17 @@
           "type": "object"
         },
         {
-          "$ref": "#/$defs/stream_item_body"
-        }
-      ]
-    },
-    "stream_item_body": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/CaptureRow"
-        },
-        {
-          "$ref": "#/$defs/SearchMatch"
-        },
-        {
-          "$ref": "#/$defs/NotificationObject"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CaptureRow"
+            },
+            {
+              "$ref": "#/$defs/SearchMatch"
+            },
+            {
+              "$ref": "#/$defs/NotificationObject"
+            }
+          ]
         }
       ]
     }

@@ -79,8 +79,8 @@ those marks, a `working` or `blocked` record stays while the shell lives, so a p
 ## Where records surface
 
 `felis sessions list --format json` and `felis sessions info` show a session's records as `program_status`, sorted by
-`id` ([cli.md](../cli.md)). The bridge and IPC carry the same list as `SessionInfo.program_status` ([ipc.md](../ipc.md)
-"Ops (kind = 5)"). Each record is:
+`id` ([cli.md](../cli.md)). IPC carries the same list as `SessionInfo.program_status` ([ipc.md](../ipc.md) "Ops (kind =
+5)"). Each record is:
 
 | Field      | Type                           | Meaning                                                         |
 | ---------- | ------------------------------ | --------------------------------------------------------------- |

@@ -28,7 +28,7 @@ substrate every surface is a thin wrapper over. A capability exists on the wire 
 
 When a new capability appears, route it by intent, not by convenience:
 
-- Is it for a caller with **no window** (a script, a CI runner, an editor bridge)? → **Client CLI verb** (typed args,
+- Is it for a caller with **no window** (a script, a CI runner, an editor plugin)? → **Client CLI verb** (typed args,
   stable `--format` machine output, one daemon connection per invocation; [ipc.md](../../reference/ipc.md) "CLI
   clients").
 - Is it a **persistent, declarative preference** the user sets once? → **`config.toml`** (client-side, reload-able,
@@ -275,9 +275,8 @@ still never exits on its own.
 
 Where two surfaces or two verbs express the same concept, they express it the same way. Each convention is sourced in
 its owner doc; what this section keeps is the decision behind it, so a new verb or wire message can be checked against
-one list. The conventions fall into four groups: when a verb may reach or start a daemon, the machine-output contract,
-the bridge's own bounds, and how identifiers and text are spelled. The [asymmetries below](#deliberate-asymmetries) are
-the exceptions.
+one list. The conventions fall into three groups: when a verb may reach or start a daemon, the machine-output contract,
+and how identifiers and text are spelled. The [asymmetries below](#deliberate-asymmetries) are the exceptions.
 
 ### Reaching the daemon
 
@@ -334,8 +333,7 @@ or arriving incrementally, which `capture`, `search` and `notifications subscrib
 and answered in one frame, so it is a point result with the whole array inside it.
 
 Framing the roster as a stream is the rejected alternative. It obliges every consumer to accumulate lines and watch for
-a terminal to learn a thing the daemon already knows in full, and `felis bridge` answers it as one object regardless, so
-the two framings of one roster would disagree.
+a terminal to learn a thing the daemon already knows in full.
 
 _Revisit if_ the roster ever becomes incremental (a `list --watch` reporting arrivals and departures), which would be a
 stream verb of its own rather than a reframing of this one.
@@ -349,9 +347,9 @@ and learns which applies only from the output it is trying to parse.
 
 A stream proposal also names its terminal: what the clean terminal's `count` counts, and which failures end the stream
 in the failing terminal. A verb is exempt only when it has nothing structured to report or a fixed framing of its own (a
-window launch, `completions`, `bridge`); exempt is not a way to defer the choice. A proposal with no class, or a stream
-with no named terminal, is not reviewable, since the first implementation would otherwise decide the framing every
-consumer inherits.
+window launch, `completions`); exempt is not a way to defer the choice. A proposal with no class, or a stream with no
+named terminal, is not reviewable, since the first implementation would otherwise decide the framing every consumer
+inherits.
 
 #### The class fixes the channels
 
@@ -367,16 +365,8 @@ otherwise discard, the result object carries the reply's own fields, with every 
 
 #### Frozen for `v:1`
 
-The two words, the class binding, the one error object, the `kind` vocabulary with its exit codes, and the two
-transports hold for the epoch; growth inside it is a new token or a new field ([cli.md](../../reference/cli.md) "Machine
-output"). What fixes the transports is the process model rather than taste: a one-shot point verb has an exit status and
-a stderr to answer with, a stream is a stdout protocol its consumer reads until the terminal, and a multiplexed bridge
-has neither an exit status nor a stderr per request, so an `id` on stdout is the only channel that can carry a
-correlated answer.
-
-Unifying them fails in both directions. Moving the CLI's errors onto stdout breaks `$(felis sessions spawn …)` and every
-shell contract built on capturing a result; handing the bridge per-request exit codes asks for a status a process has
-once.
+The two words, the class binding, the one error object, and the `kind` vocabulary with its exit codes hold for the
+epoch; growth inside it is a new token or a new field ([cli.md](../../reference/cli.md) "Machine output").
 
 #### The published schemas are generated from the serde types
 
@@ -385,25 +375,17 @@ drifts from the structs it describes. Generating keeps a field's schema and its 
 staleness a failing test rather than a reader's discovery.
 
 The cost is that JSON Schema cannot state the envelope (which body may appear under which key, and that `"v"` is a
-literal), so that layer is composed by hand around generated bodies; it is also the layer serde has no type for, since
-the CLI and the bridge wrap the same bodies differently. The bridge's per-operation request parameters are the other
-exception: the binary parses them by key rather than through a `Deserialize` type, so they are explicit schema types
-held to the runtime's parameter table by a guard test.
+literal), so that layer is composed by hand around generated bodies; it is also the layer serde has no type for.
 
 **`error.kind`** is published as an open string with the epoch's tokens in an `x-known-values` annotation. An `enum`
 fails: the vocabulary grows additively within an epoch, so a consumer pinned to an older bundle would reject an object
 it is meant to fall back on.
 
-A request parameter whose vocabulary is finite is enumerated in the published grammar rather than typed as a bare
-string, so the schema refuses what the bridge would refuse and a line the bundle admits is never answered
-`malformed_request` for one of those values. Syntax is all a schema can carry, so a parameter constrained by pattern
-rather than enumeration keeps a residual gap.
-
-A 64-bit bound keeps a second gap, in the validator rather than in the grammar: the bound is published exactly and
-annotated `x-bound-exceeds-f64-precision` rather than narrowed to what a validator can enforce, because a validator
-compares JSON numbers as `f64`, so an enforceable bound would sit below `u64::MAX` and reject counts the daemon really
-emits. A few thousand values slipping past a bound nothing produces is the cheaper failure
-([cli.md](../../reference/cli.md) "JSON Schema").
+A 64-bit bound keeps a gap in the validator: the bound is published exactly and annotated
+`x-bound-exceeds-f64-precision` rather than narrowed to what a validator can enforce, because a validator compares JSON
+numbers as `f64`, so an enforceable bound would sit below `u64::MAX` and reject counts the daemon really emits. A few
+thousand values slipping past a bound nothing produces is the cheaper failure ([cli.md](../../reference/cli.md) "JSON
+Schema").
 
 #### One rule decides where a refusal of the invocation lands
 
@@ -450,8 +432,7 @@ token's spelling still never changes within an epoch: additive means new tokens,
 #### Every top-level machine object carries `"v":1`
 
 `"v":1` versions the _CLI output contract_, never the daemon wire: a wire minor must be invisible here, or a consumer
-would re-negotiate for growth it cannot see. `felis bridge` stamps the same epoch on its own envelope, so the two
-framings of one vocabulary move together. Moving the number costs every consumer at once, which is why fields may be
+would re-negotiate for growth it cannot see. Moving the number costs every consumer at once, which is why fields may be
 added but never renamed or retyped without it.
 
 It is an epoch, not a negotiation. Two other shapes are rejected:
@@ -481,35 +462,6 @@ consumer blocked on the terminal could not tell them apart without a timeout. Th
 family, a stream ends in exactly one typed terminal naming the stream it closes ([ipc.md](../../reference/ipc.md)
 "Correlation, requests, and streams"; the two verbs' own records are in [scrollback.md](../data-model/scrollback.md)
 "Search", "Capture").
-
-### The persistent bridge has its own aggregate bounds
-
-The daemon's per-connection and per-stream limits do not bound an editor helper that can open many connections and
-retain output for a reader that has stopped, so the persistent bridge carries aggregate bounds of its own. The ceilings
-are in [cli.md](../../reference/cli.md) "`felis bridge`"; two rejections shape them, and a rejected implementation shows
-what they prevent:
-
-- **Sharing one queue budget between items and terminals.** Unread items could then occupy every slot while every
-  accepted operation still owed the caller a terminal, so terminal capacity is separate and reserved at admission, and
-  lives through the flush.
-- **Releasing a link's permit at its stream terminal.** Replacement links could then outrun teardown and escape both
-  aggregate ceilings, so an auxiliary link keeps its permit, and its operation its in-flight entry, until detach and
-  carrier shutdown finish, and the shutdown path stops stdin admission first so that aborting an operation cannot open
-  that race.
-- **An unbounded writer channel plus unbounded daemon stream channels** (the rejected implementation). Each daemon link
-  would stay within its own limits while the bridge multiplied them and accumulated output with no process-wide ceiling.
-
-Where the two kinds of ceiling differ is what they do when full, and that decides where loss is allowed: the admission
-ceilings refuse only the new request with `at_capacity`, while the channel ceilings apply backpressure rather than
-discarding an admitted operation's protocol. Capture and search therefore remain lossless until the daemon's own
-slow-subscriber eviction; only notifications, whose source is intentionally a lossy ring, report an in-band `lag` and
-continue.
-
-A failed stdout write or flush ends the bridge immediately. Continuing to read stdin or daemon links after the only
-protocol sink is gone cannot produce an observable answer and merely accumulates work; trying to synthesize error
-terminals is equally ineffective on the failed channel. The bridge aborts its operations and closes every link instead.
-
-A larger fixed queue alone would not change that; only resumable output with an acknowledged handoff would.
 
 ### Identifiers and text
 
@@ -701,7 +653,7 @@ alone is rejected (principle 1: add only what earns its place); verbs are added 
 #### `attach` is a top-level launcher, not `sessions attach`
 
 The `felis` front-door plays two roles: launching a window (`felis`, `felis attach <id>`, `felis -- <cmd>`) execs the
-GUI client, while the headless verbs (`sessions …`, `notifications`, `config`, `doctor`, `version`, `daemon`, `bridge`,
+GUI client, while the headless verbs (`sessions …`, `notifications`, `config`, `doctor`, `version`, `daemon`,
 `completions`) run in-process with no window. `attach` opens a window, so it sits with the launchers at the top level,
 not under `sessions` with the scripting verbs; the level difference between `attach` and the `sessions` mutators
 (`evict` among them) follows from launch-vs-script, not inconsistency.
@@ -776,31 +728,6 @@ The stamp is the same machinery `FELIS_SESSION_ID` uses (scrubbed from every bas
 forced on every spawn path, REQ-912), so it adds a key, not a mechanism. The daemon itself never reads it: an
 auto-spawned daemon can inherit its launcher's value, and honoring that would have it bind an address another process is
 already serving.
-
-#### `felis bridge` is the session-automation surface, not a mirror of the CLI
-
-Its op set is closed to the `sessions.*` ops, `notifications.subscribe`, and `cancel`, which is how a bridge client ends
-a stream. The operator verbs (`daemon`, `config`, `doctor`, `version`), the window launches, and the shell plumbing stay
-CLI-only ([cli.md](../../reference/cli.md) "`felis bridge`"). The line is surface policy, not a limit of the wire:
-several of the CLI-only verbs are correlated `Ops` requests exactly like the point ops the bridge does expose.
-
-What decides is the caller. A program drives _sessions_ through the bridge, while daemon lifecycle, config diagnosis,
-GUI launches and shell integration belong to the operator, who reaches them through the one-shot process whose exit
-status and exec are the answer; a non-Rust client that needs `daemon status` runs that verb with `--format json`.
-
-A complete mirror is the rejected alternative. It puts process-lifecycle verbs behind a long-lived correlated stream,
-where the reply to "stop the daemon" travels on the link being stopped, and it obliges every operator verb to grow a
-bridge twin: one operation with two definitions to keep in step, which is the cost the smaller surface buys off.
-
-Within the shared ops, three differences are policy and are frozen with their reasons:
-
-- The bridge freezes the parameters its clients have needed, so the `keys` and `wait` that `sessions.send` lacks are
-  additive params within `v:1` rather than guesses made before the tag.
-- `notifications.subscribe` needs no `once` or `timeout`, because `cancel` already ends a stream.
-- `sessions.switch` requires the `from` the CLI defaults from `$FELIS_SESSION_ID`: the bridge runs inside an editor
-  rather than a felis window, so the variable would name whatever session launched the editor. That verb also answers
-  `queued == 0` with a result rather than a refusal, because whether "no window moved" is a failure is the editor's
-  judgement, while the one-shot CLI has to pick an exit code and picks `not_queued`.
 
 #### Any unknown first word runs `felis-<word>`
 

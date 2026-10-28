@@ -17,11 +17,10 @@ scripting, run `principle-check` first.
 
 ## 0. Classify a new verb before wiring it
 
-A machine-output verb or bridge operation starts from its class: Point, Point-diagnostic, Stream, or Exempt, chosen
-against `docs/explanation/architecture/control-surfaces.md` "Shared conventions" → "Machine output". Write the class
-into the proposal, and for a Stream also what its clean terminal's `count` counts and which failures end it in the
-failing terminal. A proposal missing either is not ready to review; send it back rather than letting the implementation
-pick.
+A machine-output verb starts from its class: Point, Point-diagnostic, Stream, or Exempt, chosen against
+`docs/explanation/architecture/control-surfaces.md` "Shared conventions" → "Machine output". Write the class into the
+proposal, and for a Stream also what its clean terminal's `count` counts and which failures end it in the failing
+terminal. A proposal missing either is not ready to review; send it back rather than letting the implementation pick.
 
 ## 1. Read the contract before touching the wire
 
@@ -103,10 +102,9 @@ A new message/verb typically touches, in dependency order:
 3. `crates/felis-client-core/src/connector/requests.rs` (and `roster.rs` / `pull.rs` where relevant): the headless
    client call.
 4. `crates/felis-cli`: the verb, its `--format` output (declare the class from step 0 by flattening `PointFormat` or
-   `StreamFormat`, and emit through the `Reporter`), and completions. A bridge operation for a Stream verb also joins
-   the `DaemonOp::is_streaming` match in `cli_bridge/admission.rs`; a guard test in `cli_schema.rs` fails until the two
-   agree. Any change to `cli_output.rs` or the bridge's request grammar means running `just schema`: the published
-   bundle under `crates/felis-cli/schemas/` is generated from those types and CI fails on a stale copy.
+   `StreamFormat`, and emit through the `Reporter`), and completions. Any change to `cli_output.rs` means running
+   `just schema`: the published bundle under `crates/felis-cli/schemas/` is generated from those types and CI fails on a
+   stale copy.
 
 ## 5. Tests
 

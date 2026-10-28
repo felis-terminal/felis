@@ -15,8 +15,6 @@ use felis_client_core::ConfigSource;
 use felis_protocol::messages::{ResolvedId, SessionInfo};
 use felis_transport::logging::{self, Console};
 
-mod cli_bridge;
-mod cli_bridge_json;
 mod cli_completions;
 mod cli_config;
 mod cli_daemon;
@@ -182,11 +180,6 @@ enum Cmd {
         #[command(flatten)]
         flags: cli_sessions::RetargetFlags,
     },
-    /// Speak JSON lines on stdin/stdout for a non-Rust client.
-    ///
-    /// Persistent stdio bridge relaying JSONL requests and replies to the daemon.
-    /// Stderr carries log lines only, never protocol. Exits if daemon is unreachable.
-    Bridge,
     /// Print a shell completion script to stdout.
     ///
     /// Supports bash, elvish, fish, powershell, and zsh. The fish and zsh
@@ -519,12 +512,6 @@ fn main() -> Result<()> {
             let code = retarget(&out, "felis ssh", carrier, attachment, flags);
             std::process::exit(code);
         }
-        Some(Cmd::Bridge) => {
-            let target = dialed(&cli, dials, &out);
-            let runtime = verb_runtime(&out);
-            let code = cli_bridge::run(&runtime, &target)?;
-            std::process::exit(code);
-        }
         Some(Cmd::Completions { shell }) => {
             cli_completions::emit(shell);
             std::process::exit(0);
@@ -682,7 +669,6 @@ fn verb_reading_no_config(cmd: Option<&Cmd>) -> Option<String> {
             op: WindowOp::Retarget { .. },
         } => "felis window retarget",
         Cmd::Ssh { .. } => "felis ssh",
-        Cmd::Bridge => "felis bridge",
         Cmd::Completions { .. } => "felis completions",
         Cmd::CompleteSessions => "felis __complete-sessions",
         Cmd::Mangen { .. } => "felis __mangen",
@@ -704,7 +690,6 @@ fn verb_refusing_carrier(cmd: Option<&Cmd>) -> Option<(String, &'static str)> {
         | Cmd::Daemon { .. }
         | Cmd::Version { .. }
         | Cmd::Doctor { .. }
-        | Cmd::Bridge
         | Cmd::CompleteSessions => return None,
         Cmd::Config { .. } => (
             "felis config".to_owned(),

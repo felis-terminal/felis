@@ -146,11 +146,11 @@ the per-feature verdict is [protocols/support-matrix.md](protocols/support-matri
 ## Integration tests
 
 Integration tests run the daemon against real children on a real PTY: shells, pagers and editors, captured producer byte
-streams, detach and reattach, the `felis bridge` binary, and shell completions under real interpreters. The tests that
-drive an external tool (sshd and ssh, `less`, `nvim`, vttest and esctest, fish and zsh) need the dev shell's tools and
-fail without them. They compile on Unix only, so the native Windows job does not run them. The Windows in-place upgrade
-tests are the exception: the native Windows job runs them, each rerunning itself at Medium integrity so that the daemon
-uses the embedded ConPTY host.
+streams, detach and reattach, the `felis` verbs' machine output, and shell completions under real interpreters. The
+tests that drive an external tool (sshd and ssh, `less`, `nvim`, vttest and esctest, fish and zsh) need the dev shell's
+tools and fail without them. They compile on Unix only, so the native Windows job does not run them. The Windows
+in-place upgrade tests are the exception: the native Windows job runs them, each rerunning itself at Medium integrity so
+that the daemon uses the embedded ConPTY host.
 
 REQ-1206 ([spec.md](spec.md)) states the exit criteria for this layer, and part of it is met by hand rather than by a
 test: an editor or file-manager session driven end to end through the GUI client. The client's window state machines are
@@ -167,8 +167,8 @@ is where that assertion fires. No published `felis-json` object may forbid addit
 would make a later v1 writer's optional field a break; a test enforces it.
 
 The CLI bundle is validated against the objects the CLI test suites really parse, and must reject the fixtures under
-`crates/felis-cli/tests/fixtures/schema-invalid/`. The golden bridge conversations and the golden `felis-json` frames
-carry what a schema cannot state; `just golden` regenerates them from a live run.
+`crates/felis-cli/tests/fixtures/schema-invalid/`. The golden `felis-json` frames carry what a schema cannot state;
+`just golden` regenerates them from a live run.
 
 ## Performance benchmarks
 
@@ -273,7 +273,7 @@ probes, and of the bench scripts, are documented where they are read.
 | `FELIS_TEST_FONT_DIR`       | Directory holding the pinned test fonts. Font-dependent tests load their faces from it alone and panic when it is unset; they are compiled out on Windows, whose CI runs outside the dev shell. `dev/flake-module.nix` exports it. |
 | `FELIS_SMOKE_MARKER`        | A non-empty value puts the client in frontend-smoke mode: type the marker, read it back from the rendered frame, exit. `just smoke` and `just smoke-headless` set it.                                                              |
 | `UPDATE_SCHEMA`             | Rewrite the committed JSON schemas instead of asserting byte equality. `just schema` sets it.                                                                                                                                      |
-| `UPDATE_GOLDEN`             | Rewrite the golden bridge conversations, `felis-json` v1 frames, and cell-instance fixtures from a live run. `just golden` sets it.                                                                                                |
+| `UPDATE_GOLDEN`             | Rewrite the golden `felis-json` v1 frames and cell-instance fixtures from a live run. `just golden` sets it.                                                                                                                       |
 | `VTTEST_BIN`, `ESCTEST_BIN` | Absolute path to the conformance binary, which must exist; without it the harness resolves the name on `PATH`.                                                                                                                     |
 | `FELIS_SYSTEMD_TESTS`       | `1` runs the systemd hand-off tests against the live user manager (a transient unit per test, on its own socket path); without it they return at once.                                                                             |
 | `FELIS_PROSE_CHECK_SKIP`    | `1` makes the prose gate exit zero, for a commit whose prose is checked another way.                                                                                                                                               |

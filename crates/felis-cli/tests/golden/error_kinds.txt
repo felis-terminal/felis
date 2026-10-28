@@ -10,7 +10,6 @@ no_input_owner       1
 no_such_attachment   1
 not_queued           1
 session_ended        1
-malformed_request    2
 invalid_request      1
 at_capacity          1
 unsupported          2
@@ -18,9 +17,7 @@ daemon_unreachable   2
 daemon_lost          2
 refused              1
 protocol             2
-canceled             2
 input_failed         2
-output_failed        2
 internal             2
 
 [StreamErrorReason -> kind]

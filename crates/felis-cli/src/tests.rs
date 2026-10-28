@@ -226,7 +226,6 @@ fn the_exempt_verbs_carry_no_format_flag() {
     for argv in [
         &["felis", "--format", "json"][..],
         &["felis", "attach", "1a", "--format", "json"],
-        &["felis", "bridge", "--format", "jsonl"],
         &["felis", "completions", "bash", "--format", "json"],
     ] {
         assert!(
@@ -489,7 +488,6 @@ fn config_selection_is_a_root_flag_the_non_readers_refuse() {
     for (argv, verb) in [
         (vec!["felis", "sessions", "list"], "felis sessions"),
         (vec!["felis", "version"], "felis version"),
-        (vec!["felis", "bridge"], "felis bridge"),
         (vec!["felis", "completions", "fish"], "felis completions"),
         (vec!["felis", "fonts", "list"], "felis fonts"),
     ] {
@@ -529,8 +527,7 @@ fn expected_globals(cmd: Option<&Cmd>) -> (Global, Global) {
             Cmd::Sessions { .. }
             | Cmd::Notifications { .. }
             | Cmd::Daemon { .. }
-            | Cmd::Version { .. }
-            | Cmd::Bridge,
+            | Cmd::Version { .. },
         ) => (Refused, Dialed),
         Some(
             Cmd::Window { .. }
@@ -562,7 +559,6 @@ fn every_verb_form_places_every_global_flag() {
         &["felis", "config", "check"],
         &["felis", "doctor"],
         &["felis", "version"],
-        &["felis", "bridge"],
         &["felis", "window", "retarget"],
         &["felis", "ssh", "vm"],
         &["felis", "fonts", "list"],
@@ -940,7 +936,6 @@ fn verb_intent_decides_auto_spawn_on_either_carrier() {
         ),
         ("felis version", cli_version::REMOTE_SPAWN),
         ("felis doctor", cli_doctor::REMOTE_SPAWN),
-        ("felis bridge", cli_bridge::REMOTE_SPAWN),
         ("felis completions", cli_completions::REMOTE_SPAWN),
     ] {
         assert_eq!(policy, Refuse, "{verb} must not resurrect a daemon");

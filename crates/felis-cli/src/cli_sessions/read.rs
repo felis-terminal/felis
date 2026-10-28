@@ -492,10 +492,10 @@ fn print_search_match(
     }
 }
 
-/// Shared with the bridge's `sessions.search` items. `col_spans` are
-/// per-row highlight segments `[row_line_index, col_start, col_end]`;
-/// a match crossing a soft-wrap edge emits one per touched row.
-pub(crate) fn search_match<'a>(
+/// `col_spans` are per-row highlight segments
+/// `[row_line_index, col_start, col_end]`; a match crossing a soft-wrap
+/// edge emits one per touched row.
+fn search_match<'a>(
     line_index: i64,
     text: &'a str,
     byte_spans: &[ByteSpan],

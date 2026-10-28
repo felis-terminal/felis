@@ -170,11 +170,10 @@ pub(crate) struct StreamFormat {
 /// schema) without a second edit that could be forgotten.
 macro_rules! error_kinds {
     ($( $(#[$meta:meta])* $variant:ident => $token:literal, $exit:literal; )*) => {
-        /// The vocabulary a consumer branches on, shared with `felis
-        /// bridge` so the two surfaces cannot diverge. It grows
-        /// additively within a `v`: a consumer that meets an unknown
-        /// token reads the generic failure off the exit status. A
-        /// token's spelling is frozen within a `v`; its prose is not.
+        /// The vocabulary a consumer branches on. It grows additively
+        /// within a `v`: a consumer that meets an unknown token reads
+        /// the generic failure off the exit status. A token's spelling
+        /// is frozen within a `v`; its prose is not.
         #[derive(Debug, Clone, Copy, PartialEq, Eq)]
         pub(crate) enum ErrorKind {
             $( $(#[$meta])* $variant, )*
@@ -232,8 +231,6 @@ error_kinds! {
     NotQueued => "not_queued", 1;
     /// The session ended before the operation could finish.
     SessionEnded => "session_ended", 1;
-    /// The request could not be read or routed (bridge-side).
-    MalformedRequest => "malformed_request", 2;
     /// A well-formed request the daemon or the CLI refuses on its
     /// merits.
     InvalidRequest => "invalid_request", 1;
@@ -254,12 +251,8 @@ error_kinds! {
     /// The peer broke the protocol: an unreadable frame, a reply that
     /// answers nothing asked.
     Protocol => "protocol", 2;
-    /// The operation was canceled by its caller.
-    Canceled => "canceled", 2;
-    /// The process's own request pipe failed (bridge-side).
+    /// The process's own stdin failed.
     InputFailed => "input_failed", 2;
-    /// The process's own response pipe failed (bridge-side).
-    OutputFailed => "output_failed", 2;
     /// Anything the surface cannot name more precisely.
     Internal => "internal", 2;
 }
@@ -650,7 +643,7 @@ pub(crate) fn short_id_alone(id: u128) -> String {
 }
 
 /// The body of a `sessions list` item and a `sessions info` result
-/// alike, and what `felis bridge` wraps.
+/// alike.
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub(crate) struct SessionObject {
@@ -1258,8 +1251,8 @@ impl NotificationObject {
     }
 }
 
-/// A payload body with no `"v"`, for `felis bridge`'s own envelope. A
-/// `Value` rather than rendered text so the bridge composes one object
+/// A payload body with no `"v"`, for embedding in another result. A
+/// `Value` rather than rendered text so the caller composes one object
 /// instead of splicing fragments. Serialization cannot fail (see
 /// [`render`]); a failure would surface as a `null` body.
 pub(crate) fn body_value(value: &impl Serialize) -> serde_json::Value {

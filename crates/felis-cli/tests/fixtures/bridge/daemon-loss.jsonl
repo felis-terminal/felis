@@ -1,3 +1,0 @@
-{"dir":"in","id":"sub","op":"notifications.subscribe","params":{},"v":1}
-{"dir":"kill-daemon"}
-{"dir":"out","error":{"kind":"daemon_lost","message":"<message>"},"event":"error","id":"sub","v":1}

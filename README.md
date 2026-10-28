@@ -12,10 +12,9 @@ clients over a public, versioned IPC.
   Because the daemon transfers live terminal state instead of stacking a second emulator, sessions survive disconnects
   without tmux's protocol degradation or keybind collisions ([attach over SSH](docs/how-to/attach-over-ssh.md),
   [tmux workflows without tmux](docs/how-to/tmux-workflows-without-tmux.md)).
-- **Headless control and typed IPC.** Every session is reachable without a window. `felis sessions` and `felis bridge`
-  let scripts, editor integrations, and AI agents spawn sessions, inject input, wait for commands to finish, and inspect
-  screen state with `--format json` or `jsonl`
-  ([driving a session without a window](docs/tutorials/drive-without-a-window.md),
+- **Headless control and typed IPC.** Every session is reachable without a window. `felis sessions` lets scripts, editor
+  integrations, and AI agents spawn sessions, inject input, wait for commands to finish, and inspect screen state with
+  `--format json` or `jsonl` ([driving a session without a window](docs/tutorials/drive-without-a-window.md),
   [CLI reference](docs/reference/cli.md), [IPC protocol](docs/reference/ipc.md)).
 - **Modern protocol fidelity.** felis implements Kitty graphics, Kitty text sizing, Kitty keyboard protocol, OSC 8
   hyperlinks, OSC 133 prompt marks, OSC 7501 program status, East Asian width, and ligature font shaping

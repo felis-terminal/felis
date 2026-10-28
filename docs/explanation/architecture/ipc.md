@@ -122,10 +122,9 @@ family that grows a disagreeing arm loses the shortcut rather than quietly skipp
 
 What the shortcut does not skip is the decode. Dropping it there would spare the busiest stream on the link its
 deserialization, at the price of making corruption a property of the reader: the same malformed `Grid` body would end a
-window client's connection and pass unnoticed on a `felis bridge` link that drains the grid burst, which is exactly the
-divergence a cross-language client would discover as a felis bug rather than its own. So the drain path decodes the body
-and throws the message away, and the cost lands where it is affordable, on frames that are being dropped rather than
-rendered.
+window client's connection and pass unnoticed on a link that drains the family, which is exactly the divergence a
+cross-language client would discover as a felis bug rather than its own. So the drain path decodes the body and throws
+the message away, and the cost lands where it is affordable, on frames that are being dropped rather than rendered.
 
 The checks that stop short of the decode do so for reasons other than cost: `felis-transport` depends on
 `felis-protocol` alone, so a check that needs the receiver's state is out of its reach, and a limit meant to be answered
@@ -198,14 +197,11 @@ A value a user typed reached felis through UTF-8 arguments already; a captured o
 leaves turns a path into a path that does not exist, and a non-UTF-8 `SSH_AUTH_SOCK` is still the path the agent listens
 on.
 
-Argv and cwd stay `string` although `execve` accepts bytes for them too, and the bridge is the reason rather than the
-exec layer: `sessions.spawn` carries `cmd` and `cwd` as JSON strings, and JSON cannot express a byte sequence that is
-not UTF-8, so a `bytes` wire would hand the CLI a capability the bridge has no way to reach.
-
-The exposure is narrow as well. A Unix-native argv entry or path is arbitrary bytes, so it can fail to be UTF-8, but a
-value that reached felis because the user typed it came through UTF-8 arguments already, and on Windows a valid UTF-16
-argv or path always converts. What a client owes such a value is a refusal, not a lossy conversion, because a path
-spelled with U+FFFD dials a socket nobody listens on or opens a window in a directory that does not exist (REQ-105b).
+Argv and cwd stay `string` although `execve` accepts bytes for them too, because the exposure is narrow. A Unix-native
+argv entry or path is arbitrary bytes, so it can fail to be UTF-8, but a value that reached felis because the user typed
+it came through UTF-8 arguments already, and on Windows a valid UTF-16 argv or path always converts. What a client owes
+such a value is a refusal, not a lossy conversion, because a path spelled with U+FFFD dials a socket nobody listens on
+or opens a window in a directory that does not exist (REQ-105b).
 
 #### The snapshot replaces the base, over a local socket only
 
@@ -348,8 +344,8 @@ Rejected alternatives:
   event; shedding both is the deciding argument above.
 - **MessagePack / CBOR**: self-describing binary, more compact than JSON, but neither ships a schema-contract or codegen
   story for other languages; a consumer still reverse-engineers the message shapes. CBOR is the one serde-native
-  survivor of the format scoring, and what it would win over protobuf is self-description, which the bridge already
-  delivers in the language a scripting consumer actually wants.
+  survivor of the format scoring, and what it would win over protobuf is self-description, which `--format json` on the
+  CLI verbs already delivers in the language a scripting consumer actually wants.
 - **Cap'n Proto / FlatBuffers**: lose twice. Their zero-copy accessors pay off when a reader touches a few fields of a
   large buffer in place, while felis decodes a rehydration frame once, in full, into an owned grid it then mutates: a
   linear decode that pays their ~2× wire overhead with no random-access dividend. Both also need an external schema
@@ -494,7 +490,7 @@ geometry it inherits, and frame `0` is not expressible.
 Interleaved transfers are the alternative to the single active-transfer state; they would need per-target state on the
 receiver to buy a concurrency the producer does not have.
 
-### One encoding on the socket, JSON at a bridge
+### One encoding on the socket
 
 Protobuf binary is the only encoding a frame body ever carries. The alternative felis does not take is a **second wire
 encoding**: proto3-JSON advertised beside the binary leg, with each connection stating which one it speaks. The pressure
@@ -513,27 +509,17 @@ decoder × change kind that "Schema evolution" below exists to abolish. One leg 
 the two legs' validation semantics, since unknown-field rejection is also what catches a hand-written producer's typo'd
 field name.
 
-So the JSON surface moves off the socket and onto a boundary that can hold it: `felis bridge`, a stdio subcommand of the
-CLI that speaks protobuf to the daemon and one JSON object per line on its own stdin and stdout. The bridge is
-LSP-shaped (one process per editor client, alive until stdin EOF) because that is the shape an editor already knows how
-to supervise. Its JSON belongs to the [CLI output contract](../../reference/cli.md): that is where the surface is
-normatively specified, and what its version number tracks, so a wire minor lands without the editor noticing, which is
-the whole reason the boundary is worth having.
+So the pressure is answered off the socket. A client in such a language writes its own reader for the one encoding, as
+the out-of-tree editor client does: the cost lands once, on the client whose language lacks the tooling, rather than on
+every later wire change. A script that needs only a verb's result runs the `felis` verb with `--format json`, whose
+shapes belong to the [CLI output contract](../../reference/cli.md) and version with it, so a wire minor lands without
+the script noticing.
 
-What a bridge client never sees is a grid, so the bridge answers none of the pressure a consumer that does mirror one
-feels. That consumer reads `felis-json` v1 instead, a named format with its own envelope, schema and compatibility
-policy ([ipc.md](../../reference/ipc.md) "Structural session JSON"), whose rows are spelled cell by cell rather than
-base64 over a packed structure, the property a second wire encoding never had. The record of why that format exists, and
-why it is owned where it is, lives in [overview.md](overview.md) "Shared wire knowledge across the satellite clients".
-
-The bridge is the one place felis's process model bends the other way round: everywhere else a persistent daemon serves
-short-lived clients, and here a client's own helper process persists to hold connections open on its behalf. It earns
-the exception by holding what a one-shot process cannot: live daemon connections, kept along the seams the wire does not
-let it multiplex across, so an editor's tenth request pays no dial. It never starts a daemon, which is the headless
-surface's standing rule rather than a bridge-specific one: an absent daemon is the automation's real bug, and a helper
-that resurrects one and then reports an empty roster has masked it ([control-surfaces.md](control-surfaces.md) "A
-session verb never spawns a daemon implicitly"). The bridge is launched by an editor, not by a person opening a window,
-so nothing about it reads as intent to have a daemon.
+A consumer that mirrors a whole grid as JSON reads `felis-json` v1 instead, a named format with its own envelope, schema
+and compatibility policy ([ipc.md](../../reference/ipc.md) "Structural session JSON"), whose rows are spelled cell by
+cell rather than base64 over a packed structure, the property a second wire encoding never had. The record of why that
+format exists, and why it is owned where it is, lives in [overview.md](overview.md) "Shared wire knowledge across the
+satellite clients".
 
 ## Bulk payloads travel by reference
 
@@ -784,7 +770,7 @@ path already enforced.
 ## Correlation rides in the body
 
 A connection carries several conversations at once: a window searching its scrollback while the grid streams, an editor
-bridge with four `sessions` requests and a notification subscription in flight. Each reply and each stream item has to
+client with four `sessions` requests and a notification subscription in flight. Each reply and each stream item has to
 name what it answers, which is a **correlation envelope**: a `request_id` on a request and the reply that echoes it, a
 `stream_id` on a stream-opening request and every item, cancel, and terminal that belongs to that stream.
 
@@ -819,7 +805,7 @@ What correlation buys is that a connection is persistent and multiplexed: severa
 one, and the answer to "which ask is this" is in the frame rather than in the connection's identity. A peer that opens
 one connection per operation is then making a choice, not obeying the wire. The `felis` CLI makes it: a verb invocation
 dials, operates, and disconnects ([control-surfaces.md](control-surfaces.md)), because a process that exits after one
-operation has nothing to reuse a connection for. The bridge, which does, holds its connections open.
+operation has nothing to reuse a connection for. A long-lived client, which does, holds its connections open.
 
 ### One identity per arm
 
@@ -889,8 +875,8 @@ dial, the attach, the supersession by a later switch. The reply cannot honestly 
 it reports the count under that name.
 
 Tracking each push through to a verdict is the alternative, and it is rejected on two counts. Nothing reads such a
-verdict: the CLI and the bridge report `queued` and exit, and the shipped agent skill drives sessions that have no
-window to move at all, so the daemon would carry the bookkeeping for no caller.
+verdict: the CLI reports `queued` and exits, and the shipped agent skill drives sessions that have no window to move at
+all, so the daemon would carry the bookkeeping for no caller.
 
 The verdict would also miss the case that most wants one. A carrier retarget lands on a different daemon, which holds no
 record of the request and cannot resolve the origin's namespace, so the origin observes nothing whatever about the

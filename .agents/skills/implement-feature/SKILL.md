@@ -75,11 +75,10 @@ teed to `daemon.log` (`docs/reference/cli.md` "Log files"; `RUST_LOG` respected,
   needs `origin/main` fetched (it compares `felis.proto` with the merge-base; `just proto-compat <rev>` names a base
   explicitly).
 - Generated artifacts must be regenerated, never hand-edited:
-  - config structs, CLI `--format` output, bridge grammar, or felis-json types changed → `just schema` and commit every
-    rewritten `*.schema.json` (`crates/felis-client-core/felis-config.schema.json`, `crates/felis-cli/schemas/`,
+  - config structs, CLI `--format` output, or felis-json types changed → `just schema` and commit every rewritten
+    `*.schema.json` (`crates/felis-client-core/felis-config.schema.json`, `crates/felis-cli/schemas/`,
     `crates/felis-grid/schemas/`); a test fails on staleness under `--all-features`.
-  - bridge conversations, felis-json frames, or the cell instances the renderer paints changed on purpose →
-    `just golden`.
+  - felis-json frames or the cell instances the renderer paints changed on purpose → `just golden`.
   - `felis.proto` changed → `just proto` (the pre-commit hook fails on a stale generated copy); see the `extend-ipc`
     skill.
   - Unicode version bumped → change the UCD pin in `dev/flake-module.nix` together with `unicode-width`, then

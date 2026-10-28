@@ -22,82 +22,31 @@ fn read(name: &str) -> Value {
     serde_json::from_str(&text).expect("the committed schema is JSON")
 }
 
-/// The bridge document `$ref`s the CLI one by its published URL, so
-/// both are registered under those URLs and nothing reaches the
-/// network.
-fn bundle() -> &'static (Schemas, SchemaIndex, SchemaIndex) {
-    static BUNDLE: OnceLock<(Schemas, SchemaIndex, SchemaIndex)> = OnceLock::new();
-    BUNDLE.get_or_init(|| {
+fn cli_schema() -> &'static (Schemas, SchemaIndex) {
+    static CLI: OnceLock<(Schemas, SchemaIndex)> = OnceLock::new();
+    CLI.get_or_init(|| {
         let cli_url = format!("{RAW_BASE}/felis-cli-v1.schema.json");
-        let bridge_url = format!("{RAW_BASE}/felis-bridge-v1.schema.json");
         let mut compiler = Compiler::new();
         compiler
             .add_resource(&cli_url, read("felis-cli-v1.schema.json"))
             .unwrap();
-        compiler
-            .add_resource(&bridge_url, read("felis-bridge-v1.schema.json"))
-            .unwrap();
         let mut schemas = Schemas::new();
         let cli = compiler.compile(&cli_url, &mut schemas).unwrap();
-        let bridge = compiler.compile(&bridge_url, &mut schemas).unwrap();
-        (schemas, cli, bridge)
+        (schemas, cli)
     })
-}
-
-fn check(index: fn(&'static (Schemas, SchemaIndex, SchemaIndex)) -> SchemaIndex, object: &Value) {
-    let entry = bundle();
-    if let Err(err) = entry.0.validate(object, index(entry)) {
-        panic!("{object} does not validate against the published schema:\n{err}");
-    }
-}
-
-fn is_valid(
-    index: fn(&'static (Schemas, SchemaIndex, SchemaIndex)) -> SchemaIndex,
-    object: &Value,
-) -> bool {
-    let entry = bundle();
-    entry.0.validate(object, index(entry)).is_ok()
 }
 
 /// Every object a `--format json` / `--format jsonl` verb writes.
 pub(crate) fn assert_cli_object(object: &Value) {
-    check(|entry| entry.1, object);
-}
-
-/// Every object `felis bridge` writes on stdout.
-pub(crate) fn assert_bridge_object(object: &Value) {
-    check(|entry| entry.2, object);
+    let (schemas, index) = cli_schema();
+    if let Err(err) = schemas.validate(object, *index) {
+        panic!("{object} does not validate against the published schema:\n{err}");
+    }
 }
 
 pub(crate) fn cli_object_is_valid(object: &Value) -> bool {
-    is_valid(|entry| entry.1, object)
-}
-
-pub(crate) fn bridge_object_is_valid(object: &Value) -> bool {
-    is_valid(|entry| entry.2, object)
-}
-
-/// A bridge stdin line, which the response document does not describe:
-/// requests are a separate `$defs` entry.
-pub(crate) fn bridge_request_is_valid(request: &Value) -> bool {
-    static REQUEST: OnceLock<(Schemas, SchemaIndex)> = OnceLock::new();
-    let (schemas, index) = REQUEST.get_or_init(|| {
-        let cli_url = format!("{RAW_BASE}/felis-cli-v1.schema.json");
-        let bridge_url = format!("{RAW_BASE}/felis-bridge-v1.schema.json");
-        let mut compiler = Compiler::new();
-        compiler
-            .add_resource(&cli_url, read("felis-cli-v1.schema.json"))
-            .unwrap();
-        compiler
-            .add_resource(&bridge_url, read("felis-bridge-v1.schema.json"))
-            .unwrap();
-        let mut schemas = Schemas::new();
-        let index = compiler
-            .compile(&format!("{bridge_url}#/$defs/request"), &mut schemas)
-            .unwrap();
-        (schemas, index)
-    });
-    schemas.validate(request, *index).is_ok()
+    let (schemas, index) = cli_schema();
+    schemas.validate(object, *index).is_ok()
 }
 
 /// A fixture names the class it claims to be: payload objects stay
