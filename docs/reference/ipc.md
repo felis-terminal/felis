@@ -310,9 +310,10 @@ being serviced independently ("Backpressure" below).
 
 Every frame body is **Protocol Buffers binary**: one encoding, on every connection, in both directions. There is no
 per-connection encoding statement and nothing to negotiate. A client whose language has no protobuf runtime reaches the
-daemon by running the CLI verbs with `--format json` instead ("CLI clients" below). Why protobuf, and why the second
-JSON wire was rejected, is recorded in [the IPC design explanation](../explanation/architecture/ipc.md#why-protobuf) and
-its "One encoding on the socket" section.
+daemon by running the CLI verbs with `--format json` or, for a stream, `--format jsonl` instead ("CLI clients" below).
+Why protobuf, and why the second JSON wire was rejected, is recorded in
+[the IPC design explanation](../explanation/architecture/ipc.md#why-protobuf) and its "One encoding on the socket"
+section.
 
 The wire schema is `crates/felis-protocol/proto/felis.proto` (package `felis.v1`), and it is the **single
 machine-readable authority** for the schema layer: the message families, every message and field with its meaning in the
@@ -1198,11 +1199,11 @@ rather than `Ops` is in [the IPC design explanation](../explanation/architecture
 
 Scripted automation drives the daemon through the same wire as the GUI client, exposed via headless subcommands on the
 `felis` binary: `felis sessions {list, info, send, kill, evict, switch, capture, spawn, search, tag}`. A client in any
-language reaches these verbs by running them with `--format json` ([cli.md](cli.md) "Machine output"). Attaching a
-window is not a `sessions` verb: `felis attach <id>` launches the GUI client (`felis-client`) directly (see
-[workspace.md](workspace.md)). Bare `felis` execs the GUI client to create a new session. The CLI surface itself is
-[cli.md](cli.md): its verbs, flags, exit codes and `--format` machine output are normative there. Surface boundaries are
-in [control-surfaces.md](../explanation/architecture/control-surfaces.md).
+language reaches these verbs by running them with `--format json` or, for a stream, `--format jsonl` ([cli.md](cli.md)
+"Machine output"). Attaching a window is not a `sessions` verb: `felis attach <id>` launches the GUI client
+(`felis-client`) directly (see [workspace.md](workspace.md)). Bare `felis` execs the GUI client to create a new session.
+The CLI surface itself is [cli.md](cli.md): its verbs, flags, exit codes and `--format` machine output are normative
+there. Surface boundaries are in [control-surfaces.md](../explanation/architecture/control-surfaces.md).
 
 The verbs ride the families documented under ["Message families"](#message-families) above: the `Ops` requests (`list`,
 `info`, `kill`, `evict`, `switch`, `tag`, `spawn`), and the `Search` / `Region` conversations for `search` and

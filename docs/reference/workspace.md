@@ -111,8 +111,8 @@ sibling repos in the ecosystem.
 Two mechanisms carry that column. A language with a protobuf runtime generates its codec from `felis.proto` and speaks
 the daemon wire directly, which is the only encoding the socket has ([ipc.md](ipc.md)), and a language without one does
 the same with a generator of its own and the golden vectors in [row-codec.md](row-codec.md). A client that carries no
-codec at all runs the CLI verbs with `--format json`, whose shapes belong to the CLI output contract ([cli.md](cli.md))
-rather than to the wire, so wire-minor growth reaches it as nothing at all.
+codec at all runs the CLI verbs with `--format json` or, for a stream, `--format jsonl`, whose shapes belong to the CLI
+output contract ([cli.md](cli.md)) rather than to the wire, so wire-minor growth reaches it as nothing at all.
 
 Five shared wire facilities support external satellite clients (see
 [overview.md](../explanation/architecture/overview.md) for architectural tradeoffs):

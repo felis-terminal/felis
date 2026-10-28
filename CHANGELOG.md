@@ -56,9 +56,10 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 ### Removed
 
 - **CLI**: `felis bridge` and its `felis-bridge-v1.schema.json` are gone. A client in another language dials the daemon
-  socket and speaks the protobuf wire (`docs/reference/ipc.md`), or drives the `felis` verbs with `--format json`. The
-  CLI schema drops the unversioned `point_body`, `stream_item_body` and `error_body` definitions, and `error.kind` no
-  longer lists `malformed_request`, `canceled` or `output_failed`, which only the bridge produced.
+  socket and speaks the protobuf wire (`docs/reference/ipc.md`), or drives the `felis` verbs with `--format json` or,
+  for a stream, `--format jsonl`. The CLI schema drops the unversioned `point_body`, `stream_item_body` and `error_body`
+  definitions, and `error.kind` no longer lists `malformed_request`, `canceled` or `output_failed`, which only the
+  bridge produced.
 - **Wire**: `felis-protocol` drops `MAX_BRIDGE_LINE_BYTES`.
 
 ### Fixed

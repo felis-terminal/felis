@@ -555,8 +555,8 @@ The concrete reuse-path table is in [reference/workspace.md](../../reference/wor
 felis core ships no `examples/` bridge crates: each reuse path is realized by a sibling repo in the ecosystem, built
 only because a real consumer exists (principle 1: add only what earns its place). A client whose language can generate a
 protobuf reader speaks the wire directly, and so does one whose language cannot, with a reader of its own; a script that
-carries no codec runs the CLI verbs with `--format json`. Neither path adds a second wire encoding ([ipc.md](ipc.md)
-"One encoding on the socket").
+carries no codec runs the CLI verbs with `--format json` or, for a stream, `--format jsonl`. Neither path adds a second
+wire encoding ([ipc.md](ipc.md) "One encoding on the socket").
 
 ### Shared wire knowledge across the satellite clients
 
