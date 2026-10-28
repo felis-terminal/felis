@@ -7,8 +7,8 @@ use std::{path::Path, sync::Arc};
 use swash::{FontDataRef, FontRef, Stretch, StringId, Style};
 
 use super::{
-    FaceProvider, FaceSource, MONOSPACE_FALLBACK_FAMILIES, REGULAR_WEIGHT, ResolvedFace,
-    ascii_is_fixed_pitch, closest_style,
+    FaceProvider, FaceSource, MONOSPACE_FALLBACK_FAMILIES, ResolvedFace, ascii_is_fixed_pitch,
+    closest_style,
 };
 use crate::{FaceStyle, FontBytes, ShapingError};
 
@@ -127,7 +127,7 @@ impl FaceProvider for FileSet {
 
     /// The set's own default when it names one, else the families every
     /// platform tries, else its first fixed-pitch family by name.
-    fn default_monospace(&self) -> Result<(usize, String), ShapingError> {
+    fn default_monospace(&self, weight: u16) -> Result<(usize, String), ShapingError> {
         let mut fixed_pitch: Vec<&str> = self
             .faces
             .iter()
@@ -141,7 +141,7 @@ impl FaceProvider for FileSet {
             .chain(MONOSPACE_FALLBACK_FAMILIES.iter().copied())
             .chain(fixed_pitch)
             .find_map(|family| {
-                let id = self.find_face(family, REGULAR_WEIGHT, false)?;
+                let id = self.find_face(family, weight, false)?;
                 Some((id, family.to_owned()))
             })
             .ok_or(ShapingError::NoFont)

@@ -45,6 +45,7 @@ unicode-width = { workspace = true }
 # libfontconfig, so it is checked outside Linux.
 [target.'cfg(unix)'.dev-dependencies]
 yeslogic-fontconfig-sys = { workspace = true }
+libloading = { workspace = true }
 
 [[bench]]
 name = "shape_cache"

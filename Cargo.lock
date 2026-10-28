@@ -1491,6 +1491,7 @@ name = "felis-shaping"
 version = "0.1.0"
 dependencies = [
  "criterion",
+ "libloading",
  "memmap2",
  "objc2-core-foundation",
  "objc2-core-text",

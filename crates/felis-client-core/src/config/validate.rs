@@ -6,9 +6,10 @@ use std::path::Path;
 use serde::de::DeserializeOwned;
 
 use super::{
-    Backdrop, ConfigDiagnostics, CursorBlinkMode, DiagnosticKind, EffectiveConfig, FontSizeIssue,
-    IndexedSlotError, MAX_POST_STAGES, Osc52Policy, PostShader, RangeIssue, ShaderAnimation,
-    ShaderEvent, StageParse, fallback_entry, indexed_slot, parse_stage, post_stage_entries,
+    AxisIssue, Backdrop, ConfigDiagnostics, CursorBlinkMode, DiagnosticKind, EffectiveConfig,
+    FontSizeIssue, IndexedSlotError, MAX_FONT_WEIGHT, MAX_POST_STAGES, MIN_FONT_WEIGHT,
+    Osc52Policy, PostShader, RangeIssue, ShaderAnimation, ShaderEvent, StageParse, axis_value,
+    fallback_entry, font_weight, indexed_slot, parse_stage, post_stage_entries,
 };
 
 /// Which half of the document a merged value came from. The merged table
@@ -59,6 +60,7 @@ pub(super) fn run(
     mouse_scroll_multiplier(config, origin, diagnostics);
     shell_command(config, origin, diagnostics);
     fallback_chain(document, origin, diagnostics);
+    font_weights_and_axes(document, origin, diagnostics);
     palette(config, origin, diagnostics);
     keymap(config, origin, diagnostics);
     post_stages(config, document, origin, diagnostics);
@@ -269,6 +271,88 @@ fn fallback_chain(
             );
         }
     }
+}
+
+/// Re-validates from the merged document: a refused `weight` or `axes`
+/// entry leaves nothing in [`EffectiveConfig`].
+fn font_weights_and_axes(
+    document: &toml::Table,
+    origin: &KeyOrigin<'_>,
+    diagnostics: &mut ConfigDiagnostics,
+) {
+    for table in [None, Some("bold"), Some("italic"), Some("bold_italic")] {
+        let at = |key| {
+            let mut path = vec!["font"];
+            path.extend(table);
+            path.push(key);
+            path
+        };
+        let weight_path = at("weight");
+        let weight_key = weight_path.join(".");
+        if let Some(value) = lookup(document, &weight_path)
+            && font_weight(value).is_none()
+        {
+            diagnostics.warning(
+                DiagnosticKind::Value,
+                Some(origin.attribute(&weight_path, &weight_key)),
+                format!(
+                    "{value} is not an integer in {MIN_FONT_WEIGHT}..={MAX_FONT_WEIGHT}; ignored"
+                ),
+            );
+        }
+        let axes_path = at("axes");
+        let Some(axes) = lookup(document, &axes_path) else {
+            continue;
+        };
+        let axes_key = axes_path.join(".");
+        let Some(entries) = axes.as_table() else {
+            report_axis(
+                origin,
+                diagnostics,
+                &axes_path,
+                &axes_key,
+                AxisIssue::NotATable,
+                &weight_key,
+            );
+            continue;
+        };
+        for (tag, value) in entries {
+            if let Err(issue) = axis_value(tag, value) {
+                let mut path = axes_path.clone();
+                path.push(tag);
+                let written = if tag
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+                {
+                    format!("{axes_key}.{tag}")
+                } else {
+                    format!("{axes_key}.{tag:?}")
+                };
+                report_axis(origin, diagnostics, &path, &written, issue, &weight_key);
+            }
+        }
+    }
+}
+
+fn report_axis(
+    origin: &KeyOrigin<'_>,
+    diagnostics: &mut ConfigDiagnostics,
+    path: &[&str],
+    written: &str,
+    issue: AxisIssue,
+    weight_key: &str,
+) {
+    let message = match issue {
+        AxisIssue::NotATable => "takes a table of axis tag to number; ignored".to_owned(),
+        AxisIssue::BadTag => "not a 4-character ASCII axis tag; ignored".to_owned(),
+        AxisIssue::Weight => format!("the weight is set with `{weight_key}`; ignored"),
+        AxisIssue::BadValue => "not a number in [-32768, 32767]; ignored".to_owned(),
+    };
+    diagnostics.warning(
+        DiagnosticKind::Value,
+        Some(origin.attribute(path, written)),
+        message,
+    );
 }
 
 fn palette(config: &EffectiveConfig, origin: &KeyOrigin<'_>, diagnostics: &mut ConfigDiagnostics) {

@@ -11,9 +11,14 @@ use std::{
     sync::{Arc, Mutex, OnceLock, PoisonError},
 };
 
-use skrifa::raw::{
-    FontData, FontRead,
-    tables::cmap::{Cmap, CmapSubtable, MapVariant},
+use skrifa::{
+    MetadataProvider,
+    instance::{LocationRef, Size},
+    raw::{
+        FontData, FontRead,
+        tables::cmap::{Cmap, CmapSubtable, MapVariant},
+        types::F2Dot14,
+    },
 };
 pub use swash::GlyphId;
 use swash::{
@@ -100,6 +105,7 @@ impl FontStyle {
 
 pub struct Font {
     bytes: FontBytes,
+    index: u32,
     offset: u32,
     /// Generated once at load: swash keys its per-font shape and scale
     /// caches on this, so a fresh key per `font_ref()` call would rebuild
@@ -119,7 +125,7 @@ pub struct Font {
 impl Font {
     pub fn load_default() -> Result<Self, ShapingError> {
         let provider = system_provider()?;
-        let (id, _) = provider.default_monospace()?;
+        let (id, _) = provider.default_monospace(REGULAR_WEIGHT)?;
         Self::load_face_id(&provider, id)
     }
 
@@ -201,6 +207,7 @@ impl Font {
         };
         let font = Self {
             bytes,
+            index: face_index,
             offset,
             key: swash::CacheKey::new(),
             color,
@@ -228,18 +235,21 @@ impl Font {
         Some(self.with_coords(coords, settings))
     }
 
-    /// The regular view a stack draws: a face loaded at a named instance
-    /// stays there, any other variable face moves to `wght` 400.
-    fn into_regular_view(self) -> Self {
-        if !self.coords.is_empty() {
-            return self;
+    /// The regular view a stack draws at `weight` and `axes`, `None` for
+    /// `self` unmoved. With `weight` unset, a face loaded at a named
+    /// instance keeps its `wght` and any other variable face moves to 400.
+    fn regular_view(&self, weight: Option<u16>, axes: &[AxisSetting]) -> Option<Self> {
+        let weight = weight.or_else(|| self.coords.is_empty().then_some(REGULAR_WEIGHT));
+        if weight.is_none() && axes.is_empty() {
+            return None;
         }
-        self.at_style(REGULAR_WEIGHT, false).unwrap_or(self)
+        self.at_position(weight, false, axes)
     }
 
     fn with_coords(&self, coords: Vec<NormalizedCoord>, position: Vec<(swash::Tag, f32)>) -> Self {
         Self {
             bytes: self.bytes.clone(),
+            index: self.index,
             offset: self.offset,
             key: swash::CacheKey::new(),
             color: self.color,
@@ -255,20 +265,35 @@ impl Font {
     /// face loaded at a named instance keeps its width or optical size.
     #[must_use]
     pub fn at_style(&self, weight: u16, italic: bool) -> Option<Self> {
+        self.at_position(Some(weight), italic, &[])
+    }
+
+    /// [`Self::at_style`] with `wght` left where it is when `weight` is
+    /// `None`, then `axes` applied over it. An explicit `ital` or `slnt`
+    /// replaces the italic position; `wght` and axes the face lacks are
+    /// skipped.
+    fn at_position(&self, weight: Option<u16>, italic: bool, axes: &[AxisSetting]) -> Option<Self> {
         let face = self.font_ref();
         let variations = face.variations();
-        let axes: Vec<AxisInfo> = variations
+        let axes_info: Vec<AxisInfo> = variations
             .map(|v| AxisInfo {
                 tag: v.tag(),
                 default: v.default_value(),
             })
             .collect();
-        let target = f32::from(weight);
+        let has_axis = |tag| axes_info.iter().any(|a| a.tag == tag);
+        let explicit: Vec<(swash::Tag, f32)> = axes
+            .iter()
+            .map(|a| (swash::tag_from_bytes(&a.tag), a.value))
+            .filter(|&(tag, _)| tag != WGHT && has_axis(tag))
+            .collect();
+        let explicit_slant = explicit.iter().any(|&(tag, _)| tag == ITAL || tag == SLNT);
+        let target = f32::from(weight.unwrap_or(REGULAR_WEIGHT));
         let mut settings = Vec::new();
-        if axes.iter().any(|a| a.tag == WGHT) {
+        if weight.is_some() && has_axis(WGHT) {
             settings.push((WGHT, target));
         }
-        if italic {
+        if italic && !explicit_slant {
             let instances: Vec<InstanceInfo> = face
                 .instances()
                 .map(|i| InstanceInfo {
@@ -280,7 +305,11 @@ impl Font {
                     values: i.values().collect(),
                 })
                 .collect();
-            settings.extend(italic_position(target, &axes, &instances));
+            settings.extend(italic_position(target, &axes_info, &instances));
+        }
+        for (tag, value) in explicit {
+            settings.retain(|&(t, _)| t != tag);
+            settings.push((tag, value));
         }
         if settings.is_empty() {
             return None;
@@ -298,7 +327,7 @@ impl Font {
         let mut coords: Vec<NormalizedCoord> = variations
             .normalized_coords(settings.iter().copied())
             .collect();
-        for ((coord, axis), base) in coords.iter_mut().zip(&axes).zip(&self.coords) {
+        for ((coord, axis), base) in coords.iter_mut().zip(&axes_info).zip(&self.coords) {
             if !settings.iter().any(|(tag, _)| *tag == axis.tag) {
                 *coord = *base;
             }
@@ -314,13 +343,21 @@ impl Font {
     /// `None` when the face does not map `c`.
     #[must_use]
     pub fn advance_px(&self, c: char, px: f32) -> Option<f32> {
-        let face = self.font_ref();
-        let glyph_id = face.charmap().map(c);
-        (glyph_id != 0).then(|| {
-            face.glyph_metrics(&self.coords)
-                .scale(px)
-                .advance_width(glyph_id)
-        })
+        let glyph_id = self.font_ref().charmap().map(c);
+        if glyph_id == 0 {
+            return None;
+        }
+        self.advance_width(glyph_id, px)
+    }
+
+    /// swash reads a varied advance from `HVAR` alone; skrifa falls back
+    /// to `gvar`'s phantom points, which a face without `HVAR` (Monaspace's
+    /// variable builds) varies its width through.
+    fn advance_width(&self, glyph_id: GlyphId, px: f32) -> Option<f32> {
+        let font = skrifa::FontRef::from_index(self.bytes.as_ref().as_ref(), self.index).ok()?;
+        let coords: Vec<F2Dot14> = self.coords.iter().map(|&c| F2Dot14::from_bits(c)).collect();
+        font.glyph_metrics(Size::new(px), LocationRef::new(&coords))
+            .advance_width(glyph_id.into())
     }
 
     /// The glyph the face's cmap format 14 subtable names for `base`
@@ -409,14 +446,7 @@ impl Font {
     pub fn cell_metrics(&self, px: f32) -> CellMetrics {
         let face = self.font_ref();
         let metrics = face.metrics(&self.coords).scale(px);
-        let glyph_id = face.charmap().map('M');
-        let width = if glyph_id != 0 {
-            face.glyph_metrics(&self.coords)
-                .scale(px)
-                .advance_width(glyph_id)
-        } else {
-            px * 0.6
-        };
+        let width = self.advance_px('M', px).unwrap_or(px * 0.6);
         CellMetrics::from_scaled(width, metrics.ascent, metrics.descent, metrics.leading)
     }
 }
@@ -592,10 +622,15 @@ fn sort_ignoring_case(families: &mut [InstalledFamily]) {
 /// `None` inherits: `family` derives from base `font.family` at the target
 /// weight/slant, while `features` inherits base `font.features` (`Some([])`
 /// opts out).
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct FaceSpec {
     pub family: Option<String>,
     pub features: Option<Vec<String>>,
+    /// On the OpenType 1–1000 scale; `None` keeps the style's own weight
+    /// (italic takes regular's, bold italic takes bold's). Read with
+    /// `axes` for a styled table only: a fallback entry takes the styles'.
+    pub weight: Option<u16>,
+    pub axes: Vec<AxisSetting>,
 }
 
 impl FaceSpec {
@@ -603,13 +638,23 @@ impl FaceSpec {
     pub fn named(family: impl Into<String>) -> Self {
         Self {
             family: Some(family.into()),
-            features: None,
+            ..Self::default()
         }
     }
 }
 
+/// One variation-axis coordinate, in the axis's design units.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AxisSetting {
+    pub tag: [u8; 4],
+    pub value: f32,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct StyleFaces<'a> {
+    /// `font.weight`; `None` draws the face as the provider matched it.
+    pub regular_weight: Option<u16>,
+    pub regular_axes: &'a [AxisSetting],
     pub bold: &'a FaceSpec,
     pub italic: &'a FaceSpec,
     pub bold_italic: &'a FaceSpec,
@@ -620,14 +665,59 @@ impl Default for StyleFaces<'_> {
         const INHERIT: &FaceSpec = &FaceSpec {
             family: None,
             features: None,
+            weight: None,
+            axes: Vec::new(),
         };
         Self {
+            regular_weight: None,
+            regular_axes: &[],
             bold: INHERIT,
             italic: INHERIT,
             bold_italic: INHERIT,
         }
     }
 }
+
+impl StyleFaces<'_> {
+    /// The configured weight of each style, by [`FontStyle::index`].
+    const fn weights(&self) -> StyleWeights {
+        let italic = match self.italic.weight {
+            Some(weight) => Some(weight),
+            None => self.regular_weight,
+        };
+        let bold_italic = match self.bold_italic.weight {
+            Some(weight) => Some(weight),
+            None => self.bold.weight,
+        };
+        [self.regular_weight, self.bold.weight, italic, bold_italic]
+    }
+
+    /// `over`'s own axes merged over the regular ones it inherits when it
+    /// derives from `font.family`; the weight and slant axes are the
+    /// style's own.
+    fn axes_of(&self, over: &FaceSpec) -> Vec<AxisSetting> {
+        let mut axes: Vec<AxisSetting> = if over.family.is_none() {
+            self.regular_axes
+                .iter()
+                .filter(|a| !matches!(&a.tag, b"wght" | b"ital" | b"slnt"))
+                .copied()
+                .collect()
+        } else {
+            Vec::new()
+        };
+        for setting in &over.axes {
+            axes.retain(|a| a.tag != setting.tag);
+            axes.push(*setting);
+        }
+        axes
+    }
+}
+
+/// A configured weight per [`FontStyle::index`]; `None` keeps that
+/// style's default path.
+type StyleWeights = [Option<u16>; 4];
+
+const UNSET_WEIGHTS: StyleWeights = [None; 4];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -850,8 +940,8 @@ impl SystemFaces {
     }
 }
 
-/// The bold, italic and bold-italic slots with the weight and slant each
-/// is queried at.
+/// The bold, italic and bold-italic slots with the slant each is queried
+/// at and the weight it takes when none is configured.
 const STYLE_VARIANTS: [(FontStyle, u16, bool); 3] = [
     (
         FontStyle {
@@ -882,6 +972,9 @@ const STYLE_VARIANTS: [(FontStyle, u16, bool); 3] = [
 /// Faces one family's styles resolved to, so two styles landing on the
 /// same file and axis position share one `Arc`.
 struct StyleViews<'a, P: FaceProvider> {
+    /// Axis settings already reported as not applying to a face, so
+    /// styles sharing a face log each once.
+    reported: HashSet<(P::Id, [u8; 4], u32)>,
     provider: &'a P,
     /// Set for a fallback, whose styles are looked up among its own
     /// family's faces rather than by name.
@@ -893,18 +986,68 @@ struct StyleViews<'a, P: FaceProvider> {
 }
 
 impl<'a, P: FaceProvider> StyleViews<'a, P> {
-    fn new(provider: &'a P, regular_id: P::Id, regular: &Arc<Font>) -> Self {
+    /// `matched` is the regular face as the provider matched it, which
+    /// the styles move from; `regular` is the view drawn, whose position
+    /// a style must not inherit.
+    fn new(provider: &'a P, regular_id: P::Id, matched: &Arc<Font>, regular: &Arc<Font>) -> Self {
         Self {
+            reported: HashSet::new(),
             provider,
             sibling_of: None,
-            by_id: HashMap::from([(regular_id, Some(regular.clone()))]),
+            by_id: HashMap::from([(regular_id, Some(matched.clone()))]),
             views: HashMap::from([((regular_id, regular.coords.clone()), regular.clone())]),
             regular: regular.clone(),
         }
     }
 
-    /// `family` at `weight` and `slant`; `None` when no face matches.
-    fn resolve(&mut self, family: &str, weight: u16, italic: bool) -> Option<Arc<Font>> {
+    /// Logs each of `axes` that `font` (face `id`) lacks or holds only
+    /// in a narrower range, which drawing ignores or clamps.
+    fn report_axes(&mut self, id: P::Id, font: &Font, axes: &[AxisSetting]) {
+        for setting in axes {
+            let face = font.font_ref();
+            let axis = face
+                .variations()
+                .find_by_tag(swash::tag_from_bytes(&setting.tag));
+            let applies = axis
+                .is_some_and(|axis| (axis.min_value()..=axis.max_value()).contains(&setting.value));
+            if applies
+                || !self
+                    .reported
+                    .insert((id, setting.tag, setting.value.to_bits()))
+            {
+                continue;
+            }
+            let tag = String::from_utf8_lossy(&setting.tag);
+            match axis {
+                None => warn!(
+                    face = font.display_name(),
+                    %tag,
+                    "the face has no such variation axis; ignoring it"
+                ),
+                Some(axis) if !(axis.min_value()..=axis.max_value()).contains(&setting.value) => {
+                    warn!(
+                        face = font.display_name(),
+                        %tag,
+                        value = setting.value,
+                        min = axis.min_value(),
+                        max = axis.max_value(),
+                        "variation axis value outside the face's range; clamping"
+                    );
+                }
+                Some(_) => {}
+            }
+        }
+    }
+
+    /// `family` at `weight`, `slant` and `axes`; `None` when no face
+    /// matches.
+    fn resolve(
+        &mut self,
+        family: &str,
+        weight: u16,
+        italic: bool,
+        axes: &[AxisSetting],
+    ) -> Option<Arc<Font>> {
         let id = match self.sibling_of {
             Some(of) => self.provider.find_sibling(of, family, weight, italic),
             None => self.provider.find_face(family, weight, italic),
@@ -923,8 +1066,9 @@ impl<'a, P: FaceProvider> StyleViews<'a, P> {
         let Some(face) = loaded else {
             return Some(self.regular.clone());
         };
+        self.report_axes(id, &face, axes);
         let italic = italic && self.provider.resolve_face(id).is_some_and(|f| !f.slanted);
-        Some(match face.at_style(weight, italic) {
+        Some(match face.at_position(Some(weight), italic, axes) {
             Some(view) => self
                 .views
                 .entry((id, view.coords.clone()))
@@ -1146,8 +1290,10 @@ impl FontStack {
         explicit_fallbacks: &[FaceSpec],
         styles: &StyleFaces<'_>,
     ) -> Result<Self, ShapingError> {
+        let weights = styles.weights();
+        let regular_weight = weights[FontStyle::REGULAR.index()].unwrap_or(REGULAR_WEIGHT);
         let named = primary_family.and_then(|name| {
-            let Some(id) = db.find_face(name, REGULAR_WEIGHT, false) else {
+            let Some(id) = db.find_face(name, regular_weight, false) else {
                 warn!(
                     family = name,
                     "font family not found; falling back to monospace"
@@ -1169,14 +1315,18 @@ impl FontStack {
         let (regular_id, loaded, base_family, requested) = if let Some((id, loaded, name)) = named {
             (id, loaded, name.to_owned(), name)
         } else {
-            let (id, family) = db.default_monospace()?;
+            let (id, family) = db.default_monospace(regular_weight)?;
             (id, Font::load_face_id(db, id)?, family, "monospace")
         };
-        let regular = Arc::new(loaded.into_regular_view());
+        let matched = Arc::new(loaded);
+        let regular = matched
+            .regular_view(styles.regular_weight, styles.regular_axes)
+            .map_or_else(|| matched.clone(), Arc::new);
         let mut stack = Self::with_primary_features(regular.clone(), primary_features.to_vec());
         stack.load_styled(
             db,
             regular_id,
+            &matched,
             &regular,
             &base_family,
             primary_features,
@@ -1199,11 +1349,11 @@ impl FontStack {
                 );
                 break;
             }
-            let Some(id) = db.find_face(family, REGULAR_WEIGHT, false) else {
+            let Some(id) = db.find_face(family, regular_weight, false) else {
                 warn!(family, "font.fallback entry not installed; skipping");
                 continue;
             };
-            match fallback_views_of(db, id, family) {
+            match fallback_views_of(db, id, family, weights) {
                 Ok(views) if declared.insert(id) => {
                     stack = stack.with_fallback_views(views, features);
                 }
@@ -1252,12 +1402,15 @@ impl FontStack {
         &mut self,
         db: &P,
         regular_id: P::Id,
+        matched: &Arc<Font>,
         regular: &Arc<Font>,
         base_family: &str,
         base_features: &[String],
         styles: &StyleFaces<'_>,
     ) {
-        let mut resolver = StyleViews::new(db, regular_id, regular);
+        let mut resolver = StyleViews::new(db, regular_id, matched, regular);
+        resolver.report_axes(regular_id, regular, styles.regular_axes);
+        let weights = styles.weights();
         let overrides = [styles.bold, styles.italic, styles.bold_italic];
         for ((style, weight, italic), over) in STYLE_VARIANTS.into_iter().zip(overrides) {
             let idx = style.index();
@@ -1266,12 +1419,16 @@ impl FontStack {
                 .features
                 .as_deref()
                 .map_or_else(|| base_features.to_vec(), <[String]>::to_vec);
-            self.chains[idx][0] = resolver.resolve(family, weight, italic).unwrap_or_else(|| {
-                if over.family.is_some() {
-                    warn!("styled font family not installed; using regular");
-                }
-                regular.clone()
-            });
+            let weight = weights[idx].unwrap_or(weight);
+            let axes = styles.axes_of(over);
+            self.chains[idx][0] = resolver
+                .resolve(family, weight, italic, &axes)
+                .unwrap_or_else(|| {
+                    if over.family.is_some() {
+                        warn!("styled font family not installed; using regular");
+                    }
+                    regular.clone()
+                });
         }
     }
 
@@ -1466,26 +1623,30 @@ impl FontStack {
 }
 
 /// `family` as a fallback entry, one face per [`FontStyle::index`], each
-/// drawn from the family's own face for that style. A color face, or a
-/// style whose face would drop a codepoint the regular one covers, draws
-/// the regular face.
+/// drawn from the family's own face for that style at `weights`. A color
+/// face, or a style whose face would drop a codepoint the regular one
+/// covers, draws the regular face.
 fn fallback_views_of<P: FaceProvider>(
     db: &P,
     id: P::Id,
     family: &str,
+    weights: StyleWeights,
 ) -> Result<[Arc<Font>; 4], ShapingError> {
-    let loaded = Font::load_face_id(db, id)?;
-    let regular = Arc::new(loaded.into_regular_view());
+    let matched = Arc::new(Font::load_face_id(db, id)?);
+    let regular = matched
+        .regular_view(weights[FontStyle::REGULAR.index()], &[])
+        .map_or_else(|| matched.clone(), Arc::new);
     let mut views = std::array::from_fn(|_| regular.clone());
     if regular.has_color_glyphs() {
         return Ok(views);
     }
     let mut resolver = StyleViews {
         sibling_of: Some(id),
-        ..StyleViews::new(db, id, &regular)
+        ..StyleViews::new(db, id, &matched, &regular)
     };
     for (style, weight, italic) in STYLE_VARIANTS {
-        if let Some(view) = resolver.resolve(family, weight, italic) {
+        let weight = weights[style.index()].unwrap_or(weight);
+        if let Some(view) = resolver.resolve(family, weight, italic, &[]) {
             views[style.index()] = covering_or_regular(view, &regular, family, style);
         }
     }
@@ -1540,7 +1701,7 @@ fn append_cascade<P: FaceProvider>(
                 continue;
             }
             let family = db.family_of(face.id).unwrap_or_default();
-            let verdict = match fallback_views_of(db, face.id, &family) {
+            let verdict = match fallback_views_of(db, face.id, &family, UNSET_WEIGHTS) {
                 Ok(views) => {
                     let color = views[0].has_color_glyphs();
                     loaded.insert(face.id, views);
@@ -1617,7 +1778,7 @@ fn undeclared_views<P: FaceProvider>(
     if declared.contains(&id) {
         return None;
     }
-    fallback_views_of(db, id, family).ok()
+    fallback_views_of(db, id, family, UNSET_WEIGHTS).ok()
 }
 
 /// Pixel-space cell metrics at a given font size. `glyph_box` is the
@@ -2321,7 +2482,9 @@ mod tests {
     #[test]
     fn the_default_monospace_face_loads_with_nonzero_metrics() {
         let provider = pinned_system();
-        let (id, family) = provider.default_monospace().expect("a monospace face");
+        let (id, family) = provider
+            .default_monospace(REGULAR_WEIGHT)
+            .expect("a monospace face");
         assert_eq!(family, TEST_FONT_FAMILY);
         let font = Font::load_face_id(&provider, id).expect("load font");
         let metrics = font.cell_metrics(16.0);
@@ -2753,7 +2916,7 @@ mod tests {
         db.set_monospace_family("FreeMono");
 
         let (id, family) = db
-            .default_monospace()
+            .default_monospace(REGULAR_WEIGHT)
             .expect("a fixed-pitch face is installed");
         let (style, monospace) = db.traits_of(id).expect("resolved id names a face");
         assert!(monospace);
@@ -3195,6 +3358,287 @@ mod tests {
         assert!(!Arc::ptr_eq(face(false, false), face(true, false)));
     }
 
+    const fn setting(tag: [u8; 4], value: f32) -> AxisSetting {
+        AxisSetting { tag, value }
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn a_regular_weight_moves_regular_and_italic_and_leaves_bold_at_700() {
+        let styles = StyleFaces {
+            regular_weight: Some(500),
+            ..StyleFaces::default()
+        };
+        let (stack, _) = pinned_variable_stack(&styles);
+        let regular = stack.styled_primary(FontStyle::REGULAR);
+        let medium = design_value(regular, WGHT, 500.0);
+        let bold = design_value(regular, WGHT, 700.0);
+        assert_eq!(axis_coord(regular, *b"wght"), medium);
+        assert_eq!(axis_coord(stack.styled_primary(ITALIC), *b"wght"), medium);
+        assert_eq!(axis_coord(stack.styled_primary(BOLD), *b"wght"), bold);
+        assert_eq!(
+            axis_coord(stack.styled_primary(BOLD_ITALIC), *b"wght"),
+            bold
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn bold_italic_takes_the_bold_weight_unless_it_sets_its_own() {
+        let bold = FaceSpec {
+            weight: Some(800),
+            ..FaceSpec::default()
+        };
+        let styles = StyleFaces {
+            bold: &bold,
+            ..StyleFaces::default()
+        };
+        let (stack, _) = pinned_variable_stack(&styles);
+        let regular = stack.styled_primary(FontStyle::REGULAR);
+        let heavy = design_value(regular, WGHT, 800.0);
+        assert_eq!(axis_coord(stack.styled_primary(BOLD), *b"wght"), heavy);
+        assert_eq!(
+            axis_coord(stack.styled_primary(BOLD_ITALIC), *b"wght"),
+            heavy
+        );
+
+        let bold_italic = FaceSpec {
+            weight: Some(600),
+            ..FaceSpec::default()
+        };
+        let styles = StyleFaces {
+            bold: &bold,
+            bold_italic: &bold_italic,
+            ..StyleFaces::default()
+        };
+        let (stack, _) = pinned_variable_stack(&styles);
+        assert_eq!(
+            axis_coord(stack.styled_primary(BOLD_ITALIC), *b"wght"),
+            design_value(regular, WGHT, 600.0)
+        );
+    }
+
+    /// `instances().nth(16)` of the pinned variable face is `SemiWide
+    /// Regular`.
+    #[cfg(not(windows))]
+    #[test]
+    fn an_unset_regular_weight_keeps_a_named_instance_and_a_set_one_moves_only_wght() {
+        let files = pinned_files(&["truetype/Monaspace Neon Var.ttf"]);
+        let mut db = FileSet::default();
+        db.add_file(&files[0]).expect("the variable face reads");
+        let default = Font::try_load_with(&db, "Monaspace Neon Var").expect("the face loads");
+        let semiwide = || default.at_instance(16).expect("the instance exists");
+        assert!(semiwide().regular_view(None, &[]).is_none());
+        let light = semiwide().regular_view(Some(300), &[]).expect("wght moves");
+        assert_eq!(
+            axis_coord(&light, *b"wdth"),
+            axis_coord(&semiwide(), *b"wdth")
+        );
+        assert_eq!(
+            axis_coord(&light, *b"wght"),
+            design_value(&light, WGHT, 300.0)
+        );
+    }
+
+    /// The pinned variable face has no `HVAR`; its `wdth` axis varies the
+    /// advance through `gvar` phantom points alone.
+    #[cfg(not(windows))]
+    #[test]
+    fn a_width_axis_without_hvar_widens_the_cell() {
+        let files = pinned_files(&["truetype/Monaspace Neon Var.ttf"]);
+        let mut db = FileSet::default();
+        db.add_file(&files[0]).expect("the variable face reads");
+        let default = Font::try_load_with(&db, "Monaspace Neon Var").expect("the face loads");
+        let wide = default
+            .regular_view(None, &[setting(*b"wdth", 125.0)])
+            .expect("wdth moves");
+        let (narrow, wide) = (default.cell_metrics(20.0), wide.cell_metrics(20.0));
+        assert!(
+            wide.width > narrow.width,
+            "{} must exceed {}",
+            wide.width,
+            narrow.width
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn static_styles_are_matched_at_their_configured_weights() {
+        let files = pinned_files(&[
+            "opentype/MonaspaceNeon-Light.otf",
+            "opentype/MonaspaceNeon-LightItalic.otf",
+            "opentype/MonaspaceNeon-Regular.otf",
+            "opentype/MonaspaceNeon-Italic.otf",
+            "opentype/MonaspaceNeon-Bold.otf",
+            "opentype/MonaspaceNeon-ExtraBold.otf",
+            "opentype/MonaspaceNeon-ExtraBoldItalic.otf",
+        ]);
+        let bold = FaceSpec {
+            weight: Some(800),
+            ..FaceSpec::default()
+        };
+        let styles = StyleFaces {
+            regular_weight: Some(300),
+            bold: &bold,
+            ..StyleFaces::default()
+        };
+        let stack = FontStack::discover_in_files(&files, Some("Monaspace Neon"), &[], &[], &styles)
+            .expect("the pinned faces load");
+        let name = |style| stack.styled_primary(style).display_name();
+        assert!(
+            name(FontStyle::REGULAR).ends_with("Light"),
+            "{}",
+            name(FontStyle::REGULAR)
+        );
+        assert!(name(ITALIC).ends_with("Light Italic"), "{}", name(ITALIC));
+        assert!(name(BOLD).ends_with("ExtraBold"), "{}", name(BOLD));
+        assert!(
+            name(BOLD_ITALIC).ends_with("ExtraBold Italic"),
+            "{}",
+            name(BOLD_ITALIC)
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn derived_styles_inherit_the_regular_axes_but_not_its_slant() {
+        let regular_axes = [setting(*b"wdth", 110.0), setting(*b"slnt", -5.0)];
+        let styles = StyleFaces {
+            regular_axes: &regular_axes,
+            ..StyleFaces::default()
+        };
+        let (stack, _) = pinned_variable_stack(&styles);
+        let regular = stack.styled_primary(FontStyle::REGULAR);
+        let wdth = |font: &Font| axis_coord(font, *b"wdth");
+        let slnt = |font: &Font| axis_coord(font, *b"slnt");
+        let width = design_value(regular, swash::tag_from_bytes(b"wdth"), 110.0);
+        assert_eq!(wdth(regular), width);
+        assert_eq!(slnt(regular), design_value(regular, SLNT, -5.0));
+        for style in [BOLD, ITALIC, BOLD_ITALIC] {
+            assert_eq!(wdth(stack.styled_primary(style)), width, "{style:?}");
+        }
+        assert_eq!(slnt(stack.styled_primary(BOLD)), 0);
+        assert_eq!(
+            slnt(stack.styled_primary(ITALIC)),
+            design_value(regular, SLNT, -11.0),
+            "italic keeps its named slant"
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn a_style_naming_its_own_family_inherits_no_axes() {
+        let regular_axes = [setting(*b"wdth", 110.0)];
+        let bold = FaceSpec::named("Monaspace Neon Var");
+        let styles = StyleFaces {
+            regular_axes: &regular_axes,
+            bold: &bold,
+            ..StyleFaces::default()
+        };
+        let (stack, _) = pinned_variable_stack(&styles);
+        assert_eq!(axis_coord(stack.styled_primary(BOLD), *b"wdth"), 0);
+        assert_ne!(axis_coord(stack.styled_primary(BOLD_ITALIC), *b"wdth"), 0);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn an_explicit_slant_replaces_the_named_italic_position() {
+        let italic = FaceSpec {
+            axes: vec![setting(*b"slnt", -4.0)],
+            ..FaceSpec::default()
+        };
+        let styles = StyleFaces {
+            italic: &italic,
+            ..StyleFaces::default()
+        };
+        let (stack, _) = pinned_variable_stack(&styles);
+        let regular = stack.styled_primary(FontStyle::REGULAR);
+        assert_eq!(
+            axis_coord(stack.styled_primary(ITALIC), *b"slnt"),
+            design_value(regular, SLNT, -4.0)
+        );
+        assert_eq!(
+            axis_coord(stack.styled_primary(BOLD_ITALIC), *b"slnt"),
+            design_value(regular, SLNT, -11.0)
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn wght_and_axes_the_face_lacks_leave_the_view_unmoved() {
+        let regular_axes = [setting(*b"ZZZZ", 1.0), setting(*b"wght", 800.0)];
+        let styles = StyleFaces {
+            regular_axes: &regular_axes,
+            ..StyleFaces::default()
+        };
+        let (moved, _) = pinned_variable_stack(&styles);
+        let (unset, _) = pinned_variable_stack(&StyleFaces::default());
+        for index in 0..4 {
+            let style = FontStyle::from_index(index);
+            assert_eq!(
+                moved.styled_primary(style).coords,
+                unset.styled_primary(style).coords,
+                "{style:?}"
+            );
+        }
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn an_axis_value_outside_the_face_range_is_clamped() {
+        let regular_axes = [setting(*b"wdth", 500.0)];
+        let styles = StyleFaces {
+            regular_axes: &regular_axes,
+            ..StyleFaces::default()
+        };
+        let (stack, _) = pinned_variable_stack(&styles);
+        let regular = stack.styled_primary(FontStyle::REGULAR);
+        let widest = regular
+            .font_ref()
+            .variations()
+            .find_by_tag(swash::tag_from_bytes(b"wdth"))
+            .expect("the face has wdth")
+            .max_value();
+        assert_eq!(
+            axis_coord(regular, *b"wdth"),
+            design_value(regular, swash::tag_from_bytes(b"wdth"), widest)
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn an_explicit_fallback_is_drawn_at_the_configured_weights() {
+        let mut files = test_font_files();
+        files.push(test_font_dir().join("truetype/Monaspace Neon Var.ttf"));
+        let bold = FaceSpec {
+            weight: Some(800),
+            ..FaceSpec::default()
+        };
+        let styles = StyleFaces {
+            regular_weight: Some(300),
+            bold: &bold,
+            ..StyleFaces::default()
+        };
+        let stack = FontStack::discover_in_files(
+            &files,
+            Some(TEST_FONT_FAMILY),
+            &[],
+            &[FaceSpec::named("Monaspace Neon Var")],
+            &styles,
+        )
+        .expect("the pinned faces load");
+        let fallback = |style| stack.font_at(1, style);
+        let regular = fallback(FontStyle::REGULAR);
+        assert_eq!(
+            axis_coord(regular, *b"wght"),
+            design_value(regular, WGHT, 300.0)
+        );
+        assert_eq!(
+            axis_coord(fallback(BOLD), *b"wght"),
+            design_value(regular, WGHT, 800.0)
+        );
+    }
+
     /// The pinned faces named by path under `$FELIS_TEST_FONT_DIR`.
     fn pinned_files(names: &[&str]) -> Vec<std::path::PathBuf> {
         let dir = test_font_dir();
@@ -3368,8 +3812,8 @@ mod tests {
             self.files.find_sibling(id, family, weight, italic)
         }
 
-        fn default_monospace(&self) -> Result<(P::Id, String), ShapingError> {
-            self.files.default_monospace()
+        fn default_monospace(&self, weight: u16) -> Result<(P::Id, String), ShapingError> {
+            self.files.default_monospace(weight)
         }
 
         fn resolve_face(&self, id: P::Id) -> Option<ResolvedFace> {
@@ -3548,10 +3992,11 @@ mod tests {
             .and_then(|i| i.name(Some("en")).map(|n| n.to_string()));
         assert_eq!(name.as_deref(), Some("SemiWide Regular"));
 
-        let semiwide = default
-            .at_instance(16)
-            .expect("the instance exists")
-            .into_regular_view();
+        let semiwide = default.at_instance(16).expect("the instance exists");
+        assert!(
+            semiwide.regular_view(None, &[]).is_none(),
+            "the regular view stays at the instance"
+        );
         let width = axis_coord(&semiwide, *b"wdth");
         assert_ne!(width, 0, "SemiWide must sit off the default width");
 
@@ -3585,7 +4030,7 @@ mod tests {
             Some(0)
         }
 
-        fn default_monospace(&self) -> Result<(usize, String), ShapingError> {
+        fn default_monospace(&self, _: u16) -> Result<(usize, String), ShapingError> {
             Ok((0, "primary".to_owned()))
         }
 
@@ -3661,7 +4106,7 @@ mod tests {
             Some(1)
         }
 
-        fn default_monospace(&self) -> Result<(usize, String), ShapingError> {
+        fn default_monospace(&self, _: u16) -> Result<(usize, String), ShapingError> {
             Ok((0, TEST_FONT_FAMILY.to_owned()))
         }
 
@@ -4090,6 +4535,7 @@ mod tests {
         let spec = FaceSpec {
             family: Some(family.to_owned()),
             features,
+            ..FaceSpec::default()
         };
         let stack = FontStack::auto_discover_in(
             &provider,
@@ -4159,17 +4605,10 @@ mod tests {
             &[],
             &StyleFaces {
                 bold: &FaceSpec {
-                    family: None,
                     features: Some(bold_features.clone()),
+                    ..FaceSpec::default()
                 },
-                italic: &FaceSpec {
-                    family: None,
-                    features: None,
-                },
-                bold_italic: &FaceSpec {
-                    family: None,
-                    features: None,
-                },
+                ..StyleFaces::default()
             },
         )
         .expect("primary must load");
@@ -4495,6 +4934,7 @@ mod tests {
             &db,
             regular_id,
             &regular,
+            &regular,
             base,
             &[],
             &StyleFaces {
@@ -4544,7 +4984,15 @@ mod tests {
         };
 
         let mut stack = FontStack::with_primary_features(regular.clone(), Vec::new());
-        stack.load_styled(&db, regular_id, &regular, base, &[], &StyleFaces::default());
+        stack.load_styled(
+            &db,
+            regular_id,
+            &regular,
+            &regular,
+            base,
+            &[],
+            &StyleFaces::default(),
+        );
         assert!(
             !Arc::ptr_eq(
                 stack.styled_primary(FontStyle::REGULAR),
@@ -4577,7 +5025,7 @@ mod tests {
             ..StyleFaces::default()
         };
         let mut stack2 = FontStack::with_primary_features(regular.clone(), Vec::new());
-        stack2.load_styled(&db, regular_id, &regular, base, &[], &missing);
+        stack2.load_styled(&db, regular_id, &regular, &regular, base, &[], &missing);
         assert!(
             Arc::ptr_eq(stack2.styled_primary(bold), &regular),
             "a missing bold override falls back to the regular face",

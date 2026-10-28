@@ -40,9 +40,9 @@ pub(crate) trait FaceProvider {
         self.find_face(family, weight, italic)
     }
 
-    /// The face drawn when `font.family` is unset or names nothing, and
-    /// the family name its styled faces derive from.
-    fn default_monospace(&self) -> Result<(Self::Id, String), ShapingError>;
+    /// The face drawn when `font.family` is unset or names nothing, at
+    /// `weight`, and the family name its styled faces derive from.
+    fn default_monospace(&self, weight: u16) -> Result<(Self::Id, String), ShapingError>;
 
     fn resolve_face(&self, id: Self::Id) -> Option<ResolvedFace>;
 

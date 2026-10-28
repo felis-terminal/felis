@@ -563,10 +563,51 @@
         }
       ]
     },
+    "FallbackEntry": {
+      "description": "One `font.fallback` entry. It takes no `weight` or `axes`: it is\ndrawn at the styles' weights, and axis tags are specific to one font.",
+      "type": "object",
+      "properties": {
+        "family": {
+          "description": "The family tried for a character the faces before it miss.",
+          "type": "string"
+        },
+        "features": {
+          "description": "Feature override. Omitted ⇒ inherits `font.features`; `[]` opts\nout.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "default": null,
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "family"
+      ]
+    },
     "FontConfig": {
       "description": "Font selection.",
       "type": "object",
       "properties": {
+        "axes": {
+          "description": "Variation-axis coordinates of the regular face: 4-character tag →\nnumber (`{ wdth = 90 }`). `wght` is set with `weight`. Styles\nthat derive from `font.family` inherit these, less `ital`/`slnt`.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "number",
+            "maximum": 32767.0,
+            "minimum": -32768.0
+          },
+          "default": {},
+          "propertyNames": {
+            "not": {
+              "const": "wght"
+            },
+            "pattern": "^[\\x20-\\x7E]{4}$"
+          }
+        },
         "bold": {
           "description": "`[font.bold]`: the face for bold cells (kitty's `bold_font`).\nA missing table (or a missing `family` within it) derives the\nbold face from `font.family` at bold weight.",
           "$ref": "#/$defs/FontStyleConfig",
@@ -600,7 +641,7 @@
           "type": "array",
           "default": [],
           "items": {
-            "$ref": "#/$defs/FontStyleConfig"
+            "$ref": "#/$defs/FallbackEntry"
           }
         },
         "family": {
@@ -632,6 +673,16 @@
           ],
           "format": "float",
           "default": null
+        },
+        "weight": {
+          "description": "Regular weight, an integer on the OpenType 1–1000 scale; italic\ninherits it. Omitted ⇒ the face as matched (a variable face at\n400).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "maximum": 1000,
+          "minimum": 1
         }
       }
     },
@@ -659,6 +710,22 @@
       "description": "One font-face table: a per-style override or fallback entry.\n\nIf a style's named family has no matching face installed, the primary face\nis reused; felis does not synthesize fake bold or oblique\n(docs/explanation/rendering/text-shaping.md).",
       "type": "object",
       "properties": {
+        "axes": {
+          "description": "Variation-axis coordinates, merged per tag over the `font.axes`\nthis style inherits when it sets no `family`.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "number",
+            "maximum": 32767.0,
+            "minimum": -32768.0
+          },
+          "default": {},
+          "propertyNames": {
+            "not": {
+              "const": "wght"
+            },
+            "pattern": "^[\\x20-\\x7E]{4}$"
+          }
+        },
         "family": {
           "description": "Family override. Omitted ⇒ derived from the base `font.family`\nat this style's weight/slant.",
           "type": [
@@ -675,6 +742,16 @@
           "items": {
             "type": "string"
           }
+        },
+        "weight": {
+          "description": "Weight, an integer on the OpenType 1–1000 scale. Omitted ⇒ 700\nfor bold; italic takes `font.weight` and bold italic\n`font.bold.weight`.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "maximum": 1000,
+          "minimum": 1
         }
       }
     },

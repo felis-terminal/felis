@@ -64,6 +64,56 @@ fn library() -> Result<&'static Fc, ShapingError> {
     .map_err(|detail| ShapingError::Fontconfig(format!("load {SONAME}: {detail}")))
 }
 
+/// fontconfig's map between the OpenType weight scale and its own
+/// (`fcweight.c`), interpolated linearly between these points. Ported
+/// rather than called: `FcWeightFromOpenTypeDouble` is missing from
+/// older libraries, and a missing symbol would stop every window opening.
+const WEIGHT_SCALE: [(f64, f64); 13] = [
+    (0.0, 0.0),
+    (100.0, 0.0),
+    (200.0, 40.0),
+    (300.0, 50.0),
+    (350.0, 55.0),
+    (380.0, 75.0),
+    (400.0, 80.0),
+    (500.0, 100.0),
+    (600.0, 180.0),
+    (700.0, 200.0),
+    (800.0, 205.0),
+    (900.0, 210.0),
+    (1000.0, 215.0),
+];
+
+/// Interpolates `x` along `points` read as `(from, to)` pairs; `None`
+/// outside them.
+fn interpolate(points: impl Iterator<Item = (f64, f64)> + Clone, x: f64) -> Option<f64> {
+    let (first, _) = points.clone().next()?;
+    if x.is_nan() || x < first {
+        return None;
+    }
+    let mut prev = None;
+    for (from, to) in points {
+        if x <= from {
+            return Some(match prev {
+                Some((pf, pt)) if from > pf => pt + (to - pt) * (x - pf) / (from - pf),
+                _ => to,
+            });
+        }
+        prev = Some((from, to));
+    }
+    None
+}
+
+fn weight_from_opentype(weight: f64) -> f64 {
+    interpolate(WEIGHT_SCALE.iter().copied(), weight.min(1000.0)).unwrap_or(-1.0)
+}
+
+fn weight_to_opentype(weight: f64) -> f64 {
+    // fontconfig skips the flat (0, 100) segment going back, so its own
+    // weight 0 reads as OpenType 100.
+    interpolate(WEIGHT_SCALE[1..].iter().map(|&(ot, fc)| (fc, ot)), weight).unwrap_or(-1.0)
+}
+
 pub(crate) struct Fontconfig {
     lib: &'static Fc,
     config: *mut FcConfig,
@@ -241,7 +291,7 @@ impl Fontconfig {
             let pattern = Pattern { lib, raw };
             let family = c_string(family);
             (lib.FcPatternAddString)(raw, FC_FAMILY.as_ptr(), family.as_ptr().cast());
-            (lib.FcPatternAddInteger)(raw, FC_WEIGHT.as_ptr(), fc_weight(weight));
+            (lib.FcPatternAddDouble)(raw, FC_WEIGHT.as_ptr(), Self::fc_weight(weight));
             let slant = if italic {
                 FC_SLANT_ITALIC
             } else {
@@ -455,8 +505,23 @@ impl Fontconfig {
             italic: self
                 .integer(pattern, FC_SLANT)
                 .is_some_and(|s| s != FC_SLANT_ROMAN),
-            weight: opentype_weight(self.integer(pattern, FC_WEIGHT)?),
+            weight: Self::opentype_weight(self.double(pattern, FC_WEIGHT)?)?,
         })
+    }
+
+    fn fc_weight(weight: u16) -> f64 {
+        weight_from_opentype(f64::from(weight))
+    }
+
+    /// `None` for a weight off fontconfig's scale, which it maps to -1.
+    fn opentype_weight(weight: f64) -> Option<u16> {
+        let opentype = weight_to_opentype(weight);
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "clamped into 1..=1000 first"
+        )]
+        (opentype >= 1.0).then(|| opentype.round().min(1000.0) as u16)
     }
 
     fn face_of(&self, pattern: *mut FcPattern) -> Option<Face> {
@@ -513,6 +578,15 @@ impl Fontconfig {
         (found == FcResultMatch).then_some(value)
     }
 
+    /// An integer value reads as a double too.
+    fn double(&self, pattern: *mut FcPattern, object: &CStr) -> Option<f64> {
+        let mut value = 0.0;
+        // SAFETY: `pattern` is live.
+        let found =
+            unsafe { (self.lib.FcPatternGetDouble)(pattern, object.as_ptr(), 0, &raw mut value) };
+        (found == FcResultMatch).then_some(value)
+    }
+
     fn boolean(&self, pattern: *mut FcPattern, object: &CStr) -> Option<bool> {
         let mut value: FcBool = FC_FALSE;
         // SAFETY: `pattern` is live.
@@ -562,8 +636,8 @@ impl FaceProvider for Fontconfig {
         Some(self.record(found))
     }
 
-    fn default_monospace(&self) -> Result<(usize, String), ShapingError> {
-        let query = self.query("monospace", REGULAR_WEIGHT, false);
+    fn default_monospace(&self, weight: u16) -> Result<(usize, String), ShapingError> {
+        let query = self.query("monospace", weight, false);
         let face = self
             .best_match(&query)
             .and_then(|m| self.face_of(m.raw))
@@ -677,35 +751,6 @@ fn split_index(packed: u32) -> (u32, Option<usize>) {
     (face, named)
 }
 
-/// OpenType `usWeightClass` against fontconfig's weight scale at the
-/// named weights: a query asks only for 400 and 700, and a listing
-/// reports the nearest named weight, so the table needs no interpolation.
-const WEIGHT_SCALE: [(u16, c_int); 9] = [
-    (100, 0),
-    (200, 40),
-    (300, 50),
-    (400, 80),
-    (500, 100),
-    (600, 180),
-    (700, 200),
-    (800, 205),
-    (900, 210),
-];
-
-fn fc_weight(weight: u16) -> c_int {
-    WEIGHT_SCALE
-        .iter()
-        .min_by_key(|(ot, _)| ot.abs_diff(weight))
-        .map_or(80, |&(_, fc)| fc)
-}
-
-fn opentype_weight(weight: c_int) -> u16 {
-    WEIGHT_SCALE
-        .iter()
-        .min_by_key(|(_, fc)| fc.abs_diff(weight))
-        .map_or(REGULAR_WEIGHT, |&(ot, _)| ot)
-}
-
 fn c_string(s: &str) -> CString {
     CString::new(s.replace('\0', "")).unwrap_or_default()
 }
@@ -813,12 +858,65 @@ mod tests {
     }
 
     #[test]
-    fn weights_map_onto_fontconfig_scale() {
-        assert_eq!(fc_weight(400), 80);
-        assert_eq!(fc_weight(700), 200);
-        for (ot, fc) in WEIGHT_SCALE {
-            assert_eq!(opentype_weight(fc), ot);
+    fn the_ported_weight_map_matches_the_host_fontconfig() {
+        // SAFETY: loading libfontconfig runs only its initializers, and
+        // both symbols are `double (double)` in `fontconfig.h`.
+        let lib = unsafe { libloading::Library::new(SONAME) }.expect("libfontconfig");
+        let symbol = |name: &[u8]| {
+            // SAFETY: as above; `lib` outlives every call below.
+            *unsafe { lib.get::<unsafe extern "C" fn(f64) -> f64>(name) }.expect("symbol")
+        };
+        let from = symbol(b"FcWeightFromOpenTypeDouble\0");
+        let to = symbol(b"FcWeightToOpenTypeDouble\0");
+        for ot in [
+            -5.0, 0.0, 50.0, 100.0, 150.0, 350.0, 390.0, 450.0, 530.0, 999.0, 1000.0, 1200.0,
+        ] {
+            // SAFETY: pure arithmetic functions of their argument.
+            assert_eq!(weight_from_opentype(ot), unsafe { from(ot) }, "from {ot}");
         }
+        for fc in [-5.0, 0.0, 20.0, 55.0, 77.0, 80.0, 90.0, 190.0, 215.0, 300.0] {
+            // SAFETY: as above.
+            assert_eq!(weight_to_opentype(fc), unsafe { to(fc) }, "to {fc}");
+        }
+    }
+
+    #[test]
+    fn weights_map_continuously_onto_fontconfig_scale() {
+        assert_eq!(Fontconfig::fc_weight(400).to_bits(), 80.0_f64.to_bits());
+        assert_eq!(Fontconfig::fc_weight(700).to_bits(), 200.0_f64.to_bits());
+        let between = Fontconfig::fc_weight(450);
+        assert!(80.0 < between && between < 100.0, "{between}");
+        for weight in [100, 350, 400, 450, 530, 700, 900] {
+            assert_eq!(
+                Fontconfig::opentype_weight(Fontconfig::fc_weight(weight)),
+                Some(weight)
+            );
+        }
+        assert_eq!(Fontconfig::opentype_weight(-5.0), None);
+    }
+
+    #[test]
+    fn a_weight_between_static_faces_resolves_to_a_neighbor() {
+        let Some(fc) = pinned("") else { return };
+        let file_at = |weight| {
+            let id = fc
+                .find_face(TEST_FONT_FAMILY, weight, false)
+                .expect("installed");
+            let FaceSource::File(path) = fc.resolve_face(id).expect("recorded").source else {
+                panic!("fontconfig faces are files");
+            };
+            path.file_name()
+                .expect("a file")
+                .to_string_lossy()
+                .into_owned()
+        };
+        assert_eq!(file_at(300), "MonaspaceNeon-Light.otf");
+        assert_eq!(file_at(500), "MonaspaceNeon-Medium.otf");
+        let between = file_at(350);
+        assert!(
+            ["MonaspaceNeon-Light.otf", "MonaspaceNeon-Regular.otf"].contains(&between.as_str()),
+            "{between}"
+        );
     }
 
     #[test]
@@ -963,7 +1061,9 @@ ENDFONT
             &StyleFaces::default(),
         )
         .expect("the monospace face loads");
-        let (_, monospace) = fc.default_monospace().expect("a monospace face");
+        let (_, monospace) = fc
+            .default_monospace(REGULAR_WEIGHT)
+            .expect("a monospace face");
         assert!(stack.primary().display_name().starts_with(&monospace));
     }
 
@@ -1045,7 +1145,9 @@ ENDFONT
         ) else {
             return;
         };
-        let (_, family) = fc.default_monospace().expect("a monospace face");
+        let (_, family) = fc
+            .default_monospace(REGULAR_WEIGHT)
+            .expect("a monospace face");
         assert_eq!(family, "Monaspace Xenon");
     }
 

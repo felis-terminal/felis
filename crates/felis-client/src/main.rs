@@ -62,8 +62,8 @@ use felis_render_core::{
     overlay::{PreeditOverlay, SearchHitSpan, SearchOverlay},
 };
 use felis_render_wgpu::{
-    DEFAULT_FONT_SIZE_LOGICAL_PX, FaceSpec, MouseState, PostParam, PostStageSource, Renderer,
-    RendererConfig, SurfaceError, TRAIL_SHADER_SOURCE, TrailState, Warmup,
+    AxisSetting, DEFAULT_FONT_SIZE_LOGICAL_PX, FaceSpec, MouseState, PostParam, PostStageSource,
+    Renderer, RendererConfig, SurfaceError, TRAIL_SHADER_SOURCE, TrailState, Warmup,
 };
 use felis_transport::{ClientDriver, Delivery, FrameReader, FrameWriter, Incoming, OwnedFrame};
 use std::sync::{Mutex, PoisonError};
@@ -798,10 +798,12 @@ fn font_settings_differ(a: &RendererConfig, b: &RendererConfig) -> bool {
         || styled_faces_differ(a, b)
 }
 
-/// A `[font.bold]` / `[font.italic]` / `[font.bold_italic]` change loads
-/// different styled faces, so it needs the rediscovering reload path.
+/// A weight, axes, `[font.bold]`, `[font.italic]` or `[font.bold_italic]`
+/// change loads different faces, so it needs the rediscovering reload path.
 fn styled_faces_differ(a: &RendererConfig, b: &RendererConfig) -> bool {
-    a.font_bold != b.font_bold
+    a.font_weight != b.font_weight
+        || a.font_axes != b.font_axes
+        || a.font_bold != b.font_bold
         || a.font_italic != b.font_italic
         || a.font_bold_italic != b.font_bold_italic
 }
@@ -864,6 +866,8 @@ fn renderer_config_with(
         theme_palette: cfg.theme.palette.clone().into_overrides(),
         font_fallbacks: cfg.font.fallback.iter().map(face_spec).collect(),
         font_features: cfg.font.features.clone(),
+        font_weight: cfg.font.weight,
+        font_axes: axis_settings(&cfg.font.axes),
         font_bold: face_spec(&cfg.font.bold),
         font_italic: face_spec(&cfg.font.italic),
         font_bold_italic: face_spec(&cfg.font.bold_italic),
@@ -888,7 +892,20 @@ fn face_spec(c: &config::FontStyleConfig) -> FaceSpec {
     FaceSpec {
         family: c.family.clone(),
         features: c.features.clone(),
+        weight: c.weight,
+        axes: axis_settings(&c.axes),
     }
+}
+
+fn axis_settings(axes: &std::collections::BTreeMap<String, f32>) -> Vec<AxisSetting> {
+    axes.iter()
+        .filter_map(|(tag, &value)| {
+            Some(AxisSetting {
+                tag: tag.as_bytes().try_into().ok()?,
+                value,
+            })
+        })
+        .collect()
 }
 
 /// A stage whose file cannot be read is left out here; one that does not
