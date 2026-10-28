@@ -2093,6 +2093,26 @@ message OpsToDaemonMsg {
       },
       (felis.v1.field_since) = {minor: 1}
     ];
+    // Setup only: a connection carrying a send carries nothing else,
+    // and it never attaches.
+    OpsSend send = 21 [
+      (felis.v1.arm) = {
+        direction: DIRECTION_TO_DAEMON
+        correlation: CORRELATION_REQUEST_OPENER
+        modes: MODE_OPS
+        phases: PHASE_SETUP
+      },
+      (felis.v1.field_since) = {minor: 3}
+    ];
+    OpsSendAndWait send_and_wait = 23 [
+      (felis.v1.arm) = {
+        direction: DIRECTION_TO_DAEMON
+        correlation: CORRELATION_STREAM_OPENER
+        modes: MODE_OPS
+        phases: PHASE_SETUP
+      },
+      (felis.v1.field_since) = {minor: 3}
+    ];
   }
   Correlation correlation = 100;
 }
@@ -2172,6 +2192,37 @@ message OpsToClientMsg {
         phases: PHASE_SETUP
       },
       (felis.v1.field_since) = {minor: 1}
+    ];
+    OpsSent sent = 22 [
+      (felis.v1.arm) = {
+        direction: DIRECTION_TO_CLIENT
+        correlation: CORRELATION_REQUEST_REPLY
+        modes: MODE_OPS
+        phases: PHASE_SETUP
+      },
+      (felis.v1.field_since) = {minor: 3}
+    ];
+    // The first item of an OpsSendAndWait stream: its send's outcome.
+    // An outcome other than `id` is followed by the stream's error
+    // terminal.
+    OpsSent wait_sent = 24 [
+      (felis.v1.arm) = {
+        direction: DIRECTION_TO_CLIENT
+        correlation: CORRELATION_STREAM_ITEM
+        modes: MODE_OPS
+        phases: PHASE_SETUP
+      },
+      (felis.v1.field_since) = {minor: 3}
+    ];
+    // The second and last item of an OpsSendAndWait stream.
+    OpsMark mark = 25 [
+      (felis.v1.arm) = {
+        direction: DIRECTION_TO_CLIENT
+        correlation: CORRELATION_STREAM_ITEM
+        modes: MODE_OPS
+        phases: PHASE_SETUP
+      },
+      (felis.v1.field_since) = {minor: 3}
     ];
   }
   Correlation correlation = 100;
@@ -2532,6 +2583,98 @@ enum UpgradeRefusal {
   UPGRADE_REFUSAL_DRAINING = 7 [(felis.v1.value_since) = 1];
 }
 
+// Client → daemon. Write `steps` to the named session's program, in
+// order. The daemon validates every step against the session's current
+// modes and grid before it writes any, admits them one at a time into
+// the session's input budget, and replies once the session has taken
+// the last of them.
+message OpsSend {
+  // Lowercase hex session-id prefix (1-32 digits), resolved
+  // daemon-side.
+  string id_prefix = 1;
+  // At most MAX_SEND_STEPS (4 096). The encoded request is bounded by
+  // MAX_SEND_BODY_BYTES; both are checked before the body is decoded.
+  repeated SendStep steps = 2;
+}
+
+// One input step of an OpsSend or OpsSendAndWait.
+message SendStep {
+  // REQUIRED: an unset step is malformed and is refused at decode.
+  oneof step {
+    // Text pasted as InputMsg paste is: bracketed when the program
+    // asked for it. At most MAX_PASTE_BYTES.
+    bytes paste = 1;
+    // Bytes written untouched, as InputMsg key_bytes. At most
+    // MAX_RAW_INPUT_BYTES.
+    bytes raw = 2;
+    // Encoded against the program's keyboard modes when it is written.
+    InputKeyEvent key = 3;
+    // Encoded against the program's mouse modes when it is written; the
+    // validation refuses one those modes would drop at that moment.
+    InputMouseEvent mouse = 4;
+  }
+}
+
+// Daemon → client. How an OpsSend ended: the reply to OpsSend, and the
+// first item of an OpsSendAndWait stream.
+message OpsSent {
+  // REQUIRED: an unset outcome is malformed and is refused at decode.
+  oneof outcome {
+    // Every step was written and the session took the last one; the
+    // session's full id (16 bytes, big-endian).
+    bytes id = 1;
+    // No pooled session matches the prefix. Nothing was written.
+    ResolvedNoMatch no_match = 2;
+    // More than one pooled session matches; the count.
+    uint32 ambiguous = 3;
+    SendRefused refused = 4;
+  }
+}
+
+// The refusal half of OpsSent.
+message SendRefused {
+  SendRefusal reason = 1;
+  // The 0-based step the refusal names, for a reason about one step.
+  optional uint32 step = 2;
+  // Human-readable specifics. Never parsed.
+  string detail = 3;
+}
+
+// Why an OpsSend or OpsSendAndWait wrote nothing, or not everything.
+enum SendRefusal {
+  SEND_REFUSAL_UNSPECIFIED = 0;
+  // A step carries more than its kind admits. Nothing was written.
+  SEND_REFUSAL_INVALID_STEP = 1 [(felis.v1.value_since) = 3];
+  // A mouse step the program would not see: it has no mouse reporting
+  // on, reports clicks but not drags, or the cell is off the grid.
+  // Nothing was written.
+  SEND_REFUSAL_UNREPORTED = 2 [(felis.v1.value_since) = 3];
+  // More than MAX_SEND_STEPS steps, or a body past MAX_SEND_BODY_BYTES.
+  // Nothing was written.
+  SEND_REFUSAL_TOO_LARGE = 3 [(felis.v1.value_since) = 3];
+  // The session ended before it took the last step; an OpsSend only.
+  SEND_REFUSAL_SESSION_ENDED = 4 [(felis.v1.value_since) = 3];
+}
+
+// Client → daemon. Watch the named session for its next OSC 133 D mark,
+// then send `steps` exactly as OpsSend does; empty steps only watch.
+// The watch starts before the first step is written. The stream yields
+// OpsToClientMsg wait_sent, then one mark, then its ConnEnd; a session
+// that ends first ends it with STREAM_ERROR_REASON_UNAVAILABLE.
+message OpsSendAndWait {
+  // As OpsSend.id_prefix.
+  string id_prefix = 1;
+  // As OpsSend.steps.
+  repeated SendStep steps = 2;
+}
+
+// Daemon → client. The first OSC 133 D mark the session emitted after
+// the watch started.
+message OpsMark {
+  // The mark's exit code; absent for a bare D.
+  optional uint32 exit_code = 1;
+}
+
 // Client → daemon. Ask what this daemon is and what it is holding.
 message OpsStatus {}
 
@@ -2655,11 +2798,14 @@ enum SubjectKind {
 
 message RegionToDaemonMsg {
   oneof msg {
+    // In setup, only a session-addressed request on an Ops connection
+    // (RegionRequest.session, RegionRows.session).
     RegionRequest request = 1 [(felis.v1.arm) = {
       direction: DIRECTION_TO_DAEMON
       correlation: CORRELATION_REQUEST_OPENER
       modes: MODE_WINDOW
       modes: MODE_OPS
+      phases: PHASE_SETUP
       phases: PHASE_ATTACHED
     }];
     RegionRows rows = 3 [(felis.v1.arm) = {
@@ -2667,6 +2813,7 @@ message RegionToDaemonMsg {
       correlation: CORRELATION_STREAM_OPENER
       modes: MODE_WINDOW
       modes: MODE_OPS
+      phases: PHASE_SETUP
       phases: PHASE_ATTACHED
     }];
   }
@@ -2680,6 +2827,7 @@ message RegionToClientMsg {
       correlation: CORRELATION_REQUEST_REPLY
       modes: MODE_WINDOW
       modes: MODE_OPS
+      phases: PHASE_SETUP
       phases: PHASE_ATTACHED
     }];
     RegionRow row = 4 [(felis.v1.arm) = {
@@ -2687,6 +2835,7 @@ message RegionToClientMsg {
       correlation: CORRELATION_STREAM_ITEM
       modes: MODE_WINDOW
       modes: MODE_OPS
+      phases: PHASE_SETUP
       phases: PHASE_ATTACHED
     }];
     RegionRowsDone rows_done = 5 [(felis.v1.arm) = {
@@ -2694,6 +2843,7 @@ message RegionToClientMsg {
       correlation: CORRELATION_STREAM_ITEM
       modes: MODE_WINDOW
       modes: MODE_OPS
+      phases: PHASE_SETUP
       phases: PHASE_ATTACHED
     }];
   }
@@ -2707,6 +2857,8 @@ message RegionRequest {
   RegionSource source = 1;
   // Reconstruct SGR color/style (true) or plain text (false).
   bool ansi = 2;
+  // As SearchQuery.session: required unattached, absent attached.
+  optional bytes session = 3 [(felis.v1.field_since) = {minor: 3}];
 }
 
 // Daemon → client. The serialized region.
@@ -2732,6 +2884,8 @@ message RegionRows {
   // Emit only the youngest max_rows rows (still oldest-first); unset
   // emits the whole region.
   optional uint32 max_rows = 3;
+  // As SearchQuery.session: required unattached, absent attached.
+  optional bytes session = 4 [(felis.v1.field_since) = {minor: 3}];
 }
 
 // Daemon → client. One region row (reply to RegionRows), oldest-first.
@@ -2948,11 +3102,14 @@ message PushRetargetHost {
 // stopped with ConnCancel.
 message SearchToDaemonMsg {
   oneof msg {
+    // In setup, only a session-addressed query on an Ops connection
+    // (SearchQuery.session).
     SearchQuery query = 1 [(felis.v1.arm) = {
       direction: DIRECTION_TO_DAEMON
       correlation: CORRELATION_STREAM_OPENER
       modes: MODE_WINDOW
       modes: MODE_OPS
+      phases: PHASE_SETUP
       phases: PHASE_ATTACHED
     }];
   }
@@ -2966,6 +3123,7 @@ message SearchToClientMsg {
       correlation: CORRELATION_STREAM_ITEM
       modes: MODE_WINDOW
       modes: MODE_OPS
+      phases: PHASE_SETUP
       phases: PHASE_ATTACHED
     }];
   }
@@ -2981,6 +3139,11 @@ message SearchQuery {
   // decode. A daemon below minor 1 ignores the field and walks
   // scrollback, so a present value is withheld from it.
   optional SearchSource source = 3 [(felis.v1.field_since) = {minor: 1}];
+  // The session to search (16 bytes, big-endian): required on an
+  // unattached Ops connection, which reads the session as a fresh
+  // attach would see it; absent on an attached connection, which
+  // searches its own session.
+  optional bytes session = 4 [(felis.v1.field_since) = {minor: 3}];
 }
 
 // One logical line of the active search returning a hit.

@@ -182,6 +182,68 @@ fn skip_bytes(bytes: &mut &[u8], len: usize) -> Result<(), prost::DecodeError> {
     Ok(())
 }
 
+/// The `Ops::Send` / `SendAndWait` arm a body names and its step count,
+/// off the tags alone; every occurrence counts, as a decoder merges them.
+///
+/// # Errors
+/// [`CodecError::Prost`] on a body that is not well-formed protobuf.
+pub fn send_steps_in(mut body: &[u8]) -> Result<Option<SendCount>, CodecError> {
+    use crate::messages::{Directed as _, OpsToDaemonMsg};
+
+    let [send, wait] = [
+        OpsToDaemonMsg::Send {
+            id_prefix: String::new(),
+            steps: Vec::new(),
+        },
+        OpsToDaemonMsg::SendAndWait {
+            id_prefix: String::new(),
+            steps: Vec::new(),
+        },
+    ]
+    .map(|arm| u64::from(<OpsToDaemonMsg as WireCodec>::ARM_FIELDS[arm.arm_index()]));
+    let mut found: Option<SendCount> = None;
+    while !body.is_empty() {
+        let key = read_varint(&mut body)?;
+        let (field, wire_type) = (key >> 3, key & 7);
+        if wire_type != LENGTH_DELIMITED || (field != send && field != wait) {
+            skip_value(&mut body, wire_type)?;
+            continue;
+        }
+        let len = usize::try_from(read_varint(&mut body)?)
+            .map_err(|_| decode_error("oversized field"))?;
+        if body.len() < len {
+            return Err(decode_error("truncated field").into());
+        }
+        let (mut arm, rest) = body.split_at(len);
+        body = rest;
+        let mut steps = found.map_or(0, |f| f.steps);
+        while !arm.is_empty() {
+            let key = read_varint(&mut arm)?;
+            if key >> 3 == SEND_STEPS_FIELD {
+                steps = steps.saturating_add(1);
+            }
+            skip_value(&mut arm, key & 7)?;
+        }
+        // The last arm written is the one a decoder keeps.
+        found = Some(SendCount {
+            wait: field == wait,
+            steps,
+        });
+    }
+    Ok(found)
+}
+
+/// What [`send_steps_in`] counted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SendCount {
+    /// `Ops::SendAndWait` rather than `Ops::Send`.
+    pub wait: bool,
+    pub steps: usize,
+}
+
+/// `OpsSend.steps` and `OpsSendAndWait.steps`.
+const SEND_STEPS_FIELD: u64 = 2;
+
 /// A tag written more than once keeps its last value, as a canonical
 /// reader resolves it, but that it was written at all is what survives.
 fn parse_correlation(mut bytes: &[u8]) -> Result<CorrelationTags, prost::DecodeError> {
@@ -532,6 +594,7 @@ mod tests {
                 query: "needle".into(),
                 options: crate::messages::SearchOptions::default(),
                 source: crate::messages::SearchSource::Scrollback,
+                session: None,
             },
             stream,
         );
@@ -808,5 +871,29 @@ mod tests {
             )
             .is_none()
         );
+    }
+
+    /// The step count is read off the tags, for either send arm, and a
+    /// repeated arm counts every occurrence a decoder would merge.
+    #[test]
+    fn send_steps_are_counted_without_decoding() {
+        use crate::messages::{OpsToDaemonMsg, SendStep};
+
+        let steps = |n: usize| vec![SendStep::Paste(b"x".to_vec()); n];
+        let send = encode(&OpsToDaemonMsg::Send {
+            id_prefix: "ab".into(),
+            steps: steps(5),
+        });
+        let count = |wait, steps| Some(SendCount { wait, steps });
+        assert_eq!(send_steps_in(&send).unwrap(), count(false, 5));
+        let wait = encode(&OpsToDaemonMsg::SendAndWait {
+            id_prefix: "ab".into(),
+            steps: Vec::new(),
+        });
+        assert_eq!(send_steps_in(&wait).unwrap(), count(true, 0));
+        assert_eq!(send_steps_in(&encode(&OpsToDaemonMsg::List)).unwrap(), None);
+        let twice = [send.clone(), send].concat();
+        assert_eq!(send_steps_in(&twice).unwrap(), count(false, 10));
+        assert!(send_steps_in(&[0xA,]).is_err());
     }
 }

@@ -50,8 +50,10 @@ pub(crate) mod registry_sync;
 #[doc(hidden)]
 pub mod session_task;
 pub(crate) mod streaming;
+mod unattached;
 use session_task::{
-    OutEvent, PushOutcome, SessionCmd, SubscribeOk, SubscribeRefused, SubscribeReq, SubscriberId,
+    OutEvent, Owner, PushOutcome, SessionCmd, SubscribeOk, SubscribeRefused, SubscribeReq,
+    SubscriberId,
 };
 #[cfg(test)]
 use streaming::frame_paste;
@@ -585,7 +587,7 @@ where
     )
     .await?;
 
-    let Some((attached, mut out_rx, ack)) = wait_for_attach(
+    let setup = wait_for_attach(
         &mut reader,
         &mut writer,
         &mut driver,
@@ -595,9 +597,19 @@ where
         &pool,
         &factory,
     )
-    .await?
-    else {
-        return Ok(());
+    .await?;
+    let (attached, mut out_rx, ack) = match setup {
+        None => return Ok(()),
+        Some(Setup::Attached(attached)) => *attached,
+        Some(Setup::Unattached(first)) => {
+            let ctx = CreateCtx {
+                pool: &pool,
+                caps: &caps,
+                factory: &factory,
+                relay_env: relay_env.as_deref(),
+            };
+            return unattached::run(&mut reader, &mut writer, &mut driver, first, ctx).await;
+        }
     };
     info!(id = ?attached.id, minor = params.effective_minor, "session attached");
 
@@ -857,6 +869,14 @@ impl AttachedSub {
         }
         out.send(ev).is_ok()
     }
+}
+
+/// Where [`wait_for_attach`] leaves the connection.
+enum Setup {
+    Attached(Box<(AttachedSub, mpsc::UnboundedReceiver<OutEvent>, Ack)>),
+    /// An `Ops` connection named a session without attaching; this is
+    /// the frame that did.
+    Unattached(Payload),
 }
 
 /// Which ack the caller owes once [`wait_for_attach`] hands back a
@@ -1158,7 +1178,7 @@ async fn wait_for_attach<R: tokio::io::AsyncRead + Unpin, W: tokio::io::AsyncWri
     relay_env: Option<&[crate::child_env::EnvEntry]>,
     pool: &Arc<Mutex<SessionPool>>,
     factory: &SessionFactory,
-) -> Result<Option<(AttachedSub, mpsc::UnboundedReceiver<OutEvent>, Ack)>, ConnError> {
+) -> Result<Option<Setup>, ConnError> {
     let ConnParams { mode, .. } = params;
     // Every pre-attach frame is deadline-bounded for modes that do not idle
     // before operations. This prevents peers that query metadata from holding
@@ -1207,6 +1227,21 @@ async fn wait_for_attach<R: tokio::io::AsyncRead + Unpin, W: tokio::io::AsyncWri
                 )));
             }
         };
+        let addresses_session = match payload.kind {
+            MessageKind::Search | MessageKind::Region => true,
+            MessageKind::Ops => matches!(
+                felis_protocol::codec::send_steps_in(&payload.body),
+                Ok(Some(_))
+            ),
+            _ => false,
+        };
+        if addresses_session {
+            if mode != ConnectionMode::Ops {
+                return Err(refuse_mode(writer, mode, "address a session by id").await);
+            }
+            drop(dispatching);
+            return Ok(Some(Setup::Unattached(payload)));
+        }
         match payload.kind {
             MessageKind::Session => match deliver(driver.decode::<SessionToDaemonMsg>(&payload)?)
                 .ok_or(ConnError::ExpectedAttachOrCreate)?
@@ -1261,7 +1296,7 @@ async fn wait_for_attach<R: tokio::io::AsyncRead + Unpin, W: tokio::io::AsyncWri
                     let cmd = registered.cmd.clone();
                     let input_budget = Arc::clone(&registered.input_budget);
                     driver.attached();
-                    return Ok(Some((
+                    return Ok(Some(Setup::Attached(Box::new((
                         AttachedSub {
                             id,
                             ok,
@@ -1272,7 +1307,7 @@ async fn wait_for_attach<R: tokio::io::AsyncRead + Unpin, W: tokio::io::AsyncWri
                         },
                         out_rx,
                         Ack::Created { registered },
-                    )));
+                    )))));
                 }
                 SessionToDaemonMsg::Attach { target, live_only } => {
                     let taken = take_attach_handle(pool, &target).await;
@@ -1300,7 +1335,7 @@ async fn wait_for_attach<R: tokio::io::AsyncRead + Unpin, W: tokio::io::AsyncWri
                         }
                     };
                     driver.attached();
-                    return Ok(Some((
+                    return Ok(Some(Setup::Attached(Box::new((
                         AttachedSub {
                             id,
                             ok,
@@ -1311,7 +1346,7 @@ async fn wait_for_attach<R: tokio::io::AsyncRead + Unpin, W: tokio::io::AsyncWri
                         },
                         out_rx,
                         Ack::Attached,
-                    )));
+                    )))));
                 }
                 // The attached-phase arms; the driver's phase column
                 // already refused them.
@@ -1660,6 +1695,12 @@ async fn ops_reply(ctx: CreateCtx<'_>, msg: OpsToDaemonMsg) -> OpsToClientMsg {
         OpsToDaemonMsg::Stop { mode } => OpsToClientMsg::StopReply {
             outcome: stop_daemon(pool, caps, mode).await,
         },
+        // Served by the unattached pump, which the setup loop enters on
+        // either arm before it would reach here; the arm table admits
+        // neither after an attach.
+        OpsToDaemonMsg::Send { .. } | OpsToDaemonMsg::SendAndWait { .. } => {
+            unreachable!("a send reached the shared Ops reply")
+        }
         // Answered by `upgrade_connection`: the exec must follow the reply
         // on the requesting connection.
         OpsToDaemonMsg::Upgrade { .. } => OpsToClientMsg::UpgradeReply {
@@ -2105,7 +2146,7 @@ fn route_frame(
         }
         Incoming::Control(ConnToDaemonMsg::Cancel { stream_id }) => {
             return Ok(Route::Cmd(SessionCmd::CancelStream {
-                sub,
+                owner: Owner::Sub(sub),
                 stream: stream_id,
             }));
         }
@@ -2127,18 +2168,47 @@ fn route_frame(
             }))
         }
         MessageKind::Search => match driver.decode::<SearchToDaemonMsg>(&payload)? {
-            Delivery::Deliver(delivered) => Ok(Route::Cmd(SessionCmd::Search {
-                sub,
-                stream: delivered.stream(),
-                msg: delivered.msg,
-            })),
+            Delivery::Deliver(delivered) => {
+                let stream = delivered.stream();
+                let SearchToDaemonMsg::Query { session, .. } = &delivered.msg;
+                if session.is_some() {
+                    return Ok(addressed_on_attached(driver.fail_stream(
+                        stream,
+                        StreamErrorReason::InvalidRequest,
+                        SESSION_ON_ATTACHED,
+                    )));
+                }
+                Ok(Route::Cmd(SessionCmd::Search {
+                    owner: Owner::Sub(sub),
+                    stream,
+                    msg: delivered.msg,
+                }))
+            }
             Delivery::DroppedAfterCancel => Ok(Route::Settled),
             Delivery::RefuseStream { reply } => Ok(Route::Reply(OutEvent::Control(reply))),
         },
         MessageKind::Region => match driver.decode::<RegionToDaemonMsg>(&payload)? {
             Delivery::Deliver(delivered) => match delivered.msg {
-                RegionToDaemonMsg::Request { source, ansi } => Ok(Route::Cmd(SessionCmd::Region {
-                    sub,
+                RegionToDaemonMsg::Request {
+                    session: Some(_), ..
+                } => Ok(addressed_on_attached(Some(DaemonDriver::refuse_request(
+                    delivered.request(),
+                    StreamErrorReason::InvalidRequest,
+                    SESSION_ON_ATTACHED,
+                )))),
+                RegionToDaemonMsg::Rows {
+                    session: Some(_), ..
+                } => Ok(addressed_on_attached(driver.fail_stream(
+                    delivered.stream(),
+                    StreamErrorReason::InvalidRequest,
+                    SESSION_ON_ATTACHED,
+                ))),
+                RegionToDaemonMsg::Request {
+                    source,
+                    ansi,
+                    session: None,
+                } => Ok(Route::Cmd(SessionCmd::Region {
+                    owner: Owner::Sub(sub),
                     source,
                     ansi,
                     request: delivered.request(),
@@ -2147,8 +2217,9 @@ fn route_frame(
                     source,
                     ansi,
                     max_rows,
+                    session: None,
                 } => Ok(Route::Cmd(SessionCmd::RegionRows {
-                    sub,
+                    owner: Owner::Sub(sub),
                     source,
                     ansi,
                     max_rows,
@@ -2227,6 +2298,16 @@ fn route_frame(
     }
 }
 
+/// An attached connection reads at its own viewport; naming a session
+/// would ask for a fresh attach's, which only an unattached connection
+/// has.
+const SESSION_ON_ATTACHED: &str =
+    "an attached connection reads its own session; a session id needs an unattached connection";
+
+fn addressed_on_attached(refusal: Option<ConnToClientMsg>) -> Route {
+    refusal.map_or(Route::Settled, |msg| Route::Reply(OutEvent::Control(msg)))
+}
+
 /// Unwrap a delivery whose stream accounting cannot refuse (the
 /// un-correlated families): `None` means the driver dropped an item for
 /// a stream this side canceled.
@@ -2275,7 +2356,7 @@ async fn pump_subscriber<R: tokio::io::AsyncRead + Unpin, W: tokio::io::AsyncWri
         // not starve them.
         biased;
         res = pump_inbound(reader, driver, attached, ctx, &mut retired_rx) => res,
-        res = pump_outbound(writer, attached, out_rx, &retired_tx) => res,
+        res = pump_outbound(writer, &attached.buffered, out_rx, &retired_tx) => res,
     }
 }
 
@@ -2360,16 +2441,16 @@ async fn pump_inbound<R: tokio::io::AsyncRead + Unpin>(
 /// `ImageComplete` after its chunks.
 async fn pump_outbound<W: tokio::io::AsyncWrite + Unpin>(
     writer: &mut FrameWriter<W>,
-    attached: &AttachedSub,
+    buffered: &std::sync::atomic::AtomicUsize,
     out_rx: &mut mpsc::UnboundedReceiver<OutEvent>,
     retired: &mpsc::UnboundedSender<StreamId>,
 ) -> Result<(), ConnError> {
     // Outbox closed: evicted, or the session ended.
     while let Some(ev) = out_rx.recv().await {
-        write_out_event(writer, ev, attached, retired).await?;
+        write_out_event(writer, ev, buffered, retired).await?;
         // One syscall per burst: the ipc.md write-coalescing contract.
         while let Ok(ev) = out_rx.try_recv() {
-            write_out_event(writer, ev, attached, retired).await?;
+            write_out_event(writer, ev, buffered, retired).await?;
         }
         writer.flush().await?;
     }
@@ -2384,7 +2465,7 @@ async fn pump_outbound<W: tokio::io::AsyncWrite + Unpin>(
 async fn write_out_event<W: tokio::io::AsyncWrite + Unpin>(
     writer: &mut FrameWriter<W>,
     ev: OutEvent,
-    attached: &AttachedSub,
+    buffered: &std::sync::atomic::AtomicUsize,
     retired: &mpsc::UnboundedSender<StreamId>,
 ) -> Result<(), ConnError> {
     let len = ev.approx_wire_len();
@@ -2392,9 +2473,7 @@ async fn write_out_event<W: tokio::io::AsyncWrite + Unpin>(
         let _reported = retired.send(stream);
     }
     let res = write_event_frame(writer, &ev).await;
-    attached
-        .buffered
-        .fetch_sub(len, std::sync::atomic::Ordering::Relaxed);
+    buffered.fetch_sub(len, std::sync::atomic::Ordering::Relaxed);
     res
 }
 

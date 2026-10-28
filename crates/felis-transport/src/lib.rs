@@ -27,6 +27,7 @@ pub(crate) mod windows;
 pub use driver::{
     ClientDriver, ClientSide, ConnectionDriver, DaemonDriver, DaemonSide, Delivered, Delivery,
     DriverError, Incoming, MAX_OUTSTANDING_STREAMS, Payload, Phase, Role, Side, StreamClass,
+    Undecoded,
 };
 pub use framing::{CheckedFrame, FrameReader, FrameWriter, OwnedFrame, TransportError};
 pub use local::{Endpoint, Listener, connect, server_split};

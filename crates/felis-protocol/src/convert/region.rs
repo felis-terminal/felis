@@ -1,6 +1,6 @@
 //! `RegionToDaemonMsg` / `RegionToClientMsg` <-> wire.
 
-use super::{WireError, region_source_from_i32, region_source_to_i32};
+use super::{WireError, id_from_bytes, id_to_bytes, region_source_from_i32, region_source_to_i32};
 use crate::messages;
 use crate::wire::v1;
 
@@ -9,18 +9,25 @@ impl From<&messages::RegionToDaemonMsg> for v1::RegionToDaemonMsg {
         use messages::RegionToDaemonMsg as R;
         use v1::region_to_daemon_msg::Msg;
         let msg = match m {
-            R::Request { source, ansi } => Msg::Request(v1::RegionRequest {
+            R::Request {
+                source,
+                ansi,
+                session,
+            } => Msg::Request(v1::RegionRequest {
                 source: region_source_to_i32(*source),
                 ansi: *ansi,
+                session: session.map(id_to_bytes),
             }),
             R::Rows {
                 source,
                 ansi,
                 max_rows,
+                session,
             } => Msg::Rows(v1::RegionRows {
                 source: region_source_to_i32(*source),
                 ansi: *ansi,
                 max_rows: *max_rows,
+                session: session.map(id_to_bytes),
             }),
         };
         Self {
@@ -98,11 +105,13 @@ impl TryFrom<v1::RegionToDaemonMsg> for messages::RegionToDaemonMsg {
                 Msg::Request(r) => Self::Request {
                     source: region_source_from_i32(r.source)?,
                     ansi: r.ansi,
+                    session: r.session.map(id_from_bytes).transpose()?,
                 },
                 Msg::Rows(r) => Self::Rows {
                     source: region_source_from_i32(r.source)?,
                     ansi: r.ansi,
                     max_rows: r.max_rows,
+                    session: r.session.map(id_from_bytes).transpose()?,
                 },
             },
         )

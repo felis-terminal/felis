@@ -575,6 +575,7 @@ mod tests {
             query: "a".repeat(n),
             options: SearchOptions::default(),
             source: felis_protocol::messages::SearchSource::Scrollback,
+            session: None,
         };
         let open = |n: u64| Correlation::stream(StreamId::new(n).expect("nonzero"));
         let (a, b) = pair();

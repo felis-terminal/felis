@@ -18,7 +18,7 @@ use felis_protocol::{
     codec::{self, CodecError, WireCodec},
     messages::{
         AttachFailure, AttachRefusal, ConnToClientMsg, Correlation, CreateFailure, Directed,
-        RefusalReason, RequestId, StreamErrorReason, StreamId, Subject,
+        OpsToDaemonMsg, RefusalReason, RequestId, StreamErrorReason, StreamId, Subject,
     },
     minor::MinorGated,
     preface::{self},
@@ -283,6 +283,22 @@ pub fn check_arm_minor(
         });
     }
     Ok(())
+}
+
+/// The one gate in front of every session-addressed use, which all
+/// arrived in one minor.
+///
+/// # Errors
+/// [`ConnectError::MinorTooOld`] below that minor, nothing written.
+pub fn check_session_addressed(effective_minor: u16) -> Result<(), ConnectError> {
+    check_arm_minor(
+        &OpsToDaemonMsg::Send {
+            id_prefix: String::new(),
+            steps: Vec::new(),
+        },
+        effective_minor,
+        "addressing a session by id without attaching",
+    )
 }
 
 /// The same gate over a whole value, post-release fields included.

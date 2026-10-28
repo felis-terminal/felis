@@ -1689,7 +1689,7 @@ pub mod session_attach_failed {
 pub struct OpsToDaemonMsg {
     #[prost(message, optional, tag="100")]
     pub correlation: ::core::option::Option<Correlation>,
-    #[prost(oneof="ops_to_daemon_msg::Msg", tags="1, 3, 5, 7, 9, 11, 13, 15, 17, 19")]
+    #[prost(oneof="ops_to_daemon_msg::Msg", tags="1, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23")]
     pub msg: ::core::option::Option<ops_to_daemon_msg::Msg>,
 }
 /// Nested message and enum types in `OpsToDaemonMsg`.
@@ -1720,13 +1720,19 @@ pub mod ops_to_daemon_msg {
         /// the exec closes the connection.
         #[prost(message, tag="19")]
         Upgrade(super::OpsUpgrade),
+        /// Setup only: a connection carrying a send carries nothing else,
+        /// and it never attaches.
+        #[prost(message, tag="21")]
+        Send(super::OpsSend),
+        #[prost(message, tag="23")]
+        SendAndWait(super::OpsSendAndWait),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct OpsToClientMsg {
     #[prost(message, optional, tag="100")]
     pub correlation: ::core::option::Option<Correlation>,
-    #[prost(oneof="ops_to_client_msg::Msg", tags="2, 4, 6, 8, 10, 12, 14, 16, 18, 20")]
+    #[prost(oneof="ops_to_client_msg::Msg", tags="2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 25")]
     pub msg: ::core::option::Option<ops_to_client_msg::Msg>,
 }
 /// Nested message and enum types in `OpsToClientMsg`.
@@ -1753,6 +1759,16 @@ pub mod ops_to_client_msg {
         InfoReply(super::OpsInfoReply),
         #[prost(message, tag="20")]
         UpgradeReply(super::OpsUpgradeReply),
+        #[prost(message, tag="22")]
+        Sent(super::OpsSent),
+        /// The first item of an OpsSendAndWait stream: its send's outcome.
+        /// An outcome other than `id` is followed by the stream's error
+        /// terminal.
+        #[prost(message, tag="24")]
+        WaitSent(super::OpsSent),
+        /// The second and last item of an OpsSendAndWait stream.
+        #[prost(message, tag="25")]
+        Mark(super::OpsMark),
     }
 }
 /// Client → daemon. Create a session this connection does not attach
@@ -2234,6 +2250,112 @@ pub struct UpgradeRefused {
     #[prost(string, tag="2")]
     pub detail: ::prost::alloc::string::String,
 }
+/// Client → daemon. Write `steps` to the named session's program, in
+/// order. The daemon validates every step against the session's current
+/// modes and grid before it writes any, admits them one at a time into
+/// the session's input budget, and replies once the session has taken
+/// the last of them.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct OpsSend {
+    /// Lowercase hex session-id prefix (1-32 digits), resolved
+    /// daemon-side.
+    #[prost(string, tag="1")]
+    pub id_prefix: ::prost::alloc::string::String,
+    /// At most MAX_SEND_STEPS (4 096). The encoded request is bounded by
+    /// MAX_SEND_BODY_BYTES; both are checked before the body is decoded.
+    #[prost(message, repeated, tag="2")]
+    pub steps: ::prost::alloc::vec::Vec<SendStep>,
+}
+/// One input step of an OpsSend or OpsSendAndWait.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SendStep {
+    /// REQUIRED: an unset step is malformed and is refused at decode.
+    #[prost(oneof="send_step::Step", tags="1, 2, 3, 4")]
+    pub step: ::core::option::Option<send_step::Step>,
+}
+/// Nested message and enum types in `SendStep`.
+pub mod send_step {
+    /// REQUIRED: an unset step is malformed and is refused at decode.
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Step {
+        /// Text pasted as InputMsg paste is: bracketed when the program
+        /// asked for it. At most MAX_PASTE_BYTES.
+        #[prost(bytes, tag="1")]
+        Paste(::prost::alloc::vec::Vec<u8>),
+        /// Bytes written untouched, as InputMsg key_bytes. At most
+        /// MAX_RAW_INPUT_BYTES.
+        #[prost(bytes, tag="2")]
+        Raw(::prost::alloc::vec::Vec<u8>),
+        /// Encoded against the program's keyboard modes when it is written.
+        #[prost(message, tag="3")]
+        Key(super::InputKeyEvent),
+        /// Encoded against the program's mouse modes when it is written; the
+        /// validation refuses one those modes would drop at that moment.
+        #[prost(message, tag="4")]
+        Mouse(super::InputMouseEvent),
+    }
+}
+/// Daemon → client. How an OpsSend ended: the reply to OpsSend, and the
+/// first item of an OpsSendAndWait stream.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct OpsSent {
+    /// REQUIRED: an unset outcome is malformed and is refused at decode.
+    #[prost(oneof="ops_sent::Outcome", tags="1, 2, 3, 4")]
+    pub outcome: ::core::option::Option<ops_sent::Outcome>,
+}
+/// Nested message and enum types in `OpsSent`.
+pub mod ops_sent {
+    /// REQUIRED: an unset outcome is malformed and is refused at decode.
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Outcome {
+        /// Every step was written and the session took the last one; the
+        /// session's full id (16 bytes, big-endian).
+        #[prost(bytes, tag="1")]
+        Id(::prost::alloc::vec::Vec<u8>),
+        /// No pooled session matches the prefix. Nothing was written.
+        #[prost(message, tag="2")]
+        NoMatch(super::ResolvedNoMatch),
+        /// More than one pooled session matches; the count.
+        #[prost(uint32, tag="3")]
+        Ambiguous(u32),
+        #[prost(message, tag="4")]
+        Refused(super::SendRefused),
+    }
+}
+/// The refusal half of OpsSent.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SendRefused {
+    #[prost(enumeration="SendRefusal", tag="1")]
+    pub reason: i32,
+    /// The 0-based step the refusal names, for a reason about one step.
+    #[prost(uint32, optional, tag="2")]
+    pub step: ::core::option::Option<u32>,
+    /// Human-readable specifics. Never parsed.
+    #[prost(string, tag="3")]
+    pub detail: ::prost::alloc::string::String,
+}
+/// Client → daemon. Watch the named session for its next OSC 133 D mark,
+/// then send `steps` exactly as OpsSend does; empty steps only watch.
+/// The watch starts before the first step is written. The stream yields
+/// OpsToClientMsg wait_sent, then one mark, then its ConnEnd; a session
+/// that ends first ends it with STREAM_ERROR_REASON_UNAVAILABLE.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct OpsSendAndWait {
+    /// As OpsSend.id_prefix.
+    #[prost(string, tag="1")]
+    pub id_prefix: ::prost::alloc::string::String,
+    /// As OpsSend.steps.
+    #[prost(message, repeated, tag="2")]
+    pub steps: ::prost::alloc::vec::Vec<SendStep>,
+}
+/// Daemon → client. The first OSC 133 D mark the session emitted after
+/// the watch started.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct OpsMark {
+    /// The mark's exit code; absent for a bare D.
+    #[prost(uint32, optional, tag="1")]
+    pub exit_code: ::core::option::Option<u32>,
+}
 /// Client → daemon. Ask what this daemon is and what it is holding.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct OpsStatus {
@@ -2343,7 +2465,7 @@ pub struct Unlimited {
 // Request/Reply correlate by request_id; Rows opens a stream whose
 // Row and RowsDone items carry its stream_id.
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct RegionToDaemonMsg {
     #[prost(message, optional, tag="100")]
     pub correlation: ::core::option::Option<Correlation>,
@@ -2352,8 +2474,10 @@ pub struct RegionToDaemonMsg {
 }
 /// Nested message and enum types in `RegionToDaemonMsg`.
 pub mod region_to_daemon_msg {
-    #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Oneof)]
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
     pub enum Msg {
+        /// In setup, only a session-addressed request on an Ops connection
+        /// (RegionRequest.session, RegionRows.session).
         #[prost(message, tag="1")]
         Request(super::RegionRequest),
         #[prost(message, tag="3")]
@@ -2382,13 +2506,16 @@ pub mod region_to_client_msg {
 /// Client → daemon. Serialize a region of the attached session's buffer,
 /// soft-wrapped rows stitched into logical lines. The sink never
 /// travels: the requester routes the reply on its own host.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct RegionRequest {
     #[prost(enumeration="RegionSource", tag="1")]
     pub source: i32,
     /// Reconstruct SGR color/style (true) or plain text (false).
     #[prost(bool, tag="2")]
     pub ansi: bool,
+    /// As SearchQuery.session: required unattached, absent attached.
+    #[prost(bytes="vec", optional, tag="3")]
+    pub session: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
 }
 /// Daemon → client. The serialized region.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
@@ -2408,7 +2535,7 @@ pub struct RegionReply {
 /// Client → daemon. Serialize the same region a RegionRequest names, but
 /// reply row by row (RegionRow … RegionRowsDone) instead of as one
 /// stitched blob: the structural read behind `felis sessions capture`.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct RegionRows {
     #[prost(enumeration="RegionSource", tag="1")]
     pub source: i32,
@@ -2420,6 +2547,9 @@ pub struct RegionRows {
     /// emits the whole region.
     #[prost(uint32, optional, tag="3")]
     pub max_rows: ::core::option::Option<u32>,
+    /// As SearchQuery.session: required unattached, absent attached.
+    #[prost(bytes="vec", optional, tag="4")]
+    pub session: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
 }
 /// Daemon → client. One region row (reply to RegionRows), oldest-first.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
@@ -2653,6 +2783,8 @@ pub struct SearchToDaemonMsg {
 pub mod search_to_daemon_msg {
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
     pub enum Msg {
+        /// In setup, only a session-addressed query on an Ops connection
+        /// (SearchQuery.session).
         #[prost(message, tag="1")]
         Query(super::SearchQuery),
     }
@@ -2685,6 +2817,12 @@ pub struct SearchQuery {
     /// scrollback, so a present value is withheld from it.
     #[prost(enumeration="SearchSource", optional, tag="3")]
     pub source: ::core::option::Option<i32>,
+    /// The session to search (16 bytes, big-endian): required on an
+    /// unattached Ops connection, which reads the session as a fresh
+    /// attach would see it; absent on an attached connection, which
+    /// searches its own session.
+    #[prost(bytes="vec", optional, tag="4")]
+    pub session: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
 }
 /// One logical line of the active search returning a hit.
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -3778,6 +3916,49 @@ impl UpgradeRefusal {
             "UPGRADE_REFUSAL_PROBE_FAILED" => Some(Self::ProbeFailed),
             "UPGRADE_REFUSAL_BUSY" => Some(Self::Busy),
             "UPGRADE_REFUSAL_DRAINING" => Some(Self::Draining),
+            _ => None,
+        }
+    }
+}
+/// Why an OpsSend or OpsSendAndWait wrote nothing, or not everything.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum SendRefusal {
+    Unspecified = 0,
+    /// A step carries more than its kind admits. Nothing was written.
+    InvalidStep = 1,
+    /// A mouse step the program would not see: it has no mouse reporting
+    /// on, reports clicks but not drags, or the cell is off the grid.
+    /// Nothing was written.
+    Unreported = 2,
+    /// More than MAX_SEND_STEPS steps, or a body past MAX_SEND_BODY_BYTES.
+    /// Nothing was written.
+    TooLarge = 3,
+    /// The session ended before it took the last step; an OpsSend only.
+    SessionEnded = 4,
+}
+impl SendRefusal {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "SEND_REFUSAL_UNSPECIFIED",
+            Self::InvalidStep => "SEND_REFUSAL_INVALID_STEP",
+            Self::Unreported => "SEND_REFUSAL_UNREPORTED",
+            Self::TooLarge => "SEND_REFUSAL_TOO_LARGE",
+            Self::SessionEnded => "SEND_REFUSAL_SESSION_ENDED",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "SEND_REFUSAL_UNSPECIFIED" => Some(Self::Unspecified),
+            "SEND_REFUSAL_INVALID_STEP" => Some(Self::InvalidStep),
+            "SEND_REFUSAL_UNREPORTED" => Some(Self::Unreported),
+            "SEND_REFUSAL_TOO_LARGE" => Some(Self::TooLarge),
+            "SEND_REFUSAL_SESSION_ENDED" => Some(Self::SessionEnded),
             _ => None,
         }
     }

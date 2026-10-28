@@ -626,8 +626,25 @@ pub(crate) const OPS_TO_DAEMON_MSG_ARMS: &[ArmMeta] = &[
         phases: PhaseSet::NONE.union(PhaseSet::SETUP),
         since_minor: 1,
     },
+    ArmMeta {
+        name: "Ops::Send",
+        direction: Direction::ToDaemon,
+        correlation: CorrelationClass::RequestOpener,
+        modes: ModeSet::NONE.union(ModeSet::OPS),
+        phases: PhaseSet::NONE.union(PhaseSet::SETUP),
+        since_minor: 3,
+    },
+    ArmMeta {
+        name: "Ops::SendAndWait",
+        direction: Direction::ToDaemon,
+        correlation: CorrelationClass::StreamOpener,
+        modes: ModeSet::NONE.union(ModeSet::OPS),
+        phases: PhaseSet::NONE.union(PhaseSet::SETUP),
+        since_minor: 3,
+    },
 ];
-pub(crate) const OPS_TO_DAEMON_MSG_ARM_FIELDS: &[u32] = &[1, 3, 5, 7, 9, 11, 13, 15, 17, 19];
+pub(crate) const OPS_TO_DAEMON_MSG_ARM_FIELDS: &[u32] =
+    &[1, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23];
 
 pub(crate) const OPS_TO_CLIENT_MSG_ARMS: &[ArmMeta] = &[
     ArmMeta {
@@ -726,8 +743,33 @@ pub(crate) const OPS_TO_CLIENT_MSG_ARMS: &[ArmMeta] = &[
         phases: PhaseSet::NONE.union(PhaseSet::SETUP),
         since_minor: 1,
     },
+    ArmMeta {
+        name: "Ops::Sent",
+        direction: Direction::ToClient,
+        correlation: CorrelationClass::RequestReply,
+        modes: ModeSet::NONE.union(ModeSet::OPS),
+        phases: PhaseSet::NONE.union(PhaseSet::SETUP),
+        since_minor: 3,
+    },
+    ArmMeta {
+        name: "Ops::WaitSent",
+        direction: Direction::ToClient,
+        correlation: CorrelationClass::StreamItem,
+        modes: ModeSet::NONE.union(ModeSet::OPS),
+        phases: PhaseSet::NONE.union(PhaseSet::SETUP),
+        since_minor: 3,
+    },
+    ArmMeta {
+        name: "Ops::Mark",
+        direction: Direction::ToClient,
+        correlation: CorrelationClass::StreamItem,
+        modes: ModeSet::NONE.union(ModeSet::OPS),
+        phases: PhaseSet::NONE.union(PhaseSet::SETUP),
+        since_minor: 3,
+    },
 ];
-pub(crate) const OPS_TO_CLIENT_MSG_ARM_FIELDS: &[u32] = &[2, 4, 6, 8, 10, 12, 14, 16, 18, 20];
+pub(crate) const OPS_TO_CLIENT_MSG_ARM_FIELDS: &[u32] =
+    &[2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 25];
 
 pub(crate) const REGION_TO_DAEMON_MSG_ARMS: &[ArmMeta] = &[
     ArmMeta {
@@ -735,7 +777,9 @@ pub(crate) const REGION_TO_DAEMON_MSG_ARMS: &[ArmMeta] = &[
         direction: Direction::ToDaemon,
         correlation: CorrelationClass::RequestOpener,
         modes: ModeSet::NONE.union(ModeSet::WINDOW).union(ModeSet::OPS),
-        phases: PhaseSet::NONE.union(PhaseSet::ATTACHED),
+        phases: PhaseSet::NONE
+            .union(PhaseSet::SETUP)
+            .union(PhaseSet::ATTACHED),
         since_minor: 0,
     },
     ArmMeta {
@@ -743,7 +787,9 @@ pub(crate) const REGION_TO_DAEMON_MSG_ARMS: &[ArmMeta] = &[
         direction: Direction::ToDaemon,
         correlation: CorrelationClass::StreamOpener,
         modes: ModeSet::NONE.union(ModeSet::WINDOW).union(ModeSet::OPS),
-        phases: PhaseSet::NONE.union(PhaseSet::ATTACHED),
+        phases: PhaseSet::NONE
+            .union(PhaseSet::SETUP)
+            .union(PhaseSet::ATTACHED),
         since_minor: 0,
     },
 ];
@@ -755,7 +801,9 @@ pub(crate) const REGION_TO_CLIENT_MSG_ARMS: &[ArmMeta] = &[
         direction: Direction::ToClient,
         correlation: CorrelationClass::RequestReply,
         modes: ModeSet::NONE.union(ModeSet::WINDOW).union(ModeSet::OPS),
-        phases: PhaseSet::NONE.union(PhaseSet::ATTACHED),
+        phases: PhaseSet::NONE
+            .union(PhaseSet::SETUP)
+            .union(PhaseSet::ATTACHED),
         since_minor: 0,
     },
     ArmMeta {
@@ -763,7 +811,9 @@ pub(crate) const REGION_TO_CLIENT_MSG_ARMS: &[ArmMeta] = &[
         direction: Direction::ToClient,
         correlation: CorrelationClass::StreamItem,
         modes: ModeSet::NONE.union(ModeSet::WINDOW).union(ModeSet::OPS),
-        phases: PhaseSet::NONE.union(PhaseSet::ATTACHED),
+        phases: PhaseSet::NONE
+            .union(PhaseSet::SETUP)
+            .union(PhaseSet::ATTACHED),
         since_minor: 0,
     },
     ArmMeta {
@@ -771,7 +821,9 @@ pub(crate) const REGION_TO_CLIENT_MSG_ARMS: &[ArmMeta] = &[
         direction: Direction::ToClient,
         correlation: CorrelationClass::StreamItem,
         modes: ModeSet::NONE.union(ModeSet::WINDOW).union(ModeSet::OPS),
-        phases: PhaseSet::NONE.union(PhaseSet::ATTACHED),
+        phases: PhaseSet::NONE
+            .union(PhaseSet::SETUP)
+            .union(PhaseSet::ATTACHED),
         since_minor: 0,
     },
 ];
@@ -856,7 +908,9 @@ pub(crate) const SEARCH_TO_DAEMON_MSG_ARMS: &[ArmMeta] = &[ArmMeta {
     direction: Direction::ToDaemon,
     correlation: CorrelationClass::StreamOpener,
     modes: ModeSet::NONE.union(ModeSet::WINDOW).union(ModeSet::OPS),
-    phases: PhaseSet::NONE.union(PhaseSet::ATTACHED),
+    phases: PhaseSet::NONE
+        .union(PhaseSet::SETUP)
+        .union(PhaseSet::ATTACHED),
     since_minor: 0,
 }];
 pub(crate) const SEARCH_TO_DAEMON_MSG_ARM_FIELDS: &[u32] = &[1];
@@ -866,15 +920,25 @@ pub(crate) const SEARCH_TO_CLIENT_MSG_ARMS: &[ArmMeta] = &[ArmMeta {
     direction: Direction::ToClient,
     correlation: CorrelationClass::StreamItem,
     modes: ModeSet::NONE.union(ModeSet::WINDOW).union(ModeSet::OPS),
-    phases: PhaseSet::NONE.union(PhaseSet::ATTACHED),
+    phases: PhaseSet::NONE
+        .union(PhaseSet::SETUP)
+        .union(PhaseSet::ATTACHED),
     since_minor: 0,
 }];
 pub(crate) const SEARCH_TO_CLIENT_MSG_ARM_FIELDS: &[u32] = &[2];
 
 /// Added fields whose present value is withheld from an older peer.
+pub(crate) const REGION_REQUEST_SESSION: Requires = Requires::new(3, "RegionRequest.session");
+pub(crate) const REGION_ROWS_SESSION: Requires = Requires::new(3, "RegionRows.session");
 pub(crate) const SEARCH_QUERY_SOURCE: Requires = Requires::new(1, "SearchQuery.source");
+pub(crate) const SEARCH_QUERY_SESSION: Requires = Requires::new(3, "SearchQuery.session");
 #[cfg(test)]
-pub(crate) const GATED_FIELDS: &[Requires] = &[SEARCH_QUERY_SOURCE];
+pub(crate) const GATED_FIELDS: &[Requires] = &[
+    REGION_REQUEST_SESSION,
+    REGION_ROWS_SESSION,
+    SEARCH_QUERY_SOURCE,
+    SEARCH_QUERY_SESSION,
+];
 
 #[cfg(test)]
 pub(crate) const PAYLOAD_ONEOFS: &[&str] = &[
@@ -899,6 +963,8 @@ pub(crate) const PAYLOAD_ONEOFS: &[&str] = &[
     "OpsStop.mode: if_empty force when_empty",
     "OpsStopReply.outcome: stopping refused draining",
     "OpsUpgradeReply.outcome: upgrading refused",
+    "SendStep.step: paste raw key mouse",
+    "OpsSent.outcome: id no_match ambiguous refused",
     "ResourceReport.scope: daemon subject",
     "Limit.limit: bounded unlimited",
     "ExitStatus.status: code signal",
@@ -976,6 +1042,8 @@ pub const ADDITIONS: &[(&str, u16)] = &[
     ("Ops::Stop", 0),
     ("Ops::Info", 0),
     ("Ops::Upgrade", 1),
+    ("Ops::Send", 3),
+    ("Ops::SendAndWait", 3),
     ("Ops::Listed", 0),
     ("Ops::Destroyed", 0),
     ("Ops::Detached", 0),
@@ -986,6 +1054,9 @@ pub const ADDITIONS: &[(&str, u16)] = &[
     ("Ops::StopReply", 0),
     ("Ops::InfoReply", 0),
     ("Ops::UpgradeReply", 1),
+    ("Ops::Sent", 3),
+    ("Ops::WaitSent", 3),
+    ("Ops::Mark", 3),
     ("Region::Request", 0),
     ("Region::Rows", 0),
     ("Region::Reply", 0),
@@ -1011,8 +1082,11 @@ pub const ADDITIONS: &[(&str, u16)] = &[
     ("ImagePlacement.serial", 2),
     ("ImageVirtualPlacement.placement_id", 1),
     ("SessionConfigureTheme.palette", 2),
+    ("RegionRequest.session", 3),
+    ("RegionRows.session", 3),
     ("PushSessionExited.status", 3),
     ("SearchQuery.source", 1),
+    ("SearchQuery.session", 3),
     ("SearchMatch.anchor", 2),
     ("ConnectionMode::WINDOW", 0),
     ("ConnectionMode::OPS", 0),
@@ -1100,6 +1174,10 @@ pub const ADDITIONS: &[(&str, u16)] = &[
     ("UpgradeRefusal::PROBE_FAILED", 1),
     ("UpgradeRefusal::BUSY", 1),
     ("UpgradeRefusal::DRAINING", 1),
+    ("SendRefusal::INVALID_STEP", 3),
+    ("SendRefusal::UNREPORTED", 3),
+    ("SendRefusal::TOO_LARGE", 3),
+    ("SendRefusal::SESSION_ENDED", 3),
     ("ResourceKind::SESSIONS", 0),
     ("ResourceKind::IMAGE_STORE_BYTES", 0),
     ("ResourceKind::IN_FLIGHT_DECODES", 0),
@@ -1113,7 +1191,7 @@ pub const ADDITIONS: &[(&str, u16)] = &[
     ("SubjectKind::SUBSCRIBER", 0),
 ];
 #[cfg(test)]
-pub(crate) const ANNOTATED_ENUMS: &[&str] = &["UpgradeRefusal"];
+pub(crate) const ANNOTATED_ENUMS: &[&str] = &["UpgradeRefusal", "SendRefusal"];
 
 impl v1::ConnectionMode {
     /// The protocol minor that defined this value.
@@ -1378,6 +1456,17 @@ impl v1::UpgradeRefusal {
             | Self::ProbeFailed
             | Self::Busy
             | Self::Draining => 1,
+        }
+    }
+}
+
+impl v1::SendRefusal {
+    /// The protocol minor that defined this value.
+    #[must_use]
+    pub const fn since_minor(self) -> u16 {
+        match self {
+            Self::Unspecified => 0,
+            Self::InvalidStep | Self::Unreported | Self::TooLarge | Self::SessionEnded => 3,
         }
     }
 }

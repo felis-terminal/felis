@@ -365,6 +365,98 @@ pub(crate) const fn upgrade_refusal_to_wire(r: messages::UpgradeRefusal) -> v1::
     }
 }
 
+pub(crate) const fn send_refusal_to_wire(r: messages::SendRefusal) -> v1::SendRefusal {
+    use messages::SendRefusal as R;
+    match r {
+        R::InvalidStep => v1::SendRefusal::InvalidStep,
+        R::Unreported => v1::SendRefusal::Unreported,
+        R::TooLarge => v1::SendRefusal::TooLarge,
+        R::SessionEnded => v1::SendRefusal::SessionEnded,
+    }
+}
+
+fn send_refusal_from_wire(raw: i32) -> Result<messages::SendRefusal, WireError> {
+    use messages::SendRefusal as R;
+    match decode_enum::<v1::SendRefusal>("SendRefusal", raw)? {
+        v1::SendRefusal::Unspecified => Err(WireError::UnspecifiedEnum("SendRefusal")),
+        v1::SendRefusal::InvalidStep => Ok(R::InvalidStep),
+        v1::SendRefusal::Unreported => Ok(R::Unreported),
+        v1::SendRefusal::TooLarge => Ok(R::TooLarge),
+        v1::SendRefusal::SessionEnded => Ok(R::SessionEnded),
+    }
+}
+
+fn send_step_to_wire(step: &messages::SendStep) -> v1::SendStep {
+    use v1::send_step::Step;
+    v1::SendStep {
+        step: Some(match step {
+            messages::SendStep::Paste(bytes) => Step::Paste(bytes.clone()),
+            messages::SendStep::Raw(bytes) => Step::Raw(bytes.clone()),
+            messages::SendStep::Key(event) => Step::Key(event.into()),
+            messages::SendStep::Mouse(event) => Step::Mouse((*event).into()),
+        }),
+    }
+}
+
+fn send_step_from_wire(step: v1::SendStep) -> Result<messages::SendStep, WireError> {
+    use v1::send_step::Step;
+    Ok(
+        match step.step.ok_or(WireError::MissingOneof("SendStep.step"))? {
+            Step::Paste(bytes) => messages::SendStep::Paste(bytes),
+            Step::Raw(bytes) => messages::SendStep::Raw(bytes),
+            Step::Key(event) => messages::SendStep::Key(event.try_into()?),
+            Step::Mouse(event) => messages::SendStep::Mouse(event.try_into()?),
+        },
+    )
+}
+
+fn send_steps_from_wire(steps: Vec<v1::SendStep>) -> Result<Vec<messages::SendStep>, WireError> {
+    steps.into_iter().map(send_step_from_wire).collect()
+}
+
+fn send_outcome_to_wire(outcome: &messages::SendOutcome) -> v1::OpsSent {
+    use messages::SendOutcome as S;
+    use v1::ops_sent::Outcome;
+    v1::OpsSent {
+        outcome: Some(match outcome {
+            S::Sent { id } => Outcome::Id(id_to_bytes(*id)),
+            S::NoMatch => Outcome::NoMatch(v1::ResolvedNoMatch {}),
+            S::Ambiguous { matches } => Outcome::Ambiguous(*matches),
+            S::Refused {
+                reason,
+                step,
+                detail,
+            } => Outcome::Refused(v1::SendRefused {
+                reason: send_refusal_to_wire(*reason) as i32,
+                step: *step,
+                detail: detail.clone(),
+            }),
+        }),
+    }
+}
+
+fn send_outcome_from_wire(sent: v1::OpsSent) -> Result<messages::SendOutcome, WireError> {
+    use messages::SendOutcome as S;
+    use v1::ops_sent::Outcome;
+    Ok(
+        match sent
+            .outcome
+            .ok_or(WireError::MissingOneof("OpsSent.outcome"))?
+        {
+            Outcome::Id(id) => S::Sent {
+                id: id_from_bytes(id)?,
+            },
+            Outcome::NoMatch(_) => S::NoMatch,
+            Outcome::Ambiguous(matches) => S::Ambiguous { matches },
+            Outcome::Refused(r) => S::Refused {
+                reason: send_refusal_from_wire(r.reason)?,
+                step: r.step,
+                detail: r.detail,
+            },
+        },
+    )
+}
+
 fn upgrade_refusal_from_wire(raw: i32) -> Result<messages::UpgradeRefusal, WireError> {
     use messages::UpgradeRefusal as R;
     match decode_enum::<v1::UpgradeRefusal>("UpgradeRefusal", raw)? {
@@ -548,6 +640,14 @@ impl From<&messages::OpsToDaemonMsg> for v1::OpsToDaemonMsg {
             O::Upgrade { successor } => Msg::Upgrade(v1::OpsUpgrade {
                 successor: successor.clone(),
             }),
+            O::Send { id_prefix, steps } => Msg::Send(v1::OpsSend {
+                id_prefix: id_prefix.clone(),
+                steps: steps.iter().map(send_step_to_wire).collect(),
+            }),
+            O::SendAndWait { id_prefix, steps } => Msg::SendAndWait(v1::OpsSendAndWait {
+                id_prefix: id_prefix.clone(),
+                steps: steps.iter().map(send_step_to_wire).collect(),
+            }),
         };
         Self {
             msg: Some(msg),
@@ -664,6 +764,11 @@ impl From<&messages::OpsToClientMsg> for v1::OpsToClientMsg {
                     }
                 }),
             }),
+            O::Sent { outcome } => Msg::Sent(send_outcome_to_wire(outcome)),
+            O::WaitSent { outcome } => Msg::WaitSent(send_outcome_to_wire(outcome)),
+            O::Mark { exit_code } => Msg::Mark(v1::OpsMark {
+                exit_code: *exit_code,
+            }),
         };
         Self {
             msg: Some(msg),
@@ -720,6 +825,14 @@ impl TryFrom<v1::OpsToDaemonMsg> for messages::OpsToDaemonMsg {
                 },
                 Msg::Upgrade(u) => Self::Upgrade {
                     successor: u.successor,
+                },
+                Msg::Send(s) => Self::Send {
+                    id_prefix: s.id_prefix,
+                    steps: send_steps_from_wire(s.steps)?,
+                },
+                Msg::SendAndWait(s) => Self::SendAndWait {
+                    id_prefix: s.id_prefix,
+                    steps: send_steps_from_wire(s.steps)?,
                 },
             },
         )
@@ -830,6 +943,15 @@ impl TryFrom<v1::OpsToClientMsg> for messages::OpsToClientMsg {
                             }
                         }
                     },
+                },
+                Msg::Sent(s) => Self::Sent {
+                    outcome: send_outcome_from_wire(s)?,
+                },
+                Msg::WaitSent(s) => Self::WaitSent {
+                    outcome: send_outcome_from_wire(s)?,
+                },
+                Msg::Mark(m) => Self::Mark {
+                    exit_code: m.exit_code,
                 },
             },
         )

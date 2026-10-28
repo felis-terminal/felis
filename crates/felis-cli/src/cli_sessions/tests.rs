@@ -7,15 +7,15 @@ use felis_protocol::messages::{
 };
 use felis_protocol::{
     codec,
-    messages::{InputMsg, SessionToClientMsg, SessionToDaemonMsg},
+    messages::{InputMsg, SendOutcome, SendRefusal, SendStep as WireStep},
 };
 
 use super::{
     SessionOp,
     attachment::{RetargetArgs, local_carrier, retarget_from_args, staged_retarget},
     mutate::{
-        SendStep, SendSteps, chord_key_event, cmd_send, collect_send_payload, over_limit_payload,
-        read_send_payload, resolve_spawn_cwd, tag_result,
+        SendStep, SendSteps, StepOrigin, chord_key_event, cmd_send, collect_send_payload,
+        over_limit_payload, read_send_payload, resolve_spawn_cwd, tag_result, wire_steps,
     },
     plan,
     read::{RowEncoding, cmd_search, session_passes_tag_filter},
@@ -306,35 +306,32 @@ fn row_encoding_resolves_every_flag_pairing() {
 const SEND_TEST_ID: u128 = 0x00ab_cdef;
 const SEND_TEST_PREFIX: &str = "00000000";
 
-fn send_test_session() -> SessionInfo {
-    crate::test_support::session_info(SEND_TEST_ID)
-}
-
 /// Run `cmd_send` against a scripted daemon over an in-memory duplex
-/// pair and return every `InputMsg` frame it put on the wire.
-/// Reading the frames back is the only way to tell `--raw` from the
-/// default: with bracketed paste off both deliver byte-identical
-/// PTY input, so the distinction lives in the message variant.
+/// pair and return every step it put on the wire, as the input each
+/// would be. Reading the steps back is the only way to tell `--raw`
+/// from the default: with bracketed paste off both deliver
+/// byte-identical PTY input, so the distinction lives in the variant.
 async fn input_frames_from_send(bytes: &[u8], raw: bool, keys: &[&str]) -> Vec<InputMsg> {
     let steps: Vec<SendStep> = keys
         .iter()
         .map(|k| SendStep::Key(k.parse().expect("chord")))
         .collect();
-    let (code, frames) = send_against_burst(bytes, raw, &steps, Vec::new()).await;
-    assert_eq!(code, 0, "the scripted daemon satisfies every step");
+    let (code, frames) = send_against(bytes, raw, &steps, |_| None).await;
+    assert_eq!(code, 0, "the scripted daemon takes every step");
     frames
 }
 
-/// Run `cmd_send` against a scripted daemon whose rehydrate burst is
-/// `burst`, returning the exit code and every `InputMsg` frame written.
-async fn send_against_burst(
+/// Run `cmd_send` against a scripted daemon that answers its
+/// `Ops::Send` with `refuse(steps)`, or `Sent` when that is `None`,
+/// returning the exit code and the steps the request carried.
+async fn send_against(
     bytes: &[u8],
     raw: bool,
     steps: &[SendStep],
-    burst: Vec<felis_protocol::messages::GridMsg>,
+    refuse: impl FnOnce(&[WireStep]) -> Option<SendOutcome> + Send + 'static,
 ) -> (i32, Vec<InputMsg>) {
     use felis_protocol::MessageKind;
-    use felis_protocol::messages::{GridMsg, OpsToClientMsg, OpsToDaemonMsg};
+    use felis_protocol::messages::{OpsToClientMsg, OpsToDaemonMsg};
     use felis_transport::{FrameReader, FrameWriter};
 
     let (client_side, daemon_side) = tokio::io::duplex(64 * 1024);
@@ -344,96 +341,58 @@ async fn send_against_burst(
     let daemon = tokio::spawn(async move {
         let mut reader = FrameReader::new(daemon_read);
         let mut writer = FrameWriter::at_build_minor(daemon_write);
-        let mut inputs = Vec::new();
-        while let Some(frame) = reader.next_frame().await.expect("read client frame") {
-            match MessageKind::from_u16(frame.kind).expect("known frame kind") {
-                MessageKind::Ops => {
-                    assert!(matches!(
-                        codec::decode::<OpsToDaemonMsg>(&frame.body).expect("decode Ops"),
-                        OpsToDaemonMsg::List,
-                    ));
-                    // The reply must echo the request id, or the
-                    // client's driver refuses it as unmatchable.
-                    let correlation = codec::peek_correlation(&frame.body)
-                        .expect("decode envelope")
-                        .expect("an Ops verb carries a request id");
-                    let listed = OpsToClientMsg::Listed {
-                        sessions: vec![send_test_session()],
-                    };
-                    writer
-                        .send_correlated(&listed, correlation)
-                        .await
-                        .expect("write Listed");
-                }
-                MessageKind::Session => {
-                    match codec::decode::<SessionToDaemonMsg>(&frame.body).expect("decode Session")
-                    {
-                        SessionToDaemonMsg::Attach { target, .. } => {
-                            assert_eq!(
-                                target,
-                                felis_protocol::messages::AttachTarget::Prefix(
-                                    SEND_TEST_PREFIX.to_owned()
-                                ),
-                                "send must let the daemon resolve the prefix"
-                            );
-                            let ready = SessionToClientMsg::Attached {
-                                info: send_test_session(),
-                            };
-                            writer.send(&ready).await.expect("write Ready");
-                            for msg in &burst {
-                                writer.send(msg).await.expect("write burst frame");
-                            }
-                            writer
-                                .send(&GridMsg::RehydrateEnd)
-                                .await
-                                .expect("write RehydrateEnd");
-                        }
-                        SessionToDaemonMsg::InputFence => {
-                            let correlation = codec::peek_correlation(&frame.body)
-                                .expect("decode envelope")
-                                .expect("a fence carries a request id");
-                            writer
-                                .send_correlated(&SessionToClientMsg::InputAccepted, correlation)
-                                .await
-                                .expect("write InputAccepted");
-                        }
-                        SessionToDaemonMsg::Detach => break,
-                        other => panic!("unexpected session message: {other:?}"),
-                    }
-                }
-                MessageKind::Input => {
-                    inputs.push(codec::decode::<InputMsg>(&frame.body).expect("decode"));
-                }
-                other => panic!("unexpected frame kind: {other:?}"),
-            }
-        }
-        inputs
+        let frame = reader
+            .next_frame()
+            .await
+            .expect("read client frame")
+            .expect("the client sends its request");
+        assert_eq!(
+            MessageKind::from_u16(frame.kind),
+            Some(MessageKind::Ops),
+            "a send is one Ops request, with no attach ahead of it"
+        );
+        let OpsToDaemonMsg::Send { id_prefix, steps } =
+            codec::decode::<OpsToDaemonMsg>(&frame.body).expect("decode Ops")
+        else {
+            panic!("expected Ops::Send");
+        };
+        assert_eq!(
+            id_prefix, SEND_TEST_PREFIX,
+            "send must let the daemon resolve the prefix"
+        );
+        // The reply must echo the request id, or the client's driver
+        // refuses it as unmatchable.
+        let correlation = codec::peek_correlation(&frame.body)
+            .expect("decode envelope")
+            .expect("an Ops verb carries a request id");
+        let outcome = refuse(&steps).unwrap_or(SendOutcome::Sent { id: SEND_TEST_ID });
+        writer
+            .send_correlated(&OpsToClientMsg::Sent { outcome }, correlation)
+            .await
+            .expect("write Sent");
+        assert!(
+            reader.next_frame().await.expect("read to close").is_none(),
+            "nothing follows the reply"
+        );
+        steps.into_iter().map(WireStep::into_input).collect()
     });
 
     let conn = Connection::from_halves(
         FrameReader::new(client_read),
         FrameWriter::at_build_minor(client_write),
-        felis_protocol::ConnectionMode::Window,
+        felis_protocol::ConnectionMode::Ops,
     );
     let out = Reporter::point(Format::Human);
-    let code = cmd_send(
-        conn,
-        &out,
-        SEND_TEST_PREFIX,
-        bytes.to_vec(),
-        raw,
-        steps,
-        None,
-    )
-    .await
-    .expect("send completes");
+    let built = wire_steps(&out, bytes.to_vec(), raw, steps).expect("steps a daemon takes");
+    let code = cmd_send(conn, &out, SEND_TEST_PREFIX, built, steps, None)
+        .await
+        .expect("send completes");
     (code, daemon.await.expect("daemon task"))
 }
 
-/// Run `cmd_send` against a daemon that reads the attach and then
+/// Run `cmd_send` against a daemon that reads the request and then
 /// hangs up, and return the exit code it reports.
-async fn send_exit_code_when_the_daemon_drops_at_attach() -> i32 {
-    use felis_protocol::MessageKind;
+async fn send_exit_code_when_the_daemon_drops_mid_send() -> i32 {
     use felis_transport::{FrameReader, FrameWriter};
 
     let (client_side, daemon_side) = tokio::io::duplex(64 * 1024);
@@ -443,12 +402,7 @@ async fn send_exit_code_when_the_daemon_drops_at_attach() -> i32 {
     let daemon = tokio::spawn(async move {
         let mut reader = FrameReader::new(daemon_read);
         let writer = FrameWriter::at_build_minor(daemon_write);
-        while let Some(frame) = reader.next_frame().await.expect("read client frame") {
-            if MessageKind::from_u16(frame.kind).expect("known frame kind") == MessageKind::Session
-            {
-                break;
-            }
-        }
+        drop(reader.next_frame().await.expect("read client frame"));
         drop(writer);
         drop(reader);
     });
@@ -456,36 +410,29 @@ async fn send_exit_code_when_the_daemon_drops_at_attach() -> i32 {
     let conn = Connection::from_halves(
         FrameReader::new(client_read),
         FrameWriter::at_build_minor(client_write),
-        felis_protocol::ConnectionMode::Window,
+        felis_protocol::ConnectionMode::Ops,
     );
     let out = Reporter::point(Format::Json);
-    let code = cmd_send(
-        conn,
-        &out,
-        SEND_TEST_PREFIX,
-        b"hi".to_vec(),
-        true,
-        &[],
-        None,
-    )
-    .await
-    .expect("send reports rather than panicking");
+    let built = wire_steps(&out, b"hi".to_vec(), true, &[]).expect("one raw step");
+    let code = cmd_send(conn, &out, SEND_TEST_PREFIX, built, &[], None)
+        .await
+        .expect("send reports rather than panicking");
     daemon.await.expect("daemon task");
     code
 }
 
-/// A socket that closes mid-attach is the daemon going away, not
-/// the daemon answering "no such session": the exit contract gives
-/// the first `2` (retry) and the second `1` (pick again), and a
+/// A socket that closes before the reply is the daemon going away,
+/// not the daemon answering "no such session": the exit contract
+/// gives the first `2` (retry) and the second `1` (pick again), and a
 /// caller that cannot tell them apart retries the wrong thing.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_daemon_closing_mid_attach_exits_two() {
-    assert_eq!(send_exit_code_when_the_daemon_drops_at_attach().await, 2);
+async fn a_daemon_closing_mid_send_exits_two() {
+    assert_eq!(send_exit_code_when_the_daemon_drops_mid_send().await, 2);
 }
 
 /// A daemon below the source's minor would ignore the field and search
 /// scrollback, so the verb refuses as `unsupported` (exit 2) before a
-/// byte leaves, the attach included.
+/// byte leaves, the prefix lookup included.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_visible_search_on_a_minor_zero_daemon_exits_two_unsent() {
     use felis_protocol::messages::{SearchOptions, SearchSource};
@@ -721,21 +668,6 @@ fn a_shifted_letter_chord_sends_the_uppercase_letter() {
     assert_eq!(shift_digit.key, Key::Character("1".into()));
 }
 
-fn mouse_mode(
-    protocol: felis_protocol::messages::MouseProtocol,
-) -> felis_protocol::messages::GridMsg {
-    felis_protocol::messages::GridMsg::ModeFlags {
-        bracketed_paste: false,
-        alt_screen: true,
-        mouse_protocol: protocol,
-        application_cursor: false,
-        modify_other_keys: felis_protocol::messages::ModifyOtherKeys::Off,
-        application_keypad: false,
-        win32_input_mode: false,
-        reverse_video: false,
-    }
-}
-
 fn send_steps(argv: &[&str]) -> Vec<SendStep> {
     use clap::Parser as _;
 
@@ -778,19 +710,11 @@ fn key_and_mouse_steps_keep_their_command_line_order() {
 /// The events go out after the paste and between the keys, as
 /// unplaced 1-based cells the daemon encodes against the live modes.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn mouse_frames_follow_the_paste_in_order_with_the_keys() {
-    use felis_protocol::messages::{
-        InputMods, MouseAction, MouseButton, MouseEvent, MouseProtocol,
-    };
+async fn mouse_steps_follow_the_paste_in_order_with_the_keys() {
+    use felis_protocol::messages::{InputMods, MouseAction, MouseButton, MouseEvent};
 
     let steps = send_steps(&["--key", "escape", "--mouse", "click:12,4"]);
-    let (code, frames) = send_against_burst(
-        b"x",
-        false,
-        &steps,
-        vec![mouse_mode(MouseProtocol::ButtonEvents)],
-    )
-    .await;
+    let (code, frames) = send_against(b"x", false, &steps, |_| None).await;
     assert_eq!(code, 0);
     let click = |action| {
         InputMsg::Mouse(MouseEvent {
@@ -814,36 +738,39 @@ async fn mouse_frames_follow_the_paste_in_order_with_the_keys() {
     );
 }
 
-/// A refused event fails the whole command before any frame, the
-/// paste and the keys included, goes out.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn an_event_the_program_would_not_see_sends_nothing() {
-    use felis_protocol::messages::{GridDims, GridMsg, MouseProtocol};
+/// The daemon names the refused step by its index among the wire
+/// steps; the message names the argument it came from, a click's
+/// release included.
+#[test]
+fn a_refused_step_is_reported_against_its_argument() {
+    let steps = send_steps(&["--key", "enter", "--mouse", "click:3,4"]);
+    let out = staging_out();
+    let (wire, origins) =
+        wire_steps(&out, b"x".to_vec(), false, &steps).expect("the steps are well-formed");
+    assert_eq!(wire.len(), 4, "the paste, the key, the press, the release");
+    assert_eq!(
+        origins,
+        [
+            StepOrigin::Payload,
+            StepOrigin::Arg(0),
+            StepOrigin::Arg(1),
+            StepOrigin::Arg(1),
+        ]
+    );
+}
 
-    let resized = GridMsg::Size {
-        dims: GridDims {
-            rows: 10,
-            cols: 40,
-            pixel_w: 0,
-            pixel_h: 0,
-        },
-    };
-    for (argv, burst) in [
-        // No `ModeFlags` with reporting on: the program is not listening.
-        (&["--key", "enter", "--mouse", "click:0,0"][..], vec![]),
-        (
-            &["--mouse", "drag:0,0"],
-            vec![mouse_mode(MouseProtocol::ButtonEvents)],
-        ),
-        // Inside the attach reply's 80x24, outside the grid it resized to.
-        (
-            &["--mouse", "click:50,5"],
-            vec![mouse_mode(MouseProtocol::AnyMotion), resized],
-        ),
-    ] {
-        let steps = send_steps(argv);
-        let (code, frames) = send_against_burst(b"x", false, &steps, burst).await;
-        assert_eq!(code, 1, "{argv:?}");
-        assert_eq!(frames, [], "{argv:?}");
-    }
+/// A refusal is the daemon's verdict on the whole request: the verb
+/// fails as an invalid request (exit 1).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_step_the_daemon_refuses_fails_the_send() {
+    let steps = send_steps(&["--mouse", "drag:0,0"]);
+    let (code, _) = send_against(b"", false, &steps, |_| {
+        Some(SendOutcome::Refused {
+            reason: SendRefusal::Unreported,
+            step: Some(0),
+            detail: "the program has no mouse reporting on; nothing was sent".into(),
+        })
+    })
+    .await;
+    assert_eq!(code, 1);
 }

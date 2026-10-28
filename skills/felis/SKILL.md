@@ -118,7 +118,7 @@ felis sessions capture "$ID" --source command-output --format jsonl
 #    → rows + terminal {"v":1,"event":"end","count":N,"exit_code":M}
 
 #    To watch a command someone else started, drop the text: --wait
-#    alone blocks for the next D mark after it attaches.
+#    alone blocks for the next D mark from now on.
 felis sessions send "$ID" --wait --timeout 600 --format json
 
 # 3. Read it back. Default region is the visible grid. --lines N tails

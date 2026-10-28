@@ -1761,6 +1761,68 @@ async fn payload_less_wait_ignores_historical_marks_and_times_out() {
     server.abort();
 }
 
+/// A wait with no `--timeout` cannot end on the clock, so a session
+/// that exits with no `D` mark must end it, with or without input sent
+/// ahead of the watch.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_wait_without_a_timeout_ends_session_ended_when_the_session_exits_markless() {
+    for with_input in [false, true] {
+        let tmp = private_dir();
+        let factory: SessionFactory = Arc::new(|_| {
+            let mut cmd = PtyCommand::new("/bin/sh");
+            cmd.args(["-c", "read x; exit 0"]);
+            cmd.env_clear();
+            cmd.env("PATH", "/bin:/usr/bin");
+            cmd
+        });
+        let (server, socket, _pool) = spawn_daemon(&tmp, factory).await;
+        let id = create_and_detach(&socket).await;
+        let id_hex = format!("{id:032x}");
+
+        let mut args = vec!["sessions", "send", &id_hex];
+        if with_input {
+            args.extend(["--key", "enter"]);
+        }
+        args.extend(["--wait", "--format", "json"]);
+        let waiter = cli_command()
+            .arg("--socket")
+            .arg(&socket)
+            .args(&args)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("run felis sessions send --wait");
+        if !with_input {
+            // Only a watch already registered can be ended by the exit.
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            let out = cli_command()
+                .arg("--socket")
+                .arg(&socket)
+                .args(["sessions", "send", &id_hex, "--key", "enter"])
+                .output()
+                .expect("run felis sessions send");
+            assert!(out.status.success(), "the line that ends the shell is sent");
+        }
+        let out = tokio::task::spawn_blocking(move || waiter.wait_with_output())
+            .await
+            .unwrap()
+            .expect("wait for felis sessions send --wait");
+        assert_eq!(
+            out.status.code(),
+            Some(1),
+            "with_input={with_input}: stdout={} stderr={}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr),
+        );
+        assert!(
+            String::from_utf8_lossy(&out.stderr).contains("\"kind\":\"session_ended\""),
+            "with_input={with_input}: {}",
+            String::from_utf8_lossy(&out.stderr),
+        );
+        server.abort();
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn spawn_creates_session_and_id_is_addressable() {
     let tmp = private_dir();
@@ -3803,4 +3865,22 @@ async fn info_json_still_carries_a_short_id_without_a_roster_fetch() {
     );
 
     server.abort();
+}
+
+/// A send past the step cap is the request's fault wherever it is
+/// pointed: it fails as `invalid_request` with no daemon to dial.
+#[test]
+fn a_send_past_the_step_cap_is_refused_with_no_daemon_running() {
+    let tmp = private_dir();
+    let cold = tmp.path().join("no-daemon.sock");
+    let steps = felis_protocol::limits::MAX_SEND_STEPS + 1;
+    let out = cli_command()
+        .arg("--socket")
+        .arg(&cold)
+        .args(["sessions", "send", "deadbeef", "--format", "json"])
+        .args(std::iter::repeat_n(["--key", "a"], steps).flatten())
+        .output()
+        .expect("run felis sessions send past the step cap");
+    assert_framed_failure(&out, "invalid_request", 1);
+    assert!(!cold.exists(), "no daemon was spawned to refuse it");
 }

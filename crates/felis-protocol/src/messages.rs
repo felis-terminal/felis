@@ -43,9 +43,9 @@ pub use notify::{NotifyToClientMsg, NotifyToDaemonMsg};
 pub use ops::{
     Attachment, InfoOutcome, Limit, MAX_SESSION_TAGS, MAX_TAG_BYTES, OpsToClientMsg,
     OpsToDaemonMsg, ProgramStatusRecord, ReportScope, ResolvedId, ResourceKind, ResourceReport,
-    ResourceUnit, SessionInfo, SessionNotification, SpawnOutcome, StopMode, StopOutcome,
-    SubjectKind, SwitchDenied, SwitchScope, SwitchTarget, TerminalProgress, UpgradeOutcome,
-    UpgradeRefusal,
+    ResourceUnit, SendOutcome, SendRefusal, SendStep, SessionInfo, SessionNotification,
+    SpawnOutcome, StopMode, StopOutcome, SubjectKind, SwitchDenied, SwitchScope, SwitchTarget,
+    TerminalProgress, UpgradeOutcome, UpgradeRefusal,
 };
 pub use push::{ExitStatus, PushMsg};
 pub use region::{RegionPosition, RegionToClientMsg, RegionToDaemonMsg};
@@ -909,6 +909,8 @@ pub(crate) mod tests {
         "OpsStop.mode: if_empty force when_empty",
         "OpsStopReply.outcome: stopping refused draining",
         "OpsUpgradeReply.outcome: upgrading refused",
+        "SendStep.step: paste raw key mouse",
+        "OpsSent.outcome: id no_match ambiguous refused",
         "ResourceReport.scope: daemon subject",
         "Limit.limit: bounded unlimited",
         "ExitStatus.status: code signal",

@@ -41,8 +41,16 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
   own output from the previous frame, for afterglow and motion blur.
 - **Wire**: protocol minor 3 adds `PushSessionExited.status`, the session program's exit code or, on Unix, the signal
   that terminated it. An older window skips it; a window facing an older daemon reads it as absent.
+- **Wire**: protocol minor 3 lets an `Ops` connection read and drive a session without attaching to it: a session id on
+  `Search::Query`, `Region::Request` and `Region::Rows`, and `Ops::Send` / `Ops::SendAndWait`, which write ordered
+  paste, raw, key and mouse steps and, for the second, stream the next `OSC 133 ; D` mark. A client refuses each against
+  an older daemon before sending it.
 
 ### Changed
+
+- **CLI**: `felis sessions search`, `capture` and `send` no longer attach to the session; they name it in the request.
+  Against a daemon older than protocol minor 3 they exit `2` under `unsupported`. A `send --wait` on a session that has
+  already exited ends at once under `session_ended`, and `send` to one exits `1` under `session_ended`.
 
 - **Windows**: the daemon runs shells on Windows Terminal's ConPTY, embedded in `felis-daemon.exe` and extracted under
   `%LOCALAPPDATA%\felis\data\conpty\`, instead of the conhost built into Windows, so every Windows install,

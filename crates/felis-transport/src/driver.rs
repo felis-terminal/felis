@@ -233,6 +233,16 @@ pub enum Delivery<M> {
     },
 }
 
+/// What [`ConnectionDriver::admit_undecoded`] admitted.
+#[derive(Debug)]
+pub enum Undecoded {
+    /// The opener's validated id.
+    Admitted(Correlation),
+    /// Send `reply` and keep the connection, as
+    /// [`Delivery::RefuseStream`].
+    Refused(ConnToClientMsg),
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum DriverError {
     #[error("unexpected frame kind: expected {expected}, found {found}")]
@@ -643,6 +653,24 @@ impl<R: Role> ConnectionDriver<R> {
             })),
             Accounting::Drop => Ok(Delivery::DroppedAfterCancel),
             Accounting::Refuse(reply) => Ok(Delivery::RefuseStream { reply }),
+        }
+    }
+
+    /// Admit an opener the caller refuses without decoding its body,
+    /// under `meta`, the row of the arm it names: the arm-table checks
+    /// and id accounting a decode would run, so the refusal answers
+    /// under a validated id and the next request is not read as a skip.
+    pub fn admit_undecoded(
+        &mut self,
+        payload: &Payload,
+        meta: &ArmMeta,
+    ) -> Result<Undecoded, DriverError> {
+        match self.admit_meta(payload, meta)? {
+            Accounting::Deliver => payload.correlation.map(Undecoded::Admitted).ok_or_else(|| {
+                Self::unexpected("an opener carrying its correlation envelope", meta.name)
+            }),
+            Accounting::Refuse(reply) => Ok(Undecoded::Refused(reply)),
+            Accounting::Drop => Err(Self::unexpected("an opener", meta.name)),
         }
     }
 

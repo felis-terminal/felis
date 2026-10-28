@@ -63,7 +63,8 @@ pub use config::{
 pub use connector::{
     AttachIntent, BoundedDialError, Carrier, CarrierConnection, CarrierReader, CarrierWriter,
     ConnectError, Connection, DaemonStatus, Offer, RemoteSpawn, SessionRefusalContext, SwitchReply,
-    admits, check_value_minor, connect, connect_carrier, dial_bounded, refusal_detail,
+    admits, check_session_addressed, check_value_minor, connect, connect_carrier, dial_bounded,
+    refusal_detail,
 };
 #[cfg(feature = "native")]
 pub use dial::{

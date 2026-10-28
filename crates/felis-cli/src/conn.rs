@@ -8,13 +8,9 @@ use std::path::Path;
 use anyhow::Result;
 use felis_client_core::local_socket::{SocketSource, resolve_local_socket_source};
 use felis_client_core::{
-    Carrier, CarrierConnection, ConnectError, Connection, Offer, Reconnector, RemoteSpawn,
-    connect_carrier,
+    Carrier, CarrierConnection, ConnectError, Offer, Reconnector, RemoteSpawn, connect_carrier,
 };
-use felis_protocol::MessageKind;
-use felis_protocol::messages::{GridMsg, RefusalReason};
-use felis_transport::{Delivery, DriverError, Incoming};
-use tokio::io::{AsyncRead, AsyncWrite};
+use felis_protocol::messages::RefusalReason;
 
 use crate::cli_output::{ErrorKind, Reporter};
 
@@ -159,66 +155,6 @@ pub(crate) fn unreachable_message(target: &Reconnector, err: impl std::fmt::Disp
         ),
         Carrier::Ssh { destination, .. } => {
             format!("cannot reach the felis daemon on {destination}: {err}")
-        }
-    }
-}
-
-/// Why [`drain_rehydrate`] stopped short of the burst's end. Each
-/// surface words these itself, so the mapping to its error vocabulary
-/// stays at the caller.
-#[derive(Debug)]
-pub(crate) enum RehydrateError {
-    Closed,
-    Read(ConnectError),
-    TimedOut,
-    Corrupt(DriverError),
-}
-
-/// Consume the visible-grid burst the daemon sends on attach, up to
-/// its `RehydrateEnd`. A verb that reads regions directly has no use
-/// for the burst, but a request sent before it ends would race it.
-pub(crate) async fn drain_rehydrate<R, W>(conn: &mut Connection<R, W>) -> Result<(), RehydrateError>
-where
-    R: AsyncRead + Unpin,
-    W: AsyncWrite + Unpin,
-{
-    // A real daemon ships the burst promptly, so a longer wait means
-    // something is wrong.
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
-    loop {
-        // Through the connection, not the raw reader: frames a verb
-        // parked while its own reply was outstanding are queued there.
-        let frame = match tokio::time::timeout_at(deadline, conn.next_frame()).await {
-            Ok(Ok(Some(frame))) => frame,
-            Ok(Ok(None)) => return Err(RehydrateError::Closed),
-            Ok(Err(err)) => return Err(RehydrateError::Read(err)),
-            Err(_elapsed) => return Err(RehydrateError::TimedOut),
-        };
-        // Every frame goes through the driver, burst or not: it judges
-        // the connection's phase and would catch a daemon sending
-        // something this attach never asked for.
-        let incoming = conn
-            .driver
-            .classify(&frame)
-            .map_err(RehydrateError::Corrupt)?;
-        // Through the driver rather than a raw decode: only `decode`
-        // enforces the burst's own arm rows, and reading the body
-        // around it would exempt the frames this loop reads most.
-        if let Incoming::Payload(payload) = incoming {
-            if payload.kind == MessageKind::Grid {
-                let delivery = conn
-                    .driver
-                    .decode::<GridMsg>(&payload)
-                    .map_err(RehydrateError::Corrupt)?;
-                if matches!(delivery, Delivery::Deliver(ref grid) if grid.msg == GridMsg::RehydrateEnd)
-                {
-                    return Ok(());
-                }
-            } else {
-                conn.driver
-                    .admit_drained(&payload)
-                    .map_err(RehydrateError::Corrupt)?;
-            }
         }
     }
 }

@@ -5,10 +5,8 @@ use serde::{Deserialize, Serialize};
 
 use super::{ArmMeta, Directed, RegionSource};
 
-/// Region-export requests ([`crate::MessageKind::Region`], kind 6),
-/// sent while attached.
-///
-/// The daemon serializes regions while the requester retains sink routing
+/// Region-export requests ([`crate::MessageKind::Region`], kind 6). The
+/// daemon serializes regions while the requester retains sink routing
 /// (`docs/explanation/input.md` "Which daemon runs the command").
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RegionToDaemonMsg {
@@ -21,6 +19,9 @@ pub enum RegionToDaemonMsg {
         /// Reconstruct SGR color/style, or emit plain text. Mirrors
         /// `felis sessions capture --ansi` (default off).
         ansi: bool,
+        /// The session to read, required on an unattached connection
+        /// and absent on an attached one.
+        session: Option<u128>,
     },
     /// Serialize the same region [`Self::Request`]
     /// names, but reply row by row ([`RegionToClientMsg::Row`] … [`RegionToClientMsg::RowsDone`]).
@@ -33,6 +34,8 @@ pub enum RegionToDaemonMsg {
         /// Emit only the youngest `max_rows` rows (still oldest-first);
         /// `None` emits the whole region.
         max_rows: Option<u32>,
+        /// As [`Self::Request`]'s.
+        session: Option<u128>,
     },
 }
 
@@ -127,28 +130,34 @@ pub(crate) mod tests {
             RegionToDaemonMsg::Request {
                 source: RegionSource::Scrollback,
                 ansi: true,
+                session: None,
             },
             RegionToDaemonMsg::Request {
                 source: RegionSource::Visible,
                 ansi: false,
+                session: Some(0xfeed),
             },
             RegionToDaemonMsg::Request {
                 source: RegionSource::LastCommand,
                 ansi: false,
+                session: None,
             },
             RegionToDaemonMsg::Request {
                 source: RegionSource::CommandOutput,
                 ansi: true,
+                session: None,
             },
             RegionToDaemonMsg::Rows {
                 source: RegionSource::Scrollback,
                 ansi: false,
                 max_rows: None,
+                session: None,
             },
             RegionToDaemonMsg::Rows {
                 source: RegionSource::CommandOutput,
                 ansi: true,
                 max_rows: Some(200),
+                session: Some(u128::MAX),
             },
         ]
     }

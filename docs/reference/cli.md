@@ -264,6 +264,10 @@ All session verbs run under `felis sessions <verb>`:
 Exit codes follow the `error.kind` rule ("Exit codes"). Two are worth naming: `search` exits `1` when nothing matched,
 and `list` exits `0` on an empty roster.
 
+`capture`, `search` and `send` name their session in the request rather than attaching to it
+([ipc.md](ipc.md#ops-kind--5) "Ops (kind = 5)"), and `send` and `send --wait` each run on a connection of their own. A
+daemon whose protocol minor predates that is answered `unsupported` (exit `2`) before anything is sent.
+
 ### Verb details
 
 - **`list`**: `--tag <t>` filters sessions by tag. A session in exit grace is marked `(exited)` or `"exited":true`.
@@ -296,16 +300,18 @@ and `list` exits `0` on an empty roster.
   wheel action takes none; MODS are `shift`, `alt` and `ctrl` in the chord spelling. COL and ROW are 0-based, as
   `search`'s `col_spans` and `capture`'s rows are, so `--mouse click:12,4` clicks a match that starts at column 12 of
   row 4. The daemon encodes each event against the session's current mouse modes; under SGR-pixels (`?1016`) it reports
-  the middle of the cell. Before writing anything the verb checks every event against the mouse reporting the program
-  has on and against the grid, and refuses the whole command under `invalid_request` (exit `1`) when the program would
-  drop one (no reporting at all, or a `drag` under `?1000` alone) or a cell is off the grid. A malformed event is a
-  usage error (exit `2`). `--key` and `--mouse` go out after the text in command-line order. `--wait` blocks until the
-  session emits an OSC 133 `D` mark and prints its exit code, or `-` for a bare `D` that carries none, so
-  `felis sessions send <id> --wait` watches a command someone else started. `--timeout <secs>` bounds everything past
-  the writes: the daemon's admission of the input and the mark watch alike. An unbounded `--wait` waits indefinitely,
-  and `--timeout 0` is a deadline already past, so neither wait gets a chance to finish and the verb exits `1` under
-  `timeout`. The payload is capped at `MAX_PASTE_BYTES` of text, `MAX_RAW_INPUT_BYTES` with `--raw`
-  ([ipc.md](ipc.md#semantic-limits) "Semantic limits").
+  the middle of the cell. Before writing anything the daemon checks every event against the mouse reporting the program
+  has on and against the grid, and the verb refuses the whole command under `invalid_request` (exit `1`) when the
+  program would drop one (no reporting at all, or a `drag` under `?1000` alone) or a cell is off the grid. A malformed
+  event is a usage error (exit `2`). `--key` and `--mouse` go out after the text in command-line order. `--wait` blocks
+  until the session emits an OSC 133 `D` mark and prints its exit code, or `-` for a bare `D` that carries none, so
+  `felis sessions send <id> --wait` watches a command someone else started. The daemon starts watching before it writes
+  the first step, so a command that finishes at once is still seen; a session that ends before a mark ends the wait
+  under `session_ended` (exit `1`). `--timeout <secs>` bounds everything past the writes: the daemon's admission of the
+  input and the mark watch alike. An unbounded `--wait` waits indefinitely, and `--timeout 0` is a deadline already
+  past, so neither wait gets a chance to finish and the verb exits `1` under `timeout`. The payload is capped at
+  `MAX_PASTE_BYTES` of text, `MAX_RAW_INPUT_BYTES` with `--raw`, and the text, keys and mouse events together at
+  `MAX_SEND_STEPS` steps, a click counting two ([ipc.md](ipc.md#semantic-limits) "Semantic limits").
 - **`capture`**: `--source <visible|scrollback|command-output|last-command>` picks the region; `scrollback` streams
   retained history oldest-first, `command-output` and `last-command` the output bounded by OSC 133 prompt marks.
   `--lines N` limits output to the last N rows, and under `--source scrollback` the daemon transmits that tail alone
@@ -319,7 +325,7 @@ and `list` exits `0` on an empty roster.
   searched. `visible` matches the live screen alone, alternate screen included, so every `line_index` is a grid row and
   each `col_spans` segment names the cell columns a match covers on screen. A daemon whose protocol minor predates
   `--source visible` would search scrollback in its place, so against one the verb refuses with `unsupported` (exit `2`)
-  before attaching.
+  before sending anything.
 - **`switch`**: moves one window attached to the current session (`$FELIS_SESSION_ID` or `--from <id>`) to target
   `<id>`. When several windows mirror that session, the one that most recently received user input moves;
   `--attachment <ID>` names a window explicitly. A background `sessions send` is not a window and never becomes that

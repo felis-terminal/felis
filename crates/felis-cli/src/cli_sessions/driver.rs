@@ -9,9 +9,6 @@ use felis_protocol::{
 use felis_transport::{Delivery, Incoming};
 use tokio::io::{AsyncRead, AsyncWrite};
 
-use crate::cli_output::{ErrorKind, Reporter};
-use crate::conn::RehydrateError;
-
 pub(super) enum DrainTick {
     /// The per-attempt read timed out; the wall-clock deadline has not
     /// elapsed.
@@ -150,37 +147,4 @@ where
             return Ok(true);
         }
     }
-}
-
-/// Discards the rehydrate burst: subscribers must consume outboxes before
-/// requesting, but capture reads regions directly. A missing `RehydrateEnd`
-/// exits 2 to prevent partial captures (docs/reference/cli.md streaming-read contract).
-pub(super) async fn drain_rehydrate<R, W>(
-    conn: &mut Connection<R, W>,
-    out: &Reporter,
-) -> Result<(), i32>
-where
-    R: AsyncRead + Unpin,
-    W: AsyncWrite + Unpin,
-{
-    crate::conn::drain_rehydrate(conn)
-        .await
-        .map_err(|err| match err {
-            RehydrateError::Closed => out.fail(
-                ErrorKind::DaemonLost,
-                "capture: daemon closed the connection mid-sync",
-            ),
-            RehydrateError::TimedOut => out.fail(
-                ErrorKind::DaemonLost,
-                "capture: the daemon did not finish syncing the screen in time",
-            ),
-            RehydrateError::Read(e) => out.fail(
-                ErrorKind::DaemonLost,
-                format!("capture: connection error: {e}"),
-            ),
-            RehydrateError::Corrupt(err) => out.fail(
-                ErrorKind::Protocol,
-                format!("capture: daemon sent an unreadable frame: {err}"),
-            ),
-        })
 }
