@@ -797,7 +797,10 @@ fn an_ops_client_refuses_a_window_management_push() {
 
     for push in [
         PushMsg::Reattach { id: 1 },
-        PushMsg::SessionExited { id: 1 },
+        PushMsg::SessionExited {
+            id: 1,
+            status: None,
+        },
     ] {
         let Incoming::Payload(payload) = ops.classify(&frame(&push)).unwrap() else {
             panic!("a push is a payload");

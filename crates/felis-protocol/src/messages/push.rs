@@ -28,7 +28,12 @@ pub enum PushMsg {
     ///
     /// Distinguishes normal shell exit (PTY EOF) from daemon crashes before
     /// dropping the subscription.
-    SessionExited { id: u128 },
+    SessionExited {
+        id: u128,
+        /// `None` when the daemon had not reaped the program by the
+        /// time of the push.
+        status: Option<ExitStatus>,
+    },
     /// Daemon → client, [`crate::ConnectionMode::Window`] only. Another
     /// process asked via [`OpsToDaemonMsg::Switch`](super::OpsToDaemonMsg::Switch) on a
     /// [`SwitchTarget::Carrier`](super::SwitchTarget::Carrier) that this
@@ -39,6 +44,16 @@ pub enum PushMsg {
         /// inspects it.
         target: RetargetTarget,
     },
+}
+
+/// How a session's program ended, as the daemon reaped it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ExitStatus {
+    /// The low eight bits of Unix `exit()`, the full 32-bit code on
+    /// Windows.
+    Code(u32),
+    /// Unix only: the signal number that terminated the program.
+    Signal(u32),
 }
 
 impl Directed for PushMsg {
@@ -67,6 +82,19 @@ pub(crate) mod tests {
             PushMsg::Reattach { id: 0xBEEF },
             PushMsg::SessionExited {
                 id: 0xCAFE_BABE_DEAD_BEEF,
+                status: None,
+            },
+            PushMsg::SessionExited {
+                id: 1,
+                status: Some(ExitStatus::Code(0)),
+            },
+            PushMsg::SessionExited {
+                id: 2,
+                status: Some(ExitStatus::Code(u32::MAX)),
+            },
+            PushMsg::SessionExited {
+                id: 3,
+                status: Some(ExitStatus::Signal(9)),
             },
             PushMsg::RetargetHost {
                 target: RetargetTarget {

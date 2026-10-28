@@ -15,8 +15,9 @@ impl From<&messages::PushMsg> for v1::PushMsg {
             P::Reattach { id } => Msg::Reattach(v1::PushReattach {
                 id: id_to_bytes(*id),
             }),
-            P::SessionExited { id } => Msg::SessionExited(v1::PushSessionExited {
+            P::SessionExited { id, status } => Msg::SessionExited(v1::PushSessionExited {
                 id: id_to_bytes(*id),
+                status: status.map(Into::into),
             }),
             P::RetargetHost { target } => Msg::RetargetHost(v1::PushRetargetHost {
                 target: Some(target.into()),
@@ -37,6 +38,7 @@ impl TryFrom<v1::PushMsg> for messages::PushMsg {
             },
             Msg::SessionExited(s) => Self::SessionExited {
                 id: id_from_bytes(s.id)?,
+                status: s.status.map(TryInto::try_into).transpose()?,
             },
             Msg::RetargetHost(r) => Self::RetargetHost {
                 target: r
@@ -45,5 +47,34 @@ impl TryFrom<v1::PushMsg> for messages::PushMsg {
                     .try_into()?,
             },
         })
+    }
+}
+
+impl From<messages::ExitStatus> for v1::ExitStatus {
+    fn from(s: messages::ExitStatus) -> Self {
+        use v1::exit_status::Status;
+        let status = match s {
+            messages::ExitStatus::Code(code) => Status::Code(code),
+            messages::ExitStatus::Signal(signal) => Status::Signal(signal),
+        };
+        Self {
+            status: Some(status),
+        }
+    }
+}
+
+impl TryFrom<v1::ExitStatus> for messages::ExitStatus {
+    type Error = WireError;
+    fn try_from(s: v1::ExitStatus) -> Result<Self, Self::Error> {
+        use v1::exit_status::Status;
+        Ok(
+            match s
+                .status
+                .ok_or(WireError::MissingOneof("ExitStatus.status"))?
+            {
+                Status::Code(code) => Self::Code(code),
+                Status::Signal(signal) => Self::Signal(signal),
+            },
+        )
     }
 }

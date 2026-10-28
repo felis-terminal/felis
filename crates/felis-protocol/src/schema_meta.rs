@@ -901,6 +901,7 @@ pub(crate) const PAYLOAD_ONEOFS: &[&str] = &[
     "OpsUpgradeReply.outcome: upgrading refused",
     "ResourceReport.scope: daemon subject",
     "Limit.limit: bounded unlimited",
+    "ExitStatus.status: code signal",
 ];
 
 /// Every arm, added field and closed-enum value, as the ledger spells
@@ -1010,6 +1011,7 @@ pub const ADDITIONS: &[(&str, u16)] = &[
     ("ImagePlacement.serial", 2),
     ("ImageVirtualPlacement.placement_id", 1),
     ("SessionConfigureTheme.palette", 2),
+    ("PushSessionExited.status", 3),
     ("SearchQuery.source", 1),
     ("SearchMatch.anchor", 2),
     ("ConnectionMode::WINDOW", 0),

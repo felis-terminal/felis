@@ -412,9 +412,9 @@ is restamped whenever the subscriber count drops to zero.
 ### Telling the attached window the shell exited
 
 An attached window learns its shell exited through a typed signal, not an inference. When the owner task sees PTY EOF it
-ships `PushMsg::SessionExited { id }` to every _window_ subscriber and _then_ drops the subscription (the wire shapes
-are in [ipc.md](../../reference/ipc.md) "Push (kind = 8)"). This matters because these endings otherwise reach the
-client as the same silent channel close, and the client must react differently to each:
+ships `PushMsg::SessionExited` to every _window_ subscriber and _then_ drops the subscription (the wire shapes are in
+[ipc.md](../../reference/ipc.md) "Push (kind = 8)"). This matters because these endings otherwise reach the client as
+the same silent channel close, and the client must react differently to each:
 
 | Event                             | On the wire                               | Session after                   | Window                                  |
 | --------------------------------- | ----------------------------------------- | ------------------------------- | --------------------------------------- |

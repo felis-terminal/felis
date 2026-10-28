@@ -2598,6 +2598,29 @@ pub struct PushReattach {
 pub struct PushSessionExited {
     #[prost(bytes="vec", tag="1")]
     pub id: ::prost::alloc::vec::Vec<u8>,
+    /// How the session's program ended. Absent when the daemon had not
+    /// reaped it by the time of the push; a pre-minor-3 reader skips it.
+    #[prost(message, optional, tag="2")]
+    pub status: ::core::option::Option<ExitStatus>,
+}
+/// A reaped program's exit status.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ExitStatus {
+    #[prost(oneof="exit_status::Status", tags="1, 2")]
+    pub status: ::core::option::Option<exit_status::Status>,
+}
+/// Nested message and enum types in `ExitStatus`.
+pub mod exit_status {
+    #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Status {
+        /// The exit code: the low eight bits of Unix exit(), the full 32-bit
+        /// code on Windows.
+        #[prost(uint32, tag="1")]
+        Code(u32),
+        /// Unix only: the signal number that terminated the program.
+        #[prost(uint32, tag="2")]
+        Signal(u32),
+    }
 }
 /// Daemon → client. Re-dial a different daemon (relay of an OpsSwitch
 /// carrier target). The daemon relays `target` verbatim and never

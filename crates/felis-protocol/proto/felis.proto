@@ -2908,6 +2908,23 @@ message PushReattach {
 // ending rather than a lost transport.
 message PushSessionExited {
   bytes id = 1;
+  // How the session's program ended. Absent when the daemon had not
+  // reaped it by the time of the push; a pre-minor-3 reader skips it.
+  ExitStatus status = 2 [(felis.v1.field_since) = {
+    minor: 3
+    skippable: true
+  }];
+}
+
+// A reaped program's exit status.
+message ExitStatus {
+  oneof status {
+    // The exit code: the low eight bits of Unix exit(), the full 32-bit
+    // code on Windows.
+    uint32 code = 1;
+    // Unix only: the signal number that terminated the program.
+    uint32 signal = 2;
+  }
 }
 
 // Daemon → client. Re-dial a different daemon (relay of an OpsSwitch

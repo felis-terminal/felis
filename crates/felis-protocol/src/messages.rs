@@ -47,7 +47,7 @@ pub use ops::{
     SubjectKind, SwitchDenied, SwitchScope, SwitchTarget, TerminalProgress, UpgradeOutcome,
     UpgradeRefusal,
 };
-pub use push::PushMsg;
+pub use push::{ExitStatus, PushMsg};
 pub use region::{RegionPosition, RegionToClientMsg, RegionToDaemonMsg};
 pub use search::{
     ByteSpan, ColSpan, SearchOptions, SearchSource, SearchToClientMsg, SearchToDaemonMsg,
@@ -911,6 +911,7 @@ pub(crate) mod tests {
         "OpsUpgradeReply.outcome: upgrading refused",
         "ResourceReport.scope: daemon subject",
         "Limit.limit: bounded unlimited",
+        "ExitStatus.status: code signal",
     ];
 
     #[test]
