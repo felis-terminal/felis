@@ -3,9 +3,12 @@
 //! serializes; the JSON protocol reuses them for its session rows.
 
 use felis_protocol::SessionHex;
+use felis_protocol::messages::SessionInfo;
+use felis_protocol::session_prefix::short_session_prefix;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use super::common::session_id_from_hex;
+use super::timestamp::rfc3339_utc;
 
 /// Reads a session id only in the spelling the CLI writes it.
 fn session_id<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
@@ -55,6 +58,81 @@ pub struct SessionObject {
     /// cleared.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub terminal_progress: Option<TerminalProgressObject>,
+}
+
+impl SessionObject {
+    /// `short_id` is a display form, never a persistence target: its
+    /// uniqueness holds for the roster it was computed against, so a
+    /// stored prefix can match a younger session later
+    /// (docs/reference/cli.md "Machine output").
+    #[must_use]
+    pub fn from_info(s: &SessionInfo, short_id: String) -> Self {
+        Self {
+            id: SessionHex(s.id).to_string(),
+            short_id,
+            rows: s.dims.rows,
+            cols: s.dims.cols,
+            idle_seconds: s.idle_seconds,
+            title: s.title.clone(),
+            cwd: s.cwd.clone(),
+            spawn_cwd: s.spawn_cwd.clone(),
+            tags: s.tags.clone(),
+            last_notification: s
+                .last_notification
+                .as_ref()
+                .map(|n| LastNotificationObject {
+                    title: n.notification.title.clone(),
+                    body: n.notification.body.clone(),
+                    urgency: n.notification.urgency.as_str().to_owned(),
+                    age_seconds: n.age_seconds,
+                }),
+            foreground: s.foreground.clone(),
+            last_exit_code: s.last_exit_code,
+            exited: s.exited,
+            attachments: s
+                .attachments
+                .iter()
+                .map(|a| AttachmentObject {
+                    id: a.id.to_string(),
+                    attached_at: rfc3339_utc(a.attached_at),
+                    input_owner: a.input_owner,
+                })
+                .collect(),
+            program_status: s
+                .program_status
+                .iter()
+                .map(|r| ProgramStatusObject {
+                    id: r.id.clone(),
+                    state: r.state.clone(),
+                    kind: r.kind.clone(),
+                    progress: r.progress,
+                    app: r.app.clone(),
+                    title: r.title.clone(),
+                    msg: r.msg.clone(),
+                })
+                .collect(),
+            terminal_progress: s
+                .terminal_progress
+                .as_ref()
+                .map(|p| TerminalProgressObject {
+                    state: p.state.clone(),
+                    value: p.value,
+                }),
+        }
+    }
+
+    /// Shortened against `roster`, which a listing and a single-session
+    /// view of it share so both show one session the same `short_id`.
+    #[must_use]
+    pub fn in_roster(s: &SessionInfo, roster: &[SessionInfo]) -> Self {
+        Self::from_info(s, roster_short_id(s.id, roster))
+    }
+}
+
+/// The git-style unique prefix of `id` among `roster`.
+#[must_use]
+pub fn roster_short_id(id: u128, roster: &[SessionInfo]) -> String {
+    short_session_prefix(id, roster.iter().map(|s| s.id))
 }
 
 /// One `OSC 9 ; 4` report. `state` is an open vocabulary, as
@@ -276,6 +354,55 @@ mod tests {
             let tags = serde_json::json!({ "id": id, "tags": [] });
             assert!(serde_json::from_value::<TagResult>(tags).is_err(), "{id}");
         }
+    }
+
+    fn info(id: u128) -> SessionInfo {
+        SessionInfo {
+            id,
+            dims: felis_protocol::messages::GridDims {
+                rows: 24,
+                cols: 80,
+                pixel_w: 0,
+                pixel_h: 0,
+            },
+            title: None,
+            cwd: None,
+            spawn_cwd: None,
+            terminal_progress: None,
+            idle_seconds: None,
+            tags: Vec::new(),
+            last_notification: None,
+            foreground: None,
+            exited: false,
+            last_exit_code: None,
+            attachments: Vec::new(),
+            sequence: std::num::NonZeroU64::MIN,
+            program_status: Vec::new(),
+        }
+    }
+
+    /// The wire carries an instant; the JSON row publishes an RFC 3339
+    /// string, and an attached session carries no `idle_seconds` key.
+    #[test]
+    fn an_attachment_renders_its_stamp_as_rfc_3339() {
+        let session = SessionInfo {
+            attachments: vec![felis_protocol::messages::Attachment {
+                id: 7,
+                attached_at: std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_788_250_500),
+                input_owner: true,
+            }],
+            ..info(0xCAFE)
+        };
+        let body = serde_json::to_value(SessionObject::in_roster(
+            &session,
+            std::slice::from_ref(&session),
+        ))
+        .unwrap();
+        assert_eq!(
+            body["attachments"][0]["attached_at"],
+            "2026-09-01T08:15:00Z"
+        );
+        assert_eq!(body.get("idle_seconds"), None);
     }
 
     #[test]

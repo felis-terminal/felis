@@ -9,7 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// WHY-NOT clamping a pre-epoch instant to the epoch: the wire admits
 /// any `google.protobuf.Timestamp` back to year 0001, and rewriting one
 /// to 1970 would publish a value the daemon never sent.
-pub(crate) fn rfc3339_utc(t: SystemTime) -> String {
+pub fn rfc3339_utc(t: SystemTime) -> String {
     let secs = match t.duration_since(UNIX_EPOCH) {
         Ok(d) => d.as_secs().min(i64::MAX.cast_unsigned()).cast_signed(),
         Err(e) => {

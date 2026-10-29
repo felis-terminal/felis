@@ -48,6 +48,7 @@ mod protocol;
 pub mod schema;
 mod session;
 mod spawn;
+mod timestamp;
 
 pub use common::{
     BASE64_PATTERN, Base64, DtoError, GridDimsJson, RequestedDimsJson, RgbJson, SESSION_ID_PATTERN,
@@ -74,6 +75,7 @@ pub use protocol::{
 };
 pub use session::{
     AttachmentObject, LastNotificationObject, ListResult, ProgramStatusObject, SessionObject,
-    SessionRef, TagResult, TerminalProgressObject,
+    SessionRef, TagResult, TerminalProgressObject, roster_short_id,
 };
 pub use spawn::{EnvBytesJson, EnvPairJson, SpawnArgsJson};
+pub use timestamp::rfc3339_utc;
