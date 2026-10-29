@@ -1,0 +1,12 @@
+{
+  "id": 5,
+  "request": {
+    "add": [
+      "build"
+    ],
+    "op": "tag",
+    "remove": [],
+    "session": "0123456789abcdef0123456789abcdef"
+  },
+  "type": "request"
+}

@@ -21,20 +21,20 @@ crate's production closure against its "MUST NOT depend on" cell, which is norma
 
 ### Per-crate contracts
 
-| Crate               | Type      | Owns                                                                                                                                                                  | MUST NOT depend on                                           |
-| ------------------- | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
-| `felis-protocol`    | lib       | the `felis.proto` schema and its generated types, the IPC frame layout, the preface and protocol version constants                                                    | `tokio`, anything OS-specific, anything graphical            |
-| `felis-vt`          | lib       | the hand-rolled VT state machine and the Kitty graphics, text-sizing and keyboard dispatch                                                                            | `tokio`, OS-specific I/O, the grid crate                     |
-| `felis-grid`        | lib       | cells, grids, scrollback, the image store, reflow, selection, and the row codec ([row-codec.md](row-codec.md))                                                        | `tokio`, graphics, fonts                                     |
-| `felis-pty`         | lib       | the self-hosted PTY backends (openpty / ConPTY) and their async bridge                                                                                                | `felis-vt`, `felis-grid`, protocol/transport                 |
-| `felis-transport`   | lib       | framing, the local and SSH-stdio carriers, peer identity, the shared connection driver, and process plumbing                                                          | `felis-vt`, `felis-grid`, daemon logic                       |
-| `felis-daemon`      | bin + lib | the session pool, per-session owner tasks, the IPC server, input encoding, and the `serve`/`relay` CLI                                                                | anything graphical                                           |
-| `felis-client-core` | lib       | the shadow screen, the action enum, the IPC connector, the `config.toml` schema, the CLI's session result bodies (`json` feature), and frontend-neutral client policy | `swash`, `wgpu`, `winit` (must run a headless attach)        |
-| `felis-shaping`     | lib       | `swash` shaping, the font fallback chain, and rasterization                                                                                                           | `wgpu`, `winit`                                              |
-| `felis-render-core` | lib       | the renderer-neutral half of the renderer: palette, cell appearance, glyph index, and the per-row display list                                                        | `wgpu`, `winit`                                              |
-| `felis-render-wgpu` | lib       | the wgpu pipeline that draws the display list, and the glyph and image atlases                                                                                        | `winit` (surface comes from a caller-supplied window handle) |
-| `felis-cli`         | bin       | the `felis` front door: headless verbs and exec of the GUI and of `felis-<name>` commands                                                                             | `swash`, `wgpu`, `winit` (must stay GPU-free)                |
-| `felis-client`      | bin       | the GUI frontend the front door execs: the winit event loop and OS clipboard, wiring winit and wgpu                                                                   | —                                                            |
+| Crate               | Type      | Owns                                                                                                                                                                                        | MUST NOT depend on                                           |
+| ------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| `felis-protocol`    | lib       | the `felis.proto` schema and its generated types, the IPC frame layout, the preface and protocol version constants                                                                          | `tokio`, anything OS-specific, anything graphical            |
+| `felis-vt`          | lib       | the hand-rolled VT state machine and the Kitty graphics, text-sizing and keyboard dispatch                                                                                                  | `tokio`, OS-specific I/O, the grid crate                     |
+| `felis-grid`        | lib       | cells, grids, scrollback, the image store, reflow, selection, and the row codec ([row-codec.md](row-codec.md))                                                                              | `tokio`, graphics, fonts                                     |
+| `felis-pty`         | lib       | the self-hosted PTY backends (openpty / ConPTY) and their async bridge                                                                                                                      | `felis-vt`, `felis-grid`, protocol/transport                 |
+| `felis-transport`   | lib       | framing, the local and SSH-stdio carriers, peer identity, the shared connection driver, and process plumbing                                                                                | `felis-vt`, `felis-grid`, daemon logic                       |
+| `felis-daemon`      | bin + lib | the session pool, per-session owner tasks, the IPC server, input encoding, and the `serve`/`relay` CLI                                                                                      | anything graphical                                           |
+| `felis-client-core` | lib       | the shadow screen, the action enum, the IPC connector, the `config.toml` schema, the CLI's session result bodies and the JSON protocol (`json` feature), and frontend-neutral client policy | `swash`, `wgpu`, `winit` (must run a headless attach)        |
+| `felis-shaping`     | lib       | `swash` shaping, the font fallback chain, and rasterization                                                                                                                                 | `wgpu`, `winit`                                              |
+| `felis-render-core` | lib       | the renderer-neutral half of the renderer: palette, cell appearance, glyph index, and the per-row display list                                                                              | `wgpu`, `winit`                                              |
+| `felis-render-wgpu` | lib       | the wgpu pipeline that draws the display list, and the glyph and image atlases                                                                                                              | `winit` (surface comes from a caller-supplied window handle) |
+| `felis-cli`         | bin       | the `felis` front door: headless verbs and exec of the GUI and of `felis-<name>` commands                                                                                                   | `swash`, `wgpu`, `winit` (must stay GPU-free)                |
+| `felis-client`      | bin       | the GUI frontend the front door execs: the winit event loop and OS clipboard, wiring winit and wgpu                                                                                         | —                                                            |
 
 felis hand-rolls the VT engine in `felis-vt`: it does **not** depend on `vte`, `alacritty_terminal`, or `libghostty`.
 Those upstreams are read as reference only; the rationale is in [implementation.md](../explanation/implementation.md)
@@ -104,7 +104,7 @@ sibling repos in the ecosystem.
 | --------------------------------- | ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
 | Native Rust GPU (this repo)       | all client-side crates                                                                         | none                                                                                        |
 | Software-rendered native          | `felis-protocol`, `felis-transport`, `felis-client-core`, `felis-shaping`, `felis-render-core` | pixel composer drawing the `felis-render-core` display list in place of `felis-render-wgpu` |
-| Browser tab                       | `felis-client-core` + `felis-grid` compiled to wasm                                            | a WebSocket relay: a native `felis-client-core` attach re-exposing the session              |
+| Browser tab                       | `felis-client-core` + `felis-grid` compiled to wasm                                            | a WebSocket relay speaking the JSON protocol over native `felis-client-core` connections    |
 | Editor without a protobuf runtime | none: codec generated from `felis.proto` by a `protoc-gen-*` of its own                        | none; attaches over the Unix socket and speaks the daemon wire                              |
 | Host-terminal TUI                 | `felis-client-core` + `felis-grid` (`ansi` for the re-encode)                                  | none; attaches over the Unix socket and repaints the host terminal                          |
 
@@ -120,8 +120,8 @@ Five shared wire facilities support external satellite clients (see
 - **Grid→ANSI re-encoding:** `felis-grid::ansi` reconstructs SGR and OSC 8 from stored cell state, for the pipe action,
   `felis sessions capture --ansi`, and any client painting into a host terminal; host-specific emission is a caller
   option.
-- **Structural session JSON:** `felis-grid::json_v1` (behind the `json` feature) is the `felis-json` v1 format that
-  out-of-repo grid mirrors consume ("Structural session JSON" in [ipc.md](ipc.md)); its schema and golden frames are
+- **JSON protocol:** `felis-client-core::json` (behind the `json` feature) is the protocol a browser view's relay speaks
+  ([json-protocol.md](json-protocol.md)), with the row DTO in `felis-grid::row_json`; its schema and golden messages are
   regenerated by `just schema` and `just golden`.
 - **Kitty image layout:** `felis-grid::image_layout` turns placements and Unicode-placeholder cells into per-layer
   source and destination rectangles at the caller's cell size, which a frontend paints with its own primitive.

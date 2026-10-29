@@ -9,9 +9,9 @@ as opaque `bytes`; this specification defines its internal binary representation
 is in `crates/felis-grid/src/wire.rs`. Architectural rationale for a custom per-row codec is documented in
 [ipc.md](../explanation/architecture/ipc.md).
 
-This page governs the packed bytes alone. A consumer that reads a row as JSON reads `felis-json` v1, whose own DTOs
-spell out the decoded row and are versioned with the rest of that format ([ipc.md](ipc.md) "Structural session JSON");
-nothing outside the socket carries these bytes.
+This page governs the packed bytes alone. A consumer that reads a row as JSON reads the JSON protocol, whose row DTO
+(`felis-grid::row_json`) spells out the decoded row and is versioned with the rest of that protocol
+([json-protocol.md](json-protocol.md)); nothing outside the socket carries these bytes.
 
 ## Conventions
 

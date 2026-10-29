@@ -1,9 +1,0 @@
-{
-  "felis_json": 1,
-  "kind": "session",
-  "msg": {
-    "detail": "`ca` matches 3 sessions",
-    "reason": "ambiguous",
-    "type": "attach_failed"
-  }
-}

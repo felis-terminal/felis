@@ -1,0 +1,29 @@
+{
+  "id": 6,
+  "request": {
+    "op": "send",
+    "session": "0123456789abcdef0123456789abcdef",
+    "steps": [
+      {
+        "bytes": "bWFrZSB0ZXN0",
+        "step": "paste"
+      },
+      {
+        "event": {
+          "key": {
+            "key": "named",
+            "named": {
+              "name": "enter"
+            }
+          },
+          "kind": "press",
+          "location": "standard",
+          "mods": 3,
+          "text": "\r"
+        },
+        "step": "key"
+      }
+    ]
+  },
+  "type": "request"
+}

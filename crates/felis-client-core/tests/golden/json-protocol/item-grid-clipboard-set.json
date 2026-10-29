@@ -1,0 +1,14 @@
+{
+  "id": 7,
+  "item": {
+    "item": "grid",
+    "msg": {
+      "type": "clipboard_set",
+      "write": {
+        "data": "Y29waWVk",
+        "selection": 3
+      }
+    }
+  },
+  "type": "item"
+}

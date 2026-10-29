@@ -1,0 +1,8 @@
+{
+  "error": {
+    "kind": "session_ended",
+    "message": "the session ended"
+  },
+  "id": 7,
+  "type": "error"
+}

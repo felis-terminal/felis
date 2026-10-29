@@ -46,6 +46,10 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
   paste, raw, key and mouse steps and, for the second, stream the next `OSC 133 ; D` mark. A client refuses each against
   an older daemon before sending it.
 
+- **Wire**: the JSON protocol, in `felis-client-core` behind the `json` feature, for a relay in front of a browser view:
+  a negotiated version, session-addressed requests (list, info, create, kill, tag, send), and correlated streams that
+  attach to a session's grid, wait on it, search and capture it, and relay notifications, with a published JSON Schema.
+
 ### Changed
 
 - **CLI**: `felis sessions search`, `capture` and `send` no longer attach to the session; they name it in the request.
@@ -71,6 +75,9 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
   definitions, and `error.kind` no longer lists `malformed_request`, `canceled` or `output_failed`, which only the
   bridge produced.
 - **Wire**: `felis-protocol` drops `MAX_BRIDGE_LINE_BYTES`.
+- **Wire**: the `felis-json` v1 frame format (`felis-grid::json_v1`, its schema and the `felis-grid` `json` feature).
+  The JSON protocol replaces it; its grid, image and input objects keep felis-json's spelling except that raw bytes are
+  base64 strings, and the cell-row objects live in `felis-grid::row_json`.
 
 ### Fixed
 

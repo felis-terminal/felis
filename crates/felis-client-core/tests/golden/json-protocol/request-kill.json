@@ -1,0 +1,8 @@
+{
+  "id": 4,
+  "request": {
+    "op": "kill",
+    "session": "0123456789abcdef0123456789abcdef"
+  },
+  "type": "request"
+}

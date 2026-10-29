@@ -1,0 +1,25 @@
+{
+  "id": 1,
+  "result": {
+    "op": "list",
+    "sessions": [
+      {
+        "attachments": [],
+        "cols": 80,
+        "cwd": "file://localhost/tmp",
+        "foreground": "claude",
+        "id": "0123456789abcdef0123456789abcdef",
+        "last_exit_code": 0,
+        "program_status": [],
+        "rows": 24,
+        "sequence": 3,
+        "short_id": "01234567",
+        "tags": [
+          "work"
+        ],
+        "title": "zsh"
+      }
+    ]
+  },
+  "type": "reply"
+}

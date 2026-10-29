@@ -1,0 +1,14 @@
+{
+  "id": 9,
+  "stream": {
+    "session": "0123456789abcdef0123456789abcdef",
+    "steps": [
+      {
+        "bytes": "G1tBDQ==",
+        "step": "raw"
+      }
+    ],
+    "stream": "wait"
+  },
+  "type": "open"
+}

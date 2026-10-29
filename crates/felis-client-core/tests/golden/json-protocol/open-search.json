@@ -1,0 +1,12 @@
+{
+  "id": 10,
+  "stream": {
+    "case_insensitive": true,
+    "query": "error",
+    "regex": false,
+    "session": "0123456789abcdef0123456789abcdef",
+    "source": "scrollback",
+    "stream": "search"
+  },
+  "type": "open"
+}

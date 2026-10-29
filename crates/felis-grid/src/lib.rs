@@ -305,10 +305,6 @@ mod damage;
 mod editing;
 pub mod image_layout;
 pub mod images;
-/// `felis-json` v1: the named, versioned JSON form of a frame body
-/// for the consumers that re-expose or record a session as JSON.
-#[cfg(feature = "json")]
-pub mod json_v1;
 mod link_table;
 mod modes;
 pub mod mouse;
@@ -319,6 +315,9 @@ mod placeholder_resolve;
 #[doc(hidden)]
 pub mod pty_effects;
 mod reply_identity;
+/// The JSON spelling of a packed row, for the consumers that carry a
+/// grid as JSON.
+pub mod row_json;
 mod screen;
 pub mod search;
 mod sgr;

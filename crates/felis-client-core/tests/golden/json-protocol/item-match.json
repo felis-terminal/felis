@@ -1,0 +1,26 @@
+{
+  "id": 10,
+  "item": {
+    "anchor": {
+      "generation": 2,
+      "pushed": 1200
+    },
+    "byte_spans": [
+      {
+        "end": 5,
+        "start": 0
+      }
+    ],
+    "col_spans": [
+      {
+        "col_end": 5,
+        "col_start": 0,
+        "line_index": -4
+      }
+    ],
+    "item": "match",
+    "line_index": -4,
+    "text": "error: linker failed"
+  },
+  "type": "item"
+}

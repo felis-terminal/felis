@@ -109,12 +109,12 @@ fmt-check:
 schema:
     UPDATE_SCHEMA=1 cargo test -p felis-client-core --features schema config_schema
     UPDATE_SCHEMA=1 cargo test -p felis-cli --features schema cli_schema
-    UPDATE_SCHEMA=1 cargo test -p felis-grid --features schema json_v1::schema
+    UPDATE_SCHEMA=1 cargo test -p felis-client-core --features json,schema json::schema
 
-# Regenerate the golden felis-json v1 frames and the cell instance fixtures.
+# Regenerate the golden JSON protocol messages and the cell instance fixtures.
 [group('lint')]
 golden:
-    UPDATE_GOLDEN=1 cargo nextest run -p felis-grid --features json --test it json_v1::
+    UPDATE_GOLDEN=1 cargo nextest run -p felis-client-core --features json --test json_protocol
     UPDATE_GOLDEN=1 cargo nextest run -p felis-render-wgpu row_cache::golden_tests
 
 # Regenerate the IPC wire types (crates/felis-protocol/src/generated) via buf, then the
