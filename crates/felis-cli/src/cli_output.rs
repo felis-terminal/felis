@@ -11,11 +11,11 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use clap::builder::TypedValueParser as _;
-use felis_client_core::{Closed, ConnectError};
 pub(crate) use felis_client_core::json::{
     AttachmentObject, LastNotificationObject, ListResult, ProgramStatusObject, SessionObject,
     SessionRef, TagResult, TerminalProgressObject,
 };
+use felis_client_core::{Closed, ConnectError};
 use felis_protocol::SessionHex;
 use felis_protocol::messages::{
     AttachFailure, CreateFailure, RefusalReason, SessionInfo, StreamErrorReason,
