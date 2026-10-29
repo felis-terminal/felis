@@ -486,9 +486,19 @@ fn cases() -> Vec<Case> {
             "error",
             ServerMessage::Error {
                 id: 7,
+                error: ErrorObject::new(ErrorKind::SessionEnded, "the session ended"),
+            },
+        ),
+        case(
+            "error-moved",
+            ServerMessage::Error {
+                id: 7,
                 error: ErrorObject {
-                    kind: ErrorKind::SessionEnded,
-                    message: "the session ended".to_owned(),
+                    session: Some(SessionId(ID)),
+                    ..ErrorObject::new(
+                        ErrorKind::Moved,
+                        "another client switched this window to another session",
+                    )
                 },
             },
         ),
@@ -642,10 +652,7 @@ fn a_stream_takes_items_until_exactly_one_terminal() {
         ServerMessage::Lagged { id: 1 },
         ServerMessage::Error {
             id: 1,
-            error: ErrorObject {
-                kind: ErrorKind::Internal,
-                message: String::new(),
-            },
+            error: ErrorObject::new(ErrorKind::Internal, String::new()),
         },
     ] {
         let mut ledger = Ledger::new();

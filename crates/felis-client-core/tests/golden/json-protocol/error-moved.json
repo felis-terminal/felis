@@ -1,0 +1,9 @@
+{
+  "error": {
+    "kind": "moved",
+    "message": "another client switched this window to another session",
+    "session": "0123456789abcdef0123456789abcdef"
+  },
+  "id": 7,
+  "type": "error"
+}

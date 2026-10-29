@@ -599,6 +599,11 @@ roster, tags, a send's validation and ordering, a search's paging) to be re-spel
 shared engine exists to prevent. A CLI verb's `--format json` output is not that protocol either: it is a process's
 result, without correlation or input, under the CLI's own contract.
 
+The relay in client-core puts no byte budget on an attach's output: a consumer that stops reading stops the relay's
+reads, and the daemon's subscriber cap bounds the backlog. A budget of the relay's own was rejected. A cap on a stream's
+total bytes refuses the rehydrate burst a reattach needs, so a large session could never be reattached, and a cap per
+stream does not bound the one queue the embedder shares among its streams, whose scheduling is the embedder's.
+
 #### Grid→ANSI re-encoding: adopt, into `felis-grid`
 
 Turning stored cell state back into escape sequences recurs in three places: the daemon's pipe action,

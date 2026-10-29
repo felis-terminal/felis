@@ -49,6 +49,9 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 - **Wire**: the JSON protocol, in `felis-client-core` behind the `json` feature, for a relay in front of a browser view:
   a negotiated version, session-addressed requests (list, info, create, kill, tag, send), and correlated streams that
   attach to a session's grid, wait on it, search and capture it, and relay notifications, with a published JSON Schema.
+- **Library**: `felis-client-core::relay` serves the JSON protocol against one daemon for a browser view's gateway: the
+  roster, search and capture over one shared connection, a connection of its own per attach, send, wait and notification
+  stream, pull pacing on a local carrier, and the embedder's theme reported on every attach.
 
 ### Changed
 

@@ -478,6 +478,11 @@
           "type": "string"
         },
         {
+          "const": "moved",
+          "description": "Another client switched the window: to the error's `session`\non this daemon, or to another daemon when it names none.",
+          "type": "string"
+        },
+        {
           "const": "daemon_lost",
           "description": "The connection to the daemon ended.",
           "type": "string"
@@ -492,6 +497,17 @@
         "message": {
           "description": "Human-readable specifics. Never parsed.",
           "type": "string"
+        },
+        "session": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "For `moved`, the session on this daemon the window was\nswitched to."
         }
       },
       "required": [

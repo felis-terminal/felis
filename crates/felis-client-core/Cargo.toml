@@ -104,5 +104,9 @@ required-features = ["native"]
 name = "transient_spawn"
 required-features = ["daemon-tests"]
 
+[[test]]
+name = "relay"
+required-features = ["daemon-tests", "json"]
+
 [lints]
 workspace = true

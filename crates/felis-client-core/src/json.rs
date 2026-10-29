@@ -43,6 +43,7 @@ mod common;
 mod grid;
 mod image;
 mod input;
+mod outcome;
 mod protocol;
 #[cfg(feature = "schema")]
 pub mod schema;
