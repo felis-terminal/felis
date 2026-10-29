@@ -25,6 +25,12 @@
       groupName: "windows-rs",
     },
     {
+      // accesskit_winit consumes accesskit's tree types, so a breaking
+      // accesskit release only builds alongside the matching accesskit_winit.
+      matchPackageNames: ["accesskit", "accesskit_winit"],
+      groupName: "accesskit",
+    },
+    {
       // A new ConPTY host can change what shells see in ways the tests do
       // not cover: read the Windows Terminal release notes before merging.
       matchPackageNames: ["conpty-bin-vendored"],
