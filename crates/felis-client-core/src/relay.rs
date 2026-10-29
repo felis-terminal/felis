@@ -10,16 +10,18 @@ use std::time::Duration;
 
 use felis_protocol::MessageKind;
 use felis_protocol::frame::FrameError;
+use felis_protocol::frame::HEADER_LEN;
 use felis_protocol::messages::{
     ConnToClientMsg, GridMsg, ImageMsg, InfoOutcome, InputMsg, NotifyToClientMsg, OpsToClientMsg,
     PushMsg, RefusalReason, RegionToClientMsg, SearchOptions, SearchToClientMsg, SendStep,
     SessionInfo, SessionToDaemonMsg, StreamId, Subject,
 };
 use felis_transport::{
-    ClientDriver, Delivery, FrameReader, FrameWriter, Incoming, OwnedFrame, TransportError,
+    CheckedFrame, ClientDriver, Delivery, FrameReader, FrameWriter, Incoming, OwnedFrame,
+    TransportError,
 };
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::sync::{Notify, mpsc};
+use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore, mpsc};
 use tokio::task::JoinSet;
 
 use crate::connector::{
@@ -44,6 +46,18 @@ const ROW_LOOKUP_BOUND: Duration = Duration::from_secs(1);
 
 /// Input frames queued for an attach connection's writer.
 const INPUT_BUFFER: usize = 64;
+
+/// Encoded input bytes queued for an attach connection's writer: what a
+/// window queues toward the daemon, so a largest paste is admitted with
+/// room left for keys behind it. An input larger than this is admitted
+/// once the queue is empty.
+const INPUT_BYTE_BUDGET: usize = felis_protocol::limits::CLIENT_OUTGOING_CAP;
+
+const _: () = assert!(INPUT_BYTE_BUDGET <= u32::MAX as usize);
+
+/// An encoded input and its share of [`INPUT_BYTE_BUDGET`], returned
+/// once the frame is written.
+type QueuedInput = (CheckedFrame, OwnedSemaphorePermit);
 
 /// The colors an attach reports with `Session::ConfigureTheme`, so the
 /// session answers `OSC 10/11/12` and `OSC 4` queries with what the view
@@ -278,6 +292,7 @@ impl Relay {
         stream.session = Some(SessionId(info.id));
         stream.input = Some(AttachInput {
             tx: input_tx,
+            budget: Arc::new(Semaphore::new(INPUT_BYTE_BUDGET)),
             paced,
             effective_minor: conn.effective_minor,
         });
@@ -510,7 +525,8 @@ async fn capture_next(
 /// view that stops reading output still reaches the session.
 #[derive(Debug, Clone)]
 pub struct AttachInput {
-    tx: mpsc::Sender<InputMsg>,
+    tx: mpsc::Sender<QueuedInput>,
+    budget: Arc<Semaphore>,
     paced: bool,
     effective_minor: u16,
 }
@@ -534,8 +550,8 @@ pub enum InputError {
 }
 
 impl AttachInput {
-    /// Waits while the queue is full. A `next_grid_frame` is dropped
-    /// where the daemon pushes eagerly.
+    /// Waits, cancel-safe, while the queue is full by frames or bytes. A
+    /// `next_grid_frame` is dropped where the daemon pushes eagerly.
     ///
     /// # Errors
     /// Each but [`InputError::Ended`] means nothing was queued.
@@ -544,7 +560,6 @@ impl AttachInput {
         if !self.paced && matches!(msg, InputMsg::NextGridFrame) {
             return Ok(());
         }
-        felis_protocol::codec::WireCodec::validate(&msg)?;
         let requires = felis_protocol::minor::MinorGated::requires(&msg);
         if requires.minor > self.effective_minor {
             return Err(InputError::Unsupported {
@@ -553,7 +568,19 @@ impl AttachInput {
                 effective: self.effective_minor,
             });
         }
-        self.tx.send(msg).await.map_err(|_closed| InputError::Ended)
+        let frame = CheckedFrame::encode(&msg).map_err(|err| match err {
+            TransportError::Wire(err) => InputError::TooLarge(err),
+            err => unreachable!("every input arm is uncorrelated: {err}"),
+        })?;
+        let size = (frame.body().len() + HEADER_LEN).min(INPUT_BYTE_BUDGET);
+        let bytes = Arc::clone(&self.budget)
+            .acquire_many_owned(u32::try_from(size).unwrap_or(u32::MAX))
+            .await
+            .map_err(|_closed| InputError::Ended)?;
+        self.tx
+            .send((frame, bytes))
+            .await
+            .map_err(|_closed| InputError::Ended)
     }
 }
 
@@ -644,7 +671,7 @@ async fn run_attach<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
     conn: Connection<R, W>,
     theme: SessionToDaemonMsg,
     row: impl Future<Output = SessionRow>,
-    input: mpsc::Receiver<InputMsg>,
+    input: mpsc::Receiver<QueuedInput>,
     items: mpsc::Sender<Out>,
 ) {
     let minor = u32::from(conn.effective_minor);
@@ -748,12 +775,13 @@ fn decode<M: felis_protocol::codec::WireCodec + felis_protocol::messages::Direct
 /// whose loss the reader reports.
 async fn write_input<W: AsyncWrite + Unpin>(
     mut writer: FrameWriter<W>,
-    mut input: mpsc::Receiver<InputMsg>,
+    mut input: mpsc::Receiver<QueuedInput>,
 ) {
-    while let Some(msg) = input.recv().await {
-        if writer.send(&msg).await.is_err() {
+    while let Some((frame, bytes)) = input.recv().await {
+        if writer.send_checked(&frame).await.is_err() {
             return;
         }
+        drop(bytes);
     }
 }
 
@@ -1007,6 +1035,7 @@ mod tests {
         let (tx, mut queued) = mpsc::channel(4);
         let input = AttachInput {
             tx,
+            budget: Arc::new(Semaphore::new(INPUT_BYTE_BUDGET)),
             paced: true,
             effective_minor: 0,
         };
@@ -1018,5 +1047,57 @@ mod tests {
             Err(InputError::TooLarge(_))
         ));
         assert!(queued.try_recv().is_err());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn input_waits_once_its_queued_bytes_reach_the_budget_and_resumes_as_frames_are_written()
+    {
+        let (to_daemon, from_relay) = duplex(64 * 1024);
+        let (tx, queued) = mpsc::channel(INPUT_BUFFER);
+        let budget = Arc::new(Semaphore::new(INPUT_BYTE_BUDGET));
+        let input = AttachInput {
+            tx,
+            budget: Arc::clone(&budget),
+            paced: true,
+            effective_minor: PROTOCOL_MINOR,
+        };
+        drop(tokio::spawn(write_input(
+            FrameWriter::new(to_daemon, PROTOCOL_MINOR),
+            queued,
+        )));
+        let paste = || InputJson::Paste {
+            bytes: crate::json::Base64(vec![b'x'; felis_protocol::limits::MAX_PASTE_BYTES / 4]),
+        };
+
+        let mut admitted = 0;
+        while tokio::time::timeout(Duration::from_millis(200), input.send(paste()))
+            .await
+            .is_ok()
+        {
+            admitted += 1;
+            assert!(admitted < INPUT_BUFFER, "the byte budget never held a send");
+        }
+        let frame = HEADER_LEN + felis_protocol::limits::MAX_PASTE_BYTES / 4;
+        assert!(admitted * frame <= INPUT_BYTE_BUDGET);
+        assert!((admitted + 1) * frame > INPUT_BYTE_BUDGET);
+
+        let mut daemon = FrameReader::new(from_relay);
+        let blocked = input.send(paste());
+        daemon.next_frame().await.unwrap().unwrap();
+        tokio::time::timeout(Duration::from_secs(1), blocked)
+            .await
+            .expect("a written frame did not return its bytes to the budget")
+            .unwrap();
+        for _ in 0..admitted {
+            let written = daemon.next_frame().await.unwrap().unwrap();
+            assert_eq!(written.kind, MessageKind::Input.as_u16());
+        }
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while budget.available_permits() < INPUT_BYTE_BUDGET {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("written frames kept their share of the budget");
     }
 }

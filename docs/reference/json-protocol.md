@@ -141,10 +141,11 @@ counting the items already read. A `send` is canceled by dropping its request, w
   place of `attached`; a session it created stays. Output waits on the consumer: a consumer that stops reading stops the
   relay's reads, and the daemon evicts a subscriber whose backlog passes its cap ([ipc.md](ipc.md) "Backpressure").
   Input does not wait on output, so it reaches the session while output is unread. `AttachInput::send` refuses input
-  past a wire limit or newer than the daemon wire minor before queueing it, so nothing it accepted is dropped. Losing
-  the connection ends the stream `daemon_lost` after the items already read off it; an eviction ends it `evicted` and
-  the session's exit `session_ended`. A switch of the window (`Ops::Switch`) ends it `moved`, naming the target session,
-  and a retarget to another daemon ends it `moved` without one; the relay does not follow either, and reopening is the
+  past a wire limit or newer than the daemon wire minor before queueing it, so nothing it accepted is dropped, and waits
+  while the input it queued but has not written reaches what a window queues (`CLIENT_OUTGOING_CAP`). Losing the
+  connection ends the stream `daemon_lost` after the items already read off it; an eviction ends it `evicted` and the
+  session's exit `session_ended`. A switch of the window (`Ops::Switch`) ends it `moved`, naming the target session, and
+  a retarget to another daemon ends it `moved` without one; the relay does not follow either, and reopening is the
   embedder's.
 - **`search`, `capture`.** A consumer that falls past its buffer ends the stream `lagged` ([ipc.md](ipc.md) "A shared
   correlated connection").
