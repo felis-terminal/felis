@@ -59,7 +59,8 @@ A request ends with exactly one `reply` or `error`. A stream ends with exactly o
 items, and nothing names the id after it. `json::Ledger` holds these rules for one connection on either side.
 
 `error` carries `{"kind", "message"}`. `kind` is one of `invalid_request`, `no_match`, `ambiguous`, `session_ended`,
-`at_capacity`, `unsupported`, `refused`, `evicted`, `daemon_lost`, `internal`; `message` is prose and never parsed.
+`at_capacity`, `unsupported`, `refused`, `evicted`, `moved`, `daemon_lost`, `internal`; `message` is prose and never
+parsed. A `moved` error also carries `session` when the window was switched to another session on the same daemon.
 
 ## Requests
 
@@ -102,6 +103,50 @@ never the packed bytes the socket carries ([row-codec.md](row-codec.md)). The `C
 `command_output` or `last_command`. A `match` carries `anchor`, the history point its `line_index` and spans count from,
 when the daemon reports one, so a scrollback hit stays addressable while output advances. A `wait` ends `session_ended`
 when the session ends before its mark.
+
+## Relay
+
+`felis-client-core::relay` (the `native` and `json` features) serves this protocol for one embedder against one daemon.
+`Relay::connect` dials the daemon's carrier; `Relay::request` answers one request, and `Relay::open` opens one stream,
+which yields its items and `lag` messages and then its terminal, repeated on every later read. The embedder picks the
+ids, runs the `Ledger`, and owns the transport, the handshake and any host routing. Each request and stream rides one
+daemon connection:
+
+| Operation                                                    | Daemon connection                                                    |
+| ------------------------------------------------------------ | -------------------------------------------------------------------- |
+| `list`, `info`, `create`, `kill`, `tag`, `search`, `capture` | one unattached `Ops` connection, shared by the relay                 |
+| `send`, `wait`                                               | an unattached `Ops` connection of its own, closed after its terminal |
+| `attach`                                                     | a `Window` connection of its own                                     |
+| `notifications`                                              | an observer connection of its own                                    |
+
+The relay never redials. Once the shared connection ends, every request on it fails `daemon_lost` and `Relay::closed`
+says why; a stream on a connection of its own ends with that connection. The session row of a `create` and of an
+`attached` item carries the short id the daemon shortens against its pool, or the full id when the session is gone or
+the shared connection does not answer promptly. `Relay::open` returns an `attach` as soon as the daemon acknowledges it,
+with the session id already in `RelayStream::session`, so the caller of a `create` that it then drops can still name the
+session.
+
+A stream's `cancel` (`RelayStream::cancel`, or dropping the stream) releases its daemon side at once and ends it `end`,
+counting the items already read. A `send` is canceled by dropping its request, which closes its connection.
+
+- **`attach`.** On a local carrier the connection is pull-paced and the relay forwards the client's `next_grid_frame` as
+  `Input::NextGridFrame`; over SSH the daemon pushes eagerly and the relay drops `next_grid_frame` ([ipc.md](ipc.md)
+  "Input (kind = 1)"). The rehydrate burst is eager either way. Right after the attach the relay sends
+  `Session::ConfigureTheme` with the embedder's theme, and the stream yields nothing before that frame is written; a
+  theme the daemon wire minor cannot carry ends it `unsupported`, and a theme write that fails `daemon_lost`, each in
+  place of `attached`; a session it created stays. Output waits on the consumer: a consumer that stops reading stops the
+  relay's reads, and the daemon evicts a subscriber whose backlog passes its cap ([ipc.md](ipc.md) "Backpressure").
+  Input does not wait on output, so it reaches the session while output is unread. `AttachInput::send` refuses input
+  past a wire limit or newer than the daemon wire minor before queueing it, so nothing it accepted is dropped. Losing
+  the connection ends the stream `daemon_lost` after the items already read off it; an eviction ends it `evicted` and
+  the session's exit `session_ended`. A switch of the window (`Ops::Switch`) ends it `moved`, naming the target session,
+  and a retarget to another daemon ends it `moved` without one; the relay does not follow either, and reopening is the
+  embedder's.
+- **`search`, `capture`.** A consumer that falls past its buffer ends the stream `lagged` ([ipc.md](ipc.md) "A shared
+  correlated connection").
+- **`notifications`.** A consumer that falls behind loses notifications, each counted in a `lag` before the next item or
+  once it has read the rest. If the relay itself falls behind the observer, the subscription ends and so does the
+  stream, `lagged`, after what was queued; the relay does not subscribe again.
 
 ## Values
 

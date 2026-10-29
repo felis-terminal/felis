@@ -11,16 +11,11 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use clap::builder::TypedValueParser as _;
-pub(crate) use felis_client_core::json::{
-    AttachmentObject, LastNotificationObject, ListResult, ProgramStatusObject, SessionObject,
-    SessionRef, TagResult, TerminalProgressObject,
-};
+pub(crate) use felis_client_core::json::{ListResult, SessionObject, SessionRef, TagResult};
 use felis_client_core::{Closed, ConnectError};
 use felis_protocol::SessionHex;
-use felis_protocol::messages::{
-    AttachFailure, CreateFailure, RefusalReason, SessionInfo, StreamErrorReason,
-};
-use felis_protocol::session_prefix::{SHORT_SESSION_PREFIX_MIN, short_session_prefix};
+use felis_protocol::messages::{AttachFailure, CreateFailure, RefusalReason, StreamErrorReason};
+use felis_protocol::session_prefix::SHORT_SESSION_PREFIX_MIN;
 use serde::{Deserialize, Serialize};
 
 /// Versions the CLI output contract, never the daemon wire: a wire
@@ -629,15 +624,6 @@ impl Reporter {
     }
 }
 
-/// `short_id` is a display form (the git-style unique prefix) and never
-/// a persistence target: prefix uniqueness is a property of the roster
-/// it was computed against, so a stored prefix can match a younger
-/// session later (docs/reference/cli.md "Machine output").
-#[must_use]
-pub(crate) fn short_id_in(id: u128, roster: &[SessionInfo]) -> String {
-    short_session_prefix(id, roster.iter().map(|s| s.id))
-}
-
 /// For human output with no roster to disambiguate against: the
 /// floor-length prefix, what a display would show if nothing collided.
 /// Machine results never carry it, because a prefix no roster
@@ -649,69 +635,6 @@ pub(crate) fn short_id_alone(id: u128) -> String {
     hex.get(..SHORT_SESSION_PREFIX_MIN)
         .unwrap_or(&hex)
         .to_owned()
-}
-
-/// A single-session view passes the same roster the listing did, so
-/// both surfaces show one session the same `short_id`.
-pub(crate) fn session_object(s: &SessionInfo, roster: &[SessionInfo]) -> SessionObject {
-    session_object_with_short_id(s, short_id_in(s.id, roster))
-}
-
-/// The `Ops::Info` form: the daemon shortened the id against its
-/// own pool, so there is no roster here to shorten against.
-pub(crate) fn session_object_with_short_id(s: &SessionInfo, short_id: String) -> SessionObject {
-    SessionObject {
-        id: SessionHex(s.id).to_string(),
-        short_id,
-        rows: s.dims.rows,
-        cols: s.dims.cols,
-        idle_seconds: s.idle_seconds,
-        title: s.title.clone(),
-        cwd: s.cwd.clone(),
-        spawn_cwd: s.spawn_cwd.clone(),
-        tags: s.tags.clone(),
-        last_notification: s
-            .last_notification
-            .as_ref()
-            .map(|n| LastNotificationObject {
-                title: n.notification.title.clone(),
-                body: n.notification.body.clone(),
-                urgency: n.notification.urgency.as_str().to_owned(),
-                age_seconds: n.age_seconds,
-            }),
-        foreground: s.foreground.clone(),
-        last_exit_code: s.last_exit_code,
-        exited: s.exited,
-        attachments: s
-            .attachments
-            .iter()
-            .map(|a| AttachmentObject {
-                id: a.id.to_string(),
-                attached_at: crate::timestamp::rfc3339_utc(a.attached_at),
-                input_owner: a.input_owner,
-            })
-            .collect(),
-        program_status: s
-            .program_status
-            .iter()
-            .map(|r| ProgramStatusObject {
-                id: r.id.clone(),
-                state: r.state.clone(),
-                kind: r.kind.clone(),
-                progress: r.progress,
-                app: r.app.clone(),
-                title: r.title.clone(),
-                msg: r.msg.clone(),
-            })
-            .collect(),
-        terminal_progress: s
-            .terminal_progress
-            .as_ref()
-            .map(|p| TerminalProgressObject {
-                state: p.state.clone(),
-                value: p.value,
-            }),
-    }
 }
 
 #[derive(Debug, Serialize)]
@@ -1361,44 +1284,22 @@ mod tests {
         assert_eq!(tokens.len(), listed);
     }
 
-    fn session(
-        idle_seconds: Option<u64>,
-        attachments: Vec<felis_protocol::messages::Attachment>,
-    ) -> SessionInfo {
-        SessionInfo {
+    fn session(idle_seconds: Option<u64>) -> felis_protocol::messages::SessionInfo {
+        felis_protocol::messages::SessionInfo {
             idle_seconds,
-            attachments,
             ..crate::test_support::session_info(0xCAFE)
         }
-    }
-
-    /// The wire carries an instant; the machine surface publishes an
-    /// RFC 3339 string, and an attached session carries no
-    /// `idle_seconds` key at all.
-    #[test]
-    fn an_attachment_renders_its_stamp_as_rfc_3339() {
-        let info = session(
-            None,
-            vec![felis_protocol::messages::Attachment {
-                id: 7,
-                attached_at: std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_788_250_500),
-                input_owner: true,
-            }],
-        );
-        let body = body_value(&session_object(&info, std::slice::from_ref(&info)));
-        assert_eq!(
-            body["attachments"][0]["attached_at"],
-            "2026-09-01T08:15:00Z"
-        );
-        assert_eq!(body.get("idle_seconds"), None);
     }
 
     /// `idle_seconds: Some(0)` is "detached under a second ago", not
     /// "attached": both framings publish that one meaning.
     #[test]
     fn a_just_detached_session_reads_the_same_in_both_framings() {
-        let info = session(Some(0), Vec::new());
-        let body = body_value(&session_object(&info, std::slice::from_ref(&info)));
+        let info = session(Some(0));
+        let body = body_value(&SessionObject::in_roster(
+            &info,
+            std::slice::from_ref(&info),
+        ));
         assert_eq!(body["idle_seconds"], 0);
         assert_eq!(
             crate::format_session_line(&info, "0000cafe"),

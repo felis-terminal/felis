@@ -389,6 +389,20 @@ impl<R, W> Connection<R, W> {
             abandoned: false,
         }
     }
+
+    /// The halves, the driver, and the frames read past while a verb
+    /// waited, which come before anything still on the reader.
+    #[cfg(feature = "json")]
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        FrameReader<R>,
+        FrameWriter<W>,
+        ClientDriver,
+        std::collections::VecDeque<OwnedFrame>,
+    ) {
+        (self.reader, self.writer, self.driver, self.pending)
+    }
 }
 
 enum ReplyMatch {

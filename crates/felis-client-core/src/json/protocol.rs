@@ -308,6 +308,9 @@ json_dto! {
         Refused,
         /// Another client took the session away.
         Evicted,
+        /// Another client switched the window: to the error's `session`
+        /// on this daemon, or to another daemon when it names none.
+        Moved,
         /// The connection to the daemon ended.
         DaemonLost,
         Internal,
@@ -317,6 +320,10 @@ json_dto! {
         pub kind: ErrorKind,
         /// Human-readable specifics. Never parsed.
         pub message: String,
+        /// For `moved`, the session on this daemon the window was
+        /// switched to.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub session: Option<SessionId>,
     }
 
     /// Everything a writer sends after the handshake. A request ends

@@ -33,6 +33,8 @@ pub mod outgoing;
 pub mod pipe;
 pub mod pull;
 pub mod redraw;
+#[cfg(all(feature = "native", feature = "json"))]
+pub mod relay;
 pub mod renderer_effect;
 #[cfg(feature = "native")]
 pub mod roster;
