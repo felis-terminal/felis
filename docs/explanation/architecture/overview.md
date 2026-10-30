@@ -551,19 +551,18 @@ what keeps a shadow write from ever skipping its repaint.
 
 ### Reuse paths for non-Rust clients
 
-The concrete reuse-path table is in [reference/workspace.md](../../reference/workspace.md); what it records is a policy.
-felis core ships no `examples/` bridge crates: each reuse path is realized by a sibling repo in the ecosystem, built
-only because a real consumer exists (principle 1: add only what earns its place). A client whose language can generate a
-protobuf reader speaks the wire directly, and so does one whose language cannot, with a reader of its own; a script that
-carries no codec runs the CLI verbs with `--format json` or, for a stream, `--format jsonl`. Neither path adds a second
-wire encoding ([ipc.md](ipc.md) "One encoding on the socket").
+The reuse-path table and the five shared wire facilities are in
+[workspace.md "Reuse paths for non-Rust clients"](../../reference/workspace.md#reuse-paths-for-non-rust-clients); what
+the table records is a policy. felis core ships no `examples/` bridge crates: each reuse path is realized by a sibling
+repo in the ecosystem, built only because a real consumer exists (principle 1: add only what earns its place), and
+neither the wire path nor the CLI `--format json` path adds a second wire encoding ([ipc.md](ipc.md) "One encoding on
+the socket").
 
 ### Shared wire knowledge across the satellite clients
 
-Out-of-tree clients read a felis session in several shapes: a browser view (a wasm `felis-client-core` core) behind a
-WebSocket relay that attaches natively, a session recorder with a replaying pseudo-daemon, a host-terminal multiplexer,
-and an editor client that speaks the daemon wire from a language without a protobuf runtime. Five pieces of wire
-knowledge recur across them; the sections below record where each belongs.
+Five pieces of wire knowledge recur across the out-of-tree clients
+([workspace.md "Reuse paths for non-Rust clients"](../../reference/workspace.md#reuse-paths-for-non-rust-clients)); the
+sections below record where each belongs and what was rejected.
 
 #### Session JSON for a browser view: adopt a negotiated protocol, in `felis-client-core`
 
@@ -587,12 +586,11 @@ field may be added, so the reader that negotiated it never meets a shape it cann
 negotiation would protect the reader equally, but it cannot tell an old view from a new one, so every addition would
 cost every view a migration.
 
-The protocol lives in `felis-client-core` behind the `json` feature, and the row DTO in `felis-grid` beside the row
-codec. The row needs the codec to recode a packed row, and `felis-protocol` is deliberately opaque to the per-cell
-layout; the rest needs no tokio or OS dependency, so it builds for the wasm32 core the browser view already links, and
-the relay that drives a daemon connection with it can sit beside it in client-core. A crate of its own was rejected: it
-would sit above `felis-protocol` and `felis-grid` exactly where client-core already does, and add a published crate for
-one consumer.
+The row DTO sits in `felis-grid` beside the row codec while the rest of the protocol sits in `felis-client-core`: the
+row needs the codec to recode a packed row, and `felis-protocol` is deliberately opaque to the per-cell layout; the rest
+needs no tokio or OS dependency, so it builds for the wasm32 core the browser view already links, and the relay that
+drives a daemon connection with it can sit beside it in client-core. A crate of its own was rejected: it would sit above
+`felis-protocol` and `felis-grid` exactly where client-core already does, and add a published crate for one consumer.
 
 The alternative was to keep the protocol in the relay and export only DTOs. That leaves felis's own operations (the
 roster, tags, a send's validation and ordering, a search's paging) to be re-spelled out of tree, which is the drift a
@@ -606,13 +604,11 @@ stream does not bound the one queue the embedder shares among its streams, whose
 
 #### Grid→ANSI re-encoding: adopt, into `felis-grid`
 
-Turning stored cell state back into escape sequences recurs in three places: the daemon's pipe action,
-`felis sessions capture --ansi`, and any client painting into a host terminal. All of it lives in `felis-grid::ansi`
-(`row_ansi`, `row_ansi_with`, `sgr_set`), which sits there rather than in `felis-protocol` because it reads `Cell`,
-`StyleTable`, and the cluster and hyperlink tables, the per-cell layout `felis-protocol` is deliberately opaque to. The
-host-specific decisions (256-color down-map, clip and pad to a column count, blank the Kitty Unicode-placeholder cells
-the caller covers with an image) are caller-supplied options, so the daemon still makes no presentation choice
-(principle 3). A round-trip test driving the emitted bytes back through the real parser keeps it honest in-repo.
+The re-encoder sits in `felis-grid` rather than in `felis-protocol` because it reads `Cell`, `StyleTable`, and the
+cluster and hyperlink tables, the per-cell layout `felis-protocol` is deliberately opaque to. The host-specific
+decisions (256-color down-map, clip and pad to a column count, blank the Kitty Unicode-placeholder cells the caller
+covers with an image) are caller-supplied options, so the daemon still makes no presentation choice (principle 3). A
+round-trip test driving the emitted bytes back through the real parser keeps it honest in-repo.
 
 Two alternatives are rejected:
 

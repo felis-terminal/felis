@@ -171,17 +171,10 @@ strictly worse default than inheritance.
 
 #### Whose environment is inherited
 
-Whose environment is inherited is the harder question. The honest source is the environment of the process that asks for
-the session, so that process captures its own and sends it as `SpawnArgs.env_base`, but **only when its carrier to the
-target daemon is the local socket**. Snapshotting the daemon's own is the obvious answer and the wrong one: the daemon
-is persistent, so on a warm one that snapshot froze hours ago, and on a remote one it descends from an _earlier_ SSH
-connection and names an `SSH_AUTH_SOCK` that died with it.
-
-Over the SSH relay the dialer's environment describes the wrong host, and sending it would hand one host's credentials
-to another; the relay supplies that case instead, prepending its own environment (sshd's remote-command environment,
-which _is_ the remote login's) in the frozen preface layer's carrier block. The daemon resolves one chain, in order: the
-request's snapshot, else the connection's relay block, else its own birth environment. A supplied base **replaces**
-rather than overlays: leaving the daemon's entries underneath would keep exactly what the base was sent to displace.
+The daemon resolves one base-environment chain, in order: the request's `SpawnArgs.env_base` snapshot, else the
+connection's `FRLY` relay carrier block, else its own birth environment, with a supplied base replacing rather than
+overlaying ([ipc.md "The two environment fields"](ipc.md#the-two-environment-fields) argues why a local create sends
+`env_base` while a create over SSH relies on the relay block).
 
 Two things the daemon reads _out of_ that resolved base rather than out of its own environment, for the same reason: the
 `$SHELL` a bare create runs, and the `FELIS_TERM` / `FELIS_TERM_PROGRAM` identity hatch. Reading either from the daemon
