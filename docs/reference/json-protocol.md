@@ -34,6 +34,9 @@ field. A reader ignores every property the schema does not name, and no object t
 Everything else is a new version: a new message, variant, item or enum value, a rename, a retype, or a field that
 becomes required.
 
+The top-level key `host` on `request` and `open` is never named by any version: an embedder that routes one connection
+to several daemons may carry it there, and strips it before the message reaches a relay.
+
 ## Correlation and framing
 
 A client names each request and stream with an `id`, a `u32` it picks and that is unique among what it has open. The
@@ -91,7 +94,8 @@ roster comes in recency order. `args` takes the daemon's spawn arguments, each k
 
 An `attach` stream's first item is `attached` whichever way it opened, carrying the session row and `minor`, the daemon
 wire minor the stream speaks ([ipc.md](ipc.md) "Versioning"). A `create` whose stream cannot start leaves no session
-behind. The client sends input on the stream's id; ending the stream detaches.
+behind. The client sends input on the stream's id; ending the stream detaches. Input has no reply: a writer drops an
+input it refuses (malformed, past a wire limit, or newer than the daemon wire minor), and the stream goes on.
 
 `grid`, `image` and `input` carry a frame of the matching wire family as a dedicated object tagged by `type`, one per
 variant (`row_delta`, `cursor_state`, `placement`, `key`, `paste`, `resize`, `next_grid_frame` and the rest, as the
