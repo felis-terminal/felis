@@ -28,7 +28,7 @@ const SHADOW_SCROLLBACK_ROWS: usize = 0;
 
 /// Every variant is a value the daemon cannot produce, so the client
 /// closes the attachment and lets reconnect + rehydrate recover
-/// (`docs/reference/ipc.md` "Corruption").
+/// (`docs/reference/ipc.md` "Grid admission").
 #[derive(Debug, Error)]
 pub enum ShadowError {
     #[error("row codec: {0}")]
