@@ -131,6 +131,9 @@ Understanding-oriented: the design record. Reading order, top to bottom.
   chrome row.
 - [Accessibility](explanation/accessibility.md) — why felis exposes the terminal to screen readers on every platform,
   why through AccessKit, and what it leaves to the screen reader.
+- [Configuration](explanation/config.md) — why one shared config document lives at the `ProjectDirs` path, why parsing
+  and enum growth are lenient, the three-way config crate split, file-valued paths resolved against `config.toml`, and
+  why `font.size_px` is in logical pixels.
 
 Architecture:
 

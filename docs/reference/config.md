@@ -4,7 +4,9 @@ sidebar:
   order: 2
 ---
 
-The `config.toml` schema: where the file lives on each platform, every key with its default, and what reloads live.
+The `config.toml` schema: where the file lives on each platform, every key with its default, and what reloads live. The
+architecture behind the document, lenient parsing, and its path and unit rules is in
+[config.md](../explanation/config.md).
 
 felis reads its TOML configuration from the platform-native directory resolved via
 [`directories::ProjectDirs`](https://docs.rs/directories) at startup:
@@ -20,7 +22,7 @@ On macOS, files under `~/.config/felis/` are not read. Move or symlink the file 
 
 This table is frozen for 1.0. Each row is whatever `ProjectDirs` returns with `config.toml` joined onto it; felis
 overrides no platform's answer. The reasoning and the rejected alternatives are in
-[control-surfaces.md](../explanation/architecture/control-surfaces.md).
+[config.md](../explanation/config.md).
 
 `felis --config <path>` overrides discovery for a single invocation and window. An explicitly selected path that does
 not exist produces an error. A missing file at the default path falls back to built-in defaults.
