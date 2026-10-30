@@ -36,9 +36,10 @@ use crate::stream::{OpenFrom, begin_stream};
 /// the items a stream may hold unread before it is retired as lagged.
 pub const DEFAULT_STREAM_BUFFER: usize = 1024;
 
-/// Frame bytes a stream may hold unread before it is retired as
-/// lagged. An item reaching an empty buffer is taken whatever its
-/// size, so one large item never lags a consumer that keeps up.
+/// Bytes a stream may hold unread before it is retired as lagged: each
+/// item's frame and the buffer slot holding it. An item reaching an
+/// empty buffer is taken whatever its size, so one large item never
+/// lags a consumer that keeps up.
 pub const STREAM_BYTE_BUDGET: usize = 16 * 1024 * 1024;
 
 /// Point calls in flight at once; a further call waits for a reply.
@@ -158,9 +159,18 @@ struct Pending {
     _admitted: OwnedSemaphorePermit,
 }
 
-/// An item and the frame bytes it is charged against its stream's
+/// An item and the bytes it is charged against its stream's
 /// [`STREAM_BYTE_BUDGET`].
 type Item = (Inbound, usize);
+
+/// What each item costs besides its frame. Charging only the frame
+/// would let a burst of near-empty rows hold millions of slots inside
+/// the budget.
+const ITEM_SLOT: usize = size_of::<Item>();
+
+/// More items than the byte budget admits, so a deeper buffer would
+/// add no bound.
+const MAX_STREAM_BUFFER: usize = STREAM_BYTE_BUDGET / ITEM_SLOT + 1;
 
 struct Slot {
     items: mpsc::Sender<Item>,
@@ -398,7 +408,7 @@ impl State {
                 let Some(slot) = self.streams.get(&id.get()) else {
                     return Ok(());
                 };
-                let len = payload.body.len();
+                let len = payload.body.len() + ITEM_SLOT;
                 let held = slot.held.fetch_add(len, Ordering::AcqRel);
                 if held > 0 && held + len > STREAM_BYTE_BUDGET {
                     self.retire(id, Some(StreamEnd::Lagged));
@@ -498,7 +508,7 @@ where
     R: AsyncRead + Unpin + Send + 'static,
     W: AsyncWrite + Unpin + Send + 'static,
 {
-    /// `stream_buffer`: unread items a stream may hold before it lags.
+    /// `stream_buffer`: unread items before a stream lags; `usize::MAX` for the byte budget alone.
     ///
     /// # Errors
     /// [`ConnectError::Abandoned`], or [`ConnectError::Driver`] unless an
@@ -537,7 +547,7 @@ where
                 stop: watch::Sender::new(false),
             }),
             effective_minor,
-            stream_buffer: stream_buffer.max(1),
+            stream_buffer: stream_buffer.clamp(1, MAX_STREAM_BUFFER),
         });
         drop(tokio::spawn(read_loop(
             reader,
