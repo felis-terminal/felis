@@ -36,7 +36,7 @@ OS's API, attaching through the winit adapter to the window felis already create
 - **Speaking directly** (Speech Dispatcher, a built-in reader in the style of tdsr) bypasses the screen reader the user
   has already configured, and with it braille output, the review cursor, and the user's verbosity settings.
 
-Only Orca keys terminal-specific reading on the `Terminal` role; NVDA reserves its terminal handling for Windows
+Only Orca keys terminal-specific reading on the `terminal` role; NVDA reserves its terminal handling for Windows
 Terminal's own UIA class name, and VoiceOver has none, so on Windows and macOS the screen reader reads felis as a text
 document. Reporting that class name (`TermControl`, which AccessKit can set) to unlock NVDA's terminal handling would
 claim another program's identity, the impersonation
@@ -68,14 +68,14 @@ ways of finding output fail Principle 4 ([principles.md](principles.md#4-explici
 skips text that matches recent keystrokes, and iTerm2 compares the text of the command's row before and after it runs;
 both decide what is output from what the cells contain. Tracking the cursor instead (output is what appears below the
 row where Enter was pressed) reads no cell content, but cannot tell typing that crosses a soft wrap, or a prompt that
-redraws its own row, from output. The cost of taking the marks from the shell is that a program emitting none, a shell
-without integration or a REPL, gets no announcements; its output stays readable through the screen reader's review
+redraws its own row, from output. The cost of taking the marks from the shell is that a program emitting none (a shell
+without integration, a REPL) gets no announcements; its output stays readable through the screen reader's review
 commands.
 
 The daemon cuts the text while it parses the `D` mark, not the client after the mark reaches it. By the time a window
 handles a `D`, the same read can have carried the next prompt or, with typeahead, the next command's output, and output
 longer than a screen has scrolled out of the shadow the client holds. Only the parser sees the grid exactly as it stood
-at the `D` byte. Where the start of the output cannot be placed exactly any more, because a program inserted lines above
+at the `D` byte. Where the start of the output cannot be placed exactly anymore, because a program inserted lines above
 it or a resize re-wrapped the row it began inside, felis announces nothing rather than a guess.
 
 A window holds an announcement until output has been quiet for a moment instead of announcing per frame, because

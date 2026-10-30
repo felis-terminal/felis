@@ -155,7 +155,7 @@ closing the window leaves the session and its PTY running for the next attach
 ## Daemon process lifecycle
 
 The daemon is upgraded in place: every session keeps its shell and its state while the daemon switches to the newly
-installed binary. Where an upgrade refuses, the procedure is drain the sessions, then restart
+installed binary. Where an upgrade refuses, the procedure is to drain the sessions, then restart
 ([update-felis](../../how-to/update-felis.md); the stop postures that carry the drain are argued in
 [control-surfaces.md](control-surfaces.md) "Stopping the daemon"). Most skew needs neither. A new daemon and an old
 client settle on the lower of the two minors ([ipc.md](../../reference/ipc.md) "Versioning"), so only a daemon-_binary_
@@ -262,20 +262,21 @@ may: a successor that fails, answers out of turn, or runs out of time is ended a
 resume with every byte of output still in their pipes, since the successor read none. From it on, only the successor
 may: a predecessor that has not exited within a bound is ended, and the successor serves only once it is gone. So two
 processes never serve at once, and the two never both decide to end the other. A failure after the commit costs the
-sessions as one after the exec does, ending each the way a destroyed one ends; the successor holds each child's process
-handle, so the end reaches the right process.
+sessions as a failure after the Unix `execve` does, ending each the way a destroyed one ends; the successor holds each
+child's process handle, so the end reaches the right process.
 
 The successor joins the pipe name before the predecessor lets go of it, so the name never lapses for another process to
 bind, and a window re-dialing after the predecessor's exit finds the successor. A dial that finds every instance busy is
-retried by the window's reconnect ladder, which treats a busy pipe as transient. The new PID needs one hold. A client
-checks the server's user and integrity level on every connection by opening the process the pipe reports as its server,
-and Windows reports the process that created the pipe name for as long as any instance lives, not the one that answered.
-Each successor therefore holds that first daemon's process handle, passed down with the dump: the PID stays reserved and
-its identity readable, so the check keeps reading the right user and level after the first daemon exits. No pidfile
-names the daemon. A client that dials _during_ the upgrade connects to the predecessor and is dropped at its exit, where
-on Unix it would wait in the accept queue; it is one the user started while the upgrade ran.
+retried by the window's reconnect ladder, which treats a busy pipe as transient. The new PID makes each successor hold
+one extra handle. A client checks the server's user and integrity level on every connection by opening the process the
+pipe reports as its server, and Windows reports the process that created the pipe name for as long as any instance
+lives, not the one that answered. Each successor therefore holds that first daemon's process handle, passed down with
+the dump: the PID stays reserved and its identity readable, so the check keeps reading the right user and level after
+the first daemon exits. No pidfile names the daemon. A client that dials _during_ the upgrade connects to the
+predecessor and is dropped at its exit, where on Unix it would wait in the accept queue; it is one the user started
+while the upgrade ran.
 
-Only the embedded host can rebuild a pseudoconsole, so a daemon on the inbox host, any daemon not at Medium integrity,
+Only the embedded host can rebuild a pseudoconsole, so a daemon on the inbox host (any daemon not at Medium integrity)
 refuses the upgrade and keeps drain-and-restart. Nothing exports a pseudoconsole's handles, so the predecessor reads
 them from the struct the pinned `conpty.dll` allocates, whose layout a test pins against what `ConptyPackPseudoConsole`
 stores. A long-lived process holding the pseudoconsoles in front of the daemon is rejected: it is a third process with

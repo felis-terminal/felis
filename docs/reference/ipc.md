@@ -870,8 +870,8 @@ checked before the first step is written, and a refusal writes nothing: a step p
 decode ("Semantic limits" below), a mouse event the program would not see, under its current mouse protocol or outside
 the grid, is `UNREPORTED`, and an exited program is `SESSION_ENDED`. A refusal names the step it refused by index where
 one is to blame. The steps are then admitted one at a time against the session's input budget ("Client → daemon: the
-input budget" below), and `Sent` is written once the session took the last of them, carrying the session's full id; a
-session that ends first answers `SESSION_ENDED` instead. Admission pauses the connection's reads, as an attached
+input budget" below), and `Sent` is written once the session has taken the last of them, carrying the session's full id;
+a session that ends first answers `SESSION_ENDED` instead. Admission pauses the connection's reads, as an attached
 connection's input does, so a client runs each `Send` or `SendAndWait` on a connection of its own, and closing that
 connection is how it abandons one promptly: the daemon notices the hangup and writes no later step.
 
@@ -1054,8 +1054,8 @@ distinct from a `Region::Reply` a `pipe → clipboard` chord asked for, which is
 **Command output.** `CommandOutput` carries the text of a finished shell command, cut at its `OSC 133 ; D` mark, and how
 much of it was omitted: a count of rows, or an unknown amount ([accessibility.md](accessibility.md#announcements)). It
 goes only to the windows that turned it on with `Input::AnnounceOutput`, ships with the next cycle like the facets, and
-is an event, not state: no rehydrate burst replays it. The daemon holds at most 8 per window that has not pulled them,
-dropping the oldest, and the text is at most `MAX_ANNOUNCE_BYTES` (64 KiB).
+is an event, not state: no rehydrate burst replays it. The daemon holds at most 8 outputs per window that has not pulled
+them, dropping the oldest, and the text is at most `MAX_ANNOUNCE_BYTES` (64 KiB).
 
 #### Registry delivery
 
@@ -1508,9 +1508,9 @@ below it rather than by this budget.
 A hangup noticed there ends the connection _and_ the message it was admitting, so a peer that needs its input delivered
 has to stay until the daemon has taken it: an attached peer puts a `Session::InputFence` on the same connection, which
 the daemon answers only after the input frames ahead of it cleared admission, and `Ops::Send` answers only once the
-session took its last step. An `Ops::Send` step reserves what the `Input` arm it stands for reserves. The backpressure
-reaches the peer's socket buffer and, in a window, its own send queue (never the session task, which keeps serving every
-other subscriber; see
+session has taken its last step. An `Ops::Send` step reserves what the `Input` arm it stands for reserves. The
+backpressure reaches the peer's socket buffer and, in a window, its own send queue (never the session task, which keeps
+serving every other subscriber; see
 [session-lifecycle.md "Slow children: backpressure, not eviction"](../explanation/architecture/session-lifecycle.md)).
 `felis daemon status`'s `pty_input_bytes` row reports the daemon-wide sum of admitted-but-unwritten input against the
 per-session budget ([cli.md](cli.md) "Daemon status").

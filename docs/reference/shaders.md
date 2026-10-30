@@ -206,7 +206,7 @@ struct FelisPostUniforms {
 | `stage_index`                              | This stage's 0-based position among the stages that loaded                                         |
 | `animation_start_s`                        | Value of `time_s` when this stage's animation last started; `0` before any                         |
 | `animation_progress`                       | Linear progress of this stage's animation: `0` before any start, holding `1` after its end         |
-| `_reserved`                                | Pads the struct to its 16-byte size; always `0`                                                    |
+| `_reserved`                                | Pads the struct to a multiple of 16 bytes; always `0`                                              |
 
 Color values use linear RGBA matching the render target. Spatial coordinates and extents use normalized UV space with
 top-left origin.

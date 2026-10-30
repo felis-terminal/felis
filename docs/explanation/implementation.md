@@ -236,8 +236,8 @@ untested host without telling anyone; keeping both files open stops `conpty.dll`
 
 Only a Medium daemon runs it. Any Medium process of the user can write the extraction directory, and `OpenConsole.exe`
 imports DLLs that are not `KnownDLLs`, so such a process could plant one beside it: harmless to a Medium daemon, code
-execution in an elevated one. A daemon at any other level therefore uses the inbox ConPTY. felis-pty's tests choose the
-host explicitly so that the elevated CI runner covers both, which loads the embedded host elevated there; accepted,
+execution in an elevated one. A daemon at any other level therefore uses the inbox ConPTY. `felis-pty`'s tests choose
+the host explicitly so that the elevated CI runner covers both, which loads the embedded host elevated there; accepted,
 since the runner already runs the change under test at that level.
 
 - Rejected: inbox only. It leaves the host version to each machine's Windows build.

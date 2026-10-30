@@ -427,7 +427,8 @@ is second-class and is not accepted.
 Source compatibility with kitty or ghostty shaders is a non-goal, but the uniform vocabulary those two converged on
 independently (cursor current/previous geometry, cursor change time, time and frame, theme colors) is kept semantically
 aligned, so a port is a mechanical GLSL-to-WGSL rewrite plus a uniform rename, and a flip of the vertical axis: both
-source dialects count fragment coordinates from the bottom-left (GLSL's `gl_FragCoord`), felis's UV from the top-left.
+source dialects count fragment coordinates from the bottom-left (GLSL's `gl_FragCoord`), while felis's UV counts from
+the top-left.
 
 ### Idle-zero under animation
 
@@ -484,7 +485,7 @@ since a file named `trail.wgsl` becomes unreachable and a shader sitting in the 
 the path it is. What it buys, typing `"glow"` for a file under a directory felis picked, does not pay for either.
 
 A shader that fails validation drops its stage rather than falling back to the bundled one: substituting a cursor trail
-for the effect the user asked for is a silent change of behavior, where an absent pass reads as "your shader did not
+for the effect the user asked for is a silent change of behavior, where an absent stage reads as "your shader did not
 run". The rest of a chain still runs, since each stage reads only what the stage before it produced. A stage is created
 inside a device validation scope, so a shader the device refuses (a feature it did not enable, a fragment interface that
 does not match the fixed vertex stage) drops its stage like one naga refuses, and the window keeps painting either way;

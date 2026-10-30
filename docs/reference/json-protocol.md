@@ -6,11 +6,11 @@ sidebar:
 
 The JSON protocol is what a relay in front of a browser view speaks to that view: point operations on sessions, and
 correlated streams that mirror a session's grid, search and capture it, wait on it, and relay notifications. Its types,
-their conversions from and to the daemon wire's, and its correlation rules live in `felis-client-core::json` behind the
-`json` feature, which builds for wasm32 without `native`. The transport and the host it routes to are the relay's: a
-relay serving several daemons wraps each message in an envelope of its own, and nothing here names a host. It is not the
-CLI's `--format json` output ([cli.md](cli.md#machine-output) "Machine output"), and its relay is not the SSH relay
-([ipc.md](ipc.md#cross-host-carrier-ssh-stdio) "Cross-host carrier: SSH stdio"); why it exists is in
+their conversions from and to the daemon wire's types, and its correlation rules live in `felis-client-core::json`
+behind the `json` feature, which builds for wasm32 without `native`. The transport and the host it routes to are the
+relay's: a relay serving several daemons wraps each message in an envelope of its own, and nothing here names a host. It
+is not the CLI's `--format json` output ([cli.md](cli.md#machine-output) "Machine output"), and its relay is not the SSH
+relay ([ipc.md](ipc.md#cross-host-carrier-ssh-stdio) "Cross-host carrier: SSH stdio"); why it exists is in
 [overview.md](../explanation/architecture/overview.md#session-json-for-a-browser-view-adopt-a-negotiated-protocol-in-felis-client-core)
 "Session JSON for a browser view: adopt a negotiated protocol, in `felis-client-core`".
 
@@ -141,16 +141,16 @@ counting the items already read. A `send` is canceled by dropping its request, w
   `Input::NextGridFrame`; over SSH the daemon pushes eagerly and the relay drops `next_grid_frame` ([ipc.md](ipc.md)
   "Input (kind = 1)"). The rehydrate burst is eager either way. Right after the attach the relay sends
   `Session::ConfigureTheme` with the embedder's theme, and the stream yields nothing before that frame is written; a
-  theme the daemon wire minor cannot carry ends it `unsupported`, and a theme write that fails `daemon_lost`, each in
-  place of `attached`; a session it created stays. Output waits on the consumer: a consumer that stops reading stops the
-  relay's reads, and the daemon evicts a subscriber whose backlog passes its cap ([ipc.md](ipc.md) "Backpressure").
-  Input does not wait on output, so it reaches the session while output is unread. `AttachInput::send` refuses input
-  past a wire limit or newer than the daemon wire minor before queueing it, so nothing it accepted is dropped, and waits
-  while the input it queued but has not written reaches what a window queues (`CLIENT_OUTGOING_CAP`). Losing the
-  connection ends the stream `daemon_lost` after the items already read off it; an eviction ends it `evicted` and the
-  session's exit `session_ended`. A switch of the window (`Ops::Switch`) ends it `moved`, naming the target session, and
-  a retarget to another daemon ends it `moved` without one; the relay does not follow either, and reopening is the
-  embedder's.
+  theme the daemon wire minor cannot carry ends it `unsupported`, and a theme write that fails ends it `daemon_lost`,
+  each in place of `attached`; a session it created stays. Output waits on the consumer: a consumer that stops reading
+  stops the relay's reads, and the daemon evicts a subscriber whose backlog passes its cap ([ipc.md](ipc.md)
+  "Backpressure"). Input does not wait on output, so it reaches the session while output is unread. `AttachInput::send`
+  refuses input past a wire limit or newer than the daemon wire minor before queueing it, so nothing it accepted is
+  dropped, and waits while the input it queued but has not written reaches what a window queues (`CLIENT_OUTGOING_CAP`).
+  Losing the connection ends the stream `daemon_lost` after the items already read off it; an eviction ends it `evicted`
+  and the session's exit `session_ended`. A switch of the window (`Ops::Switch`) ends it `moved`, naming the target
+  session, and a retarget to another daemon ends it `moved` without one; the relay does not follow either, and reopening
+  is the embedder's.
 - **`search`, `capture`.** A consumer that falls past the stream's byte budget ends the stream `lagged`
   ([ipc.md](ipc.md) "A shared correlated connection"); the relay sets no item bound.
 - **`notifications`.** A consumer that falls behind loses notifications, each counted in a `lag` before the next item or

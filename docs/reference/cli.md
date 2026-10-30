@@ -666,9 +666,9 @@ Only the variables named above have their values reported. Before either renderi
   `pipe` binding's `target` when it is a command or a file, each of which reads `<redacted>`; the chord, the kind, and
   every other field stay.
 
-The report reads no hostname, username, session title, or terminal content on its own. One can still reach it inside a
-check's detail (an error passed on from a `--host` dial, for one) or a configured path outside the home directory, such
-as a `shader.post` stage's `file`.
+The report reads no hostname, username, session title, or terminal content on its own. One of them can still reach the
+report inside a check's detail (an error passed on from a `--host` dial, for example) or a configured path outside the
+home directory, such as a `shader.post` stage's `file`.
 
 The fonts come from the frontend: `doctor report` runs `felis-client --doctor-report-probe[=<config path>]`, the probe
 `doctor` runs plus a font resolution. When that probe fails, a frontend that predates the flag included, the plain probe

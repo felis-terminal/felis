@@ -145,11 +145,12 @@ Two other placements are rejected:
   live bottom. The viewpoint is the only difference, so it is one optional field on the one surface; an `Ops` copy of
   each would be a second definition of the same request and reply shapes that the two forms then have to keep in step.
 
-The session-addressed form exists so a reader or a sender never has to attach. An attach is a subscription: it pays a
-rehydrate burst and then carries traffic no request asked for (mode flags, prompt marks, image ticks, `Push`), and a
-connection attaches once. A client multiplexing many operations over one connection could attribute none of that traffic
-to a request and could reach only one session, so `Ops::Send`, `Ops::SendAndWait` and the session field on `Search` and
-`Region` carry the session in the request instead, and every frame the connection receives answers one.
+  The session-addressed form exists so a reader or a sender never has to attach. An attach is a subscription: it pays a
+  rehydrate burst and then carries traffic no request asked for (mode flags, prompt marks, image ticks, `Push`), and a
+  connection attaches once. A client multiplexing many operations over one connection could attribute none of that
+  traffic to a request and could reach only one session, so `Ops::Send`, `Ops::SendAndWait` and the session field on
+  `Search` and `Region` carry the session in the request instead, and every frame the connection receives answers a
+  request.
 
 - **A separate capture kind beside the region family.** `felis sessions capture` reads the very regions the keymap
   `pipe` chord names, so the row-stream read is a second reply shape on `Region` (`Rows` / `Row` / `RowsDone`), not a

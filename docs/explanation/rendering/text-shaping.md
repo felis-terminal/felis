@@ -257,8 +257,8 @@ Re-ranking fontconfig's answer by that CSS rule, for one tie-break on every plat
 substitution a user wrote in `fonts.conf`. The per-character system fallback keeps its regular and bold query. Threading
 the weight into it was rejected: CoreText's cascade takes only a bold trait, so a weight cannot be asked of it, and
 re-selecting a sibling of the face the host picked can land on a file that lacks the scalar or its color glyph, which
-breaks the coverage and presentation the host chose for. A user who wants a CJK or symbol face at a matching weight
-names it in `font.fallback`, where it follows the configured weights.
+breaks the coverage and presentation the host chose. A user who wants a CJK or symbol face at a matching weight names it
+in `font.fallback`, where it follows the configured weights.
 
 **Shared metrics.** Cell metrics also come from the _regular_ primary only (the four faces must share an advance width
 or the monospace grid would break), so only codepoint coverage and the rasterized outline differ per style, never the
@@ -479,14 +479,14 @@ other rule, and on Debian names `FreeMono` (from `69-unifont.conf`) on a host th
 rather than linked or bundled, the way the Vulkan loader is: the host's library is the one that reads the host's
 `/etc/fonts` syntax and cache format, which a bundled copy of another version may not (kitty's Linux build ships it the
 same way, for distributions' differing config paths). A host without libfontconfig cannot open a window. A name no
-installed family carries is accepted when its best match is not a face a generic name (the ones the stock
-`48-guessfamily.conf` recognizes, `monospace` to `ui-rounded`) also matches, so an `<alias>` that maps it elsewhere is
-honored while a typo is reported. Comparing the substituted queries instead fails: stock rules that test part of a name
-(`mono`, `sans`, `emoji`) edit a typo's query as an alias would. The cost is an alias whose target is a generic's own
-face, which reads as not installed. Faces in a format the loader cannot parse (fontconfig also lists PCF, BDF and
-Type 1) are taken out of the font set before any match, so felis matches as if they were not installed. Asking for
-`scalable` in the query instead, as kitty does, does not work: fontconfig ranks it above the family, so a name whose
-only faces are bitmaps would draw another family without a warning.
+installed family carries is accepted unless its best match is also the match of a generic name (one the stock
+`48-guessfamily.conf` recognizes, `monospace` to `ui-rounded`), so an `<alias>` that maps it elsewhere is honored while
+a typo is reported. Comparing the substituted queries instead fails: stock rules that test part of a name (`mono`,
+`sans`, `emoji`) edit a typo's query as an alias would. The cost is an alias whose target is a generic's own face, which
+reads as not installed. Faces in a format the loader cannot parse (fontconfig also lists PCF, BDF and Type 1) are taken
+out of the font set before any match, so felis matches as if they were not installed. Asking for `scalable` in the query
+instead, as kitty does, does not work: fontconfig ranks it above the family, so a name whose only faces are bitmaps
+would draw another family without a warning.
 
 **macOS and Windows faces: CoreText and DirectWrite.** The same argument holds: the faces drawn are the ones the
 platform's font API names, localized names included, and the default is the platform terminal's own ahead of the shared
