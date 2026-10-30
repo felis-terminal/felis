@@ -100,7 +100,8 @@ A verb with no row in this table has no `--format` flag.
 
 Selecting an incompatible format (such as `sessions list --format jsonl`) is a clap usage error: it exits `2` with human
 text on stderr, no error object, and lists the values the verb takes. The `felis` binary's own tracing logs go to stderr
-at `WARN` and above; setting `--format json` or `jsonl` silences them. `RUST_LOG` overrides either default.
+at `WARN` and above; setting `--format json` or `jsonl` silences them. `RUST_LOG` overrides either default. A long-lived
+browser view speaks the [JSON protocol](json-protocol.md) instead.
 
 ### The envelope
 
