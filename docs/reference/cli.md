@@ -8,6 +8,26 @@ The `felis` CLI: verbs, global flags, exit codes, and the machine-output contrac
 [ipc.md](ipc.md); what puts a control on this surface rather than another is in
 [control-surfaces.md](../explanation/architecture/control-surfaces.md).
 
+The cross-cutting contracts ([Global options](#global-options), [Exit codes](#exit-codes), and
+[Machine output](#machine-output)) come first, followed by the verb families in section order and
+[Carrier and connection lifetime](#carrier-and-connection-lifetime) and [Log files](#log-files) at the end:
+
+- [Session verbs](#session-verbs): `felis sessions` (`list`, `info`, `spawn`, `send`, `capture`, `search`, `kill`,
+  `evict`, `switch`, `tag`)
+- [Config verbs](#config-verbs) and [Fonts](#fonts): `felis config` (`path`, `check`, `show-effective`) and
+  `felis fonts list`
+- [Daemon status](#daemon-status), [Daemon stop](#daemon-stop), and [Daemon upgrade](#daemon-upgrade): `felis daemon`
+  (`status`, `stop`, `upgrade`)
+- [Doctor](#doctor) and [Doctor report](#doctor-report): `felis doctor` and `felis doctor report`
+- [Window launches](#window-launches),
+  [Re-point a window across daemons: `felis ssh`, `felis window retarget`](#re-point-a-window-across-daemons-felis-ssh-felis-window-retarget),
+  and [External commands: `felis <name>`](#external-commands-felis-name): `felis`, `felis attach`, `felis -- <cmd>`,
+  `felis ssh`, `felis window retarget`, and `felis <name>`
+- [`felis notifications subscribe`](#felis-notifications-subscribe) ([Other verbs](#other-verbs)): stream desktop
+  notifications
+- [`felis completions <shell>`](#felis-completions-shell) ([Other verbs](#other-verbs)): generate shell completions
+- [Version reporting](#version-reporting): `felis --version` and `felis version`
+
 ## Global options
 
 Global flags precede the verb (`felis --config ./work.toml doctor`):

@@ -5,8 +5,13 @@ sidebar:
 ---
 
 When `shader.post` is unset, the terminal renders directly to the swapchain without an offscreen post-processing step.
-When configured, terminal cells render into an intermediate offscreen texture that a chain of fullscreen post-process
-stages samples. Architectural design rationale is documented in [pipeline.md](../explanation/rendering/pipeline.md).
+When configured, terminal cells render into an intermediate offscreen texture that `shader.post` samples through
+[one stage](#selecting-shaders) or a [chain of up to 16](#chaining-stages), each a
+[fullscreen WGSL fragment stage](#entry-point-and-bindings) that may take [`params`](#params) (WGSL `override`
+constants) and an [`animation`](#event-animation) triggered by events, all against the [Contract v2](#contract-v2)
+uniform contract. A stage redraws only when terminal state changes or an event animation runs, unless
+[`shader.animate = "focused"`](#animation-and-the-frame-clock). Architectural design rationale is documented in
+[pipeline.md](../explanation/rendering/pipeline.md).
 
 ## Selecting shaders
 
