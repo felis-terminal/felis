@@ -9,13 +9,13 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use felis_client_core::Carrier;
 use felis_client_core::connector::RemoteSpawn;
 use felis_client_core::json::{
     AttachTarget, Base64, ErrorKind, InputJson, Item, OpResult, Open, RegionSourceJson, Request,
     SearchSourceJson, SendStepJson, SessionId, SpawnArgsJson, session_id_hex,
 };
 use felis_client_core::relay::{InputError, Relay, RelayConfig, RelayStream, StreamMessage, Theme};
+use felis_client_core::{Carrier, DEFAULT_STREAM_BUFFER};
 use felis_daemon::SessionPool;
 use felis_daemon::serve::{DaemonCaps, serve_unix};
 use tempfile::TempDir;
@@ -386,6 +386,86 @@ async fn a_switch_of_the_window_ends_the_attach_naming_the_target() {
         "{terminal:?}"
     );
     until_detached(&relay, from).await;
+}
+
+/// The capture's rows, read only once the relay holds its terminal.
+async fn capture_read_late(relay: &Relay, session: SessionId) -> Vec<StreamMessage> {
+    let mut capture = relay
+        .open(Open::Capture {
+            session,
+            source: RegionSourceJson::Scrollback,
+            ansi: false,
+            max_rows: None,
+        })
+        .await
+        .unwrap();
+    let deadline = Instant::now() + PATIENCE;
+    while relay.open_streams() != 0 {
+        assert!(Instant::now() < deadline, "the capture never ended");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    drain(&mut capture).await
+}
+
+fn rows(messages: &[StreamMessage]) -> Vec<&str> {
+    messages
+        .iter()
+        .filter_map(|message| match message {
+            StreamMessage::Item(Item::Row(row)) => Some(row.text.as_str()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_scrollback_capture_read_late_delivers_every_row() {
+    let tmp = private_dir();
+    let relay = relay_on(&daemon(&tmp).await, Theme::default()).await;
+    let session = create(
+        &relay,
+        "seq 1 5000; printf 'capture-ready\\n'; exec sleep 600",
+    )
+    .await;
+    until_screen_contains(&relay, session, "capture-ready").await;
+
+    let seen = capture_read_late(&relay, session).await;
+    let numbered: Vec<u32> = rows(&seen)
+        .into_iter()
+        .filter_map(|text| text.parse().ok())
+        .collect();
+    assert_eq!(numbered, (1..=5000).collect::<Vec<_>>());
+    assert!(
+        matches!(seen.last(), Some(StreamMessage::End { .. })),
+        "{:?}",
+        seen.last()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_capture_read_late_past_the_byte_budget_ends_lagged() {
+    let tmp = private_dir();
+    let relay = relay_on(&daemon(&tmp).await, Theme::default()).await;
+    let wide: SpawnArgsJson = serde_json::from_value(serde_json::json!({
+        "command": "/bin/sh",
+        "args": ["-c", "yes \"$(printf '%02048d' 0)\" | head -n 12000; \
+                        printf 'flood-done\\n'; exec sleep 600"],
+        "dims": { "rows": 24, "cols": 2048, "pixel_w": 0, "pixel_h": 0 },
+    }))
+    .unwrap();
+    let OpResult::Create { session } = relay.request(Request::Create { args: wide }).await.unwrap()
+    else {
+        panic!("a create answered something else");
+    };
+    let session = SessionId(u128::from_str_radix(&session.session.id, 16).unwrap());
+    until_screen_contains(&relay, session, "flood-done").await;
+
+    let seen = capture_read_late(&relay, session).await;
+    let held = rows(&seen).len();
+    assert_eq!(seen.last(), Some(&StreamMessage::Lagged));
+    assert!(
+        DEFAULT_STREAM_BUFFER < held && held < 10_000,
+        "{held} rows came before the lag"
+    );
 }
 
 /// Forwards every connection to `target` until [`Self::cut`] drops them

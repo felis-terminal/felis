@@ -147,8 +147,8 @@ counting the items already read. A `send` is canceled by dropping its request, w
   session's exit `session_ended`. A switch of the window (`Ops::Switch`) ends it `moved`, naming the target session, and
   a retarget to another daemon ends it `moved` without one; the relay does not follow either, and reopening is the
   embedder's.
-- **`search`, `capture`.** A consumer that falls past its buffer ends the stream `lagged` ([ipc.md](ipc.md) "A shared
-  correlated connection").
+- **`search`, `capture`.** A consumer that falls past the stream's byte budget ends the stream `lagged`
+  ([ipc.md](ipc.md) "A shared correlated connection"); the relay sets no item bound.
 - **`notifications`.** A consumer that falls behind loses notifications, each counted in a `lag` before the next item or
   once it has read the rest. If the relay itself falls behind the observer, the subscription ends and so does the
   stream, `lagged`, after what was queued; the relay does not subscribe again.

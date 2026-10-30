@@ -16,7 +16,7 @@ use tokio::io::{DuplexStream, ReadHalf, WriteHalf};
 use tokio::task::JoinHandle;
 
 use super::{
-    Closed, CorrelatedHandle, Family, MAX_OUTSTANDING_REQUESTS, MAX_QUEUED_BYTES,
+    Closed, CorrelatedHandle, Family, ITEM_SLOT, MAX_OUTSTANDING_REQUESTS, MAX_QUEUED_BYTES,
     STREAM_BYTE_BUDGET, StreamEnd, StreamEvent, StreamReceiver,
 };
 use crate::connector::{ConnectError, Connection};
@@ -30,6 +30,14 @@ type PeerWrite = FrameWriter<WriteHalf<DuplexStream>>;
 /// A handle whose daemon is the returned frame pair, so the test writes
 /// what no daemon would, over `buffer` bytes of socket each way.
 fn scripted_over(buffer: usize, mode: ConnectionMode) -> (CorrelatedHandle, PeerRead, PeerWrite) {
+    scripted_buffering(buffer, mode, 4)
+}
+
+fn scripted_buffering(
+    buffer: usize,
+    mode: ConnectionMode,
+    stream_buffer: usize,
+) -> (CorrelatedHandle, PeerRead, PeerWrite) {
     let (client, peer) = tokio::io::duplex(buffer);
     let (read, write) = tokio::io::split(client);
     let handle = Connection::from_halves(
@@ -37,7 +45,7 @@ fn scripted_over(buffer: usize, mode: ConnectionMode) -> (CorrelatedHandle, Peer
         FrameWriter::at_build_minor(write),
         mode,
     )
-    .into_correlated(4)
+    .into_correlated(stream_buffer)
     .unwrap();
     let (peer_read, peer_write) = tokio::io::split(peer);
     (
@@ -287,6 +295,26 @@ async fn an_unread_stream_lags_once_its_items_pass_the_byte_budget() {
         (2, StreamEnd::Lagged),
         "two items fit the budget, the third would not"
     );
+}
+
+#[tokio::test]
+async fn near_empty_items_pass_the_byte_budget_by_their_buffer_slots() {
+    let (handle, mut peer_read, mut peer_write) =
+        scripted_buffering(64 * 1024, ConnectionMode::Ops, usize::MAX);
+    let search = opened_search(&handle, &mut peer_read).await;
+    let tiny = a_match_of(0);
+    let charge = codec::encoded_len_correlated(&tiny, Correlation::stream(search.id())) + ITEM_SLOT;
+    let fit = STREAM_BYTE_BUDGET / charge;
+    for _ in 0..=fit {
+        peer_write
+            .send_correlated(&tiny, Correlation::stream(search.id()))
+            .await
+            .unwrap();
+    }
+    eventually(|| handle.open_streams() == 0).await;
+
+    let (held, end) = drain(search).await;
+    assert_eq!((held.len(), end), (fit, StreamEnd::Lagged));
 }
 
 #[tokio::test]

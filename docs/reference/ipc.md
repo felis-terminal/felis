@@ -1560,16 +1560,16 @@ transport that is gone, not one that is slow.
 `felis-client-core`'s `CorrelatedHandle` shares one unattached `Ops` connection, or one observer connection, among
 several callers. On such a connection every reply and stream item carries its correlation envelope and every terminal
 names its stream or request in `Conn`, so one reading task routes each of them, and it never waits on a caller. Each
-stream buffers a bounded number of unread items and at most `STREAM_BYTE_BUDGET` (16 MiB) of their frames, though an
-item reaching an empty buffer is taken whatever its size; a stream past either bound is canceled, and its caller reads a
-`lagged` terminal after the items already buffered. A reply or item with no envelope ends the connection, as does
-`Conn::Refused`, which the daemon writes as it closes one. A new request waits while `MAX_OUTSTANDING_REQUESTS` (64)
-await their replies, and a new stream while `MAX_OUTSTANDING_STREAMS` await their terminals, a dropped one included.
-Either also waits until its frame fits within `MAX_QUEUED_BYTES` of encoded frames queued for the daemon, a budget of
-one frame at the ceiling. A call whose frame would pass the ceiling is refused before it takes an id, and the connection
-stays usable. When the connection ends, each request still waiting and each stream still open ends with it, frames not
-yet written are discarded, and the handle does not redial. A `Send` or `SendAndWait` keeps a connection of its own
-("Ops" above), so the handle does not carry either.
+stream buffers a bounded number of unread items and at most `STREAM_BYTE_BUDGET` (16 MiB) of their encoded body bytes
+and buffer slots, though an item reaching an empty buffer is taken whatever its size; a stream past either bound is
+canceled, and its caller reads a `lagged` terminal after the items already buffered. A reply or item with no envelope
+ends the connection, as does `Conn::Refused`, which the daemon writes as it closes one. A new request waits while
+`MAX_OUTSTANDING_REQUESTS` (64) await their replies, and a new stream while `MAX_OUTSTANDING_STREAMS` await their
+terminals, a dropped one included. Either also waits until its frame fits within `MAX_QUEUED_BYTES` of encoded frames
+queued for the daemon, a budget of one frame at the ceiling. A call whose frame would pass the ceiling is refused before
+it takes an id, and the connection stays usable. When the connection ends, each request still waiting and each stream
+still open ends with it, frames not yet written are discarded, and the handle does not redial. A `Send` or `SendAndWait`
+keeps a connection of its own ("Ops" above), so the handle does not carry either.
 
 ## Authentication
 

@@ -106,9 +106,12 @@ impl Relay {
     /// # Errors
     /// The dial's or the handshake's.
     pub async fn connect(config: RelayConfig) -> Result<Self, ConnectError> {
+        // An item bound would lag a capture an embedder drains slower
+        // than the daemon's burst while it is still well inside the
+        // byte budget.
         let ops = connect_carrier(config.carrier.clone(), Offer::ops(), config.remote_spawn)
             .await?
-            .into_correlated(DEFAULT_STREAM_BUFFER)?;
+            .into_correlated(usize::MAX)?;
         Ok(Self {
             host: Arc::new(Host { config, ops }),
         })
@@ -125,6 +128,15 @@ impl Relay {
     #[must_use]
     pub fn closed(&self) -> Option<Closed> {
         self.host.ops.closed()
+    }
+
+    /// Searches and captures whose terminal has not reached their
+    /// stream yet.
+    #[cfg(feature = "daemon-tests")]
+    #[doc(hidden)]
+    #[must_use]
+    pub fn open_streams(&self) -> usize {
+        self.host.ops.open_streams()
     }
 
     /// Answers one request. A `send` dials a connection of its own and
