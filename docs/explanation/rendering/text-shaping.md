@@ -112,9 +112,9 @@ set has no platform to ask, so `auto_discover` walks the CJK, **symbol**, emoji,
 order and appends the first family installed in each group, except the symbol group (see below).
 
 An explicit `font.fallback` list in `config.toml` (keys and grammar in the
-[config reference](../../reference/config.md)) goes between the primary and the fallback above, which still covers what
-the list misses and skips a face the list already names. A character a listed face covers takes the first such face in
-declared order, ahead of the cascade's mono-first rule, except for an emoji-presentation character, which takes the
+[config reference](../../reference/config.md#font)) goes between the primary and the fallback above, which still covers
+what the list misses and skips a face the list already names. A character a listed face covers takes the first such face
+in declared order, ahead of the cascade's mono-first rule, except for an emoji-presentation character, which takes the
 first color face covering it anywhere in the chain, the primary included (see below). A missing family is skipped with a
 warning rather than failing the chain: a config written on one machine degrades gracefully on another that lacks a face.
 
@@ -270,7 +270,7 @@ Style rides the sizing key like every other axis that makes two lookups of one g
 
 ## Feature defaults and inheritance
 
-OpenType features (`font.features` in the [config reference](../../reference/config.md)) default to **off**:
+OpenType features (`font.features` in the [config reference](../../reference/config.md#font)) default to **off**:
 programming-ligature fonts (FiraCode, JetBrains Mono, Cascadia Code) render without ligatures unless the user opts in.
 This matches the first-run behavior of xterm, alacritty, kitty, and wezterm. Flipping the default would shift cell
 metrics for users who never asked for ligatures, a silent layout change on upgrade that no performance win justifies.

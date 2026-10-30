@@ -66,86 +66,33 @@ A local repository path may also be referenced: `#:schema <path>/crates/felis-cl
 
 ```toml
 [font]
-# Font family name. Omitted: the system monospace font. On Linux faces
-# come from fontconfig less its bitmap (PCF, BDF) and Type 1 faces, so a
-# family with only such faces counts as not installed: the default is
-# its `monospace` match (`fc-match monospace`), and a name is resolved
-# through it, so `fonts.conf` aliases apply, except that a name not
-# installed whose match is also a generic name's (`monospace`, `sans`,
-# `emoji`, ...) counts as not installed. On macOS the user's
-# fixed-pitch font (Menlo unless changed); on Windows Cascadia Mono.
-# Failing that, the first installed of DejaVu Sans Mono, Liberation
-# Mono, Noto Sans Mono, Ubuntu Mono, Menlo, and Consolas. Names resolve
-# through CoreText on macOS and DirectWrite on Windows, localized names
-# included. `felis fonts list` prints every name this key and the other
-# `family` keys accept.
+# Primary font family name. Default: system monospace.
 family = "JetBrainsMono Nerd Font"
 
-# Regular weight, an integer in 1..=1000 on the OpenType scale; italic
-# takes it too. A variable face moves its `wght` axis there; a static
-# family is matched at it by the platform (fontconfig on Linux, CSS font
-# matching on macOS and Windows), so a weight between two installed
-# faces may land on a different neighbor per platform. Omitted: the
-# face as matched, a variable face at 400.
+# Regular weight in 1..=1000. Default: the matched face (400 for variable).
 weight = 400
 
-# Variation-axis coordinates of the regular face: a 4-character tag to a
-# number in [-32768, 32767]. `wght` is refused (set `weight`). A value
-# outside the face's range is clamped and a tag the face lacks is
-# ignored, each logged once at load. Styles that set no `family` inherit
-# these, less `ital` and `slnt`. Default: {}.
+# Variation-axis coordinates (4-character tag to [-32768, 32767]). Default: {}.
 axes = { wdth = 100 }
 
-# Logical pixel size for cell metrics and rasterization.
-# Clamped to [4.0, 72.0]. Default: 14.0.
-# Either TOML spelling is accepted: 14 and 14.0 are the same size.
-# From a point size: ×4/3 on Linux and Windows, ×1 on macOS.
+# Logical pixel size in [4.0, 72.0]. Default: 14.0.
 size_px = 14
 
-# Factors on the cell width and height the primary face's metrics give.
-# The difference is split evenly around each glyph (the odd pixel goes
-# right and below); box-drawing and block characters and the cursor fill
-# the whole cell. Below 1.0 glyphs overlap their neighbors and keep
-# their size. Clamped to [0.5, 3.0]. Default: 1.0.
+# Cell width and height multipliers in [0.5, 3.0]. Default: 1.0.
 cell_width_scale = 1.0
 cell_height_scale = 1.2
 
-# Explicit font fallback chain resolved per codepoint, tried in
-# declared order before the host's fallback, which covers what the
-# entries miss. Default: [] (the host's fallback alone).
-# The host's fallback on Linux: fontconfig's ranked fallback for the
-# primary (`fc-match -s`), keeping the faces that add coverage, at most
-# 62; among those, a text-presentation character takes a monochrome
-# face before an earlier-ranked color one. On macOS and Windows: the
-# first installed symbols-only Nerd Font, then, per character it
-# misses, the face CoreText or DirectWrite picks for it in the user's
-# first Han-writing language (else their first language).
-# A character that defaults to emoji (⭐, ☕) takes the first color
-# face that covers it, wherever it is in the chain.
-# A variation sequence (葛󠄀) draws the variant glyph only when the
-# face that covers its base character defines one; it never selects
-# another face.
-# Omitting features inherits from primary; features = [] disables.
+# Explicit per-codepoint fallback chain tried before the host's. Default: [].
 fallback = [
     { family = "Noto Sans CJK JP", features = ["palt"] },
     { family = "Noto Color Emoji", features = [] },
     { family = "Symbols Nerd Font" },
 ]
 
-# OpenType feature tags applied to the primary face ("calt", "-liga").
-# Default: [] (programming ligatures off).
+# OpenType feature tags applied to the primary face. Default: [].
 features = ["calt", "liga"]
 
-# Per-style face overrides for the primary. Derived from font.family
-# when omitted. Fallback entries take each style from their own family
-# at that style's weight; they take no `weight` or `axes` keys. The
-# host's per-character fallback stays at regular and bold, so a CJK or
-# symbol face meant to match a configured weight is named in
-# `font.fallback`.
-# `weight` defaults to 700 for bold; italic takes `font.weight` and
-# bold_italic takes bold's. `axes` merges per tag over the inherited
-# `font.axes`; a table that sets its own `family` inherits none, and an
-# explicit `ital` or `slnt` replaces the font's named italic position.
+# Per-style face overrides; omitted styles derive from font.family.
 [font.bold]
 family = "JetBrainsMono Nerd Font"
 weight = 700
@@ -162,82 +109,55 @@ features = []
 foreground = "#e5e5e5"
 background = "#0d0d12"
 
-# WCAG 2 contrast ratio in [1.0, 21.0] each cell's text color is raised
-# to against its background, keeping its hue and turning black or white
-# when the ratio is out of reach. Text drawn in its own background color
-# and the bidi warning are left alone; color emoji and images are never
-# adjusted. A translucent window is judged by the configured background.
-# Default: 1.0 (colors as programs set them).
+# Minimum WCAG 2 contrast ratio in [1.0, 21.0]. Default: 1.0.
 minimum_contrast = 4.5
 
 [cursor]
-# Cursor block color (#rrggbb). When unset, paints in reverse video.
+# Cursor block color (#rrggbb). Default: unset (reverse video).
 color = "#ffaa00"
 
-# Cursor blink behavior: "program" (default, per DECSCUSR),
-# "never" (reduced motion), or "always".
+# Cursor blink behavior ("program", "never", "always"). Default: "program".
 blink = "program"
 
-# Half-period of cursor blink in milliseconds. Minimum 50 ms. Default: 530.
+# Half-period of cursor blink in milliseconds (>= 50). Default: 530.
 blink_interval_ms = 530
 
 [shader]
-# Post-process stages: one { builtin = "trail" } or { file = "path.wgsl" }
-# table, or an array of up to 16 run in order. A stage also takes
-# `params` and `animation` (see shaders.md).
+# Post-process stages: one stage table or an array of up to 16. Default: unset.
 post = { builtin = "trail" }
 
-# Shader animation pacing: "never" (default, dirty-only) or
-# "focused" (continuous 60 Hz when window has focus).
+# Shader animation pacing ("never", "focused"). Default: "never".
 animate = "never"
 
 [mouse]
-# Multiplier for mouse wheel notch scrolling. Clamped to [0.1, 100.0]
-# with a warning. Default: 3.0.
+# Multiplier for mouse wheel notch scrolling in [0.1, 100.0]. Default: 3.0.
 scroll_multiplier = 3.0
 
 [shell]
-# Argv a window launched without a command runs, sent verbatim: no -l
-# is added and nothing is split. Applies to `felis`, `felis-client` and
-# the new_session keybinding on the local daemon; `--host`, `felis ssh`
-# and the headless verbs keep the daemon's default. Default: [] (the
-# daemon's default: `$SHELL -l` on Unix, `$SHELL` or powershell.exe on
-# Windows). A WSL distro, say: ["wsl.exe", "-d", "Ubuntu"].
+# Argv a window launched without a command runs. Default: [].
 command = []
 
 [clipboard]
 # Back clipboard operations with OS clipboard. Default: true.
-# When false, uses an in-process clipboard.
 use_os_clipboard = true
 
-# Destination for program OSC 52 write requests:
-# "mirror" (default, session-local) or "system" (OS clipboard).
+# Destination for program OSC 52 write requests ("mirror", "system"). Default: "mirror".
 osc_52 = "mirror"
 
 [window]
-# Prefix prepended to shell window title ("<prefix> <title>").
+# Prefix prepended to shell window title ("<prefix> <title>"). Default: unset.
 title_prefix = "[work]"
 
 # Show native window title bar and borders. Default: true.
 decorations = true
 
-# Background opacity in [0.0, 1.0], clamped with a warning.
-# Default: 1.0 (opaque).
-# Values < 1.0 require transparent window surface support at startup.
+# Background opacity in [0.0, 1.0]. Default: 1.0.
 opacity = 0.95
 
-# OS-native window backdrop material:
-#   "none"     (default)
-#   "blur"     (macOS NSVisualEffectView; requires opacity < 1.0)
-#   "acrylic"  (Windows DWMSBT_TRANSIENTWINDOW)
-#   "mica"     (Windows DWMSBT_MAINWINDOW)
-#   "tabbed"   (Windows DWMSBT_TABBEDWINDOW)
+# OS-native window backdrop material ("none", "blur", "acrylic", "mica", "tabbed"). Default: "none".
 backdrop = "none"
 
-# macOS: Option acts as Alt. Default: false, where Option composes the
-# layout's characters (German Option+L types "@") and reaches the
-# program without Alt. true sends Option+B as Alt+B (ESC b) and gives
-# up those characters. Ignored on other platforms.
+# macOS: Option acts as Alt. Default: false.
 macos_option_as_alt = false
 
 [theme.palette]
@@ -260,9 +180,7 @@ bright_cyan    = "#9aedfe"
 bright_white   = "#e6e6e6"
 
 [theme.palette.indexed]
-# Overrides for 256-color palette indices 16..=255. Keys are strings:
-# TOML has no integer keys, so 16 and "16" name the same entry.
-# Color schemes often remap the low cube slots 16..=21 for accents.
+# Overrides for 256-color palette indices 16..=255 (#rrggbb).
 16 = "#d08770"
 17 = "#5e81ac"
 18 = "#3b4252"
@@ -272,11 +190,6 @@ bright_white   = "#e6e6e6"
 
 [keymap]
 # Keybinding overrides layered on platform defaults.
-# Modifiers: ctrl, shift, alt, super. Named keys: enter, tab, escape,
-# space, backspace, insert, delete, home, end, page_up, page_down,
-# up, down, left, right, f1..f35.
-# Every binding kind with its fields and accepted values is tabulated in
-# keybindings.md; so are the character-key and literal-plus spellings.
 "ctrl+shift+f" = { kind = "open_scrollback_search" }
 "ctrl+shift+v" = { kind = "paste", from = "system" }
 "ctrl+shift+c" = { kind = "copy", what = "system" }
@@ -287,8 +200,6 @@ bright_white   = "#e6e6e6"
 "ctrl+shift+-" = { kind = "font_size", step = "decrease" }
 "ctrl+shift+z" = { kind = "scroll_to_prompt", to = "previous" }
 "ctrl+shift+x" = { kind = "scroll_to_prompt", to = "next" }
-# send_string reads backslashes per `escapes`: "c_style" (default,
-# recognizing \n \r \t \\ \0 \e \xNN) or "none" to send them verbatim.
 "f5"           = { kind = "send_string", text = "clear\n" }
 "f6"           = { kind = "send_string", text = "C:\\src\\", escapes = "none" }
 "ctrl+shift+]" = { kind = "switch_session", to = "next" }
@@ -301,8 +212,127 @@ bright_white   = "#e6e6e6"
 "ctrl+shift+0" = { kind = "unbind" }
 ```
 
-The default keymap table, every binding kind's fields and accepted values, and the actions that ship unbound are in
-[keybindings.md](keybindings.md).
+### `[font]`
+
+- **`family`** (string, default: the system monospace font): primary font family name. On Linux faces come from
+  fontconfig less its bitmap (PCF, BDF) and Type 1 faces, so a family with only such faces counts as not installed: the
+  default is its `monospace` match (`fc-match monospace`), and a name is resolved through it, so `fonts.conf` aliases
+  apply, except that a name not installed whose match is also a generic name's (`monospace`, `sans`, `emoji`, …) counts
+  as not installed. On macOS the default is the user's fixed-pitch font (Menlo unless changed); on Windows, Cascadia
+  Mono. Failing that, felis uses the first installed of DejaVu Sans Mono, Liberation Mono, Noto Sans Mono, Ubuntu Mono,
+  Menlo, and Consolas. Names resolve through CoreText on macOS and DirectWrite on Windows, localized names included.
+  `felis fonts list` prints every name this key and the other `family` keys accept.
+- **`weight`** (integer in `1..=1000` on the OpenType scale, default: the face as matched, or `400` for a variable
+  face): regular weight; `italic` takes it too. A variable face moves its `wght` axis there; a static family is matched
+  at it by the platform (fontconfig on Linux, CSS font matching on macOS and Windows), so a weight between two installed
+  faces may land on a different neighbor per platform.
+- **`axes`** (table mapping a 4-character tag to a number in `[-32768, 32767]`, default `{}`): variation-axis
+  coordinates of the regular face. `wght` is refused (set `weight`). A value outside the face's range is clamped and a
+  tag the face lacks is ignored, each logged once at load. Styles that set no `family` inherit these, less `ital` and
+  `slnt`.
+- **`size_px`** (number, clamped to `[4.0, 72.0]`, default `14.0`): logical pixel size for cell metrics and
+  rasterization. Either TOML spelling is accepted: `14` and `14.0` are the same size. From a point size: ×4/3 on Linux
+  and Windows, ×1 on macOS.
+- **`cell_width_scale`**, **`cell_height_scale`** (numbers, clamped to `[0.5, 3.0]`, default `1.0`): factors on the cell
+  width and height the primary face's metrics give. The difference is split evenly around each glyph (the odd pixel goes
+  right and below); box-drawing and block characters and the cursor fill the whole cell. Below `1.0` glyphs overlap
+  their neighbors and keep their size.
+- **`fallback`** (array of `{ family, features }` tables, default `[]`, the host's fallback alone): explicit font
+  fallback chain resolved per codepoint, tried in declared order before the host's fallback, which covers what the
+  entries miss. Omitting `features` inherits from the primary; `features = []` disables.
+
+  The host's fallback on Linux is fontconfig's ranked fallback for the primary (`fc-match -s`), keeping the faces that
+  add coverage, at most 62; among those, a text-presentation character takes a monochrome face before an earlier-ranked
+  color one. On macOS and Windows it is the first installed symbols-only Nerd Font, then, per character it misses, the
+  face CoreText or DirectWrite picks for it in the user's first Han-writing language (else their first language).
+
+  A character that defaults to emoji (`⭐`, `☕`) takes the first color face that covers it, wherever it is in the
+  chain. A variation sequence (`葛󠄀`) draws the variant glyph only when the face that covers its base character defines
+  one; it never selects another face.
+
+- **`features`** (array of strings, default `[]`, programming ligatures off): OpenType feature tags applied to the
+  primary face (`"calt"`, `"-liga"`).
+- **`[font.bold]`**, **`[font.italic]`**, **`[font.bold_italic]`**: per-style face overrides for the primary (`family`,
+  `weight`, `axes`, `features`), derived from `font.family` when omitted. `weight` defaults to `700` for `bold`;
+  `italic` takes `font.weight` and `bold_italic` takes `bold`'s. `axes` merges per tag over the inherited `font.axes`; a
+  table that sets its own `family` inherits none, and an explicit `ital` or `slnt` replaces the font's named italic
+  position. Omitting `features` inherits from the primary; `features = []` disables. Fallback entries take each style
+  from their own family at that style's weight; they take no `weight` or `axes` keys. The host's per-character fallback
+  stays at regular and bold, so a CJK or symbol face meant to match a configured weight is named in `font.fallback`.
+
+### `[theme]`
+
+- **`foreground`**, **`background`** (`"#rrggbb"`, defaults `"#e5e5e5"` and `"#0d0d12"`): default foreground and
+  background colors.
+- **`minimum_contrast`** (number in `[1.0, 21.0]`, default `1.0`, colors as programs set them): WCAG 2 contrast ratio
+  each cell's text color is raised to against its background, keeping its hue and turning black or white when the ratio
+  is out of reach. Text drawn in its own background color and the bidi warning are left alone; color emoji and images
+  are never adjusted. A translucent window is judged by the configured background.
+
+### `[cursor]`
+
+| Key                 | Type                               | Default     | Meaning                                                                           |
+| ------------------- | ---------------------------------- | ----------- | --------------------------------------------------------------------------------- |
+| `color`             | `"#rrggbb"`                        | unset       | Cursor block color. When unset, paints in reverse video.                          |
+| `blink`             | `"program"`, `"never"`, `"always"` | `"program"` | Cursor blink behavior (`"program"` per `DECSCUSR`, `"never"` for reduced motion). |
+| `blink_interval_ms` | integer (`>= 50`)                  | `530`       | Half-period of cursor blink in milliseconds. Minimum `50` ms.                     |
+
+### `[shader]`
+
+| Key       | Type                   | Default   | Meaning                                                                                                                                                                                           |
+| --------- | ---------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `post`    | stage table or array   | unset     | Post-process stages: one `{ builtin = "trail" }` or `{ file = "path.wgsl" }` table, or an array of up to 16 run in order. A stage also takes `params` and `animation` ([shaders.md](shaders.md)). |
+| `animate` | `"never"`, `"focused"` | `"never"` | Shader animation pacing: `"never"` (dirty-only) or `"focused"` (continuous 60 Hz when window has focus).                                                                                          |
+
+### `[mouse]`
+
+- **`scroll_multiplier`** (number, clamped to `[0.1, 100.0]` with a warning, default `3.0`): multiplier for mouse wheel
+  notch scrolling.
+
+### `[shell]`
+
+- **`command`** (array of strings, default `[]`): argv a window launched without a command runs, sent verbatim: no `-l`
+  is added and nothing is split. Applies to `felis`, `felis-client`, and the `new_session` keybinding on the local
+  daemon; `--host`, `felis ssh`, and the headless verbs keep the daemon's default. The empty default uses the daemon's
+  default (`$SHELL -l` on Unix, `$SHELL` or `powershell.exe` on Windows). A WSL distro, for example:
+  `["wsl.exe", "-d", "Ubuntu"]`.
+
+### `[clipboard]`
+
+| Key                | Type                   | Default    | Meaning                                                                                                   |
+| ------------------ | ---------------------- | ---------- | --------------------------------------------------------------------------------------------------------- |
+| `use_os_clipboard` | boolean                | `true`     | Back clipboard operations with the OS clipboard. When `false`, uses an in-process clipboard.              |
+| `osc_52`           | `"mirror"`, `"system"` | `"mirror"` | Destination for program `OSC 52` write requests: `"mirror"` (session-local) or `"system"` (OS clipboard). |
+
+### `[window]`
+
+| Key                   | Type                                                  | Default  | Meaning                                                                                                                                                                                                                                                |
+| --------------------- | ----------------------------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `title_prefix`        | string                                                | unset    | Prefix prepended to shell window title (`"<prefix> <title>"`).                                                                                                                                                                                         |
+| `decorations`         | boolean                                               | `true`   | Show native window title bar and borders.                                                                                                                                                                                                              |
+| `opacity`             | number in `[0.0, 1.0]`                                | `1.0`    | Background opacity, clamped with a warning (`1.0` is opaque). Values `< 1.0` require transparent window surface support at startup.                                                                                                                    |
+| `backdrop`            | `"none"`, `"blur"`, `"acrylic"`, `"mica"`, `"tabbed"` | `"none"` | OS-native window backdrop material: `"none"`, `"blur"` (macOS `NSVisualEffectView`; requires `opacity < 1.0`), `"acrylic"` (Windows `DWMSBT_TRANSIENTWINDOW`), `"mica"` (Windows `DWMSBT_MAINWINDOW`), or `"tabbed"` (Windows `DWMSBT_TABBEDWINDOW`).  |
+| `macos_option_as_alt` | boolean                                               | `false`  | macOS: Option acts as Alt. Under `false`, Option composes the layout's characters (German Option+L types `@`) and reaches the program without Alt; `true` sends Option+B as Alt+B (`ESC b`) and gives up those characters. Ignored on other platforms. |
+
+### `[theme.palette]`
+
+Base 16 ANSI color overrides (`#rrggbb`), keyed by name: `black`, `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`,
+`white`, and `bright_black` through `bright_white`.
+
+### `[theme.palette.indexed]`
+
+Overrides for 256-color palette indices `16..=255` (`#rrggbb`). Keys are strings: TOML has no integer keys, so `16` and
+`"16"` name the same entry. Color schemes often remap the low cube slots `16..=21` for accents.
+
+### `[keymap]`
+
+Keybinding overrides layered on platform defaults. Modifiers: `ctrl`, `shift`, `alt`, `super`. Named keys: `enter`,
+`tab`, `escape`, `space`, `backspace`, `insert`, `delete`, `home`, `end`, `page_up`, `page_down`, `up`, `down`, `left`,
+`right`, `f1`..`f35`. `send_string` reads backslashes per `escapes`: `"c_style"` (default, recognizing `\n`, `\r`, `\t`,
+`\\`, `\0`, `\e`, `\xNN`) or `"none"` to send them verbatim.
+
+The default keymap table, every binding kind with its fields and accepted values, the character-key and literal-plus
+spellings, and the actions that ship unbound are in [keybindings.md](keybindings.md).
 
 ## Per-client overrides (`[client.<name>]`)
 

@@ -350,8 +350,8 @@ are reported as errors. `--client <id>` selects a specific client overlay (defau
 ## Fonts
 
 `felis fonts list` prints every font family name that `font.family`, a `font.fallback` entry's `family`, and
-`[font.bold|italic|bold_italic].family` accept as an installed family on this machine ([config.md](config.md)), one per
-line under a header, with whether the family is monospace and the styles it has installed:
+`[font.bold|italic|bold_italic].family` accept as an installed family on this machine ([config.md](config.md#font)), one
+per line under a header, with whether the family is monospace and the styles it has installed:
 
 ```
 FAMILY                 MONO  STYLES

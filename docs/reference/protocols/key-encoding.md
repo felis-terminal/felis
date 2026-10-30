@@ -136,12 +136,12 @@ documented in [input.md](../../explanation/input.md).
 The "macOS Option" key reports both as Alt (for input encoding) and as the macOS-native Option (for native shortcuts),
 so Option-arrow word motions still work in shells while Cmd-W still closes the window.
 
-When Option composes a character, which is the default (`window.macos_option_as_alt = false` in [config](../config.md)),
-that key press reaches the encoder as the composed character without Alt: German Option+L is `@`, Option+Space on the US
-layout is U+00A0. The press's repeats and its release report the same key and keep Alt off, even when Option is released
-first; their other modifiers are the ones held at the time. Option still sets Alt for keys it does not compose: named
-keys other than a composing Space, and any key pressed with Control or Command. With `macos_option_as_alt = true`,
-Option is Alt for every key and the layout's Option characters are not typed.
+When Option composes a character, which is the default (`window.macos_option_as_alt = false` in
+[config](../config.md#window)), that key press reaches the encoder as the composed character without Alt: German
+Option+L is `@`, Option+Space on the US layout is U+00A0. The press's repeats and its release report the same key and
+keep Alt off, even when Option is released first; their other modifiers are the ones held at the time. Option still sets
+Alt for keys it does not compose: named keys other than a composing Space, and any key pressed with Control or Command.
+With `macos_option_as_alt = true`, Option is Alt for every key and the layout's Option characters are not typed.
 
 ## Mouse reporting
 
