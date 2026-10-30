@@ -873,27 +873,18 @@ set would start pulling in two directions.
 
 ### Driving a session from a script
 
-#### Waiting is `send --wait`, a pure client of the existing mark stream
+#### Waiting with `send --wait`
 
-There is no wait verb and no daemon Wait message. The blocking behavior a scripted driver needs ("tell me when the
-command finishes, and how it exited") is built entirely CLI-side: attach as an ordinary subscriber, drain the rehydrate
-burst, then block for the next streamed `GridMsg::PromptMark` of kind `D`. Every mark that arrives is a command
-completing _now_: an `Ops` burst replays no historical marks, and the daemon seeds each subscriber's mark cursor at
-attach either way.
+`send --wait` sends one `OpsToDaemonMsg::SendAndWait` on an unattached connection
+([ipc.md](ipc.md#search-and-region-are-kinds-of-their-own) records why the wire form is session-addressed). The daemon
+registers the watch for the next `OSC 133 ; D` mark before writing the first step, so a command that finishes at once is
+still seen.
 
-A daemon-side `OpsToDaemonMsg::Wait` with a deferred reply is rejected: it would duplicate delivery machinery the
-subscriber stream already has, add the daemon's first long-parked pending reply, and buy nothing: the stream is already
-ordered after the connection's own input frames, which is what makes `send --wait` race-free (subscribe, inject, then
-the D mark of even an instantly-finishing command must still arrive on this stream).
-
-That ordering is also why the wait is a flag on `send` and not a verb beside it: a standalone `wait` opens its own
-connection, so a command started by a preceding `send` can finish before the wait subscribes, a race the surface's own
-docs would have to warn callers away from. Nothing is lost: `send --wait` with no text, `--key` or `--mouse` injects
+That ordering is why the wait is a flag on `send` and not a verb beside it: a standalone `wait` opens its own
+connection, so a command started by a preceding `send` can finish before the watch is registered, a race the surface's
+own docs would have to warn callers away from. Nothing is lost: `send --wait` with no text, `--key` or `--mouse` injects
 nothing and purely watches. The named caller is the agent-driving skill (`skills/felis`), which otherwise polls
 `capture` in a sleep loop.
-
-_Revisit if_ a waiter needs marks without the full grid-diff traffic an attach carries (e.g. hundreds of concurrent
-waiters), at which point a lean mark-only subscription kind earns its place.
 
 #### `notifications --session` / `--once` are stream filters, not a wire change
 

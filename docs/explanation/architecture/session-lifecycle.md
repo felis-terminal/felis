@@ -290,8 +290,8 @@ window paints again.
 Mirrors make that second layer ambiguous, and felis resolves the ambiguity with an order rather than a race. The daemon
 stores each window's reports **per subscriber** and resolves them along one candidate chain: the last window input owner
 first (the same marker "Attachment identity and the input-owner marker" below defines and a default-scope retarget
-picks), then the remaining windows in reverse attach order. Scripted `Ops` subscribers are never candidates: a
-`sessions send` drives the shell but owns no surface whose colors could be meant.
+picks), then the remaining windows in reverse attach order. Scripted `Ops` subscribers are never candidates: an `Ops`
+attachment drives the shell but owns no surface whose colors could be meant.
 
 The two facets travel that chain **independently**: each answers from the first candidate that has reported it, and a
 window that reported only its theme leaves the OS preference to the next one. A single `ConfigureTheme` is atomic,
@@ -815,9 +815,9 @@ name "this window". `FELIS_SESSION_ID` works precisely because a session _is_ th
 
 The **last window input owner** marker is a sibling of the size marker, updated only by PTY-reaching input from a
 _window_ subscriber. The two must not be one marker: size ownership is promoted by any subscriber's input, a scripted
-`sessions send` over an `Ops` attachment included, because that script really is the one driving the shell, but an `Ops`
-subscriber has no window to retarget, so letting it claim the switch target would move a window the script never
-addressed. Size ownership keeps its shared semantics.
+`Ops` attachment included, because that script really is the one driving the shell, but an `Ops` subscriber has no
+window to retarget, so letting it claim the switch target would move a window the script never addressed. Size ownership
+keeps its shared semantics.
 
 What the marker buys is a default that means something: the command the user typed traveled through that window, so it
 is the window they mean. When the marker is clear (nothing has typed yet, or the owner left), a session with exactly one

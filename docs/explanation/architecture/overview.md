@@ -34,6 +34,116 @@ canonical crate map is [reference/workspace.md](../../reference/workspace.md).
 └─────────────────────────────┘                  └──────────────────────────────┘
 ```
 
+## Why two processes
+
+Three reasons, in priority order:
+
+1. **Window death must not be PTY death.** A single-process design ties process lifetime to window lifetime; the daemon
+   split decouples them.
+2. **Mechanism vs. policy.** The daemon stores raw state; the client decides how to render it ("The daemon / client
+   split" below is that boundary's record).
+3. **Cross-host.** Because the boundary is a wire protocol, the daemon can run on a remote machine with the frames
+   tunneled over SSH stdio ([ipc.md](ipc.md) "Cross-host attach: SSH stdio" carries the persistence argument).
+
+## The daemon / client split
+
+When a new feature lands, it must be assignable to exactly one side. If something seems to belong "in between," that is
+a design smell: either it does not belong in felis at all, or the boundary is being drawn wrong.
+
+### The principle
+
+> Daemon = mechanism. Client = policy.
+
+- The daemon stores the _truth_ about a session: the bytes that came out of the PTY, the parsed cells, the images, the
+  cursor position.
+- The client decides the _appearance_: which font, which colors, what cursor shape, how to shape ligatures.
+
+A single daemon can be attached by multiple clients with different fonts and color schemes: in sequence or, for
+same-user clients, simultaneously (see [session-lifecycle.md](session-lifecycle.md) "Same-user mirroring"). The state on
+the wire must be font-and-color-agnostic either way; the same wire state drives several live renderers at once.
+
+### Responsibility table
+
+The principle assigns most concerns on sight: the PTY, the parser, the grid, the scrollback, the image store and the
+session's own lifecycle are the daemon's; the window, the input devices, the fonts, the atlas, the draw calls and every
+per-window animation are the client's. Seven assignments do not follow from it.
+
+| Concern                        | Owner  | Notes                                                                                                                                                                                                |
+| ------------------------------ | ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Damage tracking                | daemon | The daemon's damage decides what ships; the shadow marks the rows it applies, and the renderer rebuilds only those ([damage-tracking.md](../rendering/damage-tracking.md)).                          |
+| Selection                      | client | An anchor/extent pair over the shadow screen; no selection state crosses the wire ([input.md](../input.md)).                                                                                         |
+| Keymap → action lookup         | client | An action reaches the daemon only when it needs a session-side effect ([input.md](../input.md) "Action mapping").                                                                                    |
+| Key encoding                   | daemon | The client captures the keystroke; the bytes depend on keyboard modes only the daemon has parsed ([input.md](../input.md) "Keyboard").                                                               |
+| Clipboard                      | client | The OS clipboard is the window's; the daemon never touches it ([security-model.md](../security-model.md)).                                                                                           |
+| Default colors and OS scheme   | both   | Pixels are the client's, but it reports its resolved trio and palette so the daemon can answer a program's query ([session-lifecycle.md](session-lifecycle.md) "Client-derived presentation state"). |
+| Authentication / authorization | daemon | Local socket permissions, or the SSH carrier cross-host ([security-model.md](../security-model.md) "Daemon IPC").                                                                                    |
+
+Per-cell pixel buffers, client font selections, and configuration synchronization never cross the IPC wire. Each side
+reads its own declarative configuration independently; there is no runtime settings replication message.
+
+### Implications
+
+#### No shared memory
+
+The boundary is the IPC protocol, full stop. Even when the daemon and client run on the same host, they communicate over
+the local carrier (a Unix socket, or a named pipe on Windows): never through `mmap`, never through a shared file. This
+keeps cross-host attach (over SSH stdio) trivial: the same code path applies whether the daemon is local or remote.
+
+The one shared-memory path in the system runs the other way and stops before the boundary: a producer hands the daemon
+image pixels through a POSIX shm object (the Kitty `t=s` transfer mode), which the daemon copies into its image store
+([data-model/image-store.md](../data-model/image-store.md)). Pixels leave the daemon for a client as protocol frames.
+
+#### The daemon is color-blind
+
+The daemon stores cell attributes as protocol-level values: SGR parameters, palette indices, and 24-bit RGB triples that
+came out of the PTY. It does not interpret them as "the user's red" or "background color". The client maps
+protocol-level color to actual pixels.
+
+A config change on the client (theme reload, palette swap) does not invalidate any grid state in the daemon. The one
+deliberate exception to "the daemon does not know": the client reports its _resolved_ default fg/bg/cursor and its
+configured palette slots on attach (`SessionToDaemonMsg::ConfigureTheme`) and its OS light/dark preference
+(`InputMsg::ColorScheme`), because the daemon owns the query surface: a program's `OSC 4 ; n ; ?`, `OSC 10/11/12 ; ?` or
+`DSR ? 996 n` must answer with the colors the window paints, and the program talks to the daemon, not the client. The
+daemon stores the reports opaquely (it still never interprets a color) and **per window**, then resolves the one answer
+a query gets along a fixed candidate chain. Which mirror's colors a program sees is therefore a property of the chain,
+not of whose attach frame landed last, and a parked session keeps answering what the chain last resolved
+([session-lifecycle.md](session-lifecycle.md) "Client-derived presentation state").
+
+#### The daemon is font-blind
+
+The daemon does not know which font the client is using. The grid is indexed by _cell coordinates_, not pixels. The
+client decides cell width in pixels by measuring its current font, then sends the grid size in cells back to the daemon
+(via a resize message). The daemon asks the PTY to resize.
+
+A client can attach to a daemon, change fonts, and trigger a soft resize at any time, without any other state moving.
+
+#### The client is stateless across runs
+
+When the user closes the client window, the next client process starts empty. It connects to the daemon, requests a
+rehydration frame, and rebuilds its glyph atlas, image cache, and shaping cache from scratch. Nothing important lives
+only on the client.
+
+This is intentional: it forces the boundary to be honest. If something "feels like" it should be cached on the client
+between runs, that caching can be re-derived on a fresh attach in milliseconds, or it should not exist.
+
+### Boundary smells
+
+If a feature design produces any of the following, the design is wrong:
+
+- Daemon code that mentions a font or a color space.
+- Client code that holds authoritative session state.
+- A peer that _papers over_ version skew silently: a mismatched frame reinterpreted as something the reader does
+  understand, a field read under one major's meaning and applied under another's, or an open-ended compatibility matrix
+  carried to decode every past shape of the wire. Refusing a major the daemon does not serve is **not** the smell: the
+  preface refuses it loudly before a frame is written ([ipc.md](../../reference/ipc.md) "Versioning"). Neither is a
+  **declared** deprecation window, in which the daemon runs one decoder per major it still serves and each frame is
+  decoded by the schema its connection agreed on: two decoders that never see each other's bytes are two honest paths,
+  not a paper-over. The smell is skew handled where it cannot be seen: inside a decoder, per field, without the
+  connection having agreed which major it is speaking.
+- A "fast path" that bypasses the IPC layer for performance.
+
+The right response to a smell is to redraw the boundary on paper before writing any more code.
+
 ## Lifecycle
 
 The front door is `felis` (felis-cli): a window launch (bare `felis`, `felis attach <id>`, `felis -- <cmd>`) execs the
@@ -130,7 +240,7 @@ waits in the kernel's accept queue instead of finding a cold socket and spawning
 restores the session registry before it accepts, so a window re-attaching its session never reads `UnknownSession`
 ([session-lifecycle.md](session-lifecycle.md) "Transport loss"). A stream client gets no such continuation:
 `send --wait` waits for a command-end mark that is streamed live and never replayed
-([control-surfaces.md](control-surfaces.md) "Waiting is `send --wait`"), so it reports the session ended, and a
+([control-surfaces.md](control-surfaces.md) "Waiting with `send --wait`"), so it reports the session ended, and a
 notification stream ends. Telling those clients the close was an upgrade would take a new announcement on the wire and a
 new outcome in every stream verb, to cover a case the update procedure already tells the user to avoid.
 
@@ -300,116 +410,6 @@ The panic hook then wraps its `tracing::error!` in `catch_unwind`: a panic raise
 aborts unconditionally ([`std::panic`](https://doc.rust-lang.org/std/panic/index.html)), so the second panic is
 swallowed and the first still reaches `prev` and unwinds into the watchdog that cleans the session up
 ([session-lifecycle.md](session-lifecycle.md) "Session-task panics").
-
-## Why two processes
-
-Three reasons, in priority order:
-
-1. **Window death must not be PTY death.** A single-process design ties process lifetime to window lifetime; the daemon
-   split decouples them.
-2. **Mechanism vs. policy.** The daemon stores raw state; the client decides how to render it ("The daemon / client
-   split" below is that boundary's record).
-3. **Cross-host.** Because the boundary is a wire protocol, the daemon can run on a remote machine with the frames
-   tunneled over SSH stdio ([ipc.md](ipc.md) "Cross-host attach: SSH stdio" carries the persistence argument).
-
-## The daemon / client split
-
-When a new feature lands, it must be assignable to exactly one side. If something seems to belong "in between," that is
-a design smell: either it does not belong in felis at all, or the boundary is being drawn wrong.
-
-### The principle
-
-> Daemon = mechanism. Client = policy.
-
-- The daemon stores the _truth_ about a session: the bytes that came out of the PTY, the parsed cells, the images, the
-  cursor position.
-- The client decides the _appearance_: which font, which colors, what cursor shape, how to shape ligatures.
-
-A single daemon can be attached by multiple clients with different fonts and color schemes: in sequence or, for
-same-user clients, simultaneously (see [session-lifecycle.md](session-lifecycle.md) "Same-user mirroring"). The state on
-the wire must be font-and-color-agnostic either way; the same wire state drives several live renderers at once.
-
-### Responsibility table
-
-The principle assigns most concerns on sight: the PTY, the parser, the grid, the scrollback, the image store and the
-session's own lifecycle are the daemon's; the window, the input devices, the fonts, the atlas, the draw calls and every
-per-window animation are the client's. Seven assignments do not follow from it.
-
-| Concern                        | Owner  | Notes                                                                                                                                                                                                |
-| ------------------------------ | ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Damage tracking                | daemon | The daemon's damage decides what ships; the shadow marks the rows it applies, and the renderer rebuilds only those ([damage-tracking.md](../rendering/damage-tracking.md)).                          |
-| Selection                      | client | An anchor/extent pair over the shadow screen; no selection state crosses the wire ([input.md](../input.md)).                                                                                         |
-| Keymap → action lookup         | client | An action reaches the daemon only when it needs a session-side effect ([input.md](../input.md) "Action mapping").                                                                                    |
-| Key encoding                   | daemon | The client captures the keystroke; the bytes depend on keyboard modes only the daemon has parsed ([input.md](../input.md) "Keyboard").                                                               |
-| Clipboard                      | client | The OS clipboard is the window's; the daemon never touches it ([security-model.md](../security-model.md)).                                                                                           |
-| Default colors and OS scheme   | both   | Pixels are the client's, but it reports its resolved trio and palette so the daemon can answer a program's query ([session-lifecycle.md](session-lifecycle.md) "Client-derived presentation state"). |
-| Authentication / authorization | daemon | Local socket permissions, or the SSH carrier cross-host ([security-model.md](../security-model.md) "Daemon IPC").                                                                                    |
-
-Per-cell pixel buffers, client font selections, and configuration synchronization never cross the IPC wire. Each side
-reads its own declarative configuration independently; there is no runtime settings replication message.
-
-### Implications
-
-#### No shared memory
-
-The boundary is the IPC protocol, full stop. Even when the daemon and client run on the same host, they communicate over
-the local carrier (a Unix socket, or a named pipe on Windows): never through `mmap`, never through a shared file. This
-keeps cross-host attach (over SSH stdio) trivial: the same code path applies whether the daemon is local or remote.
-
-The one shared-memory path in the system runs the other way and stops before the boundary: a producer hands the daemon
-image pixels through a POSIX shm object (the Kitty `t=s` transfer mode), which the daemon copies into its image store
-([data-model/image-store.md](../data-model/image-store.md)). Pixels leave the daemon for a client as protocol frames.
-
-#### The daemon is color-blind
-
-The daemon stores cell attributes as protocol-level values: SGR parameters, palette indices, and 24-bit RGB triples that
-came out of the PTY. It does not interpret them as "the user's red" or "background color". The client maps
-protocol-level color to actual pixels.
-
-A config change on the client (theme reload, palette swap) does not invalidate any grid state in the daemon. The one
-deliberate exception to "the daemon does not know": the client reports its _resolved_ default fg/bg/cursor and its
-configured palette slots on attach (`SessionToDaemonMsg::ConfigureTheme`) and its OS light/dark preference
-(`InputMsg::ColorScheme`), because the daemon owns the query surface: a program's `OSC 4 ; n ; ?`, `OSC 10/11/12 ; ?` or
-`DSR ? 996 n` must answer with the colors the window paints, and the program talks to the daemon, not the client. The
-daemon stores the reports opaquely (it still never interprets a color) and **per window**, then resolves the one answer
-a query gets along a fixed candidate chain. Which mirror's colors a program sees is therefore a property of the chain,
-not of whose attach frame landed last, and a parked session keeps answering what the chain last resolved
-([session-lifecycle.md](session-lifecycle.md) "Client-derived presentation state").
-
-#### The daemon is font-blind
-
-The daemon does not know which font the client is using. The grid is indexed by _cell coordinates_, not pixels. The
-client decides cell width in pixels by measuring its current font, then sends the grid size in cells back to the daemon
-(via a resize message). The daemon asks the PTY to resize.
-
-A client can attach to a daemon, change fonts, and trigger a soft resize at any time, without any other state moving.
-
-#### The client is stateless across runs
-
-When the user closes the client window, the next client process starts empty. It connects to the daemon, requests a
-rehydration frame, and rebuilds its glyph atlas, image cache, and shaping cache from scratch. Nothing important lives
-only on the client.
-
-This is intentional: it forces the boundary to be honest. If something "feels like" it should be cached on the client
-between runs, that caching can be re-derived on a fresh attach in milliseconds, or it should not exist.
-
-### Boundary smells
-
-If a feature design produces any of the following, the design is wrong:
-
-- Daemon code that mentions a font or a color space.
-- Client code that holds authoritative session state.
-- A peer that _papers over_ version skew silently: a mismatched frame reinterpreted as something the reader does
-  understand, a field read under one major's meaning and applied under another's, or an open-ended compatibility matrix
-  carried to decode every past shape of the wire. Refusing a major the daemon does not serve is **not** the smell: the
-  preface refuses it loudly before a frame is written ([ipc.md](../../reference/ipc.md) "Versioning"). Neither is a
-  **declared** deprecation window, in which the daemon runs one decoder per major it still serves and each frame is
-  decoded by the schema its connection agreed on: two decoders that never see each other's bytes are two honest paths,
-  not a paper-over. The smell is skew handled where it cannot be seen: inside a decoder, per field, without the
-  connection having agreed which major it is speaking.
-- A "fast path" that bypasses the IPC layer for performance.
-
-The right response to a smell is to redraw the boundary on paper before writing any more code.
 
 ## Prior art and alternatives considered
 

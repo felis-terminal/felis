@@ -5,7 +5,7 @@ sidebar:
 ---
 
 Install felis, its `xterm-felis` terminfo entry, and its shell completions, from the Nix flake, through home-manager,
-through Homebrew, or from source.
+through Homebrew, from the release archives, or from source.
 
 **Prerequisites:** the [Nix package manager](https://nixos.org/download) with flakes enabled for the flake,
 home-manager, and source-build paths; the source build takes its toolchain from the same flake. The Homebrew path needs
@@ -111,43 +111,6 @@ or the Dock:
 ```sh
 ln -sf "$(brew --prefix felis)/felis.app" /Applications/felis.app
 ```
-
-## Build from source
-
-To build from source with `cargo`, use the repository Nix flake to pin the toolchain (nightly Rust plus runtime graphics
-libraries):
-
-```sh
-git clone https://github.com/felis-terminal/felis
-cd felis
-nix develop          # dev shell; installs the pre-commit hook
-
-cargo run -p felis-daemon -- serve &
-cargo run -p felis-client          # the GUI directly, or:
-cargo run -p felis-cli             # the `felis` front-door (execs felis-client)
-```
-
-On Linux, add the `wayland-clipboard` feature (`cargo build --features wayland-clipboard`; the Nix flake's Linux package
-sets it). It wires `arboard` through `wl-clipboard-rs`, so Wayland sessions on wlroots-based compositors (Sway,
-Hyprland, niri) and KDE Plasma reach the system clipboard through `wlr_data_control_v1`, which is privileged and
-focus-independent: a copy issued while the window is unfocused still lands. A build without the feature falls back to
-XWayland's X11 selection, which is also what GNOME sessions use, since Mutter does not expose `wlr_data_control_v1`.
-With XWayland disabled that path fails, and felis reports `ClipboardError::Unavailable` and falls back to an in-process
-clipboard. The feature is off by default because macOS and Windows builds have no use for `wl-clipboard-rs` or its
-transitive dependencies.
-
-Installing outside Nix requires setting up the terminfo entry, shell completions, and Linux runtime library wrappers
-manually. Compile the terminfo entry once with `tic`:
-
-```sh
-tic -x crates/felis-daemon/terminfo/felis.terminfo   # writes into ~/.terminfo
-```
-
-Verify the installation with `infocmp -x xterm-felis`. For terminfo overrides and environment configuration, see
-[terminal identity](../reference/terminal-identity.md).
-
-Platform build targets and CI validation gates are specified in
-[workspace.md](../reference/workspace.md#build-and-platform-matrix).
 
 ## The Linux archive
 
@@ -261,6 +224,42 @@ daemon log.
 
 For a build newer than the last release, the `windows` workflow uploads the same zip as a run artifact for each passing
 commit on `main`. Alternatively, build from source on Windows with `cargo build --release`.
+
+## Build from source
+
+To build from source with `cargo`, use the repository Nix flake to pin the toolchain (nightly Rust plus runtime graphics
+libraries):
+
+```sh
+git clone https://github.com/felis-terminal/felis
+cd felis
+nix develop          # dev shell; installs the pre-commit hook
+
+cargo build
+./target/debug/felis
+```
+
+On Linux, add the `wayland-clipboard` feature (`cargo build --features wayland-clipboard`; the Nix flake's Linux package
+sets it). It wires `arboard` through `wl-clipboard-rs`, so Wayland sessions on wlroots-based compositors (Sway,
+Hyprland, niri) and KDE Plasma reach the system clipboard through `wlr_data_control_v1`, which is privileged and
+focus-independent: a copy issued while the window is unfocused still lands. A build without the feature falls back to
+XWayland's X11 selection, which is also what GNOME sessions use, since Mutter does not expose `wlr_data_control_v1`.
+With XWayland disabled that path fails, and felis reports `ClipboardError::Unavailable` and falls back to an in-process
+clipboard. The feature is off by default because macOS and Windows builds have no use for `wl-clipboard-rs` or its
+transitive dependencies.
+
+Installing outside Nix requires setting up the terminfo entry, shell completions, and Linux runtime library wrappers
+manually. Compile the terminfo entry once with `tic`:
+
+```sh
+tic -x crates/felis-daemon/terminfo/felis.terminfo   # writes into ~/.terminfo
+```
+
+Verify the installation with `infocmp -x xterm-felis`. For terminfo overrides and environment configuration, see
+[terminal identity](../reference/terminal-identity.md).
+
+Platform build targets and CI validation gates are specified in
+[workspace.md](../reference/workspace.md#build-and-platform-matrix).
 
 ## Mark zsh prompts
 

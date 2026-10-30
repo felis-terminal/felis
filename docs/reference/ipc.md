@@ -515,9 +515,9 @@ recorded in the ledger ("Versioning" below).
 
 The families are split by purpose, not pooled into a catch-all: kind 0 (`Conn`) carries the handshake and the stream
 lifecycle, and the session, ops, region, notify, push, and search surfaces each ride their own frame kind (`Session`,
-`Ops`, `Region`, `Notify`, `Push`, `Search`). `Search` and `Region` are bidirectional conversations on the _attached_
-connection: each carries its request and reply halves on one kind, so a connection phase can refuse the conversation
-whole.
+`Ops`, `Region`, `Notify`, `Push`, `Search`). `Search` and `Region` are bidirectional conversations on an attached
+connection, or on an unattached `Ops` connection naming the session ("Ops (kind = 5)" below): each carries its request
+and reply halves on one kind, so a connection phase can refuse the conversation whole.
 
 A family whose arms all travel one way is one wrapper message, `<Family>Msg` (`InputMsg`, `GridMsg`, `ImageMsg`,
 `PushMsg`). A family with arms in both directions is two, `<Family>ToDaemonMsg` and `<Family>ToClientMsg`, under its one

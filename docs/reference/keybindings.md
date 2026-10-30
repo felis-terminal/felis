@@ -125,12 +125,12 @@ Session and utility actions ship without default chords. Bind them in the `[keym
 "super+n" = { kind = "run", background = true, command = ["/path/to/felis"] }
 ```
 
+The window opens on the local daemon `felis` resolves by itself: `FELIS_SOCKET` when the client inherited one, else the
+default. The command does not carry over the window's `--host`, `--socket` or `--config`.
+
 - **`shader_event`**: Fires the `user:<name>` event, which starts the animation of every post-process stage whose
   `animation.on` lists it ([shaders.md](shaders.md#event-animation)). A name no stage lists does nothing, and
   `felis config check` warns about it.
-
-The window opens on the local daemon `felis` resolves by itself: `FELIS_SOCKET` when the client inherited one, else the
-default. The command does not carry over the window's `--host`, `--socket` or `--config`.
 
 - **`pipe`**: Extracts buffer text and sends it to a configured sink:
 
