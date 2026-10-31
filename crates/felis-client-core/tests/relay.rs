@@ -34,10 +34,16 @@ fn private_dir() -> TempDir {
     tmp
 }
 
+/// Readiness is an accepted connection, not an existing path: `bind`
+/// publishes the inode before `listen`.
 async fn await_socket(path: &Path) {
     let deadline = Instant::now() + Duration::from_secs(5);
-    while !path.exists() {
-        assert!(Instant::now() < deadline, "{} never bound", path.display());
+    while UnixStream::connect(path).await.is_err() {
+        assert!(
+            Instant::now() < deadline,
+            "{} never accepted a connection",
+            path.display()
+        );
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
 }
@@ -582,21 +588,27 @@ async fn a_lost_daemon_ends_an_attach_after_what_it_already_sent() {
         })
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    let carries_the_row = |message: &StreamMessage| {
+        matches!(
+            message,
+            StreamMessage::Item(item) if row_texts(item).iter().any(|row| row.contains("before-the-cut"))
+        )
+    };
+    let mut seen = Vec::new();
+    while !seen.iter().any(carries_the_row) {
+        let message = timeout(PATIENCE, attach.next())
+            .await
+            .expect("the row never reached the attach");
+        assert!(!message.is_terminal(), "{message:?}");
+        seen.push(message);
+    }
     proxy.cut();
 
-    let seen = drain(&mut attach).await;
+    seen.extend(drain(&mut attach).await);
     assert!(matches!(
         seen.first(),
         Some(StreamMessage::Item(Item::Attached { .. }))
     ));
-    assert!(
-        seen.iter().any(|message| matches!(
-            message,
-            StreamMessage::Item(item) if row_texts(item).iter().any(|row| row.contains("before-the-cut"))
-        )),
-        "the rows sent before the loss were not delivered: {seen:?}"
-    );
     let terminal = seen.last().unwrap().clone();
     assert!(
         matches!(&terminal, StreamMessage::Error(e) if e.kind == ErrorKind::DaemonLost),

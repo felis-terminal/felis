@@ -1172,6 +1172,7 @@ mod tests {
                 ConnectError::Connect(std::io::Error::other("no socket")),
             ),
             ("NotWelcome", ConnectError::NotWelcome),
+            ("UnexpectedKind", ConnectError::UnexpectedKind { kind: 99 }),
             ("NotSessionAttached", ConnectError::NotSessionAttached),
             (
                 "InadmissibleRefusal",

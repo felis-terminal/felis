@@ -58,6 +58,7 @@ EofBeforeWelcome                   daemon_lost
 EofMidAttach                       daemon_lost
 Connect                            daemon_lost
 NotWelcome                         protocol
+UnexpectedKind                     protocol
 NotSessionAttached                 protocol
 InadmissibleRefusal                protocol
 Abandoned                          protocol

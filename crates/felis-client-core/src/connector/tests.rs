@@ -1853,35 +1853,7 @@ async fn await_session_exited(
 
 #[cfg(all(unix, feature = "daemon-tests"))]
 async fn daemon_with_exiting_shell() -> (TempDir, PathBuf, tokio::task::JoinHandle<()>) {
-    daemon_running_script("printf bye; exit 0").await
-}
-
-#[cfg(all(unix, feature = "daemon-tests"))]
-async fn daemon_running_script(
-    script: &'static str,
-) -> (TempDir, PathBuf, tokio::task::JoinHandle<()>) {
-    use felis_daemon::{serve::SessionFactory, serve::serve_unix_with_factory};
-    use felis_pty::Command;
-
-    let tmp = private_dir();
-    let path = tmp.path().join("daemon.sock");
-    let pool = Arc::new(Mutex::new(SessionPool::new()));
-
-    let factory: SessionFactory = Arc::new(move |_| {
-        let mut cmd = Command::new("/bin/sh");
-        cmd.args(["-c", script]);
-        cmd.env_clear();
-        cmd.env("PATH", "/bin:/usr/bin");
-        cmd
-    });
-
-    let server_path = path.clone();
-    let server = tokio::spawn(async move {
-        drop(serve_unix_with_factory(&server_path, DaemonCaps::default(), pool, factory).await);
-    });
-
-    await_socket(&path).await;
-    (tmp, path, server)
+    daemon_running("printf bye; exit 0").await
 }
 
 /// The daemon pushes `SessionExited` before dropping the
@@ -1911,7 +1883,7 @@ async fn window_client_hears_session_exited_when_shell_exits() {
 async fn session_exit_status_of(
     script: &'static str,
 ) -> Option<felis_protocol::messages::ExitStatus> {
-    let (_tmp, path, server) = daemon_running_script(script).await;
+    let (_tmp, path, server) = daemon_running(script).await;
     let mut c = connect(&path, Offer::window(false)).await.unwrap();
     c.create_with(SpawnArgs::default()).await.unwrap();
     let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
