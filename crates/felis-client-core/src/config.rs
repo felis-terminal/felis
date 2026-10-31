@@ -3175,7 +3175,8 @@ mod tests {
     fn a_nan_cell_scale_falls_back_to_one_with_a_warning() {
         let (cfg, diagnostics) = resolved("[font]\ncell_width_scale = nan\n");
         assert_eq!(cfg.font.cell_scale(), [1.0, 1.0]);
-        assert_eq!(diagnostics.warnings().count(), 1);
+        let warning = only_warning(&diagnostics);
+        assert_eq!(warning.key.as_deref(), Some("font.cell_width_scale"));
     }
 
     #[test]

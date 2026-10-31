@@ -1453,6 +1453,7 @@ mod tests {
         let pad = idx.cell_metrics().pad;
         assert!(pad[0] > 0 && pad[1] > 0);
         let grown = slot_after_ensure(&mut idx, 'M', SizingKey::default());
+        assert!(!grown.fills_cell);
         assert_eq!(grown.offset_px[0], plain.offset_px[0] + pad[0]);
         assert_eq!(
             grown.offset_px[1], plain.offset_px[1],
@@ -1472,6 +1473,7 @@ mod tests {
             let mut idx = GlyphIndex::new(stack(), 14.0, nz(256)).with_cell_scale(scale);
             let m = idx.cell_metrics();
             let slot = slot_after_ensure(&mut idx, '█', SizingKey::default());
+            assert!(slot.fills_cell, "{scale:?}");
             assert_eq!(slot.size_px, [m.width, m.height], "{scale:?}");
             assert_eq!(slot.offset_px[0], 0, "{scale:?}");
         }

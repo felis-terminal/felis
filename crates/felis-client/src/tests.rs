@@ -1027,6 +1027,69 @@ fn renderer_config_from_default_config_is_all_none() {
     assert!(rc.theme_palette.is_empty());
 }
 
+mod post_chain {
+    use super::*;
+
+    fn resolved(text: &str) -> config::EffectiveConfig {
+        config::ConfigDocument::parse(text, None)
+            .unwrap()
+            .resolve(GUI_CLIENT_ID)
+            .0
+    }
+
+    #[test]
+    fn an_unreadable_file_stage_is_dropped_together_with_its_animation() {
+        let dir = std::env::temp_dir().join(format!("felis-post-chain-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let readable = dir.join("glow.wgsl");
+        std::fs::write(&readable, "// glow").unwrap();
+        let missing = dir.join("absent.wgsl");
+        let cfg = resolved(&format!(
+            "[shader]\npost = [\
+             {{ builtin = \"trail\", animation = {{ on = [\"bell\"], duration_ms = 100 }} }},\
+             {{ file = {missing:?}, animation = {{ on = [\"bell\"], duration_ms = 200 }} }},\
+             {{ file = {readable:?}, animation = {{ on = [\"bell\"], duration_ms = 300 }} }},\
+             {{ builtin = \"trail\" }}]\n"
+        ));
+
+        let chain = resolve_post_chain(&cfg);
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        let labels: Vec<&str> = chain.sources.iter().map(|s| s.label.as_str()).collect();
+        assert_eq!(
+            labels,
+            [
+                "builtin trail",
+                readable.display().to_string().as_str(),
+                "builtin trail"
+            ]
+        );
+        assert_eq!(chain.sources[1].wgsl, "// glow");
+        let durations: Vec<Option<u32>> = chain
+            .animations
+            .iter()
+            .map(|a| a.as_ref().map(|a| a.duration_ms))
+            .collect();
+        assert_eq!(durations, [Some(100), Some(300), None]);
+    }
+
+    #[test]
+    fn stage_params_map_to_renderer_params_by_name() {
+        let cfg = resolved(
+            "[shader]\npost = { builtin = \"trail\", params = { on = true, steps = 4, strength = 0.5 } }\n",
+        );
+        let chain = resolve_post_chain(&cfg);
+        assert_eq!(
+            chain.sources[0].params,
+            [
+                ("on".to_owned(), PostParam::Bool(true)),
+                ("steps".to_owned(), PostParam::Int(4)),
+                ("strength".to_owned(), PostParam::Float(0.5)),
+            ]
+        );
+    }
+}
+
 #[test]
 #[allow(clippy::float_cmp)]
 fn css_shorthand_theme_color_falls_back_to_the_defaults_end_to_end() {

@@ -2281,6 +2281,41 @@ mod tests {
         test_gpu::stage_source("trail", TRAIL_SHADER_SOURCE)
     }
 
+    #[cfg(not(windows))]
+    #[test]
+    fn set_cell_scale_resizes_the_cell_around_the_font_cell_and_back() {
+        let mut renderer = offscreen_on(&noop_instance(), 8, 8, RendererConfig::default());
+        let base = renderer.cell_metrics();
+        let scaled = renderer.set_cell_scale([2.0, 1.5]);
+        assert_eq!(scaled, base.with_cell_scale([2.0, 1.5]));
+        assert_eq!(renderer.cell_metrics(), scaled);
+        assert_eq!(renderer.set_cell_scale([1.0, 1.0]), base);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn start_post_animation_without_a_chain_reports_no_run() {
+        let mut renderer = offscreen_on(&noop_instance(), 8, 8, RendererConfig::default());
+        assert!(!renderer.start_post_animation(0, Instant::now(), Duration::from_millis(300)));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn only_a_focus_edge_restamps_the_focus_change_time() {
+        let mut renderer = offscreen_on(&noop_instance(), 8, 8, RendererConfig::default());
+        let stamp = |r: &Renderer| {
+            let mut clock = r.post_clock;
+            clock.tick(Instant::now()).focus_change_time_s
+        };
+        renderer.set_window_focused(true);
+        assert_eq!(stamp(&renderer), 0.0, "already focused: no edge");
+        renderer.set_window_focused(false);
+        let blurred = stamp(&renderer);
+        assert!(blurred > 0.0);
+        renderer.set_window_focused(false);
+        assert_eq!(stamp(&renderer), blurred, "still blurred: no edge");
+    }
+
     /// 37 px rows are 148 bytes, padded to 256 for the copy: the
     /// padding must not reach `out`, before or after a resize.
     #[cfg(not(windows))]
