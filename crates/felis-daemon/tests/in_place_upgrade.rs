@@ -8,9 +8,8 @@ use std::path::Path;
 use std::process::{Child, Command as StdCommand};
 use std::time::Duration;
 
-use felis_client_core::{AttachIntent, Offer, ShadowScreen, connect};
+use felis_client_core::{Offer, connect};
 use felis_protocol::messages::{SpawnArgs, UpgradeOutcome};
-use felis_protocol::{MessageKind, codec, messages::GridMsg};
 use tempfile::TempDir;
 
 mod common;
@@ -44,22 +43,6 @@ fn spawn_real_daemon(tmp: &Path, socket: &Path) -> DaemonProc {
     DaemonProc(child)
 }
 
-fn lines(path: &Path) -> usize {
-    std::fs::read_to_string(path).map_or(0, |text| text.lines().count())
-}
-
-async fn wait_for_more_lines(path: &Path, than: usize) {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    while lines(path) <= than {
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "the session's shell stopped writing {}",
-            path.display()
-        );
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-}
-
 /// An upgrade keeps the daemon's pid, the session's id and its running
 /// shell: the shell goes on writing after the successor took over.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -85,7 +68,7 @@ async fn an_upgrade_keeps_the_daemon_pid_and_the_running_session() {
         })
         .await
         .unwrap();
-    wait_for_more_lines(&ticks, 0).await;
+    common::wait_for_more_lines(&ticks, 0).await;
 
     let mut conn = connect(&socket, Offer::ops()).await.unwrap();
     let outcome = conn
@@ -108,38 +91,12 @@ async fn an_upgrade_keeps_the_daemon_pid_and_the_running_session() {
         None,
         "the daemon process the test started is still the one serving"
     );
-    let before = lines(&ticks);
-    wait_for_more_lines(&ticks, before).await;
+    let before = common::lines(&ticks);
+    common::wait_for_more_lines(&ticks, before).await;
 }
 
 /// Grid frames from an attach until the rehydrate burst ends, mirrored
 /// the way a window mirrors them.
-async fn rehydrated_screen(socket: &Path, id: u128) -> ShadowScreen {
-    let mut conn = connect(socket, Offer::window(false)).await.unwrap();
-    let info = conn.attach(id, AttachIntent::Deliberate).await.unwrap();
-    let mut shadow = ShadowScreen::new(info.dims.rows, info.dims.cols);
-    let mut began = false;
-    let read = async {
-        while let Some(frame) = conn.next_frame().await.unwrap() {
-            if frame.kind != MessageKind::Grid.as_u16() {
-                continue;
-            }
-            let msg = codec::decode::<GridMsg>(&frame.body).unwrap();
-            began |= matches!(msg, GridMsg::RehydrateBegin);
-            let ended = matches!(msg, GridMsg::RehydrateEnd);
-            shadow.apply(&msg).unwrap();
-            if began && ended {
-                return;
-            }
-        }
-        panic!("the attach closed before its rehydrate ended");
-    };
-    tokio::time::timeout(Duration::from_secs(10), read)
-        .await
-        .expect("the rehydrate burst ends");
-    shadow
-}
-
 /// What the session printed before the upgrade is on its screen after
 /// it, and so is what the program set: the successor restores the grid
 /// rather than starting it blank.
@@ -183,7 +140,7 @@ async fn an_upgrade_keeps_the_screen_a_session_drew() {
     drop(conn);
     common::wait_connectable(&socket).await;
 
-    let shadow = rehydrated_screen(&socket, info.id).await;
+    let shadow = common::rehydrated_screen(&socket, info.id).await;
     assert!(
         common::shadow_contains(&shadow, "drawn before the upgrade"),
         "{:?}",

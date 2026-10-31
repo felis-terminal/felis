@@ -36,6 +36,10 @@ use std::time::Instant;
 #[cfg(unix)]
 use tempfile::TempDir;
 
+fn hex(id: u128) -> String {
+    felis_protocol::SessionHex(id).to_string()
+}
+
 /// The scope-dependent numbers of a status row, flattened the way the
 /// assertions below read them: absent where the arm does not carry the
 /// field, and absent for an unlimited ceiling.
@@ -3650,9 +3654,7 @@ async fn force_detach_evicts_every_subscriber_and_keeps_the_session() {
     hello_welcome_as(&mut reader_c, &mut writer_c, ConnectionMode::Ops, false).await;
     send_request(
         &mut writer_c,
-        &OpsToDaemonMsg::ForceDetach {
-            id_prefix: format!("{}", felis_protocol::SessionHex(id)),
-        },
+        &OpsToDaemonMsg::ForceDetach { id_prefix: hex(id) },
         1,
     )
     .await;
@@ -3733,9 +3735,7 @@ async fn force_detach_idle_session_reports_not_attached() {
 
     send_request(
         &mut writer_b,
-        &OpsToDaemonMsg::ForceDetach {
-            id_prefix: format!("{}", felis_protocol::SessionHex(id)),
-        },
+        &OpsToDaemonMsg::ForceDetach { id_prefix: hex(id) },
         2,
     )
     .await;
@@ -3796,7 +3796,6 @@ async fn a_switch_with_no_targeted_window_separates_the_count_from_the_denial() 
     }
     let (from, to) = (ids[0], ids[1]);
 
-    let hex = |id| format!("{}", felis_protocol::SessionHex(id));
     send_request(
         &mut writer,
         &OpsToDaemonMsg::Switch {
@@ -3942,9 +3941,7 @@ async fn a_window_may_not_destroy_another_session() {
     let result = run_gated_control_frame(
         pool.clone(),
         ConnectionMode::Window,
-        OpsToDaemonMsg::Destroy {
-            id_prefix: format!("{}", felis_protocol::SessionHex(id)),
-        },
+        OpsToDaemonMsg::Destroy { id_prefix: hex(id) },
         Some(Correlation::request(RequestId::new(1).expect("non-zero"))),
     )
     .await;
@@ -4052,7 +4049,7 @@ async fn an_attached_window_is_answered_an_error_for_a_mutating_verb() {
     assert_eq!(attached_info(&mut reader).await.id, id);
     drain_rehydrate(&mut reader).await;
 
-    let id_prefix = format!("{}", felis_protocol::SessionHex(id));
+    let id_prefix = hex(id);
     send_request(&mut writer, &OpsToDaemonMsg::Destroy { id_prefix }, 1).await;
     // The window's grid stream keeps running underneath, so the answer
     // arrives behind whatever frames the session emitted meanwhile.
@@ -4946,7 +4943,7 @@ fn the_order_is_base_then_scrub_then_stamps_then_explicit() {
     );
     assert_eq!(
         env_of(&cmd, "FELIS_SESSION_ID").as_deref(),
-        Some(&*format!("{}", felis_protocol::SessionHex(0xabc))),
+        Some(&*hex(0xabc)),
         "the identity stamp is felis's, never the base's"
     );
     assert_eq!(
@@ -8299,9 +8296,7 @@ async fn a_when_empty_stop_refuses_creates_and_exits_after_the_last_session() {
 
     send_request(
         &mut ops_writer,
-        &OpsToDaemonMsg::Destroy {
-            id_prefix: format!("{}", felis_protocol::SessionHex(id)),
-        },
+        &OpsToDaemonMsg::Destroy { id_prefix: hex(id) },
         4,
     )
     .await;
@@ -8486,7 +8481,7 @@ async fn prefix_matching_several(pool: &Arc<Mutex<SessionPool>>) -> (String, u32
         ids.push(pooled_session(pool).await.0);
         let mut counts = std::collections::BTreeMap::<char, u32>::new();
         for id in &ids {
-            let hex = felis_protocol::SessionHex(*id).to_string();
+            let hex = hex(*id);
             let first = hex.chars().next().expect("a 32-digit rendering");
             *counts.entry(first).or_default() += 1;
         }
@@ -8511,7 +8506,7 @@ async fn an_attach_by_prefix_lands_on_the_session_the_daemon_resolves() {
     let (read_half, write_half) = connect(&path).await.unwrap();
     let (mut reader, mut writer) = framed(read_half, write_half).await;
     hello_welcome(&mut reader, &mut writer, false).await;
-    let hex = felis_protocol::SessionHex(id.0).to_string();
+    let hex = hex(id.0);
     send_kind(
         &mut writer,
         &SessionToDaemonMsg::Attach {
@@ -8534,7 +8529,7 @@ async fn a_prefix_whose_session_was_destroyed_refuses_with_no_match() {
     let pool = Arc::new(Mutex::new(SessionPool::new()));
     spawn_daemon(&path, pool.clone(), shell_factory("sleep 30")).await;
     let doomed = pooled_session(&pool).await;
-    let hex = felis_protocol::SessionHex(doomed.0).to_string();
+    let hex = hex(doomed.0);
 
     let (read_half, write_half) = connect(&path).await.unwrap();
     let (mut reader, mut writer) = framed(read_half, write_half).await;
@@ -8614,7 +8609,7 @@ async fn ops_info_answers_a_row_and_a_short_id_checked_against_the_pool() {
     spawn_daemon(&path, pool.clone(), shell_factory("sleep 30")).await;
     let first = pooled_session(&pool).await;
     let second = pooled_session(&pool).await;
-    let hex = felis_protocol::SessionHex(first.0).to_string();
+    let hex = hex(first.0);
 
     let (read_half, write_half) = connect(&path).await.unwrap();
     let (mut reader, mut writer) = framed(read_half, write_half).await;

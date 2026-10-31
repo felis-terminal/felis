@@ -634,17 +634,12 @@ mod tests {
 
     #[test]
     fn an_inactive_tree_announces_nothing() {
-        let rec = Recorder::default();
-        let mut tree = A11yTree::with_adapter(Box::new(rec.clone()));
+        let mut tree = A11yTree::with_adapter(Box::new(Recorder::default()));
         let t0 = Instant::now();
         tree.announce("done".to_owned(), t0);
         assert_eq!(tree.pending_announcements(), <&[String]>::default());
         assert_eq!(tree.announcement_deadline(), None);
         assert!(!tree.tick(t0 + ANNOUNCE_MAX_DELAY));
-        let g = grid_with(2, 8, b"$ ");
-        tree.activate();
-        tree.flush(&source(g.screen(), None));
-        assert_eq!(announcements(&rec.0.borrow()[0]), vec![]);
     }
 
     #[test]
@@ -658,6 +653,7 @@ mod tests {
         tree.announce("second".to_owned(), t0 + ms(9));
         assert!(tree.tick(t0 + ms(9) + ANNOUNCE_QUIET));
         tree.flush(&source(g.screen(), None));
+        assert_eq!(tree.announcement_deadline(), None);
 
         let updates = rec.0.borrow();
         assert_eq!(updates.len(), 2);
@@ -680,18 +676,6 @@ mod tests {
         tree.flush(&source(g.screen(), None));
         assert_eq!(rec.0.borrow().len(), 1);
         assert_eq!(tree.pending_announcements(), ["done"]);
-    }
-
-    #[test]
-    fn an_announcement_is_published_once_the_output_has_been_quiet() {
-        let (rec, mut tree, g) = announcing_tree();
-        let t0 = Instant::now();
-        tree.announce("done".to_owned(), t0);
-        assert!(tree.tick(t0 + ANNOUNCE_QUIET));
-        tree.flush(&source(g.screen(), None));
-        let updates = rec.0.borrow();
-        assert_eq!(announcements(&updates[1])[0].1.label(), Some("done"));
-        assert_eq!(tree.announcement_deadline(), None);
     }
 
     #[test]

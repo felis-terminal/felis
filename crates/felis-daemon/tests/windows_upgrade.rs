@@ -10,9 +10,8 @@ use std::process::{Child, Command as StdCommand, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
-use felis_client_core::{AttachIntent, Offer, ShadowScreen, connect};
+use felis_client_core::{AttachIntent, Offer, connect};
 use felis_protocol::messages::{SpawnArgs, UpgradeOutcome, UpgradeRefusal};
-use felis_protocol::{MessageKind, codec, messages::GridMsg};
 use tempfile::TempDir;
 
 mod common;
@@ -118,22 +117,6 @@ fn runtime() -> tokio::runtime::Runtime {
         .unwrap()
 }
 
-fn lines(path: &Path) -> usize {
-    std::fs::read_to_string(path).map_or(0, |text| text.lines().count())
-}
-
-async fn wait_for_more_lines(path: &Path, than: usize) {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
-    while lines(path) <= than {
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "the session's shell stopped writing {}",
-            path.display()
-        );
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-}
-
 /// A shell that appends a line to `ticks` every 50 ms for as long as it
 /// lives.
 fn ticker(ticks: &Path) -> SpawnArgs {
@@ -169,7 +152,7 @@ fn an_upgrade_hands_the_running_session_to_a_new_daemon_process() {
 
                 let mut conn = connect(&daemon.pipe, Offer::ops()).await.unwrap();
                 let info = conn.spawn_session(ticker(&ticks)).await.unwrap();
-                wait_for_more_lines(&ticks, 0).await;
+                common::wait_for_more_lines(&ticks, 0).await;
 
                 for _ in 0..2 {
                     let mut conn = connect(&daemon.pipe, Offer::ops()).await.unwrap();
@@ -190,38 +173,12 @@ fn an_upgrade_hands_the_running_session_to_a_new_daemon_process() {
                         vec![info.id],
                         "the successor serves the same session under the same id"
                     );
-                    let before = lines(&ticks);
-                    wait_for_more_lines(&ticks, before).await;
+                    let before = common::lines(&ticks);
+                    common::wait_for_more_lines(&ticks, before).await;
                 }
             });
         },
     );
-}
-
-async fn rehydrated_screen(pipe: &Path, id: u128) -> ShadowScreen {
-    let mut conn = connect(pipe, Offer::window(false)).await.unwrap();
-    let info = conn.attach(id, AttachIntent::Deliberate).await.unwrap();
-    let mut shadow = ShadowScreen::new(info.dims.rows, info.dims.cols);
-    let mut began = false;
-    let read = async {
-        while let Some(frame) = conn.next_frame().await.unwrap() {
-            if frame.kind != MessageKind::Grid.as_u16() {
-                continue;
-            }
-            let msg = codec::decode::<GridMsg>(&frame.body).unwrap();
-            began |= matches!(msg, GridMsg::RehydrateBegin);
-            let ended = matches!(msg, GridMsg::RehydrateEnd);
-            shadow.apply(&msg).unwrap();
-            if began && ended {
-                return;
-            }
-        }
-        panic!("the attach closed before its rehydrate ended");
-    };
-    tokio::time::timeout(Duration::from_secs(10), read)
-        .await
-        .expect("the rehydrate burst ends");
-    shadow
 }
 
 /// What the session printed before the upgrade is on its screen after.
@@ -244,7 +201,7 @@ fn an_upgrade_keeps_the_screen_a_session_drew() {
                 })
                 .await
                 .unwrap();
-            let shadow = rehydrated_screen(&daemon.pipe, info.id).await;
+            let shadow = common::rehydrated_screen(&daemon.pipe, info.id).await;
             let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
             let mut shadow = shadow;
             while !common::shadow_contains(&shadow, "drawn before the upgrade") {
@@ -253,7 +210,7 @@ fn an_upgrade_keeps_the_screen_a_session_drew() {
                     "the session never drew"
                 );
                 tokio::time::sleep(Duration::from_millis(100)).await;
-                shadow = rehydrated_screen(&daemon.pipe, info.id).await;
+                shadow = common::rehydrated_screen(&daemon.pipe, info.id).await;
             }
 
             let mut conn = connect(&daemon.pipe, Offer::ops()).await.unwrap();
@@ -262,7 +219,7 @@ fn an_upgrade_keeps_the_screen_a_session_drew() {
             drop(conn);
             follow_upgrade(&mut daemon).await;
 
-            let shadow = rehydrated_screen(&daemon.pipe, info.id).await;
+            let shadow = common::rehydrated_screen(&daemon.pipe, info.id).await;
             assert!(
                 common::shadow_contains(&shadow, "drawn before the upgrade"),
                 "{:?}",
@@ -365,7 +322,7 @@ fn a_failed_hand_over_leaves_the_daemon_serving(
             wait_until_up(&daemon.pipe).await;
             let mut conn = connect(&daemon.pipe, Offer::ops()).await.unwrap();
             let info = conn.spawn_session(ticker(&ticks)).await.unwrap();
-            wait_for_more_lines(&ticks, 0).await;
+            common::wait_for_more_lines(&ticks, 0).await;
 
             let mut conn = connect(&daemon.pipe, Offer::ops()).await.unwrap();
             let outcome = conn
@@ -393,8 +350,8 @@ fn a_failed_hand_over_leaves_the_daemon_serving(
                 sessions.iter().map(|s| s.id).collect::<Vec<_>>(),
                 vec![info.id]
             );
-            let before = lines(&ticks);
-            wait_for_more_lines(&ticks, before).await;
+            let before = common::lines(&ticks);
+            common::wait_for_more_lines(&ticks, before).await;
             let created = after
                 .spawn_session(SpawnArgs::default())
                 .await

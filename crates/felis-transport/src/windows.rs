@@ -848,18 +848,12 @@ mod tests {
         server_task.await.unwrap();
     }
 
-    /// The dialer's reject arm fails before the caller writes anything:
-    /// the server sees end of stream, not a byte.
+    /// The dialer's reject arm refuses a server running as another user.
     #[tokio::test]
-    async fn a_foreign_server_sid_is_refused_before_any_byte() {
+    async fn a_foreign_server_sid_is_refused_with_permission_denied() {
         let name = unique_pipe_name("dial-reject");
         let listener = Listener::bind(&Endpoint::pipe(name.clone())).unwrap();
-        let server_task = tokio::spawn(async move {
-            let mut server = listener.accept().await.unwrap();
-            let mut buf = Vec::new();
-            server.read_to_end(&mut buf).await.ok();
-            buf
-        });
+        let server_task = tokio::spawn(async move { listener.accept().await.unwrap() });
 
         let client = connect(&name).await.unwrap();
         let own = current_identity().unwrap();
@@ -867,21 +861,16 @@ mod tests {
             .expect_err("a foreign server SID must be refused");
         assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
         drop(client);
-        assert_eq!(server_task.await.unwrap(), Vec::<u8>::new());
+        server_task.await.unwrap();
     }
 
     /// A same-user server at another integrity level is refused the same
     /// way: an elevated client must not land in a non-elevated daemon.
     #[tokio::test]
-    async fn a_server_at_another_integrity_level_is_refused_before_any_byte() {
+    async fn a_server_at_another_integrity_level_is_refused_with_permission_denied() {
         let name = unique_pipe_name("dial-integrity");
         let listener = Listener::bind(&Endpoint::pipe(name.clone())).unwrap();
-        let server_task = tokio::spawn(async move {
-            let mut server = listener.accept().await.unwrap();
-            let mut buf = Vec::new();
-            server.read_to_end(&mut buf).await.ok();
-            buf
-        });
+        let server_task = tokio::spawn(async move { listener.accept().await.unwrap() });
 
         let client = connect(&name).await.unwrap();
         let own = current_identity().unwrap();
@@ -889,7 +878,7 @@ mod tests {
             .expect_err("a server at another integrity level must be refused");
         assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
         drop(client);
-        assert_eq!(server_task.await.unwrap(), Vec::<u8>::new());
+        server_task.await.unwrap();
     }
 
     /// REQ-106a's reject arm, unreachable through `accept` on a

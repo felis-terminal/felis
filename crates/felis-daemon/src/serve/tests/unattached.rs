@@ -166,10 +166,6 @@ enum WaitFrame {
     Terminal(ConnToClientMsg),
 }
 
-fn hex(id: u128) -> String {
-    format!("{}", felis_protocol::SessionHex(id))
-}
-
 fn key(named: NamedKey) -> SendStep {
     SendStep::Key(KeyEvent {
         key: Key::Named(named),

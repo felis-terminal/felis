@@ -2,15 +2,11 @@
 //! pulls in only what it needs, so `dead_code` is expected here.
 #![allow(dead_code)]
 
-use std::path::PathBuf;
-// Unix-gated with `wait_connectable`: the graphics suites sharing this
-// module must still type-check for `just check-windows`.
-#[cfg(unix)]
-use std::path::Path;
-#[cfg(unix)]
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use felis_client_core::ShadowScreen;
+use felis_client_core::{AttachIntent, Offer, ShadowScreen, connect};
+use felis_protocol::{MessageKind, codec, messages::GridMsg};
 
 #[cfg(windows)]
 pub(crate) mod medium;
@@ -40,6 +36,48 @@ pub(crate) async fn wait_connectable(socket: &Path) {
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
+}
+
+pub(crate) fn lines(path: &Path) -> usize {
+    std::fs::read_to_string(path).map_or(0, |text| text.lines().count())
+}
+
+pub(crate) async fn wait_for_more_lines(path: &Path, than: usize) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    while lines(path) <= than {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the session's shell stopped writing {}",
+            path.display()
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+pub(crate) async fn rehydrated_screen(endpoint: &Path, id: u128) -> ShadowScreen {
+    let mut conn = connect(endpoint, Offer::window(false)).await.unwrap();
+    let info = conn.attach(id, AttachIntent::Deliberate).await.unwrap();
+    let mut shadow = ShadowScreen::new(info.dims.rows, info.dims.cols);
+    let mut began = false;
+    let read = async {
+        while let Some(frame) = conn.next_frame().await.unwrap() {
+            if frame.kind != MessageKind::Grid.as_u16() {
+                continue;
+            }
+            let msg = codec::decode::<GridMsg>(&frame.body).unwrap();
+            began |= matches!(msg, GridMsg::RehydrateBegin);
+            let ended = matches!(msg, GridMsg::RehydrateEnd);
+            shadow.apply(&msg).unwrap();
+            if began && ended {
+                return;
+            }
+        }
+        panic!("the attach closed before its rehydrate ended");
+    };
+    tokio::time::timeout(Duration::from_secs(10), read)
+        .await
+        .expect("the rehydrate burst ends");
+    shadow
 }
 
 pub(crate) fn require_tool(name: &str) -> PathBuf {
