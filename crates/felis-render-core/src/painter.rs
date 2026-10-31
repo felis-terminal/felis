@@ -1481,27 +1481,30 @@ mod tests {
         metrics().with_cell_scale([1.5, 1.5])
     }
 
+    fn lone_glyph_origin(rows: u16, bytes: &[u8], m: CellMetrics, atlas: &MockAtlas) -> [f32; 2] {
+        let g = drive(rows, 4, bytes);
+        let buffers = build_instances(g.screen(), m, &Theme::default(), atlas);
+        assert_eq!(buffers.glyphs.len(), 1);
+        buffers.glyphs[0].origin_px
+    }
+
     #[test]
     fn osc_66_right_and_bottom_alignment_stay_inside_the_grown_cell_pad() {
         // `w=3, h=1, v=1`: block 36×24, so the 6×10 bitmap sits at
         // `(36 - 6 - 2, 24 - 10 - 4) = (28, 10)`.
-        let g = drive(1, 4, b"\x1b]66;w=3:h=1:v=1;A\x07");
         let atlas = MockAtlas::full(slot());
-        let buffers = build_instances(g.screen(), grown_metrics(), &Theme::default(), &atlas);
-        assert_eq!(buffers.glyphs.len(), 1);
-        assert_eq!(buffers.glyphs[0].origin_px, [28.0, 10.0]);
+        let origin = lone_glyph_origin(1, b"\x1b]66;w=3:h=1:v=1;A\x07", grown_metrics(), &atlas);
+        assert_eq!(origin, [28.0, 10.0]);
     }
 
     #[test]
     fn osc_66_alignment_ignores_the_negative_pad_of_a_shrunk_cell() {
         // The 8×16 cell shrunk to 4×8: `w=3, h=1, v=1` aligns to the
         // block's own edges at `(12 - 6, 8 - 10) = (6, -2)`.
-        let g = drive(1, 4, b"\x1b]66;w=3:h=1:v=1;A\x07");
         let atlas = MockAtlas::full(slot());
         let shrunk = metrics().with_cell_scale([0.5, 0.5]);
-        let buffers = build_instances(g.screen(), shrunk, &Theme::default(), &atlas);
-        assert_eq!(buffers.glyphs.len(), 1);
-        assert_eq!(buffers.glyphs[0].origin_px, [6.0, -2.0]);
+        let origin = lone_glyph_origin(1, b"\x1b]66;w=3:h=1:v=1;A\x07", shrunk, &atlas);
+        assert_eq!(origin, [6.0, -2.0]);
     }
 
     #[test]
@@ -1509,19 +1512,16 @@ mod tests {
         // The slot's own offset (1) holds the first cell's pad; the
         // second cell adds its 2 px so the glyph box stays centered
         // across both.
-        let g = drive(1, 4, "中".as_bytes());
         let mut atlas = MockAtlas::full(slot());
         atlas.map.insert('中', slot());
-        let buffers = build_instances(g.screen(), grown_metrics(), &Theme::default(), &atlas);
-        assert_eq!(buffers.glyphs.len(), 1);
-        assert_eq!(buffers.glyphs[0].origin_px[0], 3.0);
+        let origin = lone_glyph_origin(1, "中".as_bytes(), grown_metrics(), &atlas);
+        assert_eq!(origin[0], 3.0);
     }
 
     #[test]
     fn a_cell_filling_glyph_takes_no_pad_whatever_its_alignment() {
         // `w=2, v=1` on a 12×24 cell: a box glyph sized to one scaled
         // cell aligns right and bottom to the block's own edges.
-        let g = drive(1, 4, "\x1b]66;w=2:h=1:v=1;█\x07".as_bytes());
         let mut atlas = MockAtlas::full(slot());
         atlas.map.insert(
             '█',
@@ -1533,9 +1533,11 @@ mod tests {
                 fills_cell: true,
             },
         );
-        let buffers = build_instances(g.screen(), grown_metrics(), &Theme::default(), &atlas);
-        assert_eq!(buffers.glyphs.len(), 1);
-        assert_eq!(buffers.glyphs[0].origin_px, [12.0, 0.0]);
+        let bytes = "\x1b]66;w=2:h=1:v=1;█\x07".as_bytes();
+        assert_eq!(
+            lone_glyph_origin(1, bytes, grown_metrics(), &atlas),
+            [12.0, 0.0]
+        );
     }
 
     #[test]
@@ -1543,11 +1545,9 @@ mod tests {
         // `s=2:n=1:d=2` on the 12×24 cell: the font's 12 px ascent at glyph
         // scale 1, below a 4 px pad at layout scale 2, so the baseline is
         // at 20 and the bitmap top at 20 - 10.
-        let g = drive(2, 4, b"\x1b]66;s=2:n=1:d=2;A\x07");
         let atlas = MockAtlas::full(slot());
-        let buffers = build_instances(g.screen(), grown_metrics(), &Theme::default(), &atlas);
-        assert_eq!(buffers.glyphs.len(), 1);
-        assert_eq!(buffers.glyphs[0].origin_px, [1.0, 10.0]);
+        let origin = lone_glyph_origin(2, b"\x1b]66;s=2:n=1:d=2;A\x07", grown_metrics(), &atlas);
+        assert_eq!(origin, [1.0, 10.0]);
     }
 
     #[test]

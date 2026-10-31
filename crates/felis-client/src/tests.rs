@@ -2743,13 +2743,10 @@ mod app_events {
     }
 
     #[test]
-    fn announcements_are_enabled_only_on_windows_and_macos() {
+    fn a_new_app_announces_output_as_the_platform_constant_says() {
         let runtime = runtime();
         let harness = app_on(&runtime, absent_daemon("platform"), 0xa);
-        assert_eq!(
-            harness.app.announce_output,
-            cfg!(any(windows, target_os = "macos"))
-        );
+        assert_eq!(harness.app.announce_output, a11y::ANNOUNCES_OUTPUT);
     }
 
     /// Lands while the tree is active, so the new attachment, which

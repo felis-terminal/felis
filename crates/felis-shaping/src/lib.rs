@@ -3145,11 +3145,7 @@ mod tests {
     #[cfg(not(windows))]
     #[test]
     fn a_variation_view_is_named_with_the_position_it_draws_at() {
-        let dir = test_font_dir();
-        let mut db = FileSet::default();
-        db.add_file(std::path::Path::new(&dir).join("truetype/Monaspace Neon Var.ttf"))
-            .expect("the variable face reads");
-        let font = Font::try_load_with(&db, "Monaspace Neon Var").expect("the variable face loads");
+        let font = pinned_variable_font();
         let bold = font.at_style(700, false).expect("the face has a wght axis");
         let bold_italic = font.at_style(700, true).expect("the face has a slnt axis");
         let heaviest = font
@@ -3423,10 +3419,7 @@ mod tests {
     #[cfg(not(windows))]
     #[test]
     fn an_unset_regular_weight_keeps_a_named_instance_and_a_set_one_moves_only_wght() {
-        let files = pinned_files(&["truetype/Monaspace Neon Var.ttf"]);
-        let mut db = FileSet::default();
-        db.add_file(&files[0]).expect("the variable face reads");
-        let default = Font::try_load_with(&db, "Monaspace Neon Var").expect("the face loads");
+        let default = pinned_variable_font();
         let semiwide = || default.at_instance(16).expect("the instance exists");
         assert!(semiwide().regular_view(None, &[]).is_none());
         let light = semiwide().regular_view(Some(300), &[]).expect("wght moves");
@@ -3445,10 +3438,7 @@ mod tests {
     #[cfg(not(windows))]
     #[test]
     fn a_width_axis_without_hvar_widens_the_cell() {
-        let files = pinned_files(&["truetype/Monaspace Neon Var.ttf"]);
-        let mut db = FileSet::default();
-        db.add_file(&files[0]).expect("the variable face reads");
-        let default = Font::try_load_with(&db, "Monaspace Neon Var").expect("the face loads");
+        let default = pinned_variable_font();
         let wide = default
             .regular_view(None, &[setting(*b"wdth", 125.0)])
             .expect("wdth moves");
@@ -3565,7 +3555,7 @@ mod tests {
 
     #[cfg(not(windows))]
     #[test]
-    fn wght_and_axes_the_face_lacks_leave_the_view_unmoved() {
+    fn a_wght_entry_in_axes_and_an_axis_the_face_lacks_are_ignored() {
         let regular_axes = [setting(*b"ZZZZ", 1.0), setting(*b"wght", 800.0)];
         let styles = StyleFaces {
             regular_axes: &regular_axes,
@@ -3643,6 +3633,14 @@ mod tests {
     fn pinned_files(names: &[&str]) -> Vec<std::path::PathBuf> {
         let dir = test_font_dir();
         names.iter().map(|name| dir.join(name)).collect()
+    }
+
+    #[cfg(not(windows))]
+    fn pinned_variable_font() -> Font {
+        let mut db = FileSet::default();
+        db.add_file(&pinned_files(&["truetype/Monaspace Neon Var.ttf"])[0])
+            .expect("the variable face reads");
+        Font::try_load_with(&db, "Monaspace Neon Var").expect("the variable face loads")
     }
 
     const SYMBOLS2: &str = "NotoSansSymbols2-Regular.otf";
@@ -3981,10 +3979,7 @@ mod tests {
     #[cfg(not(windows))]
     #[test]
     fn a_named_instance_keeps_its_width_through_regular_and_bold_views() {
-        let files = pinned_files(&["truetype/Monaspace Neon Var.ttf"]);
-        let mut db = FileSet::default();
-        db.add_file(&files[0]).expect("the variable face reads");
-        let default = Font::try_load_with(&db, "Monaspace Neon Var").expect("the face loads");
+        let default = pinned_variable_font();
         let name = default
             .font_ref()
             .instances()

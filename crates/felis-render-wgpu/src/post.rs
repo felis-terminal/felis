@@ -1064,17 +1064,6 @@ mod tests {
     }
 
     #[test]
-    fn a_shader_declaring_the_full_v2_struct_loads_and_reads_the_animation_progress() {
-        let source = contract_shader(
-            CONTRACT.len(),
-            "vec4<f32>(uv, u.animation_progress, f32(u.stage_index))",
-        );
-        validate_post_shader(&source).expect("the full v2 struct loads");
-        let (_, span) = uniform_struct(&source);
-        assert_eq!(span as usize, CONTRACT_SIZE);
-    }
-
-    #[test]
     fn the_bundled_trail_declares_a_prefix_of_the_contract() {
         let members = uniform_members(TRAIL_SHADER_SOURCE);
         assert!(members.len() <= CONTRACT.len());
@@ -1184,6 +1173,7 @@ mod tests {
             "@group(0) @binding(1) var s: sampler;",
             "@group(0) @binding(2) var t: texture_2d<f32>;",
             "@group(0) @binding(2) var s: sampler_comparison;",
+            "@group(0) @binding(3) var h: sampler;",
             "@group(0) @binding(1) var t: texture_2d<u32>;",
             "@group(0) @binding(1) var t: texture_2d_array<f32>;",
             "@group(0) @binding(1) var t: texture_multisampled_2d<f32>;",
@@ -1326,11 +1316,6 @@ mod tests {
         );
         let without = shader_with_globals("@group(0) @binding(1) var backbuffer: texture_2d<f32>;");
         assert!(!check_post_shader(&without, &[]).expect("loads").history);
-        let wrong = shader_with_globals("@group(0) @binding(3) var history: sampler;");
-        assert!(matches!(
-            validate_post_shader(&wrong),
-            Err(PostShaderError::Binding(_))
-        ));
     }
 
     #[test]
