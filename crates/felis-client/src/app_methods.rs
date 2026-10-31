@@ -282,7 +282,9 @@ impl App {
         if !self.announce_output {
             return;
         }
-        if let Some(msg) = crate::a11y::announce_output_request(enabled, self.effective_minor) {
+        if let Some(msg) =
+            felis_client_core::a11y_text::announce_output_request(enabled, self.effective_minor)
+        {
             self.send_input(&msg);
         }
     }
