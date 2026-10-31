@@ -31,6 +31,13 @@
       groupName: "accesskit",
     },
     {
+      // felis-grid's uax29 tables are checked against both crates, so all
+      // three must share one UCD version; a Unicode bump also regenerates
+      // the tables (`just unicode-tables`) on the group's branch.
+      matchPackageNames: ["unicode-width", "unicode-segmentation"],
+      groupName: "unicode",
+    },
+    {
       // A new ConPTY host can change what shells see in ways the tests do
       // not cover: read the Windows Terminal release notes before merging.
       matchPackageNames: ["conpty-bin-vendored"],
