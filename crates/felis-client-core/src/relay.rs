@@ -1043,6 +1043,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_full_notification_queue_reports_what_it_dropped_before_the_next_item() {
+        let queue = Arc::new(Lossy::new(2));
+        let mut stream = RelayStream::new(Source::Lossy(Arc::clone(&queue)));
+        let sent = |id| Item::Sent { id: SessionId(id) };
+        for id in 1..=5 {
+            queue.push(sent(id));
+        }
+
+        assert_eq!(stream.next().await, StreamMessage::Item(sent(1)));
+        assert_eq!(stream.next().await, StreamMessage::Item(sent(2)));
+        queue.push(sent(6));
+        assert_eq!(stream.next().await, StreamMessage::Lag { dropped: 3 });
+        assert_eq!(stream.next().await, StreamMessage::Item(sent(6)));
+        queue.finish(Out::End { exit_code: None });
+        assert_eq!(
+            stream.next().await,
+            StreamMessage::End {
+                count: 3,
+                exit_code: None
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unpaced_attach_drops_a_next_grid_frame_and_queues_other_input() {
+        let (tx, mut queued) = mpsc::channel(4);
+        let input = AttachInput {
+            tx,
+            budget: Arc::new(Semaphore::new(INPUT_BYTE_BUDGET)),
+            paced: false,
+            effective_minor: PROTOCOL_MINOR,
+        };
+
+        input.send(InputJson::NextGridFrame).await.unwrap();
+        assert!(queued.try_recv().is_err());
+        input
+            .send(InputJson::FocusChange { focused: true })
+            .await
+            .unwrap();
+        assert!(queued.try_recv().is_ok());
+    }
+
+    #[tokio::test]
     async fn an_input_past_a_wire_limit_is_refused_before_it_is_queued() {
         let (tx, mut queued) = mpsc::channel(4);
         let input = AttachInput {

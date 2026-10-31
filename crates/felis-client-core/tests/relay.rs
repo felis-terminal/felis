@@ -263,6 +263,79 @@ async fn requests_and_streams_answer_through_the_relay() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_canceled_search_ends_counting_only_the_items_it_yielded() {
+    let tmp = private_dir();
+    let relay = relay_on(&daemon(&tmp).await, Theme::default()).await;
+    let session = create(
+        &relay,
+        "printf 'hit\\nhit\\nhit\\nsearch-ready\\n'; exec sleep 600",
+    )
+    .await;
+    until_screen_contains(&relay, session, "search-ready").await;
+
+    let mut search = relay
+        .open(Open::Search {
+            session,
+            query: "hit".to_owned(),
+            regex: false,
+            case_insensitive: false,
+            source: SearchSourceJson::Scrollback,
+        })
+        .await
+        .unwrap();
+    let first = timeout(PATIENCE, search.next()).await.unwrap();
+    assert!(
+        matches!(first, StreamMessage::Item(Item::Match(_))),
+        "{first:?}"
+    );
+    search.cancel();
+
+    let end = StreamMessage::End {
+        count: 1,
+        exit_code: None,
+    };
+    assert_eq!(search.next().await, end);
+    assert_eq!(search.next().await, end);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_command_output_capture_ends_with_the_commands_exit_code() {
+    let tmp = private_dir();
+    let relay = relay_on(&daemon(&tmp).await, Theme::default()).await;
+    let session = create(
+        &relay,
+        "printf '\\033]133;C\\007cmd-out\\r\\n\\033]133;D;3\\007capture-ready\\r\\n'; \
+         exec sleep 600",
+    )
+    .await;
+    until_screen_contains(&relay, session, "capture-ready").await;
+
+    let mut capture = relay
+        .open(Open::Capture {
+            session,
+            source: RegionSourceJson::CommandOutput,
+            ansi: false,
+            max_rows: None,
+        })
+        .await
+        .unwrap();
+    let seen = drain(&mut capture).await;
+    let texts = rows(&seen);
+    assert!(texts.iter().any(|row| row.contains("cmd-out")), "{seen:?}");
+    assert!(
+        !texts.iter().any(|row| row.contains("capture-ready")),
+        "{seen:?}"
+    );
+    assert_eq!(
+        seen.last(),
+        Some(&StreamMessage::End {
+            count: texts.len() as u64,
+            exit_code: Some(3),
+        })
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_attach_reports_the_embedders_theme_and_carries_input() {
     let tmp = private_dir();
     let relay = relay_on(
