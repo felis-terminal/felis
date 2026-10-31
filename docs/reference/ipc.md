@@ -230,71 +230,6 @@ Each frame:
   connection usable. Image producers keep each `ImageMsg::Chunk` payload at or below `MAX_IMAGE_CHUNK_PAYLOAD` (256
   KiB), far under that ceiling: the cap is sized as a scheduling quantum, not as ceiling headroom ("Backpressure"
   below).
-
-#### Semantic limits
-
-The frame cap (`DEFAULT_MAX_BODY`) is a **framing backstop**, not any operation's policy. Each surface below carries its
-own limit (REQ-105a); the backstop only bounds what the framing layer will carry at all. Every limit on a value that
-becomes a frame body sits far under it.
-
-A limit the `Checked` column marks `sender and receiver` is checked twice with the same number: by the sender before the
-body is encoded (the CLI before it dials), and by the receiver as the body decodes, where a breach is
-`WireError::OverLimit`, naming the field, the size, the cap, and the unit the cap counts (bytes, entries, or frames).
-Every other marking is a departure from that and says which half is missing: a cap the sender alone holds, one a handler
-reads instead of the decode, and one a table or constructor enforces each answer in their own terms, which `Outcome`
-states, rather than by closing the connection.
-
-The receive-side values are part of major `1` itself, not rows of the minor ledger. Lowering one for every peer narrows
-what a field already accepts, which is a change of meaning (REQ-104b): a released peer sending a value under the old
-bound would have its connection torn down.
-
-| Limit                                     | Value       | Applies to                                                                                                                                                                                                                 | Checked                                                                       | Outcome                                                                                                                                                                                                          |
-| ----------------------------------------- | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `MAX_RAW_INPUT_BYTES`                     | 16 MiB      | `InputMsg::KeyBytes` payload (`sessions send --raw`'s escape stream, not only a key event)                                                                                                                                 | sender and receiver                                                           | sender refuses; receiver closes the connection                                                                                                                                                                   |
-| `MAX_PASTE_BYTES`                         | 16 MiB − 64 | `InputMsg::Paste` payload (the shortfall is the room a paste's bracketing needs inside the PTY input budget)                                                                                                               | sender and receiver                                                           | sender refuses; receiver closes the connection                                                                                                                                                                   |
-| `MAX_KEY_CHARACTER_BYTES`                 | 32 B        | `InputMsg::Key`'s character (one keystroke's own text; anything longer is a paste)                                                                                                                                         | sender and receiver                                                           | sender refuses; receiver closes the connection                                                                                                                                                                   |
-| `MAX_KEY_TEXT_BYTES`                      | 32 B        | `InputMsg::Key`'s composed text                                                                                                                                                                                            | sender and receiver                                                           | sender refuses; receiver closes the connection                                                                                                                                                                   |
-| `MAX_SEARCH_PATTERN_BYTES`                | 4 KiB       | `SearchToDaemonMsg::Query.query`                                                                                                                                                                                           | sender and receiver                                                           | sender refuses; receiver closes the connection                                                                                                                                                                   |
-| `MAX_SEND_STEPS`                          | 4096        | `OpsToDaemonMsg::Send` / `SendAndWait` steps, a click counting as its press and its release                                                                                                                                | sender, and receiver off the encoded body before it decodes                   | sender refuses; receiver answers `SendRefusal::TOO_LARGE` and keeps the connection                                                                                                                               |
-| `MAX_SEND_BODY_BYTES`                     | 16.5 MiB    | the encoded body of an `OpsToDaemonMsg::Send` / `SendAndWait`: the input budget plus 128 bytes per step                                                                                                                    | receiver, before the body decodes                                             | as above                                                                                                                                                                                                         |
-| `MAX_SPAWN_ARGV_ENTRIES`                  | 4096        | `SpawnArgs.args` entries                                                                                                                                                                                                   | sender and receiver                                                           | sender refuses; receiver closes the connection                                                                                                                                                                   |
-| `MAX_SPAWN_ARGV_BYTES`                    | 1 MiB       | `SpawnArgs.args` total bytes                                                                                                                                                                                               | sender and receiver                                                           | as above                                                                                                                                                                                                         |
-| `MAX_SPAWN_PATH_BYTES`                    | 4 KiB       | `SpawnArgs.command`, `SpawnArgs.cwd`                                                                                                                                                                                       | sender and receiver                                                           | as above                                                                                                                                                                                                         |
-| `MAX_ENV_BASE_ENTRIES`                    | 4096        | `SpawnArgs.env` entries                                                                                                                                                                                                    | sender and receiver                                                           | as above ("Session (kind = 4)")                                                                                                                                                                                  |
-| `MAX_ENV_BASE_BYTES`                      | 1 MiB       | `SpawnArgs.env` key + value bytes                                                                                                                                                                                          | sender and receiver                                                           | as above                                                                                                                                                                                                         |
-| the same two caps on `SpawnArgs.env_base` |             | entries and key + value bytes of a captured base                                                                                                                                                                           | dialer before it sends, daemon in the spawn path — deliberately not at decode | the one spawn fails as `CreateFailure::SpawnFailed`; the connection stays up ("Session (kind = 4)")                                                                                                              |
-| `MAX_SESSION_TAGS` / `MAX_TAG_BYTES`      | 32 / 128 B  | `SpawnArgs.tags`                                                                                                                                                                                                           | sender and receiver                                                           | as above ("Ops (kind = 5)")                                                                                                                                                                                      |
-| `MAX_SESSION_TAGS` / `MAX_TAG_BYTES`      | 32 / 128 B  | `OpsToDaemonMsg::Tag`'s delta                                                                                                                                                                                              | receiver                                                                      | not an `OverLimit`: the daemon answers `OpsToClientMsg::TagsUpdated` with `denied` set, so a caller that asked for too many tags reads why instead of losing the connection under a codec error                  |
-| `MAX_RETARGET_DESCRIPTOR_BYTES`           | 64 KiB      | `RetargetTarget` carrier strings, on `OpsToDaemonMsg::Switch` and `PushMsg::RetargetHost`                                                                                                                                  | sender and receiver                                                           | as above                                                                                                                                                                                                         |
-| `MAX_REGION_REPLY_BYTES`                  | 32 MiB      | `RegionToClientMsg::Reply.data`, the one stitched region body                                                                                                                                                              | sender only                                                                   | the daemon trims to the youngest resumable boundary — a line start, or a scalar start outside any escape sequence when the window holds no line boundary — and drops the viewport position with the head it lost |
-| `MAX_GRID_ROWS` / `MAX_GRID_COLS`         | 2048 / 2048 | announced geometry: `GridMsg::Size`, `SessionInfo.dims`                                                                                                                                                                    | receiver                                                                      | `WireError::OutOfRange`; the client closes the connection                                                                                                                                                        |
-| the same two                              |             | the row index and body width of a `GridMsg::RowDelta`, which auto-grow the client's mirror to fit a row that outran a resize                                                                                               | receiver                                                                      | inside the bound the shadow grows; past it the row is a `ShadowError` and the client closes the attachment ("Grid admission" below)                                                                              |
-| `MAX_GRID_PIXELS`                         | 32768       | announced `GridDims.pixel_w` / `pixel_h`, `0` meaning unknown                                                                                                                                                              | receiver                                                                      | as above                                                                                                                                                                                                         |
-| `MAX_IMAGE_BYTES`                         | 64 MiB      | the `width × height × bytes_per_pixel` an `ImageMsg::Header`'s `New` target implies, and the daemon's own decode budget                                                                                                    | receiver (both ends)                                                          | `WireError::OverLimit`; the client closes the connection                                                                                                                                                         |
-| `MAX_IMAGE_FRAMES`                        | 4096        | `ImageMsg::Header`'s `Frame` number, and the daemon's frame store per image                                                                                                                                                | receiver and daemon                                                           | over the cap the daemon answers Kitty `ENOTSUP`; a header past it closes the client's connection                                                                                                                 |
-| `MAX_SESSION_IMAGE_BYTES`                 | 256 MiB     | all decoded image bytes one session retains, the daemon's store and the client's mirror alike; both charge the entry and frame records alongside the pixels, so an appended frame pays for its record as well as its bytes | receiver (both ends)                                                          | the daemon evicts; the client closes the connection                                                                                                                                                              |
-| `ClusterText::CAP`                        | 128 B       | one interned grapheme cluster's text, on the grid and on a `GridMsg::Cluster` a shadow installs                                                                                                                            | constructor precondition (both ends)                                          | daemon-side the fold stops and the cell keeps the cluster that fit; an over-cap entry off the wire closes the client's attachment                                                                                |
-| `CLUSTER_TABLE_CAP`                       | 131 072     | entries in one grid's cluster table, daemon and shadow alike; also the highest id a shadow will install                                                                                                                    | the table itself (both ends)                                                  | `intern` refuses a new entry after the dedup lookup; an id past the cap closes the client's attachment                                                                                                           |
-| `LinkText::CAP`                           | 8 KiB       | one hyperlink entry's `id` and `uri`, from the parser or off a `GridMsg::Hyperlink` (equals `OSC_BUFFER_LIMIT`)                                                                                                            | constructor precondition (both ends)                                          | daemon-side the pen is not set and the covered text prints without a link target; an over-cap entry off the wire closes the client's attachment                                                                  |
-| `LINK_TABLE_BYTE_CAP`                     | 8 MiB       | the charged footprint of one grid's hyperlink table (entry struct, both string payloads, dedup slot)                                                                                                                       | the table itself (both ends)                                                  | the entry is refused before the slot vector grows, leaving no charge and no gap; a client that cannot hold it closes the attachment                                                                              |
-
-A CLI verb that would breach one refuses before it dials, reporting the `invalid_request` machine error kind
-([cli.md](cli.md) "Machine output"); the connection is never involved. The GUI client refuses an over-limit paste rather
-than truncating it: this applies to clipboard pastes, file drops, and `pipe` chord `paste` sinks. It also refuses
-over-limit search patterns before opening a stream. Refusals surface explicitly: paste size appears on the confirmation
-bar, and pattern length appears in the search bar.
-
-The region reply is the one row checked on the sending side alone: it bounds a body the daemon builds from its own
-scrollback rather than anything a peer asked for by size, and an over-budget region is trimmed rather than refused.
-
-The hyperlink table's entry _count_ needs no constant of its own: the 16-bit nonzero handle bounds it at 65 535, which
-is why only its byte budget is listed.
-
-The geometry and image rows bound a **claim** rather than a length: a number that tells the receiver how much memory to
-reserve for bytes that have not arrived and need never arrive. They are therefore admitted at decode, where the number
-is read, rather than on both sides of the send
-([the IPC design explanation](../explanation/architecture/ipc.md#bounding-announced-quantities)).
-
 - The header carries no sequence number: ordering is the stream's own guarantee, and the one thing a peer does act on
   rides a typed body instead: `InputMsg::NextGridFrame`, the client's grid-frame pull
   ([the IPC design explanation](../explanation/architecture/ipc.md#the-frozen-frame-header)).
@@ -433,7 +368,7 @@ attachment. There is no skip-and-continue anywhere.
 racing a `Cancel` is expected; an item on a never-opened or already-terminated stream is not. Unknown frame kinds and
 unknown oneof variants are likewise fatal: the effective minor is a send-side contract ("Versioning" below).
 
-Validation falls in two tiers, and a limit's tier is the one its `Checked` and `Outcome` rows in "Semantic limits" above
+Validation falls in two tiers, and a limit's tier is the one its `Checked` and `Outcome` rows in "Semantic limits" below
 give it, not one inferred from the kind of value it bounds. **Wire-level validation** is what the decode performs on a
 single body: the protobuf structure, the conversion into the domain type, which refuses a oneof arm this build does not
 define, and the caps that table records as read by the receiver at decode, whose breach is a fatal `WireError`. It is
@@ -451,7 +386,7 @@ by the constructor or table that stores it. A breach on this tier is therefore n
 
 `packed_cells` is opaque to `felis-protocol` besides, so a row whose packed cells no row codec produced is a well-formed
 frame on the wire and a `ShadowError` in the shadow that unpacks it. A `GridMsg::RowDelta`'s row index and body width
-sit on this tier as well, read against the protocol-wide `MAX_GRID_ROWS` / `MAX_GRID_COLS`; their row in the table above
+sit on this tier as well, read against the protocol-wide `MAX_GRID_ROWS` / `MAX_GRID_COLS`; their row in the table below
 states what a breach costs.
 
 One entry in the table sits outside both tiers. `MAX_REGION_REPLY_BYTES` is the sender's alone: the daemon trims a
@@ -459,49 +394,6 @@ region body rather than send one past it, and no receiver checks it.
 
 For rationale regarding connection teardown on corruption, see the design record in
 [ipc.md](../explanation/architecture/ipc.md).
-
-### Grid admission
-
-A `GridMsg` coordinate, count, or registry value the daemon could not have produced is corruption as well. The client's
-shadow refuses it as a `ShadowError` before it touches a cell and closes that attachment; reconnect and rehydrate
-rebuild the mirror, and the session and its other subscribers keep running. Each value has one rule:
-
-| Value                                          | Admitted                                                               |
-| ---------------------------------------------- | ---------------------------------------------------------------------- |
-| `RowDelta` row index                           | below `MAX_GRID_ROWS`                                                  |
-| `RowDelta` body width (the row codec's `cols`) | at most `MAX_GRID_COLS`, checked before the decoder reserves its cells |
-| a row's sized-cell column                      | inside that row's decoded columns                                      |
-| a row's `Cluster` / `Hyperlink` handle         | already installed ("Registry delivery" below)                          |
-| `Scrolled.region_top` / `region_bottom`        | `region_top <= region_bottom`, both inside the announced grid          |
-| `Scrolled.n_rows`                              | at least 1 and at most the named region's height                       |
-| `CursorState.row` / `col`                      | inside the announced grid, whether or not the cursor is visible        |
-| `ViewportState.lines_from_bottom`              | at most `max`                                                          |
-| `Cluster.id` / `Hyperlink.id`                  | nonzero, within the table caps, and not already installed              |
-| `Cluster.text`, `Hyperlink.anchor` / `uri`     | within `ClusterText::CAP` / `LinkText::CAP`                            |
-
-The **announced grid** is the geometry the daemon last stated (`SessionToClientMsg::Attached`,
-`SessionToClientMsg::Created`, or `GridMsg::Size`), which it states before composing anything at a new geometry. A
-client that resized its own shadow ahead of the daemon honoring the resize measures against that announcement rather
-than its own dimensions, and holds the cursor the daemon stated until a geometry can carry it: the correction that
-overrules an optimistic resize repeats the rows, not the cursor, whose position the daemon sends only when it moves.
-
-The daemon owes the matching send-side rules. A queued `Scrolled` names the geometry it was recorded under, so a resize
-retires every directive not yet shipped and the rows it would have shifted ride the replay instead; and a resize
-composes for every subscriber behind its `Size`, since a mirror whose next frame is already requested has nothing else
-to answer that request.
-
-A directive is also dropped for any subscriber whose last frame replayed every row of the grid as of that directive:
-those rows already hold the shift, and shipping it as well would move them twice. Shifts folded into one directive from
-both sides of such a frame replay every row instead, since the frame holds an unknown part of the shift.
-
-Each composition takes the core lock for itself and settles its own scroll accounting under it, against rows whose
-geometry and scroll order are the ones it read: a composition that finds the grid scrolled past what its subscriber was
-offered replays the rows at that reading instead, since the cells it would encode already hold a shift no directive
-accounts for.
-
-A `RowDelta` inside the two bounds applies even when it does not fit the shadow's current dimensions: a lower or wider
-row grows the mirror, a narrower one pads it. A resize race gives both an honest reading, which is why the row index and
-the body width are the only grid values bounded protocol-wide rather than by the announced geometry.
 
 ## Message families
 
@@ -515,9 +407,9 @@ recorded in the ledger ("Versioning" below).
 
 The families are split by purpose, not pooled into a catch-all: kind 0 (`Conn`) carries the handshake and the stream
 lifecycle, and the session, ops, region, notify, push, and search surfaces each ride their own frame kind (`Session`,
-`Ops`, `Region`, `Notify`, `Push`, `Search`). `Search` and `Region` are bidirectional conversations on the _attached_
-connection: each carries its request and reply halves on one kind, so a connection phase can refuse the conversation
-whole.
+`Ops`, `Region`, `Notify`, `Push`, `Search`). `Search` and `Region` are bidirectional conversations on an attached
+connection, or on an unattached `Ops` connection naming the session ("Ops (kind = 5)" below): each carries its request
+and reply halves on one kind, so a connection phase can refuse the conversation whole.
 
 A family whose arms all travel one way is one wrapper message, `<Family>Msg` (`InputMsg`, `GridMsg`, `ImageMsg`,
 `PushMsg`). A family with arms in both directions is two, `<Family>ToDaemonMsg` and `<Family>ToClientMsg`, under its one
@@ -606,7 +498,7 @@ struct (pixel dims are `0` where the producer does not know them). Announced geo
 inside the REQ-605a bounds, resolved and clamped once at admission, and a receiver **re-admits** it on decode against
 the same bounds rather than trusting the announcement. A `GridMsg::Size` or a `SessionInfo` is what sizes a client's
 shadow grid, so an out-of-range announcement is `WireError::OutOfRange` and the connection ends ("Semantic limits"
-above).
+below).
 
 Which values a `GridDims` may hold is a property of the field carrying it, not of the type:
 
@@ -748,6 +640,62 @@ shapes, the `FrameKind` values, and the preface constants, and what remains outs
 preface byte layout, and the row codec's `packed_cells` payload, the first two specified above and the last in
 [Row codec](row-codec.md).
 
+#### Handshake
+
+After the preface accepts, the client sends `ConnToDaemonMsg::Hello` and the daemon answers `ConnToClientMsg::Welcome`:
+the application half of the handshake, in the schema the preface already selected. Neither frame negotiates a version: a
+`Hello` that reached the daemon at all was decodable under the agreed major, and a `Welcome` says only that the daemon
+accepted this connection's mode. The one exception is the mode itself: a daemon that meets a mode it does not define
+answers `Refused { UnknownMode }` and closes, and every other undecodable `Hello` is corruption, closed unanswered
+("Corruption" above). The split runs on the mode number: any nonzero value the daemon does not define is the newer
+peer's, so it earns the typed refusal, while the `CONNECTION_MODE_UNSPECIFIED` sentinel `0`, which no conforming sender
+writes, is malformed and takes the corruption path.
+
+A `Welcome` puts the connection in the `Setup` phase ("Connection phases" above), from which it may attach, create, run
+an `Ops` verb, or subscribe, and nothing else. A `ConnToClientMsg::Refused` arrives instead when the peer reaches for a
+family its mode does not admit before it has attached; after that, a denial is the request's own typed error ("Ops (kind
+= 5)" below).
+
+Skew a client can meet, and where each is reported:
+
+| Condition                                                               | Where it surfaces                                                                                         |
+| ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| The peer is not felis                                                   | wrong preface magic; the connection closes with no reply                                                  |
+| The daemon does not serve the client's major                            | preface status `1`, carrying the majors it does serve                                                     |
+| The daemon accepts (status `0`) naming a major the client never offered | a client-side connect error, closed before any frame; `felis version` and `felis doctor` name both majors |
+| The daemon refuses for a newer reason                                   | preface status the client cannot name; treated as a refusal                                               |
+| The peer's mode does not admit a family, before it attaches             | `ConnToClientMsg::Refused { Role }`, then close                                                           |
+| The daemon is serving every connection it admits                        | `ConnToClientMsg::Refused { AtCapacity }`, then close; retryable                                          |
+| The peer names a mode the daemon does not define                        | `ConnToClientMsg::Refused { UnknownMode }`, then close; not retryable                                     |
+| The peer stays silent through a pre-attach phase                        | no frame: the daemon closes at that phase's deadline                                                      |
+
+A major refusal is not retryable: both halves must be rebuilt, and a client that treats it as a transient EOF would burn
+its whole backoff budget on a permanent condition.
+
+**Each pre-attach phase is time-bounded.** A peer that opens a connection and then says nothing holds a task, a file
+descriptor, and a read buffer, so the daemon cuts it at the deadline for whichever phase it stalled in:
+
+| Phase           | Deadline                    | What must arrive                                                    |
+| --------------- | --------------------------- | ------------------------------------------------------------------- |
+| Preface         | 2 s                         | the client's 8-byte preface (and its carrier block, over the relay) |
+| `Hello`         | 5 s                         | the first frame after the preface accept                            |
+| First operation | 30 s (`Window`, `Observer`) | the `Attach` / `Create` or `Subscribe`, and each frame before it    |
+| First operation | not timed (`Ops`)           | —                                                                   |
+
+The deadline runs until the attach decision, not until the first frame of any kind: a `Window` may read the roster with
+`Ops::List` before it names a session (the shipped GUI does), and each such frame restarts the 30 s rather than retiring
+it, so a peer that lists and then falls silent is still cut. Nothing after the attach decision is timed, and an `Ops`
+connection is not timed at all past its `Welcome`: an editor client may open one at startup so that "the client is
+running" means "the daemon is reachable", then write nothing until its user asks for something, and an observer idles
+for hours between notifications. A `Window` and an `Observer` owe a subject, so silence before they name one is a stall.
+
+**Connections are admitted, not merely accepted** (REQ-916). The daemon serves at most the connection cap
+(`MAX_CONNECTIONS`, 1024) at once, against a permit taken before the connection's task exists and released whenever that
+task ends. A dial past the cap is answered `Refused { AtCapacity }` rather than queued or closed, so a caller can tell a
+full daemon from a dead one. Answering costs a task of its own, so the refusal path is admitted against its own small
+ceiling; past that the socket is dropped unanswered. Every step of a refusal is deadline-bounded, the write of the
+refusal included, so a peer that stops reading cannot hold one of those few slots.
+
 ### Session (kind = 4)
 
 Bidirectional, _this connection's own_ session: the attach / create requests and their replies before attach, plus
@@ -825,7 +773,7 @@ whole `u16` code units, and Windows `=`-prefixed pseudo-variables (`=C:`) are dr
 explicit pair. Names compare under the **target platform's** semantics (case-insensitive on Windows), canonicalized
 before the reserved and denylist checks, before dedup, and before overrides apply, so `felis_session_id` cannot slip
 past an exact-case check. Case-colliding explicit pairs refuse the spawn; case-colliding base entries dedup with the
-later entry winning. Anything invalid, and a breach of the `env_base` caps ("Semantic limits" above), is a
+later entry winning. Anything invalid, and a breach of the `env_base` caps ("Semantic limits" below), is a
 `CreateFailure::SpawnFailed`, and no refusal and no log line carries an environment name or value the caller supplied.
 
 **While attached.** `Detach` ends this connection's subscription; the session lives on. `ConfigureTheme`, sent right
@@ -881,7 +829,7 @@ is written the moment the frames are enqueued, and the landing arrives later on 
 reply cannot await ([the IPC design explanation](../explanation/architecture/ipc.md#what-a-switch-reply-can-report)).
 `denied` is symmetric with it: a resolve-time verdict only, so none can arrive once a push is enqueued.
 
-**Tag, Spawn, Status.** A tag delta that would breach a tag cap ("Semantic limits" above) is refused whole: `denied`
+**Tag, Spawn, Status.** A tag delta that would breach a tag cap ("Semantic limits" below) is refused whole: `denied`
 carries the reason, `tags` the untouched set, and nothing is applied. felis never interprets a tag (the marginalia
 model, [control-surfaces.md](../explanation/architecture/control-surfaces.md)). `Spawn` creates a session this
 connection does not attach to, through the same `SpawnArgs` admission as `Session::Create` ("Session (kind = 4)" above);
@@ -919,11 +867,11 @@ client refuses before sending `Upgrade` to a daemon whose effective minor is `0`
 mouse event, each the input its `Input` arm carries ("Input (kind = 1)" below), in the order given. The whole request is
 checked before the first step is written, and a refusal writes nothing: a step past its own bound or malformed is
 `INVALID_STEP` or `TOO_LARGE`, a request past `MAX_SEND_STEPS` or `MAX_SEND_BODY_BYTES` is `TOO_LARGE` before its steps
-decode ("Semantic limits" above), a mouse event the program would not see, under its current mouse protocol or outside
+decode ("Semantic limits" below), a mouse event the program would not see, under its current mouse protocol or outside
 the grid, is `UNREPORTED`, and an exited program is `SESSION_ENDED`. A refusal names the step it refused by index where
 one is to blame. The steps are then admitted one at a time against the session's input budget ("Client → daemon: the
-input budget" below), and `Sent` is written once the session took the last of them, carrying the session's full id; a
-session that ends first answers `SESSION_ENDED` instead. Admission pauses the connection's reads, as an attached
+input budget" below), and `Sent` is written once the session has taken the last of them, carrying the session's full id;
+a session that ends first answers `SESSION_ENDED` instead. Admission pauses the connection's reads, as an attached
 connection's input does, so a client runs each `Send` or `SendAndWait` on a connection of its own, and closing that
 connection is how it abandons one promptly: the daemon notices the hangup and writes no later step.
 
@@ -1092,7 +1040,7 @@ fold into one directive, and a directive whose whole band the `RowDelta` restate
 `RowDelta` restates with anything but default cells is preceded in the same batch by an entry of default cells for that
 row. The pending directive queue is cleared on rehydrate, since the burst restates the grid outright. A region or count
 outside the announced grid closes the attachment, and the daemon's send-side rules across a resize are stated with it
-("Grid admission" above).
+("Grid admission" below).
 
 **Session meta and events.** Title, cwd, prompt marks, theme and palette overrides, pointer shape, the Kitty keyboard
 flags, and the mode-bit mirror are facets the daemon sends as they change; the palette override layer replays on
@@ -1106,13 +1054,13 @@ distinct from a `Region::Reply` a `pipe → clipboard` chord asked for, which is
 **Command output.** `CommandOutput` carries the text of a finished shell command, cut at its `OSC 133 ; D` mark, and how
 much of it was omitted: a count of rows, or an unknown amount ([accessibility.md](accessibility.md#announcements)). It
 goes only to the windows that turned it on with `Input::AnnounceOutput`, ships with the next cycle like the facets, and
-is an event, not state: no rehydrate burst replays it. The daemon holds at most 8 per window that has not pulled them,
-dropping the oldest, and the text is at most `MAX_ANNOUNCE_BYTES` (64 KiB).
+is an event, not state: no rehydrate burst replays it. The daemon holds at most 8 outputs per window that has not pulled
+them, dropping the oldest, and the text is at most `MAX_ANNOUNCE_BYTES` (64 KiB).
 
 #### Registry delivery
 
 `Cluster` and `Hyperlink` carry the two id registries a `RowDelta` addresses by handle. A cluster's text and id are
-bounded by the daemon's fold and table caps (REQ-602; "Semantic limits" above). One rule governs both registries, on the
+bounded by the daemon's fold and table caps (REQ-602; "Semantic limits" below). One rule governs both registries, on the
 attach burst and on every diff alike: **the daemon sends every entry a row references before that row**, and sends no
 entry twice to the same connection.
 
@@ -1135,7 +1083,7 @@ that ids no row names may be absent; it never means that a row may name an absen
 client has installed is refused whatever it carries, identical text included: cells hold the handle, so the id names one
 value for the life of the connection, and an attach burst reaches a table the `RehydrateBegin` emptied. Because the rule
 above holds, a row naming an entry that has not arrived is corruption: the client closes that attachment ("Grid
-admission" above) rather than draw a cell the daemon never composed. Assuming ids arrive densely from 1, or that a
+admission" below) rather than draw a cell the daemon never composed. Assuming ids arrive densely from 1, or that a
 reattach restates the whole table, is wrong.
 
 The argument for this ordering is in [grid-and-cells.md](../explanation/data-model/grid-and-cells.md).
@@ -1164,6 +1112,49 @@ writes a version the other peer's minor does not define ("Versioning" below).
 A client that cannot decode the packed payload does not mirror the grid at all: it reads the session through
 `felis sessions capture`, whose rows are text the daemon rendered ("CLI clients" below).
 
+#### Grid admission
+
+A `GridMsg` coordinate, count, or registry value the daemon could not have produced is corruption ("Corruption" above).
+The client's shadow refuses it as a `ShadowError` before it touches a cell and closes that attachment; reconnect and
+rehydrate rebuild the mirror, and the session and its other subscribers keep running. Each value has one rule:
+
+| Value                                          | Admitted                                                               |
+| ---------------------------------------------- | ---------------------------------------------------------------------- |
+| `RowDelta` row index                           | below `MAX_GRID_ROWS`                                                  |
+| `RowDelta` body width (the row codec's `cols`) | at most `MAX_GRID_COLS`, checked before the decoder reserves its cells |
+| a row's sized-cell column                      | inside that row's decoded columns                                      |
+| a row's `Cluster` / `Hyperlink` handle         | already installed ("Registry delivery" above)                          |
+| `Scrolled.region_top` / `region_bottom`        | `region_top <= region_bottom`, both inside the announced grid          |
+| `Scrolled.n_rows`                              | at least 1 and at most the named region's height                       |
+| `CursorState.row` / `col`                      | inside the announced grid, whether or not the cursor is visible        |
+| `ViewportState.lines_from_bottom`              | at most `max`                                                          |
+| `Cluster.id` / `Hyperlink.id`                  | nonzero, within the table caps, and not already installed              |
+| `Cluster.text`, `Hyperlink.anchor` / `uri`     | within `ClusterText::CAP` / `LinkText::CAP`                            |
+
+The **announced grid** is the geometry the daemon last stated (`SessionToClientMsg::Attached`,
+`SessionToClientMsg::Created`, or `GridMsg::Size`), which it states before composing anything at a new geometry. A
+client that resized its own shadow ahead of the daemon honoring the resize measures against that announcement rather
+than its own dimensions, and holds the cursor the daemon stated until a geometry can carry it: the correction that
+overrules an optimistic resize repeats the rows, not the cursor, whose position the daemon sends only when it moves.
+
+The daemon owes the matching send-side rules. A queued `Scrolled` names the geometry it was recorded under, so a resize
+retires every directive not yet shipped and the rows it would have shifted ride the replay instead; and a resize
+composes for every subscriber behind its `Size`, since a mirror whose next frame is already requested has nothing else
+to answer that request.
+
+A directive is also dropped for any subscriber whose last frame replayed every row of the grid as of that directive:
+those rows already hold the shift, and shipping it as well would move them twice. Shifts folded into one directive from
+both sides of such a frame replay every row instead, since the frame holds an unknown part of the shift.
+
+Each composition takes the core lock for itself and settles its own scroll accounting under it, against rows whose
+geometry and scroll order are the ones it read: a composition that finds the grid scrolled past what its subscriber was
+offered replays the rows at that reading instead, since the cells it would encode already hold a shift no directive
+accounts for.
+
+A `RowDelta` inside the two bounds applies even when it does not fit the shadow's current dimensions: a lower or wider
+row grows the mirror, a narrower one pads it. A resize race gives both an honest reading, which is why the row index and
+the body width are the only grid values bounded protocol-wide rather than by the announced geometry.
+
 ### Image (kind = 3)
 
 Daemon → client, uncorrelated, while attached: the Kitty graphics store and its placements
@@ -1175,7 +1166,7 @@ already transferred (`Frame`, in Kitty's 1-based numbering). The byte count a tr
 wire: felis ships coalesced frames, so every buffer of an image is `width × height × bytes_per_pixel` and the geometry
 states it once. That product is the header's allocation claim and is admitted on decode against `MAX_IMAGE_BYTES`
 (computed saturating, since nothing bounds the two axes on their own), and a `Frame` number against `MAX_IMAGE_FRAMES`.
-A client mirroring the store also holds its total to `MAX_SESSION_IMAGE_BYTES` ("Semantic limits" above).
+A client mirroring the store also holds its total to `MAX_SESSION_IMAGE_BYTES` ("Semantic limits" below).
 
 `Chunk` appends at the open transfer's own byte count and `Complete` closes it; both name the transfer's `id` as a
 cross-check. Nine sequences are malformed and end the connection, connection-locally:
@@ -1229,6 +1220,70 @@ one highlight segment per touched row. Row indices follow REQ-608's negative-fro
 anchors at its topmost (scrollback) row, and its segments carry rows of both signs. For matcher design and limits, see
 [scrollback.md "Search"](../explanation/data-model/scrollback.md#search). Why search keeps its own family rather than
 folding into `Ops` is in [the IPC design explanation](../explanation/architecture/ipc.md#kind-or-arm).
+
+## Semantic limits
+
+The frame cap (`DEFAULT_MAX_BODY`) is a **framing backstop**, not any operation's policy. Each surface below carries its
+own limit (REQ-105a); the backstop only bounds what the framing layer will carry at all. Every limit on a value that
+becomes a frame body sits far under it.
+
+A limit the `Checked` column marks `sender and receiver` is checked twice with the same number: by the sender before the
+body is encoded (the CLI before it dials), and by the receiver as the body decodes, where a breach is
+`WireError::OverLimit`, naming the field, the size, the cap, and the unit the cap counts (bytes, entries, or frames).
+Every other marking is a departure from that and says which half is missing: a cap the sender alone holds, one a handler
+reads instead of the decode, and one a table or constructor enforces each answer in their own terms, which `Outcome`
+states, rather than by closing the connection.
+
+The receive-side values are part of major `1` itself, not rows of the minor ledger. Lowering one for every peer narrows
+what a field already accepts, which is a change of meaning (REQ-104b): a released peer sending a value under the old
+bound would have its connection torn down.
+
+| Limit                                     | Value       | Applies to                                                                                                                                                                                                                 | Checked                                                                       | Outcome                                                                                                                                                                                                          |
+| ----------------------------------------- | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `MAX_RAW_INPUT_BYTES`                     | 16 MiB      | `InputMsg::KeyBytes` payload (`sessions send --raw`'s escape stream, not only a key event)                                                                                                                                 | sender and receiver                                                           | sender refuses; receiver closes the connection                                                                                                                                                                   |
+| `MAX_PASTE_BYTES`                         | 16 MiB − 64 | `InputMsg::Paste` payload (the shortfall is the room a paste's bracketing needs inside the PTY input budget)                                                                                                               | sender and receiver                                                           | sender refuses; receiver closes the connection                                                                                                                                                                   |
+| `MAX_KEY_CHARACTER_BYTES`                 | 32 B        | `InputMsg::Key`'s character (one keystroke's own text; anything longer is a paste)                                                                                                                                         | sender and receiver                                                           | sender refuses; receiver closes the connection                                                                                                                                                                   |
+| `MAX_KEY_TEXT_BYTES`                      | 32 B        | `InputMsg::Key`'s composed text                                                                                                                                                                                            | sender and receiver                                                           | sender refuses; receiver closes the connection                                                                                                                                                                   |
+| `MAX_SEARCH_PATTERN_BYTES`                | 4 KiB       | `SearchToDaemonMsg::Query.query`                                                                                                                                                                                           | sender and receiver                                                           | sender refuses; receiver closes the connection                                                                                                                                                                   |
+| `MAX_SEND_STEPS`                          | 4096        | `OpsToDaemonMsg::Send` / `SendAndWait` steps, a click counting as its press and its release                                                                                                                                | sender, and receiver off the encoded body before it decodes                   | sender refuses; receiver answers `SendRefusal::TOO_LARGE` and keeps the connection                                                                                                                               |
+| `MAX_SEND_BODY_BYTES`                     | 16.5 MiB    | the encoded body of an `OpsToDaemonMsg::Send` / `SendAndWait`: the input budget plus 128 bytes per step                                                                                                                    | receiver, before the body decodes                                             | as above                                                                                                                                                                                                         |
+| `MAX_SPAWN_ARGV_ENTRIES`                  | 4096        | `SpawnArgs.args` entries                                                                                                                                                                                                   | sender and receiver                                                           | sender refuses; receiver closes the connection                                                                                                                                                                   |
+| `MAX_SPAWN_ARGV_BYTES`                    | 1 MiB       | `SpawnArgs.args` total bytes                                                                                                                                                                                               | sender and receiver                                                           | as above                                                                                                                                                                                                         |
+| `MAX_SPAWN_PATH_BYTES`                    | 4 KiB       | `SpawnArgs.command`, `SpawnArgs.cwd`                                                                                                                                                                                       | sender and receiver                                                           | as above                                                                                                                                                                                                         |
+| `MAX_ENV_BASE_ENTRIES`                    | 4096        | `SpawnArgs.env` entries                                                                                                                                                                                                    | sender and receiver                                                           | as above ("Session (kind = 4)")                                                                                                                                                                                  |
+| `MAX_ENV_BASE_BYTES`                      | 1 MiB       | `SpawnArgs.env` key + value bytes                                                                                                                                                                                          | sender and receiver                                                           | as above                                                                                                                                                                                                         |
+| the same two caps on `SpawnArgs.env_base` |             | entries and key + value bytes of a captured base                                                                                                                                                                           | dialer before it sends, daemon in the spawn path — deliberately not at decode | the one spawn fails as `CreateFailure::SpawnFailed`; the connection stays up ("Session (kind = 4)")                                                                                                              |
+| `MAX_SESSION_TAGS` / `MAX_TAG_BYTES`      | 32 / 128 B  | `SpawnArgs.tags`                                                                                                                                                                                                           | sender and receiver                                                           | as above ("Ops (kind = 5)")                                                                                                                                                                                      |
+| `MAX_SESSION_TAGS` / `MAX_TAG_BYTES`      | 32 / 128 B  | `OpsToDaemonMsg::Tag`'s delta                                                                                                                                                                                              | receiver                                                                      | not an `OverLimit`: the daemon answers `OpsToClientMsg::TagsUpdated` with `denied` set, so a caller that asked for too many tags reads why instead of losing the connection under a codec error                  |
+| `MAX_RETARGET_DESCRIPTOR_BYTES`           | 64 KiB      | `RetargetTarget` carrier strings, on `OpsToDaemonMsg::Switch` and `PushMsg::RetargetHost`                                                                                                                                  | sender and receiver                                                           | as above                                                                                                                                                                                                         |
+| `MAX_REGION_REPLY_BYTES`                  | 32 MiB      | `RegionToClientMsg::Reply.data`, the one stitched region body                                                                                                                                                              | sender only                                                                   | the daemon trims to the youngest resumable boundary — a line start, or a scalar start outside any escape sequence when the window holds no line boundary — and drops the viewport position with the head it lost |
+| `MAX_GRID_ROWS` / `MAX_GRID_COLS`         | 2048 / 2048 | announced geometry: `GridMsg::Size`, `SessionInfo.dims`                                                                                                                                                                    | receiver                                                                      | `WireError::OutOfRange`; the client closes the connection                                                                                                                                                        |
+| the same two                              |             | the row index and body width of a `GridMsg::RowDelta`, which auto-grow the client's mirror to fit a row that outran a resize                                                                                               | receiver                                                                      | inside the bound the shadow grows; past it the row is a `ShadowError` and the client closes the attachment ("Grid admission" above)                                                                              |
+| `MAX_GRID_PIXELS`                         | 32768       | announced `GridDims.pixel_w` / `pixel_h`, `0` meaning unknown                                                                                                                                                              | receiver                                                                      | as above                                                                                                                                                                                                         |
+| `MAX_IMAGE_BYTES`                         | 64 MiB      | the `width × height × bytes_per_pixel` an `ImageMsg::Header`'s `New` target implies, and the daemon's own decode budget                                                                                                    | receiver (both ends)                                                          | `WireError::OverLimit`; the client closes the connection                                                                                                                                                         |
+| `MAX_IMAGE_FRAMES`                        | 4096        | `ImageMsg::Header`'s `Frame` number, and the daemon's frame store per image                                                                                                                                                | receiver and daemon                                                           | over the cap the daemon answers Kitty `ENOTSUP`; a header past it closes the client's connection                                                                                                                 |
+| `MAX_SESSION_IMAGE_BYTES`                 | 256 MiB     | all decoded image bytes one session retains, the daemon's store and the client's mirror alike; both charge the entry and frame records alongside the pixels, so an appended frame pays for its record as well as its bytes | receiver (both ends)                                                          | the daemon evicts; the client closes the connection                                                                                                                                                              |
+| `ClusterText::CAP`                        | 128 B       | one interned grapheme cluster's text, on the grid and on a `GridMsg::Cluster` a shadow installs                                                                                                                            | constructor precondition (both ends)                                          | daemon-side the fold stops and the cell keeps the cluster that fit; an over-cap entry off the wire closes the client's attachment                                                                                |
+| `CLUSTER_TABLE_CAP`                       | 131 072     | entries in one grid's cluster table, daemon and shadow alike; also the highest id a shadow will install                                                                                                                    | the table itself (both ends)                                                  | `intern` refuses a new entry after the dedup lookup; an id past the cap closes the client's attachment                                                                                                           |
+| `LinkText::CAP`                           | 8 KiB       | one hyperlink entry's `id` and `uri`, from the parser or off a `GridMsg::Hyperlink` (equals `OSC_BUFFER_LIMIT`)                                                                                                            | constructor precondition (both ends)                                          | daemon-side the pen is not set and the covered text prints without a link target; an over-cap entry off the wire closes the client's attachment                                                                  |
+| `LINK_TABLE_BYTE_CAP`                     | 8 MiB       | the charged footprint of one grid's hyperlink table (entry struct, both string payloads, dedup slot)                                                                                                                       | the table itself (both ends)                                                  | the entry is refused before the slot vector grows, leaving no charge and no gap; a client that cannot hold it closes the attachment                                                                              |
+
+A CLI verb that would breach one refuses before it dials, reporting the `invalid_request` machine error kind
+([cli.md](cli.md) "Machine output"); the connection is never involved. The GUI client refuses an over-limit paste rather
+than truncating it: this applies to clipboard pastes, file drops, and `pipe` chord `paste` sinks. It also refuses
+over-limit search patterns before opening a stream. Refusals surface explicitly: paste size appears on the confirmation
+bar, and pattern length appears in the search bar.
+
+The region reply is the one row checked on the sending side alone: it bounds a body the daemon builds from its own
+scrollback rather than anything a peer asked for by size, and an over-budget region is trimmed rather than refused.
+
+The hyperlink table's entry _count_ needs no constant of its own: the 16-bit nonzero handle bounds it at 65 535, which
+is why only its byte budget is listed.
+
+The geometry and image rows bound a **claim** rather than a length: a number that tells the receiver how much memory to
+reserve for bytes that have not arrived and need never arrive. They are therefore admitted at decode, where the number
+is read, rather than on both sides of the send
+([the IPC design explanation](../explanation/architecture/ipc.md#bounding-announced-quantities)).
 
 ## CLI clients
 
@@ -1373,62 +1428,6 @@ the compatibility freeze such a change rides the pre-release rule instead, ackno
 under "Semantic limits", which adds and moves nothing and so is neither a row nor, under REQ-104b, a major. Both rules
 are argued in [the IPC design explanation](../explanation/architecture/ipc.md#the-ledger-is-the-review-gate).
 
-### Handshake
-
-After the preface accepts, the client sends `ConnToDaemonMsg::Hello` and the daemon answers `ConnToClientMsg::Welcome`:
-the application half of the handshake, in the schema the preface already selected. Neither frame negotiates a version: a
-`Hello` that reached the daemon at all was decodable under the agreed major, and a `Welcome` says only that the daemon
-accepted this connection's mode. The one exception is the mode itself: a daemon that meets a mode it does not define
-answers `Refused { UnknownMode }` and closes, and every other undecodable `Hello` is corruption, closed unanswered
-("Corruption" above). The split runs on the mode number: any nonzero value the daemon does not define is the newer
-peer's, so it earns the typed refusal, while the `CONNECTION_MODE_UNSPECIFIED` sentinel `0`, which no conforming sender
-writes, is malformed and takes the corruption path.
-
-A `Welcome` puts the connection in the `Setup` phase ("Connection phases" above), from which it may attach, create, run
-an `Ops` verb, or subscribe, and nothing else. A `ConnToClientMsg::Refused` arrives instead when the peer reaches for a
-family its mode does not admit before it has attached; after that, a denial is the request's own typed error ("Ops (kind
-= 5)" above).
-
-Skew a client can meet, and where each is reported:
-
-| Condition                                                               | Where it surfaces                                                                                         |
-| ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| The peer is not felis                                                   | wrong preface magic; the connection closes with no reply                                                  |
-| The daemon does not serve the client's major                            | preface status `1`, carrying the majors it does serve                                                     |
-| The daemon accepts (status `0`) naming a major the client never offered | a client-side connect error, closed before any frame; `felis version` and `felis doctor` name both majors |
-| The daemon refuses for a newer reason                                   | preface status the client cannot name; treated as a refusal                                               |
-| The peer's mode does not admit a family, before it attaches             | `ConnToClientMsg::Refused { Role }`, then close                                                           |
-| The daemon is serving every connection it admits                        | `ConnToClientMsg::Refused { AtCapacity }`, then close; retryable                                          |
-| The peer names a mode the daemon does not define                        | `ConnToClientMsg::Refused { UnknownMode }`, then close; not retryable                                     |
-| The peer stays silent through a pre-attach phase                        | no frame: the daemon closes at that phase's deadline                                                      |
-
-A major refusal is not retryable: both halves must be rebuilt, and a client that treats it as a transient EOF would burn
-its whole backoff budget on a permanent condition.
-
-**Each pre-attach phase is time-bounded.** A peer that opens a connection and then says nothing holds a task, a file
-descriptor, and a read buffer, so the daemon cuts it at the deadline for whichever phase it stalled in:
-
-| Phase           | Deadline                    | What must arrive                                                    |
-| --------------- | --------------------------- | ------------------------------------------------------------------- |
-| Preface         | 2 s                         | the client's 8-byte preface (and its carrier block, over the relay) |
-| `Hello`         | 5 s                         | the first frame after the preface accept                            |
-| First operation | 30 s (`Window`, `Observer`) | the `Attach` / `Create` or `Subscribe`, and each frame before it    |
-| First operation | not timed (`Ops`)           | —                                                                   |
-
-The deadline runs until the attach decision, not until the first frame of any kind: a `Window` may read the roster with
-`Ops::List` before it names a session (the shipped GUI does), and each such frame restarts the 30 s rather than retiring
-it, so a peer that lists and then falls silent is still cut. Nothing after the attach decision is timed, and an `Ops`
-connection is not timed at all past its `Welcome`: an editor client may open one at startup so that "the client is
-running" means "the daemon is reachable", then write nothing until its user asks for something, and an observer idles
-for hours between notifications. A `Window` and an `Observer` owe a subject, so silence before they name one is a stall.
-
-**Connections are admitted, not merely accepted** (REQ-916). The daemon serves at most the connection cap
-(`MAX_CONNECTIONS`, 1024) at once, against a permit taken before the connection's task exists and released whenever that
-task ends. A dial past the cap is answered `Refused { AtCapacity }` rather than queued or closed, so a caller can tell a
-full daemon from a dead one. Answering costs a task of its own, so the refusal path is admitted against its own small
-ceiling; past that the socket is dropped unanswered. Every step of a refusal is deadline-bounded, the write of the
-refusal included, so a peer that stops reading cannot hold one of those few slots.
-
 ## Backpressure
 
 A connection is **one ordered frame stream per direction**. There are no per-kind channels, no per-kind priorities, and
@@ -1509,9 +1508,9 @@ below it rather than by this budget.
 A hangup noticed there ends the connection _and_ the message it was admitting, so a peer that needs its input delivered
 has to stay until the daemon has taken it: an attached peer puts a `Session::InputFence` on the same connection, which
 the daemon answers only after the input frames ahead of it cleared admission, and `Ops::Send` answers only once the
-session took its last step. An `Ops::Send` step reserves what the `Input` arm it stands for reserves. The backpressure
-reaches the peer's socket buffer and, in a window, its own send queue (never the session task, which keeps serving every
-other subscriber; see
+session has taken its last step. An `Ops::Send` step reserves what the `Input` arm it stands for reserves. The
+backpressure reaches the peer's socket buffer and, in a window, its own send queue (never the session task, which keeps
+serving every other subscriber; see
 [session-lifecycle.md "Slow children: backpressure, not eviction"](../explanation/architecture/session-lifecycle.md)).
 `felis daemon status`'s `pty_input_bytes` row reports the daemon-wide sum of admitted-but-unwritten input against the
 per-session budget ([cli.md](cli.md) "Daemon status").

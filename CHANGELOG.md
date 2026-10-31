@@ -79,8 +79,8 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
   bridge produced.
 - **Wire**: `felis-protocol` drops `MAX_BRIDGE_LINE_BYTES`.
 - **Wire**: the `felis-json` v1 frame format (`felis-grid::json_v1`, its schema and the `felis-grid` `json` feature).
-  The JSON protocol replaces it; its grid, image and input objects keep felis-json's spelling except that raw bytes are
-  base64 strings, and the cell-row objects live in `felis-grid::row_json`.
+  The JSON protocol replaces it; its grid, image and input objects keep `felis-json`'s spelling except that raw bytes
+  are base64 strings, and the cell-row objects live in `felis-grid::row_json`.
 
 ### Fixed
 

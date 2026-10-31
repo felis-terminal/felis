@@ -219,25 +219,26 @@ the shim living in `felis-pty`.
 
 ### ConPTY host
 
-A Medium-integrity daemon runs every shell on Windows Terminal's out-of-band ConPTY (`conpty.dll` and its
-`OpenConsole.exe` host, Microsoft's `Microsoft.Windows.Console.ConPTY` package,
-<https://github.com/microsoft/terminal>), embedded in `felis-daemon.exe` through the `conpty-bin-vendored` crate and
-extracted on first use; the contract is [workspace.md "Filesystem layout"](../reference/workspace.md#filesystem-layout).
-The inbox ConPTY is whatever conhost each machine's Windows build carries, so a fix or a regression in it reaches felis
-users on Microsoft's schedule and differs between machines. The embedded host is one version felis pins and tests, and
-it measures text by grapheme cluster, matching the grid's permanently set `?2027`. Embedding rather than shipping the
-files gives a `cargo install` build the same host as the release zip, and a directory per version lets daemons of
-different versions run side by side.
+`felis-daemon.exe` embeds Windows Terminal's out-of-band ConPTY (`conpty.dll` and `OpenConsole.exe`, Microsoft's
+`Microsoft.Windows.Console.ConPTY` package, <https://github.com/microsoft/terminal>) through the `conpty-bin-vendored`
+crate; the extraction directory and file rules are in
+[workspace.md "Filesystem layout"](../reference/workspace.md#filesystem-layout), and the pseudoconsole hand-off across a
+daemon upgrade is in [overview.md "In-place upgrade"](architecture/overview.md#in-place-upgrade). The inbox ConPTY is
+whatever conhost each machine's Windows build carries, so a fix or a regression in it reaches felis users on Microsoft's
+schedule and differs between machines. The embedded host is one version felis pins and tests, and it measures text by
+grapheme cluster, matching the grid's permanently set `?2027`. Embedding rather than shipping the files gives a
+`cargo install` build the same host as the release zip, and a directory per version lets daemons of different versions
+run side by side.
 
-A host that cannot be extracted, verified or loaded refuses spawns rather than falling back, because a fallback would
-put shells on an untested host without telling anyone; `conpty.dll` itself answers a missing `OpenConsole.exe` by
-silently starting conhost, which is why the daemon keeps both files open.
+Refusing spawns when the host cannot be used, rather than falling back to the inbox host, avoids putting shells on an
+untested host without telling anyone; keeping both files open stops `conpty.dll` from answering a missing
+`OpenConsole.exe` by silently starting conhost.
 
-Only a Medium daemon runs it. Any Medium process of the user can write the directory, and `OpenConsole.exe` imports DLLs
-that are not `KnownDLLs`, so such a process could plant one beside it: harmless to a Medium daemon, code execution in an
-elevated one. A daemon at any other level therefore uses the inbox ConPTY. felis-pty's tests choose the host explicitly
-so that the elevated CI runner covers both, which loads the embedded host elevated there; accepted, since the runner
-already runs the change under test at that level.
+Only a Medium daemon runs it. Any Medium process of the user can write the extraction directory, and `OpenConsole.exe`
+imports DLLs that are not `KnownDLLs`, so such a process could plant one beside it: harmless to a Medium daemon, code
+execution in an elevated one. A daemon at any other level therefore uses the inbox ConPTY. `felis-pty`'s tests choose
+the host explicitly so that the elevated CI runner covers both, which loads the embedded host elevated there; accepted,
+since the runner already runs the change under test at that level.
 
 - Rejected: inbox only. It leaves the host version to each machine's Windows build.
 - Rejected: loading a `conpty.dll` only when the user supplies one (Alacritty's approach). The tested host would be the

@@ -8,6 +8,26 @@ The `felis` CLI: verbs, global flags, exit codes, and the machine-output contrac
 [ipc.md](ipc.md); what puts a control on this surface rather than another is in
 [control-surfaces.md](../explanation/architecture/control-surfaces.md).
 
+The cross-cutting contracts ([Global options](#global-options), [Exit codes](#exit-codes), and
+[Machine output](#machine-output)) come first, followed by the verb families in section order and
+[Carrier and connection lifetime](#carrier-and-connection-lifetime) and [Log files](#log-files) at the end:
+
+- [Session verbs](#session-verbs): `felis sessions` (`list`, `info`, `spawn`, `send`, `capture`, `search`, `kill`,
+  `evict`, `switch`, `tag`)
+- [Config verbs](#config-verbs) and [Fonts](#fonts): `felis config` (`path`, `check`, `show-effective`) and
+  `felis fonts list`
+- [Daemon status](#daemon-status), [Daemon stop](#daemon-stop), and [Daemon upgrade](#daemon-upgrade): `felis daemon`
+  (`status`, `stop`, `upgrade`)
+- [Doctor](#doctor) and [Doctor report](#doctor-report): `felis doctor` and `felis doctor report`
+- [Window launches](#window-launches),
+  [Re-point a window across daemons: `felis ssh`, `felis window retarget`](#re-point-a-window-across-daemons-felis-ssh-felis-window-retarget),
+  and [External commands: `felis <name>`](#external-commands-felis-name): `felis`, `felis attach`, `felis -- <cmd>`,
+  `felis ssh`, `felis window retarget`, and `felis <name>`
+- [`felis notifications subscribe`](#felis-notifications-subscribe) ([Other verbs](#other-verbs)): stream desktop
+  notifications
+- [`felis completions <shell>`](#felis-completions-shell) ([Other verbs](#other-verbs)): generate shell completions
+- [Version reporting](#version-reporting): `felis --version` and `felis version`
+
 ## Global options
 
 Global flags precede the verb (`felis --config ./work.toml doctor`):
@@ -100,7 +120,8 @@ A verb with no row in this table has no `--format` flag.
 
 Selecting an incompatible format (such as `sessions list --format jsonl`) is a clap usage error: it exits `2` with human
 text on stderr, no error object, and lists the values the verb takes. The `felis` binary's own tracing logs go to stderr
-at `WARN` and above; setting `--format json` or `jsonl` silences them. `RUST_LOG` overrides either default.
+at `WARN` and above; setting `--format json` or `jsonl` silences them. `RUST_LOG` overrides either default. A long-lived
+browser view speaks the [JSON protocol](json-protocol.md) instead.
 
 ### The envelope
 
@@ -350,8 +371,8 @@ are reported as errors. `--client <id>` selects a specific client overlay (defau
 ## Fonts
 
 `felis fonts list` prints every font family name that `font.family`, a `font.fallback` entry's `family`, and
-`[font.bold|italic|bold_italic].family` accept as an installed family on this machine ([config.md](config.md)), one per
-line under a header, with whether the family is monospace and the styles it has installed:
+`[font.bold|italic|bold_italic].family` accept as an installed family on this machine ([config.md](config.md#font)), one
+per line under a header, with whether the family is monospace and the styles it has installed:
 
 ```
 FAMILY                 MONO  STYLES
@@ -645,9 +666,9 @@ Only the variables named above have their values reported. Before either renderi
   `pipe` binding's `target` when it is a command or a file, each of which reads `<redacted>`; the chord, the kind, and
   every other field stay.
 
-The report reads no hostname, username, session title, or terminal content on its own. One can still reach it inside a
-check's detail (an error passed on from a `--host` dial, for one) or a configured path outside the home directory, such
-as a `shader.post` stage's `file`.
+The report reads no hostname, username, session title, or terminal content on its own. One of them can still reach the
+report inside a check's detail (an error passed on from a `--host` dial, for example) or a configured path outside the
+home directory, such as a `shader.post` stage's `file`.
 
 The fonts come from the frontend: `doctor report` runs `felis-client --doctor-report-probe[=<config path>]`, the probe
 `doctor` runs plus a font resolution. When that probe fails, a frontend that predates the flag included, the plain probe

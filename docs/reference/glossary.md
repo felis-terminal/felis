@@ -61,6 +61,9 @@ sidebar:
 - **IPC** — Inter-Process Communication. The frame-based protocol spoken between felis clients and the daemon over Unix
   sockets, Windows named pipes, or stdio transports ([ipc.md](ipc.md)).
 
+- **JSON protocol** — The negotiated, correlated JSON protocol (`felis-client-core::json`) a relay in front of a browser
+  view speaks to that view ([json-protocol.md](json-protocol.md)).
+
 - **Kitty graphics protocol** — Terminal graphics protocol transmitting and displaying inline images
   ([kitty-graphics.md](protocols/kitty-graphics.md)).
 
@@ -94,6 +97,9 @@ sidebar:
   ([session-lifecycle.md](../explanation/architecture/session-lifecycle.md)). **Visible-first rehydration** is the order
   that burst uses ([ipc.md](ipc.md)).
 
+- **Relay (JSON protocol)** — The server in `felis-client-core::relay` that speaks the JSON protocol to a browser view
+  against a daemon ([json-protocol.md](json-protocol.md#relay)).
+
 - **Run (shaping run)** — A span of cells shaped as one string: when `font.features` names features to apply, the
   longest span of a row that is ASCII at default sizing in one style and covered by that style's primary face; every
   other cell is shaped on its own ([text-shaping.md](../explanation/rendering/text-shaping.md)).
@@ -109,8 +115,9 @@ sidebar:
 
 - **Sized run** — A sequence of cells formatted with custom scale factors under the Kitty text sizing protocol.
 
-- **SSH stdio attach** — Cross-host transport launching `ssh user@host felis-daemon relay` and streaming IPC frames over
-  child stdin and stdout pipes.
+- **SSH stdio attach (SSH relay)** — Cross-host transport launching `ssh user@host felis-daemon relay` (the stdio relay)
+  and streaming raw IPC frames between child stdin and stdout pipes and the remote daemon socket
+  ([ipc.md](ipc.md#cross-host-carrier-ssh-stdio)).
 
 - **Stream (IPC)** — A multi-message correlated response sequence opened by a client request, terminated explicitly with
   `ConnToClientMsg::End` or `ConnToClientMsg::Error` ([ipc.md](ipc.md)).

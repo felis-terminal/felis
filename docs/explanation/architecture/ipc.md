@@ -145,11 +145,12 @@ Two other placements are rejected:
   live bottom. The viewpoint is the only difference, so it is one optional field on the one surface; an `Ops` copy of
   each would be a second definition of the same request and reply shapes that the two forms then have to keep in step.
 
-The session-addressed form exists so a reader or a sender never has to attach. An attach is a subscription: it pays a
-rehydrate burst and then carries traffic no request asked for (mode flags, prompt marks, image ticks, `Push`), and a
-connection attaches once. A client multiplexing many operations over one connection could attribute none of that traffic
-to a request and could reach only one session, so `Ops::Send`, `Ops::SendAndWait` and the session field on `Search` and
-`Region` carry the session in the request instead, and every frame the connection receives answers one.
+  The session-addressed form exists so a reader or a sender never has to attach. An attach is a subscription: it pays a
+  rehydrate burst and then carries traffic no request asked for (mode flags, prompt marks, image ticks, `Push`), and a
+  connection attaches once. A client multiplexing many operations over one connection could attribute none of that
+  traffic to a request and could reach only one session, so `Ops::Send`, `Ops::SendAndWait` and the session field on
+  `Search` and `Region` carry the session in the request instead, and every frame the connection receives answers a
+  request.
 
 - **A separate capture kind beside the region family.** `felis sessions capture` reads the very regions the keymap
   `pipe` chord names, so the row-stream read is a second reply shape on `Region` (`Rows` / `Row` / `RowsDone`), not a
@@ -212,11 +213,19 @@ or opens a window in a directory that does not exist (REQ-105b).
 
 #### The snapshot replaces the base, over a local socket only
 
-The snapshot replaces the base rather than overlaying it because the daemon's own environment is what it exists to
-displace: a warm daemon's environment descends from whichever login started it. For the same reason the dialing process
-fills the field only over a local socket. Over the SSH relay the dialer's environment names the wrong host, and that
-rule is what makes a retarget create correct: the _executing_ window dials the target daemon, so its environment
-describes the host the child runs on, and the initiating CLI's descriptor carries only explicit `env` intent.
+The honest source for a session's base environment is the process that asks for the session, so the dialing process
+captures its own and sends it as `SpawnArgs.env_base`, **only when its carrier to the target daemon is the local
+socket**. Snapshotting the daemon's own is the obvious answer and the wrong one: the daemon is persistent, so on a warm
+one that snapshot froze hours ago, and on a remote one it descends from an _earlier_ SSH connection and names an
+`SSH_AUTH_SOCK` that died with it. A supplied base **replaces** rather than overlays: leaving the daemon's entries
+underneath would keep what the base was sent to displace.
+
+Over the SSH relay the dialer's environment describes the wrong host, and sending it would hand one host's credentials
+to another; the relay supplies that case instead, prepending its own environment (sshd's remote-command environment,
+which _is_ the remote login's) in the frozen preface layer's `FRLY` carrier block ("The relay carrier block sits below
+the schema" below). That local-only rule is also what makes a retarget create correct: the _executing_ window dials the
+target daemon, so its environment describes the host the child runs on, and the initiating CLI's descriptor carries only
+explicit `env` intent.
 
 That "only over a local socket" rule stays a **send-side invariant**, deliberately: no decode step can enforce it.
 Rejected: having the daemon refuse an `env_base` that did not arrive over a local carrier. A relay whose snapshot is
@@ -713,13 +722,12 @@ build carries no compatibility promise, so no released felis ever meets a peer w
 
 ### The relay carrier block sits below the schema
 
-The frozen layer admits one more magic ahead of the client preface, `FRLY`: the relay carrier block, which carries the
-SSH relay's own environment so a create over that carrier has a host-correct base to fall back to
-([security-model.md](../security-model.md) "Process and environment boundary"). It sits in this layer rather than in the
-schema because it is written before either peer has said what it speaks: a block a daemon had to negotiate access to
-could not be sent at all. Its caps are frozen for the same reason: a per-minor or per-daemon cap would reintroduce
-exactly the skew the frozen layer exists to remove, since neither side knows the other's minor yet. Consumption is
-exact, and every malformed shape closes like a wrong magic.
+The frozen layer admits one more magic ahead of the client preface, `FRLY`, for the relay carrier block
+(["The two environment fields"](#the-two-environment-fields); [security-model.md](../security-model.md) "Process and
+environment boundary"). It sits in this layer rather than in the schema because it is written before either peer has
+said what it speaks: a block a daemon had to negotiate access to could not be sent at all. Its caps are frozen for the
+same reason: a per-minor or per-daemon cap would reintroduce exactly the skew the frozen layer exists to remove, since
+neither side knows the other's minor yet. Consumption is exact, and every malformed shape closes like a wrong magic.
 
 Two shapes are rejected:
 

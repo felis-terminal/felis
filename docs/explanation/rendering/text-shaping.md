@@ -111,12 +111,11 @@ would not do: the styled faces and the fallback walk would then differ from what
 set has no platform to ask, so `auto_discover` walks the CJK, **symbol**, emoji, and Nerd-symbol candidate lists in that
 order and appends the first family installed in each group, except the symbol group (see below).
 
-An explicit `font.fallback` list in `config.toml` (keys and grammar in the
-[config reference](../../reference/config.md)) goes between the primary and the fallback above, which still covers what
-the list misses and skips a face the list already names. A character a listed face covers takes the first such face in
-declared order, ahead of the cascade's mono-first rule, except for an emoji-presentation character, which takes the
-first color face covering it anywhere in the chain, the primary included (see below). A missing family is skipped with a
-warning rather than failing the chain: a config written on one machine degrades gracefully on another that lacks a face.
+When `font.fallback` is set ([config.md](../../reference/config.md#font)), the host's fallback skips a face the list
+already names, and a character a listed face covers takes the first such face in declared order, ahead of the cascade's
+mono-first rule, except for an emoji-presentation character, which takes the first color face covering it anywhere in
+the chain, the primary included (see below). A missing family is skipped with a warning rather than failing the chain: a
+config written on one machine degrades gracefully on another that lacks a face.
 
 In the file-set walk the **symbol group sits before the emoji group, and appends every installed family rather than the
 first**. Both deviations are deliberate.
@@ -196,12 +195,12 @@ then walks the fallback chain, drawing the entry it lands on in that style. A ce
 the `FontStyle`, and `resolve` is asked for that style.
 
 **Config shape: nested tables, not four flat keys.** The face is configured with `[font.bold]` / `[font.italic]` /
-`[font.bold_italic]` sub-tables (config reference), each carrying its own optional `family` and `features`. The nested
-form is chosen over four flat `bold_family = …` keys because a per-style `features` override belongs _with_ its family
-(a script italic may want different stylistic sets than the roman), and a table groups them without a naming convention
-that pairs `bold_family` with `bold_features` by prefix. When a table (or its `family`) is omitted, the style is derived
-from the base `font.family` at the matching weight/slant, so a plain single-`family` config still gets real bold/italic
-variants automatically, matching the first-run expectation set by every other terminal.
+`[font.bold_italic]` sub-tables ([config.md](../../reference/config.md#font)). The nested form is chosen over four flat
+`bold_family = …` keys because a per-style `features` override belongs _with_ its family (a script italic may want
+different stylistic sets than the roman), and a table groups them without a naming convention that pairs `bold_family`
+with `bold_features` by prefix. Deriving an omitted style from `font.family` at the matching weight/slant gives a plain
+single-`family` config real bold/italic variants automatically, matching the first-run expectation set by every other
+terminal.
 
 **Missing styled face: reuse regular, never synthesize.** felis does **not** synthesize fake-bold (outline emboldening)
 or fake-italic (a shear transform) when a family ships no real styled face. The face provider (fontconfig, CoreText or
@@ -258,8 +257,8 @@ Re-ranking fontconfig's answer by that CSS rule, for one tie-break on every plat
 substitution a user wrote in `fonts.conf`. The per-character system fallback keeps its regular and bold query. Threading
 the weight into it was rejected: CoreText's cascade takes only a bold trait, so a weight cannot be asked of it, and
 re-selecting a sibling of the face the host picked can land on a file that lacks the scalar or its color glyph, which
-breaks the coverage and presentation the host chose for. A user who wants a CJK or symbol face at a matching weight
-names it in `font.fallback`, where it follows the configured weights.
+breaks the coverage and presentation the host chose. A user who wants a CJK or symbol face at a matching weight names it
+in `font.fallback`, where it follows the configured weights.
 
 **Shared metrics.** Cell metrics also come from the _regular_ primary only (the four faces must share an advance width
 or the monospace grid would break), so only codepoint coverage and the rasterized outline differ per style, never the
@@ -270,20 +269,18 @@ Style rides the sizing key like every other axis that makes two lookups of one g
 
 ## Feature defaults and inheritance
 
-OpenType features (`font.features` in the [config reference](../../reference/config.md)) default to **off**:
+OpenType features (`font.features` in [config.md](../../reference/config.md#font)) default to **off**:
 programming-ligature fonts (FiraCode, JetBrains Mono, Cascadia Code) render without ligatures unless the user opts in.
 This matches the first-run behavior of xterm, alacritty, kitty, and wezterm. Flipping the default would shift cell
 metrics for users who never asked for ligatures, a silent layout change on upgrade that no performance win justifies.
 
-The primary face's `features` list is also the inherited default for every `font.fallback` entry that omits its own.
-Inheritance is safe because shapers silently ignore feature tags a font does not support: `"calt"` set globally is a
-no-op on a CJK or color-emoji face that lacks the table, so the common case needs no per-font duplication. For the rare
-case where inheritance _would_ be wrong, `features = [...]` overrides per-fallback, and an explicit empty
-`features = []` is the opt-out, useful for color-emoji, where the primary's `calt` should not leak in.
-
-Omission means inherit for a fallback entry and for a `[font.bold]`-style table alike, because they are the same table:
-one `family`, one optional `features`, one rule. Rejected: a bespoke fallback-entry shape (a bare family string, or a
-table whose omitted `features` opts _out_); it would put the two surfaces in silent disagreement over what an absent key
+Inheriting `font.features` when a style table or `font.fallback` entry omits `features`
+([config.md](../../reference/config.md#font)) is safe because shapers silently ignore feature tags a font does not
+support: `"calt"` set globally is a no-op on a CJK or color-emoji face that lacks the table, so the common case needs no
+per-font duplication, while `features = []` opts out where the primary's `calt` should not leak in (such as
+color-emoji). Omission means inherit for both because they are the same table: one `family`, one optional `features`,
+one rule. Rejected: a bespoke fallback-entry shape (a bare family string, or a table whose omitted `features` opts
+_out_); it would put `[font.fallback]` and `[font.bold]` in silent disagreement over what an absent `features` key
 means. One type costs the bare-string spelling and buys a rule the user learns once.
 
 ## Font loading
@@ -482,19 +479,19 @@ other rule, and on Debian names `FreeMono` (from `69-unifont.conf`) on a host th
 rather than linked or bundled, the way the Vulkan loader is: the host's library is the one that reads the host's
 `/etc/fonts` syntax and cache format, which a bundled copy of another version may not (kitty's Linux build ships it the
 same way, for distributions' differing config paths). A host without libfontconfig cannot open a window. A name no
-installed family carries is accepted when its best match is not a face a generic name (the ones the stock
-`48-guessfamily.conf` recognizes, `monospace` to `ui-rounded`) also matches, so an `<alias>` that maps it elsewhere is
-honored while a typo is reported. Comparing the substituted queries instead fails: stock rules that test part of a name
-(`mono`, `sans`, `emoji`) edit a typo's query as an alias would. The cost is an alias whose target is a generic's own
-face, which reads as not installed. Faces in a format the loader cannot parse (fontconfig also lists PCF, BDF and
-Type 1) are taken out of the font set before any match, so felis matches as if they were not installed. Asking for
-`scalable` in the query instead, as kitty does, does not work: fontconfig ranks it above the family, so a name whose
-only faces are bitmaps would draw another family without a warning.
+installed family carries is accepted unless its best match is also the match of a generic name (one the stock
+`48-guessfamily.conf` recognizes, `monospace` to `ui-rounded`), so an `<alias>` that maps it elsewhere is honored while
+a typo is reported. Comparing the substituted queries instead fails: stock rules that test part of a name (`mono`,
+`sans`, `emoji`) edit a typo's query as an alias would. The cost is an alias whose target is a generic's own face, which
+reads as not installed. Faces in a format the loader cannot parse (fontconfig also lists PCF, BDF and Type 1) are taken
+out of the font set before any match, so felis matches as if they were not installed. Asking for `scalable` in the query
+instead, as kitty does, does not work: fontconfig ranks it above the family, so a name whose only faces are bitmaps
+would draw another family without a warning.
 
 **macOS and Windows faces: CoreText and DirectWrite.** The same argument holds: the faces drawn are the ones the
-platform's font API names, localized names included. The default is the platform terminal's own, ahead of the shared
-monospace list: the user's fixed-pitch font on macOS (Menlo unless changed) and Cascadia Mono on Windows. A DirectWrite
-answer's scale factor or synthesized style is ignored, the no-synthesis rule above.
+platform's font API names, localized names included, and the default is the platform terminal's own ahead of the shared
+monospace list ([config.md](../../reference/config.md#font)). A DirectWrite answer's scale factor or synthesized style
+is ignored, the no-synthesis rule above.
 
 **Sub-pixel positioning: not done.** Kitty, WezTerm, Ghostty, and iTerm2 rasterize each glyph at four horizontal
 sub-pixel offsets. felis rasterizes pixel-aligned, sizing cells in whole pixels with no sub-pixel offset axis in the

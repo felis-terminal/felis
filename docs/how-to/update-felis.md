@@ -43,7 +43,8 @@ tar -xzf felis-x86_64-linux.tar.gz -C ~/.local/opt/felis-0.1.1 --strip-component
 
 On macOS the tarball is `felis-aarch64-darwin.tar.gz` and the unpacked tree needs
 `xattr -dr com.apple.quarantine ~/.local/opt/felis-0.1.1` before anything in it will launch
-([install](install.md#the-macos-archive)).
+([install](install.md#the-macos-archive)). On Windows, unpack the new `felis-x86_64-pc-windows-msvc.zip` into a
+directory of its own and point your `PATH` at it ([install](install.md#the-windows-deliverable)).
 
 Every archive unpacks under the same name, so each version needs a directory of its own. Unpacking one over a tree
 already in use keeps every library that version drops, and the launchers then load a mixture of the two; on macOS it

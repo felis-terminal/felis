@@ -31,8 +31,8 @@ Task-oriented; one goal per page.
 
 - [Install](how-to/install.md) — the Nix flake package, the home-manager module (and its Stylix hook), the Homebrew tap,
   the Linux, macOS and Windows release archives, a from-source build, and the terminfo entry.
-- [Update felis](how-to/update-felis.md) — install a new version, then restart the daemon onto it; the restart ends the
-  running sessions.
+- [Update felis](how-to/update-felis.md) — install a new version, then switch the running daemon onto it in place,
+  keeping the sessions; drain and restart where the switch is refused.
 - [Do your tmux workflows without tmux](how-to/tmux-workflows-without-tmux.md) — the everyday tmux operations without a
   multiplexer: sessions via the daemon, layout via your WM.
 - [Get notified when a job finishes](how-to/enable-notifications.md) — emit a notification from a long command and pop
@@ -131,6 +131,9 @@ Understanding-oriented: the design record. Reading order, top to bottom.
   chrome row.
 - [Accessibility](explanation/accessibility.md) — why felis exposes the terminal to screen readers on every platform,
   why through AccessKit, and what it leaves to the screen reader.
+- [Configuration](explanation/config.md) — why one shared config document lives at the `ProjectDirs` path, why parsing
+  and enum growth are lenient, the three-way config crate split, file-valued paths resolved against `config.toml`, and
+  why `font.size_px` is in logical pixels.
 
 Architecture:
 

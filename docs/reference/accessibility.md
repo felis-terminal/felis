@@ -62,9 +62,9 @@ platform's text-change and caret events.
 ## Announcements
 
 On Windows and macOS, a window announces the output of each finished shell command, delimited by the shell's `OSC 133`
-marks ([vt-compliance.md](protocols/vt-compliance.md)). The output is the text from where the command's `C` mark was
-written to where the cursor stands when its `D` mark arrives, both on the primary screen, cut by the daemon at the `D`
-mark so later output does not change it.
+marks ([vt-compliance.md](protocols/vt-compliance.md); [Mark shell prompts](../how-to/mark-shell-prompts.md)). The
+output is the text from where the command's `C` mark was written to where the cursor stands when its `D` mark arrives,
+both on the primary screen, cut by the daemon at the `D` mark so later output does not change it.
 
 | Case                                                                                        | Announcement                                                  |
 | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
