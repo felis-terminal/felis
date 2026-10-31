@@ -87,4 +87,12 @@ mod tests {
         assert!(expect(&mut b, READY).await.is_err());
         assert!(recv(&mut b).await.is_err(), "the channel closed");
     }
+
+    #[tokio::test]
+    async fn a_header_announcing_more_than_the_payload_limit_is_invalid_data() {
+        let mut header = vec![DUMP];
+        header.extend_from_slice(&(MAX_PAYLOAD + 1).to_le_bytes());
+        let err = recv(&mut header.as_slice()).await.unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    }
 }

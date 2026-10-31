@@ -618,7 +618,8 @@ impl App {
                     }
                     GridMsg::CommandOutput { text, omitted } => {
                         if self.window_focused
-                            && let Some(text) = crate::a11y::announcement_text(text, *omitted)
+                            && let Some(text) =
+                                felis_client_core::a11y_text::announcement_text(text, *omitted)
                         {
                             self.a11y.announce(text, Instant::now());
                         }

@@ -453,6 +453,81 @@ mod tests {
         }
     }
 
+    /// A send's refused outcome costs minor 3 on both reply arms, so a
+    /// daemon never answers an older peer with a refusal that peer cannot
+    /// decode.
+    #[test]
+    fn a_refused_send_outcome_costs_minor_three() {
+        for reason in [
+            SendRefusal::InvalidStep,
+            SendRefusal::Unreported,
+            SendRefusal::TooLarge,
+            SendRefusal::SessionEnded,
+        ] {
+            let outcome = SendOutcome::Refused {
+                reason,
+                step: None,
+                detail: String::new(),
+            };
+            let sent = OpsToClientMsg::Sent {
+                outcome: outcome.clone(),
+            };
+            let wait_sent = OpsToClientMsg::WaitSent { outcome };
+            assert_eq!(sent.requires().minor, 3, "{reason:?}");
+            assert_eq!(wait_sent.requires().minor, 3, "{reason:?}");
+        }
+    }
+
+    /// A query that names a session costs minor 3 whatever its source; one
+    /// that leaves it out reads the attached session on every peer.
+    #[test]
+    fn a_search_names_minor_three_only_when_it_names_a_session() {
+        use crate::messages::SearchOptions;
+
+        let query = |source, session| SearchToDaemonMsg::Query {
+            query: "needle".into(),
+            options: SearchOptions::default(),
+            source,
+            session,
+        };
+        assert_eq!(query(SearchSource::Scrollback, None).requires().minor, 0);
+        for source in [SearchSource::Scrollback, SearchSource::Visible] {
+            assert_eq!(
+                query(source, Some(7)).requires(),
+                Requires::new(3, "SearchQuery.session"),
+                "{source:?}"
+            );
+        }
+    }
+
+    /// Both region requests cost minor 3 only when they name a session.
+    #[test]
+    fn a_region_request_names_minor_three_only_when_it_names_a_session() {
+        use crate::messages::RegionSource;
+
+        let request = |session| RegionToDaemonMsg::Request {
+            source: RegionSource::Visible,
+            ansi: false,
+            session,
+        };
+        let rows = |session| RegionToDaemonMsg::Rows {
+            source: RegionSource::Visible,
+            ansi: false,
+            max_rows: None,
+            session,
+        };
+        assert_eq!(request(None).requires().minor, 0);
+        assert_eq!(rows(None).requires().minor, 0);
+        assert_eq!(
+            request(Some(7)).requires(),
+            Requires::new(3, "RegionRequest.session")
+        );
+        assert_eq!(
+            rows(Some(7)).requires(),
+            Requires::new(3, "RegionRows.session")
+        );
+    }
+
     /// The announcement pair costs minor 3 whichever way it is set, so a
     /// window never opts in on an older daemon and a daemon never ships
     /// output to an older window.
@@ -591,10 +666,10 @@ mod tests {
     }
 
     /// A field the schema marks gated reaches an older peer only through
-    /// a presence test here, so each one has exactly one, under the
-    /// requirement the schema states.
+    /// a presence test here, so the presence tables list each one exactly
+    /// once, under the requirement the schema states.
     #[test]
-    fn every_gated_field_of_the_schema_has_a_presence_test() {
+    fn the_presence_tables_list_exactly_the_gated_fields_of_the_schema() {
         let gated: Vec<Requires> = REGION_TO_DAEMON_FIELDS
             .iter()
             .map(|field| field.requires)
