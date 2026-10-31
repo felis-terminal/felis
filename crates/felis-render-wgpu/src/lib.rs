@@ -404,22 +404,30 @@ struct Parts {
 }
 
 #[cfg(test)]
-#[cfg(not(windows))]
 pub(crate) mod test_gpu {
-    use super::{Backends, Device, Instance, InstanceDescriptor, Queue, UploadMode, warmup};
+    use super::{Backends, Instance, InstanceDescriptor, PostStageSource};
+    #[cfg(not(windows))]
+    use super::{Device, Queue, UploadMode, warmup};
 
-    /// wgpu-core validates pipelines, bind groups and passes on the noop
-    /// backend too, so a mismatch fails here without a GPU.
-    pub(crate) fn noop_device() -> (Device, Queue, UploadMode) {
+    /// `limits` overrides what the noop adapter reports.
+    pub(crate) fn noop_instance(limits: Option<wgpu::Limits>) -> Instance {
         let mut desc = InstanceDescriptor {
             backends: Backends::NOOP,
             ..InstanceDescriptor::new_without_display_handle()
         };
         desc.backend_options.noop = wgpu::NoopBackendOptions {
             enable: true,
+            limits,
             ..wgpu::NoopBackendOptions::default()
         };
-        let instance = Instance::new(desc);
+        Instance::new(desc)
+    }
+
+    /// wgpu-core validates pipelines, bind groups and passes on the noop
+    /// backend too, so a mismatch fails here without a GPU.
+    #[cfg(not(windows))]
+    pub(crate) fn noop_device() -> (Device, Queue, UploadMode) {
+        let instance = noop_instance(None);
         warmup::block_on(async {
             let adapter = super::request_adapter(&instance, None)
                 .await
@@ -427,6 +435,14 @@ pub(crate) mod test_gpu {
             let (device, queue) = super::request_device(&adapter).await.expect("device");
             (device, queue, UploadMode::for_adapter(&adapter))
         })
+    }
+
+    pub(crate) fn stage_source(label: &str, wgsl: &str) -> PostStageSource {
+        PostStageSource {
+            label: label.to_owned(),
+            wgsl: wgsl.to_owned(),
+            params: Vec::new(),
+        }
     }
 }
 
@@ -1916,16 +1932,7 @@ mod tests {
     /// instead of `request_device` refusing the 8192 default.
     #[test]
     fn a_downlevel_adapter_gets_a_device_and_clamps_the_atlas() {
-        let mut desc = InstanceDescriptor {
-            backends: Backends::NOOP,
-            ..InstanceDescriptor::new_without_display_handle()
-        };
-        desc.backend_options.noop = wgpu::NoopBackendOptions {
-            enable: true,
-            limits: Some(wgpu::Limits::downlevel_defaults()),
-            ..wgpu::NoopBackendOptions::default()
-        };
-        let instance = Instance::new(desc);
+        let instance = test_gpu::noop_instance(Some(wgpu::Limits::downlevel_defaults()));
         warmup::block_on(async {
             let adapter = request_adapter(&instance, None)
                 .await
@@ -2194,20 +2201,7 @@ mod tests {
     }
 
     fn noop_instance() -> Instance {
-        noop_instance_with(None)
-    }
-
-    fn noop_instance_with(limits: Option<wgpu::Limits>) -> Instance {
-        let mut desc = InstanceDescriptor {
-            backends: Backends::NOOP,
-            ..InstanceDescriptor::new_without_display_handle()
-        };
-        desc.backend_options.noop = wgpu::NoopBackendOptions {
-            enable: true,
-            limits,
-            ..wgpu::NoopBackendOptions::default()
-        };
-        Instance::new(desc)
+        test_gpu::noop_instance(None)
     }
 
     fn offscreen_on(instance: &Instance, width: u32, height: u32, cfg: RendererConfig) -> Renderer {
@@ -2284,11 +2278,42 @@ mod tests {
     }
 
     fn trail_stage() -> PostStageSource {
-        PostStageSource {
-            label: "trail".to_owned(),
-            wgsl: TRAIL_SHADER_SOURCE.to_owned(),
-            params: Vec::new(),
-        }
+        test_gpu::stage_source("trail", TRAIL_SHADER_SOURCE)
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn set_cell_scale_resizes_the_cell_around_the_font_cell_and_back() {
+        let mut renderer = offscreen_on(&noop_instance(), 8, 8, RendererConfig::default());
+        let base = renderer.cell_metrics();
+        let scaled = renderer.set_cell_scale([2.0, 1.5]);
+        assert_eq!(scaled, base.with_cell_scale([2.0, 1.5]));
+        assert_eq!(renderer.cell_metrics(), scaled);
+        assert_eq!(renderer.set_cell_scale([1.0, 1.0]), base);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn start_post_animation_without_a_chain_reports_no_run() {
+        let mut renderer = offscreen_on(&noop_instance(), 8, 8, RendererConfig::default());
+        assert!(!renderer.start_post_animation(0, Instant::now(), Duration::from_millis(300)));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn only_a_focus_edge_restamps_the_focus_change_time() {
+        let mut renderer = offscreen_on(&noop_instance(), 8, 8, RendererConfig::default());
+        let stamp = |r: &Renderer| {
+            let mut clock = r.post_clock;
+            clock.tick(Instant::now()).focus_change_time_s
+        };
+        renderer.set_window_focused(true);
+        assert_eq!(stamp(&renderer), 0.0, "already focused: no edge");
+        renderer.set_window_focused(false);
+        let blurred = stamp(&renderer);
+        assert!(blurred > 0.0);
+        renderer.set_window_focused(false);
+        assert_eq!(stamp(&renderer), blurred, "still blurred: no edge");
     }
 
     /// 37 px rows are 148 bytes, padded to 256 for the copy: the
@@ -2324,7 +2349,7 @@ mod tests {
             max_buffer_size: 64 << 10,
             ..wgpu::Limits::default()
         };
-        let instance = noop_instance_with(Some(limits));
+        let instance = test_gpu::noop_instance(Some(limits));
         let mut renderer = offscreen_on(&instance, 37, 300, RendererConfig::default());
         render_blank(&mut renderer, 1, 2);
         let mut out = Vec::new();

@@ -1525,7 +1525,7 @@ mod tests {
             [client.other]
             anything = 1
         "##;
-        let (cfg, _diagnostics) = ConfigDocument::parse(text, None).unwrap().resolve("felis");
+        let (cfg, _diagnostics) = resolved(text);
         let json = serde_json::to_string(&cfg).unwrap();
         let back: EffectiveConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(back, cfg);
@@ -1545,7 +1545,7 @@ mod tests {
             [client.other.font]
             family = 7
         "#;
-        let (cfg, diagnostics) = ConfigDocument::parse(text, None).unwrap().resolve("felis");
+        let (cfg, diagnostics) = resolved(text);
         assert_eq!(cfg.font.size_px, Some(13.0));
         assert!(!diagnostics.has_errors());
         assert_eq!(diagnostics.unknown_keys(), Vec::<&str>::new());
@@ -1643,10 +1643,7 @@ mod tests {
     #[test]
     fn stages_past_the_cap_are_ignored_with_a_warning() {
         let entries = vec!["{ builtin = \"trail\" }"; MAX_POST_STAGES + 2].join(", ");
-        let (cfg, diagnostics) =
-            ConfigDocument::parse(&format!("[shader]\npost = [{entries}]\n"), None)
-                .unwrap()
-                .resolve("felis");
+        let (cfg, diagnostics) = resolved(&format!("[shader]\npost = [{entries}]\n"));
         assert_eq!(cfg.shader.post.len(), MAX_POST_STAGES);
         assert!(!diagnostics.has_errors(), "{diagnostics:?}");
         let warning = only_warning(&diagnostics);
@@ -1656,12 +1653,9 @@ mod tests {
 
     #[test]
     fn an_unknown_builtin_in_a_chain_skips_that_stage_only() {
-        let (cfg, diagnostics) = ConfigDocument::parse(
+        let (cfg, diagnostics) = resolved(
             "[shader]\npost = [{ file = \"/fx/a.wgsl\" }, { builtin = \"rain\" }, { builtin = \"trail\" }]\n",
-            None,
-        )
-        .unwrap()
-        .resolve("felis");
+        );
         assert_eq!(
             shader_choices(&cfg),
             [
@@ -1682,12 +1676,8 @@ mod tests {
 
     #[test]
     fn an_unknown_key_in_a_stage_warns_and_the_stage_still_loads() {
-        let (cfg, diagnostics) = ConfigDocument::parse(
-            "[shader]\npost = { builtin = \"trail\", strenght = 1 }\n",
-            None,
-        )
-        .unwrap()
-        .resolve("felis");
+        let (cfg, diagnostics) =
+            resolved("[shader]\npost = { builtin = \"trail\", strenght = 1 }\n");
         assert_eq!(cfg.shader.post.len(), 1);
         let warning = only_warning(&diagnostics);
         assert_eq!(warning.kind, DiagnosticKind::UnknownKey);
@@ -1711,26 +1701,13 @@ mod tests {
 
     #[test]
     fn a_non_scalar_param_skips_the_stage_with_a_warning() {
-        let (cfg, diagnostics) = ConfigDocument::parse(
+        let (cfg, diagnostics) = resolved(
             "[shader]\npost = [{ builtin = \"trail\", params = { tint = \"red\" } }, { builtin = \"trail\" }]\n",
-            None,
-        )
-        .unwrap()
-        .resolve("felis");
+        );
         assert_eq!(cfg.shader.post.len(), 1);
         let warning = only_warning(&diagnostics);
         assert_eq!(warning.key.as_deref(), Some("shader.post[0].params.tint"));
         assert!(warning.message.contains("string"), "{warning:?}");
-    }
-
-    #[test]
-    fn params_that_are_not_a_table_are_a_type_error() {
-        assert!(
-            toml::from_str::<EffectiveConfig>(
-                "[shader]\npost = { builtin = \"trail\", params = 3 }\n"
-            )
-            .is_err()
-        );
     }
 
     #[test]
@@ -1775,12 +1752,9 @@ mod tests {
             "{ on = [\"bell\"], duration_ms = 300, loop = true }",
             "\"bell\"",
         ] {
-            let (cfg, diagnostics) = ConfigDocument::parse(
-                &format!("[shader]\npost = {{ builtin = \"trail\", animation = {animation} }}\n"),
-                None,
-            )
-            .unwrap()
-            .resolve("felis");
+            let (cfg, diagnostics) = resolved(&format!(
+                "[shader]\npost = {{ builtin = \"trail\", animation = {animation} }}\n"
+            ));
             assert_eq!(cfg.shader.post.len(), 1, "{animation}");
             assert_eq!(cfg.shader.post[0].animation, None, "{animation}");
             let warning = only_warning(&diagnostics);
@@ -1809,15 +1783,10 @@ mod tests {
 
     #[test]
     fn a_shader_event_binding_compiles_to_its_action() {
-        let (cfg, diagnostics) = ConfigDocument::parse(
-            concat!(
-                "[shader]\npost = { builtin = \"trail\", animation = { on = [\"user:glow\"], duration_ms = 300 } }\n",
-                "[keymap]\n\"ctrl+shift+g\" = { kind = \"shader_event\", name = \"glow\" }\n",
-            ),
-            None,
-        )
-        .unwrap()
-        .resolve("felis");
+        let (cfg, diagnostics) = resolved(concat!(
+            "[shader]\npost = { builtin = \"trail\", animation = { on = [\"user:glow\"], duration_ms = 300 } }\n",
+            "[keymap]\n\"ctrl+shift+g\" = { kind = \"shader_event\", name = \"glow\" }\n",
+        ));
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
         let compiled = cfg.keymap.compile(None);
         assert_eq!(
@@ -1830,12 +1799,9 @@ mod tests {
 
     #[test]
     fn a_shader_event_binding_with_a_malformed_name_is_dropped() {
-        let (cfg, diagnostics) = ConfigDocument::parse(
+        let (cfg, diagnostics) = resolved(
             "[keymap]\n\"ctrl+shift+g\" = { kind = \"shader_event\", name = \"two words\" }\n",
-            None,
-        )
-        .unwrap()
-        .resolve("felis");
+        );
         assert_eq!(
             cfg.keymap.compile(None),
             Vec::<(Chord, BindingValue)>::new()
@@ -1846,52 +1812,34 @@ mod tests {
 
     #[test]
     fn a_shader_event_no_stage_listens_for_warns() {
-        let (_, diagnostics) = ConfigDocument::parse(
-            concat!(
-                "[shader]\npost = { builtin = \"trail\", animation = { on = [\"user:glow\"], duration_ms = 300 } }\n",
-                "[keymap]\n\"ctrl+shift+g\" = { kind = \"shader_event\", name = \"gloww\" }\n",
-            ),
-            None,
-        )
-        .unwrap()
-        .resolve("felis");
+        let (_, diagnostics) = resolved(concat!(
+            "[shader]\npost = { builtin = \"trail\", animation = { on = [\"user:glow\"], duration_ms = 300 } }\n",
+            "[keymap]\n\"ctrl+shift+g\" = { kind = \"shader_event\", name = \"gloww\" }\n",
+        ));
         let warning = only_warning(&diagnostics);
         assert_eq!(warning.key.as_deref(), Some("keymap.\"ctrl+shift+g\""));
         assert!(warning.message.contains("user:gloww"), "{warning:?}");
     }
 
     #[test]
-    fn a_stage_naming_both_selectors_or_neither_is_a_type_error() {
+    fn a_shader_post_value_of_the_wrong_shape_is_a_type_error() {
         for text in [
             "[shader]\npost = { builtin = \"trail\", file = \"a.wgsl\" }\n",
             "[shader]\npost = {}\n",
             "[shader]\npost = [\"trail\"]\n",
+            "[shader]\npost = \"trail\"\n",
+            "[shader]\npost = \"glow.wgsl\"\n",
+            "[shader]\npost = { file = 3 }\n",
+            "[shader]\npost = { builtin = 3 }\n",
+            "[shader]\npost = { builtin = \"trail\", params = 3 }\n",
         ] {
             assert!(toml::from_str::<EffectiveConfig>(text).is_err(), "{text}");
         }
     }
 
     #[test]
-    fn a_bare_string_is_not_a_shader_value() {
-        assert!(toml::from_str::<EffectiveConfig>("[shader]\npost = \"trail\"\n").is_err());
-        assert!(toml::from_str::<EffectiveConfig>("[shader]\npost = \"glow.wgsl\"\n").is_err());
-    }
-
-    #[test]
-    fn a_malformed_shader_selector_payload_is_still_a_type_error() {
-        assert!(
-            toml::from_str::<EffectiveConfig>("[shader]\npost = { file = 3 }\n").is_err(),
-            "a known selector with the wrong payload shape is malformed, not futuristic",
-        );
-        assert!(toml::from_str::<EffectiveConfig>("[shader]\npost = { builtin = 3 }\n").is_err());
-    }
-
-    #[test]
     fn an_unknown_builtin_degrades_to_no_post_pass_with_a_warning() {
-        let (cfg, diagnostics) =
-            ConfigDocument::parse("[shader]\npost = { builtin = \"trial\" }\n", None)
-                .unwrap()
-                .resolve("felis");
+        let (cfg, diagnostics) = resolved("[shader]\npost = { builtin = \"trial\" }\n");
         assert_eq!(cfg.shader.post, Vec::<PostStageConfig>::new());
         assert!(!diagnostics.has_errors(), "{diagnostics:?}");
         let warning = only_warning(&diagnostics);
@@ -1902,10 +1850,7 @@ mod tests {
 
     #[test]
     fn an_unknown_shader_selector_degrades_to_no_post_pass_with_a_warning() {
-        let (cfg, diagnostics) =
-            ConfigDocument::parse("[shader]\npost = { procedural = \"rain\" }\n", None)
-                .unwrap()
-                .resolve("felis");
+        let (cfg, diagnostics) = resolved("[shader]\npost = { procedural = \"rain\" }\n");
         assert_eq!(cfg.shader.post, Vec::<PostStageConfig>::new());
         assert!(!diagnostics.has_errors(), "{diagnostics:?}");
         let warning = only_warning(&diagnostics);
@@ -1917,7 +1862,7 @@ mod tests {
     /// survives a token this build has never heard of.
     #[test]
     fn an_unknown_enum_token_keeps_every_other_setting() {
-        let (cfg, diagnostics) = ConfigDocument::parse(
+        let (cfg, diagnostics) = resolved(
             r#"
             [font]
             family = "JetBrains Mono"
@@ -1930,10 +1875,7 @@ mod tests {
             [clipboard]
             osc_52 = "system"
         "#,
-            None,
-        )
-        .unwrap()
-        .resolve("felis");
+        );
         assert_eq!(cfg.font.family.as_deref(), Some("JetBrains Mono"));
         assert_eq!(cfg.font.size_px, Some(13.0));
         assert_eq!(cfg.cursor.blink_interval_ms, 120);
@@ -1959,7 +1901,7 @@ mod tests {
             ),
             ("[shader]\npost = { chain = \"a\" }\n", "shader.post"),
         ] {
-            let (cfg, diagnostics) = ConfigDocument::parse(text, None).unwrap().resolve("felis");
+            let (cfg, diagnostics) = resolved(text);
             assert_eq!(cfg, EffectiveConfig::default(), "{key}");
             assert!(!diagnostics.has_errors(), "{key}: {diagnostics:?}");
             let warning = only_warning(&diagnostics);
@@ -1970,12 +1912,9 @@ mod tests {
 
     #[test]
     fn an_unknown_enum_token_in_the_overlay_reports_the_overlay_path() {
-        let (cfg, diagnostics) = ConfigDocument::parse(
+        let (cfg, diagnostics) = resolved(
             "[window]\nbackdrop = \"blur\"\n\n[client.felis.window]\nbackdrop = \"vibrancy\"\n",
-            None,
-        )
-        .unwrap()
-        .resolve("felis");
+        );
         assert_eq!(cfg.window.backdrop, Backdrop::None);
         assert!(!diagnostics.has_errors(), "{diagnostics:?}");
         assert_eq!(
@@ -1986,14 +1925,15 @@ mod tests {
 
     #[test]
     fn a_known_token_in_the_overlay_leaves_no_warning() {
-        let (cfg, diagnostics) = ConfigDocument::parse(
+        let (cfg, diagnostics) = resolved(
             "[window]\nbackdrop = \"blur\"\n\n[client.felis.window]\nbackdrop = \"mica\"\n",
-            None,
-        )
-        .unwrap()
-        .resolve("felis");
+        );
         assert_eq!(cfg.window.backdrop, Backdrop::Mica);
         assert_eq!(diagnostics.iter().count(), 0, "{diagnostics:?}");
+    }
+
+    fn resolved(text: &str) -> (EffectiveConfig, ConfigDiagnostics) {
+        ConfigDocument::parse(text, None).unwrap().resolve("felis")
     }
 
     fn only_warning(diagnostics: &ConfigDiagnostics) -> Diagnostic {
@@ -2616,7 +2556,7 @@ mod tests {
 
     #[test]
     fn font_weights_and_axes_parse_per_style() {
-        let (cfg, diagnostics) = ConfigDocument::parse(
+        let (cfg, diagnostics) = resolved(
             r"
             [font]
             weight = 500
@@ -2625,10 +2565,7 @@ mod tests {
             weight = 800
             axes = { GRAD = 50 }
         ",
-            None,
-        )
-        .unwrap()
-        .resolve("felis");
+        );
         assert_eq!(diagnostics.iter().count(), 0, "{diagnostics:?}");
         assert_eq!(cfg.font.weight, Some(500));
         assert_eq!(
@@ -2689,7 +2626,7 @@ mod tests {
                 "client.felis.font.bold.axes.wght",
             ),
         ] {
-            let (cfg, diagnostics) = ConfigDocument::parse(text, None).unwrap().resolve("felis");
+            let (cfg, diagnostics) = resolved(text);
             assert!(!diagnostics.has_errors(), "{key}: {diagnostics:?}");
             let warning = only_warning(&diagnostics);
             assert_eq!(warning.kind, DiagnosticKind::Value, "{key}");
@@ -2703,17 +2640,13 @@ mod tests {
 
     #[test]
     fn a_refused_axis_entry_keeps_its_neighbors() {
-        let (cfg, _) = ConfigDocument::parse("[font]\naxes = { wght = 700, wdth = 90 }\n", None)
-            .unwrap()
-            .resolve("felis");
+        let (cfg, _) = resolved("[font]\naxes = { wght = 700, wdth = 90 }\n");
         assert_eq!(cfg.font.axes, BTreeMap::from([("wdth".to_owned(), 90.0)]));
     }
 
     #[test]
     fn an_axes_wght_diagnostic_names_the_weight_key_of_its_style() {
-        let (_, diagnostics) = ConfigDocument::parse("[font.bold]\naxes = { wght = 800 }\n", None)
-            .unwrap()
-            .resolve("felis");
+        let (_, diagnostics) = resolved("[font.bold]\naxes = { wght = 800 }\n");
         assert!(
             only_warning(&diagnostics)
                 .message
@@ -2728,12 +2661,9 @@ mod tests {
             "{ family = \"X\", weight = 500 }",
             "{ family = \"X\", axes = { wdth = 90 } }",
         ] {
-            let (cfg, diagnostics) = ConfigDocument::parse(
-                &format!("[font]\nfallback = [{entry}, {{ family = \"Y\" }}]\n"),
-                None,
-            )
-            .unwrap()
-            .resolve("felis");
+            let (cfg, diagnostics) = resolved(&format!(
+                "[font]\nfallback = [{entry}, {{ family = \"Y\" }}]\n"
+            ));
             assert_eq!(fallback_families(&cfg), ["Y"], "{entry}");
             assert_eq!(
                 only_warning(&diagnostics).key.as_deref(),
@@ -2789,8 +2719,7 @@ mod tests {
 
     #[test]
     fn resolve_reports_an_out_of_range_minimum_contrast_as_clamped() {
-        let document = ConfigDocument::parse("[theme]\nminimum_contrast = 30\n", None).unwrap();
-        let (cfg, diagnostics) = document.resolve("felis");
+        let (cfg, diagnostics) = resolved("[theme]\nminimum_contrast = 30\n");
         let clamped = cfg.theme.clamped_minimum_contrast();
         assert_eq!(clamped, 21.0);
         let warning = diagnostics.warnings().next().expect("one warning");
@@ -2883,9 +2812,7 @@ mod tests {
 
     #[test]
     fn cursor_blink_degrades_an_unknown_mode_with_a_warning() {
-        let (cfg, diagnostics) = ConfigDocument::parse("[cursor]\nblink = \"alway\"\n", None)
-            .unwrap()
-            .resolve("felis");
+        let (cfg, diagnostics) = resolved("[cursor]\nblink = \"alway\"\n");
         assert_eq!(cfg.cursor.blink, CursorBlinkMode::Program);
         assert!(!diagnostics.has_errors(), "{diagnostics:?}");
         let warning = only_warning(&diagnostics);
@@ -2916,8 +2843,7 @@ mod tests {
 
     #[test]
     fn resolve_warns_on_a_shell_command_naming_no_program() {
-        let document = ConfigDocument::parse("[shell]\ncommand = [\"\", \"-l\"]\n", None).unwrap();
-        let (cfg, diagnostics) = document.resolve("felis");
+        let (cfg, diagnostics) = resolved("[shell]\ncommand = [\"\", \"-l\"]\n");
         assert_eq!(cfg.shell.argv(), None);
         let warning = only_warning(&diagnostics);
         assert_eq!(warning.kind, DiagnosticKind::Value);
@@ -2956,7 +2882,7 @@ mod tests {
                     [font]\n\
                     size_px = \"big\"\n\
                     fallback = [12]\n";
-        let (_cfg, diagnostics) = ConfigDocument::parse(text, None).unwrap().resolve("felis");
+        let (_cfg, diagnostics) = resolved(text);
         assert!(diagnostics.has_errors(), "the type error is still an error");
         assert_eq!(diagnostics.unknown_keys(), ["fnt"]);
         assert!(
@@ -3156,8 +3082,7 @@ mod tests {
 
     #[test]
     fn resolve_reports_an_unknown_key_as_a_warning() {
-        let document = ConfigDocument::parse("[window]\nprefix = \"[work]\"\n", None).unwrap();
-        let (cfg, diagnostics) = document.resolve("felis");
+        let (cfg, diagnostics) = resolved("[window]\nprefix = \"[work]\"\n");
         assert!(!diagnostics.has_errors(), "a typo must not fail the load");
         let warning = diagnostics.warnings().next().expect("one warning");
         assert_eq!(warning.kind, DiagnosticKind::UnknownKey);
@@ -3167,8 +3092,7 @@ mod tests {
 
     #[test]
     fn resolve_reports_a_type_error_as_an_error_and_falls_back() {
-        let document = ConfigDocument::parse("[window]\ndecorations = \"yes\"\n", None).unwrap();
-        let (cfg, diagnostics) = document.resolve("felis");
+        let (cfg, diagnostics) = resolved("[window]\ndecorations = \"yes\"\n");
         assert!(diagnostics.has_errors());
         assert_eq!(
             diagnostics.errors().next().map(|d| d.kind),
@@ -3179,10 +3103,7 @@ mod tests {
 
     #[test]
     fn resolve_reports_a_malformed_keymap_entry_at_its_chord() {
-        let document =
-            ConfigDocument::parse("[keymap]\n\"ctrl+shift+q\" = { action = \"nope\" }\n", None)
-                .unwrap();
-        let (_, diagnostics) = document.resolve("felis");
+        let (_, diagnostics) = resolved("[keymap]\n\"ctrl+shift+q\" = { action = \"nope\" }\n");
         let warning = diagnostics.warnings().next().expect("one warning");
         assert_eq!(warning.kind, DiagnosticKind::Value);
         assert_eq!(warning.key.as_deref(), Some(r#"keymap."ctrl+shift+q""#));
@@ -3190,9 +3111,7 @@ mod tests {
 
     #[test]
     fn resolve_reports_a_malformed_fallback_entry_at_its_index() {
-        let document =
-            ConfigDocument::parse("[font]\nfallback = [{ familly = \"Noto\" }]\n", None).unwrap();
-        let (cfg, diagnostics) = document.resolve("felis");
+        let (cfg, diagnostics) = resolved("[font]\nfallback = [{ familly = \"Noto\" }]\n");
         assert_eq!(cfg.font.fallback, Vec::<FontStyleConfig>::new());
         let warning = diagnostics.warnings().next().expect("one warning");
         assert_eq!(warning.kind, DiagnosticKind::Value);
@@ -3201,12 +3120,8 @@ mod tests {
 
     #[test]
     fn resolve_reports_an_overlay_value_at_the_overlay_path() {
-        let document = ConfigDocument::parse(
-            "[client.felis.font]\nsize_px = 200.0\nfallback = [{ familly = \"Noto\" }]\n",
-            None,
-        )
-        .unwrap();
-        let (_, diagnostics) = document.resolve("felis");
+        let (_, diagnostics) =
+            resolved("[client.felis.font]\nsize_px = 200.0\nfallback = [{ familly = \"Noto\" }]\n");
         let keys: Vec<_> = diagnostics
             .warnings()
             .filter_map(|d| d.key.as_deref())
@@ -3219,8 +3134,7 @@ mod tests {
 
     #[test]
     fn resolve_reports_an_out_of_range_font_size_as_clamped() {
-        let document = ConfigDocument::parse("[font]\nsize_px = 200.0\n", None).unwrap();
-        let (cfg, diagnostics) = document.resolve("felis");
+        let (cfg, diagnostics) = resolved("[font]\nsize_px = 200.0\n");
         assert_eq!(
             cfg.font.sanitized_font_size_logical_px(),
             Some(MAX_FONT_SIZE_LOGICAL_PX),
@@ -3233,20 +3147,16 @@ mod tests {
     #[test]
     fn cell_scale_defaults_to_one_and_reads_each_axis() {
         assert_eq!(EffectiveConfig::default().font.cell_scale(), [1.0, 1.0]);
-        let document = ConfigDocument::parse("[font]\ncell_height_scale = 1.2\n", None).unwrap();
-        let (cfg, diagnostics) = document.resolve("felis");
+        let (cfg, diagnostics) = resolved("[font]\ncell_height_scale = 1.2\n");
         assert_eq!(cfg.font.cell_scale(), [1.0, 1.2]);
         assert_eq!(diagnostics.warnings().count(), 0);
     }
 
     #[test]
     fn an_out_of_range_cell_scale_clamps_with_a_warning_at_its_own_key() {
-        let document = ConfigDocument::parse(
+        let (cfg, diagnostics) = resolved(
             "[font]\ncell_width_scale = 0.1\n[client.felis.font]\ncell_height_scale = 9\n",
-            None,
-        )
-        .unwrap();
-        let (cfg, diagnostics) = document.resolve("felis");
+        );
         assert_eq!(cfg.font.cell_scale(), [MIN_CELL_SCALE, MAX_CELL_SCALE]);
         let keys: Vec<_> = diagnostics
             .warnings()
@@ -3263,10 +3173,10 @@ mod tests {
 
     #[test]
     fn a_nan_cell_scale_falls_back_to_one_with_a_warning() {
-        let document = ConfigDocument::parse("[font]\ncell_width_scale = nan\n", None).unwrap();
-        let (cfg, diagnostics) = document.resolve("felis");
+        let (cfg, diagnostics) = resolved("[font]\ncell_width_scale = nan\n");
         assert_eq!(cfg.font.cell_scale(), [1.0, 1.0]);
-        assert_eq!(diagnostics.warnings().count(), 1);
+        let warning = only_warning(&diagnostics);
+        assert_eq!(warning.key.as_deref(), Some("font.cell_width_scale"));
     }
 
     #[test]
@@ -3283,8 +3193,7 @@ mod tests {
 
     #[test]
     fn resolve_reports_an_out_of_range_window_opacity_as_clamped() {
-        let document = ConfigDocument::parse("[window]\nopacity = 2.5\n", None).unwrap();
-        let (cfg, diagnostics) = document.resolve("felis");
+        let (cfg, diagnostics) = resolved("[window]\nopacity = 2.5\n");
         let clamped = cfg.window.clamped_opacity();
         assert_eq!(clamped, 1.0);
         let warning = diagnostics.warnings().next().expect("one warning");
@@ -3299,8 +3208,7 @@ mod tests {
 
     #[test]
     fn resolve_reports_a_negative_scroll_multiplier_as_clamped() {
-        let document = ConfigDocument::parse("[mouse]\nscroll_multiplier = -1\n", None).unwrap();
-        let (cfg, diagnostics) = document.resolve("felis");
+        let (cfg, diagnostics) = resolved("[mouse]\nscroll_multiplier = -1\n");
         let clamped = cfg.mouse.clamped_scroll_multiplier();
         assert!((clamped - 0.1).abs() < f64::EPSILON);
         let warning = diagnostics.warnings().next().expect("one warning");
@@ -3315,10 +3223,7 @@ mod tests {
 
     #[test]
     fn a_scroll_multiplier_one_ulp_below_the_floor_is_reported_as_clamped() {
-        let document =
-            ConfigDocument::parse("[mouse]\nscroll_multiplier = 0.09999999999999999\n", None)
-                .unwrap();
-        let (cfg, diagnostics) = document.resolve("felis");
+        let (cfg, diagnostics) = resolved("[mouse]\nscroll_multiplier = 0.09999999999999999\n");
         let clamped = cfg.mouse.clamped_scroll_multiplier();
         let warning = diagnostics.warnings().next().expect("one warning");
         assert_eq!(warning.kind, DiagnosticKind::Value);
@@ -3332,8 +3237,7 @@ mod tests {
 
     #[test]
     fn a_non_finite_scroll_multiplier_falls_back_to_the_default_and_warns() {
-        let document = ConfigDocument::parse("[mouse]\nscroll_multiplier = nan\n", None).unwrap();
-        let (cfg, diagnostics) = document.resolve("felis");
+        let (cfg, diagnostics) = resolved("[mouse]\nscroll_multiplier = nan\n");
         assert!(
             (cfg.mouse.clamped_scroll_multiplier() - DEFAULT_SCROLL_MULTIPLIER).abs()
                 < f64::EPSILON,
@@ -3351,12 +3255,8 @@ mod tests {
 
     #[test]
     fn in_band_opacity_and_scroll_multiplier_produce_no_diagnostic() {
-        let document = ConfigDocument::parse(
-            "[window]\nopacity = 0.85\n\n[mouse]\nscroll_multiplier = 5\n",
-            None,
-        )
-        .unwrap();
-        let (_, diagnostics) = document.resolve("felis");
+        let (_, diagnostics) =
+            resolved("[window]\nopacity = 0.85\n\n[mouse]\nscroll_multiplier = 5\n");
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
     }
 
@@ -3647,17 +3547,14 @@ mod tests {
 
     #[test]
     fn client_overlay_non_table_is_reported_and_skipped() {
-        let (cfg, diagnostics) = ConfigDocument::parse(
+        let (cfg, diagnostics) = resolved(
             r#"
             client = { felis = "oops" }
 
             [font]
             size_px = 14.0
         "#,
-            None,
-        )
-        .unwrap()
-        .resolve("felis");
+        );
         assert_eq!(diagnostics.unknown_keys(), Vec::<&str>::new());
         let reported: Vec<_> = diagnostics
             .warnings()
@@ -3670,16 +3567,13 @@ mod tests {
 
     #[test]
     fn client_overlay_nested_client_is_reported_and_stripped() {
-        let (cfg, diagnostics) = ConfigDocument::parse(
+        let (cfg, diagnostics) = resolved(
             r"
             [client.felis]
             font = { size_px = 16.0 }
             client = { felis = { font = { size_px = 99.0 } } }
         ",
-            None,
-        )
-        .unwrap()
-        .resolve("felis");
+        );
         assert_eq!(diagnostics.unknown_keys(), Vec::<&str>::new());
         let reported: Vec<_> = diagnostics
             .warnings()

@@ -405,7 +405,7 @@ mod tests {
 
         use super::super::*;
         use crate::post::{MouseState, PostClock, PostFrame, TRAIL_SHADER_SOURCE, TrailState};
-        use crate::test_gpu::noop_device;
+        use crate::test_gpu::{noop_device, stage_source as source};
 
         const FORMAT: TextureFormat = TextureFormat::Rgba8UnormSrgb;
 
@@ -416,21 +416,23 @@ mod tests {
                 return textureSample(backbuffer, backbuffer_sampler, uv);\n\
             }";
 
-        fn source(label: &str, wgsl: &str) -> PostStageSource {
-            PostStageSource {
-                label: label.to_owned(),
-                wgsl: wgsl.to_owned(),
-                params: Vec::new(),
-            }
+        fn load_every_stage(
+            device: &Device,
+            mode: UploadMode,
+            sources: &[PostStageSource],
+        ) -> PostChain {
+            PostChain::new(device, FORMAT, mode, (16, 8), sources, &mut |r| {
+                panic!("stage {} refused: {}", r.source_index, r.error)
+            })
+            .expect("every stage loads")
         }
 
-        /// Encodes and submits one frame inside a validation scope; `Some` is
-        /// the device's complaint.
-        fn encode_one_frame(
+        /// Encodes and submits one frame inside a validation scope.
+        fn assert_the_device_accepts_a_frame(
             device: &Device,
             queue: &Queue,
             chain: &mut PostChain,
-        ) -> Option<wgpu::Error> {
+        ) {
             let theme = ResolvedTheme::new(&Theme::default());
             let (_surface, surface_view) = create_target(device, FORMAT, 16, 8);
             let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
@@ -458,7 +460,8 @@ mod tests {
             );
             let index = queue.submit([encoder.finish()]);
             chain.submitted(&index);
-            crate::warmup::block_on(scope.pop())
+            let error = crate::warmup::block_on(scope.pop());
+            assert_eq!(error.map(|e| e.to_string()), None);
         }
 
         #[test]
@@ -469,19 +472,10 @@ mod tests {
                 source("a", PASSTHROUGH),
                 source("b", PASSTHROUGH),
             ];
-            let mut chain = PostChain::new(&device, FORMAT, mode, (16, 8), &sources, &mut |r| {
-                panic!("stage {} refused: {}", r.source_index, r.error)
-            })
-            .expect("every stage loads");
-            assert_eq!(
-                encode_one_frame(&device, &queue, &mut chain).map(|e| e.to_string()),
-                None
-            );
+            let mut chain = load_every_stage(&device, mode, &sources);
+            assert_the_device_accepts_a_frame(&device, &queue, &mut chain);
             chain.resize(&device, 32, 4);
-            assert_eq!(
-                encode_one_frame(&device, &queue, &mut chain).map(|e| e.to_string()),
-                None
-            );
+            assert_the_device_accepts_a_frame(&device, &queue, &mut chain);
         }
 
         const HISTORY_BLEND: &str = "\
@@ -502,30 +496,20 @@ mod tests {
                 source("trail", TRAIL_SHADER_SOURCE),
                 source("motion blur", HISTORY_BLEND),
             ];
-            let mut chain = PostChain::new(&device, FORMAT, mode, (16, 8), &sources, &mut |r| {
-                panic!("stage {} refused: {}", r.source_index, r.error)
-            })
-            .expect("every stage loads");
+            let mut chain = load_every_stage(&device, mode, &sources);
             assert!(chain.blit.is_some());
             for _ in 0..2 {
-                assert_eq!(
-                    encode_one_frame(&device, &queue, &mut chain).map(|e| e.to_string()),
-                    None
-                );
+                assert_the_device_accepts_a_frame(&device, &queue, &mut chain);
             }
             chain.resize(&device, 32, 4);
-            assert_eq!(
-                encode_one_frame(&device, &queue, &mut chain).map(|e| e.to_string()),
-                None
-            );
+            assert_the_device_accepts_a_frame(&device, &queue, &mut chain);
         }
 
         #[test]
         fn a_chain_without_history_allocates_no_history_texture_or_blit() {
             let (device, _queue, mode) = noop_device();
             let sources = [source("a", PASSTHROUGH), source("b", PASSTHROUGH)];
-            let chain = PostChain::new(&device, FORMAT, mode, (16, 8), &sources, &mut |_| {})
-                .expect("loads");
+            let chain = load_every_stage(&device, mode, &sources);
             assert!(chain.history.iter().all(Option::is_none));
             assert!(chain.blit.is_none());
         }
@@ -594,18 +578,14 @@ mod tests {
             .expect("two stages load");
             assert_eq!(refused, [1, 2]);
             assert_eq!(chain.stages.len(), 2);
-            assert_eq!(
-                encode_one_frame(&device, &queue, &mut chain).map(|e| e.to_string()),
-                None
-            );
+            assert_the_device_accepts_a_frame(&device, &queue, &mut chain);
         }
 
         #[test]
         fn stopping_a_stage_drops_only_its_run() {
             let (device, _queue, mode) = noop_device();
             let sources = [source("a", PASSTHROUGH), source("b", PASSTHROUGH)];
-            let mut chain = PostChain::new(&device, FORMAT, mode, (16, 8), &sources, &mut |_| {})
-                .expect("loads");
+            let mut chain = load_every_stage(&device, mode, &sources);
             let run = AnimationRun {
                 start: Instant::now(),
                 duration: std::time::Duration::from_millis(300),
