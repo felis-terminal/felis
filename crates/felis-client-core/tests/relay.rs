@@ -34,10 +34,16 @@ fn private_dir() -> TempDir {
     tmp
 }
 
+/// Readiness is an accepted connection, not an existing path: `bind`
+/// publishes the inode before `listen`.
 async fn await_socket(path: &Path) {
     let deadline = Instant::now() + Duration::from_secs(5);
-    while !path.exists() {
-        assert!(Instant::now() < deadline, "{} never bound", path.display());
+    while UnixStream::connect(path).await.is_err() {
+        assert!(
+            Instant::now() < deadline,
+            "{} never accepted a connection",
+            path.display()
+        );
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
 }
@@ -254,6 +260,79 @@ async fn requests_and_streams_answer_through_the_relay() {
     relay.request(Request::Kill { session }).await.unwrap();
     let gone = relay.request(Request::Info { session }).await.unwrap_err();
     assert_eq!(gone.kind, ErrorKind::NoMatch);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_canceled_search_ends_counting_only_the_items_it_yielded() {
+    let tmp = private_dir();
+    let relay = relay_on(&daemon(&tmp).await, Theme::default()).await;
+    let session = create(
+        &relay,
+        "printf 'hit\\nhit\\nhit\\nsearch-ready\\n'; exec sleep 600",
+    )
+    .await;
+    until_screen_contains(&relay, session, "search-ready").await;
+
+    let mut search = relay
+        .open(Open::Search {
+            session,
+            query: "hit".to_owned(),
+            regex: false,
+            case_insensitive: false,
+            source: SearchSourceJson::Scrollback,
+        })
+        .await
+        .unwrap();
+    let first = timeout(PATIENCE, search.next()).await.unwrap();
+    assert!(
+        matches!(first, StreamMessage::Item(Item::Match(_))),
+        "{first:?}"
+    );
+    search.cancel();
+
+    let end = StreamMessage::End {
+        count: 1,
+        exit_code: None,
+    };
+    assert_eq!(search.next().await, end);
+    assert_eq!(search.next().await, end);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_command_output_capture_ends_with_the_commands_exit_code() {
+    let tmp = private_dir();
+    let relay = relay_on(&daemon(&tmp).await, Theme::default()).await;
+    let session = create(
+        &relay,
+        "printf '\\033]133;C\\007cmd-out\\r\\n\\033]133;D;3\\007capture-ready\\r\\n'; \
+         exec sleep 600",
+    )
+    .await;
+    until_screen_contains(&relay, session, "capture-ready").await;
+
+    let mut capture = relay
+        .open(Open::Capture {
+            session,
+            source: RegionSourceJson::CommandOutput,
+            ansi: false,
+            max_rows: None,
+        })
+        .await
+        .unwrap();
+    let seen = drain(&mut capture).await;
+    let texts = rows(&seen);
+    assert!(texts.iter().any(|row| row.contains("cmd-out")), "{seen:?}");
+    assert!(
+        !texts.iter().any(|row| row.contains("capture-ready")),
+        "{seen:?}"
+    );
+    assert_eq!(
+        seen.last(),
+        Some(&StreamMessage::End {
+            count: texts.len() as u64,
+            exit_code: Some(3),
+        })
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -582,21 +661,27 @@ async fn a_lost_daemon_ends_an_attach_after_what_it_already_sent() {
         })
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    let carries_the_row = |message: &StreamMessage| {
+        matches!(
+            message,
+            StreamMessage::Item(item) if row_texts(item).iter().any(|row| row.contains("before-the-cut"))
+        )
+    };
+    let mut seen = Vec::new();
+    while !seen.iter().any(carries_the_row) {
+        let message = timeout(PATIENCE, attach.next())
+            .await
+            .expect("the row never reached the attach");
+        assert!(!message.is_terminal(), "{message:?}");
+        seen.push(message);
+    }
     proxy.cut();
 
-    let seen = drain(&mut attach).await;
+    seen.extend(drain(&mut attach).await);
     assert!(matches!(
         seen.first(),
         Some(StreamMessage::Item(Item::Attached { .. }))
     ));
-    assert!(
-        seen.iter().any(|message| matches!(
-            message,
-            StreamMessage::Item(item) if row_texts(item).iter().any(|row| row.contains("before-the-cut"))
-        )),
-        "the rows sent before the loss were not delivered: {seen:?}"
-    );
     let terminal = seen.last().unwrap().clone();
     assert!(
         matches!(&terminal, StreamMessage::Error(e) if e.kind == ErrorKind::DaemonLost),

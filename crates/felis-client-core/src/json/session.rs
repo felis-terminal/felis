@@ -242,6 +242,7 @@ pub struct TagResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::session_info;
 
     fn running() -> SessionObject {
         SessionObject {
@@ -356,31 +357,6 @@ mod tests {
         }
     }
 
-    fn info(id: u128) -> SessionInfo {
-        SessionInfo {
-            id,
-            dims: felis_protocol::messages::GridDims {
-                rows: 24,
-                cols: 80,
-                pixel_w: 0,
-                pixel_h: 0,
-            },
-            title: None,
-            cwd: None,
-            spawn_cwd: None,
-            terminal_progress: None,
-            idle_seconds: None,
-            tags: Vec::new(),
-            last_notification: None,
-            foreground: None,
-            exited: false,
-            last_exit_code: None,
-            attachments: Vec::new(),
-            sequence: std::num::NonZeroU64::MIN,
-            program_status: Vec::new(),
-        }
-    }
-
     /// The wire carries an instant; the JSON row publishes an RFC 3339
     /// string, and an attached session carries no `idle_seconds` key.
     #[test]
@@ -391,7 +367,7 @@ mod tests {
                 attached_at: std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_788_250_500),
                 input_owner: true,
             }],
-            ..info(0xCAFE)
+            ..session_info(0xCAFE)
         };
         let body = serde_json::to_value(SessionObject::in_roster(
             &session,

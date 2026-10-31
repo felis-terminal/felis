@@ -49,7 +49,7 @@ pub mod shadow;
 pub mod spawn;
 #[cfg(feature = "native")]
 pub mod stream;
-#[cfg(all(test, unix, feature = "native"))]
+#[cfg(test)]
 mod test_support;
 pub mod viewport;
 

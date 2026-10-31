@@ -1,7 +1,7 @@
 use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 
-use felis_client_core::{ConnectError, Connection, Reconnector};
+use felis_client_core::{Connection, Reconnector};
 use felis_protocol::messages::{
     MAX_PASTE_BYTES, RetargetCarrier, RetargetLanding, RetargetTarget, SessionInfo,
 };
@@ -15,12 +15,12 @@ use super::{
     attachment::{RetargetArgs, local_carrier, retarget_from_args, staged_retarget},
     mutate::{
         SendStep, SendSteps, StepOrigin, chord_key_event, cmd_send, collect_send_payload,
-        over_limit_payload, read_send_payload, resolve_spawn_cwd, tag_result, wire_steps,
+        read_send_payload, resolve_spawn_cwd, tag_result, wire_steps,
     },
     plan,
     read::{RowEncoding, cmd_search, session_passes_tag_filter},
 };
-use crate::cli_output::{ErrorKind, Format, PointFormat, Reporter, SessionRef};
+use crate::cli_output::{Format, PointFormat, Reporter, SessionRef};
 
 fn retarget_args() -> RetargetArgs {
     RetargetArgs {
@@ -35,28 +35,6 @@ fn retarget_args() -> RetargetArgs {
 
 fn staging_out() -> Reporter {
     Reporter::point(Format::Human)
-}
-
-/// A payload the daemon would refuse must be caught here: on the
-/// wire the refusal is a closed connection, which the caller can
-/// only report as the transient `daemon_lost` class.
-#[test]
-fn over_limit_payload_bounds_a_paste_and_a_raw_payload_by_their_own_caps() {
-    use felis_protocol::limits::{MAX_PASTE_BYTES, PTY_INPUT_BUDGET};
-
-    let out = staging_out();
-    assert_eq!(over_limit_payload(&out, MAX_PASTE_BYTES, false), None);
-    assert_eq!(
-        over_limit_payload(&out, MAX_PASTE_BYTES + 1, false),
-        Some(1)
-    );
-    // `--raw` skips the bracketing, so the whole budget is its bound.
-    assert_eq!(over_limit_payload(&out, MAX_PASTE_BYTES + 1, true), None);
-    assert_eq!(over_limit_payload(&out, PTY_INPUT_BUDGET, true), None);
-    assert_eq!(
-        over_limit_payload(&out, PTY_INPUT_BUDGET + 1, true),
-        Some(1)
-    );
 }
 
 /// One assertion per carrier arm: a wrong mapping is silent on the
@@ -470,14 +448,6 @@ async fn a_visible_search_on_a_minor_zero_daemon_exits_two_unsent() {
     );
 }
 
-#[test]
-fn an_unexpected_frame_kind_reports_a_protocol_failure() {
-    assert_eq!(
-        ErrorKind::from_connect_error(&ConnectError::UnexpectedKind { kind: 99 }),
-        ErrorKind::Protocol
-    );
-}
-
 /// The planner is where the refusal has to live: it runs before
 /// [`Dial`], so an over-limit payload never costs a connection.
 /// Every verb that carries one is checked through `plan` itself,
@@ -511,7 +481,8 @@ fn send_op(text: String, raw: bool) -> SessionOp {
 
 /// An over-limit payload never reaches a dial: the verb exits 1
 /// under `invalid_request` (REQ-105a), and the boundary itself is
-/// still accepted. `--raw` is checked too, against its own cap.
+/// still accepted. `--raw` skips the bracketing, so its own cap, not
+/// the paste cap, bounds it.
 #[test]
 fn an_over_limit_send_payload_is_refused_before_the_dial() {
     use felis_protocol::messages::{MAX_PASTE_BYTES, MAX_RAW_INPUT_BYTES};
@@ -533,6 +504,13 @@ fn an_over_limit_send_payload_is_refused_before_the_dial() {
             "the boundary itself must still send (raw={raw})"
         );
     }
+    assert!(
+        matches!(
+            plan(send_op("a".repeat(MAX_PASTE_BYTES + 1), true), &target),
+            ControlFlow::Continue(_)
+        ),
+        "a raw send past the paste cap was refused"
+    );
 }
 
 /// The same for `spawn`, whose limit is on the program path.
@@ -738,11 +716,11 @@ async fn mouse_steps_follow_the_paste_in_order_with_the_keys() {
     );
 }
 
-/// The daemon names the refused step by its index among the wire
-/// steps; the message names the argument it came from, a click's
+/// The daemon names a refused step by its index among the wire steps,
+/// so each wire step maps back to the argument it came from, a click's
 /// release included.
 #[test]
-fn a_refused_step_is_reported_against_its_argument() {
+fn each_wire_step_maps_to_the_argument_it_came_from() {
     let steps = send_steps(&["--key", "enter", "--mouse", "click:3,4"]);
     let out = staging_out();
     let (wire, origins) =

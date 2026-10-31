@@ -41,31 +41,7 @@ pub fn resolve_session_id(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn session(id: u128) -> SessionInfo {
-        SessionInfo {
-            id,
-            dims: felis_protocol::messages::GridDims {
-                rows: 24,
-                cols: 80,
-                pixel_w: 0,
-                pixel_h: 0,
-            },
-            title: None,
-            cwd: None,
-            spawn_cwd: None,
-            terminal_progress: None,
-            idle_seconds: None,
-            tags: Vec::new(),
-            last_notification: None,
-            foreground: None,
-            exited: false,
-            last_exit_code: None,
-            attachments: Vec::new(),
-            sequence: std::num::NonZeroU64::MIN,
-            program_status: Vec::new(),
-        }
-    }
+    use crate::test_support::session_info as session;
 
     #[test]
     fn resolve_session_id_returns_unique_match() {

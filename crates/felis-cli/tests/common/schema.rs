@@ -65,14 +65,14 @@ pub(crate) fn cli_def_rejects(def: &str, instance: &Value) -> bool {
     schemas.validate(instance, index).is_err()
 }
 
-pub(crate) fn invalid_fixtures(prefix: &str) -> Vec<(String, Value)> {
+pub(crate) fn invalid_output_fixtures() -> Vec<(String, Value)> {
     let dir =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/schema-invalid");
     let mut found: Vec<(String, Value)> = std::fs::read_dir(&dir)
         .unwrap()
         .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
         .filter(|name| {
-            name.starts_with(prefix)
+            name.starts_with("out-")
                 && std::path::Path::new(name)
                     .extension()
                     .is_some_and(|ext| ext == "json")
@@ -86,10 +86,6 @@ pub(crate) fn invalid_fixtures(prefix: &str) -> Vec<(String, Value)> {
         })
         .collect();
     found.sort_by(|a, b| a.0.cmp(&b.0));
-    assert!(
-        !found.is_empty(),
-        "no `{prefix}` fixtures in {}",
-        dir.display()
-    );
+    assert!(!found.is_empty(), "no `out-` fixtures in {}", dir.display());
     found
 }

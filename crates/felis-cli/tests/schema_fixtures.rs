@@ -15,7 +15,7 @@ mod schema;
 /// a missing or foreign `v`.
 #[test]
 fn every_invalid_output_fixture_fails_the_class_it_claims() {
-    for (name, fixture) in schema::invalid_fixtures("out-") {
+    for (name, fixture) in schema::invalid_output_fixtures() {
         let against = fixture["against"]
             .as_str()
             .expect("`against` names a class");

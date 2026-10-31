@@ -547,14 +547,18 @@ fn every_golden_message_reads_back_as_what_was_written() {
 }
 
 /// The grid conversions are the reason a browser can mirror a session,
-/// so a golden row delta must also recode to the wire body it came from.
+/// so a row delta must recode to the wire body it came from.
 #[test]
-fn a_golden_row_delta_recodes_to_its_wire_body() {
+fn a_row_delta_recodes_to_its_wire_body() {
     let msg = GridMsg::RowDelta {
         rows: vec![(0, packed_row("hi")), (3, packed_row("felis"))],
     };
     let json = GridJson::try_from(msg.clone()).unwrap();
     assert_eq!(GridMsg::try_from(json).unwrap(), msg);
+}
+
+#[test]
+fn a_golden_row_delta_spells_its_cells_as_structural_graphemes() {
     let value = golden_path("item-grid-row-delta");
     let value: Value = serde_json::from_str(&std::fs::read_to_string(value).unwrap()).unwrap();
     let cells = &value["item"]["msg"]["rows"][0]["cells"];
@@ -595,7 +599,7 @@ fn a_message_carrying_an_unknown_optional_field_still_reads() {
 }
 
 #[test]
-fn a_writer_answers_with_the_highest_shared_version() {
+fn a_writer_welcomes_the_version_it_shares_wherever_the_offer_lists_it() {
     assert_eq!(negotiate(&[1]), ServerHello::Welcome { version: 1 });
     assert_eq!(negotiate(&[3, 1, 2]), ServerHello::Welcome { version: 1 });
 }
@@ -756,15 +760,23 @@ fn input_rides_an_open_attach_stream_only() {
     ledger.client(&input(2)).unwrap();
 }
 
-/// An attach opener names one session or one spawn, never neither.
 #[test]
-fn an_attach_opener_naming_no_target_is_refused() {
-    assert!(
-        serde_json::from_value::<ClientMessage>(
-            json!({ "type": "open", "id": 1, "stream": { "stream": "attach" } })
-        )
-        .is_err()
+fn a_request_is_not_closed_by_another_operations_result() {
+    let mut ledger = Ledger::new();
+    ledger.client(&request(1, Request::List)).unwrap();
+    let kill = reply(
+        1,
+        OpResult::Kill(SessionRef {
+            id: SESSION.to_owned(),
+            was_attached: None,
+            exit_code: None,
+        }),
     );
+    assert_eq!(ledger.server(&kill), Err(FramingError::WrongResult(1)));
+    assert!(ledger.is_open(1));
+    ledger
+        .server(&reply(1, OpResult::List { sessions: vec![] }))
+        .unwrap();
 }
 
 const SCHEMA_URL: &str = "https://raw.githubusercontent.com/felis-terminal/felis/main/crates/felis-client-core/schemas/json-protocol-v1.schema.json";
@@ -972,6 +984,14 @@ fn every_value_at_a_published_bound_is_admitted() {
     }
 }
 
+/// An attach opener names one session or one spawn, never neither.
+#[test]
+fn an_attach_opener_naming_no_target_is_refused() {
+    let neither = json!({ "type": "open", "id": 1, "stream": { "stream": "attach" } });
+    assert!(!validates(&neither), "{neither}");
+    assert!(serde_json::from_value::<ClientMessage>(neither).is_err());
+}
+
 #[test]
 fn an_attach_opener_naming_both_targets_is_refused() {
     let both = json!({
@@ -1012,23 +1032,4 @@ fn a_search_match_keeps_its_history_anchor() {
     assert_eq!(value["anchor"], json!({ "pushed": 7, "generation": 1 }));
     let back: SearchMatchJson = serde_json::from_value(value).unwrap();
     assert_eq!(back, item);
-}
-
-#[test]
-fn a_request_is_not_closed_by_another_operations_result() {
-    let mut ledger = Ledger::new();
-    ledger.client(&request(1, Request::List)).unwrap();
-    let kill = reply(
-        1,
-        OpResult::Kill(SessionRef {
-            id: SESSION.to_owned(),
-            was_attached: None,
-            exit_code: None,
-        }),
-    );
-    assert_eq!(ledger.server(&kill), Err(FramingError::WrongResult(1)));
-    assert!(ledger.is_open(1));
-    ledger
-        .server(&reply(1, OpResult::List { sessions: vec![] }))
-        .unwrap();
 }
