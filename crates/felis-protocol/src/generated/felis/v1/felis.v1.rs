@@ -587,7 +587,7 @@ pub struct ProgramStatusRecord {
     pub msg: ::core::option::Option<::prost::alloc::string::String>,
 }
 /// One live window attachment of a session, as OpsListed reports it.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Attachment {
     /// Daemon-lifetime attachment id: allocated per window attach, unique
     /// across every session the daemon holds, never reused. It names *this
@@ -607,6 +607,28 @@ pub struct Attachment {
     /// attachment reports true, or none while the marker is clear.
     #[prost(bool, tag="3")]
     pub input_owner: bool,
+    /// How the attaching connection reached the daemon. This is the
+    /// daemon-side carrier, not where the viewer sits: a view relayed
+    /// onward from a local connection reports LOCAL. Absent from a daemon
+    /// that does not report it; UNSPECIFIED is refused at decode.
+    #[prost(enumeration="AttachCarrier", optional, tag="4")]
+    pub carrier: ::core::option::Option<i32>,
+    /// The relay environment's SSH variables, only beside RELAY (refused
+    /// at decode otherwise). Absent beside RELAY means unknown, not unset:
+    /// a carrier block in a skipped format, or a non-Unicode value.
+    #[prost(message, optional, tag="5")]
+    pub ssh_env: ::core::option::Option<SshEnv>,
+}
+/// SSH_CONNECTION, SSH_CLIENT and SSH_TTY; each is set exactly when the
+/// relay's environment carried that variable.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SshEnv {
+    #[prost(string, optional, tag="1")]
+    pub connection: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag="2")]
+    pub client: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag="3")]
+    pub tty: ::core::option::Option<::prost::alloc::string::String>,
 }
 // ---------------------------------------------------------------------------
 // Conn (MessageKind::Conn, kind 0): the connection handshake
@@ -3861,6 +3883,37 @@ impl AttentionSource {
             "ATTENTION_SOURCE_UNSPECIFIED" => Some(Self::Unspecified),
             "ATTENTION_SOURCE_BELL" => Some(Self::Bell),
             "ATTENTION_SOURCE_NOTIFICATION" => Some(Self::Notification),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum AttachCarrier {
+    Unspecified = 0,
+    /// The daemon's own local socket (or named pipe).
+    Local = 1,
+    /// The SSH relay: the connection opened with an FRLY carrier header.
+    Relay = 2,
+}
+impl AttachCarrier {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "ATTACH_CARRIER_UNSPECIFIED",
+            Self::Local => "ATTACH_CARRIER_LOCAL",
+            Self::Relay => "ATTACH_CARRIER_RELAY",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "ATTACH_CARRIER_UNSPECIFIED" => Some(Self::Unspecified),
+            "ATTACH_CARRIER_LOCAL" => Some(Self::Local),
+            "ATTACH_CARRIER_RELAY" => Some(Self::Relay),
             _ => None,
         }
     }

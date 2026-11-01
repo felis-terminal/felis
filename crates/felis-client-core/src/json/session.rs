@@ -366,6 +366,7 @@ mod tests {
                 id: 7,
                 attached_at: std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_788_250_500),
                 input_owner: true,
+                carrier: None,
             }],
             ..session_info(0xCAFE)
         };

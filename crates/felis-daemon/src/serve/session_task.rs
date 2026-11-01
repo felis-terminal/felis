@@ -2341,6 +2341,7 @@ impl SessionTask {
                     id: sub.id.0,
                     attached_at: sub.attached_at,
                     input_owner: self.input_owner == Some(sub.id),
+                    carrier: None,
                 })
                 .collect();
         }

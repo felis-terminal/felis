@@ -41,11 +41,11 @@ pub use limits::{
 };
 pub use notify::{NotifyToClientMsg, NotifyToDaemonMsg};
 pub use ops::{
-    Attachment, InfoOutcome, Limit, MAX_SESSION_TAGS, MAX_TAG_BYTES, OpsToClientMsg,
+    AttachCarrier, Attachment, InfoOutcome, Limit, MAX_SESSION_TAGS, MAX_TAG_BYTES, OpsToClientMsg,
     OpsToDaemonMsg, ProgramStatusRecord, ReportScope, ResolvedId, ResourceKind, ResourceReport,
     ResourceUnit, SendOutcome, SendRefusal, SendStep, SessionInfo, SessionNotification,
-    SpawnOutcome, StopMode, StopOutcome, SubjectKind, SwitchDenied, SwitchScope, SwitchTarget,
-    TerminalProgress, UpgradeOutcome, UpgradeRefusal,
+    SpawnOutcome, SshEnv, StopMode, StopOutcome, SubjectKind, SwitchDenied, SwitchScope,
+    SwitchTarget, TerminalProgress, UpgradeOutcome, UpgradeRefusal,
 };
 pub use push::{ExitStatus, PushMsg};
 pub use region::{RegionPosition, RegionToClientMsg, RegionToDaemonMsg};

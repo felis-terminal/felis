@@ -116,6 +116,30 @@ pub struct Attachment {
     /// [`SwitchScope::Default`] resolves to; at most one attachment
     /// reports `true`.
     pub input_owner: bool,
+    /// `None` from a daemon that does not report it.
+    pub carrier: Option<AttachCarrier>,
+}
+
+/// How an attachment's connection reached the daemon: the daemon-side
+/// carrier, not where the viewer sits.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AttachCarrier {
+    Local,
+    /// `ssh_env` is `None` when the values are unknown (a carrier block
+    /// the daemon skipped, or a non-Unicode SSH variable), which is not
+    /// the same as a relay environment that set none of them.
+    Relay {
+        ssh_env: Option<SshEnv>,
+    },
+}
+
+/// The SSH variables of a relay's own environment, each `Some` exactly
+/// when that environment set it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SshEnv {
+    pub connection: Option<String>,
+    pub client: Option<String>,
+    pub tty: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -721,11 +745,39 @@ pub(crate) mod tests {
                     id: 7,
                     attached_at: UNIX_EPOCH + Duration::from_secs(1_788_250_500),
                     input_owner: true,
+                    carrier: Some(AttachCarrier::Relay {
+                        ssh_env: Some(SshEnv {
+                            connection: Some("192.0.2.7 50122 192.0.2.1 22".into()),
+                            client: Some("192.0.2.7 50122 22".into()),
+                            tty: None,
+                        }),
+                    }),
                 },
                 Attachment {
                     id: 9,
                     attached_at: UNIX_EPOCH + Duration::from_secs(1_788_250_590),
                     input_owner: false,
+                    carrier: Some(AttachCarrier::Local),
+                },
+                Attachment {
+                    id: 11,
+                    attached_at: UNIX_EPOCH + Duration::from_secs(1_788_250_600),
+                    input_owner: false,
+                    carrier: Some(AttachCarrier::Relay {
+                        ssh_env: Some(SshEnv::default()),
+                    }),
+                },
+                Attachment {
+                    id: 13,
+                    attached_at: UNIX_EPOCH + Duration::from_secs(1_788_250_610),
+                    input_owner: false,
+                    carrier: Some(AttachCarrier::Relay { ssh_env: None }),
+                },
+                Attachment {
+                    id: 15,
+                    attached_at: UNIX_EPOCH + Duration::from_secs(1_788_250_620),
+                    input_owner: false,
+                    carrier: None,
                 },
             ],
             sequence: NonZeroU64::new(42).unwrap(),

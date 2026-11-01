@@ -1075,6 +1075,8 @@ pub const ADDITIONS: &[(&str, u16)] = &[
     ("SessionInfo.program_status", 1),
     ("SessionInfo.spawn_cwd", 2),
     ("SessionInfo.terminal_progress", 2),
+    ("Attachment.carrier", 3),
+    ("Attachment.ssh_env", 3),
     ("InputViewport.anchor", 2),
     ("GridViewportState.anchor", 2),
     ("ImageNew.serial", 2),
@@ -1167,6 +1169,8 @@ pub const ADDITIONS: &[(&str, u16)] = &[
     ("KeyEventKind::RELEASE", 0),
     ("AttentionSource::BELL", 0),
     ("AttentionSource::NOTIFICATION", 0),
+    ("AttachCarrier::LOCAL", 0),
+    ("AttachCarrier::RELAY", 0),
     ("UpgradeRefusal::UNSUPPORTED", 1),
     ("UpgradeRefusal::DUMP_VERSION", 1),
     ("UpgradeRefusal::PROTOCOL_MAJOR", 1),
@@ -1439,6 +1443,16 @@ impl v1::AttentionSource {
     pub const fn since_minor(self) -> u16 {
         match self {
             Self::Unspecified | Self::Bell | Self::Notification => 0,
+        }
+    }
+}
+
+impl v1::AttachCarrier {
+    /// The protocol minor that defined this value.
+    #[must_use]
+    pub const fn since_minor(self) -> u16 {
+        match self {
+            Self::Unspecified | Self::Local | Self::Relay => 0,
         }
     }
 }
