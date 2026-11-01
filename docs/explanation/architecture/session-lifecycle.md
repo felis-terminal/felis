@@ -210,6 +210,14 @@ Three alternatives are rejected:
 - **Disclaiming persistent agent support.** The stale agent is the most common form of the very failure this exists to
   fix.
 
+#### The other SSH variables are reported, not rewritten
+
+`SSH_CONNECTION`, `SSH_CLIENT` and `SSH_TTY` hold values, not paths, so no link can make them follow the window, and a
+session created over SSH keeps them after a local reattach. The roster instead reports each window's carrier and, for a
+relay, those three values ([cli.md](../../reference/cli.md#result-objects)); a shell that wants them current reads them
+back from a prompt hook ([attach-over-ssh.md](../../how-to/attach-over-ssh.md)). Stripping them at spawn was rejected: a
+shell created and viewed over SSH would lose a true value to fix a stale one.
+
 #### `LANG` is filled rather than stamped, and only on macOS
 
 felis fills `LANG` in the daemon when a macOS session would otherwise start with no locale. launchd hands a

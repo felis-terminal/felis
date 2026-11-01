@@ -6,6 +6,17 @@
           "description": "RFC 3339, UTC.",
           "type": "string"
         },
+        "carrier": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CarrierName"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How this window's connection reached the daemon, not where its\nviewer sits. Omitted when the daemon does not report it."
+        },
         "id": {
           "description": "A decimal **string**: the id is a `u64` counter, and a bare JSON\nnumber past 2^53−1 silently rounds in common consumers.\n`--attachment` accepts the same spelling.",
           "pattern": "^[0-9]+$",
@@ -14,6 +25,17 @@
         "input_owner": {
           "description": "Unconditional, unlike the optionals elsewhere: an omitted key\nwould read as \"this daemon does not report it\".",
           "type": "boolean"
+        },
+        "ssh_env": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SshEnvObject"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Present only for a `relay` attachment whose SSH variables the\ndaemon knows; an empty object means it set none. Omitted beside\n`relay`, the values are unknown, not unset."
         }
       },
       "required": [
@@ -102,6 +124,13 @@
         "soft_wrap_continued"
       ],
       "type": "object"
+    },
+    "CarrierName": {
+      "enum": [
+        "local",
+        "relay"
+      ],
+      "type": "string"
     },
     "CheckObject": {
       "properties": {
@@ -1292,6 +1321,30 @@
         "colorterm",
         "ssh"
       ],
+      "type": "object"
+    },
+    "SshEnvObject": {
+      "description": "Keyed by the variable names, so a hook can export each key as it\nstands.",
+      "properties": {
+        "SSH_CLIENT": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "SSH_CONNECTION": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "SSH_TTY": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
       "type": "object"
     },
     "SwitchResult": {

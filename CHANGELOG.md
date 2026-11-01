@@ -45,6 +45,10 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
   `Search::Query`, `Region::Request` and `Region::Rows`, and `Ops::Send` / `Ops::SendAndWait`, which write ordered
   paste, raw, key and mouse steps and, for the second, stream the next `OSC 133 ; D` mark. A client refuses each against
   an older daemon before sending it.
+- **CLI**: each `attachments[]` entry of `felis sessions list --format json` and `felis sessions info` reports
+  `carrier`, whether that window reached the daemon over its local socket or the SSH relay, and for a relay its
+  `ssh_env`, so a prompt hook can resync `SSH_CONNECTION`, `SSH_CLIENT` and `SSH_TTY` in a session reattached from
+  another place. Protocol minor 3 adds `Attachment.carrier` and `Attachment.ssh_env`.
 
 - **Wire**: the JSON protocol, in `felis-client-core` behind the `json` feature, for a relay in front of a browser view:
   a negotiated version, session-addressed requests (list, info, create, kill, tag, send), and correlated streams that

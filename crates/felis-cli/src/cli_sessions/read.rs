@@ -3,7 +3,7 @@ use std::ops::ControlFlow;
 use anyhow::Result;
 use felis_client_core::json::{rfc3339_utc, roster_short_id};
 use felis_client_core::{ConnectError, Connection, check_session_addressed, check_value_minor};
-use felis_protocol::messages::SessionInfo;
+use felis_protocol::messages::{AttachCarrier, SessionInfo};
 use felis_protocol::{
     SessionHex,
     messages::{
@@ -126,8 +126,13 @@ where
             stdoutln!("progress: {}", progress_line(progress));
         }
         for attachment in &session.attachments {
+            let carrier = match attachment.carrier {
+                Some(AttachCarrier::Local) => ", local",
+                Some(AttachCarrier::Relay { .. }) => ", relay",
+                None => "",
+            };
             stdoutln!(
-                "window:   {} (attached {}){}",
+                "window:   {} (attached {}{carrier}){}",
                 attachment.id,
                 rfc3339_utc(attachment.attached_at),
                 if attachment.input_owner {
