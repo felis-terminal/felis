@@ -64,6 +64,33 @@ Host remote
 Without agent forwarding, remote shells run without an agent. On Windows, OpenSSH agent uses a persistent named pipe, so
 socket proxying is not required.
 
+### Keep SSH variables current after reattaching
+
+A shell keeps the environment it started with, so a session created over SSH still sets `SSH_CONNECTION` after you
+reattach it from a local window on that host, and a local session keeps it unset when viewed over SSH. The daemon
+reports how each window reached it (`carrier` and `ssh_env` under `attachments`,
+[cli.md](../reference/cli.md#result-objects)), and a prompt hook can resync the three SSH variables from the window you
+type in, or from the only window attached. It leaves them alone when it cannot tell: no window, several and none typed
+in yet, or a daemon that does not know the values. The hook needs `jq`:
+
+```sh
+# ~/.zshrc (bash: PROMPT_COMMAND=felis_ssh_env)
+felis_ssh_env() {
+  [ -n "$FELIS_SESSION_ID" ] || return
+  eval "$(felis sessions info "$FELIS_SESSION_ID" --format json 2>/dev/null |
+    jq -r --arg unset unset '
+      .attachments | (map(select(.input_owner)) + if length == 1 then . else [] end)[0]
+      | select(.carrier == "local" or has("ssh_env")) | (.ssh_env // {}) as $env
+      | ("SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY") as $name
+      | if $env | has($name) then "export \($name)=\($env[$name] | @sh)" else "\($unset) \($name)" end')"
+}
+precmd_functions+=(felis_ssh_env)
+```
+
+In fish, run the same pipeline from a `--on-event fish_prompt` function with `--arg unset 'set -e'` and pipe its output
+to `source`. `carrier` describes the window's own connection to the daemon, so a view relayed onward from a local
+window, such as a browser behind a relay, reads as `local` wherever it is.
+
 ## Retarget an existing window
 
 `felis --host` opens a new window connected to a remote daemon. To point an existing window to another daemon, run

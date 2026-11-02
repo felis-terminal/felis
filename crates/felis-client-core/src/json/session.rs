@@ -3,7 +3,7 @@
 //! serializes; the JSON protocol reuses them for its session rows.
 
 use felis_protocol::SessionHex;
-use felis_protocol::messages::SessionInfo;
+use felis_protocol::messages::{AttachCarrier, SessionInfo, SshEnv};
 use felis_protocol::session_prefix::short_session_prefix;
 use serde::{Deserialize, Deserializer, Serialize};
 
@@ -92,10 +92,22 @@ impl SessionObject {
             attachments: s
                 .attachments
                 .iter()
-                .map(|a| AttachmentObject {
-                    id: a.id.to_string(),
-                    attached_at: rfc3339_utc(a.attached_at),
-                    input_owner: a.input_owner,
+                .map(|a| {
+                    let (carrier, ssh_env) = match &a.carrier {
+                        None => (None, None),
+                        Some(AttachCarrier::Local) => (Some(CarrierName::Local), None),
+                        Some(AttachCarrier::Relay { ssh_env }) => (
+                            Some(CarrierName::Relay),
+                            ssh_env.as_ref().map(SshEnvObject::from),
+                        ),
+                    };
+                    AttachmentObject {
+                        id: a.id.to_string(),
+                        attached_at: rfc3339_utc(a.attached_at),
+                        input_owner: a.input_owner,
+                        carrier,
+                        ssh_env,
+                    }
                 })
                 .collect(),
             program_status: s
@@ -202,6 +214,54 @@ pub struct AttachmentObject {
     /// Unconditional, unlike the optionals elsewhere: an omitted key
     /// would read as "this daemon does not report it".
     pub input_owner: bool,
+    /// How this window's connection reached the daemon, not where its
+    /// viewer sits. Omitted when the daemon does not report it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub carrier: Option<CarrierName>,
+    /// Present only for a `relay` attachment whose SSH variables the
+    /// daemon knows; an empty object means it set none. Omitted beside
+    /// `relay`, the values are unknown, not unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssh_env: Option<SshEnvObject>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum CarrierName {
+    Local,
+    Relay,
+}
+
+/// Keyed by the variable names, so a hook can export each key as it
+/// stands.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct SshEnvObject {
+    #[serde(
+        rename = "SSH_CONNECTION",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub connection: Option<String>,
+    #[serde(
+        rename = "SSH_CLIENT",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub client: Option<String>,
+    #[serde(rename = "SSH_TTY", default, skip_serializing_if = "Option::is_none")]
+    pub tty: Option<String>,
+}
+
+impl From<&SshEnv> for SshEnvObject {
+    fn from(e: &SshEnv) -> Self {
+        Self {
+            connection: e.connection.clone(),
+            client: e.client.clone(),
+            tty: e.tty.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -268,6 +328,12 @@ mod tests {
                 id: "18446744073709551615".to_owned(),
                 attached_at: "2026-01-02T03:04:05Z".to_owned(),
                 input_owner: true,
+                carrier: Some(CarrierName::Relay),
+                ssh_env: Some(SshEnvObject {
+                    connection: Some("192.0.2.7 50122 192.0.2.1 22".to_owned()),
+                    client: None,
+                    tty: None,
+                }),
             }],
             program_status: vec![ProgramStatusObject {
                 id: String::new(),
@@ -366,6 +432,7 @@ mod tests {
                 id: 7,
                 attached_at: std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_788_250_500),
                 input_owner: true,
+                carrier: None,
             }],
             ..session_info(0xCAFE)
         };
@@ -379,6 +446,62 @@ mod tests {
             "2026-09-01T08:15:00Z"
         );
         assert_eq!(body.get("idle_seconds"), None);
+    }
+
+    /// The JSON keys are the variable names; an unknown relay environment
+    /// omits `ssh_env` where a known-empty one writes `{}`.
+    #[test]
+    fn an_attachment_reports_its_carrier_and_ssh_variables() {
+        use felis_protocol::messages::Attachment;
+
+        let attachment = |id, carrier| Attachment {
+            id,
+            attached_at: std::time::UNIX_EPOCH,
+            input_owner: false,
+            carrier,
+        };
+        let session = SessionInfo {
+            attachments: vec![
+                attachment(1, Some(AttachCarrier::Local)),
+                attachment(
+                    2,
+                    Some(AttachCarrier::Relay {
+                        ssh_env: Some(SshEnv {
+                            connection: Some("192.0.2.7 50122 192.0.2.1 22".into()),
+                            ..SshEnv::default()
+                        }),
+                    }),
+                ),
+                attachment(
+                    3,
+                    Some(AttachCarrier::Relay {
+                        ssh_env: Some(SshEnv::default()),
+                    }),
+                ),
+                attachment(4, Some(AttachCarrier::Relay { ssh_env: None })),
+                attachment(5, None),
+            ],
+            ..session_info(0xCAFE)
+        };
+        let body = serde_json::to_value(SessionObject::in_roster(
+            &session,
+            std::slice::from_ref(&session),
+        ))
+        .unwrap();
+        let attached_at = "1970-01-01T00:00:00Z";
+        assert_eq!(
+            body["attachments"],
+            serde_json::json!([
+                { "id": "1", "attached_at": attached_at, "input_owner": false, "carrier": "local" },
+                {
+                    "id": "2", "attached_at": attached_at, "input_owner": false, "carrier": "relay",
+                    "ssh_env": { "SSH_CONNECTION": "192.0.2.7 50122 192.0.2.1 22" },
+                },
+                { "id": "3", "attached_at": attached_at, "input_owner": false, "carrier": "relay", "ssh_env": {} },
+                { "id": "4", "attached_at": attached_at, "input_owner": false, "carrier": "relay" },
+                { "id": "5", "attached_at": attached_at, "input_owner": false },
+            ])
+        );
     }
 
     #[test]

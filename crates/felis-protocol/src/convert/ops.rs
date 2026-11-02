@@ -36,10 +36,20 @@ const NANOS_PER_SECOND: i32 = 1_000_000_000;
 
 impl From<&messages::Attachment> for v1::Attachment {
     fn from(a: &messages::Attachment) -> Self {
+        let (carrier, ssh_env) = match &a.carrier {
+            None => (None, None),
+            Some(messages::AttachCarrier::Local) => (Some(v1::AttachCarrier::Local), None),
+            Some(messages::AttachCarrier::Relay { ssh_env }) => (
+                Some(v1::AttachCarrier::Relay),
+                ssh_env.as_ref().map(v1::SshEnv::from),
+            ),
+        };
         Self {
             id: a.id,
             attached_at: Some(a.attached_at.into()),
             input_owner: a.input_owner,
+            carrier: carrier.map(|c| c as i32),
+            ssh_env,
         }
     }
 }
@@ -47,6 +57,23 @@ impl From<&messages::Attachment> for v1::Attachment {
 impl TryFrom<v1::Attachment> for messages::Attachment {
     type Error = WireError;
     fn try_from(a: v1::Attachment) -> Result<Self, Self::Error> {
+        let carrier = a
+            .carrier
+            .map(|raw| decode_enum("Attachment.carrier", raw))
+            .transpose()?;
+        let carrier = match (carrier, a.ssh_env) {
+            (None, None) => None,
+            (Some(v1::AttachCarrier::Local), None) => Some(messages::AttachCarrier::Local),
+            (Some(v1::AttachCarrier::Relay), ssh_env) => Some(messages::AttachCarrier::Relay {
+                ssh_env: ssh_env.map(messages::SshEnv::from),
+            }),
+            (Some(v1::AttachCarrier::Unspecified), _) => {
+                return Err(WireError::UnspecifiedEnum("Attachment.carrier"));
+            }
+            (None | Some(v1::AttachCarrier::Local), Some(_)) => {
+                return Err(WireError::MalformedField("Attachment.ssh_env"));
+            }
+        };
         Ok(Self {
             id: a.id,
             attached_at: attached_at_from_wire(
@@ -54,7 +81,28 @@ impl TryFrom<v1::Attachment> for messages::Attachment {
                     .ok_or(WireError::MissingField("Attachment.attached_at"))?,
             )?,
             input_owner: a.input_owner,
+            carrier,
         })
+    }
+}
+
+impl From<&messages::SshEnv> for v1::SshEnv {
+    fn from(e: &messages::SshEnv) -> Self {
+        Self {
+            connection: e.connection.clone(),
+            client: e.client.clone(),
+            tty: e.tty.clone(),
+        }
+    }
+}
+
+impl From<v1::SshEnv> for messages::SshEnv {
+    fn from(e: v1::SshEnv) -> Self {
+        Self {
+            connection: e.connection,
+            client: e.client,
+            tty: e.tty,
+        }
     }
 }
 
@@ -1063,7 +1111,38 @@ mod tests {
             id: 7,
             attached_at,
             input_owner: false,
+            carrier: None,
+            ssh_env: None,
         }
+    }
+
+    /// SSH values only describe a relay: beside a local carrier, or with
+    /// no carrier at all, they are refused rather than dropped.
+    #[test]
+    fn ssh_env_beside_a_non_relay_carrier_is_rejected() {
+        for carrier in [None, Some(v1::AttachCarrier::Local as i32)] {
+            let wire = v1::Attachment {
+                carrier,
+                ssh_env: Some(v1::SshEnv::default()),
+                ..wire_attachment(Some(prost_types::Timestamp::default()))
+            };
+            assert!(matches!(
+                messages::Attachment::try_from(wire),
+                Err(WireError::MalformedField("Attachment.ssh_env"))
+            ));
+        }
+    }
+
+    #[test]
+    fn an_unspecified_carrier_is_rejected() {
+        let wire = v1::Attachment {
+            carrier: Some(v1::AttachCarrier::Unspecified as i32),
+            ..wire_attachment(Some(prost_types::Timestamp::default()))
+        };
+        assert!(matches!(
+            messages::Attachment::try_from(wire),
+            Err(WireError::UnspecifiedEnum("Attachment.carrier"))
+        ));
     }
 
     /// `1` is the first value a daemon mints. A `0` (which is also what
@@ -1127,6 +1206,7 @@ mod tests {
             id: 7,
             attached_at: at,
             input_owner: true,
+            carrier: None,
         };
         let bytes = v1::Attachment::from(&domain).encode_to_vec();
         let back =

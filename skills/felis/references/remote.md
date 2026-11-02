@@ -15,6 +15,10 @@ daemon-owned path, so agent forwarding survives the SSH connection that opened i
 the only thing that ends a remote daemon short of a reboot is the systemd user manager stopping one it started for a
 non-lingering user.
 
+That environment is fixed at spawn: a session later reattached from a local window still sets the remote login's
+`SSH_CONNECTION`. Read how the current window arrived from `attachments[].carrier` / `ssh_env` in `sessions info`
+instead of trusting the variable.
+
 ## Which local daemon a call reaches
 
 The local daemon is resolved as `--socket`, then `$FELIS_SOCKET`, then the platform default, which on Unix is

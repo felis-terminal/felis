@@ -830,6 +830,37 @@ message Attachment {
   // target a default-scope OpsSwitch resolves to. Exactly one
   // attachment reports true, or none while the marker is clear.
   bool input_owner = 3;
+  // How the attaching connection reached the daemon. This is the
+  // daemon-side carrier, not where the viewer sits: a view relayed
+  // onward from a local connection reports LOCAL. Absent from a daemon
+  // that does not report it; UNSPECIFIED is refused at decode.
+  optional AttachCarrier carrier = 4 [(felis.v1.field_since) = {
+    minor: 3
+    skippable: true
+  }];
+  // The relay environment's SSH variables, only beside RELAY (refused
+  // at decode otherwise). Absent beside RELAY means unknown, not unset:
+  // a carrier block in a skipped format, or a non-Unicode value.
+  SshEnv ssh_env = 5 [(felis.v1.field_since) = {
+    minor: 3
+    skippable: true
+  }];
+}
+
+enum AttachCarrier {
+  ATTACH_CARRIER_UNSPECIFIED = 0;
+  // The daemon's own local socket (or named pipe).
+  ATTACH_CARRIER_LOCAL = 1;
+  // The SSH relay: the connection opened with an FRLY carrier header.
+  ATTACH_CARRIER_RELAY = 2;
+}
+
+// SSH_CONNECTION, SSH_CLIENT and SSH_TTY; each is set exactly when the
+// relay's environment carried that variable.
+message SshEnv {
+  optional string connection = 1;
+  optional string client = 2;
+  optional string tty = 3;
 }
 
 // ---------------------------------------------------------------------------

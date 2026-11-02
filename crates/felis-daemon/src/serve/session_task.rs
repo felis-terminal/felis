@@ -18,10 +18,10 @@ use felis_protocol::messages::{
 use felis_protocol::{
     ConnectionMode, MinorGated as _,
     messages::{
-        Attachment, ConnToClientMsg, Correlation, ExitStatus, GridDims, GridMsg, ImageMsg,
-        InputMsg, NotifyToClientMsg, OpsToClientMsg, PushMsg, RegionToClientMsg, RequestId,
-        SearchToClientMsg, SearchToDaemonMsg, SessionInfo, SessionToClientMsg, StreamErrorReason,
-        StreamId, Subject, SwitchDenied, SwitchScope,
+        AttachCarrier, Attachment, ConnToClientMsg, Correlation, ExitStatus, GridDims, GridMsg,
+        ImageMsg, InputMsg, NotifyToClientMsg, OpsToClientMsg, PushMsg, RegionToClientMsg,
+        RequestId, SearchToClientMsg, SearchToDaemonMsg, SessionInfo, SessionToClientMsg,
+        StreamErrorReason, StreamId, Subject, SwitchDenied, SwitchScope,
     },
 };
 use felis_pty::{ChildHandle, Size as PtySize};
@@ -355,6 +355,7 @@ pub struct SubscribeReq {
     /// `SessionToDaemonMsg::Attach { live_only }`: refuse when the shell has
     /// exited.
     pub live_only: bool,
+    pub carrier: AttachCarrier,
     /// Answered once the rehydrate burst is queued.
     pub reply: oneshot::Sender<Result<SubscribeOk, SubscribeRefused>>,
 }
@@ -887,6 +888,7 @@ struct Subscriber {
     id: SubscriberId,
     is_window: bool,
     attached_at: SystemTime,
+    carrier: AttachCarrier,
     /// Pull pacing (docs/explanation/rendering/pipeline.md
     /// "Demand-driven emission"): diffs ship only against a
     /// pending `NextGridFrame` pull.
@@ -1723,6 +1725,7 @@ impl SessionTask {
             id,
             is_window: req.mode.is_window(),
             attached_at: SystemTime::now(),
+            carrier: req.carrier,
             pull_pacing: req.pull_paced,
             pull_pending: false,
             minor: req.minor,
@@ -2341,6 +2344,7 @@ impl SessionTask {
                     id: sub.id.0,
                     attached_at: sub.attached_at,
                     input_owner: self.input_owner == Some(sub.id),
+                    carrier: Some(sub.carrier.clone()),
                 })
                 .collect();
         }
@@ -3857,6 +3861,7 @@ mod tests {
             pull_paced,
             minor: felis_protocol::preface::PROTOCOL_MINOR,
             live_only: false,
+            carrier: AttachCarrier::Local,
             tx,
             buffered: Arc::new(AtomicUsize::new(0)),
             reply: reply_tx,
@@ -3880,6 +3885,7 @@ mod tests {
             pull_paced: false,
             minor: felis_protocol::preface::PROTOCOL_MINOR,
             live_only: false,
+            carrier: AttachCarrier::Local,
             tx,
             buffered: Arc::new(AtomicUsize::new(0)),
             reply: reply_tx,
@@ -8294,6 +8300,7 @@ mod tests {
                 pull_paced: false,
                 minor: felis_protocol::preface::PROTOCOL_MINOR,
                 live_only: false,
+                carrier: AttachCarrier::Local,
                 tx,
                 buffered: Arc::new(AtomicUsize::new(0)),
                 reply: reply_tx,

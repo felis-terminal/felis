@@ -717,13 +717,15 @@ async fn the_daemon_clamps_a_client_minor_it_sits_behind() {
         .await
         .unwrap();
 
-        let (effective, carrier) = exchange_bootstrap(&mut daemon_read, &mut daemon_write)
-            .await
-            .expect("the major is served");
+        let (effective, carrier, attach_carrier) =
+            exchange_bootstrap(&mut daemon_read, &mut daemon_write)
+                .await
+                .expect("the major is served");
         assert_eq!(
             carrier, None,
             "a bare client preface carries no relay block"
         );
+        assert_eq!(attach_carrier, AttachCarrier::Local);
         assert_eq!(
             effective, PROTOCOL_MINOR,
             "a client at minor {client_minor} must not pull this daemon past its own",
@@ -736,6 +738,94 @@ async fn the_daemon_clamps_a_client_minor_it_sits_behind() {
             },
         );
     }
+}
+
+/// What the daemon reads off the bootstrap bytes alone, before any frame.
+async fn carrier_of(prefix: &[u8]) -> AttachCarrier {
+    use felis_protocol::preface::{ClientPreface, PROTOCOL_MAJOR, PROTOCOL_MINOR};
+    use tokio::io::AsyncWriteExt as _;
+
+    let (client, daemon) = tokio::io::duplex(4096);
+    let (_client_read, mut client_write) = tokio::io::split(client);
+    let (mut daemon_read, mut daemon_write) = tokio::io::split(daemon);
+    let mut bytes = prefix.to_vec();
+    bytes.extend_from_slice(
+        &ClientPreface {
+            major: PROTOCOL_MAJOR,
+            minor: PROTOCOL_MINOR,
+        }
+        .encode(),
+    );
+    client_write.write_all(&bytes).await.unwrap();
+    let (_, _, carrier) = exchange_bootstrap(&mut daemon_read, &mut daemon_write)
+        .await
+        .expect("the major is served");
+    carrier
+}
+
+#[tokio::test]
+async fn a_decoded_relay_block_reports_its_ssh_variables() {
+    let block = CarrierBlock {
+        env: vec![
+            entry("HOME", "/home/u"),
+            entry("SSH_CONNECTION", "192.0.2.7 50122 192.0.2.1 22"),
+            entry("SSH_CLIENT", "192.0.2.7 50122 22"),
+        ],
+    };
+    assert_eq!(
+        carrier_of(&block.encode().unwrap()).await,
+        AttachCarrier::Relay {
+            ssh_env: Some(SshEnv {
+                connection: Some("192.0.2.7 50122 192.0.2.1 22".into()),
+                client: Some("192.0.2.7 50122 22".into()),
+                tty: None,
+            }),
+        }
+    );
+}
+
+/// A relay whose environment set no SSH variable is still a relay, with
+/// values known to be unset.
+#[tokio::test]
+async fn a_relay_block_without_ssh_variables_reports_them_unset() {
+    let block = CarrierBlock {
+        env: vec![entry("HOME", "/home/u")],
+    };
+    assert_eq!(
+        carrier_of(&block.encode().unwrap()).await,
+        AttachCarrier::Relay {
+            ssh_env: Some(SshEnv::default()),
+        }
+    );
+}
+
+/// A block in a later format is skipped by length: the connection is
+/// still a relay's, but its values are unknown.
+#[tokio::test]
+async fn a_skipped_relay_block_reports_unknown_ssh_variables() {
+    let payload = [0x00, 0x02, 0xde, 0xad];
+    let mut block = preface::CARRIER_MAGIC.to_vec();
+    block.extend_from_slice(&u32::try_from(payload.len()).unwrap().to_be_bytes());
+    block.extend_from_slice(&payload);
+    assert_eq!(
+        carrier_of(&block).await,
+        AttachCarrier::Relay { ssh_env: None }
+    );
+}
+
+#[tokio::test]
+async fn a_bare_preface_reports_a_local_carrier() {
+    assert_eq!(carrier_of(&[]).await, AttachCarrier::Local);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_non_utf8_ssh_variable_makes_every_value_unknown() {
+    let env = vec![
+        entry("SSH_CLIENT", "192.0.2.7 50122 22"),
+        (b"SSH_TTY".to_vec(), vec![0x2f, 0xff]),
+    ];
+    assert_eq!(ssh_env(&env), None);
 }
 
 /// The daemon hands region bytes back rather than spawning the argv: the
@@ -2299,6 +2389,44 @@ async fn a_create_ack_reports_the_window_it_attached() {
         1,
         "the create ack's roster row must list the subscriber it answers: {info:?}"
     );
+}
+
+/// The roster row carries each window's carrier: the relay's SSH values
+/// for a connection that opened with a carrier block, `Local` for one
+/// that did not.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_window_attachment_reports_the_carrier_it_arrived_on() {
+    use felis_transport::preface::write_carrier_block;
+
+    let tmp = private_dir();
+    let path = tmp.path().join("daemon.sock");
+    let pool = Arc::new(Mutex::new(SessionPool::new()));
+    spawn_daemon(&path, pool.clone(), shell_factory("sleep 30")).await;
+
+    let (read_half, mut write_half) = connect(&path).await.unwrap();
+    let block = CarrierBlock {
+        env: vec![entry("SSH_CONNECTION", "192.0.2.7 50122 192.0.2.1 22")],
+    };
+    write_carrier_block(&mut write_half, &block).await.unwrap();
+    let (mut reader, mut writer) = framed(read_half, write_half).await;
+    hello_welcome(&mut reader, &mut writer, false).await;
+    let relayed = create_and_attach_info(&mut reader, &mut writer).await;
+    assert_eq!(
+        relayed.attachments[0].carrier,
+        Some(AttachCarrier::Relay {
+            ssh_env: Some(SshEnv {
+                connection: Some("192.0.2.7 50122 192.0.2.1 22".into()),
+                ..SshEnv::default()
+            }),
+        })
+    );
+
+    let (read_half, write_half) = connect(&path).await.unwrap();
+    let (mut reader, mut writer) = framed(read_half, write_half).await;
+    hello_welcome(&mut reader, &mut writer, false).await;
+    let local = create_and_attach_info(&mut reader, &mut writer).await;
+    assert_eq!(local.attachments[0].carrier, Some(AttachCarrier::Local));
 }
 
 /// The roster row names the directory the create asked for, though the
@@ -6337,6 +6465,7 @@ async fn status_sums_every_subscriber_backlog_and_names_the_deepest() {
                     pull_paced: false,
                     minor: preface::PROTOCOL_MINOR,
                     live_only: false,
+                    carrier: AttachCarrier::Local,
                     tx,
                     buffered: Arc::clone(&buffered),
                     reply: reply_tx,

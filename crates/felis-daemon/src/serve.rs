@@ -19,12 +19,13 @@ use felis_protocol::{
     convert::WireError,
     frame::FrameError,
     messages::{
-        AttachFailure, AttachRefusal, AttachTarget, ConnToClientMsg, ConnToDaemonMsg, Correlation,
-        CreateFailure, Directed, Direction, GridDims, GridMsg, ImageMsg, InfoOutcome, InputMsg,
-        Notification, NotifyToClientMsg, NotifyToDaemonMsg, OpsToClientMsg, OpsToDaemonMsg,
-        PushMsg, RefusalReason, RegionToDaemonMsg, RequestId, ResolvedId, SearchToDaemonMsg,
-        SessionInfo, SessionToClientMsg, SessionToDaemonMsg, SpawnOutcome, StopMode, StopOutcome,
-        StreamErrorReason, StreamId, Subject, SwitchScope, SwitchTarget, ThemeChannel,
+        AttachCarrier, AttachFailure, AttachRefusal, AttachTarget, ConnToClientMsg,
+        ConnToDaemonMsg, Correlation, CreateFailure, Directed, Direction, GridDims, GridMsg,
+        ImageMsg, InfoOutcome, InputMsg, Notification, NotifyToClientMsg, NotifyToDaemonMsg,
+        OpsToClientMsg, OpsToDaemonMsg, PushMsg, RefusalReason, RegionToDaemonMsg, RequestId,
+        ResolvedId, SearchToDaemonMsg, SessionInfo, SessionToClientMsg, SessionToDaemonMsg,
+        SpawnOutcome, SshEnv, StopMode, StopOutcome, StreamErrorReason, StreamId, Subject,
+        SwitchScope, SwitchTarget, ThemeChannel,
     },
     preface::{self, CarrierBlock, ClientPreface, DaemonAccept, DaemonRefuse},
 };
@@ -553,7 +554,7 @@ where
     // Built before the preface so a frame arriving ahead of one is
     // refused by phase.
     let mut driver = ConnectionDriver::daemon();
-    let (effective_minor, carrier) = with_deadline(
+    let (effective_minor, carrier, attach_carrier) = with_deadline(
         caps.handshake.preface,
         HandshakePhase::Preface,
         exchange_bootstrap(&mut read_half, &mut write_half),
@@ -594,6 +595,7 @@ where
         params,
         &caps,
         relay_env.as_deref(),
+        &attach_carrier,
         &pool,
         &factory,
     )
@@ -721,7 +723,7 @@ async fn write_capacity_refusal(
     limit: usize,
 ) -> Result<(), ConnError> {
     let (mut read_half, mut write_half) = server_split(stream);
-    let (effective_minor, _carrier) = with_deadline(
+    let (effective_minor, _carrier, _) = with_deadline(
         deadlines.preface,
         HandshakePhase::Preface,
         exchange_bootstrap(&mut read_half, &mut write_half),
@@ -927,6 +929,7 @@ async fn subscribe_to(
     cmd: &mpsc::Sender<SessionCmd>,
     params: ConnParams,
     live_only: bool,
+    carrier: &AttachCarrier,
 ) -> Result<Subscription, SubscribeFailure> {
     let ConnParams {
         mode,
@@ -942,6 +945,7 @@ async fn subscribe_to(
         pull_paced,
         minor: effective_minor,
         live_only,
+        carrier: carrier.clone(),
         tx,
         buffered: Arc::clone(&buffered),
         reply: reply_tx,
@@ -1176,6 +1180,7 @@ async fn wait_for_attach<R: tokio::io::AsyncRead + Unpin, W: tokio::io::AsyncWri
     params: ConnParams,
     caps: &DaemonCaps,
     relay_env: Option<&[crate::child_env::EnvEntry]>,
+    carrier: &AttachCarrier,
     pool: &Arc<Mutex<SessionPool>>,
     factory: &SessionFactory,
 ) -> Result<Option<Setup>, ConnError> {
@@ -1272,7 +1277,7 @@ async fn wait_for_attach<R: tokio::io::AsyncRead + Unpin, W: tokio::io::AsyncWri
                     // Not live-only: `felis -- true` exits before the subscribe
                     // lands, and a live-only create would refuse the window its
                     // own command's output.
-                    let subscribed = subscribe_to(&registered.cmd, params, false).await;
+                    let subscribed = subscribe_to(&registered.cmd, params, false, carrier).await;
                     let id = registered.id;
                     let Subscription {
                         ok,
@@ -1319,7 +1324,7 @@ async fn wait_for_attach<R: tokio::io::AsyncRead + Unpin, W: tokio::io::AsyncWri
                             return Ok(None);
                         }
                     };
-                    let subscribed = subscribe_to(&handle.cmd, params, live_only).await;
+                    let subscribed = subscribe_to(&handle.cmd, params, live_only, carrier).await;
                     let Subscription {
                         ok,
                         out_rx,
@@ -2888,12 +2893,19 @@ async fn resolve_prefix(pool: &Arc<Mutex<SessionPool>>, prefix: &str) -> Resolve
 async fn exchange_bootstrap<R, W>(
     read_half: &mut R,
     write_half: &mut W,
-) -> Result<(u16, Option<CarrierBlock>), ConnError>
+) -> Result<(u16, Option<CarrierBlock>, AttachCarrier), ConnError>
 where
     R: tokio::io::AsyncRead + Unpin,
     W: tokio::io::AsyncWrite + Unpin,
 {
     let opened = read_client_bootstrap(read_half).await?;
+    let attach_carrier = match (&opened.carrier, opened.skipped_carrier_version) {
+        (Some(block), _) => AttachCarrier::Relay {
+            ssh_env: ssh_env(&block.env),
+        },
+        (None, Some(_)) => AttachCarrier::Relay { ssh_env: None },
+        (None, None) => AttachCarrier::Local,
+    };
     if let Some(version) = opened.skipped_carrier_version {
         warn!(
             carrier_format_version = version,
@@ -2922,7 +2934,26 @@ where
     Ok((
         preface::effective_minor(minor, accept.minor),
         opened.carrier,
+        attach_carrier,
     ))
+}
+
+/// `None` when any of the three is not Unicode: a value the hook cannot
+/// be told is unknown, which unsetting it would misreport.
+fn ssh_env(env: &[crate::child_env::EnvEntry]) -> Option<SshEnv> {
+    let var = |name| match crate::child_env::lookup(env, name, crate::child_env::TARGET_IS_WINDOWS)
+    {
+        None => Some(None),
+        Some(value) => felis_pty::env_from_bytes(value)?
+            .into_string()
+            .ok()
+            .map(Some),
+    };
+    Some(SshEnv {
+        connection: var("SSH_CONNECTION")?,
+        client: var("SSH_CLIENT")?,
+        tty: var("SSH_TTY")?,
+    })
 }
 
 /// Where a create's environment base comes from; one chain, resolved
