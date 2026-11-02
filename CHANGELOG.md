@@ -10,6 +10,12 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-03
+
+Screen readers can read the window, post-process shaders chain and animate, each font style picks its own weight, the
+Windows daemon upgrades in place, and the JSON protocol replaces `felis bridge`. A 0.3 daemon left running answers
+`felis sessions search`, `capture` and `send` with `unsupported`: run `felis daemon upgrade` after installing.
+
 ### Added
 
 - **Platform**: screen readers can read the window. The GUI client exposes the visible rows, the cursor as the caret,
@@ -550,7 +556,9 @@ commands in place of `felis frontend <name>`.
 
 Initial release.
 
-[unreleased]: https://github.com/felis-terminal/felis/compare/v0.3.0...HEAD
+[unreleased]: https://github.com/felis-terminal/felis/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/felis-terminal/felis/compare/v0.3.1...v0.4.0
+[0.3.1]: https://github.com/felis-terminal/felis/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/felis-terminal/felis/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/felis-terminal/felis/compare/v0.1.4...v0.2.0
 [0.1.4]: https://github.com/felis-terminal/felis/compare/v0.1.3...v0.1.4
