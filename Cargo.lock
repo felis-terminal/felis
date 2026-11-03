@@ -1279,7 +1279,7 @@ dependencies = [
 
 [[package]]
 name = "felis-cli"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "boon",
@@ -1307,7 +1307,7 @@ dependencies = [
 
 [[package]]
 name = "felis-client"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "accesskit",
  "accesskit_winit",
@@ -1338,7 +1338,7 @@ dependencies = [
 
 [[package]]
 name = "felis-client-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "bitflags 2.13.2",
  "boon",
@@ -1370,7 +1370,7 @@ dependencies = [
 
 [[package]]
 name = "felis-daemon"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "bytes",
@@ -1400,7 +1400,7 @@ dependencies = [
 
 [[package]]
 name = "felis-grid"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "bitflags 2.13.2",
  "bytes",
@@ -1423,7 +1423,7 @@ dependencies = [
 
 [[package]]
 name = "felis-protocol"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "bitflags 2.13.2",
  "bytes",
@@ -1439,7 +1439,7 @@ dependencies = [
 
 [[package]]
 name = "felis-pty"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "conpty-bin-vendored",
  "directories",
@@ -1456,7 +1456,7 @@ dependencies = [
 
 [[package]]
 name = "felis-render-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "criterion",
  "felis-grid",
@@ -1470,7 +1470,7 @@ dependencies = [
 
 [[package]]
 name = "felis-render-wgpu"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "bytemuck",
  "criterion",
@@ -1488,7 +1488,7 @@ dependencies = [
 
 [[package]]
 name = "felis-shaping"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "criterion",
  "libloading 0.9.0",
@@ -1509,7 +1509,7 @@ dependencies = [
 
 [[package]]
 name = "felis-transport"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "bytes",
  "criterion",
@@ -1528,7 +1528,7 @@ dependencies = [
 
 [[package]]
 name = "felis-vt"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "criterion",
  "felis-protocol",
@@ -1541,7 +1541,7 @@ dependencies = [
 
 [[package]]
 name = "felis-workspace-tests"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "felis-protocol",
 ]
