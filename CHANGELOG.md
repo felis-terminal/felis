@@ -10,7 +10,9 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 
 ## [Unreleased]
 
-## [0.4.0] - 2026-11-03
+## [0.4.1] - 2026-11-03
+
+The v0.4.0 tag failed its release gate and was never published; 0.4.1 is the 0.4 release.
 
 Screen readers can read the window, post-process shaders chain and animate, each font style picks its own weight, the
 Windows daemon upgrades in place, and the JSON protocol replaces `felis bridge`. A 0.3 daemon left running answers
