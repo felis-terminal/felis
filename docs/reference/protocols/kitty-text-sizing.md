@@ -68,6 +68,8 @@ Each character of a run owns its own block of cells; the rules below apply per c
 `OSC 66 ; s=2 ; AB ST` leaves the other intact.
 
 - Writing into any cell of a character's block erases the whole block, including rows the write does not reach.
+- An erase that reaches any cell of a block (EL, ED, ECH, DECERA, and the selective DECSEL, DECSED, DECSERA) erases the
+  whole block, unless that erase skips the block's cells as protected, in which case the block stays whole.
 - A cell move that would split a block taller than one row between its rows erases the block first: inserting or
   deleting characters on one of its rows (ICH, DCH, insert mode), shifting columns in a scroll region whose top or
   bottom margin crosses it (DECIC, DECDC, SL, SR, DECBI, DECFI), and scrolling or inserting or deleting lines at a seam
