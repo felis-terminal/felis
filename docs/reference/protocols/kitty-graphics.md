@@ -208,7 +208,7 @@ buffer composite of base frame (`c=`) and new rectangle (`x, y, s, v`). Storage 
 - `c`: 1-based source frame for compositing; omitted fills with background color `Y` (32-bit RGBA, default transparent
   black).
 - `x`, `y`, `s`, `v`: Offset and dimensions within frame canvas.
-- `C`: Composition mode (`C=1` overwrites pixels; default alpha-blends).
+- `X`: Composition mode (`X=1` overwrites pixels; default alpha-blends).
 - `z`: Frame duration in milliseconds (`z>0` sets duration; `z<0` marks frame gapless; `z=0` or omitted defaults to 40
   ms).
 - Standard transmission keys (`f`, `t`, `o`, `m`) apply.

@@ -1799,7 +1799,7 @@ fn store_frame(
         );
     }
     let data_px = compose::convert_bpp(data.pixels(), data.format.bytes_per_pixel(), img_bpp);
-    let replace = control_u32(complete, b'C') == Some(1);
+    let replace = control_u32(complete, b'X') == Some(1);
     let z = control_i32(complete, b'z');
     let target = control_u32(complete, b'r'); // 1-based frame to edit; absent → append
     let base = control_u32(complete, b'c'); // 1-based base frame for a new frame

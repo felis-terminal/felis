@@ -1467,6 +1467,63 @@ fn animation_frame_appends_and_emits_frame_transmission() {
     assert_eq!(resp, Some(b"\x1b_Gi=1;OK\x1b\\".to_vec()));
 }
 
+fn edit_root_frame(
+    grid: &mut felis_grid::Grid,
+    images: &mut felis_grid::images::ImageStore,
+    placements: &mut felis_grid::images::Placements,
+    mode: (u8, &[u8]),
+) -> Vec<u8> {
+    let ctrls: Vec<(u8, &[u8])> = vec![
+        (b'a', b"f"),
+        (b'i', b"1"),
+        (b'r', b"1"),
+        (b'f', b"32"),
+        (b's', b"1"),
+        (b'v', b"1"),
+        mode,
+    ];
+    handle_complete(
+        &mut ApcCtx {
+            grid,
+            images,
+            placements,
+            events: &mut Vec::new(),
+            shm: &mut ShmDeferral::default(),
+            cell_pixel_w: 0,
+            cell_pixel_h: 0,
+            anchor_cursor: None,
+        },
+        &complete(&ctrls, &b64(&[0x11, 0x22, 0x33, 0x00])),
+    );
+    images
+        .get(ImageId(1))
+        .unwrap()
+        .frame(0)
+        .unwrap()
+        .pixels
+        .to_vec()
+}
+
+#[test]
+fn animation_frame_overwrites_with_x_1_and_blends_otherwise() {
+    let root = vec![0xAA, 0xBB, 0xCC, 0xDD];
+    let (mut grid, mut images, mut placements) = handler_state();
+    transmit_root(&mut grid, &mut images, &mut placements, b"1");
+    assert_eq!(
+        edit_root_frame(&mut grid, &mut images, &mut placements, (b'X', b"1")),
+        vec![0x11, 0x22, 0x33, 0x00],
+        "X=1 replaces the canvas pixels, transparent ones included",
+    );
+
+    let (mut grid, mut images, mut placements) = handler_state();
+    transmit_root(&mut grid, &mut images, &mut placements, b"1");
+    assert_eq!(
+        edit_root_frame(&mut grid, &mut images, &mut placements, (b'C', b"1")),
+        root,
+        "C= is the a=c composition key; on a=f a transparent pixel still blends",
+    );
+}
+
 /// The producer-facing half of the frame cap: `a=f` past 4096 answers
 /// `ENOTSUP` (kitty's status set has no `ENOSPC`) and leaves the
 /// animation exactly as it was, rather than evicting a frame the
