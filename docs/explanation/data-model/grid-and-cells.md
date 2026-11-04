@@ -459,9 +459,10 @@ daemon ships the style and the blink flag, never blink frames, because the phase
 Each _physical_ row of the live grid carries a `u16` watermark (`Grid::occupancy`, indexed like `soft_wrap`) that is the
 authoritative live extent of the row: columns `[0..occupancy)` are live content and columns `[occupancy..cols)` are
 undefined, holding whatever bytes a previous tenant of the physical slot left behind. Any cell write raises the
-watermark (raising is always safe); a whole-row default blank (the `rotate_region` recycle, or an erase-to-row-end under
-the default pen) drops it. A pen carrying any non-default attribute (BCE) is live content, so it pins the watermark at
-`cols` and materializes the cells; colored blanks are never mistaken for absent ones.
+watermark (raising is always safe); a whole-row default blank (the `rotate_region` recycle) drops it to 0, and a
+default-pen erase that reaches it lowers it to the erase's start and writes only the cells below it. A pen carrying any
+non-default attribute (BCE) is live content, so it pins the watermark at `cols` and materializes the cells; colored
+blanks are never mistaken for absent ones.
 
 The model divides responsibility between readers and writers, and both halves are needed for the elision below to be
 safe. Readers clip at the watermark: a column at or past it reads as a shared blank, row content and the push into

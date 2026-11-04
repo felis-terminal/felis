@@ -56,5 +56,9 @@ harness = false
 name = "csi_dispatch"
 harness = false
 
+[[bench]]
+name = "erase"
+harness = false
+
 [lints]
 workspace = true

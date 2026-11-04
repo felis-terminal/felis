@@ -894,17 +894,18 @@ impl Grid {
     /// (DECSCA) still blank, matching xterm's "regular erase respects
     /// only ECMA protection" (esctest's `test_ED_respectsISOProtection`
     /// et al.).
-    pub(crate) fn range_blank_iso(&mut self, row: u16, from: usize, to: usize) {
-        self.range_blank_inner(row, from, to, true);
+    pub(crate) fn range_blank_iso(&mut self, row: u16, from: usize, to: usize) -> bool {
+        self.range_blank_inner(row, from, to, true)
     }
 
+    /// Returns whether a cell or the row's soft-wrap bit changed.
     pub(crate) fn range_blank_inner(
         &mut self,
         row: u16,
         mut from: usize,
         mut to: usize,
         erase: bool,
-    ) {
+    ) -> bool {
         let iso_aware = erase && self.screen.style_table.has_iso_protected();
         let row_start = self.screen.idx(row, 0);
         let row_end = row_start + usize::from(self.screen.cols);
@@ -927,9 +928,25 @@ impl Grid {
             link: None,
             sizing: None,
         };
+        let phys = row_start / usize::from(self.screen.cols);
+        if blank == Cell::default() && !iso_aware {
+            let occ_abs = row_start + usize::from(self.screen.occupancy[phys]);
+            let mut changed = from < occ_abs;
+            if changed {
+                self.screen.cells[from..to.min(occ_abs)].fill(blank);
+                if to >= occ_abs {
+                    self.screen.occupancy[phys] =
+                        u16::try_from(from - row_start).unwrap_or(u16::MAX);
+                }
+            }
+            if from == row_start && to == row_end && self.screen.soft_wrap[phys] {
+                self.screen.set_soft_wrap(row, false);
+                changed = true;
+            }
+            return changed;
+        }
         // A pen-colored blank raises the watermark to `to`, over stale
         // cells left of `from` or kept by the protected-cell skip below.
-        let phys = row_start / usize::from(self.screen.cols);
         if blank != Cell::default() && usize::from(self.screen.occupancy[phys]) < to - row_start {
             self.fill_leading_gap(phys, to - row_start);
         }
@@ -968,6 +985,7 @@ impl Grid {
         if from == row_start && to == row_end {
             self.screen.set_soft_wrap(row, false);
         }
+        true
     }
 
     pub(crate) fn line_feed(&mut self) {
@@ -1577,8 +1595,9 @@ impl Grid {
             .idx(self.screen.cursor.row, self.screen.cursor.col);
         let row_end = self.screen.idx(self.screen.cursor.row, 0) + usize::from(self.screen.cols);
         let to = (from + n).min(row_end);
-        self.range_blank_iso(self.screen.cursor.row, from, to);
-        self.screen.damage.mark(self.screen.cursor.row.into());
+        if self.range_blank_iso(self.screen.cursor.row, from, to) {
+            self.screen.damage.mark(self.screen.cursor.row.into());
+        }
     }
 
     /// xterm allows one slot per screen; a save overwrites.
@@ -1651,6 +1670,12 @@ impl Grid {
     }
 
     pub(crate) fn el(&mut self, mode: u16) {
+        if self.el_inner(mode) {
+            self.screen.damage.mark(self.screen.cursor.row.into());
+        }
+    }
+
+    fn el_inner(&mut self, mode: u16) -> bool {
         let row_start = self.screen.idx(self.screen.cursor.row, 0);
         let cols = usize::from(self.screen.cols);
         match mode {
@@ -1659,21 +1684,18 @@ impl Grid {
                     .screen
                     .idx(self.screen.cursor.row, self.screen.cursor.col);
                 let to = row_start + cols;
-                self.range_blank_iso(self.screen.cursor.row, from, to);
+                self.range_blank_iso(self.screen.cursor.row, from, to)
             }
             1 => {
                 let to = self
                     .screen
                     .idx(self.screen.cursor.row, self.screen.cursor.col)
                     + 1;
-                self.range_blank_iso(self.screen.cursor.row, row_start, to);
+                self.range_blank_iso(self.screen.cursor.row, row_start, to)
             }
-            2 => {
-                self.range_blank_iso(self.screen.cursor.row, row_start, row_start + cols);
-            }
-            _ => {}
+            2 => self.range_blank_iso(self.screen.cursor.row, row_start, row_start + cols),
+            _ => false,
         }
-        self.screen.damage.mark(self.screen.cursor.row.into());
     }
 
     /// Outside `0..=6` is ignored (xterm).
@@ -1699,7 +1721,9 @@ impl Grid {
                 for r in from_row..usize::from(self.screen.rows) {
                     let logical = u16::try_from(r).unwrap_or(u16::MAX);
                     let start = self.screen.idx(logical, 0);
-                    self.range_blank_iso(logical, start, start + cols);
+                    if self.range_blank_iso(logical, start, start + cols) {
+                        self.screen.damage.mark(r);
+                    }
                 }
             }
             1 => {
@@ -1707,7 +1731,9 @@ impl Grid {
                 for r in 0..usize::from(self.screen.cursor.row) {
                     let logical = u16::try_from(r).unwrap_or(u16::MAX);
                     let start = self.screen.idx(logical, 0);
-                    self.range_blank_iso(logical, start, start + cols);
+                    if self.range_blank_iso(logical, start, start + cols) {
+                        self.screen.damage.mark(r);
+                    }
                 }
             }
             2 => {
@@ -1725,9 +1751,6 @@ impl Grid {
                 self.screen.erase_viewport(blank);
                 self.pty_effects
                     .push(PtyEffect::ImagesCleared(crate::ImageClear::Screen));
-                // Damage is settled above; the mark_all below would
-                // ship the untouched rows as no-op RowDeltas.
-                return;
             }
             3 => {
                 // xterm's `CSI 3 J`: the live screen is not touched
@@ -1739,11 +1762,9 @@ impl Grid {
                 // `scrollback_total_pushed`, so the shared prune drops
                 // exactly the scrollback-bound prefix.
                 self.prune_evicted_marks();
-                return;
             }
             _ => {}
         }
-        self.screen.damage.mark_all();
     }
 
     /// No-op when the cursor is outside the scroll region (VT220); the

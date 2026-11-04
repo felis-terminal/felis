@@ -14,8 +14,8 @@ model must scale to "one row changed in a 200×80 grid" without iterating the wh
 ## Where damage lives
 
 - **Daemon (`felis-grid`).** A `Damage` tracker records which logical rows changed since the last `compose_diffs` cycle.
-  Mutations (`set_cell`, `write_row_cells`, scroll, erase, alt-screen switch, resize) mark rows dirty; `compose_diffs`
-  drains the dirty rows into the wire protocol and clears the tracker.
+  Mutations (`set_cell`, `write_row_cells`, scroll, erase, alt-screen switch, resize) mark rows dirty, an erase only the
+  rows whose cells it changed; `compose_diffs` drains the dirty rows into the wire protocol and clears the tracker.
 - **Client (`felis-client`).** The shadow's writes (`write_row_cells`, `set_cell`, a scroll directive, a resize) run
   through the same `ScreenBuffer` the daemon uses, so they mark the same row bitset. The renderer reads it when a frame
   is due and the client clears it after the paint. Whether a frame is due at all is a single boolean `RedrawScheduler`;
