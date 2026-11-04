@@ -17,9 +17,13 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
   `--kind` is required and names the kinds, so a kind added later never reaches an existing invocation; a client
   subscribes before it lists so it misses nothing. Protocol minor 4 adds the observer's kind set and its items;
   `felis notifications subscribe` still hears notifications alone.
+- **Graphics**: a Kitty graphics feature query (`a=q` with `e=<action>`) is answered with the keys felis honors for that
+  action, so a producer can tell, for example, Unicode placeholders apart from the placement offsets felis ignores.
 
 ### Fixed
 
+- **Graphics**: an animation frame (`a=f`) overwrites the canvas under `X=1`, the key the Kitty graphics protocol
+  defines for it; felis read `C=1`, the composition key of `a=c`, so `X=1` frames alpha-blended.
 - **CLI**: `felis notifications subscribe` ends with its clean terminal when the daemon stops, instead of exiting `2`
   with `daemon_lost`.
 

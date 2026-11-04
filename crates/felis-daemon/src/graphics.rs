@@ -16,7 +16,7 @@ use felis_grid::{ApcBody, ScreenSwitch};
 use felis_protocol::messages::{ImageFormat, ImageMsg, ImageTarget, MAX_IMAGE_CHUNK_PAYLOAD};
 use felis_vt::kitty_graphics::{
     self, CompleteCommand, ErrorCode, Outcome, Reassembler, ResponseRefs, Status, base64,
-    format_response, inflate as zlib,
+    format_feature_response, format_response, inflate as zlib,
 };
 // Handed to `image_decode` for the Unix `t=f` / `t=t` secure-open path;
 // Windows declines those methods outright.
@@ -26,6 +26,7 @@ use rustix::fs::{Mode, OFlags};
 use crate::pool::Session;
 
 mod compose;
+mod feature_query;
 mod image_decode;
 pub use image_decode::{
     DecodeError, MAX_DECODED_BYTES, ShmDeferral, decode_image, shm_segment_name, unlink_shm_segment,
@@ -710,6 +711,10 @@ fn handle_complete(ctx: &mut ApcCtx<'_>, complete: &CompleteCommand) -> Option<V
         return apply_quiet_mode(true, quiet, &refs, both);
     }
 
+    if action == b'q' && control_value(complete, b'e').is_some() {
+        return feature_query_reply(complete, quiet);
+    }
+
     let outcome: ActionOutcome = match action {
         b'q' => {
             // kitty answers a query with its `i=` alone, and a query
@@ -795,6 +800,17 @@ fn handle_complete(ctx: &mut ApcCtx<'_>, complete: &CompleteCommand) -> Option<V
     }
 
     apply_quiet_mode(addressed, quiet, &refs, outcome)
+}
+
+/// Always `OK` when answered, so any `q=` silences it; it reads no
+/// payload, so it records no shared-memory name either.
+fn feature_query_reply(complete: &CompleteCommand, quiet: u8) -> Option<Vec<u8>> {
+    let image_id = image_ref(complete, b'i')?;
+    let Some(keys) = feature_query::supported_keys(complete) else {
+        tracing::debug!("graphics feature query with a malformed e= dropped");
+        return None;
+    };
+    (quiet == 0).then(|| format_feature_response(image_id, &keys))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1799,7 +1815,7 @@ fn store_frame(
         );
     }
     let data_px = compose::convert_bpp(data.pixels(), data.format.bytes_per_pixel(), img_bpp);
-    let replace = control_u32(complete, b'C') == Some(1);
+    let replace = control_u32(complete, b'X') == Some(1);
     let z = control_i32(complete, b'z');
     let target = control_u32(complete, b'r'); // 1-based frame to edit; absent → append
     let base = control_u32(complete, b'c'); // 1-based base frame for a new frame

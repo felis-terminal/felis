@@ -506,6 +506,21 @@ fn action_q_emits_nothing_into_image_outbox() {
 }
 
 #[test]
+fn a_feature_query_mid_transfer_is_answered_and_the_transfer_completes() {
+    let mut s = State::new();
+    assert_eq!(s.dispatch(&body("Ga=t,i=99,f=24,s=1,v=1,m=1", b"AQ")), None);
+    assert_eq!(
+        s.dispatch(&body("Ga=q,i=31,e=T,U=1", b"")),
+        Some(b"\x1b_Gi=31,e=T,U=1;OK\x1b\\".to_vec()),
+    );
+    assert_eq!(
+        s.dispatch(&body("Gm=0", b"ID")),
+        Some(b"\x1b_Gi=99;OK\x1b\\".to_vec()),
+    );
+    assert_eq!(s.images.len(), 1);
+}
+
+#[test]
 fn failed_transmit_emits_nothing_into_image_outbox() {
     let mut s = State::new();
     // 2 bytes against the 4 that `f=32,s=1,v=1` promises: EINVAL.
