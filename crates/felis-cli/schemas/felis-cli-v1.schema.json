@@ -545,6 +545,185 @@
         "internal"
       ]
     },
+    "EventObject": {
+      "description": "One `sessions events` item. `type` names the item; the lag and end\nobjects every stream shares carry `event` instead, so the two never\ncollide.",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/NotificationObject",
+          "properties": {
+            "type": {
+              "const": "notification",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "session_id": {
+              "$ref": "#/$defs/EventSessionId"
+            },
+            "type": {
+              "const": "added",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "session_id"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Neither `exit_code` nor `signal` when no status was reaped.",
+          "properties": {
+            "exit_code": {
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "session_id": {
+              "$ref": "#/$defs/EventSessionId"
+            },
+            "signal": {
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "type": {
+              "const": "exited",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "session_id"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "session_id": {
+              "$ref": "#/$defs/EventSessionId"
+            },
+            "type": {
+              "const": "removed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "session_id"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The whole record set, as a session row's `program_status`.",
+          "properties": {
+            "records": {
+              "items": {
+                "$ref": "#/$defs/ProgramStatusObject"
+              },
+              "type": "array"
+            },
+            "session_id": {
+              "$ref": "#/$defs/EventSessionId"
+            },
+            "type": {
+              "const": "program_status",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "session_id",
+            "records"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "session_id": {
+              "$ref": "#/$defs/EventSessionId"
+            },
+            "type": {
+              "const": "prompt_shown",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "session_id"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "exit_code": {
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "session_id": {
+              "$ref": "#/$defs/EventSessionId"
+            },
+            "type": {
+              "const": "command_finished",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "session_id"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Names the session row fields to re-read, never their values.",
+          "properties": {
+            "fields": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "session_id": {
+              "$ref": "#/$defs/EventSessionId"
+            },
+            "type": {
+              "const": "changed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "session_id",
+            "fields"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "EventSessionId": {
+      "description": "A `sessions events` item's session, as 32 lowercase hex digits.",
+      "pattern": "^[0-9a-f]{32}$",
+      "type": "string"
+    },
     "FontFamiliesResult": {
       "description": "`felis fonts list`: sorted ignoring case, one entry per name the\nplatform's font matching treats as one family.",
       "properties": {
@@ -1693,6 +1872,9 @@
             },
             {
               "$ref": "#/$defs/NotificationObject"
+            },
+            {
+              "$ref": "#/$defs/EventObject"
             }
           ]
         }

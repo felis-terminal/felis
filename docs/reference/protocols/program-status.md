@@ -92,9 +92,9 @@ those marks, a `working` or `blocked` record stays while the shell lives, so a p
 | `title`    | string, optional               | decoded UTF-8, direction controls kept                          |
 | `msg`      | string, optional               | decoded UTF-8, direction controls kept                          |
 
-No event announces a change: a consumer polls, and one `felis sessions list --format json` covers every session. A
-program that needs the user at once also sends a [notification](notifications.md), which `felis notifications subscribe`
-streams.
+`felis sessions events --kind program_status` streams the whole record set after every change to it, and one
+`felis sessions list --format json` covers every session. A program that needs the user at once also sends a
+[notification](notifications.md), which `felis notifications subscribe` streams.
 
 `title` and `msg` reach IPC and JSON exactly as decoded. The human `felis sessions info` line spells every direction
 control and control character in producer text as `<U+XXXX>`.

@@ -71,7 +71,7 @@ or the end of the session.
 | `state` | string                         | an open vocabulary; a reader treats an unknown value as unknown |
 | `value` | integer `0` to `100`, optional | absent when the report carried none                             |
 
-No event announces a change: a consumer polls, as it does for [program status](program-status.md).
+No event announces a change: a consumer polls `felis sessions info`.
 
 ## Producers
 

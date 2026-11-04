@@ -31,7 +31,7 @@ use felis_protocol::messages::{
     InfoOutcome, MAX_PASTE_BYTES, MAX_RAW_INPUT_BYTES, MAX_SEARCH_PATTERN_BYTES, ResolvedId,
     SessionInfo, SwitchScope, Validate, check_limit,
 };
-use felis_protocol::messages::{RegionSource, SearchOptions, SearchSource};
+use felis_protocol::messages::{ObserverKind, RegionSource, SearchOptions, SearchSource};
 use tokio::io::{AsyncRead, AsyncWrite};
 
 use self::attachment::{cmd_switch, require_switch_from};
@@ -40,7 +40,7 @@ use self::mutate::{
     parse_env_pair, spawn_args_for, spawn_on, wire_steps,
 };
 use self::read::{RowEncoding, cmd_capture, cmd_info, cmd_list, cmd_search};
-use crate::cli_output::{ErrorKind, Format, PointFormat, Reporter, StreamFormat};
+use crate::cli_output::{ErrorKind, Format, PointFormat, Reporter, StreamFormat, stdoutln};
 use crate::conn::Dial;
 use crate::session_id_from_resolved;
 
@@ -310,6 +310,27 @@ pub(crate) enum SessionOp {
         #[command(flatten)]
         output: StreamFormat,
     },
+    /// Stream what happens to sessions until interrupted.
+    ///
+    /// Sessions added, exited and removed, program-status changes, prompts
+    /// and finished commands, row changes, and notifications, as `--kind`
+    /// names them. An item names what changed; `sessions list` reads the rest.
+    Events {
+        /// The kinds to stream (repeatable, or comma-separated).
+        #[arg(
+            long = "kind",
+            value_name = "KIND",
+            value_delimiter = ',',
+            required = true
+        )]
+        kinds: Vec<ObserverKindArg>,
+        /// Only stream items about this session (hex id or any unique
+        /// prefix).
+        #[arg(long, value_name = "ID-OR-PREFIX", value_parser = crate::validate_session_id_prefix)]
+        session: Option<String>,
+        #[command(flatten)]
+        output: StreamFormat,
+    },
     /// Add and remove labels, for pickers and scripts to filter on.
     ///
     /// Positional TAGs are added; `--remove <TAG>` removes. Both may
@@ -380,6 +401,33 @@ impl From<SourceArg> for RegionSource {
             SourceArg::Scrollback => Self::Scrollback,
             SourceArg::CommandOutput => Self::CommandOutput,
             SourceArg::LastCommand => Self::LastCommand,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub(crate) enum ObserverKindArg {
+    /// Sessions added, exited and removed.
+    Lifecycle,
+    /// A session's whole OSC 7501 record set after each change.
+    #[value(name = "program_status")]
+    ProgramStatus,
+    /// Prompts shown and commands finished (OSC 133).
+    Prompt,
+    /// A session's tags, title, cwd or attachments changed.
+    Meta,
+    /// Desktop notifications, as `notifications subscribe`.
+    Notification,
+}
+
+impl From<ObserverKindArg> for ObserverKind {
+    fn from(value: ObserverKindArg) -> Self {
+        match value {
+            ObserverKindArg::Lifecycle => Self::Lifecycle,
+            ObserverKindArg::ProgramStatus => Self::ProgramStatus,
+            ObserverKindArg::Prompt => Self::Prompt,
+            ObserverKindArg::Meta => Self::Meta,
+            ObserverKindArg::Notification => Self::Notification,
         }
     }
 }
@@ -628,6 +676,19 @@ pub(crate) fn plan(op: SessionOp, target: &Reconnector) -> ControlFlow<i32, Plan
                 cmd_search(conn, &body, &id, &pattern, options, source).await
             })
         }
+        SessionOp::Events {
+            kinds,
+            session,
+            output,
+        } => {
+            let (out, body) = stream_out(output.format);
+            let mut kinds: Vec<ObserverKind> = kinds.into_iter().map(Into::into).collect();
+            kinds.sort_unstable();
+            kinds.dedup();
+            Plan::new(Dial::Observer, out, move |conn| async move {
+                cmd_events(conn, &body, session, kinds).await
+            })
+        }
         SessionOp::Tag {
             id,
             tags,
@@ -654,9 +715,38 @@ impl SessionOp {
             | Self::Spawn { output, .. }
             | Self::Switch { output, .. }
             | Self::Tag { output, .. } => output.format,
-            Self::Capture { output, .. } | Self::Search { output, .. } => output.format,
+            Self::Capture { output, .. }
+            | Self::Search { output, .. }
+            | Self::Events { output, .. } => output.format,
         }
     }
+}
+
+async fn cmd_events(
+    conn: CarrierConnection,
+    out: &Reporter,
+    session_prefix: Option<String>,
+    kinds: Vec<ObserverKind>,
+) -> Result<i32> {
+    let watch = crate::cli_notifications::Watch {
+        verb: "events",
+        session_prefix,
+        kinds,
+        deadline: None,
+        end_code: 0,
+    };
+    watch
+        .run(conn, out, |msg, delivered| {
+            let item = crate::cli_output::EventObject::from_msg(msg)?;
+            *delivered += 1;
+            if out.machine() {
+                out.item(&item);
+            } else {
+                stdoutln!("{}", item.line());
+            }
+            None
+        })
+        .await
 }
 
 fn point_out(format: Format) -> (Arc<Reporter>, Arc<Reporter>) {

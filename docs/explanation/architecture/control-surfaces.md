@@ -329,14 +329,16 @@ instead of guessing at the intent.
 #### A verb's source puts it in the stream class
 
 What puts a verb in the stream class is its _source_, not the shape of its answer. A stream frames something unbounded
-or arriving incrementally, which `capture`, `search` and `notifications subscribe` are; the session roster is bounded
-and answered in one frame, so it is a point result with the whole array inside it.
+or arriving incrementally, which `capture`, `search`, `sessions events` and `notifications subscribe` are; the session
+roster is bounded and answered in one frame, so it is a point result with the whole array inside it.
 
 Framing the roster as a stream is the rejected alternative. It obliges every consumer to accumulate lines and watch for
 a terminal to learn a thing the daemon already knows in full.
 
-_Revisit if_ the roster ever becomes incremental (a `list --watch` reporting arrivals and departures), which would be a
-stream verb of its own rather than a reframing of this one.
+Arrivals and departures are a stream verb of their own, `sessions events`, and its items are hints to list again rather
+than a mirror of the roster. A mirror, a snapshot followed by deltas, is the rejected alternative: it needs the snapshot
+and the first delta taken atomically against the pool, which the pool lock does not give, while subscribing before
+listing needs only that each change is published after it lands.
 
 #### A proposed verb names its class before it is built
 

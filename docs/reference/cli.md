@@ -13,7 +13,7 @@ The cross-cutting contracts ([Global options](#global-options), [Exit codes](#ex
 [Carrier and connection lifetime](#carrier-and-connection-lifetime) and [Log files](#log-files) at the end:
 
 - [Session verbs](#session-verbs): `felis sessions` (`list`, `info`, `spawn`, `send`, `capture`, `search`, `kill`,
-  `evict`, `switch`, `tag`)
+  `evict`, `switch`, `tag`, `events`)
 - [Config verbs](#config-verbs) and [Fonts](#fonts): `felis config` (`path`, `check`, `show-effective`) and
   `felis fonts list`
 - [Daemon status](#daemon-status), [Daemon stop](#daemon-stop), and [Daemon upgrade](#daemon-upgrade): `felis daemon`
@@ -113,7 +113,7 @@ Classification by verb:
 | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Point            | `sessions list`, `sessions info`, `sessions spawn`, `sessions send`, `sessions kill`, `sessions evict`, `sessions tag`, `sessions switch`, `felis ssh`, `window retarget`, `daemon status`, `daemon stop`, `daemon upgrade`, `config path`, `fonts list`, `version`, `doctor report` |
 | Point-diagnostic | `config check`, `config show-effective`, `doctor`                                                                                                                                                                                                                                    |
-| Stream           | `sessions capture`, `sessions search`, `notifications subscribe`                                                                                                                                                                                                                     |
+| Stream           | `sessions capture`, `sessions search`, `sessions events`, `notifications subscribe`                                                                                                                                                                                                  |
 | Exempt           | `felis`, `felis attach`, `felis completions`, `felis <name>`                                                                                                                                                                                                                         |
 
 A verb with no row in this table has no `--format` flag.
@@ -262,6 +262,7 @@ The stream verbs frame one object per item between the envelope's `"v"` and thei
 | `capture`                 | `row`, `text`, `soft_wrap_continued`, plus `ansi` under `--ansi`                                |
 | `search`                  | `line_index`, `text`, `byte_spans`, `col_spans`                                                 |
 | `notifications subscribe` | `session_id`, `title`, `body`, `urgency`, `notification_id`, `session_title`, `cwd`, `attached` |
+| `sessions events`         | `type`, `session_id`, and the keys its `type` names ("Verb details")                            |
 
 A `capture` `row` is the region's own coordinate: scrollback rows count backwards from `-1` (the youngest), live rows
 carry their grid index, and mark ranges start at 0. `search`'s `line_index` follows the same convention; its
@@ -285,6 +286,7 @@ All session verbs run under `felis sessions <verb>`:
 | `evict <id>`        | Disconnect all clients from a session.       |
 | `switch <id>`       | Retarget one window onto another session.    |
 | `tag <id> [tag...]` | Add or remove session tags.                  |
+| `events`            | Stream what happens to sessions.             |
 
 Exit codes follow the `error.kind` rule ("Exit codes"). Two are worth naming: `search` exits `1` when nothing matched,
 and `list` exits `0` on an empty roster.
@@ -357,6 +359,27 @@ daemon whose protocol minor predates that is answered `unsupported` (exit `2`) b
   input owner. Exit `1` covers an unknown target, an `--attachment` that has detached, and a source session no window
   can be chosen for unambiguously.
 - **`tag`**: positional tags are added; `--remove <tag>` removes tags.
+- **`events`**: streams items about sessions until interrupted. `--kind <kind>` (repeatable or comma-separated, at least
+  one) picks what to stream, so a kind added later never reaches an existing invocation; `--session <id>` keeps one
+  session's items. Each item's `type` and the keys it adds:
+
+  | `--kind`         | `type`             | Keys                                                                                              |
+  | ---------------- | ------------------ | ------------------------------------------------------------------------------------------------- |
+  | `lifecycle`      | `added`            | none: the session entered the roster, and no item about it comes before this one                  |
+  | `lifecycle`      | `exited`           | `exit_code` or `signal`, neither when no status was reaped; once per session                      |
+  | `lifecycle`      | `removed`          | none: the session left the pool, the last item about it but a `changed` for its tags              |
+  | `program_status` | `program_status`   | `records`, the whole record set after each change, as a row's `program_status`; `[]` when cleared |
+  | `prompt`         | `prompt_shown`     | none: a primary OSC 133 `A`                                                                       |
+  | `prompt`         | `command_finished` | `exit_code`, absent for a bare OSC 133 `D`                                                        |
+  | `meta`           | `changed`          | `fields`, the row fields to re-read: `tags`, `title`, `cwd`, `attachments`                        |
+  | `notification`   | `notification`     | the `notifications subscribe` item keys                                                           |
+
+  A session's items arrive in the order it produced them, a `changed` for its tags apart; items about different sessions
+  carry no order between them, and neither do notifications and the other kinds. Each item follows the update of the row
+  it reports, so a `list` or `info` run on it reads the new state, and a consumer that subscribes before it lists misses
+  nothing in between; after a `lag` event it lists again. `--session` keeps the existing session it resolves to, so no
+  `added` follows. A kill ends a running session with `removed` and no `exited`. Against a daemon whose protocol minor
+  predates it the verb exits `2` under `unsupported`. It never starts a daemon.
 
 ## Config verbs
 
@@ -791,12 +814,12 @@ SSH the non-spawning forms dial `felis-daemon relay --no-spawn`, which reports "
 starting one; the spawning forms dial `relay` without that flag and let it apply the local spawn-then-retry policy on
 the remote side.
 
-| Form                                                                                                                                                                                  | Local socket            | `--host`                                                  |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------- | --------------------------------------------------------- |
-| `sessions spawn`, window launches (bare `felis`, `felis attach`, `felis -- <cmd>`)                                                                                                    | starts a daemon         | the relay starts one                                      |
-| Read and drive verbs (`list`, `info`, `capture`, `search`, `send`, `kill`, `evict`, `tag`, `switch`, the retargets' source dial), `notifications subscribe`, `daemon status` / `stop` | unreachable, exit `2`   | `relay --no-spawn`, then exit `2`                         |
-| `daemon upgrade`                                                                                                                                                                      | unreachable, exit `2`   | the remote `felis daemon upgrade`, which never starts one |
-| `version`, `doctor`                                                                                                                                                                   | reported as not running | `relay --no-spawn`, reported as not running               |
+| Form                                                                                                                                                                                            | Local socket            | `--host`                                                  |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------- | --------------------------------------------------------- |
+| `sessions spawn`, window launches (bare `felis`, `felis attach`, `felis -- <cmd>`)                                                                                                              | starts a daemon         | the relay starts one                                      |
+| Read and drive verbs (`list`, `info`, `capture`, `search`, `send`, `kill`, `evict`, `tag`, `switch`, the retargets' source dial), `events`, `notifications subscribe`, `daemon status` / `stop` | unreachable, exit `2`   | `relay --no-spawn`, then exit `2`                         |
+| `daemon upgrade`                                                                                                                                                                                | unreachable, exit `2`   | the remote `felis daemon upgrade`, which never starts one |
+| `version`, `doctor`                                                                                                                                                                             | reported as not running | `relay --no-spawn`, reported as not running               |
 
 A **cold socket** is a connect that failed with `ENOENT` or `ECONNREFUSED` (`ERROR_FILE_NOT_FOUND` for an absent Windows
 pipe, which reports as not-found). Only that licenses a spawn, on the local dial, the systemd hand-off and the relay

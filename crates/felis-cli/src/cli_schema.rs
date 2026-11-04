@@ -165,6 +165,9 @@ fn cli_document() -> Value {
         generator
             .subschema_for::<crate::cli_output::NotificationObject>()
             .to_value(),
+        generator
+            .subschema_for::<crate::cli_output::EventObject>()
+            .to_value(),
     ];
     let error = generator.subschema_for::<MachineError>().to_value();
     let defs = generator.take_definitions(true);

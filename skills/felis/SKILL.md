@@ -27,7 +27,7 @@ when a task reaches them.
 ## The contract
 
 **`--format` is the interface, and the value follows the verb's class.** Point verbs (`list`, `info`, `spawn`, `send`,
-`kill`, `evict`, `tag`) take `json` and print one object on stdout. Stream verbs (`capture`, `search`,
+`kill`, `evict`, `tag`) take `json` and print one object on stdout. Stream verbs (`capture`, `search`, `events`,
 `notifications subscribe`) take `jsonl`: one object per line, then exactly one terminal,
 `{"v":1,"event":"end","count":N}` or `{"v":1,"event":"error","error":{…}}`, even when the stream fails before its first
 item. Never infer the end from EOF; drop the terminal with `select(.event | not)` in `jq`. Asking a verb for the other

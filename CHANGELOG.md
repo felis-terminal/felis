@@ -10,6 +10,14 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 
 ## [Unreleased]
 
+### Added
+
+- **CLI**: `felis sessions events` streams what happens to sessions: added, exited with its status, and removed; every
+  OSC 7501 program-status change; OSC 133 prompts and finished commands; and a hint naming which row fields changed.
+  `--kind` is required and names the kinds, so a kind added later never reaches an existing invocation; a client
+  subscribes before it lists so it misses nothing. Protocol minor 4 adds the observer's kind set and its items;
+  `felis notifications subscribe` still hears notifications alone.
+
 ### Fixed
 
 - **CLI**: `felis notifications subscribe` ends with its clean terminal when the daemon stops, instead of exiting `2`
