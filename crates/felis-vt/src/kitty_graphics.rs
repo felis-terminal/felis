@@ -216,6 +216,29 @@ pub fn format_response(refs: &ResponseRefs, status: Status<'_>) -> Vec<u8> {
     out
 }
 
+/// The `OK` reply to a feature query (`a=q` with `e=`): `i=` and then the
+/// supported keys in the order given. Each value must be ASCII
+/// alphanumeric or `-`, the bytes a control value may hold.
+#[must_use]
+pub fn format_feature_response(image_id: u32, keys: &[(u8, String)]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(32);
+    out.extend_from_slice(b"\x1b_Gi=");
+    out.extend_from_slice(image_id.to_string().as_bytes());
+    for (key, value) in keys {
+        debug_assert!(
+            value
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        );
+        out.push(b',');
+        out.push(*key);
+        out.push(b'=');
+        out.extend_from_slice(value.as_bytes());
+    }
+    out.extend_from_slice(b";OK\x1b\\");
+    out
+}
+
 /// 64 MiB covers a 4K RGBA frame uncompressed (≈33 MiB) plus base64
 /// expansion. Per `docs/explanation/security-model.md` "Kitty graphics", a
 /// producer streaming `m=1` forever costs O(cap) memory, not O(stream).
@@ -327,11 +350,14 @@ impl ReassemblyTracker {
             };
         }
         // kitty's `grman_handle_command` routes only add actions through
-        // `currently_loading`; the rest run at once. A delete drops an open
-        // transfer (`handle_delete_command`); the others leave it to its
-        // next chunk.
-        if let Some(action @ (b"p" | b"d" | b"c" | b"a")) = cmd.get(b'a') {
-            if action == b"d" {
+        // `currently_loading`; the rest run at once, and so does a feature
+        // query, which kitty answers before `handle_add_command`. A delete
+        // drops an open transfer (`handle_delete_command`); the others
+        // leave it to its next chunk.
+        let action = cmd.get(b'a');
+        let feature_query = action == Some(b"q") && cmd.get(b'e').is_some();
+        if feature_query || matches!(action, Some(b"p" | b"d" | b"c" | b"a")) {
+            if action == Some(b"d") {
                 self.reset();
             }
             return Step::Done {
@@ -944,6 +970,16 @@ mod tests {
             Status::Ok,
         );
         assert_eq!(bytes, b"\x1b_Gi=1,I=2,p=3,r=4;OK\x1b\\");
+    }
+
+    #[test]
+    fn format_feature_response_puts_the_keys_after_the_image_id() {
+        let keys = [(b'e', "T".to_owned()), (b'z', "-3".to_owned())];
+        assert_eq!(
+            format_feature_response(31, &keys),
+            b"\x1b_Gi=31,e=T,z=-3;OK\x1b\\"
+        );
+        assert_eq!(format_feature_response(31, &[]), b"\x1b_Gi=31;OK\x1b\\");
     }
 
     #[test]

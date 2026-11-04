@@ -109,20 +109,21 @@ proptest! {
         prop_assert_eq!(emitted.unwrap(), expected);
     }
 
-    /// A put, compose or animation-control command completes on its own
-    /// body whatever its `m=`, even mid-transfer, and the transfer it
-    /// interrupts still assembles from its chunks alone.
+    /// A put, compose, animation-control command or feature query
+    /// (`a=q,e=…`) completes on its own body whatever its `m=`, even
+    /// mid-transfer, and the transfer it interrupts still assembles from
+    /// its chunks alone.
     #[test]
-    fn put_compose_and_animate_run_at_once_without_disturbing_an_open_transfer(
+    fn put_compose_animate_and_feature_query_run_at_once_without_disturbing_an_open_transfer(
         chunks in proptest::collection::vec(
             proptest::collection::vec(any::<u8>(), 0..32),
             2..6,
         ),
-        mid_transfer in prop::sample::select(vec![b"p", b"c", b"a"]),
+        mid_transfer in prop::sample::select(vec![b"p", b"c", b"a", b"q"]),
         interleaved in proptest::collection::vec(
             (
                 0..6usize,
-                prop::sample::select(vec![b"p", b"c", b"a"]),
+                prop::sample::select(vec![b"p", b"c", b"a", b"q"]),
                 any::<bool>(),
                 proptest::collection::vec(any::<u8>(), 0..8),
             ),
@@ -137,14 +138,17 @@ proptest! {
             let here = interleaved.iter().chain(std::iter::once(&forced));
             for (_, action, more, payload) in here.filter(|(at, ..)| *at == i) {
                 let m_value: &[u8] = if *more { b"1" } else { b"0" };
-                let cmd = Command {
-                    controls: vec![(b'a', action.as_slice()), (b'm', m_value)],
-                    payload,
-                };
-                let Outcome::Done(complete) = r.feed(&cmd) else {
+                let mut controls = vec![(b'a', action.as_slice())];
+                if *action == b"q" {
+                    controls.push((b'e', b"T"));
+                }
+                let expected: Vec<(u8, Vec<u8>)> =
+                    controls.iter().map(|(k, v)| (*k, v.to_vec())).collect();
+                controls.push((b'm', m_value));
+                let Outcome::Done(complete) = r.feed(&Command { controls, payload }) else {
                     return Err(TestCaseError::fail("a non-add command must complete at once"));
                 };
-                prop_assert_eq!(complete.controls, vec![(b'a', action.to_vec())]);
+                prop_assert_eq!(complete.controls, expected);
                 prop_assert_eq!(&complete.payload, payload);
             }
             let m_value: &[u8] = if i == last { b"0" } else { b"1" };

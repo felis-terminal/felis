@@ -319,6 +319,18 @@ targets, direct (`t=d`), file (`t=f`), temporary file (`t=t`), and shared memory
 only `t=d` succeeds. RGB, RGBA, PNG formats, zlib compression, Unicode placeholders, and animation controls report
 support identically across all supported targets.
 
+### Feature queries (`e=`)
+
+An `a=q` carrying `e=<action>` checks keys instead of loading data: the reply is `OK` and echoes, after `i=`, `e=` and
+then each non-default key of the query that felis honors for that action, with its value, in kitty's order. A key
+missing from the reply is not supported with that value; a reply without `e=` means the action is unknown. felis leaves
+out `f=8`/`f=16`, `N=`, a placement's `X=`/`Y=`, the relative placement keys (`P=`, `Q=`, `H=`, `V=`), and a value the
+action cannot hold or never reads: a cell coordinate or count past 65535, `s=`/`v=` with PNG data, and `S=`/`O=` without
+a file medium. On Windows it reports `t=d` alone. The [limits](#limits) are not checked: a reply naming a key does not
+promise that a load using it fits, which a plain `a=q` tests. A feature query reads no payload and leaves an open
+chunked transfer alone. It is answered only with `i=` and without `q=`; an `e=` that is not one letter drops the
+command. `e=` on any other action is ignored.
+
 ### Response suppression (`q=`)
 
 The `q=` parameter controls daemon acknowledgments:

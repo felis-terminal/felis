@@ -594,17 +594,17 @@ fn inflate_if_zlib(bytes: Vec<u8>, complete: &CompleteCommand) -> Result<Vec<u8>
 
 /// `f=` defaults to `32` (RGBA), Kitty's documented default.
 fn decode_format(bytes: Vec<u8>, complete: &CompleteCommand) -> Result<ImageEntry, DecodeError> {
-    let f = control_value(complete, b'f').unwrap_or(b"32");
+    let f = match control_value(complete, b'f') {
+        None => Some(32),
+        Some(_) => control_u32(complete, b'f'),
+    };
     match f {
-        b"24" => decode_raw(bytes, complete, ImageFormat::Rgb24, 3),
-        b"32" => decode_raw(bytes, complete, ImageFormat::Rgba32, 4),
-        b"100" => decode_png(&bytes),
-        other => {
-            let _ = other;
-            Err(DecodeError::InvalidValue(
-                "f= must be 24 (RGB), 32 (RGBA), or 100 (PNG)",
-            ))
-        }
+        Some(24) => decode_raw(bytes, complete, ImageFormat::Rgb24, 3),
+        Some(32) => decode_raw(bytes, complete, ImageFormat::Rgba32, 4),
+        Some(100) => decode_png(&bytes),
+        _ => Err(DecodeError::InvalidValue(
+            "f= must be 24 (RGB), 32 (RGBA), or 100 (PNG)",
+        )),
     }
 }
 
