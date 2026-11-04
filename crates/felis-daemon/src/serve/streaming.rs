@@ -194,6 +194,8 @@ fn replay_effects(
                 session.program_status.expire_transient();
                 session.terminal_progress = None;
             }
+            // Nothing consumes prompt edges yet.
+            PtyEffect::Prompt(_) => {}
             PtyEffect::TerminalProgress(report) => session.terminal_progress = report,
             PtyEffect::CommandOutput { text, omitted } => session
                 .command_outputs

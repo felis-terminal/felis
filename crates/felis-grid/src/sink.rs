@@ -3,7 +3,7 @@
 
 use super::{
     AttrFlags, Cell, DA1_REPLY, DCS_BUFFER_LIMIT, DcsKind, DcsState, Grapheme, Grid,
-    ModifyOtherKeys, MouseEncoding, MouseProtocol, PromptKind, PromptMark, PtyEffect,
+    ModifyOtherKeys, MouseEncoding, MouseProtocol, PromptEdge, PromptKind, PromptMark, PtyEffect,
     SPECIAL_COLOR_COUNT, Sink, ThemeChannel, parse_osc_133, sanitize_osc_str,
 };
 use crate::editing::blank_cells;
@@ -796,6 +796,17 @@ impl Sink for Grid {
                             kind: mark.kind,
                             exit_code: mark.exit_code,
                         });
+                        let edge = match mark.kind {
+                            PromptKind::PromptStart if !mark.secondary => Some(PromptEdge::Shown),
+                            PromptKind::CommandEnd => Some(PromptEdge::CommandFinished {
+                                exit_code: mark.exit_code,
+                            }),
+                            _ => None,
+                        };
+                        if let Some(edge) = edge {
+                            self.pty_effects.push_prompt_edge(edge);
+                            self.yield_pending |= self.pty_effects.status_budget_spent();
+                        }
                     }
                     _ => unreachable!("outer match already narrowed to this code set"),
                 }

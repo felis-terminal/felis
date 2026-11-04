@@ -135,7 +135,13 @@ fn an_owed_prompt_expiry_survives_the_hop() {
     assert_eq!(grid.take_pty_effects().len(), 1, "the report");
     let (mut parser, mut grid) = hop(&parser, &grid);
     parser.advance(&mut grid, b"\x1b]133;A\x07");
-    assert_eq!(grid.take_pty_effects(), [PtyEffect::PromptStarted]);
+    assert_eq!(
+        grid.take_pty_effects(),
+        [
+            PtyEffect::PromptStarted,
+            PtyEffect::Prompt(crate::PromptEdge::Shown)
+        ]
+    );
 }
 
 /// A parked session crosses the hop answering the same configured

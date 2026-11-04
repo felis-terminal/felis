@@ -276,6 +276,10 @@ pub enum PtyEffect {
     ProgramStatus(ProgramStatusEffect),
     /// OSC 133 `A` that is not a `k=s` continuation, on either screen.
     PromptStarted,
+    /// A primary OSC 133 `A` or a `D`, on either screen, queued after the
+    /// mark joins [`Grid::prompt_marks`] so it keeps its place among the
+    /// status effects.
+    Prompt(PromptEdge),
     /// A terminated `ConEmu` `OSC 9 ; 4` report; `None` clears.
     TerminalProgress(felis_vt::progress::ProgressReport),
     /// The text of a finished command's output, cut at its primary-screen
@@ -284,6 +288,15 @@ pub enum PtyEffect {
         text: String,
         omitted: felis_protocol::messages::OmittedOutput,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "state-dump", derive(Serialize, Deserialize))]
+pub enum PromptEdge {
+    /// A primary `A`: the shell drew a prompt.
+    Shown,
+    /// A `D`; `None` for a bare one.
+    CommandFinished { exit_code: Option<u32> },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

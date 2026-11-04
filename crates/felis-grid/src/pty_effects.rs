@@ -16,11 +16,9 @@ pub const APC_OUTBOX_BYTES: usize = 1024 * 1024;
 
 const _: () = assert!(APC_OUTBOX_BYTES >= felis_vt::APC_BUFFER_LIMIT);
 
-/// [`ProgramStatus`](crate::PtyEffect::ProgramStatus),
-/// [`PromptStarted`](crate::PtyEffect::PromptStarted) and
-/// [`TerminalProgress`](crate::PtyEffect::TerminalProgress) effects
-/// buffered between drains before the parse yields. None is ever dropped:
-/// the daemon's state must match what the producer sent.
+/// Program-status, prompt and terminal-progress effects buffered between
+/// drains before the parse yields. None is ever dropped: the daemon's
+/// state must match what the producer sent.
 pub const STATUS_OUTBOX_YIELD: usize = 64;
 
 /// [`CommandOutput`](crate::PtyEffect::CommandOutput) effects buffered
@@ -36,6 +34,8 @@ pub struct PtyEffectQueue {
     apc_bytes: usize,
     status_len: usize,
     command_output_len: usize,
+    /// Prompt edges at the tail, which a scroll coalesces past.
+    trailing_edges: usize,
 }
 
 impl PartialEq for PtyEffectQueue {
@@ -58,15 +58,36 @@ impl PtyEffectQueue {
         }
         if matches!(
             effect,
-            PtyEffect::ProgramStatus(_) | PtyEffect::PromptStarted | PtyEffect::TerminalProgress(_)
+            PtyEffect::ProgramStatus(_)
+                | PtyEffect::PromptStarted
+                | PtyEffect::Prompt(_)
+                | PtyEffect::TerminalProgress(_)
         ) {
             self.status_len += 1;
         }
         if matches!(effect, PtyEffect::CommandOutput { .. }) {
             self.command_output_len += 1;
         }
+        self.trailing_edges = if matches!(effect, PtyEffect::Prompt(_)) {
+            self.trailing_edges + 1
+        } else {
+            0
+        };
         self.effects.push(effect);
         true
+    }
+
+    /// [`Self::push`] for the one effect every shell prompt queues,
+    /// without the general path's per-kind checks. Room for the rest of
+    /// the status budget is taken at once: a drain that sees one prompt
+    /// usually sees a command's worth, and growing a step at a time
+    /// costs more than the edges.
+    pub fn push_prompt_edge(&mut self, edge: crate::PromptEdge) {
+        self.effects
+            .reserve(STATUS_OUTBOX_YIELD.saturating_sub(self.status_len));
+        self.status_len += 1;
+        self.trailing_edges += 1;
+        self.effects.push(PtyEffect::Prompt(edge));
     }
 
     /// `false` when this drain's APC budget is spent; a refused APC
@@ -75,6 +96,7 @@ impl PtyEffectQueue {
         if !self.reserve_apc(body.len()) {
             return false;
         }
+        self.trailing_edges = 0;
         self.effects.push(PtyEffect::Apc(ApcBody {
             body: body.to_vec(),
             cursor_row,
@@ -83,12 +105,23 @@ impl PtyEffectQueue {
         true
     }
 
+    /// The effects a scroll may coalesce into: trailing prompt edges
+    /// commute with every scroll effect, since nothing that consumes one
+    /// reads the other, and leaving them in the way would split a
+    /// command's output into one scroll directive per prompt.
+    #[inline]
+    fn coalescing_tail(&mut self) -> &mut [PtyEffect] {
+        let end = self.effects.len() - self.trailing_edges;
+        &mut self.effects[..end]
+    }
+
     /// Coalesces into the tail entry, reaching past a trailing
     /// [`Scrolled`](PtyEffect::Scrolled), which commutes with a placement
     /// shift. No general `last_mut` exists: it would hand out a slot an
     /// APC could be written into past the budget.
+    #[inline]
     pub fn push_scroll(&mut self, n: u32) {
-        let tail = match self.effects.as_mut_slice() {
+        let tail = match self.coalescing_tail() {
             [
                 ..,
                 PtyEffect::ScrolledIntoScrollback(total),
@@ -100,6 +133,7 @@ impl PtyEffectQueue {
         if let Some(total) = tail {
             *total = total.saturating_add(n);
         } else {
+            self.trailing_edges = 0;
             self.effects.push(PtyEffect::ScrolledIntoScrollback(n));
         }
     }
@@ -114,7 +148,7 @@ impl PtyEffectQueue {
                 && tail.region_bottom == op.region_bottom
                 && tail.direction == op.direction
         };
-        let tail = match self.effects.as_mut_slice() {
+        let tail = match self.coalescing_tail() {
             [
                 ..,
                 PtyEffect::RegionScrolled {
@@ -135,6 +169,7 @@ impl PtyEffectQueue {
         if let Some(tail) = tail {
             tail.n_rows = tail.n_rows.saturating_add(op.n_rows);
         } else {
+            self.trailing_edges = 0;
             self.effects
                 .push(PtyEffect::RegionScrolled { op, into_history });
         }
@@ -149,7 +184,7 @@ impl PtyEffectQueue {
             geometry_gen: tail_gen,
             last_seq,
             ..
-        }) = self.effects.last_mut()
+        }) = self.coalescing_tail().last_mut()
             && *tail_gen == geometry_gen
             && tail.region_top == op.region_top
             && tail.region_bottom == op.region_bottom
@@ -160,6 +195,7 @@ impl PtyEffectQueue {
             *last_seq = scroll_seq;
             return;
         }
+        self.trailing_edges = 0;
         self.effects.push(PtyEffect::Scrolled {
             op,
             geometry_gen,
@@ -189,6 +225,7 @@ impl PtyEffectQueue {
         self.apc_bytes = 0;
         self.status_len = 0;
         self.command_output_len = 0;
+        self.trailing_edges = 0;
         std::mem::take(&mut self.effects)
     }
 
@@ -234,6 +271,7 @@ impl<'de> serde::Deserialize<'de> for PtyEffectQueue {
                     effect,
                     PtyEffect::ProgramStatus(_)
                         | PtyEffect::PromptStarted
+                        | PtyEffect::Prompt(_)
                         | PtyEffect::TerminalProgress(_)
                 )
             })
@@ -242,12 +280,18 @@ impl<'de> serde::Deserialize<'de> for PtyEffectQueue {
             .iter()
             .filter(|effect| matches!(effect, PtyEffect::CommandOutput { .. }))
             .count();
+        let trailing_edges = effects
+            .iter()
+            .rev()
+            .take_while(|effect| matches!(effect, PtyEffect::Prompt(_)))
+            .count();
         Ok(Self {
             effects,
             apc_len,
             apc_bytes,
             status_len,
             command_output_len,
+            trailing_edges,
         })
     }
 }
