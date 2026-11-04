@@ -816,6 +816,21 @@ impl Grid {
         }
     }
 
+    /// The span an erase of `[from, to)` blanks: the OSC 66 blocks it
+    /// reaches are erased whole first, then the span widens over any
+    /// wide pair it splits.
+    pub(crate) fn erase_aligned_span(
+        &mut self,
+        row: u16,
+        from: usize,
+        to: usize,
+        protect: AttrFlags,
+    ) -> (usize, usize) {
+        let col = |c: usize| u16::try_from(c).unwrap_or(u16::MAX);
+        self.erase_sized_blocks_on(row, col(from), col(to), protect);
+        self.pair_aligned_span(row, from, to)
+    }
+
     /// Widens `[from, to)` so it splits no wide pair. Past the watermark a
     /// recycled row's stale `Spacer` would pull in a live cell, so only
     /// cells below it are probed. A pair shares one protection state, so
@@ -896,7 +911,13 @@ impl Grid {
         from = from.max(row_start).min(row_end);
         to = to.max(from).min(row_end);
         if erase {
-            let (from_col, to_col) = self.pair_aligned_span(row, from - row_start, to - row_start);
+            let protect = if iso_aware {
+                AttrFlags::ISO_PROTECTED
+            } else {
+                AttrFlags::empty()
+            };
+            let (from_col, to_col) =
+                self.erase_aligned_span(row, from - row_start, to - row_start, protect);
             from = row_start + from_col;
             to = row_start + to_col;
         }
@@ -2313,9 +2334,9 @@ impl Grid {
         // The watermark is raised to `to`, over any stale tail left of
         // `from` that this erase skips.
         self.materialize_row_tail(row);
-        let (from, to) = self.pair_aligned_span(row, from, to);
-        let blank = self.selective_blank();
         let protect = AttrFlags::PROTECTED | AttrFlags::ISO_PROTECTED;
+        let (from, to) = self.erase_aligned_span(row, from, to, protect);
+        let blank = self.selective_blank();
         for col in from..to {
             let idx = row_start + col;
             if !self
@@ -2345,10 +2366,22 @@ impl Grid {
         for r in 0..self.screen.rows {
             self.materialize_row_tail(r);
         }
-        let (tail_start, _) = self.pair_aligned_span(self.screen.cursor.row, cur_col, cols);
-        let (_, head_end) = self.pair_aligned_span(self.screen.cursor.row, 0, cur_col + 1);
-        let blank = self.selective_blank();
         let protect = AttrFlags::PROTECTED | AttrFlags::ISO_PROTECTED;
+        let row = self.screen.cursor.row;
+        let (whole_rows, cursor_span) = match ps {
+            0 => (row + 1..self.screen.rows, cur_col..cols),
+            1 => (0..row, 0..cur_col + 1),
+            2 => (0..self.screen.rows, 0..0),
+            _ => return,
+        };
+        for r in whole_rows {
+            self.erase_sized_blocks_on(r, 0, self.screen.cols, protect);
+        }
+        let col = |c: usize| u16::try_from(c).unwrap_or(u16::MAX);
+        self.erase_sized_blocks_on(row, col(cursor_span.start), col(cursor_span.end), protect);
+        let (tail_start, _) = self.pair_aligned_span(row, cur_col, cols);
+        let (_, head_end) = self.pair_aligned_span(row, 0, cur_col + 1);
+        let blank = self.selective_blank();
         let styles = &self.screen.style_table;
         let erase_range = |start: usize, end: usize, cells: &mut [Cell], blank: &Cell| {
             for cell in &mut cells[start..end] {
@@ -2480,8 +2513,12 @@ impl Grid {
             return;
         };
         for r in rect.top..=rect.bottom {
-            let (from, to) =
-                self.pair_aligned_span(r, usize::from(rect.left), usize::from(rect.right) + 1);
+            let (from, to) = self.erase_aligned_span(
+                r,
+                usize::from(rect.left),
+                usize::from(rect.right) + 1,
+                AttrFlags::empty(),
+            );
             let row_start = self.screen.idx(r, 0);
             blank_cells(&mut self.screen.cells[row_start + from..row_start + to]);
             self.screen.damage.mark(usize::from(r));
@@ -2498,8 +2535,12 @@ impl Grid {
         for r in rect.top..=rect.bottom {
             // Reads and re-watermarks past existing occupancy, so materialize first.
             self.materialize_row_tail(r);
-            let (from, to) =
-                self.pair_aligned_span(r, usize::from(rect.left), usize::from(rect.right) + 1);
+            let (from, to) = self.erase_aligned_span(
+                r,
+                usize::from(rect.left),
+                usize::from(rect.right) + 1,
+                AttrFlags::PROTECTED,
+            );
             let row_start = self.screen.idx(r, 0);
             for idx in row_start + from..row_start + to {
                 if !self

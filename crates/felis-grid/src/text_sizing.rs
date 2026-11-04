@@ -2,7 +2,7 @@
 //! handle stamping, and the spanned-block bookkeeping the OSC 66
 //! dispatcher and the renderer read.
 
-use super::{Cell, Grapheme, Grid, Sizing, SizingHandle, ViewportRow};
+use super::{AttrFlags, Cell, Grapheme, Grid, Sizing, SizingHandle, ViewportRow};
 
 /// An OSC 66 character's footprint: `rows × cols` cells from its
 /// primary at `(top, left)`.
@@ -88,14 +88,14 @@ impl Grid {
         }
     }
 
-    /// Distinct multi-row blocks with a cell inside the watermark of
-    /// `row` × `[left, right)` that `keep` accepts.
-    fn multirow_blocks_on(
+    /// Distinct blocks with a cell inside the watermark of `row` ×
+    /// `[left, right)` that `keep` accepts for that cell.
+    fn sized_blocks_on(
         &self,
         row: u16,
         left: u16,
         right: u16,
-        keep: impl Fn(&SizedBlock) -> bool,
+        keep: impl Fn(&Cell, &SizedBlock) -> bool,
     ) -> Vec<SizedBlock> {
         let mut out: Vec<SizedBlock> = Vec::new();
         if !self.screen.has_sized_cells() || row >= self.screen.rows {
@@ -111,8 +111,7 @@ impl Grid {
         for (col, cell) in (left..end).zip(cells) {
             if cell.sizing.is_some()
                 && let Some(block) = self.sized_block_at(row, col)
-                && block.rows > 1
-                && keep(&block)
+                && keep(cell, &block)
                 && !out.iter().any(|b| b.same_as(&block))
             {
                 out.push(block);
@@ -128,7 +127,29 @@ impl Grid {
         if !self.screen.has_sized_cells() {
             return;
         }
-        for block in self.multirow_blocks_on(row, left, right, |_| true) {
+        for block in self.sized_blocks_on(row, left, right, |_, b| b.rows > 1) {
+            self.clear_sized_block(block);
+        }
+    }
+
+    /// An erase that reaches any cell of a block erases the whole block,
+    /// on every row, unless that cell carries one of the `protect` flags
+    /// the erase skips.
+    pub(crate) fn erase_sized_blocks_on(
+        &mut self,
+        row: u16,
+        left: u16,
+        right: u16,
+        protect: AttrFlags,
+    ) {
+        if !self.screen.has_sized_cells() {
+            return;
+        }
+        let styles = &self.screen.style_table;
+        let blocks = self.sized_blocks_on(row, left, right, |cell, _| {
+            !styles.resolve(cell.style).flags.intersects(protect)
+        });
+        for block in blocks {
             self.clear_sized_block(block);
         }
     }
@@ -152,7 +173,8 @@ impl Grid {
             if seam == 0 {
                 continue;
             }
-            for block in self.multirow_blocks_on(seam, left, right, |b| b.top < seam) {
+            for block in self.sized_blocks_on(seam, left, right, |_, b| b.rows > 1 && b.top < seam)
+            {
                 if !cut.iter().any(|b| b.same_as(&block)) {
                     cut.push(block);
                 }

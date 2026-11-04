@@ -580,6 +580,51 @@ fn a_cell_move_keeps_or_erases_a_multi_row_block_whole() {
     }
 }
 
+/// `(case, op, primary afterwards)`.
+type EraseCase = (&'static str, &'static [u8], Option<(u16, u16)>);
+
+/// A 2×2 `A` at (1,2) on a 4×10 grid, then an erase: one that reaches
+/// any of its cells erases all four, one that stops short keeps it.
+#[test]
+fn an_erase_reaching_part_of_a_block_erases_it_whole() {
+    let cases: [EraseCase; 12] = [
+        ("EL 0 from its right half", b"\x1b[2;4H\x1b[K", None),
+        ("EL 1 to its left half", b"\x1b[3;3H\x1b[1K", None),
+        ("EL 2 on its bottom row", b"\x1b[3;1H\x1b[2K", None),
+        ("EL 0 right of it", b"\x1b[2;5H\x1b[K", Some((1, 2))),
+        ("ED 0 below its top row", b"\x1b[2;5H\x1b[J", None),
+        ("ED 1 above its bottom row", b"\x1b[3;1H\x1b[1J", None),
+        ("ECH on its bottom-right cell", b"\x1b[3;4H\x1b[X", None),
+        ("DECERA over its bottom row", b"\x1b[3;1;3;10$z", None),
+        ("DECSERA over its bottom row", b"\x1b[3;1;3;10${", None),
+        ("DECSEL on its bottom row", b"\x1b[3;1H\x1b[?2K", None),
+        ("DECSED 0 below its top row", b"\x1b[2;5H\x1b[?J", None),
+        ("DECSED 1 above its bottom row", b"\x1b[3;1H\x1b[?1J", None),
+    ];
+    for (case, op, expected) in cases {
+        let mut p = Parser::new();
+        let mut g = Grid::new(4, 10);
+        drive(&mut p, &mut g, b"\x1b[2;3H\x1b]66;s=2;A\x07");
+        drive(&mut p, &mut g, op);
+        assert_blocks_whole(&g, case);
+        assert_eq!(primary(&g), expected, "{case}");
+    }
+}
+
+/// A selective erase skips a DECSCA-protected block, every row of it.
+#[test]
+fn a_selective_erase_keeps_a_protected_block_whole() {
+    let mut p = Parser::new();
+    let mut g = Grid::new(4, 10);
+    drive(
+        &mut p,
+        &mut g,
+        b"\x1b[2;3H\x1b[1\"q\x1b]66;s=2;A\x07\x1b[0\"q\x1b[3;1H\x1b[?2K",
+    );
+    assert_blocks_whole(&g, "DECSEL");
+    assert_eq!(primary(&g), Some((1, 2)));
+}
+
 #[test]
 fn a_full_screen_scroll_moves_a_multi_row_block_whole() {
     let mut p = Parser::new();
@@ -697,6 +742,24 @@ fn arb_move() -> impl proptest::strategy::Strategy<Value = Vec<u8>> {
         prop_oneof![Just(b"\x1b[?69l".to_vec()), Just(b"\x1b[r".to_vec())],
         prop_oneof![Just(b"\x1b[?1049h".to_vec()), Just(b"\x1b[?1049l".to_vec())],
         prop_oneof![Just(b"\x1b[?7h".to_vec()), Just(b"\x1b[?7l".to_vec())],
+        (0u8..3, prop::sample::select(&["K", "J", "?K", "?J"][..])).prop_map(|(ps, f)| format!(
+            "\x1b[{}{ps}{}",
+            &f[..f.len() - 1],
+            &f[f.len() - 1..]
+        )
+        .into_bytes()),
+        (1u8..4).prop_map(|n| format!("\x1b[{n}X").into_bytes()),
+        (
+            1u8..7,
+            1u8..13,
+            0u8..3,
+            0u8..3,
+            prop::sample::select(&["$z", "${"][..])
+        )
+            .prop_map(
+                |(t, l, h, w, f)| format!("\x1b[{t};{l};{};{}{f}", t + h, l + w).into_bytes()
+            ),
+        prop_oneof![Just(b"\x1b[1\"q".to_vec()), Just(b"\x1b[0\"q".to_vec())],
     ]
 }
 
@@ -723,10 +786,10 @@ fn arb_op() -> impl proptest::strategy::Strategy<Value = Op> {
 }
 
 proptest::proptest! {
-    /// No sequence of writes, cell moves and resizes leaves part of a
-    /// block behind or a block running off the grid.
+    /// No sequence of writes, cell moves, erases and resizes leaves part
+    /// of a block behind or a block running off the grid.
     #[test]
-    fn no_cell_move_leaves_part_of_a_block(ops in proptest::collection::vec(arb_op(), 1..40)) {
+    fn no_edit_leaves_part_of_a_block(ops in proptest::collection::vec(arb_op(), 1..40)) {
         let mut p = Parser::new();
         let mut g = Grid::new(6, 12);
         for op in &ops {

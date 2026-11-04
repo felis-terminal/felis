@@ -24,6 +24,8 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 
 - **Graphics**: an animation frame (`a=f`) overwrites the canvas under `X=1`, the key the Kitty graphics protocol
   defines for it; felis read `C=1`, the composition key of `a=c`, so `X=1` frames alpha-blended.
+- **Text sizing**: an erase (EL, ED, ECH, DECERA and their selective forms) that reaches part of an `OSC 66` character
+  erases the whole character, instead of leaving its other cells behind.
 - **CLI**: `felis notifications subscribe` ends with its clean terminal when the daemon stops, instead of exiting `2`
   with `daemon_lost`.
 
