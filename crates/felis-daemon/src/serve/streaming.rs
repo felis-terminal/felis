@@ -11,7 +11,8 @@ use super::{
     ConnError, ConnectionMode, Grid, GridMsg, ImageMsg, Instant, PtyEffect, SessionId, ThemeChannel,
 };
 use felis_grid::{
-    Damage, ProgramStatusEffect, RowEncode, ScrollOp, ViewportAnchor, ViewportRowView, encode_row,
+    Damage, ProgramStatusEffect, PromptEdge, RowEncode, ScrollOp, ViewportAnchor, ViewportRowView,
+    encode_row,
 };
 use felis_protocol::messages::{
     AttentionSource, Correlation, Notification, OpsToClientMsg, PaletteAction, StreamErrorReason,
@@ -139,7 +140,9 @@ fn replay_effects(
                     &mut session.image_events,
                 );
                 session.saved_screens.alternate = None;
+                let before = session.program_status.generation();
                 session.program_status.reset();
+                note_status_change(session, before);
                 session.terminal_progress = None;
             }
             // Parked for `session_task::fan_out_grid_state`, the only consumer
@@ -185,17 +188,25 @@ fn replay_effects(
                 );
             }
             PtyEffect::ProgramStatus(ProgramStatusEffect::Report(report)) => {
+                let before = session.program_status.generation();
                 session.program_status.report(*report);
+                note_status_change(session, before);
             }
             PtyEffect::ProgramStatus(ProgramStatusEffect::Clear { id }) => {
+                let before = session.program_status.generation();
                 session.program_status.clear(&id);
+                note_status_change(session, before);
             }
             PtyEffect::PromptStarted => {
+                let before = session.program_status.generation();
                 session.program_status.expire_transient();
+                note_status_change(session, before);
                 session.terminal_progress = None;
             }
-            // Nothing consumes prompt edges yet.
-            PtyEffect::Prompt(_) => {}
+            PtyEffect::Prompt(PromptEdge::Shown) => session.observed.push(Observed::PromptShown),
+            PtyEffect::Prompt(PromptEdge::CommandFinished { exit_code }) => {
+                session.observed.push(Observed::CommandFinished(exit_code));
+            }
             PtyEffect::TerminalProgress(report) => session.terminal_progress = report,
             PtyEffect::CommandOutput { text, omitted } => session
                 .command_outputs
@@ -299,6 +310,24 @@ impl DiffStreamState {
         let moved = stepped != self.viewport;
         self.viewport = stepped;
         moved
+    }
+}
+
+/// One observer item the effect replay parked, in the order the program
+/// wrote what caused it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Observed {
+    ProgramStatus(Vec<felis_protocol::messages::ProgramStatusRecord>),
+    PromptShown,
+    CommandFinished(Option<u32>),
+}
+
+/// Parks the record set as it now stands when `before` is out of date.
+pub(crate) fn note_status_change(session: &mut crate::pool::Session, before: u64) {
+    if session.program_status.generation() != before {
+        session
+            .observed
+            .push(Observed::ProgramStatus(session.program_status.snapshot()));
     }
 }
 

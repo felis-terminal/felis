@@ -9,7 +9,7 @@ use std::{
     num::NonZeroU64,
     sync::{
         Arc, Mutex as StdMutex,
-        atomic::{AtomicU64, AtomicUsize, Ordering as AtomicOrdering},
+        atomic::{AtomicU8, AtomicU64, AtomicUsize, Ordering as AtomicOrdering},
     },
     time::Instant,
 };
@@ -150,6 +150,9 @@ pub struct Session {
     /// `GridMsg::CommandOutput` frames the effect replay parked this
     /// drain cycle for the opted-in subscribers.
     pub command_outputs: Vec<felis_protocol::messages::GridMsg>,
+    /// Observer items the effect replay parked this drain cycle, in byte
+    /// order, for the session task to publish once the row is updated.
+    pub observed: Vec<crate::serve::streaming::Observed>,
     /// OSC 7501 records, applied in byte order by the effect replay.
     pub program_status: crate::program_status::ProgramStatusStore,
     /// The last `OSC 9 ; 4` report, applied in byte order like
@@ -205,6 +208,7 @@ impl Session {
             image_events: Vec::new(),
             scroll_ops: Vec::new(),
             command_outputs: Vec::new(),
+            observed: Vec::new(),
             program_status: crate::program_status::ProgramStatusStore::default(),
             terminal_progress: None,
             cell_pixel_w: 0,
@@ -374,6 +378,73 @@ pub struct SessionHandle {
     /// task, which must keep running while its threads park. `None` for
     /// a handle built without a PTY.
     pub upgrade: Option<UpgradeParts>,
+    pub publication: Arc<Publication>,
+}
+
+/// Whether a row ever became nameable and what observers have heard of
+/// it, shared by the pool, the owner task and its supervisor: a session
+/// that ends on any path before its task heard it was published still
+/// owes the `SessionAdded` and `SessionRemoved` the roster implied.
+#[derive(Debug, Default)]
+pub struct Publication(AtomicU8);
+
+/// Publish one observer item. Zero observers is the usual case, not a
+/// failure.
+pub fn emit(hub: &broadcast::Sender<NotifyToClientMsg>, msg: NotifyToClientMsg) {
+    let _sent = hub.send(msg).is_ok();
+}
+
+impl Publication {
+    const HELD: u8 = 0;
+    const LISTED: u8 = 1;
+    const ANNOUNCED: u8 = 2;
+    const ENDED: u8 = 3;
+
+    #[must_use]
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self::default())
+    }
+
+    fn mark_listed(&self) {
+        let _first = self.0.compare_exchange(
+            Self::HELD,
+            Self::LISTED,
+            AtomicOrdering::AcqRel,
+            AtomicOrdering::Acquire,
+        );
+    }
+
+    /// `SessionAdded` went out, and the session has not ended.
+    #[must_use]
+    pub fn is_announced(&self) -> bool {
+        self.0.load(AtomicOrdering::Acquire) == Self::ANNOUNCED
+    }
+
+    /// Claim the `SessionAdded` of a listed row. `false`: it already
+    /// went out, the row is still held, or the session ended first.
+    pub fn announce(&self) -> bool {
+        self.0
+            .compare_exchange(
+                Self::LISTED,
+                Self::ANNOUNCED,
+                AtomicOrdering::AcqRel,
+                AtomicOrdering::Acquire,
+            )
+            .is_ok()
+    }
+
+    /// Settle the session's lifecycle once, publishing whichever of
+    /// `SessionAdded` and `SessionRemoved` the roster still owes; a
+    /// second call publishes nothing.
+    pub fn end(&self, hub: &broadcast::Sender<NotifyToClientMsg>, id: SessionId) {
+        let was = self.0.swap(Self::ENDED, AtomicOrdering::AcqRel);
+        if was == Self::LISTED {
+            emit(hub, NotifyToClientMsg::SessionAdded { session_id: id.0 });
+        }
+        if was == Self::LISTED || was == Self::ANNOUNCED {
+            emit(hub, NotifyToClientMsg::SessionRemoved { session_id: id.0 });
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -554,6 +625,10 @@ pub struct SessionPool {
     /// (docs/reference/protocols/notifications.md): session tasks publish,
     /// `felis notifications subscribe` observers receive.
     notify_hub: broadcast::Sender<NotifyToClientMsg>,
+    /// Every observer kind but notifications. A ring of its own, so the
+    /// traffic of kinds a notification subscriber never asked for cannot
+    /// push it into lag.
+    events_hub: broadcast::Sender<NotifyToClientMsg>,
 }
 
 impl Default for SessionPool {
@@ -568,6 +643,7 @@ impl SessionPool {
         // A slow observer that falls 256 behind sees a typed
         // `NotifyToClientMsg::Lagged` marker for the gap, never a silent drop.
         let (notify_hub, _) = broadcast::channel(256);
+        let (events_hub, _) = broadcast::channel(1024);
         Self {
             sessions: HashMap::new(),
             held: HashSet::new(),
@@ -579,6 +655,7 @@ impl SessionPool {
             sequences: AtomicU64::new(0),
             attachment_ids: AttachmentIds(Arc::new(AtomicU64::new(0))),
             notify_hub,
+            events_hub,
         }
     }
 
@@ -609,6 +686,18 @@ impl SessionPool {
     #[must_use]
     pub fn subscribe_notifications(&self) -> broadcast::Receiver<NotifyToClientMsg> {
         self.notify_hub.subscribe()
+    }
+
+    #[doc(hidden)]
+    #[must_use]
+    pub fn events_hub(&self) -> broadcast::Sender<NotifyToClientMsg> {
+        self.events_hub.clone()
+    }
+
+    #[doc(hidden)]
+    #[must_use]
+    pub fn subscribe_events(&self) -> broadcast::Receiver<NotifyToClientMsg> {
+        self.events_hub.subscribe()
     }
 
     /// Take one slot if the pool is not draining and is below `max`,
@@ -765,10 +854,12 @@ impl SessionPool {
         slot: Option<SessionSlot>,
         listing: Listing,
     ) {
-        self.sessions.insert(id, handle);
         if listing == Listing::Held {
             self.held.insert(id);
+        } else {
+            handle.publication.mark_listed();
         }
+        self.sessions.insert(id, handle);
         drop(slot);
     }
 
@@ -778,7 +869,11 @@ impl SessionPool {
     #[doc(hidden)]
     pub fn publish(&mut self, id: SessionId) -> bool {
         self.held.remove(&id);
-        self.sessions.contains_key(&id)
+        let Some(handle) = self.sessions.get(&id) else {
+            return false;
+        };
+        handle.publication.mark_listed();
+        true
     }
 
     #[doc(hidden)]
@@ -1061,6 +1156,7 @@ mod tests {
             input_budget: new_input_budget(),
             resizer: None,
             upgrade: None,
+            publication: Publication::new(),
             meta: Arc::new(StdMutex::new(SessionMeta {
                 rows: DEFAULT_ROWS,
                 cols: DEFAULT_COLS,

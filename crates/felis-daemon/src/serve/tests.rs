@@ -9212,4 +9212,6 @@ proptest::proptest! {
 }
 
 #[cfg(unix)]
+mod observer_events;
+#[cfg(unix)]
 mod unattached;

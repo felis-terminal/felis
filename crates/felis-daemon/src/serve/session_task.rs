@@ -20,8 +20,8 @@ use felis_protocol::{
     messages::{
         AttachCarrier, Attachment, ConnToClientMsg, Correlation, ExitStatus, GridDims, GridMsg,
         ImageMsg, InputMsg, NotifyToClientMsg, OpsToClientMsg, PushMsg, RegionToClientMsg,
-        RequestId, SearchToClientMsg, SearchToDaemonMsg, SessionInfo, SessionToClientMsg,
-        StreamErrorReason, StreamId, Subject, SwitchDenied, SwitchScope,
+        RequestId, SearchToClientMsg, SearchToDaemonMsg, SessionField, SessionInfo,
+        SessionToClientMsg, StreamErrorReason, StreamId, Subject, SwitchDenied, SwitchScope,
     },
 };
 use felis_pty::{ChildHandle, Size as PtySize};
@@ -378,6 +378,9 @@ pub struct SubscribeOk {
 
 pub enum SessionCmd {
     Subscribe(SubscribeReq),
+    /// The creator made a [`Listing::Held`] row nameable: the observer
+    /// items held until now go out behind `SessionAdded`.
+    Published,
     /// Unknown ids are ignored: a post-eviction race is harmless.
     Unsubscribe {
         sub: SubscriberId,
@@ -736,7 +739,8 @@ async fn spawn_task(
         sequence,
     }));
     let meta_status_generation = session.program_status.generation();
-    let (hub, attachment_ids) = {
+    let publication = crate::pool::Publication::new();
+    let (hub, attachment_ids, events_hub) = {
         guard.register(
             id,
             SessionHandle {
@@ -748,11 +752,16 @@ async fn spawn_task(
                     quiescer: session.quiescer.clone(),
                     child: Arc::clone(&session.child),
                 }),
+                publication: Arc::clone(&publication),
             },
             slot,
             listing,
         );
-        let handles = (guard.notify_hub(), guard.attachment_ids());
+        let handles = (
+            guard.notify_hub(),
+            guard.attachment_ids(),
+            guard.events_hub(),
+        );
         drop(guard);
         handles
     };
@@ -777,6 +786,7 @@ async fn spawn_task(
         meta,
         pool: Arc::downgrade(pool),
         hub,
+        observers: ObserverOutbox::new(events_hub, id, Arc::clone(&publication)),
         policy,
         active_sub: None,
         input_owner: None,
@@ -813,6 +823,7 @@ async fn spawn_task(
         // may carry replies the program is still waiting for.
         task.session.signals.mark_dirty();
     }
+    task.observers.publish();
     let child = Arc::clone(&task.session.child);
     let handle = tokio::spawn(run_session(task, cmd_rx));
     let (done_tx, done) = watch::channel(false);
@@ -821,6 +832,7 @@ async fn spawn_task(
         Arc::downgrade(pool),
         id,
         child,
+        publication,
         done_tx,
     )));
     SessionLifecycle {
@@ -841,11 +853,12 @@ async fn supervise(
     pool: Weak<Mutex<SessionPool>>,
     id: SessionId,
     child: Arc<ChildHandle>,
+    publication: Arc<crate::pool::Publication>,
     done: watch::Sender<bool>,
 ) {
     let outcome = handle.await;
     if let Err(err) = outcome {
-        report_dead_task(err, &pool, id, &child).await;
+        report_dead_task(err, &pool, id, &child, &publication).await;
     }
     // Last on both paths: a rollback waiting on `done` must not observe
     // completion before `run_session`'s tail (or the recovery above)
@@ -859,6 +872,7 @@ async fn report_dead_task(
     pool: &Weak<Mutex<SessionPool>>,
     id: SessionId,
     child: &Arc<ChildHandle>,
+    publication: &crate::pool::Publication,
 ) {
     let reason = match err.try_into_panic() {
         Ok(payload) => payload
@@ -873,6 +887,8 @@ async fn report_dead_task(
         let mut guard = pool.lock().await;
         let teardown = guard.begin_teardown();
         guard.remove(id);
+        // The task's own lifecycle items died with it.
+        publication.end(&guard.events_hub(), id);
         Some(teardown)
     } else {
         None
@@ -1032,6 +1048,133 @@ struct HeldMark {
     exit_code: Option<u32>,
 }
 
+/// Prompt items a session holds before it is published; older ones
+/// give way and the loss is announced with `Lagged` behind
+/// `SessionAdded`. Program status and row hints collapse instead, since
+/// nobody can have seen the sets they replace.
+const HELD_PROMPT_ITEMS: usize = 64;
+
+/// The observer items this session publishes, every one from its own
+/// task so they leave in the order the task produced them. A row the
+/// creator still holds publishes nothing: its items wait, and go out
+/// behind `SessionAdded` once it is published, or never if it is rolled
+/// back.
+struct ObserverOutbox {
+    hub: tokio::sync::broadcast::Sender<NotifyToClientMsg>,
+    id: SessionId,
+    publication: Arc<crate::pool::Publication>,
+    held: Vec<NotifyToClientMsg>,
+    dropped: u64,
+    exit_reported: bool,
+}
+
+impl ObserverOutbox {
+    const fn new(
+        hub: tokio::sync::broadcast::Sender<NotifyToClientMsg>,
+        id: SessionId,
+        publication: Arc<crate::pool::Publication>,
+    ) -> Self {
+        Self {
+            hub,
+            id,
+            publication,
+            held: Vec::new(),
+            dropped: 0,
+            exit_reported: false,
+        }
+    }
+
+    /// Announced, and nobody is listening: an item built now reaches no
+    /// one. A held row's items still wait for the observers to come.
+    fn unheard(&self) -> bool {
+        self.publication.is_announced() && self.hub.receiver_count() == 0
+    }
+
+    fn send(&mut self, msg: NotifyToClientMsg) {
+        self.publish();
+        if self.publication.is_announced() {
+            crate::pool::emit(&self.hub, msg);
+        } else {
+            self.hold(msg);
+        }
+    }
+
+    fn hold(&mut self, mut msg: NotifyToClientMsg) {
+        use felis_protocol::messages::ObserverKind;
+        let is_prompt = |m: &NotifyToClientMsg| ObserverKind::of(m) == Some(ObserverKind::Prompt);
+        let prompt = is_prompt(&msg);
+        match &mut msg {
+            NotifyToClientMsg::ProgramStatus { .. } => self
+                .held
+                .retain(|m| !matches!(m, NotifyToClientMsg::ProgramStatus { .. })),
+            NotifyToClientMsg::SessionChanged { fields, .. } => {
+                self.held.retain(|m| match m {
+                    NotifyToClientMsg::SessionChanged {
+                        fields: earlier, ..
+                    } => {
+                        fields.extend(earlier.iter().copied());
+                        false
+                    }
+                    _ => true,
+                });
+                fields.sort_unstable();
+                fields.dedup();
+            }
+            _ if prompt => {
+                if self.held.iter().filter(|m| is_prompt(m)).count() >= HELD_PROMPT_ITEMS
+                    && let Some(oldest) = self.held.iter().position(is_prompt)
+                {
+                    self.held.remove(oldest);
+                    self.dropped += 1;
+                }
+            }
+            _ => {}
+        }
+        self.held.push(msg);
+    }
+
+    /// Announce the row once the pool has made it nameable, whoever
+    /// noticed first: the creator's signal, or the next item.
+    fn publish(&mut self) {
+        if !self.publication.announce() {
+            return;
+        }
+        crate::pool::emit(
+            &self.hub,
+            NotifyToClientMsg::SessionAdded {
+                session_id: self.id.0,
+            },
+        );
+        let missed = std::mem::take(&mut self.dropped);
+        if missed > 0 {
+            crate::pool::emit(&self.hub, NotifyToClientMsg::Lagged { missed });
+        }
+        for msg in std::mem::take(&mut self.held) {
+            crate::pool::emit(&self.hub, msg);
+        }
+    }
+
+    /// Once per session, whichever exit detection comes first.
+    fn exited(&mut self, status: Option<ExitStatus>) {
+        if std::mem::replace(&mut self.exit_reported, true) {
+            return;
+        }
+        self.send(NotifyToClientMsg::SessionExited {
+            session_id: self.id.0,
+            status,
+        });
+    }
+
+    /// The last item. A row that was ever nameable is announced here if
+    /// the creator's signal never arrived; one that never was leaves
+    /// nothing.
+    fn removed(&mut self) {
+        self.publish();
+        self.held.clear();
+        self.publication.end(&self.hub, self.id);
+    }
+}
+
 // Independent lifecycle/reporting flags, not an encodable state
 // machine: EOF, child exit, and the focus mirror vary freely.
 #[allow(clippy::struct_excessive_bools)]
@@ -1048,6 +1191,7 @@ struct SessionTask {
     /// Weak so a parked task keeps no pool alive.
     pool: Weak<Mutex<SessionPool>>,
     hub: tokio::sync::broadcast::Sender<NotifyToClientMsg>,
+    observers: ObserverOutbox,
     policy: IdlePolicy,
     /// Owner of the PTY size (active-owns-winsize). `None` until anyone
     /// types; any resize applies meanwhile.
@@ -1244,7 +1388,6 @@ async fn run_session(mut t: SessionTask, mut cmd_rx: mpsc::Receiver<SessionCmd>)
         };
         let drain_deadline =
             drain_at.unwrap_or_else(|| tokio::time::Instant::now() + Duration::from_secs(3600));
-        let attached = !t.subs.is_empty();
         // Per iteration rather than at every `subs` mutation site; a
         // one-chunk-stale read only mis-paces ~1 KiB.
         t.session.signals.set_attached_subs(t.subs.len());
@@ -1323,9 +1466,13 @@ async fn run_session(mut t: SessionTask, mut cmd_rx: mpsc::Receiver<SessionCmd>)
                         if let Err(err) = t.drive_cycle() {
                             debug!(?err, "session task: effect drain at EOF failed");
                         }
+                        let before = t.session.program_status.generation();
                         t.session.program_status.expire_transient();
+                        streaming::note_status_change(&mut t.session, before);
                         t.refresh_meta();
+                        t.publish_observed();
                         let status = t.reap_after_eof().await;
+                        t.observers.exited(status);
                         t.notify_shell_exit(status);
                         t.evict_all(None);
                         t.end_watches();
@@ -1344,11 +1491,13 @@ async fn run_session(mut t: SessionTask, mut cmd_rx: mpsc::Receiver<SessionCmd>)
             // Not while held for an upgrade: the dump names this child
             // unreaped, so reaping it now would hand the successor a pid
             // that may be reused.
-            _ = drain_tick.tick(), if !attached && !t.upgrade_hold => {
+            _ = drain_tick.tick(), if !t.upgrade_hold => {
+                // Ungated by `attached`: a program left holding the PTY
+                // keeps EOF away, and an observer is owed the exit.
                 if !t.child_exited
-                    && matches!(t.session.child.try_wait(), Ok(Some(_)))
+                    && let Ok(Some(status)) = t.session.child.try_wait()
                 {
-                    t.on_child_exit();
+                    t.on_child_exit(exit_status_to_wire(status));
                 }
                 if t.reap_due() {
                     break EndReason::Reaped;
@@ -1385,6 +1534,14 @@ async fn run_session(mut t: SessionTask, mut cmd_rx: mpsc::Receiver<SessionCmd>)
         EndReason::PtyError => info!(id = ?t.id, "session task: dropping session on PTY error"),
         EndReason::Reaped => info!(id = ?t.id, "session task: reaped post-exit idle session"),
     }
+    // A command can win the race against the parse drain, and
+    // `SessionRemoved` must follow what was parsed. Not under an upgrade
+    // hold: the dump already took the parse state it describes.
+    if !t.upgrade_hold
+        && let Err(err) = t.drain_and_fan()
+    {
+        debug!(?err, "session task: effect drain at teardown failed");
+    }
     t.evict_all(None);
     t.close_requesters("the session ended");
     let teardown = if let Some(pool) = t.pool.upgrade() {
@@ -1395,6 +1552,8 @@ async fn run_session(mut t: SessionTask, mut cmd_rx: mpsc::Receiver<SessionCmd>)
     } else {
         None
     };
+    t.publish_observed();
+    t.observers.removed();
     end_child(&t.session.child).await;
     drop(teardown);
 }
@@ -1666,6 +1825,10 @@ impl SessionTask {
                 None
             }
             SessionCmd::Shutdown => Some(EndReason::Destroyed),
+            SessionCmd::Published => {
+                self.observers.publish();
+                None
+            }
             SessionCmd::Settle(done) => {
                 self.upgrade_hold = true;
                 let _settled = done.send(());
@@ -2316,12 +2479,19 @@ impl SessionTask {
         meta.terminal_progress = self.session.terminal_progress;
         meta.rows = rows;
         meta.cols = cols;
+        let mut changed = Vec::new();
         if let Some((epoch, title)) = title {
             self.meta_title_epoch = epoch;
+            if meta.title != title {
+                changed.push(SessionField::Title);
+            }
             meta.title = title;
         }
         if let Some((epoch, cwd)) = cwd {
             self.meta_cwd_epoch = epoch;
+            if meta.cwd != cwd {
+                changed.push(SessionField::Cwd);
+            }
             meta.cwd = cwd;
         }
         meta.last_exit_code = last_exit_code;
@@ -2336,7 +2506,7 @@ impl SessionTask {
         // while the count stands still.
         if self.attachments_dirty {
             self.attachments_dirty = false;
-            meta.attachments = self
+            let attachments: Vec<Attachment> = self
                 .subs
                 .iter()
                 .filter(|sub| sub.is_window)
@@ -2347,6 +2517,17 @@ impl SessionTask {
                     carrier: Some(sub.carrier.clone()),
                 })
                 .collect();
+            if meta.attachments != attachments {
+                changed.push(SessionField::Attachments);
+                meta.attachments = attachments;
+            }
+        }
+        drop(meta);
+        if !changed.is_empty() {
+            self.observers.send(NotifyToClientMsg::SessionChanged {
+                session_id: self.id.0,
+                fields: changed,
+            });
         }
     }
 
@@ -2465,6 +2646,32 @@ impl SessionTask {
         }
         self.push_facets(&cycle.facets, cycle.clipboard);
         self.push_composed(cycle.composed);
+        self.publish_observed();
+    }
+
+    /// After the row they concern is updated, so a client that re-reads
+    /// it on an item sees what the item reports.
+    fn publish_observed(&mut self) {
+        if self.observers.unheard() {
+            self.session.observed.clear();
+            return;
+        }
+        for observed in std::mem::take(&mut self.session.observed) {
+            let session_id = self.id.0;
+            self.observers.send(match observed {
+                streaming::Observed::ProgramStatus(records) => NotifyToClientMsg::ProgramStatus {
+                    session_id,
+                    records,
+                },
+                streaming::Observed::PromptShown => NotifyToClientMsg::PromptShown { session_id },
+                streaming::Observed::CommandFinished(exit_code) => {
+                    NotifyToClientMsg::CommandFinished {
+                        session_id,
+                        exit_code,
+                    }
+                }
+            });
+        }
     }
 
     fn push_image_events(&mut self) {
@@ -3077,12 +3284,13 @@ impl SessionTask {
 
     /// Seen before EOF when a process the program left behind holds the
     /// PTY open: no mark it owes a wait can come any more.
-    fn on_child_exit(&mut self) {
+    fn on_child_exit(&mut self, status: Option<ExitStatus>) {
         self.child_exited = true;
         self.stamp_exited_meta();
         if let Err(err) = self.drive_cycle() {
             debug!(?err, "session task: effect drain at child exit failed");
         }
+        self.observers.exited(status);
         self.end_watches();
     }
 
@@ -3735,6 +3943,11 @@ impl SessionTask {
             meta,
             pool: Weak::new(),
             hub: tokio::sync::broadcast::channel(8).0,
+            observers: ObserverOutbox::new(
+                tokio::sync::broadcast::channel(64).0,
+                SessionId::new(),
+                crate::pool::Publication::new(),
+            ),
             policy: IdlePolicy::default(),
             active_sub: None,
             input_owner: None,
@@ -8040,6 +8253,7 @@ mod tests {
             input_budget: crate::pool::new_input_budget(),
             resizer: None,
             upgrade: None,
+            publication: crate::pool::Publication::new(),
             meta: Arc::new(StdMutex::new(SessionMeta {
                 rows: crate::DEFAULT_ROWS,
                 cols: crate::DEFAULT_COLS,
@@ -8071,6 +8285,7 @@ mod tests {
             Arc::downgrade(&pool),
             id,
             exited_child(),
+            crate::pool::Publication::new(),
             watch::channel(false).0,
         )
         .await;
@@ -8079,6 +8294,194 @@ mod tests {
             pool.lock().await.handle_cloned(id).is_none(),
             "the panicked task's entry must be gone from the pool"
         );
+    }
+
+    fn bare_handle(publication: Arc<crate::pool::Publication>) -> SessionHandle {
+        let (cmd, _cmd_rx) = mpsc::channel(1);
+        SessionHandle {
+            cmd,
+            input_budget: crate::pool::new_input_budget(),
+            resizer: None,
+            upgrade: None,
+            publication,
+            meta: Arc::new(StdMutex::new(SessionMeta {
+                rows: crate::DEFAULT_ROWS,
+                cols: crate::DEFAULT_COLS,
+                pixel_w: 0,
+                pixel_h: 0,
+                title: None,
+                cwd: None,
+                idle_since: Instant::now(),
+                subscribers: 0,
+                tags: std::collections::BTreeSet::new(),
+                last_notification: None,
+                last_exit_code: None,
+                exited: false,
+                attachments: Vec::new(),
+                program_status: Vec::new(),
+                spawn_cwd: None,
+                terminal_progress: None,
+                sequence: std::num::NonZeroU64::MIN,
+            })),
+        }
+    }
+
+    /// A task that dies takes its own lifecycle items with it; its
+    /// supervisor sends what the roster implied, whether or not the task
+    /// had announced the row, and nothing for a row nobody could name.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_panicked_task_owes_observers_the_lifecycle_the_roster_showed() {
+        for (listing, announced, expected) in [
+            (Listing::Public, false, 2),
+            (Listing::Public, true, 1),
+            (Listing::Held, false, 0),
+        ] {
+            let id = SessionId::new();
+            let publication = crate::pool::Publication::new();
+            let pool = Arc::new(Mutex::new(SessionPool::new()));
+            let mut rx = {
+                let mut guard = pool.lock().await;
+                guard.register(id, bare_handle(Arc::clone(&publication)), None, listing);
+                guard.subscribe_events()
+            };
+            if announced {
+                assert!(publication.announce());
+            }
+            let task = tokio::spawn(async { panic!("boom") });
+            supervise(
+                task,
+                Arc::downgrade(&pool),
+                id,
+                exited_child(),
+                Arc::clone(&publication),
+                watch::channel(false).0,
+            )
+            .await;
+
+            let items: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+            let want: Vec<_> = [
+                NotifyToClientMsg::SessionAdded { session_id: id.0 },
+                NotifyToClientMsg::SessionRemoved { session_id: id.0 },
+            ]
+            .into_iter()
+            .skip(2 - expected)
+            .collect();
+            assert_eq!(
+                items, want,
+                "{listing:?}, announced {announced}: what observers hear of a dead task",
+            );
+        }
+    }
+
+    /// A destroy queued ahead of the parse drain still lets the session
+    /// publish what it parsed, and `SessionRemoved` comes after it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_destroy_ahead_of_the_drain_publishes_what_was_parsed() {
+        let mut task = SessionTask::for_tests(session_with("read _x"));
+        {
+            let mut core = task.session.lock_core();
+            let core = &mut *core;
+            core.parser
+                .advance(&mut core.grid, b"\x1b]133;A\x07\x1b]7501;state=working\x07");
+        }
+        let publication = crate::pool::Publication::new();
+        let mut pool = SessionPool::new();
+        pool.register(
+            task.id,
+            bare_handle(Arc::clone(&publication)),
+            None,
+            Listing::Public,
+        );
+        let (hub, mut rx) = tokio::sync::broadcast::channel(64);
+        task.observers = ObserverOutbox::new(hub, task.id, publication);
+        task.observers.publish();
+        let session_id = task.id.0;
+
+        let (cmd_tx, cmd_rx) = mpsc::channel(4);
+        cmd_tx.send(SessionCmd::Shutdown).await.expect("queued");
+        run_session(task, cmd_rx).await;
+
+        let items: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+        assert_eq!(
+            items,
+            [
+                NotifyToClientMsg::SessionAdded { session_id },
+                NotifyToClientMsg::PromptShown { session_id },
+                NotifyToClientMsg::ProgramStatus {
+                    session_id,
+                    records: vec![felis_protocol::messages::ProgramStatusRecord {
+                        id: String::new(),
+                        state: "working".to_owned(),
+                        kind: None,
+                        progress: None,
+                        app: None,
+                        title: None,
+                        msg: None,
+                    }],
+                },
+                NotifyToClientMsg::SessionRemoved { session_id },
+            ]
+        );
+    }
+
+    /// Before publication nobody can see a session's items, so a burst
+    /// stays bounded: program status keeps only its latest set, row
+    /// hints merge, and prompt items beyond the cap give way oldest
+    /// first, the loss announced right behind `SessionAdded`.
+    #[test]
+    fn a_held_session_keeps_a_bounded_outbox() {
+        let id = SessionId::new();
+        let session_id = id.0;
+        let publication = crate::pool::Publication::new();
+        let (hub, mut rx) = tokio::sync::broadcast::channel(1024);
+        let mut outbox = ObserverOutbox::new(hub, id, Arc::clone(&publication));
+        let overflow = 10;
+        for n in 0..HELD_PROMPT_ITEMS + overflow {
+            outbox.send(NotifyToClientMsg::CommandFinished {
+                session_id,
+                exit_code: Some(u32::try_from(n).unwrap()),
+            });
+            outbox.send(NotifyToClientMsg::ProgramStatus {
+                session_id,
+                records: Vec::new(),
+            });
+        }
+        outbox.send(NotifyToClientMsg::SessionChanged {
+            session_id,
+            fields: vec![SessionField::Title],
+        });
+        outbox.send(NotifyToClientMsg::SessionChanged {
+            session_id,
+            fields: vec![SessionField::Cwd],
+        });
+        assert!(rx.try_recv().is_err(), "a held row publishes nothing");
+
+        let mut pool = SessionPool::new();
+        pool.register(id, bare_handle(publication), None, Listing::Public);
+        outbox.publish();
+        let items: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+
+        let mut want = vec![
+            NotifyToClientMsg::SessionAdded { session_id },
+            NotifyToClientMsg::Lagged {
+                missed: u64::try_from(overflow).unwrap(),
+            },
+        ];
+        want.extend((overflow..HELD_PROMPT_ITEMS + overflow).map(|n| {
+            NotifyToClientMsg::CommandFinished {
+                session_id,
+                exit_code: Some(u32::try_from(n).unwrap()),
+            }
+        }));
+        want.push(NotifyToClientMsg::ProgramStatus {
+            session_id,
+            records: Vec::new(),
+        });
+        want.push(NotifyToClientMsg::SessionChanged {
+            session_id,
+            fields: vec![SessionField::Title, SessionField::Cwd],
+        });
+        assert_eq!(items, want);
     }
 
     fn exited_child() -> Arc<ChildHandle> {
@@ -8192,6 +8595,7 @@ mod tests {
             Arc::downgrade(&pool),
             SessionId::new(),
             child,
+            crate::pool::Publication::new(),
             watch::channel(false).0,
         )
         .await;
@@ -8211,6 +8615,7 @@ mod tests {
             input_budget: crate::pool::new_input_budget(),
             resizer: None,
             upgrade: None,
+            publication: crate::pool::Publication::new(),
             meta: Arc::new(StdMutex::new(SessionMeta {
                 rows: crate::DEFAULT_ROWS,
                 cols: crate::DEFAULT_COLS,
@@ -8242,6 +8647,7 @@ mod tests {
             Arc::downgrade(&pool),
             id,
             exited_child(),
+            crate::pool::Publication::new(),
             watch::channel(false).0,
         )
         .await;
@@ -8641,7 +9047,7 @@ mod tests {
         assert_eq!(task.prepare_send(pending, &[]), Prepared::Ready);
         drop(drain_events(&mut rx));
 
-        task.on_child_exit();
+        task.on_child_exit(None);
         assert!(!task.pty_eof, "the PTY is still open");
         assert!(!task.send_fence(None, 1), "a plain send answers ended");
         assert!(!task.send_fence(pending, 1), "the pending wait ended");

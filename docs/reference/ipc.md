@@ -943,9 +943,26 @@ the session's whole record set after each change to it), `prompt` (`PromptShown`
 (`SessionChanged`, a hint naming which fields changed, carrying no values). A client facing a daemon below the minor
 that introduced `kinds` refuses a non-empty set before sending.
 
+Events are not a mirror of the roster: `Ops::List` and `Ops::Info` stay its source of truth, and an event tells a client
+when to read it again. The recipe that leaves no gap is to subscribe, wait for `Subscribed`, then list; every change
+after `Subscribed` produces an event, and every event's handler is a re-read or idempotent, so one about a state the
+list already shows is harmless. A session's events come from its own task, in the order the task produced them:
+`SessionAdded` first, `SessionRemoved` last, `SessionExited` at most once and before `SessionRemoved`, and
+`ProgramStatus`, `PromptShown` and `CommandFinished` in the order their escape sequences were parsed. A session killed
+while its program runs is removed without an exit, and a session rolled back before it entered the roster publishes
+nothing. Each event is published after the roster state it concerns is updated. Two exceptions sit outside that order:
+`SessionChanged` naming `tags` comes from the tag request rather than the task and may follow `SessionRemoved`, and
+notifications travel a ring of their own, so they are unordered against the other kinds. No order holds across sessions.
+With a session prefix, `SessionAdded` never arrives, since the session already exists.
+
 Loss under backpressure is the contract: the daemon never buffers without bound for a slow observer, so one that falls
-behind the shared notification ring loses events. The loss is never silent: `Lagged` says how many were missed, so a
-consumer waiting on a specific event knows it may be among them. felis decodes and relays; it never draws a banner.
+behind a shared ring loses events. The loss is never silent: `Lagged` says how many were missed, so a consumer waiting
+on a specific event knows it may be among them, and a roster consumer lists again. A missed `ProgramStatus` or prompt
+transition is not recoverable; the row holds only the latest record and exit code. A session still held by its creator
+holds its items in a bounded queue: program status keeps only its latest set and row hints merge, which loses nothing
+anyone could have seen, while prompt items past the bound give way oldest first and the loss is a `Lagged` right behind
+`SessionAdded`. A daemon that stops ends every observer stream with its clean terminal. felis decodes and relays; it
+never draws a banner.
 
 ### Push (kind = 8)
 
