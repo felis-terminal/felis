@@ -39,7 +39,7 @@ pub use limits::{
     MAX_SPAWN_ARGV_BYTES, MAX_SPAWN_ARGV_ENTRIES, MAX_SPAWN_PATH_BYTES, Validate, check_claim,
     check_count, check_limit,
 };
-pub use notify::{NotifyToClientMsg, NotifyToDaemonMsg};
+pub use notify::{NotifyToClientMsg, NotifyToDaemonMsg, ObserverKind, SessionField};
 pub use ops::{
     AttachCarrier, Attachment, InfoOutcome, Limit, MAX_SESSION_TAGS, MAX_TAG_BYTES, OpsToClientMsg,
     OpsToDaemonMsg, ProgramStatusRecord, ReportScope, ResolvedId, ResourceKind, ResourceReport,

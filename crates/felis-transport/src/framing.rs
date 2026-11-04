@@ -696,6 +696,7 @@ mod tests {
         match writer
             .send(&NotifyToDaemonMsg::Subscribe {
                 session_prefix: None,
+                kinds: Vec::new(),
             })
             .await
         {
@@ -755,6 +756,7 @@ mod tests {
                     .send_correlated(
                         &NotifyToDaemonMsg::Subscribe {
                             session_prefix: None,
+                            kinds: Vec::new(),
                         },
                         request,
                     )
@@ -797,6 +799,7 @@ mod tests {
             .send_correlated(
                 &NotifyToDaemonMsg::Subscribe {
                     session_prefix: None,
+                    kinds: Vec::new(),
                 },
                 Correlation::stream(StreamId::new(1).expect("nonzero")),
             )

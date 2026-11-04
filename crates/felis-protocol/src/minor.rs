@@ -83,6 +83,13 @@ const SEARCH_TO_DAEMON_FIELDS: &[GatedField<SearchToDaemonMsg>] = &[
     },
 ];
 
+const NOTIFY_TO_DAEMON_FIELDS: &[GatedField<crate::messages::NotifyToDaemonMsg>] = &[GatedField {
+    requires: crate::schema_meta::NOTIFY_SUBSCRIBE_KINDS,
+    present: |msg| match msg {
+        crate::messages::NotifyToDaemonMsg::Subscribe { kinds, .. } => !kinds.is_empty(),
+    },
+}];
+
 const REGION_TO_DAEMON_FIELDS: &[GatedField<RegionToDaemonMsg>] = &[
     GatedField {
         requires: crate::schema_meta::REGION_REQUEST_SESSION,
@@ -331,7 +338,6 @@ macro_rules! gated_by_arm {
 gated_by_arm!(
     ImageMsg,
     crate::messages::InputMsg,
-    crate::messages::NotifyToDaemonMsg,
     crate::messages::NotifyToClientMsg,
     crate::messages::RegionToClientMsg,
     crate::messages::SearchToClientMsg,
@@ -340,6 +346,12 @@ gated_by_arm!(
 impl MinorGated for SearchToDaemonMsg {
     fn requires(&self) -> Requires {
         arm_requires(self).max(field_requires(self, SEARCH_TO_DAEMON_FIELDS))
+    }
+}
+
+impl MinorGated for crate::messages::NotifyToDaemonMsg {
+    fn requires(&self) -> Requires {
+        arm_requires(self).max(field_requires(self, NOTIFY_TO_DAEMON_FIELDS))
     }
 }
 
@@ -554,6 +566,58 @@ mod tests {
         }
     }
 
+    /// A subscribe that names its kinds costs minor 4, so a client never
+    /// asks an older daemon for items it would answer with notifications
+    /// alone; the default subscribe stays a base-schema one.
+    #[test]
+    fn naming_observer_kinds_costs_minor_four() {
+        use crate::messages::{NotifyToDaemonMsg, ObserverKind};
+
+        let default = NotifyToDaemonMsg::Subscribe {
+            session_prefix: Some("ab".into()),
+            kinds: Vec::new(),
+        };
+        assert_eq!(default.requires(), Requires::new(0, "Notify::Subscribe"));
+        for kind in ObserverKind::ALL {
+            let named = NotifyToDaemonMsg::Subscribe {
+                session_prefix: None,
+                kinds: vec![kind],
+            };
+            assert_eq!(named.requires(), Requires::new(4, "NotifySubscribe.kinds"));
+        }
+    }
+
+    /// Every item an observer asks for by kind is a minor-4 arm, so the
+    /// send gate refuses it on a connection that could not have asked.
+    #[test]
+    fn the_observer_items_cost_minor_four() {
+        use crate::messages::{NotifyToClientMsg, SessionField};
+
+        for item in [
+            NotifyToClientMsg::SessionAdded { session_id: 1 },
+            NotifyToClientMsg::SessionExited {
+                session_id: 1,
+                status: None,
+            },
+            NotifyToClientMsg::SessionRemoved { session_id: 1 },
+            NotifyToClientMsg::ProgramStatus {
+                session_id: 1,
+                records: Vec::new(),
+            },
+            NotifyToClientMsg::PromptShown { session_id: 1 },
+            NotifyToClientMsg::CommandFinished {
+                session_id: 1,
+                exit_code: Some(0),
+            },
+            NotifyToClientMsg::SessionChanged {
+                session_id: 1,
+                fields: vec![SessionField::Title],
+            },
+        ] {
+            assert_eq!(item.requires().minor, 4, "{item:?}");
+        }
+    }
+
     /// A `Hello` costs the minor that defined the mode it names, so a
     /// mode added later cannot reach a daemon that predates it. Every
     /// shipped mode is a base-schema one, so the pinning case is the
@@ -673,6 +737,7 @@ mod tests {
         let gated: Vec<Requires> = REGION_TO_DAEMON_FIELDS
             .iter()
             .map(|field| field.requires)
+            .chain(NOTIFY_TO_DAEMON_FIELDS.iter().map(|field| field.requires))
             .chain(SEARCH_TO_DAEMON_FIELDS.iter().map(|field| field.requires))
             .collect();
         assert_eq!(gated, crate::schema_meta::GATED_FIELDS);

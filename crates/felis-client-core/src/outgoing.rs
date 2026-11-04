@@ -290,6 +290,7 @@ mod tests {
 
         let err = OutgoingFrame::ordered(&NotifyToDaemonMsg::Subscribe {
             session_prefix: None,
+            kinds: Vec::new(),
         })
         .expect_err("a stream opener has no uncorrelated spelling");
         assert!(

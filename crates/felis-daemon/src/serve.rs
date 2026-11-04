@@ -1462,7 +1462,11 @@ async fn wait_for_attach<R: tokio::io::AsyncRead + Unpin, W: tokio::io::AsyncWri
                         // the arm's class, so the ack and the terminal
                         // read it off the delivery instead of the body.
                         let stream = delivered.stream();
-                        let NotifyToDaemonMsg::Subscribe { session_prefix } = delivered.msg;
+                        // No kind past notifications is published yet.
+                        let NotifyToDaemonMsg::Subscribe {
+                            session_prefix,
+                            kinds: _,
+                        } = delivered.msg;
                         // The role changes before the ack is written: a
                         // session frame arriving between the two is
                         // refused by phase.

@@ -535,6 +535,7 @@ impl TryFrom<Open> for DaemonRequest {
             }),
             Open::Notifications { session } => Self::Notify(NotifyToDaemonMsg::Subscribe {
                 session_prefix: session.map(prefix),
+                kinds: Vec::new(),
             }),
         })
     }
@@ -654,6 +655,17 @@ impl TryFrom<NotifyToClientMsg> for NotificationJson {
             // report is a `lag` message, so neither is an item.
             NotifyToClientMsg::Subscribed { .. } => Err(DtoError::Outside("Subscribed")),
             NotifyToClientMsg::Lagged { .. } => Err(DtoError::Outside("Lagged")),
+            // The JSON protocol subscribes to notifications alone, so
+            // the daemon sends it no other kind.
+            NotifyToClientMsg::SessionAdded { .. }
+            | NotifyToClientMsg::SessionExited { .. }
+            | NotifyToClientMsg::SessionRemoved { .. }
+            | NotifyToClientMsg::ProgramStatus { .. }
+            | NotifyToClientMsg::PromptShown { .. }
+            | NotifyToClientMsg::CommandFinished { .. }
+            | NotifyToClientMsg::SessionChanged { .. } => {
+                Err(DtoError::Outside("an observer kind"))
+            }
         }
     }
 }

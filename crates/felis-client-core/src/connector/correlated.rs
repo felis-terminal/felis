@@ -888,7 +888,10 @@ impl CorrelatedHandle {
         self.open(
             ConnectionMode::Observer,
             OpenFrom::Setup,
-            &NotifyToDaemonMsg::Subscribe { session_prefix },
+            &NotifyToDaemonMsg::Subscribe {
+                session_prefix,
+                kinds: Vec::new(),
+            },
         )
         .await
     }

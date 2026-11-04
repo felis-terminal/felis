@@ -110,19 +110,7 @@ impl SessionObject {
                     }
                 })
                 .collect(),
-            program_status: s
-                .program_status
-                .iter()
-                .map(|r| ProgramStatusObject {
-                    id: r.id.clone(),
-                    state: r.state.clone(),
-                    kind: r.kind.clone(),
-                    progress: r.progress,
-                    app: r.app.clone(),
-                    title: r.title.clone(),
-                    msg: r.msg.clone(),
-                })
-                .collect(),
+            program_status: s.program_status.iter().map(Into::into).collect(),
             terminal_progress: s
                 .terminal_progress
                 .as_ref()
@@ -178,6 +166,20 @@ pub struct ProgramStatusObject {
     pub title: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub msg: Option<String>,
+}
+
+impl From<&felis_protocol::messages::ProgramStatusRecord> for ProgramStatusObject {
+    fn from(r: &felis_protocol::messages::ProgramStatusRecord) -> Self {
+        Self {
+            id: r.id.clone(),
+            state: r.state.clone(),
+            kind: r.kind.clone(),
+            progress: r.progress,
+            app: r.app.clone(),
+            title: r.title.clone(),
+            msg: r.msg.clone(),
+        }
+    }
 }
 
 /// `sessions list`'s whole answer. The roster is bounded and arrives in
