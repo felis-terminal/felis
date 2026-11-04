@@ -301,28 +301,63 @@ pub struct DaemonCaps {
 /// the accept loop. A `watch` rather than a `Notify` so a fire that
 /// lands while the loop is inside an accept is still read afterward.
 #[derive(Debug)]
-pub struct Shutdown(watch::Sender<bool>);
+pub struct Shutdown {
+    fired: watch::Sender<bool>,
+    open_observers: watch::Sender<usize>,
+}
+
+/// How long a stopping daemon waits for its observers to write their
+/// terminals before it exits anyway.
+const OBSERVER_DRAIN: Duration = Duration::from_secs(2);
+
+/// One observer stream the stopping daemon waits to see end.
+struct ObserverTicket(Arc<Shutdown>);
+
+impl Drop for ObserverTicket {
+    fn drop(&mut self) {
+        self.0
+            .open_observers
+            .send_modify(|open| *open = open.saturating_sub(1));
+    }
+}
 
 impl Shutdown {
     #[must_use]
     pub fn new() -> Arc<Self> {
-        Arc::new(Self(watch::Sender::new(false)))
+        Arc::new(Self {
+            fired: watch::Sender::new(false),
+            open_observers: watch::Sender::new(0),
+        })
+    }
+
+    fn observe(self: &Arc<Self>) -> ObserverTicket {
+        self.open_observers.send_modify(|open| *open += 1);
+        ObserverTicket(Arc::clone(self))
+    }
+
+    /// The runtime drops every connection task when `serve` returns, so
+    /// an observer stream ends with its terminal only if the daemon
+    /// waits for it here.
+    async fn drain_observers(&self) {
+        let mut open = self.open_observers.subscribe();
+        let drained = async { open.wait_for(|open| *open == 0).await.is_ok() };
+        let _drained = tokio::time::timeout(OBSERVER_DRAIN, drained).await;
     }
 
     /// Fired *after* the reply that announced it was written, so the
     /// caller of `felis daemon stop` reads the outcome of a stop that
     /// then happens.
     pub fn fire(&self) {
-        self.0.send_modify(|fired| *fired = true);
+        self.fired.send_modify(|fired| *fired = true);
     }
 
     #[must_use]
     pub fn fired(&self) -> bool {
-        *self.0.borrow()
+        *self.fired.borrow()
     }
 
     fn watch(&self) -> watch::Receiver<bool> {
-        self.0.subscribe()
+        self.fired.subscribe()
     }
 }
 
@@ -527,6 +562,7 @@ async fn accept_loop(
     }
     caps.upgrade.clear_listener();
     info!(endpoint = %endpoint, "felis-daemon stopping");
+    caps.shutdown.drain_observers().await;
     // Nothing unlinks the path, here or in `Drop` (REQ-009d): an
     // unlink would race a replacement daemon that rebound the same
     // name and delete its live socket.
@@ -1474,8 +1510,10 @@ async fn wait_for_attach<R: tokio::io::AsyncRead + Unpin, W: tokio::io::AsyncWri
                         // The observer runs until the subscriber leaves; an
                         // upgrade ends it at the exec instead of waiting.
                         drop(dispatching);
+                        let _ticket = caps.shutdown.observe();
+                        let mut exit = caps.shutdown.watch();
                         let sent = run_notification_observer(
-                            reader, writer, driver, stream, only, &mut rx,
+                            reader, writer, driver, stream, only, &mut rx, &mut exit,
                         )
                         .await?;
                         end_observer(writer, driver, stream, sent, None).await?;
@@ -2521,7 +2559,8 @@ async fn write_event_frame<W: tokio::io::AsyncWrite + Unpin>(
 
 /// Drive a notification observer (docs/reference/protocols/notifications.md).
 ///
-/// Runs until broadcast closes, client disconnects, or stream cancel arrives.
+/// Runs until broadcast closes, the daemon stops, the client disconnects,
+/// or stream cancel arrives.
 /// Returns emitted item count for terminal `End` emission.
 async fn run_notification_observer<R, W>(
     reader: &mut FrameReader<R>,
@@ -2530,6 +2569,7 @@ async fn run_notification_observer<R, W>(
     stream: StreamId,
     only: Option<u128>,
     rx: &mut tokio::sync::broadcast::Receiver<NotifyToClientMsg>,
+    exit: &mut watch::Receiver<bool>,
 ) -> Result<u32, ConnError>
 where
     R: tokio::io::AsyncRead + Unpin,
@@ -2540,6 +2580,9 @@ where
     let mut sent = 0u32;
     loop {
         tokio::select! {
+            // The pool's hubs outlive a stop while connections hold it, so
+            // the stop itself ends the stream.
+            _stopped = async { exit.wait_for(|fired| *fired).await.is_ok() } => return Ok(sent),
             frame = reader.next_frame() => {
                 let Some(frame) = frame? else { return Ok(sent) };
                 match driver.classify(&frame)? {

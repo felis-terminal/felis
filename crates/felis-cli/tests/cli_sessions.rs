@@ -3884,3 +3884,69 @@ fn a_send_past_the_step_cap_is_refused_with_no_daemon_running() {
     assert_framed_failure(&out, "invalid_request", 1);
     assert!(!cold.exists(), "no daemon was spawned to refuse it");
 }
+
+/// `daemon stop` ends a `notifications subscribe` stream with its clean
+/// terminal, counting the items delivered, rather than leaving the
+/// consumer a bare close it would read as a lost daemon.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn notifications_end_cleanly_when_the_daemon_stops() {
+    use tokio::io::{AsyncBufReadExt as _, BufReader};
+
+    let tmp = private_dir();
+    let factory: SessionFactory = Arc::new(|_| {
+        let mut cmd = PtyCommand::new("/bin/sh");
+        cmd.args([
+            "-c",
+            "while :; do printf '\\033]9;ping\\007'; sleep 0.2; done",
+        ]);
+        cmd.env_clear();
+        cmd.env("PATH", fixture_path());
+        cmd
+    });
+    let (server, socket, _pool) = spawn_daemon(&tmp, factory).await;
+    create_and_detach(&socket).await;
+    let mut child = tokio::process::Command::new(cli_bin())
+        .env_remove("FELIS_SOCKET")
+        .arg("--socket")
+        .arg(&socket)
+        .args(["notifications", "subscribe", "--format", "jsonl"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .expect("run felis notifications subscribe");
+    let mut lines = BufReader::new(child.stdout.take().expect("piped stdout")).lines();
+    let mut next = async || -> Option<serde_json::Value> {
+        let line = tokio::time::timeout(Duration::from_secs(30), lines.next_line())
+            .await
+            .expect("a line within the timeout")
+            .expect("read stdout")?;
+        Some(serde_json::from_str(&line).unwrap_or_else(|e| panic!("not JSON ({e}): {line}")))
+    };
+    // A notification proves the stream is open before the stop is sent.
+    let first = next().await.expect("an item");
+    assert_eq!(first["body"], "ping", "{first}");
+    let mut items = 1;
+
+    let stopped = cli_command()
+        .arg("--socket")
+        .arg(&socket)
+        .args(["daemon", "stop", "--force", "--format", "json"])
+        .output()
+        .expect("run felis daemon stop");
+    assert_eq!(stopped.status.code(), Some(0), "{stopped:?}");
+
+    let terminal = loop {
+        let item = next().await.expect("the stream ends in a terminal");
+        if item.get("event").is_some() {
+            break item;
+        }
+        items += 1;
+    };
+    assert_eq!(terminal["event"], "end", "{terminal}");
+    assert_eq!(terminal["count"], items, "{terminal}");
+    assert!(next().await.is_none(), "the terminal is the last line");
+    let status = child.wait().await.expect("the verb exits");
+    assert_eq!(status.code(), Some(0), "a clean end exits 0");
+    server.abort();
+}

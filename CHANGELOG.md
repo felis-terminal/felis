@@ -10,6 +10,11 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 
 ## [Unreleased]
 
+### Fixed
+
+- **CLI**: `felis notifications subscribe` ends with its clean terminal when the daemon stops, instead of exiting `2`
+  with `daemon_lost`.
+
 ## [0.4.1] - 2026-11-03
 
 The v0.4.0 tag failed its release gate and was never published; 0.4.1 is the 0.4 release.
