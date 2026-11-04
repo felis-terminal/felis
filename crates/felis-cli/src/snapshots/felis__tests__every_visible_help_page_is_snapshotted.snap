@@ -73,6 +73,7 @@ Commands:
   spawn    Create a detached session and print its id
   switch   Point one window attached to a session at another session
   search   Search a session's scrollback and screen
+  events   Stream what happens to sessions until interrupted
   tag      Add and remove labels, for pickers and scripts to filter on
   help     Print this message or the help of the given subcommand(s)
 
@@ -330,6 +331,36 @@ Options:
           
           [default: scrollback]
           [possible values: scrollback, visible]
+
+      --format <FORMAT>
+          Output framing: `human` (default) or `jsonl`: one JSON object per line on stdout, ending in exactly one terminal object
+          
+          [default: human]
+          [possible values: human, jsonl]
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+$ felis sessions events --help
+Stream what happens to sessions until interrupted.
+
+Sessions added, exited and removed, program-status changes, prompts and finished commands, row changes, and notifications, as `--kind` names them. An item names what changed; `sessions list` reads the rest.
+
+Usage: felis sessions events [OPTIONS] --kind <KIND>
+
+Options:
+      --kind <KIND>
+          The kinds to stream (repeatable, or comma-separated)
+
+          Possible values:
+          - lifecycle:      Sessions added, exited and removed
+          - program_status: A session's whole OSC 7501 record set after each change
+          - prompt:         Prompts shown and commands finished (OSC 133)
+          - meta:           A session's tags, title, cwd or attachments changed
+          - notification:   Desktop notifications, as `notifications subscribe`
+
+      --session <ID-OR-PREFIX>
+          Only stream items about this session (hex id or any unique prefix)
 
       --format <FORMAT>
           Output framing: `human` (default) or `jsonl`: one JSON object per line on stdout, ending in exactly one terminal object

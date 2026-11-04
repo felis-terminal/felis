@@ -2617,7 +2617,8 @@ pub struct RegionPosition {
 // Notify (MessageKind::Notify, kind 7): notification observer
 // ---------------------------------------------------------------------------
 
-// Subscribe opens a stream; Subscribed, Event, and Lagged are items.
+// Subscribe opens a stream; Subscribed, Lagged and the kinds it asked
+// for are items.
 // The observer stream is endless by intent, but terminates via
 // ConnEnd/ConnError: consumers distinguish daemon shutdown from no
 // events fired yet, rather than reading it from a bare EOF.
@@ -2640,16 +2641,16 @@ pub mod notify_to_daemon_msg {
         Subscribe(super::NotifySubscribe),
     }
 }
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct NotifyToClientMsg {
     #[prost(message, optional, tag="100")]
     pub correlation: ::core::option::Option<Correlation>,
-    #[prost(oneof="notify_to_client_msg::Msg", tags="2, 3, 4")]
+    #[prost(oneof="notify_to_client_msg::Msg", tags="2, 3, 4, 5, 6, 7, 8, 9, 10, 11")]
     pub msg: ::core::option::Option<notify_to_client_msg::Msg>,
 }
 /// Nested message and enum types in `NotifyToClientMsg`.
 pub mod notify_to_client_msg {
-    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum Msg {
         #[prost(message, tag="2")]
         Event(super::NotifyEvent),
@@ -2657,15 +2658,34 @@ pub mod notify_to_client_msg {
         Subscribed(super::NotifySubscribed),
         #[prost(message, tag="4")]
         Lagged(super::NotifyLagged),
+        #[prost(message, tag="5")]
+        SessionAdded(super::NotifySessionAdded),
+        #[prost(message, tag="6")]
+        SessionExited(super::NotifySessionExited),
+        #[prost(message, tag="7")]
+        SessionRemoved(super::NotifySessionRemoved),
+        #[prost(message, tag="8")]
+        ProgramStatus(super::NotifyProgramStatus),
+        #[prost(message, tag="9")]
+        PromptShown(super::NotifyPromptShown),
+        #[prost(message, tag="10")]
+        CommandFinished(super::NotifyCommandFinished),
+        #[prost(message, tag="11")]
+        SessionChanged(super::NotifySessionChanged),
     }
 }
 /// Client → daemon. Turn this connection into a notification observer.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct NotifySubscribe {
-    /// Only relay notifications from the session this prefix resolves
-    /// to. The daemon resolves it; an observer never needs the roster.
+    /// Only relay items about the session this prefix resolves to. The
+    /// daemon resolves it; an observer never needs the roster.
     #[prost(string, optional, tag="1")]
     pub session_prefix: ::core::option::Option<::prost::alloc::string::String>,
+    /// The kinds of item to relay. Empty is notifications alone, what a
+    /// subscriber that predates the field asked for; the daemon sends no
+    /// kind left out.
+    #[prost(enumeration="ObserverKind", repeated, packed="false", tag="2")]
+    pub kinds: ::prost::alloc::vec::Vec<i32>,
 }
 /// Daemon → observer. Acknowledges NotifySubscribe before the event
 /// stream: carries the filter resolution so a bad prefix surfaces as a
@@ -2682,6 +2702,64 @@ pub struct NotifySubscribed {
 pub struct NotifyLagged {
     #[prost(uint64, tag="1")]
     pub missed: u64,
+}
+/// Daemon → observer. A session entered the listed roster: the first
+/// item about it, so every other item for that id follows this one.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct NotifySessionAdded {
+    #[prost(bytes="vec", tag="1")]
+    pub session_id: ::prost::alloc::vec::Vec<u8>,
+}
+/// Daemon → observer. The session's child process ended; sent once per
+/// session, while the session stays listed in its post-exit grace.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct NotifySessionExited {
+    #[prost(bytes="vec", tag="1")]
+    pub session_id: ::prost::alloc::vec::Vec<u8>,
+    /// Unset when the daemon could not reap a status.
+    #[prost(message, optional, tag="2")]
+    pub status: ::core::option::Option<ExitStatus>,
+}
+/// Daemon → observer. The session left the pool; nothing about it
+/// follows except a NotifySessionChanged for its tags.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct NotifySessionRemoved {
+    #[prost(bytes="vec", tag="1")]
+    pub session_id: ::prost::alloc::vec::Vec<u8>,
+}
+/// Daemon → observer. The session's whole OSC 7501 record set after a
+/// change to it, as SessionInfo.program_status spells it: an empty set
+/// is every record cleared.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct NotifyProgramStatus {
+    #[prost(bytes="vec", tag="1")]
+    pub session_id: ::prost::alloc::vec::Vec<u8>,
+    #[prost(message, repeated, tag="2")]
+    pub records: ::prost::alloc::vec::Vec<ProgramStatusRecord>,
+}
+/// Daemon → observer. A primary OSC 133 A mark: the shell drew a prompt.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct NotifyPromptShown {
+    #[prost(bytes="vec", tag="1")]
+    pub session_id: ::prost::alloc::vec::Vec<u8>,
+}
+/// Daemon → observer. An OSC 133 D mark: a command finished.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct NotifyCommandFinished {
+    #[prost(bytes="vec", tag="1")]
+    pub session_id: ::prost::alloc::vec::Vec<u8>,
+    /// The mark's exit code; absent for a bare D.
+    #[prost(uint32, optional, tag="2")]
+    pub exit_code: ::core::option::Option<u32>,
+}
+/// Daemon → observer. Some of the session's row fields changed; the
+/// values are read from SessionInfo, this names which.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct NotifySessionChanged {
+    #[prost(bytes="vec", tag="1")]
+    pub session_id: ::prost::alloc::vec::Vec<u8>,
+    #[prost(enumeration="SessionField", repeated, tag="2")]
+    pub fields: ::prost::alloc::vec::Vec<i32>,
 }
 /// Daemon → observer. One decoded desktop notification (OSC 9 / 99 /
 /// 777) from any pooled session.
@@ -2914,7 +2992,7 @@ pub struct SearchMatch {
 // below and asserts the Rust values equal them, so editing one here
 // without the other fails the build; prose-check: ignore):
 //    PROTOCOL_MAJOR = 1
-//    PROTOCOL_MINOR = 3
+//    PROTOCOL_MINOR = 4
 //
 // Kind or arm: a frame kind is a *surface*, so a message addressing a
 // surface no existing kind owns earns a kind, as does one whose
@@ -4134,6 +4212,86 @@ impl SubjectKind {
             "SUBJECT_KIND_UNSPECIFIED" => Some(Self::Unspecified),
             "SUBJECT_KIND_SESSION" => Some(Self::Session),
             "SUBJECT_KIND_SUBSCRIBER" => Some(Self::Subscriber),
+            _ => None,
+        }
+    }
+}
+/// What an observer stream relays, named by NotifySubscribe.kinds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum ObserverKind {
+    Unspecified = 0,
+    /// NotifyEvent.
+    Notification = 1,
+    /// NotifySessionAdded, NotifySessionExited and NotifySessionRemoved.
+    Lifecycle = 2,
+    /// NotifyProgramStatus.
+    ProgramStatus = 3,
+    /// NotifyPromptShown and NotifyCommandFinished.
+    Prompt = 4,
+    /// NotifySessionChanged.
+    Meta = 5,
+}
+impl ObserverKind {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "OBSERVER_KIND_UNSPECIFIED",
+            Self::Notification => "OBSERVER_KIND_NOTIFICATION",
+            Self::Lifecycle => "OBSERVER_KIND_LIFECYCLE",
+            Self::ProgramStatus => "OBSERVER_KIND_PROGRAM_STATUS",
+            Self::Prompt => "OBSERVER_KIND_PROMPT",
+            Self::Meta => "OBSERVER_KIND_META",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "OBSERVER_KIND_UNSPECIFIED" => Some(Self::Unspecified),
+            "OBSERVER_KIND_NOTIFICATION" => Some(Self::Notification),
+            "OBSERVER_KIND_LIFECYCLE" => Some(Self::Lifecycle),
+            "OBSERVER_KIND_PROGRAM_STATUS" => Some(Self::ProgramStatus),
+            "OBSERVER_KIND_PROMPT" => Some(Self::Prompt),
+            "OBSERVER_KIND_META" => Some(Self::Meta),
+            _ => None,
+        }
+    }
+}
+/// A session row field whose change NotifySessionChanged reports.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum SessionField {
+    Unspecified = 0,
+    Tags = 1,
+    Title = 2,
+    Cwd = 3,
+    Attachments = 4,
+}
+impl SessionField {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "SESSION_FIELD_UNSPECIFIED",
+            Self::Tags => "SESSION_FIELD_TAGS",
+            Self::Title => "SESSION_FIELD_TITLE",
+            Self::Cwd => "SESSION_FIELD_CWD",
+            Self::Attachments => "SESSION_FIELD_ATTACHMENTS",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "SESSION_FIELD_UNSPECIFIED" => Some(Self::Unspecified),
+            "SESSION_FIELD_TAGS" => Some(Self::Tags),
+            "SESSION_FIELD_TITLE" => Some(Self::Title),
+            "SESSION_FIELD_CWD" => Some(Self::Cwd),
+            "SESSION_FIELD_ATTACHMENTS" => Some(Self::Attachments),
             _ => None,
         }
     }

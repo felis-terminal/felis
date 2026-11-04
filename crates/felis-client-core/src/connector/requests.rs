@@ -2,15 +2,18 @@ use felis_protocol::{
     codec::{self, WireCodec},
     messages::{
         AttachFailure, AttachRefusal, AttachTarget, Directed, InfoOutcome, NotifyToDaemonMsg,
-        OpsToClientMsg, OpsToDaemonMsg, ResolvedId, ResourceReport, RetargetTarget, SendOutcome,
-        SendStep, SessionInfo, SessionToClientMsg, SessionToDaemonMsg, SpawnArgs, SpawnOutcome,
-        StopMode, StopOutcome, StreamId, SwitchDenied, SwitchScope, SwitchTarget, UpgradeOutcome,
+        ObserverKind, OpsToClientMsg, OpsToDaemonMsg, ResolvedId, ResourceReport, RetargetTarget,
+        SendOutcome, SendStep, SessionInfo, SessionToClientMsg, SessionToDaemonMsg, SpawnArgs,
+        SpawnOutcome, StopMode, StopOutcome, StreamId, SwitchDenied, SwitchScope, SwitchTarget,
+        UpgradeOutcome,
     },
     minor::MinorGated,
 };
 use tokio::io::{AsyncRead, AsyncWrite};
 
-use super::{ConnectError, Connection, check_arm_minor, check_session_addressed};
+use super::{
+    ConnectError, Connection, check_arm_minor, check_session_addressed, check_value_minor,
+};
 use crate::stream::OpenFrom;
 
 /// What was asked, as far as which refusals can answer it.
@@ -544,11 +547,25 @@ where
         &mut self,
         session_prefix: Option<String>,
     ) -> Result<StreamId, ConnectError> {
-        self.open_stream_from(
-            OpenFrom::Setup,
-            &NotifyToDaemonMsg::Subscribe { session_prefix },
-        )
-        .await
+        self.subscribe_observer(session_prefix, Vec::new()).await
+    }
+
+    /// Subscribe an observer to `kinds`; empty is notifications alone.
+    ///
+    /// # Errors
+    /// [`ConnectError::MinorTooOld`] for a non-empty `kinds` the daemon
+    /// predates, before anything is written; otherwise as [`Self::open_stream`].
+    pub async fn subscribe_observer(
+        &mut self,
+        session_prefix: Option<String>,
+        kinds: Vec<ObserverKind>,
+    ) -> Result<StreamId, ConnectError> {
+        let msg = NotifyToDaemonMsg::Subscribe {
+            session_prefix,
+            kinds,
+        };
+        check_value_minor(&msg, self.effective_minor)?;
+        self.open_stream_from(OpenFrom::Setup, &msg).await
     }
 
     /// Open a search or capture stream that names its session.

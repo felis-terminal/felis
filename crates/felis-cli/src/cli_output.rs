@@ -1037,6 +1037,174 @@ impl NotificationObject {
     }
 }
 
+/// A `sessions events` item's session, as 32 lowercase hex digits.
+#[derive(Debug, Serialize)]
+#[cfg_attr(
+    feature = "schema",
+    derive(schemars::JsonSchema),
+    schemars(transparent)
+)]
+#[serde(transparent)]
+pub(crate) struct EventSessionId(
+    #[cfg_attr(feature = "schema", schemars(regex(pattern = r"^[0-9a-f]{32}$")))] String,
+);
+
+/// One `sessions events` item. `type` names the item; the lag and end
+/// objects every stream shares carry `event` instead, so the two never
+/// collide.
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub(crate) enum EventObject {
+    Notification(NotificationObject),
+    Added {
+        session_id: EventSessionId,
+    },
+    /// Neither `exit_code` nor `signal` when no status was reaped.
+    Exited {
+        session_id: EventSessionId,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        exit_code: Option<u32>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        signal: Option<u32>,
+    },
+    Removed {
+        session_id: EventSessionId,
+    },
+    /// The whole record set, as a session row's `program_status`.
+    ProgramStatus {
+        session_id: EventSessionId,
+        records: Vec<felis_client_core::json::ProgramStatusObject>,
+    },
+    PromptShown {
+        session_id: EventSessionId,
+    },
+    CommandFinished {
+        session_id: EventSessionId,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        exit_code: Option<u32>,
+    },
+    /// Names the session row fields to re-read, never their values.
+    Changed {
+        session_id: EventSessionId,
+        fields: Vec<String>,
+    },
+}
+
+impl EventObject {
+    /// `None` for the stream's own acknowledgement and lag markers.
+    pub(crate) fn from_msg(msg: felis_protocol::messages::NotifyToClientMsg) -> Option<Self> {
+        use felis_protocol::messages::{ExitStatus, NotifyToClientMsg as N};
+        let hex = |id: u128| EventSessionId(SessionHex(id).to_string());
+        Some(match msg {
+            N::Event {
+                session_id,
+                notification,
+                notify_id,
+                session_title,
+                cwd,
+                attached,
+            } => Self::Notification(NotificationObject::new(
+                session_id,
+                &notification,
+                notify_id.as_deref(),
+                session_title.as_deref(),
+                cwd.as_deref(),
+                attached,
+            )),
+            N::SessionAdded { session_id } => Self::Added {
+                session_id: hex(session_id),
+            },
+            N::SessionExited { session_id, status } => Self::Exited {
+                session_id: hex(session_id),
+                exit_code: match status {
+                    Some(ExitStatus::Code(code)) => Some(code),
+                    _ => None,
+                },
+                signal: match status {
+                    Some(ExitStatus::Signal(signal)) => Some(signal),
+                    _ => None,
+                },
+            },
+            N::SessionRemoved { session_id } => Self::Removed {
+                session_id: hex(session_id),
+            },
+            N::ProgramStatus {
+                session_id,
+                records,
+            } => Self::ProgramStatus {
+                session_id: hex(session_id),
+                records: records.iter().map(Into::into).collect(),
+            },
+            N::PromptShown { session_id } => Self::PromptShown {
+                session_id: hex(session_id),
+            },
+            N::CommandFinished {
+                session_id,
+                exit_code,
+            } => Self::CommandFinished {
+                session_id: hex(session_id),
+                exit_code,
+            },
+            N::SessionChanged { session_id, fields } => Self::Changed {
+                session_id: hex(session_id),
+                fields: fields.iter().map(|f| f.as_str().to_owned()).collect(),
+            },
+            N::Subscribed { .. } | N::Lagged { .. } => return None,
+        })
+    }
+
+    /// The human line: a live tail to scan, not a parse target.
+    pub(crate) fn line(&self) -> String {
+        let id = |hex: &str| hex.get(..8).unwrap_or(hex).to_owned();
+        match self {
+            Self::Notification(n) => format!(
+                "{}  notification  {}",
+                id(&n.session_id),
+                n.title.as_deref().unwrap_or(&n.body)
+            ),
+            Self::Added { session_id } => format!("{}  added", id(&session_id.0)),
+            Self::Exited {
+                session_id,
+                exit_code,
+                signal,
+            } => match (exit_code, signal) {
+                (Some(code), _) => format!("{}  exited  {code}", id(&session_id.0)),
+                (None, Some(signal)) => format!("{}  exited  signal {signal}", id(&session_id.0)),
+                (None, None) => format!("{}  exited", id(&session_id.0)),
+            },
+            Self::Removed { session_id } => format!("{}  removed", id(&session_id.0)),
+            Self::ProgramStatus {
+                session_id,
+                records,
+            } => {
+                let states: Vec<String> = records
+                    .iter()
+                    .map(|r| {
+                        if r.id.is_empty() {
+                            r.state.clone()
+                        } else {
+                            format!("{}={}", r.id, r.state)
+                        }
+                    })
+                    .collect();
+                format!("{}  status  {}", id(&session_id.0), states.join(" "))
+            }
+            Self::PromptShown { session_id } => format!("{}  prompt", id(&session_id.0)),
+            Self::CommandFinished {
+                session_id,
+                exit_code,
+            } => match exit_code {
+                Some(code) => format!("{}  finished  {code}", id(&session_id.0)),
+                None => format!("{}  finished", id(&session_id.0)),
+            },
+            Self::Changed { session_id, fields } => {
+                format!("{}  changed  {}", id(&session_id.0), fields.join(","))
+            }
+        }
+    }
+}
+
 /// A payload body with no `"v"`, for embedding in another result. A
 /// `Value` rather than rendered text so the caller composes one object
 /// instead of splicing fragments. Serialization cannot fail (see

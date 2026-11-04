@@ -864,8 +864,64 @@ pub(crate) const NOTIFY_TO_CLIENT_MSG_ARMS: &[ArmMeta] = &[
         phases: PhaseSet::NONE.union(PhaseSet::OBSERVING),
         since_minor: 0,
     },
+    ArmMeta {
+        name: "Notify::SessionAdded",
+        direction: Direction::ToClient,
+        correlation: CorrelationClass::StreamItem,
+        modes: ModeSet::NONE.union(ModeSet::OBSERVER),
+        phases: PhaseSet::NONE.union(PhaseSet::OBSERVING),
+        since_minor: 4,
+    },
+    ArmMeta {
+        name: "Notify::SessionExited",
+        direction: Direction::ToClient,
+        correlation: CorrelationClass::StreamItem,
+        modes: ModeSet::NONE.union(ModeSet::OBSERVER),
+        phases: PhaseSet::NONE.union(PhaseSet::OBSERVING),
+        since_minor: 4,
+    },
+    ArmMeta {
+        name: "Notify::SessionRemoved",
+        direction: Direction::ToClient,
+        correlation: CorrelationClass::StreamItem,
+        modes: ModeSet::NONE.union(ModeSet::OBSERVER),
+        phases: PhaseSet::NONE.union(PhaseSet::OBSERVING),
+        since_minor: 4,
+    },
+    ArmMeta {
+        name: "Notify::ProgramStatus",
+        direction: Direction::ToClient,
+        correlation: CorrelationClass::StreamItem,
+        modes: ModeSet::NONE.union(ModeSet::OBSERVER),
+        phases: PhaseSet::NONE.union(PhaseSet::OBSERVING),
+        since_minor: 4,
+    },
+    ArmMeta {
+        name: "Notify::PromptShown",
+        direction: Direction::ToClient,
+        correlation: CorrelationClass::StreamItem,
+        modes: ModeSet::NONE.union(ModeSet::OBSERVER),
+        phases: PhaseSet::NONE.union(PhaseSet::OBSERVING),
+        since_minor: 4,
+    },
+    ArmMeta {
+        name: "Notify::CommandFinished",
+        direction: Direction::ToClient,
+        correlation: CorrelationClass::StreamItem,
+        modes: ModeSet::NONE.union(ModeSet::OBSERVER),
+        phases: PhaseSet::NONE.union(PhaseSet::OBSERVING),
+        since_minor: 4,
+    },
+    ArmMeta {
+        name: "Notify::SessionChanged",
+        direction: Direction::ToClient,
+        correlation: CorrelationClass::StreamItem,
+        modes: ModeSet::NONE.union(ModeSet::OBSERVER),
+        phases: PhaseSet::NONE.union(PhaseSet::OBSERVING),
+        since_minor: 4,
+    },
 ];
-pub(crate) const NOTIFY_TO_CLIENT_MSG_ARM_FIELDS: &[u32] = &[2, 3, 4];
+pub(crate) const NOTIFY_TO_CLIENT_MSG_ARM_FIELDS: &[u32] = &[2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
 
 pub(crate) const PUSH_MSG_ARMS: &[ArmMeta] = &[
     ArmMeta {
@@ -930,12 +986,14 @@ pub(crate) const SEARCH_TO_CLIENT_MSG_ARM_FIELDS: &[u32] = &[2];
 /// Added fields whose present value is withheld from an older peer.
 pub(crate) const REGION_REQUEST_SESSION: Requires = Requires::new(3, "RegionRequest.session");
 pub(crate) const REGION_ROWS_SESSION: Requires = Requires::new(3, "RegionRows.session");
+pub(crate) const NOTIFY_SUBSCRIBE_KINDS: Requires = Requires::new(4, "NotifySubscribe.kinds");
 pub(crate) const SEARCH_QUERY_SOURCE: Requires = Requires::new(1, "SearchQuery.source");
 pub(crate) const SEARCH_QUERY_SESSION: Requires = Requires::new(3, "SearchQuery.session");
 #[cfg(test)]
 pub(crate) const GATED_FIELDS: &[Requires] = &[
     REGION_REQUEST_SESSION,
     REGION_ROWS_SESSION,
+    NOTIFY_SUBSCRIBE_KINDS,
     SEARCH_QUERY_SOURCE,
     SEARCH_QUERY_SESSION,
 ];
@@ -1066,6 +1124,13 @@ pub const ADDITIONS: &[(&str, u16)] = &[
     ("Notify::Event", 0),
     ("Notify::Subscribed", 0),
     ("Notify::Lagged", 0),
+    ("Notify::SessionAdded", 4),
+    ("Notify::SessionExited", 4),
+    ("Notify::SessionRemoved", 4),
+    ("Notify::ProgramStatus", 4),
+    ("Notify::PromptShown", 4),
+    ("Notify::CommandFinished", 4),
+    ("Notify::SessionChanged", 4),
     ("Push::Evicted", 0),
     ("Push::Reattach", 0),
     ("Push::SessionExited", 0),
@@ -1086,6 +1151,7 @@ pub const ADDITIONS: &[(&str, u16)] = &[
     ("SessionConfigureTheme.palette", 2),
     ("RegionRequest.session", 3),
     ("RegionRows.session", 3),
+    ("NotifySubscribe.kinds", 4),
     ("PushSessionExited.status", 3),
     ("SearchQuery.source", 1),
     ("SearchQuery.session", 3),
@@ -1193,6 +1259,15 @@ pub const ADDITIONS: &[(&str, u16)] = &[
     ("ResourceUnit::BYTES", 0),
     ("SubjectKind::SESSION", 0),
     ("SubjectKind::SUBSCRIBER", 0),
+    ("ObserverKind::NOTIFICATION", 0),
+    ("ObserverKind::LIFECYCLE", 0),
+    ("ObserverKind::PROGRAM_STATUS", 0),
+    ("ObserverKind::PROMPT", 0),
+    ("ObserverKind::META", 0),
+    ("SessionField::TAGS", 0),
+    ("SessionField::TITLE", 0),
+    ("SessionField::CWD", 0),
+    ("SessionField::ATTACHMENTS", 0),
 ];
 #[cfg(test)]
 pub(crate) const ANNOTATED_ENUMS: &[&str] = &["UpgradeRefusal", "SendRefusal"];
@@ -1518,6 +1593,31 @@ impl v1::SubjectKind {
     pub const fn since_minor(self) -> u16 {
         match self {
             Self::Unspecified | Self::Session | Self::Subscriber => 0,
+        }
+    }
+}
+
+impl v1::ObserverKind {
+    /// The protocol minor that defined this value.
+    #[must_use]
+    pub const fn since_minor(self) -> u16 {
+        match self {
+            Self::Unspecified
+            | Self::Notification
+            | Self::Lifecycle
+            | Self::ProgramStatus
+            | Self::Prompt
+            | Self::Meta => 0,
+        }
+    }
+}
+
+impl v1::SessionField {
+    /// The protocol minor that defined this value.
+    #[must_use]
+    pub const fn since_minor(self) -> u16 {
+        match self {
+            Self::Unspecified | Self::Tags | Self::Title | Self::Cwd | Self::Attachments => 0,
         }
     }
 }

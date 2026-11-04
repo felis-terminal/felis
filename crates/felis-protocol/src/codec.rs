@@ -607,6 +607,7 @@ mod tests {
         check(
             &NotifyToDaemonMsg::Subscribe {
                 session_prefix: Some("ab".to_owned()),
+                kinds: Vec::new(),
             },
             stream,
         );

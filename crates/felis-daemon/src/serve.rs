@@ -22,10 +22,10 @@ use felis_protocol::{
         AttachCarrier, AttachFailure, AttachRefusal, AttachTarget, ConnToClientMsg,
         ConnToDaemonMsg, Correlation, CreateFailure, Directed, Direction, GridDims, GridMsg,
         ImageMsg, InfoOutcome, InputMsg, Notification, NotifyToClientMsg, NotifyToDaemonMsg,
-        OpsToClientMsg, OpsToDaemonMsg, PushMsg, RefusalReason, RegionToDaemonMsg, RequestId,
-        ResolvedId, SearchToDaemonMsg, SessionInfo, SessionToClientMsg, SessionToDaemonMsg,
-        SpawnOutcome, SshEnv, StopMode, StopOutcome, StreamErrorReason, StreamId, Subject,
-        SwitchScope, SwitchTarget, ThemeChannel,
+        ObserverKind, OpsToClientMsg, OpsToDaemonMsg, PushMsg, RefusalReason, RegionToDaemonMsg,
+        RequestId, ResolvedId, SearchToDaemonMsg, SessionField, SessionInfo, SessionToClientMsg,
+        SessionToDaemonMsg, SpawnOutcome, SshEnv, StopMode, StopOutcome, StreamErrorReason,
+        StreamId, Subject, SwitchScope, SwitchTarget, ThemeChannel,
     },
     preface::{self, CarrierBlock, ClientPreface, DaemonAccept, DaemonRefuse},
 };
@@ -301,28 +301,63 @@ pub struct DaemonCaps {
 /// the accept loop. A `watch` rather than a `Notify` so a fire that
 /// lands while the loop is inside an accept is still read afterward.
 #[derive(Debug)]
-pub struct Shutdown(watch::Sender<bool>);
+pub struct Shutdown {
+    fired: watch::Sender<bool>,
+    open_observers: watch::Sender<usize>,
+}
+
+/// How long a stopping daemon waits for its observers to write their
+/// terminals before it exits anyway.
+const OBSERVER_DRAIN: Duration = Duration::from_secs(2);
+
+/// One observer stream the stopping daemon waits to see end.
+struct ObserverTicket(Arc<Shutdown>);
+
+impl Drop for ObserverTicket {
+    fn drop(&mut self) {
+        self.0
+            .open_observers
+            .send_modify(|open| *open = open.saturating_sub(1));
+    }
+}
 
 impl Shutdown {
     #[must_use]
     pub fn new() -> Arc<Self> {
-        Arc::new(Self(watch::Sender::new(false)))
+        Arc::new(Self {
+            fired: watch::Sender::new(false),
+            open_observers: watch::Sender::new(0),
+        })
+    }
+
+    fn observe(self: &Arc<Self>) -> ObserverTicket {
+        self.open_observers.send_modify(|open| *open += 1);
+        ObserverTicket(Arc::clone(self))
+    }
+
+    /// The runtime drops every connection task when `serve` returns, so
+    /// an observer stream ends with its terminal only if the daemon
+    /// waits for it here.
+    async fn drain_observers(&self) {
+        let mut open = self.open_observers.subscribe();
+        let drained = async { open.wait_for(|open| *open == 0).await.is_ok() };
+        let _drained = tokio::time::timeout(OBSERVER_DRAIN, drained).await;
     }
 
     /// Fired *after* the reply that announced it was written, so the
     /// caller of `felis daemon stop` reads the outcome of a stop that
     /// then happens.
     pub fn fire(&self) {
-        self.0.send_modify(|fired| *fired = true);
+        self.fired.send_modify(|fired| *fired = true);
     }
 
     #[must_use]
     pub fn fired(&self) -> bool {
-        *self.0.borrow()
+        *self.fired.borrow()
     }
 
     fn watch(&self) -> watch::Receiver<bool> {
-        self.0.subscribe()
+        self.fired.subscribe()
     }
 }
 
@@ -527,6 +562,7 @@ async fn accept_loop(
     }
     caps.upgrade.clear_listener();
     info!(endpoint = %endpoint, "felis-daemon stopping");
+    caps.shutdown.drain_observers().await;
     // Nothing unlinks the path, here or in `Drop` (REQ-009d): an
     // unlink would race a replacement daemon that rebound the same
     // name and delete its live socket.
@@ -1001,7 +1037,12 @@ impl Registered {
     /// Make the pool row nameable and hand the session over: past this
     /// the row is shared, so there is nothing left to roll back.
     async fn publish(self) -> mpsc::Sender<SessionCmd> {
-        self.pool.lock().await.publish(self.id);
+        if self.pool.lock().await.publish(self.id) {
+            // After the row is nameable, so a `list` an observer runs on
+            // `SessionAdded` finds it. A failed send is a task already
+            // ending, which publishes nothing more.
+            drop(self.cmd.send(SessionCmd::Published).await);
+        }
         self.keep()
     }
 
@@ -1426,7 +1467,11 @@ async fn wait_for_attach<R: tokio::io::AsyncRead + Unpin, W: tokio::io::AsyncWri
                         // the arm's class, so the ack and the terminal
                         // read it off the delivery instead of the body.
                         let stream = delivered.stream();
-                        let NotifyToDaemonMsg::Subscribe { session_prefix } = delivered.msg;
+                        let NotifyToDaemonMsg::Subscribe {
+                            session_prefix,
+                            kinds,
+                        } = delivered.msg;
+                        let kinds = ObserverKinds::from_request(&kinds);
                         // The role changes before the ack is written: a
                         // session frame arriving between the two is
                         // refused by phase.
@@ -1435,16 +1480,22 @@ async fn wait_for_attach<R: tokio::io::AsyncRead + Unpin, W: tokio::io::AsyncWri
                         // resolving, under one lock: an event published while the filter
                         // resolves must already be in this receiver's queue, or `--once`
                         // waits for a notification that was sent.
-                        let (mut rx, filter) = {
+                        let (mut feed, filter) = {
                             let guard = pool.lock().await;
-                            let rx = guard.subscribe_notifications();
+                            let feed = ObserverFeed {
+                                kinds,
+                                notifications: kinds
+                                    .wants(ObserverKind::Notification)
+                                    .then(|| guard.subscribe_notifications()),
+                                events: kinds.wants_events().then(|| guard.subscribe_events()),
+                            };
                             let filter = session_prefix.as_deref().map(|prefix| {
                                 felis_protocol::session_prefix::resolve_session_prefix(
                                     prefix,
                                     guard.ids().map(|id| id.0),
                                 )
                             });
-                            (rx, filter)
+                            (feed, filter)
                         };
                         writer
                             .send_correlated(
@@ -1474,8 +1525,10 @@ async fn wait_for_attach<R: tokio::io::AsyncRead + Unpin, W: tokio::io::AsyncWri
                         // The observer runs until the subscriber leaves; an
                         // upgrade ends it at the exec instead of waiting.
                         drop(dispatching);
+                        let _ticket = caps.shutdown.observe();
+                        let mut exit = caps.shutdown.watch();
                         let sent = run_notification_observer(
-                            reader, writer, driver, stream, only, &mut rx,
+                            reader, writer, driver, stream, only, &mut feed, &mut exit,
                         )
                         .await?;
                         end_observer(writer, driver, stream, sent, None).await?;
@@ -1645,7 +1698,10 @@ async fn ops_reply(ctx: CreateCtx<'_>, msg: OpsToDaemonMsg) -> OpsToClientMsg {
             // waking its task.
             let resolved = resolve_prefix(pool, &id_prefix).await;
             let (tags, denied) = if let ResolvedId::Ok { id } = resolved {
-                let handle = pool.lock().await.handle_cloned(SessionId(id));
+                let (handle, events) = {
+                    let guard = pool.lock().await;
+                    (guard.handle_cloned(SessionId(id)), guard.events_hub())
+                };
                 handle.map_or_else(
                     || (Vec::new(), None),
                     |handle| {
@@ -1653,10 +1709,26 @@ async fn ops_reply(ctx: CreateCtx<'_>, msg: OpsToDaemonMsg) -> OpsToClientMsg {
                             .meta
                             .lock()
                             .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        let before = meta.tags.clone();
                         let denied = crate::pool::apply_tag_delta(&mut meta.tags, &add, &remove)
                             .err()
                             .map(|e| e.to_string());
-                        (meta.tags.iter().cloned().collect(), denied)
+                        let tags: Vec<String> = meta.tags.iter().cloned().collect();
+                        let changed = meta.tags != before;
+                        drop(meta);
+                        // From this handler rather than the session task, so
+                        // a parked session relabels without a wake; the
+                        // ordering promise excludes it.
+                        if changed {
+                            crate::pool::emit(
+                                &events,
+                                NotifyToClientMsg::SessionChanged {
+                                    session_id: id,
+                                    fields: vec![SessionField::Tags],
+                                },
+                            );
+                        }
+                        (tags, denied)
                     },
                 )
             } else {
@@ -2519,9 +2591,59 @@ async fn write_event_frame<W: tokio::io::AsyncWrite + Unpin>(
     Ok(())
 }
 
+/// The kinds one observer asked for; empty is notifications alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ObserverKinds(u8);
+
+impl ObserverKinds {
+    fn from_request(kinds: &[ObserverKind]) -> Self {
+        if kinds.is_empty() {
+            return Self::bit(ObserverKind::Notification);
+        }
+        Self(kinds.iter().fold(0, |acc, kind| acc | Self::bit(*kind).0))
+    }
+
+    const fn bit(kind: ObserverKind) -> Self {
+        Self(match kind {
+            ObserverKind::Notification => 1,
+            ObserverKind::Lifecycle => 2,
+            ObserverKind::ProgramStatus => 4,
+            ObserverKind::Prompt => 8,
+            ObserverKind::Meta => 16,
+        })
+    }
+
+    const fn wants(self, kind: ObserverKind) -> bool {
+        self.0 & Self::bit(kind).0 != 0
+    }
+
+    const fn wants_events(self) -> bool {
+        self.0 & !Self::bit(ObserverKind::Notification).0 != 0
+    }
+}
+
+/// What one observer asked for, and one receiver per ring it needs: a
+/// notification-only subscriber never holds the events ring, so its
+/// traffic cannot lag it.
+struct ObserverFeed {
+    kinds: ObserverKinds,
+    notifications: Option<tokio::sync::broadcast::Receiver<NotifyToClientMsg>>,
+    events: Option<tokio::sync::broadcast::Receiver<NotifyToClientMsg>>,
+}
+
+async fn recv_from(
+    rx: Option<&mut tokio::sync::broadcast::Receiver<NotifyToClientMsg>>,
+) -> Result<NotifyToClientMsg, tokio::sync::broadcast::error::RecvError> {
+    match rx {
+        Some(rx) => rx.recv().await,
+        None => std::future::pending().await,
+    }
+}
+
 /// Drive a notification observer (docs/reference/protocols/notifications.md).
 ///
-/// Runs until broadcast closes, client disconnects, or stream cancel arrives.
+/// Runs until broadcast closes, the daemon stops, the client disconnects,
+/// or stream cancel arrives.
 /// Returns emitted item count for terminal `End` emission.
 async fn run_notification_observer<R, W>(
     reader: &mut FrameReader<R>,
@@ -2529,7 +2651,8 @@ async fn run_notification_observer<R, W>(
     driver: &mut DaemonDriver,
     stream: StreamId,
     only: Option<u128>,
-    rx: &mut tokio::sync::broadcast::Receiver<NotifyToClientMsg>,
+    feed: &mut ObserverFeed,
+    exit: &mut watch::Receiver<bool>,
 ) -> Result<u32, ConnError>
 where
     R: tokio::io::AsyncRead + Unpin,
@@ -2540,6 +2663,9 @@ where
     let mut sent = 0u32;
     loop {
         tokio::select! {
+            // The pool's hubs outlive a stop while connections hold it, so
+            // the stop itself ends the stream.
+            _stopped = async { exit.wait_for(|fired| *fired).await.is_ok() } => return Ok(sent),
             frame = reader.next_frame() => {
                 let Some(frame) = frame? else { return Ok(sent) };
                 match driver.classify(&frame)? {
@@ -2556,10 +2682,16 @@ where
                     }
                 }
             }
-            event = rx.recv() => {
+            event = async {
+                tokio::select! {
+                    event = recv_from(feed.notifications.as_mut()) => event,
+                    event = recv_from(feed.events.as_mut()) => event,
+                }
+            } => {
                 match event {
-                    Ok(NotifyToClientMsg::Event { session_id, .. })
-                        if only.is_some_and(|want| want != session_id) => {}
+                    Ok(ev) if only.is_some_and(|want| ev.session_id() != Some(want)) => {}
+                    Ok(ev)
+                        if ObserverKind::of(&ev).is_some_and(|kind| !feed.kinds.wants(kind)) => {}
                     Ok(ev) => {
                         writer.send_correlated(&ev, correlation).await?;
                         sent = sent.saturating_add(1);

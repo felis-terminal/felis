@@ -707,7 +707,8 @@ fn a_mode_refuses_a_surface_it_never_asked_for() {
     assert!(matches!(
         window
             .classify(&frame(&NotifyToDaemonMsg::Subscribe {
-                session_prefix: None
+                session_prefix: None,
+                kinds: Vec::new(),
             }))
             .unwrap_err(),
         DriverError::ModeDenied { .. }
@@ -1401,6 +1402,7 @@ fn an_envelope_of_the_wrong_class_closes_the_connection_on_every_family() {
             correlated(
                 &NotifyToDaemonMsg::Subscribe {
                     session_prefix: None,
+                    kinds: Vec::new(),
                 },
                 request_envelope(),
             ),
@@ -2000,6 +2002,7 @@ fn every_streaming_family_shares_one_table() {
     let subscribe = correlated(
         &NotifyToDaemonMsg::Subscribe {
             session_prefix: None,
+            kinds: Vec::new(),
         },
         Correlation::stream(stream(1)),
     );
@@ -2038,6 +2041,7 @@ fn sample_of(kind: MessageKind) -> OwnedFrame {
         }),
         MessageKind::Notify => frame(&NotifyToDaemonMsg::Subscribe {
             session_prefix: None,
+            kinds: Vec::new(),
         }),
         MessageKind::Push => frame(&PushMsg::Evicted {
             reason: "evicted".into(),
@@ -2288,6 +2292,7 @@ fn an_observer_and_an_attached_window_share_no_surface() {
     let subscribe = correlated(
         &NotifyToDaemonMsg::Subscribe {
             session_prefix: None,
+            kinds: Vec::new(),
         },
         Correlation::stream(id),
     );
@@ -2302,6 +2307,7 @@ fn an_observer_and_an_attached_window_share_no_surface() {
     let second = correlated(
         &NotifyToDaemonMsg::Subscribe {
             session_prefix: None,
+            kinds: Vec::new(),
         },
         Correlation::stream(stream(2)),
     );

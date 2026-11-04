@@ -5,7 +5,85 @@ use serde::{Deserialize, Serialize};
 
 use super::{ArmMeta, Directed};
 
-use super::Notification;
+use super::{ExitStatus, Notification, ProgramStatusRecord};
+
+/// What an observer stream relays
+/// ([`NotifyToDaemonMsg::Subscribe::kinds`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub enum ObserverKind {
+    /// [`NotifyToClientMsg::Event`].
+    Notification,
+    /// [`NotifyToClientMsg::SessionAdded`], [`NotifyToClientMsg::SessionExited`]
+    /// and [`NotifyToClientMsg::SessionRemoved`].
+    Lifecycle,
+    /// [`NotifyToClientMsg::ProgramStatus`].
+    ProgramStatus,
+    /// [`NotifyToClientMsg::PromptShown`] and [`NotifyToClientMsg::CommandFinished`].
+    Prompt,
+    /// [`NotifyToClientMsg::SessionChanged`].
+    Meta,
+}
+
+impl ObserverKind {
+    pub const ALL: [Self; 5] = [
+        Self::Notification,
+        Self::Lifecycle,
+        Self::ProgramStatus,
+        Self::Prompt,
+        Self::Meta,
+    ];
+
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Notification => "notification",
+            Self::Lifecycle => "lifecycle",
+            Self::ProgramStatus => "program_status",
+            Self::Prompt => "prompt",
+            Self::Meta => "meta",
+        }
+    }
+
+    /// The kind an item belongs to; `None` for the stream's own
+    /// `Subscribed` and `Lagged`.
+    #[must_use]
+    pub const fn of(msg: &NotifyToClientMsg) -> Option<Self> {
+        match msg {
+            NotifyToClientMsg::Event { .. } => Some(Self::Notification),
+            NotifyToClientMsg::SessionAdded { .. }
+            | NotifyToClientMsg::SessionExited { .. }
+            | NotifyToClientMsg::SessionRemoved { .. } => Some(Self::Lifecycle),
+            NotifyToClientMsg::ProgramStatus { .. } => Some(Self::ProgramStatus),
+            NotifyToClientMsg::PromptShown { .. } | NotifyToClientMsg::CommandFinished { .. } => {
+                Some(Self::Prompt)
+            }
+            NotifyToClientMsg::SessionChanged { .. } => Some(Self::Meta),
+            NotifyToClientMsg::Subscribed { .. } | NotifyToClientMsg::Lagged { .. } => None,
+        }
+    }
+}
+
+/// A session row field whose change [`NotifyToClientMsg::SessionChanged`]
+/// names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub enum SessionField {
+    Tags,
+    Title,
+    Cwd,
+    Attachments,
+}
+
+impl SessionField {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Tags => "tags",
+            Self::Title => "title",
+            Self::Cwd => "cwd",
+            Self::Attachments => "attachments",
+        }
+    }
+}
 
 /// Notification observer requests ([`crate::MessageKind::Notify`],
 /// kind 7): the client's half of the [`crate::ConnectionMode::Observer`]
@@ -17,9 +95,12 @@ pub enum NotifyToDaemonMsg {
     /// (`docs/reference/protocols/notifications.md`). The daemon replies
     /// [`NotifyToClientMsg::Subscribed`] and then streams events until it closes.
     Subscribe {
-        /// Only relay notifications from the session this lowercase
-        /// hex prefix resolves to; resolved daemon-side.
+        /// Only relay items about the session this lowercase hex
+        /// prefix resolves to; resolved daemon-side.
         session_prefix: Option<String>,
+        /// Empty is notifications alone, the subscribe of a peer that
+        /// predates the field.
+        kinds: Vec<ObserverKind>,
     },
 }
 
@@ -56,6 +137,55 @@ pub enum NotifyToClientMsg {
     /// observer fell behind the notification ring. Loss under
     /// backpressure is part of the observer contract, but never silent.
     Lagged { missed: u64 },
+    /// Daemon → observer. The session entered the listed roster; the
+    /// first item about it.
+    SessionAdded { session_id: u128 },
+    /// Daemon → observer. The session's child ended, once per session.
+    /// `None` when no status could be reaped.
+    SessionExited {
+        session_id: u128,
+        status: Option<ExitStatus>,
+    },
+    /// Daemon → observer. The session left the pool; the last item its
+    /// own task publishes about it.
+    SessionRemoved { session_id: u128 },
+    /// Daemon → observer. The whole OSC 7501 record set after a change.
+    ProgramStatus {
+        session_id: u128,
+        records: Vec<ProgramStatusRecord>,
+    },
+    /// Daemon → observer. A primary OSC 133 `A` mark.
+    PromptShown { session_id: u128 },
+    /// Daemon → observer. An OSC 133 `D` mark; `None` for a bare `D`.
+    CommandFinished {
+        session_id: u128,
+        exit_code: Option<u32>,
+    },
+    /// Daemon → observer. These row fields changed; their values are
+    /// the session row's.
+    SessionChanged {
+        session_id: u128,
+        fields: Vec<SessionField>,
+    },
+}
+
+impl NotifyToClientMsg {
+    /// The session an item is about; `None` for `Subscribed` and
+    /// `Lagged`.
+    #[must_use]
+    pub const fn session_id(&self) -> Option<u128> {
+        match self {
+            Self::Event { session_id, .. }
+            | Self::SessionAdded { session_id }
+            | Self::SessionExited { session_id, .. }
+            | Self::SessionRemoved { session_id }
+            | Self::ProgramStatus { session_id, .. }
+            | Self::PromptShown { session_id }
+            | Self::CommandFinished { session_id, .. }
+            | Self::SessionChanged { session_id, .. } => Some(*session_id),
+            Self::Subscribed { .. } | Self::Lagged { .. } => None,
+        }
+    }
 }
 
 impl Directed for NotifyToDaemonMsg {
@@ -76,6 +206,13 @@ impl Directed for NotifyToClientMsg {
             Self::Event { .. } => 0,
             Self::Subscribed { .. } => 1,
             Self::Lagged { .. } => 2,
+            Self::SessionAdded { .. } => 3,
+            Self::SessionExited { .. } => 4,
+            Self::SessionRemoved { .. } => 5,
+            Self::ProgramStatus { .. } => 6,
+            Self::PromptShown { .. } => 7,
+            Self::CommandFinished { .. } => 8,
+            Self::SessionChanged { .. } => 9,
         }
     }
 }
@@ -90,9 +227,15 @@ pub(crate) mod tests {
         vec![
             NotifyToDaemonMsg::Subscribe {
                 session_prefix: None,
+                kinds: Vec::new(),
             },
             NotifyToDaemonMsg::Subscribe {
                 session_prefix: Some("cafe".into()),
+                kinds: Vec::new(),
+            },
+            NotifyToDaemonMsg::Subscribe {
+                session_prefix: None,
+                kinds: ObserverKind::ALL.to_vec(),
             },
         ]
     }
@@ -109,6 +252,49 @@ pub(crate) mod tests {
                 filter: Some(crate::messages::ResolvedId::NoMatch),
             },
             NotifyToClientMsg::Lagged { missed: 17 },
+            NotifyToClientMsg::SessionAdded { session_id: 0x51 },
+            NotifyToClientMsg::SessionExited {
+                session_id: 0x51,
+                status: Some(ExitStatus::Code(3)),
+            },
+            NotifyToClientMsg::SessionExited {
+                session_id: 0x51,
+                status: Some(ExitStatus::Signal(9)),
+            },
+            NotifyToClientMsg::SessionExited {
+                session_id: 0x51,
+                status: None,
+            },
+            NotifyToClientMsg::SessionRemoved { session_id: 0x51 },
+            NotifyToClientMsg::ProgramStatus {
+                session_id: 0x51,
+                records: vec![ProgramStatusRecord {
+                    id: String::new(),
+                    state: "working".into(),
+                    kind: Some("agent".into()),
+                    progress: Some(40),
+                    app: Some("claude".into()),
+                    title: None,
+                    msg: Some("editing".into()),
+                }],
+            },
+            NotifyToClientMsg::ProgramStatus {
+                session_id: 0x51,
+                records: Vec::new(),
+            },
+            NotifyToClientMsg::PromptShown { session_id: 0x51 },
+            NotifyToClientMsg::CommandFinished {
+                session_id: 0x51,
+                exit_code: Some(1),
+            },
+            NotifyToClientMsg::CommandFinished {
+                session_id: 0x51,
+                exit_code: None,
+            },
+            NotifyToClientMsg::SessionChanged {
+                session_id: 0x51,
+                fields: vec![SessionField::Tags, SessionField::Attachments],
+            },
             NotifyToClientMsg::Event {
                 session_id: 0xCAFE_BABE_DEAD_BEEF,
                 notification: Notification {

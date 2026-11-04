@@ -1129,11 +1129,16 @@ fn osc_10_refused_spec_keeps_the_override_and_sends_no_reply() {
     assert_eq!(g.theme_override(ThemeChannel::Background), None);
 }
 
+/// The prompt edges every `A` and `D` queues are left out: the cases
+/// here pin the status effects around them.
 fn effects_of(bytes: &[u8]) -> Vec<PtyEffect> {
     let mut p = Parser::new();
     let mut g = Grid::new(4, 20);
     drive(&mut p, &mut g, bytes);
     g.take_pty_effects()
+        .into_iter()
+        .filter(|effect| !matches!(effect, PtyEffect::Prompt(_)))
+        .collect()
 }
 
 fn report(state: felis_vt::program_status::State) -> felis_vt::program_status::Report {
@@ -1495,17 +1500,20 @@ fn an_interrupted_report_does_not_spend_the_status_budget() {
     assert_eq!(stops(&mut g, &filler), Vec::<usize>::new());
 }
 
-/// Prompt starts share the budget: a session task that drains only on
-/// request must still see them in bounded batches.
+/// Prompt starts and prompt edges share the budget: a session task that
+/// drains only on request must still see them in bounded batches. A
+/// primary `A` after a `working` report queues a start and an edge.
 #[test]
 fn prompt_starts_and_reports_fill_the_status_budget_together() {
     let mut g = Grid::new(2, 8);
     let prompt = b"\x1b]133;A\x07";
     let report = b"\x1b]7501;state=working\x07";
+    let finished = b"\x1b]133;D;0\x07";
     let mut bytes = Vec::new();
-    for _ in 0..STATUS_OUTBOX_YIELD / 2 {
+    for _ in 0..STATUS_OUTBOX_YIELD / 4 {
         bytes.extend_from_slice(report);
         bytes.extend_from_slice(prompt);
+        bytes.extend_from_slice(finished);
     }
     assert_eq!(stops(&mut g, &bytes), [bytes.len()]);
     assert_eq!(g.take_pty_effects().len(), STATUS_OUTBOX_YIELD);

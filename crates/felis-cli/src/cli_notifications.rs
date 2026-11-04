@@ -5,7 +5,7 @@
 
 use anyhow::Result;
 use clap::Subcommand;
-use felis_protocol::messages::{ConnToClientMsg, NotifyToClientMsg};
+use felis_protocol::messages::{ConnToClientMsg, NotifyToClientMsg, ObserverKind};
 use felis_transport::{Delivery, Incoming};
 use tokio::io::{AsyncRead, AsyncWrite};
 
@@ -114,7 +114,7 @@ pub(crate) fn run(
 }
 
 async fn stream_notifications<R, W>(
-    mut conn: Connection<R, W>,
+    conn: Connection<R, W>,
     out: &Reporter,
     session_prefix: Option<String>,
     once: bool,
@@ -124,137 +124,36 @@ where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
 {
-    use std::io::Write as _;
-
-    // The failure below is before the first item, so it is reported as
-    // the stream's one terminal rather than propagated: a `?` would
-    // write no object, and a consumer reading until the terminal would
-    // wait forever (docs/reference/cli.md "Machine output").
-    if let Err(err) = conn.subscribe_notifications(session_prefix.clone()).await {
-        let kind = match err {
-            ConnectError::Driver(_) => ErrorKind::Protocol,
-            _ => ErrorKind::DaemonLost,
-        };
-        return Ok(out.fail(kind, format!("notifications: subscribe: {err}")));
-    }
-
-    let deadline = crate::timeout_deadline(timeout);
-    let mut delivered: u64 = 0;
-
-    let timed_out = || {
-        out.fail(
-            ErrorKind::Timeout,
+    let deadline = crate::timeout_deadline(timeout).map(|at| {
+        (
+            at,
             format!(
                 "notifications: no notification within {}s",
                 timeout.unwrap_or(0)
             ),
         )
+    });
+    let watch = Watch {
+        verb: "notifications",
+        session_prefix,
+        kinds: Vec::new(),
+        deadline,
+        end_code: i32::from(once),
     };
-
-    loop {
-        // `timeout_at` polls its inner future before the expired timer,
-        // so an elapsed deadline has to end the wait on its own: a
-        // frame already in the reader's read-ahead would otherwise be
-        // delivered past the deadline the caller set.
-        if deadline.is_some_and(|at| at <= tokio::time::Instant::now()) {
-            return Ok(timed_out());
-        }
-        // Through the connection, not the raw reader: a frame parked
-        // by a verb that ran on this connection must be read first.
-        let next = conn.next_frame();
-        let frame = match deadline {
-            Some(deadline) => match tokio::time::timeout_at(deadline, next).await {
-                Ok(read) => read,
-                Err(_elapsed) => return Ok(timed_out()),
-            },
-            None => next.await,
-        };
-        let frame = match frame {
-            Ok(Some(frame)) => frame,
-            // EOF without a terminal: the daemon died rather than
-            // ending the stream, and a `--once` caller cannot tell
-            // whether its notification was lost.
-            Ok(None) => {
-                return Ok(out.fail(
-                    ErrorKind::DaemonLost,
-                    "notifications: daemon closed the stream without ending it",
-                ));
-            }
-            Err(err) => {
-                return Ok(out.fail(
-                    ErrorKind::DaemonLost,
-                    format!("notifications: stream error: {err}"),
-                ));
-            }
-        };
-        let msg = match conn.driver.classify(&frame) {
-            // The daemon is done publishing. Under `--once` the
-            // promised notification never came (nonzero), but the
-            // terminal is still clean.
-            Ok(Incoming::Control(ConnToClientMsg::End { .. })) => {
-                out.end(delivered, None);
-                return Ok(i32::from(once));
-            }
-            Ok(Incoming::Control(ConnToClientMsg::Error { reason, detail, .. })) => {
-                return Ok(out.fail(
-                    ErrorKind::from_stream_reason(reason),
-                    format!("notifications: {}: {detail}", reason.as_str()),
-                ));
-            }
-            Ok(Incoming::Control(_) | Incoming::CancelIgnored { .. }) => continue,
-            Ok(Incoming::Payload(payload)) => {
-                match conn.driver.decode::<NotifyToClientMsg>(&payload) {
-                    Ok(Delivery::Deliver(delivered)) => delivered.msg,
-                    Ok(Delivery::DroppedAfterCancel | Delivery::RefuseStream { .. }) => continue,
-                    Err(err) => {
-                        return Ok(out.fail(
-                            ErrorKind::Protocol,
-                            format!("notifications: daemon sent an unreadable frame: {err}"),
-                        ));
-                    }
-                }
-            }
-            Err(err) => {
-                return Ok(out.fail(
-                    ErrorKind::Protocol,
-                    format!("notifications: daemon sent an unreadable frame: {err}"),
-                ));
-            }
-        };
-        if let NotifyToClientMsg::Subscribed { filter } = msg {
-            // A failed `--session` resolution arrives as a typed ack;
-            // the daemon closes right after.
-            if let Some(resolved) = filter
-                && let Err(err) = session_id_from_resolved(
-                    resolved,
-                    session_prefix.as_deref().unwrap_or_default(),
-                )
-            {
-                let kind = match err {
-                    crate::SessionPrefixError::NoMatch { .. } => ErrorKind::NoMatch,
-                    crate::SessionPrefixError::Ambiguous { .. } => ErrorKind::Ambiguous,
-                };
-                return Ok(out.fail(kind, format!("notifications: {err}")));
-            }
-            continue;
-        }
-        if let NotifyToClientMsg::Lagged { missed } = msg {
-            // The marker rides stdout as an in-band event: the event a
-            // piped consumer waits on may be among the missed.
-            out.lag(missed);
-            let _flushed = std::io::stdout().flush().is_ok();
-            continue;
-        }
-        if let NotifyToClientMsg::Event {
-            session_id,
-            notification,
-            notify_id,
-            session_title,
-            cwd,
-            attached,
-        } = msg
-        {
-            delivered += 1;
+    watch
+        .run(conn, out, |msg, delivered| {
+            let NotifyToClientMsg::Event {
+                session_id,
+                notification,
+                notify_id,
+                session_title,
+                cwd,
+                attached,
+            } = msg
+            else {
+                return None;
+            };
+            *delivered += 1;
             if out.machine() {
                 out.item(&NotificationObject::new(
                     session_id,
@@ -267,13 +166,170 @@ where
             } else {
                 stdoutln!("{}", notification_line(session_id, &notification));
             }
-            // Flush so a piped consumer sees each notification now, not
-            // on block-buffer fill; a flush failure on a closed pipe
-            // ends the stream on the next write anyway.
-            let _flushed = std::io::stdout().flush().is_ok();
             if once {
-                out.end(delivered, None);
-                return Ok(0);
+                out.end(*delivered, None);
+                return Some(0);
+            }
+            None
+        })
+        .await
+}
+
+/// One observer subscription read to its terminal: the framing, the
+/// filter ack and lag markers are the same whichever kinds it asked
+/// for, so only the items differ between verbs.
+pub(crate) struct Watch {
+    pub(crate) verb: &'static str,
+    pub(crate) session_prefix: Option<String>,
+    pub(crate) kinds: Vec<ObserverKind>,
+    /// When the wait gives up, and what it says then.
+    pub(crate) deadline: Option<(tokio::time::Instant, String)>,
+    /// The exit code a clean terminal from the daemon ends with.
+    pub(crate) end_code: i32,
+}
+
+impl Watch {
+    /// `on_item` writes an item and counts it; `Some` ends the stream
+    /// with that exit code, the item having written its own terminal.
+    pub(crate) async fn run<R, W>(
+        self,
+        mut conn: Connection<R, W>,
+        out: &Reporter,
+        mut on_item: impl FnMut(NotifyToClientMsg, &mut u64) -> Option<i32>,
+    ) -> Result<i32>
+    where
+        R: AsyncRead + Unpin,
+        W: AsyncWrite + Unpin,
+    {
+        use std::io::Write as _;
+
+        let Self {
+            verb,
+            session_prefix,
+            kinds,
+            deadline,
+            end_code,
+        } = self;
+        // The failure below is before the first item, so it is reported
+        // as the stream's one terminal rather than propagated: a `?`
+        // would write no object, and a consumer reading until the
+        // terminal would wait forever (docs/reference/cli.md "Machine
+        // output").
+        if let Err(err) = conn.subscribe_observer(session_prefix.clone(), kinds).await {
+            let kind = match err {
+                ConnectError::Driver(_) => ErrorKind::Protocol,
+                ConnectError::MinorTooOld { .. } => ErrorKind::Unsupported,
+                _ => ErrorKind::DaemonLost,
+            };
+            return Ok(out.fail(kind, format!("{verb}: subscribe: {err}")));
+        }
+
+        let mut delivered: u64 = 0;
+        loop {
+            // `timeout_at` polls its inner future before the expired
+            // timer, so an elapsed deadline has to end the wait on its
+            // own: a frame already in the reader's read-ahead would
+            // otherwise be delivered past the deadline the caller set.
+            if let Some((at, said)) = &deadline
+                && *at <= tokio::time::Instant::now()
+            {
+                return Ok(out.fail(ErrorKind::Timeout, said.clone()));
+            }
+            // Through the connection, not the raw reader: a frame parked
+            // by a verb that ran on this connection must be read first.
+            let next = conn.next_frame();
+            let frame = match &deadline {
+                Some((at, said)) => match tokio::time::timeout_at(*at, next).await {
+                    Ok(read) => read,
+                    Err(_elapsed) => return Ok(out.fail(ErrorKind::Timeout, said.clone())),
+                },
+                None => next.await,
+            };
+            let frame = match frame {
+                Ok(Some(frame)) => frame,
+                // EOF without a terminal: the daemon died rather than
+                // ending the stream, and a waiting caller cannot tell
+                // whether its item was lost.
+                Ok(None) => {
+                    return Ok(out.fail(
+                        ErrorKind::DaemonLost,
+                        format!("{verb}: daemon closed the stream without ending it"),
+                    ));
+                }
+                Err(err) => {
+                    return Ok(out.fail(
+                        ErrorKind::DaemonLost,
+                        format!("{verb}: stream error: {err}"),
+                    ));
+                }
+            };
+            let msg = match conn.driver.classify(&frame) {
+                Ok(Incoming::Control(ConnToClientMsg::End { .. })) => {
+                    out.end(delivered, None);
+                    return Ok(end_code);
+                }
+                Ok(Incoming::Control(ConnToClientMsg::Error { reason, detail, .. })) => {
+                    return Ok(out.fail(
+                        ErrorKind::from_stream_reason(reason),
+                        format!("{verb}: {}: {detail}", reason.as_str()),
+                    ));
+                }
+                Ok(Incoming::Control(_) | Incoming::CancelIgnored { .. }) => continue,
+                Ok(Incoming::Payload(payload)) => {
+                    match conn.driver.decode::<NotifyToClientMsg>(&payload) {
+                        Ok(Delivery::Deliver(delivered)) => delivered.msg,
+                        Ok(Delivery::DroppedAfterCancel | Delivery::RefuseStream { .. }) => {
+                            continue;
+                        }
+                        Err(err) => {
+                            return Ok(out.fail(
+                                ErrorKind::Protocol,
+                                format!("{verb}: daemon sent an unreadable frame: {err}"),
+                            ));
+                        }
+                    }
+                }
+                Err(err) => {
+                    return Ok(out.fail(
+                        ErrorKind::Protocol,
+                        format!("{verb}: daemon sent an unreadable frame: {err}"),
+                    ));
+                }
+            };
+            match msg {
+                NotifyToClientMsg::Subscribed { filter } => {
+                    // A failed `--session` resolution arrives as a typed
+                    // ack; the daemon closes right after.
+                    if let Some(resolved) = filter
+                        && let Err(err) = session_id_from_resolved(
+                            resolved,
+                            session_prefix.as_deref().unwrap_or_default(),
+                        )
+                    {
+                        let kind = match err {
+                            crate::SessionPrefixError::NoMatch { .. } => ErrorKind::NoMatch,
+                            crate::SessionPrefixError::Ambiguous { .. } => ErrorKind::Ambiguous,
+                        };
+                        return Ok(out.fail(kind, format!("{verb}: {err}")));
+                    }
+                }
+                NotifyToClientMsg::Lagged { missed } => {
+                    // The marker rides stdout as an in-band event: the
+                    // item a piped consumer waits on may be among the
+                    // missed.
+                    out.lag(missed);
+                    let _flushed = std::io::stdout().flush().is_ok();
+                }
+                item => {
+                    let ended = on_item(item, &mut delivered);
+                    // Flush so a piped consumer sees each item now, not
+                    // on block-buffer fill; a flush failure on a closed
+                    // pipe ends the stream on the next write anyway.
+                    let _flushed = std::io::stdout().flush().is_ok();
+                    if let Some(code) = ended {
+                        return Ok(code);
+                    }
+                }
             }
         }
     }

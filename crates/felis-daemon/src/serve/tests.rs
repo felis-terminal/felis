@@ -4289,6 +4289,7 @@ async fn a_window_may_not_subscribe_to_notifications() {
         ConnectionMode::Window,
         NotifyToDaemonMsg::Subscribe {
             session_prefix: None,
+            kinds: Vec::new(),
         },
         Some(Correlation::stream(StreamId::new(1).expect("non-zero"))),
     )
@@ -4384,6 +4385,7 @@ async fn an_unresolvable_observer_filter_gets_a_typed_nomatch_ack() {
         &mut writer,
         &NotifyToDaemonMsg::Subscribe {
             session_prefix: Some("dead".into()),
+            kinds: Vec::new(),
         },
         1,
     )
@@ -4450,6 +4452,7 @@ async fn an_event_published_at_the_subscribed_ack_reaches_the_observer() {
         &mut writer,
         &NotifyToDaemonMsg::Subscribe {
             session_prefix: None,
+            kinds: Vec::new(),
         },
         1,
     )
@@ -9208,5 +9211,7 @@ proptest::proptest! {
     }
 }
 
+#[cfg(unix)]
+mod observer_events;
 #[cfg(unix)]
 mod unattached;

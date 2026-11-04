@@ -1328,6 +1328,7 @@ fn pty_effects_drain_in_byte_stream_order() {
             PtyEffect::BracketedPasteDisabled => "paste_guard_off",
             PtyEffect::ProgramStatus(_) => "program_status",
             PtyEffect::PromptStarted => "prompt_started",
+            PtyEffect::Prompt(_) => "prompt",
             PtyEffect::TerminalProgress(_) => "terminal_progress",
             PtyEffect::CommandOutput { .. } => "command_output",
         })
@@ -1340,6 +1341,7 @@ fn pty_effects_drain_in_byte_stream_order() {
             "response",
             "program_status",
             "prompt_started",
+            "prompt",
             "scrolled",
             "scroll_op",
             "switch"
@@ -1347,6 +1349,80 @@ fn pty_effects_drain_in_byte_stream_order() {
         "effects={effects:?}"
     );
     assert_eq!(g.take_pty_effects(), Vec::<PtyEffect>::new());
+}
+
+/// A primary `A` and every `D` queue a prompt edge where the program
+/// wrote them among the status effects, on either screen; a continuation
+/// `A` and the `B` / `C` marks queue none.
+#[test]
+fn prompt_edges_queue_in_byte_stream_order_on_both_screens() {
+    let mut p = Parser::new();
+    let mut g = Grid::new(4, 20);
+    let mut burst = Vec::new();
+    burst.extend_from_slice(b"\x1b]133;D;3\x07");
+    burst.extend_from_slice(b"\x1b]7501;state=idle\x07");
+    burst.extend_from_slice(b"\x1b]133;A\x07");
+    burst.extend_from_slice(b"\x1b]133;A;k=s\x07");
+    burst.extend_from_slice(b"\x1b]133;B\x07\x1b]133;C\x07");
+    burst.extend_from_slice(b"\x1b[?1049h\x1b]133;D\x07");
+    drive(&mut p, &mut g, &burst);
+    let edges: Vec<String> = g
+        .take_pty_effects()
+        .into_iter()
+        .filter_map(|e| match e {
+            PtyEffect::Prompt(edge) => Some(format!("{edge:?}")),
+            PtyEffect::ProgramStatus(_) => Some("status".to_owned()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        edges,
+        [
+            "CommandFinished { exit_code: Some(3) }",
+            "status",
+            "Shown",
+            "CommandFinished { exit_code: None }",
+        ]
+    );
+}
+
+/// Prompt edges commute with scrolling, so the scrolls on either side
+/// of a `D` / `A` pair still coalesce: a command per prompt costs one
+/// scroll directive and one scrollback count per drain, not one per
+/// command.
+#[test]
+fn prompt_edges_do_not_split_scroll_runs() {
+    let mut p = Parser::new();
+    let mut g = Grid::new(4, 20);
+    let mut burst = Vec::new();
+    for _ in 0..3 {
+        burst.extend_from_slice(b"out\nout\nout\nout\n");
+        burst.extend_from_slice(b"\x1b]133;D;0\x07\x1b]133;A\x07");
+    }
+    drive(&mut p, &mut g, &burst);
+    let kinds: Vec<&str> = g
+        .take_pty_effects()
+        .iter()
+        .map(|e| match e {
+            PtyEffect::Prompt(_) => "edge",
+            PtyEffect::Scrolled { .. } => "scrolled",
+            PtyEffect::ScrolledIntoScrollback(_) => "into_scrollback",
+            _ => "other",
+        })
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            "into_scrollback",
+            "scrolled",
+            "edge",
+            "edge",
+            "edge",
+            "edge",
+            "edge",
+            "edge"
+        ]
+    );
 }
 
 /// REQ-902: edge-triggered, so a program spamming resets cannot flood
