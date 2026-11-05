@@ -474,7 +474,7 @@ fn main() -> Result<ExitCode> {
     let reconnector = match cli.host {
         None => Reconnector {
             carrier: Carrier::Local(resolve_local_socket(cli.socket.as_deref())?.into()),
-            offer: Offer::window(true),
+            offer: Offer::window(true).with_image_regions(),
         },
         Some(host) => {
             info!(host = %host, "connecting via ssh stdio");
@@ -483,7 +483,7 @@ fn main() -> Result<ExitCode> {
                     destination: host,
                     ssh_args: cli.ssh_arg,
                 },
-                offer: Offer::window(false),
+                offer: Offer::window(false).with_image_regions(),
             }
         }
     };

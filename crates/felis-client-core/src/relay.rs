@@ -757,9 +757,10 @@ fn attach_frame(driver: &mut ClientDriver, frame: &OwnedFrame) -> Option<Out> {
             Err(out) => Some(out),
         },
         MessageKind::Image => match decode::<ImageMsg>(driver, &payload)? {
-            Ok(msg) => Some(Out::Item(Item::Image {
-                msg: ImageJson::from(msg),
-            })),
+            Ok(msg) => match ImageJson::try_from(msg) {
+                Ok(msg) => Some(Out::Item(Item::Image { msg })),
+                Err(err) => Some(Out::Error(internal(err))),
+            },
             Err(out) => Some(out),
         },
         MessageKind::Push => match decode::<PushMsg>(driver, &payload)? {

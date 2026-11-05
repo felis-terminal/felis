@@ -1356,7 +1356,7 @@ pub struct ImageHeader {
     /// ImageId (Kitty i=), bare u32.
     #[prost(uint32, tag="1")]
     pub id: u32,
-    #[prost(oneof="image_header::Target", tags="2, 3")]
+    #[prost(oneof="image_header::Target", tags="2, 3, 4")]
     pub target: ::core::option::Option<image_header::Target>,
 }
 /// Nested message and enum types in `ImageHeader`.
@@ -1367,6 +1367,8 @@ pub mod image_header {
         Image(super::ImageNew),
         #[prost(message, tag="3")]
         Frame(super::ImageFrame),
+        #[prost(message, tag="4")]
+        Region(super::ImageFrameRegion),
     }
 }
 /// A fresh image under this id: it replaces whatever the id held,
@@ -1394,6 +1396,23 @@ pub struct ImageNew {
 pub struct ImageFrame {
     #[prost(uint32, tag="1")]
     pub number: u32,
+}
+/// A rectangle inside a frame the receiver holds, numbered as in
+/// ImageFrame (never an append). The transfer delivers the rectangle's
+/// rows, packed: width * height * bytes_per_pixel(format) bytes, which
+/// Complete writes over it, leaving every other pixel as it was.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ImageFrameRegion {
+    #[prost(uint32, tag="1")]
+    pub number: u32,
+    #[prost(uint32, tag="2")]
+    pub x: u32,
+    #[prost(uint32, tag="3")]
+    pub y: u32,
+    #[prost(uint32, tag="4")]
+    pub width: u32,
+    #[prost(uint32, tag="5")]
+    pub height: u32,
 }
 /// Pixel bytes appended to the open transfer, in order. `id` must name
 /// the open transfer's image.
@@ -1577,6 +1596,10 @@ pub struct SessionAttach {
     /// (docs/explanation/architecture/session-lifecycle.md).
     #[prost(bool, tag="2")]
     pub live_only: bool,
+    /// This window reads ImageHeader.region transfers; without it every
+    /// frame edit reaches it whole. A minor-3 daemon skips it.
+    #[prost(bool, tag="4")]
+    pub image_regions: bool,
     /// Which session to land on. A union rather than sibling fields, so
     /// neither "both" nor "neither" is something a sender built from the
     /// schema can produce.
@@ -1609,6 +1632,9 @@ pub mod session_attach {
 pub struct SessionCreate {
     #[prost(message, optional, tag="1")]
     pub args: ::core::option::Option<SpawnArgs>,
+    /// As SessionAttach.image_regions.
+    #[prost(bool, tag="2")]
+    pub image_regions: bool,
 }
 /// Client → daemon. The window is closing; the session lives on.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]

@@ -250,6 +250,7 @@ async fn input_reaches_the_pty_while_the_rehydrate_burst_is_stalled_mid_write() 
                 env: vec![("TERM".to_owned(), "xterm-256color".to_owned())],
                 ..Default::default()
             },
+            image_regions: false,
         })
         .await
         .unwrap();
@@ -295,6 +296,7 @@ async fn input_reaches_the_pty_while_the_rehydrate_burst_is_stalled_mid_write() 
         .send(&SessionToDaemonMsg::Attach {
             target: AttachTarget::Id(id),
             live_only: false,
+            image_regions: false,
         })
         .await
         .unwrap();

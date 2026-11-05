@@ -235,6 +235,7 @@ where
         writer,
         &SessionToDaemonMsg::Create {
             args: felis_protocol::messages::SpawnArgs::default(),
+            image_regions: false,
         },
     )
     .await;
@@ -262,6 +263,7 @@ where
                 dims,
                 ..Default::default()
             },
+            image_regions: false,
         },
     )
     .await;
@@ -441,6 +443,7 @@ where
         &SessionToDaemonMsg::Attach {
             target: AttachTarget::Id(id),
             live_only: false,
+            image_regions: false,
         },
     )
     .await;
@@ -2189,6 +2192,7 @@ async fn a_pick_that_exits_before_the_attach_is_refused_and_the_re_pick_lands() 
         &SessionToDaemonMsg::Attach {
             target: AttachTarget::Id(survivor.0),
             live_only: true,
+            image_regions: false,
         },
     )
     .await;
@@ -2220,6 +2224,7 @@ async fn a_pick_that_exits_before_the_attach_is_refused_and_the_re_pick_lands() 
         &SessionToDaemonMsg::Attach {
             target: AttachTarget::Id(doomed.0),
             live_only: true,
+            image_regions: false,
         },
     )
     .await;
@@ -2254,6 +2259,7 @@ async fn a_pick_that_exits_before_the_attach_is_refused_and_the_re_pick_lands() 
         &SessionToDaemonMsg::Attach {
             target: AttachTarget::Id(survivor.0),
             live_only: true,
+            image_regions: false,
         },
     )
     .await;
@@ -2450,6 +2456,7 @@ async fn a_create_ack_reports_the_directory_the_child_started_in() {
                 cwd: dir.clone(),
                 ..Default::default()
             },
+            image_regions: false,
         },
     )
     .await;
@@ -2490,6 +2497,7 @@ async fn a_re_attach_does_not_move_a_session_in_the_ring() {
         &SessionToDaemonMsg::Attach {
             target: AttachTarget::Id(id),
             live_only: false,
+            image_regions: false,
         },
     )
     .await;
@@ -2530,6 +2538,7 @@ async fn a_live_only_attach_is_refused_on_a_corpse_but_a_deliberate_one_lands() 
         &SessionToDaemonMsg::Attach {
             target: AttachTarget::Id(id),
             live_only: true,
+            image_regions: false,
         },
     )
     .await;
@@ -2553,6 +2562,7 @@ async fn a_live_only_attach_is_refused_on_a_corpse_but_a_deliberate_one_lands() 
         &SessionToDaemonMsg::Attach {
             target: AttachTarget::Id(id),
             live_only: false,
+            image_regions: false,
         },
     )
     .await;
@@ -3055,6 +3065,7 @@ async fn rehydrate_replays_persisted_images_and_placements() {
         &SessionToDaemonMsg::Attach {
             target: AttachTarget::Id(session_id.0),
             live_only: false,
+            image_regions: false,
         },
     )
     .await;
@@ -3200,6 +3211,7 @@ async fn time_to_first_frame_under_simulated_slow_link() {
         &SessionToDaemonMsg::Attach {
             target: AttachTarget::Id(session_id.0),
             live_only: false,
+            image_regions: false,
         },
     )
     .await;
@@ -4039,6 +4051,7 @@ async fn create_parked_session(pool: Arc<Mutex<SessionPool>>) -> u128 {
         &mut writer,
         &SessionToDaemonMsg::Create {
             args: felis_protocol::messages::SpawnArgs::default(),
+            image_regions: false,
         },
     )
     .await;
@@ -4171,6 +4184,7 @@ async fn an_attached_window_is_answered_an_error_for_a_mutating_verb() {
         &SessionToDaemonMsg::Attach {
             target: AttachTarget::Id(id),
             live_only: false,
+            image_regions: false,
         },
     )
     .await;
@@ -4341,6 +4355,7 @@ async fn attach_ready_reports_the_session_as_no_longer_idle() {
         &SessionToDaemonMsg::Attach {
             target: AttachTarget::Id(id),
             live_only: false,
+            image_regions: false,
         },
     )
     .await;
@@ -4504,6 +4519,7 @@ async fn an_observer_may_not_attach() {
         SessionToDaemonMsg::Attach {
             target: AttachTarget::Id(id),
             live_only: false,
+            image_regions: false,
         },
         None,
     )
@@ -4645,9 +4661,11 @@ fn a_second_opener_on_an_attached_connection_is_refused_by_phase() {
         SessionToDaemonMsg::Attach {
             target: AttachTarget::Id(7),
             live_only: false,
+            image_regions: false,
         },
         SessionToDaemonMsg::Create {
             args: felis_protocol::messages::SpawnArgs::default(),
+            image_regions: false,
         },
     ] {
         let mut driver = attached_driver();
@@ -4873,6 +4891,7 @@ async fn the_caps_terminfo_dir_reaches_a_created_session_and_a_cwd_retry() {
                     cwd: cwd.to_owned(),
                     ..Default::default()
                 },
+                image_regions: false,
             },
         )
         .await;
@@ -5496,6 +5515,7 @@ async fn a_create_past_the_geometry_bound_is_refused_before_anything_spawns() {
                     }),
                     ..Default::default()
                 },
+                image_regions: false,
             },
         )
         .await;
@@ -5552,6 +5572,7 @@ async fn an_absent_create_geometry_defaults_and_a_zero_axis_is_refused() {
                 }),
                 ..Default::default()
             },
+            image_regions: false,
         },
     )
     .await;
@@ -5652,6 +5673,7 @@ async fn a_create_past_the_session_cap_is_refused_and_executes_nothing() {
         &mut writer_b,
         &SessionToDaemonMsg::Create {
             args: felis_protocol::messages::SpawnArgs::default(),
+            image_regions: false,
         },
     )
     .await;
@@ -5918,6 +5940,7 @@ async fn a_create_is_nameable_before_its_ack_is_read() {
         &mut writer,
         &SessionToDaemonMsg::Create {
             args: felis_protocol::messages::SpawnArgs::default(),
+            image_regions: false,
         },
     )
     .await;
@@ -6024,6 +6047,7 @@ async fn a_create_whose_ack_cannot_be_written_leaves_a_detached_session() {
         &mut writer,
         &SessionToDaemonMsg::Create {
             args: felis_protocol::messages::SpawnArgs::default(),
+            image_regions: false,
         },
     )
     .await;
@@ -6144,6 +6168,7 @@ async fn concurrent_creates_never_admit_past_the_session_cap() {
                 &mut writer,
                 &SessionToDaemonMsg::Create {
                     args: felis_protocol::messages::SpawnArgs::default(),
+                    image_regions: false,
                 },
             )
             .await;
@@ -7033,6 +7058,7 @@ async fn many_sessions_with_mirrors_never_pass_the_connection_ceiling() {
                         &SessionToDaemonMsg::Attach {
                             target: AttachTarget::Id(id),
                             live_only: false,
+                            image_regions: false,
                         },
                     )
                     .await;
@@ -8413,6 +8439,7 @@ async fn a_when_empty_stop_refuses_creates_and_exits_after_the_last_session() {
         &mut new_writer,
         &SessionToDaemonMsg::Create {
             args: felis_protocol::messages::SpawnArgs::default(),
+            image_regions: false,
         },
     )
     .await;
@@ -8644,6 +8671,7 @@ async fn an_attach_by_prefix_lands_on_the_session_the_daemon_resolves() {
         &SessionToDaemonMsg::Attach {
             target: AttachTarget::Prefix(hex[..8].to_owned()),
             live_only: false,
+            image_regions: false,
         },
     )
     .await;
@@ -8690,6 +8718,7 @@ async fn a_prefix_whose_session_was_destroyed_refuses_with_no_match() {
         &SessionToDaemonMsg::Attach {
             target: AttachTarget::Prefix(hex[..8].to_owned()),
             live_only: false,
+            image_regions: false,
         },
     )
     .await;
@@ -8718,6 +8747,7 @@ async fn an_ambiguous_prefix_on_attach_refuses_with_the_match_count() {
         &SessionToDaemonMsg::Attach {
             target: AttachTarget::Prefix(prefix),
             live_only: false,
+            image_regions: false,
         },
     )
     .await;

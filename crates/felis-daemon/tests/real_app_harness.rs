@@ -142,6 +142,7 @@ impl RealAppSession {
                     env,
                     ..Default::default()
                 },
+                image_regions: false,
             })
             .await
             .unwrap();

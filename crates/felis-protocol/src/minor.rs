@@ -117,6 +117,23 @@ const REGION_TO_DAEMON_FIELDS: &[GatedField<RegionToDaemonMsg>] = &[
     },
 ];
 
+const IMAGE_FIELDS: &[GatedField<ImageMsg>] = &[GatedField {
+    requires: crate::schema_meta::IMAGE_HEADER_REGION,
+    present: |msg| {
+        matches!(
+            msg,
+            ImageMsg::Header {
+                target: crate::messages::ImageTarget::Region { .. },
+                ..
+            }
+        )
+    },
+}];
+
+/// What a frame-region transfer costs; a sender that cannot afford it
+/// ships the whole frame instead.
+pub const IMAGE_HEADER_REGION: Requires = crate::schema_meta::IMAGE_HEADER_REGION;
+
 /// A value whose send authorization is computed rather than branched
 /// on. The gate is the send boundary ([`felis-transport`'s
 /// `FrameWriter`](https://docs.rs/felis-transport)), never the caller.
@@ -335,8 +352,13 @@ macro_rules! gated_by_arm {
     };
 }
 
+impl MinorGated for ImageMsg {
+    fn requires(&self) -> Requires {
+        arm_requires(self).max(field_requires(self, IMAGE_FIELDS))
+    }
+}
+
 gated_by_arm!(
-    ImageMsg,
     crate::messages::InputMsg,
     crate::messages::NotifyToClientMsg,
     crate::messages::RegionToClientMsg,
@@ -587,6 +609,34 @@ mod tests {
         }
     }
 
+    /// Only a region header costs minor 4: the chunks and completion
+    /// that follow it are the transfer messages every minor defines.
+    #[test]
+    fn a_frame_region_header_costs_minor_four() {
+        use crate::messages::{ImageTarget, SourceRect};
+        use std::num::NonZeroU32;
+
+        let number = NonZeroU32::MIN;
+        let region = ImageMsg::Header {
+            id: crate::ImageId(1),
+            target: ImageTarget::Region {
+                number,
+                rect: SourceRect {
+                    x: 0,
+                    y: 0,
+                    width: 1,
+                    height: 1,
+                },
+            },
+        };
+        assert_eq!(region.requires(), Requires::new(4, "ImageHeader.region"));
+        let frame = ImageMsg::Header {
+            id: crate::ImageId(1),
+            target: ImageTarget::Frame { number },
+        };
+        assert_eq!(frame.requires(), Requires::new(0, "Image::Header"));
+    }
+
     /// Every item an observer asks for by kind is a minor-4 arm, so the
     /// send gate refuses it on a connection that could not have asked.
     #[test]
@@ -734,9 +784,10 @@ mod tests {
     /// once, under the requirement the schema states.
     #[test]
     fn the_presence_tables_list_exactly_the_gated_fields_of_the_schema() {
-        let gated: Vec<Requires> = REGION_TO_DAEMON_FIELDS
+        let gated: Vec<Requires> = IMAGE_FIELDS
             .iter()
             .map(|field| field.requires)
+            .chain(REGION_TO_DAEMON_FIELDS.iter().map(|field| field.requires))
             .chain(NOTIFY_TO_DAEMON_FIELDS.iter().map(|field| field.requires))
             .chain(SEARCH_TO_DAEMON_FIELDS.iter().map(|field| field.requires))
             .collect();

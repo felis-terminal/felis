@@ -24,6 +24,10 @@ pub enum SessionToDaemonMsg {
         /// Set on system-selected landings to prevent parking on dead sessions.
         /// Explicit user targets leave it false to inspect the post-exit grace screen.
         live_only: bool,
+        /// This window reads region transfers
+        /// ([`ImageTarget::Region`](super::ImageTarget::Region)); without
+        /// it the daemon ships every frame edit whole.
+        image_regions: bool,
     },
     /// Create a new session *and* attach this
     /// connection to it; the daemon replies [`SessionToClientMsg::Created`] only once
@@ -34,6 +38,8 @@ pub enum SessionToDaemonMsg {
         /// Unset fields fall back to daemon defaults (`$SHELL`, the
         /// daemon's cwd, 24×80).
         args: SpawnArgs,
+        /// As [`Self::Attach`]'s.
+        image_regions: bool,
     },
     /// The window is closing; the session lives on.
     Detach,
@@ -280,21 +286,26 @@ pub(crate) mod tests {
             SessionToDaemonMsg::Attach {
                 target: AttachTarget::Id(0x1234_5678),
                 live_only: false,
+                image_regions: false,
             },
             SessionToDaemonMsg::Attach {
                 target: AttachTarget::Id(0x1234_5678),
                 live_only: true,
+                image_regions: false,
             },
             SessionToDaemonMsg::Attach {
                 target: AttachTarget::Prefix("1234".into()),
                 live_only: false,
+                image_regions: false,
             },
             SessionToDaemonMsg::Attach {
                 target: AttachTarget::Prefix("1234abcd".into()),
                 live_only: true,
+                image_regions: false,
             },
             SessionToDaemonMsg::Create {
                 args: SpawnArgs::default(),
+                image_regions: false,
             },
             SessionToDaemonMsg::Create {
                 args: SpawnArgs {
@@ -314,12 +325,14 @@ pub(crate) mod tests {
                         (b"SSH_AUTH_SOCK".to_vec(), vec![0x2f, 0xff]),
                     ]),
                 },
+                image_regions: false,
             },
             SessionToDaemonMsg::Create {
                 args: SpawnArgs {
                     env_base: Some(Vec::new()),
                     ..SpawnArgs::default()
                 },
+                image_regions: false,
             },
             SessionToDaemonMsg::Create {
                 args: SpawnArgs {
@@ -331,6 +344,7 @@ pub(crate) mod tests {
                     }),
                     ..SpawnArgs::default()
                 },
+                image_regions: false,
             },
             SessionToDaemonMsg::Detach,
             SessionToDaemonMsg::ConfigureTheme {
@@ -446,12 +460,14 @@ pub(crate) mod tests {
         let empty = SessionToDaemonMsg::Attach {
             target: AttachTarget::Prefix(String::new()),
             live_only: false,
+            image_regions: false,
         };
         assert!(Validate::validate(&empty).is_err());
         for bad in ["zz", &"a".repeat(33)] {
             let msg = SessionToDaemonMsg::Attach {
                 target: AttachTarget::Prefix(bad.to_owned()),
                 live_only: false,
+                image_regions: false,
             };
             assert!(
                 Validate::validate(&msg).is_err(),
@@ -461,6 +477,7 @@ pub(crate) mod tests {
         let ok = SessionToDaemonMsg::Attach {
             target: AttachTarget::Prefix("0".into()),
             live_only: false,
+            image_regions: false,
         };
         assert!(Validate::validate(&ok).is_ok());
     }
@@ -473,6 +490,7 @@ pub(crate) mod tests {
         let zero = SessionToDaemonMsg::Attach {
             target: AttachTarget::Id(0),
             live_only: false,
+            image_regions: false,
         };
         assert_eq!(roundtrip(&zero), zero);
     }

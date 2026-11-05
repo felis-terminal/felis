@@ -1721,6 +1721,7 @@ message ImageHeader {
   oneof target {
     ImageNew image = 2;
     ImageFrame frame = 3;
+    ImageFrameRegion region = 4 [(felis.v1.field_since) = {minor: 4}];
   }
 }
 
@@ -1746,6 +1747,18 @@ message ImageNew {
 // are malformed. Geometry is inherited and cannot be restated.
 message ImageFrame {
   uint32 number = 1;
+}
+
+// A rectangle inside a frame the receiver holds, numbered as in
+// ImageFrame (never an append). The transfer delivers the rectangle's
+// rows, packed: width * height * bytes_per_pixel(format) bytes, which
+// Complete writes over it, leaving every other pixel as it was.
+message ImageFrameRegion {
+  uint32 number = 1;
+  uint32 x = 2;
+  uint32 y = 3;
+  uint32 width = 4;
+  uint32 height = 5;
 }
 
 // Pixel bytes appended to the open transfer, in order. `id` must name
@@ -1953,6 +1966,12 @@ message SessionAttach {
   // attach leaves it false and may land on a corpse
   // (docs/explanation/architecture/session-lifecycle.md).
   bool live_only = 2;
+  // This window reads ImageHeader.region transfers; without it every
+  // frame edit reaches it whole. A minor-3 daemon skips it.
+  bool image_regions = 4 [(felis.v1.field_since) = {
+    minor: 4
+    skippable: true
+  }];
 }
 
 // Client → daemon. Create a new session and attach this connection to
@@ -1962,6 +1981,11 @@ message SessionAttach {
 // wants no window is OpsSpawn.
 message SessionCreate {
   SpawnArgs args = 1;
+  // As SessionAttach.image_regions.
+  bool image_regions = 2 [(felis.v1.field_since) = {
+    minor: 4
+    skippable: true
+  }];
 }
 
 // Client → daemon. The window is closing; the session lives on.

@@ -11,7 +11,7 @@ use felis_protocol::{
     ImageId, PlacementId,
     messages::{
         ImageFormat, ImageMsg, ImageTarget, MAX_IMAGE_BYTES, MAX_IMAGE_FRAMES,
-        MAX_SESSION_IMAGE_BYTES,
+        MAX_SESSION_IMAGE_BYTES, SourceRect,
     },
 };
 use thiserror::Error;
@@ -153,6 +153,12 @@ pub enum ImageShadowError {
     /// between undefined.
     #[error("image {id} named frame {number} with only {have} frames transferred")]
     FrameNumberSkipsAhead { id: u32, number: u32, have: usize },
+    /// A region patches bytes the mirror holds, so a frame it has not
+    /// completed leaves nothing to patch.
+    #[error("image {id} named a region of frame {number} with {have} frames held")]
+    RegionForUnheldFrame { id: u32, number: u32, have: usize },
+    #[error("image {id} named a region outside its {width}x{height} geometry")]
+    RegionOutOfBounds { id: u32, width: u32, height: u32 },
     #[error("image {id} sent pixel bytes with no transfer open")]
     ChunkWithoutHeader { id: u32 },
     #[error("image {id} completed a transfer that was never opened")]
@@ -189,6 +195,9 @@ struct ActiveTransfer {
     /// re-sent displayed frame keeps what was on screen. Uncharged for
     /// that re-send: the daemon admits an in-place edit at the cap.
     pixels: Vec<u8>,
+    /// Set for a region transfer: `pixels` holds the rectangle alone,
+    /// written over the frame at `Complete`.
+    region: Option<SourceRect>,
 }
 
 /// What one mirrored image costs the aggregate before a single pixel:
@@ -524,6 +533,18 @@ impl ImageShadow {
                 serial,
             } => self.open_new(id, width, height, format, serial)?,
             ImageTarget::Frame { number } => self.open_frame(id, number)?,
+            ImageTarget::Region { number, rect } => {
+                let (slot, expected) = self.open_region(id, number, rect)?;
+                self.active = Some(ActiveTransfer {
+                    id,
+                    slot,
+                    expected,
+                    received: 0,
+                    pixels: vec![0; expected],
+                    region: Some(rect),
+                });
+                return Ok(());
+            }
         };
         let expected = self.images.get(&id).map_or(0, |entry| entry.frame_len);
         let pixels = self.frame_buffer(expected);
@@ -533,8 +554,44 @@ impl ImageShadow {
             expected,
             received: 0,
             pixels,
+            region: None,
         });
         Ok(())
+    }
+
+    /// Refused rather than skipped: the daemon ships a region only for
+    /// a frame this connection already received whole, so one the
+    /// mirror lacks is a broken stream, and the reconnect that follows
+    /// the refusal rehydrates every frame whole. Uncharged, as a patch
+    /// changes no frame's length.
+    fn open_region(
+        &self,
+        id: ImageId,
+        number: NonZeroU32,
+        rect: SourceRect,
+    ) -> Result<(usize, usize), ImageShadowError> {
+        let entry = self
+            .images
+            .get(&id)
+            .ok_or(ImageShadowError::FrameForUnknownImage { id: id.0 })?;
+        let slot = number.get() as usize - 1;
+        if !entry.frames.get(slot).is_some_and(|f| f.complete) {
+            return Err(ImageShadowError::RegionForUnheldFrame {
+                id: id.0,
+                number: number.get(),
+                have: entry.frames.len(),
+            });
+        }
+        let fits = |at: u32, len: u32, axis: u32| u64::from(at) + u64::from(len) <= u64::from(axis);
+        if !fits(rect.x, rect.width, entry.width) || !fits(rect.y, rect.height, entry.height) {
+            return Err(ImageShadowError::RegionOutOfBounds {
+                id: id.0,
+                width: entry.width,
+                height: entry.height,
+            });
+        }
+        let bpp = entry.format.bytes_per_pixel();
+        Ok((slot, rect.width as usize * rect.height as usize * bpp))
     }
 
     /// Replaces the whole entry, animation frames included: a fresh
@@ -693,11 +750,16 @@ impl ImageShadow {
             });
         }
         let slot = active.slot;
-        let mut pixels = self
-            .active
-            .take()
-            .map(|open| open.pixels)
-            .unwrap_or_default();
+        let Some(ActiveTransfer {
+            mut pixels, region, ..
+        }) = self.active.take()
+        else {
+            return Ok(());
+        };
+        if let Some(rect) = region {
+            self.patch_region(id, slot, rect, &pixels);
+            return Ok(());
+        }
         if let Some(entry) = self.images.get_mut(&id) {
             if let Some(frame) = entry.frames.get_mut(slot) {
                 std::mem::swap(&mut frame.pixels, &mut pixels);
@@ -711,6 +773,28 @@ impl ImageShadow {
         }
         self.recycle(pixels);
         Ok(())
+    }
+
+    fn patch_region(&mut self, id: ImageId, slot: usize, rect: SourceRect, rows: &[u8]) {
+        let Some(entry) = self.images.get_mut(&id) else {
+            return;
+        };
+        let bpp = entry.format.bytes_per_pixel();
+        let (stride, row) = (entry.width as usize * bpp, rect.width as usize * bpp);
+        let Some(frame) = entry.frames.get_mut(slot) else {
+            return;
+        };
+        if row == 0 {
+            return;
+        }
+        for (r, src) in rows.chunks_exact(row).enumerate() {
+            let at = (rect.y as usize + r) * stride + rect.x as usize * bpp;
+            frame.pixels[at..at + row].copy_from_slice(src);
+        }
+        if entry.current == slot {
+            entry.generation = next_generation();
+            self.dirty_images.insert(id);
+        }
     }
 
     /// Tolerant like `Placement`: a rehydrate can name the live frame
@@ -1664,5 +1748,164 @@ mod tests {
         close(&mut s, 1, 16);
         s.layout_into(&mut layout, screen.screen(), (8.0, 16.0), 0);
         assert_eq!(layout.above_text()[0].image_size, [4, 1]);
+    }
+
+    /// A 4×3 RGB24 image whose pixel `i` is `[i, i, i]`, so a patched
+    /// byte is told apart from every untouched one by position.
+    fn rgb_grid(s: &mut ImageShadow, id: u32) {
+        let new = ImageMsg::Header {
+            id: ImageId(id),
+            target: ImageTarget::New {
+                width: 4,
+                height: 3,
+                format: ImageFormat::Rgb24,
+                serial: None,
+            },
+        };
+        transfer(s, &new, (0..12u8).flat_map(|i| [i; 3]).collect());
+    }
+
+    fn region(id: u32, number: u32, x: u32, y: u32, width: u32, height: u32) -> ImageMsg {
+        ImageMsg::Header {
+            id: ImageId(id),
+            target: ImageTarget::Region {
+                number: NonZeroU32::new(number).unwrap(),
+                rect: SourceRect {
+                    x,
+                    y,
+                    width,
+                    height,
+                },
+            },
+        }
+    }
+
+    #[test]
+    fn a_region_patches_exactly_its_rectangle_of_the_named_frame() {
+        let mut s = ImageShadow::new();
+        rgb_grid(&mut s, 1);
+        transfer(&mut s, &frame_header(1, 2), vec![0xEE; 36]);
+        s.take_dirty_images();
+        let shown = generation(&s, 1);
+        transfer(
+            &mut s,
+            &region(1, 1, 1, 1, 2, 2),
+            (0..12).map(|b| 0x80 | b).collect(),
+        );
+
+        let mut want: Vec<u8> = (0..12u8).flat_map(|i| [i; 3]).collect();
+        for (r, start) in [(0u8, 15), (1, 27)] {
+            want[start..start + 6]
+                .copy_from_slice(&(0..6).map(|b| 0x80 | (r * 6 + b)).collect::<Vec<_>>());
+        }
+        let image = s.image(ImageId(1)).unwrap();
+        assert_eq!(image.frames[0].pixels, want);
+        assert_eq!(
+            image.frames[1].pixels, [0xEE; 36],
+            "another frame is untouched"
+        );
+        assert!(generation(&s, 1) > shown);
+        assert_eq!(s.take_dirty_images(), [ImageId(1)]);
+    }
+
+    #[test]
+    fn a_region_shows_nothing_until_its_complete() {
+        let mut s = ImageShadow::new();
+        rgb_grid(&mut s, 1);
+        s.take_dirty_images();
+        let (before, shown) = (
+            s.image(ImageId(1)).unwrap().pixels().to_vec(),
+            generation(&s, 1),
+        );
+        s.apply_ok(&region(1, 1, 0, 0, 4, 2));
+        s.apply_ok(&chunk(1, vec![0xFF; 12]));
+        assert_eq!(s.image(ImageId(1)).unwrap().pixels(), before);
+        assert_eq!((drawable(&s, 1), generation(&s, 1)), (Some((4, 3)), shown));
+        assert_eq!(s.take_dirty_images(), []);
+        s.apply_ok(&chunk(1, vec![0xFF; 12]));
+        s.apply_ok(&complete(1));
+        assert_eq!(s.image(ImageId(1)).unwrap().pixels()[..24], [0xFF; 24]);
+        assert_eq!(s.image(ImageId(1)).unwrap().pixels()[24..], before[24..]);
+    }
+
+    #[test]
+    fn a_region_off_screen_leaves_the_displayed_frame_clean() {
+        let mut s = ImageShadow::new();
+        rgb_grid(&mut s, 1);
+        transfer(&mut s, &frame_header(1, 2), vec![0; 36]);
+        s.take_dirty_images();
+        let shown = generation(&s, 1);
+        transfer(&mut s, &region(1, 2, 3, 2, 1, 1), vec![9; 3]);
+        assert_eq!((generation(&s, 1), s.take_dirty_images()), (shown, vec![]));
+        assert_eq!(s.image(ImageId(1)).unwrap().frames[1].pixels[33..], [9; 3]);
+    }
+
+    #[test]
+    fn a_region_costs_the_session_aggregate_nothing() {
+        let mut s = ImageShadow::new();
+        rgb_grid(&mut s, 1);
+        let before = s.retained_bytes();
+        transfer(&mut s, &region(1, 1, 0, 0, 4, 3), vec![1; 36]);
+        assert_eq!(s.retained_bytes(), before);
+    }
+
+    /// Each refusal leaves the mirror as it was, and the next transfer
+    /// still opens: nothing of the refused region is staged.
+    #[test]
+    fn a_region_the_mirror_cannot_patch_is_refused() {
+        let mut s = ImageShadow::new();
+        rgb_grid(&mut s, 1);
+        let held = s.image(ImageId(1)).unwrap().pixels().to_vec();
+        let cases = [
+            (
+                region(2, 1, 0, 0, 1, 1),
+                ImageShadowError::FrameForUnknownImage { id: 2 },
+            ),
+            (
+                region(1, 2, 0, 0, 1, 1),
+                ImageShadowError::RegionForUnheldFrame {
+                    id: 1,
+                    number: 2,
+                    have: 1,
+                },
+            ),
+            (
+                region(1, 1, 3, 0, 2, 1),
+                ImageShadowError::RegionOutOfBounds {
+                    id: 1,
+                    width: 4,
+                    height: 3,
+                },
+            ),
+            (
+                region(1, 1, 0, u32::MAX, 1, 2),
+                ImageShadowError::RegionOutOfBounds {
+                    id: 1,
+                    width: 4,
+                    height: 3,
+                },
+            ),
+        ];
+        for (msg, err) in cases {
+            assert_eq!(s.apply(&msg), Err(err));
+        }
+        assert_eq!(s.image(ImageId(1)).unwrap().pixels(), held);
+        transfer(&mut s, &region(1, 1, 0, 0, 1, 1), vec![7; 3]);
+        assert_eq!(s.image(ImageId(1)).unwrap().pixels()[..3], [7; 3]);
+    }
+
+    #[test]
+    fn a_region_delivering_more_than_its_rectangle_is_refused() {
+        let mut s = ImageShadow::new();
+        rgb_grid(&mut s, 1);
+        s.apply_ok(&region(1, 1, 0, 0, 1, 1));
+        assert_eq!(
+            s.apply(&chunk(1, vec![0; 4])),
+            Err(ImageShadowError::ChunkOverrun {
+                id: 1,
+                expected: 3,
+                received: 4,
+            })
+        );
     }
 }

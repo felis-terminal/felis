@@ -147,7 +147,11 @@ impl From<&messages::SessionToDaemonMsg> for v1::SessionToDaemonMsg {
         use messages::SessionToDaemonMsg as S;
         use v1::session_to_daemon_msg::Msg;
         let msg = match m {
-            S::Attach { target, live_only } => Msg::Attach(v1::SessionAttach {
+            S::Attach {
+                target,
+                live_only,
+                image_regions,
+            } => Msg::Attach(v1::SessionAttach {
                 target: Some(match target {
                     messages::AttachTarget::Id(id) => {
                         v1::session_attach::Target::Id(id_to_bytes(*id))
@@ -157,9 +161,14 @@ impl From<&messages::SessionToDaemonMsg> for v1::SessionToDaemonMsg {
                     }
                 }),
                 live_only: *live_only,
+                image_regions: *image_regions,
             }),
-            S::Create { args } => Msg::Create(v1::SessionCreate {
+            S::Create {
+                args,
+                image_regions,
+            } => Msg::Create(v1::SessionCreate {
                 args: Some(args.into()),
+                image_regions: *image_regions,
             }),
             S::Detach => Msg::Detach(v1::SessionDetach {}),
             S::ConfigureTheme {
@@ -224,11 +233,13 @@ impl TryFrom<v1::SessionToDaemonMsg> for messages::SessionToDaemonMsg {
                 Msg::Attach(a) => Self::Attach {
                     target: attach_target_from_wire(a.target)?,
                     live_only: a.live_only,
+                    image_regions: a.image_regions,
                 },
                 Msg::Create(c) => Self::Create {
                     args: messages::SpawnArgs::try_from(
                         c.args.ok_or(WireError::MissingField("Create.args"))?,
                     )?,
+                    image_regions: c.image_regions,
                 },
                 Msg::Detach(_) => Self::Detach,
                 Msg::ConfigureTheme(t) => Self::ConfigureTheme {
@@ -301,6 +312,7 @@ mod tests {
             msg: Some(v1::session_to_daemon_msg::Msg::Attach(v1::SessionAttach {
                 target,
                 live_only: false,
+                image_regions: false,
             })),
             correlation: None,
         }
@@ -367,6 +379,7 @@ mod tests {
             messages::SessionToDaemonMsg::Attach {
                 target: messages::AttachTarget::Id(0xCAFE),
                 live_only: false,
+                image_regions: false,
             }
         );
         assert_eq!(
@@ -377,6 +390,7 @@ mod tests {
             messages::SessionToDaemonMsg::Attach {
                 target: messages::AttachTarget::Prefix("cafe".into()),
                 live_only: false,
+                image_regions: false,
             }
         );
     }

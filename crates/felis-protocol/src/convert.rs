@@ -770,10 +770,11 @@ mod tests {
                         }),
                         ..v1::SpawnArgs::default()
                     }),
+                    image_regions: false,
                 })),
                 correlation: None,
             };
-            let messages::SessionToDaemonMsg::Create { args } =
+            let messages::SessionToDaemonMsg::Create { args, .. } =
                 messages::SessionToDaemonMsg::try_from(create).unwrap()
             else {
                 panic!("a Create must decode as a Create");
@@ -789,10 +790,11 @@ mod tests {
         let create = v1::SessionToDaemonMsg {
             msg: Some(v1::session_to_daemon_msg::Msg::Create(v1::SessionCreate {
                 args: Some(v1::SpawnArgs::default()),
+                image_regions: false,
             })),
             correlation: None,
         };
-        let messages::SessionToDaemonMsg::Create { args } =
+        let messages::SessionToDaemonMsg::Create { args, .. } =
             messages::SessionToDaemonMsg::try_from(create).unwrap()
         else {
             panic!("a Create must decode as a Create");

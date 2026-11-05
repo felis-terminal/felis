@@ -984,6 +984,7 @@ pub(crate) const SEARCH_TO_CLIENT_MSG_ARMS: &[ArmMeta] = &[ArmMeta {
 pub(crate) const SEARCH_TO_CLIENT_MSG_ARM_FIELDS: &[u32] = &[2];
 
 /// Added fields whose present value is withheld from an older peer.
+pub(crate) const IMAGE_HEADER_REGION: Requires = Requires::new(4, "ImageHeader.region");
 pub(crate) const REGION_REQUEST_SESSION: Requires = Requires::new(3, "RegionRequest.session");
 pub(crate) const REGION_ROWS_SESSION: Requires = Requires::new(3, "RegionRows.session");
 pub(crate) const NOTIFY_SUBSCRIBE_KINDS: Requires = Requires::new(4, "NotifySubscribe.kinds");
@@ -991,6 +992,7 @@ pub(crate) const SEARCH_QUERY_SOURCE: Requires = Requires::new(1, "SearchQuery.s
 pub(crate) const SEARCH_QUERY_SESSION: Requires = Requires::new(3, "SearchQuery.session");
 #[cfg(test)]
 pub(crate) const GATED_FIELDS: &[Requires] = &[
+    IMAGE_HEADER_REGION,
     REGION_REQUEST_SESSION,
     REGION_ROWS_SESSION,
     NOTIFY_SUBSCRIBE_KINDS,
@@ -1144,10 +1146,13 @@ pub const ADDITIONS: &[(&str, u16)] = &[
     ("Attachment.ssh_env", 3),
     ("InputViewport.anchor", 2),
     ("GridViewportState.anchor", 2),
+    ("ImageHeader.region", 4),
     ("ImageNew.serial", 2),
     ("ImagePlacement.requested", 1),
     ("ImagePlacement.serial", 2),
     ("ImageVirtualPlacement.placement_id", 1),
+    ("SessionAttach.image_regions", 4),
+    ("SessionCreate.image_regions", 4),
     ("SessionConfigureTheme.palette", 2),
     ("RegionRequest.session", 3),
     ("RegionRows.session", 3),

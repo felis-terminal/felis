@@ -2234,6 +2234,7 @@ fn the_session_openers_and_the_attached_traffic_do_not_overlap() {
     let opener = SessionToDaemonMsg::Attach {
         target: felis_protocol::messages::AttachTarget::Id(1),
         live_only: false,
+        image_regions: false,
     };
     let mut setup = in_phase::<DaemonSide>(Phase::Setup, ConnectionMode::Window);
     let Incoming::Payload(p) = setup.classify(&frame(&opener)).unwrap() else {

@@ -276,7 +276,7 @@ impl Validate for SearchToDaemonMsg {
 impl Validate for SessionToDaemonMsg {
     fn validate(&self) -> Result<(), WireError> {
         match self {
-            Self::Create { args } => args.validate(),
+            Self::Create { args, .. } => args.validate(),
             // The prefix shares the target slot with `id`, and an empty
             // one encodes as neither field set: the shape the decoder
             // refuses. Checked here so it is refused before a byte
@@ -366,12 +366,14 @@ mod tests {
                 args: vec![String::new(); n],
                 ..SpawnArgs::default()
             },
+            image_regions: false,
         };
         let cmd = |n: usize| SessionToDaemonMsg::Create {
             args: SpawnArgs {
                 command: "a".repeat(n),
                 ..SpawnArgs::default()
             },
+            image_regions: false,
         };
 
         assert_pair(&key(MAX_RAW_INPUT_BYTES), &key(MAX_RAW_INPUT_BYTES + 1));
@@ -505,6 +507,7 @@ mod tests {
                 env_base: Some(vec![(b"K".to_vec(), Vec::new()); MAX_ENV_BASE_ENTRIES + 1]),
                 ..SpawnArgs::default()
             },
+            image_regions: false,
         };
         msg.validate().unwrap();
         decode::<SessionToDaemonMsg>(&encode(&msg)).unwrap();
@@ -529,6 +532,7 @@ mod tests {
                 env_base: Some(vec![(b"PATH".to_vec(), b"/bin".to_vec())]),
                 tags: vec!["agent".into()],
             },
+            image_regions: false,
         }
         .validate()
         .unwrap();

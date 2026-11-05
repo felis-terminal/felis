@@ -496,10 +496,14 @@ impl TryFrom<Open> for DaemonRequest {
             } => Self::Session(SessionToDaemonMsg::Attach {
                 target: DomainAttachTarget::Id(session.0),
                 live_only: false,
+                image_regions: false,
             }),
             Open::Attach {
                 target: AttachTarget::Create(args),
-            } => Self::Session(SessionToDaemonMsg::Create { args: args.into() }),
+            } => Self::Session(SessionToDaemonMsg::Create {
+                args: args.into(),
+                image_regions: false,
+            }),
             Open::Wait { session, steps } => Self::Ops(OpsToDaemonMsg::SendAndWait {
                 id_prefix: prefix(session),
                 steps: steps

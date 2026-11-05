@@ -713,7 +713,7 @@ impl App {
                     );
                     return;
                 }
-                // Chunks and frame headers only build up a pixel buffer;
+                // Chunks and frame or region headers only build up a pixel buffer;
                 // redrawing per chunk would turn one multi-MiB transmission
                 // into N full frame encodes. A new-image header does
                 // repaint, since a same-id replacement hides the image from
@@ -722,7 +722,8 @@ impl App {
                     msg,
                     ImageMsg::Chunk { .. }
                         | ImageMsg::Header {
-                            target: felis_protocol::messages::ImageTarget::Frame { .. },
+                            target: felis_protocol::messages::ImageTarget::Frame { .. }
+                                | felis_protocol::messages::ImageTarget::Region { .. },
                             ..
                         }
                 );

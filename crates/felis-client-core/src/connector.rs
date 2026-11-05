@@ -357,6 +357,8 @@ pub struct Connection<R = ReadHalf, W = WriteHalf> {
     /// The daemon's build. Informational only, never a compatibility
     /// gate.
     pub daemon_identity: Option<BuildIdentity>,
+    /// [`Offer::image_regions`].
+    pub image_regions: bool,
     /// Set once a reply broke the protocol: every later byte comes from
     /// a peer whose framing is not trusted, so the next request is
     /// refused instead of read.
@@ -386,6 +388,7 @@ impl<R, W> Connection<R, W> {
             accepted_major: preface::PROTOCOL_MAJOR,
             daemon_minor: effective_minor,
             daemon_identity: None,
+            image_regions: false,
             abandoned: false,
         }
     }
