@@ -777,7 +777,7 @@ fn handle_complete(ctx: &mut ApcCtx<'_>, complete: &CompleteCommand) -> Option<V
                 err @ ActionOutcome::Err(..) => apply_quiet_mode(addressed, quiet, &refs, err),
             };
         }
-        b'c' => handle_compose(images, placements, events, complete, &mut refs),
+        b'c' => handle_compose(images, events, complete, &mut refs),
         _ => {
             tracing::debug!(
                 action,
@@ -1826,39 +1826,34 @@ fn store_frame(
         && (rn as usize) <= frame_count
     {
         let idx = rn as usize - 1;
-        let (mut canvas, prev_gap) = match images.get(id).and_then(|e| e.frame(idx)) {
-            Some(f) => (f.pixels.to_vec(), f.gap_ms),
-            None => return ActionOutcome::error(ErrorCode::NotFound, "a=f: frame vanished"),
-        };
-        compose::blit(
-            &mut canvas,
-            img_w,
-            img_h,
-            &data_px,
-            data.width,
-            data.height,
-            off_x,
-            off_y,
-            img_bpp,
-            replace,
-        );
+        let edited = images.edit_frame(id, idx, |canvas| {
+            compose::blit(
+                canvas,
+                img_w,
+                img_h,
+                &data_px,
+                data.width,
+                data.height,
+                off_x,
+                off_y,
+                img_bpp,
+                replace,
+            );
+        });
+        if let Err(err) = edited {
+            return frame_error_to_outcome(err);
+        }
         // kitty only changes an edited frame's gap when z is given.
-        let gap = if z.is_some() { gap_from_z(z) } else { prev_gap };
-        let frame = Frame {
-            pixels: canvas.into(),
-            gap_ms: gap,
-        };
-        return match images.replace_frame(id, idx, frame) {
-            Ok(evicted) => {
-                announce_evictions(placements, events, evicted);
-                events.push(ImageEvent::TransmitFrame {
-                    id,
-                    index: idx as u32,
-                });
-                ActionOutcome::Ok
-            }
-            Err(err) => frame_error_to_outcome(err),
-        };
+        if z.is_some()
+            && let Some(mut control) = images.animation_control(id)
+        {
+            control.set_gap(idx, gap_from_z(z));
+        }
+        events.push(ImageEvent::TransmitFrame {
+            id,
+            index: idx as u32,
+        });
+        return ActionOutcome::Ok;
     }
 
     let mut canvas = match base {
@@ -1949,7 +1944,6 @@ fn handle_animation_control(
 
 fn handle_compose(
     images: &mut felis_grid::images::ImageStore,
-    placements: &mut felis_grid::images::Placements,
     events: &mut Vec<ImageEvent>,
     complete: &CompleteCommand,
     refs: &mut ResponseRefs,
@@ -2011,45 +2005,32 @@ fn handle_compose(
     let bpp = format.bytes_per_pixel();
     let src_idx = src_n as usize - 1;
     let dst_idx = dst_n as usize - 1;
-    let src_px = match images.get(id).and_then(|e| e.frame(src_idx)) {
-        Some(f) => f.pixels.clone(),
-        None => return ActionOutcome::error(ErrorCode::NotFound, "a=c: source frame vanished"),
+    let Some(src_frame) = images.get(id).and_then(|e| e.frame(src_idx)) else {
+        return ActionOutcome::error(ErrorCode::NotFound, "a=c: source frame vanished");
     };
-    let (mut dst_px, dst_gap) = match images.get(id).and_then(|e| e.frame(dst_idx)) {
-        Some(f) => (f.pixels.to_vec(), f.gap_ms),
-        None => {
-            return ActionOutcome::error(ErrorCode::NotFound, "a=c: destination frame vanished");
-        }
+    // A handle on the frame being edited would force the edit onto a
+    // whole-canvas copy, so a same-frame source is cut out instead.
+    let edited = if src_idx == dst_idx {
+        let cut = compose::cut_out(&src_frame.pixels, img_w, src_x, src_y, w, h, bpp);
+        images.edit_frame(id, dst_idx, |dst| {
+            compose::blit(dst, img_w, img_h, &cut, w, h, dst_x, dst_y, bpp, replace);
+        })
+    } else {
+        let src_px = src_frame.pixels.clone();
+        images.edit_frame(id, dst_idx, |dst| {
+            compose::blit_region(
+                dst, &src_px, img_w, dst_x, dst_y, src_x, src_y, w, h, bpp, replace,
+            );
+        })
     };
-    compose::blit_region(
-        &mut dst_px,
-        &src_px,
-        img_w,
-        dst_x,
-        dst_y,
-        src_x,
-        src_y,
-        w,
-        h,
-        bpp,
-        replace,
-    );
-    let _ = img_h;
-    let frame = Frame {
-        pixels: dst_px.into(),
-        gap_ms: dst_gap,
-    };
-    match images.replace_frame(id, dst_idx, frame) {
-        Ok(evicted) => {
-            announce_evictions(placements, events, evicted);
-            events.push(ImageEvent::TransmitFrame {
-                id,
-                index: dst_idx as u32,
-            });
-            ActionOutcome::Ok
-        }
-        Err(err) => frame_error_to_outcome(err),
+    if let Err(err) = edited {
+        return frame_error_to_outcome(err);
     }
+    events.push(ImageEvent::TransmitFrame {
+        id,
+        index: dst_idx as u32,
+    });
+    ActionOutcome::Ok
 }
 
 /// `d=F` on an image with no extra frames deletes the whole image. No

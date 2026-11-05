@@ -4,7 +4,7 @@
 
 use std::num::NonZeroU16;
 
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use indexmap::IndexMap;
 
 mod table;
@@ -544,6 +544,29 @@ impl ImageStore {
         *slot = frame;
         self.bytes_total = self.bytes_total - old_len + new_len;
         Ok(evicted)
+    }
+
+    /// Same-length, so it charges and evicts nothing. Edits in place
+    /// unless another handle (an unwritten materialized chunk) shares
+    /// the buffer; then the edit lands on a copy and that handle keeps
+    /// the pixels it was cut from.
+    pub fn edit_frame(
+        &mut self,
+        id: ImageId,
+        frame_idx: usize,
+        edit: impl FnOnce(&mut [u8]),
+    ) -> Result<(), FrameError> {
+        let slot = self
+            .entries
+            .get_mut(&id)
+            .ok_or(FrameError::NoSuchImage)?
+            .frames
+            .get_mut(frame_idx)
+            .ok_or(FrameError::NoSuchFrame)?;
+        let mut pixels = BytesMut::from(std::mem::take(&mut slot.pixels));
+        edit(&mut pixels);
+        slot.pixels = pixels.freeze();
+        Ok(())
     }
 
     /// Returns the freed byte count. The last frame cannot be removed

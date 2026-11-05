@@ -133,6 +133,24 @@ pub(crate) fn blit_region(
     }
 }
 
+pub(crate) fn cut_out(
+    src: &[u8],
+    img_w: u32,
+    x: u32,
+    y: u32,
+    w: u32,
+    h: u32,
+    bpp: usize,
+) -> Vec<u8> {
+    let len = (w as usize) * bpp;
+    let mut out = Vec::with_capacity(len * (h as usize));
+    for row in y..y + h {
+        let start = ((row * img_w + x) as usize) * bpp;
+        out.extend_from_slice(&src[start..start + len]);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use proptest::prelude::*;
@@ -270,11 +288,7 @@ mod tests {
             let (dst_x, dst_y) = (at(&corners[2], img_w - w), at(&corners[3], img_h - h));
             let dst = sized(&dst_pool, img_w, img_h, bpp);
             let src = sized(&src_pool, img_w, img_h, bpp);
-            let mut cut = Vec::new();
-            for y in src_y..src_y + h {
-                let start = ((y * img_w + src_x) as usize) * bpp;
-                cut.extend_from_slice(&src[start..start + (w as usize) * bpp]);
-            }
+            let cut = cut_out(&src, img_w, src_x, src_y, w, h, bpp);
             let mut want = dst.clone();
             blit(&mut want, img_w, img_h, &cut, w, h, dst_x, dst_y, bpp, replace);
             let mut got = dst;

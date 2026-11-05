@@ -1231,6 +1231,52 @@ fn equal_size_replace_frame_evicts_nothing_in_an_over_cap_store() {
     assert_eq!(s.get(ImageId(1)).unwrap().frame(0).unwrap().gap_ms, 40);
 }
 
+#[test]
+fn edit_frame_rewrites_an_unshared_buffer_where_it_lies_and_charges_nothing() {
+    let mut s = ImageStore::new(1000);
+    s.insert(ImageId(1), entry(10)).unwrap();
+    let used = s.bytes_used();
+    let at = s.get(ImageId(1)).unwrap().frame(0).unwrap().pixels.as_ptr();
+    s.edit_frame(ImageId(1), 0, |px| px[3] = 7).unwrap();
+    let pixels = &s.get(ImageId(1)).unwrap().frame(0).unwrap().pixels;
+    assert_eq!(pixels.as_ptr(), at, "an unshared buffer is not copied");
+    assert_eq!(pixels[3], 7);
+    assert_eq!(s.bytes_used(), used);
+}
+
+#[test]
+fn edit_frame_leaves_a_shared_handle_with_the_old_pixels() {
+    let mut s = ImageStore::new(1000);
+    s.insert(ImageId(1), entry(10)).unwrap();
+    let held = s
+        .get(ImageId(1))
+        .unwrap()
+        .frame(0)
+        .unwrap()
+        .pixels
+        .slice(2..6);
+    s.edit_frame(ImageId(1), 0, |px| px.fill(9)).unwrap();
+    assert_eq!(held[..], [0; 4]);
+    assert_eq!(
+        s.get(ImageId(1)).unwrap().frame(0).unwrap().pixels[..],
+        [9; 10]
+    );
+}
+
+#[test]
+fn edit_frame_rejects_unknown_image_and_frame() {
+    let mut s = ImageStore::new(1000);
+    s.insert(ImageId(1), entry(10)).unwrap();
+    assert_eq!(
+        s.edit_frame(ImageId(9), 0, |_| {}),
+        Err(FrameError::NoSuchImage)
+    );
+    assert_eq!(
+        s.edit_frame(ImageId(1), 1, |_| {}),
+        Err(FrameError::NoSuchFrame)
+    );
+}
+
 /// Pins against the `-> Ok(())` body mutant.
 #[test]
 fn replace_frame_rejects_unknown_image_and_frame() {
