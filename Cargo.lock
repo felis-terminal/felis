@@ -1375,6 +1375,7 @@ dependencies = [
  "anyhow",
  "bytes",
  "clap",
+ "criterion",
  "felis-client-core",
  "felis-grid",
  "felis-protocol",
