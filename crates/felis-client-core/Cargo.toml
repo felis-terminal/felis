@@ -96,6 +96,10 @@ harness = false
 name = "gungraun_gate"
 harness = false
 
+[[bench]]
+name = "image_consume"
+harness = false
+
 [[example]]
 name = "attach"
 required-features = ["native"]

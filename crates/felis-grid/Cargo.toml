@@ -60,5 +60,9 @@ harness = false
 name = "erase"
 harness = false
 
+[[bench]]
+name = "kitty_apc"
+harness = false
+
 [lints]
 workspace = true
