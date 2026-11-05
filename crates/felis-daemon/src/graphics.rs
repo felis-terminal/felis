@@ -959,11 +959,7 @@ fn evict_to_fit(
     }
     free_unreferenced_where(images, placements, events, |id, _| id != incoming);
     while over(images) {
-        let Some(oldest) = images
-            .iter_ids()
-            .filter(|id| *id != incoming)
-            .min_by_key(|id| images.get(*id).map_or(0, ImageEntry::atime))
-        else {
+        let Some(oldest) = images.least_recently_used(Some(incoming)) else {
             break;
         };
         for removed in placements.delete_image(oldest) {
@@ -1034,22 +1030,15 @@ fn free_unreferenced_where(
     events: &mut Vec<ImageEvent>,
     candidate: impl Fn(ImageId, &ImageEntry) -> bool,
 ) {
-    let candidates: Vec<ImageId> = images
-        .iter_ids()
-        .filter(|&id| images.get(id).is_some_and(|entry| candidate(id, entry)))
-        .collect();
-    if candidates.is_empty() {
-        return;
-    }
-    let referenced: std::collections::HashSet<ImageId> = std::iter::once(&*placements)
-        .flat_map(|table| {
-            table
-                .iter()
-                .map(|p| p.image_id)
-                .chain(table.iter_virtual().map(|v| v.image_id))
+    // Only refcount-0 images are walked: a direct placement holds its
+    // image's ref, so a pinned image is always referenced.
+    let unreferenced: Vec<ImageId> = images
+        .iter_unpinned_ids()
+        .filter(|&id| {
+            images.get(id).is_some_and(|entry| candidate(id, entry)) && !placements.references(id)
         })
         .collect();
-    for id in candidates.into_iter().filter(|id| !referenced.contains(id)) {
+    for id in unreferenced {
         free_image(images, placements, events, id);
     }
 }

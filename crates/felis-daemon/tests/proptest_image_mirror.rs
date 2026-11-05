@@ -291,6 +291,14 @@ proptest! {
         let mut s = Session::new();
         for (i, (op, flush)) in ops.iter().enumerate() {
             s.run(op);
+            // The unreferenced-image sweep walks only refcount-0 images.
+            for id in s.images.iter_ids() {
+                prop_assert_eq!(
+                    s.images.get(id).map(|e| e.refcount() as usize),
+                    Some(s.placements.for_image(id).count()),
+                    "refcount of image {:?} after {:?}", id, op
+                );
+            }
             if !flush && i + 1 < ops.len() {
                 continue;
             }
