@@ -169,10 +169,11 @@ its pull-request runs, every failure on a change that did not touch the measured
 from a real regression.
 
 An instruction count does not depend on what else the machine runs. Repeat runs give identical counts, with or without
-synthetic load beside them, and the same commit built from two checkout paths differs by under 0.2%, an order of
-magnitude below the 2% threshold. Injected regressions show the count tracks the cost the gate exists to catch: extra
-work in the print path raised it by 9% to 23% on the benchmarks that reach that path, where wall-clock time rose 10% to
-29%, and disabling the ASCII fast path raised it by 25% to 233%.
+synthetic load beside them, except that std's per-process hash seed moves a benchmark whose measured code probes a
+`HashMap` by under 0.05%; the same commit built from two checkout paths differs by under 0.2%, an order of magnitude
+below the 2% threshold. Injected regressions show the count tracks the cost the gate exists to catch: extra work in the
+print path raised it by 9% to 23% on the benchmarks that reach that path, where wall-clock time rose 10% to 29%, and
+disabling the ASCII fast path raised it by 25% to 233%.
 
 The count is blind to a regression that only changes memory behavior. A change that added cache misses without adding
 instructions cost 25% to 55% in wall-clock time while the count moved under 0.7%; callgrind's estimated cycles, which

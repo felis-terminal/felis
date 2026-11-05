@@ -62,6 +62,7 @@ felis-daemon = { path = "../felis-daemon" }
 felis-client-core = { path = ".", features = ["daemon-tests"] }
 felis-pty = { workspace = true }
 felis-vt = { workspace = true }
+miniz_oxide = { workspace = true }
 insta = { workspace = true }
 proptest = { workspace = true }
 criterion = { workspace = true }
