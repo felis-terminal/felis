@@ -22,13 +22,16 @@ pub struct PlaceholderCell {
 
 impl Grid {}
 
-fn placeholder_text(grapheme: Grapheme, screen: &ScreenBuffer) -> Option<String> {
+fn placeholder_text<'a>(
+    grapheme: Grapheme,
+    screen: &'a ScreenBuffer,
+    buf: &'a mut [u8; 4],
+) -> Option<&'a str> {
     match grapheme {
-        Grapheme::Char(c) if c == PLACEHOLDER => Some(c.to_string()),
-        Grapheme::Cluster(id) => {
-            let s = screen.cluster_str(id)?;
-            s.starts_with(PLACEHOLDER).then(|| s.to_string())
-        }
+        Grapheme::Char(c) if c == PLACEHOLDER => Some(c.encode_utf8(buf)),
+        Grapheme::Cluster(id) => screen
+            .cluster_str(id)
+            .filter(|s| s.starts_with(PLACEHOLDER)),
         _ => None,
     }
 }
@@ -49,6 +52,14 @@ impl ScreenBuffer {
     #[must_use]
     pub fn placeholder_cells(&self) -> Vec<PlaceholderCell> {
         let mut out = Vec::new();
+        self.placeholder_cells_into(&mut out);
+        out
+    }
+
+    /// [`Self::placeholder_cells`] into a caller-kept buffer, cleared
+    /// first, so a per-frame caller reuses its allocation.
+    pub fn placeholder_cells_into(&self, out: &mut Vec<PlaceholderCell>) {
+        out.clear();
         for row in 0..self.rows() {
             // (low 24 bits, placement id, high byte, tile row, tile column)
             let mut prev: Option<(u32, u32, u32, u32, u32)> = None;
@@ -57,11 +68,12 @@ impl ScreenBuffer {
                     prev = None;
                     continue;
                 };
-                let Some(text) = placeholder_text(cell.grapheme, self) else {
+                let mut buf = [0u8; 4];
+                let Some(text) = placeholder_text(cell.grapheme, self, &mut buf) else {
                     prev = None;
                     continue;
                 };
-                let Some(decoded) = decode_placement(&text) else {
+                let Some(decoded) = decode_placement(text) else {
                     prev = None;
                     continue;
                 };
@@ -106,7 +118,6 @@ impl ScreenBuffer {
                 });
             }
         }
-        out
     }
 }
 

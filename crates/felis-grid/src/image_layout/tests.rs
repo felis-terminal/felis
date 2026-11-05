@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fmt::Write as _;
 
 use felis_protocol::PlacementId;
 use felis_vt::Parser;
@@ -645,4 +646,43 @@ fn an_image_with_no_draw_is_occluded() {
     let images = Sizes::default().with(1, 16, 32);
     let layout = layout_of(&images, &[placed(1, 1, 1, 2, 2)]);
     assert!(layout.occluded(ImageId(9), |_| true));
+}
+
+#[test]
+fn each_placeholder_cell_resolves_its_own_image_when_runs_alternate() {
+    use felis_protocol::kitty_graphics::placeholder::PLACEHOLDER;
+    let mut grid = Grid::new(2, 8);
+    let mut bytes = String::new();
+    for id in [7, 7, 8, 9, 7] {
+        write!(bytes, "\x1b[38;5;{id}m{PLACEHOLDER}").expect("a String takes any write");
+    }
+    drive(&mut Parser::new(), &mut grid, bytes.as_bytes());
+    let images = Sizes::default().with(7, 16, 16);
+    let mut layout = ImageLayout::new();
+    let virtuals = [virt(7, 2, 1, 0), virt(9, 1, 1, 0)];
+    layout.rebuild(grid.screen(), &images, &[], &virtuals, (8.0, 16.0), 0);
+    let stats = layout.placeholder_stats();
+    assert_eq!(
+        (stats.cells, stats.tiles, stats.no_placement, stats.no_image),
+        (5, 3, 1, 1)
+    );
+    assert_eq!(
+        layout
+            .under_text()
+            .iter()
+            .map(|d| d.dst[0])
+            .collect::<Vec<_>>(),
+        [0.0, 8.0, 32.0]
+    );
+
+    layout.rebuild(
+        Grid::new(2, 8).screen(),
+        &images,
+        &[],
+        &virtuals,
+        (8.0, 16.0),
+        0,
+    );
+    assert_eq!(layout.placeholder_stats().cells, 0);
+    assert_eq!(layout.under_text(), []);
 }

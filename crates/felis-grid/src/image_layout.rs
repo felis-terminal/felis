@@ -7,7 +7,7 @@ use std::collections::{HashMap, HashSet};
 use felis_protocol::messages::{RequestedExtent, SourceRect};
 
 use crate::{
-    ScreenBuffer,
+    PlaceholderCell, ScreenBuffer,
     images::{ClientPlacement, ImageId, VirtualPlacement, clip_source},
 };
 
@@ -104,6 +104,7 @@ pub struct ImageLayout {
     sorted: Vec<(StackKey, ImageDraw)>,
     vp_map: HashMap<(ImageId, u32), VirtualPlacement>,
     seen: HashSet<ImageId>,
+    cells: Vec<PlaceholderCell>,
 }
 
 impl ImageLayout {
@@ -164,17 +165,17 @@ impl ImageLayout {
     /// `screen` is the composed viewport the client paints, so
     /// placeholder cells are already where they show; anchored
     /// placements live in live-screen rows and shift by `viewport`.
-    pub fn rebuild(
+    pub fn rebuild<'a>(
         &mut self,
         screen: &ScreenBuffer,
         images: &impl LayoutImages,
-        placements: &[ClientPlacement],
+        placements: impl IntoIterator<Item = &'a ClientPlacement> + Clone,
         virtual_placements: &[VirtualPlacement],
         cell_px: (f32, f32),
         viewport: u32,
     ) {
         self.sorted.clear();
-        self.collect_live(placements, virtual_placements);
+        self.collect_live(placements.clone(), virtual_placements);
         self.push_placements(screen, images, placements, cell_px, viewport);
         self.push_placeholders(screen, images, virtual_placements, cell_px);
         // Stable: placeholder tiles tie and keep cell order, as do the
@@ -192,15 +193,15 @@ impl ImageLayout {
         }
     }
 
-    fn collect_live(
+    fn collect_live<'a>(
         &mut self,
-        placements: &[ClientPlacement],
+        placements: impl IntoIterator<Item = &'a ClientPlacement>,
         virtual_placements: &[VirtualPlacement],
     ) {
         self.live.clear();
         self.seen.clear();
         let ids = placements
-            .iter()
+            .into_iter()
             .map(|p| p.image_id)
             .chain(virtual_placements.iter().map(|v| v.image_id));
         for id in ids {
@@ -210,11 +211,11 @@ impl ImageLayout {
         }
     }
 
-    fn push_placements(
+    fn push_placements<'a>(
         &mut self,
         screen: &ScreenBuffer,
         images: &impl LayoutImages,
-        placements: &[ClientPlacement],
+        placements: impl IntoIterator<Item = &'a ClientPlacement>,
         (cw, ch): (f32, f32),
         viewport: u32,
     ) {
@@ -270,26 +271,39 @@ impl ImageLayout {
             let key = v.placement_id.map_or(0, |p| p.0);
             self.vp_map.entry((v.image_id, key)).or_insert(*v);
         }
-        for pc in screen.placeholder_cells() {
+        let mut cells = std::mem::take(&mut self.cells);
+        screen.placeholder_cells_into(&mut cells);
+        // A run of cells names one image and placement, so the lookups
+        // are made once per run rather than per cell.
+        let mut last: Option<((ImageId, u32), Resolved)> = None;
+        for &pc in &cells {
             self.placeholder_stats.cells += 1;
-            let found = self
-                .vp_map
-                .get(&(pc.image_id, pc.placement_id))
-                .or_else(|| {
-                    self.vp_map
-                        .get(&(pc.image_id, 0))
-                        .filter(|v| v.placement_id.is_none())
-                });
-            let Some(&vp) = found else {
-                self.placeholder_stats.no_placement += 1;
-                continue;
+            let key = (pc.image_id, pc.placement_id);
+            let resolved = match last {
+                Some((held, resolved)) if held == key => resolved,
+                _ => {
+                    let resolved = self.resolve_placeholder(images, key, (cw, ch));
+                    last = Some((key, resolved));
+                    resolved
+                }
             };
-            let Some((width, height)) = images.drawable_size(pc.image_id) else {
-                self.placeholder_stats.no_image += 1;
-                continue;
+            let (width, height, total_cols, total_rows, rank) = match resolved {
+                Resolved::NoPlacement => {
+                    self.placeholder_stats.no_placement += 1;
+                    continue;
+                }
+                Resolved::NoImage => {
+                    self.placeholder_stats.no_image += 1;
+                    continue;
+                }
+                Resolved::Draw {
+                    width,
+                    height,
+                    total_cols,
+                    total_rows,
+                    rank,
+                } => (width, height, total_cols, total_rows, rank),
             };
-            let (total_cols, total_rows) =
-                placeholder_grid_extent(vp.cols, vp.rows, width, height, cw, ch);
             let tile = PlaceholderTile {
                 screen_row: pc.row,
                 screen_col: pc.col,
@@ -302,14 +316,57 @@ impl ImageLayout {
                 self.placeholder_stats.tiles += 1;
                 let key = StackKey {
                     z: PLACEHOLDER_Z,
-                    image: images.stack_rank(pc.image_id),
+                    image: rank,
                     kind: DrawKind::Placeholder,
                     placement: 0,
                 };
                 self.sorted.push((key, draw));
             }
         }
+        self.cells = cells;
     }
+
+    fn resolve_placeholder(
+        &self,
+        images: &impl LayoutImages,
+        (image_id, placement_id): (ImageId, u32),
+        (cw, ch): (f32, f32),
+    ) -> Resolved {
+        let found = self.vp_map.get(&(image_id, placement_id)).or_else(|| {
+            self.vp_map
+                .get(&(image_id, 0))
+                .filter(|v| v.placement_id.is_none())
+        });
+        let Some(vp) = found else {
+            return Resolved::NoPlacement;
+        };
+        let Some((width, height)) = images.drawable_size(image_id) else {
+            return Resolved::NoImage;
+        };
+        let (total_cols, total_rows) =
+            placeholder_grid_extent(vp.cols, vp.rows, width, height, cw, ch);
+        Resolved::Draw {
+            width,
+            height,
+            total_cols,
+            total_rows,
+            rank: images.stack_rank(image_id),
+        }
+    }
+}
+
+/// What a placeholder cell's image and placement resolve to this frame.
+#[derive(Clone, Copy)]
+enum Resolved {
+    NoPlacement,
+    NoImage,
+    Draw {
+        width: u32,
+        height: u32,
+        total_cols: u16,
+        total_rows: u16,
+        rank: u64,
+    },
 }
 
 fn covers([ox, oy, ow, oh]: [f32; 4], [ux, uy, uw, uh]: [f32; 4]) -> bool {

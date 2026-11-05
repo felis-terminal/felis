@@ -312,7 +312,6 @@ proptest! {
             let mut window: Vec<_> = s
                 .window
                 .placements()
-                .iter()
                 .map(|p| {
                     (
                         p.image_id.0,
@@ -344,7 +343,7 @@ proptest! {
                 );
             }
 
-            let shown = s.window.placements().iter().map(|p| p.image_id)
+            let shown = s.window.placements().map(|p| p.image_id)
                 .chain(s.window.virtual_placements().iter().map(|v| v.image_id));
             for id in shown {
                 prop_assert!(s.window.image(id).is_some(), "image {:?} is shown but not stored after {:?}", id, op);
