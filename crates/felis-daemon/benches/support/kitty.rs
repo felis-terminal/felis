@@ -1,0 +1,174 @@
+//! Kitty graphics producer traffic for the daemon dispatch benches: UI-like
+//! pixels, the APC bodies a producer would send for them, and a session's
+//! dispatch state.
+
+use std::hint::black_box;
+
+use felis_daemon::graphics::{ApcCtx, ImageEvent, ShmDeferral, dispatch_apc_body};
+use felis_grid::Grid;
+use felis_grid::images::{ImageStore, Placements};
+use felis_protocol::messages::MAX_SESSION_IMAGE_BYTES;
+use felis_vt::kitty_graphics::Reassembler;
+
+pub(crate) const CHUNK: usize = 4096;
+
+pub(crate) const CELL_W: u16 = 10;
+pub(crate) const CELL_H: u16 = 20;
+
+pub(crate) struct Lcg(u64);
+
+impl Lcg {
+    pub(crate) const fn new(seed: u64) -> Self {
+        Self(seed)
+    }
+
+    pub(crate) const fn next(&mut self) -> u32 {
+        self.0 = self
+            .0
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        (self.0 >> 33) as u32
+    }
+
+    pub(crate) const fn below(&mut self, n: u32) -> u32 {
+        self.next() % n
+    }
+}
+
+/// A browser-like frame: a flat sidebar, a gradient header, and a body of
+/// text lines over a photo-like region whose low-bit noise keeps zlib and
+/// PNG near the 2-4x ratio real UI frames reach.
+pub(crate) fn ui_frame(width: u32, height: u32, bpp: usize, seed: u64) -> Vec<u8> {
+    let mut rng = Lcg::new(seed);
+    let mut out = Vec::with_capacity(width as usize * height as usize * bpp);
+    let sidebar = width / 6;
+    let header = height / 10;
+    let mut glyphs = 0u32;
+    for y in 0..height {
+        if y % 20 == 0 {
+            glyphs = rng.next();
+        }
+        for x in 0..width {
+            let rgb: [u8; 3] = if x < sidebar {
+                [0x2b, 0x2d, 0x31]
+            } else if y < header {
+                let t = (y * 255 / header.max(1)) as u8;
+                [0x30 + t / 4, 0x60 + t / 3, 0xa0 + t / 4]
+            } else if (y % 20) < 14 && x < width * 3 / 5 {
+                let bit = glyphs.rotate_left((x / 7) % 32) & 1 == 1;
+                let stroke = (x + y) % 3 != 0;
+                if bit && stroke {
+                    [0x20, 0x20, 0x20]
+                } else {
+                    [0xf8, 0xf8, 0xf8]
+                }
+            } else {
+                let n = (rng.next() & 0x1f) as u8;
+                [
+                    (x * 255 / width) as u8 ^ n,
+                    (y * 255 / height) as u8 ^ n,
+                    0x80 | n,
+                ]
+            };
+            out.extend_from_slice(&rgb);
+            if bpp == 4 {
+                out.push(0xff);
+            }
+        }
+    }
+    out
+}
+
+pub(crate) fn base64(data: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(data.len().div_ceil(3) * 4);
+    felis_protocol::base64::encode_into(data, &mut out);
+    out
+}
+
+pub(crate) fn zlib(data: &[u8]) -> Vec<u8> {
+    miniz_oxide::deflate::compress_to_vec_zlib(data, 6)
+}
+
+pub(crate) fn png_rgba(width: u32, height: u32, rgba: &[u8]) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut encoder = png::Encoder::new(&mut out, width, height);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    let mut writer = encoder.write_header().unwrap();
+    writer.write_image_data(rgba).unwrap();
+    writer.finish().unwrap();
+    out
+}
+
+pub(crate) fn command(controls: &str, payload: &[u8]) -> Vec<Vec<u8>> {
+    let encoded = base64(payload);
+    if encoded.len() <= CHUNK {
+        return vec![[format!("G{controls};").as_bytes(), &encoded].concat()];
+    }
+    let chunks: Vec<&[u8]> = encoded.chunks(CHUNK).collect();
+    let last = chunks.len() - 1;
+    chunks
+        .iter()
+        .enumerate()
+        .map(|(i, chunk)| {
+            let head = match i {
+                0 => format!("G{controls},m=1;"),
+                _ if i == last => "Gm=0;".to_owned(),
+                _ => "Gm=1;".to_owned(),
+            };
+            [head.as_bytes(), chunk].concat()
+        })
+        .collect()
+}
+
+pub(crate) struct Session {
+    pub(crate) grid: Grid,
+    pub(crate) images: ImageStore,
+    pub(crate) placements: Placements,
+    pub(crate) events: Vec<ImageEvent>,
+    shm: ShmDeferral,
+    reassembler: Reassembler,
+}
+
+impl Session {
+    pub(crate) fn new(width: u32, height: u32) -> Self {
+        Self {
+            grid: Grid::new(
+                (height / u32::from(CELL_H)).max(1) as u16,
+                (width / u32::from(CELL_W)).max(1) as u16,
+            ),
+            images: ImageStore::new(MAX_SESSION_IMAGE_BYTES),
+            placements: Placements::new(),
+            events: Vec::new(),
+            shm: ShmDeferral::default(),
+            reassembler: Reassembler::new(),
+        }
+    }
+
+    /// `q=2` silences every reply, so a rejected workload shows only in
+    /// the store and the events: each bench asserts on those before timing.
+    pub(crate) fn feed(&mut self, bodies: &[Vec<u8>]) {
+        for body in bodies {
+            black_box(dispatch_apc_body(
+                &mut ApcCtx {
+                    grid: &mut self.grid,
+                    images: &mut self.images,
+                    placements: &mut self.placements,
+                    events: &mut self.events,
+                    shm: &mut self.shm,
+                    cell_pixel_w: CELL_W,
+                    cell_pixel_h: CELL_H,
+                    anchor_cursor: Some((0, 0)),
+                },
+                &mut self.reassembler,
+                body,
+            ));
+        }
+    }
+
+    pub(crate) fn feed_all(&mut self, commands: &[Vec<Vec<u8>>]) {
+        for command in commands {
+            self.feed(command);
+        }
+    }
+}

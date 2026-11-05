@@ -58,9 +58,14 @@ tempfile = { workspace = true }
 miniz_oxide = { workspace = true }
 felis-client-core = { workspace = true }
 proptest = { workspace = true }
+criterion = { workspace = true }
 
 [target.'cfg(windows)'.dev-dependencies]
 windows-sys = { workspace = true }
+
+[[bench]]
+name = "graphics_dispatch"
+harness = false
 
 [lints]
 workspace = true
