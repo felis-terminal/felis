@@ -243,6 +243,9 @@ fn bench_redraw(c: &mut Criterion) {
     }
     let churn = daemon.ship();
     assert_eq!(churn.len(), 400, "{churn:?}");
+    apply_all(&mut placed, &churn);
+    redraw(&mut placed, &mut layout, &blank);
+    assert_eq!(draws(&layout), 1000);
     group.throughput(Throughput::Elements(churn.len() as u64));
     group.bench_function("churn/placements_200_of_1000/192x54", |b| {
         b.iter(|| {
@@ -250,7 +253,6 @@ fn bench_redraw(c: &mut Criterion) {
             redraw(&mut placed, &mut layout, &blank)
         });
     });
-    assert_eq!(draws(&layout), 1000);
     group.finish();
 }
 
