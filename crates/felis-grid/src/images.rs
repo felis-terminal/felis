@@ -5,9 +5,10 @@
 use std::num::NonZeroU16;
 
 use bytes::{Bytes, BytesMut};
-use indexmap::IndexMap;
 
+mod entries;
 mod table;
+pub(crate) use entries::Entries;
 use table::{Keyed, Table};
 
 pub use felis_protocol::{
@@ -388,7 +389,7 @@ pub enum InsertError {
 pub struct ImageStore {
     /// Insertion order is the eviction order, front first.
     #[cfg_attr(feature = "state-dump", serde(with = "crate::state::image_entries"))]
-    entries: IndexMap<ImageId, ImageEntry>,
+    entries: Entries,
     bytes_total: usize,
     bytes_cap: usize,
     next_anonymous_id: u32,
@@ -402,7 +403,7 @@ impl ImageStore {
     #[must_use]
     pub fn new(bytes_cap: usize) -> Self {
         Self {
-            entries: IndexMap::new(),
+            entries: Entries::default(),
             bytes_total: 0,
             bytes_cap,
             next_anonymous_id: u32::MAX,
@@ -415,13 +416,10 @@ impl ImageStore {
     /// the witness for [`Self::replace_frame`]'s eviction guard being
     /// `>` rather than `>=`.
     #[cfg(test)]
-    pub(crate) fn over_cap_for_test(
-        entries: IndexMap<ImageId, ImageEntry>,
-        bytes_cap: usize,
-    ) -> Self {
+    pub(crate) fn over_cap_for_test(entries: Vec<(ImageId, ImageEntry)>, bytes_cap: usize) -> Self {
         Self {
-            bytes_total: entries.values().map(ImageEntry::byte_len).sum(),
-            entries,
+            bytes_total: entries.iter().map(|(_, entry)| entry.byte_len()).sum(),
+            entries: entries.into_iter().collect(),
             bytes_cap,
             next_anonymous_id: u32::MAX,
             clock: 0,
@@ -437,7 +435,7 @@ impl ImageStore {
         loop {
             let id = ImageId(self.next_anonymous_id);
             self.next_anonymous_id = self.next_anonymous_id.checked_sub(1).unwrap_or(u32::MAX);
-            if !self.entries.contains_key(&id) {
+            if !self.entries.contains(id) {
                 return id;
             }
         }
@@ -456,7 +454,7 @@ impl ImageStore {
         // Priced while the existing entry remains in place. Its bytes count
         // as room because the replacement takes its slot; dropping it
         // first would lose it if insertion fails with `Err`.
-        let displaced = self.entries.get(&id).map_or(0, ImageEntry::byte_len);
+        let displaced = self.entries.get(id).map_or(0, ImageEntry::byte_len);
         let freeable = self.freeable_bytes(Some(id)) + displaced;
         if self.bytes_total - freeable + needed > self.bytes_cap {
             return Err(InsertError::OverCapacity {
@@ -465,8 +463,7 @@ impl ImageStore {
             });
         }
         let mut entry = entry;
-        // shift_remove rather than swap_remove keeps the eviction order.
-        if let Some(old) = self.entries.shift_remove(&id) {
+        if let Some(old) = self.entries.remove(id) {
             self.bytes_total -= old.byte_len();
             entry.serial = old.serial;
         } else {
@@ -475,16 +472,16 @@ impl ImageStore {
         }
         let evicted = self.evict_to_fit(needed, None)?;
         self.bytes_total += needed;
-        self.entries.insert(id, entry);
+        self.entries.push(id, entry);
         self.touch(id);
         Ok(evicted)
     }
 
     /// Mark the image as just used, for [`ImageEntry::atime`].
     pub fn touch(&mut self, id: ImageId) {
-        if let Some(entry) = self.entries.get_mut(&id) {
+        if self.entries.contains(id) {
             self.clock += 1;
-            entry.atime = self.clock;
+            self.entries.set_atime(id, self.clock);
         }
     }
 
@@ -493,7 +490,7 @@ impl ImageStore {
     pub fn push_frame(&mut self, id: ImageId, frame: Frame) -> Result<PushedFrame, FrameError> {
         let held = self
             .entries
-            .get(&id)
+            .get(id)
             .ok_or(FrameError::NoSuchImage)?
             .frames
             .len();
@@ -506,13 +503,12 @@ impl ImageStore {
         let evicted = self
             .evict_to_fit(needed, Some(id))
             .map_err(frame_capacity_error)?;
-        let entry = self.entries.get_mut(&id).ok_or(FrameError::NoSuchImage)?;
+        let entry = self.entries.get_mut(id).ok_or(FrameError::NoSuchImage)?;
         entry.frames.push(frame);
+        let index = entry.frames.len() - 1;
+        self.entries.recharge(id, 0, needed);
         self.bytes_total += needed;
-        Ok(PushedFrame {
-            index: entry.frames.len() - 1,
-            evicted,
-        })
+        Ok(PushedFrame { index, evicted })
     }
 
     pub fn replace_frame(
@@ -522,7 +518,7 @@ impl ImageStore {
         frame: Frame,
     ) -> Result<Evicted, FrameError> {
         let old_len = {
-            let entry = self.entries.get(&id).ok_or(FrameError::NoSuchImage)?;
+            let entry = self.entries.get(id).ok_or(FrameError::NoSuchImage)?;
             entry
                 .frames
                 .get(frame_idx)
@@ -536,12 +532,13 @@ impl ImageStore {
         } else {
             Evicted::new()
         };
-        let entry = self.entries.get_mut(&id).ok_or(FrameError::NoSuchImage)?;
+        let entry = self.entries.get_mut(id).ok_or(FrameError::NoSuchImage)?;
         let slot = entry
             .frames
             .get_mut(frame_idx)
             .ok_or(FrameError::NoSuchFrame)?;
         *slot = frame;
+        self.entries.recharge(id, old_len, new_len);
         self.bytes_total = self.bytes_total - old_len + new_len;
         Ok(evicted)
     }
@@ -558,7 +555,7 @@ impl ImageStore {
     ) -> Result<(), FrameError> {
         let slot = self
             .entries
-            .get_mut(&id)
+            .get_mut(id)
             .ok_or(FrameError::NoSuchImage)?
             .frames
             .get_mut(frame_idx)
@@ -574,7 +571,7 @@ impl ImageStore {
     /// promotes the next frame to root, felis does not special-case
     /// index 0.
     pub fn remove_frame(&mut self, id: ImageId, frame_idx: usize) -> Result<usize, FrameError> {
-        let entry = self.entries.get_mut(&id).ok_or(FrameError::NoSuchImage)?;
+        let entry = self.entries.get_mut(id).ok_or(FrameError::NoSuchImage)?;
         if frame_idx >= entry.frames.len() {
             return Err(FrameError::NoSuchFrame);
         }
@@ -588,6 +585,7 @@ impl ImageStore {
             entry.current -= 1;
         }
         let freed = removed.byte_len();
+        self.entries.recharge(id, freed, 0);
         self.bytes_total -= freed;
         Ok(freed)
     }
@@ -597,12 +595,12 @@ impl ImageStore {
     /// wake an idle client for no visible change.
     pub fn advance_animations(&mut self, now_ms: u64) -> Vec<(ImageId, usize)> {
         let mut changed = Vec::new();
-        for (id, entry) in &mut self.entries {
+        for (id, entry) in self.entries.iter_mut() {
             if entry.refcount > 0
                 && entry.is_animated()
                 && let Some(idx) = entry.advance(now_ms)
             {
-                changed.push((*id, idx));
+                changed.push((id, idx));
             }
         }
         changed
@@ -614,7 +612,7 @@ impl ImageStore {
     #[must_use]
     pub fn next_animation_due_ms(&self, now_ms: u64) -> Option<u64> {
         let mut soonest: Option<u64> = None;
-        for entry in self.entries.values() {
+        for (_, entry) in self.entries.iter() {
             if entry.refcount > 0 && entry.is_animatable() {
                 let due = entry.next_due_ms().unwrap_or(now_ms);
                 soonest = Some(soonest.map_or(due, |s| s.min(due)));
@@ -624,41 +622,29 @@ impl ImageStore {
     }
 
     pub fn animation_control(&mut self, id: ImageId) -> Option<AnimationControl<'_>> {
-        self.entries.get_mut(&id).map(AnimationControl::new)
+        self.entries.get_mut(id).map(AnimationControl::new)
     }
 
     #[must_use]
     pub fn get(&self, id: ImageId) -> Option<&ImageEntry> {
-        self.entries.get(&id)
+        self.entries.get(id)
     }
 
     /// `false` when the id is unknown (the dispatcher emits `ENOENT`).
     pub fn retain(&mut self, id: ImageId) -> bool {
-        match self.entries.get_mut(&id) {
-            Some(entry) => {
-                entry.refcount = entry.refcount.saturating_add(1);
-                true
-            }
-            None => false,
-        }
+        self.entries.retain(id)
     }
 
     /// `false` when the id is unknown or the refcount is already zero.
     /// Reaching zero does not delete the entry; eviction does, when the
     /// cap is hit.
     pub fn release(&mut self, id: ImageId) -> bool {
-        match self.entries.get_mut(&id) {
-            Some(entry) if entry.refcount > 0 => {
-                entry.refcount -= 1;
-                true
-            }
-            _ => false,
-        }
+        self.entries.release(id)
     }
 
     /// Removes regardless of refcount.
     pub fn delete(&mut self, id: ImageId) -> Option<ImageEntry> {
-        let entry = self.entries.shift_remove(&id)?;
+        let entry = self.entries.remove(id)?;
         self.bytes_total -= entry.byte_len();
         Some(entry)
     }
@@ -679,7 +665,19 @@ impl ImageStore {
     }
 
     pub fn iter_ids(&self) -> impl Iterator<Item = ImageId> + '_ {
-        self.entries.keys().copied()
+        self.entries.iter().map(|(id, _)| id)
+    }
+
+    /// The refcount-0 ids, in [`Self::iter_ids`] order.
+    pub fn iter_unpinned_ids(&self) -> impl Iterator<Item = ImageId> + '_ {
+        self.entries.unpinned_ids()
+    }
+
+    /// The image whose [`ImageEntry::atime`] is smallest, `except`
+    /// aside; of equal ones, the first in [`Self::iter_ids`] order.
+    #[must_use]
+    pub fn least_recently_used(&self, except: Option<ImageId>) -> Option<ImageId> {
+        self.entries.least_recently_used(except)
     }
 
     /// kitty's `img_by_client_number`: of the images sent with `I=number`,
@@ -690,14 +688,14 @@ impl ImageStore {
             .iter()
             .filter(|(_, entry)| entry.number == Some(number))
             .max_by_key(|(_, entry)| entry.serial)
-            .map(|(id, _)| *id)
+            .map(|(id, _)| id)
     }
 
     /// kitty's `get_free_client_id`: the lowest id from 1 up that no
     /// image holds, which an `I=` transmission is given.
     #[must_use]
     pub fn lowest_free_id(&self) -> ImageId {
-        let mut taken: Vec<u32> = self.entries.keys().map(|id| id.0).collect();
+        let mut taken: Vec<u32> = self.entries.iter().map(|(id, _)| id.0).collect();
         taken.sort_unstable();
         let mut free = 1;
         for id in taken {
@@ -718,11 +716,7 @@ impl ImageStore {
     /// Bytes the store could reclaim without dropping anything a
     /// placement still holds, `except` aside.
     fn freeable_bytes(&self, except: Option<ImageId>) -> usize {
-        self.entries
-            .iter()
-            .filter(|(id, entry)| entry.refcount == 0 && except != Some(**id))
-            .map(|(_, entry)| entry.byte_len())
-            .sum()
+        self.entries.unpinned_bytes(except)
     }
 
     fn evict_to_fit(
@@ -742,19 +736,14 @@ impl ImageStore {
             });
         }
         let mut evicted = Evicted::new();
-        let mut idx = 0;
-        while self.bytes_total + needed > self.bytes_cap && idx < self.entries.len() {
-            let Some((&id, entry)) = self.entries.get_index(idx) else {
+        while self.bytes_total + needed > self.bytes_cap {
+            let Some(id) = self.entries.unpinned_ids().find(|id| except != Some(*id)) else {
                 break;
             };
-            if entry.refcount == 0 && except != Some(id) {
-                let size = entry.byte_len();
-                self.entries.shift_remove_index(idx);
-                self.bytes_total -= size;
-                evicted.push(id);
-            } else {
-                idx += 1;
+            if let Some(entry) = self.entries.remove(id) {
+                self.bytes_total -= entry.byte_len();
             }
+            evicted.push(id);
         }
         Ok(evicted)
     }
@@ -767,7 +756,7 @@ impl ImageStore {
     /// # Errors
     /// The first inconsistency found.
     pub fn check_restored(&self) -> Result<(), crate::state::StateError> {
-        for (id, entry) in &self.entries {
+        for (id, entry) in self.entries.iter() {
             let expected = (entry.width as usize)
                 .checked_mul(entry.height as usize)
                 .and_then(|px| px.checked_mul(entry.format.bytes_per_pixel()));
@@ -785,7 +774,7 @@ impl ImageStore {
                 )));
             }
         }
-        let charged: usize = self.entries.values().map(ImageEntry::byte_len).sum();
+        let charged: usize = self.entries.iter().map(|(_, entry)| entry.byte_len()).sum();
         if charged != self.bytes_total || charged > self.bytes_cap {
             return Err(crate::state::StateError(
                 "image store byte total".to_owned(),

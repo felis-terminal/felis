@@ -22,7 +22,6 @@ felis-vt = { workspace = true }
 regex = { workspace = true }
 bitflags = { workspace = true }
 foldhash = { workspace = true }
-indexmap = { workspace = true }
 serde = { workspace = true }
 schemars = { workspace = true, optional = true }
 thiserror = { workspace = true }

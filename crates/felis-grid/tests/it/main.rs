@@ -13,6 +13,7 @@ mod proptest_decrqm;
 mod proptest_decrqss;
 mod proptest_grid;
 mod proptest_image_store;
+mod proptest_image_store_model;
 mod proptest_mouse;
 mod proptest_osc;
 mod proptest_osc_52;

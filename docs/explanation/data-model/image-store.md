@@ -19,8 +19,8 @@ still image is a one-frame entry, so animation adds no second representation. Pl
 side table rather than inside the store, which is what lets an image be placed twice, or placed and then scrolled,
 without the store knowing.
 
-Entries sit in one insertion-ordered map, front to back oldest to newest, which is the order the store's own refcount-0
-eviction walks.
+Entries are kept in insertion order, oldest first, which is the order the store's own refcount-0 eviction walks. Side
+indexes over the unreferenced entries and over access time let eviction pick its victim without walking the whole store.
 
 Ids for images transmitted without one are assigned counting **down** from the top of the id space, away from the low
 ids producers pick by hand. A collision here is not a rejected transmission but a silently overwritten image, which is
