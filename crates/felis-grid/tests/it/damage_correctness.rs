@@ -216,6 +216,49 @@ fn cursor_only_moves_leave_the_damage_empty() {
 }
 
 #[test]
+fn erasing_cells_that_are_already_blank_leaves_the_damage_empty() {
+    let erases: &[&[u8]] = &[
+        b"\x1b[3;1H\x1b[K",
+        b"\x1b[3;1H\x1b[2K",
+        b"\x1b[3;1H\x1b[8X",
+        b"\x1b[1;7H\x1b[K",
+        b"\x1b[2;6H\x1b[J",
+        b"\x1b[4;1H\x1b[1K",
+    ];
+    for &bytes in erases {
+        let mut g = Grid::new(4, 8);
+        drive(&mut g, b"hello\r\nworld");
+        drive(&mut g, bytes);
+        let before = snapshot_cells(&g);
+        drive(&mut g, bytes);
+        let dirty: Vec<usize> = g.damage().dirty_rows().collect();
+        assert!(dirty.is_empty(), "{bytes:?} marked rows {dirty:?}");
+        assert_eq!(before, snapshot_cells(&g), "{bytes:?} changed a cell");
+    }
+}
+
+#[test]
+fn an_erase_past_a_recycled_rows_watermark_exposes_no_stale_cells() {
+    let mut g = Grid::new(2, 8);
+    drive(&mut g, b"abcdefgh\r\nijklmnop\r\n");
+    drive(&mut g, b"\x1b[2;3H\x1b[K\x1b[3X\x1b[2;7Hz");
+    let mut fresh = Grid::new(2, 8);
+    drive(&mut fresh, b"\x1b[2;7Hz");
+    assert_eq!(g.row_content(1), fresh.row_content(1));
+}
+
+#[test]
+fn an_erase_of_a_live_row_marks_only_that_row() {
+    let mut g = Grid::new(4, 8);
+    drive(&mut g, b"hello\r\nworld\r\n\r\nlast");
+    let before = snapshot_cells(&g);
+    drive(&mut g, b"\x1b[2;3H\x1b[J");
+    let dirty: Vec<usize> = g.damage().dirty_rows().collect();
+    assert_eq!(dirty, [1, 3]);
+    assert_no_underdraw(&before, &mut g, "ed_0_over_a_blank_row");
+}
+
+#[test]
 fn a_line_feed_at_the_bottom_owes_only_the_row_it_vacated() {
     let mut g = Grid::new(4, 8);
     drive(&mut g, b"r1\r\nr2\r\nr3\r\nr4");
@@ -299,7 +342,8 @@ fn shell_byte_strategy() -> impl Strategy<Value = Vec<u8>> {
                 Just(b'L'),
                 Just(b'M'),
                 Just(b'@'),
-                Just(b'P')
+                Just(b'P'),
+                Just(b'X')
             ]
         )
             .prop_map(|(n, op)| {
