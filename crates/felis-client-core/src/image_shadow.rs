@@ -35,6 +35,7 @@ fn next_generation() -> u64 {
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct ClientFrame {
+    /// Empty until `complete`: bytes still in transfer are not here.
     pub pixels: Vec<u8>,
     pub complete: bool,
 }
@@ -73,6 +74,7 @@ pub struct ClientImage {
 }
 
 impl ClientImage {
+    /// Empty while the displayed frame's bytes are still arriving.
     #[must_use]
     pub fn pixels(&self) -> &[u8] {
         &self.frames[self.current].pixels
@@ -182,11 +184,11 @@ struct ActiveTransfer {
     slot: usize,
     expected: usize,
     received: usize,
-    /// Pixels for the displayed frame, swapped in at `Complete` so a
-    /// re-read mid-transfer (an atlas reset) finds what was on screen.
-    /// Uncharged to the session cap, as the daemon edits frames in place
-    /// and admits the edit at the cap; one open transfer bounds it.
-    staged: Option<Vec<u8>>,
+    /// Moved into the frame only at `Complete`, so neither a reused
+    /// buffer's old image nor a half-written one is reachable, and a
+    /// re-sent displayed frame keeps what was on screen. Uncharged for
+    /// that re-send: the daemon admits an in-place edit at the cap.
+    pixels: Vec<u8>,
 }
 
 /// What one mirrored image costs the aggregate before a single pixel:
@@ -210,6 +212,12 @@ pub struct ImageShadow {
     /// multi-megabyte transmission.
     retained: usize,
     active: Option<ActiveTransfer>,
+    /// The last pixel buffer a frame gave up, reused by the next one of
+    /// the same length so a stream of same-sized frames neither
+    /// allocates nor zero-fills. Uncharged and never readable from
+    /// outside: it is one frame at most, and a mismatched request drops
+    /// it.
+    spare: Vec<u8>,
     /// Images first heard of, for [`ClientImage::rank`] when the daemon
     /// sends no serial.
     arrivals: u64,
@@ -281,12 +289,14 @@ impl ImageShadow {
         if self.dirty_images.is_empty() {
             return Vec::new();
         }
-        let drained = std::mem::take(&mut self.dirty_images);
-        self.image_order
+        let drained = self
+            .image_order
             .iter()
-            .filter(|id| drained.contains(*id))
+            .filter(|id| self.dirty_images.contains(*id))
             .copied()
-            .collect()
+            .collect();
+        self.dirty_images.clear();
+        drained
     }
 
     /// Applies an image message to update the mirror.
@@ -363,13 +373,10 @@ impl ImageShadow {
     /// Bytes one entry holds: pixels plus the records carrying them, matching
     /// [`felis_grid::images::ImageEntry::byte_len`]. Counting pixels alone
     /// would allow frame-record amplification
-    /// (`docs/explanation/protocols/kitty-graphics.md`).
-    fn bytes_of(entry: &ClientImage) -> usize {
-        ENTRY_OVERHEAD + entry.frames.iter().map(Self::frame_bytes).sum::<usize>()
-    }
-
-    const fn frame_bytes(frame: &ClientFrame) -> usize {
-        FRAME_OVERHEAD + frame.pixels.len()
+    /// (`docs/explanation/protocols/kitty-graphics.md`). A frame counts
+    /// at its claimed length from the header on.
+    const fn bytes_of(entry: &ClientImage) -> usize {
+        ENTRY_OVERHEAD + entry.frames.len() * (FRAME_OVERHEAD + entry.frame_len)
     }
 
     /// Computed at wire width and saturating, so two `u32::MAX` axes
@@ -405,6 +412,26 @@ impl ImageShadow {
         Ok(wanted)
     }
 
+    /// A buffer of `len` bytes whose contents are unspecified: it backs
+    /// an [`ActiveTransfer`], which must deliver all `len` bytes before
+    /// [`ImageMsg::Complete`] moves it where anything can read it.
+    fn frame_buffer(&mut self, len: usize) -> Vec<u8> {
+        let spare = std::mem::take(&mut self.spare);
+        if spare.len() == len {
+            spare
+        } else {
+            vec![0u8; len]
+        }
+    }
+
+    /// An empty buffer (a frame whose bytes never arrived) would only
+    /// displace a usable spare.
+    fn recycle(&mut self, pixels: Vec<u8>) {
+        if !pixels.is_empty() {
+            self.spare = pixels;
+        }
+    }
+
     /// Mirror-only: anchors past the daemon's retention horizon arrive
     /// as explicit `PlacementRemoved`s, so this never drops an entry no
     /// matter how negative its row goes.
@@ -432,17 +459,13 @@ impl ImageShadow {
             ImageTarget::Frame { number } => self.open_frame(id, number)?,
         };
         let expected = self.images.get(&id).map_or(0, |entry| entry.frame_len);
-        let staged = self
-            .images
-            .get(&id)
-            .filter(|entry| entry.drawable && entry.current == slot)
-            .map(|_| vec![0u8; expected]);
+        let pixels = self.frame_buffer(expected);
         self.active = Some(ActiveTransfer {
             id,
             slot,
             expected,
             received: 0,
-            staged,
+            pixels,
         });
         Ok(())
     }
@@ -470,13 +493,19 @@ impl ImageShadow {
                 self.arrivals
             }
         };
+        if let Some(held) = self.images.get_mut(&id)
+            && let Some(root) = held.frames.first_mut()
+        {
+            let pixels = std::mem::take(&mut root.pixels);
+            self.recycle(pixels);
+        }
         let entry = ClientImage {
             width,
             height,
             format,
             frame_len,
             frames: vec![ClientFrame {
-                pixels: vec![0u8; frame_len],
+                pixels: Vec::new(),
                 complete: false,
             }],
             current: 0,
@@ -527,21 +556,27 @@ impl ImageShadow {
         if entry.drawable && entry.current == slot {
             return Ok(slot);
         }
-        let freed = entry.frames.get(slot).map_or(0, Self::frame_bytes);
+        let freed = if slot < have {
+            FRAME_OVERHEAD + frame_len
+        } else {
+            0
+        };
         let retained = self.admit_aggregate(id, freed, FRAME_OVERHEAD + frame_len)?;
 
         let frame = ClientFrame {
-            pixels: vec![0u8; frame_len],
+            pixels: Vec::new(),
             complete: false,
         };
+        let mut replaced = Vec::new();
         if let Some(entry) = self.images.get_mut(&id) {
             if slot < entry.frames.len() {
-                entry.frames[slot] = frame;
+                replaced = std::mem::replace(&mut entry.frames[slot], frame).pixels;
             } else {
                 entry.frames.push(frame);
             }
             self.retained = retained;
         }
+        self.recycle(replaced);
         Ok(slot)
     }
 
@@ -565,19 +600,8 @@ impl ImageShadow {
                 received: end,
             });
         }
-        let slot = active.slot;
-        if let Some(active) = self.active.as_mut()
-            && let Some(staged) = active.staged.as_mut()
-        {
-            staged[start..end].copy_from_slice(bytes);
-        } else if let Some(frame) = self
-            .images
-            .get_mut(&id)
-            .and_then(|entry| entry.frames.get_mut(slot))
-        {
-            frame.pixels[start..end].copy_from_slice(bytes);
-        }
         if let Some(active) = self.active.as_mut() {
+            active.pixels[start..end].copy_from_slice(bytes);
             active.received = end;
         }
         Ok(())
@@ -602,12 +626,14 @@ impl ImageShadow {
             });
         }
         let slot = active.slot;
-        let staged = self.active.take().and_then(|open| open.staged);
+        let mut pixels = self
+            .active
+            .take()
+            .map(|open| open.pixels)
+            .unwrap_or_default();
         if let Some(entry) = self.images.get_mut(&id) {
             if let Some(frame) = entry.frames.get_mut(slot) {
-                if let Some(pixels) = staged {
-                    frame.pixels = pixels;
-                }
+                std::mem::swap(&mut frame.pixels, &mut pixels);
                 frame.complete = true;
             }
             if entry.current == slot {
@@ -616,13 +642,14 @@ impl ImageShadow {
                 self.dirty_images.insert(id);
             }
         }
+        self.recycle(pixels);
         Ok(())
     }
 
     /// Tolerant like `Placement`: a rehydrate can name the live frame
     /// of an image a later eviction in the same drain removed. An
     /// unfinished frame is dropped the same way, so the renderer is
-    /// never handed the zero fill an open header left.
+    /// never handed a frame whose bytes are still arriving.
     fn apply_show_frame(&mut self, id: ImageId, number: NonZeroU32) {
         let slot = number.get() as usize - 1;
         let Some(entry) = self.images.get_mut(&id) else {
@@ -650,8 +677,11 @@ impl ImageShadow {
         // placements but not its bytes, so they go even when it is absent.
         self.placements.retain(|p| p.image_id != id);
         self.virtual_placements.retain(|v| v.image_id != id);
-        if let Some(entry) = self.images.remove(&id) {
+        if let Some(mut entry) = self.images.remove(&id) {
             self.retained -= Self::bytes_of(&entry);
+            if let Some(root) = entry.frames.first_mut() {
+                self.recycle(std::mem::take(&mut root.pixels));
+            }
             self.image_order.retain(|x| *x != id);
             self.dirty_images.remove(&id);
         }
@@ -1038,7 +1068,10 @@ mod tests {
 
         s.apply_ok(&header(8, 8));
         let img = s.image(ImageId(8)).unwrap();
-        assert_eq!(img.pixels().len(), 8);
+        assert!(
+            img.pixels().is_empty(),
+            "no bytes until the replacement completes"
+        );
         assert!(!img.is_complete());
         assert_eq!(img.frame_count(), 1, "replacement resets to a single frame");
         assert!(
@@ -1094,7 +1127,7 @@ mod tests {
         assert_eq!(
             s.image(ImageId(1)).unwrap().current_frame(),
             0,
-            "an open frame is the zero fill its header allocated",
+            "an open frame has no bytes to show",
         );
     }
 
@@ -1395,6 +1428,91 @@ mod tests {
         assert!(generation(&s, 1) > shown);
         assert_eq!(s.take_dirty_images(), [ImageId(1)]);
         assert_eq!(s.retained_bytes(), before);
+    }
+
+    /// Nothing a frontend can read: the pixels, the frame list, or the
+    /// widened copy.
+    fn observable(s: &ImageShadow, id: u32) -> Vec<u8> {
+        let image = s.image(ImageId(id)).unwrap();
+        let mut out = image.pixels().to_vec();
+        for frame in &image.frames {
+            out.extend_from_slice(&frame.pixels);
+        }
+        let mut rgba = Vec::new();
+        image.write_rgba8(&mut rgba);
+        out.extend(rgba);
+        out
+    }
+
+    /// A deleted image's buffer goes to the next transfer of its length,
+    /// which must not show it before its own bytes complete.
+    #[test]
+    fn a_reused_buffer_shows_nothing_of_its_previous_image_mid_transfer() {
+        let mut s = ImageShadow::new();
+        transfer(&mut s, &header(1, 8), vec![0xAA; 8]);
+        s.apply_ok(&ImageMsg::Delete { id: ImageId(1) });
+        s.apply_ok(&header(2, 8));
+        assert_eq!(observable(&s, 2), Vec::<u8>::new());
+        s.apply_ok(&chunk(2, vec![0xBB; 4]));
+        assert_eq!(observable(&s, 2), Vec::<u8>::new());
+        assert_eq!(drawable(&s, 2), None);
+    }
+
+    /// The same for a replacement under one id and for an animation
+    /// frame, whose old bytes become the reused buffer.
+    #[test]
+    fn a_replaced_image_or_frame_shows_none_of_its_old_bytes_mid_transfer() {
+        let mut s = ImageShadow::new();
+        transfer(&mut s, &header(1, 8), vec![0xAA; 8]);
+        s.apply_ok(&header(1, 8));
+        s.apply_ok(&chunk(1, vec![0xBB; 4]));
+        assert_eq!(observable(&s, 1), Vec::<u8>::new());
+        s.apply_ok(&chunk(1, vec![0xBB; 4]));
+        s.apply_ok(&complete(1));
+        transfer(&mut s, &frame_header(1, 2), vec![0xCC; 8]);
+        transfer(&mut s, &frame_header(1, 3), vec![0xDD; 8]);
+        s.apply_ok(&frame_header(1, 2));
+        s.apply_ok(&chunk(1, vec![0xEE; 4]));
+        let image = s.image(ImageId(1)).unwrap();
+        let frames: Vec<_> = image.frames.iter().map(|f| f.pixels.clone()).collect();
+        assert_eq!(frames, [vec![0xBB; 8], Vec::new(), vec![0xDD; 8]]);
+    }
+
+    /// Each completed re-send frees a buffer the next one reuses, which
+    /// must never be the one on screen.
+    #[test]
+    fn a_half_sent_frame_never_shows_through_a_reused_buffer() {
+        let mut s = ImageShadow::new();
+        transfer(&mut s, &header(1, 4), vec![1, 2, 3, 4]);
+        for n in 1..=3u8 {
+            let shown = s.image(ImageId(1)).unwrap().pixels().to_vec();
+            s.apply_ok(&frame_header(1, 1));
+            s.apply_ok(&chunk(1, vec![10 * n; 2]));
+            assert_eq!(s.image(ImageId(1)).unwrap().pixels(), shown, "send {n}");
+            s.apply_ok(&chunk(1, vec![10 * n + 1; 2]));
+            s.apply_ok(&complete(1));
+            assert_eq!(
+                s.image(ImageId(1)).unwrap().pixels(),
+                [10 * n, 10 * n, 10 * n + 1, 10 * n + 1]
+            );
+        }
+    }
+
+    /// A replaced or deleted image's buffer is reused by the next
+    /// transfer of its length, so the transfer must overwrite all of it.
+    #[test]
+    fn a_reused_buffer_carries_nothing_of_its_previous_image_once_complete() {
+        let mut s = ImageShadow::new();
+        transfer(&mut s, &header(1, 8), vec![0xAA; 8]);
+        transfer(&mut s, &header(1, 8), vec![0xBB; 8]);
+        assert_eq!(s.image(ImageId(1)).unwrap().pixels(), [0xBB; 8]);
+        s.apply_ok(&ImageMsg::Delete { id: ImageId(1) });
+        transfer(&mut s, &header(2, 8), vec![0xCC; 8]);
+        assert_eq!(s.image(ImageId(2)).unwrap().pixels(), [0xCC; 8]);
+        transfer(&mut s, &frame_header(2, 2), vec![0xDD; 8]);
+        transfer(&mut s, &frame_header(2, 2), vec![0xEE; 8]);
+        s.apply_ok(&show_frame(2, 2));
+        assert_eq!(s.image(ImageId(2)).unwrap().pixels(), [0xEE; 8]);
     }
 
     /// The daemon edits a frame in place and admits the edit at the cap,

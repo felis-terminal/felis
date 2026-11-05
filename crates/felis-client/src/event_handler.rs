@@ -45,7 +45,7 @@ struct ShadowImages<'a>(&'a felis_client_core::ImageShadow);
 
 impl ImageSource for ShadowImages<'_> {
     fn image_data(&self, id: ImageId) -> Option<ImageData<'_>> {
-        let img = self.0.image(id)?;
+        let img = self.0.image(id).filter(|img| img.is_drawable())?;
         Some(ImageData {
             width: img.width,
             height: img.height,
@@ -1496,5 +1496,55 @@ mod paint_gate_tests {
     fn a_rehydrating_shadow_paints_nothing_even_with_no_cycle_open() {
         assert!(!may_paint_grid(true, true, false));
         assert!(!may_paint_grid(false, false, false));
+    }
+}
+
+#[cfg(test)]
+mod image_source_tests {
+    use super::ShadowImages;
+    use felis_client_core::{ImageId, ImageShadow};
+    use felis_protocol::messages::{ImageFormat, ImageMsg, ImageTarget};
+    use felis_render_core::ImageSource as _;
+
+    fn header(id: u32) -> ImageMsg {
+        ImageMsg::Header {
+            id: ImageId(id),
+            target: ImageTarget::New {
+                width: 1,
+                height: 1,
+                format: ImageFormat::Rgba32,
+                serial: None,
+            },
+        }
+    }
+
+    fn chunk(id: u32, bytes: &[u8]) -> ImageMsg {
+        ImageMsg::Chunk {
+            id: ImageId(id),
+            bytes: bytes.to_vec().into(),
+        }
+    }
+
+    /// The renderer re-uploads whatever `image_data` answers, so an
+    /// image whose bytes are still arriving must answer nothing.
+    #[test]
+    fn an_image_still_in_transfer_supplies_no_pixels() {
+        let mut shadow = ImageShadow::new();
+        shadow.apply(&header(1)).unwrap();
+        shadow.apply(&chunk(1, &[1, 2, 3, 4])).unwrap();
+        shadow
+            .apply(&ImageMsg::Complete { id: ImageId(1) })
+            .unwrap();
+        assert_eq!(
+            ShadowImages(&shadow)
+                .image_data(ImageId(1))
+                .map(|d| d.pixels),
+            Some(&[1, 2, 3, 4][..])
+        );
+        shadow.apply(&ImageMsg::Delete { id: ImageId(1) }).unwrap();
+        shadow.apply(&header(2)).unwrap();
+        assert!(ShadowImages(&shadow).image_data(ImageId(2)).is_none());
+        shadow.apply(&chunk(2, &[9, 9])).unwrap();
+        assert!(ShadowImages(&shadow).image_data(ImageId(2)).is_none());
     }
 }
