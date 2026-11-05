@@ -1,7 +1,8 @@
 //! End-to-end PTY -> daemon -> shadow throughput baseline.
 //!
 //! Evaluates compute cost from `compose_diffs` through `FrameWriter::write_frame`,
-//! frame decode, `GridMsg` decode, and `ShadowScreen::apply`.
+//! frame decode, `GridMsg` decode, and `ShadowScreen::apply`, plus the
+//! Kitty graphics path through `ImageShadow` and its layout.
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
@@ -14,6 +15,11 @@ use felis_vt::Parser;
 
 #[path = "support/workload.rs"]
 mod workload;
+
+#[path = "support/graphics.rs"]
+mod graphics;
+
+use graphics::{Graphics, Pipeline};
 
 use workload::{
     COLS, PTY_CHUNK_SIZE, ROWS, STREAM_BYTES, apply_diffs, csi_redraw, emit_diffs_with,
@@ -204,5 +210,39 @@ fn bench_throughput(c: &mut Criterion) {
     }
 }
 
-criterion_group!(end_to_end_throughput, bench_throughput);
+fn bench_graphics(c: &mut Criterion) {
+    let mut group = c.benchmark_group("graphics_end_to_end");
+    for workload in [
+        Graphics::VideoInline,
+        Graphics::BrowserReplace,
+        Graphics::BrowserDirtyRects,
+        Graphics::PatchLayers,
+        Graphics::Thumbnails,
+        Graphics::CellWipes,
+    ] {
+        let (prelude, bytes) = workload.streams();
+        let primed = || {
+            let mut pipeline = Pipeline::new();
+            pipeline.feed(&prelude);
+            pipeline
+        };
+        let mut checked = primed();
+        checked.feed(&bytes);
+        workload.check(&checked);
+        group.throughput(Throughput::Bytes(bytes.len() as u64));
+        group.bench_function(workload.name(), |b| {
+            b.iter_batched(
+                primed,
+                |mut pipeline| {
+                    pipeline.feed(black_box(&bytes));
+                    pipeline
+                },
+                BatchSize::SmallInput,
+            );
+        });
+    }
+    group.finish();
+}
+
+criterion_group!(end_to_end_throughput, bench_throughput, bench_graphics);
 criterion_main!(end_to_end_throughput);

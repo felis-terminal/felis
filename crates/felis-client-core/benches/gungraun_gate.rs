@@ -1,5 +1,5 @@
-//! Instruction-count twin of the `daemon_side` and `multi_cycle_end_to_end`
-//! groups in `end_to_end_throughput.rs`, run under callgrind for the PR
+//! Instruction-count twin of the `daemon_side`, `multi_cycle_end_to_end`
+//! and `graphics_end_to_end` groups in `end_to_end_throughput.rs`, run under callgrind for the PR
 //! regression gate (`just bench-gate-ir`). Setup runs outside the measured
 //! region, and the returned buffers drop outside it, as `iter_batched` does
 //! for the Criterion twin.
@@ -9,6 +9,10 @@
 #[cfg(target_os = "linux")]
 #[path = "support/workload.rs"]
 mod workload;
+
+#[cfg(target_os = "linux")]
+#[path = "support/graphics.rs"]
+mod graphics;
 
 #[cfg(target_os = "linux")]
 #[allow(
@@ -23,6 +27,7 @@ mod gate {
     use felis_vt::Parser;
     use gungraun::{library_benchmark, library_benchmark_group};
 
+    use crate::graphics::{Graphics, Pipeline};
     use crate::workload::{
         COLS, PTY_CHUNK_SIZE, ROWS, STREAM_BYTES, apply_diffs, csi_redraw, emit_diffs_with,
         plaintext_scroll, repeat_to, shell_prompt,
@@ -125,9 +130,45 @@ mod gate {
         (bytes, scratch)
     }
 
+    pub(crate) struct GraphicsInput {
+        workload: Graphics,
+        bytes: Vec<u8>,
+        pipeline: Pipeline,
+    }
+
+    fn setup_graphics(workload: Graphics) -> GraphicsInput {
+        let (prelude, bytes) = workload.streams();
+        let mut pipeline = Pipeline::new();
+        pipeline.feed(&prelude);
+        GraphicsInput {
+            workload,
+            bytes,
+            pipeline,
+        }
+    }
+
+    fn check_graphics(output: GraphicsInput) {
+        let GraphicsInput {
+            workload, pipeline, ..
+        } = output;
+        workload.check(&pipeline);
+    }
+
+    #[library_benchmark(setup = setup_graphics, teardown = check_graphics)]
+    #[bench::video_inline(Graphics::VideoInline)]
+    #[bench::browser_replace(Graphics::BrowserReplace)]
+    #[bench::browser_dirty_rects(Graphics::BrowserDirtyRects)]
+    #[bench::patch_layers(Graphics::PatchLayers)]
+    #[bench::thumbnails(Graphics::Thumbnails)]
+    #[bench::cell_wipes(Graphics::CellWipes)]
+    fn graphics_end_to_end(mut input: GraphicsInput) -> GraphicsInput {
+        input.pipeline.feed(black_box(&input.bytes));
+        input
+    }
+
     library_benchmark_group!(
         name = end_to_end_throughput,
-        benchmarks = [daemon_side, multi_cycle_end_to_end]
+        benchmarks = [daemon_side, multi_cycle_end_to_end, graphics_end_to_end]
     );
 
     gungraun::main!(library_benchmark_groups = end_to_end_throughput);
