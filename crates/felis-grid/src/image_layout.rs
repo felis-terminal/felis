@@ -165,17 +165,17 @@ impl ImageLayout {
     /// `screen` is the composed viewport the client paints, so
     /// placeholder cells are already where they show; anchored
     /// placements live in live-screen rows and shift by `viewport`.
-    pub fn rebuild(
+    pub fn rebuild<'a>(
         &mut self,
         screen: &ScreenBuffer,
         images: &impl LayoutImages,
-        placements: &[ClientPlacement],
+        placements: impl IntoIterator<Item = &'a ClientPlacement> + Clone,
         virtual_placements: &[VirtualPlacement],
         cell_px: (f32, f32),
         viewport: u32,
     ) {
         self.sorted.clear();
-        self.collect_live(placements, virtual_placements);
+        self.collect_live(placements.clone(), virtual_placements);
         self.push_placements(screen, images, placements, cell_px, viewport);
         self.push_placeholders(screen, images, virtual_placements, cell_px);
         // Stable: placeholder tiles tie and keep cell order, as do the
@@ -193,15 +193,15 @@ impl ImageLayout {
         }
     }
 
-    fn collect_live(
+    fn collect_live<'a>(
         &mut self,
-        placements: &[ClientPlacement],
+        placements: impl IntoIterator<Item = &'a ClientPlacement>,
         virtual_placements: &[VirtualPlacement],
     ) {
         self.live.clear();
         self.seen.clear();
         let ids = placements
-            .iter()
+            .into_iter()
             .map(|p| p.image_id)
             .chain(virtual_placements.iter().map(|v| v.image_id));
         for id in ids {
@@ -211,11 +211,11 @@ impl ImageLayout {
         }
     }
 
-    fn push_placements(
+    fn push_placements<'a>(
         &mut self,
         screen: &ScreenBuffer,
         images: &impl LayoutImages,
-        placements: &[ClientPlacement],
+        placements: impl IntoIterator<Item = &'a ClientPlacement>,
         (cw, ch): (f32, f32),
         viewport: u32,
     ) {

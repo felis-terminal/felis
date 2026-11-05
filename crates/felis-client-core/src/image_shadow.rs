@@ -2,7 +2,7 @@
 //!
 //! Placements preserve insertion order, which the layout keeps on equal z.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, hash_map::Entry};
 use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -198,11 +198,79 @@ const ENTRY_OVERHEAD: usize = size_of::<ClientImage>() + size_of::<ImageId>();
 /// What one frame slot costs whether or not pixels ever arrive for it.
 const FRAME_OVERHEAD: usize = size_of::<ClientFrame>();
 
+/// Direct placements in arrival order. A removal leaves a hole rather
+/// than shifting the tail, so one message costs the same however many
+/// placements are held; the holes are swept once they outnumber the
+/// live entries.
+#[derive(Debug, Default)]
+struct DirectPlacements {
+    slots: Vec<Option<ClientPlacement>>,
+    index: HashMap<(ImageId, Option<PlacementId>), usize>,
+}
+
+impl DirectPlacements {
+    fn iter(&self) -> impl Iterator<Item = &ClientPlacement> + Clone {
+        self.slots.iter().flatten()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.index.is_empty()
+    }
+
+    fn upsert(&mut self, placement: ClientPlacement) {
+        match self
+            .index
+            .entry((placement.image_id, placement.placement_id))
+        {
+            Entry::Occupied(at) => self.slots[*at.get()] = Some(placement),
+            Entry::Vacant(at) => {
+                at.insert(self.slots.len());
+                self.slots.push(Some(placement));
+            }
+        }
+    }
+
+    fn remove(&mut self, key: (ImageId, Option<PlacementId>)) {
+        if let Some(at) = self.index.remove(&key) {
+            self.slots[at] = None;
+            self.sweep();
+        }
+    }
+
+    fn remove_image(&mut self, id: ImageId) {
+        let slots = &mut self.slots;
+        self.index.retain(|&(image, _), &mut at| {
+            let keep = image != id;
+            if !keep {
+                slots[at] = None;
+            }
+            keep
+        });
+        self.sweep();
+    }
+
+    fn iter_mut(&mut self) -> impl Iterator<Item = &mut ClientPlacement> {
+        self.slots.iter_mut().flatten()
+    }
+
+    fn sweep(&mut self) {
+        if self.slots.len() <= 2 * self.index.len() {
+            return;
+        }
+        self.slots.retain(Option::is_some);
+        for (i, p) in self.slots.iter().flatten().enumerate() {
+            if let Some(at) = self.index.get_mut(&(p.image_id, p.placement_id)) {
+                *at = i;
+            }
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct ImageShadow {
     images: HashMap<ImageId, ClientImage>,
     image_order: Vec<ImageId>,
-    placements: Vec<ClientPlacement>,
+    placements: DirectPlacements,
     virtual_placements: Vec<VirtualPlacement>,
     dirty_images: HashSet<ImageId>,
     /// Bytes the images above hold ([`ImageShadow::bytes_of`]'s unit),
@@ -241,9 +309,8 @@ impl ImageShadow {
 
     /// Insertion order, which [`ImageLayout`] keeps among equal-z
     /// placements of an image only when the daemon sends no serial.
-    #[must_use]
-    pub fn placements(&self) -> &[ClientPlacement] {
-        &self.placements
+    pub fn placements(&self) -> impl Iterator<Item = &ClientPlacement> + Clone {
+        self.placements.iter()
     }
 
     /// What the layout resolves a `U+10EEEE` cell against.
@@ -276,7 +343,7 @@ impl ImageShadow {
         layout.rebuild(
             screen,
             self,
-            &self.placements,
+            self.placements.iter(),
             &self.virtual_placements,
             cell_px,
             viewport,
@@ -437,7 +504,7 @@ impl ImageShadow {
     /// matter how negative its row goes.
     fn apply_placements_shifted(&mut self, lines: u32) {
         let lines = i32::try_from(lines).unwrap_or(i32::MAX);
-        for p in &mut self.placements {
+        for p in self.placements.iter_mut() {
             p.anchor_row = p.anchor_row.saturating_sub(lines);
         }
     }
@@ -675,7 +742,7 @@ impl ImageShadow {
         }
         // A drain that creates and drops an image in one cycle ships its
         // placements but not its bytes, so they go even when it is absent.
-        self.placements.retain(|p| p.image_id != id);
+        self.placements.remove_image(id);
         self.virtual_placements.retain(|v| v.image_id != id);
         if let Some(mut entry) = self.images.remove(&id) {
             self.retained -= Self::bytes_of(&entry);
@@ -688,23 +755,13 @@ impl ImageShadow {
     }
 
     fn apply_placement(&mut self, placement: ClientPlacement) {
-        let key = (placement.image_id, placement.placement_id);
-        if let Some(slot) = self
-            .placements
-            .iter_mut()
-            .find(|p| (p.image_id, p.placement_id) == key)
-        {
-            *slot = placement;
-        } else {
-            self.placements.push(placement);
-        }
+        self.placements.upsert(placement);
     }
 
     /// One `(image_id, placement_id)` names a direct or a virtual
     /// placement, so the removal looks in both.
     fn apply_placement_removed(&mut self, image_id: ImageId, placement_id: Option<PlacementId>) {
-        self.placements
-            .retain(|p| !(p.image_id == image_id && p.placement_id == placement_id));
+        self.placements.remove((image_id, placement_id));
         self.virtual_placements
             .retain(|v| !(v.image_id == image_id && v.placement_id == placement_id));
     }
@@ -1004,7 +1061,7 @@ mod tests {
         s.apply_ok(&ImageMsg::Delete { id: ImageId(5) });
         assert!(s.image(ImageId(5)).is_none());
         assert!(
-            s.placements().is_empty(),
+            s.placements().next().is_none(),
             "every placement referencing the deleted id is dropped",
         );
     }
@@ -1016,8 +1073,8 @@ mod tests {
         transfer(&mut s, &header(11, 4), vec![0; 4]);
         s.apply_ok(&placement(11, Some(1), 0));
         s.apply_ok(&placement(11, Some(1), 5)); // same key, new z
-        assert_eq!(s.placements().len(), 1);
-        assert_eq!(s.placements()[0].z_index, 5);
+        let z: Vec<_> = s.placements().map(|p| p.z_index).collect();
+        assert_eq!(z, [5]);
     }
 
     /// Pins: anchors shift into scrollback coordinates (negative rows)
@@ -1028,19 +1085,43 @@ mod tests {
         transfer(&mut s, &header(4, 4), vec![0; 4]);
         s.apply_ok(&placement(4, None, 0)); // anchor_row: 1
         s.apply_ok(&ImageMsg::PlacementsShifted { lines: 3 });
+        let rows = |s: &ImageShadow| s.placements().map(|p| p.anchor_row).collect::<Vec<_>>();
         assert_eq!(
-            s.placements()[0].anchor_row,
-            -2,
+            rows(&s),
+            [-2],
             "anchor must shift into scrollback coordinates, not clamp or drop",
         );
         s.apply_ok(&ImageMsg::PlacementsShifted { lines: 5 });
-        assert_eq!(s.placements()[0].anchor_row, -7);
-        assert_eq!(s.placements().len(), 1);
+        assert_eq!(rows(&s), [-7]);
         s.apply_ok(&ImageMsg::PlacementRemoved {
             image_id: ImageId(4),
             placement_id: None,
         });
-        assert_eq!(s.placements(), []);
+        assert_eq!(rows(&s), Vec::<i32>::new());
+    }
+
+    /// Removals leave holes that a later sweep closes; neither may
+    /// reorder the survivors or point an upsert at the wrong entry.
+    #[test]
+    fn placements_keep_arrival_order_across_removals_and_upserts() {
+        let mut s = ImageShadow::new();
+        for p in 1..=10 {
+            s.apply_ok(&placement(3, Some(p), 0));
+        }
+        for p in [2, 3, 5, 6, 8, 9, 10] {
+            s.apply_ok(&ImageMsg::PlacementRemoved {
+                image_id: ImageId(3),
+                placement_id: Some(PlacementId(p)),
+            });
+        }
+        s.apply_ok(&placement(3, Some(4), 7));
+        s.apply_ok(&placement(3, Some(2), 0));
+        s.apply_ok(&placement(3, Some(1), 9));
+        let held: Vec<_> = s
+            .placements()
+            .map(|p| (p.placement_id.unwrap().0, p.z_index))
+            .collect();
+        assert_eq!(held, [(1, 9), (4, 7), (7, 0), (2, 0)]);
     }
 
     #[test]
@@ -1054,7 +1135,7 @@ mod tests {
             image_id: ImageId(2),
             placement_id: Some(PlacementId(2)),
         });
-        let keys: Vec<_> = s.placements().iter().map(|p| p.placement_id).collect();
+        let keys: Vec<_> = s.placements().map(|p| p.placement_id).collect();
         assert_eq!(keys, vec![Some(PlacementId(1)), None]);
     }
 

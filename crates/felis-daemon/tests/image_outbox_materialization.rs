@@ -148,13 +148,12 @@ fn a_placement_between_two_transmissions_survives_the_collapse() {
     s.dispatch(&body("Ga=p,i=1,c=2,r=1,q=2", &[]));
     s.ship(&mut shadow);
 
+    let placed: Vec<_> = shadow.placements().map(|p| (p.image_id, p.cols)).collect();
     assert_eq!(
-        shadow.placements().len(),
-        1,
+        placed,
+        [(ImageId(1), 2)],
         "the later placement must outlive the collapsed transmission",
     );
-    assert_eq!(shadow.placements()[0].cols, 2);
-    assert_eq!(shadow.placements()[0].image_id, ImageId(1));
     assert_eq!(shadow.image(ImageId(1)).unwrap().pixels(), &[0x22; 16]);
 }
 
@@ -177,7 +176,7 @@ fn an_image_evicted_later_in_the_batch_ships_nothing() {
     assert!(shadow.image(ImageId(1)).is_none(), "no stale image 1");
     assert!(shadow.image(ImageId(2)).is_some(), "image 2 arrives");
     assert!(
-        shadow.placements().iter().all(|p| p.image_id != ImageId(1)),
+        shadow.placements().all(|p| p.image_id != ImageId(1)),
         "the evicted image must not keep a ghost placement",
     );
 }
@@ -274,7 +273,7 @@ proptest::proptest! {
             s.dispatch(&body(&format!("G{action}{p},q=2"), &[]));
             s.ship(&mut shadow);
             let daemon: Vec<_> = s.placements.iter().map(|p| p.placement_id.map(|id| id.0)).collect();
-            let mirror: Vec<_> = shadow.placements().iter().map(|p| p.placement_id.map(|id| id.0)).collect();
+            let mirror: Vec<_> = shadow.placements().map(|p| p.placement_id.map(|id| id.0)).collect();
             proptest::prop_assert_eq!(daemon, mirror);
         }
     }
