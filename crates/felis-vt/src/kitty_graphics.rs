@@ -253,9 +253,11 @@ const _: () = assert!(REASSEMBLY_BUFFER_LIMIT == 67_108_864);
 pub struct CompleteCommand {
     /// Head-chunk controls with `m` stripped.
     pub controls: Vec<(u8, Vec<u8>)>,
-    /// Concatenated chunk payloads as sent: base64 decoding (`t=d`) and
-    /// zlib inflate (`o=z`) happen at the consumer.
-    pub payload: Vec<u8>,
+    /// The chunk payloads' concatenation base64-decoded, or `None` when
+    /// it is not base64. Every medium's payload is base64 (the pixels of
+    /// `t=d`, the path or name of the others); zlib inflate (`o=z`)
+    /// happens at the consumer.
+    pub payload: Option<Vec<u8>>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -429,8 +431,9 @@ impl ReassemblyTracker {
 )]
 pub struct Reassembler {
     pub(crate) tracker: ReassemblyTracker,
-    #[cfg_attr(feature = "state-dump", serde(with = "crate::state::b64"))]
-    pub(crate) payload: Vec<u8>,
+    /// Decoded as chunks arrive, so the base64 text is never parked.
+    #[cfg_attr(feature = "state-dump", serde(with = "crate::state::decoder_text"))]
+    pub(crate) payload: base64::Decoder,
 }
 
 impl Reassembler {
@@ -438,30 +441,30 @@ impl Reassembler {
     pub const fn new() -> Self {
         Self {
             tracker: ReassemblyTracker::new(),
-            payload: Vec::new(),
+            payload: base64::Decoder::new(),
         }
     }
 
-    /// Parked payload bytes of the open transmission, or `None` between
-    /// transmissions. The daemon's resource accounting reads this:
+    /// Payload bytes received for the open transmission, or `None`
+    /// between transmissions. The daemon's resource accounting reads this:
     /// `felis daemon status` is the only place a never-terminated `m=1`
     /// stream is visible.
     #[must_use]
     pub fn in_flight_bytes(&self) -> Option<usize> {
-        self.tracker.is_open().then_some(self.payload.len())
+        self.tracker.is_open().then_some(self.payload.pushed())
     }
 
     pub fn feed(&mut self, cmd: &Command<'_>) -> Outcome {
         match self.tracker.step(cmd) {
             Step::Overflow { controls } => {
-                self.payload = Vec::new();
+                self.payload = base64::Decoder::new();
                 Outcome::Overflow { controls }
             }
             Step::Pending { continued } => {
                 if !continued {
-                    self.payload.clear();
+                    self.payload = base64::Decoder::new();
                 }
-                self.payload.extend_from_slice(cmd.payload);
+                self.payload.push(cmd.payload);
                 Outcome::Pending
             }
             Step::Done {
@@ -470,13 +473,13 @@ impl Reassembler {
             } => {
                 let payload = if continued {
                     let mut payload = std::mem::take(&mut self.payload);
-                    payload.extend_from_slice(cmd.payload);
-                    payload
+                    payload.push(cmd.payload);
+                    payload.finish()
                 } else {
                     if !self.tracker.is_open() {
-                        self.payload = Vec::new();
+                        self.payload = base64::Decoder::new();
                     }
-                    cmd.payload.to_vec()
+                    base64::decode(cmd.payload)
                 };
                 Outcome::Done(CompleteCommand { controls, payload })
             }
@@ -485,7 +488,7 @@ impl Reassembler {
 
     pub fn reset(&mut self) {
         self.tracker.reset();
-        self.payload = Vec::new();
+        self.payload = base64::Decoder::new();
     }
 }
 
@@ -697,7 +700,7 @@ mod tests {
 
     fn done_payload(outcome: &Outcome) -> &[u8] {
         match outcome {
-            Outcome::Done(c) => &c.payload,
+            Outcome::Done(c) => c.payload.as_deref().expect("a base64 payload"),
             other => panic!("expected Done, got {other:?}"),
         }
     }
@@ -705,12 +708,12 @@ mod tests {
     #[test]
     fn single_chunk_image_emits_done_immediately() {
         let mut r = Reassembler::new();
-        let cmd = parse(b"Ga=T,f=100;abc").unwrap();
+        let cmd = parse(b"Ga=T,f=100;YWJj").unwrap();
         let outcome = r.feed(&cmd);
         let Outcome::Done(complete) = outcome else {
             panic!("expected Done");
         };
-        assert_eq!(complete.payload, b"abc");
+        assert_eq!(complete.payload.as_deref(), Some(&b"abc"[..]));
         assert_eq!(
             complete.controls,
             vec![(b'a', b"T".to_vec()), (b'f', b"100".to_vec())]
@@ -721,22 +724,22 @@ mod tests {
     fn explicit_m0_first_chunk_is_treated_as_single_chunk() {
         // `m=0` on a head with no prior chunks is "single chunk done".
         let mut r = Reassembler::new();
-        let cmd = parse(b"Gm=0;hello").unwrap();
+        let cmd = parse(b"Gm=0;aGVsbG8").unwrap();
         assert_eq!(done_payload(&r.feed(&cmd)), b"hello");
     }
 
     #[test]
-    fn multi_chunk_image_concatenates_in_order() {
+    fn multi_chunk_image_decodes_the_chunks_in_order() {
         let mut r = Reassembler::new();
-        let head = parse(b"Ga=T,f=100,m=1;aaaa").unwrap();
+        let head = parse(b"Ga=T,f=100,m=1;YWJj").unwrap();
         assert_eq!(r.feed(&head), Outcome::Pending);
-        let mid = parse(b"Gm=1;bbbb").unwrap();
+        let mid = parse(b"Gm=1;ZGVm").unwrap();
         assert_eq!(r.feed(&mid), Outcome::Pending);
-        let tail = parse(b"Gm=0;cccc").unwrap();
+        let tail = parse(b"Gm=0;Z2hp").unwrap();
         let Outcome::Done(complete) = r.feed(&tail) else {
             panic!("expected Done");
         };
-        assert_eq!(complete.payload, b"aaaabbbbcccc");
+        assert_eq!(complete.payload.as_deref(), Some(&b"abcdefghi"[..]));
         assert_eq!(
             complete.controls,
             vec![(b'a', b"T".to_vec()), (b'f', b"100".to_vec())]
@@ -750,16 +753,16 @@ mod tests {
         let mut r = Reassembler::new();
         assert_eq!(r.in_flight_bytes(), None);
 
-        let head = parse(b"Ga=T,f=100,m=1;aaaa").unwrap();
+        let head = parse(b"Ga=T,f=100,m=1;YWJj").unwrap();
         assert_eq!(r.feed(&head), Outcome::Pending);
         assert_eq!(r.in_flight_bytes(), Some(4));
 
-        let mid = parse(b"Gm=1;bbbbbb").unwrap();
+        let mid = parse(b"Gm=1;ZGVmZ2").unwrap();
         assert_eq!(r.feed(&mid), Outcome::Pending);
         assert_eq!(r.in_flight_bytes(), Some(10));
 
-        let tail = parse(b"Gm=0;cc").unwrap();
-        assert_eq!(done_payload(&r.feed(&tail)), b"aaaabbbbbbcc");
+        let tail = parse(b"Gm=0;hp").unwrap();
+        assert_eq!(done_payload(&r.feed(&tail)), b"abcdefghi");
         assert_eq!(
             r.in_flight_bytes(),
             None,
@@ -782,10 +785,10 @@ mod tests {
             vec![(b'a', b"d".to_vec()), (b'd', b"A".to_vec())]
         );
         assert_eq!(r.in_flight_bytes(), None);
-        let Outcome::Done(tail) = r.feed(&parse(b"Gm=0;bb").unwrap()) else {
+        let Outcome::Done(tail) = r.feed(&parse(b"Gm=0;YQ").unwrap()) else {
             panic!("expected Done");
         };
-        assert_eq!(tail.payload, b"bb");
+        assert_eq!(tail.payload.as_deref(), Some(&b"a"[..]));
         assert_eq!(tail.controls, Vec::new());
     }
 
@@ -799,17 +802,14 @@ mod tests {
         assert_eq!(r.in_flight_bytes(), None);
 
         assert_eq!(
-            r.feed(&parse(b"Ga=T,i=6,m=1;aaaa").unwrap()),
+            r.feed(&parse(b"Ga=T,i=6,m=1;YWJj").unwrap()),
             Outcome::Pending
         );
         assert!(matches!(
             r.feed(&parse(b"Ga=d,d=A,i=1,I=2").unwrap()),
             Outcome::Done(_)
         ));
-        assert_eq!(
-            done_payload(&r.feed(&parse(b"Gm=0;bb").unwrap())),
-            b"aaaabb"
-        );
+        assert_eq!(done_payload(&r.feed(&parse(b"Gm=0;ZA").unwrap())), b"abcd");
     }
 
     /// A reset releases the parked bytes and the gauge must say so.
@@ -827,10 +827,74 @@ mod tests {
     fn missing_m_on_terminal_chunk_finalises() {
         // The spec is "m=1 means more follow", so absence means done.
         let mut r = Reassembler::new();
-        let head = parse(b"Ga=T,m=1;aa").unwrap();
+        let head = parse(b"Ga=T,m=1;YW").unwrap();
         assert_eq!(r.feed(&head), Outcome::Pending);
-        let tail = parse(b"G;bb").unwrap();
-        assert_eq!(done_payload(&r.feed(&tail)), b"aabb");
+        let tail = parse(b"G;Jj").unwrap();
+        assert_eq!(done_payload(&r.feed(&tail)), b"abc");
+    }
+
+    #[test]
+    fn a_middle_chunk_outside_the_alphabet_fails_the_whole_transmission_at_its_end() {
+        let mut r = Reassembler::new();
+        assert_eq!(
+            r.feed(&parse(b"Ga=T,i=3,m=1;YWJj").unwrap()),
+            Outcome::Pending
+        );
+        assert_eq!(r.feed(&parse(b"Gm=1;ZG*m").unwrap()), Outcome::Pending);
+        assert_eq!(r.in_flight_bytes(), Some(8));
+        assert_eq!(r.feed(&parse(b"Gm=1;Z2hp").unwrap()), Outcome::Pending);
+        let Outcome::Done(complete) = r.feed(&parse(b"Gm=0;YQ").unwrap()) else {
+            panic!("expected Done");
+        };
+        assert_eq!(complete.payload, None);
+        assert_eq!(
+            complete.controls,
+            vec![(b'a', b"T".to_vec()), (b'i', b"3".to_vec())]
+        );
+    }
+
+    #[test]
+    fn padding_that_ends_a_middle_chunk_fails_the_transmission() {
+        let mut r = Reassembler::new();
+        assert_eq!(r.feed(&parse(b"Ga=T,m=1;YQ==").unwrap()), Outcome::Pending);
+        let Outcome::Done(complete) = r.feed(&parse(b"Gm=0;YWJj").unwrap()) else {
+            panic!("expected Done");
+        };
+        assert_eq!(complete.payload, None);
+    }
+
+    #[test]
+    fn a_malformed_transmission_dropped_mid_stream_leaves_the_next_one_clean() {
+        for abort in [&b"Ga=d,d=A"[..], b"Ga=T,t=s,m=1;bmFtZQ=="] {
+            let mut r = Reassembler::new();
+            assert_eq!(r.feed(&parse(b"Ga=T,m=1;**").unwrap()), Outcome::Pending);
+            assert!(matches!(r.feed(&parse(abort).unwrap()), Outcome::Done(_)));
+            assert_eq!(r.in_flight_bytes(), None);
+            assert_eq!(r.feed(&parse(b"Ga=T,m=1;YW").unwrap()), Outcome::Pending);
+            assert_eq!(done_payload(&r.feed(&parse(b"Gm=0;Jj").unwrap())), b"abc");
+        }
+    }
+
+    #[test]
+    fn a_partial_group_dropped_mid_stream_does_not_reach_the_next_transmission() {
+        let mut r = Reassembler::new();
+        assert_eq!(r.feed(&parse(b"Ga=T,m=1;ZG").unwrap()), Outcome::Pending);
+        assert!(matches!(
+            r.feed(&parse(b"Ga=d,d=A").unwrap()),
+            Outcome::Done(_)
+        ));
+        assert_eq!(done_payload(&r.feed(&parse(b"Ga=T;YWJj").unwrap())), b"abc");
+    }
+
+    #[test]
+    fn a_put_mid_stream_decodes_alone_and_keeps_the_streams_partial_group() {
+        let mut r = Reassembler::new();
+        assert_eq!(r.feed(&parse(b"Ga=T,m=1;YW").unwrap()), Outcome::Pending);
+        let Outcome::Done(put) = r.feed(&parse(b"Ga=p,i=1;ZA").unwrap()) else {
+            panic!("expected the put to complete");
+        };
+        assert_eq!(put.payload.as_deref(), Some(&b"d"[..]));
+        assert_eq!(done_payload(&r.feed(&parse(b"Gm=0;Jj").unwrap())), b"abc");
     }
 
     #[test]
@@ -902,7 +966,7 @@ mod tests {
             let Outcome::Done(complete) = r.feed(&cmd) else {
                 panic!("t={} with m=1 must complete", medium[0] as char);
             };
-            assert_eq!(complete.payload, b"bXB2LWtpdHR5");
+            assert_eq!(complete.payload.as_deref(), Some(&b"mpv-kitty"[..]));
             assert!(complete.controls.iter().all(|(k, _)| *k != b'm'));
         }
     }
@@ -920,7 +984,7 @@ mod tests {
         let Outcome::Done(complete) = r.feed(&shm) else {
             panic!("expected Done");
         };
-        assert_eq!(complete.payload, b"bmFtZQ==");
+        assert_eq!(complete.payload.as_deref(), Some(&b"name"[..]));
         assert!(complete.controls.contains(&(b't', b"s".to_vec())));
         assert!(!complete.controls.contains(&(b'f', b"100".to_vec())));
     }
@@ -930,11 +994,11 @@ mod tests {
         let mut r = Reassembler::new();
         drop(r.feed(&parse(b"Ga=T,m=1;aaa").unwrap()));
         r.reset();
-        let next = parse(b"Gb=p;zzz").unwrap();
+        let next = parse(b"Gb=p;enp6").unwrap();
         let Outcome::Done(complete) = r.feed(&next) else {
             panic!("expected Done");
         };
-        assert_eq!(complete.payload, b"zzz");
+        assert_eq!(complete.payload.as_deref(), Some(&b"zzz"[..]));
         assert_eq!(complete.controls, vec![(b'b', b"p".to_vec())]);
     }
 
@@ -1080,8 +1144,30 @@ mod tests {
                 controls: vec![(b'a', b"T".to_vec())],
             }
         );
-        let recover = parse(b"Ga=T;ok").unwrap();
+        let recover = parse(b"Ga=T;b2s").unwrap();
         assert_eq!(done_payload(&r.feed(&recover)), b"ok");
+    }
+
+    #[test]
+    fn an_overflow_answers_before_a_malformed_payload_would() {
+        let mut r = Reassembler::new();
+        let mut near_cap = vec![b'x'; REASSEMBLY_BUFFER_LIMIT - 4];
+        near_cap[0] = b'*';
+        let big_head = Command {
+            controls: vec![(b'a', b"T".as_slice()), (b'm', b"1".as_slice())],
+            payload: &near_cap,
+        };
+        assert_eq!(r.feed(&big_head), Outcome::Pending);
+        let overrun = Command {
+            controls: vec![(b'm', b"0".as_slice())],
+            payload: &[b'y'; 8],
+        };
+        assert_eq!(
+            r.feed(&overrun),
+            Outcome::Overflow {
+                controls: vec![(b'a', b"T".to_vec())],
+            }
+        );
     }
 
     #[test]
@@ -1124,8 +1210,8 @@ mod tests {
         match r.feed(&big_tail) {
             Outcome::Done(complete) => {
                 assert_eq!(
-                    complete.payload.len(),
-                    REASSEMBLY_BUFFER_LIMIT,
+                    complete.payload.map(|p| p.len()),
+                    Some(REASSEMBLY_BUFFER_LIMIT / 4 * 3),
                     "a payload exactly at the cap must assemble in full",
                 );
             }

@@ -3,8 +3,8 @@
 //! budget, optional zlib inflate, and the raw and PNG decoders.
 
 use super::{
-    CompleteCommand, Cursor, ImageEntry, ImageFormat, base64, control_byte, control_u32,
-    control_value, zlib,
+    CompleteCommand, Cursor, ImageEntry, ImageFormat, control_byte, control_u32, control_value,
+    zlib,
 };
 // Windows declines the file-backed methods with `ENOTSUP`
 // (docs/reference/protocols/support-matrix.md "Kitty graphics").
@@ -49,9 +49,10 @@ pub enum DecodeError {
 
 /// Decode the payload of one assembled Kitty graphics command into an [`ImageEntry`].
 ///
-/// Handles transport acquisition, base64 decoding, optional decompression,
-/// and pixel format decoding by value to avoid per-frame buffer copies.
-pub fn decode_image(complete: &CompleteCommand) -> Result<ImageEntry, DecodeError> {
+/// Handles transport acquisition, optional decompression, and pixel
+/// format decoding by value to avoid per-frame buffer copies: a `t=d`
+/// payload is moved out of `complete`.
+pub fn decode_image(complete: &mut CompleteCommand) -> Result<ImageEntry, DecodeError> {
     let raw = bytes_from_transmission(complete)?;
     let decoded = inflate_if_zlib(raw, complete).and_then(|bytes| decode_format(bytes, complete));
     if !file_backed(complete) {
@@ -75,9 +76,11 @@ pub(super) fn file_backed(complete: &CompleteCommand) -> bool {
     matches!(control_byte(complete, b't'), Some(b'f' | b't' | b's'))
 }
 
-fn bytes_from_transmission(complete: &CompleteCommand) -> Result<Vec<u8>, DecodeError> {
+fn bytes_from_transmission(complete: &mut CompleteCommand) -> Result<Vec<u8>, DecodeError> {
     match control_byte(complete, b't').unwrap_or(b'd') {
-        b'd' => base64::decode(&complete.payload)
+        b'd' => complete
+            .payload
+            .take()
             .ok_or(DecodeError::InvalidValue("malformed base64 payload")),
         b'f' => read_file_payload(complete, MAX_DECODED_BYTES),
         b't' => read_temp_file_payload(complete, MAX_DECODED_BYTES),
@@ -99,10 +102,13 @@ struct FilePath {
 /// opening some files has side effects (`docs/explanation/security-model.md`).
 #[cfg(unix)]
 fn resolve_file_path(complete: &CompleteCommand) -> Result<FilePath, DecodeError> {
-    let path_bytes = base64::decode(&complete.payload)
+    let path_bytes = complete
+        .payload
+        .as_deref()
         .ok_or(DecodeError::InvalidValue("malformed base64 path"))?;
-    let requested = String::from_utf8(path_bytes)
-        .map_err(|_| DecodeError::InvalidValue("file path is not valid UTF-8"))?;
+    let requested = std::str::from_utf8(path_bytes)
+        .map_err(|_| DecodeError::InvalidValue("file path is not valid UTF-8"))?
+        .to_owned();
     let path = std::path::Path::new(&requested);
     if !path.is_absolute() {
         return Err(DecodeError::InvalidValue("file path must be absolute"));
@@ -288,9 +294,11 @@ const fn read_temp_file_payload(
 fn read_shm_payload(complete: &CompleteCommand, cap: usize) -> Result<Vec<u8>, DecodeError> {
     use rustix::shm;
 
-    let name_bytes = base64::decode(&complete.payload)
+    let name_bytes = complete
+        .payload
+        .as_deref()
         .ok_or(DecodeError::InvalidValue("malformed base64 name"))?;
-    let name = std::str::from_utf8(&name_bytes)
+    let name = std::str::from_utf8(name_bytes)
         .map_err(|_| DecodeError::InvalidValue("t=s name is not valid UTF-8"))?;
     let name = normalize_shm_name(name);
 
@@ -321,8 +329,8 @@ pub fn shm_segment_name(complete: &CompleteCommand) -> Option<String> {
     if control_byte(complete, b't') != Some(b's') {
         return None;
     }
-    let name_bytes = base64::decode(&complete.payload)?;
-    String::from_utf8(name_bytes).ok()
+    let name = std::str::from_utf8(complete.payload.as_deref()?).ok()?;
+    Some(name.to_owned())
 }
 
 /// Unlink a deferred `t=s` object at session teardown; ENOENT (the

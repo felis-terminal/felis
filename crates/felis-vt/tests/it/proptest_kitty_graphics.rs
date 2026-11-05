@@ -5,12 +5,25 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use felis_vt::kitty_graphics::{
-    Command, Outcome, Reassembler,
+    Command, Outcome, Reassembler, base64,
     inflate::{InflateError, inflate},
     parse,
 };
 use miniz_oxide::deflate::compress_to_vec_zlib;
 use proptest::prelude::*;
+
+/// Mostly the alphabet, with whitespace, and padding or a foreign byte
+/// rarely enough that most concatenations still decode.
+fn base64ish(max: usize) -> impl Strategy<Value = Vec<u8>> {
+    proptest::collection::vec(
+        prop_oneof![
+            40 => prop::sample::select(&b"AQgw+/09"[..]),
+            4 => prop::sample::select(&b" \n"[..]),
+            1 => prop::sample::select(&b"=*"[..]),
+        ],
+        0..max,
+    )
+}
 
 proptest! {
     /// Every accepted control key is a single ASCII letter and every value
@@ -68,17 +81,16 @@ proptest! {
         drop(inflate(&bytes, cap));
     }
 
-    /// `feed` is associative over chunk boundaries.
+    /// `feed` decodes the chunks' concatenation, wherever the chunk
+    /// boundaries split a group, its padding or its whitespace, and
+    /// whichever chunk holds a byte outside the alphabet.
     #[test]
-    fn reassembled_payload_is_chunk_concatenation(
-        chunks in proptest::collection::vec(
-            proptest::collection::vec(any::<u8>(), 0..32),
-            1..8,
-        ),
+    fn reassembled_payload_is_the_decoded_chunk_concatenation(
+        chunks in proptest::collection::vec(base64ish(32), 1..8),
     ) {
         let mut r = Reassembler::new();
         let last = chunks.len() - 1;
-        let mut emitted: Option<Vec<u8>> = None;
+        let mut emitted: Option<Option<Vec<u8>>> = None;
         for (i, chunk) in chunks.iter().enumerate() {
             let m_value: &[u8] = if i == last { b"0" } else { b"1" };
             // The head chunk carries `a=T`; mid / tail chunks carry only `m`.
@@ -106,7 +118,7 @@ proptest! {
             }
         }
         let expected: Vec<u8> = chunks.into_iter().flatten().collect();
-        prop_assert_eq!(emitted.unwrap(), expected);
+        prop_assert_eq!(emitted.unwrap(), base64::decode(&expected));
     }
 
     /// A put, compose, animation-control command or feature query
@@ -115,24 +127,21 @@ proptest! {
     /// its chunks alone.
     #[test]
     fn put_compose_animate_and_feature_query_run_at_once_without_disturbing_an_open_transfer(
-        chunks in proptest::collection::vec(
-            proptest::collection::vec(any::<u8>(), 0..32),
-            2..6,
-        ),
+        chunks in proptest::collection::vec(base64ish(32), 2..6),
         mid_transfer in prop::sample::select(vec![b"p", b"c", b"a", b"q"]),
         interleaved in proptest::collection::vec(
             (
                 0..6usize,
                 prop::sample::select(vec![b"p", b"c", b"a", b"q"]),
                 any::<bool>(),
-                proptest::collection::vec(any::<u8>(), 0..8),
+                base64ish(8),
             ),
             0..6,
         ),
     ) {
         let mut r = Reassembler::new();
         let last = chunks.len() - 1;
-        let mut emitted: Option<Vec<u8>> = None;
+        let mut emitted: Option<Option<Vec<u8>>> = None;
         let forced = (last, mid_transfer, true, Vec::new());
         for (i, chunk) in chunks.iter().enumerate() {
             let here = interleaved.iter().chain(std::iter::once(&forced));
@@ -149,7 +158,7 @@ proptest! {
                     return Err(TestCaseError::fail("a non-add command must complete at once"));
                 };
                 prop_assert_eq!(complete.controls, expected);
-                prop_assert_eq!(&complete.payload, payload);
+                prop_assert_eq!(complete.payload, base64::decode(payload));
             }
             let m_value: &[u8] = if i == last { b"0" } else { b"1" };
             let controls: Vec<(u8, &[u8])> = if i == 0 {
@@ -168,7 +177,7 @@ proptest! {
             }
         }
         let expected: Vec<u8> = chunks.into_iter().flatten().collect();
-        prop_assert_eq!(emitted.unwrap(), expected);
+        prop_assert_eq!(emitted.unwrap(), base64::decode(&expected));
     }
 
     /// Whatever `parse` emits is something a valid producer could have sent.
