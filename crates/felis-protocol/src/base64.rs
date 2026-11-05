@@ -3,25 +3,27 @@
 //! Accepts optional RFC 4648 §3.2 unpadded tails because kitten emits
 //! unpadded payloads. Whitespace is stripped for column-wrapped input.
 
-use std::borrow::Cow;
-
 /// Decodes standard-alphabet base64 bytes, allowing optional padding and whitespace.
 ///
 /// Returns `None` on invalid bytes, misplaced padding, or a 1-char tail.
 /// Empty input yields an empty vector for zero-payload keepalives.
 #[must_use]
 pub fn decode(input: &[u8]) -> Option<Vec<u8>> {
-    let bytes: Cow<'_, [u8]> = if input.iter().any(u8::is_ascii_whitespace) {
-        Cow::Owned(
-            input
+    // Whitespace is outside the alphabet, so whitespace-free input never
+    // pays for a scan, and input carrying some fails the first pass.
+    decode_compact(input).or_else(|| {
+        input.iter().any(u8::is_ascii_whitespace).then(|| {
+            let stripped: Vec<u8> = input
                 .iter()
                 .copied()
                 .filter(|b| !b.is_ascii_whitespace())
-                .collect(),
-        )
-    } else {
-        Cow::Borrowed(input)
-    };
+                .collect();
+            decode_compact(&stripped)
+        })?
+    })
+}
+
+fn decode_compact(bytes: &[u8]) -> Option<Vec<u8>> {
     if bytes.is_empty() {
         return Some(Vec::new());
     }
@@ -32,22 +34,24 @@ pub fn decode(input: &[u8]) -> Option<Vec<u8>> {
         r => r,
     };
     let (body, tail) = bytes.split_at(bytes.len() - tail_len);
-    let groups = body.as_chunks::<4>().0;
-    let mut out = vec![0u8; groups.len() * 3 + 3];
-    let mut invalid = 0u8;
-    for (o, g) in out.as_chunks_mut::<3>().0.iter_mut().zip(groups) {
-        let s = g.map(|c| SEXTET[c as usize]);
-        invalid |= s[0] | s[1] | s[2] | s[3];
-        // Every `|` here ORs disjoint bit ranges, so the `| -> ^`
-        // mutants cargo-mutants reports on this codec are equivalent.
-        let n = (u32::from(s[0]) << 18)
-            | (u32::from(s[1]) << 12)
-            | (u32::from(s[2]) << 6)
-            | u32::from(s[3]);
-        *o = [(n >> 16) as u8, (n >> 8) as u8, n as u8];
+    let groups = body.len() / 4;
+    let mut out = vec![0u8; groups * 3 + 3];
+    let (pairs, odd) = body.as_chunks::<8>();
+    for (o, g) in out.as_chunks_mut::<6>().0.iter_mut().zip(pairs) {
+        let hi = group(g[0], g[1], g[2], g[3]);
+        let lo = group(g[4], g[5], g[6], g[7]);
+        if (hi | lo) & INVALID_GROUP != 0 {
+            return None;
+        }
+        let n = (u64::from(hi) << 24) | u64::from(lo);
+        o.copy_from_slice(&n.to_be_bytes()[2..]);
     }
-    if invalid & INVALID != 0 {
-        return None;
+    if let [a, b, c, d] = *odd {
+        let n = group(a, b, c, d);
+        if n & INVALID_GROUP != 0 {
+            return None;
+        }
+        out[pairs.len() * 6..groups * 3].copy_from_slice(&n.to_be_bytes()[1..]);
     }
     let data = match tail {
         [a, b, b'=', b'='] | [a, b] => &[*a, *b][..],
@@ -64,10 +68,19 @@ pub fn decode(input: &[u8]) -> Option<Vec<u8>> {
         n = (n << 6) | u32::from(s);
     }
     n <<= 6 * (4 - data.len());
-    let len = groups.len() * 3 + data.len() - 1;
-    out[groups.len() * 3..].copy_from_slice(&[(n >> 16) as u8, (n >> 8) as u8, n as u8]);
+    let len = groups * 3 + data.len() - 1;
+    out[groups * 3..].copy_from_slice(&[(n >> 16) as u8, (n >> 8) as u8, n as u8]);
     out.truncate(len);
     Some(out)
+}
+
+/// One whole group's 24 bits, with [`INVALID_GROUP`] set if any byte is
+/// outside the alphabet.
+fn group(a: u8, b: u8, c: u8, d: u8) -> u32 {
+    SHIFTED[0][a as usize]
+        | SHIFTED[1][b as usize]
+        | SHIFTED[2][c as usize]
+        | SHIFTED[3][d as usize]
 }
 
 /// Encode bytes as standard-alphabet base64, appending to `out`.
@@ -107,6 +120,27 @@ const SEXTET: [u8; 256] = {
         c += 1;
     }
     table
+};
+
+/// Above the 24 bits a group decodes to.
+const INVALID_GROUP: u32 = 1 << 31;
+
+/// [`SEXTET`] pre-shifted to each slot of a group, so a group decodes with
+/// four loads and three ORs.
+static SHIFTED: [[u32; 256]; 4] = {
+    let mut tables = [[INVALID_GROUP; 256]; 4];
+    let mut slot = 0;
+    while slot < 4 {
+        let mut c = 0;
+        while c < 256 {
+            if let Some(v) = decode_char(c as u8) {
+                tables[slot][c] = (v as u32) << (18 - 6 * slot);
+            }
+            c += 1;
+        }
+        slot += 1;
+    }
+    tables
 };
 
 const fn decode_char(c: u8) -> Option<u8> {
@@ -216,6 +250,37 @@ mod tests {
         assert_eq!(out, b"prefix:TWFu");
     }
 
+    fn reference_decode(input: &[u8]) -> Option<Vec<u8>> {
+        let mut text: Vec<u8> = input
+            .iter()
+            .copied()
+            .filter(|b| !b.is_ascii_whitespace())
+            .collect();
+        if text.len() % 4 == 0 {
+            let pad = text
+                .iter()
+                .rev()
+                .take(2)
+                .take_while(|&&b| b == b'=')
+                .count();
+            text.truncate(text.len() - pad);
+        }
+        if text.len() % 4 == 1 {
+            return None;
+        }
+        let (mut acc, mut bits, mut out) = (0u32, 0, Vec::new());
+        for c in text {
+            acc = (acc << 6) | u32::from(decode_char(c)?);
+            bits += 6;
+            if bits >= 8 {
+                bits -= 8;
+                out.push((acc >> bits) as u8);
+                acc &= (1 << bits) - 1;
+            }
+        }
+        Some(out)
+    }
+
     proptest! {
         /// `decode(encode(x)) == x` for payloads of any length. proptest,
         /// not Kani: the property spans both heap-allocating halves,
@@ -312,6 +377,16 @@ mod tests {
             unpadded.truncate(unpadded.len() - unpadded.len() % 4);
             unpadded.push(extra);
             prop_assert_eq!(decode(&unpadded), None);
+        }
+
+        /// `decode` agrees with a strip-then-unpad-then-bit-loop decoder
+        /// on input mixing the alphabet, padding, whitespace and foreign
+        /// bytes, whatever group the odd byte lands in.
+        #[test]
+        fn decode_matches_a_bit_loop_reference(
+            input in proptest::collection::vec(prop::sample::select(&b"AQw+/9= \n\t-"[..]), 0..48),
+        ) {
+            prop_assert_eq!(decode(&input), reference_decode(&input));
         }
 
         /// `decode` is total on malformed input. The Kani proof
