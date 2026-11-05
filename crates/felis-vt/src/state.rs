@@ -59,6 +59,28 @@ pub mod b64 {
     }
 }
 
+/// A [`Decoder`](felis_protocol::base64::Decoder) as the [`b64`] of the
+/// base64 text that rebuilds it, which is the field a predecessor that
+/// parked the text itself writes.
+pub mod decoder_text {
+    use felis_protocol::base64::Decoder;
+    use serde::{Deserializer, Serializer};
+
+    /// # Errors
+    /// Only the serializer's own.
+    pub fn serialize<S: Serializer>(decoder: &Decoder, serializer: S) -> Result<S::Ok, S::Error> {
+        super::b64::serialize(&decoder.replay(), serializer)
+    }
+
+    /// # Errors
+    /// A string that is not base64.
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Decoder, D::Error> {
+        let mut decoder = Decoder::new();
+        decoder.push(&super::b64::deserialize(deserializer)?);
+        Ok(decoder)
+    }
+}
+
 /// [`b64`] for an optional payload.
 pub mod opt_b64 {
     use serde::{Deserialize, Deserializer, Serializer, de::Error as _};
@@ -168,7 +190,7 @@ impl Reassembler {
         self.tracker.check_restored()?;
         let expected = self.tracker.open.as_ref().map_or(0, |open| open.buffered);
         check(
-            self.payload.len() == expected,
+            self.payload.pushed() == expected,
             "graphics reassembly payload",
         )
     }
@@ -286,6 +308,22 @@ mod tests {
         restored.check_restored().unwrap();
         let tail = crate::kitty_graphics::parse(b"Gm=0;BBBB").unwrap();
         assert_eq!(restored.feed(&tail), reassembler.feed(&tail));
+    }
+
+    #[test]
+    fn a_transmission_parked_as_base64_text_resumes_decoded() {
+        let mut reassembler = Reassembler::new();
+        let head = crate::kitty_graphics::parse(b"Ga=T,m=1;YW J").unwrap();
+        let _pending = reassembler.feed(&head);
+        let mut value = serde_json::to_value(&reassembler).unwrap();
+        value["payload"] = serde_json::Value::from(b64::encode(b"YW J"));
+        let mut restored: Reassembler = serde_json::from_value(value).unwrap();
+        restored.check_restored().unwrap();
+        let tail = crate::kitty_graphics::parse(b"Gm=0;j").unwrap();
+        let crate::kitty_graphics::Outcome::Done(complete) = restored.feed(&tail) else {
+            panic!("expected Done");
+        };
+        assert_eq!(complete.payload.as_deref(), Some(&b"abc"[..]));
     }
 
     #[test]

@@ -9,78 +9,194 @@
 /// Empty input yields an empty vector for zero-payload keepalives.
 #[must_use]
 pub fn decode(input: &[u8]) -> Option<Vec<u8>> {
-    // Whitespace is outside the alphabet, so whitespace-free input never
-    // pays for a scan, and input carrying some fails the first pass.
-    decode_compact(input).or_else(|| {
-        input.iter().any(u8::is_ascii_whitespace).then(|| {
+    let mut decoder = Decoder::new();
+    decoder.push(input);
+    decoder.finish()
+}
+
+/// [`decode`] over input that arrives in pieces: pushing the pieces in
+/// order and finishing gives what [`decode`] gives for their
+/// concatenation, wherever the boundaries fall.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Decoder {
+    out: Vec<u8>,
+    /// The last group seen, undecoded: only the final group may carry
+    /// padding or be short, and which group is final is known only at
+    /// [`Decoder::finish`]. Never holds whitespace.
+    held: [u8; 4],
+    held_len: u8,
+    invalid: bool,
+    pushed: usize,
+}
+
+impl Decoder {
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            out: Vec::new(),
+            held: [0; 4],
+            held_len: 0,
+            invalid: false,
+            pushed: 0,
+        }
+    }
+
+    pub fn push(&mut self, input: &[u8]) {
+        self.pushed += input.len();
+        if self.invalid {
+            return;
+        }
+        let (out_len, held, held_len) = (self.out.len(), self.held, self.held_len);
+        // Whitespace is outside the alphabet, so whitespace-free input
+        // never pays for a scan, and input carrying some fails this pass.
+        if self.push_compact(input) {
+            return;
+        }
+        self.out.truncate(out_len);
+        (self.held, self.held_len) = (held, held_len);
+        if input.iter().any(u8::is_ascii_whitespace) {
             let stripped: Vec<u8> = input
                 .iter()
                 .copied()
                 .filter(|b| !b.is_ascii_whitespace())
                 .collect();
-            decode_compact(&stripped)
-        })?
-    })
+            if self.push_compact(&stripped) {
+                return;
+            }
+        }
+        self.invalid = true;
+        self.out = Vec::new();
+    }
+
+    /// Bytes pushed so far, whitespace included.
+    #[must_use]
+    pub const fn pushed(&self) -> usize {
+        self.pushed
+    }
+
+    /// `None` on invalid bytes, misplaced padding, or a 1-char tail.
+    #[must_use]
+    pub fn finish(self) -> Option<Vec<u8>> {
+        if self.invalid {
+            return None;
+        }
+        let mut out = self.out;
+        let tail = &self.held[..usize::from(self.held_len)];
+        if tail.is_empty() {
+            return Some(out);
+        }
+        let data = match *tail {
+            [a, b, b'=', b'='] | [a, b] => &[a, b][..],
+            [a, b, c, b'='] | [a, b, c] => &[a, b, c][..],
+            [_] => return None,
+            _ => tail,
+        };
+        let mut n = 0u32;
+        for &c in data {
+            let s = SEXTET[c as usize];
+            if s & INVALID != 0 {
+                return None;
+            }
+            n = (n << 6) | u32::from(s);
+        }
+        n <<= 6 * (4 - data.len());
+        out.extend_from_slice(&n.to_be_bytes()[1..data.len()]);
+        Some(out)
+    }
+
+    /// Input that, pushed into a fresh decoder, rebuilds this one: the
+    /// decoded bytes re-encoded, the held group, then spaces up to
+    /// [`Decoder::pushed`], since whitespace decodes to nothing.
+    #[must_use]
+    pub fn replay(&self) -> Vec<u8> {
+        let mut text = Vec::with_capacity(self.pushed);
+        if self.invalid {
+            text.push(b'=');
+        } else {
+            encode_into(&self.out, &mut text);
+            text.extend_from_slice(&self.held[..usize::from(self.held_len)]);
+        }
+        text.resize(self.pushed, b' ');
+        text
+    }
+
+    /// Decodes all but the last 1..=4 bytes held so far; `false` when a
+    /// decoded group or the held tail has a byte outside the alphabet
+    /// other than padding.
+    fn push_compact(&mut self, mut data: &[u8]) -> bool {
+        let held = usize::from(self.held_len);
+        if held + data.len() <= 4 {
+            if data.iter().any(u8::is_ascii_whitespace) {
+                return false;
+            }
+            self.held[held..held + data.len()].copy_from_slice(data);
+            self.held_len += data.len() as u8;
+            return true;
+        }
+        if held > 0 {
+            let (head, rest) = data.split_at(4 - held);
+            self.held[held..].copy_from_slice(head);
+            data = rest;
+            let n = group(self.held);
+            if n & INVALID_GROUP != 0 {
+                return false;
+            }
+            self.out.extend_from_slice(&n.to_be_bytes()[1..]);
+        }
+        let keep = match data.len() % 4 {
+            0 => 4,
+            r => r,
+        };
+        let (body, tail) = data.split_at(data.len() - keep);
+        if tail.iter().any(u8::is_ascii_whitespace) || !decode_groups(body, &mut self.out) {
+            return false;
+        }
+        self.held[..keep].copy_from_slice(tail);
+        self.held_len = keep as u8;
+        true
+    }
 }
 
-fn decode_compact(bytes: &[u8]) -> Option<Vec<u8>> {
-    if bytes.is_empty() {
-        return Some(Vec::new());
-    }
-    // Only the last group may carry padding or be short, so every group
-    // before it decodes to exactly three bytes.
-    let tail_len = match bytes.len() % 4 {
-        0 => 4,
-        r => r,
-    };
-    let (body, tail) = bytes.split_at(bytes.len() - tail_len);
-    let groups = body.len() / 4;
-    let mut out = vec![0u8; groups * 3 + 3];
+/// Appends whole groups (`body.len()` a multiple of four); `false` at
+/// a block of groups with a byte outside the alphabet.
+fn decode_groups(body: &[u8], out: &mut Vec<u8>) -> bool {
+    // The slack spares the final group's bytes a reallocation.
+    out.reserve(body.len() / 4 * 3 + 3);
+    // Staged through a small block: decoding into the vector itself would
+    // first have to zero its spare capacity.
+    let mut block = [0u8; 64 * 6];
     let (pairs, odd) = body.as_chunks::<8>();
-    for (o, g) in out.as_chunks_mut::<6>().0.iter_mut().zip(pairs) {
-        let hi = group(g[0], g[1], g[2], g[3]);
-        let lo = group(g[4], g[5], g[6], g[7]);
-        if (hi | lo) & INVALID_GROUP != 0 {
-            return None;
+    for run in pairs.chunks(64) {
+        let mut invalid = 0;
+        for (o, g) in block.as_chunks_mut::<6>().0.iter_mut().zip(run) {
+            let hi = group([g[0], g[1], g[2], g[3]]);
+            let lo = group([g[4], g[5], g[6], g[7]]);
+            invalid |= hi | lo;
+            let n = (u64::from(hi) << 24) | u64::from(lo);
+            o.copy_from_slice(&n.to_be_bytes()[2..]);
         }
-        let n = (u64::from(hi) << 24) | u64::from(lo);
-        o.copy_from_slice(&n.to_be_bytes()[2..]);
+        if invalid & INVALID_GROUP != 0 {
+            return false;
+        }
+        out.extend_from_slice(&block[..run.len() * 6]);
     }
-    if let [a, b, c, d] = *odd {
-        let n = group(a, b, c, d);
+    if let Ok(odd) = <[u8; 4]>::try_from(odd) {
+        let n = group(odd);
         if n & INVALID_GROUP != 0 {
-            return None;
+            return false;
         }
-        out[pairs.len() * 6..groups * 3].copy_from_slice(&n.to_be_bytes()[1..]);
+        out.extend_from_slice(&n.to_be_bytes()[1..]);
     }
-    let data = match tail {
-        [a, b, b'=', b'='] | [a, b] => &[*a, *b][..],
-        [a, b, c, b'='] | [a, b, c] => &[*a, *b, *c][..],
-        [_] => return None,
-        _ => tail,
-    };
-    let mut n = 0u32;
-    for &c in data {
-        let s = SEXTET[c as usize];
-        if s & INVALID != 0 {
-            return None;
-        }
-        n = (n << 6) | u32::from(s);
-    }
-    n <<= 6 * (4 - data.len());
-    let len = groups * 3 + data.len() - 1;
-    out[groups * 3..].copy_from_slice(&[(n >> 16) as u8, (n >> 8) as u8, n as u8]);
-    out.truncate(len);
-    Some(out)
+    true
 }
 
 /// One whole group's 24 bits, with [`INVALID_GROUP`] set if any byte is
 /// outside the alphabet.
-fn group(a: u8, b: u8, c: u8, d: u8) -> u32 {
-    SHIFTED[0][a as usize]
-        | SHIFTED[1][b as usize]
-        | SHIFTED[2][c as usize]
-        | SHIFTED[3][d as usize]
+fn group(g: [u8; 4]) -> u32 {
+    SHIFTED[0][g[0] as usize]
+        | SHIFTED[1][g[1] as usize]
+        | SHIFTED[2][g[2] as usize]
+        | SHIFTED[3][g[3] as usize]
 }
 
 /// Encode bytes as standard-alphabet base64, appending to `out`.
@@ -387,6 +503,42 @@ mod tests {
             input in proptest::collection::vec(prop::sample::select(&b"AQw+/9= \n\t-"[..]), 0..48),
         ) {
             prop_assert_eq!(decode(&input), reference_decode(&input));
+        }
+
+        /// A payload pushed in pieces decodes as it does whole, wherever
+        /// the boundaries split a group, its padding or its whitespace.
+        #[test]
+        fn pushing_in_pieces_decodes_like_the_whole(
+            input in proptest::collection::vec(prop::sample::select(&b"AQw+/9= \n-"[..]), 0..48),
+            cuts in proptest::collection::vec(any::<prop::sample::Index>(), 0..6),
+        ) {
+            let mut cuts: Vec<usize> = cuts.iter().map(|c| c.index(input.len() + 1)).collect();
+            cuts.sort_unstable();
+            let mut decoder = Decoder::new();
+            let mut from = 0;
+            for cut in cuts.into_iter().chain([input.len()]) {
+                decoder.push(&input[from..cut]);
+                from = cut;
+            }
+            prop_assert_eq!(decoder.pushed(), input.len());
+            prop_assert_eq!(decoder.finish(), decode(&input));
+        }
+
+        /// A decoder rebuilt from its replay finishes like the original
+        /// after any further input, and counts the same bytes pushed.
+        #[test]
+        fn a_replayed_decoder_continues_like_the_original(
+            head in proptest::collection::vec(prop::sample::select(&b"AQw+/9= \n-"[..]), 0..24),
+            rest in proptest::collection::vec(prop::sample::select(&b"AQw+/9= \n-"[..]), 0..24),
+        ) {
+            let mut original = Decoder::new();
+            original.push(&head);
+            let mut replayed = Decoder::new();
+            replayed.push(&original.replay());
+            prop_assert_eq!(replayed.pushed(), original.pushed());
+            original.push(&rest);
+            replayed.push(&rest);
+            prop_assert_eq!(replayed.finish(), original.finish());
         }
 
         /// `decode` is total on malformed input. The Kani proof

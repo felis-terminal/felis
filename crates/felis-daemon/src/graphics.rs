@@ -15,7 +15,7 @@ use felis_grid::images::{
 use felis_grid::{ApcBody, ScreenSwitch};
 use felis_protocol::messages::{ImageFormat, ImageMsg, ImageTarget, MAX_IMAGE_CHUNK_PAYLOAD};
 use felis_vt::kitty_graphics::{
-    self, CompleteCommand, ErrorCode, Outcome, Reassembler, ResponseRefs, Status, base64,
+    self, CompleteCommand, ErrorCode, Outcome, Reassembler, ResponseRefs, Status,
     format_feature_response, format_response, inflate as zlib,
 };
 // Handed to `image_decode` for the Unix `t=f` / `t=t` secure-open path;
@@ -391,12 +391,12 @@ pub fn dispatch_apc_body(
     reassembler: &mut Reassembler,
     body: &[u8],
 ) -> Option<Vec<u8>> {
-    let complete = match reassemble_apc_body(reassembler, body) {
+    let mut complete = match reassemble_apc_body(reassembler, body) {
         BodyDispatch::Assembled(complete) => complete,
         BodyDispatch::Reply(reply) => return Some(reply),
         BodyDispatch::Silent => return None,
     };
-    handle_complete(ctx, &complete)
+    handle_complete(ctx, &mut complete)
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -428,7 +428,7 @@ pub fn reassemble_apc_body(reassembler: &mut Reassembler, body: &[u8]) -> BodyDi
             // reset state. Echo the head chunk's ids and honor its `q=`.
             let head = CompleteCommand {
                 controls,
-                payload: Vec::new(),
+                payload: None,
             };
             let refs = response_refs(&head);
             let quiet = quiet_level(&head);
@@ -683,7 +683,7 @@ pub fn apply_reflow_remap(
     }
 }
 
-fn handle_complete(ctx: &mut ApcCtx<'_>, complete: &CompleteCommand) -> Option<Vec<u8>> {
+fn handle_complete(ctx: &mut ApcCtx<'_>, complete: &mut CompleteCommand) -> Option<Vec<u8>> {
     let ApcCtx {
         grid,
         images,
@@ -885,7 +885,7 @@ fn apply_quiet_mode(
 
 /// Producers feature-detect the dispatcher this way (the spec
 /// recommends a tiny test image with `a=q`).
-fn handle_query(complete: &CompleteCommand) -> ActionOutcome {
+fn handle_query(complete: &mut CompleteCommand) -> ActionOutcome {
     match decode_image(complete) {
         Ok(_) => ActionOutcome::Ok,
         Err(err) => decode_error_to_outcome(err),
@@ -896,7 +896,7 @@ fn handle_transmit(
     images: &mut felis_grid::images::ImageStore,
     placements: &mut felis_grid::images::Placements,
     events: &mut Vec<ImageEvent>,
-    complete: &CompleteCommand,
+    complete: &mut CompleteCommand,
     refs: &mut ResponseRefs,
 ) -> ActionOutcome {
     match transmit_image(images, placements, events, complete, refs) {
@@ -911,7 +911,7 @@ fn transmit_image(
     images: &mut felis_grid::images::ImageStore,
     placements: &mut felis_grid::images::Placements,
     events: &mut Vec<ImageEvent>,
-    complete: &CompleteCommand,
+    complete: &mut CompleteCommand,
     refs: &mut ResponseRefs,
 ) -> Result<ImageId, ActionOutcome> {
     let id = resolve_or_allocate_image_id(complete, refs, images);
@@ -1099,7 +1099,7 @@ fn handle_transmit_and_display(
     images: &mut felis_grid::images::ImageStore,
     placements: &mut felis_grid::images::Placements,
     events: &mut Vec<ImageEvent>,
-    complete: &CompleteCommand,
+    complete: &mut CompleteCommand,
     refs: &mut ResponseRefs,
     cell_pixel_w: u16,
     cell_pixel_h: u16,
@@ -1768,7 +1768,7 @@ fn handle_animation_frame(
     images: &mut felis_grid::images::ImageStore,
     placements: &mut felis_grid::images::Placements,
     events: &mut Vec<ImageEvent>,
-    complete: &CompleteCommand,
+    complete: &mut CompleteCommand,
     refs: &mut ResponseRefs,
 ) -> ActionOutcome {
     let id = match resolve_image_id(complete, refs, images) {

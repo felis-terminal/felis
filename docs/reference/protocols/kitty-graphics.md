@@ -23,12 +23,13 @@ ESC _ G <controls> ; <payload> ESC \
 or a base64-encoded path / shm name (for file or SHM references).
 
 A `t=d` transfer may arrive in chunks, `m=1` on every chunk but the last: the payloads concatenate in arrival order, and
-base64 decoding plus any `o=z` inflate run once, over the concatenation. A continuation chunk's controls are ignored
-apart from `m=` and a non-zero `q=`, which overrides the first chunk's. An `a=p`, `a=d`, `a=c` or `a=a` command ignores
-`m=` and runs at once, even mid-transfer. A delete drops the open transfer; after the others it continues with the next
-chunk. A command with both `i=` and `I=` is refused at once and leaves any open transfer alone. felis does not police
-the producer's chunking. A chunk whose payload passes the upstream 4096-byte cap is accepted to the
-[APC body limit](#limits), and a payload decodes with or without its RFC 4648 padding, which is what kitten emits.
+base64 decoding plus any `o=z` inflate apply to the concatenation, wherever the chunk boundaries fall. A continuation
+chunk's controls are ignored apart from `m=` and a non-zero `q=`, which overrides the first chunk's. An `a=p`, `a=d`,
+`a=c` or `a=a` command ignores `m=` and runs at once, even mid-transfer. A delete drops the open transfer; after the
+others it continues with the next chunk. A command with both `i=` and `I=` is refused at once and leaves any open
+transfer alone. felis does not police the producer's chunking. A chunk whose payload passes the upstream 4096-byte cap
+is accepted to the [APC body limit](#limits), and a payload decodes with or without its RFC 4648 padding, which is what
+kitten emits.
 
 ## Transmission methods
 
