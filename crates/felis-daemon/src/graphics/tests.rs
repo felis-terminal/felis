@@ -1746,6 +1746,75 @@ fn animation_frame_overwrites_with_x_1_and_blends_otherwise() {
     );
 }
 
+fn shipped_chunks(wire: &[ImageMsg]) -> Vec<Bytes> {
+    wire.iter()
+        .filter_map(|m| match m {
+            ImageMsg::Chunk { bytes, .. } => Some(bytes.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_frame_edit_leaves_chunks_already_materialized_with_the_old_pixels() {
+    let (mut grid, mut images, mut placements) = handler_state();
+    transmit_root(&mut grid, &mut images, &mut placements, b"1");
+    let in_flight = shipped_chunks(&materialize_image_events(
+        &[ImageEvent::Transmit(ImageId(1))],
+        &images,
+    ));
+    assert_eq!(in_flight, [vec![0xAA, 0xBB, 0xCC, 0xDD]]);
+
+    edit_root_frame(&mut grid, &mut images, &mut placements, (b'X', b"1"));
+
+    assert_eq!(
+        in_flight,
+        [vec![0xAA, 0xBB, 0xCC, 0xDD]],
+        "a chunk awaiting its writer keeps the pixels it was cut from"
+    );
+    let next = materialize_image_events(
+        &[ImageEvent::TransmitFrame {
+            id: ImageId(1),
+            index: 0,
+        }],
+        &images,
+    );
+    assert_eq!(shipped_chunks(&next), [vec![0x11, 0x22, 0x33, 0x00]]);
+}
+
+#[test]
+fn a_same_frame_compose_copies_the_source_rectangle_as_it_was() {
+    let (mut grid, mut images, mut placements) = handler_state();
+    let pixels: Vec<u8> = (0..16).collect();
+    let ctrls: [(u8, &[u8]); 6] = [
+        (b'a', b"t"),
+        (b'i', b"1"),
+        (b'f', b"32"),
+        (b's', b"4"),
+        (b'v', b"1"),
+        (b't', b"d"),
+    ];
+    dispatch_controls(
+        &mut grid,
+        &mut images,
+        &mut placements,
+        &ctrls,
+        &b64(&pixels),
+    );
+    let compose: [(u8, &[u8]); 7] = [
+        (b'a', b"c"),
+        (b'i', b"1"),
+        (b'r', b"1"),
+        (b'c', b"1"),
+        (b'w', b"2"),
+        (b'x', b"2"),
+        (b'C', b"1"),
+    ];
+    dispatch_controls(&mut grid, &mut images, &mut placements, &compose, b"");
+    let root = &images.get(ImageId(1)).unwrap().frame(0).unwrap().pixels;
+    assert_eq!(root[..], [0, 1, 2, 3, 4, 5, 6, 7, 0, 1, 2, 3, 4, 5, 6, 7]);
+}
+
 /// The producer-facing half of the frame cap: `a=f` past 4096 answers
 /// `ENOTSUP` (kitty's status set has no `ENOSPC`) and leaves the
 /// animation exactly as it was, rather than evicting a frame the

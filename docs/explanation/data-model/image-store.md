@@ -98,10 +98,11 @@ storage separately at `storage_limit × 5`; felis folds frames into the one exis
 pathological producer hits eviction sooner than kitty would. The frame mutators (`push_frame` / `replace_frame` /
 `remove_frame`) run the same refcount-aware eviction as `insert`, excluding the image being grown so it never evicts
 itself to fit its own frame. They are also the only way in: the store lends out an `AnimationControl` view (gap,
-displayed frame, run mode, loop bound) rather than a mutable entry, so a mutation that moves bytes has nowhere to be
-written except a method that charges for it. A `&mut ImageEntry` is rejected for the reason budgets usually fail: it
-reaches the entry's dimensions and its frame vector, so the charge stays honest only as long as every caller remembers
-to make it, and the store must not depend on that.
+displayed frame, run mode, loop bound) and, through `edit_frame`, a frame's pixel slice, which cannot change length,
+rather than a mutable entry, so a mutation that moves bytes has nowhere to be written except a method that charges for
+it. A `&mut ImageEntry` is rejected for the reason budgets usually fail: it reaches the entry's dimensions and its frame
+vector, so the charge stays honest only as long as every caller remembers to make it, and the store must not depend on
+that.
 
 Playback state lives on the entry, and the advance state machine (`ImageEntry::advance(now_ms) -> Option<usize>`) is
 pure and clock-source-agnostic: it takes monotonic milliseconds, not `Instant`, so it is proptest-able without a real
