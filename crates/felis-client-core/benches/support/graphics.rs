@@ -477,7 +477,7 @@ impl Pipeline {
         emit_diffs_with(&mut self.grid, &mut self.scratch, true);
         apply_diffs(&self.scratch, &mut self.shadow);
         self.scratch.clear();
-        for msg in materialize_image_events(&self.events, &self.images) {
+        for msg in materialize_image_events(&self.events, &self.images, true) {
             frame_into(&mut self.scratch, MessageKind::Image, &encode(&msg));
         }
         self.events.clear();

@@ -1724,7 +1724,7 @@ fn animation_frame_appends_and_emits_frame_transmission() {
     assert_eq!(entry.frame_count(), 2, "a=f appends a frame");
     assert_eq!(entry.frame(1).unwrap().pixels, vec![0x11, 0x22, 0x33, 0x44]);
     assert_eq!(entry.frame(1).unwrap().gap_ms, 100, "z=100 → 100ms gap");
-    let wire = materialize_image_events(&events, &images);
+    let wire = materialize_image_events(&events, &images, true);
     assert!(
         wire.iter().any(|e| matches!(
             e,
@@ -1809,6 +1809,7 @@ fn a_frame_edit_leaves_chunks_already_materialized_with_the_old_pixels() {
     let in_flight = shipped_chunks(&materialize_image_events(
         &[ImageEvent::Transmit(ImageId(1))],
         &images,
+        true,
     ));
     assert_eq!(in_flight, [vec![0xAA, 0xBB, 0xCC, 0xDD]]);
 
@@ -1825,6 +1826,7 @@ fn a_frame_edit_leaves_chunks_already_materialized_with_the_old_pixels() {
             index: 0,
         }],
         &images,
+        true,
     );
     assert_eq!(shipped_chunks(&next), [vec![0x11, 0x22, 0x33, 0x00]]);
 }
@@ -2095,7 +2097,7 @@ fn delete_frame_removes_it_and_reships_the_image() {
     // Frame removal has no per-frame wire message: the client gets a
     // full rebuild, so a fresh root Header is re-emitted.
     assert!(
-        materialize_image_events(&events, &images)
+        materialize_image_events(&events, &images, true)
             .iter()
             .any(|e| matches!(e, ImageMsg::Header { id: ImageId(1), .. })),
         "frame delete re-ships the image so the client rebuilds its frames",
@@ -3556,7 +3558,7 @@ fn icat_replay_unpadded_frame_appends_and_a_eq_a_is_silent() {
     assert_eq!(entry.frame_count(), 2, "unpadded a=f payload must decode");
     assert_eq!(entry.frame(1).unwrap().gap_ms, 80);
     assert!(
-        materialize_image_events(&events, &images)
+        materialize_image_events(&events, &images, true)
             .iter()
             .any(|e| matches!(
                 e,

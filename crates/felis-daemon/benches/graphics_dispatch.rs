@@ -169,7 +169,7 @@ fn with_base_image(w: u32, h: u32) -> Session {
 fn bench_frame_edits(g: &mut Group<'_>, name: String, mut s: Session, edits: &[Command]) {
     s.feed_all(edits);
     assert!(
-        has_event(&s, |e| matches!(e, ImageEvent::TransmitFrame { .. })),
+        has_event(&s, |e| matches!(e, ImageEvent::TransmitRegion { .. })),
         "{name}: frame edits rejected"
     );
     s.events.clear();
@@ -396,7 +396,7 @@ fn fanout_frame(g: &mut Group<'_>) {
             "no transmit event to fan out"
         );
         assert!(
-            materialize_image_events(&events, &s.images)
+            materialize_image_events(&events, &s.images, true)
                 .iter()
                 .any(|m| matches!(m, ImageMsg::Chunk { .. })),
             "fan-out materializes no pixel chunks"
@@ -406,7 +406,7 @@ fn fanout_frame(g: &mut Group<'_>) {
             g.throughput(Throughput::Elements(1));
             g.bench_function(format!("frame_rgba/sub{subscribers}/{}", dims(w, h)), |b| {
                 b.iter(|| {
-                    subs.send(&materialize_image_events(&events, &s.images));
+                    subs.send(&materialize_image_events(&events, &s.images, true));
                 });
             });
         }
@@ -431,7 +431,7 @@ fn fanout_dirty_rects(g: &mut Group<'_>) {
         }
         let events = std::mem::take(&mut s.events);
         assert!(
-            materialize_image_events(&events, &s.images)
+            materialize_image_events(&events, &s.images, true)
                 .iter()
                 .any(|m| matches!(m, ImageMsg::Chunk { .. })),
             "dirty rectangles materialize no pixel chunks"
@@ -442,7 +442,7 @@ fn fanout_dirty_rects(g: &mut Group<'_>) {
             format!("dirty_rects/n{count}/{}", dims(width, height)),
             |b| {
                 b.iter(|| {
-                    subs.send(&materialize_image_events(&events, &s.images));
+                    subs.send(&materialize_image_events(&events, &s.images, true));
                 });
             },
         );

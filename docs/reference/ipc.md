@@ -1216,6 +1216,13 @@ A zero-length `Chunk` is a legal no-op. A `Complete` is therefore the proof the 
 zero-fills a shortfall and never normalizes a malformed sequence. A `Delete` of the image a transfer is open on aborts
 that transfer.
 
+**Frame edits.** An in-place edit of an existing frame (`a=f` with `r=`, `a=c`) reaches a window at minor 4 or later
+that attached with `image_regions` set as `Region` transfers of the rectangles the edits touched since the last fan-out,
+read from the store at ship time; any other window receives the whole frame under `Frame`. One frame's edits in one
+fan-out ship as at most 16 rectangles, a rectangle another covers dropped and more merged into their bounding box, and
+as the whole frame instead once they cover more than half of it. Nothing ships as a `Region` for a frame the same
+fan-out re-ships whole, or for an image it re-states or deletes; the attach burst carries every frame whole.
+
 **Store and placements.** `Delete` drops an image with its placements and also announces the daemon's own evictions, so
 a mirror's byte total tracks the daemon's. `Placement` and `VirtualPlacement` are upserts that `PlacementRemoved`
 removes, and `PlacementsShifted` moves every anchor when the live region pushes rows into scrollback; a placement whose

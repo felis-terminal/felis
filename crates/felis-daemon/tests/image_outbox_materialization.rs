@@ -12,6 +12,7 @@ use felis_daemon::graphics::{
 };
 use felis_grid::Grid;
 use felis_grid::images::{ImageId, ImageStore, Placements};
+use felis_protocol::messages::{ImageMsg, ImageTarget, SourceRect};
 use felis_vt::kitty_graphics::Reassembler;
 
 mod common;
@@ -57,9 +58,13 @@ impl State {
         );
     }
 
-    fn ship(&mut self, shadow: &mut ImageShadow) -> Vec<felis_protocol::messages::ImageMsg> {
+    fn ship(&mut self, shadow: &mut ImageShadow) -> Vec<ImageMsg> {
+        self.ship_at(true, shadow)
+    }
+
+    fn ship_at(&mut self, regions: bool, shadow: &mut ImageShadow) -> Vec<ImageMsg> {
         let events = std::mem::take(&mut self.events);
-        let wire = materialize_image_events(&events, &self.images);
+        let wire = materialize_image_events(&events, &self.images, regions);
         for msg in &wire {
             // The daemon's own emissions are inside every protocol
             // limit by construction; a refusal here is the interesting
@@ -125,7 +130,7 @@ fn a_superseded_transmission_ships_once_with_the_latest_pixels() {
 
     let headers = wire
         .iter()
-        .filter(|m| matches!(m, felis_protocol::messages::ImageMsg::Header { .. }))
+        .filter(|m| matches!(m, ImageMsg::Header { .. }))
         .count();
     assert_eq!(
         headers, 1,
@@ -234,6 +239,183 @@ fn a_frame_jump_in_the_same_batch_lands_the_mirror_on_the_live_frame() {
         entry_frame,
         "the mirror must display the frame the store displays",
     );
+}
+
+/// An 8×4 RGBA image whose pixel `i` is `[i; 4]`, shipped to `shadows`.
+fn pattern_image(s: &mut State, shadows: &mut [&mut ImageShadow]) {
+    let pixels: Vec<u8> = (0..32u8).flat_map(|i| [i; 4]).collect();
+    s.dispatch(&body("Ga=t,i=1,f=32,s=8,v=4,q=2", &b64(&pixels)));
+    let events = std::mem::take(&mut s.events);
+    for shadow in shadows {
+        for msg in materialize_image_events(&events, &s.images, true) {
+            shadow.apply(&msg).unwrap();
+        }
+    }
+}
+
+fn edit(s: &mut State, frame: u32, rect: (u32, u32, u32, u32), fill: u8) {
+    let (x, y, width, height) = rect;
+    s.dispatch(&body(
+        &format!("Ga=f,i=1,r={frame},x={x},y={y},s={width},v={height},f=32,X=1,q=2"),
+        &b64(&vec![fill; (width * height * 4) as usize]),
+    ));
+}
+
+fn targets(wire: &[ImageMsg]) -> Vec<ImageTarget> {
+    wire.iter()
+        .filter_map(|m| match m {
+            ImageMsg::Header { target, .. } => Some(*target),
+            _ => None,
+        })
+        .collect()
+}
+
+fn chunk_bytes(wire: &[ImageMsg]) -> Vec<u8> {
+    wire.iter()
+        .filter_map(|m| match m {
+            ImageMsg::Chunk { bytes, .. } => Some(&bytes[..]),
+            _ => None,
+        })
+        .flatten()
+        .copied()
+        .collect()
+}
+
+const fn region(x: u32, y: u32, width: u32, height: u32) -> ImageTarget {
+    ImageTarget::Region {
+        number: std::num::NonZeroU32::MIN,
+        rect: SourceRect {
+            x,
+            y,
+            width,
+            height,
+        },
+    }
+}
+
+const ROOT: ImageTarget = ImageTarget::Frame {
+    number: std::num::NonZeroU32::MIN,
+};
+
+fn root_pixels(s: &State) -> Vec<u8> {
+    s.images
+        .get(ImageId(1))
+        .unwrap()
+        .frame(0)
+        .unwrap()
+        .pixels
+        .to_vec()
+}
+
+#[test]
+fn an_edit_ships_its_rectangle_alone_and_the_whole_frame_to_a_window_without_regions() {
+    let mut s = State::with_cap(ROOMY_CAP);
+    let (mut current, mut whole) = (ImageShadow::new(), ImageShadow::new());
+    pattern_image(&mut s, &mut [&mut current, &mut whole]);
+    edit(&mut s, 1, (2, 1, 3, 2), 0xEE);
+    let events = s.events.clone();
+
+    let wire = s.ship(&mut current);
+    assert_eq!(targets(&wire), [region(2, 1, 3, 2)]);
+    let store = root_pixels(&s);
+    let rows: Vec<u8> = [1usize, 2]
+        .iter()
+        .flat_map(|y| store[(y * 8 + 2) * 4..(y * 8 + 5) * 4].to_vec())
+        .collect();
+    assert_eq!(chunk_bytes(&wire), rows, "exactly the rectangle's rows");
+    assert_eq!(current.image(ImageId(1)).unwrap().pixels(), store);
+
+    s.events = events;
+    let wire = s.ship_at(false, &mut whole);
+    assert_eq!(targets(&wire), [ROOT]);
+    assert_eq!(chunk_bytes(&wire), store);
+    assert_eq!(whole.image(ImageId(1)).unwrap().pixels(), store);
+}
+
+#[test]
+fn edits_of_one_frame_in_a_batch_ship_once_each_and_a_covered_one_not_at_all() {
+    let mut s = State::with_cap(ROOMY_CAP);
+    let mut shadow = ImageShadow::new();
+    pattern_image(&mut s, &mut [&mut shadow]);
+    edit(&mut s, 1, (0, 0, 1, 1), 0x01);
+    edit(&mut s, 1, (6, 3, 2, 1), 0x02);
+    edit(&mut s, 1, (0, 0, 2, 1), 0x03);
+    edit(&mut s, 1, (1, 0, 1, 1), 0x04);
+
+    let wire = s.ship(&mut shadow);
+    assert_eq!(targets(&wire), [region(6, 3, 2, 1), region(0, 0, 2, 1)]);
+    assert_eq!(shadow.image(ImageId(1)).unwrap().pixels(), root_pixels(&s));
+}
+
+#[test]
+fn edits_past_the_rectangle_cap_ship_as_their_bounding_box() {
+    let mut s = State::with_cap(ROOMY_CAP);
+    let mut shadow = ImageShadow::new();
+    pattern_image(&mut s, &mut [&mut shadow]);
+    for k in 0..8 {
+        edit(&mut s, 1, (k, 0, 1, 1), 0x10);
+        edit(&mut s, 1, (k, 1, 1, 1), 0x20);
+    }
+    assert_eq!(
+        targets(&s.ship(&mut shadow)).len(),
+        16,
+        "at the cap each ships"
+    );
+    for k in 0..8 {
+        edit(&mut s, 1, (k, 0, 1, 1), 0x10);
+        edit(&mut s, 1, (k, 1, 1, 1), 0x20);
+    }
+    edit(&mut s, 1, (0, 2, 1, 1), 0x30);
+    let wire = s.ship(&mut shadow);
+    assert_eq!(targets(&wire), [ROOT], "an 8x3 box is past half the frame");
+    assert_eq!(shadow.image(ImageId(1)).unwrap().pixels(), root_pixels(&s));
+}
+
+#[test]
+fn edits_over_half_the_frame_ship_it_whole() {
+    let mut s = State::with_cap(ROOMY_CAP);
+    let mut shadow = ImageShadow::new();
+    pattern_image(&mut s, &mut [&mut shadow]);
+    edit(&mut s, 1, (0, 0, 8, 2), 0x55);
+    assert_eq!(
+        targets(&s.ship(&mut shadow)),
+        [region(0, 0, 8, 2)],
+        "half ships as a region"
+    );
+    edit(&mut s, 1, (0, 0, 8, 2), 0x66);
+    edit(&mut s, 1, (0, 3, 1, 1), 0x66);
+    assert_eq!(targets(&s.ship(&mut shadow)), [ROOT]);
+    assert_eq!(shadow.image(ImageId(1)).unwrap().pixels(), root_pixels(&s));
+}
+
+#[test]
+fn a_whole_frame_or_image_in_the_same_batch_supersedes_its_edits() {
+    let mut s = State::with_cap(ROOMY_CAP);
+    let mut shadow = ImageShadow::new();
+    pattern_image(&mut s, &mut [&mut shadow]);
+    s.dispatch(&body("Ga=f,i=1,f=32,s=8,v=4,q=2", &b64(&[0x77; 128])));
+    edit(&mut s, 2, (1, 1, 1, 1), 0x78);
+    let two = ImageTarget::Frame {
+        number: std::num::NonZeroU32::new(2).unwrap(),
+    };
+    assert_eq!(
+        targets(&s.ship(&mut shadow)),
+        [two],
+        "an append carries its edits"
+    );
+
+    edit(&mut s, 1, (1, 1, 1, 1), 0x79);
+    s.dispatch(&body("Ga=d,d=f,i=1,r=2,q=2", &[]));
+    let wire = s.ship(&mut shadow);
+    assert!(
+        targets(&wire)
+            .iter()
+            .all(|t| !matches!(t, ImageTarget::Region { .. })),
+        "a restate re-ships every frame, got {wire:?}"
+    );
+    let held = shadow.image(ImageId(1)).unwrap();
+    assert_eq!(held.frames.len(), 1);
+    assert_eq!(held.pixels(), root_pixels(&s));
 }
 
 #[derive(Debug, Clone)]

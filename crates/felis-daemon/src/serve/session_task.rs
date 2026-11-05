@@ -355,6 +355,9 @@ pub struct SubscribeReq {
     /// `SessionToDaemonMsg::Attach { live_only }`: refuse when the shell has
     /// exited.
     pub live_only: bool,
+    /// `SessionToDaemonMsg::Attach { image_regions }`: the window reads
+    /// frame-region transfers.
+    pub image_regions: bool,
     pub carrier: AttachCarrier,
     /// Answered once the rehydrate burst is queued.
     pub reply: oneshot::Sender<Result<SubscribeOk, SubscribeRefused>>,
@@ -911,6 +914,7 @@ struct Subscriber {
     pull_pacing: bool,
     pull_pending: bool,
     minor: u16,
+    image_regions: bool,
     /// `InputMsg::AnnounceOutput`; a fresh attachment starts without it.
     announce_output: bool,
     /// Shipped with this subscriber's next diff cycle, never in a
@@ -949,6 +953,10 @@ struct ThemeReport {
 }
 
 impl Subscriber {
+    const fn reads_regions(&self) -> bool {
+        self.image_regions && self.minor >= felis_protocol::minor::IMAGE_HEADER_REGION.minor
+    }
+
     /// `false` means the subscriber is dead (pump hung up, or backlog
     /// over cap); the caller removes it.
     fn push(&self, ev: OutEvent) -> bool {
@@ -1892,6 +1900,7 @@ impl SessionTask {
             pull_pacing: req.pull_paced,
             pull_pending: false,
             minor: req.minor,
+            image_regions: req.image_regions,
             announce_output: false,
             command_outputs: VecDeque::new(),
             tx: req.tx,
@@ -2682,16 +2691,29 @@ impl SessionTask {
         // parked session), materialized only for a window: a parked mpv
         // would otherwise pay a frame read per video frame for nobody.
         let events = std::mem::take(&mut self.session.image_events);
-        if self.subs.iter().any(|sub| sub.is_window) {
-            let msgs = crate::graphics::materialize_image_events(&events, &self.session.images);
-            self.broadcast(|sub| {
-                if sub.is_window {
-                    msgs.iter().cloned().map(OutEvent::Image).collect()
-                } else {
-                    Vec::new()
-                }
+        // A batch without a region marker materializes the same for every
+        // window, so only one with one splits the windows in two.
+        let split = events
+            .iter()
+            .any(|e| matches!(e, crate::graphics::ImageEvent::TransmitRegion { .. }));
+        let bucket = |sub: &Subscriber| usize::from(split && sub.reads_regions());
+        let mut msgs: [Option<Vec<ImageMsg>>; 2] = [None, None];
+        for sub in self.subs.iter().filter(|sub| sub.is_window) {
+            msgs[bucket(sub)].get_or_insert_with(|| {
+                crate::graphics::materialize_image_events(
+                    &events,
+                    &self.session.images,
+                    sub.reads_regions(),
+                )
             });
         }
+        if msgs.iter().all(Option::is_none) {
+            return;
+        }
+        self.broadcast(|sub| match (&msgs[bucket(sub)], sub.is_window) {
+            (Some(msgs), true) => msgs.iter().cloned().map(OutEvent::Image).collect(),
+            _ => Vec::new(),
+        });
     }
 
     /// Drains the parse's effects first, as a drive cycle does: a scroll
@@ -4074,6 +4096,7 @@ mod tests {
             pull_paced,
             minor: felis_protocol::preface::PROTOCOL_MINOR,
             live_only: false,
+            image_regions: false,
             carrier: AttachCarrier::Local,
             tx,
             buffered: Arc::new(AtomicUsize::new(0)),
@@ -4098,6 +4121,7 @@ mod tests {
             pull_paced: false,
             minor: felis_protocol::preface::PROTOCOL_MINOR,
             live_only: false,
+            image_regions: false,
             carrier: AttachCarrier::Local,
             tx,
             buffered: Arc::new(AtomicUsize::new(0)),
@@ -8706,6 +8730,7 @@ mod tests {
                 pull_paced: false,
                 minor: felis_protocol::preface::PROTOCOL_MINOR,
                 live_only: false,
+                image_regions: false,
                 carrier: AttachCarrier::Local,
                 tx,
                 buffered: Arc::new(AtomicUsize::new(0)),
@@ -8893,6 +8918,70 @@ mod tests {
         assert!(
             announced(&drain_events(&mut rx_old)).is_empty(),
             "a connection below the arm's minor is never sent it"
+        );
+    }
+
+    fn image_targets(events: &[OutEvent]) -> Vec<felis_protocol::messages::ImageTarget> {
+        events
+            .iter()
+            .filter_map(|ev| match ev {
+                OutEvent::Image(ImageMsg::Header { target, .. }) => Some(*target),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_frame_edit_reaches_only_an_opted_in_window_at_the_region_minor_as_a_region() {
+        use felis_protocol::messages::{ImageTarget, SourceRect};
+
+        let mut task = SessionTask::for_tests(session_with("read _x"));
+        let (new, mut rx_new) = attach_sub(&mut task, false);
+        let (old, mut rx_old) = attach_sub(&mut task, false);
+        let (_off, mut rx_off) = attach_sub(&mut task, false);
+        for (sub, minor) in [
+            (new, felis_protocol::preface::PROTOCOL_MINOR),
+            (old, felis_protocol::minor::IMAGE_HEADER_REGION.minor - 1),
+        ] {
+            let idx = task.sub_index(sub).expect("subscriber present");
+            task.subs[idx].image_regions = true;
+            task.subs[idx].minor = minor;
+        }
+        write_to_grid(
+            &task,
+            b"\x1b_Ga=t,f=32,s=4,v=2,i=1,q=2;AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\x1b\\",
+        );
+        task.drain_and_fan().expect("effects drain");
+        drain_events(&mut rx_new);
+        drain_events(&mut rx_old);
+        drain_events(&mut rx_off);
+
+        write_to_grid(
+            &task,
+            b"\x1b_Ga=f,i=1,r=1,x=1,y=1,s=1,v=1,f=32,q=2;/////w==\x1b\\",
+        );
+        task.drain_and_fan().expect("effects drain");
+
+        let number = std::num::NonZeroU32::MIN;
+        let rect = SourceRect {
+            x: 1,
+            y: 1,
+            width: 1,
+            height: 1,
+        };
+        assert_eq!(
+            image_targets(&drain_events(&mut rx_new)),
+            [ImageTarget::Region { number, rect }]
+        );
+        assert_eq!(
+            image_targets(&drain_events(&mut rx_old)),
+            [ImageTarget::Frame { number }],
+            "a window below the region's minor gets the whole frame"
+        );
+        assert_eq!(
+            image_targets(&drain_events(&mut rx_off)),
+            [ImageTarget::Frame { number }],
+            "a window that did not opt in gets the whole frame"
         );
     }
 

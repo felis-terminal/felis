@@ -1,6 +1,7 @@
-//! A window mirrors the daemon's images and placements from the events
-//! alone across arbitrary Kitty graphics command and screen sequences
-//! (`docs/reference/protocols/kitty-graphics.md`).
+//! A window mirrors the daemon's images, frames and placements from the
+//! events alone across arbitrary Kitty graphics command and screen
+//! sequences (`docs/reference/protocols/kitty-graphics.md`), whether it
+//! takes frame edits as regions or as whole frames.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -49,6 +50,32 @@ enum Op {
         p: Option<u32>,
     },
     Screen(&'static str),
+    /// `a=f`: append when `edit` is `None`, else edit frame `r=` at
+    /// `x`, `y` over `w` × `h`.
+    Frame {
+        id: u32,
+        edit: Option<(u32, u32, u32, u32, u32)>,
+    },
+    /// `a=c`: `r=` onto `c=`, `w` × `h` from (0, 0) to (`x`, `y`).
+    Compose {
+        id: u32,
+        src: u32,
+        dst: u32,
+        rect: (u32, u32, u32, u32),
+    },
+    DeleteFrame {
+        id: u32,
+        r: u32,
+    },
+    Jump {
+        id: u32,
+        c: u32,
+    },
+}
+
+/// A rectangle that fits the 2×2 images the ops send.
+fn rect() -> impl Strategy<Value = (u32, u32, u32, u32)> {
+    (0u32..2, 0u32..2).prop_flat_map(|(x, y)| (Just(x), Just(y), 1..=2 - x, 1..=2 - y))
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -114,6 +141,18 @@ fn op() -> impl Strategy<Value = Op> {
             Just("\x1b[H\x1bM"),
         ]
         .prop_map(Op::Screen),
+        (1u32..5, proptest::option::of((1u32..4, rect()))).prop_map(|(id, edit)| Op::Frame {
+            id,
+            edit: edit.map(|(r, (x, y, w, h))| (r, x, y, w, h)),
+        }),
+        (1u32..5, 1u32..4, 1u32..4, rect()).prop_map(|(id, src, dst, rect)| Op::Compose {
+            id,
+            src,
+            dst,
+            rect,
+        }),
+        (1u32..5, 1u32..4).prop_map(|(id, r)| Op::DeleteFrame { id, r }),
+        (1u32..5, 1u32..4).prop_map(|(id, c)| Op::Jump { id, c }),
     ]
 }
 
@@ -126,7 +165,12 @@ struct Session {
     saved: SavedScreens,
     events: Vec<ImageEvent>,
     shm: ShmDeferral,
+    /// Takes frame edits as regions.
     window: ImageShadow,
+    /// Below the region minor or not opted in: takes them as whole frames.
+    whole: ImageShadow,
+    /// Varies every payload, so a stale pixel is told apart.
+    fill: u8,
 }
 
 impl Session {
@@ -141,6 +185,8 @@ impl Session {
             events: Vec::new(),
             shm: ShmDeferral::default(),
             window: ImageShadow::new(),
+            whole: ImageShadow::new(),
+            fill: 0,
         }
     }
 
@@ -266,6 +312,33 @@ impl Session {
                 self.apc(&controls, b"");
             }
             Op::Screen(bytes) => self.screen(bytes),
+            Op::Frame { id, edit } => {
+                self.fill = self.fill.wrapping_add(1);
+                let (keys, w, h) = match edit {
+                    None => (String::new(), 2, 2),
+                    Some((frame, left, top, w, h)) => {
+                        (format!(",r={frame},x={left},y={top}"), *w, *h)
+                    }
+                };
+                let pixels = vec![self.fill; (w * h * 4) as usize];
+                self.apc(
+                    &format!("Ga=f,i={id}{keys},s={w},v={h},f=32,X=1,q=2"),
+                    &b64(&pixels),
+                );
+            }
+            Op::Compose {
+                id,
+                src,
+                dst,
+                rect: (x, y, w, h),
+            } => {
+                self.apc(
+                    &format!("Ga=c,i={id},r={src},c={dst},x={x},y={y},w={w},h={h},C=1,q=2"),
+                    b"",
+                );
+            }
+            Op::DeleteFrame { id, r } => self.apc(&format!("Ga=d,d=f,i={id},r={r},q=2"), b""),
+            Op::Jump { id, c } => self.apc(&format!("Ga=a,i={id},c={c},q=2"), b""),
         }
     }
 
@@ -273,10 +346,12 @@ impl Session {
     /// commands the PTY read carried.
     fn flush(&mut self) {
         let events = std::mem::take(&mut self.events);
-        for msg in materialize_image_events(&events, &self.images) {
-            self.window
-                .apply(&msg)
-                .expect("the daemon sends a well-formed stream");
+        for (window, regions) in [(&mut self.window, true), (&mut self.whole, false)] {
+            for msg in materialize_image_events(&events, &self.images, regions) {
+                window
+                    .apply(&msg)
+                    .expect("the daemon sends a well-formed stream");
+            }
         }
     }
 }
@@ -304,57 +379,68 @@ proptest! {
             }
             s.flush();
 
-            let mut daemon: Vec<_> = s
-                .placements
-                .iter()
-                .map(|p| {
-                    (
-                        p.image_id.0,
-                        p.placement_id.map(|id| id.0),
-                        p.anchor.row,
-                        p.extent(),
-                        p.source.map(|r| (r.x, r.y, r.width, r.height)),
-                    )
-                })
-                .collect();
-            let mut window: Vec<_> = s
-                .window
-                .placements()
-                .map(|p| {
-                    (
-                        p.image_id.0,
-                        p.placement_id.map(|id| id.0),
-                        p.anchor_row,
-                        (p.cols, p.rows),
-                        p.source.map(|r| (r.x, r.y, r.width, r.height)),
-                    )
-                })
-                .collect();
-            daemon.sort();
-            window.sort();
-            prop_assert_eq!(daemon, window, "placements after {:?}", op);
+            for (shadow, name) in [(&s.window, "window"), (&s.whole, "whole-frame window")] {
+                let mut daemon: Vec<_> = s
+                    .placements
+                    .iter()
+                    .map(|p| {
+                        (
+                            p.image_id.0,
+                            p.placement_id.map(|id| id.0),
+                            p.anchor.row,
+                            p.extent(),
+                            p.source.map(|r| (r.x, r.y, r.width, r.height)),
+                        )
+                    })
+                    .collect();
+                let mut window: Vec<_> = shadow
+                    .placements()
+                    .map(|p| {
+                        (
+                            p.image_id.0,
+                            p.placement_id.map(|id| id.0),
+                            p.anchor_row,
+                            (p.cols, p.rows),
+                            p.source.map(|r| (r.x, r.y, r.width, r.height)),
+                        )
+                    })
+                    .collect();
+                daemon.sort();
+                window.sort();
+                prop_assert_eq!(daemon, window, "{} placements after {:?}", name, op);
 
-            let wire = |v: &felis_grid::images::VirtualPlacement| (v.image_id, v.placement_id, v.cols, v.rows, v.z_index);
-            let daemon: Vec<_> = s.placements.iter_virtual().map(wire).collect();
-            let window: Vec<_> = s.window.virtual_placements().iter().map(wire).collect();
-            prop_assert_eq!(daemon, window, "virtual placements after {:?}", op);
+                let wire = |v: &felis_grid::images::VirtualPlacement| (v.image_id, v.placement_id, v.cols, v.rows, v.z_index);
+                let daemon: Vec<_> = s.placements.iter_virtual().map(wire).collect();
+                let window: Vec<_> = shadow.virtual_placements().iter().map(wire).collect();
+                prop_assert_eq!(daemon, window, "{} virtual placements after {:?}", name, op);
 
-            // Named ids, I= ids from the lowest free one up, anonymous
-            // ids from the top down.
-            for id in (1..=16).chain(u32::MAX - 64..=u32::MAX).map(felis_grid::images::ImageId) {
-                prop_assert_eq!(
-                    s.images.get(id).is_some(),
-                    s.window.image(id).is_some(),
-                    "image {:?} after {:?}",
-                    id,
-                    op
-                );
-            }
+                // Named ids, I= ids from the lowest free one up, anonymous
+                // ids from the top down.
+                for id in (1..=16).chain(u32::MAX - 64..=u32::MAX).map(felis_grid::images::ImageId) {
+                    prop_assert_eq!(
+                        s.images.get(id).is_some(),
+                        shadow.image(id).is_some(),
+                        "image {:?} after {:?}",
+                        id,
+                        op
+                    );
+                }
 
-            let shown = s.window.placements().map(|p| p.image_id)
-                .chain(s.window.virtual_placements().iter().map(|v| v.image_id));
-            for id in shown {
-                prop_assert!(s.window.image(id).is_some(), "image {:?} is shown but not stored after {:?}", id, op);
+                let shown = shadow.placements().map(|p| p.image_id)
+                    .chain(shadow.virtual_placements().iter().map(|v| v.image_id));
+                for id in shown {
+                    prop_assert!(shadow.image(id).is_some(), "image {:?} is shown but not stored after {:?}", id, op);
+                }
+
+                for id in s.images.iter_ids() {
+                    let entry = s.images.get(id).unwrap();
+                    let held = shadow.image(id).unwrap();
+                    prop_assert_eq!(held.frames.len(), entry.frame_count(), "{} frames of {:?} after {:?}", name, id, op);
+                    prop_assert_eq!(held.current_frame(), entry.current_frame(), "{} shown frame of {:?} after {:?}", name, id, op);
+                    for (i, frame) in held.frames.iter().enumerate() {
+                        prop_assert_eq!(&frame.pixels[..], &entry.frame(i).unwrap().pixels[..], "{} frame {} of {:?} after {:?}", name, i, id, op);
+                    }
+                }
             }
         }
     }

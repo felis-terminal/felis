@@ -6493,6 +6493,7 @@ async fn status_sums_every_subscriber_backlog_and_names_the_deepest() {
                     pull_paced: false,
                     minor: preface::PROTOCOL_MINOR,
                     live_only: false,
+                    image_regions: false,
                     carrier: AttachCarrier::Local,
                     tx,
                     buffered: Arc::clone(&buffered),
