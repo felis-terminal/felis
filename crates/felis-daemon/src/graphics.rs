@@ -1110,7 +1110,7 @@ fn evict_to_fit(
     if !over(images) {
         return;
     }
-    free_unreferenced_where(images, placements, events, |id, _| id != incoming);
+    free_unreferenced_where(images, placements, events, false, Some(incoming));
     while over(images) {
         let Some(oldest) = images.least_recently_used(Some(incoming)) else {
             break;
@@ -1163,7 +1163,7 @@ fn free_unreferenced(
     placements: &mut felis_grid::images::Placements,
     events: &mut Vec<ImageEvent>,
 ) {
-    free_unreferenced_where(images, placements, events, |_, _| true);
+    free_unreferenced_where(images, placements, events, false, None);
 }
 
 /// kitty frees an image sent without an id once its last placement
@@ -1174,22 +1174,25 @@ pub fn free_unreferenced_anonymous(
     placements: &mut felis_grid::images::Placements,
     events: &mut Vec<ImageEvent>,
 ) {
-    free_unreferenced_where(images, placements, events, |_, entry| entry.is_anonymous());
+    free_unreferenced_where(images, placements, events, true, None);
 }
 
 fn free_unreferenced_where(
     images: &mut felis_grid::images::ImageStore,
     placements: &mut felis_grid::images::Placements,
     events: &mut Vec<ImageEvent>,
-    candidate: impl Fn(ImageId, &ImageEntry) -> bool,
+    anonymous_only: bool,
+    spare: Option<ImageId>,
 ) {
-    // Only refcount-0 images are walked: a direct placement holds its
-    // image's ref, so a pinned image is always referenced.
+    // A direct placement holds its image's ref and a virtual one is
+    // marked held, so only the store's loose images can be unreferenced.
+    for id in placements.take_virtual_changes() {
+        images.set_virtually_held(id, placements.has_virtual(id));
+    }
     let unreferenced: Vec<ImageId> = images
-        .iter_unpinned_ids()
-        .filter(|&id| {
-            images.get(id).is_some_and(|entry| candidate(id, entry)) && !placements.references(id)
-        })
+        .loose_ids(anonymous_only)
+        .into_iter()
+        .filter(|&id| Some(id) != spare && !placements.references(id))
         .collect();
     for id in unreferenced {
         free_image(images, placements, events, id);

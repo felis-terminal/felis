@@ -9,7 +9,7 @@ use bytes::{Bytes, BytesMut};
 mod entries;
 mod table;
 pub(crate) use entries::Entries;
-use table::{Keyed, Table};
+use table::{ChangedImages, Keyed, Table};
 
 pub use felis_protocol::{
     ImageId, PlacementId,
@@ -211,7 +211,8 @@ impl ImageEntry {
     }
 
     /// Mirrors kitty's `image_is_animatable`.
-    fn is_animatable(&self) -> bool {
+    #[must_use]
+    pub fn is_animatable(&self) -> bool {
         self.mode != AnimationMode::Stopped
             && self.frames.len() > 1
             && self.total_gap_ms() > 0
@@ -266,7 +267,7 @@ impl ImageEntry {
     /// `Loading` halts on the last frame, `Running` loops until
     /// `max_loops`. Returns the new index when the displayed frame
     /// changed.
-    pub(crate) fn advance(&mut self, now_ms: u64) -> Option<usize> {
+    pub fn advance(&mut self, now_ms: u64) -> Option<usize> {
         if !self.is_animatable() {
             return None;
         }
@@ -595,14 +596,11 @@ impl ImageStore {
     /// wake an idle client for no visible change.
     pub fn advance_animations(&mut self, now_ms: u64) -> Vec<(ImageId, usize)> {
         let mut changed = Vec::new();
-        for (id, entry) in self.entries.iter_mut() {
-            if entry.refcount > 0
-                && entry.is_animated()
-                && let Some(idx) = entry.advance(now_ms)
-            {
+        self.entries.for_each_animated_mut(|id, entry| {
+            if let Some(idx) = entry.advance(now_ms) {
                 changed.push((id, idx));
             }
-        }
+        });
         changed
     }
 
@@ -611,14 +609,11 @@ impl ImageStore {
     /// frame clock is due now, so the first tick anchors it.
     #[must_use]
     pub fn next_animation_due_ms(&self, now_ms: u64) -> Option<u64> {
-        let mut soonest: Option<u64> = None;
-        for (_, entry) in self.entries.iter() {
-            if entry.refcount > 0 && entry.is_animatable() {
-                let due = entry.next_due_ms().unwrap_or(now_ms);
-                soonest = Some(soonest.map_or(due, |s| s.min(due)));
-            }
-        }
-        soonest
+        self.entries
+            .animated()
+            .filter(|entry| entry.is_animatable())
+            .map(|entry| entry.next_due_ms().unwrap_or(now_ms))
+            .min()
     }
 
     pub fn animation_control(&mut self, id: ImageId) -> Option<AnimationControl<'_>> {
@@ -694,18 +689,21 @@ impl ImageStore {
     /// kitty's `get_free_client_id`: the lowest id from 1 up that no
     /// image holds, which an `I=` transmission is given.
     #[must_use]
-    pub fn lowest_free_id(&self) -> ImageId {
-        let mut taken: Vec<u32> = self.entries.iter().map(|(id, _)| id.0).collect();
-        taken.sort_unstable();
-        let mut free = 1;
-        for id in taken {
-            if id == free {
-                free += 1;
-            } else if id > free {
-                break;
-            }
-        }
-        ImageId(free)
+    pub fn lowest_free_id(&mut self) -> ImageId {
+        self.entries.lowest_free_id()
+    }
+
+    /// Records whether a virtual placement shows the image, which no
+    /// refcount says: [`Self::loose_ids`] leaves held images out.
+    pub fn set_virtually_held(&mut self, id: ImageId, held: bool) {
+        self.entries.set_held(id, held);
+    }
+
+    /// The refcount-0 ids not [`Self::set_virtually_held`], only the
+    /// anonymous ones when `anonymous_only`, in [`Self::iter_ids`] order.
+    #[must_use]
+    pub fn loose_ids(&self, anonymous_only: bool) -> Vec<ImageId> {
+        self.entries.loose_ids(anonymous_only)
     }
 
     #[must_use]
@@ -1182,7 +1180,7 @@ pub struct Placements {
     /// `(image_id, placement_id)` names a direct or a virtual placement,
     /// never both. Kept apart because nothing that moves or clears
     /// anchored placements touches them.
-    virtuals: Table<VirtualPlacement>,
+    virtuals: Table<VirtualPlacement, ChangedImages>,
     /// Both tables draw from it, so the oldest placement of either kind
     /// is the one with the lowest.
     next_seq: u64,
@@ -1430,6 +1428,17 @@ impl Placements {
     #[must_use]
     pub fn references(&self, image_id: ImageId) -> bool {
         self.entries.has_image(image_id) || self.virtuals.has_image(image_id)
+    }
+
+    #[must_use]
+    pub fn has_virtual(&self, image_id: ImageId) -> bool {
+        self.virtuals.has_image(image_id)
+    }
+
+    /// The images whose [`Self::has_virtual`] may have changed since the
+    /// last call, each once.
+    pub fn take_virtual_changes(&mut self) -> Vec<ImageId> {
+        self.virtuals.take_changed()
     }
 
     /// Overwritten in place under its `(image_id, placement_id)`, or by
