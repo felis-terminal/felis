@@ -3,6 +3,7 @@
 //! dispatch state.
 
 use std::hint::black_box;
+use std::time::{Duration, Instant};
 
 use felis_daemon::graphics::{ApcCtx, ImageEvent, ShmDeferral, dispatch_apc_body};
 use felis_grid::Grid;
@@ -170,5 +171,13 @@ impl Session {
         for command in commands {
             self.feed(command);
         }
+    }
+
+    /// How long the session task holds the parse lock to dispatch one
+    /// command: every body of it, decode included.
+    pub(crate) fn hold(&mut self, bodies: &[Vec<u8>]) -> Duration {
+        let start = Instant::now();
+        self.feed(bodies);
+        start.elapsed()
     }
 }

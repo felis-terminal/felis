@@ -484,6 +484,67 @@ fn animation(g: &mut Group<'_>, mut images: ImageStore) {
     });
 }
 
+/// The parse lock's hold per heavy command, the time the session task
+/// can serve no pull, keystroke or other window while it dispatches.
+fn lock_hold(c: &mut Criterion) {
+    let mut g = c.benchmark_group("graphics_lock_hold");
+    g.sample_size(10);
+    let (w, h) = (1280, 720);
+    let png = png_rgba(w, h, &ui_frame(w, h, 4, 1));
+    let png_frame = command("a=T,i=1,p=1,f=100,C=1,q=2", &png);
+    bench_hold(&mut g, format!("png/{}", dims(w, h)), (w, h), &png_frame);
+    let (w, h) = FULL_FRAMES[0];
+    let pixels = ui_frame(w, h, 4, 3);
+    let zlib_frame = command(
+        &format!("a=T,i=1,p=1,f=32,s={w},v={h},C=1,q=2,o=z"),
+        &zlib(&pixels),
+    );
+    bench_hold(
+        &mut g,
+        format!("zlib_rgba/{}", dims(w, h)),
+        (w, h),
+        &zlib_frame,
+    );
+    #[cfg(unix)]
+    {
+        let name = format!("/felis-bench-{}-lock-hold", std::process::id());
+        let _segment = ShmSegment::create(name.clone(), &pixels);
+        let shm_frame = command(
+            &format!(
+                "a=T,i=1,p=1,f=32,s={w},v={h},C=1,q=2,t=s,S={}",
+                pixels.len()
+            ),
+            name.as_bytes(),
+        );
+        bench_hold(
+            &mut g,
+            format!("shm_rgba/{}", dims(w, h)),
+            (w, h),
+            &shm_frame,
+        );
+    }
+    g.finish();
+}
+
+fn bench_hold(g: &mut Group<'_>, name: String, (w, h): (u32, u32), frame: &Command) {
+    let mut s = Session::new(w, h);
+    s.feed(frame);
+    assert!(s.images.get(ImageId(1)).is_some(), "{name} rejected");
+    s.events.clear();
+    g.throughput(Throughput::Elements(1));
+    g.bench_function(name, |b| {
+        b.iter_custom(|iters| {
+            (0..iters)
+                .map(|_| {
+                    let held = s.hold(frame);
+                    s.events.clear();
+                    held
+                })
+                .sum()
+        });
+    });
+}
+
 struct Subscribers {
     runtime: tokio::runtime::Runtime,
     writers: Vec<FrameWriter<tokio::io::Sink>>,
@@ -666,5 +727,5 @@ fn fanout(c: &mut Criterion) {
     g.finish();
 }
 
-criterion_group!(benches, dispatch, fanout);
+criterion_group!(benches, dispatch, lock_hold, fanout);
 criterion_main!(benches);
