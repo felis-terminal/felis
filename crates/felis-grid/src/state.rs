@@ -7,7 +7,6 @@
 use std::num::{NonZeroU16, NonZeroU32};
 
 use bytes::Bytes;
-use indexmap::IndexMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 pub use felis_vt::state::StateError;
@@ -203,11 +202,12 @@ pub(crate) mod shared_b64 {
 /// The store's entries as a list: a JSON object would need string keys,
 /// and the order is the eviction order.
 pub(crate) mod image_entries {
-    use super::{Deserialize, Deserializer, ImageEntry, ImageId, IndexMap, Serializer};
+    use super::{Deserialize, Deserializer, ImageEntry, ImageId, Serializer};
+    use crate::images::Entries;
     use serde::de::Error as _;
 
     pub(crate) fn serialize<S: Serializer>(
-        entries: &IndexMap<ImageId, ImageEntry>,
+        entries: &Entries,
         serializer: S,
     ) -> Result<S::Ok, S::Error> {
         serializer.collect_seq(entries.iter())
@@ -215,10 +215,10 @@ pub(crate) mod image_entries {
 
     pub(crate) fn deserialize<'de, D: Deserializer<'de>>(
         deserializer: D,
-    ) -> Result<IndexMap<ImageId, ImageEntry>, D::Error> {
+    ) -> Result<Entries, D::Error> {
         let list = Vec::<(ImageId, ImageEntry)>::deserialize(deserializer)?;
         let len = list.len();
-        let entries: IndexMap<_, _> = list.into_iter().collect();
+        let entries: Entries = list.into_iter().collect();
         if entries.len() != len {
             return Err(D::Error::custom("an image id appears twice"));
         }

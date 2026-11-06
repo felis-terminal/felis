@@ -66,7 +66,6 @@ prost-types = "0.14"
 bytes = { version = "1", features = ["serde"] }
 bitflags = { version = "2", features = ["serde"] }
 # indexmap over HashMap+VecDeque: unifies entry lookup and eviction order without resync drift.
-indexmap = { version = "2", features = ["serde"] }
 # foldhash over default SipHash: style-intern index is non-adversarial and SipHash dominates parse time.
 foldhash = "0.2"
 thiserror = "2"

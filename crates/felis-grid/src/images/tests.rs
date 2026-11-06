@@ -44,7 +44,7 @@ fn a_restored_store_must_hold_well_formed_frames_and_charge_exactly_its_total() 
         s.check_restored().err().map(|err| err.0)
     };
     let with_entry = |edit: fn(&mut ImageEntry)| {
-        move |s: &mut ImageStore| edit(s.entries.get_mut(&ImageId(1)).unwrap())
+        move |s: &mut ImageStore| edit(s.entries.get_mut(ImageId(1)).unwrap())
     };
     assert_eq!(refusal(&|_| {}), None, "a store charged exactly to its cap");
 
@@ -1212,10 +1212,11 @@ fn replace_frame_grows_near_cap_and_evicts_others() {
 /// even when the store starts over capacity.
 #[test]
 fn equal_size_replace_frame_evicts_nothing_in_an_over_cap_store() {
-    let mut entries = IndexMap::new();
-    entries.insert(ImageId(1), entry(40));
-    // The bystander: refcount 0, first to go in an eviction pass.
-    entries.insert(ImageId(2), entry(40));
+    let entries = vec![
+        (ImageId(1), entry(40)),
+        // The bystander: refcount 0, first to go in an eviction pass.
+        (ImageId(2), entry(40)),
+    ];
     let mut s = ImageStore::over_cap_for_test(entries, charge(40));
     assert!(s.bytes_used() > s.bytes_cap(), "store must start over cap");
 
@@ -1229,6 +1230,22 @@ fn equal_size_replace_frame_evicts_nothing_in_an_over_cap_store() {
     // `entry` builds its root frame gapless, `frame_of` at 40 ms, so
     // the gap proves the swap landed.
     assert_eq!(s.get(ImageId(1)).unwrap().frame(0).unwrap().gap_ms, 40);
+}
+
+/// Entries restored from a dump that predates `atime` all hold 0; the
+/// LRU then picks them in store order.
+#[test]
+fn least_recently_used_breaks_atime_ties_by_store_order() {
+    let s = ImageStore::over_cap_for_test(
+        vec![
+            (ImageId(3), entry(1)),
+            (ImageId(1), entry(1)),
+            (ImageId(2), entry(1)),
+        ],
+        charge(1) * 3,
+    );
+    assert_eq!(s.least_recently_used(None), Some(ImageId(3)));
+    assert_eq!(s.least_recently_used(Some(ImageId(3))), Some(ImageId(1)));
 }
 
 #[test]
