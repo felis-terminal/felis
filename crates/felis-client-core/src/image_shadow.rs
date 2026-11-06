@@ -29,6 +29,73 @@ fn next_generation() -> u64 {
     NEXT_GENERATION.fetch_add(1, Ordering::Relaxed)
 }
 
+/// Two images' worth of the daemon's 16 rectangles per frame and
+/// fan-out, so a redraw that misses no fan-out can always patch.
+const EDIT_RING: usize = 32;
+
+/// One region patch to an image's displayed frame, which moved it from
+/// generation `from` to `to`.
+#[derive(Debug, Clone, Copy)]
+struct Edit {
+    id: ImageId,
+    from: u64,
+    to: u64,
+    rect: SourceRect,
+}
+
+/// The latest patches across every image, oldest overwritten first.
+/// Fixed-size and shared rather than per image: a per-image log would
+/// grow [`ClientImage`], and with it the charge per entry, past what
+/// the daemon's store charges for the same image, so the mirror could
+/// refuse a session the store admitted.
+#[derive(Debug)]
+struct EditRing {
+    edits: [Option<Edit>; EDIT_RING],
+    next: usize,
+}
+
+impl Default for EditRing {
+    fn default() -> Self {
+        Self {
+            edits: [None; EDIT_RING],
+            next: 0,
+        }
+    }
+}
+
+impl EditRing {
+    const fn push(&mut self, edit: Edit) {
+        self.edits[self.next] = Some(edit);
+        self.next = (self.next + 1) % EDIT_RING;
+    }
+
+    fn oldest_first(&self) -> impl Iterator<Item = &Edit> {
+        let (newer, older) = self.edits.split_at(self.next);
+        older.iter().chain(newer).flatten()
+    }
+
+    /// Appends to `out` the chain of `id`'s patches that leads from
+    /// `since` to `current`; `false`, leaving `out` as it was, when the
+    /// ring does not hold every link.
+    fn chain(&self, id: ImageId, since: u64, current: u64, out: &mut Vec<SourceRect>) -> bool {
+        let start = out.len();
+        let mut at = since;
+        for edit in self.oldest_first().filter(|e| e.id == id) {
+            if at == current {
+                break;
+            }
+            if edit.from == at {
+                out.push(edit.rect);
+                at = edit.to;
+            }
+        }
+        if at != current {
+            out.truncate(start);
+        }
+        at == current
+    }
+}
+
 /// One animation frame. felis ships coalesced frames
 /// (docs/reference/protocols/kitty-graphics.md "Animation"), so each
 /// frame is a complete pixel buffer.
@@ -282,6 +349,7 @@ pub struct ImageShadow {
     placements: DirectPlacements,
     virtual_placements: Vec<VirtualPlacement>,
     dirty_images: HashSet<ImageId>,
+    edits: EditRing,
     /// Bytes the images above hold ([`ImageShadow::bytes_of`]'s unit),
     /// kept as a running total: the aggregate has to be answerable
     /// before a header is applied, and re-summing every frame of every
@@ -373,6 +441,15 @@ impl ImageShadow {
             .collect();
         self.dirty_images.clear();
         drained
+    }
+
+    /// Appends to `out` every rectangle `id`'s displayed pixels changed
+    /// in since its generation was `since`, or returns `false` when the
+    /// change since then is not a run of patches the ring still holds.
+    pub fn edits_since(&self, id: ImageId, since: u64, out: &mut Vec<SourceRect>) -> bool {
+        self.images
+            .get(&id)
+            .is_some_and(|image| self.edits.chain(id, since, image.generation, out))
     }
 
     /// Applies an image message to update the mirror.
@@ -792,7 +869,14 @@ impl ImageShadow {
             frame.pixels[at..at + row].copy_from_slice(src);
         }
         if entry.current == slot {
+            let from = entry.generation;
             entry.generation = next_generation();
+            self.edits.push(Edit {
+                id,
+                from,
+                to: entry.generation,
+                rect,
+            });
             self.dirty_images.insert(id);
         }
     }
@@ -1892,6 +1976,92 @@ mod tests {
         assert_eq!(s.image(ImageId(1)).unwrap().pixels(), held);
         transfer(&mut s, &region(1, 1, 0, 0, 1, 1), vec![7; 3]);
         assert_eq!(s.image(ImageId(1)).unwrap().pixels()[..3], [7; 3]);
+    }
+
+    fn rect(x: u32, y: u32, width: u32, height: u32) -> SourceRect {
+        SourceRect {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
+    fn edits(s: &ImageShadow, since: u64) -> Option<Vec<SourceRect>> {
+        let mut out = Vec::new();
+        s.edits_since(ImageId(1), since, &mut out).then_some(out)
+    }
+
+    #[test]
+    fn edits_since_lists_every_patch_to_the_displayed_frame_after_that_generation() {
+        let mut s = ImageShadow::new();
+        rgb_grid(&mut s, 1);
+        let shown = generation(&s, 1);
+        assert_eq!(edits(&s, shown), Some(vec![]));
+        transfer(&mut s, &region(1, 1, 1, 1, 1, 1), vec![1; 3]);
+        let first = generation(&s, 1);
+        transfer(&mut s, &region(1, 1, 0, 2, 2, 1), vec![2; 6]);
+        assert_eq!(
+            edits(&s, shown),
+            Some(vec![rect(1, 1, 1, 1), rect(0, 2, 2, 1)])
+        );
+        assert_eq!(edits(&s, first), Some(vec![rect(0, 2, 2, 1)]));
+        assert_eq!(edits(&s, 0), None, "a generation the log never held");
+    }
+
+    #[test]
+    fn edits_since_answers_none_across_a_whole_frame_change() {
+        let mut s = ImageShadow::new();
+        rgb_grid(&mut s, 1);
+        transfer(&mut s, &frame_header(1, 2), vec![0; 36]);
+        let base = generation(&s, 1);
+        transfer(&mut s, &region(1, 1, 0, 0, 1, 1), vec![1; 3]);
+        let patched = generation(&s, 1);
+        s.apply_ok(&show_frame(1, 2));
+        assert_eq!(edits(&s, base), None, "a frame switch");
+        assert_eq!(edits(&s, patched), None);
+        let switched = generation(&s, 1);
+        transfer(&mut s, &region(1, 2, 0, 0, 1, 1), vec![1; 3]);
+        transfer(&mut s, &frame_header(1, 2), vec![0; 36]);
+        assert_eq!(edits(&s, switched), None, "a whole re-transmission");
+    }
+
+    /// The mirror refuses past the cap the store evicts at, so it may
+    /// charge an image no more than the store does.
+    #[test]
+    fn the_mirror_charges_no_more_per_record_than_the_store() {
+        use felis_grid::images::{Frame, ImageEntry};
+        assert!(ENTRY_OVERHEAD <= size_of::<ImageEntry>() + size_of::<ImageId>());
+        assert!(FRAME_OVERHEAD <= size_of::<Frame>());
+    }
+
+    #[test]
+    fn edits_since_forgets_a_generation_whose_patches_left_the_ring() {
+        let mut s = ImageShadow::new();
+        rgb_grid(&mut s, 1);
+        rgb_grid(&mut s, 2);
+        let shown = generation(&s, 1);
+        transfer(&mut s, &region(1, 1, 0, 0, 1, 1), vec![1; 3]);
+        for _ in 1..EDIT_RING {
+            transfer(&mut s, &region(2, 1, 0, 0, 1, 1), vec![1; 3]);
+        }
+        assert_eq!(edits(&s, shown), Some(vec![rect(0, 0, 1, 1)]));
+        transfer(&mut s, &region(2, 1, 0, 0, 1, 1), vec![1; 3]);
+        assert_eq!(edits(&s, shown), None, "another image's patch evicted it");
+    }
+
+    #[test]
+    fn edits_since_does_not_follow_a_replaced_image_s_old_patches() {
+        let mut s = ImageShadow::new();
+        rgb_grid(&mut s, 1);
+        let shown = generation(&s, 1);
+        transfer(&mut s, &region(1, 1, 0, 0, 1, 1), vec![1; 3]);
+        s.apply_ok(&ImageMsg::Delete { id: ImageId(1) });
+        rgb_grid(&mut s, 1);
+        assert_eq!(edits(&s, shown), None);
+        let fresh = generation(&s, 1);
+        transfer(&mut s, &region(1, 1, 1, 1, 1, 1), vec![1; 3]);
+        assert_eq!(edits(&s, fresh), Some(vec![rect(1, 1, 1, 1)]));
     }
 
     #[test]

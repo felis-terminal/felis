@@ -6,8 +6,15 @@
 
 use std::{collections::HashMap, num::NonZeroU32};
 
-use felis_protocol::{ImageId, messages::ImageFormat};
-use felis_render_core::atlas::{Allocation, ShelfAtlas};
+use felis_protocol::{
+    ImageId,
+    messages::{ImageFormat, SourceRect},
+};
+use felis_render_core::{
+    ImageData, ImageSource,
+    atlas::{Allocation, ShelfAtlas},
+    image_upload::{ImageUpload, ResidentImages, rect_rows},
+};
 use wgpu::{
     BindGroup, BindGroupLayout, Device, Sampler, Texture, TextureFormat, TextureViewDescriptor,
 };
@@ -112,6 +119,15 @@ fn uv_for(alloc: &Allocation, atlas_w: u32, atlas_h: u32) -> ImageSlot {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SlotWrite {
+    Written,
+    SheetFull,
+    /// The slot's texels are stale, or partly patched, until a whole
+    /// upload succeeds.
+    Dropped,
+}
+
 /// Created on the first upload rather than at startup, so an
 /// image-free session never allocates the (up to 256 MiB) sheet.
 struct ImageAtlasGpu {
@@ -121,6 +137,7 @@ struct ImageAtlasGpu {
 
 pub struct ImageAtlas {
     index: ImageIndex,
+    resident: ResidentImages,
     layout: BindGroupLayout,
     sampler: Sampler,
     gpu: Option<ImageAtlasGpu>,
@@ -137,6 +154,7 @@ impl ImageAtlas {
         let sampler = gpu_resources::create_atlas_sampler(device, "felis image sampler");
         Self {
             index: ImageIndex::new(atlas_side),
+            resident: ResidentImages::new(),
             layout: layout.clone(),
             sampler,
             gpu: None,
@@ -193,20 +211,20 @@ impl ImageAtlas {
 
     pub fn forget(&mut self, id: ImageId) {
         self.index.forget(id);
+        self.resident.forget(id);
     }
 
-    /// `None` when the atlas is full; the caller resets and re-uploads
+    /// On [`SlotWrite::SheetFull`] the caller resets and re-uploads
     /// everything.
     pub(crate) fn upload(
         &mut self,
         device: &Device,
         uploader: &mut TextureUploader,
         id: ImageId,
-        width: u32,
-        height: u32,
-        format: ImageFormat,
-        pixels: &[u8],
-    ) -> Option<ImageSlot> {
+        data: &ImageData<'_>,
+        source: &impl ImageSource,
+    ) -> SlotWrite {
+        let (width, height) = (data.width, data.height);
         let slot = match self.index.slot(id) {
             Some(existing)
                 if existing.width == width
@@ -216,14 +234,17 @@ impl ImageAtlas {
                 existing
             }
             _ => {
-                self.index.forget(id);
-                self.index.allocate(id, width, height)?
+                self.forget(id);
+                let Some(slot) = self.index.allocate(id, width, height) else {
+                    return SlotWrite::SheetFull;
+                };
+                slot
             }
         };
         // Before `ensure_gpu`, so a producer that only ever transmits
         // empty buffers never forces the texture allocation.
         if slot.width == 0 || slot.height == 0 {
-            return Some(slot);
+            return SlotWrite::Written;
         }
         let atlas_w = self.index.atlas_side();
         let origin_x = (slot.uv_min[0] * atlas_w as f32).round() as u32;
@@ -231,31 +252,55 @@ impl ImageAtlas {
         self.ensure_gpu(device);
         let Some(gpu) = self.gpu.as_ref() else {
             // `ensure_gpu` always populates `self.gpu`; skipping the upload
-            // beats an `expect` (the slot stays valid and the next dirty
-            // pass re-uploads).
-            return Some(slot);
+            // beats an `expect`, and the image stays pending.
+            return SlotWrite::Dropped;
         };
-        let texels = match format {
-            ImageFormat::Rgb24 => Texels::Rgb(pixels),
-            ImageFormat::Rgba32 => Texels::Packed {
-                bytes: pixels,
-                bytes_per_row: width * 4,
-            },
+        let plan = self.resident.plan(id, data, source);
+        let whole = [SourceRect {
+            x: 0,
+            y: 0,
+            width,
+            height,
+        }];
+        let rects = match &plan {
+            ImageUpload::Whole => &whole[..],
+            ImageUpload::Rects(rects) => rects,
         };
-        uploader.write(
-            &gpu.texture,
-            TexelLayout::Rgba8,
-            [origin_x, origin_y],
-            [width, height],
-            texels,
-        );
-        Some(slot)
+        let mut written = true;
+        for &rect in rects {
+            let (bytes, bytes_per_row) = rect_rows(data, rect);
+            let texels = match data.format {
+                ImageFormat::Rgb24 => Texels::Rgb {
+                    bytes,
+                    bytes_per_row,
+                },
+                ImageFormat::Rgba32 => Texels::Packed {
+                    bytes,
+                    bytes_per_row,
+                },
+            };
+            written &= uploader.write(
+                &gpu.texture,
+                TexelLayout::Rgba8,
+                [origin_x + rect.x, origin_y + rect.y],
+                [rect.width, rect.height],
+                texels,
+            );
+        }
+        if written {
+            self.resident.uploaded(id, data);
+            SlotWrite::Written
+        } else {
+            self.resident.forget(id);
+            SlotWrite::Dropped
+        }
     }
 
     /// The texture's pixels are not zeroed; the caller re-uploads every
     /// still-live image before drawing.
     pub fn reset(&mut self) {
         self.index.reset();
+        self.resident.clear();
     }
 }
 

@@ -222,9 +222,11 @@ use. Revisit with a dedicated `Instant`-clocked thread if sub-30 ms animation vi
 The client re-uploads the current frame's pixels into its single per-id atlas slot on each `ShowFrame` rather than
 caching texels per frame; that is cheap for the small images that dominate terminal animation. If a large (4K-class)
 animation makes that per-advance upload the bottleneck, cache an atlas slot per `(id, frame)`: upload once on the
-frame's `Complete`, select by UV on `ShowFrame`. A frame edit re-uploads the whole frame too, though only its rectangle
-crosses the wire ([below](#frame-edits-ship-as-regions)); a partial atlas upload of the rectangle is the next step if
-that upload shows up in a profile.
+frame's `Complete`, select by UV on `ShowFrame`. A frame edit ([below](#frame-edits-ship-as-regions)) uploads only its
+rectangles into the slot. The renderer records which generation each slot shows and asks the shadow for the rectangles
+patched since then, rather than taking them from the per-redraw dirty set: a redraw that skipped an occluded image, or
+fell several edits behind, still patches correctly. Whatever the shadow cannot answer with patches (a frame switch, a
+whole re-transmission, a reallocated slot or a recycled sheet) uploads the whole frame.
 
 ## Frame edits ship as regions
 

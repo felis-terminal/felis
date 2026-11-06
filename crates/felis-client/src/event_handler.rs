@@ -5,7 +5,7 @@ use felis_client_core::{
     pull::RedrawTurn,
     renderer_effect::{RendererEffect, renderer_effect},
 };
-use felis_protocol::messages::AttentionSource;
+use felis_protocol::messages::{AttentionSource, SourceRect};
 
 use super::{
     ActiveEventLoop, App, AppEvent, ApplicationHandler, Arc, ClosedOutcome, ControlFlow, DragState,
@@ -51,7 +51,12 @@ impl ImageSource for ShadowImages<'_> {
             height: img.height,
             format: img.format,
             pixels: img.pixels(),
+            generation: img.generation(),
         })
+    }
+
+    fn edits_since(&self, id: ImageId, generation: u64, out: &mut Vec<SourceRect>) -> bool {
+        self.0.edits_since(id, generation, out)
     }
 }
 
@@ -1547,5 +1552,301 @@ mod image_source_tests {
         assert!(ShadowImages(&shadow).image_data(ImageId(2)).is_none());
         shadow.apply(&chunk(2, &[9, 9])).unwrap();
         assert!(ShadowImages(&shadow).image_data(ImageId(2)).is_none());
+    }
+}
+
+/// The renderer's patch-or-whole bookkeeping over the real shadow, with
+/// the atlas slot modelled as a CPU-side texture.
+#[cfg(test)]
+mod partial_upload_tests {
+    use std::collections::{HashMap, HashSet};
+    use std::num::NonZeroU32;
+
+    use felis_client_core::{ImageId, ImageShadow};
+    use felis_protocol::messages::{ImageFormat, ImageMsg, ImageTarget, SourceRect};
+    use felis_render_core::{
+        ImageData, ImageSource,
+        image_upload::{ImageUpload, ResidentImages, rect_rows},
+    };
+    use proptest::prelude::*;
+
+    use super::ShadowImages;
+
+    const ID: ImageId = ImageId(1);
+    const MAX_FRAMES: u32 = 3;
+
+    #[derive(Debug, Clone)]
+    enum Op {
+        Transmit {
+            width: u32,
+            height: u32,
+            rgb: bool,
+        },
+        /// A whole frame; `number` past the held count appends.
+        Frame {
+            number: u32,
+        },
+        Region {
+            number: u32,
+            rect: [u32; 4],
+        },
+        Show {
+            number: u32,
+        },
+        Delete,
+        /// A redraw that uploads everything pending.
+        Draw,
+        /// A redraw that leaves the image pending, as an occluded one is.
+        Hidden,
+        /// The sheet recycles: every slot's texels become garbage.
+        Reset,
+        /// The image's slot moves and it is queued again, as when the
+        /// renderer reallocates it.
+        Reallocate,
+        /// Patches to another image, pushing this one's out of the
+        /// shared edit ring.
+        Elsewhere {
+            count: usize,
+        },
+    }
+
+    fn op() -> impl Strategy<Value = Op> {
+        prop_oneof![
+            1 => (1u32..7, 1u32..7, any::<bool>())
+                .prop_map(|(width, height, rgb)| Op::Transmit { width, height, rgb }),
+            2 => (1..=MAX_FRAMES).prop_map(|number| Op::Frame { number }),
+            6 => (1..=MAX_FRAMES, any::<[u32; 4]>())
+                .prop_map(|(number, rect)| Op::Region { number, rect }),
+            2 => (1..=MAX_FRAMES).prop_map(|number| Op::Show { number }),
+            1 => Just(Op::Delete),
+            4 => Just(Op::Draw),
+            2 => Just(Op::Hidden),
+            1 => Just(Op::Reset),
+            1 => Just(Op::Reallocate),
+            1 => (1usize..40).prop_map(|count| Op::Elsewhere { count }),
+        ]
+    }
+
+    fn transfer(shadow: &mut ImageShadow, target: ImageTarget, bytes: Vec<u8>) {
+        transfer_to(shadow, ID, target, bytes);
+    }
+
+    fn transfer_to(shadow: &mut ImageShadow, id: ImageId, target: ImageTarget, bytes: Vec<u8>) {
+        shadow.apply(&ImageMsg::Header { id, target }).unwrap();
+        shadow
+            .apply(&ImageMsg::Chunk {
+                id,
+                bytes: bytes.into(),
+            })
+            .unwrap();
+        shadow.apply(&ImageMsg::Complete { id }).unwrap();
+    }
+
+    const OTHER: ImageId = ImageId(2);
+    const OTHER_IMAGE: ImageTarget = ImageTarget::New {
+        width: 1,
+        height: 1,
+        format: ImageFormat::Rgba32,
+        serial: None,
+    };
+
+    #[derive(Default)]
+    struct CpuAtlas {
+        resident: ResidentImages,
+        slots: HashMap<ImageId, (u32, u32, Vec<u8>)>,
+        whole: usize,
+        patched: usize,
+    }
+
+    impl CpuAtlas {
+        fn garble(&mut self) {
+            for (_, _, texels) in self.slots.values_mut() {
+                texels.fill(0xA5);
+            }
+        }
+
+        fn upload(&mut self, id: ImageId, source: &impl ImageSource) {
+            let Some(data) = source.image_data(id) else {
+                return;
+            };
+            let slot = self.slots.entry(id).or_default();
+            if (slot.0, slot.1) != (data.width, data.height) {
+                *slot = (
+                    data.width,
+                    data.height,
+                    vec![0xA5; (data.width * data.height * 4) as usize],
+                );
+                self.resident.forget(id);
+            }
+            let rects = match self.resident.plan(id, &data, source) {
+                ImageUpload::Whole => {
+                    self.whole += 1;
+                    vec![SourceRect {
+                        x: 0,
+                        y: 0,
+                        width: data.width,
+                        height: data.height,
+                    }]
+                }
+                ImageUpload::Rects(rects) => {
+                    self.patched += 1;
+                    rects
+                }
+            };
+            let texels = &mut self.slots.get_mut(&id).unwrap().2;
+            for rect in rects {
+                write_rect(texels, &data, rect);
+            }
+            self.resident.uploaded(id, &data);
+        }
+    }
+
+    fn write_rect(texels: &mut [u8], data: &ImageData<'_>, rect: SourceRect) {
+        let (rows, stride) = rect_rows(data, rect);
+        let bpp = data.format.bytes_per_pixel();
+        for r in 0..rect.height as usize {
+            for c in 0..rect.width as usize {
+                let src = &rows[r * stride as usize + c * bpp..][..bpp];
+                let at = ((rect.y as usize + r) * data.width as usize + rect.x as usize + c) * 4;
+                texels[at..at + bpp].copy_from_slice(src);
+                if bpp == 3 {
+                    texels[at + 3] = 0xFF;
+                }
+            }
+        }
+    }
+
+    fn rgba(data: &ImageData<'_>) -> Vec<u8> {
+        match data.format {
+            ImageFormat::Rgba32 => data.pixels.to_vec(),
+            ImageFormat::Rgb24 => data
+                .pixels
+                .as_chunks::<3>()
+                .0
+                .iter()
+                .flat_map(|p| [p[0], p[1], p[2], 0xFF])
+                .collect(),
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(512))]
+
+        /// Whatever arrived, was missed, or was evicted in between, a
+        /// redraw leaves the slot showing exactly the displayed frame.
+        #[test]
+        fn a_redraw_leaves_the_slot_equal_to_the_displayed_frame(
+            ops in prop::collection::vec(op(), 1..60),
+        ) {
+            let mut shadow = ImageShadow::new();
+            transfer_to(&mut shadow, OTHER, OTHER_IMAGE, vec![0; 4]);
+            let mut atlas = CpuAtlas::default();
+            let mut pending: HashSet<ImageId> = HashSet::new();
+            let mut seed = 0u8;
+            let mut bytes = |len: usize| -> Vec<u8> {
+                seed = seed.wrapping_add(1);
+                (0..len).map(|i| seed.wrapping_mul(31).wrapping_add(i as u8)).collect()
+            };
+            for op in ops {
+                let geometry = shadow.image(ID).map(|img| {
+                    (img.width, img.height, img.format, img.frame_count(), img.frames.iter().all(|f| f.complete))
+                });
+                match (op, geometry) {
+                    (Op::Transmit { width, height, rgb }, _) => {
+                        let format = if rgb { ImageFormat::Rgb24 } else { ImageFormat::Rgba32 };
+                        let len = (width * height) as usize * format.bytes_per_pixel();
+                        let target = ImageTarget::New { width, height, format, serial: None };
+                        transfer(&mut shadow, target, bytes(len));
+                    }
+                    (Op::Frame { number }, Some((w, h, format, held, _))) if number as usize <= held + 1 => {
+                        let len = (w * h) as usize * format.bytes_per_pixel();
+                        let number = NonZeroU32::new(number).unwrap();
+                        transfer(&mut shadow, ImageTarget::Frame { number }, bytes(len));
+                    }
+                    (Op::Region { number, rect: [x, y, rw, rh] }, Some((w, h, format, held, true)))
+                        if number as usize <= held =>
+                    {
+                        let (x, y) = (x % w, y % h);
+                        let rect = SourceRect { x, y, width: 1 + rw % (w - x), height: 1 + rh % (h - y) };
+                        let len = (rect.width * rect.height) as usize * format.bytes_per_pixel();
+                        let number = NonZeroU32::new(number).unwrap();
+                        transfer(&mut shadow, ImageTarget::Region { number, rect }, bytes(len));
+                    }
+                    (Op::Show { number }, Some(_)) => {
+                        let number = NonZeroU32::new(number).unwrap();
+                        shadow.apply(&ImageMsg::ShowFrame { id: ID, number }).unwrap();
+                    }
+                    (Op::Delete, _) => {
+                        shadow.apply(&ImageMsg::Delete { id: ID }).unwrap();
+                    }
+                    (Op::Hidden, _) => pending.extend(shadow.take_dirty_images()),
+                    (Op::Draw, _) => {
+                        pending.extend(shadow.take_dirty_images());
+                        let source = ShadowImages(&shadow);
+                        for id in pending.drain() {
+                            atlas.upload(id, &source);
+                        }
+                        if let Some(data) = source.image_data(ID) {
+                            let slot = &atlas.slots[&ID];
+                            prop_assert_eq!(&slot.2, &rgba(&data));
+                        }
+                    }
+                    (Op::Reset, _) => {
+                        atlas.garble();
+                        atlas.resident.clear();
+                        pending.extend(shadow.image(ID).map(|_| ID));
+                    }
+                    (Op::Elsewhere { count }, _) => {
+                        let rect = SourceRect { x: 0, y: 0, width: 1, height: 1 };
+                        let number = NonZeroU32::new(1).unwrap();
+                        for _ in 0..count {
+                            transfer_to(&mut shadow, OTHER, ImageTarget::Region { number, rect }, vec![1; 4]);
+                        }
+                    }
+                    (Op::Reallocate, _) => {
+                        atlas.garble();
+                        atlas.resident.forget(ID);
+                        pending.extend(shadow.image(ID).map(|_| ID));
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_patch_to_a_resident_frame_uploads_only_its_rectangle() {
+        let mut shadow = ImageShadow::new();
+        let target = ImageTarget::New {
+            width: 1920,
+            height: 1080,
+            format: ImageFormat::Rgba32,
+            serial: None,
+        };
+        transfer(&mut shadow, target, vec![0; 1920 * 1080 * 4]);
+        let mut resident = ResidentImages::new();
+        let source = ShadowImages(&shadow);
+        let data = source.image_data(ID).unwrap();
+        assert_eq!(resident.plan(ID, &data, &source), ImageUpload::Whole);
+        resident.uploaded(ID, &data);
+
+        let rect = SourceRect {
+            x: 640,
+            y: 320,
+            width: 64,
+            height: 64,
+        };
+        let number = NonZeroU32::new(1).unwrap();
+        transfer(
+            &mut shadow,
+            ImageTarget::Region { number, rect },
+            vec![1; 64 * 64 * 4],
+        );
+        let source = ShadowImages(&shadow);
+        let data = source.image_data(ID).unwrap();
+        assert_eq!(
+            resident.plan(ID, &data, &source),
+            ImageUpload::Rects(vec![rect])
+        );
     }
 }

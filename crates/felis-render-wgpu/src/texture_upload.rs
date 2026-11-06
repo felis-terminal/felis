@@ -80,9 +80,10 @@ pub(crate) const fn atlas_view_formats(
 pub(crate) enum Texels<'a> {
     /// Rows already in the target's layout, `bytes_per_row` apart.
     Packed { bytes: &'a [u8], bytes_per_row: u32 },
-    /// Tightly packed RGB rows, widened to opaque RGBA as they are staged,
-    /// so a video frame is not expanded into a frame-sized buffer first.
-    Rgb(&'a [u8]),
+    /// RGB rows `bytes_per_row` apart, widened to opaque RGBA as they are
+    /// staged, so a video frame is not expanded into a frame-sized buffer
+    /// first.
+    Rgb { bytes: &'a [u8], bytes_per_row: u32 },
 }
 
 impl<'a> Texels<'a> {
@@ -98,8 +99,11 @@ impl<'a> Texels<'a> {
                 let from = row * bytes_per_row as usize;
                 &bytes[from..from + row_bytes]
             }
-            Self::Rgb(bytes) => {
-                let from = row * row_bytes / 4 * 3;
+            Self::Rgb {
+                bytes,
+                bytes_per_row,
+            } => {
+                let from = row * bytes_per_row as usize;
                 scratch.resize(row_bytes, 0);
                 expand_rgb(bytes.get(from..).unwrap_or_default(), scratch);
                 scratch
@@ -115,7 +119,7 @@ impl<'a> Texels<'a> {
                 bytes,
                 bytes_per_row,
             } => bytes.len() >= (height - 1) * bytes_per_row as usize + row_bytes,
-            Self::Rgb(_) => true,
+            Self::Rgb { .. } => true,
         }
     }
 }
@@ -275,6 +279,8 @@ impl TextureUploader {
         }
     }
 
+    /// `false` when the write was dropped, leaving the target's texels
+    /// as they were.
     pub(crate) fn write(
         &mut self,
         target: &Texture,
@@ -282,19 +288,18 @@ impl TextureUploader {
         origin: [u32; 2],
         extent: [u32; 2],
         texels: Texels<'_>,
-    ) {
+    ) -> bool {
         let [width, height] = extent;
         if width == 0 || height == 0 {
-            return;
+            return true;
         }
         let row_bytes = (width * layout.bytes()) as usize;
         if !texels.covers(row_bytes, height as usize) {
             tracing::warn!(width, height, "atlas upload shorter than its extent");
-            return;
+            return false;
         }
         if self.pipelines.is_none() {
-            self.stage_copy(target, origin, extent, texels, row_bytes);
-            return;
+            return self.stage_copy(target, origin, extent, texels, row_bytes);
         }
         for chunk in
             self.staging
@@ -312,6 +317,7 @@ impl TextureUploader {
                 },
             });
         }
+        true
     }
 
     fn stage_copy(
@@ -321,13 +327,13 @@ impl TextureUploader {
         extent: [u32; 2],
         texels: Texels<'_>,
         row_bytes: usize,
-    ) {
+    ) -> bool {
         let stride = row_bytes.next_multiple_of(COPY_BYTES_PER_ROW_ALIGNMENT as usize);
         let (Some(size), Some(align)) = (
             BufferSize::new((stride * extent[1] as usize) as BufferAddress),
             BufferSize::new(COPY_BUFFER_ALIGNMENT),
         ) else {
-            return;
+            return false;
         };
         let device = &self.device;
         let belt = self
@@ -339,7 +345,7 @@ impl TextureUploader {
             Ok(view) => view,
             Err(err) => {
                 tracing::warn!(?err, "atlas upload: mapping refused");
-                return;
+                return false;
             }
         };
         for row in 0..extent[1] as usize {
@@ -355,6 +361,7 @@ impl TextureUploader {
             origin,
             extent,
         });
+        true
     }
 
     fn encode_staged(&mut self, encoder: &mut CommandEncoder) {
@@ -611,7 +618,10 @@ mod tests {
         let mut st = staging(1 << 20);
         // Two 2-texel rows; the second row's last texel is missing.
         st.push_rows(
-            Texels::Rgb(&[1, 2, 3, 4, 5, 6, 7, 8, 9]),
+            Texels::Rgb {
+                bytes: &[1, 2, 3, 4, 5, 6, 7, 8, 9],
+                bytes_per_row: 6,
+            },
             8,
             2,
             &mut Vec::new(),
