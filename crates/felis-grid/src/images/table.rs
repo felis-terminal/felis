@@ -1,6 +1,8 @@
 //! The insertion-ordered, keyed storage behind [`super::Placements`].
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+
+use foldhash::fast::FixedState;
 
 use super::{ImageId, Placement, PlacementId, VirtualPlacement};
 
@@ -22,29 +24,66 @@ impl Keyed for VirtualPlacement {
     }
 }
 
+/// Hears which images gained their first entry or lost their last.
+pub(super) trait ImageChanges: Default {
+    fn note(&mut self, image_id: ImageId);
+}
+
+impl ImageChanges for () {
+    fn note(&mut self, _: ImageId) {}
+}
+
+/// Each image once, until drained.
+#[derive(Debug, Clone, Default)]
+#[expect(
+    clippy::box_collection,
+    reason = "the session futures hold their placements inline, under `clippy::large_futures`"
+)]
+pub(super) struct ChangedImages(Box<HashSet<ImageId, FixedState>>);
+
+impl ImageChanges for ChangedImages {
+    fn note(&mut self, image_id: ImageId) {
+        self.0.insert(image_id);
+    }
+}
+
 /// Entries ordered by the sequence number they were inserted under, and
 /// found by key without a scan.
 #[derive(Debug, Clone)]
-pub(super) struct Table<T> {
+pub(super) struct Table<T, C = ()> {
     by_seq: BTreeMap<u64, T>,
     seq_of: HashMap<Key, u64>,
     /// Each image's entries, so dropping or asking after one image costs
     /// its own placements rather than the table's.
     by_image: HashMap<ImageId, BTreeSet<u64>>,
+    changed: C,
 }
 
-impl<T: Keyed> Table<T> {
+impl<T: Keyed> Table<T, ChangedImages> {
+    /// Drains the images whose [`Self::has_image`] may have flipped.
+    pub(super) fn take_changed(&mut self) -> Vec<ImageId> {
+        self.changed.0.drain().collect()
+    }
+}
+
+impl<T: Keyed, C: ImageChanges> Table<T, C> {
     pub(super) fn new() -> Self {
         Self {
             by_seq: BTreeMap::new(),
             seq_of: HashMap::new(),
             by_image: HashMap::new(),
+            changed: C::default(),
         }
     }
 
     fn index(&mut self, key: Key, seq: u64) {
         self.seq_of.insert(key, seq);
-        self.by_image.entry(key.0).or_default().insert(seq);
+        let seqs = self.by_image.entry(key.0).or_default();
+        let first = seqs.is_empty();
+        seqs.insert(seq);
+        if first {
+            self.changed.note(key.0);
+        }
     }
 
     fn unindex(&mut self, key: Key) -> Option<u64> {
@@ -53,6 +92,7 @@ impl<T: Keyed> Table<T> {
             seqs.remove(&seq);
             if seqs.is_empty() {
                 self.by_image.remove(&key.0);
+                self.changed.note(key.0);
             }
         }
         Some(seq)
@@ -126,7 +166,10 @@ impl<T: Keyed> Table<T> {
 
     /// Removes the image's entries and returns them in table order.
     pub(super) fn extract_image(&mut self, image_id: ImageId) -> Vec<T> {
-        let seqs = self.by_image.remove(&image_id).unwrap_or_default();
+        let Some(seqs) = self.by_image.remove(&image_id) else {
+            return Vec::new();
+        };
+        self.changed.note(image_id);
         seqs.into_iter()
             .filter_map(|seq| {
                 let entry = self.by_seq.remove(&seq)?;

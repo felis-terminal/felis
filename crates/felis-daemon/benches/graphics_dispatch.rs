@@ -8,9 +8,12 @@
 #[path = "support/kitty.rs"]
 mod kitty;
 
+use std::hint::black_box;
+
 use criterion::measurement::WallTime;
 use criterion::{BenchmarkGroup, Criterion, Throughput, criterion_group, criterion_main};
 use felis_daemon::graphics::{ImageEvent, image_sync_messages, materialize_image_events};
+use felis_grid::images::{AnimationMode, Frame, ImageEntry, ImageFormat, ImageStore};
 use felis_protocol::messages::ImageMsg;
 use felis_protocol::{ImageId, PROTOCOL_MINOR};
 use felis_transport::{CheckedFrame, FrameWriter};
@@ -349,6 +352,136 @@ fn store_pressure(g: &mut Group<'_>) {
             s.events.clear();
         });
     });
+    animation(g, s.images);
+}
+
+/// The tile under new controls: only the first chunk names them, so a
+/// fresh id costs one header rather than a re-encode.
+fn with_controls(tile: &Command, controls: &str) -> Command {
+    let mut out = tile.clone();
+    let body = out[0].iter().position(|&b| b == b';').unwrap() + 1;
+    let more = if out.len() > 1 { ",m=1" } else { "" };
+    out[0] = [format!("G{controls}{more};").as_bytes(), &out[0][body..]].concat();
+    out
+}
+
+/// A thumbnail wall drawn with Unicode placeholders: virtual placements
+/// take no refcount, so every image is a refcount-0 one that a
+/// placement still shows.
+fn store_pressure_virtual(g: &mut Group<'_>) {
+    let tile = command("a=T,f=32,s=128,v=128,q=2", &ui_frame(128, 128, 4, 11));
+    let named = |id: u32| {
+        with_controls(
+            &tile,
+            &format!("a=T,U=1,i={id},f=32,s=128,v=128,c=4,r=2,q=2"),
+        )
+    };
+    let mut s = Session::new(1920, 1080);
+    let mut id = 1;
+    while !has_event(&s, |e| matches!(e, ImageEvent::Delete { .. })) {
+        s.feed(&named(id));
+        id += 1;
+    }
+    s.events.clear();
+    let resident = s.images.len();
+    assert_eq!(
+        resident,
+        s.placements.iter_virtual().count(),
+        "virtual placements rejected"
+    );
+    g.throughput(Throughput::Elements(1));
+    g.bench_function(
+        format!("store_pressure/virtual_insert_at_quota/{resident}"),
+        |b| {
+            b.iter(|| {
+                s.feed(&named(id));
+                id += 1;
+                s.events.clear();
+            });
+        },
+    );
+    g.bench_function(
+        format!("store_pressure/virtual_scroll_sweep/{resident}"),
+        |b| {
+            b.iter(|| {
+                felis_daemon::graphics::free_unreferenced_anonymous(
+                    &mut s.images,
+                    &mut s.placements,
+                    &mut s.events,
+                );
+            });
+        },
+    );
+}
+
+/// `I=` transmissions, each given the lowest id no image holds.
+fn store_pressure_numbered(g: &mut Group<'_>) {
+    let tile = command(
+        "a=T,I=7,f=32,s=128,v=128,C=1,q=2",
+        &ui_frame(128, 128, 4, 12),
+    );
+    let mut s = Session::new(1920, 1080);
+    warm_to_quota(&mut s, &tile);
+    let resident = s.images.len();
+    assert!(resident >= 4000, "{resident} images resident");
+    g.throughput(Throughput::Elements(1));
+    g.bench_function(
+        format!("store_pressure/numbered_insert_at_quota/{resident}"),
+        |b| {
+            b.iter(|| {
+                s.feed(&tile);
+                s.events.clear();
+            });
+        },
+    );
+}
+
+/// The session loop asks for the next due frame on every wake-up and
+/// advances on every due one, over a store of placed stills with a few
+/// animations among them.
+fn animation(g: &mut Group<'_>, mut images: ImageStore) {
+    const ANIMATED: u32 = 16;
+    let stills = images.len();
+    for k in 0..ANIMATED {
+        let id = ImageId(1_000_000 + k);
+        images
+            .insert(id, ImageEntry::new(8, 8, ImageFormat::Rgba32, vec![0; 256]))
+            .unwrap();
+        for _ in 0..2 {
+            images
+                .push_frame(
+                    id,
+                    Frame {
+                        pixels: vec![0; 256].into(),
+                        gap_ms: 40,
+                    },
+                )
+                .unwrap();
+        }
+        images
+            .animation_control(id)
+            .unwrap()
+            .set_mode(AnimationMode::Running);
+        images.retain(id);
+    }
+    images.advance_animations(0);
+    let name = format!("{stills}_stills_{ANIMATED}_animated");
+    assert_eq!(
+        images.next_animation_due_ms(0),
+        Some(0),
+        "{name}: nothing animates"
+    );
+    g.throughput(Throughput::Elements(1));
+    g.bench_function(format!("store_pressure/animation_due/{name}"), |b| {
+        b.iter(|| black_box(images.next_animation_due_ms(black_box(0))));
+    });
+    let mut now = 0;
+    g.bench_function(format!("store_pressure/animation_tick/{name}"), |b| {
+        b.iter(|| {
+            now += 40;
+            black_box(images.advance_animations(now))
+        });
+    });
 }
 
 struct Subscribers {
@@ -519,6 +652,8 @@ fn dispatch(c: &mut Criterion) {
     thumbnail_grid(&mut g);
     cell_wipes(&mut g);
     store_pressure(&mut g);
+    store_pressure_virtual(&mut g);
+    store_pressure_numbered(&mut g);
     g.finish();
 }
 

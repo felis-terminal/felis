@@ -1,14 +1,14 @@
-//! Property: [`ImageStore`] evicts exactly what a whole-store scan
-//! would. The model below keeps every entry in one insertion-ordered
-//! list and answers each eviction question by walking all of it, which
-//! is the store's contract stated without its indexes
+//! Property: [`ImageStore`] evicts, frees, numbers and animates exactly
+//! what a whole-store scan would. The model below keeps every entry in
+//! one insertion-ordered list and answers each question by walking all
+//! of it, which is the store's contract stated without its indexes
 //! (`docs/explanation/data-model/image-store.md` "Limits").
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use felis_grid::images::{
-    Evicted, Frame, FrameError, ImageEntry, ImageFormat, ImageId, ImageStore, InsertError,
-    MAX_IMAGE_FRAMES,
+    AnimationMode, Evicted, Frame, FrameError, ImageEntry, ImageFormat, ImageId, ImageStore,
+    InsertError, MAX_IMAGE_FRAMES,
 };
 use proptest::prelude::*;
 
@@ -16,14 +16,48 @@ const IDS: u32 = 8;
 
 #[derive(Debug, Clone)]
 enum Op {
-    Insert { id: u32, size: usize },
-    Touch { id: u32 },
-    Retain { id: u32 },
-    Release { id: u32 },
-    Delete { id: u32 },
-    PushFrame { id: u32, size: usize },
-    ReplaceFrame { id: u32, idx: usize, size: usize },
-    RemoveFrame { id: u32, idx: usize },
+    Insert {
+        id: u32,
+        size: usize,
+        anonymous: bool,
+    },
+    Hold {
+        id: u32,
+        held: bool,
+    },
+    Animate {
+        id: u32,
+        mode: AnimationMode,
+    },
+    Tick {
+        ms: u64,
+    },
+    LowestFree,
+    Touch {
+        id: u32,
+    },
+    Retain {
+        id: u32,
+    },
+    Release {
+        id: u32,
+    },
+    Delete {
+        id: u32,
+    },
+    PushFrame {
+        id: u32,
+        size: usize,
+    },
+    ReplaceFrame {
+        id: u32,
+        idx: usize,
+        size: usize,
+    },
+    RemoveFrame {
+        id: u32,
+        idx: usize,
+    },
 }
 
 fn op() -> impl Strategy<Value = Op> {
@@ -31,7 +65,15 @@ fn op() -> impl Strategy<Value = Op> {
     let size = 1usize..=48;
     let idx = 0usize..3;
     prop_oneof![
-        3 => (id.clone(), size.clone()).prop_map(|(id, size)| Op::Insert { id, size }),
+        3 => (id.clone(), size.clone(), any::<bool>()).prop_map(|(id, size, anonymous)| Op::Insert { id, size, anonymous }),
+        1 => (id.clone(), any::<bool>()).prop_map(|(id, held)| Op::Hold { id, held }),
+        1 => (id.clone(), prop_oneof![
+            Just(AnimationMode::Stopped),
+            Just(AnimationMode::Loading),
+            Just(AnimationMode::Running),
+        ]).prop_map(|(id, mode)| Op::Animate { id, mode }),
+        2 => (0u64..100).prop_map(|ms| Op::Tick { ms }),
+        1 => Just(Op::LowestFree),
         2 => id.clone().prop_map(|id| Op::Touch { id }),
         2 => id.clone().prop_map(|id| Op::Retain { id }),
         2 => id.clone().prop_map(|id| Op::Release { id }),
@@ -68,6 +110,8 @@ struct ModelEntry {
     frames: Vec<usize>,
     refcount: u32,
     atime: u64,
+    anonymous: bool,
+    held: bool,
 }
 
 impl ModelEntry {
@@ -136,7 +180,12 @@ impl Model {
         }
     }
 
-    fn insert(&mut self, id: ImageId, size: usize) -> Result<Evicted, InsertError> {
+    fn insert(
+        &mut self,
+        id: ImageId,
+        size: usize,
+        anonymous: bool,
+    ) -> Result<Evicted, InsertError> {
         let needed = overhead() + frame_bytes(size);
         if needed > self.cap {
             return Err(InsertError::OverCapacity {
@@ -162,6 +211,8 @@ impl Model {
             frames: vec![size],
             refcount: 0,
             atime: 0,
+            anonymous,
+            held: false,
         });
         self.touch(id);
         Ok(evicted)
@@ -226,6 +277,29 @@ impl Model {
             .min_by_key(|e| e.atime)
             .map(|e| e.id)
     }
+
+    fn lowest_free_id(&self) -> ImageId {
+        (1..=u32::MAX)
+            .map(ImageId)
+            .find(|&id| self.position(id).is_none())
+            .unwrap()
+    }
+
+    fn loose_ids(&self, anonymous_only: bool) -> Vec<ImageId> {
+        self.entries
+            .iter()
+            .filter(|e| e.refcount == 0 && !e.held && (e.anonymous || !anonymous_only))
+            .map(|e| e.id)
+            .collect()
+    }
+
+    /// Each entry as the store holds it, in store order.
+    fn held<'s>(&self, store: &'s ImageStore) -> Vec<(&ModelEntry, &'s ImageEntry)> {
+        self.entries
+            .iter()
+            .map(|e| (e, store.get(e.id).unwrap()))
+            .collect()
+    }
 }
 
 const fn frame_capacity_error(err: InsertError) -> FrameError {
@@ -244,10 +318,41 @@ proptest! {
         let cap = cap_entries * (overhead() + frame_bytes(24));
         let mut store = ImageStore::new(cap);
         let mut model = Model { entries: Vec::new(), total: 0, cap, clock: 0 };
+        let mut now = 0;
         for op in &ops {
             match *op {
-                Op::Insert { id, size } => {
-                    prop_assert_eq!(store.insert(ImageId(id), entry(size)), model.insert(ImageId(id), size), "{:?}", op);
+                Op::Insert { id, size, anonymous } => {
+                    let e = if anonymous { entry(size).into_anonymous() } else { entry(size) };
+                    prop_assert_eq!(store.insert(ImageId(id), e), model.insert(ImageId(id), size, anonymous), "{:?}", op);
+                }
+                Op::Hold { id, held } => {
+                    store.set_virtually_held(ImageId(id), held);
+                    if let Some(e) = model.entry_mut(ImageId(id)) {
+                        e.held = held;
+                    }
+                }
+                Op::Animate { id, mode } => {
+                    let found = store.animation_control(ImageId(id)).map(|mut c| c.set_mode(mode)).is_some();
+                    prop_assert_eq!(found, model.position(ImageId(id)).is_some());
+                }
+                Op::LowestFree => {
+                    prop_assert_eq!(store.lowest_free_id(), model.lowest_free_id());
+                }
+                Op::Tick { ms } => {
+                    now += ms;
+                    let mut want = Vec::new();
+                    let mut after = Vec::new();
+                    for (e, entry) in model.held(&store) {
+                        let mut entry = entry.clone();
+                        if e.refcount > 0 && entry.is_animated() && let Some(idx) = entry.advance(now) {
+                            want.push((e.id, idx));
+                        }
+                        after.push((e.id, entry));
+                    }
+                    prop_assert_eq!(store.advance_animations(now), want, "{:?}", op);
+                    for (id, entry) in &after {
+                        prop_assert_eq!(store.get(*id), Some(entry), "{:?}", op);
+                    }
                 }
                 Op::Touch { id } => {
                     store.touch(ImageId(id));
@@ -299,6 +404,16 @@ proptest! {
                     "LRU except {:?} after {:?}", except, op
                 );
             }
+            for anonymous_only in [false, true] {
+                prop_assert_eq!(store.loose_ids(anonymous_only), model.loose_ids(anonymous_only), "loose after {:?}", op);
+            }
+            let due = model
+                .held(&store)
+                .into_iter()
+                .filter(|(e, entry)| e.refcount > 0 && entry.is_animatable())
+                .map(|(_, entry)| entry.next_due_ms().unwrap_or(now))
+                .min();
+            prop_assert_eq!(store.next_animation_due_ms(now), due, "due after {:?}", op);
             for e in &model.entries {
                 let held = store.get(e.id).unwrap();
                 prop_assert_eq!((held.refcount(), held.atime(), held.byte_len()), (e.refcount, e.atime, e.bytes()));

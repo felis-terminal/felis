@@ -40,6 +40,7 @@ enum Op {
         id: u32,
     },
     DeleteImage(u32),
+    DeleteVirtuals(u32),
     ShiftUp(u32),
 }
 
@@ -64,7 +65,8 @@ fn op() -> impl Strategy<Value = Op> {
             image,
             id: u32::MAX - n
         }),
-        image.prop_map(Op::DeleteImage),
+        image.clone().prop_map(Op::DeleteImage),
+        image.prop_map(Op::DeleteVirtuals),
         (0u32..3).prop_map(Op::ShiftUp),
     ]
 }
@@ -156,6 +158,8 @@ proptest! {
     ) {
         let mut table = Placements::with_cap(CAP);
         let mut model = Model::default();
+        // What a reader of `take_virtual_changes` alone believes.
+        let mut synced = [false; 4];
         for op in &ops {
             match *op {
                 Op::Put { image, id, row } => {
@@ -211,6 +215,14 @@ proptest! {
                     let gone: Vec<_> = gone.into_iter().map(|(_, p)| p).collect();
                     prop_assert_eq!(table.delete_image(ImageId(image)), gone, "{:?}", op);
                 }
+                Op::DeleteVirtuals(image) => {
+                    let (gone, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut model.virtuals)
+                        .into_iter()
+                        .partition(|(_, v)| v.image_id == ImageId(image));
+                    model.virtuals = kept;
+                    let gone: Vec<_> = gone.into_iter().map(|(_, v)| v).collect();
+                    prop_assert_eq!(table.remove_virtual(ImageId(image)), gone, "{:?}", op);
+                }
                 Op::ShiftUp(lines) => {
                     let mut gone = Vec::new();
                     let lines = i32::try_from(lines).unwrap();
@@ -236,6 +248,13 @@ proptest! {
                 prop_assert_eq!(table.for_image(image).cloned().collect::<Vec<_>>(), mine, "after {:?}", op);
                 let shown = table.for_image(image).next().is_some() || model.virtuals.iter().any(|(_, v)| v.image_id == image);
                 prop_assert_eq!(table.references(image), shown, "after {:?}", op);
+            }
+            for image in table.take_virtual_changes() {
+                synced[image.0 as usize] = table.has_virtual(image);
+            }
+            for image in 1..4 {
+                let shown = model.virtuals.iter().any(|(_, v)| v.image_id == ImageId(image));
+                prop_assert_eq!(synced[image as usize], shown, "virtual changes after {:?}", op);
             }
         }
     }
