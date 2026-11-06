@@ -72,6 +72,14 @@ pub enum ImageTarget {
     /// numbering: `1` is the root frame in place, `2..=frames + 1`
     /// edits or appends. Geometry is inherited.
     Frame { number: NonZeroU32 },
+    /// A rectangle of a frame the receiver holds, in the numbering
+    /// [`Self::Frame`] uses, written over that rectangle at `Complete`.
+    /// The transfer carries the rectangle's rows, packed:
+    /// `rect.width × rect.height × bytes_per_pixel` bytes.
+    Region {
+        number: NonZeroU32,
+        rect: SourceRect,
+    },
 }
 
 /// Image-family messages ([`crate::MessageKind::Image`], kind 3).
@@ -284,6 +292,18 @@ pub(crate) mod tests {
                 bytes: vec![0x11, 0x22, 0x33, 0x44].into(),
             },
             ImageMsg::Complete { id: ImageId(7) },
+            ImageMsg::Header {
+                id: ImageId(7),
+                target: ImageTarget::Region {
+                    number: NonZeroU32::new(2).unwrap(),
+                    rect: SourceRect {
+                        x: 3,
+                        y: 4,
+                        width: 1,
+                        height: 1,
+                    },
+                },
+            },
             ImageMsg::ShowFrame {
                 id: ImageId(7),
                 number: NonZeroU32::new(2).unwrap(),

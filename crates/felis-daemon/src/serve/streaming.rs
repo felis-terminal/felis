@@ -1596,7 +1596,7 @@ mod tests {
                 .map(|d| (d.image_id.0, d.dst[0] / 8.0))
                 .collect::<Vec<_>>()
         };
-        let live = crate::graphics::materialize_image_events(&events, &images);
+        let live = crate::graphics::materialize_image_events(&events, &images, true);
         let mut rehydrate = Vec::new();
         compose_image_rehydrate(&images, &placements, &mut rehydrate);
         let rehydrate: Vec<_> = rehydrate

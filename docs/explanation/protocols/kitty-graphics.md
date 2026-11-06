@@ -222,9 +222,34 @@ use. Revisit with a dedicated `Instant`-clocked thread if sub-30 ms animation vi
 The client re-uploads the current frame's pixels into its single per-id atlas slot on each `ShowFrame` rather than
 caching texels per frame; that is cheap for the small images that dominate terminal animation. If a large (4K-class)
 animation makes that per-advance upload the bottleneck, cache an atlas slot per `(id, frame)`: upload once on the
-frame's `Complete`, select by UV on `ShowFrame`. A frame edit (`a=f` onto an existing frame, `a=c`) re-ships that whole
-frame's pixels, not a diff; add a frame-region delta message only if a producer that re-edits frames every tick shows
-up.
+frame's `Complete`, select by UV on `ShowFrame`. A frame edit re-uploads the whole frame too, though only its rectangle
+crosses the wire ([below](#frame-edits-ship-as-regions)); a partial atlas upload of the rectangle is the next step if
+that upload shows up in a profile.
+
+## Frame edits ship as regions
+
+A terminal browser presents a page as a stream of dirty rectangles (`a=f` with `r=`), and notcurses wipes cells with
+them; each edits a frame in place. Re-shipping the edited frame whole made a 64×64 edit of a 1920×1080 RGBA frame cost 8
+MB on the wire and as much on the client as a fresh transmission. So a window at minor 4 that opts in is sent the
+rectangles alone, as a third `Header` target beside `New` and `Frame`, which reuses the transfer's chunking, its byte
+count proof, and the client's stage-then-commit at `Complete` that keeps a half-arrived patch off screen. Every other
+window keeps receiving the whole frame: reading an unknown target as unset would be malformed to an older one, so the
+daemon materializes the batch once per side. The opt-in, rather than the minor alone, is what keeps the JSON relay's
+attachments on whole frames: JSON protocol version 1 has no region target, and a later JSON version can opt in.
+
+The rectangles are recorded as markers and read back at ship time like every other transmission, so overlap costs
+nothing in correctness and the coalescing is free to be crude: a rectangle another covers is dropped, more than 16 on
+one frame merge into their bounding box, and past half the frame the whole frame ships instead, since the row copies and
+extra transfers then buy back too few bytes. A whole-frame marker for the frame, or a re-statement of the image, in the
+same batch already carries every edit, so it supersedes the rectangles.
+
+A region patches bytes the client already holds, so the scheme rests on one invariant: at every fan-out boundary a
+window's frames equal the store's. It holds by induction over the ordered, lossless stream (a subscriber that cannot
+take a push is dropped, never skipped), because every in-place edit queues a marker covering what it changed, and the
+attach burst starts each window from whole frames. A region for a frame the window does not hold is therefore a broken
+stream, and the client refuses it as malformed, as it refuses a `Frame` for an unknown id; the reconnect that follows
+rehydrates every frame whole. Skipping it instead was rejected: a window that skipped a patch would keep the stale bytes
+around it with nothing on the wire to correct them, while a refusal converges on the next attach.
 
 ## Scrollback-anchored placements: rejected shapes
 
@@ -383,6 +408,10 @@ Two properties fall out. A marker whose image the _same_ drain later evicted mat
 stale bytes, because the store is consulted at ship time and does not have it, which is also what lets the eviction path
 stay a pair of tiny markers. And with no subscribers the markers are dropped without materializing at all, so a detached
 session pays nothing to keep an animation advancing.
+
+A region marker (an in-place frame edit) is the one transmission marker that does not carry its frame's whole state,
+which is why a whole-frame marker or a re-statement supersedes it and not the reverse
+([Frame edits ship as regions](#frame-edits-ship-as-regions)).
 
 Because a `Transmit` marker re-states the whole image (root frame, every animation frame, the displayed index), a later
 marker for the same id makes an earlier one redundant, and only the last is materialized. That is what bounds the mpv

@@ -169,7 +169,7 @@ fn with_base_image(w: u32, h: u32) -> Session {
 fn bench_frame_edits(g: &mut Group<'_>, name: String, mut s: Session, edits: &[Command]) {
     s.feed_all(edits);
     assert!(
-        has_event(&s, |e| matches!(e, ImageEvent::TransmitFrame { .. })),
+        has_event(&s, |e| matches!(e, ImageEvent::TransmitRegion { .. })),
         "{name}: frame edits rejected"
     );
     s.events.clear();
@@ -396,7 +396,7 @@ fn fanout_frame(g: &mut Group<'_>) {
             "no transmit event to fan out"
         );
         assert!(
-            materialize_image_events(&events, &s.images)
+            materialize_image_events(&events, &s.images, true)
                 .iter()
                 .any(|m| matches!(m, ImageMsg::Chunk { .. })),
             "fan-out materializes no pixel chunks"
@@ -406,10 +406,46 @@ fn fanout_frame(g: &mut Group<'_>) {
             g.throughput(Throughput::Elements(1));
             g.bench_function(format!("frame_rgba/sub{subscribers}/{}", dims(w, h)), |b| {
                 b.iter(|| {
-                    subs.send(&materialize_image_events(&events, &s.images));
+                    subs.send(&materialize_image_events(&events, &s.images, true));
                 });
             });
         }
+    }
+}
+
+/// One fan-out of a browser's dirty rectangles: the bytes a window is
+/// sent for what the dispatch benches above store.
+fn fanout_dirty_rects(g: &mut Group<'_>) {
+    const RECTS: [(u32, u32); 4] = [(64, 64), (128, 128), (256, 128), (512, 256)];
+    let (width, height) = FULL_FRAMES[0];
+    for count in [1, 10] {
+        let mut rng = Lcg::new(5);
+        let mut s = with_base_image(width, height);
+        for k in 0..count {
+            let (rect_w, rect_h) = RECTS[k % RECTS.len()];
+            let (left, top) = (rng.below(width - rect_w), rng.below(height - rect_h));
+            s.feed(&command(
+                &format!("a=f,i=1,r=1,X=1,x={left},y={top},s={rect_w},v={rect_h},f=32,q=2"),
+                &ui_frame(rect_w, rect_h, 4, k as u64),
+            ));
+        }
+        let events = std::mem::take(&mut s.events);
+        assert!(
+            materialize_image_events(&events, &s.images, true)
+                .iter()
+                .any(|m| matches!(m, ImageMsg::Chunk { .. })),
+            "dirty rectangles materialize no pixel chunks"
+        );
+        let mut subs = Subscribers::new(1);
+        g.throughput(Throughput::Elements(1));
+        g.bench_function(
+            format!("dirty_rects/n{count}/{}", dims(width, height)),
+            |b| {
+                b.iter(|| {
+                    subs.send(&materialize_image_events(&events, &s.images, true));
+                });
+            },
+        );
     }
 }
 
@@ -490,6 +526,7 @@ fn fanout(c: &mut Criterion) {
     let mut g = c.benchmark_group("graphics_fanout");
     g.sample_size(10);
     fanout_frame(&mut g);
+    fanout_dirty_rects(&mut g);
     fanout_rehydrate(&mut g);
     g.finish();
 }

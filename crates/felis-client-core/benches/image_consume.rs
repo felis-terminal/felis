@@ -35,7 +35,7 @@ fn retransmit(controls: &str, width: u32, height: u32, bpp: usize) -> (ImageShad
     (shadow, msgs)
 }
 
-/// The daemon re-ships an `r=1` edit's frame whole.
+/// The daemon ships an `r=1` edit's rectangle alone.
 fn subrect_patch() -> (ImageShadow, Vec<ImageMsg>) {
     let mut daemon = Daemon::new();
     daemon.send(
@@ -152,7 +152,7 @@ fn bench_transfers(c: &mut Criterion) {
     assert!(matches!(
         msgs[0],
         ImageMsg::Header {
-            target: ImageTarget::Frame { .. },
+            target: ImageTarget::Region { .. },
             ..
         }
     ));
@@ -163,7 +163,7 @@ fn bench_transfers(c: &mut Criterion) {
             _ => 0,
         })
         .sum();
-    assert_eq!(shipped, 1920 * 1080 * 4);
+    assert_eq!(shipped, 64 * 64 * 4);
     apply_all(&mut shadow, &msgs);
     assert_eq!(shadow.take_dirty_images(), vec![ImageId(1)]);
     group.bench_function("subrect/rgba32_64x64_patch/1920x1080", |b| {

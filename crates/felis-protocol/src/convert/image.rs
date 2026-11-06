@@ -79,6 +79,15 @@ impl From<&messages::ImageMsg> for v1::ImageMsg {
                             number: number.get(),
                         })
                     }
+                    messages::ImageTarget::Region { number, rect } => {
+                        v1::image_header::Target::Region(v1::ImageFrameRegion {
+                            number: number.get(),
+                            x: rect.x,
+                            y: rect.y,
+                            width: rect.width,
+                            height: rect.height,
+                        })
+                    }
                 }),
             }),
             I::Chunk { id, bytes } => Msg::Chunk(v1::ImageChunk {
@@ -171,6 +180,22 @@ fn header_from_wire(h: v1::ImageHeader) -> Result<messages::ImageMsg, WireError>
         Target::Frame(f) => messages::ImageTarget::Frame {
             number: frame_number("ImageFrame.number", f.number)?,
         },
+        Target::Region(r) => {
+            // The receiver holds the geometry that bounds a rectangle, so
+            // the claim checked here is only the frame number and the
+            // pixel count no image can exceed.
+            let pixels = u64::from(r.width).saturating_mul(u64::from(r.height));
+            check_claim("ImageFrameRegion.pixels", pixels, MAX_IMAGE_BYTES, "bytes")?;
+            messages::ImageTarget::Region {
+                number: frame_number("ImageFrameRegion.number", r.number)?,
+                rect: messages::SourceRect {
+                    x: r.x,
+                    y: r.y,
+                    width: r.width,
+                    height: r.height,
+                },
+            }
+        }
     };
     Ok(messages::ImageMsg::Header {
         id: ImageId(h.id),

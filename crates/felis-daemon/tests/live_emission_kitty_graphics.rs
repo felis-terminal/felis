@@ -67,7 +67,7 @@ impl State {
 
     fn drain_events(&mut self) -> Vec<ImageMsg> {
         let events = std::mem::take(&mut self.events);
-        materialize_image_events(&events, &self.images)
+        materialize_image_events(&events, &self.images, true)
     }
 
     fn advance_and_drain(&mut self, bytes: &[u8]) {

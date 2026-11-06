@@ -13,7 +13,9 @@ use felis_grid::images::{
     InsertError, Placement, PlacementId, VirtualPlacement,
 };
 use felis_grid::{ApcBody, ScreenSwitch};
-use felis_protocol::messages::{ImageFormat, ImageMsg, ImageTarget, MAX_IMAGE_CHUNK_PAYLOAD};
+use felis_protocol::messages::{
+    ImageFormat, ImageMsg, ImageTarget, MAX_IMAGE_CHUNK_PAYLOAD, SourceRect,
+};
 use felis_vt::kitty_graphics::{
     self, CompleteCommand, ErrorCode, Outcome, Reassembler, ResponseRefs, Status,
     format_feature_response, format_response, inflate as zlib,
@@ -52,6 +54,14 @@ pub enum ImageEvent {
         id: ImageId,
         index: u32,
     },
+    /// An in-place edit of an existing frame that changed `rect` alone.
+    /// Read back at ship time like `TransmitFrame`, so a window that
+    /// cannot take a region gets the whole frame from it instead.
+    TransmitRegion {
+        id: ImageId,
+        index: u32,
+        rect: SourceRect,
+    },
     Placement {
         image_id: ImageId,
         placement_id: Option<PlacementId>,
@@ -59,7 +69,7 @@ pub enum ImageEvent {
         anchor_col: u16,
         cols: u16,
         rows: u16,
-        source: Option<felis_protocol::messages::SourceRect>,
+        source: Option<SourceRect>,
         z_index: i32,
         requested: felis_protocol::messages::RequestedExtent,
         serial: u64,
@@ -105,6 +115,11 @@ impl std::fmt::Display for ImageEvent {
         match self {
             Self::Transmit(id) => write!(f, "Transmit(i={id})"),
             Self::TransmitFrame { id, index } => write!(f, "TransmitFrame(i={id},f={index})"),
+            Self::TransmitRegion { id, index, rect } => write!(
+                f,
+                "TransmitRegion(i={id},f={index},{}x{}+{}+{})",
+                rect.width, rect.height, rect.x, rect.y
+            ),
             Self::Placement { image_id, .. } => write!(f, "Placement(i={image_id})"),
             Self::PlacementRemoved { image_id, .. } => {
                 write!(f, "PlacementRemoved(i={image_id})")
@@ -211,20 +226,137 @@ pub fn frame_sync_messages(
     out.push(ImageMsg::Complete { id });
 }
 
-/// Materializes queued image events into wire messages.
-///
-/// Superseded transmission markers collapse to the last event per id,
-/// while controls preserve ordering (see [`ImageEvent::restates`]).
+/// Skips what [`frame_sync_messages`] skips. A rectangle spanning the
+/// frame's width is one contiguous run, so it ships as views of the
+/// store's buffer; any other is copied out row by row.
+fn region_sync_messages(
+    images: &felis_grid::images::ImageStore,
+    id: ImageId,
+    index: u32,
+    rect: SourceRect,
+    out: &mut Vec<ImageMsg>,
+) {
+    let Some(entry) = images.get(id) else {
+        return;
+    };
+    let Some(frame) = entry.frame(index as usize) else {
+        return;
+    };
+    let bpp = entry.format.bytes_per_pixel();
+    let stride = entry.width as usize * bpp;
+    let (start, row) = (
+        rect.y as usize * stride + rect.x as usize * bpp,
+        rect.width as usize * bpp,
+    );
+    let len = row * rect.height as usize;
+    let Some(end) = start
+        .checked_add(len)
+        .filter(|&end| end <= frame.pixels.len())
+    else {
+        return;
+    };
+    let pixels = if row == stride {
+        frame.pixels.slice(start..end)
+    } else {
+        let mut packed = Vec::with_capacity(len);
+        for r in 0..rect.height as usize {
+            let at = start + r * stride;
+            packed.extend_from_slice(&frame.pixels[at..at + row]);
+        }
+        Bytes::from(packed)
+    };
+    out.push(ImageMsg::Header {
+        id,
+        target: ImageTarget::Region {
+            number: frame_number(index as usize),
+            rect,
+        },
+    });
+    for chunk in chunked(&pixels) {
+        out.push(ImageMsg::Chunk { id, bytes: chunk });
+    }
+    out.push(ImageMsg::Complete { id });
+}
+
+/// Past this many rectangles on one frame per fan-out, they ship as
+/// their bounding box: each costs a transfer of its own.
+const MAX_REGIONS_PER_FRAME: usize = 16;
+
+/// The rectangles one fan-out owes a frame. Overlap is harmless, since
+/// every rectangle is read from the store's current bytes.
+#[derive(Default)]
+struct FrameRegions(Vec<SourceRect>);
+
+impl FrameRegions {
+    const fn contains(outer: SourceRect, inner: SourceRect) -> bool {
+        outer.x <= inner.x
+            && outer.y <= inner.y
+            && inner.x + inner.width <= outer.x + outer.width
+            && inner.y + inner.height <= outer.y + outer.height
+    }
+
+    fn add(&mut self, rect: SourceRect) {
+        if self.0.iter().any(|&held| Self::contains(held, rect)) {
+            return;
+        }
+        self.0.retain(|&held| !Self::contains(rect, held));
+        self.0.push(rect);
+        if self.0.len() > MAX_REGIONS_PER_FRAME {
+            let (x, y) = self
+                .0
+                .iter()
+                .fold((u32::MAX, u32::MAX), |(x, y), r| (x.min(r.x), y.min(r.y)));
+            let (right, bottom) = self.0.iter().fold((0, 0), |(right, bottom), r| {
+                (right.max(r.x + r.width), bottom.max(r.y + r.height))
+            });
+            self.0 = vec![SourceRect {
+                x,
+                y,
+                width: right - x,
+                height: bottom - y,
+            }];
+        }
+    }
+
+    /// Past half the frame, the per-row copy and the extra transfers
+    /// buy back too few bytes over shipping the frame whole.
+    fn worth_shipping(&self, width: u32, height: u32) -> bool {
+        let area: u64 = self
+            .0
+            .iter()
+            .map(|r| u64::from(r.width) * u64::from(r.height))
+            .sum();
+        area * 2 <= u64::from(width) * u64::from(height)
+    }
+}
+
+/// Materializes queued image events for a window: superseded markers
+/// collapse per id, controls keep their order, and region markers follow
+/// docs/explanation/protocols/kitty-graphics.md "Frame edits ship as
+/// regions" when `regions_allowed`, else ship their frames whole.
 #[must_use]
 pub fn materialize_image_events(
     events: &[ImageEvent],
     images: &felis_grid::images::ImageStore,
+    regions_allowed: bool,
 ) -> Vec<ImageMsg> {
     let mut last_restate: std::collections::HashMap<ImageId, usize> =
+        std::collections::HashMap::new();
+    let mut whole: std::collections::HashSet<(ImageId, u32)> = std::collections::HashSet::new();
+    let mut regions: std::collections::HashMap<(ImageId, u32), FrameRegions> =
         std::collections::HashMap::new();
     for (i, event) in events.iter().enumerate() {
         if let Some(id) = event.restates() {
             last_restate.insert(id, i);
+        }
+        match *event {
+            ImageEvent::TransmitFrame { id, index } => {
+                whole.insert((id, index));
+            }
+            ImageEvent::TransmitRegion { id, index, rect } if regions_allowed => {
+                regions.entry((id, index)).or_default().add(rect);
+            }
+            _ => {}
         }
     }
     let mut framed: std::collections::HashSet<(ImageId, u32)> = std::collections::HashSet::new();
@@ -236,7 +368,28 @@ pub fn materialize_image_events(
                     image_sync_messages(images, id, &mut out);
                 }
             }
-            ImageEvent::TransmitFrame { id, index } => {
+            ImageEvent::TransmitRegion { id, index, .. } if regions_allowed => {
+                if last_restate.contains_key(&id) || whole.contains(&(id, index)) {
+                    continue;
+                }
+                let Some(owed) = regions.remove(&(id, index)) else {
+                    continue;
+                };
+                match images.get(id) {
+                    Some(entry) if owed.worth_shipping(entry.width, entry.height) => {
+                        for &rect in &owed.0 {
+                            region_sync_messages(images, id, index, rect, &mut out);
+                        }
+                    }
+                    _ => {
+                        if framed.insert((id, index)) {
+                            frame_sync_messages(images, id, index, &mut out);
+                        }
+                    }
+                }
+            }
+            ImageEvent::TransmitFrame { id, index }
+            | ImageEvent::TransmitRegion { id, index, .. } => {
                 // Kept at the first position for its index: the mirror appends
                 // sequentially and rejects out-of-order frame numbers, while
                 // every marker reads current pixels from the store at fan-out.
@@ -1722,12 +1875,12 @@ fn source_rect(
     complete: &CompleteCommand,
     image_width: u32,
     image_height: u32,
-) -> Option<felis_protocol::messages::SourceRect> {
+) -> Option<SourceRect> {
     let [x, y, w, h] = b"xywh".map(|key| control_u32(complete, key));
     if [x, y, w, h].iter().all(Option::is_none) {
         return None;
     }
-    Some(felis_protocol::messages::SourceRect {
+    Some(SourceRect {
         x: x.unwrap_or(0),
         y: y.unwrap_or(0),
         width: w.filter(|&w| w != 0).unwrap_or(image_width),
@@ -1838,9 +1991,15 @@ fn store_frame(
         {
             control.set_gap(idx, gap_from_z(z));
         }
-        events.push(ImageEvent::TransmitFrame {
+        events.push(ImageEvent::TransmitRegion {
             id,
             index: idx as u32,
+            rect: SourceRect {
+                x: off_x,
+                y: off_y,
+                width: data.width,
+                height: data.height,
+            },
         });
         return ActionOutcome::Ok;
     }
@@ -2015,9 +2174,15 @@ fn handle_compose(
     if let Err(err) = edited {
         return frame_error_to_outcome(err);
     }
-    events.push(ImageEvent::TransmitFrame {
+    events.push(ImageEvent::TransmitRegion {
         id,
         index: dst_idx as u32,
+        rect: SourceRect {
+            x: dst_x,
+            y: dst_y,
+            width: w,
+            height: h,
+        },
     });
     ActionOutcome::Ok
 }

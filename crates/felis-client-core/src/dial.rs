@@ -574,11 +574,11 @@ pub fn reconnector_for_target(
     Some(match &target.carrier {
         RetargetCarrier::DefaultLocal => Reconnector {
             carrier: Carrier::Local(default_socket?.into()),
-            offer: Offer::window(true),
+            offer: Offer::window(true).with_image_regions(),
         },
         RetargetCarrier::LocalEndpoint(path) => Reconnector {
             carrier: Carrier::Local(PathBuf::from(path).into()),
-            offer: Offer::window(true),
+            offer: Offer::window(true).with_image_regions(),
         },
         RetargetCarrier::Ssh {
             destination,
@@ -588,7 +588,7 @@ pub fn reconnector_for_target(
                 destination: destination.clone(),
                 ssh_args: ssh_args.clone(),
             },
-            offer: Offer::window(false),
+            offer: Offer::window(false).with_image_regions(),
         },
     })
 }
@@ -1125,6 +1125,7 @@ mod tests {
             Some(default_socket.clone())
         );
         assert!(default_local.offer.pull_paced);
+        assert!(default_local.offer.image_regions);
 
         let explicit = for_carrier(RetargetCarrier::LocalEndpoint("/tmp/alt.sock".into()));
         assert_eq!(
@@ -1143,6 +1144,7 @@ mod tests {
                 if destination == "user@devbox" && ssh_args == &["-p", "2222"]
         ));
         assert!(!ssh.offer.pull_paced);
+        assert!(ssh.offer.image_regions);
     }
 
     #[test]

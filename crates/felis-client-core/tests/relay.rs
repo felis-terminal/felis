@@ -11,8 +11,9 @@ use std::time::Duration;
 
 use felis_client_core::connector::RemoteSpawn;
 use felis_client_core::json::{
-    AttachTarget, Base64, ErrorKind, InputJson, Item, OpResult, Open, RegionSourceJson, Request,
-    SearchSourceJson, SendStepJson, SessionId, SpawnArgsJson, session_id_hex,
+    AttachTarget, Base64, ErrorKind, ImageJson, ImageTargetJson, InputJson, Item, OpResult, Open,
+    RegionSourceJson, Request, SearchSourceJson, SendStepJson, SessionId, SpawnArgsJson,
+    session_id_hex,
 };
 use felis_client_core::relay::{InputError, Relay, RelayConfig, RelayStream, StreamMessage, Theme};
 use felis_client_core::{Carrier, DEFAULT_STREAM_BUFFER};
@@ -371,6 +372,60 @@ async fn an_attach_reports_the_embedders_theme_and_carries_input() {
         .await
         .unwrap();
     until_screen_contains(&relay, session, "]11;rgb:1212/3434/5").await;
+}
+
+/// The target of the next image header the attach yields.
+async fn next_image_target(attach: &mut RelayStream) -> ImageTargetJson {
+    loop {
+        match timeout(PATIENCE, attach.next()).await.unwrap() {
+            StreamMessage::Item(Item::Image {
+                msg: ImageJson::Header { target, .. },
+                ..
+            }) => return target,
+            StreamMessage::Item(_) => {}
+            other => panic!("the attach ended before an image header: {other:?}"),
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_frame_edit_reaches_a_json_attach_as_the_whole_frame() {
+    let tmp = private_dir();
+    let relay = relay_on(&daemon(&tmp).await, Theme::default()).await;
+    let mut attach = relay
+        .open(Open::Attach {
+            target: AttachTarget::Create(sh("read a; printf '\\033_Ga=t,f=32,s=4,v=2,i=1,q=2;\
+                 AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\\033\\\\'; \
+                 read b; printf '\\033_Ga=f,i=1,r=1,x=1,y=1,s=1,v=1,f=32,q=2;/////w==\\033\\\\'; \
+                 exec sleep 600")),
+        })
+        .await
+        .unwrap();
+    let input = attach.input().unwrap();
+    let send = |line: &'static [u8]| {
+        input.send(InputJson::KeyBytes {
+            bytes: Base64(line.to_vec()),
+        })
+    };
+    send(b"a\n").await.unwrap();
+    let target = next_image_target(&mut attach).await;
+    assert!(
+        matches!(
+            target,
+            ImageTargetJson::New {
+                width: 4,
+                height: 2,
+                ..
+            }
+        ),
+        "{target:?}"
+    );
+    send(b"b\n").await.unwrap();
+    let target = next_image_target(&mut attach).await;
+    assert!(
+        matches!(target, ImageTargetJson::Frame { number: 1 }),
+        "a JSON attach never opts into regions, got {target:?}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

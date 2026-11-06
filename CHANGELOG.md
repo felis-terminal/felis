@@ -20,6 +20,13 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 - **Graphics**: a Kitty graphics feature query (`a=q` with `e=<action>`) is answered with the keys felis honors for that
   action, so a producer can tell, for example, Unicode placeholders apart from the placement offsets felis ignores.
 
+### Changed
+
+- **Protocol**: an edit of an existing Kitty animation frame (`a=f` with `r=`, `a=c`) reaches a window as the changed
+  rectangles alone rather than the whole frame, so a terminal browser's or notcurses' small updates to a large image no
+  longer re-send it. Protocol minor 4 adds the region transfer, which a window opts into on attach; a JSON protocol
+  attachment, or a window or daemon at minor 3 or below, keeps receiving whole frames.
+
 ### Fixed
 
 - **Graphics**: an animation frame (`a=f`) overwrites the canvas under `X=1`, the key the Kitty graphics protocol

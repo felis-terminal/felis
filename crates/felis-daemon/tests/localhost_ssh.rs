@@ -336,6 +336,7 @@ async fn ssh_session_echoes_keystrokes_back_through_the_hop() {
             command: cat.display().to_string(),
             ..SpawnArgs::default()
         },
+        image_regions: false,
     };
     writer.send(&create).await.unwrap();
     let (rows, cols) = match next_control::<_, SessionToClientMsg>(
@@ -403,6 +404,7 @@ async fn ssh_link_drop_preserves_the_persistent_daemon() {
                 command: cat.display().to_string(),
                 ..SpawnArgs::default()
             },
+            image_regions: false,
         })
         .await
         .unwrap();

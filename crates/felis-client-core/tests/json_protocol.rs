@@ -372,7 +372,8 @@ fn cases() -> Vec<Case> {
                             serial: Some(2),
                         },
                     }
-                    .into(),
+                    .try_into()
+                    .unwrap(),
                 },
             ),
         ),
@@ -385,7 +386,8 @@ fn cases() -> Vec<Case> {
                         id: ImageId(9),
                         bytes: vec![0, 1, 2, 254, 255].into(),
                     }
-                    .into(),
+                    .try_into()
+                    .unwrap(),
                 },
             ),
         ),
@@ -411,7 +413,8 @@ fn cases() -> Vec<Case> {
                         requested: None,
                         serial: Some(5),
                     }
-                    .into(),
+                    .try_into()
+                    .unwrap(),
                 },
             ),
         ),
@@ -575,10 +578,11 @@ fn a_golden_row_delta_spells_its_cells_as_structural_graphemes() {
 
 #[test]
 fn image_bytes_travel_as_a_base64_string() {
-    let msg = ImageJson::from(ImageMsg::Chunk {
+    let msg = ImageJson::try_from(ImageMsg::Chunk {
         id: ImageId(9),
         bytes: vec![104, 105].into(),
-    });
+    })
+    .unwrap();
     assert_eq!(serde_json::to_value(&msg).unwrap()["bytes"], json!("aGk="));
 }
 
@@ -899,7 +903,8 @@ fn what_the_reader_refuses_the_schema_refuses() {
                 id: ImageId(9),
                 bytes: b"hi".to_vec().into(),
             }
-            .into(),
+            .try_into()
+            .unwrap(),
         },
     ))
     .unwrap();

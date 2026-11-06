@@ -152,9 +152,11 @@ impl From<RequestedExtentJson> for RequestedExtent {
     }
 }
 
-impl From<ImageTarget> for ImageTargetJson {
-    fn from(target: ImageTarget) -> Self {
-        match target {
+impl TryFrom<ImageTarget> for ImageTargetJson {
+    type Error = DtoError;
+
+    fn try_from(target: ImageTarget) -> Result<Self, Self::Error> {
+        Ok(match target {
             ImageTarget::New {
                 width,
                 height,
@@ -169,7 +171,10 @@ impl From<ImageTarget> for ImageTargetJson {
             ImageTarget::Frame { number } => Self::Frame {
                 number: number.get(),
             },
-        }
+            // A JSON attachment never opts into regions, so one arriving
+            // is the daemon's fault, not a frame to drop.
+            ImageTarget::Region { .. } => return Err(DtoError::Outside("Region")),
+        })
     }
 }
 
@@ -201,12 +206,14 @@ fn frame_number(number: u32) -> Result<NonZeroU32, DtoError> {
         .ok_or_else(|| DtoError::field("number", "frame numbering is 1-based, so `0` is no frame"))
 }
 
-impl From<ImageMsg> for ImageJson {
-    fn from(msg: ImageMsg) -> Self {
-        match msg {
+impl TryFrom<ImageMsg> for ImageJson {
+    type Error = DtoError;
+
+    fn try_from(msg: ImageMsg) -> Result<Self, Self::Error> {
+        Ok(match msg {
             ImageMsg::Header { id, target } => Self::Header {
                 id: id.0,
-                target: target.into(),
+                target: target.try_into()?,
             },
             ImageMsg::Chunk { id, bytes } => Self::Chunk {
                 id: id.0,
@@ -262,7 +269,7 @@ impl From<ImageMsg> for ImageJson {
                 number: number.get(),
             },
             ImageMsg::PlacementsShifted { lines } => Self::PlacementsShifted { lines },
-        }
+        })
     }
 }
 

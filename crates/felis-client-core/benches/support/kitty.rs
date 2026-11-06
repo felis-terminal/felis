@@ -124,7 +124,7 @@ impl Daemon {
     }
 
     pub(crate) fn ship(&mut self) -> Vec<ImageMsg> {
-        let msgs = materialize_image_events(&self.events, &self.images);
+        let msgs = materialize_image_events(&self.events, &self.images, true);
         self.events.clear();
         msgs
     }

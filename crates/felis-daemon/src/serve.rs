@@ -964,7 +964,7 @@ impl SubscribeFailure {
 async fn subscribe_to(
     cmd: &mpsc::Sender<SessionCmd>,
     params: ConnParams,
-    live_only: bool,
+    (live_only, image_regions): (bool, bool),
     carrier: &AttachCarrier,
 ) -> Result<Subscription, SubscribeFailure> {
     let ConnParams {
@@ -981,6 +981,7 @@ async fn subscribe_to(
         pull_paced,
         minor: effective_minor,
         live_only,
+        image_regions,
         carrier: carrier.clone(),
         tx,
         buffered: Arc::clone(&buffered),
@@ -1293,7 +1294,10 @@ async fn wait_for_attach<R: tokio::io::AsyncRead + Unpin, W: tokio::io::AsyncWri
                 .ok_or(ConnError::ExpectedAttachOrCreate)?
                 .msg
             {
-                SessionToDaemonMsg::Create { args } => {
+                SessionToDaemonMsg::Create {
+                    args,
+                    image_regions,
+                } => {
                     // The spawn's roster row predates the subscription,
                     // and `Created` promises the row of an attached
                     // session.
@@ -1318,7 +1322,9 @@ async fn wait_for_attach<R: tokio::io::AsyncRead + Unpin, W: tokio::io::AsyncWri
                     // Not live-only: `felis -- true` exits before the subscribe
                     // lands, and a live-only create would refuse the window its
                     // own command's output.
-                    let subscribed = subscribe_to(&registered.cmd, params, false, carrier).await;
+                    let subscribed =
+                        subscribe_to(&registered.cmd, params, (false, image_regions), carrier)
+                            .await;
                     let id = registered.id;
                     let Subscription {
                         ok,
@@ -1355,7 +1361,11 @@ async fn wait_for_attach<R: tokio::io::AsyncRead + Unpin, W: tokio::io::AsyncWri
                         Ack::Created { registered },
                     )))));
                 }
-                SessionToDaemonMsg::Attach { target, live_only } => {
+                SessionToDaemonMsg::Attach {
+                    target,
+                    live_only,
+                    image_regions,
+                } => {
                     let taken = take_attach_handle(pool, &target).await;
                     let (id, handle) = match taken {
                         Ok(taken) => taken,
@@ -1365,7 +1375,9 @@ async fn wait_for_attach<R: tokio::io::AsyncRead + Unpin, W: tokio::io::AsyncWri
                             return Ok(None);
                         }
                     };
-                    let subscribed = subscribe_to(&handle.cmd, params, live_only, carrier).await;
+                    let subscribed =
+                        subscribe_to(&handle.cmd, params, (live_only, image_regions), carrier)
+                            .await;
                     let Subscription {
                         ok,
                         out_rx,

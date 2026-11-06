@@ -22,6 +22,9 @@ use super::{ConnectError, Connection, check_mode_minor};
 pub struct Offer {
     pub mode: ConnectionMode,
     pub pull_paced: bool,
+    /// Sent on every attach and create this connection makes:
+    /// `SessionAttach.image_regions` in docs/reference/ipc.md.
+    pub image_regions: bool,
 }
 
 impl Offer {
@@ -33,6 +36,17 @@ impl Offer {
         Self {
             mode: ConnectionMode::Window,
             pull_paced,
+            image_regions: false,
+        }
+    }
+
+    /// For a window that applies region transfers through
+    /// [`ImageShadow`](crate::ImageShadow).
+    #[must_use]
+    pub const fn with_image_regions(self) -> Self {
+        Self {
+            image_regions: true,
+            ..self
         }
     }
 
@@ -41,6 +55,7 @@ impl Offer {
         Self {
             mode: ConnectionMode::Ops,
             pull_paced: false,
+            image_regions: false,
         }
     }
 
@@ -49,6 +64,7 @@ impl Offer {
         Self {
             mode: ConnectionMode::Observer,
             pull_paced: false,
+            image_regions: false,
         }
     }
 }
@@ -190,6 +206,7 @@ where
         accepted_major: daemon_advertised.0,
         daemon_minor: daemon_advertised.1,
         daemon_identity: identity,
+        image_regions: offer.image_regions,
         abandoned: false,
     })
 }

@@ -1329,7 +1329,7 @@ impl App {
         };
         let reconnector = Reconnector {
             carrier: Carrier::Local(socket.clone().into()),
-            offer: Offer::window(true),
+            offer: Offer::window(true).with_image_regions(),
         };
         self.switch_state = SwitchState::InFlight {
             session_gone: false,
@@ -1338,7 +1338,7 @@ impl App {
         self.dial_in_background(
             dial_and_land(
                 Carrier::Local(socket.into()),
-                Offer::window(true),
+                Offer::window(true).with_image_regions(),
                 Landing::Create(prepared.args),
             ),
             Some(reconnector),

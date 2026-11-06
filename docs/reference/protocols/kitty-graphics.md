@@ -238,8 +238,9 @@ The daemon manages animation timers, advancing active animations by wall-clock i
 looping according to configured bounds. Animations continue advancing when detached.
 
 Frame transitions emit `ShowFrame { id, number }` to clients. Frame pixel data transfers once via `Header` → `Chunk*` →
-`Complete` sequences using 1-based Kitty frame numbers ([ipc.md](../ipc.md#image-kind--3)). Clients track frame
-presentation without computing tick intervals locally.
+`Complete` sequences using 1-based Kitty frame numbers ([ipc.md](../ipc.md#image-kind--3)); an in-place edit (`a=f` with
+`r=`, `a=c`) ships only the rectangles it changed to a minor-4 window that opts in. Clients track frame presentation
+without computing tick intervals locally.
 
 ## Z-ordering
 

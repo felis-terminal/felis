@@ -126,6 +126,7 @@ impl AttachIntent {
 struct AttachSessionReq {
     target: AttachTarget,
     live_only: bool,
+    image_regions: bool,
 }
 
 impl ControlRequest for AttachSessionReq {
@@ -136,6 +137,7 @@ impl ControlRequest for AttachSessionReq {
         SessionToDaemonMsg::Attach {
             target: self.target.clone(),
             live_only: self.live_only,
+            image_regions: self.image_regions,
         }
     }
 
@@ -157,6 +159,7 @@ impl ControlRequest for AttachSessionReq {
 
 struct CreateSessionReq {
     args: SpawnArgs,
+    image_regions: bool,
 }
 
 impl ControlRequest for CreateSessionReq {
@@ -166,6 +169,7 @@ impl ControlRequest for CreateSessionReq {
     fn take_msg(&mut self) -> SessionToDaemonMsg {
         SessionToDaemonMsg::Create {
             args: std::mem::take(&mut self.args),
+            image_regions: self.image_regions,
         }
     }
 
@@ -654,6 +658,7 @@ where
             .request(AttachSessionReq {
                 target,
                 live_only: intent.live_only(),
+                image_regions: self.image_regions,
             })
             .await?;
         self.driver.attached();
@@ -681,7 +686,12 @@ where
     /// # Errors
     /// Connection or refusal errors.
     pub async fn create_with(&mut self, args: SpawnArgs) -> Result<SessionInfo, ConnectError> {
-        let info = self.request(CreateSessionReq { args }).await?;
+        let info = self
+            .request(CreateSessionReq {
+                args,
+                image_regions: self.image_regions,
+            })
+            .await?;
         // On the ack, not on the request: the rehydrate burst rides the
         // same reader, and a `Grid` frame classified while the driver
         // still says `Setup` would end the connection.
