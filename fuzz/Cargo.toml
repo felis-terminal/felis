@@ -94,3 +94,10 @@ path = "fuzz_targets/chord_parser.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "base64_decode"
+path = "fuzz_targets/base64_decode.rs"
+test = false
+doc = false
+bench = false

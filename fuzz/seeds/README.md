@@ -21,6 +21,9 @@ fuzz/seeds/
 ├── ipc_body/          — protobuf framed-body bytes for the body codec +
 │                        the wire→domain conversion layer (including
 │                        retired enum values, which must be rejected)
+├── base64_decode/     — `[mode][input…]`: mode bit 0 encodes the input as a
+│                        payload first (bit 1 strips its padding), the
+│                        rest of the mode byte sets the push piece size
 ├── row_codec/         — `packed_cells` payloads per
 │                        docs/reference/row-codec.md: the three golden
 │                        vectors that spec publishes, plus one seed per
