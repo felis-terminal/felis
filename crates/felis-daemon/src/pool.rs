@@ -379,6 +379,44 @@ pub struct SessionHandle {
     /// a handle built without a PTY.
     pub upgrade: Option<UpgradeParts>,
     pub publication: Arc<Publication>,
+    pub shutdown: Arc<ShutdownSignal>,
+}
+
+impl SessionHandle {
+    /// False when the task already ended.
+    pub async fn shutdown(&self) -> bool {
+        self.shutdown.send(&self.cmd).await
+    }
+}
+
+/// A destroy that reaches the owner task while it takes no commands, as
+/// when a decode has held its queue to the cap. Requested beside
+/// `SessionCmd::Shutdown`, which keeps its place behind earlier commands
+/// whenever the task is taking them.
+#[derive(Debug, Default)]
+pub struct ShutdownSignal(Notify);
+
+impl ShutdownSignal {
+    pub fn request(&self) {
+        self.0.notify_one();
+    }
+
+    pub async fn requested(&self) {
+        self.0.notified().await;
+    }
+
+    /// Requests the shutdown and queues its command; false when the task
+    /// already ended.
+    pub async fn send(&self, cmd: &mpsc::Sender<SessionCmd>) -> bool {
+        self.request();
+        cmd.send(SessionCmd::Shutdown).await.is_ok()
+    }
+
+    /// [`Self::send`] without waiting; false when the queue is full too.
+    pub fn try_send(&self, cmd: &mpsc::Sender<SessionCmd>) -> bool {
+        self.request();
+        cmd.try_send(SessionCmd::Shutdown).is_ok()
+    }
 }
 
 /// Whether a row ever became nameable and what observers have heard of
@@ -1157,6 +1195,7 @@ mod tests {
             resizer: None,
             upgrade: None,
             publication: Publication::new(),
+            shutdown: Arc::default(),
             meta: Arc::new(StdMutex::new(SessionMeta {
                 rows: DEFAULT_ROWS,
                 cols: DEFAULT_COLS,

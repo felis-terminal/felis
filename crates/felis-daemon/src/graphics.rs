@@ -33,7 +33,7 @@ mod image_decode;
 pub use image_decode::{
     DecodeError, MAX_DECODED_BYTES, ShmDeferral, decode_image, shm_segment_name, unlink_shm_segment,
 };
-use image_decode::{MEDIUM_READ_FAILED, file_backed};
+use image_decode::{MEDIUM_READ_FAILED, file_backed, named_medium};
 #[cfg(all(test, unix))]
 use image_decode::{deletable_path, open_resolved_dir, readable_location};
 
@@ -545,28 +545,33 @@ pub fn dispatch_apc_body(
     reassembler: &mut Reassembler,
     body: &[u8],
 ) -> Option<Vec<u8>> {
-    let prepared = begin_apc_body(ctx, reassembler, body);
+    let prepared = begin_apc_body(ctx, reassembler, body, None);
     finish_in_place(ctx, prepared)
 }
 
 fn finish_in_place(ctx: &mut ApcCtx<'_>, prepared: Prepared) -> Option<Vec<u8>> {
     match prepared {
         Prepared::Done(reply) => reply,
-        Prepared::Decode(job, plan) => commit_decoded(ctx, plan, Some(job.run())),
+        Prepared::Decode(PreparedDecode { mut complete, plan }) => {
+            let result = decode_image(&mut complete);
+            commit_decoded(ctx, &plan, &complete, result)
+        }
     }
 }
 
 /// Everything a body's dispatch does before its decode. The decode may
 /// run without the parse lock as long as nothing but animation playback
 /// changes the store, the placements or the grid before
-/// [`commit_decoded`].
+/// [`commit_decoded`]. `started` times a decode [`commit_offloaded`]
+/// logs.
 pub fn begin_apc_body(
     ctx: &mut ApcCtx<'_>,
     reassembler: &mut Reassembler,
     body: &[u8],
+    started: Option<std::time::Instant>,
 ) -> Prepared {
     match reassemble_apc_body(reassembler, body) {
-        BodyDispatch::Assembled(complete) => prepare_complete(ctx, complete),
+        BodyDispatch::Assembled(complete) => prepare_complete(ctx, complete, started, body.len()),
         BodyDispatch::Reply(reply) => Prepared::Done(Some(reply)),
         BodyDispatch::Silent => Prepared::Done(None),
     }
@@ -576,28 +581,14 @@ pub fn begin_apc_body(
 pub enum Prepared {
     /// The dispatch is over; the reply, if any, goes to the PTY.
     Done(Option<Vec<u8>>),
-    /// The command waits on [`DecodeJob::run`], then [`commit_decoded`].
-    Decode(DecodeJob, CommitPlan),
+    /// The command waits on [`decode_image`], then [`commit_decoded`].
+    Decode(PreparedDecode),
 }
 
-/// A command's decode: it reads the command alone, no session state.
-pub struct DecodeJob(CompleteCommand);
-
-/// A finished [`DecodeJob`].
-pub struct DecodeOutput {
-    complete: CompleteCommand,
-    result: Result<ImageEntry, DecodeError>,
-}
-
-impl DecodeJob {
-    #[must_use]
-    pub fn run(mut self) -> DecodeOutput {
-        let result = decode_image(&mut self.0);
-        DecodeOutput {
-            complete: self.0,
-            result,
-        }
-    }
+/// A command whose decode reads the command alone, no session state.
+pub struct PreparedDecode {
+    pub complete: CompleteCommand,
+    pub plan: CommitPlan,
 }
 
 /// What a command's dispatch resolved before its decode.
@@ -606,8 +597,11 @@ pub struct CommitPlan {
     refs: ResponseRefs,
     quiet: u8,
     addressed: bool,
-    file_backed: bool,
+    /// `t=`, read once: a decode that panicked answers by it.
+    medium: Option<u8>,
     anchor_cursor: (u16, u16),
+    started: Option<std::time::Instant>,
+    bytes_in: usize,
 }
 
 enum DecodeStep {
@@ -620,6 +614,34 @@ enum DecodeStep {
         id: ImageId,
         canvas: (u32, u32, ImageFormat, usize),
     },
+}
+
+/// A [`PreparedDecode`]'s decode, off the session task.
+pub struct DecodeJob(CompleteCommand);
+
+/// A finished [`DecodeJob`].
+pub struct Decoded(CompleteCommand, Result<ImageEntry, DecodeError>);
+
+impl PreparedDecode {
+    #[must_use]
+    pub fn into_job(self) -> (DecodeJob, CommitPlan) {
+        (DecodeJob(self.complete), self.plan)
+    }
+}
+
+impl DecodeJob {
+    /// The bytes the decode holds before it starts, for the session's
+    /// resource report.
+    #[must_use]
+    pub fn payload_len(&self) -> usize {
+        self.0.payload.as_ref().map_or(0, Vec::len)
+    }
+
+    #[must_use]
+    pub fn run(mut self) -> Decoded {
+        let result = decode_image(&mut self.0);
+        Decoded(self.0, result)
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -680,29 +702,83 @@ pub fn dispatch_apc_bodies(
     let n_bodies = bodies.len();
     let bytes_in: usize = bodies.iter().map(|b| b.body.len()).sum();
     let events_before = session.image_events.len();
-    let cell_pixel_w = session.cell_pixel_w;
-    let cell_pixel_h = session.cell_pixel_h;
     let mut responses = Vec::new();
     for apc in bodies {
-        // The cursor captured when this body arrived, not the live one
-        // (see `ApcBody`); the reassembler completes only on the
-        // finishing body, and producers don't move the cursor
-        // mid-transmit.
-        let mut ctx = ApcCtx {
-            grid,
-            images: &mut session.images,
-            placements: &mut session.placements,
-            events: &mut session.image_events,
-            shm: &mut session.shm_segments,
-            cell_pixel_w,
-            cell_pixel_h,
-            anchor_cursor: Some((apc.cursor_row, apc.cursor_col)),
-        };
-        let response = dispatch_apc_body(&mut ctx, &mut session.graphics_reassembler, &apc.body);
+        let (mut ctx, reassembler) = session_ctx(session, grid, (apc.cursor_row, apc.cursor_col));
+        let response = dispatch_apc_body(&mut ctx, reassembler, &apc.body);
         if let Some(response) = response {
             responses.push(response);
         }
     }
+    log_dispatch(session, t_start, n_bodies, bytes_in, events_before);
+    responses
+}
+
+/// One body, its decode left to the caller when the parse stopped on it
+/// ([`ApcBody::stops_parse`]): the caller runs it off the parse lock and
+/// hands the result to [`commit_offloaded`].
+pub fn dispatch_apc(session: &mut Session, grid: &mut felis_grid::Grid, apc: &ApcBody) -> Prepared {
+    let started = std::time::Instant::now();
+    let events_before = session.image_events.len();
+    let (mut ctx, reassembler) = session_ctx(session, grid, (apc.cursor_row, apc.cursor_col));
+    let prepared = if apc.stops_parse {
+        begin_apc_body(&mut ctx, reassembler, &apc.body, Some(started))
+    } else {
+        Prepared::Done(dispatch_apc_body(&mut ctx, reassembler, &apc.body))
+    };
+    if matches!(prepared, Prepared::Done(_)) {
+        log_dispatch(session, started, 1, apc.body.len(), events_before);
+    }
+    prepared
+}
+
+/// `decoded` is `None` for a decode that panicked.
+pub fn commit_offloaded(
+    session: &mut Session,
+    grid: &mut felis_grid::Grid,
+    plan: &CommitPlan,
+    decoded: Option<Decoded>,
+) -> Option<Vec<u8>> {
+    let events_before = session.image_events.len();
+    let (mut ctx, _) = session_ctx(session, grid, plan.anchor_cursor);
+    let reply = match decoded {
+        Some(Decoded(complete, result)) => commit_decoded(&mut ctx, plan, &complete, result),
+        None => commit_failed_decode(plan),
+    };
+    if let Some(started) = plan.started {
+        log_dispatch(session, started, 1, plan.bytes_in, events_before);
+    }
+    reply
+}
+
+/// The cursor captured when the body arrived, not the live one (see
+/// `ApcBody`); the reassembler completes only on the finishing body, and
+/// producers don't move the cursor mid-transmit.
+const fn session_ctx<'a>(
+    session: &'a mut Session,
+    grid: &'a mut felis_grid::Grid,
+    anchor_cursor: (u16, u16),
+) -> (ApcCtx<'a>, &'a mut Reassembler) {
+    let ctx = ApcCtx {
+        grid,
+        images: &mut session.images,
+        placements: &mut session.placements,
+        events: &mut session.image_events,
+        shm: &mut session.shm_segments,
+        cell_pixel_w: session.cell_pixel_w,
+        cell_pixel_h: session.cell_pixel_h,
+        anchor_cursor: Some(anchor_cursor),
+    };
+    (ctx, &mut session.graphics_reassembler)
+}
+
+fn log_dispatch(
+    session: &Session,
+    t_start: std::time::Instant,
+    n_bodies: usize,
+    bytes_in: usize,
+    events_before: usize,
+) {
     let events_emitted = session.image_events.len() - events_before;
     let elapsed_ms = t_start.elapsed().as_millis();
     if elapsed_ms > 5 || events_emitted > 0 {
@@ -719,7 +795,6 @@ pub fn dispatch_apc_bodies(
             "dispatch_apc_bodies"
         );
     }
-    responses
 }
 
 /// The primary screen's images while the alternate screen is up: kitty
@@ -907,16 +982,17 @@ pub fn apply_reflow_remap(
 }
 
 #[cfg(test)]
-fn handle_complete(ctx: &mut ApcCtx<'_>, complete: &CompleteCommand) -> Option<Vec<u8>> {
-    let owned = CompleteCommand {
-        controls: complete.controls.clone(),
-        payload: complete.payload.clone(),
-    };
-    let prepared = prepare_complete(ctx, owned);
+fn handle_complete(ctx: &mut ApcCtx<'_>, complete: CompleteCommand) -> Option<Vec<u8>> {
+    let prepared = prepare_complete(ctx, complete, None, 0);
     finish_in_place(ctx, prepared)
 }
 
-fn prepare_complete(ctx: &mut ApcCtx<'_>, complete: CompleteCommand) -> Prepared {
+fn prepare_complete(
+    ctx: &mut ApcCtx<'_>,
+    complete: CompleteCommand,
+    started: Option<std::time::Instant>,
+    bytes_in: usize,
+) -> Prepared {
     let ApcCtx {
         grid,
         images,
@@ -1039,45 +1115,44 @@ fn prepare_complete(ctx: &mut ApcCtx<'_>, complete: CompleteCommand) -> Prepared
             return Prepared::Done(None);
         }
     };
-    let file_backed = file_backed(&complete);
-    Prepared::Decode(
-        DecodeJob(complete),
-        CommitPlan {
+    let medium = control_byte(&complete, b't');
+    Prepared::Decode(PreparedDecode {
+        complete,
+        plan: CommitPlan {
             step,
             refs,
             quiet,
             addressed,
-            file_backed,
+            medium,
             anchor_cursor,
+            started,
+            bytes_in,
         },
-    )
+    })
+}
+
+/// A command whose decode panicked answers as one that failed, with
+/// nothing stored.
+pub fn commit_failed_decode(plan: &CommitPlan) -> Option<Vec<u8>> {
+    let failed = if named_medium(plan.medium) {
+        MEDIUM_READ_FAILED
+    } else {
+        DecodeError::BadImage("image decoder failed")
+    };
+    let outcome = decode_error_to_outcome(failed);
+    apply_quiet_mode(plan.addressed, plan.quiet, &plan.refs, outcome)
 }
 
 /// The rest of a [`prepare_complete`]d command's dispatch once its
-/// decode is done. `None` is a decode that panicked: it answers as one
-/// that failed, with nothing stored.
+/// decode is done.
 pub fn commit_decoded(
     ctx: &mut ApcCtx<'_>,
-    plan: CommitPlan,
-    output: Option<DecodeOutput>,
+    plan: &CommitPlan,
+    complete: &CompleteCommand,
+    result: Result<ImageEntry, DecodeError>,
 ) -> Option<Vec<u8>> {
-    let CommitPlan {
-        step,
-        mut refs,
-        quiet,
-        addressed,
-        file_backed,
-        anchor_cursor,
-    } = plan;
-    let Some(DecodeOutput { complete, result }) = output else {
-        let failed = if file_backed {
-            MEDIUM_READ_FAILED
-        } else {
-            DecodeError::BadImage("image decoder failed")
-        };
-        let outcome = decode_error_to_outcome(failed);
-        return apply_quiet_mode(addressed, quiet, &refs, outcome);
-    };
+    let mut refs = plan.refs;
+    let (quiet, addressed, anchor_cursor) = (plan.quiet, plan.addressed, plan.anchor_cursor);
     let ApcCtx {
         grid,
         images,
@@ -1088,17 +1163,17 @@ pub fn commit_decoded(
         cell_pixel_h,
         ..
     } = ctx;
-    let outcome = match step {
+    let outcome = match plan.step {
         DecodeStep::Query => match result {
             Ok(_) => ActionOutcome::Ok,
             Err(err) => decode_error_to_outcome(err),
         },
         DecodeStep::Transmit { id, display } => {
-            match store_transmitted(images, placements, events, &complete, &refs, id, result) {
+            match store_transmitted(images, placements, events, complete, &refs, id, result) {
                 Err(outcome) => outcome,
                 Ok(()) if !display => ActionOutcome::Ok,
-                Ok(()) if control_u32(&complete, b'U') == Some(1) => {
-                    upsert_virtual_placement(images, placements, events, id, &complete, &mut refs)
+                Ok(()) if control_u32(complete, b'U') == Some(1) => {
+                    upsert_virtual_placement(images, placements, events, id, complete, &mut refs)
                 }
                 Ok(()) => upsert_placement(
                     grid,
@@ -1106,7 +1181,7 @@ pub fn commit_decoded(
                     placements,
                     events,
                     id,
-                    &complete,
+                    complete,
                     &mut refs,
                     *cell_pixel_w,
                     *cell_pixel_h,
@@ -1115,10 +1190,10 @@ pub fn commit_decoded(
             }
         }
         DecodeStep::Frame { id, canvas } => {
-            store_decoded_frame(images, placements, events, &complete, id, canvas, result)
+            store_decoded_frame(images, placements, events, complete, id, canvas, result)
         }
     };
-    finish_command(shm, &complete, addressed, quiet, &refs, outcome)
+    finish_command(shm, complete, addressed, quiet, &refs, outcome)
 }
 
 /// Defer the unlink only once the command succeeded, the only outcome
@@ -2369,6 +2444,43 @@ const fn frame_error_to_outcome(err: FrameError) -> ActionOutcome {
         // as ENOTSUP, like the `InsertError` path.
         _ => ActionOutcome::error(ErrorCode::Unsupported, "frame mutation rejected"),
     }
+}
+
+#[cfg(test)]
+pub(crate) fn b64(input: &[u8]) -> Vec<u8> {
+    const ALPHA: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = Vec::with_capacity(input.len().div_ceil(3) * 4);
+    for chunk in input.chunks(3) {
+        let b0 = chunk[0];
+        let b1 = chunk.get(1).copied().unwrap_or(0);
+        let b2 = chunk.get(2).copied().unwrap_or(0);
+        out.push(ALPHA[(b0 >> 2) as usize]);
+        out.push(ALPHA[(((b0 & 0x03) << 4) | (b1 >> 4)) as usize]);
+        if chunk.len() == 1 {
+            out.push(b'=');
+            out.push(b'=');
+        } else {
+            out.push(ALPHA[(((b1 & 0x0F) << 2) | (b2 >> 6)) as usize]);
+            if chunk.len() == 2 {
+                out.push(b'=');
+            } else {
+                out.push(ALPHA[(b2 & 0x3F) as usize]);
+            }
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+pub(crate) fn encode_png(width: u32, height: u32, color: png::ColorType, data: &[u8]) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    let mut encoder = png::Encoder::new(&mut bytes, width, height);
+    encoder.set_color(color);
+    encoder.set_depth(png::BitDepth::Eight);
+    let mut writer = encoder.write_header().expect("png header");
+    writer.write_image_data(data).expect("png data");
+    writer.finish().expect("png finish");
+    bytes
 }
 
 #[cfg(test)]

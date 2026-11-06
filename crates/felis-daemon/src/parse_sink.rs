@@ -106,8 +106,9 @@ impl ParseSignals {
 
     /// Call **before** `take_pty_effects`: a chunk parsed while the task
     /// drains must re-flag rather than strand its effects.
-    pub fn clear_dirty(&self) {
-        self.dirty.store(false, Ordering::Release);
+    /// Returns whether the sink had parsed anything since the last clear.
+    pub fn clear_dirty(&self) -> bool {
+        self.dirty.swap(false, Ordering::AcqRel)
     }
 
     /// Resolves when the sink has parsed something since the last
@@ -374,6 +375,29 @@ mod tests {
         let mut sink = build_sink(Arc::clone(&core), Arc::clone(&signals));
         let feeder = std::thread::spawn(move || {
             sink(b"\x1b_Ga=T,f=24,s=1,v=1,c=2,r=1,m=1;AA\x1b\\\x1b_Gm=1;AA\x1b\\");
+            sink(b"\x1b_Gm=0;\x1b\\done");
+        });
+        tokio::time::timeout(Duration::from_secs(5), signals.drain_requested())
+            .await
+            .expect("the last chunk must request a drain");
+        assert!(!top_row_text(&core).contains("done"), "parse stopped");
+        signals.publish_drained(signals.drain_generation());
+        tokio::task::spawn_blocking(move || feeder.join().unwrap())
+            .await
+            .unwrap();
+        assert_eq!(signals.drain_generation(), 1, "one pause for the stream");
+        assert!(top_row_text(&core).contains("done"));
+    }
+
+    /// A chunked PNG that moves no cursor still stops the parse once,
+    /// after its last chunk, for its decode off the session task.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn sink_pauses_once_for_a_chunked_png_that_moves_no_cursor() {
+        let core = test_core();
+        let signals = Arc::new(ParseSignals::new());
+        let mut sink = build_sink(Arc::clone(&core), Arc::clone(&signals));
+        let feeder = std::thread::spawn(move || {
+            sink(b"\x1b_Ga=T,f=100,C=1,m=1;AA\x1b\\\x1b_Gm=1;AA\x1b\\");
             sink(b"\x1b_Gm=0;\x1b\\done");
         });
         tokio::time::timeout(Duration::from_secs(5), signals.drain_requested())

@@ -31,19 +31,90 @@ use crate::graphics::ImageEvent;
 pub(crate) fn drain_effects(
     session: &mut crate::pool::Session,
     core: &mut crate::pool::ParseCore,
-) -> Result<(), ConnError> {
-    // The replay's one grid mutation, the cursor advance past an image,
-    // can scroll and queue effects of its own; they replay in this drain,
-    // and anything a later pass would still queue waits for the next.
+) -> Drained {
+    run_drain(session, core, Ok(()))
+}
+
+/// How a drain ended.
+pub(crate) enum Drained {
+    Done(Result<(), ConnError>),
+    /// Stopped at the body the parse stopped on, whose decode the caller
+    /// runs before it hands the result to [`resume_drain`].
+    Suspended(crate::graphics::PreparedDecode),
+}
+
+#[cfg(all(test, unix))]
+impl Drained {
+    pub(crate) fn expect_done(self) -> Result<(), ConnError> {
+        match self {
+            Self::Done(written) => written,
+            Self::Suspended(_) => panic!("the drain stopped at an offloaded decode"),
+        }
+    }
+}
+
+/// Commits the decode a drain stopped at, then drains on: the parse
+/// stopped right after that body, so nothing followed it in its drain.
+/// `decoded` is `None` for a decode that panicked.
+pub(crate) fn resume_drain(
+    session: &mut crate::pool::Session,
+    core: &mut crate::pool::ParseCore,
+    plan: &crate::graphics::CommitPlan,
+    decoded: Option<crate::graphics::Decoded>,
+) -> Drained {
     let mut written = Ok(());
-    for _ in 0..3 {
+    if let Some(reply) = crate::graphics::commit_offloaded(session, &mut core.grid, plan, decoded) {
+        respond(&session.writer, &reply, &mut written);
+    }
+    run_drain(session, core, written)
+}
+
+/// The replay's one grid mutation, the cursor advance past an image, can
+/// scroll and queue effects of its own; they replay in the same drain,
+/// and anything a later pass would still queue waits for the next.
+const DRAIN_TAKES: usize = 3;
+
+fn run_drain(
+    session: &mut crate::pool::Session,
+    core: &mut crate::pool::ParseCore,
+    mut written: Result<(), ConnError>,
+) -> Drained {
+    for _ in 0..DRAIN_TAKES {
         let effects = core.grid.take_pty_effects();
         if effects.is_empty() {
             break;
         }
-        replay_effects(session, core, effects, &mut written);
+        if let Some(prepared) = replay_effects(session, core, effects, &mut written) {
+            return Drained::Suspended(prepared);
+        }
     }
-    written
+    Drained::Done(written)
+}
+
+/// The drain with every body taken as one the parse never stopped on.
+#[cfg(all(test, unix))]
+pub(crate) fn drain_effects_in_place(
+    session: &mut crate::pool::Session,
+    core: &mut crate::pool::ParseCore,
+) -> Result<(), ConnError> {
+    let mut effects = core.grid.take_pty_effects();
+    for effect in &mut effects {
+        if let PtyEffect::Apc(apc) = effect {
+            apc.stops_parse = false;
+        }
+    }
+    let mut written = Ok(());
+    assert!(replay_effects(session, core, effects, &mut written).is_none());
+    match run_drain(session, core, written) {
+        Drained::Done(written) => written,
+        Drained::Suspended(_) => unreachable!("an in-place drain never suspends"),
+    }
+}
+
+fn respond(writer: &felis_pty::PtyWriter, bytes: &[u8], written: &mut Result<(), ConnError>) {
+    if written.is_ok() {
+        *written = write_pty(writer, bytes);
+    }
 }
 
 fn shift_placements(session: &mut crate::pool::Session, n: u32, retain: u32) {
@@ -71,21 +142,18 @@ fn shift_placements(session: &mut crate::pool::Session, n: u32, retain: u32) {
 /// A failed PTY write is recorded in `written` (the first one wins) and
 /// later responses are skipped, but the state effects behind it still
 /// apply: the queue is already taken, and at EOF a reply the dead PTY
-/// refuses must not cost the child's final status report.
+/// refuses must not cost the child's final status report. Stops at an
+/// offloaded decode, the last effect of its drain.
 fn replay_effects(
     session: &mut crate::pool::Session,
     core: &mut crate::pool::ParseCore,
     effects: Vec<PtyEffect>,
     written: &mut Result<(), ConnError>,
-) {
+) -> Option<crate::graphics::PreparedDecode> {
     // Replay in byte-stream order so interleaved effects within a burst do not
     // invert. Query responses flow even with zero subscribers so programs do not hang.
-    fn respond(writer: &felis_pty::PtyWriter, bytes: &[u8], written: &mut Result<(), ConnError>) {
-        if written.is_ok() {
-            *written = write_pty(writer, bytes);
-        }
-    }
-    for effect in effects {
+    let mut effects = effects.into_iter();
+    while let Some(effect) = effects.next() {
         match effect {
             PtyEffect::ImagesCleared(scope) => crate::graphics::clear_images(
                 &mut session.images,
@@ -96,10 +164,28 @@ fn replay_effects(
             // docs/explanation/protocols/kitty-graphics.md "Dispatcher
             // architecture".
             PtyEffect::Apc(apc) => {
-                let responses =
-                    crate::graphics::dispatch_apc_bodies(session, &mut core.grid, vec![apc]);
-                for response in responses {
-                    respond(&session.writer, &response, written);
+                match crate::graphics::dispatch_apc(session, &mut core.grid, &apc) {
+                    crate::graphics::Prepared::Done(reply) => {
+                        if let Some(reply) = reply {
+                            respond(&session.writer, &reply, written);
+                        }
+                    }
+                    crate::graphics::Prepared::Decode(prepared) if written.is_ok() => {
+                        let after = effects.len();
+                        debug_assert_eq!(after, 0, "the parse stops right after an offloaded body");
+                        return Some(prepared);
+                    }
+                    // The session ends on the failed write anyway.
+                    crate::graphics::Prepared::Decode(prepared) => {
+                        let (job, plan) = prepared.into_job();
+                        let decoded = Some(job.run());
+                        let _unwritten = crate::graphics::commit_offloaded(
+                            session,
+                            &mut core.grid,
+                            &plan,
+                            decoded,
+                        );
+                    }
                 }
             }
             PtyEffect::Response(bytes) => respond(&session.writer, &bytes, written),
@@ -213,6 +299,7 @@ fn replay_effects(
                 .push(GridMsg::CommandOutput { text, omitted }),
         }
     }
+    None
 }
 
 /// Retained scrollback rows + live rows; mirrors the renderer's

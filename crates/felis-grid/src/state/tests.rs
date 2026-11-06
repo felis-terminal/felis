@@ -340,6 +340,7 @@ fn queued_apc_bodies_are_held_to_the_outbox_count_byte_and_body_caps() {
             body: vec![b'A'; len],
             cursor_row: 0,
             cursor_col: 0,
+            stops_parse: false,
         }))
         .unwrap();
         move |v: &mut serde_json::Value| {

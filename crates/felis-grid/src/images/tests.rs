@@ -1443,7 +1443,7 @@ fn yields(g: &mut Grid, bodies: &[&str]) -> Vec<bool> {
 }
 
 #[test]
-fn parse_yields_after_a_cursor_moving_placement_only() {
+fn parse_yields_after_a_cursor_moving_placement_or_an_offloaded_decode_only() {
     let cases: &[(&[&str], &[bool])] = &[
         (&["Ga=T,f=24,s=1,v=1;AAAA"], &[true]),
         (&["Ga=p,i=1"], &[true]),
@@ -1466,13 +1466,38 @@ fn parse_yields_after_a_cursor_moving_placement_only() {
         // A file-backed command abandons an open direct stream.
         (
             &["Ga=T,m=1;AA", "Ga=t,t=f;L3RtcA==", "Gm=0;AA"],
-            &[false, false, false],
+            &[false, true, false],
         ),
+        (&["Ga=t,f=100;AA"], &[true]),
+        (&["Ga=q,i=1,t=s;L3NobQ=="], &[true]),
+        (&["Ga=T,C=1,f=32,s=256,v=256,o=z;AA"], &[true]),
+        (&["Ga=T,C=1,f=32,s=256,v=256;AA"], &[false]),
+        (&["Ga=p,i=1,C=1,f=100"], &[false]),
+        (&["Ga=t,f=100,m=1;AA", "Gm=0;AA"], &[false, true]),
     ];
     for (bodies, want) in cases {
         let mut g = Grid::new(8, 16);
         assert_eq!(yields(&mut g, bodies), *want, "{bodies:?}");
     }
+}
+
+#[test]
+fn only_the_body_completing_an_offloaded_decode_stops_the_parse() {
+    let mut g = Grid::new(8, 16);
+    yields(
+        &mut g,
+        &[
+            "Ga=T,f=100,m=1;AA",
+            "Gm=1;AA",
+            "Gm=0;AA",
+            "Ga=t,f=24,s=1,v=1;AAAA",
+        ],
+    );
+    let flags: Vec<bool> = apc_bodies(&mut g)
+        .iter()
+        .map(|apc| apc.stops_parse)
+        .collect();
+    assert_eq!(flags, [false, false, true, false]);
 }
 
 #[test]

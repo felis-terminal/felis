@@ -101,8 +101,17 @@ impl PtyEffectQueue {
             body: body.to_vec(),
             cursor_row,
             cursor_col,
+            stops_parse: false,
         }));
         true
+    }
+
+    /// Flags the body [`Self::push_apc`] just queued as the one the parse
+    /// stops after.
+    pub fn stop_after_last_apc(&mut self) {
+        if let Some(PtyEffect::Apc(apc)) = self.effects.last_mut() {
+            apc.stops_parse = true;
+        }
     }
 
     /// The effects a scroll may coalesce into: trailing prompt edges

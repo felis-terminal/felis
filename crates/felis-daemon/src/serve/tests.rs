@@ -2206,14 +2206,14 @@ async fn a_pick_that_exits_before_the_attach_is_refused_and_the_re_pick_lands() 
         "the pick's roster must still show the doomed session as live"
     );
 
-    pool.lock()
+    let delivered = pool
+        .lock()
         .await
         .handle_cloned(doomed)
         .expect("the doomed session is still pooled")
-        .cmd
-        .send(SessionCmd::Shutdown)
-        .await
-        .expect("the session task takes the shutdown");
+        .shutdown()
+        .await;
+    assert!(delivered, "the session task takes the shutdown");
     wait_for_gone(&pool, doomed).await;
 
     let (read_half, write_half) = connect(&path).await.unwrap();
@@ -2713,7 +2713,9 @@ async fn scroll_into_scrollback_retains_placement_and_emits_shift() {
         core.parser.advance(&mut core.grid, &buf);
     }
     let core = Arc::clone(&session.core);
-    drain_effects(&mut session, &mut core.lock()).unwrap();
+    drain_effects(&mut session, &mut core.lock())
+        .expect_done()
+        .unwrap();
 
     let scrolled = u32::try_from(session.lock_core().grid.scrollback().len()).expect("fits");
     assert!(scrolled > 0, "newline flood must reach the scrollback");
@@ -2783,7 +2785,9 @@ async fn a_region_scroll_moves_the_placements_inside_the_region() {
             .advance(&mut core.grid, b"\x1b[2;10r\x1b[10;1H\n\n");
     }
     let core = Arc::clone(&session.core);
-    drain_effects(&mut session, &mut core.lock()).unwrap();
+    drain_effects(&mut session, &mut core.lock())
+        .expect_done()
+        .unwrap();
 
     let rows: Vec<(u32, i32)> = session
         .placements
@@ -6085,11 +6089,8 @@ async fn a_create_whose_ack_cannot_be_written_leaves_a_detached_session() {
 #[cfg(unix)]
 async fn shut_down_and_reap(pool: &Arc<Mutex<SessionPool>>, id: SessionId) {
     let handle = pool.lock().await.handle_cloned(id).expect("listed");
-    handle
-        .cmd
-        .send(SessionCmd::Shutdown)
-        .await
-        .expect("the session task is still running");
+    let delivered = handle.shutdown().await;
+    assert!(delivered, "the session task takes the shutdown");
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     while !pool.lock().await.quiescent() {
         assert!(
@@ -7387,14 +7388,14 @@ async fn a_fence_after_the_session_ended_gets_no_reply() {
     hello_welcome(&mut reader, &mut writer, false).await;
     let id = create_and_attach(&mut reader, &mut writer).await;
 
-    pool.lock()
+    let delivered = pool
+        .lock()
         .await
         .handle_cloned(SessionId(id))
         .expect("the session is still pooled")
-        .cmd
-        .send(SessionCmd::Shutdown)
-        .await
-        .expect("the session task takes the shutdown");
+        .shutdown()
+        .await;
+    assert!(delivered, "the session task takes the shutdown");
     wait_for_gone(&pool, SessionId(id)).await;
 
     // The write itself may already meet the closed connection, which is

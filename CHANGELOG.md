@@ -26,6 +26,9 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
   rectangles alone rather than the whole frame, so a terminal browser's or notcurses' small updates to a large image no
   longer re-send it. Protocol minor 4 adds the region transfer, which a window opts into on attach; a JSON protocol
   attachment, or a window or daemon at minor 3 or below, keeps receiving whole frames.
+- **Graphics**: while felis decodes a large Kitty image (a PNG, a file or shared-memory source, or a large compressed
+  frame), keystrokes still reach the program and windows still redraw; only the program's later output waits for the
+  image.
 
 ### Fixed
 

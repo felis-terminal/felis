@@ -657,6 +657,15 @@ async fn profile_cat_pull_paced() {
     eprintln!("profile_cat_pull_paced: best {best_mibs:.1} MiB/s over {iters} iter(s)");
 }
 
+/// The `p` quantile of sorted `lat`, in milliseconds.
+fn percentile_ms(lat: &[Duration], p: f64) -> f64 {
+    if lat.is_empty() {
+        return f64::NAN;
+    }
+    let idx = ((lat.len() as f64 - 1.0) * p).round() as usize;
+    lat[idx].as_secs_f64() * 1e3
+}
+
 /// Echo latency (`KeyBytes` sent → glyph visible in the shadow):
 /// every per-keystroke cost except the GUI present/vsync.
 /// `FELIS_ECHO_PULL=1` runs pull-paced at 60 Hz, adding the 0–16 ms
@@ -756,13 +765,7 @@ async fn profile_echo_latency() {
     }
 
     lat.sort_unstable();
-    let pct = |p: f64| -> f64 {
-        if lat.is_empty() {
-            return f64::NAN;
-        }
-        let idx = ((lat.len() as f64 - 1.0) * p).round() as usize;
-        lat[idx].as_secs_f64() * 1e3
-    };
+    let pct = |p| percentile_ms(&lat, p);
     let mean = if lat.is_empty() {
         f64::NAN
     } else {
@@ -887,13 +890,7 @@ async fn profile_text_latency_during_image() {
     }
 
     lat.sort_unstable();
-    let pct = |p: f64| -> f64 {
-        if lat.is_empty() {
-            return f64::NAN;
-        }
-        let idx = ((lat.len() as f64 - 1.0) * p).round() as usize;
-        lat[idx].as_secs_f64() * 1e3
-    };
+    let pct = |p| percentile_ms(&lat, p);
     eprintln!(
         "profile_text_latency_during_image: n={} timeouts={} | min={:.3} p50={:.3} p90={:.3} p99={:.3} max={:.3} ms",
         lat.len(),

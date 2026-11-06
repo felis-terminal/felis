@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc dce182ad7ccead2ab84b2de884e8a7bb6a9ec415be7c0e9679305426af0759f0 # shrinks to items = [[27, 95, 71, 105, 61, 49, 44, 97, 61, 84, 44, 102, 61, 49, 48, 48, 44, 112, 61, 52, 59, 105, 86, 66, 79, 82, 119, 48, 75, 71, 103, 111, 65, 65, 65, 65, 78, 83, 85, 104, 69, 85, 103, 65, 65, 65, 65, 73, 65, 65, 65, 65, 67, 67, 65, 89, 65, 65, 65, 66, 121, 116, 103, 48, 107, 65, 65, 65, 65, 69, 48, 108, 69, 81, 86, 82, 52, 110, 71, 78, 104, 89, 71, 82, 105, 90, 103, 69, 66, 68, 105, 65, 65, 48, 81, 65, 67, 104, 103, 66, 80, 119, 87, 105, 51, 51, 65, 65, 65, 65, 65, 66, 74, 82, 85, 53, 69, 114, 107, 74, 103, 103, 103, 61, 61, 27, 92]], cuts = [], plan = [Interleaved { tick_ms: None, pull: false, attach: false, resize: Some((4, 10)) }]

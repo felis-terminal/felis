@@ -5,7 +5,10 @@
 use std::hint::black_box;
 use std::time::{Duration, Instant};
 
-use felis_daemon::graphics::{ApcCtx, ImageEvent, ShmDeferral, dispatch_apc_body};
+use felis_daemon::graphics::{
+    ApcCtx, ImageEvent, Prepared, PreparedDecode, ShmDeferral, begin_apc_body, commit_decoded,
+    decode_image, dispatch_apc_body,
+};
 use felis_grid::Grid;
 use felis_grid::images::{ImageStore, Placements};
 use felis_protocol::messages::MAX_SESSION_IMAGE_BYTES;
@@ -150,21 +153,23 @@ impl Session {
     /// the store and the events: each bench asserts on those before timing.
     pub(crate) fn feed(&mut self, bodies: &[Vec<u8>]) {
         for body in bodies {
-            black_box(dispatch_apc_body(
-                &mut ApcCtx {
-                    grid: &mut self.grid,
-                    images: &mut self.images,
-                    placements: &mut self.placements,
-                    events: &mut self.events,
-                    shm: &mut self.shm,
-                    cell_pixel_w: CELL_W,
-                    cell_pixel_h: CELL_H,
-                    anchor_cursor: Some((0, 0)),
-                },
-                &mut self.reassembler,
-                body,
-            ));
+            let (mut ctx, reassembler) = self.ctx();
+            black_box(dispatch_apc_body(&mut ctx, reassembler, body));
         }
+    }
+
+    const fn ctx(&mut self) -> (ApcCtx<'_>, &mut Reassembler) {
+        let ctx = ApcCtx {
+            grid: &mut self.grid,
+            images: &mut self.images,
+            placements: &mut self.placements,
+            events: &mut self.events,
+            shm: &mut self.shm,
+            cell_pixel_w: CELL_W,
+            cell_pixel_h: CELL_H,
+            anchor_cursor: Some((0, 0)),
+        };
+        (ctx, &mut self.reassembler)
     }
 
     pub(crate) fn feed_all(&mut self, commands: &[Vec<Vec<u8>>]) {
@@ -174,10 +179,24 @@ impl Session {
     }
 
     /// How long the session task holds the parse lock to dispatch one
-    /// command: every body of it, decode included.
+    /// heavy command: every body of it, but not the decode the last one
+    /// hands off.
     pub(crate) fn hold(&mut self, bodies: &[Vec<u8>]) -> Duration {
+        let Some((last, head)) = bodies.split_last() else {
+            return Duration::ZERO;
+        };
         let start = Instant::now();
-        self.feed(bodies);
-        start.elapsed()
+        self.feed(head);
+        let (mut ctx, reassembler) = self.ctx();
+        let Prepared::Decode(PreparedDecode { mut complete, plan }) =
+            begin_apc_body(&mut ctx, reassembler, last, None)
+        else {
+            panic!("the command decodes nothing");
+        };
+        let prepared = start.elapsed();
+        let result = black_box(decode_image(&mut complete));
+        let start = Instant::now();
+        black_box(commit_decoded(&mut ctx, &plan, &complete, result));
+        prepared + start.elapsed()
     }
 }

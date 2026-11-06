@@ -73,7 +73,11 @@ pub(super) const MEDIUM_READ_FAILED: DecodeError =
 
 /// `t=f`, `t=t` or `t=s`: the source is named, not carried.
 pub(super) fn file_backed(complete: &CompleteCommand) -> bool {
-    matches!(control_byte(complete, b't'), Some(b'f' | b't' | b's'))
+    named_medium(control_byte(complete, b't'))
+}
+
+pub(super) const fn named_medium(medium: Option<u8>) -> bool {
+    matches!(medium, Some(b'f' | b't' | b's'))
 }
 
 fn bytes_from_transmission(complete: &mut CompleteCommand) -> Result<Vec<u8>, DecodeError> {

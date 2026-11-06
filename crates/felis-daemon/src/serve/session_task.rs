@@ -76,6 +76,11 @@ const ANNOUNCE_QUEUE_CAP: usize = 8;
 /// outruns the task, the same way the PTY would.
 const CMD_CHANNEL_CAPACITY: usize = 64;
 
+/// Past this many held commands the task stops taking commands until
+/// the decode commits, so a window resizing for the whole of a long
+/// decode backs up into the command channel instead of the task's memory.
+const HELD_CMDS_CAP: usize = 1024;
+
 /// The connection pump owns encoding, framing, and the correlation
 /// envelope.
 #[derive(Debug, Clone)]
@@ -569,6 +574,7 @@ pub struct SessionLifecycle {
     /// Flips to `true` once the owner task has exited *and* the child
     /// is reaped.
     pub done: watch::Receiver<bool>,
+    pub shutdown: Arc<crate::pool::ShutdownSignal>,
 }
 
 /// Spawn a session owner task.
@@ -743,6 +749,7 @@ async fn spawn_task(
     }));
     let meta_status_generation = session.program_status.generation();
     let publication = crate::pool::Publication::new();
+    let shutdown = Arc::new(crate::pool::ShutdownSignal::default());
     let (hub, attachment_ids, events_hub) = {
         guard.register(
             id,
@@ -756,6 +763,7 @@ async fn spawn_task(
                     child: Arc::clone(&session.child),
                 }),
                 publication: Arc::clone(&publication),
+                shutdown: Arc::clone(&shutdown),
             },
             slot,
             listing,
@@ -812,6 +820,12 @@ async fn spawn_task(
         meta_status_generation,
         pending_chunks: VecDeque::new(),
         upgrade_hold: false,
+        decode: None,
+        held_cmds: VecDeque::new(),
+        awaiting_post_release_drain: false,
+        shutdown: Arc::clone(&shutdown),
+        #[cfg(all(test, unix))]
+        before_decode: None,
     };
     if let Some(carried) = carried {
         task.reported_focus = carried.reported_focus;
@@ -844,6 +858,7 @@ async fn spawn_task(
         cmd: cmd_tx,
         input_budget,
         done,
+        shutdown,
     }
 }
 
@@ -1254,6 +1269,89 @@ struct SessionTask {
     pending_chunks: VecDeque<(Owner, StreamId)>,
     /// See [`SessionCmd::Settle`].
     upgrade_hold: bool,
+    /// The decode the parse is stopped on, running off this task
+    /// (docs/explanation/protocols/kitty-graphics.md "Dispatcher
+    /// architecture"). While it runs no effect is drained and the sink
+    /// is not released.
+    decode: Option<InFlightDecode>,
+    /// Commands held during [`Self::decode`], replayed in arrival order
+    /// at its commit as the task would have run them after it
+    /// ([`SessionTask::runs_during_decode`] names the exceptions).
+    held_cmds: VecDeque<HeldCmd>,
+    /// From a decode's commit until a drain covers the parse the sink
+    /// makes after the release, which it always reports.
+    awaiting_post_release_drain: bool,
+    shutdown: Arc<crate::pool::ShutdownSignal>,
+    /// Test-only: the next decode runs this first, on the blocking pool.
+    #[cfg(all(test, unix))]
+    before_decode: Option<Box<dyn FnOnce() + Send + Sync>>,
+}
+
+/// A mutex only to keep the task `Sync`: a command is `Send` alone.
+struct HeldCmd(std::sync::Mutex<SessionCmd>);
+
+impl HeldCmd {
+    fn into_inner(self) -> SessionCmd {
+        self.0
+            .into_inner()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+struct InFlightDecode {
+    plan: crate::graphics::CommitPlan,
+    handle: tokio::task::JoinHandle<crate::graphics::Decoded>,
+    payload_len: usize,
+}
+
+/// What the run loop's arms may do in one iteration.
+#[derive(Clone, Copy)]
+struct Hold {
+    upgrade: bool,
+    /// A decode in flight, or committed with the output after it not yet
+    /// drained.
+    decode: bool,
+}
+
+impl Hold {
+    /// A pending decode still drains: its commit and the drain after its
+    /// release are what end it.
+    const fn drains(self) -> bool {
+        !self.upgrade
+    }
+
+    /// What must follow the output after the image: the next chunk of a
+    /// walk, EOF, the reap and the report reconcile.
+    const fn quiesced(self) -> bool {
+        !self.decode
+    }
+}
+
+enum DecodeAdmit {
+    Hold,
+    Run,
+    /// Window input, with whether it promotes its window.
+    Typed {
+        promotes: bool,
+    },
+}
+
+const fn is_typed(msg: &InputMsg) -> bool {
+    matches!(
+        msg,
+        InputMsg::KeyBytes(_) | InputMsg::Paste(_) | InputMsg::Mouse(_) | InputMsg::Key(_)
+    )
+}
+
+/// Resolves when the in-flight decode, if any, is done. Cancel-safe in
+/// `select!`.
+async fn decode_done(
+    decode: &mut Option<InFlightDecode>,
+) -> Result<crate::graphics::Decoded, tokio::task::JoinError> {
+    match decode {
+        Some(decode) => (&mut decode.handle).await,
+        None => std::future::pending().await,
+    }
 }
 
 /// PTY-visible steps, recorded so a test can pin their order.
@@ -1399,8 +1497,28 @@ async fn run_session(mut t: SessionTask, mut cmd_rx: mpsc::Receiver<SessionCmd>)
         // Per iteration rather than at every `subs` mutation site; a
         // one-chunk-stale read only mis-paces ~1 KiB.
         t.session.signals.set_attached_subs(t.subs.len());
+        // While a decode is pending, an arm runs only if it serves the
+        // state from before the image or commutes with the commit and the
+        // output after it; every other arm, and any added later, is gated
+        // on `quiesced`.
+        let hold = t.hold();
         tokio::select! {
             biased;
+            // Ahead of everything and ungated by an upgrade hold: the sink
+            // stays stopped on the image until its commit, and a park
+            // waits for the sink.
+            decoded = decode_done(&mut t.decode) => {
+                let committed = t.commit_decode(decoded);
+                last_drain = tokio::time::Instant::now();
+                match committed {
+                    Ok(None) => {}
+                    Ok(Some(reason)) => break reason,
+                    Err(err) => {
+                        warn!(?err, "session task: PTY pipeline error");
+                        break EndReason::PtyError;
+                    }
+                }
+            }
             // Ahead of commands: the sink is blocked until this drain
             // dispatches the image placement it stopped after.
             () = t.session.signals.drain_requested() => {
@@ -1414,7 +1532,7 @@ async fn run_session(mut t: SessionTask, mut cmd_rx: mpsc::Receiver<SessionCmd>)
             // Commands next: under pull pacing they carry the
             // per-vsync pulls, which a sustained PTY burst must not
             // starve.
-            cmd = cmd_rx.recv() => {
+            cmd = cmd_rx.recv(), if t.held_cmds.len() < HELD_CMDS_CAP => {
                 match cmd {
                     None => break EndReason::PoolDropped,
                     Some(cmd) => {
@@ -1424,17 +1542,20 @@ async fn run_session(mut t: SessionTask, mut cmd_rx: mpsc::Receiver<SessionCmd>)
                     }
                 }
             }
+            // Only a decode stops the command intake; otherwise the
+            // command carries the same shutdown in its place.
+            () = t.shutdown.requested(), if t.decode.is_some() => break EndReason::Destroyed,
             // After commands in the biased order: a `Cancel` sent
             // mid-walk lands before the next slice. The yield lets the
             // connection pump that forwards it run: this arm is always
             // ready, so without it the walk finishes in one poll.
-            () = std::future::ready(()), if t.has_pending_chunks() => {
+            () = std::future::ready(()), if t.has_pending_chunks() && hold.quiesced() => {
                 t.run_next_chunk();
                 tokio::task::yield_now().await;
             }
             // Ungated by `attached`: a parked session still owes query
             // responses to the program and notifications to observers.
-            () = t.session.signals.parsed(), if drain_at.is_none() && !t.upgrade_hold => {
+            () = t.session.signals.parsed(), if drain_at.is_none() && hold.drains() => {
                 if last_drain.elapsed() >= DRAIN_COALESCE {
                     let drained = t.drain_and_fan();
                     // From the drain's end, not its start: a drain that
@@ -1454,7 +1575,7 @@ async fn run_session(mut t: SessionTask, mut cmd_rx: mpsc::Receiver<SessionCmd>)
                     drain_at = Some(last_drain + DRAIN_COALESCE);
                 }
             }
-            () = tokio::time::sleep_until(drain_deadline), if drain_at.is_some() && !t.upgrade_hold => {
+            () = tokio::time::sleep_until(drain_deadline), if drain_at.is_some() && hold.drains() => {
                 drain_at = None;
                 let drained = t.drain_and_fan();
                 last_drain = tokio::time::Instant::now();
@@ -1464,7 +1585,7 @@ async fn run_session(mut t: SessionTask, mut cmd_rx: mpsc::Receiver<SessionCmd>)
                 }
             }
             // No data ever lands here (`felis_pty::PtyReader`).
-            res = t.session.reader.read(&mut eof_buf), if !t.pty_eof => {
+            res = t.session.reader.read(&mut eof_buf), if !t.pty_eof && hold.quiesced() => {
                 match res {
                     Ok(0) => {
                         t.pty_eof = true;
@@ -1499,7 +1620,7 @@ async fn run_session(mut t: SessionTask, mut cmd_rx: mpsc::Receiver<SessionCmd>)
             // Not while held for an upgrade: the dump names this child
             // unreaped, so reaping it now would hand the successor a pid
             // that may be reused.
-            _ = drain_tick.tick(), if !t.upgrade_hold => {
+            _ = drain_tick.tick(), if hold.drains() && hold.quiesced() => {
                 // Ungated by `attached`: a program left holding the PTY
                 // keeps EOF away, and an observer is owed the exit.
                 if !t.child_exited
@@ -1519,19 +1640,12 @@ async fn run_session(mut t: SessionTask, mut cmd_rx: mpsc::Receiver<SessionCmd>)
             }
         }
         // Sync paths (detach, eviction, resize) cannot write to the
-        // PTY; the edges they leave are reconciled here.
-        if t.focus_dirty
-            && let Some(reason) = t.sync_focus_to_pty()
-        {
-            break reason;
-        }
-        if t.scheme_dirty
-            && let Some(reason) = t.sync_color_scheme_to_pty()
-        {
-            break reason;
-        }
-        if t.resize_notify_dirty
-            && let Some(reason) = t.sync_resize_notify_to_pty()
+        // PTY; the edges they leave are reconciled here, behind the
+        // replies to everything parsed before them.
+        // Read again: the arm may have committed the decode or drained
+        // past it.
+        if t.hold().quiesced()
+            && let Some(reason) = t.reconcile_reports()
         {
             break reason;
         }
@@ -1729,6 +1843,77 @@ fn pty_write_outcome(res: Result<(), ConnError>) -> Option<EndReason> {
 
 impl SessionTask {
     fn handle_cmd(&mut self, cmd: SessionCmd) -> Option<EndReason> {
+        if self.decode.is_none() {
+            return self.run_cmd(cmd);
+        }
+        match self.admits_during_decode(&cmd) {
+            DecodeAdmit::Hold => {
+                self.held_cmds
+                    .push_back(HeldCmd(std::sync::Mutex::new(cmd)));
+                None
+            }
+            DecodeAdmit::Run => self.run_cmd(cmd),
+            DecodeAdmit::Typed { promotes } => {
+                let SessionCmd::Input {
+                    sub,
+                    msg,
+                    reservation,
+                } = cmd
+                else {
+                    unreachable!("only window input is admitted as typed")
+                };
+                self.input_with(sub, msg, reservation, promotes)
+            }
+        }
+    }
+
+    /// What a decode does not hold: input with no size or input-owner
+    /// change while nothing is held and no report of the task's own is
+    /// owed (the input path writes one first), reads no held command's
+    /// order depends on, and the shutdown. Everything else, and every
+    /// variant added later, waits for the commit.
+    fn admits_during_decode(&self, cmd: &SessionCmd) -> DecodeAdmit {
+        match cmd {
+            SessionCmd::Input {
+                msg: InputMsg::NextGridFrame,
+                ..
+            }
+            | SessionCmd::Stats { .. }
+            // Ends the session, so nothing held after it matters, and a
+            // decode that never finishes cannot keep it alive.
+            | SessionCmd::Shutdown => DecodeAdmit::Run,
+            SessionCmd::Input { sub, msg, .. } if is_typed(msg) && self.writes_input_now() => {
+                let promotes = self.input_promotes(msg);
+                if self.input_keeps_size(*sub, promotes) {
+                    DecodeAdmit::Typed { promotes }
+                } else {
+                    DecodeAdmit::Hold
+                }
+            }
+            SessionCmd::RemoteInput { msg, .. } if is_typed(msg) && self.writes_input_now() => {
+                DecodeAdmit::Run
+            }
+            _ => DecodeAdmit::Hold,
+        }
+    }
+
+    fn input_keeps_size(&self, sub: SubscriberId, promotes: bool) -> bool {
+        !promotes
+            || (self.active_sub == Some(sub)
+                && self
+                    .sub_index(sub)
+                    .is_some_and(|i| !self.subs[i].is_window || self.input_owner == Some(sub)))
+    }
+
+    #[allow(
+        clippy::missing_const_for_fn,
+        reason = "VecDeque::is_empty is const only above the MSRV"
+    )]
+    fn writes_input_now(&self) -> bool {
+        self.held_cmds.is_empty() && !self.owes_reports()
+    }
+
+    fn run_cmd(&mut self, cmd: SessionCmd) -> Option<EndReason> {
         match cmd {
             SessionCmd::Subscribe(req) => {
                 self.subscribe(req);
@@ -2411,7 +2596,11 @@ impl SessionTask {
                     .map(|saved| saved.images.bytes_used())
                     .sum::<usize>(),
             image_bytes_cap: self.session.images.bytes_cap() * 2,
-            decode_bytes_in_flight: self.session.graphics_reassembler.in_flight_bytes(),
+            decode_bytes_in_flight: self
+                .decode
+                .as_ref()
+                .map(|decode| decode.payload_len)
+                .or_else(|| self.session.graphics_reassembler.in_flight_bytes()),
             max_subscriber_backlog,
             total_subscriber_backlog,
             pty_input_bytes: felis_protocol::limits::PTY_INPUT_BUDGET
@@ -2555,11 +2744,30 @@ impl SessionTask {
     }
 
     fn drain_effects_under(&mut self, core: &mut ParseCore) -> Result<(), ConnError> {
+        let drained = if self.decode.is_some() {
+            streaming::Drained::Done(Ok(()))
+        } else {
+            streaming::drain_effects(&mut self.session, core)
+        };
+        self.settle_drain(core, drained)
+    }
+
+    fn settle_drain(
+        &mut self,
+        core: &ParseCore,
+        drained: streaming::Drained,
+    ) -> Result<(), ConnError> {
+        let drained = match drained {
+            streaming::Drained::Done(written) => written,
+            streaming::Drained::Suspended(prepared) => {
+                self.start_decode(prepared);
+                Ok(())
+            }
+        };
         // The parse thread records a `DECSET 2048` set without writing
         // anything; the burst it rode in on is drained here, so the
         // reconcile owes the state a look. Judged under this guard: the
         // reconcile takes the lock again, a second wait per cycle.
-        let drained = streaming::drain_effects(&mut self.session, core);
         if resize_notify_key(&core.grid) != self.reported_resize {
             self.resize_notify_dirty = true;
         }
@@ -2586,11 +2794,115 @@ impl SessionTask {
         // Re-arm before draining: a chunk parsed mid-drain must
         // re-notify, or its effects strand until the next unrelated
         // wake.
-        self.session.signals.clear_dirty();
+        let parsed = self.session.signals.clear_dirty();
         let generation = self.session.signals.drain_generation();
         let drained = self.drive_cycle();
-        self.session.signals.publish_drained(generation);
+        if self.decode.is_none() {
+            self.session.signals.publish_drained(generation);
+            // The commit cleared the flag, so only the sink's parse after
+            // the release sets it again.
+            self.awaiting_post_release_drain &= !parsed;
+        }
         drained
+    }
+
+    fn start_decode(&mut self, prepared: crate::graphics::PreparedDecode) {
+        let (job, plan) = prepared.into_job();
+        #[cfg(all(test, unix))]
+        let before = self.before_decode.take();
+        let payload_len = job.payload_len();
+        let handle = tokio::task::spawn_blocking(move || {
+            #[cfg(all(test, unix))]
+            if let Some(before) = before {
+                before();
+            }
+            job.run()
+        });
+        self.decode = Some(InFlightDecode {
+            plan,
+            handle,
+            payload_len,
+        });
+    }
+
+    const fn hold(&self) -> Hold {
+        Hold {
+            upgrade: self.upgrade_hold,
+            decode: self.decode.is_some() || self.awaiting_post_release_drain,
+        }
+    }
+
+    const fn owes_reports(&self) -> bool {
+        self.focus_dirty || self.scheme_dirty || self.resize_notify_dirty
+    }
+
+    fn reconcile_reports(&mut self) -> Option<EndReason> {
+        if !self.owes_reports() {
+            return None;
+        }
+        if self.focus_dirty
+            && let Some(reason) = self.sync_focus_to_pty()
+        {
+            return Some(reason);
+        }
+        if self.scheme_dirty
+            && let Some(reason) = self.sync_color_scheme_to_pty()
+        {
+            return Some(reason);
+        }
+        if self.resize_notify_dirty {
+            return self.sync_resize_notify_to_pty();
+        }
+        None
+    }
+
+    /// The decode's commit and the rest of the drain it stopped, under
+    /// one lock, then the release of the sink waiting on it. A panicked
+    /// decode answers as a failed one rather than ending the session.
+    fn commit_decode(
+        &mut self,
+        decoded: Result<crate::graphics::Decoded, tokio::task::JoinError>,
+    ) -> Result<Option<EndReason>, ConnError> {
+        let Some(InFlightDecode { plan, .. }) = self.decode.take() else {
+            return Ok(None);
+        };
+        let decoded = decoded
+            .map_err(|err| error!(?err, "session task: Kitty graphics decode panicked"))
+            .ok();
+        let generation = self.session.signals.drain_generation();
+        let core = Arc::clone(&self.session.core);
+        let mut guard = core.lock();
+        let resumed = streaming::resume_drain(&mut self.session, &mut guard, &plan, decoded);
+        let drained = self.settle_drain(&guard, resumed);
+        self.ship_cycle(guard);
+        if self.decode.is_some() {
+            return drained.map(|()| None);
+        }
+        // Before the release, or the bytes after the image parse at a
+        // size a later resize trims on the alternate screen. The parse
+        // stays stopped until the release, so the core lock is not held.
+        let mut ended = None;
+        while let Some(held) = self.held_cmds.pop_front() {
+            ended = match held.into_inner() {
+                // Admitted input outlives its window, as a keystroke
+                // lost on a detach would be gone with no sign; a window
+                // gone without a held detach was evicted mid-decode.
+                SessionCmd::Input {
+                    sub,
+                    msg,
+                    reservation,
+                } if self.sub_index(sub).is_none() => self.handle_remote_input(msg, reservation),
+                cmd => self.run_cmd(cmd),
+            };
+            if ended.is_some() {
+                self.held_cmds.clear();
+                break;
+            }
+        }
+        self.session.signals.clear_dirty();
+        self.awaiting_post_release_drain = true;
+        self.session.signals.publish_drained(generation);
+        drained.map(|()| ended)
     }
 
     /// The drain's error is returned after the cycle ships rather than
@@ -2600,11 +2912,15 @@ impl SessionTask {
         let core = Arc::clone(&self.session.core);
         let mut guard = core.lock();
         let drained = self.drain_effects_under(&mut guard);
-        let cycle = self.compose_cycle(&mut guard);
-        drop(guard);
+        self.ship_cycle(guard);
+        drained
+    }
+
+    fn ship_cycle(&mut self, mut core: parking_lot::MutexGuard<'_, ParseCore>) {
+        let cycle = self.compose_cycle(&mut core);
+        drop(core);
         self.finish_cycle(cycle);
         self.scan_watches();
-        drained
     }
 
     /// Nothing here may push to a subscriber: an eviction's
@@ -2953,24 +3269,40 @@ impl SessionTask {
         self.handle_admitted_input(sub_id, msg, None)
     }
 
+    fn input_promotes(&self, msg: &InputMsg) -> bool {
+        match msg {
+            InputMsg::KeyBytes(_) | InputMsg::Paste(_) => true,
+            InputMsg::Mouse(_) | InputMsg::Key(_) => {
+                encode_input(&self.session.lock_core(), msg).is_some()
+            }
+            _ => false,
+        }
+    }
+
     fn handle_admitted_input(
         &mut self,
         sub_id: SubscriberId,
         msg: InputMsg,
         reservation: Option<InputReservation>,
     ) -> Option<EndReason> {
+        let promotes = self.input_promotes(&msg);
+        self.input_with(sub_id, msg, reservation, promotes)
+    }
+
+    /// `promotes` is [`Self::input_promotes`] for `msg`, read under the
+    /// same modes.
+    fn input_with(
+        &mut self,
+        sub_id: SubscriberId,
+        msg: InputMsg,
+        reservation: Option<InputReservation>,
+        promotes: bool,
+    ) -> Option<EndReason> {
         let i = self.sub_index(sub_id)?;
         // Active-owns-winsize (session-lifecycle.md "Same-user mirroring"): size
         // ownership follows input reaching the PTY. Mouse motion promotes only if it
         // encodes to bytes, preventing passive mirror hovers from stealing size.
         // Promoted before dispatch so new winsize applies before bytes reach shell.
-        let promotes = match &msg {
-            InputMsg::KeyBytes(_) | InputMsg::Paste(_) => true,
-            InputMsg::Mouse(_) | InputMsg::Key(_) => {
-                encode_input(&self.session.lock_core(), &msg).is_some()
-            }
-            _ => false,
-        };
         if promotes {
             // Only a window's input moves the switch-target marker: an
             // `Ops` sender has no window to move.
@@ -3660,17 +3992,10 @@ impl SessionTask {
             return;
         }
         self.active_sub = Some(sub_id);
-        let differs = |size: PtySize| {
-            let program = self.program_size(size);
-            let core = self.session.lock_core();
-            size.rows != core.grid.rows()
-                || size.cols != core.grid.cols()
-                || (program.pixel_width, program.pixel_height) != core.grid.winsize_pixels()
-        };
         let Some(size) = self.subs[i].desired_size else {
             return;
         };
-        if differs(size) {
+        if self.size_differs(size) {
             debug!(
                 sub = sub_id.0,
                 rows = size.rows,
@@ -3778,7 +4103,19 @@ impl SessionTask {
         crate::program_size(size, (self.session.cell_pixel_w, self.session.cell_pixel_h))
     }
 
+    fn size_differs(&self, size: PtySize) -> bool {
+        let program = self.program_size(size);
+        let core = self.session.lock_core();
+        size.rows != core.grid.rows()
+            || size.cols != core.grid.cols()
+            || (program.pixel_width, program.pixel_height) != core.grid.winsize_pixels()
+    }
+
     fn apply_size(&mut self, size: PtySize) {
+        debug_assert!(
+            self.decode.is_none(),
+            "a resize during a decode is held until its commit"
+        );
         let program = self.program_size(size);
         // Floor division matches how producers derive cell size from
         // TIOCGWINSZ.
@@ -3987,6 +4324,11 @@ impl SessionTask {
             pty_resized_over: Vec::new(),
             pending_chunks: VecDeque::new(),
             upgrade_hold: false,
+            decode: None,
+            held_cmds: VecDeque::new(),
+            awaiting_post_release_drain: false,
+            shutdown: Arc::default(),
+            before_decode: None,
             meta_title_epoch: 0,
             meta_cwd_epoch: 0,
             meta_status_generation: 0,
@@ -3994,7 +4336,10 @@ impl SessionTask {
     }
 
     fn animation_tick(&mut self) {
-        let now = crate::graphics::anim_now_ms();
+        self.animation_tick_at(crate::graphics::anim_now_ms());
+    }
+
+    fn animation_tick_at(&mut self, now: u64) {
         let advanced = self.session.images.advance_animations(now);
         if advanced.is_empty() {
             return;
@@ -4030,6 +4375,8 @@ mod tests {
 
     use super::*;
 
+    mod decode_offload;
+
     fn test_request() -> RequestId {
         RequestId::new(1).unwrap_or_else(|| unreachable!("1 is non-zero"))
     }
@@ -4051,11 +4398,11 @@ mod tests {
 
     /// Asserted on the grid rather than the reader half, which is
     /// EOF-only in sink mode.
-    async fn wait_for_grid_text(task: &SessionTask, needle: &str) {
+    async fn wait_for_grid_text(core: &parking_lot::Mutex<ParseCore>, needle: &str) {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
         loop {
             let text: String = {
-                let core = task.session.lock_core();
+                let core = core.lock();
                 let clusters = core.grid.cluster_table();
                 core.grid
                     .rows_with_wrap(felis_grid::AltScreenRows::Include)
@@ -4591,7 +4938,7 @@ mod tests {
         // The echo has to be on the grid and shipped before the reports,
         // or a report's cycle carries it and the last assertion measures
         // the keystroke.
-        wait_for_grid_text(&task, "k").await;
+        wait_for_grid_text(&task.session.core, "k").await;
         task.after_drive();
         drain_events(&mut rx_a);
         drain_events(&mut rx_b);
@@ -4737,13 +5084,19 @@ mod tests {
     /// A child that saves its own stdin to `path`.
     ///
     /// Uses `stty raw -echo` so line discipline does not hold bytes awaiting newline
-    /// and echo does not feed stdin back into the parser. `emit` runs after `stty`.
-    fn capture_session(path: &std::path::Path, emit: &str) -> Session {
+    /// and echo does not feed stdin back into the parser. `emit` runs after `stty`,
+    /// or with `on_go` after the child prints `READY` and reads a line.
+    fn capture_session(path: &std::path::Path, emit: &str, on_go: bool) -> Session {
+        let go = if on_go {
+            "printf READY; read -r _go; "
+        } else {
+            ""
+        };
         let mut cmd = Command::new("/bin/sh");
         cmd.args([
             "-c",
             &format!(
-                "stty raw -echo; printf '{emit}'; printf {CAPTURE_READY}; exec cat > {}",
+                "stty raw -echo; {go}printf '{emit}'; printf {CAPTURE_READY}; exec cat > {}",
                 path.display()
             ),
         ]);
@@ -4755,8 +5108,8 @@ mod tests {
     /// Waits for the child's `stty` to land; bytes written before it
     /// would sit in the line discipline and miss the capture.
     async fn capture_task(path: &std::path::Path) -> SessionTask {
-        let task = SessionTask::for_tests(capture_session(path, ""));
-        wait_for_grid_text(&task, CAPTURE_READY).await;
+        let task = SessionTask::for_tests(capture_session(path, "", false));
+        wait_for_grid_text(&task.session.core, CAPTURE_READY).await;
         task
     }
 
@@ -5399,7 +5752,7 @@ mod tests {
     async fn mode_2048_set_over_the_pty_is_answered_by_the_run_loop() {
         let dir = tempfile::TempDir::new().unwrap();
         let path = dir.path().join("pty-in");
-        let task = SessionTask::for_tests(capture_session(&path, "\\033[?2048h"));
+        let task = SessionTask::for_tests(capture_session(&path, "\\033[?2048h", false));
         let (rows, cols) = {
             let core = task.session.lock_core();
             (core.grid.rows(), core.grid.cols())
@@ -5578,7 +5931,7 @@ mod tests {
 
         let end = task.handle_input(sub_b, InputMsg::KeyBytes(b"HELLO\n".to_vec()));
         assert!(end.is_none());
-        wait_for_grid_text(&task, "got=HELLO").await;
+        wait_for_grid_text(&task.session.core, "got=HELLO").await;
     }
 
     /// A search emits in bounded slices: the first slice reaches the
@@ -5589,7 +5942,7 @@ mod tests {
             "i=0; while [ $i -lt 400 ]; do echo needle-$i; i=$((i+1)); done; read _x",
         ));
         let (sub, mut rx) = attach_sub(&mut task, false);
-        wait_for_grid_text(&task, "needle-399").await;
+        wait_for_grid_text(&task.session.core, "needle-399").await;
         drain_events(&mut rx);
 
         let stream = test_stream(1);
@@ -5634,7 +5987,7 @@ mod tests {
             "i=0; while [ $i -lt 400 ]; do echo needle-$i; i=$((i+1)); done; read _x",
         ));
         let (sub, mut rx) = attach_sub(&mut task, false);
-        wait_for_grid_text(&task, "needle-399").await;
+        wait_for_grid_text(&task.session.core, "needle-399").await;
         drain_events(&mut rx);
 
         let stream = test_stream(1);
@@ -5686,7 +6039,7 @@ mod tests {
             "printf '\\033[?1049h\\033[2;1Hon-alt'; read _x",
         ));
         let (sub, mut rx) = attach_sub(&mut task, false);
-        wait_for_grid_text(&task, "on-alt").await;
+        wait_for_grid_text(&task.session.core, "on-alt").await;
         drain_events(&mut rx);
 
         let mut hits = |source, id| {
@@ -5817,7 +6170,7 @@ mod tests {
     async fn a_row_stream_ends_with_rows_done_then_its_terminal() {
         let mut task = SessionTask::for_tests(session_with("printf 'CAPTURE\\n'; read _x"));
         let (sub, mut rx) = attach_sub(&mut task, false);
-        wait_for_grid_text(&task, "CAPTURE").await;
+        wait_for_grid_text(&task.session.core, "CAPTURE").await;
         drain_events(&mut rx);
 
         let stream = test_stream(1);
@@ -5908,7 +6261,7 @@ mod tests {
             "i=0; while [ $i -lt 400 ]; do echo needle-$i; i=$((i+1)); done; read _x",
         ));
         let (sub, mut rx) = attach_sub(&mut task, false);
-        wait_for_grid_text(&task, "needle-399").await;
+        wait_for_grid_text(&task.session.core, "needle-399").await;
         drain_events(&mut rx);
 
         let stream = test_stream(1);
@@ -5946,7 +6299,7 @@ mod tests {
             "i=0; while [ $i -lt 400 ]; do echo needle-$i; i=$((i+1)); done; read _x",
         ));
         let (sub, mut rx) = attach_sub(&mut task, false);
-        wait_for_grid_text(&task, "needle-399").await;
+        wait_for_grid_text(&task.session.core, "needle-399").await;
         drain_events(&mut rx);
 
         let stream = test_stream(1);
@@ -5995,7 +6348,7 @@ mod tests {
         let mut task = SessionTask::for_tests(session_with("printf 'CLIPME'; read _x"));
         let (sub_a, mut rx_a) = attach_sub(&mut task, false);
         let (_sub_b, mut rx_b) = attach_sub(&mut task, false);
-        wait_for_grid_text(&task, "CLIPME").await;
+        wait_for_grid_text(&task.session.core, "CLIPME").await;
 
         task.handle_region(
             Owner::Sub(sub_a),
@@ -6309,7 +6662,7 @@ mod tests {
 
         task.handle_input(sub, InputMsg::Paste(b"PASTED\n".to_vec()));
 
-        wait_for_grid_text(&task, "got=PASTED").await;
+        wait_for_grid_text(&task.session.core, "got=PASTED").await;
     }
 
     /// Demand-driven pacing (docs/explanation/rendering/pipeline.md): a
@@ -6351,7 +6704,7 @@ mod tests {
     async fn a_pull_cycle_ends_with_one_marker_after_its_last_frame() {
         let mut task = SessionTask::for_tests(session_with("printf 'cycle-end-probe'; read _x"));
         let (sub, mut rx) = attach_sub(&mut task, true);
-        wait_for_grid_text(&task, "cycle-end-probe").await;
+        wait_for_grid_text(&task.session.core, "cycle-end-probe").await;
         drain_events(&mut rx);
 
         task.handle_input(sub, InputMsg::NextGridFrame);
@@ -6422,7 +6775,7 @@ mod tests {
     async fn an_eager_push_peer_gets_no_cycle_marker() {
         let mut task = SessionTask::for_tests(session_with("printf 'eager-probe'; read _x"));
         let (_sub, mut rx) = attach_sub(&mut task, false);
-        wait_for_grid_text(&task, "eager-probe").await;
+        wait_for_grid_text(&task.session.core, "eager-probe").await;
         task.ship_all();
 
         assert!(
@@ -6574,7 +6927,7 @@ mod tests {
         task.handle_input(sub_a, InputMsg::KeyBytes(b"a".to_vec()));
         // The echo has to be on the grid and shipped before the resize,
         // or it rides the replay and the row counts below measure it.
-        wait_for_grid_text(&task, "a").await;
+        wait_for_grid_text(&task.session.core, "a").await;
         task.after_drive();
         drain_events(&mut rx_a);
         // One pull hands the mirror that echo, the next finds it clean
@@ -8059,7 +8412,7 @@ mod tests {
         let mut task = SessionTask::for_tests(Session::from_spawned(
             crate::SpawnedPty::spawn(cmd).expect("spawn /bin/sh"),
         ));
-        wait_for_grid_text(&task, "ready").await;
+        wait_for_grid_text(&task.session.core, "ready").await;
         write_to_grid(&task, b"\x1b]7501;?\x1b\\");
         task.drive_cycle().expect("drive");
 
@@ -8278,6 +8631,7 @@ mod tests {
             resizer: None,
             upgrade: None,
             publication: crate::pool::Publication::new(),
+            shutdown: Arc::default(),
             meta: Arc::new(StdMutex::new(SessionMeta {
                 rows: crate::DEFAULT_ROWS,
                 cols: crate::DEFAULT_COLS,
@@ -8328,6 +8682,7 @@ mod tests {
             resizer: None,
             upgrade: None,
             publication,
+            shutdown: Arc::default(),
             meta: Arc::new(StdMutex::new(SessionMeta {
                 rows: crate::DEFAULT_ROWS,
                 cols: crate::DEFAULT_COLS,
@@ -8422,7 +8777,7 @@ mod tests {
         let session_id = task.id.0;
 
         let (cmd_tx, cmd_rx) = mpsc::channel(4);
-        cmd_tx.send(SessionCmd::Shutdown).await.expect("queued");
+        assert!(task.shutdown.send(&cmd_tx).await, "queued");
         run_session(task, cmd_rx).await;
 
         let items: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
@@ -8578,7 +8933,7 @@ mod tests {
         let pid = pid_from(&pidfile).await;
 
         let handle = pool.lock().await.handle_cloned(id).expect("registered");
-        handle.cmd.send(SessionCmd::Shutdown).await.expect("send");
+        assert!(handle.shutdown().await, "send");
 
         assert!(
             waits_for_exit(pid).await,
@@ -8640,6 +8995,7 @@ mod tests {
             resizer: None,
             upgrade: None,
             publication: crate::pool::Publication::new(),
+            shutdown: Arc::default(),
             meta: Arc::new(StdMutex::new(SessionMeta {
                 rows: crate::DEFAULT_ROWS,
                 cols: crate::DEFAULT_COLS,
@@ -8716,6 +9072,7 @@ mod tests {
         }
 
         let (cmd_tx, cmd_rx) = mpsc::channel(CMD_CHANNEL_CAPACITY);
+        let shutdown = Arc::clone(&task.shutdown);
         let loop_task = tokio::spawn(run_session(task, cmd_rx));
 
         // Real time, not tokio's paused clock: `graphics::anim_now_ms`
@@ -8759,7 +9116,7 @@ mod tests {
             "a reattach must land on the live frame; got {shown:?}",
         );
 
-        cmd_tx.send(SessionCmd::Shutdown).await.ok();
+        let _delivered = shutdown.send(&cmd_tx).await;
         loop_task.await.expect("session loop ends cleanly");
     }
 
