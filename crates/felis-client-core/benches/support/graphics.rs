@@ -76,13 +76,9 @@ impl Graphics {
                 }
             }
             Self::BrowserReplace => {
-                let frame = |out: &mut Vec<u8>, seed| {
-                    let pixels = zlib(&ui_frame(320, 180, 4, seed));
-                    command(out, "a=T,i=1,p=1,f=32,s=320,v=180,o=z,C=1,q=2", &pixels);
-                };
-                frame(&mut prelude, 0);
-                for seed in 1..=2 {
-                    frame(&mut stream, seed);
+                browser_frame(&mut prelude, 0);
+                for seed in BROWSER_SEEDS {
+                    browser_frame(&mut stream, seed);
                 }
             }
             Self::BrowserDirtyRects | Self::CellWipes => {
@@ -98,19 +94,12 @@ impl Graphics {
             }
             Self::PatchLayers => {
                 base_image(&mut prelude, (640, 360));
-                let patch = |out: &mut Vec<u8>, k: u32, seed| {
-                    let (w, h) = PATCHES[k as usize % PATCHES.len()];
-                    let id = 1000 + k;
-                    write!(Bytes(out), "\x1b[{};{}H", k / 8 * 2 + 1, k % 8 * 8 + 1).unwrap();
-                    let controls = format!("a=T,i={id},f=32,s={w},v={h},z={},C=1,q=2", k + 1);
-                    command(out, &controls, &ui_frame(w, h, 4, seed));
-                };
                 for k in 0..64 {
-                    patch(&mut prelude, k, patch_seed(k, false));
+                    patch(&mut prelude, k, false);
                 }
                 for k in 0..64 {
-                    command(&mut stream, &format!("a=d,d=I,i={},q=2", 1000 + k), &[]);
-                    patch(&mut stream, k, patch_seed(k, true));
+                    delete_patch(&mut stream, k);
+                    patch(&mut stream, k, true);
                 }
             }
             Self::Thumbnails => {
@@ -189,14 +178,21 @@ impl Graphics {
         let laid_out =
             p.layout.under_bg().len() + p.layout.under_text().len() + p.layout.above_text().len();
         assert_eq!(laid_out, draws, "{name}: draws");
-        let holds = |id, expected: &[u8]| {
-            let client = p.image_shadow.image(ImageId(id)).map(ClientImage::pixels);
-            let daemon = p.images.get(ImageId(id)).map(ImageEntry::pixels);
-            client == Some(expected) && daemon == Some(expected)
-        };
         match self {
             Self::BrowserReplace => {
-                assert!(holds(1, &ui_frame(320, 180, 4, 2)), "{name}: not replaced");
+                let mut replay = Replay::new(self);
+                for seed in BROWSER_SEEDS {
+                    let session = replay.step(|out| browser_frame(out, seed));
+                    assert!(
+                        session.holds(1, &ui_frame(320, 180, 4, seed)),
+                        "{name}: frame {seed} not replaced"
+                    );
+                }
+                replay.finish();
+                assert!(
+                    p.holds(1, &ui_frame(320, 180, 4, 2)),
+                    "{name}: not replaced"
+                );
             }
             Self::BrowserDirtyRects | Self::CellWipes => {
                 let (base, edits) = self.edits();
@@ -208,19 +204,21 @@ impl Graphics {
                         "{name}: edit hidden"
                     );
                 }
-                assert!(holds(1, &expected), "{name}: an edit did not land");
+                assert!(p.holds(1, &expected), "{name}: an edit did not land");
             }
             Self::PatchLayers => {
+                let mut replay = Replay::new(self);
                 for k in 0..64 {
-                    let (w, h) = PATCHES[k as usize % PATCHES.len()];
-                    let reused = ui_frame(w, h, 4, patch_seed(k, true));
-                    assert_ne!(reused, ui_frame(w, h, 4, patch_seed(k, false)));
-                    assert!(
-                        holds(1000 + k, &reused),
-                        "{name}: id {} not reused",
-                        1000 + k
-                    );
+                    let id = 1000 + k;
+                    let session = replay.step(|out| delete_patch(out, k));
+                    assert!(session.lacks(id), "{name}: id {id} not deleted");
+                    let reused = patch_pixels(k, true);
+                    assert_ne!(reused, patch_pixels(k, false));
+                    let session = replay.step(|out| patch(out, k, true));
+                    assert!(session.holds(id, &reused), "{name}: id {id} not reused");
+                    assert!(p.holds(id, &reused), "{name}: id {id} not reused");
                 }
+                replay.finish();
             }
             Self::VideoInline | Self::Thumbnails => {}
         }
@@ -250,10 +248,76 @@ fn paint((width, height): (u32, u32), edits: &[Edit], skipped: Option<usize>) ->
     }
     canvas
 }
+
+const BROWSER_SEEDS: [u64; 2] = [1, 2];
+
+fn browser_frame(out: &mut Vec<u8>, seed: u64) {
+    let pixels = zlib(&ui_frame(320, 180, 4, seed));
+    command(out, "a=T,i=1,p=1,f=32,s=320,v=180,o=z,C=1,q=2", &pixels);
+}
+
 const PATCHES: [(u32, u32); 3] = [(16, 16), (32, 16), (64, 32)];
 
-fn patch_seed(k: u32, reused: bool) -> u64 {
-    u64::from(k) + if reused { 64 } else { 0 }
+fn patch_pixels(k: u32, reused: bool) -> Vec<u8> {
+    let (w, h) = PATCHES[k as usize % PATCHES.len()];
+    ui_frame(w, h, 4, u64::from(k) + if reused { 64 } else { 0 })
+}
+
+fn patch(out: &mut Vec<u8>, k: u32, reused: bool) {
+    let (w, h) = PATCHES[k as usize % PATCHES.len()];
+    let id = 1000 + k;
+    write!(Bytes(out), "\x1b[{};{}H", k / 8 * 2 + 1, k % 8 * 8 + 1).unwrap();
+    let controls = format!("a=T,i={id},f=32,s={w},v={h},z={},C=1,q=2", k + 1);
+    command(out, &controls, &patch_pixels(k, reused));
+}
+
+fn delete_patch(out: &mut Vec<u8>, k: u32) {
+    command(out, &format!("a=d,d=I,i={},q=2", 1000 + k), &[]);
+}
+
+/// A fresh session fed a workload's stream one step at a time, for the
+/// steps a later one overwrites: the final state cannot show them.
+struct Replay {
+    name: &'static str,
+    session: Pipeline,
+    stream: Vec<u8>,
+    at: usize,
+}
+
+impl Replay {
+    fn new(workload: Graphics) -> Self {
+        let (prelude, stream) = workload.streams();
+        let mut session = Pipeline::new();
+        session.feed(&prelude);
+        Self {
+            name: workload.name(),
+            session,
+            stream,
+            at: 0,
+        }
+    }
+
+    fn step(&mut self, write: impl FnOnce(&mut Vec<u8>)) -> &Pipeline {
+        let mut bytes = Vec::new();
+        write(&mut bytes);
+        let name = self.name;
+        assert!(
+            self.stream[self.at..].starts_with(&bytes),
+            "{name}: replayed step not next in the stream"
+        );
+        self.at += bytes.len();
+        self.session.feed(&bytes);
+        &self.session
+    }
+
+    fn finish(self) {
+        let name = self.name;
+        assert_eq!(
+            self.at,
+            self.stream.len(),
+            "{name}: stream tail not replayed"
+        );
+    }
 }
 
 fn base_image(out: &mut Vec<u8>, (w, h): (u32, u32)) {
@@ -412,6 +476,19 @@ impl Pipeline {
             image_shadow: ImageShadow::new(),
             layout: ImageLayout::new(),
         }
+    }
+
+    fn lacks(&self, id: u32) -> bool {
+        self.image_shadow.image(ImageId(id)).is_none() && self.images.get(ImageId(id)).is_none()
+    }
+
+    fn holds(&self, id: u32, expected: &[u8]) -> bool {
+        let client = self
+            .image_shadow
+            .image(ImageId(id))
+            .map(ClientImage::pixels);
+        let daemon = self.images.get(ImageId(id)).map(ImageEntry::pixels);
+        client == Some(expected) && daemon == Some(expected)
     }
 
     /// The streams never scroll, so dropping the non-APC effects loses
