@@ -41,7 +41,8 @@ use tokio::runtime::Runtime;
 const ROWS: u16 = 24;
 #[cfg(unix)]
 const COLS: u16 = 80;
-/// The daemon's PTY read size, so the stream has production frame
+/// The PTY parse thread's swap floor (`MIN_SWAP` in `felis-pty`), not
+/// its 64 KiB `read(2)` size, so the stream has production frame
 /// granularity (one `compose_diffs` cycle per chunk).
 #[cfg(unix)]
 const PTY_CHUNK_SIZE: usize = 8 * 1024;

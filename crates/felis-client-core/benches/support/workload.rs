@@ -15,8 +15,10 @@ pub(crate) const ROWS: u16 = 24;
 pub(crate) const COLS: u16 = 80;
 pub(crate) const STREAM_BYTES: usize = 4 * 1024;
 
-/// The daemon's PTY read size (`READ_BUFFER_SIZE` in `felis-pty`); the
-/// multi-cycle benches run one `compose_diffs` per chunk of this size.
+/// The PTY parse thread's swap floor (`MIN_SWAP` in `felis-pty`), not
+/// its 64 KiB `read(2)` size: the parser takes the reads accumulated
+/// since its last swap, and the multi-cycle benches run one
+/// `compose_diffs` per chunk of this size.
 pub(crate) const PTY_CHUNK_SIZE: usize = 8 * 1024;
 
 pub(crate) fn plaintext_scroll() -> Vec<u8> {
