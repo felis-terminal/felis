@@ -52,7 +52,7 @@ fn malformed_g_envelope_is_dropped_without_a_reply() {
 fn a_first_chunk_with_both_image_id_and_number_is_refused_at_once() {
     let mut r = Reassembler::new();
     let (mut grid, mut images, mut placements) = handler_state();
-    let Some(mut complete) = assembled(reassemble_apc_body(&mut r, b"Ga=T,i=1,I=2,m=1;zz")) else {
+    let Some(complete) = assembled(reassemble_apc_body(&mut r, b"Ga=T,i=1,I=2,m=1;zz")) else {
         panic!("expected the command to complete");
     };
     let reply = handle_complete(
@@ -66,7 +66,7 @@ fn a_first_chunk_with_both_image_id_and_number_is_refused_at_once() {
             cell_pixel_h: 0,
             anchor_cursor: None,
         },
-        &mut complete,
+        &complete,
     );
     assert_eq!(
         reply,
@@ -395,7 +395,7 @@ fn windows_transmission_rejection_echoes_id_and_honors_quiet() {
             cell_pixel_h: 0,
             anchor_cursor: None,
         },
-        &mut complete(&controls, &path),
+        &complete(&controls, &path),
     )
     .expect("the q=0 default replies to errors");
     assert!(
@@ -417,7 +417,7 @@ fn windows_transmission_rejection_echoes_id_and_honors_quiet() {
                 cell_pixel_h: 0,
                 anchor_cursor: None,
             },
-            &mut complete(&quiet, &path),
+            &complete(&quiet, &path),
         )
         .is_none(),
         "q=2 must suppress the rejection too",
@@ -588,7 +588,7 @@ fn transmit_inserts_into_image_store_and_emits_ok() {
     let (ctrls, payload) = tiny_rgba_controls();
     let mut all = vec![(b'a', b"t".as_slice()), (b'i', b"7".as_slice())];
     all.extend_from_slice(&ctrls);
-    let mut cmd = complete(&all, &payload);
+    let cmd = complete(&all, &payload);
     let response = handle_complete(
         &mut ApcCtx {
             grid: &mut grid,
@@ -600,7 +600,7 @@ fn transmit_inserts_into_image_store_and_emits_ok() {
             cell_pixel_h: 0,
             anchor_cursor: None,
         },
-        &mut cmd,
+        &cmd,
     )
     .expect("q=0 default emits an OK response");
     assert_eq!(response, b"\x1b_Gi=7;OK\x1b\\");
@@ -621,7 +621,7 @@ fn transmit_with_q1_suppresses_ok_response() {
         (b'q', b"1".as_slice()),
     ];
     all.extend_from_slice(&ctrls);
-    let mut cmd = complete(&all, &payload);
+    let cmd = complete(&all, &payload);
     assert!(
         handle_complete(
             &mut ApcCtx {
@@ -634,7 +634,7 @@ fn transmit_with_q1_suppresses_ok_response() {
                 cell_pixel_h: 0,
                 anchor_cursor: None,
             },
-            &mut cmd,
+            &cmd,
         )
         .is_none(),
         "q=1 OK is suppressed"
@@ -648,7 +648,7 @@ fn transmit_with_q1_suppresses_ok_response() {
 #[test]
 fn transmit_with_q1_still_emits_errors() {
     let (mut grid, mut images, mut placements) = handler_state();
-    let mut cmd = complete(&[(b'a', b"p"), (b'i', b"5"), (b'q', b"1")], b"");
+    let cmd = complete(&[(b'a', b"p"), (b'i', b"5"), (b'q', b"1")], b"");
     let response = handle_complete(
         &mut ApcCtx {
             grid: &mut grid,
@@ -660,7 +660,7 @@ fn transmit_with_q1_still_emits_errors() {
             cell_pixel_h: 0,
             anchor_cursor: None,
         },
-        &mut cmd,
+        &cmd,
     )
     .expect("q=1 errors still emit");
     assert!(
@@ -675,7 +675,7 @@ fn transmit_with_q2_suppresses_every_response_including_errors() {
     let (ctrls, payload) = tiny_rgba_controls();
     let mut all = vec![(b'a', b"t".as_slice()), (b'q', b"2".as_slice())];
     all.extend_from_slice(&ctrls);
-    let mut cmd = complete(&all, &payload);
+    let cmd = complete(&all, &payload);
     assert!(
         handle_complete(
             &mut ApcCtx {
@@ -688,7 +688,7 @@ fn transmit_with_q2_suppresses_every_response_including_errors() {
                 cell_pixel_h: 0,
                 anchor_cursor: None,
             },
-            &mut cmd,
+            &cmd,
         )
         .is_none(),
         "q=2 silences errors too"
@@ -705,7 +705,7 @@ fn transmit_with_q3_or_higher_is_treated_as_silent() {
         (b'q', b"99".as_slice()),
     ];
     all.extend_from_slice(&ctrls);
-    let mut cmd = complete(&all, &payload);
+    let cmd = complete(&all, &payload);
     assert!(
         handle_complete(
             &mut ApcCtx {
@@ -718,7 +718,7 @@ fn transmit_with_q3_or_higher_is_treated_as_silent() {
                 cell_pixel_h: 0,
                 anchor_cursor: None,
             },
-            &mut cmd,
+            &cmd,
         )
         .is_none(),
         "q=99 silences",
@@ -733,7 +733,7 @@ fn transmit_with_missing_image_id_auto_allocates_an_anonymous_id() {
     let (ctrls, payload) = tiny_rgba_controls();
     let mut all = vec![(b'a', b"t".as_slice())];
     all.extend_from_slice(&ctrls);
-    let mut cmd = complete(&all, &payload);
+    let cmd = complete(&all, &payload);
     let response = handle_complete(
         &mut ApcCtx {
             grid: &mut grid,
@@ -745,7 +745,7 @@ fn transmit_with_missing_image_id_auto_allocates_an_anonymous_id() {
             cell_pixel_h: 0,
             anchor_cursor: None,
         },
-        &mut cmd,
+        &cmd,
     );
     assert_eq!(response, None);
     assert!(
@@ -760,7 +760,7 @@ fn transmit_with_image_id_zero_is_anonymous() {
     let (ctrls, payload) = tiny_rgba_controls();
     let mut all = vec![(b'a', b"t".as_slice()), (b'i', b"0".as_slice())];
     all.extend_from_slice(&ctrls);
-    let mut cmd = complete(&all, &payload);
+    let cmd = complete(&all, &payload);
     let response = handle_complete(
         &mut ApcCtx {
             grid: &mut grid,
@@ -772,7 +772,7 @@ fn transmit_with_image_id_zero_is_anonymous() {
             cell_pixel_h: 0,
             anchor_cursor: None,
         },
-        &mut cmd,
+        &cmd,
     );
     assert_eq!(response, None);
     assert!(images.get(ImageId(u32::MAX)).is_some());
@@ -784,7 +784,7 @@ fn transmit_and_display_records_placement_at_cursor() {
     let (ctrls, payload) = tiny_rgba_controls();
     let mut all = vec![(b'a', b"T".as_slice()), (b'i', b"42".as_slice())];
     all.extend_from_slice(&ctrls);
-    let mut cmd = complete(&all, &payload);
+    let cmd = complete(&all, &payload);
     handle_complete(
         &mut ApcCtx {
             grid: &mut grid,
@@ -796,7 +796,7 @@ fn transmit_and_display_records_placement_at_cursor() {
             cell_pixel_h: 0,
             anchor_cursor: None,
         },
-        &mut cmd,
+        &cmd,
     )
     .unwrap();
     assert!(images.get(ImageId(42)).is_some());
@@ -816,7 +816,7 @@ fn transmit_and_display_records_placement_at_cursor() {
 #[test]
 fn display_existing_without_image_returns_enoent() {
     let (mut grid, mut images, mut placements) = handler_state();
-    let mut cmd = complete(&[(b'a', b"p"), (b'i', b"42")], b"");
+    let cmd = complete(&[(b'a', b"p"), (b'i', b"42")], b"");
     let response = handle_complete(
         &mut ApcCtx {
             grid: &mut grid,
@@ -828,7 +828,7 @@ fn display_existing_without_image_returns_enoent() {
             cell_pixel_h: 0,
             anchor_cursor: None,
         },
-        &mut cmd,
+        &cmd,
     )
     .unwrap();
     assert!(
@@ -855,10 +855,10 @@ fn display_existing_with_known_image_records_placement() {
             cell_pixel_h: 0,
             anchor_cursor: None,
         },
-        &mut complete(&all, &payload),
+        &complete(&all, &payload),
     )
     .unwrap();
-    let mut display = complete(&[(b'a', b"p"), (b'i', b"5"), (b'z', b"-1")], b"");
+    let display = complete(&[(b'a', b"p"), (b'i', b"5"), (b'z', b"-1")], b"");
     handle_complete(
         &mut ApcCtx {
             grid: &mut grid,
@@ -870,7 +870,7 @@ fn display_existing_with_known_image_records_placement() {
             cell_pixel_h: 0,
             anchor_cursor: None,
         },
-        &mut display,
+        &display,
     )
     .unwrap();
     assert_eq!(placements.len(), 1);
@@ -896,12 +896,12 @@ fn delete_with_d_eq_a_clears_all_placements_but_keeps_images() {
                 cell_pixel_h: 0,
                 anchor_cursor: None,
             },
-            &mut complete(&all, &payload),
+            &complete(&all, &payload),
         )
         .unwrap();
     }
     assert_eq!(placements.len(), 3);
-    let mut cmd = complete(&[(b'a', b"d"), (b'd', b"a")], b"");
+    let cmd = complete(&[(b'a', b"d"), (b'd', b"a")], b"");
     handle_complete(
         &mut ApcCtx {
             grid: &mut grid,
@@ -913,7 +913,7 @@ fn delete_with_d_eq_a_clears_all_placements_but_keeps_images() {
             cell_pixel_h: 0,
             anchor_cursor: None,
         },
-        &mut cmd,
+        &cmd,
     )
     .ok_or(())
     .expect_err("deletes are not acknowledged on success (kitty parity)");
@@ -941,10 +941,10 @@ fn delete_with_d_eq_capital_a_clears_everything() {
             cell_pixel_h: 0,
             anchor_cursor: None,
         },
-        &mut complete(&all, &payload),
+        &complete(&all, &payload),
     )
     .unwrap();
-    let mut cmd = complete(&[(b'a', b"d"), (b'd', b"A")], b"");
+    let cmd = complete(&[(b'a', b"d"), (b'd', b"A")], b"");
     handle_complete(
         &mut ApcCtx {
             grid: &mut grid,
@@ -956,7 +956,7 @@ fn delete_with_d_eq_capital_a_clears_everything() {
             cell_pixel_h: 0,
             anchor_cursor: None,
         },
-        &mut cmd,
+        &cmd,
     )
     .ok_or(())
     .expect_err("deletes are not acknowledged on success (kitty parity)");
@@ -981,10 +981,10 @@ fn delete_default_d_eq_i_removes_placement_keeps_image() {
             cell_pixel_h: 0,
             anchor_cursor: None,
         },
-        &mut complete(&all, &payload),
+        &complete(&all, &payload),
     )
     .unwrap();
-    let mut cmd = complete(&[(b'a', b"d"), (b'i', b"12")], b"");
+    let cmd = complete(&[(b'a', b"d"), (b'i', b"12")], b"");
     handle_complete(
         &mut ApcCtx {
             grid: &mut grid,
@@ -996,7 +996,7 @@ fn delete_default_d_eq_i_removes_placement_keeps_image() {
             cell_pixel_h: 0,
             anchor_cursor: None,
         },
-        &mut cmd,
+        &cmd,
     )
     .ok_or(())
     .expect_err("deletes are not acknowledged on success (kitty parity)");
@@ -1060,7 +1060,7 @@ fn delete_test_state(
                 cell_pixel_h: 0,
                 anchor_cursor: None,
             },
-            &mut complete(&all, &payload),
+            &complete(&all, &payload),
         )
         .unwrap();
     }
@@ -1072,7 +1072,7 @@ fn delete_d_eq_p_drops_placement_intersecting_the_xy_cell() {
     let (mut grid, mut images, mut placements) = delete_test_state(&[1, 2]);
     placements.upsert(seeded_placement(1, None, 5, 10, 2, 5, 0, false));
     placements.upsert(seeded_placement(2, None, 1, 1, 1, 1, 0, false));
-    let mut cmd = complete(
+    let cmd = complete(
         &[(b'a', b"d"), (b'd', b"p"), (b'x', b"12"), (b'y', b"5")],
         b"",
     );
@@ -1087,7 +1087,7 @@ fn delete_d_eq_p_drops_placement_intersecting_the_xy_cell() {
             cell_pixel_h: 0,
             anchor_cursor: None,
         },
-        &mut cmd,
+        &cmd,
     )
     .ok_or(())
     .expect_err("deletes are not acknowledged on success (kitty parity)");
@@ -1103,7 +1103,7 @@ fn delete_d_eq_p_drops_placement_intersecting_the_xy_cell() {
 fn delete_d_eq_capital_p_also_frees_the_image_store() {
     let (mut grid, mut images, mut placements) = delete_test_state(&[7]);
     placements.upsert(seeded_placement(7, None, 5, 10, 2, 5, 0, false));
-    let mut cmd = complete(
+    let cmd = complete(
         &[(b'a', b"d"), (b'd', b"P"), (b'x', b"12"), (b'y', b"5")],
         b"",
     );
@@ -1118,7 +1118,7 @@ fn delete_d_eq_capital_p_also_frees_the_image_store() {
             cell_pixel_h: 0,
             anchor_cursor: None,
         },
-        &mut cmd,
+        &cmd,
     )
     .ok_or(())
     .expect_err("deletes are not acknowledged on success (kitty parity)");
@@ -1132,7 +1132,7 @@ fn delete_d_eq_x_drops_placements_intersecting_the_column() {
     placements.upsert(seeded_placement(1, None, 1, 10, 1, 6, 0, false));
     placements.upsert(seeded_placement(2, None, 20, 12, 1, 3, 0, false));
     placements.upsert(seeded_placement(3, None, 5, 1, 1, 5, 0, false));
-    let mut cmd = complete(&[(b'a', b"d"), (b'd', b"x"), (b'x', b"12")], b"");
+    let cmd = complete(&[(b'a', b"d"), (b'd', b"x"), (b'x', b"12")], b"");
     handle_complete(
         &mut ApcCtx {
             grid: &mut grid,
@@ -1144,7 +1144,7 @@ fn delete_d_eq_x_drops_placements_intersecting_the_column() {
             cell_pixel_h: 0,
             anchor_cursor: None,
         },
-        &mut cmd,
+        &cmd,
     )
     .ok_or(())
     .expect_err("deletes are not acknowledged on success (kitty parity)");
@@ -1158,7 +1158,7 @@ fn delete_d_eq_y_drops_placements_intersecting_the_row() {
     placements.upsert(seeded_placement(1, None, 5, 1, 3, 2, 0, false));
     placements.upsert(seeded_placement(2, None, 5, 70, 1, 1, 0, false));
     placements.upsert(seeded_placement(3, None, 10, 1, 1, 1, 0, false));
-    let mut cmd = complete(&[(b'a', b"d"), (b'd', b"y"), (b'y', b"5")], b"");
+    let cmd = complete(&[(b'a', b"d"), (b'd', b"y"), (b'y', b"5")], b"");
     handle_complete(
         &mut ApcCtx {
             grid: &mut grid,
@@ -1170,7 +1170,7 @@ fn delete_d_eq_y_drops_placements_intersecting_the_row() {
             cell_pixel_h: 0,
             anchor_cursor: None,
         },
-        &mut cmd,
+        &cmd,
     )
     .ok_or(())
     .expect_err("deletes are not acknowledged on success (kitty parity)");
@@ -1184,7 +1184,7 @@ fn delete_d_eq_z_drops_placements_at_the_specified_z_index() {
     placements.upsert(seeded_placement(1, None, 1, 1, 1, 1, 0, false));
     placements.upsert(seeded_placement(2, None, 1, 1, 1, 1, -1, false));
     placements.upsert(seeded_placement(3, None, 1, 1, 1, 1, -1, false));
-    let mut cmd = complete(&[(b'a', b"d"), (b'd', b"z"), (b'z', b"-1")], b"");
+    let cmd = complete(&[(b'a', b"d"), (b'd', b"z"), (b'z', b"-1")], b"");
     handle_complete(
         &mut ApcCtx {
             grid: &mut grid,
@@ -1196,7 +1196,7 @@ fn delete_d_eq_z_drops_placements_at_the_specified_z_index() {
             cell_pixel_h: 0,
             anchor_cursor: None,
         },
-        &mut cmd,
+        &cmd,
     )
     .ok_or(())
     .expect_err("deletes are not acknowledged on success (kitty parity)");
@@ -1209,7 +1209,7 @@ fn delete_d_eq_q_requires_all_three_coords_to_match() {
     let (mut grid, mut images, mut placements) = delete_test_state(&[1, 2]);
     placements.upsert(seeded_placement(1, None, 5, 5, 1, 1, 0, false));
     placements.upsert(seeded_placement(2, None, 5, 5, 1, 1, 3, false));
-    let mut cmd = complete(
+    let cmd = complete(
         &[
             (b'a', b"d"),
             (b'd', b"q"),
@@ -1230,7 +1230,7 @@ fn delete_d_eq_q_requires_all_three_coords_to_match() {
             cell_pixel_h: 0,
             anchor_cursor: None,
         },
-        &mut cmd,
+        &cmd,
     )
     .ok_or(())
     .expect_err("deletes are not acknowledged on success (kitty parity)");
@@ -1243,7 +1243,7 @@ fn delete_d_eq_c_uses_the_current_cursor_position() {
     let (mut grid, mut images, mut placements) = delete_test_state(&[1, 2]);
     placements.upsert(seeded_placement(1, None, 1, 1, 1, 1, 0, false));
     placements.upsert(seeded_placement(2, None, 5, 5, 1, 1, 0, false));
-    let mut cmd = complete(&[(b'a', b"d"), (b'd', b"c")], b"");
+    let cmd = complete(&[(b'a', b"d"), (b'd', b"c")], b"");
     handle_complete(
         &mut ApcCtx {
             grid: &mut grid,
@@ -1255,7 +1255,7 @@ fn delete_d_eq_c_uses_the_current_cursor_position() {
             cell_pixel_h: 0,
             anchor_cursor: None,
         },
-        &mut cmd,
+        &cmd,
     )
     .ok_or(())
     .expect_err("deletes are not acknowledged on success (kitty parity)");
@@ -1271,7 +1271,7 @@ fn delete_d_eq_r_drops_placements_in_the_image_id_range() {
     for id in [3u32, 5, 7, 9] {
         placements.upsert(seeded_placement(id, None, 1, 1, 1, 1, 0, false));
     }
-    let mut cmd = complete(
+    let cmd = complete(
         &[(b'a', b"d"), (b'd', b"r"), (b'x', b"5"), (b'y', b"7")],
         b"",
     );
@@ -1286,7 +1286,7 @@ fn delete_d_eq_r_drops_placements_in_the_image_id_range() {
             cell_pixel_h: 0,
             anchor_cursor: None,
         },
-        &mut cmd,
+        &cmd,
     )
     .ok_or(())
     .expect_err("deletes are not acknowledged on success (kitty parity)");
@@ -1301,7 +1301,7 @@ fn delete_d_eq_capital_r_also_frees_images_in_range() {
     for id in [3u32, 5, 7] {
         placements.upsert(seeded_placement(id, None, 1, 1, 1, 1, 0, false));
     }
-    let mut cmd = complete(
+    let cmd = complete(
         &[(b'a', b"d"), (b'd', b"R"), (b'x', b"5"), (b'y', b"7")],
         b"",
     );
@@ -1316,7 +1316,7 @@ fn delete_d_eq_capital_r_also_frees_images_in_range() {
             cell_pixel_h: 0,
             anchor_cursor: None,
         },
-        &mut cmd,
+        &cmd,
     )
     .ok_or(())
     .expect_err("deletes are not acknowledged on success (kitty parity)");
@@ -1332,7 +1332,7 @@ fn delete_extended_modes_emit_placement_removed_per_evicted_entry() {
     placements.upsert(seeded_placement(1, None, 1, 1, 1, 1, 0, false));
     placements.upsert(seeded_placement(2, None, 1, 1, 1, 1, 0, false));
     let mut events = Vec::new();
-    let mut cmd = complete(&[(b'a', b"d"), (b'd', b"c")], b"");
+    let cmd = complete(&[(b'a', b"d"), (b'd', b"c")], b"");
     handle_complete(
         &mut ApcCtx {
             grid: &mut grid,
@@ -1344,7 +1344,7 @@ fn delete_extended_modes_emit_placement_removed_per_evicted_entry() {
             cell_pixel_h: 0,
             anchor_cursor: None,
         },
-        &mut cmd,
+        &cmd,
     )
     .ok_or(())
     .expect_err("deletes are not acknowledged on success (kitty parity)");
@@ -1361,7 +1361,7 @@ fn query_with_valid_payload_emits_ok() {
     let (ctrls, payload) = tiny_rgba_controls();
     let mut all = vec![(b'a', b"q".as_slice()), (b'i', b"31".as_slice())];
     all.extend_from_slice(&ctrls);
-    let mut cmd = complete(&all, &payload);
+    let cmd = complete(&all, &payload);
     let response = handle_complete(
         &mut ApcCtx {
             grid: &mut grid,
@@ -1373,7 +1373,7 @@ fn query_with_valid_payload_emits_ok() {
             cell_pixel_h: 0,
             anchor_cursor: None,
         },
-        &mut cmd,
+        &cmd,
     )
     .unwrap();
     assert_eq!(response, b"\x1b_Gi=31;OK\x1b\\");
@@ -1614,7 +1614,7 @@ proptest! {
 #[test]
 fn query_with_invalid_payload_emits_specific_error() {
     let (mut grid, mut images, mut placements) = handler_state();
-    let mut cmd = complete(
+    let cmd = complete(
         &[
             (b'a', b"q"),
             (b'i', b"32"),
@@ -1635,7 +1635,7 @@ fn query_with_invalid_payload_emits_specific_error() {
             cell_pixel_h: 0,
             anchor_cursor: None,
         },
-        &mut cmd,
+        &cmd,
     )
     .unwrap();
     assert!(
@@ -1647,7 +1647,7 @@ fn query_with_invalid_payload_emits_specific_error() {
 #[test]
 fn unknown_action_is_dropped_without_a_reply() {
     let (mut grid, mut images, mut placements) = handler_state();
-    let mut cmd = complete(&[(b'a', b"X"), (b'i', b"1")], b"");
+    let cmd = complete(&[(b'a', b"X"), (b'i', b"1")], b"");
     let response = handle_complete(
         &mut ApcCtx {
             grid: &mut grid,
@@ -1659,7 +1659,7 @@ fn unknown_action_is_dropped_without_a_reply() {
             cell_pixel_h: 0,
             anchor_cursor: None,
         },
-        &mut cmd,
+        &cmd,
     );
     assert_eq!(response, None);
 }
@@ -1684,7 +1684,7 @@ fn transmit_root(
             cell_pixel_h: 0,
             anchor_cursor: None,
         },
-        &mut complete(&all, &payload),
+        &complete(&all, &payload),
     );
 }
 
@@ -1718,7 +1718,7 @@ fn animation_frame_appends_and_emits_frame_transmission() {
             cell_pixel_h: 0,
             anchor_cursor: None,
         },
-        &mut complete(&ctrls, &payload),
+        &complete(&ctrls, &payload),
     );
     let entry = images.get(ImageId(1)).unwrap();
     assert_eq!(entry.frame_count(), 2, "a=f appends a frame");
@@ -1899,7 +1899,7 @@ fn an_animation_frame_past_the_cap_is_declined_and_changes_nothing() {
             cell_pixel_h: 0,
             anchor_cursor: None,
         },
-        &mut complete(&ctrls, &payload),
+        &complete(&ctrls, &payload),
     );
 
     let resp = resp.unwrap();
@@ -1945,7 +1945,7 @@ fn a_frame_push_that_evicts_announces_the_eviction() {
             cell_pixel_h: 0,
             anchor_cursor: None,
         },
-        &mut complete(&ctrls, &payload),
+        &complete(&ctrls, &payload),
     );
 
     assert!(
@@ -1978,7 +1978,7 @@ fn animation_frame_default_gap_is_40ms_and_negative_is_gapless() {
             cell_pixel_h: 0,
             anchor_cursor: None,
         },
-        &mut complete(&ctrls, &payload),
+        &complete(&ctrls, &payload),
     );
     assert_eq!(images.get(ImageId(1)).unwrap().frame(1).unwrap().gap_ms, 40);
     let (ctrls, payload) = push_frame_cmd(b"-5", [5, 6, 7, 8]);
@@ -1993,7 +1993,7 @@ fn animation_frame_default_gap_is_40ms_and_negative_is_gapless() {
             cell_pixel_h: 0,
             anchor_cursor: None,
         },
-        &mut complete(&ctrls, &payload),
+        &complete(&ctrls, &payload),
     );
     assert_eq!(images.get(ImageId(1)).unwrap().frame(2).unwrap().gap_ms, 0);
 }
@@ -2016,7 +2016,7 @@ fn animation_control_sets_state_loops_and_jumps() {
                 cell_pixel_h: 0,
                 anchor_cursor: None,
             },
-            &mut complete(&ctrls, &payload),
+            &complete(&ctrls, &payload),
         );
     }
     let a: &[(u8, &[u8])] = &[
@@ -2038,7 +2038,7 @@ fn animation_control_sets_state_loops_and_jumps() {
             cell_pixel_h: 0,
             anchor_cursor: None,
         },
-        &mut complete(a, b""),
+        &complete(a, b""),
     );
     let entry = images.get(ImageId(1)).unwrap();
     assert_eq!(entry.mode(), AnimationMode::Running);
@@ -2071,7 +2071,7 @@ fn delete_frame_removes_it_and_reships_the_image() {
             cell_pixel_h: 0,
             anchor_cursor: None,
         },
-        &mut complete(&ctrls, &payload),
+        &complete(&ctrls, &payload),
     );
     assert_eq!(images.get(ImageId(1)).unwrap().frame_count(), 2);
     let d: &[(u8, &[u8])] = &[(b'a', b"d"), (b'd', b"f"), (b'i', b"1"), (b'r', b"2")];
@@ -2087,7 +2087,7 @@ fn delete_frame_removes_it_and_reships_the_image() {
             cell_pixel_h: 0,
             anchor_cursor: None,
         },
-        &mut complete(d, b""),
+        &complete(d, b""),
     );
     assert_eq!(
         images.get(ImageId(1)).unwrap().frame_count(),
@@ -2135,7 +2135,7 @@ fn an_oversized_frame_from_a_file_gets_the_file_medium_reply() {
                 cell_pixel_h: 0,
                 anchor_cursor: None,
             },
-            &mut complete(&ctrls, payload),
+            &complete(&ctrls, payload),
         )
         .expect("error response emitted")
     };
@@ -2166,7 +2166,7 @@ fn animation_frame_on_missing_image_is_not_found() {
             cell_pixel_h: 0,
             anchor_cursor: None,
         },
-        &mut complete(&ctrls, &payload),
+        &complete(&ctrls, &payload),
     )
     .expect("error response emitted");
     assert!(
@@ -2191,7 +2191,7 @@ fn compose_copies_a_region_between_frames() {
             cell_pixel_h: 0,
             anchor_cursor: None,
         },
-        &mut complete(&ctrls, &payload),
+        &complete(&ctrls, &payload),
     );
     let c: &[(u8, &[u8])] = &[
         (b'a', b"c"),
@@ -2211,7 +2211,7 @@ fn compose_copies_a_region_between_frames() {
             cell_pixel_h: 0,
             anchor_cursor: None,
         },
-        &mut complete(c, b""),
+        &complete(c, b""),
     );
     assert_eq!(
         images.get(ImageId(1)).unwrap().frame(0).unwrap().pixels,
@@ -2338,7 +2338,7 @@ fn transmit_and_display_advances_cursor_by_cells() {
         (b'r', b"2".as_slice()),
     ];
     all.extend_from_slice(&ctrls);
-    let mut cmd = complete(&all, &payload);
+    let cmd = complete(&all, &payload);
     handle_complete(
         &mut ApcCtx {
             grid: &mut grid,
@@ -2350,7 +2350,7 @@ fn transmit_and_display_advances_cursor_by_cells() {
             cell_pixel_h: 0,
             anchor_cursor: None,
         },
-        &mut cmd,
+        &cmd,
     )
     .unwrap();
     let cur = grid.cursor();
@@ -2373,7 +2373,7 @@ fn transmit_and_display_with_no_cursor_move_keeps_cursor() {
         (b'C', b"1".as_slice()),
     ];
     all.extend_from_slice(&ctrls);
-    let mut cmd = complete(&all, &payload);
+    let cmd = complete(&all, &payload);
     handle_complete(
         &mut ApcCtx {
             grid: &mut grid,
@@ -2385,7 +2385,7 @@ fn transmit_and_display_with_no_cursor_move_keeps_cursor() {
             cell_pixel_h: 0,
             anchor_cursor: None,
         },
-        &mut cmd,
+        &cmd,
     )
     .unwrap();
     let cur = grid.cursor();
@@ -2409,7 +2409,7 @@ fn natural_sizing_resolves_cells_from_image_pixels_and_advances_cursor() {
     ];
     let mut all = vec![(b'a', b"T".as_slice()), (b'i', b"42".as_slice())];
     all.extend_from_slice(&ctrls);
-    let mut cmd = complete(&all, &payload);
+    let cmd = complete(&all, &payload);
     handle_complete(
         &mut ApcCtx {
             grid: &mut grid,
@@ -2421,7 +2421,7 @@ fn natural_sizing_resolves_cells_from_image_pixels_and_advances_cursor() {
             cell_pixel_h: 16,
             anchor_cursor: None,
         },
-        &mut cmd,
+        &cmd,
     )
     .unwrap();
     let cur = grid.cursor();
@@ -2438,7 +2438,7 @@ fn natural_sizing_resolves_cells_from_image_pixels_and_advances_cursor() {
 fn natural_sizing_resolves_from_the_source_rectangle() {
     let (mut grid, mut images, mut placements) = handler_state();
     let payload = b64(&vec![0u8; 32 * 16 * 4]);
-    let mut cmd = complete(
+    let cmd = complete(
         &[
             (b'a', b"T".as_slice()),
             (b'i', b"42".as_slice()),
@@ -2463,7 +2463,7 @@ fn natural_sizing_resolves_from_the_source_rectangle() {
             cell_pixel_h: 16,
             anchor_cursor: None,
         },
-        &mut cmd,
+        &cmd,
     )
     .unwrap();
     let p = placements.iter().next().expect("placement recorded");
@@ -2517,7 +2517,7 @@ fn a_partial_source_rectangle_defaults_each_missing_key() {
                 cell_pixel_h: 10,
                 anchor_cursor: None,
             },
-            &mut complete(&controls, &payload),
+            &complete(&controls, &payload),
         )
         .unwrap();
         let p = placements.iter().next().expect("placement recorded");
@@ -2558,7 +2558,7 @@ fn a_put_with_only_rows_derives_its_columns_and_reports_the_request() {
             cell_pixel_h: 20,
             anchor_cursor: None,
         },
-        &mut complete(
+        &complete(
             &[
                 (b'a', b"T".as_slice()),
                 (b'i', b"42".as_slice()),
@@ -2608,7 +2608,7 @@ fn natural_sizing_falls_back_when_cell_pixel_dims_are_zero() {
     ];
     let mut all = vec![(b'a', b"T".as_slice()), (b'i', b"43".as_slice())];
     all.extend_from_slice(&ctrls);
-    let mut cmd = complete(&all, &payload);
+    let cmd = complete(&all, &payload);
     handle_complete(
         &mut ApcCtx {
             grid: &mut grid,
@@ -2620,7 +2620,7 @@ fn natural_sizing_falls_back_when_cell_pixel_dims_are_zero() {
             cell_pixel_h: 0,
             anchor_cursor: None,
         },
-        &mut cmd,
+        &cmd,
     )
     .unwrap();
     let cur = grid.cursor();
@@ -2657,7 +2657,7 @@ fn transmit_via_file_path_reads_bytes_from_disk() {
     let pixels = [0xDE, 0xAD, 0xBE, 0xEF];
     let f = tempfile_with_bytes(&pixels);
     let path_b64 = b64(f.path().to_str().unwrap().as_bytes());
-    let mut cmd = complete(
+    let cmd = complete(
         &[
             (b'a', b"t"),
             (b'i', b"100"),
@@ -2679,7 +2679,7 @@ fn transmit_via_file_path_reads_bytes_from_disk() {
             cell_pixel_h: 0,
             anchor_cursor: None,
         },
-        &mut cmd,
+        &cmd,
     )
     .unwrap();
     let entry = images.get(ImageId(100)).expect("image stored");
@@ -2738,7 +2738,7 @@ fn a_temp_file_range_past_its_end_is_refused_and_still_unlinked() {
 fn transmit_via_file_path_rejects_relative_path() {
     let (mut grid, mut images, mut placements) = handler_state();
     let path_b64 = b64(b"some/relative/file.png");
-    let mut cmd = complete(
+    let cmd = complete(
         &[(b'a', b"t"), (b'i', b"101"), (b't', b"f"), (b'f', b"32")],
         &path_b64,
     );
@@ -2753,7 +2753,7 @@ fn transmit_via_file_path_rejects_relative_path() {
             cell_pixel_h: 0,
             anchor_cursor: None,
         },
-        &mut cmd,
+        &cmd,
     )
     .unwrap();
     assert!(response.starts_with(b"\x1b_Gi=101;EINVAL"));
@@ -2764,7 +2764,7 @@ fn transmit_via_file_path_rejects_relative_path() {
 fn transmit_via_file_path_rejects_parent_dir_component() {
     let (mut grid, mut images, mut placements) = handler_state();
     let path_b64 = b64(b"/tmp/../etc/passwd");
-    let mut cmd = complete(
+    let cmd = complete(
         &[(b'a', b"t"), (b'i', b"102"), (b't', b"f"), (b'f', b"32")],
         &path_b64,
     );
@@ -2779,7 +2779,7 @@ fn transmit_via_file_path_rejects_parent_dir_component() {
             cell_pixel_h: 0,
             anchor_cursor: None,
         },
-        &mut cmd,
+        &cmd,
     )
     .unwrap();
     assert!(
@@ -2793,7 +2793,7 @@ fn transmit_via_file_path_rejects_parent_dir_component() {
 fn transmit_via_file_path_missing_file_returns_ebadf() {
     let (mut grid, mut images, mut placements) = handler_state();
     let path_b64 = b64(b"/this/path/does/not/exist/even/maybe.png");
-    let mut cmd = complete(
+    let cmd = complete(
         &[(b'a', b"t"), (b'i', b"103"), (b't', b"f"), (b'f', b"32")],
         &path_b64,
     );
@@ -2808,7 +2808,7 @@ fn transmit_via_file_path_missing_file_returns_ebadf() {
             cell_pixel_h: 0,
             anchor_cursor: None,
         },
-        &mut cmd,
+        &cmd,
     )
     .unwrap();
     assert!(
@@ -2829,7 +2829,7 @@ fn transmit_via_file_path_rejects_symlink_with_nofollow() {
     let link_path = link_dir.path().join("link");
     symlink(target.path(), &link_path).expect("symlink");
     let path_b64 = b64(link_path.to_str().unwrap().as_bytes());
-    let mut cmd = complete(
+    let cmd = complete(
         &[
             (b'a', b"t"),
             (b'i', b"104"),
@@ -2851,7 +2851,7 @@ fn transmit_via_file_path_rejects_symlink_with_nofollow() {
             cell_pixel_h: 0,
             anchor_cursor: None,
         },
-        &mut cmd,
+        &cmd,
     )
     .unwrap();
     assert!(
@@ -2870,7 +2870,7 @@ fn transmit_via_file_path_rejects_directory_target_with_ebadf() {
     let (mut grid, mut images, mut placements) = handler_state();
     let dir = tempfile::tempdir().expect("tempdir");
     let path_b64 = b64(dir.path().to_str().unwrap().as_bytes());
-    let mut cmd = complete(
+    let cmd = complete(
         &[(b'a', b"t"), (b'i', b"105"), (b't', b"f"), (b'f', b"32")],
         &path_b64,
     );
@@ -2885,7 +2885,7 @@ fn transmit_via_file_path_rejects_directory_target_with_ebadf() {
             cell_pixel_h: 0,
             anchor_cursor: None,
         },
-        &mut cmd,
+        &cmd,
     )
     .unwrap();
     assert!(
@@ -2901,7 +2901,7 @@ fn transmit_via_temp_file_reads_then_unlinks() {
     let pixels = [0xFE, 0xED, 0xFA, 0xCE];
     let path = graphics_tempfile_with_bytes(&pixels);
     let path_b64 = b64(path.to_str().unwrap().as_bytes());
-    let mut cmd = complete(
+    let cmd = complete(
         &[
             (b'a', b"t"),
             (b'i', b"200"),
@@ -2923,7 +2923,7 @@ fn transmit_via_temp_file_reads_then_unlinks() {
             cell_pixel_h: 0,
             anchor_cursor: None,
         },
-        &mut cmd,
+        &cmd,
     )
     .unwrap();
     let entry = images.get(ImageId(200)).expect("image stored");
@@ -3092,7 +3092,7 @@ fn transmit_via_temp_file_rejects_symlink_with_nofollow() {
     let link_path = link_dir.path().join("link");
     symlink(target.path(), &link_path).expect("symlink");
     let path_b64 = b64(link_path.to_str().unwrap().as_bytes());
-    let mut cmd = complete(
+    let cmd = complete(
         &[
             (b'a', b"t"),
             (b'i', b"201"),
@@ -3114,7 +3114,7 @@ fn transmit_via_temp_file_rejects_symlink_with_nofollow() {
             cell_pixel_h: 0,
             anchor_cursor: None,
         },
-        &mut cmd,
+        &cmd,
     )
     .unwrap();
     assert!(
@@ -3132,7 +3132,7 @@ fn transmit_via_temp_file_rejects_symlink_with_nofollow() {
 fn transmit_via_temp_file_rejects_relative_path() {
     let (mut grid, mut images, mut placements) = handler_state();
     let path_b64 = b64(b"relative/temp.png");
-    let mut cmd = complete(
+    let cmd = complete(
         &[(b'a', b"t"), (b'i', b"202"), (b't', b"t"), (b'f', b"32")],
         &path_b64,
     );
@@ -3147,7 +3147,7 @@ fn transmit_via_temp_file_rejects_relative_path() {
             cell_pixel_h: 0,
             anchor_cursor: None,
         },
-        &mut cmd,
+        &cmd,
     )
     .unwrap();
     assert!(
@@ -3165,7 +3165,7 @@ fn transmit_via_file_path_oversize_file_returns_ebadf() {
     let oversize = (MAX_DECODED_BYTES as u64).saturating_add(1024);
     f.as_file().set_len(oversize).expect("set_len sparse");
     let path_b64 = b64(f.path().to_str().unwrap().as_bytes());
-    let mut cmd = complete(
+    let cmd = complete(
         &[
             (b'a', b"t"),
             (b'i', b"106"),
@@ -3187,7 +3187,7 @@ fn transmit_via_file_path_oversize_file_returns_ebadf() {
             cell_pixel_h: 0,
             anchor_cursor: None,
         },
-        &mut cmd,
+        &cmd,
     )
     .unwrap();
     assert!(
@@ -3230,7 +3230,7 @@ fn transmit_via_shm_reads_without_unlinking() {
     let pixels = [0xDE, 0xAD, 0xBE, 0xEF];
     let name = shm_with_bytes("roundtrip", &pixels);
     let name_b64 = b64(name.trim_start_matches('/').as_bytes());
-    let mut cmd = complete(
+    let cmd = complete(
         &[
             (b'a', b"t"),
             (b'i', b"300"),
@@ -3252,7 +3252,7 @@ fn transmit_via_shm_reads_without_unlinking() {
             cell_pixel_h: 0,
             anchor_cursor: None,
         },
-        &mut cmd,
+        &cmd,
     )
     .unwrap();
     let entry = images.get(ImageId(300)).expect("image stored");
@@ -3384,7 +3384,7 @@ fn zeroed_shm(suffix: &str) -> String {
     name
 }
 
-fn dispatch_with_deferral(cmd: &mut CompleteCommand, shm: &mut ShmDeferral) -> Option<Vec<u8>> {
+fn dispatch_with_deferral(cmd: &CompleteCommand, shm: &mut ShmDeferral) -> Option<Vec<u8>> {
     let (mut grid, mut images, mut placements) = handler_state();
     handle_complete(
         &mut ApcCtx {
@@ -3439,12 +3439,12 @@ fn a_reused_name_outlives_a_flood_of_rotating_ones() {
 #[test]
 fn a_failed_t_eq_s_command_defers_nothing() {
     // Pins: a name the daemon never opened must not spend a slot.
-    let mut cmd = complete(
+    let cmd = complete(
         &[(b't', b"s"), (b'f', b"32"), (b's', b"1"), (b'v', b"1")],
         &b64(b"felis-test-no-such-object"),
     );
     let mut deferral = ShmDeferral::default();
-    dispatch_with_deferral(&mut cmd, &mut deferral);
+    dispatch_with_deferral(&cmd, &mut deferral);
     assert_eq!(deferral.names().len(), 0);
 }
 
@@ -3456,7 +3456,7 @@ fn overflowing_the_deferral_unlinks_the_name_it_drops() {
         .collect();
     let mut deferral = ShmDeferral::default();
     for name in &names {
-        let mut cmd = complete(
+        let cmd = complete(
             &[
                 (b'a', b"q"),
                 (b't', b"s"),
@@ -3466,7 +3466,7 @@ fn overflowing_the_deferral_unlinks_the_name_it_drops() {
             ],
             &b64(name.trim_start_matches('/').as_bytes()),
         );
-        dispatch_with_deferral(&mut cmd, &mut deferral);
+        dispatch_with_deferral(&cmd, &mut deferral);
     }
     assert_eq!(deferral.names().len(), ShmDeferral::CAP);
     assert!(
@@ -3622,7 +3622,7 @@ fn dispatch_controls(
             cell_pixel_h: 16,
             anchor_cursor: Some((0, 0)),
         },
-        &mut complete(controls, payload),
+        &complete(controls, payload),
     )
 }
 
@@ -3830,7 +3830,7 @@ proptest! {
                 cell_pixel_h: 16,
                 anchor_cursor: Some((0, 0)),
             },
-            &mut complete(&[(b'a', b"d"), (b'd', d)], b""),
+            &complete(&[(b'a', b"d"), (b'd', d)], b""),
         );
         let mut removed: Vec<(u32, u32)> = Vec::new();
         let mut deleted: Vec<u32> = Vec::new();
@@ -3910,7 +3910,7 @@ fn run_under_a_three_image_cap(
             cell_pixel_h: 0,
             anchor_cursor: None,
         },
-        &mut complete(&all, &b64(&[0u8; 4])),
+        &complete(&all, &b64(&[0u8; 4])),
     );
     events
 }

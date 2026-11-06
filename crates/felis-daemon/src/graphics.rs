@@ -539,17 +539,87 @@ pub struct ApcCtx<'a> {
     pub anchor_cursor: Option<(u16, u16)>,
 }
 
+/// [`begin_apc_body`] with the decode run in place.
 pub fn dispatch_apc_body(
     ctx: &mut ApcCtx<'_>,
     reassembler: &mut Reassembler,
     body: &[u8],
 ) -> Option<Vec<u8>> {
-    let mut complete = match reassemble_apc_body(reassembler, body) {
-        BodyDispatch::Assembled(complete) => complete,
-        BodyDispatch::Reply(reply) => return Some(reply),
-        BodyDispatch::Silent => return None,
-    };
-    handle_complete(ctx, &mut complete)
+    let prepared = begin_apc_body(ctx, reassembler, body);
+    finish_in_place(ctx, prepared)
+}
+
+fn finish_in_place(ctx: &mut ApcCtx<'_>, prepared: Prepared) -> Option<Vec<u8>> {
+    match prepared {
+        Prepared::Done(reply) => reply,
+        Prepared::Decode(job, plan) => commit_decoded(ctx, plan, Some(job.run())),
+    }
+}
+
+/// Everything a body's dispatch does before its decode. The decode may
+/// run without the parse lock as long as nothing but animation playback
+/// changes the store, the placements or the grid before
+/// [`commit_decoded`].
+pub fn begin_apc_body(
+    ctx: &mut ApcCtx<'_>,
+    reassembler: &mut Reassembler,
+    body: &[u8],
+) -> Prepared {
+    match reassemble_apc_body(reassembler, body) {
+        BodyDispatch::Assembled(complete) => prepare_complete(ctx, complete),
+        BodyDispatch::Reply(reply) => Prepared::Done(Some(reply)),
+        BodyDispatch::Silent => Prepared::Done(None),
+    }
+}
+
+/// What [`begin_apc_body`] leaves to do.
+pub enum Prepared {
+    /// The dispatch is over; the reply, if any, goes to the PTY.
+    Done(Option<Vec<u8>>),
+    /// The command waits on [`DecodeJob::run`], then [`commit_decoded`].
+    Decode(DecodeJob, CommitPlan),
+}
+
+/// A command's decode: it reads the command alone, no session state.
+pub struct DecodeJob(CompleteCommand);
+
+/// A finished [`DecodeJob`].
+pub struct DecodeOutput {
+    complete: CompleteCommand,
+    result: Result<ImageEntry, DecodeError>,
+}
+
+impl DecodeJob {
+    #[must_use]
+    pub fn run(mut self) -> DecodeOutput {
+        let result = decode_image(&mut self.0);
+        DecodeOutput {
+            complete: self.0,
+            result,
+        }
+    }
+}
+
+/// What a command's dispatch resolved before its decode.
+pub struct CommitPlan {
+    step: DecodeStep,
+    refs: ResponseRefs,
+    quiet: u8,
+    addressed: bool,
+    file_backed: bool,
+    anchor_cursor: (u16, u16),
+}
+
+enum DecodeStep {
+    Query,
+    Transmit {
+        id: ImageId,
+        display: bool,
+    },
+    Frame {
+        id: ImageId,
+        canvas: (u32, u32, ImageFormat, usize),
+    },
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -836,7 +906,17 @@ pub fn apply_reflow_remap(
     }
 }
 
-fn handle_complete(ctx: &mut ApcCtx<'_>, complete: &mut CompleteCommand) -> Option<Vec<u8>> {
+#[cfg(test)]
+fn handle_complete(ctx: &mut ApcCtx<'_>, complete: &CompleteCommand) -> Option<Vec<u8>> {
+    let owned = CompleteCommand {
+        controls: complete.controls.clone(),
+        payload: complete.payload.clone(),
+    };
+    let prepared = prepare_complete(ctx, owned);
+    finish_in_place(ctx, prepared)
+}
+
+fn prepare_complete(ctx: &mut ApcCtx<'_>, complete: CompleteCommand) -> Prepared {
     let ApcCtx {
         grid,
         images,
@@ -852,23 +932,23 @@ fn handle_complete(ctx: &mut ApcCtx<'_>, complete: &mut CompleteCommand) -> Opti
         let cursor = grid.cursor();
         (cursor.row, cursor.col)
     });
-    let action = control_byte(complete, b'a').unwrap_or(b't');
-    let mut refs = response_refs(complete);
-    let quiet = quiet_level(complete);
-    let mut addressed = addressed(complete);
-    if image_ref(complete, b'i').is_some() && image_ref(complete, b'I').is_some() {
+    let action = control_byte(&complete, b'a').unwrap_or(b't');
+    let mut refs = response_refs(&complete);
+    let quiet = quiet_level(&complete);
+    let mut addressed = addressed(&complete);
+    if image_ref(&complete, b'i').is_some() && image_ref(&complete, b'I').is_some() {
         let both = ActionOutcome::error(
             ErrorCode::InvalidValue,
             "must not specify both image id and image number",
         );
-        return apply_quiet_mode(true, quiet, &refs, both);
+        return Prepared::Done(apply_quiet_mode(true, quiet, &refs, both));
     }
 
-    if action == b'q' && control_value(complete, b'e').is_some() {
-        return feature_query_reply(complete, quiet);
+    if action == b'q' && control_value(&complete, b'e').is_some() {
+        return Prepared::Done(feature_query_reply(&complete, quiet));
     }
 
-    let outcome: ActionOutcome = match action {
+    let step = match action {
         b'q' => {
             // kitty answers a query with its `i=` alone, and a query
             // without one not at all.
@@ -877,37 +957,53 @@ fn handle_complete(ctx: &mut ApcCtx<'_>, complete: &mut CompleteCommand) -> Opti
                 ..ResponseRefs::default()
             };
             addressed = refs.image_id.is_some();
-            handle_query(complete)
+            DecodeStep::Query
         }
-        b't' => handle_transmit(images, placements, events, complete, &mut refs),
-        b'T' => handle_transmit_and_display(
-            grid,
-            images,
-            placements,
-            events,
-            complete,
-            &mut refs,
-            cell_pixel_w,
-            cell_pixel_h,
-            anchor_cursor,
-        ),
-        b'p' => handle_display_existing(
-            grid,
-            images,
-            placements,
-            events,
-            complete,
-            &mut refs,
-            cell_pixel_w,
-            cell_pixel_h,
-            anchor_cursor,
-        ),
+        b't' | b'T' => DecodeStep::Transmit {
+            id: resolve_or_allocate_image_id(&complete, &mut refs, images),
+            display: action == b'T',
+        },
+        // Ahead of the decode, which a `t=t` source does not survive.
+        b'f' => {
+            let found = resolve_image_id(&complete, &mut refs, images).and_then(|id| {
+                let e = images.get(id).ok_or(ActionOutcome::error(
+                    ErrorCode::NotFound,
+                    "a=f: image not in store",
+                ))?;
+                Ok(DecodeStep::Frame {
+                    id,
+                    canvas: (e.width, e.height, e.format, e.frame_count()),
+                })
+            });
+            match found {
+                Ok(step) => step,
+                Err(outcome) => {
+                    return Prepared::Done(apply_quiet_mode(addressed, quiet, &refs, outcome));
+                }
+            }
+        }
+        b'p' => {
+            let outcome = handle_display_existing(
+                grid,
+                images,
+                placements,
+                events,
+                &complete,
+                &mut refs,
+                cell_pixel_w,
+                cell_pixel_h,
+                anchor_cursor,
+            );
+            return Prepared::Done(finish_command(
+                shm, &complete, addressed, quiet, &refs, outcome,
+            ));
+        }
         b'd' => {
             // kitty's `case 'd'` calls no `finish_command_response`, so a
             // delete is never answered, failed or not. mpv's vo_kitty
             // cleanup sends a bare `a=d;` without q= and reads nothing.
             if let ActionOutcome::Err(code, message) =
-                handle_delete(grid, images, placements, events, complete, &mut refs)
+                handle_delete(grid, images, placements, events, &complete, &mut refs)
             {
                 tracing::debug!(
                     ?code,
@@ -916,43 +1012,135 @@ fn handle_complete(ctx: &mut ApcCtx<'_>, complete: &mut CompleteCommand) -> Opti
                 );
             }
             free_unreferenced_anonymous(images, placements, events);
-            return None;
+            return Prepared::Done(None);
         }
-        b'f' => handle_animation_frame(images, placements, events, complete, &mut refs),
         b'a' => {
             // kitty parity: a successful a=a is never acknowledged
             // (`kitty/graphics.c`). kitten icat sends a=a without q= and
             // never reads responses, so an OK would land in the user's
             // shell as `_Gi=...;OK` garbage.
-            let outcome = handle_animation_control(images, events, complete, &mut refs);
-            return match outcome {
+            let outcome = handle_animation_control(images, events, &complete, &mut refs);
+            return Prepared::Done(match outcome {
                 ActionOutcome::Ok => None,
                 err @ ActionOutcome::Err(..) => apply_quiet_mode(addressed, quiet, &refs, err),
-            };
+            });
         }
-        b'c' => handle_compose(images, events, complete, &mut refs),
+        b'c' => {
+            let outcome = handle_compose(images, events, &complete, &mut refs);
+            return Prepared::Done(finish_command(
+                shm, &complete, addressed, quiet, &refs, outcome,
+            ));
+        }
         _ => {
             tracing::debug!(
                 action,
                 "unknown graphics action dropped (kitty sends no reply)"
             );
-            return None;
+            return Prepared::Done(None);
         }
     };
+    let file_backed = file_backed(&complete);
+    Prepared::Decode(
+        DecodeJob(complete),
+        CommitPlan {
+            step,
+            refs,
+            quiet,
+            addressed,
+            file_backed,
+            anchor_cursor,
+        },
+    )
+}
 
-    // Defer the unlink only once the command succeeded, the only outcome
-    // proving the daemon opened the object; keeping unresolved names
-    // would let a producer spend a deferral slot per escape sequence
-    // without owning a segment. `a=d`/`a=a` return above and read no
-    // payload.
+/// The rest of a [`prepare_complete`]d command's dispatch once its
+/// decode is done. `None` is a decode that panicked: it answers as one
+/// that failed, with nothing stored.
+pub fn commit_decoded(
+    ctx: &mut ApcCtx<'_>,
+    plan: CommitPlan,
+    output: Option<DecodeOutput>,
+) -> Option<Vec<u8>> {
+    let CommitPlan {
+        step,
+        mut refs,
+        quiet,
+        addressed,
+        file_backed,
+        anchor_cursor,
+    } = plan;
+    let Some(DecodeOutput { complete, result }) = output else {
+        let failed = if file_backed {
+            MEDIUM_READ_FAILED
+        } else {
+            DecodeError::BadImage("image decoder failed")
+        };
+        let outcome = decode_error_to_outcome(failed);
+        return apply_quiet_mode(addressed, quiet, &refs, outcome);
+    };
+    let ApcCtx {
+        grid,
+        images,
+        placements,
+        events,
+        shm,
+        cell_pixel_w,
+        cell_pixel_h,
+        ..
+    } = ctx;
+    let outcome = match step {
+        DecodeStep::Query => match result {
+            Ok(_) => ActionOutcome::Ok,
+            Err(err) => decode_error_to_outcome(err),
+        },
+        DecodeStep::Transmit { id, display } => {
+            match store_transmitted(images, placements, events, &complete, &refs, id, result) {
+                Err(outcome) => outcome,
+                Ok(()) if !display => ActionOutcome::Ok,
+                Ok(()) if control_u32(&complete, b'U') == Some(1) => {
+                    upsert_virtual_placement(images, placements, events, id, &complete, &mut refs)
+                }
+                Ok(()) => upsert_placement(
+                    grid,
+                    images,
+                    placements,
+                    events,
+                    id,
+                    &complete,
+                    &mut refs,
+                    *cell_pixel_w,
+                    *cell_pixel_h,
+                    anchor_cursor,
+                ),
+            }
+        }
+        DecodeStep::Frame { id, canvas } => {
+            store_decoded_frame(images, placements, events, &complete, id, canvas, result)
+        }
+    };
+    finish_command(shm, &complete, addressed, quiet, &refs, outcome)
+}
+
+/// Defer the unlink only once the command succeeded, the only outcome
+/// proving the daemon opened the object; keeping unresolved names
+/// would let a producer spend a deferral slot per escape sequence
+/// without owning a segment. `a=d`/`a=a` never get here and read no
+/// payload.
+fn finish_command(
+    shm: &mut ShmDeferral,
+    complete: &CompleteCommand,
+    addressed: bool,
+    quiet: u8,
+    refs: &ResponseRefs,
+    outcome: ActionOutcome,
+) -> Option<Vec<u8>> {
     if matches!(outcome, ActionOutcome::Ok)
         && let Some(name) = shm_segment_name(complete)
         && let Some(evicted) = shm.record(name)
     {
         unlink_shm_segment(&evicted);
     }
-
-    apply_quiet_mode(addressed, quiet, &refs, outcome)
+    apply_quiet_mode(addressed, quiet, refs, outcome)
 }
 
 /// Always `OK` when answered, so any `q=` silences it; it reads no
@@ -1036,39 +1224,17 @@ fn apply_quiet_mode(
     }
 }
 
-/// Producers feature-detect the dispatcher this way (the spec
-/// recommends a tiny test image with `a=q`).
-fn handle_query(complete: &mut CompleteCommand) -> ActionOutcome {
-    match decode_image(complete) {
-        Ok(_) => ActionOutcome::Ok,
-        Err(err) => decode_error_to_outcome(err),
-    }
-}
-
-fn handle_transmit(
+/// The store half of a transmit; the decode is the caller's.
+fn store_transmitted(
     images: &mut felis_grid::images::ImageStore,
     placements: &mut felis_grid::images::Placements,
     events: &mut Vec<ImageEvent>,
-    complete: &mut CompleteCommand,
-    refs: &mut ResponseRefs,
-) -> ActionOutcome {
-    match transmit_image(images, placements, events, complete, refs) {
-        Ok(_) => ActionOutcome::Ok,
-        Err(outcome) => outcome,
-    }
-}
-
-/// Returns the resolved [`ImageId`] so `a=T` can place an anonymous
-/// transmit (no `i=`, so `refs.image_id` stays unset).
-fn transmit_image(
-    images: &mut felis_grid::images::ImageStore,
-    placements: &mut felis_grid::images::Placements,
-    events: &mut Vec<ImageEvent>,
-    complete: &mut CompleteCommand,
-    refs: &mut ResponseRefs,
-) -> Result<ImageId, ActionOutcome> {
-    let id = resolve_or_allocate_image_id(complete, refs, images);
-    let mut entry = decode_image(complete).map_err(decode_error_to_outcome)?;
+    complete: &CompleteCommand,
+    refs: &ResponseRefs,
+    id: ImageId,
+    decoded: Result<ImageEntry, DecodeError>,
+) -> Result<(), ActionOutcome> {
+    let mut entry = decoded.map_err(decode_error_to_outcome)?;
     if refs.image_id.is_none() {
         entry = entry.into_anonymous();
     }
@@ -1078,7 +1244,7 @@ fn transmit_image(
         entry = entry.with_number(number);
     }
     match insert_into_store(images, placements, events, id, entry) {
-        ActionOutcome::Ok => Ok(id),
+        ActionOutcome::Ok => Ok(()),
         err @ ActionOutcome::Err(..) => Err(after_file_read(complete, err)),
     }
 }
@@ -1237,38 +1403,6 @@ fn resolve_or_allocate_image_id(
         return id;
     }
     images.allocate_anonymous_id()
-}
-
-fn handle_transmit_and_display(
-    grid: &mut felis_grid::Grid,
-    images: &mut felis_grid::images::ImageStore,
-    placements: &mut felis_grid::images::Placements,
-    events: &mut Vec<ImageEvent>,
-    complete: &mut CompleteCommand,
-    refs: &mut ResponseRefs,
-    cell_pixel_w: u16,
-    cell_pixel_h: u16,
-    anchor_cursor: (u16, u16),
-) -> ActionOutcome {
-    let id = match transmit_image(images, placements, events, complete, refs) {
-        Ok(id) => id,
-        Err(outcome) => return outcome,
-    };
-    if control_u32(complete, b'U') == Some(1) {
-        return upsert_virtual_placement(images, placements, events, id, complete, refs);
-    }
-    upsert_placement(
-        grid,
-        images,
-        placements,
-        events,
-        id,
-        complete,
-        refs,
-        cell_pixel_w,
-        cell_pixel_h,
-        anchor_cursor,
-    )
 }
 
 fn handle_display_existing(
@@ -1909,35 +2043,20 @@ const fn decode_error_to_outcome(err: DecodeError) -> ActionOutcome {
 /// (a copy of base frame `c=`, the `Y=` fill, or the edited frame's
 /// pixels), so every stored frame is a coalesced full-canvas frame
 /// (docs/reference/protocols/kitty-graphics.md "Animation").
-fn handle_animation_frame(
+fn store_decoded_frame(
     images: &mut felis_grid::images::ImageStore,
     placements: &mut felis_grid::images::Placements,
     events: &mut Vec<ImageEvent>,
-    complete: &mut CompleteCommand,
-    refs: &mut ResponseRefs,
+    complete: &CompleteCommand,
+    id: ImageId,
+    canvas: (u32, u32, ImageFormat, usize),
+    decoded: Result<ImageEntry, DecodeError>,
 ) -> ActionOutcome {
-    let id = match resolve_image_id(complete, refs, images) {
-        Ok(id) => id,
-        Err(outcome) => return outcome,
-    };
-    let (img_w, img_h, format, frame_count) = match images.get(id) {
-        Some(e) => (e.width, e.height, e.format, e.frame_count()),
-        None => return ActionOutcome::error(ErrorCode::NotFound, "a=f: image not in store"),
-    };
-
-    let data = match decode_image(complete) {
+    let data = match decoded {
         Ok(d) => d,
         Err(err) => return decode_error_to_outcome(err),
     };
-    let outcome = store_frame(
-        images,
-        placements,
-        events,
-        complete,
-        id,
-        (img_w, img_h, format, frame_count),
-        &data,
-    );
+    let outcome = store_frame(images, placements, events, complete, id, canvas, &data);
     after_file_read(complete, outcome)
 }
 
