@@ -1,5 +1,8 @@
 #![doc = include_str!("../README.md")]
-#![cfg_attr(not(test), forbid(unsafe_code))]
+// `deny`, not `forbid`: `forbid` cannot be relaxed at the audited
+// `#[allow(unsafe_code)]` sites, the base64 block kernel's loads, stores
+// and feature-checked call.
+#![cfg_attr(not(test), deny(unsafe_code))]
 
 pub mod base64;
 pub mod build_identity;
