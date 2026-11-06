@@ -3,6 +3,8 @@
 //! Accepts optional RFC 4648 §3.2 unpadded tails because kitten emits
 //! unpadded payloads. Whitespace is stripped for column-wrapped input.
 
+mod simd;
+
 /// Decodes standard-alphabet base64 bytes, allowing optional padding and whitespace.
 ///
 /// Returns `None` on invalid bytes, misplaced padding, or a 1-char tail.
@@ -162,6 +164,12 @@ impl Decoder {
 fn decode_groups(body: &[u8], out: &mut Vec<u8>) -> bool {
     // The slack spares the final group's bytes a reallocation.
     out.reserve(body.len() / 4 * 3 + 3);
+    simd::decode_blocks(body, out).is_some_and(|done| decode_groups_scalar(&body[done..], out))
+}
+
+/// [`decode_groups`] without the block kernel: the reference it is
+/// tested against, and the path on every other target.
+fn decode_groups_scalar(body: &[u8], out: &mut Vec<u8>) -> bool {
     // Staged through a small block: decoding into the vector itself would
     // first have to zero its spare capacity.
     let mut block = [0u8; 64 * 6];
@@ -272,7 +280,7 @@ const fn decode_char(c: u8) -> Option<u8> {
 
 #[cfg(kani)]
 mod kani_proofs {
-    use super::{decode, decode_char};
+    use super::{decode, decode_char, decode_groups_scalar};
 
     /// Every accepted byte maps to a sextet that fits six bits, the
     /// invariant the bit-packing in `decode` relies on.
@@ -291,6 +299,43 @@ mod kani_proofs {
     fn decode_never_panics() {
         let bytes: [u8; 8] = kani::any();
         let _ = decode(&bytes);
+    }
+
+    /// Wherever the block kernel hands over to the scalar groups, two
+    /// groups decode like a per-byte loop: rejected iff a byte is outside
+    /// the alphabet, else each group's 24 bits in order. The kernel
+    /// itself is outside Kani's model, so its part is played by the
+    /// scalar groups it is tested against.
+    #[kani::proof]
+    #[kani::unwind(9)]
+    fn whole_groups_decode_like_a_per_byte_loop_at_any_hand_over() {
+        let body: [u8; 8] = kani::any();
+        let mut expected = [0u8; 6];
+        let mut valid = true;
+        for g in 0..2 {
+            let mut n = 0u32;
+            for i in 0..4 {
+                match decode_char(body[4 * g + i]) {
+                    Some(v) => n = (n << 6) | u32::from(v),
+                    None => valid = false,
+                }
+            }
+            expected[3 * g] = (n >> 16) as u8;
+            expected[3 * g + 1] = (n >> 8) as u8;
+            expected[3 * g + 2] = n as u8;
+        }
+        for done in [0, 4, 8] {
+            let mut out = Vec::new();
+            let ok = decode_groups_scalar(&body[..done], &mut out)
+                && decode_groups_scalar(&body[done..], &mut out);
+            assert_eq!(ok, valid);
+            if ok {
+                assert_eq!(out.len(), 6);
+                for i in 0..6 {
+                    assert_eq!(out[i], expected[i]);
+                }
+            }
+        }
     }
 }
 
@@ -539,6 +584,57 @@ mod tests {
             original.push(&rest);
             replayed.push(&rest);
             prop_assert_eq!(replayed.finish(), original.finish());
+        }
+
+        /// The block kernel agrees with the scalar groups on arbitrary
+        /// bytes and on alphabet runs with at most one foreign byte, long
+        /// enough to cross a staging run and leave a scalar tail.
+        #[test]
+        fn the_block_kernel_decodes_like_the_scalar_groups(
+            arbitrary in any::<bool>(),
+            bytes in proptest::collection::vec(any::<u8>(), 0..1200),
+            alphabet in proptest::collection::vec(
+                prop::sample::select(&b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"[..]),
+                0..1200,
+            ),
+            foreign in prop::option::of((any::<prop::sample::Index>(), any::<u8>())),
+        ) {
+            let mut body = if arbitrary { bytes } else { alphabet };
+            if let (Some((at, byte)), false) = (foreign, body.is_empty()) {
+                let i = at.index(body.len());
+                body[i] = byte;
+            }
+            body.truncate(body.len() / 4 * 4);
+            let (mut blocks, mut scalar) = (Vec::new(), Vec::new());
+            let ok = decode_groups(&body, &mut blocks);
+            prop_assert_eq!(ok, decode_groups_scalar(&body, &mut scalar));
+            if ok {
+                prop_assert_eq!(blocks, scalar);
+            }
+        }
+
+        /// A payload long enough for the block kernel decodes back to
+        /// itself, padded or not, wherever the pieces split it.
+        #[test]
+        fn a_long_payload_pushed_in_pieces_decodes_to_itself(
+            payload in proptest::collection::vec(any::<u8>(), 0..1200),
+            padded in any::<bool>(),
+            cuts in proptest::collection::vec(any::<prop::sample::Index>(), 0..8),
+        ) {
+            let mut encoded = Vec::new();
+            encode_into(&payload, &mut encoded);
+            if !padded {
+                encoded.retain(|&b| b != b'=');
+            }
+            let mut cuts: Vec<usize> = cuts.iter().map(|c| c.index(encoded.len() + 1)).collect();
+            cuts.sort_unstable();
+            let mut decoder = Decoder::new();
+            let mut from = 0;
+            for cut in cuts.into_iter().chain([encoded.len()]) {
+                decoder.push(&encoded[from..cut]);
+                from = cut;
+            }
+            prop_assert_eq!(decoder.finish(), Some(payload));
         }
 
         /// `decode` is total on malformed input. The Kani proof

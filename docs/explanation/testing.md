@@ -133,7 +133,7 @@ the generic blowup exceeds solver limits, and the fuzz targets own those round-t
   `#[kani::unwind(n)]`, making it _weaker_ than the unbounded `vt_parser` fuzz target for length coverage, while the
   branchy DFA makes CBMC blow up. Full-parser totality stays with fuzzing.
 - **Heap-allocating round-trips.** The base64 `decode(encode(x)) == x` property bit-blasts past every solver tried; it
-  lives as a proptest instead, and only the two cheap base64 safety proofs stay under Kani.
+  lives as a proptest instead, and only cheap base64 proofs over a few groups stay under Kani.
 - **The allocating half of `Chord::parse`.** Its byte-level kernels are proven: the `+` split, the name lookups, and the
   F-key index accumulator. The `String`-building layer above them (the character key, the token named in each error) is
   orchestration whose only computation is the kernels', so the `chord_parser` fuzz target and the parser proptests own

@@ -58,6 +58,8 @@ jobs:
       # felis-dist too, so a bundler that cannot relocate or re-sign the
       # app fails here rather than on the tag that would have shipped it.
       - run: nix build .#felis .#felis-dist --print-build-logs
+      # The only runner whose CPU takes felis-protocol's NEON base64 path.
+      - run: nix develop -c cargo test -p felis-protocol --all-features
       - uses: ./.forgejo/actions/niks3-push
         if: github.event_name == 'push'
       # The tag's archive checks, run on every revision: the bundle's
