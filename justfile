@@ -263,9 +263,10 @@ bench-vs-check-field *args:
 
 # ── Fuzz (mirrors fuzz.yml; Linux/macOS, needs the flake nightly) ───
 
-# Not cargo-fuzz's default AddressSanitizer: every fuzzed crate forbids
-# unsafe_code, so ASan finds nothing a panic would not, at a tenth of the
-# executions per second.
+# Not cargo-fuzz's default AddressSanitizer: the fuzzed code is safe Rust
+# apart from felis-protocol's SIMD base64 loads and stores, whose bounds
+# a slice panic would not catch; run that target with
+# FUZZ_SANITIZER=address after touching them.
 fuzz_sanitizer := env('FUZZ_SANITIZER', 'none')
 fuzz_jobs := env('FUZZ_JOBS', '4')
 
