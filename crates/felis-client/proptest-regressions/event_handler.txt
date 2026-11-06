@@ -1,0 +1,9 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc cbfa64a850be5b2f8d47f3c55175b7b9d7e1a327469f4666397145a8e32a13ff # shrinks to ops = [Transmit { width: 1, height: 1, rgb: false }, Draw, Reallocate, Draw]
+cc 8ff1306a96f996e6ff63853ba31bb761fcf87c0bca916316e2a640bb2ed977bc # shrinks to ops = [Transmit { width: 1, height: 2, rgb: false }, Draw, Region { number: 1, rect: [0, 0, 0, 798506370] }, Frame { number: 1 }, Draw]
+cc 584814e039de2fe5c8e1b4c8dedaa1627edfc6998f4735b78ee00302fb984f0e # shrinks to ops = [Transmit { width: 1, height: 4, rgb: false }, Frame { number: 2 }, Show { number: 2 }, Draw, Region { number: 2, rect: [0, 458770377, 0, 19683] }, Frame { number: 2 }, Draw]

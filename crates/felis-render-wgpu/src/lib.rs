@@ -71,7 +71,7 @@ use crate::{
     buffer_ring::{GrowingInstanceBuffer, UniformRing, UploadMode},
     glyph_cache::GlyphCache,
     gpu_instances::{BgInstance, DecorationInstance, FgInstance, ImgInstance, clip_img_quad_above},
-    image_atlas::{ImageAtlas, ImageSlot},
+    image_atlas::{ImageAtlas, ImageSlot, SlotWrite},
     pipeline::{
         ViewportUniform, atlas_bind_group_layout_entries, bg_instance_layout,
         decoration_instance_layout, fg_instance_layout, glyph_bind_group_layout_entries,
@@ -113,6 +113,9 @@ enum UploadOutcome {
     Uploaded,
     SheetFull,
     Missing,
+    /// Stays pending for the next draw: nothing else would retry an
+    /// image whose producer has no reason to send it again.
+    WriteFailed,
 }
 
 #[derive(Debug, Error)]
@@ -1361,12 +1364,16 @@ impl Renderer {
         for id in std::mem::take(&mut self.image_pending) {
             let visible = !layout.occluded(id, |over| opaque(images, over));
             if visible {
-                if (missed.is_empty() || !stop_when_full)
-                    && self.try_upload_image(id, images) != UploadOutcome::SheetFull
-                {
-                    continue;
+                let outcome = if missed.is_empty() || !stop_when_full {
+                    self.try_upload_image(id, images)
+                } else {
+                    UploadOutcome::SheetFull
+                };
+                match outcome {
+                    UploadOutcome::Uploaded | UploadOutcome::Missing => continue,
+                    UploadOutcome::SheetFull => missed.push(id),
+                    UploadOutcome::WriteFailed => {}
                 }
-                missed.push(id);
             }
             self.image_pending.push(id);
         }
@@ -1379,22 +1386,13 @@ impl Renderer {
         let Some(data) = images.image_data(id) else {
             return UploadOutcome::Missing;
         };
-        if self
+        match self
             .images
-            .upload(
-                &self.device,
-                &mut self.uploader,
-                id,
-                data.width,
-                data.height,
-                data.format,
-                data.pixels,
-            )
-            .is_some()
+            .upload(&self.device, &mut self.uploader, id, &data, images)
         {
-            UploadOutcome::Uploaded
-        } else {
-            UploadOutcome::SheetFull
+            SlotWrite::Written => UploadOutcome::Uploaded,
+            SlotWrite::SheetFull => UploadOutcome::SheetFull,
+            SlotWrite::Dropped => UploadOutcome::WriteFailed,
         }
     }
 
@@ -2413,6 +2411,7 @@ mod tests {
                 height: self.height,
                 format: ImageFormat::Rgba32,
                 pixels: &self.pixels,
+                generation: 0,
             })
         }
     }
@@ -2529,6 +2528,7 @@ mod tests {
                 height: RGB_SIDE,
                 format: ImageFormat::Rgb24,
                 pixels,
+                generation: 0,
             })
         }
     }
@@ -2610,6 +2610,166 @@ mod tests {
                 .expect("an offscreen render has no surface to lose");
             assert_eq!(
                 image_center(&mut renderer, width),
+                [0, 0, 0xFF, 0xFF],
+                "{mode:?}"
+            );
+        }
+    }
+
+    /// Blue at generation 1, red at every later one, though the edit log
+    /// claims only `PATCH` changed: what lands outside it shows whether
+    /// a patch upload stayed inside its rectangle.
+    struct Repainted {
+        format: ImageFormat,
+        generation: u64,
+        pixels: Vec<u8>,
+        log: bool,
+    }
+
+    const PATCH: felis_protocol::messages::SourceRect = felis_protocol::messages::SourceRect {
+        x: 4,
+        y: 4,
+        width: 4,
+        height: 4,
+    };
+
+    impl Repainted {
+        fn new(format: ImageFormat) -> Self {
+            let mut image = Self {
+                format,
+                generation: 0,
+                pixels: Vec::new(),
+                log: true,
+            };
+            image.repaint([0, 0, 0xFF]);
+            image
+        }
+
+        fn repaint(&mut self, rgb: [u8; 3]) {
+            self.generation += 1;
+            let texel: &[u8] = match self.format {
+                ImageFormat::Rgb24 => &rgb,
+                ImageFormat::Rgba32 => &[rgb[0], rgb[1], rgb[2], 0xFF],
+            };
+            self.pixels = texel.repeat((RGB_SIDE * RGB_SIDE) as usize);
+        }
+    }
+
+    impl ImageSource for Repainted {
+        fn image_data(&self, _: ImageId) -> Option<ImageData<'_>> {
+            Some(ImageData {
+                width: RGB_SIDE,
+                height: RGB_SIDE,
+                format: self.format,
+                pixels: &self.pixels,
+                generation: self.generation,
+            })
+        }
+
+        fn edits_since(
+            &self,
+            _: ImageId,
+            generation: u64,
+            out: &mut Vec<felis_protocol::messages::SourceRect>,
+        ) -> bool {
+            out.push(PATCH);
+            self.log && generation + 1 == self.generation
+        }
+    }
+
+    impl felis_grid::image_layout::LayoutImages for Repainted {
+        fn drawable_size(&self, _: ImageId) -> Option<(u32, u32)> {
+            Some((RGB_SIDE, RGB_SIDE))
+        }
+
+        fn stack_rank(&self, _: ImageId) -> u64 {
+            0
+        }
+    }
+
+    fn pixel_at(renderer: &mut Renderer, frame_width: u32, x: u32, y: u32) -> [u8; 4] {
+        let mut out = Vec::new();
+        renderer.read_frame(&mut out).expect("readback");
+        let i = ((y * frame_width + x) * 4) as usize;
+        [out[i], out[i + 1], out[i + 2], out[i + 3]]
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    #[ignore = "needs a GPU adapter; `just test-gpu` runs it on lavapipe"]
+    fn a_patched_image_rewrites_only_its_rectangle_in_the_atlas() {
+        const BLUE: [u8; 4] = [0, 0, 0xFF, 0xFF];
+        const RED: [u8; 4] = [0xFF, 0, 0, 0xFF];
+        for format in [ImageFormat::Rgb24, ImageFormat::Rgba32] {
+            for mode in [None, Some(UploadMode::Staged)] {
+                let (cols, rows) = (8u16, 4u16);
+                let mut renderer =
+                    offscreen_in_mode(&new_instance(), mode, 8, 8, RendererConfig::default());
+                let m = renderer.cell_metrics();
+                let width = u32::from(cols) * m.width;
+                renderer.resize(width, u32::from(rows) * m.height);
+                let mut grid = felis_grid::Grid::new(rows, cols);
+                felis_vt::Parser::new().advance(&mut grid, b"\x1b[?25l");
+                let mut image = Repainted::new(format);
+                let mut layout = ImageLayout::new();
+                let cell = (m.width as f32, m.height as f32);
+                let mut draw = |renderer: &mut Renderer, image: &Repainted| {
+                    layout.rebuild(grid.screen(), image, &[placed_at_origin(1)], &[], cell, 0);
+                    renderer
+                        .render(grid.screen(), &[ImageId(1)], image, &layout, 0, 0)
+                        .expect("an offscreen render has no surface to lose");
+                };
+                draw(&mut renderer, &image);
+                assert_eq!(pixel_at(&mut renderer, width, 1, 1), BLUE);
+
+                image.repaint([0xFF, 0, 0]);
+                draw(&mut renderer, &image);
+                let label = format!("{format:?} {mode:?}");
+                assert_eq!(pixel_at(&mut renderer, width, 5, 5), RED, "{label}");
+                assert_eq!(pixel_at(&mut renderer, width, 7, 7), RED, "{label}");
+                assert_eq!(pixel_at(&mut renderer, width, 3, 5), BLUE, "{label}");
+                assert_eq!(pixel_at(&mut renderer, width, 8, 8), BLUE, "{label}");
+
+                image.log = false;
+                image.repaint([0xFF, 0, 0]);
+                draw(&mut renderer, &image);
+                assert_eq!(pixel_at(&mut renderer, width, 1, 1), RED, "{label}");
+            }
+        }
+    }
+
+    /// A write the uploader drops (here, one whose source is shorter than
+    /// its extent) keeps the image pending, so a later draw with nothing
+    /// dirty still paints it once the write succeeds.
+    #[cfg(not(windows))]
+    #[test]
+    #[ignore = "needs a GPU adapter; `just test-gpu` runs it on lavapipe"]
+    fn an_image_whose_write_failed_is_retried_on_the_next_draw() {
+        for mode in [None, Some(UploadMode::Staged)] {
+            let (cols, rows) = (8u16, 4u16);
+            let mut renderer =
+                offscreen_in_mode(&new_instance(), mode, 8, 8, RendererConfig::default());
+            let m = renderer.cell_metrics();
+            let width = u32::from(cols) * m.width;
+            renderer.resize(width, u32::from(rows) * m.height);
+            let mut grid = felis_grid::Grid::new(rows, cols);
+            felis_vt::Parser::new().advance(&mut grid, b"\x1b[?25l");
+            let mut image = Repainted::new(ImageFormat::Rgba32);
+            let full = std::mem::take(&mut image.pixels);
+            image.pixels = full[..4].to_vec();
+            let mut layout = ImageLayout::new();
+            let cell = (m.width as f32, m.height as f32);
+            layout.rebuild(grid.screen(), &image, &[placed_at_origin(1)], &[], cell, 0);
+            renderer
+                .render(grid.screen(), &[ImageId(1)], &image, &layout, 0, 0)
+                .expect("an offscreen render has no surface to lose");
+
+            image.pixels = full;
+            renderer
+                .render(grid.screen(), &[], &image, &layout, 0, 0)
+                .expect("an offscreen render has no surface to lose");
+            assert_eq!(
+                pixel_at(&mut renderer, width, 1, 1),
                 [0, 0, 0xFF, 0xFF],
                 "{mode:?}"
             );
