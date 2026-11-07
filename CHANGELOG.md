@@ -38,6 +38,10 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 
 ### Fixed
 
+- **Platform**: on Linux, a window opened from an application launcher or a compositor keybinding takes focus under a
+  compositor that prevents focus stealing: the client passes the launcher's activation token (`XDG_ACTIVATION_TOKEN` on
+  Wayland, `DESKTOP_STARTUP_ID` on X11) to its window, and the desktop entry declares `StartupNotify=true` so launchers
+  send one.
 - **Graphics**: an animation frame (`a=f`) overwrites the canvas under `X=1`, the key the Kitty graphics protocol
   defines for it; felis read `C=1`, the composition key of `a=c`, so `X=1` frames alpha-blended.
 - **Text sizing**: an erase (EL, ED, ECH, DECERA and their selective forms) that reaches part of an `OSC 66` character

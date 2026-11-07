@@ -728,6 +728,10 @@ Top-level invocations that launch the GUI client:
 `felis -- <cmd>` creates a standard persistent session; closing the window does not terminate the process. For a
 detached command without a window, use `felis sessions spawn -- <cmd>`.
 
+On Linux, the window presents the launcher's activation token (`XDG_ACTIVATION_TOKEN` on Wayland, `DESKTOP_STARTUP_ID`
+on X11) so a compositor that prevents focus stealing still focuses it; the client removes both variables before it
+spawns anything, so no child presents the token again.
+
 When its shell exits, a window takes the first of these it can:
 
 1. a retarget or reattach it had parked while busy;

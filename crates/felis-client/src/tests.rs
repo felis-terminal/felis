@@ -2263,6 +2263,7 @@ mod app_events {
         let cfg = config::EffectiveConfig::default();
         let startup = ClientStartup {
             warmup: None,
+            startup_token: startup_token::StartupToken::default(),
             renderer_cfg: renderer_config_from(&cfg),
             post_animations: Vec::new(),
             font_size_logical_px: configured_font_size_logical_px(&cfg),
