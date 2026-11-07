@@ -44,6 +44,31 @@ the cell box, and with `c`/`r` omitted that box comes from the decoded image's p
 both daemon-side. Running the dispatcher under the parse lock puts the PNG decoder and the reassembly on the reader
 thread's critical section for every APC, not just the placements that move the cursor.
 
+A heavy decode stops the parse the same way: a `t=f`, `t=t` or `t=s` source, a PNG, or a zlib payload declaring at least
+256 KiB of pixels (`offloads_decode` in `felis-vt` names the set). The session task prepares the command under the parse
+lock (reassembly, the id checks, id allocation), runs the decode on the blocking pool without it, then commits (store,
+placement, cursor move, reply) under one acquisition and only then releases the reader. Meanwhile it drains no effect,
+and runs only a window's pull and a stats read, both answered from the state as it stood before the command, and input
+that writes to the program with no size or input-owner change while nothing waits and no report of the task's own is
+owed, plus a shutdown, which a decode that never finishes must not outlive. Every other command waits out the decode in
+arrival order; holding is the default so that a command kind added later waits too. The task's own work waits the same
+way, until a drain has covered what the reader parsed after the image: the exit check, which would end a wait before the
+`OSC 133` mark the program wrote after the image, the reports the task writes itself (focus, color scheme, `DECSET 2048`
+resize), which would land ahead of the image's reply, and search walks. Animation playback keeps running, since the
+commit reads nothing it touches. The held commands replay after the commit and before the reader is released, each
+resize applied in turn, so the image is placed at the geometry the producer saw, a shrink and a grow trim the alternate
+screen as they would have in place, no keystroke reaches the program ahead of a resize it followed
+([the frozen order of an ownership transfer](../architecture/session-lifecycle.md#ownership-transfer-has-a-frozen-order)),
+and a fence is answered only once the input ahead of it is written. Input from a window that left meanwhile is still
+written, since a dropped keystroke is gone with no sign. The stopped parse is what makes the split exact: nothing the
+program wrote after the command exists until the commit, so prepare, decode and commit end where an in-place dispatch
+ends, replies keep the order of their requests, and the only change between prepare and commit, animation playback,
+touches nothing the commit reads. Decoding off the lock without stopping the parse is rejected: the bytes after the
+image would parse against a cursor the placement has not moved and a store the image is not in yet. Text after a heavy
+image still waits for its decode, since that text is placed relative to the image; what stops waiting is everything the
+program did not write. A decoder that panics answers as a failed decode rather than taking the session task down with
+it.
+
 Because the dispatcher's entry holds `&mut Session`, it reaches the image store, the placement table, the response
 writer, and `&mut session.grid` through one borrow root: no callback ping-pong, no interior mutability. A
 `Sink`-decorator wrapper intercepting `apc_dispatch` in the daemon is rejected: `Session` owns its `Grid`, so the

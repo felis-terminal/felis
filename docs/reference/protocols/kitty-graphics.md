@@ -372,5 +372,11 @@ Non-`G` APC escapes are silently ignored to prevent interfering with unrelated A
   way is deleted (emitting `Delete`). kitty has no such cap.
 - APC command queue: at most 64 APC bodies and 1 MiB buffered between daemon drains. The body that fills the queue
   pauses the PTY parse until the daemon drains it, so a burst of any length arrives whole.
+- Decodes off the session task: one per session. A command decoding a `t=f`, `t=t` or `t=s` source, a PNG, or a zlib
+  payload that declares at least 256 KiB of pixels (`s=`×`v=`×bytes per pixel) pauses the PTY parse until it is stored
+  and answered. Meanwhile a window's pulls, stats reads, a shutdown, and input that changes no size or input owner while
+  nothing is held and no daemon report is owed run at once; every other session command applies after it, in arrival
+  order. The child-exit check, the daemon's own focus, color-scheme and resize reports, and search walks resume once the
+  output after the image has been drained.
 - Shared-memory unlinks: Up to 16 deferred segment names per session. Subsequent segments trigger immediate unlinking of
   the oldest entry.

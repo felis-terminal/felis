@@ -8,6 +8,7 @@ fn apc(n: usize) -> PtyEffect {
         body: format!("Gi={n}").into_bytes(),
         cursor_row: 0,
         cursor_col: 0,
+        stops_parse: false,
     })
 }
 
@@ -170,6 +171,7 @@ proptest! {
                         body: buf[..len].to_vec(),
                         cursor_row: 0,
                         cursor_col: 0,
+                        stops_parse: false,
                     })),
                 ),
             };

@@ -1023,6 +1023,7 @@ struct Registered {
     cmd: mpsc::Sender<SessionCmd>,
     input_budget: Arc<Semaphore>,
     done: watch::Receiver<bool>,
+    shutdown: Arc<crate::pool::ShutdownSignal>,
     live: bool,
 }
 
@@ -1059,7 +1060,7 @@ impl Registered {
     async fn roll_back(&mut self) {
         let _entry = self.pool.lock().await.remove(self.id);
         // A failed send means the task already ended.
-        drop(self.cmd.send(SessionCmd::Shutdown).await);
+        let _delivered = self.shutdown.send(&self.cmd).await;
         let wait = async {
             while !*self.done.borrow_and_update() {
                 if self.done.changed().await.is_err() {
@@ -1085,7 +1086,7 @@ impl Drop for Registered {
         // A panic unwound past every `roll_back`; `Drop` cannot await,
         // so the supervisor is left to finish the reap.
         error!(id = ?self.id, "a half-built session was dropped without a rollback");
-        if self.cmd.try_send(SessionCmd::Shutdown).is_ok() {
+        if self.shutdown.try_send(&self.cmd) {
             // The owner task removes its own pool entry on the way out.
             return;
         }
@@ -1094,11 +1095,12 @@ impl Drop for Registered {
         // detached task that can block on the send.
         let pool = Arc::clone(&self.pool);
         let cmd = self.cmd.clone();
+        let shutdown = Arc::clone(&self.shutdown);
         let id = self.id;
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
             handle.spawn(async move {
                 let _entry = pool.lock().await.remove(id);
-                drop(cmd.send(SessionCmd::Shutdown).await);
+                let _delivered = shutdown.send(&cmd).await;
             });
         } else {
             error!(id = ?id, "no runtime left to roll back on; the session stays in the pool");
@@ -1201,6 +1203,7 @@ async fn create_session(
             cmd: life.cmd,
             input_budget: life.input_budget,
             done: life.done,
+            shutdown: life.shutdown,
             live: true,
         },
         // From the spawn, never a second pool lookup a concurrent destroy
@@ -1625,7 +1628,7 @@ async fn ops_reply(ctx: CreateCtx<'_>, msg: OpsToDaemonMsg) -> OpsToClientMsg {
                 let handle = pool.lock().await.remove(SessionId(id));
                 if let Some(handle) = handle {
                     // A failed send means the task already ended.
-                    drop(handle.cmd.send(SessionCmd::Shutdown).await);
+                    let _delivered = handle.shutdown().await;
                 }
             }
             OpsToClientMsg::Destroyed { resolved }
@@ -1991,7 +1994,7 @@ async fn drain_to_empty(pool: &Arc<Mutex<SessionPool>>, destroy: bool) {
         for handle in handles {
             // A failed send means the task already ended.
             if destroy {
-                drop(handle.cmd.send(SessionCmd::Shutdown).await);
+                let _delivered = handle.shutdown().await;
             }
             // The receiver drops when the session task returns, which
             // is what reaps the child: returning at the pool count

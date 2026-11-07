@@ -657,6 +657,15 @@ async fn profile_cat_pull_paced() {
     eprintln!("profile_cat_pull_paced: best {best_mibs:.1} MiB/s over {iters} iter(s)");
 }
 
+/// The `p` quantile of sorted `lat`, in milliseconds.
+fn percentile_ms(lat: &[Duration], p: f64) -> f64 {
+    if lat.is_empty() {
+        return f64::NAN;
+    }
+    let idx = ((lat.len() as f64 - 1.0) * p).round() as usize;
+    lat[idx].as_secs_f64() * 1e3
+}
+
 /// Echo latency (`KeyBytes` sent → glyph visible in the shadow):
 /// every per-keystroke cost except the GUI present/vsync.
 /// `FELIS_ECHO_PULL=1` runs pull-paced at 60 Hz, adding the 0–16 ms
@@ -756,13 +765,7 @@ async fn profile_echo_latency() {
     }
 
     lat.sort_unstable();
-    let pct = |p: f64| -> f64 {
-        if lat.is_empty() {
-            return f64::NAN;
-        }
-        let idx = ((lat.len() as f64 - 1.0) * p).round() as usize;
-        lat[idx].as_secs_f64() * 1e3
-    };
+    let pct = |p| percentile_ms(&lat, p);
     let mean = if lat.is_empty() {
         f64::NAN
     } else {
@@ -784,6 +787,120 @@ async fn profile_echo_latency() {
         mean,
     );
 
+    session.shutdown().await;
+}
+
+/// Typed text latency (`KeyBytes` sent → byte in the program's stdin)
+/// while the program streams full-HD PNG frames: what the session task
+/// makes a keystroke wait for while it dispatches an image.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "timing-sensitive latency probe; run with --ignored"]
+async fn profile_text_latency_during_image() {
+    use std::io::Write as _;
+    use std::time::Instant;
+
+    const SAMPLES: usize = 100;
+    const CHUNK: usize = 4096;
+
+    require_tool("sh");
+    let coreutils_dir = require_tool("cat")
+        .parent()
+        .expect("a PATH entry has a parent directory")
+        .to_path_buf();
+    let dir = tempfile::tempdir().unwrap();
+    let (w, h) = (1920u32, 1080u32);
+    let mut seed = 0x9e37_79b9_u32;
+    let pixels: Vec<u8> = (0..w * h * 4)
+        .map(|_| {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            (seed >> 24) as u8
+        })
+        .collect();
+    let mut png = Vec::new();
+    let mut encoder = png::Encoder::new(&mut png, w, h);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    let mut writer = encoder.write_header().unwrap();
+    writer.write_image_data(&pixels).unwrap();
+    writer.finish().unwrap();
+    let mut encoded = Vec::new();
+    felis_protocol::base64::encode_into(&png, &mut encoded);
+    let frame_path = dir.path().join("frame.kitty");
+    let mut frame = std::fs::File::create(&frame_path).unwrap();
+    let chunks: Vec<&[u8]> = encoded.chunks(CHUNK).collect();
+    for (i, chunk) in chunks.iter().enumerate() {
+        let head = match i {
+            0 => "a=T,i=1,f=100,C=1,q=2,m=1",
+            _ if i + 1 == chunks.len() => "m=0",
+            _ => "m=1",
+        };
+        frame
+            .write_all(format!("\x1b_G{head};").as_bytes())
+            .unwrap();
+        frame.write_all(chunk).unwrap();
+        frame.write_all(b"\x1b\\").unwrap();
+    }
+    frame.write_all(b"frame\r\n").unwrap();
+    drop(frame);
+    let typed_path = dir.path().join("typed");
+
+    let mut cmd = Command::new("/bin/sh");
+    cmd.args([
+        "-c",
+        &format!(
+            "stty raw -echo 2>/dev/null; (while :; do cat {}; done) & exec cat > {}",
+            frame_path.display(),
+            typed_path.display()
+        ),
+    ]);
+    cmd.env_clear();
+    cmd.env("PATH", format!("{}:/usr/bin:/bin", coreutils_dir.display()));
+    cmd.env("TERM", "xterm-256color");
+    let session = RealAppSession::spawn(cmd, false).await;
+    assert!(
+        session
+            .wait_for_shadow(|s| shadow_contains(s, "frame"), Duration::from_secs(20))
+            .await,
+        "the image stream never started"
+    );
+
+    let typed = || std::fs::metadata(&typed_path).map_or(0, |m| m.len());
+    let mut lat: Vec<Duration> = Vec::with_capacity(SAMPLES);
+    let mut timeouts = 0usize;
+    for i in 0..SAMPLES {
+        tokio::time::sleep(Duration::from_millis((i % 7) as u64)).await;
+        let before = typed();
+        let t0 = Instant::now();
+        session.send_input(b"k").await;
+        let deadline = t0 + Duration::from_secs(2);
+        loop {
+            if typed() > before {
+                lat.push(t0.elapsed());
+                break;
+            }
+            if Instant::now() >= deadline {
+                timeouts += 1;
+                break;
+            }
+            tokio::time::sleep(Duration::from_micros(200)).await;
+        }
+    }
+
+    lat.sort_unstable();
+    let pct = |p| percentile_ms(&lat, p);
+    eprintln!(
+        "profile_text_latency_during_image: n={} timeouts={} | min={:.3} p50={:.3} p90={:.3} p99={:.3} max={:.3} ms",
+        lat.len(),
+        timeouts,
+        pct(0.0),
+        pct(0.50),
+        pct(0.90),
+        pct(0.99),
+        pct(1.0),
+    );
     session.shutdown().await;
 }
 

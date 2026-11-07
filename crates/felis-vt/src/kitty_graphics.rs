@@ -8,6 +8,7 @@ pub mod inflate;
 // base64 lives in `felis-protocol` because `felis-grid`'s OSC 52 path
 // needs the same codec; re-exported so this path stays stable.
 pub use felis_protocol::base64;
+use felis_protocol::messages::ImageFormat;
 
 /// Borrows into the original APC buffer: the dispatcher copies what it
 /// needs before the parser advances.
@@ -89,22 +90,116 @@ pub fn control(controls: &[(u8, Vec<u8>)], key: u8) -> Option<&[u8]> {
 /// `key` read as a decimal number, so `C=01` means what `C=1` does.
 #[must_use]
 pub fn control_u32(controls: &[(u8, Vec<u8>)], key: u8) -> Option<u32> {
-    std::str::from_utf8(control(controls, key)?)
-        .ok()?
-        .parse()
-        .ok()
+    number(control(controls, key))
 }
 
 /// Whether kitty moves the cursor past the placement a completed command
 /// makes (`graphics.c` `handle_put_command`): `a=T` and `a=p` do unless
-/// `C=1` asks not to or `U=1` makes the placement virtual. The grid stops its parse on exactly these commands
-/// and the dispatcher moves the cursor on exactly these, so text after
-/// the image lands beside it.
+/// `C=1` asks not to or `U=1` makes the placement virtual. The grid stops
+/// its parse on exactly these commands and the dispatcher moves the
+/// cursor on exactly these, so text after the image lands beside it.
 #[must_use]
 pub fn moves_cursor(controls: &[(u8, Vec<u8>)]) -> bool {
-    matches!(control(controls, b'a'), Some(b"T" | b"p"))
-        && control_u32(controls, b'C') != Some(1)
-        && control_u32(controls, b'U') != Some(1)
+    StopKeys::read(controls).moves_cursor()
+}
+
+/// The pixel bytes an `o=z` raw transmission must declare (`s=` × `v=`
+/// × the format's bytes per pixel) for [`offloads_decode`] to take it.
+pub const OFFLOAD_INFLATE_BYTES: u64 = 256 * 1024;
+
+/// Whether a completed command decodes a file or shared-memory source, a
+/// PNG, or a zlib payload declaring at least [`OFFLOAD_INFLATE_BYTES`]:
+/// the decodes the daemon runs off its session task while the grid's
+/// parse waits (docs/explanation/protocols/kitty-graphics.md
+/// "Dispatcher architecture"). Each key reads as the dispatcher reads it.
+#[must_use]
+pub fn offloads_decode(controls: &[(u8, Vec<u8>)]) -> bool {
+    StopKeys::read(controls).offloads_decode()
+}
+
+/// The keys [`moves_cursor`] and [`offloads_decode`] read, each its last
+/// value, taken in one pass.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct StopKeys<'a> {
+    a: Option<&'a [u8]>,
+    t: Option<&'a [u8]>,
+    f: Option<&'a [u8]>,
+    o: Option<&'a [u8]>,
+    s: Option<&'a [u8]>,
+    v: Option<&'a [u8]>,
+    e: Option<&'a [u8]>,
+    c: Option<&'a [u8]>,
+    u: Option<&'a [u8]>,
+}
+
+impl<'a> StopKeys<'a> {
+    #[must_use]
+    pub fn read(controls: &'a [(u8, Vec<u8>)]) -> Self {
+        let mut keys = Self::default();
+        for (key, value) in controls {
+            let slot = match key {
+                b'a' => &mut keys.a,
+                b't' => &mut keys.t,
+                b'f' => &mut keys.f,
+                b'o' => &mut keys.o,
+                b's' => &mut keys.s,
+                b'v' => &mut keys.v,
+                b'e' => &mut keys.e,
+                b'C' => &mut keys.c,
+                b'U' => &mut keys.u,
+                _ => continue,
+            };
+            *slot = Some(value);
+        }
+        keys
+    }
+
+    /// [`moves_cursor`].
+    #[must_use]
+    pub fn moves_cursor(&self) -> bool {
+        matches!(self.a, Some(b"T" | b"p"))
+            && number(self.c) != Some(1)
+            && number(self.u) != Some(1)
+    }
+
+    /// [`offloads_decode`].
+    #[must_use]
+    pub fn offloads_decode(&self) -> bool {
+        let byte = |value: Option<&[u8]>| value.filter(|v| v.len() == 1).map(|v| v[0]);
+        let decodes = match byte(self.a).unwrap_or(b't') {
+            b't' | b'T' | b'f' => true,
+            b'q' => self.e.is_none(),
+            _ => false,
+        };
+        if !decodes {
+            return false;
+        }
+        if matches!(byte(self.t), Some(b'f' | b't' | b's')) {
+            return true;
+        }
+        let format = self.f.map_or(Some(32), |f| number(Some(f)));
+        if format == Some(100) {
+            return true;
+        }
+        if self.o != Some(b"z") {
+            return false;
+        }
+        let format = if format == Some(24) {
+            ImageFormat::Rgb24
+        } else {
+            ImageFormat::Rgba32
+        };
+        [self.s, self.v]
+            .map(|value| u64::from(number(value).unwrap_or(0)))
+            .into_iter()
+            .fold(format.bytes_per_pixel() as u64, u64::saturating_mul)
+            >= OFFLOAD_INFLATE_BYTES
+    }
+}
+
+#[inline]
+fn number(value: Option<&[u8]>) -> Option<u32> {
+    std::str::from_utf8(value?).ok()?.parse().ok()
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -542,6 +637,45 @@ mod tests {
         ] {
             assert_eq!(
                 moves_cursor(&controls(body)),
+                want,
+                "{}",
+                String::from_utf8_lossy(body)
+            );
+        }
+    }
+
+    #[test]
+    fn offloads_decode_takes_file_backed_png_and_large_zlib_decodes_alone() {
+        let controls = |body: &[u8]| -> Vec<(u8, Vec<u8>)> {
+            parse(body)
+                .unwrap()
+                .controls
+                .into_iter()
+                .map(|(k, v)| (k, v.to_vec()))
+                .collect()
+        };
+        for (body, want) in [
+            (&b"Ga=T,t=f"[..], true),
+            (b"Gt=t", true),
+            (b"Ga=f,i=1,t=s", true),
+            (b"Ga=q,i=1,f=100", true),
+            (b"Ga=q,i=1,f=100,e=1", false),
+            (b"Ga=p,i=1,f=100", false),
+            (b"Ga=d,t=f", false),
+            (b"Ga=c,i=1,t=f", false),
+            (b"Ga=tt,f=100", true),
+            (b"Gt=ff,f=32", false),
+            (b"Gf=0100", true),
+            (b"Gf=32", false),
+            (b"Gf=32,s=256,v=256,o=z", true),
+            (b"Gf=32,s=256,v=255,o=z", false),
+            (b"Gf=24,s=256,v=256,o=z", false),
+            (b"Gf=24,s=512,v=171,o=z", true),
+            (b"Gs=256,v=256", false),
+            (b"Gs=4294967295,v=4294967295,o=z", true),
+        ] {
+            assert_eq!(
+                offloads_decode(&controls(body)),
                 want,
                 "{}",
                 String::from_utf8_lossy(body)

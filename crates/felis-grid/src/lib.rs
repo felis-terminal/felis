@@ -920,6 +920,12 @@ pub struct ApcBody {
     pub cursor_row: u16,
     /// Cursor column (0-based) when the parser delivered the body.
     pub cursor_col: u16,
+    /// The parse stopped after this body because it completes a command
+    /// whose decode runs off the session task
+    /// ([`felis_vt::kitty_graphics::offloads_decode`]). Not dumped: a
+    /// restored parse is not stopped on it.
+    #[cfg_attr(feature = "state-dump", serde(skip))]
+    pub stops_parse: bool,
 }
 
 /// xterm special colors: bold, underline, blink, reverse, italic.

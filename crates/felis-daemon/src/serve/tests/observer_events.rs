@@ -153,11 +153,8 @@ async fn a_session_killed_while_running_is_removed_without_an_exit() {
         .await
         .remove(SessionId(session_id))
         .expect("the row");
-    handle
-        .cmd
-        .send(SessionCmd::Shutdown)
-        .await
-        .expect("the task is alive");
+    let delivered = handle.shutdown().await;
+    assert!(delivered, "the session task takes the shutdown");
     assert_eq!(
         items_until_removed(&mut rx, session_id).await,
         [NotifyToClientMsg::SessionRemoved { session_id }]
@@ -192,10 +189,9 @@ async fn a_row_published_after_its_task_ended_is_still_added_and_removed() {
     );
     let session_id = info.id;
     assert!(pool.lock().await.publish(SessionId(session_id)));
+    let shutdown = Arc::clone(&registered.shutdown);
     let cmd = registered.keep();
-    cmd.send(SessionCmd::Shutdown)
-        .await
-        .expect("the task is alive");
+    assert!(shutdown.send(&cmd).await, "the task is alive");
     assert_eq!(
         items_until_removed(&mut rx, session_id).await,
         [
@@ -429,16 +425,15 @@ async fn a_list_run_on_an_item_already_shows_what_the_item_reports() {
             );
         }
     }
-    // A tag that was already there changes nothing, so the next item is
+    let delivered = // A tag that was already there changes nothing, so the next item is
     // the removal rather than a second relabel.
     pool.lock()
         .await
         .handle_cloned(SessionId(session_id))
         .expect("the row")
-        .cmd
-        .send(SessionCmd::Shutdown)
-        .await
-        .expect("the task is alive");
+        .shutdown()
+        .await;
+    assert!(delivered, "the session task takes the shutdown");
     assert_eq!(
         observer.next().await,
         NotifyToClientMsg::SessionRemoved { session_id }

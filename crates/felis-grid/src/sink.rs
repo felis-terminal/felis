@@ -828,14 +828,18 @@ impl Sink for Grid {
             self.bell_pending = true;
             return;
         }
+        let (moves_cursor, offloads) = self.completed_graphics_command(body);
+        if offloads {
+            self.pty_effects.stop_after_last_apc();
+        }
         // Yield rather than drop past the cap: a producer placing an
         // image cell by cell sends hundreds of bodies in one write.
-        self.yield_pending =
-            self.completes_cursor_moving_placement(body) || self.pty_effects.apc_budget_spent();
+        self.yield_pending = moves_cursor || offloads || self.pty_effects.apc_budget_spent();
     }
 
     /// The daemon moves the cursor past a placement only once it has
-    /// dispatched the APC, so the parse stops there until it has
+    /// dispatched the APC, and decodes a heavy image off its task while
+    /// this parse waits, so the parse stops after either
     /// (`docs/explanation/protocols/kitty-graphics.md` "Dispatcher
     /// architecture").
     fn take_yield(&mut self) -> bool {
@@ -1190,14 +1194,17 @@ impl Grid {
 }
 
 impl Grid {
-    fn completes_cursor_moving_placement(&mut self, body: &[u8]) -> bool {
-        use felis_vt::kitty_graphics::{Step, moves_cursor, parse};
+    /// Whether `body` completes a command that moves the cursor, and one
+    /// whose decode the daemon offloads.
+    fn completed_graphics_command(&mut self, body: &[u8]) -> (bool, bool) {
+        use felis_vt::kitty_graphics::{Step, StopKeys, parse};
         let Some(cmd) = parse(body) else {
-            return false;
+            return (false, false);
         };
         let Step::Done { controls, .. } = self.graphics_tracker.step(&cmd) else {
-            return false;
+            return (false, false);
         };
-        moves_cursor(&controls)
+        let keys = StopKeys::read(&controls);
+        (keys.moves_cursor(), keys.offloads_decode())
     }
 }
