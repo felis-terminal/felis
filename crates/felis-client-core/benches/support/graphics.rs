@@ -7,6 +7,7 @@ use std::fmt::Write as _;
 use std::hint::black_box;
 use std::num::NonZeroU32;
 
+use bytes::{BufMut as _, BytesMut};
 use felis_client_core::{ClientImage, ImageId, ImageLayout, ImageShadow, ShadowScreen};
 use felis_daemon::graphics::{
     ApcCtx, ImageEvent, ShmDeferral, dispatch_apc_body, materialize_image_events,
@@ -18,7 +19,7 @@ use felis_grid::{
 use felis_protocol::{
     MessageKind,
     codec::{decode, encode},
-    frame::{Frame, decode as decode_frame},
+    frame::{Frame, HEADER_LEN, LEN_OVERHEAD, decode as decode_frame},
     kitty_graphics::placeholder::{PLACEHOLDER, Rank, diacritic_for},
     messages::{GridMsg, ImageMsg, MAX_SESSION_IMAGE_BYTES},
 };
@@ -685,6 +686,13 @@ fn frame_into(out: &mut Vec<u8>, kind: MessageKind, body: &[u8]) {
     .expect("bench bodies are inside the ceiling");
 }
 
+fn frame_onto(out: &mut BytesMut, kind: MessageKind, body: &[u8]) {
+    let len = u32::try_from(body.len()).expect("bench bodies are inside the ceiling");
+    out.put_u32_le(len + LEN_OVERHEAD);
+    out.put_u16_le(kind.as_u16());
+    out.extend_from_slice(body);
+}
+
 /// One session's daemon state and one attached client's mirror of it.
 pub(crate) struct Pipeline {
     parser: Parser,
@@ -695,6 +703,7 @@ pub(crate) struct Pipeline {
     shm: ShmDeferral,
     reassembler: Reassembler,
     scratch: Vec<u8>,
+    wire: BytesMut,
     clusters_sent: usize,
     shadow: ShadowScreen,
     image_shadow: ImageShadow,
@@ -712,6 +721,7 @@ impl Pipeline {
             shm: ShmDeferral::default(),
             reassembler: Reassembler::new(),
             scratch: Vec::with_capacity(PTY_READ),
+            wire: BytesMut::new(),
             clusters_sent: 0,
             shadow: ShadowScreen::new(ROWS, COLS),
             image_shadow: ImageShadow::new(),
@@ -800,17 +810,16 @@ impl Pipeline {
         apply_diffs(&self.scratch, &mut self.shadow);
         emit_diffs_with(&mut self.grid, &mut self.scratch, true);
         apply_diffs(&self.scratch, &mut self.shadow);
-        self.scratch.clear();
         for msg in materialize_image_events(&self.events, &self.images, true) {
-            frame_into(&mut self.scratch, MessageKind::Image, &encode(&msg));
+            frame_onto(&mut self.wire, MessageKind::Image, &encode(&msg));
         }
         self.events.clear();
-        let mut rest = &self.scratch[..];
+        let mut rest = self.wire.split().freeze();
         while !rest.is_empty() {
-            let (frame, n) = decode_frame(rest).expect("frame decodes");
-            let msg: ImageMsg = decode(frame.body).unwrap();
+            let (_, n) = decode_frame(&rest).expect("frame decodes");
+            let frame = rest.split_to(n);
+            let msg: ImageMsg = decode(frame.slice(HEADER_LEN..)).unwrap();
             self.image_shadow.apply(&msg).expect("image shadow apply");
-            rest = &rest[n..];
         }
     }
 

@@ -49,6 +49,7 @@ directories = { workspace = true, optional = true }
 rustix = { workspace = true }
 
 [dev-dependencies]
+bytes = { workspace = true }
 felis-transport = { workspace = true, features = ["test-util"] }
 tokio = { workspace = true, features = [
   "macros",
