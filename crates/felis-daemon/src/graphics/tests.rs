@@ -1862,6 +1862,199 @@ fn a_same_frame_compose_copies_the_source_rectangle_as_it_was() {
     assert_eq!(root[..], [0, 1, 2, 3, 4, 5, 6, 7, 0, 1, 2, 3, 4, 5, 6, 7]);
 }
 
+const OPAQUE: [u8; 4] = [0x51, 0x52, 0x53, 0xFF];
+const CLEAR: [u8; 4] = [0x61, 0x62, 0x63, 0x00];
+
+/// Pixel `i` of a 3x2 RGBA canvas whose six pixels all differ, with
+/// half alpha so an opaque write is visible in the alpha byte.
+fn canvas_pixel(tag: u8, i: u8) -> [u8; 4] {
+    [tag, i, i + 0x10, 0x80]
+}
+
+fn canvas(tag: u8) -> Vec<u8> {
+    (0..6).flat_map(|i| canvas_pixel(tag, i)).collect()
+}
+
+fn with_pixels(mut canvas: Vec<u8>, writes: &[(usize, [u8; 4])]) -> Vec<u8> {
+    for &(i, px) in writes {
+        canvas[i * 4..i * 4 + 4].copy_from_slice(&px);
+    }
+    canvas
+}
+
+/// Image 1 as a 3x2 RGBA root of `canvas(0xA0)` plus a full-canvas
+/// frame 2 of `canvas(0xB0)`.
+fn two_frame_canvas() -> (
+    felis_grid::Grid,
+    felis_grid::images::ImageStore,
+    felis_grid::images::Placements,
+) {
+    let (mut grid, mut images, mut placements) = handler_state();
+    let root: [(u8, &[u8]); 6] = [
+        (b'a', b"t"),
+        (b'i', b"1"),
+        (b'f', b"32"),
+        (b's', b"3"),
+        (b'v', b"2"),
+        (b't', b"d"),
+    ];
+    dispatch_controls(
+        &mut grid,
+        &mut images,
+        &mut placements,
+        &root,
+        &b64(&canvas(0xA0)),
+    );
+    let second: [(u8, &[u8]); 6] = [
+        (b'a', b"f"),
+        (b'i', b"1"),
+        (b'f', b"32"),
+        (b's', b"3"),
+        (b'v', b"2"),
+        (b'X', b"1"),
+    ];
+    let reply = dispatch_controls(
+        &mut grid,
+        &mut images,
+        &mut placements,
+        &second,
+        &b64(&canvas(0xB0)),
+    );
+    assert_eq!(reply, Some(b"\x1b_Gi=1;OK\x1b\\".to_vec()));
+    (grid, images, placements)
+}
+
+fn send_frame(
+    state: &mut (
+        felis_grid::Grid,
+        felis_grid::images::ImageStore,
+        felis_grid::images::Placements,
+    ),
+    controls: &[(u8, &[u8])],
+    data: &[u8],
+) {
+    let mut all: Vec<(u8, &[u8])> = vec![(b'a', b"f"), (b'i', b"1")];
+    all.extend_from_slice(controls);
+    let (grid, images, placements) = state;
+    let reply = dispatch_controls(grid, images, placements, &all, &b64(data));
+    assert!(
+        reply.as_deref().is_some_and(|r| r.ends_with(b";OK\x1b\\")),
+        "{controls:?}: {reply:?}",
+    );
+}
+
+fn frame_pixels_of(images: &felis_grid::images::ImageStore, index: usize) -> Vec<u8> {
+    images
+        .get(ImageId(1))
+        .unwrap()
+        .frame(index)
+        .unwrap()
+        .pixels
+        .to_vec()
+}
+
+#[test]
+fn a_new_frame_blends_its_offset_rectangle_onto_its_c_base_frame_and_ignores_y() {
+    let mut state = two_frame_canvas();
+    send_frame(
+        &mut state,
+        &[
+            (b'c', b"2"),
+            (b'Y', b"4294967295"),
+            (b'f', b"32"),
+            (b's', b"2"),
+            (b'v', b"1"),
+            (b'x', b"1"),
+            (b'y', b"1"),
+        ],
+        &[OPAQUE, CLEAR].concat(),
+    );
+    assert_eq!(state.1.get(ImageId(1)).unwrap().frame_count(), 3);
+    assert_eq!(
+        frame_pixels_of(&state.1, 2),
+        with_pixels(canvas(0xB0), &[(4, OPAQUE)]),
+    );
+    assert_eq!(frame_pixels_of(&state.1, 1), canvas(0xB0));
+}
+
+#[test]
+fn a_new_frame_without_c_blends_its_offset_rectangle_onto_a_y_filled_canvas() {
+    let mut state = two_frame_canvas();
+    send_frame(
+        &mut state,
+        &[
+            (b'Y', b"270544960"),
+            (b'f', b"32"),
+            (b's', b"1"),
+            (b'v', b"2"),
+            (b'x', b"2"),
+        ],
+        &[OPAQUE, CLEAR].concat(),
+    );
+    let y = [0x10, 0x20, 0x30, 0x40];
+    assert_eq!(
+        frame_pixels_of(&state.1, 2),
+        with_pixels(y.repeat(6), &[(2, OPAQUE)]),
+    );
+}
+
+#[test]
+fn an_in_place_edit_blends_its_offset_rectangle_and_ignores_c_and_y() {
+    let mut state = two_frame_canvas();
+    send_frame(
+        &mut state,
+        &[
+            (b'r', b"1"),
+            (b'c', b"2"),
+            (b'Y', b"4294967295"),
+            (b'f', b"32"),
+            (b's', b"2"),
+            (b'v', b"2"),
+            (b'x', b"1"),
+        ],
+        &[OPAQUE, CLEAR, CLEAR, OPAQUE].concat(),
+    );
+    assert_eq!(state.1.get(ImageId(1)).unwrap().frame_count(), 2);
+    assert_eq!(
+        frame_pixels_of(&state.1, 0),
+        with_pixels(canvas(0xA0), &[(1, OPAQUE), (5, OPAQUE)]),
+    );
+}
+
+#[test]
+fn an_rgb_frame_lands_opaque_on_an_rgba_canvas_when_appended_and_when_edited() {
+    let rgb = [0x71, 0x72, 0x73, 0x81, 0x82, 0x83];
+    let rgb_rect: [(u8, &[u8]); 3] = [(b'f', b"24"), (b's', b"1"), (b'v', b"2")];
+
+    let mut state = two_frame_canvas();
+    send_frame(
+        &mut state,
+        &[rgb_rect.as_slice(), &[(b'c', b"1"), (b'x', b"1")]].concat(),
+        &rgb,
+    );
+    let rgb_writes = |first: usize| {
+        [
+            (first, [0x71, 0x72, 0x73, 0xFF]),
+            (first + 3, [0x81, 0x82, 0x83, 0xFF]),
+        ]
+    };
+    assert_eq!(
+        frame_pixels_of(&state.1, 2),
+        with_pixels(canvas(0xA0), &rgb_writes(1)),
+    );
+
+    let mut state = two_frame_canvas();
+    send_frame(
+        &mut state,
+        &[rgb_rect.as_slice(), &[(b'r', b"2"), (b'x', b"2")]].concat(),
+        &rgb,
+    );
+    assert_eq!(
+        frame_pixels_of(&state.1, 1),
+        with_pixels(canvas(0xB0), &rgb_writes(2)),
+    );
+}
+
 /// The producer-facing half of the frame cap: `a=f` past 4096 answers
 /// `ENOTSUP` (kitty's status set has no `ENOSPC`) and leaves the
 /// animation exactly as it was, rather than evicting a frame the
