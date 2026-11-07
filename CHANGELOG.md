@@ -32,6 +32,10 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
   rectangles alone rather than the whole frame, so a terminal browser's or notcurses' small updates to a large image no
   longer re-send it. Protocol minor 4 adds the region transfer, which a window opts into on attach; a JSON protocol
   attachment, or a window or daemon at minor 3 or below, keeps receiving whole frames.
+- **Protocol**: the daemon no longer sends OSC 133 prompt marks (`PromptMark`) to a window, a JSON protocol attachment
+  included, either in the attach burst or live, so reattaching to a session with long history no longer ships a frame
+  per retained mark. An `Ops` attachment still receives live marks, and a window still accepts them from an older
+  daemon.
 - **Graphics**: while felis decodes a large Kitty image (a PNG, a file or shared-memory source, or a large compressed
   frame), keystrokes still reach the program and windows still redraw; only the program's later output waits for the
   image.

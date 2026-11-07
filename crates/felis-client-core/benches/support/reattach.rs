@@ -270,8 +270,6 @@ pub(crate) struct Window {
     shadow: ShadowScreen,
     image_shadow: ImageShadow,
     layout: ImageLayout,
-    /// The shadow keeps no prompt marks, so the check counts them here.
-    marks: usize,
 }
 
 impl Window {
@@ -280,7 +278,6 @@ impl Window {
             shadow: ShadowScreen::new(ROWS, COLS),
             image_shadow: ImageShadow::new(),
             layout: ImageLayout::new(),
-            marks: 0,
         }
     }
 
@@ -293,7 +290,6 @@ impl Window {
             let frame = burst.split_to(n);
             if kind == MessageKind::Grid.as_u16() {
                 let msg: GridMsg = decode(&frame[HEADER_LEN..]).unwrap();
-                self.marks += usize::from(matches!(msg, GridMsg::PromptMark { .. }));
                 self.shadow.apply(&msg).expect("shadow apply");
             } else {
                 let msg: ImageMsg = decode(frame.slice(HEADER_LEN..)).unwrap();
@@ -309,9 +305,9 @@ impl Window {
         );
     }
 
-    /// The window holds the session's screen, its prompt marks and every
-    /// image on screen, so a burst that shipped less fails the bench
-    /// instead of reading as a win.
+    /// The window holds the session's screen and every image on screen,
+    /// so a burst that shipped less fails the bench instead of reading as
+    /// a win.
     pub(crate) fn check(&self, session: &Session) {
         let screen = self.shadow.screen();
         let grid = &session.grid;
@@ -336,8 +332,6 @@ impl Window {
                 );
             }
         }
-        assert!(self.marks > 0);
-        assert_eq!(self.marks, grid.prompt_marks().len(), "prompt marks");
         for id in session.images.iter_ids() {
             let shown = self.image_shadow.image(id).map(ClientImage::pixels);
             let held = session.images.get(id).map(ImageEntry::pixels);

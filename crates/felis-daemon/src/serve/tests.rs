@@ -171,6 +171,13 @@ fn seeded_stream(grid: &Grid) -> SubscriberStream {
     seeded_stream_into(grid, &mut Vec::new())
 }
 
+fn ops_stream_into(grid: &Grid, out: &mut Vec<OutEvent>) -> SubscriberStream {
+    let images = felis_grid::images::ImageStore::new(1024);
+    let placements = felis_grid::images::Placements::new();
+    SubscriberStream::rehydrated(ConnectionMode::Ops, grid, &images, &placements, out)
+        .expect("rehydrate compose")
+}
+
 fn compose_one(
     grid: &mut Grid,
     stream: &mut SubscriberStream,
@@ -1366,6 +1373,30 @@ fn browsing_into_scrollback_ships_the_entries_those_rows_name_first() {
     );
 }
 
+fn prompt_mark_count(out: &[OutEvent]) -> usize {
+    grid_msgs(out)
+        .iter()
+        .filter(|m| matches!(m, GridMsg::PromptMark { .. }))
+        .count()
+}
+
+/// A window's shadow drops prompt marks and its prompt jump resolves
+/// daemon-side, so neither its burst nor its live cycles carry them.
+#[test]
+fn a_window_is_sent_no_prompt_marks_in_its_burst_or_its_cycles() {
+    let mut grid = Grid::new(2, 8);
+    let mut parser = felis_vt::Parser::new();
+    parser.advance(&mut grid, b"\x1b]133;A\x07$ \x1b]133;B\x07");
+    let mut burst = Vec::new();
+    let mut stream = seeded_stream_into(&grid, &mut burst);
+    assert_eq!(prompt_mark_count(&burst), 0, "burst: {burst:?}");
+
+    parser.advance(&mut grid, b"\x1b]133;C\x07\x1b]133;D;0\x07");
+    let mut out = Vec::new();
+    compose_one(&mut grid, &mut stream, &mut out).expect("compose ok");
+    assert_eq!(prompt_mark_count(&out), 0, "cycle: {out:?}");
+}
+
 /// The cursor counts absolute ordinals minus `prompt_marks_pruned`, so a
 /// front-prune cannot skip a mark the subscriber never received.
 #[test]
@@ -1373,7 +1404,7 @@ fn compose_diffs_streams_marks_across_a_front_prune_without_skipping() {
     let mut grid = Grid::new(2, 8);
     let mut parser = felis_vt::Parser::new();
     parser.advance(&mut grid, b"\x1b[1;1H\x1b]133;A\x07");
-    let mut stream = seeded_stream(&grid);
+    let mut stream = ops_stream_into(&grid, &mut Vec::new());
     assert_eq!(stream.diff.prompt_marks_sent, 1);
 
     for _ in 0..felis_grid::DEFAULT_SCROLLBACK_ROWS + 5 {
@@ -1385,18 +1416,17 @@ fn compose_diffs_streams_marks_across_a_front_prune_without_skipping() {
     parser.advance(&mut grid, b"\x1b]133;A\x07");
     let mut out = Vec::new();
     compose_one(&mut grid, &mut stream, &mut out).expect("compose ok");
-    let marks = grid_msgs(&out)
-        .into_iter()
-        .filter(|m| matches!(m, GridMsg::PromptMark { .. }))
-        .count();
-    assert_eq!(marks, 1, "the post-prune mark ships once, not skipped");
+    assert_eq!(
+        prompt_mark_count(&out),
+        1,
+        "the post-prune mark ships once, not skipped"
+    );
     let mut out2 = Vec::new();
     compose_one(&mut grid, &mut stream, &mut out2).expect("compose ok");
-    assert!(
-        grid_msgs(&out2)
-            .iter()
-            .all(|m| !matches!(m, GridMsg::PromptMark { .. })),
-        "no mark re-fires on a quiescent cycle",
+    assert_eq!(
+        prompt_mark_count(&out2),
+        0,
+        "no mark re-fires on a quiescent cycle"
     );
 }
 

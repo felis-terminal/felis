@@ -19,7 +19,6 @@ pub const fn answers_pull(msg: &GridMsg) -> bool {
         GridMsg::RowDelta { .. }
             | GridMsg::Scrolled { .. }
             | GridMsg::CursorState { .. }
-            | GridMsg::PromptMark { .. }
             | GridMsg::ViewportState { .. }
             | GridMsg::Hyperlink { .. }
             | GridMsg::Cluster { .. }
@@ -214,7 +213,7 @@ impl PresentRetry {
 mod tests {
     use super::*;
     use felis_protocol::RowPayload;
-    use felis_protocol::messages::{AttentionSource, CursorStyle, PromptKind, ScrollDirection};
+    use felis_protocol::messages::{AttentionSource, CursorStyle, ScrollDirection};
 
     fn cycle_frame() -> GridMsg {
         GridMsg::RowDelta {
@@ -355,16 +354,17 @@ mod tests {
         assert!(!s.cycle_open(), "the marker closed it");
     }
 
-    /// An `Ops` subscriber's cycle can carry no rows at all and is
-    /// bounded the same way.
+    /// A cycle can carry no rows at all and is bounded the same way.
     #[test]
     fn a_cycle_without_rows_is_still_bounded_by_the_marker() {
         let mut s = marked();
         assert!(s.take_due());
-        s.on_frame(&GridMsg::PromptMark {
-            line: 7,
-            kind: PromptKind::PromptStart,
-            exit_code: None,
+        s.on_frame(&GridMsg::CursorState {
+            row: 0,
+            col: 0,
+            visible: true,
+            style: CursorStyle::Block,
+            blink: false,
         });
         assert!(s.cycle_open());
         assert!(!s.take_due());

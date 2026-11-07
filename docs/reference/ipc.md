@@ -602,6 +602,7 @@ narrower than what the mode admits on receipt, and which the daemon may narrow f
 | the full attach burst (rows, cursor, meta, images)         | ✅       | ❌    | ❌         |
 | the live grid stream (rows, cursor, viewport, scrolls)     | ✅       | ❌    | ❌         |
 | live image events and the session-meta facets              | ✅       | ❌    | ❌         |
+| live prompt marks (`PromptMark`)                           | ❌       | ✅    | ❌         |
 
 - **`Window`** is an interactive window: it attaches to one session and streams it, and reads the roster to populate its
   session picker. The window-management pushes above are its alone, since each one moves or alerts a window and no other
@@ -1051,15 +1052,15 @@ carries none. What rides between the markers depends on `Hello.mode` ("Connectio
   `Search` reply it asks for. The two mode messages stay because a driver encodes its keys and mouse events against
   them, and live `PromptMark` frames still reach an `Ops` subscriber after the burst.
 
-**Compose cycles.** A **cycle** is what the daemon composes in one pass: mode flags, prompt marks, viewport state, a
-scroll directive, the registry entries the rows reference, one or more `RowDelta` frames, cursor state, and the registry
-tail, in that order. On a pull-paced connection each cycle answers one `Input::NextGridFrame` and ends in `CycleEnd`:
-exactly one per non-empty cycle, with nothing of that cycle after it. An empty cycle ships nothing at all, the marker
-included; the pull stays armed daemon-side and outstanding client-side, and the next dirty cycle answers it. The marker
-is what clears the client's outstanding pull and releases its grid paint, so no redraw source (a pending redraw, a
-cursor blink, an animation tick, a facet push) can put a cycle's `Scrolled` on screen without the rows and cursor that
-follow it. An eager-push peer receives no `CycleEnd`. The rehydrate burst is the other boundary and keeps its own: it
-ships eagerly at attach, answers no pull, and ends at `RehydrateEnd`.
+**Compose cycles.** A **cycle** is what the daemon composes in one pass: mode flags, prompt marks (`Ops` only), viewport
+state, a scroll directive, the registry entries the rows reference, one or more `RowDelta` frames, cursor state, and the
+registry tail, in that order. On a pull-paced connection each cycle answers one `Input::NextGridFrame` and ends in
+`CycleEnd`: exactly one per non-empty cycle, with nothing of that cycle after it. An empty cycle ships nothing at all,
+the marker included; the pull stays armed daemon-side and outstanding client-side, and the next dirty cycle answers it.
+The marker is what clears the client's outstanding pull and releases its grid paint, so no redraw source (a pending
+redraw, a cursor blink, an animation tick, a facet push) can put a cycle's `Scrolled` on screen without the rows and
+cursor that follow it. An eager-push peer receives no `CycleEnd`. The rehydrate burst is the other boundary and keeps
+its own: it ships eagerly at attach, answers no pull, and ends at `RehydrateEnd`.
 
 **Scroll directives.** The daemon emits a `Scrolled` for every scroll of the scrolling region (a line feed, `IND`, `NEL`
 or `RI` at a margin, `SU`, `SD`) and for `IL` / `DL`, whose band runs from the cursor row to the bottom margin, whether
@@ -1072,14 +1073,14 @@ row. The pending directive queue is cleared on rehydrate, since the burst restat
 outside the announced grid closes the attachment, and the daemon's send-side rules across a resize are stated with it
 ("Grid admission" below).
 
-**Session meta and events.** Title, cwd, prompt marks, theme and palette overrides, pointer shape, the Kitty keyboard
-flags, and the mode-bit mirror are facets the daemon sends as they change; the palette override layer replays on
-rehydrate, and no row payload carries a palette entry, since a cell names an index rather than a color. `Attention` asks
-for the user's attention on a BEL or on a desktop notification fired on this attached session, whose content goes to
-observers ("Notify (kind = 7)" above); the client answers either with the same non-disruptive window-attention request.
-`ClipboardSet`, a program's `OSC 52` write, is the one facet not broadcast: the daemon sends it to the initiating
-(active) subscriber only, per-client clipboard scope ([security-model.md](../explanation/security-model.md)). It is
-distinct from a `Region::Reply` a `pipe → clipboard` chord asked for, which is the user's own action.
+**Session meta and events.** Title, cwd, theme and palette overrides, pointer shape, the Kitty keyboard flags, and the
+mode-bit mirror are facets the daemon sends as they change; the palette override layer replays on rehydrate, and no row
+payload carries a palette entry, since a cell names an index rather than a color. `Attention` asks for the user's
+attention on a BEL or on a desktop notification fired on this attached session, whose content goes to observers ("Notify
+(kind = 7)" above); the client answers either with the same non-disruptive window-attention request. `ClipboardSet`, a
+program's `OSC 52` write, is the one facet not broadcast: the daemon sends it to the initiating (active) subscriber
+only, per-client clipboard scope ([security-model.md](../explanation/security-model.md)). It is distinct from a
+`Region::Reply` a `pipe → clipboard` chord asked for, which is the user's own action.
 
 **Command output.** `CommandOutput` carries the text of a finished shell command, cut at its `OSC 133 ; D` mark, and how
 much of it was omitted: a count of rows, or an unknown amount ([accessibility.md](accessibility.md#announcements)). It
