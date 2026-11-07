@@ -264,16 +264,13 @@ fn first_line(stderr: &[u8]) -> String {
         .to_owned()
 }
 
-/// `ssh_args` are spliced verbatim, as the relay carrier splices them.
 fn remote_upgrade_command(
     destination: &str,
     ssh_args: &[String],
     format: Format,
 ) -> std::process::Command {
-    let mut cmd = std::process::Command::new("ssh");
-    cmd.args(ssh_args)
-        .arg(destination)
-        .args(["felis", "daemon", "upgrade", "--format"])
+    let mut cmd = felis_client_core::ssh_command(ssh_args, destination);
+    cmd.args(["felis", "daemon", "upgrade", "--format"])
         .arg(match format {
             Format::Human => "human",
             Format::Json => "json",
@@ -680,6 +677,7 @@ mod tests {
             [
                 "-p",
                 "2222",
+                "--",
                 "user@devbox",
                 "felis",
                 "daemon",

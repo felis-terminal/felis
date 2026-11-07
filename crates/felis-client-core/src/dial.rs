@@ -13,7 +13,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use crate::config::ShellConfig;
 use crate::connector::{
     AttachIntent, Carrier, CarrierConnection, ConnectError, Connection, Offer, RemoteSpawn,
-    connect_carrier,
+    connect_carrier, connect_carrier_armed,
 };
 use crate::roster::{RingKey, pick_exit_switch_target};
 use crate::spawn::SpawnConnectError;
@@ -186,9 +186,11 @@ pub async fn redial_session(
                                 source,
                             })?
                     }
-                    None => reconnector.dial_launch(LANDING_REMOTE_SPAWN).await?,
+                    None => reconnector.dial_launch_armed(LANDING_REMOTE_SPAWN).await?,
                 };
-                land_on(conn, landing, DialIntent::Switch, offer).await
+                let mut landed = land_on(conn, landing, DialIntent::Switch, offer).await?;
+                landed.conn.release_relay();
+                Ok(landed)
             };
             match tokio::time::timeout(RECONNECT_ATTEMPT_TIMEOUT, attempt).await {
                 Ok(landed) => landed,
@@ -259,6 +261,15 @@ impl Reconnector {
         &self,
         remote_spawn: RemoteSpawn,
     ) -> Result<CarrierConnection, DialError> {
+        let mut conn = self.dial_launch_armed(remote_spawn).await?;
+        conn.release_relay();
+        Ok(conn)
+    }
+
+    async fn dial_launch_armed(
+        &self,
+        remote_spawn: RemoteSpawn,
+    ) -> Result<CarrierConnection, DialError> {
         match self.carrier.local_socket() {
             Some(socket) => crate::spawn::connect_or_spawn_daemon(&socket, self.offer)
                 .await
@@ -266,7 +277,7 @@ impl Reconnector {
                     socket: socket.display().to_string(),
                     source,
                 }),
-            None => connect_carrier(self.carrier.clone(), self.offer, remote_spawn)
+            None => connect_carrier_armed(self.carrier.clone(), self.offer, remote_spawn)
                 .await
                 .map_err(DialError::SshStdio),
         }
@@ -458,17 +469,20 @@ pub async fn dial_and_land_within(
     let intent = landing.intent();
     let landing = landing.with_env_base_for(&carrier);
     let connect = async {
-        connect_carrier(carrier, offer, LANDING_REMOTE_SPAWN)
+        connect_carrier_armed(carrier, offer, LANDING_REMOTE_SPAWN)
             .await
             .map_err(|source| DialError::Connect { intent, source })
     };
     if landing.bounds_connect_only() {
-        let conn = bounded(budget, connect).await??;
+        let mut conn = bounded(budget, connect).await??;
+        conn.release_relay();
         return land_on(conn, landing, intent, offer).await;
     }
     bounded(budget, async {
         let conn = connect.await?;
-        land_on(conn, landing, intent, offer).await
+        let mut landed = land_on(conn, landing, intent, offer).await?;
+        landed.conn.release_relay();
+        Ok(landed)
     })
     .await?
 }

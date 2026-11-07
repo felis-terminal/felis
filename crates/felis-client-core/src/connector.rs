@@ -7,11 +7,11 @@ mod requests;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use self::carrier::connect_carrier_with_retry;
 pub use self::carrier::{
     BoundedDialError, Carrier, CarrierConnection, CarrierReader, CarrierWriter, Offer, RemoteSpawn,
-    connect, connect_carrier, dial_bounded,
+    connect, connect_carrier, dial_bounded, ssh_command,
 };
+pub(crate) use self::carrier::{connect_carrier_armed, connect_carrier_with_retry};
 pub use self::correlated::{
     Closed, CorrelatedHandle, DEFAULT_STREAM_BUFFER, Family, Inbound, MAX_OUTSTANDING_REQUESTS,
     MAX_QUEUED_BYTES, STREAM_BYTE_BUDGET, StreamEnd, StreamEvent, StreamReceiver,
@@ -363,6 +363,9 @@ pub struct Connection<R = ReadHalf, W = WriteHalf> {
     /// a peer whose framing is not trusted, so the next request is
     /// refused instead of read.
     abandoned: bool,
+    /// The SSH carrier's `ssh` child while a bounded dial may still
+    /// abandon this connection.
+    relay: Option<carrier::RelayChild>,
 }
 
 impl<R, W> Connection<R, W> {
@@ -390,6 +393,15 @@ impl<R, W> Connection<R, W> {
             daemon_identity: None,
             image_regions: false,
             abandoned: false,
+            relay: None,
+        }
+    }
+
+    /// Ends the kill-on-drop of an SSH carrier's `ssh` child that
+    /// [`carrier::connect_carrier_armed`] left armed.
+    pub(crate) fn release_relay(&mut self) {
+        if let Some(relay) = self.relay.take() {
+            relay.release();
         }
     }
 

@@ -41,6 +41,9 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
   erases the whole character, instead of leaving its other cells behind.
 - **CLI**: `felis notifications subscribe` ends with its clean terminal when the daemon stops, instead of exiting `2`
   with `daemon_lost`.
+- **SSH**: a remote window reconnecting over a dead route no longer leaves one `ssh` process behind per attempt: an
+  attempt that gives up ends its `ssh`. A `--host` destination that starts with `-` reaches `ssh` as a destination
+  rather than as an option.
 
 ## [0.4.1] - 2026-11-03
 
