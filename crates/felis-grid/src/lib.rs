@@ -2145,9 +2145,12 @@ impl Grid {
                 break;
             }
         }
-        let mut combined: Vec<Vec<Cell>> = Vec::with_capacity(sb_len + live_extent);
-        let mut continued: Vec<bool> = Vec::with_capacity(sb_len + live_extent);
         let old_cols_usize = usize::from(old_cols);
+        let mut combined = PackedRows::with_capacity(
+            sb_len + live_extent,
+            (sb_len + live_extent) * old_cols_usize,
+        );
+        let mut continued: Vec<bool> = Vec::with_capacity(sb_len + live_extent);
         for (i, (cells, cont)) in self
             .screen
             .rows_with_wrap(AltScreenRows::Include)
@@ -2156,22 +2159,22 @@ impl Grid {
         {
             let screen_row = i.checked_sub(sb_len).and_then(|r| u16::try_from(r).ok());
             if screen_row.is_some_and(|r| blank.as_ref().is_some_and(|b| b.contains(&r))) {
-                combined.push(vec![Cell::default(); old_cols_usize]);
+                combined.push_padded(&[], old_cols_usize);
                 continued.push(false);
                 continue;
             }
             let blank_end = blank.as_ref().map(|b| b.end);
             let cont = cont && (blank_end.is_none() || screen_row != blank_end);
-            let mut row = cells.to_vec();
             if i < sb_len {
                 // Pad history rows back to full width: the walk clips
                 // at the occupancy watermark, but the rewrap
                 // reconstructs bare-LF column carries from trailing
                 // positional blanks, so a clipped row would collapse a
                 // staircase to column 0.
-                row.resize(old_cols_usize, Cell::default());
+                combined.push_padded(cells, old_cols_usize);
+            } else {
+                combined.push(cells);
             }
-            combined.push(row);
             continued.push(cont);
         }
 
@@ -2203,7 +2206,11 @@ impl Grid {
         // For image-placement anchors (REQ-604), track where each
         // pre-reflow row's first cell lands, so an anchor
         // mid-logical-line remaps to its own row, not the line start.
-        let mut out_rows: Vec<Vec<Cell>> = Vec::with_capacity(combined.len());
+        let cols_usize = usize::from(cols);
+        let mut out_rows = PackedRows::with_capacity(
+            combined.len(),
+            combined.cells.len().min(combined.len() * cols_usize),
+        );
         let mut out_continued: Vec<bool> = Vec::with_capacity(combined.len());
         let mut new_line_start: Vec<usize> = Vec::with_capacity(spans.len());
         let mut new_row_of_old: Vec<usize> = Vec::with_capacity(combined.len());
@@ -2211,10 +2218,12 @@ impl Grid {
         let mut dropped: Vec<usize> = Vec::new();
         let mut cursor_phys = (0usize, 0usize);
         let blocks = self.whole_sized_blocks(&combined);
+        let track_landing = !blocks.is_empty();
         let mut landing = Landing::default();
+        let mut run: Vec<Cell> = Vec::new();
         for (li, &(start, end)) in spans.iter().enumerate() {
             new_line_start.push(out_rows.len());
-            let run = self.stitch_logical_line(&combined, start, end);
+            self.stitch_logical_line(&combined, start, end, &mut run);
             let line_first = out_rows.len();
             let target = (li == cursor_line).then_some(cursor_run_index);
             row_starts.clear();
@@ -2240,14 +2249,18 @@ impl Grid {
                 } else {
                     combined[k].len()
                 };
-                landing.rows.push(LandedRow { line: li, off, len });
+                if track_landing {
+                    landing.rows.push(LandedRow { line: li, off, len });
+                }
                 off += len;
             }
-            landing.lines.push(LandedLine {
-                first_row: line_first,
-                row_starts: row_starts.clone(),
-                dropped: dropped.clone(),
-            });
+            if track_landing {
+                landing.lines.push(LandedLine {
+                    first_row: line_first,
+                    row_starts: row_starts.clone(),
+                    dropped: dropped.clone(),
+                });
+            }
         }
         // A multi-row block's rows are separate lines, so a re-wrap can
         // move one row and not the next (REQ-407). Sizing survives only
@@ -2278,18 +2291,15 @@ impl Grid {
 
         // `install_ring` drops the oldest past `cap` (D2: a narrowing
         // that overflows the ring loses the oldest lines).
-        let cols_usize = usize::from(cols);
         let rows_usize = usize::from(rows);
-        let history: Vec<(Vec<Cell>, bool)> = (0..win_start)
-            .map(|phys| {
-                let row = &out_rows[phys];
-                let occ = row
-                    .iter()
-                    .rposition(|c| *c != Cell::default())
-                    .map_or(0, |i| i + 1);
-                (row[..occ].to_vec(), out_continued[phys])
-            })
-            .collect();
+        let history = (0..win_start).map(|phys| {
+            let row = &out_rows[phys];
+            let occ = row
+                .iter()
+                .rposition(|c| *c != Cell::default())
+                .map_or(0, |i| i + 1);
+            (&row[..occ], out_continued[phys])
+        });
         let mut viewport_cells = vec![Cell::default(); rows_usize * cols_usize];
         let mut viewport_soft_wrap = vec![false; rows_usize];
         for r in 0..rows_usize {
@@ -2301,7 +2311,7 @@ impl Grid {
             }
         }
         self.screen
-            .install_ring(rows, cols, &history, &viewport_cells, &viewport_soft_wrap);
+            .install_ring(rows, cols, history, &viewport_cells, &viewport_soft_wrap);
 
         let cursor_row = cursor_phys.0.saturating_sub(win_start).min(rows_usize - 1);
         self.screen.cursor.row = u16::try_from(cursor_row).unwrap_or(rows - 1);
@@ -2371,10 +2381,11 @@ impl Grid {
     /// Every sized block whose footprint is whole in `combined`, as
     /// `(row, col, scale, block_w)`. A partial one (the part a scroll
     /// left in history) has nothing to keep whole.
-    fn whole_sized_blocks(&self, combined: &[Vec<Cell>]) -> Vec<(usize, usize, usize, usize)> {
+    fn whole_sized_blocks(&self, combined: &PackedRows) -> Vec<(usize, usize, usize, usize)> {
         let continues = |g: Grapheme| matches!(g, Grapheme::SizedSpacer | Grapheme::Spacer);
         let mut blocks = Vec::new();
-        for (k, row) in combined.iter().enumerate() {
+        for k in 0..combined.len() {
+            let row = &combined[k];
             for (c, cell) in row.iter().enumerate() {
                 let Some(handle) = cell.sizing else { continue };
                 if continues(cell.grapheme) || matches!(cell.grapheme, Grapheme::Empty) {
@@ -2447,8 +2458,14 @@ impl Grid {
     /// The run's trailing never-written padding (`Cell::default()`) is
     /// trimmed; a colored BCE blank or a wide-glyph `Spacer` is not
     /// `default`, so it rides through.
-    fn stitch_logical_line(&self, combined: &[Vec<Cell>], start: usize, end: usize) -> Vec<Cell> {
-        let mut run: Vec<Cell> = Vec::new();
+    fn stitch_logical_line(
+        &self,
+        combined: &PackedRows,
+        start: usize,
+        end: usize,
+        run: &mut Vec<Cell>,
+    ) {
+        run.clear();
         for k in start..=end {
             if k < end {
                 run.extend_from_slice(self.nontail_contribution(&combined[k], &combined[k + 1]));
@@ -2459,7 +2476,6 @@ impl Grid {
         while run.last().is_some_and(|c| *c == Cell::default()) {
             run.pop();
         }
-        run
     }
 
     /// Always emits at least one row so a blank logical line survives.
@@ -2470,14 +2486,13 @@ impl Grid {
         &self,
         run: &[Cell],
         cols: u16,
-        out_rows: &mut Vec<Vec<Cell>>,
+        out_rows: &mut PackedRows,
         out_continued: &mut Vec<bool>,
         cursor_target: Option<usize>,
         row_starts: &mut Vec<usize>,
         dropped: &mut Vec<usize>,
     ) -> Option<(usize, usize)> {
         let cols_usize = usize::from(cols);
-        let mut cur: Vec<Cell> = Vec::with_capacity(cols_usize);
         let mut rows_pushed = 0usize;
         let mut first = true;
         let mut cursor_pos = None;
@@ -2497,35 +2512,35 @@ impl Grid {
                     i += 2;
                     continue;
                 }
-                if cur.len() + 2 > cols_usize {
-                    pad_and_push(&mut cur, cols_usize, out_rows, out_continued, &mut first);
+                if out_rows.open_len() + 2 > cols_usize {
+                    pad_and_push(cols_usize, out_rows, out_continued, &mut first);
                     rows_pushed += 1;
                     row_starts.push(i);
                 }
                 if cursor_target == Some(i) {
-                    cursor_pos = Some((rows_pushed, cur.len()));
+                    cursor_pos = Some((rows_pushed, out_rows.open_len()));
                 }
                 if cursor_target == Some(i + 1) {
-                    cursor_pos = Some((rows_pushed, cur.len() + 1));
+                    cursor_pos = Some((rows_pushed, out_rows.open_len() + 1));
                 }
-                cur.push(cell);
-                cur.push(run[i + 1]);
+                out_rows.push_cell(cell);
+                out_rows.push_cell(run[i + 1]);
                 i += 2;
             } else {
-                if cur.len() + 1 > cols_usize {
-                    pad_and_push(&mut cur, cols_usize, out_rows, out_continued, &mut first);
+                if out_rows.open_len() + 1 > cols_usize {
+                    pad_and_push(cols_usize, out_rows, out_continued, &mut first);
                     rows_pushed += 1;
                     row_starts.push(i);
                 }
                 if cursor_target == Some(i) {
-                    cursor_pos = Some((rows_pushed, cur.len()));
+                    cursor_pos = Some((rows_pushed, out_rows.open_len()));
                 }
-                cur.push(cell);
+                out_rows.push_cell(cell);
                 i += 1;
             }
         }
-        let last_col = cur.len();
-        pad_and_push(&mut cur, cols_usize, out_rows, out_continued, &mut first);
+        let last_col = out_rows.open_len();
+        pad_and_push(cols_usize, out_rows, out_continued, &mut first);
         if cursor_target.is_some() && cursor_pos.is_none() {
             cursor_pos = Some((rows_pushed, last_col.min(cols_usize.saturating_sub(1))));
         }
@@ -2892,6 +2907,82 @@ fn trim_soft_wrap(src: &[bool], dst_rows: u16) -> Box<[bool]> {
     dst
 }
 
+#[derive(Default)]
+struct PackedRows {
+    cells: Vec<Cell>,
+    ends: Vec<usize>,
+    /// The row being built. Appending straight to `cells` instead
+    /// measured slower in the re-wrap loop.
+    open: Vec<Cell>,
+}
+
+impl PackedRows {
+    fn with_capacity(rows: usize, cells: usize) -> Self {
+        Self {
+            cells: Vec::with_capacity(cells),
+            ends: Vec::with_capacity(rows),
+            open: Vec::new(),
+        }
+    }
+
+    const fn len(&self) -> usize {
+        self.ends.len()
+    }
+
+    fn get(&self, k: usize) -> Option<&[Cell]> {
+        (k < self.len()).then(|| &self[k])
+    }
+
+    fn push(&mut self, row: &[Cell]) {
+        self.cells.extend_from_slice(row);
+        self.ends.push(self.cells.len());
+    }
+
+    fn push_padded(&mut self, row: &[Cell], width: usize) {
+        let start = self.cells.len();
+        self.cells.extend_from_slice(&row[..row.len().min(width)]);
+        self.cells.resize(start + width, Cell::default());
+        self.ends.push(self.cells.len());
+    }
+
+    const fn open_len(&self) -> usize {
+        self.open.len()
+    }
+
+    fn push_cell(&mut self, cell: Cell) {
+        self.open.push(cell);
+    }
+
+    fn finish_padded(&mut self, width: usize) {
+        let start = self.cells.len();
+        self.cells
+            .extend_from_slice(&self.open[..self.open.len().min(width)]);
+        self.cells.resize(start + width, Cell::default());
+        self.ends.push(self.cells.len());
+        self.open.clear();
+    }
+
+    fn span(&self, k: usize) -> std::ops::Range<usize> {
+        let start = k.checked_sub(1).map_or(0, |prev| self.ends[prev]);
+        start..self.ends[k]
+    }
+}
+
+impl std::ops::Index<usize> for PackedRows {
+    type Output = [Cell];
+
+    fn index(&self, k: usize) -> &[Cell] {
+        &self.cells[self.span(k)]
+    }
+}
+
+impl std::ops::IndexMut<usize> for PackedRows {
+    fn index_mut(&mut self, k: usize) -> &mut [Cell] {
+        let span = self.span(k);
+        &mut self.cells[span]
+    }
+}
+
 /// Where a reflow put each pre-reflow cell.
 #[derive(Default)]
 struct Landing {
@@ -2937,14 +3028,12 @@ impl Landing {
 }
 
 fn pad_and_push(
-    cur: &mut Vec<Cell>,
     cols: usize,
-    out_rows: &mut Vec<Vec<Cell>>,
+    out_rows: &mut PackedRows,
     out_continued: &mut Vec<bool>,
     first: &mut bool,
 ) {
-    cur.resize(cols, Cell::default());
-    out_rows.push(std::mem::take(cur));
+    out_rows.finish_padded(cols);
     out_continued.push(!*first);
     *first = false;
 }
@@ -3220,6 +3309,8 @@ fn osc8_scheme_allowed(uri: &str) -> bool {
 
 #[cfg(test)]
 mod cold_tier_tests;
+#[cfg(test)]
+mod reflow_tests;
 #[cfg(test)]
 mod scrollback_tests;
 #[cfg(test)]

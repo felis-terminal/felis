@@ -670,11 +670,11 @@ impl ScreenBuffer {
     /// and the viewport after it, `base` at `history_len`, `phys_cap`
     /// sized to exactly the occupied window; history past `cap` is
     /// dropped oldest-first.
-    pub(crate) fn install_ring(
+    pub(crate) fn install_ring<'h>(
         &mut self,
         rows: u16,
         cols: u16,
-        history: &[(Vec<Cell>, bool)],
+        history: impl ExactSizeIterator<Item = (&'h [Cell], bool)>,
         viewport_cells: &[Cell],
         viewport_soft_wrap: &[bool],
     ) {
@@ -687,10 +687,10 @@ impl ScreenBuffer {
         let mut cells = ring_cells(phys_cap * cols_usize, rows_usize + self.cap, cols_usize);
         let mut soft_wrap = vec![false; phys_cap].into_boxed_slice();
         let mut occupancy = vec![0u16; phys_cap].into_boxed_slice();
-        for (dst, (row, wrap)) in history[hist_drop..].iter().enumerate() {
+        for (dst, (row, wrap)) in history.skip(hist_drop).enumerate() {
             let occ = row.len().min(cols_usize);
             cells[dst * cols_usize..dst * cols_usize + occ].copy_from_slice(&row[..occ]);
-            soft_wrap[dst] = *wrap;
+            soft_wrap[dst] = wrap;
             occupancy[dst] = u16::try_from(occ).unwrap_or(cols);
         }
         let vp = history_len * cols_usize;
@@ -1435,7 +1435,13 @@ impl ScreenBuffer {
         self.cursor.row = self.cursor.row.min(rows - 1);
         self.cursor.col = self.cursor.col.min(cols - 1);
         self.cursor.pending_wrap = false;
-        self.install_ring(rows, cols, &history, &new_viewport, &new_vp_wrap);
+        self.install_ring(
+            rows,
+            cols,
+            history.iter().map(|(row, wrap)| (row.as_slice(), *wrap)),
+            &new_viewport,
+            &new_vp_wrap,
+        );
         self.retrack_geometry(rows, cols);
     }
 
