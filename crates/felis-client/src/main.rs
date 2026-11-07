@@ -3,7 +3,8 @@
 
 // `deny`, not `forbid`: the sanctioned `allow(unsafe_code)` sites
 // (`macos_window`, `hyperlink`'s `ShellExecuteW`, `window_class`'s class
-// lookup) would be refused by `forbid`.
+// lookup, `startup_token`'s environment removal) would be refused by
+// `forbid`.
 #![cfg_attr(not(test), deny(unsafe_code))]
 
 use std::{
@@ -94,6 +95,7 @@ mod navigation;
 mod option_compose;
 mod os_clipboard;
 mod smoke;
+mod startup_token;
 mod switch_intent;
 #[cfg(windows)]
 mod window_class;
@@ -413,6 +415,11 @@ fn main() -> Result<ExitCode> {
     #[cfg(feature = "dhat-heap")]
     let _dhat = dhat::Profiler::new_heap();
 
+    // SAFETY: nothing has spawned a thread yet; the GPU warmup and the
+    // tokio runtime both start further down.
+    #[allow(unsafe_code)]
+    let startup_token = unsafe { startup_token::StartupToken::take_from_env() };
+
     let cli = Cli::parse();
     // Before `logging::init`: the console sink is stdout, and a log line
     // on the channel carrying the JSON would corrupt the report.
@@ -477,6 +484,7 @@ fn main() -> Result<ExitCode> {
         // Before the dial: on a cold start the GPU work hides the daemon
         // spawn, and it needs neither the window nor the session.
         warmup: Some(Warmup::start_gpu()),
+        startup_token,
         renderer_cfg: renderer_config_with(&cfg, post_chain.sources),
         post_animations: post_chain.animations,
         font_size_logical_px: configured_font_size_logical_px(&cfg),
@@ -1093,6 +1101,7 @@ async fn attach_for_mode(
 struct ClientStartup {
     /// `None` only in tests, which build an [`App`] with no window.
     warmup: Option<Warmup>,
+    startup_token: startup_token::StartupToken,
     renderer_cfg: RendererConfig,
     /// Indexed like `renderer_cfg.post_stages`.
     post_animations: Vec<Option<config::StageAnimation>>,
@@ -1357,6 +1366,8 @@ struct App {
     renderer: Option<Renderer>,
     /// Taken by the first `resumed`.
     warmup: Option<Warmup>,
+    /// Taken by the first `resumed`.
+    startup_token: startup_token::StartupToken,
     renderer_cfg: RendererConfig,
     outgoing: Option<OutgoingSender>,
     /// `None` only briefly between detach and the new pump landing;
@@ -1586,6 +1597,7 @@ impl App {
             window: None,
             renderer: None,
             warmup: startup.warmup,
+            startup_token: startup.startup_token,
             renderer_cfg: startup.renderer_cfg,
             outgoing: Some(link.outgoing),
             pump: link.pump,

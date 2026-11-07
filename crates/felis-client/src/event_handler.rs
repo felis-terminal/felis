@@ -71,6 +71,7 @@ impl ApplicationHandler<AppEvent> for App {
             self.transparent,
             self.window_class.as_deref(),
         );
+        let attrs = std::mem::take(&mut self.startup_token).apply(event_loop, attrs);
         let window = match event_loop.create_window(attrs) {
             Ok(w) => Arc::new(w),
             Err(err) => {
