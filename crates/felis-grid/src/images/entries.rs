@@ -9,8 +9,8 @@ use foldhash::fast::FixedState;
 use super::{ImageEntry, ImageId};
 
 /// Every index here is derived from the entries' `refcount`, `atime`,
-/// frame count and byte length, so those change only through this
-/// type's methods; [`Self::get_mut`] and [`Self::for_each_animated_mut`]
+/// frame count, byte length, `number` and `serial`, so those change only
+/// through this type's methods; [`Self::get_mut`] and [`Self::for_each_animated_mut`]
 /// lend the rest.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Entries {
@@ -43,6 +43,8 @@ struct Marks {
     /// [`Entries::lowest_free_id`]: a session that never sends `I=` would
     /// otherwise pay for it on every insert and removal.
     id_runs: Option<BTreeMap<u32, u32>>,
+    /// Each `I=` number's entries as `(serial, seq)`, newest last.
+    numbered: HashMap<u32, BTreeSet<(u64, u64)>, FixedState>,
 }
 
 impl Entries {
@@ -107,6 +109,13 @@ impl Entries {
             self.marks.animated.insert(seq);
         }
         self.by_atime.insert((entry.atime, seq));
+        if let Some(number) = entry.number {
+            self.marks
+                .numbered
+                .entry(number)
+                .or_default()
+                .insert((entry.serial, seq));
+        }
         self.add_id(id.0);
         self.seq_of.insert(id, seq);
         self.by_seq.insert(seq, (id, entry));
@@ -123,6 +132,14 @@ impl Entries {
         self.marks.held.remove(&seq);
         self.marks.animated.remove(&seq);
         self.by_atime.remove(&(entry.atime, seq));
+        if let Some(number) = entry.number
+            && let Some(seqs) = self.marks.numbered.get_mut(&number)
+        {
+            seqs.remove(&(entry.serial, seq));
+            if seqs.is_empty() {
+                self.marks.numbered.remove(&number);
+            }
+        }
         self.remove_id(id.0);
         self.debug_check();
         Some(entry)
@@ -232,6 +249,13 @@ impl Entries {
             seqs.sort_unstable();
         }
         seqs.into_iter().filter_map(|seq| self.id_at(seq)).collect()
+    }
+
+    /// Of the entries with this `number`, the greatest serial; of equal
+    /// ones, the newest.
+    pub(super) fn newest_with_number(&self, number: u32) -> Option<ImageId> {
+        let &(_, seq) = self.marks.numbered.get(&number)?.last()?;
+        self.id_at(seq)
     }
 
     /// The lowest id from 1 up that no entry holds.
@@ -367,6 +391,16 @@ impl Entries {
             .map(|(&seq, _)| seq)
             .collect();
         assert_eq!(self.marks.animated, animated, "animated index");
+        let mut numbered: HashMap<u32, BTreeSet<(u64, u64)>, FixedState> = HashMap::default();
+        for (&seq, (_, entry)) in &self.by_seq {
+            if let Some(number) = entry.number {
+                numbered
+                    .entry(number)
+                    .or_default()
+                    .insert((entry.serial, seq));
+            }
+        }
+        assert_eq!(self.marks.numbered, numbered, "number index");
         if let Some(runs) = &self.marks.id_runs {
             assert_eq!(*runs, id_runs(self.seq_of.keys()), "id runs");
         }
