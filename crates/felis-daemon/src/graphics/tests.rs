@@ -454,6 +454,19 @@ fn zlib_zip_bomb_is_rejected() {
 }
 
 #[test]
+fn zlib_inflating_past_the_declared_size_is_over_budget() {
+    let compressed = zlib_compress(&[0x77u8; 17]);
+    let mut cmd = complete(
+        &[(b'f', b"32"), (b's', b"2"), (b'v', b"2"), (b'o', b"z")],
+        &b64(&compressed),
+    );
+    assert!(matches!(
+        decode_image(&mut cmd),
+        Err(DecodeError::OverBudget)
+    ));
+}
+
+#[test]
 fn unknown_compression_returns_unsupported() {
     let mut cmd = complete(
         &[(b'f', b"32"), (b's', b"1"), (b'v', b"1"), (b'o', b"lz4")],

@@ -2616,7 +2616,7 @@ async fn write_event_frame<W: tokio::io::AsyncWrite + Unpin>(
         if matches!(err, TransportError::Frame(FrameError::BodyTooLarge { .. })) {
             tracing::error!(
                 kind = frame.kind(),
-                body_len = frame.body().len(),
+                body_len = frame.body_len(),
                 "outbound event exceeds the frame ceiling; evicting the subscriber"
             );
         }

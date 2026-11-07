@@ -24,6 +24,51 @@ pub fn encode<M: WireCodec>(msg: &M) -> Vec<u8> {
     msg.to_wire().encode_to_vec()
 }
 
+/// [`encode`] for an image message, split into a head and the chunk
+/// payload the encoding ends on, so the payload reaches the wire
+/// without being copied into the body. Writing the head and then the
+/// tail puts [`encode`]'s bytes on the wire; an arm without a payload
+/// comes back whole, with an empty tail.
+#[must_use]
+pub fn encode_image(msg: &crate::messages::ImageMsg) -> (Vec<u8>, bytes::Bytes) {
+    use prost::Message as _;
+
+    // Field keys (`tag << 3 | LEN`) of `ImageMsg.chunk` and `ImageChunk.bytes`.
+    const CHUNK_ARM_KEY: u8 = 2 << 3 | 2;
+    const CHUNK_BYTES_KEY: u8 = 2 << 3 | 2;
+
+    let crate::messages::ImageMsg::Chunk { id, bytes } = msg else {
+        return (encode(msg), bytes::Bytes::new());
+    };
+    if bytes.is_empty() {
+        return (encode(msg), bytes::Bytes::new());
+    }
+    let fields = crate::wire::v1::ImageChunk {
+        id: id.0,
+        bytes: bytes::Bytes::new(),
+    }
+    .encode_to_vec();
+    let payload_prefix = 1 + prost::length_delimiter_len(bytes.len());
+    let chunk_len = fields.len() + payload_prefix + bytes.len();
+    let mut head = Vec::with_capacity(
+        1 + prost::length_delimiter_len(chunk_len) + fields.len() + payload_prefix,
+    );
+    head.push(CHUNK_ARM_KEY);
+    put_varint(chunk_len, &mut head);
+    head.extend_from_slice(&fields);
+    head.push(CHUNK_BYTES_KEY);
+    put_varint(bytes.len(), &mut head);
+    (head, bytes.clone())
+}
+
+fn put_varint(mut value: usize, out: &mut Vec<u8>) {
+    while value >= 0x80 {
+        out.push((value as u8) | 0x80);
+        value >>= 7;
+    }
+    out.push(value as u8);
+}
+
 /// Decodes a protobuf body into its domain message.
 ///
 /// # Errors
@@ -551,6 +596,33 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    proptest::proptest! {
+        /// Head then tail is the body [`encode`] writes, at every
+        /// varint width of the id and the payload length.
+        #[test]
+        fn a_split_image_chunk_writes_the_bytes_encode_does(
+            id in proptest::prop_oneof![proptest::strategy::Just(0u32), proptest::num::u32::ANY],
+            len in proptest::prop_oneof![0usize..300, 16_000usize..17_000, 2_097_000usize..2_098_000],
+        ) {
+            let msg = crate::messages::ImageMsg::Chunk {
+                id: crate::ImageId(id),
+                bytes: bytes::Bytes::from(vec![0xA5; len]),
+            };
+            let (head, tail) = encode_image(&msg);
+            proptest::prop_assert_eq!([head, tail.to_vec()].concat(), encode(&msg));
+        }
+    }
+
+    #[test]
+    fn an_image_arm_without_a_payload_encodes_whole() {
+        let msg = crate::messages::ImageMsg::Complete {
+            id: crate::ImageId(7),
+        };
+        let (head, tail) = encode_image(&msg);
+        assert_eq!(head, encode(&msg));
+        assert!(tail.is_empty());
+    }
 
     /// Sized at the widest id, a correlated opener is exactly as long
     /// as its encoding there and no shorter than at any other id.

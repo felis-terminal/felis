@@ -203,14 +203,14 @@ impl OutgoingQueue {
     /// # Errors
     /// Returns [`OutgoingFull`] if queue capacity is exceeded.
     pub fn push(&mut self, frame: OutgoingFrame) -> Result<(), OutgoingFull> {
-        let incoming = frame.frame.body().len();
+        let incoming = frame.frame.body_len();
         if let Some(key) = frame.coalesce
             && let Some(slot) = self
                 .items
                 .iter_mut()
                 .find(|queued| queued.coalesce == Some(key))
         {
-            let replaced = slot.frame.body().len();
+            let replaced = slot.frame.body_len();
             let after = self.bytes - replaced + incoming;
             if after > self.cap {
                 return Err(OutgoingFull {
@@ -249,7 +249,7 @@ impl OutgoingQueue {
     /// The oldest frame, or `None` when the queue is empty.
     pub fn pop(&mut self) -> Option<OutgoingFrame> {
         let frame = self.items.pop_front()?;
-        self.bytes -= frame.frame.body().len();
+        self.bytes -= frame.frame.body_len();
         Some(frame)
     }
 }
@@ -410,7 +410,7 @@ mod tests {
         assert_eq!(queue.len(), 2);
         drop(queue.pop());
         let latest = queue.pop().expect("a queued frame");
-        assert_eq!(latest.frame().body(), b"20");
+        assert_eq!(&*latest.frame().body(), b"20");
     }
 
     /// Typing while browsing queues a return to live ahead of the
@@ -640,7 +640,7 @@ mod tests {
                 let len_before = queue.len();
                 if op == 3 {
                     if let Some(frame) = queue.pop() {
-                        prop_assert_eq!(queue.bytes(), before - frame.frame().body().len());
+                        prop_assert_eq!(queue.bytes(), before - frame.frame().body_len());
                         prop_assert_eq!(queue.len(), len_before - 1);
                     } else {
                         prop_assert_eq!(before, 0);
@@ -673,7 +673,7 @@ mod tests {
             }
             let held = queue.bytes();
             let drained: usize = std::iter::from_fn(|| queue.pop())
-                .map(|frame| frame.frame().body().len())
+                .map(|frame| frame.frame().body_len())
                 .sum();
             prop_assert_eq!(drained, held);
             prop_assert_eq!(queue.bytes(), 0);

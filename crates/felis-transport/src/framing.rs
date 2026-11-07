@@ -11,7 +11,7 @@ use felis_protocol::{
     codec::{self, Correlated, WireCodec},
     convert::WireError,
     frame::{DEFAULT_MAX_BODY, Frame, FrameError, HEADER_LEN, LEN_OVERHEAD},
-    messages::{Correlation, CorrelationClass, Directed},
+    messages::{Correlation, CorrelationClass, Directed, ImageMsg},
     minor::{MinorGated, Requires},
 };
 use thiserror::Error;
@@ -206,6 +206,8 @@ const SCRATCH_BYPASS: usize = 8 * 1024;
 pub struct CheckedFrame {
     kind: u16,
     body: Vec<u8>,
+    /// Written after `body` as the rest of it, uncopied.
+    tail: Bytes,
     requires: Requires,
 }
 
@@ -216,6 +218,22 @@ impl CheckedFrame {
     /// [`TransportError::Correlation`] when the arm wants an envelope
     /// this path cannot write.
     pub fn encode<M: WireCodec + MinorGated + Directed>(msg: &M) -> Result<Self, TransportError> {
+        Self::encode_with(msg, |msg| (codec::encode(msg), Bytes::new()))
+    }
+
+    /// [`Self::encode`] for an image message, whose chunk payload stays
+    /// the buffer it was handed in rather than a copy in the body.
+    ///
+    /// # Errors
+    /// As [`Self::encode`].
+    pub fn encode_image(msg: &ImageMsg) -> Result<Self, TransportError> {
+        Self::encode_with(msg, codec::encode_image)
+    }
+
+    fn encode_with<M: WireCodec + MinorGated + Directed>(
+        msg: &M,
+        encode: impl FnOnce(&M) -> (Vec<u8>, Bytes),
+    ) -> Result<Self, TransportError> {
         // Keyed on the arm's class, never on whether the message
         // carries an id: `Conn::Cancel`/`End`/`Error` name a stream in
         // an ordinary field and are `Uncorrelated`, so an
@@ -229,9 +247,11 @@ impl CheckedFrame {
             });
         }
         msg.validate()?;
+        let (body, tail) = encode(msg);
         Ok(Self {
             kind: M::KIND.as_u16(),
-            body: codec::encode(msg),
+            body,
+            tail,
             requires: msg.requires(),
         })
     }
@@ -266,6 +286,7 @@ impl CheckedFrame {
         Ok(Self {
             kind: M::KIND.as_u16(),
             body: codec::encode_correlated(msg, correlation),
+            tail: Bytes::new(),
             requires: msg.requires(),
         })
     }
@@ -280,6 +301,7 @@ impl CheckedFrame {
         Self {
             kind,
             body,
+            tail: Bytes::new(),
             requires,
         }
     }
@@ -289,9 +311,20 @@ impl CheckedFrame {
         self.kind
     }
 
+    /// The whole body, copied together only when it was encoded in two
+    /// parts.
     #[must_use]
-    pub fn body(&self) -> &[u8] {
-        &self.body
+    pub fn body(&self) -> std::borrow::Cow<'_, [u8]> {
+        if self.tail.is_empty() {
+            std::borrow::Cow::Borrowed(&self.body)
+        } else {
+            std::borrow::Cow::Owned([&self.body[..], &self.tail].concat())
+        }
+    }
+
+    #[must_use]
+    pub const fn body_len(&self) -> usize {
+        self.body.len() + self.tail.len()
     }
 
     #[must_use]
@@ -367,19 +400,42 @@ impl<W: AsyncWrite + Unpin> FrameWriter<W> {
     ///
     /// [`TransportError::Frame`] if body exceeds ceiling (refused before write).
     pub(crate) async fn write_frame(&mut self, frame: &Frame<'_>) -> Result<(), TransportError> {
-        if frame.body.len() >= SCRATCH_BYPASS {
-            let mut header = [0u8; HEADER_LEN];
-            let len = LEN_OVERHEAD + frame.checked_body_len()?;
-            header[..4].copy_from_slice(&len.to_le_bytes());
-            header[4..].copy_from_slice(&frame.kind.to_le_bytes());
-            // Two flat writes, not one chained `write_all_buf`: the chain's
+        self.write_parts(frame.kind, frame.body, &[]).await
+    }
+
+    /// One frame whose body is `head` followed by `tail`.
+    async fn write_parts(
+        &mut self,
+        kind: u16,
+        head: &[u8],
+        tail: &[u8],
+    ) -> Result<(), TransportError> {
+        let body_len = head.len() + tail.len();
+        let len = u32::try_from(body_len)
+            .ok()
+            .filter(|len| *len <= DEFAULT_MAX_BODY)
+            .ok_or(FrameError::BodyTooLarge {
+                body_len: body_len as u64,
+                ceiling: DEFAULT_MAX_BODY,
+            })?
+            + LEN_OVERHEAD;
+        let mut header = [0u8; HEADER_LEN];
+        header[..4].copy_from_slice(&len.to_le_bytes());
+        header[4..].copy_from_slice(&kind.to_le_bytes());
+        if body_len >= SCRATCH_BYPASS {
+            // Flat writes, not one chained `write_all_buf`: the chain's
             // per-partial-write indirection measured worse than the copy
             // this path avoids.
             self.inner.write_all(&header).await?;
-            self.inner.write_all(frame.body).await?;
+            self.inner.write_all(head).await?;
+            if !tail.is_empty() {
+                self.inner.write_all(tail).await?;
+            }
         } else {
             self.scratch.clear();
-            frame.encode_to(&mut self.scratch)?;
+            self.scratch.extend_from_slice(&header);
+            self.scratch.extend_from_slice(head);
+            self.scratch.extend_from_slice(tail);
             self.inner.write_all(&self.scratch).await?;
         }
         Ok(())
@@ -437,11 +493,7 @@ impl<W: AsyncWrite + Unpin> FrameWriter<W> {
         frame: &CheckedFrame,
     ) -> Result<(), TransportError> {
         self.authorize(frame.requires)?;
-        self.write_frame(&Frame {
-            kind: frame.kind,
-            body: &frame.body,
-        })
-        .await
+        self.write_parts(frame.kind, &frame.body, &frame.tail).await
     }
 
     pub async fn flush(&mut self) -> Result<(), TransportError> {
@@ -503,6 +555,31 @@ mod tests {
             let got = drain.await.unwrap().unwrap().expect("frame");
             assert_eq!(got.kind, 3);
             assert_eq!(got.body, body[..]);
+        }
+    }
+
+    /// On both sides of the bypass, an image chunk sent with its payload
+    /// apart arrives as the body the whole encoding writes.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_image_chunk_sent_in_two_parts_arrives_whole() {
+        for payload_len in [1, SCRATCH_BYPASS, 256 * 1024] {
+            let (a, b) = pair();
+            let mut writer = FrameWriter::at_build_minor(a);
+            let mut reader = FrameReader::new(b);
+
+            let msg = ImageMsg::Chunk {
+                id: felis_protocol::ImageId(9),
+                bytes: Bytes::from(vec![0xC3u8; payload_len]),
+            };
+            let frame = CheckedFrame::encode_image(&msg).unwrap();
+            assert_eq!(frame.body(), codec::encode(&msg));
+            assert_eq!(frame.body_len(), codec::encode(&msg).len());
+            let drain = tokio::spawn(async move { reader.next_frame().await });
+            writer.send_checked(&frame).await.unwrap();
+
+            let got = drain.await.unwrap().unwrap().expect("frame");
+            assert_eq!(got.kind, MessageKind::Image.as_u16());
+            assert_eq!(got.body, codec::encode(&msg));
         }
     }
 

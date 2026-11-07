@@ -66,7 +66,8 @@ Chunking: `m=` only applies to `t=d`. A command specifying `t=f`, `t=t`, or `t=s
 
 Supported formats include `f=24` (RGB), `f=32` (RGBA), and `f=100` (PNG, decoded daemon-side). An omitted `f=` is
 `f=32`, upstream's default. JPEG and WebP are not supported directly (encode as PNG or raw RGB/RGBA). Zlib (`o=z`)
-compression is supported across all transmission media. Feature status is tracked in the
+compression is supported across all transmission media; a raw (`f=24`/`f=32`) stream that inflates past `s × v × bpp` is
+refused with `ENOTSUP`. Feature status is tracked in the
 [support matrix](support-matrix.md#image-formats-f-and-compression).
 
 ## Lifecycle

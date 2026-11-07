@@ -1286,7 +1286,7 @@ pub(crate) fn publish_notifications(
 pub(crate) fn body_for(ev: &OutEvent) -> Result<CheckedFrame, TransportError> {
     match ev {
         OutEvent::Grid(msg) => CheckedFrame::encode(msg),
-        OutEvent::Image(msg) => CheckedFrame::encode(msg),
+        OutEvent::Image(msg) => CheckedFrame::encode_image(msg),
         OutEvent::Push(msg) => CheckedFrame::encode(msg),
         OutEvent::Region { msg, correlation } => CheckedFrame::encode_correlated(msg, *correlation),
         OutEvent::Session { msg, correlation } => {
@@ -1312,7 +1312,7 @@ pub(crate) fn ops_reply_frame(
     ceiling: usize,
 ) -> Result<CheckedFrame, TransportError> {
     let frame = CheckedFrame::encode_correlated(msg, correlation)?;
-    let len = frame.body().len();
+    let len = frame.body_len();
     let Correlation::Request(request) = correlation else {
         return Ok(frame);
     };
@@ -1604,7 +1604,7 @@ mod tests {
         let frame = ops_reply_frame(&msg, request(7), 4096).expect("a refusal encodes");
         assert_eq!(frame.kind(), felis_protocol::MessageKind::Conn.as_u16());
         let refusal: felis_protocol::messages::ConnToClientMsg =
-            felis_protocol::codec::decode(frame.body()).expect("decodes");
+            felis_protocol::codec::decode(&*frame.body()).expect("decodes");
         let felis_protocol::messages::ConnToClientMsg::Error {
             subject: felis_protocol::messages::Subject::Request(id),
             reason: StreamErrorReason::Internal,

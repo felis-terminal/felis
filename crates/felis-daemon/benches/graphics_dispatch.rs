@@ -18,7 +18,7 @@ use felis_grid::images::{AnimationMode, Frame, ImageEntry, ImageFormat, ImageSto
 use felis_protocol::messages::ImageMsg;
 use felis_protocol::{ImageId, PROTOCOL_MINOR};
 use felis_transport::{CheckedFrame, FrameWriter};
-use kitty::{Lcg, Session, command, png_rgba, ui_frame, zlib};
+use kitty::{Lcg, Session, command, page_frame, png_rgba, ui_frame, zlib};
 
 type Group<'a> = BenchmarkGroup<'a, WallTime>;
 type Command = Vec<Vec<u8>>;
@@ -139,7 +139,7 @@ fn video_shm(g: &mut Group<'_>) {
 
 fn browser_replace(g: &mut Group<'_>) {
     for (w, h) in FULL_FRAMES {
-        let pixels = ui_frame(w, h, 4, 3);
+        let pixels = page_frame(w, h, 3);
         let base = format!("a=T,i=1,p=1,f=32,s={w},v={h},C=1,q=2");
         let variants = [
             ("plain", command(&base, &pixels)),
@@ -195,7 +195,7 @@ fn browser_dirty_rects(g: &mut Group<'_>) {
                     .map(|k| {
                         let (rw, rh) = RECTS[k % RECTS.len()];
                         let (x, y) = (rng.below(w - rw), rng.below(h - rh));
-                        let pixels = ui_frame(rw, rh, 4, k as u64);
+                        let pixels = page_frame(rw, rh, k as u64);
                         let controls =
                             format!("a=f,i=1,r=1,X=1,x={x},y={y},s={rw},v={rh},f=32,q=2");
                         if compressed {
@@ -761,7 +761,7 @@ impl Subscribers {
         self.runtime.block_on(async {
             for writer in writers.iter_mut() {
                 for msg in msgs {
-                    let body = CheckedFrame::encode(msg).unwrap();
+                    let body = CheckedFrame::encode_image(msg).unwrap();
                     writer.send_checked_unflushed(&body).await.unwrap();
                 }
                 writer.flush().await.unwrap();
