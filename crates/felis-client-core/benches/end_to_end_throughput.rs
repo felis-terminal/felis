@@ -1,9 +1,6 @@
-//! End-to-end PTY -> daemon -> shadow throughput baseline.
-//!
-//! Evaluates compute cost from `compose_diffs` through `FrameWriter::write_frame`,
-//! frame decode, `GridMsg` decode, and `ShadowScreen::apply`, the Kitty
-//! graphics path through `ImageShadow` and its layout, a resize's reflow over
-//! a full scrollback, and a reattach.
+//! End-to-end PTY -> daemon -> shadow throughput baseline: `compose_diffs`
+//! through frame and `GridMsg` decode to `ShadowScreen::apply`, the Kitty
+//! graphics path, a resize's reflow, a reattach, and an agent's inline TUI.
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
@@ -22,6 +19,11 @@ mod graphics;
 
 #[path = "support/reattach.rs"]
 mod reattach;
+
+#[path = "support/agent_tui.rs"]
+mod agent_tui;
+
+use agent_tui::{AgentPipeline, AgentTui};
 
 use graphics::{Graphics, Pipeline};
 use reattach::{Reattach, Window};
@@ -308,11 +310,33 @@ fn bench_reattach(c: &mut Criterion) {
     }
 }
 
+fn bench_agent_tui(c: &mut Criterion) {
+    let (writes, expected) = AgentTui::writes();
+    let mut checked = AgentPipeline::new();
+    checked.feed(&writes);
+    checked.check(&expected);
+    let bytes: usize = writes.iter().map(Vec::len).sum();
+    let mut group = c.benchmark_group("agent_tui_end_to_end");
+    group.throughput(Throughput::Bytes(bytes as u64));
+    group.bench_function("session", |b| {
+        b.iter_batched(
+            AgentPipeline::new,
+            |mut pipeline| {
+                pipeline.feed(black_box(&writes));
+                pipeline
+            },
+            BatchSize::SmallInput,
+        );
+    });
+    group.finish();
+}
+
 criterion_group!(
     end_to_end_throughput,
     bench_throughput,
     bench_graphics,
     bench_reflow,
-    bench_reattach
+    bench_reattach,
+    bench_agent_tui
 );
 criterion_main!(end_to_end_throughput);

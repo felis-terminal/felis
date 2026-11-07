@@ -1,9 +1,7 @@
-//! Instruction-count twin of the `daemon_side`, `multi_cycle_end_to_end`,
-//! `graphics_end_to_end`, `resize_reflow` and `reattach_*` groups in
-//! `end_to_end_throughput.rs`, run under callgrind for the PR regression gate
-//! (`just bench-gate-ir`). Setup runs outside the measured region, and the
-//! returned buffers drop outside it, as `iter_batched` does for the Criterion
-//! twin.
+//! Instruction-count twin of every group in `end_to_end_throughput.rs`, run
+//! under callgrind for the PR regression gate (`just bench-gate-ir`). Setup runs
+//! outside the measured region, and the returned buffers drop outside it, as
+//! `iter_batched` does for the Criterion twin.
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
@@ -20,6 +18,10 @@ mod graphics;
 mod reattach;
 
 #[cfg(target_os = "linux")]
+#[path = "support/agent_tui.rs"]
+mod agent_tui;
+
+#[cfg(target_os = "linux")]
 #[allow(
     unused_qualifications,
     reason = "gungraun's #[library_benchmark] expansion emits `super::` paths with user spans"
@@ -34,6 +36,7 @@ mod gate {
 
     use bytes::Bytes;
 
+    use crate::agent_tui::{AgentPipeline, AgentTui, Expected};
     use crate::graphics::{Graphics, Pipeline, Segments};
     use crate::reattach::{Reattach, Session, Window};
     use crate::workload::{
@@ -241,6 +244,35 @@ mod gate {
         input
     }
 
+    pub(crate) struct AgentInput {
+        writes: Vec<Vec<u8>>,
+        expected: Expected,
+        pipeline: AgentPipeline,
+    }
+
+    fn setup_agent() -> AgentInput {
+        let (writes, expected) = AgentTui::writes();
+        AgentInput {
+            writes,
+            expected,
+            pipeline: AgentPipeline::new(),
+        }
+    }
+
+    fn check_agent(output: AgentInput) {
+        let AgentInput {
+            expected, pipeline, ..
+        } = output;
+        pipeline.check(&expected);
+    }
+
+    #[library_benchmark(setup = setup_agent, teardown = check_agent)]
+    #[bench::session()]
+    fn agent_tui_end_to_end(mut input: AgentInput) -> AgentInput {
+        input.pipeline.feed(black_box(&input.writes));
+        input
+    }
+
     library_benchmark_group!(
         name = end_to_end_throughput,
         benchmarks = [
@@ -249,7 +281,8 @@ mod gate {
             graphics_end_to_end,
             resize_reflow,
             reattach_daemon_side,
-            reattach_end_to_end
+            reattach_end_to_end,
+            agent_tui_end_to_end
         ]
     );
 
