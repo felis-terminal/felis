@@ -4,6 +4,7 @@
 //! raw APC bodies into its outbox, and the serve loop drains the outbox
 //! after every `Parser::advance` and feeds each body through here.
 
+use std::borrow::Cow;
 use std::io::Cursor;
 use std::num::NonZeroU32;
 
@@ -552,9 +553,9 @@ pub fn dispatch_apc_body(
 fn finish_in_place(ctx: &mut ApcCtx<'_>, prepared: Prepared) -> Option<Vec<u8>> {
     match prepared {
         Prepared::Done(reply) => reply,
-        Prepared::Decode(PreparedDecode { mut complete, plan }) => {
-            let result = decode_image(&mut complete);
-            commit_decoded(ctx, &plan, &complete, result)
+        Prepared::Decode(prepared) => {
+            let (job, plan) = prepared.into_job();
+            commit_decoded(ctx, &plan, job.run())
         }
     }
 }
@@ -589,6 +590,23 @@ pub enum Prepared {
 pub struct PreparedDecode {
     pub complete: CompleteCommand,
     pub plan: CommitPlan,
+    frame: Option<FrameTarget>,
+}
+
+/// The canvas an `a=f` writes to, read before its decode so the
+/// conversion and composition run with it.
+struct FrameTarget {
+    canvas: (u32, u32, ImageFormat, usize),
+    /// A new frame's `c=` base; `None` is the background canvas.
+    base: Option<Bytes>,
+}
+
+/// An `a=f`'s pixels in its canvas's format.
+enum FramePixels {
+    /// The rectangle an edit blits onto its 0-based `frame`.
+    Rect { frame: usize, pixels: Bytes },
+    /// A new frame, already composed onto its base.
+    Added(Vec<u8>),
 }
 
 /// What a command's dispatch resolved before its decode.
@@ -617,15 +635,20 @@ enum DecodeStep {
 }
 
 /// A [`PreparedDecode`]'s decode, off the session task.
-pub struct DecodeJob(CompleteCommand);
+pub struct DecodeJob(CompleteCommand, Option<FrameTarget>);
 
-/// A finished [`DecodeJob`].
-pub struct Decoded(CompleteCommand, Result<ImageEntry, DecodeError>);
+/// A finished [`DecodeJob`]. A decoded `a=f` without frame pixels sent
+/// a rectangle that leaves the canvas.
+pub struct Decoded(
+    CompleteCommand,
+    Result<ImageEntry, DecodeError>,
+    Option<FramePixels>,
+);
 
 impl PreparedDecode {
     #[must_use]
     pub fn into_job(self) -> (DecodeJob, CommitPlan) {
-        (DecodeJob(self.complete), self.plan)
+        (DecodeJob(self.complete, self.frame), self.plan)
     }
 }
 
@@ -640,7 +663,11 @@ impl DecodeJob {
     #[must_use]
     pub fn run(mut self) -> Decoded {
         let result = decode_image(&mut self.0);
-        Decoded(self.0, result)
+        let pixels = match (&result, &self.1) {
+            (Ok(data), Some(target)) => frame_pixels(&self.0, target, data),
+            _ => None,
+        };
+        Decoded(self.0, result, pixels)
     }
 }
 
@@ -742,7 +769,7 @@ pub fn commit_offloaded(
     let events_before = session.image_events.len();
     let (mut ctx, _) = session_ctx(session, grid, plan.anchor_cursor);
     let reply = match decoded {
-        Some(Decoded(complete, result)) => commit_decoded(&mut ctx, plan, &complete, result),
+        Some(decoded) => commit_decoded(&mut ctx, plan, decoded),
         None => commit_failed_decode(plan),
     };
     if let Some(started) = plan.started {
@@ -1024,6 +1051,7 @@ fn prepare_complete(
         return Prepared::Done(feature_query_reply(&complete, quiet));
     }
 
+    let mut frame = None;
     let step = match action {
         b'q' => {
             // kitty answers a query with its `i=` alone, and a query
@@ -1046,10 +1074,16 @@ fn prepare_complete(
                     ErrorCode::NotFound,
                     "a=f: image not in store",
                 ))?;
-                Ok(DecodeStep::Frame {
-                    id,
-                    canvas: (e.width, e.height, e.format, e.frame_count()),
-                })
+                let canvas = (e.width, e.height, e.format, e.frame_count());
+                let base = match edited_frame(&complete, canvas.3) {
+                    Some(_) => None,
+                    None => control_u32(&complete, b'c')
+                        .filter(|&c| c >= 1 && c as usize <= canvas.3)
+                        .and_then(|c| e.frame(c as usize - 1))
+                        .map(|f| f.pixels.clone()),
+                };
+                frame = Some(FrameTarget { canvas, base });
+                Ok(DecodeStep::Frame { id, canvas })
             });
             match found {
                 Ok(step) => step,
@@ -1118,6 +1152,7 @@ fn prepare_complete(
     let medium = control_byte(&complete, b't');
     Prepared::Decode(PreparedDecode {
         complete,
+        frame,
         plan: CommitPlan {
             step,
             refs,
@@ -1148,9 +1183,10 @@ pub fn commit_failed_decode(plan: &CommitPlan) -> Option<Vec<u8>> {
 pub fn commit_decoded(
     ctx: &mut ApcCtx<'_>,
     plan: &CommitPlan,
-    complete: &CompleteCommand,
-    result: Result<ImageEntry, DecodeError>,
+    decoded: Decoded,
 ) -> Option<Vec<u8>> {
+    let Decoded(complete, result, pixels) = decoded;
+    let complete = &complete;
     let mut refs = plan.refs;
     let (quiet, addressed, anchor_cursor) = (plan.quiet, plan.addressed, plan.anchor_cursor);
     let ApcCtx {
@@ -1189,9 +1225,15 @@ pub fn commit_decoded(
                 ),
             }
         }
-        DecodeStep::Frame { id, canvas } => {
-            store_decoded_frame(images, placements, events, complete, id, canvas, result)
-        }
+        DecodeStep::Frame { id, canvas } => store_decoded_frame(
+            images,
+            placements,
+            events,
+            complete,
+            id,
+            canvas,
+            result.map(|data| (data, pixels)),
+        ),
     };
     finish_command(shm, complete, addressed, quiet, &refs, outcome)
 }
@@ -2125,92 +2167,66 @@ fn store_decoded_frame(
     complete: &CompleteCommand,
     id: ImageId,
     canvas: (u32, u32, ImageFormat, usize),
-    decoded: Result<ImageEntry, DecodeError>,
+    decoded: Result<(ImageEntry, Option<FramePixels>), DecodeError>,
 ) -> ActionOutcome {
-    let data = match decoded {
+    let (data, pixels) = match decoded {
         Ok(d) => d,
         Err(err) => return decode_error_to_outcome(err),
     };
-    let outcome = store_frame(images, placements, events, complete, id, canvas, &data);
+    let outcome = match pixels {
+        Some(pixels) => store_frame(
+            images, placements, events, complete, id, canvas, &data, pixels,
+        ),
+        None => ActionOutcome::error(
+            ErrorCode::InvalidValue,
+            "a=f: frame data rectangle exceeds image bounds",
+        ),
+    };
     after_file_read(complete, outcome)
 }
 
-fn store_frame(
-    images: &mut felis_grid::images::ImageStore,
-    placements: &mut felis_grid::images::Placements,
-    events: &mut Vec<ImageEvent>,
+/// The 0-based frame an `a=f` edits in place (`r=`), else `None`: it
+/// adds a frame.
+fn edited_frame(complete: &CompleteCommand, frame_count: usize) -> Option<usize> {
+    control_u32(complete, b'r')
+        .filter(|&r| r >= 1 && r as usize <= frame_count)
+        .map(|r| r as usize - 1)
+}
+
+fn frame_offset(complete: &CompleteCommand) -> (u32, u32) {
+    (
+        control_u32(complete, b'x').unwrap_or(0),
+        control_u32(complete, b'y').unwrap_or(0),
+    )
+}
+
+/// `None` when the rectangle leaves the canvas.
+fn frame_pixels(
     complete: &CompleteCommand,
-    id: ImageId,
-    (img_w, img_h, format, frame_count): (u32, u32, ImageFormat, usize),
+    target: &FrameTarget,
     data: &ImageEntry,
-) -> ActionOutcome {
-    let img_bpp = format.bytes_per_pixel();
-    let off_x = control_u32(complete, b'x').unwrap_or(0);
-    let off_y = control_u32(complete, b'y').unwrap_or(0);
+) -> Option<FramePixels> {
+    let (img_w, img_h, format, frame_count) = target.canvas;
+    let (off_x, off_y) = frame_offset(complete);
     if off_x.saturating_add(data.width) > img_w || off_y.saturating_add(data.height) > img_h {
-        return ActionOutcome::error(
-            ErrorCode::InvalidValue,
-            "a=f: frame data rectangle exceeds image bounds",
-        );
+        return None;
     }
+    let img_bpp = format.bytes_per_pixel();
     let data_px = compose::convert_bpp(data.pixels(), data.format.bytes_per_pixel(), img_bpp);
-    let replace = control_u32(complete, b'X') == Some(1);
-    let z = control_i32(complete, b'z');
-    let target = control_u32(complete, b'r'); // 1-based frame to edit; absent → append
-    let base = control_u32(complete, b'c'); // 1-based base frame for a new frame
-    let bgcolor = control_u32(complete, b'Y').unwrap_or(0);
-
-    if let Some(rn) = target
-        && rn >= 1
-        && (rn as usize) <= frame_count
-    {
-        let idx = rn as usize - 1;
-        let edited = images.edit_frame(id, idx, |canvas| {
-            compose::blit(
-                canvas,
-                img_w,
-                img_h,
-                &data_px,
-                data.width,
-                data.height,
-                off_x,
-                off_y,
-                img_bpp,
-                replace,
-            );
-        });
-        if let Err(err) = edited {
-            return frame_error_to_outcome(err);
-        }
-        // kitty only changes an edited frame's gap when z is given.
-        if z.is_some()
-            && let Some(mut control) = images.animation_control(id)
-        {
-            control.set_gap(idx, gap_from_z(z));
-        }
-        events.push(ImageEvent::TransmitRegion {
-            id,
-            index: idx as u32,
-            rect: SourceRect {
-                x: off_x,
-                y: off_y,
-                width: data.width,
-                height: data.height,
-            },
-        });
-        return ActionOutcome::Ok;
+    if let Some(frame) = edited_frame(complete, frame_count) {
+        let pixels = match data_px {
+            Cow::Borrowed(_) => data.frames()[data.current_frame()].pixels.clone(),
+            Cow::Owned(px) => px.into(),
+        };
+        return Some(FramePixels::Rect { frame, pixels });
     }
-
-    let mut canvas = match base {
-        Some(cn) if cn >= 1 && (cn as usize) <= frame_count => images
-            .get(id)
-            .and_then(|e| e.frame(cn as usize - 1))
-            .map_or_else(
-                || compose::background_canvas(img_w, img_h, format, bgcolor),
-                |f| f.pixels.to_vec(),
-            ),
-        _ => compose::background_canvas(img_w, img_h, format, bgcolor),
-    };
+    let mut canvas = target.base.as_ref().map_or_else(
+        || {
+            let bgcolor = control_u32(complete, b'Y').unwrap_or(0);
+            compose::background_canvas(img_w, img_h, format, bgcolor)
+        },
+        |base| base.to_vec(),
+    );
     compose::blit(
         &mut canvas,
         img_w,
@@ -2221,8 +2237,63 @@ fn store_frame(
         off_x,
         off_y,
         img_bpp,
-        replace,
+        control_u32(complete, b'X') == Some(1),
     );
+    Some(FramePixels::Added(canvas))
+}
+
+fn store_frame(
+    images: &mut felis_grid::images::ImageStore,
+    placements: &mut felis_grid::images::Placements,
+    events: &mut Vec<ImageEvent>,
+    complete: &CompleteCommand,
+    id: ImageId,
+    (img_w, img_h, format, _): (u32, u32, ImageFormat, usize),
+    data: &ImageEntry,
+    pixels: FramePixels,
+) -> ActionOutcome {
+    let z = control_i32(complete, b'z');
+    let canvas = match pixels {
+        FramePixels::Added(canvas) => canvas,
+        FramePixels::Rect { frame: idx, pixels } => {
+            let (off_x, off_y) = frame_offset(complete);
+            let replace = control_u32(complete, b'X') == Some(1);
+            let edited = images.edit_frame(id, idx, |canvas| {
+                compose::blit(
+                    canvas,
+                    img_w,
+                    img_h,
+                    &pixels,
+                    data.width,
+                    data.height,
+                    off_x,
+                    off_y,
+                    format.bytes_per_pixel(),
+                    replace,
+                );
+            });
+            if let Err(err) = edited {
+                return frame_error_to_outcome(err);
+            }
+            // kitty only changes an edited frame's gap when z is given.
+            if z.is_some()
+                && let Some(mut control) = images.animation_control(id)
+            {
+                control.set_gap(idx, gap_from_z(z));
+            }
+            events.push(ImageEvent::TransmitRegion {
+                id,
+                index: idx as u32,
+                rect: SourceRect {
+                    x: off_x,
+                    y: off_y,
+                    width: data.width,
+                    height: data.height,
+                },
+            });
+            return ActionOutcome::Ok;
+        }
+    };
     let frame = Frame {
         pixels: canvas.into(),
         gap_ms: gap_from_z(z),

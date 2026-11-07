@@ -46,18 +46,19 @@ thread's critical section for every APC, not just the placements that move the c
 
 A heavy decode stops the parse the same way: a `t=f`, `t=t` or `t=s` source, a PNG, or a zlib payload declaring at least
 256 KiB of pixels (`offloads_decode` in `felis-vt` names the set). The session task prepares the command under the parse
-lock (reassembly, the id checks, id allocation), runs the decode on the blocking pool without it, then commits (store,
-placement, cursor move, reply) under one acquisition and only then releases the reader. Meanwhile it drains no effect,
-and runs only a window's pull and a stats read, both answered from the state as it stood before the command, and input
-that writes to the program with no size or input-owner change while nothing waits and no report of the task's own is
-owed, plus a shutdown, which a decode that never finishes must not outlive. Every other command waits out the decode in
-arrival order; holding is the default so that a command kind added later waits too. The task's own work waits the same
-way, until a drain has covered what the reader parsed after the image: the exit check, which would end a wait before the
-`OSC 133` mark the program wrote after the image, the reports the task writes itself (focus, color scheme, `DECSET 2048`
-resize), which would land ahead of the image's reply, and search walks. Animation playback keeps running, since the
-commit reads nothing it touches. The held commands replay after the commit and before the reader is released, each
-resize applied in turn, so the image is placed at the geometry the producer saw, a shrink and a grow trim the alternate
-screen as they would have in place, no keystroke reaches the program ahead of a resize it followed
+lock (reassembly, the id checks, id allocation), runs the decode, and an `a=f` frame's composition onto its base, on the
+blocking pool without it, then commits (store, placement, cursor move, reply) under one acquisition and only then
+releases the reader. Meanwhile it drains no effect, and runs only a window's pull and a stats read, both answered from
+the state as it stood before the command, and input that writes to the program with no size or input-owner change while
+nothing waits and no report of the task's own is owed, plus a shutdown, which a decode that never finishes must not
+outlive. Every other command waits out the decode in arrival order; holding is the default so that a command kind added
+later waits too. The task's own work waits the same way, until a drain has covered what the reader parsed after the
+image: the exit check, which would end a wait before the `OSC 133` mark the program wrote after the image, the reports
+the task writes itself (focus, color scheme, `DECSET 2048` resize), which would land ahead of the image's reply, and
+search walks. Animation playback keeps running, since the commit reads nothing it touches. The held commands replay
+after the commit and before the reader is released, each resize applied in turn, so the image is placed at the geometry
+the producer saw, a shrink and a grow trim the alternate screen as they would have in place, no keystroke reaches the
+program ahead of a resize it followed
 ([the frozen order of an ownership transfer](../architecture/session-lifecycle.md#ownership-transfer-has-a-frozen-order)),
 and a fence is answered only once the input ahead of it is written. Input from a window that left meanwhile is still
 written, since a dropped keystroke is gone with no sign. The stopped parse is what makes the split exact: nothing the

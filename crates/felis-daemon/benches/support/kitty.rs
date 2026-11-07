@@ -6,8 +6,7 @@ use std::hint::black_box;
 use std::time::{Duration, Instant};
 
 use felis_daemon::graphics::{
-    ApcCtx, ImageEvent, Prepared, PreparedDecode, ShmDeferral, begin_apc_body, commit_decoded,
-    decode_image, dispatch_apc_body,
+    ApcCtx, ImageEvent, Prepared, ShmDeferral, begin_apc_body, commit_decoded, dispatch_apc_body,
 };
 use felis_grid::Grid;
 use felis_grid::images::{ImageStore, Placements};
@@ -188,15 +187,14 @@ impl Session {
         let start = Instant::now();
         self.feed(head);
         let (mut ctx, reassembler) = self.ctx();
-        let Prepared::Decode(PreparedDecode { mut complete, plan }) =
-            begin_apc_body(&mut ctx, reassembler, last, None)
-        else {
+        let Prepared::Decode(prepared) = begin_apc_body(&mut ctx, reassembler, last, None) else {
             panic!("the command decodes nothing");
         };
+        let (job, plan) = prepared.into_job();
         let prepared = start.elapsed();
-        let result = black_box(decode_image(&mut complete));
+        let decoded = black_box(job.run());
         let start = Instant::now();
-        black_box(commit_decoded(&mut ctx, &plan, &complete, result));
+        black_box(commit_decoded(&mut ctx, &plan, decoded));
         prepared + start.elapsed()
     }
 }

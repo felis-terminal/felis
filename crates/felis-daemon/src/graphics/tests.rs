@@ -1667,6 +1667,39 @@ fn push_frame_cmd(gap: &'static [u8], pixel: [u8; 4]) -> (Vec<(u8, &'static [u8]
 }
 
 #[test]
+fn a_frame_rectangle_past_the_canvas_is_einval_and_stores_nothing() {
+    let (mut grid, mut images, mut placements) = handler_state();
+    transmit_root(&mut grid, &mut images, &mut placements, b"1");
+    let root = images.get(ImageId(1)).unwrap().clone();
+    for (edit, echo) in [(None, ""), (Some(b"1".as_slice()), ",r=1")] {
+        let (mut ctrls, payload) = push_frame_cmd(b"100", [0x11, 0x22, 0x33, 0x44]);
+        ctrls.push((b'x', b"1"));
+        if let Some(r) = edit {
+            ctrls.push((b'r', r));
+        }
+        let mut events = Vec::new();
+        let resp = handle_complete(
+            &mut ApcCtx {
+                grid: &mut grid,
+                images: &mut images,
+                placements: &mut placements,
+                events: &mut events,
+                shm: &mut ShmDeferral::default(),
+                cell_pixel_w: 0,
+                cell_pixel_h: 0,
+                anchor_cursor: None,
+            },
+            complete(&ctrls, &payload),
+        );
+        let want =
+            format!("\x1b_Gi=1{echo};EINVAL:a=f: frame data rectangle exceeds image bounds\x1b\\");
+        assert_eq!(resp, Some(want.into_bytes()), "r={edit:?}");
+        assert!(events.is_empty(), "r={edit:?}: {events:?}");
+        assert_eq!(images.get(ImageId(1)), Some(&root), "r={edit:?}");
+    }
+}
+
+#[test]
 fn animation_frame_appends_and_emits_frame_transmission() {
     let (mut grid, mut images, mut placements) = handler_state();
     transmit_root(&mut grid, &mut images, &mut placements, b"1");
