@@ -69,7 +69,7 @@ pub use connector::{
     Closed, ConnectError, Connection, CorrelatedHandle, DEFAULT_STREAM_BUFFER, DaemonStatus, Offer,
     RemoteSpawn, SessionRefusalContext, StreamEnd, StreamEvent, StreamReceiver, SwitchReply,
     admits, check_session_addressed, check_value_minor, connect, connect_carrier, dial_bounded,
-    refusal_detail,
+    refusal_detail, ssh_command,
 };
 #[cfg(feature = "native")]
 pub use dial::{

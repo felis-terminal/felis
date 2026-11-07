@@ -21,14 +21,17 @@ fn relay_command_builds_the_ssh_stdio_relay_invocation() {
     let std_cmd = cmd.as_std();
     assert_eq!(std_cmd.get_program(), "ssh");
     let args: Vec<&std::ffi::OsStr> = std_cmd.get_args().collect();
-    assert_eq!(args, ["user@host", "felis-daemon", "relay"]);
+    assert_eq!(args, ["--", "user@host", "felis-daemon", "relay"]);
 }
 
 #[test]
 fn relay_command_appends_no_spawn_for_refused_remote_spawn() {
     let cmd = relay_command("user@host", &[], RemoteSpawn::Refuse);
     let args: Vec<&std::ffi::OsStr> = cmd.as_std().get_args().collect();
-    assert_eq!(args, ["user@host", "felis-daemon", "relay", "--no-spawn"]);
+    assert_eq!(
+        args,
+        ["--", "user@host", "felis-daemon", "relay", "--no-spawn"]
+    );
 }
 
 /// The landing half of the auto-spawn matrix: a window launch and
@@ -39,7 +42,7 @@ fn relay_command_appends_no_spawn_for_refused_remote_spawn() {
 fn the_landing_relay_command_lets_the_remote_daemon_spawn() {
     let cmd = relay_command("user@host", &[], crate::LANDING_REMOTE_SPAWN);
     let args: Vec<&std::ffi::OsStr> = cmd.as_std().get_args().collect();
-    assert_eq!(args, ["user@host", "felis-daemon", "relay"]);
+    assert_eq!(args, ["--", "user@host", "felis-daemon", "relay"]);
 }
 
 /// ssh requires its options before the destination.
@@ -51,8 +54,36 @@ fn relay_command_splices_ssh_args_before_the_destination() {
     let args: Vec<&std::ffi::OsStr> = std_cmd.get_args().collect();
     assert_eq!(
         args,
-        ["-p", "2222", "-i", "user@host", "felis-daemon", "relay"],
+        [
+            "-p",
+            "2222",
+            "-i",
+            "--",
+            "user@host",
+            "felis-daemon",
+            "relay"
+        ],
     );
+}
+
+/// A destination is data: one spelled like an option still reaches ssh
+/// after the terminator, whatever the caller's own arguments end with.
+#[test]
+fn an_option_like_destination_lands_after_the_terminator() {
+    for ssh_args in [
+        vec![],
+        vec!["--".to_string()],
+        vec!["-i".to_string(), "--".to_string()],
+    ] {
+        let cmd = relay_command("-oProxyCommand=false", &ssh_args, RemoteSpawn::Allow);
+        let args: Vec<&std::ffi::OsStr> = cmd.as_std().get_args().collect();
+        let tail = &args[ssh_args.len()..];
+        assert_eq!(
+            tail,
+            ["--", "-oProxyCommand=false", "felis-daemon", "relay"],
+            "{ssh_args:?}"
+        );
+    }
 }
 
 use super::*;
@@ -60,9 +91,7 @@ use std::time::Duration;
 
 use super::{
     ConnectError, Connection,
-    carrier::{
-        CarrierConnection, Offer, RemoteSpawn, handshake_over, open_stdio_command, relay_command,
-    },
+    carrier::{CarrierConnection, Offer, RemoteSpawn, connect_relay_armed, relay_command},
     check_arm_minor, check_mode_minor,
     requests::{
         AttachIntent, ForceDetachReq, SessionRefusalContext, SwitchSessionReq, TagReq, admits,
@@ -503,8 +532,7 @@ async fn connect_stdio_command(
     cmd: Command,
     offer: Offer,
 ) -> Result<CarrierConnection, ConnectError> {
-    let (read_half, write_half) = open_stdio_command(cmd)?;
-    handshake_over(read_half, write_half, offer).await
+    connect_relay_armed(cmd, offer).await
 }
 
 /// A child that will not start is not the endpoint answering:
@@ -2274,4 +2302,46 @@ async fn every_session_addressed_call_is_refused_unsent_on_the_previous_minor() 
         sent.is_empty(),
         "nothing may reach the daemon, got {sent:?}"
     );
+}
+
+/// A relay that never answers stands in for `ssh` stuck connecting,
+/// which reads no stdin, so only a kill can end it.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_abandoned_ssh_dial_kills_its_relay_child() {
+    let dir = TempDir::new().unwrap();
+    let marker = dir.path().join("pid");
+    let mut cmd = Command::new("/bin/sh");
+    cmd.args(["-c", "echo $$ > \"$1\"; exec sleep 60", "relay"])
+        .arg(&marker);
+    let dial = tokio::spawn(connect_relay_armed(cmd, Offer::ops()));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let pid = loop {
+        if let Ok(pid) = std::fs::read_to_string(&marker)
+            && pid.ends_with('\n')
+        {
+            break pid;
+        }
+        assert!(Instant::now() < deadline, "the relay child never started");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    };
+    dial.abort();
+    assert!(matches!(dial.await, Err(err) if err.is_cancelled()));
+    loop {
+        // The shell builtin: the Nix build sandbox on Linux has no /bin/kill.
+        let alive = std::process::Command::new("/bin/sh")
+            .args(["-c", "kill -0 \"$1\"", "kill", pid.trim()])
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap()
+            .success();
+        if !alive {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the relay child survived the abandoned dial"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
 }

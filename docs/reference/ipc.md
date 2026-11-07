@@ -71,8 +71,11 @@ The relay carries bytes only; the client and the remote daemon handshake and con
 and remote attach share the framing, the handshake, the rehydrate path, and the input pipeline unchanged.
 
 Nothing listens on the network on either end, so existing SSH firewall configurations, jump hosts, and `~/.ssh/config`
-entries work unchanged, and felis inherits keys, agents, and 2FA prompts. felis puts no connection deadline on the `ssh`
-child; timeouts follow the user's SSH config.
+entries work unchanged, and felis inherits keys, agents, and 2FA prompts. A plain dial puts no deadline on the `ssh`
+child, so its timeouts follow the user's SSH config; a window's reconnect attempt is bounded by felis. The client passes
+the destination after `--`, so no destination is read as an `ssh` option. A dial the client abandons before it lands
+kills its `ssh` child, which a dead route would otherwise keep connecting; an established connection ends it by closing
+`ssh`'s stdin.
 
 The `FRLY` **carrier block** ("Relay carrier block" below), holding the relay's own environment, is the only thing the
 relay can write of its own, once, before the splicing begins; it is omitted when that environment exceeds either frozen

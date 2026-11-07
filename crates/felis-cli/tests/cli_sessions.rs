@@ -267,9 +267,9 @@ fn the_ssh_relay_command_asks_for_a_spawn_only_for_the_spawning_verb() {
     for (verb, expected) in [
         (
             ["sessions", "list"],
-            "nowhere felis-daemon relay --no-spawn",
+            "-- nowhere felis-daemon relay --no-spawn",
         ),
-        (["sessions", "spawn"], "nowhere felis-daemon relay"),
+        (["sessions", "spawn"], "-- nowhere felis-daemon relay"),
     ] {
         drop(std::fs::remove_file(&calls));
         let out = cli_command()

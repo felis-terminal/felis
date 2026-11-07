@@ -14,7 +14,7 @@ use felis_transport::{
 };
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::process::{ChildStdin, ChildStdout, Command};
+use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 
 use super::{ConnectError, Connection, check_mode_minor};
 
@@ -95,18 +95,48 @@ pub(crate) async fn connect_carrier_with_retry(
 
 /// `ssh_args` are spliced verbatim as argv entries, never through a shell:
 /// which of them take values is `ssh`'s grammar, not felis's (principle 4)
-/// (docs/reference/ipc.md "Cross-host carrier: SSH stdio").
+/// (docs/reference/ipc.md "Cross-host carrier: SSH stdio"). The `--` is
+/// unconditional for the same reason: telling a caller's own terminator
+/// from an option value such as `-i --` would mean parsing that grammar.
+#[must_use]
+pub fn ssh_command(ssh_args: &[String], destination: &str) -> std::process::Command {
+    let mut cmd = std::process::Command::new("ssh");
+    cmd.args(ssh_args).arg("--").arg(destination);
+    cmd
+}
+
 #[must_use]
 pub(super) fn relay_command(host: &str, ssh_args: &[String], remote_spawn: RemoteSpawn) -> Command {
-    let mut cmd = Command::new("ssh");
-    cmd.args(ssh_args)
-        .arg(host)
-        .arg("felis-daemon")
-        .arg("relay");
+    let mut cmd = ssh_command(ssh_args, host);
+    cmd.arg("felis-daemon").arg("relay");
     if remote_spawn == RemoteSpawn::Refuse {
         cmd.arg("--no-spawn");
     }
-    cmd
+    cmd.into()
+}
+
+/// Kills the `ssh` child when dropped unreleased. A dial abandoned
+/// mid-flight cannot end `ssh` by closing its stdin: while `ssh` is
+/// still connecting it reads no stdin, and a half-open route keeps it
+/// there for as long as the kernel retries.
+pub(super) struct RelayChild(Option<Child>);
+
+impl RelayChild {
+    /// Hands the child back to the stdin-EOF shutdown: a kill on an
+    /// established connection could discard the last request `ssh`
+    /// has buffered but not yet sent.
+    pub(super) fn release(mut self) {
+        self.0.take();
+    }
+}
+
+impl Drop for RelayChild {
+    fn drop(&mut self) {
+        if let Some(child) = &mut self.0 {
+            // An already-exited child is the outcome a kill wants.
+            drop(child.start_kill());
+        }
+    }
 }
 
 /// `cmd.stderr` stays at the parent default so SSH password prompts
@@ -114,15 +144,29 @@ pub(super) fn relay_command(host: &str, ssh_args: &[String], remote_spawn: Remot
 /// (docs/reference/ipc.md "Cross-host carrier: SSH stdio").
 pub(super) fn open_stdio_command(
     cmd: Command,
-) -> Result<(CarrierReader, CarrierWriter), ConnectError> {
-    let session = felis_transport::spawn_command(cmd)?;
-    // The Child handle is dropped here; `ssh` survives until the
-    // caller's writer half closes its stdin.
-    let felis_transport::StdioSession { reader, writer, .. } = session;
+) -> Result<(CarrierReader, CarrierWriter, RelayChild), ConnectError> {
+    let felis_transport::StdioSession {
+        child,
+        reader,
+        writer,
+    } = felis_transport::spawn_command(cmd)?;
     Ok((
         CarrierReader::Ssh(reader.into_inner()),
         CarrierWriter::Ssh(writer.into_inner()),
+        RelayChild(Some(child)),
     ))
+}
+
+/// The spawn and the handshake with the relay still armed: the caller
+/// releases it once its own bounded phase is over.
+pub(super) async fn connect_relay_armed(
+    cmd: Command,
+    offer: Offer,
+) -> Result<CarrierConnection, ConnectError> {
+    let (read_half, write_half, relay) = open_stdio_command(cmd)?;
+    let mut conn = handshake_over(read_half, write_half, offer).await?;
+    conn.relay = Some(relay);
+    Ok(conn)
 }
 
 /// The preface runs before a [`FrameReader`] exists: the reader's
@@ -208,6 +252,7 @@ where
         daemon_identity: identity,
         image_regions: offer.image_regions,
         abandoned: false,
+        relay: None,
     })
 }
 
@@ -316,28 +361,57 @@ pub async fn connect_carrier(
     offer: Offer,
     remote_spawn: RemoteSpawn,
 ) -> Result<CarrierConnection, ConnectError> {
-    let (read_half, write_half) = open_carrier(carrier, remote_spawn).await?;
-    handshake_over(read_half, write_half, offer).await
+    let mut conn = connect_carrier_armed(carrier, offer, remote_spawn).await?;
+    conn.release_relay();
+    Ok(conn)
+}
+
+/// [`connect_carrier`] for a caller that bounds more than the handshake:
+/// it calls [`Connection::release_relay`] once that bound is met.
+pub(crate) async fn connect_carrier_armed(
+    carrier: Carrier,
+    offer: Offer,
+    remote_spawn: RemoteSpawn,
+) -> Result<CarrierConnection, ConnectError> {
+    match carrier {
+        Carrier::Local(endpoint) => {
+            let (read_half, write_half) = open_local(endpoint).await?;
+            handshake_over(read_half, write_half, offer).await
+        }
+        Carrier::Ssh {
+            destination,
+            ssh_args,
+        } => connect_relay_armed(relay_command(&destination, &ssh_args, remote_spawn), offer).await,
+    }
+}
+
+async fn open_local(endpoint: Endpoint) -> Result<(CarrierReader, CarrierWriter), ConnectError> {
+    let (read_half, write_half) = local::connect(endpoint)
+        .await
+        .map_err(ConnectError::Connect)?;
+    Ok((
+        CarrierReader::Local(read_half),
+        CarrierWriter::Local(write_half),
+    ))
 }
 
 async fn open_carrier(
     carrier: Carrier,
     remote_spawn: RemoteSpawn,
-) -> Result<(CarrierReader, CarrierWriter), ConnectError> {
+) -> Result<(CarrierReader, CarrierWriter, Option<RelayChild>), ConnectError> {
     match carrier {
         Carrier::Local(endpoint) => {
-            let (read_half, write_half) = local::connect(endpoint)
-                .await
-                .map_err(ConnectError::Connect)?;
-            Ok((
-                CarrierReader::Local(read_half),
-                CarrierWriter::Local(write_half),
-            ))
+            let (read_half, write_half) = open_local(endpoint).await?;
+            Ok((read_half, write_half, None))
         }
         Carrier::Ssh {
             destination,
             ssh_args,
-        } => open_stdio_command(relay_command(&destination, &ssh_args, remote_spawn)),
+        } => {
+            let (read_half, write_half, relay) =
+                open_stdio_command(relay_command(&destination, &ssh_args, remote_spawn))?;
+            Ok((read_half, write_half, Some(relay)))
+        }
     }
 }
 
@@ -374,9 +448,12 @@ pub async fn dial_bounded(
         .await
         .map_err(|_elapsed| BoundedDialError::ConnectTimedOut { deadline })??;
     let remaining = deadline.saturating_sub(started.elapsed());
-    let (read_half, write_half) = halves;
+    let (read_half, write_half, relay) = halves;
     let conn = tokio::time::timeout(remaining, handshake_over(read_half, write_half, offer))
         .await
         .map_err(|_elapsed| BoundedDialError::HandshakeTimedOut { deadline })??;
+    if let Some(relay) = relay {
+        relay.release();
+    }
     Ok(conn)
 }
