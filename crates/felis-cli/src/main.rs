@@ -280,6 +280,12 @@ struct Cli {
     /// and `doctor`; other verbs refuse it.
     #[arg(long, value_name = "PATH")]
     config: Option<PathBuf>,
+    /// Name the window for window-manager rules: the Wayland `app_id` and X11 `WM_CLASS`, or the Win32 window class.
+    ///
+    /// Window launches only; other verbs refuse it. No effect on macOS,
+    /// which has no per-window class. Default: `felis` on Linux.
+    #[arg(long, value_name = "NAME", value_parser = felis_client_core::window_class::validate_window_class)]
+    class: Option<String>,
     /// Run this program in the new window instead of the default `$SHELL` (`xterm -e`).
     ///
     /// Arguments after `--` are taken literally as argv. Ignored with a subcommand.
@@ -395,6 +401,17 @@ fn main() -> Result<()> {
             format!(
                 "{verb}: --config selects the config.toml a window launch, `felis config`, or \
                  `felis doctor` reads; this verb reads none. Drop the flag."
+            ),
+        ));
+    }
+    if cli.class.is_some()
+        && let Some(verb) = verb_opening_no_window(cli.cmd.as_ref())
+    {
+        std::process::exit(out.fail(
+            cli_output::ErrorKind::Usage,
+            format!(
+                "{verb}: --class names the window a launch opens; this verb opens none. Drop \
+                 the flag."
             ),
         ));
     }
@@ -675,6 +692,29 @@ fn verb_reading_no_config(cmd: Option<&Cmd>) -> Option<String> {
     Some(verb.to_owned())
 }
 
+/// Every verb but the window launches, which alone open the window
+/// `--class` names.
+fn verb_opening_no_window(cmd: Option<&Cmd>) -> Option<String> {
+    let verb = match cmd? {
+        Cmd::Attach { .. } => return None,
+        Cmd::Config { .. } => "felis config",
+        Cmd::Doctor { .. } => "felis doctor",
+        Cmd::Sessions { .. } => "felis sessions",
+        Cmd::Notifications { .. } => "felis notifications",
+        Cmd::Version { .. } => "felis version",
+        Cmd::Fonts { .. } => "felis fonts",
+        Cmd::Daemon { .. } => "felis daemon",
+        Cmd::Window {
+            op: WindowOp::Retarget { .. },
+        } => "felis window retarget",
+        Cmd::Ssh { .. } => "felis ssh",
+        Cmd::Completions { .. } => "felis completions",
+        Cmd::CompleteSessions => "felis __complete-sessions",
+        Cmd::Mangen { .. } => "felis __mangen",
+    };
+    Some(verb.to_owned())
+}
+
 /// The verbs that dial no daemon the global carrier could name, each
 /// with the tail that says why. Refused there rather than ignored, for
 /// the reason `--config` is (docs/reference/cli.md "Global options").
@@ -740,10 +780,14 @@ const fn version_conflict(cli: &Cli) -> Option<&'static str> {
             "`--version` reports this build and runs nothing else; drop it to run the command, or use `felis version` to compare builds",
         );
     }
-    if cli.config.is_some() || cli.host.is_some() || cli.socket.is_some() || !cli.ssh_arg.is_empty()
+    if cli.config.is_some()
+        || cli.host.is_some()
+        || cli.socket.is_some()
+        || !cli.ssh_arg.is_empty()
+        || cli.class.is_some()
     {
         return Some(
-            "`--version` reports this build and runs nothing else: it reads no config.toml and dials no daemon; drop --config/--host/--socket/--ssh-arg, or use `felis version` to compare builds",
+            "`--version` reports this build and runs nothing else: it reads no config.toml, dials no daemon, and opens no window; drop --config/--host/--socket/--ssh-arg/--class, or use `felis version` to compare builds",
         );
     }
     None
@@ -769,6 +813,10 @@ fn global_passthrough(cli: &Cli, config_source: &ConfigSource) -> Vec<OsString> 
     for token in &cli.ssh_arg {
         args.push("--ssh-arg".into());
         args.push(token.into());
+    }
+    if let Some(class) = &cli.class {
+        args.push("--class".into());
+        args.push(class.into());
     }
     args
 }

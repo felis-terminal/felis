@@ -109,8 +109,8 @@ fn the_self_report_refuses_to_share_the_line_with_a_command() {
     }
 }
 
-/// The globals select what a verb reads or dials, and this flag does
-/// neither: dropping them silently would let a user believe they had
+/// The globals select what a verb reads, dials, or opens, and this flag
+/// does none of it: dropping them silently would let a user believe they had
 /// asked about the remote build (`docs/reference/cli.md` "Global
 /// options").
 #[test]
@@ -120,6 +120,7 @@ fn the_self_report_refuses_the_globals_it_could_not_honor() {
         vec!["--config", "work.toml", "--version"],
         vec!["--socket", "/tmp/felis-x.sock", "--version"],
         vec!["--host", "vm", "--ssh-arg=-p", "--version"],
+        vec!["--class", "scratch", "--version"],
     ] {
         let argv: Vec<&std::ffi::OsStr> = args.iter().copied().map(std::ffi::OsStr::new).collect();
         let out = felis(&home, &argv);
@@ -127,7 +128,7 @@ fn the_self_report_refuses_the_globals_it_could_not_honor() {
         assert!(out.stdout.is_empty(), "{args:?}");
         let stderr = String::from_utf8(out.stderr).unwrap();
         assert!(
-            stderr.contains("it reads no config.toml and dials no daemon"),
+            stderr.contains("it reads no config.toml, dials no daemon, and opens no window"),
             "{stderr}"
         );
     }

@@ -39,6 +39,15 @@ Global flags precede the verb (`felis --config ./work.toml doctor`):
 - `--socket <path>`: dials a local daemon at an explicit socket path, on the host it runs on. A relative path is
   anchored to the caller's working directory. It is mutually exclusive with `--host` (exit `2`).
 - `--ssh-arg <token>`: passes an argument token to `ssh` when `--host` is used (repeatable).
+- `--class <name>`: names the launched window for window-manager rules, for the window's whole life (a retarget, a
+  session switch, or a reconnect keeps it). On Linux it sets the Wayland app ID and both X11 `WM_CLASS` fields; absent,
+  both are `felis`, which pairs the window with `felis.desktop`, and any other name loses that pairing (a generic icon
+  and a separate dock group on GNOME and KDE). On Windows it sets the Win32 window class and leaves the AppUserModelID,
+  so taskbar grouping and pinning are unchanged. On macOS it is accepted and has no effect: the platform has no
+  per-window class ([non-goals.md](../explanation/non-goals.md) "Cross-platform constraints"). A name must be 1 to 255
+  bytes with no control characters, and on Windows must not already be a registered window class (a system class such as
+  `Button`, or winit's `Winit Thread Event Target`), compared case-insensitively. A refused name exits `2` before the
+  window dials the daemon, so no session is created.
 
 ### Placement matrix
 
@@ -47,19 +56,19 @@ frontend's command line, `--config` in its absolute form), _read_ (this process 
 `config path` resolves it, the rest parse it), _dials_ (names the daemon the verb connects to), or _refused_ (a usage
 error, exit `2`).
 
-| Verb form                                                        | `--config` | `--host`                | `--socket` | `--ssh-arg`             |
-| ---------------------------------------------------------------- | ---------- | ----------------------- | ---------- | ----------------------- |
-| Window launch: bare `felis`, `felis -- <cmd>`, `attach`          | forwarded  | forwarded               | forwarded  | forwarded               |
-| Headless verbs: `sessions`, `notifications`, `daemon`, `version` | refused    | dials                   | dials      | dials                   |
-| `daemon upgrade`                                                 | refused    | runs remote `felis`     | dials      | forwarded to `ssh`      |
-| `config path` / `check` / `show-effective`                       | read       | refused                 | refused    | refused                 |
-| `fonts list`                                                     | refused    | refused                 | refused    | refused                 |
-| `doctor`, `doctor report`                                        | read       | dials                   | dials      | dials                   |
-| `felis ssh`, `window retarget`                                   | refused    | refused                 | refused    | refused                 |
-| `<name>` (external command)                                      | refused    | refused                 | refused    | refused                 |
-| `completions <shell>`, `__mangen <dir>`                          | refused    | refused                 | refused    | refused                 |
-| `__complete-sessions`                                            | refused    | no candidates, exit `0` | dials      | no candidates, exit `0` |
-| `--version`                                                      | refused    | refused                 | refused    | refused                 |
+| Verb form                                                        | `--config` | `--host`                | `--socket` | `--ssh-arg`             | `--class` |
+| ---------------------------------------------------------------- | ---------- | ----------------------- | ---------- | ----------------------- | --------- |
+| Window launch: bare `felis`, `felis -- <cmd>`, `attach`          | forwarded  | forwarded               | forwarded  | forwarded               | forwarded |
+| Headless verbs: `sessions`, `notifications`, `daemon`, `version` | refused    | dials                   | dials      | dials                   | refused   |
+| `daemon upgrade`                                                 | refused    | runs remote `felis`     | dials      | forwarded to `ssh`      | refused   |
+| `config path` / `check` / `show-effective`                       | read       | refused                 | refused    | refused                 | refused   |
+| `fonts list`                                                     | refused    | refused                 | refused    | refused                 | refused   |
+| `doctor`, `doctor report`                                        | read       | dials                   | dials      | dials                   | refused   |
+| `felis ssh`, `window retarget`                                   | refused    | refused                 | refused    | refused                 | refused   |
+| `<name>` (external command)                                      | refused    | refused                 | refused    | refused                 | refused   |
+| `completions <shell>`, `__mangen <dir>`                          | refused    | refused                 | refused    | refused                 | refused   |
+| `__complete-sessions`                                            | refused    | no candidates, exit `0` | dials      | no candidates, exit `0` | refused   |
+| `--version`                                                      | refused    | refused                 | refused    | refused                 | refused   |
 
 `doctor` dials, so `--host` makes its daemon row report the remote daemon; every other row still describes this machine.
 `doctor report` follows the same rule: `--host` changes only the daemon row and the daemon build, and the environment
@@ -779,8 +788,8 @@ built-in verb takes is reachable only by its own name. An external command reads
   names that path and exits `1`. On success the process is replaced on Unix; on Windows `felis` waits and exits with the
   child's code.
 - **Help**: `felis help <name> [<args>...]` runs `felis-<name> [<args>...] --help`.
-- **Globals**: `--config`, `--host`, `--socket`, and `--ssh-arg` before the name are refused (exit `2`): `felis` does
-  not know how `felis-<name>` spells them. Write them after the name, in the command's own spelling:
+- **Globals**: `--config`, `--host`, `--socket`, `--ssh-arg`, and `--class` before the name are refused (exit `2`):
+  `felis` does not know how `felis-<name>` spells them. Write them after the name, in the command's own spelling:
   `felis tui --config ./work.toml`.
 
 ## Carrier and connection lifetime

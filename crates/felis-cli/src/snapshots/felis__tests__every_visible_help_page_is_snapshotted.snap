@@ -53,6 +53,11 @@ Options:
           
           The selected file must exist. Applies to window launches, `config`, and `doctor`; other verbs refuse it.
 
+      --class <NAME>
+          Name the window for window-manager rules: the Wayland `app_id` and X11 `WM_CLASS`, or the Win32 window class.
+          
+          Window launches only; other verbs refuse it. No effect on macOS, which has no per-window class. Default: `felis` on Linux.
+
   -h, --help
           Print help (see a summary with '-h')
 

@@ -1329,6 +1329,7 @@ dependencies = [
  "objc2-quartz-core 0.3.2",
  "proptest",
  "serde_json",
+ "tempfile",
  "tokio",
  "tracing",
  "window-vibrancy",
