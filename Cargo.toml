@@ -224,8 +224,7 @@ gungraun = "=0.20.0"
 # a backtrace per allocation, far too costly for a normal run, so it
 # must never compile into a default build. It is also a dev-dependency
 # of `felis-client-core`, where a heap ceiling is the only way to state
-# what a limits test is actually asserting — that refusing a claim did
-# not first allocate against it. The on-exit `dhat-heap.json`
+# what its limits and session-footprint tests assert. The on-exit `dhat-heap.json`
 # opens in the DHAT viewer
 # (https://nnethercote.github.io/dh_view/dh_view.html) as an
 # allocation-site flamegraph — this is the "framegraph" surface for

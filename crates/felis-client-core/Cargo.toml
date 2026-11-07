@@ -69,12 +69,13 @@ proptest = { workspace = true }
 criterion = { workspace = true }
 serde_json = { workspace = true }
 boon = { workspace = true }
-# Heap accounting for `tests/hostile_claims.rs`: the property under
-# test is that a tiny frame allocates nothing proportional to what it
-# claims, which only an allocator can witness. Test-only, and it needs
+# Heap accounting for `tests/hostile_claims.rs` (a tiny frame allocates
+# nothing proportional to what it claims) and `tests/session_memory.rs`
+# (what a session and a window keep alive): properties only an
+# allocator can witness. Test-only, and it needs
 # no `unsafe` here — the `#[global_allocator]` is dhat's own type.
 dhat = { workspace = true }
-# The same test hand-builds wire messages: a hostile frame is defined by
+# `hostile_claims` hand-builds wire messages: a hostile frame is defined by
 # what it says on the wire, so it has to be encoded there rather than
 # round-tripped from a domain value the checks already admitted.
 prost = { workspace = true }
