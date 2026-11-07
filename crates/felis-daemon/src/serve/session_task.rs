@@ -8543,7 +8543,7 @@ mod tests {
                 },
             ];
             for ev in events {
-                let encoded = streaming::body_for(&ev).expect("sendable").body().len();
+                let encoded = streaming::body_for(&ev).expect("sendable").body_len();
                 assert!(
                     ev.approx_wire_len() >= encoded,
                     "{} charged for a {encoded}-byte body: {ev:?}",

@@ -18,7 +18,7 @@ use felis_grid::{
 };
 use felis_protocol::{
     MessageKind,
-    codec::{decode, encode},
+    codec::{decode, encode, encode_image},
     frame::{Frame, HEADER_LEN, LEN_OVERHEAD, decode as decode_frame},
     kitty_graphics::placeholder::{PLACEHOLDER, Rank, diacritic_for},
     messages::{GridMsg, ImageMsg, MAX_SESSION_IMAGE_BYTES},
@@ -686,11 +686,15 @@ fn frame_into(out: &mut Vec<u8>, kind: MessageKind, body: &[u8]) {
     .expect("bench bodies are inside the ceiling");
 }
 
-fn frame_onto(out: &mut BytesMut, kind: MessageKind, body: &[u8]) {
-    let len = u32::try_from(body.len()).expect("bench bodies are inside the ceiling");
+/// The daemon's fan-out writes an image body as its head and its
+/// uncopied payload (`CheckedFrame::encode_image`).
+fn image_frame_onto(out: &mut BytesMut, msg: &ImageMsg) {
+    let (head, tail) = encode_image(msg);
+    let len = u32::try_from(head.len() + tail.len()).expect("bench bodies are inside the ceiling");
     out.put_u32_le(len + LEN_OVERHEAD);
-    out.put_u16_le(kind.as_u16());
-    out.extend_from_slice(body);
+    out.put_u16_le(MessageKind::Image.as_u16());
+    out.extend_from_slice(&head);
+    out.extend_from_slice(&tail);
 }
 
 /// One session's daemon state and one attached client's mirror of it.
@@ -811,7 +815,7 @@ impl Pipeline {
         emit_diffs_with(&mut self.grid, &mut self.scratch, true);
         apply_diffs(&self.scratch, &mut self.shadow);
         for msg in materialize_image_events(&self.events, &self.images, true) {
-            frame_onto(&mut self.wire, MessageKind::Image, &encode(&msg));
+            image_frame_onto(&mut self.wire, &msg);
         }
         self.events.clear();
         let mut rest = self.wire.split().freeze();

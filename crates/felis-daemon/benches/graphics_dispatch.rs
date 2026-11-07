@@ -761,7 +761,7 @@ impl Subscribers {
         self.runtime.block_on(async {
             for writer in writers.iter_mut() {
                 for msg in msgs {
-                    let body = CheckedFrame::encode(msg).unwrap();
+                    let body = CheckedFrame::encode_image(msg).unwrap();
                     writer.send_checked_unflushed(&body).await.unwrap();
                 }
                 writer.flush().await.unwrap();

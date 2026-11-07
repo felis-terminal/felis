@@ -584,7 +584,7 @@ impl AttachInput {
             TransportError::Wire(err) => InputError::TooLarge(err),
             err => unreachable!("every input arm is uncorrelated: {err}"),
         })?;
-        let size = (frame.body().len() + HEADER_LEN).min(INPUT_BYTE_BUDGET);
+        let size = (frame.body_len() + HEADER_LEN).min(INPUT_BYTE_BUDGET);
         let bytes = Arc::clone(&self.budget)
             .acquire_many_owned(u32::try_from(size).unwrap_or(u32::MAX))
             .await

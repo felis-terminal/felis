@@ -1225,7 +1225,7 @@ impl OutgoingSender {
         if self.shared.lost.load(Ordering::Acquire) {
             return Err(OutgoingFull {
                 queued: queue.bytes(),
-                incoming: frame.frame().body().len(),
+                incoming: frame.frame().body_len(),
                 cap: felis_protocol::limits::CLIENT_OUTGOING_CAP,
             });
         }

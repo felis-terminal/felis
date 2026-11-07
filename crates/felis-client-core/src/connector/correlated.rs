@@ -680,7 +680,7 @@ impl CorrelatedHandle {
             let id = state.driver.issue_request()?;
             let frame = match CheckedFrame::encode_correlated(&msg, Correlation::request(id)) {
                 Ok(frame) => {
-                    debug_assert!(frame.body().len() + HEADER_LEN <= size as usize);
+                    debug_assert!(frame.body_len() + HEADER_LEN <= size as usize);
                     frame
                 }
                 Err(err) => {
@@ -751,7 +751,7 @@ impl CorrelatedHandle {
         let id = begin_stream(&mut state.driver, from)?;
         let frame = match CheckedFrame::encode_correlated(msg, Correlation::stream(id)) {
             Ok(frame) => {
-                debug_assert!(frame.body().len() + HEADER_LEN <= size as usize);
+                debug_assert!(frame.body_len() + HEADER_LEN <= size as usize);
                 frame
             }
             Err(err) => {
