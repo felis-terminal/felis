@@ -2,7 +2,7 @@
 //!
 //! Evaluates compute cost from `compose_diffs` through `FrameWriter::write_frame`,
 //! frame decode, `GridMsg` decode, and `ShadowScreen::apply`, plus the
-//! Kitty graphics path through `ImageShadow` and its layout.
+//! Kitty graphics path and a resize's reflow over a full scrollback.
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
@@ -22,8 +22,9 @@ mod graphics;
 use graphics::{Graphics, Pipeline};
 
 use workload::{
-    COLS, PTY_CHUNK_SIZE, ROWS, STREAM_BYTES, apply_diffs, csi_redraw, emit_diffs_with,
-    plaintext_scroll, repeat_to, shell_prompt,
+    COLS, PTY_CHUNK_SIZE, REFLOW_NARROW_COLS, REFLOW_WIDE_COLS, ROWS, STREAM_BYTES, apply_diffs,
+    csi_redraw, emit_diffs_with, plaintext_scroll, reflow_and_replay, reflow_history_grid,
+    repeat_to, shell_prompt,
 };
 
 fn emit_diffs(grid: &mut Grid, scratch: &mut Vec<u8>) {
@@ -248,5 +249,29 @@ fn bench_graphics(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(end_to_end_throughput, bench_throughput, bench_graphics);
+fn bench_reflow(c: &mut Criterion) {
+    let mut group = c.benchmark_group("resize_reflow");
+    let history = reflow_history_grid();
+    for (name, cols) in [("narrow", REFLOW_NARROW_COLS), ("widen", REFLOW_WIDE_COLS)] {
+        group.bench_function(name, |b| {
+            let mut scratch: Vec<u8> = Vec::with_capacity(128 * 1024);
+            b.iter_batched(
+                || history.clone(),
+                |mut grid| {
+                    reflow_and_replay(&mut grid, black_box(cols), &mut scratch);
+                    grid
+                },
+                BatchSize::LargeInput,
+            );
+        });
+    }
+    group.finish();
+}
+
+criterion_group!(
+    end_to_end_throughput,
+    bench_throughput,
+    bench_graphics,
+    bench_reflow
+);
 criterion_main!(end_to_end_throughput);
