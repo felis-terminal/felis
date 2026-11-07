@@ -151,6 +151,22 @@ pub type ServerReadHalf = tokio::io::ReadHalf<tokio::net::windows::named_pipe::N
 #[cfg(windows)]
 pub type ServerWriteHalf = tokio::io::WriteHalf<tokio::net::windows::named_pipe::NamedPipeServer>;
 
+/// The process that connected an accepted stream, as the kernel recorded
+/// it at connect time; `None` where it cannot be read. Independent of the
+/// accept-time identity check, which already passed or refused the peer.
+#[must_use]
+pub fn peer_pid(stream: &ServerStream) -> Option<std::num::NonZeroU32> {
+    #[cfg(unix)]
+    {
+        use std::os::fd::AsFd as _;
+        crate::peer::peer_pid(stream.as_fd())
+    }
+    #[cfg(windows)]
+    {
+        std::num::NonZeroU32::new(backend::client_pid(stream).ok()?)
+    }
+}
+
 #[must_use]
 pub fn server_split(stream: ServerStream) -> (ServerReadHalf, ServerWriteHalf) {
     #[cfg(unix)]

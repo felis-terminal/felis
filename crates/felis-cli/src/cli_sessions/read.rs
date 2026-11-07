@@ -127,9 +127,12 @@ where
         }
         for attachment in &session.attachments {
             let carrier = match attachment.carrier {
-                Some(AttachCarrier::Local) => ", local",
-                Some(AttachCarrier::Relay { .. }) => ", relay",
-                None => "",
+                Some(AttachCarrier::Local {
+                    client_pid: Some(pid),
+                }) => format!(", local, pid {pid}"),
+                Some(AttachCarrier::Local { client_pid: None }) => ", local".to_owned(),
+                Some(AttachCarrier::Relay { .. }) => ", relay".to_owned(),
+                None => String::new(),
             };
             stdoutln!(
                 "window:   {} (attached {}{carrier}){}",

@@ -980,7 +980,7 @@ fn attach_window(task: &mut SessionTask) -> (SubscribeReply, mpsc::UnboundedRece
             minor: felis_protocol::preface::PROTOCOL_MINOR,
             live_only: false,
             image_regions: false,
-            carrier: AttachCarrier::Local,
+            carrier: AttachCarrier::Local { client_pid: None },
             tx,
             buffered: Arc::new(AtomicUsize::new(0)),
             reply: reply_tx,

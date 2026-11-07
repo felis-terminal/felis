@@ -30,7 +30,7 @@ pub use driver::{
     Undecoded,
 };
 pub use framing::{CheckedFrame, FrameReader, FrameWriter, OwnedFrame, TransportError};
-pub use local::{Endpoint, Listener, connect, server_split};
+pub use local::{Endpoint, Listener, connect, peer_pid, server_split};
 pub use preface::PrefaceExchangeError;
 pub use retry::{RetryError, RetryPolicy, retry_while, retry_with_backoff};
 pub use stdio::{StdioSession, spawn_command};

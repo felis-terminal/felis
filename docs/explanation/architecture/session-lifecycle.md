@@ -814,6 +814,13 @@ The id is **not** exported into the child environment. A `FELIS_ATTACHMENT_ID` v
 environment is fixed at spawn and shared by every mirror and every later re-attach, so an environment variable cannot
 name "this window". `FELIS_SESSION_ID` works precisely because a session _is_ the thing the environment is fixed to.
 
+A local attachment also reports the **pid of the process that connected it**, so a window-manager script can find the OS
+window showing a session without felis taking over layout (principle 1). The pid is read by the daemon off the socket it
+already authenticates, never claimed in `Hello`, so a client cannot name another process. An OS window id (HWND,
+CGWindowID, X11 XID) is rejected: a Wayland client holds none another client can address, while every one of those
+window managers resolves a window from its pid. A relayed attachment reports none, because its peer is the relay process
+and the window sits on another host.
+
 The **last window input owner** marker is a sibling of the size marker, updated only by PTY-reaching input from a
 _window_ subscriber. The two must not be one marker: size ownership is promoted by any subscriber's input, a scripted
 `Ops` attachment included, because that script really is the one driving the shell, but an `Ops` subscriber has no

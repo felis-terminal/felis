@@ -30,6 +30,10 @@ rustix = { workspace = true, features = ["pipe"] }
 [target.'cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos", target_os = "watchos", target_os = "freebsd", target_os = "dragonfly", target_os = "netbsd", target_os = "openbsd"))'.dependencies]
 libc = { workspace = true }
 
+# libc for SO_PEERCRED: rustix's UCred cannot hold the pid 0 the kernel reports across pid namespaces.
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = { workspace = true }
+
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true }
 

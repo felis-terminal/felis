@@ -30,7 +30,7 @@ use felis_protocol::frame::Frame;
 #[cfg(unix)]
 use felis_protocol::messages::{PushMsg, RegionToClientMsg, StreamErrorReason, Subject};
 #[cfg(unix)]
-use std::num::NonZeroU64;
+use std::num::{NonZeroU32, NonZeroU64};
 #[cfg(unix)]
 use std::time::Instant;
 #[cfg(unix)]
@@ -721,14 +721,14 @@ async fn the_daemon_clamps_a_client_minor_it_sits_behind() {
         .unwrap();
 
         let (effective, carrier, attach_carrier) =
-            exchange_bootstrap(&mut daemon_read, &mut daemon_write)
+            exchange_bootstrap(&mut daemon_read, &mut daemon_write, None)
                 .await
                 .expect("the major is served");
         assert_eq!(
             carrier, None,
             "a bare client preface carries no relay block"
         );
-        assert_eq!(attach_carrier, AttachCarrier::Local);
+        assert_eq!(attach_carrier, AttachCarrier::Local { client_pid: None });
         assert_eq!(
             effective, PROTOCOL_MINOR,
             "a client at minor {client_minor} must not pull this daemon past its own",
@@ -744,7 +744,7 @@ async fn the_daemon_clamps_a_client_minor_it_sits_behind() {
 }
 
 /// What the daemon reads off the bootstrap bytes alone, before any frame.
-async fn carrier_of(prefix: &[u8]) -> AttachCarrier {
+async fn carrier_of(prefix: &[u8], peer_pid: Option<NonZeroU32>) -> AttachCarrier {
     use felis_protocol::preface::{ClientPreface, PROTOCOL_MAJOR, PROTOCOL_MINOR};
     use tokio::io::AsyncWriteExt as _;
 
@@ -760,7 +760,7 @@ async fn carrier_of(prefix: &[u8]) -> AttachCarrier {
         .encode(),
     );
     client_write.write_all(&bytes).await.unwrap();
-    let (_, _, carrier) = exchange_bootstrap(&mut daemon_read, &mut daemon_write)
+    let (_, _, carrier) = exchange_bootstrap(&mut daemon_read, &mut daemon_write, peer_pid)
         .await
         .expect("the major is served");
     carrier
@@ -776,7 +776,7 @@ async fn a_decoded_relay_block_reports_its_ssh_variables() {
         ],
     };
     assert_eq!(
-        carrier_of(&block.encode().unwrap()).await,
+        carrier_of(&block.encode().unwrap(), NonZeroU32::new(4242)).await,
         AttachCarrier::Relay {
             ssh_env: Some(SshEnv {
                 connection: Some("192.0.2.7 50122 192.0.2.1 22".into()),
@@ -795,7 +795,7 @@ async fn a_relay_block_without_ssh_variables_reports_them_unset() {
         env: vec![entry("HOME", "/home/u")],
     };
     assert_eq!(
-        carrier_of(&block.encode().unwrap()).await,
+        carrier_of(&block.encode().unwrap(), None).await,
         AttachCarrier::Relay {
             ssh_env: Some(SshEnv::default()),
         }
@@ -811,14 +811,24 @@ async fn a_skipped_relay_block_reports_unknown_ssh_variables() {
     block.extend_from_slice(&u32::try_from(payload.len()).unwrap().to_be_bytes());
     block.extend_from_slice(&payload);
     assert_eq!(
-        carrier_of(&block).await,
+        carrier_of(&block, NonZeroU32::new(4242)).await,
         AttachCarrier::Relay { ssh_env: None }
     );
 }
 
+/// The peer pid names the window only on a local connection: a relay's
+/// peer is the relay process, so the relay cases above drop it.
 #[tokio::test]
-async fn a_bare_preface_reports_a_local_carrier() {
-    assert_eq!(carrier_of(&[]).await, AttachCarrier::Local);
+async fn a_bare_preface_reports_a_local_carrier_with_the_peer_pid() {
+    let pid = NonZeroU32::new(4242);
+    assert_eq!(
+        carrier_of(&[], pid).await,
+        AttachCarrier::Local { client_pid: pid }
+    );
+    assert_eq!(
+        carrier_of(&[], None).await,
+        AttachCarrier::Local { client_pid: None }
+    );
 }
 
 #[cfg(unix)]
@@ -2398,8 +2408,8 @@ async fn a_create_ack_reports_the_window_it_attached() {
 }
 
 /// The roster row carries each window's carrier: the relay's SSH values
-/// for a connection that opened with a carrier block, `Local` for one
-/// that did not.
+/// for a connection that opened with a carrier block, `Local` with the
+/// connecting process's pid for one that did not.
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_window_attachment_reports_the_carrier_it_arrived_on() {
@@ -2432,7 +2442,15 @@ async fn a_window_attachment_reports_the_carrier_it_arrived_on() {
     let (mut reader, mut writer) = framed(read_half, write_half).await;
     hello_welcome(&mut reader, &mut writer, false).await;
     let local = create_and_attach_info(&mut reader, &mut writer).await;
-    assert_eq!(local.attachments[0].carrier, Some(AttachCarrier::Local));
+    let client_pid = if cfg!(any(target_os = "linux", target_vendor = "apple")) {
+        NonZeroU32::new(std::process::id())
+    } else {
+        None
+    };
+    assert_eq!(
+        local.attachments[0].carrier,
+        Some(AttachCarrier::Local { client_pid })
+    );
 }
 
 /// The roster row names the directory the create asked for, though the
@@ -6495,7 +6513,7 @@ async fn status_sums_every_subscriber_backlog_and_names_the_deepest() {
                     minor: preface::PROTOCOL_MINOR,
                     live_only: false,
                     image_regions: false,
-                    carrier: AttachCarrier::Local,
+                    carrier: AttachCarrier::Local { client_pid: None },
                     tx,
                     buffered: Arc::clone(&buffered),
                     reply: reply_tx,

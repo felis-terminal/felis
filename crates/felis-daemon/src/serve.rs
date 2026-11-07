@@ -7,6 +7,7 @@
 use std::{
     ffi::{OsStr, OsString},
     io,
+    num::NonZeroU32,
     path::{Path, PathBuf},
     sync::Arc,
     time::{Duration, Instant},
@@ -584,6 +585,23 @@ where
     R: tokio::io::AsyncRead + Unpin + Send,
     W: tokio::io::AsyncWrite + Unpin + Send,
 {
+    serve_stream(read_half, write_half, None, caps, pool, factory).await
+}
+
+/// `peer_pid` is the connecting process the accepted socket names, which
+/// a carrier without one (a test's duplex) leaves unknown.
+async fn serve_stream<R, W>(
+    read_half: R,
+    write_half: W,
+    peer_pid: Option<NonZeroU32>,
+    caps: DaemonCaps,
+    pool: Arc<Mutex<SessionPool>>,
+    factory: SessionFactory,
+) -> Result<(), ConnError>
+where
+    R: tokio::io::AsyncRead + Unpin + Send,
+    W: tokio::io::AsyncWrite + Unpin + Send,
+{
     // The preface runs on the raw halves: a `FrameReader` reads ahead and
     // would pull the preface into a buffer nothing else can reach.
     let (mut read_half, mut write_half) = (read_half, write_half);
@@ -593,7 +611,7 @@ where
     let (effective_minor, carrier, attach_carrier) = with_deadline(
         caps.handshake.preface,
         HandshakePhase::Preface,
-        exchange_bootstrap(&mut read_half, &mut write_half),
+        exchange_bootstrap(&mut read_half, &mut write_half, peer_pid),
     )
     .await?;
     driver.preface_done();
@@ -716,8 +734,9 @@ pub async fn handle_connection(
     pool: Arc<Mutex<SessionPool>>,
     factory: SessionFactory,
 ) -> Result<(), ConnError> {
+    let peer_pid = felis_transport::peer_pid(&stream);
     let (read_half, write_half) = server_split(stream);
-    handle_stream(read_half, write_half, caps, pool, factory).await
+    serve_stream(read_half, write_half, peer_pid, caps, pool, factory).await
 }
 
 /// Answer a peer the daemon has no permit for, then close. Spawned
@@ -762,7 +781,7 @@ async fn write_capacity_refusal(
     let (effective_minor, _carrier, _) = with_deadline(
         deadlines.preface,
         HandshakePhase::Preface,
-        exchange_bootstrap(&mut read_half, &mut write_half),
+        exchange_bootstrap(&mut read_half, &mut write_half, None),
     )
     .await?;
     let mut reader = FrameReader::new(read_half);
@@ -3040,6 +3059,7 @@ async fn resolve_prefix(pool: &Arc<Mutex<SessionPool>>, prefix: &str) -> Resolve
 async fn exchange_bootstrap<R, W>(
     read_half: &mut R,
     write_half: &mut W,
+    peer_pid: Option<NonZeroU32>,
 ) -> Result<(u16, Option<CarrierBlock>, AttachCarrier), ConnError>
 where
     R: tokio::io::AsyncRead + Unpin,
@@ -3051,7 +3071,9 @@ where
             ssh_env: ssh_env(&block.env),
         },
         (None, Some(_)) => AttachCarrier::Relay { ssh_env: None },
-        (None, None) => AttachCarrier::Local,
+        (None, None) => AttachCarrier::Local {
+            client_pid: peer_pid,
+        },
     };
     if let Some(version) = opened.skipped_carrier_version {
         warn!(

@@ -1,7 +1,7 @@
 //! `OpsToDaemonMsg` / `OpsToClientMsg` <-> wire, with the
 //! session-roster vocabulary its `Listed` reply carries.
 
-use std::num::NonZeroU64;
+use std::num::{NonZeroU32, NonZeroU64};
 
 use super::{WireError, decode_enum, dims_from_wire, id_from_bytes, id_to_bytes, narrow};
 use crate::messages;
@@ -36,12 +36,17 @@ const NANOS_PER_SECOND: i32 = 1_000_000_000;
 
 impl From<&messages::Attachment> for v1::Attachment {
     fn from(a: &messages::Attachment) -> Self {
-        let (carrier, ssh_env) = match &a.carrier {
-            None => (None, None),
-            Some(messages::AttachCarrier::Local) => (Some(v1::AttachCarrier::Local), None),
+        let (carrier, ssh_env, client_pid) = match &a.carrier {
+            None => (None, None, None),
+            Some(messages::AttachCarrier::Local { client_pid }) => (
+                Some(v1::AttachCarrier::Local),
+                None,
+                client_pid.map(NonZeroU32::get),
+            ),
             Some(messages::AttachCarrier::Relay { ssh_env }) => (
                 Some(v1::AttachCarrier::Relay),
                 ssh_env.as_ref().map(v1::SshEnv::from),
+                None,
             ),
         };
         Self {
@@ -50,6 +55,7 @@ impl From<&messages::Attachment> for v1::Attachment {
             input_owner: a.input_owner,
             carrier: carrier.map(|c| c as i32),
             ssh_env,
+            client_pid,
         }
     }
 }
@@ -61,17 +67,30 @@ impl TryFrom<v1::Attachment> for messages::Attachment {
             .carrier
             .map(|raw| decode_enum("Attachment.carrier", raw))
             .transpose()?;
-        let carrier = match (carrier, a.ssh_env) {
-            (None, None) => None,
-            (Some(v1::AttachCarrier::Local), None) => Some(messages::AttachCarrier::Local),
-            (Some(v1::AttachCarrier::Relay), ssh_env) => Some(messages::AttachCarrier::Relay {
-                ssh_env: ssh_env.map(messages::SshEnv::from),
-            }),
-            (Some(v1::AttachCarrier::Unspecified), _) => {
+        let client_pid = a
+            .client_pid
+            .map(|pid| {
+                NonZeroU32::new(pid).ok_or(WireError::MalformedField("Attachment.client_pid"))
+            })
+            .transpose()?;
+        let carrier = match (carrier, a.ssh_env, client_pid) {
+            (None, None, None) => None,
+            (Some(v1::AttachCarrier::Local), None, client_pid) => {
+                Some(messages::AttachCarrier::Local { client_pid })
+            }
+            (Some(v1::AttachCarrier::Relay), ssh_env, None) => {
+                Some(messages::AttachCarrier::Relay {
+                    ssh_env: ssh_env.map(messages::SshEnv::from),
+                })
+            }
+            (Some(v1::AttachCarrier::Unspecified), _, _) => {
                 return Err(WireError::UnspecifiedEnum("Attachment.carrier"));
             }
-            (None | Some(v1::AttachCarrier::Local), Some(_)) => {
+            (None | Some(v1::AttachCarrier::Local), Some(_), _) => {
                 return Err(WireError::MalformedField("Attachment.ssh_env"));
+            }
+            (None | Some(v1::AttachCarrier::Relay), _, Some(_)) => {
+                return Err(WireError::MalformedField("Attachment.client_pid"));
             }
         };
         Ok(Self {
@@ -1113,6 +1132,29 @@ mod tests {
             input_owner: false,
             carrier: None,
             ssh_env: None,
+            client_pid: None,
+        }
+    }
+
+    /// A pid only describes a local connection: beside a relay, or with
+    /// no carrier at all, it is refused rather than dropped, and so is a
+    /// pid of 0.
+    #[test]
+    fn a_client_pid_beside_a_non_local_carrier_or_zero_is_rejected() {
+        for (carrier, pid) in [
+            (None, 7),
+            (Some(v1::AttachCarrier::Relay as i32), 7),
+            (Some(v1::AttachCarrier::Local as i32), 0),
+        ] {
+            let wire = v1::Attachment {
+                carrier,
+                client_pid: Some(pid),
+                ..wire_attachment(Some(prost_types::Timestamp::default()))
+            };
+            assert!(matches!(
+                messages::Attachment::try_from(wire),
+                Err(WireError::MalformedField("Attachment.client_pid"))
+            ));
         }
     }
 

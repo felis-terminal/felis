@@ -202,6 +202,10 @@ pub(crate) fn security_descriptor_for(identity: &Identity) -> io::Result<Securit
 }
 
 fn client_identity(server: &NamedPipeServer) -> io::Result<Identity> {
+    process_identity(client_pid(server)?)
+}
+
+pub(crate) fn client_pid(server: &NamedPipeServer) -> io::Result<u32> {
     let handle = server.as_raw_handle() as HANDLE;
     let mut pid: u32 = 0;
     // SAFETY: `handle` is the live server end of a connected pipe;
@@ -210,7 +214,7 @@ fn client_identity(server: &NamedPipeServer) -> io::Result<Identity> {
     if ok == 0 {
         return Err(io::Error::last_os_error());
     }
-    process_identity(pid)
+    Ok(pid)
 }
 
 /// The dialer's twin of [`client_identity`] (REQ-106a).

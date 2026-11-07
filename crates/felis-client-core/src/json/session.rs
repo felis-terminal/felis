@@ -2,6 +2,8 @@
 //! "Machine output"), owned so a consumer can deserialize what the CLI
 //! serializes; the JSON protocol reuses them for its session rows.
 
+use std::num::NonZeroU32;
+
 use felis_protocol::SessionHex;
 use felis_protocol::messages::{AttachCarrier, SessionInfo, SshEnv};
 use felis_protocol::session_prefix::short_session_prefix;
@@ -93,12 +95,15 @@ impl SessionObject {
                 .attachments
                 .iter()
                 .map(|a| {
-                    let (carrier, ssh_env) = match &a.carrier {
-                        None => (None, None),
-                        Some(AttachCarrier::Local) => (Some(CarrierName::Local), None),
+                    let (carrier, ssh_env, client_pid) = match &a.carrier {
+                        None => (None, None, None),
+                        Some(AttachCarrier::Local { client_pid }) => {
+                            (Some(CarrierName::Local), None, *client_pid)
+                        }
                         Some(AttachCarrier::Relay { ssh_env }) => (
                             Some(CarrierName::Relay),
                             ssh_env.as_ref().map(SshEnvObject::from),
+                            None,
                         ),
                     };
                     AttachmentObject {
@@ -107,6 +112,7 @@ impl SessionObject {
                         input_owner: a.input_owner,
                         carrier,
                         ssh_env,
+                        client_pid,
                     }
                 })
                 .collect(),
@@ -225,6 +231,11 @@ pub struct AttachmentObject {
     /// `relay`, the values are unknown, not unset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ssh_env: Option<SshEnvObject>,
+    /// The pid of the process that connected this window's socket, for
+    /// mapping the attachment to its OS window. Only beside `local`, and
+    /// omitted when the daemon does not know it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_pid: Option<NonZeroU32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -326,17 +337,28 @@ mod tests {
             foreground: Some("vim".to_owned()),
             last_exit_code: Some(0),
             exited: false,
-            attachments: vec![AttachmentObject {
-                id: "18446744073709551615".to_owned(),
-                attached_at: "2026-01-02T03:04:05Z".to_owned(),
-                input_owner: true,
-                carrier: Some(CarrierName::Relay),
-                ssh_env: Some(SshEnvObject {
-                    connection: Some("192.0.2.7 50122 192.0.2.1 22".to_owned()),
-                    client: None,
-                    tty: None,
-                }),
-            }],
+            attachments: vec![
+                AttachmentObject {
+                    id: "18446744073709551615".to_owned(),
+                    attached_at: "2026-01-02T03:04:05Z".to_owned(),
+                    input_owner: true,
+                    carrier: Some(CarrierName::Relay),
+                    ssh_env: Some(SshEnvObject {
+                        connection: Some("192.0.2.7 50122 192.0.2.1 22".to_owned()),
+                        client: None,
+                        tty: None,
+                    }),
+                    client_pid: None,
+                },
+                AttachmentObject {
+                    id: "3".to_owned(),
+                    attached_at: "2026-01-02T03:04:06Z".to_owned(),
+                    input_owner: false,
+                    carrier: Some(CarrierName::Local),
+                    ssh_env: None,
+                    client_pid: NonZeroU32::new(4242),
+                },
+            ],
             program_status: vec![ProgramStatusObject {
                 id: String::new(),
                 state: "busy".to_owned(),
@@ -451,9 +473,10 @@ mod tests {
     }
 
     /// The JSON keys are the variable names; an unknown relay environment
-    /// omits `ssh_env` where a known-empty one writes `{}`.
+    /// omits `ssh_env` where a known-empty one writes `{}`, and an unknown
+    /// pid omits `client_pid`.
     #[test]
-    fn an_attachment_reports_its_carrier_and_ssh_variables() {
+    fn an_attachment_reports_its_carrier_ssh_variables_and_client_pid() {
         use felis_protocol::messages::Attachment;
 
         let attachment = |id, carrier| Attachment {
@@ -464,7 +487,12 @@ mod tests {
         };
         let session = SessionInfo {
             attachments: vec![
-                attachment(1, Some(AttachCarrier::Local)),
+                attachment(
+                    1,
+                    Some(AttachCarrier::Local {
+                        client_pid: NonZeroU32::new(4242),
+                    }),
+                ),
                 attachment(
                     2,
                     Some(AttachCarrier::Relay {
@@ -482,6 +510,7 @@ mod tests {
                 ),
                 attachment(4, Some(AttachCarrier::Relay { ssh_env: None })),
                 attachment(5, None),
+                attachment(6, Some(AttachCarrier::Local { client_pid: None })),
             ],
             ..session_info(0xCAFE)
         };
@@ -494,7 +523,10 @@ mod tests {
         assert_eq!(
             body["attachments"],
             serde_json::json!([
-                { "id": "1", "attached_at": attached_at, "input_owner": false, "carrier": "local" },
+                {
+                    "id": "1", "attached_at": attached_at, "input_owner": false, "carrier": "local",
+                    "client_pid": 4242,
+                },
                 {
                     "id": "2", "attached_at": attached_at, "input_owner": false, "carrier": "relay",
                     "ssh_env": { "SSH_CONNECTION": "192.0.2.7 50122 192.0.2.1 22" },
@@ -502,6 +534,7 @@ mod tests {
                 { "id": "3", "attached_at": attached_at, "input_owner": false, "carrier": "relay", "ssh_env": {} },
                 { "id": "4", "attached_at": attached_at, "input_owner": false, "carrier": "relay" },
                 { "id": "5", "attached_at": attached_at, "input_owner": false },
+                { "id": "6", "attached_at": attached_at, "input_owner": false, "carrier": "local" },
             ])
         );
     }
