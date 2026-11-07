@@ -30,6 +30,7 @@ fn cli(home: &TempDir) -> StdCommand {
 fn cli_resolving(home: &TempDir) -> StdCommand {
     let bin = std::env::var("CARGO_BIN_EXE_felis").expect("cargo sets CARGO_BIN_EXE_felis");
     let mut cmd = StdCommand::new(bin);
+    cmd.current_dir(home.path());
     cmd.env_remove("FELIS_SOCKET");
     cmd.env("HOME", home.path());
     cmd.env("XDG_CONFIG_HOME", home.path().join("config"));
@@ -184,6 +185,7 @@ async fn the_daemon_row_names_the_negotiated_minor_as_negotiated() {
 
     let bin = std::env::var("CARGO_BIN_EXE_felis").unwrap();
     let out = StdCommand::new(bin)
+        .current_dir(home.path())
         .env_remove("FELIS_SOCKET")
         .env("HOME", home.path())
         .env("XDG_CONFIG_HOME", home.path().join("config"))
@@ -326,6 +328,7 @@ async fn the_daemon_row_says_at_capacity_rather_than_not_running() {
 
     let bin = std::env::var("CARGO_BIN_EXE_felis").unwrap();
     let out = StdCommand::new(bin)
+        .current_dir(home.path())
         .env_remove("FELIS_SOCKET")
         .env("HOME", home.path())
         .env("XDG_CONFIG_HOME", home.path().join("config"))
