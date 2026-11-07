@@ -594,7 +594,11 @@ fn inflate_if_zlib(bytes: Vec<u8>, complete: &CompleteCommand) -> Result<Vec<u8>
     if o != b"z" {
         return Err(DecodeError::Unsupported("o= must be z (zlib) or absent"));
     }
-    match zlib::inflate(&bytes, MAX_DECODED_BYTES) {
+    let inflated = match raw_len(complete) {
+        Some(len) => zlib::inflate_exact(&bytes, len),
+        None => zlib::inflate(&bytes, MAX_DECODED_BYTES),
+    };
+    match inflated {
         Ok(out) => Ok(out),
         Err(zlib::InflateError::SizeLimit) => Err(DecodeError::OverBudget),
         Err(zlib::InflateError::Decompression) => Err(DecodeError::InvalidValue(
@@ -602,6 +606,25 @@ fn inflate_if_zlib(bytes: Vec<u8>, complete: &CompleteCommand) -> Result<Vec<u8>
         )),
         Err(_) => Err(DecodeError::InvalidValue("zlib inflate failed")),
     }
+}
+
+/// The `s × v × bpp` a raw `f=24` / `f=32` transmission declares,
+/// when it is one [`decode_raw`] could accept.
+fn raw_len(complete: &CompleteCommand) -> Option<usize> {
+    let bpp = match control_value(complete, b'f') {
+        None => 4,
+        Some(_) => match control_u32(complete, b'f')? {
+            24 => 3,
+            32 => 4,
+            _ => return None,
+        },
+    };
+    let width = control_u32(complete, b's')? as usize;
+    let height = control_u32(complete, b'v')? as usize;
+    width
+        .checked_mul(height)?
+        .checked_mul(bpp)
+        .filter(|&len| len <= MAX_DECODED_BYTES)
 }
 
 /// `f=` defaults to `32` (RGBA), Kitty's documented default.
