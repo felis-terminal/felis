@@ -3,13 +3,14 @@
 //! local wall-clock numbers measure the same code.
 
 use felis_client_core::ShadowScreen;
-use felis_grid::{Grid, PtyEffect, RowEncode, encode_row};
+use felis_grid::{DEFAULT_SCROLLBACK_ROWS, Grid, PtyEffect, RowEncode, encode_row};
 use felis_protocol::{
     MessageKind, RowPayload,
     codec::{decode, encode},
     frame::{Frame, decode as decode_frame},
     messages::GridMsg,
 };
+use felis_vt::Parser;
 
 pub(crate) const ROWS: u16 = 24;
 pub(crate) const COLS: u16 = 80;
@@ -65,6 +66,47 @@ pub(crate) fn repeat_to(seed: &[u8], target: usize) -> Vec<u8> {
         out.extend_from_slice(&seed[..take]);
     }
     out
+}
+
+/// A tiling WM's split halves the window; a widen stitches the
+/// soft-wrapped lines back together.
+pub(crate) const REFLOW_NARROW_COLS: u16 = 40;
+pub(crate) const REFLOW_WIDE_COLS: u16 = 120;
+
+/// A full scrollback ring, the steady state of a long-lived session and
+/// the most rows a reflow walks: hard-wrapped prompts, a diagnostic that
+/// soft-wraps across three rows, and a CJK line whose wide characters
+/// straddle the wrap column.
+pub(crate) fn reflow_history_grid() -> Grid {
+    let mut cycle: Vec<u8> = Vec::new();
+    cycle.extend_from_slice(b"\x1b[1;32m$\x1b[0m cargo build --release\n");
+    cycle.extend_from_slice(b"\x1b[33mwarning\x1b[0m: ");
+    cycle.extend_from_slice(
+        "unused variable `cols`: prefix it with an underscore if intentional "
+            .repeat(3)
+            .as_bytes(),
+    );
+    cycle.extend_from_slice(b"\n-> ");
+    cycle.extend_from_slice("端末の再折り返しは横幅の変更で走る。".repeat(3).as_bytes());
+    cycle.extend_from_slice(b"\n\n");
+    let rows_per_cycle = 7;
+    let cycles = (DEFAULT_SCROLLBACK_ROWS + usize::from(ROWS)) / rows_per_cycle + 1;
+    let mut parser = Parser::new();
+    let mut grid = Grid::new(ROWS, COLS);
+    for _ in 0..cycles {
+        parser.advance(&mut grid, &cycle);
+    }
+    assert_eq!(grid.scrollback().len(), grid.scrollback_capacity());
+    drop(grid.take_pty_effects());
+    grid.damage_mut().clear();
+    grid
+}
+
+/// The daemon's resize of the primary screen: the reflow, then the
+/// full-screen replay it leaves dirty.
+pub(crate) fn reflow_and_replay(grid: &mut Grid, cols: u16, scratch: &mut Vec<u8>) {
+    std::hint::black_box(grid.reflow(ROWS, cols));
+    emit_diffs_with(grid, scratch, true);
 }
 
 fn scroll_ops(grid: &mut Grid) -> Vec<felis_grid::ScrollOp> {

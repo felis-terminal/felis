@@ -1,5 +1,5 @@
-//! Instruction-count twin of the `daemon_side`, `multi_cycle_end_to_end`
-//! and `graphics_end_to_end` groups in `end_to_end_throughput.rs`, run under callgrind for the PR
+//! Instruction-count twin of the `daemon_side`, `multi_cycle_end_to_end`,
+//! `graphics_end_to_end` and `resize_reflow` groups in `end_to_end_throughput.rs`, run under callgrind for the PR
 //! regression gate (`just bench-gate-ir`). Setup runs outside the measured
 //! region, and the returned buffers drop outside it, as `iter_batched` does
 //! for the Criterion twin.
@@ -29,8 +29,9 @@ mod gate {
 
     use crate::graphics::{Graphics, Pipeline, Segments};
     use crate::workload::{
-        COLS, PTY_CHUNK_SIZE, ROWS, STREAM_BYTES, apply_diffs, csi_redraw, emit_diffs_with,
-        plaintext_scroll, repeat_to, shell_prompt,
+        COLS, PTY_CHUNK_SIZE, REFLOW_NARROW_COLS, REFLOW_WIDE_COLS, ROWS, STREAM_BYTES,
+        apply_diffs, csi_redraw, emit_diffs_with, plaintext_scroll, reflow_and_replay,
+        reflow_history_grid, repeat_to, shell_prompt,
     };
 
     const SCRATCH_CAPACITY: usize = 128 * 1024;
@@ -173,9 +174,36 @@ mod gate {
         input
     }
 
+    pub(crate) struct ReflowInput {
+        grid: Grid,
+        scratch: Vec<u8>,
+        cols: u16,
+    }
+
+    fn setup_reflow(cols: u16) -> ReflowInput {
+        ReflowInput {
+            grid: reflow_history_grid(),
+            scratch: Vec::with_capacity(SCRATCH_CAPACITY),
+            cols,
+        }
+    }
+
+    #[library_benchmark]
+    #[bench::narrow(args = (REFLOW_NARROW_COLS), setup = setup_reflow)]
+    #[bench::widen(args = (REFLOW_WIDE_COLS), setup = setup_reflow)]
+    fn resize_reflow(mut input: ReflowInput) -> ReflowInput {
+        reflow_and_replay(&mut input.grid, black_box(input.cols), &mut input.scratch);
+        input
+    }
+
     library_benchmark_group!(
         name = end_to_end_throughput,
-        benchmarks = [daemon_side, multi_cycle_end_to_end, graphics_end_to_end]
+        benchmarks = [
+            daemon_side,
+            multi_cycle_end_to_end,
+            graphics_end_to_end,
+            resize_reflow
+        ]
     );
 
     gungraun::main!(library_benchmark_groups = end_to_end_throughput);
