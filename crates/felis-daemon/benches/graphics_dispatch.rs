@@ -8,6 +8,7 @@
 #[path = "support/kitty.rs"]
 mod kitty;
 
+use std::fmt::Write as _;
 use std::hint::black_box;
 
 use criterion::measurement::WallTime;
@@ -436,6 +437,147 @@ fn store_pressure_numbered(g: &mut Group<'_>) {
     );
 }
 
+/// A producer that names its images by `I=` alone and re-places or
+/// replaces them by number, over a store of thousands of numbered ones.
+fn numbered_churn(g: &mut Group<'_>) {
+    let tile = ui_frame(16, 16, 4, 13);
+    for resident in [100, 1000, 4000] {
+        let transmit = |n: u32| command(&format!("a=T,I={n},p=1,f=32,s=16,v=16,C=1,q=2"), &tile);
+        let mut s = Session::new(1920, 1080);
+        for n in 1..=resident {
+            s.feed(&transmit(n));
+        }
+        s.events.clear();
+        assert_eq!(
+            s.images.len(),
+            resident as usize,
+            "numbered images rejected"
+        );
+        let mut n = 0;
+        g.throughput(Throughput::Elements(1));
+        g.bench_function(format!("numbered_churn/put/{resident}"), |b| {
+            b.iter(|| {
+                n = n % resident + 1;
+                s.feed(&command(&format!("a=p,I={n},p=1,C=1,q=2"), &[]));
+                s.events.clear();
+            });
+        });
+        g.bench_function(
+            format!("numbered_churn/delete_retransmit/{resident}"),
+            |b| {
+                b.iter(|| {
+                    n = n % resident + 1;
+                    s.feed(&command(&format!("a=d,d=N,I={n},q=2"), &[]));
+                    s.feed(&transmit(n));
+                    s.events.clear();
+                });
+            },
+        );
+        assert_eq!(s.images.len(), resident as usize, "churn lost images");
+    }
+}
+
+/// A Unicode-placeholder screen: `placements` virtual placements, and a
+/// full grid of placeholder cells tiling 100 of their images.
+fn placeholder_screen(g: &mut Group<'_>) {
+    use felis_grid::image_layout::{ImageLayout, LayoutImages};
+    use felis_protocol::kitty_graphics::placeholder::{PLACEHOLDER, Rank, diacritic_for};
+
+    struct Store<'a>(&'a ImageStore);
+    impl LayoutImages for Store<'_> {
+        fn drawable_size(&self, id: ImageId) -> Option<(u32, u32)> {
+            self.0.get(id).map(|e| (e.width, e.height))
+        }
+        fn stack_rank(&self, id: ImageId) -> u64 {
+            self.0.get(id).map_or(u64::MAX, ImageEntry::serial)
+        }
+    }
+
+    const TILE: (u32, u32) = (20, 6);
+    let pixels = ui_frame(8, 8, 4, 14);
+    for placements in [100u32, 1000] {
+        let mut s = Session::new(2000, 1200);
+        let (rows, cols) = (s.grid.screen().rows(), s.grid.screen().cols());
+        for id in 1..=placements {
+            s.feed(&command(
+                &format!(
+                    "a=T,U=1,i={id},p=1,f=32,s=8,v=8,c={},r={},q=2",
+                    TILE.0, TILE.1
+                ),
+                &pixels,
+            ));
+        }
+        let mut text = String::new();
+        let rank = |n| diacritic_for(Rank::new(n).unwrap());
+        for row in 0..u32::from(rows) {
+            write!(text, "\x1b[{};1H", row + 1).unwrap();
+            for col in 0..u32::from(cols) {
+                let tile = (row / TILE.1) * (u32::from(cols) / TILE.0) + col / TILE.0;
+                let id = 1 + tile * placements / 100;
+                let [_, r, g, b] = id.to_be_bytes();
+                write!(text, "\x1b[38;2;{r};{g};{b}m").unwrap();
+                text.extend([PLACEHOLDER, rank(row % TILE.1), rank(col % TILE.0)]);
+            }
+        }
+        felis_vt::Parser::new().advance(&mut s.grid, text.as_bytes());
+        let cells = s.grid.screen().placeholder_cells();
+        assert_eq!(
+            cells.len(),
+            usize::from(rows) * usize::from(cols),
+            "placeholders dropped"
+        );
+        assert!(
+            cells.iter().all(|c| s
+                .placements
+                .virtual_for_cell(c.image_id, c.placement_id)
+                .is_some()),
+            "a placeholder cell resolves to no placement"
+        );
+        let screen = format!("{placements}vp/{cols}x{rows}");
+        g.throughput(Throughput::Elements(cells.len() as u64));
+        g.bench_function(
+            format!("placeholder_screen/virtual_for_cell/{screen}"),
+            |b| {
+                b.iter(|| {
+                    for c in &cells {
+                        black_box(s.placements.virtual_for_cell(c.image_id, c.placement_id));
+                    }
+                });
+            },
+        );
+        let virtuals: Vec<_> = s.placements.iter_virtual().copied().collect();
+        let mut layout = ImageLayout::new();
+        g.bench_function(format!("placeholder_screen/layout/{screen}"), |b| {
+            b.iter(|| {
+                layout.rebuild(
+                    s.grid.screen(),
+                    &Store(&s.images),
+                    [],
+                    &virtuals,
+                    (f32::from(kitty::CELL_W), f32::from(kitty::CELL_H)),
+                    0,
+                );
+                black_box(layout.under_text().len());
+            });
+        });
+        g.throughput(Throughput::Elements(1));
+        let mut id = 0;
+        g.bench_function(
+            format!("placeholder_screen/put_virtual/{placements}vp"),
+            |b| {
+                b.iter(|| {
+                    id = id % placements + 1;
+                    s.feed(&command(
+                        &format!("a=p,U=1,i={id},p=1,c={},r={},q=2", TILE.0, TILE.1),
+                        &[],
+                    ));
+                    s.events.clear();
+                });
+            },
+        );
+    }
+}
+
 /// The session loop asks for the next due frame on every wake-up and
 /// advances on every due one, over a store of placed stills with a few
 /// animations among them.
@@ -523,7 +665,59 @@ fn lock_hold(c: &mut Criterion) {
             &shm_frame,
         );
     }
+    for (w, h) in FULL_FRAMES {
+        frame_holds(&mut g, w, h);
+    }
     g.finish();
+}
+
+/// `a=f` over a full canvas, the frame's pixels zlib-compressed so its
+/// inflate leaves the lock: a new frame composed on frame 1, in RGBA and
+/// in RGB the canvas converts, and frame 1 rewritten in place.
+fn frame_holds(g: &mut Group<'_>, w: u32, h: u32) {
+    let rgba = zlib(&ui_frame(w, h, 4, 15));
+    let rgb = zlib(&ui_frame(w, h, 3, 15));
+    let geometry = format!("s={w},v={h},o=z,q=2");
+    let cases = [
+        ("append_rgba", format!("a=f,i=1,c=1,f=32,{geometry}"), &rgba),
+        ("append_rgb", format!("a=f,i=1,c=1,f=24,{geometry}"), &rgb),
+        (
+            "edit_rgba",
+            format!("a=f,i=1,r=1,X=1,f=32,{geometry}"),
+            &rgba,
+        ),
+    ];
+    for (variant, controls, payload) in cases {
+        let edit = command(&controls, payload);
+        let mut s = with_base_image(w, h);
+        let pop = |s: &mut Session| {
+            while s.images.get(ImageId(1)).unwrap().frame_count() > 1 {
+                s.images.remove_frame(ImageId(1), 1).unwrap();
+            }
+            s.events.clear();
+        };
+        s.feed(&edit);
+        assert!(
+            has_event(&s, |e| matches!(
+                e,
+                ImageEvent::TransmitFrame { .. } | ImageEvent::TransmitRegion { .. }
+            )),
+            "{variant}: frame rejected"
+        );
+        pop(&mut s);
+        g.throughput(Throughput::Elements(1));
+        g.bench_function(format!("frame_{variant}/{}", dims(w, h)), |b| {
+            b.iter_custom(|iters| {
+                (0..iters)
+                    .map(|_| {
+                        let held = s.hold(&edit);
+                        pop(&mut s);
+                        held
+                    })
+                    .sum()
+            });
+        });
+    }
 }
 
 fn bench_hold(g: &mut Group<'_>, name: String, (w, h): (u32, u32), frame: &Command) {
@@ -715,6 +909,8 @@ fn dispatch(c: &mut Criterion) {
     store_pressure(&mut g);
     store_pressure_virtual(&mut g);
     store_pressure_numbered(&mut g);
+    numbered_churn(&mut g);
+    placeholder_screen(&mut g);
     g.finish();
 }
 
