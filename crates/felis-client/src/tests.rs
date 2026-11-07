@@ -950,7 +950,7 @@ mod mouse_position {
 fn window_attributes_flag_transparent_surface_when_requested() {
     // Without it the OS composites the window opaque and the renderer's
     // bg alpha is silently ignored.
-    let attrs = window_attributes("felis".to_owned(), true, true);
+    let attrs = window_attributes("felis".to_owned(), true, true, None);
     assert!(attrs.transparent);
 }
 
@@ -960,7 +960,7 @@ fn window_attributes_keep_rounded_corners_on_macos_when_chromeless() {
     // window and selects `Borderless` whenever `decorations` is false,
     // so on macOS the flag stays `true` and the titlebar is emptied
     // instead.
-    let attrs = window_attributes("felis".to_owned(), false, false);
+    let attrs = window_attributes("felis".to_owned(), false, false, None);
     if cfg!(target_os = "macos") {
         assert!(attrs.decorations);
     } else {
@@ -2277,6 +2277,7 @@ mod app_events {
             shell_cfg: cfg.shell.clone(),
             keymap: Keymap::default_for_platform(),
             config_source: ConfigSource::Default,
+            window_class: None,
         };
         let (outgoing, outgoing_rx) = outgoing_channel();
         let link = AppLink {

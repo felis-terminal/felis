@@ -52,6 +52,7 @@ pub mod stream;
 #[cfg(test)]
 mod test_support;
 pub mod viewport;
+pub mod window_class;
 
 pub use action::{
     Action, ClipboardScope, Escapes, FontSizeStep, IpcAction, PipeRegionSource, PipeTarget,

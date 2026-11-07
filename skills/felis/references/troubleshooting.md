@@ -44,7 +44,7 @@ way down
 `felis version --format json` reports `cli`, `client`, `daemon`, each `{"version","revision","dirty"}`; `client` and
 `daemon` are `null` unless their `*_status` is `ok`. The daemon outlives its windows, so compare `daemon.revision`
 against `cli.revision`. `felis --version` reports only this binary and dials nothing, so it refuses `--config`,
-`--host`, `--socket`, and `--ssh-arg` at exit `2` rather than ignoring them.
+`--host`, `--socket`, `--ssh-arg`, and `--class` at exit `2` rather than ignoring them.
 
 `felis daemon upgrade` replaces a stale daemon without losing sessions. It is a point verb, `--format json`, and never
 autospawns. The daemon switches to the `felis-daemon` installed beside `felis` in place and keeps every session; it

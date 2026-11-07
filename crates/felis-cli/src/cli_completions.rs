@@ -137,12 +137,12 @@ function __felis_carrier_flags
                 test $i -le (count $tokens); and echo -- $tokens[$i]
             case '--socket=*'
                 echo -- $tokens[$i]
-            case --ssh-arg
-                # Skipped with its value: an ssh token spelled like a
-                # verb would otherwise end the scan before the --host
-                # it requires.
+            case --ssh-arg --class
+                # Skipped with its value: a value spelled like a verb
+                # would otherwise end the scan before the --host or
+                # --socket that follows.
                 set i (math $i + 1)
-            case '--ssh-arg=*'
+            case '--ssh-arg=*' '--class=*'
             case '*'
                 contains -- $tokens[$i] retarget ssh; and break
         end
@@ -199,7 +199,7 @@ function __felis_ssh_destination_slot
         set -l t $tokens[$i]
         if test $seen -eq 0
             switch $t
-                case --config --socket
+                case --config --socket --class
                     set i (math $i + 1)
                 case --host --ssh-arg
                     set i (math $i + 1)
@@ -298,12 +298,12 @@ _felis_complete_sessions() {
             --socket=*)
                 carrier+=($words[i])
                 ;;
-            --ssh-arg)
-                # Skipped with its value: an ssh token spelled like a
-                # verb would otherwise end the scan before the --host
-                # it requires.
+            --ssh-arg|--class)
+                # Skipped with its value: a value spelled like a verb
+                # would otherwise end the scan before the --host or
+                # --socket that follows.
                 (( i++ )) ;;
-            --ssh-arg=*)
+            --ssh-arg=*|--class=*)
                 ;;
             retarget|ssh)
                 break ;;
@@ -643,6 +643,10 @@ mod tests {
         (
             "felis --socket=/x attach ",
             Some("--socket=/x __complete-sessions"),
+        ),
+        (
+            "felis --class ssh --socket /x attach ",
+            Some("--socket /x __complete-sessions"),
         ),
         (
             "felis window retarget /y --session ",

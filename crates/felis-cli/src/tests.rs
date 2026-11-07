@@ -336,11 +336,16 @@ fn globals_before_an_external_command_are_recorded_for_the_refusal() {
         "--host",
         "h",
         "--ssh-arg=-p",
+        "--class",
+        "scratch",
         "tui",
     ]))
     .expect("globals before the word still reach the lookup");
     assert_eq!(external.word, "tui");
-    assert_eq!(external.globals_before, ["--config", "--host", "--ssh-arg"]);
+    assert_eq!(
+        external.globals_before,
+        ["--config", "--host", "--ssh-arg", "--class"]
+    );
 }
 
 /// A separator would turn the sibling / `$PATH` lookup of `felis-<name>`
@@ -420,6 +425,39 @@ fn global_passthrough_rebuilds_set_flags_only() {
             OsString::from("2222"),
         ],
     );
+}
+
+#[test]
+fn global_passthrough_rebuilds_the_window_class_after_the_carrier() {
+    let cli = Cli::try_parse_from(["felis", "--class", "scratch", "--socket", "/tmp/x.sock"])
+        .expect("parses --class");
+    assert_eq!(
+        global_passthrough(&cli, &ConfigSource::Default),
+        ["--socket", "/tmp/x.sock", "--class", "scratch"].map(OsString::from),
+    );
+}
+
+/// The shared validator runs at felis's own parse, so a name the
+/// frontend would refuse never crosses the exec.
+#[test]
+fn an_invalid_window_class_is_a_usage_error_before_any_verb_runs() {
+    let too_long = "a".repeat(256);
+    for value in ["", "a\tb", "a\u{1b}b", too_long.as_str()] {
+        let err = Cli::try_parse_from(["felis", "--class", value])
+            .expect_err("an invalid class must not parse");
+        assert_eq!(
+            err.kind(),
+            clap::error::ErrorKind::ValueValidation,
+            "{value:?}"
+        );
+        assert_eq!(err.exit_code(), 2);
+    }
+    let longest = "a".repeat(255);
+    for value in [longest.as_str(), "端末", "felis scratch"] {
+        let cli = Cli::try_parse_from(["felis", "--class", value])
+            .unwrap_or_else(|e| panic!("{value:?}: {e}"));
+        assert_eq!(cli.class.as_deref(), Some(value));
+    }
 }
 
 /// The window it launches must read the file the user named from
@@ -515,28 +553,28 @@ enum Global {
 
 /// The frozen matrix (docs/reference/cli.md "Global options"), as an
 /// exhaustive match so a new verb cannot be added without a cell:
-/// `(--config, the --host/--socket/--ssh-arg carrier)`.
-fn expected_globals(cmd: Option<&Cmd>) -> (Global, Global) {
+/// `(--config, the --host/--socket/--ssh-arg carrier, --class)`.
+fn expected_globals(cmd: Option<&Cmd>) -> (Global, Global, Global) {
     use Global::{Dialed, Forwarded, InProcess, NoCandidates, Refused};
     match cmd {
         // The window launches: bare `felis`, `felis -- <cmd>`, `attach`.
-        None | Some(Cmd::Attach { .. }) => (Forwarded, Forwarded),
-        Some(Cmd::Config { .. }) => (InProcess, Refused),
-        Some(Cmd::Doctor { .. }) => (InProcess, Dialed),
+        None | Some(Cmd::Attach { .. }) => (Forwarded, Forwarded, Forwarded),
+        Some(Cmd::Config { .. }) => (InProcess, Refused, Refused),
+        Some(Cmd::Doctor { .. }) => (InProcess, Dialed, Refused),
         Some(
             Cmd::Sessions { .. }
             | Cmd::Notifications { .. }
             | Cmd::Daemon { .. }
             | Cmd::Version { .. },
-        ) => (Refused, Dialed),
+        ) => (Refused, Dialed, Refused),
         Some(
             Cmd::Window { .. }
             | Cmd::Ssh { .. }
             | Cmd::Fonts { .. }
             | Cmd::Completions { .. }
             | Cmd::Mangen { .. },
-        ) => (Refused, Refused),
-        Some(Cmd::CompleteSessions) => (Refused, NoCandidates),
+        ) => (Refused, Refused, Refused),
+        Some(Cmd::CompleteSessions) => (Refused, NoCandidates, Refused),
     }
 }
 
@@ -567,8 +605,14 @@ fn every_verb_form_places_every_global_flag() {
         &["felis", "__mangen", "man"],
     ] {
         let cli = Cli::try_parse_from(argv).unwrap_or_else(|e| panic!("{argv:?}: {e}"));
-        let (config, carrier) = expected_globals(cli.cmd.as_ref());
+        let (config, carrier, class) = expected_globals(cli.cmd.as_ref());
         let cmd = cli.cmd.as_ref();
+
+        assert_eq!(
+            verb_opening_no_window(cmd).is_some(),
+            class == Refused,
+            "{argv:?}: --class is {class:?}",
+        );
 
         assert_eq!(
             verb_reading_no_config(cmd).is_some(),
@@ -612,7 +656,7 @@ fn every_verb_form_places_every_global_flag() {
         let execs_a_frontend = matches!(cmd, None | Some(Cmd::Attach { .. }));
         assert_eq!(
             execs_a_frontend,
-            config == Forwarded && carrier == Forwarded,
+            config == Forwarded && carrier == Forwarded && class == Forwarded,
             "{argv:?}: forwarding is all-or-nothing",
         );
         if execs_a_frontend {
@@ -624,6 +668,8 @@ fn every_verb_form_places_every_global_flag() {
                     "--ssh-arg=-p",
                     "--config",
                     "c.toml",
+                    "--class",
+                    "scratch",
                 ];
                 line.extend_from_slice(&argv[1..]);
                 Cli::try_parse_from(&line).unwrap_or_else(|e| panic!("{line:?}: {e}"))
@@ -631,7 +677,7 @@ fn every_verb_form_places_every_global_flag() {
             let source =
                 resolve_config_source(with_globals.config.as_deref()).expect("a cwd exists");
             let forwarded = global_passthrough(&with_globals, &source);
-            for flag in ["--config", "--host", "--ssh-arg"] {
+            for flag in ["--config", "--host", "--ssh-arg", "--class"] {
                 assert!(
                     forwarded.contains(&OsString::from(flag)),
                     "{argv:?}: {flag} must reach the frontend, got {forwarded:?}",
@@ -653,6 +699,7 @@ fn the_version_flag_refuses_every_global() {
         vec!["--host", "vm"],
         vec!["--socket", "/tmp/x.sock"],
         vec!["--host", "vm", "--ssh-arg=-p"],
+        vec!["--class", "scratch"],
     ] {
         let mut argv = vec!["felis", "--version"];
         argv.extend_from_slice(&globals);

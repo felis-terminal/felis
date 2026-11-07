@@ -53,6 +53,7 @@ objc2-quartz-core = { workspace = true }
 objc2-foundation = { workspace = true }
 
 [dev-dependencies]
+tempfile = { workspace = true }
 felis-vt = { workspace = true }
 proptest = { workspace = true }
 

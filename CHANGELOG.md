@@ -12,6 +12,9 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 
 ### Added
 
+- **CLI**: `felis --class <name>` names a launched window for window-manager rules: the Wayland app ID and X11
+  `WM_CLASS` on Linux, the Win32 window class on Windows, no effect on macOS. Bare `felis`, `felis -- <cmd>`, and
+  `attach` take it; every other verb and `--version` refuse it with exit `2`.
 - **CLI**: `felis sessions events` streams what happens to sessions: added, exited with its status, and removed; every
   OSC 7501 program-status change; OSC 133 prompts and finished commands; and a hint naming which row fields changed.
   `--kind` is required and names the kinds, so a kind added later never reaches an existing invocation; a client

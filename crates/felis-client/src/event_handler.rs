@@ -69,6 +69,7 @@ impl ApplicationHandler<AppEvent> for App {
             compose_window_title(self.title_prefix.as_deref(), "felis"),
             self.decorations,
             self.transparent,
+            self.window_class.as_deref(),
         );
         let window = match event_loop.create_window(attrs) {
             Ok(w) => Arc::new(w),

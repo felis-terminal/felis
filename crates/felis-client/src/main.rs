@@ -1,8 +1,9 @@
 //! `felis-client`: the native GUI client. Renders the daemon's grid via
 //! wgpu; closing the window detaches, and the daemon's session lives on.
 
-// `deny`, not `forbid`: the two sanctioned `allow(unsafe_code)` sites
-// (`macos_window`, `hyperlink`'s `ShellExecuteW`) would be refused by `forbid`.
+// `deny`, not `forbid`: the sanctioned `allow(unsafe_code)` sites
+// (`macos_window`, `hyperlink`'s `ShellExecuteW`, `window_class`'s class
+// lookup) would be refused by `forbid`.
 #![cfg_attr(not(test), deny(unsafe_code))]
 
 use std::{
@@ -94,6 +95,8 @@ mod option_compose;
 mod os_clipboard;
 mod smoke;
 mod switch_intent;
+#[cfg(windows)]
+mod window_class;
 mod window_host;
 mod window_input;
 mod winit_keys;
@@ -346,6 +349,16 @@ struct Cli {
     /// this process cannot recover.
     #[arg(long, value_name = "PATH")]
     config: Option<PathBuf>,
+    /// The window's class for window-manager rules: the Wayland `app_id`
+    /// and X11 `WM_CLASS` on Linux, the Win32 window class on Windows; no
+    /// effect on macOS, which has no per-window class. Absent: `felis`
+    /// on Linux, winit's default class on Windows.
+    #[arg(
+        long,
+        value_name = "NAME",
+        value_parser = felis_client_core::window_class::validate_window_class
+    )]
+    class: Option<String>,
     /// Program and args to run instead of `$SHELL` (`xterm -e` analogue).
     /// Arguments after `--` are taken literally as argv (`felis -- htop`).
     /// The session persists across window close and child exit until removed
@@ -413,6 +426,18 @@ fn main() -> Result<ExitCode> {
     if cli.font_families_probe {
         return run_font_families_probe().map(|()| ExitCode::SUCCESS);
     }
+    #[cfg(windows)]
+    if let Some(class) = cli.class.as_deref()
+        && let Some(reason) = window_class::collision(class)
+    {
+        use clap::CommandFactory as _;
+        Cli::command()
+            .error(
+                clap::error::ErrorKind::InvalidValue,
+                format!("invalid value for '--class <NAME>': {reason}"),
+            )
+            .exit();
+    }
     // Tee logs into a per-user file: a `.app` launch inherits `/dev/null`
     // for stdout/stderr, so console-only logging records nothing when a
     // window dies in the field.
@@ -463,6 +488,7 @@ fn main() -> Result<ExitCode> {
         shell_cfg: cfg.shell.clone(),
         keymap: Keymap::default_for_platform().with_overrides(compiled_keymap),
         config_source,
+        window_class: cli.class,
     };
 
     let runtime = build_runtime()?;
@@ -643,7 +669,12 @@ const APP_ID: &str = "felis";
 /// OS-rounded corners and drop shadows while the full-size content view
 /// sits in front to receive terminal clicks.
 #[must_use]
-fn window_attributes(title: String, decorations: bool, transparent: bool) -> WindowAttributes {
+fn window_attributes(
+    title: String,
+    decorations: bool,
+    transparent: bool,
+    class: Option<&str>,
+) -> WindowAttributes {
     // `with_transparent(true)` only when `window.opacity < 1.0`: an
     // always-on transparent surface costs an extra compositor blend and,
     // on some WMs, drops the opaque-window optimization.
@@ -655,14 +686,27 @@ fn window_attributes(title: String, decorations: bool, transparent: bool) -> Win
         .with_visible(false);
 
     // Wayland's app_id and X11's WM_CLASS share one winit field, so the
-    // Wayland setter covers both backends. It must match
+    // Wayland setter covers both backends. The default must match
     // share/applications/felis.desktop, or the WM cannot pair the window
     // with that entry.
     #[cfg(target_os = "linux")]
     let attrs = {
         use winit::platform::wayland::WindowAttributesExtWayland;
-        attrs.with_name(APP_ID, APP_ID)
+        let name = class.unwrap_or(APP_ID);
+        attrs.with_name(name, name)
     };
+    #[cfg(target_os = "windows")]
+    let attrs = match class {
+        Some(class) => {
+            use winit::platform::windows::WindowAttributesExtWindows;
+            attrs.with_class_name(class)
+        }
+        None => attrs,
+    };
+    // macOS window managers match the bundle id and the title; there is
+    // no per-window class to set.
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    let _ = class;
 
     #[cfg(target_os = "macos")]
     if !decorations {
@@ -1065,6 +1109,7 @@ struct ClientStartup {
     /// Carried into [`App`] so a live reload re-reads the document this
     /// window started from, not whatever platform discovery now finds.
     config_source: ConfigSource,
+    window_class: Option<String>,
 }
 
 fn drive(
@@ -1384,6 +1429,9 @@ struct App {
     /// config, and `reload_config` snaps it back.
     current_font_size_logical_px: f32,
     title_prefix: Option<String>,
+    /// Fixed for the window's life: a retarget, a session switch, or a
+    /// reconnect keeps the same OS window.
+    window_class: Option<String>,
     /// Applied at window creation via [`window_attributes`] and live via
     /// `Window::set_decorations`, which on macOS can only toggle plain
     /// borderless: a live switch to `false` yields square corners until
@@ -1574,6 +1622,7 @@ impl App {
             decorations: window_cfg.decorations,
             transparent: window_cfg.clamped_opacity() < 1.0,
             title_prefix: window_cfg.title_prefix,
+            window_class: startup.window_class,
             backdrop: window_cfg.backdrop,
             macos_option_as_alt: window_cfg.macos_option_as_alt,
             key_presses: option_compose::KeyPresses::for_platform(window_cfg.macos_option_as_alt),
