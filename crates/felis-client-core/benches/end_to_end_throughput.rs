@@ -216,25 +216,29 @@ fn bench_graphics(c: &mut Criterion) {
         Graphics::VideoInline,
         Graphics::BrowserReplace,
         Graphics::BrowserDirtyRects,
+        #[cfg(unix)]
+        Graphics::BrowserShm,
         Graphics::PatchLayers,
         Graphics::Thumbnails,
         Graphics::CellWipes,
     ] {
-        let (prelude, bytes) = workload.streams();
+        let _segments = workload.segments();
+        let (prelude, writes) = workload.streams();
         let primed = || {
             let mut pipeline = Pipeline::new();
             pipeline.feed(&prelude);
             pipeline
         };
         let mut checked = primed();
-        checked.feed(&bytes);
+        checked.feed_writes(&writes);
         workload.check(&checked);
-        group.throughput(Throughput::Bytes(bytes.len() as u64));
+        let bytes: usize = writes.iter().map(Vec::len).sum();
+        group.throughput(Throughput::Bytes(bytes as u64));
         group.bench_function(workload.name(), |b| {
             b.iter_batched(
                 primed,
                 |mut pipeline| {
-                    pipeline.feed(black_box(&bytes));
+                    pipeline.feed_writes(black_box(&writes));
                     pipeline
                 },
                 BatchSize::SmallInput,

@@ -27,7 +27,7 @@ mod gate {
     use felis_vt::Parser;
     use gungraun::{library_benchmark, library_benchmark_group};
 
-    use crate::graphics::{Graphics, Pipeline};
+    use crate::graphics::{Graphics, Pipeline, Segments};
     use crate::workload::{
         COLS, PTY_CHUNK_SIZE, ROWS, STREAM_BYTES, apply_diffs, csi_redraw, emit_diffs_with,
         plaintext_scroll, repeat_to, shell_prompt,
@@ -132,24 +132,30 @@ mod gate {
 
     pub(crate) struct GraphicsInput {
         workload: Graphics,
-        bytes: Vec<u8>,
+        writes: Vec<Vec<u8>>,
         pipeline: Pipeline,
+        _segments: Segments,
     }
 
     fn setup_graphics(workload: Graphics) -> GraphicsInput {
-        let (prelude, bytes) = workload.streams();
+        let segments = workload.segments();
+        let (prelude, writes) = workload.streams();
         let mut pipeline = Pipeline::new();
         pipeline.feed(&prelude);
         GraphicsInput {
             workload,
-            bytes,
+            writes,
             pipeline,
+            _segments: segments,
         }
     }
 
     fn check_graphics(output: GraphicsInput) {
         let GraphicsInput {
-            workload, pipeline, ..
+            workload,
+            pipeline,
+            _segments,
+            ..
         } = output;
         workload.check(&pipeline);
     }
@@ -158,11 +164,12 @@ mod gate {
     #[bench::video_inline(Graphics::VideoInline)]
     #[bench::browser_replace(Graphics::BrowserReplace)]
     #[bench::browser_dirty_rects(Graphics::BrowserDirtyRects)]
+    #[bench::browser_shm(Graphics::BrowserShm)]
     #[bench::patch_layers(Graphics::PatchLayers)]
     #[bench::thumbnails(Graphics::Thumbnails)]
     #[bench::cell_wipes(Graphics::CellWipes)]
     fn graphics_end_to_end(mut input: GraphicsInput) -> GraphicsInput {
-        input.pipeline.feed(black_box(&input.bytes));
+        input.pipeline.feed_writes(black_box(&input.writes));
         input
     }
 

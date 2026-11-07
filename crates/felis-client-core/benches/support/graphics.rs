@@ -42,6 +42,8 @@ pub(crate) enum Graphics {
     VideoInline,
     BrowserReplace,
     BrowserDirtyRects,
+    #[cfg(unix)]
+    BrowserShm,
     PatchLayers,
     Thumbnails,
     CellWipes,
@@ -53,6 +55,8 @@ impl Graphics {
             Self::VideoInline => "video_inline",
             Self::BrowserReplace => "browser_replace",
             Self::BrowserDirtyRects => "browser_dirty_rects",
+            #[cfg(unix)]
+            Self::BrowserShm => "browser_shm",
             Self::PatchLayers => "patch_layers",
             Self::Thumbnails => "thumbnails",
             Self::CellWipes => "cell_wipes",
@@ -60,8 +64,9 @@ impl Graphics {
     }
 
     /// The bytes a session holds before the measured stream, and the
-    /// stream itself.
-    pub(crate) fn streams(self) -> (Vec<u8>, Vec<u8>) {
+    /// stream as the producer writes it: each write is one PTY read, so
+    /// one session cycle.
+    pub(crate) fn streams(self) -> (Vec<u8>, Vec<Vec<u8>>) {
         let mut prelude = Vec::new();
         let mut stream = Vec::new();
         match self {
@@ -77,20 +82,43 @@ impl Graphics {
             }
             Self::BrowserReplace => {
                 browser_frame(&mut prelude, 0);
-                for seed in BROWSER_SEEDS {
-                    browser_frame(&mut stream, seed);
-                }
+                let writes = BROWSER_SEEDS.map(|seed| {
+                    let mut write = Vec::new();
+                    browser_frame(&mut write, seed);
+                    write
+                });
+                return (prelude, writes.into());
             }
-            Self::BrowserDirtyRects | Self::CellWipes => {
+            Self::BrowserDirtyRects => {
+                browser_frame(&mut prelude, 0);
+                let writes = browser_updates()
+                    .iter()
+                    .map(|update| {
+                        let mut write = Vec::new();
+                        browser_update(&mut write, update);
+                        write
+                    })
+                    .collect();
+                return (prelude, writes);
+            }
+            #[cfg(unix)]
+            Self::BrowserShm => {
+                shm_frame(&mut prelude, 0);
+                let writes = (1..=SHM_FRAMES).map(|k| {
+                    let mut write = Vec::new();
+                    shm_frame(&mut write, k);
+                    write
+                });
+                return (prelude, writes.collect());
+            }
+            Self::CellWipes => {
                 let (base, edits) = self.edits();
                 base_image(&mut prelude, base);
                 for Edit { x, y, w, h, pixels } in edits {
                     let controls = format!("a=f,i=1,r=1,X=1,x={x},y={y},s={w},v={h},f=32,q=2");
                     command(&mut stream, &controls, &pixels);
                 }
-                if matches!(self, Self::CellWipes) {
-                    command(&mut stream, "a=a,i=1,c=1,q=2", &[]);
-                }
+                command(&mut stream, "a=a,i=1,c=1,q=2", &[]);
             }
             Self::PatchLayers => {
                 base_image(&mut prelude, (640, 360));
@@ -111,26 +139,26 @@ impl Graphics {
                 }
             }
         }
-        (prelude, stream)
+        (prelude, vec![stream])
+    }
+
+    /// The segments a `t=s` workload names, alive while the guard is.
+    pub(crate) fn segments(self) -> Segments {
+        match self {
+            #[cfg(unix)]
+            Self::BrowserShm => Segments::create(
+                (0..=SHM_FRAMES)
+                    .map(|k| (shm_name(k), page_frame(BROWSER_PAGE.0, BROWSER_PAGE.1, k)))
+                    .collect(),
+            ),
+            _ => Segments::default(),
+        }
     }
 
     /// The `X=1` frame edits a workload sends over its base image; every
     /// one stays visible in the final frame, so a rejected edit shows.
     fn edits(self) -> ((u32, u32), Vec<Edit>) {
         match self {
-            Self::BrowserDirtyRects => {
-                let base = (320, 180);
-                let mut rng = Lcg::new(4);
-                let edits = (0..32_u32)
-                    .map(|k| {
-                        let (w, h) = (32 + rng.below(33), 32 + rng.below(33));
-                        let (x, y) = (rng.below(base.0 - w), rng.below(base.1 - h));
-                        let pixels = ui_frame(w, h, 4, u64::from(k) + 1);
-                        Edit { x, y, w, h, pixels }
-                    })
-                    .collect();
-                (base, edits)
-            }
             Self::CellWipes => {
                 let (w, h) = (u32::from(CELL_PX.0), u32::from(CELL_PX.1));
                 let (cols, rows) = (16, 8);
@@ -161,6 +189,8 @@ impl Graphics {
         let (images, placements, virtual_placements, draws) = match self {
             Self::VideoInline => (4, 4, 0, 4),
             Self::BrowserReplace | Self::BrowserDirtyRects | Self::CellWipes => (1, 1, 0, 1),
+            #[cfg(unix)]
+            Self::BrowserShm => (1, 1, 0, 1),
             Self::PatchLayers => (65, 65, 0, 65),
             Self::Thumbnails => (64, 0, 64, 64 * 6 * 3),
         };
@@ -184,17 +214,42 @@ impl Graphics {
                 for seed in BROWSER_SEEDS {
                     let session = replay.step(|out| browser_frame(out, seed));
                     assert!(
-                        session.holds(1, &ui_frame(320, 180, 4, seed)),
+                        session.holds(1, &browser_page(seed)),
                         "{name}: frame {seed} not replaced"
                     );
                 }
                 replay.finish();
+                let last = BROWSER_SEEDS[BROWSER_SEEDS.len() - 1];
+                assert!(p.holds(1, &browser_page(last)), "{name}: not replaced");
+            }
+            Self::BrowserDirtyRects => {
+                let mut replay = Replay::new(self);
+                let mut canvas = browser_page(0);
+                for (k, update) in browser_updates().iter().enumerate() {
+                    let session = replay.step(|out| browser_update(out, update));
+                    paint_onto(&mut canvas, BROWSER_PAGE.0, update);
+                    assert!(session.holds(1, &canvas), "{name}: update {k} did not land");
+                }
+                replay.finish();
+                assert!(p.holds(1, &canvas), "{name}: an edit did not land");
+            }
+            #[cfg(unix)]
+            Self::BrowserShm => {
+                let mut replay = Replay::new(self);
+                for k in 1..=SHM_FRAMES {
+                    let session = replay.step(|out| shm_frame(out, k));
+                    assert!(
+                        session.holds(1, &browser_page(k)),
+                        "{name}: frame {k} not read"
+                    );
+                }
+                replay.finish();
                 assert!(
-                    p.holds(1, &ui_frame(320, 180, 4, 2)),
+                    p.holds(1, &browser_page(SHM_FRAMES)),
                     "{name}: not replaced"
                 );
             }
-            Self::BrowserDirtyRects | Self::CellWipes => {
+            Self::CellWipes => {
                 let (base, edits) = self.edits();
                 let expected = paint(base, &edits, None);
                 for skipped in 0..edits.len() {
@@ -237,23 +292,167 @@ struct Edit {
 fn paint((width, height): (u32, u32), edits: &[Edit], skipped: Option<usize>) -> Vec<u8> {
     let mut canvas = ui_frame(width, height, 4, 0);
     for (k, edit) in edits.iter().enumerate() {
-        if Some(k) == skipped {
-            continue;
+        if Some(k) != skipped {
+            paint_onto(&mut canvas, width, std::slice::from_ref(edit));
         }
+    }
+    canvas
+}
+
+fn paint_onto(canvas: &mut [u8], width: u32, edits: &[Edit]) {
+    for edit in edits {
         let row = edit.w as usize * 4;
         for (r, src) in edit.pixels.chunks(row).enumerate() {
             let at = ((edit.y as usize + r) * width as usize + edit.x as usize) * 4;
             canvas[at..at + row].copy_from_slice(src);
         }
     }
-    canvas
 }
+
+/// terminal-browser's frame at an 8x16-cell 240x67 window.
+const BROWSER_PAGE: (u32, u32) = (1920, 1072);
 
 const BROWSER_SEEDS: [u64; 2] = [1, 2];
 
+fn browser_page(seed: u64) -> Vec<u8> {
+    page_frame(BROWSER_PAGE.0, BROWSER_PAGE.1, seed)
+}
+
+/// Every write terminal-browser makes is one synchronized update.
+fn synchronized(out: &mut Vec<u8>, body: impl FnOnce(&mut Vec<u8>)) {
+    out.extend_from_slice(b"\x1b[?2026h");
+    body(out);
+    out.extend_from_slice(b"\x1b[?2026l");
+}
+
 fn browser_frame(out: &mut Vec<u8>, seed: u64) {
-    let pixels = zlib(&ui_frame(320, 180, 4, seed));
-    command(out, "a=T,i=1,p=1,f=32,s=320,v=180,o=z,C=1,q=2", &pixels);
+    let (w, h) = BROWSER_PAGE;
+    let pixels = zlib(&browser_page(seed));
+    let controls = format!("a=T,f=32,o=z,s={w},v={h},t=d,i=1,p=1,C=1,z=0,q=2");
+    synchronized(out, |out| {
+        out.extend_from_slice(b"\x1b[H");
+        command(out, &controls, &pixels);
+    });
+}
+
+/// Each update's rectangles as terminal-browser's frame-edit presenter
+/// sent them for a hover, typed text, a CSS spinner beside a ticking
+/// counter, and a scroll, cut from one capture of each.
+const BROWSER_TRACE: [&[(u32, u32, u32, u32)]; 22] = [
+    &[(652, 133, 81, 30)],
+    &[(318, 140, 1, 17)],
+    &[(652, 133, 81, 30)],
+    &[(318, 140, 1, 17)],
+    &[(318, 139, 67, 17)],
+    &[(326, 139, 10, 17)],
+    &[(335, 139, 5, 17)],
+    &[(339, 139, 4, 17)],
+    &[(342, 139, 10, 17)],
+    &[(351, 139, 6, 17)],
+    &[(262, 130, 54, 54)],
+    &[(262, 130, 54, 54)],
+    &[(262, 130, 54, 54)],
+    &[(262, 129, 54, 55)],
+    &[(262, 129, 153, 55)],
+    &[(262, 130, 55, 54)],
+    &[(262, 130, 54, 54)],
+    &[(262, 130, 54, 54)],
+    &[(262, 130, 153, 54)],
+    &[(262, 130, 54, 54)],
+    &[(250, 25, 900, 1045), (263, 25, 1649, 176)],
+    &[(250, 25, 1662, 328), (250, 139, 900, 931)],
+];
+
+/// Glyph-sized rectangles carry anti-aliased edges, which compress like a
+/// photo; a scrolled block of page compresses like the page.
+fn browser_updates() -> Vec<Vec<Edit>> {
+    let mut seed = 0;
+    BROWSER_TRACE
+        .iter()
+        .map(|rects| {
+            rects
+                .iter()
+                .map(|&(x, y, w, h)| {
+                    seed += 1;
+                    let pixels = if w * h < 1 << 16 {
+                        ui_frame(w, h, 4, seed)
+                    } else {
+                        page_frame(w, h, seed)
+                    };
+                    Edit { x, y, w, h, pixels }
+                })
+                .collect()
+        })
+        .collect()
+}
+
+fn browser_update(out: &mut Vec<u8>, edits: &[Edit]) {
+    synchronized(out, |out| {
+        for Edit { x, y, w, h, pixels } in edits {
+            let controls = format!("a=f,f=32,o=z,i=1,r=1,X=1,x={x},y={y},s={w},v={h},t=d,q=2");
+            command(out, &controls, &zlib(pixels));
+        }
+    });
+}
+
+#[cfg(unix)]
+const SHM_FRAMES: u64 = 2;
+
+/// terminal-browser names a fresh segment for every frame.
+#[cfg(unix)]
+fn shm_name(k: u64) -> String {
+    format!("/felis-bench-{}-browser-{k}", std::process::id())
+}
+
+#[cfg(unix)]
+fn shm_frame(out: &mut Vec<u8>, k: u64) {
+    let (w, h) = BROWSER_PAGE;
+    let controls = format!("a=T,f=32,s={w},v={h},t=s,i=1,p=1,C=1,z=0,q=2");
+    synchronized(out, |out| {
+        out.extend_from_slice(b"\x1b[H");
+        command(out, &controls, shm_name(k).as_bytes());
+    });
+}
+
+/// The daemon defers a `t=s` unlink to session teardown, which a bench
+/// pipeline never reaches, so one set of segments serves every run.
+#[derive(Default)]
+#[cfg_attr(
+    not(unix),
+    expect(dead_code, reason = "only Unix names shared-memory segments")
+)]
+pub(crate) struct Segments(Vec<String>);
+
+impl Segments {
+    #[cfg(unix)]
+    fn create(segments: Vec<(String, Vec<u8>)>) -> Self {
+        use std::io::Write as _;
+        let mut names = Vec::new();
+        for (name, data) in segments {
+            let fd = rustix::shm::open(
+                name.as_str(),
+                rustix::shm::OFlags::CREATE
+                    | rustix::shm::OFlags::RDWR
+                    | rustix::shm::OFlags::TRUNC,
+                rustix::fs::Mode::from_raw_mode(0o600),
+            )
+            .expect("shm segment opens");
+            std::fs::File::from(fd)
+                .write_all(&data)
+                .expect("shm segment fills");
+            names.push(name);
+        }
+        Self(names)
+    }
+}
+
+impl Drop for Segments {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        for name in &self.0 {
+            let _ = rustix::shm::unlink(name.as_str());
+        }
+    }
 }
 
 const PATCHES: [(u32, u32); 3] = [(16, 16), (32, 16), (64, 32)];
@@ -286,13 +485,13 @@ struct Replay {
 
 impl Replay {
     fn new(workload: Graphics) -> Self {
-        let (prelude, stream) = workload.streams();
+        let (prelude, writes) = workload.streams();
         let mut session = Pipeline::new();
         session.feed(&prelude);
         Self {
             name: workload.name(),
             session,
-            stream,
+            stream: writes.concat(),
             at: 0,
         }
     }
@@ -435,6 +634,48 @@ fn ui_frame(width: u32, height: u32, bpp: usize, seed: u64) -> Vec<u8> {
     out
 }
 
+/// A text page as a terminal browser paints it: flat margins, card rules,
+/// and lines drawn from a few dozen glyphs, so zlib lands near the 30-40x
+/// that real pages reach, where [`ui_frame`]'s noise holds it near 3x.
+fn page_frame(width: u32, height: u32, seed: u64) -> Vec<u8> {
+    const GLYPHS: u32 = 48;
+    let mut rng = Lcg::new(seed);
+    let glyphs: Vec<u128> = (0..GLYPHS)
+        .map(|_| (0..4).fold(0, |g, _| g << 32 | u128::from(rng.next())))
+        .collect();
+    let mut line: Vec<Option<u128>> = Vec::new();
+    let mut out = Vec::with_capacity(width as usize * height as usize * 4);
+    let margin = width / 8;
+    for y in 0..height {
+        let gy = y % 24;
+        if gy == 0 {
+            line = (0..=width / 8)
+                .map(|_| (rng.below(6) != 0).then(|| glyphs[rng.below(GLYPHS) as usize]))
+                .collect();
+        }
+        for x in 0..width {
+            let rgb: [u8; 3] = if x < margin {
+                [0xf3, 0xf4, 0xf6]
+            } else if (x - margin) % 640 < 2 || gy == 23 {
+                [0xdd; 3]
+            } else if gy < 16 {
+                let bit = gy * 8 + x % 8;
+                let ink = line[(x / 8) as usize].is_some_and(|g| g >> bit & 1 == 1);
+                if ink && bit % 3 != 0 {
+                    [0x22; 3]
+                } else {
+                    [0xfa; 3]
+                }
+            } else {
+                [0xfa; 3]
+            };
+            out.extend_from_slice(&rgb);
+            out.push(0xff);
+        }
+    }
+    out
+}
+
 fn frame_into(out: &mut Vec<u8>, kind: MessageKind, body: &[u8]) {
     Frame {
         kind: kind.as_u16(),
@@ -489,6 +730,12 @@ impl Pipeline {
             .map(ClientImage::pixels);
         let daemon = self.images.get(ImageId(id)).map(ImageEntry::pixels);
         client == Some(expected) && daemon == Some(expected)
+    }
+
+    pub(crate) fn feed_writes(&mut self, writes: &[Vec<u8>]) {
+        for write in writes {
+            self.feed(write);
+        }
     }
 
     /// The streams never scroll, so dropping the non-APC effects loses
