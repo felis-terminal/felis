@@ -227,12 +227,14 @@ decimal **string**, the spelling `--attachment` accepts), `attached_at` (RFC 333
 three always present. It carries `carrier` (`local` or `relay`), how that window's connection reached the daemon rather
 than where its viewer sits, when the daemon reports it. A `relay` entry carries `ssh_env` when the daemon knows the
 relay's `SSH_CONNECTION`, `SSH_CLIENT` and `SSH_TTY`: an object keyed by those names holding the ones that were set,
-`{}` for none. A `relay` entry without `ssh_env` means the values are unknown, not unset. Each `program_status[]` entry
-always carries `id` (string, `""` for the root record) and `state` (string). It carries `kind` (string), `progress`
-(number, `0` to `100`), `app`, `title` and `msg` (strings) when the record has them. A `state` or `kind` not listed in
-[program-status.md](protocols/program-status.md) is a newer value, not an error. `terminal_progress` always carries
-`state` (string) and carries `value` (number, `0` to `100`) when the report had one; a `state` not listed in
-[terminal-progress.md](protocols/terminal-progress.md) is a newer value.
+`{}` for none. A `relay` entry without `ssh_env` means the values are unknown, not unset. A `local` entry carries
+`client_pid` (number) when the daemon knows the pid of the process that connected that window's socket, normally the
+window process itself, so a window-manager script can resolve the OS window from it; the human `window:` line shows it
+as `pid <n>`. Each `program_status[]` entry always carries `id` (string, `""` for the root record) and `state` (string).
+It carries `kind` (string), `progress` (number, `0` to `100`), `app`, `title` and `msg` (strings) when the record has
+them. A `state` or `kind` not listed in [program-status.md](protocols/program-status.md) is a newer value, not an error.
+`terminal_progress` always carries `state` (string) and carries `value` (number, `0` to `100`) when the report had one;
+a `state` not listed in [terminal-progress.md](protocols/terminal-progress.md) is a newer value.
 
 The mutating verbs answer a point result naming what they reached:
 

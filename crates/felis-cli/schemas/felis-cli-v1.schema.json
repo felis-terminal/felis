@@ -17,6 +17,16 @@
           ],
           "description": "How this window's connection reached the daemon, not where its\nviewer sits. Omitted when the daemon does not report it."
         },
+        "client_pid": {
+          "description": "The pid of the process that connected this window's socket, for\nmapping the attachment to its OS window. Only beside `local`, and\nomitted when the daemon does not know it.",
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "id": {
           "description": "A decimal **string**: the id is a `u64` counter, and a bare JSON\nnumber past 2^53−1 silently rounds in common consumers.\n`--attachment` accepts the same spelling.",
           "pattern": "^[0-9]+$",

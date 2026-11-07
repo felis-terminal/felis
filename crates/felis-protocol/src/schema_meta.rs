@@ -1144,6 +1144,7 @@ pub const ADDITIONS: &[(&str, u16)] = &[
     ("SessionInfo.terminal_progress", 2),
     ("Attachment.carrier", 3),
     ("Attachment.ssh_env", 3),
+    ("Attachment.client_pid", 4),
     ("InputViewport.anchor", 2),
     ("GridViewportState.anchor", 2),
     ("ImageHeader.region", 4),

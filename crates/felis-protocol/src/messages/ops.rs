@@ -1,7 +1,7 @@
 //! [`OpsToDaemonMsg`] and [`OpsToClientMsg`]: one-shot ops on *named
 //! other* sessions (kind 5), with the session-roster vocabulary its `Listed` reply carries.
 
-use std::num::NonZeroU64;
+use std::num::{NonZeroU32, NonZeroU64};
 use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
@@ -124,13 +124,13 @@ pub struct Attachment {
 /// carrier, not where the viewer sits.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AttachCarrier {
-    Local,
+    /// `client_pid` is the process that connected the socket, which on
+    /// felis's own paths is the window; `None` when unknown.
+    Local { client_pid: Option<NonZeroU32> },
     /// `ssh_env` is `None` when the values are unknown (a carrier block
     /// the daemon skipped, or a non-Unicode SSH variable), which is not
     /// the same as a relay environment that set none of them.
-    Relay {
-        ssh_env: Option<SshEnv>,
-    },
+    Relay { ssh_env: Option<SshEnv> },
 }
 
 /// The SSH variables of a relay's own environment, each `Some` exactly
@@ -757,7 +757,15 @@ pub(crate) mod tests {
                     id: 9,
                     attached_at: UNIX_EPOCH + Duration::from_secs(1_788_250_590),
                     input_owner: false,
-                    carrier: Some(AttachCarrier::Local),
+                    carrier: Some(AttachCarrier::Local {
+                        client_pid: NonZeroU32::new(4242),
+                    }),
+                },
+                Attachment {
+                    id: 10,
+                    attached_at: UNIX_EPOCH + Duration::from_secs(1_788_250_595),
+                    input_owner: false,
+                    carrier: Some(AttachCarrier::Local { client_pid: None }),
                 },
                 Attachment {
                     id: 11,

@@ -618,6 +618,15 @@ pub struct Attachment {
     /// a carrier block in a skipped format, or a non-Unicode value.
     #[prost(message, optional, tag="5")]
     pub ssh_env: ::core::option::Option<SshEnv>,
+    /// The pid of the process that connected this attachment's socket, as
+    /// the daemon's kernel recorded it at accept: on felis's own paths the
+    /// window process, but a connector that hands its socket on and exits
+    /// leaves a pid that no longer names the holder. Only beside LOCAL
+    /// (refused at decode otherwise), and never 0. Absent means unknown: a
+    /// platform without the query, a failed lookup, or a peer outside the
+    /// daemon's pid namespace.
+    #[prost(uint32, optional, tag="6")]
+    pub client_pid: ::core::option::Option<u32>,
 }
 /// SSH_CONNECTION, SSH_CLIENT and SSH_TTY; each is set exactly when the
 /// relay's environment carried that variable.

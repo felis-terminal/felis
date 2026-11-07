@@ -17,6 +17,9 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
   `--kind` is required and names the kinds, so a kind added later never reaches an existing invocation; a client
   subscribes before it lists so it misses nothing. Protocol minor 4 adds the observer's kind set and its items;
   `felis notifications subscribe` still hears notifications alone.
+- **CLI**: `felis sessions list` and `info` report each local window's process id as `attachments[].client_pid` (and
+  `pid <n>` on the `window:` line), so a window-manager script can map a session to its OS window. Protocol minor 4 adds
+  `Attachment.client_pid`; a relayed window, or a daemon at minor 3 or below, reports none.
 - **Graphics**: a Kitty graphics feature query (`a=q` with `e=<action>`) is answered with the keys felis honors for that
   action, so a producer can tell, for example, Unicode placeholders apart from the placement offsets felis ignores.
 
