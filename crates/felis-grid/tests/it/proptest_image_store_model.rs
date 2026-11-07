@@ -14,12 +14,16 @@ use proptest::prelude::*;
 
 const IDS: u32 = 8;
 
+/// `I=` numbers, fewer than ids so several images share one.
+const NUMBERS: u32 = 3;
+
 #[derive(Debug, Clone)]
 enum Op {
     Insert {
         id: u32,
         size: usize,
         anonymous: bool,
+        number: Option<u32>,
     },
     Hold {
         id: u32,
@@ -65,7 +69,8 @@ fn op() -> impl Strategy<Value = Op> {
     let size = 1usize..=48;
     let idx = 0usize..3;
     prop_oneof![
-        3 => (id.clone(), size.clone(), any::<bool>()).prop_map(|(id, size, anonymous)| Op::Insert { id, size, anonymous }),
+        3 => (id.clone(), size.clone(), any::<bool>(), proptest::option::of(0..NUMBERS))
+            .prop_map(|(id, size, anonymous, number)| Op::Insert { id, size, anonymous, number }),
         1 => (id.clone(), any::<bool>()).prop_map(|(id, held)| Op::Hold { id, held }),
         1 => (id.clone(), prop_oneof![
             Just(AnimationMode::Stopped),
@@ -112,6 +117,8 @@ struct ModelEntry {
     atime: u64,
     anonymous: bool,
     held: bool,
+    number: Option<u32>,
+    serial: u64,
 }
 
 impl ModelEntry {
@@ -126,6 +133,7 @@ struct Model {
     total: usize,
     cap: usize,
     clock: u64,
+    next_serial: u64,
 }
 
 impl Model {
@@ -185,6 +193,7 @@ impl Model {
         id: ImageId,
         size: usize,
         anonymous: bool,
+        number: Option<u32>,
     ) -> Result<Evicted, InsertError> {
         let needed = overhead() + frame_bytes(size);
         if needed > self.cap {
@@ -200,10 +209,14 @@ impl Model {
                 cap: self.cap,
             });
         }
-        if let Some(at) = self.position(id) {
+        let serial = if let Some(at) = self.position(id) {
             let old = self.entries.remove(at);
             self.total -= old.bytes();
-        }
+            old.serial
+        } else {
+            self.next_serial += 1;
+            self.next_serial
+        };
         let evicted = self.evict_to_fit(needed, None)?;
         self.total += needed;
         self.entries.push(ModelEntry {
@@ -213,6 +226,8 @@ impl Model {
             atime: 0,
             anonymous,
             held: false,
+            number,
+            serial,
         });
         self.touch(id);
         Ok(evicted)
@@ -285,6 +300,19 @@ impl Model {
             .unwrap()
     }
 
+    /// Of the images sent with `number`, the greatest serial; of equal
+    /// ones, the last in store order.
+    fn newest_with_number(&self, number: u32) -> Option<ImageId> {
+        self.entries
+            .iter()
+            .filter(|e| e.number == Some(number))
+            .fold(None, |best: Option<&ModelEntry>, e| match best {
+                Some(b) if b.serial > e.serial => Some(b),
+                _ => Some(e),
+            })
+            .map(|e| e.id)
+    }
+
     fn loose_ids(&self, anonymous_only: bool) -> Vec<ImageId> {
         self.entries
             .iter()
@@ -317,13 +345,17 @@ proptest! {
     ) {
         let cap = cap_entries * (overhead() + frame_bytes(24));
         let mut store = ImageStore::new(cap);
-        let mut model = Model { entries: Vec::new(), total: 0, cap, clock: 0 };
+        let mut model = Model { entries: Vec::new(), total: 0, cap, clock: 0, next_serial: 0 };
         let mut now = 0;
         for op in &ops {
             match *op {
-                Op::Insert { id, size, anonymous } => {
+                Op::Insert { id, size, anonymous, number } => {
                     let e = if anonymous { entry(size).into_anonymous() } else { entry(size) };
-                    prop_assert_eq!(store.insert(ImageId(id), e), model.insert(ImageId(id), size, anonymous), "{:?}", op);
+                    let e = match number {
+                        Some(n) => e.with_number(n),
+                        None => e,
+                    };
+                    prop_assert_eq!(store.insert(ImageId(id), e), model.insert(ImageId(id), size, anonymous, number), "{:?}", op);
                 }
                 Op::Hold { id, held } => {
                     store.set_virtually_held(ImageId(id), held);
@@ -404,6 +436,13 @@ proptest! {
                     "LRU except {:?} after {:?}", except, op
                 );
             }
+            for number in 0..NUMBERS {
+                prop_assert_eq!(
+                    store.newest_with_number(number),
+                    model.newest_with_number(number),
+                    "newest with I={} after {:?}", number, op
+                );
+            }
             for anonymous_only in [false, true] {
                 prop_assert_eq!(store.loose_ids(anonymous_only), model.loose_ids(anonymous_only), "loose after {:?}", op);
             }
@@ -416,7 +455,10 @@ proptest! {
             prop_assert_eq!(store.next_animation_due_ms(now), due, "due after {:?}", op);
             for e in &model.entries {
                 let held = store.get(e.id).unwrap();
-                prop_assert_eq!((held.refcount(), held.atime(), held.byte_len()), (e.refcount, e.atime, e.bytes()));
+                prop_assert_eq!(
+                    (held.refcount(), held.atime(), held.byte_len(), held.number(), held.serial()),
+                    (e.refcount, e.atime, e.bytes(), e.number, e.serial)
+                );
             }
         }
     }

@@ -679,11 +679,7 @@ impl ImageStore {
     /// the last created.
     #[must_use]
     pub fn newest_with_number(&self, number: u32) -> Option<ImageId> {
-        self.entries
-            .iter()
-            .filter(|(_, entry)| entry.number == Some(number))
-            .max_by_key(|(_, entry)| entry.serial)
-            .map(|(id, _)| id)
+        self.entries.newest_with_number(number)
     }
 
     /// kitty's `get_free_client_id`: the lowest id from 1 up that no

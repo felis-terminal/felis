@@ -2061,3 +2061,20 @@ fn a_dump_without_serials_takes_them_from_its_sequence_numbers() {
     assert_eq!(restored.serial(ImageId(1), Some(PlacementId(2))), Some(2));
     assert_eq!(restored.serial(ImageId(2), Some(PlacementId(1))), Some(3));
 }
+
+/// Entries restored from a dump that predates serials all hold 0; the
+/// newest of a number is then the last in store order.
+#[test]
+fn newest_with_number_breaks_serial_ties_by_store_order() {
+    let s = ImageStore::over_cap_for_test(
+        vec![
+            (ImageId(3), entry(1).with_number(7)),
+            (ImageId(1), entry(1).with_number(7)),
+            (ImageId(2), entry(1).with_number(8)),
+        ],
+        charge(1) * 3,
+    );
+    assert_eq!(s.newest_with_number(7), Some(ImageId(1)));
+    assert_eq!(s.newest_with_number(8), Some(ImageId(2)));
+    assert_eq!(s.newest_with_number(9), None);
+}
