@@ -38,9 +38,9 @@ impl Lcg {
     }
 }
 
-/// A browser-like frame: a flat sidebar, a gradient header, and a body of
-/// text lines over a photo-like region whose low-bit noise keeps zlib and
-/// PNG near the 2-4x ratio real UI frames reach.
+/// A UI-like frame: a flat sidebar, a gradient header, and a body of text
+/// lines over a photo-like region whose low-bit noise keeps zlib and PNG
+/// near 2-4x, as video and anti-aliased UI pixels compress.
 pub(crate) fn ui_frame(width: u32, height: u32, bpp: usize, seed: u64) -> Vec<u8> {
     let mut rng = Lcg::new(seed);
     let mut out = Vec::with_capacity(width as usize * height as usize * bpp);
@@ -77,6 +77,48 @@ pub(crate) fn ui_frame(width: u32, height: u32, bpp: usize, seed: u64) -> Vec<u8
             if bpp == 4 {
                 out.push(0xff);
             }
+        }
+    }
+    out
+}
+
+/// A text page as a terminal browser paints it: flat margins, card rules,
+/// and lines drawn from a few dozen glyphs, so zlib lands near the 30-40x
+/// that real pages reach.
+pub(crate) fn page_frame(width: u32, height: u32, seed: u64) -> Vec<u8> {
+    const GLYPHS: u32 = 48;
+    let mut rng = Lcg::new(seed);
+    let glyphs: Vec<u128> = (0..GLYPHS)
+        .map(|_| (0..4).fold(0, |g, _| g << 32 | u128::from(rng.next())))
+        .collect();
+    let mut line: Vec<Option<u128>> = Vec::new();
+    let mut out = Vec::with_capacity(width as usize * height as usize * 4);
+    let margin = width / 8;
+    for y in 0..height {
+        let gy = y % 24;
+        if gy == 0 {
+            line = (0..=width / 8)
+                .map(|_| (rng.below(6) != 0).then(|| glyphs[rng.below(GLYPHS) as usize]))
+                .collect();
+        }
+        for x in 0..width {
+            let rgb: [u8; 3] = if x < margin {
+                [0xf3, 0xf4, 0xf6]
+            } else if (x - margin) % 640 < 2 || gy == 23 {
+                [0xdd; 3]
+            } else if gy < 16 {
+                let bit = gy * 8 + x % 8;
+                let ink = line[(x / 8) as usize].is_some_and(|g| g >> bit & 1 == 1);
+                if ink && bit % 3 != 0 {
+                    [0x22; 3]
+                } else {
+                    [0xfa; 3]
+                }
+            } else {
+                [0xfa; 3]
+            };
+            out.extend_from_slice(&rgb);
+            out.push(0xff);
         }
     }
     out
