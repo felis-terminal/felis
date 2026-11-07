@@ -1,8 +1,9 @@
 //! Instruction-count twin of the `daemon_side`, `multi_cycle_end_to_end`,
-//! `graphics_end_to_end` and `resize_reflow` groups in `end_to_end_throughput.rs`, run under callgrind for the PR
-//! regression gate (`just bench-gate-ir`). Setup runs outside the measured
-//! region, and the returned buffers drop outside it, as `iter_batched` does
-//! for the Criterion twin.
+//! `graphics_end_to_end`, `resize_reflow` and `reattach_*` groups in
+//! `end_to_end_throughput.rs`, run under callgrind for the PR regression gate
+//! (`just bench-gate-ir`). Setup runs outside the measured region, and the
+//! returned buffers drop outside it, as `iter_batched` does for the Criterion
+//! twin.
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
@@ -13,6 +14,10 @@ mod workload;
 #[cfg(target_os = "linux")]
 #[path = "support/graphics.rs"]
 mod graphics;
+
+#[cfg(target_os = "linux")]
+#[path = "support/reattach.rs"]
+mod reattach;
 
 #[cfg(target_os = "linux")]
 #[allow(
@@ -27,7 +32,10 @@ mod gate {
     use felis_vt::Parser;
     use gungraun::{library_benchmark, library_benchmark_group};
 
+    use bytes::Bytes;
+
     use crate::graphics::{Graphics, Pipeline, Segments};
+    use crate::reattach::{Reattach, Session, Window};
     use crate::workload::{
         COLS, PTY_CHUNK_SIZE, REFLOW_NARROW_COLS, REFLOW_WIDE_COLS, ROWS, STREAM_BYTES,
         apply_diffs, csi_redraw, emit_diffs_with, plaintext_scroll, reflow_and_replay,
@@ -196,13 +204,52 @@ mod gate {
         input
     }
 
+    #[library_benchmark(setup = Reattach::session)]
+    #[bench::scrollback_10k(Reattach::Scrollback10k)]
+    #[bench::scrollback_100k(Reattach::Scrollback100k)]
+    #[bench::scrollback_10k_images(Reattach::Scrollback10kImages)]
+    fn reattach_daemon_side(session: Session) -> (Session, Bytes) {
+        let burst = session.burst();
+        black_box(burst.len());
+        (session, burst)
+    }
+
+    pub(crate) struct ReattachInput {
+        session: Session,
+        window: Window,
+    }
+
+    fn setup_reattach(workload: Reattach) -> ReattachInput {
+        ReattachInput {
+            session: workload.session(),
+            window: Window::new(),
+        }
+    }
+
+    fn check_reattach(output: ReattachInput) {
+        let ReattachInput { session, window } = output;
+        window.check(&session);
+    }
+
+    #[library_benchmark(setup = setup_reattach, teardown = check_reattach)]
+    #[bench::scrollback_10k(Reattach::Scrollback10k)]
+    #[bench::scrollback_100k(Reattach::Scrollback100k)]
+    #[bench::scrollback_10k_images(Reattach::Scrollback10kImages)]
+    fn reattach_end_to_end(mut input: ReattachInput) -> ReattachInput {
+        let burst = input.session.burst();
+        input.window.rehydrate(burst);
+        input
+    }
+
     library_benchmark_group!(
         name = end_to_end_throughput,
         benchmarks = [
             daemon_side,
             multi_cycle_end_to_end,
             graphics_end_to_end,
-            resize_reflow
+            resize_reflow,
+            reattach_daemon_side,
+            reattach_end_to_end
         ]
     );
 

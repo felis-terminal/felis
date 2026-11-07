@@ -80,6 +80,22 @@ pub fn default_session_factory() -> SessionFactory {
     Arc::new(SpawnedPty::default_shell_command)
 }
 
+/// The burst a window attaching to this state receives, for the attach
+/// benches.
+///
+/// # Errors
+/// As the attach itself: a row the codec refuses.
+#[doc(hidden)]
+pub fn window_rehydrate(
+    grid: &Grid,
+    images: &felis_grid::images::ImageStore,
+    placements: &felis_grid::images::Placements,
+    out: &mut Vec<OutEvent>,
+) -> Result<(), ConnError> {
+    streaming::SubscriberStream::rehydrated(ConnectionMode::Window, grid, images, placements, out)
+        .map(drop)
+}
+
 #[derive(Debug, Error)]
 pub enum ServeError {
     #[error("bind: {0}")]

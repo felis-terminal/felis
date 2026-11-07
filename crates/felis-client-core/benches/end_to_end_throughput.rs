@@ -1,8 +1,9 @@
 //! End-to-end PTY -> daemon -> shadow throughput baseline.
 //!
 //! Evaluates compute cost from `compose_diffs` through `FrameWriter::write_frame`,
-//! frame decode, `GridMsg` decode, and `ShadowScreen::apply`, plus the
-//! Kitty graphics path and a resize's reflow over a full scrollback.
+//! frame decode, `GridMsg` decode, and `ShadowScreen::apply`, the Kitty
+//! graphics path through `ImageShadow` and its layout, a resize's reflow over
+//! a full scrollback, and a reattach.
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
@@ -19,7 +20,11 @@ mod workload;
 #[path = "support/graphics.rs"]
 mod graphics;
 
+#[path = "support/reattach.rs"]
+mod reattach;
+
 use graphics::{Graphics, Pipeline};
+use reattach::{Reattach, Window};
 
 use workload::{
     COLS, PTY_CHUNK_SIZE, REFLOW_NARROW_COLS, REFLOW_WIDE_COLS, ROWS, STREAM_BYTES, apply_diffs,
@@ -268,10 +273,46 @@ fn bench_reflow(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_reattach(c: &mut Criterion) {
+    for workload in [
+        Reattach::Scrollback10k,
+        Reattach::Scrollback100k,
+        Reattach::Scrollback10kImages,
+    ] {
+        let session = workload.session();
+        let mut checked = Window::new();
+        checked.rehydrate(session.burst());
+        checked.check(&session);
+        let burst_bytes = session.burst().len() as u64;
+        {
+            let mut group = c.benchmark_group("reattach_daemon_side");
+            group.throughput(Throughput::Bytes(burst_bytes));
+            group.bench_function(workload.name(), |b| {
+                b.iter_with_large_drop(|| session.burst());
+            });
+            group.finish();
+        }
+        let mut group = c.benchmark_group("reattach_end_to_end");
+        group.throughput(Throughput::Bytes(burst_bytes));
+        group.bench_function(workload.name(), |b| {
+            b.iter_batched(
+                Window::new,
+                |mut window| {
+                    window.rehydrate(session.burst());
+                    window
+                },
+                BatchSize::SmallInput,
+            );
+        });
+        group.finish();
+    }
+}
+
 criterion_group!(
     end_to_end_throughput,
     bench_throughput,
     bench_graphics,
-    bench_reflow
+    bench_reflow,
+    bench_reattach
 );
 criterion_main!(end_to_end_throughput);
