@@ -15,7 +15,6 @@ testing = []
 [dependencies]
 swash = { workspace = true }
 skrifa = { workspace = true }
-zeno = { workspace = true }
 memmap2 = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }

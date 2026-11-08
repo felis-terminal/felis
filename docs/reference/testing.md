@@ -243,8 +243,9 @@ The threats these tests verify, and the property each defense must hold, are
 Tool: Kani (<https://model-checking.github.io/kani/>).
 
 Kani model-checks self-contained SWAR and arithmetic kernels (UTF-8 and LEB128 decoding, the printable-run scan, CSI
-parameter accumulation, frame headers, base64, placeholder and geometry arithmetic) for absence of panics and assertion
-violations across bounded inputs. Each proof is a `#[kani::proof]` harness under `#[cfg(kani)]` beside its kernel.
+parameter accumulation, frame headers, base64, placeholder and geometry arithmetic, glyph coverage accumulation) for
+absence of panics and assertion violations across bounded inputs. Each proof is a `#[kani::proof]` harness under
+`#[cfg(kani)]` beside its kernel.
 
 ```
 just kani                     # run all proofs in the Kani dev shell

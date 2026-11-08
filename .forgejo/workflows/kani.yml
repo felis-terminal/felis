@@ -20,7 +20,7 @@ concurrency:
 
 jobs:
   proofs:
-    name: cargo kani (vt + protocol + grid + client-core kernels)
+    name: cargo kani (vt + protocol + grid + client-core + shaping kernels)
     runs-on: x86_64-linux
     timeout-minutes: 240
     steps:

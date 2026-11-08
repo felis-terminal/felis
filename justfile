@@ -325,12 +325,12 @@ _fuzz-seed:
 
 # ── Kani model checking (x86_64-linux only; mirrors kani.yml) ───────
 
-# Model-check the vt + protocol + grid + client-core kernel proofs (docs/reference/testing.md).
+# Model-check the vt + protocol + grid + client-core + shaping kernel proofs (docs/reference/testing.md).
 # --no-default-features keeps felis-client-core's `native` feature (tokio, felis-transport) out of the
-# goto model; the other three packages have no default features to lose.
+# goto model; the other packages have no default features to lose.
 [group('kani')]
 kani *args:
-    nix develop .#kani -c cargo kani -p felis-vt -p felis-protocol -p felis-grid -p felis-client-core --no-default-features {{ args }}
+    nix develop .#kani -c cargo kani -p felis-vt -p felis-protocol -p felis-grid -p felis-client-core -p felis-shaping --no-default-features {{ args }}
 
 # Bump dev/packages/kani/default.nix to the latest Kani release (then run `just kani`).
 [group('kani')]

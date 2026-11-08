@@ -8,7 +8,10 @@
 use std::{
     borrow::Cow,
     collections::{HashMap, HashSet},
-    sync::{Arc, Mutex, OnceLock, PoisonError},
+    sync::{
+        Arc, Mutex, OnceLock, PoisonError,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use skrifa::{
@@ -23,15 +26,17 @@ use skrifa::{
 pub use swash::GlyphId;
 use swash::{
     FontRef, NormalizedCoord, Setting, StringId,
-    scale::{Render, ScaleContext, Source, StrikeWith, image::Content},
+    scale::ScaleContext,
     shape::{Direction, ShapeContext},
-    zeno::Format,
 };
 use thiserror::Error;
+
+use crate::raster::{RasterOptions, Rasterizer};
 use tracing::{debug, warn};
 
 mod presentation;
 mod provider;
+mod raster;
 
 use presentation::is_emoji_presentation;
 pub use provider::MONOSPACE_FALLBACK_FAMILIES;
@@ -63,6 +68,14 @@ type FontBytes = Arc<dyn AsRef<[u8]> + Send + Sync>;
 /// every feature test agree on the face.
 #[doc(hidden)]
 pub const TEST_FONT_FAMILY: &str = "Monaspace Neon";
+
+/// Rasterizes the outline `draw` emits at `px` through the outline path's
+/// rasterizer, for the fuzz target.
+#[cfg(feature = "testing")]
+#[doc(hidden)]
+pub fn rasterize_path(px: f32, draw: impl FnOnce(&mut dyn skrifa::PathSink)) -> GlyphBitmap {
+    raster::rasterize_path(px, draw)
+}
 
 /// The pinned test-font set `$FELIS_TEST_FONT_DIR` names; panics when
 /// it is unset.
@@ -120,6 +133,11 @@ pub struct Font {
     /// in design units: what [`Font::display_name`] names. Normalizing
     /// passes through `avar`, so `coords` cannot be read back exactly.
     position: Vec<(swash::Tag, f32)>,
+    /// The face at `coords`, which the outline scaler draws from.
+    face: skrifa::Font,
+    /// Identifies this face at this position to the outline scaler cache.
+    raster_id: u64,
+    raster: RasterOptions,
 }
 
 impl Font {
@@ -205,6 +223,9 @@ impl Font {
             let color = font_ref.color_palettes().len() != 0 || font_ref.color_strikes().len() != 0;
             (font_ref.offset, color)
         };
+        let face =
+            skrifa::Font::new(skrifa::raw::model::Blob::Shared(bytes.clone()), face_index)
+                .ok_or_else(|| ShapingError::BadFont("skrifa::Font::new returned None".into()))?;
         let font = Self {
             bytes,
             index: face_index,
@@ -213,6 +234,9 @@ impl Font {
             color,
             coords: Vec::new(),
             position: Vec::new(),
+            face,
+            raster_id: next_raster_id(),
+            raster: RasterOptions::platform(),
         };
         Ok(match instance {
             Some(index) => font.at_instance(index).ok_or_else(|| {
@@ -247,6 +271,11 @@ impl Font {
     }
 
     fn with_coords(&self, coords: Vec<NormalizedCoord>, position: Vec<(swash::Tag, f32)>) -> Self {
+        let face = self
+            .face
+            .instance_builder()
+            .normalized_coords(coords.iter().map(|&c| F2Dot14::from_bits(c)))
+            .build();
         Self {
             bytes: self.bytes.clone(),
             index: self.index,
@@ -255,6 +284,9 @@ impl Font {
             color: self.color,
             coords,
             position,
+            face,
+            raster_id: next_raster_id(),
+            raster: self.raster,
         }
     }
 
@@ -449,6 +481,11 @@ impl Font {
         let width = self.advance_px('M', px).unwrap_or(px * 0.6);
         CellMetrics::from_scaled(width, metrics.ascent, metrics.descent, metrics.leading)
     }
+}
+
+fn next_raster_id() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    NEXT.fetch_add(1, Ordering::Relaxed)
 }
 
 const WGHT: swash::Tag = swash::tag_from_bytes(b"wght");
@@ -2089,10 +2126,9 @@ pub struct ShapeCache {
     map: HashMap<ShapeKey, GlyphBitmap>,
     bytes_used: usize,
     cap: usize,
-    /// Reused: swash keys per-font scaler state on `FontRef::key` inside
-    /// the context, so a fresh `ScaleContext` per rasterize would rebuild
-    /// it on every miss (reuse measured -38% on `shape_cache/miss`).
-    scale_ctx: ScaleContext,
+    /// Reused: it keeps per-font scaler state, so a fresh one per
+    /// rasterize would rebuild it on every miss.
+    rasterizer: Rasterizer,
 }
 
 impl Default for ShapeCache {
@@ -2108,7 +2144,7 @@ impl ShapeCache {
             map: HashMap::new(),
             bytes_used: 0,
             cap,
-            scale_ctx: ScaleContext::new(),
+            rasterizer: Rasterizer::default(),
         }
     }
 
@@ -2127,7 +2163,7 @@ impl ShapeCache {
     ) -> &GlyphBitmap {
         let key = (c, px, sizing);
         if !self.map.contains_key(&key) {
-            let bitmap = rasterize(&mut self.scale_ctx, font, c, px as f32);
+            let bitmap = rasterize(&mut self.rasterizer, font, c, px as f32);
             self.bytes_used += entry_cost(&bitmap);
             self.map.insert(key, bitmap);
             while self.bytes_used > self.cap {
@@ -2151,7 +2187,7 @@ impl ShapeCache {
         if glyph_id == 0 {
             return GlyphBitmap::blank();
         }
-        rasterize_with(&mut self.scale_ctx, font, glyph_id, px)
+        self.rasterizer.rasterize(font, glyph_id, px)
     }
 
     #[must_use]
@@ -2165,59 +2201,12 @@ impl ShapeCache {
     }
 }
 
-fn rasterize(ctx: &mut ScaleContext, font: &Font, c: char, px: f32) -> GlyphBitmap {
-    let face = font.font_ref();
-    let glyph_id = face.charmap().map(c);
+fn rasterize(rasterizer: &mut Rasterizer, font: &Font, c: char, px: f32) -> GlyphBitmap {
+    let glyph_id = font.font_ref().charmap().map(c);
     if glyph_id == 0 {
         return GlyphBitmap::blank();
     }
-    rasterize_with(ctx, font, glyph_id, px)
-}
-
-fn rasterize_with(ctx: &mut ScaleContext, font: &Font, glyph_id: GlyphId, px: f32) -> GlyphBitmap {
-    let face = font.font_ref();
-    // Unhinted on macOS: CoreText never grid-fits, so a hinted raster
-    // sits beside every native window with stems snapped a pixel off.
-    let hint = cfg!(not(target_os = "macos"));
-    let mut scaler = ctx
-        .builder(face)
-        .size(px)
-        .hint(hint)
-        .normalized_coords(&font.coords)
-        .build();
-    let sources: &[Source] = if font.color {
-        &[
-            Source::ColorOutline(0),
-            Source::ColorBitmap(StrikeWith::BestFit),
-            Source::Outline,
-        ]
-    } else {
-        &[Source::Outline]
-    };
-    let image = Render::new(sources)
-        .format(Format::Alpha)
-        .render(&mut scaler, glyph_id);
-    let Some(image) = image else {
-        return GlyphBitmap::blank();
-    };
-    let pixels = match image.content {
-        Content::Mask => GlyphPixels::Coverage(image.data.clone()),
-        // swash emits straight RGBA in R,G,B,A order (sbix/CBDT PNG
-        // decoder and COLR blitter alike); a BGRA reorder here renders a
-        // red 🦀 blue.
-        Content::Color => GlyphPixels::Rgba(image.data.clone()),
-        // LCD masks are RGBA-packed coverage, not color.
-        Content::SubpixelMask => {
-            GlyphPixels::Coverage(image.data.as_chunks::<4>().0.iter().map(|p| p[3]).collect())
-        }
-    };
-    GlyphBitmap::new(
-        image.placement.width,
-        image.placement.height,
-        image.placement.left,
-        image.placement.top,
-        pixels,
-    )
+    rasterizer.rasterize(font, glyph_id, px)
 }
 
 impl GlyphBitmap {
@@ -2633,7 +2622,7 @@ mod tests {
     #[test]
     fn mask_glyph_rasterizes_as_coverage() {
         let font = font();
-        let bitmap = rasterize(&mut ScaleContext::new(), &font, 'A', 16.0);
+        let bitmap = rasterize(&mut Rasterizer::default(), &font, 'A', 16.0);
         assert!(
             matches!(bitmap.pixels(), GlyphPixels::Coverage(_)),
             "ASCII 'A' is a coverage mask, not color",
@@ -2650,7 +2639,7 @@ mod tests {
         db.add_dir(dir);
         let font = Font::try_load_with(&db, "Noto Color Emoji").expect("pinned color face");
         assert!(font.has_color_glyphs() && font.has_glyph('⏸'));
-        let bitmap = rasterize(&mut ScaleContext::new(), &font, '⏸', 32.0);
+        let bitmap = rasterize(&mut Rasterizer::default(), &font, '⏸', 32.0);
         assert!(
             bitmap.is_color(),
             "a color-face U+23F8 must rasterize as RGBA, not collapse to a mask",
@@ -3027,7 +3016,7 @@ mod tests {
             &StyleFaces::default(),
         )
         .expect("Monaspace primary must load from the pinned font dir");
-        let mut ctx = ScaleContext::new();
+        let mut ctx = Rasterizer::default();
         for c in ['✳', '✻', '✶', '✢'] {
             let font = stack.resolve(c, FontStyle::REGULAR);
             assert!(
@@ -3195,7 +3184,7 @@ mod tests {
         db.add_file(&file).expect("the variable face reads");
         let default_instance = Font::try_load_with(&db, family).expect("the variable face loads");
         let ink = |font: &Font| {
-            let bitmap = rasterize(&mut ScaleContext::new(), font, 'M', 32.0);
+            let bitmap = rasterize(&mut Rasterizer::default(), font, 'M', 32.0);
             bitmap
                 .pixels()
                 .as_bytes()
@@ -3298,7 +3287,7 @@ mod tests {
             "bold italic keeps the bold weight",
         );
         let ink = |font: &Font| {
-            rasterize(&mut ScaleContext::new(), font, 'M', 32.0)
+            rasterize(&mut Rasterizer::default(), font, 'M', 32.0)
                 .pixels()
                 .as_bytes()
                 .to_vec()
@@ -4193,7 +4182,7 @@ mod tests {
     ];
 
     fn ink(font: &Font, c: char) -> u64 {
-        rasterize(&mut ScaleContext::new(), font, c, 32.0)
+        rasterize(&mut Rasterizer::default(), font, c, 32.0)
             .pixels()
             .as_bytes()
             .iter()
@@ -4698,7 +4687,7 @@ mod tests {
         let glyph_id = face.charmap().map('A');
         assert_ne!(glyph_id, 0, "system monospace must cover 'A'");
         let mut cache = ShapeCache::default();
-        let from_char = rasterize(&mut cache.scale_ctx, &font, 'A', 16.0);
+        let from_char = rasterize(&mut cache.rasterizer, &font, 'A', 16.0);
         let from_id = cache.rasterize_glyph_id(&font, glyph_id, 16.0);
         assert_eq!(from_char.pixels.as_bytes(), from_id.pixels.as_bytes());
         assert_eq!(from_char.width(), from_id.width());

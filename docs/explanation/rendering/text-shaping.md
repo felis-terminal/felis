@@ -32,12 +32,13 @@ Shaping direction is hard-coded left-to-right: a terminal cell row is monospace 
 
 ## Cache
 
-Caching happens at three layers: swash's own per-font caches, the per-glyph bitmap cache, and a per-run shape memo.
+Caching happens at three layers: per-font shaper and scaler state, the per-glyph bitmap cache, and a per-run shape memo.
 
-**swash per-font caches.** swash's `ShapeContext` / `ScaleContext` cache per-font state (GSUB shape data, feature lists,
-scaler setup) keyed on `FontRef::key`. felis generates that key once per loaded `Font` and reuses one `ShapeContext` (in
-`Shaper`) and one `ScaleContext` (owned by the per-glyph `ShapeCache`, which is the single rasterization gateway) so
-those caches actually hit. Both contexts hold up to 8 fonts internally, above the fallback chain's typical 4.
+**Per-font shaper and scaler state.** swash's `ShapeContext` caches per-font state (GSUB shape data, feature lists)
+keyed on `FontRef::key`. felis generates that key once per loaded `Font` and reuses one `ShapeContext` (in `Shaper`) so
+the cache actually hits. The per-glyph `ShapeCache`, which is the single rasterization gateway, keeps skrifa outline
+scalers for the last 8 (face, size) pairs, because setting up a hinted scaler reruns the font's hinting programs, and
+one swash `ScaleContext` for color glyphs. Each holds up to 8 fonts, above the fallback chain's typical 4.
 
 **Per-glyph bitmap cache.** Rasterization is cached per glyph rather than per run, because the same glyph recurs across
 runs that share nothing else: shells re-print one prompt thousands of times and most output is plain ASCII. An entry is
@@ -210,7 +211,7 @@ glyph. This mirrors the fallback policy elsewhere (a missing `font.fallback` fam
 config is a description of intent that degrades gracefully across machines, and a user who wants bold to stand out
 installs a bold face rather than accepting a mechanically-smeared approximation.
 
-_Revisit if_ users ask for synthesized styles for faces that genuinely lack them: the hook is a synthesis pass (zeno
+_Revisit if_ users ask for synthesized styles for faces that genuinely lack them: the hook is a synthesis pass (outline
 emboldening + a shear in the scaler) gated behind an opt-in config, layered on top of this face-selection path without
 disturbing it.
 

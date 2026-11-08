@@ -1509,7 +1509,6 @@ dependencies = [
  "windows",
  "windows-core",
  "yeslogic-fontconfig-sys",
- "zeno",
 ]
 
 [[package]]
