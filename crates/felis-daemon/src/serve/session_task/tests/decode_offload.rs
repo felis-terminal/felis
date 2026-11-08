@@ -1066,7 +1066,7 @@ impl LateWindow {
     }
 }
 
-fn resize_dims((rows, cols): (u16, u16)) -> RequestedDims {
+pub(super) fn resize_dims((rows, cols): (u16, u16)) -> RequestedDims {
     RequestedDims {
         rows: u32::from(rows),
         cols: u32::from(cols),

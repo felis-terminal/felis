@@ -33,6 +33,13 @@ const SIDE_BYTES_CEILING: usize = 1 << 20;
 /// hold the session's whole ring.
 const WINDOW_TEXT_CEILING: usize = 1 << 20;
 
+/// What a quiet session's cells may hold against a full ring's: the
+/// compacted tiers keep each history row's occupied cells, not its
+/// blank tail.
+const fn compacted_ceiling(full: usize) -> usize {
+    full / 2
+}
+
 #[derive(Clone, Copy)]
 struct Footprint {
     live_bytes: usize,
@@ -117,6 +124,15 @@ fn session(inputs: &[&[u8]]) -> (Session, Footprint) {
     })
 }
 
+/// As the daemon leaves a session once its output stops. Compacted
+/// outside the profiled region, so the cold tier's heap counts once, in
+/// the held cells, not again in the heap columns.
+fn quiet(inputs: &[&[u8]]) -> (Session, Footprint) {
+    let (mut session, footprint) = session(inputs);
+    while !session.grid.compact_history(usize::MAX) {}
+    (session, footprint)
+}
+
 /// The burst is composed outside the profiled region but copied inside
 /// it, as a window's read buffer is, so a window that kept slices of
 /// the burst would be charged for the whole buffer.
@@ -147,21 +163,25 @@ impl Report {
             size_of::<Cell>() * usize::from(COLS),
         );
         out.push_str(
-            "| scenario | live B | live blocks | peak B | allocations | B per row | mean occupied cols |\n\
-             | --- | --: | --: | --: | --: | --: | --: |\n",
+            "| scenario | live B | live blocks | peak B | allocations | cells resident B | B per row | mean occupied cols |\n\
+             | --- | --: | --: | --: | --: | --: | --: | --: |\n",
         );
         Self(out)
     }
 
-    /// Per row counts the cells (the ring's reservation, off the heap)
-    /// and everything else a session holds, pixels aside, over the rows a
-    /// full ring retains.
+    /// Per row counts the cells the session holds (both scrollback
+    /// tiers, not the ring's reservation) and everything else on its
+    /// heap, pixels aside, over the rows a full ring retains.
     fn row(&mut self, name: &str, fp: Footprint, session: Option<&Session>) {
         let history = session.map_or(0, |s| s.grid.scrollback().len());
+        let resident = session.map_or_else(
+            || "-".to_owned(),
+            |s| s.grid.resident_cell_bytes().to_string(),
+        );
         let (per_row, occupied) = match session {
             Some(s) if history > 0 => {
                 let rows = usize::from(ROWS) + history;
-                let text = fp.live_bytes + s.grid.reserved_cell_bytes() - s.images.bytes_used();
+                let text = fp.live_bytes + s.grid.resident_cell_bytes() - s.images.bytes_used();
                 (
                     (text / rows).to_string(),
                     mean_occupied_cols(&s.grid).to_string(),
@@ -171,7 +191,7 @@ impl Report {
         };
         writeln!(
             self.0,
-            "| {name} | {} | {} | {} | {} | {per_row} | {occupied} |",
+            "| {name} | {} | {} | {} | {} | {resident} | {per_row} | {occupied} |",
             fp.live_bytes, fp.live_blocks, fp.peak_bytes, fp.allocations
         )
         .unwrap();
@@ -189,6 +209,8 @@ fn session_and_window_heap_stays_within_structural_ceilings() {
     let (plain, plain_fp) = session(&[&plain_input]);
     let (rich, rich_fp) = session(&[&rich_input]);
     let (pictured, pictured_fp) = session(&[&rich_input, &image_input]);
+    let (plain_quiet, plain_quiet_fp) = quiet(&[&plain_input]);
+    let (rich_quiet, rich_quiet_fp) = quiet(&[&rich_input]);
     let rich_window = window(&rich);
     let pictured_window = window(&pictured);
 
@@ -197,6 +219,8 @@ fn session_and_window_heap_stays_within_structural_ceilings() {
     report.row("plain 10k", plain_fp, Some(&plain));
     report.row("rich 10k", rich_fp, Some(&rich));
     report.row("rich 10k + images", pictured_fp, Some(&pictured));
+    report.row("plain 10k, quiet", plain_quiet_fp, Some(&plain_quiet));
+    report.row("rich 10k, quiet", rich_quiet_fp, Some(&rich_quiet));
     report.row("window, rich 10k", rich_window, None);
     report.row("window, rich 10k + images", pictured_window, None);
     println!("{}", report.0);
@@ -226,6 +250,24 @@ fn session_and_window_heap_stays_within_structural_ceilings() {
         pictured_fp.live_bytes - rich_fp.live_bytes < pixels * 3 / 2,
         "the session holds its {pixels} pixel bytes more than once",
     );
+    for (name, full, quiet) in [
+        ("plain", &plain, &plain_quiet),
+        ("rich", &rich, &rich_quiet),
+    ] {
+        assert_eq!(
+            quiet.grid.scrollback().len(),
+            DEFAULT_SCROLLBACK_ROWS,
+            "{name}"
+        );
+        let (full, quiet) = (
+            full.grid.resident_cell_bytes(),
+            quiet.grid.resident_cell_bytes(),
+        );
+        assert!(
+            quiet < compacted_ceiling(full),
+            "{name}: a quiet session holds {quiet} of a full ring's {full} cell bytes",
+        );
+    }
     assert!(
         rich_window.live_bytes < WINDOW_TEXT_CEILING,
         "the window holds {} bytes of text state",

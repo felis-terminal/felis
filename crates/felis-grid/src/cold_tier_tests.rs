@@ -661,6 +661,34 @@ mod residency {
         (p, g, tp, twin)
     }
 
+    /// What `resident_cell_bytes` reports for the ring is what it keeps
+    /// resident, to the page, full and compacted.
+    #[test]
+    fn resident_cell_bytes_match_what_the_ring_keeps_resident() {
+        use crate::paged_cells::page_bytes;
+        let ring_resident = |g: &Grid| g.resident_cell_bytes() - g.screen.cold.heap_bytes();
+        let resident = |g: &Grid| primary_pages(g) * page_bytes();
+        let (_, mut full, _, _) = grids(24, 200, 2000);
+        let mut p = Parser::new();
+        let lines = Op::Lines {
+            count: 250,
+            width: 9,
+            color: 3,
+            bare_lf: false,
+        };
+        for _ in 0..9 {
+            drive(&mut p, &mut full, &bytes_of(&lines, 24));
+        }
+        assert!(ring_resident(&full).abs_diff(resident(&full)) <= page_bytes());
+        let (_, g, _, _) = compacted();
+        assert!(
+            ring_resident(&g).abs_diff(resident(&g)) <= 2 * page_bytes(),
+            "{} reported, {} resident",
+            ring_resident(&g),
+            resident(&g)
+        );
+    }
+
     /// Spec: scans and clones keep discarded pages discarded. Each walk
     /// that once read the whole physical ring runs with no compaction
     /// after it, and residency stays where compaction left it.

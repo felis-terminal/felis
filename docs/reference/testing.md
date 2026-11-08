@@ -212,11 +212,12 @@ shell fails when the two disagree.
 ### Heap footprint
 
 `crates/felis-client-core/tests/session_memory.rs` counts, under the dhat allocator, the heap a parked session holds
-(idle, with a full scrollback ring, with Kitty images) and the heap a window holds once attached to it. Its ceilings run
-with the workspace tests and are structural: no allocation per history row, image pixels held once on each side, and a
-window that keeps no history. `just bench-mem` prints the figures. The cell ring is an OS mapping dhat does not see
-([scrollback.md](../explanation/data-model/scrollback.md)), so the per-row column adds the ring's whole reservation,
-resident or not.
+(idle, with a full scrollback ring, with Kitty images, and quiet, its history compacted as the daemon leaves it) and the
+heap a window holds once attached to it. Its ceilings run with the workspace tests and are structural: no allocation per
+history row, image pixels held once on each side, a window that keeps no history, and a quiet session holding less than
+half a full ring's cells. `just bench-mem` prints the figures. The cell ring is an OS mapping dhat does not see
+([scrollback.md](../explanation/data-model/scrollback.md)), so the cells-resident and per-row columns count the cells a
+session holds in both scrollback tiers (`Grid::resident_cell_bytes`), not the ring's reservation.
 
 ## Damage-tracking correctness
 
