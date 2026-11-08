@@ -30,6 +30,7 @@ mod protocol_coverage_matrix;
 mod ref_recordings;
 mod repro_osc66_clear_leak;
 mod scenario_snapshots;
+mod screen_ops_keep_history;
 mod sizing_gc;
 mod snapshot_cluster_boundaries;
 mod snapshot_csi;

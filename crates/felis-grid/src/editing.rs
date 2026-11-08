@@ -2382,8 +2382,9 @@ impl Grid {
         let rows = usize::from(self.screen.rows);
         let cur_row = usize::from(self.screen.cursor.row);
         let cur_col = usize::from(self.screen.cursor.col);
-        // The watermark is raised to `cols` on every row below, so no
-        // stale tail may survive under it.
+        // Pins every viewport row's watermark at `cols`: the blank
+        // carries the pen background, and protected cells may survive
+        // anywhere.
         for r in 0..self.screen.rows {
             self.materialize_row_tail(r);
         }
@@ -2411,12 +2412,11 @@ impl Grid {
                 }
             }
         };
+        // Rows are addressed through `phys_row_at`: the ring shares its
+        // physical rows with history, so a bare `logical * cols` would
+        // erase history rows instead of the viewport.
         match ps {
             0 => {
-                // Rows are addressed through `phys_row_at`: after a
-                // scroll the physical order is rotated, so a bare
-                // `logical * cols` would erase the wrong rows. (Mode 2
-                // is rotation-agnostic.)
                 let cur_base = self.screen.phys_row_at(cur_row) * cols;
                 erase_range(
                     cur_base + tail_start,
@@ -2443,15 +2443,15 @@ impl Grid {
                 );
             }
             2 => {
-                erase_range(0, rows * cols, &mut self.screen.cells, &blank);
+                for r in 0..rows {
+                    let rs = self.screen.phys_row_at(r) * cols;
+                    erase_range(rs, rs + cols, &mut self.screen.cells, &blank);
+                }
                 self.pty_effects
                     .push(PtyEffect::ImagesCleared(crate::ImageClear::Screen));
             }
             _ => return,
         }
-        // Conservative `cols` everywhere: the blank carries the pen
-        // background, and protected cells may have survived anywhere.
-        self.screen.occupancy.fill(self.screen.cols);
         self.screen.damage.mark_all();
     }
 
@@ -3005,9 +3005,7 @@ impl Grid {
             link: None,
             sizing: None,
         };
-        self.screen.fill_cells(filler);
-        self.screen.occupancy.fill(self.screen.cols);
-        self.screen.soft_wrap.fill(false);
+        self.screen.fill_viewport(filler);
         self.screen.cursor = Cursor::new();
         self.margins.top = 0;
         self.margins.bottom = self.screen.rows.saturating_sub(1);

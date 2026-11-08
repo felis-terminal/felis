@@ -967,8 +967,7 @@ impl Grid {
                 self.screen.cursor.col = 0;
                 self.screen.cursor.pending_wrap = false;
                 if !(self.conformance_level >= 5 && self.dec_ncsm) {
-                    self.screen.fill_cells(Cell::default());
-                    self.screen.soft_wrap.fill(false);
+                    self.screen.erase_viewport(Cell::default());
                 }
                 self.screen.damage.mark_all();
             }
