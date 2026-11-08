@@ -5867,8 +5867,10 @@ mod tests {
         use std::sync::atomic::{AtomicBool, AtomicU32};
 
         const HOLD: Duration = Duration::from_millis(6);
-        const FLOOD_CAP: Duration = Duration::from_secs(5);
+        const FLOOD_CHUNKS: u32 = 600;
+        const MAX_LEAD_CHUNKS: u32 = 5;
         const MAX_LAG_CHUNKS: u32 = 20;
+        const HANG_GUARD: Duration = Duration::from_secs(30);
         assert!(HOLD > DRAIN_COALESCE, "each drain must outwait the window");
 
         let mut task = SessionTask::for_tests(session_with("read -r _"));
@@ -5886,8 +5888,17 @@ mod tests {
             let chunks = Arc::clone(&chunks);
             let stop = Arc::clone(&stop);
             move || {
-                let started = Instant::now();
-                while !stop.load(Ordering::Relaxed) && started.elapsed() < FLOOD_CAP {
+                let mut lead = 0;
+                while !stop.load(Ordering::Relaxed) && chunks.load(Ordering::Relaxed) < FLOOD_CHUNKS
+                {
+                    if !signals.is_dirty() {
+                        lead = 0;
+                    }
+                    // A task the host does not schedule must not run up the lag.
+                    if lead >= MAX_LEAD_CHUNKS {
+                        std::thread::yield_now();
+                        continue;
+                    }
                     let n = chunks.load(Ordering::Relaxed);
                     {
                         let mut guard = loop {
@@ -5902,6 +5913,7 @@ mod tests {
                         std::thread::sleep(HOLD);
                         signals.mark_dirty();
                     }
+                    lead += 1;
                     chunks.store(n.wrapping_add(1), Ordering::Relaxed);
                 }
                 stop.store(true, Ordering::Relaxed);
@@ -5926,7 +5938,7 @@ mod tests {
                 .expect("the session task accepts the pull");
             // A pull that lands after the flood finds nothing to ship
             // and stays armed, so the cycle it waits for never comes.
-            let answered = tokio::time::timeout(FLOOD_CAP, async {
+            let answered = tokio::time::timeout(HANG_GUARD, async {
                 while !matches!(
                     rx.recv().await.expect("the outbox stays open"),
                     OutEvent::Grid(GridMsg::CycleEnd)

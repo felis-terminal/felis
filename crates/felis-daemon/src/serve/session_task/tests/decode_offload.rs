@@ -766,19 +766,24 @@ async fn a_shutdown_reaches_a_session_whose_decode_held_commands_to_the_cap() {
     let run = start(capture_session(&dir.path().join("pty-in"), &transmit, true)).await;
     send(&run.cmd_tx, paste(run.sub, b"go\n")).await;
     meet(&run.gate).await;
+    let sent = Arc::new(AtomicUsize::new(0));
     let flood = {
         let cmd_tx = run.cmd_tx.clone();
         let sub = run.sub;
+        let sent = Arc::clone(&sent);
         tokio::spawn(async move {
             for rows in (0..).map(|n| 10 + n % 20) {
                 if cmd_tx.send(resize(sub, (rows, 80))).await.is_err() {
                     return;
                 }
+                sent.fetch_add(1, Ordering::Relaxed);
             }
         })
     };
-    let full = tokio::time::timeout(Duration::from_secs(10), async {
-        while run.cmd_tx.capacity() > 0 {
+    // An empty queue slot says nothing about the hold: a task the host
+    // has not scheduled yet takes more, and the shutdown's send lands.
+    let full = tokio::time::timeout(Duration::from_secs(30), async {
+        while sent.load(Ordering::Relaxed) < HELD_CMDS_CAP + CMD_CHANNEL_CAPACITY {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
