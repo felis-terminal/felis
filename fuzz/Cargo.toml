@@ -17,6 +17,8 @@ felis-vt = { path = "../crates/felis-vt" }
 felis-grid = { path = "../crates/felis-grid" }
 felis-protocol = { path = "../crates/felis-protocol" }
 felis-client-core = { path = "../crates/felis-client-core" }
+felis-shaping = { path = "../crates/felis-shaping", features = ["testing"] }
+skrifa = { version = "0.49", default-features = false, features = ["std"] }
 
 [[bin]]
 name = "vt_parser"
@@ -98,6 +100,13 @@ bench = false
 [[bin]]
 name = "base64_decode"
 path = "fuzz_targets/base64_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "glyph_raster"
+path = "fuzz_targets/glyph_raster.rs"
 test = false
 doc = false
 bench = false

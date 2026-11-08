@@ -29,6 +29,9 @@ fuzz/seeds/
 │                        vectors that spec publishes, plus one seed per
 │                        rejection class (over-limit prefix, run/grapheme
 │                        mismatch, trailing bytes, unknown version, …)
+├── glyph_raster/      — `[px:LE f32]` then path commands per the target's
+│                        input convention; one seed on each side of every
+│                        rasterizer limit (side, working set, segment cap)
 └── chord_parser/      — UTF-8 chord strings for
                          `felis_client_core::keymap::Chord::from_str`
                          (the `[keymap]` chord grammar of
