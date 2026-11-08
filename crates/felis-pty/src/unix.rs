@@ -73,6 +73,19 @@ impl Master {
         let raw = unsafe { libc::tcgetpgrp(self.fd.as_raw_fd()) };
         (raw > 0).then_some(raw)
     }
+
+    pub(crate) fn peer_closed(&self) -> bool {
+        let mut fds = [rustix::event::PollFd::new(
+            &self.fd,
+            rustix::event::PollFlags::empty(),
+        )];
+        let zero = rustix::event::Timespec {
+            tv_sec: 0,
+            tv_nsec: 0,
+        };
+        rustix::event::poll(&mut fds, Some(&zero)).is_ok()
+            && fds[0].revents().contains(rustix::event::PollFlags::HUP)
+    }
 }
 
 /// How long [`MasterReader::read`] re-tries a non-blocking read before

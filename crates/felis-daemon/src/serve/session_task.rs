@@ -357,9 +357,7 @@ pub struct SubscribeReq {
     /// Bytes pushed but not yet written; the connection pump decrements
     /// as it writes (see `SUBSCRIBER_BUFFER_CAP`).
     pub buffered: Arc<AtomicUsize>,
-    /// `SessionToDaemonMsg::Attach { live_only }`: refuse when the shell has
-    /// exited.
-    pub live_only: bool,
+    pub if_exited: IfExited,
     /// `SessionToDaemonMsg::Attach { image_regions }`: the window reads
     /// frame-region transfers.
     pub image_regions: bool,
@@ -367,6 +365,23 @@ pub struct SubscribeReq {
     /// Answered once the rehydrate burst is queued.
     pub reply: oneshot::Sender<Result<SubscribeOk, SubscribeRefused>>,
 }
+
+/// What a subscription does on a session whose shell has already exited.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IfExited {
+    /// A deliberate attach lands, to read the final screen.
+    Land,
+    /// `SessionToDaemonMsg::Attach { live_only }`.
+    Refuse,
+    /// The create's own attach. It is no viewer of a corpse: a shell that
+    /// exits before it lands still owes it the `SessionExited` and close
+    /// it would have heard had it landed first.
+    Notify,
+}
+
+/// A shell's exit, with the status its reap found, if any.
+#[derive(Debug, Clone, Copy)]
+struct ShellExit(Option<ExitStatus>);
 
 /// An enum rather than a dropped reply channel: the caller already
 /// reads a dropped channel as "the task is unwinding", and the two
@@ -803,7 +818,9 @@ async fn spawn_task(
         input_owner: None,
         attachments_dirty: false,
         pty_eof: false,
+        told_exit: None,
         child_exited: exited,
+        reaped_exit: None,
         row_cache: streaming::RowEncodeCache::default(),
         reported_focus: false,
         focus_dirty: false,
@@ -1228,7 +1245,12 @@ struct SessionTask {
     /// `refresh_meta` rebuilds it.
     attachments_dirty: bool,
     pty_eof: bool,
+    /// What `SessionExited` carried, once EOF told the windows.
+    told_exit: Option<ShellExit>,
     child_exited: bool,
+    /// Reaped by the exit poll and not yet acted on: EOF or the end of a
+    /// decode is owed it first.
+    reaped_exit: Option<ShellExit>,
     row_cache: streaming::RowEncodeCache,
     /// Focus last reported to the PTY, so reports are edge-triggered
     /// per session-level transition rather than per window event.
@@ -1623,11 +1645,7 @@ async fn run_session(mut t: SessionTask, mut cmd_rx: mpsc::Receiver<SessionCmd>)
             _ = drain_tick.tick(), if hold.drains() && hold.quiesced() => {
                 // Ungated by `attached`: a program left holding the PTY
                 // keeps EOF away, and an observer is owed the exit.
-                if !t.child_exited
-                    && let Ok(Some(status)) = t.session.child.try_wait()
-                {
-                    t.on_child_exit(exit_status_to_wire(status));
-                }
+                t.poll_child_exit();
                 if t.reap_due() {
                     break EndReason::Reaped;
                 }
@@ -2039,12 +2057,13 @@ impl SessionTask {
     }
 
     fn subscribe(&mut self, req: SubscribeReq) {
+        let if_exited = req.if_exited;
         // Checked inside the actor, not off the roster's `exited` flag
         // client-side: that flag is a snapshot, and a session exiting
         // between the listing and the attach would leave a window
         // parked on a corpse that never pushes it off and blocks the
         // reap.
-        if req.live_only && (self.pty_eof || self.child_exited) {
+        if if_exited == IfExited::Refuse && self.program_gone() {
             drop(req.reply.send(Err(SubscribeRefused::Exited)));
             return;
         }
@@ -2121,6 +2140,18 @@ impl SessionTask {
         info.dims.rows = rows;
         info.dims.cols = cols;
         if req.reply.send(Ok(SubscribeOk { sub: id, info })).is_err() {
+            self.remove_sub(id);
+            return;
+        }
+        if if_exited == IfExited::Notify
+            && let Some(ShellExit(status)) = self.told_exit
+        {
+            if let Some(sub) = self.subs.iter().find(|s| s.id == id && s.is_window) {
+                let _ = sub.push(OutEvent::Push(PushMsg::SessionExited {
+                    id: self.id.0,
+                    status,
+                }));
+            }
             self.remove_sub(id);
         }
     }
@@ -2531,7 +2562,8 @@ impl SessionTask {
     /// [`Self::evict_all`]; the connection pump (`serve.rs`) flushes
     /// buffered events before it observes the channel close, so the
     /// message lands ahead of the drop.
-    fn notify_shell_exit(&self, status: Option<ExitStatus>) {
+    fn notify_shell_exit(&mut self, status: Option<ExitStatus>) {
+        self.told_exit = Some(ShellExit(status));
         for sub in &self.subs {
             if sub.is_window {
                 let _ = sub.push(OutEvent::Push(PushMsg::SessionExited {
@@ -2546,6 +2578,10 @@ impl SessionTask {
     /// waitable, so EOF can land a moment ahead of the status. Never
     /// while held for an upgrade: the dump names this child unreaped.
     async fn reap_after_eof(&mut self) -> Option<ExitStatus> {
+        if let Some(ShellExit(status)) = self.reaped_exit.take() {
+            self.child_exited = true;
+            return status;
+        }
         if self.upgrade_hold {
             return None;
         }
@@ -3457,7 +3493,7 @@ impl SessionTask {
         watch: Option<(RequesterId, StreamId)>,
         mouse: &[(u32, MouseEvent)],
     ) -> Prepared {
-        if self.pty_eof || self.child_exited {
+        if self.program_gone() {
             return Prepared::Ended;
         }
         {
@@ -3636,14 +3672,46 @@ impl SessionTask {
         true
     }
 
+    /// Nothing written now reaches the program, though output it wrote
+    /// before exiting may still end a wait admitted earlier.
+    const fn program_gone(&self) -> bool {
+        self.pty_eof || self.child_exited || self.reaped_exit.is_some()
+    }
+
+    fn poll_child_exit(&mut self) {
+        if self.child_exited {
+            return;
+        }
+        let status = self.reaped_exit.take().or_else(|| {
+            let reaped = self.session.child.try_wait().ok().flatten();
+            reaped.map(|status| ShellExit(exit_status_to_wire(status)))
+        });
+        let Some(ShellExit(status)) = status else {
+            return;
+        };
+        // EOF lands behind the parse of everything the child wrote; the
+        // sink may not have read that output yet.
+        if !self.pty_eof && self.session.resizer.peer_closed() {
+            self.reaped_exit = Some(ShellExit(status));
+            return;
+        }
+        self.on_child_exit(status);
+    }
+
     /// Seen before EOF when a process the program left behind holds the
-    /// PTY open: no mark it owes a wait can come any more.
+    /// PTY open: no mark it owes a wait can come any more, once the output
+    /// it wrote before exiting is parsed. That output can stop on an image
+    /// whose decode this drain starts, and the exit then waits for it.
     fn on_child_exit(&mut self, status: Option<ExitStatus>) {
-        self.child_exited = true;
         self.stamp_exited_meta();
         if let Err(err) = self.drive_cycle() {
             debug!(?err, "session task: effect drain at child exit failed");
         }
+        if self.decode.is_some() {
+            self.reaped_exit = Some(ShellExit(status));
+            return;
+        }
+        self.child_exited = true;
         self.observers.exited(status);
         self.end_watches();
     }
@@ -4312,7 +4380,9 @@ impl SessionTask {
             input_owner: None,
             attachments_dirty: false,
             pty_eof: false,
+            told_exit: None,
             child_exited: false,
+            reaped_exit: None,
             row_cache: streaming::RowEncodeCache::default(),
             reported_focus: false,
             focus_dirty: false,
@@ -4436,13 +4506,22 @@ mod tests {
         mode: ConnectionMode,
         pull_paced: bool,
     ) -> (SubscriberId, mpsc::UnboundedReceiver<OutEvent>) {
+        attach_sub_if_exited(task, mode, pull_paced, IfExited::Land)
+    }
+
+    fn attach_sub_if_exited(
+        task: &mut SessionTask,
+        mode: ConnectionMode,
+        pull_paced: bool,
+        if_exited: IfExited,
+    ) -> (SubscriberId, mpsc::UnboundedReceiver<OutEvent>) {
         let (tx, mut rx) = mpsc::unbounded_channel();
         let (reply_tx, mut reply_rx) = oneshot::channel();
         task.subscribe(SubscribeReq {
             mode,
             pull_paced,
             minor: felis_protocol::preface::PROTOCOL_MINOR,
-            live_only: false,
+            if_exited,
             image_regions: false,
             carrier: AttachCarrier::Local { client_pid: None },
             tx,
@@ -4467,7 +4546,7 @@ mod tests {
             mode,
             pull_paced: false,
             minor: felis_protocol::preface::PROTOCOL_MINOR,
-            live_only: false,
+            if_exited: IfExited::Land,
             image_regions: false,
             carrier: AttachCarrier::Local { client_pid: None },
             tx,
@@ -5788,8 +5867,10 @@ mod tests {
         use std::sync::atomic::{AtomicBool, AtomicU32};
 
         const HOLD: Duration = Duration::from_millis(6);
-        const FLOOD_CAP: Duration = Duration::from_secs(5);
+        const FLOOD_CHUNKS: u32 = 600;
+        const MAX_LEAD_CHUNKS: u32 = 5;
         const MAX_LAG_CHUNKS: u32 = 20;
+        const HANG_GUARD: Duration = Duration::from_secs(30);
         assert!(HOLD > DRAIN_COALESCE, "each drain must outwait the window");
 
         let mut task = SessionTask::for_tests(session_with("read -r _"));
@@ -5807,8 +5888,17 @@ mod tests {
             let chunks = Arc::clone(&chunks);
             let stop = Arc::clone(&stop);
             move || {
-                let started = Instant::now();
-                while !stop.load(Ordering::Relaxed) && started.elapsed() < FLOOD_CAP {
+                let mut lead = 0;
+                while !stop.load(Ordering::Relaxed) && chunks.load(Ordering::Relaxed) < FLOOD_CHUNKS
+                {
+                    if !signals.is_dirty() {
+                        lead = 0;
+                    }
+                    // A task the host does not schedule must not run up the lag.
+                    if lead >= MAX_LEAD_CHUNKS {
+                        std::thread::yield_now();
+                        continue;
+                    }
                     let n = chunks.load(Ordering::Relaxed);
                     {
                         let mut guard = loop {
@@ -5823,6 +5913,7 @@ mod tests {
                         std::thread::sleep(HOLD);
                         signals.mark_dirty();
                     }
+                    lead += 1;
                     chunks.store(n.wrapping_add(1), Ordering::Relaxed);
                 }
                 stop.store(true, Ordering::Relaxed);
@@ -5847,7 +5938,7 @@ mod tests {
                 .expect("the session task accepts the pull");
             // A pull that lands after the flood finds nothing to ship
             // and stays armed, so the cycle it waits for never comes.
-            let answered = tokio::time::timeout(FLOOD_CAP, async {
+            let answered = tokio::time::timeout(HANG_GUARD, async {
                 while !matches!(
                     rx.recv().await.expect("the outbox stays open"),
                     OutEvent::Grid(GridMsg::CycleEnd)
@@ -7788,6 +7879,42 @@ mod tests {
         );
     }
 
+    /// `felis -- true` can exit before the create's own attach lands.
+    #[tokio::test]
+    async fn the_creating_attach_hears_an_exit_that_beat_it_and_a_deliberate_one_stays() {
+        let mut task = SessionTask::for_tests(session_with("read _x"));
+        task.notify_shell_exit(Some(ExitStatus::Code(3)));
+
+        let attach = |task: &mut SessionTask, mode, if_exited| {
+            let (_, mut rx) = attach_sub_if_exited(task, mode, false, if_exited);
+            let exits = drain_events(&mut rx)
+                .into_iter()
+                .filter_map(|ev| match ev {
+                    OutEvent::Push(PushMsg::SessionExited { status, .. }) => Some(status),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            let closed = matches!(rx.try_recv(), Err(mpsc::error::TryRecvError::Disconnected));
+            (exits, closed)
+        };
+        assert_eq!(
+            attach(&mut task, ConnectionMode::Window, IfExited::Notify),
+            (vec![Some(ExitStatus::Code(3))], true),
+            "the creating window hears the exit it lost the race to, then the close",
+        );
+        assert_eq!(
+            attach(&mut task, ConnectionMode::Ops, IfExited::Notify),
+            (vec![], true),
+            "a scripted create sees only the close",
+        );
+        assert_eq!(
+            attach(&mut task, ConnectionMode::Window, IfExited::Land),
+            (vec![], false),
+            "a deliberate attach stays to read the final screen",
+        );
+        assert_eq!(task.subs.len(), 1);
+    }
+
     /// Both authoritative-dims paths (applied resize, overruled-mirror
     /// correction) announce to every subscriber.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -9130,7 +9257,7 @@ mod tests {
                 mode: ConnectionMode::Window,
                 pull_paced: false,
                 minor: felis_protocol::preface::PROTOCOL_MINOR,
-                live_only: false,
+                if_exited: IfExited::Land,
                 image_regions: false,
                 carrier: AttachCarrier::Local { client_pid: None },
                 tx,
@@ -9554,6 +9681,41 @@ mod tests {
             .collect();
         assert_eq!(ended, [test_stream(1), test_stream(2)]);
         assert_eq!(task.prepare_send(None, &[]), Prepared::Ended);
+    }
+
+    /// The exit poll can reap a child whose last output the sink has not
+    /// read yet. With nothing else holding the terminal, EOF is coming,
+    /// and it lands behind that output.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_child_exit_with_eof_coming_leaves_the_waits_to_eof() {
+        let mut task = SessionTask::for_tests(session_with("read -r _go; exit 4"));
+        let (conn, mut rx) = requester(&mut task);
+        let watch = Some((conn, test_stream(1)));
+        assert_eq!(task.prepare_send(watch, &[]), Prepared::Ready);
+        drop(drain_events(&mut rx));
+
+        streaming::write_pty_reserved(&task.session.writer, b"go\n".to_vec(), None).unwrap();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+        while task.reaped_exit.is_none() {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "the child never exited"
+            );
+            task.poll_child_exit();
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        task.poll_child_exit();
+        assert!(!task.child_exited, "the exit waits for EOF");
+        assert_eq!(
+            task.prepare_send(None, &[]),
+            Prepared::Ended,
+            "a send after the exit is refused"
+        );
+        let early = drain_events(&mut rx);
+        assert!(early.is_empty(), "the wait is EOF's to end: {early:?}");
+        assert_eq!(task.reap_after_eof().await, Some(ExitStatus::Code(4)));
+        assert!(task.child_exited);
     }
 
     #[tokio::test]

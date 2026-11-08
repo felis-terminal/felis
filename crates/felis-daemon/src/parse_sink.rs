@@ -111,6 +111,11 @@ impl ParseSignals {
         self.dirty.swap(false, Ordering::AcqRel)
     }
 
+    #[cfg(all(test, unix))]
+    pub(crate) fn is_dirty(&self) -> bool {
+        self.dirty.load(Ordering::Acquire)
+    }
+
     /// Resolves when the sink has parsed something since the last
     /// [`Self::clear_dirty`]. Cancel-safe in `select!`.
     pub async fn parsed(&self) {
