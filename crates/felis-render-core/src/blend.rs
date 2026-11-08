@@ -36,7 +36,12 @@ mod tests {
 
     use super::*;
 
-    const TOLERANCE: f32 = 1e-3;
+    /// The remap divides by the luminance span, so its f32 rounding grows
+    /// as the span shrinks: a fixed slack is either too loose for far-apart
+    /// colors or too tight near [`MIN_LUMINANCE_SPAN`].
+    fn rounding_slack(fg: f32, bg: f32) -> f32 {
+        8.0 * f32::EPSILON / (fg - bg).abs()
+    }
 
     fn distinct_pair() -> impl Strategy<Value = (f32, f32)> {
         (0.0f32..=1.0, 0.0f32..=1.0).prop_filter("luminances the remap applies to", |(fg, bg)| {
@@ -48,8 +53,9 @@ mod tests {
         /// No ink stays no ink and full ink stays full ink.
         #[test]
         fn empty_and_full_coverage_are_fixed_points((fg, bg) in distinct_pair()) {
-            prop_assert!(linear_corrected_coverage(0.0, fg, bg) < TOLERANCE);
-            prop_assert!(linear_corrected_coverage(1.0, fg, bg) > 1.0 - TOLERANCE);
+            let slack = rounding_slack(fg, bg);
+            prop_assert!(linear_corrected_coverage(0.0, fg, bg) <= slack);
+            prop_assert!(linear_corrected_coverage(1.0, fg, bg) >= 1.0 - slack);
         }
 
         /// More ink in the mask never paints less.
@@ -61,7 +67,8 @@ mod tests {
         ) {
             let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
             prop_assert!(
-                linear_corrected_coverage(lo, fg, bg) <= linear_corrected_coverage(hi, fg, bg) + 1e-6
+                linear_corrected_coverage(lo, fg, bg)
+                    <= linear_corrected_coverage(hi, fg, bg) + rounding_slack(fg, bg)
             );
         }
 
@@ -100,10 +107,11 @@ mod tests {
             a in 0.0f32..=1.0,
         ) {
             let corrected = linear_corrected_coverage(a, fg, bg);
+            let slack = rounding_slack(fg, bg);
             if fg > bg {
-                prop_assert!(corrected <= a + 1e-5, "{corrected} > {a}");
+                prop_assert!(corrected <= a + slack, "{corrected} > {a}");
             } else {
-                prop_assert!(corrected >= a - 1e-5, "{corrected} < {a}");
+                prop_assert!(corrected >= a - slack, "{corrected} < {a}");
             }
         }
     }
