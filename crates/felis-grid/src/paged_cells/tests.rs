@@ -41,7 +41,7 @@ fn an_empty_buffer_maps_nothing() {
     assert_eq!(cells.capacity(), 0);
     let reserved_nothing = PagedCells::with_reserve(0, 0);
     assert!(reserved_nothing.is_empty());
-    assert_eq!(cells, reserved_nothing);
+    assert_eq!(*cells, *reserved_nothing);
 }
 
 #[test]
@@ -67,7 +67,7 @@ fn growing_past_capacity_moves_the_cells_intact() {
 fn a_clone_keeps_the_contents_and_the_capacity() {
     let cells = filled(300, 4 * page_cells());
     let copy = cells.clone();
-    assert_eq!(copy, cells);
+    assert_eq!(*copy, *cells);
     assert_eq!(copy.capacity(), cells.capacity());
     assert_ne!(copy.as_ptr(), cells.as_ptr());
 }

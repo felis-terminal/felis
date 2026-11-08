@@ -10,7 +10,7 @@ use crate::Cell;
 /// the widest row it may take, so a row never straddles two chunks.
 const MIN_CHUNK_SHIFT: u32 = 12;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy)]
 struct ColdRow {
     /// Offset of the row's first cell in the store's cell stream, where
     /// chunk `n` spans `[n << shift, (n + 1) << shift)`.
@@ -19,7 +19,7 @@ struct ColdRow {
     soft_wrap: bool,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct ColdStore {
     /// The last `live` entries are the stored rows, oldest first. An
     /// eviction only shrinks `live`; a push drops the dead prefix once it

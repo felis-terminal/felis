@@ -18,7 +18,6 @@ use crate::{
     ViewportRowView, hist_phys_of, ring_cells,
 };
 
-#[derive(PartialEq, Eq)]
 pub struct ScreenBuffer {
     pub(crate) rows: u16,
     pub(crate) cols: u16,
@@ -114,7 +113,7 @@ pub struct ScreenBuffer {
 /// Scrollback is shared across both buffers per xterm. The
 /// `sizing_table` registry is not saved: it persists across toggles so
 /// handles in the saved cells stay valid.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug)]
 pub(crate) struct SavedScreen {
     pub(crate) cells: PagedCells,
     /// Need not be the live grid's: a resize under the alt screen leaves
@@ -379,6 +378,99 @@ impl Clone for SavedScreen {
         }
     }
 }
+
+/// Equal when every reader sees the same screen. Where the rows sit in
+/// the ring (`base`, `phys_cap`, the band rotation, the split between the
+/// tiers), cells past a watermark or in a vacant row, the gap's reuse
+/// state and the `has_sized_cells` hint are memory layout, not content:
+/// a clone, a compacted ring and a restored dump differ in them.
+impl PartialEq for ScreenBuffer {
+    fn eq(&self, other: &Self) -> bool {
+        let Self {
+            rows,
+            cols,
+            cells: _,
+            base: _,
+            band_top: _,
+            band_len: _,
+            band_rot: _,
+            soft_wrap: _,
+            occupancy: _,
+            cursor,
+            cursor_style,
+            cursor_blink,
+            style_table,
+            damage,
+            cap,
+            phys_cap: _,
+            history_len: _,
+            cold: _,
+            gap: _,
+            saved_primary,
+            saved_alternate,
+            link_table,
+            cluster_table,
+            sizing_table,
+            has_sized_cells: _,
+            geometry_gen,
+            scroll_seq,
+        } = self;
+        *rows == other.rows
+            && *cols == other.cols
+            && *cursor == other.cursor
+            && *cursor_style == other.cursor_style
+            && *cursor_blink == other.cursor_blink
+            && *cap == other.cap
+            && *geometry_gen == other.geometry_gen
+            && *scroll_seq == other.scroll_seq
+            && *damage == other.damage
+            && *style_table == other.style_table
+            && *link_table == other.link_table
+            && *cluster_table == other.cluster_table
+            && *sizing_table == other.sizing_table
+            && *saved_primary == other.saved_primary
+            && *saved_alternate == other.saved_alternate
+            && self.ring().history_rows().eq(other.ring().history_rows())
+            && (0..*rows).all(|r| {
+                self.row_content(r) == other.row_content(r)
+                    && self.row_soft_wrap_continued(r) == other.row_soft_wrap_continued(r)
+            })
+    }
+}
+
+impl Eq for ScreenBuffer {}
+
+/// As for [`ScreenBuffer`]; a snapshot carries no band.
+impl PartialEq for SavedScreen {
+    fn eq(&self, other: &Self) -> bool {
+        let Self {
+            cells: _,
+            rows,
+            cols,
+            base: _,
+            phys_cap: _,
+            history_len: _,
+            cap,
+            cold: _,
+            gap: _,
+            soft_wrap: _,
+            occupancy: _,
+            cursor,
+            pen,
+        } = self;
+        *rows == other.rows
+            && *cols == other.cols
+            && *cap == other.cap
+            && *cursor == other.cursor
+            && *pen == other.pen
+            && self
+                .ring()
+                .canonical_rows()
+                .eq(other.ring().canonical_rows())
+    }
+}
+
+impl Eq for SavedScreen {}
 
 impl ScreenBuffer {
     /// Shadow-side `GridMsg::Scrolled`, `false` and no cell touched when

@@ -77,14 +77,23 @@ impl RingRef<'_> {
     }
 }
 
-#[cfg(any(test, feature = "state-dump"))]
 impl<'a> RingRef<'a> {
-    /// Cold history, ring history, then the viewport's physical rows in
-    /// order from `base` (a scroll band resolves on top of that order),
-    /// each clipped at its occupancy: the ring as it would read laid out
-    /// densely with no cold tier.
+    /// Cold history, then ring history, oldest first, each clipped at its
+    /// occupancy.
+    pub(crate) fn history_rows(&self) -> impl Iterator<Item = (&'a [Cell], bool)> + '_ {
+        self.ring_rows(self.phys_cap - self.history_len..self.phys_cap)
+    }
+
+    /// [`Self::history_rows`], then the viewport's physical rows in
+    /// order from `base` (a scroll band resolves on top of that order):
+    /// the ring as it would read laid out densely with no cold tier.
     pub(crate) fn canonical_rows(&self) -> impl Iterator<Item = (&'a [Cell], bool)> + '_ {
-        let ring = (self.phys_cap - self.history_len..self.phys_cap + self.rows).map(|offset| {
+        self.ring_rows(self.phys_cap - self.history_len..self.phys_cap + self.rows)
+    }
+
+    /// The cold rows, then the ring rows `offsets` past `base`.
+    fn ring_rows(&self, offsets: Range<usize>) -> impl Iterator<Item = (&'a [Cell], bool)> + '_ {
+        let ring = offsets.map(|offset| {
             let phys = (self.base + offset) % self.phys_cap;
             let start = phys * self.cols;
             let occupied = usize::from(self.occupancy[phys]).min(self.cols);

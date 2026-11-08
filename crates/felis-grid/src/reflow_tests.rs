@@ -425,9 +425,6 @@ proptest! {
                     grid.compact_history(*n);
                 }
                 Step::Reflow(r, c) => {
-                    // A clone drops compacted-away ring content, so it
-                    // equals another clone but not its source.
-                    grid = grid.clone();
                     let mut reference = grid.clone();
                     let expected = reference.reflow_reference(*r, *c);
                     let got = grid.reflow(*r, *c);

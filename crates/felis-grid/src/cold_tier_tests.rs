@@ -6,7 +6,7 @@ use felis_vt::Parser;
 use proptest::prelude::*;
 
 use crate::search::{SearchOptions, SearchQuery, SearchSource};
-use crate::test_support::{drive, normalized};
+use crate::test_support::drive;
 use crate::*;
 
 #[derive(Debug, Clone)]
@@ -171,7 +171,7 @@ fn hits(g: &Grid, source: SearchSource) -> Vec<SearchHit> {
 
 /// Everything a reader observes is the twin's.
 fn assert_unobservable(g: &mut Grid, twin: &mut Grid) {
-    assert!(normalized(g) == normalized(twin), "state differs");
+    assert!(g == twin, "state differs");
     assert_eq!(history(g), history(twin), "history");
     assert_eq!(
         g.rows_with_wrap(AltScreenRows::Include).collect::<Vec<_>>(),
@@ -476,6 +476,33 @@ fn compaction_keeps_one_screen_of_history_in_the_ring() {
     assert_eq!(g.screen.cold.len(), 23);
     assert!(g.compact_history(10), "a finished run has nothing left");
     assert_unobservable(&mut g, &mut twin);
+}
+
+/// Equality is what readers see: a compacted grid equals its
+/// uncompacted twin, its clone (which copies live rows only and starts
+/// with an intact gap) and its restored dump, mid-refill included.
+#[test]
+fn a_compacted_grid_equals_its_twin_its_clone_and_its_restored_dump() {
+    let (mut p, mut g, mut tp, mut twin) = grids(4, 60, 200);
+    lines(150, 41, &mut p, &mut g, &mut tp, &mut twin);
+    for slice in [30, usize::MAX] {
+        g.compact_history(slice);
+        lines(3, 17, &mut p, &mut g, &mut tp, &mut twin);
+        if slice == usize::MAX {
+            assert!(
+                !g.screen.gap.is_intact(),
+                "the refill stopped inside the gap"
+            );
+        }
+        assert!(g == twin, "compacted against the twin");
+        assert!(g.clone() == g, "clone against its source");
+        #[cfg(feature = "state-dump")]
+        {
+            let restored: Grid =
+                serde_json::from_slice(&serde_json::to_vec(&g).expect("dump")).expect("restore");
+            assert!(restored == g, "restored dump against its source");
+        }
+    }
 }
 
 /// A recycled vacant row whose pages were not discarded keeps a tail
