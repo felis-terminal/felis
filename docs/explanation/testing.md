@@ -196,6 +196,17 @@ cost. What does regress is structural: an allocation per history row, a pixel co
 history. Each is a ceiling far from today's figure, and allocation counts and live bytes are fixed for a fixed input, so
 the ceilings run with the rest of the workspace tests, Windows included, instead of only on the Linux bench runner.
 
+## Waiting on state, not on time
+
+A test waits for the state its assertion needs, never for a duration or for a stand-in that usually coincides with that
+state. CI shares its host with builds, and load there climbs to several times the core count, so a sleep, a short
+timeout, or a proxy (a socket path that exists before its listener accepts, a free queue slot, a quiet stretch on a
+stream) measures the host rather than the code, and lengthening it only makes the failure rarer. A deadline stays only
+as a hang guard around a wait that ends on an event, long enough that reaching it means the code is wrong. An assertion
+that something does not happen needs a positive sync point first: an event the code emits after the moment the unwanted
+one would have come. A test that fails only under load is as likely to have found a race in the product as in itself,
+and the fix goes where the race is.
+
 ## Shell overlays under the real interpreters
 
 The completion tests drive the generated fish and zsh overlays through the interpreter itself, against a `felis`
