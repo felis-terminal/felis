@@ -214,9 +214,9 @@ shell fails when the two disagree.
 `crates/felis-client-core/tests/session_memory.rs` counts, under the dhat allocator, the heap a parked session holds
 (idle, with a full scrollback ring, with Kitty images) and the heap a window holds once attached to it. Its ceilings run
 with the workspace tests and are structural: no allocation per history row, image pixels held once on each side, and a
-window that keeps no history. `just bench-mem` prints the figures. dhat counts requested bytes, so the ring's whole
-reservation counts as live from construction, resident or not
-([scrollback.md](../explanation/data-model/scrollback.md)).
+window that keeps no history. `just bench-mem` prints the figures. The cell ring is an OS mapping dhat does not see
+([scrollback.md](../explanation/data-model/scrollback.md)), so the per-row column adds the ring's whole reservation,
+resident or not.
 
 ## Damage-tracking correctness
 

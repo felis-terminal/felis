@@ -8,6 +8,7 @@ use std::num::{NonZeroU16, NonZeroU32};
 use crate::cluster_table::ClusterTable;
 use crate::damage::Damage;
 use crate::link_table::LinkTable;
+use crate::paged_cells::PagedCells;
 use crate::style_table::{StyleId, StyleTable};
 use crate::{
     AltScreenRows, Attributes, BLANK_CELL, Cell, ClusterText, Cursor, CursorStyle, Grapheme,
@@ -19,7 +20,7 @@ use crate::{
 pub struct ScreenBuffer {
     pub(crate) rows: u16,
     pub(crate) cols: u16,
-    pub(crate) cells: Vec<Cell>,
+    pub(crate) cells: PagedCells,
     /// Physical index of logical viewport row 0: logical row `r`
     /// resolves to physical `(base + r) % phys_cap` ([`Self::phys_row`]).
     /// A full-screen scroll advances `base` instead of moving rows; a
@@ -106,7 +107,7 @@ pub struct ScreenBuffer {
 /// handles in the saved cells stay valid.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SavedScreen {
-    pub(crate) cells: Vec<Cell>,
+    pub(crate) cells: PagedCells,
     /// Need not be the live grid's: a resize under the alt screen leaves
     /// the saved primary at its snapshot geometry until
     /// `Grid::leave_alternate` re-wraps it, so reads of this buffer

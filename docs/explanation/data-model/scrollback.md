@@ -37,14 +37,20 @@ Initializing all `rows + cap` rows up front writes every one of them, so an idle
 cap: at 16 bytes per `Cell` and a 137-column grid, ~21 MiB against the ~75 KiB a bare 137×35 viewport actually needs.
 
 The _capacity_ is nonetheless reserved up front, and only the length grows. Reserved address space and resident rows are
-not the same cost: `Vec::with_capacity` on a buffer this size is one `mmap`, whose pages stay unfaulted until written,
-so the full 21 MiB is address space while residency tracks the rows history has actually reached, and the ring never has
-to move. Growing by allocating the next size up and copying into it (the rejected alternative) leaves the allocator
-holding every intermediate buffer: after a 200 k-line flood the daemon holds 11.2 MB of freed ring buffers it has not
-returned to the OS against 12.2 MB of ring actually live, which is _half the flooded footprint being garbage_ (measured
-at 24×80, `vmmap`'s `MALLOC_LARGE (empty)`; the same shape at 82×137 with a client attached reads 51.7 → 28.8 MB
-flooded, idle unchanged). Returning the pages instead (`malloc_zone_pressure_relief` and its Linux twin) is rejected: it
-is per-platform `unsafe` FFI to undo an allocation the ring never needed to make.
+not the same cost: the cell buffer is an anonymous mapping of its own (`mmap` on Linux and macOS, a `VirtualAlloc`
+reservation committed as the length grows on Windows; `crates/felis-grid/src/paged_cells.rs`), whose pages stay
+unfaulted until written, so the full 21 MiB is address space while residency tracks the rows history has actually
+reached, and the ring never has to move. The all-zero bit pattern is `Cell::default()`, checked at compile time, so a
+fresh page needs no initializing write. Growing by allocating the next size up and copying into it (the rejected
+alternative) leaves the allocator holding every intermediate buffer: after a 200 k-line flood the daemon holds 11.2 MB
+of freed ring buffers it has not returned to the OS against 12.2 MB of ring actually live, which is _half the flooded
+footprint being garbage_ (measured at 24×80, `vmmap`'s `MALLOC_LARGE (empty)`; the same shape at 82×137 with a client
+attached reads 51.7 → 28.8 MB flooded, idle unchanged). Keeping the ring on `malloc` and returning those pages
+afterwards (`malloc_zone_pressure_relief` and its Linux twin) is rejected: it undoes, per platform, an allocation the
+ring never needed to make. A `malloc`'d ring is also retained once freed: under glibc, freeing one ring-sized block
+raises the dynamic mmap threshold to its size, so each later ring comes from the heap and freeing it on a resize or
+`CSI 3 J` returns nothing to the OS (a daemon at 54×192 holds 70 MB after three `CSI 3 J` cycles against 10.6 MB with
+its own mapping).
 
 With the capacity reserved, a growth is a rotation rather than a copy. The one caller grows only a ring that is exactly
 full (`history_len + rows == phys_cap`), so every physical row is live and canonical order is one `rotate_left` away,

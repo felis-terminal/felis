@@ -1,5 +1,8 @@
 #![doc = include_str!("../README.md")]
-#![cfg_attr(not(test), forbid(unsafe_code))]
+// `deny`, not `forbid`: `forbid` cannot be relaxed at the audited
+// `#[allow(unsafe_code)]` site, the ring's page-backed cell storage
+// (`paged_cells`).
+#![cfg_attr(not(test), deny(unsafe_code))]
 
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
@@ -324,6 +327,7 @@ pub mod mouse;
 mod osc52;
 mod osc_color;
 mod osc_dispatch;
+mod paged_cells;
 mod placeholder_resolve;
 #[doc(hidden)]
 pub mod pty_effects;
@@ -370,6 +374,7 @@ use modes::{
 pub use mouse::{encode_mouse, fill_cell_center_pixels, mouse_event_reported};
 use osc_color::{format_osc_color_response, parse_x_color};
 use osc52::{format_osc_52_response, parse_osc_52_selection};
+use paged_cells::PagedCells;
 pub use placeholder_resolve::PlaceholderCell;
 #[doc(hidden)]
 pub use pty_effects::{APC_OUTBOX_BYTES, APC_OUTBOX_CAP, PtyEffectQueue, STATUS_OUTBOX_YIELD};
@@ -409,13 +414,8 @@ pub struct Cell {
 }
 
 /// Reserves capacity upfront so [`Grid::grow_ring`] never reallocates.
-///
-/// Growing stepwise leaves the allocator holding freed intermediate buffers
-/// unreturned to the OS; unfaulted reserved pages avoid resident memory cost.
-fn ring_cells(len: usize, ring_rows: usize, cols: usize) -> Vec<Cell> {
-    let mut cells = Vec::with_capacity(ring_rows.saturating_mul(cols).max(len));
-    cells.resize(len, Cell::default());
-    cells
+fn ring_cells(len: usize, ring_rows: usize, cols: usize) -> PagedCells {
+    PagedCells::with_reserve(len, ring_rows.saturating_mul(cols))
 }
 
 impl Default for Cell {
@@ -452,9 +452,12 @@ impl Cell {
     }
 }
 
+/// `Empty` is the zero tag: the ring reads never-written bytes as
+/// `Cell::default()` (`paged_cells`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[repr(u8)]
 pub enum Grapheme {
-    Empty,
+    Empty = 0,
     /// 7-bit printable ASCII (`0x20..=0x7E`); no allocation.
     Ascii(u8),
     Char(char),
@@ -1771,8 +1774,9 @@ impl Grid {
         // never populate `saved_alternate` on leave.
         let restored_alt = self.screen.saved_alternate.take();
         let resumed = restored_alt.is_some();
-        let blank_cells = || -> Vec<Cell> {
-            vec![Cell::default(); usize::from(self.screen.rows) * usize::from(self.screen.cols)]
+        let blank_cells = || {
+            let len = usize::from(self.screen.rows) * usize::from(self.screen.cols);
+            PagedCells::with_reserve(len, len)
         };
         let blank_wrap =
             || -> Box<[bool]> { vec![false; usize::from(self.screen.rows)].into_boxed_slice() };
@@ -2530,7 +2534,7 @@ impl Grid {
         self.screen.soft_wrap.rotate_left(oldest);
         self.screen.occupancy.rotate_left(oldest);
         // Within the reservation `ring_cells` took, so no byte moves.
-        self.screen.cells.resize(new_cap * cols, Cell::default());
+        self.screen.cells.grow(new_cap * cols);
         let mut soft_wrap = vec![false; new_cap].into_boxed_slice();
         let mut occupancy = vec![0u16; new_cap].into_boxed_slice();
         soft_wrap[..self.screen.phys_cap].copy_from_slice(&self.screen.soft_wrap);
@@ -2964,8 +2968,9 @@ fn trim_cells(
     src_occ: &[u16],
     dst_rows: u16,
     dst_cols: u16,
-) -> Vec<Cell> {
-    let mut dst = vec![Cell::default(); usize::from(dst_rows) * usize::from(dst_cols)];
+) -> PagedCells {
+    let len = usize::from(dst_rows) * usize::from(dst_cols);
+    let mut dst = PagedCells::with_reserve(len, len);
     for r in 0..src_rows.min(dst_rows) {
         // `occupancy` is authoritative: the source tail past the
         // watermark holds undefined bytes. Requires `src` in

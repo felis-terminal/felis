@@ -24,8 +24,9 @@ static ALLOC: dhat::Alloc = dhat::Alloc;
 /// order of magnitude below one per row.
 const ALLOCATIONS_CEILING: u64 = (DEFAULT_SCROLLBACK_ROWS / 10) as u64;
 
-/// What a full session may hold beyond its cell ring and image pixels:
-/// registries, prompt marks and parser state, about 100 bytes a row.
+/// What a full session may hold on the heap beside its image pixels
+/// (the cell ring is an OS mapping dhat never sees): registries, prompt
+/// marks and parser state, about 100 bytes a row.
 const SIDE_BYTES_CEILING: usize = 1 << 20;
 
 /// A window mirrors the viewport only; a shadow that kept history would
@@ -152,14 +153,15 @@ impl Report {
         Self(out)
     }
 
-    /// Per row counts the cells and everything else a session holds,
-    /// pixels aside, over the rows a full ring retains.
+    /// Per row counts the cells (the ring's reservation, off the heap)
+    /// and everything else a session holds, pixels aside, over the rows a
+    /// full ring retains.
     fn row(&mut self, name: &str, fp: Footprint, session: Option<&Session>) {
         let history = session.map_or(0, |s| s.grid.scrollback().len());
         let (per_row, occupied) = match session {
             Some(s) if history > 0 => {
                 let rows = usize::from(ROWS) + history;
-                let text = fp.live_bytes - s.images.bytes_used();
+                let text = fp.live_bytes + s.grid.reserved_cell_bytes() - s.images.bytes_used();
                 (
                     (text / rows).to_string(),
                     mean_occupied_cols(&s.grid).to_string(),
@@ -199,7 +201,6 @@ fn session_and_window_heap_stays_within_structural_ceilings() {
     report.row("window, rich 10k + images", pictured_window, None);
     println!("{}", report.0);
 
-    let ring = rich.grid.reserved_cell_bytes();
     let pixels = pictured.images.bytes_used();
     assert!(pixels > 0, "the image session holds no pixels");
     for (name, s, fp) in [
@@ -208,10 +209,10 @@ fn session_and_window_heap_stays_within_structural_ceilings() {
         ("images", &pictured, pictured_fp),
     ] {
         assert_eq!(s.grid.scrollback().len(), DEFAULT_SCROLLBACK_ROWS, "{name}");
-        let side = fp.live_bytes - ring - s.images.bytes_used();
+        let side = fp.live_bytes - s.images.bytes_used();
         assert!(
             side < SIDE_BYTES_CEILING,
-            "{name}: {side} bytes beyond the ring and the pixels",
+            "{name}: {side} heap bytes beside the pixels",
         );
     }
     for (name, fp) in [("plain", plain_fp), ("rich", rich_fp)] {

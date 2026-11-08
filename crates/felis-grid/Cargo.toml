@@ -28,12 +28,26 @@ thiserror = { workspace = true }
 unicode-width = { workspace = true }
 simdutf8 = { workspace = true }
 
+# The ring's page-backed cell storage (`src/paged_cells.rs`) maps, commits
+# and discards its pages itself.
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = [
+  "Win32_System_SystemInformation",
+] }
+
 [dev-dependencies]
 proptest = { workspace = true }
 insta = { workspace = true }
 criterion = { workspace = true }
 serde_json = { workspace = true }
 unicode-segmentation = { workspace = true }
+
+# Per-page working-set queries for the storage tests.
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys = { workspace = true, features = ["Win32_System_ProcessStatus"] }
 
 [[bench]]
 name = "damage_merge"
