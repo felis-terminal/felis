@@ -52,6 +52,8 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 
 ### Fixed
 
+- **Keybindings**: a `pipe` binding with `target = "paste"` raises the confirmation bar for a region that carries a line
+  break or other control byte while bracketed paste is off, as `Ctrl+V` does; it used to send the region as typed keys.
 - **CLI**: `felis sessions send --wait` ends with the exit code of an OSC 133 `D` mark the program printed just before
   exiting, instead of `session_ended`, also when a process it left in the background still holds the terminal and on
   macOS.

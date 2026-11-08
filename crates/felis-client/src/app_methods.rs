@@ -1235,13 +1235,9 @@ impl App {
             }
             PipeTarget::Paste => {
                 self.pipe_state = PipeState::Idle;
-                // The daemon brackets it per `?2004` exactly as a Ctrl+V.
-                // Held to the same cap as one, too: its region budget is
-                // twice `MAX_PASTE_BYTES`, so a large scrollback reaches
-                // here already over the input limit.
-                if self.admit_paste(data.len()) {
-                    self.send_input(&InputMsg::Paste(data.to_vec()));
-                }
+                // The region is program-written text, so it takes the same
+                // size cap and REQ-804 confirmation as a Ctrl+V.
+                self.ferry_paste(data);
                 self.run_pending_push();
             }
         }

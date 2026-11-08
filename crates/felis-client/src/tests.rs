@@ -2123,6 +2123,8 @@ fn test_place(socket: &str, session_id: u128) -> exit_ladder::Place {
 mod app_events {
     use std::sync::mpsc;
 
+    use felis_client_core::PipeTarget;
+
     use super::*;
     use crate::window_input::{KeyPress, PressedKey, WindowInput};
 
@@ -2610,6 +2612,61 @@ mod app_events {
                 "{answer:?} cancels and is consumed"
             );
         }
+    }
+
+    #[test]
+    fn a_pipe_paste_sink_holds_control_bytes_for_confirmation_like_ctrl_v() {
+        let runtime = runtime();
+        let mut harness = app_on(&runtime, absent_daemon("home"), 0xa);
+        let live = ViewportPosition {
+            offset: 0,
+            anchor: None,
+        };
+
+        harness
+            .app
+            .finish_pipe(b"rm -rf build\n", None, PipeTarget::Paste, live);
+        assert!(harness.app.pending_confirm.is_some());
+        assert!(
+            harness.sent().is_empty(),
+            "nothing goes out before the answer"
+        );
+        harness.app.pending_confirm = None;
+
+        harness
+            .app
+            .finish_pipe(b"make", None, PipeTarget::Paste, live);
+        assert!(harness.app.pending_confirm.is_none());
+        assert_eq!(
+            harness.sent(),
+            vec![input_frame(&InputMsg::Paste(b"make".to_vec()))]
+        );
+
+        let conn_gen = harness.app.conn_gen;
+        harness.app.on_app_event(AppEvent::GridFrame {
+            msg: GridMsg::ModeFlags {
+                bracketed_paste: true,
+                alt_screen: false,
+                mouse_protocol: felis_protocol::messages::MouseProtocol::Off,
+                application_cursor: false,
+                modify_other_keys: felis_protocol::messages::ModifyOtherKeys::Off,
+                application_keypad: false,
+                win32_input_mode: false,
+                reverse_video: false,
+            },
+            conn_gen,
+        });
+        harness
+            .app
+            .finish_pipe(b"rm -rf build\n", None, PipeTarget::Paste, live);
+        assert!(
+            harness.app.pending_confirm.is_none(),
+            "bracketed paste frames the line break, so nothing to confirm"
+        );
+        assert_eq!(
+            harness.sent(),
+            vec![input_frame(&InputMsg::Paste(b"rm -rf build\n".to_vec()))]
+        );
     }
 
     fn retarget_target() -> RetargetTarget {
