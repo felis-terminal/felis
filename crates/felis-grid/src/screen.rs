@@ -641,12 +641,6 @@ impl ScreenBuffer {
         }
     }
 
-    /// Every cell, history included.
-    pub(crate) fn fill_cells(&mut self, cell: Cell) {
-        self.cells.fill(cell);
-        self.has_sized_cells = cell.sizing.is_some();
-    }
-
     pub(crate) fn erase_viewport(&mut self, blank: Cell) {
         if blank == Cell::default() {
             // Everything past the watermark is already `Cell::default()`,
@@ -670,14 +664,27 @@ impl ScreenBuffer {
             }
             self.has_sized_cells = false;
         } else {
-            // BCE: every cell takes the pen's color, and the
-            // watermark pins at `cols` (a colored blank is not
-            // a default cell).
-            self.fill_cells(blank);
-            self.occupancy.fill(self.cols);
-            self.soft_wrap.fill(false);
-            self.damage.mark_all();
+            // BCE: every cell takes the pen's color (a colored blank is
+            // not a default cell).
+            self.fill_viewport(blank);
         }
+    }
+
+    /// Every viewport row becomes `cell` across all columns, its
+    /// watermark pinned at `cols`; history rows share the ring and stay
+    /// untouched.
+    pub(crate) fn fill_viewport(&mut self, cell: Cell) {
+        let cols = usize::from(self.cols);
+        let full = u16::try_from(cols).unwrap_or(u16::MAX);
+        for logical in 0..usize::from(self.rows) {
+            let phys = self.phys_row_at(logical);
+            let start = phys * cols;
+            self.cells[start..start + cols].fill(cell);
+            self.occupancy[phys] = full;
+            self.soft_wrap[phys] = false;
+        }
+        self.has_sized_cells = cell.sizing.is_some();
+        self.damage.mark_all();
     }
 
     /// The reservation covers the whole retention window up front

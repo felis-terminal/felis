@@ -50,6 +50,9 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
   defines for it; felis read `C=1`, the composition key of `a=c`, so `X=1` frames alpha-blended.
 - **Text sizing**: an erase (EL, ED, ECH, DECERA and their selective forms) that reaches part of an `OSC 66` character
   erases the whole character, instead of leaving its other cells behind.
+- **Scrollback**: a screen clear with a background color set (`CSI 2 J` after an SGR background), `DECALN`, the
+  `DECCOLM` clear, and the selective erase `DECSED` act on the screen alone, as in xterm; they overwrote or erased
+  scrollback rows too.
 - **CLI**: `felis notifications subscribe` ends with its clean terminal when the daemon stops, instead of exiting `2`
   with `daemon_lost`.
 - **SSH**: a remote window reconnecting over a dead route no longer leaves one `ssh` process behind per attempt: an
