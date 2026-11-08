@@ -86,15 +86,21 @@ impl PtySession {
             writer,
             master,
             child,
-            quiescer: _,
+            quiescer,
         } = self;
+        #[cfg(windows)]
+        drop(quiescer);
         (
             reader,
             writer,
             ChildHandle {
                 child: Mutex::new(child),
             },
-            Resizer { master },
+            Resizer {
+                master,
+                #[cfg(unix)]
+                quiescer,
+            },
         )
     }
 }
@@ -156,6 +162,8 @@ impl ChildHandle {
 
 pub struct Resizer {
     master: platform::Master,
+    #[cfg(unix)]
+    quiescer: Quiescer,
 }
 
 impl Resizer {
@@ -172,12 +180,29 @@ impl Resizer {
         self.master.foreground_pgrp()
     }
 
-    /// Whether nothing holds the terminal side open any more, so EOF is
-    /// coming. `false` where the platform cannot tell (Windows, whose
-    /// `ConPTY` never reports EOF).
+    /// Whether every byte the terminal side wrote before this call has
+    /// been through the sink, whoever still holds that side open. Always
+    /// `true` on Windows, whose `ConPTY` output cannot be told apart from
+    /// what its renderer has yet to emit.
     #[must_use]
-    pub fn peer_closed(&self) -> bool {
-        self.master.peer_closed()
+    #[cfg_attr(windows, allow(clippy::unused_self, clippy::missing_const_for_fn))]
+    pub fn output_drained(&self) -> bool {
+        #[cfg(unix)]
+        {
+            // The queue first: an empty one with the reader idle after it
+            // means nothing written before the probe is still in flight.
+            // At EOF the queue reads as readable on macOS, and is moot.
+            let queued = self.master.output_queued();
+            match self.quiescer.caught_up() {
+                quiesce::CaughtUp::AtEof => true,
+                quiesce::CaughtUp::Idle => !queued,
+                quiesce::CaughtUp::No => false,
+            }
+        }
+        #[cfg(windows)]
+        {
+            true
+        }
     }
 
     /// The PTY master, which an in-place upgrade carries across `execve`.
@@ -1257,27 +1282,73 @@ mod tests {
         }
     }
 
+    /// The sink stays shut until the child is reaped, so its output is
+    /// still queued or unparsed when the probe first runs. The holder keeps
+    /// the terminal side open past the exit, where no EOF orders anything.
     #[cfg(unix)]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn the_terminal_side_reads_closed_only_once_its_last_holder_exits() {
-        let (_collected, sink) = collector();
-        let session = spawn(blocks_forever(), small_size(), sink).expect("spawn");
-        let (_reader, _writer, child, resizer) = session.split();
-        assert!(!resizer.peer_closed(), "a running child holds it open");
+    async fn output_drained_after_the_reap_means_the_sink_has_all_the_childs_output() {
+        for holder in ["", "( read -r _hold <&1 ) &"] {
+            for doublings in [0_u32, 6, 12, 15] {
+                let expected = 16_usize << doublings;
+                let open = Arc::new((Mutex::new(false), Condvar::new()));
+                let collected = Arc::new(Mutex::new(Vec::<u8>::new()));
+                let sink: ByteSink = Box::new({
+                    let open = Arc::clone(&open);
+                    let collected = Arc::clone(&collected);
+                    move |bytes: &[u8]| {
+                        let (lock, cv) = &*open;
+                        let mut shut = lock.lock().unwrap();
+                        while !*shut {
+                            shut = cv.wait(shut).unwrap();
+                        }
+                        collected.lock().unwrap().extend_from_slice(bytes);
+                    }
+                });
+                let mut cmd = Command::new("/bin/sh");
+                cmd.args([
+                    "-c",
+                    &format!(
+                        "{holder} s=xxxxxxxxxxxxxxxx; i=0; \
+                         while [ $i -lt {doublings} ]; do s=$s$s; i=$((i+1)); done; \
+                         printf %s \"$s\""
+                    ),
+                ]);
+                let session = spawn(cmd, small_size(), sink).expect("spawn");
+                let (_reader, _writer, child, resizer) = session.split();
+                let pid = child
+                    .process_id()
+                    .unwrap()
+                    .expect("a spawned child has a pid");
+                let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+                while child.try_wait().expect("try_wait").is_none() {
+                    assert!(
+                        tokio::time::Instant::now() < deadline,
+                        "the child never exited"
+                    );
+                    tokio::time::sleep(Duration::from_millis(1)).await;
+                }
+                assert!(
+                    !resizer.output_drained(),
+                    "holder={holder:?} {expected}: the shut sink has parsed nothing"
+                );
 
-        assert!(child.hangup().expect("hangup"), "a live child is signaled");
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
-        while child.try_wait().expect("try_wait").is_none() {
-            assert!(
-                tokio::time::Instant::now() < deadline,
-                "the child never exited"
-            );
-            tokio::time::sleep(Duration::from_millis(10)).await;
+                *open.0.lock().unwrap() = true;
+                open.1.notify_all();
+                while !resizer.output_drained() {
+                    assert!(tokio::time::Instant::now() < deadline, "never drained");
+                    tokio::time::sleep(Duration::from_millis(1)).await;
+                }
+                assert!(
+                    *collected.lock().unwrap() == vec![b'x'; expected],
+                    "holder={holder:?} {expected}: the sink has all of it"
+                );
+                if let Some(pid) = rustix::process::Pid::from_raw(pid) {
+                    rustix::process::kill_process_group(pid, rustix::process::Signal::HUP)
+                        .unwrap_or_default();
+                }
+            }
         }
-        assert!(
-            resizer.peer_closed(),
-            "nothing holds it once the child is reaped"
-        );
     }
 
     /// Every master half the caller owns can be gone and the child
