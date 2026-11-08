@@ -11,8 +11,9 @@ use crate::*;
 
 #[derive(Debug, Clone)]
 enum Op {
-    /// `count` lines of `width` columns in color `color`; bare LF keeps
-    /// the column, so the rows leave a staircase.
+    Bytes(Vec<u8>),
+    /// `count` lines of `width` columns in 256-color `color`; bare LF
+    /// keeps the column, so the rows leave a staircase.
     Lines {
         count: u8,
         width: u8,
@@ -29,44 +30,99 @@ enum Op {
         bottom: u8,
         n: u8,
     },
-    /// An OSC 133 prompt, command and output.
-    Prompt,
-    /// An OSC 66 run, which interns a sizing handle.
-    Sized,
-    /// Colored ED 2, DECALN, DECCOLM under `?40`, DECSED 0/1/2.
+    /// Colored ED 2, DECALN, DECCOLM under `?40`, DECSED 0/1/2: none may
+    /// change a history row.
     WholeScreen(u8),
-    Ed3,
-    Alt(bool),
+    /// On both grids, and on the compacted one also through the
+    /// one-buffer-per-row oracle.
     Reflow {
-        rows: u8,
-        cols: u8,
+        rows: u16,
+        cols: u16,
+    },
+    /// A slice on the compacted grid alone, with the OS refusing every
+    /// discard when `refuse` is set.
+    Compact {
+        max: usize,
+        refuse: bool,
     },
     /// Both table sweeps, on both grids.
     Sweep,
-    Compact(u8),
+    /// The compacted grid goes on as its clone.
+    Clone,
+    /// The compacted grid goes on as its restored state dump.
+    Dump,
+}
+
+fn token() -> impl Strategy<Value = &'static str> {
+    prop::sample::select(vec![
+        "a",
+        "b",
+        "xyz",
+        " ",
+        "\r\n",
+        "\n",
+        "\r",
+        "\t",
+        "\x08",
+        "端",
+        "末",
+        "👍",
+        "e\u{301}",
+        "\x1b[31m",
+        "\x1b[38;5;200m",
+        "\x1b[0m",
+        "\x1b[44m\x1b[K",
+        "\x1b[44m\x1b[2J",
+        "\x1b[3J",
+        "\x1b[5G",
+        "\x1b[2A",
+        "\x1b[H",
+        "\x1b[3;2H",
+        "\x1b]8;;http://x\x07",
+        "\x1b]8;;\x07",
+        "\x1b]66;s=2;AB\x07",
+        "\x1b]66;s=2:w=3;A\x07",
+        "\x1b]66;w=2;x\x07",
+        "\x1b]133;A\x07",
+        "\x1b]133;A;redraw=last\x07",
+        "\x1b]133;A;redraw=0\x07",
+        "\x1b]133;B\x07",
+        "\x1b]133;C\x07",
+        "\x1b]133;D;0\x07",
+        "\x1b[?1049h",
+        "\x1b[?1049l",
+        "\x1b[?7l",
+        "\x1b[?7h",
+    ])
 }
 
 fn op() -> impl Strategy<Value = Op> {
     prop_oneof![
-        6 => (1u8..12, 0u8..40, 0u8..8, any::<bool>()).prop_map(|(count, width, color, bare_lf)| {
+        6 => prop::collection::vec(token(), 1..24).prop_map(|ts| Op::Bytes(ts.concat().into_bytes())),
+        1 => prop::collection::vec(any::<u8>(), 1..32).prop_map(Op::Bytes),
+        2 => (prop::sample::select(vec!["", ";redraw=last", ";redraw=0"]), token())
+            .prop_map(|(redraw, prompt)| Op::Bytes(format!(
+                "\x1b]133;C\x07out\r\n\x1b]133;D;0\x07\x1b]133;A{redraw}\x07$ {prompt}{prompt}\x1b]133;B\x07"
+            ).into_bytes())),
+        4 => (1u8..12, 0u8..40, any::<u8>(), any::<bool>()).prop_map(|(count, width, color, bare_lf)| {
             Op::Lines { count, width, color, bare_lf }
         }),
         1 => (1u8..8, 1u8..4).prop_map(|(color, n)| Op::BceScroll { color, n }),
         1 => (0u8..4, 1u8..4).prop_map(|(bottom, n)| Op::PartialTop { bottom, n }),
-        1 => Just(Op::Prompt),
-        1 => Just(Op::Sized),
         1 => (0u8..6).prop_map(Op::WholeScreen),
-        1 => Just(Op::Ed3),
-        1 => any::<bool>().prop_map(Op::Alt),
-        1 => (2u8..8, 4u8..24).prop_map(|(rows, cols)| Op::Reflow { rows, cols }),
+        2 => (1u16..=8, 1u16..=24).prop_map(|(rows, cols)| Op::Reflow { rows, cols }),
+        4 => (0usize..=32, prop::bool::weighted(0.2))
+            .prop_map(|(max, refuse)| Op::Compact { max, refuse }),
         1 => Just(Op::Sweep),
-        4 => (0u8..12).prop_map(Op::Compact),
+        1 => Just(Op::Clone),
+        1 => Just(Op::Dump),
     ]
 }
 
 fn bytes_of(op: &Op, rows: u16) -> Vec<u8> {
-    match *op {
-        Op::Lines {
+    match op {
+        Op::Bytes(bytes) => bytes.clone(),
+        &Op::Lines {
             count,
             width,
             color,
@@ -78,16 +134,16 @@ fn bytes_of(op: &Op, rows: u16) -> Vec<u8> {
                     .map(|c| char::from(b'a' + ((c + usize::from(i)) % 26) as u8))
                     .collect();
                 let end = if bare_lf { "\n" } else { "\r\n" };
-                out.extend_from_slice(format!("\x1b[3{color}m{text}\x1b[m{end}").as_bytes());
+                out.extend_from_slice(format!("\x1b[38;5;{color}m{text}\x1b[m{end}").as_bytes());
             }
             out
         }
-        Op::BceScroll { color, n } => format!(
+        &Op::BceScroll { color, n } => format!(
             "\x1b[4{color}m\x1b[{rows};1H{}\x1b[m",
             "\n".repeat(n.into())
         )
         .into_bytes(),
-        Op::PartialTop { bottom, n } => {
+        &Op::PartialTop { bottom, n } => {
             let bottom = (u16::from(bottom) + 1).min(rows.saturating_sub(1)).max(1);
             format!(
                 "\x1b[1;{bottom}r\x1b[{bottom};1Hpt\x1b[45m{}\x1b[m\x1b[r",
@@ -95,33 +151,24 @@ fn bytes_of(op: &Op, rows: u16) -> Vec<u8> {
             )
             .into_bytes()
         }
-        Op::Prompt => {
-            b"\x1b]133;A\x07$ \x1b]133;B\x07ls\r\n\x1b]133;C\x07out\r\n\x1b]133;D;0\x07".to_vec()
-        }
-        Op::Sized => b"\x1b]66;s=2;W\x07\r\n\r\n".to_vec(),
-        Op::WholeScreen(which) => match which {
+        &Op::WholeScreen(which) => match which {
             0 => b"\x1b[46m\x1b[2J\x1b[m".to_vec(),
             1 => b"\x1b#8".to_vec(),
             2 => b"\x1b[?40h\x1b[?3h\x1b[?3l\x1b[?40l".to_vec(),
             n => format!("\x1b[44m\x1b[?{}J\x1b[m", n - 3).into_bytes(),
         },
-        Op::Ed3 => b"\x1b[3J".to_vec(),
-        Op::Alt(on) => {
-            if on {
-                b"\x1b[?1049halt\r\n".to_vec()
-            } else {
-                b"\x1b[?1049l".to_vec()
-            }
-        }
-        Op::Reflow { .. } | Op::Sweep | Op::Compact(_) => Vec::new(),
+        Op::Reflow { .. } | Op::Compact { .. } | Op::Sweep | Op::Clone | Op::Dump => Vec::new(),
     }
 }
 
-/// Feeds `op` to both grids, compaction to `g` alone.
+/// Feeds `op` to both grids; compaction, clones and dumps reach `g`
+/// alone.
 fn apply(op: &Op, p: &mut Parser, g: &mut Grid, tp: &mut Parser, twin: &mut Grid) {
     match *op {
-        Op::Compact(max) => {
-            g.compact_history(usize::from(max));
+        Op::Compact { max, refuse } => {
+            paged_cells::fail_discards(refuse);
+            g.compact_history(max);
+            paged_cells::fail_discards(false);
         }
         Op::Sweep => {
             for grid in [g, twin] {
@@ -130,8 +177,38 @@ fn apply(op: &Op, p: &mut Parser, g: &mut Grid, tp: &mut Parser, twin: &mut Grid
             }
         }
         Op::Reflow { rows, cols } => {
-            let remap = g.reflow(rows.into(), cols.into());
-            assert_eq!(remap, twin.reflow(rows.into(), cols.into()), "reflow remap");
+            let mut reference = g.clone();
+            let expected = reference.reflow_reference(rows, cols);
+            let remap = g.reflow(rows, cols);
+            assert_eq!(remap, expected, "reflow remap against the oracle");
+            assert!(*g == reference, "reflow against the oracle");
+            assert_eq!(remap, twin.reflow(rows, cols), "reflow remap");
+        }
+        Op::Clone => {
+            let copy = g.clone();
+            assert!(copy == *g, "clone");
+            *g = copy;
+        }
+        Op::Dump => {
+            #[cfg(feature = "state-dump")]
+            {
+                let json = serde_json::to_vec(&*g).expect("dump");
+                let restored: Grid = serde_json::from_slice(&json).expect("restore");
+                restored.check_restored().expect("consistent");
+                assert!(restored == *g, "restored dump");
+                *g = restored;
+            }
+        }
+        Op::WholeScreen(_) => {
+            let before = history(g);
+            let bytes = bytes_of(op, g.rows());
+            drive(p, g, &bytes);
+            drive(tp, twin, &bytes);
+            assert_eq!(
+                history(g),
+                before,
+                "a screen-scoped command changed history"
+            );
         }
         _ => {
             let bytes = bytes_of(op, g.rows());
@@ -201,20 +278,27 @@ fn assert_unobservable(g: &mut Grid, twin: &mut Grid) {
 }
 
 /// Cold and ring history share one cap, a row cannot be in both, the
-/// ring's arrays still cover its window, and no live row lies on a page
-/// that was discarded and not reused since.
+/// ring's arrays still cover its window, no live row lies on a page that
+/// was discarded and not reused since, the gap's reused prefix lies
+/// inside the gap, and the cold index stays within twice the cap.
 fn assert_tiers_consistent(g: &Grid) {
     let s = &g.screen;
-    for (ring, cap, cells) in std::iter::once((s.ring(), s.cap, &s.cells)).chain(
+    for (ring, cap, cells, gap) in std::iter::once((s.ring(), s.cap, &s.cells, s.gap)).chain(
         s.saved_primary
             .as_ref()
-            .map(|p| (p.ring(), p.cap, &p.cells)),
+            .map(|p| (p.ring(), p.cap, &p.cells, p.gap)),
     ) {
         for rows in ring.live_rows() {
             assert!(
                 !cells.has_discarded_page(rows.start * ring.cols..rows.end * ring.cols),
                 "a live row in {rows:?} lies on a discarded page"
             );
+            for phys in rows {
+                assert!(
+                    usize::from(ring.occupancy[phys]) <= ring.cols,
+                    "occupancy past cols"
+                );
+            }
         }
         assert!(
             ring.cold.len() + ring.history_len <= cap,
@@ -225,6 +309,15 @@ fn assert_tiers_consistent(g: &Grid) {
         assert!(
             ring.cold.is_empty() || ring.history_len >= 1,
             "a cold row with no ring history above it"
+        );
+        assert!(
+            ring.cold.index_len() <= 2 * cap,
+            "cold index past twice the cap"
+        );
+        let gap_len = ring.phys_cap - ring.history_len - ring.rows;
+        assert!(
+            gap.reused_prefix().is_none_or(|n| n < gap_len),
+            "the reused prefix runs past the gap"
         );
     }
 }
@@ -263,130 +356,21 @@ fn grids(rows: u16, cols: u16, cap: usize) -> (Parser, Grid, Parser, Grid) {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(256))]
-
-    /// Output, BCE blanks, wraps, partial-top scrolls, prompt marks,
-    /// screen-scoped erases, ED 3, the alternate screen and reflows,
-    /// interleaved with compaction slices of any size and run past the
-    /// cap so the cold tier evicts: after every step the compacted grid
-    /// reads exactly as its uncompacted twin.
+    /// Output of every kind, reflows, table sweeps, clones and state
+    /// dumps, interleaved with compaction slices of any size (some refused
+    /// by the OS) and run past the cap so the cold tier evicts: after every
+    /// step the compacted grid equals its uncompacted twin, reads as it
+    /// through every reader, and keeps the tiers consistent.
     #[test]
-    fn compaction_is_unobservable(
-        rows in 2u16..6,
-        cols in 4u16..20,
-        cap in 0usize..24,
+    fn a_compacted_grid_reads_as_its_uncompacted_twin(
+        rows in 1u16..=8,
+        cols in 1u16..=24,
+        cap in 0usize..=24,
         ops in prop::collection::vec(op(), 1..40),
     ) {
         let (mut p, mut g, mut tp, mut twin) = grids(rows, cols, cap);
         for op in &ops {
             apply(op, &mut p, &mut g, &mut tp, &mut twin);
-            assert_unobservable(&mut g, &mut twin);
-        }
-    }
-
-    /// Rows recycled out of the vacated gap read as the twin's, whatever
-    /// slice boundary the compaction stopped at and whatever blank the
-    /// recycle writes.
-    #[test]
-    fn recycling_after_compaction_reads_as_the_twin(
-        slices in prop::collection::vec(1u8..9, 1..6),
-        refill in prop::collection::vec(op(), 1..20),
-    ) {
-        let (mut p, mut g, mut tp, mut twin) = grids(4, 12, 30);
-        let fill = Op::Lines { count: 40, width: 17, color: 3, bare_lf: false };
-        apply(&fill, &mut p, &mut g, &mut tp, &mut twin);
-        for slice in slices {
-            g.compact_history(slice.into());
-            assert_unobservable(&mut g, &mut twin);
-        }
-        for op in refill.iter().filter(|op| !matches!(op, Op::Compact(_))) {
-            apply(op, &mut p, &mut g, &mut tp, &mut twin);
-            assert_unobservable(&mut g, &mut twin);
-        }
-    }
-
-    /// W → W' → W with no eviction, on the live primary and on one saved
-    /// under `?1049h` and resized before the restore: rows, cursor,
-    /// marks and the placement remaps match the twin's (REQ-604, REQ-407).
-    #[test]
-    fn reflow_round_trips_match_the_twin(
-        narrow in 4u16..16,
-        lines in 1u8..20,
-        saved in any::<bool>(),
-        slice in 1u8..40,
-    ) {
-        let (mut p, mut g, mut tp, mut twin) = grids(5, 16, 200);
-        for op in [
-            Op::Prompt,
-            Op::Lines { count: lines, width: 23, color: 2, bare_lf: false },
-            Op::Sized,
-            Op::Prompt,
-        ] {
-            apply(&op, &mut p, &mut g, &mut tp, &mut twin);
-        }
-        g.compact_history(slice.into());
-        assert_unobservable(&mut g, &mut twin);
-        if saved {
-            apply(&Op::Alt(true), &mut p, &mut g, &mut tp, &mut twin);
-            g.compact_history(usize::MAX);
-        }
-        for step in [Op::Reflow { rows: 5, cols: narrow as u8 }, Op::Reflow { rows: 5, cols: 16 }] {
-            apply(&step, &mut p, &mut g, &mut tp, &mut twin);
-            assert_unobservable(&mut g, &mut twin);
-        }
-        if saved {
-            apply(&Op::Alt(false), &mut p, &mut g, &mut tp, &mut twin);
-            assert_unobservable(&mut g, &mut twin);
-        }
-        prop_assert_eq!(g.cursor(), twin.cursor());
-    }
-
-    /// Cold rows carrying distinct pens and sizing handles keep them
-    /// across both table sweeps, which then compact the tables under
-    /// new output.
-    #[test]
-    fn table_sweeps_keep_cold_rows_attributes_and_sizing(
-        colors in prop::collection::vec(0u8..255, 1..12),
-        slice in 1u8..30,
-    ) {
-        let (mut p, mut g, mut tp, mut twin) = grids(3, 12, 40);
-        let mut out = Vec::new();
-        for (i, color) in colors.iter().enumerate() {
-            out.extend_from_slice(format!("\x1b[38;5;{color}mc{i}\x1b[m").as_bytes());
-            out.extend_from_slice(b"\x1b]66;s=2;S\x07\r\n\r\n");
-        }
-        out.extend_from_slice(b"\r\n\r\n\r\n\r\n");
-        drive(&mut p, &mut g, &out);
-        drive(&mut tp, &mut twin, &out);
-        g.compact_history(slice.into());
-        prop_assert!(!g.screen.cold.is_empty());
-        let churn = b"\x1b[38;2;1;2;3mx\x1b[38;2;4;5;6my\x1b[m\x1b]66;s=3;Z\x07\r\n";
-        drive(&mut p, &mut g, churn);
-        drive(&mut tp, &mut twin, churn);
-        for grid in [&mut g, &mut twin] {
-            grid.gc_styles();
-            grid.gc_sizings();
-        }
-        prop_assert_eq!(resolved(&g), resolved(&twin));
-        assert_tiers_consistent(&g);
-    }
-
-    /// The commands that once wrote the whole physical ring leave both
-    /// tiers of history alone at any ring base and slice boundary.
-    #[test]
-    fn whole_screen_commands_leave_compacted_history_alone(
-        fill in 10u8..60,
-        slice in 1u8..40,
-        which in prop::collection::vec(0u8..6, 1..6),
-    ) {
-        let (mut p, mut g, mut tp, mut twin) = grids(4, 10, 30);
-        apply(&Op::Lines { count: fill, width: 13, color: 5, bare_lf: false },
-            &mut p, &mut g, &mut tp, &mut twin);
-        g.compact_history(slice.into());
-        let before = history(&g);
-        for w in which {
-            apply(&Op::WholeScreen(w), &mut p, &mut g, &mut tp, &mut twin);
-            prop_assert_eq!(history(&g), before.clone());
             assert_unobservable(&mut g, &mut twin);
         }
     }
@@ -432,25 +416,6 @@ proptest! {
         }
         assert_unobservable(&mut g, &mut twin);
     }
-}
-
-/// Each history and live cell as its pen and sizing resolve, so two
-/// grids whose tables were swept differently still compare.
-fn resolved(g: &Grid) -> Vec<Vec<(Grapheme, Attributes, Option<Sizing>)>> {
-    g.rows_with_wrap(AltScreenRows::Include)
-        .map(|(cells, _)| {
-            cells
-                .iter()
-                .map(|c| {
-                    (
-                        c.grapheme,
-                        *g.style(c.style),
-                        c.sizing.and_then(|h| g.sizing_by_handle(h)).copied(),
-                    )
-                })
-                .collect()
-        })
-        .collect()
 }
 
 #[test]
@@ -502,6 +467,50 @@ fn a_compacted_grid_equals_its_twin_its_clone_and_its_restored_dump() {
                 serde_json::from_slice(&serde_json::to_vec(&g).expect("dump")).expect("restore");
             assert!(restored == g, "restored dump against its source");
         }
+    }
+}
+
+/// A primary compacted while saved under `?1049h` survives a resize
+/// under the alternate screen, a state dump and the re-wrap on leave,
+/// then keeps scrolling in FIFO order, as its twin.
+#[test]
+fn a_saved_compacted_primary_survives_resize_dump_and_leave() {
+    let (mut p, mut g, mut tp, mut twin) = grids(5, 16, 200);
+    let prompt = b"\x1b]133;A\x07$ \x1b]133;B\x07ls\r\n\x1b]133;C\x07".to_vec();
+    for op in [
+        Op::Bytes(prompt.clone()),
+        Op::Lines {
+            count: 60,
+            width: 23,
+            color: 2,
+            bare_lf: false,
+        },
+        Op::Bytes(prompt),
+        Op::Bytes(b"\x1b[?1049halt\r\n".to_vec()),
+        Op::Compact {
+            max: usize::MAX,
+            refuse: false,
+        },
+        Op::Reflow { rows: 4, cols: 9 },
+        Op::Dump,
+        Op::Reflow { rows: 5, cols: 16 },
+        Op::Bytes(b"\x1b[?1049l".to_vec()),
+        Op::Lines {
+            count: 30,
+            width: 12,
+            color: 6,
+            bare_lf: false,
+        },
+    ] {
+        apply(&op, &mut p, &mut g, &mut tp, &mut twin);
+        if matches!(op, Op::Compact { .. }) {
+            let saved = g.screen.saved_primary.as_ref().expect("saved primary");
+            assert!(
+                !saved.cold.is_empty(),
+                "the slice reached the saved primary"
+            );
+        }
+        assert_unobservable(&mut g, &mut twin);
     }
 }
 
@@ -564,49 +573,8 @@ fn drive_lf(grid: &mut Grid) {
     drive(&mut Parser::new(), grid, b"\r\n");
 }
 
-/// A compacted grid carried across the state dump, live and with the
-/// primary saved under the alternate screen, reads as its twin and keeps
-/// scrolling in FIFO order after the restore.
-#[cfg(feature = "state-dump")]
-#[test]
-fn a_compacted_grid_survives_the_state_dump() {
-    for saved in [false, true] {
-        let (mut p, mut g, mut tp, mut twin) = grids(4, 30, 40);
-        for op in [
-            Op::Prompt,
-            Op::Lines {
-                count: 50,
-                width: 37,
-                color: 3,
-                bare_lf: false,
-            },
-            Op::Sized,
-            Op::Alt(saved),
-        ] {
-            apply(&op, &mut p, &mut g, &mut tp, &mut twin);
-        }
-        g.compact_history(25);
-        let json = serde_json::to_vec(&g).expect("dump");
-        let mut restored: Grid = serde_json::from_slice(&json).expect("restore");
-        restored.check_restored().expect("consistent");
-        assert_unobservable(&mut restored, &mut twin);
-        for op in [
-            Op::Alt(false),
-            Op::Lines {
-                count: 30,
-                width: 12,
-                color: 6,
-                bare_lf: false,
-            },
-        ] {
-            apply(&op, &mut p, &mut restored, &mut tp, &mut twin);
-            assert_unobservable(&mut restored, &mut twin);
-        }
-    }
-}
-
 /// A discard the OS refuses changes nothing: the rows still move to the
-/// cold tier and the ring stays usable.
+/// cold tier, no page counts as discarded, and the ring stays usable.
 #[test]
 fn a_refused_discard_leaves_compaction_unobservable() {
     let (mut p, mut g, mut tp, mut twin) = grids(4, 200, 300);
@@ -617,10 +585,18 @@ fn a_refused_discard_leaves_compaction_unobservable() {
         bare_lf: false,
     };
     apply(&fill, &mut p, &mut g, &mut tp, &mut twin);
-    paged_cells::fail_discards(true);
-    let done = g.compact_history(usize::MAX);
-    paged_cells::fail_discards(false);
-    assert!(done);
+    apply(
+        &Op::Compact {
+            max: usize::MAX,
+            refuse: true,
+        },
+        &mut p,
+        &mut g,
+        &mut tp,
+        &mut twin,
+    );
+    assert!(!g.screen.cold.is_empty());
+    assert_eq!(g.screen.cells.discarded_pages(), 0);
     assert_unobservable(&mut g, &mut twin);
     apply(&fill, &mut p, &mut g, &mut tp, &mut twin);
     assert_unobservable(&mut g, &mut twin);

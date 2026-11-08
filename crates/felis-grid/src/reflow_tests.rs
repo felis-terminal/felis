@@ -1,11 +1,7 @@
-//! [`Grid::reflow`] against an oracle that holds one buffer per row, the
-//! plain shape [`PackedRows`] flattens: the grid and the returned
-//! [`ReflowRemap`] must agree in every field.
+//! An oracle for [`Grid::reflow`] that holds one buffer per row, the
+//! plain shape [`PackedRows`] flattens: the cold-tier model test checks
+//! the grid and the returned [`ReflowRemap`] against it in every field.
 
-use felis_vt::Parser;
-use proptest::prelude::*;
-
-use crate::test_support::drive;
 use crate::*;
 
 fn packed(rows: &[Vec<Cell>]) -> PackedRows {
@@ -17,7 +13,7 @@ fn packed(rows: &[Vec<Cell>]) -> PackedRows {
 }
 
 impl Grid {
-    fn reflow_reference(&mut self, rows: u16, cols: u16) -> Option<ReflowRemap> {
+    pub(crate) fn reflow_reference(&mut self, rows: u16, cols: u16) -> Option<ReflowRemap> {
         let rows = rows.max(1);
         let cols = cols.max(1);
         if rows == self.screen.rows && cols == self.screen.cols {
@@ -344,94 +340,4 @@ fn pad_and_push_reference(
     out_rows.push(std::mem::take(cur));
     out_continued.push(!*first);
     *first = false;
-}
-
-#[derive(Clone, Debug)]
-enum Step {
-    Bytes(Vec<u8>),
-    Reflow(u16, u16),
-    Compact(usize),
-}
-
-fn token() -> impl Strategy<Value = &'static str> {
-    prop::sample::select(vec![
-        "a",
-        "b",
-        "xyz",
-        " ",
-        "\r\n",
-        "\n",
-        "\r",
-        "\t",
-        "\x08",
-        "端",
-        "末",
-        "👍",
-        "e\u{301}",
-        "\x1b[31m",
-        "\x1b[0m",
-        "\x1b[44m\x1b[K",
-        "\x1b[44m\x1b[2J",
-        "\x1b[5G",
-        "\x1b[2A",
-        "\x1b[H",
-        "\x1b[3;2H",
-        "\x1b]8;;http://x\x07",
-        "\x1b]8;;\x07",
-        "\x1b]66;s=2;AB\x07",
-        "\x1b]66;s=2:w=3;A\x07",
-        "\x1b]66;w=2;x\x07",
-        "\x1b]133;A\x07",
-        "\x1b]133;A;redraw=last\x07",
-        "\x1b]133;A;redraw=0\x07",
-        "\x1b]133;B\x07",
-        "\x1b]133;C\x07",
-        "\x1b]133;D;0\x07",
-        "\x1b[?1049h",
-        "\x1b[?1049l",
-        "\x1b[?7l",
-        "\x1b[?7h",
-    ])
-}
-
-fn step() -> impl Strategy<Value = Step> {
-    prop_oneof![
-        6 => proptest::collection::vec(token(), 1..24)
-            .prop_map(|ts| Step::Bytes(ts.concat().into_bytes())),
-        1 => proptest::collection::vec(any::<u8>(), 1..32).prop_map(Step::Bytes),
-        2 => (prop::sample::select(vec!["", ";redraw=last", ";redraw=0"]), token())
-            .prop_map(|(redraw, prompt)| Step::Bytes(format!(
-                "\x1b]133;C\x07out\r\n\x1b]133;D;0\x07\x1b]133;A{redraw}\x07$ {prompt}{prompt}\x1b]133;B\x07"
-            ).into_bytes())),
-        2 => (1u16..=8, 1u16..=24).prop_map(|(r, c)| Step::Reflow(r, c)),
-        1 => (1usize..=32).prop_map(Step::Compact),
-    ]
-}
-
-proptest! {
-    #[test]
-    fn reflow_matches_the_per_row_reference(
-        rows in 1u16..=8,
-        cols in 1u16..=24,
-        scrollback in 0usize..=24,
-        steps in proptest::collection::vec(step(), 1..24),
-    ) {
-        let mut parser = Parser::new();
-        let mut grid = Grid::with_scrollback(rows, cols, scrollback);
-        for step in &steps {
-            match step {
-                Step::Bytes(bytes) => drive(&mut parser, &mut grid, bytes),
-                Step::Compact(n) => {
-                    grid.compact_history(*n);
-                }
-                Step::Reflow(r, c) => {
-                    let mut reference = grid.clone();
-                    let expected = reference.reflow_reference(*r, *c);
-                    let got = grid.reflow(*r, *c);
-                    prop_assert_eq!(got, expected, "remap diverged after {:?}", steps);
-                    prop_assert!(grid == reference, "grid diverged after {:?}", steps);
-                }
-            }
-        }
-    }
 }

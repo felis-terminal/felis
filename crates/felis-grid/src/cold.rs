@@ -72,6 +72,12 @@ impl ColdStore {
         self.live == 0
     }
 
+    /// Index entries held, evicted ones not yet dropped included.
+    #[cfg(test)]
+    pub(crate) const fn index_len(&self) -> usize {
+        self.rows.len()
+    }
+
     fn live(&self) -> &[ColdRow] {
         &self.rows[self.rows.len() - self.live..]
     }

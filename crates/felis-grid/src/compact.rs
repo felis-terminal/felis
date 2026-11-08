@@ -227,6 +227,11 @@ impl GapReuse {
     pub(crate) const fn is_intact(self) -> bool {
         self.0 == usize::MAX
     }
+
+    #[cfg(test)]
+    pub(crate) const fn reused_prefix(self) -> Option<usize> {
+        if self.is_intact() { None } else { Some(self.0) }
+    }
 }
 
 impl Default for GapReuse {
