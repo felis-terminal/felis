@@ -39,6 +39,9 @@ pub(crate) struct PagedCells {
     /// Committed prefix in bytes, a page multiple covering `len` cells.
     #[cfg(windows)]
     committed: usize,
+    /// Pages discarded and not reused since, by index.
+    #[cfg(test)]
+    discarded: std::collections::BTreeSet<usize>,
 }
 
 // SAFETY: `PagedCells` uniquely owns its mapping, as `Vec<Cell>` owns its
@@ -57,6 +60,8 @@ impl PagedCells {
             map_bytes: 0,
             #[cfg(windows)]
             committed: 0,
+            #[cfg(test)]
+            discarded: std::collections::BTreeSet::new(),
         }
     }
 
@@ -83,6 +88,8 @@ impl PagedCells {
             map_bytes,
             #[cfg(windows)]
             committed: 0,
+            #[cfg(test)]
+            discarded: std::collections::BTreeSet::new(),
         };
         #[cfg(windows)]
         cells.commit(len)?;
@@ -125,6 +132,8 @@ impl PagedCells {
         if FAIL_DISCARD.get() {
             return Err(io::Error::other("injected discard failure"));
         }
+        #[cfg(test)]
+        self.track_discard(offset, bytes);
         // SAFETY: `inner_pages` returns a page-aligned, page-multiple
         // span inside `[0, len)`, which lies in this buffer's mapping
         // (committed on Windows). Every primitive `sys::discard` uses
@@ -133,31 +142,49 @@ impl PagedCells {
         unsafe { sys::discard(self.ptr.cast::<u8>().as_ptr().add(offset), bytes) }
     }
 
-    /// Tells the OS a discarded range is live again (macOS
-    /// `MADV_FREE_REUSE`, which restores its accounting); a no-op where
-    /// the discard needs no pairing.
+    /// Tells the OS the pages under `cells` are live again (macOS
+    /// `MADV_FREE_REUSE`, which restores its accounting), every page the
+    /// range touches, so a row straddling a page boundary is covered; a
+    /// no-op where the discard needs no pairing.
     pub(crate) fn reuse(&mut self, cells: Range<usize>) -> io::Result<()> {
-        let Some((offset, bytes)) = self.inner_pages(cells) else {
+        let Some((offset, bytes)) = self.outer_pages(cells) else {
             return Ok(());
         };
-        // SAFETY: as for `discard`: a whole-page span inside `[0, len)`;
-        // `sys::reuse` changes no byte.
+        #[cfg(test)]
+        self.track_reuse(offset, bytes);
+        // SAFETY: as for `discard`: a whole-page span inside the mapping
+        // (`outer_pages` rounds out within `map_bytes`); `sys::reuse`
+        // changes no byte.
         unsafe { sys::reuse(self.ptr.cast::<u8>().as_ptr().add(offset), bytes) }
     }
 
     /// The byte span of the whole pages inside `cells`, `None` when no
     /// page fits. Panics like slice indexing past `len`.
     fn inner_pages(&self, cells: Range<usize>) -> Option<(usize, usize)> {
+        self.check_range(&cells);
+        let page = sys::page_size();
+        let start = (cells.start * size_of::<Cell>()).next_multiple_of(page);
+        let end = cells.end * size_of::<Cell>() / page * page;
+        (start < end).then(|| (start, end - start))
+    }
+
+    /// The byte span of every page `cells` touches, `None` when it is
+    /// empty. Inside the mapping, which is whole pages covering `len`.
+    fn outer_pages(&self, cells: Range<usize>) -> Option<(usize, usize)> {
+        self.check_range(&cells);
+        let page = sys::page_size();
+        let start = cells.start * size_of::<Cell>() / page * page;
+        let end = (cells.end * size_of::<Cell>()).next_multiple_of(page);
+        (cells.start < cells.end).then(|| (start, end - start))
+    }
+
+    fn check_range(&self, cells: &Range<usize>) {
         assert!(cells.start <= cells.end, "range {cells:?} is reversed");
         assert!(
             cells.end <= self.len,
             "range {cells:?} out of bounds for {} cells",
             self.len
         );
-        let page = sys::page_size();
-        let start = (cells.start * size_of::<Cell>()).next_multiple_of(page);
-        let end = cells.end * size_of::<Cell>() / page * page;
-        (start < end).then(|| (start, end - start))
     }
 
     #[cfg(windows)]
@@ -178,6 +205,38 @@ impl PagedCells {
             self.committed = want;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+impl PagedCells {
+    fn track_discard(&mut self, offset: usize, bytes: usize) {
+        let page = sys::page_size();
+        self.discarded
+            .extend(offset / page..(offset + bytes) / page);
+    }
+
+    fn track_reuse(&mut self, offset: usize, bytes: usize) {
+        let page = sys::page_size();
+        for index in offset / page..(offset + bytes) / page {
+            self.discarded.remove(&index);
+        }
+    }
+
+    /// Whether a page under `cells` is discarded and not reused since.
+    pub(crate) fn has_discarded_page(&self, cells: Range<usize>) -> bool {
+        let page = sys::page_size();
+        self.outer_pages(cells).is_some_and(|(offset, bytes)| {
+            self.discarded
+                .range(offset / page..(offset + bytes) / page)
+                .next()
+                .is_some()
+        })
+    }
+
+    /// Pages discarded and not reused since.
+    pub(crate) fn discarded_pages(&self) -> usize {
+        self.discarded.len()
     }
 }
 
@@ -290,6 +349,22 @@ pub(crate) fn resident_pages(cells: &PagedCells) -> usize {
     };
     assert_eq!(rc, 0, "mincore: {}", io::Error::last_os_error());
     vec.iter().filter(|b| *b & 1 != 0).count()
+}
+
+/// What macOS charges the process for memory (`phys_footprint`): a page
+/// `MADV_FREE_REUSABLE` handed back stops counting until it is reused.
+#[cfg(all(test, target_os = "macos"))]
+pub(crate) fn phys_footprint() -> u64 {
+    // SAFETY: `rusage_info_v2` is plain integers, for which all-zero
+    // bytes are a valid value.
+    let mut info: libc::rusage_info_v2 = unsafe { std::mem::zeroed() };
+    // SAFETY: `RUSAGE_INFO_V2` fills exactly a `rusage_info_v2`, which
+    // the pointer addresses; the call reads nothing through it.
+    let rc = unsafe {
+        libc::proc_pid_rusage(libc::getpid(), libc::RUSAGE_INFO_V2, (&raw mut info).cast())
+    };
+    assert_eq!(rc, 0, "proc_pid_rusage: {}", io::Error::last_os_error());
+    info.ri_phys_footprint
 }
 
 fn layout(cells: usize) -> Option<Layout> {

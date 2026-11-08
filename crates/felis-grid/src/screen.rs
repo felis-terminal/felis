@@ -7,7 +7,7 @@ use std::num::{NonZeroU16, NonZeroU32};
 
 use crate::cluster_table::ClusterTable;
 use crate::cold::ColdStore;
-use crate::compact::{RingMut, RingRef};
+use crate::compact::{GapReuse, RingMut, RingRef};
 use crate::damage::Damage;
 use crate::link_table::LinkTable;
 use crate::paged_cells::PagedCells;
@@ -73,9 +73,8 @@ pub struct ScreenBuffer {
     /// History older than the ring's, oldest first. Shares `cap` with
     /// `history_len`.
     pub(crate) cold: ColdStore,
-    /// The vacant rows' whole pages went back to the OS; set until a
-    /// vacant row turns live again.
-    pub(crate) gap_discarded: bool,
+    /// Which vacant rows may turn live before their pages are reused.
+    pub(crate) gap: GapReuse,
     /// `Some` while the alternate screen is active.
     pub(crate) saved_primary: Option<SavedScreen>,
     /// `?1047l` and `?1049l` drop this slot on leave (xterm: those modes
@@ -131,7 +130,7 @@ pub(crate) struct SavedScreen {
     pub(crate) history_len: usize,
     pub(crate) cap: usize,
     pub(crate) cold: ColdStore,
-    pub(crate) gap_discarded: bool,
+    pub(crate) gap: GapReuse,
     pub(crate) soft_wrap: Box<[bool]>,
     pub(crate) occupancy: Box<[u16]>,
     pub(crate) cursor: Cursor,
@@ -168,7 +167,7 @@ impl ScreenBuffer {
             phys_cap: usize::from(rows),
             history_len: 0,
             cold: ColdStore::default(),
-            gap_discarded: false,
+            gap: GapReuse::INTACT,
             saved_primary: None,
             saved_alternate: None,
             link_table: LinkTable::default(),
@@ -207,7 +206,7 @@ impl ScreenBuffer {
             rows: usize::from(self.rows),
             cols: usize::from(self.cols),
             cold: &mut self.cold,
-            gap_discarded: &mut self.gap_discarded,
+            gap: &mut self.gap,
         }
     }
 
@@ -319,7 +318,7 @@ impl SavedScreen {
             rows: usize::from(self.rows),
             cols: usize::from(self.cols),
             cold: &mut self.cold,
-            gap_discarded: &mut self.gap_discarded,
+            gap: &mut self.gap,
         }
     }
 }
@@ -348,7 +347,7 @@ impl Clone for ScreenBuffer {
             phys_cap: self.phys_cap,
             history_len: self.history_len,
             cold: self.cold.clone(),
-            gap_discarded: false,
+            gap: GapReuse::INTACT,
             saved_primary: self.saved_primary.clone(),
             saved_alternate: self.saved_alternate.clone(),
             link_table: self.link_table.clone(),
@@ -372,7 +371,7 @@ impl Clone for SavedScreen {
             history_len: self.history_len,
             cap: self.cap,
             cold: self.cold.clone(),
-            gap_discarded: false,
+            gap: GapReuse::INTACT,
             soft_wrap: self.soft_wrap.clone(),
             occupancy: self.occupancy.clone(),
             cursor: self.cursor,
@@ -711,7 +710,7 @@ impl ScreenBuffer {
         self.phys_cap = phys_cap;
         self.history_len = history_len;
         self.cold.clear();
-        self.gap_discarded = false;
+        self.gap = GapReuse::INTACT;
         // Callers read `viewport` through the band-aware accessors, so
         // the fresh layout carries no rotation.
         self.band_len = 0;
