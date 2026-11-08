@@ -6697,6 +6697,50 @@ mod tests {
         );
     }
 
+    /// A window is sent no prompt marks, so a pull whose cycle would
+    /// have carried only a mark is an empty cycle: nothing ships, the
+    /// marker included, and the pull stays armed. An `Ops` pull in the
+    /// same pass is answered with the mark and closed by the marker.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_mark_only_cycle_leaves_a_window_pull_armed_and_answers_an_ops_pull() {
+        let mut task = SessionTask::for_tests(session_with("read _x"));
+        let (window, mut window_rx) = attach_sub(&mut task, true);
+        let (ops, mut ops_rx) = attach_sub_as(&mut task, ConnectionMode::Ops, true);
+        drain_events(&mut window_rx);
+        drain_events(&mut ops_rx);
+
+        felis_vt::Parser::new().advance(&mut task.session.lock_core().grid, b"\x1b]133;A\x07");
+        task.handle_input(window, InputMsg::NextGridFrame);
+        task.handle_input(ops, InputMsg::NextGridFrame);
+        task.ship_all();
+
+        let window_events = drain_events(&mut window_rx);
+        assert!(
+            !window_events.iter().any(|ev| matches!(
+                ev,
+                OutEvent::Grid(GridMsg::PromptMark { .. } | GridMsg::CycleEnd)
+            )),
+            "a mark-only cycle is empty for a window: {window_events:?}"
+        );
+        let i = task.sub_index(window).expect("window still attached");
+        assert!(task.subs[i].pull_pending, "the window's pull stays armed");
+
+        let ops_grid: Vec<GridMsg> = drain_events(&mut ops_rx)
+            .into_iter()
+            .filter_map(|ev| match ev {
+                OutEvent::Grid(msg) => Some(msg),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            matches!(
+                ops_grid.as_slice(),
+                [GridMsg::PromptMark { .. }, GridMsg::CycleEnd]
+            ),
+            "the ops pull is answered and terminated: {ops_grid:?}"
+        );
+    }
+
     /// The cycle terminator closes a non-empty pull-paced cycle: one
     /// marker, after every message that cycle composed, whether the
     /// rows arrived in one `RowDelta` frame or several.

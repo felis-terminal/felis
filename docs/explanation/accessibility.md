@@ -72,11 +72,11 @@ redraws its own row, from output. The cost of taking the marks from the shell is
 without integration, a REPL) gets no announcements; its output stays readable through the screen reader's review
 commands.
 
-The daemon cuts the text while it parses the `D` mark, not the client after the mark reaches it. By the time a window
-handles a `D`, the same read can have carried the next prompt or, with typeahead, the next command's output, and output
-longer than a screen has scrolled out of the shadow the client holds. Only the parser sees the grid exactly as it stood
-at the `D` byte. Where the start of the output cannot be placed exactly anymore, because a program inserted lines above
-it or a resize re-wrapped the row it began inside, felis announces nothing rather than a guess.
+The daemon cuts the text while it parses the `D` mark, rather than shipping the mark for the client to cut on. By the
+time a window could handle a `D`, the same read can have carried the next prompt or, with typeahead, the next command's
+output, and output longer than a screen has scrolled out of the shadow the client holds. Only the parser sees the grid
+exactly as it stood at the `D` byte. Where the start of the output cannot be placed exactly anymore, because a program
+inserted lines above it or a resize re-wrapped the row it began inside, felis announces nothing rather than a guess.
 
 A window holds an announcement until output has been quiet for a moment instead of announcing per frame, because
 VoiceOver cuts a polite announcement off when the next one arrives. With typeahead, a shell writes the second command's

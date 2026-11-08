@@ -1146,8 +1146,8 @@ mod tests {
         );
     }
 
-    /// Pins: `PromptMark` (still shipped on rehydrate and live) applies
-    /// as a no-op.
+    /// Pins: `PromptMark`, which an older daemon still ships to a
+    /// window, applies as a no-op.
     #[test]
     fn prompt_mark_message_is_a_shadow_no_op_and_apply_succeeds() {
         use felis_protocol::messages::PromptKind;

@@ -326,7 +326,8 @@ pub(crate) struct DiffStreamState {
     pub(crate) last_cursor_blink: bool,
     /// Absolute ordinal in the never-pruned mark numbering, not a live
     /// index: the grid front-prunes evicted marks, so subtract
-    /// [`Grid::prompt_marks_pruned`] to index the retained slice.
+    /// [`Grid::prompt_marks_pruned`] to index the retained slice. Only
+    /// an `Ops` subscriber is sent marks; a window's stays at its seed.
     pub(crate) prompt_marks_sent: usize,
     pub(crate) last_mode_flags: felis_grid::ModeSnapshot,
     /// Scrollback offset this subscriber is browsing at (0 = live),
@@ -911,13 +912,6 @@ pub(crate) fn compose_rehydrate(
             name: Some(shape.to_owned()),
         }));
     }
-    for mark in grid.prompt_marks() {
-        out.push(OutEvent::Grid(GridMsg::PromptMark {
-            line: mark.line,
-            kind: mark.kind,
-            exit_code: mark.exit_code,
-        }));
-    }
     for channel in [
         ThemeChannel::Foreground,
         ThemeChannel::Background,
@@ -977,28 +971,13 @@ pub(crate) fn compose_diffs(
         out.push(OutEvent::Grid(mode_flags_msg(cur_modes)));
         sub.diff.last_mode_flags = cur_modes;
     }
-    // `prompt_marks_sent` is an absolute ordinal; the retained slice
-    // begins at ordinal `pruned`. A mark pruned before this subscriber
-    // caught up is unrecoverable, so clamp up rather than rewind into
-    // evicted territory.
-    let marks = grid.prompt_marks();
-    let pruned = usize::try_from(grid.prompt_marks_pruned()).unwrap_or(usize::MAX);
-    let end = pruned.saturating_add(marks.len());
-    let mut sent = sub.diff.prompt_marks_sent.max(pruned);
-    while sent < end {
-        let mark = marks[sent - pruned];
-        out.push(OutEvent::Grid(GridMsg::PromptMark {
-            line: mark.line,
-            kind: mark.kind,
-            exit_code: mark.exit_code,
-        }));
-        sent += 1;
-    }
-    sub.diff.prompt_marks_sent = sent;
     // Everything below is the grid itself and goes only to a mirroring
     // subscriber: an `Ops` connection is owed no registry entries, so a
-    // row shipped there could never be resolved.
+    // row shipped there could never be resolved. Prompt marks are the
+    // reverse: a window's prompt jump resolves daemon-side, and its
+    // shadow drops them.
     if !sub.mirrors_grid {
+        push_new_prompt_marks(grid, &mut sub.diff.prompt_marks_sent, out);
         sub.clear_scrolls();
         sub.damage.clear();
         return Ok(());
@@ -1165,6 +1144,25 @@ pub(crate) fn compose_diffs(
         drip_registry_tail(grid, &mut sub.sent, out);
     }
     Ok(())
+}
+
+/// Ship the marks recorded since ordinal `sent` and advance it.
+fn push_new_prompt_marks(grid: &Grid, sent: &mut usize, out: &mut Vec<OutEvent>) {
+    // `sent` is an absolute ordinal; the retained slice begins at
+    // ordinal `pruned`. A mark pruned before this subscriber caught up
+    // is unrecoverable, so clamp up rather than rewind into evicted
+    // territory.
+    let marks = grid.prompt_marks();
+    let pruned = usize::try_from(grid.prompt_marks_pruned()).unwrap_or(usize::MAX);
+    let end = pruned.saturating_add(marks.len());
+    for mark in &marks[(*sent).max(pruned).min(end) - pruned..] {
+        out.push(OutEvent::Grid(GridMsg::PromptMark {
+            line: mark.line,
+            kind: mark.kind,
+            exit_code: mark.exit_code,
+        }));
+    }
+    *sent = end;
 }
 
 /// Take single-consumer facets once for broadcast across all subscribers.
