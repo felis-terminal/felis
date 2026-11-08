@@ -111,7 +111,7 @@ impl ParseSignals {
         self.dirty.swap(false, Ordering::AcqRel)
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn is_dirty(&self) -> bool {
         self.dirty.load(Ordering::Acquire)
     }

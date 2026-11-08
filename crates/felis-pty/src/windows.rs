@@ -468,6 +468,7 @@ impl Master {
         None
     }
 
+    #[allow(clippy::unused_self, clippy::missing_const_for_fn)]
     pub(crate) fn peer_closed(&self) -> bool {
         false
     }
