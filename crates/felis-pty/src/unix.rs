@@ -74,17 +74,21 @@ impl Master {
         (raw > 0).then_some(raw)
     }
 
-    pub(crate) fn peer_closed(&self) -> bool {
+    /// `n_tty_poll` flushes the kernel's pending hand-off to the master's
+    /// queue before it answers, so bytes a write already returned for count
+    /// as queued; on macOS a slave write lands in that queue synchronously.
+    pub(crate) fn output_queued(&self) -> bool {
         let mut fds = [rustix::event::PollFd::new(
             &self.fd,
-            rustix::event::PollFlags::empty(),
+            rustix::event::PollFlags::IN,
         )];
         let zero = rustix::event::Timespec {
             tv_sec: 0,
             tv_nsec: 0,
         };
-        rustix::event::poll(&mut fds, Some(&zero)).is_ok()
-            && fds[0].revents().contains(rustix::event::PollFlags::HUP)
+        rustix::event::poll(&mut fds, Some(&zero)).map_or(true, |_| {
+            fds[0].revents().contains(rustix::event::PollFlags::IN)
+        })
     }
 }
 
@@ -127,7 +131,11 @@ impl Read for MasterReader {
                     let now = std::time::Instant::now();
                     let deadline = *spin_deadline.get_or_insert_with(|| now + READ_SPIN_WINDOW);
                     if now >= deadline {
-                        wait_for(&self.file, rustix::event::PollFlags::IN, &self.quiesce)?;
+                        self.quiesce.set_reader_idle(true);
+                        let waited =
+                            wait_for(&self.file, rustix::event::PollFlags::IN, &self.quiesce);
+                        self.quiesce.set_reader_idle(false);
+                        waited?;
                         spin_deadline = None;
                     } else {
                         // Keep the retries hot: each read(2) is what

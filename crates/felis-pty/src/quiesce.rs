@@ -14,6 +14,13 @@ use crate::{SinkShared, WriterState, poison};
 
 pub(crate) struct QuiesceShared {
     requested: AtomicBool,
+    /// Set while the reader waits for readable input, which it does only
+    /// after a read found none and with everything it read already handed
+    /// to the parser. A lock rather than an atomic: the reader clears it
+    /// before its next read, and a probe that saw that read's effect on
+    /// the kernel queue must also see the clear.
+    #[cfg(unix)]
+    reader_idle: Mutex<bool>,
     state: Mutex<ParkState>,
     resume: Condvar,
     #[cfg(unix)]
@@ -44,6 +51,8 @@ impl QuiesceShared {
     pub(crate) fn new() -> io::Result<Self> {
         Ok(Self {
             requested: AtomicBool::new(false),
+            #[cfg(unix)]
+            reader_idle: Mutex::new(false),
             state: Mutex::new(ParkState::default()),
             resume: Condvar::new(),
             #[cfg(unix)]
@@ -78,6 +87,14 @@ impl QuiesceShared {
 
     pub(crate) fn requested(&self) -> bool {
         self.requested.load(Ordering::Acquire)
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn set_reader_idle(&self, idle: bool) {
+        *self
+            .reader_idle
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = idle;
     }
 
     #[cfg(unix)]
@@ -130,6 +147,15 @@ impl QuiesceShared {
         state.unwritten.clear();
         state.held_total = 0;
     }
+}
+
+#[cfg(unix)]
+pub(crate) enum CaughtUp {
+    No,
+    /// Only as far as the reader had read: the master's queue may hold
+    /// more.
+    Idle,
+    AtEof,
 }
 
 /// A session's PTY threads, parked: the reader holds nothing it read,
@@ -192,6 +218,26 @@ impl Quiescer {
         drop(state);
         self.shared.resume.notify_all();
         Ok(())
+    }
+
+    /// Whether the parser has been through everything the reader read,
+    /// and the reader holds nothing: it is waiting for input after a read
+    /// found none, or it has reached the end of the stream.
+    #[cfg(unix)]
+    pub(crate) fn caught_up(&self) -> CaughtUp {
+        let Ok(reader_idle) = self.shared.reader_idle.lock().map(|idle| *idle) else {
+            return CaughtUp::No;
+        };
+        let Ok(sink) = self.sink.state.lock() else {
+            return CaughtUp::No;
+        };
+        if sink.eof && sink.parser_gone {
+            CaughtUp::AtEof
+        } else if reader_idle && sink.filling.is_empty() && sink.parser_parked {
+            CaughtUp::Idle
+        } else {
+            CaughtUp::No
+        }
     }
 
     #[cfg(windows)]

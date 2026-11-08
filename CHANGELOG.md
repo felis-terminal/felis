@@ -45,6 +45,9 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 
 ### Fixed
 
+- **CLI**: `felis sessions send --wait` ends with the exit code of an OSC 133 `D` mark the program printed just before
+  exiting, instead of `session_ended`, also when a process it left in the background still holds the terminal and on
+  macOS.
 - **Daemon**: on Linux with glibc, a resize or `CSI 3 J` returns the replaced scrollback ring's memory to the OS; from
   the third such cycle on, a freed ring stayed resident in the daemon (about 30 MB at 54×192).
 - **Platform**: on Linux, a window opened from an application launcher or a compositor keybinding takes focus under a
