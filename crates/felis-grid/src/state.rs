@@ -16,6 +16,7 @@ use crate::{
     HyperlinkEntry, KITTY_KBD_STACK_LIMIT, LinkText, Margins, NOTIFY_OUTBOX_CAP, PtyEffect,
     ScreenBuffer, ShellPrompt, Sizing, SizingHandle, StyleTable, SyncOutput, TITLE_STACK_LIMIT,
     images::{ImageEntry, ImageId},
+    paged_cells::PagedCells,
     pty_effects::{APC_OUTBOX_BYTES, APC_OUTBOX_CAP},
     screen::SavedScreen,
     wire::{MAX_CELLS_PER_ROW, ROW_CODEC_VERSION, RowEncode, decode_row, encode_row},
@@ -349,7 +350,7 @@ impl<'a> RingRef<'a> {
 }
 
 struct Ring {
-    cells: Vec<Cell>,
+    cells: PagedCells,
     soft_wrap: Box<[bool]>,
     occupancy: Box<[u16]>,
 }
@@ -378,14 +379,11 @@ impl RingDump {
             return Err("ring geometry".to_owned());
         }
         let len = self.phys_cap * cols;
-        let mut cells = Vec::new();
         // The reservation `ring_cells` takes, so history growth after the
         // restore never reallocates either.
         let reserve = ring_rows.checked_mul(cols).ok_or("ring capacity")?;
-        cells
-            .try_reserve_exact(reserve.max(len))
-            .map_err(|err| err.to_string())?;
-        cells.resize(len, Cell::default());
+        let mut cells =
+            PagedCells::try_with_reserve(len, reserve).map_err(|err| err.to_string())?;
         let mut soft_wrap = vec![false; self.phys_cap].into_boxed_slice();
         let mut occupancy = vec![0u16; self.phys_cap].into_boxed_slice();
         let pens = tables.styles.len();

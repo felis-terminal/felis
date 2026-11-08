@@ -752,3 +752,68 @@ fn a_style_sweep_leaves_the_pen_memo_resolving_to_the_live_pen() {
         "the pen memo stopped resolving to the live pen after a sweep",
     );
 }
+
+/// Colored lines, every fifth one long enough to soft-wrap.
+fn styled_lines(lines: std::ops::Range<usize>, cols: usize) -> Vec<u8> {
+    let mut out = Vec::new();
+    for i in lines {
+        let width = if i % 5 == 0 { cols + 7 } else { i % cols };
+        out.extend_from_slice(
+            format!("\x1b[3{}m{i}:{}\x1b[0m\r\n", i % 8, "x".repeat(width)).as_bytes(),
+        );
+    }
+    out
+}
+
+/// Every row the grid's accessors expose, history first, with its wrap bit.
+fn read_back(g: &Grid) -> Vec<(Vec<Cell>, bool)> {
+    g.rows_with_wrap(AltScreenRows::Include)
+        .map(|(cells, wrap)| (cells.to_vec(), wrap))
+        .collect()
+}
+
+/// Two grids fed the same full ring; the first then discards every whole
+/// page of its cell buffer.
+fn discarded_and_twin(fail: bool) -> (Parser, Grid, Parser, Grid, std::io::Result<()>) {
+    let (rows, cols, cap) = (6u16, 80usize, 60usize);
+    let first = styled_lines(0..cap + 40, cols);
+    let (mut p, mut g) = (Parser::new(), Grid::with_scrollback(rows, cols as u16, cap));
+    let (mut tp, mut twin) = (Parser::new(), Grid::with_scrollback(rows, cols as u16, cap));
+    drive(&mut p, &mut g, &first);
+    drive(&mut tp, &mut twin, &first);
+    assert_eq!(g.scrollback().len(), cap, "the ring is full");
+    let len = g.screen.cells.len();
+    paged_cells::fail_discards(fail);
+    let discarded = g.screen.cells.discard(0..len);
+    paged_cells::fail_discards(false);
+    (p, g, tp, twin, discarded)
+}
+
+/// A discarded range reads back unspecified until rewritten, so the check
+/// runs after output has recycled every physical row, and only through the
+/// grid's accessors.
+#[test]
+fn a_discarded_ring_rewritten_by_output_reads_like_its_twin() {
+    let (mut p, mut g, mut tp, mut twin, discarded) = discarded_and_twin(false);
+    discarded.expect("discard");
+    let second = styled_lines(1000..1100, 80);
+    drive(&mut p, &mut g, &second);
+    drive(&mut tp, &mut twin, &second);
+    assert_ring_consistent(&g);
+    assert_eq!(read_back(&g), read_back(&twin));
+    assert_eq!(g.cursor(), twin.cursor());
+}
+
+#[test]
+fn a_failed_discard_leaves_the_grid_unchanged_and_usable() {
+    let (mut p, mut g, mut tp, mut twin, discarded) = discarded_and_twin(true);
+    assert!(discarded.is_err());
+    assert_eq!(read_back(&g), read_back(&twin));
+    let more = styled_lines(1000..1030, 80);
+    drive(&mut p, &mut g, &more);
+    drive(&mut tp, &mut twin, &more);
+    g.resize(9, 50);
+    twin.resize(9, 50);
+    assert_ring_consistent(&g);
+    assert_eq!(read_back(&g), read_back(&twin));
+}

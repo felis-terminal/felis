@@ -42,6 +42,8 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 
 ### Fixed
 
+- **Daemon**: on Linux with glibc, a resize or `CSI 3 J` returns the replaced scrollback ring's memory to the OS; from
+  the third such cycle on, a freed ring stayed resident in the daemon (about 30 MB at 54×192).
 - **Platform**: on Linux, a window opened from an application launcher or a compositor keybinding takes focus under a
   compositor that prevents focus stealing: the client passes the launcher's activation token (`XDG_ACTIVATION_TOKEN` on
   Wayland, `DESKTOP_STARTUP_ID` on X11) to its window, and the desktop entry declares `StartupNotify=true` so launchers
