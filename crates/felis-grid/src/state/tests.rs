@@ -3,31 +3,11 @@ use proptest::prelude::*;
 
 use super::*;
 
-/// What a dump promises to keep: everything but the bytes past each
-/// row's occupancy, which no reader looks at, the fast-path hint a
-/// stale sized cell there can hold up, and the instant of a sync
+/// What a dump promises to keep: what every reader sees, though not
+/// the ring layout (`normalized`), and not the instant of a sync
 /// deadline, which moves with the clock it is measured on.
 fn canonical(grid: &Grid) -> Grid {
-    fn blank_tails(cells: &mut [Cell], cols: u16, occupancy: &[u16]) {
-        let cols = usize::from(cols);
-        for (row, &occupied) in occupancy.iter().enumerate() {
-            let start = row * cols + usize::from(occupied);
-            cells[start..(row + 1) * cols].fill(Cell::default());
-        }
-    }
-    let mut grid = grid.clone();
-    let screen = &mut grid.screen;
-    blank_tails(&mut screen.cells, screen.cols, &screen.occupancy);
-    for saved in [
-        screen.saved_primary.as_mut(),
-        screen.saved_alternate.as_mut(),
-    ]
-    .into_iter()
-    .flatten()
-    {
-        blank_tails(&mut saved.cells, saved.cols, &saved.occupancy);
-    }
-    screen.refresh_has_sized_cells();
+    let mut grid = crate::test_support::normalized(grid);
     if let SyncOutput::On { deadline } = &mut grid.sync_output {
         *deadline = None;
     }

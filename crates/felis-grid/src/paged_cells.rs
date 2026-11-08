@@ -117,10 +117,6 @@ impl PagedCells {
     /// `Cell::default()`, so callers treat the range as unspecified. A
     /// failure changes nothing. Call [`Self::reuse`] before the range holds
     /// live cells again (macOS accounts for it there).
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "no production caller discards yet")
-    )]
     pub(crate) fn discard(&mut self, cells: Range<usize>) -> io::Result<()> {
         let Some((offset, bytes)) = self.inner_pages(cells) else {
             return Ok(());
@@ -140,10 +136,6 @@ impl PagedCells {
     /// Tells the OS a discarded range is live again (macOS
     /// `MADV_FREE_REUSE`, which restores its accounting); a no-op where
     /// the discard needs no pairing.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "no production caller discards yet")
-    )]
     pub(crate) fn reuse(&mut self, cells: Range<usize>) -> io::Result<()> {
         let Some((offset, bytes)) = self.inner_pages(cells) else {
             return Ok(());
@@ -155,10 +147,6 @@ impl PagedCells {
 
     /// The byte span of the whole pages inside `cells`, `None` when no
     /// page fits. Panics like slice indexing past `len`.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "no production caller discards yet")
-    )]
     fn inner_pages(&self, cells: Range<usize>) -> Option<(usize, usize)> {
         assert!(cells.start <= cells.end, "range {cells:?} is reversed");
         assert!(
@@ -169,7 +157,7 @@ impl PagedCells {
         let page = sys::page_size();
         let start = (cells.start * size_of::<Cell>()).next_multiple_of(page);
         let end = cells.end * size_of::<Cell>() / page * page;
-        (start < end).then_some((start, end - start))
+        (start < end).then(|| (start, end - start))
     }
 
     #[cfg(windows)]
@@ -270,6 +258,40 @@ impl fmt::Debug for PagedCells {
     }
 }
 
+/// The OS page size, the granularity [`PagedCells::discard`] works in.
+#[cfg_attr(
+    not(any(unix, windows)),
+    expect(
+        clippy::missing_const_for_fn,
+        reason = "only the mapping-less fallback knows its page size at compile time"
+    )
+)]
+pub(crate) fn page_bytes() -> usize {
+    sys::page_size()
+}
+
+/// Resident pages of the buffer, as `mincore` counts them: a page a read
+/// faulted back in as the shared zero page counts too.
+#[cfg(all(test, target_os = "linux"))]
+pub(crate) fn resident_pages(cells: &PagedCells) -> usize {
+    let pages = (cells.len() * size_of::<Cell>()).div_ceil(sys::page_size());
+    if pages == 0 {
+        return 0;
+    }
+    let mut vec = vec![0u8; pages];
+    // SAFETY: the span is this buffer's mapping (page-aligned start,
+    // `pages` whole pages inside it) and `vec` has one byte per page.
+    let rc = unsafe {
+        libc::mincore(
+            cells.as_ptr().cast_mut().cast(),
+            pages * sys::page_size(),
+            vec.as_mut_ptr(),
+        )
+    };
+    assert_eq!(rc, 0, "mincore: {}", io::Error::last_os_error());
+    vec.iter().filter(|b| *b & 1 != 0).count()
+}
+
 fn layout(cells: usize) -> Option<Layout> {
     Layout::array::<Cell>(cells).ok()
 }
@@ -335,16 +357,8 @@ mod sys {
     }
 
     #[cfg(target_os = "macos")]
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "no production caller discards yet")
-    )]
     const DISCARD: libc::c_int = libc::MADV_FREE_REUSABLE;
     #[cfg(not(target_os = "macos"))]
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "no production caller discards yet")
-    )]
     const DISCARD: libc::c_int = libc::MADV_DONTNEED;
 
     /// # Safety
@@ -352,10 +366,6 @@ mod sys {
     /// mapping. Linux refaults them as zero pages; macOS lets the kernel
     /// take them, after which they read as zero or as what they held.
     /// Neither advice unmaps or protects anything.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "no production caller discards yet")
-    )]
     pub(super) unsafe fn discard(ptr: *mut u8, bytes: usize) -> io::Result<()> {
         // SAFETY: forwarded from the caller's contract.
         let rc = unsafe { libc::madvise(ptr.cast(), bytes, DISCARD) };
@@ -369,10 +379,6 @@ mod sys {
     /// # Safety
     /// As for [`discard`]; `MADV_FREE_REUSE` changes no byte.
     #[cfg(target_os = "macos")]
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "no production caller discards yet")
-    )]
     pub(super) unsafe fn reuse(ptr: *mut u8, bytes: usize) -> io::Result<()> {
         // SAFETY: forwarded from the caller's contract.
         let rc = unsafe { libc::madvise(ptr.cast(), bytes, libc::MADV_FREE_REUSE) };
@@ -387,10 +393,6 @@ mod sys {
     /// None: Linux's discard needs no pairing.
     #[cfg(not(target_os = "macos"))]
     #[allow(clippy::unnecessary_wraps)]
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "no production caller discards yet")
-    )]
     pub(super) const unsafe fn reuse(_ptr: *mut u8, _bytes: usize) -> io::Result<()> {
         Ok(())
     }
@@ -453,10 +455,6 @@ mod sys {
     /// from [`reserve`]. Both `DiscardVirtualMemory` and `MEM_RESET` keep
     /// the pages committed and accessible; their contents become zero or
     /// stay as they were.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "no production caller discards yet")
-    )]
     pub(super) unsafe fn discard(ptr: *mut u8, bytes: usize) -> io::Result<()> {
         // SAFETY: forwarded from the caller's contract.
         if unsafe { DiscardVirtualMemory(ptr.cast(), bytes) } == 0 {
@@ -474,10 +472,6 @@ mod sys {
     /// # Safety
     /// None: Windows' discard needs no pairing.
     #[allow(clippy::unnecessary_wraps)]
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "no production caller discards yet")
-    )]
     pub(super) const unsafe fn reuse(_ptr: *mut u8, _bytes: usize) -> io::Result<()> {
         Ok(())
     }
@@ -521,10 +515,6 @@ mod sys {
     /// # Safety
     /// None: nothing is handed back.
     #[allow(clippy::unnecessary_wraps)]
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "no production caller discards yet")
-    )]
     pub(super) const unsafe fn discard(_ptr: *mut u8, _bytes: usize) -> io::Result<()> {
         Ok(())
     }
@@ -532,10 +522,6 @@ mod sys {
     /// # Safety
     /// None.
     #[allow(clippy::unnecessary_wraps)]
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "no production caller discards yet")
-    )]
     pub(super) const unsafe fn reuse(_ptr: *mut u8, _bytes: usize) -> io::Result<()> {
         Ok(())
     }

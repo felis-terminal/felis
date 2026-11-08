@@ -12,9 +12,11 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 pub use felis_vt::state::StateError;
 
 use crate::{
-    ApcBody, Attributes, Cell, ClusterText, Cursor, CursorStyle, Damage, Grapheme, Grid,
-    HyperlinkEntry, KITTY_KBD_STACK_LIMIT, LinkText, Margins, NOTIFY_OUTBOX_CAP, PtyEffect,
-    ScreenBuffer, ShellPrompt, Sizing, SizingHandle, StyleTable, SyncOutput, TITLE_STACK_LIMIT,
+    ApcBody, Attributes, ClusterText, Cursor, CursorStyle, Damage, Grapheme, Grid, HyperlinkEntry,
+    KITTY_KBD_STACK_LIMIT, LinkText, Margins, NOTIFY_OUTBOX_CAP, PtyEffect, ScreenBuffer,
+    ShellPrompt, Sizing, SizingHandle, StyleTable, SyncOutput, TITLE_STACK_LIMIT,
+    cold::ColdStore,
+    compact::RingRef,
     images::{ImageEntry, ImageId},
     paged_cells::PagedCells,
     pty_effects::{APC_OUTBOX_BYTES, APC_OUTBOX_CAP},
@@ -281,72 +283,43 @@ struct ScreenDump {
     scroll_seq: u64,
 }
 
-struct RingRef<'a> {
-    rows: u16,
-    cols: u16,
-    base: usize,
-    phys_cap: usize,
-    history_len: usize,
-    cap: usize,
-    cells: &'a [Cell],
-    soft_wrap: &'a [bool],
-    occupancy: &'a [u16],
-}
-
-impl<'a> RingRef<'a> {
-    fn of_saved(saved: &'a SavedScreen) -> Self {
-        Self {
-            rows: saved.rows,
-            cols: saved.cols,
-            base: saved.base,
-            phys_cap: saved.phys_cap,
-            history_len: saved.history_len,
-            cap: saved.cap,
-            cells: &saved.cells,
-            soft_wrap: &saved.soft_wrap,
-            occupancy: &saved.occupancy,
-        }
-    }
-
-    fn dump(&self, styles: &StyleTable) -> Result<RingDump, String> {
-        let cols = usize::from(self.cols);
-        let mut cells = Vec::with_capacity(self.phys_cap);
-        let mut sizings = Vec::new();
-        for row in 0..self.phys_cap {
-            let start = row * cols;
-            let occupied = usize::from(self.occupancy.get(row).copied().unwrap_or(0));
-            let slice = self
-                .cells
-                .get(start..start + occupied)
-                .ok_or("a ring row past its cells")?;
-            let payload = encode_row(
-                RowEncode {
-                    cells: slice,
-                    pad_to: occupied,
-                    sized_cells: &[],
-                    soft_wrap_continued: self.soft_wrap.get(row).copied().unwrap_or(false),
-                },
-                styles,
-            )
-            .map_err(|err| err.to_string())?;
-            cells.push(felis_vt::state::b64::encode(&payload));
-            for (col, cell) in slice.iter().enumerate() {
-                if let Some(handle) = cell.sizing {
-                    sizings.push((row, col as u16, handle.get()));
-                }
+/// Writes `ring` laid out densely (`RingRef::canonical_rows`): history at
+/// `[0, history_len)`, cold rows first, then the viewport. The format is
+/// the one a ring with no cold tier always had, so either side of an
+/// upgrade reads it, and no vacant row is read.
+fn dump_ring(ring: &RingRef<'_>, cap: usize, styles: &StyleTable) -> Result<RingDump, String> {
+    let history_len = ring.cold.len() + ring.history_len;
+    let phys_cap = history_len + ring.rows;
+    let mut cells = Vec::with_capacity(phys_cap);
+    let mut sizings = Vec::new();
+    for (row, (slice, soft_wrap_continued)) in ring.canonical_rows().enumerate() {
+        let payload = encode_row(
+            RowEncode {
+                cells: slice,
+                pad_to: slice.len(),
+                sized_cells: &[],
+                soft_wrap_continued,
+            },
+            styles,
+        )
+        .map_err(|err| err.to_string())?;
+        cells.push(felis_vt::state::b64::encode(&payload));
+        for (col, cell) in slice.iter().enumerate() {
+            if let Some(handle) = cell.sizing {
+                sizings.push((row, col as u16, handle.get()));
             }
         }
-        Ok(RingDump {
-            rows: self.rows,
-            cols: self.cols,
-            base: self.base,
-            phys_cap: self.phys_cap,
-            history_len: self.history_len,
-            cap: self.cap,
-            cells,
-            sizings,
-        })
     }
+    Ok(RingDump {
+        rows: u16::try_from(ring.rows).map_err(|_| "ring rows")?,
+        cols: u16::try_from(ring.cols).map_err(|_| "ring cols")?,
+        base: history_len,
+        phys_cap,
+        history_len,
+        cap,
+        cells,
+        sizings,
+    })
 }
 
 struct Ring {
@@ -432,7 +405,7 @@ impl RingDump {
 impl SavedDump {
     fn of(saved: &SavedScreen, styles: &StyleTable) -> Result<Self, String> {
         Ok(Self {
-            ring: RingRef::of_saved(saved).dump(styles)?,
+            ring: dump_ring(&saved.ring(), saved.cap, styles)?,
             cursor: saved.cursor,
             pen: saved.pen,
         })
@@ -451,6 +424,8 @@ impl SavedDump {
             phys_cap: self.ring.phys_cap,
             history_len: self.ring.history_len,
             cap: self.ring.cap,
+            cold: ColdStore::default(),
+            gap_discarded: false,
             soft_wrap: ring.soft_wrap,
             occupancy: ring.occupancy,
             cursor: self.cursor,
@@ -462,18 +437,7 @@ impl SavedDump {
 impl ScreenDump {
     fn of(screen: &ScreenBuffer) -> Result<Self, String> {
         let styles = &screen.style_table;
-        let ring = RingRef {
-            rows: screen.rows,
-            cols: screen.cols,
-            base: screen.base,
-            phys_cap: screen.phys_cap,
-            history_len: screen.history_len,
-            cap: screen.cap,
-            cells: &screen.cells,
-            soft_wrap: &screen.soft_wrap,
-            occupancy: &screen.occupancy,
-        }
-        .dump(styles)?;
+        let ring = dump_ring(&screen.ring(), screen.cap, styles)?;
         let links = (1..=screen.link_table.len())
             .map(|handle| {
                 let entry = u16::try_from(handle)
@@ -595,6 +559,8 @@ impl ScreenDump {
             cap: self.ring.cap,
             phys_cap: self.ring.phys_cap,
             history_len: self.ring.history_len,
+            cold: ColdStore::default(),
+            gap_discarded: false,
             saved_primary,
             saved_alternate,
             link_table,

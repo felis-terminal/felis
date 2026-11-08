@@ -316,7 +316,9 @@ pub enum ProgramStatusEffect {
 /// capture --ansi`, and the host-terminal clients.
 pub mod ansi;
 mod cluster_table;
+mod cold;
 mod command_output;
+mod compact;
 mod damage;
 mod editing;
 pub mod image_layout;
@@ -1403,6 +1405,15 @@ impl Grid {
         self.scrollback_total_pushed
     }
 
+    /// Moves up to `max_rows` of the primary's history rows older than one
+    /// screen of history out of the ring into the cold tier, packed at
+    /// their occupancy, and hands the ring pages they vacate back to the
+    /// OS. No reader can tell the two tiers apart. `true` once nothing is
+    /// left to move; a later call resumes where this one stopped.
+    pub fn compact_history(&mut self, max_rows: usize) -> bool {
+        self.screen.compact_history(max_rows)
+    }
+
     /// Resolve a [`PromptMark::line`] to its current location
     /// (`docs/explanation/data-model/scrollback.md` "Prompt marks (OSC 133)").
     /// The live screen occupies absolute lines
@@ -1774,6 +1785,8 @@ impl Grid {
         // never populate `saved_alternate` on leave.
         let restored_alt = self.screen.saved_alternate.take();
         let resumed = restored_alt.is_some();
+        let saved_cold = std::mem::take(&mut self.screen.cold);
+        let saved_gap_discarded = std::mem::take(&mut self.screen.gap_discarded);
         let blank_cells = || {
             let len = usize::from(self.screen.rows) * usize::from(self.screen.cols);
             PagedCells::with_reserve(len, len)
@@ -1836,6 +1849,8 @@ impl Grid {
             phys_cap: saved_phys_cap,
             history_len: saved_history_len,
             cap: saved_cap,
+            cold: saved_cold,
+            gap_discarded: saved_gap_discarded,
             cursor: self.screen.cursor,
             pen: self.pen,
         });
@@ -1885,6 +1900,11 @@ impl Grid {
                 phys_cap: std::mem::replace(&mut self.screen.phys_cap, saved.phys_cap),
                 history_len: std::mem::replace(&mut self.screen.history_len, saved.history_len),
                 cap: std::mem::replace(&mut self.screen.cap, saved.cap),
+                cold: std::mem::replace(&mut self.screen.cold, saved.cold),
+                gap_discarded: std::mem::replace(
+                    &mut self.screen.gap_discarded,
+                    saved.gap_discarded,
+                ),
                 cursor: self.screen.cursor,
                 pen: self.pen,
             });
@@ -1901,6 +1921,8 @@ impl Grid {
             self.screen.phys_cap = saved.phys_cap;
             self.screen.history_len = saved.history_len;
             self.screen.cap = saved.cap;
+            self.screen.cold = saved.cold;
+            self.screen.gap_discarded = saved.gap_discarded;
         }
         self.screen.refresh_has_sized_cells();
         if restore_cursor {
@@ -2560,6 +2582,9 @@ impl Grid {
         let rows = usize::from(self.screen.rows);
         let blank_is_default = *blank_with == Cell::default();
         for _ in 0..n {
+            if self.screen.gap_discarded {
+                self.screen.ring_mut().reuse_gap();
+            }
             // Grow before the base moves, or the recycle-blank below
             // would clobber the row about to become history-youngest.
             if self.screen.history_len < self.screen.cap
@@ -2573,6 +2598,13 @@ impl Grid {
                 self.screen.base + 1
             };
             self.screen.history_len = (self.screen.history_len + 1).min(self.screen.cap);
+            // The cold tier holds the oldest rows, so the cap evicts there
+            // first; a full ring has none left in it.
+            if !self.screen.cold.is_empty()
+                && self.screen.cold.len() + self.screen.history_len > self.screen.cap
+            {
+                self.screen.cold.pop_front();
+            }
             let bottom = self.screen.phys_row_at(rows - 1);
             let start = bottom * cols;
             if blank_is_default {
@@ -2629,6 +2661,7 @@ impl Grid {
     /// `rows * cols` ring, preserving the visible screen exactly.
     fn drop_history(&mut self) {
         if self.screen.history_len == 0
+            && self.screen.cold.is_empty()
             && self.screen.base == 0
             && self.screen.phys_cap == usize::from(self.screen.rows)
         {
@@ -2653,6 +2686,8 @@ impl Grid {
         self.screen.base = 0;
         self.screen.phys_cap = rows;
         self.screen.history_len = 0;
+        self.screen.cold.clear();
+        self.screen.gap_discarded = false;
         self.screen.band_len = 0;
         self.screen.band_rot = 0;
     }
@@ -2681,6 +2716,8 @@ pub enum AltScreenRows {
 /// occupancy-clipped: a history row's tail past the watermark is
 /// undefined, so the view hands back only the live prefix.
 pub struct ScrollbackView<'a> {
+    /// Rows older than the ring's: indices `[0, cold.len())`.
+    cold: &'a cold::ColdStore,
     cells: &'a [Cell],
     soft_wrap: &'a [bool],
     occupancy: &'a [u16],
@@ -2692,41 +2729,47 @@ pub struct ScrollbackView<'a> {
 
 impl<'a> ScrollbackView<'a> {
     #[must_use]
-    pub const fn len(&self) -> usize {
-        self.history_len
+    pub fn len(&self) -> usize {
+        self.cold.len() + self.history_len
     }
 
     #[must_use]
-    pub const fn is_empty(&self) -> bool {
-        self.history_len == 0
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 
     /// History row `idx_from_oldest`, occupancy-clipped, or `None` past
-    /// the retained ring.
+    /// the retained history.
     #[must_use]
     pub fn row(&self, idx_from_oldest: usize) -> Option<&'a [Cell]> {
-        if idx_from_oldest >= self.history_len {
+        let Some(idx) = idx_from_oldest.checked_sub(self.cold.len()) else {
+            return self.cold.row(idx_from_oldest);
+        };
+        if idx >= self.history_len {
             return None;
         }
-        let phys = hist_phys_of(self.base, self.phys_cap, self.history_len, idx_from_oldest);
+        let phys = hist_phys_of(self.base, self.phys_cap, self.history_len, idx);
         let start = phys * self.cols;
         let occ = usize::from(self.occupancy[phys]).min(self.cols);
         Some(&self.cells[start..start + occ])
     }
 
     #[must_use]
-    pub const fn soft_wrap_continued(&self, idx_from_oldest: usize) -> Option<bool> {
-        if idx_from_oldest >= self.history_len {
+    pub fn soft_wrap_continued(&self, idx_from_oldest: usize) -> Option<bool> {
+        let Some(idx) = idx_from_oldest.checked_sub(self.cold.len()) else {
+            return self.cold.soft_wrap(idx_from_oldest);
+        };
+        if idx >= self.history_len {
             return None;
         }
-        let phys = hist_phys_of(self.base, self.phys_cap, self.history_len, idx_from_oldest);
+        let phys = hist_phys_of(self.base, self.phys_cap, self.history_len, idx);
         Some(self.soft_wrap[phys])
     }
 
     /// Iterate history rows oldest to newest, occupancy-clipped.
     pub fn iter(&self) -> impl Iterator<Item = &'a [Cell]> {
         let this = ScrollbackView { ..*self };
-        (0..self.history_len).map(move |i| this.row(i).unwrap_or(&[]))
+        (0..self.len()).map(move |i| this.row(i).unwrap_or(&[]))
     }
 }
 
@@ -3175,6 +3218,8 @@ fn osc8_scheme_allowed(uri: &str) -> bool {
         .any(|allowed| scheme.eq_ignore_ascii_case(allowed))
 }
 
+#[cfg(test)]
+mod cold_tier_tests;
 #[cfg(test)]
 mod scrollback_tests;
 #[cfg(test)]
