@@ -30,8 +30,8 @@ use reattach::{Reattach, Window};
 
 use workload::{
     COLS, PTY_CHUNK_SIZE, REFLOW_NARROW_COLS, REFLOW_WIDE_COLS, ROWS, STREAM_BYTES, apply_diffs,
-    csi_redraw, emit_diffs_with, plaintext_scroll, reflow_and_replay, reflow_history_grid,
-    repeat_to, shell_prompt,
+    csi_redraw, emit_diffs_with, full_history_grid, plaintext_scroll, reflow_and_replay,
+    reflow_history_grid, repeat_to, shell_prompt,
 };
 
 fn emit_diffs(grid: &mut Grid, scratch: &mut Vec<u8>) {
@@ -79,6 +79,28 @@ fn bench_throughput(c: &mut Criterion) {
             });
         }
         daemon.finish();
+    }
+
+    {
+        let mut group = c.benchmark_group("scroll_full_history");
+        let bytes = plaintext_scroll();
+        group.throughput(Throughput::Bytes(bytes.len() as u64));
+        for (name, compact) in [("full_ring", false), ("compacted", true)] {
+            group.bench_function(name, |b| {
+                let mut scratch: Vec<u8> = Vec::with_capacity(128 * 1024);
+                b.iter_batched(
+                    // A clone has no discarded gap to reclaim on its first line feed.
+                    || (Parser::new(), full_history_grid(compact)),
+                    |(mut parser, mut grid)| {
+                        parser.advance(&mut grid, black_box(&bytes));
+                        emit_diffs(&mut grid, &mut scratch);
+                        grid
+                    },
+                    BatchSize::LargeInput,
+                );
+            });
+        }
+        group.finish();
     }
 
     {

@@ -22,11 +22,12 @@ pub(crate) const STREAM_BYTES: usize = 4 * 1024;
 /// `compose_diffs` per chunk of this size.
 pub(crate) const PTY_CHUNK_SIZE: usize = 8 * 1024;
 
+const PLAINTEXT_LINE: &[u8] = b"the quick brown fox jumps over the lazy dog\n";
+
 pub(crate) fn plaintext_scroll() -> Vec<u8> {
-    let line = b"the quick brown fox jumps over the lazy dog\n";
     let mut out = Vec::with_capacity(STREAM_BYTES);
     while out.len() < STREAM_BYTES {
-        out.extend_from_slice(line);
+        out.extend_from_slice(PLAINTEXT_LINE);
     }
     out.truncate(STREAM_BYTES);
     out
@@ -97,6 +98,23 @@ pub(crate) fn reflow_history_grid() -> Grid {
         parser.advance(&mut grid, &cycle);
     }
     assert_eq!(grid.scrollback().len(), grid.scrollback_capacity());
+    drop(grid.take_pty_effects());
+    grid.damage_mut().clear();
+    grid
+}
+
+/// A long-lived session's next burst of output scrolls a full ring;
+/// `compact` first moves its history to the cold tier, as the daemon does
+/// while the session idles, so each line feed also evicts a cold row.
+pub(crate) fn full_history_grid(compact: bool) -> Grid {
+    let mut parser = Parser::new();
+    let mut grid = Grid::new(ROWS, COLS);
+    let lines = DEFAULT_SCROLLBACK_ROWS + usize::from(ROWS);
+    parser.advance(&mut grid, &PLAINTEXT_LINE.repeat(lines));
+    assert_eq!(grid.scrollback().len(), grid.scrollback_capacity());
+    if compact {
+        assert!(grid.compact_history(usize::MAX));
+    }
     drop(grid.take_pty_effects());
     grid.damage_mut().clear();
     grid
