@@ -522,7 +522,13 @@ async fn a_mark_that_arrives_while_the_connection_is_idle_is_delivered() {
         ops.wait_frame().await,
         WaitFrame::Sent(SendOutcome::Sent { id })
     );
-    assert!(ops.frame_within(1).await.is_none(), "nothing to report yet");
+    // A reply on the same connection: a mark queued ahead of it would
+    // be read first.
+    ops.request(&OpsToDaemonMsg::List).await;
+    assert!(
+        matches!(ops.ops_reply().await, OpsToClientMsg::Listed { .. }),
+        "nothing to report yet"
+    );
     open_gate(&gate).await;
     assert_eq!(ops.wait_frame().await, WaitFrame::Mark(Some(9)));
 }
@@ -652,7 +658,15 @@ async fn a_send_whose_connection_closes_mid_admission_writes_no_later_step() {
     let dir = private_dir();
     let gate = gate(dir.path());
     let received = dir.path().join("received");
-    let (_tmp, path, pool) = daemon(gated_sink(&gate, &received));
+    let tmp = private_dir();
+    let path = tmp.path().join("daemon.sock");
+    let pool = Arc::new(Mutex::new(SessionPool::new()));
+    let admission = ConnectionAdmission::new(8);
+    let caps = DaemonCaps {
+        admission: Arc::clone(&admission),
+        ..DaemonCaps::default()
+    };
+    spawn_daemon_with_caps(&path, Arc::clone(&pool), gated_sink(&gate, &received), caps);
     let mut ops = Peer::ops(&path).await;
     let id = ops.spawn().await;
 
@@ -668,9 +682,16 @@ async fn a_send_whose_connection_closes_mid_admission_writes_no_later_step() {
         .await;
     await_budget(&pool, id, PTY_INPUT_BUDGET).await;
     drop(sender);
-    // Long enough for the daemon to notice the hangup before the budget
-    // frees: a step admitted after it would be a write nobody asked for.
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    // The daemon must see the hangup before the budget frees: a step
+    // admitted after it would be a write nobody asked for.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    while admission.served() > 1 {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the daemon never noticed the hangup"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
     open_gate(&gate).await;
 
     await_file(&received, |b| b.len() >= PTY_INPUT_BUDGET).await;

@@ -1833,7 +1833,6 @@ async fn spawn_creates_session_and_id_is_addressable() {
     );
 
     let id = u128::from_str_radix(&id_hex, 16).expect("hex parse");
-    tokio::time::sleep(Duration::from_millis(50)).await;
     assert!(
         pool.lock().await.get(felis_daemon::SessionId(id)).is_some(),
         "spawned session must be in the pool under the printed id",
@@ -2606,9 +2605,32 @@ async fn a_target_that_disconnects_after_queue_admission_keeps_the_switch_result
     })
     .await
     .expect("no Reattach push within 5s");
-    // The window takes the push and goes away without attaching.
+    // The window takes the push and goes away without attaching. Its
+    // departure from `from` is the daemon's last word on it.
     drop(gui);
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    let attachments_of = |id: u128| {
+        let out = cli_command()
+            .arg("--socket")
+            .arg(&socket)
+            .args([
+                "sessions",
+                "info",
+                &format!("{id:032x}"),
+                "--format",
+                "json",
+            ])
+            .output()
+            .expect("run felis sessions info");
+        parse_point(&String::from_utf8_lossy(&out.stdout), "sessions info")["attachments"].clone()
+    };
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    while attachments_of(from) != serde_json::json!([]) {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the window never left its session"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
 
     let info = cli_command()
         .arg("--socket")

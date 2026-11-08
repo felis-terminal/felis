@@ -8,10 +8,41 @@ use tokio::sync::broadcast;
 
 use super::*;
 
-/// Long enough for a child that only prints to have printed; the
-/// assertions never depend on it being exact.
-const SETTLE: Duration = Duration::from_millis(300);
+/// Prints a prompt mark, then a title the held row's meta shows once
+/// the cycle that parsed the mark has run.
+const PROMPT_THEN_TITLE: &str = "printf '\\033]133;A\\007\\033]2;ready\\007'; exec sleep 30";
 const ITEM_DEADLINE: Duration = Duration::from_secs(10);
+
+/// The title lands in the meta mid-cycle, ahead of that cycle's
+/// observer items; the stats reply comes only after the cycle ends.
+async fn await_prompt_handled(pool: &Arc<Mutex<SessionPool>>, registered: &Registered) {
+    let deadline = tokio::time::Instant::now() + ITEM_DEADLINE;
+    loop {
+        let title = pool
+            .lock()
+            .await
+            .row_even_held(registered.id)
+            .and_then(|row| row.meta.lock().unwrap().title.clone());
+        if title.as_deref() == Some("ready") {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the held row never parsed its prompt"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let (reply, stats) = oneshot::channel();
+    assert!(
+        registered
+            .cmd
+            .send(SessionCmd::Stats { reply })
+            .await
+            .is_ok()
+    );
+    let answered = tokio::time::timeout(ITEM_DEADLINE, stats).await;
+    assert!(matches!(answered, Ok(Ok(_))), "the task answers");
+}
 
 fn quick_reap() -> DaemonCaps {
     DaemonCaps {
@@ -169,7 +200,7 @@ async fn a_session_killed_while_running_is_removed_without_an_exit() {
 async fn a_row_published_after_its_task_ended_is_still_added_and_removed() {
     let pool = Arc::new(Mutex::new(SessionPool::new()));
     let mut rx = pool.lock().await.subscribe_events();
-    let factory = shell_factory("printf '\\033]133;A\\007'; exec sleep 30");
+    let factory = shell_factory(PROMPT_THEN_TITLE);
     let caps = DaemonCaps::default();
     let (registered, info) = create_session(
         CreateCtx {
@@ -182,7 +213,7 @@ async fn a_row_published_after_its_task_ended_is_still_added_and_removed() {
     )
     .await
     .expect("the create must be admitted");
-    tokio::time::sleep(SETTLE).await;
+    await_prompt_handled(&pool, &registered).await;
     assert!(
         matches!(rx.try_recv(), Err(broadcast::error::TryRecvError::Empty)),
         "a held row publishes nothing",
@@ -192,8 +223,12 @@ async fn a_row_published_after_its_task_ended_is_still_added_and_removed() {
     let shutdown = Arc::clone(&registered.shutdown);
     let cmd = registered.keep();
     assert!(shutdown.send(&cmd).await, "the task is alive");
+    // The title that synced the test may or may not change the row the
+    // stream already announced, depending on where the shutdown lands.
+    let mut items = items_until_removed(&mut rx, session_id).await;
+    items.retain(|item| !matches!(item, NotifyToClientMsg::SessionChanged { .. }));
     assert_eq!(
-        items_until_removed(&mut rx, session_id).await,
+        items,
         [
             NotifyToClientMsg::SessionAdded { session_id },
             NotifyToClientMsg::PromptShown { session_id },
@@ -208,7 +243,7 @@ async fn a_row_published_after_its_task_ended_is_still_added_and_removed() {
 async fn a_rolled_back_create_publishes_nothing() {
     let pool = Arc::new(Mutex::new(SessionPool::new()));
     let mut rx = pool.lock().await.subscribe_events();
-    let factory = shell_factory("printf '\\033]133;A\\007'; exec sleep 30");
+    let factory = shell_factory(PROMPT_THEN_TITLE);
     let caps = DaemonCaps::default();
     let (mut registered, _info) = create_session(
         CreateCtx {
@@ -221,7 +256,7 @@ async fn a_rolled_back_create_publishes_nothing() {
     )
     .await
     .expect("the create must be admitted");
-    tokio::time::sleep(SETTLE).await;
+    await_prompt_handled(&pool, &registered).await;
     registered.roll_back().await;
     assert!(
         matches!(rx.try_recv(), Err(broadcast::error::TryRecvError::Empty)),

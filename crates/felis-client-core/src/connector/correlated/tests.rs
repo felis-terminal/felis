@@ -504,12 +504,12 @@ async fn the_last_drop_stops_a_stalled_writer_and_sends_nothing_queued() {
             handle.spawn_session(args).await
         }
     });
-    tokio::time::sleep(BRIEFLY).await;
+    eventually(|| handle.issued_requests() == 1).await;
     let destroy = tokio::spawn({
         let handle = handle.clone();
         async move { handle.destroy_session("ab".to_owned()).await }
     });
-    tokio::time::sleep(BRIEFLY).await;
+    eventually(|| handle.issued_requests() == 2).await;
     spawn.abort();
     destroy.abort();
     assert!(spawn.await.unwrap_err().is_cancelled());

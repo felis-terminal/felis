@@ -317,8 +317,8 @@ impl Drop for RealAppSession {
 }
 
 /// The real `less` paging through the pipeline without a panic or
-/// stall (a `Scrolled` frame or a quiet burst are both
-/// protocol-correct).
+/// stall. Numbered lines make each page's rows differ, so the page a
+/// keystroke brings up is visible in the shadow.
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn less_pages_through_long_stdin() {
@@ -328,14 +328,14 @@ async fn less_pages_through_long_stdin() {
     let mut cmd = Command::new("/bin/sh");
     cmd.args([
         "-c",
-        &format!("yes line | head -200 | {} -X -R", less.display()),
+        &format!("seq -f 'line %g' 200 | {} -X -R", less.display()),
     ]);
     cmd.env_clear();
-    // NixOS keeps coreutils off /usr/bin:/bin; without `yes`/`head`
-    // the shadow assertion matches `sh`'s "command not found" lines.
-    let coreutils_dir = resolve_binary("head")
+    // NixOS keeps coreutils off /usr/bin:/bin; without `seq` the
+    // shadow assertion matches `sh`'s "command not found" lines.
+    let coreutils_dir = resolve_binary("seq")
         .and_then(|p| p.parent().map(std::path::Path::to_path_buf))
-        .expect("`head` must be on the test runner's PATH");
+        .expect("`seq` must be on the test runner's PATH");
     cmd.env("PATH", format!("{}:/usr/bin:/bin", coreutils_dir.display()));
     cmd.env("TERM", "xterm-256color");
     cmd.env("LESSSECURE", "1");
@@ -347,7 +347,7 @@ async fn less_pages_through_long_stdin() {
     let drew = session
         .wait_for_shadow(
             |s| shadow_rows(s).iter().filter(|r| r.contains("line")).count() >= 10,
-            Duration::from_secs(2),
+            Duration::from_secs(30),
         )
         .await;
     assert!(
@@ -356,29 +356,36 @@ async fn less_pages_through_long_stdin() {
         session.with_shadow(shadow_rows),
     );
 
+    // Each space pages by a screen less its prompt row: the fourth
+    // page is the first to show line 80.
     for _ in 0..3 {
         session.send_input(b" ").await;
-        tokio::time::sleep(Duration::from_millis(50)).await;
     }
-
-    tokio::time::sleep(Duration::from_millis(200)).await;
-    let after = session.counters();
-
+    let paged = session
+        .wait_for_shadow(
+            |s| shadow_rows(s).iter().any(|r| r.trim_end() == "line 80"),
+            Duration::from_secs(30),
+        )
+        .await;
+    assert!(
+        paged,
+        "less did not page forward: {:?}",
+        session.with_shadow(shadow_rows),
+    );
     // Exact counts vary by terminfo and less version.
+    let after = session.counters();
     assert!(
         after.count("CursorState") >= 1,
         "expected ≥ 1 CursorState frame, got 0; counters: {after:?}",
     );
     assert!(
-        after.count("RowDelta") >= 1,
+        after.count("RowDelta") + after.count("Scrolled") >= 1,
         "expected ≥ 1 cell-bearing frame, got 0; counters: {after:?}",
     );
 
     eprintln!("less counters: {after:?}");
 
     session.send_input(b"q").await;
-    tokio::time::sleep(Duration::from_millis(150)).await;
-
     session.shutdown().await;
 }
 

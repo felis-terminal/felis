@@ -923,6 +923,12 @@ impl SessionPool {
         self.sessions.get(&id)
     }
 
+    /// [`Self::get`] with held rows included.
+    #[cfg(all(test, unix))]
+    pub(crate) fn row_even_held(&self, id: SessionId) -> Option<&SessionHandle> {
+        self.sessions.get(&id)
+    }
+
     #[doc(hidden)]
     #[must_use]
     pub fn handle_cloned(&self, id: SessionId) -> Option<SessionHandle> {
