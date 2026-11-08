@@ -1018,8 +1018,19 @@ async fn killed_client_reattaches_and_observes_prior_output() {
     );
     // No explicit Detach: the close-mid-loop path a hung-up window takes.
     drop(a);
-
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    while pool
+        .lock()
+        .await
+        .get(felis_daemon::SessionId(session_id))
+        .is_some_and(|row| row.meta.lock().unwrap().subscribers > 0)
+    {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the daemon never saw the window go"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
 
     let mut b = connect(&path, Offer::window(false)).await.unwrap();
     assert!(

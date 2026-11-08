@@ -778,9 +778,13 @@ async fn hpa_draws_box_outline_in_the_middle() {
             .await,
         "HPA test screen never drew",
     );
-    // The prompt text arrives after the box and some releases
-    // interleave the two; let the read task drain.
-    tokio::time::sleep(Duration::from_millis(800)).await;
+    // vttest's hold prompt comes last, after the box and its caption.
+    assert!(
+        session
+            .wait_for("Push <RETURN>", Duration::from_secs(5))
+            .await,
+        "HPA test screen never finished",
+    );
     session.check_or_dump(|g| {
         let is_star = |r: u16, c: u16| -> bool {
             matches!(g.cell(r, c).unwrap().grapheme, Grapheme::Ascii(b'*'))
