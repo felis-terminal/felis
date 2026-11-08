@@ -6541,7 +6541,7 @@ async fn status_sums_every_subscriber_backlog_and_names_the_deepest() {
                     mode: ConnectionMode::Window,
                     pull_paced: false,
                     minor: preface::PROTOCOL_MINOR,
-                    live_only: false,
+                    if_exited: session_task::IfExited::Land,
                     image_regions: false,
                     carrier: AttachCarrier::Local { client_pid: None },
                     tx,

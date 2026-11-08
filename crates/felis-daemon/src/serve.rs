@@ -999,7 +999,7 @@ impl SubscribeFailure {
 async fn subscribe_to(
     cmd: &mpsc::Sender<SessionCmd>,
     params: ConnParams,
-    (live_only, image_regions): (bool, bool),
+    (if_exited, image_regions): (session_task::IfExited, bool),
     carrier: &AttachCarrier,
 ) -> Result<Subscription, SubscribeFailure> {
     let ConnParams {
@@ -1015,7 +1015,7 @@ async fn subscribe_to(
         mode,
         pull_paced,
         minor: effective_minor,
-        live_only,
+        if_exited,
         image_regions,
         carrier: carrier.clone(),
         tx,
@@ -1360,9 +1360,13 @@ async fn wait_for_attach<R: tokio::io::AsyncRead + Unpin, W: tokio::io::AsyncWri
                     // Not live-only: `felis -- true` exits before the subscribe
                     // lands, and a live-only create would refuse the window its
                     // own command's output.
-                    let subscribed =
-                        subscribe_to(&registered.cmd, params, (false, image_regions), carrier)
-                            .await;
+                    let subscribed = subscribe_to(
+                        &registered.cmd,
+                        params,
+                        (session_task::IfExited::Notify, image_regions),
+                        carrier,
+                    )
+                    .await;
                     let id = registered.id;
                     let Subscription {
                         ok,
@@ -1413,8 +1417,13 @@ async fn wait_for_attach<R: tokio::io::AsyncRead + Unpin, W: tokio::io::AsyncWri
                             return Ok(None);
                         }
                     };
+                    let if_exited = if live_only {
+                        session_task::IfExited::Refuse
+                    } else {
+                        session_task::IfExited::Land
+                    };
                     let subscribed =
-                        subscribe_to(&handle.cmd, params, (live_only, image_regions), carrier)
+                        subscribe_to(&handle.cmd, params, (if_exited, image_regions), carrier)
                             .await;
                     let Subscription {
                         ok,

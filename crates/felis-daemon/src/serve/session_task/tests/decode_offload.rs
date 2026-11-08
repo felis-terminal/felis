@@ -978,7 +978,7 @@ fn attach_window(task: &mut SessionTask) -> (SubscribeReply, mpsc::UnboundedRece
             mode: ConnectionMode::Window,
             pull_paced: false,
             minor: felis_protocol::preface::PROTOCOL_MINOR,
-            live_only: false,
+            if_exited: IfExited::Land,
             image_regions: false,
             carrier: AttachCarrier::Local { client_pid: None },
             tx,

@@ -726,11 +726,14 @@ no roster the client holds can go stale in between. A teardown still races the s
 exists, or `create`, a `CreateFailure` about one that does not exist yet. Which values each request admits is exact, and
 a client is entitled to refuse anything else as a protocol failure rather than report it as a refusal:
 
-| Request                   | Admits                                                                                                                                    |
-| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `Attach` naming a full id | `attach ∈ {UnknownSession, SessionEnding}`, plus `SessionExited` when it set `live_only`                                                  |
-| `Attach` naming a prefix  | `attach ∈ {NoMatch, Ambiguous, SessionEnding}`, plus `SessionExited` when it set `live_only`                                              |
-| `Create`                  | any `create` value, or `attach = SessionEnding` alone: its spawn landed and its subscription lost a race against a child that ended first |
+| Request                   | Admits                                                                                                                                      |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Attach` naming a full id | `attach ∈ {UnknownSession, SessionEnding}`, plus `SessionExited` when it set `live_only`                                                    |
+| `Attach` naming a prefix  | `attach ∈ {NoMatch, Ambiguous, SessionEnding}`, plus `SessionExited` when it set `live_only`                                                |
+| `Create`                  | any `create` value, or `attach = SessionEnding` alone: its spawn landed and its subscription lost a race against a session that ended first |
+
+A create whose child exits before its subscription lands is not refused: the attach succeeds, then a `Window` connection
+receives `SessionExited` and every connection the close, as if it had landed first.
 
 A create past the daemon's session limit is refused `SessionLimitReached` before anything is executed, its `detail`
 naming the admitted count and the limit (REQ-915); one arriving while the daemon drains toward exit is refused

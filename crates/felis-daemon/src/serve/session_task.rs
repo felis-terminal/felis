@@ -357,9 +357,7 @@ pub struct SubscribeReq {
     /// Bytes pushed but not yet written; the connection pump decrements
     /// as it writes (see `SUBSCRIBER_BUFFER_CAP`).
     pub buffered: Arc<AtomicUsize>,
-    /// `SessionToDaemonMsg::Attach { live_only }`: refuse when the shell has
-    /// exited.
-    pub live_only: bool,
+    pub if_exited: IfExited,
     /// `SessionToDaemonMsg::Attach { image_regions }`: the window reads
     /// frame-region transfers.
     pub image_regions: bool,
@@ -367,6 +365,23 @@ pub struct SubscribeReq {
     /// Answered once the rehydrate burst is queued.
     pub reply: oneshot::Sender<Result<SubscribeOk, SubscribeRefused>>,
 }
+
+/// What a subscription does on a session whose shell has already exited.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IfExited {
+    /// A deliberate attach lands, to read the final screen.
+    Land,
+    /// `SessionToDaemonMsg::Attach { live_only }`.
+    Refuse,
+    /// The create's own attach. It is no viewer of a corpse: a shell that
+    /// exits before it lands still owes it the `SessionExited` and close
+    /// it would have heard had it landed first.
+    Notify,
+}
+
+/// A shell's exit, with the status its reap found, if any.
+#[derive(Debug, Clone, Copy)]
+struct ShellExit(Option<ExitStatus>);
 
 /// An enum rather than a dropped reply channel: the caller already
 /// reads a dropped channel as "the task is unwinding", and the two
@@ -803,6 +818,7 @@ async fn spawn_task(
         input_owner: None,
         attachments_dirty: false,
         pty_eof: false,
+        told_exit: None,
         child_exited: exited,
         row_cache: streaming::RowEncodeCache::default(),
         reported_focus: false,
@@ -1228,6 +1244,8 @@ struct SessionTask {
     /// `refresh_meta` rebuilds it.
     attachments_dirty: bool,
     pty_eof: bool,
+    /// What `SessionExited` carried, once EOF told the windows.
+    told_exit: Option<ShellExit>,
     child_exited: bool,
     row_cache: streaming::RowEncodeCache,
     /// Focus last reported to the PTY, so reports are edge-triggered
@@ -2039,12 +2057,13 @@ impl SessionTask {
     }
 
     fn subscribe(&mut self, req: SubscribeReq) {
+        let if_exited = req.if_exited;
         // Checked inside the actor, not off the roster's `exited` flag
         // client-side: that flag is a snapshot, and a session exiting
         // between the listing and the attach would leave a window
         // parked on a corpse that never pushes it off and blocks the
         // reap.
-        if req.live_only && (self.pty_eof || self.child_exited) {
+        if if_exited == IfExited::Refuse && (self.pty_eof || self.child_exited) {
             drop(req.reply.send(Err(SubscribeRefused::Exited)));
             return;
         }
@@ -2121,6 +2140,18 @@ impl SessionTask {
         info.dims.rows = rows;
         info.dims.cols = cols;
         if req.reply.send(Ok(SubscribeOk { sub: id, info })).is_err() {
+            self.remove_sub(id);
+            return;
+        }
+        if if_exited == IfExited::Notify
+            && let Some(ShellExit(status)) = self.told_exit
+        {
+            if let Some(sub) = self.subs.iter().find(|s| s.id == id && s.is_window) {
+                let _ = sub.push(OutEvent::Push(PushMsg::SessionExited {
+                    id: self.id.0,
+                    status,
+                }));
+            }
             self.remove_sub(id);
         }
     }
@@ -2531,7 +2562,8 @@ impl SessionTask {
     /// [`Self::evict_all`]; the connection pump (`serve.rs`) flushes
     /// buffered events before it observes the channel close, so the
     /// message lands ahead of the drop.
-    fn notify_shell_exit(&self, status: Option<ExitStatus>) {
+    fn notify_shell_exit(&mut self, status: Option<ExitStatus>) {
+        self.told_exit = Some(ShellExit(status));
         for sub in &self.subs {
             if sub.is_window {
                 let _ = sub.push(OutEvent::Push(PushMsg::SessionExited {
@@ -4312,6 +4344,7 @@ impl SessionTask {
             input_owner: None,
             attachments_dirty: false,
             pty_eof: false,
+            told_exit: None,
             child_exited: false,
             row_cache: streaming::RowEncodeCache::default(),
             reported_focus: false,
@@ -4436,13 +4469,22 @@ mod tests {
         mode: ConnectionMode,
         pull_paced: bool,
     ) -> (SubscriberId, mpsc::UnboundedReceiver<OutEvent>) {
+        attach_sub_if_exited(task, mode, pull_paced, IfExited::Land)
+    }
+
+    fn attach_sub_if_exited(
+        task: &mut SessionTask,
+        mode: ConnectionMode,
+        pull_paced: bool,
+        if_exited: IfExited,
+    ) -> (SubscriberId, mpsc::UnboundedReceiver<OutEvent>) {
         let (tx, mut rx) = mpsc::unbounded_channel();
         let (reply_tx, mut reply_rx) = oneshot::channel();
         task.subscribe(SubscribeReq {
             mode,
             pull_paced,
             minor: felis_protocol::preface::PROTOCOL_MINOR,
-            live_only: false,
+            if_exited,
             image_regions: false,
             carrier: AttachCarrier::Local { client_pid: None },
             tx,
@@ -4467,7 +4509,7 @@ mod tests {
             mode,
             pull_paced: false,
             minor: felis_protocol::preface::PROTOCOL_MINOR,
-            live_only: false,
+            if_exited: IfExited::Land,
             image_regions: false,
             carrier: AttachCarrier::Local { client_pid: None },
             tx,
@@ -7788,6 +7830,42 @@ mod tests {
         );
     }
 
+    /// `felis -- true` can exit before the create's own attach lands.
+    #[tokio::test]
+    async fn the_creating_attach_hears_an_exit_that_beat_it_and_a_deliberate_one_stays() {
+        let mut task = SessionTask::for_tests(session_with("read _x"));
+        task.notify_shell_exit(Some(ExitStatus::Code(3)));
+
+        let attach = |task: &mut SessionTask, mode, if_exited| {
+            let (_, mut rx) = attach_sub_if_exited(task, mode, false, if_exited);
+            let exits = drain_events(&mut rx)
+                .into_iter()
+                .filter_map(|ev| match ev {
+                    OutEvent::Push(PushMsg::SessionExited { status, .. }) => Some(status),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            let closed = matches!(rx.try_recv(), Err(mpsc::error::TryRecvError::Disconnected));
+            (exits, closed)
+        };
+        assert_eq!(
+            attach(&mut task, ConnectionMode::Window, IfExited::Notify),
+            (vec![Some(ExitStatus::Code(3))], true),
+            "the creating window hears the exit it lost the race to, then the close",
+        );
+        assert_eq!(
+            attach(&mut task, ConnectionMode::Ops, IfExited::Notify),
+            (vec![], true),
+            "a scripted create sees only the close",
+        );
+        assert_eq!(
+            attach(&mut task, ConnectionMode::Window, IfExited::Land),
+            (vec![], false),
+            "a deliberate attach stays to read the final screen",
+        );
+        assert_eq!(task.subs.len(), 1);
+    }
+
     /// Both authoritative-dims paths (applied resize, overruled-mirror
     /// correction) announce to every subscriber.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -9130,7 +9208,7 @@ mod tests {
                 mode: ConnectionMode::Window,
                 pull_paced: false,
                 minor: felis_protocol::preface::PROTOCOL_MINOR,
-                live_only: false,
+                if_exited: IfExited::Land,
                 image_regions: false,
                 carrier: AttachCarrier::Local { client_pid: None },
                 tx,
