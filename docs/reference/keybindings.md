@@ -77,7 +77,7 @@ binding, a value outside the vocabulary below, or a missing required field drops
 | `switch_session`         | `to`         | `previous`, `next`                                                                    | Required          |
 | `new_session`            | —            | —                                                                                     | —                 |
 | `kill_session`           | —            | —                                                                                     | —                 |
-| `pipe`                   | `source`     | `scrollback`, `visible`, `selection`, `command_output`, `last_command`                | Required          |
+| `pipe`                   | `source`     | `scrollback`, `visible`, `selection`, `command_output`, `last_command`, `osc_52`      | Required          |
 |                          | `target`     | `"clipboard"`, `"temp_file"`, `"paste"`, `{ command = [...] }`, `{ file = "<path>" }` | The default pager |
 |                          | `ansi`       | `true`, `false`                                                                       | `false`           |
 | `run`                    | `command`    | Argv array of strings, non-empty; never a shell string                                | Required          |
@@ -144,6 +144,8 @@ default. The command does not carry over the window's `--host`, `--socket` or `-
 "ctrl+shift+y" = { kind = "pipe", source = "selection", target = "clipboard" }
 # Scrollback to a client-chosen temporary file.
 "ctrl+shift+s" = { kind = "pipe", source = "scrollback", target = "temp_file" }
+# The last OSC 52 clipboard write a program made, to the system clipboard.
+"ctrl+shift+o" = { kind = "pipe", source = "osc_52", target = "clipboard" }
 ```
 
 What each sink does with the captured region:
@@ -158,7 +160,10 @@ What each sink does with the captured region:
 - `"temp_file"`: writes to a client-managed temporary file whose path is logged.
 - `"paste"`: sends the captured region back as input to the session.
 
-The `source` regions are the same ones `felis sessions capture` reads; see the
+`osc_52` is the payload of the last `OSC 52` write to the clipboard (`c`) that a program sent to this window, whatever
+`clipboard.osc_52` let through to the OS clipboard; `ansi` does not apply to it. It is kept per window, survives a
+session switch, is not cleared by `OSC 52 ; c ; !`, and is lost when the window closes. `selection` and `osc_52` are
+window-local; the other sources are the same ones `felis sessions capture` reads; see the
 [scrollback capture guide](../how-to/search-and-capture-scrollback.md).
 
 Command argvs (`pipe` and `run`) execute locally on the window host, resolved against its `PATH` and filesystem. The
@@ -187,9 +192,9 @@ Command sinks fed `scrollback` or `visible` export viewport line anchors to the 
 | `FELIS_CURSOR_COLUMN`     | 1-based rendered column of the cursor         |
 
 Line numbers count stitched logical lines (soft-wrapped rows combined). Columns count rendered characters, unaffected by
-`ansi = true`. These variables are unset for unanchored regions (`command_output`, `last_command`, `selection`), for
-`run`, and for a region the daemon trimmed to fit `MAX_REGION_REPLY_BYTES` ([ipc.md](ipc.md#semantic-limits) "Semantic
-limits").
+`ansi = true`. These variables are unset for unanchored regions (`command_output`, `last_command`, `selection`,
+`osc_52`), for `run`, and for a region the daemon trimmed to fit `MAX_REGION_REPLY_BYTES`
+([ipc.md](ipc.md#semantic-limits) "Semantic limits").
 
 Argv elements are passed verbatim without placeholder expansion.
 

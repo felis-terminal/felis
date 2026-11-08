@@ -2068,6 +2068,34 @@ mod tests {
     }
 
     #[test]
+    fn keymap_parses_the_osc_52_pipe_source_token() {
+        use crate::action::{PipeRegionSource, PipeTarget};
+        let cfg: EffectiveConfig = toml::from_str(
+            r#"
+            [keymap]
+            "ctrl+shift+y" = { kind = "pipe", source = "osc_52", target = "clipboard" }
+        "#,
+        )
+        .unwrap();
+        let compiled: BTreeMap<Chord, BindingValue> =
+            cfg.keymap.compile(None).into_iter().collect();
+
+        assert_eq!(
+            compiled
+                .get(&"ctrl+shift+y".parse().unwrap())
+                .unwrap()
+                .clone()
+                .into_action(),
+            Some(Action::PipeRegion {
+                source: PipeRegionSource::Osc52,
+                target: PipeTarget::Clipboard,
+                ansi: false,
+            }),
+        );
+        assert_eq!(PipeRegionSource::Osc52.wire_source(), None);
+    }
+
+    #[test]
     fn keymap_parses_each_pipe_target_token() {
         use crate::action::{PipeRegionSource, PipeTarget};
         let cfg: EffectiveConfig = toml::from_str(

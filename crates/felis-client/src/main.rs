@@ -1430,6 +1430,8 @@ struct App {
     /// Held so `reload_config` rebuilds the backend only on a change:
     /// `Arc<dyn Clipboard>` cannot be mutated in place.
     clipboard_cfg: config::ClipboardConfig,
+    /// The `pipe` chord's `osc_52` source.
+    last_osc_52_write: Option<Vec<u8>>,
     drag: DragState,
     /// Cycles 1 → 2 → 3 → 1 (a 4th rapid click resets to single, matching
     /// xterm / kitty / alacritty).
@@ -1628,6 +1630,7 @@ impl App {
             held_buttons: HeldButtons::default(),
             clipboard: build_clipboard(&startup.clipboard_cfg),
             clipboard_cfg: startup.clipboard_cfg,
+            last_osc_52_write: None,
             drag: DragState::Idle,
             click_streak: ClickStreak::new(),
             configured_font_size_logical_px: startup.font_size_logical_px,

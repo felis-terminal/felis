@@ -12,6 +12,9 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 
 ### Added
 
+- **Keybindings**: a `pipe` binding takes `source = "osc_52"`, the last `OSC 52` clipboard write a program sent to the
+  window. With `target = "clipboard"` it copies that text to the system clipboard on the user's chord while
+  `clipboard.osc_52 = "mirror"` keeps programs from writing it on their own.
 - **CLI**: `felis --class <name>` names a launched window for window-manager rules: the Wayland app ID and X11
   `WM_CLASS` on Linux, the Win32 window class on Windows, no effect on macOS. Bare `felis`, `felis -- <cmd>`, and
   `attach` take it; every other verb and `--version` refuse it with exit `2`.

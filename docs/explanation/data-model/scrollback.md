@@ -187,11 +187,11 @@ request, read a framed reply stream, detach. The daemon encodes each row to text
 and carries no cell codec. Like search the reply is a cancelable stream, and the row window is pushed into each source's
 iterator rather than applied to a materialized region, so a capture of a huge scrollback pays for the rows it ships.
 
-**Its sources are the pipe action's sources, token for token.** One wire enum serves both, so a user who learns which
-region a chord sends learns which region the CLI reads. The two readers differ only in reply shape: `pipe` asks for one
-stitched blob, which is what a pager or an argv sink consumes, while capture asks for the same region row by row,
-because a structural consumer wants each row's index and soft-wrap bit and a stitched blob flattens both away. Why the
-richer source lands on capture rather than a separate `sessions pipe` verb is recorded in
+**Its sources are the pipe action's daemon-side sources, token for token.** One wire enum serves both, so a user who
+learns which region a chord sends learns which region the CLI reads. The two readers differ only in reply shape: `pipe`
+asks for one stitched blob, which is what a pager or an argv sink consumes, while capture asks for the same region row
+by row, because a structural consumer wants each row's index and soft-wrap bit and a stitched blob flattens both away.
+Why the richer source lands on capture rather than a separate `sessions pipe` verb is recorded in
 [control-surfaces.md](../architecture/control-surfaces.md) "`pipe` is keymap-only, and stays a separate verb from
 `capture`".
 
@@ -257,14 +257,15 @@ default-plain case is clean for every picker, which is why plain is the default 
 
 ### Selection source: client-side serialization
 
-Four of the five `pipe` sources (`scrollback`, `visible`, `command_output`, `last_command`) are daemon state, serialized
-daemon-side by the encoders above. The fifth, `selection`, is **not** daemon state: the grid the daemon owns carries no
-selection; the selection is a client-local gesture over presented pixels (principle 3). So the **client** serializes it,
-reusing `felis_client_core::Selection::extract_text`, which routes through the shared stitch ("Soft wrap" above), then
-feeds those bytes straight to the sink; there is no region to ask the daemon for, so the chord skips the round trip
-entirely. Placing the read on the client is the boundary, not a convenience: asking the daemon to track a per-client
-selection would put presentation state on the wrong side of principle 3, and would not round-trip cross-host anyway
-(each attached client has its own selection).
+Four of the six `pipe` sources (`scrollback`, `visible`, `command_output`, `last_command`) are daemon state, serialized
+daemon-side by the encoders above. The fifth, `osc_52`, is a program's payload, not cells, and stays with the window for
+the reason [input.md](../input.md) "`pipe` ships a region to an external sink" gives. The sixth, `selection`, is **not**
+daemon state: the grid the daemon owns carries no selection; the selection is a client-local gesture over presented
+pixels (principle 3). So the **client** serializes it, reusing `felis_client_core::Selection::extract_text`, which
+routes through the shared stitch ("Soft wrap" above), then feeds those bytes straight to the sink; there is no region to
+ask the daemon for, so the chord skips the round trip entirely. Placing the read on the client is the boundary, not a
+convenience: asking the daemon to track a per-client selection would put presentation state on the wrong side of
+principle 3, and would not round-trip cross-host anyway (each attached client has its own selection).
 
 ### A region too large to carry
 

@@ -156,7 +156,7 @@ rides `OpsToDaemonMsg::Spawn { args }`, which returns the session's identity and
 The **`pipe`** token ships a region of the session buffer to an external sink, modeled on foot's `pipe-*` action family
 (<https://man.archlinux.org/man/foot.ini.5.en>); the sink set is modeled on Ghostty's `write_scrollback_file` `:open` /
 `:copy` / `:paste` variants (<https://ghostty.org/docs/config/keybind/reference>) rather than a pager special-case. The
-region is the subject; `source` is always a real region (launching a command with _no_ region is the separate `run`
+region is the subject; `source` always names bytes to ship (launching a command with _no_ region is the separate `run`
 action below). Three arguments shape the fields.
 
 Each sink carries its own payload, so an argv handed to the clipboard sink or a path handed to the command sink has no
@@ -171,8 +171,13 @@ The `selection` source is client-owned (the daemon grid has no selection), so th
 `felis_grid::Selection::extract_text` over the same `logical_line_spans` soft-wrap rule the daemon encoders use
 ([scrollback](data-model/scrollback.md) "Selection source: client-side serialization"), and feeds those bytes straight
 to the sink instead of asking for a region (`RegionToDaemonMsg::Request`): the selection is presentation the client owns
-(principle 3), so the client is the only side that can read it. An empty source (no selection, no OSC 133 marks) is a
-no-op.
+(principle 3), so the client is the only side that can read it.
+
+The `osc_52` source is client-owned too: it is the last `OSC 52` clipboard write the daemon routed to this window, held
+by the client, not the session cache that answers `OSC 52 ; c ; ?`. Reading that cache instead would let one window's
+chord, or any `sessions capture` caller, take a write another window's user drove, which per-client clipboard scope
+forbids ([security-model.md](security-model.md) "Per-client clipboard scope"). The price is that the value lives and
+dies with the window. An empty source (no selection, no OSC 133 marks, no OSC 52 write yet) is a no-op.
 
 `ansi` defaults off because the tools a region is usually handed to (hint pickers, editors, text utilities) re-parse it
 as data, where embedded escapes corrupt the match. Color is the exception a color-rendering sink asks for.
@@ -506,6 +511,11 @@ OSC 52 clipboard access from the shell is gated, and the two directions are not 
 clipboard is **off by default**: it is a known foot-gun (a pasted command can rewrite the clipboard), so the user must
 opt in. The **read** of the OS clipboard is not implemented at all (REQ-802), so a hostile program cannot exfiltrate
 clipboard contents even with the write gate open ([security-model.md](security-model.md) "Output-to-input injection").
+
+The gate stops a program from writing the system clipboard on its own; it does not strand what the program meant to
+copy. A `pipe` binding with `source = "osc_52"` and `target = "clipboard"` promotes the program's last write when the
+user presses it, so a yank in a remote editor reaches the system clipboard without the program ever holding the write
+permission.
 
 The system clipboard and the Linux PRIMARY selection stay independent in both directions: a `Paste { from: System }` on
 an empty `CLIPBOARD` does not fall back to `PRIMARY`, because a paste whose source depends on which buffer happens to be

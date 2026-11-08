@@ -96,9 +96,9 @@ fn decode_c_style(text: &str) -> Result<Vec<u8>, EscapeError> {
 
 /// Region of the terminal buffer a `pipe` binding serializes (its
 /// `source` field).
-// Not a wire type: a client-side superset of `RegionSource` adding
-// `Selection`, which is client-owned (principle 3) and extracted here
-// rather than named to a daemon that holds no selection.
+// Not a wire type: a client-side superset of `RegionSource` adding the
+// client-owned `Selection` and `Osc52` (docs/explanation/input.md
+// "`pipe` ships a region to an external sink").
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
@@ -114,6 +114,10 @@ pub enum PipeRegionSource {
     /// The last command line plus its output: the most recent
     /// `OSC 133 B → D` range.
     LastCommand,
+    /// The last `OSC 52` clipboard (`c`) write a program in this window
+    /// made, whatever `clipboard.osc_52` let through to the OS.
+    #[serde(rename = "osc_52")]
+    Osc52,
 }
 
 /// Client-side like [`PipeRegionSource`]: every sink runs on the machine
@@ -143,7 +147,7 @@ impl PipeRegionSource {
             Self::Visible => Some(RegionSource::Visible),
             Self::CommandOutput => Some(RegionSource::CommandOutput),
             Self::LastCommand => Some(RegionSource::LastCommand),
-            Self::Selection => None,
+            Self::Selection | Self::Osc52 => None,
         }
     }
 }

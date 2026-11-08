@@ -586,11 +586,10 @@ impl App {
                     // `p`); both program paths are hostile-gated in the
                     // backend. The program already issued the OSC, so
                     // retrying an unavailable backend is up to it.
-                    if write
+                    let to_clipboard = write
                         .selection
-                        .contains(felis_grid::ClipboardSelection::CLIPBOARD)
-                        && let Err(err) = self.clipboard.write(&write.data)
-                    {
+                        .contains(felis_grid::ClipboardSelection::CLIPBOARD);
+                    if to_clipboard && let Err(err) = self.clipboard.write(&write.data) {
                         warn!(?err, selection = ?write.selection, "clipboard write");
                     }
                     if write
@@ -599,6 +598,9 @@ impl App {
                         && let Err(err) = self.clipboard.write_primary_program(&write.data)
                     {
                         warn!(?err, selection = ?write.selection, "primary clipboard write");
+                    }
+                    if to_clipboard {
+                        self.last_osc_52_write = Some(write.data);
                     }
                 }
                 if let Some(effect) = renderer_effect(&msg)
