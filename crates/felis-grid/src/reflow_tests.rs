@@ -341,3 +341,107 @@ fn pad_and_push_reference(
     out_continued.push(!*first);
     *first = false;
 }
+
+proptest::proptest! {
+    /// Rows pushed whole, padded or clipped to a width, or built cell by
+    /// cell, read back as one buffer per row holds them, from any
+    /// reservation, including ones the rows outgrow.
+    #[test]
+    fn packed_rows_read_back_as_pushed(
+        reserve in 0usize..48,
+        pushes in proptest::collection::vec(
+            (proptest::collection::vec(b'!'..=b'~', 0..20), 0usize..20, 0u8..3),
+            0..32,
+        ),
+    ) {
+        let mut rows = PackedRows::with_capacity(0, reserve);
+        let mut model: Vec<Vec<Cell>> = Vec::new();
+        for (text, width, how) in pushes {
+            let cells: Vec<Cell> = text
+                .iter()
+                .map(|&b| Cell { grapheme: Grapheme::Ascii(b), ..Cell::default() })
+                .collect();
+            let mut padded = cells[..cells.len().min(width)].to_vec();
+            padded.resize(width, Cell::default());
+            match how {
+                0 => {
+                    rows.push(&cells);
+                    model.push(cells);
+                }
+                1 => {
+                    rows.push_padded(&cells, width);
+                    model.push(padded);
+                }
+                _ => {
+                    for &cell in &cells {
+                        rows.push_cell(cell);
+                    }
+                    rows.finish_padded(width);
+                    model.push(padded);
+                }
+            }
+        }
+        proptest::prop_assert_eq!(rows.len(), model.len());
+        for (k, want) in model.iter().enumerate() {
+            proptest::prop_assert_eq!(&rows[k], want.as_slice());
+        }
+    }
+}
+
+proptest::proptest! {
+    /// A reused run reads back as the last line extended into it, from
+    /// any earlier contents and through any growth.
+    #[test]
+    fn cell_run_reads_back_the_last_line(
+        lines in proptest::collection::vec(
+            proptest::collection::vec(proptest::collection::vec(b'!'..=b'~', 0..40), 0..6),
+            1..8,
+        ),
+    ) {
+        let mut run = CellRun::default();
+        for line in &lines {
+            run.len = 0;
+            let mut model = Vec::new();
+            for part in line {
+                let cells: Vec<Cell> = part
+                    .iter()
+                    .map(|&b| Cell { grapheme: Grapheme::Ascii(b), ..Cell::default() })
+                    .collect();
+                run.extend_from_slice(&cells);
+                model.extend(cells);
+            }
+            proptest::prop_assert_eq!(&*run, model.as_slice());
+        }
+    }
+}
+
+/// Spec: on Linux, re-wrapping one soft-wrapped line as long as the whole
+/// ring, resize after resize, leaves none of its working memory resident.
+/// Reads the process's resident set, so it assumes a process of its own,
+/// as nextest runs it.
+#[cfg(target_os = "linux")]
+#[test]
+fn reflowing_a_ring_long_line_leaves_nothing_resident() {
+    fn rss() -> usize {
+        let statm = std::fs::read_to_string("/proc/self/statm").unwrap();
+        let pages: usize = statm.split_whitespace().nth(1).unwrap().parse().unwrap();
+        pages * paged_cells::page_bytes()
+    }
+    let mut grid = Grid::new(24, 80);
+    let line: Vec<u8> = (0..(DEFAULT_SCROLLBACK_ROWS + 24) * 80)
+        .map(|i| b'a' + (i % 26) as u8)
+        .collect();
+    felis_vt::Parser::new().advance(&mut grid, &line);
+    drop(line);
+    let ring = (DEFAULT_SCROLLBACK_ROWS + 24) * 80 * size_of::<Cell>();
+    let mut first = None;
+    for cycle in 0..6 {
+        grid.reflow(24, if cycle % 2 == 0 { 100 } else { 80 });
+        let now = rss();
+        let first = *first.get_or_insert(now);
+        assert!(
+            now < first + ring / 4,
+            "reflow {cycle}: {now} bytes resident, {first} after the first"
+        );
+    }
+}
