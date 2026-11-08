@@ -702,7 +702,7 @@ mod tests {
     fn a_text_presentation_symbol_draws_in_mono() {
         let stack = crate::FontStack::auto_discover(None, &[], &[], &crate::StyleFaces::default())
             .expect("the default stack loads");
-        let mut ctx = swash::scale::ScaleContext::new();
+        let mut ctx = crate::raster::Rasterizer::default();
         for c in ['\u{2733}', '\u{23FA}', '\u{2602}'] {
             let index = stack.first_cover_styled_index(c, FontStyle::REGULAR);
             assert_ne!(index, 0, "U+{:04X}", c as u32);

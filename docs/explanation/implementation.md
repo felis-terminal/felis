@@ -252,9 +252,10 @@ since the runner already runs the change under test at that level.
 
 ### swash
 
-felis shapes and rasterizes with swash alone (<https://github.com/dfrg/swash>), with no rustybuzz, cosmic-text, or
-HarfBuzz; the choice rationale is in [text-shaping.md](rendering/text-shaping.md) "Prior art and alternatives
-considered". swash is dual Apache-2.0 / MIT, compatible with felis's Apache-2.0.
+felis shapes with swash alone (<https://github.com/dfrg/swash>), with no rustybuzz, cosmic-text, or HarfBuzz; the choice
+rationale is in [text-shaping.md](rendering/text-shaping.md) "Prior art and alternatives considered". swash also draws
+color glyphs, while monochrome outlines come from skrifa (<https://github.com/googlefonts/fontations>) through a
+felis-owned coverage rasterizer. Both are dual Apache-2.0 / MIT, compatible with felis's Apache-2.0.
 
 ## IPC encoding
 

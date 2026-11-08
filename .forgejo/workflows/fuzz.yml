@@ -9,7 +9,6 @@ on:
       - '**'
       - '!docs/**'
       - '!**/*.md'
-      - '!crates/felis-shaping/**'
       - '!crates/felis-render-core/**'
       - '!crates/felis-render-wgpu/**'
       - '!crates/felis-client/**'
