@@ -161,8 +161,8 @@ Rendering:
 
 - [Render pipeline](explanation/rendering/pipeline.md) — client GPU pipeline stages, shadow screen snapshotting, and
   wgpu frame presentation.
-- [Text shaping](explanation/rendering/text-shaping.md) — client-side swash shaping, run grouping, font fallback chains,
-  and glyph caching.
+- [Text shaping](explanation/rendering/text-shaping.md) — client-side harfrust shaping, run grouping, font fallback
+  chains, and glyph caching.
 - [Damage tracking](explanation/rendering/damage-tracking.md) — row-granularity bitset tracking that decides what the
   daemon ships and which rows the client rebuilds.
 
@@ -184,8 +184,8 @@ Protocols:
 
 Engineering and verification:
 
-- [Implementation style](explanation/implementation.md) — the crate-level choices (Tokio, wgpu, swash, the self-hosted
-  VT and PTY layers), each with the alternative it rejects and the trigger that would reopen it.
+- [Implementation style](explanation/implementation.md) — the crate-level choices (Tokio, wgpu, harfrust, the
+  self-hosted VT and PTY layers), each with the alternative it rejects and the trigger that would reopen it.
 - [Testing strategy](explanation/testing.md) — why the layers exist, why sampling is not enough, which peer conformance
   practices felis adopted and rejected, and what is deliberately not verified.
 - [Benchmark-harness design](explanation/benchmarks.md) — why the cross-terminal comparison is a local report rather

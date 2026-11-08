@@ -1,6 +1,6 @@
 //! Criterion benchmark: `GlyphIndex::shape_run_cached` memo hit.
 //! Pairs with `felis-shaping`'s `shape_run` bench, which measures the
-//! unmemoized swash cost the miss path pays.
+//! unmemoized shaping cost the miss path pays.
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 

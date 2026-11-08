@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "felis text shaper: swash + font fallback + shape cache"
+description = "felis text shaper: harfrust shaping + font fallback + shape cache"
 
 [features]
 # Test-only support, outside the semver contract.
@@ -13,6 +13,7 @@ description = "felis text shaper: swash + font fallback + shape cache"
 testing = []
 
 [dependencies]
+harfrust = { workspace = true }
 swash = { workspace = true }
 skrifa = { workspace = true }
 memmap2 = { workspace = true }

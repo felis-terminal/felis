@@ -5,7 +5,7 @@ sidebar:
 ---
 
 Shaping turns a sequence of Unicode codepoints (the cell content) into a sequence of _glyph runs_: which font face,
-which glyph IDs, which positions. felis delegates the shaping itself to `swash` (the engine choice is in "Prior art"
+which glyph IDs, which positions. felis delegates the shaping itself to harfrust (the engine choice is in "Prior art"
 below) and runs it on the client, after grid diffs arrive, because a shaped run is a property of the font the window
 happens to hold. It caches aggressively.
 
@@ -34,11 +34,14 @@ Shaping direction is hard-coded left-to-right: a terminal cell row is monospace 
 
 Caching happens at three layers: per-font shaper and scaler state, the per-glyph bitmap cache, and a per-run shape memo.
 
-**Per-font shaper and scaler state.** swash's `ShapeContext` caches per-font state (GSUB shape data, feature lists)
-keyed on `FontRef::key`. felis generates that key once per loaded `Font` and reuses one `ShapeContext` (in `Shaper`) so
-the cache actually hits. The per-glyph `ShapeCache`, which is the single rasterization gateway, keeps skrifa outline
-scalers for the last 8 (face, size) pairs, because setting up a hinted scaler reruns the font's hinting programs, and
-one swash `ScaleContext` for color glyphs. Each holds up to 8 fonts, above the fallback chain's typical 4.
+**Per-font shaper and scaler state.** harfrust keeps a face's layout tables (GSUB, GPOS, the cmap cache) in the font
+object, shared by every variation view of one file, so they are read once per file. `Shaper` keeps a reusable glyph
+buffer and the shape plans of the last 16 (face view, feature list) pairs, since a plan is built for one instance and
+one feature list. The face the shaper reads carries no `trak` table: a cell grid has no use for AAT tracking, whose only
+effect would be on ligature validation and cluster pens, and harfrust offers no switch that turns it off. The per-glyph
+`ShapeCache`, which is the single rasterization gateway, keeps skrifa outline scalers for the last 8 (face, size) pairs,
+because setting up a hinted scaler reruns the font's hinting programs, and one swash `ScaleContext` for color glyphs.
+Each holds up to 8 fonts, above the fallback chain's typical 4.
 
 **Per-glyph bitmap cache.** Rasterization is cached per glyph rather than per run, because the same glyph recurs across
 runs that share nothing else: shells re-print one prompt thousands of times and most output is plain ASCII. An entry is
@@ -160,13 +163,10 @@ anchors its face on the first astral emoji scalar (`is_emoji_face_anchor`, U+1F0
 fire. Failing both, a VS16 anywhere in the cluster (a bare `❤️`, a keycap) routes the base through
 `resolve_color_index`. A VS16-less dingbat (`⏸`, a plain `❤`) has no signal and stays mono.
 
-Once the face is chosen, the cluster is shaped without the variation selectors that face does not map. swash 0.2.10
-never looks a selector up in the cmap's variation-sequence subtable (format 14), and it drops VS15/VS16 only after an
-emoji base; after a base such as `#` the VS16 is shaped as a `.notdef` with a full advance, which splits the keycap
-ligature into three glyphs. A selector the face maps directly is kept. Dropping a selector does not lose the variant it
-names: felis looks the pair up in the face's format 14 subtable itself and draws that glyph in place of the base's
-default one. A cluster that also carries a combining mark keeps the default glyph, because swash positioned the mark
-against it.
+Once the face is chosen, the shaper maps each variation sequence through the face's variation-sequence subtable (cmap
+format 14), before substitution and positioning, so a combining mark after `葛󠄀` sits on the variant glyph. A selector
+the face does not map is removed from the output rather than drawn as a `.notdef`, which keeps a keycap such as `#️⃣` one
+ligated glyph.
 
 So whether `葛󠄀` (U+845B U+E0100) draws its variant depends on the face that covers `葛`: a variation sequence never
 moves a cluster to another face. A primary that covers `葛` without variant data (Moralerspace, for one) draws the
@@ -408,14 +408,14 @@ sized-cluster note below). The daemon is unaffected: it stays font-blind and shi
 `GridMsg::Cluster { id, text }` registry entry, the wire path segmentation already uses; compositing is entirely
 client-side.
 
-**Shape the whole cluster; let the font decide the glyph count.** The cluster text goes through swash and the renderer
-emits one instance per glyph the font's own tables produce. That count is not fixed per input: a base plus a combining
-mark the font positions with GPOS stays two glyphs, a ZWJ sequence the font covers renders as one color glyph, a
-precomposed form is one glyph from the start. felis pre-decides none of that. The alternative, inspecting the codepoints
-to route marks and joins through its own stacking, reproduces work the shaper already does from the font's GSUB, GPOS,
-and COLR tables, and does it worse for every script felis did not special-case. The per-glyph positioning offsets swash
-returns are applied as given, including the sign flip from the font's y-up space to the screen's y-down one, so a
-combining mark rides its base onto the anchor the font specifies rather than one felis invented.
+**Shape the whole cluster; let the font decide the glyph count.** The cluster text goes through harfrust and the
+renderer emits one instance per glyph the font's own tables produce. That count is not fixed per input: a base plus a
+combining mark the font positions with GPOS stays two glyphs, a ZWJ sequence the font covers renders as one color glyph,
+a precomposed form is one glyph from the start. felis pre-decides none of that. The alternative, inspecting the
+codepoints to route marks and joins through its own stacking, reproduces work the shaper already does from the font's
+GSUB, GPOS, and COLR tables, and does it worse for every script felis did not special-case. The per-glyph positioning
+offsets harfrust returns are applied as given, including the sign flip from the font's y-up space to the screen's y-down
+one, so a combining mark rides its base onto the anchor the font specifies rather than one felis invented.
 
 One consequence is worth stating because it constrains the atlas: a composited cluster can pull glyphs from more than
 one face, a base from the primary and a mark from a fallback that covers it. The resolved face is therefore part of the
@@ -453,12 +453,15 @@ save work in the case nobody is waiting on.
 
 ## Prior art and alternatives considered
 
-**Shaper: swash, not HarfBuzz or a platform API.** HarfBuzz is the reference shaper (Kitty, foot, WezTerm), with the
-widest coverage but an FFI dependency and a large per-face cache; CoreText (iTerm2) and DirectWrite (Windows Terminal)
-are platform-locked; Alacritty ships _no_ shaper by default, rendering one glyph per codepoint with ligatures off, a
-speed-over-correctness choice felis's principles reject. felis uses swash: pure Rust (no FFI lifetime juggling),
-coverage sufficient for the scripts a terminal sees, and it rasterizes too, so one crate covers both shaping and
-rendering. A rustybuzz fallback for swash's complex-script gaps is unnecessary and is not wired.
+**Shaper: harfrust, not HarfBuzz or a platform API.** HarfBuzz is the reference shaper (Kitty, foot, WezTerm); CoreText
+(iTerm2) and DirectWrite (Windows Terminal) are platform-locked; Alacritty ships _no_ shaper by default, rendering one
+glyph per codepoint with ligatures off, a speed-over-correctness choice felis's principles reject. felis uses harfrust,
+HarfBuzz's algorithm in pure Rust on the same read-fonts font model skrifa draws outlines from, so a face is parsed once
+and one font stack ships. Rejected: **swash**, which never consults the format 14 subtable and leaves a combining mark
+unattached at its full advance on the pinned monospace face (measured), so a cluster whose mark has no precomposed form
+draws two cells wide and is shrunk to fit; **HarfBuzz through FFI**, a C dependency and lifetime bridging for the
+algorithm harfrust ports; **rustybuzz**, which reads fonts through a third parser (ttf-parser) beside read-fonts and
+swash's own.
 
 **Ligatures: shape, then validate.** A general shaper does not know about cells. felis shapes a run once and checks each
 ligature's advances against `n_graphemes × cell_width`; a ligature that would overflow its cell budget falls back to

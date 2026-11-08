@@ -90,8 +90,10 @@
       # Pinned font set prevents tests from skipping silently on machines lacking ligature or emoji fonts.
       # The CJK faces are subset to 葛 because the full collection is 32 MB; the subsets keep their cmap 14 entries.
       # Only the Monaspace faces a test names are copied: every isolated fontconfig rescans this directory, and the full set cost ~1 s per test.
+      # Felis Trak Probe is Monaspace Neon Var given a `trak` table, which no pinned face carries. It sits outside share/fonts so no stack discovers it; tests load it by path.
       testFonts =
-        pkgs.runCommand "felis-test-fonts" { nativeBuildInputs = [ pkgs.python3Packages.fonttools ]; }
+        pkgs.runCommand "felis-test-fonts"
+          { nativeBuildInputs = [ (pkgs.python3.withPackages (ps: [ ps.fonttools ])) ]; }
           ''
             mkdir -p $out/share/fonts/opentype $out/share/fonts/truetype
             for family in Neon Argon ArgonNF Xenon; do
@@ -112,6 +114,30 @@
               --font-number=0 --unicodes=U+845B,U+E0100-E0101 --output-file=$out/share/fonts/NotoSansCJKjp-Kuzu.otf
             pyftsubset ${pkgs.noto-fonts-cjk-sans}/share/fonts/opentype/noto-cjk/NotoSansCJK-VF.otf.ttc \
               --font-number=2 --unicodes=U+845B,U+E0100-E0101 --output-file=$out/share/fonts/NotoSansCJKsc-Kuzu.otf
+            pyftsubset "${pkgs.monaspace}/share/fonts/truetype/Monaspace Neon Var.ttf" \
+              --unicodes=U+0020-007E --layout-features='*' --name-IDs='*' --output-file=trak-probe.ttf
+            mkdir -p $out/share/trak-probe
+            python3 - trak-probe.ttf $out/share/trak-probe/FelisTrakProbe.ttf <<'EOF'
+            import sys
+            from fontTools.ttLib import TTFont, newTable
+            from fontTools.ttLib.tables._t_r_a_k import TrackData, TrackTableEntry
+
+            font = TTFont(sys.argv[1])
+            for record in font["name"].names:
+                text = record.toUnicode()
+                for old, new in [("Monaspace Neon Var", "Felis Trak Probe"), ("MonaspaceNeonVar", "FelisTrakProbe"),
+                                 ("Monaspace Neon", "Felis Trak Probe"), ("MonaspaceNeon", "FelisTrakProbe")]:
+                    text = text.replace(old, new)
+                record.string = text
+            trak = newTable("trak")
+            trak.version = 1.0
+            trak.format = 0
+            trak.horizData = TrackData({0.0: TrackTableEntry({12.0: 100, 24.0: -50}, nameIndex=256)})
+            trak.vertData = TrackData()
+            font["trak"] = trak
+            assert "STAT" in font
+            font.save(sys.argv[2])
+            EOF
           '';
 
       kani = pkgs.callPackage ./packages/kani { };

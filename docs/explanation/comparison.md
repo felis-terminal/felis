@@ -64,9 +64,9 @@ is not evidence about throughput at terminal workloads ([principles](principles.
 
 Rust, with `harfbuzz_rs` shaping, a built-in multiplexer that attaches across hosts, and Lua scripting.
 
-WezTerm is the existence proof for cross-host attach in a Rust terminal, and its `harfbuzz_rs` integration is the
-fallback pattern if felis ever needs to leave swash. On scope it is the deliberate inverse: WezTerm includes everything
-and accepts the steady-state cost, while felis admits a capability only when no dedicated tool does it better
+WezTerm is the existence proof for cross-host attach in a Rust terminal; its `harfbuzz_rs` integration is the FFI route
+to HarfBuzz that felis declined for harfrust. On scope it is the deliberate inverse: WezTerm includes everything and
+accepts the steady-state cost, while felis admits a capability only when no dedicated tool does it better
 ([design values](design.md#a-drawn-boundary)).
 
 ### iTerm2

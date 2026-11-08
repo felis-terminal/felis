@@ -202,6 +202,7 @@ dependencies = [
 name = "felis-shaping"
 version = "0.2.0"
 dependencies = [
+ "harfrust",
  "memmap2",
  "objc2-core-foundation",
  "objc2-core-text",
@@ -268,6 +269,19 @@ dependencies = [
  "cfg-if",
  "libc",
  "r-efi",
+]
+
+[[package]]
+name = "harfrust"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "865dcc4105d51c323d8fedbb2d75b5e9c8ecddf5613f74c82f851d0afbc97114"
+dependencies = [
+ "bitflags",
+ "bytemuck",
+ "read-fonts 0.46.0",
+ "smallvec",
+ "yoke",
 ]
 
 [[package]]

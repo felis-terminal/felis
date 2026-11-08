@@ -81,6 +81,7 @@ unicode-segmentation = "1.13"
 # simdutf8 over std::str::from_utf8: the std validator is scalar and cost a quarter of the CJK parse.
 simdutf8 = "0.1"
 swash = "0.2"
+harfrust = "0.15"
 # Newer than the skrifa swash 0.2 pulls in, so the lockfile carries both.
 skrifa = { version = "0.49", default-features = false, features = ["std"] }
 # `felis-shaping` maps the faces it draws rather than reading them onto
@@ -302,6 +303,7 @@ debug = 0
 # `"*"` buys the same test time but doubles a cold build's CPU.
 [profile.dev.package]
 swash = { opt-level = 1 }
+harfrust = { opt-level = 1 }
 skrifa = { opt-level = 1 }
 read-fonts = { opt-level = 1 }
 miniz_oxide = { opt-level = 1 }

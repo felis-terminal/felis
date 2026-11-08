@@ -22,7 +22,7 @@ canonical crate map is [reference/workspace.md](../../reference/workspace.md).
 │            ▼                │                  │             │                │
 │  ┌───────────────────────┐  │                  │  ┌──────────▼─────────────┐  │
 │  │ VT parser             │  │                  │  │ Text shaper            │  │
-│  │ + grid + scrollback   │  │                  │  │ (swash)                │  │
+│  │ + grid + scrollback   │  │                  │  │ (harfrust)             │  │
 │  │ + image store         │  │                  │  └──────────┬─────────────┘  │
 │  └─────────┬─────────────┘  │                  │             │                │
 │            ▼                │                  │  ┌──────────▼─────────────┐  │

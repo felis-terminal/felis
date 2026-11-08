@@ -1,6 +1,5 @@
 //! Criterion benchmark: steady-state `Shaper::shape_run` cost with a
-//! reused shaper (swash's per-font caches warm) vs a fresh one per
-//! iteration.
+//! reused shaper (its shape plan cached) vs a fresh one per iteration.
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 

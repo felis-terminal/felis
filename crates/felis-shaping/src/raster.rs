@@ -171,7 +171,7 @@ pub(crate) struct SkrifaOutlines {
 impl SkrifaOutlines {
     fn scaler(&mut self, font: &Font, px: f32) -> &ScalerFont {
         self.clock += 1;
-        let key = (font.raster_id, px.to_bits());
+        let key = (font.id, px.to_bits());
         let found = self.slots.iter().position(|s| (s.font, s.px) == key);
         let index = found.unwrap_or_else(|| {
             let slot = ScalerSlot {
