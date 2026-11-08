@@ -111,6 +111,28 @@ pub(crate) struct ResolvedFace {
     /// The face itself is italic or oblique, so an italic query needs no
     /// axis move to reach it.
     pub slanted: bool,
+    /// `None` where the host keeps no per-face setting, so the platform's
+    /// own mode applies.
+    pub hinting: Option<FaceHinting>,
+}
+
+/// The grid fitting fontconfig asks for a face.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum FaceHinting {
+    /// `hinting=false` or `hintstyle=hintnone`.
+    #[cfg_attr(
+        not(any(target_os = "linux", all(test, not(windows)))),
+        expect(dead_code, reason = "only the fontconfig provider reports it")
+    )]
+    None,
+    /// `hintslight` or `hintmedium`.
+    Slight { autohint: bool },
+    /// `hintfull`.
+    #[cfg_attr(
+        not(any(target_os = "linux", all(test, not(windows)))),
+        expect(dead_code, reason = "only the fontconfig provider reports it")
+    )]
+    Full { autohint: bool },
 }
 
 pub(crate) enum FaceSource {

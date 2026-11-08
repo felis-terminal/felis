@@ -208,6 +208,7 @@ impl FaceProvider for DirectWrite {
             index: face.index,
             instance: face.instance,
             slanted: face.style.italic,
+            hinting: None,
         })
     }
 
@@ -322,6 +323,7 @@ impl SystemFallback for Fallback {
             index,
             instance,
             slanted,
+            hinting: None,
         }))
     }
 }

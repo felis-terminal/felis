@@ -3,16 +3,16 @@
 
 use std::fmt::Write as _;
 
-use skrifa::ScalerFont;
+use skrifa::{HintOptions, RasterTarget, ScalerFont};
 use swash::{
     scale::{Render, ScaleContext, Source},
     zeno::Format,
 };
 
-use super::{OutlineBackend, RasterOptions, SkrifaOutlines, scaler_font};
+use super::{Hinting, OutlineBackend, RasterOptions, SkrifaOutlines, scaler_font};
 use crate::{
     FileSet, Font, GlyphBitmap,
-    provider::{FaceSource, ResolvedFace},
+    provider::{FaceHinting, FaceSource, ResolvedFace},
     test_font_dir,
 };
 
@@ -164,7 +164,7 @@ fn differential(hinted: bool) -> Parity {
     let raster = if hinted {
         RasterOptions::hinted()
     } else {
-        RasterOptions::UNHINTED
+        RasterOptions::NEVER_HINTED
     };
     let mut parity = Parity::default();
     let mut swash_ctx = ScaleContext::new();
@@ -239,6 +239,7 @@ fn hint_reliant_face() -> Font {
         index: 0,
         instance: None,
         slanted: false,
+        hinting: None,
     })
     .expect("the renamed face loads")
 }
@@ -256,6 +257,74 @@ fn unhinted_raster_leaves_a_hint_reliant_face_unhinted() {
             .is_some(),
         "skrifa's unhinted scaler hints a hint-reliant face",
     );
-    let font = with_raster(&face, RasterOptions::UNHINTED);
+    let font = with_raster(&face, RasterOptions::NEVER_HINTED);
     assert_eq!(scaler_font(&font, 16.0).hint_options(), None);
+}
+
+#[test]
+fn hintnone_still_hints_a_hint_reliant_face() {
+    let none = RasterOptions::for_face(Some(FaceHinting::None));
+    let tricky = with_raster(&hint_reliant_face(), none);
+    assert!(scaler_font(&tricky, 16.0).hint_options().is_some());
+    let plain = with_raster(&load("truetype/MonaspaceNeonFrozen-Regular.ttf"), none);
+    assert_eq!(scaler_font(&plain, 16.0).hint_options(), None);
+}
+
+#[test]
+fn fontconfig_hint_styles_map_to_skrifa_targets() {
+    let hinted = |hinting| match RasterOptions::for_face(Some(hinting)).hinting {
+        Hinting::Hinted(options) => options,
+        other => panic!("{hinting:?} draws {other:?}"),
+    };
+    assert_eq!(
+        RasterOptions::for_face(Some(FaceHinting::None)).hinting,
+        Hinting::Unhinted
+    );
+    for (autohint, engine) in [
+        (false, HintOptions::auto_fallback()),
+        (true, HintOptions::auto()),
+    ] {
+        assert_eq!(
+            hinted(FaceHinting::Slight { autohint }),
+            engine
+                .with_target(RasterTarget::Light)
+                .with_preserve_linear_metrics(true)
+        );
+        assert_eq!(
+            hinted(FaceHinting::Full { autohint }),
+            engine.with_target(RasterTarget::Normal)
+        );
+    }
+}
+
+#[test]
+fn a_face_outside_fontconfig_draws_in_the_platform_mode() {
+    let expected = if cfg!(target_os = "macos") {
+        RasterOptions::NEVER_HINTED
+    } else {
+        RasterOptions::for_face(Some(FaceHinting::Slight { autohint: false }))
+    };
+    assert_eq!(RasterOptions::for_face(None), expected);
+}
+
+/// The variable file carries no instructions, so both styles run the
+/// automatic hinter, which `hintfull` lets snap `m`'s stems horizontally.
+#[test]
+fn hintslight_and_hintfull_draw_different_bitmaps() {
+    let face = load("truetype/Monaspace Neon Var.ttf")
+        .at_style(400, false)
+        .expect("the variable face moves");
+    let draw = |hinting| {
+        let font = with_raster(&face, RasterOptions::for_face(Some(hinting)));
+        let glyph = font.font_ref().charmap().map('m');
+        SkrifaOutlines::default()
+            .coverage(&font, glyph, 15.0)
+            .expect("an outline")
+    };
+    let slight = draw(FaceHinting::Slight { autohint: false });
+    let full = draw(FaceHinting::Full { autohint: false });
+    assert_ne!(
+        (slight.left, slight.width(), slight.pixels().as_bytes()),
+        (full.left, full.width(), full.pixels().as_bytes())
+    );
 }

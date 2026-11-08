@@ -349,10 +349,11 @@ past the edge lands on top of the neighbor; only the window edge bounds the last
 glyph.
 
 How far it reaches depends on the raster. Unhinted, as on macOS, a glyph whose ink fills its advance crosses by the
-rounded-off fraction, under half a pixel. On Linux, where felis hints the raster, hinting widens some outlines further:
-at 18.67 px in an 11 px cell, DejaVu Sans Mono's `_`, `#` and `W` put one column of partial coverage (up to 44%) into
-the next cell. kitty on Linux accepts the unhinted form of the same overlap (slight hinting rounds the advance but
-leaves the outline unhinted horizontally), and ghostty states it as its trade.
+rounded-off fraction, under half a pixel. On Linux under `hintslight`, hinting keeps the overlap to the same one column
+of the next cell but darkens it: at 18.67 px in an 11 px cell, DejaVu Sans Mono's `_`, `#` and `W` put up to 44%
+coverage there, against 16% unhinted. `hintfull` reaches further only on a face the automatic hinter draws, which it
+then fits horizontally too: Monaspace Neon's variable build, which carries no instructions, puts up to 63% into the next
+column. kitty on Linux hints the same way under the same setting, and ghostty states the overlap as its trade.
 
 Rejected:
 
@@ -499,9 +500,15 @@ sub-pixel offsets. felis rasterizes pixel-aligned, sizing cells in whole pixels 
 atlas key (see "Atlas integration" above). At HiDPI the difference is marginal, and one raster per glyph keeps the atlas
 smaller and the cache key simpler.
 
-**Hinting, variable, and color fonts.** Hinting is off on macOS, where CoreText renders every native window unhinted,
-and on everywhere else; fontconfig's hinting preference is not consulted. Bold / italic select a separate styled face
-per [Per-style faces](#per-style-faces), which also covers how a variable face's weight and italic axes are set, so the
+**Hinting, variable, and color fonts.** Hinting is off on macOS, where CoreText renders every native window unhinted. On
+Linux each face is hinted as fontconfig's render settings for its match ask, read as kitty and cairo read them, so a
+`fonts.conf` rule can give one family or style its own: `hintslight` and `hintmedium` fit vertically only, `hintfull`
+lets the hinter fit horizontally too (in practice only the automatic hinter does, on a face without instructions),
+`autohint` runs the automatic hinter in place of the face's instructions, and `hinting=false` or `hintnone` draws
+unhinted except a face whose contours need its instructions, which FreeType hints under every setting. `antialias` is
+ignored, since felis draws grayscale only. felis has no hinting key of its own: fontconfig is where Linux users already
+set it ("Linux faces" above). Windows hints vertically for every face. Bold / italic select a separate styled face per
+[Per-style faces](#per-style-faces), which also covers how a variable face's weight and italic axes are set, so the
 styled primaries can be several views of one variable file. Color fonts (COLR/CPAL, sbix, CBDT, all supported by swash)
 rasterize into RGBA atlas slots; the cell shader samples RGBA instead of R8.
 

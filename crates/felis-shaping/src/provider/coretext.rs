@@ -225,6 +225,7 @@ impl FaceProvider for CoreText {
             index: face.index,
             instance: face.instance,
             slanted: face.style.italic,
+            hinting: None,
         })
     }
 
@@ -329,6 +330,7 @@ impl SystemFallback for Fallback {
             index: face.index,
             instance: face.instance,
             slanted: face.style.italic,
+            hinting: None,
         }))
     }
 }
