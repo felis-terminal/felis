@@ -310,7 +310,7 @@ fn shared_memory_transmission_decodes_off_linux() {
     .expect("create test shm");
     rustix::fs::ftruncate(&fd, 4).expect("size test shm");
     drop(fd);
-    let cmd = complete(
+    let mut cmd = complete(
         &[(b't', b"s"), (b'f', b"32"), (b's', b"1"), (b'v', b"1")],
         &b64(name.trim_start_matches('/').as_bytes()),
     );
