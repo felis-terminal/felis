@@ -280,11 +280,26 @@ pub const XTERM_PALETTE: [[u8; 3]; 16] = {
 /// IEC 61966-2-1 sRGB → linear conversion for one component.
 #[must_use]
 pub fn srgb_byte_to_linear(component: u8) -> f32 {
-    let c = f32::from(component) / 255.0;
+    srgb_to_linear(f32::from(component) / 255.0)
+}
+
+/// The IEC 61966-2-1 decoding curve over `0.0..=1.0`.
+#[must_use]
+pub fn srgb_to_linear(c: f32) -> f32 {
     if c <= 0.040_45 {
         c / 12.92
     } else {
         ((c + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+/// The inverse of [`srgb_to_linear`] over `0.0..=1.0`.
+#[must_use]
+pub fn linear_to_srgb(c: f32) -> f32 {
+    if c <= 0.003_130_8 {
+        c * 12.92
+    } else {
+        1.055f32.mul_add(c.powf(1.0 / 2.4), -0.055)
     }
 }
 
@@ -302,13 +317,7 @@ pub fn srgb_to_linear_rgba(srgb: [u8; 3], alpha: f32) -> [f32; 4] {
 /// colors into an sRGB-encoded surface itself (a DOM style).
 #[must_use]
 pub fn linear_to_srgb_byte(component: f32) -> u8 {
-    let c = component.clamp(0.0, 1.0);
-    let encoded = if c <= 0.003_130_8 {
-        c * 12.92
-    } else {
-        1.055f32.mul_add(c.powf(1.0 / 2.4), -0.055)
-    };
-    (encoded * 255.0).round() as u8
+    (linear_to_srgb(component.clamp(0.0, 1.0)) * 255.0).round() as u8
 }
 
 /// Alpha is coverage, not light, so it scales without the transfer curve.

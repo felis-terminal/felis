@@ -82,6 +82,51 @@ mismatches the shader's color space. Losing the surface (`Lost` / `Outdated`) re
 compositor may hand one back at any resize; `OutOfMemory` is fatal and the client exits, because there is nothing to
 retry with.
 
+### Text weight under linear blending
+
+An sRGB target blends in linear light, which is right for colors and images but makes the weight of anti-aliased text
+depend on the theme. An edge pixel at half coverage lands halfway between the two colors in linear luminance, which
+reads brighter than halfway, so light text on a dark background looks heavier and dark text on a light background
+lighter than in a terminal that blends the encoded values. Fonts are tuned for the second kind: foot's
+[`gamma-correct-blending`](https://codeberg.org/dnkl/foot/src/branch/master/doc/foot.ini.5.scd) notes that "many fonts
+have been developed on systems that do not do gamma-correct blending".
+
+So on Linux and Windows the shader remaps the coverage of every mask draw before blending: from the luminances of the
+foreground and the background it takes the coverage at which the linear blend reaches the luminance an sRGB-space blend
+would. Colors still mix in linear space; only the weight moves. This is ghostty's `linear-corrected`
+[`alpha-blending`](https://github.com/ghostty-org/ghostty/blob/main/src/config/Config.zig), the same mapping as kitty's
+`legacy` [`text_composition_strategy`](https://github.com/kovidgoyal/kitty/blob/master/kitty/options/definition.py). A
+mask draw is anything whose pixels are a coverage tinted by the foreground: font glyphs, the built-in box-drawing glyphs
+and the line decorations. Color glyphs, images and backgrounds carry their own color and blend unchanged.
+`felis_render_core::blend` is the reference the shader mirrors. The renderer turns the remap on only for an sRGB target:
+a surface that falls back to a non-sRGB format already blends encoded values, and the remap would correct twice.
+
+The background the remap assumes is the resolved background of the draw's own cell (reverse video, cursor and selection
+applied), and for the default background of a translucent window its configured opaque color. The remap is about text
+against its own background; what the compositor shows behind the window is outside felis. Four cases blend over
+something else: ink overhanging into a neighbor cell of another background, a Kitty image placed between the background
+and text layers, a search highlight laid under a match, and the backdrop of a translucent window. Only edge pixels are
+affected, by the difference between the assumed and the real background. The painter does not know where images sit, and
+search highlights are an overlay on cached rows, so tracking them would repaint every row per search keystroke; the
+error is accepted rather than tracked.
+
+macOS keeps plain linear blending, as ghostty does there, until it is measured against the platform's own text. The
+rejected alternatives:
+
+- **Plain linear blending everywhere.** The weight shift above, in both directions at once.
+- **sRGB-space blending.** It matches the fonts' tuning, but mixing encoded values darkens the edge between saturated
+  colors (red on green), the artifact ghostty documents for its `native` mode.
+- **kitty's gamma and contrast knobs.** A tuning surface for a preference nobody has stated (Principle 1); if tuning is
+  asked for, the two numbers of kitty's strategy (its [PR 5969](https://github.com/kovidgoyal/kitty/pull/5969)) can
+  parameterize this remap.
+- **FreeType stem darkening.** It changes outlines, not blending: it thickens all text whatever the theme, which the
+  [FreeType text-rendering notes](https://freetype.org/freetype2/docs/hinting/text-rendering-general.html) pair with
+  gamma-correct blending because gamma correction alone thins dark-on-light text, but it makes light-on-dark heavier
+  still, and it needs verification at every size the atlas rasterizes.
+- **A DirectWrite-equivalent correction on Windows**, as
+  [Windows Terminal](https://github.com/microsoft/terminal/blob/main/src/renderer/atlas/dwrite_helpers.hlsl) does. It
+  would match native Windows text more closely at the cost of a second shader path for one platform.
+
 ### Offscreen rendering
 
 A renderer can also draw into a texture of its own instead of a window surface, for a consumer with no window that reads

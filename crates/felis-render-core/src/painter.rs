@@ -15,6 +15,7 @@ use crate::{
     appearance::{
         CellAppearance, CursorMarkerKind, Disposition, FrameState, RowCells, RowFrame, resolve_cell,
     },
+    contrast::relative_luminance,
     display_list::{AtlasKind, DecoKind, Decoration, GlyphDraw, Rect, RowPaint},
     glyphs::{
         AtlasView, ClusterGlyph, GlyphSlot, ShapeFrame, ShapedCell, cluster_base_char,
@@ -266,11 +267,21 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
             if matches!(shaped, ShapedCell::Trailing) {
                 continue;
             }
+            let ink = self.ink(look.fg, look.bg);
             if let ShapedCell::Cluster { start, len, fit_px } = shaped {
-                self.push_cluster_cell(out, &at, look.fg, (start, len), fit_px);
+                self.push_cluster_cell(out, &at, ink, (start, len), fit_px);
                 continue;
             }
-            self.push_char_cell(out, &at, look.fg, shaped);
+            self.push_char_cell(out, &at, ink, shaped);
+        }
+    }
+
+    /// Judged against the straight background, so a translucent window
+    /// weights text as it would over its configured, opaque color.
+    fn ink(&self, color: [f32; 4], bg: [f32; 4]) -> Ink {
+        Ink {
+            color,
+            ground_luminance: relative_luminance(self.theme.contrast_ground(bg)),
         }
     }
 
@@ -319,7 +330,7 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
         &self,
         out: &mut RowPaint,
         at: &CellRef<'_>,
-        fg_color: [f32; 4],
+        ink: Ink,
         (start, len): (u32, u16),
         fit_px: u16,
     ) {
@@ -342,7 +353,7 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
             fit_px,
             glyph_scale,
             origin: [0.0, scaled_ascent],
-            color: fg_color,
+            ink,
         };
         let block_shift = self.cluster_block_shift(at, pen, sizing);
         let origin = self.origin(at);
@@ -422,13 +433,7 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
             .map(|pad| pad.max(0) as f32 * layout_scale)
     }
 
-    fn push_char_cell(
-        &self,
-        out: &mut RowPaint,
-        at: &CellRef<'_>,
-        fg_color: [f32; 4],
-        shaped: ShapedCell,
-    ) {
+    fn push_char_cell(&self, out: &mut RowPaint, at: &CellRef<'_>, ink: Ink, shaped: ShapedCell) {
         let shape_primary = match shaped {
             ShapedCell::Primary {
                 glyph_id,
@@ -521,7 +526,7 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
         };
         let origin = self.origin(at);
         let draw_origin = [origin[0] + h_offset, origin[1] + v_offset];
-        let quad = glyph_draw(slot, draw_origin, fg_color);
+        let quad = glyph_draw(slot, draw_origin, ink);
         // Shape runs do not split at color changes (`next_shape_run`),
         // so a glyph inking across cells is sliced per cell with each
         // strip's own color (kitty's per-cell sprite behavior). Color
@@ -578,6 +583,7 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
         let ox = origin[0];
         let oy = origin[1];
         let cw = self.cw;
+        let ground_luminance = self.ink(look.fg, look.bg).ground_luminance;
         let solid = |out: &mut Vec<Decoration>, top: f32, color: [f32; 4]| {
             out.push(Decoration {
                 origin_px: [ox, top.clamp(oy, oy + self.ch - thickness)],
@@ -586,6 +592,7 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
                 kind: DecoKind::Solid,
                 thickness_px: thickness,
                 period_px: 0.0,
+                ground_luminance,
             });
         };
 
@@ -609,6 +616,7 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
                     kind: DecoKind::Dotted,
                     thickness_px: thickness,
                     period_px: (thickness * 3.0).max(3.0),
+                    ground_luminance,
                 }),
                 UnderlineStyle::Dashed => out.push(Decoration {
                     origin_px: [ox, underline_top],
@@ -617,6 +625,7 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
                     kind: DecoKind::Dashed,
                     thickness_px: thickness,
                     period_px: (cw * 0.75).max(6.0),
+                    ground_luminance,
                 }),
                 UnderlineStyle::Curly => {
                     // Taller band so the sine can swing ± its amplitude.
@@ -633,6 +642,7 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
                         kind: DecoKind::Curly,
                         thickness_px: thickness,
                         period_px: cw.max(thickness * 4.0),
+                        ground_luminance,
                     });
                 }
             }
@@ -648,9 +658,9 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
     }
 
     /// Shape runs do not end at color boundaries (`next_shape_run`), and
-    /// one draw carries one tint, so a glyph covering
-    /// differently-colored cells is split into per-cell strips (kitty's
-    /// per-cell sprites). A uniform-color run emits the original quad.
+    /// one draw carries one tint and one ground, so a glyph covering cells
+    /// of different fg or bg is split into per-cell strips (kitty's
+    /// per-cell sprites). A uniform run emits the original quad.
     fn push_sliced_by_cell(&self, out: &mut RowPaint, quad: GlyphDraw, at: &CellRef<'_>) {
         let x0 = quad.origin_px[0];
         let x1 = x0 + quad.size_px[0];
@@ -670,17 +680,24 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
             out.glyphs.push(quad);
             return;
         }
-        let fg_at = |col: u16| -> [f32; 4] {
+        let ink_at = |col: u16| -> Ink {
             if col == at.col {
-                return quad.color;
+                return Ink {
+                    color: quad.color,
+                    ground_luminance: quad.ground_luminance,
+                };
             }
-            resolve_cell(at.cells, at.frame, self.theme, col).fg
+            let look = resolve_cell(at.cells, at.frame, self.theme, col);
+            self.ink(look.fg, look.bg)
         };
         // Both sides come from the same palette lookups, so equal
         // colors are equal bit patterns; an epsilon would blur distinct
         // palette entries.
         #[allow(clippy::float_cmp)]
-        let uniform = (col_first..=col_last).all(|col| fg_at(col) == quad.color);
+        let uniform = (col_first..=col_last).all(|col| {
+            let ink = ink_at(col);
+            ink.color == quad.color && ink.ground_luminance == quad.ground_luminance
+        });
         if uniform {
             out.glyphs.push(quad);
             return;
@@ -702,10 +719,12 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
             }
             let t0 = (sx0 - x0) / w;
             let t1 = (sx1 - x0) / w;
+            let ink = ink_at(col);
             let mut strip = GlyphDraw {
                 origin_px: [sx0, quad.origin_px[1]],
                 size_px: [sx1 - sx0, quad.size_px[1]],
-                color: fg_at(col),
+                color: ink.color,
+                ground_luminance: ink.ground_luminance,
                 ..quad
             };
             strip.crop_src_x(t0, t1);
@@ -775,7 +794,7 @@ pub fn extend_preedit<A: AtlasView>(
             atlas,
             metrics,
             (&overlay.text[cell.bytes], cell.width),
-            origin,
+            (origin, overlay_ink(PREEDIT_BG)),
             &mut out.glyphs,
         );
     }
@@ -829,7 +848,7 @@ fn push_overlay_glyphs<A: AtlasView>(
     atlas: &A,
     metrics: CellMetrics,
     (cluster, cols): (&str, u8),
-    origin: [f32; 2],
+    (origin, ink): ([f32; 2], Ink),
     out: &mut Vec<GlyphDraw>,
 ) {
     let ascent = f32::from(u16::try_from(metrics.ascent).unwrap_or(u16::MAX));
@@ -851,7 +870,7 @@ fn push_overlay_glyphs<A: AtlasView>(
                 fit_px: 0,
                 glyph_scale: 1.0,
                 origin: [origin[0], origin[1] + ascent],
-                color: theme_default_fg(),
+                ink,
             },
             out,
         );
@@ -864,7 +883,7 @@ fn push_overlay_glyphs<A: AtlasView>(
                 origin[0] + slot.offset_px[0] as f32,
                 origin[1] + ascent - slot.offset_px[1] as f32,
             ],
-            theme_default_fg(),
+            ink,
         ));
     }
 }
@@ -879,7 +898,23 @@ struct ClusterPen<'g> {
     fit_px: u16,
     glyph_scale: f32,
     origin: [f32; 2],
+    ink: Ink,
+}
+
+/// A coverage draw's tint and the luminance of what it is drawn over.
+#[derive(Clone, Copy)]
+struct Ink {
     color: [f32; 4],
+    ground_luminance: f32,
+}
+
+/// Overlay text is the fixed [`theme_default_fg`] on the overlay's own
+/// background, which is always opaque.
+fn overlay_ink(bg: [f32; 4]) -> Ink {
+    Ink {
+        color: theme_default_fg(),
+        ground_luminance: relative_luminance(bg),
+    }
 }
 
 /// Each placed glyph's slot and top-left corner; a glyph with no slot
@@ -933,7 +968,7 @@ fn cluster_ink_box<A: AtlasView>(
         .reduce(|[a, b, c, d], [x0, y0, x1, y1]| [a.min(x0), b.min(y0), c.max(x1), d.max(y1)])
 }
 
-const fn glyph_draw(slot: GlyphSlot, origin_px: [f32; 2], color: [f32; 4]) -> GlyphDraw {
+const fn glyph_draw(slot: GlyphSlot, origin_px: [f32; 2], ink: Ink) -> GlyphDraw {
     let [x, y] = slot.atlas_px;
     let [w, h] = slot.size_px;
     GlyphDraw {
@@ -946,7 +981,8 @@ const fn glyph_draw(slot: GlyphSlot, origin_px: [f32; 2], color: [f32; 4]) -> Gl
         },
         src_min_px: [x as f32, y as f32],
         src_max_px: [(x + w) as f32, (y + h) as f32],
-        color,
+        color: ink.color,
+        ground_luminance: ink.ground_luminance,
     }
 }
 
@@ -958,7 +994,7 @@ fn push_cluster_glyphs<A: AtlasView>(
 ) {
     out.extend(
         cluster_glyph_quads(atlas, cell_height, pen)
-            .map(|(slot, origin_px)| glyph_draw(slot, origin_px, pen.color)),
+            .map(|(slot, origin_px)| glyph_draw(slot, origin_px, pen.ink)),
     );
 }
 
@@ -1257,7 +1293,7 @@ fn push_bottom_bar<A: AtlasView>(
             atlas,
             metrics,
             (&label[cell.bytes], cell.width),
-            origin,
+            (origin, overlay_ink(bar_bg)),
             &mut out.glyphs,
         );
     }
@@ -1701,6 +1737,31 @@ mod tests {
         assert_ne!(buffers.glyphs[0].color, red);
     }
 
+    #[test]
+    fn shaped_quad_slices_per_cell_when_only_the_background_changes() {
+        let g = drive(1, 3, b"<-\x1b[41m>");
+        let mut atlas = MockAtlas::full(slot());
+        atlas.gid_map.insert(42, ligature_slot(0));
+        let frame = ShapeFrame::from_cells(
+            vec![
+                ShapedCell::Primary {
+                    glyph_id: 42,
+                    span_cols: 3,
+                },
+                ShapedCell::Trailing,
+                ShapedCell::Trailing,
+            ],
+            3,
+        );
+        let buffers = build_shaped(g.screen(), &atlas, &frame);
+        let theme = ResolvedTheme::new(&Theme::default());
+        let red = resolve_fg(Color::Indexed(1), &theme);
+        let grounds: Vec<f32> = buffers.glyphs.iter().map(|g| g.ground_luminance).collect();
+        let plain = relative_luminance(theme.bg);
+        assert_eq!(grounds, [plain, plain, relative_luminance(red)]);
+        assert!(buffers.glyphs.iter().all(|g| g.color == theme.fg));
+    }
+
     /// Uniform colors take the unsliced fast path.
     #[test]
     fn shaped_quad_stays_unsliced_when_colors_match() {
@@ -2106,6 +2167,61 @@ mod tests {
         assert_eq!(buffers.rects[0].color, theme.bg);
         assert_eq!(buffers.glyphs[1].color, theme.bg);
         assert_eq!(buffers.rects[1].color, theme.fg);
+    }
+
+    #[test]
+    fn a_glyph_and_its_decorations_are_weighted_against_the_bg_they_paint_on() {
+        let g = drive(1, 2, b"\x1b[?25l\x1b[4mA\x1b[7mB");
+        let atlas = MockAtlas::full(slot());
+        let theme = Theme::default();
+        let buffers = build_instances(g.screen(), metrics(), &theme, &atlas);
+        let grounds: Vec<f32> = buffers.glyphs.iter().map(|g| g.ground_luminance).collect();
+        assert_eq!(
+            grounds,
+            [relative_luminance(theme.bg), relative_luminance(theme.fg)]
+        );
+        let deco_grounds: Vec<f32> = buffers.decos.iter().map(|d| d.ground_luminance).collect();
+        assert_eq!(deco_grounds, grounds, "one underline per cell");
+    }
+
+    #[test]
+    fn a_translucent_default_bg_weights_glyphs_by_its_configured_opaque_color() {
+        let straight_bg = [1.0, 1.0, 1.0, 0.25];
+        let premultiplied = Theme {
+            bg: [0.25, 0.25, 0.25, 0.25],
+            ..Theme::default()
+        };
+        let theme = ResolvedTheme::new(&premultiplied).with_straight_bg(straight_bg);
+        let g = drive(1, 1, b"\x1b[?25lA");
+        let atlas = MockAtlas::full(slot());
+        let mut buffers = RowPaint::default();
+        CellPainter::new(g.screen(), metrics(), &theme, &atlas, &ShapeFrame::empty())
+            .with_viewport(0, 1)
+            .extend_screen(&mut buffers);
+        assert_eq!(
+            buffers.glyphs[0].ground_luminance,
+            relative_luminance(straight_bg)
+        );
+    }
+
+    #[test]
+    fn overlay_text_is_weighted_against_the_overlay_bg() {
+        let atlas = MockAtlas::full(slot());
+        let mut out = RowPaint::default();
+        extend_confirm(
+            &ConfirmOverlay {
+                label: "y".to_owned(),
+            },
+            metrics(),
+            2,
+            4,
+            &atlas,
+            &mut out,
+        );
+        assert_eq!(
+            out.glyphs[0].ground_luminance,
+            relative_luminance(CONFIRM_BAR_BG)
+        );
     }
 
     /// DECSCNM and SGR 7 compose by XOR on the *resolved* pair.
@@ -3225,6 +3341,7 @@ mod tests {
             src_min_px: [0.0, 0.0],
             src_max_px: [8.0, 16.0],
             color: [1.0; 4],
+            ground_luminance: 0.0,
         });
         out.glyphs.push(GlyphDraw {
             origin_px: [0.0, 34.0],
@@ -3233,6 +3350,7 @@ mod tests {
             src_min_px: [0.0, 0.0],
             src_max_px: [8.0, 16.0],
             color: [1.0; 4],
+            ground_luminance: 0.0,
         });
         clip_cells_above(&mut out, 32.0);
         assert_eq!(

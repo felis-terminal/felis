@@ -141,6 +141,11 @@ pub const fn fg_instance_layout() -> VertexBufferLayout<'static> {
             offset: offset_of!(FgInstance, is_color) as u64,
             shader_location: 5,
         },
+        VertexAttribute {
+            format: VertexFormat::Float32,
+            offset: offset_of!(FgInstance, ground_luminance) as u64,
+            shader_location: 6,
+        },
     ];
     VertexBufferLayout {
         array_stride: size_of::<FgInstance>() as u64,
@@ -182,6 +187,11 @@ pub const fn decoration_instance_layout() -> VertexBufferLayout<'static> {
             format: VertexFormat::Float32,
             offset: offset_of!(DecorationInstance, period_px) as u64,
             shader_location: 5,
+        },
+        VertexAttribute {
+            format: VertexFormat::Float32,
+            offset: offset_of!(DecorationInstance, ground_luminance) as u64,
+            shader_location: 6,
         },
     ];
     VertexBufferLayout {
