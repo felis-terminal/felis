@@ -28,6 +28,9 @@ pub struct GlyphDraw {
     /// Bottom-right of the sampled region, in pixels of the `atlas` sheet.
     pub src_max_px: [f32; 2],
     pub color: [f32; 4],
+    /// Relative luminance of the straight background of the cell the
+    /// draw belongs to, for [`crate::blend::linear_corrected_coverage`].
+    pub ground_luminance: f32,
 }
 
 impl GlyphDraw {
@@ -77,6 +80,8 @@ pub struct Decoration {
     /// Pattern period (dotted / dashed) or sine wavelength (curly).
     /// Unused by [`DecoKind::Solid`].
     pub period_px: f32,
+    /// As [`GlyphDraw::ground_luminance`].
+    pub ground_luminance: f32,
 }
 
 #[derive(Debug, Default, PartialEq)]

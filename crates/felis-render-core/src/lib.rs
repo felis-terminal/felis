@@ -7,6 +7,7 @@ use felis_protocol::{
 
 pub mod appearance;
 pub mod atlas;
+pub mod blend;
 #[cfg(feature = "glyphs")]
 pub mod box_drawing;
 pub mod contrast;

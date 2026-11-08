@@ -937,6 +937,7 @@ fn renderer_config_with(
         },
         post_stages,
         font_files: Vec::new(),
+        text_alpha_correction: !cfg!(target_os = "macos"),
     }
 }
 

@@ -41,12 +41,15 @@ pub struct FgInstance {
     /// coverage mask tinted by `color`. A float so it rides
     /// `VertexFormat::Float32` like the rest of the instance.
     pub is_color: f32,
+    /// The display list's `ground_luminance`, read by the coverage
+    /// remap of mask glyphs.
+    pub ground_luminance: f32,
     /// Pads the stride to the WGSL struct layout.
     #[expect(
         clippy::pub_underscore_fields,
         reason = "explicit WGSL alignment padding; never read, but Pod needs it pub"
     )]
-    pub _pad: [f32; 3],
+    pub _pad: [f32; 2],
 }
 
 const _: () = assert!(size_of::<FgInstance>() == 64);
@@ -96,15 +99,11 @@ pub struct DecorationInstance {
     /// Pattern period (dotted / dashed) or sine wavelength (curly), px.
     /// Unused by [`DECO_SOLID`].
     pub period_px: f32,
-    /// Pads the stride to the WGSL struct layout.
-    #[expect(
-        clippy::pub_underscore_fields,
-        reason = "explicit WGSL alignment padding; never read, but Pod needs it pub"
-    )]
-    pub _pad: f32,
+    /// As [`FgInstance::ground_luminance`].
+    pub ground_luminance: f32,
 }
 
-const _: () = assert!(size_of::<DecorationInstance>().is_multiple_of(16));
+const _: () = assert!(size_of::<DecorationInstance>() == 48);
 
 /// The kind values must match the `deco_fs` branch cutoffs in
 /// `shader.wgsl`.
@@ -170,7 +169,8 @@ pub(crate) fn encode(paint: &RowPaint, sides: AtlasSides, out: &mut InstanceBuff
             uv_max: [g.src_max_px[0] / side, g.src_max_px[1] / side],
             color: g.color,
             is_color,
-            _pad: [0.0; 3],
+            ground_luminance: g.ground_luminance,
+            _pad: [0.0; 2],
         }
     }));
     out.deco
@@ -186,7 +186,7 @@ pub(crate) fn encode(paint: &RowPaint, sides: AtlasSides, out: &mut InstanceBuff
             },
             thickness_px: d.thickness_px,
             period_px: d.period_px,
-            _pad: 0.0,
+            ground_luminance: d.ground_luminance,
         }));
 }
 
@@ -223,6 +223,7 @@ mod tests {
             src_min_px: [32.0, 64.0],
             src_max_px: [40.0, 80.0],
             color: [0.5; 4],
+            ground_luminance: 0.25,
         };
         let paint = RowPaint {
             rects: vec![Rect {
@@ -238,6 +239,7 @@ mod tests {
                 kind: DecoKind::Curly,
                 thickness_px: 1.0,
                 period_px: 8.0,
+                ground_luminance: 0.75,
             }],
         };
         let mut out = InstanceBuffers::default();
@@ -260,8 +262,10 @@ mod tests {
         assert_eq!(mono.is_color, 0.0);
         assert_eq!((color.uv_min, color.uv_max), ([0.25, 0.5], [0.3125, 0.625]));
         assert_eq!(color.is_color, 1.0);
+        assert_eq!(mono.ground_luminance, 0.25);
         assert_eq!(out.deco[0].kind, DECO_CURLY);
         assert_eq!(out.deco[0].period_px, 8.0);
+        assert_eq!(out.deco[0].ground_luminance, 0.75);
     }
 
     /// The uv the painter wrote before glyph sources moved to atlas
@@ -306,6 +310,7 @@ mod tests {
             src_min_px: [x as f32, y as f32],
             src_max_px: [(x + w) as f32, (y + h) as f32],
             color: [1.0; 4],
+            ground_luminance: 0.0,
         };
         glyph.crop_src_x(t0, t1);
         glyph.crop_src_y(0.0, kept_y);

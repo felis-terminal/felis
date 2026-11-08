@@ -24,6 +24,31 @@ struct Viewport {
 
 @group(0) @binding(0) var<uniform> viewport: Viewport;
 
+// Set by the renderer per pipeline: whether mask coverage is remapped
+// (docs/explanation/rendering/pipeline.md "Text weight under linear blending").
+override linear_correction: bool = false;
+
+fn srgb_to_linear(c: f32) -> f32 {
+    return select(pow((c + 0.055) / 1.055, 2.4), c / 12.92, c <= 0.04045);
+}
+
+fn linear_to_srgb(c: f32) -> f32 {
+    return select(1.055 * pow(c, 1.0 / 2.4) - 0.055, c * 12.92, c <= 0.0031308);
+}
+
+// Mirrors felis_render_core::blend::linear_corrected_coverage.
+fn corrected_coverage(coverage: f32, fg: vec3<f32>, ground_luminance: f32) -> f32 {
+    let fg_l = dot(fg, vec3<f32>(0.2126, 0.7152, 0.0722));
+    let span = fg_l - ground_luminance;
+    if (!linear_correction || abs(span) <= 0.001) {
+        return coverage;
+    }
+    let fg_s = linear_to_srgb(fg_l);
+    let bg_s = linear_to_srgb(ground_luminance);
+    let blended = srgb_to_linear(mix(bg_s, fg_s, coverage));
+    return clamp((blended - ground_luminance) / span, 0.0, 1.0);
+}
+
 fn corner_for_vertex(vid: u32) -> vec2<f32> {
     return vec2<f32>(f32(vid & 1u), f32((vid >> 1u) & 1u));
 }
@@ -75,6 +100,7 @@ struct FgInstance {
     // 1.0 → sample the RGBA color atlas (emoji); 0.0 → the coverage
     // atlas tinted by `color`.
     @location(5) is_color: f32,
+    @location(6) ground_luminance: f32,
 };
 
 struct FgVsOut {
@@ -82,6 +108,7 @@ struct FgVsOut {
     @location(0) uv: vec2<f32>,
     @location(1) color: vec4<f32>,
     @location(2) is_color: f32,
+    @location(3) @interpolate(flat) ground_luminance: f32,
 };
 
 @group(1) @binding(0) var atlas_tex: texture_2d<f32>;
@@ -97,6 +124,7 @@ fn fg_vs(@builtin(vertex_index) vid: u32, inst: FgInstance) -> FgVsOut {
     out.uv = mix(inst.uv_min, inst.uv_max, corner);
     out.color = inst.color;
     out.is_color = inst.is_color;
+    out.ground_luminance = inst.ground_luminance;
     return out;
 }
 
@@ -116,7 +144,8 @@ fn fg_fs(in: FgVsOut) -> @location(0) vec4<f32> {
     // by the instance color and modulate the alpha so the bg pass shows
     // through anti-aliased pixels.
     let coverage = textureSample(atlas_tex, atlas_sampler, in.uv).r;
-    return vec4<f32>(in.color.rgb, in.color.a * coverage);
+    let weight = corrected_coverage(coverage, in.color.rgb, in.ground_luminance);
+    return vec4<f32>(in.color.rgb, in.color.a * weight);
 }
 
 // ---- Decoration pass (SGR underlines / strikethrough / overline) ----
@@ -140,6 +169,7 @@ struct DecoInstance {
     @location(4) thickness_px: f32,
     // Pattern period (dotted / dashed) or sine wavelength (curly), px.
     @location(5) period_px: f32,
+    @location(6) ground_luminance: f32,
 };
 
 struct DecoVsOut {
@@ -154,6 +184,7 @@ struct DecoVsOut {
     // Grid-space pixel position of this fragment (perspective-correct
     // linear), used for the pattern phase and the curly distance test.
     @location(6) pos: vec2<f32>,
+    @location(7) @interpolate(flat) ground_luminance: f32,
 };
 
 @vertex
@@ -172,6 +203,7 @@ fn deco_vs(@builtin(vertex_index) vid: u32, inst: DecoInstance) -> DecoVsOut {
     // wave swings ± this within it.
     out.amplitude = max((inst.size_px.y - inst.thickness_px) * 0.5, 0.0);
     out.pos = vpos;
+    out.ground_luminance = inst.ground_luminance;
     return out;
 }
 
@@ -199,7 +231,8 @@ fn deco_fs(in: DecoVsOut) -> @location(0) vec4<f32> {
         let dist = abs(in.pos.y - wave_y);
         coverage = 1.0 - smoothstep(half_t - 0.75, half_t + 0.75, dist);
     }
-    return vec4<f32>(in.color.rgb, in.color.a * coverage);
+    let weight = corrected_coverage(coverage, in.color.rgb, in.ground_luminance);
+    return vec4<f32>(in.color.rgb, in.color.a * weight);
 }
 
 // ---- Image pass (Kitty graphics) -------------------------------------

@@ -39,6 +39,9 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 - **Graphics**: while felis decodes a large Kitty image (a PNG, a file or shared-memory source, or a large compressed
   frame), keystrokes still reach the program and windows still redraw; only the program's later output waits for the
   image.
+- **Rendering**: on Linux and Windows, text keeps the weight its font was designed for whatever the theme: dark text on
+  a light background no longer looks thin, and light text on a dark background no longer looks heavy. Colors still blend
+  as before; macOS is unchanged.
 
 ### Fixed
 

@@ -183,6 +183,12 @@ pub struct RendererConfig {
     /// (primary, styles, fallbacks); empty uses the system's. Fixed at
     /// construction: [`Renderer::reload_font`] keeps the renderer's own.
     pub font_files: Vec<PathBuf>,
+    /// Remaps glyph and decoration coverage so linear blending lands on
+    /// the luminance of sRGB-space blending
+    /// (`docs/explanation/rendering/pipeline.md` "Text weight under
+    /// linear blending"). Honored only on an sRGB target, the one that
+    /// blends in linear space.
+    pub text_alpha_correction: bool,
 }
 
 impl RendererConfig {
@@ -715,6 +721,10 @@ impl Renderer {
             bind_group_layouts: &[Some(&viewport_bgl), Some(&glyph_bgl)],
             immediate_size: 0,
         });
+        let linear_correction = [(
+            "linear_correction",
+            f64::from(u8::from(cfg.text_alpha_correction && format.is_srgb())),
+        )];
         let bg_pipeline = build_pipeline(
             &device,
             &module,
@@ -725,6 +735,7 @@ impl Renderer {
                 fs_entry: "bg_fs",
                 buffer_layout: bg_instance_layout(),
                 blend: None,
+                constants: &[],
             },
         );
         let fg_pipeline = build_pipeline(
@@ -737,6 +748,7 @@ impl Renderer {
                 fs_entry: "fg_fs",
                 buffer_layout: fg_instance_layout(),
                 blend: Some(BlendState::ALPHA_BLENDING),
+                constants: &linear_correction,
             },
         );
         let deco_pipeline = build_pipeline(
@@ -749,6 +761,7 @@ impl Renderer {
                 fs_entry: "deco_fs",
                 buffer_layout: decoration_instance_layout(),
                 blend: Some(BlendState::ALPHA_BLENDING),
+                constants: &linear_correction,
             },
         );
         let image_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
@@ -766,6 +779,7 @@ impl Renderer {
                 fs_entry: "image_fs",
                 buffer_layout: img_instance_layout(),
                 blend: Some(BlendState::ALPHA_BLENDING),
+                constants: &[],
             },
         );
 
@@ -1851,6 +1865,8 @@ struct PipelineSpec<'a> {
     fs_entry: &'a str,
     buffer_layout: VertexBufferLayout<'a>,
     blend: Option<BlendState>,
+    /// The shader's `override` values for the fragment stage.
+    constants: &'a [(&'a str, f64)],
 }
 
 fn build_pipeline(
@@ -1871,7 +1887,10 @@ fn build_pipeline(
         fragment: Some(FragmentState {
             module,
             entry_point: Some(spec.fs_entry),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            compilation_options: wgpu::PipelineCompilationOptions {
+                constants: spec.constants,
+                ..wgpu::PipelineCompilationOptions::default()
+            },
             targets: &[Some(ColorTargetState {
                 format,
                 blend: spec.blend,
