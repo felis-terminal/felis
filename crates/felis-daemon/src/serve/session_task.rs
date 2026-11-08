@@ -820,6 +820,7 @@ async fn spawn_task(
         pty_eof: false,
         told_exit: None,
         child_exited: exited,
+        reaped_exit: None,
         row_cache: streaming::RowEncodeCache::default(),
         reported_focus: false,
         focus_dirty: false,
@@ -1247,6 +1248,9 @@ struct SessionTask {
     /// What `SessionExited` carried, once EOF told the windows.
     told_exit: Option<ShellExit>,
     child_exited: bool,
+    /// Reaped by the exit poll and not yet acted on: EOF or the end of a
+    /// decode is owed it first.
+    reaped_exit: Option<ShellExit>,
     row_cache: streaming::RowEncodeCache,
     /// Focus last reported to the PTY, so reports are edge-triggered
     /// per session-level transition rather than per window event.
@@ -1641,11 +1645,7 @@ async fn run_session(mut t: SessionTask, mut cmd_rx: mpsc::Receiver<SessionCmd>)
             _ = drain_tick.tick(), if hold.drains() && hold.quiesced() => {
                 // Ungated by `attached`: a program left holding the PTY
                 // keeps EOF away, and an observer is owed the exit.
-                if !t.child_exited
-                    && let Ok(Some(status)) = t.session.child.try_wait()
-                {
-                    t.on_child_exit(exit_status_to_wire(status));
-                }
+                t.poll_child_exit();
                 if t.reap_due() {
                     break EndReason::Reaped;
                 }
@@ -2063,7 +2063,7 @@ impl SessionTask {
         // between the listing and the attach would leave a window
         // parked on a corpse that never pushes it off and blocks the
         // reap.
-        if if_exited == IfExited::Refuse && (self.pty_eof || self.child_exited) {
+        if if_exited == IfExited::Refuse && self.program_gone() {
             drop(req.reply.send(Err(SubscribeRefused::Exited)));
             return;
         }
@@ -2578,6 +2578,10 @@ impl SessionTask {
     /// waitable, so EOF can land a moment ahead of the status. Never
     /// while held for an upgrade: the dump names this child unreaped.
     async fn reap_after_eof(&mut self) -> Option<ExitStatus> {
+        if let Some(ShellExit(status)) = self.reaped_exit.take() {
+            self.child_exited = true;
+            return status;
+        }
         if self.upgrade_hold {
             return None;
         }
@@ -3489,7 +3493,7 @@ impl SessionTask {
         watch: Option<(RequesterId, StreamId)>,
         mouse: &[(u32, MouseEvent)],
     ) -> Prepared {
-        if self.pty_eof || self.child_exited {
+        if self.program_gone() {
             return Prepared::Ended;
         }
         {
@@ -3668,14 +3672,46 @@ impl SessionTask {
         true
     }
 
+    /// Nothing written now reaches the program, though output it wrote
+    /// before exiting may still end a wait admitted earlier.
+    const fn program_gone(&self) -> bool {
+        self.pty_eof || self.child_exited || self.reaped_exit.is_some()
+    }
+
+    fn poll_child_exit(&mut self) {
+        if self.child_exited {
+            return;
+        }
+        let status = self.reaped_exit.take().or_else(|| {
+            let reaped = self.session.child.try_wait().ok().flatten();
+            reaped.map(|status| ShellExit(exit_status_to_wire(status)))
+        });
+        let Some(ShellExit(status)) = status else {
+            return;
+        };
+        // EOF lands behind the parse of everything the child wrote; the
+        // sink may not have read that output yet.
+        if !self.pty_eof && self.session.resizer.peer_closed() {
+            self.reaped_exit = Some(ShellExit(status));
+            return;
+        }
+        self.on_child_exit(status);
+    }
+
     /// Seen before EOF when a process the program left behind holds the
-    /// PTY open: no mark it owes a wait can come any more.
+    /// PTY open: no mark it owes a wait can come any more, once the output
+    /// it wrote before exiting is parsed. That output can stop on an image
+    /// whose decode this drain starts, and the exit then waits for it.
     fn on_child_exit(&mut self, status: Option<ExitStatus>) {
-        self.child_exited = true;
         self.stamp_exited_meta();
         if let Err(err) = self.drive_cycle() {
             debug!(?err, "session task: effect drain at child exit failed");
         }
+        if self.decode.is_some() {
+            self.reaped_exit = Some(ShellExit(status));
+            return;
+        }
+        self.child_exited = true;
         self.observers.exited(status);
         self.end_watches();
     }
@@ -4346,6 +4382,7 @@ impl SessionTask {
             pty_eof: false,
             told_exit: None,
             child_exited: false,
+            reaped_exit: None,
             row_cache: streaming::RowEncodeCache::default(),
             reported_focus: false,
             focus_dirty: false,
@@ -9632,6 +9669,41 @@ mod tests {
             .collect();
         assert_eq!(ended, [test_stream(1), test_stream(2)]);
         assert_eq!(task.prepare_send(None, &[]), Prepared::Ended);
+    }
+
+    /// The exit poll can reap a child whose last output the sink has not
+    /// read yet. With nothing else holding the terminal, EOF is coming,
+    /// and it lands behind that output.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_child_exit_with_eof_coming_leaves_the_waits_to_eof() {
+        let mut task = SessionTask::for_tests(session_with("read -r _go; exit 4"));
+        let (conn, mut rx) = requester(&mut task);
+        let watch = Some((conn, test_stream(1)));
+        assert_eq!(task.prepare_send(watch, &[]), Prepared::Ready);
+        drop(drain_events(&mut rx));
+
+        streaming::write_pty_reserved(&task.session.writer, b"go\n".to_vec(), None).unwrap();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+        while task.reaped_exit.is_none() {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "the child never exited"
+            );
+            task.poll_child_exit();
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        task.poll_child_exit();
+        assert!(!task.child_exited, "the exit waits for EOF");
+        assert_eq!(
+            task.prepare_send(None, &[]),
+            Prepared::Ended,
+            "a send after the exit is refused"
+        );
+        let early = drain_events(&mut rx);
+        assert!(early.is_empty(), "the wait is EOF's to end: {early:?}");
+        assert_eq!(task.reap_after_eof().await, Some(ExitStatus::Code(4)));
+        assert!(task.child_exited);
     }
 
     #[tokio::test]

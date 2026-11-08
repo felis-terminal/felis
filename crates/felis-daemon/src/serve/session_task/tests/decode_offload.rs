@@ -591,10 +591,8 @@ async fn a_child_exiting_during_the_decode_ends_its_wait_with_the_mark_after_the
     // Past several exit polls with the child gone.
     tokio::time::sleep(Duration::from_millis(400)).await;
     stats(&run.cmd_tx).await;
-    assert!(
-        drain_events(&mut watcher).is_empty(),
-        "the wait outlives the decode"
-    );
+    let early = drain_events(&mut watcher);
+    assert!(early.is_empty(), "the wait outlives the decode: {early:?}");
 
     meet(&run.gate).await;
     let first = tokio::time::timeout(Duration::from_secs(10), watcher.recv())
@@ -609,6 +607,61 @@ async fn a_child_exiting_during_the_decode_ends_its_wait_with_the_mark_after_the
         "the mark after the image ends the wait, not the exit: {first:?}"
     );
     run.stop().await;
+}
+
+/// The exit poll can see the child gone before any drain has met the
+/// image its last output stopped on; the poll's own drain then starts
+/// the decode.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_child_exit_seen_before_its_image_decodes_waits_for_the_mark_after_the_image() {
+    let mut task = SessionTask::for_tests(session_with("read _x"));
+    let (conn, mut watcher) = requester(&mut task);
+    let watch = Some((conn, test_stream(1)));
+    assert_eq!(task.prepare_send(watch, &[]), Prepared::Ready);
+    assert!(task.send_fence(watch, 1));
+    drain_events(&mut watcher);
+
+    let mut output = command("a=t,i=1,f=100,q=2", &png(2, 2, 10), false);
+    output.extend_from_slice(b"\x1b]133;D;7\x07");
+    let stopped = {
+        let mut core = task.session.lock_core();
+        let core = &mut *core;
+        core.parser.advance_until_yield(&mut core.grid, &output)
+    }
+    .expect("the parse stops on the image");
+
+    task.on_child_exit(Some(ExitStatus::Code(0)));
+    assert!(task.decode.is_some(), "the exit's drain starts the decode");
+    task.poll_child_exit();
+    let early = drain_events(&mut watcher);
+    assert!(
+        early.is_empty(),
+        "the exit waits behind the image: {early:?}"
+    );
+    assert!(!task.child_exited);
+
+    let joined = (&mut task.decode.as_mut().unwrap().handle).await;
+    assert!(task.commit_decode(joined).expect("the commit").is_none());
+    {
+        let mut core = task.session.lock_core();
+        let core = &mut *core;
+        let rest = core
+            .parser
+            .advance_until_yield(&mut core.grid, &output[stopped..]);
+        assert_eq!(rest, None, "nothing after the image stops the parse");
+    }
+    task.drain_and_fan().expect("the drain");
+    let first = drain_events(&mut watcher);
+    assert!(
+        matches!(
+            first.first(),
+            Some(OutEvent::Ops { msg, .. })
+                if matches!(**msg, OpsToClientMsg::Mark { exit_code: Some(7) })
+        ),
+        "the mark after the image ends the wait, not the exit: {first:?}"
+    );
+    task.poll_child_exit();
+    assert!(task.child_exited, "the exit lands once its output drained");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

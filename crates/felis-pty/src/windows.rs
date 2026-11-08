@@ -467,6 +467,10 @@ impl Master {
     pub(crate) fn foreground_pgrp(&self) -> Option<i32> {
         None
     }
+
+    pub(crate) fn peer_closed(&self) -> bool {
+        false
+    }
 }
 
 /// Master-side `Read` that reports end-of-stream instead of

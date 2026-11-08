@@ -172,6 +172,14 @@ impl Resizer {
         self.master.foreground_pgrp()
     }
 
+    /// Whether nothing holds the terminal side open any more, so EOF is
+    /// coming. `false` where the platform cannot tell (Windows, whose
+    /// `ConPTY` never reports EOF).
+    #[must_use]
+    pub fn peer_closed(&self) -> bool {
+        self.master.peer_closed()
+    }
+
     /// The PTY master, which an in-place upgrade carries across `execve`.
     #[cfg(unix)]
     #[must_use]
@@ -1247,6 +1255,29 @@ mod tests {
         if let Some(pgrp) = resizer.foreground_pgrp() {
             assert!(pgrp > 0, "a reported pgid must be positive, got {pgrp}");
         }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_terminal_side_reads_closed_only_once_its_last_holder_exits() {
+        let (_collected, sink) = collector();
+        let session = spawn(blocks_forever(), small_size(), sink).expect("spawn");
+        let (_reader, _writer, child, resizer) = session.split();
+        assert!(!resizer.peer_closed(), "a running child holds it open");
+
+        assert!(child.hangup().expect("hangup"), "a live child is signaled");
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+        while child.try_wait().expect("try_wait").is_none() {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "the child never exited"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(
+            resizer.peer_closed(),
+            "nothing holds it once the child is reaped"
+        );
     }
 
     /// Every master half the caller owns can be gone and the child
