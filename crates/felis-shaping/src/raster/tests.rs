@@ -188,7 +188,9 @@ fn differential(hinted: bool) -> Parity {
                     .format(Format::Alpha)
                     .render(&mut scaler, glyph)
                     .expect("swash draws every corpus outline");
-                let ours = outlines.coverage(&font, glyph, px).expect("an outline");
+                let ours = outlines
+                    .coverage(&font, u32::from(glyph), px)
+                    .expect("an outline");
                 parity.compare(&format!("{name} {c:?} {px}px"), &ours, &theirs);
             }
         }
@@ -318,7 +320,7 @@ fn hintslight_and_hintfull_draw_different_bitmaps() {
         let font = with_raster(&face, RasterOptions::for_face(Some(hinting)));
         let glyph = font.font_ref().charmap().map('m');
         SkrifaOutlines::default()
-            .coverage(&font, glyph, 15.0)
+            .coverage(&font, u32::from(glyph), 15.0)
             .expect("an outline")
     };
     let slight = draw(FaceHinting::Slight { autohint: false });

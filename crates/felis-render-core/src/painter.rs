@@ -4029,7 +4029,7 @@ mod tests {
             atlas.gid_map.insert(
                 id,
                 GlyphSlot {
-                    atlas_px: [u32::from(id), 0],
+                    atlas_px: [id, 0],
                     ..slot()
                 },
             );

@@ -23,13 +23,14 @@ use skrifa::{
         types::F2Dot14,
     },
 };
-pub use swash::GlyphId;
 use swash::{
     FontRef, NormalizedCoord, Setting, StringId,
     scale::ScaleContext,
     shape::{Direction, ShapeContext},
 };
 use thiserror::Error;
+
+pub type GlyphId = u32;
 
 use crate::raster::{RasterOptions, Rasterizer};
 use tracing::{debug, warn};
@@ -379,7 +380,7 @@ impl Font {
         if glyph_id == 0 {
             return None;
         }
-        self.advance_width(glyph_id, px)
+        self.advance_width(GlyphId::from(glyph_id), px)
     }
 
     /// swash reads a varied advance from `HVAR` alone; skrifa falls back
@@ -389,7 +390,7 @@ impl Font {
         let font = skrifa::FontRef::from_index(self.bytes.as_ref().as_ref(), self.index).ok()?;
         let coords: Vec<F2Dot14> = self.coords.iter().map(|&c| F2Dot14::from_bits(c)).collect();
         font.glyph_metrics(Size::new(px), LocationRef::new(&coords))
-            .advance_width(glyph_id.into())
+            .advance_width(skrifa::GlyphId::new(glyph_id))
     }
 
     /// The glyph the face's cmap format 14 subtable names for `base`
@@ -406,7 +407,7 @@ impl Font {
             }
         })?;
         match variants.map_variant(base, selector)? {
-            MapVariant::Variant(glyph) => GlyphId::try_from(glyph.to_u32()).ok(),
+            MapVariant::Variant(glyph) => Some(glyph.to_u32()),
             MapVariant::UseDefault => None,
         }
     }
@@ -1185,14 +1186,17 @@ fn substitute_variant(font: &Font, px: f32, text: &str, glyphs: &mut [ShapedGlyp
     let [glyph] = glyphs else {
         return;
     };
-    if glyph.glyph_id != nominal {
+    if glyph.glyph_id != GlyphId::from(nominal) {
         return;
     }
     let Some(variant) = font.variant_glyph(base, selector) else {
         return;
     };
+    let Ok(narrow) = u16::try_from(variant) else {
+        return;
+    };
     let metrics = face.glyph_metrics(&font.coords).scale(px);
-    glyph.advance_px += metrics.advance_width(variant) - metrics.advance_width(nominal);
+    glyph.advance_px += metrics.advance_width(narrow) - metrics.advance_width(nominal);
     glyph.glyph_id = variant;
 }
 
@@ -2208,7 +2212,7 @@ fn rasterize(rasterizer: &mut Rasterizer, font: &Font, c: char, px: f32) -> Glyp
     if glyph_id == 0 {
         return GlyphBitmap::blank();
     }
-    rasterizer.rasterize(font, glyph_id, px)
+    rasterizer.rasterize(font, GlyphId::from(glyph_id), px)
 }
 
 impl GlyphBitmap {
@@ -2333,7 +2337,7 @@ impl Shaper {
             let src_end = cluster.source.end;
             for g in cluster.glyphs {
                 out.push(ShapedGlyph {
-                    glyph_id: g.id,
+                    glyph_id: GlyphId::from(g.id),
                     source_byte_start: src_start,
                     source_byte_len: src_end.saturating_sub(src_start),
                     advance_px: g.advance,
@@ -4689,7 +4693,7 @@ mod tests {
     fn rasterize_by_char_matches_rasterize_by_glyph_id() {
         let font = font();
         let face = font.font_ref();
-        let glyph_id = face.charmap().map('A');
+        let glyph_id = GlyphId::from(face.charmap().map('A'));
         assert_ne!(glyph_id, 0, "system monospace must cover 'A'");
         let mut cache = ShapeCache::default();
         let from_char = rasterize(&mut cache.rasterizer, &font, 'A', 16.0);
@@ -4759,7 +4763,10 @@ mod tests {
     fn shape_run_calt_texture_healing_defaults_on_and_disables() {
         let font = Font::load_test_font();
         let charmap = font.font_ref().charmap();
-        let base_ids = vec![charmap.map('m'), charmap.map('i'), charmap.map('m')];
+        let base_ids: Vec<GlyphId> = ['m', 'i', 'm']
+            .into_iter()
+            .map(|c| GlyphId::from(charmap.map(c)))
+            .collect();
         let mut shaper = Shaper::new();
         let healed = shaper.shape_run(&font, 16.0, &[], "mim");
         let disabled = shaper.shape_run(&font, 16.0, &["-calt".to_owned()], "mim");
@@ -4767,8 +4774,8 @@ mod tests {
             assert_eq!(out.len(), 3, "healing must keep one glyph per cell");
             assert!(out.iter().all(|g| g.source_byte_len == 1));
         }
-        let healed_ids: Vec<u16> = healed.iter().map(|g| g.glyph_id).collect();
-        let disabled_ids: Vec<u16> = disabled.iter().map(|g| g.glyph_id).collect();
+        let healed_ids: Vec<GlyphId> = healed.iter().map(|g| g.glyph_id).collect();
+        let disabled_ids: Vec<GlyphId> = disabled.iter().map(|g| g.glyph_id).collect();
         assert_eq!(
             disabled_ids, base_ids,
             "`-calt` must fall back to the unhealed charmap glyphs",
@@ -4854,8 +4861,8 @@ mod tests {
         let mut shaper = Shaper::new();
         let plain = shaper.shape_run(&font, 16.0, &[], "->");
         let ss03 = shaper.shape_run(&font, 16.0, &["ss03".to_owned()], "->");
-        let plain_ids: Vec<u16> = plain.iter().map(|g| g.glyph_id).collect();
-        let ss03_ids: Vec<u16> = ss03.iter().map(|g| g.glyph_id).collect();
+        let plain_ids: Vec<GlyphId> = plain.iter().map(|g| g.glyph_id).collect();
+        let ss03_ids: Vec<GlyphId> = ss03.iter().map(|g| g.glyph_id).collect();
         assert_ne!(
             plain_ids, ss03_ids,
             "ss03 must swap the `->` glyphs for the arrow alternates",
