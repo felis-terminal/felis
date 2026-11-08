@@ -9,14 +9,10 @@ use std::hint::black_box;
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use felis_shaping::{Font, Shaper};
 
-/// Ligature-bait operators are included so feature lookups actually fire.
-const ROW: &str = "user@host:~/src/felis$ cargo test -p felis-shaping -- --nocapture # => != ->";
+#[path = "support/run.rs"]
+mod run;
 
-const PX: f32 = 16.0;
-
-fn features() -> Vec<String> {
-    vec!["calt".to_owned(), "liga".to_owned()]
-}
+use run::{PX, ROW, features};
 
 fn bench_shape_run(c: &mut Criterion) {
     let font = Font::load_test_font_or_default().expect("load bench font");
