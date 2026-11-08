@@ -188,6 +188,19 @@ fn anchor_viewport_drops_to_live_when_history_is_erased() {
     assert_eq!(g.anchor_viewport(2, since), 0);
 }
 
+/// With no history there is no line for `CSI 3 J` to erase, so the
+/// anchor generation stays put however far the ring's base has moved.
+#[test]
+fn erasing_empty_history_keeps_the_anchor_generation() {
+    let mut p = Parser::new();
+    let mut g = Grid::with_scrollback(2, 4, 0);
+    drive(&mut p, &mut g, b"r1\r\nr2\r\nr3");
+    assert!(g.scrollback().is_empty());
+    let before = g.viewport_anchor();
+    drive(&mut p, &mut g, b"\x1b[3J");
+    assert_eq!(g.viewport_anchor(), before);
+}
+
 #[test]
 fn anchor_viewport_drops_to_live_on_the_alternate_screen() {
     let mut p = Parser::new();
