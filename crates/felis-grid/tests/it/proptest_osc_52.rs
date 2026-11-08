@@ -117,7 +117,7 @@ proptest! {
         let mut p = Parser::new();
         let mut g = Grid::new(1, 1);
         drive_with(&mut p, &mut g,&osc_52_set(b"c", &payload));
-        prop_assert!(g.take_pending_clipboard_set().is_some());
+        prop_assert!(!g.take_pending_clipboard_sets().is_empty());
 
         drive_with(&mut p, &mut g,&osc_52_query(b"c"));
         let response = common::responses(&mut g).pop().unwrap();
@@ -133,12 +133,12 @@ proptest! {
         let mut p = Parser::new();
         let mut g = Grid::new(1, 1);
         drive_with(&mut p, &mut g,&osc_52_set(b"c", &payload));
-        drop(g.take_pending_clipboard_set());
+        drop(g.take_pending_clipboard_sets());
 
         drive_with(&mut p, &mut g,&osc_52_clear(b"c"));
         prop_assert!(common::responses(&mut g).is_empty(),
             "clear must not emit a response");
-        prop_assert!(g.take_pending_clipboard_set().is_none(),
+        prop_assert!(g.take_pending_clipboard_sets().is_empty(),
             "clear must not hand the host a clipboard write");
 
         drive_with(&mut p, &mut g,&osc_52_query(b"c"));
@@ -158,7 +158,7 @@ proptest! {
         let mut g = Grid::new(1, 1);
         for payload in &payloads {
             drive_with(&mut p, &mut g,&osc_52_set(b"c", payload));
-            drop(g.take_pending_clipboard_set());
+            drop(g.take_pending_clipboard_sets());
         }
 
         drive_with(&mut p, &mut g,&osc_52_query(b"c"));
@@ -174,7 +174,7 @@ proptest! {
         let mut p = Parser::new();
         let mut g = Grid::new(1, 1);
         drive_with(&mut p, &mut g,&osc_52_set(b"p", &payload));
-        drop(g.take_pending_clipboard_set());
+        drop(g.take_pending_clipboard_sets());
 
         drive_with(&mut p, &mut g,&osc_52_query(b"c"));
         let response = common::responses(&mut g).pop().unwrap();
@@ -192,9 +192,9 @@ proptest! {
         let mut p = Parser::new();
         let mut g = Grid::new(1, 1);
         drive_with(&mut p, &mut g,&osc_52_set(b"c", &c_payload));
-        drop(g.take_pending_clipboard_set());
+        drop(g.take_pending_clipboard_sets());
         drive_with(&mut p, &mut g,&osc_52_set(b"p", &p_payload));
-        drop(g.take_pending_clipboard_set());
+        drop(g.take_pending_clipboard_sets());
 
         drive_with(&mut p, &mut g,&osc_52_query(b"cp"));
         let response = common::responses(&mut g).pop().unwrap();

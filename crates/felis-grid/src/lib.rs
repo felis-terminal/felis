@@ -849,10 +849,14 @@ pub struct Grid {
     /// (`NOTIFY_REASSEMBLY_*`) so a producer that never sends `d=1`
     /// cannot leak.
     osc99_pending: HashMap<String, PartialNotification>,
-    /// Latest `OSC 52` write for the daemon to forward. Replaced, not
-    /// queued: programs that set the clipboard repeatedly want only the
-    /// last write to land.
-    pending_clipboard_set: Option<ClipboardWrite>,
+    /// Latest `OSC 52` write per selection for the daemon to forward.
+    /// Replaced, not queued: programs that set the clipboard repeatedly
+    /// want only the last write to land. One slot per selection, since a
+    /// single slot lets a `p`-only write erase a `c` write still pending.
+    #[cfg_attr(feature = "state-dump", serde(with = "felis_vt::state::opt_b64"))]
+    pending_clipboard_set_clipboard: Option<Vec<u8>>,
+    #[cfg_attr(feature = "state-dump", serde(with = "felis_vt::state::opt_b64"))]
+    pending_clipboard_set_primary: Option<Vec<u8>>,
     /// Last value stored under the clipboard selection (`c`). `?`
     /// queries answer from here, not the OS clipboard, so a program
     /// cannot read data the user did not put there via OSC 52 (tmux's
@@ -1144,7 +1148,8 @@ impl Grid {
             current_sizing_handle: None,
             kitty_kbd: KittyKbd::default(),
             pty_effects: PtyEffectQueue::default(),
-            pending_clipboard_set: None,
+            pending_clipboard_set_clipboard: None,
+            pending_clipboard_set_primary: None,
             bell_pending: false,
             notifications: Vec::new(),
             osc99_pending: HashMap::new(),
@@ -1156,9 +1161,29 @@ impl Grid {
         }
     }
 
-    /// Forwarded by the daemon as `GridMsg::ClipboardSet`.
-    pub const fn take_pending_clipboard_set(&mut self) -> Option<ClipboardWrite> {
-        self.pending_clipboard_set.take()
+    /// Forwarded by the daemon as one `GridMsg::ClipboardSet` each. Both
+    /// selections holding the same bytes come out as one write naming
+    /// both, as the `cp` write that usually put them there did.
+    pub fn take_pending_clipboard_sets(&mut self) -> Vec<ClipboardWrite> {
+        let clipboard = self.pending_clipboard_set_clipboard.take();
+        let primary = self.pending_clipboard_set_primary.take();
+        match (clipboard, primary) {
+            (Some(c), Some(p)) if c == p => vec![ClipboardWrite {
+                selection: ClipboardSelection::CLIPBOARD | ClipboardSelection::PRIMARY,
+                data: c,
+            }],
+            (clipboard, primary) => clipboard
+                .map(|data| ClipboardWrite {
+                    selection: ClipboardSelection::CLIPBOARD,
+                    data,
+                })
+                .into_iter()
+                .chain(primary.map(|data| ClipboardWrite {
+                    selection: ClipboardSelection::PRIMARY,
+                    data,
+                }))
+                .collect(),
+        }
     }
 
     /// The only drain for parser side-effects; the per-kind extraction

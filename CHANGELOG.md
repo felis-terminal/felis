@@ -52,6 +52,8 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 
 ### Fixed
 
+- **Clipboard**: an `OSC 52` write to the clipboard (`c`) followed closely by one to PRIMARY alone (`p`) no longer loses
+  the clipboard write; with `clipboard.osc_52 = "system"` the clipboard kept its old contents.
 - **Keybindings**: a `pipe` binding with `target = "paste"` raises the confirmation bar for a region that carries a line
   break or other control byte while bracketed paste is off, as `Ctrl+V` does; it used to send the region as typed keys.
 - **CLI**: `felis sessions send --wait` ends with the exit code of an OSC 133 `D` mark the program printed just before
