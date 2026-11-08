@@ -2742,12 +2742,12 @@ pub struct ScrollbackView<'a> {
 
 impl<'a> ScrollbackView<'a> {
     #[must_use]
-    pub fn len(&self) -> usize {
+    pub const fn len(&self) -> usize {
         self.cold.len() + self.history_len
     }
 
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
