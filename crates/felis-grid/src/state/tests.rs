@@ -3,11 +3,10 @@ use proptest::prelude::*;
 
 use super::*;
 
-/// What a dump promises to keep: what every reader sees, though not
-/// the ring layout (`normalized`), and not the instant of a sync
+/// What a dump promises to keep: everything but the instant of a sync
 /// deadline, which moves with the clock it is measured on.
 fn canonical(grid: &Grid) -> Grid {
-    let mut grid = crate::test_support::normalized(grid);
+    let mut grid = grid.clone();
     if let SyncOutput::On { deadline } = &mut grid.sync_output {
         *deadline = None;
     }

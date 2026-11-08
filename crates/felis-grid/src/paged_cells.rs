@@ -303,14 +303,6 @@ impl Clone for PagedCells {
     }
 }
 
-impl PartialEq for PagedCells {
-    fn eq(&self, other: &Self) -> bool {
-        **self == **other
-    }
-}
-
-impl Eq for PagedCells {}
-
 impl fmt::Debug for PagedCells {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         (**self).fmt(f)

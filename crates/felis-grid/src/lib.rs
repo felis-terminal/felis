@@ -2680,7 +2680,11 @@ impl Grid {
         {
             return;
         }
-        self.history_epoch = self.history_epoch.wrapping_add(1);
+        // No line an anchor names is erased when there is no history; the
+        // relayout below only moves the ring's base.
+        if self.screen.history_len != 0 || !self.screen.cold.is_empty() {
+            self.history_epoch = self.history_epoch.wrapping_add(1);
+        }
         let cols = usize::from(self.screen.cols);
         let rows = usize::from(self.screen.rows);
         let mut cells = ring_cells(rows * cols, rows + self.screen.cap, cols);
