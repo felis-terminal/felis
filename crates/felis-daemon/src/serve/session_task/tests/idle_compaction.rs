@@ -9,6 +9,7 @@ use felis_grid::{Grid, SearchOptions, SearchQuery};
 use felis_protocol::messages::SearchSource;
 
 use super::super::idle::{self, IdleProbe, QUIET, Step};
+use super::decode_offload::resize_dims;
 use super::*;
 use crate::parse_sink::ParseSignals;
 
@@ -97,6 +98,7 @@ struct Quiet {
     signals: Arc<ParseSignals>,
     probe: Arc<IdleProbe>,
     twin: ParseCore,
+    sub: SubscriberId,
     rx: mpsc::UnboundedReceiver<OutEvent>,
     shadow: felis_client_core::ShadowScreen,
     cmd_tx: mpsc::Sender<SessionCmd>,
@@ -107,7 +109,7 @@ impl Quiet {
     fn start() -> Self {
         let mut task = SessionTask::for_tests(session_with("read _x"));
         let shadow = new_mirror(&task);
-        let (_sub, rx) = attach_sub(&mut task, false);
+        let (sub, rx) = attach_sub(&mut task, false);
         let (rows, cols) = {
             let core = task.session.lock_core();
             (core.grid.rows(), core.grid.cols())
@@ -123,6 +125,7 @@ impl Quiet {
             signals,
             probe,
             twin: ParseCore::new(rows, cols),
+            sub,
             rx,
             shadow,
             cmd_tx,
@@ -342,6 +345,189 @@ async fn each_gap_between_bursts_compacts_the_whole_history() {
         );
         q.assert_reads_as_twin(&format!("after burst {burst}"));
         q.feed(&lines(50_000 + burst * 1000, 1000));
+    }
+    q.stop().await;
+}
+
+/// Captures through the session task, as an upgrade does.
+async fn capture(cmd_tx: &mpsc::Sender<SessionCmd>) -> crate::upgrade::dump::SessionState {
+    let (done, settled) = oneshot::channel();
+    cmd_tx
+        .send(SessionCmd::Settle(done))
+        .await
+        .map_err(|_| ())
+        .unwrap();
+    settled.await.unwrap();
+    let (reply, state) = oneshot::channel();
+    cmd_tx
+        .send(SessionCmd::Capture(reply))
+        .await
+        .map_err(|_| ())
+        .unwrap();
+    *state.await.unwrap()
+}
+
+/// Spec: a compacted session carried through an upgrade, its history
+/// live or saved under the alternate screen, restores as the uncompacted
+/// twin reads and keeps evicting in FIFO order.
+#[tokio::test(start_paused = true)]
+async fn a_compacted_session_survives_the_hand_off() {
+    for alternate in [false, true] {
+        let mut q = Quiet::start();
+        q.feed(&lines(0, felis_grid::DEFAULT_SCROLLBACK_ROWS + 30));
+        if alternate {
+            q.feed(b"\x1b[?1049h\x1b[Hfull-screen program");
+        }
+        q.until_runs_done(1).await;
+        let state = capture(&q.cmd_tx).await;
+        let bytes = serde_json::to_vec(&state).unwrap();
+        let restored: crate::upgrade::dump::SessionState = serde_json::from_slice(&bytes).unwrap();
+        let mut successor = ParseCore {
+            parser: restored.parser,
+            grid: restored.grid,
+            table_gc: restored.table_gc,
+        };
+        assert_reads_as(&successor.grid, &q.twin.grid, "restored");
+        let mut more = lines(70_000, 300);
+        if alternate {
+            more.splice(0..0, b"\x1b[?1049l".iter().copied());
+        }
+        successor.parser.advance(&mut successor.grid, &more);
+        q.twin.parser.advance(&mut q.twin.grid, &more);
+        assert_reads_as(&successor.grid, &q.twin.grid, "scrolled after the restore");
+        q.cmd_tx
+            .send(SessionCmd::Resume)
+            .await
+            .map_err(|_| ())
+            .unwrap();
+        q.stop().await;
+    }
+}
+
+/// No slice runs while an upgrade holds the session, however long the
+/// hold outlasts the quiet interval; the run follows the resume.
+#[tokio::test(start_paused = true)]
+async fn an_upgrade_hold_defers_compaction_until_the_resume() {
+    let mut q = Quiet::start();
+    q.feed(&lines(0, felis_grid::DEFAULT_SCROLLBACK_ROWS + 30));
+    let (done, settled) = oneshot::channel();
+    q.cmd_tx
+        .send(SessionCmd::Settle(done))
+        .await
+        .map_err(|_| ())
+        .unwrap();
+    settled.await.unwrap();
+    tokio::time::advance(QUIET * 10).await;
+    let (reply, stats) = oneshot::channel();
+    q.cmd_tx
+        .send(SessionCmd::Stats { reply })
+        .await
+        .map_err(|_| ())
+        .unwrap();
+    stats.await.unwrap();
+    assert_eq!(q.probe.count(Step::Slice), 0, "{:?}", q.probe.log.lock());
+    q.cmd_tx
+        .send(SessionCmd::Resume)
+        .await
+        .map_err(|_| ())
+        .unwrap();
+    q.until_runs_done(1).await;
+    q.assert_reads_as_twin("after the resume");
+    q.stop().await;
+}
+
+/// Resident set of this test process, from `/proc/self/statm`. The
+/// tests reading it assume a process of their own, as nextest runs them.
+#[cfg(target_os = "linux")]
+fn rss_bytes() -> usize {
+    let statm = std::fs::read_to_string("/proc/self/statm").unwrap();
+    let pages: usize = statm.split_whitespace().nth(1).unwrap().parse().unwrap();
+    pages * rustix::param::page_size()
+}
+
+/// Spec: a refused upgrade, whose capture clones the grid under the
+/// session lock and then drops it, faults no discarded page back in;
+/// the session stays usable and compacts again.
+#[tokio::test(start_paused = true)]
+async fn a_refused_upgrade_leaves_the_compacted_session_as_it_was() {
+    let mut q = Quiet::start();
+    q.feed(&lines(0, felis_grid::DEFAULT_SCROLLBACK_ROWS + 30));
+    q.until_runs_done(1).await;
+    let held = q.resident();
+    #[cfg(target_os = "linux")]
+    let before = rss_bytes();
+    drop(capture(&q.cmd_tx).await);
+    q.cmd_tx
+        .send(SessionCmd::Resume)
+        .await
+        .map_err(|_| ())
+        .unwrap();
+    assert_eq!(q.resident(), held);
+    #[cfg(target_os = "linux")]
+    {
+        let after = rss_bytes();
+        assert!(
+            after < before + full_ring_bytes(&q) / 2,
+            "a refused capture took the process from {before} to {after} bytes"
+        );
+    }
+    q.feed(&lines(80_000, 2000));
+    q.until_runs_done(2).await;
+    assert!(
+        q.resident() <= held + held / 4,
+        "{} after recompaction, {held} before",
+        q.resident()
+    );
+    q.assert_reads_as_twin("after the refused upgrade");
+    q.stop().await;
+}
+
+/// Spec: on Linux, a quiet session hands its ring pages back to the OS,
+/// and repeated flood, compaction, resize and `CSI 3 J` cycles do not
+/// ratchet the process up. A reflow's scratch buffers stay in glibc's
+/// heap once freed, so the bound starts once both widths have reflowed:
+/// from then on no quiet spell ends above the highest earlier point.
+#[cfg(target_os = "linux")]
+#[tokio::test(start_paused = true)]
+async fn a_quiet_session_returns_its_ring_pages_cycle_after_cycle() {
+    let mut q = Quiet::start();
+    let ring = full_ring_bytes(&q);
+    let mut high: Option<usize> = None;
+    for cycle in 0..4 {
+        q.feed(&lines(
+            cycle * 20_000,
+            felis_grid::DEFAULT_SCROLLBACK_ROWS + 30,
+        ));
+        let flooded = rss_bytes();
+        q.until_runs_done(2 * cycle + 1).await;
+        let quiet = rss_bytes();
+        assert!(
+            quiet + ring / 3 < flooded,
+            "cycle {cycle}: {flooded} bytes flooded, {quiet} once quiet"
+        );
+        let cols = if cycle % 2 == 0 { 100 } else { 80 };
+        q.cmd_tx
+            .send(SessionCmd::Input {
+                sub: q.sub,
+                msg: InputMsg::Resize {
+                    dims: resize_dims((24, cols)),
+                },
+                reservation: None,
+            })
+            .await
+            .map_err(|_| ())
+            .unwrap();
+        q.until_runs_done(2 * cycle + 2).await;
+        let resized = rss_bytes();
+        if let Some(high) = high.filter(|_| cycle >= 2) {
+            assert!(
+                quiet.max(resized) < high + ring / 4,
+                "cycle {cycle}: {quiet} bytes once quiet, {resized} once resized, \
+                 {high} at most before"
+            );
+        }
+        high = Some(high.unwrap_or(0).max(quiet).max(resized));
+        q.feed(b"\x1b[3J");
     }
     q.stop().await;
 }
