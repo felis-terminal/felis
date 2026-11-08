@@ -346,13 +346,12 @@ mod tests {
     }
 }
 
-// Unix-only: binds `serve_unix` on a real socket path.
+// Unix-only: serves a daemon on a real socket path.
 #[cfg(all(test, unix))]
 mod unix_tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
 
     use std::sync::Arc;
-    use std::time::Duration;
 
     use felis_protocol::{
         ConnectionMode, codec,
@@ -381,8 +380,8 @@ mod unix_tests {
     use tokio::sync::Mutex;
 
     use super::*;
+    use crate::SessionPool;
     use crate::serve::DaemonCaps;
-    use crate::{SessionPool, serve_unix};
 
     /// Records every autospawn instead of exec'ing this test binary.
     struct SpawnLog {
@@ -436,14 +435,16 @@ mod unix_tests {
         Some(dir)
     }
 
-    async fn wait_connectable(path: &Path) {
-        for _ in 0..100 {
-            if connect(path).await.is_ok() {
-                return;
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-        panic!("daemon never became connectable");
+    /// Bound before it is spawned, so the next connect is queued.
+    fn serve_bound(path: &Path, pool: Arc<Mutex<SessionPool>>) {
+        let serving = crate::serve::bind_unix(
+            path,
+            DaemonCaps::default(),
+            pool,
+            crate::serve::default_session_factory(),
+        )
+        .unwrap();
+        tokio::spawn(async move { drop(serving.await) });
     }
 
     /// A preface plus `Hello` written straight onto the returned halves
@@ -453,13 +454,9 @@ mod unix_tests {
         let tmp = private_dir();
         let path = tmp.path().join("daemon.sock");
         let pool = Arc::new(Mutex::new(SessionPool::new()));
-        let server_path = path.clone();
-        tokio::spawn(async move {
-            drop(serve_unix(&server_path, DaemonCaps::default(), pool).await);
-        });
         // Pre-bind so the autospawn path, which would exec the test binary,
         // is never taken.
-        wait_connectable(&path).await;
+        serve_bound(&path, pool);
 
         let spawns = SpawnLog::new();
         let (mut read_half, mut write_half) = open_daemon_link(&path, false, &spawns.deps())
@@ -501,11 +498,7 @@ mod unix_tests {
         let tmp = private_dir();
         let path = tmp.path().join("daemon.sock");
         let pool = Arc::new(Mutex::new(SessionPool::new()));
-        let server_path = path.clone();
-        tokio::spawn(async move {
-            drop(serve_unix(&server_path, DaemonCaps::default(), pool).await);
-        });
-        wait_connectable(&path).await;
+        serve_bound(&path, pool);
 
         let (mut read_half, mut write_half) = connect(&path).await.unwrap();
         prepend_environment(&mut write_half, &capture_environment()).await;
@@ -601,11 +594,7 @@ mod unix_tests {
         let dir = private_dir();
         let path = dir.path().join("daemon.sock");
         let pool = Arc::new(Mutex::new(SessionPool::new()));
-        let server_path = path.clone();
-        tokio::spawn(async move {
-            drop(serve_unix(&server_path, DaemonCaps::default(), pool).await);
-        });
-        wait_connectable(&path).await;
+        serve_bound(&path, pool);
         let own = rustix::process::geteuid().as_raw();
         let bogus = if own == 0 { 65534 } else { 0 };
 

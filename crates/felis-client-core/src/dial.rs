@@ -614,7 +614,7 @@ mod tests {
     use super::*;
 
     #[cfg(unix)]
-    use crate::test_support::{await_socket, private_dir};
+    use crate::test_support::{private_dir, serve_bound};
 
     use felis_protocol::messages::AttachFailure;
     use felis_transport::retry::RetryPolicy;
@@ -949,7 +949,7 @@ mod tests {
     #[cfg(all(unix, feature = "daemon-tests"))]
     #[tokio::test]
     async fn an_exact_attach_lands_without_listing_the_roster() {
-        use felis_daemon::serve::{SessionFactory, serve_unix_with_factory};
+        use felis_daemon::serve::SessionFactory;
 
         let tmp = private_dir();
         let path = tmp.path().join("daemon.sock");
@@ -961,19 +961,12 @@ mod tests {
             cmd.env("PATH", "/bin:/usr/bin");
             cmd
         });
-        let server_path = path.clone();
-        let _server = tokio::spawn(async move {
-            drop(
-                serve_unix_with_factory(
-                    &server_path,
-                    felis_daemon::serve::DaemonCaps::default(),
-                    pool,
-                    factory,
-                )
-                .await,
-            );
-        });
-        await_socket(&path).await;
+        let _server = serve_bound(
+            &path,
+            felis_daemon::serve::DaemonCaps::default(),
+            pool,
+            factory,
+        );
 
         let carrier = Carrier::Local(path.into());
         let created = dial_and_land(

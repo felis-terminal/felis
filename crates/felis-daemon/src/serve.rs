@@ -458,6 +458,19 @@ pub async fn serve_unix_with_factory(
     pool: Arc<Mutex<SessionPool>>,
     factory: SessionFactory,
 ) -> Result<(), ServeError> {
+    bind_unix(endpoint, caps, pool, factory)?.await
+}
+
+/// Binds now and serves when the returned future is polled: a connect
+/// made once this returns is queued, never refused, which a caller
+/// starting a daemon in-process can wait on instead of the socket path.
+#[doc(hidden)]
+pub fn bind_unix(
+    endpoint: impl Into<Endpoint>,
+    caps: DaemonCaps,
+    pool: Arc<Mutex<SessionPool>>,
+    factory: SessionFactory,
+) -> Result<impl Future<Output = Result<(), ServeError>> + Send + 'static, ServeError> {
     let endpoint = endpoint.into();
     let caps = with_endpoint(&endpoint, caps)?;
     let server = Listener::bind(&endpoint)?;
@@ -474,7 +487,7 @@ pub async fn serve_unix_with_factory(
     #[cfg(target_os = "linux")]
     crate::notify::notify_ready(std::env::var_os(crate::NOTIFY_SOCKET_ENV).as_deref())
         .map_err(ServeError::Io)?;
-    accept_loop(server, endpoint, caps, pool, factory).await
+    Ok(accept_loop(server, endpoint, caps, pool, factory))
 }
 
 /// Serves the listening socket a predecessor carried across an in-place

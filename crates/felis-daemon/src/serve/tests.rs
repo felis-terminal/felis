@@ -283,9 +283,6 @@ where
     }
 }
 
-/// Blocks until the socket file appears so a connect cannot race the bind.
-/// The socket file appears at `bind`, before `listen`: a connect in
-/// that window is refused though the daemon is still starting.
 #[cfg(unix)]
 async fn connect(
     path: &Path,
@@ -293,42 +290,23 @@ async fn connect(
     felis_transport::local::ReadHalf,
     felis_transport::local::WriteHalf,
 )> {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        match felis_transport::local::connect(path).await {
-            Err(err)
-                if err.kind() == io::ErrorKind::ConnectionRefused && Instant::now() < deadline =>
-            {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-            other => return other,
-        }
-    }
+    felis_transport::local::connect(path).await
 }
 
 #[cfg(unix)]
-async fn spawn_daemon(path: &Path, pool: Arc<Mutex<SessionPool>>, factory: SessionFactory) {
-    spawn_daemon_with_caps(path, pool, factory, DaemonCaps::default()).await;
+fn spawn_daemon(path: &Path, pool: Arc<Mutex<SessionPool>>, factory: SessionFactory) {
+    spawn_daemon_with_caps(path, pool, factory, DaemonCaps::default());
 }
 
 #[cfg(unix)]
-async fn spawn_daemon_with_caps(
+fn spawn_daemon_with_caps(
     path: &Path,
     pool: Arc<Mutex<SessionPool>>,
     factory: SessionFactory,
     caps: DaemonCaps,
 ) {
-    let server_path = path.to_path_buf();
-    tokio::spawn(async move {
-        drop(serve_unix_with_factory(&server_path, caps, pool, factory).await);
-    });
-    for _ in 0..100 {
-        if path.exists() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    assert!(path.exists());
+    let serving = bind_unix(path, caps, pool, factory).expect("the test daemon binds its socket");
+    tokio::spawn(async move { drop(serving.await) });
 }
 
 /// The order matters: a `FrameReader` built first would read ahead past the
@@ -522,7 +500,7 @@ async fn streams_pty_output_through_the_grid_to_the_wire() {
     let pool = Arc::new(Mutex::new(SessionPool::new()));
     let factory = shell_factory("printf hello-felis; sleep 0.5");
 
-    spawn_daemon(&path, pool, factory).await;
+    spawn_daemon(&path, pool, factory);
 
     let (read_half, write_half) = connect(&path).await.unwrap();
     let (mut reader, mut writer) = framed(read_half, write_half).await;
@@ -545,7 +523,7 @@ async fn text_after_a_placement_in_one_write_lands_right_of_the_image() {
     let factory = shell_factory(
         "printf 'top\\n\\033_Ga=T,f=24,s=1,v=1,c=2,r=2;AAAA\\033\\\\AFTER'; sleep 0.5",
     );
-    spawn_daemon(&path, pool, factory).await;
+    spawn_daemon(&path, pool, factory);
     let (read_half, write_half) = connect(&path).await.unwrap();
     let (mut reader, mut writer) = framed(read_half, write_half).await;
     hello_welcome(&mut reader, &mut writer, false).await;
@@ -589,7 +567,7 @@ async fn daemon_refuses_an_unsupported_protocol_major_in_the_preface() {
     let pool = Arc::new(Mutex::new(SessionPool::new()));
     let factory = shell_factory("true");
 
-    spawn_daemon(&path, pool, factory).await;
+    spawn_daemon(&path, pool, factory);
 
     let (mut read_half, mut write_half) = connect(&path).await.unwrap();
     let future_major = PROTOCOL_MAJOR + 1;
@@ -634,7 +612,7 @@ async fn a_non_felis_peer_is_closed_without_a_single_reply_byte() {
     let pool = Arc::new(Mutex::new(SessionPool::new()));
     let factory = shell_factory("true");
 
-    spawn_daemon(&path, pool, factory).await;
+    spawn_daemon(&path, pool, factory);
 
     let (mut read_half, mut write_half) = connect(&path).await.unwrap();
     write_half.write_all(b"GET / HTTP/1.1\r\n").await.unwrap();
@@ -668,7 +646,7 @@ async fn the_accept_reply_precedes_the_welcome_on_the_wire() {
     let pool = Arc::new(Mutex::new(SessionPool::new()));
     let factory = shell_factory("true");
 
-    spawn_daemon(&path, pool, factory).await;
+    spawn_daemon(&path, pool, factory);
 
     let (mut read_half, mut write_half) = connect(&path).await.unwrap();
 
@@ -859,7 +837,7 @@ async fn a_region_request_ships_the_bytes_back_and_spawns_nothing() {
     let probe = Arc::clone(&pool);
     let factory = shell_factory("read _x");
 
-    spawn_daemon(&path, pool, factory).await;
+    spawn_daemon(&path, pool, factory);
 
     let (read_half, write_half) = connect(&path).await.unwrap();
     let (mut reader, mut writer) = framed(read_half, write_half).await;
@@ -1935,7 +1913,7 @@ async fn resize_over_the_wire_makes_subsequent_row_deltas_carry_the_new_width() 
     let pool = Arc::new(Mutex::new(SessionPool::new()));
     let factory = shell_factory("read x; printf 'got=%s\\n' \"$x\"");
 
-    spawn_daemon(&path, pool, factory).await;
+    spawn_daemon(&path, pool, factory);
 
     let (read_half, write_half) = connect(&path).await.unwrap();
     let (mut reader, mut writer) = framed(read_half, write_half).await;
@@ -2006,18 +1984,14 @@ async fn first_frame_on_wrong_kind_is_rejected_cleanly() {
     let path = tmp.path().join("daemon.sock");
     let pool = Arc::new(Mutex::new(SessionPool::new()));
 
-    let server_path = path.clone();
-    let server_pool = pool.clone();
-    let server = tokio::spawn(async move {
-        drop(serve_unix(&server_path, DaemonCaps::default(), server_pool).await);
-    });
-
-    for _ in 0..100 {
-        if path.exists() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
+    let serving = bind_unix(
+        &path,
+        DaemonCaps::default(),
+        pool.clone(),
+        default_session_factory(),
+    )
+    .expect("the test daemon binds its socket");
+    let server = tokio::spawn(async move { drop(serving.await) });
 
     let (read_half, write_half) = connect(&path).await.unwrap();
     let (mut reader, mut writer) = framed(read_half, write_half).await;
@@ -2070,7 +2044,7 @@ async fn session_task_reaps_dead_session_after_grace() {
         ..DaemonCaps::default()
     };
 
-    spawn_daemon_with_caps(&path, pool.clone(), factory, caps).await;
+    spawn_daemon_with_caps(&path, pool.clone(), factory, caps);
 
     let (read_half, write_half) = connect(&path).await.unwrap();
     let (mut reader, mut writer) = framed(read_half, write_half).await;
@@ -2157,7 +2131,7 @@ async fn exited_shell_is_flagged_in_meta_during_the_grace() {
         },
         ..DaemonCaps::default()
     };
-    spawn_daemon_with_caps(&path, pool.clone(), factory, caps).await;
+    spawn_daemon_with_caps(&path, pool.clone(), factory, caps);
 
     let (read_half, write_half) = connect(&path).await.unwrap();
     let (mut reader, mut writer) = framed(read_half, write_half).await;
@@ -2197,7 +2171,7 @@ async fn a_pick_that_exits_before_the_attach_is_refused_and_the_re_pick_lands() 
         },
         ..DaemonCaps::default()
     };
-    spawn_daemon_with_caps(&path, pool.clone(), shell_factory("sleep 30"), caps).await;
+    spawn_daemon_with_caps(&path, pool.clone(), shell_factory("sleep 30"), caps);
 
     let session_task::SessionLifecycle { id: survivor, .. } = session_task::spawn_owned(
         &pool,
@@ -2423,7 +2397,7 @@ async fn a_create_ack_reports_the_window_it_attached() {
     let tmp = private_dir();
     let path = tmp.path().join("daemon.sock");
     let pool = Arc::new(Mutex::new(SessionPool::new()));
-    spawn_daemon(&path, pool.clone(), shell_factory("sleep 30")).await;
+    spawn_daemon(&path, pool.clone(), shell_factory("sleep 30"));
 
     let (read_half, write_half) = connect(&path).await.unwrap();
     let (mut reader, mut writer) = framed(read_half, write_half).await;
@@ -2448,7 +2422,7 @@ async fn a_window_attachment_reports_the_carrier_it_arrived_on() {
     let tmp = private_dir();
     let path = tmp.path().join("daemon.sock");
     let pool = Arc::new(Mutex::new(SessionPool::new()));
-    spawn_daemon(&path, pool.clone(), shell_factory("sleep 30")).await;
+    spawn_daemon(&path, pool.clone(), shell_factory("sleep 30"));
 
     let (read_half, mut write_half) = connect(&path).await.unwrap();
     let block = CarrierBlock {
@@ -2491,7 +2465,7 @@ async fn a_create_ack_reports_the_directory_the_child_started_in() {
     let tmp = private_dir();
     let path = tmp.path().join("daemon.sock");
     let pool = Arc::new(Mutex::new(SessionPool::new()));
-    spawn_daemon(&path, pool.clone(), shell_factory("sleep 30")).await;
+    spawn_daemon(&path, pool.clone(), shell_factory("sleep 30"));
     let dir = tmp.path().to_str().unwrap().to_owned();
 
     let (read_half, write_half) = connect(&path).await.unwrap();
@@ -2526,7 +2500,7 @@ async fn a_re_attach_does_not_move_a_session_in_the_ring() {
     let tmp = private_dir();
     let path = tmp.path().join("daemon.sock");
     let pool = Arc::new(Mutex::new(SessionPool::new()));
-    spawn_daemon(&path, pool.clone(), shell_factory("sleep 30")).await;
+    spawn_daemon(&path, pool.clone(), shell_factory("sleep 30"));
 
     let (read_half, write_half) = connect(&path).await.unwrap();
     let (mut reader, mut writer) = framed(read_half, write_half).await;
@@ -2568,7 +2542,7 @@ async fn a_live_only_attach_is_refused_on_a_corpse_but_a_deliberate_one_lands() 
         },
         ..DaemonCaps::default()
     };
-    spawn_daemon_with_caps(&path, pool.clone(), shell_factory("exit 0"), caps).await;
+    spawn_daemon_with_caps(&path, pool.clone(), shell_factory("exit 0"), caps);
 
     let (read_half, write_half) = connect(&path).await.unwrap();
     let (mut reader, mut writer) = framed(read_half, write_half).await;
@@ -2666,7 +2640,7 @@ async fn detached_session_keeps_draining_so_child_does_not_block() {
         ..DaemonCaps::default()
     };
 
-    spawn_daemon_with_caps(&path, pool.clone(), factory, caps).await;
+    spawn_daemon_with_caps(&path, pool.clone(), factory, caps);
 
     let (read_half, write_half) = connect(&path).await.unwrap();
     let (mut reader, mut writer) = framed(read_half, write_half).await;
@@ -2889,7 +2863,7 @@ async fn measure_attached_cat_drain() {
             cmd
         })
     };
-    spawn_daemon(&path, pool.clone(), factory).await;
+    spawn_daemon(&path, pool.clone(), factory);
 
     let (read_half, write_half) = connect(&path).await.unwrap();
     let (mut reader, mut writer) = framed(read_half, write_half).await;
@@ -2998,7 +2972,7 @@ async fn measure_pull_cycles_under_flood() {
             cmd
         })
     };
-    spawn_daemon(&path, pool.clone(), factory).await;
+    spawn_daemon(&path, pool.clone(), factory);
 
     let (read_half, write_half) = connect(&path).await.unwrap();
     let (mut reader, mut writer) = framed(read_half, write_half).await;
@@ -3073,7 +3047,7 @@ async fn rehydrate_replays_persisted_images_and_placements() {
     let pool = Arc::new(Mutex::new(SessionPool::new()));
     let factory = shell_factory("read _x");
 
-    spawn_daemon(&path, pool.clone(), factory).await;
+    spawn_daemon(&path, pool.clone(), factory);
 
     let mut owned = owned_session("read _x");
     owned
@@ -3217,7 +3191,7 @@ async fn time_to_first_frame_under_simulated_slow_link() {
     let pool = Arc::new(Mutex::new(SessionPool::new()));
     let factory = shell_factory("read _x");
 
-    spawn_daemon(&path, pool.clone(), factory).await;
+    spawn_daemon(&path, pool.clone(), factory);
 
     // 4 KiB of pixels: without them both landmarks land in one MTU and the
     // gap is framing overhead.
@@ -3407,7 +3381,7 @@ async fn a_hello_naming_an_unknown_mode_is_refused_by_name() {
     let pool = Arc::new(Mutex::new(SessionPool::new()));
     let factory = shell_factory("read x");
 
-    spawn_daemon(&path, pool.clone(), factory).await;
+    spawn_daemon(&path, pool.clone(), factory);
 
     let (read_half, write_half) = connect(&path).await.unwrap();
     let (mut reader, mut writer) = framed(read_half, write_half).await;
@@ -3468,7 +3442,7 @@ async fn an_unreadable_hello_that_is_not_a_future_mode_closes_unanswered() {
         let pool = Arc::new(Mutex::new(SessionPool::new()));
         let factory = shell_factory("read x");
 
-        spawn_daemon(&path, pool.clone(), factory).await;
+        spawn_daemon(&path, pool.clone(), factory);
 
         let (read_half, write_half) = connect(&path).await.unwrap();
         let (mut reader, mut writer) = framed(read_half, write_half).await;
@@ -3502,7 +3476,7 @@ async fn malformed_input_frame_does_not_orphan_the_session() {
     let pool = Arc::new(Mutex::new(SessionPool::new()));
     let factory = shell_factory("read x");
 
-    spawn_daemon(&path, pool.clone(), factory).await;
+    spawn_daemon(&path, pool.clone(), factory);
 
     let (read_half, write_half) = connect(&path).await.unwrap();
     let (mut reader, mut writer) = framed(read_half, write_half).await;
@@ -3649,7 +3623,7 @@ async fn two_subscribers_mirror_one_session() {
     let pool = Arc::new(Mutex::new(SessionPool::new()));
     let factory = shell_factory("read x; printf 'got=%s\\n' \"$x\"; sleep 0.5");
 
-    spawn_daemon(&path, pool.clone(), factory).await;
+    spawn_daemon(&path, pool.clone(), factory);
 
     let (ra, wa) = connect(&path).await.unwrap();
     let (mut reader_a, mut writer_a) = framed(ra, wa).await;
@@ -3688,7 +3662,7 @@ async fn late_joiner_rehydrates_output_that_predates_its_attach() {
     let pool = Arc::new(Mutex::new(SessionPool::new()));
     let factory = shell_factory("printf marker-xyz; read _x");
 
-    spawn_daemon(&path, pool, factory).await;
+    spawn_daemon(&path, pool, factory);
 
     let (ra, wa) = connect(&path).await.unwrap();
     let (mut reader_a, mut writer_a) = framed(ra, wa).await;
@@ -3714,7 +3688,7 @@ async fn detaching_one_mirror_keeps_the_other_streaming() {
     let pool = Arc::new(Mutex::new(SessionPool::new()));
     let factory = shell_factory("read x; printf 'got=%s\\n' \"$x\"; sleep 0.5");
 
-    spawn_daemon(&path, pool.clone(), factory).await;
+    spawn_daemon(&path, pool.clone(), factory);
 
     let (ra, wa) = connect(&path).await.unwrap();
     let (mut reader_a, mut writer_a) = framed(ra, wa).await;
@@ -3761,7 +3735,7 @@ async fn a_corrupt_frame_kills_its_own_connection_and_nothing_else() {
     let pool = Arc::new(Mutex::new(SessionPool::new()));
     let factory = shell_factory("read x; printf 'got=%s\\n' \"$x\"; sleep 0.5");
 
-    spawn_daemon(&path, pool.clone(), factory).await;
+    spawn_daemon(&path, pool.clone(), factory);
 
     let (ra, wa) = connect(&path).await.unwrap();
     let (mut reader_a, mut writer_a) = framed(ra, wa).await;
@@ -3830,7 +3804,7 @@ async fn force_detach_evicts_every_subscriber_and_keeps_the_session() {
     let pool = Arc::new(Mutex::new(SessionPool::new()));
     // `read` is a `sh` builtin, so the session blocks without a program the
     // host must resolve.
-    spawn_daemon(&path, pool.clone(), shell_factory("read _x")).await;
+    spawn_daemon(&path, pool.clone(), shell_factory("read _x"));
 
     let (ra, wa) = connect(&path).await.unwrap();
     let (mut reader_a, mut writer_a) = framed(ra, wa).await;
@@ -3902,7 +3876,7 @@ async fn force_detach_idle_session_reports_not_attached() {
     let tmp = private_dir();
     let path = tmp.path().join("daemon.sock");
     let pool = Arc::new(Mutex::new(SessionPool::new()));
-    spawn_daemon(&path, pool.clone(), shell_factory("read _x")).await;
+    spawn_daemon(&path, pool.clone(), shell_factory("read _x"));
 
     let (rb, wb) = connect(&path).await.unwrap();
     let (mut reader_b, mut writer_b) = framed(rb, wb).await;
@@ -3960,7 +3934,7 @@ async fn a_switch_with_no_targeted_window_separates_the_count_from_the_denial() 
     let tmp = private_dir();
     let path = tmp.path().join("daemon.sock");
     let pool = Arc::new(Mutex::new(SessionPool::new()));
-    spawn_daemon(&path, pool.clone(), shell_factory("read _x")).await;
+    spawn_daemon(&path, pool.clone(), shell_factory("read _x"));
 
     let (rb, wb) = connect(&path).await.unwrap();
     let (mut reader, mut writer) = framed(rb, wb).await;
@@ -4380,7 +4354,7 @@ async fn attach_ready_reports_the_session_as_no_longer_idle() {
     let tmp = private_dir();
     let path = tmp.path().join("daemon.sock");
     let pool = Arc::new(Mutex::new(SessionPool::new()));
-    spawn_daemon(&path, pool.clone(), shell_factory("read _x")).await;
+    spawn_daemon(&path, pool.clone(), shell_factory("read _x"));
 
     let id = create_parked_session(pool.clone()).await;
     // A parked row already reports `Some(0)`, so the premise is the
@@ -4929,7 +4903,7 @@ async fn the_caps_terminfo_dir_reaches_a_created_session_and_a_cwd_retry() {
         terminfo_dir: Some(terminfo.clone()),
         ..DaemonCaps::default()
     };
-    spawn_daemon_with_caps(&path, pool, factory, caps).await;
+    spawn_daemon_with_caps(&path, pool, factory, caps);
     let expected = format!("TI={}:|", terminfo.display());
 
     for cwd in ["", "/felis-no-such-directory-for-tests"] {
@@ -5549,7 +5523,7 @@ async fn a_create_past_the_geometry_bound_is_refused_before_anything_spawns() {
         let pool = Arc::new(Mutex::new(SessionPool::new()));
         let factory: SessionFactory =
             Arc::new(|_| panic!("an out-of-range create must not reach the factory"));
-        spawn_daemon(&path, pool, factory).await;
+        spawn_daemon(&path, pool, factory);
 
         let (read_half, write_half) = connect(&path).await.unwrap();
         let (mut reader, mut writer) = framed(read_half, write_half).await;
@@ -5598,7 +5572,7 @@ async fn an_absent_create_geometry_defaults_and_a_zero_axis_is_refused() {
     let tmp = private_dir();
     let path = tmp.path().join("daemon.sock");
     let pool = Arc::new(Mutex::new(SessionPool::new()));
-    spawn_daemon(&path, pool, shell_factory("read x")).await;
+    spawn_daemon(&path, pool, shell_factory("read x"));
 
     let (read_half, write_half) = connect(&path).await.unwrap();
     let (mut reader, mut writer) = framed(read_half, write_half).await;
@@ -5654,7 +5628,7 @@ async fn a_resize_past_the_geometry_bound_is_clamped_and_reported_clamped() {
     let tmp = private_dir();
     let path = tmp.path().join("daemon.sock");
     let pool = Arc::new(Mutex::new(SessionPool::new()));
-    spawn_daemon(&path, pool, shell_factory("read x")).await;
+    spawn_daemon(&path, pool, shell_factory("read x"));
 
     let (read_half, write_half) = connect(&path).await.unwrap();
     let (mut reader, mut writer) = framed(read_half, write_half).await;
@@ -5709,7 +5683,7 @@ async fn a_create_past_the_session_cap_is_refused_and_executes_nothing() {
         max_sessions: 1,
         ..DaemonCaps::default()
     };
-    spawn_daemon_with_caps(&path, pool.clone(), shell_factory("sleep 30"), caps).await;
+    spawn_daemon_with_caps(&path, pool.clone(), shell_factory("sleep 30"), caps);
 
     let (read_half, write_half) = connect(&path).await.unwrap();
     let (mut reader, mut writer) = framed(read_half, write_half).await;
@@ -5779,7 +5753,7 @@ async fn concurrent_ops_spawns_are_attributed_by_request_id() {
     let tmp = private_dir();
     let path = tmp.path().join("daemon.sock");
     let pool = Arc::new(Mutex::new(SessionPool::new()));
-    spawn_daemon(&path, pool.clone(), shell_factory("sleep 30")).await;
+    spawn_daemon(&path, pool.clone(), shell_factory("sleep 30"));
 
     let (read_half, write_half) = connect(&path).await.unwrap();
     let (mut reader, mut writer) = framed(read_half, write_half).await;
@@ -5835,8 +5809,7 @@ async fn a_create_is_attached_when_its_ack_is_written() {
         &path,
         pool.clone(),
         shell_factory("printf 'hello-felis\n'; sleep 30"),
-    )
-    .await;
+    );
 
     let (read_half, write_half) = connect(&path).await.unwrap();
     let (mut reader, mut writer) = framed(read_half, write_half).await;
@@ -6199,7 +6172,7 @@ async fn concurrent_creates_never_admit_past_the_session_cap() {
         max_sessions: CAP,
         ..DaemonCaps::default()
     };
-    spawn_daemon_with_caps(&path, pool.clone(), shell_factory("sleep 30"), caps).await;
+    spawn_daemon_with_caps(&path, pool.clone(), shell_factory("sleep 30"), caps);
 
     // All dialed before any sends, so the creates reach the admission check
     // together.
@@ -6266,7 +6239,7 @@ async fn status_reports_every_accounted_resource_with_its_limit() {
         max_sessions: 7,
         ..DaemonCaps::default()
     };
-    spawn_daemon_with_caps(&path, pool.clone(), shell_factory("sleep 30"), caps).await;
+    spawn_daemon_with_caps(&path, pool.clone(), shell_factory("sleep 30"), caps);
 
     let (read_half, write_half) = connect(&path).await.unwrap();
     let (mut reader, mut writer) = framed(read_half, write_half).await;
@@ -6382,7 +6355,7 @@ async fn status_samples_what_the_sessions_are_holding() {
     let tmp = private_dir();
     let path = tmp.path().join("daemon.sock");
     let pool = Arc::new(Mutex::new(SessionPool::new()));
-    spawn_daemon(&path, pool.clone(), shell_factory("sleep 30")).await;
+    spawn_daemon(&path, pool.clone(), shell_factory("sleep 30"));
 
     let mut owned = owned_session("sleep 30");
     owned
@@ -6654,7 +6627,7 @@ async fn a_dial_past_the_connection_cap_is_refused_at_capacity() {
     let tmp = private_dir();
     let path = tmp.path().join("daemon.sock");
     let pool = Arc::new(Mutex::new(SessionPool::new()));
-    spawn_daemon_with_caps(&path, pool, shell_factory("sleep 30"), admission_caps(1, 4)).await;
+    spawn_daemon_with_caps(&path, pool, shell_factory("sleep 30"), admission_caps(1, 4));
 
     let (read_half, write_half) = connect(&path).await.unwrap();
     let (mut reader, mut writer) = framed(read_half, write_half).await;
@@ -6705,7 +6678,7 @@ async fn silent_over_cap_peers_are_bounded_by_the_refusal_slots() {
     let tmp = private_dir();
     let path = tmp.path().join("daemon.sock");
     let pool = Arc::new(Mutex::new(SessionPool::new()));
-    spawn_daemon_with_caps(&path, pool, shell_factory("sleep 30"), admission_caps(1, 1)).await;
+    spawn_daemon_with_caps(&path, pool, shell_factory("sleep 30"), admission_caps(1, 1));
 
     let (read_half, write_half) = connect(&path).await.unwrap();
     let (mut reader, mut writer) = framed(read_half, write_half).await;
@@ -6748,8 +6721,7 @@ async fn the_connections_row_counts_admitted_peers_and_every_permit_returns() {
         pool,
         shell_factory("sleep 30"),
         admission_caps(CAP, 4),
-    )
-    .await;
+    );
 
     let (read_half, write_half) = connect(&path).await.unwrap();
     let (mut reader, mut writer) = framed(read_half, write_half).await;
@@ -7028,7 +7000,7 @@ async fn a_connection_cut_at_a_handshake_deadline_returns_its_permit() {
         },
         ..admission_caps(1, 4)
     };
-    spawn_daemon_with_caps(&path, pool, shell_factory("sleep 30"), caps).await;
+    spawn_daemon_with_caps(&path, pool, shell_factory("sleep 30"), caps);
 
     // Takes the daemon's only permit and then says nothing, so its
     // handler ends in `Err(HandshakeTimeout { Hello })`.
@@ -7070,8 +7042,7 @@ async fn many_sessions_with_mirrors_never_pass_the_connection_ceiling() {
         pool,
         shell_factory("sleep 30"),
         admission_caps(CAP, 8),
-    )
-    .await;
+    );
 
     // Admitted first and held throughout: every reading of the row is
     // taken by a connection the row itself counts.
@@ -7359,7 +7330,7 @@ async fn an_empty_fence_is_answered_at_once() {
     let tmp = private_dir();
     let path = tmp.path().join("daemon.sock");
     let pool = Arc::new(Mutex::new(SessionPool::new()));
-    spawn_daemon(&path, pool, shell_factory("read _x")).await;
+    spawn_daemon(&path, pool, shell_factory("read _x"));
 
     let (read_half, write_half) = connect(&path).await.unwrap();
     let (mut reader, mut writer) = framed(read_half, write_half).await;
@@ -7386,8 +7357,7 @@ async fn input_admitted_before_the_fence_survives_the_client_hanging_up() {
         &path,
         Arc::clone(&pool),
         shell_factory("read line; printf 'GOT:%s' \"$line\""),
-    )
-    .await;
+    );
 
     let (read_half, write_half) = connect(&path).await.unwrap();
     let (mut reader, mut writer) = framed(read_half, write_half).await;
@@ -7429,7 +7399,7 @@ async fn a_fence_after_the_session_ended_gets_no_reply() {
     let tmp = private_dir();
     let path = tmp.path().join("daemon.sock");
     let pool = Arc::new(Mutex::new(SessionPool::new()));
-    spawn_daemon(&path, Arc::clone(&pool), shell_factory("read _x")).await;
+    spawn_daemon(&path, Arc::clone(&pool), shell_factory("read _x"));
 
     let (read_half, write_half) = connect(&path).await.unwrap();
     let (mut reader, mut writer) = framed(read_half, write_half).await;
@@ -7486,8 +7456,7 @@ async fn a_key_parked_on_a_full_budget_holds_back_the_fence_behind_it() {
             "stty raw -echo; read _ < {}; exec cat >/dev/null",
             gate.display()
         )),
-    )
-    .await;
+    );
 
     let (typist_r, typist_w) = connect(&path).await.unwrap();
     let (mut typist_reader, mut typist_writer) = framed(typist_r, typist_w).await;
@@ -7556,8 +7525,7 @@ async fn an_exact_limit_paste_takes_the_budget_whole_and_completes() {
             "stty raw -echo; read _ < {}; exec cat >/dev/null",
             gate.display()
         )),
-    )
-    .await;
+    );
 
     let (ops_r, ops_w) = connect(&path).await.unwrap();
     let (mut ops_reader, mut ops_writer) = framed(ops_r, ops_w).await;
@@ -7707,8 +7675,7 @@ async fn a_paste_admitted_before_a_mode_flip_is_written_bracketed_within_its_res
             gate.display(),
             received.display()
         )),
-    )
-    .await;
+    );
 
     let (ops_r, ops_w) = connect(&path).await.unwrap();
     let (mut ops_reader, mut ops_writer) = framed(ops_r, ops_w).await;
@@ -7789,8 +7756,7 @@ async fn a_stalled_child_parks_the_typist_and_not_the_daemon() {
         &path,
         pool,
         shell_factory("stty raw -echo; while :; do printf 'tick\\r\\n'; sleep 0.1; done"),
-    )
-    .await;
+    );
 
     let (typist_r, typist_w) = connect(&path).await.unwrap();
     let (mut typist_reader, mut typist_writer) = framed(typist_r, typist_w).await;
@@ -7908,8 +7874,7 @@ async fn a_peer_that_hangs_up_while_parked_gives_its_connection_back() {
         &path,
         pool,
         shell_factory("stty raw -echo; printf raw-ready; sleep 30"),
-    )
-    .await;
+    );
 
     let (typist_r, typist_w) = connect(&path).await.unwrap();
     let (mut typist_reader, mut typist_writer) = framed(typist_r, typist_w).await;
@@ -7992,7 +7957,7 @@ async fn destroying_a_session_releases_a_connection_parked_on_its_budget() {
     let tmp = private_dir();
     let path = tmp.path().join("daemon.sock");
     let pool = Arc::new(Mutex::new(SessionPool::new()));
-    spawn_daemon(&path, pool, shell_factory("stty raw -echo; sleep 30")).await;
+    spawn_daemon(&path, pool, shell_factory("stty raw -echo; sleep 30"));
 
     let (typist_r, typist_w) = connect(&path).await.unwrap();
     let (mut typist_reader, mut typist_writer) = framed(typist_r, typist_w).await;
@@ -8233,25 +8198,14 @@ async fn the_sessions_row_counts_a_slot_reserved_before_registration() {
 /// `spawn_daemon_with_caps` with the serve future kept, for the stop
 /// tests: the daemon exiting is the thing under test.
 #[cfg(unix)]
-async fn spawn_daemon_watching(
+fn spawn_daemon_watching(
     path: &Path,
     pool: Arc<Mutex<SessionPool>>,
     factory: SessionFactory,
     caps: DaemonCaps,
 ) -> tokio::task::JoinHandle<Result<(), ServeError>> {
-    let server_path = path.to_path_buf();
-    let serving =
-        tokio::spawn(
-            async move { serve_unix_with_factory(&server_path, caps, pool, factory).await },
-        );
-    for _ in 0..100 {
-        if path.exists() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    assert!(path.exists());
-    serving
+    let serving = bind_unix(path, caps, pool, factory).expect("the test daemon binds its socket");
+    tokio::spawn(serving)
 }
 
 #[cfg(unix)]
@@ -8302,8 +8256,7 @@ async fn a_default_stop_refuses_while_a_session_remains_and_preserves_it() {
         pool.clone(),
         shell_factory("sleep 30"),
         DaemonCaps::default(),
-    )
-    .await;
+    );
 
     let (read_half, write_half) = connect(&path).await.unwrap();
     let (mut reader, mut writer) = framed(read_half, write_half).await;
@@ -8341,8 +8294,7 @@ async fn a_refused_upgrade_is_answered_and_leaves_the_daemon_serving() {
         pool.clone(),
         shell_factory("sleep 30"),
         DaemonCaps::default(),
-    )
-    .await;
+    );
 
     let (read_half, write_half) = connect(&path).await.unwrap();
     let (mut reader, mut writer) = framed(read_half, write_half).await;
@@ -8399,8 +8351,7 @@ async fn a_forced_stop_destroys_every_session_and_ends_the_accept_loop() {
         pool.clone(),
         shell_factory("sleep 30"),
         DaemonCaps::default(),
-    )
-    .await;
+    );
 
     let (read_half, write_half) = connect(&path).await.unwrap();
     let (mut reader, mut writer) = framed(read_half, write_half).await;
@@ -8447,8 +8398,7 @@ async fn a_when_empty_stop_refuses_creates_and_exits_after_the_last_session() {
         pool.clone(),
         shell_factory("sleep 30"),
         DaemonCaps::default(),
-    )
-    .await;
+    );
 
     let (read_half, write_half) = connect(&path).await.unwrap();
     let (mut reader, mut writer) = framed(read_half, write_half).await;
@@ -8612,8 +8562,7 @@ async fn a_stop_whose_reply_cannot_be_written_still_stops_the_daemon() {
         pool.clone(),
         shell_factory("sleep 30"),
         DaemonCaps::default(),
-    )
-    .await;
+    );
 
     let (read_half, write_half) = connect(&path).await.unwrap();
     let (mut reader, mut writer) = framed(read_half, write_half).await;
@@ -8709,7 +8658,7 @@ async fn an_attach_by_prefix_lands_on_the_session_the_daemon_resolves() {
     let tmp = private_dir();
     let path = tmp.path().join("daemon.sock");
     let pool = Arc::new(Mutex::new(SessionPool::new()));
-    spawn_daemon(&path, pool.clone(), shell_factory("sleep 30")).await;
+    spawn_daemon(&path, pool.clone(), shell_factory("sleep 30"));
     let id = pooled_session(&pool).await;
 
     let (read_half, write_half) = connect(&path).await.unwrap();
@@ -8737,7 +8686,7 @@ async fn a_prefix_whose_session_was_destroyed_refuses_with_no_match() {
     let tmp = private_dir();
     let path = tmp.path().join("daemon.sock");
     let pool = Arc::new(Mutex::new(SessionPool::new()));
-    spawn_daemon(&path, pool.clone(), shell_factory("sleep 30")).await;
+    spawn_daemon(&path, pool.clone(), shell_factory("sleep 30"));
     let doomed = pooled_session(&pool).await;
     let hex = hex(doomed.0);
 
@@ -8786,7 +8735,7 @@ async fn an_ambiguous_prefix_on_attach_refuses_with_the_match_count() {
     let tmp = private_dir();
     let path = tmp.path().join("daemon.sock");
     let pool = Arc::new(Mutex::new(SessionPool::new()));
-    spawn_daemon(&path, pool.clone(), shell_factory("sleep 30")).await;
+    spawn_daemon(&path, pool.clone(), shell_factory("sleep 30"));
     let (prefix, matches) = prefix_matching_several(&pool).await;
 
     let (read_half, write_half) = connect(&path).await.unwrap();
@@ -8818,7 +8767,7 @@ async fn ops_info_answers_a_row_and_a_short_id_checked_against_the_pool() {
     let tmp = private_dir();
     let path = tmp.path().join("daemon.sock");
     let pool = Arc::new(Mutex::new(SessionPool::new()));
-    spawn_daemon(&path, pool.clone(), shell_factory("sleep 30")).await;
+    spawn_daemon(&path, pool.clone(), shell_factory("sleep 30"));
     let first = pooled_session(&pool).await;
     let second = pooled_session(&pool).await;
     let hex = hex(first.0);
@@ -8851,7 +8800,7 @@ async fn ops_info_reports_no_match_and_ambiguity_as_outcome_arms() {
     let tmp = private_dir();
     let path = tmp.path().join("daemon.sock");
     let pool = Arc::new(Mutex::new(SessionPool::new()));
-    spawn_daemon(&path, pool.clone(), shell_factory("sleep 30")).await;
+    spawn_daemon(&path, pool.clone(), shell_factory("sleep 30"));
     let (prefix, matches) = prefix_matching_several(&pool).await;
 
     let (read_half, write_half) = connect(&path).await.unwrap();
@@ -9219,7 +9168,7 @@ async fn pty_eof_expires_transient_records_and_keeps_progress_after_the_final_re
         },
         ..DaemonCaps::default()
     };
-    spawn_daemon_with_caps(&path, pool.clone(), factory, caps).await;
+    spawn_daemon_with_caps(&path, pool.clone(), factory, caps);
 
     let (read_half, write_half) = connect(&path).await.unwrap();
     let (mut reader, mut writer) = framed(read_half, write_half).await;

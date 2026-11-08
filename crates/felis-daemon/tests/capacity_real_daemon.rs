@@ -3,6 +3,7 @@
 //! Tests daemon fd limits against its own process instead of the test runner.
 //! Both tests are ignored; run on demand on macOS with `--run-ignored all`.
 
+#![cfg(unix)]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::path::Path;
@@ -66,13 +67,8 @@ async fn spawn_real_daemon(socket: &Path, nofile: Option<u64>) -> DaemonProc {
         .spawn()
         .expect("spawn felis-daemon");
     let proc = DaemonProc(child);
-    for _ in 0..400 {
-        if socket.exists() {
-            return proc;
-        }
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    }
-    panic!("daemon socket {} never appeared", socket.display());
+    common::wait_connectable(socket).await;
+    proc
 }
 
 fn fd_count(pid: u32) -> usize {

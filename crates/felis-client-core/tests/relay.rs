@@ -18,7 +18,7 @@ use felis_client_core::json::{
 use felis_client_core::relay::{InputError, Relay, RelayConfig, RelayStream, StreamMessage, Theme};
 use felis_client_core::{Carrier, DEFAULT_STREAM_BUFFER};
 use felis_daemon::SessionPool;
-use felis_daemon::serve::{DaemonCaps, serve_unix};
+use felis_daemon::serve::{DaemonCaps, bind_unix, default_session_factory};
 use tempfile::TempDir;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{Mutex, Notify};
@@ -35,28 +35,17 @@ fn private_dir() -> TempDir {
     tmp
 }
 
-/// Readiness is an accepted connection, not an existing path: `bind`
-/// publishes the inode before `listen`.
-async fn await_socket(path: &Path) {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while UnixStream::connect(path).await.is_err() {
-        assert!(
-            Instant::now() < deadline,
-            "{} never accepted a connection",
-            path.display()
-        );
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-}
-
-async fn daemon(tmp: &TempDir) -> PathBuf {
+fn daemon(tmp: &TempDir) -> PathBuf {
     let path = tmp.path().join("daemon.sock");
     let pool = Arc::new(Mutex::new(SessionPool::new()));
-    let server_path = path.clone();
-    drop(tokio::spawn(async move {
-        drop(serve_unix(&server_path, DaemonCaps::default(), pool).await);
-    }));
-    await_socket(&path).await;
+    let serving = bind_unix(
+        &path,
+        DaemonCaps::default(),
+        pool,
+        default_session_factory(),
+    )
+    .expect("the test daemon binds its socket");
+    drop(tokio::spawn(async move { drop(serving.await) }));
     path
 }
 
@@ -175,7 +164,7 @@ async fn until_detached(relay: &Relay, session: SessionId) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn requests_and_streams_answer_through_the_relay() {
     let tmp = private_dir();
-    let relay = relay_on(&daemon(&tmp).await, Theme::default()).await;
+    let relay = relay_on(&daemon(&tmp), Theme::default()).await;
     let session = create(
         &relay,
         "read a; printf 'marker-one\\n'; printf '\\033]9;ping\\007'; \
@@ -266,7 +255,7 @@ async fn requests_and_streams_answer_through_the_relay() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_canceled_search_ends_counting_only_the_items_it_yielded() {
     let tmp = private_dir();
-    let relay = relay_on(&daemon(&tmp).await, Theme::default()).await;
+    let relay = relay_on(&daemon(&tmp), Theme::default()).await;
     let session = create(
         &relay,
         "printf 'hit\\nhit\\nhit\\nsearch-ready\\n'; exec sleep 600",
@@ -302,7 +291,7 @@ async fn a_canceled_search_ends_counting_only_the_items_it_yielded() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_command_output_capture_ends_with_the_commands_exit_code() {
     let tmp = private_dir();
-    let relay = relay_on(&daemon(&tmp).await, Theme::default()).await;
+    let relay = relay_on(&daemon(&tmp), Theme::default()).await;
     let session = create(
         &relay,
         "printf '\\033]133;C\\007cmd-out\\r\\n\\033]133;D;3\\007capture-ready\\r\\n'; \
@@ -340,7 +329,7 @@ async fn a_command_output_capture_ends_with_the_commands_exit_code() {
 async fn an_attach_reports_the_embedders_theme_and_carries_input() {
     let tmp = private_dir();
     let relay = relay_on(
-        &daemon(&tmp).await,
+        &daemon(&tmp),
         Theme {
             bg: Some((0x12, 0x34, 0x56)),
             ..Theme::default()
@@ -391,7 +380,7 @@ async fn next_image_target(attach: &mut RelayStream) -> ImageTargetJson {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_frame_edit_reaches_a_json_attach_as_the_whole_frame() {
     let tmp = private_dir();
-    let relay = relay_on(&daemon(&tmp).await, Theme::default()).await;
+    let relay = relay_on(&daemon(&tmp), Theme::default()).await;
     let mut attach = relay
         .open(Open::Attach {
             target: AttachTarget::Create(sh("read a; printf '\\033_Ga=t,f=32,s=4,v=2,i=1,q=2;\
@@ -431,7 +420,7 @@ async fn a_frame_edit_reaches_a_json_attach_as_the_whole_frame() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_unread_attach_holds_back_neither_point_ops_nor_its_own_drop() {
     let tmp = private_dir();
-    let relay = relay_on(&daemon(&tmp).await, Theme::default()).await;
+    let relay = relay_on(&daemon(&tmp), Theme::default()).await;
     let flood = create(&relay, "while :; do echo flood-flood-flood-flood; done").await;
     let quiet = create(&relay, "printf 'quiet-marker\\n'; exec cat >/dev/null").await;
 
@@ -485,7 +474,7 @@ async fn an_unread_attach_holds_back_neither_point_ops_nor_its_own_drop() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_switch_of_the_window_ends_the_attach_naming_the_target() {
     let tmp = private_dir();
-    let socket = daemon(&tmp).await;
+    let socket = daemon(&tmp);
     let relay = relay_on(&socket, Theme::default()).await;
     let from = create(&relay, "exec sleep 600").await;
     let to = create(&relay, "exec sleep 600").await;
@@ -554,7 +543,7 @@ fn rows(messages: &[StreamMessage]) -> Vec<&str> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_scrollback_capture_read_late_delivers_every_row() {
     let tmp = private_dir();
-    let relay = relay_on(&daemon(&tmp).await, Theme::default()).await;
+    let relay = relay_on(&daemon(&tmp), Theme::default()).await;
     let session = create(
         &relay,
         "seq 1 5000; printf 'capture-ready\\n'; exec sleep 600",
@@ -578,7 +567,7 @@ async fn a_scrollback_capture_read_late_delivers_every_row() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_capture_read_late_past_the_byte_budget_ends_lagged() {
     let tmp = private_dir();
-    let relay = relay_on(&daemon(&tmp).await, Theme::default()).await;
+    let relay = relay_on(&daemon(&tmp), Theme::default()).await;
     let wide: SpawnArgsJson = serde_json::from_value(serde_json::json!({
         "command": "/bin/sh",
         "args": ["-c", "yes \"$(printf '%02048d' 0)\" | head -n 12000; \
@@ -655,7 +644,7 @@ impl Proxy {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_attach_create_streams_while_the_shared_connection_hangs() {
     let tmp = private_dir();
-    let socket = daemon(&tmp).await;
+    let socket = daemon(&tmp);
     let proxy = Proxy::start(tmp.path().join("proxy.sock"), socket);
     let relay = relay_on(&proxy.path, Theme::default()).await;
     proxy.freeze();
@@ -704,7 +693,7 @@ async fn an_attach_create_streams_while_the_shared_connection_hangs() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_lost_daemon_ends_an_attach_after_what_it_already_sent() {
     let tmp = private_dir();
-    let socket = daemon(&tmp).await;
+    let socket = daemon(&tmp);
     let proxy = Proxy::start(tmp.path().join("proxy.sock"), socket);
     let relay = relay_on(&proxy.path, Theme::default()).await;
     let session = create(&relay, "printf 'before-the-cut\\n'; exec sleep 600").await;

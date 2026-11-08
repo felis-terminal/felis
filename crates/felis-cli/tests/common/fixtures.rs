@@ -8,7 +8,7 @@ use std::time::Duration;
 #[cfg(unix)]
 use felis_daemon::{
     SessionPool,
-    serve::{DaemonCaps, SessionFactory, serve_unix_with_factory},
+    serve::{DaemonCaps, SessionFactory, bind_unix},
 };
 #[cfg(unix)]
 use felis_protocol::messages::SpawnArgs;
@@ -43,7 +43,7 @@ pub(crate) fn quiet_factory() -> SessionFactory {
 }
 
 #[cfg(unix)]
-pub(crate) async fn spawn_daemon(
+pub(crate) fn spawn_daemon(
     tmp: &TempDir,
     factory: SessionFactory,
 ) -> (
@@ -51,11 +51,11 @@ pub(crate) async fn spawn_daemon(
     std::path::PathBuf,
     Arc<Mutex<SessionPool>>,
 ) {
-    spawn_daemon_with_caps(tmp, factory, DaemonCaps::default()).await
+    spawn_daemon_with_caps(tmp, factory, DaemonCaps::default())
 }
 
 #[cfg(unix)]
-pub(crate) async fn spawn_daemon_with_caps(
+pub(crate) fn spawn_daemon_with_caps(
     tmp: &TempDir,
     factory: SessionFactory,
     caps: DaemonCaps,
@@ -66,21 +66,12 @@ pub(crate) async fn spawn_daemon_with_caps(
 ) {
     let path = tmp.path().join("daemon.sock");
     let pool = Arc::new(Mutex::new(SessionPool::new()));
-    let server_path = path.clone();
-    let server_pool = pool.clone();
-    let handle = tokio::spawn(async move {
-        drop(serve_unix_with_factory(&server_path, caps, server_pool, factory).await);
-    });
-    // Readiness is an accepted connection, not an existing path:
-    // `bind` publishes the inode before `listen`, so a path probe can
-    // hand the CLI ECONNREFUSED.
-    for _ in 0..200 {
-        if tokio::net::UnixStream::connect(&path).await.is_ok() {
-            return (handle, path, pool);
-        }
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    }
-    panic!("daemon on {} never accepted a connection", path.display());
+    // Bound before it is spawned: a path probe would race `listen`, and
+    // a connect probe would take one of the admission permits `caps` sets.
+    let serving =
+        bind_unix(&path, caps, pool.clone(), factory).expect("the test daemon binds its socket");
+    let handle = tokio::spawn(async move { drop(serving.await) });
+    (handle, path, pool)
 }
 
 #[cfg(unix)]

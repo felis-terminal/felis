@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use felis_daemon::{
     SessionPool,
-    serve::{DaemonCaps, SessionFactory, serve_unix_with_factory},
+    serve::{DaemonCaps, SessionFactory, bind_unix},
 };
 use felis_protocol::messages::SpawnArgs;
 use felis_pty::Command as PtyCommand;
@@ -41,36 +41,24 @@ fn fixture_path() -> std::ffi::OsString {
     path
 }
 
-/// `window retarget` rejects the global `--socket`, so the child
-/// reaches this daemon through the stamp every shell inside a felis
-/// session carries: no variable moves the default endpoint any more.
-async fn spawn_default_socket_daemon(
-    tmp: &TempDir,
-    factory: SessionFactory,
-) -> (
+type StampedDaemon = (
     tokio::task::JoinHandle<()>,
     std::path::PathBuf,
     Arc<Mutex<SessionPool>>,
     (&'static str, std::path::PathBuf),
-) {
+);
+
+/// `window retarget` rejects the global `--socket`, so the child
+/// reaches this daemon through the stamp every shell inside a felis
+/// session carries: no variable moves the default endpoint any more.
+fn spawn_default_socket_daemon(tmp: &TempDir, factory: SessionFactory) -> StampedDaemon {
     let path = tmp.path().join("stamped").join("daemon.sock");
     let stamp = ("FELIS_SOCKET", path.clone());
     let pool = Arc::new(Mutex::new(SessionPool::new()));
-    let server_path = path.clone();
-    let server_pool = pool.clone();
-    let handle = tokio::spawn(async move {
-        drop(
-            serve_unix_with_factory(&server_path, DaemonCaps::default(), server_pool, factory)
-                .await,
-        );
-    });
-    for _ in 0..200 {
-        if tokio::net::UnixStream::connect(&path).await.is_ok() {
-            return (handle, path, pool, stamp);
-        }
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    }
-    panic!("daemon on {} never accepted a connection", path.display());
+    let serving = bind_unix(&path, DaemonCaps::default(), pool.clone(), factory)
+        .expect("the test daemon binds its socket");
+    let handle = tokio::spawn(async move { drop(serving.await) });
+    (handle, path, pool, stamp)
 }
 
 /// Owns its runtime so `kill` takes every accepted connection down with
@@ -86,33 +74,30 @@ impl KillableDaemon {
     async fn start(tmp: &TempDir, factory: SessionFactory) -> Self {
         let socket = tmp.path().join("daemon.sock");
         let (stop_tx, stop_rx) = std::sync::mpsc::channel();
+        let (bound_tx, bound_rx) = tokio::sync::oneshot::channel();
         let serve_path = socket.clone();
         let thread = std::thread::spawn(move || {
             let runtime = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
                 .build()
                 .expect("daemon runtime");
-            runtime.spawn(async move {
+            let serving = {
+                let _entered = runtime.enter();
                 let pool = Arc::new(Mutex::new(SessionPool::new()));
-                drop(
-                    serve_unix_with_factory(&serve_path, DaemonCaps::default(), pool, factory)
-                        .await,
-                );
-            });
+                bind_unix(&serve_path, DaemonCaps::default(), pool, factory)
+                    .expect("the test daemon binds its socket")
+            };
+            runtime.spawn(async move { drop(serving.await) });
+            bound_tx.send(()).unwrap_or_default();
             let _stopped = stop_rx.recv();
             runtime.shutdown_timeout(Duration::from_millis(100));
         });
-        for _ in 0..400 {
-            if tokio::net::UnixStream::connect(&socket).await.is_ok() {
-                return Self {
-                    socket,
-                    stop: Some(stop_tx),
-                    thread: Some(thread),
-                };
-            }
-            tokio::time::sleep(Duration::from_millis(5)).await;
+        bound_rx.await.expect("the daemon thread binds");
+        Self {
+            socket,
+            stop: Some(stop_tx),
+            thread: Some(thread),
         }
-        panic!("daemon on {} never accepted a connection", socket.display());
     }
 
     fn kill(&mut self) {
@@ -156,7 +141,7 @@ fn cli_command() -> StdCommand {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn complete_sessions_lists_the_local_socket_roster() {
     let tmp = private_dir();
-    let (server, socket, _pool) = spawn_daemon(&tmp, quiet_factory()).await;
+    let (server, socket, _pool) = spawn_daemon(&tmp, quiet_factory());
     let id = create_and_detach(&socket).await;
 
     let out = cli_command()
@@ -192,7 +177,7 @@ async fn complete_sessions_with_a_host_emits_nothing_and_never_runs_ssh() {
     use std::os::unix::fs::PermissionsExt as _;
 
     let tmp = private_dir();
-    let (server, socket, _pool) = spawn_daemon(&tmp, quiet_factory()).await;
+    let (server, socket, _pool) = spawn_daemon(&tmp, quiet_factory());
     create_and_detach(&socket).await;
     let marker = tmp.path().join("ssh-ran");
     let ssh = tmp.path().join("ssh");
@@ -294,7 +279,7 @@ fn the_ssh_relay_command_asks_for_a_spawn_only_for_the_spawning_verb() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn list_prints_one_session_and_exits_zero() {
     let tmp = private_dir();
-    let (server, socket, _pool) = spawn_daemon(&tmp, quiet_factory()).await;
+    let (server, socket, _pool) = spawn_daemon(&tmp, quiet_factory());
     let id = create_and_detach(&socket).await;
 
     let out = cli_command()
@@ -437,7 +422,7 @@ async fn a_stream_that_never_opens_still_emits_its_error_terminal() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_point_verbs_failure_is_one_typed_error_on_stderr() {
     let tmp = private_dir();
-    let (server, socket, _pool) = spawn_daemon(&tmp, quiet_factory()).await;
+    let (server, socket, _pool) = spawn_daemon(&tmp, quiet_factory());
     let out = cli_command()
         .arg("--socket")
         .arg(&socket)
@@ -464,7 +449,7 @@ async fn a_point_verbs_failure_is_one_typed_error_on_stderr() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn info_prints_session_metadata() {
     let tmp = private_dir();
-    let (server, socket, _pool) = spawn_daemon(&tmp, quiet_factory()).await;
+    let (server, socket, _pool) = spawn_daemon(&tmp, quiet_factory());
     let id = create_and_detach(&socket).await;
     let id_hex = format!("{id:032x}");
     let prefix = &id_hex[..8];
@@ -500,7 +485,7 @@ async fn info_prints_session_metadata() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn list_and_info_show_the_spawn_directory() {
     let tmp = private_dir();
-    let (server, socket, _pool) = spawn_daemon(&tmp, quiet_factory()).await;
+    let (server, socket, _pool) = spawn_daemon(&tmp, quiet_factory());
     let id = create_and_detach(&socket).await;
     let id_hex = format!("{id:032x}");
     let daemon_cwd = std::env::current_dir()
@@ -557,7 +542,7 @@ async fn list_and_info_show_program_status_records_and_progress() {
         cmd.env("PATH", "/bin:/usr/bin");
         cmd
     });
-    let (server, socket, pool) = spawn_daemon(&tmp, factory).await;
+    let (server, socket, pool) = spawn_daemon(&tmp, factory);
     let id = create_and_detach(&socket).await;
     let id_hex = format!("{id:032x}");
 
@@ -617,7 +602,7 @@ async fn list_and_info_show_program_status_records_and_progress() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn kill_removes_session_and_second_call_exits_one() {
     let tmp = private_dir();
-    let (server, socket, pool) = spawn_daemon(&tmp, quiet_factory()).await;
+    let (server, socket, pool) = spawn_daemon(&tmp, quiet_factory());
     let id = create_and_detach(&socket).await;
     let id_hex = format!("{id:032x}");
 
@@ -720,7 +705,7 @@ async fn send_without_text_or_dash_is_a_usage_error_exit_two() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn send_empty_payload_still_resolves_the_session_id() {
     let tmp = private_dir();
-    let (server, socket, _pool) = spawn_daemon(&tmp, quiet_factory()).await;
+    let (server, socket, _pool) = spawn_daemon(&tmp, quiet_factory());
     let id = create_and_detach(&socket).await;
     let id_hex = format!("{id:032x}");
 
@@ -770,7 +755,7 @@ async fn send_returns_zero_on_detached_session() {
         cmd.env("PATH", "/bin:/usr/bin");
         cmd
     });
-    let (server, socket, _pool) = spawn_daemon(&tmp, factory).await;
+    let (server, socket, _pool) = spawn_daemon(&tmp, factory);
     let id = create_and_detach(&socket).await;
     let id_hex = format!("{id:032x}");
 
@@ -840,7 +825,7 @@ async fn send_waits_for_admission_rather_than_dropping_its_input() {
             cmd
         })
     };
-    let (server, socket, _pool) = spawn_daemon(&tmp, factory).await;
+    let (server, socket, _pool) = spawn_daemon(&tmp, factory);
     let id = create_and_detach(&socket).await;
     let id_hex = format!("{id:032x}");
 
@@ -953,7 +938,7 @@ async fn send_wait_timeout_bounds_the_admission_of_a_wedged_child() {
         cmd.env("PATH", fixture_path());
         cmd
     });
-    let (server, socket, _pool) = spawn_daemon(&tmp, factory).await;
+    let (server, socket, _pool) = spawn_daemon(&tmp, factory);
     let id = create_and_detach(&socket).await;
     let id_hex = format!("{id:032x}");
 
@@ -1046,7 +1031,7 @@ async fn send_wait_timeout_zero_gives_up_at_once() {
         cmd.env("PATH", fixture_path());
         cmd
     });
-    let (server, socket, _pool) = spawn_daemon(&tmp, factory).await;
+    let (server, socket, _pool) = spawn_daemon(&tmp, factory);
     let id = create_and_detach(&socket).await;
     let id_hex = format!("{id:032x}");
 
@@ -1090,7 +1075,7 @@ async fn send_key_enter_delivers_text_and_enter_in_one_call() {
         cmd.env("PATH", "/bin:/usr/bin");
         cmd
     });
-    let (server, socket, _pool) = spawn_daemon(&tmp, factory).await;
+    let (server, socket, _pool) = spawn_daemon(&tmp, factory);
     let id = create_and_detach(&socket).await;
     let id_hex = format!("{id:032x}");
 
@@ -1126,7 +1111,7 @@ async fn capture_renders_visible_grid_rows() {
         cmd.env("PATH", "/bin:/usr/bin");
         cmd
     });
-    let (server, socket, _pool) = spawn_daemon(&tmp, factory).await;
+    let (server, socket, _pool) = spawn_daemon(&tmp, factory);
     let id = create_and_detach(&socket).await;
     let id_hex = format!("{id:032x}");
 
@@ -1181,7 +1166,7 @@ async fn capture_scrollback_includes_offscreen_history() {
         cmd.env("PATH", "/bin:/usr/bin");
         cmd
     });
-    let (server, socket, _pool) = spawn_daemon(&tmp, factory).await;
+    let (server, socket, _pool) = spawn_daemon(&tmp, factory);
     let id = create_and_detach(&socket).await;
     let id_hex = format!("{id:032x}");
 
@@ -1241,7 +1226,7 @@ async fn capture_lines_tails_the_region_and_keeps_row_indices() {
         cmd.env("PATH", "/bin:/usr/bin");
         cmd
     });
-    let (server, socket, _pool) = spawn_daemon(&tmp, factory).await;
+    let (server, socket, _pool) = spawn_daemon(&tmp, factory);
     let id = create_and_detach(&socket).await;
     let id_hex = format!("{id:032x}");
 
@@ -1318,7 +1303,7 @@ async fn capture_ansi_reconstructs_sgr_color() {
         cmd.env("PATH", "/bin:/usr/bin");
         cmd
     });
-    let (server, socket, _pool) = spawn_daemon(&tmp, factory).await;
+    let (server, socket, _pool) = spawn_daemon(&tmp, factory);
     let id = create_and_detach(&socket).await;
     let id_hex = format!("{id:032x}");
 
@@ -1378,7 +1363,7 @@ async fn capture_ansi_json_carries_both_forms_per_row() {
         cmd.env("PATH", "/bin:/usr/bin");
         cmd
     });
-    let (server, socket, _pool) = spawn_daemon(&tmp, factory).await;
+    let (server, socket, _pool) = spawn_daemon(&tmp, factory);
     let id = create_and_detach(&socket).await;
     let id_hex = format!("{id:032x}");
 
@@ -1433,7 +1418,7 @@ async fn capture_ansi_json_composes_on_a_mark_range_source() {
         cmd.env("PATH", "/bin:/usr/bin");
         cmd
     });
-    let (server, socket, _pool) = spawn_daemon(&tmp, factory).await;
+    let (server, socket, _pool) = spawn_daemon(&tmp, factory);
     let id = create_and_detach(&socket).await;
     let id_hex = format!("{id:032x}");
 
@@ -1492,7 +1477,7 @@ async fn capture_source_command_output_returns_the_c_to_d_range() {
         cmd.env("PATH", "/bin:/usr/bin");
         cmd
     });
-    let (server, socket, _pool) = spawn_daemon(&tmp, factory).await;
+    let (server, socket, _pool) = spawn_daemon(&tmp, factory);
     let id = create_and_detach(&socket).await;
     let id_hex = format!("{id:032x}");
 
@@ -1554,7 +1539,7 @@ async fn capture_json_semantic_source_emits_region_relative_rows() {
         cmd.env("PATH", "/bin:/usr/bin");
         cmd
     });
-    let (server, socket, _pool) = spawn_daemon(&tmp, factory).await;
+    let (server, socket, _pool) = spawn_daemon(&tmp, factory);
     let id = create_and_detach(&socket).await;
     let id_hex = format!("{id:032x}");
 
@@ -1627,7 +1612,7 @@ async fn send_wait_prints_the_commands_exit_code() {
         cmd.env("PATH", "/bin:/usr/bin");
         cmd
     });
-    let (server, socket, _pool) = spawn_daemon(&tmp, factory).await;
+    let (server, socket, _pool) = spawn_daemon(&tmp, factory);
     let id = create_and_detach(&socket).await;
     let id_hex = format!("{id:032x}");
 
@@ -1676,7 +1661,7 @@ async fn send_wait_json_emits_the_wait_shape() {
         cmd.env("PATH", "/bin:/usr/bin");
         cmd
     });
-    let (server, socket, _pool) = spawn_daemon(&tmp, factory).await;
+    let (server, socket, _pool) = spawn_daemon(&tmp, factory);
     let id = create_and_detach(&socket).await;
     let id_hex = format!("{id:032x}");
 
@@ -1729,7 +1714,7 @@ async fn payload_less_wait_ignores_historical_marks_and_times_out() {
         cmd.env("PATH", "/bin:/usr/bin");
         cmd
     });
-    let (server, socket, _pool) = spawn_daemon(&tmp, factory).await;
+    let (server, socket, _pool) = spawn_daemon(&tmp, factory);
     let id = create_and_detach(&socket).await;
     let id_hex = format!("{id:032x}");
 
@@ -1775,7 +1760,7 @@ async fn a_wait_without_a_timeout_ends_session_ended_when_the_session_exits_mark
             cmd.env("PATH", "/bin:/usr/bin");
             cmd
         });
-        let (server, socket, _pool) = spawn_daemon(&tmp, factory).await;
+        let (server, socket, _pool) = spawn_daemon(&tmp, factory);
         let id = create_and_detach(&socket).await;
         let id_hex = format!("{id:032x}");
 
@@ -1826,7 +1811,7 @@ async fn a_wait_without_a_timeout_ends_session_ended_when_the_session_exits_mark
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn spawn_creates_session_and_id_is_addressable() {
     let tmp = private_dir();
-    let (server, socket, pool) = spawn_daemon(&tmp, quiet_factory()).await;
+    let (server, socket, pool) = spawn_daemon(&tmp, quiet_factory());
 
     let out = cli_command()
         .arg("--socket")
@@ -1884,7 +1869,7 @@ async fn spawn_creates_session_and_id_is_addressable() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn spawn_with_out_of_range_rows_is_refused_by_the_daemon() {
     let tmp = private_dir();
-    let (server, socket, pool) = spawn_daemon(&tmp, quiet_factory()).await;
+    let (server, socket, pool) = spawn_daemon(&tmp, quiet_factory());
 
     for rows in ["3000", "70000"] {
         let out = cli_command()
@@ -1960,8 +1945,7 @@ async fn spawn_past_the_session_cap_is_typed_at_capacity() {
             max_sessions: 1,
             ..DaemonCaps::default()
         },
-    )
-    .await;
+    );
 
     let first = cli_command()
         .arg("--socket")
@@ -2013,7 +1997,7 @@ async fn spawn_past_the_session_cap_is_typed_at_capacity() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn spawn_tag_labels_the_session_at_creation() {
     let tmp = private_dir();
-    let (server, socket, _pool) = spawn_daemon(&tmp, quiet_factory()).await;
+    let (server, socket, _pool) = spawn_daemon(&tmp, quiet_factory());
 
     let out = cli_command()
         .arg("--socket")
@@ -2071,7 +2055,7 @@ async fn spawn_tag_labels_the_session_at_creation() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn spawn_json_emits_id_object() {
     let tmp = private_dir();
-    let (server, socket, _pool) = spawn_daemon(&tmp, quiet_factory()).await;
+    let (server, socket, _pool) = spawn_daemon(&tmp, quiet_factory());
 
     let out = cli_command()
         .arg("--socket")
@@ -2105,7 +2089,7 @@ async fn spawn_json_emits_id_object() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tag_json_emits_id_and_tag_array_for_adds_and_removes() {
     let tmp = private_dir();
-    let (server, socket, _pool) = spawn_daemon(&tmp, quiet_factory()).await;
+    let (server, socket, _pool) = spawn_daemon(&tmp, quiet_factory());
     let id = create_and_detach(&socket).await;
     let id_hex = format!("{id:032x}");
 
@@ -2184,7 +2168,7 @@ async fn tag_json_emits_id_and_tag_array_for_adds_and_removes() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn kill_and_evict_json_emit_their_typed_replies() {
     let tmp = private_dir();
-    let (server, socket, _pool) = spawn_daemon(&tmp, quiet_factory()).await;
+    let (server, socket, _pool) = spawn_daemon(&tmp, quiet_factory());
     let id = create_and_detach(&socket).await;
     let id_hex = format!("{id:032x}");
 
@@ -2229,7 +2213,7 @@ async fn search_returns_hits_and_no_match_exits_one() {
         cmd.env("PATH", "/bin:/usr/bin");
         cmd
     });
-    let (server, socket, _pool) = spawn_daemon(&tmp, factory).await;
+    let (server, socket, _pool) = spawn_daemon(&tmp, factory);
     let id = create_and_detach(&socket).await;
     let id_hex = format!("{id:032x}");
 
@@ -2298,7 +2282,7 @@ async fn search_returns_hits_and_no_match_exits_one() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn send_against_unknown_id_exits_one() {
     let tmp = private_dir();
-    let (server, socket, _pool) = spawn_daemon(&tmp, quiet_factory()).await;
+    let (server, socket, _pool) = spawn_daemon(&tmp, quiet_factory());
 
     let out = cli_command()
         .arg("--socket")
@@ -2329,7 +2313,7 @@ async fn switch_pushes_reattach_to_attached_client() {
     use felis_protocol::{MessageKind, codec, messages::PushMsg};
 
     let tmp = private_dir();
-    let (server, socket, _pool) = spawn_daemon(&tmp, quiet_factory()).await;
+    let (server, socket, _pool) = spawn_daemon(&tmp, quiet_factory());
     let target = create_and_detach(&socket).await;
     // The window-mode connection is the one the daemon pushes to.
     let mut gui = connect(&socket, Offer::window(false)).await.unwrap();
@@ -2386,7 +2370,7 @@ async fn switch_pushes_reattach_to_attached_client() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn switch_with_no_attached_client_exits_one() {
     let tmp = private_dir();
-    let (server, socket, _pool) = spawn_daemon(&tmp, quiet_factory()).await;
+    let (server, socket, _pool) = spawn_daemon(&tmp, quiet_factory());
     let from = create_and_detach(&socket).await;
     let target = create_and_detach(&socket).await;
 
@@ -2422,7 +2406,7 @@ async fn switch_with_no_attached_client_exits_one() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn switch_with_an_unknown_attachment_exits_one() {
     let tmp = private_dir();
-    let (server, socket, _pool) = spawn_daemon(&tmp, quiet_factory()).await;
+    let (server, socket, _pool) = spawn_daemon(&tmp, quiet_factory());
     let from = create_and_detach(&socket).await;
     let target = create_and_detach(&socket).await;
 
@@ -2459,7 +2443,7 @@ async fn switch_with_an_unknown_attachment_exits_one() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn switch_to_the_same_session_exits_zero() {
     let tmp = private_dir();
-    let (server, socket, _pool) = spawn_daemon(&tmp, quiet_factory()).await;
+    let (server, socket, _pool) = spawn_daemon(&tmp, quiet_factory());
     // Parked: the shape the default scope would otherwise deny.
     let id = create_and_detach(&socket).await;
 
@@ -2501,7 +2485,7 @@ async fn a_switch_human_line_says_queued_and_not_landed() {
     use felis_client_core::connect;
 
     let tmp = private_dir();
-    let (server, socket, _pool) = spawn_daemon(&tmp, quiet_factory()).await;
+    let (server, socket, _pool) = spawn_daemon(&tmp, quiet_factory());
     let target = create_and_detach(&socket).await;
     let mut gui = connect(&socket, Offer::window(false)).await.unwrap();
     let from = gui.create_with(SpawnArgs::default()).await.unwrap().id;
@@ -2533,7 +2517,7 @@ async fn a_switch_human_line_says_queued_and_not_landed() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_same_session_switch_human_line_says_nothing_was_queued() {
     let tmp = private_dir();
-    let (server, socket, _pool) = spawn_daemon(&tmp, quiet_factory()).await;
+    let (server, socket, _pool) = spawn_daemon(&tmp, quiet_factory());
     let id = create_and_detach(&socket).await;
 
     let out = cli_command()
@@ -2574,7 +2558,7 @@ async fn a_target_that_disconnects_after_queue_admission_keeps_the_switch_result
     use felis_protocol::{MessageKind, codec, messages::PushMsg};
 
     let tmp = private_dir();
-    let (server, socket, _pool) = spawn_daemon(&tmp, quiet_factory()).await;
+    let (server, socket, _pool) = spawn_daemon(&tmp, quiet_factory());
     let target = create_and_detach(&socket).await;
     let mut gui = connect(&socket, Offer::window(false)).await.unwrap();
     let from = gui.create_with(SpawnArgs::default()).await.unwrap().id;
@@ -2659,8 +2643,8 @@ async fn a_cross_daemon_retarget_reports_admission_without_landing() {
 
     let tmp = private_dir();
     let elsewhere = private_dir();
-    let (server, socket, _pool) = spawn_daemon(&tmp, quiet_factory()).await;
-    let (other_server, other_socket, _other_pool) = spawn_daemon(&elsewhere, quiet_factory()).await;
+    let (server, socket, _pool) = spawn_daemon(&tmp, quiet_factory());
+    let (other_server, other_socket, _other_pool) = spawn_daemon(&elsewhere, quiet_factory());
     let mut gui = connect(&socket, Offer::window(false)).await.unwrap();
     let from = gui.create_with(SpawnArgs::default()).await.unwrap().id;
 
@@ -2735,7 +2719,7 @@ async fn a_retarget_human_line_says_queued_and_not_landed() {
     use felis_client_core::connect;
 
     let tmp = private_dir();
-    let (server, socket, _pool) = spawn_daemon(&tmp, quiet_factory()).await;
+    let (server, socket, _pool) = spawn_daemon(&tmp, quiet_factory());
     let mut gui = connect(&socket, Offer::window(false)).await.unwrap();
     let from = gui.create_with(SpawnArgs::default()).await.unwrap().id;
 
@@ -2771,7 +2755,7 @@ async fn window_retarget_without_a_carrier_heads_for_the_local_daemon() {
 
     let tmp = private_dir();
     let (server, socket, _pool, (env_var, env_value)) =
-        spawn_default_socket_daemon(&tmp, quiet_factory()).await;
+        spawn_default_socket_daemon(&tmp, quiet_factory());
     let mut gui = connect(&socket, Offer::window(false)).await.unwrap();
     let from = gui.create_with(SpawnArgs::default()).await.unwrap().id;
 
@@ -2824,7 +2808,7 @@ async fn an_in_window_retarget_reaches_the_stamped_daemon() {
     use felis_protocol::{MessageKind, codec, messages::PushMsg};
 
     let tmp = private_dir();
-    let (server, socket, _pool) = spawn_daemon(&tmp, quiet_factory()).await;
+    let (server, socket, _pool) = spawn_daemon(&tmp, quiet_factory());
     let mut gui = connect(&socket, Offer::window(false)).await.unwrap();
     let from = gui.create_with(SpawnArgs::default()).await.unwrap().id;
 
@@ -2873,7 +2857,7 @@ async fn an_in_window_retarget_reaches_the_stamped_daemon() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_explicit_socket_outranks_the_stamp() {
     let tmp = private_dir();
-    let (server, socket, _pool) = spawn_daemon(&tmp, quiet_factory()).await;
+    let (server, socket, _pool) = spawn_daemon(&tmp, quiet_factory());
 
     let out = cli_command()
         .arg("--socket")
@@ -3128,7 +3112,7 @@ async fn notifications_once_waits_for_a_live_notification() {
         cmd.env("PATH", fixture_path());
         cmd
     });
-    let (server, socket, _pool) = spawn_daemon(&tmp, factory).await;
+    let (server, socket, _pool) = spawn_daemon(&tmp, factory);
     let id = create_and_detach(&socket).await;
     let id_hex = format!("{id:032x}");
 
@@ -3267,7 +3251,7 @@ async fn a_stream_verb_whose_daemon_dies_still_writes_its_terminal() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn notifications_once_times_out_on_a_silent_session() {
     let tmp = private_dir();
-    let (server, socket, _pool) = spawn_daemon(&tmp, quiet_factory()).await;
+    let (server, socket, _pool) = spawn_daemon(&tmp, quiet_factory());
     let id = create_and_detach(&socket).await;
     let id_hex = format!("{id:032x}");
 
@@ -3307,7 +3291,7 @@ async fn notifications_once_times_out_on_a_silent_session() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn notifications_once_timeout_zero_gives_up_at_once() {
     let tmp = private_dir();
-    let (server, socket, _pool) = spawn_daemon(&tmp, quiet_factory()).await;
+    let (server, socket, _pool) = spawn_daemon(&tmp, quiet_factory());
     let id = create_and_detach(&socket).await;
     let id_hex = format!("{id:032x}");
 
@@ -3361,7 +3345,7 @@ async fn send_key_enter_runs_the_pasted_command() {
         cmd.env("PATH", "/bin:/usr/bin");
         cmd
     });
-    let (server, socket, _pool) = spawn_daemon(&tmp, factory).await;
+    let (server, socket, _pool) = spawn_daemon(&tmp, factory);
     let id = create_and_detach(&socket).await;
     let id_hex = format!("{id:032x}");
 
@@ -3396,21 +3380,27 @@ async fn send_key_enter_runs_the_pasted_command() {
     server.abort();
 }
 
+/// Bound before the fake daemon is spawned, so the CLI's connect is
+/// queued rather than refused.
+fn bind_listener(socket: &std::path::Path) -> felis_transport::Listener {
+    felis_transport::Listener::bind(&felis_transport::Endpoint::unix(socket.to_path_buf()))
+        .expect("bind the fake daemon's socket")
+}
+
 /// A daemon that completes the handshake and then answers the roster
 /// query with a window-only push, an arm an `Ops` link may never
 /// receive (REQ-114). It is the protocol class of the failure matrix
 /// below: the peer answered, but not in this protocol.
-async fn rogue_daemon(socket: std::path::PathBuf) {
+async fn rogue_daemon(listener: felis_transport::Listener) {
     use felis_protocol::MessageKind;
     use felis_protocol::messages::{ConnToClientMsg, PushMsg};
     use felis_protocol::preface::{DaemonPreface, PROTOCOL_MAJOR, PROTOCOL_MINOR};
     use felis_transport::{
-        Endpoint, FrameReader, FrameWriter, Listener,
+        FrameReader, FrameWriter,
         preface::{read_client_bootstrap, write_daemon_preface},
         server_split,
     };
 
-    let listener = Listener::bind(&Endpoint::unix(socket)).expect("bind the rogue socket");
     let stream = listener.accept().await.expect("accept the CLI");
     let (mut read_half, mut write_half) = server_split(stream);
     let _bootstrap = read_client_bootstrap(&mut read_half)
@@ -3456,14 +3446,14 @@ async fn rogue_daemon(socket: std::path::PathBuf) {
 /// notification in a single write, so `FrameReader` takes all three in
 /// one `read_buf`. Answering after reading `Subscribe` leaves the event
 /// in the kernel, where an unready socket times the wait out early.
-async fn eager_notify_daemon(socket: std::path::PathBuf) {
+async fn eager_notify_daemon(listener: felis_transport::Listener) {
     use felis_protocol::MessageKind;
     use felis_protocol::messages::{
         ConnToClientMsg, Correlation, Notification, NotifyToClientMsg, StreamId, Urgency,
     };
     use felis_protocol::preface::{DaemonPreface, PROTOCOL_MAJOR, PROTOCOL_MINOR};
     use felis_transport::{
-        CheckedFrame, Endpoint, FrameReader, FrameWriter, Listener,
+        CheckedFrame, FrameReader, FrameWriter,
         preface::{read_client_bootstrap, write_daemon_preface},
         server_split,
     };
@@ -3473,7 +3463,6 @@ async fn eager_notify_daemon(socket: std::path::PathBuf) {
     // opens it arrives. The assertion below holds the daemon to it.
     let stream_id = StreamId::new(1).expect("1 is a stream id");
 
-    let listener = Listener::bind(&Endpoint::unix(socket)).expect("bind the eager socket");
     let stream = listener.accept().await.expect("accept the CLI");
     let (mut read_half, mut write_half) = server_split(stream);
     let _bootstrap = read_client_bootstrap(&mut read_half)
@@ -3560,15 +3549,7 @@ async fn eager_notify_daemon(socket: std::path::PathBuf) {
 async fn notifications_timeout_zero_outranks_an_already_readable_notification() {
     let tmp = private_dir();
     let socket = tmp.path().join("eager.sock");
-    let daemon = tokio::spawn(eager_notify_daemon(socket.clone()));
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    while !socket.exists() {
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "the eager daemon never bound its socket",
-        );
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
+    let daemon = tokio::spawn(eager_notify_daemon(bind_listener(&socket)));
 
     let out = cli_command()
         .arg("--socket")
@@ -3664,16 +3645,10 @@ fn assert_framed_failure(out: &std::process::Output, kind: &str, code: i32) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn every_machine_failure_class_is_one_object_and_one_code() {
     let tmp = private_dir();
-    let (server, socket, _pool) = spawn_daemon(&tmp, quiet_factory()).await;
+    let (server, socket, _pool) = spawn_daemon(&tmp, quiet_factory());
     let cold = tmp.path().join("no-daemon.sock");
     let rogue = tmp.path().join("rogue.sock");
-    let rogue_task = tokio::spawn(rogue_daemon(rogue.clone()));
-    for _ in 0..400 {
-        if rogue.exists() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    }
+    let rogue_task = tokio::spawn(rogue_daemon(bind_listener(&rogue)));
     let socket_arg = socket.display().to_string();
     let cold_arg = cold.display().to_string();
     let rogue_arg = rogue.display().to_string();
@@ -3838,7 +3813,7 @@ async fn human_mode_logs_nothing_below_warn_by_default() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn info_json_still_carries_a_short_id_without_a_roster_fetch() {
     let tmp = private_dir();
-    let (server, socket, _pool) = spawn_daemon(&tmp, quiet_factory()).await;
+    let (server, socket, _pool) = spawn_daemon(&tmp, quiet_factory());
     let id = create_and_detach(&socket).await;
     let id_hex = format!("{id:032x}");
 
@@ -3924,7 +3899,7 @@ async fn events_streams_lifecycle_and_prompt_items() {
         cmd.env("PATH", fixture_path());
         cmd
     });
-    let (server, socket, _pool) = spawn_daemon(&tmp, factory).await;
+    let (server, socket, _pool) = spawn_daemon(&tmp, factory);
     let first = format!("{:032x}", create_and_detach(&socket).await);
 
     let mut child = tokio::process::Command::new(cli_bin())
@@ -4020,7 +3995,7 @@ async fn events_end_cleanly_when_the_daemon_stops() {
         cmd.env("PATH", fixture_path());
         cmd
     });
-    let (server, socket, _pool) = spawn_daemon(&tmp, factory).await;
+    let (server, socket, _pool) = spawn_daemon(&tmp, factory);
     let id = format!("{:032x}", create_and_detach(&socket).await);
     let mut child = tokio::process::Command::new(cli_bin())
         .env_remove("FELIS_SOCKET")

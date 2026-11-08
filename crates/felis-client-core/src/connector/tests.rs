@@ -6,12 +6,12 @@ use felis_protocol::frame::Frame;
 use std::{num::NonZeroU32, sync::Arc};
 
 #[cfg(all(unix, feature = "daemon-tests"))]
-use felis_daemon::{SessionPool, serve::DaemonCaps, serve_unix};
+use felis_daemon::{SessionPool, serve::DaemonCaps, serve::default_session_factory, serve_unix};
 #[cfg(unix)]
 use tempfile::TempDir;
 
 #[cfg(unix)]
-use crate::test_support::{await_socket, private_dir};
+use crate::test_support::{private_dir, serve_bound};
 #[cfg(unix)]
 use tokio::sync::Mutex;
 
@@ -504,13 +504,13 @@ async fn connector_round_trips_through_a_real_daemon() {
     let path = tmp.path().join("daemon.sock");
     let pool = Arc::new(Mutex::new(SessionPool::new()));
 
-    let server_path = path.clone();
     let server_pool = pool.clone();
-    let server = tokio::spawn(async move {
-        drop(serve_unix(&server_path, DaemonCaps::default(), server_pool).await);
-    });
-
-    await_socket(&path).await;
+    let server = serve_bound(
+        &path,
+        DaemonCaps::default(),
+        server_pool,
+        default_session_factory(),
+    );
 
     let mut conn = connect(&path, Offer::ops()).await.unwrap();
     assert_eq!(
@@ -620,7 +620,7 @@ async fn await_row_containing(
 pub(super) async fn daemon_running(
     script: &'static str,
 ) -> (TempDir, PathBuf, tokio::task::JoinHandle<()>) {
-    use felis_daemon::{serve::SessionFactory, serve::serve_unix_with_factory};
+    use felis_daemon::serve::SessionFactory;
     use felis_pty::Command;
 
     let tmp = private_dir();
@@ -633,11 +633,7 @@ pub(super) async fn daemon_running(
         cmd.env("PATH", "/bin:/usr/bin");
         cmd
     });
-    let server_path = path.clone();
-    let server = tokio::spawn(async move {
-        drop(serve_unix_with_factory(&server_path, DaemonCaps::default(), pool, factory).await);
-    });
-    await_socket(&path).await;
+    let server = serve_bound(&path, DaemonCaps::default(), pool, factory);
     (tmp, path, server)
 }
 
@@ -992,7 +988,7 @@ async fn a_huge_scrollback_search_emits_before_the_walk_completes() {
 #[cfg(all(unix, feature = "daemon-tests"))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn killed_client_reattaches_and_observes_prior_output() {
-    use felis_daemon::{serve::SessionFactory, serve::serve_unix_with_factory};
+    use felis_daemon::serve::SessionFactory;
     use felis_pty::Command;
 
     let tmp = private_dir();
@@ -1009,16 +1005,8 @@ async fn killed_client_reattaches_and_observes_prior_output() {
         cmd
     });
 
-    let server_path = path.clone();
     let server_pool = pool.clone();
-    let server = tokio::spawn(async move {
-        drop(
-            serve_unix_with_factory(&server_path, DaemonCaps::default(), server_pool, factory)
-                .await,
-        );
-    });
-
-    await_socket(&path).await;
+    let server = serve_bound(&path, DaemonCaps::default(), server_pool, factory);
 
     let mut a = connect(&path, Offer::window(false)).await.unwrap();
     let attach = a.create_with(SpawnArgs::default()).await.unwrap();
@@ -1057,7 +1045,7 @@ async fn killed_client_reattaches_and_observes_prior_output() {
 #[cfg(all(unix, feature = "daemon-tests"))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn destroy_session_removes_session_and_acks_existed() {
-    use felis_daemon::{serve::SessionFactory, serve::serve_unix_with_factory};
+    use felis_daemon::serve::SessionFactory;
     use felis_pty::Command;
 
     let tmp = private_dir();
@@ -1075,15 +1063,7 @@ async fn destroy_session_removes_session_and_acks_existed() {
     });
 
     let server_pool = pool.clone();
-    let server_path = path.clone();
-    let server = tokio::spawn(async move {
-        drop(
-            serve_unix_with_factory(&server_path, DaemonCaps::default(), server_pool, factory)
-                .await,
-        );
-    });
-
-    await_socket(&path).await;
+    let server = serve_bound(&path, DaemonCaps::default(), server_pool, factory);
 
     let mut a = connect(&path, Offer::ops()).await.unwrap();
     let id = a.create_with(SpawnArgs::default()).await.unwrap().id;
@@ -1122,11 +1102,12 @@ async fn destroy_session_on_missing_id_returns_existed_false() {
     let path = tmp.path().join("daemon.sock");
     let pool = Arc::new(Mutex::new(SessionPool::new()));
     let server_pool = pool.clone();
-    let server_path = path.clone();
-    let server = tokio::spawn(async move {
-        drop(serve_unix(&server_path, DaemonCaps::default(), server_pool).await);
-    });
-    await_socket(&path).await;
+    let server = serve_bound(
+        &path,
+        DaemonCaps::default(),
+        server_pool,
+        default_session_factory(),
+    );
 
     let mut conn = connect(&path, Offer::ops()).await.unwrap();
     let resolved = conn.destroy_session("deadbeef".to_owned()).await.unwrap();
