@@ -88,7 +88,8 @@ fn rows_are_packed_at_their_length() {
 
 proptest! {
     /// The store against a deque of owned rows, through pushes of any
-    /// width up to the ring's and evictions down to empty and back.
+    /// width up to the ring's and evictions down to empty and back; the
+    /// store indexes at most twice the most rows it held at once.
     #[test]
     fn the_store_matches_a_deque_of_rows(
         cols in 1usize..300,
@@ -96,6 +97,7 @@ proptest! {
     ) {
         let mut store = ColdStore::default();
         let mut model: VecDeque<(Vec<Cell>, bool)> = VecDeque::new();
+        let mut peak = 0;
         for (i, (push, len, wrap)) in ops.into_iter().enumerate() {
             if push {
                 let cells = row(i, len % (cols + 1));
@@ -105,6 +107,8 @@ proptest! {
                 store.pop_front();
                 model.pop_front();
             }
+            peak = peak.max(model.len());
+            prop_assert!(store.rows.len() <= 2 * peak);
             prop_assert_eq!(contents(&store), model.iter().cloned().collect::<Vec<_>>());
             let mut swept = Vec::new();
             store.for_each_row_mut(|cells| swept.push(cells.to_vec()));

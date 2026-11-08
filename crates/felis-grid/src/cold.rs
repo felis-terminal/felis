@@ -21,8 +21,13 @@ struct ColdRow {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct ColdStore {
-    /// Oldest first.
-    rows: VecDeque<ColdRow>,
+    /// The last `live` entries are the stored rows, oldest first. An
+    /// eviction only shrinks `live`; a push drops the dead prefix once it
+    /// is as long as the live rows, so the vector stays within twice the
+    /// most rows ever live and moves at most one row per eviction on
+    /// average.
+    rows: Vec<ColdRow>,
+    live: usize,
     /// `chunks[i]` is stream chunk `first_chunk + i`; its length is how
     /// far rows fill it.
     chunks: VecDeque<Vec<Cell>>,
@@ -59,20 +64,26 @@ const fn place(next: u64, len: u64, shift: u32) -> u64 {
 }
 
 impl ColdStore {
-    pub(crate) fn len(&self) -> usize {
-        self.rows.len()
+    pub(crate) const fn len(&self) -> usize {
+        self.live
     }
 
-    pub(crate) fn is_empty(&self) -> bool {
-        self.rows.is_empty()
+    pub(crate) const fn is_empty(&self) -> bool {
+        self.live == 0
+    }
+
+    fn live(&self) -> &[ColdRow] {
+        &self.rows[self.rows.len() - self.live..]
     }
 
     /// Appends `cells` as the youngest cold row. `cols` is the width of
     /// the ring it came from, which bounds every row the store takes
     /// until it empties.
     pub(crate) fn push_back(&mut self, cells: &[Cell], soft_wrap: bool, cols: usize) {
-        if self.rows.is_empty() {
+        if self.is_empty() {
             self.reset(chunk_shift(cols));
+        } else if self.rows.len() >= 2 * self.live {
+            self.rows.drain(..self.rows.len() - self.live);
         }
         let size = 1usize << self.shift;
         let len = u16::try_from(cells.len()).unwrap_or(u16::MAX);
@@ -90,24 +101,32 @@ impl ColdStore {
         debug_assert_eq!(dst.len() as u64, start & (size as u64 - 1));
         dst.extend_from_slice(cells);
         self.next = start + cells.len() as u64;
-        self.rows.push_back(ColdRow {
+        self.rows.push(ColdRow {
             start,
             len,
             soft_wrap,
         });
+        self.live += 1;
     }
 
     /// Drops the oldest row and recycles every chunk no remaining row
     /// reaches: O(1), since a row spans one chunk.
+    #[inline]
     pub(crate) fn pop_front(&mut self) {
-        if self.rows.pop_front().is_none() {
-            return;
-        }
-        let Some(front) = self.rows.front() else {
-            self.reset(self.shift);
-            return;
+        let live = match self.live {
+            0 => return,
+            1 => return self.reset(self.shift),
+            live => live - 1,
         };
-        let keep_from = front.start >> self.shift;
+        self.live = live;
+        let keep_from = self.rows[self.rows.len() - live].start >> self.shift;
+        if self.first_chunk < keep_from {
+            self.recycle_front_chunks(keep_from);
+        }
+    }
+
+    #[cold]
+    fn recycle_front_chunks(&mut self, keep_from: u64) {
         while self.first_chunk < keep_from {
             let Some(mut emptied) = self.chunks.pop_front() else {
                 break;
@@ -132,6 +151,8 @@ impl ColdStore {
         if self.shift != shift {
             self.spare = None;
         }
+        self.rows.clear();
+        self.live = 0;
         self.chunks.clear();
         self.first_chunk = 0;
         self.next = 0;
@@ -140,25 +161,26 @@ impl ColdStore {
 
     /// Cold row `idx` from the oldest, as stored.
     pub(crate) fn row(&self, idx: usize) -> Option<&[Cell]> {
-        let row = self.rows.get(idx)?;
+        let row = self.live().get(idx)?;
         let (chunk, within) = self.locate(row);
         Some(&self.chunks[chunk][within..within + usize::from(row.len)])
     }
 
     pub(crate) fn soft_wrap(&self, idx: usize) -> Option<bool> {
-        self.rows.get(idx).map(|row| row.soft_wrap)
+        self.live().get(idx).map(|row| row.soft_wrap)
     }
 
     /// Every stored row, oldest first, for the table sweeps.
     pub(crate) fn for_each_row_mut(&mut self, mut f: impl FnMut(&mut [Cell])) {
-        for row in &self.rows {
+        let first = self.rows.len() - self.live;
+        for row in &self.rows[first..] {
             let (chunk, within) = locate(row, self.first_chunk, self.shift);
             f(&mut self.chunks[chunk][within..within + usize::from(row.len)]);
         }
     }
 
     pub(crate) fn rows(&self) -> impl Iterator<Item = (&[Cell], bool)> {
-        self.rows.iter().map(|row| {
+        self.live().iter().map(|row| {
             let (chunk, within) = self.locate(row);
             (
                 &self.chunks[chunk][within..within + usize::from(row.len)],

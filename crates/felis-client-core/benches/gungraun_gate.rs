@@ -41,8 +41,8 @@ mod gate {
     use crate::reattach::{Reattach, Session, Window};
     use crate::workload::{
         COLS, PTY_CHUNK_SIZE, REFLOW_NARROW_COLS, REFLOW_WIDE_COLS, ROWS, STREAM_BYTES,
-        apply_diffs, csi_redraw, emit_diffs_with, plaintext_scroll, reflow_and_replay,
-        reflow_history_grid, repeat_to, shell_prompt,
+        apply_diffs, csi_redraw, emit_diffs_with, full_history_grid, plaintext_scroll,
+        reflow_and_replay, reflow_history_grid, repeat_to, shell_prompt,
     };
 
     const SCRATCH_CAPACITY: usize = 128 * 1024;
@@ -115,6 +115,27 @@ mod gate {
         emit_diffs_with(&mut grid, &mut scratch, true);
         black_box(scratch.len());
         (bytes, scratch)
+    }
+
+    fn setup_full_history(compact: bool) -> DaemonInput {
+        DaemonInput {
+            bytes: plaintext_scroll(),
+            scratch: Vec::with_capacity(SCRATCH_CAPACITY),
+            parser: Parser::new(),
+            grid: full_history_grid(compact),
+        }
+    }
+
+    #[library_benchmark(setup = setup_full_history)]
+    #[bench::full_ring(false)]
+    #[bench::compacted(true)]
+    fn scroll_full_history(mut input: DaemonInput) -> DaemonInput {
+        input
+            .parser
+            .advance(&mut input.grid, black_box(&input.bytes));
+        emit_diffs_with(&mut input.grid, &mut input.scratch, true);
+        black_box(input.scratch.len());
+        input
     }
 
     #[library_benchmark]
@@ -277,6 +298,7 @@ mod gate {
         name = end_to_end_throughput,
         benchmarks = [
             daemon_side,
+            scroll_full_history,
             multi_cycle_end_to_end,
             graphics_end_to_end,
             resize_reflow,
