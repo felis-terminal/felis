@@ -37,8 +37,7 @@ async fn status_json_reports_every_resource_with_limit_and_usage() {
             max_sessions: 9,
             ..DaemonCaps::default()
         },
-    )
-    .await;
+    );
     create_and_detach(&socket).await;
 
     let out = cli_command()
@@ -145,7 +144,7 @@ async fn status_json_reports_every_resource_with_limit_and_usage() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn status_human_names_the_build_and_every_row() {
     let tmp = private_dir();
-    let (_server, socket, _pool) = spawn_daemon(&tmp, quiet_factory()).await;
+    let (_server, socket, _pool) = spawn_daemon(&tmp, quiet_factory());
 
     let out = cli_command()
         .arg("--socket")
@@ -243,8 +242,7 @@ async fn a_verb_dialing_a_full_daemon_is_typed_at_capacity() {
             admission: ConnectionAdmission::with_refusal_slots(0, 4),
             ..DaemonCaps::default()
         },
-    )
-    .await;
+    );
 
     let out = cli_command()
         .arg("--socket")
@@ -276,7 +274,7 @@ async fn a_verb_dialing_a_full_daemon_is_typed_at_capacity() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn stop_refuses_while_sessions_remain_and_reports_the_count() {
     let tmp = private_dir();
-    let (_server, socket, _pool) = spawn_daemon(&tmp, quiet_factory()).await;
+    let (_server, socket, _pool) = spawn_daemon(&tmp, quiet_factory());
     create_and_detach(&socket).await;
 
     let out = cli_command()
@@ -313,7 +311,7 @@ async fn stop_refuses_while_sessions_remain_and_reports_the_count() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn stop_on_an_empty_daemon_reports_stopping_and_ends_it() {
     let tmp = private_dir();
-    let (_server, socket, _pool) = spawn_daemon(&tmp, quiet_factory()).await;
+    let (_server, socket, _pool) = spawn_daemon(&tmp, quiet_factory());
 
     let out = cli_command()
         .arg("--socket")
@@ -382,7 +380,7 @@ fn path_with_a_successor(tmp: &tempfile::TempDir) -> std::path::PathBuf {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_refused_upgrade_reports_the_reason_and_leaves_the_daemon_serving() {
     let tmp = private_dir();
-    let (_server, socket, _pool) = spawn_daemon(&tmp, quiet_factory()).await;
+    let (_server, socket, _pool) = spawn_daemon(&tmp, quiet_factory());
     create_and_detach(&socket).await;
 
     let out = cli_command()

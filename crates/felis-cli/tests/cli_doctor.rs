@@ -181,7 +181,7 @@ fn a_cold_socket_warns_rather_than_failing_the_run() {
 async fn the_daemon_row_names_the_negotiated_minor_as_negotiated() {
     let home = private_dir();
     let (server, socket, _pool) =
-        spawn_daemon_with_caps(&home, quiet_factory(), DaemonCaps::default()).await;
+        spawn_daemon_with_caps(&home, quiet_factory(), DaemonCaps::default());
 
     let bin = std::env::var("CARGO_BIN_EXE_felis").unwrap();
     let out = StdCommand::new(bin)
@@ -324,7 +324,7 @@ async fn the_daemon_row_says_at_capacity_rather_than_not_running() {
         admission: ConnectionAdmission::with_refusal_slots(0, 4),
         ..DaemonCaps::default()
     };
-    let (server, socket, _pool) = spawn_daemon_with_caps(&home, quiet_factory(), caps).await;
+    let (server, socket, _pool) = spawn_daemon_with_caps(&home, quiet_factory(), caps);
 
     let bin = std::env::var("CARGO_BIN_EXE_felis").unwrap();
     let out = StdCommand::new(bin)

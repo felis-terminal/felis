@@ -191,11 +191,11 @@ fn mouse(action: MouseAction) -> SendStep {
 /// Prints `OSC 133 ; D ; <line>` for each line it reads.
 const MARK_EACH_LINE: &str = r"stty -echo; while read l; do printf '\033]133;D;%s\007' $l; done";
 
-async fn daemon(factory: SessionFactory) -> (TempDir, PathBuf, Arc<Mutex<SessionPool>>) {
+fn daemon(factory: SessionFactory) -> (TempDir, PathBuf, Arc<Mutex<SessionPool>>) {
     let tmp = private_dir();
     let path = tmp.path().join("daemon.sock");
     let pool = Arc::new(Mutex::new(SessionPool::new()));
-    spawn_daemon(&path, Arc::clone(&pool), factory).await;
+    spawn_daemon(&path, Arc::clone(&pool), factory);
     (tmp, path, pool)
 }
 
@@ -247,7 +247,7 @@ async fn a_send_stalled_on_the_input_budget_leaves_other_connections_answering()
     let dir = private_dir();
     let gate = gate(dir.path());
     let received = dir.path().join("received");
-    let (_tmp, path, pool) = daemon(gated_sink(&gate, &received)).await;
+    let (_tmp, path, pool) = daemon(gated_sink(&gate, &received));
     let mut ops = Peer::ops(&path).await;
     let id = ops.spawn().await;
 
@@ -282,7 +282,7 @@ async fn a_raw_step_the_size_of_the_whole_budget_is_followed_by_its_key() {
     let dir = private_dir();
     let received = dir.path().join("received");
     let factory = script_factory(format!("stty raw -echo; exec cat > {}", received.display()));
-    let (_tmp, path, _pool) = daemon(factory).await;
+    let (_tmp, path, _pool) = daemon(factory);
     let mut ops = Peer::ops(&path).await;
     let id = ops.spawn().await;
 
@@ -310,7 +310,7 @@ async fn a_request_whose_last_mouse_event_is_unreported_writes_nothing() {
         r"stty raw -echo; printf '\033[?1000hREADY'; exec cat > {}",
         received.display()
     ));
-    let (_tmp, path, _pool) = daemon(factory).await;
+    let (_tmp, path, _pool) = daemon(factory);
     let mut ops = Peer::ops(&path).await;
     let id = ops.spawn().await;
     ops.await_visible(id, "READY").await;
@@ -343,7 +343,7 @@ async fn a_request_whose_last_mouse_event_is_unreported_writes_nothing() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn sent_carries_the_full_id_a_prefix_resolved_to() {
-    let (_tmp, path, _pool) = daemon(shell_factory("read _x")).await;
+    let (_tmp, path, _pool) = daemon(shell_factory("read _x"));
     let mut ops = Peer::ops(&path).await;
     let id = ops.spawn().await;
 
@@ -358,7 +358,7 @@ async fn sent_carries_the_full_id_a_prefix_resolved_to() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_command_that_ends_at_once_is_marked_right_after_wait_sent() {
-    let (_tmp, path, _pool) = daemon(shell_factory(MARK_EACH_LINE)).await;
+    let (_tmp, path, _pool) = daemon(shell_factory(MARK_EACH_LINE));
     let mut ops = Peer::ops(&path).await;
     let id = ops.spawn().await;
 
@@ -390,7 +390,7 @@ async fn a_mark_that_lands_during_a_stalled_admission_follows_wait_sent() {
         r"stty raw -echo; read _ < {}; printf '\033]133;D;5\007'; exec cat > /dev/null",
         gate.display()
     ));
-    let (_tmp, path, pool) = daemon(factory).await;
+    let (_tmp, path, pool) = daemon(factory);
     let mut ops = Peer::ops(&path).await;
     let id = ops.spawn().await;
 
@@ -414,7 +414,7 @@ async fn a_mark_that_lands_during_a_stalled_admission_follows_wait_sent() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn canceling_a_wait_after_wait_sent_ends_its_stream() {
-    let (_tmp, path, _pool) = daemon(shell_factory("read _x; read _y")).await;
+    let (_tmp, path, _pool) = daemon(shell_factory("read _x; read _y"));
     let mut ops = Peer::ops(&path).await;
     let id = ops.spawn().await;
 
@@ -440,7 +440,7 @@ async fn canceling_a_wait_after_wait_sent_ends_its_stream() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_wait_on_an_exited_session_ends_unavailable_at_once() {
-    let (_tmp, path, _pool) = daemon(shell_factory("exit 0")).await;
+    let (_tmp, path, _pool) = daemon(shell_factory("exit 0"));
     let mut ops = Peer::ops(&path).await;
     let id = ops.spawn().await;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
@@ -476,7 +476,7 @@ async fn a_wait_on_an_exited_session_ends_unavailable_at_once() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_watch_only_wait_reports_the_mark_another_connection_caused() {
-    let (_tmp, path, _pool) = daemon(shell_factory(MARK_EACH_LINE)).await;
+    let (_tmp, path, _pool) = daemon(shell_factory(MARK_EACH_LINE));
     let mut watcher = Peer::ops(&path).await;
     let id = watcher.spawn().await;
 
@@ -509,7 +509,7 @@ async fn a_mark_that_arrives_while_the_connection_is_idle_is_delivered() {
         r"read _ < {}; printf '\033]133;D;9\007'; read _x",
         gate.display()
     ));
-    let (_tmp, path, _pool) = daemon(factory).await;
+    let (_tmp, path, _pool) = daemon(factory);
     let mut ops = Peer::ops(&path).await;
     let id = ops.spawn().await;
 
@@ -532,7 +532,7 @@ async fn cancel_stops_a_running_unattached_search() {
     let factory = shell_factory(
         "i=0; while [ $i -lt 20000 ]; do echo line$i; i=$((i+1)); done; echo READY; read _x",
     );
-    let (_tmp, path, _pool) = daemon(factory).await;
+    let (_tmp, path, _pool) = daemon(factory);
     let mut ops = Peer::ops(&path).await;
     let id = ops.spawn().await;
     ops.await_visible(id, "READY").await;
@@ -562,7 +562,7 @@ async fn cancel_stops_a_running_unattached_search() {
 async fn a_send_past_the_step_cap_is_refused_before_its_steps_are_decoded() {
     use felis_protocol::frame::Frame;
 
-    let (_tmp, path, _pool) = daemon(shell_factory("read _x")).await;
+    let (_tmp, path, _pool) = daemon(shell_factory("read _x"));
     let mut ops = Peer::ops(&path).await;
     let id = ops.spawn().await;
 
@@ -607,7 +607,7 @@ async fn a_wait_ends_unavailable_when_the_session_exits_with_no_mark() {
     let dir = private_dir();
     let gate = gate(dir.path());
     let factory = script_factory(format!("read _ < {}; exit 0", gate.display()));
-    let (_tmp, path, _pool) = daemon(factory).await;
+    let (_tmp, path, _pool) = daemon(factory);
     let mut ops = Peer::ops(&path).await;
     let id = ops.spawn().await;
 
@@ -652,7 +652,7 @@ async fn a_send_whose_connection_closes_mid_admission_writes_no_later_step() {
     let dir = private_dir();
     let gate = gate(dir.path());
     let received = dir.path().join("received");
-    let (_tmp, path, pool) = daemon(gated_sink(&gate, &received)).await;
+    let (_tmp, path, pool) = daemon(gated_sink(&gate, &received));
     let mut ops = Peer::ops(&path).await;
     let id = ops.spawn().await;
 
@@ -696,7 +696,7 @@ async fn two_connections_sending_to_one_stalled_session_share_its_budget() {
     let dir = private_dir();
     let gate = gate(dir.path());
     let received = dir.path().join("received");
-    let (_tmp, path, pool) = daemon(gated_sink(&gate, &received)).await;
+    let (_tmp, path, pool) = daemon(gated_sink(&gate, &received));
     let mut ops = Peer::ops(&path).await;
     let id = ops.spawn().await;
 
@@ -726,7 +726,7 @@ async fn two_connections_sending_to_one_stalled_session_share_its_budget() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_capture_names_its_session_and_reads_the_live_screen() {
-    let (_tmp, path, _pool) = daemon(shell_factory("echo hello-capture; read _x")).await;
+    let (_tmp, path, _pool) = daemon(shell_factory("echo hello-capture; read _x"));
     let mut ops = Peer::ops(&path).await;
     let id = ops.spawn().await;
     ops.await_visible(id, "hello-capture").await;
@@ -758,7 +758,7 @@ async fn a_capture_names_its_session_and_reads_the_live_screen() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_session_addressed_search_on_an_attached_connection_is_refused() {
-    let (_tmp, path, _pool) = daemon(shell_factory("read _x")).await;
+    let (_tmp, path, _pool) = daemon(shell_factory("read _x"));
     let (read_half, write_half) = connect(&path).await.unwrap();
     let (mut reader, mut writer) = framed(read_half, write_half).await;
     hello_welcome(&mut reader, &mut writer, false).await;
@@ -804,8 +804,7 @@ async fn a_stop_on_an_unattached_connection_is_answered_before_the_daemon_exits(
         pool,
         shell_factory("sleep 30"),
         DaemonCaps::default(),
-    )
-    .await;
+    );
     let mut ops = Peer::ops(&path).await;
     let id = ops.spawn().await;
     assert_eq!(
@@ -834,8 +833,7 @@ async fn a_stop_on_an_unattached_connection_is_answered_before_the_daemon_exits(
 async fn a_wait_ends_when_the_program_exits_while_its_background_job_holds_the_pty() {
     let (_tmp, path, _pool) = daemon(shell_factory(
         "trap '' HUP; sleep 20 & trap - HUP; read _x; exit 0",
-    ))
-    .await;
+    ));
     let mut ops = Peer::ops(&path).await;
     let id = ops.spawn().await;
 

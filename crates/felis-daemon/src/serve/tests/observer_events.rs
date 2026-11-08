@@ -237,7 +237,7 @@ async fn an_exit_under_an_attached_window_is_reported_without_eof() {
     let path = tmp.path().join("daemon.sock");
     let pool = Arc::new(Mutex::new(SessionPool::new()));
     let mut rx = pool.lock().await.subscribe_events();
-    spawn_daemon(&path, pool.clone(), shell_factory("sleep 30 & exit 7")).await;
+    spawn_daemon(&path, pool.clone(), shell_factory("sleep 30 & exit 7"));
 
     let (read_half, write_half) = connect(&path).await.unwrap();
     let (mut reader, mut writer) = framed(read_half, write_half).await;
@@ -322,7 +322,7 @@ async fn an_observer_hears_only_the_kinds_it_asked_for() {
     let tmp = private_dir();
     let path = tmp.path().join("daemon.sock");
     let pool = Arc::new(Mutex::new(SessionPool::new()));
-    spawn_daemon(&path, pool.clone(), shell_factory("sleep 30")).await;
+    spawn_daemon(&path, pool.clone(), shell_factory("sleep 30"));
     let mut default = Observer::subscribe(&path, Vec::new()).await;
     let mut lifecycle = Observer::subscribe(&path, vec![ObserverKind::Lifecycle]).await;
 
@@ -362,7 +362,7 @@ async fn a_list_run_on_an_item_already_shows_what_the_item_reports() {
     let tmp = private_dir();
     let path = tmp.path().join("daemon.sock");
     let pool = Arc::new(Mutex::new(SessionPool::new()));
-    spawn_daemon(&path, pool.clone(), shell_factory("sleep 30")).await;
+    spawn_daemon(&path, pool.clone(), shell_factory("sleep 30"));
     let mut observer =
         Observer::subscribe(&path, vec![ObserverKind::Lifecycle, ObserverKind::Meta]).await;
 

@@ -266,7 +266,7 @@ mod tests {
     use felis_protocol::preface::{DaemonPreface, PROTOCOL_MAJOR};
     use felis_transport::{Endpoint, local::Listener, preface::write_daemon_preface};
 
-    use crate::test_support::{await_socket, private_dir};
+    use crate::test_support::{private_dir, serve_bound};
 
     #[test]
     fn the_forked_daemon_is_not_handed_the_launchers_readiness_endpoint() {
@@ -845,7 +845,8 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn a_full_daemon_is_reported_at_capacity_instead_of_spawned_over() {
         use felis_daemon::{
-            SessionPool, serve::ConnectionAdmission, serve::DaemonCaps, serve_unix,
+            SessionPool, serve::ConnectionAdmission, serve::DaemonCaps,
+            serve::default_session_factory,
         };
         use std::sync::Arc;
         use tokio::sync::Mutex;
@@ -856,11 +857,12 @@ mod tests {
             admission: ConnectionAdmission::with_refusal_slots(1, 4),
             ..DaemonCaps::default()
         };
-        let server_path = path.clone();
-        let server_task = tokio::spawn(async move {
-            drop(serve_unix(&server_path, caps, Arc::new(Mutex::new(SessionPool::new()))).await);
-        });
-        await_socket(&path).await;
+        let server_task = serve_bound(
+            &path,
+            caps,
+            Arc::new(Mutex::new(SessionPool::new())),
+            default_session_factory(),
+        );
 
         let held = connect_or_spawn_daemon(&path, Offer::ops())
             .await

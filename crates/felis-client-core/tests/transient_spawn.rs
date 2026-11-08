@@ -12,7 +12,7 @@ use std::time::Duration;
 use felis_client_core::connector::{Offer, connect};
 use felis_client_core::pipe::{Origin, prepare_spawn};
 use felis_daemon::SessionPool;
-use felis_daemon::serve::{DaemonCaps, serve_unix};
+use felis_daemon::serve::{DaemonCaps, bind_unix, default_session_factory};
 use felis_protocol::messages::{GridDims, RegionPosition};
 use tempfile::TempDir;
 
@@ -30,20 +30,17 @@ fn private_dir() -> TempDir {
 }
 use tokio::sync::Mutex;
 
-async fn spawn_daemon(tmp: &TempDir) -> std::path::PathBuf {
+fn spawn_daemon(tmp: &TempDir) -> std::path::PathBuf {
     let path = tmp.path().join("daemon.sock");
     let pool = Arc::new(Mutex::new(SessionPool::new()));
-    let server_path = path.clone();
-    tokio::spawn(async move {
-        drop(serve_unix(&server_path, DaemonCaps::default(), pool).await);
-    });
-    for _ in 0..200 {
-        if path.exists() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    assert!(path.exists(), "daemon never bound its socket");
+    let serving = bind_unix(
+        &path,
+        DaemonCaps::default(),
+        pool,
+        default_session_factory(),
+    )
+    .unwrap();
+    tokio::spawn(async move { drop(serving.await) });
     path
 }
 
@@ -62,7 +59,7 @@ async fn read_when_written(path: &std::path::Path) -> String {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_transient_carries_the_region_and_the_origin_context_to_the_child() {
     let tmp = private_dir();
-    let socket = spawn_daemon(&tmp).await;
+    let socket = spawn_daemon(&tmp);
     let report = tmp.path().join("report.txt");
 
     // `sh -c '<script>' <arg>` binds `$0` to the region file `prepare_spawn` appends.
@@ -118,7 +115,7 @@ async fn a_transient_carries_the_region_and_the_origin_context_to_the_child() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_run_transient_reaches_the_child_with_the_argv_unchanged() {
     let tmp = private_dir();
-    let socket = spawn_daemon(&tmp).await;
+    let socket = spawn_daemon(&tmp);
     let report = tmp.path().join("report.txt");
 
     let script = format!("{{ echo \"args=[$*]\"; echo END; }} > {}", report.display());

@@ -155,8 +155,7 @@ async fn the_daemon_row_says_at_capacity_rather_than_not_running() {
             admission: ConnectionAdmission::with_refusal_slots(0, 4),
             ..DaemonCaps::default()
         },
-    )
-    .await;
+    );
 
     let home = private_dir();
     let row = daemon_row(&socket, &home);
@@ -169,7 +168,7 @@ async fn the_daemon_row_says_at_capacity_rather_than_not_running() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_machine_form_carries_a_typed_identity_per_process() {
     let tmp = private_dir();
-    let (_server, socket, _pool) = spawn_daemon(&tmp, quiet_factory()).await;
+    let (_server, socket, _pool) = spawn_daemon(&tmp, quiet_factory());
     let home = private_dir();
 
     let out = version_verb(&socket, &home, &["--format", "json"]);

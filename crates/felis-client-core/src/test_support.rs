@@ -40,17 +40,16 @@ pub(crate) fn private_dir() -> tempfile::TempDir {
     tmp
 }
 
-/// Waits for an in-process daemon to bind `path`, failing the test if it
-/// never does.
-#[cfg(all(unix, feature = "native"))]
-pub(crate) async fn await_socket(path: &std::path::Path) {
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
-    while !path.exists() {
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "the test daemon never bound {}",
-            path.display(),
-        );
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-    }
+/// An in-process daemon, bound before it is spawned so a connect the
+/// caller makes next is queued rather than refused.
+#[cfg(all(unix, feature = "daemon-tests"))]
+pub(crate) fn serve_bound(
+    path: &std::path::Path,
+    caps: felis_daemon::serve::DaemonCaps,
+    pool: std::sync::Arc<tokio::sync::Mutex<felis_daemon::SessionPool>>,
+    factory: felis_daemon::serve::SessionFactory,
+) -> tokio::task::JoinHandle<()> {
+    let serving = felis_daemon::serve::bind_unix(path, caps, pool, factory)
+        .expect("the test daemon binds its socket");
+    tokio::spawn(async move { drop(serving.await) })
 }
