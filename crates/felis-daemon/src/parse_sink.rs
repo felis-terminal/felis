@@ -5,7 +5,7 @@
 
 use std::sync::{
     Arc,
-    atomic::{AtomicBool, AtomicUsize, Ordering},
+    atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
 };
 use std::time::{Duration, Instant};
 
@@ -76,6 +76,9 @@ pub struct ParseSignals {
     gate: parking_lot::Mutex<YieldGate>,
     gate_cv: parking_lot::Condvar,
     drain_notify: Notify,
+    /// Advanced under the core lock with every parsed chunk, so a reader
+    /// holding that lock sees every chunk applied before it.
+    output: AtomicU64,
 }
 
 #[derive(Default)]
@@ -95,7 +98,19 @@ impl ParseSignals {
             gate: parking_lot::Mutex::new(YieldGate::default()),
             gate_cv: parking_lot::Condvar::new(),
             drain_notify: Notify::new(),
+            output: AtomicU64::new(0),
         }
+    }
+
+    /// Call with the core lock held, after the chunk is applied.
+    pub fn note_output(&self) {
+        self.output.fetch_add(1, Ordering::Release);
+    }
+
+    /// Changes with every chunk parsed; the idle compaction's quiet test
+    /// (docs/explanation/data-model/scrollback.md "Idle compaction").
+    pub fn output_generation(&self) -> u64 {
+        self.output.load(Ordering::Acquire)
     }
 
     pub fn mark_dirty(&self) {
@@ -208,6 +223,7 @@ pub fn build_sink(
                 let core = &mut *guard;
                 let stopped = core.parser.advance_until_yield(&mut core.grid, rest);
                 core.maybe_gc_tables();
+                signals.note_output();
                 stopped
             };
             signals.mark_dirty();

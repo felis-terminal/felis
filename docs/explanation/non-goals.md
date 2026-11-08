@@ -56,9 +56,10 @@ Single-user SSH stdio attach is implemented, and the protocol is transport-plugg
   disk ([overview.md](architecture/overview.md) "In-place upgrade").
 - **Migrating sessions between daemon processes or hosts.** A session is pinned to its daemon; only that daemon's own
   upgrade hands it on. Live process migration (such as CRIU-style checkpoint and restore) is not supported.
-- **Compression or disk-paging of scrollback.** Inactive scrollback stays in the unified in-memory ring until evicted by
-  capacity bounds. Compressing old rows or paging them to disk adds search and traversal latency without saving enough
-  memory to justify the complexity.
+- **Compression or disk-paging of scrollback.** Scrollback stays in memory until evicted by capacity bounds; a quiet
+  session's history drops its blank row tails and nothing more ([data-model/scrollback.md](data-model/scrollback.md)
+  "Idle compaction"). Compressing old rows or paging them to disk adds search and traversal latency without saving
+  enough memory to justify the complexity.
 
 ## Scripting and extensibility
 

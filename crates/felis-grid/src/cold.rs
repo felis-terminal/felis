@@ -196,7 +196,6 @@ impl ColdStore {
     }
 
     /// Cells held, spare chunk and per-row index included.
-    #[cfg_attr(not(test), expect(dead_code, reason = "measured by tests only"))]
     pub(crate) fn heap_bytes(&self) -> usize {
         let chunks: usize = self
             .chunks
