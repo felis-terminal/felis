@@ -2783,6 +2783,13 @@ impl<'a> ScrollbackView<'a> {
         Some(self.soft_wrap[phys])
     }
 
+    /// The width history rows were laid out at, which under the
+    /// alternate screen is the saved primary's.
+    #[must_use]
+    pub const fn cols(&self) -> usize {
+        self.cols
+    }
+
     /// Iterate history rows oldest to newest, occupancy-clipped.
     pub fn iter(&self) -> impl Iterator<Item = &'a [Cell]> {
         let this = ScrollbackView { ..*self };
@@ -3457,6 +3464,14 @@ impl Grid {
     #[must_use]
     pub const fn reserved_cell_bytes(&self) -> usize {
         self.screen.reserved_cell_bytes()
+    }
+
+    /// What the cells keep resident, both scrollback tiers included
+    /// (`docs/explanation/data-model/scrollback.md` "Capacity and
+    /// eviction"); [`Self::reserved_cell_bytes`] is the address space.
+    #[must_use]
+    pub fn resident_cell_bytes(&self) -> usize {
+        self.screen.resident_cell_bytes()
     }
 
     #[must_use]

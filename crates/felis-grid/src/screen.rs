@@ -1014,6 +1014,24 @@ impl ScreenBuffer {
         self.cells.capacity() * size_of::<Cell>()
     }
 
+    /// Live ring rows at full width plus the cold tier's heap, over every
+    /// screen. A vacant ring row is reserved address space only, so this
+    /// is what the cells keep resident, to the page.
+    #[must_use]
+    pub fn resident_cell_bytes(&self) -> usize {
+        [
+            Some(self.ring()),
+            self.saved_primary.as_ref().map(SavedScreen::ring),
+            self.saved_alternate.as_ref().map(SavedScreen::ring),
+        ]
+        .into_iter()
+        .flatten()
+        .map(|ring| {
+            (ring.history_len + ring.rows) * ring.cols * size_of::<Cell>() + ring.cold.heap_bytes()
+        })
+        .sum()
+    }
+
     /// Clamps `viewport` itself, so callers pass the raw request. `None`
     /// only for `row` out of range.
     pub(crate) fn resolve_viewport_row(&self, viewport: u32, row: u16) -> Option<ViewportRow> {

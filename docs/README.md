@@ -152,7 +152,8 @@ Data model:
 
 - [Grid and cells](explanation/data-model/grid-and-cells.md) — cell representation, primary/alternate screen models, and
   style handle interning.
-- [Scrollback](explanation/data-model/scrollback.md) — flat cell ring buffer, zero-copy eviction, and reflow on resize.
+- [Scrollback](explanation/data-model/scrollback.md) — flat cell ring, idle compaction, zero-copy eviction, and reflow
+  on resize.
 - [Image store](explanation/data-model/image-store.md) — daemon-side Kitty graphics storage, refcounting, and memory
   bounds.
 

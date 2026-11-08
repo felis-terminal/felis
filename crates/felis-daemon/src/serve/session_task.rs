@@ -36,6 +36,8 @@ use crate::{
     serve::{ConnError, IdlePolicy, key_encode, streaming, write_paste, write_pty},
 };
 
+mod idle;
+
 /// 2× the per-session image-store cap, so a full image rehydrate burst
 /// (the largest single push) can never trip it on a healthy
 /// connection.
@@ -841,6 +843,7 @@ async fn spawn_task(
         held_cmds: VecDeque::new(),
         awaiting_post_release_drain: false,
         shutdown: Arc::clone(&shutdown),
+        idle: idle::IdleCompaction::new(idle::QUIET),
         #[cfg(all(test, unix))]
         before_decode: None,
     };
@@ -1304,6 +1307,7 @@ struct SessionTask {
     /// makes after the release, which it always reports.
     awaiting_post_release_drain: bool,
     shutdown: Arc<crate::pool::ShutdownSignal>,
+    idle: idle::IdleCompaction,
     /// Test-only: the next decode runs this first, on the blocking pool.
     #[cfg(all(test, unix))]
     before_decode: Option<Box<dyn FnOnce() + Send + Sync>>,
@@ -1524,6 +1528,15 @@ async fn run_session(mut t: SessionTask, mut cmd_rx: mpsc::Receiver<SessionCmd>)
         // output after it; every other arm, and any added later, is gated
         // on `quiesced`.
         let hold = t.hold();
+        t.idle.observe(
+            t.session.signals.output_generation(),
+            tokio::time::Instant::now(),
+        );
+        let idle_deadline = t
+            .idle
+            .deadline()
+            .unwrap_or_else(|| tokio::time::Instant::now() + Duration::from_secs(3600));
+        let compacts = hold.drains() && hold.quiesced();
         tokio::select! {
             biased;
             // Ahead of everything and ungated by an upgrade hold: the sink
@@ -1655,6 +1668,16 @@ async fn run_session(mut t: SessionTask, mut cmd_rx: mpsc::Receiver<SessionCmd>)
             // the live frame (REQ-307).
             () = tokio::time::sleep(anim_sleep) => {
                 t.animation_tick();
+            }
+            () = tokio::time::sleep_until(idle_deadline), if t.idle.deadline().is_some() && compacts => {
+                t.idle
+                    .timer_fired(t.session.signals.output_generation(), tokio::time::Instant::now());
+            }
+            // Last, so every other arm goes first between slices; the
+            // yield lets the connection pumps run.
+            () = std::future::ready(()), if t.idle.running() && compacts => {
+                t.compact_slice();
+                tokio::task::yield_now().await;
             }
         }
         // Sync paths (detach, eviction, resize) cannot write to the
@@ -2866,6 +2889,17 @@ impl SessionTask {
             upgrade: self.upgrade_hold,
             decode: self.decode.is_some() || self.awaiting_post_release_drain,
         }
+    }
+
+    fn compact_slice(&mut self) {
+        let shared = Arc::clone(&self.session.core);
+        let mut core = shared.lock();
+        let rows = idle::slice_rows(core.grid.scrollback().cols());
+        let generation = self.session.signals.output_generation();
+        self.idle
+            .slice(generation, tokio::time::Instant::now(), || {
+                core.grid.compact_history(rows)
+            });
     }
 
     const fn owes_reports(&self) -> bool {
@@ -4221,6 +4255,7 @@ impl SessionTask {
         } else {
             core.grid.reflow(size.rows, size.cols)
         };
+        self.idle.invalidate();
         // Every queued directive names the geometry it was recorded
         // under, so the new dimensions retire them all; the reflow has
         // marked every row dirty, which is the replay that replaces them.
@@ -4398,6 +4433,7 @@ impl SessionTask {
             held_cmds: VecDeque::new(),
             awaiting_post_release_drain: false,
             shutdown: Arc::default(),
+            idle: idle::IdleCompaction::new(idle::QUIET),
             before_decode: None,
             meta_title_epoch: 0,
             meta_cwd_epoch: 0,
@@ -4446,6 +4482,7 @@ mod tests {
     use super::*;
 
     mod decode_offload;
+    mod idle_compaction;
 
     fn test_request() -> RequestId {
         RequestId::new(1).unwrap_or_else(|| unreachable!("1 is non-zero"))

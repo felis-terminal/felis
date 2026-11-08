@@ -104,8 +104,8 @@ sidebar:
   longest span of a row that is ASCII at default sizing in one style and covered by that style's primary face; every
   other cell is shaped on its own ([text-shaping.md](../explanation/rendering/text-shaping.md)).
 
-- **Session** — A daemon-owned instance encapsulating a child PTY, active screen grid, scrollback ring buffer, and image
-  store. A session survives client disconnections.
+- **Session** — A daemon-owned instance encapsulating a child PTY, active screen grid, scrollback, and image store. A
+  session survives client disconnections.
 
 - **SGR** — Select Graphic Rendition. The CSI sequence family (`CSI ... m`) controlling text styling, foreground colors,
   background colors, and text decorations.
