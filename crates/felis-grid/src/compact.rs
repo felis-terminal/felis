@@ -105,7 +105,7 @@ pub(crate) struct RingMut<'a> {
     pub(crate) rows: usize,
     pub(crate) cols: usize,
     pub(crate) cold: &'a mut ColdStore,
-    pub(crate) gap_discarded: &'a mut bool,
+    pub(crate) gap: &'a mut GapReuse,
 }
 
 impl RingMut<'_> {
@@ -131,7 +131,9 @@ impl RingMut<'_> {
         if gap == 0 {
             return moved == excess;
         }
-        let discard = if *self.gap_discarded {
+        let discard = if self.gap.is_intact() {
+            vacant_rows(self.base, self.phys_cap, *self.history_len, self.rows)
+        } else {
             // The page that straddles the previous slice's last row and
             // this slice's first lies wholly inside the gap only now.
             let row_bytes = self.cols * size_of::<Cell>();
@@ -143,10 +145,8 @@ impl RingMut<'_> {
                 moved + back,
                 self.phys_cap,
             )
-        } else {
-            vacant_rows(self.base, self.phys_cap, *self.history_len, self.rows)
         };
-        if moved > 0 || !*self.gap_discarded {
+        if moved > 0 || self.gap.is_intact() {
             for rows in discard {
                 // A failed discard changed nothing: those pages stay
                 // resident and every row stays valid.
@@ -155,23 +155,74 @@ impl RingMut<'_> {
                         .discard(rows.start * self.cols..rows.end * self.cols),
                 );
             }
+            *self.gap = GapReuse(0);
         }
-        *self.gap_discarded = true;
         moved == excess
     }
 
-    /// Before a vacant row turns live: tells the OS the whole gap is in
-    /// use again (macOS accounts for it there), so the next compaction
-    /// discards it afresh.
+    /// Before the gap's first row turns live: makes sure its pages are in
+    /// use again (macOS accounts for them there).
+    #[inline]
+    pub(crate) fn take_gap_row(self) {
+        debug_assert!(
+            self.gap.0 < self.phys_cap - *self.history_len - self.rows,
+            "the reused prefix lies inside the gap"
+        );
+        if self.gap.0 == 0 {
+            self.reuse_ahead();
+        } else {
+            self.gap.0 -= 1;
+        }
+    }
+
+    /// Reuses the pages under the next [`REUSE_AHEAD_BYTES`] of the gap,
+    /// not the whole gap: macOS charges every page `MADV_FREE_REUSE`
+    /// covers at once, so footprint would jump back to the full ring on
+    /// the first line of output.
     #[cold]
-    pub(crate) fn reuse_gap(self) {
-        *self.gap_discarded = false;
-        for rows in vacant_rows(self.base, self.phys_cap, *self.history_len, self.rows) {
+    fn reuse_ahead(self) {
+        let gap = self.phys_cap - *self.history_len - self.rows;
+        let ahead = REUSE_AHEAD_BYTES
+            .max(paged_cells::page_bytes())
+            .div_ceil(self.cols * size_of::<Cell>())
+            .min(gap);
+        let front = (self.base + self.rows) % self.phys_cap;
+        for rows in ring_segments(front, ahead, self.phys_cap) {
             drop(
                 self.cells
                     .reuse(rows.start * self.cols..rows.end * self.cols),
             );
         }
+        *self.gap = if ahead == gap {
+            GapReuse::INTACT
+        } else {
+            GapReuse(ahead - 1)
+        };
+    }
+}
+
+/// One `madvise` per this much refilled history, rather than per page.
+pub(crate) const REUSE_AHEAD_BYTES: usize = 64 << 10;
+
+/// Which of the vacant gap's rows may turn live without reusing their
+/// pages first. Either no page wholly inside the gap is discarded, or
+/// the first `n` gap rows (in ring order from the viewport bottom) lie
+/// on reused pages and `n` is less than the gap's length.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct GapReuse(usize);
+
+impl GapReuse {
+    pub(crate) const INTACT: Self = Self(usize::MAX);
+
+    #[inline]
+    pub(crate) const fn is_intact(self) -> bool {
+        self.0 == usize::MAX
+    }
+}
+
+impl Default for GapReuse {
+    fn default() -> Self {
+        Self::INTACT
     }
 }
 

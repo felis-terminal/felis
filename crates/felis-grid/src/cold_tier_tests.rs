@@ -200,13 +200,22 @@ fn assert_unobservable(g: &mut Grid, twin: &mut Grid) {
     assert_tiers_consistent(g);
 }
 
-/// Cold and ring history share one cap, a row cannot be in both, and the
-/// ring's arrays still cover its window.
+/// Cold and ring history share one cap, a row cannot be in both, the
+/// ring's arrays still cover its window, and no live row lies on a page
+/// that was discarded and not reused since.
 fn assert_tiers_consistent(g: &Grid) {
     let s = &g.screen;
-    for (ring, cap) in std::iter::once((s.ring(), s.cap))
-        .chain(s.saved_primary.as_ref().map(|p| (p.ring(), p.cap)))
-    {
+    for (ring, cap, cells) in std::iter::once((s.ring(), s.cap, &s.cells)).chain(
+        s.saved_primary
+            .as_ref()
+            .map(|p| (p.ring(), p.cap, &p.cells)),
+    ) {
+        for rows in ring.live_rows() {
+            assert!(
+                !cells.has_discarded_page(rows.start * ring.cols..rows.end * ring.cols),
+                "a live row in {rows:?} lies on a discarded page"
+            );
+        }
         assert!(
             ring.cold.len() + ring.history_len <= cap,
             "history past cap"
@@ -218,6 +227,30 @@ fn assert_tiers_consistent(g: &Grid) {
             "a cold row with no ring history above it"
         );
     }
+}
+
+/// `count` lines of `width` columns, fed to both grids.
+fn lines(
+    count: usize,
+    width: usize,
+    p: &mut Parser,
+    g: &mut Grid,
+    tp: &mut Parser,
+    twin: &mut Grid,
+) {
+    let line = format!("\x1b[32m{}\x1b[m\r\n", "w".repeat(width));
+    let out = line.repeat(count);
+    drive(p, g, out.as_bytes());
+    drive(tp, twin, out.as_bytes());
+}
+
+/// The most pages a refill of `turned_live` rows may reuse: the pages
+/// those rows span, one reuse-ahead span, and a straddling page at each
+/// end of both.
+fn reuse_bound(turned_live: usize, cols: u16) -> usize {
+    let page = paged_cells::page_bytes();
+    let row_bytes = usize::from(cols) * size_of::<Cell>();
+    (turned_live * row_bytes).div_ceil(page) + compact::REUSE_AHEAD_BYTES.div_ceil(page) + 4
 }
 
 fn grids(rows: u16, cols: u16, cap: usize) -> (Parser, Grid, Parser, Grid) {
@@ -356,6 +389,48 @@ proptest! {
             prop_assert_eq!(history(&g), before.clone());
             assert_unobservable(&mut g, &mut twin);
         }
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(48))]
+
+    /// However slices, refills and reflows interleave and wherever the
+    /// gap wraps, every live row stays on reused pages, and a burst
+    /// reclaims only the pages its rows reach plus one reuse-ahead span.
+    #[test]
+    fn refill_reuses_only_the_pages_it_reaches(
+        cols in 100u16..600,
+        fill in 300usize..700,
+        steps in prop::collection::vec((0usize..120, 0usize..400, any::<bool>()), 1..8),
+    ) {
+        let (mut p, mut g, mut tp, mut twin) = grids(3, cols, 300);
+        let width = usize::from(cols) / 3;
+        lines(fill, width, &mut p, &mut g, &mut tp, &mut twin);
+        for (burst, slice, reflow) in steps {
+            let cols = g.cols();
+            g.compact_history(slice);
+            assert_tiers_consistent(&g);
+            let gap = g.screen.phys_cap - g.screen.history_len - usize::from(g.rows());
+            let before = g.screen.cells.discarded_pages();
+            lines(burst, width, &mut p, &mut g, &mut tp, &mut twin);
+            assert_tiers_consistent(&g);
+            prop_assert_eq!(history(&g), history(&twin));
+            let reclaimed = before - g.screen.cells.discarded_pages();
+            prop_assert!(
+                reclaimed <= reuse_bound(burst.min(gap), cols),
+                "{burst} rows into a {gap}-row gap reclaimed {reclaimed} pages"
+            );
+            if burst >= gap {
+                prop_assert_eq!(g.screen.cells.discarded_pages(), 0);
+            }
+            if reflow {
+                let remap = g.reflow(3, cols ^ 1);
+                prop_assert_eq!(remap, twin.reflow(3, cols ^ 1));
+                assert_tiers_consistent(&g);
+            }
+        }
+        assert_unobservable(&mut g, &mut twin);
     }
 }
 
@@ -712,7 +787,104 @@ fn measure_slice_latency_at_the_largest_geometry() {
     let start = Instant::now();
     g.compact_history(1);
     println!(
-        "{rows}x{cols}: 1-row slice re-discarding the whole gap {:?}",
+        "{rows}x{cols}: 1-row slice after the line feed {:?}",
         start.elapsed()
     );
+}
+
+/// `count` lines whose widths spread around `mean` columns, the shape
+/// of shell output the measurements below use.
+#[cfg(target_os = "macos")]
+fn spread_lines(count: usize, mean: usize) -> Vec<u8> {
+    let mut out = Vec::new();
+    for i in 0..count {
+        let width = (i * 7919) % (2 * mean + 1);
+        let text: String = (0..width)
+            .map(|c| char::from(b'!' + (c % 90) as u8))
+            .collect();
+        out.extend_from_slice(format!("\x1b[3{}m{text}\x1b[m\r\n", i % 8).as_bytes());
+    }
+    out
+}
+
+/// macOS counts a discarded page again from the `MADV_FREE_REUSE` that
+/// takes it back, so this is where reusing more than the rows about to
+/// turn live shows: a refill must grow the footprint with its rows.
+#[cfg(target_os = "macos")]
+mod footprint {
+    use super::*;
+    use crate::paged_cells::phys_footprint;
+
+    const MIB: u64 = 1 << 20;
+
+    #[test]
+    fn a_refill_after_compaction_grows_the_footprint_by_its_rows_alone() {
+        let (rows, cols) = (54u16, 192u16);
+        let ring_bytes =
+            (usize::from(rows) + DEFAULT_SCROLLBACK_ROWS) * usize::from(cols) * size_of::<Cell>();
+        let ring_bytes = u64::try_from(ring_bytes).expect("small ring");
+        let mut p = Parser::new();
+        let mut g = Grid::new(rows, cols);
+        let fill = spread_lines(DEFAULT_SCROLLBACK_ROWS + 100, 5);
+        let one = spread_lines(1, 5);
+        let hundred = spread_lines(100, 5);
+        drive(&mut p, &mut g, &fill);
+        let full = phys_footprint();
+        while !g.compact_history(1024) {}
+        let compacted = phys_footprint();
+        assert!(
+            compacted + ring_bytes * 3 / 4 < full,
+            "compaction left {compacted} of {full} bytes"
+        );
+        drive(&mut p, &mut g, &one);
+        let one_line = phys_footprint();
+        assert!(
+            one_line < compacted + MIB,
+            "one line took the footprint from {compacted} to {one_line} bytes"
+        );
+        drive(&mut p, &mut g, &hundred);
+        let row_bytes = u64::from(cols) * size_of::<Cell>() as u64;
+        assert!(
+            phys_footprint() < one_line + 100 * row_bytes + MIB,
+            "a hundred lines reclaimed more than their rows"
+        );
+    }
+
+    /// Measurement, not a gate (`cargo nextest run --release -p
+    /// felis-grid --run-ignored only measure_ --no-capture`): the
+    /// process footprint around compacting a full 54×192 ring and
+    /// refilling it, for plain and rich output.
+    #[test]
+    #[ignore = "measurement"]
+    fn measure_refill_footprint() {
+        let mib = |bytes: u64| bytes as f64 / MIB as f64;
+        // Each grid outlives the next one's measurement: a dropped cold
+        // tier's heap would serve the next grid and hide its growth.
+        let mut kept = Vec::new();
+        for (name, mean) in [("plain", 33usize), ("rich", 65)] {
+            let mut p = Parser::new();
+            let mut g = Grid::new(54, 192);
+            let fill = spread_lines(DEFAULT_SCROLLBACK_ROWS + 100, mean);
+            let one = spread_lines(1, mean);
+            let thousand = spread_lines(1000, mean);
+            let start = phys_footprint();
+            drive(&mut p, &mut g, &fill);
+            let full = phys_footprint();
+            while !g.compact_history(1024) {}
+            let compacted = phys_footprint();
+            drive(&mut p, &mut g, &one);
+            let one_line = phys_footprint();
+            drive(&mut p, &mut g, &thousand);
+            let more = phys_footprint();
+            drive(&mut p, &mut g, &fill);
+            let refilled = phys_footprint();
+            let [full, compacted, one_line, more, refilled] =
+                [full, compacted, one_line, more, refilled].map(|b| mib(b.saturating_sub(start)));
+            println!(
+                "54x192 {name}: full {full:.1} MiB, compacted {compacted:.1}, +1 line \
+                 {one_line:.1}, +1001 lines {more:.1}, refilled {refilled:.1}"
+            );
+            kept.push(g);
+        }
+    }
 }

@@ -2,7 +2,7 @@
 
 use felis_vt::Parser;
 
-use crate::compact::RingRef;
+use crate::compact::{GapReuse, RingRef};
 use crate::paged_cells::PagedCells;
 use crate::{ApcBody, Grid, PtyEffect, ScreenSwitch, ScrollOp};
 
@@ -76,7 +76,7 @@ pub(crate) fn normalized(grid: &Grid) -> Grid {
     (screen.cells, screen.soft_wrap, screen.occupancy) = (cells, soft_wrap, occupancy);
     (screen.base, screen.history_len) = (history_len, history_len);
     screen.cold.clear();
-    screen.gap_discarded = false;
+    screen.gap = GapReuse::INTACT;
     for saved in [
         screen.saved_primary.as_mut(),
         screen.saved_alternate.as_mut(),
@@ -89,7 +89,7 @@ pub(crate) fn normalized(grid: &Grid) -> Grid {
         (saved.cells, saved.soft_wrap, saved.occupancy) = (cells, soft_wrap, occupancy);
         (saved.base, saved.history_len) = (history_len, history_len);
         saved.cold.clear();
-        saved.gap_discarded = false;
+        saved.gap = GapReuse::INTACT;
     }
     screen.refresh_has_sized_cells();
     grid

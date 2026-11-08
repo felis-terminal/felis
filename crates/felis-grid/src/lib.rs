@@ -360,6 +360,7 @@ pub use ansi::{
 pub use cluster_table::CLUSTER_TABLE_CAP;
 pub use cluster_table::ClusterTable;
 pub use command_output::{MAX_ANNOUNCE_BYTES, MAX_ANNOUNCE_ROWS};
+use compact::GapReuse;
 pub use damage::Damage;
 #[doc(hidden)]
 pub use link_table::LINK_TABLE_BYTE_CAP;
@@ -1786,7 +1787,7 @@ impl Grid {
         let restored_alt = self.screen.saved_alternate.take();
         let resumed = restored_alt.is_some();
         let saved_cold = std::mem::take(&mut self.screen.cold);
-        let saved_gap_discarded = std::mem::take(&mut self.screen.gap_discarded);
+        let saved_gap = std::mem::take(&mut self.screen.gap);
         let blank_cells = || {
             let len = usize::from(self.screen.rows) * usize::from(self.screen.cols);
             PagedCells::with_reserve(len, len)
@@ -1850,7 +1851,7 @@ impl Grid {
             history_len: saved_history_len,
             cap: saved_cap,
             cold: saved_cold,
-            gap_discarded: saved_gap_discarded,
+            gap: saved_gap,
             cursor: self.screen.cursor,
             pen: self.pen,
         });
@@ -1901,10 +1902,7 @@ impl Grid {
                 history_len: std::mem::replace(&mut self.screen.history_len, saved.history_len),
                 cap: std::mem::replace(&mut self.screen.cap, saved.cap),
                 cold: std::mem::replace(&mut self.screen.cold, saved.cold),
-                gap_discarded: std::mem::replace(
-                    &mut self.screen.gap_discarded,
-                    saved.gap_discarded,
-                ),
+                gap: std::mem::replace(&mut self.screen.gap, saved.gap),
                 cursor: self.screen.cursor,
                 pen: self.pen,
             });
@@ -1922,7 +1920,7 @@ impl Grid {
             self.screen.history_len = saved.history_len;
             self.screen.cap = saved.cap;
             self.screen.cold = saved.cold;
-            self.screen.gap_discarded = saved.gap_discarded;
+            self.screen.gap = saved.gap;
         }
         self.screen.refresh_has_sized_cells();
         if restore_cursor {
@@ -2597,8 +2595,8 @@ impl Grid {
         let rows = usize::from(self.screen.rows);
         let blank_is_default = *blank_with == Cell::default();
         for _ in 0..n {
-            if self.screen.gap_discarded {
-                self.screen.ring_mut().reuse_gap();
+            if !self.screen.gap.is_intact() {
+                self.screen.ring_mut().take_gap_row();
             }
             // Grow before the base moves, or the recycle-blank below
             // would clobber the row about to become history-youngest.
@@ -2702,7 +2700,7 @@ impl Grid {
         self.screen.phys_cap = rows;
         self.screen.history_len = 0;
         self.screen.cold.clear();
-        self.screen.gap_discarded = false;
+        self.screen.gap = GapReuse::INTACT;
         self.screen.band_len = 0;
         self.screen.band_rot = 0;
     }
