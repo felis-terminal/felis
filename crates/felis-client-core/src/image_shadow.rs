@@ -256,11 +256,11 @@ struct ActiveTransfer {
     id: ImageId,
     slot: usize,
     expected: usize,
-    received: usize,
     /// Moved into the frame only at `Complete`, so neither a reused
     /// buffer's old image nor a half-written one is reachable, and a
     /// re-sent displayed frame keeps what was on screen. Uncharged for
     /// that re-send: the daemon admits an in-place edit at the cap.
+    /// Holds exactly the bytes received so far.
     pixels: Vec<u8>,
     /// Set for a region transfer: `pixels` holds the rectangle alone,
     /// written over the frame at `Complete`.
@@ -358,8 +358,8 @@ pub struct ImageShadow {
     retained: usize,
     active: Option<ActiveTransfer>,
     /// The last pixel buffer a frame gave up, reused by the next one of
-    /// the same length so a stream of same-sized frames neither
-    /// allocates nor zero-fills. Uncharged and never readable from
+    /// the same length so a stream of same-sized frames does not
+    /// allocate. Uncharged and never readable from
     /// outside: it is one frame at most, and a mismatched request drops
     /// it.
     spare: Vec<u8>,
@@ -565,15 +565,14 @@ impl ImageShadow {
         Ok(wanted)
     }
 
-    /// A buffer of `len` bytes whose contents are unspecified: it backs
-    /// an [`ActiveTransfer`], which must deliver all `len` bytes before
-    /// [`ImageMsg::Complete`] moves it where anything can read it.
+    /// An empty buffer with room for `len` bytes.
     fn frame_buffer(&mut self, len: usize) -> Vec<u8> {
-        let spare = std::mem::take(&mut self.spare);
+        let mut spare = std::mem::take(&mut self.spare);
         if spare.len() == len {
+            spare.clear();
             spare
         } else {
-            vec![0u8; len]
+            Vec::with_capacity(len)
         }
     }
 
@@ -616,8 +615,7 @@ impl ImageShadow {
                     id,
                     slot,
                     expected,
-                    received: 0,
-                    pixels: vec![0; expected],
+                    pixels: Vec::with_capacity(expected),
                     region: Some(rect),
                 });
                 return Ok(());
@@ -629,7 +627,6 @@ impl ImageShadow {
             id,
             slot,
             expected,
-            received: 0,
             pixels,
             region: None,
         });
@@ -792,8 +789,7 @@ impl ImageShadow {
                 named: id.0,
             });
         }
-        let start = active.received;
-        let end = start + bytes.len();
+        let end = active.pixels.len() + bytes.len();
         if end > active.expected {
             return Err(ImageShadowError::ChunkOverrun {
                 id: id.0,
@@ -802,8 +798,7 @@ impl ImageShadow {
             });
         }
         if let Some(active) = self.active.as_mut() {
-            active.pixels[start..end].copy_from_slice(bytes);
-            active.received = end;
+            active.pixels.extend_from_slice(bytes);
         }
         Ok(())
     }
@@ -819,11 +814,11 @@ impl ImageShadow {
                 named: id.0,
             });
         }
-        if active.received != active.expected {
+        if active.pixels.len() != active.expected {
             return Err(ImageShadowError::IncompleteComplete {
                 id: id.0,
                 expected: active.expected,
-                received: active.received,
+                received: active.pixels.len(),
             });
         }
         let slot = active.slot;
