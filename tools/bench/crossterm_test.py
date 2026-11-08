@@ -2182,10 +2182,14 @@ class TestLaunch:
     @pytest.fixture
     def rendered(self, build):
         def rendered(name, caps=frozenset()) -> str:
-            """argv plus any config file it writes, as one searchable string."""
+            """argv plus any config file it writes, as one searchable string, with
+            the random temp paths masked so a name cannot match a setting."""
             launch = build(name, caps)
             bodies = [p.read_text() for p in launch.tmp]
-            return " ".join([*launch.argv, *launch.env.values(), *bodies])
+            text = " ".join([*launch.argv, *launch.env.values(), *bodies])
+            for p in launch.tmp:
+                text = text.replace(str(p), "<tmp>")
+            return text
 
         return rendered
 
