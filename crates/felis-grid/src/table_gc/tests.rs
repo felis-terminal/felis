@@ -95,7 +95,8 @@ fn a_full_scrollback_buys_headroom_the_live_set_alone_would_not() {
     let mut grid = Grid::new(rows, cols);
     let mut parser = Parser::default();
     for i in 0..(crate::DEFAULT_SCROLLBACK_ROWS + usize::from(rows)) {
-        parser.advance(&mut grid, format!("r{i}\r\n").as_bytes());
+        // Full rows: a sweep reads only each row's occupied cells.
+        parser.advance(&mut grid, format!("{i:<20}\r\n").as_bytes());
     }
     for i in 0..(STYLE_INIT * 2) {
         let (r, g, b) = (i / 65536 % 256, i / 256 % 256, i % 256);
@@ -110,7 +111,7 @@ fn a_full_scrollback_buys_headroom_the_live_set_alone_would_not() {
     gc.maybe_sweep(&mut grid);
 
     let live = grid.style_table_len();
-    let swept_cells = (crate::DEFAULT_SCROLLBACK_ROWS + usize::from(rows)) * usize::from(cols);
+    let swept_cells = crate::DEFAULT_SCROLLBACK_ROWS * usize::from(cols);
     assert!(
         live * 2 < swept_cells / HEADROOM_DIVISOR,
         "the test is only meaningful while the live set cannot buy the headroom itself",

@@ -11,6 +11,12 @@
 //! The harness drains every take_* queue each run so accumulated state
 //! (PTY effects, notifications, grid events, dirty rows) cannot OOM the
 //! corpus minimizer over long sessions.
+//!
+//! A `0xFF` byte (never part of UTF-8) followed by a count is a
+//! sentinel, not output: it runs a compaction slice of that many rows,
+//! so the two-tier scrollback, its cold-tier eviction and the recycling
+//! of discarded ring rows meet every dispatch path. The small scrollback
+//! lets an input reach the cap.
 
 #![no_main]
 
@@ -19,9 +25,19 @@ use felis_vt::Parser;
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {
-    let mut grid = Grid::new(8, 32);
+    let mut grid = Grid::with_scrollback(8, 32, 64);
     let mut parser = Parser::new();
-    parser.advance(&mut grid, data);
+    let mut chunks = data.split(|&b| b == 0xFF);
+    if let Some(head) = chunks.next() {
+        parser.advance(&mut grid, head);
+    }
+    for chunk in chunks {
+        let (slice, rest) = chunk
+            .split_first()
+            .map_or((0, chunk), |(&n, rest)| (n, rest));
+        grid.compact_history(usize::from(slice));
+        parser.advance(&mut grid, rest);
+    }
     // PtyEffect subsumes the former pending-response and clipboard-set
     // queues since the single-queue refactor (one stream-ordered drain).
     drop(grid.take_pty_effects());

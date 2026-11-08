@@ -6,6 +6,8 @@
 use std::num::{NonZeroU16, NonZeroU32};
 
 use crate::cluster_table::ClusterTable;
+use crate::cold::ColdStore;
+use crate::compact::{RingMut, RingRef};
 use crate::damage::Damage;
 use crate::link_table::LinkTable;
 use crate::paged_cells::PagedCells;
@@ -16,7 +18,7 @@ use crate::{
     ViewportRowView, hist_phys_of, ring_cells,
 };
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(PartialEq, Eq)]
 pub struct ScreenBuffer {
     pub(crate) rows: u16,
     pub(crate) cols: u16,
@@ -64,8 +66,16 @@ pub struct ScreenBuffer {
     /// history fills.
     pub(crate) phys_cap: usize,
     /// History occupies `[base - history_len, base)` (mod `phys_cap`);
-    /// the viewport `[base, base + rows)`.
+    /// the viewport `[base, base + rows)`. Physical rows outside that
+    /// window are vacant: no reader reaches them, and no scan may touch
+    /// them, or it faults discarded pages back in.
     pub(crate) history_len: usize,
+    /// History older than the ring's, oldest first. Shares `cap` with
+    /// `history_len`.
+    pub(crate) cold: ColdStore,
+    /// The vacant rows' whole pages went back to the OS; set until a
+    /// vacant row turns live again.
+    pub(crate) gap_discarded: bool,
     /// `Some` while the alternate screen is active.
     pub(crate) saved_primary: Option<SavedScreen>,
     /// `?1047l` and `?1049l` drop this slot on leave (xterm: those modes
@@ -105,7 +115,7 @@ pub struct ScreenBuffer {
 /// Scrollback is shared across both buffers per xterm. The
 /// `sizing_table` registry is not saved: it persists across toggles so
 /// handles in the saved cells stay valid.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) struct SavedScreen {
     pub(crate) cells: PagedCells,
     /// Need not be the live grid's: a resize under the alt screen leaves
@@ -120,6 +130,8 @@ pub(crate) struct SavedScreen {
     pub(crate) phys_cap: usize,
     pub(crate) history_len: usize,
     pub(crate) cap: usize,
+    pub(crate) cold: ColdStore,
+    pub(crate) gap_discarded: bool,
     pub(crate) soft_wrap: Box<[bool]>,
     pub(crate) occupancy: Box<[u16]>,
     pub(crate) cursor: Cursor,
@@ -155,6 +167,8 @@ impl ScreenBuffer {
             cap: scrollback_rows,
             phys_cap: usize::from(rows),
             history_len: 0,
+            cold: ColdStore::default(),
+            gap_discarded: false,
             saved_primary: None,
             saved_alternate: None,
             link_table: LinkTable::default(),
@@ -163,6 +177,206 @@ impl ScreenBuffer {
             has_sized_cells: false,
             geometry_gen: 0,
             scroll_seq: 0,
+        }
+    }
+}
+
+impl ScreenBuffer {
+    pub(crate) fn ring(&self) -> RingRef<'_> {
+        RingRef {
+            cells: &self.cells,
+            soft_wrap: &self.soft_wrap,
+            occupancy: &self.occupancy,
+            base: self.base,
+            phys_cap: self.phys_cap,
+            history_len: self.history_len,
+            rows: usize::from(self.rows),
+            cols: usize::from(self.cols),
+            cold: &self.cold,
+        }
+    }
+
+    pub(crate) fn ring_mut(&mut self) -> RingMut<'_> {
+        RingMut {
+            cells: &mut self.cells,
+            soft_wrap: &self.soft_wrap,
+            occupancy: &self.occupancy,
+            base: self.base,
+            phys_cap: self.phys_cap,
+            history_len: &mut self.history_len,
+            rows: usize::from(self.rows),
+            cols: usize::from(self.cols),
+            cold: &mut self.cold,
+            gap_discarded: &mut self.gap_discarded,
+        }
+    }
+
+    /// Compacts the primary's history wherever it lives: here, or in the
+    /// saved primary while the alternate screen is up.
+    pub(crate) fn compact_history(&mut self, max_rows: usize) -> bool {
+        match self.saved_primary.as_mut() {
+            Some(saved) => saved.ring_mut().compact(max_rows),
+            None => self.ring_mut().compact(max_rows),
+        }
+    }
+
+    /// The occupied cells of every live row, cold rows included. Vacant
+    /// rows are skipped (see `history_len`), and so are tails past a
+    /// watermark: a recycled vacant row's tail names ids an earlier sweep
+    /// never saw.
+    fn for_each_live_cell(&self, mut f: impl FnMut(&Cell)) -> usize {
+        let mut scanned = 0;
+        for ring in [
+            Some(self.ring()),
+            self.saved_primary.as_ref().map(SavedScreen::ring),
+        ]
+        .into_iter()
+        .chain([self.saved_alternate.as_ref().map(SavedScreen::ring)])
+        .flatten()
+        {
+            for phys in ring.live_rows().into_iter().flatten() {
+                let start = phys * ring.cols;
+                let occupied = usize::from(ring.occupancy[phys]).min(ring.cols);
+                scanned += occupied;
+                ring.cells[start..start + occupied].iter().for_each(&mut f);
+            }
+            for (row, _) in ring.cold.rows() {
+                scanned += row.len();
+                row.iter().for_each(&mut f);
+            }
+        }
+        scanned
+    }
+
+    fn for_each_live_cell_mut(&mut self, mut f: impl FnMut(&mut Cell)) {
+        let live = self.ring().live_rows();
+        let cols = usize::from(self.cols);
+        visit_ring_mut(
+            &mut self.cells,
+            &self.occupancy,
+            live,
+            cols,
+            &mut self.cold,
+            &mut f,
+        );
+        for saved in [self.saved_primary.as_mut(), self.saved_alternate.as_mut()]
+            .into_iter()
+            .flatten()
+        {
+            let live = saved.ring().live_rows();
+            let cols = usize::from(saved.cols);
+            visit_ring_mut(
+                &mut saved.cells,
+                &saved.occupancy,
+                live,
+                cols,
+                &mut saved.cold,
+                &mut f,
+            );
+        }
+    }
+}
+
+fn visit_ring_mut(
+    cells: &mut [Cell],
+    occupancy: &[u16],
+    live: [std::ops::Range<usize>; 2],
+    cols: usize,
+    cold: &mut ColdStore,
+    f: &mut impl FnMut(&mut Cell),
+) {
+    for phys in live.into_iter().flatten() {
+        let start = phys * cols;
+        let occupied = usize::from(occupancy[phys]).min(cols);
+        cells[start..start + occupied].iter_mut().for_each(&mut *f);
+    }
+    cold.for_each_row_mut(|row| row.iter_mut().for_each(&mut *f));
+}
+
+impl SavedScreen {
+    pub(crate) fn ring(&self) -> RingRef<'_> {
+        RingRef {
+            cells: &self.cells,
+            soft_wrap: &self.soft_wrap,
+            occupancy: &self.occupancy,
+            base: self.base,
+            phys_cap: self.phys_cap,
+            history_len: self.history_len,
+            rows: usize::from(self.rows),
+            cols: usize::from(self.cols),
+            cold: &self.cold,
+        }
+    }
+
+    fn ring_mut(&mut self) -> RingMut<'_> {
+        RingMut {
+            cells: &mut self.cells,
+            soft_wrap: &self.soft_wrap,
+            occupancy: &self.occupancy,
+            base: self.base,
+            phys_cap: self.phys_cap,
+            history_len: &mut self.history_len,
+            rows: usize::from(self.rows),
+            cols: usize::from(self.cols),
+            cold: &mut self.cold,
+            gap_discarded: &mut self.gap_discarded,
+        }
+    }
+}
+
+/// Copies live rows only (`RingRef::clone_cells`): the upgrade capture
+/// clones the grid under the session lock, and a full copy would fault
+/// every discarded page back in.
+impl Clone for ScreenBuffer {
+    fn clone(&self) -> Self {
+        Self {
+            rows: self.rows,
+            cols: self.cols,
+            cells: self.ring().clone_cells(&self.cells),
+            base: self.base,
+            band_top: self.band_top,
+            band_len: self.band_len,
+            band_rot: self.band_rot,
+            soft_wrap: self.soft_wrap.clone(),
+            occupancy: self.occupancy.clone(),
+            cursor: self.cursor,
+            cursor_style: self.cursor_style,
+            cursor_blink: self.cursor_blink,
+            style_table: self.style_table.clone(),
+            damage: self.damage.clone(),
+            cap: self.cap,
+            phys_cap: self.phys_cap,
+            history_len: self.history_len,
+            cold: self.cold.clone(),
+            gap_discarded: false,
+            saved_primary: self.saved_primary.clone(),
+            saved_alternate: self.saved_alternate.clone(),
+            link_table: self.link_table.clone(),
+            cluster_table: self.cluster_table.clone(),
+            sizing_table: self.sizing_table.clone(),
+            has_sized_cells: self.has_sized_cells,
+            geometry_gen: self.geometry_gen,
+            scroll_seq: self.scroll_seq,
+        }
+    }
+}
+
+impl Clone for SavedScreen {
+    fn clone(&self) -> Self {
+        Self {
+            cells: self.ring().clone_cells(&self.cells),
+            rows: self.rows,
+            cols: self.cols,
+            base: self.base,
+            phys_cap: self.phys_cap,
+            history_len: self.history_len,
+            cap: self.cap,
+            cold: self.cold.clone(),
+            gap_discarded: false,
+            soft_wrap: self.soft_wrap.clone(),
+            occupancy: self.occupancy.clone(),
+            cursor: self.cursor,
+            pen: self.pen,
         }
     }
 }
@@ -432,16 +646,19 @@ impl ScreenBuffer {
     /// buffer sees its own empty history.
     pub(crate) fn history_rows_owned(&self) -> Vec<(Vec<Cell>, bool)> {
         let cols = usize::from(self.cols);
-        (0..self.history_len)
-            .map(|i| {
-                let phys = self.hist_phys(i);
-                let occ = usize::from(self.occupancy[phys]).min(cols);
-                let start = phys * cols;
-                (
-                    self.cells[start..start + occ].to_vec(),
-                    self.soft_wrap[phys],
-                )
-            })
+        let ring = (0..self.history_len).map(|i| {
+            let phys = self.hist_phys(i);
+            let occ = usize::from(self.occupancy[phys]).min(cols);
+            let start = phys * cols;
+            (
+                self.cells[start..start + occ].to_vec(),
+                self.soft_wrap[phys],
+            )
+        });
+        self.cold
+            .rows()
+            .map(|(row, wrap)| (row.to_vec(), wrap))
+            .chain(ring)
             .collect()
     }
 
@@ -493,6 +710,8 @@ impl ScreenBuffer {
         self.base = history_len;
         self.phys_cap = phys_cap;
         self.history_len = history_len;
+        self.cold.clear();
+        self.gap_discarded = false;
         // Callers read `viewport` through the band-aware accessors, so
         // the fresh layout carries no rotation.
         self.band_len = 0;
@@ -626,8 +845,16 @@ impl ScreenBuffer {
         }
     }
 
+    /// Reads the viewport rows only, whole: the hint guards prints into
+    /// the viewport, and a history scan would touch vacant pages.
     pub(crate) fn refresh_has_sized_cells(&mut self) {
-        self.has_sized_cells = self.cells.iter().any(|c| c.sizing.is_some());
+        let cols = usize::from(self.cols);
+        self.has_sized_cells = (0..usize::from(self.rows)).any(|r| {
+            let start = self.phys_row_at(r) * cols;
+            self.cells[start..start + cols]
+                .iter()
+                .any(|c| c.sizing.is_some())
+        });
     }
 
     pub(crate) const fn has_sized_cells(&self) -> bool {
@@ -869,26 +1096,20 @@ impl ScreenBuffer {
         // it is read from the saved primary at the snapshot's own width
         // (a resize under the alt screen moves the live dimensions ahead
         // of it until `?1049l` re-wraps).
-        self.saved_primary.as_ref().map_or_else(
-            || ScrollbackView {
-                cells: &self.cells,
-                soft_wrap: &self.soft_wrap,
-                occupancy: &self.occupancy,
-                base: self.base,
-                phys_cap: self.phys_cap,
-                history_len: self.history_len,
-                cols: usize::from(self.cols),
-            },
-            |saved| ScrollbackView {
-                cells: &saved.cells,
-                soft_wrap: &saved.soft_wrap,
-                occupancy: &saved.occupancy,
-                base: saved.base,
-                phys_cap: saved.phys_cap,
-                history_len: saved.history_len,
-                cols: usize::from(saved.cols),
-            },
-        )
+        let ring = self
+            .saved_primary
+            .as_ref()
+            .map_or_else(|| self.ring(), SavedScreen::ring);
+        ScrollbackView {
+            cold: ring.cold,
+            cells: ring.cells,
+            soft_wrap: ring.soft_wrap,
+            occupancy: ring.occupancy,
+            base: ring.base,
+            phys_cap: ring.phys_cap,
+            history_len: ring.history_len,
+            cols: ring.cols,
+        }
     }
 
     #[must_use]
@@ -1079,10 +1300,7 @@ impl ScreenBuffer {
 
     #[must_use]
     pub fn cell_sizing_handle(&self, row: u16, col: u16) -> Option<SizingHandle> {
-        if row >= self.rows || col >= self.cols {
-            return None;
-        }
-        self.cells[self.idx(row, col)].sizing
+        self.cell(row, col)?.sizing
     }
 
     /// `None` at the `u16::MAX` cap, which keeps handles
@@ -1100,7 +1318,8 @@ impl ScreenBuffer {
             return Vec::new();
         }
         let mut out: Vec<(u16, Sizing)> = Vec::new();
-        for c in 0..self.cols {
+        let occupied = self.occupancy[self.phys_row(row)].min(self.cols);
+        for c in 0..occupied {
             if let Some(handle) = self.cells[self.idx(row, c)].sizing
                 && let Some(sizing) = self.sizing_by_handle(handle).copied()
             {
@@ -1117,11 +1336,17 @@ impl ScreenBuffer {
             return;
         }
         let idx = self.idx(row, col);
-        let prior = self.cells[idx].sizing;
+        let prior = self.cell(row, col).and_then(|cell| cell.sizing);
         match (prior, handle) {
             (None, None) => {}
             (Some(p), Some(h)) if p == h => {}
             (_, Some(h)) => {
+                let phys = self.phys_row(row);
+                let occupied = usize::from(self.occupancy[phys]);
+                let row_start = phys * usize::from(self.cols);
+                if usize::from(col) >= occupied {
+                    self.cells[row_start + occupied..=idx].fill(Cell::default());
+                }
                 self.cells[idx].sizing = Some(h);
                 self.has_sized_cells = true;
                 self.occ_bump_idx(idx);
@@ -1245,37 +1470,13 @@ impl ScreenBuffer {
     /// Unlike cluster/link tables, style tables can grow unboundedly
     /// (`docs/explanation/data-model/grid-and-cells.md` "Style interning").
     pub(crate) fn gc_styles(&mut self) -> (usize, bool) {
-        let mut compacted = false;
         let mut marks = self.style_table.mark_buffer();
-        let mut scanned = self.cells.len();
-        for c in &self.cells {
-            StyleTable::mark(&mut marks, c.style);
-        }
-        for saved in [self.saved_primary.as_ref(), self.saved_alternate.as_ref()]
-            .into_iter()
-            .flatten()
-        {
-            scanned += saved.cells.len();
-            for c in &saved.cells {
-                StyleTable::mark(&mut marks, c.style);
-            }
-        }
-        if let Some(remap) = self.style_table.compact(&marks) {
-            let apply = |id: &mut StyleId| *id = remap[id.get() as usize];
-            for c in &mut self.cells {
-                apply(&mut c.style);
-            }
-            for saved in [self.saved_primary.as_mut(), self.saved_alternate.as_mut()]
-                .into_iter()
-                .flatten()
-            {
-                for c in &mut saved.cells {
-                    apply(&mut c.style);
-                }
-            }
-            compacted = true;
-        }
-        (scanned, compacted)
+        let scanned = self.for_each_live_cell(|c| StyleTable::mark(&mut marks, c.style));
+        let Some(remap) = self.style_table.compact(&marks) else {
+            return (scanned, false);
+        };
+        self.for_each_live_cell_mut(|c| c.style = remap[c.style.get() as usize]);
+        (scanned, true)
     }
 
     /// Monotonically grows toward the `u16` cap, distinguishing separate runs.
@@ -1288,21 +1489,11 @@ impl ScreenBuffer {
                 *slot = true;
             }
         };
-        for c in &self.cells {
+        self.for_each_live_cell(|c| {
             if let Some(handle) = c.sizing {
                 mark(handle, &mut used);
             }
-        }
-        for saved in [self.saved_primary.as_ref(), self.saved_alternate.as_ref()]
-            .into_iter()
-            .flatten()
-        {
-            for c in &saved.cells {
-                if let Some(handle) = c.sizing {
-                    mark(handle, &mut used);
-                }
-            }
-        }
+        });
         let mut remap: Vec<Option<SizingHandle>> = vec![None; self.sizing_table.len()];
         let mut kept: Vec<Sizing> = Vec::new();
         for (i, sizing) in self.sizing_table.iter().enumerate() {
@@ -1324,21 +1515,11 @@ impl ScreenBuffer {
         let translate = |handle: SizingHandle| -> Option<SizingHandle> {
             remap.get(handle.get() as usize - 1).copied().flatten()
         };
-        for c in &mut self.cells {
+        self.for_each_live_cell_mut(|c| {
             if let Some(old) = c.sizing {
                 c.sizing = translate(old);
             }
-        }
-        for saved in [self.saved_primary.as_mut(), self.saved_alternate.as_mut()]
-            .into_iter()
-            .flatten()
-        {
-            for c in &mut saved.cells {
-                if let Some(old) = c.sizing {
-                    c.sizing = translate(old);
-                }
-            }
-        }
+        });
         remap
     }
 }

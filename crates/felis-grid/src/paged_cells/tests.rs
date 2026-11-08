@@ -139,21 +139,6 @@ fn a_discard_past_the_length_panics() {
 #[cfg(target_os = "linux")]
 #[test]
 fn a_discard_returns_its_pages_to_the_os() {
-    fn resident_pages(cells: &PagedCells) -> usize {
-        let pages = (cells.len() * size_of::<Cell>()).div_ceil(sys::page_size());
-        let mut vec = vec![0u8; pages];
-        // SAFETY: the span is this buffer's mapping (page-aligned start,
-        // `pages` whole pages inside it) and `vec` has one byte per page.
-        let rc = unsafe {
-            libc::mincore(
-                cells.as_ptr().cast_mut().cast(),
-                pages * sys::page_size(),
-                vec.as_mut_ptr(),
-            )
-        };
-        assert_eq!(rc, 0, "mincore: {}", io::Error::last_os_error());
-        vec.iter().filter(|b| *b & 1 != 0).count()
-    }
     let page = page_cells();
     let mut cells = PagedCells::with_reserve(16 * page, 64 * page);
     assert_eq!(resident_pages(&cells), 0, "a fresh mapping is not resident");
