@@ -3,10 +3,11 @@
 
 Benches the base revision in a throwaway worktree, saves it as a
 gungraun baseline, then benches the current checkout against it with a
-callgrind limit on instructions (Ir). gungraun applies the limit; this
-script owns what gungraun cannot know: skipping a base that predates
-the bench, a fresh output home per run, the per-bench report, and the
-PR label that accepts a regression.
+callgrind limit on instructions (Ir). Each crate in GATES carries its
+own `gungraun_gate` bench. gungraun applies the limit; this script owns
+what gungraun cannot know: skipping a crate whose gate the base
+predates, a fresh output home per run, the per-bench report, and the PR
+label that accepts a regression.
 
 Exit codes: 0 clean, skipped, or accepted by label; 1 regression, a
 failed bench run, or a base bench missing from the head run; 2 nothing
@@ -24,9 +25,8 @@ import sys
 import tempfile
 from pathlib import Path
 
-PACKAGE = "felis-client-core"
+GATES = ("felis-client-core", "felis-shaping")
 BENCH = "gungraun_gate"
-BENCH_SOURCE = f"crates/{PACKAGE}/benches/{BENCH}.rs"
 BASELINE = "base"
 DEFAULT_THRESHOLD_PCT = 2.0
 ACCEPT_LABEL = "perf-regression-accepted"
@@ -44,8 +44,29 @@ def label_accepts(labels_json: str) -> bool:
     return any(label.get("name") == ACCEPT_LABEL for label in labels or [])
 
 
+def bench_source(package: str) -> str:
+    return f"crates/{package}/benches/{BENCH}.rs"
+
+
+def crate_home(home: Path, package: str) -> Path:
+    """The `--home` one crate's bench runs with.
+
+    gungraun names no package in the paths under it when the bench
+    executable runs outside `cargo bench`, so a shared home would leave
+    the summaries without a crate to attribute a regression to.
+    """
+    return home / package
+
+
 def collect(home: Path) -> list[dict]:
     """One row per benchmark summary that was compared against BASELINE."""
+    rows = []
+    for package in GATES:
+        rows += collect_crate(crate_home(home, package), package)
+    return rows
+
+
+def collect_crate(home: Path, package: str) -> list[dict]:
     rows = []
     for path in sorted(home.glob("**/summary.json")):
         summary = json.loads(path.read_text())
@@ -59,7 +80,8 @@ def collect(home: Path) -> list[dict]:
                     # gungraun's own identity: a baseline is stored per
                     # module path, so a workload moved to another group
                     # keeps its name but loses its base count.
-                    "key": f"{summary['module_path']}::{summary.get('id')}",
+                    "key": f"{package}::{summary['module_path']}::{summary.get('id')}",
+                    "package": package,
                     "bench": f"{summary['function_name']}/{summary['id']}",
                     "new": ir["new"],
                     "old": ir.get("old"),
@@ -83,13 +105,17 @@ def render(rows: list[dict]) -> str:
 def verdict(
     rows: list[dict],
     base_ids: set[str],
-    bench_rc: int,
+    bench_rcs: dict[str, int],
     accepted: bool,
     threshold: float,
 ) -> int:
-    if bench_rc not in (0, REGRESSION_RC):
-        print(f"bench-gate-ir: the bench run failed (exit {bench_rc})", file=sys.stderr)
-        return 1
+    for package, rc in bench_rcs.items():
+        if rc not in (0, REGRESSION_RC):
+            print(
+                f"bench-gate-ir: the {package} bench run failed (exit {rc})",
+                file=sys.stderr,
+            )
+            return 1
     head = {row["key"]: row for row in rows}
     missing = sorted(base_ids - head.keys())
     uncompared = sorted(
@@ -104,12 +130,16 @@ def verdict(
         )
         return 1
     regressed = [row for row in rows if row["regressions"]]
-    if bench_rc == REGRESSION_RC and not regressed:
-        print(
-            "bench-gate-ir: gungraun reported a regression no summary records",
-            file=sys.stderr,
-        )
-        return 1
+    for package, rc in bench_rcs.items():
+        if rc == REGRESSION_RC and not any(
+            row["package"] == package for row in regressed
+        ):
+            print(
+                f"bench-gate-ir: gungraun reported a {package} regression no"
+                " summary records",
+                file=sys.stderr,
+            )
+            return 1
     if regressed:
         names = ", ".join(row["bench"] for row in regressed)
         if accepted:
@@ -151,7 +181,7 @@ def workspace_members(cwd: Path) -> list[str]:
     return [pkg["name"] for pkg in json.loads(meta)["packages"]]
 
 
-def build_bench(cwd: Path, target_dir: Path) -> Path:
+def build_benches(cwd: Path, target_dir: Path, packages: list[str]) -> dict[str, Path]:
     env = {**os.environ, "CARGO_TARGET_DIR": str(target_dir)}
     # cargo identifies a workspace unit without its checkout path, so an
     # artifact another checkout built later than these sources were
@@ -160,7 +190,9 @@ def build_bench(cwd: Path, target_dir: Path) -> Path:
     for member in workspace_members(cwd):
         clean += ["-p", member]
     subprocess.run(clean, cwd=cwd, env=env, check=True)
-    cmd = ["cargo", "bench", "-p", PACKAGE, "--bench", BENCH, "--no-run"]
+    cmd = ["cargo", "bench", "--bench", BENCH, "--no-run"]
+    for package in packages:
+        cmd += ["-p", package]
     print(f"::: {cwd}: {' '.join(cmd)}", flush=True)
     out = subprocess.run(
         [*cmd, "--message-format=json"],
@@ -170,6 +202,7 @@ def build_bench(cwd: Path, target_dir: Path) -> Path:
         stdout=subprocess.PIPE,
         text=True,
     ).stdout
+    exes = {}
     for line in out.splitlines():
         try:
             msg = json.loads(line)
@@ -180,24 +213,47 @@ def build_bench(cwd: Path, target_dir: Path) -> Path:
             and msg["target"]["name"] == BENCH
             and msg.get("executable")
         ):
-            return Path(msg["executable"])
-    raise RuntimeError(f"cargo built no {BENCH} executable in {cwd}")
+            # A package id names its package only when that differs
+            # from the directory, so the manifest's directory is read.
+            exes[Path(msg["manifest_path"]).parent.name] = Path(msg["executable"])
+    missing = [package for package in packages if package not in exes]
+    if missing:
+        raise RuntimeError(
+            f"cargo built no {BENCH} executable for {', '.join(missing)} in {cwd}"
+        )
+    return exes
 
 
-def run_bench(cwd: Path, target_dir: Path, *gungraun_args: str) -> int:
-    exe = build_bench(cwd, target_dir)
-    cmd = [str(exe), "--bench", *gungraun_args]
-    print(f"::: {cwd}: {' '.join(cmd)}", flush=True)
-    return subprocess.run(cmd, cwd=cwd / "crates" / PACKAGE).returncode
+def run_benches(
+    cwd: Path, target_dir: Path, home: Path, packages: list[str], *gungraun_args: str
+) -> dict[str, int]:
+    exes = build_benches(cwd, target_dir, packages)
+    rcs = {}
+    for package in packages:
+        cmd = [
+            str(exes[package]),
+            "--bench",
+            f"--home={crate_home(home, package)}",
+            *gungraun_args,
+        ]
+        print(f"::: {cwd}: {' '.join(cmd)}", flush=True)
+        rcs[package] = subprocess.run(cmd, cwd=cwd / "crates" / package).returncode
+    return rcs
 
 
 def cmd_gate(args: argparse.Namespace, repo: Path) -> int:
     base = git(repo, "rev-parse", "--verify", f"{args.base}^{{commit}}").stdout.strip()
-    if git(repo, "cat-file", "-e", f"{base}:{BENCH_SOURCE}", check=False).returncode:
-        print(
-            f"bench-gate-ir: base {base[:12]} has no {BENCH_SOURCE}; nothing to"
-            " compare against, so the gate is skipped"
-        )
+    base_packages = []
+    for package in GATES:
+        source = bench_source(package)
+        if git(repo, "cat-file", "-e", f"{base}:{source}", check=False).returncode:
+            print(
+                f"bench-gate-ir: base {base[:12]} has no {source}; nothing to"
+                f" compare {package} against, so its gate is skipped"
+            )
+        else:
+            base_packages.append(package)
+    if not base_packages:
         return 0
 
     # A fresh home per run: the target directory outlives the job on
@@ -211,10 +267,11 @@ def cmd_gate(args: argparse.Namespace, repo: Path) -> int:
     try:
         git(repo, "worktree", "add", "--detach", str(worktree), base)
         try:
-            rc = run_bench(
+            base_rcs = run_benches(
                 worktree,
                 target_dir,
-                f"--home={home}",
+                home,
+                base_packages,
                 f"--save-baseline={BASELINE}",
                 "--save-summary=json",
             )
@@ -225,16 +282,18 @@ def cmd_gate(args: argparse.Namespace, repo: Path) -> int:
                 path.unlink()
         finally:
             git(repo, "worktree", "remove", "--force", str(worktree), check=False)
-        if rc != 0:
+        failed = {package: rc for package, rc in base_rcs.items() if rc != 0}
+        if failed:
             print(
-                f"bench-gate-ir: benching the base failed (exit {rc})", file=sys.stderr
+                f"bench-gate-ir: benching the base failed ({failed})", file=sys.stderr
             )
             return 1
 
-        rc = run_bench(
+        head_rcs = run_benches(
             repo,
             target_dir,
-            f"--home={home}",
+            home,
+            list(GATES),
             f"--baseline={BASELINE}",
             f"--callgrind-limits=ir={args.threshold}%",
             "--save-summary=json",
@@ -243,7 +302,9 @@ def cmd_gate(args: argparse.Namespace, repo: Path) -> int:
         print()
         print(render(rows))
         print()
-        return verdict(rows, base_ids, rc, label_accepts(args.labels), args.threshold)
+        return verdict(
+            rows, base_ids, head_rcs, label_accepts(args.labels), args.threshold
+        )
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
         git(repo, "worktree", "prune", check=False)
