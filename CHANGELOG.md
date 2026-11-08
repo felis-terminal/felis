@@ -45,6 +45,10 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 - **Rendering**: on Linux and Windows, text keeps the weight its font was designed for whatever the theme: dark text on
   a light background no longer looks thin, and light text on a dark background no longer looks heavy. Colors still blend
   as before; macOS is unchanged.
+- **Rendering**: on Linux, each face is hinted as fontconfig's `hintstyle`, `hinting` and `autohint` settings for it
+  ask, so a `fonts.conf` rule changes how felis draws it, instead of one fixed mode for every face. Under the stock
+  `hintslight` text looks as before, apart from slight shading changes on faces without hinting instructions; `hintfull`
+  also grid-fits those faces horizontally, and `hintnone` draws unhinted.
 
 ### Fixed
 

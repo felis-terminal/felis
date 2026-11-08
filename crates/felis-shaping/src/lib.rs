@@ -41,8 +41,8 @@ mod raster;
 use presentation::is_emoji_presentation;
 pub use provider::MONOSPACE_FALLBACK_FAMILIES;
 use provider::{
-    BOLD_WEIGHT, FaceProvider, FaceSource, LoadedAs, REGULAR_WEIGHT, ResolvedFace, SystemFallback,
-    files::FileSet,
+    BOLD_WEIGHT, FaceHinting, FaceProvider, FaceSource, LoadedAs, REGULAR_WEIGHT, ResolvedFace,
+    SystemFallback, files::FileSet,
 };
 
 #[derive(Debug, Error)]
@@ -212,7 +212,7 @@ impl Font {
     }
 
     fn load_resolved(face: ResolvedFace) -> Result<Self, ShapingError> {
-        let (face_index, instance) = (face.index, face.instance);
+        let (face_index, instance, hinting) = (face.index, face.instance, face.hinting);
         let bytes: FontBytes = match face.source {
             FaceSource::Shared(bytes) => bytes,
             FaceSource::File(path) => Arc::new(map_face_file(&path)?),
@@ -236,7 +236,7 @@ impl Font {
             position: Vec::new(),
             face,
             raster_id: next_raster_id(),
-            raster: RasterOptions::platform(),
+            raster: RasterOptions::for_face(hinting),
         };
         Ok(match instance {
             Some(index) => font.at_instance(index).ok_or_else(|| {
@@ -837,6 +837,7 @@ struct FaceKey {
     source: FaceSourceKey,
     index: u32,
     instance: Option<usize>,
+    hinting: Option<FaceHinting>,
     bold: bool,
     outlines_only: bool,
 }
@@ -859,6 +860,7 @@ impl FaceKey {
             source,
             index: face.index,
             instance: face.instance,
+            hinting: face.hinting,
             bold: style.bold,
             outlines_only: false,
         }
@@ -3665,6 +3667,7 @@ mod tests {
                 index: 0,
                 instance: None,
                 slanted: false,
+                hinting: None,
             }))
         }
     }
@@ -4031,6 +4034,7 @@ mod tests {
                 index: 0,
                 instance: None,
                 slanted: false,
+                hinting: None,
             })
         }
 
@@ -4105,6 +4109,7 @@ mod tests {
                 index: 0,
                 instance: None,
                 slanted: false,
+                hinting: None,
             })
         }
     }

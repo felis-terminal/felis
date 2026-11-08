@@ -154,6 +154,7 @@ impl FaceProvider for FileSet {
             index: face.index,
             instance: None,
             slanted: face.style.italic,
+            hinting: None,
         })
     }
 

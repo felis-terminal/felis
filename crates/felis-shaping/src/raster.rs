@@ -7,7 +7,7 @@ use swash::{
     zeno::Format,
 };
 
-use crate::{Font, GlyphBitmap, GlyphId, GlyphPixels};
+use crate::{Font, GlyphBitmap, GlyphId, GlyphPixels, provider::FaceHinting};
 
 pub(crate) mod coverage;
 #[cfg(test)]
@@ -18,16 +18,27 @@ use coverage::{PathEl, Point};
 /// How a face's outlines are drawn, fixed for the face's lifetime.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct RasterOptions {
-    /// `None` draws unhinted.
-    pub(crate) hinting: Option<HintOptions>,
+    pub(crate) hinting: Hinting,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Hinting {
+    Hinted(HintOptions),
+    /// Unhinted, except a hint-reliant face, whose contours are wrong
+    /// without its instructions, as `FreeType` hints it under `hintnone`.
+    Unhinted,
+    /// Unhinted even for a hint-reliant face, as CoreText draws it.
+    Never,
 }
 
 impl RasterOptions {
-    pub(crate) const UNHINTED: Self = Self { hinting: None };
+    pub(crate) const NEVER_HINTED: Self = Self {
+        hinting: Hinting::Never,
+    };
 
     pub(crate) fn hinted() -> Self {
         Self {
-            hinting: Some(
+            hinting: Hinting::Hinted(
                 HintOptions::auto_fallback()
                     .with_target(RasterTarget::Lcd)
                     .with_preserve_linear_metrics(true),
@@ -35,14 +46,47 @@ impl RasterOptions {
         }
     }
 
+    /// The options for a face the host reports `hinting` for, the
+    /// platform's own where it reports none.
+    pub(crate) fn for_face(hinting: Option<FaceHinting>) -> Self {
+        hinting.map_or_else(Self::platform, Self::fontconfig)
+    }
+
     /// Unhinted on macOS: CoreText never grid-fits, so a hinted raster
-    /// sits beside every native window with stems snapped a pixel off.
-    pub(crate) fn platform() -> Self {
+    /// sits beside every native window with stems snapped a pixel off. A
+    /// Linux face outside fontconfig takes fontconfig's stock `hintslight`.
+    fn platform() -> Self {
         if cfg!(target_os = "macos") {
-            Self::UNHINTED
-        } else {
+            Self::NEVER_HINTED
+        } else if cfg!(windows) {
             Self::hinted()
+        } else {
+            Self::fontconfig(FaceHinting::Slight { autohint: false })
         }
+    }
+
+    /// Linear metrics are kept where fontconfig asks for no horizontal
+    /// fitting; `hintfull` asks for it.
+    fn fontconfig(hinting: FaceHinting) -> Self {
+        let engine = |autohint| {
+            if autohint {
+                HintOptions::auto()
+            } else {
+                HintOptions::auto_fallback()
+            }
+        };
+        let hinting = match hinting {
+            FaceHinting::None => Hinting::Unhinted,
+            FaceHinting::Slight { autohint } => Hinting::Hinted(
+                engine(autohint)
+                    .with_target(RasterTarget::Light)
+                    .with_preserve_linear_metrics(true),
+            ),
+            FaceHinting::Full { autohint } => {
+                Hinting::Hinted(engine(autohint).with_target(RasterTarget::Normal))
+            }
+        };
+        Self { hinting }
     }
 }
 
@@ -75,7 +119,7 @@ impl Rasterizer {
             .color
             .builder(font.font_ref())
             .size(px)
-            .hint(font.raster.hinting.is_some())
+            .hint(matches!(font.raster.hinting, Hinting::Hinted(_)))
             .normalized_coords(&font.coords)
             .build();
         let image = Render::new(&[
@@ -152,22 +196,19 @@ impl SkrifaOutlines {
     }
 }
 
-/// `force_unhinted`, not `unhinted`: skrifa's `unhinted` still hints a
-/// hint-reliant face, which would change those faces' pixels on macOS.
 /// A face whose hinting setup fails draws unhinted: a failed hinted
 /// scaler fails every draw, and the face would draw no glyphs at all.
 fn scaler_font(font: &Font, px: f32) -> ScalerFont {
     let outlines = font.face.clone();
-    match font.raster.hinting {
-        Some(options) => {
-            let scaler = ScalerFont::hinted(outlines.clone(), px, options);
-            if scaler.hinting_error().is_some() {
-                ScalerFont::force_unhinted(outlines, Some(px))
-            } else {
-                scaler
-            }
-        }
-        None => ScalerFont::force_unhinted(outlines, Some(px)),
+    let scaler = match font.raster.hinting {
+        Hinting::Hinted(options) => ScalerFont::hinted(outlines.clone(), px, options),
+        Hinting::Unhinted => ScalerFont::unhinted(outlines.clone(), Some(px)),
+        Hinting::Never => return ScalerFont::force_unhinted(outlines, Some(px)),
+    };
+    if scaler.hinting_error().is_some() {
+        ScalerFont::force_unhinted(outlines, Some(px))
+    } else {
+        scaler
     }
 }
 

@@ -17,15 +17,16 @@ use fontconfig_sys::{
     Fc, FcBool, FcCharSet, FcConfig, FcFontSet, FcMatchPattern, FcPattern, FcResult, FcResultMatch,
     FcSetApplication, FcSetSystem,
     constants::{
-        FC_CHARSET, FC_COLOR, FC_FAMILY, FC_FILE, FC_FONTFORMAT, FC_INDEX, FC_LANG, FC_SLANT,
-        FC_SLANT_ITALIC, FC_SLANT_ROMAN, FC_WEIGHT,
+        FC_AUTOHINT, FC_CHARSET, FC_COLOR, FC_FAMILY, FC_FILE, FC_FONTFORMAT, FC_HINT_FULL,
+        FC_HINT_MEDIUM, FC_HINT_NONE, FC_HINT_SLIGHT, FC_HINT_STYLE, FC_HINTING, FC_INDEX, FC_LANG,
+        FC_SLANT, FC_SLANT_ITALIC, FC_SLANT_ROMAN, FC_WEIGHT,
     },
 };
 
 use tracing::info;
 
 use super::{
-    CascadeFace, FaceProvider, FaceSource, LoadedAs, REGULAR_WEIGHT, ResolvedFace,
+    CascadeFace, FaceHinting, FaceProvider, FaceSource, LoadedAs, REGULAR_WEIGHT, ResolvedFace,
     ascii_is_fixed_pitch,
 };
 use crate::{FaceStyle, InstalledFamily, ShapingError, map_face_file};
@@ -152,7 +153,8 @@ pub(crate) struct Fontconfig {
     /// Set by tests so a query does not depend on the host's locale.
     lang: Option<CString>,
     faces: RefCell<Vec<Face>>,
-    ids: RefCell<HashMap<FaceKey, usize>>,
+    /// One file matched under different render settings is two faces.
+    ids: RefCell<HashMap<(FaceKey, FaceHinting), usize>>,
     /// The installed faces the loader can parse, matched and sorted in
     /// place of the config's own sets so a face it cannot draw is never
     /// chosen, as if it were not installed.
@@ -179,6 +181,8 @@ struct Face {
     key: FaceKey,
     family: String,
     slanted: bool,
+    /// Meaningful only for a render-prepared pattern's face.
+    hinting: FaceHinting,
 }
 
 /// A pattern this module created or was handed ownership of.
@@ -556,7 +560,21 @@ impl Fontconfig {
             key: FaceKey { path, index },
             family,
             slanted,
+            hinting: face_hinting(
+                self.boolean(pattern, FC_HINTING),
+                self.integer(pattern, FC_HINT_STYLE),
+                self.boolean(pattern, FC_AUTOHINT),
+            ),
         })
+    }
+
+    /// `font` with the render settings the config gives it for `query`,
+    /// which a match applies and a sort does not.
+    fn render_prepare(&self, query: &Pattern<'_>, font: *mut FcPattern) -> Option<Pattern<'_>> {
+        // SAFETY: `config`, `query` and `font` are live; the prepared
+        // pattern is owned by the returned guard.
+        let raw = unsafe { (self.lib.FcFontRenderPrepare)(self.config, query.raw, font) };
+        (!raw.is_null()).then_some(Pattern { lib: self.lib, raw })
     }
 
     fn record(&self, face: Face) -> usize {
@@ -564,7 +582,7 @@ impl Fontconfig {
         *self
             .ids
             .borrow_mut()
-            .entry(face.key.clone())
+            .entry((face.key.clone(), face.hinting))
             .or_insert_with(|| {
                 faces.push(face);
                 faces.len() - 1
@@ -678,6 +696,7 @@ impl FaceProvider for Fontconfig {
             index,
             instance,
             slanted: face.slanted,
+            hinting: Some(face.hinting),
         })
     }
 
@@ -729,7 +748,7 @@ impl FaceProvider for Fontconfig {
         };
         let mut cascade = Vec::new();
         for pattern in sorted.patterns() {
-            let Some(face) = self.face_of(pattern) else {
+            let Some(file) = self.face_of(pattern).map(|face| face.key) else {
                 continue;
             };
             let mut charset = ptr::null_mut();
@@ -741,17 +760,35 @@ impl FaceProvider for Fontconfig {
             if !has_charset || charset.is_null() {
                 continue;
             }
-            let id = self.record(face);
-            let is_color = match loaded.get(&id) {
+            let verdict = {
+                let faces = self.faces.borrow();
+                loaded
+                    .iter()
+                    .find(|&(&id, _)| faces.get(id).is_some_and(|face| face.key == file))
+                    .map(|(_, &verdict)| verdict)
+            };
+            let is_color = match verdict {
                 Some(LoadedAs::Unusable) => continue,
-                Some(LoadedAs::Color(color)) => *color,
+                Some(LoadedAs::Color(color)) => color,
                 None => self.boolean(pattern, FC_COLOR).unwrap_or(false),
             };
             let class = if is_color { &color } else { &mono };
             let mut grew: FcBool = FC_FALSE;
             // SAFETY: both charsets are live.
             unsafe { (lib.FcCharSetMerge)(class.raw, charset, &raw mut grew) };
-            if grew != FC_FALSE && !cascade.iter().any(|c: &CascadeFace<usize>| c.id == id) {
+            if grew == FC_FALSE {
+                continue;
+            }
+            // Prepared only once it adds coverage: a full font set sorts
+            // hundreds of faces, and the cascade keeps a few dozen.
+            let Some(face) = self
+                .render_prepare(&query, pattern)
+                .and_then(|prepared| self.face_of(prepared.raw))
+            else {
+                continue;
+            };
+            let id = self.record(face);
+            if !cascade.iter().any(|c: &CascadeFace<usize>| c.id == id) {
                 cascade.push(CascadeFace {
                     id,
                     color: is_color,
@@ -759,6 +796,24 @@ impl FaceProvider for Fontconfig {
             }
         }
         Some(cascade)
+    }
+}
+
+/// The grid fitting these pattern values ask for; an absent one reads as
+/// `FcDefaultSubstitute` fills it.
+fn face_hinting(
+    hinting: Option<bool>,
+    style: Option<c_int>,
+    autohint: Option<bool>,
+) -> FaceHinting {
+    let autohint = autohint.unwrap_or(false);
+    if hinting == Some(false) {
+        return FaceHinting::None;
+    }
+    match style.unwrap_or(FC_HINT_FULL) {
+        FC_HINT_NONE => FaceHinting::None,
+        FC_HINT_SLIGHT | FC_HINT_MEDIUM => FaceHinting::Slight { autohint },
+        _ => FaceHinting::Full { autohint },
     }
 }
 
@@ -878,6 +933,108 @@ mod tests {
         assert_eq!(split_index((17 << 16) + 2), (2, Some(16)));
         assert_eq!(split_index(VARIABLE_DEFAULT_INSTANCE << 16), (0, None));
         assert_eq!(split_index(i32::MIN.cast_unsigned()), (0, None));
+    }
+
+    #[test]
+    fn render_settings_read_as_the_grid_fitting_they_ask_for() {
+        let read = |hinting, style, autohint| face_hinting(hinting, style, autohint);
+        assert_eq!(
+            read(Some(false), Some(FC_HINT_FULL), None),
+            FaceHinting::None
+        );
+        assert_eq!(
+            read(Some(true), Some(FC_HINT_NONE), None),
+            FaceHinting::None
+        );
+        for style in [FC_HINT_SLIGHT, FC_HINT_MEDIUM] {
+            assert_eq!(
+                read(Some(true), Some(style), Some(true)),
+                FaceHinting::Slight { autohint: true }
+            );
+        }
+        assert_eq!(
+            read(Some(true), Some(FC_HINT_FULL), Some(false)),
+            FaceHinting::Full { autohint: false }
+        );
+    }
+
+    #[test]
+    fn absent_render_settings_read_as_fontconfig_defaults_them() {
+        assert_eq!(
+            face_hinting(None, None, None),
+            FaceHinting::Full { autohint: false }
+        );
+    }
+
+    /// Noto Sans Symbols 2 has one file, so both weights match it.
+    #[test]
+    fn one_file_matched_under_two_hint_styles_is_two_faces() {
+        let Some(fc) = pinned(
+            r"<match target='pattern'><test name='weight' compare='more_eq'><const>bold</const></test>
+              <edit name='hintstyle' mode='assign'><const>hintfull</const></edit></match>
+            <match target='pattern'><test name='weight' compare='less'><const>bold</const></test>
+              <edit name='hintstyle' mode='assign'><const>hintslight</const></edit></match>",
+        ) else {
+            return;
+        };
+        let family = "Noto Sans Symbols 2";
+        let regular = fc
+            .find_face(family, REGULAR_WEIGHT, false)
+            .expect("installed");
+        let bold = fc.find_face(family, BOLD_WEIGHT, false).expect("installed");
+        assert_ne!(regular, bold);
+        let (regular, bold) = (
+            fc.resolve_face(regular).expect("recorded"),
+            fc.resolve_face(bold).expect("recorded"),
+        );
+        let path = |face: &ResolvedFace| match &face.source {
+            FaceSource::File(path) => path.clone(),
+            FaceSource::Shared(_) => panic!("fontconfig faces are files"),
+        };
+        assert_eq!(path(&regular), path(&bold));
+        assert_eq!(
+            regular.hinting,
+            Some(FaceHinting::Slight { autohint: false })
+        );
+        assert_eq!(bold.hinting, Some(FaceHinting::Full { autohint: false }));
+        let stack =
+            FontStack::auto_discover_in(&fc, Some(family), &[], &[], &StyleFaces::default())
+                .expect("the face loads");
+        let bold_style = FontStyle {
+            bold: true,
+            italic: false,
+        };
+        assert_ne!(
+            stack.font_at(0, FontStyle::REGULAR).raster,
+            stack.font_at(0, bold_style).raster
+        );
+    }
+
+    #[test]
+    fn a_cascade_face_takes_the_render_settings_a_font_rule_gives_it() {
+        let Some(fc) = pinned(
+            r"<match target='pattern'><edit name='family' mode='append' binding='strong'>
+              <string>Noto Sans Symbols 2</string></edit></match>
+            <match target='font'><test name='family'><string>Noto Sans Symbols 2</string></test>
+              <edit name='hintstyle' mode='assign'><const>hintnone</const></edit></match>",
+        ) else {
+            return;
+        };
+        let cascade = fc
+            .fallback_cascade(TEST_FONT_FAMILY, &HashMap::new())
+            .expect("fontconfig ranks a cascade");
+        let hinting_of = |name: &str| {
+            let face = cascade
+                .iter()
+                .find(|face| family(&fc, face.id) == name)
+                .unwrap_or_else(|| panic!("{name} is in the cascade"));
+            fc.resolve_face(face.id).expect("recorded").hinting
+        };
+        assert_eq!(hinting_of("Noto Sans Symbols 2"), Some(FaceHinting::None));
+        assert_eq!(
+            hinting_of(TEST_FONT_FAMILY),
+            Some(FaceHinting::Full { autohint: false })
+        );
     }
 
     #[test]
