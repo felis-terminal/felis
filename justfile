@@ -238,6 +238,11 @@ bench-gate:
 bench-gate-ir base="origin/main":
     python3 tools/bench/gungraun.py gate --base {{ base }}
 
+# Heap footprint of a parked session and its window, as a table (docs/reference/testing.md "Heap footprint").
+[group('bench')]
+bench-mem:
+    cargo nextest run -p felis-client-core --all-features --test session_memory --no-capture
+
 # ── Cross-terminal comparison (not a CI gate) ───────────────────────
 # Note: latency suite drives active window; leave keyboard untouched while running.
 

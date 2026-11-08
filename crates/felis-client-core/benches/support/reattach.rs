@@ -1,7 +1,8 @@
 //! A long-lived session's daemon state and the attach burst a window
-//! reattaching to it receives, shared by the Criterion benches and their
-//! instruction-count twin. The burst is the daemon's own composition, so
-//! a change to what an attach ships moves both.
+//! reattaching to it receives, shared by the Criterion benches, their
+//! instruction-count twin and the heap-footprint test. The burst is the
+//! daemon's own composition, so a change to what an attach ships moves
+//! them all.
 
 use std::fmt::Write as _;
 use std::hint::black_box;
@@ -23,8 +24,8 @@ use felis_protocol::{
 };
 use felis_vt::{Parser, kitty_graphics::Reassembler};
 
-const ROWS: u16 = 54;
-const COLS: u16 = 192;
+pub(crate) const ROWS: u16 = 54;
+pub(crate) const COLS: u16 = 192;
 const CELL_PX: (u16, u16) = (10, 20);
 const PTY_READ: usize = 64 * 1024;
 const IMAGE_PX: (u32, u32) = (400, 240);
@@ -80,7 +81,7 @@ impl Reattach {
 /// output of the shapes a build or a log produces (SGR runs, 256-color
 /// and truecolor text, wide CJK, combining clusters, hyperlinks, and
 /// lines long enough to soft-wrap).
-fn shell_history(lines: usize) -> Vec<u8> {
+pub(crate) fn shell_history(lines: usize) -> Vec<u8> {
     let mut out = String::with_capacity(lines * 110);
     let mut line = 0;
     let mut cmd = 0usize;
@@ -137,7 +138,7 @@ fn shell_history(lines: usize) -> Vec<u8> {
     out.into_bytes()
 }
 
-fn images(count: u32) -> Vec<u8> {
+pub(crate) fn images(count: u32) -> Vec<u8> {
     let (w, h) = IMAGE_PX;
     let mut out = String::new();
     for id in 1..=count {
@@ -179,8 +180,8 @@ fn images(count: u32) -> Vec<u8> {
 /// The state a parked session holds for the next window.
 pub(crate) struct Session {
     parser: Parser,
-    grid: Grid,
-    images: ImageStore,
+    pub(crate) grid: Grid,
+    pub(crate) images: ImageStore,
     placements: Placements,
     events: Vec<ImageEvent>,
     shm: ShmDeferral,
@@ -188,7 +189,7 @@ pub(crate) struct Session {
 }
 
 impl Session {
-    fn new(scrollback: usize) -> Self {
+    pub(crate) fn new(scrollback: usize) -> Self {
         Self {
             parser: Parser::new(),
             grid: Grid::with_scrollback(ROWS, COLS, scrollback),
@@ -200,7 +201,7 @@ impl Session {
         }
     }
 
-    fn feed(&mut self, bytes: &[u8]) {
+    pub(crate) fn feed(&mut self, bytes: &[u8]) {
         for read in bytes.chunks(PTY_READ) {
             let mut rest = read;
             loop {

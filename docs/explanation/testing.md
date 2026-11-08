@@ -185,6 +185,17 @@ An accepted cost is a label on the pull request (`perf-regression-accepted`) rat
 acceptance belongs to one change: once it merges, the next pull request's base already includes the cost, so a committed
 exemption would only outlive its reason and hide the next regression on the same benchmark.
 
+### Heap ceilings, not a relative heap gate
+
+Heap is gated by fixed ceilings in the test suite rather than by a base-relative count beside the instruction count
+(gungraun can run Valgrind's DHAT on the same benches). A session's heap is its cell ring, whose size the geometry
+budget already fixes ([session-lifecycle.md](architecture/session-lifecycle.md) "Geometry bounds"), plus image pixels
+and a remainder of registries and marks two orders smaller. A 2% threshold on that total cannot see the remainder
+double, and a threshold on the remainder alone fails on every registry change while saying nothing about a session's
+cost. What does regress is structural: an allocation per history row, a pixel copy held twice, a window that keeps
+history. Each is a ceiling far from today's figure, and allocation counts and live bytes are fixed for a fixed input, so
+the ceilings run with the rest of the workspace tests, Windows included, instead of only on the Linux bench runner.
+
 ## Shell overlays under the real interpreters
 
 The completion tests drive the generated fish and zsh overlays through the interpreter itself, against a `felis`

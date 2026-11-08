@@ -22,7 +22,7 @@ workflows that gate them. The strategy behind the layers is in [testing.md](../e
 | Conformance tests      | VT100-VT520 + xterm sequence behavior         | vttest + esctest2                                              |
 | Protocol conformance   | Kitty graphics / sizing / keyboard wire specs | Upstream Kitty specs                                           |
 | Integration tests      | End-to-end daemon <-> client                  | Real PTY + spawned shell                                       |
-| Performance benchmarks | Hot-loop throughput and latency               | Criterion, gungraun (Valgrind callgrind)                       |
+| Performance benchmarks | Hot-loop throughput, latency, and heap        | Criterion, gungraun (Valgrind callgrind), dhat                 |
 | Mutation testing       | Whether the other layers bite                 | cargo-mutants                                                  |
 | Visual regression      | Renderer correctness over time                | Out of scope for v1 ([explanation](../explanation/testing.md)) |
 
@@ -187,6 +187,7 @@ adding one to a crate's `Cargo.toml` is all it takes to enter `just bench-all`.
 | Generate Markdown report          | `just bench-report`                                                                                 |
 | Check regression against baseline | `just bench --save-baseline before`, modify code, `just bench --baseline before`, `just bench-gate` |
 | Instruction-count gate            | `just bench-gate-ir [base]` (base revision, `origin/main` by default)                               |
+| Heap footprint table              | `just bench-mem`                                                                                    |
 | Orchestrator and gate tests       | `just test-tools tools/bench`                                                                       |
 
 `just bench-gate` fails if a benchmark's mean wall-clock change exceeds the threshold (15% by default). It has no CI
@@ -207,6 +208,15 @@ instructions (callgrind's `Ir`) of the `gungraun_gate` bench in `felis-client-co
 The gate runs on Linux only. The dev shell provides `valgrind` and `gungraun-runner`, and the runner must be the exact
 version of the `gungraun` crate in `Cargo.lock`: `dev/packages/gungraun-runner.nix` pins it, and evaluating the dev
 shell fails when the two disagree.
+
+### Heap footprint
+
+`crates/felis-client-core/tests/session_memory.rs` counts, under the dhat allocator, the heap a parked session holds
+(idle, with a full scrollback ring, with Kitty images) and the heap a window holds once attached to it. Its ceilings run
+with the workspace tests and are structural: no allocation per history row, image pixels held once on each side, and a
+window that keeps no history. `just bench-mem` prints the figures. dhat counts requested bytes, so the ring's whole
+reservation counts as live from construction, resident or not
+([scrollback.md](../explanation/data-model/scrollback.md)).
 
 ## Damage-tracking correctness
 
