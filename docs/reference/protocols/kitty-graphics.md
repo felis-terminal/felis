@@ -249,7 +249,7 @@ Image layers stack relative to text according to Kitty rules:
 
 1. Window background fill.
 2. Images with `z < -1073741824` (`INT32_MIN / 2`), in z order.
-3. Cell backgrounds.
+3. Cell backgrounds other than the default; a cell on the default background shows the layers below it.
 4. Images with `-1073741824 <= z < 0`, in z order.
 5. Cell glyphs.
 6. Images with `z >= 0`, in z order.

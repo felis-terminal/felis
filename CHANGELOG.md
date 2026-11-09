@@ -59,6 +59,8 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 
 ### Fixed
 
+- **Graphics**: a Kitty image placed with `z < -1073741824` shows through cells on the default background, as in kitty;
+  only a cell with a background color of its own covers it. Before, every cell covered it.
 - **Rendering**: `COLR` emoji (Twemoji, OpenMoji, Segoe UI Emoji) no longer lose their bottom row or right column, and
   their antialiased edges no longer darken toward black.
 - **Clipboard**: an `OSC 52` write to the clipboard (`c`) followed closely by one to PRIMARY alone (`p`) no longer loses

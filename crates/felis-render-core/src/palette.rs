@@ -382,6 +382,17 @@ impl ResolvedTheme {
         self
     }
 
+    /// What a frame starts as. Under DECSCNM the letterbox takes the
+    /// theme foreground too, or a padding strip frames the reversed
+    /// screen in a visible border. The alpha stays the background's:
+    /// `window.opacity` is a window property, not part of the color `?5`
+    /// swaps.
+    #[must_use]
+    pub const fn clear_color(&self, reverse_video: bool) -> [f32; 4] {
+        let rgb = if reverse_video { self.fg } else { self.bg };
+        [rgb[0], rgb[1], rgb[2], self.bg[3]]
+    }
+
     /// The color `bg` is judged against for contrast: the straight
     /// default background where `bg` is the default background.
     #[must_use]

@@ -1768,18 +1768,9 @@ fn instance_for_draw(draw: &ImageDraw, slot: ImageSlot) -> Option<ImgInstance> {
     })
 }
 
-/// Under DECSCNM the letterbox takes the theme foreground too, or a
-/// padding strip frames the reversed screen in a visible border. The
-/// alpha stays the background's: `window.opacity` is a window property,
-/// not part of the color `?5` swaps.
 fn clear_color_for_theme(theme: &ResolvedTheme, reverse_video: bool) -> Color {
-    let rgb = if reverse_video { theme.fg } else { theme.bg };
-    Color {
-        r: f64::from(rgb[0]),
-        g: f64::from(rgb[1]),
-        b: f64::from(rgb[2]),
-        a: f64::from(theme.bg[3]),
-    }
+    let [r, g, b, a] = theme.clear_color(reverse_video).map(f64::from);
+    Color { r, g, b, a }
 }
 
 /// felis paints the background straight-alpha (the bg pass runs with
@@ -2517,6 +2508,56 @@ mod tests {
         }
         bad.truncate(20);
         assert!(bad.is_empty(), "cell {m:?}, off-red pixels: {bad:?}");
+    }
+
+    /// kitty draws `z < INT32_MIN / 2` under non-default backgrounds
+    /// only: a default-bg cell shows the image, and an explicit bg covers
+    /// it even when it names the theme background's color.
+    #[cfg(not(windows))]
+    #[test]
+    #[ignore = "needs a GPU adapter; `just test-gpu` runs it on lavapipe"]
+    fn an_image_under_the_backgrounds_shows_through_default_background_cells_only() {
+        let cfg = RendererConfig {
+            theme_bg: Some("#336699".to_owned()),
+            ..RendererConfig::default()
+        };
+        let mut renderer = offscreen_on(&new_instance(), 8, 8, cfg);
+        let m = renderer.cell_metrics();
+        let (w, h) = (2 * m.width, 2 * m.height);
+        renderer.resize(w, h);
+        let image = OneImage {
+            id: ImageId(1),
+            width: w,
+            height: h,
+            pixels: [0xFF, 0x00, 0x00, 0xFF].repeat((w * h) as usize),
+        };
+        let mut grid = felis_grid::Grid::new(2, 2);
+        felis_vt::Parser::new().advance(&mut grid, b"\x1b[?25l\x1b[2;1H\x1b[48;2;51;102;153m  ");
+        let placement = felis_grid::images::ClientPlacement {
+            z_index: i32::MIN,
+            ..placed_at_origin(1)
+        };
+        let mut layout = ImageLayout::new();
+        layout.rebuild(
+            grid.screen(),
+            &image,
+            [&placement],
+            &[],
+            (m.width as f32, m.height as f32),
+            0,
+        );
+        assert_eq!(layout.under_bg().len(), 1);
+        renderer
+            .render(grid.screen(), &[ImageId(1)], &image, &layout, 0, 0)
+            .expect("an offscreen render has no surface to lose");
+        let mut out = Vec::new();
+        renderer.read_frame(&mut out).expect("readback");
+        let at = |x: u32, y: u32| {
+            let i = ((y * w + x) * 4) as usize;
+            out[i..i + 4].to_vec()
+        };
+        assert_eq!(at(m.width / 2, m.height / 2), [0xFF, 0x00, 0x00, 0xFF]);
+        assert_eq!(at(m.width / 2, m.height * 3 / 2), [0x33, 0x66, 0x99, 0xFF]);
     }
 
     const RGB_SIDE: u32 = 16;
