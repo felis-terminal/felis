@@ -1,0 +1,366 @@
+NotoColorEmoji.ttf#0 default 8ce9153b3aecfab8
+NotoSansCJKjp-Kuzu.otf#0 default 2931c89faec192da
+NotoSansCJKjp-Kuzu.otf#0 instance 0 2931c89faec192da
+NotoSansCJKjp-Kuzu.otf#0 instance 1 2931c89faec192da
+NotoSansCJKjp-Kuzu.otf#0 instance 2 2931c89faec192da
+NotoSansCJKjp-Kuzu.otf#0 instance 3 2931c89faec192da
+NotoSansCJKjp-Kuzu.otf#0 instance 4 2931c89faec192da
+NotoSansCJKjp-Kuzu.otf#0 instance 5 2931c89faec192da
+NotoSansCJKjp-Kuzu.otf#0 instance 6 2931c89faec192da
+NotoSansCJKjp-Kuzu.otf#0 wght=100 2931c89faec192da
+NotoSansCJKjp-Kuzu.otf#0 wght=121.62162 2931c89faec192da
+NotoSansCJKjp-Kuzu.otf#0 wght=143.24324 2931c89faec192da
+NotoSansCJKjp-Kuzu.otf#0 wght=164.86487 2931c89faec192da
+NotoSansCJKjp-Kuzu.otf#0 wght=186.48648 2931c89faec192da
+NotoSansCJKjp-Kuzu.otf#0 wght=208.10811 2931c89faec192da
+NotoSansCJKjp-Kuzu.otf#0 wght=229.72974 2931c89faec192da
+NotoSansCJKjp-Kuzu.otf#0 wght=251.35135 2931c89faec192da
+NotoSansCJKjp-Kuzu.otf#0 wght=272.97296 2931c89faec192da
+NotoSansCJKjp-Kuzu.otf#0 wght=294.5946 2931c89faec192da
+NotoSansCJKjp-Kuzu.otf#0 wght=316.21622 2931c89faec192da
+NotoSansCJKjp-Kuzu.otf#0 wght=337.83783 2931c89faec192da
+NotoSansCJKjp-Kuzu.otf#0 wght=359.45947 2931c89faec192da
+NotoSansCJKjp-Kuzu.otf#0 wght=381.0811 2931c89faec192da
+NotoSansCJKjp-Kuzu.otf#0 wght=402.7027 2931c89faec192da
+NotoSansCJKjp-Kuzu.otf#0 wght=424.3243 2931c89faec192da
+NotoSansCJKjp-Kuzu.otf#0 wght=445.94595 2931c89faec192da
+NotoSansCJKjp-Kuzu.otf#0 wght=467.56757 2931c89faec192da
+NotoSansCJKjp-Kuzu.otf#0 wght=489.18918 2931c89faec192da
+NotoSansCJKjp-Kuzu.otf#0 wght=510.81082 2931c89faec192da
+NotoSansCJKjp-Kuzu.otf#0 wght=532.43243 2931c89faec192da
+NotoSansCJKjp-Kuzu.otf#0 wght=554.0541 2931c89faec192da
+NotoSansCJKjp-Kuzu.otf#0 wght=575.67566 2931c89faec192da
+NotoSansCJKjp-Kuzu.otf#0 wght=597.2973 2931c89faec192da
+NotoSansCJKjp-Kuzu.otf#0 wght=618.91895 2931c89faec192da
+NotoSansCJKjp-Kuzu.otf#0 wght=640.5405 2931c89faec192da
+NotoSansCJKjp-Kuzu.otf#0 wght=662.1622 2931c89faec192da
+NotoSansCJKjp-Kuzu.otf#0 wght=683.7838 2931c89faec192da
+NotoSansCJKjp-Kuzu.otf#0 wght=705.4054 2931c89faec192da
+NotoSansCJKjp-Kuzu.otf#0 wght=727.02704 2931c89faec192da
+NotoSansCJKjp-Kuzu.otf#0 wght=748.6486 2931c89faec192da
+NotoSansCJKjp-Kuzu.otf#0 wght=770.27026 2931c89faec192da
+NotoSansCJKjp-Kuzu.otf#0 wght=791.8919 2931c89faec192da
+NotoSansCJKjp-Kuzu.otf#0 wght=813.5135 2931c89faec192da
+NotoSansCJKjp-Kuzu.otf#0 wght=835.13513 2931c89faec192da
+NotoSansCJKjp-Kuzu.otf#0 wght=856.7568 2931c89faec192da
+NotoSansCJKjp-Kuzu.otf#0 wght=878.37836 2931c89faec192da
+NotoSansCJKjp-Kuzu.otf#0 wght=900 2931c89faec192da
+NotoSansCJKsc-Kuzu.otf#0 default 2931c89faec192da
+NotoSansCJKsc-Kuzu.otf#0 instance 0 2931c89faec192da
+NotoSansCJKsc-Kuzu.otf#0 instance 1 2931c89faec192da
+NotoSansCJKsc-Kuzu.otf#0 instance 2 2931c89faec192da
+NotoSansCJKsc-Kuzu.otf#0 instance 3 2931c89faec192da
+NotoSansCJKsc-Kuzu.otf#0 instance 4 2931c89faec192da
+NotoSansCJKsc-Kuzu.otf#0 instance 5 2931c89faec192da
+NotoSansCJKsc-Kuzu.otf#0 instance 6 2931c89faec192da
+NotoSansCJKsc-Kuzu.otf#0 wght=100 2931c89faec192da
+NotoSansCJKsc-Kuzu.otf#0 wght=121.62162 2931c89faec192da
+NotoSansCJKsc-Kuzu.otf#0 wght=143.24324 2931c89faec192da
+NotoSansCJKsc-Kuzu.otf#0 wght=164.86487 2931c89faec192da
+NotoSansCJKsc-Kuzu.otf#0 wght=186.48648 2931c89faec192da
+NotoSansCJKsc-Kuzu.otf#0 wght=208.10811 2931c89faec192da
+NotoSansCJKsc-Kuzu.otf#0 wght=229.72974 2931c89faec192da
+NotoSansCJKsc-Kuzu.otf#0 wght=251.35135 2931c89faec192da
+NotoSansCJKsc-Kuzu.otf#0 wght=272.97296 2931c89faec192da
+NotoSansCJKsc-Kuzu.otf#0 wght=294.5946 2931c89faec192da
+NotoSansCJKsc-Kuzu.otf#0 wght=316.21622 2931c89faec192da
+NotoSansCJKsc-Kuzu.otf#0 wght=337.83783 2931c89faec192da
+NotoSansCJKsc-Kuzu.otf#0 wght=359.45947 2931c89faec192da
+NotoSansCJKsc-Kuzu.otf#0 wght=381.0811 2931c89faec192da
+NotoSansCJKsc-Kuzu.otf#0 wght=402.7027 2931c89faec192da
+NotoSansCJKsc-Kuzu.otf#0 wght=424.3243 2931c89faec192da
+NotoSansCJKsc-Kuzu.otf#0 wght=445.94595 2931c89faec192da
+NotoSansCJKsc-Kuzu.otf#0 wght=467.56757 2931c89faec192da
+NotoSansCJKsc-Kuzu.otf#0 wght=489.18918 2931c89faec192da
+NotoSansCJKsc-Kuzu.otf#0 wght=510.81082 2931c89faec192da
+NotoSansCJKsc-Kuzu.otf#0 wght=532.43243 2931c89faec192da
+NotoSansCJKsc-Kuzu.otf#0 wght=554.0541 2931c89faec192da
+NotoSansCJKsc-Kuzu.otf#0 wght=575.67566 2931c89faec192da
+NotoSansCJKsc-Kuzu.otf#0 wght=597.2973 2931c89faec192da
+NotoSansCJKsc-Kuzu.otf#0 wght=618.91895 2931c89faec192da
+NotoSansCJKsc-Kuzu.otf#0 wght=640.5405 2931c89faec192da
+NotoSansCJKsc-Kuzu.otf#0 wght=662.1622 2931c89faec192da
+NotoSansCJKsc-Kuzu.otf#0 wght=683.7838 2931c89faec192da
+NotoSansCJKsc-Kuzu.otf#0 wght=705.4054 2931c89faec192da
+NotoSansCJKsc-Kuzu.otf#0 wght=727.02704 2931c89faec192da
+NotoSansCJKsc-Kuzu.otf#0 wght=748.6486 2931c89faec192da
+NotoSansCJKsc-Kuzu.otf#0 wght=770.27026 2931c89faec192da
+NotoSansCJKsc-Kuzu.otf#0 wght=791.8919 2931c89faec192da
+NotoSansCJKsc-Kuzu.otf#0 wght=813.5135 2931c89faec192da
+NotoSansCJKsc-Kuzu.otf#0 wght=835.13513 2931c89faec192da
+NotoSansCJKsc-Kuzu.otf#0 wght=856.7568 2931c89faec192da
+NotoSansCJKsc-Kuzu.otf#0 wght=878.37836 2931c89faec192da
+NotoSansCJKsc-Kuzu.otf#0 wght=900 2931c89faec192da
+NotoSansSymbols.ttf#0 default 2699271f1a45279e
+NotoSansSymbols.ttf#0 instance 0 be726ec391c3351e
+NotoSansSymbols.ttf#0 instance 1 2a2d7b35bb410ad6
+NotoSansSymbols.ttf#0 instance 2 c1e3b27a0e46629e
+NotoSansSymbols.ttf#0 instance 3 2699271f1a45279e
+NotoSansSymbols.ttf#0 instance 4 03112c5b973647fe
+NotoSansSymbols.ttf#0 instance 5 221b679beba2cb22
+NotoSansSymbols.ttf#0 instance 6 1488bc860293eb0a
+NotoSansSymbols.ttf#0 instance 7 6df5aba2d42d3fce
+NotoSansSymbols.ttf#0 instance 8 df3afa9a3b5e99b6
+NotoSansSymbols.ttf#0 wght=100 be726ec391c3351e
+NotoSansSymbols.ttf#0 wght=121.62162 623e131bf23478d6
+NotoSansSymbols.ttf#0 wght=143.24324 f9ee3ca5149361d6
+NotoSansSymbols.ttf#0 wght=164.86487 599d682d46b2f806
+NotoSansSymbols.ttf#0 wght=186.48648 f21416608132397a
+NotoSansSymbols.ttf#0 wght=208.10811 e210792c3e6e1552
+NotoSansSymbols.ttf#0 wght=229.72974 80fedf704143a0d2
+NotoSansSymbols.ttf#0 wght=251.35135 b7b8d1a1b8332b12
+NotoSansSymbols.ttf#0 wght=272.97296 12526f3f1e7fbb02
+NotoSansSymbols.ttf#0 wght=294.5946 74fd13ab912fc60a
+NotoSansSymbols.ttf#0 wght=316.21622 c31f6276cbac2e0a
+NotoSansSymbols.ttf#0 wght=337.83783 6bcc575c519a277a
+NotoSansSymbols.ttf#0 wght=359.45947 f71790c5fe92cf36
+NotoSansSymbols.ttf#0 wght=381.0811 23322f528ca6133e
+NotoSansSymbols.ttf#0 wght=402.7027 2699271f1a45279e
+NotoSansSymbols.ttf#0 wght=424.3243 2686de1da4162356
+NotoSansSymbols.ttf#0 wght=445.94595 c3a339859d2cb5d2
+NotoSansSymbols.ttf#0 wght=467.56757 643bbdbf92403cb2
+NotoSansSymbols.ttf#0 wght=489.18918 80a98ac592a9394a
+NotoSansSymbols.ttf#0 wght=510.81082 3b6d40d758937212
+NotoSansSymbols.ttf#0 wght=532.43243 a81496ed9c0bd6b2
+NotoSansSymbols.ttf#0 wght=554.0541 1571a1f8660b7342
+NotoSansSymbols.ttf#0 wght=575.67566 da352e150e194c1e
+NotoSansSymbols.ttf#0 wght=597.2973 f2f3790ecb025d26
+NotoSansSymbols.ttf#0 wght=618.91895 cd0ff2311c961ec2
+NotoSansSymbols.ttf#0 wght=640.5405 48f0133cebc1a722
+NotoSansSymbols.ttf#0 wght=662.1622 266c96621c682b42
+NotoSansSymbols.ttf#0 wght=683.7838 6149a8f9bdb85dee
+NotoSansSymbols.ttf#0 wght=705.4054 1488bc860293eb0a
+NotoSansSymbols.ttf#0 wght=727.02704 fe8fe6be31a14096
+NotoSansSymbols.ttf#0 wght=748.6486 2ce037112c2e4af6
+NotoSansSymbols.ttf#0 wght=770.27026 08ce36a3927dd8e6
+NotoSansSymbols.ttf#0 wght=791.8919 6df5aba2d42d3fce
+NotoSansSymbols.ttf#0 wght=813.5135 96eba4b9cb343782
+NotoSansSymbols.ttf#0 wght=835.13513 c780d0fd6fe46a5e
+NotoSansSymbols.ttf#0 wght=856.7568 56097ad58c779fd2
+NotoSansSymbols.ttf#0 wght=878.37836 9cb6959765ff707a
+NotoSansSymbols.ttf#0 wght=900 df3afa9a3b5e99b6
+NotoSansSymbols2-Regular.otf#0 default f88cbba03a15a04e
+MonaspaceArgon-Bold.otf#0 default a9acf99ea9098410
+MonaspaceArgon-BoldItalic.otf#0 default a9acf99ea9098410
+MonaspaceArgon-ExtraBold.otf#0 default a9acf99ea9098410
+MonaspaceArgon-ExtraBoldItalic.otf#0 default a9acf99ea9098410
+MonaspaceArgon-ExtraLight.otf#0 default a9acf99ea9098410
+MonaspaceArgon-ExtraLightItalic.otf#0 default a9acf99ea9098410
+MonaspaceArgon-Italic.otf#0 default a9acf99ea9098410
+MonaspaceArgon-Light.otf#0 default a9acf99ea9098410
+MonaspaceArgon-LightItalic.otf#0 default a9acf99ea9098410
+MonaspaceArgon-Medium.otf#0 default a9acf99ea9098410
+MonaspaceArgon-MediumItalic.otf#0 default a9acf99ea9098410
+MonaspaceArgon-Regular.otf#0 default a9acf99ea9098410
+MonaspaceArgon-SemiBold.otf#0 default a9acf99ea9098410
+MonaspaceArgon-SemiBoldItalic.otf#0 default a9acf99ea9098410
+MonaspaceArgonNF-Bold.otf#0 default a9acf99ea9098410
+MonaspaceArgonNF-BoldItalic.otf#0 default a9acf99ea9098410
+MonaspaceArgonNF-ExtraBold.otf#0 default a9acf99ea9098410
+MonaspaceArgonNF-ExtraBoldItalic.otf#0 default a9acf99ea9098410
+MonaspaceArgonNF-ExtraLight.otf#0 default a9acf99ea9098410
+MonaspaceArgonNF-ExtraLightItalic.otf#0 default a9acf99ea9098410
+MonaspaceArgonNF-Italic.otf#0 default a9acf99ea9098410
+MonaspaceArgonNF-Light.otf#0 default a9acf99ea9098410
+MonaspaceArgonNF-LightItalic.otf#0 default a9acf99ea9098410
+MonaspaceArgonNF-Medium.otf#0 default a9acf99ea9098410
+MonaspaceArgonNF-MediumItalic.otf#0 default a9acf99ea9098410
+MonaspaceArgonNF-Regular.otf#0 default a9acf99ea9098410
+MonaspaceArgonNF-SemiBold.otf#0 default a9acf99ea9098410
+MonaspaceArgonNF-SemiBoldItalic.otf#0 default a9acf99ea9098410
+MonaspaceNeon-Bold.otf#0 default a9acf99ea9098410
+MonaspaceNeon-BoldItalic.otf#0 default a9acf99ea9098410
+MonaspaceNeon-ExtraBold.otf#0 default a9acf99ea9098410
+MonaspaceNeon-ExtraBoldItalic.otf#0 default a9acf99ea9098410
+MonaspaceNeon-ExtraLight.otf#0 default a9acf99ea9098410
+MonaspaceNeon-ExtraLightItalic.otf#0 default a9acf99ea9098410
+MonaspaceNeon-Italic.otf#0 default a9acf99ea9098410
+MonaspaceNeon-Light.otf#0 default a9acf99ea9098410
+MonaspaceNeon-LightItalic.otf#0 default a9acf99ea9098410
+MonaspaceNeon-Medium.otf#0 default a9acf99ea9098410
+MonaspaceNeon-MediumItalic.otf#0 default a9acf99ea9098410
+MonaspaceNeon-Regular.otf#0 default a9acf99ea9098410
+MonaspaceNeon-SemiBold.otf#0 default a9acf99ea9098410
+MonaspaceNeon-SemiBoldItalic.otf#0 default a9acf99ea9098410
+MonaspaceXenon-Bold.otf#0 default a9acf99ea9098410
+MonaspaceXenon-BoldItalic.otf#0 default a9acf99ea9098410
+MonaspaceXenon-ExtraBold.otf#0 default a9acf99ea9098410
+MonaspaceXenon-ExtraBoldItalic.otf#0 default a9acf99ea9098410
+MonaspaceXenon-ExtraLight.otf#0 default a9acf99ea9098410
+MonaspaceXenon-ExtraLightItalic.otf#0 default a9acf99ea9098410
+MonaspaceXenon-Italic.otf#0 default a9acf99ea9098410
+MonaspaceXenon-Light.otf#0 default a9acf99ea9098410
+MonaspaceXenon-LightItalic.otf#0 default a9acf99ea9098410
+MonaspaceXenon-Medium.otf#0 default a9acf99ea9098410
+MonaspaceXenon-MediumItalic.otf#0 default a9acf99ea9098410
+MonaspaceXenon-Regular.otf#0 default a9acf99ea9098410
+MonaspaceXenon-SemiBold.otf#0 default a9acf99ea9098410
+MonaspaceXenon-SemiBoldItalic.otf#0 default a9acf99ea9098410
+Monaspace Neon Var.ttf#0 default a9acf99ea9098410
+Monaspace Neon Var.ttf#0 instance 0 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 instance 1 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 instance 2 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 instance 3 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 instance 4 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 instance 5 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 instance 6 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 instance 7 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 instance 8 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 instance 9 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 instance 10 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 instance 11 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 instance 12 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 instance 13 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 instance 14 79f20c91709e4490
+Monaspace Neon Var.ttf#0 instance 15 79f20c91709e4490
+Monaspace Neon Var.ttf#0 instance 16 79f20c91709e4490
+Monaspace Neon Var.ttf#0 instance 17 79f20c91709e4490
+Monaspace Neon Var.ttf#0 instance 18 79f20c91709e4490
+Monaspace Neon Var.ttf#0 instance 19 79f20c91709e4490
+Monaspace Neon Var.ttf#0 instance 20 79f20c91709e4490
+Monaspace Neon Var.ttf#0 instance 21 79f20c91709e4490
+Monaspace Neon Var.ttf#0 instance 22 79f20c91709e4490
+Monaspace Neon Var.ttf#0 instance 23 79f20c91709e4490
+Monaspace Neon Var.ttf#0 instance 24 79f20c91709e4490
+Monaspace Neon Var.ttf#0 instance 25 79f20c91709e4490
+Monaspace Neon Var.ttf#0 instance 26 79f20c91709e4490
+Monaspace Neon Var.ttf#0 instance 27 79f20c91709e4490
+Monaspace Neon Var.ttf#0 instance 28 a55f140af493a580
+Monaspace Neon Var.ttf#0 instance 29 a55f140af493a580
+Monaspace Neon Var.ttf#0 instance 30 a55f140af493a580
+Monaspace Neon Var.ttf#0 instance 31 a55f140af493a580
+Monaspace Neon Var.ttf#0 instance 32 a55f140af493a580
+Monaspace Neon Var.ttf#0 instance 33 a55f140af493a580
+Monaspace Neon Var.ttf#0 instance 34 a55f140af493a580
+Monaspace Neon Var.ttf#0 instance 35 a55f140af493a580
+Monaspace Neon Var.ttf#0 instance 36 a55f140af493a580
+Monaspace Neon Var.ttf#0 instance 37 a55f140af493a580
+Monaspace Neon Var.ttf#0 instance 38 a55f140af493a580
+Monaspace Neon Var.ttf#0 instance 39 a55f140af493a580
+Monaspace Neon Var.ttf#0 instance 40 a55f140af493a580
+Monaspace Neon Var.ttf#0 instance 41 a55f140af493a580
+Monaspace Neon Var.ttf#0 wght=200 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 wght=216.21622 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 wght=232.43243 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 wght=248.64865 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 wght=264.86487 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 wght=281.0811 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 wght=297.2973 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 wght=313.51352 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 wght=329.72974 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 wght=345.94595 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 wght=362.16217 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 wght=378.37836 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 wght=394.5946 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 wght=410.8108 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 wght=427.02704 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 wght=443.24323 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 wght=459.45947 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 wght=475.6757 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 wght=491.8919 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 wght=508.1081 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 wght=524.32434 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 wght=540.5405 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 wght=556.7567 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 wght=572.97296 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 wght=589.1892 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 wght=605.4054 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 wght=621.6216 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 wght=637.8378 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 wght=654.0541 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 wght=670.27026 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 wght=686.48645 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 wght=702.7027 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 wght=718.91895 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 wght=735.13513 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 wght=751.3514 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 wght=767.56757 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 wght=783.7838 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 wght=800 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 wdth=100 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 wdth=100.675674 9bdc4fe409c67e60
+Monaspace Neon Var.ttf#0 wdth=101.35135 882e59b7c024ccd0
+Monaspace Neon Var.ttf#0 wdth=102.02702 858b5119a9810b90
+Monaspace Neon Var.ttf#0 wdth=102.702705 35ebd790c9fc6160
+Monaspace Neon Var.ttf#0 wdth=103.37838 abbb528843151fc0
+Monaspace Neon Var.ttf#0 wdth=104.054054 8ed4f3ad6290a0a0
+Monaspace Neon Var.ttf#0 wdth=104.72973 b0aad110db04cda0
+Monaspace Neon Var.ttf#0 wdth=105.4054 34986a252473a940
+Monaspace Neon Var.ttf#0 wdth=106.08108 bdb24a40510fe600
+Monaspace Neon Var.ttf#0 wdth=106.75676 de0741c8b5073630
+Monaspace Neon Var.ttf#0 wdth=107.432434 6c30914daf123d00
+Monaspace Neon Var.ttf#0 wdth=108.10811 4780c2955dba9650
+Monaspace Neon Var.ttf#0 wdth=108.78378 6170849c73c85800
+Monaspace Neon Var.ttf#0 wdth=109.45946 5bd38024f2e83ac0
+Monaspace Neon Var.ttf#0 wdth=110.13513 2aceb57ba2cf86d0
+Monaspace Neon Var.ttf#0 wdth=110.810814 d5b2e21168c1ad10
+Monaspace Neon Var.ttf#0 wdth=111.48649 4e07d8a7ff25b160
+Monaspace Neon Var.ttf#0 wdth=112.16216 8c5b57e2df74cc80
+Monaspace Neon Var.ttf#0 wdth=112.83784 fee54c6d8eab9aa0
+Monaspace Neon Var.ttf#0 wdth=113.51351 b24cba5e4846e8d0
+Monaspace Neon Var.ttf#0 wdth=114.189186 2905c3d9e3b3af50
+Monaspace Neon Var.ttf#0 wdth=114.86487 a23a0dcd670c7b80
+Monaspace Neon Var.ttf#0 wdth=115.54054 b248eac2a3469090
+Monaspace Neon Var.ttf#0 wdth=116.21622 eac2ef53771af900
+Monaspace Neon Var.ttf#0 wdth=116.89189 6d8386aae4a08440
+Monaspace Neon Var.ttf#0 wdth=117.567566 71d9980221dea210
+Monaspace Neon Var.ttf#0 wdth=118.24324 c9bcec43fc8fda10
+Monaspace Neon Var.ttf#0 wdth=118.918915 f6f96decb2f77dc0
+Monaspace Neon Var.ttf#0 wdth=119.5946 806dd7e093232f20
+Monaspace Neon Var.ttf#0 wdth=120.27027 2f5d445940365250
+Monaspace Neon Var.ttf#0 wdth=120.945946 fd7f2e9ee9e48f10
+Monaspace Neon Var.ttf#0 wdth=121.62162 21ba4c96f2651f90
+Monaspace Neon Var.ttf#0 wdth=122.297295 9df133dc7edab100
+Monaspace Neon Var.ttf#0 wdth=122.97298 6d73fa758cf50d90
+Monaspace Neon Var.ttf#0 wdth=123.64865 e23932cfc083a820
+Monaspace Neon Var.ttf#0 wdth=124.324326 f47f3ceb9935da50
+Monaspace Neon Var.ttf#0 wdth=125 a55f140af493a580
+Monaspace Neon Var.ttf#0 slnt=-11 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 slnt=-10.7027025 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 slnt=-10.405405 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 slnt=-10.1081085 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 slnt=-9.810811 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 slnt=-9.513514 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 slnt=-9.216216 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 slnt=-8.918919 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 slnt=-8.621622 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 slnt=-8.324325 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 slnt=-8.027027 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 slnt=-7.7297297 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 slnt=-7.432432 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 slnt=-7.135135 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 slnt=-6.8378377 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 slnt=-6.5405407 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 slnt=-6.243243 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 slnt=-5.9459457 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 slnt=-5.6486487 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 slnt=-5.3513513 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 slnt=-5.0540543 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 slnt=-4.756757 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 slnt=-4.4594593 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 slnt=-4.1621623 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 slnt=-3.8648648 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 slnt=-3.5675673 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 slnt=-3.2702703 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 slnt=-2.9729729 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 slnt=-2.6756754 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 slnt=-2.378378 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 slnt=-2.0810814 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 slnt=-1.7837839 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 slnt=-1.4864864 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 slnt=-1.189189 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 slnt=-0.8918915 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 slnt=-0.59459496 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 slnt=-0.29729748 a9acf99ea9098410
+Monaspace Neon Var.ttf#0 slnt=0 a9acf99ea9098410
+MonaspaceNeonFrozen-Bold.ttf#0 default a9acf99ea9098410
+MonaspaceNeonFrozen-BoldItalic.ttf#0 default a9acf99ea9098410
+MonaspaceNeonFrozen-Italic.ttf#0 default a9acf99ea9098410
+MonaspaceNeonFrozen-Regular.ttf#0 default a9acf99ea9098410
+MonaspaceNeonFrozen-WideRegular.ttf#0 default a55f140af493a580
+FelisBitmapProbe.ttf#0 default a15f880a1d01f6b2
+FelisColorProbe.ttf#0 default a15f880a1d01f6b2
+FelisColorProbeNoCpal.ttf#0 default a15f880a1d01f6b2
+FelisColrProbe.ttf#0 default 3c1e1bf37dfcafb8
+FelisHintedProbe.ttf#0 default a15f880a1d01f6b2
+FelisSbixProbe.ttf#0 default a15f880a1d01f6b2

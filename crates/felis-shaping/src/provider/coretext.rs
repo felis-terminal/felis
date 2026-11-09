@@ -18,7 +18,7 @@ use objc2_core_text::{
     CTFontUIFontType, kCTFontFamilyNameAttribute, kCTFontNameAttribute, kCTFontStyleNameAttribute,
     kCTFontURLAttribute,
 };
-use swash::{FontDataRef, StringId, Style};
+use skrifa::raw::types::NameId;
 use tracing::debug;
 
 use super::{
@@ -26,7 +26,8 @@ use super::{
     ascii_is_fixed_pitch, closest_style, fallback_language,
 };
 use crate::{
-    FaceStyle, FontStyle, InstalledFamily, ShapingError, WGHT, has_italic_token, map_face_file,
+    FaceStyle, FontBytes, FontStyle, InstalledFamily, ShapingError, WGHT, has_italic_token,
+    map_face_file, metadata,
 };
 
 /// The face CoreText answers with when nothing covers a scalar; its glyphs
@@ -388,38 +389,29 @@ fn file_faces(path: &Path) -> Vec<FileFace> {
     let Ok(data) = map_face_file(path) else {
         return Vec::new();
     };
-    let Some(file) = FontDataRef::new(&data) else {
-        return Vec::new();
-    };
+    let data: FontBytes = std::sync::Arc::new(data);
     let mut faces = Vec::new();
-    for (index, font) in file.fonts().enumerate() {
-        let Ok(index) = u32::try_from(index) else {
-            break;
+    for index in 0..metadata::face_count(data.as_ref().as_ref()) {
+        let Some(font) = metadata::model_face(&data, index) else {
+            continue;
         };
-        let attributes = font.attributes();
-        let weight = attributes.weight().0;
+        let attributes = metadata::attributes(data.as_ref().as_ref(), index);
+        let weight = attributes.weight;
         faces.push(FileFace {
-            post_script: font
-                .localized_strings()
-                .find_by_id(StringId::PostScript, None)
-                .map(|name| name.to_string())
-                .unwrap_or_default(),
+            post_script: metadata::any_name(&font, NameId::POSTSCRIPT_NAME).unwrap_or_default(),
             instance_name: None,
             index,
             instance: None,
             style: FaceStyle {
-                italic: attributes.style() != Style::Normal,
+                italic: attributes.italic,
                 weight,
             },
         });
-        let wght = font.variations().position(|axis| axis.tag() == WGHT);
-        for (at, instance) in font.instances().enumerate() {
-            let name = instance
-                .name(Some("en"))
-                .or_else(|| instance.name(None))
-                .map(|name| name.to_string());
+        let wght = font.axes().iter().position(|axis| axis.tag() == WGHT);
+        for (at, instance) in font.named_instances().iter().enumerate() {
+            let name = metadata::english_name(&font, instance.subfamily_name());
             let instance_weight = wght
-                .and_then(|axis| instance.values().nth(axis))
+                .and_then(|axis| instance.user_coords().nth(axis))
                 // Saturates into u16; `wght` is 1–1000 by spec.
                 .map_or(weight, |value| {
                     #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
@@ -428,8 +420,8 @@ fn file_faces(path: &Path) -> Vec<FileFace> {
                 });
             faces.push(FileFace {
                 post_script: instance
-                    .postscript_name(None)
-                    .map(|name| name.to_string())
+                    .postscript_name()
+                    .and_then(|id| metadata::any_name(&font, id))
                     .unwrap_or_default(),
                 style: FaceStyle {
                     italic: name.as_deref().is_some_and(has_italic_token),
@@ -449,23 +441,35 @@ fn family_names(path: &Path, index: u32) -> Vec<String> {
     let Ok(data) = map_face_file(path) else {
         return Vec::new();
     };
-    let Some(font) = usize::try_from(index)
-        .ok()
-        .and_then(|index| swash::FontRef::from_index(&data, index))
-    else {
-        return Vec::new();
-    };
-    font.localized_strings()
-        .filter(|name| matches!(name.id(), StringId::Family | StringId::TypographicFamily))
-        .map(|name| name.to_string())
-        .filter(|name| !name.is_empty())
-        .collect()
+    let data: FontBytes = std::sync::Arc::new(data);
+    metadata::model_face(&data, index)
+        .map(|font| metadata::all_family_names(&font))
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{BOLD_WEIGHT, FontStack, REGULAR_WEIGHT, StyleFaces};
+
+    /// Each named instance carries the PostScript name its `fvar` record
+    /// names, so a descriptor CoreText reports by that name finds it.
+    #[test]
+    fn every_named_instance_of_a_variable_file_carries_its_own_postscript_name() {
+        let faces = file_faces(&crate::test_font_dir().join("truetype/Monaspace Neon Var.ttf"));
+        let instances: Vec<&FileFace> = faces.iter().filter(|f| f.instance.is_some()).collect();
+        assert!(instances.len() > 1);
+        let mut names: Vec<&str> = instances.iter().map(|f| f.post_script.as_str()).collect();
+        assert!(names.iter().all(|name| !name.is_empty()), "{names:?}");
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(names.len(), instances.len(), "{names:?}");
+        assert!(
+            instances
+                .iter()
+                .any(|f| f.instance_name.as_deref() == Some("SemiWide Regular"))
+        );
+    }
 
     #[test]
     fn a_listed_family_resolves_and_an_unknown_one_does_not() {
@@ -589,7 +593,7 @@ mod tests {
         let weight = |style| {
             let index = stack.resolve_styled_index('\u{6F22}', style);
             let font = stack.font_at(index, style);
-            font.font_ref().attributes().weight().0
+            crate::metadata::attributes(font.bytes.as_ref().as_ref(), font.index).weight
         };
         assert!(weight(bold) > weight(FontStyle::REGULAR));
     }

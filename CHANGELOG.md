@@ -51,13 +51,16 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 - **Rendering**: on Linux, each face is hinted as fontconfig's `hintstyle`, `hinting` and `autohint` settings for it
   ask, so a `fonts.conf` rule changes how felis draws it, instead of one fixed mode for every face. Under the stock
   `hintslight` text looks as before, apart from slight shading changes on faces without hinting instructions; `hintfull`
-  also grid-fits those faces horizontally, and `hintnone` draws unhinted.
+  also grid-fits those faces horizontally, and `hintnone` draws unhinted. The layers of a `COLR` emoji follow the same
+  setting as its face's text.
 - **Rendering**: a combining mark a font has no precomposed glyph for (`q́`) sits on its base at the font's anchor
   instead of the cluster being shrunk into its cell, a mark the font does not cover is left undrawn rather than widening
   the cluster, and an ideographic variation sequence followed by a mark (`葛󠄀́`) draws the variant glyph.
 
 ### Fixed
 
+- **Rendering**: `COLR` emoji (Twemoji, OpenMoji, Segoe UI Emoji) no longer lose their bottom row or right column, and
+  their antialiased edges no longer darken toward black.
 - **Clipboard**: an `OSC 52` write to the clipboard (`c`) followed closely by one to PRIMARY alone (`p`) no longer loses
   the clipboard write; with `clipboard.osc_52 = "system"` the clipboard kept its old contents.
 - **Keybindings**: a `pipe` binding with `target = "paste"` raises the confirmation bar for a region that carries a line

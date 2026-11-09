@@ -10,6 +10,10 @@
 mod cache;
 
 #[cfg(target_os = "linux")]
+#[path = "support/emoji.rs"]
+mod emoji;
+
+#[cfg(target_os = "linux")]
 #[path = "support/run.rs"]
 mod run;
 
@@ -19,12 +23,12 @@ mod run;
     reason = "gungraun's #[library_benchmark] expansion emits `super::` paths with user spans"
 )]
 mod gate {
-    use std::hint::black_box;
+    use std::{hint::black_box, sync::Arc};
 
     use felis_shaping::{Font, ShapeCache, ShapedGlyph, Shaper};
     use gungraun::{LibraryBenchmarkConfig, library_benchmark, library_benchmark_group};
 
-    use crate::{cache, run};
+    use crate::{cache, emoji, run};
 
     const FONT_DIR: &str = "FELIS_TEST_FONT_DIR";
 
@@ -56,6 +60,36 @@ mod gate {
     fn shape_cache(mut input: CacheInput) -> CacheInput {
         for &ch in cache::GLYPHS {
             black_box(input.cache.get_or_insert(&input.font, ch, cache::PX));
+        }
+        input
+    }
+
+    pub(crate) struct EmojiInput {
+        font: Arc<Font>,
+        glyphs: &'static [char],
+        cache: ShapeCache,
+    }
+
+    fn setup_emoji(colr: bool) -> EmojiInput {
+        let (font, glyphs) = if colr {
+            (emoji::colr(), emoji::COLR)
+        } else {
+            (emoji::cbdt(), emoji::CBDT)
+        };
+        EmojiInput {
+            font,
+            glyphs,
+            cache: ShapeCache::default(),
+        }
+    }
+
+    // Every emoji misses, as in `shape_cache`.
+    #[library_benchmark(setup = setup_emoji)]
+    #[bench::miss_emoji_cbdt(false)]
+    #[bench::miss_emoji_colr(true)]
+    fn shape_cache_emoji(mut input: EmojiInput) -> EmojiInput {
+        for &ch in input.glyphs {
+            black_box(input.cache.get_or_insert(&input.font, ch, emoji::PX));
         }
         input
     }
@@ -94,7 +128,10 @@ mod gate {
         (input, glyphs)
     }
 
-    library_benchmark_group!(name = shaping, benchmarks = [shape_cache, shape_run]);
+    library_benchmark_group!(
+        name = shaping,
+        benchmarks = [shape_cache, shape_cache_emoji, shape_run]
+    );
 
     gungraun::main!(
         config = LibraryBenchmarkConfig::default().pass_through_env(FONT_DIR);

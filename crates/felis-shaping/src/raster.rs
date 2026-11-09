@@ -1,15 +1,15 @@
-//! The rasterization gateway behind [`crate::ShapeCache`]: color glyphs
-//! through swash, monochrome outlines through skrifa and [`coverage`].
+//! The rasterization gateway behind [`crate::ShapeCache`]: `COLR` layers,
+//! then `sbix`/`CBDT` strikes for a color face, then the monochrome
+//! outline, all outlines through skrifa and [`coverage`].
 
 use skrifa::{DrawMemory, HintOptions, PathSink, RasterTarget, ScalerFont};
-use swash::{
-    scale::{Render, ScaleContext, Source, StrikeWith, image::Content},
-    zeno::Format,
-};
 
 use crate::{Font, GlyphBitmap, GlyphId, GlyphPixels, provider::FaceHinting};
 
+mod color;
 pub(crate) mod coverage;
+mod resample;
+mod strike;
 #[cfg(test)]
 mod tests;
 
@@ -99,7 +99,6 @@ pub(crate) trait OutlineBackend {
 #[derive(Default)]
 pub(crate) struct Rasterizer {
     outlines: SkrifaOutlines,
-    color: ScaleContext,
 }
 
 impl Rasterizer {
@@ -115,37 +114,11 @@ impl Rasterizer {
     }
 
     fn color_glyph(&mut self, font: &Font, glyph: GlyphId, px: f32) -> Option<GlyphBitmap> {
-        let mut scaler = self
-            .color
-            .builder(font.font_ref())
-            .size(px)
-            .hint(matches!(font.raster.hinting, Hinting::Hinted(_)))
-            .normalized_coords(&font.coords)
-            .build();
-        let image = Render::new(&[
-            Source::ColorOutline(0),
-            Source::ColorBitmap(StrikeWith::BestFit),
-        ])
-        .format(Format::Alpha)
-        .render(&mut scaler, u16::try_from(glyph).ok()?)?;
-        let pixels = match image.content {
-            Content::Mask => GlyphPixels::Coverage(image.data),
-            // swash emits straight RGBA in R,G,B,A order (sbix/CBDT PNG
-            // decoder and COLR blitter alike); a BGRA reorder here renders a
-            // red 🦀 blue.
-            Content::Color => GlyphPixels::Rgba(image.data),
-            // LCD masks are RGBA-packed coverage, not color.
-            Content::SubpixelMask => {
-                GlyphPixels::Coverage(image.data.as_chunks::<4>().0.iter().map(|p| p[3]).collect())
-            }
-        };
-        Some(GlyphBitmap::new(
-            image.placement.width,
-            image.placement.height,
-            image.placement.left,
-            image.placement.top,
-            pixels,
-        ))
+        if !(px.is_finite() && px > 0.0) {
+            return None;
+        }
+        color::render(&mut self.outlines, font, glyph, px)
+            .or_else(|| strike::render(font, glyph, px))
     }
 }
 
@@ -209,6 +182,51 @@ fn scaler_font(font: &Font, px: f32) -> ScalerFont {
         ScalerFont::force_unhinted(outlines, Some(px))
     } else {
         scaler
+    }
+}
+
+impl SkrifaOutlines {
+    /// A `COLR` layer's coverage within `budget` bytes; a layer with no
+    /// outline is empty, and `None` means over a raster limit.
+    fn mask_within(
+        &mut self,
+        font: &Font,
+        glyph: GlyphId,
+        px: f32,
+        budget: usize,
+    ) -> Option<coverage::Mask> {
+        self.with_layer_path(font, glyph, px, |path, segments| match path {
+            Some(path) => coverage::rasterize_within(path, px, segments, budget),
+            None => Some(coverage::Mask::default()),
+        })
+    }
+
+    /// The pixel box a `COLR` layer's coverage is drawn into, as the face
+    /// hints it; empty for a layer that draws nothing.
+    fn layer_box(&mut self, font: &Font, glyph: GlyphId, px: f32) -> Option<[i32; 4]> {
+        self.with_layer_path(font, glyph, px, |path, segments| match path {
+            Some(path) => coverage::pixel_box(path, px, segments),
+            None => Some([0; 4]),
+        })
+    }
+
+    /// `f` with the layer's outline as the face's scaler draws it at `px`,
+    /// or `None` when it has none.
+    fn with_layer_path<T>(
+        &mut self,
+        font: &Font,
+        glyph: GlyphId,
+        px: f32,
+        f: impl FnOnce(Option<&[PathEl]>, &mut Vec<[f32; 4]>) -> T,
+    ) -> T {
+        let mut path = std::mem::take(&mut self.path);
+        path.0.clear();
+        let outline = self.scaler(font, px).outline(skrifa::GlyphId::new(glyph));
+        let drawn =
+            outline.is_some_and(|outline| outline.draw(DrawMemory::Scratch, &mut path).is_ok());
+        let result = f(drawn.then_some(path.0.as_slice()), &mut self.segments);
+        self.path = path;
+        result
     }
 }
 

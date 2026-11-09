@@ -18,14 +18,13 @@ use harfrust::{
     Buffer, BufferFlags, Direction, Feature, Script, ShapeOptions, ShapePlan, ShaperFont, Tag,
 };
 use skrifa::{
-    MetadataProvider,
+    GlyphSourceOrder, MetadataProvider, PathSink, ScalerFont,
     instance::{LocationRef, Size},
     raw::{
         model::{Blob, TableFunction},
-        types::F2Dot14,
+        types::{F2Dot14, NameId},
     },
 };
-use swash::{FontRef, NormalizedCoord, StringId, scale::ScaleContext};
 use thiserror::Error;
 
 pub type GlyphId = u32;
@@ -33,12 +32,17 @@ pub type GlyphId = u32;
 use crate::raster::{RasterOptions, Rasterizer};
 use tracing::{debug, warn};
 
+#[cfg(test)]
+#[cfg(not(windows))]
+mod goldens;
+mod metadata;
 mod presentation;
 mod provider;
 mod raster;
 #[cfg(test)]
-#[cfg(not(windows))]
 mod swash_parity;
+#[cfg(test)]
+mod test_support;
 
 use presentation::is_emoji_presentation;
 pub use provider::MONOSPACE_FALLBACK_FAMILIES;
@@ -75,8 +79,26 @@ pub const TEST_FONT_FAMILY: &str = "Monaspace Neon";
 /// rasterizer, for the fuzz target.
 #[cfg(feature = "testing")]
 #[doc(hidden)]
-pub fn rasterize_path(px: f32, draw: impl FnOnce(&mut dyn skrifa::PathSink)) -> GlyphBitmap {
+pub fn rasterize_path(px: f32, draw: impl FnOnce(&mut dyn PathSink)) -> GlyphBitmap {
     raster::rasterize_path(px, draw)
+}
+
+/// Draws `glyph` of the first face in `bytes` at `px` through the whole
+/// rasterizer, color sources included, for the fuzz target and the heap
+/// tests; `None` when the bytes hold no face.
+#[cfg(feature = "testing")]
+#[doc(hidden)]
+#[must_use]
+pub fn rasterize_face_glyph(bytes: Vec<u8>, glyph: GlyphId, px: f32) -> Option<GlyphBitmap> {
+    let font = Font::load_resolved(ResolvedFace {
+        source: FaceSource::Shared(Arc::new(bytes)),
+        index: 0,
+        instance: None,
+        slanted: false,
+        hinting: None,
+    })
+    .ok()?;
+    Some(Rasterizer::default().rasterize(&font, glyph, px))
 }
 
 /// The pinned test-font set `$FELIS_TEST_FONT_DIR` names; panics when
@@ -121,20 +143,15 @@ impl FontStyle {
 pub struct Font {
     bytes: FontBytes,
     index: u32,
-    offset: u32,
-    /// Generated once at load: swash keys its per-font scale cache on
-    /// this, so a fresh key per `font_ref()` call would rebuild it on
-    /// every color glyph.
-    key: swash::CacheKey,
     color: bool,
     /// Variation-axis position, one entry per axis; empty for a static
     /// face. Every scaler, shaper and metrics call must pass it, or a
     /// variable face draws its default instance whatever weight was asked.
-    coords: Vec<NormalizedCoord>,
+    coords: Vec<F2Dot14>,
     /// The axis settings behind `coords`, clamped to each axis's range,
     /// in design units: what [`Font::display_name`] names. Normalizing
     /// passes through `avar`, so `coords` cannot be read back exactly.
-    position: Vec<(swash::Tag, f32)>,
+    position: Vec<(Tag, f32)>,
     /// The face at `coords`, which the shaper and the outline scaler
     /// read.
     face: skrifa::Font,
@@ -163,23 +180,25 @@ impl Font {
     /// (Noto Sans CJK's static weights), passes without walking 65k
     /// codepoints.
     fn covers_all_of(&self, regular: &Self) -> bool {
-        if Arc::ptr_eq(&self.bytes, &regular.bytes) && self.offset == regular.offset {
+        if Arc::ptr_eq(&self.bytes, &regular.bytes) && self.index == regular.index {
             return true;
         }
-        let cmap = swash::tag_from_bytes(b"cmap");
-        if let Some(own) = self.font_ref().table(cmap)
-            && regular.font_ref().table(cmap) == Some(own)
+        if let Some(own) = self.cmap_bytes()
+            && regular.cmap_bytes() == Some(own)
         {
             return true;
         }
-        let own = self.font_ref().charmap();
-        let mut covers = true;
-        regular.font_ref().charmap().enumerate(|cp, glyph| {
-            if covers && glyph != 0 && own.map(cp) == 0 {
-                covers = false;
-            }
-        });
-        covers
+        let own = self.face.charmap();
+        regular
+            .face
+            .charmap()
+            .unicodes()
+            .all(|(cp, glyph)| glyph == skrifa::GlyphId::NOTDEF || own.map_unicode(cp).is_some())
+    }
+
+    fn cmap_bytes(&self) -> Option<&[u8]> {
+        let font = skrifa::FontRef::from_index(self.bytes.as_ref().as_ref(), self.index).ok()?;
+        Some(font.table_data(Tag::new(b"cmap"))?.as_bytes())
     }
 
     /// The pinned probe font; panics when the fixture is absent.
@@ -221,19 +240,15 @@ impl Font {
             FaceSource::Shared(bytes) => bytes,
             FaceSource::File(path) => Arc::new(map_face_file(&path)?),
         };
-        let (offset, color) = {
-            let font_ref = FontRef::from_index(bytes.as_ref().as_ref(), face_index as usize)
-                .ok_or_else(|| ShapingError::BadFont("FontRef::from_index returned None".into()))?;
-            let color = font_ref.color_palettes().len() != 0 || font_ref.color_strikes().len() != 0;
-            (font_ref.offset, color)
-        };
         let face = untracked_face(&bytes, face_index)
             .ok_or_else(|| ShapingError::BadFont("skrifa::Font::new returned None".into()))?;
+        let color = !face.palettes().is_empty()
+            || !face
+                .bitmap_strikes_with(GlyphSourceOrder::COLOR_BITMAPS)
+                .is_empty();
         let font = Self {
             bytes,
             index: face_index,
-            offset,
-            key: swash::CacheKey::new(),
             color,
             coords: Vec::new(),
             position: Vec::new(),
@@ -252,14 +267,23 @@ impl Font {
     /// The face at named instance `index` (zero-based, in `fvar` order);
     /// `None` when the face has no such instance.
     fn at_instance(&self, index: usize) -> Option<Self> {
-        let face = self.font_ref();
-        let variations = face.variations();
-        let values: Vec<f32> = face.instances().nth(index)?.values().collect();
-        let settings: Vec<(swash::Tag, f32)> = variations.map(|v| v.tag()).zip(values).collect();
-        let coords = variations
-            .normalized_coords(settings.iter().copied())
+        let instance = self
+            .face
+            .named_instances()
+            .get(u32::try_from(index).ok()?)?;
+        let settings: Vec<(Tag, f32)> = self
+            .face
+            .axes()
+            .iter()
+            .map(|axis| axis.tag())
+            .zip(instance.user_coords())
             .collect();
+        let coords = self.normalized_coords(&settings);
         Some(self.with_coords(coords, settings))
+    }
+
+    fn normalized_coords(&self, settings: &[(Tag, f32)]) -> Vec<F2Dot14> {
+        metadata::normalized_coords(self.bytes.as_ref().as_ref(), self.index, settings)
     }
 
     /// The regular view a stack draws at `weight` and `axes`, `None` for
@@ -273,17 +297,15 @@ impl Font {
         self.at_position(weight, false, axes)
     }
 
-    fn with_coords(&self, coords: Vec<NormalizedCoord>, position: Vec<(swash::Tag, f32)>) -> Self {
+    fn with_coords(&self, coords: Vec<F2Dot14>, position: Vec<(Tag, f32)>) -> Self {
         let face = self
             .face
             .instance_builder()
-            .normalized_coords(coords.iter().map(|&c| F2Dot14::from_bits(c)))
+            .normalized_coords(coords.iter().copied())
             .build();
         Self {
             bytes: self.bytes.clone(),
             index: self.index,
-            offset: self.offset,
-            key: swash::CacheKey::new(),
             color: self.color,
             coords,
             position,
@@ -308,18 +330,18 @@ impl Font {
     /// replaces the italic position; `wght` and axes the face lacks are
     /// skipped.
     fn at_position(&self, weight: Option<u16>, italic: bool, axes: &[AxisSetting]) -> Option<Self> {
-        let face = self.font_ref();
-        let variations = face.variations();
-        let axes_info: Vec<AxisInfo> = variations
+        let face_axes = self.face.axes();
+        let axes_info: Vec<AxisInfo> = face_axes
+            .iter()
             .map(|v| AxisInfo {
                 tag: v.tag(),
                 default: v.default_value(),
             })
             .collect();
         let has_axis = |tag| axes_info.iter().any(|a| a.tag == tag);
-        let explicit: Vec<(swash::Tag, f32)> = axes
+        let explicit: Vec<(Tag, f32)> = axes
             .iter()
-            .map(|a| (swash::tag_from_bytes(&a.tag), a.value))
+            .map(|a| (Tag::new(&a.tag), a.value))
             .filter(|&(tag, _)| tag != WGHT && has_axis(tag))
             .collect();
         let explicit_slant = explicit.iter().any(|&(tag, _)| tag == ITAL || tag == SLNT);
@@ -329,15 +351,14 @@ impl Font {
             settings.push((WGHT, target));
         }
         if italic && !explicit_slant {
-            let instances: Vec<InstanceInfo> = face
-                .instances()
+            let instances: Vec<InstanceInfo> = self
+                .face
+                .named_instances()
+                .iter()
                 .map(|i| InstanceInfo {
-                    name: i
-                        .name(Some("en"))
-                        .or_else(|| i.name(None))
-                        .map(|n| n.to_string())
+                    name: metadata::english_name(&self.face, i.subfamily_name())
                         .unwrap_or_default(),
-                    values: i.values().collect(),
+                    values: i.user_coords().collect(),
                 })
                 .collect();
             settings.extend(italic_position(target, &axes_info, &instances));
@@ -351,7 +372,7 @@ impl Font {
         }
         let mut position = self.position.clone();
         for &(tag, value) in &settings {
-            let value = variations.find_by_tag(tag).map_or(value, |axis| {
+            let value = face_axes.get_by_tag(tag).map_or(value, |axis| {
                 value.clamp(axis.min_value(), axis.max_value())
             });
             match position.iter_mut().find(|(t, _)| *t == tag) {
@@ -359,9 +380,7 @@ impl Font {
                 None => position.push((tag, value)),
             }
         }
-        let mut coords: Vec<NormalizedCoord> = variations
-            .normalized_coords(settings.iter().copied())
-            .collect();
+        let mut coords = self.normalized_coords(&settings);
         for ((coord, axis), base) in coords.iter_mut().zip(&axes_info).zip(&self.coords) {
             if !settings.iter().any(|(tag, _)| *tag == axis.tag) {
                 *coord = *base;
@@ -372,17 +391,21 @@ impl Font {
 
     #[must_use]
     pub fn has_glyph(&self, c: char) -> bool {
-        self.font_ref().charmap().map(c) != 0
+        self.glyph_for(c).is_some()
+    }
+
+    /// `None` when the face does not map `c`.
+    fn glyph_for(&self, c: char) -> Option<GlyphId> {
+        self.face
+            .charmap()
+            .map_unicode(c)
+            .map(skrifa::GlyphId::to_u32)
     }
 
     /// `None` when the face does not map `c`.
     #[must_use]
     pub fn advance_px(&self, c: char, px: f32) -> Option<f32> {
-        let glyph_id = self.font_ref().charmap().map(c);
-        if glyph_id == 0 {
-            return None;
-        }
-        self.advance_width(GlyphId::from(glyph_id), px)
+        self.advance_width(self.glyph_for(c)?, px)
     }
 
     /// swash reads a varied advance from `HVAR` alone; skrifa falls back
@@ -390,8 +413,7 @@ impl Font {
     /// variable builds) varies its width through.
     fn advance_width(&self, glyph_id: GlyphId, px: f32) -> Option<f32> {
         let font = skrifa::FontRef::from_index(self.bytes.as_ref().as_ref(), self.index).ok()?;
-        let coords: Vec<F2Dot14> = self.coords.iter().map(|&c| F2Dot14::from_bits(c)).collect();
-        font.glyph_metrics(Size::new(px), LocationRef::new(&coords))
+        font.glyph_metrics(Size::new(px), LocationRef::new(&self.coords))
             .advance_width(skrifa::GlyphId::new(glyph_id))
     }
 
@@ -402,12 +424,33 @@ impl Font {
 
     /// A CBDT face carries an empty `glyf` entry under each bitmap.
     fn has_outline(&self, c: char) -> bool {
-        let font = self.font_ref();
-        let mut ctx = ScaleContext::new();
-        let mut scaler = ctx.builder(font).normalized_coords(&self.coords).build();
-        scaler
-            .scale_outline(font.charmap().map(c))
-            .is_some_and(|outline| !outline.is_empty())
+        #[derive(Default)]
+        struct Inked(bool);
+        impl PathSink for Inked {
+            fn move_to(&mut self, _: f32, _: f32) {
+                self.0 = true;
+            }
+            fn line_to(&mut self, _: f32, _: f32) {
+                self.0 = true;
+            }
+            fn quad_to(&mut self, _: f32, _: f32, _: f32, _: f32) {
+                self.0 = true;
+            }
+            fn curve_to(&mut self, _: f32, _: f32, _: f32, _: f32, _: f32, _: f32) {
+                self.0 = true;
+            }
+            fn close(&mut self) {}
+        }
+        let glyph = self.glyph_for(c).unwrap_or_default();
+        let mut inked = Inked::default();
+        ScalerFont::force_unhinted(self.face.clone(), None)
+            .outline(skrifa::GlyphId::new(glyph))
+            .is_some_and(|outline| {
+                outline
+                    .draw(skrifa::DrawMemory::Scratch, &mut inked)
+                    .is_ok()
+                    && inked.0
+            })
     }
 
     /// The same face with its color tables left unread, for a scalar
@@ -424,15 +467,10 @@ impl Font {
     /// draws at follows it, as `(wght=700, slnt=-11)`.
     #[must_use]
     pub fn display_name(&self) -> String {
-        let strings = self.font_ref().localized_strings();
-        let name = [StringId::Full, StringId::Family]
+        let name = [NameId::FULL_NAME, NameId::FAMILY_NAME]
             .into_iter()
-            .find_map(|id| {
-                strings
-                    .find_by_id(id, Some("en"))
-                    .or_else(|| strings.find_by_id(id, None))
-            })
-            .map_or_else(|| "unnamed".to_owned(), |found| found.to_string());
+            .find_map(|id| metadata::english_name(&self.face, id))
+            .unwrap_or_else(|| "unnamed".to_owned());
         if self.position.is_empty() {
             return name;
         }
@@ -450,20 +488,38 @@ impl Font {
         format!("{name} ({axes})")
     }
 
-    pub(crate) fn font_ref(&self) -> FontRef<'_> {
-        FontRef {
-            data: self.bytes.as_ref().as_ref(),
-            offset: self.offset,
-            key: self.key,
-        }
+    /// The same face as swash reads it, for the differentials that hold
+    /// felis to swash's output.
+    #[cfg(test)]
+    pub(crate) fn swash_ref(&self) -> swash::FontRef<'_> {
+        swash::FontRef::from_index(self.bytes.as_ref().as_ref(), self.index as usize)
+            .expect("a face that loaded parses for swash")
+    }
+
+    #[cfg(test)]
+    pub(crate) fn swash_coords(&self) -> Vec<i16> {
+        self.coords.iter().map(|c| c.to_bits()).collect()
     }
 
     #[must_use]
     pub fn cell_metrics(&self, px: f32) -> CellMetrics {
-        let face = self.font_ref();
-        let metrics = face.metrics(&self.coords).scale(px);
         let width = self.advance_px('M', px).unwrap_or(px * 0.6);
-        CellMetrics::from_scaled(width, metrics.ascent, metrics.descent, metrics.leading)
+        let (ascent, descent, leading) = self.line_metrics(px);
+        CellMetrics::from_scaled(width, ascent, descent, leading)
+    }
+
+    /// Ascent, descent (positive below the baseline) and line gap at `px`.
+    fn line_metrics(&self, px: f32) -> (f32, f32, f32) {
+        let metrics = self.face.metrics();
+        let Some(line) = metrics.h_line() else {
+            return (0.0, 0.0, 0.0);
+        };
+        let scale = px / f32::from(metrics.units_per_em);
+        (
+            line.ascender.to_f32() * scale,
+            -line.descender.to_f32() * scale,
+            line.line_gap.to_f32() * scale,
+        )
     }
 }
 
@@ -521,12 +577,12 @@ impl AsRef<[u8]> for TableSlice {
     }
 }
 
-const WGHT: swash::Tag = swash::tag_from_bytes(b"wght");
-const ITAL: swash::Tag = swash::tag_from_bytes(b"ital");
-const SLNT: swash::Tag = swash::tag_from_bytes(b"slnt");
+const WGHT: Tag = Tag::new(b"wght");
+const ITAL: Tag = Tag::new(b"ital");
+const SLNT: Tag = Tag::new(b"slnt");
 
 struct AxisInfo {
-    tag: swash::Tag,
+    tag: Tag,
     default: f32,
 }
 
@@ -545,7 +601,7 @@ fn italic_position(
     target_wght: f32,
     axes: &[AxisInfo],
     instances: &[InstanceInfo],
-) -> Vec<(swash::Tag, f32)> {
+) -> Vec<(Tag, f32)> {
     let is_italic_axis = |tag| tag == ITAL || tag == SLNT;
     if !axes.iter().any(|a| is_italic_axis(a.tag)) {
         return Vec::new();
@@ -1053,7 +1109,7 @@ struct StyleViews<'a, P: FaceProvider> {
     sibling_of: Option<P::Id>,
     /// `None` for a face that failed to load.
     by_id: HashMap<P::Id, Option<Arc<Font>>>,
-    views: HashMap<(P::Id, Vec<NormalizedCoord>), Arc<Font>>,
+    views: HashMap<(P::Id, Vec<F2Dot14>), Arc<Font>>,
     regular: Arc<Font>,
 }
 
@@ -1076,10 +1132,7 @@ impl<'a, P: FaceProvider> StyleViews<'a, P> {
     /// in a narrower range, which drawing ignores or clamps.
     fn report_axes(&mut self, id: P::Id, font: &Font, axes: &[AxisSetting]) {
         for setting in axes {
-            let face = font.font_ref();
-            let axis = face
-                .variations()
-                .find_by_tag(swash::tag_from_bytes(&setting.tag));
+            let axis = font.face.axes().get_by_tag(Tag::new(&setting.tag));
             let applies = axis
                 .is_some_and(|axis| (axis.min_value()..=axis.max_value()).contains(&setting.value));
             if applies
@@ -1921,6 +1974,14 @@ impl GlyphPixels {
     pub const fn is_color(&self) -> bool {
         matches!(self, Self::Rgba(_))
     }
+
+    /// The bytes the buffer holds allocated, which a color glyph near the
+    /// raster budget may keep beyond its pixels.
+    const fn allocated(&self) -> usize {
+        match self {
+            Self::Coverage(bytes) | Self::Rgba(bytes) => bytes.capacity(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -2101,8 +2162,8 @@ type ShapeKey = (char, u32, SizingKey);
 /// pixels, and PTY output picks the key.
 const ENTRY_BYTES: usize = size_of::<(ShapeKey, GlyphBitmap)>();
 
-fn entry_cost(bitmap: &GlyphBitmap) -> usize {
-    ENTRY_BYTES + bitmap.pixels.as_bytes().len()
+const fn entry_cost(bitmap: &GlyphBitmap) -> usize {
+    ENTRY_BYTES + bitmap.pixels.allocated()
 }
 
 /// Byte-capped glyph-bitmap cache. Eviction is arbitrary, not LRU:
@@ -2187,11 +2248,10 @@ impl ShapeCache {
 }
 
 fn rasterize(rasterizer: &mut Rasterizer, font: &Font, c: char, px: f32) -> GlyphBitmap {
-    let glyph_id = font.font_ref().charmap().map(c);
-    if glyph_id == 0 {
+    let Some(glyph_id) = font.glyph_for(c) else {
         return GlyphBitmap::blank();
-    }
-    rasterizer.rasterize(font, GlyphId::from(glyph_id), px)
+    };
+    rasterizer.rasterize(font, glyph_id, px)
 }
 
 impl GlyphBitmap {
@@ -3292,8 +3352,9 @@ mod tests {
         .expect("the pinned faces load");
         let fallback = stack.font_at(1, FontStyle::REGULAR);
         let wght = fallback
-            .font_ref()
-            .variations()
+            .face
+            .axes()
+            .iter()
             .position(|v| v.tag() == WGHT)
             .expect("the face has wght");
         assert_eq!(
@@ -3315,12 +3376,14 @@ mod tests {
         (stack, files[0].clone())
     }
 
-    fn design_value(font: &Font, tag: swash::Tag, value: f32) -> NormalizedCoord {
-        font.font_ref()
-            .variations()
-            .find_by_tag(tag)
-            .expect("the face has the axis")
-            .normalize(value)
+    fn design_value(font: &Font, tag: Tag, value: f32) -> F2Dot14 {
+        let index = font
+            .face
+            .axes()
+            .iter()
+            .position(|axis| axis.tag() == tag)
+            .expect("the face has the axis");
+        font.normalized_coords(&[(tag, value)])[index]
     }
 
     /// Monaspace Neon Var ships no italic file: its "Italic" and "Bold
@@ -3341,13 +3404,14 @@ mod tests {
         let slanted = design_value(regular, SLNT, -11.0);
         let slnt_at = |font: &Font| {
             let index = font
-                .font_ref()
-                .variations()
+                .face
+                .axes()
+                .iter()
                 .position(|v| v.tag() == SLNT)
                 .expect("the face has slnt");
             font.coords[index]
         };
-        assert_eq!(slnt_at(regular), 0);
+        assert_eq!(slnt_at(regular), F2Dot14::ZERO);
         assert_eq!(slnt_at(italic), slanted);
         assert_eq!(slnt_at(bold_italic), slanted);
         assert_eq!(
@@ -3559,13 +3623,13 @@ mod tests {
         let regular = stack.styled_primary(FontStyle::REGULAR);
         let wdth = |font: &Font| axis_coord(font, *b"wdth");
         let slnt = |font: &Font| axis_coord(font, *b"slnt");
-        let width = design_value(regular, swash::tag_from_bytes(b"wdth"), 110.0);
+        let width = design_value(regular, Tag::new(b"wdth"), 110.0);
         assert_eq!(wdth(regular), width);
         assert_eq!(slnt(regular), design_value(regular, SLNT, -5.0));
         for style in [BOLD, ITALIC, BOLD_ITALIC] {
             assert_eq!(wdth(stack.styled_primary(style)), width, "{style:?}");
         }
-        assert_eq!(slnt(stack.styled_primary(BOLD)), 0);
+        assert_eq!(slnt(stack.styled_primary(BOLD)), F2Dot14::ZERO);
         assert_eq!(
             slnt(stack.styled_primary(ITALIC)),
             design_value(regular, SLNT, -11.0),
@@ -3584,8 +3648,14 @@ mod tests {
             ..StyleFaces::default()
         };
         let (stack, _) = pinned_variable_stack(&styles);
-        assert_eq!(axis_coord(stack.styled_primary(BOLD), *b"wdth"), 0);
-        assert_ne!(axis_coord(stack.styled_primary(BOLD_ITALIC), *b"wdth"), 0);
+        assert_eq!(
+            axis_coord(stack.styled_primary(BOLD), *b"wdth"),
+            F2Dot14::ZERO
+        );
+        assert_ne!(
+            axis_coord(stack.styled_primary(BOLD_ITALIC), *b"wdth"),
+            F2Dot14::ZERO
+        );
     }
 
     #[cfg(not(windows))]
@@ -3642,14 +3712,14 @@ mod tests {
         let (stack, _) = pinned_variable_stack(&styles);
         let regular = stack.styled_primary(FontStyle::REGULAR);
         let widest = regular
-            .font_ref()
-            .variations()
-            .find_by_tag(swash::tag_from_bytes(b"wdth"))
+            .face
+            .axes()
+            .get_by_tag(Tag::new(b"wdth"))
             .expect("the face has wdth")
             .max_value();
         assert_eq!(
             axis_coord(regular, *b"wdth"),
-            design_value(regular, swash::tag_from_bytes(b"wdth"), widest)
+            design_value(regular, Tag::new(b"wdth"), widest)
         );
     }
 
@@ -3957,11 +4027,12 @@ mod tests {
         assert_eq!(faces.slot_for(SCISSORS, text, FontStyle::REGULAR), None);
     }
 
-    fn axis_coord(font: &Font, tag: [u8; 4]) -> NormalizedCoord {
-        let tag = swash::tag_from_bytes(&tag);
+    fn axis_coord(font: &Font, tag: [u8; 4]) -> F2Dot14 {
+        let tag = Tag::new(&tag);
         let index = font
-            .font_ref()
-            .variations()
+            .face
+            .axes()
+            .iter()
             .position(|v| v.tag() == tag)
             .expect("the face has the axis");
         font.coords[index]
@@ -3970,35 +4041,35 @@ mod tests {
     /// The pinned variable face and its instance 16's position as
     /// `(tag, value)` pairs.
     #[cfg(not(windows))]
-    fn semiwide_position() -> (Vec<u8>, Vec<(u32, f32)>) {
+    fn semiwide_position() -> (skrifa::Font, Vec<(u32, f32)>) {
         let files = pinned_files(&["truetype/Monaspace Neon Var.ttf"]);
-        let data = std::fs::read(&files[0]).expect("the variable face reads");
-        let font = FontRef::from_index(&data, 0).expect("the face parses");
-        let coords = font
-            .instances()
-            .nth(16)
-            .expect("the instance exists")
-            .values();
-        let position = font
-            .variations()
-            .map(|axis| axis.tag())
-            .zip(coords)
+        let data: FontBytes = Arc::new(std::fs::read(&files[0]).expect("the variable face reads"));
+        let face = metadata::model_face(&data, 0).expect("the face parses");
+        let position = face
+            .axes()
+            .iter()
+            .map(|axis| u32::from_be_bytes(axis.tag().to_be_bytes()))
+            .zip(
+                face.named_instances()
+                    .get(16)
+                    .expect("the instance exists")
+                    .user_coords(),
+            )
             .collect();
-        (data, position)
+        (face, position)
     }
 
     #[cfg(not(windows))]
     #[test]
     fn a_host_position_resolves_to_the_named_instance_there() {
-        let (data, mut position) = semiwide_position();
-        let font = FontRef::from_index(&data, 0).expect("the face parses");
+        let (font, mut position) = semiwide_position();
         assert_eq!(
-            provider::instance_at(font, &position),
+            provider::instance_at(&font, &position),
             Some(provider::AxisPosition::Named(16))
         );
         position[0].1 += 0.25;
         assert_eq!(
-            provider::instance_at(font, &position),
+            provider::instance_at(&font, &position),
             Some(provider::AxisPosition::Named(16))
         );
     }
@@ -4006,31 +4077,35 @@ mod tests {
     #[cfg(not(windows))]
     #[test]
     fn a_host_position_no_instance_names_is_unrepresentable() {
-        let (data, mut position) = semiwide_position();
-        let font = FontRef::from_index(&data, 0).expect("the face parses");
-        let wdth = swash::tag_from_bytes(b"wdth");
+        let (font, mut position) = semiwide_position();
+        let wdth = u32::from_be_bytes(*b"wdth");
         let at = position
             .iter()
             .position(|&(tag, _)| tag == wdth)
             .expect("the face has wdth");
         position[at].1 += 3.0;
-        assert_eq!(provider::instance_at(font, &position), None);
+        assert_eq!(provider::instance_at(&font, &position), None);
 
         let (_, mut position) = semiwide_position();
-        position.push((swash::tag_from_bytes(b"ZZZZ"), 0.0));
-        assert_eq!(provider::instance_at(font, &position), None);
+        position.push((u32::from_be_bytes(*b"ZZZZ"), 0.0));
+        assert_eq!(provider::instance_at(&font, &position), None);
     }
 
     #[cfg(not(windows))]
     #[test]
     fn a_host_position_at_every_default_is_representable() {
-        let (data, _) = semiwide_position();
-        let font = FontRef::from_index(&data, 0).expect("the face parses");
+        let (font, _) = semiwide_position();
         let position: Vec<(u32, f32)> = font
-            .variations()
-            .map(|axis| (axis.tag(), axis.default_value()))
+            .axes()
+            .iter()
+            .map(|axis| {
+                (
+                    u32::from_be_bytes(axis.tag().to_be_bytes()),
+                    axis.default_value(),
+                )
+            })
             .collect();
-        assert!(provider::instance_at(font, &position).is_some());
+        assert!(provider::instance_at(&font, &position).is_some());
     }
 
     /// `instances().nth(16)` of the pinned variable face is `SemiWide
@@ -4040,10 +4115,10 @@ mod tests {
     fn a_named_instance_keeps_its_width_through_regular_and_bold_views() {
         let default = pinned_variable_font();
         let name = default
-            .font_ref()
-            .instances()
-            .nth(16)
-            .and_then(|i| i.name(Some("en")).map(|n| n.to_string()));
+            .face
+            .named_instances()
+            .get(16)
+            .and_then(|i| metadata::english_name(&default.face, i.subfamily_name()));
         assert_eq!(name.as_deref(), Some("SemiWide Regular"));
 
         let semiwide = default.at_instance(16).expect("the instance exists");
@@ -4052,7 +4127,11 @@ mod tests {
             "the regular view stays at the instance"
         );
         let width = axis_coord(&semiwide, *b"wdth");
-        assert_ne!(width, 0, "SemiWide must sit off the default width");
+        assert_ne!(
+            width,
+            F2Dot14::ZERO,
+            "SemiWide must sit off the default width"
+        );
 
         let bold = semiwide.at_style(BOLD_WEIGHT, false).expect("wght moves");
         assert_eq!(axis_coord(&bold, *b"wdth"), width);
@@ -4404,7 +4483,7 @@ mod tests {
 
     fn axis(tag: [u8; 4], default: f32) -> AxisInfo {
         AxisInfo {
-            tag: swash::tag_from_bytes(&tag),
+            tag: Tag::new(&tag),
             default,
         }
     }
@@ -4754,9 +4833,9 @@ mod tests {
     #[test]
     fn rasterize_by_char_matches_rasterize_by_glyph_id() {
         let font = font();
-        let face = font.font_ref();
-        let glyph_id = GlyphId::from(face.charmap().map('A'));
-        assert_ne!(glyph_id, 0, "system monospace must cover 'A'");
+        let glyph_id = font
+            .glyph_for('A')
+            .expect("system monospace must cover 'A'");
         let mut cache = ShapeCache::default();
         let from_char = rasterize(&mut cache.rasterizer, &font, 'A', 16.0);
         let from_id = cache.rasterize_glyph_id(&font, glyph_id, 16.0);
@@ -4777,25 +4856,6 @@ mod tests {
         assert!(bitmap.is_blank());
         assert_eq!(bitmap.width(), 0);
         assert_eq!(bitmap.height(), 0);
-    }
-
-    /// `font_ref()` hands swash the same `CacheKey` every call (swash
-    /// keys its per-font caches on it) and distinct fonts never share one.
-    #[cfg(not(windows))]
-    #[test]
-    fn font_ref_key_is_stable_per_font_and_distinct_between_fonts() {
-        let font = font();
-        assert_eq!(
-            font.font_ref().key,
-            font.font_ref().key,
-            "font_ref() must hand swash the same cache key every call",
-        );
-        let other = self::font();
-        assert_ne!(
-            font.font_ref().key,
-            other.font_ref().key,
-            "separately-loaded fonts must not share a swash cache slot",
-        );
     }
 
     #[cfg(not(windows))]
@@ -4823,10 +4883,9 @@ mod tests {
     #[test]
     fn shape_run_calt_texture_healing_defaults_on_and_disables() {
         let font = Font::load_test_font();
-        let charmap = font.font_ref().charmap();
         let base_ids: Vec<GlyphId> = ['m', 'i', 'm']
             .into_iter()
-            .map(|c| GlyphId::from(charmap.map(c)))
+            .map(|c| font.glyph_for(c).unwrap_or_default())
             .collect();
         let mut shaper = Shaper::new();
         let healed = shaper.shape_run(&font, 16.0, &[], "mim");
@@ -5422,8 +5481,7 @@ mod tests {
     #[test]
     fn a_lone_mark_shapes_without_a_dotted_circle() {
         let font = font();
-        let mark = GlyphId::from(font.font_ref().charmap().map('\u{301}'));
-        assert_ne!(mark, 0, "the face maps U+0301");
+        let mark = font.glyph_for('\u{301}').expect("the face maps U+0301");
         let out = Shaper::new().shape_run(&font, 16.0, &[], "\u{301}");
         let ids: Vec<GlyphId> = out.iter().map(|g| g.glyph_id).collect();
         assert_eq!(ids, [mark]);

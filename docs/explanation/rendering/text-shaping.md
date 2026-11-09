@@ -40,8 +40,8 @@ buffer and the shape plans of the last 16 (face view, feature list) pairs, since
 one feature list. The face the shaper reads carries no `trak` table: a cell grid has no use for AAT tracking, whose only
 effect would be on ligature validation and cluster pens, and harfrust offers no switch that turns it off. The per-glyph
 `ShapeCache`, which is the single rasterization gateway, keeps skrifa outline scalers for the last 8 (face, size) pairs,
-because setting up a hinted scaler reruns the font's hinting programs, and one swash `ScaleContext` for color glyphs.
-Each holds up to 8 fonts, above the fallback chain's typical 4.
+because setting up a hinted scaler reruns the font's hinting programs; a color glyph's layers draw through the same
+scalers. It holds up to 8 fonts, above the fallback chain's typical 4.
 
 **Per-glyph bitmap cache.** Rasterization is cached per glyph rather than per run, because the same glyph recurs across
 runs that share nothing else: shells re-print one prompt thousands of times and most output is plain ASCII. An entry is
@@ -55,13 +55,13 @@ tuple, which is what keeps the several maps that thread it (the per-glyph cache,
 `'A'` and a regular one, and one raw glyph id resolved against two different faces therefore each get their own slot
 without a single map's signature changing.
 
-The cache holds a hard-coded soft cap of 16 MiB, not configurable, and charges each entry its bookkeeping as well as its
-pixels. A pixels-only budget would leave the map unbounded: a glyph that rasterizes blank (a space, a codepoint no face
-covers) has no pixels, and PTY output picks the key, so a producer walking OSC 66 sizings adds entries that cost
-nothing. Eviction is deliberately **not** LRU: past the cap it drops arbitrary other entries one at a time until it is
-back under budget, excluding the entry just inserted. Recency ordering costs a touch per hit on the hottest path in the
-renderer, to reorder a cache whose working set is a screenful of glyphs that all stay hot; the arbitrary drop is wrong
-only for the entries that were about to be evicted anyway. A true LRU is future work.
+The cache holds a hard-coded soft cap of 16 MiB, not configurable, and charges each entry its bookkeeping as well as the
+buffer holding its pixels. A pixels-only budget would leave the map unbounded: a glyph that rasterizes blank (a space, a
+codepoint no face covers) has no pixels, and PTY output picks the key, so a producer walking OSC 66 sizings adds entries
+that cost nothing. Eviction is deliberately **not** LRU: past the cap it drops arbitrary other entries one at a time
+until it is back under budget, excluding the entry just inserted. Recency ordering costs a touch per hit on the hottest
+path in the renderer, to reorder a cache whose working set is a screenful of glyphs that all stay hot; the arbitrary
+drop is wrong only for the entries that were about to be evicted anyway. A true LRU is future work.
 
 **Per-run shape memo.** The renderer re-walks every visible run on every frame, and the per-glyph layers only cache
 _rasterization_, so when `font.features` is active, shaping itself (cluster analysis + GSUB) would recur per run per
@@ -360,8 +360,8 @@ Rejected:
 - **Ceil the advance.** Glyphs then never touch, but DejaVu Sans Mono at 14 pt gets a 12 px cell where every Linux peer
   gets 11, so the same window holds fewer columns than in kitty, and a grid of a given column count is 9% wider.
 - **Round on Linux, ceil on macOS.** It reproduces kitty on both platforms, but only by mirroring where kitty reads its
-  advance: hinted from FreeType, unhinted from CoreText. felis reads the same unhinted swash advance on both, so the
-  split would encode a difference felis does not have.
+  advance: hinted from FreeType, unhinted from CoreText. felis reads the same unhinted advance on both, so the split
+  would encode a difference felis does not have.
 
 A glyph whose advance overruns the cells it is placed in (a `※` the CJK fallback face draws full-width in its one cell)
 rasterizes smaller and is centred in its block. The advance decides whether a glyph is fitted: an italic overhang or a
@@ -512,8 +512,12 @@ unhinted except a face whose contours need its instructions, which FreeType hint
 ignored, since felis draws grayscale only. felis has no hinting key of its own: fontconfig is where Linux users already
 set it ("Linux faces" above). Windows hints vertically for every face. Bold / italic select a separate styled face per
 [Per-style faces](#per-style-faces), which also covers how a variable face's weight and italic axes are set, so the
-styled primaries can be several views of one variable file. Color fonts (COLR/CPAL, sbix, CBDT, all supported by swash)
-rasterize into RGBA atlas slots; the cell shader samples RGBA instead of R8.
+styled primaries can be several views of one variable file. Color fonts rasterize into RGBA atlas slots, and the cell
+shader samples RGBA instead of R8. `COLR` version 0 layers are drawn through the face's own scaler, hinted as its text
+is, composited source-over in premultiplied RGBA, and un-premultiplied once into the straight RGBA the atlas holds;
+`sbix` and `CBDT` strikes come next, and a glyph only `COLR` version 1 defines falls through to its outline. A strike is
+scaled to the cell with a Mitchell–Netravali cubic rather than the sharper area filter, because switching filters
+changes every emoji, measured, and that is a decision of its own.
 
 **Bidi: not performed.** felis runs no UAX#9 reordering across the cell grid (a non-goal: the grid is linear visual
 order), and the shaper is fixed left-to-right inside a run as well ("Shaping unit: the ligature run" above), so RTL text

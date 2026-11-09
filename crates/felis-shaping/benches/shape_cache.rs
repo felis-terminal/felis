@@ -9,6 +9,8 @@ use felis_shaping::{Font, ShapeCache};
 
 #[path = "support/cache.rs"]
 mod cache;
+#[path = "support/emoji.rs"]
+mod emoji;
 
 use cache::{GLYPHS, PX};
 
@@ -37,6 +39,26 @@ fn bench_shape_cache(c: &mut Criterion) {
             }
         });
     });
+    group.finish();
+
+    if std::env::var_os("FELIS_TEST_FONT_DIR").is_none() {
+        return;
+    }
+    let mut group = c.benchmark_group("shape_cache");
+    for (name, font, glyphs) in [
+        ("miss_emoji_cbdt", emoji::cbdt(), emoji::CBDT),
+        ("miss_emoji_colr", emoji::colr(), emoji::COLR),
+    ] {
+        group.throughput(Throughput::Elements(glyphs.len() as u64));
+        group.bench_function(name, |b| {
+            b.iter(|| {
+                let mut cache = ShapeCache::default();
+                for &ch in glyphs {
+                    black_box(cache.get_or_insert(&font, ch, emoji::PX));
+                }
+            });
+        });
+    }
     group.finish();
 }
 

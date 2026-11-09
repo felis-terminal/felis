@@ -60,6 +60,9 @@ jobs:
       - run: nix build .#felis .#felis-dist --print-build-logs
       # The only runner whose CPU takes felis-protocol's NEON base64 path.
       - run: nix develop -c cargo test -p felis-protocol --all-features
+      # The font goldens hold on every host the pinned fonts reach, so the
+      # raster modes they name must not lean on this host's defaults.
+      - run: "nix develop -c cargo test -p felis-shaping --all-features -- goldens:: outlines_match_their_golden"
       - uses: ./.forgejo/actions/niks3-push
         if: github.event_name == 'push'
       # The tag's archive checks, run on every revision: the bundle's

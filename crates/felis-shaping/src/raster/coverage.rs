@@ -9,10 +9,19 @@ const MAX_CURVE_DEPTH: u32 = 10;
 const SEGMENT_CAP: usize = 16_000;
 const SEGMENT_BYTES: usize = 16;
 const CELL_BYTES: usize = size_of::<Cell>();
+/// Every buffer one glyph's rasterization holds at once.
 const WORKING_SET: usize = 16 << 20;
-/// The tallest box the working set admits at one pixel wide, which also
-/// keeps every box-relative coordinate inside 24.8.
-const MAX_SIDE: f32 = ((WORKING_SET - SEGMENT_BYTES * SEGMENT_CAP) / (CELL_BYTES + 1)) as f32;
+/// What a rasterizer keeps between glyphs that grows with the size asked
+/// for: the segment scratch, whose growth stops at its cap. What it keeps
+/// that follows only the face (the outline path, the hinting state of a
+/// few scalers) is not charged: fonts are trusted.
+const RETAINED_SCRATCH: usize = SEGMENT_CAP * SEGMENT_BYTES;
+/// The bytes every buffer sized from one glyph request is charged
+/// against, beside the retained scratch.
+pub(crate) const IMAGE_BUDGET: usize = WORKING_SET - RETAINED_SCRATCH;
+/// The tallest box the budget admits at one pixel wide, which also keeps
+/// every box-relative coordinate inside 24.8.
+const MAX_SIDE: f32 = (IMAGE_BUDGET / (CELL_BYTES + 1)) as f32;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct Point {
@@ -73,31 +82,33 @@ pub(crate) struct Mask {
 /// points, too deep a curve, too many segments, too large a box), which
 /// the caller treats as no outline. `segments` is scratch, left holding
 /// the flattened outline relative to [`origin`].
+pub(crate) fn rasterize(path: &[PathEl], px: f32, segments: &mut Vec<[f32; 4]>) -> Option<Mask> {
+    rasterize_within(path, px, segments, IMAGE_BUDGET)
+}
+
+/// [`rasterize`] with its working buffers held to `budget` bytes.
 #[expect(
     clippy::cast_possible_wrap,
     reason = "the budget keeps every side under MAX_SIDE"
 )]
-pub(crate) fn rasterize(path: &[PathEl], px: f32, segments: &mut Vec<[f32; 4]>) -> Option<Mask> {
-    segments.clear();
+pub(crate) fn rasterize_within(
+    path: &[PathEl],
+    px: f32,
+    segments: &mut Vec<[f32; 4]>,
+    budget: usize,
+) -> Option<Mask> {
     let side = side_limit(px)?;
-    let origin = origin(path, side)?;
-    flatten(path, origin, segments)?;
-    let Some((min, max)) = bounds(
-        segments
-            .iter()
-            .flat_map(|s| [Point::new(s[0], s[1]), Point::new(s[2], s[3])]),
-    ) else {
-        return Some(Mask::default());
-    };
-    let (left, top) = (min.x.floor(), max.y.ceil());
-    let (width, height) = (
-        (max.x.ceil() - left) as usize,
-        (top - min.y.floor()) as usize,
-    );
+    let Flattened {
+        origin,
+        left,
+        top,
+        width,
+        height,
+    } = flattened(path, px, segments)?;
     if width == 0 || height == 0 {
         return Some(Mask::default());
     }
-    if !within_budget(width, height, side, segments.capacity()) {
+    if !within_budget(width, height, side, budget) {
         return None;
     }
     let mut cells = vec![Cell::default(); width * height];
@@ -122,22 +133,106 @@ pub(crate) fn rasterize(path: &[PathEl], px: f32, segments: &mut Vec<[f32; 4]>) 
     ))
 }
 
-fn side_limit(px: f32) -> Option<f32> {
+/// The pixel box `path` flattens into at `px`, relative to `origin`; empty
+/// when the outline covers no pixel box.
+struct Flattened {
+    origin: Point,
+    left: f32,
+    top: f32,
+    width: usize,
+    height: usize,
+}
+
+/// `None` over a limit.
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "the side limit bounds the box before the casts"
+)]
+fn flattened(path: &[PathEl], px: f32, segments: &mut Vec<[f32; 4]>) -> Option<Flattened> {
+    segments.clear();
+    let origin = origin(path, side_limit(px)?)?;
+    flatten(path, origin, segments)?;
+    let Some((min, max)) = bounds(
+        segments
+            .iter()
+            .flat_map(|s| [Point::new(s[0], s[1]), Point::new(s[2], s[3])]),
+    ) else {
+        return Some(Flattened {
+            origin,
+            left: 0.0,
+            top: 0.0,
+            width: 0,
+            height: 0,
+        });
+    };
+    let (left, top) = (min.x.floor(), max.y.ceil());
+    let (width, height) = (
+        (max.x.ceil() - left) as usize,
+        (top - min.y.floor()) as usize,
+    );
+    Some(Flattened {
+        origin,
+        left,
+        top,
+        width,
+        height,
+    })
+}
+
+/// The box, as `[left, top, right, bottom]` in pixels with y up, that
+/// [`rasterize`] would draw `path` into before trimming it to its ink,
+/// empty when it draws nothing; `None` over a limit.
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    reason = "the side limit keeps the box inside i32"
+)]
+pub(crate) fn pixel_box(
+    path: &[PathEl],
+    px: f32,
+    segments: &mut Vec<[f32; 4]>,
+) -> Option<[i32; 4]> {
+    let f = flattened(path, px, segments)?;
+    if f.width == 0 || f.height == 0 {
+        return Some([0; 4]);
+    }
+    let (left, top) = ((f.origin.x + f.left) as i32, (f.origin.y + f.top) as i32);
+    Some([left, top, left + f.width as i32, top - f.height as i32])
+}
+
+/// Grows `segments` to its cap at once, so it never reallocates beside a
+/// buffer charged against the rest of the budget.
+pub(crate) fn reserve_segments(segments: &mut Vec<[f32; 4]>) {
+    segments.clear();
+    segments.reserve_exact(SEGMENT_CAP);
+}
+
+/// Drops the spare capacity of a glyph's only image-sized buffer when the
+/// budget holds both it and the smaller copy a relocating shrink makes;
+/// otherwise the capacity, already charged, stays with the buffer.
+pub(crate) fn shrink_within(buffer: &mut Vec<u8>) {
+    if buffer.capacity() + buffer.len() <= IMAGE_BUDGET {
+        buffer.shrink_to_fit();
+    }
+}
+
+/// The longest side any glyph raster at `px` may have.
+pub(crate) fn side_limit(px: f32) -> Option<f32> {
     (px.is_finite() && px > 0.0).then(|| (8.0 * px).clamp(64.0, MAX_SIDE))
 }
 
-/// Every working buffer of one rasterization, charged before the first is
-/// allocated: `i32` area and cover per cell, the segment scratch as
-/// allocated, the A8 output. Nothing else is allocated while the cells
-/// live: [`trim`] works in place.
-fn within_budget(width: usize, height: usize, side: f32, segment_capacity: usize) -> bool {
+/// Every working buffer of one rasterization sized from its box, charged
+/// before the first is allocated: `i32` area and cover per cell, and the
+/// A8 output. Nothing else is allocated while the cells live: [`trim`]
+/// works in place.
+fn within_budget(width: usize, height: usize, side: f32, budget: usize) -> bool {
     width as f32 <= side
         && height as f32 <= side
         && width
             .checked_mul(height)
             .and_then(|cells| cells.checked_mul(CELL_BYTES + 1))
-            .and_then(|bytes| bytes.checked_add(segment_capacity.checked_mul(SEGMENT_BYTES)?))
-            .is_some_and(|bytes| bytes <= WORKING_SET)
+            .is_some_and(|bytes| bytes <= budget)
 }
 
 fn bounds(points: impl IntoIterator<Item = Point>) -> Option<(Point, Point)> {
@@ -267,6 +362,9 @@ fn line(out: &mut Vec<[f32; 4]>, from: Point, to: Point) -> Option<Point> {
     if from != to {
         if out.len() == SEGMENT_CAP {
             return None;
+        }
+        if out.len() == out.capacity() {
+            out.reserve_exact(out.len().max(64).min(SEGMENT_CAP - out.len()));
         }
         out.push([from.x, from.y, to.x, to.y]);
     }

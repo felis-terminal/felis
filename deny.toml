@@ -46,7 +46,7 @@ deny = [
   ], reason = "only felis-shaping shapes text" },
   { crate = "swash", wrappers = [
     "felis-shaping",
-  ], reason = "only felis-shaping rasterizes color glyphs" },
+  ], reason = "test-only reference in felis-shaping" },
   # The crate graph (docs/reference/workspace.md "Dependency direction"): each
   # felis-* library is admitted only as a direct dependency of the parents
   # listed here.

@@ -285,7 +285,7 @@ probes, and of the bench scripts, are documented where they are read.
 | `FELIS_TEST_FONT_DIR`       | Directory holding the pinned test fonts. Font-dependent tests load their faces from it alone and panic when it is unset; they are compiled out on Windows, whose CI runs outside the dev shell. `dev/flake-module.nix` exports it. |
 | `FELIS_SMOKE_MARKER`        | A non-empty value puts the client in frontend-smoke mode: type the marker, read it back from the rendered frame, exit. `just smoke` and `just smoke-headless` set it.                                                              |
 | `UPDATE_SCHEMA`             | Rewrite the committed JSON schemas instead of asserting byte equality. `just schema` sets it.                                                                                                                                      |
-| `UPDATE_GOLDEN`             | Rewrite the golden JSON protocol messages and cell-instance fixtures from a live run. `just golden` sets it.                                                                                                                       |
+| `UPDATE_GOLDEN`             | Rewrite the golden JSON protocol messages, cell-instance fixtures and felis-shaping's font goldens from a live run. `just golden` sets it.                                                                                         |
 | `VTTEST_BIN`, `ESCTEST_BIN` | Absolute path to the conformance binary, which must exist; without it the harness resolves the name on `PATH`.                                                                                                                     |
 | `FELIS_SYSTEMD_TESTS`       | `1` runs the systemd hand-off tests against the live user manager (a transient unit per test, on its own socket path); without it they return at once.                                                                             |
 | `FELIS_PROSE_CHECK_SKIP`    | `1` makes the prose gate exit zero, for a commit whose prose is checked another way.                                                                                                                                               |
@@ -298,15 +298,15 @@ published Forgejo release to GitHub, crates.io, and the Homebrew tap ([workspace
 
 ### Workflows
 
-| Workflow      | Triggers                  | Purpose                                                                                                        |
-| ------------- | ------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `pr.yml`      | Push, PR                  | `nix flake check`, the Cargo suite (clippy, nextest, `just deny`, tool tests), the wire check, Linux smoke.    |
-| `windows.yml` | Push, PR                  | Windows clippy, nextest, headless smoke, and package artifact.                                                 |
-| `darwin.yml`  | Push, PR                  | aarch64-darwin package and release-archive build, with the archive's manifest, signature, and smoke checks.    |
-| `fuzz.yml`    | Push, PR, Nightly, Manual | Fuzz smoke on push and PR; the nightly long run with corpus minification.                                      |
-| `kani.yml`    | Weekly, PR, Manual        | Every Kani proof; on a PR, only when `dev/packages/kani/` changes.                                             |
-| `bench.yml`   | PR, PR label change       | Instruction-count regression gate against the PR's base commit.                                                |
-| `release.yml` | Tag (`v*`)                | The release gate on the tag's revision, then the release assets ([workspace.md](workspace.md) "Release gate"). |
+| Workflow      | Triggers                  | Purpose                                                                                                                                       |
+| ------------- | ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pr.yml`      | Push, PR                  | `nix flake check`, the Cargo suite (clippy, nextest, `just deny`, tool tests), the wire check, Linux smoke.                                   |
+| `windows.yml` | Push, PR                  | Windows clippy, nextest, headless smoke, and package artifact.                                                                                |
+| `darwin.yml`  | Push, PR                  | aarch64-darwin package and release-archive build, with the archive's manifest, signature, and smoke checks, and felis-shaping's font goldens. |
+| `fuzz.yml`    | Push, PR, Nightly, Manual | Fuzz smoke on push and PR; the nightly long run with corpus minification.                                                                     |
+| `kani.yml`    | Weekly, PR, Manual        | Every Kani proof; on a PR, only when `dev/packages/kani/` changes.                                                                            |
+| `bench.yml`   | PR, PR label change       | Instruction-count regression gate against the PR's base commit.                                                                               |
+| `release.yml` | Tag (`v*`)                | The release gate on the tag's revision, then the release assets ([workspace.md](workspace.md) "Release gate").                                |
 
 ### Frontend smoke test
 

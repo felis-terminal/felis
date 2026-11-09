@@ -13,7 +13,6 @@ use super::{
     fallback_language, instance_at,
 };
 use crate::{FaceStyle, FontStyle, InstalledFamily, ShapingError, map_face_file};
-use swash::FontDataRef;
 use tracing::debug;
 use windows::{
     System::UserProfile::GlobalizationPreferences,
@@ -592,9 +591,9 @@ fn named_instance(
         .iter()
         .map(|value| (value.axisTag.0.swap_bytes(), value.value))
         .collect();
-    let data = map_face_file(path).ok()?;
-    let font = FontDataRef::new(&data)?.get(usize::try_from(index).ok()?)?;
-    instance_at(font, &position)
+    let data: crate::FontBytes = std::sync::Arc::new(map_face_file(path).ok()?);
+    let font = crate::metadata::model_face(&data, index)?;
+    instance_at(&font, &position)
 }
 
 #[cfg(test)]
@@ -693,7 +692,7 @@ mod tests {
         let weight = |style| {
             let index = stack.resolve_styled_index('\u{6F22}', style);
             let font = stack.font_at(index, style);
-            font.font_ref().attributes().weight().0
+            crate::metadata::attributes(font.bytes.as_ref().as_ref(), font.index).weight
         };
         assert!(weight(bold) > weight(FontStyle::REGULAR));
     }
