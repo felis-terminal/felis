@@ -46,12 +46,20 @@ unicode-width = { workspace = true }
 yeslogic-fontconfig-sys = { workspace = true }
 libloading = { workspace = true }
 
+# The instruction-count gate runs under Valgrind, which felis uses on Linux only.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+gungraun = { workspace = true }
+
 [[bench]]
 name = "shape_cache"
 harness = false
 
 [[bench]]
 name = "shape_run"
+harness = false
+
+[[bench]]
+name = "gungraun_gate"
 harness = false
 
 [lints]

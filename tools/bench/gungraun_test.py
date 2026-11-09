@@ -24,6 +24,7 @@ def make_summary(
     old: int | None,
     regressed: bool,
     group: str = "gate",
+    package: str = "felis-client-core",
 ) -> None:
     values = {"new": new} if old is None else {"new": new, "old": old}
     regressions = (
@@ -41,7 +42,14 @@ def make_summary(
         if regressed
         else []
     )
-    d = home / "felis-client-core" / "gungraun_gate" / group / f"{function}.{bench_id}"
+    # The layout gungraun writes under the `--home` the gate passes a
+    # crate, with the bench executable run directly.
+    d = (
+        gungraun.crate_home(home, package)
+        / "gungraun_gate"
+        / group
+        / f"{function}.{bench_id}"
+    )
     d.mkdir(parents=True)
     d.joinpath("summary.json").write_text(
         json.dumps(
@@ -77,12 +85,14 @@ def run_verdict(
         contextlib.redirect_stdout(io.StringIO()),
         contextlib.redirect_stderr(io.StringIO()),
     ):
-        return gungraun.verdict(rows, base_ids, rc, accepted, 2.0)
+        return gungraun.verdict(
+            rows, base_ids, {"felis-client-core": rc}, accepted, 2.0
+        )
 
 
 BASE_IDS = {
-    "gungraun_gate::gate::daemon_side::csi_redraw",
-    "gungraun_gate::gate::daemon_side::shell_prompt",
+    "felis-client-core::gungraun_gate::gate::daemon_side::csi_redraw",
+    "felis-client-core::gungraun_gate::gate::daemon_side::shell_prompt",
 }
 
 
@@ -178,3 +188,39 @@ def test_other_labels_do_not_accept():
 @pytest.mark.parametrize("labels", ["", "null", "[]"])
 def test_absent_labels_do_not_accept(labels):
     assert not gungraun.label_accepts(labels)
+
+
+def test_same_bench_path_in_two_crates_keeps_separate_keys(tmp_path):
+    make_summary(tmp_path, "run", "warm", 100, 100, False)
+    make_summary(tmp_path, "run", "warm", 100, 100, False, package="felis-shaping")
+    rows = gungraun.collect(tmp_path)
+    assert len({row["key"] for row in rows}) == 2
+
+
+def run_two_crate_verdict(tmp_path, rcs: dict[str, int], accepted: bool) -> int:
+    make_summary(tmp_path, "daemon_side", "csi_redraw", 100, 100, False)
+    make_summary(
+        tmp_path, "shape_cache", "miss", 105, 100, True, "shaping", "felis-shaping"
+    )
+    rows = gungraun.collect(tmp_path)
+    with (
+        contextlib.redirect_stdout(io.StringIO()),
+        contextlib.redirect_stderr(io.StringIO()),
+    ):
+        return gungraun.verdict(rows, {r["key"] for r in rows}, rcs, accepted, 2.0)
+
+
+SHAPING_REGRESSED = {"felis-client-core": 0, "felis-shaping": gungraun.REGRESSION_RC}
+
+
+def test_a_second_crate_regression_passes_with_the_accept_label(tmp_path):
+    assert run_two_crate_verdict(tmp_path, SHAPING_REGRESSED, accepted=True) == 0
+
+
+def test_a_second_crate_regression_fails_without_the_accept_label(tmp_path):
+    assert run_two_crate_verdict(tmp_path, SHAPING_REGRESSED, accepted=False) == 1
+
+
+def test_a_regression_exit_is_matched_to_its_own_crate(tmp_path):
+    rcs = {"felis-client-core": gungraun.REGRESSION_RC, "felis-shaping": 0}
+    assert run_two_crate_verdict(tmp_path, rcs, accepted=True) == 1

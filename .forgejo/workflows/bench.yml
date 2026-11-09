@@ -6,13 +6,12 @@ on:
     # labeled/unlabeled re-run the gate when the override label changes.
     types: [opened, synchronize, reopened, labeled, unlabeled]
     # Excludes the crates the gated benches cannot link rather than listing
-    # the ones they do: a new dependency of felis-daemon or felis-client-core
-    # then still runs the gate instead of silently skipping it.
+    # the ones they do: a new dependency of a gated bench then still runs the
+    # gate instead of silently skipping it.
     paths:
       - '**'
       - '!docs/**'
       - '!**/*.md'
-      - '!crates/felis-shaping/**'
       - '!crates/felis-render-core/**'
       - '!crates/felis-render-wgpu/**'
       - '!crates/felis-client/**'

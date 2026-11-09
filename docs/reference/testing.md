@@ -196,14 +196,14 @@ caller; the pull-request gate is the instruction-count gate below.
 ### Instruction-count gate
 
 `bench.yml` runs `tools/bench/gungraun.py gate` on every pull request against its base commit. It counts the
-instructions (callgrind's `Ir`) of the `gungraun_gate` bench in `felis-client-core`, which shares its workloads with
-`end_to_end_throughput`, and:
+instructions (callgrind's `Ir`) of the `gungraun_gate` benches in `felis-client-core` and `felis-shaping`, which share
+their workloads with the Criterion benches `end_to_end_throughput`, `shape_cache`, and `shape_run`, and:
 
 - fails when any benchmark's `Ir` exceeds the base's by more than 2%;
 - passes a regression when the pull request carries the `perf-regression-accepted` label, by convention with a PR
   comment stating why the cost is accepted;
 - fails when the bench run breaks or a benchmark the base ran is missing from the head run, label or not;
-- skips when the base revision has no `gungraun_gate` bench.
+- skips a crate whose `gungraun_gate` bench the base revision lacks.
 
 The gate runs on Linux only. The dev shell provides `valgrind` and `gungraun-runner`, and the runner must be the exact
 version of the `gungraun` crate in `Cargo.lock`: `dev/packages/gungraun-runner.nix` pins it, and evaluating the dev
