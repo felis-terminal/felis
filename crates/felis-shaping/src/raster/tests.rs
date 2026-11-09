@@ -1,13 +1,9 @@
-//! The outline path against swash's, which it replaces at parity.
+//! The outline path pinned by its golden, and the hinting each mode picks.
 #![cfg(not(windows))]
 
 use std::fmt::Write as _;
 
 use skrifa::{HintOptions, RasterTarget, ScalerFont};
-use swash::{
-    scale::{Render, ScaleContext, Source},
-    zeno::Format,
-};
 
 use super::{Hinting, OutlineBackend, RasterOptions, SkrifaOutlines, scaler_font};
 use crate::{
@@ -58,155 +54,6 @@ fn corpus() -> Vec<(String, Font)> {
     faces
 }
 
-/// `(left, top, width, height)` of the nonzero pixels.
-fn ink_box(
-    data: &[u8],
-    width: i32,
-    height: i32,
-    left: i32,
-    top: i32,
-) -> Option<(i32, i32, i32, i32)> {
-    let inked = |r: i32, c: i32| data[(r * width + c) as usize] != 0;
-    let rows: Vec<i32> = (0..height)
-        .filter(|&r| (0..width).any(|c| inked(r, c)))
-        .collect();
-    let cols: Vec<i32> = (0..width)
-        .filter(|&c| (0..height).any(|r| inked(r, c)))
-        .collect();
-    let (r0, r1, c0, c1) = (*rows.first()?, *rows.last()?, *cols.first()?, *cols.last()?);
-    Some((left + c0, top - r0, c1 - c0 + 1, r1 - r0 + 1))
-}
-
-#[derive(Default)]
-struct Parity {
-    glyphs: usize,
-    inked_pixels: usize,
-    within: usize,
-    worst_delta: u8,
-    worst_delta_at: String,
-    worst_placement: i32,
-    worst: String,
-}
-
-impl Parity {
-    fn compare(&mut self, label: &str, ours: &GlyphBitmap, theirs: &swash::scale::image::Image) {
-        let p = theirs.placement;
-        let (ow, oh) = (ours.width().cast_signed(), ours.height().cast_signed());
-        let (tw, th) = (p.width.cast_signed(), p.height.cast_signed());
-        let their_ink = theirs.data.iter().any(|&v| v != 0);
-        if ours.is_blank() && !their_ink {
-            return;
-        }
-        self.glyphs += 1;
-        let ours_box = (!ours.is_blank()).then_some((ours.left, ours.top, ow, oh));
-        let placement = match (ours_box, ink_box(&theirs.data, tw, th, p.left, p.top)) {
-            (Some(a), Some(b)) => [a.0 - b.0, a.1 - b.1, a.2 - b.2, a.3 - b.3]
-                .into_iter()
-                .map(i32::abs)
-                .max()
-                .unwrap_or(0),
-            _ => i32::MAX,
-        };
-        if placement > self.worst_placement {
-            self.worst_placement = placement;
-            self.worst = format!(
-                "{label}: ours {ours_box:?}, swash ink {:?}",
-                ink_box(&theirs.data, tw, th, p.left, p.top)
-            );
-        }
-        let ours_px = ours.pixels().as_bytes();
-        let at = |data: &[u8], w: i32, h: i32, left: i32, top: i32, x: i32, y: i32| {
-            let (c, r) = (x - left, top - y);
-            if (0..w).contains(&c) && (0..h).contains(&r) {
-                data[(r * w + c) as usize]
-            } else {
-                0
-            }
-        };
-        let (x0, x1) = (ours.left.min(p.left), (ours.left + ow).max(p.left + tw));
-        let (y0, y1) = ((ours.top - oh).min(p.top - th), ours.top.max(p.top));
-        for y in (y0 + 1)..=y1 {
-            for x in x0..x1 {
-                let a = at(ours_px, ow, oh, ours.left, ours.top, x, y);
-                let b = at(&theirs.data, tw, th, p.left, p.top, x, y);
-                if a == 0 && b == 0 {
-                    continue;
-                }
-                self.inked_pixels += 1;
-                let delta = a.abs_diff(b);
-                self.within += usize::from(delta <= 8);
-                if delta > self.worst_delta {
-                    self.worst_delta = delta;
-                    self.worst_delta_at = format!("{label} at ({x},{y})");
-                }
-            }
-        }
-    }
-
-    fn report(&self, mode: &str) -> String {
-        let mut line = String::new();
-        let share = self.within as f64 / self.inked_pixels.max(1) as f64;
-        let _ = write!(
-            line,
-            "{mode}: {} glyphs, {} inked pixels, {:.4}% within 8/255, worst |Δ| {}/255 ({}), worst placement Δ {} px ({})",
-            self.glyphs,
-            self.inked_pixels,
-            share * 100.0,
-            self.worst_delta,
-            self.worst_delta_at,
-            self.worst_placement,
-            self.worst,
-        );
-        line
-    }
-}
-
-fn differential(hinted: bool) -> Parity {
-    let raster = if hinted {
-        RasterOptions::hinted()
-    } else {
-        RasterOptions::NEVER_HINTED
-    };
-    let mut parity = Parity::default();
-    let mut swash_ctx = ScaleContext::new();
-    let mut outlines = SkrifaOutlines::default();
-    for (name, face) in corpus() {
-        let font = with_raster(&face, raster);
-        let chars = ('!'..='~')
-            .chain(SYMBOLS.chars())
-            .filter(|&c| font.has_glyph(c));
-        for c in chars {
-            let glyph = font.swash_ref().charmap().map(c);
-            for px in 10..=40 {
-                let px = px as f32;
-                let mut scaler = swash_ctx
-                    .builder(font.swash_ref())
-                    .size(px)
-                    .hint(hinted)
-                    .normalized_coords(font.swash_coords())
-                    .build();
-                let theirs = Render::new(&[Source::Outline])
-                    .format(Format::Alpha)
-                    .render(&mut scaler, glyph)
-                    .expect("swash draws every corpus outline");
-                let ours = outlines
-                    .coverage(&font, u32::from(glyph), px)
-                    .expect("an outline");
-                parity.compare(&format!("{name} {c:?} {px}px"), &ours, &theirs);
-            }
-        }
-    }
-    parity
-}
-
-fn assert_parity(parity: &Parity, mode: &str) {
-    let report = parity.report(mode);
-    eprintln!("{report}");
-    assert!(parity.glyphs > 1000, "{report}");
-    assert!(parity.worst_placement <= 1, "{report}");
-    assert!(parity.within * 100 >= parity.inked_pixels * 99, "{report}");
-}
-
 /// Every corpus glyph at 10–40 px, hinted and unhinted, one digest per
 /// face, mode and size.
 #[test]
@@ -236,16 +83,6 @@ fn outlines_match_their_golden() {
         }
     }
     assert_golden("outlines.txt", &out);
-}
-
-#[test]
-fn hinted_outlines_match_swash_within_tolerance() {
-    assert_parity(&differential(true), "hinted (Lcd + preserve)");
-}
-
-#[test]
-fn unhinted_outlines_match_swash_without_hinting_within_tolerance() {
-    assert_parity(&differential(false), "unhinted");
 }
 
 /// A face renamed onto the hint-reliant name list, so skrifa treats it
@@ -350,9 +187,9 @@ fn hintslight_and_hintfull_draw_different_bitmaps() {
         .expect("the variable face moves");
     let draw = |hinting| {
         let font = with_raster(&face, RasterOptions::for_face(Some(hinting)));
-        let glyph = font.swash_ref().charmap().map('m');
+        let glyph = font.glyph_for('m').expect("the face maps m");
         SkrifaOutlines::default()
-            .coverage(&font, u32::from(glyph), 15.0)
+            .coverage(&font, glyph, 15.0)
             .expect("an outline")
     };
     let slight = draw(FaceHinting::Slight { autohint: false });

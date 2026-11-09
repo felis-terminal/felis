@@ -55,7 +55,7 @@ pub struct GlyphSlot {
     pub atlas_px: [u32; 2],
     /// Pixel size of the glyph bitmap (not the cell).
     pub size_px: [u32; 2],
-    /// `(left, top)` from the cell's `(0, baseline)` origin, per swash.
+    /// `(left, top)` from the cell's `(0, baseline)` origin, as rasterized.
     pub offset_px: [i32; 2],
     /// True when the bitmap lives in the RGBA color atlas.
     pub is_color: bool,
@@ -188,7 +188,7 @@ pub struct GlyphIndex {
     placed_slots: usize,
     /// Run-level shape memo per [`FontStyle`] for borrow-keyed `&str` lookup.
     /// Text and style suffice as keys because font, size, and features are fixed.
-    /// Avoids Swash cluster-analysis and GSUB costs on every frame.
+    /// Avoids shaping costs on every frame.
     shaped_runs: [HashMap<String, Vec<ShapedGlyph>>; 4],
     /// Overlay clusters (pre-edit, bar labels) shaped like a grid cluster
     /// cell. Lives here so a font, size or feature reload drops it with
@@ -1172,7 +1172,7 @@ impl GridWalker {
     /// index's slots still hold everything the last walk put there, and
     /// every row otherwise. With empty `features` and no interned
     /// clusters this avoids shaping overhead. `shaper` is borrowed
-    /// mutably so Swash's feature cache on `ShapeContext` stays resident.
+    /// mutably so its shape-plan cache stays resident.
     pub fn walk(
         &mut self,
         index: &mut GlyphIndex,
@@ -1626,7 +1626,7 @@ mod tests {
             (large.atlas_px, large.size_px),
             "sized variant must occupy a different atlas rect"
         );
-        // Generous slack: swash's hinted metrics are not exactly 2×.
+        // Generous slack: hinted metrics are not exactly 2×.
         assert!(
             large.size_px[1] > small.size_px[1],
             "scaled bitmap height ({}) must exceed default ({})",
@@ -1896,7 +1896,7 @@ mod tests {
         let small = idx.slot('A', h, frac_half_sk).expect("fractional slot");
         let mid = idx.slot('A', h, default_sk).expect("default slot");
         let large = idx.slot('A', h, scale_2_sk).expect("integer scale=2 slot");
-        // swash's hinted metrics are not strictly proportional; compare
+        // Hinted metrics are not strictly proportional; compare
         // the ordering, not exact ratios.
         assert!(
             small.size_px[1] < mid.size_px[1],

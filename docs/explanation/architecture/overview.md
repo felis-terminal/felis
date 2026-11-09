@@ -491,9 +491,9 @@ would remove that pass at the cost of putting each backend's record shape back i
   belongs in `tests/` (the guard shape above). _Revisit if_ a fixture copied into several crates' tests diverges between
   the copies in a way that lets a defect through.
 - The renderer-neutral code spread over `felis-shaping` and `felis-client-core` instead of a crate of its own: both
-  crates exist, so no new seam looks needed. But `felis-client-core` bans `swash`, which the box-drawing rasterizer
-  reaches through `felis-shaping`'s bitmap types, and `felis-shaping` would gain the grid's color and selection
-  vocabulary, which none of its shaping work reads.
+  crates exist, so no new seam looks needed. But `felis-client-core` bans the font stack (`harfrust`, `skrifa`), which
+  the box-drawing rasterizer reaches through `felis-shaping`'s bitmap types, and `felis-shaping` would gain the grid's
+  color and selection vocabulary, which none of its shaping work reads.
 - A crate between `felis-protocol` and `felis-transport` to hold the shared connection driver: one module in a crate of
   its own, drawing a seam a repo split would have to un-draw. The driver lives in `felis-transport`, the first crate
   that already has both the protocol vocabulary and `tokio` ([ipc.md](ipc.md) "Why the driver lives in

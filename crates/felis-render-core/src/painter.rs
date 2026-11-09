@@ -489,7 +489,7 @@ impl<'a, A: AtlasView> CellPainter<'a, A> {
         };
         // `layout_scale` (= `s`) matches the screen's block stamping in
         // `dispatch_osc_66`; `glyph_scale` (= `s × n/d`, or `s`) is what
-        // swash rasterized against and scales the baseline.
+        // the glyph was rasterized at and scales the baseline.
         let layout_scale = sizing_scale_for_layout(sizing);
         let glyph_scale = sizing_glyph_scale(sizing);
         let scaled_ascent = self.metrics.baseline(glyph_scale, layout_scale);
@@ -938,7 +938,7 @@ fn cluster_glyph_quads<'g, A: AtlasView>(
                 // default path (`scale == 1`) byte-identical to `b + x`.
                 let x_base = pen.origin[0] + *x;
                 let gx = cg.x_offset_px.mul_add(pen.glyph_scale, x_base) + slot.offset_px[0] as f32;
-                // swash reports GPOS y in font space (y-up); screen space
+                // The shaper reports GPOS y in font space (y-up); screen space
                 // is y-down.
                 let y_base = pen.origin[1] - slot.offset_px[1] as f32;
                 let gy = cg.y_offset_px.mul_add(-pen.glyph_scale, y_base);
@@ -1327,7 +1327,7 @@ mod tests {
 
     use super::*;
 
-    /// Whitespace returns `None`, mimicking swash.
+    /// Whitespace returns `None`, as a blank glyph has no slot.
     struct MockAtlas {
         map: HashMap<char, GlyphSlot>,
         gid_map: HashMap<felis_shaping::GlyphId, GlyphSlot>,

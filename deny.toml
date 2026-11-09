@@ -44,9 +44,13 @@ deny = [
   { crate = "harfrust", wrappers = [
     "felis-shaping",
   ], reason = "only felis-shaping shapes text" },
-  { crate = "swash", wrappers = [
+  { crate = "skrifa", wrappers = [
     "felis-shaping",
-  ], reason = "test-only reference in felis-shaping" },
+  ], reason = "only felis-shaping reads fonts" },
+  { crate = "read-fonts", wrappers = [
+    "harfrust",
+    "skrifa",
+  ], reason = "felis reads fonts through harfrust and skrifa" },
   # The crate graph (docs/reference/workspace.md "Dependency direction"): each
   # felis-* library is admitted only as a direct dependency of the parents
   # listed here.

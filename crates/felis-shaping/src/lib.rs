@@ -40,8 +40,7 @@ mod presentation;
 mod provider;
 mod raster;
 #[cfg(test)]
-mod swash_parity;
-#[cfg(test)]
+#[cfg(not(windows))]
 mod test_support;
 
 use presentation::is_emoji_presentation;
@@ -408,7 +407,7 @@ impl Font {
         self.advance_width(self.glyph_for(c)?, px)
     }
 
-    /// swash reads a varied advance from `HVAR` alone; skrifa falls back
+    /// `hmtx` and `HVAR` alone miss a varied advance; skrifa falls back
     /// to `gvar`'s phantom points, which a face without `HVAR` (Monaspace's
     /// variable builds) varies its width through.
     fn advance_width(&self, glyph_id: GlyphId, px: f32) -> Option<f32> {
@@ -486,19 +485,6 @@ impl Font {
             .collect::<Vec<_>>()
             .join(", ");
         format!("{name} ({axes})")
-    }
-
-    /// The same face as swash reads it, for the differentials that hold
-    /// felis to swash's output.
-    #[cfg(test)]
-    pub(crate) fn swash_ref(&self) -> swash::FontRef<'_> {
-        swash::FontRef::from_index(self.bytes.as_ref().as_ref(), self.index as usize)
-            .expect("a face that loaded parses for swash")
-    }
-
-    #[cfg(test)]
-    pub(crate) fn swash_coords(&self) -> Vec<i16> {
-        self.coords.iter().map(|c| c.to_bits()).collect()
     }
 
     #[must_use]
@@ -4875,7 +4861,7 @@ mod tests {
         }
     }
 
-    /// Monaspace's `calt` texture healing is on by default (swash, like
+    /// Monaspace's `calt` texture healing is on by default (harfrust, like
     /// `HarfBuzz` and CSS, applies `calt` unrequested) and `-calt` turns
     /// it off. Needs the pinned devshell font: `FiraCode`'s calt never
     /// yields a single ligature glyph.
