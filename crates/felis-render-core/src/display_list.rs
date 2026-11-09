@@ -93,6 +93,27 @@ pub struct RowPaint {
 }
 
 impl RowPaint {
+    /// Widens the last rect over `rect` when `rect` continues it as one
+    /// band of one color. Exact because a backend draws `rects` in list
+    /// order without blending: the union covers the same pixels with the
+    /// same color.
+    #[allow(
+        clippy::float_cmp,
+        reason = "adjacency of cell-grid coordinates; a rounding miss only declines the merge"
+    )]
+    pub fn push_rect_merged(&mut self, rect: Rect) {
+        if let Some(last) = self.rects.last_mut()
+            && last.color == rect.color
+            && last.origin_px[1] == rect.origin_px[1]
+            && last.size_px[1] == rect.size_px[1]
+            && last.origin_px[0] + last.size_px[0] == rect.origin_px[0]
+        {
+            last.size_px[0] += rect.size_px[0];
+            return;
+        }
+        self.rects.push(rect);
+    }
+
     pub fn clear(&mut self) {
         self.rects.clear();
         self.glyphs.clear();

@@ -40,7 +40,8 @@ redraw request, so a burst of frames costs one paint ([damage-tracking.md](damag
 5. The renderer issues draw calls inside one render pass, in the
    layered order:
      a. clear (load op) + images z below the bg tier
-     b. cell backgrounds (incl. cursor/selection markers, which are
+     b. cell backgrounds other than the default, which the clear
+        already holds (incl. cursor/selection markers, which are
         background-layer instances, not a separate pass)
      c. images z below text but above bg
      d. cell glyphs (incl. box-drawing and hyperlink underlines)
@@ -576,6 +577,9 @@ _Revisit if_ a real consumer needs the vertex stage.
   On the client, anything that changes sets one sticky redraw request, and the next frame rebuilds the rows the shadow
   marked ([damage-tracking.md](damage-tracking.md)). felis does not skip frames for energy reasons (a screen with a
   blinking cursor still ticks).
+- **A background quad per run, not per cell.** A cell on the default background draws no quad, and a row's run of one
+  background color draws one. A software adapter (llvmpipe, WARP) pays per quad more than per pixel, and a quad per cell
+  made the background tier most of its frame.
 
 ## Prior art and alternatives considered
 
