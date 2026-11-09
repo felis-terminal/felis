@@ -28,8 +28,8 @@ png, regex, tokio), under a single-developer effort budget that rules out mainta
   the parser.
 
 The known costs, accepted up front: winit's IME on Linux has rough edges, and matching Kitty's IME quality there takes
-Wayland-specific work. The text-shaping path is settled on harfrust (see "harfrust, skrifa and swash" below), and wgpu's
-small runtime overhead is covered under "wgpu" below.
+Wayland-specific work. The text-shaping path is settled on harfrust (see "harfrust and skrifa" below), and wgpu's small
+runtime overhead is covered under "wgpu" below.
 
 ### Tokio (multi-thread)
 
@@ -250,12 +250,12 @@ since the runner already runs the change under test at that level.
 
 ## Text shaping and rasterization
 
-### harfrust, skrifa and swash
+### harfrust and skrifa
 
-harfrust (<https://github.com/harfbuzz/harfrust>) shapes, skrifa (<https://github.com/googlefonts/fontations>) draws
-monochrome outlines through a felis-owned coverage rasterizer, and swash (<https://github.com/dfrg/swash>) draws color
-glyphs; the shaper choice is in [text-shaping.md](rendering/text-shaping.md) "Prior art and alternatives considered".
-harfrust is MIT and skrifa and swash are dual Apache-2.0 / MIT, all compatible with felis's Apache-2.0.
+harfrust (<https://github.com/harfbuzz/harfrust>) shapes, and skrifa (<https://github.com/googlefonts/fontations>) reads
+the outlines, `COLR` layers and bitmap strikes that felis's own rasterizer and color painter draw; the shaper choice is
+in [text-shaping.md](rendering/text-shaping.md) "Prior art and alternatives considered". harfrust is MIT and skrifa is
+dual Apache-2.0 / MIT, both compatible with felis's Apache-2.0.
 
 ## IPC encoding
 

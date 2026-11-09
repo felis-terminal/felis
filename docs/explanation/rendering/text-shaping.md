@@ -300,14 +300,14 @@ Alacritty/Kitty/Ghostty band (~20–100 MB) instead of far above it. The field a
 (CoreText) or FreeType's path-based `FT_New_Face` (which mmaps on Unix); WezTerm mmaps the file itself and feeds
 FreeType an `FT_Stream` (`wezterm-font/src/ftwrap.rs`), the same shape felis uses.
 
-The cost is one `unsafe` call. swash needs a persistent `&[u8]` to rasterize from, and mapping a file has no safe API,
-so there is no safe route to a file-backed face. `felis-shaping` therefore relaxes the workspace-wide
-`unsafe_code = "deny"` lint crate-wide (the policy lives in `Cargo.toml` / `clippy.toml`), with `Mmap::map` as the
-audited mapping site, carrying a `// SAFETY:` comment. The face providers' platform calls are the relaxation's other
-users: libfontconfig on Linux is a C ABI loaded at run time with no safe binding, and the CoreText and DirectWrite
-bindings expose their calls as `unsafe`. A mapped file truncated underneath the process would SIGBUS; accepted, because
-the mapped paths are root-owned read-only OS font assets that are not rewritten in place during a session, the identical
-trade-off FreeType already makes.
+The cost is one `unsafe` call. The read-fonts font model reads tables in place from a persistent `&[u8]`, and mapping a
+file has no safe API, so there is no safe route to a file-backed face. `felis-shaping` therefore relaxes the
+workspace-wide `unsafe_code = "deny"` lint crate-wide (the policy lives in `Cargo.toml` / `clippy.toml`), with
+`Mmap::map` as the audited mapping site, carrying a `// SAFETY:` comment. The face providers' platform calls are the
+relaxation's other users: libfontconfig on Linux is a C ABI loaded at run time with no safe binding, and the CoreText
+and DirectWrite bindings expose their calls as `unsafe`. A mapped file truncated underneath the process would SIGBUS;
+accepted, because the mapped paths are root-owned read-only OS font assets that are not rewritten in place during a
+session, the identical trade-off FreeType already makes.
 
 Rejected alternatives:
 
@@ -460,8 +460,7 @@ HarfBuzz's algorithm in pure Rust on the same read-fonts font model skrifa draws
 and one font stack ships. Rejected: **swash**, which never consults the format 14 subtable and leaves a combining mark
 unattached at its full advance on the pinned monospace face (measured), so a cluster whose mark has no precomposed form
 draws two cells wide and is shrunk to fit; **HarfBuzz through FFI**, a C dependency and lifetime bridging for the
-algorithm harfrust ports; **rustybuzz**, which reads fonts through a third parser (ttf-parser) beside read-fonts and
-swash's own.
+algorithm harfrust ports; **rustybuzz**, which reads fonts through a second parser (ttf-parser) beside read-fonts.
 
 **Ligatures: shape, then validate.** A general shaper does not know about cells. felis shapes a run once and checks each
 ligature's advances against `n_graphemes × cell_width`; a ligature that would overflow its cell budget falls back to

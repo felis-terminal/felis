@@ -39,7 +39,6 @@ windows-core = { workspace = true }
 [dev-dependencies]
 criterion = { workspace = true }
 proptest = { workspace = true }
-swash = { workspace = true }
 unicode-width = { workspace = true }
 
 # The fontconfig provider's tests also run on other Unix hosts that have

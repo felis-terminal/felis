@@ -1,0 +1,79 @@
+regular [] 10 59882aa7bfb9bba9
+regular [] 13 0f79db174c1212d5
+regular [] 16 8093d62182f0838d
+regular [] 21.5 240cec540f2ae19d
+regular [] 40 13e4deeba27c7dcd
+regular ["-calt"] 10 e179be2eba3755c3
+regular ["-calt"] 13 022309b1a3ced327
+regular ["-calt"] 16 04ff84285a60cc2b
+regular ["-calt"] 21.5 5a6ac6b1f06c754f
+regular ["-calt"] 40 2294d30f9b2e01eb
+regular ["calt", "liga"] 10 59882aa7bfb9bba9
+regular ["calt", "liga"] 13 0f79db174c1212d5
+regular ["calt", "liga"] 16 8093d62182f0838d
+regular ["calt", "liga"] 21.5 240cec540f2ae19d
+regular ["calt", "liga"] 40 13e4deeba27c7dcd
+regular ["ss01", "ss02", "ss03", "ss04", "ss05", "ss06", "ss07", "ss08", "ss09"] 10 ebe189d668fc8202
+regular ["ss01", "ss02", "ss03", "ss04", "ss05", "ss06", "ss07", "ss08", "ss09"] 13 220b94811327172e
+regular ["ss01", "ss02", "ss03", "ss04", "ss05", "ss06", "ss07", "ss08", "ss09"] 16 42eca5e2608d390e
+regular ["ss01", "ss02", "ss03", "ss04", "ss05", "ss06", "ss07", "ss08", "ss09"] 21.5 7cfffa820bce0be6
+regular ["ss01", "ss02", "ss03", "ss04", "ss05", "ss06", "ss07", "ss08", "ss09"] 40 756b4592227fed32
+regular ["ss03"] 10 f4a316facf40dc9c
+regular ["ss03"] 13 2a60e924f6e1cd84
+regular ["ss03"] 16 77cf2e7aed029320
+regular ["ss03"] 21.5 330f061c8f7cb634
+regular ["ss03"] 40 ec992fcc9ea2b264
+regular ["-calt", "liga 0", "dlig"] 10 8fae51d45739d343
+regular ["-calt", "liga 0", "dlig"] 13 27b1d1d5a6549b2f
+regular ["-calt", "liga 0", "dlig"] 16 f7af8a863236ba8b
+regular ["-calt", "liga 0", "dlig"] 21.5 45d173ff44b0468f
+regular ["-calt", "liga 0", "dlig"] 40 d5945a28b460866f
+wght 700 [] 10 218fc71d169c6c79
+wght 700 [] 13 8849a909b42d958d
+wght 700 [] 16 c8c604103be30755
+wght 700 [] 21.5 b32ee0ed59766d2d
+wght 700 [] 40 f031b78f38aa8a2d
+wght 700 ["-calt"] 10 e179be2eba3755c3
+wght 700 ["-calt"] 13 022309b1a3ced327
+wght 700 ["-calt"] 16 04ff84285a60cc2b
+wght 700 ["-calt"] 21.5 5a6ac6b1f06c754f
+wght 700 ["-calt"] 40 2294d30f9b2e01eb
+wght 700 ["calt", "liga"] 10 218fc71d169c6c79
+wght 700 ["calt", "liga"] 13 8849a909b42d958d
+wght 700 ["calt", "liga"] 16 c8c604103be30755
+wght 700 ["calt", "liga"] 21.5 b32ee0ed59766d2d
+wght 700 ["calt", "liga"] 40 f031b78f38aa8a2d
+wght 700 ["ss01", "ss02", "ss03", "ss04", "ss05", "ss06", "ss07", "ss08", "ss09"] 10 8b28e474d885a92a
+wght 700 ["ss01", "ss02", "ss03", "ss04", "ss05", "ss06", "ss07", "ss08", "ss09"] 13 b99bac424f1e631e
+wght 700 ["ss01", "ss02", "ss03", "ss04", "ss05", "ss06", "ss07", "ss08", "ss09"] 16 ab0127337d4be6d6
+wght 700 ["ss01", "ss02", "ss03", "ss04", "ss05", "ss06", "ss07", "ss08", "ss09"] 21.5 970ba909682e58de
+wght 700 ["ss01", "ss02", "ss03", "ss04", "ss05", "ss06", "ss07", "ss08", "ss09"] 40 e9be192d3724db9a
+wght 700 ["ss03"] 10 58e32203106bd66c
+wght 700 ["ss03"] 13 e454ac26c5557edc
+wght 700 ["ss03"] 16 146d524dcb4f4288
+wght 700 ["ss03"] 21.5 73b905eade0803c4
+wght 700 ["ss03"] 40 fd70f7eb6d181304
+wght 700 ["-calt", "liga 0", "dlig"] 10 8fae51d45739d343
+wght 700 ["-calt", "liga 0", "dlig"] 13 27b1d1d5a6549b2f
+wght 700 ["-calt", "liga 0", "dlig"] 16 f7af8a863236ba8b
+wght 700 ["-calt", "liga 0", "dlig"] 21.5 45d173ff44b0468f
+wght 700 ["-calt", "liga 0", "dlig"] 40 d5945a28b460866f
+"#\u{fe0f}\u{20e3}" face 4 897a90891f934bd3
+"1\u{fe0f}\u{20e3}" face 4 a46ad390d9d70cd4
+"*\u{fe0f}\u{20e3}" face 4 3394896abdd52fb2
+"#\u{20e3}" face 0 7c31e6f71d620276
+"❤\u{fe0f}\u{200d}🔥" face 4 45824a952cf9017f
+"❤\u{fe0f}" face 4 8c5ad2b9427a3d77
+"⭐\u{fe0f}" face 4 9618967b5a98bdfd
+"🀄\u{fe0f}" face 4 1a6ee5d36a31fae6
+"⭐\u{fe0e}" face 0 03f96f224b031e27
+"🀄\u{fe0e}" face 3 e7a5f3a70c343e2c
+"👨\u{200d}👩\u{200d}👧" face 4 746306e7a03ee104
+"👍🏽" face 4 8bc7631084896201
+"🇯🇵" face 4 ceb6aa537ede20d5
+"葛\u{e0100}" face 1 686b1aa2f1d1c7a4
+"葛\u{e0101}" face 1 303a14d49ef2f820
+"葛\u{e0102}" face 1 303a14d49ef2f820
+"é" face 0 c2310c341ae72ad4
+"ñ" face 0 28d958139af432b0
+"e\u{301}" face 0 79d3966a9f68a039

@@ -40,8 +40,7 @@ mod presentation;
 mod provider;
 mod raster;
 #[cfg(test)]
-mod swash_parity;
-#[cfg(test)]
+#[cfg(not(windows))]
 mod test_support;
 
 use presentation::is_emoji_presentation;
@@ -408,7 +407,7 @@ impl Font {
         self.advance_width(self.glyph_for(c)?, px)
     }
 
-    /// swash reads a varied advance from `HVAR` alone; skrifa falls back
+    /// `hmtx` and `HVAR` alone miss a varied advance; skrifa falls back
     /// to `gvar`'s phantom points, which a face without `HVAR` (Monaspace's
     /// variable builds) varies its width through.
     fn advance_width(&self, glyph_id: GlyphId, px: f32) -> Option<f32> {
@@ -486,19 +485,6 @@ impl Font {
             .collect::<Vec<_>>()
             .join(", ");
         format!("{name} ({axes})")
-    }
-
-    /// The same face as swash reads it, for the differentials that hold
-    /// felis to swash's output.
-    #[cfg(test)]
-    pub(crate) fn swash_ref(&self) -> swash::FontRef<'_> {
-        swash::FontRef::from_index(self.bytes.as_ref().as_ref(), self.index as usize)
-            .expect("a face that loaded parses for swash")
-    }
-
-    #[cfg(test)]
-    pub(crate) fn swash_coords(&self) -> Vec<i16> {
-        self.coords.iter().map(|c| c.to_bits()).collect()
     }
 
     #[must_use]
@@ -4875,7 +4861,7 @@ mod tests {
         }
     }
 
-    /// Monaspace's `calt` texture healing is on by default (swash, like
+    /// Monaspace's `calt` texture healing is on by default (harfrust, like
     /// `HarfBuzz` and CSS, applies `calt` unrequested) and `-calt` turns
     /// it off. Needs the pinned devshell font: `FiraCode`'s calt never
     /// yields a single ligature glyph.
@@ -5350,6 +5336,91 @@ mod tests {
             variant.glyphs.first().map(|g| g.glyph_id),
             "a mark after the sequence leaves the base on the variant"
         );
+    }
+
+    /// A mark with no precomposed glyph attaches at the face's anchors, so
+    /// the cluster is no wider than its base.
+    #[cfg(not(windows))]
+    #[test]
+    fn a_mark_without_a_precomposed_glyph_sits_on_its_base() {
+        let stack = pinned_stack(&[]);
+        let style = FontStyle::REGULAR;
+        let mut shaper = Shaper::new();
+        for text in ["q\u{301}", "x\u{323}", "g\u{308}\u{301}"] {
+            let ours = shaper.shape_cluster(&stack, 32.0, style, text);
+            let base = text.chars().next().expect("a base");
+            let font = stack.font_at(ours.font_id, style);
+            let base_advance = font.advance_px(base, 32.0).expect("the face maps the base");
+            let total: f32 = ours.glyphs.iter().map(|g| g.advance_px).sum();
+            assert!(
+                (total - base_advance).abs() <= 0.01,
+                "{text:?}: {:?}",
+                ours.glyphs
+            );
+            assert!(
+                ours.glyphs[1..]
+                    .iter()
+                    .all(|g| g.advance_px == 0.0 && g.x_offset_px != 0.0),
+                "{text:?}: every mark is attached, {:?}",
+                ours.glyphs
+            );
+        }
+    }
+
+    /// The sequence applies before positioning, so the mark sits on the
+    /// variant at no advance of its own.
+    #[cfg(not(windows))]
+    #[test]
+    fn a_mark_after_a_variation_sequence_keeps_the_variant() {
+        let stack = pinned_stack(&[]);
+        let style = FontStyle::REGULAR;
+        let mut shaper = Shaper::new();
+        let variant = shaper
+            .shape_cluster(&stack, 18.0, style, "葛\u{E0100}")
+            .glyphs[0];
+        let default = shaper.shape_cluster(&stack, 18.0, style, "葛").glyphs[0];
+        assert_ne!(variant.glyph_id, default.glyph_id);
+        let marked = shaper.shape_cluster(&stack, 18.0, style, "葛\u{E0100}\u{301}");
+        assert_eq!(marked.glyphs.len(), 2, "{:?}", marked.glyphs);
+        assert_eq!(marked.glyphs[0].glyph_id, variant.glyph_id);
+        assert!(marked.glyphs[1].advance_px == 0.0, "{:?}", marked.glyphs);
+    }
+
+    /// A mark the face does not map shapes as `.notdef` at zero advance,
+    /// as `HarfBuzz` zeroes every mark, so the cluster stays one cell wide.
+    #[cfg(not(windows))]
+    #[test]
+    fn a_mark_the_face_does_not_map_shapes_as_a_zero_advance_notdef() {
+        let probe = load_pinned(TRAK_PROBE);
+        assert!(probe.has_glyph('e') && !probe.has_glyph('\u{301}'));
+        let stack = FontStack::new(probe);
+        let style = FontStyle::REGULAR;
+        let ours = Shaper::new().shape_cluster(&stack, 18.0, style, "e\u{301}");
+        assert_eq!(ours.glyphs.len(), 2, "{:?}", ours.glyphs);
+        assert_eq!(ours.glyphs[1].glyph_id, 0);
+        assert!(ours.glyphs[1].advance_px == 0.0, "{:?}", ours.glyphs);
+        let base = stack.font_at(0, style).advance_px('e', 18.0).expect("an e");
+        assert!((ours.glyphs[0].advance_px - base).abs() <= 0.01);
+    }
+
+    /// A `CBDT` face's empty `glyf` entries are no outline; a text face's
+    /// glyphs are.
+    #[cfg(not(windows))]
+    #[test]
+    fn only_an_inked_outline_counts_as_one() {
+        let emoji = load_pinned("NotoColorEmoji.ttf");
+        let mut mapped = 0;
+        for (cp, _) in emoji.face.charmap().unicodes() {
+            let Some(c) = char::from_u32(cp) else {
+                continue;
+            };
+            assert!(!emoji.has_outline(c), "U+{cp:04X}");
+            mapped += 1;
+        }
+        assert!(mapped > 1000, "{mapped}");
+        let text = Font::load_test_font();
+        assert!(('!'..='~').all(|c| text.has_outline(c)));
+        assert!(!text.has_outline(' '));
     }
 
     /// Unicode's `Default_Ignorable_Code_Point`, the set
