@@ -110,3 +110,10 @@ path = "fuzz_targets/glyph_raster.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "color_glyph"
+path = "fuzz_targets/color_glyph.rs"
+test = false
+doc = false
+bench = false

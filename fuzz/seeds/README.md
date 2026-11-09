@@ -32,6 +32,13 @@ fuzz/seeds/
 ├── glyph_raster/      — `[px:LE f32]` then path commands per the target's
 │                        input convention; one seed on each side of every
 │                        rasterizer limit (side, working set, segment cap)
+├── color_glyph/       — `[px:LE f32][glyph:LE u16]` then a font file: the
+│                        color probes' COLR, CBDT and sbix glyphs, one seed
+│                        per fall-through (v1 only, past the side limit,
+│                        a PNG header past the budget), per path whose
+│                        buffers sit just under the budget, PNGs that
+│                        take a palette's tRNS or 16-bit samples, and a
+│                        layer its hinting lifts past its outline
 └── chord_parser/      — UTF-8 chord strings for
                          `felis_client_core::keymap::Chord::from_str`
                          (the `[keymap]` chord grammar of
