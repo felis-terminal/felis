@@ -41,9 +41,12 @@ deny = [
   { crate = "accesskit_winit", wrappers = [
     "felis-client",
   ], reason = "only felis-client owns a window" },
-  { crate = "swash", wrappers = [
+  { crate = "harfrust", wrappers = [
     "felis-shaping",
   ], reason = "only felis-shaping shapes text" },
+  { crate = "swash", wrappers = [
+    "felis-shaping",
+  ], reason = "only felis-shaping rasterizes color glyphs" },
   # The crate graph (docs/reference/workspace.md "Dependency direction"): each
   # felis-* library is admitted only as a direct dependency of the parents
   # listed here.

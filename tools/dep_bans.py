@@ -37,6 +37,7 @@ RENDER = (
     "felis-shaping",
     "felis-render-core",
     "felis-render-wgpu",
+    "harfrust",
     "swash",
     "zeno",
     "fontdb",
@@ -64,7 +65,7 @@ RENDER = (
     "usvg",
     "resvg",
 )
-GPU_FREE = ("swash", "wgpu", "winit")
+GPU_FREE = ("harfrust", "swash", "wgpu", "winit")
 
 BANS: dict[str, tuple[str, ...]] = {
     "felis-protocol": ASYNC + OS + RENDER,

@@ -17,9 +17,9 @@ Rust is the implementation language, for two structural reasons:
 - The borrow checker prevents whole classes of memory errors in the parser hot loop.
 
 The implementation language itself is below the noise floor for terminal performance (VT parsing and text shaping
-dominate), so the call rests on ergonomics plus the mature ecosystem for the supporting crates felis needs (swash, png,
-regex, tokio), under a single-developer effort budget that rules out maintaining three native GPU backends (see "wgpu"
-below).
+dominate), so the call rests on ergonomics plus the mature ecosystem for the supporting crates felis needs (harfrust,
+png, regex, tokio), under a single-developer effort budget that rules out maintaining three native GPU backends (see
+"wgpu" below).
 
 - Rejected: Zig + libghostty-vt + native Metal/Vulkan. It triples the per-platform GPU work for a solo developer, and
   reusing `libghostty-vt` would tie felis's protocol set to Ghostty's release cadence (felis owns its VT engine; see "VT
@@ -28,8 +28,8 @@ below).
   the parser.
 
 The known costs, accepted up front: winit's IME on Linux has rough edges, and matching Kitty's IME quality there takes
-Wayland-specific work. The text-shaping path is settled on swash (see "swash" below), and wgpu's small runtime overhead
-is covered under "wgpu" below.
+Wayland-specific work. The text-shaping path is settled on harfrust (see "harfrust, skrifa and swash" below), and wgpu's
+small runtime overhead is covered under "wgpu" below.
 
 ### Tokio (multi-thread)
 
@@ -250,12 +250,12 @@ since the runner already runs the change under test at that level.
 
 ## Text shaping and rasterization
 
-### swash
+### harfrust, skrifa and swash
 
-felis shapes with swash alone (<https://github.com/dfrg/swash>), with no rustybuzz, cosmic-text, or HarfBuzz; the choice
-rationale is in [text-shaping.md](rendering/text-shaping.md) "Prior art and alternatives considered". swash also draws
-color glyphs, while monochrome outlines come from skrifa (<https://github.com/googlefonts/fontations>) through a
-felis-owned coverage rasterizer. Both are dual Apache-2.0 / MIT, compatible with felis's Apache-2.0.
+harfrust (<https://github.com/harfbuzz/harfrust>) shapes, skrifa (<https://github.com/googlefonts/fontations>) draws
+monochrome outlines through a felis-owned coverage rasterizer, and swash (<https://github.com/dfrg/swash>) draws color
+glyphs; the shaper choice is in [text-shaping.md](rendering/text-shaping.md) "Prior art and alternatives considered".
+harfrust is MIT and skrifa and swash are dual Apache-2.0 / MIT, all compatible with felis's Apache-2.0.
 
 ## IPC encoding
 

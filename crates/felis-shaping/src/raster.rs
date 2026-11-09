@@ -127,7 +127,7 @@ impl Rasterizer {
             Source::ColorBitmap(StrikeWith::BestFit),
         ])
         .format(Format::Alpha)
-        .render(&mut scaler, glyph)?;
+        .render(&mut scaler, u16::try_from(glyph).ok()?)?;
         let pixels = match image.content {
             Content::Mask => GlyphPixels::Coverage(image.data),
             // swash emits straight RGBA in R,G,B,A order (sbix/CBDT PNG
@@ -171,7 +171,7 @@ pub(crate) struct SkrifaOutlines {
 impl SkrifaOutlines {
     fn scaler(&mut self, font: &Font, px: f32) -> &ScalerFont {
         self.clock += 1;
-        let key = (font.raster_id, px.to_bits());
+        let key = (font.id, px.to_bits());
         let found = self.slots.iter().position(|s| (s.font, s.px) == key);
         let index = found.unwrap_or_else(|| {
             let slot = ScalerSlot {
@@ -219,9 +219,7 @@ impl OutlineBackend for SkrifaOutlines {
         }
         let mut path = std::mem::take(&mut self.path);
         path.0.clear();
-        let outline = self
-            .scaler(font, px)
-            .outline(skrifa::GlyphId::new(u32::from(glyph)));
+        let outline = self.scaler(font, px).outline(skrifa::GlyphId::new(glyph));
         let drawn =
             outline.is_some_and(|outline| outline.draw(DrawMemory::Scratch, &mut path).is_ok());
         let mask = drawn

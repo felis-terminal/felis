@@ -52,6 +52,9 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
   ask, so a `fonts.conf` rule changes how felis draws it, instead of one fixed mode for every face. Under the stock
   `hintslight` text looks as before, apart from slight shading changes on faces without hinting instructions; `hintfull`
   also grid-fits those faces horizontally, and `hintnone` draws unhinted.
+- **Rendering**: a combining mark a font has no precomposed glyph for (`q́`) sits on its base at the font's anchor
+  instead of the cluster being shrunk into its cell, a mark the font does not cover is left undrawn rather than widening
+  the cluster, and an ideographic variation sequence followed by a mark (`葛󠄀́`) draws the variant glyph.
 
 ### Fixed
 

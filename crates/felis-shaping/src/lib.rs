@@ -6,30 +6,29 @@
 #![allow(unsafe_code)]
 
 use std::{
-    borrow::Cow,
     collections::{HashMap, HashSet},
+    ops::Range,
     sync::{
         Arc, Mutex, OnceLock, PoisonError,
         atomic::{AtomicU64, Ordering},
     },
 };
 
+use harfrust::{
+    Buffer, BufferFlags, Direction, Feature, Script, ShapeOptions, ShapePlan, ShaperFont, Tag,
+};
 use skrifa::{
     MetadataProvider,
     instance::{LocationRef, Size},
     raw::{
-        FontData, FontRead,
-        tables::cmap::{Cmap, CmapSubtable, MapVariant},
+        model::{Blob, TableFunction},
         types::F2Dot14,
     },
 };
-pub use swash::GlyphId;
-use swash::{
-    FontRef, NormalizedCoord, Setting, StringId,
-    scale::ScaleContext,
-    shape::{Direction, ShapeContext},
-};
+use swash::{FontRef, NormalizedCoord, StringId, scale::ScaleContext};
 use thiserror::Error;
+
+pub type GlyphId = u32;
 
 use crate::raster::{RasterOptions, Rasterizer};
 use tracing::{debug, warn};
@@ -37,6 +36,9 @@ use tracing::{debug, warn};
 mod presentation;
 mod provider;
 mod raster;
+#[cfg(test)]
+#[cfg(not(windows))]
+mod swash_parity;
 
 use presentation::is_emoji_presentation;
 pub use provider::MONOSPACE_FALLBACK_FAMILIES;
@@ -120,9 +122,9 @@ pub struct Font {
     bytes: FontBytes,
     index: u32,
     offset: u32,
-    /// Generated once at load: swash keys its per-font shape and scale
-    /// caches on this, so a fresh key per `font_ref()` call would rebuild
-    /// the GSUB/GPOS tables every pass (21% of `shape_run` time).
+    /// Generated once at load: swash keys its per-font scale cache on
+    /// this, so a fresh key per `font_ref()` call would rebuild it on
+    /// every color glyph.
     key: swash::CacheKey,
     color: bool,
     /// Variation-axis position, one entry per axis; empty for a static
@@ -133,10 +135,12 @@ pub struct Font {
     /// in design units: what [`Font::display_name`] names. Normalizing
     /// passes through `avar`, so `coords` cannot be read back exactly.
     position: Vec<(swash::Tag, f32)>,
-    /// The face at `coords`, which the outline scaler draws from.
+    /// The face at `coords`, which the shaper and the outline scaler
+    /// read.
     face: skrifa::Font,
-    /// Identifies this face at this position to the outline scaler cache.
-    raster_id: u64,
+    /// Identifies this face at this position to the shape plan and
+    /// outline scaler caches.
+    id: u64,
     raster: RasterOptions,
 }
 
@@ -223,9 +227,8 @@ impl Font {
             let color = font_ref.color_palettes().len() != 0 || font_ref.color_strikes().len() != 0;
             (font_ref.offset, color)
         };
-        let face =
-            skrifa::Font::new(skrifa::raw::model::Blob::Shared(bytes.clone()), face_index)
-                .ok_or_else(|| ShapingError::BadFont("skrifa::Font::new returned None".into()))?;
+        let face = untracked_face(&bytes, face_index)
+            .ok_or_else(|| ShapingError::BadFont("skrifa::Font::new returned None".into()))?;
         let font = Self {
             bytes,
             index: face_index,
@@ -235,7 +238,7 @@ impl Font {
             coords: Vec::new(),
             position: Vec::new(),
             face,
-            raster_id: next_raster_id(),
+            id: next_font_id(),
             raster: RasterOptions::for_face(hinting),
         };
         Ok(match instance {
@@ -285,7 +288,7 @@ impl Font {
             coords,
             position,
             face,
-            raster_id: next_raster_id(),
+            id: next_font_id(),
             raster: self.raster,
         }
     }
@@ -379,7 +382,7 @@ impl Font {
         if glyph_id == 0 {
             return None;
         }
-        self.advance_width(glyph_id, px)
+        self.advance_width(GlyphId::from(glyph_id), px)
     }
 
     /// swash reads a varied advance from `HVAR` alone; skrifa falls back
@@ -389,26 +392,7 @@ impl Font {
         let font = skrifa::FontRef::from_index(self.bytes.as_ref().as_ref(), self.index).ok()?;
         let coords: Vec<F2Dot14> = self.coords.iter().map(|&c| F2Dot14::from_bits(c)).collect();
         font.glyph_metrics(Size::new(px), LocationRef::new(&coords))
-            .advance_width(glyph_id.into())
-    }
-
-    /// The glyph the face's cmap format 14 subtable names for `base`
-    /// followed by `selector`; `None` when the face has no entry or the
-    /// entry keeps the base's default glyph.
-    #[must_use]
-    pub fn variant_glyph(&self, base: char, selector: char) -> Option<GlyphId> {
-        let table = self.font_ref().table(swash::tag_from_bytes(b"cmap"))?;
-        let cmap = Cmap::read(FontData::new(table)).ok()?;
-        let variants = cmap.encoding_records().iter().find_map(|record| {
-            match record.subtable(cmap.offset_data()).ok()? {
-                CmapSubtable::Format14(variants) => Some(variants),
-                _ => None,
-            }
-        })?;
-        match variants.map_variant(base, selector)? {
-            MapVariant::Variant(glyph) => GlyphId::try_from(glyph.to_u32()).ok(),
-            MapVariant::UseDefault => None,
-        }
+            .advance_width(skrifa::GlyphId::new(glyph_id))
     }
 
     #[must_use]
@@ -483,9 +467,58 @@ impl Font {
     }
 }
 
-fn next_raster_id() -> u64 {
+fn next_font_id() -> u64 {
     static NEXT: AtomicU64 = AtomicU64::new(0);
     NEXT.fetch_add(1, Ordering::Relaxed)
+}
+
+const TRAK: Tag = Tag::new(b"trak");
+
+/// The face at `index` in `bytes`, its tables read in place, with no
+/// `trak` table. harfrust tracks every face that has `trak` and `STAT`,
+/// with no feature or option to turn it off, and tracking only moves the
+/// pens of a grid whose cell width the face's `M` advance already fixed.
+fn untracked_face(bytes: &FontBytes, index: u32) -> Option<skrifa::Font> {
+    let data = bytes.as_ref().as_ref();
+    let directory = skrifa::FontRef::from_index(data, index).ok()?;
+    let tables: Vec<(Tag, Range<usize>)> = directory
+        .table_directory()
+        .table_records()
+        .iter()
+        .filter_map(|record| {
+            let start = usize::try_from(record.offset()).ok()?;
+            let end = start.checked_add(usize::try_from(record.length()).ok()?)?;
+            (end <= data.len()).then_some((record.tag(), start..end))
+        })
+        .collect();
+    let bytes = bytes.clone();
+    let table = move |tag: Tag| {
+        if tag == TRAK {
+            return None;
+        }
+        let (_, range) = tables.iter().find(|(t, _)| *t == tag)?;
+        let slice: FontBytes = Arc::new(TableSlice {
+            bytes: bytes.clone(),
+            range: range.clone(),
+        });
+        Some(Blob::Shared(slice))
+    };
+    skrifa::Font::new(TableFunction::new(Arc::new(table)), 0)
+}
+
+struct TableSlice {
+    bytes: FontBytes,
+    range: Range<usize>,
+}
+
+impl AsRef<[u8]> for TableSlice {
+    fn as_ref(&self) -> &[u8] {
+        self.bytes
+            .as_ref()
+            .as_ref()
+            .get(self.range.clone())
+            .unwrap_or_default()
+    }
 }
 
 const WGHT: swash::Tag = swash::tag_from_bytes(b"wght");
@@ -1144,56 +1177,6 @@ pub const EMOJI_FALLBACK_FAMILIES: &[&str] = &[
 /// color face, while stopping below U+20000 so astral CJK never anchors emoji.
 const fn is_emoji_face_anchor(c: char) -> bool {
     matches!(c, '\u{1F000}'..='\u{1FAFF}')
-}
-
-const fn is_variation_selector(c: char) -> bool {
-    matches!(c, '\u{FE00}'..='\u{FE0F}' | '\u{E0100}'..='\u{E01EF}')
-}
-
-/// swash 0.2.10 never looks a selector up in cmap 14 (`map_variant` has no
-/// caller), so one the face does not map shapes as a `.notdef` that splits
-/// ligatures such as the keycap. The face already honored the presentation;
-/// revisit once swash maps variants.
-fn without_unmapped_selectors(text: &str, maps: impl Fn(char) -> bool) -> Cow<'_, str> {
-    let dropped = |i: usize, c: char| i > 0 && is_variation_selector(c) && !maps(c);
-    if !text.char_indices().any(|(i, c)| dropped(i, c)) {
-        return Cow::Borrowed(text);
-    }
-    Cow::Owned(
-        text.char_indices()
-            .filter(|&(i, c)| !dropped(i, c))
-            .map(|(_, c)| c)
-            .collect(),
-    )
-}
-
-/// swash 0.2.10 shapes the base to its default glyph, so the variant the
-/// face names for the base and the selector right after it replaces that
-/// glyph. Only a cluster that shaped to the base's glyph alone is
-/// rewritten: a mark's GPOS offset was computed against the default
-/// glyph, and a base that GSUB turned into another glyph keeps it.
-fn substitute_variant(font: &Font, px: f32, text: &str, glyphs: &mut [ShapedGlyph]) {
-    let mut chars = text.chars();
-    let (Some(base), Some(selector)) = (chars.next(), chars.next()) else {
-        return;
-    };
-    if !is_variation_selector(selector) {
-        return;
-    }
-    let face = font.font_ref();
-    let nominal = face.charmap().map(base);
-    let [glyph] = glyphs else {
-        return;
-    };
-    if glyph.glyph_id != nominal {
-        return;
-    }
-    let Some(variant) = font.variant_glyph(base, selector) else {
-        return;
-    };
-    let metrics = face.glyph_metrics(&font.coords).scale(px);
-    glyph.advance_px += metrics.advance_width(variant) - metrics.advance_width(nominal);
-    glyph.glyph_id = variant;
 }
 
 /// Monochrome symbol and dingbat faces, appended before emoji fallbacks.
@@ -2208,7 +2191,7 @@ fn rasterize(rasterizer: &mut Rasterizer, font: &Font, c: char, px: f32) -> Glyp
     if glyph_id == 0 {
         return GlyphBitmap::blank();
     }
-    rasterizer.rasterize(font, glyph_id, px)
+    rasterizer.rasterize(font, GlyphId::from(glyph_id), px)
 }
 
 impl GlyphBitmap {
@@ -2225,8 +2208,8 @@ impl GlyphBitmap {
 
 /// One output glyph from [`Shaper::shape_run`]. Source byte indices
 /// double as cell indices (cells are 1:1 with bytes on the felis side);
-/// a ligature spanning several cells yields one glyph with
-/// `from_ligature` set, painted at its leftmost cell. Advances and
+/// every glyph of a ligature claims the whole source span of the cells
+/// it replaces, and is painted from its leftmost cell. Advances and
 /// offsets are already in pixels at the shaper's `px`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ShapedGlyph {
@@ -2236,7 +2219,6 @@ pub struct ShapedGlyph {
     pub advance_px: f32,
     pub x_offset_px: f32,
     pub y_offset_px: f32,
-    pub from_ligature: bool,
 }
 
 /// A whole grapheme cluster shaped against one face (marks and joiners
@@ -2252,10 +2234,10 @@ pub struct ClusterShaping {
 
 /// Parse one `font.features` entry.
 ///
-/// Not `Setting::parse`: swash implements literal CSS grammar requiring
-/// quoted tags (`"'ss03'"`), dropping bare-tag forms like `"ss03"` or `"-clig"`.
-/// Quotes are tolerated for CSS compatibility.
-fn parse_feature(entry: &str) -> Option<Setting<u16>> {
+/// Not harfrust's `Feature::from_str`: it reads `HarfBuzz` syntax
+/// (`kern=0`, `+kern`) and rejects the documented `ss03 on` and
+/// `ss03 2` forms. Quotes are tolerated for CSS compatibility.
+fn parse_feature(entry: &str) -> Option<Feature> {
     let entry = entry.trim();
     let (entry, negated) = entry
         .strip_prefix('-')
@@ -2266,7 +2248,7 @@ fn parse_feature(entry: &str) -> Option<Setting<u16>> {
     if tag.is_empty() || tag.len() > 4 || !tag.bytes().all(|b| b.is_ascii_graphic()) {
         return None;
     }
-    let value = match tokens.next() {
+    let value: u16 = match tokens.next() {
         None => u16::from(!negated),
         Some(_) if negated => return None,
         Some("on") => 1,
@@ -2276,14 +2258,69 @@ fn parse_feature(entry: &str) -> Option<Setting<u16>> {
     if tokens.next().is_some() {
         return None;
     }
-    Some(Setting::from((tag, value)))
+    let tag = Tag::new_checked(tag.as_bytes()).ok()?;
+    Some(Feature::new(tag, u32::from(value), ..))
 }
 
-/// Reusable swash shaper, held across frames: a fresh `ShapeContext`
-/// per frame discards the per-font feature tables swash builds on first
-/// use.
+/// Enough for the four styled primaries and the faces one frame's
+/// clusters fall back to.
+const PLAN_SLOTS: usize = 16;
+
+struct PlanSlot {
+    font: u64,
+    features: Vec<Feature>,
+    used: u64,
+    plan: ShapePlan,
+}
+
+#[derive(Default)]
+struct PlanCache {
+    slots: Vec<PlanSlot>,
+    clock: u64,
+}
+
+impl PlanCache {
+    fn get(&mut self, font: &Font, features: &[Feature]) -> &ShapePlan {
+        self.clock += 1;
+        let found = self
+            .slots
+            .iter()
+            .position(|slot| slot.font == font.id && slot.features == features);
+        let index = found.unwrap_or_else(|| {
+            let slot = PlanSlot {
+                font: font.id,
+                features: features.to_vec(),
+                used: 0,
+                plan: ShapePlan::new(
+                    &font.face,
+                    Direction::LeftToRight,
+                    Some(Script::LATIN),
+                    None,
+                    features,
+                ),
+            };
+            if self.slots.len() < PLAN_SLOTS {
+                self.slots.push(slot);
+                self.slots.len() - 1
+            } else {
+                let oldest = (0..self.slots.len())
+                    .min_by_key(|&i| self.slots[i].used)
+                    .unwrap_or(0);
+                self.slots[oldest] = slot;
+                oldest
+            }
+        });
+        self.slots[index].used = self.clock;
+        &self.slots[index].plan
+    }
+}
+
+/// Reusable shaper, held across frames: it keeps the glyph buffer and the
+/// shape plans of the last few (face, features) pairs, which a fresh one
+/// would rebuild.
 pub struct Shaper {
-    ctx: ShapeContext,
+    buffer: Buffer,
+    plans: PlanCache,
 }
 
 impl Default for Shaper {
@@ -2295,8 +2332,11 @@ impl Default for Shaper {
 impl Shaper {
     #[must_use]
     pub fn new() -> Self {
+        let mut buffer = Buffer::new();
+        buffer.set_flags(BufferFlags::REMOVE_DEFAULT_IGNORABLES);
         Self {
-            ctx: ShapeContext::new(),
+            buffer,
+            plans: PlanCache::default(),
         }
     }
 
@@ -2304,7 +2344,7 @@ impl Shaper {
     /// ligature fires). Malformed `features` entries are dropped
     /// silently, as CSS does. Direction is fixed LTR: a cell row is LTR
     /// by construction and bidi reordering lives in the bidi marker
-    /// render path.
+    /// render path. The script is fixed Latin.
     pub fn shape_run(
         &mut self,
         font: &Font,
@@ -2315,34 +2355,29 @@ impl Shaper {
         if text.is_empty() {
             return Vec::new();
         }
-        let parsed: Vec<Setting<u16>> = features.iter().filter_map(|s| parse_feature(s)).collect();
-        let face = font.font_ref();
-        let mut shaper = self
-            .ctx
-            .builder(face)
-            .size(px)
-            .direction(Direction::LeftToRight)
-            .features(parsed.iter().copied())
-            .normalized_coords(&font.coords)
-            .build();
-        shaper.add_str(text);
-        let mut out = Vec::new();
-        shaper.shape_with(|cluster| {
-            let is_lig = cluster.is_ligature();
-            let src_start = cluster.source.start;
-            let src_end = cluster.source.end;
-            for g in cluster.glyphs {
-                out.push(ShapedGlyph {
-                    glyph_id: g.id,
-                    source_byte_start: src_start,
-                    source_byte_len: src_end.saturating_sub(src_start),
-                    advance_px: g.advance,
-                    x_offset_px: g.x,
-                    y_offset_px: g.y,
-                    from_ligature: is_lig,
-                });
-            }
-        });
+        let features: Vec<Feature> = features.iter().filter_map(|s| parse_feature(s)).collect();
+        let buffer = &mut self.buffer;
+        buffer.push_str(text);
+        buffer.set_direction(Direction::LeftToRight);
+        buffer.set_script(Some(Script::LATIN));
+        let shaped = harfrust::shape(
+            &ShaperFont::new(&font.face),
+            buffer,
+            ShapeOptions::new()
+                .plan(Some(self.plans.get(font, &features)))
+                .features(&features),
+        );
+        debug_assert!(shaped.is_ok(), "the plan matches the buffer: {shaped:?}");
+        let out = if shaped.is_ok() && buffer.allocation_successful() {
+            glyphs_of(
+                buffer,
+                px / f32::from(font.face.units_per_em().max(1)),
+                text,
+            )
+        } else {
+            Vec::new()
+        };
+        buffer.clear();
         out
     }
 
@@ -2357,30 +2392,62 @@ impl Shaper {
         style: FontStyle,
         text: &str,
     ) -> ClusterShaping {
-        let Some(base) = text.chars().next() else {
+        let Some(font_id) = cluster_face(stack, style, text) else {
             return ClusterShaping {
                 font_id: 0,
                 glyphs: Vec::new(),
             };
         };
-        let font_id = if text.chars().nth(1) == Some('\u{FE0E}') {
-            stack.first_cover_styled_index(base, style)
-        } else if let Some(anchor) = text.chars().find(|&c| is_emoji_face_anchor(c)) {
-            stack.resolve_styled_index(anchor, style)
-        } else if text.contains('\u{FE0F}') {
-            stack
-                .resolve_color_index(base, style)
-                .unwrap_or_else(|| stack.resolve_styled_index(base, style))
-        } else {
-            stack.resolve_styled_index(base, style)
-        };
         let font = stack.font_at(font_id, style).clone();
         let features = stack.features_for(font_id, style);
-        let shaped_text = without_unmapped_selectors(text, |c| font.has_glyph(c));
-        let mut glyphs = self.shape_run(&font, px, features, &shaped_text);
-        substitute_variant(&font, px, text, &mut glyphs);
+        let glyphs = self.shape_run(&font, px, features, text);
         ClusterShaping { font_id, glyphs }
     }
+}
+
+fn cluster_face(stack: &FontStack, style: FontStyle, text: &str) -> Option<usize> {
+    let base = text.chars().next()?;
+    Some(if text.chars().nth(1) == Some('\u{FE0E}') {
+        stack.first_cover_styled_index(base, style)
+    } else if let Some(anchor) = text.chars().find(|&c| is_emoji_face_anchor(c)) {
+        stack.resolve_styled_index(anchor, style)
+    } else if text.contains('\u{FE0F}') {
+        stack
+            .resolve_color_index(base, style)
+            .unwrap_or_else(|| stack.resolve_styled_index(base, style))
+    } else {
+        stack.resolve_styled_index(base, style)
+    })
+}
+
+/// Clusters stay in logical order at harfrust's default cluster level, so
+/// a glyph's source span ends where the next cluster starts.
+fn glyphs_of(buffer: &Buffer, scale: f32, text: &str) -> Vec<ShapedGlyph> {
+    let mut out: Vec<ShapedGlyph> = buffer
+        .glyph_infos()
+        .iter()
+        .zip(buffer.glyph_positions())
+        .map(|(info, pos)| ShapedGlyph {
+            glyph_id: info.glyph_id,
+            source_byte_start: info.cluster,
+            source_byte_len: 0,
+            advance_px: pos.x_advance as f32 * scale,
+            x_offset_px: pos.x_offset as f32 * scale,
+            y_offset_px: pos.y_offset as f32 * scale,
+        })
+        .collect();
+    let mut end = u32::try_from(text.len()).unwrap_or(u32::MAX);
+    let mut next_start = None;
+    for glyph in out.iter_mut().rev() {
+        if let Some(next) = next_start
+            && next != glyph.source_byte_start
+        {
+            end = next;
+        }
+        glyph.source_byte_len = end.saturating_sub(glyph.source_byte_start);
+        next_start = Some(glyph.source_byte_start);
+    }
+    out
 }
 
 #[cfg(test)]
@@ -4645,7 +4712,6 @@ mod tests {
             assert_eq!(g.source_byte_start, i as u32);
             assert_eq!(g.source_byte_len, 1);
             assert!(g.advance_px > 0.0, "ASCII glyph must have non-zero advance");
-            assert!(!g.from_ligature, "no features → no ligature substitutions");
             assert_ne!(g.glyph_id, 0, "ASCII char must map to a real glyph");
         }
     }
@@ -4689,7 +4755,7 @@ mod tests {
     fn rasterize_by_char_matches_rasterize_by_glyph_id() {
         let font = font();
         let face = font.font_ref();
-        let glyph_id = face.charmap().map('A');
+        let glyph_id = GlyphId::from(face.charmap().map('A'));
         assert_ne!(glyph_id, 0, "system monospace must cover 'A'");
         let mut cache = ShapeCache::default();
         let from_char = rasterize(&mut cache.rasterizer, &font, 'A', 16.0);
@@ -4746,7 +4812,6 @@ mod tests {
             assert_eq!(a.source_byte_start, b.source_byte_start);
             assert_eq!(a.source_byte_len, b.source_byte_len);
             assert!((a.advance_px - b.advance_px).abs() < f32::EPSILON);
-            assert_eq!(a.from_ligature, b.from_ligature);
         }
     }
 
@@ -4759,7 +4824,10 @@ mod tests {
     fn shape_run_calt_texture_healing_defaults_on_and_disables() {
         let font = Font::load_test_font();
         let charmap = font.font_ref().charmap();
-        let base_ids = vec![charmap.map('m'), charmap.map('i'), charmap.map('m')];
+        let base_ids: Vec<GlyphId> = ['m', 'i', 'm']
+            .into_iter()
+            .map(|c| GlyphId::from(charmap.map(c)))
+            .collect();
         let mut shaper = Shaper::new();
         let healed = shaper.shape_run(&font, 16.0, &[], "mim");
         let disabled = shaper.shape_run(&font, 16.0, &["-calt".to_owned()], "mim");
@@ -4767,8 +4835,8 @@ mod tests {
             assert_eq!(out.len(), 3, "healing must keep one glyph per cell");
             assert!(out.iter().all(|g| g.source_byte_len == 1));
         }
-        let healed_ids: Vec<u16> = healed.iter().map(|g| g.glyph_id).collect();
-        let disabled_ids: Vec<u16> = disabled.iter().map(|g| g.glyph_id).collect();
+        let healed_ids: Vec<GlyphId> = healed.iter().map(|g| g.glyph_id).collect();
+        let disabled_ids: Vec<GlyphId> = disabled.iter().map(|g| g.glyph_id).collect();
         assert_eq!(
             disabled_ids, base_ids,
             "`-calt` must fall back to the unhealed charmap glyphs",
@@ -4780,8 +4848,8 @@ mod tests {
     }
 
     /// The documented `font.features` grammar, over every 4-byte tag:
-    /// swash's `Setting::parse` returns `None` for every bare tag, so
-    /// each surface form here is one felis must accept itself.
+    /// harfrust's `Feature::from_str` rejects the `on` and numeric forms,
+    /// so each surface form here is one felis must accept itself.
     fn arb_tag() -> impl Strategy<Value = String> {
         proptest::string::string_regex("[a-z0-9]{4}").expect("literal tag regex")
     }
@@ -4795,7 +4863,7 @@ mod tests {
             pad_right in "[ ]{0,2}",
             quote in prop_oneof![Just(""), Just("'"), Just("\"")],
         ) {
-            let raw = u32::from_be_bytes(tag.as_bytes().try_into().expect("4-byte tag"));
+            let raw = Tag::new_checked(tag.as_bytes()).expect("a 4-byte tag");
             let quoted = format!("{quote}{tag}{quote}");
             let wrap = |entry: &str| format!("{pad_left}{entry}{pad_right}");
             for (entry, want) in [
@@ -4808,7 +4876,7 @@ mod tests {
                 let s = parse_feature(&entry).ok_or_else(|| {
                     TestCaseError::fail(format!("{entry:?} must parse"))
                 })?;
-                prop_assert_eq!((s.tag, s.value), (raw, want), "entry {:?}", entry);
+                prop_assert_eq!((s.tag, s.value), (raw, u32::from(want)), "entry {:?}", entry);
             }
         }
 
@@ -4854,16 +4922,15 @@ mod tests {
         let mut shaper = Shaper::new();
         let plain = shaper.shape_run(&font, 16.0, &[], "->");
         let ss03 = shaper.shape_run(&font, 16.0, &["ss03".to_owned()], "->");
-        let plain_ids: Vec<u16> = plain.iter().map(|g| g.glyph_id).collect();
-        let ss03_ids: Vec<u16> = ss03.iter().map(|g| g.glyph_id).collect();
+        let plain_ids: Vec<GlyphId> = plain.iter().map(|g| g.glyph_id).collect();
+        let ss03_ids: Vec<GlyphId> = ss03.iter().map(|g| g.glyph_id).collect();
         assert_ne!(
             plain_ids, ss03_ids,
             "ss03 must swap the `->` glyphs for the arrow alternates",
         );
         assert_eq!(ss03.len(), 2, "Monaspace arrows are blank-lead + body");
         assert!(
-            ss03.iter()
-                .all(|g| g.from_ligature && g.source_byte_len == 2),
+            ss03.iter().all(|g| g.source_byte_len == 2),
             "both arrow pieces must claim the full 2-byte cluster",
         );
     }
@@ -5157,8 +5224,8 @@ mod tests {
         assert!(stack.font_at(emoji.font_id, style).has_color_glyphs());
     }
 
-    /// The keycap ligature needs `#` and U+20E3 adjacent; a VS16 left
-    /// between them shapes as `.notdef` and splits it into three glyphs.
+    /// The keycap ligature needs `#` and U+20E3 adjacent: the VS16
+    /// between them must not split it into three glyphs.
     #[cfg(not(windows))]
     #[test]
     fn a_keycap_with_vs16_shapes_to_the_one_keycap_glyph() {
@@ -5217,51 +5284,227 @@ mod tests {
                 "{case}"
             );
         }
+        let variant = shaper.shape_cluster(&stack, 18.0, style, "葛\u{E0100}");
         let marked = shaper.shape_cluster(&stack, 18.0, style, "葛\u{E0100}\u{0301}");
         assert_eq!(
             marked.glyphs.first().map(|g| g.glyph_id),
-            plain.glyphs.first().map(|g| g.glyph_id),
-            "a mark positioned against the default glyph keeps it"
+            variant.glyphs.first().map(|g| g.glyph_id),
+            "a mark after the sequence leaves the base on the variant"
         );
     }
 
-    #[test]
-    fn only_an_unmapped_selector_after_the_base_is_dropped() {
-        let unmapped: fn(char) -> bool = |_| false;
-        let cases = [
-            ("a keycap VS16", "#\u{FE0F}\u{20E3}", unmapped, "#\u{20E3}"),
-            (
-                "an ideographic variation selector",
-                "葛\u{E0100}",
-                unmapped,
-                "葛",
-            ),
-            (
-                "a standardized variation selector",
-                "≩\u{FE00}",
-                unmapped,
-                "≩",
-            ),
-            (
-                "a selector the face maps",
-                "#\u{FE0F}\u{20E3}",
-                |c| c == '\u{FE0F}',
-                "#\u{FE0F}\u{20E3}",
-            ),
-            (
-                "a lone selector as the base",
-                "\u{FE0F}",
-                unmapped,
-                "\u{FE0F}",
-            ),
-            ("text without selectors", "क्ष", unmapped, "क्ष"),
-        ];
-        for (case, text, maps, expected) in cases {
-            assert_eq!(without_unmapped_selectors(text, maps), expected, "{case}");
+    /// Unicode's `Default_Ignorable_Code_Point`, the set
+    /// `BufferFlags::REMOVE_DEFAULT_IGNORABLES` deletes from.
+    const fn is_default_ignorable(c: char) -> bool {
+        matches!(
+            c,
+            '\u{AD}'
+                | '\u{34F}'
+                | '\u{61C}'
+                | '\u{115F}'..='\u{1160}'
+                | '\u{17B4}'..='\u{17B5}'
+                | '\u{180B}'..='\u{180F}'
+                | '\u{200B}'..='\u{200F}'
+                | '\u{202A}'..='\u{202E}'
+                | '\u{2060}'..='\u{206F}'
+                | '\u{3164}'
+                | '\u{FE00}'..='\u{FE0F}'
+                | '\u{FEFF}'
+                | '\u{FFA0}'
+                | '\u{FFF0}'..='\u{FFF8}'
+                | '\u{1BCA0}'..='\u{1BCA3}'
+                | '\u{1D173}'..='\u{1D17A}'
+                | '\u{E0000}'..='\u{E0FFF}'
+        )
+    }
+
+    #[cfg(not(windows))]
+    fn span_faces() -> &'static [Font; 2] {
+        static FACES: OnceLock<[Font; 2]> = OnceLock::new();
+        FACES.get_or_init(|| {
+            let emoji = pinned_files(&[EMOJI]);
+            let mut db = FileSet::default();
+            db.add_file(&emoji[0]).expect("the emoji face reads");
+            [
+                font(),
+                Font::load_face_id(&db, 0).expect("the emoji face loads"),
+            ]
+        })
+    }
+
+    fn arb_cluster_text() -> impl Strategy<Value = String> {
+        let interesting = prop::sample::select(vec![
+            'a',
+            'm',
+            'i',
+            '-',
+            '>',
+            '=',
+            '#',
+            '1',
+            '\u{20E3}',
+            '\u{FE0E}',
+            '\u{FE0F}',
+            '\u{200D}',
+            '\u{200B}',
+            '\u{301}',
+            '\u{308}',
+            '\u{2764}',
+            '\u{2B50}',
+            '\u{1F525}',
+            '\u{1F1EF}',
+            '\u{1F1F5}',
+            '\u{1F3FD}',
+            '\u{845B}',
+            '\u{E0100}',
+        ]);
+        proptest::collection::vec(prop_oneof![any::<char>(), interesting], 0..10)
+            .prop_map(String::from_iter)
+    }
+
+    #[cfg(not(windows))]
+    proptest! {
+        #[test]
+        fn shaped_spans_cover_the_text_in_order(text in arb_cluster_text()) {
+            for font in span_faces() {
+                let out = Shaper::new().shape_run(font, 16.0, &[], &text);
+                if out.is_empty() {
+                    prop_assert!(
+                        text.chars().all(is_default_ignorable),
+                        "only default-ignorables shape to nothing: {:?}",
+                        text
+                    );
+                    continue;
+                }
+                let len = text.len();
+                for pair in out.windows(2) {
+                    prop_assert!(pair[0].source_byte_start <= pair[1].source_byte_start);
+                }
+                for g in &out {
+                    let start = g.source_byte_start as usize;
+                    let end = start + g.source_byte_len as usize;
+                    prop_assert!(start < end && end <= len, "{:?} in {:?}", g, text);
+                    prop_assert!(text.is_char_boundary(start) && text.is_char_boundary(end));
+                }
+                prop_assert_eq!(out[0].source_byte_start, 0);
+                let last = out[out.len() - 1];
+                prop_assert_eq!((last.source_byte_start + last.source_byte_len) as usize, len);
+            }
         }
-        assert!(matches!(
-            without_unmapped_selectors("e\u{301}", unmapped),
-            Cow::Borrowed(_)
-        ));
+    }
+
+    /// The renderer falls back to the per-char path for a cluster that
+    /// shapes to nothing.
+    #[cfg(not(windows))]
+    #[test]
+    fn default_ignorables_alone_shape_to_no_glyphs() {
+        let font = font();
+        let mut shaper = Shaper::new();
+        for text in ["\u{FE0F}", "\u{200D}", "\u{FE0F}\u{200B}"] {
+            assert_eq!(shaper.shape_run(&font, 16.0, &[], text), [], "{text:?}");
+        }
+    }
+
+    /// Without `REMOVE_DEFAULT_IGNORABLES` the face's unmapped VS15
+    /// would shape to a second, blank glyph.
+    #[cfg(not(windows))]
+    #[test]
+    fn an_unmapped_selector_adds_no_glyph() {
+        let symbols = load_pinned(SYMBOLS2);
+        assert!(!symbols.has_glyph('\u{FE0E}'));
+        let out = Shaper::new().shape_run(&symbols, 18.0, &[], "\u{2B50}\u{FE0E}");
+        assert_eq!(out.len(), 1, "{out:?}");
+        assert_eq!(out[0].source_byte_len, 6);
+    }
+
+    /// `BEGINNING_OF_TEXT` would insert U+25CC before a mark with no base.
+    #[cfg(not(windows))]
+    #[test]
+    fn a_lone_mark_shapes_without_a_dotted_circle() {
+        let font = font();
+        let mark = GlyphId::from(font.font_ref().charmap().map('\u{301}'));
+        assert_ne!(mark, 0, "the face maps U+0301");
+        let out = Shaper::new().shape_run(&font, 16.0, &[], "\u{301}");
+        let ids: Vec<GlyphId> = out.iter().map(|g| g.glyph_id).collect();
+        assert_eq!(ids, [mark]);
+    }
+
+    /// Shape plans are cached per face and feature list, so a shaper
+    /// that has served other pairs answers as a fresh one does.
+    #[cfg(not(windows))]
+    #[test]
+    fn a_reused_shaper_matches_a_fresh_one_across_faces_and_features() {
+        let [mono, emoji] = span_faces();
+        let feature_sets = [Vec::new(), vec!["-calt".to_owned(), "ss03".to_owned()]];
+        let mut shared = Shaper::new();
+        let mut differs = false;
+        for _ in 0..3 {
+            for (font, text) in [(mono, "mim->"), (emoji, "#\u{20E3}\u{1F1EF}\u{1F1F5}")] {
+                let outputs: Vec<Vec<ShapedGlyph>> = feature_sets
+                    .iter()
+                    .map(|features| {
+                        let fresh = Shaper::new().shape_run(font, 16.0, features, text);
+                        assert_eq!(
+                            shared.shape_run(font, 16.0, features, text),
+                            fresh,
+                            "{text:?} {features:?}"
+                        );
+                        fresh
+                    })
+                    .collect();
+                differs |= outputs[0] != outputs[1];
+            }
+        }
+        assert!(differs, "the feature sets shape differently");
+    }
+
+    pub(crate) const TRAK_PROBE: &str = "../trak-probe/FelisTrakProbe.ttf";
+
+    /// The probe face tracks every glyph +100 units at 12 pt and -50 at
+    /// 24 pt; felis shapes it at its `hmtx` advances at any size.
+    #[cfg(not(windows))]
+    #[test]
+    fn a_face_with_a_trak_table_shapes_untracked() {
+        use skrifa::raw::{TableProvider, model::Blob};
+        let bytes = std::fs::read(pinned_files(&[TRAK_PROBE])[0].clone()).expect("probe reads");
+        let raw = skrifa::FontRef::new(&bytes).expect("the probe parses");
+        for tag in [b"trak", b"STAT"] {
+            assert!(
+                raw.table_data(Tag::new(tag)).is_some(),
+                "the probe has {tag:?}"
+            );
+        }
+        let tracked = skrifa::Font::new(Blob::from(bytes.clone()), 0).expect("a blob font");
+        let mut buffer = Buffer::new();
+        buffer.push_str("m");
+        buffer.guess_segment_properties();
+        harfrust::shape(&ShaperFont::new(&tracked), &mut buffer, ShapeOptions::new())
+            .expect("shapes");
+        let hmtx = raw.glyph_metrics(Size::unscaled(), LocationRef::default());
+        let m = buffer.glyph_infos()[0].glyph_id;
+        let m_advance = hmtx.advance_width(skrifa::GlyphId::new(m)).expect("hmtx");
+        assert!(
+            (buffer.glyph_positions()[0].x_advance as f32 - m_advance - 100.0).abs() < 0.5,
+            "harfrust tracks the probe when it sees the table"
+        );
+        let font = load_pinned(TRAK_PROBE);
+        let upem = f32::from(raw.head().expect("head").units_per_em());
+        let mut shaper = Shaper::new();
+        for px in [12.0, 16.0, 24.0, 32.0, 48.0] {
+            let out = shaper.shape_run(&font, px, &[], "mim->");
+            assert_eq!(out.len(), 5, "{px}");
+            for g in out {
+                let advance = hmtx
+                    .advance_width(skrifa::GlyphId::new(g.glyph_id))
+                    .expect("hmtx");
+                assert!(
+                    (g.advance_px - advance * px / upem).abs() <= 0.01,
+                    "{px}px glyph {}: {} != {}",
+                    g.glyph_id,
+                    g.advance_px,
+                    advance * px / upem
+                );
+            }
+        }
     }
 }

@@ -2068,7 +2068,9 @@ mod tests {
     }
 
     /// Clusters whose advance stays within their cells keep the native
-    /// path: a ligated flag, a widened VS16 emoji, a keycap, a combining mark.
+    /// path: a ligated flag, a widened VS16 emoji, a keycap, a combining
+    /// mark, and one the face attaches at its anchor with no precomposed
+    /// glyph.
     #[cfg(not(windows))]
     #[test]
     fn a_cluster_within_its_cells_is_not_fitted() {
@@ -2077,6 +2079,7 @@ mod tests {
             "\u{2764}\u{FE0F}",
             "#\u{FE0F}\u{20E3}",
             "e\u{301}",
+            "q\u{301}",
         ] {
             let p = walk_pinned(text.as_bytes(), 4);
             assert_eq!(cluster_fit_px_at(&p, 0), 0, "{text:?}");
@@ -2261,7 +2264,6 @@ mod tests {
             advance_px: 16.0,
             x_offset_px: 0.0,
             y_offset_px: 0.0,
-            from_ligature: true,
         }];
         apply_shaped_run(
             &mut frame_cells,
@@ -2303,7 +2305,6 @@ mod tests {
             advance_px: 8.0,
             x_offset_px: 0.0,
             y_offset_px: 0.0,
-            from_ligature: true,
         };
         let shaped = [piece(100), piece(200)];
         apply_shaped_run(
@@ -2357,7 +2358,6 @@ mod tests {
             advance_px,
             x_offset_px: 0.0,
             y_offset_px: 0.0,
-            from_ligature: true,
         };
         let mut wide = vec![ShapedCell::None; 2];
         apply_shaped_run(
