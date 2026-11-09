@@ -1,4 +1,4 @@
-//! Cell metrics, face metadata and color glyphs, pinned against
+//! Cell metrics, face metadata, shaping and color glyphs, pinned against
 //! `tests/goldens/`. `UPDATE_GOLDEN=1` rewrites the files (`just golden`).
 
 use std::{fmt::Write as _, path::PathBuf, sync::Arc};
@@ -6,9 +6,10 @@ use std::{fmt::Write as _, path::PathBuf, sync::Arc};
 use skrifa::{Tag, raw::types::NameId};
 
 use crate::{
-    CellMetrics, Font, FontBytes, GlyphBitmap, GlyphId,
+    CellMetrics, Font, FontBytes, FontStack, FontStyle, GlyphBitmap, GlyphId, ShapedGlyph, Shaper,
+    StyleFaces,
     metadata::{self, Attributes},
-    provider::{FaceSource, ResolvedFace},
+    provider::{FaceSource, ResolvedFace, files::FileSet},
     raster::{RasterOptions, Rasterizer},
     test_font_dir,
 };
@@ -39,6 +40,18 @@ impl Digest {
             .bytes(&bitmap.height().to_le_bytes())
             .bytes(&[kind])
             .bytes(bitmap.pixels().as_bytes())
+    }
+
+    fn glyphs(&mut self, glyphs: &[ShapedGlyph]) -> &mut Self {
+        for g in glyphs {
+            self.bytes(&g.glyph_id.to_le_bytes())
+                .bytes(&g.source_byte_start.to_le_bytes())
+                .bytes(&g.source_byte_len.to_le_bytes())
+                .bytes(&g.advance_px.to_bits().to_le_bytes())
+                .bytes(&g.x_offset_px.to_bits().to_le_bytes())
+                .bytes(&g.y_offset_px.to_bits().to_le_bytes());
+        }
+        self
     }
 
     pub(crate) fn hex(self) -> String {
@@ -279,8 +292,91 @@ fn metadata() -> String {
     out
 }
 
-/// One strike glyph of Noto Color Emoji in this many: fewer than the swash
-/// sweep takes, since the golden runs on every CI platform in a debug build.
+const ROW: &str = "user@host:~/src/felis$ cargo test -p felis-shaping -- --nocapture # => != ->";
+
+const OPERATORS: [&str; 25] = [
+    "->", "=>", "!=", "==", "===", "<=", ">=", "<-", "<->", "::", "//", "/*", "&&", "||", "www",
+    "mim", "fi", "ffi", "|>", "<|", "-->", "<!--", "...", "#{", "0x1F",
+];
+
+const FEATURE_SETS: [&[&str]; 6] = [
+    &[],
+    &["-calt"],
+    &["calt", "liga"],
+    &[
+        "ss01", "ss02", "ss03", "ss04", "ss05", "ss06", "ss07", "ss08", "ss09",
+    ],
+    &["ss03"],
+    &["-calt", "liga 0", "dlig"],
+];
+
+/// Keycaps, ZWJ and modifier sequences, flags, presentation and
+/// ideographic variation selectors, and precomposed and decomposed marks.
+const CLUSTERS: [&str; 19] = [
+    "#\u{FE0F}\u{20E3}",
+    "1\u{FE0F}\u{20E3}",
+    "*\u{FE0F}\u{20E3}",
+    "#\u{20E3}",
+    "\u{2764}\u{FE0F}\u{200D}\u{1F525}",
+    "\u{2764}\u{FE0F}",
+    "\u{2B50}\u{FE0F}",
+    "\u{1F004}\u{FE0F}",
+    "\u{2B50}\u{FE0E}",
+    "\u{1F004}\u{FE0E}",
+    "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}",
+    "\u{1F44D}\u{1F3FD}",
+    "\u{1F1EF}\u{1F1F5}",
+    "葛\u{E0100}",
+    "葛\u{E0101}",
+    "葛\u{E0102}",
+    "\u{E9}",
+    "\u{F1}",
+    "e\u{301}",
+];
+
+/// Printable ASCII, a prompt row and the operators each Monaspace
+/// ligature set draws, per face, feature set and size; then each cluster
+/// against the pinned fallback chain.
+fn shaping() -> String {
+    let regular = crate::test_support::pinned("opentype/MonaspaceNeon-Regular.otf");
+    let bold = crate::test_support::pinned("truetype/Monaspace Neon Var.ttf")
+        .at_style(700, false)
+        .expect("the variable face moves to wght 700");
+    let ascii: String = (0x20_u8..0x7f).map(char::from).collect();
+    let texts: Vec<&str> = [ascii.as_str(), ROW].into_iter().chain(OPERATORS).collect();
+    let mut shaper = Shaper::new();
+    let mut out = String::new();
+    for (face, font) in [("regular", &regular), ("wght 700", &bold)] {
+        for set in FEATURE_SETS {
+            let features: Vec<String> = set.iter().map(|&f| f.to_owned()).collect();
+            for px in [10.0, 13.0, 16.0, 21.5, 40.0] {
+                let mut digest = Digest::default();
+                for &text in &texts {
+                    digest.glyphs(&shaper.shape_run(font, px, &features, text));
+                }
+                let _ = writeln!(out, "{face} {set:?} {px} {}", digest.hex());
+            }
+        }
+    }
+    let mut db = FileSet::default();
+    db.add_dir(test_font_dir());
+    let stack = FontStack::auto_discover_in(&db, None, &[], &[], &StyleFaces::default())
+        .expect("the pinned set loads");
+    for text in CLUSTERS {
+        let cluster = shaper.shape_cluster(&stack, 18.0, FontStyle::REGULAR, text);
+        let mut digest = Digest::default();
+        let _ = writeln!(
+            out,
+            "{text:?} face {} {}",
+            cluster.font_id,
+            digest.glyphs(&cluster.glyphs).hex()
+        );
+    }
+    out
+}
+
+/// One strike glyph of Noto Color Emoji in this many, since the golden
+/// runs on every CI platform in a debug build.
 const NOTO_STRIDE: usize = 36;
 
 /// The gate sizes, and 16 px at OSC 66 scales 2 and 7.
@@ -382,6 +478,11 @@ fn cell_metrics_match_their_golden() {
 #[test]
 fn face_metadata_matches_its_golden() {
     assert_golden("metadata.txt", &metadata());
+}
+
+#[test]
+fn shaping_matches_its_golden() {
+    assert_golden("shaping.txt", &shaping());
 }
 
 #[test]

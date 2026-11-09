@@ -5352,6 +5352,91 @@ mod tests {
         );
     }
 
+    /// A mark with no precomposed glyph attaches at the face's anchors, so
+    /// the cluster is no wider than its base.
+    #[cfg(not(windows))]
+    #[test]
+    fn a_mark_without_a_precomposed_glyph_sits_on_its_base() {
+        let stack = pinned_stack(&[]);
+        let style = FontStyle::REGULAR;
+        let mut shaper = Shaper::new();
+        for text in ["q\u{301}", "x\u{323}", "g\u{308}\u{301}"] {
+            let ours = shaper.shape_cluster(&stack, 32.0, style, text);
+            let base = text.chars().next().expect("a base");
+            let font = stack.font_at(ours.font_id, style);
+            let base_advance = font.advance_px(base, 32.0).expect("the face maps the base");
+            let total: f32 = ours.glyphs.iter().map(|g| g.advance_px).sum();
+            assert!(
+                (total - base_advance).abs() <= 0.01,
+                "{text:?}: {:?}",
+                ours.glyphs
+            );
+            assert!(
+                ours.glyphs[1..]
+                    .iter()
+                    .all(|g| g.advance_px == 0.0 && g.x_offset_px != 0.0),
+                "{text:?}: every mark is attached, {:?}",
+                ours.glyphs
+            );
+        }
+    }
+
+    /// The sequence applies before positioning, so the mark sits on the
+    /// variant at no advance of its own.
+    #[cfg(not(windows))]
+    #[test]
+    fn a_mark_after_a_variation_sequence_keeps_the_variant() {
+        let stack = pinned_stack(&[]);
+        let style = FontStyle::REGULAR;
+        let mut shaper = Shaper::new();
+        let variant = shaper
+            .shape_cluster(&stack, 18.0, style, "葛\u{E0100}")
+            .glyphs[0];
+        let default = shaper.shape_cluster(&stack, 18.0, style, "葛").glyphs[0];
+        assert_ne!(variant.glyph_id, default.glyph_id);
+        let marked = shaper.shape_cluster(&stack, 18.0, style, "葛\u{E0100}\u{301}");
+        assert_eq!(marked.glyphs.len(), 2, "{:?}", marked.glyphs);
+        assert_eq!(marked.glyphs[0].glyph_id, variant.glyph_id);
+        assert!(marked.glyphs[1].advance_px == 0.0, "{:?}", marked.glyphs);
+    }
+
+    /// A mark the face does not map shapes as `.notdef` at zero advance,
+    /// as `HarfBuzz` zeroes every mark, so the cluster stays one cell wide.
+    #[cfg(not(windows))]
+    #[test]
+    fn a_mark_the_face_does_not_map_shapes_as_a_zero_advance_notdef() {
+        let probe = load_pinned(TRAK_PROBE);
+        assert!(probe.has_glyph('e') && !probe.has_glyph('\u{301}'));
+        let stack = FontStack::new(probe);
+        let style = FontStyle::REGULAR;
+        let ours = Shaper::new().shape_cluster(&stack, 18.0, style, "e\u{301}");
+        assert_eq!(ours.glyphs.len(), 2, "{:?}", ours.glyphs);
+        assert_eq!(ours.glyphs[1].glyph_id, 0);
+        assert!(ours.glyphs[1].advance_px == 0.0, "{:?}", ours.glyphs);
+        let base = stack.font_at(0, style).advance_px('e', 18.0).expect("an e");
+        assert!((ours.glyphs[0].advance_px - base).abs() <= 0.01);
+    }
+
+    /// A `CBDT` face's empty `glyf` entries are no outline; a text face's
+    /// glyphs are.
+    #[cfg(not(windows))]
+    #[test]
+    fn only_an_inked_outline_counts_as_one() {
+        let emoji = load_pinned("NotoColorEmoji.ttf");
+        let mut mapped = 0;
+        for (cp, _) in emoji.face.charmap().unicodes() {
+            let Some(c) = char::from_u32(cp) else {
+                continue;
+            };
+            assert!(!emoji.has_outline(c), "U+{cp:04X}");
+            mapped += 1;
+        }
+        assert!(mapped > 1000, "{mapped}");
+        let text = Font::load_test_font();
+        assert!(('!'..='~').all(|c| text.has_outline(c)));
+        assert!(!text.has_outline(' '));
+    }
+
     /// Unicode's `Default_Ignorable_Code_Point`, the set
     /// `BufferFlags::REMOVE_DEFAULT_IGNORABLES` deletes from.
     const fn is_default_ignorable(c: char) -> bool {
