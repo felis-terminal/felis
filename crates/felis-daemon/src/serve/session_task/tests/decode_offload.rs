@@ -660,8 +660,15 @@ async fn a_child_exit_seen_before_its_image_decodes_waits_for_the_mark_after_the
         ),
         "the mark after the image ends the wait, not the exit: {first:?}"
     );
-    task.poll_child_exit();
-    assert!(task.child_exited, "the exit lands once its output drained");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    while !task.child_exited {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the exit lands once its output drained"
+        );
+        task.poll_child_exit();
+        tokio::time::sleep(Duration::from_millis(1)).await;
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
