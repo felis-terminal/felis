@@ -68,12 +68,13 @@ RENDER = (
     "resvg",
 )
 GPU_FREE = ("harfrust", "skrifa", "read-fonts", "wgpu", "winit")
+FELIS = tuple(sorted(path.name for path in (ROOT / "crates").glob("felis-*")))
 
 BANS: dict[str, tuple[str, ...]] = {
     "felis-protocol": ASYNC + OS + RENDER,
     "felis-vt": ASYNC + OS + ("felis-grid",),
     "felis-grid": ASYNC + RENDER,
-    "felis-pty": ("felis-vt", "felis-grid", "felis-protocol", "felis-transport"),
+    "felis-pty": tuple(name for name in FELIS if name != "felis-pty"),
     "felis-transport": ("felis-vt", "felis-grid", "felis-daemon"),
     "felis-daemon": RENDER,
     "felis-client-core": GPU_FREE,
