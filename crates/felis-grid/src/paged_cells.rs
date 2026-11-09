@@ -1,5 +1,5 @@
-//! The ring's cell storage: one anonymous OS mapping per buffer, reserved
-//! at full capacity and committed as the length grows
+//! The ring's and reflow's cell storage: one anonymous OS mapping per
+//! buffer, reserved at full capacity and committed as the length grows
 //! (docs/explanation/data-model/scrollback.md "Structure"). The crate's one
 //! audited `unsafe` boundary: every read relies on each byte of the mapping
 //! being part of a written cell or zero, and on zero being a valid cell.

@@ -483,10 +483,9 @@ async fn a_refused_upgrade_leaves_the_compacted_session_as_it_was() {
 }
 
 /// Spec: on Linux, a quiet session hands its ring pages back to the OS,
-/// and repeated flood, compaction, resize and `CSI 3 J` cycles do not
-/// ratchet the process up. A reflow's scratch buffers stay in glibc's
-/// heap once freed, so the bound starts once both widths have reflowed:
-/// from then on no quiet spell ends above the highest earlier point.
+/// a resize leaves no reflow scratch resident once the session is quiet
+/// again, and repeated flood, compaction, resize and `CSI 3 J` cycles do
+/// not ratchet the process up.
 #[cfg(target_os = "linux")]
 #[tokio::test(start_paused = true)]
 async fn a_quiet_session_returns_its_ring_pages_cycle_after_cycle() {
@@ -519,7 +518,11 @@ async fn a_quiet_session_returns_its_ring_pages_cycle_after_cycle() {
             .unwrap();
         q.until_runs_done(2 * cycle + 2).await;
         let resized = rss_bytes();
-        if let Some(high) = high.filter(|_| cycle >= 2) {
+        assert!(
+            resized < quiet + ring / 4,
+            "cycle {cycle}: {quiet} bytes once quiet, {resized} once resized and quiet"
+        );
+        if let Some(high) = high {
             assert!(
                 quiet.max(resized) < high + ring / 4,
                 "cycle {cycle}: {quiet} bytes once quiet, {resized} once resized, \

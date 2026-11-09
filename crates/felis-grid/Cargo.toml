@@ -28,7 +28,7 @@ thiserror = { workspace = true }
 unicode-width = { workspace = true }
 simdutf8 = { workspace = true }
 
-# The ring's page-backed cell storage (`src/paged_cells.rs`) maps, commits
+# The page-backed cell storage (`src/paged_cells.rs`) maps, commits
 # and discards its pages itself.
 [target.'cfg(unix)'.dependencies]
 libc = { workspace = true }

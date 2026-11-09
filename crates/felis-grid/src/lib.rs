@@ -1,6 +1,6 @@
 #![doc = include_str!("../README.md")]
 // `deny`, not `forbid`: `forbid` cannot be relaxed at the audited
-// `#[allow(unsafe_code)]` site, the ring's page-backed cell storage
+// `#[allow(unsafe_code)]` site, the page-backed cell storage
 // (`paged_cells`).
 #![cfg_attr(not(test), deny(unsafe_code))]
 
@@ -2230,10 +2230,15 @@ impl Grid {
         // pre-reflow row's first cell lands, so an anchor
         // mid-logical-line remaps to its own row, not the line start.
         let cols_usize = usize::from(cols);
-        let mut out_rows = PackedRows::with_capacity(
-            combined.len(),
-            combined.cells.len().min(combined.len() * cols_usize),
-        );
+        // Outgrowing the reservation copies every cell built so far,
+        // and untouched reserved pages cost nothing; each line's rows
+        // hold its cells plus at most one partial row. A widening never
+        // adds rows.
+        let mut out_cells = combined.cells.len() + spans.len() * cols_usize;
+        if cols >= old_cols {
+            out_cells = out_cells.min(combined.len() * cols_usize);
+        }
+        let mut out_rows = PackedRows::with_capacity(combined.len(), out_cells);
         let mut out_continued: Vec<bool> = Vec::with_capacity(combined.len());
         let mut new_line_start: Vec<usize> = Vec::with_capacity(spans.len());
         let mut new_row_of_old: Vec<usize> = Vec::with_capacity(combined.len());
@@ -2243,7 +2248,7 @@ impl Grid {
         let blocks = self.whole_sized_blocks(&combined);
         let track_landing = !blocks.is_empty();
         let mut landing = Landing::default();
-        let mut run: Vec<Cell> = Vec::new();
+        let mut run = CellRun::default();
         for (li, &(start, end)) in spans.iter().enumerate() {
             new_line_start.push(out_rows.len());
             self.stitch_logical_line(&combined, start, end, &mut run);
@@ -2486,9 +2491,9 @@ impl Grid {
         combined: &PackedRows,
         start: usize,
         end: usize,
-        run: &mut Vec<Cell>,
+        run: &mut CellRun,
     ) {
-        run.clear();
+        run.len = 0;
         for k in start..=end {
             if k < end {
                 run.extend_from_slice(self.nontail_contribution(&combined[k], &combined[k + 1]));
@@ -2497,7 +2502,7 @@ impl Grid {
             }
         }
         while run.last().is_some_and(|c| *c == Cell::default()) {
-            run.pop();
+            run.len -= 1;
         }
     }
 
@@ -2943,7 +2948,10 @@ fn trim_soft_wrap(src: &[bool], dst_rows: u16) -> Box<[bool]> {
 
 #[derive(Default)]
 struct PackedRows {
-    cells: Vec<Cell>,
+    /// In its own mapping: a freed heap block this large would raise
+    /// glibc's mmap threshold, and every later reflow's scratch would
+    /// stay resident in the heap.
+    cells: PagedCells,
     ends: Vec<usize>,
     /// The row being built. Appending straight to `cells` instead
     /// measured slower in the re-wrap loop.
@@ -2953,7 +2961,7 @@ struct PackedRows {
 impl PackedRows {
     fn with_capacity(rows: usize, cells: usize) -> Self {
         Self {
-            cells: Vec::with_capacity(cells),
+            cells: PagedCells::with_reserve(0, cells),
             ends: Vec::with_capacity(rows),
             open: Vec::new(),
         }
@@ -2968,15 +2976,21 @@ impl PackedRows {
     }
 
     fn push(&mut self, row: &[Cell]) {
-        self.cells.extend_from_slice(row);
-        self.ends.push(self.cells.len());
+        self.push_padded(row, row.len());
     }
 
     fn push_padded(&mut self, row: &[Cell], width: usize) {
         let start = self.cells.len();
-        self.cells.extend_from_slice(&row[..row.len().min(width)]);
-        self.cells.resize(start + width, Cell::default());
-        self.ends.push(self.cells.len());
+        let end = start + width;
+        if end > self.cells.capacity() {
+            let mut moved = PagedCells::with_reserve(start, end.max(self.cells.capacity() * 2));
+            moved.copy_from_slice(&self.cells);
+            self.cells = moved;
+        }
+        self.cells.grow(end);
+        let kept = row.len().min(width);
+        self.cells[start..start + kept].copy_from_slice(&row[..kept]);
+        self.ends.push(end);
     }
 
     const fn open_len(&self) -> usize {
@@ -2988,17 +3002,48 @@ impl PackedRows {
     }
 
     fn finish_padded(&mut self, width: usize) {
-        let start = self.cells.len();
-        self.cells
-            .extend_from_slice(&self.open[..self.open.len().min(width)]);
-        self.cells.resize(start + width, Cell::default());
-        self.ends.push(self.cells.len());
+        let open = std::mem::take(&mut self.open);
+        self.push_padded(&open, width);
+        self.open = open;
         self.open.clear();
     }
 
     fn span(&self, k: usize) -> std::ops::Range<usize> {
         let start = k.checked_sub(1).map_or(0, |prev| self.ends[prev]);
         start..self.ends[k]
+    }
+}
+
+/// One logical line's cells, in its own mapping for the reason
+/// [`PackedRows::cells`] is: a line can span the whole ring. The cells
+/// past `len` are stale.
+#[derive(Default)]
+struct CellRun {
+    cells: PagedCells,
+    len: usize,
+}
+
+impl CellRun {
+    fn extend_from_slice(&mut self, src: &[Cell]) {
+        let end = self.len + src.len();
+        if end > self.cells.capacity() {
+            let mut moved = PagedCells::with_reserve(self.len, end.max(self.cells.capacity() * 2));
+            moved.copy_from_slice(&self.cells[..self.len]);
+            self.cells = moved;
+        }
+        if end > self.cells.len() {
+            self.cells.grow(end);
+        }
+        self.cells[self.len..end].copy_from_slice(src);
+        self.len = end;
+    }
+}
+
+impl std::ops::Deref for CellRun {
+    type Target = [Cell];
+
+    fn deref(&self) -> &[Cell] {
+        &self.cells[..self.len]
     }
 }
 
