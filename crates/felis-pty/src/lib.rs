@@ -29,6 +29,8 @@ use windows as platform;
 
 pub use command::{Command, Size, env_bytes, env_from_bytes};
 pub use quiesce::{Parked, Quiescer};
+#[cfg(windows)]
+pub use windows::set_conpty_dir;
 
 /// Pending-byte ceiling for the reader ⇄ parser handoff: the reader
 /// parks once this many unparsed bytes are buffered. A flood amortizes

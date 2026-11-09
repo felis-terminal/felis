@@ -121,6 +121,7 @@ async fn prepare(
 
 fn adopt(session: &SessionDump) -> Result<Adopted, TakeoverError> {
     let conpty = session.conpty.unwrap_or_default();
+    crate::use_felis_conpty_dir();
     prepare_adopt(&HandoverValues {
         signal: conpty.signal,
         reference: conpty.reference,

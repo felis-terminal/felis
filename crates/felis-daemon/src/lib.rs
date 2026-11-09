@@ -198,6 +198,20 @@ pub struct SpawnedPty {
     pub quiescer: felis_pty::Quiescer,
 }
 
+/// Points `felis-pty` at the `ConPTY` extraction directory that
+/// `docs/reference/workspace.md` names. Every path into the bundled
+/// host calls this, library tests included.
+#[cfg(windows)]
+pub(crate) fn use_felis_conpty_dir() {
+    let Some(dirs) = directories::ProjectDirs::from("", "", "felis") else {
+        tracing::error!("no local application data directory for the ConPTY host");
+        return;
+    };
+    if let Err(in_force) = felis_pty::set_conpty_dir(dirs.data_local_dir().join("conpty")) {
+        tracing::warn!(dir = %in_force.display(), "the ConPTY directory is already set elsewhere");
+    }
+}
+
 impl SpawnedPty {
     /// Default shell command: `$SHELL`, falling back to `/bin/sh`.
     ///
@@ -242,6 +256,8 @@ impl SpawnedPty {
         let core = Arc::new(parking_lot::Mutex::new(parse_core));
         let signals = Arc::new(ParseSignals::new());
         let sink = parse_sink::build_sink(Arc::clone(&core), Arc::clone(&signals));
+        #[cfg(windows)]
+        use_felis_conpty_dir();
         let session = felis_pty::spawn(command, size, sink)?;
         Ok(Self::from_session(session, core, signals))
     }

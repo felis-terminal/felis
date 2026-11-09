@@ -1379,6 +1379,7 @@ dependencies = [
  "bytes",
  "clap",
  "criterion",
+ "directories",
  "felis-client-core",
  "felis-grid",
  "felis-protocol",
@@ -1447,7 +1448,6 @@ name = "felis-pty"
 version = "0.1.2"
 dependencies = [
  "conpty-bin-vendored",
- "directories",
  "felis-grid",
  "felis-vt",
  "libc",
