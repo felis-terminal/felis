@@ -1930,7 +1930,9 @@ async fn session_exited_carries_the_signal_that_killed_the_program() {
     );
 }
 
-#[cfg(all(unix, feature = "daemon-tests"))]
+// macOS keeps a session leader's controlling terminal open until the
+// leader exits, so there the PTY never closes under a running program.
+#[cfg(all(unix, not(target_os = "macos"), feature = "daemon-tests"))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn session_exited_carries_no_status_when_the_program_outlives_its_pty() {
     assert_eq!(
@@ -1941,6 +1943,20 @@ async fn session_exited_carries_no_status_when_the_program_outlives_its_pty() {
         )
         .await,
         None,
+    );
+}
+
+// The macOS side of the split above: the PTY closes only when the program
+// exits, so the window hears its real status.
+#[cfg(all(target_os = "macos", feature = "daemon-tests"))]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn session_exited_carries_the_status_of_a_program_that_closed_its_pty() {
+    assert_eq!(
+        session_exit_status_of(
+            "exec </dev/null >/dev/null 2>&1; i=0; while [ \"$i\" -lt 20000 ]; do i=$((i+1)); done; exit 7"
+        )
+        .await,
+        Some(felis_protocol::messages::ExitStatus::Code(7)),
     );
 }
 
