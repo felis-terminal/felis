@@ -124,6 +124,10 @@ just snapshot-accept   # accept all staged snapshots
 The renderer's cell-instance fixtures are raw bytes rather than insta snapshots: they pin the bg, fg, and decoration
 instance buffers a set of small screens paint into, and `just golden` rewrites them.
 
+felis-shaping's color glyphs are held to a reference rather than a snapshot: the `color-reference` flake check, Linux
+only, draws the pinned `COLR` faces through felis and through cairo and fails when they differ past the bounds
+`dev/color-reference/compare.py` sets.
+
 ## Conformance tests
 
 ### vttest

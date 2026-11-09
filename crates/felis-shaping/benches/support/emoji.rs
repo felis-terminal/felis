@@ -19,6 +19,12 @@ pub(crate) const COLR: &[char] = &[
     '😀', '❤', '🦀', '👍', '🎉', '✅', '⭐', '🔥', '🐱', '🌈', '🍣', '🚀',
 ];
 
+/// Single code point emoji of the `COLR` version 1 subset: gradients,
+/// nested composites and clip boxes, with no ligature to shape.
+pub(crate) const COLR_V1: &[char] = &[
+    '😀', '😂', '❤', '👍', '🎉', '✅', '⭐', '🔥', '🐱', '🌈', '🚀', '🎄', '🐰',
+];
+
 pub(crate) const PX: u32 = 16;
 
 /// The face `family` names in `file` under the pinned test-font
@@ -39,4 +45,8 @@ pub(crate) fn cbdt() -> Arc<Font> {
 
 pub(crate) fn colr() -> Arc<Font> {
     face("../color-probe/FelisColrProbe.ttf", "OpenMoji")
+}
+
+pub(crate) fn colr_v1() -> Arc<Font> {
+    face("../colrv1/FelisColrV1Probe.ttf", "Noto Color Emoji")
 }

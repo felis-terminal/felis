@@ -166,9 +166,10 @@ def color_probe(out):
     # C: two layers 20 em apart.  D: layers that paint no ink.
     # E: two small layers at opposite corners of an em square.
     # F: E's first layer, and a layer inkless at the opposite corner.
+    # G: A's version 0 layers alone.
     layer_names = ["lay1", "lay2", "far1", "far2", "blank", "corner1", "corner2"]
-    names = [".notdef", "A", "B", "C", "D", "E", "F", *layer_names, "sliver"]
-    cmap = {ord(name): name for name in "ABCDEF"}
+    names = [".notdef", "A", "B", "C", "D", "E", "F", "G", *layer_names, "sliver"]
+    cmap = {ord(name): name for name in "ABCDEFG"}
     fb = base(names, "Felis Color Probe", cmap)
     glyphs = {name: rect(50, 0, 550, 700) for name in names}
     glyphs.update(
@@ -200,6 +201,7 @@ def color_probe(out):
         "D": [("blank", 0)],
         "E": [("corner1", 0), ("corner2", 2)],
         "F": [("corner1", 0), ("sliver", 2)],
+        "G": [("lay1", 0), ("lay2", 1)],
     }
     table = colr.table
     table.BaseGlyphRecordArray = record(ot.BaseGlyphRecordArray, BaseGlyphRecord=[])

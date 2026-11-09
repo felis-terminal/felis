@@ -70,11 +70,11 @@ mod gate {
         cache: ShapeCache,
     }
 
-    fn setup_emoji(colr: bool) -> EmojiInput {
-        let (font, glyphs) = if colr {
-            (emoji::colr(), emoji::COLR)
-        } else {
-            (emoji::cbdt(), emoji::CBDT)
+    fn setup_emoji(source: &str) -> EmojiInput {
+        let (font, glyphs) = match source {
+            "cbdt" => (emoji::cbdt(), emoji::CBDT),
+            "colr" => (emoji::colr(), emoji::COLR),
+            _ => (emoji::colr_v1(), emoji::COLR_V1),
         };
         EmojiInput {
             font,
@@ -85,8 +85,9 @@ mod gate {
 
     // Every emoji misses, as in `shape_cache`.
     #[library_benchmark(setup = setup_emoji)]
-    #[bench::miss_emoji_cbdt(false)]
-    #[bench::miss_emoji_colr(true)]
+    #[bench::miss_emoji_cbdt("cbdt")]
+    #[bench::miss_emoji_colr("colr")]
+    #[bench::miss_emoji_colrv1("colrv1")]
     fn shape_cache_emoji(mut input: EmojiInput) -> EmojiInput {
         for &ch in input.glyphs {
             black_box(input.cache.get_or_insert(&input.font, ch, emoji::PX));

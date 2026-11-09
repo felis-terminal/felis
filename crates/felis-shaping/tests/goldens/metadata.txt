@@ -624,7 +624,7 @@ FelisColorProbe.ttf#0
   postscript None
   weight 400 italic false off-width 0
   color true
-  cmap 6 3230fae7abd146d5
+  cmap 7 8a91e1e53d4f8285
 FelisColorProbeNoCpal.ttf#0
   display Felis Color Probe
   families ["Felis Color Probe"]
@@ -632,7 +632,7 @@ FelisColorProbeNoCpal.ttf#0
   postscript None
   weight 400 italic false off-width 0
   color false
-  cmap 6 3230fae7abd146d5
+  cmap 7 8a91e1e53d4f8285
 FelisColrProbe.ttf#0
   display OpenMoji Color
   families ["OpenMoji"]

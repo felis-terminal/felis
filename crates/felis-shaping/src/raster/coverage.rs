@@ -133,6 +133,156 @@ pub(crate) fn rasterize_within(
     ))
 }
 
+/// [`rasterize_within`] cut to `window` (`[left, top, right, bottom]` in
+/// pixels, y up) as geometry, so an edge the window shares with the
+/// outline is antialiased once, not twice. The side limit applies to the
+/// cut box, so an outline far larger than the window costs only the window.
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss,
+    reason = "the side limit bounds the cut box before the casts"
+)]
+pub(crate) fn rasterize_clipped(
+    path: &[PathEl],
+    px: f32,
+    segments: &mut Vec<[f32; 4]>,
+    budget: usize,
+    window: [f32; 4],
+) -> Option<Mask> {
+    let side = side_limit(px)?;
+    segments.clear();
+    let points = path.iter().flat_map(PathEl::points);
+    if !points
+        .clone()
+        .all(|p| p.x.abs() <= MAX_SIDE && p.y.abs() <= MAX_SIDE)
+    {
+        return None;
+    }
+    let Some((min, _)) = bounds(points.copied()) else {
+        return Some(Mask::default());
+    };
+    let origin = Point::new(min.x.floor(), min.y.floor());
+    flatten(path, origin, segments)?;
+    let Some((min, max)) = bounds(
+        segments
+            .iter()
+            .flat_map(|s| [Point::new(s[0], s[1]), Point::new(s[2], s[3])]),
+    ) else {
+        return Some(Mask::default());
+    };
+    let [w_left, w_top, w_right, w_bottom] = [
+        window[0] - origin.x,
+        window[1] - origin.y,
+        window[2] - origin.x,
+        window[3] - origin.y,
+    ];
+    let left = min.x.max(w_left).floor();
+    let right = max.x.min(w_right).ceil();
+    let top = max.y.min(w_top).ceil();
+    let bottom = min.y.max(w_bottom).floor();
+    if !(right > left && top > bottom) {
+        return Some(Mask::default());
+    }
+    let (width, height) = ((right - left) as usize, (top - bottom) as usize);
+    if !within_budget(width, height, side, budget) {
+        return None;
+    }
+    let (w, h) = (width as f32, height as f32);
+    let cut = [
+        (w_left - left).clamp(0.0, w),
+        (top - w_top).clamp(0.0, h),
+        (w_right - left).clamp(0.0, w),
+        (top - w_bottom).clamp(0.0, h),
+    ];
+    let mut cells = vec![Cell::default(); width * height];
+    let fixed = |v: f32, max: i32| ((v * ONE as f32).round() as i32).clamp(0, max);
+    let (xmax, ymax) = (width as i32 * ONE, height as i32 * ONE);
+    for s in segments.iter() {
+        let from = Point::new(s[0] - left, top - s[1]);
+        let to = Point::new(s[2] - left, top - s[3]);
+        for [a, b] in clip_to_window(from, to, cut).into_iter().flatten() {
+            deposit(
+                &mut cells,
+                width,
+                (fixed(a.x, xmax), fixed(a.y, ymax)),
+                (fixed(b.x, xmax), fixed(b.y, ymax)),
+            );
+        }
+    }
+    let mut data = vec![0; width * height];
+    for (row, out) in cells.chunks_exact(width).zip(data.chunks_exact_mut(width)) {
+        accumulate_row(row, out);
+    }
+    drop(cells);
+    Some(trim(
+        data,
+        width,
+        height,
+        (origin.x + left) as i32,
+        (origin.y + top) as i32,
+    ))
+}
+
+/// The pieces of the edge from `from` to `to` (y down) inside the rows of
+/// `[x0, y0, x1, y1]`, split at the columns; a piece beside the window
+/// moves onto its nearer edge, keeping the cover it adds to the columns
+/// right of it. Clamping the end points alone would bend the edge.
+#[expect(
+    clippy::float_cmp,
+    reason = "only an edge that is exactly horizontal or vertical has no crossing to solve for"
+)]
+#[expect(
+    clippy::many_single_char_names,
+    reason = "the window's corners and the edge's ends read as the geometry names them"
+)]
+fn clip_to_window(from: Point, to: Point, [x0, y0, x1, y1]: [f32; 4]) -> [Option<[Point; 2]>; 3] {
+    let mut out = [None; 3];
+    let (a, b) = if from.y <= to.y {
+        (from, to)
+    } else {
+        (to, from)
+    };
+    if b.y <= y0 || a.y >= y1 || a.y == b.y {
+        return out;
+    }
+    let at_y = |y: f32| a.lerp(b, (y - a.y) / (b.y - a.y));
+    let (a, b) = (
+        if a.y < y0 { at_y(y0) } else { a },
+        if b.y > y1 { at_y(y1) } else { b },
+    );
+    let mut cuts = [0.0, 1.0, 1.0, 1.0];
+    let mut n = 1;
+    if a.x != b.x {
+        let mut crossings = [(x0 - a.x) / (b.x - a.x), (x1 - a.x) / (b.x - a.x)];
+        crossings.sort_by(f32::total_cmp);
+        for t in crossings {
+            if t > 0.0 && t < 1.0 {
+                cuts[n] = t;
+                n += 1;
+            }
+        }
+    }
+    cuts[n] = 1.0;
+    for i in 0..n {
+        let (p, q) = (a.lerp(b, cuts[i]), a.lerp(b, cuts[i + 1]));
+        let mid = p.lerp(q, 0.5).x;
+        let x = |v: f32| {
+            if mid < x0 {
+                x0
+            } else if mid > x1 {
+                x1
+            } else {
+                v.clamp(x0, x1)
+            }
+        };
+        let (p, q) = (Point::new(x(p.x), p.y), Point::new(x(q.x), q.y));
+        out[i] = Some(if from.y <= to.y { [p, q] } else { [q, p] });
+    }
+    out
+}
+
 /// The pixel box `path` flattens into at `px`, relative to `origin`; empty
 /// when the outline covers no pixel box.
 struct Flattened {
@@ -541,7 +691,7 @@ mod kani_proofs {
 mod tests {
     use proptest::prelude::*;
 
-    use super::{Mask, PathEl, Point, origin, rasterize, side_limit};
+    use super::{Mask, PathEl, Point, origin, rasterize, rasterize_clipped, side_limit};
 
     const PX: f32 = 32.0;
 
@@ -819,6 +969,55 @@ mod tests {
                     prop_assert!(u32::from(ga.abs_diff(gb)) <= slack, "({x},{y}): {ga} vs {gb}");
                 }
             }
+        }
+
+        #[test]
+        fn a_window_around_the_outline_cuts_nothing(path in path(point())) {
+            let (whole, _) = render(&path);
+            let clipped = rasterize_clipped(&path, PX, &mut Vec::new(), super::IMAGE_BUDGET, [-100.0, 100.0, 100.0, -100.0])
+                .expect("inside every limit");
+            prop_assert_eq!(whole, clipped);
+        }
+
+        #[test]
+        fn a_whole_pixel_window_keeps_the_coverage_inside_it(
+            path in path(point()),
+            corner in (-8_i32..40, -8_i32..40),
+            size in (1_i32..48, 1_i32..48),
+        ) {
+            let (whole, segments) = render(&path);
+            let (left, bottom) = corner;
+            let (right, top) = (left + size.0, bottom + size.1);
+            let window = [left, top, right, bottom].map(|v| v as f32);
+            let clipped = rasterize_clipped(&path, PX, &mut Vec::new(), super::IMAGE_BUDGET, window)
+                .expect("inside every limit");
+            for y in -10..45 {
+                for x in -10..45 {
+                    let inside = (left..right).contains(&x) && (bottom..top).contains(&y);
+                    let want = if inside { at(&whole, x, y) } else { 0 };
+                    let got = at(&clipped, x, y);
+                    let slack = 1 + 2 * touching(&segments, x, y);
+                    prop_assert!(u32::from(want.abs_diff(got)) <= slack, "({x},{y}): {got} against {want}");
+                }
+            }
+        }
+
+        #[test]
+        fn a_window_edge_through_a_pixel_covers_the_part_inside_it(
+            x0 in 0.0_f32..1.0,
+            y0 in 0.0_f32..1.0,
+            width in 2.0_f32..20.0,
+            height in 2.0_f32..20.0,
+        ) {
+            let square = polygon(&[p(-50.0, -50.0), p(50.0, -50.0), p(50.0, 50.0), p(-50.0, 50.0)]);
+            let window = [x0, y0 + height, x0 + width, y0];
+            let mask = rasterize_clipped(&square, PX, &mut Vec::new(), super::IMAGE_BUDGET, window)
+                .expect("inside every limit");
+            let covered = mask.data.iter().map(|&v| f32::from(v)).sum::<f32>() / 255.0;
+            let edge_pixels = 2.0 * (width + height + 2.0);
+            prop_assert!(width.mul_add(-height, covered).abs() <= edge_pixels / 128.0, "{covered} against {}", width * height);
+            let corner = ((1.0 - x0) * (1.0 - y0) * 256.0).min(255.0);
+            prop_assert!((f32::from(at(&mask, 0, 0)) - corner).abs() <= 2.0, "{} against {corner}", at(&mask, 0, 0));
         }
 
         #[test]

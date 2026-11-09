@@ -55,6 +55,10 @@ gungraun = { workspace = true }
 name = "color_budget"
 required-features = ["testing"]
 
+[[example]]
+name = "color_reference"
+required-features = ["testing"]
+
 [[bench]]
 name = "shape_cache"
 harness = false
