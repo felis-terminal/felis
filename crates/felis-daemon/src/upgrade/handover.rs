@@ -41,6 +41,7 @@ pub async fn prepare(
     state: &Arc<UpgradeState>,
 ) -> Result<Ready, Refusal> {
     check_replaceable(state)?;
+    crate::use_felis_conpty_dir();
     felis_pty::handover::available().map_err(Refusal::Unsupported)?;
     let Some(pipe_name) = state.listener() else {
         return Err(Refusal::Unsupported(

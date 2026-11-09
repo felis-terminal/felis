@@ -39,7 +39,7 @@ pub fn available() -> Result<(), String> {
     let host = process_host().map_err(|err| err.to_string())?;
     if host != Host::Bundled {
         return Err(
-            "this daemon runs its shells on the inbox console host, which cannot hand them over"
+            "this process runs its shells on the inbox console host, which cannot hand them over"
                 .to_owned(),
         );
     }

@@ -227,9 +227,10 @@ struct Extracted {
 /// kept and refuses every spawn: there is no fallback to the inbox host.
 fn bundle() -> Result<&'static Bundle, PtyError> {
     static BUNDLE: OnceLock<Result<Bundle, String>> = OnceLock::new();
+    let dir = conpty_dir()?.join(conpty::VERSION);
     BUNDLE
         .get_or_init(|| {
-            let bundle = bundle_dir().and_then(load_bundle);
+            let bundle = load_bundle(dir);
             match &bundle {
                 Ok(bundle) => {
                     tracing::info!(dir = %bundle.dir.display(), "using the bundled ConPTY");
@@ -242,10 +243,33 @@ fn bundle() -> Result<&'static Bundle, PtyError> {
         .map_err(|err| PtyError::OpenPty(err.clone()))
 }
 
-fn bundle_dir() -> Result<PathBuf, String> {
-    directories::ProjectDirs::from("", "", "felis")
-        .map(|dirs| dirs.data_local_dir().join("conpty").join(conpty::VERSION))
-        .ok_or_else(|| "no local application data directory for the ConPTY host".to_owned())
+static CONPTY_DIR: OnceLock<PathBuf> = OnceLock::new();
+
+/// Sets the directory the bundled `ConPTY` host is extracted into, one
+/// directory per embedded version beneath it. The bundled host refuses
+/// every spawn and adoption until this is set. Setting the directory
+/// already in force does nothing; any other returns `Err` with the one
+/// in force, since the host loads once per process.
+pub fn set_conpty_dir(dir: PathBuf) -> Result<(), PathBuf> {
+    match CONPTY_DIR.set(dir) {
+        Ok(()) => Ok(()),
+        Err(dir) => match CONPTY_DIR.get() {
+            Some(in_force) if *in_force != dir => Err(in_force.clone()),
+            _ => Ok(()),
+        },
+    }
+}
+
+/// Read outside `bundle`'s cell so that a spawn before
+/// [`set_conpty_dir`] does not cache its refusal.
+fn conpty_dir() -> Result<&'static Path, PtyError> {
+    #[cfg(test)]
+    let _already_set = set_conpty_dir(std::env::temp_dir().join("felis-pty-tests"));
+    CONPTY_DIR.get().map(PathBuf::as_path).ok_or_else(|| {
+        PtyError::OpenPty(
+            "no ConPTY directory set; call felis_pty::set_conpty_dir first".to_owned(),
+        )
+    })
 }
 
 fn load_bundle(dir: PathBuf) -> Result<Bundle, String> {
@@ -331,7 +355,7 @@ fn place(dir: &Path, name: &str, bytes: &[u8]) -> Result<File, String> {
     if on_disk != bytes {
         // Never overwritten: another daemon may be running it.
         return Err(format!(
-            "{} is not the ConPTY felis embeds; delete {} while no felis daemon runs",
+            "{} is not the ConPTY this program embeds; delete {} while no process uses it",
             path.display(),
             dir.display()
         ));
