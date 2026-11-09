@@ -1033,7 +1033,10 @@ fn osc_52_single_segment_is_a_noop() {
     let mut p = Parser::new();
     let mut g = Grid::new(1, 1);
     drive(&mut p, &mut g, b"\x1b]52;c\x07");
-    assert!(g.take_pending_clipboard_set().is_none());
+    assert_eq!(
+        g.take_pending_clipboard_sets(),
+        Vec::<ClipboardWrite>::new()
+    );
     assert_eq!(responses(&mut g), Vec::<Vec<u8>>::new());
 }
 

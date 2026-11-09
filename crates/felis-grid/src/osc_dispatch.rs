@@ -1,12 +1,11 @@
 //! OSC dispatch handlers: OSC 8, 66, 4/5/10-12, 52, 9/777/99, and 22.
 
 use super::{
-    ClipboardSelection, ClipboardWrite, ClusterText, Grapheme, Grid, NonZeroU16, NonZeroU32,
-    ProgramStatusEffect, PtyEffect, SPECIAL_COLOR_COUNT, ThemeChannel, default_dynamic_color,
-    default_palette_color, default_special_color, format_osc_52_response,
-    format_osc_color_response, osc8_scheme_allowed, parse_osc_8_id, parse_osc_52_selection,
-    parse_palette_index, parse_x_color, sanitize_osc_str, special_slot_from_osc4_alias,
-    special_slot_from_osc5,
+    ClipboardSelection, ClusterText, Grapheme, Grid, NonZeroU16, NonZeroU32, ProgramStatusEffect,
+    PtyEffect, SPECIAL_COLOR_COUNT, ThemeChannel, default_dynamic_color, default_palette_color,
+    default_special_color, format_osc_52_response, format_osc_color_response, osc8_scheme_allowed,
+    parse_osc_8_id, parse_osc_52_selection, parse_palette_index, parse_x_color, sanitize_osc_str,
+    special_slot_from_osc4_alias, special_slot_from_osc5,
 };
 use crate::editing::{continues_cluster, ends_in_pictographic_joiner, is_lone_regional_indicator};
 use felis_vt::{split_osc, split_osc_first};
@@ -308,7 +307,7 @@ impl Grid {
     }
 
     /// A write always lands in the session-local mirror (which serves
-    /// the `?` readback) and queues a `ClipboardWrite`; whether it also
+    /// the `?` readback) and queues a write for each selection it names; whether it also
     /// reaches the OS clipboard is the client's `clipboard.osc_52 =
     /// "system"` opt-in, never decided here.
     pub(crate) fn dispatch_osc_52(&mut self, payload: Option<&[u8]>) {
@@ -349,11 +348,12 @@ impl Grid {
         };
         if selection.contains(ClipboardSelection::CLIPBOARD) {
             self.clipboard_cache_clipboard = Some(data.clone());
+            self.pending_clipboard_set_clipboard = Some(data.clone());
         }
         if selection.contains(ClipboardSelection::PRIMARY) {
             self.clipboard_cache_primary = Some(data.clone());
+            self.pending_clipboard_set_primary = Some(data);
         }
-        self.pending_clipboard_set = Some(ClipboardWrite { selection, data });
     }
 
     /// Clipboard wins when both are present: xterm's "first selector

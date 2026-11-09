@@ -1,9 +1,39 @@
 use felis_client_core::config::MAX_FONT_SIZE_LOGICAL_PX;
+use felis_grid::ClipboardSelection;
 
 use super::*;
 
 const fn at(row: u16, col: u16) -> GridPos {
     GridPos { row, col }
+}
+
+const fn mode_flags(
+    bracketed_paste: bool,
+    alt_screen: bool,
+    mouse_protocol: felis_protocol::messages::MouseProtocol,
+) -> GridMsg {
+    GridMsg::ModeFlags {
+        bracketed_paste,
+        alt_screen,
+        mouse_protocol,
+        application_cursor: false,
+        modify_other_keys: felis_protocol::messages::ModifyOtherKeys::Off,
+        application_keypad: false,
+        win32_input_mode: false,
+        reverse_video: false,
+    }
+}
+
+fn clipboard_frame(selection: ClipboardSelection, data: &[u8], conn_gen: u64) -> AppEvent {
+    AppEvent::GridFrame {
+        msg: GridMsg::ClipboardSet {
+            write: felis_protocol::messages::ClipboardWrite {
+                selection,
+                data: data.to_vec(),
+            },
+        },
+        conn_gen,
+    }
 }
 
 mod cli {
@@ -1479,7 +1509,7 @@ fn held_buttons_reports_the_newest_button_for_drag_attribution() {
 }
 
 mod selection_invalidation {
-    use felis_protocol::messages::{ModifyOtherKeys, MouseProtocol};
+    use felis_protocol::messages::MouseProtocol;
 
     use super::*;
 
@@ -1609,7 +1639,7 @@ mod selection_invalidation {
     #[test]
     fn entering_or_leaving_the_alt_screen_clears_the_selection() {
         // A `?1049` swap replaces every visible cell, in both directions.
-        let msg = mode_flags(true, MouseProtocol::Off);
+        let msg = mode_flags(false, true, MouseProtocol::Off);
         assert!(grid_change_invalidates_selection(&msg, false, true, LIVE));
         assert!(grid_change_invalidates_selection(&msg, true, false, LIVE));
     }
@@ -1620,13 +1650,13 @@ mod selection_invalidation {
         // reporting after taking the alt screen re-sends the same
         // `alt_screen`; only the transition may clear.
         assert!(!grid_change_invalidates_selection(
-            &mode_flags(true, MouseProtocol::AnyMotion),
+            &mode_flags(false, true, MouseProtocol::AnyMotion),
             true,
             true,
             LIVE,
         ));
         assert!(!grid_change_invalidates_selection(
-            &mode_flags(false, MouseProtocol::ButtonEvents),
+            &mode_flags(false, false, MouseProtocol::ButtonEvents),
             false,
             false,
             LIVE,
@@ -1654,19 +1684,6 @@ mod selection_invalidation {
         assert!(!grid_change_invalidates_selection(
             &at_bottom, false, false, LIVE
         ));
-    }
-
-    const fn mode_flags(alt_screen: bool, mouse_protocol: MouseProtocol) -> GridMsg {
-        GridMsg::ModeFlags {
-            bracketed_paste: false,
-            alt_screen,
-            mouse_protocol,
-            application_cursor: false,
-            modify_other_keys: ModifyOtherKeys::Off,
-            application_keypad: false,
-            win32_input_mode: false,
-            reverse_video: false,
-        }
     }
 }
 
@@ -2122,6 +2139,8 @@ fn test_place(socket: &str, session_id: u128) -> exit_ladder::Place {
 /// window effect in [`AppHarness::window`].
 mod app_events {
     use std::sync::mpsc;
+
+    use felis_client_core::{PipeRegionSource, PipeTarget};
 
     use super::*;
     use crate::window_input::{KeyPress, PressedKey, WindowInput};
@@ -2610,6 +2629,158 @@ mod app_events {
                 "{answer:?} cancels and is consumed"
             );
         }
+    }
+
+    #[test]
+    fn a_pipe_paste_sink_holds_control_bytes_for_confirmation_like_ctrl_v() {
+        let runtime = runtime();
+        let mut harness = app_on(&runtime, absent_daemon("home"), 0xa);
+        let live = ViewportPosition {
+            offset: 0,
+            anchor: None,
+        };
+
+        harness
+            .app
+            .finish_pipe(b"rm -rf build\n", None, PipeTarget::Paste, live);
+        assert!(harness.app.pending_confirm.is_some());
+        assert!(
+            harness.sent().is_empty(),
+            "nothing goes out before the answer"
+        );
+        harness.app.pending_confirm = None;
+
+        harness
+            .app
+            .finish_pipe(b"make", None, PipeTarget::Paste, live);
+        assert!(harness.app.pending_confirm.is_none());
+        assert_eq!(
+            harness.sent(),
+            vec![input_frame(&InputMsg::Paste(b"make".to_vec()))]
+        );
+
+        let conn_gen = harness.app.conn_gen;
+        harness.app.on_app_event(AppEvent::GridFrame {
+            msg: mode_flags(true, false, felis_protocol::messages::MouseProtocol::Off),
+            conn_gen,
+        });
+        harness
+            .app
+            .finish_pipe(b"rm -rf build\n", None, PipeTarget::Paste, live);
+        assert!(
+            harness.app.pending_confirm.is_none(),
+            "bracketed paste frames the line break, so nothing to confirm"
+        );
+        assert_eq!(
+            harness.sent(),
+            vec![input_frame(&InputMsg::Paste(b"rm -rf build\n".to_vec()))]
+        );
+    }
+
+    #[test]
+    fn the_osc_52_pipe_source_replays_the_last_clipboard_write_a_program_made() {
+        let runtime = runtime();
+        let mut harness = app_on(&runtime, absent_daemon("home"), 0xa);
+        let live = harness.app.conn_gen;
+
+        harness
+            .app
+            .start_pipe(PipeRegionSource::Osc52, PipeTarget::Paste, false);
+        assert!(harness.sent().is_empty(), "no write yet, nothing to pipe");
+
+        harness.app.on_app_event(clipboard_frame(
+            ClipboardSelection::CLIPBOARD,
+            b"yanked",
+            live,
+        ));
+        harness.app.on_app_event(clipboard_frame(
+            ClipboardSelection::PRIMARY,
+            b"primary only",
+            live,
+        ));
+        harness
+            .app
+            .start_pipe(PipeRegionSource::Osc52, PipeTarget::Paste, false);
+        assert_eq!(
+            harness.sent(),
+            vec![input_frame(&InputMsg::Paste(b"yanked".to_vec()))]
+        );
+    }
+
+    /// The window's last `c` write: a later one replaces it, a frame from
+    /// a superseded connection does not, and a session switch keeps it.
+    #[cfg(unix)]
+    #[test]
+    fn the_osc_52_pipe_value_follows_the_latest_live_write_across_a_switch() {
+        let runtime = runtime();
+        let mut harness = app_on(&runtime, absent_daemon("home"), 0xa);
+        let write =
+            |data: &[u8], conn_gen| clipboard_frame(ClipboardSelection::CLIPBOARD, data, conn_gen);
+        let live = harness.app.conn_gen;
+
+        harness.app.on_app_event(write(b"first", live));
+        harness.app.on_app_event(write(b"second", live));
+        assert_eq!(
+            harness.app.last_osc_52_write.as_deref(),
+            Some(&b"second"[..])
+        );
+
+        harness.app.on_app_event(write(b"stale", live + 1));
+        assert_eq!(
+            harness.app.last_osc_52_write.as_deref(),
+            Some(&b"second"[..])
+        );
+
+        let _far = land_switch(&runtime, &mut harness, 0xb);
+        assert_eq!(
+            harness.app.last_osc_52_write.as_deref(),
+            Some(&b"second"[..])
+        );
+    }
+
+    /// The `clipboard.osc_52 = "mirror"` gate as a backend sees it:
+    /// program writes are dropped, user writes land.
+    #[derive(Default)]
+    struct MirrorGatedClipboard(InMemoryClipboard);
+
+    impl Clipboard for MirrorGatedClipboard {
+        fn read(&self) -> Result<Vec<u8>, felis_client_core::clipboard::ClipboardError> {
+            self.0.read()
+        }
+        fn write(&self, _bytes: &[u8]) -> Result<(), felis_client_core::clipboard::ClipboardError> {
+            Ok(())
+        }
+        fn write_user(
+            &self,
+            bytes: &[u8],
+        ) -> Result<(), felis_client_core::clipboard::ClipboardError> {
+            self.0.write(bytes)
+        }
+    }
+
+    #[test]
+    fn the_osc_52_pipe_chord_promotes_a_gated_program_write_to_the_clipboard() {
+        let runtime = runtime();
+        let mut harness = app_on(&runtime, absent_daemon("home"), 0xa);
+        let clipboard = Arc::new(MirrorGatedClipboard::default());
+        harness.app.clipboard = clipboard.clone();
+        let conn_gen = harness.app.conn_gen;
+
+        harness.app.on_app_event(clipboard_frame(
+            ClipboardSelection::CLIPBOARD,
+            b"yanked",
+            conn_gen,
+        ));
+        assert_eq!(
+            clipboard.read().unwrap(),
+            b"",
+            "the gate kept the program out"
+        );
+
+        harness
+            .app
+            .start_pipe(PipeRegionSource::Osc52, PipeTarget::Clipboard, false);
+        assert_eq!(clipboard.read().unwrap(), b"yanked");
     }
 
     fn retarget_target() -> RetargetTarget {

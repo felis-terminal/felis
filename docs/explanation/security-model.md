@@ -128,10 +128,12 @@ exist are fire-and-forget.
 ### Clipboard, bracketed paste, and OSC control bytes
 
 - **Clipboard is write-mostly and gated.** An OSC 52 write always lands in the session-local mirror, but reaches the
-  _OS_ clipboard only with explicit user opt-in (`clipboard.osc_52 = "system"`, default off). A `?` query never reads
-  the OS clipboard; it answers that mirror of the values the session itself wrote. The OS-clipboard read is not
-  implemented, and the standing position is never: whether to support clipboard _read_ from the PTY at all, and under
-  what confirmation, is a question felis answers no to until an argument reopens it.
+  _OS_ clipboard on its own only with explicit user opt-in (`clipboard.osc_52 = "system"`, default off). The one other
+  route is the user's own chord: a `pipe` from the `osc_52` source promotes the last write, ungated, because the
+  keypress is the consent the gate stands in for. A `?` query never reads the OS clipboard; it answers that mirror of
+  the values the session itself wrote. The OS-clipboard read is not implemented, and the standing position is never:
+  whether to support clipboard _read_ from the PTY at all, and under what confirmation, is a question felis answers no
+  to until an argument reopens it.
 - **Bracketed paste is never turned off silently.** The mode starts off and a program turns it on with `CSI ? 2004 h`. A
   DECRST that turns it back off raises an edge-triggered warning in the daemon's diagnostic log, so a program cannot
   strip the framing a shell relies on to tell pasted bytes from typed ones and leave no trace.

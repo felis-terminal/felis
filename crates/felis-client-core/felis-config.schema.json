@@ -958,6 +958,11 @@
           "description": "The last command line plus its output: the most recent\n`OSC 133 B → D` range.",
           "type": "string",
           "const": "last_command"
+        },
+        {
+          "description": "The last `OSC 52` clipboard (`c`) write a program in this window\nmade, whatever `clipboard.osc_52` let through to the OS.",
+          "type": "string",
+          "const": "osc_52"
         }
       ]
     },

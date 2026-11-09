@@ -695,7 +695,7 @@ menu instead of a prefix", wants e.g. just the last command's output) is a riche
 (`RegionToDaemonMsg::Rows` → `Row`… → `RowsDone`, [ipc.md](../../reference/ipc.md) "Region (kind = 6)"); only the keymap
 `pipe` chord uses the one-blob `Request` → `Reply` push path ([scrollback.md](../data-model/scrollback.md) "Capture").
 It is **not** a `sessions pipe` verb, which would wear the push name on a pull operation. The source _token_ aligns with
-the keymap; `selection` is client-owned and has no headless form, so it stays keymap-only.
+the keymap; `selection` and `osc_52` are client-owned and have no headless form, so they stay keymap-only.
 
 #### `pipe`'s `clipboard` sink overlaps `copy`, and keeps its place
 

@@ -1160,18 +1160,13 @@ impl App {
         }
         let viewport = self.viewport_position();
         let Some(wire_source) = source.wire_source() else {
-            let Some(sel) = self.selection() else {
-                tracing::debug!("pipe selection: no active selection; ignoring");
+            let Some(data) = self.client_pipe_source(source) else {
+                tracing::debug!(?source, "pipe: client-owned source is empty; ignoring");
                 return;
             };
-            let text = sel.extract_text(self.shadow.screen());
-            if text.is_empty() {
-                tracing::debug!("pipe selection: empty selection; ignoring");
-                return;
-            }
-            // A selection is an arbitrary sub-rectangle, not a window onto
-            // the buffer, so "where the user was looking" has no meaning.
-            self.finish_pipe(&text.into_bytes(), None, target, viewport);
+            // Neither source is a window onto the buffer, so "where the
+            // user was looking" has no meaning.
+            self.finish_pipe(&data, None, target, viewport);
             return;
         };
         // The daemon ends the connection on a `Region::Request` that
@@ -1199,8 +1194,21 @@ impl App {
         );
     }
 
-    /// Reached from `RegionToClientMsg::Reply`, and directly for the `Selection`
-    /// source.
+    /// The sources [`PipeRegionSource::wire_source`] leaves to the client.
+    /// `None` when there is nothing to ship.
+    fn client_pipe_source(&self, source: PipeRegionSource) -> Option<Vec<u8>> {
+        match source {
+            PipeRegionSource::Osc52 => self.last_osc_52_write.clone(),
+            PipeRegionSource::Selection => {
+                let text = self.selection()?.extract_text(self.shadow.screen());
+                (!text.is_empty()).then(|| text.into_bytes())
+            }
+            _ => None,
+        }
+    }
+
+    /// Reached from `RegionToClientMsg::Reply`, and directly for the
+    /// client-owned sources.
     pub(crate) fn finish_pipe(
         &mut self,
         data: &[u8],
@@ -1235,13 +1243,9 @@ impl App {
             }
             PipeTarget::Paste => {
                 self.pipe_state = PipeState::Idle;
-                // The daemon brackets it per `?2004` exactly as a Ctrl+V.
-                // Held to the same cap as one, too: its region budget is
-                // twice `MAX_PASTE_BYTES`, so a large scrollback reaches
-                // here already over the input limit.
-                if self.admit_paste(data.len()) {
-                    self.send_input(&InputMsg::Paste(data.to_vec()));
-                }
+                // The region is program-written text, so it takes the same
+                // size cap and REQ-804 confirmation as a Ctrl+V.
+                self.ferry_paste(data);
                 self.run_pending_push();
             }
         }

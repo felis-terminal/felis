@@ -1871,8 +1871,17 @@ struct Cycle {
     meta: MetaFacts,
     notifications: Option<streaming::TakenNotifications>,
     facets: Vec<GridMsg>,
-    clipboard: Option<felis_grid::ClipboardWrite>,
+    clipboard: ClipboardBatch,
     composed: Vec<Composed>,
+}
+
+/// A cycle's OSC 52 writes and the window they belong to, resolved
+/// while composing: every push in `finish_cycle` can evict the active
+/// window, and a target resolved after that would land on a bystander.
+#[derive(Default)]
+struct ClipboardBatch {
+    target: Option<SubscriberId>,
+    writes: Vec<felis_grid::ClipboardWrite>,
 }
 
 fn pty_write_outcome(res: Result<(), ConnError>) -> Option<EndReason> {
@@ -3155,20 +3164,23 @@ impl SessionTask {
     /// window attaching minutes later would ship a lie. The
     /// state-shaped facets come off the grid on that window's own
     /// rehydrate.
-    fn collect_facets_under(
-        &self,
-        core: &mut ParseCore,
-    ) -> (Vec<GridMsg>, Option<felis_grid::ClipboardWrite>) {
+    fn collect_facets_under(&self, core: &mut ParseCore) -> (Vec<GridMsg>, ClipboardBatch) {
         if self.subs.is_empty() || !core.grid.ready_to_present(Instant::now()) {
-            return (Vec::new(), None);
+            return (Vec::new(), ClipboardBatch::default());
         }
+        let writes = core.grid.take_pending_clipboard_sets();
+        let target = if writes.is_empty() {
+            None
+        } else {
+            self.clipboard_target()
+        };
         (
             streaming::collect_facets(&mut core.grid),
-            core.grid.take_pending_clipboard_set(),
+            ClipboardBatch { target, writes },
         )
     }
 
-    fn push_facets(&mut self, facets: &[GridMsg], clipboard: Option<felis_grid::ClipboardWrite>) {
+    fn push_facets(&mut self, facets: &[GridMsg], clipboard: ClipboardBatch) {
         if !facets.is_empty() {
             self.broadcast(|sub| {
                 if sub.is_window {
@@ -3178,8 +3190,24 @@ impl SessionTask {
                 }
             });
         }
-        if let Some(write) = clipboard {
-            self.route_clipboard_set(write);
+        if clipboard.writes.is_empty() {
+            return;
+        }
+        let Some(target) = clipboard.target else {
+            debug!(
+                id = ?self.id,
+                "dropping OSC 52 write: no attributable window subscriber"
+            );
+            return;
+        };
+        let Some(i) = self.sub_index(target) else {
+            return;
+        };
+        for write in clipboard.writes {
+            if !self.push_to(target, i, OutEvent::Grid(GridMsg::ClipboardSet { write })) {
+                debug!(id = ?self.id, sub = target.0, "OSC 52 target outbox died");
+                return;
+            }
         }
     }
 
@@ -3188,9 +3216,8 @@ impl SessionTask {
     /// mirror host's clipboard. The active subscriber is the best
     /// attribution; a sole window is unambiguous; otherwise the write
     /// is dropped rather than guessed.
-    fn route_clipboard_set(&mut self, write: felis_grid::ClipboardWrite) {
-        let target = self
-            .active_sub
+    fn clipboard_target(&self) -> Option<SubscriberId> {
+        self.active_sub
             .filter(|&id| self.subs.iter().any(|s| s.id == id && s.is_window))
             .or_else(|| {
                 let mut windows = self.subs.iter().filter(|s| s.is_window);
@@ -3198,19 +3225,7 @@ impl SessionTask {
                     (Some(only), None) => Some(only.id),
                     _ => None,
                 }
-            });
-        let Some(target) = target else {
-            debug!(
-                id = ?self.id,
-                "dropping OSC 52 write: no attributable window subscriber"
-            );
-            return;
-        };
-        if let Some(i) = self.sub_index(target)
-            && !self.push_to(target, i, OutEvent::Grid(GridMsg::ClipboardSet { write }))
-        {
-            debug!(id = ?self.id, sub = target.0, "OSC 52 target outbox died");
-        }
+            })
     }
 
     fn broadcast(&mut self, f: impl Fn(&Subscriber) -> Vec<OutEvent>) {
@@ -8827,6 +8842,56 @@ mod tests {
             .filter(|ev| matches!(ev, OutEvent::Grid(GridMsg::ClipboardSet { .. })))
             .count();
         assert_eq!(writes, 1, "a sole window subscriber is unambiguous");
+    }
+
+    /// A burst drains as one write per selection; losing the active
+    /// window on the first must not hand the second to a bystander.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn osc52_writes_stop_when_the_active_subscriber_dies_mid_burst() {
+        let mut task = SessionTask::for_tests(session_with("read _x"));
+        let (sub_a, rx_a) = attach_sub(&mut task, false);
+        let (_sub_b, mut rx_b) = attach_sub(&mut task, false);
+        task.active_sub = Some(sub_a);
+        drop(rx_a);
+
+        write_to_grid(&task, b"\x1b]52;c;Zm9v\x1b\\\x1b]52;p;YmFy\x1b\\");
+        task.broadcast_facets();
+
+        assert!(
+            drain_events(&mut rx_b)
+                .iter()
+                .all(|ev| !matches!(ev, OutEvent::Grid(GridMsg::ClipboardSet { .. }))),
+            "a bystander must not inherit the dead window's clipboard write",
+        );
+    }
+
+    /// The notification's attention push runs before the clipboard
+    /// push in a cycle; evicting the active window there must not hand
+    /// its write to the window left behind.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn osc52_write_is_not_inherited_after_an_earlier_push_evicts_the_active_window() {
+        let mut task = SessionTask::for_tests(session_with("read _x"));
+        let (sub_a, rx_a) = attach_sub(&mut task, false);
+        let (_sub_b, mut rx_b) = attach_sub(&mut task, false);
+        task.active_sub = Some(sub_a);
+        drop(rx_a);
+
+        write_to_grid(&task, b"\x1b]9;done\x07\x1b]52;c;Zm9v\x1b\\");
+        task.after_drive();
+
+        let events = drain_events(&mut rx_b);
+        assert!(
+            events
+                .iter()
+                .any(|ev| matches!(ev, OutEvent::Grid(GridMsg::Attention { .. }))),
+            "the cycle reached the bystander, so the ordering was exercised",
+        );
+        assert!(
+            events
+                .iter()
+                .all(|ev| !matches!(ev, OutEvent::Grid(GridMsg::ClipboardSet { .. }))),
+            "a bystander must not inherit the evicted window's clipboard write",
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

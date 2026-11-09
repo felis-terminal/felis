@@ -114,7 +114,7 @@ fn assert_probe_changes_state(probe: &Probe) {
         // DECSTR's only observable here is its erased-range effect: it does
         // not move the cursor (xterm) and the seed has no non-default modes.
         || !grid.take_pty_effects().is_empty()
-        || grid.take_pending_clipboard_set().is_some()
+        || !grid.take_pending_clipboard_sets().is_empty()
         || grid.take_title_dirty().is_some()
         || grid.take_cwd_dirty().is_some()
         || grid.take_kitty_kbd_dirty().is_some()

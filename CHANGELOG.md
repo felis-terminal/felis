@@ -12,6 +12,9 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 
 ### Added
 
+- **Keybindings**: a `pipe` binding takes `source = "osc_52"`, the last `OSC 52` clipboard write a program sent to the
+  window. With `target = "clipboard"` it copies that text to the system clipboard on the user's chord while
+  `clipboard.osc_52 = "mirror"` keeps programs from writing it on their own.
 - **CLI**: `felis --class <name>` names a launched window for window-manager rules: the Wayland app ID and X11
   `WM_CLASS` on Linux, the Win32 window class on Windows, no effect on macOS. Bare `felis`, `felis -- <cmd>`, and
   `attach` take it; every other verb and `--version` refuse it with exit `2`.
@@ -52,6 +55,10 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 
 ### Fixed
 
+- **Clipboard**: an `OSC 52` write to the clipboard (`c`) followed closely by one to PRIMARY alone (`p`) no longer loses
+  the clipboard write; with `clipboard.osc_52 = "system"` the clipboard kept its old contents.
+- **Keybindings**: a `pipe` binding with `target = "paste"` raises the confirmation bar for a region that carries a line
+  break or other control byte while bracketed paste is off, as `Ctrl+V` does; it used to send the region as typed keys.
 - **CLI**: `felis sessions send --wait` ends with the exit code of an OSC 133 `D` mark the program printed just before
   exiting, instead of `session_ended`, also when a process it left in the background still holds the terminal and on
   macOS.
