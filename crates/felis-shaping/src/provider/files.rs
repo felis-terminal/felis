@@ -4,13 +4,11 @@
 
 use std::{path::Path, sync::Arc};
 
-use swash::{FontDataRef, FontRef, Stretch, StringId, Style};
-
 use super::{
     FaceProvider, FaceSource, MONOSPACE_FALLBACK_FAMILIES, ResolvedFace, ascii_is_fixed_pitch,
     closest_style,
 };
-use crate::{FaceStyle, FontBytes, ShapingError};
+use crate::{FaceStyle, FontBytes, ShapingError, metadata};
 
 struct Face {
     bytes: FontBytes,
@@ -36,24 +34,19 @@ impl FileSet {
     pub(crate) fn add(&mut self, bytes: Vec<u8>) -> bool {
         let bytes: FontBytes = Arc::new(bytes);
         let before = self.faces.len();
-        let Some(file) = FontDataRef::new(bytes.as_ref().as_ref()) else {
-            return false;
-        };
-        let found: Vec<Face> = file
-            .fonts()
-            .enumerate()
-            .filter_map(|(index, font)| {
-                let index = u32::try_from(index).ok()?;
-                let attributes = font.attributes();
+        let found: Vec<Face> = (0..metadata::face_count(bytes.as_ref().as_ref()))
+            .filter_map(|index| {
+                let face = metadata::model_face(&bytes, index)?;
+                let attributes = metadata::attributes(bytes.as_ref().as_ref(), index);
                 Some(Face {
                     bytes: bytes.clone(),
                     index,
-                    families: family_names(font),
+                    families: metadata::family_names(&face),
                     style: FaceStyle {
-                        italic: attributes.style() != Style::Normal,
-                        weight: attributes.weight().0,
+                        italic: attributes.italic,
+                        weight: attributes.weight,
                     },
-                    off_width: attributes.stretch().raw().abs_diff(Stretch::NORMAL.raw()),
+                    off_width: attributes.off_width,
                     monospace: ascii_is_fixed_pitch(bytes.as_ref().as_ref(), index),
                 })
             })
@@ -161,30 +154,4 @@ impl FaceProvider for FileSet {
     fn family_of(&self, id: usize) -> Option<String> {
         self.faces.get(id)?.families.first().cloned()
     }
-}
-
-/// English names first, as a styled lookup of the face asks for them.
-fn family_names(font: FontRef<'_>) -> Vec<String> {
-    let strings = font.localized_strings();
-    let typographic = strings
-        .clone()
-        .any(|name| name.id() == StringId::TypographicFamily);
-    let id = if typographic {
-        StringId::TypographicFamily
-    } else {
-        StringId::Family
-    };
-    let mut names: Vec<(bool, String)> = strings
-        .filter(|name| name.id() == id)
-        .map(|name| (!name.language().starts_with("en"), name.to_string()))
-        .filter(|(_, name)| !name.is_empty())
-        .collect();
-    names.sort_by_key(|(foreign, _)| *foreign);
-    let mut unique = Vec::new();
-    for (_, name) in names {
-        if !unique.contains(&name) {
-            unique.push(name);
-        }
-    }
-    unique
 }

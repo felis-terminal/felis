@@ -276,11 +276,12 @@ pub(crate) enum AxisPosition {
 /// tags and values; `None` for a position no instance names, which loading
 /// would draw at the default instead.
 #[cfg(any(windows, test))]
-pub(crate) fn instance_at(
-    font: swash::FontRef<'_>,
-    position: &[(u32, f32)],
-) -> Option<AxisPosition> {
-    let tags: Vec<u32> = font.variations().map(|axis| axis.tag()).collect();
+pub(crate) fn instance_at(font: &skrifa::Font, position: &[(u32, f32)]) -> Option<AxisPosition> {
+    let tags: Vec<u32> = font
+        .axes()
+        .iter()
+        .map(|axis| u32::from_be_bytes(axis.tag().to_be_bytes()))
+        .collect();
     // `None` when `position` names an axis the face lacks.
     let distance = |coords: &[f32]| {
         position.iter().try_fold(0.0_f32, |far, &(tag, value)| {
@@ -289,10 +290,11 @@ pub(crate) fn instance_at(
         })
     };
     let nearest = font
-        .instances()
+        .named_instances()
+        .iter()
         .enumerate()
         .filter_map(|(at, instance)| {
-            let coords: Vec<f32> = instance.values().collect();
+            let coords: Vec<f32> = instance.user_coords().collect();
             Some((at, distance(&coords)?))
         })
         .min_by(|a, b| a.1.total_cmp(&b.1));
@@ -301,7 +303,11 @@ pub(crate) fn instance_at(
     {
         return Some(AxisPosition::Named(at));
     }
-    let defaults: Vec<f32> = font.variations().map(|axis| axis.default_value()).collect();
+    let defaults: Vec<f32> = font
+        .axes()
+        .iter()
+        .map(|axis| axis.default_value())
+        .collect();
     distance(&defaults)
         .is_some_and(|far| far < AXIS_TOLERANCE)
         .then_some(AxisPosition::Default)

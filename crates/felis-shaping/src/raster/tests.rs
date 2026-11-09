@@ -175,14 +175,14 @@ fn differential(hinted: bool) -> Parity {
             .chain(SYMBOLS.chars())
             .filter(|&c| font.has_glyph(c));
         for c in chars {
-            let glyph = font.font_ref().charmap().map(c);
+            let glyph = font.swash_ref().charmap().map(c);
             for px in 10..=40 {
                 let px = px as f32;
                 let mut scaler = swash_ctx
-                    .builder(font.font_ref())
+                    .builder(font.swash_ref())
                     .size(px)
                     .hint(hinted)
-                    .normalized_coords(&font.coords)
+                    .normalized_coords(font.swash_coords())
                     .build();
                 let theirs = Render::new(&[Source::Outline])
                     .format(Format::Alpha)
@@ -318,7 +318,7 @@ fn hintslight_and_hintfull_draw_different_bitmaps() {
         .expect("the variable face moves");
     let draw = |hinting| {
         let font = with_raster(&face, RasterOptions::for_face(Some(hinting)));
-        let glyph = font.font_ref().charmap().map('m');
+        let glyph = font.swash_ref().charmap().map('m');
         SkrifaOutlines::default()
             .coverage(&font, u32::from(glyph), 15.0)
             .expect("an outline")

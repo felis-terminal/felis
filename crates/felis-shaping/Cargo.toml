@@ -14,7 +14,7 @@ testing = []
 
 [dependencies]
 harfrust = { workspace = true }
-swash = { workspace = true }
+png = { workspace = true }
 skrifa = { workspace = true }
 memmap2 = { workspace = true }
 thiserror = { workspace = true }
@@ -39,6 +39,7 @@ windows-core = { workspace = true }
 [dev-dependencies]
 criterion = { workspace = true }
 proptest = { workspace = true }
+swash = { workspace = true }
 unicode-width = { workspace = true }
 
 # The fontconfig provider's tests also run on other Unix hosts that have
@@ -50,6 +51,10 @@ libloading = { workspace = true }
 # The instruction-count gate runs under Valgrind, which felis uses on Linux only.
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 gungraun = { workspace = true }
+
+[[test]]
+name = "color_budget"
+required-features = ["testing"]
 
 [[bench]]
 name = "shape_cache"

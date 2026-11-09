@@ -1502,6 +1502,7 @@ dependencies = [
  "memmap2",
  "objc2-core-foundation",
  "objc2-core-text",
+ "png",
  "proptest",
  "skrifa 0.49.0",
  "swash",
