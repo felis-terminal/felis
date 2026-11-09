@@ -1285,7 +1285,10 @@ class TestStop:
                 os.kill(pid, 0)
             except ProcessLookupError:
                 return True
-            stat = Path(f"/proc/{pid}/stat").read_text()
+            try:
+                stat = Path(f"/proc/{pid}/stat").read_text()
+            except (FileNotFoundError, ProcessLookupError):
+                return True
             return stat[stat.rfind(")") + 2] == "Z"
 
         return wait_until(exited, 5)
