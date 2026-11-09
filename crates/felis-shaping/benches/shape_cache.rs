@@ -48,6 +48,7 @@ fn bench_shape_cache(c: &mut Criterion) {
     for (name, font, glyphs) in [
         ("miss_emoji_cbdt", emoji::cbdt(), emoji::CBDT),
         ("miss_emoji_colr", emoji::colr(), emoji::COLR),
+        ("miss_emoji_colrv1", emoji::colr_v1(), emoji::COLR_V1),
     ] {
         group.throughput(Throughput::Elements(glyphs.len() as u64));
         group.bench_function(name, |b| {
