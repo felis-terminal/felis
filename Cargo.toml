@@ -298,9 +298,10 @@ inherits = "test"
 debug = 0
 
 
-# The dependencies CPU-bound tests spend their time in (font rasterization, zlib, proptest's generators).
-# `"*"` buys the same test time but doubles a cold build's CPU.
+# The crates CPU-bound tests spend their time in (felis-shaping's rasterizer, font parsing, zlib, proptest's
+# generators). `"*"` buys the same test time but doubles a cold build's CPU.
 [profile.dev.package]
+felis-shaping = { opt-level = 1 }
 harfrust = { opt-level = 1 }
 skrifa = { opt-level = 1 }
 read-fonts = { opt-level = 1 }
