@@ -91,6 +91,16 @@
       # The CJK faces are subset to 葛 because the full collection is 32 MB; the subsets keep their cmap 14 entries.
       # Only the Monaspace faces a test names are copied: every isolated fontconfig rescans this directory, and the full set cost ~1 s per test.
       # Felis Trak Probe is Monaspace Neon Var given a `trak` table, which no pinned face carries. It sits outside share/fonts so no stack discovers it; tests load it by path.
+      # The color probes sit there too, for the same reason: emoji fallback in other tests must not find them. OpenMoji is the real COLRv0 face, subset to a dozen emoji; its layers are ones hinting moves.
+      # Both emoji faces are upstream's prebuilt files, not the nixpkgs packages: those build from source per system, and their PNG and COLR encoders give different bytes on darwin, which breaks the goldens.
+      notoColorEmoji = pkgs.fetchurl {
+        url = "https://raw.githubusercontent.com/googlefonts/noto-emoji/v2.051/fonts/NotoColorEmoji.ttf";
+        hash = "sha256-cqY1yz0vNSTFFiDN3kBrIXIE6KagbGoJb/jtS1/W4ns=";
+      };
+      openmojiColor = pkgs.fetchurl {
+        url = "https://raw.githubusercontent.com/hfg-gmuend/openmoji/17.0.0/font/OpenMoji-color-colr0_svg/OpenMoji-color-colr0_svg.ttf";
+        hash = "sha256-o89sNEvMh7zZHEIoUS4dQXEhI5wHF2jB5HgQM0MHBq0=";
+      };
       testFonts =
         pkgs.runCommand "felis-test-fonts"
           { nativeBuildInputs = [ (pkgs.python3.withPackages (ps: [ ps.fonttools ])) ]; }
@@ -109,7 +119,7 @@
               $out/share/fonts/truetype/
             cp ${pkgs.noto-fonts}/share/fonts/noto/NotoSansSymbols.ttf $out/share/fonts/
             cp ${pkgs.noto-fonts}/share/fonts/noto/NotoSansSymbols2-Regular.otf $out/share/fonts/
-            cp ${pkgs.noto-fonts-color-emoji}/share/fonts/noto/NotoColorEmoji.ttf $out/share/fonts/
+            cp ${notoColorEmoji} $out/share/fonts/NotoColorEmoji.ttf
             pyftsubset ${pkgs.noto-fonts-cjk-sans}/share/fonts/opentype/noto-cjk/NotoSansCJK-VF.otf.ttc \
               --font-number=0 --unicodes=U+845B,U+E0100-E0101 --output-file=$out/share/fonts/NotoSansCJKjp-Kuzu.otf
             pyftsubset ${pkgs.noto-fonts-cjk-sans}/share/fonts/opentype/noto-cjk/NotoSansCJK-VF.otf.ttc \
@@ -138,6 +148,10 @@
             assert "STAT" in font
             font.save(sys.argv[2])
             EOF
+            python3 ${./color-probes.py} $out/share/color-probe
+            pyftsubset ${openmojiColor} \
+              --unicodes=U+1F600,U+2764,U+1F980,U+1F44D,U+1F389,U+2705,U+2B50,U+1F525,U+1F431,U+1F308,U+1F363,U+1F680 \
+              --drop-tables+=SVG --output-file=$out/share/color-probe/FelisColrProbe.ttf
           '';
 
       kani = pkgs.callPackage ./packages/kani { };
