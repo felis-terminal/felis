@@ -100,6 +100,35 @@ pub fn rasterize_face_glyph(bytes: Vec<u8>, glyph: GlyphId, px: f32) -> Option<G
     Some(Rasterizer::default().rasterize(&font, glyph, px))
 }
 
+/// Draws each of `glyphs` of the first face in `bytes` at `px` unhinted,
+/// as a reference renderer drawing without hinting does, for the color
+/// reference comparison; `None` when the bytes hold no face.
+#[cfg(feature = "testing")]
+#[doc(hidden)]
+#[must_use]
+pub fn rasterize_face_glyphs_unhinted(
+    bytes: Vec<u8>,
+    glyphs: &[GlyphId],
+    px: f32,
+) -> Option<Vec<GlyphBitmap>> {
+    let mut font = Font::load_resolved(ResolvedFace {
+        source: FaceSource::Shared(Arc::new(bytes)),
+        index: 0,
+        instance: None,
+        slanted: false,
+        hinting: None,
+    })
+    .ok()?;
+    font.raster = RasterOptions::NEVER_HINTED;
+    let mut rasterizer = Rasterizer::default();
+    Some(
+        glyphs
+            .iter()
+            .map(|&glyph| rasterizer.rasterize(&font, glyph, px))
+            .collect(),
+    )
+}
+
 /// The pinned test-font set `$FELIS_TEST_FONT_DIR` names; panics when
 /// it is unset.
 #[cfg(any(test, feature = "testing"))]

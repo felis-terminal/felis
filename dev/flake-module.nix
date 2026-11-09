@@ -317,6 +317,65 @@
               }
             ];
           }).activationPackage;
+      }
+      // pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+        # cairo, as kitty draws through it, is the COLR oracle: felis's color
+        # glyphs must match its rendering within dev/color-reference/compare.py's
+        # bounds. Rendered here rather than committed as images, so a face or
+        # size change needs no regenerated binaries. The test font's list leaves
+        # out what the painter lacks (it falls back, nothing to compare), the
+        # glyphs cairo crashes on (178, 179) or never finishes (194-204), which
+        # cargo tests cover, and 169: felis's coverage matches FreeType's gray
+        # raster, which cancels abutting opposite-winding contours within a
+        # pixel, where cairo fills COLR layers with its own per-sample nonzero filler.
+        color-reference =
+          let
+            craneLib = inputs.crane.mkLib pkgs;
+            args = config.packages.felis.commonArgs // {
+              pname = "felis-color-reference";
+              cargoExtraArgs = "--locked -p felis-shaping --features testing";
+            };
+            felisReference = craneLib.mkCargoDerivation (
+              args
+              // {
+                cargoArtifacts = craneLib.buildDepsOnly args;
+                buildPhaseCargoCommand = "cargoWithProfile build ${args.cargoExtraArgs} --example color_reference";
+                installPhaseCommand = "install -Dm755 target/release/examples/color_reference $out/bin/color_reference";
+              }
+            );
+            testGlyphs = "90 93 96 123 125 140 148 149 150 151 154 155 167 182 183 185 186 188 189 191 192";
+          in
+          pkgs.runCommandCC "felis-color-reference"
+            {
+              nativeBuildInputs = [
+                pkgs.pkg-config
+                (pkgs.python3.withPackages (ps: [ ps.fonttools ]))
+              ];
+              buildInputs = [
+                pkgs.cairo
+                pkgs.freetype
+              ];
+            }
+            ''
+              cc -O2 -rdynamic -o cairo_reference ${./color-reference/cairo_reference.c} \
+                $(pkg-config --cflags --libs cairo freetype2) -ldl -lm
+              v1_glyphs=$(python3 -c 'import sys; from fontTools.ttLib import TTFont; f = TTFont(sys.argv[1]); print(*(f.getGlyphID(r.BaseGlyph) for r in f["COLR"].table.BaseGlyphList.BaseGlyphPaintRecord))' \
+                ${testFonts}/share/colrv1/FelisColrV1Probe.ttf)
+              compare() {
+                label=$1 font=$2
+                shift 2
+                for px in 10 13 16 24 32 48 100; do
+                  ${felisReference}/bin/color_reference "$font" $px felis-$label-$px "$@"
+                  mkdir cairo-$label-$px
+                  ./cairo_reference "$font" $px cairo-$label-$px "$@"
+                  python3 ${./color-reference/compare.py} felis-$label-$px cairo-$label-$px "$label $px"
+                done
+              }
+              compare colr-v0 ${testFonts}/share/color-probe/FelisColrProbe.ttf $(seq 1 12)
+              compare noto-v1 ${testFonts}/share/colrv1/FelisColrV1Probe.ttf $v1_glyphs
+              compare test-glyphs ${testFonts}/share/colrv1/test_glyphs-glyf_colr_1.ttf ${testGlyphs}
+              touch $out
+            '';
       };
 
       treefmt = {
