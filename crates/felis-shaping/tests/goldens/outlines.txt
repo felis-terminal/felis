@@ -1,0 +1,868 @@
+opentype/MonaspaceNeon-Regular.otf hinted 10 50a36b1886cdc438
+opentype/MonaspaceNeon-Regular.otf hinted 11 b9c1d2c39ac9e8ac
+opentype/MonaspaceNeon-Regular.otf hinted 12 e277a0f1d09ee6c2
+opentype/MonaspaceNeon-Regular.otf hinted 13 a5f34e14948d1638
+opentype/MonaspaceNeon-Regular.otf hinted 14 5713f57a066e0fdd
+opentype/MonaspaceNeon-Regular.otf hinted 15 e22c475cffe63b16
+opentype/MonaspaceNeon-Regular.otf hinted 16 8dfd66922ba3346c
+opentype/MonaspaceNeon-Regular.otf hinted 17 591f6e162e3c8847
+opentype/MonaspaceNeon-Regular.otf hinted 18 28c4e3ffc4bb8753
+opentype/MonaspaceNeon-Regular.otf hinted 19 748133e45387291f
+opentype/MonaspaceNeon-Regular.otf hinted 20 74dcb67edb222c5b
+opentype/MonaspaceNeon-Regular.otf hinted 21 fe006a4112157372
+opentype/MonaspaceNeon-Regular.otf hinted 22 65d4ed9f2b75762e
+opentype/MonaspaceNeon-Regular.otf hinted 23 adb26c08f48330ff
+opentype/MonaspaceNeon-Regular.otf hinted 24 ac35cd60a424e988
+opentype/MonaspaceNeon-Regular.otf hinted 25 92168e04c3a5ebb6
+opentype/MonaspaceNeon-Regular.otf hinted 26 b1953a69999f653e
+opentype/MonaspaceNeon-Regular.otf hinted 27 88c551a6b6e9bfd2
+opentype/MonaspaceNeon-Regular.otf hinted 28 0a6979ed31405155
+opentype/MonaspaceNeon-Regular.otf hinted 29 a7c5da5fe32120a2
+opentype/MonaspaceNeon-Regular.otf hinted 30 a837f76e64733862
+opentype/MonaspaceNeon-Regular.otf hinted 31 521af676c153d86d
+opentype/MonaspaceNeon-Regular.otf hinted 32 a2b08fb7cf7396e0
+opentype/MonaspaceNeon-Regular.otf hinted 33 cb9632e6112ce94a
+opentype/MonaspaceNeon-Regular.otf hinted 34 77b32bc9a79e22c3
+opentype/MonaspaceNeon-Regular.otf hinted 35 3ab0fb6d8b78c090
+opentype/MonaspaceNeon-Regular.otf hinted 36 be65f89c3eeea1f4
+opentype/MonaspaceNeon-Regular.otf hinted 37 e5502e247eac6914
+opentype/MonaspaceNeon-Regular.otf hinted 38 17d5efb28ca8c41d
+opentype/MonaspaceNeon-Regular.otf hinted 39 b51393e885439038
+opentype/MonaspaceNeon-Regular.otf hinted 40 10e90c5921b72764
+opentype/MonaspaceNeon-Bold.otf hinted 10 dfe4959b952a07db
+opentype/MonaspaceNeon-Bold.otf hinted 11 db3c36826a32a63e
+opentype/MonaspaceNeon-Bold.otf hinted 12 cf2d23183bbbb4eb
+opentype/MonaspaceNeon-Bold.otf hinted 13 d58fa2eeadf199a8
+opentype/MonaspaceNeon-Bold.otf hinted 14 c09236bae2f4381e
+opentype/MonaspaceNeon-Bold.otf hinted 15 4cb4926202bc486e
+opentype/MonaspaceNeon-Bold.otf hinted 16 ea645777e4d971ec
+opentype/MonaspaceNeon-Bold.otf hinted 17 b215d3bd482cc897
+opentype/MonaspaceNeon-Bold.otf hinted 18 06aeaea9002aaccc
+opentype/MonaspaceNeon-Bold.otf hinted 19 ea4925ebe5fa91fd
+opentype/MonaspaceNeon-Bold.otf hinted 20 20263d1d9d359b67
+opentype/MonaspaceNeon-Bold.otf hinted 21 bccac721d0236fd7
+opentype/MonaspaceNeon-Bold.otf hinted 22 2cde911c705d343a
+opentype/MonaspaceNeon-Bold.otf hinted 23 2f1c3155afb92ed0
+opentype/MonaspaceNeon-Bold.otf hinted 24 d27477a486b2d6c2
+opentype/MonaspaceNeon-Bold.otf hinted 25 931d08575c1d4d8c
+opentype/MonaspaceNeon-Bold.otf hinted 26 a638e8b1c1694cdc
+opentype/MonaspaceNeon-Bold.otf hinted 27 63d9097c67002f1a
+opentype/MonaspaceNeon-Bold.otf hinted 28 921fffbe6facd9b4
+opentype/MonaspaceNeon-Bold.otf hinted 29 0c85f86319986c06
+opentype/MonaspaceNeon-Bold.otf hinted 30 d66bfa6f0069e42c
+opentype/MonaspaceNeon-Bold.otf hinted 31 a2fe3b9103b0bf53
+opentype/MonaspaceNeon-Bold.otf hinted 32 dc3f30b6b0fee6df
+opentype/MonaspaceNeon-Bold.otf hinted 33 da78fdf4ac6a5f5b
+opentype/MonaspaceNeon-Bold.otf hinted 34 bdfd5bcb78c41b54
+opentype/MonaspaceNeon-Bold.otf hinted 35 6f9b88ff4c55b8ec
+opentype/MonaspaceNeon-Bold.otf hinted 36 a9c889e1da5a6f5e
+opentype/MonaspaceNeon-Bold.otf hinted 37 86e28772c7936678
+opentype/MonaspaceNeon-Bold.otf hinted 38 7ddc0b4656f73116
+opentype/MonaspaceNeon-Bold.otf hinted 39 95e47d59aee28e3b
+opentype/MonaspaceNeon-Bold.otf hinted 40 eba074b2b312374e
+opentype/MonaspaceNeon-Italic.otf hinted 10 46c117a0ab8e8f26
+opentype/MonaspaceNeon-Italic.otf hinted 11 aadd0d9f7ff7d3b9
+opentype/MonaspaceNeon-Italic.otf hinted 12 2dffd57d612e0da5
+opentype/MonaspaceNeon-Italic.otf hinted 13 26a96b3743342c0a
+opentype/MonaspaceNeon-Italic.otf hinted 14 af6e4bd983a49d50
+opentype/MonaspaceNeon-Italic.otf hinted 15 2b4068f167651bcd
+opentype/MonaspaceNeon-Italic.otf hinted 16 9027d7ffde0ab901
+opentype/MonaspaceNeon-Italic.otf hinted 17 8661e87eb61a27b4
+opentype/MonaspaceNeon-Italic.otf hinted 18 4442c822429714f0
+opentype/MonaspaceNeon-Italic.otf hinted 19 de809029b4a21351
+opentype/MonaspaceNeon-Italic.otf hinted 20 e96b8b6216199b33
+opentype/MonaspaceNeon-Italic.otf hinted 21 b7f5679cb2eccd18
+opentype/MonaspaceNeon-Italic.otf hinted 22 9dfefd32beae3058
+opentype/MonaspaceNeon-Italic.otf hinted 23 73a9c501fab98f12
+opentype/MonaspaceNeon-Italic.otf hinted 24 87730c00935308e8
+opentype/MonaspaceNeon-Italic.otf hinted 25 324ee4ce72f522c5
+opentype/MonaspaceNeon-Italic.otf hinted 26 9a8988d0dc3c66e2
+opentype/MonaspaceNeon-Italic.otf hinted 27 1cd8d188336f2492
+opentype/MonaspaceNeon-Italic.otf hinted 28 34cb5dd78e883de6
+opentype/MonaspaceNeon-Italic.otf hinted 29 2976675159ec67d3
+opentype/MonaspaceNeon-Italic.otf hinted 30 564c8e81b3bbc7a2
+opentype/MonaspaceNeon-Italic.otf hinted 31 62667d91f9e96b8c
+opentype/MonaspaceNeon-Italic.otf hinted 32 8a6a3cd72ca34454
+opentype/MonaspaceNeon-Italic.otf hinted 33 0632d7e040bfa4e0
+opentype/MonaspaceNeon-Italic.otf hinted 34 daf2c18332c7d55b
+opentype/MonaspaceNeon-Italic.otf hinted 35 5a61c7e8a949c292
+opentype/MonaspaceNeon-Italic.otf hinted 36 fb6f303c37846836
+opentype/MonaspaceNeon-Italic.otf hinted 37 45c41bf84be12a52
+opentype/MonaspaceNeon-Italic.otf hinted 38 819b9b87d044d2f5
+opentype/MonaspaceNeon-Italic.otf hinted 39 3c41a0c323f262e8
+opentype/MonaspaceNeon-Italic.otf hinted 40 68fa72a47d92739c
+opentype/MonaspaceNeon-BoldItalic.otf hinted 10 2528c60e66bc2d5c
+opentype/MonaspaceNeon-BoldItalic.otf hinted 11 057acb01ccb0c8cb
+opentype/MonaspaceNeon-BoldItalic.otf hinted 12 3d7434243d8f954e
+opentype/MonaspaceNeon-BoldItalic.otf hinted 13 1340161d7b7f930d
+opentype/MonaspaceNeon-BoldItalic.otf hinted 14 fc865a30dd407f63
+opentype/MonaspaceNeon-BoldItalic.otf hinted 15 f8fe802b9afe85c6
+opentype/MonaspaceNeon-BoldItalic.otf hinted 16 1b2487960e8b4daf
+opentype/MonaspaceNeon-BoldItalic.otf hinted 17 e810c9ff49cdc589
+opentype/MonaspaceNeon-BoldItalic.otf hinted 18 63d2f8084ba6f9e5
+opentype/MonaspaceNeon-BoldItalic.otf hinted 19 3f3501c00bce92e5
+opentype/MonaspaceNeon-BoldItalic.otf hinted 20 621991ff184c7626
+opentype/MonaspaceNeon-BoldItalic.otf hinted 21 4654d15232ac90dd
+opentype/MonaspaceNeon-BoldItalic.otf hinted 22 286fa24f3b992029
+opentype/MonaspaceNeon-BoldItalic.otf hinted 23 2d5b682d87ba2909
+opentype/MonaspaceNeon-BoldItalic.otf hinted 24 1b74b98bb559e12d
+opentype/MonaspaceNeon-BoldItalic.otf hinted 25 466d045f5680be96
+opentype/MonaspaceNeon-BoldItalic.otf hinted 26 2c4434fa50a10867
+opentype/MonaspaceNeon-BoldItalic.otf hinted 27 1bf22be089fc8330
+opentype/MonaspaceNeon-BoldItalic.otf hinted 28 14ccfb71ae0c80f2
+opentype/MonaspaceNeon-BoldItalic.otf hinted 29 4a2b7f884672f0b4
+opentype/MonaspaceNeon-BoldItalic.otf hinted 30 823d31739ceb4bc0
+opentype/MonaspaceNeon-BoldItalic.otf hinted 31 781d8e95c26250d1
+opentype/MonaspaceNeon-BoldItalic.otf hinted 32 e5c45be2d007309e
+opentype/MonaspaceNeon-BoldItalic.otf hinted 33 3e2a1e5722bc073a
+opentype/MonaspaceNeon-BoldItalic.otf hinted 34 1f11ea4683028156
+opentype/MonaspaceNeon-BoldItalic.otf hinted 35 a3d61715434d0e8a
+opentype/MonaspaceNeon-BoldItalic.otf hinted 36 b7497e4f49b714be
+opentype/MonaspaceNeon-BoldItalic.otf hinted 37 f6669d3c856aea38
+opentype/MonaspaceNeon-BoldItalic.otf hinted 38 62d53621c75a8189
+opentype/MonaspaceNeon-BoldItalic.otf hinted 39 daeebbf55fb0c5ee
+opentype/MonaspaceNeon-BoldItalic.otf hinted 40 a550aa9314a3cb9a
+truetype/MonaspaceNeonFrozen-Regular.ttf hinted 10 70d17533b8a02854
+truetype/MonaspaceNeonFrozen-Regular.ttf hinted 11 31d4c4d7c0ddb3ad
+truetype/MonaspaceNeonFrozen-Regular.ttf hinted 12 7a965202b1dcf68e
+truetype/MonaspaceNeonFrozen-Regular.ttf hinted 13 33134e18ffb35b38
+truetype/MonaspaceNeonFrozen-Regular.ttf hinted 14 d2a0b164acc25d9f
+truetype/MonaspaceNeonFrozen-Regular.ttf hinted 15 49fb759aac4702f3
+truetype/MonaspaceNeonFrozen-Regular.ttf hinted 16 2182a9c98cec5325
+truetype/MonaspaceNeonFrozen-Regular.ttf hinted 17 2a46b11fb304aabe
+truetype/MonaspaceNeonFrozen-Regular.ttf hinted 18 be5d07077a9a7810
+truetype/MonaspaceNeonFrozen-Regular.ttf hinted 19 9f70ceaaf1482c22
+truetype/MonaspaceNeonFrozen-Regular.ttf hinted 20 62b4fe2e4bce4bc5
+truetype/MonaspaceNeonFrozen-Regular.ttf hinted 21 0790b2632b5441d4
+truetype/MonaspaceNeonFrozen-Regular.ttf hinted 22 fa5f06e74850e7eb
+truetype/MonaspaceNeonFrozen-Regular.ttf hinted 23 88db8438f206654a
+truetype/MonaspaceNeonFrozen-Regular.ttf hinted 24 2bfebef5922f4140
+truetype/MonaspaceNeonFrozen-Regular.ttf hinted 25 c133da56a5c806d4
+truetype/MonaspaceNeonFrozen-Regular.ttf hinted 26 06f8c620ec3684b0
+truetype/MonaspaceNeonFrozen-Regular.ttf hinted 27 8c4bda2cbd04c1c0
+truetype/MonaspaceNeonFrozen-Regular.ttf hinted 28 f26a83a7a47e5547
+truetype/MonaspaceNeonFrozen-Regular.ttf hinted 29 b910cfbbedf9f350
+truetype/MonaspaceNeonFrozen-Regular.ttf hinted 30 26a8161b2d1bfcee
+truetype/MonaspaceNeonFrozen-Regular.ttf hinted 31 f2adce93b6488b22
+truetype/MonaspaceNeonFrozen-Regular.ttf hinted 32 fbc56c45cdf47d71
+truetype/MonaspaceNeonFrozen-Regular.ttf hinted 33 79eaef937bcfd839
+truetype/MonaspaceNeonFrozen-Regular.ttf hinted 34 3325ab571e54e430
+truetype/MonaspaceNeonFrozen-Regular.ttf hinted 35 b95ccfe6d56ee321
+truetype/MonaspaceNeonFrozen-Regular.ttf hinted 36 c55f653dbc133bbc
+truetype/MonaspaceNeonFrozen-Regular.ttf hinted 37 cd2694a28263c900
+truetype/MonaspaceNeonFrozen-Regular.ttf hinted 38 e8b7b159a89cd846
+truetype/MonaspaceNeonFrozen-Regular.ttf hinted 39 9ed5ea09048e1c26
+truetype/MonaspaceNeonFrozen-Regular.ttf hinted 40 cf2d1c0e3b324f2d
+truetype/MonaspaceNeonFrozen-Bold.ttf hinted 10 0a506c1b8e0b88d6
+truetype/MonaspaceNeonFrozen-Bold.ttf hinted 11 c0aa595727b03967
+truetype/MonaspaceNeonFrozen-Bold.ttf hinted 12 6a3461b762c7cbc4
+truetype/MonaspaceNeonFrozen-Bold.ttf hinted 13 3b14257abda42c23
+truetype/MonaspaceNeonFrozen-Bold.ttf hinted 14 f24bc7036b52484c
+truetype/MonaspaceNeonFrozen-Bold.ttf hinted 15 66513c36328c1f78
+truetype/MonaspaceNeonFrozen-Bold.ttf hinted 16 223fbc6439430e5c
+truetype/MonaspaceNeonFrozen-Bold.ttf hinted 17 c5ca12fceba30399
+truetype/MonaspaceNeonFrozen-Bold.ttf hinted 18 fa3e9b5a8dfb6264
+truetype/MonaspaceNeonFrozen-Bold.ttf hinted 19 fc3907b3f2f862b0
+truetype/MonaspaceNeonFrozen-Bold.ttf hinted 20 fdc4dcdd2ec3b3b5
+truetype/MonaspaceNeonFrozen-Bold.ttf hinted 21 d23e5b89a817fcc3
+truetype/MonaspaceNeonFrozen-Bold.ttf hinted 22 a4ce2b7ece36688b
+truetype/MonaspaceNeonFrozen-Bold.ttf hinted 23 cd709d583e5be135
+truetype/MonaspaceNeonFrozen-Bold.ttf hinted 24 e1393edff9bdf54b
+truetype/MonaspaceNeonFrozen-Bold.ttf hinted 25 37ffbfbe9df78aaf
+truetype/MonaspaceNeonFrozen-Bold.ttf hinted 26 d5306f28ace35f70
+truetype/MonaspaceNeonFrozen-Bold.ttf hinted 27 d56e5ae37429eb70
+truetype/MonaspaceNeonFrozen-Bold.ttf hinted 28 93309b253bb476a5
+truetype/MonaspaceNeonFrozen-Bold.ttf hinted 29 cae25261087082c2
+truetype/MonaspaceNeonFrozen-Bold.ttf hinted 30 55f479e1bcafc54a
+truetype/MonaspaceNeonFrozen-Bold.ttf hinted 31 3b1faca24a1d9837
+truetype/MonaspaceNeonFrozen-Bold.ttf hinted 32 b60260b88c282e47
+truetype/MonaspaceNeonFrozen-Bold.ttf hinted 33 d8cb616a88ac3113
+truetype/MonaspaceNeonFrozen-Bold.ttf hinted 34 3195dd2583283c90
+truetype/MonaspaceNeonFrozen-Bold.ttf hinted 35 396696b96118db0a
+truetype/MonaspaceNeonFrozen-Bold.ttf hinted 36 f84307181c31d4c3
+truetype/MonaspaceNeonFrozen-Bold.ttf hinted 37 f44cbd110d01b701
+truetype/MonaspaceNeonFrozen-Bold.ttf hinted 38 af0504c5473a875c
+truetype/MonaspaceNeonFrozen-Bold.ttf hinted 39 c14f333a43341240
+truetype/MonaspaceNeonFrozen-Bold.ttf hinted 40 2fa740ad6df0a877
+truetype/MonaspaceNeonFrozen-Italic.ttf hinted 10 e2d5be68afe4a909
+truetype/MonaspaceNeonFrozen-Italic.ttf hinted 11 d6aeb0f71a1737c2
+truetype/MonaspaceNeonFrozen-Italic.ttf hinted 12 98fcf2db54d9cb1f
+truetype/MonaspaceNeonFrozen-Italic.ttf hinted 13 bea4941b96021e12
+truetype/MonaspaceNeonFrozen-Italic.ttf hinted 14 bba6a4ff48fd67c2
+truetype/MonaspaceNeonFrozen-Italic.ttf hinted 15 e8174fe7faa9159d
+truetype/MonaspaceNeonFrozen-Italic.ttf hinted 16 20276fdc101d6d8d
+truetype/MonaspaceNeonFrozen-Italic.ttf hinted 17 7e65daf295b84462
+truetype/MonaspaceNeonFrozen-Italic.ttf hinted 18 ec7fb6351bd8afbb
+truetype/MonaspaceNeonFrozen-Italic.ttf hinted 19 e1f485a1002ddc41
+truetype/MonaspaceNeonFrozen-Italic.ttf hinted 20 755af45c024cd054
+truetype/MonaspaceNeonFrozen-Italic.ttf hinted 21 b273021708d08df2
+truetype/MonaspaceNeonFrozen-Italic.ttf hinted 22 33556c7e97fe1b2c
+truetype/MonaspaceNeonFrozen-Italic.ttf hinted 23 a6a197eb4f1240b3
+truetype/MonaspaceNeonFrozen-Italic.ttf hinted 24 063890dcec52b18e
+truetype/MonaspaceNeonFrozen-Italic.ttf hinted 25 e3503f896c0487f2
+truetype/MonaspaceNeonFrozen-Italic.ttf hinted 26 5274a18ed46dc1cd
+truetype/MonaspaceNeonFrozen-Italic.ttf hinted 27 477f58988607dbb6
+truetype/MonaspaceNeonFrozen-Italic.ttf hinted 28 261b0b18e0c60945
+truetype/MonaspaceNeonFrozen-Italic.ttf hinted 29 276e71a0c2eebe6e
+truetype/MonaspaceNeonFrozen-Italic.ttf hinted 30 1946ddc1faff7187
+truetype/MonaspaceNeonFrozen-Italic.ttf hinted 31 836c8b00856f7a78
+truetype/MonaspaceNeonFrozen-Italic.ttf hinted 32 97925cdd891ea6f4
+truetype/MonaspaceNeonFrozen-Italic.ttf hinted 33 5a5444a3c9c5f600
+truetype/MonaspaceNeonFrozen-Italic.ttf hinted 34 334f58c0666d2cdf
+truetype/MonaspaceNeonFrozen-Italic.ttf hinted 35 95df409db366b64b
+truetype/MonaspaceNeonFrozen-Italic.ttf hinted 36 602ff008775e61bc
+truetype/MonaspaceNeonFrozen-Italic.ttf hinted 37 05affa501f5a0533
+truetype/MonaspaceNeonFrozen-Italic.ttf hinted 38 3237b5eb411510a6
+truetype/MonaspaceNeonFrozen-Italic.ttf hinted 39 d82022dcb0622821
+truetype/MonaspaceNeonFrozen-Italic.ttf hinted 40 f78dee3ecf440aef
+truetype/MonaspaceNeonFrozen-BoldItalic.ttf hinted 10 b22fdb301d68d66d
+truetype/MonaspaceNeonFrozen-BoldItalic.ttf hinted 11 4d592296e7383153
+truetype/MonaspaceNeonFrozen-BoldItalic.ttf hinted 12 e22bd497e5b63af0
+truetype/MonaspaceNeonFrozen-BoldItalic.ttf hinted 13 f7ae7916a3041eab
+truetype/MonaspaceNeonFrozen-BoldItalic.ttf hinted 14 d06a22791ecfba3f
+truetype/MonaspaceNeonFrozen-BoldItalic.ttf hinted 15 8ff62e8dfc15b056
+truetype/MonaspaceNeonFrozen-BoldItalic.ttf hinted 16 5631e394e9435d75
+truetype/MonaspaceNeonFrozen-BoldItalic.ttf hinted 17 09cf09fb38416b61
+truetype/MonaspaceNeonFrozen-BoldItalic.ttf hinted 18 8da6ada70825ca6d
+truetype/MonaspaceNeonFrozen-BoldItalic.ttf hinted 19 883c9c313342ede7
+truetype/MonaspaceNeonFrozen-BoldItalic.ttf hinted 20 8b3550cfc5984b43
+truetype/MonaspaceNeonFrozen-BoldItalic.ttf hinted 21 9f51e8d91577ab41
+truetype/MonaspaceNeonFrozen-BoldItalic.ttf hinted 22 007d5b5b9f9c6885
+truetype/MonaspaceNeonFrozen-BoldItalic.ttf hinted 23 f87331bc73960943
+truetype/MonaspaceNeonFrozen-BoldItalic.ttf hinted 24 3fdfef939a799b24
+truetype/MonaspaceNeonFrozen-BoldItalic.ttf hinted 25 fa501eea786a4282
+truetype/MonaspaceNeonFrozen-BoldItalic.ttf hinted 26 e1b7dce1f863fa95
+truetype/MonaspaceNeonFrozen-BoldItalic.ttf hinted 27 343f15e4a1d17c16
+truetype/MonaspaceNeonFrozen-BoldItalic.ttf hinted 28 097d8930e5cb40c5
+truetype/MonaspaceNeonFrozen-BoldItalic.ttf hinted 29 c76082b3a2a01043
+truetype/MonaspaceNeonFrozen-BoldItalic.ttf hinted 30 2790458e43bf65b9
+truetype/MonaspaceNeonFrozen-BoldItalic.ttf hinted 31 b48fe2c0d428c347
+truetype/MonaspaceNeonFrozen-BoldItalic.ttf hinted 32 f75d55cdefb29248
+truetype/MonaspaceNeonFrozen-BoldItalic.ttf hinted 33 91c5ebb6c817432c
+truetype/MonaspaceNeonFrozen-BoldItalic.ttf hinted 34 81d312fb588ca4a3
+truetype/MonaspaceNeonFrozen-BoldItalic.ttf hinted 35 90a3fedd784c5fa2
+truetype/MonaspaceNeonFrozen-BoldItalic.ttf hinted 36 e74db734abce19a5
+truetype/MonaspaceNeonFrozen-BoldItalic.ttf hinted 37 4913aefe7d1e9623
+truetype/MonaspaceNeonFrozen-BoldItalic.ttf hinted 38 04a6f57462df7259
+truetype/MonaspaceNeonFrozen-BoldItalic.ttf hinted 39 579744bad6ed258d
+truetype/MonaspaceNeonFrozen-BoldItalic.ttf hinted 40 57406602e0642ba4
+Var wght=400 italic=false hinted 10 fbaf7c7c77d31f6d
+Var wght=400 italic=false hinted 11 633a69df5cb67766
+Var wght=400 italic=false hinted 12 7d25ff05e4b7b938
+Var wght=400 italic=false hinted 13 e9d6498d81d3b6c8
+Var wght=400 italic=false hinted 14 fcc8f8c405405b62
+Var wght=400 italic=false hinted 15 877d89c8e5d3b15a
+Var wght=400 italic=false hinted 16 30f006b25bce4a70
+Var wght=400 italic=false hinted 17 076c2d15d197466c
+Var wght=400 italic=false hinted 18 3272c7c490d0aac8
+Var wght=400 italic=false hinted 19 cff14581a7aa9cf7
+Var wght=400 italic=false hinted 20 52183b44f8084acc
+Var wght=400 italic=false hinted 21 2d2a7a527f23e27a
+Var wght=400 italic=false hinted 22 db6a647e4783c0ab
+Var wght=400 italic=false hinted 23 b22d3326e39b8fce
+Var wght=400 italic=false hinted 24 98b6c863124d95d2
+Var wght=400 italic=false hinted 25 99b69baad7545ef6
+Var wght=400 italic=false hinted 26 c94a278704606ddb
+Var wght=400 italic=false hinted 27 05f94e43e0433bbc
+Var wght=400 italic=false hinted 28 52003a25f9d8daff
+Var wght=400 italic=false hinted 29 03a21a3c4dc92b5e
+Var wght=400 italic=false hinted 30 2b6ee8d61e5ae4bd
+Var wght=400 italic=false hinted 31 218031c8fb0b414b
+Var wght=400 italic=false hinted 32 4dd294c8d75cfa92
+Var wght=400 italic=false hinted 33 334fff49d08b56c7
+Var wght=400 italic=false hinted 34 7d43cb9dff4d54f9
+Var wght=400 italic=false hinted 35 cf7693b9f49608b7
+Var wght=400 italic=false hinted 36 a5f4505436e40127
+Var wght=400 italic=false hinted 37 d7d65b23d631a94b
+Var wght=400 italic=false hinted 38 f96b4265d4b83673
+Var wght=400 italic=false hinted 39 762c256941a6af8a
+Var wght=400 italic=false hinted 40 f4824acbcc6f36f3
+Var wght=700 italic=false hinted 10 2a27dc6eb7fc29ff
+Var wght=700 italic=false hinted 11 8943b1fc58f650e2
+Var wght=700 italic=false hinted 12 2c1bb16cd5fe314c
+Var wght=700 italic=false hinted 13 a371f246f49db049
+Var wght=700 italic=false hinted 14 75931239af37a63d
+Var wght=700 italic=false hinted 15 269ae623f0ec509f
+Var wght=700 italic=false hinted 16 e7903382ec25edd6
+Var wght=700 italic=false hinted 17 d756d0cf7003c3ac
+Var wght=700 italic=false hinted 18 f73de5d8ef2dbd98
+Var wght=700 italic=false hinted 19 85cf40718628d4bf
+Var wght=700 italic=false hinted 20 2eaab24b04a0617a
+Var wght=700 italic=false hinted 21 795c1128f23f5043
+Var wght=700 italic=false hinted 22 1c140a327477fe69
+Var wght=700 italic=false hinted 23 ed96a9ddbb85d497
+Var wght=700 italic=false hinted 24 d192c6f00a5dde25
+Var wght=700 italic=false hinted 25 8d5ccc44d7ea5230
+Var wght=700 italic=false hinted 26 b6727315dd9d4dbf
+Var wght=700 italic=false hinted 27 366895ace1e505c4
+Var wght=700 italic=false hinted 28 a2b6e0be2483ab30
+Var wght=700 italic=false hinted 29 eb543305b70a1f4a
+Var wght=700 italic=false hinted 30 f60e4a556a963dfd
+Var wght=700 italic=false hinted 31 07a8b79b421073f0
+Var wght=700 italic=false hinted 32 357c82f0fce9cf15
+Var wght=700 italic=false hinted 33 d5d9cf13f980eb1f
+Var wght=700 italic=false hinted 34 184191926669ee0e
+Var wght=700 italic=false hinted 35 929af4a82f41f34c
+Var wght=700 italic=false hinted 36 cdc56e531114aaf6
+Var wght=700 italic=false hinted 37 25b2e5d490cbd1a0
+Var wght=700 italic=false hinted 38 0ebb95a35ba11944
+Var wght=700 italic=false hinted 39 55958c8ca717e248
+Var wght=700 italic=false hinted 40 e30133ec1a658aba
+Var wght=400 italic=true hinted 10 1a0f38a75e3bf313
+Var wght=400 italic=true hinted 11 070cc849427064b2
+Var wght=400 italic=true hinted 12 bda41b924622e220
+Var wght=400 italic=true hinted 13 2b068bca47bc20d8
+Var wght=400 italic=true hinted 14 a9a743a6e9ce6298
+Var wght=400 italic=true hinted 15 6253e6ff90f6a865
+Var wght=400 italic=true hinted 16 c39d51f2b8be7672
+Var wght=400 italic=true hinted 17 01c310d1b3f4cf36
+Var wght=400 italic=true hinted 18 010cee73f9e7d852
+Var wght=400 italic=true hinted 19 9673ae0f00240230
+Var wght=400 italic=true hinted 20 d40133c9c2e7633c
+Var wght=400 italic=true hinted 21 0047989156f92b38
+Var wght=400 italic=true hinted 22 cca314306e42eccd
+Var wght=400 italic=true hinted 23 011a36cabaeee47f
+Var wght=400 italic=true hinted 24 e1ea8ddc6ffb5bc1
+Var wght=400 italic=true hinted 25 f269cdfadfddd5cb
+Var wght=400 italic=true hinted 26 b2ea36e9a5ca39da
+Var wght=400 italic=true hinted 27 266c4ad50f9af858
+Var wght=400 italic=true hinted 28 efb58572c349b1e2
+Var wght=400 italic=true hinted 29 22f2732225909d69
+Var wght=400 italic=true hinted 30 40735bb67c88aa08
+Var wght=400 italic=true hinted 31 87b78aa350c369c4
+Var wght=400 italic=true hinted 32 9c36819035cbc416
+Var wght=400 italic=true hinted 33 4335ab47a045f84a
+Var wght=400 italic=true hinted 34 5ffef67cf2e24e22
+Var wght=400 italic=true hinted 35 57a786f5d8c39f66
+Var wght=400 italic=true hinted 36 ad06ce09015b4c07
+Var wght=400 italic=true hinted 37 26efaededd2aec81
+Var wght=400 italic=true hinted 38 b9f1316e0d80ec59
+Var wght=400 italic=true hinted 39 f8812124296ca47e
+Var wght=400 italic=true hinted 40 5714eabae67829bd
+Var wght=700 italic=true hinted 10 5327b7f4fb7a40bb
+Var wght=700 italic=true hinted 11 4dbefafa567f02ac
+Var wght=700 italic=true hinted 12 21e91056a4e42b45
+Var wght=700 italic=true hinted 13 b1f69915459031b5
+Var wght=700 italic=true hinted 14 65e034cf7fe16a4c
+Var wght=700 italic=true hinted 15 1b9f795f513e31bc
+Var wght=700 italic=true hinted 16 fc3252e4d0f05bc4
+Var wght=700 italic=true hinted 17 c57d1b54225d30e2
+Var wght=700 italic=true hinted 18 1c51cd45e8de1f34
+Var wght=700 italic=true hinted 19 e1ac19847725d19d
+Var wght=700 italic=true hinted 20 d033e6fb6c50fa40
+Var wght=700 italic=true hinted 21 8192b56b7e907416
+Var wght=700 italic=true hinted 22 e68c3fd2d7763580
+Var wght=700 italic=true hinted 23 80023494863caf4a
+Var wght=700 italic=true hinted 24 6d47aee1d2cd0e50
+Var wght=700 italic=true hinted 25 9be3dce4b9957db7
+Var wght=700 italic=true hinted 26 efa1c5b6bfaca0cf
+Var wght=700 italic=true hinted 27 3abfd99855ca3a61
+Var wght=700 italic=true hinted 28 f782dd9286a3f4ca
+Var wght=700 italic=true hinted 29 396f7c672649d5b8
+Var wght=700 italic=true hinted 30 0629c92f537bb5a4
+Var wght=700 italic=true hinted 31 b425b063e1ffc7da
+Var wght=700 italic=true hinted 32 45b7ee81dfd5a944
+Var wght=700 italic=true hinted 33 65b2437837d33edd
+Var wght=700 italic=true hinted 34 288f24d12c9cfb13
+Var wght=700 italic=true hinted 35 ac6069cb8c2b1736
+Var wght=700 italic=true hinted 36 cdc5889f08d1d0ba
+Var wght=700 italic=true hinted 37 8ea08c52525493fd
+Var wght=700 italic=true hinted 38 22494ac0d653f1dd
+Var wght=700 italic=true hinted 39 c25cf4b373c51158
+Var wght=700 italic=true hinted 40 066f37a1d38935d8
+NotoSansSymbols.ttf hinted 10 5d7d11db7c1dc65f
+NotoSansSymbols.ttf hinted 11 462010aaab6dff30
+NotoSansSymbols.ttf hinted 12 d3c43a546abec3d0
+NotoSansSymbols.ttf hinted 13 96de8857fb7a765a
+NotoSansSymbols.ttf hinted 14 5db48279c705f084
+NotoSansSymbols.ttf hinted 15 ef76ed51e29ab681
+NotoSansSymbols.ttf hinted 16 45984c215ac5de50
+NotoSansSymbols.ttf hinted 17 8ed61aa5075be80c
+NotoSansSymbols.ttf hinted 18 436027e1aab8712e
+NotoSansSymbols.ttf hinted 19 80a48d63482e8448
+NotoSansSymbols.ttf hinted 20 a7b8571652fe91c4
+NotoSansSymbols.ttf hinted 21 3df6ccda8b7b5a65
+NotoSansSymbols.ttf hinted 22 544b813852c84e52
+NotoSansSymbols.ttf hinted 23 9340d612f51d25d2
+NotoSansSymbols.ttf hinted 24 7bc810ad7b88469b
+NotoSansSymbols.ttf hinted 25 dedf79dfe5e51119
+NotoSansSymbols.ttf hinted 26 5fa11500f853fdf4
+NotoSansSymbols.ttf hinted 27 18bde5d20e23b8fd
+NotoSansSymbols.ttf hinted 28 4b307996bf0d3878
+NotoSansSymbols.ttf hinted 29 bb711db25bd66bfb
+NotoSansSymbols.ttf hinted 30 153cf54dcb803bf8
+NotoSansSymbols.ttf hinted 31 47c8e7c457350ade
+NotoSansSymbols.ttf hinted 32 f225d4d82d159e9c
+NotoSansSymbols.ttf hinted 33 5f61216dc183d841
+NotoSansSymbols.ttf hinted 34 9faaa9b7d91f3d18
+NotoSansSymbols.ttf hinted 35 ebdf6b92b5794616
+NotoSansSymbols.ttf hinted 36 a68a080a719ace92
+NotoSansSymbols.ttf hinted 37 eb6409556608d537
+NotoSansSymbols.ttf hinted 38 18048b714d60aaa7
+NotoSansSymbols.ttf hinted 39 e9b9b2129ce692cb
+NotoSansSymbols.ttf hinted 40 99f9f7273f7594f8
+NotoSansSymbols2-Regular.otf hinted 10 b6ea8b8ebd80ab46
+NotoSansSymbols2-Regular.otf hinted 11 1cd40b65d7b6739f
+NotoSansSymbols2-Regular.otf hinted 12 97e1a9dcfc662b6f
+NotoSansSymbols2-Regular.otf hinted 13 964fcaefc2ca24b2
+NotoSansSymbols2-Regular.otf hinted 14 cac9942110f429e0
+NotoSansSymbols2-Regular.otf hinted 15 1772764ee84c8e88
+NotoSansSymbols2-Regular.otf hinted 16 328fcbb24378a2b6
+NotoSansSymbols2-Regular.otf hinted 17 027c97be57dace98
+NotoSansSymbols2-Regular.otf hinted 18 c13153021122e471
+NotoSansSymbols2-Regular.otf hinted 19 5b836ed0a8f7c0d0
+NotoSansSymbols2-Regular.otf hinted 20 8e8a3f5a6b05914a
+NotoSansSymbols2-Regular.otf hinted 21 0e7370c4fc777b18
+NotoSansSymbols2-Regular.otf hinted 22 4c5a538cdac1a299
+NotoSansSymbols2-Regular.otf hinted 23 c1c31109a6dea0e5
+NotoSansSymbols2-Regular.otf hinted 24 92d3a10cb9af0604
+NotoSansSymbols2-Regular.otf hinted 25 a4d324a08b6a21fe
+NotoSansSymbols2-Regular.otf hinted 26 b2156d2cb72c9f99
+NotoSansSymbols2-Regular.otf hinted 27 a5e7a5d4a089c76d
+NotoSansSymbols2-Regular.otf hinted 28 b0fae0e9412efea5
+NotoSansSymbols2-Regular.otf hinted 29 eec8eca73f8a2fa3
+NotoSansSymbols2-Regular.otf hinted 30 55692913bc0c0b59
+NotoSansSymbols2-Regular.otf hinted 31 ead838fd11ead8e9
+NotoSansSymbols2-Regular.otf hinted 32 03ee26f9342768ee
+NotoSansSymbols2-Regular.otf hinted 33 514a7191bcf20d48
+NotoSansSymbols2-Regular.otf hinted 34 c083522f8ce59334
+NotoSansSymbols2-Regular.otf hinted 35 a2d7a4e78af01b7d
+NotoSansSymbols2-Regular.otf hinted 36 8da44559d683c5cf
+NotoSansSymbols2-Regular.otf hinted 37 5e688a026b9156e0
+NotoSansSymbols2-Regular.otf hinted 38 d023eb799d165094
+NotoSansSymbols2-Regular.otf hinted 39 193d70624670f3a4
+NotoSansSymbols2-Regular.otf hinted 40 cbe5d3b918566d84
+opentype/MonaspaceNeon-Regular.otf unhinted 10 ef549b133c0f108d
+opentype/MonaspaceNeon-Regular.otf unhinted 11 bb22030b3d6a812e
+opentype/MonaspaceNeon-Regular.otf unhinted 12 efe9ace3030c7263
+opentype/MonaspaceNeon-Regular.otf unhinted 13 a04a5800540b71e6
+opentype/MonaspaceNeon-Regular.otf unhinted 14 be32c8af34277d65
+opentype/MonaspaceNeon-Regular.otf unhinted 15 9a5018b0c9e5f8f7
+opentype/MonaspaceNeon-Regular.otf unhinted 16 9df2fac4d5893cdb
+opentype/MonaspaceNeon-Regular.otf unhinted 17 f8b3c28dd3b72ef9
+opentype/MonaspaceNeon-Regular.otf unhinted 18 4361947dc628d65b
+opentype/MonaspaceNeon-Regular.otf unhinted 19 4375604fe98227f9
+opentype/MonaspaceNeon-Regular.otf unhinted 20 6e7da58edabd93e5
+opentype/MonaspaceNeon-Regular.otf unhinted 21 1b3930761ac7f6a9
+opentype/MonaspaceNeon-Regular.otf unhinted 22 4d8f8c3197ef0bd8
+opentype/MonaspaceNeon-Regular.otf unhinted 23 9363b184f8ff4d62
+opentype/MonaspaceNeon-Regular.otf unhinted 24 4ab86eb0455fe75f
+opentype/MonaspaceNeon-Regular.otf unhinted 25 3c6c96034a3eeeee
+opentype/MonaspaceNeon-Regular.otf unhinted 26 1068e8eeb729425d
+opentype/MonaspaceNeon-Regular.otf unhinted 27 bf6372a4390e7034
+opentype/MonaspaceNeon-Regular.otf unhinted 28 00f87835e5403fa4
+opentype/MonaspaceNeon-Regular.otf unhinted 29 c542da00448b47b4
+opentype/MonaspaceNeon-Regular.otf unhinted 30 6b48a0dfa9185d87
+opentype/MonaspaceNeon-Regular.otf unhinted 31 46d2ade433a8d0a7
+opentype/MonaspaceNeon-Regular.otf unhinted 32 79b0a1d441967c9f
+opentype/MonaspaceNeon-Regular.otf unhinted 33 e985f50c65be1361
+opentype/MonaspaceNeon-Regular.otf unhinted 34 d35b8cf691b449db
+opentype/MonaspaceNeon-Regular.otf unhinted 35 8041a407fcd3dea4
+opentype/MonaspaceNeon-Regular.otf unhinted 36 439e918958d677eb
+opentype/MonaspaceNeon-Regular.otf unhinted 37 9e761ff3f6485cbe
+opentype/MonaspaceNeon-Regular.otf unhinted 38 a569b15ccb2640e2
+opentype/MonaspaceNeon-Regular.otf unhinted 39 362eef513d9c1e5c
+opentype/MonaspaceNeon-Regular.otf unhinted 40 216940f78bfe994f
+opentype/MonaspaceNeon-Bold.otf unhinted 10 a5af8fbc2ebdd3d4
+opentype/MonaspaceNeon-Bold.otf unhinted 11 b861218f8994f934
+opentype/MonaspaceNeon-Bold.otf unhinted 12 2d070daa5dadb85f
+opentype/MonaspaceNeon-Bold.otf unhinted 13 e1e42e3ab74a27b4
+opentype/MonaspaceNeon-Bold.otf unhinted 14 6c92502ac14e1dd9
+opentype/MonaspaceNeon-Bold.otf unhinted 15 a5a5d4b51cd1362c
+opentype/MonaspaceNeon-Bold.otf unhinted 16 7d330d8244703f91
+opentype/MonaspaceNeon-Bold.otf unhinted 17 2fd3da3b5d33b9c5
+opentype/MonaspaceNeon-Bold.otf unhinted 18 17033e2b2d69c167
+opentype/MonaspaceNeon-Bold.otf unhinted 19 4a657161da21e499
+opentype/MonaspaceNeon-Bold.otf unhinted 20 832f5197d7d6c2fd
+opentype/MonaspaceNeon-Bold.otf unhinted 21 613117ccf41cdf02
+opentype/MonaspaceNeon-Bold.otf unhinted 22 76bb0aceb33b920d
+opentype/MonaspaceNeon-Bold.otf unhinted 23 c56e05151732c1dc
+opentype/MonaspaceNeon-Bold.otf unhinted 24 b415828ae18350d4
+opentype/MonaspaceNeon-Bold.otf unhinted 25 385bdc0ad0511ee4
+opentype/MonaspaceNeon-Bold.otf unhinted 26 08eb3c71368e93f0
+opentype/MonaspaceNeon-Bold.otf unhinted 27 dbdde2d5d6625e86
+opentype/MonaspaceNeon-Bold.otf unhinted 28 ae93160ecee3218d
+opentype/MonaspaceNeon-Bold.otf unhinted 29 844329ba82e4a1a6
+opentype/MonaspaceNeon-Bold.otf unhinted 30 440b95951a5a1020
+opentype/MonaspaceNeon-Bold.otf unhinted 31 ec41e0f3fec34cfa
+opentype/MonaspaceNeon-Bold.otf unhinted 32 bfc837ce1464e989
+opentype/MonaspaceNeon-Bold.otf unhinted 33 3d5932a33fa6644f
+opentype/MonaspaceNeon-Bold.otf unhinted 34 55375cf462f75f1f
+opentype/MonaspaceNeon-Bold.otf unhinted 35 191586b0fb1070ea
+opentype/MonaspaceNeon-Bold.otf unhinted 36 56d54f70cd52a9cc
+opentype/MonaspaceNeon-Bold.otf unhinted 37 3558bb002d9b91f1
+opentype/MonaspaceNeon-Bold.otf unhinted 38 575fca51d8e1b916
+opentype/MonaspaceNeon-Bold.otf unhinted 39 01c84e34f3e9f51e
+opentype/MonaspaceNeon-Bold.otf unhinted 40 b1be66c7bc85abdd
+opentype/MonaspaceNeon-Italic.otf unhinted 10 820ecd1b6d2a8cdf
+opentype/MonaspaceNeon-Italic.otf unhinted 11 6ee3565d0d2ac14b
+opentype/MonaspaceNeon-Italic.otf unhinted 12 72d26d6c9dc8c41c
+opentype/MonaspaceNeon-Italic.otf unhinted 13 619fff9cbc12e416
+opentype/MonaspaceNeon-Italic.otf unhinted 14 729912556544360b
+opentype/MonaspaceNeon-Italic.otf unhinted 15 d7b72288ec8424e8
+opentype/MonaspaceNeon-Italic.otf unhinted 16 a5354d8a14f69fe7
+opentype/MonaspaceNeon-Italic.otf unhinted 17 a1377be2b7f03ecf
+opentype/MonaspaceNeon-Italic.otf unhinted 18 4ad9493afeaab80c
+opentype/MonaspaceNeon-Italic.otf unhinted 19 bf3a75120a488ba7
+opentype/MonaspaceNeon-Italic.otf unhinted 20 2be47af6bb3fa27a
+opentype/MonaspaceNeon-Italic.otf unhinted 21 a5d0eed6855ec6dc
+opentype/MonaspaceNeon-Italic.otf unhinted 22 919f66ca485aaa15
+opentype/MonaspaceNeon-Italic.otf unhinted 23 0127cf8f6c7de563
+opentype/MonaspaceNeon-Italic.otf unhinted 24 158b51fd56276dbe
+opentype/MonaspaceNeon-Italic.otf unhinted 25 1e59028fae48eb4c
+opentype/MonaspaceNeon-Italic.otf unhinted 26 15cf1afdcf1d6a50
+opentype/MonaspaceNeon-Italic.otf unhinted 27 98a3e9c5a2bcaf34
+opentype/MonaspaceNeon-Italic.otf unhinted 28 105bfeb0dcc57bf2
+opentype/MonaspaceNeon-Italic.otf unhinted 29 fa6861741db25f95
+opentype/MonaspaceNeon-Italic.otf unhinted 30 a60de89ce0404581
+opentype/MonaspaceNeon-Italic.otf unhinted 31 259aa986347d9ea2
+opentype/MonaspaceNeon-Italic.otf unhinted 32 fa7507ea638c1349
+opentype/MonaspaceNeon-Italic.otf unhinted 33 5c624842467194b6
+opentype/MonaspaceNeon-Italic.otf unhinted 34 8cea075ba454418d
+opentype/MonaspaceNeon-Italic.otf unhinted 35 8cf90c3bd4745f7c
+opentype/MonaspaceNeon-Italic.otf unhinted 36 12fa22d630664f3b
+opentype/MonaspaceNeon-Italic.otf unhinted 37 5a632cbf4e8f3163
+opentype/MonaspaceNeon-Italic.otf unhinted 38 d603405a942720a4
+opentype/MonaspaceNeon-Italic.otf unhinted 39 ca2c8120f2f1979b
+opentype/MonaspaceNeon-Italic.otf unhinted 40 de28c1b22e29e185
+opentype/MonaspaceNeon-BoldItalic.otf unhinted 10 685cff3f78c5555c
+opentype/MonaspaceNeon-BoldItalic.otf unhinted 11 3cb418ccb3c1f722
+opentype/MonaspaceNeon-BoldItalic.otf unhinted 12 c87fa4452e388801
+opentype/MonaspaceNeon-BoldItalic.otf unhinted 13 079b1e30291c4c17
+opentype/MonaspaceNeon-BoldItalic.otf unhinted 14 712c769c68da01eb
+opentype/MonaspaceNeon-BoldItalic.otf unhinted 15 81d35ae20ed45844
+opentype/MonaspaceNeon-BoldItalic.otf unhinted 16 3a444af23b6ec14f
+opentype/MonaspaceNeon-BoldItalic.otf unhinted 17 0f180c8ca5a62cf2
+opentype/MonaspaceNeon-BoldItalic.otf unhinted 18 14f1b87a3d470916
+opentype/MonaspaceNeon-BoldItalic.otf unhinted 19 59bb22c4fe4ad035
+opentype/MonaspaceNeon-BoldItalic.otf unhinted 20 9d6bb0eeb5abb71e
+opentype/MonaspaceNeon-BoldItalic.otf unhinted 21 b66aabac86349213
+opentype/MonaspaceNeon-BoldItalic.otf unhinted 22 d96c66001703f29a
+opentype/MonaspaceNeon-BoldItalic.otf unhinted 23 5b99743e754b7318
+opentype/MonaspaceNeon-BoldItalic.otf unhinted 24 451bf717f10fc657
+opentype/MonaspaceNeon-BoldItalic.otf unhinted 25 c97adda19b220141
+opentype/MonaspaceNeon-BoldItalic.otf unhinted 26 051d477e50f53557
+opentype/MonaspaceNeon-BoldItalic.otf unhinted 27 f7471e7f7619361f
+opentype/MonaspaceNeon-BoldItalic.otf unhinted 28 806136ffa57ad7b2
+opentype/MonaspaceNeon-BoldItalic.otf unhinted 29 ff1babc2ccd1dbe6
+opentype/MonaspaceNeon-BoldItalic.otf unhinted 30 e52131a7fea0518f
+opentype/MonaspaceNeon-BoldItalic.otf unhinted 31 1b7d64c427f4868b
+opentype/MonaspaceNeon-BoldItalic.otf unhinted 32 57ad66a0aecda324
+opentype/MonaspaceNeon-BoldItalic.otf unhinted 33 1a2233e19c169bc4
+opentype/MonaspaceNeon-BoldItalic.otf unhinted 34 16f4486dfd1be405
+opentype/MonaspaceNeon-BoldItalic.otf unhinted 35 ea30c12f7cc21d0a
+opentype/MonaspaceNeon-BoldItalic.otf unhinted 36 9ba62b08e7c17c9a
+opentype/MonaspaceNeon-BoldItalic.otf unhinted 37 cb9a180fec8d2a96
+opentype/MonaspaceNeon-BoldItalic.otf unhinted 38 e0cefb02730ff2b6
+opentype/MonaspaceNeon-BoldItalic.otf unhinted 39 000dd3b0c9e212d2
+opentype/MonaspaceNeon-BoldItalic.otf unhinted 40 6f3edcae754f71e2
+truetype/MonaspaceNeonFrozen-Regular.ttf unhinted 10 93cbecbc805bec17
+truetype/MonaspaceNeonFrozen-Regular.ttf unhinted 11 a186a1bdd1237dad
+truetype/MonaspaceNeonFrozen-Regular.ttf unhinted 12 5395385d684ac086
+truetype/MonaspaceNeonFrozen-Regular.ttf unhinted 13 318a616c30c735a4
+truetype/MonaspaceNeonFrozen-Regular.ttf unhinted 14 47e3485d6160fa9f
+truetype/MonaspaceNeonFrozen-Regular.ttf unhinted 15 838a3fbdbb385568
+truetype/MonaspaceNeonFrozen-Regular.ttf unhinted 16 d9e5434a68c11713
+truetype/MonaspaceNeonFrozen-Regular.ttf unhinted 17 0e35cdbd5d17a984
+truetype/MonaspaceNeonFrozen-Regular.ttf unhinted 18 949c9105a6d4aa29
+truetype/MonaspaceNeonFrozen-Regular.ttf unhinted 19 22c5ee28bd997429
+truetype/MonaspaceNeonFrozen-Regular.ttf unhinted 20 04ea4c5941722690
+truetype/MonaspaceNeonFrozen-Regular.ttf unhinted 21 165bf846ac5ebcab
+truetype/MonaspaceNeonFrozen-Regular.ttf unhinted 22 9726b0a383a0c954
+truetype/MonaspaceNeonFrozen-Regular.ttf unhinted 23 2d8fa056d05e8d3e
+truetype/MonaspaceNeonFrozen-Regular.ttf unhinted 24 bb284f2991b0be04
+truetype/MonaspaceNeonFrozen-Regular.ttf unhinted 25 fb220e602d1a7b06
+truetype/MonaspaceNeonFrozen-Regular.ttf unhinted 26 2ec1220bbfef8409
+truetype/MonaspaceNeonFrozen-Regular.ttf unhinted 27 bded063da4c3cf89
+truetype/MonaspaceNeonFrozen-Regular.ttf unhinted 28 a0dbd760cb88e429
+truetype/MonaspaceNeonFrozen-Regular.ttf unhinted 29 1b6f650ac3d86b69
+truetype/MonaspaceNeonFrozen-Regular.ttf unhinted 30 3aef694e327bc71e
+truetype/MonaspaceNeonFrozen-Regular.ttf unhinted 31 184f3cafacae9ddd
+truetype/MonaspaceNeonFrozen-Regular.ttf unhinted 32 42a7226cbe14d6bb
+truetype/MonaspaceNeonFrozen-Regular.ttf unhinted 33 72a80dcc64292c52
+truetype/MonaspaceNeonFrozen-Regular.ttf unhinted 34 cca709226b35b82c
+truetype/MonaspaceNeonFrozen-Regular.ttf unhinted 35 29f80f3855b1a90b
+truetype/MonaspaceNeonFrozen-Regular.ttf unhinted 36 e837977981de7400
+truetype/MonaspaceNeonFrozen-Regular.ttf unhinted 37 61269d2b63638a0f
+truetype/MonaspaceNeonFrozen-Regular.ttf unhinted 38 26109447a065c066
+truetype/MonaspaceNeonFrozen-Regular.ttf unhinted 39 e0eeb4a02f8c431d
+truetype/MonaspaceNeonFrozen-Regular.ttf unhinted 40 6ff596bdb536db34
+truetype/MonaspaceNeonFrozen-Bold.ttf unhinted 10 57c2bc00c589bced
+truetype/MonaspaceNeonFrozen-Bold.ttf unhinted 11 3d7f838375c1131f
+truetype/MonaspaceNeonFrozen-Bold.ttf unhinted 12 54874e2361636df2
+truetype/MonaspaceNeonFrozen-Bold.ttf unhinted 13 63ed866fa0ebd4a4
+truetype/MonaspaceNeonFrozen-Bold.ttf unhinted 14 4e0402adee0fff8c
+truetype/MonaspaceNeonFrozen-Bold.ttf unhinted 15 5204b3c8313b752e
+truetype/MonaspaceNeonFrozen-Bold.ttf unhinted 16 cee09073736da17f
+truetype/MonaspaceNeonFrozen-Bold.ttf unhinted 17 54bb3f7cf7a5bd9d
+truetype/MonaspaceNeonFrozen-Bold.ttf unhinted 18 dc8317fcc93924ed
+truetype/MonaspaceNeonFrozen-Bold.ttf unhinted 19 addfc966374318f2
+truetype/MonaspaceNeonFrozen-Bold.ttf unhinted 20 c5177f50f716ef04
+truetype/MonaspaceNeonFrozen-Bold.ttf unhinted 21 7cc8acd92b8f9033
+truetype/MonaspaceNeonFrozen-Bold.ttf unhinted 22 ddd02fc6ca74fa02
+truetype/MonaspaceNeonFrozen-Bold.ttf unhinted 23 c6fde72983a34261
+truetype/MonaspaceNeonFrozen-Bold.ttf unhinted 24 915badcc14a5d4c7
+truetype/MonaspaceNeonFrozen-Bold.ttf unhinted 25 52a2ccc27c9a1988
+truetype/MonaspaceNeonFrozen-Bold.ttf unhinted 26 37ddbe8e7cd9e24d
+truetype/MonaspaceNeonFrozen-Bold.ttf unhinted 27 872b13a9fdbc844a
+truetype/MonaspaceNeonFrozen-Bold.ttf unhinted 28 0d4db96281c6bae9
+truetype/MonaspaceNeonFrozen-Bold.ttf unhinted 29 29d5a1e057d1349d
+truetype/MonaspaceNeonFrozen-Bold.ttf unhinted 30 09ffd773f21868e7
+truetype/MonaspaceNeonFrozen-Bold.ttf unhinted 31 64d8d9d2169ab761
+truetype/MonaspaceNeonFrozen-Bold.ttf unhinted 32 4924bc107c436fc0
+truetype/MonaspaceNeonFrozen-Bold.ttf unhinted 33 affd39db8af97d64
+truetype/MonaspaceNeonFrozen-Bold.ttf unhinted 34 5e3cef97e6ed831b
+truetype/MonaspaceNeonFrozen-Bold.ttf unhinted 35 dd9cb107738561c6
+truetype/MonaspaceNeonFrozen-Bold.ttf unhinted 36 5fedc3f805ee444e
+truetype/MonaspaceNeonFrozen-Bold.ttf unhinted 37 222699d2c32e0733
+truetype/MonaspaceNeonFrozen-Bold.ttf unhinted 38 cfdefa027536d724
+truetype/MonaspaceNeonFrozen-Bold.ttf unhinted 39 2cadc519c18e4246
+truetype/MonaspaceNeonFrozen-Bold.ttf unhinted 40 2af925945ee02c43
+truetype/MonaspaceNeonFrozen-Italic.ttf unhinted 10 98f25e1bfb0cef05
+truetype/MonaspaceNeonFrozen-Italic.ttf unhinted 11 7fc7b86d43697a1d
+truetype/MonaspaceNeonFrozen-Italic.ttf unhinted 12 3dab0e53e4f118f5
+truetype/MonaspaceNeonFrozen-Italic.ttf unhinted 13 a5c4a629ee6b298d
+truetype/MonaspaceNeonFrozen-Italic.ttf unhinted 14 15fddd47f1aab55d
+truetype/MonaspaceNeonFrozen-Italic.ttf unhinted 15 46f52129cc793f05
+truetype/MonaspaceNeonFrozen-Italic.ttf unhinted 16 4c2820e43d24bce4
+truetype/MonaspaceNeonFrozen-Italic.ttf unhinted 17 90e76239baaeb6f8
+truetype/MonaspaceNeonFrozen-Italic.ttf unhinted 18 00415002b92ab5f4
+truetype/MonaspaceNeonFrozen-Italic.ttf unhinted 19 78dbe5ad60cb0f27
+truetype/MonaspaceNeonFrozen-Italic.ttf unhinted 20 4b370510a634d065
+truetype/MonaspaceNeonFrozen-Italic.ttf unhinted 21 5fe2539f2cb58c4a
+truetype/MonaspaceNeonFrozen-Italic.ttf unhinted 22 fa29d177022473d8
+truetype/MonaspaceNeonFrozen-Italic.ttf unhinted 23 d436fcb9ee28b90d
+truetype/MonaspaceNeonFrozen-Italic.ttf unhinted 24 3640961df40bf352
+truetype/MonaspaceNeonFrozen-Italic.ttf unhinted 25 6d8cba19bc6fbff8
+truetype/MonaspaceNeonFrozen-Italic.ttf unhinted 26 1b2c587bffae73dc
+truetype/MonaspaceNeonFrozen-Italic.ttf unhinted 27 8ee97c6616d9d259
+truetype/MonaspaceNeonFrozen-Italic.ttf unhinted 28 c0ec12feadeb8075
+truetype/MonaspaceNeonFrozen-Italic.ttf unhinted 29 c0fb207e58cb23a8
+truetype/MonaspaceNeonFrozen-Italic.ttf unhinted 30 3e9a8646227821d4
+truetype/MonaspaceNeonFrozen-Italic.ttf unhinted 31 6b2c666c2f96ff87
+truetype/MonaspaceNeonFrozen-Italic.ttf unhinted 32 f8f5896804a27a8d
+truetype/MonaspaceNeonFrozen-Italic.ttf unhinted 33 c6a72d34b1b5e847
+truetype/MonaspaceNeonFrozen-Italic.ttf unhinted 34 fbe575049c50998d
+truetype/MonaspaceNeonFrozen-Italic.ttf unhinted 35 27b226d0bfd6ce30
+truetype/MonaspaceNeonFrozen-Italic.ttf unhinted 36 23256607861f694c
+truetype/MonaspaceNeonFrozen-Italic.ttf unhinted 37 0505d4436734760e
+truetype/MonaspaceNeonFrozen-Italic.ttf unhinted 38 8ca88e15746e8616
+truetype/MonaspaceNeonFrozen-Italic.ttf unhinted 39 25668d0e0d889cf2
+truetype/MonaspaceNeonFrozen-Italic.ttf unhinted 40 71b2e64c52db76b7
+truetype/MonaspaceNeonFrozen-BoldItalic.ttf unhinted 10 3bc934bad51604ea
+truetype/MonaspaceNeonFrozen-BoldItalic.ttf unhinted 11 66b03555c415abbd
+truetype/MonaspaceNeonFrozen-BoldItalic.ttf unhinted 12 aa6070676c2dd73b
+truetype/MonaspaceNeonFrozen-BoldItalic.ttf unhinted 13 e920a38e53cd2dbc
+truetype/MonaspaceNeonFrozen-BoldItalic.ttf unhinted 14 199f867173517819
+truetype/MonaspaceNeonFrozen-BoldItalic.ttf unhinted 15 a210f3dc18f5b359
+truetype/MonaspaceNeonFrozen-BoldItalic.ttf unhinted 16 48aa2036839f4d8b
+truetype/MonaspaceNeonFrozen-BoldItalic.ttf unhinted 17 ee576bbad0610c72
+truetype/MonaspaceNeonFrozen-BoldItalic.ttf unhinted 18 8c0ca369f493498e
+truetype/MonaspaceNeonFrozen-BoldItalic.ttf unhinted 19 3cce8712c1cf086b
+truetype/MonaspaceNeonFrozen-BoldItalic.ttf unhinted 20 d74810464f81f9aa
+truetype/MonaspaceNeonFrozen-BoldItalic.ttf unhinted 21 1333c008582b7b57
+truetype/MonaspaceNeonFrozen-BoldItalic.ttf unhinted 22 0fe4d7fe040a5bf0
+truetype/MonaspaceNeonFrozen-BoldItalic.ttf unhinted 23 c9f66f1a48c38ab9
+truetype/MonaspaceNeonFrozen-BoldItalic.ttf unhinted 24 f959163230c6c5ea
+truetype/MonaspaceNeonFrozen-BoldItalic.ttf unhinted 25 4ff74f2bd9ba2633
+truetype/MonaspaceNeonFrozen-BoldItalic.ttf unhinted 26 4d54fdeadc9d8c84
+truetype/MonaspaceNeonFrozen-BoldItalic.ttf unhinted 27 008b0c50e9ca7557
+truetype/MonaspaceNeonFrozen-BoldItalic.ttf unhinted 28 438f077c1fa4ee35
+truetype/MonaspaceNeonFrozen-BoldItalic.ttf unhinted 29 585af63edd17330c
+truetype/MonaspaceNeonFrozen-BoldItalic.ttf unhinted 30 3cde9f0e2453214e
+truetype/MonaspaceNeonFrozen-BoldItalic.ttf unhinted 31 3f1f2b9e98cd55a1
+truetype/MonaspaceNeonFrozen-BoldItalic.ttf unhinted 32 9d566458421c1900
+truetype/MonaspaceNeonFrozen-BoldItalic.ttf unhinted 33 524678e2dd252f89
+truetype/MonaspaceNeonFrozen-BoldItalic.ttf unhinted 34 0af0a51efa70bb4d
+truetype/MonaspaceNeonFrozen-BoldItalic.ttf unhinted 35 8221d11f09ad10c9
+truetype/MonaspaceNeonFrozen-BoldItalic.ttf unhinted 36 ed75fa8a6c3c381b
+truetype/MonaspaceNeonFrozen-BoldItalic.ttf unhinted 37 8f5770d3fe06dfcd
+truetype/MonaspaceNeonFrozen-BoldItalic.ttf unhinted 38 871df8c140ef0899
+truetype/MonaspaceNeonFrozen-BoldItalic.ttf unhinted 39 34f8240a1d56d228
+truetype/MonaspaceNeonFrozen-BoldItalic.ttf unhinted 40 7640aaeb74de463c
+Var wght=400 italic=false unhinted 10 70c0c3bf0e25a26c
+Var wght=400 italic=false unhinted 11 9a0d517e6829ca81
+Var wght=400 italic=false unhinted 12 156a1ce708fd9127
+Var wght=400 italic=false unhinted 13 bd21ea3c40ef7f7f
+Var wght=400 italic=false unhinted 14 03673928f1b39cb3
+Var wght=400 italic=false unhinted 15 98594893fcd2a088
+Var wght=400 italic=false unhinted 16 4ab0e662c51510b0
+Var wght=400 italic=false unhinted 17 4c8e0c45234895e4
+Var wght=400 italic=false unhinted 18 cdf3da8eb03ebb40
+Var wght=400 italic=false unhinted 19 389417ec731e73dd
+Var wght=400 italic=false unhinted 20 fa93ff7b47945835
+Var wght=400 italic=false unhinted 21 3615b120a55058b1
+Var wght=400 italic=false unhinted 22 042db391ac2d2ed1
+Var wght=400 italic=false unhinted 23 8f9ff9b8aa44f262
+Var wght=400 italic=false unhinted 24 aeac63fb98d75544
+Var wght=400 italic=false unhinted 25 d84954a7aa34803b
+Var wght=400 italic=false unhinted 26 d14bb2d26916b309
+Var wght=400 italic=false unhinted 27 68af929464e44d0b
+Var wght=400 italic=false unhinted 28 238218e192d75e9b
+Var wght=400 italic=false unhinted 29 c9b5003846f4d45f
+Var wght=400 italic=false unhinted 30 2ec0956a74bb06a5
+Var wght=400 italic=false unhinted 31 ca371a2c697211af
+Var wght=400 italic=false unhinted 32 5e45f750e0a58bab
+Var wght=400 italic=false unhinted 33 89ab42aed7a23bb4
+Var wght=400 italic=false unhinted 34 f6533f5831953779
+Var wght=400 italic=false unhinted 35 e0a772dbb315e929
+Var wght=400 italic=false unhinted 36 0a9666aa842cbc09
+Var wght=400 italic=false unhinted 37 31d2a1fabfa0f286
+Var wght=400 italic=false unhinted 38 8b0ee750286afd52
+Var wght=400 italic=false unhinted 39 e40490d0e56237a1
+Var wght=400 italic=false unhinted 40 4260b9156799e116
+Var wght=700 italic=false unhinted 10 f0ba9ce56a2add9c
+Var wght=700 italic=false unhinted 11 9cbb0621fb61eccb
+Var wght=700 italic=false unhinted 12 f4c09f056d7e5db3
+Var wght=700 italic=false unhinted 13 c6793964e8f65462
+Var wght=700 italic=false unhinted 14 039f86123da0e8b1
+Var wght=700 italic=false unhinted 15 3814330ae457cd1f
+Var wght=700 italic=false unhinted 16 4f5b9f63ae0cfb18
+Var wght=700 italic=false unhinted 17 f5297ba7c8e02401
+Var wght=700 italic=false unhinted 18 bf135899b96d2114
+Var wght=700 italic=false unhinted 19 fe443b0048e85f9b
+Var wght=700 italic=false unhinted 20 15898915123b1f97
+Var wght=700 italic=false unhinted 21 bad56fdf80c74a7a
+Var wght=700 italic=false unhinted 22 23cde8d5e40adf19
+Var wght=700 italic=false unhinted 23 13e93918755053e3
+Var wght=700 italic=false unhinted 24 409643f14673fd2f
+Var wght=700 italic=false unhinted 25 e46de0f8fe6da2db
+Var wght=700 italic=false unhinted 26 92e4146cba5e399a
+Var wght=700 italic=false unhinted 27 aa8641f2ec94e0b2
+Var wght=700 italic=false unhinted 28 9830cd1544fa2f8c
+Var wght=700 italic=false unhinted 29 3b98cbe7cb581446
+Var wght=700 italic=false unhinted 30 5df36fc8c33ae9eb
+Var wght=700 italic=false unhinted 31 6a278e2c1ec35308
+Var wght=700 italic=false unhinted 32 5d46e1491fad9a62
+Var wght=700 italic=false unhinted 33 b1805c432f6f38b0
+Var wght=700 italic=false unhinted 34 9c7ee918636c2bf6
+Var wght=700 italic=false unhinted 35 722ee6166b2de633
+Var wght=700 italic=false unhinted 36 3d7d2516933847d4
+Var wght=700 italic=false unhinted 37 2d23e11f09a06611
+Var wght=700 italic=false unhinted 38 99c31a01a0b398c8
+Var wght=700 italic=false unhinted 39 1bd342c9753f0508
+Var wght=700 italic=false unhinted 40 551d4ed8f8b6aece
+Var wght=400 italic=true unhinted 10 2ce9db74eb15078e
+Var wght=400 italic=true unhinted 11 f7830dfcab4af747
+Var wght=400 italic=true unhinted 12 2ce9bd7995d610e3
+Var wght=400 italic=true unhinted 13 94b184a07fcdc435
+Var wght=400 italic=true unhinted 14 48e34ed1bf92e1e6
+Var wght=400 italic=true unhinted 15 25f3c94c16068241
+Var wght=400 italic=true unhinted 16 f122653bb59c113f
+Var wght=400 italic=true unhinted 17 6b02d397c551d925
+Var wght=400 italic=true unhinted 18 b924855da76fd7ca
+Var wght=400 italic=true unhinted 19 034dd89e74288b97
+Var wght=400 italic=true unhinted 20 c477042311c6eb32
+Var wght=400 italic=true unhinted 21 22a5564370b69983
+Var wght=400 italic=true unhinted 22 0f7f3b2fe5a6ae9e
+Var wght=400 italic=true unhinted 23 eb297ec46414b4c5
+Var wght=400 italic=true unhinted 24 0afa94fbf91320bb
+Var wght=400 italic=true unhinted 25 6a8bc8af2e672736
+Var wght=400 italic=true unhinted 26 270c2211e508014f
+Var wght=400 italic=true unhinted 27 0a0e7de4c497609d
+Var wght=400 italic=true unhinted 28 0709bb7fff7c5987
+Var wght=400 italic=true unhinted 29 aee7e76e0a55a43f
+Var wght=400 italic=true unhinted 30 6c07f5203b8057db
+Var wght=400 italic=true unhinted 31 d2b3934ba992d172
+Var wght=400 italic=true unhinted 32 4dd412ca8fda5230
+Var wght=400 italic=true unhinted 33 896c9b18873783b3
+Var wght=400 italic=true unhinted 34 4e0ff1a4b660c7ab
+Var wght=400 italic=true unhinted 35 36a6a77f4e8eda70
+Var wght=400 italic=true unhinted 36 0f2d3394b2a908b2
+Var wght=400 italic=true unhinted 37 01eb4b2dc29ca1c3
+Var wght=400 italic=true unhinted 38 5910b8c9ea55e931
+Var wght=400 italic=true unhinted 39 d6337bb8fdb0ad2d
+Var wght=400 italic=true unhinted 40 32b5c77912314467
+Var wght=700 italic=true unhinted 10 ddcee59d60bb3bc5
+Var wght=700 italic=true unhinted 11 4a7c89959328e39a
+Var wght=700 italic=true unhinted 12 28507c5d40a08d46
+Var wght=700 italic=true unhinted 13 3dfad313701148eb
+Var wght=700 italic=true unhinted 14 15d053fc9aa10df1
+Var wght=700 italic=true unhinted 15 08ee3c399a31bd8b
+Var wght=700 italic=true unhinted 16 674afd630d185319
+Var wght=700 italic=true unhinted 17 d94b5341636e9ca4
+Var wght=700 italic=true unhinted 18 67fb1d18474c34b5
+Var wght=700 italic=true unhinted 19 6a86a041aa7910db
+Var wght=700 italic=true unhinted 20 da499639fcd89ff7
+Var wght=700 italic=true unhinted 21 176e4dc209d4cca3
+Var wght=700 italic=true unhinted 22 154ab617f345836e
+Var wght=700 italic=true unhinted 23 bac5fd80729dcbfb
+Var wght=700 italic=true unhinted 24 943146f2a4980fbb
+Var wght=700 italic=true unhinted 25 62171109e56bfee0
+Var wght=700 italic=true unhinted 26 991bf609eefe5e35
+Var wght=700 italic=true unhinted 27 dc51e699ebe036f4
+Var wght=700 italic=true unhinted 28 c30d461c3b7cde61
+Var wght=700 italic=true unhinted 29 83a2217888c7d033
+Var wght=700 italic=true unhinted 30 3fc67c955a7c361f
+Var wght=700 italic=true unhinted 31 9c67bfd0a43f42ae
+Var wght=700 italic=true unhinted 32 ec8c7ebf2a9e5897
+Var wght=700 italic=true unhinted 33 e5ab6ec8889cc3fd
+Var wght=700 italic=true unhinted 34 95659f90c17235f1
+Var wght=700 italic=true unhinted 35 134da93267a7f80c
+Var wght=700 italic=true unhinted 36 28195a0a6395c203
+Var wght=700 italic=true unhinted 37 f4302758228883c8
+Var wght=700 italic=true unhinted 38 605f87545d7e8f22
+Var wght=700 italic=true unhinted 39 aef800f2c34f3f07
+Var wght=700 italic=true unhinted 40 a0f4e290c7de95e1
+NotoSansSymbols.ttf unhinted 10 5d7d11db7c1dc65f
+NotoSansSymbols.ttf unhinted 11 462010aaab6dff30
+NotoSansSymbols.ttf unhinted 12 d3c43a546abec3d0
+NotoSansSymbols.ttf unhinted 13 96de8857fb7a765a
+NotoSansSymbols.ttf unhinted 14 5db48279c705f084
+NotoSansSymbols.ttf unhinted 15 ef76ed51e29ab681
+NotoSansSymbols.ttf unhinted 16 45984c215ac5de50
+NotoSansSymbols.ttf unhinted 17 8ed61aa5075be80c
+NotoSansSymbols.ttf unhinted 18 436027e1aab8712e
+NotoSansSymbols.ttf unhinted 19 80a48d63482e8448
+NotoSansSymbols.ttf unhinted 20 a7b8571652fe91c4
+NotoSansSymbols.ttf unhinted 21 3df6ccda8b7b5a65
+NotoSansSymbols.ttf unhinted 22 544b813852c84e52
+NotoSansSymbols.ttf unhinted 23 9340d612f51d25d2
+NotoSansSymbols.ttf unhinted 24 7bc810ad7b88469b
+NotoSansSymbols.ttf unhinted 25 dedf79dfe5e51119
+NotoSansSymbols.ttf unhinted 26 5fa11500f853fdf4
+NotoSansSymbols.ttf unhinted 27 18bde5d20e23b8fd
+NotoSansSymbols.ttf unhinted 28 4b307996bf0d3878
+NotoSansSymbols.ttf unhinted 29 bb711db25bd66bfb
+NotoSansSymbols.ttf unhinted 30 153cf54dcb803bf8
+NotoSansSymbols.ttf unhinted 31 47c8e7c457350ade
+NotoSansSymbols.ttf unhinted 32 f225d4d82d159e9c
+NotoSansSymbols.ttf unhinted 33 5f61216dc183d841
+NotoSansSymbols.ttf unhinted 34 9faaa9b7d91f3d18
+NotoSansSymbols.ttf unhinted 35 ebdf6b92b5794616
+NotoSansSymbols.ttf unhinted 36 a68a080a719ace92
+NotoSansSymbols.ttf unhinted 37 eb6409556608d537
+NotoSansSymbols.ttf unhinted 38 18048b714d60aaa7
+NotoSansSymbols.ttf unhinted 39 e9b9b2129ce692cb
+NotoSansSymbols.ttf unhinted 40 99f9f7273f7594f8
+NotoSansSymbols2-Regular.otf unhinted 10 8a3eb2ba4f83b822
+NotoSansSymbols2-Regular.otf unhinted 11 7e02f0455c20b6e4
+NotoSansSymbols2-Regular.otf unhinted 12 01dbde7bd707da08
+NotoSansSymbols2-Regular.otf unhinted 13 e46e511892a9ea1a
+NotoSansSymbols2-Regular.otf unhinted 14 78d6f768c7ec6b15
+NotoSansSymbols2-Regular.otf unhinted 15 cb2cd9a6889c359e
+NotoSansSymbols2-Regular.otf unhinted 16 448524625245dc3f
+NotoSansSymbols2-Regular.otf unhinted 17 34f31cd6263f9160
+NotoSansSymbols2-Regular.otf unhinted 18 5c9ad055fe04e756
+NotoSansSymbols2-Regular.otf unhinted 19 7baad3acdc423502
+NotoSansSymbols2-Regular.otf unhinted 20 f0ddf1ef7c8e074f
+NotoSansSymbols2-Regular.otf unhinted 21 0536dc5f4564c86d
+NotoSansSymbols2-Regular.otf unhinted 22 795e9d68cd63270a
+NotoSansSymbols2-Regular.otf unhinted 23 8e2d27472bc6998a
+NotoSansSymbols2-Regular.otf unhinted 24 24a3e99e68696590
+NotoSansSymbols2-Regular.otf unhinted 25 7c90eb200c88233b
+NotoSansSymbols2-Regular.otf unhinted 26 1cbfa565031376ee
+NotoSansSymbols2-Regular.otf unhinted 27 9f711fced8c8fabb
+NotoSansSymbols2-Regular.otf unhinted 28 c7ebd1176fb2d882
+NotoSansSymbols2-Regular.otf unhinted 29 aba434883db75a9f
+NotoSansSymbols2-Regular.otf unhinted 30 c6ed9a432ab25fac
+NotoSansSymbols2-Regular.otf unhinted 31 3cdacf5c82406df4
+NotoSansSymbols2-Regular.otf unhinted 32 ecf638682ad67cb8
+NotoSansSymbols2-Regular.otf unhinted 33 ac5872f53034b3aa
+NotoSansSymbols2-Regular.otf unhinted 34 d0fa4d7cf9d12897
+NotoSansSymbols2-Regular.otf unhinted 35 7354427f817af9f1
+NotoSansSymbols2-Regular.otf unhinted 36 9259a5c36bc21126
+NotoSansSymbols2-Regular.otf unhinted 37 7611e15350bce3b2
+NotoSansSymbols2-Regular.otf unhinted 38 4b86fb44edb10ff3
+NotoSansSymbols2-Regular.otf unhinted 39 c9aca6a025631118
+NotoSansSymbols2-Regular.otf unhinted 40 036fa6dd8bb43f48

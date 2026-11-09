@@ -1,0 +1,659 @@
+NotoColorEmoji.ttf#0
+  display Noto Color Emoji
+  families ["Noto Color Emoji"]
+  every family ["Noto Color Emoji"]
+  postscript Some("NotoColorEmoji")
+  weight 400 italic false off-width 0
+  color true
+  cmap 1501 9fe0a88b84ffd4b6
+NotoSansCJKjp-Kuzu.otf#0
+  display Noto Sans CJK JP
+  families ["Noto Sans CJK JP"]
+  every family ["Noto Sans CJK JP"]
+  postscript Some("NotoSansCJKjp-Thin")
+  weight 100 italic false off-width 0
+  color false
+  cmap 1 cc7989b17cb974bb
+  axis wght 100 100 900
+  instance Some("Thin") Some("NotoSansCJKjp-Thin") [100.0]
+  instance Some("Light") Some("NotoSansCJKjp-Light") [300.0]
+  instance Some("DemiLight") Some("NotoSansCJKjp-DemiLight") [350.0]
+  instance Some("Regular") Some("NotoSansCJKjp-Regular") [400.0]
+  instance Some("Medium") Some("NotoSansCJKjp-Medium") [500.0]
+  instance Some("Bold") Some("NotoSansCJKjp-Bold") [700.0]
+  instance Some("Black") Some("NotoSansCJKjp-Black") [900.0]
+  normalized 96fea6025160a3f0
+NotoSansCJKsc-Kuzu.otf#0
+  display Noto Sans CJK SC
+  families ["Noto Sans CJK SC"]
+  every family ["Noto Sans CJK SC"]
+  postscript Some("NotoSansCJKsc-Thin")
+  weight 100 italic false off-width 0
+  color false
+  cmap 1 ec8985987a183f08
+  axis wght 100 100 900
+  instance Some("Thin") Some("NotoSansCJKsc-Thin") [100.0]
+  instance Some("Light") Some("NotoSansCJKsc-Light") [300.0]
+  instance Some("DemiLight") Some("NotoSansCJKsc-DemiLight") [350.0]
+  instance Some("Regular") Some("NotoSansCJKsc-Regular") [400.0]
+  instance Some("Medium") Some("NotoSansCJKsc-Medium") [500.0]
+  instance Some("Bold") Some("NotoSansCJKsc-Bold") [700.0]
+  instance Some("Black") Some("NotoSansCJKsc-Black") [900.0]
+  normalized 96fea6025160a3f0
+NotoSansSymbols.ttf#0
+  display Noto Sans Symbols Regular
+  families ["Noto Sans Symbols"]
+  every family ["Noto Sans Symbols"]
+  postscript Some("NotoSansSymbols-Regular")
+  weight 400 italic false off-width 0
+  color false
+  cmap 840 6151c54faa88cee4
+  axis wght 100 400 900
+  instance Some("Thin") None [100.0]
+  instance Some("ExtraLight") None [200.0]
+  instance Some("Light") None [300.0]
+  instance Some("Regular") None [400.0]
+  instance Some("Medium") None [500.0]
+  instance Some("SemiBold") None [600.0]
+  instance Some("Bold") None [700.0]
+  instance Some("ExtraBold") None [800.0]
+  instance Some("Black") None [900.0]
+  normalized 4e84728ac6df823a
+NotoSansSymbols2-Regular.otf#0
+  display Noto Sans Symbols 2 Regular
+  families ["Noto Sans Symbols 2"]
+  every family ["Noto Sans Symbols 2"]
+  postscript Some("NotoSansSymbols2-Regular")
+  weight 400 italic false off-width 0
+  color false
+  cmap 2641 3946c3b7cc8419c1
+MonaspaceArgon-Bold.otf#0
+  display Monaspace Argon Bold
+  families ["Monaspace Argon"]
+  every family ["Monaspace Argon", "Monaspace Argon", "Monaspace Argon"]
+  postscript Some("MonaspaceArgon-Bold")
+  weight 700 italic false off-width 0
+  color false
+  cmap 2460 8a5e538ac1c3ccb4
+MonaspaceArgon-BoldItalic.otf#0
+  display Monaspace Argon Bold Italic
+  families ["Monaspace Argon"]
+  every family ["Monaspace Argon", "Monaspace Argon", "Monaspace Argon"]
+  postscript Some("MonaspaceArgon-BoldItalic")
+  weight 700 italic true off-width 0
+  color false
+  cmap 2460 8a5e538ac1c3ccb4
+MonaspaceArgon-ExtraBold.otf#0
+  display Monaspace Argon ExtraBold
+  families ["Monaspace Argon"]
+  every family ["Monaspace Argon ExtraBold", "Monaspace Argon ExtraBold", "Monaspace Argon"]
+  postscript Some("MonaspaceArgon-ExtraBold")
+  weight 800 italic false off-width 0
+  color false
+  cmap 2460 8a5e538ac1c3ccb4
+MonaspaceArgon-ExtraBoldItalic.otf#0
+  display Monaspace Argon ExtraBold Italic
+  families ["Monaspace Argon"]
+  every family ["Monaspace Argon ExtraBold", "Monaspace Argon ExtraBold", "Monaspace Argon"]
+  postscript Some("MonaspaceArgon-ExtraBoldItalic")
+  weight 800 italic true off-width 0
+  color false
+  cmap 2460 8a5e538ac1c3ccb4
+MonaspaceArgon-ExtraLight.otf#0
+  display Monaspace Argon ExtraLight
+  families ["Monaspace Argon"]
+  every family ["Monaspace Argon ExtraLight", "Monaspace Argon ExtraLight", "Monaspace Argon"]
+  postscript Some("MonaspaceArgon-ExtraLight")
+  weight 200 italic false off-width 0
+  color false
+  cmap 2460 8a5e538ac1c3ccb4
+MonaspaceArgon-ExtraLightItalic.otf#0
+  display Monaspace Argon ExtraLight Italic
+  families ["Monaspace Argon"]
+  every family ["Monaspace Argon ExtraLight", "Monaspace Argon ExtraLight", "Monaspace Argon"]
+  postscript Some("MonaspaceArgon-ExtraLightItalic")
+  weight 200 italic true off-width 0
+  color false
+  cmap 2460 8a5e538ac1c3ccb4
+MonaspaceArgon-Italic.otf#0
+  display Monaspace Argon Italic
+  families ["Monaspace Argon"]
+  every family ["Monaspace Argon", "Monaspace Argon", "Monaspace Argon"]
+  postscript Some("MonaspaceArgon-Italic")
+  weight 400 italic true off-width 0
+  color false
+  cmap 2460 8a5e538ac1c3ccb4
+MonaspaceArgon-Light.otf#0
+  display Monaspace Argon Light
+  families ["Monaspace Argon"]
+  every family ["Monaspace Argon Light", "Monaspace Argon Light", "Monaspace Argon"]
+  postscript Some("MonaspaceArgon-Light")
+  weight 300 italic false off-width 0
+  color false
+  cmap 2460 8a5e538ac1c3ccb4
+MonaspaceArgon-LightItalic.otf#0
+  display Monaspace Argon Light Italic
+  families ["Monaspace Argon"]
+  every family ["Monaspace Argon Light", "Monaspace Argon Light", "Monaspace Argon"]
+  postscript Some("MonaspaceArgon-LightItalic")
+  weight 300 italic true off-width 0
+  color false
+  cmap 2460 8a5e538ac1c3ccb4
+MonaspaceArgon-Medium.otf#0
+  display Monaspace Argon Medium
+  families ["Monaspace Argon"]
+  every family ["Monaspace Argon Medium", "Monaspace Argon Medium", "Monaspace Argon"]
+  postscript Some("MonaspaceArgon-Medium")
+  weight 500 italic false off-width 0
+  color false
+  cmap 2460 8a5e538ac1c3ccb4
+MonaspaceArgon-MediumItalic.otf#0
+  display Monaspace Argon Medium Italic
+  families ["Monaspace Argon"]
+  every family ["Monaspace Argon Medium", "Monaspace Argon Medium", "Monaspace Argon"]
+  postscript Some("MonaspaceArgon-MediumItalic")
+  weight 500 italic true off-width 0
+  color false
+  cmap 2460 8a5e538ac1c3ccb4
+MonaspaceArgon-Regular.otf#0
+  display Monaspace Argon Regular
+  families ["Monaspace Argon"]
+  every family ["Monaspace Argon", "Monaspace Argon", "Monaspace Argon"]
+  postscript Some("MonaspaceArgon-Regular")
+  weight 400 italic false off-width 0
+  color false
+  cmap 2460 8a5e538ac1c3ccb4
+MonaspaceArgon-SemiBold.otf#0
+  display Monaspace Argon SemiBold
+  families ["Monaspace Argon"]
+  every family ["Monaspace Argon SemiBold", "Monaspace Argon SemiBold", "Monaspace Argon"]
+  postscript Some("MonaspaceArgon-SemiBold")
+  weight 600 italic false off-width 0
+  color false
+  cmap 2460 8a5e538ac1c3ccb4
+MonaspaceArgon-SemiBoldItalic.otf#0
+  display Monaspace Argon SemiBold Italic
+  families ["Monaspace Argon"]
+  every family ["Monaspace Argon SemiBold", "Monaspace Argon SemiBold", "Monaspace Argon"]
+  postscript Some("MonaspaceArgon-SemiBoldItalic")
+  weight 600 italic true off-width 0
+  color false
+  cmap 2460 8a5e538ac1c3ccb4
+MonaspaceArgonNF-Bold.otf#0
+  display Monaspace Argon NF Bold
+  families ["Monaspace Argon NF"]
+  every family ["Monaspace Argon NF", "Monaspace Argon NF", "Monaspace Argon NF"]
+  postscript Some("MonaspaceArgonNF-Bold")
+  weight 700 italic false off-width 0
+  color false
+  cmap 11606 e2b73a1380288027
+MonaspaceArgonNF-BoldItalic.otf#0
+  display Monaspace Argon NF Bold Italic
+  families ["Monaspace Argon NF"]
+  every family ["Monaspace Argon NF", "Monaspace Argon NF", "Monaspace Argon NF"]
+  postscript Some("MonaspaceArgonNF-BoldItalic")
+  weight 700 italic true off-width 0
+  color false
+  cmap 11606 e2b73a1380288027
+MonaspaceArgonNF-ExtraBold.otf#0
+  display Monaspace Argon NF ExtraBold
+  families ["Monaspace Argon NF"]
+  every family ["Monaspace Argon NF ExtraBold", "Monaspace Argon NF ExtraBold", "Monaspace Argon NF"]
+  postscript Some("MonaspaceArgonNF-ExtraBold")
+  weight 800 italic false off-width 0
+  color false
+  cmap 11606 e2b73a1380288027
+MonaspaceArgonNF-ExtraBoldItalic.otf#0
+  display Monaspace Argon NF ExtraBold Italic
+  families ["Monaspace Argon NF"]
+  every family ["Monaspace Argon NF ExtraBold", "Monaspace Argon NF ExtraBold", "Monaspace Argon NF"]
+  postscript Some("MonaspaceArgonNF-ExtraBoldItalic")
+  weight 800 italic true off-width 0
+  color false
+  cmap 11606 e2b73a1380288027
+MonaspaceArgonNF-ExtraLight.otf#0
+  display Monaspace Argon NF ExtraLight
+  families ["Monaspace Argon NF"]
+  every family ["Monaspace Argon NF ExtraLight", "Monaspace Argon NF ExtraLight", "Monaspace Argon NF"]
+  postscript Some("MonaspaceArgonNF-ExtraLight")
+  weight 200 italic false off-width 0
+  color false
+  cmap 11606 e2b73a1380288027
+MonaspaceArgonNF-ExtraLightItalic.otf#0
+  display Monaspace Argon NF ExtraLight Italic
+  families ["Monaspace Argon NF"]
+  every family ["Monaspace Argon NF ExtraLight", "Monaspace Argon NF ExtraLight", "Monaspace Argon NF"]
+  postscript Some("MonaspaceArgonNF-ExtraLightItalic")
+  weight 200 italic true off-width 0
+  color false
+  cmap 11606 e2b73a1380288027
+MonaspaceArgonNF-Italic.otf#0
+  display Monaspace Argon NF Italic
+  families ["Monaspace Argon NF"]
+  every family ["Monaspace Argon NF", "Monaspace Argon NF", "Monaspace Argon NF"]
+  postscript Some("MonaspaceArgonNF-Italic")
+  weight 400 italic true off-width 0
+  color false
+  cmap 11606 e2b73a1380288027
+MonaspaceArgonNF-Light.otf#0
+  display Monaspace Argon NF Light
+  families ["Monaspace Argon NF"]
+  every family ["Monaspace Argon NF Light", "Monaspace Argon NF Light", "Monaspace Argon NF"]
+  postscript Some("MonaspaceArgonNF-Light")
+  weight 300 italic false off-width 0
+  color false
+  cmap 11606 e2b73a1380288027
+MonaspaceArgonNF-LightItalic.otf#0
+  display Monaspace Argon NF Light Italic
+  families ["Monaspace Argon NF"]
+  every family ["Monaspace Argon NF Light", "Monaspace Argon NF Light", "Monaspace Argon NF"]
+  postscript Some("MonaspaceArgonNF-LightItalic")
+  weight 300 italic true off-width 0
+  color false
+  cmap 11606 e2b73a1380288027
+MonaspaceArgonNF-Medium.otf#0
+  display Monaspace Argon NF Medium
+  families ["Monaspace Argon NF"]
+  every family ["Monaspace Argon NF Medium", "Monaspace Argon NF Medium", "Monaspace Argon NF"]
+  postscript Some("MonaspaceArgonNF-Medium")
+  weight 500 italic false off-width 0
+  color false
+  cmap 11606 e2b73a1380288027
+MonaspaceArgonNF-MediumItalic.otf#0
+  display Monaspace Argon NF Medium Italic
+  families ["Monaspace Argon NF"]
+  every family ["Monaspace Argon NF Medium", "Monaspace Argon NF Medium", "Monaspace Argon NF"]
+  postscript Some("MonaspaceArgonNF-MediumItalic")
+  weight 500 italic true off-width 0
+  color false
+  cmap 11606 e2b73a1380288027
+MonaspaceArgonNF-Regular.otf#0
+  display Monaspace Argon NF Regular
+  families ["Monaspace Argon NF"]
+  every family ["Monaspace Argon NF", "Monaspace Argon NF", "Monaspace Argon NF"]
+  postscript Some("MonaspaceArgonNF-Regular")
+  weight 400 italic false off-width 0
+  color false
+  cmap 11606 e2b73a1380288027
+MonaspaceArgonNF-SemiBold.otf#0
+  display Monaspace Argon NF SemiBold
+  families ["Monaspace Argon NF"]
+  every family ["Monaspace Argon NF SemiBold", "Monaspace Argon NF SemiBold", "Monaspace Argon NF"]
+  postscript Some("MonaspaceArgonNF-SemiBold")
+  weight 600 italic false off-width 0
+  color false
+  cmap 11606 e2b73a1380288027
+MonaspaceArgonNF-SemiBoldItalic.otf#0
+  display Monaspace Argon NF SemiBold Italic
+  families ["Monaspace Argon NF"]
+  every family ["Monaspace Argon NF SemiBold", "Monaspace Argon NF SemiBold", "Monaspace Argon NF"]
+  postscript Some("MonaspaceArgonNF-SemiBoldItalic")
+  weight 600 italic true off-width 0
+  color false
+  cmap 11606 e2b73a1380288027
+MonaspaceNeon-Bold.otf#0
+  display Monaspace Neon Bold
+  families ["Monaspace Neon"]
+  every family ["Monaspace Neon", "Monaspace Neon", "Monaspace Neon"]
+  postscript Some("MonaspaceNeon-Bold")
+  weight 700 italic false off-width 0
+  color false
+  cmap 2460 f0745e408eda70cd
+MonaspaceNeon-BoldItalic.otf#0
+  display Monaspace Neon Bold Italic
+  families ["Monaspace Neon"]
+  every family ["Monaspace Neon", "Monaspace Neon", "Monaspace Neon"]
+  postscript Some("MonaspaceNeon-BoldItalic")
+  weight 700 italic true off-width 0
+  color false
+  cmap 2460 f0745e408eda70cd
+MonaspaceNeon-ExtraBold.otf#0
+  display Monaspace Neon ExtraBold
+  families ["Monaspace Neon"]
+  every family ["Monaspace Neon ExtraBold", "Monaspace Neon ExtraBold", "Monaspace Neon"]
+  postscript Some("MonaspaceNeon-ExtraBold")
+  weight 800 italic false off-width 0
+  color false
+  cmap 2460 f0745e408eda70cd
+MonaspaceNeon-ExtraBoldItalic.otf#0
+  display Monaspace Neon ExtraBold Italic
+  families ["Monaspace Neon"]
+  every family ["Monaspace Neon ExtraBold", "Monaspace Neon ExtraBold", "Monaspace Neon"]
+  postscript Some("MonaspaceNeon-ExtraBoldItalic")
+  weight 800 italic true off-width 0
+  color false
+  cmap 2460 f0745e408eda70cd
+MonaspaceNeon-ExtraLight.otf#0
+  display Monaspace Neon ExtraLight
+  families ["Monaspace Neon"]
+  every family ["Monaspace Neon ExtraLight", "Monaspace Neon ExtraLight", "Monaspace Neon"]
+  postscript Some("MonaspaceNeon-ExtraLight")
+  weight 200 italic false off-width 0
+  color false
+  cmap 2460 f0745e408eda70cd
+MonaspaceNeon-ExtraLightItalic.otf#0
+  display Monaspace Neon ExtraLight Italic
+  families ["Monaspace Neon"]
+  every family ["Monaspace Neon ExtraLight", "Monaspace Neon ExtraLight", "Monaspace Neon"]
+  postscript Some("MonaspaceNeon-ExtraLightItalic")
+  weight 200 italic true off-width 0
+  color false
+  cmap 2460 f0745e408eda70cd
+MonaspaceNeon-Italic.otf#0
+  display Monaspace Neon Italic
+  families ["Monaspace Neon"]
+  every family ["Monaspace Neon", "Monaspace Neon", "Monaspace Neon"]
+  postscript Some("MonaspaceNeon-Italic")
+  weight 400 italic true off-width 0
+  color false
+  cmap 2460 f0745e408eda70cd
+MonaspaceNeon-Light.otf#0
+  display Monaspace Neon Light
+  families ["Monaspace Neon"]
+  every family ["Monaspace Neon Light", "Monaspace Neon Light", "Monaspace Neon"]
+  postscript Some("MonaspaceNeon-Light")
+  weight 300 italic false off-width 0
+  color false
+  cmap 2460 f0745e408eda70cd
+MonaspaceNeon-LightItalic.otf#0
+  display Monaspace Neon Light Italic
+  families ["Monaspace Neon"]
+  every family ["Monaspace Neon Light", "Monaspace Neon Light", "Monaspace Neon"]
+  postscript Some("MonaspaceNeon-LightItalic")
+  weight 300 italic true off-width 0
+  color false
+  cmap 2460 f0745e408eda70cd
+MonaspaceNeon-Medium.otf#0
+  display Monaspace Neon Medium
+  families ["Monaspace Neon"]
+  every family ["Monaspace Neon Medium", "Monaspace Neon Medium", "Monaspace Neon"]
+  postscript Some("MonaspaceNeon-Medium")
+  weight 500 italic false off-width 0
+  color false
+  cmap 2460 f0745e408eda70cd
+MonaspaceNeon-MediumItalic.otf#0
+  display Monaspace Neon Medium Italic
+  families ["Monaspace Neon"]
+  every family ["Monaspace Neon Medium", "Monaspace Neon Medium", "Monaspace Neon"]
+  postscript Some("MonaspaceNeon-MediumItalic")
+  weight 500 italic true off-width 0
+  color false
+  cmap 2460 f0745e408eda70cd
+MonaspaceNeon-Regular.otf#0
+  display Monaspace Neon Regular
+  families ["Monaspace Neon"]
+  every family ["Monaspace Neon", "Monaspace Neon", "Monaspace Neon"]
+  postscript Some("MonaspaceNeon-Regular")
+  weight 400 italic false off-width 0
+  color false
+  cmap 2460 f0745e408eda70cd
+MonaspaceNeon-SemiBold.otf#0
+  display Monaspace Neon SemiBold
+  families ["Monaspace Neon"]
+  every family ["Monaspace Neon SemiBold", "Monaspace Neon SemiBold", "Monaspace Neon"]
+  postscript Some("MonaspaceNeon-SemiBold")
+  weight 600 italic false off-width 0
+  color false
+  cmap 2460 f0745e408eda70cd
+MonaspaceNeon-SemiBoldItalic.otf#0
+  display Monaspace Neon SemiBold Italic
+  families ["Monaspace Neon"]
+  every family ["Monaspace Neon SemiBold", "Monaspace Neon SemiBold", "Monaspace Neon"]
+  postscript Some("MonaspaceNeon-SemiBoldItalic")
+  weight 600 italic true off-width 0
+  color false
+  cmap 2460 f0745e408eda70cd
+MonaspaceXenon-Bold.otf#0
+  display Monaspace Xenon Bold
+  families ["Monaspace Xenon"]
+  every family ["Monaspace Xenon", "Monaspace Xenon", "Monaspace Xenon"]
+  postscript Some("MonaspaceXenon-Bold")
+  weight 700 italic false off-width 0
+  color false
+  cmap 2460 fafab4019e30b0f8
+MonaspaceXenon-BoldItalic.otf#0
+  display Monaspace Xenon Bold Italic
+  families ["Monaspace Xenon"]
+  every family ["Monaspace Xenon", "Monaspace Xenon", "Monaspace Xenon"]
+  postscript Some("MonaspaceXenon-BoldItalic")
+  weight 700 italic true off-width 0
+  color false
+  cmap 2460 fafab4019e30b0f8
+MonaspaceXenon-ExtraBold.otf#0
+  display Monaspace Xenon ExtraBold
+  families ["Monaspace Xenon"]
+  every family ["Monaspace Xenon ExtraBold", "Monaspace Xenon ExtraBold", "Monaspace Xenon"]
+  postscript Some("MonaspaceXenon-ExtraBold")
+  weight 800 italic false off-width 0
+  color false
+  cmap 2460 fafab4019e30b0f8
+MonaspaceXenon-ExtraBoldItalic.otf#0
+  display Monaspace Xenon ExtraBold Italic
+  families ["Monaspace Xenon"]
+  every family ["Monaspace Xenon ExtraBold", "Monaspace Xenon ExtraBold", "Monaspace Xenon"]
+  postscript Some("MonaspaceXenon-ExtraBoldItalic")
+  weight 800 italic true off-width 0
+  color false
+  cmap 2460 fafab4019e30b0f8
+MonaspaceXenon-ExtraLight.otf#0
+  display Monaspace Xenon ExtraLight
+  families ["Monaspace Xenon"]
+  every family ["Monaspace Xenon ExtraLight", "Monaspace Xenon ExtraLight", "Monaspace Xenon"]
+  postscript Some("MonaspaceXenon-ExtraLight")
+  weight 200 italic false off-width 0
+  color false
+  cmap 2460 fafab4019e30b0f8
+MonaspaceXenon-ExtraLightItalic.otf#0
+  display Monaspace Xenon ExtraLight Italic
+  families ["Monaspace Xenon"]
+  every family ["Monaspace Xenon ExtraLight", "Monaspace Xenon ExtraLight", "Monaspace Xenon"]
+  postscript Some("MonaspaceXenon-ExtraLightItalic")
+  weight 200 italic true off-width 0
+  color false
+  cmap 2460 fafab4019e30b0f8
+MonaspaceXenon-Italic.otf#0
+  display Monaspace Xenon Italic
+  families ["Monaspace Xenon"]
+  every family ["Monaspace Xenon", "Monaspace Xenon", "Monaspace Xenon"]
+  postscript Some("MonaspaceXenon-Italic")
+  weight 400 italic true off-width 0
+  color false
+  cmap 2460 fafab4019e30b0f8
+MonaspaceXenon-Light.otf#0
+  display Monaspace Xenon Light
+  families ["Monaspace Xenon"]
+  every family ["Monaspace Xenon Light", "Monaspace Xenon Light", "Monaspace Xenon"]
+  postscript Some("MonaspaceXenon-Light")
+  weight 300 italic false off-width 0
+  color false
+  cmap 2460 fafab4019e30b0f8
+MonaspaceXenon-LightItalic.otf#0
+  display Monaspace Xenon Light Italic
+  families ["Monaspace Xenon"]
+  every family ["Monaspace Xenon Light", "Monaspace Xenon Light", "Monaspace Xenon"]
+  postscript Some("MonaspaceXenon-LightItalic")
+  weight 300 italic true off-width 0
+  color false
+  cmap 2460 fafab4019e30b0f8
+MonaspaceXenon-Medium.otf#0
+  display Monaspace Xenon Medium
+  families ["Monaspace Xenon"]
+  every family ["Monaspace Xenon Medium", "Monaspace Xenon Medium", "Monaspace Xenon"]
+  postscript Some("MonaspaceXenon-Medium")
+  weight 500 italic false off-width 0
+  color false
+  cmap 2460 fafab4019e30b0f8
+MonaspaceXenon-MediumItalic.otf#0
+  display Monaspace Xenon Medium Italic
+  families ["Monaspace Xenon"]
+  every family ["Monaspace Xenon Medium", "Monaspace Xenon Medium", "Monaspace Xenon"]
+  postscript Some("MonaspaceXenon-MediumItalic")
+  weight 500 italic true off-width 0
+  color false
+  cmap 2460 fafab4019e30b0f8
+MonaspaceXenon-Regular.otf#0
+  display Monaspace Xenon Regular
+  families ["Monaspace Xenon"]
+  every family ["Monaspace Xenon", "Monaspace Xenon", "Monaspace Xenon"]
+  postscript Some("MonaspaceXenon-Regular")
+  weight 400 italic false off-width 0
+  color false
+  cmap 2460 fafab4019e30b0f8
+MonaspaceXenon-SemiBold.otf#0
+  display Monaspace Xenon SemiBold
+  families ["Monaspace Xenon"]
+  every family ["Monaspace Xenon SemiBold", "Monaspace Xenon SemiBold", "Monaspace Xenon"]
+  postscript Some("MonaspaceXenon-SemiBold")
+  weight 600 italic false off-width 0
+  color false
+  cmap 2460 fafab4019e30b0f8
+MonaspaceXenon-SemiBoldItalic.otf#0
+  display Monaspace Xenon SemiBold Italic
+  families ["Monaspace Xenon"]
+  every family ["Monaspace Xenon SemiBold", "Monaspace Xenon SemiBold", "Monaspace Xenon"]
+  postscript Some("MonaspaceXenon-SemiBoldItalic")
+  weight 600 italic true off-width 0
+  color false
+  cmap 2460 fafab4019e30b0f8
+Monaspace Neon Var.ttf#0
+  display Monaspace Neon Var ExtraLight
+  families ["Monaspace Neon Var"]
+  every family ["Monaspace Neon Var ExtraLight", "Monaspace Neon Var"]
+  postscript Some("MonaspaceNeonVar-ExtraLight")
+  weight 200 italic false off-width 0
+  color false
+  cmap 2460 f0745e408eda70cd
+  axis wght 200 200 800
+  axis wdth 100 100 125
+  axis slnt -11 0 0
+  instance Some("ExtraLight") Some("MonaspaceNeonVar-ExtraLight") [200.0, 100.0, 0.0]
+  instance Some("Light") Some("MonaspaceNeonVar-Light") [300.0, 100.0, 0.0]
+  instance Some("Regular") Some("MonaspaceNeonVar-Regular") [400.0, 100.0, 0.0]
+  instance Some("Medium") Some("MonaspaceNeonVar-Medium") [500.0, 100.0, 0.0]
+  instance Some("SemiBold") Some("MonaspaceNeonVar-SemiBold") [600.0, 100.0, 0.0]
+  instance Some("Bold") Some("MonaspaceNeonVar-Bold") [700.0, 100.0, 0.0]
+  instance Some("ExtraBold") Some("MonaspaceNeonVar-ExtraBold") [800.0, 100.0, 0.0]
+  instance Some("ExtraLight Italic") Some("MonaspaceNeonVar-ExtraLightItalic") [200.0, 100.0, -11.0]
+  instance Some("Light Italic") Some("MonaspaceNeonVar-LightItalic") [300.0, 100.0, -11.0]
+  instance Some("Italic") Some("MonaspaceNeonVar-Italic") [400.0, 100.0, -11.0]
+  instance Some("Medium Italic") Some("MonaspaceNeonVar-MediumItalic") [500.0, 100.0, -11.0]
+  instance Some("SemiBold Italic") Some("MonaspaceNeonVar-SemiBoldItalic") [600.0, 100.0, -11.0]
+  instance Some("Bold Italic") Some("MonaspaceNeonVar-BoldItalic") [700.0, 100.0, -11.0]
+  instance Some("ExtraBold Italic") Some("MonaspaceNeonVar-ExtraBoldItalic") [800.0, 100.0, -11.0]
+  instance Some("SemiWide ExtraLight") Some("MonaspaceNeonVar-SemiWideExtraLight") [200.0, 112.5, 0.0]
+  instance Some("SemiWide Light") Some("MonaspaceNeonVar-SemiWideLight") [300.0, 112.5, 0.0]
+  instance Some("SemiWide Regular") Some("MonaspaceNeonVar-SemiWideRegular") [400.0, 112.5, 0.0]
+  instance Some("SemiWide Medium") Some("MonaspaceNeonVar-SemiWideMedium") [500.0, 112.5, 0.0]
+  instance Some("SemiWide SemiBold") Some("MonaspaceNeonVar-SemiWideSemiBold") [600.0, 112.5, 0.0]
+  instance Some("SemiWide Bold") Some("MonaspaceNeonVar-SemiWideBold") [700.0, 112.5, 0.0]
+  instance Some("SemiWide ExtraBold") Some("MonaspaceNeonVar-SemiWideExtraBold") [800.0, 112.5, 0.0]
+  instance Some("SemiWide ExtraLight Italic") Some("MonaspaceNeonVar-SemiWideExtraLightItalic") [200.0, 112.5, -11.0]
+  instance Some("SemiWide Light Italic") Some("MonaspaceNeonVar-SemiWideLightItalic") [300.0, 112.5, -11.0]
+  instance Some("SemiWide Italic") Some("MonaspaceNeonVar-SemiWideItalic") [400.0, 112.5, -11.0]
+  instance Some("SemiWide Medium Italic") Some("MonaspaceNeonVar-SemiWideMediumItalic") [500.0, 112.5, -11.0]
+  instance Some("SemiWide SemiBold Italic") Some("MonaspaceNeonVar-SemiWideSemiBoldItalic") [600.0, 112.5, -11.0]
+  instance Some("SemiWide Bold Italic") Some("MonaspaceNeonVar-SemiWideBoldItalic") [700.0, 112.5, -11.0]
+  instance Some("SemiWide ExtraBold Italic") Some("MonaspaceNeonVar-SemiWideExtraBoldItalic") [800.0, 112.5, -11.0]
+  instance Some("Wide ExtraLight") Some("MonaspaceNeonVar-WideExtraLight") [200.0, 125.0, 0.0]
+  instance Some("Wide Light") Some("MonaspaceNeonVar-WideLight") [300.0, 125.0, 0.0]
+  instance Some("Wide Regular") Some("MonaspaceNeonVar-WideRegular") [400.0, 125.0, 0.0]
+  instance Some("Wide Medium") Some("MonaspaceNeonVar-WideMedium") [500.0, 125.0, 0.0]
+  instance Some("Wide SemiBold") Some("MonaspaceNeonVar-WideSemiBold") [600.0, 125.0, 0.0]
+  instance Some("Wide Bold") Some("MonaspaceNeonVar-WideBold") [700.0, 125.0, 0.0]
+  instance Some("Wide ExtraBold") Some("MonaspaceNeonVar-WideExtraBold") [800.0, 125.0, 0.0]
+  instance Some("Wide ExtraLight Italic") Some("MonaspaceNeonVar-WideExtraLightItalic") [200.0, 125.0, -11.0]
+  instance Some("Wide Light Italic") Some("MonaspaceNeonVar-WideLightItalic") [300.0, 125.0, -11.0]
+  instance Some("Wide Italic") Some("MonaspaceNeonVar-WideItalic") [400.0, 125.0, -11.0]
+  instance Some("Wide Medium Italic") Some("MonaspaceNeonVar-WideMediumItalic") [500.0, 125.0, -11.0]
+  instance Some("Wide SemiBold Italic") Some("MonaspaceNeonVar-WideSemiBoldItalic") [600.0, 125.0, -11.0]
+  instance Some("Wide Bold Italic") Some("MonaspaceNeonVar-WideBoldItalic") [700.0, 125.0, -11.0]
+  instance Some("Wide ExtraBold Italic") Some("MonaspaceNeonVar-WideExtraBoldItalic") [800.0, 125.0, -11.0]
+  normalized daf20ddbb4bb7a12
+MonaspaceNeonFrozen-Bold.ttf#0
+  display Monaspace Neon Frozen Bold
+  families ["Monaspace Neon Frozen"]
+  every family ["Monaspace Neon Frozen", "Monaspace Neon Frozen", "Monaspace Neon Frozen"]
+  postscript Some("MonaspaceNeonFrozen-Bold")
+  weight 700 italic false off-width 0
+  color false
+  cmap 2460 f0745e408eda70cd
+MonaspaceNeonFrozen-BoldItalic.ttf#0
+  display Monaspace Neon Frozen Bold Italic
+  families ["Monaspace Neon Frozen"]
+  every family ["Monaspace Neon Frozen", "Monaspace Neon Frozen", "Monaspace Neon Frozen"]
+  postscript Some("MonaspaceNeonFrozen-BoldItalic")
+  weight 700 italic true off-width 0
+  color false
+  cmap 2460 f0745e408eda70cd
+MonaspaceNeonFrozen-Italic.ttf#0
+  display Monaspace Neon Frozen Italic
+  families ["Monaspace Neon Frozen"]
+  every family ["Monaspace Neon Frozen", "Monaspace Neon Frozen", "Monaspace Neon Frozen"]
+  postscript Some("MonaspaceNeonFrozen-Italic")
+  weight 400 italic true off-width 0
+  color false
+  cmap 2460 f0745e408eda70cd
+MonaspaceNeonFrozen-Regular.ttf#0
+  display Monaspace Neon Frozen Regular
+  families ["Monaspace Neon Frozen"]
+  every family ["Monaspace Neon Frozen", "Monaspace Neon Frozen", "Monaspace Neon Frozen"]
+  postscript Some("MonaspaceNeonFrozen-Regular")
+  weight 400 italic false off-width 0
+  color false
+  cmap 2460 f0745e408eda70cd
+MonaspaceNeonFrozen-WideRegular.ttf#0
+  display Monaspace Neon Frozen Wide Regular
+  families ["Monaspace Neon Frozen"]
+  every family ["Monaspace Neon Frozen Wide", "Monaspace Neon Frozen Wide", "Monaspace Neon Frozen"]
+  postscript Some("MonaspaceNeonFrozen-WideRegular")
+  weight 400 italic false off-width 50
+  color false
+  cmap 2460 f0745e408eda70cd
+FelisBitmapProbe.ttf#0
+  display Felis Bitmap Probe
+  families ["Felis Bitmap Probe"]
+  every family ["Felis Bitmap Probe", "Felis Bitmap Probe"]
+  postscript None
+  weight 400 italic false off-width 0
+  color true
+  cmap 12 ea1d26850323b205
+FelisColorProbe.ttf#0
+  display Felis Color Probe
+  families ["Felis Color Probe"]
+  every family ["Felis Color Probe", "Felis Color Probe"]
+  postscript None
+  weight 400 italic false off-width 0
+  color true
+  cmap 6 3230fae7abd146d5
+FelisColorProbeNoCpal.ttf#0
+  display Felis Color Probe
+  families ["Felis Color Probe"]
+  every family ["Felis Color Probe", "Felis Color Probe"]
+  postscript None
+  weight 400 italic false off-width 0
+  color false
+  cmap 6 3230fae7abd146d5
+FelisColrProbe.ttf#0
+  display OpenMoji Color
+  families ["OpenMoji"]
+  every family ["OpenMoji"]
+  postscript Some("OpenMojiColor")
+  weight 400 italic false off-width 0
+  color true
+  cmap 12 d436fc00bbc2fdc2
+FelisHintedProbe.ttf#0
+  display Felis Hinted Probe
+  families ["Felis Hinted Probe"]
+  every family ["Felis Hinted Probe", "Felis Hinted Probe"]
+  postscript None
+  weight 400 italic false off-width 0
+  color true
+  cmap 2 2d3973551b9f27f5
+FelisSbixProbe.ttf#0
+  display Apple Color Emoji
+  families ["Apple Color Emoji"]
+  every family ["Apple Color Emoji", "Apple Color Emoji"]
+  postscript None
+  weight 400 italic false off-width 0
+  color true
+  cmap 3 9b7fac7569b2fde5

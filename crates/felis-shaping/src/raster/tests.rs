@@ -12,6 +12,7 @@ use swash::{
 use super::{Hinting, OutlineBackend, RasterOptions, SkrifaOutlines, scaler_font};
 use crate::{
     FileSet, Font, GlyphBitmap,
+    goldens::{Digest, assert_golden},
     provider::{FaceHinting, FaceSource, ResolvedFace},
     test_font_dir,
 };
@@ -204,6 +205,37 @@ fn assert_parity(parity: &Parity, mode: &str) {
     assert!(parity.glyphs > 1000, "{report}");
     assert!(parity.worst_placement <= 1, "{report}");
     assert!(parity.within * 100 >= parity.inked_pixels * 99, "{report}");
+}
+
+/// Every corpus glyph at 10–40 px, hinted and unhinted, one digest per
+/// face, mode and size.
+#[test]
+fn outlines_match_their_golden() {
+    let mut out = String::new();
+    let mut outlines = SkrifaOutlines::default();
+    for (mode, raster) in [
+        ("hinted", RasterOptions::hinted()),
+        ("unhinted", RasterOptions::NEVER_HINTED),
+    ] {
+        for (name, face) in corpus() {
+            let font = with_raster(&face, raster);
+            let glyphs: Vec<u32> = ('!'..='~')
+                .chain(SYMBOLS.chars())
+                .filter_map(|c| font.glyph_for(c))
+                .collect();
+            for px in 10..=40 {
+                let mut digest = Digest::default();
+                for &glyph in &glyphs {
+                    let bitmap = outlines
+                        .coverage(&font, glyph, px as f32)
+                        .unwrap_or_else(GlyphBitmap::blank);
+                    digest.bitmap(&bitmap);
+                }
+                let _ = writeln!(out, "{name} {mode} {px} {}", digest.hex());
+            }
+        }
+    }
+    assert_golden("outlines.txt", &out);
 }
 
 #[test]

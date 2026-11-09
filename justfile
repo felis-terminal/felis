@@ -111,11 +111,12 @@ schema:
     UPDATE_SCHEMA=1 cargo test -p felis-cli --features schema cli_schema
     UPDATE_SCHEMA=1 cargo test -p felis-client-core --features json,schema json::schema
 
-# Regenerate the golden JSON protocol messages and the cell instance fixtures.
+# Regenerate the golden JSON protocol messages, the cell instance fixtures and the font goldens.
 [group('lint')]
 golden:
     UPDATE_GOLDEN=1 cargo nextest run -p felis-client-core --features json --test json_protocol
     UPDATE_GOLDEN=1 cargo nextest run -p felis-render-wgpu row_cache::golden_tests
+    UPDATE_GOLDEN=1 cargo nextest run -p felis-shaping --all-features goldens:: outlines_match_their_golden
 
 # Regenerate the IPC wire types (crates/felis-protocol/src/generated) via buf, then the
 # schema metadata (src/schema_meta.rs) from the same schema.

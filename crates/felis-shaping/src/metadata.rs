@@ -69,7 +69,7 @@ pub(crate) fn english_name(face: &skrifa::Font, id: NameId) -> Option<String> {
 }
 
 /// The string `id` names in the record a language-free lookup picks.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", all(test, not(windows))))]
 pub(crate) fn any_name(face: &skrifa::Font, id: NameId) -> Option<String> {
     let name = face.names().get(id)?;
     pick(&name, None).map(|found| found.name().to_string())
@@ -106,7 +106,7 @@ pub(crate) fn family_names(face: &skrifa::Font) -> Vec<String> {
 }
 
 /// Every legacy and typographic family name, in every language.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", all(test, not(windows))))]
 pub(crate) fn all_family_names(face: &skrifa::Font) -> Vec<String> {
     let names = face.names();
     [NameId::FAMILY_NAME, NameId::TYPOGRAPHIC_FAMILY_NAME]

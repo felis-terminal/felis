@@ -32,6 +32,9 @@ pub type GlyphId = u32;
 use crate::raster::{RasterOptions, Rasterizer};
 use tracing::{debug, warn};
 
+#[cfg(test)]
+#[cfg(not(windows))]
+mod goldens;
 mod metadata;
 mod presentation;
 mod provider;
