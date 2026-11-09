@@ -19,9 +19,15 @@ runs:
         root="$HOME/.cache/forgejo-ci/${{ github.repository }}"
         mkdir -p "$root"
         toolchain="$(nix develop -c rustc -vV | sed -n '/^rustc /,$p')"
-        runner="$(cat /proc/sys/kernel/random/boot_id) $PPID $(cut -d' ' -f22 "/proc/$PPID/stat") $(cat "/proc/$PPID/comm")"
+        if [ "$(uname)" = Darwin ]; then
+          runner="$(sysctl -n kern.boottime) $PPID $(ps -o lstart= -p "$PPID") $(ps -o comm= -p "$PPID")"
+          flock=(nix shell --inputs-from . nixpkgs#flock -c flock)
+        else
+          runner="$(cat /proc/sys/kernel/random/boot_id) $PPID $(cut -d' ' -f22 "/proc/$PPID/stat") $(cat "/proc/$PPID/comm")"
+          flock=(flock)
+        fi
         CARGO_ENV_ROOT="$root" CARGO_ENV_TOOLCHAIN="$toolchain" CARGO_ENV_RUNNER="$runner" \
-          flock "$root/lock" node "${{ github.action_path }}/guard.mjs" start
+          "${flock[@]}" "$root/lock" node "${{ github.action_path }}/guard.mjs" start
 
     # D: is the Windows guest's state disk, the only one that outlives the
     # reset of its system disk; $HOME there rides the disk that does not.

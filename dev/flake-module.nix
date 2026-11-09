@@ -571,6 +571,10 @@
             ${pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isDarwin ''
               # Bundled LLVM tools link @rpath/libLLVM.dylib which fails to resolve during cargo release strip.
               export DYLD_FALLBACK_LIBRARY_PATH=${rustToolchain}/lib''${DYLD_FALLBACK_LIBRARY_PATH:+:$DYLD_FALLBACK_LIBRARY_PATH}
+              # The fontconfig provider's tests dlopen libfontconfig, which macOS does not ship.
+              export DYLD_FALLBACK_LIBRARY_PATH=$DYLD_FALLBACK_LIBRARY_PATH:${
+                pkgs.lib.makeLibraryPath [ pkgs.fontconfig ]
+              }
             ''}
             ${pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
               # mold over BFD: every mutant pays a relink, so shorter link time

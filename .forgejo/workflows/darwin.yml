@@ -58,11 +58,6 @@ jobs:
       # felis-dist too, so a bundler that cannot relocate or re-sign the
       # app fails here rather than on the tag that would have shipped it.
       - run: nix build .#felis .#felis-dist --print-build-logs
-      # The only runner whose CPU takes felis-protocol's NEON base64 path.
-      - run: nix develop -c cargo test -p felis-protocol --all-features
-      # The font goldens hold on every host the pinned fonts reach, so the
-      # raster modes they name must not lean on this host's defaults.
-      - run: "nix develop -c cargo test -p felis-shaping --all-features -- goldens:: outlines_match_their_golden"
       - uses: ./.forgejo/actions/niks3-push
         if: github.event_name == 'push'
       # The tag's archive checks, run on every revision: the bundle's
@@ -81,6 +76,24 @@ jobs:
       - name: the archive runs on the runner
         timeout-minutes: 10
         run: sh tools/release/macos-archive-smoke.sh "$DIST_ROOT/felis-$TRIPLE" "${RUNNER_TEMP:-/tmp}"
+
+  darwin-test:
+    name: cargo nextest (aarch64-darwin)
+    runs-on: aarch64-darwin
+    needs: [changes]
+    if: needs.changes.outputs.relevant == 'true'
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.forgejo/actions/cargo-env
+      - name: compile the test binaries
+        run: nix develop -c cargo nextest run --workspace --all-features --locked --no-run
+        timeout-minutes: 60
+      - name: cargo nextest run
+        run: nix develop -c cargo nextest run --workspace --all-features --locked --no-fail-fast
+        timeout-minutes: 25
+      - uses: ./.forgejo/actions/cargo-env/done
+        if: always()
 
   darwin-noop:
     name: darwin docs-only no-op

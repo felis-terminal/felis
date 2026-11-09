@@ -1275,12 +1275,14 @@ impl FontStack {
     }
 
     /// Auto-discovery over the pinned `$FELIS_TEST_FONT_DIR` set alone,
-    /// so a fallback-dependent test sees the same faces on every host.
+    /// drawn with fontconfig's stock `hintslight`, so a fallback-dependent
+    /// test sees the same faces and the same rasters on every host.
     #[cfg(any(test, feature = "testing"))]
     #[doc(hidden)]
     #[must_use]
     pub fn pinned_test_stack() -> Self {
         let mut set = FileSet::default();
+        set.set_hinting(FaceHinting::Slight { autohint: false });
         set.add_dir(test_font_dir());
         Self::auto_discover_in(&set, None, &[], &[], &StyleFaces::default())
             .unwrap_or_else(|e| panic!("the pinned set has no monospace face: {e}"))
