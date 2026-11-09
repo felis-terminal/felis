@@ -101,6 +101,23 @@
         url = "https://raw.githubusercontent.com/hfg-gmuend/openmoji/17.0.0/font/OpenMoji-color-colr0_svg/OpenMoji-color-colr0_svg.ttf";
         hash = "sha256-o89sNEvMh7zZHEIoUS4dQXEhI5wHF2jB5HgQM0MHBq0=";
       };
+      # The COLRv1 faces sit in share/colrv1, outside share/fonts and outside the color probes the
+      # face goldens walk: the variable test font has 44 axes, and the walk sweeps each. Noto's COLRv1
+      # build is Fedora's only color emoji face; the subset keeps a flag, skin tones, ZWJ families, a
+      # keycap, a source-in glyph and the deepest paint graph. The color-fonts pair are googlefonts'
+      # paint-graph test fonts.
+      notoColrV1 = pkgs.fetchurl {
+        url = "https://raw.githubusercontent.com/googlefonts/noto-emoji/v2.051/fonts/Noto-COLRv1.ttf";
+        hash = "sha256-CuV/5YZFY4UjujXziNk3OdKSU5qay4TfVwDIGx4aKNI=";
+      };
+      colrV1TestGlyphs = pkgs.fetchurl {
+        url = "https://raw.githubusercontent.com/googlefonts/color-fonts/e830e042b0e93fd5b0197a7fe9f0398f6d87f467/fonts/test_glyphs-glyf_colr_1.ttf";
+        hash = "sha256-iqYRscqXBErG8T3Jgv3iklZhLwpazG70fKVBp6W5myg=";
+      };
+      colrV1TestGlyphsVariable = pkgs.fetchurl {
+        url = "https://raw.githubusercontent.com/googlefonts/color-fonts/e830e042b0e93fd5b0197a7fe9f0398f6d87f467/fonts/test_glyphs-glyf_colr_1_variable.ttf";
+        hash = "sha256-rVdaCdZ0iuvLO5D/04TGTVxktf2ZJ5Z+fNfMDXDJjTQ=";
+      };
       testFonts =
         pkgs.runCommand "felis-test-fonts"
           { nativeBuildInputs = [ (pkgs.python3.withPackages (ps: [ ps.fonttools ])) ]; }
@@ -152,6 +169,12 @@
             pyftsubset ${openmojiColor} \
               --unicodes=U+1F600,U+2764,U+1F980,U+1F44D,U+1F389,U+2705,U+2B50,U+1F525,U+1F431,U+1F308,U+1F363,U+1F680 \
               --drop-tables+=SVG --output-file=$out/share/color-probe/FelisColrProbe.ttf
+            mkdir -p $out/share/colrv1
+            pyftsubset ${notoColrV1} \
+              --unicodes=U+0023,U+0031,U+200D,U+20E3,U+FE0F,U+2764,U+2B50,U+2705,U+1F600,U+1F602,U+1F525,U+1F44D,U+1F3FB,U+1F3FD,U+1F3FE,U+1F3FF,U+1F468,U+1F469,U+1F467,U+1F9D1,U+1F384,U+1F430,U+1F1EF,U+1F1F5,U+1F1EA,U+1F1E8,U+1F1E6,U+1F308,U+1F680,U+1F431,U+1F389 \
+              --output-file=$out/share/colrv1/FelisColrV1Probe.ttf
+            cp ${colrV1TestGlyphs} $out/share/colrv1/test_glyphs-glyf_colr_1.ttf
+            cp ${colrV1TestGlyphsVariable} $out/share/colrv1/test_glyphs-glyf_colr_1_variable.ttf
           '';
 
       kani = pkgs.callPackage ./packages/kani { };
