@@ -178,6 +178,10 @@ const CJK: &str = "NotoSansCJKjp-Kuzu.otf";
 const COLR: &str = "../color-probe/FelisColorProbe.ttf";
 const MASK: &str = "../color-probe/FelisBitmapProbe.ttf";
 const NOTO: &str = "NotoColorEmoji.ttf";
+const COLR_V1: &str = "../colrv1/FelisColrV1Probe.ttf";
+
+/// A flag ligature, reached by glyph id as no one code point maps it.
+const DEEPEST_V1_GLYPH: u32 = 190;
 
 /// One glyph drawn in turn, and what its bitmap must be.
 struct Draw {
@@ -199,8 +203,9 @@ fn color_glyphs_charged_just_under_the_budget_peak_within_it() {
         stack(COLR, "Felis Color Probe"),
         stack(MASK, "Felis Bitmap Probe"),
         stack(NOTO, "Noto Color Emoji"),
+        stack(COLR_V1, "Noto Color Emoji"),
     ];
-    let (cjk, colr, mask, noto) = (0, 1, 2, 3);
+    let (cjk, colr, mask, noto, colr_v1) = (0, 1, 2, 3, 4);
     let colr_glyph = |c| glyph_of(COLR, c).expect("the probe maps it");
     let mask_glyph = |c| glyph_of(MASK, c).expect("the probe maps it");
     let draws = [
@@ -218,12 +223,12 @@ fn color_glyphs_charged_just_under_the_budget_peak_within_it() {
             px: 16.0,
             expect: |b| assert!(color(b).0 > 0),
         },
-        // `B` has only a version 1 paint, so it draws its 500 × 700-unit
-        // outline: 1140 × 1596 cells, 99.1% of the budget.
+        // `C`'s layers lie too far apart for the budget, so it draws its
+        // 500 × 700-unit outline: 1140 × 1596 cells, 99.1% of the budget.
         Draw {
             label: "outline near the budget",
             face: colr,
-            glyph: colr_glyph('B'),
+            glyph: colr_glyph('C'),
             px: 2280.0,
             expect: |b| assert!(coverage(b).0 > 1100),
         },
@@ -244,6 +249,16 @@ fn color_glyphs_charged_just_under_the_budget_peak_within_it() {
             glyph: colr_glyph('F'),
             px: 2032.0,
             expect: |b| assert!(color(b).0 < 40),
+        },
+        // The Noto subset's glyph whose paint nests the most composites,
+        // three, at the largest size whose canvas and stacked layers the
+        // budget admits.
+        Draw {
+            label: "COLRv1 layers near the budget",
+            face: colr_v1,
+            glyph: DEEPEST_V1_GLYPH,
+            px: 760.0,
+            expect: |b| assert!(color(b).0 > 800),
         },
         // Noto's 136 × 128 strike scaled to 2023 × 1904: the source, the
         // scratch and the scaled image are 99.95% of the budget.

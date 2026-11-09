@@ -395,6 +395,20 @@ pub(crate) fn strike_glyphs(font: &Font) -> Vec<GlyphId> {
         .collect()
 }
 
+fn paint_glyphs(font: &Font) -> Vec<GlyphId> {
+    let paints = font.face.color_glyphs();
+    (0..font.face.num_glyphs())
+        .filter(|&glyph| {
+            paints
+                .get_with_version(
+                    skrifa::GlyphId::new(glyph),
+                    skrifa::font::glyph::color::ColorGlyphVersion::ColrV1,
+                )
+                .is_some()
+        })
+        .collect()
+}
+
 /// The hinting a face draws its layers with on each platform and under
 /// each fontconfig setting, and unhinted.
 pub(crate) fn raster_modes() -> [(&'static str, RasterOptions); 4] {
@@ -450,6 +464,20 @@ fn color() -> String {
         let font = with_raster(&colr, raster);
         for px in 10..=40 {
             line(format!("FelisColrProbe {mode}"), &font, &layered, px as f32);
+        }
+    }
+    for name in [
+        "FelisColrV1Probe.ttf",
+        "test_glyphs-glyf_colr_1.ttf",
+        "test_glyphs-glyf_colr_1_variable.ttf",
+    ] {
+        let face = crate::test_support::colrv1(name);
+        let painted = paint_glyphs(&face);
+        for (mode, raster) in raster_modes() {
+            let font = with_raster(&face, raster);
+            for px in [10.0, 13.0, 16.0, 24.0, 40.0, 100.0] {
+                line(format!("{name} {mode}"), &font, &painted, px);
+            }
         }
     }
     for (probe, chars) in [

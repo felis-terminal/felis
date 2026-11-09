@@ -1,5 +1,6 @@
-//! `COLR` version 0 glyphs: each layer's outline through the face's own
-//! scaler and [`coverage`], composited source-over in its palette color.
+//! `COLR` glyphs: a version 1 paint graph where the face has one, else
+//! the version 0 layers, each outline through the face's own scaler and
+//! [`coverage`], composited source-over in its palette color.
 
 use skrifa::{
     GlyphId as FontGlyphId,
@@ -9,6 +10,9 @@ use skrifa::{
 
 use super::{SkrifaOutlines, coverage};
 use crate::{Font, GlyphBitmap, GlyphId, GlyphPixels};
+
+mod composite;
+mod v1;
 
 /// The color a layer gets when it names the text foreground: a canvas has
 /// no foreground of its own.
@@ -61,16 +65,29 @@ struct Canvas {
     data: Vec<u8>,
 }
 
-/// `None` when the face draws `glyph` with no version 0 layers, a layer
-/// asks for a paint version 0 lacks, or a buffer would exceed the raster
-/// budget; the next source is then tried.
+/// The version 1 paint where it draws whole, else the version 0 layers;
+/// `None` when neither draws, and the next source is then tried.
 pub(super) fn render(
     outlines: &mut SkrifaOutlines,
     font: &Font,
     glyph: GlyphId,
     px: f32,
 ) -> Option<GlyphBitmap> {
-    let palette = font.face.palettes().get(0)?;
+    let palette = font.face.palettes().get(0)?.colors();
+    v1::render(outlines, font, palette, glyph, px)
+        .or_else(|| render_v0(outlines, font, palette, glyph, px))
+}
+
+/// `None` when the face draws `glyph` with no version 0 layers, a layer
+/// asks for a paint version 0 lacks, or a buffer would exceed the raster
+/// budget.
+fn render_v0(
+    outlines: &mut SkrifaOutlines,
+    font: &Font,
+    palette: &[skrifa::color::Color],
+    glyph: GlyphId,
+    px: f32,
+) -> Option<GlyphBitmap> {
     let colors = font.face.color_glyphs();
     let color_glyph =
         colors.get_with_version(FontGlyphId::new(glyph), ColorGlyphVersion::ColrV0)?;
@@ -104,7 +121,6 @@ pub(super) fn render(
             FOREGROUND
         } else {
             palette
-                .colors()
                 .get(usize::from(index))
                 .map_or(FOREGROUND, |c| [c.red, c.green, c.blue, c.alpha])
         };
@@ -352,21 +368,22 @@ mod tests {
             [0, 1, 2].map(|c| (f32::from(pixel[c]) * a + background * (1.0 - a)).round() as u8)
         }
 
-        /// `A`'s layers: opaque red below `y` = 40, translucent blue (CPAL
-        /// alpha 128) above `y` = 30, at 0.1 px per unit.
+        /// `A`'s version 1 paint fills its first layer, below `y` = 40, in
+        /// opaque green; its version 0 layers would put translucent blue
+        /// above it.
         #[test]
-        fn a_glyph_with_both_versions_paints_its_version_0_layers() {
+        fn a_glyph_with_both_versions_paints_its_version_1_paint() {
             let a = draw("FelisColorProbe.ttf", 'A');
-            assert_eq!(
-                at(&a, 10, 20),
-                [255, 0, 0, 255],
-                "red layer, no green v1 paint"
-            );
+            assert_eq!(at(&a, 10, 20), [0, 255, 0, 255]);
+            assert_eq!((a.top, a.height()), (40, 40), "no version 0 layer above");
         }
 
+        /// `G`'s layers: opaque red below `y` = 40, translucent blue (CPAL
+        /// alpha 128) above `y` = 30, at 0.1 px per unit.
         #[test]
         fn a_translucent_layer_composites_as_its_palette_alpha_over_black_and_white() {
-            let a = draw("FelisColorProbe.ttf", 'A');
+            let a = draw("FelisColorProbe.ttf", 'G');
+            assert_eq!(at(&a, 10, 20), [255, 0, 0, 255]);
             let blue_only = at(&a, 30, 55);
             assert_eq!(blue_only, [0, 0, 255, 128]);
             assert_eq!(over(blue_only, 0.0), [0, 0, 128]);
@@ -378,13 +395,16 @@ mod tests {
 
         #[test]
         fn a_fully_covered_pixel_of_an_opaque_layer_is_opaque() {
-            let a = draw("FelisColorProbe.ttf", 'A');
+            let a = draw("FelisColorProbe.ttf", 'G');
             assert_eq!(at(&a, 10, 20)[3], 255);
         }
 
         #[test]
-        fn a_glyph_only_version_1_defines_draws_its_outline() {
-            assert!(!draw("FelisColorProbe.ttf", 'B').pixels().is_color());
+        fn a_glyph_only_version_1_defines_draws_its_paint() {
+            assert_eq!(
+                at(&draw("FelisColorProbe.ttf", 'B'), 10, 20),
+                [0, 255, 0, 255]
+            );
         }
 
         #[test]

@@ -53,6 +53,10 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
   `hintslight` text looks as before, apart from slight shading changes on faces without hinting instructions; `hintfull`
   also grid-fits those faces horizontally, and `hintnone` draws unhinted. The layers of a `COLR` emoji follow the same
   setting as its face's text.
+- **Rendering**: emoji from a `COLR` version 1 font draw in color: Noto Color Emoji as Fedora ships it, which drew
+  blank, and Segoe UI Emoji on Windows, whose gradients and shading replace the flat version 0 layers felis drew. An
+  emoji using a paint felis does not draw yet (a sweep gradient, a gradient that repeats or reflects, a blend mode other
+  than soft light) draws from the face's version 0 layers, strike, or outline instead.
 - **Rendering**: a combining mark a font has no precomposed glyph for (`q́`) sits on its base at the font's anchor
   instead of the cluster being shrunk into its cell, a mark the font does not cover is left undrawn rather than widening
   the cluster, and an ideographic variation sequence followed by a mark (`葛󠄀́`) draws the variant glyph.
