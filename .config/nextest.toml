@@ -1,10 +1,18 @@
 # Serializes clipboard tests across separate nextest processes where in-memory mutexes cannot protect OS selections.
 [test-groups]
 real-clipboard = { max-threads = 1 }
+# Concurrent writers into separate macOS PTYs contend in the kernel: two 16 MiB floods take 3.7 s each against 0.8 s
+# alone, four take 26 s each, so the input-budget tests run one at a time there.
+macos-pty-flood = { max-threads = 1 }
 
 [[profile.default.overrides]]
 filter = 'package(felis-client) & test(/os_clipboard::tests::/)'
 test-group = 'real-clipboard'
+
+[[profile.default.overrides]]
+platform = 'cfg(target_os = "macos")'
+filter = 'package(felis-daemon) & test(/^serve::tests::/) & test(/budget|admission|parked|stalled|paste_admitted/)'
+test-group = 'macos-pty-flood'
 
 [profile.default]
 slow-timeout = { period = "60s", terminate-after = 3 }
