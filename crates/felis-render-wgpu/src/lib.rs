@@ -1872,7 +1872,10 @@ fn build_pipeline(
         vertex: VertexState {
             module,
             entry_point: Some(spec.vs_entry),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            compilation_options: wgpu::PipelineCompilationOptions {
+                constants: spec.constants,
+                ..wgpu::PipelineCompilationOptions::default()
+            },
             buffers: &[Some(spec.buffer_layout)],
         },
         fragment: Some(FragmentState {
@@ -2558,6 +2561,40 @@ mod tests {
         };
         assert_eq!(at(m.width / 2, m.height / 2), [0xFF, 0x00, 0x00, 0xFF]);
         assert_eq!(at(m.width / 2, m.height * 3 / 2), [0x33, 0x66, 0x99, 0xFF]);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    #[ignore = "needs a GPU adapter; `just test-gpu` runs it on lavapipe"]
+    fn text_alpha_correction_thins_light_text_and_thickens_dark_text() {
+        let frame = |correction: bool, text: &[u8]| {
+            let cfg = RendererConfig {
+                text_alpha_correction: correction,
+                ..RendererConfig::default()
+            };
+            let mut renderer = offscreen_on(&new_instance(), 8, 8, cfg);
+            let m = renderer.cell_metrics();
+            renderer.resize(4 * m.width, m.height);
+            let mut grid = felis_grid::Grid::new(1, 4);
+            felis_vt::Parser::new().advance(&mut grid, b"\x1b[?25l");
+            felis_vt::Parser::new().advance(&mut grid, text);
+            renderer
+                .render(grid.screen(), &[], &NoImages, &ImageLayout::new(), 0, 0)
+                .expect("an offscreen render has no surface to lose");
+            let mut out = Vec::new();
+            renderer.read_frame(&mut out).expect("readback");
+            out.iter().map(|&b| u64::from(b)).sum::<u64>()
+        };
+        // Both directions darken the edges: light ink loses weight, dark
+        // ink gains it.
+        for text in [
+            &b"\x1b[97;40mW@&e"[..],
+            b"\x1b[30;107mW@&e",
+            b"\x1b[97;40;4:3m    ",
+            b"\x1b[30;107;4:3m    ",
+        ] {
+            assert!(frame(true, text) < frame(false, text), "{text:?}");
+        }
     }
 
     const RGB_SIDE: u32 = 16;

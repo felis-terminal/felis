@@ -36,17 +36,26 @@ fn linear_to_srgb(c: f32) -> f32 {
     return select(1.055 * pow(c, 1.0 / 2.4) - 0.055, c * 12.92, c <= 0.0031308);
 }
 
-// Mirrors felis_render_core::blend::linear_corrected_coverage.
-fn corrected_coverage(coverage: f32, fg: vec3<f32>, ground_luminance: f32) -> f32 {
+// Mirrors felis_render_core::blend::linear_corrected_coverage, split so
+// the vertex stage computes the per-instance terms once: a software
+// rasterizer pays every `pow` left in the fragment stage per pixel.
+// The ramp is (fg sRGB, ground sRGB, luminance span, ground luminance);
+// a zero span leaves coverage as is.
+fn coverage_ramp(fg: vec3<f32>, ground_luminance: f32) -> vec4<f32> {
     let fg_l = dot(fg, vec3<f32>(0.2126, 0.7152, 0.0722));
     let span = fg_l - ground_luminance;
     if (!linear_correction || abs(span) <= 0.001) {
+        return vec4<f32>(0.0);
+    }
+    return vec4<f32>(linear_to_srgb(fg_l), linear_to_srgb(ground_luminance), span, ground_luminance);
+}
+
+fn corrected_coverage(coverage: f32, ramp: vec4<f32>) -> f32 {
+    if (ramp.z == 0.0) {
         return coverage;
     }
-    let fg_s = linear_to_srgb(fg_l);
-    let bg_s = linear_to_srgb(ground_luminance);
-    let blended = srgb_to_linear(mix(bg_s, fg_s, coverage));
-    return clamp((blended - ground_luminance) / span, 0.0, 1.0);
+    let blended = srgb_to_linear(mix(ramp.y, ramp.x, coverage));
+    return clamp((blended - ramp.w) / ramp.z, 0.0, 1.0);
 }
 
 fn corner_for_vertex(vid: u32) -> vec2<f32> {
@@ -72,7 +81,7 @@ struct BgInstance {
 
 struct BgVsOut {
     @builtin(position) clip_pos: vec4<f32>,
-    @location(0) color: vec4<f32>,
+    @location(0) @interpolate(flat) color: vec4<f32>,
 };
 
 @vertex
@@ -106,9 +115,9 @@ struct FgInstance {
 struct FgVsOut {
     @builtin(position) clip_pos: vec4<f32>,
     @location(0) uv: vec2<f32>,
-    @location(1) color: vec4<f32>,
-    @location(2) is_color: f32,
-    @location(3) @interpolate(flat) ground_luminance: f32,
+    @location(1) @interpolate(flat) color: vec4<f32>,
+    @location(2) @interpolate(flat) is_color: f32,
+    @location(3) @interpolate(flat) ramp: vec4<f32>,
 };
 
 @group(1) @binding(0) var atlas_tex: texture_2d<f32>;
@@ -124,7 +133,7 @@ fn fg_vs(@builtin(vertex_index) vid: u32, inst: FgInstance) -> FgVsOut {
     out.uv = mix(inst.uv_min, inst.uv_max, corner);
     out.color = inst.color;
     out.is_color = inst.is_color;
-    out.ground_luminance = inst.ground_luminance;
+    out.ramp = coverage_ramp(inst.color.rgb, inst.ground_luminance);
     return out;
 }
 
@@ -144,7 +153,7 @@ fn fg_fs(in: FgVsOut) -> @location(0) vec4<f32> {
     // by the instance color and modulate the alpha so the bg pass shows
     // through anti-aliased pixels.
     let coverage = textureSample(atlas_tex, atlas_sampler, in.uv).r;
-    let weight = corrected_coverage(coverage, in.color.rgb, in.ground_luminance);
+    let weight = corrected_coverage(coverage, in.ramp);
     return vec4<f32>(in.color.rgb, in.color.a * weight);
 }
 
@@ -174,7 +183,7 @@ struct DecoInstance {
 
 struct DecoVsOut {
     @builtin(position) clip_pos: vec4<f32>,
-    @location(0) color: vec4<f32>,
+    @location(0) @interpolate(flat) color: vec4<f32>,
     @location(1) @interpolate(flat) kind: f32,
     @location(2) @interpolate(flat) thickness_px: f32,
     @location(3) @interpolate(flat) period_px: f32,
@@ -184,7 +193,7 @@ struct DecoVsOut {
     // Grid-space pixel position of this fragment (perspective-correct
     // linear), used for the pattern phase and the curly distance test.
     @location(6) pos: vec2<f32>,
-    @location(7) @interpolate(flat) ground_luminance: f32,
+    @location(7) @interpolate(flat) ramp: vec4<f32>,
 };
 
 @vertex
@@ -203,7 +212,7 @@ fn deco_vs(@builtin(vertex_index) vid: u32, inst: DecoInstance) -> DecoVsOut {
     // wave swings ± this within it.
     out.amplitude = max((inst.size_px.y - inst.thickness_px) * 0.5, 0.0);
     out.pos = vpos;
-    out.ground_luminance = inst.ground_luminance;
+    out.ramp = coverage_ramp(inst.color.rgb, inst.ground_luminance);
     return out;
 }
 
@@ -231,7 +240,7 @@ fn deco_fs(in: DecoVsOut) -> @location(0) vec4<f32> {
         let dist = abs(in.pos.y - wave_y);
         coverage = 1.0 - smoothstep(half_t - 0.75, half_t + 0.75, dist);
     }
-    let weight = corrected_coverage(coverage, in.color.rgb, in.ground_luminance);
+    let weight = corrected_coverage(coverage, in.ramp);
     return vec4<f32>(in.color.rgb, in.color.a * weight);
 }
 
