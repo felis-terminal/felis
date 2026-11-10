@@ -40,7 +40,7 @@ tokio = { version = "1", features = [
 ] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-base64 = { version = "0.22", default-features = false, features = ["alloc"] }
+base64 = { version = "0.23", default-features = false, features = ["alloc"] }
 parking_lot = "0.12"
 # Behind default-off schema feature so shipping binaries and felis-protocol stay schemars-free.
 schemars = "1"
