@@ -257,5 +257,17 @@ async fn an_idle_notification_subscriber_does_not_block_the_upgrade() {
         .await
         .expect("the upgrade is answered");
     assert_eq!(outcome, UpgradeOutcome::Upgrading);
+    let ended = async { while let Ok(Some(_frame)) = observer.next_frame().await {} };
+    tokio::time::timeout(Duration::from_secs(10), ended)
+        .await
+        .expect("the subscriber's stream ends at the exec");
     drop(observer);
+
+    // macOS drops a SIGKILL that lands while the daemon is inside
+    // `execve`, so the teardown's kill must wait for the successor.
+    let mut after = connect(&socket, Offer::ops()).await.unwrap();
+    assert!(
+        after.list_sessions().await.unwrap().is_empty(),
+        "the successor serves after the upgrade"
+    );
 }
