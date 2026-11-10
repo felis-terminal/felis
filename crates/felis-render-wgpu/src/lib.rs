@@ -2,7 +2,6 @@
 #![doc = include_str!("../README.md")]
 
 use std::{
-    collections::BTreeMap,
     num::NonZeroU32,
     path::PathBuf,
     sync::Arc,
@@ -20,12 +19,11 @@ use felis_protocol::{
 };
 use felis_render_core::{
     ImageSource, SelectionRange,
-    contrast::MAX_CONTRAST_RATIO,
     glyphs::{GLYPH_ATLAS_SIDE, ShapeFrame},
     layout::letterbox_origin,
     overlay::{ConfirmOverlay, LinkPreviewOverlay, PreeditOverlay, SearchOverlay},
     painter::{BAR_ELLIPSIS, cursor_rect_px},
-    palette::{ResolvedTheme, Theme, effective_theme},
+    palette::{Theme, ThemeConfig, ThemeState},
 };
 pub use felis_shaping::{AxisSetting, FaceSpec, installed_families};
 use felis_shaping::{CellMetrics, FontStack, ShapingError, StackDescription, StyleFaces};
@@ -155,11 +153,10 @@ pub struct RendererConfig {
     /// `[font.cell_width_scale, font.cell_height_scale]`; `None` keeps
     /// the cell the font's metrics give.
     pub cell_scale: Option<[f32; 2]>,
-    pub theme_fg: Option<String>,
-    pub theme_bg: Option<String>,
-    /// Sparse `[theme.palette]` overrides by index; absent indices keep
-    /// the xterm baseline.
-    pub theme_palette: BTreeMap<u8, String>,
+    /// `theme.background_opacity` below 1.0 also needs the caller to
+    /// create the window with `with_transparent(true)`, or the OS ignores
+    /// the alpha.
+    pub theme: ThemeConfig,
     /// `font.fallback`, tried before auto-discovery.
     pub font_fallbacks: Vec<FaceSpec>,
     pub font_features: Vec<String>,
@@ -169,14 +166,6 @@ pub struct RendererConfig {
     pub font_bold: FaceSpec,
     pub font_italic: FaceSpec,
     pub font_bold_italic: FaceSpec,
-    /// `None` keeps the reverse-video cursor.
-    pub theme_cursor: Option<String>,
-    /// `0.0..=1.0`; `None` and `Some(1.0)` keep the opaque surface. The
-    /// caller must also create the window with `with_transparent(true)`
-    /// or the OS ignores the alpha.
-    pub background_opacity: Option<f32>,
-    /// `theme.minimum_contrast`; `None` leaves colors as resolved.
-    pub theme_minimum_contrast: Option<f32>,
     /// The stages resolved from `shader.post` by the caller (this crate
     /// takes no paths), in chain order. Empty keeps the single-pass path.
     pub post_stages: Vec<PostStageSource>,
@@ -274,7 +263,7 @@ async fn request_device(adapter: &Adapter) -> Result<(Device, Queue), RendererEr
 
 #[expect(
     clippy::struct_excessive_bools,
-    reason = "independent paint-time switches (surface alpha mode, focus, blink phase, DECSCNM), not disjoint states of one machine"
+    reason = "independent switches (focus, blink phase, a pending repaint, one-shot log latches), not disjoint states of one machine"
 )]
 pub struct Renderer {
     target: Target,
@@ -283,15 +272,7 @@ pub struct Renderer {
     format: TextureFormat,
     width: u32,
     height: u32,
-    pub clear_color: Color,
-    bg_premultiplied: bool,
-    theme: Theme,
-    /// `OSC 10` / `11` / `12` overrides, indexed by `ThemeChannel as
-    /// usize`; `None` keeps the configured value.
-    runtime_theme: [Option<[u8; 3]>; 3],
-    runtime_palette: Box<[Option<[u8; 3]>; 256]>,
-    resolved_theme: ResolvedTheme,
-    reverse_video: bool,
+    theme: ThemeState,
     glyph_repaint_pending: bool,
     glyph_atlas_thrash_logged: bool,
     image_atlas_overflow_logged: bool,
@@ -469,7 +450,7 @@ fn offscreen_config(mut cfg: RendererConfig) -> Result<RendererConfig, RendererE
     if !cfg.post_stages.is_empty() {
         return Err(RendererError::OffscreenPostShader);
     }
-    cfg.background_opacity = None;
+    cfg.theme.background_opacity = None;
     Ok(cfg)
 }
 
@@ -575,7 +556,10 @@ impl Renderer {
             .or_else(|| caps.formats.first().copied())
             .ok_or(RendererError::NoFormat)?;
 
-        let opacity = cfg.background_opacity.map_or(1.0, |a| a.clamp(0.0, 1.0));
+        let opacity = cfg
+            .theme
+            .background_opacity
+            .map_or(1.0, |a| a.clamp(0.0, 1.0));
         let (alpha_mode, bg_premultiplied) = select_alpha_mode(&caps.alpha_modes, opacity);
 
         let config = SurfaceConfiguration {
@@ -610,7 +594,7 @@ impl Renderer {
     }
 
     /// Draws into a texture of its own instead of a window, for
-    /// [`Self::read_frame`]. `background_opacity` is ignored, so the
+    /// [`Self::read_frame`]. `theme.background_opacity` is ignored, so the
     /// target holds straight RGB. A post-process shader is refused: its
     /// uniforms read the host clock, and the trail shader paints the
     /// whole frame unless its caller drives [`TrailState`].
@@ -831,9 +815,7 @@ impl Renderer {
             &mut log_refused_stage,
         );
 
-        let theme = Self::theme_from_config(cfg);
-        let resolved_theme = resolve_for_surface(&theme, bg_premultiplied);
-        let clear_color = clear_color_for_theme(&resolved_theme, false);
+        let theme = ThemeState::new(&Theme::from_config(&cfg.theme), bg_premultiplied);
 
         let cells = RowCache::new(device.limits().max_buffer_size);
         Self {
@@ -843,13 +825,7 @@ impl Renderer {
             format,
             width,
             height,
-            clear_color,
-            bg_premultiplied,
             theme,
-            runtime_theme: [None; 3],
-            runtime_palette: Box::new([None; 256]),
-            resolved_theme,
-            reverse_video: false,
             glyph_repaint_pending: false,
             glyph_atlas_thrash_logged: false,
             image_atlas_overflow_logged: false,
@@ -1013,55 +989,39 @@ impl Renderer {
     }
 
     pub fn apply_theme_override(&mut self, channel: ThemeChannel, rgb: Option<(u8, u8, u8)>) {
-        self.runtime_theme[channel as usize] = rgb.map(<[u8; 3]>::from);
-        self.refresh_theme();
+        self.theme.apply_channel_override(channel, rgb);
+        self.cells.invalidate();
     }
 
     /// Resolved at paint time, so the recolor reaches cells already on
     /// screen: a cell stores the palette index, never a color.
     pub fn apply_palette_override(&mut self, index: u8, rgb: Option<(u8, u8, u8)>) {
-        self.runtime_palette[usize::from(index)] = rgb.map(<[u8; 3]>::from);
-        self.refresh_theme();
+        self.theme.apply_palette_override(index, rgb);
+        self.cells.invalidate();
     }
 
-    /// Bare `OSC 104`. The `OSC 10` / `11` / `12` channels stay: xterm's
-    /// `OSC 104` addresses the indexed palette alone, and their reset is
-    /// `OSC 110` / `111` / `112`.
+    /// Bare `OSC 104`; see [`ThemeState::reset_palette_overrides`].
     pub fn reset_palette_overrides(&mut self) {
-        *self.runtime_palette = [None; 256];
-        self.refresh_theme();
+        self.theme.reset_palette_overrides();
+        self.cells.invalidate();
     }
 
-    /// Called at the start of each rehydrate: the burst replays only the
-    /// overrides in force, so it cannot unset the previous session's.
+    /// See [`ThemeState::reset_session_colors`].
     pub fn reset_session_colors(&mut self) {
-        self.runtime_theme = [None; 3];
-        *self.runtime_palette = [None; 256];
-        self.refresh_theme();
+        self.theme.reset_session_colors();
+        self.cells.invalidate();
     }
 
     /// Resolved at paint time, so the flip reaches scrollback rows with
     /// no re-transmission; image pixels and client chrome stay untouched.
-    pub fn set_reverse_video(&mut self, on: bool) {
-        if self.reverse_video == on {
-            return;
-        }
-        self.reverse_video = on;
-        self.clear_color = clear_color_for_theme(&self.resolved_theme, on);
-    }
-
-    fn refresh_theme(&mut self) {
-        self.resolved_theme = resolve_for_surface(
-            &effective_theme(&self.theme, &self.runtime_theme, &self.runtime_palette),
-            self.bg_premultiplied,
-        );
-        self.clear_color = clear_color_for_theme(&self.resolved_theme, self.reverse_video);
-        self.cells.invalidate();
+    /// No invalidation: reverse video is part of the row-cache key.
+    pub const fn set_reverse_video(&mut self, on: bool) {
+        self.theme.set_reverse_video(on);
     }
 
     pub fn set_theme(&mut self, theme: &Theme) {
-        self.theme = *theme;
-        self.refresh_theme();
+        self.theme.set_theme(theme);
+        self.cells.invalidate();
     }
 
     pub fn reload_font(
@@ -1103,23 +1063,6 @@ impl Renderer {
         self.glyphs
             .reload_font_size(self.glyphs.font_size_physical_px());
         self.cells.invalidate();
-    }
-
-    #[must_use]
-    pub fn theme_from_config(cfg: &RendererConfig) -> Theme {
-        let mut theme = Theme::with_overrides(cfg.theme_fg.as_deref(), cfg.theme_bg.as_deref())
-            .with_palette(&cfg.theme_palette)
-            .with_cursor(cfg.theme_cursor.as_deref());
-        // Only the default background (and the letterbox clear) carries
-        // the opacity; a cell with an explicit bg stays at alpha 1.0,
-        // kitty's `background_opacity` model.
-        if let Some(a) = cfg.background_opacity {
-            theme.bg[3] = a.clamp(0.0, 1.0);
-        }
-        if let Some(ratio) = cfg.theme_minimum_contrast {
-            theme.minimum_contrast = ratio.clamp(1.0, MAX_CONTRAST_RATIO);
-        }
-        theme
     }
 
     pub fn set_window_focused(&mut self, focused: bool) {
@@ -1423,7 +1366,7 @@ impl Renderer {
             viewport_max,
             cursor_visible: self.window_focused && self.cursor_blink_visible,
             selection: self.selection,
-            reverse_video: self.reverse_video,
+            reverse_video: self.theme.reverse_video(),
             font_features: &self.font_features,
             atlas_generation: self.glyphs.atlas_resets(),
             preedit: self.preedit.as_ref(),
@@ -1434,7 +1377,7 @@ impl Renderer {
         let (_, reserved_bottom_rows) = self.cells.paint_frame(
             screen,
             metrics,
-            &self.resolved_theme,
+            self.theme.resolved(),
             &self.glyphs,
             &self.shape_frame,
             &frame,
@@ -1602,7 +1545,7 @@ impl Renderer {
                 depth_slice: None,
                 resolve_target: None,
                 ops: Operations {
-                    load: LoadOp::Clear(self.clear_color),
+                    load: LoadOp::Clear(wgpu_color(self.theme.clear_rgba())),
                     store: StoreOp::Store,
                 },
             })],
@@ -1680,7 +1623,7 @@ impl Renderer {
         metrics: CellMetrics,
         viewport: u32,
     ) {
-        let theme = &self.resolved_theme;
+        let theme = self.theme.resolved();
         let time = self.post_clock.tick(Instant::now());
         if let Some(post) = self.post.as_mut() {
             let cursor = screen.cursor();
@@ -1767,28 +1710,9 @@ fn instance_for_draw(draw: &ImageDraw, slot: ImageSlot) -> Option<ImgInstance> {
     })
 }
 
-fn clear_color_for_theme(theme: &ResolvedTheme, reverse_video: bool) -> Color {
-    let [r, g, b, a] = theme.clear_color(reverse_video).map(f64::from);
+fn wgpu_color([r, g, b, a]: [f32; 4]) -> Color {
+    let [r, g, b, a] = [r, g, b, a].map(f64::from);
     Color { r, g, b, a }
-}
-
-/// felis paints the background straight-alpha (the bg pass runs with
-/// blending off), so a `PostMultiplied` surface takes the theme as is.
-/// Only `bg` is touched: fg, cursor, and explicit cell backgrounds are
-/// alpha 1.0, for which premultiply is identity.
-#[must_use]
-fn premultiplied_bg(mut theme: Theme, premultiply: bool) -> Theme {
-    if premultiply {
-        let a = theme.bg[3];
-        theme.bg[0] *= a;
-        theme.bg[1] *= a;
-        theme.bg[2] *= a;
-    }
-    theme
-}
-
-fn resolve_for_surface(theme: &Theme, premultiply: bool) -> ResolvedTheme {
-    ResolvedTheme::new(&premultiplied_bg(*theme, premultiply)).with_straight_bg(theme.bg)
 }
 
 /// Selects `(mode, premultiply)` for surface composition.
@@ -1897,7 +1821,7 @@ mod tests {
         )
     )]
 
-    use felis_render_core::{ImageData, palette::srgb_to_linear_rgba};
+    use felis_render_core::ImageData;
 
     use super::*;
 
@@ -1991,140 +1915,6 @@ mod tests {
             height: 0,
         };
         assert!(instance_for_draw(&draw([0.0; 4], [0, 0]), degenerate).is_none());
-    }
-
-    #[test]
-    fn theme_from_config_default_renderer_config_is_default_theme() {
-        let theme = Renderer::theme_from_config(&RendererConfig::default());
-        let default = Theme::default();
-        assert_eq!(theme.fg, default.fg);
-        assert_eq!(theme.bg, default.bg);
-        assert_eq!(theme.cursor, default.cursor);
-        for slot in theme.palette {
-            assert!(slot.is_none(), "default config touches no palette slot");
-        }
-    }
-
-    #[test]
-    fn theme_from_config_threads_fg_bg_cursor_and_palette_through() {
-        let palette = BTreeMap::from([(1u8, "#ff5555".to_owned()), (12u8, "#5555ff".to_owned())]);
-        let cfg = RendererConfig {
-            theme_fg: Some("#cdcdcd".into()),
-            theme_bg: Some("#101010".into()),
-            theme_cursor: Some("#ffaa00".into()),
-            theme_palette: palette,
-            ..Default::default()
-        };
-        let theme = Renderer::theme_from_config(&cfg);
-        assert_eq!(theme.fg, srgb_to_linear_rgba([0xCD, 0xCD, 0xCD], 1.0));
-        assert_eq!(theme.bg, srgb_to_linear_rgba([0x10, 0x10, 0x10], 1.0));
-        assert_eq!(
-            theme.cursor,
-            Some(srgb_to_linear_rgba([0xFF, 0xAA, 0x00], 1.0))
-        );
-        assert_eq!(theme.palette[1], Some([0xFF, 0x55, 0x55]));
-        assert_eq!(theme.palette[12], Some([0x55, 0x55, 0xFF]));
-        assert!(theme.palette[0].is_none());
-        assert!(theme.palette[15].is_none());
-    }
-
-    #[test]
-    fn theme_from_config_carries_background_opacity_into_bg_alpha() {
-        let cfg = RendererConfig {
-            theme_bg: Some("#101010".into()),
-            background_opacity: Some(0.8),
-            ..Default::default()
-        };
-        let theme = Renderer::theme_from_config(&cfg);
-        let opaque = srgb_to_linear_rgba([0x10, 0x10, 0x10], 1.0);
-        assert_eq!(
-            [theme.bg[0], theme.bg[1], theme.bg[2]],
-            [opaque[0], opaque[1], opaque[2]]
-        );
-        assert!((theme.bg[3] - 0.8).abs() < 1e-6);
-        let unset = Renderer::theme_from_config(&RendererConfig::default());
-        assert_eq!(unset.bg[3], 1.0, "no opacity configured is fully opaque");
-    }
-
-    #[test]
-    fn theme_from_config_clamps_out_of_range_opacity() {
-        // The renderer-side clamp is the last line behind the client's
-        // `clamped_opacity`.
-        let low = Renderer::theme_from_config(&RendererConfig {
-            background_opacity: Some(-1.0),
-            ..Default::default()
-        });
-        assert_eq!(low.bg[3], 0.0);
-        let high = Renderer::theme_from_config(&RendererConfig {
-            background_opacity: Some(2.0),
-            ..Default::default()
-        });
-        assert_eq!(high.bg[3], 1.0);
-    }
-
-    #[test]
-    fn theme_from_config_clamps_minimum_contrast_into_the_wcag_range() {
-        let ratio = |r: Option<f32>| {
-            Renderer::theme_from_config(&RendererConfig {
-                theme_minimum_contrast: r,
-                ..Default::default()
-            })
-            .minimum_contrast
-        };
-        assert_eq!(ratio(None), 1.0);
-        assert_eq!(ratio(Some(4.5)), 4.5);
-        assert_eq!(ratio(Some(0.5)), 1.0);
-        assert_eq!(ratio(Some(40.0)), MAX_CONTRAST_RATIO);
-    }
-
-    #[test]
-    fn clear_color_mirrors_the_resolved_theme_background_alpha_included() {
-        // Dropping the alpha to 1.0 would punch an opaque hole through a
-        // translucent window's margins.
-        let theme = Theme {
-            bg: [0.25, 0.5, 0.75, 0.5],
-            ..Theme::default()
-        };
-        let clear = clear_color_for_theme(&ResolvedTheme::new(&theme), false);
-        assert_eq!(
-            [clear.r, clear.g, clear.b, clear.a],
-            [0.25, 0.5, 0.75, 0.5].map(f64::from),
-        );
-        let premultiplied =
-            clear_color_for_theme(&ResolvedTheme::new(&premultiplied_bg(theme, true)), false);
-        assert_eq!(
-            [
-                premultiplied.r,
-                premultiplied.g,
-                premultiplied.b,
-                premultiplied.a
-            ],
-            [0.125, 0.25, 0.375, 0.5].map(f64::from),
-        );
-    }
-
-    #[test]
-    fn clear_color_under_decscnm_takes_the_foreground_and_keeps_bg_alpha() {
-        let theme = Theme {
-            fg: [0.75, 0.5, 0.25, 1.0],
-            bg: [0.125, 0.25, 0.375, 0.5],
-            ..Theme::default()
-        };
-        let clear = clear_color_for_theme(&ResolvedTheme::new(&theme), true);
-        assert_eq!(
-            [clear.r, clear.g, clear.b, clear.a],
-            [0.75, 0.5, 0.25, 0.5].map(f64::from),
-        );
-    }
-
-    #[test]
-    fn premultiplied_bg_scales_rgb_by_alpha_only_when_asked() {
-        let theme = Theme {
-            bg: [0.4, 0.6, 0.8, 0.5],
-            ..Theme::default()
-        };
-        assert_eq!(premultiplied_bg(theme, false).bg, [0.4, 0.6, 0.8, 0.5]);
-        assert_eq!(premultiplied_bg(theme, true).bg, [0.2, 0.3, 0.4, 0.5]);
     }
 
     #[test]
@@ -2336,8 +2126,11 @@ mod tests {
     #[ignore = "needs a GPU adapter; `just test-gpu` runs it on lavapipe"]
     fn an_offscreen_frame_reads_back_the_opaque_theme_background() {
         let cfg = RendererConfig {
-            theme_bg: Some("#336699".to_owned()),
-            background_opacity: Some(0.25),
+            theme: ThemeConfig {
+                bg: Some("#336699".to_owned()),
+                background_opacity: Some(0.25),
+                ..ThemeConfig::default()
+            },
             ..RendererConfig::default()
         };
         let mut renderer = offscreen_on(&new_instance(), 40, 20, cfg);
@@ -2474,7 +2267,10 @@ mod tests {
     #[ignore = "needs a GPU adapter; `just test-gpu` runs it on lavapipe"]
     fn an_image_under_the_backgrounds_shows_through_default_background_cells_only() {
         let cfg = RendererConfig {
-            theme_bg: Some("#336699".to_owned()),
+            theme: ThemeConfig {
+                bg: Some("#336699".to_owned()),
+                ..ThemeConfig::default()
+            },
             ..RendererConfig::default()
         };
         let mut renderer = offscreen_on(&new_instance(), 8, 8, cfg);

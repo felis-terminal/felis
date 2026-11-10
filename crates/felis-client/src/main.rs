@@ -62,6 +62,7 @@ use felis_protocol::{
 use felis_render_core::{
     ImageData, ImageSource,
     overlay::{PreeditOverlay, SearchHitSpan, SearchOverlay},
+    palette::{Theme, ThemeConfig},
 };
 use felis_render_wgpu::{
     AxisSetting, DEFAULT_FONT_SIZE_LOGICAL_PX, FaceSpec, MouseState, PostParam, PostStageSource,
@@ -878,12 +879,13 @@ fn font_features_differ(a: &RendererConfig, b: &RendererConfig) -> bool {
 
 /// Gates the re-report on reload: the daemon answers `OSC 10/11/12 ; ?`
 /// from the last frame the client sent. Narrower than "the theme
-/// changed": the palette and background alpha are not in the report.
+/// changed": the background alpha and minimum contrast are not in the
+/// report.
 fn reported_theme_differs(a: &RendererConfig, b: &RendererConfig) -> bool {
-    a.theme_fg != b.theme_fg
-        || a.theme_bg != b.theme_bg
-        || a.theme_cursor != b.theme_cursor
-        || a.theme_palette != b.theme_palette
+    a.theme.fg != b.theme.fg
+        || a.theme.bg != b.theme.bg
+        || a.theme.cursor != b.theme.cursor
+        || a.theme.palette != b.theme.palette
 }
 
 /// A reload drops any in-flight zoom, so the renderer is resized
@@ -913,9 +915,23 @@ fn renderer_config_with(
         font_family: cfg.font.family.clone(),
         font_size_physical_px: None,
         cell_scale: Some(cfg.font.cell_scale()),
-        theme_fg: cfg.theme.foreground.clone(),
-        theme_bg: cfg.theme.background.clone(),
-        theme_palette: cfg.theme.palette.clone().into_overrides(),
+        theme: ThemeConfig {
+            fg: cfg.theme.foreground.clone(),
+            bg: cfg.theme.background.clone(),
+            palette: cfg.theme.palette.clone().into_overrides(),
+            cursor: cfg.cursor.color.clone(),
+            // Map fully-opaque to `None` so the renderer's opaque default
+            // path stays byte-for-byte unchanged; only `opacity < 1.0`
+            // carries an alpha and flips the surface to a transparent mode.
+            background_opacity: {
+                let a = cfg.window.clamped_opacity();
+                (a < 1.0).then_some(a)
+            },
+            minimum_contrast: {
+                let ratio = cfg.theme.clamped_minimum_contrast();
+                (ratio > 1.0).then_some(ratio)
+            },
+        },
         font_fallbacks: cfg.font.fallback.iter().map(face_spec).collect(),
         font_features: cfg.font.features.clone(),
         font_weight: cfg.font.weight,
@@ -923,18 +939,6 @@ fn renderer_config_with(
         font_bold: face_spec(&cfg.font.bold),
         font_italic: face_spec(&cfg.font.italic),
         font_bold_italic: face_spec(&cfg.font.bold_italic),
-        theme_cursor: cfg.cursor.color.clone(),
-        // Map fully-opaque to `None` so the renderer's opaque default
-        // path stays byte-for-byte unchanged; only `opacity < 1.0`
-        // carries an alpha and flips the surface to a transparent mode.
-        background_opacity: {
-            let a = cfg.window.clamped_opacity();
-            (a < 1.0).then_some(a)
-        },
-        theme_minimum_contrast: {
-            let ratio = cfg.theme.clamped_minimum_contrast();
-            (ratio > 1.0).then_some(ratio)
-        },
         post_stages,
         font_files: Vec::new(),
         text_alpha_correction: !cfg!(target_os = "macos"),
@@ -1036,11 +1040,11 @@ pub(crate) fn configure_theme_frame(
     cfg: &RendererConfig,
 ) -> Result<OutgoingFrame, felis_transport::TransportError> {
     let (fg, bg, cursor) = felis_render_core::palette::configured_theme_report(
-        cfg.theme_fg.as_deref(),
-        cfg.theme_bg.as_deref(),
-        cfg.theme_cursor.as_deref(),
+        cfg.theme.fg.as_deref(),
+        cfg.theme.bg.as_deref(),
+        cfg.theme.cursor.as_deref(),
     );
-    let palette = felis_render_core::palette::configured_palette_report(&cfg.theme_palette);
+    let palette = felis_render_core::palette::configured_palette_report(&cfg.theme.palette);
     OutgoingFrame::ordered(&SessionToDaemonMsg::ConfigureTheme {
         fg,
         bg,

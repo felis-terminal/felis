@@ -7,7 +7,7 @@ use super::{
     Modifiers, MouseAction, MouseButton, MouseEvent, MouseState, Offer, OutgoingFrame,
     PhysicalPosition, PhysicalSize, PipeState, Pumps, Reconnector, RegionToDaemonMsg, Renderer,
     SearchDirection, SearchHitRecord, SearchHitSpan, SearchOverlay, SearchToDaemonMsg, SearchUi,
-    SearchUiMode, Selection, SessionInfo, SessionToDaemonMsg, SharedDriver, SwitchState,
+    SearchUiMode, Selection, SessionInfo, SessionToDaemonMsg, SharedDriver, SwitchState, Theme,
     TrailRecord, TrailState, ViewportPosition, activation_target, codec, compose_window_title,
     composed_row_for_line, config, configured_font_size_logical_px, cursor_trail, dial_and_land,
     error, font_features_differ, font_settings_differ, font_stack_inputs_differ, info,
@@ -572,7 +572,7 @@ impl App {
             for stage in stopped {
                 renderer.stop_post_animation(stage);
             }
-            renderer.set_theme(&Renderer::theme_from_config(&new_renderer_cfg));
+            renderer.set_theme(&Theme::from_config(&new_renderer_cfg.theme));
             // Rebuild only on a real change: rebuilding the chain would
             // recompile every stage for an unrelated font edit.
             if post_stages_changed

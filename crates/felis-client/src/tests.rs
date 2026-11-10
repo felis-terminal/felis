@@ -947,10 +947,10 @@ fn renderer_config_from_default_config_is_all_none() {
     assert!(rc.font_family.is_none());
     assert!(rc.font_size_physical_px.is_none());
     assert_eq!(rc.font_fallbacks, Vec::<FaceSpec>::new());
-    assert!(rc.theme_fg.is_none());
-    assert!(rc.theme_bg.is_none());
-    assert!(rc.theme_cursor.is_none());
-    assert!(rc.theme_palette.is_empty());
+    assert!(rc.theme.fg.is_none());
+    assert!(rc.theme.bg.is_none());
+    assert!(rc.theme.cursor.is_none());
+    assert!(rc.theme.palette.is_empty());
 }
 
 mod post_chain {
@@ -1034,8 +1034,8 @@ fn css_shorthand_theme_color_falls_back_to_the_defaults_end_to_end() {
         },
         ..Default::default()
     };
-    let theme = Renderer::theme_from_config(&renderer_config_from(&short));
-    let default = felis_render_core::palette::Theme::default();
+    let theme = Theme::from_config(&renderer_config_from(&short).theme);
+    let default = Theme::default();
     assert_eq!(theme.fg, default.fg, "shorthand fg keeps the default");
     assert_eq!(theme.bg, default.bg, "shorthand bg keeps the default");
     assert_eq!(
@@ -1135,33 +1135,35 @@ fn renderer_config_from_full_config_carries_every_field_through() {
     assert_eq!(rc.font_italic.family.as_deref(), Some("Victor Mono"));
     assert_eq!(rc.font_italic.features, None);
     assert_eq!(rc.font_bold_italic.family, None);
-    assert_eq!(rc.theme_fg.as_deref(), Some("#cdcdcd"));
-    assert_eq!(rc.theme_bg.as_deref(), Some("#101010"));
-    assert_eq!(rc.theme_cursor.as_deref(), Some("#ffaa00"));
-    assert_eq!(rc.theme_minimum_contrast, Some(4.5));
+    assert_eq!(rc.theme.fg.as_deref(), Some("#cdcdcd"));
+    assert_eq!(rc.theme.bg.as_deref(), Some("#101010"));
+    assert_eq!(rc.theme.cursor.as_deref(), Some("#ffaa00"));
+    assert_eq!(rc.theme.minimum_contrast, Some(4.5));
     assert_eq!(
-        renderer_config_from(&config::EffectiveConfig::default()).theme_minimum_contrast,
+        renderer_config_from(&config::EffectiveConfig::default())
+            .theme
+            .minimum_contrast,
         None,
         "the default ratio of 1 maps to no adjustment"
     );
     // `PaletteConfig::into_overrides` lays out by SGR index: slot 1 is
     // red, 12 is bright_blue, and `indexed` carries cube slot 16.
     assert_eq!(
-        rc.theme_palette.get(&1).map(String::as_str),
+        rc.theme.palette.get(&1).map(String::as_str),
         Some("#ff5555")
     );
     assert_eq!(
-        rc.theme_palette.get(&12).map(String::as_str),
+        rc.theme.palette.get(&12).map(String::as_str),
         Some("#5555ff")
     );
     assert_eq!(
-        rc.theme_palette.get(&16).map(String::as_str),
+        rc.theme.palette.get(&16).map(String::as_str),
         Some("#d08770")
     );
     // Untouched slots are absent; the renderer keeps the xterm baseline.
-    assert!(!rc.theme_palette.contains_key(&0), "slot 0 stays at xterm");
+    assert!(!rc.theme.palette.contains_key(&0), "slot 0 stays at xterm");
     assert!(
-        !rc.theme_palette.contains_key(&15),
+        !rc.theme.palette.contains_key(&15),
         "slot 15 stays at xterm"
     );
 }
@@ -1278,13 +1280,16 @@ mod font_differs {
         // A pure color change must not take the atlas-rebuild slow path.
         let base = RendererConfig {
             font_family: Some("JetBrains Mono".to_owned()),
-            theme_fg: Some("#ffffff".to_owned()),
+            theme: ThemeConfig {
+                fg: Some("#ffffff".to_owned()),
+                ..Default::default()
+            },
             ..Default::default()
         };
         let mut other = base.clone();
-        other.theme_fg = Some("#000000".to_owned());
-        other.theme_bg = Some("#101010".to_owned());
-        other.theme_cursor = Some("#ff00ff".to_owned());
+        other.theme.fg = Some("#000000".to_owned());
+        other.theme.bg = Some("#101010".to_owned());
+        other.theme.cursor = Some("#ff00ff".to_owned());
         assert!(!font_settings_differ(&base, &other));
     }
 }
@@ -1294,34 +1299,41 @@ fn reported_theme_differs_tracks_only_the_reported_colors() {
     // The reload path re-sends `ConfigureTheme` off this predicate, and
     // the frame carries fg / bg / cursor and the palette: a stale one
     // leaves OSC 4 / 10 / 11 / 12 answering the attach-time color; an
-    // opacity-only edit would resend identical colors.
+    // opacity- or contrast-only edit would resend identical colors.
     let base = RendererConfig {
-        theme_fg: Some("#ffffff".to_owned()),
-        theme_bg: Some("#000000".to_owned()),
-        theme_cursor: Some("#ff00ff".to_owned()),
+        theme: ThemeConfig {
+            fg: Some("#ffffff".to_owned()),
+            bg: Some("#000000".to_owned()),
+            cursor: Some("#ff00ff".to_owned()),
+            ..Default::default()
+        },
         ..Default::default()
     };
     assert!(!reported_theme_differs(&base, &base));
 
     let mut fg = base.clone();
-    fg.theme_fg = Some("#eeeeee".to_owned());
+    fg.theme.fg = Some("#eeeeee".to_owned());
     assert!(reported_theme_differs(&base, &fg));
 
     let mut bg = base.clone();
-    bg.theme_bg = Some("#101010".to_owned());
+    bg.theme.bg = Some("#101010".to_owned());
     assert!(reported_theme_differs(&base, &bg));
 
     let mut cursor = base.clone();
-    cursor.theme_cursor = Some("#00ff00".to_owned());
+    cursor.theme.cursor = Some("#00ff00".to_owned());
     assert!(reported_theme_differs(&base, &cursor));
 
     let mut palette_only = base.clone();
-    palette_only.theme_palette.insert(1, "#ff0000".to_owned());
+    palette_only.theme.palette.insert(1, "#ff0000".to_owned());
     assert!(reported_theme_differs(&base, &palette_only));
 
     let mut opacity_only = base.clone();
-    opacity_only.background_opacity = Some(0.8);
+    opacity_only.theme.background_opacity = Some(0.8);
     assert!(!reported_theme_differs(&base, &opacity_only));
+
+    let mut contrast_only = base.clone();
+    contrast_only.theme.minimum_contrast = Some(4.5);
+    assert!(!reported_theme_differs(&base, &contrast_only));
 }
 
 #[test]

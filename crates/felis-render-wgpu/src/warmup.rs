@@ -244,7 +244,10 @@ mod tests {
         let started = font_config();
         let mut warmup = fonts_only(&started);
         let recolored = RendererConfig {
-            theme_fg: Some("#ffffff".to_owned()),
+            theme: felis_render_core::palette::ThemeConfig {
+                fg: Some("#ffffff".to_owned()),
+                ..Default::default()
+            },
             font_size_physical_px: Some(28.0),
             ..font_config()
         };
