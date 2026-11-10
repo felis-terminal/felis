@@ -44,6 +44,9 @@ const READ_PENDING_CAP: usize = 1024 * 1024;
 /// always queue, and one write admitted below the ceiling may pass it.
 pub const PTY_WRITE_PENDING_CAP: usize = 1024 * 1024;
 
+/// How often [`ChildHandle::wait_timeout`] looks for the child's exit.
+const CHILD_WAIT_POLL: std::time::Duration = std::time::Duration::from_millis(50);
+
 /// Maximum bytes per `read(2)` against the PTY master. 64 KiB matches
 /// the kernel's pipe buffer ceiling on Linux and macOS, so a long `cat`
 /// completes in a handful of reads.
@@ -121,6 +124,26 @@ impl ChildHandle {
     pub fn try_wait(&self) -> io::Result<Option<std::process::ExitStatus>> {
         let mut guard = self.child.lock().map_err(poison)?;
         guard.try_wait()
+    }
+
+    /// Reaps the child once it exits, or gives up at `timeout` with
+    /// `None`. Polls [`try_wait`](Self::try_wait), and looks once more
+    /// at the deadline.
+    pub async fn wait_timeout(
+        &self,
+        timeout: std::time::Duration,
+    ) -> io::Result<Option<std::process::ExitStatus>> {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            if let Some(status) = self.try_wait()? {
+                return Ok(Some(status));
+            }
+            let now = tokio::time::Instant::now();
+            if now >= deadline {
+                return Ok(None);
+            }
+            tokio::time::sleep(CHILD_WAIT_POLL.min(deadline - now)).await;
+        }
     }
 
     #[cfg(unix)]
@@ -1056,14 +1079,10 @@ mod tests {
             ended.expect("the end of output is not an error");
         }
 
-        let mut waited = None;
-        for _ in 0..50 {
-            if let Some(status) = child.try_wait().expect("try_wait") {
-                waited = Some(status);
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
+        let waited = child
+            .wait_timeout(Duration::from_millis(1000))
+            .await
+            .expect("wait");
         assert!(waited.is_some(), "child did not exit");
     }
 
@@ -1152,6 +1171,21 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn waiting_on_a_live_child_gives_up_at_the_timeout() {
+        let (_collected, sink) = collector();
+        let PtyParts { child, .. } = spawn(blocks_forever(), small_size(), sink).expect("spawn");
+        let started = tokio::time::Instant::now();
+        let waited = child
+            .wait_timeout(Duration::from_millis(200))
+            .await
+            .expect("wait");
+        assert!(waited.is_none(), "a live child is not reported exited");
+        assert!(started.elapsed() >= Duration::from_millis(200));
+        assert!(child.kill().expect("kill"), "the child was still live");
+        assert!(wait_for_exit(&child).await, "the killed child is reaped");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn killing_the_child_reaps_it() {
         let (_collected, sink) = collector();
         let session = spawn(blocks_forever(), small_size(), sink).expect("spawn");
@@ -1169,14 +1203,10 @@ mod tests {
         // (see `hangup_ends_a_child_that_outlives_the_master`).
         assert!(child.kill().expect("kill"), "a live child is signaled");
 
-        let mut waited = None;
-        for _ in 0..100 {
-            if let Some(status) = child.try_wait().expect("try_wait") {
-                waited = Some(status);
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
+        let waited = child
+            .wait_timeout(Duration::from_millis(5000))
+            .await
+            .expect("wait");
         assert!(waited.is_some(), "kill did not reap child");
         assert!(
             !child.kill().expect("kill"),
@@ -1185,13 +1215,11 @@ mod tests {
     }
 
     async fn wait_for_exit(child: &ChildHandle) -> bool {
-        for _ in 0..100 {
-            if child.try_wait().expect("try_wait").is_some() {
-                return true;
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-        false
+        child
+            .wait_timeout(Duration::from_secs(5))
+            .await
+            .expect("wait")
+            .is_some()
     }
 
     /// The child is its own session leader (`setsid` + `TIOCSCTTY` in
@@ -1339,14 +1367,10 @@ mod tests {
         );
 
         assert!(child.hangup().expect("hangup"), "a live child is signaled");
-        let mut waited = None;
-        for _ in 0..100 {
-            if let Some(status) = child.try_wait().expect("try_wait") {
-                waited = Some(status);
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
+        let waited = child
+            .wait_timeout(Duration::from_millis(5000))
+            .await
+            .expect("wait");
         assert!(waited.is_some(), "the hung-up child never exited");
     }
 
