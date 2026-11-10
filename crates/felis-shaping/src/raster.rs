@@ -7,6 +7,8 @@ use skrifa::{DrawMemory, HintOptions, PathSink, RasterTarget, ScalerFont};
 use crate::{Font, GlyphBitmap, GlyphId, GlyphPixels, provider::FaceHinting};
 
 mod color;
+#[cfg(all(test, target_os = "macos"))]
+mod coretext;
 pub(crate) mod coverage;
 mod resample;
 mod strike;

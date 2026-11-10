@@ -27,9 +27,13 @@ yeslogic-fontconfig-sys = { workspace = true }
 objc2-core-foundation = { workspace = true, features = [
   "CFArray",
   "CFCGTypes",
+  "CFData",
   "CFDictionary",
+  "CFNumber",
+  "CFPreferences",
   "CFURL",
 ] }
+objc2-core-graphics = { workspace = true }
 objc2-core-text = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
