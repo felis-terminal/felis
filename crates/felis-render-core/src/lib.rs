@@ -15,6 +15,7 @@ pub mod display_list;
 #[cfg(feature = "glyphs")]
 pub mod glyphs;
 pub mod image_upload;
+pub mod layout;
 pub mod overlay;
 #[cfg(feature = "glyphs")]
 pub mod painter;

@@ -462,23 +462,6 @@ mod wheel {
 }
 
 #[test]
-fn ime_cursor_area_is_the_cursor_cell_in_pixels() {
-    // Platform IMEs lean on this; a one-pixel drift puts the popup over
-    // the wrong character.
-    for (col, row, want) in [
-        (0, 0, (0, 0, 8, 16)),
-        (10, 3, (80, 48, 8, 16)),
-        (1000, 0, (8000, 0, 8, 16)),
-    ] {
-        assert_eq!(
-            ime_cursor_area_pixels(col, row, 8, 16),
-            want,
-            "cursor at col {col}, row {row}",
-        );
-    }
-}
-
-#[test]
 fn search_ui_starts_off() {
     assert_eq!(SearchUi::default().mode, SearchUiMode::Off);
 }
@@ -863,115 +846,28 @@ mod search_navigation {
 }
 
 mod mouse_position {
-    use crate::app_methods::{cell_for_position, pixel_for_position};
+    use crate::app_methods::cell_for_position;
 
     use super::*;
 
-    const DIMS: felis_protocol::messages::GridDims = felis_protocol::messages::GridDims {
-        rows: 24,
-        cols: 80,
-        pixel_w: 0,
-        pixel_h: 0,
-    };
-
-    fn pos(x: f64, y: f64) -> PhysicalPosition<f64> {
-        PhysicalPosition::new(x, y)
-    }
-
-    /// Why `reflow` re-derives the hovered cell: font zooms or DPI changes
-    /// move the grid under a motionless pointer without winit motion events.
-    /// Caching the cell from `CursorMoved` would target the wrong glyph or hyperlink.
+    /// The winit adapter hands `x` to the column and `y` to the row, and
+    /// the grid it clamps against is `dims`, not the cell size.
     #[test]
-    fn a_metrics_change_moves_the_cell_under_a_motionless_pointer() {
-        let pointer = pos(35.0, 61.0);
+    fn cell_for_position_maps_x_to_col_and_y_to_row() {
+        let dims = felis_protocol::messages::GridDims {
+            rows: 24,
+            cols: 80,
+            pixel_w: 0,
+            pixel_h: 0,
+        };
+        let pointer = PhysicalPosition::new(135.0, 61.0);
         assert_eq!(
-            cell_for_position(pointer, (0.0, 0.0), 10, 20, DIMS),
+            cell_for_position(pointer, (100.0, 0.0), [10, 20], dims),
             at(3, 3)
         );
         assert_eq!(
-            cell_for_position(pointer, (0.0, 0.0), 20, 40, DIMS),
-            at(1, 1),
-            "a zoom to double-size cells puts a different cell under the same pixel"
-        );
-    }
-
-    proptest::proptest! {
-        /// Every pixel of a cell names that cell once the letterbox
-        /// origin comes off, and a zero-sized metric floors to one pixel
-        /// so a pre-resize renderer still names a cell the grid has.
-        #[test]
-        fn cell_for_position_names_the_cell_holding_the_pixel(
-            rows in 1_u16..=200,
-            cols in 1_u16..=200,
-            cell_w in 0_u32..=64,
-            cell_h in 0_u32..=64,
-            origin_x in -500.0_f32..=500.0,
-            origin_y in -500.0_f32..=500.0,
-            row_offset in 0_u32..=200,
-            col_offset in 0_u32..=200,
-            within_x in 0_u32..=64,
-            within_y in 0_u32..=64,
-            frac_x in 0.0_f64..0.999,
-            frac_y in 0.0_f64..0.999,
-        ) {
-            let (cw, ch) = (cell_w.max(1), cell_h.max(1));
-            let (row, col) = (row_offset % u32::from(rows), col_offset % u32::from(cols));
-            let dims = felis_protocol::messages::GridDims { rows, cols, pixel_w: 0, pixel_h: 0 };
-            let x = f64::from(origin_x) + f64::from(col * cw + within_x % cw) + frac_x;
-            let y = f64::from(origin_y) + f64::from(row * ch + within_y % ch) + frac_y;
-            let cell = cell_for_position(pos(x, y), (origin_x, origin_y), cell_w, cell_h, dims);
-            proptest::prop_assert_eq!(cell, at(row as u16, col as u16));
-        }
-
-        /// Off the block in either direction, the nearest edge cell: a
-        /// stray event mid-resize still names a cell the grid has.
-        #[test]
-        fn cell_for_position_clamps_to_the_nearest_edge_cell(
-            rows in 1_u16..=200,
-            cols in 1_u16..=200,
-            cell_w in 1_u32..=64,
-            cell_h in 1_u32..=64,
-            origin_x in -500.0_f32..=500.0,
-            origin_y in -500.0_f32..=500.0,
-            before in 0.0_f64..=10_000.0,
-            past in 0.0_f64..=10_000.0,
-        ) {
-            let dims = felis_protocol::messages::GridDims { rows, cols, pixel_w: 0, pixel_h: 0 };
-            let origin = (origin_x, origin_y);
-            let above = pos(f64::from(origin_x) - before, f64::from(origin_y) - before);
-            proptest::prop_assert_eq!(
-                cell_for_position(above, origin, cell_w, cell_h, dims),
-                at(0, 0),
-            );
-            let beyond = pos(
-                f64::from(origin_x) + f64::from(u32::from(cols) * cell_w) + past,
-                f64::from(origin_y) + f64::from(u32::from(rows) * cell_h) + past,
-            );
-            proptest::prop_assert_eq!(
-                cell_for_position(beyond, origin, cell_w, cell_h, dims),
-                at(rows - 1, cols - 1),
-            );
-        }
-    }
-
-    /// Pins: `?1016` reports 1-based pixels relative to the content block.
-    #[test]
-    fn pixel_for_position_reports_one_based_content_relative_pixels() {
-        assert_eq!(pixel_for_position(pos(0.0, 0.0), (0.0, 0.0)), (1, 1));
-        assert_eq!(pixel_for_position(pos(11.7, 25.2), (0.0, 0.0)), (12, 26));
-        assert_eq!(
-            pixel_for_position(pos(111.7, 65.2), (100.0, 40.0)),
-            (12, 26)
-        );
-        assert_eq!(pixel_for_position(pos(10.0, 10.0), (100.0, 40.0)), (1, 1));
-    }
-
-    /// The pair rides the wire as `u16`.
-    #[test]
-    fn pixel_for_position_saturates_at_the_wire_limit() {
-        assert_eq!(
-            pixel_for_position(pos(f64::from(u32::MAX), 100_000.0), (0.0, 0.0)),
-            (u16::MAX, u16::MAX),
+            cell_for_position(PhysicalPosition::new(1e6, 1e6), (0.0, 0.0), [10, 20], dims),
+            at(23, 79)
         );
     }
 }

@@ -22,6 +22,7 @@ use felis_render_core::{
     ImageSource, SelectionRange,
     contrast::MAX_CONTRAST_RATIO,
     glyphs::{GLYPH_ATLAS_SIDE, ShapeFrame},
+    layout::letterbox_origin,
     overlay::{ConfirmOverlay, LinkPreviewOverlay, PreeditOverlay, SearchOverlay},
     painter::{BAR_ELLIPSIS, cursor_rect_px},
     palette::{ResolvedTheme, Theme, effective_theme},
@@ -1505,10 +1506,8 @@ impl Renderer {
         self.content_origin_px = letterbox_origin(
             screen.rows(),
             screen.cols(),
-            metrics.width as f32,
-            metrics.height as f32,
-            self.width as f32,
-            self.height as f32,
+            [metrics.width, metrics.height],
+            [self.width, self.height],
         );
         let viewport_uniform =
             ViewportUniform::with_origin(self.width, self.height, self.content_origin_px);
@@ -1790,28 +1789,6 @@ fn premultiplied_bg(mut theme: Theme, premultiply: bool) -> Theme {
 
 fn resolve_for_surface(theme: &Theme, premultiply: bool) -> ResolvedTheme {
     ResolvedTheme::new(&premultiplied_bg(*theme, premultiply)).with_straight_bg(theme.bg)
-}
-
-/// Computes letterbox origin for screen mirroring (`docs/explanation/architecture/session-lifecycle.md`).
-///
-/// Surpluses of at least one cell center the content on whole pixels; sub-cell remainders
-/// anchor top-left. Deficits anchor bottom-left so the GPU clips while keeping the prompt visible.
-fn letterbox_origin(rows: u16, cols: u16, cw: f32, ch: f32, win_w: f32, win_h: f32) -> [f32; 2] {
-    let surplus_x = f32::from(cols).mul_add(-cw, win_w);
-    let surplus_y = f32::from(rows).mul_add(-ch, win_h);
-    let x = if surplus_x >= cw {
-        (surplus_x / 2.0).floor()
-    } else {
-        0.0
-    };
-    let y = if surplus_y >= ch {
-        (surplus_y / 2.0).floor()
-    } else if surplus_y < 0.0 {
-        surplus_y
-    } else {
-        0.0
-    };
-    [x, y]
 }
 
 /// Selects `(mode, premultiply)` for surface composition.
@@ -2098,30 +2075,6 @@ mod tests {
         assert_eq!(ratio(Some(4.5)), 4.5);
         assert_eq!(ratio(Some(0.5)), 1.0);
         assert_eq!(ratio(Some(40.0)), MAX_CONTRAST_RATIO);
-    }
-
-    #[test]
-    fn letterbox_origin_keeps_top_left_for_the_everyday_remainder() {
-        assert_eq!(
-            letterbox_origin(24, 80, 10.0, 20.0, 805.0, 485.0),
-            [0.0, 0.0]
-        );
-    }
-
-    #[test]
-    fn letterbox_origin_centers_a_smaller_authoritative_grid() {
-        assert_eq!(
-            letterbox_origin(10, 40, 10.0, 20.0, 800.0, 600.0),
-            [200.0, 200.0]
-        );
-    }
-
-    #[test]
-    fn letterbox_origin_bottom_anchors_a_larger_authoritative_grid() {
-        assert_eq!(
-            letterbox_origin(30, 100, 10.0, 20.0, 800.0, 500.0),
-            [0.0, -100.0]
-        );
     }
 
     #[test]

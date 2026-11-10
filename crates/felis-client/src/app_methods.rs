@@ -10,10 +10,10 @@ use super::{
     SearchUiMode, Selection, SessionInfo, SessionToDaemonMsg, SharedDriver, SwitchState,
     TrailRecord, TrailState, ViewportPosition, activation_target, codec, compose_window_title,
     composed_row_for_line, config, configured_font_size_logical_px, cursor_trail, dial_and_land,
-    error, font_features_differ, font_settings_differ, font_stack_inputs_differ,
-    ime_cursor_area_pixels, info, keymap_adapter, launch_args, live_font_size_differs,
-    pointer_icon, preedit_from_ime, renderer_config_with, reported_theme_differs,
-    resolve_local_socket, resolve_post_chain, shader_events, viewport_for_hit, warn,
+    error, font_features_differ, font_settings_differ, font_stack_inputs_differ, info,
+    keymap_adapter, launch_args, live_font_size_differs, pointer_icon, preedit_from_ime,
+    renderer_config_with, reported_theme_differs, resolve_local_socket, resolve_post_chain,
+    shader_events, viewport_for_hit, warn,
 };
 use crate::window_input::PressedKey;
 use felis_client_core::config::ShaderEvent;
@@ -24,6 +24,7 @@ use felis_client_core::roster::RingKey;
 use felis_client_core::viewport::{ViewportIntent, step_request};
 use felis_client_core::{FontSizeStep, NamedKey, PipeRegionSource, PipeTarget};
 use felis_protocol::messages::{GridDims, RegionPosition, RequestedDims, ViewportAnchor};
+use felis_render_core::layout::{cell_at, cell_rect_px, report_pixel};
 
 impl App {
     /// `current_font_size_logical_px` (the unit `font.size_px` and the zoom
@@ -125,21 +126,24 @@ impl App {
     }
 
     /// Without this the platform IME anchors its pre-edit panel at the
-    /// window's top-left.
+    /// window's top-left. One cell at the cursor: the IME treats the rect
+    /// as "the area the user is typing into" and places its popup
+    /// adjacent (Wayland `zwp_text_input_v3`, XIM, `AppKit`, Windows TSF).
     pub(crate) fn update_ime_cursor_area(&self) {
         let (Some(window), Some(renderer)) = (self.window.as_ref(), self.renderer.as_ref()) else {
             return;
         };
         let metrics = renderer.cell_metrics();
         let cursor = self.shadow.screen().cursor();
-        let (x, y, w, h) =
-            ime_cursor_area_pixels(cursor.col, cursor.row, metrics.width, metrics.height);
-        // Shift through the letterbox origin (same-user mirroring,
-        // docs/explanation/architecture/session-lifecycle.md).
-        let (ox, oy) = renderer.content_origin_px();
+        let [x, y, _, _] = cell_rect_px(
+            renderer.content_origin_px().into(),
+            [metrics.width, metrics.height],
+            cursor.row,
+            cursor.col,
+        );
         window.set_ime_cursor_area(
-            PhysicalPosition::new(f64::from(x) + f64::from(ox), f64::from(y) + f64::from(oy)),
-            PhysicalSize::new(w, h),
+            PhysicalPosition::new(f64::from(x), f64::from(y)),
+            PhysicalSize::new(metrics.width, metrics.height),
         );
     }
 
@@ -1708,8 +1712,7 @@ impl App {
         Some(cell_for_position(
             position,
             renderer.content_origin_px(),
-            metrics.width,
-            metrics.height,
+            [metrics.width, metrics.height],
             GridDims {
                 rows: self.shadow.screen().rows(),
                 cols: self.shadow.screen().cols(),
@@ -1720,10 +1723,13 @@ impl App {
     }
 
     /// `None` before the renderer is ready; the convention is
-    /// [`pixel_for_position`]'s.
+    /// [`report_pixel`]'s.
     pub(crate) fn position_to_pixel(&self, position: PhysicalPosition<f64>) -> Option<(u16, u16)> {
         let renderer = self.renderer.as_ref()?;
-        Some(pixel_for_position(position, renderer.content_origin_px()))
+        Some(report_pixel(
+            position.into(),
+            renderer.content_origin_px().into(),
+        ))
     }
 
     /// The single place the client's 0-based [`GridPos`] becomes the
@@ -1860,40 +1866,21 @@ pub(crate) fn visible_hit_spans(
     spans
 }
 
-/// `origin_px` is the renderer's letterbox origin (same-user mirroring,
-/// docs/explanation/architecture/session-lifecycle.md). A position outside
-/// the block clamps to its edge cell, so a stray event mid-resize still
-/// names a cell the grid has.
+/// The cell under a pointer, clamped to the grid as [`cell_at`] clamps.
 pub(crate) fn cell_for_position(
     position: PhysicalPosition<f64>,
     origin_px: (f32, f32),
-    cell_w: u32,
-    cell_h: u32,
+    cell_px: [u32; 2],
     dims: GridDims,
 ) -> GridPos {
-    let cw = cell_w.max(1);
-    let ch = cell_h.max(1);
-    let px = (position.x - f64::from(origin_px.0)).max(0.0) as u32;
-    let py = (position.y - f64::from(origin_px.1)).max(0.0) as u32;
-    let col0 = (px / cw).min(u32::from(dims.cols).saturating_sub(1));
-    let row0 = (py / ch).min(u32::from(dims.rows).saturating_sub(1));
-    GridPos {
-        row: row0 as u16,
-        col: col0 as u16,
-    }
-}
-
-/// The 1-based, content-block-relative pixel the `?1016` SGR-pixel mouse
-/// encoding reports, clamped into `u16` for the wire.
-pub(crate) fn pixel_for_position(
-    position: PhysicalPosition<f64>,
-    origin_px: (f32, f32),
-) -> (u16, u16) {
-    let px = (position.x - f64::from(origin_px.0)).max(0.0);
-    let py = (position.y - f64::from(origin_px.1)).max(0.0);
-    // xterm reports pixels 1-based, mirroring the cell convention.
-    let clamp = |v: f64| -> u16 { (v as u32).saturating_add(1).min(u32::from(u16::MAX)) as u16 };
-    (clamp(px), clamp(py))
+    let (row, col) = cell_at(
+        position.into(),
+        origin_px.into(),
+        cell_px,
+        dims.rows,
+        dims.cols,
+    );
+    GridPos { row, col }
 }
 
 /// `Some(notice)` for a paste past [`MAX_PASTE_BYTES`], `None` for one

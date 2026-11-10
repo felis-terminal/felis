@@ -2002,20 +2002,6 @@ fn preedit_from_ime(ime: &ImeInput, cursor_cell: GridPos) -> Option<PreeditOverl
     }
 }
 
-/// One cell at the cursor: the IME panel treats the rect as "the area the
-/// user is typing into" and positions its popup adjacent (Wayland
-/// `zwp_text_input_v3`, XIM, `AppKit`, Windows TSF all consume it so).
-const fn ime_cursor_area_pixels(
-    cursor_col: u16,
-    cursor_row: u16,
-    cell_width: u32,
-    cell_height: u32,
-) -> (u32, u32, u32, u32) {
-    let x = (cursor_col as u32) * cell_width;
-    let y = (cursor_row as u32) * cell_height;
-    (x, y, cell_width, cell_height)
-}
-
 /// Recorded at press time because the routing cannot be re-derived at
 /// release: the mouse-mode / Shift predicate ([`should_start_selection`])
 /// can flip mid-hold, and either direction breaks the press/release
