@@ -111,8 +111,8 @@ impl Command {
 
     /// Replace the inherited environment snapshot entirely with `base`.
     ///
-    /// Never an overlay: completely displaces the parent's environment to avoid
-    /// leaking stale daemon variables across SSH hops or detached sessions.
+    /// Never an overlay: nothing from this process's own environment
+    /// survives.
     pub fn env_base<I, K, V>(&mut self, base: I) -> &mut Self
     where
         I: IntoIterator<Item = (K, V)>,

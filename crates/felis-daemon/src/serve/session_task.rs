@@ -25,7 +25,6 @@ use felis_protocol::{
     },
 };
 use felis_pty::{ChildHandle, Size as PtySize};
-use tokio::io::AsyncReadExt as _;
 use tokio::sync::{Mutex, Notify, mpsc, oneshot, watch};
 use tracing::{debug, error, info, trace, warn};
 
@@ -1503,7 +1502,6 @@ async fn run_session(mut t: SessionTask, mut cmd_rx: mpsc::Receiver<SessionCmd>)
     // Every way out, an unwinding panic included, releases a sink
     // waiting in `wait_for_drain`.
     let _release_sink = SinkRelease(Arc::clone(&t.session.signals));
-    let mut eof_buf = [0u8; 16];
     let mut drain_tick = tokio::time::interval(t.policy.drain_interval);
     let mut last_drain = tokio::time::Instant::now();
     let mut drain_at: Option<tokio::time::Instant> = None;
@@ -1619,10 +1617,9 @@ async fn run_session(mut t: SessionTask, mut cmd_rx: mpsc::Receiver<SessionCmd>)
                     break EndReason::PtyError;
                 }
             }
-            // No data ever lands here (`felis_pty::PtyReader`).
-            res = t.session.reader.read(&mut eof_buf), if !t.pty_eof && hold.quiesced() => {
+            res = t.session.eof.eof(), if !t.pty_eof && hold.quiesced() => {
                 match res {
-                    Ok(0) => {
+                    Ok(()) => {
                         t.pty_eof = true;
                         t.stamp_exited_meta();
                         // `felis_pty` guarantees the child's final
@@ -1640,9 +1637,6 @@ async fn run_session(mut t: SessionTask, mut cmd_rx: mpsc::Receiver<SessionCmd>)
                         t.notify_shell_exit(status);
                         t.evict_all(None);
                         t.end_watches();
-                    }
-                    Ok(_) => {
-                        warn!("session task: unexpected data on the sink-mode reader");
                     }
                     Err(err) => {
                         warn!(?err, "session task: PTY read error");
@@ -5437,15 +5431,10 @@ mod tests {
             let mut parser = felis_vt::Parser::new();
             parser.advance(&mut core.grid, b"\x1b[?2031h\x1b[?1004h");
         }
-        let mut eof_buf = [0u8; 1];
-        let read = tokio::time::timeout(
-            Duration::from_secs(10),
-            task.session.reader.read(&mut eof_buf),
-        )
-        .await
-        .expect("the shell exited within the deadline")
-        .expect("the lifecycle reader reports EOF, not an error");
-        assert_eq!(read, 0, "the sink-mode reader carries no data");
+        tokio::time::timeout(Duration::from_secs(10), task.session.eof.eof())
+            .await
+            .expect("the shell exited within the deadline")
+            .expect("the end of output is not an error");
         task.pty_eof = true;
         task.evict_all(None);
 

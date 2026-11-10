@@ -2451,7 +2451,7 @@ where
 {
     let outer = crate::SpawnedPty::spawn(keepalive_command()).expect("spawn keep-alive child");
     let crate::SpawnedPty {
-        reader,
+        eof,
         writer,
         child,
         resizer,
@@ -2473,7 +2473,7 @@ where
         program_status: crate::program_status::ProgramStatusStore::default(),
         cell_pixel_w: 8,
         cell_pixel_h: 16,
-        reader,
+        eof,
         writer,
         child: std::sync::Arc::new(child),
         resizer: std::sync::Arc::new(resizer),

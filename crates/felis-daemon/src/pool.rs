@@ -20,7 +20,7 @@ use felis_grid::{
     kitty_graphics::Reassembler,
 };
 use felis_protocol::messages::{Attachment, MAX_SESSION_TAGS, MAX_TAG_BYTES, NotifyToClientMsg};
-use felis_pty::{ChildHandle, PtyReader, PtyWriter, Resizer};
+use felis_pty::{ChildHandle, PtyEof, PtyWriter, Resizer};
 use felis_vt::Parser;
 use tokio::sync::{Notify, Semaphore, broadcast, mpsc};
 
@@ -166,7 +166,7 @@ pub struct Session {
     pub cell_pixel_w: u16,
     /// See [`Session::cell_pixel_w`].
     pub cell_pixel_h: u16,
-    pub reader: PtyReader,
+    pub eof: PtyEof,
     pub writer: PtyWriter,
     /// Shared: the panic path needs it after this `Session` is gone, so
     /// the watchdog (`serve::session_task::supervise`) reaches it through
@@ -191,7 +191,7 @@ impl Session {
     #[must_use]
     pub fn from_spawned(spawned: crate::SpawnedPty) -> Self {
         let crate::SpawnedPty {
-            reader,
+            eof,
             writer,
             child,
             resizer,
@@ -214,7 +214,7 @@ impl Session {
             terminal_progress: None,
             cell_pixel_w: 0,
             cell_pixel_h: 0,
-            reader,
+            eof,
             writer,
             child: Arc::new(child),
             resizer: Arc::new(resizer),

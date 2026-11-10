@@ -412,6 +412,7 @@ fn session_dump(id: u128, handle: &SessionHandle, unwritten: Vec<u8>) -> Session
     }
 }
 
+#[cfg(windows)]
 fn child_failed(err: &std::io::Error) -> Refusal {
     Refusal::ProbeFailed(format!("read a session child: {err}"))
 }
@@ -423,20 +424,13 @@ fn carry_master(
     parts: &UpgradeParts,
     dumped: &mut SessionDump,
 ) -> Result<OwnedFd, Refusal> {
-    let master = resizer
-        .master_fd()
-        .try_clone_to_owned()
-        .map_err(|err| Refusal::ProbeFailed(format!("duplicate a PTY master: {err}")))?;
-    let pid = parts
-        .child
-        .process_id()
-        .map_err(|err| child_failed(&err))?
-        .ok_or_else(|| Refusal::ProbeFailed("a session child has no pid".into()))?;
-    let exit_status = parts
-        .child
-        .try_wait()
-        .map_err(|err| child_failed(&err))?
+    let handover = felis_pty::handover::Handover::of(resizer, &parts.child)
+        .map_err(|err| Refusal::ProbeFailed(format!("read a session's PTY and child: {err}")))?;
+    let pid = handover.pid();
+    let exit_status = handover
+        .exit_status()
         .map(std::process::ExitStatus::into_raw);
+    let master = handover.into_master();
     dumped.master_fd = master.as_raw_fd();
     dumped.child = super::dump::ChildDump { pid, exit_status };
     dumped.exited |= exit_status.is_some();

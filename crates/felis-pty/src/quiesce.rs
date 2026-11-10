@@ -167,8 +167,9 @@ pub struct Parked {
     pub unwritten: Vec<u8>,
 }
 
-/// Parks and resumes one session's PTY threads. Cloned out of a
-/// [`crate::PtySession`] before it is split.
+/// Parks and resumes one session's PTY threads, so the session can be
+/// handed over ([`crate::handover`]) with no byte half-way between the
+/// child and the sink.
 #[derive(Clone)]
 pub struct Quiescer {
     pub(crate) shared: Arc<QuiesceShared>,

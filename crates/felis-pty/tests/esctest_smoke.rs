@@ -4,10 +4,6 @@
 
 #![cfg(unix)]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
-#![expect(
-    clippy::used_underscore_binding,
-    reason = "conformance harness: relaxed lint posture for test scaffolding"
-)]
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -15,7 +11,7 @@ use std::time::Duration;
 
 use felis_grid::Grid;
 use felis_pty::spawn;
-use felis_pty::{Command, Size};
+use felis_pty::{Command, PtyParts, Size};
 use tokio::io::AsyncWriteExt;
 use tokio::task::JoinHandle;
 
@@ -66,9 +62,7 @@ impl EsctestSession {
             Box::new(move |bytes: &[u8]| drop(chunks_tx.send(bytes.to_vec()))),
         )
         .expect("spawn esctest");
-        let (_reader, writer, _child, _resizer) = session.split();
-        let _child = _child;
-        let _resizer = _resizer;
+        let PtyParts { writer, .. } = session;
 
         let writer_arc: Arc<tokio::sync::Mutex<Box<dyn tokio::io::AsyncWrite + Send + Unpin>>> =
             Arc::new(tokio::sync::Mutex::new(Box::new(writer)));

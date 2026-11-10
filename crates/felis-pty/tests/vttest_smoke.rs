@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use felis_grid::{Grapheme, Grid, ReplyIdentity};
 use felis_pty::spawn;
-use felis_pty::{Command, Size};
+use felis_pty::{Command, PtyParts, Size};
 use tokio::io::AsyncWriteExt;
 use tokio::task::JoinHandle;
 
@@ -47,7 +47,7 @@ impl VttestSession {
             Box::new(move |bytes: &[u8]| drop(chunks_tx.send(bytes.to_vec()))),
         )
         .expect("spawn vttest");
-        let (_reader, writer, _child, _resizer) = session.split();
+        let PtyParts { writer, .. } = session;
 
         let mut grid = Grid::new(ROWS, COLS);
         grid.set_reply_identity(ReplyIdentity::new("felis 0.1.0", "felis-1"));

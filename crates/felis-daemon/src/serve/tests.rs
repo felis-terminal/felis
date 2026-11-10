@@ -4762,14 +4762,7 @@ fn spawn_args_command_inherits_daemon_env_with_user_overrides_last() {
     };
     let factory: SessionFactory =
         Arc::new(|_| panic!("a named command must not reach the default-program factory"));
-    let cmd = command_from_args(
-        &args,
-        &factory,
-        session_id,
-        None,
-        &ResolvedEnv::birth(),
-        None,
-    );
+    let cmd = command_from_args(&args, &factory, session_id, &ResolvedEnv::birth(), None);
     // Keys are stored folded (uppercase on Windows), so probe keys fold the
     // same way.
     let fold = |k: &OsStr| -> String {
@@ -4836,7 +4829,6 @@ fn spawn_args_set_the_current_origin_over_a_stale_inherited_one() {
     apply_spawn_posture(
         &mut cmd,
         1,
-        None,
         &ResolvedEnv::birth(),
         &[("FELIS_ORIGIN_SESSION_ID".to_owned(), "current".to_owned())],
         None,
@@ -4856,7 +4848,6 @@ fn the_terminfo_dir_leads_a_terminfo_dirs_the_spawn_request_sets() {
     apply_spawn_posture(
         &mut cmd,
         1,
-        None,
         &ResolvedEnv::birth(),
         &[("TERMINFO_DIRS".to_owned(), "/caller/terminfo".to_owned())],
         Some(Path::new("/opt/felis/share/terminfo")),
@@ -4875,7 +4866,6 @@ fn no_terminfo_dir_leaves_the_requested_terminfo_dirs_as_it_is() {
     apply_spawn_posture(
         &mut cmd,
         1,
-        None,
         &ResolvedEnv::birth(),
         &[("TERMINFO_DIRS".to_owned(), "/caller/terminfo".to_owned())],
         None,
@@ -5081,7 +5071,7 @@ fn a_base_replaces_the_daemons_environment() {
     let args = felis_protocol::messages::SpawnArgs::default();
     let base = vec![entry("FROM_BASE", "fresh")];
 
-    let replaced = command_from_args(&args, &factory, 0, None, &resolved_request(&base), None);
+    let replaced = command_from_args(&args, &factory, 0, &resolved_request(&base), None);
     assert_eq!(env_of(&replaced, "FROM_BASE").as_deref(), Some("fresh"));
     assert_eq!(
         env_of(&replaced, "DAEMON_ONLY"),
@@ -5089,7 +5079,7 @@ fn a_base_replaces_the_daemons_environment() {
         "nothing from the daemon's own environment survives a base"
     );
 
-    let birth = command_from_args(&args, &factory, 0, None, &ResolvedEnv::birth(), None);
+    let birth = command_from_args(&args, &factory, 0, &ResolvedEnv::birth(), None);
     assert_eq!(env_of(&birth, "DAEMON_ONLY").as_deref(), Some("stale"));
 }
 
@@ -5110,7 +5100,7 @@ fn the_order_is_base_then_scrub_then_stamps_then_explicit() {
         entry("KEEP", "kept"),
     ];
 
-    let cmd = command_from_args(&args, &factory, 0xabc, None, &resolved_request(&base), None);
+    let cmd = command_from_args(&args, &factory, 0xabc, &resolved_request(&base), None);
     assert_eq!(env_of(&cmd, "KEEP").as_deref(), Some("kept"));
     assert_eq!(
         env_of(&cmd, "VTE_VERSION"),
@@ -5167,7 +5157,7 @@ fn the_identity_hatch_is_read_from_the_resolved_base() {
         entry("FELIS_TERM_PROGRAM", "kitty"),
     ];
 
-    let cmd = command_from_args(&args, &factory, 0, None, &resolved_request(&base), None);
+    let cmd = command_from_args(&args, &factory, 0, &resolved_request(&base), None);
     assert_eq!(env_of(&cmd, "TERM").as_deref(), Some("xterm-kitty"));
     assert_eq!(env_of(&cmd, "TERM_PROGRAM").as_deref(), Some("kitty"));
     assert_eq!(
@@ -5177,7 +5167,7 @@ fn the_identity_hatch_is_read_from_the_resolved_base() {
     );
 
     if std::env::var_os("FELIS_TERM").is_none() {
-        let bare = command_from_args(&args, &factory, 0, None, &resolved_request(&[]), None);
+        let bare = command_from_args(&args, &factory, 0, &resolved_request(&[]), None);
         assert_eq!(env_of(&bare, "TERM").as_deref(), Some(crate::DEFAULT_TERM));
     }
 }
@@ -5251,7 +5241,7 @@ fn a_snapshot_or_relay_base_loses_its_stale_origin_variables() {
                 env: explicit.clone(),
                 ..Default::default()
             };
-            let cmd = command_from_args(&args, &factory, 0, None, &resolved, None);
+            let cmd = command_from_args(&args, &factory, 0, &resolved, None);
             for key in crate::ORIGIN_ENV {
                 let want = explicit
                     .iter()
@@ -5328,43 +5318,55 @@ fn spawn_command_for_test(
         crate::child_env::TARGET_IS_WINDOWS,
     )
     .unwrap();
-    command_from_args(args, factory, 0, None, &resolved, None)
+    command_from_args(args, factory, 0, &resolved, None)
 }
 
-/// The default-program path still carries `SpawnArgs.cwd`; an empty one
-/// means inherit the daemon's cwd.
+/// The requested cwd is where the default program starts.
+#[cfg(unix)]
 #[test]
-fn command_from_args_applies_the_requested_cwd_to_the_default_program() {
-    let factory: SessionFactory = Arc::new(|_| {
+fn spawn_with_args_starts_the_default_program_in_the_requested_cwd() {
+    let tmp = private_dir();
+    let dir = tmp.path().canonicalize().unwrap();
+    let out = dir.join("pwd");
+    let script = format!("pwd -P > '{}'", out.display());
+    let factory: SessionFactory = Arc::new(move |_| {
         let mut cmd = Command::new("/bin/sh");
+        cmd.args(["-c", &script]);
         cmd.env_clear();
         cmd
     });
-
-    let requested = felis_protocol::messages::SpawnArgs {
-        cwd: "/tmp".to_owned(),
+    let args = felis_protocol::messages::SpawnArgs {
+        cwd: dir.to_str().unwrap().to_owned(),
         ..Default::default()
     };
-    let with_cwd = command_from_args(
-        &requested,
+    // `Session` is not `Debug`, so match rather than `expect`.
+    let _spawned = match spawn_with_args(
+        &args,
         &factory,
         0,
-        spawn_cwd(&requested),
-        &ResolvedEnv::birth(),
+        EnvBaseSource::Birth,
         None,
-    );
-    assert_eq!(with_cwd.get_cwd(), Some(Path::new("/tmp")));
-
-    let bare = felis_protocol::messages::SpawnArgs::default();
-    let without = command_from_args(
-        &bare,
-        &factory,
-        0,
-        spawn_cwd(&bare),
-        &ResolvedEnv::birth(),
         None,
-    );
-    assert_eq!(without.get_cwd(), None);
+        None,
+        crate::DEFAULT_SIZE,
+    ) {
+        Ok(spawned) => spawned,
+        Err(err) => panic!("spawn in an existing cwd: {err}"),
+    };
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let written = loop {
+        if let Ok(text) = std::fs::read_to_string(&out)
+            && text.ends_with('\n')
+        {
+            break text;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the child never wrote its cwd"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert_eq!(written.trim_end(), dir.to_str().unwrap());
 }
 
 /// A relative `cwd` is refused rather than resolved against the daemon's
@@ -5504,7 +5506,7 @@ fn command_from_args_applies_env_overrides_to_the_default_program() {
         env: vec![("FELIS_ENV_PROBE".to_owned(), "reached".to_owned())],
         ..Default::default()
     };
-    let cmd = command_from_args(&args, &factory, 0, None, &ResolvedEnv::birth(), None);
+    let cmd = command_from_args(&args, &factory, 0, &ResolvedEnv::birth(), None);
     let probe = cmd
         .get_envs()
         .find(|(k, _)| *k == OsStr::new("FELIS_ENV_PROBE"))
