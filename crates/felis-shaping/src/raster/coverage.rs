@@ -247,26 +247,30 @@ fn clip_to_window(from: Point, to: Point, [x0, y0, x1, y1]: [f32; 4]) -> [Option
     if b.y <= y0 || a.y >= y1 || a.y == b.y {
         return out;
     }
-    let at_y = |y: f32| a.lerp(b, (y - a.y) / (b.y - a.y));
+    let at_y = |y: f32| Point::new(a.lerp(b, (y - a.y) / (b.y - a.y)).x, y);
     let (a, b) = (
         if a.y < y0 { at_y(y0) } else { a },
         if b.y > y1 { at_y(y1) } else { b },
     );
-    let mut cuts = [0.0, 1.0, 1.0, 1.0];
+    // The pieces' ends are the edge's own ends and the window's own
+    // coordinates at a cut, never a lerp landing on them: `a + (b - a)` is
+    // not `b` in f32, and one ulp can round the whole edge to another 24.8
+    // step than the unclipped raster.
+    let mut ends = [a, b, b, b];
     let mut n = 1;
     if a.x != b.x {
-        let mut crossings = [(x0 - a.x) / (b.x - a.x), (x1 - a.x) / (b.x - a.x)];
-        crossings.sort_by(f32::total_cmp);
-        for t in crossings {
+        let mut crossings = [x0, x1].map(|x| ((x - a.x) / (b.x - a.x), x));
+        crossings.sort_by(|l, r| l.0.total_cmp(&r.0));
+        for (t, x) in crossings {
             if t > 0.0 && t < 1.0 {
-                cuts[n] = t;
+                ends[n] = Point::new(x, a.lerp(b, t).y);
                 n += 1;
             }
         }
     }
-    cuts[n] = 1.0;
+    ends[n] = b;
     for i in 0..n {
-        let (p, q) = (a.lerp(b, cuts[i]), a.lerp(b, cuts[i + 1]));
+        let (p, q) = (ends[i], ends[i + 1]);
         let mid = p.lerp(q, 0.5).x;
         let x = |v: f32| {
             if mid < x0 {
@@ -691,7 +695,9 @@ mod kani_proofs {
 mod tests {
     use proptest::prelude::*;
 
-    use super::{Mask, PathEl, Point, origin, rasterize, rasterize_clipped, side_limit};
+    use super::{
+        Mask, PathEl, Point, clip_to_window, origin, rasterize, rasterize_clipped, side_limit,
+    };
 
     const PX: f32 = 32.0;
 
@@ -1039,6 +1045,53 @@ mod tests {
             let row = |r: usize| mask.data[r * w..][..w].iter().any(|&v| v != 0);
             let col = |c: usize| (0..h).any(|r| mask.data[r * w + c] != 0);
             prop_assert!(row(0) && row(h - 1) && col(0) && col(w - 1));
+        }
+    }
+
+    #[test]
+    fn an_edge_the_window_does_not_cut_keeps_its_exact_ends() {
+        let path = [
+            PathEl::MoveTo(p(0.0, 0.0)),
+            PathEl::CurveTo([p(0.0, 0.0), p(0.0, 0.0), p(-6.3793, 36.44678)]),
+            PathEl::LineTo(p(16.236_326, 0.0)),
+            PathEl::Close,
+        ];
+        let (whole, _) = render(&path);
+        let clipped = rasterize_clipped(
+            &path,
+            PX,
+            &mut Vec::new(),
+            super::IMAGE_BUDGET,
+            [-100.0, 100.0, 100.0, -100.0],
+        )
+        .expect("inside every limit");
+        assert_eq!(whole, clipped);
+    }
+
+    #[test]
+    fn a_diagonal_cut_by_a_fractional_window_ends_on_its_edges_in_one_chain() {
+        let window = [0.37, 0.29, 5.13, 6.71];
+        for (from, to) in [
+            (p(-1.7, -0.9), p(7.3, 9.1)),
+            (p(7.3, 9.1), p(-1.7, -0.9)),
+            (p(6.1, -0.3), p(0.2, 8.6)),
+        ] {
+            let pieces: Vec<[Point; 2]> = clip_to_window(from, to, window)
+                .into_iter()
+                .flatten()
+                .collect();
+            let downward = |[p, q]: [Point; 2]| if from.y > to.y { [q, p] } else { [p, q] };
+            let chain: Vec<[Point; 2]> = pieces.iter().copied().map(downward).collect();
+            assert!(chain.len() > 1, "{from:?} to {to:?}: {pieces:?}");
+            assert_eq!(chain[0][0].y.to_bits(), window[1].to_bits(), "{pieces:?}");
+            assert_eq!(
+                chain[chain.len() - 1][1].y.to_bits(),
+                window[3].to_bits(),
+                "{pieces:?}"
+            );
+            for pair in chain.windows(2) {
+                assert_eq!(pair[0][1], pair[1][0], "{pieces:?}");
+            }
         }
     }
 
