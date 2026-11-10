@@ -72,7 +72,7 @@ FELIS = tuple(sorted(path.name for path in (ROOT / "crates").glob("felis-*")))
 
 BANS: dict[str, tuple[str, ...]] = {
     "felis-protocol": ASYNC + OS + RENDER,
-    "felis-vt": ASYNC + OS + ("felis-grid",),
+    "felis-vt": ASYNC + OS + tuple(name for name in FELIS if name != "felis-vt"),
     "felis-grid": ASYNC + RENDER,
     "felis-pty": tuple(name for name in FELIS if name != "felis-pty"),
     "felis-transport": ("felis-vt", "felis-grid", "felis-daemon"),

@@ -11,13 +11,13 @@ use felis_daemon::graphics::{
     dispatch_apc_body, materialize_image_events,
 };
 use felis_grid::images::{ImageStore, Placements};
+use felis_grid::kitty_graphics::Reassembler;
 use felis_grid::{Grid, PtyEffect};
 use felis_protocol::{
     ImageId, PlacementId,
     messages::{ImageFormat, ImageMsg, ImageTarget},
 };
 use felis_vt::Parser;
-use felis_vt::kitty_graphics::Reassembler;
 
 mod common;
 use common::{b64, body};

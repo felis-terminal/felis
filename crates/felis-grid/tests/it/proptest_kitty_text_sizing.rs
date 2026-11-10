@@ -3,7 +3,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use felis_vt::kitty_text_sizing::{HAlign, Sizing, VAlign, parse, parse_metadata};
+use felis_grid::kitty_text_sizing::{HAlign, Sizing, VAlign, parse, parse_metadata};
 use proptest::prelude::*;
 
 proptest! {

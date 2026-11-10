@@ -2,12 +2,12 @@
 //!
 //! Input convention: the first byte's low bit picks the terminator (BEL
 //! when set) and the rest is the payload after `7501;`. Companion to
-//! `crates/felis-vt/tests/it/proptest_program_status.rs`; win condition is
+//! `crates/felis-grid/tests/it/proptest_program_status.rs`; win condition is
 //! silence: panic = bug.
 
 #![no_main]
 
-use felis_vt::program_status::{Terminator, parse_osc7501};
+use felis_grid::program_status::{Terminator, parse_osc7501};
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {

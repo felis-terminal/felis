@@ -10,8 +10,8 @@ use felis_daemon::graphics::{
 };
 use felis_grid::Grid;
 use felis_grid::images::{ImageStore, Placements};
+use felis_grid::kitty_graphics::Reassembler;
 use felis_protocol::messages::MAX_SESSION_IMAGE_BYTES;
-use felis_vt::kitty_graphics::Reassembler;
 
 pub(crate) const CHUNK: usize = 4096;
 

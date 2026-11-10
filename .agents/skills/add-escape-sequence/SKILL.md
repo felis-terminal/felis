@@ -28,8 +28,9 @@ Before implementing, check in this order:
 
 Data flows one way; place each piece at its lowest correct layer:
 
-- **Parse/dispatch** — `crates/felis-vt`: the DFA recognizes the sequence and dispatches a typed event to the sink.
-  Kitty graphics and text-sizing each have a dispatch module here; the Kitty keyboard encoder lives in
+- **Parse/dispatch** — `crates/felis-vt`: the DFA recognizes the sequence and hands its parameters or string body to the
+  sink. The payload parsers (Kitty graphics, text sizing, notifications, progress, program status) are
+  `crates/felis-grid` modules, since `felis-vt` depends on no other felis crate; the Kitty keyboard encoder lives in
   `crates/felis-daemon/src/serve/key_encode.rs`, its flag type in `felis-protocol`, and its mode state in `felis-grid`.
 - **State** — `crates/felis-grid`: cells, modes, scrollback, image store, damage. Most sequences end here.
 - **Daemon orchestration** — `crates/felis-daemon` only when the sequence needs session-level work (e.g. graphics APC
@@ -44,7 +45,7 @@ Data flows one way; place each piece at its lowest correct layer:
 
 - **insta snapshots** are the conformance workhorse: `crates/felis-grid/tests/it/snapshot_csi.rs`,
   `snapshot_csi_handlers.rs`, `snapshot_osc.rs`; protocol-specific ones in
-  `crates/felis-vt/tests/it/snapshot_kitty_*.rs`. Review with `cargo insta review`.
+  `crates/felis-grid/tests/it/snapshot_kitty_*.rs`. Review with `cargo insta review`.
 - Drive helpers: integration tests under `crates/felis-grid/tests/it/` use `common/mod.rs`'s `drive(rows, cols, bytes)`
   / `drive_take` / `drive_with(parser, grid, bytes)`; unit tests inside `felis-grid` use `src/test_support.rs`'s
   `drive(parser, grid, bytes)`. Reuse the helper of the layer you are in and never invent a new argument order.

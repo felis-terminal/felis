@@ -14,9 +14,9 @@ use felis_daemon::graphics::{
 use std::fmt::Write as _;
 
 use felis_grid::images::{ImageStore, Placements};
+use felis_grid::kitty_graphics::Reassembler;
 use felis_grid::{Grid, PtyEffect};
 use felis_vt::Parser;
-use felis_vt::kitty_graphics::Reassembler;
 use proptest::prelude::*;
 
 mod common;

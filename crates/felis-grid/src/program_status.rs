@@ -4,8 +4,8 @@
 //! Every check finishes before anything is built, so a dropped report
 //! carries nothing a caller could half-apply.
 
-use crate::split_osc_first;
 use felis_protocol::base64;
+use felis_vt::split_osc_first;
 
 /// The spec's per-report caps, plus the per-terminal record cap.
 pub mod limits {

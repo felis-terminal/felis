@@ -1,7 +1,7 @@
+use crate::kitty_text_sizing::{HAlign, VAlign};
 use crate::test_support::drive;
 use crate::*;
 use felis_vt::Parser;
-use felis_vt::kitty_text_sizing::{HAlign, VAlign};
 
 /// `Sizing`'s private fields disallow a functional-update literal
 /// outside its module.

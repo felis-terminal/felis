@@ -8,7 +8,7 @@
 
 use std::fmt::Write as _;
 
-use felis_vt::kitty_graphics::{Command, parse};
+use felis_grid::kitty_graphics::{Command, parse};
 
 /// `None` renders as `"REJECTED"` so accept→reject flips show on the first
 /// line of the diff.

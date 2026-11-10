@@ -4,7 +4,7 @@
 //! felis does not implement: `f=8`/`f=16`, `N=`, the placement's `X=`/`Y=`
 //! cell offsets, and relative placements (`P=`, `Q=`, `H=`, `V=`).
 
-use felis_vt::kitty_graphics::CompleteCommand;
+use felis_grid::kitty_graphics::CompleteCommand;
 
 use super::{control_byte, control_i32, control_u32};
 

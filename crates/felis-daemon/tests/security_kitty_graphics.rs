@@ -10,7 +10,7 @@ use std::os::unix::fs::symlink;
 use felis_daemon::graphics::{ApcCtx, MAX_DECODED_BYTES, ShmDeferral, dispatch_apc_body};
 use felis_grid::Grid;
 use felis_grid::images::{ImageEntry, ImageFormat, ImageId, ImageStore, Placements};
-use felis_vt::kitty_graphics::Reassembler;
+use felis_grid::kitty_graphics::Reassembler;
 
 mod common;
 use common::{b64, body};

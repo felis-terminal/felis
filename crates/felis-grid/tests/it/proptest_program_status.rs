@@ -4,11 +4,11 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use felis_vt::program_status::limits::{
+use felis_grid::program_status::limits::{
     APP_MAX, ID_DEPTH_MAX, ID_MAX, ID_SEGMENT_MAX, KEY_MAX, MSG_DECODED_MAX, SEQUENCE_MAX,
     TITLE_DECODED_MAX, TITLE_ENCODED_MAX,
 };
-use felis_vt::program_status::{Kind, Osc7501, Report, State, Terminator, parse_osc7501};
+use felis_grid::program_status::{Kind, Osc7501, Report, State, Terminator, parse_osc7501};
 use proptest::prelude::*;
 
 /// Independent of `felis_protocol::base64`, which the decoder uses.

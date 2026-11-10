@@ -662,7 +662,7 @@ fn osc9_notification_relays_message_as_body() {
     assert_eq!(got[0].body, "Build finished");
     assert_eq!(
         g.take_notifications(),
-        Vec::<felis_vt::notification::Notification>::new()
+        Vec::<notification::Notification>::new()
     );
 }
 
@@ -673,7 +673,7 @@ fn conemu_osc9_4_progress_is_not_a_notification() {
     drive(&mut p, &mut g, b"\x1b]9;4;1;50\x07\x1b]9;4;9\x07");
     assert_eq!(
         g.take_notifications(),
-        Vec::<felis_vt::notification::Notification>::new()
+        Vec::<notification::Notification>::new()
     );
 }
 
@@ -695,7 +695,7 @@ fn other_conemu_subcommands_are_consumed_without_effect() {
     drive(&mut p, &mut g, b"\x1b]9;1;500\x07\x1b]9;9;/tmp\x07");
     assert_eq!(
         g.take_notifications(),
-        Vec::<felis_vt::notification::Notification>::new()
+        Vec::<notification::Notification>::new()
     );
     assert_eq!(g.take_pty_effects(), []);
 }
@@ -760,7 +760,7 @@ fn osc99_chunks_reassemble_across_advances() {
     drive(&mut p, &mut g, b"\x1b]99;i=abc:d=0:p=body;the body\x1b\\");
     assert_eq!(
         g.take_notifications(),
-        Vec::<felis_vt::notification::Notification>::new()
+        Vec::<notification::Notification>::new()
     );
     drive(&mut p, &mut g, b"\x1b]99;i=abc:d=1:p=body; more\x1b\\");
     let got = g.take_notifications();
@@ -786,7 +786,7 @@ fn osc99_chunk_at_the_specs_full_encoded_payload_size_reassembles() {
     );
     assert_eq!(
         g.take_notifications(),
-        Vec::<felis_vt::notification::Notification>::new()
+        Vec::<notification::Notification>::new()
     );
     drive(&mut p, &mut g, b"\x1b]99;i=big:d=1:e=1:p=title;\x1b\\");
     let got = g.take_notifications();
@@ -803,7 +803,7 @@ fn osc99_support_query_gets_a_truthful_reply() {
     // outbox.
     assert_eq!(
         g.take_notifications(),
-        Vec::<felis_vt::notification::Notification>::new()
+        Vec::<notification::Notification>::new()
     );
     let replies = responses(&mut g);
     assert_eq!(replies.len(), 1);
@@ -1144,8 +1144,8 @@ fn effects_of(bytes: &[u8]) -> Vec<PtyEffect> {
         .collect()
 }
 
-fn report(state: felis_vt::program_status::State) -> felis_vt::program_status::Report {
-    felis_vt::program_status::Report {
+fn report(state: program_status::State) -> program_status::Report {
+    program_status::Report {
         id: String::new(),
         state,
         kind: None,
@@ -1158,9 +1158,9 @@ fn report(state: felis_vt::program_status::State) -> felis_vt::program_status::R
 
 #[test]
 fn osc_7501_report_becomes_a_status_effect_for_either_terminator() {
-    use felis_vt::program_status::{Kind, State};
+    use crate::program_status::{Kind, State};
     let want = PtyEffect::ProgramStatus(ProgramStatusEffect::Report(Box::new(
-        felis_vt::program_status::Report {
+        program_status::Report {
             id: "build/test".to_owned(),
             kind: Some(Kind::Permission),
             progress: Some(40),
@@ -1263,7 +1263,7 @@ fn osc_7501_sequence_cap_counts_the_terminator_the_parser_saw() {
     assert_eq!(
         effects_of(format!("{body}\x07").as_bytes()),
         [PtyEffect::ProgramStatus(ProgramStatusEffect::Report(
-            Box::new(report(felis_vt::program_status::State::Done))
+            Box::new(report(program_status::State::Done))
         ))]
     );
     assert_eq!(effects_of(format!("{body}\x1b\\").as_bytes()), []);
@@ -1274,7 +1274,7 @@ fn osc_133_prompt_start_queues_prompt_started_unless_a_continuation() {
     const WORKING: &[u8] = b"\x1b]7501;state=working\x07";
     let working = || {
         PtyEffect::ProgramStatus(ProgramStatusEffect::Report(Box::new(report(
-            felis_vt::program_status::State::Working,
+            program_status::State::Working,
         ))))
     };
     for prompt in [&b"\x1b]133;A\x07"[..], b"\x1b]133;A;redraw=0\x1b\\"] {
@@ -1374,7 +1374,7 @@ fn ris_after_a_report_keeps_the_report_ahead_of_the_reset() {
         effects_of(b"\x1b]7501;state=working\x07\x1bc"),
         [
             PtyEffect::ProgramStatus(ProgramStatusEffect::Report(Box::new(report(
-                felis_vt::program_status::State::Working
+                program_status::State::Working
             )))),
             PtyEffect::HardReset,
             PtyEffect::ImagesCleared(ImageClear::Screen),
@@ -1382,13 +1382,13 @@ fn ris_after_a_report_keeps_the_report_ahead_of_the_reset() {
     );
 }
 
-fn progress(state: felis_vt::progress::ProgressState, value: Option<u8>) -> PtyEffect {
-    PtyEffect::TerminalProgress(Some(felis_vt::progress::Progress { state, value }))
+fn progress(state: progress::ProgressState, value: Option<u8>) -> PtyEffect {
+    PtyEffect::TerminalProgress(Some(progress::Progress { state, value }))
 }
 
 #[test]
 fn osc_9_4_report_becomes_a_progress_effect_for_either_terminator() {
-    use felis_vt::progress::ProgressState;
+    use crate::progress::ProgressState;
     for end in ["\x07", "\x1b\\"] {
         let bytes = format!("\x1b]9;4;2;71{end}\x1b]9;4;0{end}");
         assert_eq!(
@@ -1419,7 +1419,7 @@ fn osc_9_4_interrupted_or_malformed_queues_nothing() {
 /// reported before it still expires at the next prompt.
 #[test]
 fn osc_133_prompt_start_is_owed_after_progress_but_not_settled_by_its_clear() {
-    use felis_vt::progress::ProgressState;
+    use crate::progress::ProgressState;
     let prompt = b"\x1b]133;A\x07";
     assert_eq!(
         effects_of(&[&b"\x1b]9;4;3\x07"[..], prompt].concat()),

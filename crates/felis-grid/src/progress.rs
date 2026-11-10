@@ -1,7 +1,7 @@
 //! `ConEmu` `OSC 9 ; 4 ; <st> [; <pr>]` progress decoder (decode-only),
 //! per `docs/reference/protocols/terminal-progress.md`.
 
-use crate::split_osc_first;
+use felis_vt::split_osc_first;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "state-dump", derive(serde::Serialize, serde::Deserialize))]

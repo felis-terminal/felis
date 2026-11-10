@@ -4,5 +4,6 @@
 
 mod proptest_frame;
 mod proptest_geometry;
+mod proptest_placeholder;
 mod proptest_preface;
 mod proptest_session_prefix;

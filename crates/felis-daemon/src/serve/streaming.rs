@@ -1220,7 +1220,7 @@ pub(crate) fn collect_facets(grid: &mut Grid) -> Vec<GridMsg> {
 }
 
 pub(crate) struct TakenNotifications {
-    notifs: Vec<felis_vt::notification::Notification>,
+    notifs: Vec<felis_grid::notification::Notification>,
     session_title: Option<String>,
     cwd: Option<String>,
 }
@@ -1632,7 +1632,7 @@ mod tests {
         let mut images = ImageStore::new(1 << 20);
         let mut placements = Placements::new();
         let mut events = Vec::new();
-        let mut reassembler = felis_vt::kitty_graphics::Reassembler::new();
+        let mut reassembler = felis_grid::kitty_graphics::Reassembler::new();
         for controls in [
             "a=t,i=1,f=32,s=1,v=1",
             "a=t,i=2,f=32,s=1,v=1",

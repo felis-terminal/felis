@@ -1415,6 +1415,7 @@ dependencies = [
  "foldhash 0.2.0",
  "insta",
  "libc",
+ "miniz_oxide 0.9.1",
  "proptest",
  "regex",
  "schemars",
@@ -1536,10 +1537,9 @@ dependencies = [
 name = "felis-vt"
 version = "0.2.0"
 dependencies = [
+ "base64",
  "criterion",
- "felis-protocol",
  "insta",
- "miniz_oxide 0.9.1",
  "proptest",
  "serde",
  "serde_json",

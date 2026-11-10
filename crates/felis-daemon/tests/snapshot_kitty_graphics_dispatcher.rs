@@ -2,14 +2,14 @@
 //! Kitty graphics command, bucketed as in
 //! `docs/reference/protocols/kitty-graphics.md` (action, transmission
 //! medium, format, `q=` gating, error mapping).
-//! `felis-vt::tests::snapshot_kitty_graphics` pins the parser side.
+//! `felis-grid`'s `snapshot_kitty_graphics` pins the parser side.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use felis_daemon::graphics::{ApcCtx, ShmDeferral, dispatch_apc_body};
 use felis_grid::Grid;
 use felis_grid::images::{ImageId, ImageStore, Placements};
-use felis_vt::kitty_graphics::Reassembler;
+use felis_grid::kitty_graphics::Reassembler;
 
 mod common;
 use common::{b64, body};

@@ -6366,11 +6366,11 @@ async fn status_samples_what_the_sessions_are_holding() {
         )
         .expect("insert under cap");
     let head = format!("Ga=T,f=100,m=1;{}", std::str::from_utf8(PARKED).unwrap());
-    let cmd = felis_vt::kitty_graphics::parse(head.as_bytes()).expect("a graphics command");
+    let cmd = felis_grid::kitty_graphics::parse(head.as_bytes()).expect("a graphics command");
     assert!(
         matches!(
             owned.graphics_reassembler.feed(&cmd),
-            felis_vt::kitty_graphics::Outcome::Pending
+            felis_grid::kitty_graphics::Outcome::Pending
         ),
         "an m=1 head parks the transmission"
     );
@@ -9193,8 +9193,8 @@ async fn pty_eof_expires_transient_records_and_keeps_progress_after_the_final_re
         {
             assert_eq!(
                 meta.terminal_progress,
-                Some(felis_vt::progress::Progress {
-                    state: felis_vt::progress::ProgressState::Error,
+                Some(felis_grid::progress::Progress {
+                    state: felis_grid::progress::ProgressState::Error,
                     value: Some(71),
                 })
             );

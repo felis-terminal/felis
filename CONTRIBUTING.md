@@ -71,7 +71,7 @@ below.
 | `render`      | `felis-render-core` and `felis-render-wgpu` crates, palette, GPU pipeline, atlas               |
 | `shaping`     | `felis-shaping` crate, harfrust shaper, font fallback                                          |
 | `transport`   | `felis-transport` crate, framing, socket/pipe, SSH carrier                                     |
-| `vt`          | `felis-vt` crate, VT parser, dispatch                                                          |
+| `vt`          | `felis-vt` crate, VT parser                                                                    |
 | `manual`      | User-facing docs quadrants: `docs/tutorials/`, `docs/how-to/`, and user-facing reference pages |
 | `docs`        | Documentation tree when no narrower scope fits (or cross-quadrant doc cascades)                |
 | `skills`      | Agent skills (`skills/felis`, `.agents/skills/`)                                               |

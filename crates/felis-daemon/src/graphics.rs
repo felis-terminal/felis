@@ -13,13 +13,13 @@ use felis_grid::images::{
     AnyPlacement, CellPos, Displaced, Evicted, Extent, Frame, FrameError, ImageEntry, ImageId,
     InsertError, Placement, PlacementId, VirtualPlacement,
 };
+use felis_grid::kitty_graphics::{
+    self, CompleteCommand, ErrorCode, Outcome, Reassembler, ResponseRefs, Status,
+    format_feature_response, format_response, inflate as zlib,
+};
 use felis_grid::{ApcBody, ScreenSwitch};
 use felis_protocol::messages::{
     ImageFormat, ImageMsg, ImageTarget, MAX_IMAGE_CHUNK_PAYLOAD, SourceRect,
-};
-use felis_vt::kitty_graphics::{
-    self, CompleteCommand, ErrorCode, Outcome, Reassembler, ResponseRefs, Status,
-    format_feature_response, format_response, inflate as zlib,
 };
 // Handed to `image_decode` for the Unix `t=f` / `t=t` secure-open path;
 // Windows declines those methods outright.

@@ -7,9 +7,10 @@
 use felis_grid::{
     Grid, TableGc,
     images::{ImageStore, Placements},
+    kitty_graphics::Reassembler,
 };
 use felis_protocol::messages::Urgency;
-use felis_vt::{Parser, kitty_graphics::Reassembler};
+use felis_vt::Parser;
 use serde::{Deserialize, Serialize};
 
 /// The dump version this build writes and the one it reads. A field
@@ -89,8 +90,8 @@ pub struct SessionState {
     pub idle_ms: u64,
     pub last_notification: Option<NotificationDump>,
     /// OSC 7501 records, least recently updated first.
-    pub program_status: Vec<felis_vt::program_status::Report>,
-    pub terminal_progress: felis_vt::progress::ProgressReport,
+    pub program_status: Vec<felis_grid::program_status::Report>,
+    pub terminal_progress: felis_grid::progress::ProgressReport,
 }
 
 impl Default for SessionState {
@@ -147,7 +148,7 @@ impl SessionState {
         if self.shm_segments.len() > crate::graphics::ShmDeferral::CAP {
             return Err("deferred shared memory names".to_owned());
         }
-        if self.program_status.len() > felis_vt::program_status::limits::RECORDS_MAX
+        if self.program_status.len() > felis_grid::program_status::limits::RECORDS_MAX
             || self
                 .program_status
                 .iter()
@@ -447,17 +448,19 @@ mod tests {
             &mut state.grid,
             b"\x1b]2;title\x07\x1b[31mred\x1b[0m\r\n\x1b[?1049h\x1b[5;5Halt\x1b[38;2;1",
         );
-        state.program_status.push(felis_vt::program_status::Report {
-            id: String::new(),
-            state: felis_vt::program_status::State::Working,
-            kind: None,
-            progress: Some(50),
-            app: None,
-            title: None,
-            msg: None,
-        });
-        state.terminal_progress = Some(felis_vt::progress::Progress {
-            state: felis_vt::progress::ProgressState::Error,
+        state
+            .program_status
+            .push(felis_grid::program_status::Report {
+                id: String::new(),
+                state: felis_grid::program_status::State::Working,
+                kind: None,
+                progress: Some(50),
+                app: None,
+                title: None,
+                msg: None,
+            });
+        state.terminal_progress = Some(felis_grid::progress::Progress {
+            state: felis_grid::progress::ProgressState::Error,
             value: Some(71),
         });
         state

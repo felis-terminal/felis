@@ -19,11 +19,11 @@ pub struct Run<'a> {
 /// missing metadata, unknown keys, out-of-range values, or `d <= n`.
 #[must_use]
 pub fn parse(body: &[u8]) -> Option<Run<'_>> {
-    let (code, rest) = crate::split_osc_first(body);
+    let (code, rest) = felis_vt::split_osc_first(body);
     if code != b"66" {
         return None;
     }
-    let (metadata, text) = crate::split_osc_first(rest?);
+    let (metadata, text) = felis_vt::split_osc_first(rest?);
     let sizing = parse_metadata(metadata)?;
     Some(Run {
         sizing,

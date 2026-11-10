@@ -4,7 +4,7 @@
 //! splits off only the fields its wire form defines, preserving any literal
 //! `;` inside the payload.
 
-use crate::split_osc_first;
+use felis_vt::split_osc_first;
 
 // `Urgency` is the wire type (`docs/reference/protocols/notifications.md`).
 pub use felis_protocol::messages::Urgency;
@@ -170,7 +170,7 @@ pub fn parse_osc99(body: &[u8]) -> Option<Osc99> {
 
     let text = if base64 {
         // Invalid Base64 drops the chunk rather than relaying garbage.
-        let decoded = crate::kitty_graphics::base64::decode(payload_bytes)?;
+        let decoded = felis_protocol::base64::decode(payload_bytes)?;
         String::from_utf8_lossy(&decoded).into_owned()
     } else {
         String::from_utf8_lossy(payload_bytes).into_owned()

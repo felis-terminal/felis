@@ -19,6 +19,7 @@ state-dump = ["felis-vt/state-dump"]
 felis-protocol = { workspace = true }
 bytes = { workspace = true }
 felis-vt = { workspace = true }
+miniz_oxide = { workspace = true }
 regex = { workspace = true }
 bitflags = { workspace = true }
 foldhash = { workspace = true }

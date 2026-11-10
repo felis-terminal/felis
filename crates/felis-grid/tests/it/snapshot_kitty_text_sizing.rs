@@ -5,7 +5,7 @@
 
 use std::fmt::Write as _;
 
-use felis_vt::kitty_text_sizing::{Run, parse};
+use felis_grid::kitty_text_sizing::{Run, parse};
 
 /// `None` renders as `"REJECTED"` so accept↔reject flips show as a diff on
 /// the first line. `pin` assembles the `;`-separated body from wire fields.
