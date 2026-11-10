@@ -1173,7 +1173,13 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn waiting_on_a_live_child_gives_up_at_the_timeout() {
         let (_collected, sink) = collector();
-        let PtyParts { child, .. } = spawn(blocks_forever(), small_size(), sink).expect("spawn");
+        // Held: on Windows dropping the resizer closes the pseudoconsole,
+        // which ends the child before the deadline.
+        let PtyParts {
+            child,
+            resizer: _resizer,
+            ..
+        } = spawn(blocks_forever(), small_size(), sink).expect("spawn");
         let started = tokio::time::Instant::now();
         let waited = child
             .wait_timeout(Duration::from_millis(200))
