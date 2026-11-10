@@ -48,13 +48,13 @@ s against 0.48 s with the parse on the reader thread). Parsing inline on the rea
 synchronous `write(2)` hostage to parse cost: the kernel drains a bulk write in a ~1 KiB lockstep (wake the reader, hand
 over a chunk, wake the writer to refill), so the queue drains at 1 KiB/(read+parse) and a DOOM-fire-style sim+write loop
 caps at ~628 fps. The reader/parse split with a condvar-only-when-parked handoff plus a short non-blocking spin in the
-macOS reader (`felis-pty`'s sink-mode doc owns the numbers, including why neither half works alone) reaches ~666 fps,
-and bulk accept reaches 250 MB/s against the inline path's 210. The session's owner task keeps only what is downstream
-of the parse (effect replay, diff compose, fan-out), reaching the shared parser+grid unit through a `parking_lot::Mutex`
-whose `!Send` guard makes holding it across an `await` a compile error. The owner task coalesces its per-chunk work
-under a flood so it does not contend the parse thread off that lock, takes the lock once per cycle, and the lock hands
-off to a waiting owner task so the parse thread cannot starve it off in turn (see [pipeline.md](rendering/pipeline.md)
-"Demand-driven emission", which argues the choice of lock).
+macOS reader (the perf-trace skill's `references/cost-maps.md` owns the numbers, including why neither half works alone)
+reaches ~666 fps, and bulk accept reaches 250 MB/s against the inline path's 210. The session's owner task keeps only
+what is downstream of the parse (effect replay, diff compose, fan-out), reaching the shared parser+grid unit through a
+`parking_lot::Mutex` whose `!Send` guard makes holding it across an `await` a compile error. The owner task coalesces
+its per-chunk work under a flood so it does not contend the parse thread off that lock, takes the lock once per cycle,
+and the lock hands off to a waiting owner task so the parse thread cannot starve it off in turn (see
+[pipeline.md](rendering/pipeline.md) "Demand-driven emission", which argues the choice of lock).
 
 Linux's PTY queue holds ~68 KiB (64 KiB of flip buffers plus the line discipline's 4 KiB read buffer), so the writer is
 not held to the reader chunk by chunk, and there the spin moves no DOOM-fire frame rate while costing 1.4 to 2.1 s of
