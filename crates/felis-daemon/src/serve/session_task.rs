@@ -9114,7 +9114,7 @@ mod tests {
         cmd.env_clear();
         cmd.env("PATH", "/bin:/usr/bin");
         let spawned = crate::SpawnedPty::spawn(cmd).expect("spawn /bin/sh");
-        Arc::new(spawned.child)
+        Arc::new(spawned.pty.child)
     }
 
     async fn pid_from(path: &std::path::Path) -> i32 {
@@ -9796,13 +9796,10 @@ mod tests {
                 "holder={holder:?}: the mark ends the wait, not the exit: {events:?}"
             );
             assert_eq!(task.prepare_send(None, &[]), Prepared::Ended);
-            if let Some(pid) = task
-                .session
-                .child
-                .process_id()
-                .unwrap()
-                .and_then(rustix::process::Pid::from_raw)
-            {
+            let handover =
+                felis_pty::handover::Handover::of(&task.session.resizer, &task.session.child)
+                    .unwrap();
+            if let Some(pid) = rustix::process::Pid::from_raw(handover.pid()) {
                 rustix::process::kill_process_group(pid, rustix::process::Signal::HUP)
                     .unwrap_or_default();
             }

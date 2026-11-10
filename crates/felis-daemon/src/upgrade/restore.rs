@@ -259,6 +259,7 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
+    use felis_pty::handover::Handover;
 
     /// A real PTY child whose master the predecessor would carry: its
     /// first owner parked, so the adopter alone reads and writes it.
@@ -267,10 +268,10 @@ mod tests {
         cmd.arg("-c").arg(script);
         let spawned = SpawnedPty::spawn(cmd).unwrap();
         std::thread::sleep(Duration::from_millis(300));
-        spawned.quiescer.park(Duration::from_secs(2)).unwrap();
-        let master = spawned.resizer.master_fd().try_clone_to_owned().unwrap();
-        let pid = spawned.child.process_id().unwrap().unwrap();
-        (master, pid, spawned)
+        spawned.pty.quiescer.park(Duration::from_secs(2)).unwrap();
+        let handover = Handover::of(&spawned.pty.resizer, &spawned.pty.child).unwrap();
+        let pid = handover.pid();
+        (handover.into_master(), pid, spawned)
     }
 
     fn restored(title: Option<&str>) -> Restored {
@@ -292,7 +293,14 @@ mod tests {
     /// successor signals it. Resuming lets the reap go ahead.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_held_session_does_not_reap_its_exited_child_until_resumed() {
-        let (master, pid, _first) = carried_child("sleep 0.5");
+        let tmp = tempfile::tempdir().unwrap();
+        let trigger = tmp.path().join("exit");
+        // Exits only once triggered, after the session is held: the
+        // snapshot reaps a child that has already exited.
+        let (master, pid, _first) = carried_child(&format!(
+            "until [ -e '{}' ]; do sleep 0.05; done",
+            trigger.display()
+        ));
         let session = Session::from_spawned(
             SpawnedPty::adopt(
                 Adopted::inherited(master, pid, None).unwrap(),
@@ -322,6 +330,7 @@ mod tests {
             .await
             .unwrap();
         settled.await.unwrap();
+        std::fs::write(&trigger, b"").unwrap();
 
         let pid = Pid::from_raw(pid).unwrap();
         let deadline = Instant::now() + Duration::from_secs(5);
@@ -437,9 +446,10 @@ mod tests {
         ));
         let spawned = SpawnedPty::spawn(cmd).unwrap();
         tokio::time::sleep(Duration::from_millis(300)).await;
-        spawned.quiescer.park(Duration::from_secs(2)).unwrap();
-        let master = spawned.resizer.master_fd().try_clone_to_owned().unwrap();
-        let pid = spawned.child.process_id().unwrap().unwrap();
+        spawned.pty.quiescer.park(Duration::from_secs(2)).unwrap();
+        let handover = Handover::of(&spawned.pty.resizer, &spawned.pty.child).unwrap();
+        let pid = handover.pid();
+        let master = handover.into_master();
 
         let mut core = ParseCore::new(24, 80);
         core.parser.advance(&mut core.grid, b"\x1b[c");

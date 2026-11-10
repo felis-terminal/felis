@@ -8,7 +8,7 @@ use std::env;
 use std::sync::{Arc, LazyLock};
 
 use felis_protocol::SessionHex;
-use felis_pty::{ChildHandle, Command, PtyEof, PtyError, PtyWriter, Resizer, Size};
+use felis_pty::{Command, PtyError, PtyParts, Size};
 use felis_transport::env::{SESSION_ID_ENV, SOCKET_ENV};
 
 use crate::parse_sink::ParseSignals;
@@ -186,14 +186,9 @@ const DEFAULT_TERM_PROGRAM: &str = "felis";
 /// with the async-side state.
 #[doc(hidden)]
 pub struct SpawnedPty {
-    pub eof: PtyEof,
-    pub writer: PtyWriter,
-    pub child: ChildHandle,
-    pub resizer: Resizer,
+    pub pty: PtyParts,
     pub core: Arc<parking_lot::Mutex<ParseCore>>,
     pub signals: Arc<ParseSignals>,
-    /// Parks the PTY threads for an in-place upgrade.
-    pub quiescer: felis_pty::Quiescer,
 }
 
 /// Points `felis-pty` at the `ConPTY` extraction directory that
@@ -257,7 +252,11 @@ impl SpawnedPty {
         #[cfg(windows)]
         use_felis_conpty_dir();
         let parts = felis_pty::spawn(command, size, sink)?;
-        Ok(Self::from_parts(parts, core, signals))
+        Ok(Self {
+            pty: parts,
+            core,
+            signals,
+        })
     }
 
     /// Starts a session an in-place upgrade carried over: the PTY and
@@ -272,30 +271,11 @@ impl SpawnedPty {
         let signals = Arc::new(ParseSignals::new());
         let sink = parse_sink::build_sink(Arc::clone(&core), Arc::clone(&signals));
         let parts = adopted.start(sink)?;
-        Ok(Self::from_parts(parts, core, signals))
-    }
-
-    fn from_parts(
-        parts: felis_pty::PtyParts,
-        core: Arc<parking_lot::Mutex<ParseCore>>,
-        signals: Arc<ParseSignals>,
-    ) -> Self {
-        let felis_pty::PtyParts {
-            eof,
-            writer,
-            child,
-            resizer,
-            quiescer,
-        } = parts;
-        Self {
-            eof,
-            writer,
-            child,
-            resizer,
+        Ok(Self {
+            pty: parts,
             core,
             signals,
-            quiescer,
-        }
+        })
     }
 }
 
@@ -490,7 +470,10 @@ mod tests {
             pixel_height: 640,
         };
         let spawned = SpawnedPty::spawn_sized(cmd, size).expect("spawn /bin/sh");
-        let winsize = rustix::termios::tcgetwinsize(spawned.resizer.master_fd()).expect("winsize");
+        let master = felis_pty::handover::Handover::of(&spawned.pty.resizer, &spawned.pty.child)
+            .expect("hand over")
+            .into_master();
+        let winsize = rustix::termios::tcgetwinsize(&master).expect("winsize");
         assert_eq!(
             (
                 winsize.ws_row,
@@ -518,7 +501,10 @@ mod tests {
             pixel_height: 0,
         };
         let spawned = SpawnedPty::spawn_sized(cmd, size).expect("spawn /bin/sh");
-        let winsize = rustix::termios::tcgetwinsize(spawned.resizer.master_fd()).expect("winsize");
+        let master = felis_pty::handover::Handover::of(&spawned.pty.resizer, &spawned.pty.child)
+            .expect("hand over")
+            .into_master();
+        let winsize = rustix::termios::tcgetwinsize(&master).expect("winsize");
         assert_eq!(
             (
                 winsize.ws_row,
@@ -609,10 +595,14 @@ mod tests {
     /// before child processes have echoed output.
     async fn read_until_output_complete(pty: SpawnedPty) -> Arc<parking_lot::Mutex<ParseCore>> {
         let SpawnedPty {
-            mut eof,
+            pty:
+                PtyParts {
+                    mut eof,
+                    child,
+                    resizer,
+                    ..
+                },
             core,
-            child,
-            resizer,
             ..
         } = pty;
         #[cfg(windows)]

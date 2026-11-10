@@ -191,13 +191,16 @@ impl Session {
     #[must_use]
     pub fn from_spawned(spawned: crate::SpawnedPty) -> Self {
         let crate::SpawnedPty {
-            eof,
-            writer,
-            child,
-            resizer,
+            pty:
+                felis_pty::PtyParts {
+                    eof,
+                    writer,
+                    child,
+                    resizer,
+                    quiescer,
+                },
             core,
             signals,
-            quiescer,
         } = spawned;
         Self {
             core,
