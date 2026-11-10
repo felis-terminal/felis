@@ -1726,8 +1726,6 @@ const HANGUP_GRACE: Duration = Duration::from_secs(2);
 #[cfg(test)]
 const HANGUP_GRACE: Duration = Duration::from_millis(250);
 
-const HANGUP_POLL: Duration = Duration::from_millis(50);
-
 /// How long the reap after the `SIGKILL` is polled for. Bounded so a
 /// child stuck in uninterruptible sleep cannot hold [`end_child`] open
 /// for the connection's life.
@@ -1751,16 +1749,12 @@ pub(crate) async fn end_child(child: &ChildHandle) {
         Ok(true) => {}
         Err(err) => warn!(?err, "session teardown: hangup"),
     }
-    let deadline = Instant::now() + HANGUP_GRACE;
-    while Instant::now() < deadline {
-        tokio::time::sleep(HANGUP_POLL).await;
-        match child.try_wait() {
-            Ok(Some(_)) => return,
-            Ok(None) => {}
-            Err(err) => {
-                warn!(?err, "session teardown: waiting on the child");
-                return;
-            }
+    match child.wait_timeout(HANGUP_GRACE).await {
+        Ok(Some(_)) => return,
+        Ok(None) => {}
+        Err(err) => {
+            warn!(?err, "session teardown: waiting on the child");
+            return;
         }
     }
     match child.kill() {
@@ -1768,24 +1762,13 @@ pub(crate) async fn end_child(child: &ChildHandle) {
         Ok(false) => {}
         Err(err) => warn!(?err, "session teardown: kill"),
     }
-    // Polled to an observed exit, not looked at once: `SIGKILL` is
+    // Waited to an observed exit, not looked at once: `SIGKILL` is
     // delivered, not completed, so a single look can miss it and leave a
     // zombie the daemon parents for the rest of its life.
-    let deadline = Instant::now() + REAP_GRACE;
-    loop {
-        tokio::time::sleep(HANGUP_POLL).await;
-        match child.try_wait() {
-            Ok(Some(_)) => return,
-            Ok(None) => {}
-            Err(err) => {
-                warn!(?err, "session teardown: reaping the killed child");
-                return;
-            }
-        }
-        if Instant::now() >= deadline {
-            warn!("session teardown: the killed child was not reaped within the grace");
-            return;
-        }
+    match child.wait_timeout(REAP_GRACE).await {
+        Ok(Some(_)) => {}
+        Ok(None) => warn!("session teardown: the killed child was not reaped within the grace"),
+        Err(err) => warn!(?err, "session teardown: reaping the killed child"),
     }
 }
 
