@@ -2851,20 +2851,8 @@ pub(crate) fn spawn_with_args(
     {
         return Err(SessionError::Spawn(format!("SpawnArgs: {err}")));
     }
-    let in_daemon_cwd = || {
-        SpawnedPty::spawn_sized(
-            command_from_args(args, factory, session_id, None, &env, terminfo_dir),
-            size,
-        )
-        .map(|pty| SpawnedWithArgs {
-            pty,
-            cwd: daemon_cwd(),
-        })
-    };
-    let Some(dir) = spawn_cwd(args) else {
-        return in_daemon_cwd();
-    };
-    if !dir.is_absolute() {
+    let dir = spawn_cwd(args);
+    if dir.is_some_and(|dir| !dir.is_absolute()) {
         // A relative cwd would resolve against the daemon's directory, which
         // froze at auto-spawn (`/` for a macOS GUI autospawn).
         return Err(SessionError::Spawn(format!(
@@ -2872,10 +2860,19 @@ pub(crate) fn spawn_with_args(
             args.cwd
         )));
     }
-    match SpawnedPty::spawn_sized(
-        command_from_args(args, factory, session_id, Some(dir), &env, terminfo_dir),
-        size,
-    ) {
+    let cmd = command_from_args(args, factory, session_id, &env, terminfo_dir);
+    let in_daemon_cwd = |cmd| {
+        SpawnedPty::spawn_sized(cmd, size).map(|pty| SpawnedWithArgs {
+            pty,
+            cwd: daemon_cwd(),
+        })
+    };
+    let Some(dir) = dir else {
+        return in_daemon_cwd(cmd);
+    };
+    let mut in_dir = cmd.clone();
+    in_dir.cwd(dir);
+    match SpawnedPty::spawn_sized(in_dir, size) {
         Ok(pty) => Ok(SpawnedWithArgs {
             pty,
             cwd: Some(args.cwd.clone()),
@@ -2889,7 +2886,7 @@ pub(crate) fn spawn_with_args(
                 %err,
                 "requested cwd unusable; starting the default shell in the daemon's cwd"
             );
-            in_daemon_cwd()
+            in_daemon_cwd(cmd)
         }
         Err(err) => Err(err),
     }
@@ -2912,14 +2909,12 @@ fn spawn_cwd(args: &felis_protocol::messages::SpawnArgs) -> Option<&Path> {
     (!args.cwd.is_empty()).then(|| Path::new(&args.cwd))
 }
 
-/// `cwd` is passed rather than read off `args` so the bare-launch
-/// fallback can rebuild the same command without one
-/// (`felis_pty::Command` is not `Clone`).
+/// Without the cwd: the caller sets it, keeping a copy without one for
+/// the bare-launch fallback.
 fn command_from_args(
     args: &felis_protocol::messages::SpawnArgs,
     factory: &SessionFactory,
     session_id: u128,
-    cwd: Option<&Path>,
     env: &ResolvedEnv,
     terminfo_dir: Option<&Path>,
 ) -> felis_pty::Command {
@@ -2934,25 +2929,21 @@ fn command_from_args(
         }
         cmd
     };
-    apply_spawn_posture(&mut cmd, session_id, cwd, env, &args.env, terminfo_dir);
+    apply_spawn_posture(&mut cmd, session_id, env, &args.env, terminfo_dir);
     cmd
 }
 
-/// Apply session spawn posture: cwd, identity stamps, and caller env overrides.
+/// Apply session spawn posture: identity stamps and caller env overrides.
 ///
 /// Caller pairs may override unreserved identity stamps, but cannot set
 /// `FELIS_SESSION_ID` or denylisted variables checked upstream.
 fn apply_spawn_posture(
     cmd: &mut felis_pty::Command,
     session_id: u128,
-    cwd: Option<&Path>,
     resolved: &ResolvedEnv,
     env: &[(String, String)],
     terminfo_dir: Option<&Path>,
 ) {
-    if let Some(dir) = cwd {
-        cmd.cwd(dir);
-    }
     // First, and by replacement: `Command::new` snapshotted the daemon's
     // environment, and leaving it under a base would keep exactly the
     // stale entries the base was sent to displace.
