@@ -484,15 +484,10 @@ const fn fault(_: Fault) -> bool {
     false
 }
 
-/// CoreGraphics dilates a smoothed outline by an amount it does not
-/// document, and Skia notes it grows with the size, so the pad does too.
-#[expect(
-    clippy::cast_possible_truncation,
-    reason = "the side limit rejects any pad near i64's range"
-)]
-fn pad(px: f32) -> i64 {
-    1 + (px / 16.0).ceil() as i64
-}
+/// CoreGraphics' dilation reached at most one pixel past the unhinted
+/// outline's box at 6–4096 px on macOS 26, so the pad does not grow with
+/// the size; the second pixel keeps the canvas's outer ring empty.
+const PAD: i64 = 2;
 
 enum Unpainted {
     OverLimit,
@@ -523,10 +518,9 @@ impl Canvas {
         smooth: bool,
     ) -> Result<Self, Unpainted> {
         let [left, top, right, bottom] = ink_box.map(i64::from);
-        let pad = pad(px);
         let side = coverage::side_limit(px).ok_or(Unpainted::OverLimit)?;
         let span = |from: i64, to: i64| {
-            usize::try_from(to - from + 2 * pad)
+            usize::try_from(to - from + 2 * PAD)
                 .ok()
                 .filter(|&n| n as f32 <= side)
                 .ok_or(Unpainted::OverLimit)
@@ -537,10 +531,10 @@ impl Canvas {
             .filter(|&bytes| bytes <= coverage::IMAGE_BUDGET)
             .ok_or(Unpainted::OverLimit)?;
         let edge = |v: i64| i32::try_from(v).map_err(|_| Unpainted::OverLimit);
-        let (canvas_left, canvas_top) = (edge(left - pad)?, edge(top + pad)?);
+        let (canvas_left, canvas_top) = (edge(left - PAD)?, edge(top + PAD)?);
         let mut data = vec![0; width * height];
         #[expect(clippy::cast_precision_loss, reason = "the side limit bounds both")]
-        let origin = CGPoint::new((pad - left) as f64, (pad - bottom) as f64);
+        let origin = CGPoint::new((PAD - left) as f64, (PAD - bottom) as f64);
         if !draw(ct, glyph, origin, width, Format::Gray, smooth, &mut data) {
             return Err(Unpainted::NoContext);
         }

@@ -506,16 +506,16 @@ atlas key (see "Atlas integration" above). At HiDPI the difference is marginal, 
 smaller and the cache key simpler.
 
 **macOS outlines: CoreText draws them.** CoreText draws text unhinted, and its font smoothing dilates each outline by an
-amount it sets from `AppleFontSmoothing`, the size and the fill; that is the weight of every native window, so felis has
-CoreText draw a face's monochrome outlines in white on black into a gray bitmap, with the smoothing on unless
-`AppleFontSmoothing` is `0`. Everything else stays felis's: CoreText reads the face from the bytes harfrust shaped, so
-glyph ids agree; the bitmap is the box of the face's unhinted outline grown by a pad for the dilation; and cell metrics,
-advances and color glyphs are the same on every platform. A face with color tables draws its outlines through felis's
-rasterizer too, since CoreText would draw their color rendering into the mask. A face CoreText cannot prove it opened as
-felis shaped it (its PostScript name, glyph count and variation read back) draws through felis's rasterizer instead.
-CoreText's pixels change with every macOS major, so its tests pin none: they check what felis decides (the face and
-instance CoreText opened, the smoothing setting that reaches the draw, placement against the unhinted outline), and the
-weight against Terminal.app is measured by hand. Rejected:
+amount it sets from the size and the fill; that is the weight of every native window, so felis has CoreText draw a
+face's monochrome outlines in white on black into a gray bitmap, with the smoothing on unless `AppleFontSmoothing` is
+`0`. Everything else stays felis's: CoreText reads the face from the bytes harfrust shaped, so glyph ids agree; the
+bitmap is the box of the face's unhinted outline grown by a pad for the dilation; and cell metrics, advances and color
+glyphs are the same on every platform. A face with color tables draws its outlines through felis's rasterizer too, since
+CoreText would draw their color rendering into the mask. A face CoreText cannot prove it opened as felis shaped it (its
+PostScript name, glyph count and variation read back) draws through felis's rasterizer instead. CoreText's pixels change
+with every macOS major, so its tests pin none: they check what felis decides (the face and instance CoreText opened, the
+smoothing setting that reaches the draw, placement against the unhinted outline), and the weight against Terminal.app is
+measured by hand. Rejected:
 
 - **Stem darkening in felis's own rasterizer.** One rasterizer and bit-exact goldens on every host, but the dilation it
   would fit is undocumented and varies with the smoothing level, the fill and the size: a fit to Menlo at 14 pt drifts

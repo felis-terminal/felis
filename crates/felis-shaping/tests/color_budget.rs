@@ -311,7 +311,7 @@ fn color_glyphs_charged_just_under_the_budget_peak_within_it() {
         },
     ];
     // CoreText draws into one canvas, its only image-sized buffer: `M`'s
-    // at 5655 px is 3414 × 4839 with its pad, 99.97% of the budget. A
+    // at 6872 px is 3290 × 5021 with its pad, 99.99% of the budget. A
     // pixel larger passes it, so it draws nothing and allocates no image.
     #[cfg(target_os = "macos")]
     draws.extend([
@@ -319,15 +319,15 @@ fn color_glyphs_charged_just_under_the_budget_peak_within_it() {
             label: "CoreText canvas near the budget",
             face: monaspace,
             glyph: glyph_of(MONASPACE, 'M').expect("Monaspace maps M"),
-            px: 5655.0,
-            expect: |b| assert!(coverage(b).0 > 2700),
+            px: 6872.0,
+            expect: |b| assert!(coverage(b).0 > 3200),
             peak: PEAK,
         },
         Draw {
             label: "CoreText canvas past the budget",
             face: monaspace,
             glyph: glyph_of(MONASPACE, 'M').expect("Monaspace maps M"),
-            px: 5656.0,
+            px: 6873.0,
             expect: |b| assert_eq!(coverage(b), (0, 0)),
             peak: SEGMENT_SCRATCH + OVERHEAD,
         },

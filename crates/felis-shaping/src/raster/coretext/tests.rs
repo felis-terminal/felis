@@ -8,8 +8,8 @@ use objc2_core_graphics::CGGlyph;
 use objc2_core_text::{CTFont, CTFontDescriptor};
 
 use super::{
-    Canvas, CoreTextOutlines, Drawn, Fault, Format, SmoothingPreference, descriptors_from_data,
-    draw, font_from_descriptor, font_smoothing, inject, pad,
+    Canvas, CoreTextOutlines, Drawn, Fault, Format, PAD, SmoothingPreference,
+    descriptors_from_data, draw, font_from_descriptor, font_smoothing, inject,
 };
 use crate::{
     Font, FontBytes, GlyphBitmap, GlyphId, WGHT, goldens, map_face_file, metadata,
@@ -278,7 +278,7 @@ fn check(name: &str, c: char, px: f32, pair: &Pair, failures: &mut Vec<String>) 
             [sl, st, sr, sb]
         ));
     }
-    let grow = i32::try_from(pad(px)).expect("a small pad");
+    let grow = i32::try_from(PAD - 1).expect("a small pad");
     if !(cl >= sl - grow && cr <= sr + grow && ct_top <= st + grow && cb >= sb - grow) {
         fail(format!(
             "CoreText box {:?} passes skrifa's {:?} grown by {grow}",
@@ -362,6 +362,28 @@ fn check_faces(faces: &[(String, Font)]) {
 #[test]
 fn coretext_glyphs_sit_where_skrifas_do() {
     check_faces(&corpus());
+}
+
+/// The largest canvas the image budget admits, which the property sizes
+/// stop far short of, still leaves the pad's outer pixel unpainted.
+#[test]
+fn a_canvas_at_the_budget_keeps_its_outer_ring_empty() {
+    let font = load("opentype/MonaspaceNeon-Regular.otf");
+    let glyph = font.glyph_for('M').expect("Monaspace maps M");
+    let px = 6872.0;
+    let ink_box = SkrifaOutlines::default()
+        .layer_box(&font, glyph, px)
+        .expect("M has an outline");
+    let ctf = CoreTextOutlines::default()
+        .font(&font, px)
+        .expect("CoreText opens the face");
+    let id = CGGlyph::try_from(glyph).expect("a 16-bit glyph id");
+    let Ok(canvas) = Canvas::draw(&ctf, id, ink_box, px, font_smoothing().smooths()) else {
+        panic!("the budget admits the canvas");
+    };
+    assert!(canvas.width * canvas.height > super::coverage::IMAGE_BUDGET * 999 / 1000);
+    assert!(canvas.data.iter().any(|&v| v != 0), "the canvas holds ink");
+    assert!(ring_is_empty(&canvas));
 }
 
 /// `glyph` as CoreText draws it without smoothing, which leaves its
