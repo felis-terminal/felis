@@ -35,8 +35,8 @@ Dropping `ChildHandle` never signals the child. The child ends when it exits on 
 ## Platform differences
 
 - Windows runs shells on a `ConPTY` host this crate bundles, or on the system's own host when the process is not at
-  Medium integrity. `set_conpty_dir` names the directory the bundled host is extracted to; it refuses every spawn until
-  that is set.
+  Medium integrity. `set_conpty_dir` names the directory the bundled host is extracted to; a spawn on the bundled host
+  fails until it is set, while the system's host needs no directory.
 - `Resizer::foreground_pgrp` is `None` on Windows.
 - `Resizer::output_drained` is always `true` on Windows, where output the host has not rendered yet cannot be told apart
   from output already delivered.

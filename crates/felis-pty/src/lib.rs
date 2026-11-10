@@ -74,11 +74,11 @@ pub struct PtyParts {
     pub quiescer: Quiescer,
 }
 
-/// Dropping this does *not* end the child, and neither does dropping
-/// the [`Resizer`]: the reader thread holds its own dup of the master
-/// until EOF, and EOF is the child exiting. A teardown that wants the
-/// child gone says so through [`hangup`](ChildHandle::hangup) or
-/// [`kill`](ChildHandle::kill).
+/// Dropping this never signals the child. On Unix neither does dropping
+/// the [`Resizer`], since the reader thread holds its own dup of the
+/// master; on Windows that closes the pseudoconsole. A teardown that
+/// wants the child gone says so through [`hangup`](ChildHandle::hangup)
+/// or [`kill`](ChildHandle::kill).
 pub struct ChildHandle {
     child: Mutex<platform::Child>,
 }
@@ -352,8 +352,8 @@ fn writer_gone() -> io::Error {
 }
 
 /// The child's input. Bytes queue to a dedicated writer thread, so a
-/// child that stops reading never blocks the caller; the queue is bounded
-/// by [`PTY_WRITE_PENDING_CAP`].
+/// child that stops reading never blocks the caller; unreserved bytes in
+/// the queue are bounded by [`PTY_WRITE_PENDING_CAP`].
 pub struct PtyWriter {
     /// `None` past [`AsyncWrite::poll_shutdown`]: closing the channel
     /// is what ends the writer thread, and a shut-down writer must
