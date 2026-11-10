@@ -1,12 +1,15 @@
 //! The rasterization gateway behind [`crate::ShapeCache`]: `COLR` layers,
 //! then `sbix`/`CBDT` strikes for a color face, then the monochrome
-//! outline, all outlines through skrifa and [`coverage`].
+//! outline, through skrifa and [`coverage`], or through CoreText for a
+//! face without color tables on macOS.
 
 use skrifa::{DrawMemory, HintOptions, PathSink, RasterTarget, ScalerFont};
 
 use crate::{Font, GlyphBitmap, GlyphId, GlyphPixels, provider::FaceHinting};
 
 mod color;
+#[cfg(target_os = "macos")]
+mod coretext;
 pub(crate) mod coverage;
 mod resample;
 mod strike;
@@ -19,6 +22,17 @@ use coverage::{PathEl, Point};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct RasterOptions {
     pub(crate) hinting: Hinting,
+    pub(crate) outlines: Outlines,
+}
+
+/// Which rasterizer draws a face's monochrome outlines.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Outlines {
+    Skrifa,
+    /// CoreText, falling back to skrifa for a face or glyph it cannot
+    /// draw.
+    #[cfg(target_os = "macos")]
+    CoreText,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -34,8 +48,13 @@ pub(crate) enum Hinting {
 impl RasterOptions {
     pub(crate) const NEVER_HINTED: Self = Self {
         hinting: Hinting::Never,
+        outlines: Outlines::Skrifa,
     };
 
+    #[cfg_attr(
+        all(target_os = "macos", not(test)),
+        expect(dead_code, reason = "macOS draws through CoreText")
+    )]
     pub(crate) fn hinted() -> Self {
         Self {
             hinting: Hinting::Hinted(
@@ -43,6 +62,7 @@ impl RasterOptions {
                     .with_target(RasterTarget::Lcd)
                     .with_preserve_linear_metrics(true),
             ),
+            outlines: Outlines::Skrifa,
         }
     }
 
@@ -52,13 +72,22 @@ impl RasterOptions {
         hinting.map_or_else(Self::platform, Self::fontconfig)
     }
 
-    /// Unhinted on macOS: CoreText never grid-fits, so a hinted raster
-    /// sits beside every native window with stems snapped a pixel off. A
-    /// Linux face outside fontconfig takes fontconfig's stock `hintslight`.
+    /// CoreText draws, so text has the weight every native window draws;
+    /// it never grid-fits, so the box it draws into comes from the
+    /// unhinted outline.
+    #[cfg(target_os = "macos")]
+    const fn platform() -> Self {
+        Self {
+            hinting: Hinting::Never,
+            outlines: Outlines::CoreText,
+        }
+    }
+
+    /// A Linux face outside fontconfig takes fontconfig's stock
+    /// `hintslight`.
+    #[cfg(not(target_os = "macos"))]
     fn platform() -> Self {
-        if cfg!(target_os = "macos") {
-            Self::NEVER_HINTED
-        } else if cfg!(windows) {
+        if cfg!(windows) {
             Self::hinted()
         } else {
             Self::fontconfig(FaceHinting::Slight { autohint: false })
@@ -86,7 +115,10 @@ impl RasterOptions {
                 Hinting::Hinted(engine(autohint).with_target(RasterTarget::Normal))
             }
         };
-        Self { hinting }
+        Self {
+            hinting,
+            outlines: Outlines::Skrifa,
+        }
     }
 }
 
@@ -99,6 +131,8 @@ pub(crate) trait OutlineBackend {
 #[derive(Default)]
 pub(crate) struct Rasterizer {
     outlines: SkrifaOutlines,
+    #[cfg(target_os = "macos")]
+    core_text: coretext::CoreTextOutlines,
 }
 
 impl Rasterizer {
@@ -108,9 +142,23 @@ impl Rasterizer {
         {
             return bitmap;
         }
-        self.outlines
-            .coverage(font, glyph, px)
+        self.outline(font, glyph, px)
             .unwrap_or_else(GlyphBitmap::blank)
+    }
+
+    fn outline(&mut self, font: &Font, glyph: GlyphId, px: f32) -> Option<GlyphBitmap> {
+        // A face's color tables decide, not `font.color`: an
+        // `outlines_only` view still has them, and CoreText would draw
+        // their color rendering into the mask.
+        #[cfg(target_os = "macos")]
+        if font.raster.outlines == Outlines::CoreText && !font.color_tables {
+            match self.core_text.coverage(&mut self.outlines, font, glyph, px) {
+                coretext::Drawn::Glyph(bitmap) => return Some(bitmap),
+                coretext::Drawn::Nothing => return None,
+                coretext::Drawn::Skrifa => {}
+            }
+        }
+        self.outlines.coverage(font, glyph, px)
     }
 
     fn color_glyph(&mut self, font: &Font, glyph: GlyphId, px: f32) -> Option<GlyphBitmap> {
@@ -201,8 +249,9 @@ impl SkrifaOutlines {
         })
     }
 
-    /// The pixel box a `COLR` layer's coverage is drawn into, as the face
-    /// hints it; empty for a layer that draws nothing.
+    /// The pixel box a `COLR` layer's coverage, or a CoreText outline
+    /// before its dilation, is drawn into, as the face hints it; empty for
+    /// a glyph that draws nothing.
     fn layer_box(&mut self, font: &Font, glyph: GlyphId, px: f32) -> Option<[i32; 4]> {
         self.with_layer_path(font, glyph, px, |path, segments| match path {
             Some(path) => coverage::pixel_box(path, px, segments),

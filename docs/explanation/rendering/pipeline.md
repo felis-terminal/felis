@@ -111,8 +111,9 @@ affected, by the difference between the assumed and the real background. The pai
 search highlights are an overlay on cached rows, so tracking them would repaint every row per search keystroke; the
 error is accepted rather than tracked.
 
-macOS keeps plain linear blending, as ghostty does there, until it is measured against the platform's own text. The
-rejected alternatives:
+macOS keeps plain linear blending, as ghostty does there. CoreText's font smoothing already dilates the mask
+(text-shaping.md, "macOS outlines"), and blended linearly it lands within 10% of Terminal.app's ink in both a dark and a
+light theme; the remap on top adds 12% too much in the light one. The rejected alternatives:
 
 - **Plain linear blending everywhere.** The weight shift above, in both directions at once.
 - **sRGB-space blending.** It matches the fonts' tuning, but mixing encoded values darkens the edge between saturated

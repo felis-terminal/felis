@@ -179,18 +179,27 @@ const COLR: &str = "../color-probe/FelisColorProbe.ttf";
 const MASK: &str = "../color-probe/FelisBitmapProbe.ttf";
 const NOTO: &str = "NotoColorEmoji.ttf";
 const COLR_V1: &str = "../colrv1/FelisColrV1Probe.ttf";
+const MONASPACE: &str = "opentype/MonaspaceNeon-Regular.otf";
 
 /// A flag ligature, reached by glyph id as no one code point maps it.
 const DEEPEST_V1_GLYPH: u32 = 190;
 
-/// One glyph drawn in turn, and what its bitmap must be.
+/// One glyph drawn in turn, what its bitmap must be, and the peak heap
+/// it may reach.
 struct Draw {
     label: &'static str,
     face: usize,
     glyph: u32,
     px: f32,
     expect: fn(&GlyphBitmap),
+    peak: usize,
 }
+
+const PEAK: usize = WORKING_SET + OVERHEAD;
+
+/// The segment scratch a rasterizer keeps between glyphs, at its cap.
+#[cfg(target_os = "macos")]
+const SEGMENT_SCRATCH: usize = 16_000 * 16;
 
 /// Every source near the budget, through one rasterizer, after the draws
 /// that leave it holding the most between glyphs: the subset's longest
@@ -204,17 +213,22 @@ fn color_glyphs_charged_just_under_the_budget_peak_within_it() {
         stack(MASK, "Felis Bitmap Probe"),
         stack(NOTO, "Noto Color Emoji"),
         stack(COLR_V1, "Noto Color Emoji"),
+        stack(MONASPACE, "Monaspace Neon"),
     ];
     let (cjk, colr, mask, noto, colr_v1) = (0, 1, 2, 3, 4);
+    #[cfg(target_os = "macos")]
+    let monaspace = 5;
     let colr_glyph = |c| glyph_of(COLR, c).expect("the probe maps it");
     let mask_glyph = |c| glyph_of(MASK, c).expect("the probe maps it");
-    let draws = [
+    #[cfg_attr(not(target_os = "macos"), expect(unused_mut))]
+    let mut draws = vec![
         Draw {
             label: "the longest outline",
             face: cjk,
             glyph: most_complex_cjk_glyph(CJK).expect("the CJK subset maps glyphs"),
             px: 40_000.0,
             expect: |_| {},
+            peak: PEAK,
         },
         Draw {
             label: "COLR at 16 px",
@@ -222,6 +236,7 @@ fn color_glyphs_charged_just_under_the_budget_peak_within_it() {
             glyph: colr_glyph('A'),
             px: 16.0,
             expect: |b| assert!(color(b).0 > 0),
+            peak: PEAK,
         },
         // `C`'s layers lie too far apart for the budget, so it draws its
         // 500 × 700-unit outline: 1140 × 1596 cells, 99.1% of the budget.
@@ -231,6 +246,7 @@ fn color_glyphs_charged_just_under_the_budget_peak_within_it() {
             glyph: colr_glyph('C'),
             px: 2280.0,
             expect: |b| assert!(coverage(b).0 > 1100),
+            peak: PEAK,
         },
         // A 2032-pixel-square canvas, 99.96% of the budget, inked across
         // its span: the trimmed image is too large to shrink beside it.
@@ -240,6 +256,7 @@ fn color_glyphs_charged_just_under_the_budget_peak_within_it() {
             glyph: colr_glyph('E'),
             px: 2032.0,
             expect: |b| assert!(color(b).0 > 2000),
+            peak: PEAK,
         },
         // The same canvas inked in one corner: the trimmed image is a
         // speck, shrunk beside the canvas.
@@ -249,6 +266,7 @@ fn color_glyphs_charged_just_under_the_budget_peak_within_it() {
             glyph: colr_glyph('F'),
             px: 2032.0,
             expect: |b| assert!(color(b).0 < 40),
+            peak: PEAK,
         },
         // The Noto subset's glyph whose paint nests the most composites,
         // three, at the largest size whose canvas and stacked layers the
@@ -259,6 +277,7 @@ fn color_glyphs_charged_just_under_the_budget_peak_within_it() {
             glyph: DEEPEST_V1_GLYPH,
             px: 760.0,
             expect: |b| assert!(color(b).0 > 800),
+            peak: PEAK,
         },
         // Noto's 136 × 128 strike scaled to 2023 × 1904: the source, the
         // scratch and the scaled image are 99.95% of the budget.
@@ -268,6 +287,7 @@ fn color_glyphs_charged_just_under_the_budget_peak_within_it() {
             glyph: glyph_of(NOTO, '😀').expect("Noto maps it"),
             px: 1622.0,
             expect: |b| assert_eq!(color(b), (2023, 1904)),
+            peak: PEAK,
         },
         // A 255-pixel mask scaled to 1888 pixels: 99.5% of the budget, and
         // the scaled image with its coverage copy would pass it.
@@ -277,6 +297,7 @@ fn color_glyphs_charged_just_under_the_budget_peak_within_it() {
             glyph: mask_glyph('D'),
             px: 237.0,
             expect: |b| assert_eq!(coverage(b), (1888, 1888)),
+            peak: PEAK,
         },
         // Scaled to 1593 pixels, the scaled image and its coverage copy
         // fit the budget together, so the coverage is shrunk.
@@ -286,8 +307,31 @@ fn color_glyphs_charged_just_under_the_budget_peak_within_it() {
             glyph: mask_glyph('D'),
             px: 200.0,
             expect: |b| assert_eq!(coverage(b), (1593, 1593)),
+            peak: PEAK,
         },
     ];
+    // CoreText draws into one canvas, its only image-sized buffer: `M`'s
+    // at 6872 px is 3290 × 5021 with its pad, 99.99% of the budget. A
+    // pixel larger passes it, so it draws nothing and allocates no image.
+    #[cfg(target_os = "macos")]
+    draws.extend([
+        Draw {
+            label: "CoreText canvas near the budget",
+            face: monaspace,
+            glyph: glyph_of(MONASPACE, 'M').expect("Monaspace maps M"),
+            px: 6872.0,
+            expect: |b| assert!(coverage(b).0 > 3200),
+            peak: PEAK,
+        },
+        Draw {
+            label: "CoreText canvas past the budget",
+            face: monaspace,
+            glyph: glyph_of(MONASPACE, 'M').expect("Monaspace maps M"),
+            px: 6873.0,
+            expect: |b| assert_eq!(coverage(b), (0, 0)),
+            peak: SEGMENT_SCRATCH + OVERHEAD,
+        },
+    ]);
     let mut cache = ShapeCache::default();
     let before = HEAP.reset();
     for draw in draws {
@@ -296,9 +340,10 @@ fn color_glyphs_charged_just_under_the_budget_peak_within_it() {
         let peak = HEAP.peak.load(Ordering::Relaxed) - before;
         (draw.expect)(&bitmap);
         assert!(
-            peak <= WORKING_SET + OVERHEAD,
-            "{}: peak {peak} bytes against a {WORKING_SET}-byte budget",
-            draw.label
+            peak <= draw.peak,
+            "{}: peak {peak} bytes against a {}-byte bound",
+            draw.label,
+            draw.peak
         );
     }
 }

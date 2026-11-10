@@ -171,7 +171,11 @@ impl FontStyle {
 pub struct Font {
     bytes: FontBytes,
     index: u32,
+    /// Whether the color sources are tried for this view.
     color: bool,
+    /// Whether the face has color tables, which an [`Font::outlines_only`]
+    /// view keeps.
+    color_tables: bool,
     /// Variation-axis position, one entry per axis; empty for a static
     /// face. Every scaler, shaper and metrics call must pass it, or a
     /// variable face draws its default instance whatever weight was asked.
@@ -278,6 +282,7 @@ impl Font {
             bytes,
             index: face_index,
             color,
+            color_tables: color,
             coords: Vec::new(),
             position: Vec::new(),
             face,
@@ -335,6 +340,7 @@ impl Font {
             bytes: self.bytes.clone(),
             index: self.index,
             color: self.color,
+            color_tables: self.color_tables,
             coords,
             position,
             face,

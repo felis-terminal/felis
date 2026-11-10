@@ -621,7 +621,21 @@ fn accumulate_row(row: &[Cell], out: &mut [u8]) {
     }
 }
 
-fn trim(mut data: Vec<u8>, width: usize, height: usize, left: i32, top: i32) -> Mask {
+fn trim(data: Vec<u8>, width: usize, height: usize, left: i32, top: i32) -> Mask {
+    let mut mask = trim_in_place(data, width, height, left, top);
+    mask.data.shrink_to_fit();
+    mask
+}
+
+/// [`trim`] keeping the buffer's capacity, for a caller whose budget
+/// charged no room for a relocating shrink.
+pub(crate) fn trim_in_place(
+    mut data: Vec<u8>,
+    width: usize,
+    height: usize,
+    left: i32,
+    top: i32,
+) -> Mask {
     let ink = |r: usize, c: usize| data[r * width + c] != 0;
     let row_ink = |r: &usize| (0..width).any(|c| ink(*r, c));
     let Some(r0) = (0..height).find(row_ink) else {
@@ -638,7 +652,6 @@ fn trim(mut data: Vec<u8>, width: usize, height: usize, left: i32, top: i32) -> 
             data.copy_within(src..src + w, i * w);
         }
         data.truncate(w * h);
-        data.shrink_to_fit();
     }
     Mask {
         width: w as u32,

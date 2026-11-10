@@ -140,13 +140,22 @@ objc2-core-foundation = { version = "0.3", default-features = false, features = 
   "CFString",
 ] }
 # The macOS face provider (felis-shaping): family matching, the user's
-# fixed-pitch font and the per-character fallback.
+# fixed-pitch font and the per-character fallback; with CoreGraphics, the
+# macOS outline rasterizer.
 objc2-core-text = { version = "0.3", default-features = false, features = [
   "std",
+  "objc2-core-graphics",
   "CTFont",
   "CTFontDescriptor",
   "CTFontManager",
   "CTFontTraits",
+] }
+objc2-core-graphics = { version = "0.3", default-features = false, features = [
+  "std",
+  "CGBitmapContext",
+  "CGColorSpace",
+  "CGContext",
+  "CGImage",
 ] }
 # The Windows face provider (felis-shaping): DirectWrite's collection,
 # family matching and per-character fallback. The version wgpu-hal pulls
