@@ -5,8 +5,8 @@
 use std::{path::Path, sync::Arc};
 
 use super::{
-    FaceProvider, FaceSource, MONOSPACE_FALLBACK_FAMILIES, ResolvedFace, ascii_is_fixed_pitch,
-    closest_style,
+    FaceHinting, FaceProvider, FaceSource, MONOSPACE_FALLBACK_FAMILIES, ResolvedFace,
+    ascii_is_fixed_pitch, closest_style,
 };
 use crate::{FaceStyle, FontBytes, ShapingError, metadata};
 
@@ -27,6 +27,8 @@ pub(crate) struct FileSet {
     faces: Vec<Face>,
     /// Takes the place of the platform's monospace default.
     monospace: Option<String>,
+    /// Takes the place of the platform's raster mode for every face.
+    hinting: Option<FaceHinting>,
 }
 
 impl FileSet {
@@ -88,6 +90,11 @@ impl FileSet {
         self.monospace = Some(family.to_owned());
     }
 
+    #[cfg(any(test, feature = "testing"))]
+    pub(crate) const fn set_hinting(&mut self, hinting: FaceHinting) {
+        self.hinting = Some(hinting);
+    }
+
     /// The style and fixed pitch the set recorded for `id`.
     #[cfg(all(test, not(windows)))]
     pub(crate) fn traits_of(&self, id: usize) -> Option<(FaceStyle, bool)> {
@@ -147,7 +154,7 @@ impl FaceProvider for FileSet {
             index: face.index,
             instance: None,
             slanted: face.style.italic,
-            hinting: None,
+            hinting: self.hinting,
         })
     }
 

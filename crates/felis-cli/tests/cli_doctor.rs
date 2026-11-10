@@ -523,10 +523,14 @@ fn a_failure_before_the_report_is_framed_as_json() {
 #[cfg(unix)]
 #[test]
 fn the_home_directory_is_collapsed_without_home_set() {
-    let Some(real_home) = std::env::var_os("HOME") else {
-        return;
-    };
-    let real_home = real_home.to_string_lossy().into_owned();
+    // The passwd entry rather than `$HOME`: a service account's `HOME`
+    // can name another directory, which an unset `HOME` never reaches.
+    let out = StdCommand::new("/bin/sh")
+        .args(["-c", "eval echo ~$(id -un)"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    let real_home = String::from_utf8(out.stdout).unwrap().trim().to_owned();
     let home = private_dir();
     let mut cmd = cli(&home);
     cmd.args(["doctor", "report", "--format", "json"])
@@ -535,7 +539,14 @@ fn the_home_directory_is_collapsed_without_home_set() {
         .env_remove("XDG_STATE_HOME");
     let (_, object) = report_json(&mut cmd);
     let json = object.to_string();
-    assert!(!json.contains(&real_home), "{json}");
+    let config = object["environment"]["config"]["path"].as_str().unwrap();
+    if real_home == "/" {
+        // Collapsing a root home would rewrite every absolute path.
+        assert!(config.starts_with('/'), "{json}");
+    } else {
+        assert!(config.starts_with("~/"), "{json}");
+        assert!(!json.contains(&real_home), "{json}");
+    }
 }
 
 /// A path that is the home directory itself, followed by prose, is
