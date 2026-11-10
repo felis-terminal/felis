@@ -5653,10 +5653,11 @@ async fn a_resize_past_the_geometry_bound_is_clamped_and_reported_clamped() {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
     let mut announced = None;
     while announced.is_none() && tokio::time::Instant::now() < deadline {
-        let frame = match tokio::time::timeout(Duration::from_secs(5), reader.next_frame()).await {
+        let frame = match tokio::time::timeout_at(deadline, reader.next_frame()).await {
             Ok(Ok(Some(f))) => f,
             Ok(Err(e)) => panic!("the connection must survive an out-of-range resize: {e:?}"),
-            Ok(Ok(None)) | Err(_) => panic!("the daemon closed instead of clamping"),
+            Ok(Ok(None)) => panic!("the daemon closed instead of clamping"),
+            Err(_) => break,
         };
         if frame.kind != MessageKind::Grid.as_u16() {
             continue;
