@@ -294,8 +294,8 @@ in [cli.md](../../reference/cli.md) "Auto-spawning".
 
 A retarget is the one form that dials twice, and the two halves take different sides of this split: the source dial
 drives a daemon that is already holding the window, while the landing on the target host is a window asking for a daemon
-to hold it. So the landing spawns over SSH, and on a cold local socket it fails instead, because `dial_and_land` opens
-that socket directly rather than through `connect_or_spawn_daemon`.
+to hold it. So the landing spawns over SSH, and on a cold local socket it fails instead, because `Reconnector::land`
+opens that socket directly rather than through `connect_or_spawn_daemon`.
 
 #### A diagnostic names what it found and changes nothing
 

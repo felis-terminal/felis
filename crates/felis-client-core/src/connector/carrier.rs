@@ -28,9 +28,6 @@ pub struct Offer {
 }
 
 impl Offer {
-    /// The local carrier pulls per vsync; the SSH carrier eager-pushes,
-    /// a round trip per frame being a poor fit for its latency
-    /// (docs/explanation/rendering/pipeline.md "Demand-driven emission").
     #[must_use]
     pub const fn window(pull_paced: bool) -> Self {
         Self {
@@ -38,6 +35,14 @@ impl Offer {
             pull_paced,
             image_regions: false,
         }
+    }
+
+    /// The local carrier pulls per vsync; the SSH carrier eager-pushes,
+    /// a round trip per frame being a poor fit for its latency
+    /// (docs/explanation/rendering/pipeline.md "Demand-driven emission").
+    #[must_use]
+    pub const fn window_over(carrier: &Carrier) -> Self {
+        Self::window(matches!(carrier, Carrier::Local(_)))
     }
 
     /// For a window that applies region transfers through

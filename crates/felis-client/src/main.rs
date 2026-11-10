@@ -29,7 +29,7 @@ use felis_client_core::{
     action::{Action, ClipboardScope, IpcAction, SwitchDirection},
     config,
     config::{Backdrop, BuiltinShader, GUI_CLIENT_ID, PostShaderChoice, compose_window_title},
-    config_watcher, cursor_blink, cursor_trail, dial_and_land, dial_and_land_within,
+    config_watcher, cursor_blink, cursor_trail,
     doctor::{ClipboardProbe, FontsProbe, GpuProbe, PROBE_VERSION, ProbeReport},
     font_families::{FAMILIES_PROBE_VERSION, FamiliesOutcome, FamiliesProbe, Family, Style},
     launch_args,
@@ -507,19 +507,15 @@ fn main() -> Result<ExitCode> {
     // handshake and every re-attach negotiate identically: the daemon
     // never sees a leaner subset appear mid-window.
     let reconnector = match cli.host {
-        None => Reconnector {
-            carrier: Carrier::Local(resolve_local_socket(cli.socket.as_deref())?.into()),
-            offer: Offer::window(true).with_image_regions(),
-        },
+        None => Reconnector::window(Carrier::Local(
+            resolve_local_socket(cli.socket.as_deref())?.into(),
+        )),
         Some(host) => {
             info!(host = %host, "connecting via ssh stdio");
-            Reconnector {
-                carrier: Carrier::Ssh {
-                    destination: host,
-                    ssh_args: cli.ssh_arg,
-                },
-                offer: Offer::window(false).with_image_regions(),
-            }
+            Reconnector::window(Carrier::Ssh {
+                destination: host,
+                ssh_args: cli.ssh_arg,
+            })
         }
     };
 

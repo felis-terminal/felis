@@ -4,16 +4,15 @@
 use super::{
     App, AppEvent, Correlation, DialError, DialedConnection, Instant, Landing, PendingReattach,
     PipeState, Reconnector, SessionHex, SessionInfo, SwitchDirection, SwitchState, TrailRecord,
-    dial_and_land, dial_and_land_within, info, pick_switch_target, reconnector_for_target,
-    resolve_local_socket, warn,
+    info, pick_switch_target, reconnector_for_target, resolve_local_socket, warn,
 };
 use crate::app_methods::window_title_for;
 use crate::exit_ladder::{ExitAnchor, ExitLadder, Place, Rung};
 use crate::switch_intent::{Fetch, Resolved};
 use anyhow::Result;
 use felis_client_core::AttachIntent;
+use felis_client_core::ROSTER_FETCH_TIMEOUT;
 use felis_client_core::roster::RingKey;
-use felis_client_core::{ROSTER_FETCH_TIMEOUT, redial_session};
 use felis_protocol::messages::OpsToDaemonMsg;
 use felis_protocol::messages::{RequestId, RetargetLanding, RetargetTarget};
 use std::future::Future;
@@ -69,9 +68,8 @@ impl App {
     /// (docs/explanation/architecture/session-lifecycle.md "Transport
     /// loss").
     pub(crate) fn begin_reconnect(&mut self) {
-        let carrier = self.reconnector.carrier.clone();
-        let offer = self.reconnector.offer;
         let id = self.current_session_id;
+        let redial = self.reconnector.redial(id);
         // Both replies ride the connection that just died, and an
         // outstanding region request nobody clears keeps `is_busy` true
         // for the life of the window.
@@ -92,7 +90,7 @@ impl App {
         );
         let events = self.events.clone();
         self.runtime.spawn(async move {
-            let event = match redial_session(carrier, offer, id).await {
+            let event = match redial.await {
                 Ok(dialed) => switch_ready_event(dialed, None, TrailRecord::Reconnect),
                 Err(err) => AppEvent::ReconnectFailed {
                     reason: crate::ExitReason::from_reconnect(&err),
@@ -194,8 +192,6 @@ impl App {
             tracing::debug!("session switch already in progress; dropping the pick");
             return;
         }
-        let carrier = self.reconnector.carrier.clone();
-        let offer = self.reconnector.offer;
         info!(
             target = format!("{target_id:#x}"),
             direction = ?fetch.direction,
@@ -208,13 +204,12 @@ impl App {
             retry: (!fetch.retry).then_some(fetch.direction),
         };
         self.dial_in_background(
-            dial_and_land(
-                carrier,
-                offer,
+            self.reconnector.land(
                 Landing::Attach {
                     id: target_id,
                     intent: AttachIntent::Automatic,
                 },
+                None,
             ),
             None,
             TrailRecord::Push,
@@ -322,16 +317,14 @@ impl App {
             retry: None,
         };
         self.dial_in_background(
-            dial_and_land_within(
-                reconnector.carrier.clone(),
-                reconnector.offer,
+            reconnector.land(
                 Landing::AttachExact {
                     id: session_id,
                     // The window chose this rung, not the user: a place
                     // whose shell exited meanwhile must refuse.
                     intent: AttachIntent::Automatic,
                 },
-                budget,
+                Some(budget),
             ),
             crossing,
             TrailRecord::Keep,
@@ -353,12 +346,7 @@ impl App {
             retry: None,
         };
         self.dial_in_background(
-            dial_and_land_within(
-                reconnector.carrier.clone(),
-                reconnector.offer,
-                Landing::PickExit { anchor: ring_key },
-                budget,
-            ),
+            reconnector.land(Landing::PickExit { anchor: ring_key }, Some(budget)),
             crossing,
             TrailRecord::Keep,
         );
@@ -460,18 +448,7 @@ impl App {
             // legitimate thing to land on.
             intent: AttachIntent::Deliberate,
         };
-        let carrier = reconnector.carrier.clone();
-        let offer = reconnector.offer;
-        match budget {
-            Some(budget) => self.dial_in_background(
-                dial_and_land_within(carrier, offer, landing, budget),
-                crossing,
-                record,
-            ),
-            None => {
-                self.dial_in_background(dial_and_land(carrier, offer, landing), crossing, record);
-            }
-        }
+        self.dial_in_background(reconnector.land(landing, budget), crossing, record);
         true
     }
 
@@ -510,20 +487,7 @@ impl App {
             session_gone: exit_driven,
             retry: None,
         };
-        let carrier = retargeted.carrier.clone();
-        let offer = retargeted.offer;
-        match budget {
-            Some(budget) => self.dial_in_background(
-                dial_and_land_within(carrier, offer, landing, budget),
-                Some(retargeted),
-                record,
-            ),
-            None => self.dial_in_background(
-                dial_and_land(carrier, offer, landing),
-                Some(retargeted),
-                record,
-            ),
-        }
+        self.dial_in_background(retargeted.land(landing, budget), Some(retargeted), record);
         true
     }
 

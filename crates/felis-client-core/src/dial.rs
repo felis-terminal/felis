@@ -22,7 +22,7 @@ use crate::spawn::SpawnConnectError;
 /// carrier: a launch and a retarget's landing both mean "hold this
 /// session for me" (docs/reference/cli.md "Auto-spawning"). On a cold
 /// local socket only [`Reconnector::dial_launch`] spawns, so a
-/// [`dial_and_land`] landing there fails instead.
+/// [`Reconnector::land`] there fails instead.
 pub const LANDING_REMOTE_SPAWN: RemoteSpawn = RemoteSpawn::Allow;
 
 #[derive(Debug, Error)]
@@ -155,12 +155,7 @@ pub enum ReconnectError {
     },
 }
 
-/// Re-dial the carrier and session the window lost, and nothing else,
-/// live-only (`architecture/session-lifecycle.md` "Transport loss").
-///
-/// # Errors
-/// [`ReconnectError`] once the ladder is spent or refused.
-pub async fn redial_session(
+async fn redial_session(
     carrier: Carrier,
     offer: Offer,
     id: u128,
@@ -252,6 +247,46 @@ pub struct Reconnector {
 }
 
 impl Reconnector {
+    /// The GUI window's descriptor, so the launch, every switch, and
+    /// every retarget negotiate the same offer for the same carrier.
+    #[must_use]
+    pub const fn window(carrier: Carrier) -> Self {
+        Self {
+            offer: Offer::window_over(&carrier).with_image_regions(),
+            carrier,
+        }
+    }
+
+    /// A creating landing under a `budget` bounds the connect step
+    /// alone: the daemon may already have created the session, and
+    /// dropping the connection then orphans it.
+    pub fn land(
+        &self,
+        landing: Landing,
+        budget: Option<Duration>,
+    ) -> impl Future<Output = Result<DialedConnection, DialError>> + Send + 'static {
+        let carrier = self.carrier.clone();
+        let offer = self.offer;
+        async move {
+            match budget {
+                Some(budget) => dial_and_land_within(carrier, offer, landing, budget).await,
+                None => dial_and_land(carrier, offer, landing).await,
+            }
+        }
+    }
+
+    /// Re-dial the carrier and session the window lost, and nothing else,
+    /// live-only (`architecture/session-lifecycle.md` "Transport loss").
+    ///
+    /// # Errors
+    /// [`ReconnectError`] once the ladder is spent or refused.
+    pub fn redial(
+        &self,
+        id: u128,
+    ) -> impl Future<Output = Result<DialedConnection, ReconnectError>> + Send + 'static {
+        redial_session(self.carrier.clone(), self.offer, id)
+    }
+
     /// The spawning half of the auto-spawn matrix
     /// (docs/reference/cli.md "Auto-spawning"): the caller's policy is
     /// what the SSH relay is asked for. Only the local carrier
@@ -424,7 +459,7 @@ impl Landing {
     }
 
     /// Whether only the connect step may be cut short; see
-    /// [`dial_and_land_within`].
+    /// [`Reconnector::land`].
     const fn bounds_connect_only(&self) -> bool {
         matches!(self, Self::Create(_) | Self::CreateOnTarget(_))
     }
@@ -440,7 +475,7 @@ impl Landing {
     }
 }
 
-pub async fn dial_and_land(
+async fn dial_and_land(
     carrier: Carrier,
     offer: Offer,
     landing: Landing,
@@ -455,12 +490,7 @@ pub async fn dial_and_land(
     land_on(conn, landing, intent, offer).await
 }
 
-/// [`dial_and_land`] under a caller-supplied bound. A creating landing
-/// bounds the connect step alone: the daemon may already have created
-/// the session, and dropping the connection then orphans it.
-/// # Errors
-/// [`DialError::AttemptTimeout`] when the bounded phase outlives `budget`.
-pub async fn dial_and_land_within(
+async fn dial_and_land_within(
     carrier: Carrier,
     offer: Offer,
     landing: Landing,
@@ -578,33 +608,24 @@ async fn land_on(
 
 /// `default_socket` is the receiving client's, not the sending daemon's,
 /// and `None` is a client with none: only a [`RetargetCarrier::DefaultLocal`]
-/// target needs it. Only the SSH carrier declines pull pacing, since a
-/// per-vsync round trip over a high-latency link starves the stream.
+/// target needs it.
 #[must_use]
 pub fn reconnector_for_target(
     target: &RetargetTarget,
     default_socket: Option<PathBuf>,
 ) -> Option<Reconnector> {
-    Some(match &target.carrier {
-        RetargetCarrier::DefaultLocal => Reconnector {
-            carrier: Carrier::Local(default_socket?.into()),
-            offer: Offer::window(true).with_image_regions(),
-        },
-        RetargetCarrier::LocalEndpoint(path) => Reconnector {
-            carrier: Carrier::Local(PathBuf::from(path).into()),
-            offer: Offer::window(true).with_image_regions(),
-        },
+    let carrier = match &target.carrier {
+        RetargetCarrier::DefaultLocal => Carrier::Local(default_socket?.into()),
+        RetargetCarrier::LocalEndpoint(path) => Carrier::Local(PathBuf::from(path).into()),
         RetargetCarrier::Ssh {
             destination,
             ssh_args,
-        } => Reconnector {
-            carrier: Carrier::Ssh {
-                destination: destination.clone(),
-                ssh_args: ssh_args.clone(),
-            },
-            offer: Offer::window(false).with_image_regions(),
+        } => Carrier::Ssh {
+            destination: destination.clone(),
+            ssh_args: ssh_args.clone(),
         },
-    })
+    };
+    Some(Reconnector::window(carrier))
 }
 
 #[cfg(test)]
