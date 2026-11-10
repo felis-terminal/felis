@@ -8,7 +8,7 @@ use std::env;
 use std::sync::{Arc, LazyLock};
 
 use felis_protocol::SessionHex;
-use felis_pty::{ChildHandle, Command, PtyError, PtyReader, PtyWriter, Resizer, Size};
+use felis_pty::{ChildHandle, Command, PtyEof, PtyError, PtyWriter, Resizer, Size};
 use felis_transport::env::{SESSION_ID_ENV, SOCKET_ENV};
 
 use crate::parse_sink::ParseSignals;
@@ -186,9 +186,7 @@ const DEFAULT_TERM_PROGRAM: &str = "felis";
 /// with the async-side state.
 #[doc(hidden)]
 pub struct SpawnedPty {
-    /// Carries only the EOF/error lifecycle signal; the sink on the parse
-    /// thread consumes the data (`felis_pty::ByteSink`).
-    pub reader: PtyReader,
+    pub eof: PtyEof,
     pub writer: PtyWriter,
     pub child: ChildHandle,
     pub resizer: Resizer,
@@ -258,32 +256,14 @@ impl SpawnedPty {
         let sink = parse_sink::build_sink(Arc::clone(&core), Arc::clone(&signals));
         #[cfg(windows)]
         use_felis_conpty_dir();
-        let session = felis_pty::spawn(command, size, sink)?;
-        Ok(Self::from_session(session, core, signals))
+        let parts = felis_pty::spawn(command, size, sink)?;
+        Ok(Self::from_parts(parts, core, signals))
     }
 
-    /// Resumes a session an in-place upgrade carried across `execve`: the
-    /// PTY master and the child are already this process's, and `core`
-    /// is the terminal state the predecessor left, installed before the
-    /// parse thread reads a byte.
-    #[cfg(unix)]
-    pub fn adopt(
-        master: std::os::fd::OwnedFd,
-        pid: i32,
-        exit_status: Option<i32>,
-        core: ParseCore,
-    ) -> Result<Self, SessionError> {
-        let core = Arc::new(parking_lot::Mutex::new(core));
-        let signals = Arc::new(ParseSignals::new());
-        let sink = parse_sink::build_sink(Arc::clone(&core), Arc::clone(&signals));
-        let session = felis_pty::adopt(master, pid, exit_status, sink)?;
-        Ok(Self::from_session(session, core, signals))
-    }
-
-    /// Starts a session a Windows upgrade handed over, once the
-    /// predecessor is gone: the pseudoconsole and the child are already
-    /// this process's, and `core` is the predecessor's terminal state.
-    #[cfg(windows)]
+    /// Starts a session an in-place upgrade carried over: the PTY and
+    /// the child are already this process's, and `core` is the terminal
+    /// state the predecessor left, installed before the parse thread
+    /// reads a byte.
     pub fn adopt(
         adopted: felis_pty::handover::Adopted,
         core: ParseCore,
@@ -291,19 +271,24 @@ impl SpawnedPty {
         let core = Arc::new(parking_lot::Mutex::new(core));
         let signals = Arc::new(ParseSignals::new());
         let sink = parse_sink::build_sink(Arc::clone(&core), Arc::clone(&signals));
-        let session = adopted.start(sink)?;
-        Ok(Self::from_session(session, core, signals))
+        let parts = adopted.start(sink)?;
+        Ok(Self::from_parts(parts, core, signals))
     }
 
-    fn from_session(
-        session: felis_pty::PtySession,
+    fn from_parts(
+        parts: felis_pty::PtyParts,
         core: Arc<parking_lot::Mutex<ParseCore>>,
         signals: Arc<ParseSignals>,
     ) -> Self {
-        let quiescer = session.quiescer();
-        let (reader, writer, child, resizer) = session.split();
+        let felis_pty::PtyParts {
+            eof,
+            writer,
+            child,
+            resizer,
+            quiescer,
+        } = parts;
         Self {
-            reader,
+            eof,
             writer,
             child,
             resizer,
@@ -439,7 +424,6 @@ mod tests {
 
     use super::*;
     use felis_pty::Command;
-    use tokio::io::AsyncReadExt;
 
     #[test]
     fn default_term_matches_the_shipped_terminfo_entry() {
@@ -619,13 +603,13 @@ mod tests {
         grid_text(&core)
     }
 
-    /// Drive the reader to EOF, waiting for all parse sink calls to finish.
+    /// Waits for the end of output, after the parse sink's last call.
     ///
     /// Keeps `resizer` alive to prevent early `ClosePseudoConsole` on Windows
     /// before child processes have echoed output.
     async fn read_until_output_complete(pty: SpawnedPty) -> Arc<parking_lot::Mutex<ParseCore>> {
         let SpawnedPty {
-            mut reader,
+            mut eof,
             core,
             child,
             resizer,
@@ -640,9 +624,7 @@ mod tests {
             }
             drop(resizer);
         }
-        let mut buf = Vec::new();
-        let done =
-            tokio::time::timeout(Duration::from_secs(10), reader.read_to_end(&mut buf)).await;
+        let done = tokio::time::timeout(Duration::from_secs(10), eof.eof()).await;
         drop(done.expect("child never reached EOF"));
         #[cfg(unix)]
         drop(resizer);

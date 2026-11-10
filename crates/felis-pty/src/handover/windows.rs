@@ -1,6 +1,4 @@
-//! Carrying a Windows session to an in-place upgrade's successor
-//! (`docs/explanation/architecture/overview.md` "In-place upgrade"):
-//! the handles that keep a pseudoconsole and its shell alive, moved
+//! The handles that keep a pseudoconsole and its shell alive, moved
 //! into another process by `DuplicateHandle`, and the processes the
 //! hand-over runs between.
 #![allow(unsafe_code)]
@@ -29,7 +27,7 @@ use windows_sys::Win32::{
 };
 
 use crate::{
-    ByteSink, ChildHandle, PtyError, PtySession, Resizer, poison, session_over,
+    ByteSink, ChildHandle, PtyError, PtyParts, Resizer, poison, session_over,
     windows::{Api, Child, Host, Master, api, append_quoted, hresult_error, process_host},
 };
 
@@ -263,7 +261,7 @@ impl Adopted {
 
     /// Starts the session's threads: from here it is this process's
     /// like any it spawned.
-    pub fn start(self, sink: ByteSink) -> Result<PtySession, PtyError> {
+    pub fn start(self, sink: ByteSink) -> Result<PtyParts, PtyError> {
         let master = Master {
             api: self.api,
             hpc: self.hpc,

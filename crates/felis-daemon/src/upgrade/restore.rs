@@ -14,6 +14,8 @@ use std::{
 };
 
 #[cfg(unix)]
+use felis_pty::handover::Adopted;
+#[cfg(unix)]
 use felis_transport::{Endpoint, Listener, inherit::take_inherited};
 #[cfg(unix)]
 use rustix::process::{Pid, Signal, WaitId, WaitIdOptions, WaitOptions};
@@ -110,7 +112,8 @@ async fn register(
     master: OwnedFd,
 ) -> Result<(), String> {
     register_with(pool, policy, dump, |core| {
-        SpawnedPty::adopt(master, dump.child.pid, dump.child.exit_status, core)
+        let adopted = Adopted::inherited(master, dump.child.pid, dump.child.exit_status)?;
+        SpawnedPty::adopt(adopted, core)
     })
     .await
 }
@@ -291,7 +294,11 @@ mod tests {
     async fn a_held_session_does_not_reap_its_exited_child_until_resumed() {
         let (master, pid, _first) = carried_child("sleep 0.5");
         let session = Session::from_spawned(
-            SpawnedPty::adopt(master, pid, None, ParseCore::new(24, 80)).unwrap(),
+            SpawnedPty::adopt(
+                Adopted::inherited(master, pid, None).unwrap(),
+                ParseCore::new(24, 80),
+            )
+            .unwrap(),
         );
         let pool = Arc::new(Mutex::new(SessionPool::new()));
         let policy = IdlePolicy {
@@ -436,7 +443,9 @@ mod tests {
 
         let mut core = ParseCore::new(24, 80);
         core.parser.advance(&mut core.grid, b"\x1b[c");
-        let session = Session::from_spawned(SpawnedPty::adopt(master, pid, None, core).unwrap());
+        let session = Session::from_spawned(
+            SpawnedPty::adopt(Adopted::inherited(master, pid, None).unwrap(), core).unwrap(),
+        );
         let pool = Arc::new(Mutex::new(SessionPool::new()));
         spawn_restored(
             &pool,
