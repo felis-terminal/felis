@@ -57,7 +57,7 @@ Runtime edges only; no cycles. An arrow points from a crate to a crate that depe
 already implies, such as `felis-daemon`'s direct `felis-vt` dependency, is not drawn again.
 
 ```
-felis-protocol  ← depended on by every crate except felis-pty and felis-shaping
+felis-protocol  ← depended on by every crate except felis-pty, felis-vt and felis-shaping
 
 felis-pty      felis-vt       felis-transport      felis-shaping
     │              │             │       │               │

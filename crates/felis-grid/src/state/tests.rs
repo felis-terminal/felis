@@ -452,3 +452,14 @@ fn a_graphics_payload_past_its_tracked_length_is_refused() {
     let grown: Reassembler = serde_json::from_value(value).unwrap();
     assert!(grown.check_restored().is_err());
 }
+
+proptest! {
+    /// A predecessor that spelled its payloads with `felis_protocol::base64`
+    /// must hand over a dump its successor reads back byte for byte.
+    #[test]
+    fn dump_base64_matches_the_protocol_encoder(bytes in proptest::collection::vec(any::<u8>(), 0..64)) {
+        let mut protocol = Vec::new();
+        felis_protocol::base64::encode_into(&bytes, &mut protocol);
+        prop_assert_eq!(felis_vt::state::b64::encode(&bytes).into_bytes(), protocol);
+    }
+}

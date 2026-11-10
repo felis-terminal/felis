@@ -33,6 +33,7 @@ fn check(ok: bool, what: &str) -> Result<(), StateError> {
 /// Byte payloads as standard base64 strings: a JSON number array costs
 /// up to four bytes per byte, base64 four per three.
 pub mod b64 {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
     use serde::{Deserialize as _, Deserializer, Serializer, de::Error as _};
 
     /// # Errors
@@ -49,14 +50,13 @@ pub mod b64 {
 
     #[must_use]
     pub fn encode(bytes: &[u8]) -> String {
-        let mut out = Vec::with_capacity(bytes.len().div_ceil(3) * 4);
-        felis_protocol::base64::encode_into(bytes, &mut out);
-        out.into_iter().map(char::from).collect()
+        STANDARD.encode(bytes)
     }
 
     pub(super) fn decode<'de, D: Deserializer<'de>>(text: &str) -> Result<Vec<u8>, D::Error> {
-        felis_protocol::base64::decode(text.as_bytes())
-            .ok_or_else(|| D::Error::custom("invalid base64"))
+        STANDARD
+            .decode(text)
+            .map_err(|_| D::Error::custom("invalid base64"))
     }
 }
 

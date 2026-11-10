@@ -1537,8 +1537,8 @@ dependencies = [
 name = "felis-vt"
 version = "0.2.0"
 dependencies = [
+ "base64",
  "criterion",
- "felis-protocol",
  "insta",
  "proptest",
  "serde",

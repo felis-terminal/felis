@@ -10,10 +10,10 @@ description = "felis VT parser: Williams DFA with UTF-8 buffering"
 [features]
 # Serde for the state an in-place daemon upgrade carries across exec;
 # only the daemon enables it.
-state-dump = ["dep:serde"]
+state-dump = ["dep:serde", "dep:base64"]
 
 [dependencies]
-felis-protocol = { workspace = true }
+base64 = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }
 
 [dev-dependencies]
