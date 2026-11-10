@@ -7,6 +7,8 @@ use felis_grid::Color;
 use felis_protocol::messages::ThemeChannel;
 use tracing::warn;
 
+use crate::contrast::MAX_CONTRAST_RATIO;
+
 #[derive(Debug, Clone, Copy)]
 pub struct Theme {
     /// Default foreground (linear RGBA).
@@ -31,7 +33,7 @@ pub struct Theme {
 /// so an `OSC 10 ; ?` reply and the painted surface cannot drift.
 pub const DEFAULT_FG_SRGB: [u8; 3] = [0xE5, 0xE5, 0xE5];
 
-/// Same as `Renderer::clear_color`; what `OSC 11 ; ?` reports, so a
+/// The default clear color; what `OSC 11 ; ?` reports, so a
 /// background detector reads felis as dark.
 pub const DEFAULT_BG_SRGB: [u8; 3] = [0x0D, 0x0D, 0x12];
 
@@ -170,6 +172,152 @@ pub fn effective_theme(
         t.cursor = Some(srgb_to_linear_rgba(rgb, 1.0));
     }
     t
+}
+
+/// The renderer's theme inputs as unparsed config strings.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct ThemeConfig {
+    pub fg: Option<String>,
+    pub bg: Option<String>,
+    /// Sparse `[theme.palette]` overrides by index; absent indices keep
+    /// the xterm baseline.
+    pub palette: BTreeMap<u8, String>,
+    /// `cursor.color`; `None` keeps the reverse-video cursor.
+    pub cursor: Option<String>,
+    /// `window.opacity`, `0.0..=1.0`; `None` and `Some(1.0)` keep the
+    /// opaque surface.
+    pub background_opacity: Option<f32>,
+    /// `theme.minimum_contrast`; `None` leaves colors as resolved.
+    pub minimum_contrast: Option<f32>,
+}
+
+impl Theme {
+    #[must_use]
+    pub fn from_config(cfg: &ThemeConfig) -> Self {
+        let mut theme = Self::with_overrides(cfg.fg.as_deref(), cfg.bg.as_deref())
+            .with_palette(&cfg.palette)
+            .with_cursor(cfg.cursor.as_deref());
+        // Only the default background (and the letterbox clear) carries
+        // the opacity; a cell with an explicit bg stays at alpha 1.0,
+        // kitty's `background_opacity` model.
+        if let Some(a) = cfg.background_opacity {
+            theme.bg[3] = a.clamp(0.0, 1.0);
+        }
+        if let Some(ratio) = cfg.minimum_contrast {
+            theme.minimum_contrast = ratio.clamp(1.0, MAX_CONTRAST_RATIO);
+        }
+        theme
+    }
+}
+
+/// The configured theme with the session's runtime color state layered
+/// on top: `OSC 10` / `11` / `12` channels, `OSC 4` palette slots, and
+/// DECSCNM.
+#[derive(Debug, Clone)]
+pub struct ThemeState {
+    base: Theme,
+    /// Indexed by `ThemeChannel as usize`; `None` keeps the configured
+    /// value.
+    channels: [Option<[u8; 3]>; 3],
+    palette: Box<[Option<[u8; 3]>; 256]>,
+    reverse_video: bool,
+    premultiply: bool,
+    resolved: ResolvedTheme,
+}
+
+impl ThemeState {
+    /// `premultiply` is whether the surface composites premultiplied
+    /// alpha, so the resolved default background must be premultiplied.
+    #[must_use]
+    pub fn new(theme: &Theme, premultiply: bool) -> Self {
+        Self {
+            base: *theme,
+            channels: [None; 3],
+            palette: Box::new([None; 256]),
+            reverse_video: false,
+            premultiply,
+            resolved: resolve_for_surface(theme, premultiply),
+        }
+    }
+
+    /// A config reload: runtime overrides stay in force over the new base.
+    pub fn set_theme(&mut self, theme: &Theme) {
+        self.base = *theme;
+        self.refresh();
+    }
+
+    pub fn apply_channel_override(&mut self, channel: ThemeChannel, rgb: Option<(u8, u8, u8)>) {
+        self.channels[channel as usize] = rgb.map(<[u8; 3]>::from);
+        self.refresh();
+    }
+
+    pub fn apply_palette_override(&mut self, index: u8, rgb: Option<(u8, u8, u8)>) {
+        self.palette[usize::from(index)] = rgb.map(<[u8; 3]>::from);
+        self.refresh();
+    }
+
+    /// Bare `OSC 104`. The `OSC 10` / `11` / `12` channels stay: xterm's
+    /// `OSC 104` addresses the indexed palette alone, and their reset is
+    /// `OSC 110` / `111` / `112`.
+    pub fn reset_palette_overrides(&mut self) {
+        *self.palette = [None; 256];
+        self.refresh();
+    }
+
+    /// Called at the start of each rehydrate: the burst replays only the
+    /// overrides in force, so it cannot unset the previous session's.
+    pub fn reset_session_colors(&mut self) {
+        self.channels = [None; 3];
+        *self.palette = [None; 256];
+        self.refresh();
+    }
+
+    /// Leaves [`Self::resolved`] untouched: reverse video is applied per
+    /// cell at paint time.
+    pub const fn set_reverse_video(&mut self, on: bool) {
+        self.reverse_video = on;
+    }
+
+    #[must_use]
+    pub const fn resolved(&self) -> &ResolvedTheme {
+        &self.resolved
+    }
+
+    #[must_use]
+    pub const fn reverse_video(&self) -> bool {
+        self.reverse_video
+    }
+
+    #[must_use]
+    pub const fn clear_rgba(&self) -> [f32; 4] {
+        self.resolved.clear_color(self.reverse_video)
+    }
+
+    fn refresh(&mut self) {
+        self.resolved = resolve_for_surface(
+            &effective_theme(&self.base, &self.channels, &self.palette),
+            self.premultiply,
+        );
+    }
+}
+
+/// felis paints the background straight-alpha (the bg pass runs with
+/// blending off), so a `PostMultiplied` surface takes the theme as is.
+/// Only `bg` is touched: fg, cursor, and explicit cell backgrounds are
+/// alpha 1.0, for which premultiply is identity.
+#[must_use]
+fn premultiplied_bg(mut theme: Theme, premultiply: bool) -> Theme {
+    if premultiply {
+        let a = theme.bg[3];
+        theme.bg[0] *= a;
+        theme.bg[1] *= a;
+        theme.bg[2] *= a;
+    }
+    theme
+}
+
+fn resolve_for_surface(theme: &Theme, premultiply: bool) -> ResolvedTheme {
+    ResolvedTheme::new(&premultiplied_bg(*theme, premultiply)).with_straight_bg(theme.bg)
 }
 
 /// Painted on cells holding UAX #9 explicit-formatting characters so a
@@ -852,6 +1000,217 @@ mod tests {
         assert!(approx(
             resolve_fg(Color::Indexed(3), &after_reset),
             srgb_to_linear_rgba([0x11, 0x22, 0x33], 1.0),
+        ));
+    }
+
+    #[test]
+    fn theme_from_config_default_config_is_default_theme() {
+        let theme = Theme::from_config(&ThemeConfig::default());
+        let default = Theme::default();
+        assert_eq!(theme.fg, default.fg);
+        assert_eq!(theme.bg, default.bg);
+        assert_eq!(theme.cursor, default.cursor);
+        for slot in theme.palette {
+            assert!(slot.is_none(), "default config touches no palette slot");
+        }
+    }
+
+    #[test]
+    fn theme_from_config_threads_fg_bg_cursor_and_palette_through() {
+        let palette = BTreeMap::from([(1u8, "#ff5555".to_owned()), (12u8, "#5555ff".to_owned())]);
+        let cfg = ThemeConfig {
+            fg: Some("#cdcdcd".into()),
+            bg: Some("#101010".into()),
+            cursor: Some("#ffaa00".into()),
+            palette,
+            ..Default::default()
+        };
+        let theme = Theme::from_config(&cfg);
+        assert_eq!(theme.fg, srgb_to_linear_rgba([0xCD, 0xCD, 0xCD], 1.0));
+        assert_eq!(theme.bg, srgb_to_linear_rgba([0x10, 0x10, 0x10], 1.0));
+        assert_eq!(
+            theme.cursor,
+            Some(srgb_to_linear_rgba([0xFF, 0xAA, 0x00], 1.0))
+        );
+        assert_eq!(theme.palette[1], Some([0xFF, 0x55, 0x55]));
+        assert_eq!(theme.palette[12], Some([0x55, 0x55, 0xFF]));
+        assert!(theme.palette[0].is_none());
+        assert!(theme.palette[15].is_none());
+    }
+
+    #[test]
+    fn theme_from_config_carries_background_opacity_into_bg_alpha() {
+        let cfg = ThemeConfig {
+            bg: Some("#101010".into()),
+            background_opacity: Some(0.8),
+            ..Default::default()
+        };
+        let theme = Theme::from_config(&cfg);
+        let opaque = srgb_to_linear_rgba([0x10, 0x10, 0x10], 1.0);
+        assert_eq!(
+            [theme.bg[0], theme.bg[1], theme.bg[2]],
+            [opaque[0], opaque[1], opaque[2]]
+        );
+        assert!((theme.bg[3] - 0.8).abs() < 1e-6);
+        let unset = Theme::from_config(&ThemeConfig::default());
+        assert_eq!(unset.bg[3], 1.0, "no opacity configured is fully opaque");
+    }
+
+    #[test]
+    fn theme_from_config_clamps_out_of_range_opacity() {
+        // The clamp here is the last line behind the client's
+        // `clamped_opacity`.
+        let low = Theme::from_config(&ThemeConfig {
+            background_opacity: Some(-1.0),
+            ..Default::default()
+        });
+        assert_eq!(low.bg[3], 0.0);
+        let high = Theme::from_config(&ThemeConfig {
+            background_opacity: Some(2.0),
+            ..Default::default()
+        });
+        assert_eq!(high.bg[3], 1.0);
+    }
+
+    #[test]
+    fn theme_from_config_clamps_minimum_contrast_into_the_wcag_range() {
+        let ratio = |r: Option<f32>| {
+            Theme::from_config(&ThemeConfig {
+                minimum_contrast: r,
+                ..Default::default()
+            })
+            .minimum_contrast
+        };
+        assert_eq!(ratio(None), 1.0);
+        assert_eq!(ratio(Some(4.5)), 4.5);
+        assert_eq!(ratio(Some(0.5)), 1.0);
+        assert_eq!(ratio(Some(40.0)), MAX_CONTRAST_RATIO);
+    }
+
+    #[test]
+    fn clear_color_mirrors_the_resolved_theme_background_alpha_included() {
+        // Dropping the alpha to 1.0 would punch an opaque hole through a
+        // translucent window's margins.
+        let theme = Theme {
+            bg: [0.25, 0.5, 0.75, 0.5],
+            ..Theme::default()
+        };
+        assert_eq!(
+            ThemeState::new(&theme, false).clear_rgba(),
+            [0.25, 0.5, 0.75, 0.5]
+        );
+        assert_eq!(
+            ThemeState::new(&theme, true).clear_rgba(),
+            [0.125, 0.25, 0.375, 0.5]
+        );
+    }
+
+    #[test]
+    fn clear_color_under_decscnm_takes_the_foreground_and_keeps_bg_alpha() {
+        let theme = Theme {
+            fg: [0.75, 0.5, 0.25, 1.0],
+            bg: [0.125, 0.25, 0.375, 0.5],
+            ..Theme::default()
+        };
+        let mut state = ThemeState::new(&theme, false);
+        state.set_reverse_video(true);
+        assert!(state.reverse_video());
+        assert_eq!(state.clear_rgba(), [0.75, 0.5, 0.25, 0.5]);
+        state.set_reverse_video(false);
+        assert_eq!(state.clear_rgba(), theme.bg);
+    }
+
+    #[test]
+    fn premultiplied_bg_scales_rgb_by_alpha_only_when_asked() {
+        let theme = Theme {
+            bg: [0.4, 0.6, 0.8, 0.5],
+            ..Theme::default()
+        };
+        assert_eq!(premultiplied_bg(theme, false).bg, [0.4, 0.6, 0.8, 0.5]);
+        assert_eq!(premultiplied_bg(theme, true).bg, [0.2, 0.3, 0.4, 0.5]);
+    }
+
+    fn translucent_state() -> ThemeState {
+        let theme = Theme {
+            bg: srgb_to_linear_rgba(DEFAULT_BG_SRGB, 0.8),
+            ..Theme::default()
+        };
+        ThemeState::new(&theme, false)
+    }
+
+    #[test]
+    fn osc_11_on_theme_state_keeps_the_configured_bg_alpha() {
+        let mut state = translucent_state();
+        state.apply_channel_override(ThemeChannel::Background, Some((0x00, 0xCD, 0x00)));
+        let want = srgb_to_linear_rgba([0x00, 0xCD, 0x00], 0.8);
+        assert!(approx(state.resolved().bg, want));
+        assert!(approx(state.clear_rgba(), want));
+    }
+
+    #[test]
+    fn bare_osc_104_clears_palette_overrides_but_keeps_the_channel_ones() {
+        let mut state = ThemeState::new(&Theme::default(), false);
+        state.apply_channel_override(ThemeChannel::Foreground, Some((0xAB, 0x00, 0x00)));
+        state.apply_palette_override(3, Some((0xAA, 0xBB, 0xCC)));
+        state.reset_palette_overrides();
+        assert!(approx(
+            state.resolved().palette[3],
+            srgb_to_linear_rgba(xterm_256(3), 1.0),
+        ));
+        assert!(approx(
+            state.resolved().fg,
+            srgb_to_linear_rgba([0xAB, 0x00, 0x00], 1.0),
+        ));
+    }
+
+    #[test]
+    fn reset_session_colors_clears_channel_and_palette_overrides() {
+        let mut state = ThemeState::new(&Theme::default(), false);
+        state.apply_channel_override(ThemeChannel::Foreground, Some((0xAB, 0x00, 0x00)));
+        state.apply_channel_override(ThemeChannel::Cursor, Some((0x00, 0x00, 0xEF)));
+        state.apply_palette_override(3, Some((0xAA, 0xBB, 0xCC)));
+        state.reset_session_colors();
+        let base = ResolvedTheme::new(&Theme::default());
+        assert_eq!(state.resolved().fg, base.fg);
+        assert_eq!(state.resolved().cursor, None);
+        assert_eq!(state.resolved().palette[3], base.palette[3]);
+    }
+
+    #[test]
+    fn reverse_video_clears_to_the_runtime_fg_with_the_bg_alpha() {
+        let mut state = translucent_state();
+        state.apply_channel_override(ThemeChannel::Foreground, Some((0xAB, 0x00, 0x00)));
+        state.set_reverse_video(true);
+        let fg = srgb_to_linear_rgba([0xAB, 0x00, 0x00], 1.0);
+        assert!(approx(state.clear_rgba(), [fg[0], fg[1], fg[2], 0.8]));
+    }
+
+    #[test]
+    fn a_config_reload_keeps_runtime_overrides_in_force() {
+        let mut state = ThemeState::new(&Theme::default(), false);
+        state.apply_channel_override(ThemeChannel::Background, Some((0x00, 0xCD, 0x00)));
+        state.apply_palette_override(3, Some((0xAA, 0xBB, 0xCC)));
+        let mut reloaded = Theme::with_overrides(Some("#101010"), Some("#202020"));
+        reloaded.bg[3] = 0.5;
+        reloaded.palette[3] = Some([0x11, 0x22, 0x33]);
+        reloaded.palette[4] = Some([0x44, 0x55, 0x66]);
+        state.set_theme(&reloaded);
+        let resolved = state.resolved();
+        assert!(approx(
+            resolved.fg,
+            srgb_to_linear_rgba([0x10, 0x10, 0x10], 1.0)
+        ));
+        assert!(approx(
+            resolved.bg,
+            srgb_to_linear_rgba([0x00, 0xCD, 0x00], 0.5)
+        ));
+        assert!(approx(
+            resolved.palette[3],
+            srgb_to_linear_rgba([0xAA, 0xBB, 0xCC], 1.0)
+        ));
+        assert!(approx(
+            resolved.palette[4],
+            srgb_to_linear_rgba([0x44, 0x55, 0x66], 1.0)
         ));
     }
 
