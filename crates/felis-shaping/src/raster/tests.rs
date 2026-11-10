@@ -15,14 +15,14 @@ use crate::{
 
 const SYMBOLS: &str = "←↑→↓↔⇒∀∃∅∈∑√∞≈≠≤≥⊕⌘⌥⏎■□▲△●○◆★☆☐☑♠♣♥♦♪✓✔✗✘❯";
 
-fn load(name: &str) -> Font {
+pub(super) fn load(name: &str) -> Font {
     let mut db = FileSet::default();
     db.add_file(test_font_dir().join(name))
         .expect("the pinned face reads");
     Font::load_face_id(&db, 0).expect("the pinned face loads")
 }
 
-fn with_raster(font: &Font, raster: RasterOptions) -> Font {
+pub(super) fn with_raster(font: &Font, raster: RasterOptions) -> Font {
     let mut font = font.with_coords(font.coords.clone(), font.position.clone());
     font.raster = raster;
     font
@@ -30,7 +30,7 @@ fn with_raster(font: &Font, raster: RasterOptions) -> Font {
 
 /// Four styles of each outline format in the pinned set, plus the symbol
 /// faces at their one style.
-fn corpus() -> Vec<(String, Font)> {
+pub(super) fn corpus() -> Vec<(String, Font)> {
     let mut faces = Vec::new();
     for (dir, stem, ext) in [
         ("opentype", "MonaspaceNeon", "otf"),
@@ -170,11 +170,13 @@ fn fontconfig_hint_styles_map_to_skrifa_targets() {
 
 #[test]
 fn a_face_outside_fontconfig_draws_in_the_platform_mode() {
-    let expected = if cfg!(target_os = "macos") {
-        RasterOptions::NEVER_HINTED
-    } else {
-        RasterOptions::for_face(Some(FaceHinting::Slight { autohint: false }))
+    #[cfg(target_os = "macos")]
+    let expected = RasterOptions {
+        hinting: Hinting::Never,
+        outlines: super::Outlines::CoreText,
     };
+    #[cfg(not(target_os = "macos"))]
+    let expected = RasterOptions::for_face(Some(FaceHinting::Slight { autohint: false }));
     assert_eq!(RasterOptions::for_face(None), expected);
 }
 

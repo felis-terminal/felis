@@ -60,6 +60,9 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 - **Rendering**: a combining mark a font has no precomposed glyph for (`q́`) sits on its base at the font's anchor
   instead of the cluster being shrunk into its cell, a mark the font does not cover is left undrawn rather than widening
   the cluster, and an ideographic variation sequence followed by a mark (`葛󠄀́`) draws the variant glyph.
+- **Rendering**: on macOS, CoreText draws text outlines with the system's font smoothing, so text has the weight
+  Terminal.app's has instead of looking thin; `AppleFontSmoothing` set to `0` turns the smoothing off, as it does in
+  other applications. Emoji and other color glyphs, cell sizes, and shaping are unchanged.
 
 ### Fixed
 

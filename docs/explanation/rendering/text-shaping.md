@@ -304,10 +304,12 @@ The cost is one `unsafe` call. The read-fonts font model reads tables in place f
 file has no safe API, so there is no safe route to a file-backed face. `felis-shaping` therefore relaxes the
 workspace-wide `unsafe_code = "deny"` lint crate-wide (the policy lives in `Cargo.toml` / `clippy.toml`), with
 `Mmap::map` as the audited mapping site, carrying a `// SAFETY:` comment. The face providers' platform calls are the
-relaxation's other users: libfontconfig on Linux is a C ABI loaded at run time with no safe binding, and the CoreText
-and DirectWrite bindings expose their calls as `unsafe`. A mapped file truncated underneath the process would SIGBUS;
-accepted, because the mapped paths are root-owned read-only OS font assets that are not rewritten in place during a
-session, the identical trade-off FreeType already makes.
+relaxation's other users: libfontconfig on Linux is a C ABI loaded at run time with no safe binding, the CoreText and
+DirectWrite bindings expose their calls as `unsafe`, and the macOS outline rasterizer hands CoreGraphics a bitmap buffer
+and CoreText the mapped bytes without a copy, declaring the CoreText calls that can return NULL itself where the binding
+would panic on one. A mapped file truncated underneath the process would SIGBUS; accepted, because the mapped paths are
+root-owned read-only OS font assets that are not rewritten in place during a session, the identical trade-off FreeType
+already makes.
 
 Rejected alternatives:
 
@@ -348,12 +350,13 @@ before any glyph, and each glyph quad at its bitmap size from its own bearing, n
 past the edge lands on top of the neighbor; only the window edge bounds the last column, as it bounds any overhanging
 glyph.
 
-How far it reaches depends on the raster. Unhinted, as on macOS, a glyph whose ink fills its advance crosses by the
-rounded-off fraction, under half a pixel. On Linux under `hintslight`, hinting keeps the overlap to the same one column
-of the next cell but darkens it: at 18.67 px in an 11 px cell, DejaVu Sans Mono's `_`, `#` and `W` put up to 44%
-coverage there, against 16% unhinted. `hintfull` reaches further only on a face the automatic hinter draws, which it
-then fits horizontally too: Monaspace Neon's variable build, which carries no instructions, puts up to 63% into the next
-column. kitty on Linux hints the same way under the same setting, and ghostty states the overlap as its trade.
+How far it reaches depends on the raster. Unhinted, a glyph whose ink fills its advance crosses by the rounded-off
+fraction, under half a pixel, plus on macOS the fraction of a pixel CoreText's smoothing dilates it by. On Linux under
+`hintslight`, hinting keeps the overlap to the same one column of the next cell but darkens it: at 18.67 px in an 11 px
+cell, DejaVu Sans Mono's `_`, `#` and `W` put up to 44% coverage there, against 16% unhinted. `hintfull` reaches further
+only on a face the automatic hinter draws, which it then fits horizontally too: Monaspace Neon's variable build, which
+carries no instructions, puts up to 63% into the next column. kitty on Linux hints the same way under the same setting,
+and ghostty states the overlap as its trade.
 
 Rejected:
 
@@ -501,6 +504,25 @@ is ignored, the no-synthesis rule above.
 sub-pixel offsets. felis rasterizes pixel-aligned, sizing cells in whole pixels with no sub-pixel offset axis in the
 atlas key (see "Atlas integration" above). At HiDPI the difference is marginal, and one raster per glyph keeps the atlas
 smaller and the cache key simpler.
+
+**macOS outlines: CoreText draws them.** CoreText draws text unhinted, and its font smoothing dilates each outline by an
+amount it sets from `AppleFontSmoothing`, the size and the fill; that is the weight of every native window, so felis has
+CoreText draw a face's monochrome outlines in white on black into a gray bitmap, with the smoothing on unless
+`AppleFontSmoothing` is `0`. Everything else stays felis's: CoreText reads the face from the bytes harfrust shaped, so
+glyph ids agree; the bitmap is the box of the face's unhinted outline grown by a pad for the dilation; and cell metrics,
+advances and color glyphs are the same on every platform. A face with color tables draws its outlines through felis's
+rasterizer too, since CoreText would draw their color rendering into the mask. A face CoreText cannot prove it opened as
+felis shaped it (its PostScript name, glyph count and variation read back) draws through felis's rasterizer instead.
+CoreText's pixels change with every macOS major, so its tests pin none: they check what felis decides (the face and
+instance CoreText opened, the smoothing setting that reaches the draw, placement against the unhinted outline), and the
+weight against Terminal.app is measured by hand. Rejected:
+
+- **Stem darkening in felis's own rasterizer.** One rasterizer and bit-exact goldens on every host, but the dilation it
+  would fit is undocumented and varies with the smoothing level, the fill and the size: a fit to Menlo at 14 pt drifts
+  elsewhere, and each macOS release could move what it fits.
+- **FreeType on macOS**, WezTerm's choice. It draws the same undilated weight felis's rasterizer does.
+- **A thickening knob** (ghostty's `font-thicken`, kitty's `macos_thicken_font`). `AppleFontSmoothing` is the platform's
+  setting and is honored; a second one has no asking user (Principle 1).
 
 **Hinting, variable, and color fonts.** Hinting is off on macOS, where CoreText renders every native window unhinted. On
 Linux each face is hinted as fontconfig's render settings for its match ask, read as kitty and cairo read them, so a
