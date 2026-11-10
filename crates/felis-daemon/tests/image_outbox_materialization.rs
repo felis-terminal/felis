@@ -12,8 +12,8 @@ use felis_daemon::graphics::{
 };
 use felis_grid::Grid;
 use felis_grid::images::{ImageId, ImageStore, Placements};
+use felis_grid::kitty_graphics::Reassembler;
 use felis_protocol::messages::{ImageMsg, ImageTarget, SourceRect};
-use felis_vt::kitty_graphics::Reassembler;
 
 mod common;
 use common::{b64, body};

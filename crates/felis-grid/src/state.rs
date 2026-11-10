@@ -18,6 +18,7 @@ use crate::{
     cold::ColdStore,
     compact::{GapReuse, RingRef},
     images::{ImageEntry, ImageId},
+    kitty_graphics::{REASSEMBLY_BUFFER_LIMIT, Reassembler, ReassemblyTracker},
     paged_cells::PagedCells,
     pty_effects::{APC_OUTBOX_BYTES, APC_OUTBOX_CAP},
     screen::SavedScreen,
@@ -29,6 +30,55 @@ fn check(ok: bool, what: &str) -> Result<(), StateError> {
         Ok(())
     } else {
         Err(StateError(what.to_owned()))
+    }
+}
+
+/// A [`Decoder`](felis_protocol::base64::Decoder) as the
+/// [`b64`](felis_vt::state::b64) of the base64 text that rebuilds it, which
+/// is the field a predecessor that parked the text itself writes.
+pub mod decoder_text {
+    use felis_protocol::base64::Decoder;
+    use felis_vt::state::b64;
+    use serde::{Deserializer, Serializer};
+
+    /// # Errors
+    /// Only the serializer's own.
+    pub fn serialize<S: Serializer>(decoder: &Decoder, serializer: S) -> Result<S::Ok, S::Error> {
+        b64::serialize(&decoder.replay(), serializer)
+    }
+
+    /// # Errors
+    /// A string that is not base64.
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Decoder, D::Error> {
+        let mut decoder = Decoder::new();
+        decoder.push(&b64::deserialize(deserializer)?);
+        Ok(decoder)
+    }
+}
+
+impl ReassemblyTracker {
+    /// # Errors
+    /// An open transmission past the reassembly cap.
+    pub fn check_restored(&self) -> Result<(), StateError> {
+        check(
+            self.open
+                .as_ref()
+                .is_none_or(|open| open.buffered <= REASSEMBLY_BUFFER_LIMIT),
+            "graphics reassembly length",
+        )
+    }
+}
+
+impl Reassembler {
+    /// # Errors
+    /// Parked payload bytes that disagree with the tracker's count.
+    pub fn check_restored(&self) -> Result<(), StateError> {
+        self.tracker.check_restored()?;
+        let expected = self.tracker.open.as_ref().map_or(0, |open| open.buffered);
+        check(
+            self.payload.pushed() == expected,
+            "graphics reassembly payload",
+        )
     }
 }
 

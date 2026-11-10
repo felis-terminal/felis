@@ -18,7 +18,7 @@ use super::{Mode, OFlags};
 pub const MAX_DECODED_BYTES: usize = felis_protocol::messages::MAX_IMAGE_BYTES as usize;
 // Equal to the reassembly cap so a transmission cannot eat more
 // decoded memory than it did chunked.
-const _: () = assert!(MAX_DECODED_BYTES == felis_vt::kitty_graphics::REASSEMBLY_BUFFER_LIMIT);
+const _: () = assert!(MAX_DECODED_BYTES == felis_grid::kitty_graphics::REASSEMBLY_BUFFER_LIMIT);
 
 /// Reasons [`decode_image`] may reject a transmission. Mapped to Kitty
 /// error codes at the action-handler layer, so the dispatcher can

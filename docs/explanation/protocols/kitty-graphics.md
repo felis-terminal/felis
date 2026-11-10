@@ -45,9 +45,9 @@ both daemon-side. Running the dispatcher under the parse lock puts the PNG decod
 thread's critical section for every APC, not just the placements that move the cursor.
 
 A heavy decode stops the parse the same way: a `t=f`, `t=t` or `t=s` source, a PNG, or a zlib payload declaring at least
-256 KiB of pixels (`offloads_decode` in `felis-vt` names the set). The session task prepares the command under the parse
-lock (reassembly, the id checks, id allocation), runs the decode, and an `a=f` frame's composition onto its base, on the
-blocking pool without it, then commits (store, placement, cursor move, reply) under one acquisition and only then
+256 KiB of pixels (`offloads_decode` in `felis-grid` names the set). The session task prepares the command under the
+parse lock (reassembly, the id checks, id allocation), runs the decode, and an `a=f` frame's composition onto its base,
+on the blocking pool without it, then commits (store, placement, cursor move, reply) under one acquisition and only then
 releases the reader. Meanwhile it drains no effect, and runs only a window's pull and a stats read, both answered from
 the state as it stood before the command, and input that writes to the program with no size or input-owner change while
 nothing waits and no report of the task's own is owed, plus a shutdown, which a decode that never finishes must not
@@ -129,10 +129,10 @@ every other producer stray bytes in the shell. A reassembly overflow is still an
 whose first chunk carried the ids.
 
 The silence for a non-`G` APC body is the load-bearing edge. felis answers only the Kitty graphics dialect
-(`ESC _ G …`); another APC dialect (a `felis-vt` non-graphics APC, or a different terminal's extension a producer probes
-for) is not felis's to answer. Emitting a Kitty `EINVAL` into it would inject bytes into a protocol felis does not
-speak, which a naive producer could misread as a valid response in _that_ protocol. Staying silent on non-`G` bodies
-keeps the error surface confined to the dialect felis owns.
+(`ESC _ G …`); another APC dialect (a non-graphics APC, or a different terminal's extension a producer probes for) is
+not felis's to answer. Emitting a Kitty `EINVAL` into it would inject bytes into a protocol felis does not speak, which
+a naive producer could misread as a valid response in _that_ protocol. Staying silent on non-`G` bodies keeps the error
+surface confined to the dialect felis owns.
 
 ## Shared-memory transfer: deviations from kitty
 

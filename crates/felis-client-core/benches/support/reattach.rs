@@ -14,6 +14,7 @@ use felis_daemon::serve::{session_task::OutEvent, window_rehydrate};
 use felis_grid::{
     Grid, HyperlinkEntry, PtyEffect,
     images::{ImageEntry, ImageStore, Placements},
+    kitty_graphics::Reassembler,
     push_cell_text,
 };
 use felis_protocol::{
@@ -22,7 +23,7 @@ use felis_protocol::{
     frame::{HEADER_LEN, LEN_OVERHEAD, decode as decode_frame},
     messages::{GridMsg, ImageMsg, MAX_SESSION_IMAGE_BYTES},
 };
-use felis_vt::{Parser, kitty_graphics::Reassembler};
+use felis_vt::Parser;
 
 pub(crate) const ROWS: u16 = 54;
 pub(crate) const COLS: u16 = 192;

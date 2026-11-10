@@ -407,3 +407,48 @@ proptest! {
         assert_survives(6, 12, 8, &head.concat(), &tail.concat());
     }
 }
+
+fn round_trip<T: Serialize + serde::de::DeserializeOwned>(value: &T) -> T {
+    serde_json::from_slice(&serde_json::to_vec(value).unwrap()).unwrap()
+}
+
+#[test]
+fn an_open_graphics_transmission_survives_the_hop() {
+    let mut reassembler = Reassembler::new();
+    let head = crate::kitty_graphics::parse(b"Ga=T,f=24,i=7,m=1;AAAA").unwrap();
+    assert_eq!(
+        reassembler.feed(&head),
+        crate::kitty_graphics::Outcome::Pending
+    );
+    let mut restored = round_trip(&reassembler);
+    restored.check_restored().unwrap();
+    let tail = crate::kitty_graphics::parse(b"Gm=0;BBBB").unwrap();
+    assert_eq!(restored.feed(&tail), reassembler.feed(&tail));
+}
+
+#[test]
+fn a_transmission_parked_as_base64_text_resumes_decoded() {
+    let mut reassembler = Reassembler::new();
+    let head = crate::kitty_graphics::parse(b"Ga=T,m=1;YW J").unwrap();
+    let _pending = reassembler.feed(&head);
+    let mut value = serde_json::to_value(&reassembler).unwrap();
+    value["payload"] = serde_json::Value::from(felis_vt::state::b64::encode(b"YW J"));
+    let mut restored: Reassembler = serde_json::from_value(value).unwrap();
+    restored.check_restored().unwrap();
+    let tail = crate::kitty_graphics::parse(b"Gm=0;j").unwrap();
+    let crate::kitty_graphics::Outcome::Done(complete) = restored.feed(&tail) else {
+        panic!("expected Done");
+    };
+    assert_eq!(complete.payload.as_deref(), Some(&b"abc"[..]));
+}
+
+#[test]
+fn a_graphics_payload_past_its_tracked_length_is_refused() {
+    let mut reassembler = Reassembler::new();
+    let head = crate::kitty_graphics::parse(b"Ga=T,m=1;AAAA").unwrap();
+    let _pending = reassembler.feed(&head);
+    let mut value = serde_json::to_value(&reassembler).unwrap();
+    value["payload"] = serde_json::Value::from("AAAAAAAA");
+    let grown: Reassembler = serde_json::from_value(value).unwrap();
+    assert!(grown.check_restored().is_err());
+}

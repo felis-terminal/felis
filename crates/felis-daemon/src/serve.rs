@@ -2170,7 +2170,7 @@ async fn daemon_status(pool: &Arc<Mutex<SessionPool>>, caps: &DaemonCaps) -> Ops
                 ResourceUnit::Bytes,
                 SubjectKind::Session,
                 decode_bytes,
-                Limit::Bounded(felis_vt::kitty_graphics::REASSEMBLY_BUFFER_LIMIT as u64),
+                Limit::Bounded(felis_grid::kitty_graphics::REASSEMBLY_BUFFER_LIMIT as u64),
             ),
             subject_row(
                 ResourceKind::SubscriberQueueBytes,

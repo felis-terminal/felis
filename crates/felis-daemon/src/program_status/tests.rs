@@ -1,7 +1,7 @@
-use felis_vt::program_status::{Kind, Report, State};
+use felis_grid::program_status::{Kind, Report, State};
 use proptest::prelude::*;
 
-use felis_vt::program_status::limits::RECORDS_MAX;
+use felis_grid::program_status::limits::RECORDS_MAX;
 
 use super::ProgramStatusStore;
 

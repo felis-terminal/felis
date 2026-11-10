@@ -7,9 +7,7 @@ use std::fmt;
 
 use crate::{
     APC_BUFFER_LIMIT, LimitedBuffer, MAX_INTERMEDIATES, MAX_PARAMS, OSC_BUFFER_LIMIT, Parser,
-    State,
-    kitty_graphics::{REASSEMBLY_BUFFER_LIMIT, Reassembler, ReassemblyTracker},
-    utf8::Decoder,
+    State, utf8::Decoder,
 };
 
 /// A restored value no run of the parser could have produced.
@@ -46,9 +44,7 @@ pub mod b64 {
     /// # Errors
     /// A string that is not base64.
     pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<u8>, D::Error> {
-        let text = String::deserialize(deserializer)?;
-        felis_protocol::base64::decode(text.as_bytes())
-            .ok_or_else(|| D::Error::custom("invalid base64"))
+        decode::<D>(&String::deserialize(deserializer)?)
     }
 
     #[must_use]
@@ -57,33 +53,16 @@ pub mod b64 {
         felis_protocol::base64::encode_into(bytes, &mut out);
         out.into_iter().map(char::from).collect()
     }
-}
 
-/// A [`Decoder`](felis_protocol::base64::Decoder) as the [`b64`] of the
-/// base64 text that rebuilds it, which is the field a predecessor that
-/// parked the text itself writes.
-pub mod decoder_text {
-    use felis_protocol::base64::Decoder;
-    use serde::{Deserializer, Serializer};
-
-    /// # Errors
-    /// Only the serializer's own.
-    pub fn serialize<S: Serializer>(decoder: &Decoder, serializer: S) -> Result<S::Ok, S::Error> {
-        super::b64::serialize(&decoder.replay(), serializer)
-    }
-
-    /// # Errors
-    /// A string that is not base64.
-    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Decoder, D::Error> {
-        let mut decoder = Decoder::new();
-        decoder.push(&super::b64::deserialize(deserializer)?);
-        Ok(decoder)
+    pub(super) fn decode<'de, D: Deserializer<'de>>(text: &str) -> Result<Vec<u8>, D::Error> {
+        felis_protocol::base64::decode(text.as_bytes())
+            .ok_or_else(|| D::Error::custom("invalid base64"))
     }
 }
 
 /// [`b64`] for an optional payload.
 pub mod opt_b64 {
-    use serde::{Deserialize, Deserializer, Serializer, de::Error as _};
+    use serde::{Deserialize, Deserializer, Serializer};
 
     /// # Errors
     /// Only the serializer's own.
@@ -104,10 +83,7 @@ pub mod opt_b64 {
         deserializer: D,
     ) -> Result<Option<Vec<u8>>, D::Error> {
         Option::<String>::deserialize(deserializer)?
-            .map(|text| {
-                felis_protocol::base64::decode(text.as_bytes())
-                    .ok_or_else(|| D::Error::custom("invalid base64"))
-            })
+            .map(|text| super::b64::decode::<D>(&text))
             .transpose()
     }
 }
@@ -166,32 +142,6 @@ impl Decoder {
                 (1..=3).contains(&held) && self.len <= held
             },
             "UTF-8 decoder state",
-        )
-    }
-}
-
-impl ReassemblyTracker {
-    /// # Errors
-    /// An open transmission past the reassembly cap.
-    pub fn check_restored(&self) -> Result<(), StateError> {
-        check(
-            self.open
-                .as_ref()
-                .is_none_or(|open| open.buffered <= REASSEMBLY_BUFFER_LIMIT),
-            "graphics reassembly length",
-        )
-    }
-}
-
-impl Reassembler {
-    /// # Errors
-    /// Parked payload bytes that disagree with the tracker's count.
-    pub fn check_restored(&self) -> Result<(), StateError> {
-        self.tracker.check_restored()?;
-        let expected = self.tracker.open.as_ref().map_or(0, |open| open.buffered);
-        check(
-            self.payload.pushed() == expected,
-            "graphics reassembly payload",
         )
     }
 }
@@ -297,36 +247,6 @@ mod tests {
     }
 
     #[test]
-    fn an_open_graphics_transmission_survives_the_hop() {
-        let mut reassembler = Reassembler::new();
-        let head = crate::kitty_graphics::parse(b"Ga=T,f=24,i=7,m=1;AAAA").unwrap();
-        assert_eq!(
-            reassembler.feed(&head),
-            crate::kitty_graphics::Outcome::Pending
-        );
-        let mut restored = round_trip(&reassembler);
-        restored.check_restored().unwrap();
-        let tail = crate::kitty_graphics::parse(b"Gm=0;BBBB").unwrap();
-        assert_eq!(restored.feed(&tail), reassembler.feed(&tail));
-    }
-
-    #[test]
-    fn a_transmission_parked_as_base64_text_resumes_decoded() {
-        let mut reassembler = Reassembler::new();
-        let head = crate::kitty_graphics::parse(b"Ga=T,m=1;YW J").unwrap();
-        let _pending = reassembler.feed(&head);
-        let mut value = serde_json::to_value(&reassembler).unwrap();
-        value["payload"] = serde_json::Value::from(b64::encode(b"YW J"));
-        let mut restored: Reassembler = serde_json::from_value(value).unwrap();
-        restored.check_restored().unwrap();
-        let tail = crate::kitty_graphics::parse(b"Gm=0;j").unwrap();
-        let crate::kitty_graphics::Outcome::Done(complete) = restored.feed(&tail) else {
-            panic!("expected Done");
-        };
-        assert_eq!(complete.payload.as_deref(), Some(&b"abc"[..]));
-    }
-
-    #[test]
     fn states_no_run_could_reach_are_refused() {
         let mut parser = Parser::new();
         parser.params.len = MAX_PARAMS + 1;
@@ -337,13 +257,6 @@ mod tests {
         let decoder: Decoder =
             serde_json::from_str(r#"{"buf":[240,159,0,0],"len":3,"needed":1}"#).unwrap();
         assert!(decoder.check_restored().is_err());
-        let mut reassembler = Reassembler::new();
-        let head = crate::kitty_graphics::parse(b"Ga=T,m=1;AAAA").unwrap();
-        let _pending = reassembler.feed(&head);
-        let mut value = serde_json::to_value(&reassembler).unwrap();
-        value["payload"] = serde_json::Value::from("AAAAAAAA");
-        let grown: Reassembler = serde_json::from_value(value).unwrap();
-        assert!(grown.check_restored().is_err());
     }
 
     #[test]

@@ -8565,15 +8565,15 @@ mod tests {
         assert_eq!(listed_status(&task), status(&[("ab", "done")]));
     }
 
-    fn listed_progress(task: &SessionTask) -> felis_vt::progress::ProgressReport {
+    fn listed_progress(task: &SessionTask) -> felis_grid::progress::ProgressReport {
         task.meta.lock().unwrap().terminal_progress
     }
 
     const fn progress(
-        state: felis_vt::progress::ProgressState,
+        state: felis_grid::progress::ProgressState,
         value: Option<u8>,
-    ) -> felis_vt::progress::Progress {
-        felis_vt::progress::Progress { state, value }
+    ) -> felis_grid::progress::Progress {
+        felis_grid::progress::Progress { state, value }
     }
 
     /// Each report replaces the last whole, and the session keeps it
@@ -8581,7 +8581,7 @@ mod tests {
     /// detach.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn terminal_progress_reaches_the_roster_and_is_replaced_whole() {
-        use felis_vt::progress::ProgressState;
+        use felis_grid::progress::ProgressState;
         let mut task = SessionTask::for_tests(session_with("read _x"));
         let (win, _rx) = attach_sub(&mut task, false);
         write_to_grid(&task, b"\x1b]9;4;2;71\x1b\\");

@@ -19,10 +19,6 @@ pub use felis_protocol::messages::{
 };
 use felis_protocol::messages::{PromptJump, PromptKind, ThemeChannel};
 use felis_vt::Sink;
-/// Re-exported so `felis-render-core` can flag Trojan-Source characters
-/// without depending on `felis-vt` (`docs/explanation/architecture/overview.md`
-/// "Workspace: the crate-boundary decision record").
-pub use felis_vt::bidi;
 use serde::{Deserialize, Serialize};
 
 /// 1-based registry index handed out by [`Grid::install_sizing`]; the
@@ -284,7 +280,7 @@ pub enum PtyEffect {
     /// status effects.
     Prompt(PromptEdge),
     /// A terminated `ConEmu` `OSC 9 ; 4` report; `None` clears.
-    TerminalProgress(felis_vt::progress::ProgressReport),
+    TerminalProgress(progress::ProgressReport),
     /// The text of a finished command's output, cut at its primary-screen
     /// `OSC 133 ; D` while [`Grid::set_capture_command_output`] is on.
     CommandOutput {
@@ -307,7 +303,7 @@ pub enum PromptEdge {
 pub enum ProgramStatusEffect {
     /// The whole content of the record it replaces. Boxed: inline, it
     /// would double every queued effect's size.
-    Report(Box<felis_vt::program_status::Report>),
+    Report(Box<program_status::Report>),
     /// `""` removes every record; otherwise the record and its descendants.
     Clear { id: String },
 }
@@ -315,6 +311,7 @@ pub enum ProgramStatusEffect {
 /// Grid → ANSI/SGR re-encoding for the pipe action, `felis sessions
 /// capture --ansi`, and the host-terminal clients.
 pub mod ansi;
+pub mod bidi;
 mod cluster_table;
 mod cold;
 mod command_output;
@@ -323,14 +320,19 @@ mod damage;
 mod editing;
 pub mod image_layout;
 pub mod images;
+pub mod kitty_graphics;
+pub mod kitty_text_sizing;
 mod link_table;
 mod modes;
 pub mod mouse;
+pub mod notification;
 mod osc52;
 mod osc_color;
 mod osc_dispatch;
 mod paged_cells;
 mod placeholder_resolve;
+pub mod program_status;
+pub mod progress;
 #[doc(hidden)]
 pub mod pty_effects;
 mod reply_identity;
@@ -661,7 +663,7 @@ pub struct Grid {
     pending_bidi: editing::PendingBidi,
     /// Mirrors the daemon's graphics reassembler over the APC bodies
     /// this grid admits, so it knows which body completes a command.
-    graphics_tracker: felis_vt::kitty_graphics::ReassemblyTracker,
+    graphics_tracker: kitty_graphics::ReassemblyTracker,
     /// Set by an admitted APC that completes a cursor-moving placement, or
     /// by an effect that spends an outbox budget; taken by
     /// [`felis_vt::Sink::take_yield`].
@@ -844,7 +846,7 @@ pub struct Grid {
     /// OSC 9 / 99 / 777 notifications awaiting relay
     /// (`docs/reference/protocols/notifications.md`). Capped at
     /// `NOTIFY_OUTBOX_CAP` per drain; further ones drop with BEL flagged.
-    notifications: Vec<felis_vt::notification::Notification>,
+    notifications: Vec<notification::Notification>,
     /// In-flight OSC 99 multi-chunk reassembly keyed by `i=`. Bounded
     /// (`NOTIFY_REASSEMBLY_*`) so a producer that never sends `d=1`
     /// cannot leak.
@@ -932,7 +934,7 @@ pub struct ApcBody {
     pub cursor_col: u16,
     /// The parse stopped after this body because it completes a command
     /// whose decode runs off the session task
-    /// ([`felis_vt::kitty_graphics::offloads_decode`]). Not dumped: a
+    /// ([`crate::kitty_graphics::offloads_decode`]). Not dumped: a
     /// restored parse is not stopped on it.
     #[cfg_attr(feature = "state-dump", serde(skip))]
     pub stops_parse: bool,
@@ -1097,7 +1099,7 @@ impl Grid {
             last_printed: None,
             zwj_pending: false,
             pending_bidi: editing::PendingBidi::default(),
-            graphics_tracker: felis_vt::kitty_graphics::ReassemblyTracker::new(),
+            graphics_tracker: kitty_graphics::ReassemblyTracker::new(),
             yield_pending: false,
             prompt_expiry_owed: false,
             dcs: None,
@@ -1213,7 +1215,7 @@ impl Grid {
     /// Every OSC 9 / 99 / 777 notification decoded since the last call
     /// (`docs/reference/protocols/notifications.md`); incomplete OSC 99
     /// chunks stay in the reassembly map.
-    pub fn take_notifications(&mut self) -> Vec<felis_vt::notification::Notification> {
+    pub fn take_notifications(&mut self) -> Vec<notification::Notification> {
         std::mem::take(&mut self.notifications)
     }
 

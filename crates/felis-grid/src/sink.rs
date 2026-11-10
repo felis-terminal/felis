@@ -1196,7 +1196,7 @@ impl Grid {
     /// Whether `body` completes a command that moves the cursor, and one
     /// whose decode the daemon offloads.
     fn completed_graphics_command(&mut self, body: &[u8]) -> (bool, bool) {
-        use felis_vt::kitty_graphics::{Step, StopKeys, parse};
+        use crate::kitty_graphics::{Step, StopKeys, parse};
         let Some(cmd) = parse(body) else {
             return (false, false);
         };

@@ -145,7 +145,7 @@ pub(crate) fn body(controls: &str, payload: &[u8]) -> Vec<u8> {
 }
 
 /// Hand-rolled rather than round-tripped through
-/// `felis_vt::kitty_graphics::base64`: an encoder built on the decoder
+/// `felis_protocol::base64`: an encoder built on the decoder
 /// under test would hide a bidirectional regression.
 pub(crate) fn b64(input: &[u8]) -> Vec<u8> {
     const ALPHA: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";

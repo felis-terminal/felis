@@ -9,8 +9,8 @@ use felis_daemon::graphics::ImageEvent;
 use felis_daemon::graphics::{ApcCtx, ShmDeferral, dispatch_apc_body};
 use felis_grid::Grid;
 use felis_grid::images::{ImageStore, Placements};
+use felis_grid::kitty_graphics::Reassembler;
 use felis_vt::Parser;
-use felis_vt::kitty_graphics::Reassembler;
 
 mod common;
 use common::b64;

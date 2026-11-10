@@ -7,6 +7,7 @@ use std::fmt::Write as _;
 use felis_daemon::graphics::{
     ApcCtx, ImageEvent, ShmDeferral, dispatch_apc_body, materialize_image_events,
 };
+use felis_grid::kitty_graphics::Reassembler;
 use felis_grid::{
     Grid,
     images::{ImageStore, Placements},
@@ -15,7 +16,6 @@ use felis_protocol::{
     kitty_graphics::placeholder::{PLACEHOLDER, Rank, diacritic_for},
     messages::{ImageMsg, MAX_SESSION_IMAGE_BYTES},
 };
-use felis_vt::kitty_graphics::Reassembler;
 
 pub(crate) const ROWS: u16 = 54;
 pub(crate) const COLS: u16 = 192;

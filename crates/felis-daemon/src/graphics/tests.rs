@@ -161,7 +161,7 @@ fn end_to_end_parser_feeds_apc_through_grid_relay_into_dispatcher() {
 fn complete(controls: &[(u8, &[u8])], payload: &[u8]) -> CompleteCommand {
     CompleteCommand {
         controls: controls.iter().map(|(k, v)| (*k, v.to_vec())).collect(),
-        payload: kitty_graphics::base64::decode(payload),
+        payload: felis_protocol::base64::decode(payload),
     }
 }
 

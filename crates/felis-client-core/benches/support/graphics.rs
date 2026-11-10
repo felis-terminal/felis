@@ -15,6 +15,7 @@ use felis_daemon::graphics::{
 use felis_grid::{
     Grid, PtyEffect,
     images::{ImageEntry, ImageStore, Placements},
+    kitty_graphics::Reassembler,
 };
 use felis_protocol::{
     MessageKind,
@@ -23,7 +24,7 @@ use felis_protocol::{
     kitty_graphics::placeholder::{PLACEHOLDER, Rank, diacritic_for},
     messages::{GridMsg, ImageMsg, MAX_SESSION_IMAGE_BYTES},
 };
-use felis_vt::{Parser, kitty_graphics::Reassembler};
+use felis_vt::Parser;
 
 use crate::workload::{apply_diffs, emit_diffs_with};
 

@@ -86,7 +86,7 @@ impl Grid {
     /// text. Each grapheme cluster is its own sized character, placed
     /// by `place_sized_cluster`.
     pub(crate) fn dispatch_osc_66(&mut self, body: &[u8]) {
-        let Some(run) = felis_vt::kitty_text_sizing::parse(body) else {
+        let Some(run) = crate::kitty_text_sizing::parse(body) else {
             return;
         };
         let Ok(text) = std::str::from_utf8(run.text) else {
@@ -391,13 +391,13 @@ impl Grid {
                 return;
             }
         }
-        if let Some(n) = felis_vt::notification::parse_osc9(body) {
+        if let Some(n) = crate::notification::parse_osc9(body) {
             self.relay_notification(n);
         }
     }
 
     fn dispatch_progress(&mut self, fields: &[u8]) {
-        let Some(report) = felis_vt::progress::parse_progress(fields) else {
+        let Some(report) = crate::progress::parse_progress(fields) else {
             return;
         };
         self.prompt_expiry_owed |= report.is_some();
@@ -407,7 +407,7 @@ impl Grid {
 
     /// OSC 777, rxvt-unicode `notify ; title ; body`.
     pub(crate) fn dispatch_osc777(&mut self, body: &[u8]) {
-        if let Some(n) = felis_vt::notification::parse_osc777(body) {
+        if let Some(n) = crate::notification::parse_osc777(body) {
             self.relay_notification(n);
         }
     }
@@ -455,8 +455,8 @@ impl Grid {
     /// OSC 99, kitty desktop notifications
     /// (`docs/reference/protocols/notifications.md`).
     pub(crate) fn dispatch_osc99(&mut self, body: &[u8]) {
-        use felis_vt::notification::{Notification, Osc99, PayloadKind};
-        let Some(ev) = felis_vt::notification::parse_osc99(body) else {
+        use crate::notification::{Notification, Osc99, PayloadKind};
+        let Some(ev) = crate::notification::parse_osc99(body) else {
             return;
         };
         let (id, done, kind, text, urgency) = match ev {
@@ -522,7 +522,7 @@ impl Grid {
     /// is a report. `?` goes unanswered: answering advertises support,
     /// which waits until the records it implies are observable.
     pub(crate) fn dispatch_osc7501(&mut self, body: &[u8], end: felis_vt::OscEnd) {
-        use felis_vt::program_status::{Osc7501, Terminator, parse_osc7501};
+        use crate::program_status::{Osc7501, Terminator, parse_osc7501};
         let terminator = match end {
             felis_vt::OscEnd::Bel => Terminator::Bel,
             felis_vt::OscEnd::St => Terminator::St,
@@ -532,8 +532,7 @@ impl Grid {
             Some(Osc7501::Report(report)) => {
                 self.prompt_expiry_owed |= matches!(
                     report.state,
-                    felis_vt::program_status::State::Working
-                        | felis_vt::program_status::State::Blocked
+                    crate::program_status::State::Working | crate::program_status::State::Blocked
                 );
                 ProgramStatusEffect::Report(Box::new(report))
             }
@@ -554,7 +553,7 @@ impl Grid {
     /// A saturated outbox drops the notification and flags the bell,
     /// so the producer sees one signal rather than a silent loss (the
     /// APC-outbox posture).
-    fn relay_notification(&mut self, n: felis_vt::notification::Notification) {
+    fn relay_notification(&mut self, n: crate::notification::Notification) {
         if n.title.is_none() && n.body.is_empty() {
             return;
         }

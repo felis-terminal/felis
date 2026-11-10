@@ -4,11 +4,12 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use felis_vt::kitty_graphics::{
-    Command, Outcome, Reassembler, base64,
+use felis_grid::kitty_graphics::{
+    Command, Outcome, Reassembler,
     inflate::{InflateError, inflate},
     parse,
 };
+use felis_protocol::base64;
 use miniz_oxide::deflate::compress_to_vec_zlib;
 use proptest::prelude::*;
 

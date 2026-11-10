@@ -11,9 +11,9 @@ use felis_daemon::graphics::{
     ApcCtx, SavedScreens, ShmDeferral, apply_reflow_remap, apply_screen_switch, dispatch_apc_body,
 };
 use felis_grid::images::{ImageStore, Placements};
+use felis_grid::kitty_graphics::Reassembler;
 use felis_grid::{Grid, PtyEffect};
 use felis_vt::Parser;
-use felis_vt::kitty_graphics::Reassembler;
 
 mod common;
 use common::{apc, b64};

@@ -17,10 +17,11 @@ use std::{
 use felis_grid::{
     Grid, ReplyIdentity, TableGc,
     images::{ImageStore, Placements},
+    kitty_graphics::Reassembler,
 };
 use felis_protocol::messages::{Attachment, MAX_SESSION_TAGS, MAX_TAG_BYTES, NotifyToClientMsg};
 use felis_pty::{ChildHandle, PtyReader, PtyWriter, Resizer};
-use felis_vt::{Parser, kitty_graphics::Reassembler};
+use felis_vt::Parser;
 use tokio::sync::{Notify, Semaphore, broadcast, mpsc};
 
 use crate::{
@@ -157,7 +158,7 @@ pub struct Session {
     pub program_status: crate::program_status::ProgramStatusStore,
     /// The last `OSC 9 ; 4` report, applied in byte order like
     /// [`Self::program_status`].
-    pub terminal_progress: felis_vt::progress::ProgressReport,
+    pub terminal_progress: felis_grid::progress::ProgressReport,
     /// Cell pixel size from `InputMsg::Resize`; the graphics dispatcher
     /// resolves auto placement extents (`c=0` / `r=0`) with it so the
     /// cursor advances past the image. Zero before any client attaches
@@ -293,7 +294,7 @@ pub struct SessionMeta {
     /// last meta publish.
     pub program_status: Vec<felis_protocol::messages::ProgramStatusRecord>,
     pub spawn_cwd: Option<String>,
-    pub terminal_progress: felis_vt::progress::ProgressReport,
+    pub terminal_progress: felis_grid::progress::ProgressReport,
 }
 
 /// A session's most recent notification plus the `Instant` it arrived,

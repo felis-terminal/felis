@@ -5,9 +5,7 @@
 //! <https://sw.kovidgoyal.net/kitty/graphics-protocol/>.
 
 pub mod inflate;
-// base64 lives in `felis-protocol` because `felis-grid`'s OSC 52 path
-// needs the same codec; re-exported so this path stays stable.
-pub use felis_protocol::base64;
+use felis_protocol::base64;
 use felis_protocol::messages::ImageFormat;
 
 /// Borrows into the original APC buffer: the dispatcher copies what it
@@ -340,7 +338,7 @@ pub fn format_feature_response(image_id: u32, keys: &[(u8, String)]) -> Vec<u8> 
 pub const REASSEMBLY_BUFFER_LIMIT: usize = 64 * 1024 * 1024;
 
 // One chunk arrives as one APC body.
-const _: () = assert!(REASSEMBLY_BUFFER_LIMIT > crate::APC_BUFFER_LIMIT);
+const _: () = assert!(REASSEMBLY_BUFFER_LIMIT > felis_vt::APC_BUFFER_LIMIT);
 // A literal, not the symbol: the documented cap must not move with it.
 const _: () = assert!(REASSEMBLY_BUFFER_LIMIT == 67_108_864);
 

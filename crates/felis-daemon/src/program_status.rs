@@ -4,9 +4,9 @@
 
 use std::collections::BTreeMap;
 
+use felis_grid::program_status::limits::RECORDS_MAX;
+use felis_grid::program_status::{Report, State};
 use felis_protocol::messages::ProgramStatusRecord;
-use felis_vt::program_status::limits::RECORDS_MAX;
-use felis_vt::program_status::{Report, State};
 
 #[derive(Debug)]
 pub struct ProgramStatusStore {
