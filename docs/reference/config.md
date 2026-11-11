@@ -441,7 +441,8 @@ Diagnostic categories reported by `felis config check`:
 
 ## Live reload
 
-A saved `config.toml` takes effect in running windows. The `reload` action (`Ctrl+Shift+R`) re-reads it on demand.
+Saving `config.toml` reloads it in running windows automatically; the `reload` action (`Ctrl+Shift+R`) re-reads it on
+demand.
 
 Live application by property:
 
