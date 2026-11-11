@@ -1,8 +1,8 @@
 //! Per-pixel arithmetic of the version 1 painter: the composite modes it
 //! draws, on premultiplied RGBA8 as W3C Compositing-1 defines them, and
-//! the gradient parameter of each brush shape.
+//! the gradient parameter of each brush shape and extend mode.
 
-use skrifa::font::glyph::color::CompositeMode;
+use skrifa::font::glyph::color::{CompositeMode, Extend};
 
 use super::div255;
 
@@ -258,48 +258,63 @@ impl Conical {
     }
 }
 
-/// A color line sampled at 256 points of `t` in 0..=1, premultiplied, for
-/// a pad extend: `t` outside the line takes its end color.
-pub(super) struct Ramp([[u8; 4]; 256]);
+/// `t` brought into 0..=1 by `extend`: held at the ends, wrapped, or
+/// mirrored every other period.
+pub(super) fn extended(t: f32, extend: Extend) -> f32 {
+    match extend {
+        Extend::Repeat => t - t.floor(),
+        Extend::Reflect => {
+            let u = t.rem_euclid(2.0);
+            if u > 1.0 { 2.0 - u } else { u }
+        }
+        Extend::Pad | Extend::Unknown => t.clamp(0.0, 1.0),
+    }
+}
+
+/// A color line sampled at 256 points of `t` in 0..=1, premultiplied, and
+/// the extend that brings any other `t` into that range.
+pub(super) struct Ramp {
+    colors: [[u8; 4]; 256],
+    below: [u8; 4],
+    extend: Extend,
+}
 
 impl Ramp {
     /// `stops` sorted by offset, each a straight color: interpolated
     /// straight, as cairo and Skia interpolate a gradient, then
     /// premultiplied.
-    pub(super) fn new(stops: &[(f32, [f32; 4])]) -> Self {
-        let mut ramp = [[0; 4]; 256];
-        for (i, out) in (0_u16..).zip(&mut ramp) {
-            let t = f32::from(i) / 255.0;
-            let color = Self::at(stops, t);
-            let a = color[3];
-            *out = [
-                unit(color[0] * a),
-                unit(color[1] * a),
-                unit(color[2] * a),
-                unit(a),
-            ];
+    pub(super) fn new(stops: &[(f32, [f32; 4])], extend: Extend) -> Self {
+        let premultiplied =
+            |[r, g, b, a]: [f32; 4]| [unit(r * a), unit(g * a), unit(b * a), unit(a)];
+        let mut colors = [[0; 4]; 256];
+        for (i, out) in (0_u16..).zip(&mut colors) {
+            *out = premultiplied(Self::at(stops, f32::from(i) / 255.0));
         }
-        Self(ramp)
+        let below = premultiplied(stops.first().map_or([0.0; 4], |&(_, color)| color));
+        Self {
+            colors,
+            below,
+            extend,
+        }
     }
 
     fn at(stops: &[(f32, [f32; 4])], t: f32) -> [f32; 4] {
-        let Some(&(first_offset, first)) = stops.first() else {
+        let Some(&(_, first)) = stops.first() else {
             return [0.0; 4];
         };
-        if t <= first_offset {
-            return first;
-        }
-        for pair in stops.windows(2) {
-            let ((o0, c0), (o1, c1)) = (pair[0], pair[1]);
-            if t <= o1 {
-                if o1 <= o0 {
-                    return c1;
-                }
-                let f = (t - o0) / (o1 - o0);
-                return std::array::from_fn(|i| (c1[i] - c0[i]).mul_add(f, c0[i]));
-            }
-        }
-        stops.last().map_or(first, |&(_, c)| c)
+        let above = stops.partition_point(|&(offset, _)| offset <= t);
+        let (Some(&(o0, c0)), Some(&(o1, c1))) = (
+            above.checked_sub(1).and_then(|i| stops.get(i)),
+            stops.get(above),
+        ) else {
+            return if above == 0 {
+                first
+            } else {
+                stops[stops.len() - 1].1
+            };
+        };
+        let f = (t - o0) / (o1 - o0);
+        std::array::from_fn(|i| (c1[i] - c0[i]).mul_add(f, c0[i]))
     }
 
     #[expect(
@@ -308,8 +323,12 @@ impl Ramp {
         reason = "clamped into 0..=255"
     )]
     pub(super) fn sample(&self, t: f32) -> [u8; 4] {
+        if t < 0.0 && matches!(self.extend, Extend::Pad | Extend::Unknown) {
+            return self.below;
+        }
+        let t = extended(t, self.extend);
         let index = (t.clamp(0.0, 1.0) * 255.0).round() as usize;
-        self.0[index.min(255)]
+        self.colors[index.min(255)]
     }
 }
 
@@ -321,9 +340,9 @@ impl Ramp {
 )]
 mod tests {
     use proptest::prelude::*;
-    use skrifa::font::glyph::color::CompositeMode;
+    use skrifa::font::glyph::color::{CompositeMode, Extend};
 
-    use super::{Conical, Ramp, clears_backdrop, linear_t, op};
+    use super::{Conical, Ramp, clears_backdrop, extended, linear_t, op};
 
     /// Every mode the format defines.
     const MODES: [CompositeMode; 28] = [
@@ -587,6 +606,22 @@ mod tests {
             }
         }
 
+
+        #[test]
+        fn repeat_wraps_t_into_one_period(t in -10.0_f32..10.0, k in -5_i8..5) {
+            let u = extended(t, Extend::Repeat);
+            prop_assert!((0.0..=1.0).contains(&u));
+            let shifted = extended(t + f32::from(k), Extend::Repeat);
+            prop_assert!((u - shifted).abs() < 1e-4 || (u - shifted).abs() > 1.0 - 1e-4, "{u} vs {shifted}");
+        }
+
+        #[test]
+        fn reflect_mirrors_t_every_other_period(t in -10.0_f32..10.0, k in -5_i8..5) {
+            let u = extended(t, Extend::Reflect);
+            prop_assert!((0.0..=1.0).contains(&u));
+            prop_assert!((u - extended(-t, Extend::Reflect)).abs() < 1e-4);
+            prop_assert!((u - extended(t + 2.0 * f32::from(k), Extend::Reflect)).abs() < 1e-4);
+        }
     }
 
     #[test]
@@ -653,7 +688,10 @@ mod tests {
 
     #[test]
     fn a_pad_ramp_holds_its_end_colors_outside_the_line() {
-        let ramp = Ramp::new(&[(0.25, [1.0, 0.0, 0.0, 1.0]), (0.75, [0.0, 0.0, 1.0, 0.5])]);
+        let ramp = Ramp::new(
+            &[(0.25, [1.0, 0.0, 0.0, 1.0]), (0.75, [0.0, 0.0, 1.0, 0.5])],
+            Extend::Pad,
+        );
         assert_eq!(ramp.sample(-3.0), [255, 0, 0, 255]);
         assert_eq!(ramp.sample(0.1), [255, 0, 0, 255]);
         assert_eq!(ramp.sample(0.9), [0, 0, 128, 128]);
@@ -665,16 +703,30 @@ mod tests {
         );
     }
 
+    /// The `COLR` color line: of stops sharing an offset, the first
+    /// colors the line below it and the last at and above it.
     #[test]
-    fn coincident_stops_step_between_their_colors() {
-        let ramp = Ramp::new(&[
-            (0.0, [1.0, 0.0, 0.0, 1.0]),
-            (0.5, [1.0, 0.0, 0.0, 1.0]),
-            (0.5, [0.0, 1.0, 0.0, 1.0]),
-            (1.0, [0.0, 1.0, 0.0, 1.0]),
-        ]);
-        assert_eq!(ramp.sample(0.4), [255, 0, 0, 255]);
-        assert_eq!(ramp.sample(0.6), [0, 255, 0, 255]);
+    fn coincident_stops_use_the_first_below_and_the_last_from_their_offset() {
+        let red = [1.0, 0.0, 0.0, 1.0];
+        let green = [0.0, 1.0, 0.0, 1.0];
+        let blue = [0.0, 0.0, 1.0, 1.0];
+        let at = 51.0 / 255.0;
+        let ramp = Ramp::new(
+            &[(0.0, red), (at, red), (at, green), (at, blue), (1.0, blue)],
+            Extend::Pad,
+        );
+        assert_eq!(ramp.sample(50.0 / 255.0), [255, 0, 0, 255], "inside, below");
+        assert_eq!(ramp.sample(at), [0, 0, 255, 255], "inside, at the offset");
+        let ramp = Ramp::new(&[(0.0, red), (0.0, green), (1.0, green)], Extend::Pad);
+        assert_eq!(
+            ramp.sample(-1.0),
+            [255, 0, 0, 255],
+            "padded below the first offset"
+        );
+        assert_eq!(ramp.sample(0.0), [0, 255, 0, 255], "at the first offset");
+        let ramp = Ramp::new(&[(0.0, red), (1.0, green), (1.0, blue)], Extend::Pad);
+        assert_eq!(ramp.sample(1.0), [0, 0, 255, 255], "at the last offset");
+        assert_eq!(ramp.sample(2.0), [0, 0, 255, 255], "padded past it");
     }
 
     /// The branch points random pairs rarely reach: transparent and
@@ -712,5 +764,46 @@ mod tests {
     fn an_undefined_mode_clears() {
         assert_eq!(op(CompositeMode::Unknown)([9, 9, 9, 9], [255; 4]), [0; 4]);
         assert!(clears_backdrop(CompositeMode::Unknown));
+    }
+
+    #[test]
+    fn each_extend_brings_t_into_the_line() {
+        let cases = [
+            //  t     pad   repeat reflect
+            (0.0, 0.0, 0.0, 0.0),
+            (0.25, 0.25, 0.25, 0.25),
+            (1.0, 1.0, 0.0, 1.0),
+            (1.25, 1.0, 0.25, 0.75),
+            (2.25, 1.0, 0.25, 0.25),
+            (-0.25, 0.0, 0.75, 0.25),
+        ];
+        for (t, pad, repeat, reflect) in cases {
+            assert_eq!(extended(t, Extend::Pad), pad, "pad {t}");
+            assert_eq!(
+                extended(t, Extend::Unknown),
+                pad,
+                "an unknown extend pads, {t}"
+            );
+            assert_eq!(extended(t, Extend::Repeat), repeat, "repeat {t}");
+            assert_eq!(extended(t, Extend::Reflect), reflect, "reflect {t}");
+        }
+        assert_eq!(extended(f32::NEG_INFINITY, Extend::Pad), 0.0);
+        assert_eq!(extended(f32::INFINITY, Extend::Pad), 1.0);
+    }
+
+    #[test]
+    fn a_ramp_repeats_or_reflects_past_its_end() {
+        let ramp = Ramp::new(
+            &[(0.0, [1.0, 0.0, 0.0, 1.0]), (1.0, [0.0, 0.0, 1.0, 1.0])],
+            Extend::Repeat,
+        );
+        assert_eq!(ramp.sample(1.0 + 1.0 / 255.0), ramp.sample(1.0 / 255.0));
+        assert_eq!(ramp.sample(-0.5), ramp.sample(0.5));
+        let ramp = Ramp::new(
+            &[(0.0, [1.0, 0.0, 0.0, 1.0]), (1.0, [0.0, 0.0, 1.0, 1.0])],
+            Extend::Reflect,
+        );
+        assert_eq!(ramp.sample(1.25), ramp.sample(0.75));
+        assert_eq!(ramp.sample(-0.25), ramp.sample(0.25));
     }
 }

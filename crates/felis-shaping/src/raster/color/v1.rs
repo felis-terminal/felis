@@ -281,15 +281,12 @@ impl Painter<'_> {
         reason = "an outer None refuses the glyph, an inner None draws nothing"
     )]
     fn shader(&self, brush: &Brush<'_>, m: Matrix<f32>) -> Option<Option<Shader>> {
-        let ramp = |stops: &[ColorStop], extend: Extend| -> Option<Box<Ramp>> {
-            if extend != Extend::Pad {
-                return None;
-            }
+        let ramp = |stops: &[ColorStop], extend: Extend| -> Box<Ramp> {
             let stops: Vec<(f32, [f32; 4])> = stops
                 .iter()
                 .map(|s| (s.offset, self.color(s.palette_index, s.alpha)))
                 .collect();
-            Some(Box::new(Ramp::new(&stops)))
+            Box::new(Ramp::new(&stops, extend))
         };
         Some(match *brush {
             Brush::Solid {
@@ -311,7 +308,7 @@ impl Painter<'_> {
                 color_stops,
                 extend,
             } => {
-                let ramp = ramp(color_stops, extend)?;
+                let ramp = ramp(color_stops, extend);
                 let d = [p1.x - p0.x, p1.y - p0.y];
                 let len2 = d[0].mul_add(d[0], d[1] * d[1]);
                 inverse(m)
@@ -332,7 +329,7 @@ impl Painter<'_> {
                 color_stops,
                 extend,
             } => {
-                let ramp = ramp(color_stops, extend)?;
+                let ramp = ramp(color_stops, extend);
                 inverse(m).map(|inverse| Shader::Radial {
                     inverse,
                     conical: Conical {
@@ -960,9 +957,7 @@ mod tests {
 
     #[test]
     fn a_paint_the_painter_lacks_draws_the_glyph_whole_from_the_next_source() {
-        for name in ["linear_repeat_0_1", "sweep_0_360_pad_narrow"] {
-            assert!(!draw(name, 40.0).pixels().is_color(), "{name}");
-        }
+        assert!(!draw("sweep_0_360_pad_narrow", 40.0).pixels().is_color());
     }
 
     #[test]
