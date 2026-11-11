@@ -845,13 +845,11 @@ message Attachment {
     minor: 3
     skippable: true
   }];
-  // The pid of the process that connected this attachment's socket, as
-  // the daemon's kernel recorded it at accept: on felis's own paths the
-  // window process, but a connector that hands its socket on and exits
-  // leaves a pid that no longer names the holder. Only beside LOCAL
-  // (refused at decode otherwise), and never 0. Absent means unknown: a
-  // platform without the query, a failed lookup, or a peer outside the
-  // daemon's pid namespace.
+  // The pid that connected this attachment's socket, as the kernel
+  // recorded it at accept; a connector that hands its socket on and
+  // exits leaves a stale pid. Only beside LOCAL (refused at decode
+  // otherwise), never 0. Absent means unknown: no platform query, a
+  // failed lookup, or a peer outside the daemon's pid namespace.
   optional uint32 client_pid = 6 [(felis.v1.field_since) = {
     minor: 4
     skippable: true
