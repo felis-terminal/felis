@@ -79,24 +79,19 @@ are in `felis sessions events --help` and
 [cli.md "Verb details"](https://github.com/felis-terminal/felis/blob/main/docs/reference/cli.md#verb-details). Items are
 hints, not a mirror: start the stream, then `sessions list`, and list again after a `lag` event.
 
-A producer that reports OSC 7501 status is the cheapest to wait on. The stream never ends by itself, and a pipe into
-`head` would not end it either, so read it from a FIFO and kill it on the first match or at the deadline:
+A producer that reports OSC 7501 status is the cheapest to wait on: poll until it holds a status and none of it is
+`working`. The loop also ends on `blocked`, which means the producer waits on input, so read the states before acting:
 
 ```sh
-dir=$(mktemp -d) && mkfifo "$dir/events"
-felis sessions events --session "$ID" --kind program_status,lifecycle --format jsonl >"$dir/events" &
-stream=$!
-(sleep 600 && kill "$stream") >/dev/null 2>&1 &   # the deadline
-watchdog=$!
-jq -cen 'first(inputs | select(.event == "error" or .type == "removed" or (.type == "program_status"
-         and (.records | length > 0) and all(.records[]; .state != "working"))))' <"$dir/events"
-rc=$?                              # 0 printed the item, 4 the deadline passed or the stream ended
-kill "$stream" "$watchdog" 2>/dev/null; rm -r "$dir"
+deadline=$((SECONDS + 600))
+while :; do
+  status=$(felis sessions info "$ID" --format json) || { rc=2; break; }   # session gone, daemon lost
+  echo "$status" | jq -e '.program_status | length > 0 and all(.[]; .state != "working")' >/dev/null && { rc=0; break; }
+  [ "$SECONDS" -ge "$deadline" ] && { rc=1; break; }
+  sleep 2
+done
+echo "$status" | jq '.program_status'
 ```
-
-The item printed is the first set with no `working` record, the session's removal, or the stream's error terminal. A set
-without `working` may be `blocked`, which means the producer waits on input, so read the states before acting. An error
-of kind `unsupported` is a daemon too old for `sessions events`: poll `sessions info` for `program_status` instead.
 
 When a producer emits none of these, poll the visible grid against a deadline: `search --source visible` exits `0` on a
 match and `1` on none. Retry only on `1`; a `2` (a daemon too old for `--source visible`, a lost connection) does not
