@@ -1,8 +1,8 @@
 //! `COLR` version 1 glyphs painted into premultiplied RGBA8 canvases.
 //!
 //! Every buffer sized by the pixel size is charged against
-//! [`coverage::IMAGE_BUDGET`] before allocation. A paint this painter
-//! lacks, a refused charge, or a malformed graph drops the glyph whole.
+//! [`coverage::IMAGE_BUDGET`] before allocation. A refused charge or a
+//! malformed graph drops the glyph whole.
 
 use skrifa::{
     GlyphId as FontGlyphId,
@@ -17,7 +17,7 @@ use skrifa::{
 
 use super::{
     Canvas, FOREGROUND, FOREGROUND_INDEX,
-    composite::{self, Conical, Ramp},
+    composite::{self, Conical, Ramp, Sweep},
     div255,
 };
 use crate::{
@@ -204,6 +204,11 @@ enum Shader {
         conical: Conical,
         ramp: Box<Ramp>,
     },
+    Sweep {
+        inverse: Matrix<f32>,
+        sweep: Sweep,
+        ramp: Box<Ramp>,
+    },
 }
 
 impl Shader {
@@ -227,6 +232,11 @@ impl Shader {
             } => conical
                 .t(inverse.transform(x, y).into())
                 .map(|t| ramp.sample(t)),
+            Self::Sweep {
+                inverse,
+                sweep,
+                ramp,
+            } => Some(ramp.sample(sweep.t(inverse.transform(x, y).into()))),
         }
     }
 }
@@ -274,13 +284,8 @@ impl Painter<'_> {
     }
 
     /// The shader for `brush` mapped into the canvas by `m`; `None` for a
-    /// brush this painter does not draw, `Some(None)` for one that paints
-    /// nothing.
-    #[expect(
-        clippy::option_option,
-        reason = "an outer None refuses the glyph, an inner None draws nothing"
-    )]
-    fn shader(&self, brush: &Brush<'_>, m: Matrix<f32>) -> Option<Option<Shader>> {
+    /// brush that paints nothing.
+    fn shader(&self, brush: &Brush<'_>, m: Matrix<f32>) -> Option<Shader> {
         let ramp = |stops: &[ColorStop], extend: Extend| -> Box<Ramp> {
             let stops: Vec<(f32, [f32; 4])> = stops
                 .iter()
@@ -288,7 +293,7 @@ impl Painter<'_> {
                 .collect();
             Box::new(Ramp::new(&stops, extend))
         };
-        Some(match *brush {
+        match *brush {
             Brush::Solid {
                 palette_index,
                 alpha,
@@ -341,8 +346,29 @@ impl Painter<'_> {
                     ramp,
                 })
             }
-            Brush::SweepGradient { .. } => return None,
-        })
+            Brush::SweepGradient {
+                c0,
+                start_angle,
+                end_angle,
+                color_stops,
+                extend,
+            } => {
+                let pads = matches!(extend, Extend::Pad | Extend::Unknown);
+                if !pads && end_angle <= start_angle {
+                    return None;
+                }
+                let ramp = ramp(color_stops, extend);
+                inverse(m).map(|inverse| Shader::Sweep {
+                    inverse,
+                    sweep: Sweep {
+                        center: [c0.x, c0.y],
+                        start: start_angle,
+                        end: end_angle,
+                    },
+                    ramp,
+                })
+            }
+        }
     }
 
     /// The outline of `glyph` under the current transform, cut to the
@@ -713,10 +739,8 @@ impl PaintSink for Painter<'_> {
         if self.failed {
             return;
         }
-        match self.shader(&brush, self.ctm()) {
-            Some(Some(shader)) => self.paint(&shader, None),
-            Some(None) => {}
-            None => self.fail(),
+        if let Some(shader) = self.shader(&brush, self.ctm()) {
+            self.paint(&shader, None);
         }
     }
 
@@ -730,10 +754,8 @@ impl PaintSink for Painter<'_> {
             return;
         }
         let m = brush_transform.map_or_else(|| self.ctm(), |t| self.ctm() * t);
-        let shader = match self.shader(&brush, m) {
-            Some(Some(shader)) => shader,
-            Some(None) => return,
-            None => return self.fail(),
+        let Some(shader) = self.shader(&brush, m) else {
+            return;
         };
         match self.outline(glyph) {
             Some(mask) => self.paint(&shader, Some(&mask)),
@@ -955,18 +977,40 @@ mod tests {
         Rasterizer::default().rasterize(&font, glyph_named(&font, name), px)
     }
 
+    /// The test font holds every brush, extend and composite mode.
     #[test]
-    fn a_paint_the_painter_lacks_draws_the_glyph_whole_from_the_next_source() {
-        assert!(!draw("sweep_0_360_pad_narrow", 40.0).pixels().is_color());
+    fn every_glyph_of_the_test_font_but_the_cycles_draws_from_version_1() {
+        let font = colrv1(TEST_GLYPHS);
+        let palette = font.face.palettes().get(0).expect("a palette").colors();
+        let cycles = ["paintcolrglyph_cycle_first", "paintcolrglyph_cycle_second"]
+            .map(|name| glyph_named(&font, name));
+        let mut outlines = crate::raster::SkrifaOutlines::default();
+        let mut drawn = 0;
+        for glyph in (0..u32::from(u16::MAX)).filter(|g| !cycles.contains(g)) {
+            if font
+                .face
+                .color_glyphs()
+                .get_with_version(skrifa::GlyphId::new(glyph), ColorGlyphVersion::ColrV1)
+                .is_none()
+            {
+                continue;
+            }
+            assert!(
+                super::render(&mut outlines, &font, palette, glyph, 40.0).is_some(),
+                "glyph {glyph}"
+            );
+            drawn += 1;
+        }
+        assert_eq!(drawn, 198);
     }
 
     #[test]
     fn a_paint_graph_that_cycles_draws_the_next_source() {
         let font = colrv1(TEST_GLYPHS);
+        let palette = font.face.palettes().get(0).expect("a palette").colors();
+        let mut outlines = crate::raster::SkrifaOutlines::default();
         for name in ["paintcolrglyph_cycle_first", "paintcolrglyph_cycle_second"] {
             let glyph = glyph_named(&font, name);
-            let mut outlines = crate::raster::SkrifaOutlines::default();
-            let palette = font.face.palettes().get(0).expect("a palette").colors();
             assert!(
                 super::render(&mut outlines, &font, palette, glyph, 40.0).is_none(),
                 "{name}"
@@ -980,21 +1024,37 @@ mod tests {
         }
     }
 
-    /// The sweeps whose stops coincide, which cairo never finishes: one
-    /// that pads still reaches a sweep, which the painter lacks, so it
-    /// draws its outline; one that reflects or repeats reaches the painter
-    /// as the solid color of its last stop, as the `COLR` specification
-    /// resolves such a sweep, and draws in color.
+    /// The sweeps whose stops all coincide, which cairo never finishes.
+    /// The `COLR` specification renders nothing for such a color line
+    /// that repeats or reflects, and one that pads in its first color
+    /// below the stops' offset and its last at and above it.
     #[test]
-    fn sweeps_with_coincident_stops_finish_on_one_source() {
-        let font = colrv1(TEST_GLYPHS);
+    fn sweeps_with_coincident_stops_draw_as_the_specification_resolves_them() {
         for direction in ["forward", "reverse"] {
             for colors in ["blue_red", "linen_gray"] {
-                for (extend, color) in [("pad", false), ("reflect", true), ("repeat", true)] {
+                for extend in ["pad", "reflect", "repeat"] {
                     let name = format!("sweep_coincident_stops_{direction}_{colors}_{extend}");
-                    let bitmap =
-                        Rasterizer::default().rasterize(&font, glyph_named(&font, &name), 40.0);
-                    assert_eq!(bitmap.pixels().is_color(), color, "{name}");
+                    let bitmap = draw(&name, 40.0);
+                    let GlyphPixels::Rgba(rgba) = bitmap.pixels() else {
+                        panic!("{name} draws in color");
+                    };
+                    if extend != "pad" {
+                        assert!(
+                            rgba.as_chunks::<4>().0.iter().all(|p| p[3] == 0),
+                            "{name} draws nothing"
+                        );
+                        continue;
+                    }
+                    let mut opaque: Vec<[u8; 4]> = rgba
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .copied()
+                        .filter(|p| p[3] == 255)
+                        .collect();
+                    opaque.sort_unstable();
+                    opaque.dedup();
+                    assert_eq!(opaque.len(), 2, "{name}: {opaque:?}");
                 }
             }
         }

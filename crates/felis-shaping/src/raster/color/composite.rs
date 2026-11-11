@@ -258,6 +258,68 @@ impl Conical {
     }
 }
 
+/// A sweep brush around `center`, from `start` to `end` degrees
+/// clockwise, `start` no greater than `end`.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Sweep {
+    pub(super) center: [f32; 2],
+    pub(super) start: f32,
+    pub(super) end: f32,
+}
+
+impl Sweep {
+    /// The gradient parameter at `p` from its angle clockwise from the
+    /// positive x axis with y up. The format samples counter-clockwise
+    /// angles in 0..360, so the clockwise angle runs over (0, 360]: the
+    /// positive x axis itself is 360. A sweep whose angles coincide steps
+    /// there from before the line to past it.
+    pub(super) fn t(&self, p: [f32; 2]) -> f32 {
+        let angle =
+            360.0 - atan2_degrees(p[1] - self.center[1], p[0] - self.center[0]).rem_euclid(360.0);
+        let sector = self.end - self.start;
+        if sector > 0.0 {
+            (angle - self.start) / sector
+        } else if angle < self.start {
+            f32::NEG_INFINITY
+        } else {
+            f32::INFINITY
+        }
+    }
+}
+
+/// The angle of `(x, y)` in degrees, in -180..=180, from basic float
+/// operations alone: the platform `atan2` rounds differently on each libm,
+/// which moves a sweep's hard edges between pixels from one OS to another.
+/// The polynomial is Abramowitz and Stegun 4.4.49, within 2e-8 radians.
+fn atan2_degrees(y: f32, x: f32) -> f32 {
+    const A: [f32; 8] = [
+        0.002_866_225_7,
+        -0.016_165_737,
+        0.042_909_614,
+        -0.075_289_64,
+        0.106_562_64,
+        -0.142_089,
+        0.199_935_51,
+        -0.333_331_45,
+    ];
+    let (ax, ay) = (x.abs(), y.abs());
+    let (lo, hi) = if ay > ax { (ax, ay) } else { (ay, ax) };
+    if hi == 0.0 {
+        return 0.0;
+    }
+    let a = lo / hi;
+    let s = a * a;
+    let poly = A.iter().fold(0.0_f32, |acc, &c| acc.mul_add(s, c));
+    let mut angle = a * poly.mul_add(s, 1.0) * (180.0 / std::f32::consts::PI);
+    if ay > ax {
+        angle = 90.0 - angle;
+    }
+    if x < 0.0 {
+        angle = 180.0 - angle;
+    }
+    if y < 0.0 { -angle } else { angle }
+}
+
 /// `t` brought into 0..=1 by `extend`: held at the ends, wrapped, or
 /// mirrored every other period.
 pub(super) fn extended(t: f32, extend: Extend) -> f32 {
@@ -342,7 +404,7 @@ mod tests {
     use proptest::prelude::*;
     use skrifa::font::glyph::color::{CompositeMode, Extend};
 
-    use super::{Conical, Ramp, clears_backdrop, extended, linear_t, op};
+    use super::{Conical, Ramp, Sweep, clears_backdrop, extended, linear_t, op};
 
     /// Every mode the format defines.
     const MODES: [CompositeMode; 28] = [
@@ -606,6 +668,33 @@ mod tests {
             }
         }
 
+        #[test]
+        fn a_sweep_runs_clockwise_from_its_start_to_its_end_angle(
+            center in prop::array::uniform2(-100.0_f32..100.0),
+            start in 0.0_f32..360.0,
+            sector in 1.0_f32..360.0,
+            f in 0.0_f32..1.0,
+            distance in 1.0_f32..100.0,
+        ) {
+            let end = start + sector;
+            let angle = sector.mul_add(f, start).rem_euclid(360.0).to_radians();
+            let p = [
+                angle.cos().mul_add(distance, center[0]),
+                (-angle.sin()).mul_add(distance, center[1]),
+            ];
+            let t = Sweep { center, start, end }.t(p);
+            let turn = 360.0 / sector;
+            prop_assert!(
+                [f - turn, f, f + turn].iter().any(|g| (t - g).abs() < 1e-3),
+                "{t} against {f} a turn apart"
+            );
+        }
+
+        #[test]
+        fn the_portable_atan2_is_the_platform_one(y in -100.0_f32..100.0, x in -100.0_f32..100.0) {
+            let want = f64::from(y).atan2(f64::from(x)).to_degrees();
+            prop_assert!((f64::from(super::atan2_degrees(y, x)) - want).abs() < 1e-4, "{y}, {x}");
+        }
 
         #[test]
         fn repeat_wraps_t_into_one_period(t in -10.0_f32..10.0, k in -5_i8..5) {
@@ -789,6 +878,88 @@ mod tests {
         }
         assert_eq!(extended(f32::NEG_INFINITY, Extend::Pad), 0.0);
         assert_eq!(extended(f32::INFINITY, Extend::Pad), 1.0);
+    }
+
+    #[test]
+    fn a_full_sweep_turns_clockwise_with_y_up() {
+        let sweep = Sweep {
+            center: [0.0, 0.0],
+            start: 0.0,
+            end: 360.0,
+        };
+        assert_eq!(
+            sweep.t([1.0, 0.0]),
+            1.0,
+            "the positive x axis is 0 counter-clockwise, so 360 clockwise"
+        );
+        assert!(sweep.t([1.0, -1e-6]) < 0.01, "just past it clockwise");
+        assert_eq!(sweep.t([0.0, -1.0]), 0.25);
+        assert_eq!(sweep.t([-1.0, 0.0]), 0.5);
+        assert_eq!(sweep.t([0.0, 1.0]), 0.75);
+        assert!(sweep.t([1.0, 1e-6]) > 0.99, "just short of a full turn");
+    }
+
+    #[test]
+    fn a_sweep_sector_maps_outside_angles_beyond_the_line() {
+        let sweep = Sweep {
+            center: [10.0, 10.0],
+            start: 90.0,
+            end: 180.0,
+        };
+        assert_eq!(sweep.t([10.0, 9.0]), 0.0);
+        assert_eq!(sweep.t([9.0, 10.0]), 1.0);
+        assert_eq!(sweep.t([11.0, 9.0]), -0.5, "45 degrees");
+        assert_eq!(sweep.t([10.0, 11.0]), 2.0, "270 degrees");
+    }
+
+    #[test]
+    fn a_sector_across_the_positive_x_axis_runs_on_without_a_turn() {
+        let sweep = Sweep {
+            center: [0.0, 0.0],
+            start: 315.0,
+            end: 405.0,
+        };
+        assert_eq!(sweep.t([1.0, 1.0]), 0.0, "315 degrees");
+        assert_eq!(sweep.t([1.0, 0.0]), 0.5, "360 degrees");
+        assert!(
+            sweep.t([1.0, -1e-3]) < -3.0,
+            "just past it: a new turn, below the start"
+        );
+        assert_eq!(sweep.t([0.0, 1.0]), -0.5, "270 degrees");
+    }
+
+    /// A padded sweep whose angles coincide is two colors: the color line's
+    /// below its offset and the one at and above it.
+    #[test]
+    fn a_padded_sweep_whose_angles_coincide_steps_at_the_angle() {
+        let sweep = Sweep {
+            center: [0.0, 0.0],
+            start: 90.0,
+            end: 90.0,
+        };
+        let ramp = Ramp::new(
+            &[
+                (0.0, [1.0, 0.0, 0.0, 1.0]),
+                (0.0, [0.0, 0.0, 1.0, 1.0]),
+                (1.0, [0.0, 0.0, 1.0, 1.0]),
+            ],
+            Extend::Pad,
+        );
+        assert_eq!(
+            ramp.sample(sweep.t([1.0, -0.5])),
+            [255, 0, 0, 255],
+            "45 degrees"
+        );
+        assert_eq!(
+            ramp.sample(sweep.t([-1.0, -0.5])),
+            [0, 0, 255, 255],
+            "135 degrees"
+        );
+        assert_eq!(
+            ramp.sample(sweep.t([1.0, 0.5])),
+            [0, 0, 255, 255],
+            "315 degrees"
+        );
     }
 
     #[test]
