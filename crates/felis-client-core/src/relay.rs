@@ -281,8 +281,8 @@ impl Relay {
     }
 
     async fn open_attach(&self, target: AttachTarget) -> Result<RelayStream, ErrorObject> {
-        let paced = matches!(self.host.config.carrier, Carrier::Local(_));
-        let mut conn = self.dial(Offer::window(paced)).await?;
+        let offer = Offer::window_over(&self.host.config.carrier);
+        let mut conn = self.dial(offer).await?;
         let info = match target {
             AttachTarget::Session(id) => conn.attach(id.0, AttachIntent::Deliberate).await,
             AttachTarget::Create(args) => conn.create_with(args.into()).await,
@@ -305,7 +305,7 @@ impl Relay {
         stream.input = Some(AttachInput {
             tx: input_tx,
             budget: Arc::new(Semaphore::new(INPUT_BYTE_BUDGET)),
-            paced,
+            paced: offer.pull_paced,
             effective_minor: conn.effective_minor,
         });
         let relay = self.clone();

@@ -9,11 +9,11 @@ use super::{
     SearchDirection, SearchHitRecord, SearchHitSpan, SearchOverlay, SearchToDaemonMsg, SearchUi,
     SearchUiMode, Selection, SessionInfo, SessionToDaemonMsg, SharedDriver, SwitchState, Theme,
     TrailRecord, TrailState, ViewportPosition, activation_target, codec, compose_window_title,
-    composed_row_for_line, config, configured_font_size_logical_px, cursor_trail, dial_and_land,
-    error, font_features_differ, font_settings_differ, font_stack_inputs_differ, info,
-    keymap_adapter, launch_args, live_font_size_differs, pointer_icon, preedit_from_ime,
-    renderer_config_with, reported_theme_differs, resolve_local_socket, resolve_post_chain,
-    shader_events, viewport_for_hit, warn,
+    composed_row_for_line, config, configured_font_size_logical_px, cursor_trail, error,
+    font_features_differ, font_settings_differ, font_stack_inputs_differ, info, keymap_adapter,
+    launch_args, live_font_size_differs, pointer_icon, preedit_from_ime, renderer_config_with,
+    reported_theme_differs, resolve_local_socket, resolve_post_chain, shader_events,
+    viewport_for_hit, warn,
 };
 use crate::window_input::PressedKey;
 use felis_client_core::config::ShaderEvent;
@@ -1335,20 +1335,13 @@ impl App {
             region: prepared.region,
             source: self.current_place(),
         };
-        let reconnector = Reconnector {
-            carrier: Carrier::Local(socket.clone().into()),
-            offer: Offer::window(true).with_image_regions(),
-        };
+        let reconnector = Reconnector::window(Carrier::Local(socket.into()));
         self.switch_state = SwitchState::InFlight {
             session_gone: false,
             retry: None,
         };
         self.dial_in_background(
-            dial_and_land(
-                Carrier::Local(socket.into()),
-                Offer::window(true).with_image_regions(),
-                Landing::Create(prepared.args),
-            ),
+            reconnector.land(Landing::Create(prepared.args), None),
             Some(reconnector),
             TrailRecord::PushIntoTransient,
         );
@@ -1375,12 +1368,11 @@ impl App {
             tracing::debug!("session switch already in progress; ignoring chord");
             return;
         }
-        let carrier = self.reconnector.carrier.clone();
-        let offer = self.reconnector.offer;
+        let carrier = &self.reconnector.carrier;
         // A local carrier resolves the same cwd fallback as the initial
         // window; an SSH-attached window must not ship this host's paths
         // across (see `launch_args`).
-        let args = match launch_args(Vec::new(), &self.shell_cfg, &carrier) {
+        let args = match launch_args(Vec::new(), &self.shell_cfg, carrier) {
             Ok(args) => args,
             Err(err) => {
                 // On the bar, not only in a log: a chord that fails silently
@@ -1396,7 +1388,7 @@ impl App {
             retry: None,
         };
         self.dial_in_background(
-            dial_and_land(carrier, offer, Landing::Create(args)),
+            self.reconnector.land(Landing::Create(args), None),
             None,
             TrailRecord::Push,
         );

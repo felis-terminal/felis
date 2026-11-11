@@ -75,9 +75,8 @@ pub use connector::{
 #[cfg(feature = "native")]
 pub use dial::{
     DialError, DialIntent, DialedConnection, LANDING_REMOTE_SPAWN, Landing, LaunchCwdError,
-    RECONNECT_ATTEMPT_TIMEOUT, ROSTER_FETCH_TIMEOUT, ReconnectError, Reconnector, dial_and_land,
-    dial_and_land_within, fetch_roster, launch_args, reconnector_for_target, redial_session,
-    spawn_args_from_cli,
+    RECONNECT_ATTEMPT_TIMEOUT, ROSTER_FETCH_TIMEOUT, ReconnectError, Reconnector, fetch_roster,
+    launch_args, reconnector_for_target, spawn_args_from_cli,
 };
 pub use felis_protocol::{ImageId, PlacementId};
 pub use hyperlink::{ActivationRejection, ActivationTarget, SchemeClass};
