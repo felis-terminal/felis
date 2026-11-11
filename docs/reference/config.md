@@ -262,6 +262,14 @@ bright_white   = "#e6e6e6"
   from their own family at that style's weight; they take no `weight` or `axes` keys. The host's per-character fallback
   stays at regular and bold, so a CJK or symbol face meant to match a configured weight is named in `font.fallback`.
 
+Hinting has no key. On Linux each face is hinted as fontconfig's render settings for its match ask, so a `fonts.conf`
+rule can set it per family or style: `hintslight` and `hintmedium` fit outlines vertically only; `hintfull` fits them
+horizontally too, which in practice changes only a face the automatic hinter draws (one without instructions of its
+own); `autohint` runs the automatic hinter in place of the face's instructions; `hinting=false` or `hintnone` draws
+unhinted, except a face whose outlines need its instructions. `antialias` is ignored, since glyphs are always grayscale.
+On macOS glyphs draw unhinted, with CoreText's font smoothing unless `AppleFontSmoothing` is `0`; on Windows every face
+is hinted vertically.
+
 ### `[theme]`
 
 - **`foreground`**, **`background`** (`"#rrggbb"`, defaults `"#e5e5e5"` and `"#0d0d12"`): default foreground and

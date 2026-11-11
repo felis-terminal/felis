@@ -102,9 +102,7 @@ side of the unified ring and blanks one) and the IL / DL / ICH / DCH shuffles. M
 scroll-by-1 cell cost is 893 ns with `clone()` against a 71 ns `Copy` ceiling (12.6×), and `scroll_region_up` accounts
 for ~58% of the daemon-side plaintext-scroll bench cost. With the handle, the bulk paths use `copy_from_slice` /
 `copy_within` / `slice::fill`, and `Cell` is a 16-byte `Copy` struct (see [Style interning](#style-interning)) rather
-than the ≥48 bytes an owning payload forces: less scrollback residency and less memory bandwidth on every grid walk. The
-regression anchors are `crates/felis-grid/benches/scroll_region.rs` and
-`crates/felis-client-core/benches/end_to_end_throughput.rs`.
+than the ≥48 bytes an owning payload forces: less scrollback residency and less memory bandwidth on every grid walk.
 
 The registry mirrors the OSC 8 hyperlink registry exactly: a `ClusterTable` owns the entries and a dedup index keyed by
 a 64-bit digest of the text (a digest hit is confirmed against the entry, so a collision costs a duplicate row and never
@@ -287,9 +285,9 @@ The cell does not hold `Attributes` inline. It holds a four-byte `StyleId` handl
 `Vec<Attributes>` with a dedup index, exactly mirroring the cluster / link / sizing registries. This is what puts `Cell`
 at 16 bytes rather than the 28 an inline pen costs. Two motivations, both measured:
 
-- **Scrollback residency.** Both scrollback tiers hold cells, a history-row count proportional to what scrolled off, so
-  the per-cell unit cost multiplies across the whole live grid _and_ the retained history; dropping it from 28 to 16
-  bytes is the largest single resident-memory lever after the ring itself.
+- **Scrollback residency.** Retained history holds a row count proportional to what scrolled off, so the per-cell unit
+  cost multiplies across the whole live grid _and_ the retained history; dropping it from 28 to 16 bytes is the largest
+  single resident-memory lever after the ring itself.
 - **The ascii throughput floor.** With an inline pen, `print_str`'s bulk loop stores a whole 28-byte `Cell` per
   character, of which 16 bytes (the pen) are loop-invariant across a run; the read-free parse floor is store-width
   bound, not parse-CPU bound. Interning makes the per-char store a four-byte id copy, moving ghostty's shape into

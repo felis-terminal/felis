@@ -19,10 +19,9 @@ still image is a one-frame entry, so animation adds no second representation. Pl
 side table rather than inside the store, which is what lets an image be placed twice, or placed and then scrolled,
 without the store knowing.
 
-Entries are kept in insertion order, oldest first, which is the order the store's own refcount-0 eviction walks. Side
-indexes over the unreferenced entries, access time, placed animations and taken ids let eviction, freeing, playback and
-`I=` numbering cost what they touch rather than what the store holds. A virtual placement takes no refcount, so the
-dispatcher marks the images one shows, and freeing what nothing references skips them.
+Entries are kept in insertion order, oldest first, which is the order the store's own refcount-0 eviction walks. A
+virtual placement takes no refcount, so freeing what nothing references must skip the images one shows, which the
+dispatcher marks.
 
 Ids for images transmitted without one are assigned counting **down** from the top of the id space, away from the low
 ids producers pick by hand. A collision here is not a rejected transmission but a silently overwritten image, which is

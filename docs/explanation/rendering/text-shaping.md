@@ -36,12 +36,10 @@ Caching happens at three layers: per-font shaper and scaler state, the per-glyph
 
 **Per-font shaper and scaler state.** harfrust keeps a face's layout tables (GSUB, GPOS, the cmap cache) in the font
 object, shared by every variation view of one file, so they are read once per file. `Shaper` keeps a reusable glyph
-buffer and the shape plans of the last 16 (face view, feature list) pairs, since a plan is built for one instance and
-one feature list. The face the shaper reads carries no `trak` table: a cell grid has no use for AAT tracking, whose only
-effect would be on ligature validation and cluster pens, and harfrust offers no switch that turns it off. The per-glyph
-`ShapeCache`, which is the single rasterization gateway, keeps skrifa outline scalers for the last 8 (face, size) pairs,
-because setting up a hinted scaler reruns the font's hinting programs; a color glyph's layers draw through the same
-scalers. It holds up to 8 fonts, above the fallback chain's typical 4.
+buffer and the shape plans of a bounded number of recent (face view, feature list) pairs, since a plan is built for one
+instance and one feature list. The per-glyph `ShapeCache`, which is the single rasterization gateway, keeps skrifa
+outline scalers for a bounded number of recent (face, size) pairs, because setting up a hinted scaler reruns the font's
+hinting programs; a color glyph's layers draw through the same scalers.
 
 **Per-glyph bitmap cache.** Rasterization is cached per glyph rather than per run, because the same glyph recurs across
 runs that share nothing else: shells re-print one prompt thousands of times and most output is plain ASCII. An entry is
@@ -181,11 +179,11 @@ covers it. A cell whose character the primary face does not cover is therefore n
 stops at it, and it is shaped alone against the face `resolve` picked.
 
 Holding the whole eager chain open is cheap even when several fallback faces are large, because font bytes are
-memory-mapped, not heap-copied (next section). The symbol group's all-installed rule adds at most a handful of faces (≤3
-on stock macOS: Zapf Dingbats ~50 KB, STIX Two Math and Apple Symbols a few MB each on disk), and each is mapped, not
-read, so the cost is virtual address space plus the pages actually faulted when a glyph is drawn, KB-scale resident, the
-same trade the ~183 MB emoji face already makes. The only steady-state cost is a slightly longer `resolve` walk for
-codepoints nothing covers, which the shape cache amortizes after the first miss.
+memory-mapped, not heap-copied (next section). The symbol group's all-installed rule adds at most a handful of faces
+(three on stock macOS), and each is mapped, not read, so the cost is virtual address space plus the pages actually
+faulted when a glyph is drawn, KB-scale resident, the same trade the ~183 MB emoji face already makes. The only
+steady-state cost is a slightly longer `resolve` walk for codepoints nothing covers, which the shape cache amortizes
+after the first miss.
 
 ## Per-style faces
 
@@ -305,9 +303,8 @@ file has no safe API, so there is no safe route to a file-backed face. `felis-sh
 workspace-wide `unsafe_code = "deny"` lint crate-wide (the policy lives in `Cargo.toml` / `clippy.toml`), with
 `Mmap::map` as the audited mapping site, carrying a `// SAFETY:` comment. The face providers' platform calls are the
 relaxation's other users: libfontconfig on Linux is a C ABI loaded at run time with no safe binding, the CoreText and
-DirectWrite bindings expose their calls as `unsafe`, and the macOS outline rasterizer hands CoreGraphics a bitmap buffer
-and CoreText the mapped bytes without a copy, declaring the CoreText calls that can return NULL itself where the binding
-would panic on one. A mapped file truncated underneath the process would SIGBUS; accepted, because the mapped paths are
+DirectWrite bindings expose their calls as `unsafe`, and the macOS outline rasterizer's CoreText calls are audited sites
+of their own. A mapped file truncated underneath the process would SIGBUS; accepted, because the mapped paths are
 root-owned read-only OS font assets that are not rewritten in place during a session, the identical trade-off FreeType
 already makes.
 
@@ -351,12 +348,10 @@ past the edge lands on top of the neighbor; only the window edge bounds the last
 glyph.
 
 How far it reaches depends on the raster. Unhinted, a glyph whose ink fills its advance crosses by the rounded-off
-fraction, under half a pixel, plus on macOS the fraction of a pixel CoreText's smoothing dilates it by. On Linux under
-`hintslight`, hinting keeps the overlap to the same one column of the next cell but darkens it: at 18.67 px in an 11 px
-cell, DejaVu Sans Mono's `_`, `#` and `W` put up to 44% coverage there, against 16% unhinted. `hintfull` reaches further
-only on a face the automatic hinter draws, which it then fits horizontally too: Monaspace Neon's variable build, which
-carries no instructions, puts up to 63% into the next column. kitty on Linux hints the same way under the same setting,
-and ghostty states the overlap as its trade.
+fraction, under half a pixel, plus on macOS the fraction of a pixel CoreText's smoothing dilates it by. On Linux,
+vertical hinting keeps the overlap to the same one column of the next cell but darkens it (DejaVu Sans Mono's `W` at
+18.67 px in an 11 px cell puts up to 44% coverage there, against 16% unhinted). kitty on Linux hints the same way under
+the same fontconfig setting, and ghostty states the overlap as its trade.
 
 Rejected:
 
@@ -507,15 +502,11 @@ smaller and the cache key simpler.
 
 **macOS outlines: CoreText draws them.** CoreText draws text unhinted, and its font smoothing dilates each outline by an
 amount it sets from the size and the fill; that is the weight of every native window, so felis has CoreText draw a
-face's monochrome outlines in white on black into a gray bitmap, with the smoothing on unless `AppleFontSmoothing` is
-`0`. Everything else stays felis's: CoreText reads the face from the bytes harfrust shaped, so glyph ids agree; the
-bitmap is the box of the face's unhinted outline grown by a pad for the dilation; and cell metrics, advances and color
-glyphs are the same on every platform. A face with color tables draws its outlines through felis's rasterizer too, since
-CoreText would draw their color rendering into the mask. A face CoreText cannot prove it opened as felis shaped it (its
-PostScript name, glyph count and variation read back) draws through felis's rasterizer instead. CoreText's pixels change
-with every macOS major, so its tests pin none: they check what felis decides (the face and instance CoreText opened, the
-smoothing setting that reaches the draw, placement against the unhinted outline), and the weight against Terminal.app is
-measured by hand. Rejected:
+face's monochrome outlines into a gray bitmap, with the smoothing on unless `AppleFontSmoothing` is `0`. Everything else
+stays felis's: CoreText reads the face from the bytes harfrust shaped, so glyph ids agree, and cell metrics, advances
+and color glyphs are the same on every platform. A face with color tables draws its outlines through felis's rasterizer
+too, since CoreText would draw their color rendering into the mask, and so does a face CoreText cannot be shown to have
+opened as felis shaped it. Rejected:
 
 - **Stem darkening in felis's own rasterizer.** One rasterizer and bit-exact goldens on every host, but the dilation it
   would fit is undocumented and varies with the smoothing level, the fill and the size: a fit to Menlo at 14 pt drifts
@@ -524,29 +515,21 @@ measured by hand. Rejected:
 - **A thickening knob** (ghostty's `font-thicken`, kitty's `macos_thicken_font`). `AppleFontSmoothing` is the platform's
   setting and is honored; a second one has no asking user (Principle 1).
 
-**Hinting, variable, and color fonts.** Hinting is off on macOS, where CoreText renders every native window unhinted. On
-Linux each face is hinted as fontconfig's render settings for its match ask, read as kitty and cairo read them, so a
-`fonts.conf` rule can give one family or style its own: `hintslight` and `hintmedium` fit vertically only, `hintfull`
-lets the hinter fit horizontally too (in practice only the automatic hinter does, on a face without instructions),
-`autohint` runs the automatic hinter in place of the face's instructions, and `hinting=false` or `hintnone` draws
-unhinted except a face whose contours need its instructions, which FreeType hints under every setting. `antialias` is
-ignored, since felis draws grayscale only. felis has no hinting key of its own: fontconfig is where Linux users already
-set it ("Linux faces" above). Windows hints vertically for every face. Bold / italic select a separate styled face per
-[Per-style faces](#per-style-faces), which also covers how a variable face's weight and italic axes are set, so the
-styled primaries can be several views of one variable file. Color fonts rasterize into RGBA atlas slots, and the cell
-shader samples RGBA instead of R8. A color glyph's sources are tried in turn: its `COLR` version 1 paint, its version 0
-layers, its `sbix` or `CBDT` strike, its outline. A source that cannot draw the glyph whole (a paint graph that cycles,
-a buffer past the raster budget) yields to the next, so no glyph is drawn half painted. Version 1 comes first on a face
-that has both, the order of the `COLR` specification, DirectWrite, and Chrome; Segoe UI Emoji's version 0 layers are a
-flat rendition of the same emoji. Version 0 layers are drawn through the face's own scaler, hinted as its text is. A
-version 1 paint is drawn unhinted: its gradients and clips are placed in font units under transforms that a grid-fitted
-outline would miss. Both composite in premultiplied RGBA and are un-premultiplied once into the straight RGBA the atlas
-holds. The version 1 painter draws every brush, extend, and composite mode the format defines. The painter is felis's
-own, over the coverage rasterizer that draws text, rather than tiny-skia or vello_cpu: either would bring a second
-rasterizer and `unsafe` SIMD to paint a cell-sized image. cairo, which kitty draws color glyphs with, is the reference a
-flake check compares the painter against, since no pinned set of reference images exists. A strike is scaled to the cell
-with a Mitchell–Netravali cubic rather than the sharper area filter, because switching filters changes every emoji,
-measured, and that is a decision of its own.
+**Hinting: the platform's setting.** Hinting is off on macOS, where CoreText renders every native window unhinted, and
+vertical on Windows. On Linux each face is hinted as fontconfig's render settings for its match ask
+([config.md](../../reference/config.md#font) states how each one reads), so a `fonts.conf` rule can give one family or
+style its own. felis has no hinting key of its own: fontconfig is where Linux users already set it ("Linux faces"
+above).
+
+**Color glyphs: `COLR` version 1 first.** Color fonts rasterize into RGBA atlas slots, and the cell shader samples RGBA
+instead of R8. A color glyph's sources are tried in turn: its `COLR` version 1 paint, its version 0 layers, its `sbix`
+or `CBDT` strike, its outline. A source that cannot draw the glyph whole (a paint graph that cycles, a buffer past the
+raster budget) yields to the next, so no glyph is drawn half painted. Version 1 comes first on a face that has both, the
+order of the `COLR` specification, DirectWrite, and Chrome; Segoe UI Emoji's version 0 layers are a flat rendition of
+the same emoji. Version 0 layers are drawn through the face's own scaler, hinted as its text is. A version 1 paint is
+drawn unhinted: its gradients and clips are placed in font units under transforms that a grid-fitted outline would miss.
+The painter is felis's own, over the coverage rasterizer that draws text, rather than tiny-skia or vello_cpu: either
+would bring a second rasterizer and `unsafe` SIMD to paint a cell-sized image.
 
 **Bidi: not performed.** felis runs no UAX#9 reordering across the cell grid (a non-goal: the grid is linear visual
 order), and the shaper is fixed left-to-right inside a run as well ("Shaping unit: the ligature run" above), so RTL text

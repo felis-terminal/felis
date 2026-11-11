@@ -12,7 +12,7 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 
 ### Added
 
-- **Keybindings**: a `pipe` binding takes `source = "osc_52"`, the last `OSC 52` clipboard write a program sent to the
+- **Keymap**: a `pipe` binding takes `source = "osc_52"`, the last `OSC 52` clipboard write a program sent to the
   window. With `target = "clipboard"` it copies that text to the system clipboard on the user's chord while
   `clipboard.osc_52 = "mirror"` keeps programs from writing it on their own.
 - **CLI**: `felis --class <name>` names a launched window for window-manager rules: the Wayland app ID and X11
@@ -20,9 +20,8 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
   `attach` take it; every other verb and `--version` refuse it with exit `2`.
 - **CLI**: `felis sessions events` streams what happens to sessions: added, exited with its status, and removed; every
   OSC 7501 program-status change; OSC 133 prompts and finished commands; and a hint naming which row fields changed.
-  `--kind` is required and names the kinds, so a kind added later never reaches an existing invocation; a client
-  subscribes before it lists so it misses nothing. Protocol minor 4 adds the observer's kind set and its items;
-  `felis notifications subscribe` still hears notifications alone.
+  `--kind` is required. Protocol minor 4 adds the observer's kind set and its items; `felis notifications subscribe`
+  still hears notifications alone.
 - **CLI**: `felis sessions list` and `info` report each local window's process id as `attachments[].client_pid` (and
   `pid <n>` on the `window:` line), so a window-manager script can map a session to its OS window. Protocol minor 4 adds
   `Attachment.client_pid`; a relayed window, or a daemon at minor 3 or below, reports none.
@@ -31,60 +30,48 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 
 ### Changed
 
-- **Protocol**: an edit of an existing Kitty animation frame (`a=f` with `r=`, `a=c`) reaches a window as the changed
+- **Wire**: an edit of an existing Kitty animation frame (`a=f` with `r=`, `a=c`) reaches a window as the changed
   rectangles alone rather than the whole frame, so a terminal browser's or notcurses' small updates to a large image no
   longer re-send it. Protocol minor 4 adds the region transfer, which a window opts into on attach; a JSON protocol
   attachment, or a window or daemon at minor 3 or below, keeps receiving whole frames.
-- **Protocol**: the daemon no longer sends OSC 133 prompt marks (`PromptMark`) to a window, a JSON protocol attachment
-  included, either in the attach burst or live, so reattaching to a session with long history no longer ships a frame
-  per retained mark. An `Ops` attachment still receives live marks, and a window still accepts them from an older
-  daemon.
-- **Graphics**: while felis decodes a large Kitty image (a PNG, a file or shared-memory source, or a large compressed
-  frame), keystrokes still reach the program and windows still redraw; only the program's later output waits for the
-  image.
-- **Daemon**: a session whose output has stopped for a moment holds much less memory: its scrollback keeps each row's
-  text and drops the blank rest of the row, so a full 10,000-row history at 54×192 goes from about 30 MB to 6 to 11 MB.
-  Search, capture, and scrolling back read the same rows as before.
+- **Wire**: a window or JSON protocol attachment no longer receives OSC 133 prompt marks (`PromptMark`), so reattaching
+  to a session with long history no longer ships a frame per retained mark.
+- **Graphics**: while felis decodes a large Kitty image, keystrokes still reach the program and windows still redraw;
+  only the program's later output waits for the image.
+- **Daemon**: a session whose output has paused holds much less scrollback memory: a full 10,000-row history at 54×192
+  goes from about 30 MB to about 10 MB or less.
 - **Rendering**: on Linux and Windows, text keeps the weight its font was designed for whatever the theme: dark text on
-  a light background no longer looks thin, and light text on a dark background no longer looks heavy. Colors still blend
-  as before; macOS is unchanged.
+  a light background no longer looks thin, and light text on a dark background no longer looks heavy. macOS is
+  unchanged.
 - **Rendering**: on Linux, each face is hinted as fontconfig's `hintstyle`, `hinting` and `autohint` settings for it
-  ask, so a `fonts.conf` rule changes how felis draws it, instead of one fixed mode for every face. Under the stock
-  `hintslight` text looks as before, apart from slight shading changes on faces without hinting instructions; `hintfull`
-  also grid-fits those faces horizontally, and `hintnone` draws unhinted. The layers of a `COLR` emoji follow the same
-  setting as its face's text.
-- **Rendering**: emoji from a `COLR` version 1 font draw in color: Noto Color Emoji as Fedora ships it, which drew
-  blank, and Segoe UI Emoji on Windows, whose gradients and shading replace the flat version 0 layers felis drew.
+  ask, so a `fonts.conf` rule changes how felis draws it; under the stock `hintslight` text looks as before.
+- **Rendering**: `COLR` version 1 emoji draw in color, gradients included: Noto Color Emoji as Fedora ships it drew
+  blank, and Segoe UI Emoji on Windows drew flat.
 - **Rendering**: a combining mark a font has no precomposed glyph for (`q́`) sits on its base at the font's anchor
   instead of the cluster being shrunk into its cell, a mark the font does not cover is left undrawn rather than widening
   the cluster, and an ideographic variation sequence followed by a mark (`葛󠄀́`) draws the variant glyph.
-- **Rendering**: on macOS, CoreText draws text outlines with the system's font smoothing, so text has the weight
-  Terminal.app's has instead of looking thin; `AppleFontSmoothing` set to `0` turns the smoothing off, as it does in
-  other applications. Emoji and other color glyphs, cell sizes, and shaping are unchanged.
+- **Rendering**: on macOS, text is drawn with the system's font smoothing, so it has Terminal.app's weight instead of
+  looking thin; `AppleFontSmoothing` set to `0` turns the smoothing off, as in other applications.
 
 ### Fixed
 
 - **Graphics**: a Kitty image placed with `z < -1073741824` shows through cells on the default background, as in kitty;
   only a cell with a background color of its own covers it. Before, every cell covered it.
-- **Rendering**: `COLR` emoji (Twemoji, OpenMoji, Segoe UI Emoji) no longer lose their bottom row or right column, and
-  their antialiased edges no longer darken toward black.
+- **Rendering**: `COLR` emoji (Twemoji, OpenMoji, Segoe UI Emoji) keep their bottom row and right column, and their
+  antialiased edges no longer darken toward black.
 - **Clipboard**: an `OSC 52` write to the clipboard (`c`) followed closely by one to PRIMARY alone (`p`) no longer loses
   the clipboard write; with `clipboard.osc_52 = "system"` the clipboard kept its old contents.
-- **Keybindings**: a `pipe` binding with `target = "paste"` raises the confirmation bar for a region that carries a line
+- **Keymap**: a `pipe` binding with `target = "paste"` raises the confirmation bar for a region that carries a line
   break or other control byte while bracketed paste is off, as `Ctrl+V` does; it used to send the region as typed keys.
 - **CLI**: `felis sessions send --wait` ends with the exit code of an OSC 133 `D` mark the program printed just before
   exiting, instead of `session_ended`, also when a process it left in the background still holds the terminal and on
   macOS.
-- **Daemon**: on Linux with glibc, a resize or `CSI 3 J` returns the replaced scrollback ring's memory to the OS; from
-  the third such cycle on, a freed ring stayed resident in the daemon (about 30 MB at 54×192).
-- **Daemon**: on Linux with glibc, a resize that re-wraps a long scrollback returns its working memory to the OS; from
-  the second such resize on, about 30 MB of it stayed resident in the daemon at 54×192.
+- **Daemon**: on Linux with glibc, a resize (one that re-wraps a long scrollback included) or `CSI 3 J` returns the
+  freed scrollback memory to the OS instead of leaving about 30 MB resident in the daemon.
 - **Platform**: on Linux, a window opened from an application launcher or a compositor keybinding takes focus under a
-  compositor that prevents focus stealing: the client passes the launcher's activation token (`XDG_ACTIVATION_TOKEN` on
-  Wayland, `DESKTOP_STARTUP_ID` on X11) to its window, and the desktop entry declares `StartupNotify=true` so launchers
-  send one.
-- **Graphics**: an animation frame (`a=f`) overwrites the canvas under `X=1`, the key the Kitty graphics protocol
-  defines for it; felis read `C=1`, the composition key of `a=c`, so `X=1` frames alpha-blended.
+  compositor that prevents focus stealing; a desktop entry of your own needs `StartupNotify=true` for it.
+- **Graphics**: an animation frame (`a=f`) with `X=1` overwrites the canvas, as the Kitty graphics protocol defines,
+  instead of alpha-blending onto it.
 - **Text sizing**: an erase (EL, ED, ECH, DECERA and their selective forms) that reaches part of an `OSC 66` character
   erases the whole character, instead of leaving its other cells behind.
 - **Scrollback**: a screen clear with a background color set (`CSI 2 J` after an SGR background), `DECALN`, the

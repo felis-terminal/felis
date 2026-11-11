@@ -12,7 +12,7 @@ History and the live viewport share one flat cell ring, the **hot tier**; once a
 than one screen moves to a **cold tier** (["Idle compaction"](#idle-compaction) below). `Grid`'s `cells` holds up to
 `rows + cap` physical rows; a `base` offset marks the top of the viewport, and the rows just below it in ring order are
 the retained history. The row that scrolls off the viewport top _is_ the youngest history row, in the same storage, so
-eviction is a `base` bump, not a copy (`crates/felis-grid/src/screen.rs`).
+eviction is a `base` bump, not a copy.
 
 Logical viewport row `r` resolves to physical ring row `(base + r) mod phys_cap`; history row `-k` (1 = youngest) to
 `(base - k) mod phys_cap`. History and viewport occupy one contiguous ring window `[base - history_len, base + rows)`,
@@ -38,25 +38,14 @@ Initializing all `rows + cap` rows up front writes every one of them, so an idle
 cap: at 16 bytes per `Cell` and a 137-column grid, ~21 MiB against the ~75 KiB a bare 137×35 viewport actually needs.
 
 The _capacity_ is nonetheless reserved up front, and only the length grows. Reserved address space and resident rows are
-not the same cost: the cell buffer is an anonymous mapping of its own (`mmap` on Linux and macOS, a `VirtualAlloc`
-reservation committed as the length grows on Windows; `crates/felis-grid/src/paged_cells.rs`), whose pages stay
-unfaulted until written, so the full 21 MiB is address space while residency tracks the rows history has actually
-reached, and the ring never has to move. The all-zero bit pattern is `Cell::default()`, checked at compile time, so a
-fresh page needs no initializing write. Growing by allocating the next size up and copying into it (the rejected
-alternative) leaves the allocator holding every intermediate buffer: after a 200 k-line flood the daemon holds 11.2 MB
-of freed ring buffers it has not returned to the OS against 12.2 MB of ring actually live, which is _half the flooded
-footprint being garbage_ (measured at 24×80, `vmmap`'s `MALLOC_LARGE (empty)`; the same shape at 82×137 with a client
-attached reads 51.7 → 28.8 MB flooded, idle unchanged). Keeping the ring on `malloc` and returning those pages
-afterwards (`malloc_zone_pressure_relief` and its Linux twin) is rejected: it undoes, per platform, an allocation the
-ring never needed to make. A `malloc`'d ring is also retained once freed: under glibc, freeing one ring-sized block
-raises the dynamic mmap threshold to its size, so each later ring comes from the heap and freeing it on a resize or
-`CSI 3 J` returns nothing to the OS (a daemon at 54×192 holds 70 MB after three `CSI 3 J` cycles against 10.6 MB with
-its own mapping).
-
-With the capacity reserved, a growth is a rotation rather than a copy. The one caller grows only a ring that is exactly
-full (`history_len + rows == phys_cap`), so every physical row is live and canonical order is one `rotate_left` away,
-needing no scratch buffer. The `soft_wrap` and `occupancy` side-arrays are rebuilt on each growth; at one bool and one
-`u16` per row against `cols` cells, their churn is three orders below the cells' and not worth a second reservation.
+not the same cost: the cell buffer is an anonymous mapping of its own, whose pages stay unfaulted until written, so the
+full 21 MiB is address space while residency tracks the rows history has actually reached, and the ring never has to
+move. Growing by allocating the next size up and copying into it (the rejected alternative) leaves the allocator holding
+every intermediate buffer: after a 200 k-line flood about half the daemon's footprint is freed ring buffers it has not
+returned to the OS. Keeping the ring on `malloc` and returning those pages afterwards (`malloc_zone_pressure_relief` and
+its Linux twin) is rejected: it undoes, per platform, an allocation the ring never needed to make, and under glibc a
+freed ring-sized block raises the mmap threshold so that later rings are never returned at all. With the capacity
+reserved, a growth is an in-place rotation rather than a copy.
 
 Readers go through a borrowing `ScrollbackView` (`Grid::scrollback()`), which clips each history row at its occupancy
 watermark ([grid-and-cells.md "Occupancy watermark"](grid-and-cells.md#occupancy-watermark)): a history row is a former
@@ -70,47 +59,34 @@ the `SavedScreen` snapshot carries `base`, `phys_cap`, `history_len`, and `cap` 
 ## Idle compaction
 
 A full ring is resident at full width, while rows average a fraction of it: at 54×192, shell output occupies 33 of 192
-columns on average and colored tool output 65, so most of a full ring's 29.5 MiB is blank tails, and the daemon keeps
-that for every session it holds. Once a session's output stops, the daemon moves its history older than one screen out
-of the ring into the cold tier, which keeps each row's occupied cells only, packed in FIFO order into recycled chunks
-with the row's wrap bit, and hands the ring pages those rows vacated back to the OS (`crates/felis-grid/src/compact.rs`
-and `cold.rs`). A full idle session at 54×192 then holds about 5.8 MiB of cells for plain output and 10.8 MiB for
-colored output.
+columns on average, so most of a full ring is blank tails, and the daemon keeps that for every session it holds. Once a
+session's output stops, the daemon moves its history older than one screen out of the ring into the cold tier, which
+keeps each row's occupied cells only, packed in FIFO order with the row's wrap bit, and hands the ring pages those rows
+vacated back to the OS.
 
-Readers cannot tell the tiers apart. `ScrollbackView` lends a cold row as the same occupancy-clipped `&[Cell]` a ring
-row yields, so search, capture, reflow and the state dump read both tiers through it, and the scroll path evicts the
-oldest cold row before any ring row, in constant time. History is never written once it leaves the viewport; a relayout
-(resize, `CSI 3 J`) rebuilds the ring densely through the view, so the tiers never need reconciling. Every walk that
-reads the physical ring (table sweeps, the sizing refresh, alternate-screen switches, the clone an upgrade captures)
-visits live rows and the cold tier only, because touching a vacated page faults it back in.
+Readers cannot tell the tiers apart. The scrollback view lends a cold row as the same occupancy-clipped `&[Cell]` a ring
+row yields, and the scroll path evicts the oldest cold row before any ring row, in constant time. History is never
+written once it leaves the viewport; a relayout (resize, `CSI 3 J`) rebuilds the ring densely through the view, so the
+tiers never need reconciling. A walk over the physical ring visits live rows and the cold tier only, because touching a
+vacated page faults it back in.
 
-The trigger is time, never content. The parse sink advances a per-session output generation with every chunk it applies.
-The session task arms a 200 ms quiet timer whenever the generation moves, and when the timer fires with the generation
-unchanged, a compaction run starts. Two cheaper signals cannot prove a quiet interval: a sink chunk's length says
-nothing about what follows, because the PTY reader batches reads, and the task's dirty flag folds many chunks into one
-wake. A run then takes slices back to back, releasing the session lock and yielding to input, pulls, attaches and
-resizes between them. Each slice reads the generation under the lock and ends the run if output landed; the next quiet
-interval starts a new run, which resumes where the last one stopped. Waiting a quiet interval per slice instead is
-rejected: a full history would take dozens of intervals, so a session whose output comes in bursts would rarely finish.
-A resize re-arms the timer as well, since a reflow lays history back into the ring.
+The trigger is time, never content: a run starts once a quiet interval passes with no output applied. Two cheaper
+signals cannot prove a quiet interval: a sink chunk's length says nothing about what follows, because the PTY reader
+batches reads, and the task's dirty flag folds many chunks into one wake. A run takes slices back to back, releasing the
+session lock between them; a slice that finds new output ends the run, and the next quiet interval resumes where it
+stopped. Waiting a quiet interval per slice instead is rejected: a full history would take dozens of intervals, so a
+session whose output comes in bursts would rarely finish. A slice moves a fixed budget of cells, so one lock hold stays
+bounded at any grid width.
 
-A slice moves at most 64 rows at the widest admitted grid (2048 columns) and proportionally more on narrower ones, the
-same budget of cells either way. That bounds one lock hold near 1 ms at 2048×2048, since both the copy and the page
-discard after it scale with the cells moved.
-
-Vacated pages are discarded, never decommitted: `MADV_DONTNEED` on Linux, `MADV_FREE_REUSABLE` on macOS (reused 64 KiB
-ahead of the rows that refill them, because macOS counts every reused page at once), and `DiscardVirtualMemory` on
-Windows, falling back to `MEM_RESET`. Each leaves the pages mapped and readable as their old bytes or as zeros, and
-all-zero bytes are `Cell::default()`, so a refused discard changes nothing. A decommit and recommit pair
-(`MEM_DECOMMIT`) is rejected: a recommit can fail under commit pressure and leave live rows on inaccessible pages. On
-Windows the discard lowers the working set, not the commit charge.
+Vacated pages are discarded, never decommitted. A discard leaves the pages mapped and readable as their old bytes or as
+zeros, and the all-zero bit pattern is `Cell::default()`, so a refused discard changes nothing. A decommit and recommit
+pair is rejected: a recommit can fail under commit pressure and leave live rows on inaccessible pages.
 
 Four alternatives are measured on scroll floods and rejected:
 
-- Copying each row into a variable-length store as it leaves the viewport costs 8 to 15% more instructions and up to 52%
-  more wall time, past the 2% gate; it is the eager copy that the
-  ["Unified viewport-into-history ring"](#unified-viewport-into-history-ring) removes. Batching the copy 128 rows at a
-  time costs more, because the source rows have gone cold by then.
+- Copying each row into a variable-length store as it leaves the viewport costs 8 to 15% more instructions, past the 2%
+  gate; it is the eager copy that the ["Unified viewport-into-history ring"](#unified-viewport-into-history-ring)
+  removes. Batching the copy 128 rows at a time costs more, because the source rows have gone cold by then.
 - Rings bucketed by width class pay the same copy plus about 25% rounding waste.
 - Ghostty's pages with an 8-byte cell and idle-time LZ4 would replace the grid wholesale; the policy, compacting cold
   history while idle, is the part taken.
@@ -120,18 +96,17 @@ Four alternatives are measured on scroll floods and rejected:
 
 A logical line of shell output may span N rows because it wrapped at the column edge. Each row carries a
 `soft_wrap_continued` bit: true when the row is an autowrap continuation of the row above. On the live grid the bit is
-indexed by _physical_ row (`Grid::soft_wrap` in `crates/felis-grid/src/lib.rs`), a parallel ring to `cells`, so a scroll
-that only bumps `base` carries every row's bit with its cells for free; a row that scrolls into history keeps the same
-physical slot and so keeps its bit with no move at all.
+indexed by _physical_ row, a parallel ring to `cells`, so a scroll that only bumps `base` carries every row's bit with
+its cells for free; a row that scrolls into history keeps the same physical slot and so keeps its bit with no move at
+all.
 
 The bit records how content **arrived**: it is set when a deferred or wide-glyph autowrap completes, cleared when the
 row is wholesale blanked, and deliberately untouched by partial overwrites; it is not a re-derivation of what the row
 currently holds. Four consumers read it: search stitches logical lines back together (below), `?45` reverse-wraparound
 retraces wrapped lines (`Grid::step_cursor_back`), triple-click logical-line selection on the client, and reflow
 stitches each soft-wrapped line before re-wrapping it at a new width (`Grid::reflow`, "Reflow on resize" below). The bit
-rides the `RowDelta` row codec (a header flag bit, normatively [row-codec.md](../../reference/row-codec.md), implemented
-in `crates/felis-grid/src/wire.rs`; every row-carrying path: delta, batch, rehydrate, composed browse viewport), and the
-shadow screen mirrors it on apply.
+rides the `RowDelta` row codec (a header flag bit, normatively [row-codec.md](../../reference/row-codec.md)) on every
+row-carrying path, and the shadow screen mirrors it on apply.
 
 Stitching itself is one rule in one function. `felis_grid::logical_line_spans` joins rows tied by the bit into the
 logical line the program printed, with no newline across the wrap edge, and walks scrollback and the live rows as one
@@ -318,8 +293,8 @@ lifetime.
 Front-draining breaks the naive "mark index = position in the vector" assumption, so the daemon's streaming cursor
 counts in a **never-pruned ordinal**: mark `i` in the live vector carries absolute ordinal `prompt_marks_pruned + i`. A
 per-connection cursor stored as that ordinal survives a prune untouched, and the daemon subtracts `prompt_marks_pruned`
-to index the retained slice (`Grid::prompt_marks_pruned`, consumed in `crates/felis-daemon/src/serve/streaming.rs`). A
-mark pruned before a subscriber ever streamed it is skipped, never re-sent as a different mark.
+to index the retained slice. A mark pruned before a subscriber ever streamed it is skipped, never re-sent as a different
+mark.
 
 ### Prompt-jump navigation
 
@@ -355,24 +330,22 @@ name is a place, not a distance.
 
 ## Selection vs scrollback
 
-The selection model is client-side pure data (`crates/felis-client-core/src/selection.rs`): an anchor/extent pair in
-0-based shadow-grid coordinates, owned by the App. The daemon's grid and scrollback carry no selection state and nothing
-crosses the wire ([input.md](../input.md)); when a keybinding pipes the selection, the client serializes it itself (see
-"Selection source: client-side serialization" above).
+The selection model is client-side pure data: an anchor/extent pair in 0-based shadow-grid coordinates, owned by the
+App. The daemon's grid and scrollback carry no selection state and nothing crosses the wire ([input.md](../input.md));
+when a keybinding pipes the selection, the client serializes it itself (see "Selection source: client-side
+serialization" above).
 
 ## Capacity and eviction
 
-- Capacity is in lines. A session takes `DEFAULT_SCROLLBACK_ROWS = 10_000` (`crates/felis-grid/src/lib.rs`); per-session
-  sizing is not user-configurable. Capacity is a construction parameter rather than a constant because a screen that is
-  a mirror retains nothing: the client's shadow builds at capacity 0, since the daemon composes the browse viewport and
-  ships it as ordinary rows. At capacity 0 a row leaving the viewport top is dropped instead of evicted into history,
-  and the ring reserves only the live viewport. The alternate screen runs at capacity 0 for the same reason: it has no
-  history of its own.
-- While output flows, memory is the dense cell array: a row is a `[Cell]` at 16 bytes per cell (`size_of::<Cell>()`),
-  with the pen interned to a four-byte handle rather than carried inline
-  ([grid-and-cells.md](grid-and-cells.md#style-interning)), so the default 10k rows at 96 columns costs ≈ 15 MiB per
-  session, the figure the 100 000-row rejection below scales by ten. Once the session is quiet, history keeps only its
-  occupied cells (["Idle compaction"](#idle-compaction)).
+- Capacity is in lines. A session takes `DEFAULT_SCROLLBACK_ROWS = 10_000`; per-session sizing is not user-configurable.
+  Capacity is a construction parameter rather than a constant because a screen that is a mirror retains nothing: the
+  client's shadow builds at capacity 0, since the daemon composes the browse viewport and ships it as ordinary rows. At
+  capacity 0 a row leaving the viewport top is dropped instead of evicted into history, and the ring reserves only the
+  live viewport. The alternate screen runs at capacity 0 for the same reason: it has no history of its own.
+- Memory is the dense cell array: a row is a `[Cell]` at 16 bytes per cell, with the pen interned to a four-byte handle
+  rather than carried inline ([grid-and-cells.md](grid-and-cells.md#style-interning)), so the default 10k rows at 96
+  columns costs ≈ 15 MiB per session before [idle compaction](#idle-compaction), the figure the 100 000-row rejection
+  below scales by ten.
 - Eviction is FIFO across both tiers. There is no "important lines" policy; users wanting permanence should pipe to a
   file.
 
@@ -383,12 +356,11 @@ why each was chosen over the alternatives, so the rationale lives with the desig
 
 **Storage: row ring, with a slab only for quiet history.** A fixed-size ring of dense rows is what Kitty, Alacritty,
 WezTerm, foot, and Ghostty all use: O(1) append and random access, contiguous and cache-friendly, predictable eviction.
-felis keeps that ring for the viewport and for all history while output flows, and packs history into a slab-like cold
-tier only once the session is quiet (["Idle compaction"](#idle-compaction)). A pointer-ring-plus-slab for all history
-(tmux) compacts short lines too, but pays a copy and an indirection on every scroll; a piece table gives up the O(1)
-cell lookup the renderer depends on (no major terminal uses one); a paged or disk-backed log (iTerm2 optional, tmux
-logging) bounds memory regardless of capacity but costs a syscall per read and a versioned on-disk format. At felis's
-scale none of those pays for itself.
+felis keeps that ring, plus the cold tier of ["Idle compaction"](#idle-compaction) for quiet history. A
+pointer-ring-plus-slab for all history (tmux) compacts short lines too, but pays a copy and an indirection on every
+scroll; a piece table gives up the O(1) cell lookup the renderer depends on (no major terminal uses one); a paged or
+disk-backed log (iTerm2 optional, tmux logging) bounds memory regardless of capacity but costs a syscall per read and a
+versioned on-disk format. At felis's scale none of those pays for itself.
 
 **Default capacity: 10 000 rows.** Matches Alacritty and Ghostty; Kitty and tmux default to 2k, foot and iTerm2 to 1k. A
 larger default is rejected because the daemon keeps _every_ session's scrollback resident for the session's whole
@@ -428,8 +400,7 @@ Five decisions fix the reflow's edges:
 - **The round-trip is exact only without eviction (D2).** `W → W' → W` restores the original layout only while no
   scrollback eviction occurs. Narrowing produces more physical rows, and once the ring is at `cap` the oldest rows evict
   first (as in Kitty), so a narrow-then-widen that overflowed the ring cannot resurrect the evicted head. This is the
-  scoped limit of the round-trip guarantee (REQ-604, REQ-407); the width round-trip proptest that pins it holds its
-  input under the cap so no eviction fires.
+  scoped limit of the round-trip guarantee (REQ-604, REQ-407).
 - **The alternate screen keeps trim/pad (D3).** On the alt screen `reflow` delegates to `resize`. Alt rows are a
   distinct surface with no shared scrollback to stitch against, so re-wrapping them against the primary's history would
   join unrelated content; trim and pad is the right operator there.
@@ -493,7 +464,7 @@ Two cheaper fixes are measured and rejected:
 
 The unification is invisible on the wire: `Grid`'s storage is private and the wire ships logical `RowDelta` / `Scrolled`
 messages, so the shadow screen, the renderer, and every out-of-repo consumer see the same row stream either way. The
-cold tier keeps the property: rows reach it only while the session is quiet, never on the scroll path.
+cold tier keeps the property, since rows never reach it on the scroll path.
 
 ## Interior scroll band
 
@@ -516,21 +487,9 @@ case matches what a move-per-line scheme pays on every scrolled line.
 
 The rejected alternative moves the region's rows per scrolled line, occupancy-clipped. Clipping alone leaves the
 interior scroll ~8× behind ghostty on vtebench `scrolling_top_region`, because the residual is per-row move bookkeeping
-that no clipping removes: parity needs the scroll to stop touching rows at all. Measured (parse-into-grid floor, 137×82,
-`\x1b[2;82r` + 2-byte lines): the band reaches ~153 MiB/s against the per-line move's 12.3 (~12×), bringing the interior
-region to parity with the full-screen sparse-scroll floor (~140 MiB/s at 137×35); end-to-end in a live window a 30 MB
-flood takes 0.32 s against 1.92 s (~6×), with rendering adding nothing on top (raw ≈ DECSET 2026). The ascii print floor
-and the full-screen scroll floor are unregressed: the band check in `phys_row_at` is gated on an interleaved floor A/B
-(n=24 pairs, distributions congruent).
-
-Two codegen traps, both measured on the sparse full-screen scroll floor (the path that pays the band checks without ever
-arming a band):
-
-- The in-band wrap stays a `%` even though `band_rot < band_len` would let a conditional subtract avoid the `idiv`: the
-  subtract form's extra inline code bloated `phys_row_at`'s many inlined copies and read −8%; the `idiv` sits only on
-  in-band resolutions, paid once per printed row of a region flood.
-- `materialize_band` is a `#[inline]` guard over a `#[cold]` reorder body: folded into one function, the per-LF guard
-  call in `scroll_full_screen_into_history` read −9%.
+that no clipping removes: parity needs the scroll to stop touching rows at all. The band is about 12× faster than the
+per-line move on the parse-into-grid floor, bringing the interior region to parity with the full-screen scroll, and it
+leaves the ascii print and full-screen scroll floors unregressed.
 
 Alternatives considered:
 

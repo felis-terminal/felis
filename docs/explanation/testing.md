@@ -45,17 +45,16 @@ iTerm2) verify their escape-sequence layer.
 - **esctest2 as a CI ratchet** ([reference/esctest-compatibility.md](../reference/esctest-compatibility.md)). Among the
   peers, only xterm's and iTerm2's maintainers run it at all, both manually, outside CI (iTerm2's maintainer authored
   it). felis is alone in gating on it, which is also why the ratchet is one-way.
-- **vttest as hand-picked scenario replays, not a gate** (`vttest_smoke.rs`, 27 scenarios). Both kitty's and wezterm's
-  maintainers judge vttest human-required on record
-  ([kitty #6331](https://github.com/kovidgoyal/kitty/discussions/6331),
+- **vttest as hand-picked scenario replays, not a gate**. Both kitty's and wezterm's maintainers judge vttest
+  human-required on record ([kitty #6331](https://github.com/kovidgoyal/kitty/discussions/6331),
   [wezterm #133](https://github.com/wez/wezterm/issues/133)), and the peer in-process unit cultures grew partly to
   replace it, so felis does not gate on what it cannot automate honestly.
 - **Layered fuzz targets on crate boundaries** (`just fuzz*`), after ghostty's three-target AFL++ shape.
-- **Recording-based RefTest fixtures**, after alacritty's shape (`crates/felis-grid/tests/it/ref_recordings.rs` replays
-  `crates/felis-grid/tests/ref/<scenario>/` `recording.bin` + `size.json` into a `Parser` + `Grid` and pins the screen
-  with insta): anything a human can demonstrate interactively becomes a deterministic regression. Alacritty's
-  `config.json` is dropped (the felis vt layer is configless by design) and its bespoke `expected.snap` format is
-  replaced by the workspace's existing insta review flow. The repository ships no tool that captures a new scenario.
+- **Recording-based RefTest fixtures**, after alacritty's shape (a recorded byte stream replayed into a parser and grid,
+  the screen pinned with insta): anything a human can demonstrate interactively becomes a deterministic regression.
+  Alacritty's `config.json` is dropped (the felis vt layer is configless by design) and its bespoke `expected.snap`
+  format is replaced by the workspace's existing insta review flow. The repository ships no tool that captures a new
+  scenario.
 
 **Rejected**
 
@@ -67,7 +66,7 @@ iTerm2) verify their escape-sequence layer.
   ceremony does not; the marginal value over the existing hand-written grid tests is small.
 - **An encode → parse → encode property over every CSI/OSC handler.** Mooted by the code's shape: the VT layer is
   decode-only, and the two response encoders that do exist (Kitty graphics, text sizing) already carry parse-back
-  proptests (`proptest_kitty_graphics.rs`, `proptest_kitty_text_sizing.rs`).
+  proptests.
 
 ## Why sampling is not enough for the SWAR kernels
 
@@ -77,11 +76,11 @@ where a single off-by-one in a bitmask or a wrapping add is the whole bug: the p
 wire-format encoders/decoders.
 
 `felis-vt` is the trust root for every byte that arrives from a child program: a panic or a wrong answer in the parser
-corrupts grid state for attacker-controlled input (see the preamble of `crates/felis-vt/tests/it/proptest_parser.rs`).
-The `State::Ground` hot path coalesces printable runs with hand-written SWAR (SIMD-within-a-register) bit tricks
-(`scan_printable_run`, `scan_mixed_print_run`, and the masks that drive them), built on the classic `hasless`/`haszero`
-subtract-and-mask predicates from Bit Twiddling Hacks (<https://graphics.stanford.edu/~seander/bithacks.html>), whose
-correctness is alignment- and borrow-sensitive across lanes.
+corrupts grid state for attacker-controlled input. The `State::Ground` hot path coalesces printable runs with
+hand-written SWAR (SIMD-within-a-register) bit tricks (`scan_printable_run`, `scan_mixed_print_run`, and the masks that
+drive them), built on the classic `hasless`/`haszero` subtract-and-mask predicates from Bit Twiddling Hacks
+(<https://graphics.stanford.edu/~seander/bithacks.html>), whose correctness is alignment- and borrow-sensitive across
+lanes.
 
 Randomized testing samples that space poorly: the proptest that checks `scan_printable_run` against a scalar loop only
 ever places **one** offending byte in printable filler, so it never exercises borrow interaction between two
@@ -133,7 +132,7 @@ the generic blowup exceeds solver limits, and the fuzz targets own those round-t
   `#[kani::unwind(n)]`, making it _weaker_ than the unbounded `vt_parser` fuzz target for length coverage, while the
   branchy DFA makes CBMC blow up. Full-parser totality stays with fuzzing.
 - **Heap-allocating round-trips.** The base64 `decode(encode(x)) == x` property bit-blasts past every solver tried; it
-  lives as a proptest instead, and only cheap base64 proofs over a few groups stay under Kani.
+  lives as a proptest instead, and Kani keeps only base64 proofs over inputs of at most two groups (eight bytes).
 - **The allocating half of `Chord::parse`.** Its byte-level kernels are proven: the `+` split, the name lookups, and the
   F-key index accumulator. The `String`-building layer above them (the character key, the token named in each error) is
   orchestration whose only computation is the kernels', so the `chord_parser` fuzz target and the parser proptests own
@@ -169,11 +168,10 @@ its pull-request runs, every failure on a change that did not touch the measured
 from a real regression.
 
 An instruction count does not depend on what else the machine runs. Repeat runs give identical counts, with or without
-synthetic load beside them, except that std's per-process hash seed moves a benchmark whose measured code probes a
-`HashMap` by under 0.05%; the same commit built from two checkout paths differs by under 0.2%, an order of magnitude
-below the 2% threshold. Injected regressions show the count tracks the cost the gate exists to catch: extra work in the
-print path raised it by 9% to 23% on the benchmarks that reach that path, where wall-clock time rose 10% to 29%, and
-disabling the ASCII fast path raised it by 25% to 233%.
+synthetic load beside them, and the same commit built from two checkout paths differs by under 0.2%, an order of
+magnitude below the 2% threshold. Injected regressions show the count tracks the cost the gate exists to catch: extra
+work in the print path raised it by 9% to 23% on the benchmarks that reach that path, where wall-clock time rose 10% to
+29%, and disabling the ASCII fast path raised it by 25% to 233%.
 
 The count is blind to a regression that only changes memory behavior. A change that added cache misses without adding
 instructions cost 25% to 55% in wall-clock time while the count moved under 0.7%; callgrind's estimated cycles, which
@@ -192,36 +190,30 @@ Heap is gated by fixed ceilings in the test suite rather than by a base-relative
 budget already fixes ([session-lifecycle.md](architecture/session-lifecycle.md) "Geometry bounds"), plus image pixels
 and a remainder of registries and marks two orders smaller. A 2% threshold on that total cannot see the remainder
 double, and a threshold on the remainder alone fails on every registry change while saying nothing about a session's
-cost. What does regress is structural: an allocation per history row, a pixel copy held twice, a window that keeps
-history. Each is a ceiling far from today's figure, and allocation counts and live bytes are fixed for a fixed input, so
-the ceilings run with the rest of the workspace tests, Windows included, instead of only on the Linux bench runner.
+cost. What does regress is structural, such as an allocation per history row, and a structural regression crosses a
+ceiling set far from today's figure.
 
 ## Waiting on state, not on time
 
 A test waits for the state its assertion needs, never for a duration or for a stand-in that usually coincides with that
 state. CI shares its host with builds, and load there climbs to several times the core count, so a sleep, a short
-timeout, or a proxy (a socket path that exists before its listener accepts, a free queue slot, a quiet stretch on a
-stream) measures the host rather than the code, and lengthening it only makes the failure rarer. A deadline stays only
-as a hang guard around a wait that ends on an event, long enough that reaching it means the code is wrong. An assertion
-that something does not happen needs a positive sync point first: an event the code emits after the moment the unwanted
-one would have come. A test that fails only under load is as likely to have found a race in the product as in itself,
-and the fix goes where the race is.
+timeout, or a proxy (a socket path that exists before its listener accepts) measures the host rather than the code, and
+lengthening it only makes the failure rarer. A deadline stays only as a hang guard around a wait that ends on an event,
+long enough that reaching it means the code is wrong. An assertion that something does not happen needs a positive sync
+point first: an event the code emits after the moment the unwanted one would have come. A test that fails only under
+load is as likely to have found a race in the product as in itself, and the fix goes where the race is.
 
 ## Shell overlays under the real interpreters
 
 The completion tests drive the generated fish and zsh overlays through the interpreter itself, against a `felis`
-stand-in that records its argv. The overlays (`crates/felis-cli/src/cli_completions.rs`) are shell script held in Rust
-strings, and the contract they carry is about what the shell does on a `<TAB>`: which tokens reach the hidden
-`__complete-sessions` helper, and which lines yield no call at all because the slot's daemon is an SSH destination.
+stand-in that records its argv. The overlays are shell script held in Rust strings, and the contract they carry is about
+what the shell does on a `<TAB>`: which tokens reach the hidden `__complete-sessions` helper, and which lines yield no
+call at all because the slot's daemon is an SSH destination.
 
 A string assertion on the overlay ("contains `--socket)`", "does not contain `--host|--socket`") pins the text, not that
 behavior. A `case` arm can match the right token and still forward it through a variable the assertion never sees, and a
 quoting slip breaks the function without changing any substring. The string assertions stay alongside as the tripwire
 that runs without either shell.
-
-The two shells are driven differently. fish exposes its completion engine directly (`complete -C '<line>'` hands the
-line to `commandline` as an interactive `<TAB>` would); zsh has no equivalent, so the test sources the script under
-`zsh -f`, stubs `compdef` and `_describe`, and calls the helpers with `words` set as the completion system would.
 
 Each test fails when its shell is off `PATH` rather than skipping: the dev shell provides both shells, and a skip would
 let an environment that lost one pass as green.

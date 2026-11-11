@@ -40,9 +40,9 @@ redraw request, so a burst of frames costs one paint ([damage-tracking.md](damag
 5. The renderer issues draw calls inside one render pass, in the
    layered order:
      a. clear (load op) + images z below the bg tier
-     b. cell backgrounds other than the default, which the clear
-        already holds (incl. cursor/selection markers, which are
-        background-layer instances, not a separate pass)
+     b. cell backgrounds other than the default (incl.
+        cursor/selection markers, which are background-layer
+        instances, not a separate pass)
      c. images z below text but above bg
      d. cell glyphs (incl. box-drawing and hyperlink underlines)
      e. SGR line decorations (underline family, strikethrough,
@@ -97,23 +97,19 @@ foreground and the background it takes the coverage at which the linear blend re
 would. Colors still mix in linear space; only the weight moves. This is ghostty's `linear-corrected`
 [`alpha-blending`](https://github.com/ghostty-org/ghostty/blob/main/src/config/Config.zig), the same mapping as kitty's
 `legacy` [`text_composition_strategy`](https://github.com/kovidgoyal/kitty/blob/master/kitty/options/definition.py). A
-mask draw is anything whose pixels are a coverage tinted by the foreground: font glyphs, the built-in box-drawing glyphs
-and the line decorations. Color glyphs, images and backgrounds carry their own color and blend unchanged.
-`felis_render_core::blend` is the reference the shader mirrors. The renderer turns the remap on only for an sRGB target:
-a surface that falls back to a non-sRGB format already blends encoded values, and the remap would correct twice.
+mask draw is one whose pixels are a coverage tinted by the foreground; color glyphs, images and backgrounds carry their
+own color and blend unchanged. The renderer turns the remap on only for an sRGB target: a surface that falls back to a
+non-sRGB format already blends encoded values, and the remap would correct twice.
 
 The background the remap assumes is the resolved background of the draw's own cell (reverse video, cursor and selection
 applied), and for the default background of a translucent window its configured opaque color. The remap is about text
-against its own background; what the compositor shows behind the window is outside felis. Four cases blend over
-something else: ink overhanging into a neighbor cell of another background, a Kitty image placed between the background
-and text layers, a search highlight laid under a match, and the backdrop of a translucent window. Only edge pixels are
-affected, by the difference between the assumed and the real background. The painter does not know where images sit, and
-search highlights are an overlay on cached rows, so tracking them would repaint every row per search keystroke; the
-error is accepted rather than tracked.
+against its own background; what the compositor shows behind the window is outside felis. Where text blends over
+something other than its cell background (an overhang into a neighbor, an image between the layers, a search highlight,
+a translucent backdrop), only edge pixels differ, and the error is accepted rather than tracked.
 
-macOS keeps plain linear blending, as ghostty does there. CoreText's font smoothing already dilates the mask
-(text-shaping.md, "macOS outlines"), and blended linearly it lands within 10% of Terminal.app's ink in both a dark and a
-light theme; the remap on top adds 12% too much in the light one. The rejected alternatives:
+macOS keeps plain linear blending, as ghostty does there: CoreText's font smoothing already dilates the mask
+([text-shaping.md](text-shaping.md) "macOS outlines"), and the remap on top over-darkens light themes. The rejected
+alternatives:
 
 - **Plain linear blending everywhere.** The weight shift above, in both directions at once.
 - **sRGB-space blending.** It matches the fonts' tuning, but mixing encoded values darkens the edge between saturated
@@ -578,9 +574,9 @@ _Revisit if_ a real consumer needs the vertex stage.
   On the client, anything that changes sets one sticky redraw request, and the next frame rebuilds the rows the shadow
   marked ([damage-tracking.md](damage-tracking.md)). felis does not skip frames for energy reasons (a screen with a
   blinking cursor still ticks).
-- **A background quad per run, not per cell.** A cell on the default background draws no quad, and a row's run of one
-  background color draws one. A software adapter (llvmpipe, WARP) pays per quad more than per pixel, and a quad per cell
-  made the background tier most of its frame.
+- **A background quad per run, not per cell.** A cell on the default background draws no quad, since the clear already
+  holds it, and a row's run of one background color draws one, because a software adapter (llvmpipe, WARP) pays per quad
+  more than per pixel.
 
 ## Prior art and alternatives considered
 

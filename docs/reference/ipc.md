@@ -72,10 +72,7 @@ and remote attach share the framing, the handshake, the rehydrate path, and the 
 
 Nothing listens on the network on either end, so existing SSH firewall configurations, jump hosts, and `~/.ssh/config`
 entries work unchanged, and felis inherits keys, agents, and 2FA prompts. A plain dial puts no deadline on the `ssh`
-child, so its timeouts follow the user's SSH config; a window's reconnect attempt is bounded by felis. The client passes
-the destination after `--`, so no destination is read as an `ssh` option. A dial the client abandons before it lands
-kills its `ssh` child, which a dead route would otherwise keep connecting; an established connection ends it by closing
-`ssh`'s stdin.
+child, so its timeouts follow the user's SSH config; a window's reconnect attempt is bounded.
 
 The `FRLY` **carrier block** ("Relay carrier block" below), holding the relay's own environment, is the only thing the
 relay can write of its own, once, before the splicing begins; it is omitted when that environment exceeds either frozen
@@ -341,9 +338,8 @@ in both directions: after sending it the client keeps accepting items for that s
 no-op. A canceled producer still owes its terminal: "stop producing" is not "stop existing", and a client waiting on a
 terminal that never came would hang.
 
-**Producers are chunked.** A stream producer emits a bounded slice and yields: the session lock is released between
-slices, so a cancel, a keystroke, and the PTY drain all get a turn mid-walk. No producer materializes its whole result
-before emitting.
+**Producers are chunked.** A stream producer emits a bounded slice and yields, so a cancel, a keystroke, and the PTY
+drain all get a turn mid-walk. No producer materializes its whole result before emitting.
 
 **Bounded concurrency.** A connection may hold `MAX_OUTSTANDING_STREAMS` (32) streams open at once. A stream-opening
 request past the bound draws a typed refusal, `ConnToClientMsg::Error { stream_id, reason: TooManyStreams }`, which is
@@ -718,9 +714,9 @@ rehydrate burst, diff cursor, and pull cadence
 through `Ops::Spawn` instead. Setting `image_regions` on either request (minor 4) asks for frame edits as `Region`
 transfers ("Image (kind = 3)" below).
 
-A prefix resolves inside the daemon, under the lock that takes the session handle, so an attach costs one round trip and
-no roster the client holds can go stale in between. A teardown still races the subscription that follows, which answers
-`SessionEnding`, so a session reaped mid-request does not always read as `NoMatch`.
+A prefix resolves inside the daemon, so an attach costs one round trip and no roster the client holds can go stale in
+between. A teardown still races the subscription that follows, which answers `SessionEnding`, so a session reaped
+mid-request does not always read as `NoMatch`.
 
 `AttachFailed` names which half of the request refused: `attach`, an `AttachFailure` about a session that already
 exists, or `create`, a `CreateFailure` about one that does not exist yet. Which values each request admits is exact, and
@@ -949,29 +945,25 @@ for an event tell daemon shutdown from idle silence without relying on raw EOF (
 subscriber that names nothing hears exactly the `Event`s above. The other kinds are point facts about the roster, each
 naming its session: `lifecycle` (`SessionAdded`, `SessionExited`, `SessionRemoved`), `program_status` (`ProgramStatus`,
 the session's whole record set after each change to it), `prompt` (`PromptShown`, `CommandFinished`) and `meta`
-(`SessionChanged`, a hint naming which fields changed, carrying no values). A client facing a daemon below the minor
-that introduced `kinds` refuses a non-empty set before sending.
+(`SessionChanged`, a hint naming which fields changed, carrying no values).
 
 Events are not a mirror of the roster: `Ops::List` and `Ops::Info` stay its source of truth, and an event tells a client
 when to read it again. The recipe that leaves no gap is to subscribe, wait for `Subscribed`, then list; every change
 after `Subscribed` produces an event, and every event's handler is a re-read or idempotent, so one about a state the
-list already shows is harmless. A session's events come from its own task, in the order the task produced them:
-`SessionAdded` first, `SessionRemoved` last, `SessionExited` at most once and before `SessionRemoved`, and
-`ProgramStatus`, `PromptShown` and `CommandFinished` in the order their escape sequences were parsed. A session killed
-while its program runs is removed without an exit, and a session rolled back before it entered the roster publishes
-nothing. Each event is published after the roster state it concerns is updated. Two exceptions sit outside that order:
-`SessionChanged` naming `tags` comes from the tag request rather than the task and may follow `SessionRemoved`, and
-notifications travel a ring of their own, so they are unordered against the other kinds. No order holds across sessions.
-With a session prefix, `SessionAdded` never arrives, since the session already exists.
+list already shows is harmless. Each event is published after the roster state it concerns is updated, and a session's
+events arrive in order: `SessionAdded` first, `SessionRemoved` last, `SessionExited` at most once and before
+`SessionRemoved`, and `ProgramStatus`, `PromptShown` and `CommandFinished` in the order their escape sequences were
+parsed. A session killed while its program runs is removed without an exit, and a create rolled back before its session
+entered the roster publishes nothing. Two exceptions sit outside that order: `SessionChanged` naming `tags` may follow
+`SessionRemoved`, and notifications are unordered against the other kinds. No order holds across sessions. With a
+session prefix, `SessionAdded` never arrives, since the session already exists.
 
 Loss under backpressure is the contract: the daemon never buffers without bound for a slow observer, so one that falls
-behind a shared ring loses events. The loss is never silent: `Lagged` says how many were missed, so a consumer waiting
-on a specific event knows it may be among them, and a roster consumer lists again. A missed `ProgramStatus` or prompt
-transition is not recoverable; the row holds only the latest record and exit code. A session still held by its creator
-holds its items in a bounded queue: program status keeps only its latest set and row hints merge, which loses nothing
-anyone could have seen, while prompt items past the bound give way oldest first and the loss is a `Lagged` right behind
-`SessionAdded`. A daemon that stops ends every observer stream with its clean terminal. felis decodes and relays; it
-never draws a banner.
+behind loses events. The loss is never silent: `Lagged` says how many were missed, so a consumer waiting on a specific
+event knows it may be among them, and a roster consumer lists again. A missed `ProgramStatus` or prompt transition is
+not recoverable; the row holds only the latest record and exit code. A burst of prompt items a session produces before
+it enters the roster can be lost too, and that loss is a `Lagged` right behind its `SessionAdded`. A daemon that stops
+ends every observer stream with its clean terminal. felis decodes and relays; it never draws a banner.
 
 ### Push (kind = 8)
 
@@ -1180,11 +1172,6 @@ A directive is also dropped for any subscriber whose last frame replayed every r
 those rows already hold the shift, and shipping it as well would move them twice. Shifts folded into one directive from
 both sides of such a frame replay every row instead, since the frame holds an unknown part of the shift.
 
-Each composition takes the core lock for itself and settles its own scroll accounting under it, against rows whose
-geometry and scroll order are the ones it read: a composition that finds the grid scrolled past what its subscriber was
-offered replays the rows at that reading instead, since the cells it would encode already hold a shift no directive
-accounts for.
-
 A `RowDelta` inside the two bounds applies even when it does not fit the shadow's current dimensions: a lower or wider
 row grows the mirror, a narrower one pads it. A resize race gives both an honest reading, which is why the row index and
 the body width are the only grid values bounded protocol-wide rather than by the announced geometry.
@@ -1205,7 +1192,7 @@ a `Frame` number against `MAX_IMAGE_FRAMES`. A client mirroring the store also h
 `MAX_SESSION_IMAGE_BYTES` ("Semantic limits" below).
 
 `Chunk` appends at the open transfer's own byte count and `Complete` closes it; both name the transfer's `id` as a
-cross-check. Eleven sequences are malformed and end the connection, connection-locally:
+cross-check. These sequences are malformed and end the connection, connection-locally:
 
 - a `Header` while a transfer is open;
 - a `Frame` or `Region` for an id the receiver holds no image for;
@@ -1224,11 +1211,10 @@ zero-fills a shortfall and never normalizes a malformed sequence. A `Delete` of 
 that transfer.
 
 **Frame edits.** An in-place edit of an existing frame (`a=f` with `r=`, `a=c`) reaches a window at minor 4 or later
-that attached with `image_regions` set as `Region` transfers of the rectangles the edits touched since the last fan-out,
-read from the store at ship time; any other window receives the whole frame under `Frame`. One frame's edits in one
-fan-out ship as at most 16 rectangles, a rectangle another covers dropped and more merged into their bounding box, and
-as the whole frame instead once they cover more than half of it. Nothing ships as a `Region` for a frame the same
-fan-out re-ships whole, or for an image it re-states or deletes; the attach burst carries every frame whole.
+that attached with `image_regions` set as `Region` transfers of the rectangles it touched; any other window receives the
+whole frame under `Frame`. An opted-in window must accept an edit arriving as a whole `Frame` instead. Nothing ships as
+a `Region` for a frame the same fan-out re-ships whole, or for an image it re-states or deletes; the attach burst
+carries every frame whole.
 
 **Store and placements.** `Delete` drops an image with its placements and also announces the daemon's own evictions, so
 a mirror's byte total tracks the daemon's. `Placement` and `VirtualPlacement` are upserts that `PlacementRemoved`
@@ -1251,14 +1237,14 @@ above): the whole REQ-607 search conversation, open to the `Window` and `Ops` mo
 a search stream ends in the shared `ConnToClientMsg::End { count }` or `Error`, like every other stream, and a `Cancel`
 stops a running walk.
 
-The walk runs in slices, releasing the session lock between them, so a `Cancel` stops it mid-flight and a keystroke on
-the same session is not queued behind it. The scrollback walk, the default source, covers retained scrollback plus the
-live primary screen, stitched across the seam, and iterates newest-first: live bottom up, then scrollback youngest to
-oldest; while the alternate screen is active its live pass is skipped. The visible walk covers the live grid alone,
-alternate screen included, top-down, and never stitches into scrollback; it resumes at a row position, as `Region::Rows`
-does, so a row repainted behind the walk is not revisited. Each slice also bounds how many items it _enqueues per turn_,
-so a scrollback-wide match set never lands as one burst. That bounds the burst, not the outbox: a search that outruns
-its reader is cut by the outbox gauge like any other backlog ("Backpressure" below).
+The walk runs in slices, so a `Cancel` stops it mid-flight and a keystroke on the same session is not queued behind it.
+The scrollback walk, the default source, covers retained scrollback plus the live primary screen, stitched across the
+seam, and iterates newest-first: live bottom up, then scrollback youngest to oldest; while the alternate screen is
+active its live pass is skipped. The visible walk covers the live grid alone, alternate screen included, top-down, and
+never stitches into scrollback; it resumes at a row position, as `Region::Rows` does, so a row repainted behind the walk
+is not revisited. Each slice also bounds how many items it _enqueues per turn_, so a scrollback-wide match set never
+lands as one burst. That bounds the burst, not the outbox: a search that outruns its reader is cut by the outbox gauge
+like any other backlog ("Backpressure" below).
 
 One `Match` covers one hit logical line, soft-wrapped rows stitched, and a match that crosses a wrap edge contributes
 one highlight segment per touched row. Row indices follow REQ-608's negative-from-top convention; a seam-straddling hit

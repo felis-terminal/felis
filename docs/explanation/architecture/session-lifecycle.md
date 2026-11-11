@@ -83,9 +83,9 @@ That transaction is why a create has two failure vocabularies rather than one, a
 refused. Its **spawn half** (admission and the fork/exec) can fail over a geometry, a cap, a drain, or a program that
 will not start, and all four say the same thing about the request: nothing ran, and no session exists. Its **attach
 half** can fail only by losing the race against a session that ended first. A child that merely exited first is no
-refusal: the attach lands and hears the exit and the close it would have had landing first. Every other attach-half
-reason (an id nothing holds, a prefix matching none or several, a shell that has already exited) is about a session that
-was already there, which is `SessionToDaemonMsg::Attach`'s business and not a create's.
+refusal: the attach lands and then receives the exit and the close, as an attach that won the race would. Every other
+attach-half reason (an id nothing holds, a prefix matching none or several, a shell that has already exited) is about a
+session that was already there, which is `SessionToDaemonMsg::Attach`'s business and not a create's.
 
 The two sets are therefore disjoint, an `OpsToDaemonMsg::Spawn` has no attach half at all, and
 `SessionToDaemonMsg::Attach` has no spawn half; so the wire carries one enum per half and the refusal names the arm
@@ -819,8 +819,7 @@ A local attachment also reports the **pid of the process that connected it**, so
 window showing a session without felis taking over layout (principle 1). The pid is read by the daemon off the socket it
 already authenticates, never claimed in `Hello`, so a client cannot name another process. An OS window id (HWND,
 CGWindowID, X11 XID) is rejected: a Wayland client holds none another client can address, while every one of those
-window managers resolves a window from its pid. A relayed attachment reports none, because its peer is the relay process
-and the window sits on another host.
+window managers resolves a window from its pid.
 
 The **last window input owner** marker is a sibling of the size marker, updated only by PTY-reaching input from a
 _window_ subscriber. The two must not be one marker: size ownership is promoted by any subscriber's input, a scripted

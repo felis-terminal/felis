@@ -294,8 +294,8 @@ in [cli.md](../../reference/cli.md) "Auto-spawning".
 
 A retarget is the one form that dials twice, and the two halves take different sides of this split: the source dial
 drives a daemon that is already holding the window, while the landing on the target host is a window asking for a daemon
-to hold it. So the landing spawns over SSH, and on a cold local socket it fails instead, because `Reconnector::land`
-opens that socket directly rather than through `connect_or_spawn_daemon`.
+to hold it. So the landing spawns over SSH, and on a cold local socket it fails instead, because it opens that socket
+directly rather than through `connect_or_spawn_daemon`.
 
 #### A diagnostic names what it found and changes nothing
 
@@ -335,10 +335,9 @@ roster is bounded and answered in one frame, so it is a point result with the wh
 Framing the roster as a stream is the rejected alternative. It obliges every consumer to accumulate lines and watch for
 a terminal to learn a thing the daemon already knows in full.
 
-Arrivals and departures are a stream verb of their own, `sessions events`, and its items are hints to list again rather
-than a mirror of the roster. A mirror, a snapshot followed by deltas, is the rejected alternative: it needs the snapshot
-and the first delta taken atomically against the pool, which the pool lock does not give, while subscribing before
-listing needs only that each change is published after it lands.
+A mirror of the roster on `sessions events`, a snapshot followed by deltas, is rejected as well: it needs the snapshot
+and the first delta taken atomically against the pool, which the pool lock does not give, while hints to list again need
+only that each change is published after it lands.
 
 #### A proposed verb names its class before it is built
 

@@ -124,9 +124,8 @@ just snapshot-accept   # accept all staged snapshots
 The renderer's cell-instance fixtures are raw bytes rather than insta snapshots: they pin the bg, fg, and decoration
 instance buffers a set of small screens paint into, and `just golden` rewrites them.
 
-felis-shaping's color glyphs are held to a reference rather than a snapshot: the `color-reference` flake check, Linux
-only, draws the pinned `COLR` faces through felis and through cairo and fails when they differ past the bounds
-`dev/color-reference/compare.py` sets.
+felis-shaping's color glyphs are held to a cairo reference rather than a snapshot, by the `color-reference` flake check
+(Linux only).
 
 ## Conformance tests
 
@@ -200,8 +199,7 @@ caller; the pull-request gate is the instruction-count gate below.
 ### Instruction-count gate
 
 `bench.yml` runs `tools/bench/gungraun.py gate` on every pull request against its base commit. It counts the
-instructions (callgrind's `Ir`) of the `gungraun_gate` benches in `felis-client-core` and `felis-shaping`, which share
-their workloads with the Criterion benches `end_to_end_throughput`, `shape_cache`, and `shape_run`, and:
+instructions (callgrind's `Ir`) of the `gungraun_gate` benches in `felis-client-core` and `felis-shaping`, and:
 
 - fails when any benchmark's `Ir` exceeds the base's by more than 2%;
 - passes a regression when the pull request carries the `perf-regression-accepted` label, by convention with a PR
@@ -215,13 +213,9 @@ shell fails when the two disagree.
 
 ### Heap footprint
 
-`crates/felis-client-core/tests/session_memory.rs` counts, under the dhat allocator, the heap a parked session holds
-(idle, with a full scrollback ring, with Kitty images, and quiet, its history compacted as the daemon leaves it) and the
-heap a window holds once attached to it. Its ceilings run with the workspace tests and are structural: no allocation per
-history row, image pixels held once on each side, a window that keeps no history, and a quiet session holding less than
-half a full ring's cells. `just bench-mem` prints the figures. The cell ring is an OS mapping dhat does not see
-([scrollback.md](../explanation/data-model/scrollback.md)), so the cells-resident and per-row columns count the cells a
-session holds in both scrollback tiers (`Grid::resident_cell_bytes`), not the ring's reservation.
+Heap ceilings on a parked session and on a window attached to it run with the workspace tests. `just bench-mem` prints
+the figures; its cells-resident and per-row columns count the cells a session holds in both scrollback tiers, not the
+ring's reservation.
 
 ## Damage-tracking correctness
 
@@ -247,10 +241,8 @@ The threats these tests verify, and the property each defense must hold, are
 
 Tool: Kani (<https://model-checking.github.io/kani/>).
 
-Kani model-checks self-contained SWAR and arithmetic kernels (UTF-8 and LEB128 decoding, the printable-run scan, CSI
-parameter accumulation, frame headers, base64, placeholder and geometry arithmetic, glyph coverage accumulation) for
-absence of panics and assertion violations across bounded inputs. Each proof is a `#[kani::proof]` harness under
-`#[cfg(kani)]` beside its kernel.
+Kani model-checks self-contained SWAR and arithmetic kernels for absence of panics and assertion violations across
+bounded inputs. Each proof is a `#[kani::proof]` harness under `#[cfg(kani)]` beside its kernel.
 
 ```
 just kani                     # run all proofs in the Kani dev shell
@@ -321,7 +313,7 @@ request drives the debug Cargo build; `main` and tags drive the shipped build.
 
 ### Wire compatibility gates
 
-Changes to `felis.proto` must preserve wire compatibility, verified by seven checks:
+Changes to `felis.proto` must preserve wire compatibility, verified by these checks:
 
 | Gate                                 | Runs in                                             | Guarantees                                                                                                        |
 | ------------------------------------ | --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |

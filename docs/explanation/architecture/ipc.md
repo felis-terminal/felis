@@ -1004,8 +1004,7 @@ client writing bytes to the system clipboard, yet they take different paths ther
 felis's own mirror, so an arbitrary program cannot silently overwrite the user's clipboard. A region reply answers the
 user's own chord (the same intent as `Ctrl+Shift+C`), so the client applies it ungated via `write_user`. Routing the
 user's pipe through `ClipboardSet` would make the pipe silently no-op under the default config, because that frame's
-gate cannot tell "the user asked" from "a program asked". The `osc_52` pipe source shows the split: the bytes came from
-a program, but the chord that ships them is the user's, so they take `write_user`.
+gate cannot tell "the user asked" from "a program asked".
 
 What carries the distinction is the _request_, not a marker on the reply. The client parks the sink the chord named
 while the region is in flight and reads it back when the reply lands, so "the user asked for the clipboard" is something

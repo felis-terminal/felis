@@ -41,8 +41,7 @@ Your window manager or compositor manages geometry and tiling:
 
 On Linux a felis window carries the Wayland app ID `felis` and the X11 `WM_CLASS` `felis`, `felis`, so a window rule
 matching that name applies to all of them. To single one window out, name it at launch: `felis --class scratchpad` gives
-that window the app ID `scratchpad`, and a rule matching `scratchpad` (float it, send it to a workspace) applies to it
-alone. On Windows the same flag sets the Win32 window class that window-rule tools match ([cli.md](../reference/cli.md)
+that window the app ID `scratchpad`, and a rule matching `scratchpad` applies to it alone ([cli.md](../reference/cli.md)
 "Global options").
 
 ## Optional: tab-like session switching in one window

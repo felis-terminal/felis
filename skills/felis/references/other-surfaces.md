@@ -8,9 +8,6 @@ None of these is needed for the three scenarios in `SKILL.md`. Each links to its
   ([cli.md "Re-point a window across daemons"](https://github.com/felis-terminal/felis/blob/main/docs/reference/cli.md#re-point-a-window-across-daemons-felis-ssh-felis-window-retarget)).
   `felis ssh devbox` re-points the window it runs in at devbox's daemon; `felis --host devbox` opens a new window there
   instead, and before a headless verb the same flag names the daemon that verb dials.
-- **`attachments[].client_pid`** in `sessions info`: the pid of a local window's process, for a window-manager script
-  that maps a session to its OS window. A headless session has no window to map
-  ([cli.md "Machine output"](https://github.com/felis-terminal/felis/blob/main/docs/reference/cli.md#machine-output)).
 - **`pipe` / `run` keymap chords** and their `FELIS_ORIGIN_SESSION_ID` / `FELIS_HOST` / `FELIS_CWD` environment:
   user-authored scripts fired from a window's `[keymap]`
   ([keybindings.md "Unbound by default"](https://github.com/felis-terminal/felis/blob/main/docs/reference/keybindings.md#unbound-by-default)).

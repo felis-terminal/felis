@@ -41,30 +41,24 @@ event loop owns the renderer and shadow-grid read side while the IPC reader runs
 
 One overlap is deliberate and load-bearing on the daemon: **the VT parse does not run on a tokio task.** Each session's
 PTY master has two dedicated OS threads in `felis-pty`: a reader that stays on the PTY, and a parse thread that advances
-the grid via a sink closure, consuming whole swap-buffer accumulations. The macOS PTY line discipline delivers output in
-~1 KiB chunks, so a 150 MB `cat` is ~156K reads. Two alternatives are rejected by measurement. Handing each chunk to a
-tokio task to parse costs one cross-thread wake plus a cache-line bounce per chunk, ~45% of the `cat`'s wall-clock (0.87
-s against 0.48 s with the parse on the reader thread). Parsing inline on the reader thread instead holds a child's
-synchronous `write(2)` hostage to parse cost: the kernel drains a bulk write in a ~1 KiB lockstep (wake the reader, hand
-over a chunk, wake the writer to refill), so the queue drains at 1 KiB/(read+parse) and a DOOM-fire-style sim+write loop
-caps at ~628 fps. The reader/parse split with a condvar-only-when-parked handoff plus a short non-blocking spin in the
-macOS reader (the perf-trace skill's `references/cost-maps.md` owns the numbers, including why neither half works alone)
-reaches ~666 fps, and bulk accept reaches 250 MB/s against the inline path's 210. The session's owner task keeps only
-what is downstream of the parse (effect replay, diff compose, fan-out), reaching the shared parser+grid unit through a
-`parking_lot::Mutex` whose `!Send` guard makes holding it across an `await` a compile error. The owner task coalesces
-its per-chunk work under a flood so it does not contend the parse thread off that lock, takes the lock once per cycle,
-and the lock hands off to a waiting owner task so the parse thread cannot starve it off in turn (see
-[pipeline.md](rendering/pipeline.md) "Demand-driven emission", which argues the choice of lock).
+the grid. The macOS PTY line discipline delivers output in ~1 KiB chunks, so a 150 MB `cat` is ~156K reads. Two
+alternatives are rejected by measurement. Handing each chunk to a tokio task to parse costs one cross-thread wake per
+chunk, ~45% of the `cat`'s wall-clock. Parsing inline on the reader thread instead holds a child's synchronous
+`write(2)` hostage to parse cost: the kernel drains a bulk write in ~1 KiB lockstep with the reader, so a
+DOOM-fire-style sim+write loop caps at ~628 fps, where the reader/parse split with a short non-blocking spin in the
+macOS reader reaches ~666 fps. The session's owner task keeps only what is downstream of the parse (effect replay, diff
+compose, fan-out), reaching the shared parser+grid unit through a `parking_lot::Mutex` whose `!Send` guard makes holding
+it across an `await` a compile error; how the owner task and the parse thread share that lock is argued in
+[pipeline.md](rendering/pipeline.md) "Demand-driven emission".
 
-Linux's PTY queue holds ~68 KiB (64 KiB of flip buffers plus the line discipline's 4 KiB read buffer), so the writer is
-not held to the reader chunk by chunk, and there the spin moves no DOOM-fire frame rate while costing 1.4 to 2.1 s of
-reader user time per 12 s; the Linux reader parks straight in `poll(2)`. A producer that writes a few bytes per
-`write(2)` still costs one read per write, because the reader stays caught up with it: vtebench's scrolling rows cost
-most of a core in ~13-byte reads. Rejected: letting that output pile up in the kernel while the parser is busy. The
-Linux write path slows down when output sits unread. A bare consumer that pauses 20 to 50 µs between reads makes the
-same producer, fully kernel-bound either way, take about 55% longer per vtebench scrolling sample (~255 against ~160 ms
-at 82x212), and a felis build whose reader waits like that runs the bench harness's scrolling rows up to twice as slow.
-The reader's CPU would be bought back with exactly the throughput those rows measure.
+Linux's PTY queue holds ~68 KiB, so the writer is not held to the reader chunk by chunk, and there the spin moves no
+DOOM-fire frame rate while costing 1.4 to 2.1 s of reader user time per 12 s; the Linux reader parks straight in
+`poll(2)`. A producer that writes a few bytes per `write(2)` still costs one read per write, because the reader stays
+caught up with it: vtebench's scrolling rows cost most of a core in ~13-byte reads. Rejected: letting that output pile
+up in the kernel while the parser is busy. The Linux write path slows down when output sits unread. A bare consumer that
+pauses 20 to 50 µs between reads makes the same producer, fully kernel-bound either way, take about 55% longer per
+vtebench scrolling sample, and a felis build whose reader waits like that runs the bench harness's scrolling rows up to
+twice as slow. The reader's CPU would be bought back with exactly the throughput those rows measure.
 
 The split costs one ordering rule at the end of the stream: the reader thread signals EOF to the parse thread, then
 waits for it to finish before letting the session's PTY reader report end-of-stream. Without that wait the two events
@@ -90,8 +84,7 @@ one WGSL shader: one codebase, three platforms. The render path draws cells as i
 
 felis's image-atlas sizing in [rendering/pipeline.md](rendering/pipeline.md) ("`min(8192, max_texture_dimension_2d)` per
 side") rests on the spec's floor: `maxTextureDimension2D` defaults to 8192 (<https://www.w3.org/TR/webgpu/#limits>), so
-8192² is guaranteed on every conforming adapter. (The glyph atlas deliberately uses a smaller 2048², well under the
-floor and so always available; see [rendering/pipeline.md](rendering/pipeline.md) "Atlases".)
+8192² is guaranteed on every conforming adapter.
 
 wgpu carries a small overhead vs. native Metal / Vulkan, dwarfed by VT and shaping costs; benchmarks show terminal
 workloads do not notice.
@@ -194,21 +187,18 @@ than through a PTY crate:
   argument as "felis owns its VT engine" (see "Rust" above).
 - **Owned concurrency invariants.** macOS's ptmx clone path races under concurrent PTY allocation (spurious `ENXIO`);
   `openpty(3)` users never see it only because Apple's libc happens to serialize internally around `ptsname`'s static
-  buffer. felis-pty serializes allocation with an explicit, documented lock rather than relying on a libc accident
-  (measurements in `crates/felis-pty/src/unix.rs` `open_pair`).
+  buffer. felis-pty serializes allocation with an explicit, documented lock rather than relying on a libc accident.
 - **No dead weight.** The backends reuse crates already in the workspace graph (`rustix`, `libc`, `windows-sys`).
 
-Costs, accepted deliberately: three audited `unsafe` relaxations (the Unix `pre_exec` handshake, the bare `tcgetpgrp` in
-`foreground_pgrp`, and the ConPTY FFI module; each is an `#[allow(unsafe_code)]` site in `crates/felis-pty/src/unix.rs`
-or `crates/felis-pty/src/windows.rs` carrying `// SAFETY:` comments), and the Windows backend is lint-checked by
-cross-compilation (`just check-windows`) with its runtime behavior exercised by the `x86_64-windows` runner's job
-against both ConPTY hosts; its known behavioral gap is recorded in `crates/felis-pty/src/windows.rs`.
+Costs, accepted deliberately: audited `unsafe` relaxations (each an `#[allow(unsafe_code)]` site carrying a `// SAFETY:`
+comment), and the Windows backend is lint-checked by cross-compilation (`just check-windows`) with its runtime behavior
+exercised by the `x86_64-windows` runner's job against both ConPTY hosts; its known behavioral gap is recorded in
+`crates/felis-pty/src/windows.rs`.
 
 - Rejected: `portable-pty` (WezTerm's cross-platform PTY crate, <https://docs.rs/portable-pty/latest/portable_pty/>). It
-  buys the five wrappers at the price of `nix` (0.28), which the workspace otherwise does not carry at all, a second
-  `thiserror` (1.x via `filedescriptor`), and `serial2` / `shell-words` that felis never uses; leaves the macOS
-  allocation race above to the libc accident; and turns the spawn/EOF/kill semantics into upstream-behavior notes rather
-  than owned specs.
+  buys the five wrappers at the price of `nix`, which the workspace otherwise does not carry at all, a second
+  `thiserror`, and `serial2` / `shell-words` that felis never uses; leaves the macOS allocation race above to the libc
+  accident; and turns the spawn/EOF/kill semantics into upstream-behavior notes rather than owned specs.
 - Rejected: `alacritty_terminal`'s tty module. It brings a full terminal-state crate along for its spawn path, and ties
   the PTY layer to Alacritty's release cadence (again the VT-engine argument).
 - Rejected: `pty-process`. It is Unix-only; the Windows backend would have to be hand-written anyway, at which point the
@@ -253,9 +243,9 @@ since the runner already runs the change under test at that level.
 ### harfrust and skrifa
 
 harfrust (<https://github.com/harfbuzz/harfrust>) shapes, and skrifa (<https://github.com/googlefonts/fontations>) reads
-the outlines, `COLR` layers and bitmap strikes that felis's own rasterizer and color painter draw; the shaper choice is
-in [text-shaping.md](rendering/text-shaping.md) "Prior art and alternatives considered". harfrust is MIT and skrifa is
-dual Apache-2.0 / MIT, both compatible with felis's Apache-2.0.
+the font tables felis's own rasterizer draws from; the shaper choice is in [text-shaping.md](rendering/text-shaping.md)
+"Prior art and alternatives considered". harfrust is MIT and skrifa is dual Apache-2.0 / MIT, both compatible with
+felis's Apache-2.0.
 
 ## IPC encoding
 

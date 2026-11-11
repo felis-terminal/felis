@@ -19,11 +19,11 @@ undocumented quirks, felis follows the documented behavior and treats deviations
 ## Dispatcher architecture
 
 The protocol dispatcher is a `felis-daemon::graphics` module (a free function taking `&mut Session` plus the drained APC
-bodies; per body it borrows the session's graphics state as an `ApcCtx`), not part of `felis-grid`. The grid stays
-decoder-free, filesystem-free, and tokio-free: hosting the dispatcher there would drag the PNG decoder, `rustix` file
-access, and a response-write callback into the one crate the workspace's one-way dependency rule keeps display-only, and
-would put per-grid copies of the image budget and the reassembly buffer in the wrong place. Both bounded buffers
-co-locate on `Session` so a future per-session memory-budget knob touches one place.
+bodies), not part of `felis-grid`. The grid stays decoder-free, filesystem-free, and tokio-free: hosting the dispatcher
+there would drag the PNG decoder, `rustix` file access, and a response-write callback into the one crate the workspace's
+one-way dependency rule keeps display-only, and would put per-grid copies of the image budget and the reassembly buffer
+in the wrong place. Both bounded buffers co-locate on `Session` so a future per-session memory-budget knob touches one
+place.
 
 `Grid::apc_dispatch` is a short relay: it queues each body as a `PtyEffect::Apc` on the grid's stream-ordered
 side-effect queue, carrying the raw bytes plus the cursor position at delivery time; a trailing DECRC / CUP in the same
@@ -44,31 +44,14 @@ the cell box, and with `c`/`r` omitted that box comes from the decoded image's p
 both daemon-side. Running the dispatcher under the parse lock puts the PNG decoder and the reassembly on the reader
 thread's critical section for every APC, not just the placements that move the cursor.
 
-A heavy decode stops the parse the same way: a `t=f`, `t=t` or `t=s` source, a PNG, or a zlib payload declaring at least
-256 KiB of pixels (`offloads_decode` in `felis-grid` names the set). The session task prepares the command under the
-parse lock (reassembly, the id checks, id allocation), runs the decode, and an `a=f` frame's composition onto its base,
-on the blocking pool without it, then commits (store, placement, cursor move, reply) under one acquisition and only then
-releases the reader. Meanwhile it drains no effect, and runs only a window's pull and a stats read, both answered from
-the state as it stood before the command, and input that writes to the program with no size or input-owner change while
-nothing waits and no report of the task's own is owed, plus a shutdown, which a decode that never finishes must not
-outlive. Every other command waits out the decode in arrival order; holding is the default so that a command kind added
-later waits too. The task's own work waits the same way, until a drain has covered what the reader parsed after the
-image: the exit check, which would end a wait before the `OSC 133` mark the program wrote after the image, the reports
-the task writes itself (focus, color scheme, `DECSET 2048` resize), which would land ahead of the image's reply, and
-search walks. Animation playback keeps running, since the commit reads nothing it touches. The held commands replay
-after the commit and before the reader is released, each resize applied in turn, so the image is placed at the geometry
-the producer saw, a shrink and a grow trim the alternate screen as they would have in place, no keystroke reaches the
-program ahead of a resize it followed
-([the frozen order of an ownership transfer](../architecture/session-lifecycle.md#ownership-transfer-has-a-frozen-order)),
-and a fence is answered only once the input ahead of it is written. Input from a window that left meanwhile is still
-written, since a dropped keystroke is gone with no sign. The stopped parse is what makes the split exact: nothing the
-program wrote after the command exists until the commit, so prepare, decode and commit end where an in-place dispatch
-ends, replies keep the order of their requests, and the only change between prepare and commit, animation playback,
-touches nothing the commit reads. Decoding off the lock without stopping the parse is rejected: the bytes after the
-image would parse against a cursor the placement has not moved and a store the image is not in yet. Text after a heavy
-image still waits for its decode, since that text is placed relative to the image; what stops waiting is everything the
-program did not write. A decoder that panics answers as a failed decode rather than taking the session task down with
-it.
+A command with a heavy decode (the set is in [kitty-graphics.md](../../reference/protocols/kitty-graphics.md#limits)
+"Limits") stops the parse the same way, and decodes off the parse lock: the session task prepares the command under the
+lock, decodes on the blocking pool without it, then commits the store, placement, cursor move and reply under one
+acquisition before it releases the reader. Decoding off the lock without stopping the parse is rejected: the bytes after
+the image would parse against a cursor the placement has not moved and a store the image is not in yet. The stopped
+parse is what keeps the split exact: nothing the program wrote after the command exists until the commit, so replies
+keep the order of their requests. Text after a heavy image still waits for its decode, since that text is placed
+relative to the image; what stops waiting is everything the program did not write.
 
 Because the dispatcher's entry holds `&mut Session`, it reaches the image store, the placement table, the response
 writer, and `&mut session.grid` through one borrow root: no callback ping-pong, no interior mutability. A
@@ -148,17 +131,16 @@ and teardown honors the spec's "the terminal must delete the object".
 
 **Why the deferral is bounded and success-gated.** The deferred names are producer-chosen (they arrive on the wire), so
 an unbounded set is a set whose size the producer picks. Held for the life of the session, it grows the daemon by a
-string per escape sequence; measured, 400k `t=s` commands carrying 226-byte names took one session from 1.9 MB to 51 MB
-in thirteen seconds, and none of those names existed: the record happened before anyone asked whether the read had
-succeeded. Two properties close it. A name is deferred only once its command returned OK, which is the only outcome that
-proves an object was opened, so the cheap version of the attack has to produce real segments, and those the OS already
-bounds. And the queue is capped (`ShmDeferral::CAP`, 16 names, LRU), unlinking the name it drops on the way out. The cap
-is safe precisely because the deferral exists for _reuse_: mpv re-sends its one name every frame, which refreshes its
-slot, so eviction can only reach names a producer has stopped using. A producer that rotates names instead degrades to
-kitty's own per-read unlink (the behavior felis deviates from) rather than to unbounded memory. The residue is a `t=s`
-command that opened its object but then failed to store the image: felis will not unlink that one at teardown. It
-belongs to a same-UID producer that can delete it itself, and the OS bounds the total, so the trade is worth the far
-larger hole it closes.
+string per escape sequence, and a record made before the read succeeds needs none of those names to exist. Two
+properties close it. A name is deferred only once its command returned OK, which is the only outcome that proves an
+object was opened, so the cheap version of the attack has to produce real segments, and those the OS already bounds. And
+the queue is capped (`ShmDeferral::CAP`, 16 names, LRU), unlinking the name it drops on the way out. The cap is safe
+precisely because the deferral exists for _reuse_: mpv re-sends its one name every frame, which refreshes its slot, so
+eviction can only reach names a producer has stopped using. A producer that rotates names instead degrades to kitty's
+own per-read unlink (the behavior felis deviates from) rather than to unbounded memory. The residue is a `t=s` command
+that opened its object but then failed to store the image: felis will not unlink that one at teardown. It belongs to a
+same-UID producer that can delete it itself, and the OS bounds the total, so the trade is worth the far larger hole it
+closes.
 
 A real producer that legitimately rotates more than `ShmDeferral::CAP` live segment names at once would see its own
 segments disappear mid-stream; the remedy is raising the cap, not removing it.
@@ -249,35 +231,32 @@ The client re-uploads the current frame's pixels into its single per-id atlas sl
 caching texels per frame; that is cheap for the small images that dominate terminal animation. If a large (4K-class)
 animation makes that per-advance upload the bottleneck, cache an atlas slot per `(id, frame)`: upload once on the
 frame's `Complete`, select by UV on `ShowFrame`. A frame edit ([below](#frame-edits-ship-as-regions)) uploads only its
-rectangles into the slot. The renderer records which generation each slot shows and asks the shadow for the rectangles
-patched since then, rather than taking them from the per-redraw dirty set: a redraw that skipped an occluded image, or
-fell several edits behind, still patches correctly. Whatever the shadow cannot answer with patches (a frame switch, a
-whole re-transmission, a reallocated slot or a recycled sheet) uploads the whole frame.
+rectangles into the slot. Those patches are tracked per slot against the shadow, not taken from the per-redraw dirty
+set, so an occluded image or one several edits behind still patches; anything the shadow cannot answer with patches
+uploads the whole frame.
 
 ## Frame edits ship as regions
 
 A terminal browser presents a page as a stream of dirty rectangles (`a=f` with `r=`), and notcurses wipes cells with
-them; each edits a frame in place. Re-shipping the edited frame whole made a 64×64 edit of a 1920×1080 RGBA frame cost 8
-MB on the wire and as much on the client as a fresh transmission. So a window at minor 4 that opts in is sent the
+them; each edits a frame in place. Re-shipping the edited frame whole would make a 64×64 edit of a 1920×1080 RGBA frame
+cost 8 MB on the wire and as much on the client as a fresh transmission. So a window at minor 4 that opts in is sent the
 rectangles alone, as a third `Header` target beside `New` and `Frame`, which reuses the transfer's chunking, its byte
 count proof, and the client's stage-then-commit at `Complete` that keeps a half-arrived patch off screen. Every other
 window keeps receiving the whole frame: reading an unknown target as unset would be malformed to an older one, so the
 daemon materializes the batch once per side. The opt-in, rather than the minor alone, is what keeps the JSON relay's
-attachments on whole frames: JSON protocol version 1 has no region target, and a later JSON version can opt in.
+attachments on whole frames, since JSON protocol version 1 has no region target.
 
 The rectangles are recorded as markers and read back at ship time like every other transmission, so overlap costs
-nothing in correctness and the coalescing is free to be crude: a rectangle another covers is dropped, more than 16 on
-one frame merge into their bounding box, and past half the frame the whole frame ships instead, since the row copies and
-extra transfers then buy back too few bytes. A whole-frame marker for the frame, or a re-statement of the image, in the
-same batch already carries every edit, so it supersedes the rectangles.
+nothing in correctness and the coalescing is free to be crude: rectangles merge, and past a size threshold the whole
+frame ships instead ([ipc.md](../../reference/ipc.md#image-kind--3) "Image (kind = 3)"). A whole-frame marker for the
+frame, or a re-statement of the image, in the same batch already carries every edit, so it supersedes the rectangles.
 
 A region patches bytes the client already holds, so the scheme rests on one invariant: at every fan-out boundary a
-window's frames equal the store's. It holds by induction over the ordered, lossless stream (a subscriber that cannot
-take a push is dropped, never skipped), because every in-place edit queues a marker covering what it changed, and the
-attach burst starts each window from whole frames. A region for a frame the window does not hold is therefore a broken
-stream, and the client refuses it as malformed, as it refuses a `Frame` for an unknown id; the reconnect that follows
-rehydrates every frame whole. Skipping it instead was rejected: a window that skipped a patch would keep the stale bytes
-around it with nothing on the wire to correct them, while a refusal converges on the next attach.
+window's frames equal the store's, which is why every in-place edit queues a marker covering what it changed. A region
+for a frame the window does not hold is therefore a broken stream, and the client refuses it as malformed, as it refuses
+a `Frame` for an unknown id; the reconnect that follows rehydrates every frame whole. Skipping it instead is rejected: a
+window that skipped a patch would keep the stale bytes around it with nothing on the wire to correct them, while a
+refusal converges on the next attach.
 
 ## Scrollback-anchored placements: rejected shapes
 
@@ -436,10 +415,6 @@ Two properties fall out. A marker whose image the _same_ drain later evicted mat
 stale bytes, because the store is consulted at ship time and does not have it, which is also what lets the eviction path
 stay a pair of tiny markers. And with no subscribers the markers are dropped without materializing at all, so a detached
 session pays nothing to keep an animation advancing.
-
-A region marker (an in-place frame edit) is the one transmission marker that does not carry its frame's whole state,
-which is why a whole-frame marker or a re-statement supersedes it and not the reverse
-([Frame edits ship as regions](#frame-edits-ship-as-regions)).
 
 Because a `Transmit` marker re-states the whole image (root frame, every animation frame, the displayed index), a later
 marker for the same id makes an earlier one redundant, and only the last is materialized. That is what bounds the mpv

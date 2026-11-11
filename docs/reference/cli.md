@@ -39,15 +39,13 @@ Global flags precede the verb (`felis --config ./work.toml doctor`):
 - `--socket <path>`: dials a local daemon at an explicit socket path, on the host it runs on. A relative path is
   anchored to the caller's working directory. It is mutually exclusive with `--host` (exit `2`).
 - `--ssh-arg <token>`: passes an argument token to `ssh` when `--host` is used (repeatable).
-- `--class <name>`: names the launched window for window-manager rules, for the window's whole life (a retarget, a
-  session switch, or a reconnect keeps it). On Linux it sets the Wayland app ID and both X11 `WM_CLASS` fields; absent,
-  both are `felis`, which pairs the window with `felis.desktop`, and any other name loses that pairing (a generic icon
-  and a separate dock group on GNOME and KDE). On Windows it sets the Win32 window class and leaves the AppUserModelID,
-  so taskbar grouping and pinning are unchanged. On macOS it is accepted and has no effect: the platform has no
-  per-window class ([non-goals.md](../explanation/non-goals.md) "Cross-platform constraints"). A name must be 1 to 255
-  bytes with no control characters, and on Windows must not already be a registered window class (a system class such as
-  `Button`, or winit's `Winit Thread Event Target`), compared case-insensitively. A refused name exits `2` before the
-  window dials the daemon, so no session is created.
+- `--class <name>`: names the launched window for window-manager rules, for the window's whole life. On Linux it sets
+  the Wayland app ID and both X11 `WM_CLASS` fields; absent, both are `felis`, which pairs the window with
+  `felis.desktop`, and any other name loses that pairing. On Windows it sets the Win32 window class. On macOS it is
+  accepted and has no effect: the platform has no per-window class ([non-goals.md](../explanation/non-goals.md)
+  "Cross-platform constraints"). A name must be 1 to 255 bytes with no control characters, and on Windows must not
+  already be a registered window class (`Button`, for instance), compared case-insensitively. A refused name exits `2`
+  before the window dials the daemon, so no session is created.
 
 ### Placement matrix
 
@@ -238,12 +236,12 @@ than where its viewer sits, when the daemon reports it. A `relay` entry carries 
 relay's `SSH_CONNECTION`, `SSH_CLIENT` and `SSH_TTY`: an object keyed by those names holding the ones that were set,
 `{}` for none. A `relay` entry without `ssh_env` means the values are unknown, not unset. A `local` entry carries
 `client_pid` (number) when the daemon knows the pid of the process that connected that window's socket, normally the
-window process itself, so a window-manager script can resolve the OS window from it; the human `window:` line shows it
-as `pid <n>`. Each `program_status[]` entry always carries `id` (string, `""` for the root record) and `state` (string).
-It carries `kind` (string), `progress` (number, `0` to `100`), `app`, `title` and `msg` (strings) when the record has
-them. A `state` or `kind` not listed in [program-status.md](protocols/program-status.md) is a newer value, not an error.
-`terminal_progress` always carries `state` (string) and carries `value` (number, `0` to `100`) when the report had one;
-a `state` not listed in [terminal-progress.md](protocols/terminal-progress.md) is a newer value.
+window process itself (the human `window:` line shows it as `pid <n>`). Each `program_status[]` entry always carries
+`id` (string, `""` for the root record) and `state` (string). It carries `kind` (string), `progress` (number, `0` to
+`100`), `app`, `title` and `msg` (strings) when the record has them. A `state` or `kind` not listed in
+[program-status.md](protocols/program-status.md) is a newer value, not an error. `terminal_progress` always carries
+`state` (string) and carries `value` (number, `0` to `100`) when the report had one; a `state` not listed in
+[terminal-progress.md](protocols/terminal-progress.md) is a newer value.
 
 The mutating verbs answer a point result naming what they reached:
 
@@ -371,26 +369,23 @@ daemon whose protocol minor predates that is answered `unsupported` (exit `2`) b
   can be chosen for unambiguously.
 - **`tag`**: positional tags are added; `--remove <tag>` removes tags.
 - **`events`**: streams items about sessions until interrupted. `--kind <kind>` (repeatable or comma-separated, at least
-  one) picks what to stream, so a kind added later never reaches an existing invocation; `--session <id>` keeps one
-  session's items. Each item's `type` and the keys it adds:
+  one) picks what to stream; `--session <id>` keeps one session's items. Each item's `type` and the keys it adds:
 
   | `--kind`         | `type`             | Keys                                                                                              |
   | ---------------- | ------------------ | ------------------------------------------------------------------------------------------------- |
-  | `lifecycle`      | `added`            | none: the session entered the roster, and no item about it comes before this one                  |
-  | `lifecycle`      | `exited`           | `exit_code` or `signal`, neither when no status was reaped; once per session                      |
-  | `lifecycle`      | `removed`          | none: the session left the pool, the last item about it but a `changed` for its tags              |
+  | `lifecycle`      | `added`            | none: the session entered the roster                                                              |
+  | `lifecycle`      | `exited`           | `exit_code` or `signal`, neither when no status was reaped                                        |
+  | `lifecycle`      | `removed`          | none: the session left the pool                                                                   |
   | `program_status` | `program_status`   | `records`, the whole record set after each change, as a row's `program_status`; `[]` when cleared |
   | `prompt`         | `prompt_shown`     | none: a primary OSC 133 `A`                                                                       |
   | `prompt`         | `command_finished` | `exit_code`, absent for a bare OSC 133 `D`                                                        |
   | `meta`           | `changed`          | `fields`, the row fields to re-read: `tags`, `title`, `cwd`, `attachments`                        |
   | `notification`   | `notification`     | the `notifications subscribe` item keys                                                           |
 
-  A session's items arrive in the order it produced them, a `changed` for its tags apart; items about different sessions
-  carry no order between them, and neither do notifications and the other kinds. Each item follows the update of the row
-  it reports, so a `list` or `info` run on it reads the new state, and a consumer that subscribes before it lists misses
-  nothing in between; after a `lag` event it lists again. `--session` keeps the existing session it resolves to, so no
-  `added` follows. A kill ends a running session with `removed` and no `exited`. Against a daemon whose protocol minor
-  predates it the verb exits `2` under `unsupported`. It never starts a daemon.
+  An item is a hint to re-read the row with `list` or `info`: start the stream before listing, and list again after a
+  `lag` event (the ordering and loss contract is [ipc.md](ipc.md) "Notify (kind = 7)"). `--session` keeps the existing
+  session it resolves to, so no `added` follows. A kill ends a running session with `removed` and no `exited`. Against a
+  daemon whose protocol minor predates it the verb exits `2` under `unsupported`. It never starts a daemon.
 
 ## Config verbs
 
@@ -729,8 +724,7 @@ Top-level invocations that launch the GUI client:
 detached command without a window, use `felis sessions spawn -- <cmd>`.
 
 On Linux, the window presents the launcher's activation token (`XDG_ACTIVATION_TOKEN` on Wayland, `DESKTOP_STARTUP_ID`
-on X11) so a compositor that prevents focus stealing still focuses it; the client removes both variables before it
-spawns anything, so no child presents the token again.
+on X11), and no process the client spawns inherits either variable.
 
 When its shell exits, a window takes the first of these it can:
 
@@ -841,18 +835,14 @@ pipe, which reports as not-found). Only that licenses a spawn, on the local dial
 alike: any other connect error (`EACCES`, an exhausted descriptor table, …) ends the dial naming the path and the error.
 A failure after the connect succeeded (a preface that never arrived, an EOF before `Welcome`) keeps the spawn-and-retry
 behavior, with one exception: a peer-identity failure (REQ-106, a uid or user-SID mismatch, or a credential query that
-fails) ends the dial with that error on every path. A listener another account serves holds the endpoint, so a spawn
-there would put a second daemon beside a live one.
+fails) ends the dial with that error on every path.
 
 How a cold daemon is started depends on where the launcher runs. On Linux, a launcher under the systemd user manager
 asks the manager to run the daemon as a transient service, `felis-daemon-<hash>.service` in `app.slice` with
 `OOMPolicy=continue`, from the launcher's own binary on the launcher's socket; `<hash>` is derived from that socket
 path, so a `--socket` daemon and the default daemon hold separate units. `systemctl --user stop` and `restart` on the
-unit are refused (`RefuseManualStop=yes`), leaving [`felis daemon stop`](#daemon-stop) the way down. The rest of the
-unit is `Type=notify`, so the start job completes only once that daemon has bound that socket; `TimeoutStartSec=15s` as
-the budget for it; `--collect`, so a unit that ends inactive or failed unloads itself and leaves the name free for the
-next window; and systemd's default `KillMode=control-group`, which felis does not override. Every call the launcher
-makes to the manager is bounded, so a manager that stops answering delays a window by seconds rather than holding it.
+unit are refused (`RefuseManualStop=yes`), leaving [`felis daemon stop`](#daemon-stop) the way down. The unit is
+otherwise `Type=notify` with `TimeoutStartSec=15s` and `--collect`, under systemd's default `KillMode=control-group`.
 Every other launcher (a login-session shell, macOS, Windows, a host without systemd), and any hand-off that does not
 yield a reachable daemon, starts it as a detached child instead, which stays in the launching process's control group.
 On Unix that child leads a process group of its own, so neither a Ctrl+C typed in the launching terminal nor that

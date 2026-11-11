@@ -74,22 +74,29 @@ A full-screen TUI agent (Claude Code etc.) emits no OSC 133 marks, so `send --wa
 `--session --once` is its completion signal only when it is configured to emit OSC 9/99/777. A plain build emits no OSC
 9, so `send --wait` is the tool there.
 
-`sessions events` streams what happens to sessions instead of a poll: `added`, `exited` (with `exit_code` or `signal`)
-and `removed`, every `program_status` change, `prompt_shown` and `command_finished` from OSC 133, and `changed` naming
-the row `fields` to re-read. `--kind` is required and names what to stream (`lifecycle`, `program_status`, `prompt`,
-`meta`, `notification`); omitting it is exit `2`. Items are hints, not a mirror: subscribe first, then `sessions list`,
-and list again after a `lag` event.
+`sessions events` streams what happens to sessions instead of a poll. `--kind` is required; the kinds and their items
+are in `felis sessions events --help` and
+[cli.md "Verb details"](https://github.com/felis-terminal/felis/blob/main/docs/reference/cli.md#verb-details). Items are
+hints, not a mirror: start the stream, then `sessions list`, and list again after a `lag` event.
+
+A producer that reports OSC 7501 status is the cheapest to wait on. The stream never ends by itself, and a pipe into
+`head` would not end it either, so read it from a FIFO and kill it on the first match or at the deadline:
 
 ```sh
-felis sessions events --session "$ID" --kind program_status,lifecycle --format jsonl |
-  jq -c 'select(.type == "removed" or (.type == "program_status" and (.records | length > 0)
-         and all(.records[]; .state != "working")))' | head -n1
+dir=$(mktemp -d) && mkfifo "$dir/events"
+felis sessions events --session "$ID" --kind program_status,lifecycle --format jsonl >"$dir/events" &
+stream=$!
+(sleep 600 && kill "$stream") >/dev/null 2>&1 &   # the deadline
+watchdog=$!
+jq -cen 'first(inputs | select(.event == "error" or .type == "removed" or (.type == "program_status"
+         and (.records | length > 0) and all(.records[]; .state != "working"))))' <"$dir/events"
+rc=$?                              # 0 printed the item, 4 the deadline passed or the stream ended
+kill "$stream" "$watchdog" 2>/dev/null; rm -r "$dir"
 ```
 
-A producer that reports OSC 7501 status is the cheapest to wait on: the pipeline above ends on the first set with no
-`working` record, or on the session's removal. It also ends on `blocked`, which means the producer waits on input, so
-read the states before acting. Against a daemon too old for `sessions events` (exit `2`, `unsupported`), poll
-`sessions info` for `program_status` instead.
+The item printed is the first set with no `working` record, the session's removal, or the stream's error terminal. A set
+without `working` may be `blocked`, which means the producer waits on input, so read the states before acting. An error
+of kind `unsupported` is a daemon too old for `sessions events`: poll `sessions info` for `program_status` instead.
 
 When a producer emits none of these, poll the visible grid against a deadline: `search --source visible` exits `0` on a
 match and `1` on none. Retry only on `1`; a `2` (a daemon too old for `--source visible`, a lost connection) does not
