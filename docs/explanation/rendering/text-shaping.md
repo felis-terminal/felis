@@ -535,20 +535,18 @@ set it ("Linux faces" above). Windows hints vertically for every face. Bold / it
 [Per-style faces](#per-style-faces), which also covers how a variable face's weight and italic axes are set, so the
 styled primaries can be several views of one variable file. Color fonts rasterize into RGBA atlas slots, and the cell
 shader samples RGBA instead of R8. A color glyph's sources are tried in turn: its `COLR` version 1 paint, its version 0
-layers, its `sbix` or `CBDT` strike, its outline. A source that cannot draw the glyph whole (a paint the painter lacks,
-a paint graph that cycles, a buffer past the raster budget) yields to the next, so no glyph is drawn half painted.
-Version 1 comes first on a face that has both, the order of the `COLR` specification, DirectWrite, and Chrome; Segoe UI
-Emoji's version 0 layers are a flat rendition of the same emoji. Version 0 layers are drawn through the face's own
-scaler, hinted as its text is. A version 1 paint is drawn unhinted: its gradients and clips are placed in font units
-under transforms that a grid-fitted outline would miss. Both composite in premultiplied RGBA and are un-premultiplied
-once into the straight RGBA the atlas holds. The version 1 painter draws solid fills, linear and two-point conical
-gradients that pad, box and glyph clips, and layers composited source-over, source-in, and soft light; a sweep, a
-gradient that repeats or reflects, or another composite mode yields to the next source. The painter is felis's own, over
-the coverage rasterizer that draws text, rather than tiny-skia or vello_cpu: either would bring a second rasterizer and
-`unsafe` SIMD to paint a cell-sized image. cairo, which kitty draws color glyphs with, is the reference a flake check
-compares the painter against, since no pinned set of reference images exists. A strike is scaled to the cell with a
-Mitchell–Netravali cubic rather than the sharper area filter, because switching filters changes every emoji, measured,
-and that is a decision of its own.
+layers, its `sbix` or `CBDT` strike, its outline. A source that cannot draw the glyph whole (a paint graph that cycles,
+a buffer past the raster budget) yields to the next, so no glyph is drawn half painted. Version 1 comes first on a face
+that has both, the order of the `COLR` specification, DirectWrite, and Chrome; Segoe UI Emoji's version 0 layers are a
+flat rendition of the same emoji. Version 0 layers are drawn through the face's own scaler, hinted as its text is. A
+version 1 paint is drawn unhinted: its gradients and clips are placed in font units under transforms that a grid-fitted
+outline would miss. Both composite in premultiplied RGBA and are un-premultiplied once into the straight RGBA the atlas
+holds. The version 1 painter draws every brush, extend, and composite mode the format defines. The painter is felis's
+own, over the coverage rasterizer that draws text, rather than tiny-skia or vello_cpu: either would bring a second
+rasterizer and `unsafe` SIMD to paint a cell-sized image. cairo, which kitty draws color glyphs with, is the reference a
+flake check compares the painter against, since no pinned set of reference images exists. A strike is scaled to the cell
+with a Mitchell–Netravali cubic rather than the sharper area filter, because switching filters changes every emoji,
+measured, and that is a decision of its own.
 
 **Bidi: not performed.** felis runs no UAX#9 reordering across the cell grid (a non-goal: the grid is linear visual
 order), and the shaper is fixed left-to-right inside a run as well ("Shaping unit: the ligature run" above), so RTL text

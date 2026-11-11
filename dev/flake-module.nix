@@ -323,11 +323,15 @@
         # glyphs must match its rendering within dev/color-reference/compare.py's
         # bounds. Rendered here rather than committed as images, so a face or
         # size change needs no regenerated binaries. The test font's list leaves
-        # out what the painter lacks (it falls back, nothing to compare), the
-        # glyphs cairo crashes on (178, 179) or never finishes (194-204), which
-        # cargo tests cover, and 169: felis's coverage matches FreeType's gray
-        # raster, which cancels abutting opposite-winding contours within a
-        # pixel, where cairo fills COLR layers with its own per-sample nonzero filler.
+        # out the glyphs cairo crashes on (178, 179) or never finishes (194-204),
+        # which cargo tests cover, and three kinds cairo cannot judge at these
+        # bounds. Glyphs whose abutting opposite-winding contours split a pixel
+        # (169, and 177, 180, 209-212 at some sizes): felis's coverage matches
+        # FreeType's gray raster, which cancels them within the pixel, where cairo
+        # fills COLR layers with its own per-sample nonzero filler. Sweeps: cairo
+        # draws them as a mesh of Bézier patches, whose hard edges land up to a
+        # pixel from felis's pixel-center samples. And 11, 97, 98, where at one
+        # size a single pixel center sits on a repeat's wrap or a cone's edge.
         color-reference =
           let
             craneLib = inputs.crane.mkLib pkgs;
@@ -343,7 +347,30 @@
                 installPhaseCommand = "install -Dm755 target/release/examples/color_reference $out/bin/color_reference";
               }
             );
-            testGlyphs = "90 93 96 123 125 140 148 149 150 151 154 155 167 182 183 185 186 188 189 191 192";
+            testGlyphs = toString (
+              [
+                8
+                9
+                10
+              ]
+              ++ pkgs.lib.range 84 96
+              ++ pkgs.lib.range 99 151
+              ++ pkgs.lib.range 154 160
+              ++ [
+                166
+                167
+                182
+                183
+                185
+                186
+                188
+                189
+                191
+                192
+              ]
+              ++ pkgs.lib.range 205 208
+              ++ pkgs.lib.range 213 220
+            );
           in
           pkgs.runCommandCC "felis-color-reference"
             {

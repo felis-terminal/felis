@@ -1,8 +1,64 @@
 //! Per-pixel arithmetic of the version 1 painter: the composite modes it
 //! draws, on premultiplied RGBA8 as W3C Compositing-1 defines them, and
-//! the gradient parameter of each brush shape.
+//! the gradient parameter of each brush shape and extend mode.
+
+use skrifa::font::glyph::color::{CompositeMode, Extend};
 
 use super::div255;
+
+/// A composite of a premultiplied source onto a premultiplied backdrop.
+pub(super) type Op = fn([u8; 4], [u8; 4]) -> [u8; 4];
+
+/// The composite `mode` names; a value the format does not define clears,
+/// as the `COLR` specification requires.
+pub(super) fn op(mode: CompositeMode) -> Op {
+    use CompositeMode as M;
+    match mode {
+        M::Clear | M::Unknown => |_, _| [0; 4],
+        M::Src => |s, _| s,
+        M::Dest => |_, d| d,
+        M::SrcOver => src_over,
+        M::DestOver => |s, d| src_over(d, s),
+        M::SrcIn => |s, d| porter_duff(s, d, d[3], 0),
+        M::DestIn => |s, d| porter_duff(s, d, 0, s[3]),
+        M::SrcOut => |s, d| porter_duff(s, d, 255 - d[3], 0),
+        M::DestOut => |s, d| porter_duff(s, d, 0, 255 - s[3]),
+        M::SrcAtop => |s, d| porter_duff(s, d, d[3], 255 - s[3]),
+        M::DestAtop => |s, d| porter_duff(s, d, 255 - d[3], s[3]),
+        M::Xor => |s, d| porter_duff(s, d, 255 - d[3], 255 - s[3]),
+        M::Plus => |s, d| std::array::from_fn(|i| s[i].saturating_add(d[i])),
+        M::Screen => |s, d| separable(s, d, |b, s| s.mul_add(-b, b + s)),
+        M::Overlay => |s, d| separable(s, d, |b, s| hard_light(s, b)),
+        M::Darken => |s, d| separable(s, d, f32::min),
+        M::Lighten => |s, d| separable(s, d, f32::max),
+        M::ColorDodge => |s, d| separable(s, d, color_dodge),
+        M::ColorBurn => |s, d| separable(s, d, color_burn),
+        M::HardLight => |s, d| separable(s, d, hard_light),
+        M::SoftLight => |s, d| separable(s, d, soft_light),
+        M::Difference => |s, d| separable(s, d, |b, s| (b - s).abs()),
+        M::Exclusion => |s, d| separable(s, d, |b, s| (-2.0 * b).mul_add(s, b + s)),
+        M::Multiply => |s, d| separable(s, d, |b, s| b * s),
+        M::HslHue => |s, d| blend(s, d, |b, s| set_lum(set_sat(s, sat(b)), lum(b))),
+        M::HslSaturation => |s, d| blend(s, d, |b, s| set_lum(set_sat(b, sat(s)), lum(b))),
+        M::HslColor => |s, d| blend(s, d, |b, s| set_lum(s, lum(b))),
+        M::HslLuminosity => |s, d| blend(s, d, |b, s| set_lum(b, lum(s))),
+    }
+}
+
+/// Whether `mode` changes a backdrop pixel where the source is
+/// transparent.
+pub(super) const fn clears_backdrop(mode: CompositeMode) -> bool {
+    matches!(
+        mode,
+        CompositeMode::Clear
+            | CompositeMode::Unknown
+            | CompositeMode::Src
+            | CompositeMode::SrcIn
+            | CompositeMode::DestIn
+            | CompositeMode::SrcOut
+            | CompositeMode::DestAtop
+    )
+}
 
 /// Source-over: `s + d · (1 − αs)`.
 pub(super) fn src_over(s: [u8; 4], d: [u8; 4]) -> [u8; 4] {
@@ -10,33 +66,69 @@ pub(super) fn src_over(s: [u8; 4], d: [u8; 4]) -> [u8; 4] {
     std::array::from_fn(|i| narrow(u32::from(s[i]) + div255(u32::from(d[i]) * keep)))
 }
 
-/// Source-in: `s · αd`.
-pub(super) fn src_in(s: [u8; 4], d: [u8; 4]) -> [u8; 4] {
-    let a = u32::from(d[3]);
-    s.map(|c| narrow(div255(u32::from(c) * a)))
+/// The Porter–Duff composite `s · Fa + d · Fb`, the factors in 0..=255.
+fn porter_duff(s: [u8; 4], d: [u8; 4], fa: u8, fb: u8) -> [u8; 4] {
+    let (fa, fb) = (u32::from(fa), u32::from(fb));
+    std::array::from_fn(|i| narrow(div255(u32::from(s[i]) * fa + u32::from(d[i]) * fb)))
 }
 
-/// Soft light, a separable blend composited source-over:
-/// `cs · (1 − αb) + cb · (1 − αs) + αs · αb · B(Cb, Cs)`, the blend term on
-/// un-premultiplied values.
-pub(super) fn soft_light(s: [u8; 4], d: [u8; 4]) -> [u8; 4] {
+/// A blend composited source-over:
+/// `cs · (1 − αb) + cb · (1 − αs) + αs · αb · B(Cb, Cs)`, with `B` taking
+/// the un-premultiplied backdrop and source colors.
+fn blend(s: [u8; 4], d: [u8; 4], b: impl Fn([f32; 3], [f32; 3]) -> [f32; 3]) -> [u8; 4] {
     let (sa, da) = (f32::from(s[3]) / 255.0, f32::from(d[3]) / 255.0);
-    let mut out = [0; 4];
+    let cs: [f32; 3] = std::array::from_fn(|i| f32::from(s[i]) / 255.0);
+    let cb: [f32; 3] = std::array::from_fn(|i| f32::from(d[i]) / 255.0);
+    let mixed = if sa > 0.0 && da > 0.0 {
+        b(cb.map(|c| (c / da).min(1.0)), cs.map(|c| (c / sa).min(1.0)))
+    } else {
+        [0.0; 3]
+    };
+    let alpha =
+        narrow(u32::from(s[3]) + u32::from(d[3]) - div255(u32::from(s[3]) * u32::from(d[3])));
+    let mut out = [0, 0, 0, alpha];
     for i in 0..3 {
-        let (cs, cb) = (f32::from(s[i]) / 255.0, f32::from(d[i]) / 255.0);
-        let blend = if sa > 0.0 && da > 0.0 {
-            sa * da * soft_light_term((cb / da).min(1.0), (cs / sa).min(1.0))
-        } else {
-            0.0
-        };
-        out[i] = unit(cs.mul_add(1.0 - da, cb.mul_add(1.0 - sa, blend)));
+        let c = cs[i].mul_add(1.0 - da, cb[i].mul_add(1.0 - sa, sa * da * mixed[i]));
+        out[i] = unit(c).min(alpha);
     }
-    out[3] = narrow(u32::from(s[3]) + u32::from(d[3]) - div255(u32::from(s[3]) * u32::from(d[3])));
     out
 }
 
-/// W3C `B(Cb, Cs)` for soft-light, on un-premultiplied channels.
-fn soft_light_term(cb: f32, cs: f32) -> f32 {
+/// A blend whose `B` acts on each channel alone.
+fn separable(s: [u8; 4], d: [u8; 4], b: impl Fn(f32, f32) -> f32) -> [u8; 4] {
+    blend(s, d, |cb, cs| std::array::from_fn(|i| b(cb[i], cs[i])))
+}
+
+fn hard_light(cb: f32, cs: f32) -> f32 {
+    if cs <= 0.5 {
+        cb * 2.0 * cs
+    } else {
+        let s = 2.0f32.mul_add(cs, -1.0);
+        s.mul_add(-cb, cb + s)
+    }
+}
+
+fn color_dodge(cb: f32, cs: f32) -> f32 {
+    if cb == 0.0 {
+        0.0
+    } else if cs >= 1.0 {
+        1.0
+    } else {
+        (cb / (1.0 - cs)).min(1.0)
+    }
+}
+
+fn color_burn(cb: f32, cs: f32) -> f32 {
+    if cb >= 1.0 {
+        1.0
+    } else if cs == 0.0 {
+        0.0
+    } else {
+        1.0 - ((1.0 - cb) / cs).min(1.0)
+    }
+}
+
+fn soft_light(cb: f32, cs: f32) -> f32 {
     if cs <= 0.5 {
         (2.0f32.mul_add(cs, -1.0) * cb).mul_add(1.0 - cb, cb)
     } else {
@@ -47,6 +139,44 @@ fn soft_light_term(cb: f32, cs: f32) -> f32 {
         };
         2.0f32.mul_add(cs, -1.0).mul_add(d - cb, cb)
     }
+}
+
+fn lum(c: [f32; 3]) -> f32 {
+    0.3f32.mul_add(c[0], 0.59f32.mul_add(c[1], 0.11 * c[2]))
+}
+
+fn set_lum(color: [f32; 3], target: f32) -> [f32; 3] {
+    let shift = target - lum(color);
+    let color = color.map(|v| v + shift);
+    let l = lum(color);
+    let low = color[0].min(color[1]).min(color[2]);
+    let high = color[0].max(color[1]).max(color[2]);
+    let color = if low < 0.0 && l > low {
+        color.map(|v| (v - l).mul_add(l / (l - low), l))
+    } else {
+        color
+    };
+    if high > 1.0 && high > l {
+        color.map(|v| (v - l).mul_add((1.0 - l) / (high - l), l))
+    } else {
+        color
+    }
+}
+
+fn sat(c: [f32; 3]) -> f32 {
+    c[0].max(c[1]).max(c[2]) - c[0].min(c[1]).min(c[2])
+}
+
+fn set_sat(c: [f32; 3], s: f32) -> [f32; 3] {
+    let mut order = [0, 1, 2];
+    order.sort_by(|&a, &b| c[a].total_cmp(&c[b]));
+    let [lo, mid, hi] = order;
+    let mut out = [0.0; 3];
+    if c[hi] > c[lo] {
+        out[mid] = (c[mid] - c[lo]) * s / (c[hi] - c[lo]);
+        out[hi] = s;
+    }
+    out
 }
 
 #[expect(
@@ -128,48 +258,125 @@ impl Conical {
     }
 }
 
-/// A color line sampled at 256 points of `t` in 0..=1, premultiplied, for
-/// a pad extend: `t` outside the line takes its end color.
-pub(super) struct Ramp([[u8; 4]; 256]);
+/// A sweep brush around `center`, from `start` to `end` degrees
+/// clockwise, `start` no greater than `end`.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Sweep {
+    pub(super) center: [f32; 2],
+    pub(super) start: f32,
+    pub(super) end: f32,
+}
+
+impl Sweep {
+    /// The gradient parameter at `p` from its angle clockwise from the
+    /// positive x axis with y up. The format samples counter-clockwise
+    /// angles in 0..360, so the clockwise angle runs over (0, 360]: the
+    /// positive x axis itself is 360. A sweep whose angles coincide steps
+    /// there from before the line to past it.
+    pub(super) fn t(&self, p: [f32; 2]) -> f32 {
+        let angle =
+            360.0 - atan2_degrees(p[1] - self.center[1], p[0] - self.center[0]).rem_euclid(360.0);
+        let sector = self.end - self.start;
+        if sector > 0.0 {
+            (angle - self.start) / sector
+        } else if angle < self.start {
+            f32::NEG_INFINITY
+        } else {
+            f32::INFINITY
+        }
+    }
+}
+
+/// The angle of `(x, y)` in degrees, in -180..=180, from basic float
+/// operations alone: the platform `atan2` rounds differently on each libm,
+/// which moves a sweep's hard edges between pixels from one OS to another.
+/// The polynomial is Abramowitz and Stegun 4.4.49, within 2e-8 radians.
+fn atan2_degrees(y: f32, x: f32) -> f32 {
+    const A: [f32; 8] = [
+        0.002_866_225_7,
+        -0.016_165_737,
+        0.042_909_614,
+        -0.075_289_64,
+        0.106_562_64,
+        -0.142_089,
+        0.199_935_51,
+        -0.333_331_45,
+    ];
+    let (ax, ay) = (x.abs(), y.abs());
+    let (lo, hi) = if ay > ax { (ax, ay) } else { (ay, ax) };
+    if hi == 0.0 {
+        return 0.0;
+    }
+    let a = lo / hi;
+    let s = a * a;
+    let poly = A.iter().fold(0.0_f32, |acc, &c| acc.mul_add(s, c));
+    let mut angle = a * poly.mul_add(s, 1.0) * (180.0 / std::f32::consts::PI);
+    if ay > ax {
+        angle = 90.0 - angle;
+    }
+    if x < 0.0 {
+        angle = 180.0 - angle;
+    }
+    if y < 0.0 { -angle } else { angle }
+}
+
+/// `t` brought into 0..=1 by `extend`: held at the ends, wrapped, or
+/// mirrored every other period.
+pub(super) fn extended(t: f32, extend: Extend) -> f32 {
+    match extend {
+        Extend::Repeat => t - t.floor(),
+        Extend::Reflect => {
+            let u = t.rem_euclid(2.0);
+            if u > 1.0 { 2.0 - u } else { u }
+        }
+        Extend::Pad | Extend::Unknown => t.clamp(0.0, 1.0),
+    }
+}
+
+/// A color line sampled at 256 points of `t` in 0..=1, premultiplied, and
+/// the extend that brings any other `t` into that range.
+pub(super) struct Ramp {
+    colors: [[u8; 4]; 256],
+    below: [u8; 4],
+    extend: Extend,
+}
 
 impl Ramp {
     /// `stops` sorted by offset, each a straight color: interpolated
     /// straight, as cairo and Skia interpolate a gradient, then
     /// premultiplied.
-    pub(super) fn new(stops: &[(f32, [f32; 4])]) -> Self {
-        let mut ramp = [[0; 4]; 256];
-        for (i, out) in (0_u16..).zip(&mut ramp) {
-            let t = f32::from(i) / 255.0;
-            let color = Self::at(stops, t);
-            let a = color[3];
-            *out = [
-                unit(color[0] * a),
-                unit(color[1] * a),
-                unit(color[2] * a),
-                unit(a),
-            ];
+    pub(super) fn new(stops: &[(f32, [f32; 4])], extend: Extend) -> Self {
+        let premultiplied =
+            |[r, g, b, a]: [f32; 4]| [unit(r * a), unit(g * a), unit(b * a), unit(a)];
+        let mut colors = [[0; 4]; 256];
+        for (i, out) in (0_u16..).zip(&mut colors) {
+            *out = premultiplied(Self::at(stops, f32::from(i) / 255.0));
         }
-        Self(ramp)
+        let below = premultiplied(stops.first().map_or([0.0; 4], |&(_, color)| color));
+        Self {
+            colors,
+            below,
+            extend,
+        }
     }
 
     fn at(stops: &[(f32, [f32; 4])], t: f32) -> [f32; 4] {
-        let Some(&(first_offset, first)) = stops.first() else {
+        let Some(&(_, first)) = stops.first() else {
             return [0.0; 4];
         };
-        if t <= first_offset {
-            return first;
-        }
-        for pair in stops.windows(2) {
-            let ((o0, c0), (o1, c1)) = (pair[0], pair[1]);
-            if t <= o1 {
-                if o1 <= o0 {
-                    return c1;
-                }
-                let f = (t - o0) / (o1 - o0);
-                return std::array::from_fn(|i| (c1[i] - c0[i]).mul_add(f, c0[i]));
-            }
-        }
-        stops.last().map_or(first, |&(_, c)| c)
+        let above = stops.partition_point(|&(offset, _)| offset <= t);
+        let (Some(&(o0, c0)), Some(&(o1, c1))) = (
+            above.checked_sub(1).and_then(|i| stops.get(i)),
+            stops.get(above),
+        ) else {
+            return if above == 0 {
+                first
+            } else {
+                stops[stops.len() - 1].1
+            };
+        };
+        let f = (t - o0) / (o1 - o0);
+        std::array::from_fn(|i| (c1[i] - c0[i]).mul_add(f, c0[i]))
     }
 
     #[expect(
@@ -178,20 +385,58 @@ impl Ramp {
         reason = "clamped into 0..=255"
     )]
     pub(super) fn sample(&self, t: f32) -> [u8; 4] {
+        if t < 0.0 && matches!(self.extend, Extend::Pad | Extend::Unknown) {
+            return self.below;
+        }
+        let t = extended(t, self.extend);
         let index = (t.clamp(0.0, 1.0) * 255.0).round() as usize;
-        self.0[index.min(255)]
+        self.colors[index.min(255)]
     }
 }
 
 #[cfg(test)]
 #[expect(
     clippy::suboptimal_flops,
+    clippy::float_cmp,
     reason = "the oracles read as the W3C and spec formulas they check against"
 )]
 mod tests {
     use proptest::prelude::*;
+    use skrifa::font::glyph::color::{CompositeMode, Extend};
 
-    use super::{Conical, Ramp, linear_t, soft_light, src_in, src_over};
+    use super::{Conical, Ramp, Sweep, clears_backdrop, extended, linear_t, op};
+
+    /// Every mode the format defines.
+    const MODES: [CompositeMode; 28] = [
+        CompositeMode::Clear,
+        CompositeMode::Src,
+        CompositeMode::Dest,
+        CompositeMode::SrcOver,
+        CompositeMode::DestOver,
+        CompositeMode::SrcIn,
+        CompositeMode::DestIn,
+        CompositeMode::SrcOut,
+        CompositeMode::DestOut,
+        CompositeMode::SrcAtop,
+        CompositeMode::DestAtop,
+        CompositeMode::Xor,
+        CompositeMode::Plus,
+        CompositeMode::Screen,
+        CompositeMode::Overlay,
+        CompositeMode::Darken,
+        CompositeMode::Lighten,
+        CompositeMode::ColorDodge,
+        CompositeMode::ColorBurn,
+        CompositeMode::HardLight,
+        CompositeMode::SoftLight,
+        CompositeMode::Difference,
+        CompositeMode::Exclusion,
+        CompositeMode::Multiply,
+        CompositeMode::HslHue,
+        CompositeMode::HslSaturation,
+        CompositeMode::HslColor,
+        CompositeMode::HslLuminosity,
+    ];
 
     fn premultiplied() -> impl Strategy<Value = [u8; 4]> {
         any::<[u8; 4]>().prop_map(|[r, g, b, a]| [r.min(a), g.min(a), b.min(a), a])
@@ -201,19 +446,100 @@ mod tests {
         p.map(|c| f64::from(c) / 255.0)
     }
 
-    fn assert_near(got: [u8; 4], want: [f64; 4], slack: f64) -> Result<(), TestCaseError> {
-        for (g, w) in got.iter().zip(want) {
-            prop_assert!(
-                (f64::from(*g) - w * 255.0).abs() <= slack,
-                "{got:?} against {:?}",
-                want.map(|w| w * 255.0)
-            );
-        }
-        Ok(())
+    fn apply(mode: CompositeMode, s: [u8; 4], d: [u8; 4]) -> [u8; 4] {
+        op(mode)(s, d)
     }
 
-    /// `B(Cb, Cs)` as W3C Compositing-1 writes it.
-    fn soft_light_term(cb: f64, cs: f64) -> f64 {
+    /// The W3C Compositing-1 result of `mode` for premultiplied `s` over
+    /// premultiplied `d`.
+    fn closed_form(mode: CompositeMode, s: [f64; 4], d: [f64; 4]) -> [f64; 4] {
+        let (sa, da) = (s[3], d[3]);
+        let pd = |fa: f64, fb: f64| -> [f64; 4] { std::array::from_fn(|i| s[i] * fa + d[i] * fb) };
+        let separable =
+            |b: fn(f64, f64) -> f64| blend(s, d, |cb, cs| std::array::from_fn(|i| b(cb[i], cs[i])));
+        match mode {
+            CompositeMode::Clear => [0.0; 4],
+            CompositeMode::Src => pd(1.0, 0.0),
+            CompositeMode::Dest => pd(0.0, 1.0),
+            CompositeMode::SrcOver => pd(1.0, 1.0 - sa),
+            CompositeMode::DestOver => pd(1.0 - da, 1.0),
+            CompositeMode::SrcIn => pd(da, 0.0),
+            CompositeMode::DestIn => pd(0.0, sa),
+            CompositeMode::SrcOut => pd(1.0 - da, 0.0),
+            CompositeMode::DestOut => pd(0.0, 1.0 - sa),
+            CompositeMode::SrcAtop => pd(da, 1.0 - sa),
+            CompositeMode::DestAtop => pd(1.0 - da, sa),
+            CompositeMode::Xor => pd(1.0 - da, 1.0 - sa),
+            CompositeMode::Plus => pd(1.0, 1.0).map(|c| c.min(1.0)),
+            CompositeMode::Multiply => separable(|cb, cs| cb * cs),
+            CompositeMode::Screen => separable(screen),
+            CompositeMode::Overlay => separable(|cb, cs| hard_light(cs, cb)),
+            CompositeMode::Darken => separable(f64::min),
+            CompositeMode::Lighten => separable(f64::max),
+            CompositeMode::ColorDodge => separable(|cb, cs| {
+                if cb == 0.0 {
+                    0.0
+                } else if cs == 1.0 {
+                    1.0
+                } else {
+                    (cb / (1.0 - cs)).min(1.0)
+                }
+            }),
+            CompositeMode::ColorBurn => separable(|cb, cs| {
+                if cb == 1.0 {
+                    1.0
+                } else if cs == 0.0 {
+                    0.0
+                } else {
+                    1.0 - ((1.0 - cb) / cs).min(1.0)
+                }
+            }),
+            CompositeMode::HardLight => separable(hard_light),
+            CompositeMode::SoftLight => separable(soft_light),
+            CompositeMode::Difference => separable(|cb, cs| (cb - cs).abs()),
+            CompositeMode::Exclusion => separable(|cb, cs| cb + cs - 2.0 * cb * cs),
+            CompositeMode::HslHue => blend(s, d, |cb, cs| set_lum(set_sat(cs, sat(cb)), lum(cb))),
+            CompositeMode::HslSaturation => {
+                blend(s, d, |cb, cs| set_lum(set_sat(cb, sat(cs)), lum(cb)))
+            }
+            CompositeMode::HslColor => blend(s, d, |cb, cs| set_lum(cs, lum(cb))),
+            CompositeMode::HslLuminosity => blend(s, d, |cb, cs| set_lum(cb, lum(cs))),
+            CompositeMode::Unknown => unreachable!("not a mode the format defines"),
+        }
+    }
+
+    /// `cs · (1 − αb) + cb · (1 − αs) + αs · αb · B(Cb, Cs)`, `B` on
+    /// un-premultiplied colors.
+    fn blend(s: [f64; 4], d: [f64; 4], b: impl Fn([f64; 3], [f64; 3]) -> [f64; 3]) -> [f64; 4] {
+        let (sa, da) = (s[3], d[3]);
+        let mixed = if sa > 0.0 && da > 0.0 {
+            b(
+                std::array::from_fn(|i| (d[i] / da).min(1.0)),
+                std::array::from_fn(|i| (s[i] / sa).min(1.0)),
+            )
+        } else {
+            [0.0; 3]
+        };
+        let mut out = [0.0, 0.0, 0.0, sa + da - sa * da];
+        for i in 0..3 {
+            out[i] = s[i] * (1.0 - da) + d[i] * (1.0 - sa) + sa * da * mixed[i];
+        }
+        out
+    }
+
+    fn screen(cb: f64, cs: f64) -> f64 {
+        cb + cs - cb * cs
+    }
+
+    fn hard_light(cb: f64, cs: f64) -> f64 {
+        if cs <= 0.5 {
+            cb * 2.0 * cs
+        } else {
+            screen(cb, 2.0 * cs - 1.0)
+        }
+    }
+
+    fn soft_light(cb: f64, cs: f64) -> f64 {
         if cs <= 0.5 {
             cb - (1.0 - 2.0 * cs) * cb * (1.0 - cb)
         } else {
@@ -226,40 +552,83 @@ mod tests {
         }
     }
 
+    fn lum(c: [f64; 3]) -> f64 {
+        0.3 * c[0] + 0.59 * c[1] + 0.11 * c[2]
+    }
+
+    fn clip_color(c: [f64; 3]) -> [f64; 3] {
+        let l = lum(c);
+        let n = c[0].min(c[1]).min(c[2]);
+        let x = c[0].max(c[1]).max(c[2]);
+        let mut c = c;
+        if n < 0.0 {
+            c = c.map(|v| l + (v - l) * l / (l - n));
+        }
+        if x > 1.0 {
+            c = c.map(|v| l + (v - l) * (1.0 - l) / (x - l));
+        }
+        c
+    }
+
+    fn set_lum(c: [f64; 3], l: f64) -> [f64; 3] {
+        let d = l - lum(c);
+        clip_color(c.map(|v| v + d))
+    }
+
+    fn sat(c: [f64; 3]) -> f64 {
+        c[0].max(c[1]).max(c[2]) - c[0].min(c[1]).min(c[2])
+    }
+
+    fn set_sat(c: [f64; 3], s: f64) -> [f64; 3] {
+        let mut order = [0, 1, 2];
+        order.sort_by(|&a, &b| c[a].total_cmp(&c[b]));
+        let [min, mid, max] = order;
+        let mut out = [0.0; 3];
+        if c[max] > c[min] {
+            out[mid] = (c[mid] - c[min]) * s / (c[max] - c[min]);
+            out[max] = s;
+        }
+        out
+    }
+
+    fn assert_near(
+        mode: CompositeMode,
+        got: [u8; 4],
+        want: [f64; 4],
+        slack: f64,
+    ) -> Result<(), TestCaseError> {
+        for (g, w) in got.iter().zip(want) {
+            prop_assert!(
+                (f64::from(*g) - w * 255.0).abs() <= slack,
+                "{mode:?}: {got:?} against {:?}",
+                want.map(|w| w * 255.0)
+            );
+        }
+        Ok(())
+    }
+
     proptest! {
         #[test]
-        fn source_over_is_the_closed_form(s in premultiplied(), d in premultiplied()) {
-            let (fs, fd) = (unit(s), unit(d));
-            let want = std::array::from_fn(|i| fs[i] + fd[i] * (1.0 - fs[3]));
-            assert_near(src_over(s, d), want, 1.0)?;
-        }
-
-        #[test]
-        fn source_in_is_the_closed_form(s in premultiplied(), d in premultiplied()) {
-            let (fs, fd) = (unit(s), unit(d));
-            assert_near(src_in(s, d), fs.map(|c| c * fd[3]), 0.5)?;
-        }
-
-        #[test]
-        fn soft_light_is_the_closed_form(s in premultiplied(), d in premultiplied()) {
-            let (fs, fd) = (unit(s), unit(d));
-            let mut want = [0.0; 4];
-            for i in 0..3 {
-                let blend = if fs[3] > 0.0 && fd[3] > 0.0 {
-                    fs[3] * fd[3] * soft_light_term((fd[i] / fd[3]).min(1.0), (fs[i] / fs[3]).min(1.0))
-                } else {
-                    0.0
-                };
-                want[i] = fs[i] * (1.0 - fd[3]) + fd[i] * (1.0 - fs[3]) + blend;
+        fn every_mode_is_its_closed_form(s in premultiplied(), d in premultiplied()) {
+            for mode in MODES {
+                assert_near(mode, apply(mode, s, d), closed_form(mode, unit(s), unit(d)), 1.0)?;
             }
-            want[3] = fs[3] + fd[3] - fs[3] * fd[3];
-            assert_near(soft_light(s, d), want, 1.0)?;
         }
 
         #[test]
         fn every_mode_keeps_its_result_premultiplied(s in premultiplied(), d in premultiplied()) {
-            for out in [src_over(s, d), src_in(s, d), soft_light(s, d)] {
-                prop_assert!(out[..3].iter().all(|&c| c <= out[3]), "{out:?}");
+            for mode in MODES {
+                let out = apply(mode, s, d);
+                prop_assert!(out[..3].iter().all(|&c| c <= out[3]), "{mode:?}: {out:?}");
+            }
+        }
+
+        #[test]
+        fn a_transparent_source_leaves_the_backdrop_unless_the_mode_clears_it(d in premultiplied()) {
+            prop_assume!(d[3] > 0);
+            for mode in MODES {
+                let kept = apply(mode, [0; 4], d) == d;
+                prop_assert_eq!(kept, !clears_backdrop(mode), "{:?}", mode);
             }
         }
 
@@ -297,6 +666,50 @@ mod tests {
                 let distance = (p[0] - center[0]).hypot(p[1] - center[1]);
                 prop_assert!((distance - radius).abs() <= 1e-2 * (1.0 + radius), "{distance} vs {radius} at t {t}");
             }
+        }
+
+        #[test]
+        fn a_sweep_runs_clockwise_from_its_start_to_its_end_angle(
+            center in prop::array::uniform2(-100.0_f32..100.0),
+            start in 0.0_f32..360.0,
+            sector in 1.0_f32..360.0,
+            f in 0.0_f32..1.0,
+            distance in 1.0_f32..100.0,
+        ) {
+            let end = start + sector;
+            let angle = sector.mul_add(f, start).rem_euclid(360.0).to_radians();
+            let p = [
+                angle.cos().mul_add(distance, center[0]),
+                (-angle.sin()).mul_add(distance, center[1]),
+            ];
+            let t = Sweep { center, start, end }.t(p);
+            let turn = 360.0 / sector;
+            prop_assert!(
+                [f - turn, f, f + turn].iter().any(|g| (t - g).abs() < 1e-3),
+                "{t} against {f} a turn apart"
+            );
+        }
+
+        #[test]
+        fn the_portable_atan2_is_the_platform_one(y in -100.0_f32..100.0, x in -100.0_f32..100.0) {
+            let want = f64::from(y).atan2(f64::from(x)).to_degrees();
+            prop_assert!((f64::from(super::atan2_degrees(y, x)) - want).abs() < 1e-4, "{y}, {x}");
+        }
+
+        #[test]
+        fn repeat_wraps_t_into_one_period(t in -10.0_f32..10.0, k in -5_i8..5) {
+            let u = extended(t, Extend::Repeat);
+            prop_assert!((0.0..=1.0).contains(&u));
+            let shifted = extended(t + f32::from(k), Extend::Repeat);
+            prop_assert!((u - shifted).abs() < 1e-4 || (u - shifted).abs() > 1.0 - 1e-4, "{u} vs {shifted}");
+        }
+
+        #[test]
+        fn reflect_mirrors_t_every_other_period(t in -10.0_f32..10.0, k in -5_i8..5) {
+            let u = extended(t, Extend::Reflect);
+            prop_assert!((0.0..=1.0).contains(&u));
+            prop_assert!((u - extended(-t, Extend::Reflect)).abs() < 1e-4);
+            prop_assert!((u - extended(t + 2.0 * f32::from(k), Extend::Reflect)).abs() < 1e-4);
         }
     }
 
@@ -364,7 +777,10 @@ mod tests {
 
     #[test]
     fn a_pad_ramp_holds_its_end_colors_outside_the_line() {
-        let ramp = Ramp::new(&[(0.25, [1.0, 0.0, 0.0, 1.0]), (0.75, [0.0, 0.0, 1.0, 0.5])]);
+        let ramp = Ramp::new(
+            &[(0.25, [1.0, 0.0, 0.0, 1.0]), (0.75, [0.0, 0.0, 1.0, 0.5])],
+            Extend::Pad,
+        );
         assert_eq!(ramp.sample(-3.0), [255, 0, 0, 255]);
         assert_eq!(ramp.sample(0.1), [255, 0, 0, 255]);
         assert_eq!(ramp.sample(0.9), [0, 0, 128, 128]);
@@ -376,15 +792,189 @@ mod tests {
         );
     }
 
+    /// The `COLR` color line: of stops sharing an offset, the first
+    /// colors the line below it and the last at and above it.
     #[test]
-    fn coincident_stops_step_between_their_colors() {
-        let ramp = Ramp::new(&[
-            (0.0, [1.0, 0.0, 0.0, 1.0]),
-            (0.5, [1.0, 0.0, 0.0, 1.0]),
-            (0.5, [0.0, 1.0, 0.0, 1.0]),
-            (1.0, [0.0, 1.0, 0.0, 1.0]),
-        ]);
-        assert_eq!(ramp.sample(0.4), [255, 0, 0, 255]);
-        assert_eq!(ramp.sample(0.6), [0, 255, 0, 255]);
+    fn coincident_stops_use_the_first_below_and_the_last_from_their_offset() {
+        let red = [1.0, 0.0, 0.0, 1.0];
+        let green = [0.0, 1.0, 0.0, 1.0];
+        let blue = [0.0, 0.0, 1.0, 1.0];
+        let at = 51.0 / 255.0;
+        let ramp = Ramp::new(
+            &[(0.0, red), (at, red), (at, green), (at, blue), (1.0, blue)],
+            Extend::Pad,
+        );
+        assert_eq!(ramp.sample(50.0 / 255.0), [255, 0, 0, 255], "inside, below");
+        assert_eq!(ramp.sample(at), [0, 0, 255, 255], "inside, at the offset");
+        let ramp = Ramp::new(&[(0.0, red), (0.0, green), (1.0, green)], Extend::Pad);
+        assert_eq!(
+            ramp.sample(-1.0),
+            [255, 0, 0, 255],
+            "padded below the first offset"
+        );
+        assert_eq!(ramp.sample(0.0), [0, 255, 0, 255], "at the first offset");
+        let ramp = Ramp::new(&[(0.0, red), (1.0, green), (1.0, blue)], Extend::Pad);
+        assert_eq!(ramp.sample(1.0), [0, 0, 255, 255], "at the last offset");
+        assert_eq!(ramp.sample(2.0), [0, 0, 255, 255], "padded past it");
+    }
+
+    /// The branch points random pairs rarely reach: transparent and
+    /// opaque layers, black and white, a channel equal to its alpha.
+    #[test]
+    fn every_mode_is_its_closed_form_at_the_extremes() {
+        let levels = [0, 1, 128, 254, 255];
+        let mut pixels = Vec::new();
+        for a in levels {
+            let under = levels.iter().copied().filter(|&c| c <= a);
+            for r in under.clone() {
+                for g in under.clone() {
+                    for b in under.clone() {
+                        pixels.push([r, g, b, a]);
+                    }
+                }
+            }
+        }
+        for &s in &pixels {
+            for &d in &pixels {
+                for mode in MODES {
+                    assert_near(
+                        mode,
+                        apply(mode, s, d),
+                        closed_form(mode, unit(s), unit(d)),
+                        1.0,
+                    )
+                    .unwrap_or_else(|e| panic!("{s:?} over {d:?}: {e}"));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn an_undefined_mode_clears() {
+        assert_eq!(op(CompositeMode::Unknown)([9, 9, 9, 9], [255; 4]), [0; 4]);
+        assert!(clears_backdrop(CompositeMode::Unknown));
+    }
+
+    #[test]
+    fn each_extend_brings_t_into_the_line() {
+        let cases = [
+            //  t     pad   repeat reflect
+            (0.0, 0.0, 0.0, 0.0),
+            (0.25, 0.25, 0.25, 0.25),
+            (1.0, 1.0, 0.0, 1.0),
+            (1.25, 1.0, 0.25, 0.75),
+            (2.25, 1.0, 0.25, 0.25),
+            (-0.25, 0.0, 0.75, 0.25),
+        ];
+        for (t, pad, repeat, reflect) in cases {
+            assert_eq!(extended(t, Extend::Pad), pad, "pad {t}");
+            assert_eq!(
+                extended(t, Extend::Unknown),
+                pad,
+                "an unknown extend pads, {t}"
+            );
+            assert_eq!(extended(t, Extend::Repeat), repeat, "repeat {t}");
+            assert_eq!(extended(t, Extend::Reflect), reflect, "reflect {t}");
+        }
+        assert_eq!(extended(f32::NEG_INFINITY, Extend::Pad), 0.0);
+        assert_eq!(extended(f32::INFINITY, Extend::Pad), 1.0);
+    }
+
+    #[test]
+    fn a_full_sweep_turns_clockwise_with_y_up() {
+        let sweep = Sweep {
+            center: [0.0, 0.0],
+            start: 0.0,
+            end: 360.0,
+        };
+        assert_eq!(
+            sweep.t([1.0, 0.0]),
+            1.0,
+            "the positive x axis is 0 counter-clockwise, so 360 clockwise"
+        );
+        assert!(sweep.t([1.0, -1e-6]) < 0.01, "just past it clockwise");
+        assert_eq!(sweep.t([0.0, -1.0]), 0.25);
+        assert_eq!(sweep.t([-1.0, 0.0]), 0.5);
+        assert_eq!(sweep.t([0.0, 1.0]), 0.75);
+        assert!(sweep.t([1.0, 1e-6]) > 0.99, "just short of a full turn");
+    }
+
+    #[test]
+    fn a_sweep_sector_maps_outside_angles_beyond_the_line() {
+        let sweep = Sweep {
+            center: [10.0, 10.0],
+            start: 90.0,
+            end: 180.0,
+        };
+        assert_eq!(sweep.t([10.0, 9.0]), 0.0);
+        assert_eq!(sweep.t([9.0, 10.0]), 1.0);
+        assert_eq!(sweep.t([11.0, 9.0]), -0.5, "45 degrees");
+        assert_eq!(sweep.t([10.0, 11.0]), 2.0, "270 degrees");
+    }
+
+    #[test]
+    fn a_sector_across_the_positive_x_axis_runs_on_without_a_turn() {
+        let sweep = Sweep {
+            center: [0.0, 0.0],
+            start: 315.0,
+            end: 405.0,
+        };
+        assert_eq!(sweep.t([1.0, 1.0]), 0.0, "315 degrees");
+        assert_eq!(sweep.t([1.0, 0.0]), 0.5, "360 degrees");
+        assert!(
+            sweep.t([1.0, -1e-3]) < -3.0,
+            "just past it: a new turn, below the start"
+        );
+        assert_eq!(sweep.t([0.0, 1.0]), -0.5, "270 degrees");
+    }
+
+    /// A padded sweep whose angles coincide is two colors: the color line's
+    /// below its offset and the one at and above it.
+    #[test]
+    fn a_padded_sweep_whose_angles_coincide_steps_at_the_angle() {
+        let sweep = Sweep {
+            center: [0.0, 0.0],
+            start: 90.0,
+            end: 90.0,
+        };
+        let ramp = Ramp::new(
+            &[
+                (0.0, [1.0, 0.0, 0.0, 1.0]),
+                (0.0, [0.0, 0.0, 1.0, 1.0]),
+                (1.0, [0.0, 0.0, 1.0, 1.0]),
+            ],
+            Extend::Pad,
+        );
+        assert_eq!(
+            ramp.sample(sweep.t([1.0, -0.5])),
+            [255, 0, 0, 255],
+            "45 degrees"
+        );
+        assert_eq!(
+            ramp.sample(sweep.t([-1.0, -0.5])),
+            [0, 0, 255, 255],
+            "135 degrees"
+        );
+        assert_eq!(
+            ramp.sample(sweep.t([1.0, 0.5])),
+            [0, 0, 255, 255],
+            "315 degrees"
+        );
+    }
+
+    #[test]
+    fn a_ramp_repeats_or_reflects_past_its_end() {
+        let ramp = Ramp::new(
+            &[(0.0, [1.0, 0.0, 0.0, 1.0]), (1.0, [0.0, 0.0, 1.0, 1.0])],
+            Extend::Repeat,
+        );
+        assert_eq!(ramp.sample(1.0 + 1.0 / 255.0), ramp.sample(1.0 / 255.0));
+        assert_eq!(ramp.sample(-0.5), ramp.sample(0.5));
+        let ramp = Ramp::new(
+            &[(0.0, [1.0, 0.0, 0.0, 1.0]), (1.0, [0.0, 0.0, 1.0, 1.0])],
+            Extend::Reflect,
+        );
+        assert_eq!(ramp.sample(1.25), ramp.sample(0.75));
+        assert_eq!(ramp.sample(-0.25), ramp.sample(0.25));
     }
 }
