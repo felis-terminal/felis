@@ -343,7 +343,27 @@
                 installPhaseCommand = "install -Dm755 target/release/examples/color_reference $out/bin/color_reference";
               }
             );
-            testGlyphs = "90 93 96 123 125 140 148 149 150 151 154 155 167 182 183 185 186 188 189 191 192";
+            testGlyphs = toString (
+              pkgs.lib.range 84 90
+              ++ [
+                93
+                96
+              ]
+              ++ pkgs.lib.range 99 151
+              ++ [
+                154
+                155
+                167
+                182
+                183
+                185
+                186
+                188
+                189
+                191
+                192
+              ]
+            );
           in
           pkgs.runCommandCC "felis-color-reference"
             {

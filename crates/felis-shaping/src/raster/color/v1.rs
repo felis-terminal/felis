@@ -748,12 +748,6 @@ impl PaintSink for Painter<'_> {
         if self.failed {
             return;
         }
-        if !matches!(
-            mode,
-            CompositeMode::SrcOver | CompositeMode::SrcIn | CompositeMode::SoftLight
-        ) {
-            return self.fail();
-        }
         let bytes = self.width * self.height * 4;
         if self.budget.charge(bytes).is_none() {
             return self.fail();
@@ -828,12 +822,14 @@ impl Painter<'_> {
     /// backdrop that lies inside the clip as if it lay outside.
     fn composite(&mut self, source: &Layer) {
         let width = self.width;
+        let op = composite::op(source.mode);
         let Some(below) = self.layers.last_mut() else {
             return;
         };
-        let region = match source.mode {
-            CompositeMode::SrcIn => below.ink,
-            _ => source.ink,
+        let region = match (below.ink, source.ink) {
+            (Some(b), Some(s)) if composite::clears_backdrop(source.mode) => Some(union(b, s)),
+            (Some(b), None) if composite::clears_backdrop(source.mode) => Some(b),
+            (_, s) => s,
         };
         let Some([c0, r0, c1, r1]) = region else {
             return;
@@ -847,17 +843,11 @@ impl Painter<'_> {
                 .iter_mut()
                 .zip(source.data[from..to].as_chunks::<4>().0);
             for (d, &s) in pixels {
-                *d = match source.mode {
-                    CompositeMode::SrcIn => composite::src_in(s, *d),
-                    CompositeMode::SoftLight => composite::soft_light(s, *d),
-                    _ => composite::src_over(s, *d),
-                };
+                *d = op(s, *d);
             }
         }
-        if source.mode != CompositeMode::SrcIn {
-            let region = [c0, r0, c1, r1];
-            below.ink = Some(below.ink.map_or(region, |ink| union(ink, region)));
-        }
+        let region = [c0, r0, c1, r1];
+        below.ink = Some(below.ink.map_or(region, |ink| union(ink, region)));
     }
 }
 
@@ -970,11 +960,7 @@ mod tests {
 
     #[test]
     fn a_paint_the_painter_lacks_draws_the_glyph_whole_from_the_next_source() {
-        for name in [
-            "linear_repeat_0_1",
-            "sweep_0_360_pad_narrow",
-            "composite_MULTIPLY",
-        ] {
+        for name in ["linear_repeat_0_1", "sweep_0_360_pad_narrow"] {
             assert!(!draw(name, 40.0).pixels().is_color(), "{name}");
         }
     }
