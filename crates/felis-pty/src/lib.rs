@@ -145,12 +145,6 @@ impl ChildHandle {
             tokio::time::sleep(CHILD_WAIT_POLL.min(deadline - now)).await;
         }
     }
-
-    #[cfg(unix)]
-    pub fn process_id(&self) -> io::Result<Option<i32>> {
-        let guard = self.child.lock().map_err(poison)?;
-        Ok(guard.process_id())
-    }
 }
 
 /// The terminal side of the session: its size and what it can report.
@@ -198,12 +192,6 @@ impl Resizer {
         {
             true
         }
-    }
-
-    #[cfg(unix)]
-    #[must_use]
-    pub fn master_fd(&self) -> std::os::fd::BorrowedFd<'_> {
-        self.master.as_fd()
     }
 }
 
@@ -1314,8 +1302,10 @@ mod tests {
                 let session = spawn(cmd, small_size(), sink).expect("spawn");
                 let PtyParts { child, resizer, .. } = session;
                 let pid = child
-                    .process_id()
+                    .child
+                    .lock()
                     .unwrap()
+                    .process_id()
                     .expect("a spawned child has a pid");
                 let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
                 while child.try_wait().expect("try_wait").is_none() {
@@ -1828,10 +1818,16 @@ mod tests {
         quiescer.park(Duration::from_secs(2)).expect("park");
 
         let master = resizer
-            .master_fd()
+            .master
+            .as_fd()
             .try_clone_to_owned()
             .expect("dup master");
-        let pid = child.process_id().expect("pid").expect("live child");
+        let pid = child
+            .child
+            .lock()
+            .unwrap()
+            .process_id()
+            .expect("live child");
         let (adopted_collected, adopted_sink) = collector();
         let adopted = handover::Adopted::inherited(master, pid, None)
             .and_then(|adopted| adopted.start(adopted_sink))
@@ -1867,7 +1863,8 @@ mod tests {
         let session = spawn(cat(), small_size(), sink).expect("spawn");
         let PtyParts { child, resizer, .. } = session;
         let master = resizer
-            .master_fd()
+            .master
+            .as_fd()
             .try_clone_to_owned()
             .expect("dup master");
 

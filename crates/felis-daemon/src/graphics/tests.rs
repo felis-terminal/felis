@@ -2451,13 +2451,16 @@ where
 {
     let outer = crate::SpawnedPty::spawn(keepalive_command()).expect("spawn keep-alive child");
     let crate::SpawnedPty {
-        eof,
-        writer,
-        child,
-        resizer,
+        pty:
+            felis_pty::PtyParts {
+                eof,
+                writer,
+                child,
+                resizer,
+                quiescer,
+            },
         core,
         signals,
-        quiescer,
     } = outer;
     let mut session = Session {
         core,
