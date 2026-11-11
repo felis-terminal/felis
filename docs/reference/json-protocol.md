@@ -81,9 +81,9 @@ parsed. A `moved` error also carries `session` when the window was switched to a
 | `send`       | `session`, `steps`         | `{"op":"send","id"}`                      | `Ops::Send`    |
 
 `create` spawns a session nobody attaches to. A session row is the object `felis sessions info --format json` prints
-([cli.md](cli.md) "Machine output") plus `sequence`, the daemon's creation order, which a tab bar sorts on since the
-roster comes in recency order. `args` takes the daemon's spawn arguments, each key optional: `command`, `args`, `cwd`,
-`env`, `dims`, `env_base`, `tags`. A send step is `{"step":"paste"|"raw","bytes"}`, `{"step":"key","event"}` or
+([cli.md](cli.md) "Machine output") plus `sequence`, the daemon's creation order; the roster itself comes in recency
+order. `args` takes the daemon's spawn arguments, each key optional: `command`, `args`, `cwd`, `env`, `dims`,
+`env_base`, `tags`. A send step is `{"step":"paste"|"raw","bytes"}`, `{"step":"key","event"}` or
 `{"step":"mouse","event"}`; every step is written in order, or none is when one is refused.
 
 ## Streams
@@ -103,9 +103,9 @@ input it refuses (malformed, past a wire limit, or newer than the daemon wire mi
 
 `grid`, `image` and `input` carry a frame of the matching wire family as a dedicated object tagged by `type`, one per
 variant (`row_delta`, `cursor_state`, `placement`, `key`, `paste`, `resize`, `next_grid_frame` and the rest, as the
-schema lists them). A `row_delta` row carries its cells as attribute runs over a grapheme list (`felis-grid::row_json`),
-never the packed bytes the socket carries ([row-codec.md](row-codec.md)). The `CommandOutput` grid arm and the
-`ViewportStep` and `AnnounceOutput` input arms are outside the protocol and are refused at conversion.
+schema lists them). A `row_delta` row carries its cells as attribute runs over a grapheme list, never the packed bytes
+the socket carries ([row-codec.md](row-codec.md)). The `CommandOutput` grid arm and the `ViewportStep` and
+`AnnounceOutput` input arms are outside the protocol and are refused at conversion.
 
 `search.source` is `scrollback` (the default) or `visible`; `capture.source` is `scrollback`, `visible`,
 `command_output` or `last_command`. A `match` carries `anchor`, the history point its `line_index` and spans count from,
@@ -164,9 +164,6 @@ counting the items already read. A `send` is canceled by dropping its request, w
 - Every bitmap is an integer the schema bounds to the bits this build defines, so a reserved bit is refused rather than
   dropped.
 
-What a reader refuses, the schema refuses with it, through the integer width of every numeric field, the printable-ASCII
-window, the 1-based handles, the row codec's per-row caps, the function-key range, the session-id and base64 patterns,
-and the OSC 66 ranges (the rule that a fraction stays below its denominator rides one `if`/`then` per denominator). Two
-checks surface only as a refusal at conversion: the attribute runs covering exactly the row's graphemes, and a sized
-cell naming a column the row has. A `u64` bound carries `x-bound-exceeds-f64-precision`, because a validator comparing
-JSON numbers as `f64` enforces that bound rounded.
+What a reader refuses, the schema refuses with it, except two checks that surface only as a refusal at conversion: the
+attribute runs covering exactly the row's graphemes, and a sized cell naming a column the row has. A `u64` bound carries
+`x-bound-exceeds-f64-precision`, because a validator comparing JSON numbers as `f64` enforces that bound rounded.

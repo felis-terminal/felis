@@ -8,26 +8,6 @@ The `felis` CLI: verbs, global flags, exit codes, and the machine-output contrac
 [ipc.md](ipc.md); what puts a control on this surface rather than another is in
 [control-surfaces.md](../explanation/architecture/control-surfaces.md).
 
-The cross-cutting contracts ([Global options](#global-options), [Exit codes](#exit-codes), and
-[Machine output](#machine-output)) come first, followed by the verb families in section order and
-[Carrier and connection lifetime](#carrier-and-connection-lifetime) and [Log files](#log-files) at the end:
-
-- [Session verbs](#session-verbs): `felis sessions` (`list`, `info`, `spawn`, `send`, `capture`, `search`, `kill`,
-  `evict`, `switch`, `tag`, `events`)
-- [Config verbs](#config-verbs) and [Fonts](#fonts): `felis config` (`path`, `check`, `show-effective`) and
-  `felis fonts list`
-- [Daemon status](#daemon-status), [Daemon stop](#daemon-stop), and [Daemon upgrade](#daemon-upgrade): `felis daemon`
-  (`status`, `stop`, `upgrade`)
-- [Doctor](#doctor) and [Doctor report](#doctor-report): `felis doctor` and `felis doctor report`
-- [Window launches](#window-launches),
-  [Re-point a window across daemons: `felis ssh`, `felis window retarget`](#re-point-a-window-across-daemons-felis-ssh-felis-window-retarget),
-  and [External commands: `felis <name>`](#external-commands-felis-name): `felis`, `felis attach`, `felis -- <cmd>`,
-  `felis ssh`, `felis window retarget`, and `felis <name>`
-- [`felis notifications subscribe`](#felis-notifications-subscribe) ([Other verbs](#other-verbs)): stream desktop
-  notifications
-- [`felis completions <shell>`](#felis-completions-shell) ([Other verbs](#other-verbs)): generate shell completions
-- [Version reporting](#version-reporting): `felis --version` and `felis version`
-
 ## Global options
 
 Global flags precede the verb (`felis --config ./work.toml doctor`):
@@ -157,8 +137,7 @@ protocol failure (exit `2`).
 **Frozen for `v:1`.** The two format words and the class each binds to, the error object's shape, the `error.kind`
 spellings above with the exit codes the table gives them, and the per-class stdout/stderr split hold for the whole
 epoch. The vocabulary still grows: new tokens land within `v:1`, existing ones are never respelled, remapped, or
-narrowed: a new token may not take over part of what an existing one already covers. The rationale is in
-[control-surfaces.md](../explanation/architecture/control-surfaces.md).
+narrowed: a new token may not take over part of what an existing one already covers.
 
 Framing begins once the arguments parse. A refusal clap states (an unknown flag, a `--format` value the verb's class
 does not take, a missing positional) is human text on stderr with exit `2`, before any format is chosen; from there
@@ -184,20 +163,17 @@ about 2048 past an `i64` maximum and 4096 past a `u64` one. Every field carrying
 
 The same precision limit fixes how integer ids are spelled, and the rule is frozen for the epoch: an id whose range
 exceeds what an `f64` holds exactly is a **decimal string** in every machine object, never a JSON number.
-`Attachment.id` is the one such id today; it is a `uint64` on the wire and a string here, while a session id is 32
-hexadecimal digits in both. A reader therefore never has to know which ids round.
+`Attachment.id` is one: a `uint64` on the wire and a string here, while a session id is 32 hexadecimal digits in both.
 
-JSON Schema cannot state the lifecycle rule that a stream writes exactly one terminal and nothing after it; the stream
-verbs' end-to-end tests pin it ([testing.md](testing.md) "Machine-surface schemas").
+A stream writes exactly one terminal and nothing after it, a rule the schema cannot state.
 
 ### Session identity
 
 A session id is 32 hexadecimal digits (`id`). Stored and scripted identifiers must always use the full 32-hex
 representation.
 
-`short_id` is provided on `list` and `info` as a display convenience. It is the shortest unique prefix for the current
-roster (at least 8 digits): shortened by the daemon against its own pool on `info`, and against the roster in the reply
-on `list`. Because roster membership changes, `short_id` is display-only.
+`short_id` on `list` and `info` is display-only: the shortest unique prefix for the current roster (at least 8 digits),
+shortened against the daemon's pool on `info` and against the roster in the reply on `list`.
 
 Mutating verbs resolve daemon-side and return the full `id`. All verbs accept either the full 32-hex id or any unique
 prefix as an input argument.
@@ -328,26 +304,26 @@ daemon whose protocol minor predates that is answered `unsupported` (exit `2`) b
   `--wait`; `--raw` requires TEXT; `--timeout` requires `--wait`. Each unmet constraint is a usage error (exit `2`). It
   pastes text, which loses its C0 controls but HT, LF and CR when the program enabled bracketed paste; `--raw` sends
   literal bytes without bracketed paste; `-` reads stdin. `--key <chord>` (repeatable) presses keys after text (`up`,
-  `escape`, `ctrl+c`, `enter`). A chord travels as the keystroke itself and the daemon encodes it against the session's
-  current keyboard modes, so it needs no knowledge of them from the caller. A chord's character is capped at
-  `MAX_KEY_CHARACTER_BYTES`; past it the verb exits `1` under `invalid_request`. `--mouse <event>` (repeatable) sends a
-  mouse event, `[MODS+]ACTION[-BUTTON]:COL,ROW`: ACTION is `click` (press then release), `press`, `drag`, `release`,
-  `wheel-up`, `wheel-down`, `wheel-left` or `wheel-right`; BUTTON is `left` (the default), `middle` or `right`, and a
-  wheel action takes none; MODS are `shift`, `alt` and `ctrl` in the chord spelling. COL and ROW are 0-based, as
-  `search`'s `col_spans` and `capture`'s rows are, so `--mouse click:12,4` clicks a match that starts at column 12 of
-  row 4. The daemon encodes each event against the session's current mouse modes; under SGR-pixels (`?1016`) it reports
-  the middle of the cell. Before writing anything the daemon checks every event against the mouse reporting the program
-  has on and against the grid, and the verb refuses the whole command under `invalid_request` (exit `1`) when the
-  program would drop one (no reporting at all, or a `drag` under `?1000` alone) or a cell is off the grid. A malformed
-  event is a usage error (exit `2`). `--key` and `--mouse` go out after the text in command-line order. `--wait` blocks
-  until the session emits an OSC 133 `D` mark and prints its exit code, or `-` for a bare `D` that carries none, so
-  `felis sessions send <id> --wait` watches a command someone else started. The daemon starts watching before it writes
-  the first step, so a command that finishes at once is still seen; a session that ends before a mark ends the wait
-  under `session_ended` (exit `1`). `--timeout <secs>` bounds everything past the writes: the daemon's admission of the
-  input and the mark watch alike. An unbounded `--wait` waits indefinitely, and `--timeout 0` is a deadline already
-  past, so neither wait gets a chance to finish and the verb exits `1` under `timeout`. The payload is capped at
-  `MAX_PASTE_BYTES` of text, `MAX_RAW_INPUT_BYTES` with `--raw`, and the text, keys and mouse events together at
-  `MAX_SEND_STEPS` steps, a click counting two ([ipc.md](ipc.md#semantic-limits) "Semantic limits").
+  `escape`, `ctrl+c`, `enter`), which the daemon encodes against the session's current keyboard modes. A chord's
+  character is capped at `MAX_KEY_CHARACTER_BYTES`; past it the verb exits `1` under `invalid_request`.
+  `--mouse <event>` (repeatable) sends a mouse event, `[MODS+]ACTION[-BUTTON]:COL,ROW`: ACTION is `click` (press then
+  release), `press`, `drag`, `release`, `wheel-up`, `wheel-down`, `wheel-left` or `wheel-right`; BUTTON is `left` (the
+  default), `middle` or `right`, and a wheel action takes none; MODS are `shift`, `alt` and `ctrl` in the chord
+  spelling. COL and ROW are 0-based, as `search`'s `col_spans` and `capture`'s rows are, so `--mouse click:12,4` clicks
+  a match that starts at column 12 of row 4. The daemon encodes each event against the session's current mouse modes;
+  under SGR-pixels (`?1016`) it reports the middle of the cell. Before writing anything the daemon checks every event
+  against the mouse reporting the program has on and against the grid, and the verb refuses the whole command under
+  `invalid_request` (exit `1`) when the program would drop one (no reporting at all, or a `drag` under `?1000` alone) or
+  a cell is off the grid. A malformed event is a usage error (exit `2`). `--key` and `--mouse` go out after the text in
+  command-line order. `--wait` blocks until the session emits an OSC 133 `D` mark and prints its exit code, or `-` for a
+  bare `D` that carries none, so `felis sessions send <id> --wait` watches a command someone else started. The daemon
+  starts watching before it writes the first step, so a command that finishes at once is still seen; a session that ends
+  before a mark ends the wait under `session_ended` (exit `1`). `--timeout <secs>` bounds everything past the writes:
+  the daemon's admission of the input and the mark watch alike. An unbounded `--wait` waits indefinitely, and
+  `--timeout 0` is a deadline already past, so neither wait gets a chance to finish and the verb exits `1` under
+  `timeout`. The payload is capped at `MAX_PASTE_BYTES` of text, `MAX_RAW_INPUT_BYTES` with `--raw`, and the text, keys
+  and mouse events together at `MAX_SEND_STEPS` steps, a click counting two ([ipc.md](ipc.md#semantic-limits) "Semantic
+  limits").
 - **`capture`**: `--source <visible|scrollback|command-output|last-command>` picks the region; `scrollback` streams
   retained history oldest-first, `command-output` and `last-command` the output bounded by OSC 133 prompt marks.
   `--lines N` limits output to the last N rows, and under `--source scrollback` the daemon transmits that tail alone
@@ -450,10 +426,9 @@ only in letter case, of which the bytewise smallest is printed; on macOS, only i
 ignoring letter case. On Linux a `fonts.conf` alias such as `monospace` is accepted as a family without appearing in the
 list.
 
-The list comes from the frontend: `fonts list` runs `felis-client --font-families-probe`, since `felis` does not link
-the font stack. A missing `felis-client` and one that predates the flag are reported as `unsupported`, exit `2`; a
-frontend that ran but could not enumerate the fonts (for example, `libfontconfig.so.1` not loadable) is `internal`, exit
-`2`.
+The list comes from `felis-client`: a missing `felis-client` and one too old to list fonts are reported as
+`unsupported`, exit `2`; a frontend that ran but could not enumerate the fonts (for example, `libfontconfig.so.1` not
+loadable) is `internal`, exit `2`.
 
 ## Daemon status
 
@@ -502,9 +477,7 @@ keys, so **absent is not `0`**:
 
 In `--format json` an absent field is an **omitted key**, never `null` or `0`. The human output spells the same arms in
 words: an unlimited ceiling prints `unlimited`, except on a subject-scoped row whose aggregate is unlimited, which drops
-the daemon-wide column rather than naming it: the ceiling that binds there is the per-subject one beside it, and a
-reader offered two `unlimited`s would have to work out which. A zero prints as `0`, and a `daemon`-scope row prints no
-per-subject column at all.
+the daemon-wide column. A zero prints as `0`, and a `daemon`-scope row prints no per-subject column at all.
 
 Exit codes: `0` when answered; `1` if at connection capacity; `2` if unreachable or protocol version is unsupported.
 
@@ -514,8 +487,7 @@ Exit codes: `0` when answered; `1` if at connection capacity; `2` if unreachable
 
 `felis daemon stop` ends a running daemon over the same IPC carrier every other verb uses, so it works on every
 supported platform and against a daemon selected with `--socket` or `--host`. It never starts a daemon. `felis-daemon`
-has no `stop` subcommand and installs no signal handler, though `SIGINT` and `SIGTERM` still end the process; the
-portable way down is `felis daemon stop` over IPC.
+has no `stop` subcommand; `SIGINT` and `SIGTERM` end the process as well.
 
 ```
 felis daemon stop [--force | --when-empty] [--format human|json]
@@ -637,10 +609,10 @@ binary, these report `skipped`. Exit codes: `1` if any check reports `fail`, `0`
 The `daemon` row dials the target the global flags name. On the platform default that dial is bounded at 2 s and its
 failures are split: `ENOENT` or `ECONNREFUSED` reports "not running", any other connect error reports "could not dial
 \<path\>", and a peer that answered something short of the felis handshake reports "something listens at \<path\> but
-did not answer as a felis daemon". The deadline covers the connect and the handshake together and is reported as the
-phase it caught. `--socket`, a `$FELIS_SOCKET` stamp, `--host`, and Windows targets keep an unbounded dial and the
-single "not running" rendering. On every target, a daemon that answers with a preface status this build does not know,
-or with a refusal of any reason, reports "running, but …".
+did not answer as a felis daemon". The deadline covers the connect and the handshake together. `--socket`, a
+`$FELIS_SOCKET` stamp, `--host`, and Windows targets keep an unbounded dial and the single "not running" rendering. On
+every target, a daemon that answers with a preface status this build does not know, or with a refusal of any reason,
+reports "running, but …".
 
 On the local Unix carrier, a daemon that answers with a build other than the installed `felis-daemon` (the one
 `felis daemon upgrade` would switch to) keeps its `ok` status, and the row names the installed build and
@@ -703,9 +675,8 @@ The report reads no hostname, username, session title, or terminal content on it
 report inside a check's detail (an error passed on from a `--host` dial, for example) or a configured path outside the
 home directory, such as a `shader.post` stage's `file`.
 
-The fonts come from the frontend: `doctor report` runs `felis-client --doctor-report-probe[=<config path>]`, the probe
-`doctor` runs plus a font resolution. When that probe fails, a frontend that predates the flag included, the plain probe
-is asked instead, so the `gpu` and `clipboard` rows still fill and `fonts.unavailable` names the reason.
+The fonts come from `felis-client`. When it cannot resolve them, an older frontend included, the `gpu` and `clipboard`
+rows still fill and `fonts.unavailable` names the reason.
 
 `doctor report` is a Point verb, not Point-diagnostic: it exits `0` whenever the report was written, failing checks
 included, and `2` for a usage error or a failure before the verb body.
@@ -734,12 +705,11 @@ When its shell exits, a window takes the first of these it can:
 
 With none of that left it closes and exits `0`. When the transport to the daemon drops instead, the window marks its
 title `— disconnected` and re-dials the same session for up to six attempts: roughly 23 seconds of backoff between them,
-plus up to 10 seconds for each attempt itself, so a ladder whose attempts hang runs about 83 seconds rather than 23. A
-reconnect never starts a daemon: on the local socket, nothing listening means the session is gone. A reconnect that
-finds the session gone enters the same trail unwind rather than closing outright, so it ends the same way any other
-shell exit does: attached elsewhere, or closed with exit code `0`. Every other reconnect failure closes the window
-directly with exit `2`, the reason and the remedy in the log: the daemon refused the window, or no daemon answered
-inside the retry budget (`felis attach <id>` once it is back).
+plus up to 10 seconds for each attempt itself. A reconnect never starts a daemon: on the local socket, nothing listening
+means the session is gone. A reconnect that finds the session gone unwinds the trail like any other shell exit: attached
+elsewhere, or closed with exit code `0`. Every other reconnect failure closes the window directly with exit `2`, the
+reason and the remedy in the log: the daemon refused the window, or no daemon answered inside the retry budget
+(`felis attach <id>` once it is back).
 
 ## Re-point a window across daemons: `felis ssh`, `felis window retarget`
 
@@ -756,9 +726,8 @@ felis window retarget [<socket>] [--from <prefix>]
 ```
 
 - `<user@host>`: any destination `ssh` accepts, passed verbatim; required.
-- `<socket>`: a local daemon socket, valid UTF-8 because the retarget descriptor carries it as a `string`
-  ([ipc.md](ipc.md)); anything else is a usage error (exit `2`). Absent: the default local daemon, which is the way back
-  from `felis ssh`.
+- `<socket>`: a local daemon socket, valid UTF-8; anything else is a usage error (exit `2`). Absent: the default local
+  daemon, which is the way back from `felis ssh`.
 - `--ssh-arg <token>`: arguments passed to SSH (repeatable), on `felis ssh` only.
 - `--from <prefix>`: selects source session (defaults to `$FELIS_SESSION_ID`).
 - `--attachment <id>`: selects specific window attached to the source session. Absent, the window moved is the source
@@ -887,10 +856,8 @@ Streams OSC 9 / 99 / 777 desktop notifications. A stream verb (`--format jsonl`)
 
 Generates a completion script for `bash`, `elvish`, `fish`, `powershell`, or `zsh`. The live session-id overlay is added
 for `zsh` and `fish` only, where it queries the local daemon asynchronously; the other shells get the static grammar.
-Running `felis completions` itself dials nothing: it prints a script built from this binary's own argument grammar, so
-the global carrier flags are refused on this verb. That grammar carries the finite option vocabularies with it:
-`--format` and the `--source` of `sessions capture` and `sessions search` complete to their listed values in every
-generated script, as they list them in `--help` and in the man page.
+Running `felis completions` itself dials nothing, so the global carrier flags are refused on this verb. `--format` and
+the `--source` of `sessions capture` and `sessions search` complete to their listed values in every generated script.
 
 ## Version reporting
 
@@ -943,15 +910,15 @@ Log directory locations:
 
 That directory belongs to the default endpoint. On Linux and macOS, a daemon or window on any other socket logs into the
 socket's own directory instead, when that directory already exists, is owned by the user, and has mode `0700` (the
-listener's own rule); otherwise it uses the directory above. Test and experiment daemons therefore stay out of the
-user's `daemon.log`, and a second daemon on a hand-picked socket such as `~/x.sock` writes `~/daemon.log`.
+listener's own rule); otherwise it uses the directory above. So a second daemon on a hand-picked socket such as
+`~/x.sock` writes `~/daemon.log`.
 
 Files exceeding 8 MiB are rotated to `<name>.old` at process startup. The console half of the tee is stderr for
-`felis-daemon serve` and stdout for `felis-client`, whose stderr a `.app` launch does not keep; both halves are filtered
-by `RUST_LOG` and the `--trace-perf` preset. A daemon the systemd user manager started writes its console to the journal
+`felis-daemon serve` and stdout for `felis-client`; both halves are filtered by `RUST_LOG` and the `--trace-perf`
+preset. A daemon the systemd user manager started writes its console to the journal
 (`journalctl --user -u felis-daemon-<hash>`); a locally forked child's console is `/dev/null`, while one
-`felis-daemon relay` forks inherits the relay's stderr, the SSH channel, until that link drops. The tee is the record
-either way. A window launch whose hand-off was attempted and fell back to a forked daemon writes one `WARN` line naming
-the reason to `client.log`; a launcher that never asked the manager (no manager, no `systemd-run`) says so at `DEBUG`.
-Headless verbs open no log file: the attempted hand-off's `WARN` line reaches their stderr in `human` format, and the
-`DEBUG` line needs `RUST_LOG`.
+`felis-daemon relay` forks inherits the relay's stderr, the SSH channel, until that link drops. The log file is the
+record either way. A window launch whose hand-off was attempted and fell back to a forked daemon writes one `WARN` line
+naming the reason to `client.log`; a launcher that never asked the manager (no manager, no `systemd-run`) says so at
+`DEBUG`. Headless verbs open no log file: the attempted hand-off's `WARN` line reaches their stderr in `human` format,
+and the `DEBUG` line needs `RUST_LOG`.

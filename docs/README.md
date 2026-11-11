@@ -20,8 +20,7 @@ site build time.
 
 Learning-oriented, hands-on. Start here.
 
-- [Your first session](tutorials/first-session.md) — open a window, close it while work keeps running, and reattach. The
-  fastest way to meet felis's one core idea.
+- [Your first session](tutorials/first-session.md) — open a window, close it while work keeps running, and reattach.
 - [Drive a session without a window](tutorials/drive-without-a-window.md) — create, steer, and read a session entirely
   from the command line, then open a window last.
 

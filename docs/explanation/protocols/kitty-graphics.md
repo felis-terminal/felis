@@ -4,13 +4,10 @@ sidebar:
   order: 3
 ---
 
-This page records the architecture and decision record behind felis's Kitty graphics implementation: where the
-dispatcher lives and why, the deliberate deviations from kitty, the rejected alternatives, and the edges felis will not
-cross. The wire surface (formats, actions, parameters, limits) lives in the
-[reference twin](../../reference/protocols/kitty-graphics.md).
-
-felis implements the Kitty graphics protocol as a first-class feature. This is one of the three core value propositions
-(see [`vision.md`](../vision.md)).
+This page records the decisions behind felis's Kitty graphics implementation: where the dispatcher lives, the deliberate
+deviations from kitty, and the rejected alternatives. The wire surface (formats, actions, parameters, limits) lives in
+the [reference twin](../../reference/protocols/kitty-graphics.md). Kitty graphics is one of felis's three core value
+propositions (see [`vision.md`](../vision.md)).
 
 The authoritative reference is the Kitty specification at <https://sw.kovidgoyal.net/kitty/graphics-protocol/>. felis
 aims for behavioral compatibility with that document at the protocol level; where the Kitty implementation has
@@ -18,31 +15,26 @@ undocumented quirks, felis follows the documented behavior and treats deviations
 
 ## Dispatcher architecture
 
-The protocol dispatcher is a `felis-daemon::graphics` module (a free function taking `&mut Session` plus the drained APC
-bodies), not part of `felis-grid`. The grid stays decoder-free, filesystem-free, and tokio-free: hosting the dispatcher
-there would drag the PNG decoder, `rustix` file access, and a response-write callback into the one crate the workspace's
-one-way dependency rule keeps display-only, and would put per-grid copies of the image budget and the reassembly buffer
-in the wrong place. Both bounded buffers co-locate on `Session` so a future per-session memory-budget knob touches one
-place.
+The protocol dispatcher lives in the daemon, not in `felis-grid`. The grid stays decoder-free, filesystem-free, and
+tokio-free: hosting the dispatcher there would drag the PNG decoder, file access, and a response writer into the one
+crate the workspace's one-way dependency rule keeps display-only, and would put per-grid copies of the image budget and
+the reassembly buffer in the wrong place. Both bounded buffers live on the session.
 
-`Grid::apc_dispatch` is a short relay: it queues each body as a `PtyEffect::Apc` on the grid's stream-ordered
-side-effect queue, carrying the raw bytes plus the cursor position at delivery time; a trailing DECRC / CUP in the same
-`Parser::advance` burst would otherwise move the cursor away from the placement anchor before the daemon drains. This
-mirrors the dirty-flag posture the grid already uses for OSC titles / cwd / theme overrides: the daemon polls after
-every `advance`; the grid stays passive. Chunk reassembly (`m=1`) also runs at the daemon
-(`Session.graphics_reassembler`, capped as
+The grid only relays: it queues each APC body on its stream-ordered side-effect queue with the cursor position at
+delivery time, since a trailing DECRC / CUP in the same parse burst would otherwise move the cursor away from the
+placement anchor before the daemon drains. Chunk reassembly (`m=1`) also runs at the daemon (capped as
 [kitty-graphics.md](../../reference/protocols/kitty-graphics.md#malformed-input) "Malformed input" states); the grid
 keeps only the payload-free half of that state machine, enough to know when a body completes a command.
 
 That knowledge serves one rule: kitty moves the cursor after a placement inside the parse, so text written after the
 image in the same write prints beside it, not under it. The daemon dispatches after the parse, so when a body completes
-an `a=T` or `a=p` without `C=1` or `U=1`, `Parser::advance_until_yield` stops right after it and the PTY reader waits
-until the session task has drained the queue, cursor move included, before parsing the rest. The wait has no timeout: a
-timed-out wait is a misplaced line under load, which is the bug itself; liveness comes from the session task releasing
-the reader for good when it exits. Two cheaper shapes are rejected. Moving the cursor in the grid at delivery time needs
-the cell box, and with `c`/`r` omitted that box comes from the decoded image's pixel size and the client's cell size,
-both daemon-side. Running the dispatcher under the parse lock puts the PNG decoder and the reassembly on the reader
-thread's critical section for every APC, not just the placements that move the cursor.
+an `a=T` or `a=p` without `C=1` or `U=1`, the parse stops right after it and the PTY reader waits until the session task
+has drained the queue, cursor move included, before parsing the rest. The wait has no timeout: a timed-out wait is a
+misplaced line under load, which is the bug itself; liveness comes from the session task releasing the reader for good
+when it exits. Two cheaper shapes are rejected. Moving the cursor in the grid at delivery time needs the cell box, and
+with `c`/`r` omitted that box comes from the decoded image's pixel size and the client's cell size, both daemon-side.
+Running the dispatcher under the parse lock puts the PNG decoder and the reassembly on the reader thread's critical
+section for every APC, not just the placements that move the cursor.
 
 A command with a heavy decode (the set is in [kitty-graphics.md](../../reference/protocols/kitty-graphics.md#limits)
 "Limits") stops the parse the same way, and decodes off the parse lock: the session task prepares the command under the
@@ -53,43 +45,37 @@ parse is what keeps the split exact: nothing the program wrote after the command
 keep the order of their requests. Text after a heavy image still waits for its decode, since that text is placed
 relative to the image; what stops waiting is everything the program did not write.
 
-Because the dispatcher's entry holds `&mut Session`, it reaches the image store, the placement table, the response
-writer, and `&mut session.grid` through one borrow root: no callback ping-pong, no interior mutability. A
-`Sink`-decorator wrapper intercepting `apc_dispatch` in the daemon is rejected: `Session` owns its `Grid`, so the
-wrapper would have to split one owned struct into two mutable borrows (interior mutability or an `unsafe` split), both
-worse than the outbox relay. The only grid mutation the dispatcher makes is the visible side-effect of a placement
-(`a=T` or `a=p`): `Grid::advance_cursor_after_image_placement`, honoring `C=1`. Unicode-placeholder cells land through
-the ordinary `print` path: producer-driven cell mutations, not dispatcher writes. That path is the one most modern
-image-displaying TUIs drive (yazi, ranger preview, jp2a, presenterm), which is why placeholder cells get the full cell
-pipeline rather than a special-cased overlay.
+Because the dispatcher takes the whole session, it reaches the image store, the placement table, the response writer,
+and the grid through one borrow root: no callback ping-pong, no interior mutability. A decorator intercepting the grid's
+APC hook in the daemon is rejected: the session owns its grid, so the wrapper would have to split one owned struct into
+two mutable borrows (interior mutability or an `unsafe` split), both worse than the queue relay. The only grid mutation
+the dispatcher makes is the cursor advance after a placement (`a=T` or `a=p`), honoring `C=1`. Unicode-placeholder cells
+land through the ordinary print path, the one most modern image-displaying TUIs drive (yazi, ranger preview, jp2a,
+presenterm), which is why placeholder cells get the full cell pipeline rather than a special-cased overlay.
 
 The `U=1` _extent_ (`c=`/`r=`/`z=`) is the one thing the cell pipeline cannot carry: a placeholder cell encodes only an
 image id, a placement id and a tile coordinate, so tile sizing needs the extent replayed on attach, and the daemon
-therefore records it in the session's `Placements` beside the anchored entries. It shares their
-`(image id, placement id)` key, as kitty keeps one ref table per image, so the existing `PlacementRemoved` names a
-virtual placement as well as an anchored one; a `VirtualPlacementRemoved` message would be a second name for the same
-removal. The image stays unpinned (refcount 0, LRU bait), because `U=1` producers churn a fresh random image id every
-render with no delete, and whatever extents are left die with the image in the same `free_image` funnel.
+records it in the placement table beside the anchored entries. It shares their `(image id, placement id)` key, as kitty
+keeps one ref table per image, so the existing `PlacementRemoved` names a virtual placement as well as an anchored one;
+a separate removal message would be a second name for the same removal. The image stays unpinned (refcount 0, LRU bait),
+because `U=1` producers churn a fresh random image id every render with no delete, and whatever extents are left die
+with the image.
 
 Decoding (`f=24/32/100`, `o=z`) is the daemon's job; the grid stores already-decoded bytes. The decoder is the `png`
-crate (<https://docs.rs/png/latest/png/>; `Decoder::set_limits` enforces the zip-bomb budget). PNG is the protocol's
-only compressed format (`f=24`/`f=32` are raw), so a single-format decoder is the whole surface. Adding JPEG / WebP
-decoders is rejected to keep the format supply-chain surface closed: producers transmit raw RGB(A) or PNG, as in Kitty.
-Responses are formatted by a decision-free `format_response` and pushed onto the PTY-master writer channel; the `q=`
-check happens at the dispatcher call site so matched ids are recorded before suppression. The animation timer also lives
-on the daemon: the async runtime is daemon-only, and a daemon-side clock is what keeps detached sessions advancing (see
-[Playback](#playback-rejected-alternatives)).
+crate (<https://docs.rs/png/latest/png/>), whose limits enforce the zip-bomb budget. PNG is the protocol's only
+compressed format (`f=24`/`f=32` are raw), so a single-format decoder is the whole surface. Adding JPEG / WebP decoders
+is rejected to keep the format supply-chain surface closed: producers transmit raw RGB(A) or PNG, as in Kitty. The
+animation timer also lives on the daemon: the async runtime is daemon-only, and a daemon-side clock is what keeps
+detached sessions advancing (see [Playback](#playback-rejected-alternatives)).
 
-The grid does not decode graphics commands; it copies each APC body into the effect queue the daemon drains. That copy
-is what needs a budget, because a producer chooses both the body size and how many arrive inside a single
-`Parser::advance`. The queue admits a bounded count and size of bodies per drain
+The grid's copy of each APC body into the effect queue is what needs a budget, because a producer chooses both the body
+size and how many arrive inside a single parse burst. The queue admits a bounded count and size of bodies per drain
 ([kitty-graphics.md](../../reference/protocols/kitty-graphics.md#limits) "Limits"), and the body that fills it stops the
 parse until the daemon has drained, the same stop a cursor-moving placement takes. Pausing beats both growing the buffer
 and dropping: the bound keeps a hostile producer from turning a command flood into daemon memory, and a producer that
 places an image one cell at a time (yazi) sends thousands of bodies in one write, none of which may be lost. The bound
-is a property of the queue type, not a check its callers remember: the queue holds the APC count it is compared against
-and mints every APC entry itself, because a count maintained beside the queue is one that eventually disagrees with it,
-and a budget that has drifted off what it names bounds nothing.
+is a property of the queue type, not a check its callers remember: a count maintained beside the queue is one that
+eventually disagrees with it.
 
 Revisit if: a second dispatcher consumer appears (a CLI debug tool or headless renderer would justify extracting a
 `felis-image` crate, with the daemon as a thin caller); placement-heavy output shows the per-placement pause in
@@ -134,24 +120,19 @@ an unbounded set is a set whose size the producer picks. Held for the life of th
 string per escape sequence, and a record made before the read succeeds needs none of those names to exist. Two
 properties close it. A name is deferred only once its command returned OK, which is the only outcome that proves an
 object was opened, so the cheap version of the attack has to produce real segments, and those the OS already bounds. And
-the queue is capped (`ShmDeferral::CAP`, 16 names, LRU), unlinking the name it drops on the way out. The cap is safe
-precisely because the deferral exists for _reuse_: mpv re-sends its one name every frame, which refreshes its slot, so
-eviction can only reach names a producer has stopped using. A producer that rotates names instead degrades to kitty's
-own per-read unlink (the behavior felis deviates from) rather than to unbounded memory. The residue is a `t=s` command
-that opened its object but then failed to store the image: felis will not unlink that one at teardown. It belongs to a
-same-UID producer that can delete it itself, and the OS bounds the total, so the trade is worth the far larger hole it
-closes.
-
-A real producer that legitimately rotates more than `ShmDeferral::CAP` live segment names at once would see its own
-segments disappear mid-stream; the remedy is raising the cap, not removing it.
+the queue is capped (16 names, LRU), unlinking the name it drops on the way out. The cap is safe precisely because the
+deferral exists for _reuse_: mpv re-sends its one name every frame, which refreshes its slot, so eviction can only reach
+names a producer has stopped using. A producer that rotates names instead degrades to kitty's own per-read unlink (the
+behavior felis deviates from) rather than to unbounded memory. The residue is a `t=s` command that opened its object but
+then failed to store the image: felis will not unlink that one at teardown. It belongs to a same-UID producer that can
+delete it itself, and the OS bounds the total, so the trade is worth the far larger hole it closes.
 
 **Why the leading slash is restored off Linux.** mpv creates `/mpv-kitty-<ptr>` yet transmits the base64 of
 `shm_path + 1` (the slash stripped). On Linux glibc maps a slashed and slash-less name to the same `/dev/shm` inode, so
 the stripped name opens as-is. On macOS/BSD the POSIX shm namespace is _literal_ (`shm_open` requires the slash and
 `/foo` ≠ `foo`), so a terminal that opens the name verbatim (kitty's `safe_shm_open` does, so mpv's `--vo-kitty-use-shm`
 is itself broken under kitty on macOS) misses the producer's object entirely and the video stays blank. felis restores a
-missing leading slash off Linux (`normalize_shm_name`), so it opens mpv's real segment and plays where even kitty does
-not.
+missing leading slash off Linux, so it opens mpv's real segment and plays where even kitty does not.
 
 **Why trailing padding is trimmed.** mpv sends raw (`f=24`) frames with no `S=`, sizing the segment with
 `ftruncate(w*h*3)`. Linux tmpfs makes that object _exactly_ `s × v × bpp`, but macOS rounds an shm object up to the page
@@ -162,8 +143,7 @@ be rejected even once the segment opened.
 
 **Why the byte-copy is platform-split.** Linux uses `pread` (no `unsafe`, and on a concurrent `ftruncate`-shrink it
 merely short-reads); macOS uses `mmap` because Apple shm fds reject `pread`. The `mmap` path is an audited `unsafe` site
-in `felis-daemon` and carries the same shrink-`SIGBUS` caveat kitty has on every platform (mpv's constant-size reuse
-never triggers it).
+and carries the same shrink-`SIGBUS` caveat kitty has on every platform (mpv's constant-size reuse never triggers it).
 
 ## File-path reach (`t=f`)
 
@@ -196,10 +176,7 @@ Two properties of the rejection carry the weight:
   directory with `openat` for `t=t`) and POSIX shared memory; a Windows equivalent is a second security-sensitive
   file-read implementation to write, audit and keep in step ([security-audits.md](../../reference/security-audits.md)
   "`O_CLOEXEC` + `O_NOFOLLOW` audit (standing)" records the Unix sites it would have to match), and no producer has
-  asked for one. Carrying the shim costs three `const fn`s.
-
-The Windows runtime gate ([workspace.md](../../reference/workspace.md#build-and-platform-matrix)) is a prerequisite for
-a port, since the port would need a gate to prove it; it is not itself a reason to do the work.
+  asked for one.
 
 ## Frame storage: pre-coalesced
 
@@ -210,10 +187,8 @@ renderer treat every frame as "upload this pixel buffer to an atlas slot" keyed 
 dumb pixel pipe with no base-frame reference graph for a cross-host or non-Rust grid consumer to replicate: the geometry
 alone states how many bytes each frame's transfer must deliver. The cost is memory: N frames cost N full canvases even
 when each `a=f` touches a small rectangle; the per-screen image byte cap bounds it (storage details in
-[`image-store.md`](../data-model/image-store.md)).
-
-The rectangle compositor (`a=f` base + rectangle, `a=c` region copy, `C=` replace vs alpha-blend) is
-`felis-daemon::graphics::compose`, beside the decoder and reusing its zip-bomb budget; the grid never composites.
+[`image-store.md`](../data-model/image-store.md)). The compositor (`a=f` base + rectangle, `a=c` region copy, `C=`
+replace vs alpha-blend) sits beside the decoder and reuses its zip-bomb budget; the grid never composites.
 
 ## Playback: rejected alternatives
 
@@ -223,17 +198,15 @@ alternatives are rejected. Re-shipping the composited current frame each tick un
 changes, but it puts a full canvas on the wire every 40 ms: ruinous on a network link, and contrary to the "ship pixels
 once, then indices" framing that makes animation cross-host-cheap. A client-side clock (ship all frames plus gaps and
 let the client animate) would freeze animation while detached and leave two clocks to drift; one daemon clock and a dumb
-client wins. The frame cadence is therefore tokio-tick-bound, not wall-accurate
-(<https://docs.rs/tokio/1/tokio/time/fn.interval.html>); the drift is invisible at the 40 ms-class gaps real producers
-use. Revisit with a dedicated `Instant`-clocked thread if sub-30 ms animation visibly stutters under daemon load.
+client wins. The frame cadence is therefore runtime-tick-bound, not wall-accurate; the drift is invisible at the 40
+ms-class gaps real producers use. Revisit with a dedicated clocked thread if sub-30 ms animation visibly stutters under
+daemon load.
 
 The client re-uploads the current frame's pixels into its single per-id atlas slot on each `ShowFrame` rather than
 caching texels per frame; that is cheap for the small images that dominate terminal animation. If a large (4K-class)
-animation makes that per-advance upload the bottleneck, cache an atlas slot per `(id, frame)`: upload once on the
-frame's `Complete`, select by UV on `ShowFrame`. A frame edit ([below](#frame-edits-ship-as-regions)) uploads only its
-rectangles into the slot. Those patches are tracked per slot against the shadow, not taken from the per-redraw dirty
-set, so an occluded image or one several edits behind still patches; anything the shadow cannot answer with patches
-uploads the whole frame.
+animation makes that per-advance upload the bottleneck, cache an atlas slot per `(id, frame)`. A frame edit
+([below](#frame-edits-ship-as-regions)) uploads only its rectangles into the slot, tracked per slot against the shadow
+rather than taken from the per-redraw dirty set, so an occluded image or one several edits behind still patches.
 
 ## Frame edits ship as regions
 
@@ -376,10 +349,9 @@ cap's anyway: delete frames, or split the animation across ids.
 
 The cap bounds the count; it does not pay for it. A four-byte image appended to 4096 frames holds 16 KiB of pixels in
 128 KiB of records, so a budget counting pixels alone bills an eighth of what the mirror holds: the tiny-image flood
-again, one level down. So `ImageShadow` charges its aggregate in the same unit the store's `ImageEntry::byte_len` uses
-("Why the budget counts more than pixels" below): the entry, every frame record, and the pixels. The mirror being no
-looser than the store is what keeps this direction safe: a client can only refuse a session the daemon would itself have
-evicted.
+again, one level down. So the client's mirror charges its aggregate in the same unit the store uses ("Why the budget
+counts more than pixels" below): the entry, every frame record, and the pixels. The mirror being no looser than the
+store is what keeps this direction safe: a client can only refuse a session the daemon would itself have evicted.
 
 ## The placement cap
 
@@ -397,26 +369,24 @@ reason, since dropping frames would silently rewrite an animation in place.
 
 ## The live outbox carries markers, not pixels
 
-Between two fan-outs the dispatcher accumulates what changed about the session's images in `Session::image_events`. The
-obvious content for that queue is the wire messages themselves, and it is the wrong one: wire messages include
-`ImageMsg::Chunk`, so the queue would hold a second full copy of every decoded image until the session task next woke,
-with a producer that transmits faster than the fan-out drains deciding how many copies pile up. mpv's `--vo=kitty` does
-exactly that, one image per video frame; sixty-four 4 MiB transmissions arriving in a single read cost a quarter
-gigabyte of pixels the store already had.
+Between two fan-outs the dispatcher accumulates what changed about the session's images in an outbox. The obvious
+content for that queue is the wire messages themselves, and it is the wrong one: wire messages include the pixel chunks,
+so the queue would hold a second full copy of every decoded image until the session task next woke, with a producer that
+transmits faster than the fan-out drains deciding how many copies pile up. mpv's `--vo=kitty` does exactly that, one
+image per video frame; sixty-four 4 MiB transmissions arriving in a single read cost a quarter gigabyte of pixels the
+store already had.
 
-So the queue holds `ImageEvent`, an enum that spells out the pixel-free controls and reduces every transmission to a
-_marker_ naming an image (or one animation frame). The bytes are read back out of the store when the session task ships,
-by the same `image_sync_messages` the attach-time rehydrate uses. Deliberately no catch-all `Wire(ImageMsg)` variant:
-one would let a `Chunk` back into the queue, and the invariant would go back to being a convention that review has to
-enforce. Spelled-out variants make "pixels sit in the outbox" unrepresentable, and the duplication they cost is the
-price of that.
+So the queue spells out the pixel-free controls and reduces every transmission to a _marker_ naming an image (or one
+animation frame). The bytes are read back out of the store at ship time, by the same path the attach-time rehydrate
+uses. Deliberately no catch-all wire-message variant: one would let a chunk back into the queue, and the invariant would
+go back to being a convention that review has to enforce.
 
 Two properties fall out. A marker whose image the _same_ drain later evicted materializes to nothing rather than to
 stale bytes, because the store is consulted at ship time and does not have it, which is also what lets the eviction path
 stay a pair of tiny markers. And with no subscribers the markers are dropped without materializing at all, so a detached
 session pays nothing to keep an animation advancing.
 
-Because a `Transmit` marker re-states the whole image (root frame, every animation frame, the displayed index), a later
+Because a transmit marker re-states the whole image (root frame, every animation frame, the displayed index), a later
 marker for the same id makes an earlier one redundant, and only the last is materialized. That is what bounds the mpv
 case: one materialization per id per fan-out rather than one per video frame. Controls are never deduped and never
 reordered, which is not symmetry-breaking laziness but a correctness requirement. `PlacementsShifted` is a _delta_ (it
@@ -441,15 +411,12 @@ bytes but really costs the `ImageEntry`, the map slot holding it, the `Frame` he
 the cap while growing the daemon by 16.6 MB, linear in the count with no ceiling short of the id space: a nominal 256
 MiB budget would admit about 2.5 GB.
 
-So `ImageEntry::byte_len` charges the entry's own footprint plus each frame's, expressed in `size_of` terms rather than
-a measured constant so the charge follows the struct if a field is added later. The invariant is that the store charges
-at least what it holds; charging a little more than the allocator really spends is the safe direction, and for real
-images (a 1080p frame is 8.3 MB) the fixed cost rounds to nothing. Only the tiny-image flood, which is the attack,
+So each entry is charged its own footprint plus each frame's, in `size_of` terms rather than a measured constant so the
+charge follows the struct if a field is added. The invariant is that the store charges at least what it holds; for real
+images (a 1080p frame is 8.3 MB) the fixed cost rounds to nothing, and only the tiny-image flood, which is the attack,
 notices.
 
-The cached total is not serialized either: it is a derived value, and a restored store whose cache disagreed with its
-entries would carry a cap that bounds nothing. `ImageStore` recomputes it on deserialization, so a dump, stale or
-tampered, cannot weaken the budget.
+The cached total is not serialized: it is recomputed on load, so a dump, stale or tampered, cannot weaken the budget.
 
 If the fixed charge ever rejects a legitimate workload far under the nominal cap, the fix is a larger cap, not a cheaper
 accounting: the point is that the number in the config means something.

@@ -21,8 +21,7 @@ On macOS, files under `~/.config/felis/` are not read. Move or symlink the file 
 `~/Library/Application Support/felis/config.toml`. On Windows, the path includes an explicit `config\` segment.
 
 This table is frozen for 1.0. Each row is whatever `ProjectDirs` returns with `config.toml` joined onto it; felis
-overrides no platform's answer. The reasoning and the rejected alternatives are in
-[config.md](../explanation/config.md).
+overrides no platform's answer.
 
 `felis --config <path>` overrides discovery for a single invocation and window. An explicitly selected path that does
 not exist produces an error. A missing file at the default path falls back to built-in defaults.
@@ -41,8 +40,8 @@ setting in the file applying. A value of the wrong _shape_ (a number or a table 
 structural error that fails the document, as it does in every version.
 
 A `[keymap]` binding's kind and its arguments are not on that list, and follow the per-entry rule instead: an
-unrecognized one drops that binding with a warning and the remaining keybindings apply, because a binding has no default
-to fall back to ([keybindings.md](keybindings.md)).
+unrecognized one drops that binding with a warning and the remaining keybindings apply
+([keybindings.md](keybindings.md)).
 
 ## Editor support (JSON Schema)
 
@@ -332,7 +331,7 @@ Base 16 ANSI color overrides (`#rrggbb`), keyed by name: `black`, `red`, `green`
 ### `[theme.palette.indexed]`
 
 Overrides for 256-color palette indices `16..=255` (`#rrggbb`). Keys are strings: TOML has no integer keys, so `16` and
-`"16"` name the same entry. Color schemes often remap the low cube slots `16..=21` for accents.
+`"16"` name the same entry.
 
 ### `[keymap]`
 
@@ -365,8 +364,7 @@ Merge rules:
 - **Arrays and scalars replace wholesale**: array or primitive values in an overlay replace base values entirely.
 - **Other client sections are inert**: sections for different client identifiers are carried untouched by the active
   client, whatever they contain. Unknown keys and values of the wrong type there produce no diagnostic and cannot stop
-  the load. The published JSON Schema draws the same line: it validates `[client.felis]` and leaves every other client's
-  section open. Frozen for 1.0.
+  the load. Frozen for 1.0.
 - **One nesting level only**: nested `client` tables inside overlays are rejected with a warning.
 
 ## Behavior on missing / malformed values
@@ -443,8 +441,7 @@ Diagnostic categories reported by `felis config check`:
 
 ## Live reload
 
-Modifications to `config.toml` take effect automatically at runtime. A file watcher observes saves and re-applies
-changes. Reloading may also be triggered via `Ctrl+Shift+R` (`reload` action).
+A saved `config.toml` takes effect in running windows. The `reload` action (`Ctrl+Shift+R`) re-reads it on demand.
 
 Live application by property:
 
@@ -465,8 +462,7 @@ Live application by property:
 | `[keymap]`                   | Rebuilds active keybinding lookup tables.                                      |
 | `[client.<name>]`            | Re-applies keys modified in the active client overlay.                         |
 
-On syntax errors during save, live reload preserves the previous valid in-memory configuration and logs warnings without
-crashing.
+A save with a syntax error keeps the previous valid configuration and logs a warning.
 
 ## Terminal identity (environment, not TOML)
 

@@ -5,14 +5,11 @@ sidebar:
 ---
 
 By the end of this tutorial you will have started a command in felis, **closed its window while it kept running**, and
-reattached to find it exactly where you left it. That survival is the one idea felis is built around, and the fastest
-way to understand it is to watch it happen once.
+reattached to find it exactly where you left it. That survival is the one idea felis is built around.
 
 Follow the steps in order. The tutorial assumes felis is already installed; if not, do [Install](../how-to/install.md)
-first, then come back.
-
-You will need about five minutes and one terminal you already have open (your normal shell, in any terminal emulator).
-We will call that your **launching terminal**.
+first, then come back. You need one terminal you already have open (your normal shell, in any terminal emulator); we
+will call that your **launching terminal**.
 
 ## Step 1: Open your first felis window
 
@@ -22,8 +19,7 @@ In your launching terminal, run:
 felis
 ```
 
-A felis window opens with a shell prompt inside it. The first time you run felis there is no daemon yet, so the client
-quietly starts one for you; nothing to set up by hand.
+A felis window opens with a shell prompt inside it. If no felis daemon is running yet, the client starts one for you.
 
 Leave this window open and click into it. The rest of the setup happens inside the felis window.
 
@@ -46,17 +42,14 @@ Start a counter so you have visible, moving state to check on later. Still insid
 i=0; while true; do echo "tick $i"; i=$((i + 1)); sleep 1; done
 ```
 
-You will see `tick 0`, `tick 1`, `tick 2`, … appear once a second. Let it run. Note the number it has reached; you will
-see it climb past that in a moment.
+You will see `tick 0`, `tick 1`, `tick 2`, … appear once a second. Let it run, and note the number it has reached.
 
 ## Step 4: Close the window
 
 Now close the felis **window**: use the window's close button or your window manager's close on Linux; on macOS, ⌘Q
 (each felis window is its own client process, so quitting the client closes just this window). The counter is still
-counting; you just stopped _looking_ at it.
-
-Here is why: the window you closed was only a view. The shell, the counter, and the scrollback all live in the felis
-**daemon**, a separate process that keeps running. Closing a view does not end the work behind it.
+counting: the window you closed was only a view, and the shell, the counter, and the scrollback all live in the felis
+**daemon**, a separate process that keeps running.
 
 Your launching terminal gets its prompt back once the window closes.
 
@@ -86,7 +79,6 @@ felis attach 3fa7
 ```
 
 A new window appears with the same shell, and the counter is still running, now well past the number from Step 3.
-Nothing was lost, and nothing was restarted; you reconnected to work that never stopped.
 
 Press `Ctrl-C` in this window to stop the counter.
 

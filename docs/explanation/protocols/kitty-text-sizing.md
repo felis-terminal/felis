@@ -6,11 +6,8 @@ sidebar:
 
 This page records how felis divides the Kitty text sizing protocol between daemon and client, how sized runs are stored,
 and how sizing interacts with the rest of the terminal model. The wire format, keys, and limits live in the
-[reference twin](../../reference/protocols/kitty-text-sizing.md).
-
-The text sizing protocol unlocks readable headings, large status displays, and per-cell fractional sizing without
-breaking grid layout. felis implements the full protocol; the canonical reference is Kitty's own documentation at
-<https://sw.kovidgoyal.net/kitty/text-sizing-protocol/>, and where this document and the upstream spec diverge, the
+[reference twin](../../reference/protocols/kitty-text-sizing.md). The canonical reference is Kitty's own documentation
+at <https://sw.kovidgoyal.net/kitty/text-sizing-protocol/>, and where this document and the upstream spec diverge, the
 upstream spec wins.
 
 ## Why fractional scale only shrinks
@@ -28,8 +25,7 @@ way: "the fractional scale just adjusts the rendered font size within those cell
   lookup.
 
 A client switching fonts mid-attach does not require the daemon to do anything; the client re-shapes the affected runs
-and rebuilds the atlas. (See [`text-shaping.md`](../rendering/text-shaping.md) for the per-(font, sizing handle, run)
-cache.)
+and rebuilds the atlas ([`text-shaping.md`](../rendering/text-shaping.md) "Cache").
 
 ## Interaction with grid coordinates
 
@@ -44,12 +40,11 @@ Sized text generalizes that idea to arbitrary M×N spans.
 
 A sized character taller than one row is only meaningful whole: its primary draws over the full footprint. A cell move
 that carries some of its rows and not others would leave the primary drawing over cells that now hold other text, or
-leave rows with no primary at all. felis therefore erases such a character before the move, as kitty does
-([`screen.c`](https://github.com/kovidgoyal/kitty/blob/master/kitty/screen.c) `nuke_multiline_char_intersecting_with`,
-called from `screen_insert_characters`, `screen_delete_characters`, `screen_insert_lines` and
-`screen_delete_lines_impl`). Re-fitting the character elsewhere was rejected for the reason reflow rejects it (see
-below): there is no position the application chose. The one exception is a scroll into scrollback: the rows that leave
-keep their part of the character, so its text survives in history, and only the rows left on screen are cleared.
+leave rows with no primary at all. felis therefore erases such a character before the move, as kitty does on its
+character and line insert and delete paths ([`screen.c`](https://github.com/kovidgoyal/kitty/blob/master/kitty/screen.c)
+`nuke_multiline_char_intersecting_with`). Re-fitting the character elsewhere was rejected for the reason reflow rejects
+it (see below): there is no position the application chose. The one exception is a scroll into scrollback: the rows that
+leave keep their part of the character, so its text survives in history, and only the rows left on screen are cleared.
 
 ## Placement
 
@@ -69,10 +64,10 @@ and plain text wrap at the same column.
 
 ## How felis stores it
 
-Per-cell sizing rides _inline_ in the `Cell`, not in a side-table. Each cell holds `sizing: Option<SizingHandle>`, a
-`NonZeroU16` index (1-based; absence = default sizing) into the grid's `sizing_table` registry. Installing a non-default
-OSC 66 run appends one `Sizing` entry to that registry and returns its handle; the whole run (primary and continuation
-cells alike) is stamped with that one handle, so a long run costs one registry entry plus one machine word per cell.
+Per-cell sizing rides _inline_ in the `Cell`, not in a side-table: each cell holds an optional `NonZeroU16` handle into
+the grid's sizing registry (absence = default sizing). Installing a non-default OSC 66 run appends one entry and stamps
+the whole run (primary and continuation cells alike) with its handle, so a long run costs one registry entry plus the
+handle per cell.
 
 Because the handle lives in the `Cell`, sizing is saved, restored, reflowed, and carried across an alternate-screen
 switch with the cell buffer for free; no parallel structure has to be kept in sync. Distinguishing primary from
@@ -83,12 +78,12 @@ continuation cells is therefore not stored either: it is derived by the equal-ha
 An entry is minted per _run_, not per distinct sizing, so the registry is bounded by how much sized text a session ever
 drew rather than by how many sizings it used. A producer that repaints (a slide deck, a TUI redrawing a sized header)
 mints a fresh entry every repaint while the entries behind the overwritten cells go unreferenced, and the handle space
-is 16-bit: past it `install_sizing` returns nothing and the run draws unsized. Nothing about that is visible to the
-producer, which is what makes it worth reclaiming rather than reporting.
+is 16-bit: past it the run draws unsized. Nothing about that is visible to the producer, which is what makes it worth
+reclaiming rather than reporting.
 
-So the grid sweeps, exactly as it does for interned pens: `gc_sizings` marks the handles live and saved cells still
-carry, compacts the registry, and remaps every cell in place. The daemon triggers it after a parse chunk, on a threshold
-that doubles when a sweep cannot halve the table, but only up to a ceiling, because unlike a pen a handle that cannot be
+So the grid sweeps, exactly as it does for interned pens: it marks the handles live and saved cells still carry,
+compacts the registry, and remaps every cell in place. The daemon triggers it after a parse chunk, on a threshold that
+doubles when a sweep cannot halve the table, but only up to a ceiling, because unlike a pen a handle that cannot be
 minted has no fallback to degrade to, so a session must not be able to raise its own trigger point beyond the sweep's
 reach.
 
@@ -107,10 +102,9 @@ When a resize changes the grid's size, each sized character either survives in p
    natural width when that fits on the new grid, and is removed when it does not; the producer re-emits it on the new
    geometry.
 
-There is no partial re-fit: a run is never broken at a boundary with the trailing portion re-wrapped, because neither
-`Grid::resize` nor `Grid::reflow` retains the run's source text on the grid, and re-fitting a sub-run would need it.
-This is why the reflow path ([scrollback.md](../data-model/scrollback.md) "Prior art and alternatives considered")
-discards a multi-cell run that a re-wrap splits across a new wrap boundary rather than laying its tail out one cell at a
-time. The rules are deterministic so that resize-then-restore returns to the original layout while every run still fits
-at the intermediate width (REQ-407); a character that lost its sizing along the way stays unsized until the producer
-re-emits it.
+There is no partial re-fit: a run is never broken at a boundary with the trailing portion re-wrapped, because the grid
+does not retain the run's source text, and re-fitting a sub-run would need it. This is why the reflow path
+([scrollback.md](../data-model/scrollback.md) "Prior art and alternatives considered") discards a multi-cell run that a
+re-wrap splits across a new wrap boundary rather than laying its tail out one cell at a time. The rules are
+deterministic so that resize-then-restore returns to the original layout while every run still fits at the intermediate
+width (REQ-407); a character that lost its sizing along the way stays unsized until the producer re-emits it.

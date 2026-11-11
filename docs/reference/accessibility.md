@@ -84,5 +84,5 @@ NSAccessibility as an announcement request. NVDA queues it behind speech in prog
 priority, which cuts off an earlier announcement still being spoken. The output of a command still running is announced
 when it finishes, and the exit status is not announced.
 
-On Linux there are no announcements: the `terminal` role's text-change events already reach Orca's terminal handling,
-which speaks new output.
+On Linux there are no announcements; Orca's terminal handling speaks new output from the `terminal` role's text-change
+events.

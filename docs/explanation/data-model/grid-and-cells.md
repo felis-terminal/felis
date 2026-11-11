@@ -77,12 +77,12 @@ does a resize; an SOS or PM string, which the parser drops whole, does not
 
 A cluster can also outgrow the cells its base reserved. A narrow base placed at width 1 (❤, U+2764; a keycap digit)
 becomes width-2 once a variation selector or keycap combiner requests emoji presentation, yet the base was already
-written at its narrow width before the selector arrived. After every fold `widen_cluster_if_needed` reconciles the
-cluster's unicode-width against that reserved footprint: a base that grew to two cells claims a trailing `Spacer`, and
-when the cursor still parks immediately after the base, advances it past the now-two-cell glyph. A selector arriving
-after a cursor move widens the glyph in place without dragging the cursor, matching the rule that a combining mark does
-not move the cursor. When the trailing cell is occupied, off-screen or past the DECSLRM right margin, the glyph stays
-one cell wide, and a reflow keeps it at that one cell rather than shifting the rest of its line.
+written at its narrow width before the selector arrived. After every fold the grid reconciles the cluster's width
+against that reserved footprint: a base that grew to two cells claims a trailing `Spacer`, and when the cursor still
+parks immediately after the base, advances it past the now-two-cell glyph. A selector arriving after a cursor move
+widens the glyph in place without dragging the cursor, matching the rule that a combining mark does not move the cursor.
+When the trailing cell is occupied, off-screen or past the DECSLRM right margin, the glyph stays one cell wide, and a
+reflow keeps it at that one cell rather than shifting the rest of its line.
 
 The grid decides cluster boundaries and cell footprint; it stays font-blind. Which face paints the cluster (a monochrome
 dingbat or the color-emoji glyph) is a client-side shaping decision, covered in
@@ -96,28 +96,23 @@ display.
 
 Holding a handle inline, rather than a heap-owning `Box<str>` on the cell, is what makes `Cell` `Copy`, and that
 property is the single largest throughput lever for plaintext output. With an owning cluster payload, every bulk cell
-operation pays a per-element `clone()` (plus drop glue on the overwritten slot) instead of a `memcpy`; the hot paths are
-`Grid::scroll_region_up` (the `cat` / shell-output shape: each line-feed at the bottom evicts one row into the history
-side of the unified ring and blanks one) and the IL / DL / ICH / DCH shuffles. Measured on an 80-cell row (release), the
-scroll-by-1 cell cost is 893 ns with `clone()` against a 71 ns `Copy` ceiling (12.6×), and `scroll_region_up` accounts
-for ~58% of the daemon-side plaintext-scroll bench cost. With the handle, the bulk paths use `copy_from_slice` /
-`copy_within` / `slice::fill`, and `Cell` is a 16-byte `Copy` struct (see [Style interning](#style-interning)) rather
-than the ≥48 bytes an owning payload forces: less scrollback residency and less memory bandwidth on every grid walk.
+operation (the line-feed scroll that `cat` output drives, the IL / DL / ICH / DCH shuffles) pays a per-element `clone()`
+plus drop glue instead of a `memcpy`: measured on an 80-cell row, a scroll-by-1 costs 12.6× the `Copy` ceiling. With the
+handle, `Cell` is a 16-byte `Copy` struct (see [Style interning](#style-interning)) rather than the ≥48 bytes an owning
+payload forces: less scrollback residency and less memory bandwidth on every grid walk.
 
-The registry mirrors the OSC 8 hyperlink registry exactly: a `ClusterTable` owns the entries and a dedup index keyed by
-a 64-bit digest of the text (a digest hit is confirmed against the entry, so a collision costs a duplicate row and never
-a cell resolving to the wrong text); `intern_cluster(&str)` dedupes, `cluster_str(id)` resolves, and the table grows
-monotonically. It serializes as its bare entry vector, like the style and link tables: the index is derived, so it
-rebuilds on load rather than riding the dump as a second copy of every cluster. Entries stream to the client as
-`GridMsg::Cluster { id, text }` **before any `RowDelta` that references them**: a `RowDelta` is only self-describing
-once its `Cluster` messages have arrived, and the same guarantee is what the hyperlink table relies on. The shadow
-screen **installs** entries at the daemon-assigned id rather than re-interning, so daemon and shadow share one id space
-and `Cell` equality (an id compare) stays meaningful across the hop.
+The registry mirrors the OSC 8 hyperlink registry: a table of entries with a dedup index keyed by a digest of the text
+(a digest hit is confirmed against the entry, so a collision costs a duplicate row and never a cell resolving to the
+wrong text), growing monotonically. Like the style and link tables it serializes as its bare entry vector, the index
+rebuilt on load. Entries stream to the client as `GridMsg::Cluster` **before any `RowDelta` that references them**, the
+same guarantee the hyperlink table relies on. The shadow screen **installs** entries at the daemon-assigned id rather
+than re-interning, so daemon and shadow share one id space and `Cell` equality (an id compare) stays meaningful across
+the hop.
 
 Cluster ids are `NonZeroU32`, not `NonZeroU16` like hyperlinks: a long-lived session with heavy CJK / emoji churn can
 mint more than 65 535 distinct clusters, which is why the table's own cap ([below](#why-the-cluster-table-is-capped))
-sits above the `u16` space rather than at it. A cluster id is also grid-local, so the niche saving that motivated `u16`
-for links does not apply: `Grapheme` is 8 bytes either way once it carries a 4-byte handle.
+sits above the `u16` space. `Grapheme` is 8 bytes either way once it carries a 4-byte handle, so the narrower id would
+save nothing.
 
 Rejected alternatives:
 
@@ -128,13 +123,11 @@ Rejected alternatives:
   table for the rare path _plus_ a second representation to keep consistent. The interner is one representation and
   shrinks `Cell`.
 - **Keeping a heap-owning payload per cell** (`Box<str>`, or a shared `Arc<str>`) **and optimizing around it**: the op
-  count in `scroll_region_up` is already minimal (one row pushed, one blanked); the cost is per-`Cell` clone / refcount
-  / drop traffic, so nothing short of a cheaper, `Copy` `Cell` moves it.
-- **Expanding ids to inline strings in the row payload**: what is rejected is the payload, not the custom codec. The row
-  codec is hand-written and specified either way ([row-codec.md](../../reference/row-codec.md)), and a string per cell
-  is what it would have to carry, where it emits a short varint handle straight from the borrowed `&[Cell]`. It avoids
-  the `GridMsg::Cluster` message for no in-memory benefit over streaming the table, and loses the table's dedup: a mark
-  repeated down a column would ship its text once per cell.
+  count of a scroll is already minimal (one row pushed, one blanked); the cost is per-`Cell` clone / refcount / drop
+  traffic, so nothing short of a cheaper, `Copy` `Cell` moves it.
+- **Expanding ids to inline strings in the row payload**: it avoids the `GridMsg::Cluster` message for no in-memory
+  benefit over streaming the table, and loses the table's dedup: a mark repeated down a column would ship its text once
+  per cell.
 
 #### Referenced-before-use is causal, not positional
 
@@ -144,27 +137,21 @@ is interned and restating both whole tables ahead of a rehydrate's first row. Th
 the screen is not, so a session that has interned tens of thousands of clusters would make every reattaching window
 decode all of them before it could paint a screenful of cells.
 
-The client tables pay for that ordering by holding holes. A shadow installs each entry at the id the daemon minted
-(`ClusterTable::install`, `LinkTable::install`), so a table grows to whatever id arrives first and the ids beneath it
-stay unfilled until their own messages land. A gap resolves to nothing, where an entry whose text is legitimately empty
-draws nothing, so each gap is an explicit empty slot rather than a filler that would trade a missing accent for a wrong
-cell. What a gap never has to answer for is a cell: the causal rule means no admitted row names one, and a row that does
-ends the attachment ([ipc.md "Grid admission"](../../reference/ipc.md#grid-admission)) instead of degrading a cell the
-next message might never repair. Those slots stay bounded by the caps the tables already enforce
-([Why the cluster table is capped](#why-the-cluster-table-is-capped), [Hyperlink interning](#hyperlink-interning)): the
-id space bounds how many one high id can force, and the byte budgets bound what the occupied ones hold.
+The client tables pay for that ordering by holding holes. A shadow installs each entry at the id the daemon minted, so
+the ids beneath the first to arrive stay unfilled until their own messages land, each an explicit empty slot. What a gap
+never has to answer for is a cell: the causal rule means no admitted row names one, and a row that does ends the
+attachment ([ipc.md "Grid admission"](../../reference/ipc.md#grid-admission)) instead of degrading a cell the next
+message might never repair. Those slots stay bounded by the caps the tables already enforce
+([Why the cluster table is capped](#why-the-cluster-table-is-capped), [Hyperlink interning](#hyperlink-interning)).
 
 Shipping the **dense prefix** up to the highest referenced id is the alternative that keeps those tables append-only. It
 is rejected because a visible entry can be numbered anywhere: one hyperlink minted late in a long session drags every
 entry beneath it into the attach burst, which is the cost the visible-first order exists to avoid.
 
-Selecting per row is why the per-connection sent-state is a set and not a cursor (`serve/registry_sync.rs`). A cursor
-can only say "everything up to N"; a visible-first burst leaves a set with holes in it, and advancing the cursor to the
-table tail would record the skipped entries as delivered. Browsing back into scrollback is where that would show:
-composed rows name whatever was interned when they were written, which is exactly the part of the registry the burst
-skipped. The set is stored as a sent prefix plus its exceptions, so the steady state (a full prefix, no exceptions)
-answers "does this connection hold everything?" with an integer compare and keeps the per-cell handle walk off the hot
-path.
+Selecting per row is why the per-connection sent-state is a set and not a cursor. A cursor can only say "everything up
+to N"; a visible-first burst leaves a set with holes in it, and advancing the cursor to the table tail would record the
+skipped entries as delivered, which browsing back into scrollback would expose. The set is stored as a sent prefix plus
+its exceptions, so the steady state answers "does this connection hold everything?" with an integer compare.
 
 The drain that converges the rest rides cycles that already carry content, rather than manufacturing a frame of its own:
 a client's redraw and its next frame pull both key off frames arriving, so frames that change nothing on screen would
@@ -195,16 +182,14 @@ outweigh the grid.
 
 So the table bounds both dimensions, at the values [ipc.md](../../reference/ipc.md) "Semantic limits" carries. Each
 bound sits on the type or the table rather than at the call sites, because a bound the mint paths must remember is a
-bound the next mint path forgets: a cluster's text is a `ClusterText` whose constructor is the check, so `TryFrom`
-extends it to a restored dump and to a cluster streamed in from a peer, and `ClusterTable::intern` refuses a _new_ entry
-after the dedup lookup, so a full table still serves every cluster already on screen and a mark repeated on a visible
-cell keeps folding.
+bound the next mint path forgets: the cluster-text type's constructor is the length check, so a restored dump and a
+cluster streamed in from a peer pass it too, and the table refuses a _new_ entry only after the dedup lookup, so a full
+table still serves every cluster already on screen.
 
 The length bound is UAX #15's Stream-Safe Text Format, which holds that no meaningful text needs more than 30 combining
-marks on one base; the longest RGI emoji ZWJ sequence (👨‍👩‍👧‍👦, 25 bytes) sits nearly 4x under it. The count bound admits
-legitimate variety several times over, because only multi-scalar clusters intern at all (a lone CJK ideograph is a
-`Grapheme::Char`, never an entry): Unicode's registered inventories run to ~29 000 IVD sequences and ~5 000 RGI emoji
-sequences, plus the mark stacks Indic and Thai text form.
+marks on one base. The count bound admits legitimate variety several times over, because only multi-scalar clusters
+intern at all: Unicode's registered inventories run to ~29 000 IVD sequences and ~5 000 RGI emoji sequences, plus the
+mark stacks Indic and Thai text form.
 
 Past either bound a mark stops folding and the cell keeps rendering the cluster that fit, rather than being truncated or
 replaced, so the failure is a missing accent on new text and never a corrupted cell. A refused trailing ZWJ does not arm
@@ -212,10 +197,9 @@ the GB11 continuation, or the cap would become a way to swallow the rest of the 
 rejected: it breaks the monotonic-id contract reattach depends on, and it would let one runaway cell push out every
 legitimate cluster on screen. Refusing to mint keeps the ids stable.
 
-The count bound also covers the _shadow_ side, where the id is a peer's choice rather than the table's own: `install`
-grows the table to the id it is handed, so a `GridMsg::Cluster` naming an id near `u32::MAX` would resize it to tens of
-GB from one message. An id past the cap is one a daemon honoring the same cap never mints, so the shadow refuses it and
-the attachment ends, the same answer `MAX_GRID_ROWS` gives a `RowDelta`'s row
+The count bound also covers the _shadow_ side, where the id is a peer's choice: an install grows the table to the id it
+is handed, so one message naming an id near `u32::MAX` would allocate tens of GB. An id past the cap is one a daemon
+honoring the same cap never mints, so the shadow refuses it and the attachment ends
 ([ipc.md "Grid admission"](../../reference/ipc.md#grid-admission)).
 
 If the worst case rather than the typical one starts to matter, charge each entry's real footprint against a byte budget
@@ -231,42 +215,29 @@ contract: entries are never freed, because a reattaching client receives the tab
 hold must keep meaning what they meant.
 
 Dedup is what makes that contract survive a long log of the same link: a producer re-emitting one URI (or one `id=`)
-reuses the row it already minted, which xterm and foot both rely on. The index is keyed by a 64-bit digest of
-`(id, uri)` rather than by the strings, so it does not hold a second copy of every URI, and a digest hit is confirmed
-against the entry before it is trusted: a collision costs a duplicate row, never a wrong link. A linear scan over the
-entries is the rejected alternative, quadratic in the table: measured at 4.5 µs per new link with 8 192 entries and 27.5
-µs with 65 535, so a session that reaches the full table pays that on _every_ subsequent `OSC 8`, forever, including the
-ones the cap refuses.
+reuses the row it already minted, which xterm and foot both rely on. The index is keyed by a digest of `(id, uri)`, so
+it holds no second copy of every URI, and a digest hit is confirmed against the entry: a collision costs a duplicate
+row, never a wrong link. A linear scan over the entries is the rejected alternative: quadratic in the table, so a
+session that reaches the full table pays tens of microseconds on _every_ subsequent `OSC 8`, forever.
 
-Three bounds keep the table affordable, at the values [ipc.md](../../reference/ipc.md) "Semantic limits" carries, and
-they bind in different regimes. The `u16` handle bounds the entry **count**: a table that large has no handle left to
-hand out, so the row is refused rather than pushed to an index no cell could name. A byte budget bounds what those
-entries may **hold**, because a URI is producer-chosen and the count alone bounds almost nothing: the OSC buffer limit
-lets one reach several KB, and a full table of those measured hundreds of MB of live heap held for the session's life.
-It charges the entry struct, its two string payloads, and the dedup slot that indexes it, written in `size_of` terms so
-it follows `HyperlinkEntry` if a field is added, because a budget has to charge at least what the table really holds;
-and it is sized to stay under what the default scrollback beside it costs, the rule the cluster table follows too, while
-still admitting the whole id space for the URIs sessions really carry.
-
-The third bounds one entry's **text**, and is a type rather than a third check because the halves of an anchor arrive by
-two paths. The parser bounds what a producer emits (an over-long `OSC` body is truncated before dispatch), but a
-`GridMsg::Hyperlink` off the wire is the peer's choice, and a client's own table would hold whatever length it sent. A
-constructor precondition holds both paths to the same bound and `TryFrom` extends it to a restored dump, so the cap is a
-property of the entry rather than of the code that happened to build it. The cap _is_ the parser's limit, so nothing a
-producer can actually emit is refused: what the parser cannot deliver is exactly what the table need not hold.
+Three bounds keep the table affordable, at the values [ipc.md](../../reference/ipc.md) "Semantic limits" carries. The
+`u16` handle bounds the entry **count**. A byte budget bounds what those entries may **hold**, because a URI is
+producer-chosen and the count alone bounds almost nothing: a full table of several-KB URIs is hundreds of MB held for
+the session's life. The budget charges everything an entry really holds (the struct, its strings, its dedup slot) and
+stays under what the default scrollback beside it costs, the rule the cluster table follows too. The third bounds one
+entry's **text**, and is a type rather than a check because an entry arrives by two paths: the parser truncates what a
+producer emits, but a `GridMsg::Hyperlink` off the wire is the peer's choice. The cap _is_ the parser's limit, so
+nothing a producer can actually emit is refused.
 
 Past any of the three the pen is simply not set, so the covered text prints as ordinary characters: a link loses its
 target, never its content.
 
-The table serializes as its bare entry vector, exactly as the style table does. The dedup index and the charged total
-are derived, so they rebuild from the entries on load rather than riding the dump: a restored table whose total
-disagreed with its entries would carry a budget that bounds nothing.
+The dedup index and the charged total are derived, so they rebuild from the entries on load rather than riding the dump:
+a restored table whose total disagreed with its entries would carry a budget that bounds nothing.
 
 The shadow's mirror of this table needs no _count_ guard of its own, unlike the cluster table's: the `u16` id space is
-already the bound, so one message naming a high id can force only that many empty slots however few entries the peer
-then sends. It does hold each entry to the text cap and to the byte budget, both charged before the slot vector grows (a
-refused entry leaves neither a charge nor a gap), since one message can otherwise carry a URI as long as the frame
-allows.
+already the bound. It does hold each entry to the text cap and to the byte budget, both charged before the slot vector
+grows, since one message can otherwise carry a URI as long as the frame allows.
 
 Of the two bounds, the budget is the one to raise first: it is a constant, while the count is the handle type, so
 raising it is a wire change (`Cell.link` and every `Hyperlink` id).
@@ -281,81 +252,69 @@ that "no attributes set" round-trips to zero bytes on the wire, which is what ma
 
 ### Style interning
 
-The cell does not hold `Attributes` inline. It holds a four-byte `StyleId` handle into the grid's `style_table`, a
-`Vec<Attributes>` with a dedup index, exactly mirroring the cluster / link / sizing registries. This is what puts `Cell`
-at 16 bytes rather than the 28 an inline pen costs. Two motivations, both measured:
+The cell does not hold `Attributes` inline. It holds a four-byte `StyleId` handle into the grid's style table, with a
+dedup index, mirroring the cluster / link / sizing registries. This is what puts `Cell` at 16 bytes rather than the 28
+an inline pen costs. Two motivations, both measured:
 
 - **Scrollback residency.** Retained history holds a row count proportional to what scrolled off, so the per-cell unit
   cost multiplies across the whole live grid _and_ the retained history; dropping it from 28 to 16 bytes is the largest
   single resident-memory lever after the ring itself.
-- **The ascii throughput floor.** With an inline pen, `print_str`'s bulk loop stores a whole 28-byte `Cell` per
-  character, of which 16 bytes (the pen) are loop-invariant across a run; the read-free parse floor is store-width
-  bound, not parse-CPU bound. Interning makes the per-char store a four-byte id copy, moving ghostty's shape into
-  felis's hot loop.
+- **The ascii throughput floor.** With an inline pen, the print loop stores a whole 28-byte `Cell` per character, of
+  which 16 bytes (the pen) are loop-invariant across a run, and that floor is store-width bound, not parse-CPU bound.
+  Interning makes the per-char store a four-byte id copy, ghostty's shape.
 
 Two invariants make the handle a drop-in for an inline pen, both enforced by the dedup index:
 
-- **id 0 is the default pen.** `StyleId::DEFAULT` always resolves to `Attributes::default()`, seeded at construction and
-  never evicted. So `Cell::BLANK` stays `const`, and a cell's blankness is a bare `style == DEFAULT` compare with no
-  table lookup. No colored blank (BCE) can alias it, because a non-default background interns to a non-default id.
-- **id equality iff pen equality, within one table.** Interning dedups, so two cells share an id exactly when they share
-  a pen. The wire RLE run-key and the pipe/clipboard SGR re-emitter fall out to a `u32` compare instead of a 16-byte
-  struct compare.
+- **id 0 is the default pen**, seeded at construction and never evicted. So the blank cell stays `const`, and a cell's
+  blankness is a bare id compare with no table lookup. No colored blank (BCE) can alias it, because a non-default
+  background interns to a non-default id.
+- **id equality iff pen equality, within one table.** The wire RLE run-key and the pipe/clipboard SGR re-emitter fall
+  out to a `u32` compare instead of a 16-byte struct compare.
 
-The pen is resolved to an id **once per SGR change**, not once per cell: the grid holds a `pen_style` handle kept
-eagerly in sync with the pen (`resync_pen_style` runs on every SGR / DECSC-restore / alt-screen switch), and the many
-per-cell write paths stamp that constant id. A per-cell refcount (ghostty's shape) is rejected precisely here: it adds
-inc/dec traffic to `print_str`, the hot path interning exists to help, so a naive version regresses the benchmark it
-targets.
+The pen is resolved to an id **once per SGR change**, not once per cell: the grid keeps the current pen's id eagerly in
+sync (on every SGR, DECSC restore and alt-screen switch), and the per-cell write paths stamp that constant id. A
+per-cell refcount (ghostty's shape) is rejected precisely here: it adds inc/dec traffic to the print loop, the hot path
+interning exists to help.
 
 "Once per SGR change" is the ascii win and the truecolor tax. A `DOOM`-fire or video framebuffer emits an SGR before
-nearly every cell, so there `intern` runs per cell, where an inline pen would be a plain 16-byte store. The intern
-hasher, not the store, is then the truecolor floor's cost center, so `style_table`'s dedup index uses **foldhash**
-(`FixedState`, a fixed seed) rather than the standard library's SipHash-1-3. Measured, the read-free truecolor parse
-floor sits ~14 % under the inline-pen alternative (with SipHash-1-3, ~25 % under). That is the accepted cost of the
-ascii and residency win on the one workload interning cannot help: a genuinely fresh pen per cell has nothing to dedup.
-The foldhash win is larger end to end than the parse floor alone shows, because the shadow screen re-interns every run
-on decode, so the client pays the same hash per frame and foldhash cuts both sides.
+nearly every cell, so there the intern runs per cell, where an inline pen would be a plain 16-byte store. The intern
+hasher is then the truecolor floor's cost center, so the dedup index uses **foldhash** with a fixed seed rather than the
+standard library's SipHash-1-3: the truecolor parse floor sits ~14 % under the inline-pen alternative, against ~25 %
+with SipHash. That is the accepted cost of the ascii and residency win on the one workload interning cannot help, and
+foldhash pays twice, since the shadow screen re-interns every run on decode.
 
 A palette producer is the other half of that regime, and there the hash is avoidable. DOOM-fire emits `38;5` and `48;5`
-as separate SGRs, so each one yields a new pen, but the pens cycle among a few hundred. `intern` therefore checks a
-1024-slot direct-mapped cache of recent pens, keyed by the packed attribute words, before the dedup index: ~96 % of
-DOOM-fire's interns hit it, and a fresh-pen-per-cell flood misses on every cell and pays one extra slot compare.
-`compact` clears the cache, because the ids it holds are the ones compaction renumbers. Rejected:
+as separate SGRs, so each one yields a new pen, but the pens cycle among a few hundred. The intern therefore checks a
+small direct-mapped cache of recent pens before the dedup index: ~96 % of DOOM-fire's interns hit it, and a
+fresh-pen-per-cell flood pays one extra slot compare. A compaction clears the cache, since it renumbers the ids the
+cache holds. Rejected:
 
 - **Skipping the intern when the SGR left the pen unchanged**: DOOM-fire changes the pen on 99.7 % of its SGRs, so the
   pre-SGR compare is pure overhead there (+2 % instructions on the DOOM floor).
 - **A single last-hit entry**: consecutive pens differ in both regimes, so it never hits.
 
-The keys are producer-controlled, so the fixed seed is a real exposure and not a dismissed one. `Attributes` is exactly
-what an SGR sequence sets, [security-model.md](../security-model.md) treats PTY output as hostile, and foldhash's fast
-variant is not collision-resistant even under a random seed; with `FixedState` its constants are compile-time, so
-colliding pens can be computed offline against a known build. A producer that streams them turns each `intern` from a
-probe into a walk of the colliding bucket, and the parse pays that factor per cell.
+The keys are producer-controlled, so the fixed seed is a real exposure and not a dismissed one: an SGR sequence sets the
+key directly, [security-model.md](../security-model.md) treats PTY output as hostile, and with a fixed seed colliding
+pens can be computed offline against a known build. A producer that streams them turns each intern from a probe into a
+walk of the colliding bucket, and the parse pays that factor per cell.
 
 What keeps it inside the standard security-model.md sets for resource exhaustion ("degrade felis, not the rest of the
 user's session") is the sweep and the thread layout, not the hash. The sweep bounds the resident pen count, so the
-longest bucket is bounded by the live pens plus the headroom below, on the order of 10^5 entries on a full default ring,
-rather than growing with the length of the flood. And the cost lands where the flood does: the parse runs on the
-session's own thread, so slowing it throttles the child producing the flood, which is the backpressure the design wants,
-and it cannot starve the runtime workers other sessions' connections ride. The client's shadow re-interns the same pens
-on decode, so an attached window pays it too, on the window already displaying that output.
+longest bucket is bounded by the live pens plus the headroom below rather than by the length of the flood. And the cost
+lands where the flood does: the parse runs on the session's own thread, so slowing it throttles the child producing the
+flood and cannot starve the runtime workers other sessions' connections ride.
 
 The same truecolor producer grows the table without bound: it mints a fresh RGB pen per frame, and unlike the cluster
-and link registries (bounded by content variety, and capped besides) the style table has no natural ceiling.
-`Grid::gc_styles` reclaims unreferenced ids with a mark-compact sweep (roots: every live and saved-screen cell) and
-remaps every surviving handle in place; the `pen_style` memo, often on no cell yet, is re-interned after a compaction.
-The sizing registry is swept the same way and for a related reason: it mints per run, not per distinct value
+and link registries (bounded by content variety, and capped besides) the style table has no natural ceiling. A
+mark-compact sweep reclaims unreferenced ids (roots: every live and saved-screen cell) and remaps every surviving handle
+in place. The sizing registry is swept the same way and for a related reason: it mints per run, not per distinct value
 ([kitty-text-sizing.md](../protocols/kitty-text-sizing.md) "Reclaiming registry entries"). The cluster and link tables
-stay append-only, since a remappable table and an incrementally streamed one are mutually exclusive (below). Reflow
-needs no table walk either way: it moves handles _with_ their cells.
+stay append-only, since a remappable table and an incrementally streamed one are mutually exclusive (below).
 
-_When_ to sweep is not the grid's judgement. Both mechanisms take a threshold, and the policy (sweep past it, then raise
-it) lives in a `TableGc` the driver owns, so it stays out of the grid's `PartialEq` and its dump. There are two drivers,
-not one: the daemon's parse core sweeps after a parse chunk, and the client's shadow sweeps after an applied message,
-because the shadow fills the same two registries from decoded rows (a pen per attribute run, a sizing entry per sized
-cell) and a window has no session restart to clear them. One policy type rather than two sets of constants is what keeps
-the two from drifting apart.
+_When_ to sweep is not the grid's judgement: the policy (sweep past a threshold, then raise it) belongs to the driver,
+so it stays out of the grid's equality and its dump. There are two drivers: the daemon's parse core, and the client's
+shadow, which fills the same two registries from decoded rows and has no session restart to clear them. Both share one
+policy type so the two cannot drift apart.
 
 How far to raise it is the whole of the policy, and the two registries answer differently. The sizing raise doubles,
 bounded: a sizing handle that cannot be minted has no fallback (the run draws unsized), so the sweep must stay in reach
@@ -364,45 +323,34 @@ residency) and it leaves **headroom proportional to the cells the sweep just sca
 
 That distinction is load-bearing: headroom scaled to the live set is what makes a truecolor flood the losing regime.
 Headroom equal to the live set amortizes the O(cells) sweep to O(1) per interned pen only while the live pens are
-themselves proportional to the scan, which is true on an empty grid and false the moment scrollback fills with rows the
-flood never wrote. A screen of unique pens over a full 10 000-row ring is ~11 k live pens against ~1.9 M scanned cells:
-with the trigger at twice the live set, one sweep fires per ~11 k pens and each walks all 1.9 M cells. Measured on a 32
-MiB per-cell-truecolor flood over a full ring, the sweeps are 1.41 s of a 1.57 s parse (90 % of the parse thread) while
-the parse itself holds 208 MiB/s either way. Scaling the headroom to the scan instead (a sixteenth of it, so a sweep
-costs at most sixteen cell visits per entry it admits) puts termbench's `sgr_fg_lines` at 229 MiB/s rather than 67, last
-in the field to first. The headroom still clears the live set as well, because the opposite shape (a full screen of
-distinct pens, where a sweep reclaims only what churned) would otherwise sweep several times per frame.
-
-The mark pass that finds the roots is a dense `bool` per id rather than a `HashSet`: it visits every cell of the ring
-while the ids it writes are `0..len` by construction, so hashing each one buys nothing. A sweep that reclaims nothing
-also costs nothing beyond that pass: it reports that no id moved and the caller skips both the rewrite over every cell
-and the dedup index rebuild.
+themselves proportional to the scan, which is false the moment scrollback fills with rows the flood never wrote: a
+screen of unique pens over a full ring is ~11 k live pens against ~1.9 M scanned cells, so each ~11 k pens walk all 1.9
+M cells, and the sweeps took 90 % of the parse thread. Scaling the headroom to the scan instead (a sixteenth of it, so a
+sweep costs at most sixteen cell visits per entry it admits) puts termbench's `sgr_fg_lines` at 229 MiB/s rather than
+67, last in the field to first. The headroom still clears the live set as well, because the opposite shape (a full
+screen of distinct pens, where a sweep reclaims only what churned) would otherwise sweep several times per frame.
 
 #### The wire stays attribute-based
 
-`StyleId`s are grid-local: the daemon and each client intern independently, so an id means nothing across the hop. The
-row codec (`wire.rs`) therefore ships the **resolved `Attributes`** per RLE run: the daemon resolves
-`StyleId → Attributes` on encode, and the shadow screen re-interns `Attributes → StyleId` into its own table on decode.
-Clients, the protobuf wire, and every out-of-tree consumer never see a `StyleId`; the id space exists only in each
-process's memory. Keeping ids off the wire is not merely convenience. An id space that a GC remaps cannot also be
-streamed incrementally the way the cluster and link tables are: a client holding a streamed id would see it invalidated
-under it. A remappable table and an incrementally streamed table are mutually exclusive, and only the monotonic tables
-can stream.
+Style ids are grid-local: the daemon and each client intern independently, so an id means nothing across the hop. The
+row codec therefore ships the **resolved attributes** per RLE run, and the shadow screen re-interns them into its own
+table on decode; no client or out-of-tree consumer ever sees a style id. This is not merely convenience: an id space
+that a sweep remaps cannot also be streamed incrementally the way the cluster and link tables are, because a client
+holding a streamed id would see it invalidated under it. Only the monotonic tables can stream.
 
 Rejected alternatives:
 
 - **Struct-of-arrays** (separate grapheme and attrs column arrays): fixes the ascii write but leaves attributes 16 bytes
   per cell resident (no residency win) and turns every cell access into a two-array gather.
-- **Per-cell refcount** (inc on write, dec on overwrite): the reason above, it taxes `print_str`.
+- **Per-cell refcount** (inc on write, dec on overwrite): the reason above, it taxes the print loop.
 - **Interned ids on the wire with a streamed style table** (the cluster table's shape): saves nothing in memory over
   shipping the resolved attributes the RLE already dedups, and forecloses the GC (see the streaming/remap conflict
   above).
 
 Revisit if: the sweep shows up on a real truecolor workload, in which case the next step is incremental compaction
 rather than more headroom (the headroom divisor trades residency for parse time and sixteen is already where the two
-meet); or residency is still the ceiling after interning, in which case pack `Grapheme` to a `u32` (cell 16 → 12). That
-one is deferred: it needs a wire-repr conversion layer (`Vec<Grapheme>` is serialized directly) and shrinks the cluster
-id space, so it should A/B on its own.
+meet); or residency is still the ceiling after interning, in which case pack `Grapheme` to a `u32` (cell 16 → 12), which
+needs a serialization conversion layer and shrinks the cluster id space.
 
 ### Sizing handle
 
@@ -427,16 +375,15 @@ blanks one like any other cell, and it forwards nothing to its primary.
 
 ### Image references
 
-Cells carry no image data: direct placements (`a=T` / `a=p`) live in the image store's `Placements` side table
+Cells carry no image data: direct placements (`a=T` / `a=p`) live in the image store's placement side table
 ([image-store.md](image-store.md)), so placing or deleting an image touches no cell and damage is unaffected. The
 renderer draws placements on top of the glyph layer, honoring each placement's z-order
 ([kitty-graphics.md](../../reference/protocols/kitty-graphics.md)). A placement is anchored to a row rather than to grid
-content, and the placement table lives daemon-side, outside `Grid`, so `Grid::reflow` cannot move the anchors itself.
-Instead it returns a `ReflowRemap` built from the same logical-line mapping that remaps prompt marks, and the daemon
-replays every anchor through it (`Placements::remap_rows`): each anchor lands on the post-reflow row of the same cell,
-survivors are re-stated to subscribers in full (a re-wrap moves each anchor by its own delta, so the uniform
-`PlacementsShifted` directive cannot carry it), and an anchor whose line left the retained scrollback evicts exactly as
-scroll-driven eviction does.
+content, and the placement table lives outside the grid, so reflow returns the same logical-line mapping that remaps
+prompt marks and the daemon replays every anchor through it: each anchor lands on the post-reflow row of the same cell,
+survivors are re-stated to subscribers in full (a re-wrap moves each anchor by its own delta, so the uniform shift
+directive cannot carry it), and an anchor whose line left the retained scrollback evicts exactly as scroll-driven
+eviction does.
 
 The one exception is Unicode-placeholder placements: those _are_ grid content (`U+10EEEE` plus diacritics in ordinary
 cells), so they move with the text by construction.
@@ -454,36 +401,30 @@ daemon ships the style and the blink flag, never blink frames, because the phase
 
 ## Occupancy watermark
 
-Each _physical_ row of the live grid carries a `u16` watermark (`Grid::occupancy`, indexed like `soft_wrap`) that is the
+Each _physical_ row of the live grid carries a `u16` watermark, indexed like the soft-wrap bit, that is the
 authoritative live extent of the row: columns `[0..occupancy)` are live content and columns `[occupancy..cols)` are
 undefined, holding whatever bytes a previous tenant of the physical slot left behind. Any cell write raises the
-watermark (raising is always safe); a whole-row default blank (the `rotate_region` recycle) drops it to 0, and a
-default-pen erase that reaches it lowers it to the erase's start and writes only the cells below it. A pen carrying any
-non-default attribute (BCE) is live content, so it pins the watermark at `cols` and materializes the cells; colored
-blanks are never mistaken for absent ones.
+watermark (raising is always safe); a whole-row default blank (the scroll recycle) drops it to 0, and a default-pen
+erase that reaches it lowers it to the erase's start and writes only the cells below it. A pen carrying any non-default
+attribute (BCE) is live content, so it pins the watermark at `cols` and materializes the cells; colored blanks are never
+mistaken for absent ones.
 
 The model divides responsibility between readers and writers, and both halves are needed for the elision below to be
 safe. Readers clip at the watermark: a column at or past it reads as a shared blank, row content and the push into
 scrollback carry only the `[0..occupancy)` prefix ([scrollback.md](scrollback.md) "Structure"). Writers that land past
 it blank the gap `[occupancy..col)` first, so raising the watermark over a recycled slot never exposes the previous
 tenant's tail; the cell-shifting editors, which reason over the whole row rather than a prefix, materialize the tail
-before shifting so a `copy_within` cannot drag stale bytes into view.
+before shifting so a shift cannot drag stale bytes into view.
 
-Making occupancy authoritative lets the default-pen recycle skip work rather than do it cheaply. `rotate_region` drops
-the watermark to 0 and leaves the existing bytes in place, eliding the `cols`-cell memset that otherwise runs per line
-feed. That memset matters whenever the parser is the bottleneck, which holds for both builds: the debug build is
-parse-bound outright (halving the per-line scroll work roughly halves real `cat`-of-a-large-file wall-clock), and the
-release build's `cat` is parse-floor-bound because the parse runs on the PTY parse thread
-([pipeline.md](../rendering/pipeline.md) "Demand-driven emission" owns that topology), so the per-line scroll cost is a
-visible slice of that floor.
+Making occupancy authoritative lets the default-pen recycle skip work rather than do it cheaply: the scroll drops the
+watermark to 0 and leaves the existing bytes in place, eliding the `cols`-cell memset that otherwise runs per line feed.
+That memset is a visible slice of the parse floor, which `cat` of a large file is bound by.
 
-Rejected alternative: blank the leading gap inline in `print_str` rather than forking to a cold copy. The bulk write
-loop's throughput depends on the compiler hoisting `self.cells`'s data pointer and eliding bounds checks across the
-whole run, and any `self.cells` write or call preceding the loop in the same function body defeats that at compile time
-even when the gap never fires at runtime (measured ~30% on plaintext). A read-only watermark probe is free, so the fast
-path keeps it and only the rare gap case pays a call. `cat` through a tty gets `\n`→`\r\n` from `ONLCR`, so its runs
-restart at column 0 and never gap; only a raw producer emitting bare `\n`, or explicit cursor addressing, reaches the
-cold path.
+Rejected alternative: blank the leading gap inline in the print loop rather than forking to a cold copy. The bulk write
+loop's throughput depends on the compiler hoisting the cell buffer's pointer and eliding bounds checks across the whole
+run, and any write or call preceding the loop in the same function defeats that at compile time even when the gap never
+fires at runtime (measured ~30% on plaintext). A read-only watermark probe is free, so the fast path keeps it and only
+the rare gap case, a raw producer emitting bare `\n` or explicit cursor addressing, pays a call.
 
 The unified live-grid + history ring ([scrollback.md](scrollback.md) "Unified viewport-into-history ring") composes with
 the watermark rather than subsuming it: the ring makes eviction a base bump (no row copy), while the watermark is what

@@ -7,9 +7,9 @@ sidebar:
 `tools/bench/crossterm.py` (`just bench-vs`) runs cross-terminal comparison suites against peer terminals (`kitty`,
 `alacritty`, `ghostty`, `wezterm`, `foot`) on a local desktop. The harness pins configuration, font size, and grid
 geometry across all terminals, measures throughput, latency, startup, and memory footprint over multiple rounds, and
-generates comparative reports with per-suite charts. Architectural decisions governing the harness design and workload
-choices are in [the benchmark design](../explanation/benchmarks.md); in-tree benchmark targets and the regression gate
-are in [testing.md](testing.md#performance-benchmarks).
+generates comparative reports with per-suite charts. The design behind the harness and its workloads is
+[the benchmark design](../explanation/benchmarks.md); in-tree benchmark targets and the regression gate are in
+[testing.md](testing.md#performance-benchmarks).
 
 Figures from different machines do not compare directly: hardware, display pipelines, fonts, and latency instruments
 differ across environments.
@@ -35,62 +35,50 @@ its path. A full run refuses to start when either is missing; a run that narrows
 | `memory`      | Idle and flooded memory                      | PSS / footprint (MB) | Linux, macOS |
 | `latency`     | External keystroke-to-pixel latency          | Latency (ms)         | Linux, macOS |
 
-Not every suite runs everywhere: one with no implementation for the host platform reports itself skipped instead of
-being absent from the report. Every suite runs on Linux and macOS when its required terminals and tools are installed.
+A suite whose required terminals or tools are missing reports itself skipped instead of being absent from the report.
 
 #### Latency instrument
 
 `latency` needs a different instrument on each platform, and the suite is skipped where that platform's one is missing:
-`typometer` on macOS, `wl-latency` on Linux (`tools/bench/wl-latency/`, built by the `.#bench` shell). Both press a key
-and poll the screen until the pixel the glyph lands on changes color; they differ in what they press and poll through,
-Typometer through the OS event API and `wl-latency` through `zwp_virtual_keyboard_v1` and `zwlr_screencopy_manager_v1`.
-The instrument that took a run's bars is named on the chart. `wl-latency` drives niri only: it refuses to inject unless
-niri reports the window id it was given as focused, and a desktop that cannot name and focus a window by id skips the
-leg instead.
-
-`wl-latency` reads each screen state it waits for (the typed reference pattern, a cleared line, an empty cell before a
-key) by polling until it appears or 2 s pass, and releases each key right after pressing it. A cell already painted over
-before its key is waited out rather than timed. A leg the instrument fails is retried once in a fresh window, and the
-chart quotes the reason for each failure.
+`typometer` on macOS, `wl-latency` on Linux (built by the `.#bench` shell). Both press a key and poll the screen until
+the pixel the glyph lands on changes color. The instrument that took a run's bars is named on the chart. `wl-latency`
+drives niri only: it refuses to inject unless niri reports the window id it was given as focused, and a desktop that
+cannot name and focus a window by id skips the leg instead. A leg the instrument fails is retried once in a fresh
+window, and the chart quotes the reason for each failure.
 
 #### Startup measurement
 
 `startup` runs `sleep` as each terminal's child, times each launch until the platform reports the launch's first window,
-then terminates the launch. On Linux the signal is niri's event stream announcing a window whose pid is in the launch's
-process tree, which niri sends once the toplevel is mapped with its first buffer; on macOS it is the first on-screen
-layer-0 window of the tree in `CGWindowListCopyWindowInfo`, polled every 4 ms, which shows the window is visible but not
-that it has been drawn into. `RUNS` launches are timed after `WARMUP` discarded ones; a leg's value is their median, and
-its within-leg spread is half their interquartile range. A launch that shows no window within 20 s ends the leg as a
+then terminates the launch. On Linux the signal is niri announcing a window of the launch's process tree mapped with its
+first buffer; on macOS it is the tree's first on-screen window, which shows the window is visible but not that it has
+been drawn into. `RUNS` launches are timed after `WARMUP` discarded ones; a leg's value is their median, and its
+within-leg spread is half their interquartile range. A launch that shows no window within 20 s ends the leg as a
 recorded failure with no bar. On a tiler, work that delays the first configure is included, but completing the tiling
 animation is not timed.
 
 felis has two rows. **felis (cold)** stops the bench daemon before every launch, so each launch autospawns one. **felis
-(warm)** starts with one untimed launch whose autospawned daemon every later launch reuses. Before every launch the cold
-row checks that no daemon is bound to the bench socket and the warm row that the same daemon still is; a launch that
-fails its check ends the row as a recorded failure.
+(warm)** starts with one untimed launch whose autospawned daemon every later launch reuses. A launch that finds the
+daemon state its row requires broken ends the row as a recorded failure.
 
 ### Resource accounting and sampling
 
 The `memory` suite reads each platform's own accounting rather than RSS: PSS (`/proc/<pid>/smaps_rollup`) on Linux,
-`phys_footprint` (`proc_pid_rusage`) on macOS. Each number is what the OS charges to the processes the suite samples
-under its ledger: PSS is the process's proportional share of its resident pages, `phys_footprint` is the process's
-physical-footprint ledger (the number Activity Monitor's Memory column shows). Whatever the GPU driver allocates and the
-OS charges to the process is inside; whatever it holds elsewhere (device memory the process does not map, kernel-side
-driver state) is outside, and how the split falls depends on the API, the driver and the GPU: a GPU terminal's bar
-carries a driver share the reader cannot separate from the rest, while a CPU renderer (foot) carries none. The metric is
-recorded per leg and named on the chart.
+`phys_footprint` (`proc_pid_rusage`, the number Activity Monitor's Memory column shows) on macOS. Whatever the GPU
+driver allocates and the OS charges to the process is inside; whatever it holds elsewhere (device memory the process
+does not map, kernel-side driver state) is outside, so a GPU terminal's bar carries a driver share the reader cannot
+separate from the rest, while a CPU renderer (foot) carries none. The metric is recorded per leg and named on the chart.
 
 `vtebench`, `termbench`, `cat`, `kittenbench` and `doom-fire` also record what each terminal spent on the measured pass,
-charted as one CPU-time and one peak-memory chart with a panel per suite. The window opens after the sampler's baseline
-reading, before the workload starts, and closes once the workload has ended and the processes have gone idle (under 5%
-of one core for a 0.25 s interval, at most 3 s after the end). In between, the processes are sampled every 0.25 s:
+charted as one CPU-time and one peak-memory chart with a panel per suite. The window opens before the workload starts
+and closes once the workload has ended and the processes have gone idle. In between, the processes are sampled every
+0.25 s:
 
-| Field     | Linux                                          | macOS                                                                                                          |
-| --------- | ---------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `cpu_s`   | growth of `utime + stime` (`/proc/<pid>/stat`) | growth of `ri_user_time + ri_system_time` (`proc_pid_rusage` v4), Mach ticks converted by `mach_timebase_info` |
-| `peak_kb` | largest PSS sample                             | largest `phys_footprint` sample                                                                                |
-| `mean_kb` | mean PSS sample                                | mean `phys_footprint` sample                                                                                   |
-| `wall_s`  | the window's wall time                         | the window's wall time                                                                                         |
+| Field     | Linux                                          | macOS                                                         |
+| --------- | ---------------------------------------------- | ------------------------------------------------------------- |
+| `cpu_s`   | growth of `utime + stime` (`/proc/<pid>/stat`) | growth of `ri_user_time + ri_system_time` (`proc_pid_rusage`) |
+| `peak_kb` | largest PSS sample                             | largest `phys_footprint` sample                               |
+| `mean_kb` | mean PSS sample                                | mean `phys_footprint` sample                                  |
+| `wall_s`  | the window's wall time                         | the window's wall time                                        |
 
 felis is its client and its daemon, recorded separately under `parts` and summed sample by sample; every other terminal
 is its launch process plus the children named after it or a listed helper (kitty's `kitten`). Work outside those
@@ -127,26 +115,18 @@ instead. Each chart's subtitle names the whisker it drew, and the table prints r
 together. The `felis vs best other` column prints a ratio only where the run supports one: `—` when either side measured
 fewer than two rounds, and `—` when the two ranges overlap.
 
-Each leg records the machine it ran on at both ends of itself: the one-minute load average on every platform, plus the
-`pmset -g therm` speed limit on macOS and the `/sys/devices/system/cpu/*/thermal_throttle/` counters on Linux, recorded
-as `unavailable` where the platform reports neither. A chart note names the legs whose load average ran more than 1.0
-above the load recorded when the run started, and the legs the platform called throttled: on Linux a counter that
-advanced across the leg, on macOS a speed limit below 100 at either end of it.
+Each leg records the machine's load average and thermal throttling at both ends of itself. A chart note names the legs
+whose load average ran more than 1.0 above the load recorded when the run started, and the legs the platform called
+throttled.
 
 The same record carries `display`, whether a window could present a frame, as `locked` and `asleep` (`true`, `false`, or
-`null` for unknown):
-
-| Field    | macOS                                                              | Linux                                             |
-| -------- | ------------------------------------------------------------------ | ------------------------------------------------- |
-| `locked` | `IOConsoleLocked` from `ioreg -a -n Root -d1`                      | logind's `LockedHint` on `seat0`'s active session |
-| `asleep` | `CGDisplayIsAsleep` for the main display, read through `osascript` | `null`: no reading is taken                       |
-
-A leg sampled with either field `true` is refused and has no bar: the chart note names it, and a resumed run retakes it.
+`null` for unknown; Linux takes no `asleep` reading). A leg sampled with either field `true` is refused and has no bar:
+the chart note names it, and a resumed run retakes it.
 
 What the report reads of a leg is always one complete attempt at it; a leg interrupted or stopped partway contributes
 nothing. Run mechanics (CLI flags, workload knobs, environment variables, the results-root layout, resume, how attempts
-are isolated and how a leg's processes are stopped) are documented by `python3 tools/bench/crossterm.py --help`, the
-`tools/bench/crossterm.py` module docstring, and `tools/bench/field.py`.
+are isolated and how a leg's processes are stopped) are documented by `python3 tools/bench/crossterm.py --help` and the
+module docstrings under `tools/bench/`.
 
 ## macOS
 

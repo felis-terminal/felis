@@ -9,9 +9,8 @@ so none of the commands below disconnect it. For full CLI options, see [cli.md](
 
 ## Integrate with editors and scripts
 
-Editors (such as Emacs, Neovim, and Helix), scripts, and CI runners can drive sessions using the core IPC verbs:
-`spawn`, `send`, `capture`, `search`, and `kill`. Any environment capable of invoking subprocesses can interact with
-felis sessions:
+Editors (such as Emacs, Neovim, and Helix), scripts, and CI runners drive sessions by running `felis sessions` verbs
+(`spawn`, `send`, `capture`, `search`, `kill`) as subprocesses:
 
 ```emacs-lisp
 ;; Send the active buffer region to a target REPL session.
@@ -24,11 +23,10 @@ felis sessions:
 
 ## Switch an active window to another session
 
-From inside a felis window, `felis sessions switch <id>` retargets that window to another session. This command provides
-the CLI equivalent of the `switch_session` keybinding chord. The session being replaced is the one named by
-`$FELIS_SESSION_ID`, which felis stamps into every session's environment (see
-[terminal-identity.md](../reference/terminal-identity.md)). To switch a window from an external script, specify
-`--from <id>`.
+From inside a felis window, `felis sessions switch <id>` retargets that window to another session, like the
+`switch_session` keybinding. The session being replaced is the one named by `$FELIS_SESSION_ID`, which felis stamps into
+every session's environment (see [terminal-identity.md](../reference/terminal-identity.md)). To switch a window from an
+external script, specify `--from <id>`.
 
 Select sessions in the shell using unique ID prefixes or interactive fuzzy filtering (see the picker recipe in
 [tmux-workflows-without-tmux.md](tmux-workflows-without-tmux.md)):

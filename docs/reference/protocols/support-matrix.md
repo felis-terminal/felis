@@ -4,12 +4,9 @@ sidebar:
   order: 1
 ---
 
-Implementation status of the ANSI/VT control sequences, private modes, and extension protocols, per platform.
-
-Status tables own normative feature coverage. Detailed architectural rationale and edge-case behavior are documented in
-companion explanation pages ([vt-compliance.md](../../explanation/protocols/vt-compliance.md),
-[kitty-graphics.md](../../explanation/protocols/kitty-graphics.md),
-[kitty-text-sizing.md](../../explanation/protocols/kitty-text-sizing.md), and [input.md](../../explanation/input.md)).
+Implementation status of the ANSI/VT control sequences, private modes, and extension protocols, per platform. Each
+section links the reference page that carries the behavior; the admission decisions are argued in
+[landscape.md](../../explanation/protocols/landscape.md).
 
 **Legend:** ✅ supported · ⚠️ partial, stubbed, deferred, or
 [consumed without effect](vt-compliance.md#consumed-without-effect), which is the tolerated set a new input joins under

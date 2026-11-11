@@ -7,17 +7,17 @@ sidebar:
 The Cargo workspace: the crate map and per-crate boundaries, the dependency graph, the two version axes, the filesystem
 conventions, and the platform support matrix.
 
-Architectural decision records, crate boundary rationales, and rejected workspace configurations are documented in
-[overview.md](../explanation/architecture/overview.md). Crate dependency choices and technology rationales are detailed
-in [implementation.md](../explanation/implementation.md).
+The crate-boundary decisions and rejected workspace shapes are in
+[overview.md](../explanation/architecture/overview.md); the dependency and technology choices are in
+[implementation.md](../explanation/implementation.md).
 
 ## Crate map
 
-felis is a virtual Cargo workspace. Twelve `felis-*` crates sit under `crates/` (the prefix keeps the crates.io
-namespace consistent); the thirteenth member, `tests/`, is a test-only package outside that tree ("Workspace guards"
-below). Each crate's `Cargo.toml` is the source for its direct dependencies. `just deny` enforces the map: `deny.toml`
-admits each felis crate only as a direct dependency of the crates allowed to use it, and `tools/dep_bans.py` checks each
-crate's production closure against its "MUST NOT depend on" cell, which is normative.
+felis is a virtual Cargo workspace. The `felis-*` crates sit under `crates/`; one more member, `tests/`, is a test-only
+package outside that tree ("Workspace guards" below). Each crate's `Cargo.toml` is the source for its direct
+dependencies. `just deny` enforces the map: `deny.toml` admits each felis crate only as a direct dependency of the
+crates allowed to use it, and `tools/dep_bans.py` checks each crate's production closure against its "MUST NOT depend
+on" cell, which is normative.
 
 ### Per-crate contracts
 
@@ -36,20 +36,17 @@ crate's production closure against its "MUST NOT depend on" cell, which is norma
 | `felis-cli`         | bin       | the `felis` front door: headless verbs and exec of the GUI and of `felis-<name>` commands                                                                                                                  | `harfrust`, `skrifa`, `read-fonts`, `wgpu`, `winit` (must stay GPU-free)         |
 | `felis-client`      | bin       | the GUI frontend the front door execs: the winit event loop and OS clipboard, wiring winit and wgpu                                                                                                        | —                                                                                |
 
-felis hand-rolls the VT engine in `felis-vt`: it does **not** depend on `vte`, `alacritty_terminal`, or `libghostty`.
-Those upstreams are read as reference only; the rationale is in [implementation.md](../explanation/implementation.md)
-"VT engine".
+felis hand-rolls the VT engine in `felis-vt`: it does **not** depend on `vte`, `alacritty_terminal`, or `libghostty`
+([implementation.md](../explanation/implementation.md) "VT engine").
 
-`fuzz/` is a separate workspace (per cargo-fuzz convention) so the nightly-only libFuzzer dependency does not propagate
-to the main workspace.
+`fuzz/` is a separate workspace, per cargo-fuzz convention.
 
 ### Workspace guards
 
 `tests/` is a workspace member with no library or binary target: the package `felis-workspace-tests` exists only to host
-the guards on workspace-wide invariants, listed in [testing.md](testing.md) "Workspace guards". It sits outside
-`crates/` because `crates/*` is the extraction set and these guards belong to no crate
-([overview.md](../explanation/architecture/overview.md) "Rejected workspace shapes"). Tests that exercise one crate
-against another are the opposite case: they live in the `tests/` directory of the crate that owns the seam.
+the guards on workspace-wide invariants, listed in [testing.md](testing.md) "Workspace guards"
+([overview.md](../explanation/architecture/overview.md) "Rejected workspace shapes" says why it sits outside `crates/`).
+Tests that exercise one crate against another live in the `tests/` directory of the crate that owns the seam.
 
 ## Dependency direction
 
@@ -97,8 +94,7 @@ extraction = `felis-protocol`, `felis-vt`, `felis-grid`, `felis-transport`, `fel
 ## Reuse paths for non-Rust clients
 
 `felis-protocol` is the cross-language public surface; a non-native client implements against it (and substitutes its
-own transport / renderer). felis core ships no `examples/` bridge crates: the reuse paths below are realized by the
-sibling repos in the ecosystem.
+own transport / renderer). felis core ships no bridge crates for the reuse paths below.
 
 | Client kind                       | Crates reused                                                                                  | Bridge required                                                                             |
 | --------------------------------- | ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
@@ -112,10 +108,9 @@ Two mechanisms carry that column. A language with a protobuf runtime generates i
 the daemon wire directly, which is the only encoding the socket has ([ipc.md](ipc.md)), and a language without one does
 the same with a generator of its own and the golden vectors in [row-codec.md](row-codec.md). A client that carries no
 codec at all runs the CLI verbs with `--format json` or, for a stream, `--format jsonl`, whose shapes belong to the CLI
-output contract ([cli.md](cli.md)) rather than to the wire, so wire-minor growth reaches it as nothing at all.
+output contract ([cli.md](cli.md)) rather than to the wire, so wire-minor growth does not reach it.
 
-Five shared wire facilities support external satellite clients (see
-[overview.md](../explanation/architecture/overview.md) for architectural tradeoffs):
+Five shared wire facilities support external satellite clients ([overview.md](../explanation/architecture/overview.md)):
 
 - **Grid→ANSI re-encoding:** `felis-grid::ansi` (`row_ansi`, `row_ansi_with`, `sgr_set`) reconstructs SGR and OSC 8 from
   stored cell state, for the pipe action, `felis sessions capture --ansi`, and any client painting into a host terminal;
@@ -182,15 +177,13 @@ on macOS and Windows it yields the OS's native equivalents; felis does not overr
 The slots felis uses:
 
 - **Config:** `ProjectDirs::config_dir()`. felis reads its single TOML config from this directory.
-- **Cache:** `ProjectDirs::cache_dir()`. Reserved for regenerable data such as atlas dumps; nothing writes here today.
-  Scrollback never lands here: it is RAM-only (REQ-609).
+- **Cache:** `ProjectDirs::cache_dir()`, unused. Scrollback never lands on disk: it is RAM-only (REQ-609).
 - **Runtime / daemon socket:** `/tmp/felis.<uid>/`, derived from the uid alone rather than from
   `ProjectDirs::runtime_dir()` or any environment variable, so an SSH login, a relay and a desktop session reach one
-  daemon ([cli.md](cli.md#carrier-and-connection-lifetime) "Carrier and connection lifetime" states the rule). It holds
-  `daemon.sock` and the `daemon.sock.agent` symlink; the daemon creates it `0700` and refuses anything else there. Why
-  `/tmp` rather than a runtime directory is argued in
-  [ipc.md](../explanation/architecture/ipc.md#cross-host-attach-ssh-stdio). Windows uses named pipes
-  (`\\.\pipe\felis.<sid>.daemon`) rather than filesystem sockets; see
+  daemon ([cli.md](cli.md#carrier-and-connection-lifetime) "Carrier and connection lifetime" states the rule;
+  [ipc.md](../explanation/architecture/ipc.md#cross-host-attach-ssh-stdio) argues `/tmp`). It holds `daemon.sock` and
+  the `daemon.sock.agent` symlink; the daemon creates it `0700` and refuses anything else there. Windows uses named
+  pipes (`\\.\pipe\felis.<sid>.daemon`) rather than filesystem sockets; see
   [security-model.md](../explanation/security-model.md) "Daemon IPC" and [ipc.md](ipc.md).
 - **Logs:** `ProjectDirs::state_dir()` (`$XDG_STATE_HOME/felis/`), `data_local_dir()` on Windows, and
   `~/Library/Logs/felis/` on macOS, where `directories` has no log or state slot. Per-binary file names and rotation are
@@ -226,13 +219,12 @@ this way is in [testing.md](../explanation/testing.md) "Why a support claim need
 
 A runtime gate is: the test suite on the real target, plus a frontend smoke that launches the packaged artifact, opens a
 real winit window and wgpu surface on the platform backend, attaches a PTY, drives input, and verifies a rendered frame.
-Cargo tests alone do not constitute one (the suite deliberately leaves pixel verification out,
-[testing.md](testing.md)), and emulation does not, since it cannot validate the production GPU and window stack. The
-smoke is a mode of `felis-client` itself, armed by `FELIS_SMOKE_MARKER` ([testing.md](testing.md) "CI shape"), so a
-`main` or tag job drives the shipped binary; a pull request's smoke drives the debug build and is not part of the gate.
-`x86_64-linux` and `x86_64-pc-windows-msvc` have a passed gate and carry the support claim, since P-2 makes a durable
-distribution part of the claim and each has one. `aarch64-darwin` carries the claim on the maintainer's use of the build
-instead. `aarch64-linux` carries no claim, and it moves on that target's first green run, not on this table.
+Cargo tests alone do not constitute one, and neither does emulation. The smoke is a mode of `felis-client` itself, armed
+by `FELIS_SMOKE_MARKER` ([testing.md](testing.md) "CI shape"), so a `main` or tag job drives the shipped binary; a pull
+request's smoke drives the debug build and is not part of the gate. `x86_64-linux` and `x86_64-pc-windows-msvc` have a
+passed gate and a durable distribution, and carry the support claim. `aarch64-darwin` carries the claim on the
+maintainer's use of the build instead. `aarch64-linux` carries no claim, and it moves on that target's first green run,
+not on this table.
 
 `x86_64-darwin` is **not** committed: no flake package, no test coverage, no claim. `meta.platforms` in
 `nix/package.nix` names the three Nix systems above rather than `lib.platforms.unix`, whose extra members (the BSDs,
@@ -242,14 +234,13 @@ ARM, or FreeBSD.
 ### Release gate
 
 A release is an annotated `v*` tag. `.forgejo/workflows/release.yml` reruns the whole gate on the tag's own revision
-rather than trusting an earlier green run on `main` ([testing.md](../explanation/testing.md) "Why a support claim needs
-a passed gate"): a tag check (`just release-check <tag>`), the Cargo suite, the wire gate ([testing.md](testing.md)
-"Wire compatibility gates"), and every supported target's chain, each of which checks that the built binaries report the
-tag's version and clean revision and proves its archive off Nix. The Forgejo release page is created as a draft and
-flipped to published only once every asset is attached. The GitHub mirror republishes it, and for a final tag crates.io
-and the Homebrew tap follow. The checks and steps are those scripts: `.forgejo/workflows/release.yml`,
-`.github/workflows/release-mirror.yml`, and `tools/release/`; the maintainer's order of operations is the `release`
-skill.
+([testing.md](../explanation/testing.md) "Why a support claim needs a passed gate"): a tag check
+(`just release-check <tag>`), the Cargo suite, the wire gate ([testing.md](testing.md) "Wire compatibility gates"), and
+every supported target's chain, each of which checks that the built binaries report the tag's version and clean revision
+and proves its archive off Nix. The Forgejo release is published only once every asset is attached. The GitHub mirror
+republishes it, and for a final tag crates.io and the Homebrew tap follow. The checks and steps are those scripts:
+`.forgejo/workflows/release.yml`, `.github/workflows/release-mirror.yml`, and `tools/release/`; the maintainer's order
+of operations is the `release` skill.
 
 [non-goals.md](../explanation/non-goals.md) "Cross-platform constraints" states: "Where a feature is not uniformly
 implementable across macOS, Linux, and Windows, it is omitted rather than gated."

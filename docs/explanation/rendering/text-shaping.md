@@ -35,11 +35,10 @@ Shaping direction is hard-coded left-to-right: a terminal cell row is monospace 
 Caching happens at three layers: per-font shaper and scaler state, the per-glyph bitmap cache, and a per-run shape memo.
 
 **Per-font shaper and scaler state.** harfrust keeps a face's layout tables (GSUB, GPOS, the cmap cache) in the font
-object, shared by every variation view of one file, so they are read once per file. `Shaper` keeps a reusable glyph
-buffer and the shape plans of a bounded number of recent (face view, feature list) pairs, since a plan is built for one
-instance and one feature list. The per-glyph `ShapeCache`, which is the single rasterization gateway, keeps skrifa
-outline scalers for a bounded number of recent (face, size) pairs, because setting up a hinted scaler reruns the font's
-hinting programs; a color glyph's layers draw through the same scalers.
+object, shared by every variation view of one file, so they are read once per file. The shaper keeps the shape plans of
+a bounded number of recent (face view, feature list) pairs, since a plan is built for one instance and one feature list,
+and the rasterization gateway keeps outline scalers for a bounded number of recent (face, size) pairs, because setting
+up a hinted scaler reruns the font's hinting programs.
 
 **Per-glyph bitmap cache.** Rasterization is cached per glyph rather than per run, because the same glyph recurs across
 runs that share nothing else: shells re-print one prompt thousands of times and most output is plain ASCII. An entry is
@@ -48,26 +47,23 @@ a rasterized bitmap plus its placement offsets.
 The key has to separate every rendering of a glyph that would rasterize differently, so the cache keys on
 `(codepoint, font_size_px, SizingKey)` (REQ-709). Three of those axes (the OSC 66 sizing state, the style it is drawn
 in, and which face it resolved against) are folded into the one packed `SizingKey` rather than widened into a longer key
-tuple, which is what keeps the several maps that thread it (the per-glyph cache, the renderer's atlas slot maps, the
-`AtlasView` trait) from each having to grow a field when a new axis appears. A scale-1 `'A'` and a scale-2 `'A'`, a bold
-`'A'` and a regular one, and one raw glyph id resolved against two different faces therefore each get their own slot
-without a single map's signature changing.
+tuple, so the several maps that thread it (the per-glyph cache, the renderer's atlas slot maps) need no new field when a
+new axis appears.
 
-The cache holds a hard-coded soft cap of 16 MiB, not configurable, and charges each entry its bookkeeping as well as the
-buffer holding its pixels. A pixels-only budget would leave the map unbounded: a glyph that rasterizes blank (a space, a
-codepoint no face covers) has no pixels, and PTY output picks the key, so a producer walking OSC 66 sizings adds entries
-that cost nothing. Eviction is deliberately **not** LRU: past the cap it drops arbitrary other entries one at a time
-until it is back under budget, excluding the entry just inserted. Recency ordering costs a touch per hit on the hottest
-path in the renderer, to reorder a cache whose working set is a screenful of glyphs that all stay hot; the arbitrary
-drop is wrong only for the entries that were about to be evicted anyway. A true LRU is future work.
+The cache holds a fixed soft cap, not configurable, and charges each entry its bookkeeping as well as the buffer holding
+its pixels. A pixels-only budget would leave the map unbounded: a glyph that rasterizes blank (a space, a codepoint no
+face covers) has no pixels, and PTY output picks the key, so a producer walking OSC 66 sizings adds entries that cost
+nothing. Eviction is deliberately **not** LRU: past the cap it drops arbitrary other entries one at a time until it is
+back under budget, excluding the entry just inserted. Recency ordering costs a touch per hit on the hottest path in the
+renderer, to reorder a cache whose working set is a screenful of glyphs that all stay hot; the arbitrary drop is wrong
+only for the entries that were about to be evicted anyway.
 
 **Per-run shape memo.** The renderer re-walks every visible run on every frame, and the per-glyph layers only cache
 _rasterization_, so when `font.features` is active, shaping itself (cluster analysis + GSUB) would recur per run per
-frame. The glyph index memoizes `shape_run` output under `(style, run text)`, one map per style so the lookup is an
-index rather than a composite key. Nothing else needs to be in the key: font, size, and features are fixed for the life
-of a glyph index (every reload rebuilds it), so the memo invalidates exactly when the remaining shaping inputs change.
-Capped at 4096 entries per style (~10 MiB; same arbitrary-eviction discipline as the bitmap cache). A steady-state hit
-is a hash lookup plus a copy into a per-frame scratch buffer, ~110× cheaper than re-shaping the run.
+frame. The renderer therefore memoizes each run's shaping under `(style, run text)`. Nothing else needs to be in the
+key: font, size, and features are fixed for the life of the memo (every reload rebuilds it), so it invalidates exactly
+when the remaining shaping inputs change. It is capped per style under the same arbitrary-eviction discipline as the
+bitmap cache, and a hit is about 110× cheaper than re-shaping the run.
 
 ## Font fallback
 
@@ -80,17 +76,16 @@ per-language rules, rejected fonts) and the locale's language apply. The sort is
 that add coverage _within their presentation class_ (color by `FC_COLOR`, else mono, checked against the loaded face):
 fontconfig's own trim drops a color face whose code points an earlier mono face already covers, which is exactly the
 face an emoji needs. A text-presentation character then takes the first mono face covering it before an earlier-ranked
-color one, which is what the symbol group's position achieves below. The chain (`FontStack`) is built **eagerly** at
-startup, so the per-codepoint `resolve` call is a cheap charmap walk with no I/O, and the cascade stops at 62 faces,
-each loaded up front; on a host with more faces that add coverage, the least preferred are dropped.
+color one, which is what the symbol group's position achieves below. The chain is built **eagerly** at startup, so the
+per-codepoint lookup is a cheap charmap walk with no I/O; the cascade is capped at a fixed number of faces, dropping the
+least preferred.
 
 On **macOS** and **Windows** the platform answers **per character**. A codepoint that neither the primary nor the
-Nerd-symbol group (below) covers goes to CoreText's `CTFontCreateForStringWithLanguage` or DirectWrite's
-`IDWriteFontFallback::MapCharacters`, next to the styled primary. The language passed picks the Japanese or Chinese form
-of Han, so it is the first entry of the user's language list that writes Han, else the first, as Firefox picks it. An
-answer is kept only if it maps the codepoint (and, for emoji presentation, carries color glyphs), and is remembered for
-that codepoint, presentation and style alone. It never joins the chain, so what a codepoint draws with does not depend
-on what was drawn before it, as in kitty.
+Nerd-symbol group (below) covers goes to CoreText's or DirectWrite's per-string fallback, next to the styled primary.
+The language passed picks the Japanese or Chinese form of Han, so it is the first entry of the user's language list that
+writes Han, else the first, as Firefox picks it. An answer is kept only if it maps the codepoint (and, for emoji
+presentation, carries color glyphs), and is remembered for that codepoint, presentation and style alone. It never joins
+the chain, so what a codepoint draws with does not depend on what was drawn before it, as in kitty.
 
 DirectWrite reads no variation selector and names Segoe UI Emoji for `✳` and `☕︎` alike, so a color face answering a
 text-presentation request draws its outline, as kitty and Alacritty do; a glyph with no outline (CBDT, sbix) stays in
@@ -98,11 +93,11 @@ color.
 
 Rejected: **append each answer to the chain**, as WezTerm, Ghostty and Rio do. A later miss would then take the
 first-cover walk through faces chosen for other characters, so the same text could draw differently depending on what
-the session printed earlier. **The platform's cascade list as an ordered chain** (CoreText's
-`CTFontCopyDefaultCascadeListForLanguages`): it is ranked for the primary, not per character, misses 121 faces the
-per-character lookup reaches on a stock macOS, and lacks Zapf Dingbats, so `✳` would draw from the color emoji face. **A
-worker thread drawing a placeholder until the answer arrives**: it costs a redraw and a visible flash for a wait no
-measured lookup came near (2000 Han lookups took 38 ms on macOS, the slowest 4.7 ms).
+the session printed earlier. **The platform's cascade list as an ordered chain** (CoreText's default cascade list): it
+is ranked for the primary, not per character, misses over a hundred faces the per-character lookup reaches on a stock
+macOS, and lacks Zapf Dingbats, so `✳` would draw from the color emoji face. **A worker thread drawing a placeholder
+until the answer arrives**: it costs a redraw and a visible flash for a wait no measured lookup came near (the slowest
+of 2000 Han lookups on macOS took under 5 ms).
 
 The Nerd-symbol group stays an ordered entry on these platforms because CoreText answers a BMP private-use codepoint,
 where the Nerd glyphs live, with whichever face maps it (STIX Two Math, or LastResort) rather than a Nerd font.
@@ -110,8 +105,8 @@ where the Nerd glyphs live, with whichever face maps it (STIX Two Math, or LastR
 A caller that must draw the same faces on every machine, such as a recording-to-video converter or a screenshot test,
 runs the same discovery over a given set of font files instead of the system's. A stack built from a single primary face
 would not do: the styled faces and the fallback walk would then differ from what a window draws with those fonts. A file
-set has no platform to ask, so `auto_discover` walks the CJK, **symbol**, emoji, and Nerd-symbol candidate lists in that
-order and appends the first family installed in each group, except the symbol group (see below).
+set has no platform to ask, so discovery walks the CJK, **symbol**, emoji, and Nerd-symbol candidate lists in that order
+and appends the first family installed in each group, except the symbol group (see below).
 
 When `font.fallback` is set ([config.md](../../reference/config.md#font)), the host's fallback skips a face the list
 already names, and a character a listed face covers takes the first such face in declared order, ahead of the cascade's
@@ -124,8 +119,8 @@ first**. Both deviations are deliberate.
 
 The ordering serves text-presentation-default symbols (Unicode `Emoji_Presentation=No`: the asterisk dingbats
 `✳`/`✻`/`✶`/`✢`, the media-control symbols `⏸`/`⏹`/`⏺`), which should render as a tinted mono glyph, not a color-emoji
-tile; ordering a mono symbol face ahead of the color font is what makes `resolve`'s first-cover walk pick mono: the same
-result the macOS CoreText / fontconfig cascade reaches, and why kitty shows `⏺` as a glyph.
+tile; ordering a mono symbol face ahead of the color font is what makes the first-cover walk pick mono: the same result
+the macOS CoreText / fontconfig cascade reaches, and why kitty shows `⏺` as a glyph.
 
 First-cover alone is enough _because_ the symbol families are symbol-specific (Zapf Dingbats, Noto Sans Symbols, Apple
 Symbols, Segoe UI Symbol; STIX Two Math is the one near-general face, kept only as the sole mono home of `⏸`/`⏹`/`⏺` on
@@ -137,29 +132,27 @@ is a complete substitute, symbol coverage is fragmented: on macOS the asterisk d
 color.
 
 The list order decides only for text-presentation characters. The other half of Unicode's default, an emoji-presentation
-character (`Emoji_Presentation=Yes`: `⭐`, `⚡`, `☕`, `⌚`, `🀄`), takes `FontStack::resolve_color_index` first: the
-first face, the primary included, that both covers it and carries color glyphs (`Font::has_color_glyphs`, a `COLR` or
-color-bitmap check cached at load). First coverage decides only when no color face covers it. Without this, a symbol
-face that also covers `⭐` draws it as a small mono star in its two cells. kitty does the same: `font_for_cell` in
-[`fonts.c`](https://github.com/kovidgoyal/kitty/blob/master/kitty/fonts.c) skips the main font for an emoji-presentation
-cell and falls back preferring color. The default presentation is a property of the character alone, so single-codepoint
-`resolve` decides it from a table of the property (`emoji-data.txt` of the Unicode version the grid's widths come from,
-generated by `just unicode-tables`).
+character (`Emoji_Presentation=Yes`: `⭐`, `⚡`, `☕`, `⌚`, `🀄`), takes the first face, the primary included, that
+both covers it and carries color glyphs. First coverage decides only when no color face covers it. Without this, a
+symbol face that also covers `⭐` draws it as a small mono star in its two cells. kitty does the same: `font_for_cell`
+in [`fonts.c`](https://github.com/kovidgoyal/kitty/blob/master/kitty/fonts.c) skips the main font for an
+emoji-presentation cell and falls back preferring color. The default presentation is a property of the character alone,
+read from the Unicode version the grid's widths come from.
 
 Rejected: **keep first coverage and center the glyph in its two cells.** It fixes the left-aligned star but leaves it
 monochrome where the application asked for an emoji, unlike kitty and WezTerm. It also turns color on or off depending
 on which symbol fonts a host happens to install.
 
-A presentation that depends on the codepoints around a character is decided in `Shaper::shape_cluster`, where they are
+A presentation that depends on the codepoints around a character is decided where the cluster is shaped, where they are
 visible. Resolving `❤` (U+2764, text by default and a Zapf Dingbat) on its own picks the mono face: correct for a plain
 `❤`, wrong the moment VS16 or a ZWJ join asks for the color emoji.
 
 Three cluster signals override the default, checked in this order. A VS15 directly after the base (`⭐︎`, `🀄︎`) asks for
 text, so the base takes the first face covering it even when it defaults to emoji; that is mono when a mono face covers
 it, or when the platform's answer is a color face with an outline for it. Otherwise an emoji ZWJ / modifier sequence
-anchors its face on the first astral emoji scalar (`is_emoji_face_anchor`, U+1F000..=U+1FAFF) so `❤️‍🔥` resolves off the
-fire. Failing both, a VS16 anywhere in the cluster (a bare `❤️`, a keycap) routes the base through
-`resolve_color_index`. A VS16-less dingbat (`⏸`, a plain `❤`) has no signal and stays mono.
+anchors its face on the first astral emoji scalar (U+1F000..=U+1FAFF) so `❤️‍🔥` resolves off the fire. Failing both, a
+VS16 anywhere in the cluster (a bare `❤️`, a keycap) routes the base through the color-first lookup. A VS16-less dingbat
+(`⏸`, a plain `❤`) has no signal and stays mono.
 
 Once the face is chosen, the shaper maps each variation sequence through the face's variation-sequence subtable (cmap
 format 14), before substitution and positioning, so a combining mark after `葛󠄀` sits on the variant glyph. A selector
@@ -173,25 +166,20 @@ It would draw that one character in a second face's design and metrics, inside t
 foot, kitty, Ghostty, or Alacritty consults a face's variation-sequence data when choosing it; WezTerm and foot let
 HarfBuzz apply the sequence on the face picked for the base.
 
-The stack is queried per codepoint: `resolve(c)` returns the first font whose charmap covers `c` (the first color one
-for an emoji-presentation character), falling back to the primary (which then renders its `.notdef` box) when nothing
-covers it. A cell whose character the primary face does not cover is therefore never inside a ligature run: the run scan
-stops at it, and it is shaped alone against the face `resolve` picked.
+When nothing covers a codepoint, the primary draws it (as its `.notdef` box). A cell whose character the primary face
+does not cover is never inside a ligature run: the run scan stops at it, and it is shaped alone against the face the
+lookup picked.
 
 Holding the whole eager chain open is cheap even when several fallback faces are large, because font bytes are
-memory-mapped, not heap-copied (next section). The symbol group's all-installed rule adds at most a handful of faces
-(three on stock macOS), and each is mapped, not read, so the cost is virtual address space plus the pages actually
-faulted when a glyph is drawn, KB-scale resident, the same trade the ~183 MB emoji face already makes. The only
-steady-state cost is a slightly longer `resolve` walk for codepoints nothing covers, which the shape cache amortizes
-after the first miss.
+memory-mapped, not heap-copied ("Font loading" below): a held face costs address space plus the pages actually faulted
+when a glyph is drawn.
 
 ## Per-style faces
 
 Bold and italic cells render in **separate font faces**, the felis analogue of kitty's `bold_font` / `italic_font` /
-`bold_italic_font`. The `FontStack` holds four styled primaries indexed by a 2-bit `FontStyle` (regular, bold, italic,
-bold-italic); `resolve(c, style)` picks the styled primary that covers `c` (a color one for an emoji-presentation `c`),
-then walks the fallback chain, drawing the entry it lands on in that style. A cell's `AttrFlags::BOLD` / `ITALIC` map to
-the `FontStyle`, and `resolve` is asked for that style.
+`bold_italic_font`. The font stack holds four styled primaries (regular, bold, italic, bold-italic); a lookup for a
+cell's style picks that styled primary when it covers the character, then walks the fallback chain, drawing the entry it
+lands on in that style.
 
 **Config shape: nested tables, not four flat keys.** The face is configured with `[font.bold]` / `[font.italic]` /
 `[font.bold_italic]` sub-tables ([config.md](../../reference/config.md#font)). The nested form is chosen over four flat
@@ -204,7 +192,7 @@ terminal.
 **Missing styled face: reuse regular, never synthesize.** felis does **not** synthesize fake-bold (outline emboldening)
 or fake-italic (a shear transform) when a family ships no real styled face. The face provider (fontconfig, CoreText or
 DirectWrite) returns the closest face (the regular one) for a family without a Bold; felis dedups faces by face id and
-variation coordinates and reuses the _same_ `Arc<Font>`, so the missing style costs no extra bytes and draws the regular
+variation coordinates and reuses the same loaded face, so the missing style costs no extra bytes and draws the regular
 glyph. This mirrors the fallback policy elsewhere (a missing `font.fallback` family is skipped, not substituted): the
 config is a description of intent that degrades gracefully across machines, and a user who wants bold to stand out
 installs a bold face rather than accepting a mechanically-smeared approximation.
@@ -263,8 +251,8 @@ in `font.fallback`, where it follows the configured weights.
 or the monospace grid would break), so only codepoint coverage and the rasterized outline differ per style, never the
 cell box.
 
-Style rides the sizing key like every other axis that makes two lookups of one glyph differ (see "Cache" above), so
-`GlyphIndex::ensure` recovers the styled face from the key alone.
+Style rides the sizing key like every other axis that makes two lookups of one glyph differ (see "Cache" above), so the
+styled face is recoverable from the key alone.
 
 ## Feature defaults and inheritance
 
@@ -284,43 +272,39 @@ means. One type costs the bare-string spelling and buys a rule the user learns o
 
 ## Font loading
 
-Font bytes are **memory-mapped, not heap-copied**. The face provider hands system faces back as file paths; felis opens
-each one and maps it with `memmap2::Mmap::map`, so a large face (Apple Color Emoji is ~183 MB) stays file-backed
-(shared, clean, reclaimable page cache) instead of becoming dirty heap; no system face is copied onto the heap. The one
-exception is a caller's pinned font files (see "Font fallback"), which are read into memory: mapping is sound only while
-nothing truncates the file, which holds for a root-owned system font directory but not for a file the caller owns.
+Font bytes are **memory-mapped, not heap-copied**. The face provider hands system faces back as file paths; felis maps
+each one, so a large face (Apple Color Emoji is ~183 MB) stays file-backed (shared, clean, reclaimable page cache)
+instead of becoming dirty heap. The one exception is a caller's pinned font files (see "Font fallback"), which are read
+into memory: mapping is sound only while nothing truncates the file, which holds for a root-owned system font directory
+but not for a file the caller owns.
 
-The numbers force this. With `fs::read`, the eagerly loaded emoji + CJK fallback faces alone are ~190 MB of _live_ heap.
-Mapped, the client's footprint on macOS is ~43 MB and Apple Color Emoji costs 16 KB resident: coverage probes
-(`has_glyph`) and rasterization fault pages on demand, so cold faces stay unfaulted. That puts felis in the
-Alacritty/Kitty/Ghostty band (~20–100 MB) instead of far above it. The field agrees: every surveyed terminal
-(Alacritty/`crossfont`, WezTerm, Ghostty, Kitty, foot/`fcft`) keeps font bytes file-backed, via the OS font API
-(CoreText) or FreeType's path-based `FT_New_Face` (which mmaps on Unix); WezTerm mmaps the file itself and feeds
-FreeType an `FT_Stream` (`wezterm-font/src/ftwrap.rs`), the same shape felis uses.
+The numbers force this. Read onto the heap, the eagerly loaded emoji + CJK fallback faces alone are ~190 MB of _live_
+heap. Mapped, the client's footprint on macOS is ~43 MB and Apple Color Emoji costs 16 KB resident, which puts felis in
+the Alacritty/Kitty/Ghostty band (~20–100 MB) instead of far above it. Every surveyed terminal (Alacritty, WezTerm,
+Ghostty, Kitty, foot) keeps font bytes file-backed, via the OS font API or FreeType's path-based open; WezTerm maps the
+file itself, the same shape felis uses.
 
 The cost is one `unsafe` call. The read-fonts font model reads tables in place from a persistent `&[u8]`, and mapping a
-file has no safe API, so there is no safe route to a file-backed face. `felis-shaping` therefore relaxes the
-workspace-wide `unsafe_code = "deny"` lint crate-wide (the policy lives in `Cargo.toml` / `clippy.toml`), with
-`Mmap::map` as the audited mapping site, carrying a `// SAFETY:` comment. The face providers' platform calls are the
-relaxation's other users: libfontconfig on Linux is a C ABI loaded at run time with no safe binding, the CoreText and
-DirectWrite bindings expose their calls as `unsafe`, and the macOS outline rasterizer's CoreText calls are audited sites
-of their own. A mapped file truncated underneath the process would SIGBUS; accepted, because the mapped paths are
-root-owned read-only OS font assets that are not rewritten in place during a session, the identical trade-off FreeType
-already makes.
+file has no safe API, so there is no safe route to a file-backed face. `felis-shaping` therefore relaxes the workspace
+`unsafe_code` policy crate-wide (see `Cargo.toml`), with the mapping as an audited site carrying a `// SAFETY:` comment.
+The face providers' platform calls are the relaxation's other users: libfontconfig on Linux is a C ABI loaded at run
+time with no safe binding, the CoreText and DirectWrite bindings expose their calls as `unsafe`, and the macOS outline
+rasterizer's CoreText calls are audited sites of their own. A mapped file truncated underneath the process would SIGBUS;
+accepted, because the mapped paths are root-owned read-only OS font assets that are not rewritten in place during a
+session, the identical trade-off FreeType already makes.
 
 Rejected alternatives:
 
-- **Keep `fs::read`, accept the footprint.** ~190 MB of dirty heap for fonts is anomalous against every surveyed
-  terminal.
+- **Read fonts onto the heap, accept the footprint.** ~190 MB of dirty heap for fonts is anomalous against every
+  surveyed terminal.
 - **Lazy fallback-face opening instead of mapping (no `unsafe`).** The field's other technique: defer opening emoji/CJK
   until a glyph misses the primary. It still reads 183 MB onto the heap the first time an emoji appears; with mmap a
   held face costs ~16 KB resident, so laziness buys no memory once the file is mapped.
-- **Keep `fs::read` but switch to a returning allocator (jemalloc/mimalloc).** Hands the freed transient blocks back to
-  the OS but leaves the live kept faces on the heap: treats the malloc-retention symptom, not the heap-copying cause.
+- **Read onto the heap but switch to a returning allocator (jemalloc/mimalloc).** Hands the freed transient blocks back
+  to the OS but leaves the live kept faces on the heap: treats the malloc-retention symptom, not the heap-copying cause.
 
-Revisit if: an `unsafe` block outside these sites is ever proposed in `felis-shaping` (widen the relaxation
-deliberately, not silently); or a platform appears where mapping system fonts is unsafe in practice (fonts mutated in
-place, or no mmap support): fall back to `fs::read` there behind `cfg`.
+Revisit if a platform appears where mapping system fonts is unsafe in practice (fonts mutated in place, or no mmap
+support): read the bytes onto the heap there behind `cfg`.
 
 ## Atlas integration
 
@@ -333,14 +317,10 @@ sub-pixel axis would multiply every entry by the number of phases and buy positi
 every cell origin is already on a pixel boundary.
 
 The cell width rounds the primary face's unhinted `M` advance to the nearest pixel, the width kitty, alacritty and foot
-give on Linux and ghostty gives everywhere. kitty reaches it by another route: it ceils each ASCII advance
-([`freetype.c`](https://github.com/kovidgoyal/kitty/blob/master/kitty/freetype.c) `calc_cell_width`), but on Linux it
-reads that advance from FreeType after loading the glyph under the fontconfig hint style, and whenever fontconfig
-enables hinting (slight included) FreeType returns an advance already rounded to a whole pixel. DejaVu Sans Mono's `M`
-at 14 pt (18.67 px) advances 11.24 px unhinted; kitty receives 11.0 and its ceil leaves 11. On macOS kitty reads
-CoreText's unhinted advance instead, so its ceil acts on the fraction: Menlo's `M` at 14 pt advances 8.43 px, kitty
-sizes 9, and ghostty ([`Metrics.zig`](https://github.com/ghostty-org/ghostty/blob/main/src/font/Metrics.zig) `@round`)
-and alacritty (floor) size 8.
+give on Linux and ghostty gives everywhere. kitty reaches it by another route: it ceils each ASCII advance, but on Linux
+it reads that advance from FreeType under the fontconfig hint style, and whenever fontconfig enables hinting FreeType
+returns an advance already rounded to a whole pixel. On macOS kitty reads CoreText's unhinted advance instead, so its
+ceil acts on the fraction: Menlo's `M` at 14 pt advances 8.43 px, kitty sizes 9, and ghostty and alacritty size 8.
 
 Rounding lets ink cross the cell edge, and between cells that costs no ink. The renderer draws every cell background
 before any glyph, and each glyph quad at its bitmap size from its own bearing, never clipped to the cell box, so ink
@@ -349,9 +329,8 @@ glyph.
 
 How far it reaches depends on the raster. Unhinted, a glyph whose ink fills its advance crosses by the rounded-off
 fraction, under half a pixel, plus on macOS the fraction of a pixel CoreText's smoothing dilates it by. On Linux,
-vertical hinting keeps the overlap to the same one column of the next cell but darkens it (DejaVu Sans Mono's `W` at
-18.67 px in an 11 px cell puts up to 44% coverage there, against 16% unhinted). kitty on Linux hints the same way under
-the same fontconfig setting, and ghostty states the overlap as its trade.
+vertical hinting keeps the overlap to the same one column of the next cell but darkens it. kitty on Linux hints the same
+way under the same fontconfig setting, and ghostty states the overlap as its trade.
 
 Rejected:
 
@@ -364,23 +343,21 @@ Rejected:
 A glyph whose advance overruns the cells it is placed in (a `※` the CJK fallback face draws full-width in its one cell)
 rasterizes smaller and is centred in its block. The advance decides whether a glyph is fitted: an italic overhang or a
 hinted stem's extra column is ink past the advance on a glyph drawn for one cell, and fitting on the ink box, as kitty
-does ([`freetype.c`](https://github.com/kovidgoyal/kitty/blob/master/kitty/freetype.c) `render_bitmap`), would shrink
-ordinary text. The ink decides how far: a full-width face pads its ink with side bearings, and shrinking the whole
-advance into the cell leaves the glyph visibly smaller than in kitty or WezTerm. Centring trades the baseline for
-balance; nearly every fitted glyph is a symbol, CJK punctuation or an emoji, where a glyph shrunk toward the baseline
-sits low in its cell.
+does, would shrink ordinary text. The ink decides how far: a full-width face pads its ink with side bearings, and
+shrinking the whole advance into the cell leaves the glyph visibly smaller than in kitty or WezTerm. Centring trades the
+baseline for balance; nearly every fitted glyph is a symbol, CJK punctuation or an emoji, where a glyph shrunk toward
+the baseline sits low in its cell.
 
 Rejected: **clip to the cell box.** It keeps the neighbor clean but cuts the glyph, and it would also cut the rounding
 overlap above.
 
 Ascent and descent ceil **separately** rather than the cell height rounding their sum: that puts the baseline itself on
 a pixel boundary and gives each half whole rows, so a glyph reaching the full ascent keeps its top row. Rounding the sum
-leaves the baseline a fraction of a pixel high and clips that row. This is fcft's rule, which foot inherits
-([`fcft.c`](https://codeberg.org/dnkl/fcft) ceils each FreeType size metric), and it agrees with FreeType's own
-pixel-rounded size metrics (ascender CEIL, descender FLOOR). Rejected: kitty's extra step of rasterizing `_` and growing
-the cell when the bitmap escapes the box. It reaches the same height on the faces compared here, but only by putting
-glyph rasterization inside metric computation, and its result then varies with the hinting mode the rasterizer ran
-under.
+leaves the baseline a fraction of a pixel high and clips that row. This is fcft's rule, which foot inherits, and it
+agrees with FreeType's own pixel-rounded size metrics (ascender CEIL, descender FLOOR). Rejected: kitty's extra step of
+rasterizing `_` and growing the cell when the bitmap escapes the box. It reaches the same height on the faces compared
+here, but only by putting glyph rasterization inside metric computation, and its result then varies with the hinting
+mode the rasterizer ran under.
 
 No height rule matches every peer on both platforms. Menlo at 14 pt has a 3.30 px descent: ceiling it gives felis a 17
 px cell, where kitty, alacritty and ghostty size 16 (CoreText sets Menlo's lines 16 px apart, alacritty rounds each
@@ -399,12 +376,9 @@ integer form), which drifts out of proportion under zoom.
 ## Compositing a multi-codepoint cluster
 
 A grapheme that occupies one cell but spans several codepoints (a base letter plus stacked combining marks, an emoji ZWJ
-sequence such as 👨‍👩‍👧, a skin-tone modifier, or a base plus a variation selector) is segmented and stored intact (the cell
-holds a `Grapheme::Cluster` handle into the grid's cluster table) and the renderer composites the whole cluster. It is
-shaped as a unit and drawn as one `FgInstance` per output glyph, at default size or at an OSC 66 scale (see the
-sized-cluster note below). The daemon is unaffected: it stays font-blind and ships the cluster text as a
-`GridMsg::Cluster { id, text }` registry entry, the wire path segmentation already uses; compositing is entirely
-client-side.
+sequence such as 👨‍👩‍👧, a skin-tone modifier, or a base plus a variation selector) is stored intact in the grid's cluster
+table, and the renderer shapes it as a unit and draws one glyph instance per output glyph, at default size or at an OSC
+66 scale (see the sized-cluster note below). The daemon stays font-blind; compositing is entirely client-side.
 
 **Shape the whole cluster; let the font decide the glyph count.** The cluster text goes through harfrust and the
 renderer emits one instance per glyph the font's own tables produce. That count is not fixed per input: a base plus a

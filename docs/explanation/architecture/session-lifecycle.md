@@ -42,16 +42,15 @@ Folding exit into `Dead` is the alternative, and it loses the case users hit mos
 is closed is exactly what the grace keeps readable, and a model where exit _is_ death has no name for what is being
 kept. Orthogonality also states the reaper's condition in one line rather than as a qualified transition.
 
-Every state is owned by one per-session task in the daemon (`serve::session_task`): it holds the parser, grid, image
-stores, and PTY halves, and runs the PTY→grid pipeline continuously whether zero, one, or N clients subscribe.
-Connections never take ownership of a session; they register as subscribers over the task's command channel.
+Every state is owned by one per-session task in the daemon: it holds the parser, grid, image stores, and PTY halves, and
+runs the PTY→grid pipeline continuously whether zero, one, or N clients subscribe. Connections never take ownership of a
+session; they register as subscribers over the task's command channel.
 
 ## Creation
 
 A session is created one of two ways, and which one a caller picks is decided by whether it wants a window.
 `SessionToDaemonMsg::Create` creates _and_ attaches the requesting connection in one step; `OpsToDaemonMsg::Spawn`
-creates a session nobody attaches to, which is what a scripted caller wants and what the GUI never does. The message
-shapes, the argument record, and every refusal variant are in `crates/felis-protocol/proto/felis.proto`, and the
+creates a session nobody attaches to, which is what a scripted caller wants and what the GUI never does. The
 conversation is in [reference/ipc.md](../../reference/ipc.md) "Session (kind = 4)"; [ipc.md](ipc.md) "Creating a
 session" argues why the split runs this way. Session IDs are not human-named (see [non-goals.md](../non-goals.md) on
 user-namespaced session catalogs).
@@ -72,10 +71,9 @@ the burst width. The slot releases as the handle registers, under the same lock,
 
 ### Registering and subscribing are one transaction
 
-Registering the session and subscribing the creating connection are then one transaction. If the subscribe fails the
-daemon removes the pool entry, shuts the session down, and waits for the child to be reaped before writing the refusal.
-Otherwise a failed window launch leaves a live shell whose id nobody was ever told: unreachable, and still counted
-against the cap.
+Registering the session and subscribing the creating connection are then one transaction: if the subscribe fails, the
+daemon rolls the session back and reaps its child before writing the refusal ([ipc.md](ipc.md) "Creating a session"
+argues why).
 
 ### The refusal names which half refused
 
@@ -386,11 +384,9 @@ When the last subscriber leaves, the owner task:
 A live (still-running) shell is never reaped while detached: only the post-exit grace below ever ends a session on its
 own.
 
-Point 1's "parser keeps running" is literal: the parse rides the PTY **parse thread**, not the owner's async task
+Point 1's "parser keeps running" is literal: the parse rides the PTY parse thread, not the owner's async task
 ([pipeline.md](../rendering/pipeline.md) "Demand-driven emission" owns that topology), so it never stops because the
-last client left; what the owner task stops doing is composing and shipping wire diffs. Point 2 therefore needs no
-separate drain loop: the grid is already current, and the owner only replays the queued grid effects (query responses,
-graphics) on the sink's dirty signal.
+last client left, and the grid needs no separate drain loop.
 
 The parked pace lives in the sink instead: with zero subscribers it runs a token-bucket pacer (~10 MiB/s sustained after
 a 1 MiB burst). Because the pacer _sleeps in the sink_, a slow window stops the reader thread, the bounded PTY read
@@ -403,10 +399,9 @@ plus the capped scrollback regardless of throughput.
 There is no idle timer on a live shell: a running session, attached or detached, is preserved indefinitely. The only
 automatic transition to **Dead** is the post-exit grace.
 
-Each session's owner task polls its own child on the parked tick. Once the shell has _exited_ and the session has been
-idle (zero subscribers) past the post-exit grace (default 5 s, measured from the last detach), the task removes itself
-from the pool and the session transitions to **Dead**. A session with a running shell (or any subscriber) is left
-untouched.
+Once the shell has _exited_ and the session has been idle (zero subscribers) past the post-exit grace (default 5 s,
+measured from the last detach), the session leaves the pool and transitions to **Dead**. A session with a running shell
+(or any subscriber) is left untouched.
 
 The grace exists so that "I closed the window by accident" is recoverable for the brief window after a shell exits; it
 is restamped whenever the subscriber count drops to zero.
@@ -500,9 +495,8 @@ The ladder records one deadline, 30 seconds from the moment it actually starts: 
 a bare-close transient end, or a reconnect verdict of `SessionGone`, and, when the exit arrived while a user-initiated
 landing was still in flight, only once that landing settles and fails. Rung 1 and every trail entry are wrapped
 connect-to-attach in whatever is left of that budget; a timeout consumes the entry like a refusal, and once the deadline
-passes the remaining trail entries are skipped. The ring rung sits outside that budget: its one guarded attempt gets a
-full `RECONNECT_ATTEMPT_TIMEOUT` of its own, so the ladder's own attempts end within the deadline plus one attempt
-timeout of starting.
+passes the remaining trail entries are skipped. The ring rung sits outside that budget with one bounded attempt of its
+own, so the ladder ends within the deadline plus one attempt timeout of starting.
 
 A create-form parked retarget (`felis window retarget … -- <cmd>`) bounds only its connect step even at rung 1:
 cancelling after the create request went out could orphan a session the target daemon already made, so the
@@ -520,11 +514,10 @@ cannot exit again, so no `SessionExited` would ever push the window off it, and 
 window and corpse keep each other alive indefinitely (two fast `felis -- cmd` runs against one daemon are enough to park
 the second window on the first one's ended session).
 
-Two mechanisms hold that line, because neither is sufficient alone. The roster carries the exit fact
-(`SessionInfo::exited`, stamped from the owner task's PTY-EOF / reap-poll observations) and a chord's pick skips flagged
-entries; and because the roster is only a snapshot, the landing itself goes out live-only, so a session that exits after
-the listing refuses the attach rather than accepting a subscriber it can never release ("Picking the session a chord
-lands on").
+Two mechanisms hold that line, because neither is sufficient alone. The roster carries the exit fact and a chord's pick
+skips flagged entries; and because the roster is only a snapshot, the landing itself goes out live-only, so a session
+that exits after the listing refuses the attach rather than accepting a subscriber it can never release ("Picking the
+session a chord lands on").
 
 A _deliberate_ switch or `felis attach` sends neither the skip nor the refusal and may still land on a corpse: viewing
 the final screen is what the grace is for. Pushing `SessionExited` to a late attacher instead is rejected: it would
@@ -537,11 +530,11 @@ daemon's death and a superseded switch share that wire shape. So the window does
 shadow it last applied on screen, appends a disconnected marker to its title, stops the cursor blink (a blinking caret
 would read as a shell waiting for input), and re-dials _the same carrier and the same session_.
 
-The re-dial is a fixed number of backed-off attempts (`RetryPolicy::WINDOW_RECONNECT`, sized so each attempt can spawn a
-fresh `ssh` without hammering the host), and each attempt is itself bounded (`RECONNECT_ATTEMPT_TIMEOUT`), so the ladder
-ends within the bound [cli.md](../../reference/cli.md#window-launches) "Window launches" states even against a route
-that accepts the connection and then answers nothing. Nothing below that bound would ever return: an `ssh` child on a
-half-open path can wait as long as the kernel lets it.
+The re-dial is a fixed number of backed-off attempts, sized so each attempt can spawn a fresh `ssh` without hammering
+the host, and each attempt is itself bounded, so the ladder ends within the bound
+[cli.md](../../reference/cli.md#window-launches) "Window launches" states even against a route that accepts the
+connection and then answers nothing. Nothing below that bound would ever return: an `ssh` child on a half-open path can
+wait as long as the kernel lets it.
 
 The re-attach goes out live-only, so a session that ended while the transport was down refuses rather than parking the
 window on a corpse. The indicator and the stopped blink are client-local presentation (principle 3); no daemon message
@@ -659,19 +652,18 @@ Four properties make the fresh fetch well-defined.
 
 #### Ring order is creation order
 
-Each session carries a daemon-assigned creation sequence (`SessionInfo::sequence`): monotonic over the daemon's
-lifetime, stamped once at creation and never reassigned, so an attach does not move a session and a reap leaves a gap
-rather than handing its place to the next creation. The ring is that order, which makes `next` and `previous` inverses
-whatever the pool did between two chords.
+Each session carries a daemon-assigned creation sequence: monotonic over the daemon's lifetime, stamped once at creation
+and never reassigned, so an attach does not move a session and a reap leaves a gap rather than handing its place to the
+next creation. The ring is that order, which makes `next` and `previous` inverses whatever the pool did between two
+chords.
 
 The two orders already on hand cannot make them inverses: session ids are random `u128`s, so a ring keyed on them
 reshuffles every time a session is created, and the daemon's recency listing reorders itself every time one is parked.
 
-`OpsToClientMsg::Listed` keeps that recency order (it is what `felis sessions list` prints) and the client sorts by
-sequence itself, so neither consumer has to accept the other's order. Every row carries a sequence, since a `0` (which
-is what an omitted field writes) is refused at decode, so the ring has one order and never a fallback; the id is the
-second key only so the order is total by construction rather than by the daemon's promise never to repeat a sequence,
-because a total order is what leaves `next` and `previous` an answer at all.
+The roster keeps that recency order (it is what `felis sessions list` prints) and the client sorts by sequence itself,
+so neither consumer has to accept the other's order. Every row carries a sequence (a `0`, which is what an omitted field
+writes, is refused at decode), so the ring has one order and never a fallback; the id is the second key only so the
+order is total by construction rather than by the daemon's promise never to repeat a sequence.
 
 #### The anchor is a value, not a position
 
@@ -683,16 +675,15 @@ relative to the value returns the neighbor adjacent to the reaped session.
 
 #### Automatic landings refuse a corpse
 
-Skipping `SessionInfo::exited` rows in the roster is necessary but cannot close the race by itself: the roster is a
-snapshot, and a session that exits after it would be attached silently. That window is not merely cosmetic: the late
-attacher never receives `PushMsg::SessionExited`, so nothing ever pushes it off, and its subscription blocks the
-corpse's reap indefinitely.
+Skipping exited rows in the roster is necessary but cannot close the race by itself: the roster is a snapshot, and a
+session that exits after it would be attached silently. That window is not merely cosmetic: the late attacher never
+receives `PushMsg::SessionExited`, so nothing ever pushes it off, and its subscription blocks the corpse's reap
+indefinitely.
 
 So every system-selected landing sends the live-only form of `SessionToDaemonMsg::Attach`, which the session task
-answers against its own view of the exit and refuses with `AttachFailure::SessionExited`. That covers the directional
-chords, every rung of the exit ladder (each trail entry, the transient return, and the ring pick), where a plain attach
-would re-open the same race whenever a trail entry's session exits between two ladder attempts, and the reconnect
-ladder's re-attach after transport loss.
+answers against its own view of the exit. That covers the directional chords, every rung of the exit ladder (each trail
+entry, the transient return, and the ring pick), where a plain attach would re-open the same race whenever a trail
+entry's session exits between two ladder attempts, and the reconnect ladder's re-attach after transport loss.
 
 A landing the _user_ named sends the plain attach and may land on a corpse: reading a just-exited session's final screen
 is what the grace is for. That covers a retarget or reattach the exit ladder runs ahead of its own rungs too: the intent
@@ -766,9 +757,9 @@ reach for the carrier-less retarget to park remote work, ctrl-D to finish it.
 ## Same-user mirroring
 
 Attach is **additive**, not exclusive: the subscriber model described throughout this document. A session is owned by an
-always-running owner task (`serve::session_task`, which fans grid state out to whatever subscribers exist: zero, one, or
-many), and `SessionToDaemonMsg::Attach` _subscribes_ a client, registering it for a per-subscriber rehydration burst
-plus per-subscriber diff fan-out at that client's own pull cadence (see [pipeline.md](../rendering/pipeline.md) "Frame
+always-running owner task, which fans grid state out to whatever subscribers exist (zero, one, or many), and
+`SessionToDaemonMsg::Attach` _subscribes_ a client, registering it for a per-subscriber rehydration burst plus
+per-subscriber diff fan-out at that client's own pull cadence (see [pipeline.md](../rendering/pipeline.md) "Frame
 pacing"), rather than removing the session from the pool to own it. Input from every subscriber fans into the single PTY
 writer, interleaving at PTY granularity: two people typing at one keyboard. (Interleaved input from concurrent typists
 can garble a command line; that is inherent to shared-shell semantics, true of tmux and screen too, and accepted.)
@@ -900,21 +891,18 @@ path.
 The bound is derived rather than picked. Holding what one session keeps held (ring plus that one viewport) under 512
 MiB, with the 16-byte cell ([grid-and-cells.md](../data-model/grid-and-cells.md) "Style interning") and the 10 000-row
 default scrollback REQ-605 fixes, makes 2048 × 2048 the largest power-of-two square that fits: 440.5 MiB of the 512,
-against 1137 MiB for the next square up. `felis-grid`'s `the_geometry_bounds_fit_the_held_cell_budget` is the
-derivation, run against the real `size_of::<Cell>()` and against the buffers a grid actually holds through a screen
-switch rather than against a number quoted here, and it asserts the doubled geometry does _not_ fit, so the maximum
-reads as the largest that fits and not as a round number someone liked.
+against 1137 MiB for the next square up. A `felis-grid` test pins the derivation against the real cell size and the
+buffers a grid holds through a screen switch, and asserts the doubled geometry does _not_ fit.
 
 2048 columns is roughly an 8K display at a 4-pixel cell: the bound excludes bugs, not windows. The floor is 1, which is
 what `Grid` already clamps to; a higher one would refuse a legitimately tiny window and force the daemon to invent a
 geometry the client is not showing.
 
 The budget is on that steady state, and deliberately not on a reflow's peak. Re-wrapping the primary at a new width is
-copy-based: `reflow` materializes the combined scrollback-plus-live surface, then the rewrapped result, and
-`install_ring` lays the replacement ring while the existing ring is still alive: several times the ring's own footprint,
-briefly, all of it freed before the resize returns. Pricing that multiple into the _admission_ bound would drag the
-maxima down to 512 × 512, which is inside the range real windows reach (a maximized 8K window at an 8-pixel cell is 960
-columns), and the bound would start refusing windows instead of bugs.
+copy-based and holds several times the ring's own footprint briefly, all of it freed before the resize returns. Pricing
+that multiple into the _admission_ bound would drag the maxima down to 512 × 512, which is inside the range real windows
+reach (a maximized 8K window at an 8-pixel cell is 960 columns), and the bound would start refusing windows instead of
+bugs.
 
 It would also mis-aim: the transient is proportional to the content a session has already accumulated, not to what a
 request may ask for, and admission's job is to stop a cheap request from buying an expensive reservation. A session that
@@ -934,10 +922,10 @@ The two paths answer differently on purpose:
   with it. Clamping degrades the view; refusing destroys the session.
 
 Normalization happens **once, at admission**, and the clamped tuple is the only geometry the daemon then holds: the PTY
-size (its unknown pixel axes filled, below), the grid, the subscriber's remembered `desired_size` (so a later promotion
-replays the clamped size, not the raw request), the roster row, and the `GridMsg::Size` every mirror reads. The raw
-request is not observable anywhere afterward. The alternative (store the request, clamp at each use) is how a mirror
-ends up rendering one geometry while the PTY runs another.
+size (its unknown pixel axes filled, below), the grid, the subscriber's remembered size (so a later promotion replays
+the clamped size, not the raw request), the roster row, and the `GridMsg::Size` every mirror reads. The raw request is
+not observable anywhere afterward. The alternative (store the request, clamp at each use) is how a mirror ends up
+rendering one geometry while the PTY runs another.
 
 Zero survives on the pixel axes alone. Pixel `0` means "unknown" (the TIOCGWINSZ convention) on both paths and is never
 raised to the pixel minimum, because fabricating a window size for a producer that reported none is worse than reporting
@@ -974,8 +962,8 @@ output is unbounded and cut ([reference/ipc.md](../../reference/ipc.md) "Backpre
 What parks is the connection's reading loop, never the owner task: the reservation is acquired on the connection before
 the bytes enter the session's command channel, so a stuck child leaves the task free to keep composing diffs for every
 mirror. That ordering is the whole design. Reserving inside the task instead (the shape a bounded PTY writer invites,
-since `write_pty` is called from the task's own select loop) would reintroduce exactly the freeze the eviction rule
-above exists to prevent.
+since the PTY write runs in the task's own loop) would reintroduce exactly the freeze the eviction rule above exists to
+prevent.
 
 A parked reading loop still watches for its peer hanging up. Watching only the reservation leaks: the wait ends when the
 child drains, a wedged child never does, and until then a peer that is already gone keeps its connection permit and its
@@ -996,7 +984,7 @@ reservation like a keystroke (the widest form the encoders produce, since the ac
 admission). Dropping one would deliver a press whose release never lands, and a TUI left in a drag that no further input
 clears is exactly the "lost keystroke the user cannot tell about" this rule refuses.
 
-Fusing the two gauges is rejected too, because a reservation is held until `write_all` returns: a single large paste
+Fusing the two gauges is rejected too, because a reservation is held until the PTY write completes: a single large paste
 would fill one shared gauge for the length of its own delivery and silence every query answer the session owed a child
 that was reading perfectly well, turning a `CSI 6 n` into a hang. It also makes the exception's premise false, since a
 child merely behind a paste is still reading.

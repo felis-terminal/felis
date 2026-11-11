@@ -40,8 +40,8 @@ The entry's numeric and size limits are its readers' decision, not felis's: macO
 the 32-bit terminfo format and refuses an oversized entry, so the pin and the ceiling
 ([the reference twin](../../reference/terminal-identity.md) carries the values) say what that reader can parse. Either
 violation is total and silent: every `/usr/bin` tput, vim, less and top inside felis reports an unknown terminal while
-Nix-built programs work, so the symptom can be as small as an empty `tput lines` in a benchmark harness. Because the
-limits are invisible in the source, [the Nix build](../../../nix/compile-terminfo.sh) asserts both.
+Nix-built programs work. Because the limits are invisible in the source,
+[the Nix build](../../../nix/compile-terminfo.sh) asserts both.
 
 Three alternatives are rejected:
 
@@ -150,7 +150,6 @@ feature detection; those checks want a value that is stable across the many rebu
 between machines, which a per-build hash breaks. Leaking the hash there would also enlarge the fingerprint a program can
 key on, against the honest-but-minimal identity this doc argues for elsewhere.
 
-This is why the compatibility handshake is unaffected: the gate is the frozen preface's protocol major and minor
-([ipc.md](../../reference/ipc.md) "Versioning"), never a version string, so embedding a churning hash in `--version`
-costs nothing there. The daemon does put its build identity on the wire, in `Welcome.identity`, and no peer gates on
-that either ([ipc.md](ipc.md) "Schema evolution: major, minor, feature flag").
+The compatibility handshake is unaffected: the gate is the frozen preface's protocol major and minor
+([ipc.md](../../reference/ipc.md) "Versioning"), never a version string, and the build identity the daemon puts on the
+wire gates nothing either ([ipc.md](ipc.md) "Schema evolution: major, minor, feature flag").

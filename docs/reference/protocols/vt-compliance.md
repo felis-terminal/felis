@@ -7,10 +7,9 @@ sidebar:
 The behavioral semantics of the supported VT/ANSI escape sequences, and the exact reply payloads of the reporting
 queries.
 
-Normative support status is cataloged in the [protocol support matrix](support-matrix.md#vt--ansi). A sequence listed as
-supported that is not mentioned here behaves according to XTerm Control Sequences (`ctlseqs`) without felis-specific
-caveats. Design rationale, target compatibility baselines, and omissions are documented in the companion explanation
-document [vt-compliance.md](../../explanation/protocols/vt-compliance.md).
+Support status is in the [protocol support matrix](support-matrix.md#vt--ansi). A sequence listed as supported that is
+not mentioned here behaves according to XTerm Control Sequences (`ctlseqs`) without felis-specific caveats. The target
+tool set and the conscious omissions are argued in [vt-compliance.md](../../explanation/protocols/vt-compliance.md).
 
 ## Cursor and screen
 
@@ -81,8 +80,8 @@ document [vt-compliance.md](../../explanation/protocols/vt-compliance.md).
 - Mode save / restore: xterm's `CSI ? Ps s` saves the current state of each named DEC private mode and `CSI ? Ps r`
   restores it, replaying the mode's full side effects as a DECSET / DECRST would. A mode that was never saved restores
   to nothing; a saved mode felis does not implement restores its soft-tracked flag.
-- Application-cursor / -keypad mode: DECCKM (`?1`), DECKPAM (`ESC =`), DECKPNM (`ESC >`). State is mirrored to the
-  client over IPC so the keyboard encoder consults it at keystroke time.
+- Application-cursor / -keypad mode: DECCKM (`?1`), DECKPAM (`ESC =`), DECKPNM (`ESC >`); the keyboard encoder reads
+  them at keystroke time.
 - Soft reset: DECSTR (`CSI ! p`). Restores scroll region, autowrap, origin mode, IRM, mouse / focus / paste flags, tab
   stops, and pen while leaving cells alone.
 
@@ -120,8 +119,7 @@ The rectangle checksum query, DECRQCRA, shares this bounds model; its reply is s
 
 ## Text attributes
 
-- Blink (SGR 5 / 6) is parsed and tracked, with fast blink folded to the single slow flag, but never rendered:
-  accessibility.
+- Blink (SGR 5 / 6) is parsed and tracked, with fast blink folded to the single slow flag, but never rendered.
 - 256-color and 24-bit truecolor (SGR 38 / 48) parse both the legacy semicolon forms (`38;2;r;g;b`, `38;5;n`) and the
   ITU colon sub-parameter forms. In the colon form the optional colorspace-id slot after the `2` is honored:
   `38:2::r:g:b` skips the empty slot rather than reading it as the red channel.
@@ -166,10 +164,8 @@ The rectangle checksum query, DECRQCRA, shares this bounds model; its reply is s
   wrote. A query whose selector has a character outside xterm's `cpqs0-7` gets no reply.
 - `OSC 22`: mouse pointer shape (a CSS cursor keyword; the kitty form), including the stack: `> name` pushes and makes
   the shape live, `<` pops back to the pushed shape (a pop on an empty stack resets to the default arrow). A
-  comma-separated fallback list takes its first well-formed keyword: the daemon cannot know which shapes the client's
-  `winit` build recognizes, so "first the terminal knows" degrades to "first well-formed", and the client maps an
-  unknown-but-valid keyword to the arrow. The stack is daemon-side bookkeeping: only the live top ships, so there is no
-  wire change.
+  comma-separated fallback list takes its first well-formed keyword, not the first the window can draw, and a
+  well-formed keyword the window does not know draws the arrow.
 - `OSC 133`: semantic prompt markers (A / B / C / D), used by jump-to-prompt features in shells; felis stores them on
   the grid for client use. A `C` / `D` pair also delimits the output a window announces to a screen reader
   ([accessibility.md](../accessibility.md#announcements)). Marks sent on the primary screen also drive a resize: once a
@@ -223,8 +219,7 @@ The rectangle checksum query, DECRQCRA, shares this bounds model; its reply is s
   (the `TERM` the session's program was spawned with, `xterm-felis` unless `FELIS_TERM` or the spawn request names
   another; see [terminal-identity.md](../terminal-identity.md)), and `co` / `cols` and `li` / `lines`, which report the
   live grid dimensions rather than a hardcoded `80` / `24`. Any other cap is answered as unknown (`DCS 0 + r`), and a
-  name that is not valid hex is answered empty in its position. The `;`-joined query body is bounded at 512 bytes so a
-  multi-cap request is not truncated into an unanswerable form.
+  name that is not valid hex is answered empty in its position. The query body is bounded as [Limits](#limits) states.
 - DSR (`CSI 5 n`, `CSI 6 n`): replies `CSI 0 n` (status OK) and `CSI <row> ; <col> R` (cursor position, 1-based and
   respecting DECOM).
 - Private DSR (`CSI ? Ps n`): felis has no printer, no user-defined keys, no locator and no macro store, so each reply

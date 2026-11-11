@@ -167,11 +167,10 @@ with, which buys a validator, a warning class, and a documented failure row for 
 spelling of `file` or an unwritable-in-TOML null. A command sink is an argv vector, never a shell string: no `sh -c`
 eval lives in the action surface (principle 1); a user who wants a pipeline points the binding at their own script.
 
-The `selection` source is client-owned (the daemon grid has no selection), so the **client** serializes it, via
-`felis_grid::Selection::extract_text` over the same `logical_line_spans` soft-wrap rule the daemon encoders use
-([scrollback](data-model/scrollback.md) "Selection source: client-side serialization"), and feeds those bytes straight
-to the sink instead of asking for a region (`RegionToDaemonMsg::Request`): the selection is presentation the client owns
-(principle 3), so the client is the only side that can read it.
+The `selection` source is client-owned (the daemon grid has no selection), so the **client** serializes it, under the
+same soft-wrap rule the daemon encoders use ([scrollback](data-model/scrollback.md) "Selection source: client-side
+serialization"), and feeds those bytes straight to the sink instead of asking for a region: the selection is
+presentation the client owns (principle 3), so the client is the only side that can read it.
 
 The `osc_52` source is client-owned too: it is the last `OSC 52` clipboard write the daemon routed to this window, held
 by the client, not the session cache that answers `OSC 52 ; c ; ?`. Reading that cache instead would let one window's
@@ -423,11 +422,10 @@ The gesture inventory is in [keybindings](../reference/keybindings.md) § "Mouse
 which buttons are forwarded, are in [key-encoding](../reference/protocols/key-encoding.md). What follows is why the
 gestures are drawn that way.
 
-- Notch-wheel scrollback scrolling scales by `[mouse] scroll_multiplier`. Linux delivers a wheel notch as
-  `LineDelta(0, ±1)` with no OS scroll acceleration (winit Wayland `axis_discrete` / X11 core buttons 4/5), so the bare
-  one-notch-one-row mapping crawls; the multiplier restores a usable feel. Touchpad pixel-deltas are already
-  velocity-scaled and ignore it, and so does everything that is not a scrollback row: Shift+wheel half-pages, alt-screen
-  arrow translation, and mouse-protocol button events stay one-event-per-notch.
+- Notch-wheel scrollback scrolling scales by `[mouse] scroll_multiplier`. Linux delivers a wheel notch as one line with
+  no OS scroll acceleration, so the bare one-notch-one-row mapping crawls; the multiplier restores a usable feel.
+  Touchpad pixel-deltas are already velocity-scaled and ignore it, and so does everything that is not a scrollback row:
+  Shift+wheel half-pages, alt-screen arrow translation, and mouse-protocol button events stay one-event-per-notch.
 - The zoom-vs-scroll choice is _latched_ at the start of each wheel stream (a finger gesture plus the trackpad inertia
   it spawns) and held for the whole stream, so a Ctrl press landing during leftover momentum cannot reclassify an
   in-flight scroll as a zoom. Rationale: macOS delivers inertia as ordinary wheel events and winit 0.30 collapses the
@@ -567,8 +565,7 @@ The three bars share one row and cannot stack, so an order decides which one pai
 and confirm outrank the preview: both are the user's own deliberate action (typing a query, answering a prompt), while a
 hover is incidental to moving the pointer and can arrive under either. Search and confirm can both be live (a chord arms
 a confirmation before the search bar sees the keystroke), so the question outranks the search bar too, and a search that
-loses the row keeps only its hit highlights. Two bars in one row would not stack: every foreground quad draws after
-every background one, so their glyphs would interleave instead of one hiding the other.
+loses the row keeps only its hit highlights.
 
 An active IME composition outranks it for the same reason. The preedit panel is drawn in place at the cursor, so it
 collides with the preview only when the cursor sits on the bottom row. There every foreground quad is emitted after

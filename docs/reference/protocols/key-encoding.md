@@ -40,9 +40,9 @@ session until a program pushes flags. It encodes:
   Backspace, Escape and Space, `ESC` and the byte the key sends without Alt. Non-ASCII text goes out without the prefix,
   Shift+Tab stays `CSI Z`, and Super held with Alt drops the prefix.
 
-The mode is driven by the running program, not by config. felis mirrors the flags on a per-session stack, 32 entries
-deep; a push against a full stack evicts the bottom entry. The active flag set is the top of the stack, and the empty
-stack of a fresh session resolves to no flags, which is what makes legacy the starting mode.
+The mode is driven by the running program, not by config. felis mirrors the flags on a per-session stack (depth in
+[Limits](#limits)). The active flag set is the top of the stack, and the empty stack of a fresh session resolves to no
+flags, which is what makes legacy the starting mode.
 
 | Sequence          | Effect                                                                                                 |
 | ----------------- | ------------------------------------------------------------------------------------------------------ |
@@ -121,8 +121,8 @@ CSI Vk ; Sc ; Uc ; Kd ; Cs ; Rc _
 
 A key with neither a `Vk` nor a `Uc` (a bare modifier or dead key) emits nothing. The mode is a per-session flag driven
 by the running program, and the daemon encodes keys against it like the other keyboard modes, so a client on any OS
-attached to a Windows daemon sends win32-input records. Design rationale and the `Sc` / `ENHANCED_KEY` limitation are
-documented in [input.md](../../explanation/input.md).
+attached to a Windows daemon sends win32-input records. The `Sc` / `ENHANCED_KEY` limitation is argued in
+[input.md](../../explanation/input.md).
 
 ## Modifier convention
 

@@ -10,9 +10,6 @@ definitions, and published results are in the reference twin, [benchmarks.md](..
 benchmarks and the regression gate are in [reference/testing.md](../reference/testing.md#performance-benchmarks) and
 [explanation/testing.md](testing.md).
 
-The page groups the harness decisions by the question each answers: what kind of tool the harness is, which workloads
-and instruments it borrows, which legs it lets into a report, and what a bar is allowed to claim.
-
 ## What the harness is
 
 The harness is written in **Python, not shell**, for the reason the in-tree bench drivers are
@@ -95,11 +92,10 @@ between-terminal gap the chart is asked to resolve. Flipping that pixel directly
 calibration and is rejected too: it measures the capture half alone, so it could pass while injection jitter dominates
 the terminal bars.
 
-Both halves clear the gate on a display-paced output (injection p50 0.12 ms, capture p95 − p5 1.34 ms over 300
-injections). The same calibration on the same host without a display reads p95 − p5 41 ms, which is the nested output's
-fallback redraw rather than the instrument, because a screencopy frame arrives when the compositor next composites and a
-nested compositor has no display pacing it. That is the one bound the Linux bars carry beyond the shared one, and the
-chart states it.
+Both halves clear the gate on a display-paced output. The same calibration on the same host without a display reads p95
+− p5 41 ms, which is the nested output's fallback redraw rather than the instrument, because a screencopy frame arrives
+when the compositor next composites and a nested compositor has no display pacing it. That is the one bound the Linux
+bars carry beyond the shared one, and the chart states it.
 
 #### The timing loop follows upstream, with two Wayland exceptions
 

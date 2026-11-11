@@ -21,16 +21,13 @@ occupancy watermark of the row now recycled at the viewport bottom: no cells mov
 watermark drop _is_ the eviction of the oldest row (the window has wrapped fully around). Why one ring rather than a
 separate history store is recorded in ["Unified viewport-into-history ring"](#unified-viewport-into-history-ring) below.
 
-Each row stays contiguous, so the print fast path keeps its hoisted per-row-chunk loop and pays only the ring resolution
-on the row base. The live window is contiguous in ring space (a monotone `base`, no permutation); a sub-region scroll
-(DECSTBM, IL/DL), which cannot be a whole-window shift, rotates a _scroll band_ over the region instead of moving rows:
-an O(1) counter bump, recorded in ["Interior scroll band"](#interior-scroll-band) below. Resize / reflow re-lay the ring
-out canonically. One eviction copy remains: a scroll region anchored at the top but not covering the full screen
-(`DECSTBM` with `top = 0`, `bottom < rows - 1`) pushes to scrollback but cannot be a pure base bump, because rows below
-the region must stay; that cold path evicts its top rows through the full-screen path and then shifts the rows below the
-band back down, the same occupancy-clipped move. Because history and the live screen are one surface, the scrollback /
-live seam that `search`, `reflow`, the pipe sources, and the viewport composition read is a plain window read, not a
-join of two stores.
+Each row stays contiguous, so the print fast path pays only the ring resolution on the row base. A sub-region scroll
+(DECSTBM, IL/DL), which cannot be a whole-window shift, rotates a _scroll band_ over the region instead of moving rows
+(["Interior scroll band"](#interior-scroll-band) below). One eviction copy remains: a scroll region anchored at the top
+but short of the bottom pushes to scrollback yet cannot be a pure base bump, because the rows below it must stay, so
+that cold path shifts them back down after the push. Because history and the live screen are one surface, the scrollback
+/ live seam that search, reflow, the pipe sources, and the viewport composition read is a plain window read, not a join
+of two stores.
 
 The physical buffer grows lazily: it starts at the live `rows` and doubles toward `rows + cap` only as history fills,
 re-laying the ring out canonically on each growth (amortized O(1) per push). This is a requirement, not an optimization.
@@ -47,14 +44,13 @@ its Linux twin) is rejected: it undoes, per platform, an allocation the ring nev
 freed ring-sized block raises the mmap threshold so that later rings are never returned at all. With the capacity
 reserved, a growth is an in-place rotation rather than a copy.
 
-Readers go through a borrowing `ScrollbackView` (`Grid::scrollback()`), which clips each history row at its occupancy
-watermark ([grid-and-cells.md "Occupancy watermark"](grid-and-cells.md#occupancy-watermark)): a history row is a former
-viewport row left in place, so its tail past the watermark holds undefined bytes from the zero-copy recycle. Every
-consumer already trims trailing blanks: the daemon copy / pipe sources, seam search, and reflow, which re-pads history
-rows to full width locally so a bare-LF column carry still reconstructs. On the alternate screen `cap = 0` and the live
-ring is a bare viewport; a scrollback read routes into the saved primary buffer rather than the live (alt) fields, and
-the `SavedScreen` snapshot carries `base`, `phys_cap`, `history_len`, and `cap` across the toggle, plus the `rows` and
-`cols` they are relative to, which a resize under the alt screen moves the live grid past ("Reflow on resize", D4).
+Readers go through a borrowing scrollback view, which clips each history row at its occupancy watermark
+([grid-and-cells.md "Occupancy watermark"](grid-and-cells.md#occupancy-watermark)): a history row is a former viewport
+row left in place, so its tail past the watermark holds undefined bytes from the zero-copy recycle. Reflow re-pads
+history rows to full width locally so a bare-LF column carry still reconstructs. On the alternate screen `cap = 0` and
+the live ring is a bare viewport; a scrollback read routes into the saved primary buffer, whose snapshot keeps its own
+ring geometry and the `rows` and `cols` it is relative to, since a resize under the alt screen moves the live grid past
+them (D4 below).
 
 ## Idle compaction
 
@@ -103,17 +99,15 @@ all.
 The bit records how content **arrived**: it is set when a deferred or wide-glyph autowrap completes, cleared when the
 row is wholesale blanked, and deliberately untouched by partial overwrites; it is not a re-derivation of what the row
 currently holds. Four consumers read it: search stitches logical lines back together (below), `?45` reverse-wraparound
-retraces wrapped lines (`Grid::step_cursor_back`), triple-click logical-line selection on the client, and reflow
-stitches each soft-wrapped line before re-wrapping it at a new width (`Grid::reflow`, "Reflow on resize" below). The bit
-rides the `RowDelta` row codec (a header flag bit, normatively [row-codec.md](../../reference/row-codec.md)) on every
-row-carrying path, and the shadow screen mirrors it on apply.
+retraces wrapped lines, triple-click logical-line selection on the client, and reflow stitches each soft-wrapped line
+before re-wrapping it at a new width ("Reflow on resize" below). The bit rides the `RowDelta` row codec (a header flag
+bit, normatively [row-codec.md](../../reference/row-codec.md)) on every row-carrying path, and the shadow screen mirrors
+it on apply.
 
-Stitching itself is one rule in one function. `felis_grid::logical_line_spans` joins rows tied by the bit into the
-logical line the program printed, with no newline across the wrap edge, and walks scrollback and the live rows as one
-sequence, so the stitch crosses the scrollback / live seam. Every text-reconstructing consumer routes through it
-(`search`, `capture` in text mode, the `pipe` encoders, and the client's `Selection::extract_text`), so a wrapped URL or
-path reconstructs identically everywhere; the per-consumer sections below state only what each does with the stitched
-line.
+Stitching itself is one rule in one function (`felis_grid::logical_line_spans`): it joins rows tied by the bit into the
+logical line the program printed, with no newline across the wrap edge, across the scrollback / live seam. Every
+text-reconstructing consumer routes through it (search, text-mode capture, the `pipe` encoders, and client-side
+selection), so a wrapped URL or path reconstructs identically everywhere.
 
 ## Search
 
@@ -144,11 +138,10 @@ history that grows at its newest end, and a program repaints live rows at will.
   saved primary. The scrollback half still matches while a program holds the alt screen. The `visible` source is a
   separate walk over the live rows alone: it reads the alt screen because it stitches nothing into history, and its rows
   stitch among themselves by bits that do describe them.
-- **Trailing-blank trim** on the logical line's tail: a needle of `"hi"` does not surprise the user by matching `"hi"`
-  followed by 78 cells of `Empty` (which would, post-decode, look like `"hi" + 78 spaces` and be invisible). Leading and
-  interior blanks are preserved; rows that wrap into the next drop only their trailing `Empty` cells (the unfillable
-  slot a wide-glyph wrap leaves). This is an exact rule, not a heuristic, since printed spaces decode as `Ascii(' ')`
-  and survive.
+- **Trailing-blank trim** on the logical line's tail, so a needle ending in spaces does not match the invisible blank
+  cells after the text. Leading and interior blanks are preserved; rows that wrap into the next drop only their trailing
+  `Empty` cells (the unfillable slot a wide-glyph wrap leaves). This is an exact rule, not a heuristic, since printed
+  spaces are cells of their own and survive.
 
 ## Capture
 
@@ -183,11 +176,10 @@ capture would show, since an index that changed meaning under a flag would make 
 lie. The cut happens daemon-side for every source, because the point of a tail is to not ship rows the client would
 drop. A logical line the cut bisects prints only its surviving rows, which is honest for a tail view.
 
-**Rejected: a viewport-walking client** that drives `InputMsg::Viewport` upward in grid-height steps and stitches each
-recomposed window. The viewport path is built for an interactive GUI under pull pacing: the daemon _withholds_ row diffs
-while the viewport is non-zero and only flushes on snap-back (a frozen-view policy matching kitty/wezterm), so a
-headless CLI client would have to fake the pull cadence and de-overlap window seams. A single synchronous daemon walk is
-simpler and round-trip-free.
+**Rejected: a viewport-walking client** that scrolls the viewport upward in grid-height steps and stitches each
+recomposed window. The viewport path is built for an interactive GUI under pull pacing, with row diffs withheld while
+the view is scrolled back, so a headless client would have to fake the pull cadence and de-overlap window seams. A
+single daemon walk is simpler and round-trip-free.
 
 ## Piping to an external command
 
@@ -200,23 +192,19 @@ buffer contributes is the region and its encoding.
 
 ### Encoding: plain by default, `ansi` for color
 
-The `ansi` flag on the request picks the per-row encoder. Default (`ansi = false`) is plain text via
-`felis_grid::row_text_trim`; `ansi = true` reconstructs color via `felis_grid::row_ansi`, which walks the row's cells
-emitting CSI SGR sequences on attribute change and a trailing `SGR 0` per line, so color survives into `less -R` /
-`bat`.
+The `ansi` flag on the request picks the per-row encoder: plain text by default, or SGR sequences on each attribute
+change with a trailing `SGR 0` per line, so color survives into `less -R` / `bat`.
 
 Plain is the default because the encoding is a property of the **consumer**, and most pipe consumers re-parse the text
 as _data_: a hint picker (`thumbs`, `urlscan`), an editor, a text tool; embedded SGR escapes corrupt their parse. Only a
-consumer that renders the text _back to a screen_ wants color: a color pager (`less -R`, `bat`) or `fzf --ansi`. So a
-pager binding sets `ansi = true` (the `-R` and the flag go together), while any binding that omits it defaults plain:
-the fail-safe direction, since plain into a color pager merely loses color, whereas SGR into a data tool produces
-garbage. With no default `pipe` chord shipped, every default is uniformly plain; `ansi = true` appears only where a user
-(or the manual's sample) opts a pager in. This mirrors `felis sessions capture --ansi` (default off), so the two
-surfaces share one mental model. The live risk is drift: if the attribute set grows an SGR dimension the encoder does
-not emit, pager output diverges from what the window renders. That risk is why the encoder is shared rather than copied:
-the pipe action, `capture --ansi`, and the host-terminal clients all draw on `felis-grid::ansi`
+consumer that renders the text _back to a screen_ wants color: a color pager or `fzf --ansi`. So a pager binding sets
+`ansi = true`, while any binding that omits it defaults plain: the fail-safe direction, since plain into a color pager
+merely loses color, whereas SGR into a data tool produces garbage. `felis sessions capture --ansi` defaults off for the
+same reason. The live risk is drift: if the attribute set grows an SGR dimension the encoder does not emit, pager output
+diverges from what the window renders. That is why the encoder is shared rather than copied: the pipe action,
+`capture --ansi`, and the host-terminal clients all draw on `felis-grid::ansi`
 ([architecture/overview.md](../architecture/overview.md) "Shared wire knowledge across the satellite clients"), so one
-addition serves every consumer instead of leaving the slowest copy silently monochrome.
+addition serves every consumer.
 
 ### Logical lines: soft-wrap stitching
 
@@ -224,11 +212,10 @@ Both encoders join rows with `\n` **except across a soft-wrap edge**, via the sh
 logical line the program wrapped at the screen edge (a URL, a path) reconstructs whole. Without this a downstream hint
 picker sees a wrapped match split in half and cannot act on it.
 
-One residual limit, in the `ansi = true` case only: each `row_ansi` row closes with `SGR 0`, so a stitched logical line
-carries a reset mid-line. Harmless for a color pager. A picker that strips SGR before matching (kitty's hints kitten
-does; `kovidgoyal/kitty` `kittens/hints/marks.go` `process_escape_codes`) rejoins the chars; a picker that does not
-(`thumbs` skips SGR but does not bridge it, `urlscan` ignores it) may still split a _colored_ wrapped match. The common
-default-plain case is clean for every picker, which is why plain is the default for the hints flow.
+One residual limit, in the `ansi = true` case only: each row closes with `SGR 0`, so a stitched logical line carries a
+reset mid-line. Harmless for a color pager. A picker that strips SGR before matching (kitty's hints kitten does) rejoins
+the chars; one that does not (`thumbs`, `urlscan`) may still split a _colored_ wrapped match. The default-plain case is
+clean for every picker.
 
 ### Selection source: client-side serialization
 
@@ -236,11 +223,9 @@ Four of the six `pipe` sources (`scrollback`, `visible`, `command_output`, `last
 daemon-side by the encoders above. The fifth, `osc_52`, is a program's payload, not cells, and stays with the window for
 the reason [input.md](../input.md) "`pipe` ships a region to an external sink" gives. The sixth, `selection`, is **not**
 daemon state: the grid the daemon owns carries no selection; the selection is a client-local gesture over presented
-pixels (principle 3). So the **client** serializes it, reusing `felis_client_core::Selection::extract_text`, which
-routes through the shared stitch ("Soft wrap" above), then feeds those bytes straight to the sink; there is no region to
-ask the daemon for, so the chord skips the round trip entirely. Placing the read on the client is the boundary, not a
-convenience: asking the daemon to track a per-client selection would put presentation state on the wrong side of
-principle 3, and would not round-trip cross-host anyway (each attached client has its own selection).
+pixels (principle 3). So the **client** serializes it through the shared stitch ("Soft wrap" above) and feeds those
+bytes straight to the sink, with no daemon round trip. Asking the daemon to track a per-client selection instead would
+put presentation state on the wrong side of principle 3, and each attached client has its own selection anyway.
 
 ### A region too large to carry
 
@@ -265,30 +250,20 @@ limits"): its region goes back out as an `InputMsg::Paste`, and the budget above
 carry. It is refused with the same notice a clipboard paste of that size draws, since the sink is what makes the cap
 reachable without a human holding a clipboard that large.
 
-The OSC 133-keyed pipe sources (`CommandOutput` = last `C→D` range, `LastCommand` = last `B→D` range) extract their rows
-the same way, but across the scrollback/screen boundary: prompt marks carry **absolute line coordinates**
-(`Grid::scrollback_total_pushed + row` at record time) so a command whose output has scrolled into history is still
-recoverable. `Grid::locate_line` maps an absolute line back to a current scrollback index or screen row. See the
-prompt-mark coordinate model below.
+The OSC 133-keyed pipe sources (`command_output` = last `C→D` range, `last_command` = last `B→D` range) read across the
+scrollback / screen boundary, so a command whose output has scrolled into history is still recoverable through the
+prompt-mark coordinates below.
 
 ## Prompt marks (OSC 133)
 
-Each `OSC 133` boundary records a `PromptMark { line, kind, exit_code }` on the grid. `line` is the **absolute**
-coordinate `scrollback_total_pushed + cursor.row` at record time. `scrollback_total_pushed` is the cumulative count of
-rows ever pushed into scrollback; it only ever increases (it is never reset), so a mark's `line` stays stable across
-later scrolls and resize.
+Each `OSC 133` boundary records a mark (line, kind, exit code) on the grid. The line is an **absolute** coordinate: the
+cumulative count of rows ever pushed into scrollback, which never decreases, plus the cursor row at record time. A
+mark's line therefore stays stable across later scrolls and resizes, and resolves at read time to a live row, a retained
+scrollback row, or evicted (unrecoverable).
 
-`Grid::locate_line(line)` inverts the coordinate to a current `MarkLocation`:
-
-- `Screen(row)`: the absolute line is on the live grid.
-- `Scrollback(idx)`: it is a retained scrollback row (`idx` indexes `ScrollbackView::row`, 0 = oldest retained).
-- `Evicted`: it has scrolled past the retained ring and is unrecoverable.
-
-`prompt_marks` is **front-pruned**: marks are pushed as boundaries fire, resize never touches them, and a mark is
-dropped once its line evicts past the retained scrollback ring or is cleared by ED 3. The prune runs on each scrollback
-eviction and on ED 3; it drains the leading marks whose `line` has fallen below the oldest retained row and adds their
-count to `prompt_marks_pruned`. The vector therefore stays bounded by the number of _retained_ marks, not by session
-lifetime.
+The mark list is **front-pruned**: on each scrollback eviction and on ED 3, the leading marks whose line has fallen
+below the oldest retained row are drained and counted in `prompt_marks_pruned`, so the list stays bounded by the number
+of _retained_ marks, not by session lifetime.
 
 Front-draining breaks the naive "mark index = position in the vector" assumption, so the daemon's streaming cursor
 counts in a **never-pruned ordinal**: mark `i` in the live vector carries absolute ordinal `prompt_marks_pruned + i`. A
@@ -298,25 +273,23 @@ mark.
 
 ### Prompt-jump navigation
 
-`Grid::prompt_jump_target(viewport, direction)` resolves a previous/next prompt jump to a scrollback viewport entirely
-on the daemon. The matched `PromptStart` mark is top-aligned in the composed view; the result is hard-clamped at the
-history ends with **no wrap** (returns `None` when it would not move). Jumps are disabled on the alternate screen and
-only consider still-retained marks (evicted marks are skipped).
+A previous/next prompt jump resolves to a scrollback viewport entirely on the daemon. The matched prompt-start mark is
+top-aligned in the composed view, clamped at the history ends with **no wrap**. Jumps are disabled on the alternate
+screen and skip evicted marks.
 
 ### Browsing while output arrives
 
 A browsing view stays on the lines it shows while the program keeps printing: the offset grows by the rows pushed into
-scrollback (`Grid::anchor_viewport`), as kitty grows `scrolled_by` and alacritty its display offset, and reaching the
-bottom joins the live view again. A resize, `CSI 3 J` or a screen switch also returns the view to live: each stops a
-push count naming the same lines, and the anchor's generation records it even when one burst erases history and refills
-it before the next compose, where a clamp alone would land on unrelated rows. The anchoring lives in felis-grid so an
-embedder holding its own offset calls the same function. The client's next step must start from the grown offset, and
-with pull pacing a frame carrying it is usually in flight while the user scrolls, so a step sent then would name an
-offset the daemon has since grown. Every browsing `ViewportState` therefore carries the `ViewportAnchor` it is expressed
-against and a request echoes it back (wire in [ipc.md](../../reference/ipc.md)). **Rejected: daemon-side anchoring
-alone**, reading each request against the current bottom: correct between frames, but a scroll during streaming output
-lands one frame's output away, and on a remote attachment, where the round trip is longer than a frame, that becomes the
-common case.
+scrollback, as kitty grows `scrolled_by` and alacritty its display offset, and reaching the bottom joins the live view
+again. A resize, `CSI 3 J` or a screen switch also returns the view to live: each stops a push count naming the same
+lines, and the anchor's generation records it even when one burst erases history and refills it before the next compose,
+where a clamp alone would land on unrelated rows. The anchoring lives in felis-grid so an embedder holding its own
+offset calls the same function. The client's next step must start from the grown offset, and with pull pacing a frame
+carrying it is usually in flight while the user scrolls, so a step sent then would name an offset the daemon has since
+grown. Every browsing `ViewportState` therefore carries the `ViewportAnchor` it is expressed against and a request
+echoes it back (wire in [ipc.md](../../reference/ipc.md)). **Rejected: daemon-side anchoring alone**, reading each
+request against the current bottom: correct between frames, but a scroll during streaming output lands one frame's
+output away, and on a remote attachment, where the round trip is longer than a frame, that becomes the common case.
 
 A relative scroll (a line, a half page, a wheel tick, Home) is not an offset at all: the window sends
 `InputMsg::ViewportStep` and the daemon applies it to the view it holds for that subscriber, as `JumpPrompt` already
@@ -378,11 +351,10 @@ maintenance. Build one only if profiling shows search dominating a real workload
 
 **Reflow on resize: re-wrap every soft-wrapped line.** The landscape splits: Kitty, WezTerm, and foot re-wrap every
 soft-wrapped logical line at the new width; Alacritty reflows only on grow; tmux defaults to none. Not reflowing looks
-broken, so `Grid::reflow` re-wraps: it walks scrollback then the live rows as one combined surface (the same walk
-`Grid::search` uses), stitches each soft-wrapped logical line back to its pre-wrap length, and lays it out again at the
-new column count; a hard-wrapped line (one that ended in an explicit LF) stays a separate logical line. This is
-`O(rows × cols)` at resize, an acceptable cost. `reflow` is the daemon's primary-screen resize entry point;
-`ScreenBuffer::resize` (trim and pad) is the operator for the shadow and the alternate screen.
+broken, so felis re-wraps: it walks scrollback then the live rows as one surface, stitches each soft-wrapped logical
+line back to its pre-wrap length, and lays it out again at the new column count; a hard-wrapped line (one that ended in
+an explicit LF) stays a separate logical line. This is `O(rows × cols)` at resize, an acceptable cost. Reflow is the
+primary screen's resize; the shadow and the alternate screen trim and pad.
 
 Five decisions fix the reflow's edges:
 
@@ -392,11 +364,9 @@ Five decisions fix the reflow's edges:
   Anchoring to the physical row instead would scatter the cursor and every mark on any width change. A prompt blanked
   for the shell to repaint (D5) is the exception: blanked whole, it leaves the cursor at its column and its row offset
   from the prompt's first row, which is where the shell's repaint starts from; under `redraw=last` only the cursor's row
-  is blanked, and the cursor keeps its column on it. Kitty direct-placement anchors ride the same mapping: `reflow`
-  returns a `ReflowRemap` and the daemon replays each anchor through it (REQ-604; see
+  is blanked, and the cursor keeps its column on it. Kitty direct-placement anchors ride the same mapping (REQ-604; see
   [grid-and-cells.md](grid-and-cells.md) "Image references"); a resize deferred under the alt screen (D4) delivers the
-  remap at stream position via `PtyEffect::PrimaryReflowed`, after the screen switch restores the saved primary
-  placements.
+  remap at stream position, after the screen switch restores the saved primary placements.
 - **The round-trip is exact only without eviction (D2).** `W → W' → W` restores the original layout only while no
   scrollback eviction occurs. Narrowing produces more physical rows, and once the ring is at `cap` the oldest rows evict
   first (as in Kitty), so a narrow-then-widen that overflowed the ring cannot resurrect the evicted head. This is the
@@ -444,14 +414,12 @@ The obvious storage shape is a split: a flat live buffer plus a boxed history ri
 top eagerly copied across (a `push_prefix`). felis instead unifies them into the single flat ring "Structure" above
 describes. This section records why the unified ring, the most invasive option, wins over the cheaper fixes.
 
-Under the split, plaintext scroll on the primary screen trails ghostty about 1.6× (vtebench `scrolling`, matched 137×35
-grid), and a bisection of `scroll_region_up` localizes the whole primary-vs-alt gap to that one eager copy: ~9 ns per
-line even when the occupied prefix is a single cell, about half cold-cache miss on the destination slot, half the copy
-call itself. ghostty and alacritty pay nothing here because their viewport is a window into the history ring: the row
-that leaves the viewport top is already the newest history row, in the same storage, so eviction is pointer motion.
-felis's grid floor is not the problem: on the alt screen, the same rotate with no push already beats ghostty's
-end-to-end throughput. What the split lacks is the structural property that the evicted row is never copied, and only
-the unified ring supplies it.
+Under the split, plaintext scroll on the primary screen trails ghostty about 1.6× (vtebench `scrolling`), and the whole
+primary-vs-alt gap is that one eager copy, paid per line even when the row holds a single cell. ghostty and alacritty
+pay nothing here because their viewport is a window into the history ring: the row that leaves the viewport top is
+already the newest history row, so eviction is pointer motion. On the alt screen, the same rotate with no push already
+beats ghostty's end-to-end throughput, so what the split lacks is only the property that the evicted row is never
+copied, and only the unified ring supplies it.
 
 Two cheaper fixes are measured and rejected:
 
@@ -462,28 +430,24 @@ Two cheaper fixes are measured and rejected:
   worth paying for only if it also eliminates the copy, so the offset ring is not a standalone stage: it is one facet of
   the unified ring.
 
-The unification is invisible on the wire: `Grid`'s storage is private and the wire ships logical `RowDelta` / `Scrolled`
-messages, so the shadow screen, the renderer, and every out-of-repo consumer see the same row stream either way. The
-cold tier keeps the property, since rows never reach it on the scroll path.
+The unification is invisible on the wire: the grid's storage is private and the wire ships logical rows and scrolls, so
+the shadow screen, the renderer, and every out-of-repo consumer see the same row stream either way. The cold tier keeps
+the property, since rows never reach it on the scroll path.
 
 ## Interior scroll band
 
 A DECSTBM / IL / DL scroll cannot be a `base` bump (it shifts only a sub-range of the viewport), so the ring resolves
-those through a second rotation layered on the same seam: `(band_top, band_len, band_rot)` on `Grid`, applied inside
-`phys_row_at` to rows within the band before the `base` offset. `rotate_region` arms the band on the scrolled region and
-bumps `band_rot` instead of moving rows; only the recycled rows are blanked (the same occupancy-watermark recycle as the
-full-screen path). The band also serves the rare full-screen rotate that cannot bump `base` (scroll-down / RI with
-retained history below the viewport, where the bump would resurrect history rows).
+those through a second rotation layered on the same row resolution: a band (top, length, rotation) applied to rows
+within the scrolled region before the `base` offset. A region scroll arms the band and bumps its rotation instead of
+moving rows; only the recycled rows are blanked. The band also serves the rare full-screen rotate that cannot bump
+`base` (scroll-down / RI with retained history below the viewport, where the bump would resurrect history rows).
 
-The band is _materialized_ (physically reordered back to identity, `O(band)` occupied prefixes, then deactivated)
-exactly where raw ring order is assumed: a `base` shift (`scroll_full_screen_into_history`, the full-screen arm of
-`rotate_region`), the alt-screen snapshot / restore pair (`SavedScreen` records `base` but no band, and its compaction
-helpers rotate by `base` alone), and on a _change_ of scrolled region. The relayout paths (`install_ring`,
-`drop_history`, resize / reflow) copy the viewport out through the band-aware `phys_row_at`, so their canonical rebuild
-materializes as a side effect and they only reset the band fields. `grow_ring` rotates in place instead of copying out,
-so it has no such side effect and materializes explicitly first. A sustained same-region flood never materializes;
-alternating regions (IL at a moving cursor) re-materialize per switch, which costs one per-row region move, so the worst
-case matches what a move-per-line scheme pays on every scrolled line.
+The invariant a contributor must hold: the band is _materialized_ (physically reordered back to identity, then
+deactivated) wherever raw ring order is assumed: a `base` shift, the alt-screen snapshot / restore pair, a ring growth,
+and a _change_ of scrolled region. Relayouts that copy the viewport out through the band-aware row resolution
+materialize as a side effect. A sustained same-region flood never materializes; alternating regions (IL at a moving
+cursor) re-materialize per switch, which costs one per-row region move, so the worst case matches what a move-per-line
+scheme pays on every scrolled line.
 
 The rejected alternative moves the region's rows per scrolled line, occupancy-clipped. Clipping alone leaves the
 interior scroll ~8× behind ghostty on vtebench `scrolling_top_region`, because the residual is per-row move bookkeeping

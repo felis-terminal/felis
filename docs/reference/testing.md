@@ -53,26 +53,21 @@ network access.
 
 ## Tool tests
 
-The Python tools under `tools/` (release and wire-compatibility gates, bench orchestrators, prose and dependency checks)
-are tested by pytest, which collects every `*_test.py` beside the tool it tests. The suites are hermetic: git
-repositories are throwaway and forges are local fakes. `just test-tools` runs them all, and `pr.yml` runs that recipe on
-every pull request.
+The Python tools under `tools/` are tested by pytest, which collects every `*_test.py` beside the tool it tests. The
+suites are hermetic: git repositories are throwaway and forges are local fakes. `just test-tools` runs them all, and
+`pr.yml` runs that recipe on every pull request.
 
 ## Unit tests
 
-Unit tests pin the fixed points the design docs commit to: parser dispatch against the Williams DFA
-(<https://vt100.net/emu/dec_ansi_parser>), UTF-8 chunk boundaries, SGR-pen incrementality, reflow round-trips, damage
-granularity, image eviction order, cluster compositing, sparse registry installs, grid admission, and the connection
-driver's state machine. They sit beside the code they test, and the owning explanation page states each contract.
-`just test` runs them with the rest of the workspace suite.
+Unit tests pin the fixed points the design docs commit to. They sit beside the code they test, and the owning
+explanation page states each contract. `just test` runs them with the rest of the workspace suite.
 
 ## Property tests
 
 Tool: proptest (<https://github.com/proptest-rs/proptest>).
 
-Property tests state algebraic invariants over arbitrary input: parser and driver totality (any bytes produce
-well-formed events or a typed error, never a panic), grid bounds, reflow stability, OSC payload safety, damage union
-associativity, and geometry admission. By convention they live in a crate's integration-test tree
+Property tests state algebraic invariants over arbitrary input, such as parser and driver totality (any bytes produce
+well-formed events or a typed error, never a panic). By convention they live in a crate's integration-test tree
 (`crates/<crate>/tests/it/proptest_*.rs`) and run under `just test`.
 
 ## Fuzzing
@@ -83,8 +78,7 @@ The targets live under `fuzz/fuzz_targets/`, a separate workspace; `just fuzz-li
 ### Acceptance criteria
 
 Two bars run at two cadences. The qualification bar comes from [security-model.md](../explanation/security-model.md): a
-target passes a 24-hour run with zero panics, zero OOMs, and bounded peak memory. That run is manual, on a machine that
-can spare a day per target.
+target passes a 24-hour run with zero panics, zero OOMs, and bounded peak memory. That run is manual.
 
 CI enforces the tripwire below it. `fuzz.yml` runs `just fuzz-smoke` (10,000 executions per target) on pushes to `main`
 and pull requests targeting it, skipping documentation-only changes, and `just fuzz-long` nightly (600 seconds per
@@ -112,8 +106,8 @@ one (`address`, for instance) and `FUZZ_JOBS` sets how many targets `just fuzz-l
 
 Tool: insta (<https://github.com/mitsuhiko/insta>).
 
-A snapshot test serializes an output (a grid after a CSI, OSC, or Kitty sequence, a reflow, a rehydration, a recorded
-PTY replay, a CLI help page) and compares it against a checked-in `.snap` file.
+A snapshot test serializes an output (a grid after a sequence, a CLI help page) and compares it against a checked-in
+`.snap` file.
 
 ```
 just snapshot-test     # run tests and stage changes
@@ -121,8 +115,7 @@ just snapshot-review   # interactive cargo insta review
 just snapshot-accept   # accept all staged snapshots
 ```
 
-The renderer's cell-instance fixtures are raw bytes rather than insta snapshots: they pin the bg, fg, and decoration
-instance buffers a set of small screens paint into, and `just golden` rewrites them.
+The renderer's cell-instance fixtures are raw bytes rather than insta snapshots; `just golden` rewrites them.
 
 felis-shaping's color glyphs are held to a cairo reference rather than a snapshot, by the `color-reference` flake check
 (Linux only).
@@ -133,11 +126,10 @@ felis-shaping's color glyphs are held to a cairo reference rather than a snapsho
 
 Source: <https://invisible-island.net/vttest/vttest.html>.
 
-`crates/felis-pty/tests/vttest_smoke.rs` drives vttest's VT100-VT520 and xterm scenarios through a felis PTY and asserts
-the round-trips against the grid. Deliberate non-conformances recorded in
-[vt-compliance.md](../explanation/protocols/vt-compliance.md) (charset switching is a no-op, DECDLD soft characters are
-unsupported, DECCOLM does not resize) are excluded from failure criteria. The esctest2 suite, its ratcheted baseline,
-and its known failures are [esctest-compatibility.md](esctest-compatibility.md).
+A PTY test in `felis-pty` drives vttest's VT100-VT520 and xterm scenarios through a felis PTY and asserts the
+round-trips against the grid. Deliberate non-conformances recorded in
+[vt-compliance.md](../explanation/protocols/vt-compliance.md) are excluded from failure criteria. The esctest2 suite,
+its ratcheted baseline, and its known failures are [esctest-compatibility.md](esctest-compatibility.md).
 
 ### Kitty protocol conformance
 
@@ -148,26 +140,23 @@ the per-feature verdict is [protocols/support-matrix.md](protocols/support-matri
 
 ## Integration tests
 
-Integration tests run the daemon against real children on a real PTY: shells, pagers and editors, captured producer byte
-streams, detach and reattach, the `felis` verbs' machine output, and shell completions under real interpreters. The
-tests that drive an external tool (sshd and ssh, `less`, `nvim`, vttest and esctest, fish and zsh) need the dev shell's
-tools and fail without them. They compile on Unix only, so the native Windows job does not run them. The Windows
-in-place upgrade tests are the exception: the native Windows job runs them, each rerunning itself at Medium integrity so
-that the daemon uses the embedded ConPTY host.
+Integration tests run the daemon against real children on a real PTY, including detach and reattach, captured producer
+byte streams, and the `felis` verbs' machine output. The tests that drive an external tool (sshd and ssh, `less`,
+`nvim`, vttest and esctest, fish and zsh) need the dev shell's tools and fail without them. They compile on Unix only,
+so the native Windows job does not run them; the Windows in-place upgrade tests are the exception, each rerunning itself
+at Medium integrity so that the daemon uses the embedded ConPTY host.
 
 REQ-1206 ([spec.md](spec.md)) states the exit criteria for this layer, and part of it is met by hand rather than by a
 test: an editor or file-manager session driven end to end through the GUI client. The client's window state machines are
-unit-tested without a window or a daemon, through the felis-owned event, input and window-effect types the winit adapter
-translates to; the client as a whole is covered by the headless frontend smoke ("CI shape" below), which drives one
-window, one keystroke and one rendered frame.
+unit-tested without a window or a daemon; the client as a whole is covered by the headless frontend smoke ("CI shape"
+below), which drives one window, one keystroke and one rendered frame.
 
 ## Machine-surface schemas
 
 The committed JSON Schema documents (the CLI bundle, [cli.md](cli.md) "JSON Schema"; the config schema; the JSON
 protocol, [json-protocol.md](json-protocol.md)) are generated from the serde types under each crate's `schema` feature.
 `just schema` rewrites them; without `UPDATE_SCHEMA` the same tests assert byte equality, and CI's `--all-features` run
-is where that assertion fires. No published JSON protocol object may forbid additional properties, since a closed object
-would make an optional field a later writer of the same version adds a break; a test enforces it.
+is where that assertion fires. No published JSON protocol object may forbid additional properties; a test enforces it.
 
 The CLI bundle is validated against the objects the CLI test suites really parse, and must reject the fixtures under
 `crates/felis-cli/tests/fixtures/schema-invalid/`. The golden JSON protocol messages carry what a schema cannot state;
@@ -178,8 +167,7 @@ The CLI bundle is validated against the objects the CLI test suites really parse
 Tools: criterion (<https://docs.rs/criterion>) for wall-clock time, and gungraun (<https://docs.rs/gungraun>) for
 instruction counts under Valgrind's callgrind.
 
-`tools/bench/criterion.py` discovers every `[[bench]]` target that calls `criterion_main!` from `cargo metadata`, so
-adding one to a crate's `Cargo.toml` is all it takes to enter `just bench-all`.
+Every `[[bench]]` target that calls `criterion_main!` enters `just bench-all` once a crate's `Cargo.toml` declares it.
 
 ### Running benchmarks
 
@@ -224,12 +212,11 @@ Source: [damage-tracking.md](../explanation/rendering/damage-tracking.md).
 The invariant is **no underdraw**: every cell whose visible content changed must reach the client next paint. Overdraw
 is permitted. Three harnesses hold it, one per layer:
 
-- **Grid**: `crates/felis-grid/tests/it/damage_correctness.rs` applies the queued scroll directives to the prior screen
-  and requires every row outside the dirty set to equal the grid's.
-- **Daemon to client**: a property test in `crates/felis-daemon/src/serve/tests.rs` requires every subscriber's shadow
-  screen to hold the grid's cells, cursor, and soft-wrap bits after each compose.
-- **Renderer**: property tests in `crates/felis-render-wgpu/src/row_cache.rs` and
-  `crates/felis-render-core/src/glyphs/walk_tests.rs` require incremental frames and the populate walk to equal a full
+- **Grid** (`felis-grid`): applying the queued scroll directives to the prior screen leaves every row outside the dirty
+  set equal to the grid's.
+- **Daemon to client** (`felis-daemon`): every subscriber's shadow screen holds the grid's cells, cursor, and soft-wrap
+  bits after each compose.
+- **Renderer** (`felis-render-wgpu`, `felis-render-core`): incremental frames and the populate walk equal a full
   rebuild.
 
 ## Security tests
@@ -257,8 +244,7 @@ just kani-update              # bump dev/packages/kani/default.nix to the latest
 Tool: cargo-mutants (<https://mutants.rs/>).
 
 cargo-mutants mutates the production code and reruns the suite: a mutant no test fails on is a branch nothing pins, or a
-test whose oracle is too weak. `.cargo/mutants.toml` scopes the sweep to `felis-grid`, `felis-vt` and `felis-protocol`,
-routes it through nextest under the `mutants` cargo profile, and excludes `kani_proofs` and the committed prost codegen.
+test whose oracle is too weak. `.cargo/mutants.toml` sets the sweep's crates and exclusions.
 
 | Task                        | Command                  |
 | --------------------------- | ------------------------ |

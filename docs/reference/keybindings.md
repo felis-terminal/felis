@@ -26,12 +26,8 @@ chords.
 | Jump to scrollback top / bottom          | `Ctrl+Shift+Home` / `Ctrl+Shift+End` (also bare `End` while browsing) | same                                                                              |
 | Jump to previous / next prompt (OSC 133) | `Ctrl+Shift+Z` / `Ctrl+Shift+X`                                       | same (`Cmd+Shift+Z` is system redo, so prompt jump keeps `Ctrl+Shift` everywhere) |
 
-Both spellings of the zoom symbols are bound because keyboard layouts disagree on whether Shift produces the shifted
-character (US `Shift+=` → `+`; DE has a separate `+` keycap).
-
-The canonical default table is defined in `crates/felis-client-core/src/keymap/default.rs`. The defaults lean on
-[Kitty's](https://sw.kovidgoyal.net/kitty/conf/#keyboard-shortcuts) where bindings map onto felis's closed action set;
-see [input.md](../explanation/input.md) for alignment rationale.
+Both spellings of each zoom symbol are bound, so the chord fires whether the layout's Shift produces the shifted
+character (US `Shift+=` → `+`) or has a separate keycap for it (DE `+`).
 
 ## Chord grammar quick facts
 
@@ -46,8 +42,7 @@ see [input.md](../explanation/input.md) for alignment rationale.
   uppercase ASCII letter in a chord string is read as its lowercase letter plus Shift, so `A`, `shift+A` and `shift+a`
   are three spellings of one chord. Any other character key matches the character the layout produces, case included, so
   non-Latin layouts where Shift does not change case still bind.
-- A modifier repeated in one chord (e.g. `ctrl+ctrl+a`) is rejected as a config error
-  (`crates/felis-client-core/src/keymap/chord.rs`).
+- A modifier repeated in one chord (e.g. `ctrl+ctrl+a`) is rejected as a config error.
 - The literal `+` key is whatever follows the final separator, so it is spelled `ctrl+shift++` (bare: `+`). A chord that
   ends in a single `+` with no key after it (`ctrl+`) is a config error, as is one that starts with a separator (`+a`).
 - Chords are single strokes: there are no multi-stroke sequences and no leader or prefix key (see
@@ -91,8 +86,8 @@ byte-for-byte.
 `scroll_to_prompt` needs `OSC 133` prompt marks ([Mark shell prompts](../how-to/mark-shell-prompts.md)) and is a no-op
 while an alternate-screen application holds the screen.
 
-`ansi = true` retains ANSI SGR styling for tools that render escapes (`less -R`, `bat`, `fzf --ansi`); the default plain
-text is what parsers and hint pickers want.
+`ansi = true` retains ANSI SGR styling for tools that render escapes (`less -R`, `bat`, `fzf --ansi`); the default is
+plain text.
 
 ## Unbound by default
 
@@ -216,7 +211,7 @@ pending one. The rationale is in [input.md](../explanation/input.md) § "Confirm
 
 ## IME
 
-The client allows IME on every window and drives it through winit 0.30, so the backend is the platform's own:
+The client allows IME on every window and drives it through winit, so the backend is the platform's own:
 
 | Platform      | IME backend                                 |
 | ------------- | ------------------------------------------- |

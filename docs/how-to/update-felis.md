@@ -46,10 +46,9 @@ On macOS the tarball is `felis-aarch64-darwin.tar.gz` and the unpacked tree need
 ([install](install.md#the-macos-archive)). On Windows, unpack the new `felis-x86_64-pc-windows-msvc.zip` into a
 directory of its own and point your `PATH` at it ([install](install.md#the-windows-deliverable)).
 
-Every archive unpacks under the same name, so each version needs a directory of its own. Unpacking one over a tree
-already in use keeps every library that version drops, and the launchers then load a mixture of the two; on macOS it
-also leaves the app's resource seal covering files the new version does not contain, which stops it launching at all.
-Remove the tree you replaced once the daemon has switched to the new one.
+Every archive unpacks under the same name, so give each version a directory of its own: unpacked over a tree already in
+use, the launchers load a mixture of the two versions, and on macOS the app stops launching at all. Remove the tree you
+replaced once the daemon has switched to the new one.
 
 ## Switch the daemon in place
 
@@ -106,9 +105,8 @@ On Linux the daemon is often a transient systemd user unit, and `systemctl --use
 refused; use `felis daemon stop` ([cli.md](../reference/cli.md#auto-spawning)).
 
 Two forms start the freshly installed daemon binary: a window launch (bare `felis`, `felis attach`, `felis -- <cmd>`)
-and `felis sessions spawn`. No other headless verb starts one: `felis sessions list` and `felis daemon status` report
-the daemon unreachable, while `felis version` and `felis doctor` report it as not running. The full table is in
-[cli.md](../reference/cli.md#auto-spawning).
+and `felis sessions spawn`. Other verbs, such as `felis sessions list` and `felis doctor`, report the daemon as
+unreachable or not running instead ([cli.md](../reference/cli.md#auto-spawning)).
 
 Sessions you cannot find after the upgrade are held by a daemon on an endpoint the default rule does not name; stop it
 from a shell inside one of its own sessions, where `$FELIS_SOCKET` still names it, with

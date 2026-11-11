@@ -41,24 +41,21 @@ event loop owns the renderer and shadow-grid read side while the IPC reader runs
 
 One overlap is deliberate and load-bearing on the daemon: **the VT parse does not run on a tokio task.** Each session's
 PTY master has two dedicated OS threads in `felis-pty`: a reader that stays on the PTY, and a parse thread that advances
-the grid. The macOS PTY line discipline delivers output in ~1 KiB chunks, so a 150 MB `cat` is ~156K reads. Two
-alternatives are rejected by measurement. Handing each chunk to a tokio task to parse costs one cross-thread wake per
-chunk, ~45% of the `cat`'s wall-clock. Parsing inline on the reader thread instead holds a child's synchronous
-`write(2)` hostage to parse cost: the kernel drains a bulk write in ~1 KiB lockstep with the reader, so a
-DOOM-fire-style sim+write loop caps at ~628 fps, where the reader/parse split with a short non-blocking spin in the
-macOS reader reaches ~666 fps. The session's owner task keeps only what is downstream of the parse (effect replay, diff
-compose, fan-out), reaching the shared parser+grid unit through a `parking_lot::Mutex` whose `!Send` guard makes holding
-it across an `await` a compile error; how the owner task and the parse thread share that lock is argued in
-[pipeline.md](rendering/pipeline.md) "Demand-driven emission".
+the grid. The macOS PTY line discipline delivers output in ~1 KiB chunks, and two alternatives are rejected by
+measurement. Handing each chunk to a tokio task to parse costs one cross-thread wake per chunk, ~45% of a bulk `cat`'s
+wall-clock. Parsing inline on the reader thread instead holds a child's synchronous `write(2)` hostage to parse cost,
+because the kernel drains a bulk write in ~1 KiB lockstep with the reader: a sim+write loop caps at ~628 fps, against
+~666 fps under the reader/parse split with a short non-blocking spin in the macOS reader. The session's owner task keeps
+only what is downstream of the parse (effect replay, diff compose, fan-out), reaching the shared parser+grid unit
+through a `parking_lot::Mutex` whose `!Send` guard makes holding it across an `await` a compile error; how the owner
+task and the parse thread share that lock is argued in [pipeline.md](rendering/pipeline.md) "Demand-driven emission".
 
 Linux's PTY queue holds ~68 KiB, so the writer is not held to the reader chunk by chunk, and there the spin moves no
-DOOM-fire frame rate while costing 1.4 to 2.1 s of reader user time per 12 s; the Linux reader parks straight in
-`poll(2)`. A producer that writes a few bytes per `write(2)` still costs one read per write, because the reader stays
-caught up with it: vtebench's scrolling rows cost most of a core in ~13-byte reads. Rejected: letting that output pile
-up in the kernel while the parser is busy. The Linux write path slows down when output sits unread. A bare consumer that
-pauses 20 to 50 µs between reads makes the same producer, fully kernel-bound either way, take about 55% longer per
-vtebench scrolling sample, and a felis build whose reader waits like that runs the bench harness's scrolling rows up to
-twice as slow. The reader's CPU would be bought back with exactly the throughput those rows measure.
+frame rate while costing reader CPU; the Linux reader parks straight in `poll(2)`. A producer that writes a few bytes
+per `write(2)` still costs one read per write, because the reader stays caught up with it. Rejected: letting that output
+pile up in the kernel while the parser is busy. The Linux write path slows down when output sits unread: a reader that
+pauses tens of microseconds between reads runs vtebench's scrolling rows up to twice as slow, so the reader's CPU would
+be bought back with exactly the throughput those rows measure.
 
 The split costs one ordering rule at the end of the stream: the reader thread signals EOF to the parse thread, then
 waits for it to finish before letting the session's PTY reader report end-of-stream. Without that wait the two events
@@ -182,9 +179,9 @@ The surface a terminal needs from the platform is five thin syscall wrappers (op
 kill/`try_wait`), and the async bridge above them is felis code either way, so felis hosts those wrappers itself rather
 than through a PTY crate:
 
-- **Owned semantics.** The child-env snapshot (`felis_pty::Command::new`), the Linux `EIO`-is-EOF mapping, and kill
-  idempotence are specified by felis-pty's own docs and tests instead of notes about a dependency's behavior: the same
-  argument as "felis owns its VT engine" (see "Rust" above).
+- **Owned semantics.** The child-env snapshot, the Linux `EIO`-is-EOF mapping, and kill idempotence are specified by
+  felis-pty's own docs and tests instead of notes about a dependency's behavior: the same argument as "felis owns its VT
+  engine" (see "Rust" above).
 - **Owned concurrency invariants.** macOS's ptmx clone path races under concurrent PTY allocation (spurious `ENXIO`);
   `openpty(3)` users never see it only because Apple's libc happens to serialize internally around `ptsname`'s static
   buffer. felis-pty serializes allocation with an explicit, documented lock rather than relying on a libc accident.
@@ -249,12 +246,11 @@ felis's Apache-2.0.
 
 ## IPC encoding
 
-A frame body carries one encoding, Protocol Buffers over the `felis.v1` schema
-(`crates/felis-protocol/proto/felis.proto`, <https://protobuf.dev/>), generated with prost. The schema is the authority
-for the shapes; felis's hand-written message types are validated constructors over them, not a second contract. A
-consumer whose language has no protobuf runtime writes its own reader for it rather than reading a second wire encoding.
-[ipc.md](architecture/ipc.md) "Why protobuf" records the rejected encodings; the wire contract is
-[ipc.md](../reference/ipc.md).
+A frame body carries one encoding, Protocol Buffers over the `felis.v1` schema (<https://protobuf.dev/>), generated with
+prost. The schema is the authority for the shapes; felis's hand-written message types are validated constructors over
+them, not a second contract. A consumer whose language has no protobuf runtime writes its own reader for it rather than
+reading a second wire encoding. [ipc.md](architecture/ipc.md) "Why protobuf" records the rejected encodings; the wire
+contract is [ipc.md](../reference/ipc.md).
 
 ## Peer-UID lookup
 

@@ -12,8 +12,8 @@ below.
 
 On Japanese JIS keyboards under macOS, pressing the yen keycap may produce `¥` (U+00A5) instead of `\` (U+005C), even
 when macOS is configured to output a backslash (System Settings → Keyboard → Input Sources → Japanese → "character to
-input with the ¥ key"). That setting routes through the input method editor (IME), which passes characters through an
-event channel that winit ignores outside active compositions. As a result, felis receives U+00A5.
+input with the ¥ key"), because that setting acts through the input method, which felis does not see outside a
+composition.
 
 To map the key to a backslash, add a keybinding:
 
@@ -28,15 +28,13 @@ and specify `escapes = "none"` so that felis does not interpret it as an escape.
 
 This binding matches on the composed character `¥`, so it also remaps Option+Y on US/ABC keyboard layouts.
 
-For the windowing library rationale and upstream issue details, see the input architecture guide in
-[input.md](../explanation/input.md).
+For the upstream cause, see [input.md](../explanation/input.md).
 
 ## Modifier combinations reach applications as plain keys
 
-When an application supports the Kitty keyboard protocol, felis encodes extended modifier combinations (such as
-Shift+Enter) accurately. Some applications fail to enable the protocol because they check terminal name allowlists
-rather than querying terminal capabilities dynamically. To resolve this via terminal identification, see the allowlist
-guide in [fix-terminfo-problems.md](fix-terminfo-problems.md).
+felis encodes modifier combinations such as Shift+Enter for applications that enable the Kitty keyboard protocol. Some
+applications enable it only for an allowlist of terminal names; to get on it, see
+[fix-terminfo-problems.md](fix-terminfo-problems.md).
 
 Alternatively, bind specific key combinations directly using `send_string`:
 

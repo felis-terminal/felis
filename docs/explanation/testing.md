@@ -76,15 +76,14 @@ where a single off-by-one in a bitmask or a wrapping add is the whole bug: the p
 wire-format encoders/decoders.
 
 `felis-vt` is the trust root for every byte that arrives from a child program: a panic or a wrong answer in the parser
-corrupts grid state for attacker-controlled input. The `State::Ground` hot path coalesces printable runs with
-hand-written SWAR (SIMD-within-a-register) bit tricks (`scan_printable_run`, `scan_mixed_print_run`, and the masks that
-drive them), built on the classic `hasless`/`haszero` subtract-and-mask predicates from Bit Twiddling Hacks
-(<https://graphics.stanford.edu/~seander/bithacks.html>), whose correctness is alignment- and borrow-sensitive across
-lanes.
+corrupts grid state for attacker-controlled input. The ground-state hot path coalesces printable runs with hand-written
+SWAR (SIMD-within-a-register) bit tricks, built on the classic `hasless`/`haszero` subtract-and-mask predicates from Bit
+Twiddling Hacks (<https://graphics.stanford.edu/~seander/bithacks.html>), whose correctness is alignment- and
+borrow-sensitive across lanes.
 
-Randomized testing samples that space poorly: the proptest that checks `scan_printable_run` against a scalar loop only
-ever places **one** offending byte in printable filler, so it never exercises borrow interaction between two
-non-printable bytes. The Kani proof against `nonprintable_mask` disproves the tempting invariant ("`0x80` set in _every_
+Randomized testing samples that space poorly: the proptest that checks the run scanner against a scalar loop only ever
+places **one** offending byte in printable filler, so it never exercises borrow interaction between two non-printable
+bytes. The Kani proof against the non-printable mask disproves the tempting invariant ("`0x80` set in _every_
 non-printable byte"): the counterexample `[0x7F, 0x7E, 0xFF×6]` shows a low `0x7F` (DEL) borrowing into lane 1 and
 falsely flagging the printable `0x7E`. The code is correct (only the _lowest_ set lane is read, via `trailing_zeros()`),
 but that contract is wrong, and no sampling layer catches it.
@@ -97,10 +96,10 @@ borrows its precompiled sysroot from an upstream release tarball, and only that 
 packaging record is `dev/packages/kani/default.nix`, the file it governs.
 
 Because `cfg(kani)` code compiles under no other layer (not under `cargo test`, not under clippy), a kernel edit can
-invalidate a proof silently. The proofs are therefore re-checked by a weekly scheduled CI job plus manual dispatch
-(`kani.yml`), not per PR: CBMC's runtime would dominate the per-PR pipeline, and nightly buys nothing over weekly for a
-proof set that moves far more slowly than the parser it guards. The exception is a PR that changes the Kani package
-itself: it swaps the verifier under every proof, so the full run gates it instead of trailing it by up to a week.
+invalidate a proof silently. The proofs are therefore re-checked by a weekly scheduled CI job plus manual dispatch, not
+per PR: CBMC's runtime would dominate the per-PR pipeline, and nightly buys nothing over weekly for a proof set that
+moves far more slowly than the parser it guards. The exception is a PR that changes the Kani package itself: it swaps
+the verifier under every proof, so the full run gates it instead of trailing it by up to a week.
 
 _Revisit if_ the inventory grows enough that a full run outgrows the weekly window (then split per-crate jobs or gate by
 changed paths).
@@ -115,7 +114,7 @@ candidate only when all of these hold:
 - **Narrow interface**: bytes, integers, or a `char` in; a value or an `Option` out, so `kani::any()` can feed it
   directly.
 - **Dense computation**: arithmetic, bit-twiddling, table lookups, fixed-size buffer work, a codec. One wrong bit or
-  branch is a real bug that sampling misses (the `nonprintable_mask` borrow case above).
+  branch is a real bug that sampling misses (the borrow case above).
 - **Bounded loops**, so CBMC can unwind them exhaustively.
 - **A domain a plain test cannot enumerate.** `bidi::is_override` iterates all of `0..=char::MAX` and the placeholder
   rank tables enumerate every rank; a loop that covers the domain already proves it, and a model checker adds nothing.
@@ -128,15 +127,14 @@ the generic blowup exceeds solver limits, and the fuzz targets own those round-t
 
 ## Deliberately not verified with Kani
 
-- **Whole-parser totality.** Verifying `Parser::advance` over arbitrary input would force a bounded
-  `#[kani::unwind(n)]`, making it _weaker_ than the unbounded `vt_parser` fuzz target for length coverage, while the
-  branchy DFA makes CBMC blow up. Full-parser totality stays with fuzzing.
+- **Whole-parser totality.** Verifying the parser over arbitrary input would force a bounded unwind, making it _weaker_
+  than the unbounded parser fuzz target for length coverage, while the branchy DFA makes CBMC blow up. Full-parser
+  totality stays with fuzzing.
 - **Heap-allocating round-trips.** The base64 `decode(encode(x)) == x` property bit-blasts past every solver tried; it
   lives as a proptest instead, and Kani keeps only base64 proofs over inputs of at most two groups (eight bytes).
 - **The allocating half of `Chord::parse`.** Its byte-level kernels are proven: the `+` split, the name lookups, and the
-  F-key index accumulator. The `String`-building layer above them (the character key, the token named in each error) is
-  orchestration whose only computation is the kernels', so the `chord_parser` fuzz target and the parser proptests own
-  it.
+  F-key index accumulator. The `String`-building layer above them is orchestration whose only computation is the
+  kernels', so the chord fuzz target and the parser proptests own it.
 - **I/O-bound and state-machine code**, where the bound explosion outweighs the payoff over the proptest/fuzz layers.
 
 ## Performance regression gating
@@ -145,14 +143,11 @@ How the benchmark targets are run, what they pin, and what fails the gate is the
 ([reference/testing.md](../reference/testing.md#performance-benchmarks)); this section records why the regression gate
 is shaped the way it is.
 
-- **Python, not shell.** `tools/bench/criterion.py` and `tools/bench/gungraun.py` are stdlib-only Python (`python3`
-  pinned in the dev shell) rather than shell: every input and output is JSON (`cargo metadata`, Criterion's
-  `estimates.json` / `benchmark.json`, gungraun's `summary.json`), and a shell version needs jq + awk for a fraction of
-  the job.
+- **Python, not shell.** The bench drivers are stdlib-only Python rather than shell: every input and output is JSON, and
+  a shell version needs jq + awk for a fraction of the job.
 - **A pinned test font.** Font-dependent benches load the devshell-pinned probe font rather than a system probe, the
-  same reasoning as the shaping feature tests (`dev/flake-module.nix` `testFonts`): a system probe makes the numbers
-  machine-dependent (a different face is different GSUB/rasterization work, so two hosts' baselines never compare) and
-  panics on a font-less CI runner.
+  same reasoning as the shaping feature tests: a system probe makes the numbers machine-dependent (a different face is
+  different GSUB/rasterization work, so two hosts' baselines never compare) and panics on a font-less CI runner.
 - **The regression gate measures change against baseline, not other terminals.** `bench.yml` compares each pull request
   with its base commit ([reference/testing.md](../reference/testing.md) "Instruction-count gate"). The gate answers
   strictly whether felis has regressed against its own previous commits. Comparative performance evaluation against peer
@@ -170,8 +165,7 @@ from a real regression.
 An instruction count does not depend on what else the machine runs. Repeat runs give identical counts, with or without
 synthetic load beside them, and the same commit built from two checkout paths differs by under 0.2%, an order of
 magnitude below the 2% threshold. Injected regressions show the count tracks the cost the gate exists to catch: extra
-work in the print path raised it by 9% to 23% on the benchmarks that reach that path, where wall-clock time rose 10% to
-29%, and disabling the ASCII fast path raised it by 25% to 233%.
+work in the print path moved it about as much as it moved wall-clock time.
 
 The count is blind to a regression that only changes memory behavior. A change that added cache misses without adding
 instructions cost 25% to 55% in wall-clock time while the count moved under 0.7%; callgrind's estimated cycles, which
@@ -236,9 +230,9 @@ passed, not the target's gate to exist: a gate that is defined and wired but has
 
 The binary cache is not gated: the derivation is content-addressed, so a revision the cache lacks still builds to the
 same store path on the user's machine, and holding a push back withholds only speed, never the revision. The push
-therefore runs where the package builds (`pr.yml` and `darwin.yml` on `main`, `release.yml` on a tag), and it names the
-store path it built rather than arming a post-build hook, which pushes nothing when a re-run finds the path already in
-the store. A pull request never pushes, since its code is not trusted with the cache's credential.
+therefore runs where the package builds (on `main` and on a tag), and it names the store path it built rather than
+arming a post-build hook, which pushes nothing when a re-run finds the path already in the store. A pull request never
+pushes, since its code is not trusted with the cache's credential.
 
 Rejected: a publish job per target behind that revision's smoke, which gated nothing a user could not build from the
 same revision and cost a runner slot and a second evaluation per `main` revision.

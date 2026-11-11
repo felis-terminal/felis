@@ -13,29 +13,25 @@ model must scale to "one row changed in a 200×80 grid" without iterating the wh
 
 ## Where damage lives
 
-- **Daemon (`felis-grid`).** A `Damage` tracker records which logical rows changed since the last `compose_diffs` cycle.
-  Mutations (`set_cell`, `write_row_cells`, scroll, erase, alt-screen switch, resize) mark rows dirty, an erase only the
-  rows whose cells it changed; `compose_diffs` drains the dirty rows into the wire protocol and clears the tracker.
-- **Client (`felis-client`).** The shadow's writes (`write_row_cells`, `set_cell`, a scroll directive, a resize) run
-  through the same `ScreenBuffer` the daemon uses, so they mark the same row bitset. The renderer reads it when a frame
-  is due and the client clears it after the paint. Whether a frame is due at all is a single boolean `RedrawScheduler`;
-  damage decides only how much of that frame is rebuilt.
+- **Daemon (`felis-grid`).** A tracker records which logical rows changed since the last diff cycle. Every grid mutation
+  (cell writes, scroll, erase, alt-screen switch, resize) marks rows dirty, an erase only the rows whose cells it
+  changed; the cycle drains the dirty rows into the wire protocol and clears the tracker.
+- **Client.** The shadow's writes run through the same screen buffer the daemon uses, so they mark the same row bitset.
+  The renderer reads it when a frame is due and the client clears it after the paint. Whether a frame is due at all is a
+  single redraw flag; damage decides only how much of that frame is rebuilt.
 
 ## Daemon damage representation
 
-`Damage` is row-granularity, backed by a `Vec<u64>` bitset rather than a `Vec<bool>`: at the sizes terminals run at, a
+Damage is row-granularity, backed by a `u64`-word bitset rather than a `bool` per row: at the sizes terminals run at, a
 whole screen's worth of rows fits in one or two words, so a clear, a mark-all and a region probe each collapse to a
 single word operation and draining the dirty rows costs `O(dirty rows)` rather than `O(rows)`. Marking is total: an
 out-of-range row is ignored rather than refused, so a resize window needs no separate reset.
 
 ## From damage to the wire
 
-`compose_diffs` walks `dirty_rows()` and emits the tick's rows as one `RowDelta` frame. The wire representation (the
-message shape and its field layout) is specified in [the IPC reference](../../reference/ipc.md), not duplicated here.
-Image, link, and theme-color side tables are shipped **before** any row delta that references them. After the cycle the
-tracker is cleared.
-
-Full-screen events (resize, alt-screen enter/leave) call `mark_all()`, so the next cycle ships every row.
+A diff cycle emits the dirty rows as one `RowDelta` batch ([the IPC reference](../../reference/ipc.md) carries the
+shape), with the side-table entries they reference shipped **before** them. Full-screen events (resize, alt-screen
+enter/leave) mark every row, so the next cycle ships them all.
 
 A scroll moves the marks instead of adding to them. The grid rotates the band's rows, shifts the band's dirty bits by
 the same count, marks the rows the scroll vacated, and queues a `GridMsg::Scrolled` directive that the shadow replays as
@@ -47,19 +43,17 @@ with the content they describe.
 ## Client repaint
 
 The client keeps a shadow screen that absorbs each `RowDelta`. Inbound grid traffic, cursor/selection changes, and image
-updates all call `RedrawScheduler::request()`, which sets a sticky `pending` bool. At the next `about_to_wait`,
-`RedrawScheduler::flush()` clears the flag and issues exactly one `window.request_redraw()`, collapsing a burst of
-messages in one event-loop iteration into a single paint.
+updates all set a sticky redraw flag, which the event loop turns into exactly one redraw request once it has drained its
+queue, collapsing a burst of messages into a single paint.
 
-The renderer (`felis-render-wgpu`) keeps the cell instances of the previous frame in one fixed-size slot per row and
-rebuilds only the rows the shadow marked, plus the rows the cursor left and entered; an unused slot entry is a
-zero-sized quad, which rasterizes nothing. It then uploads only the rebuilt rows. Anything every row's instances depend
-on rebuilds them all: the grid geometry, the cell metrics, the theme and palette, DECSCNM, the selection, the viewport,
-a chrome bar or pre-edit span, and a glyph atlas recycle, which moves every slot. So does a row that outgrows its slot.
-When padding every row to the widest one would take more than half the device's buffer limit, or four times the packed
-size past a fixed allowance (`PADDING_ALLOWANCE` in `crates/felis-render-wgpu/src/row_cache.rs`), the rows stay packed
-and every frame rebuilds and uploads all of them until the rows even out. Images and the overlays are not cell instances
-and are rebuilt every frame.
+The renderer keeps the cell instances of the previous frame in one fixed-size slot per row and rebuilds only the rows
+the shadow marked, plus the rows the cursor left and entered; an unused slot entry is a zero-sized quad, which
+rasterizes nothing. It then uploads only the rebuilt rows. Anything every row's instances depend on rebuilds them all:
+the grid geometry, the cell metrics, the theme and palette, DECSCNM, the selection, the viewport, a chrome bar or
+pre-edit span, and a glyph atlas recycle, which moves every slot. So does a row that outgrows its slot. When padding
+every row to the widest one would cost far more than packing them (past half the device's buffer limit, or several times
+the packed size), the rows stay packed and every frame rebuilds and uploads all of them until the rows even out. Images
+and the overlays are not cell instances and are rebuilt every frame.
 
 The glyph populate walk that runs before the instances are built follows the same marks: it primes atlas slots for, and
 shapes, only the marked rows, and keeps the shape results of the other rows from earlier frames. It walks every row when
@@ -69,25 +63,21 @@ no walk: moving it changes no glyph.
 
 ## Correctness
 
-The enforced invariant is **no underdraw**: every cell whose visible content changed since the last `compose_diffs`
-cycle must reach the client's next paint. At the grid layer that means the cell's row is in `Damage::dirty_rows()`, or
-the cell holds what the pending scroll directives move into it from the prior screen. On the client, every applied row
-and every row a scroll directive moved is marked, and the renderer rebuilds every marked row. Cursor-only moves must
-leave damage empty, since the cursor is a client-side overlay, not cell content: a carriage return, a cursor-positioning
-sequence or a tab marks nothing, and a line feed marks only what its scroll vacates. A handler that also changes
-something a row payload carries marks that row, including a soft-wrap bit set without a cell write, as an `HT` under
-`?41` does. The cursor's own position ships as `CursorState` whenever it differs from what the subscriber last received.
+The enforced invariant is **no underdraw**: every cell whose visible content changed since the last diff cycle must
+reach the client's next paint. At the grid layer that means the cell's row is dirty, or the cell holds what the pending
+scroll directives move into it from the prior screen. On the client, every applied row and every row a scroll directive
+moved is marked, and the renderer rebuilds every marked row. Cursor-only moves must leave damage empty, since the cursor
+is a client-side overlay, not cell content: a carriage return, a cursor-positioning sequence or a tab marks nothing, and
+a line feed marks only what its scroll vacates. A handler that also changes something a row payload carries marks that
+row, including a soft-wrap bit set without a cell write, as an `HT` under `?41` does. The cursor's own position ships as
+`CursorState` whenever it differs from what the subscriber last received.
 
 Overdraw is allowed by design at both layers: a one-cell write dirties its whole row, and the client draws every row
 slot each frame. It costs IPC bytes and GPU time, not correctness; the per-cell tracking that would remove it is
 rejected ("Prior art" below).
 
-The harnesses are `crates/felis-grid/tests/it/damage_correctness.rs` for the grid, a property test in
-`crates/felis-daemon/src/serve/tests.rs` that requires every shadow to hold the grid's cells, cursor and soft-wrap bits
-after each composition it receives, and two property tests for the client: one in
-`crates/felis-render-wgpu/src/row_cache.rs` requires the cached instances to equal a full rebuild after every frame, and
-one in `crates/felis-render-core/src/glyphs/walk_tests.rs` requires the same of the populate walk's shape results and
-atlas slots. [The testing reference](../../reference/testing.md) "Damage-tracking correctness" lists all four.
+The harnesses that pin both layers are listed in [the testing reference](../../reference/testing.md) "Damage-tracking
+correctness".
 
 ## Prior art and alternatives considered
 
@@ -106,8 +96,8 @@ ranged write, at the cost of drawing the empty slot entries as zero-sized quads.
 
 **Collapse threshold: none.** Kitty and WezTerm collapse to a full redraw at ~80% dirty cells, Ghostty at ~75%, because
 tracking that many cells separately costs more than redrawing everything. felis has no threshold: partial updates ship
-and rebuild row-by-row regardless of count, and only full-screen events (`mark_all()`) mark every row. Rebuilding every
-row one at a time costs the client the same walk a full rebuild does, and draining a dirty-row bitset is already cheap.
+and rebuild row-by-row regardless of count, and only full-screen events mark every row. Rebuilding every row one at a
+time costs the client the same walk a full rebuild does, and draining a dirty-row bitset is already cheap.
 
 **Scroll shift: grid rotation, not a texture copy.** When a line pushes in, Kitty and Ghostty copy the previous frame's
 texture region up and paint the new bottom row; Alacritty and WezTerm rotate row indices in the cell store. felis
@@ -119,8 +109,8 @@ row of the scrolled region and the renderer rebuilds them; the GPU never sees th
 of the band is dirty and ships the whole band as rows otherwise, on the argument that a directive on top of a band
 replay only adds bytes. That argument holds only while the band is replayed in full, and producers almost never scroll a
 clean band: a flood or a streaming printer writes the line before its line feed, a pager rewrites its prompt on the
-bottom row before it scrolls, and vim scrolls with DECSTBM plus `DL`. Under that rule a 93-row window receives almost no
-directives and 92 or 93 rows per frame in all four of those workloads. Moving the marks with the rows makes the
+bottom row before it scrolls, and vim scrolls with DECSTBM plus `DL`. Under that rule a window receives almost no
+directives and nearly every row per frame in all four of those workloads. Moving the marks with the rows makes the
 directive sound whatever the band held, so the rule costs one directive per band per cycle and saves every row the shift
 reproduces. `IL` / `DL` are the same rotation over the band from the cursor row to the bottom margin, so they ship the
 same directive.

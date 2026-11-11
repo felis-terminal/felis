@@ -5,14 +5,13 @@ sidebar:
 ---
 
 felis identifies natively across all identity surfaces: `TERM_PROGRAM` reports `felis`, DA3 unit ID reports `felis-1`,
-and `TERM` reports `xterm-felis`. The terminfo entry advertises verified capabilities while preserving the `xterm-`
-lineage prefix for compatibility heuristics. Architectural rationale for native identity rather than terminal emulation
-spoofing is documented in [terminal-identity.md](../explanation/architecture/terminal-identity.md).
+and `TERM` reports `xterm-felis`. The terminfo entry advertises verified capabilities under the `xterm-` prefix. Why
+felis identifies as itself rather than as another terminal is in
+[terminal-identity.md](../explanation/architecture/terminal-identity.md).
 
 ## The default identity
 
-The daemon stamps identity variables onto child processes during spawn execution in `crates/felis-daemon/src/lib.rs`
-(`apply_env_policy`):
+The daemon stamps identity variables onto every session's child, a window's shell and a `felis sessions spawn` alike:
 
 | Variable               | Default                                                                                                                | Override source                                             |
 | ---------------------- | ---------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
@@ -24,8 +23,6 @@ The daemon stamps identity variables onto child processes during spawn execution
 | `FELIS_SOCKET`         | Daemon listening socket endpoint                                                                                       | Reserved; cannot be overridden                              |
 | `LANG`                 | macOS only, and only when the resolved environment names no locale: the current region as `{language}_{country}.UTF-8` | Any `LANG`, `LC_ALL` or `LC_CTYPE` already set              |
 
-Both interactive GUI shells and CLI `felis sessions spawn` invocations pass through `apply_env_policy`.
-
 Environment construction resolves in the following sequence:
 
 1. Base environment: `SpawnArgs.env_base` (when provided via local socket), the connection relay snapshot, or the daemon
@@ -34,7 +31,7 @@ Environment construction resolves in the following sequence:
    ([keybindings.md](keybindings.md)), which, unlike denylisted keys, `SpawnArgs.env` may still set.
 3. Identity and addressing stamps: The variables from the table above are injected. Five are unconditional;
    `FELIS_SOCKET` is stamped only when the daemon serves an endpoint, and a daemon serving none removes an inherited
-   value rather than letting a child address the daemon it was launched from.
+   value.
 4. Locale fill: on macOS only, `LANG` is stamped when the resolved environment sets none of `LANG`, `LC_ALL` and
    `LC_CTYPE` to a non-empty value.
 5. Custom overrides: Caller-provided `SpawnArgs.env` pairs are applied.
@@ -43,9 +40,9 @@ Before filtering, `$SHELL` and `FELIS_TERM` / `FELIS_TERM_PROGRAM` are extracted
 they fall back to daemon environment values, with `$SHELL` defaulting to `/bin/sh` (`powershell.exe` on Windows).
 
 The `LANG` fill reads the same entries: the base for a create that carries one, the daemon's own environment for a
-create that runs on the daemon's birth environment. Its value is `CFLocaleCopyCurrent()`'s `kCFLocaleLanguageCode` and
-`kCFLocaleCountryCode` joined as `{language}_{country}.UTF-8`, accepted only when `/usr/share/locale/<value>` exists and
-`en_US.UTF-8` otherwise, and it is queried per create rather than cached. On every other platform no `LANG` is stamped.
+create that runs on the daemon's birth environment. Its value is the current region's language and country, read at each
+create, as `{language}_{country}.UTF-8` when `/usr/share/locale/<value>` exists and `en_US.UTF-8` otherwise. On every
+other platform no `LANG` is stamped.
 
 Caller overrides (`SpawnArgs.env`) cannot rebind reserved addressing variables (`FELIS_SESSION_ID`, `FELIS_SOCKET`) or
 keys present in the denylist; attempts are rejected with typed errors (REQ-912). Case normalization matches platform
@@ -73,9 +70,6 @@ The entry omits DCS-based synchronization (`Sync`): felis implements only DEC pr
 (`CSI ? 2026 h/l`). Six standard capabilities are explicitly canceled. `acsc`, `smacs`, `rmacs` and `sgr` go because
 character set switching (SCS) is a no-op (REQ-211); `xr` and `rv` go because their XTVERSION and DA2 response templates
 match xterm's replies, not felis's.
-
-Design rationale for capability selection is documented in
-[terminal-identity.md](../explanation/architecture/terminal-identity.md).
 
 The compiled entry adheres to macOS ncurses 6.0 constraints: compiled size must remain under 4096 bytes and color pairs
 are bounded by `pairs#0x7fff` (validated by `nix/compile-terminfo.sh`).
@@ -145,5 +139,5 @@ Individual commands can override identity directly:
 $ TERM_PROGRAM=kitty claude
 ```
 
-`FELIS_TERM` and `FELIS_TERM_PROGRAM` configure the identity stamp and are automatically scrubbed from child process
-environments via `ENV_DENYLIST` ([security-model.md](../explanation/security-model.md)).
+`FELIS_TERM` and `FELIS_TERM_PROGRAM` configure the identity stamp and are scrubbed from the child's environment
+([security-model.md](../explanation/security-model.md)).
