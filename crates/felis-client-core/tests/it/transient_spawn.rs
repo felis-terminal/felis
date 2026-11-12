@@ -3,43 +3,13 @@
 //! Asserts arguments from [`felis_client_core::pipe::prepare_spawn`] survive
 //! `SessionToDaemonMsg::Create` intact (`docs/explanation/data-model/scrollback.md`).
 
-use std::sync::Arc;
 use std::time::Duration;
 
 use felis_client_core::connector::{Offer, connect};
 use felis_client_core::pipe::{Origin, prepare_spawn};
-use felis_daemon::SessionPool;
-use felis_daemon::serve::{DaemonCaps, bind_unix, default_session_factory};
 use felis_protocol::messages::{GridDims, RegionPosition};
-use tempfile::TempDir;
 
-/// A socket parent must be a `0700` directory this uid owns
-/// (REQ-107), and `TempDir` follows the process umask.
-fn private_dir() -> TempDir {
-    let tmp = TempDir::new().unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-
-        std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
-    }
-    tmp
-}
-use tokio::sync::Mutex;
-
-fn spawn_daemon(tmp: &TempDir) -> std::path::PathBuf {
-    let path = tmp.path().join("daemon.sock");
-    let pool = Arc::new(Mutex::new(SessionPool::new()));
-    let serving = bind_unix(
-        &path,
-        DaemonCaps::default(),
-        pool,
-        default_session_factory(),
-    )
-    .unwrap();
-    tokio::spawn(async move { drop(serving.await) });
-    path
-}
+use crate::support::{daemon, private_dir};
 
 async fn read_when_written(path: &std::path::Path) -> String {
     for _ in 0..300 {
@@ -56,7 +26,7 @@ async fn read_when_written(path: &std::path::Path) -> String {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_transient_carries_the_region_and_the_origin_context_to_the_child() {
     let tmp = private_dir();
-    let socket = spawn_daemon(&tmp);
+    let socket = daemon(&tmp);
     let report = tmp.path().join("report.txt");
 
     // `sh -c '<script>' <arg>` binds `$0` to the region file `prepare_spawn` appends.
@@ -112,7 +82,7 @@ async fn a_transient_carries_the_region_and_the_origin_context_to_the_child() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_run_transient_reaches_the_child_with_the_argv_unchanged() {
     let tmp = private_dir();
-    let socket = spawn_daemon(&tmp);
+    let socket = daemon(&tmp);
     let report = tmp.path().join("report.txt");
 
     let script = format!("{{ echo \"args=[$*]\"; echo END; }} > {}", report.display());

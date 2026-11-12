@@ -12,5 +12,6 @@ mod rehydration_snapshot;
 #[cfg(all(unix, feature = "daemon-tests", feature = "json"))]
 mod relay;
 mod shadow_table_gc;
+mod support;
 #[cfg(all(unix, feature = "daemon-tests"))]
 mod transient_spawn;
