@@ -334,104 +334,54 @@ fn block_cursor_emits_no_marker_quad() {
     assert_eq!(buffers.rects.len(), 3);
 }
 
-#[test]
-fn underline_cursor_uses_theme_cursor_color_when_configured() {
-    let theme = Theme {
-        cursor: Some([0.5, 0.7, 0.9, 1.0]),
-        ..Theme::default()
-    };
-    let g = drive(1, 3, b"\x1b[4 qA");
-    let atlas = MockAtlas::full(slot());
-    let buffers = build_instances(g.screen(), metrics(), &theme, &atlas);
-    let marker = buffers
-        .rects
-        .iter()
-        .find(|b| b.size_px[1] == CURSOR_MARKER_PX)
-        .expect("underline marker present");
-    assert_eq!(marker.color, [0.5, 0.7, 0.9, 1.0]);
-}
+type CursorQuad = fn(&[Rect]) -> Option<&Rect>;
+
+const CURSOR_SHAPES: [(&str, &[u8], u16, CursorQuad); 3] = [
+    ("block", b"AB", 2, |rects| rects.get(2)),
+    ("underline", b"\x1b[4 qA", 1, |rects| {
+        rects.iter().find(|b| b.size_px[1] == CURSOR_MARKER_PX)
+    }),
+    ("bar", b"\x1b[6 qA", 1, |rects| {
+        rects.iter().find(|b| b.size_px[0] == CURSOR_MARKER_PX)
+    }),
+];
 
 #[test]
-fn bar_cursor_uses_theme_cursor_color_when_configured() {
+fn every_cursor_shape_paints_in_the_theme_cursor_color_when_configured() {
+    let cursor = [0.5, 0.7, 0.9, 1.0];
     let theme = Theme {
-        cursor: Some([0.5, 0.7, 0.9, 1.0]),
+        cursor: Some(cursor),
         ..Theme::default()
     };
-    let g = drive(1, 3, b"\x1b[6 qA");
     let atlas = MockAtlas::full(slot());
-    let buffers = build_instances(g.screen(), metrics(), &theme, &atlas);
-    let marker = buffers
-        .rects
-        .iter()
-        .find(|b| b.size_px[0] == CURSOR_MARKER_PX)
-        .expect("bar marker present");
-    assert_eq!(marker.color, [0.5, 0.7, 0.9, 1.0]);
-}
-
-#[test]
-fn unfocused_window_suppresses_the_cursor_block() {
-    let g = drive(1, 3, b"AB");
-    let atlas = MockAtlas::full(slot());
-    let theme = Theme::default();
-    let buffers = build_instances_with(g.screen(), metrics(), &theme, &atlas, |painter| {
-        painter.with_cursor_visible(false)
-    });
-    assert_eq!(buffers.rects.len(), 3);
-    for inst in &buffers.rects {
-        assert_eq!(inst.color, theme.bg, "no cell painted with cursor swap");
+    for (shape, bytes, col, quad) in CURSOR_SHAPES {
+        let g = drive(1, 3, bytes);
+        assert_eq!(g.cursor().col, col, "{shape}");
+        let buffers = build_instances(g.screen(), metrics(), &theme, &atlas);
+        let painted = quad(&buffers.rects).unwrap_or_else(|| panic!("{shape} quad present"));
+        assert_eq!(painted.color, cursor, "{shape}");
     }
 }
 
+/// Neither the block's swap nor a marker strip paints: the row is its
+/// three cells on the theme bg.
 #[test]
-fn unfocused_window_suppresses_underline_marker_too() {
-    let g = drive(1, 3, b"\x1b[4 qA");
+fn an_unfocused_window_paints_no_cursor_of_any_shape() {
+    let theme = Theme::default();
     let atlas = MockAtlas::full(slot());
-    let buffers = build_instances_with(
-        g.screen(),
-        metrics(),
-        &Theme::default(),
-        &atlas,
-        |painter| painter.with_cursor_visible(false),
-    );
-    let marker = buffers
-        .rects
-        .iter()
-        .find(|b| b.size_px[1] == CURSOR_MARKER_PX);
-    assert!(
-        marker.is_none(),
-        "underline marker must drop when unfocused"
-    );
-}
-
-#[test]
-fn unfocused_window_suppresses_bar_marker_too() {
-    let g = drive(1, 3, b"\x1b[6 qA");
-    let atlas = MockAtlas::full(slot());
-    let buffers = build_instances_with(
-        g.screen(),
-        metrics(),
-        &Theme::default(),
-        &atlas,
-        |painter| painter.with_cursor_visible(false),
-    );
-    let marker = buffers
-        .rects
-        .iter()
-        .find(|b| b.size_px[0] == CURSOR_MARKER_PX);
-    assert!(marker.is_none(), "bar marker must drop when unfocused");
-}
-
-#[test]
-fn cursor_uses_theme_cursor_color_when_configured() {
-    let theme = Theme {
-        cursor: Some([0.5, 0.7, 0.9, 1.0]),
-        ..Theme::default()
-    };
-    let g = drive(1, 3, b"AB");
-    let atlas = MockAtlas::full(slot());
-    let buffers = build_instances(g.screen(), metrics(), &theme, &atlas);
-    assert_eq!(g.cursor().col, 2);
-    assert_eq!(buffers.rects[2].color, [0.5, 0.7, 0.9, 1.0]);
+    for (shape, bytes, _, _) in CURSOR_SHAPES {
+        let g = drive(1, 3, bytes);
+        let buffers = build_instances_with(g.screen(), metrics(), &theme, &atlas, |painter| {
+            painter.with_cursor_visible(false)
+        });
+        assert_eq!(buffers.rects.len(), 3, "{shape}");
+        for inst in &buffers.rects {
+            assert_eq!(
+                inst.color, theme.bg,
+                "{shape}: no cell painted with the cursor"
+            );
+        }
+    }
 }
 
 #[test]
