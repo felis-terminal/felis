@@ -53,8 +53,8 @@ Data flows one way; place each piece at its lowest correct layer:
   new sequence to `fuzz/seeds/<target>/` and run `just fuzz-smoke`.
 - **esctest ratchet**: if the change fixes esctest failures, raise `PASS_BASELINE` per
   `docs/reference/esctest-compatibility.md` "Invariant and baseline" (the gate lives in
-  `crates/felis-pty/tests/esctest_smoke.rs`). The baseline only ratchets up: a change that would lower it is a
-  regression to fix, not a baseline to edit down.
+  `crates/felis-pty/tests/it/esctest.rs`). The baseline only ratchets up: a change that would lower it is a regression
+  to fix, not a baseline to edit down.
 - Verify against a **real producer** (yazi, presenterm, timg, raw escapes) with the `producer-traffic-debug` skill; the
   logs, not a screenshot, are the signal.
 

@@ -2,9 +2,6 @@
 //! `Parser` and `Grid`, and reply to capability probes (DA1, DSR, etc.).
 //! A missing `vttest` (`VTTEST_BIN` overrides `PATH`) fails the tests.
 
-#![cfg(unix)]
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -15,8 +12,7 @@ use felis_pty::{Command, PtyParts, Size};
 use tokio::io::AsyncWriteExt;
 use tokio::task::JoinHandle;
 
-mod common;
-use common::{COLS, ROWS, host_replies, require_binary};
+use crate::common::{COLS, ROWS, host_replies, require_binary};
 
 struct VttestSession {
     read_task: Option<JoinHandle<()>>,

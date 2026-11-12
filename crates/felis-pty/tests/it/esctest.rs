@@ -2,9 +2,6 @@
 //! and `felis-grid` in a PTY and assert the summary meets a tracked baseline.
 //! A missing `esctest` (`ESCTEST_BIN` overrides `PATH`) fails the test.
 
-#![cfg(unix)]
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -15,8 +12,7 @@ use felis_pty::{Command, PtyParts, Size};
 use tokio::io::AsyncWriteExt;
 use tokio::task::JoinHandle;
 
-mod common;
-use common::{COLS, ROWS, host_replies, require_binary};
+use crate::common::{COLS, ROWS, host_replies, require_binary};
 
 /// Lower bound on passed count under `--expected-terminal=xterm --max-vt-level=4`.
 /// Ratchet: a commit that flips cases to PASS bumps this floor.
