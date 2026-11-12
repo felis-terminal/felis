@@ -1,5 +1,27 @@
 use super::*;
 
+/// A 16-byte window reaches the SWAR body, the chunk boundary and the
+/// scalar tail; the two-byte borrow interaction is left to the Kani proof.
+fn sweep_single_byte(
+    scan: fn(&[u8]) -> usize,
+    scalar: fn(&[u8]) -> usize,
+    background: u8,
+    width: usize,
+) {
+    for value in 0u16..=255 {
+        let byte = value as u8;
+        for pos in 0..width {
+            let mut buf = vec![background; width];
+            buf[pos] = byte;
+            assert_eq!(
+                scan(&buf),
+                scalar(&buf),
+                "byte {byte:#04x} at offset {pos} of {width}"
+            );
+        }
+    }
+}
+
 #[test]
 fn scan_printable_run_matches_scalar() {
     // The byte-at-a-time reference the SWAR path must match.
@@ -8,21 +30,7 @@ fn scan_printable_run_matches_scalar() {
             .position(|&b| !(0x20..=0x7E).contains(&b))
             .unwrap_or(buf.len())
     }
-    // Every byte value at each offset 0..16 of a printable-filled window
-    // covers the SWAR body, the chunk boundary, and the scalar tail. The
-    // two-byte borrow interaction is left to the Kani proof.
-    for value in 0u16..=255 {
-        let byte = value as u8;
-        for pos in 0..16 {
-            let mut buf = [b'x'; 16];
-            buf[pos] = byte;
-            assert_eq!(
-                scan_printable_run(&buf),
-                scalar(&buf),
-                "byte {byte:#04x} at offset {pos}"
-            );
-        }
-    }
+    sweep_single_byte(scan_printable_run, scalar, b'x', 16);
     // Tail-only path.
     for len in 0..8 {
         let buf = vec![b'A'; len];
@@ -42,34 +50,11 @@ fn scan_mixed_print_run_matches_scalar() {
             .position(|&b| b < 0x20 || b == 0x7F)
             .unwrap_or(buf.len())
     }
-    // High-byte background (0xE4 is a UTF-8 continuation byte) with one
-    // byte of every value at each offset into a second chunk.
-    for value in 0u16..=255 {
-        let byte = value as u8;
-        for pos in 0..16 {
-            let mut buf = [0xE4u8; 16];
-            buf[pos] = byte;
-            assert_eq!(
-                scan_mixed_print_run(&buf),
-                scalar(&buf),
-                "byte {byte:#04x} at offset {pos}"
-            );
-        }
-    }
+    // High-byte background: 0xE4 is a UTF-8 continuation byte.
+    sweep_single_byte(scan_mixed_print_run, scalar, 0xE4, 16);
     // The scalar-tail loop, where the 0x1F/0x20 and 0x7E/0x7F/0x80 edges
     // separate `<` from `<=`.
-    for value in 0u16..=255 {
-        let byte = value as u8;
-        for pos in 0..7 {
-            let mut buf = [0xE4u8; 7];
-            buf[pos] = byte;
-            assert_eq!(
-                scan_mixed_print_run(&buf),
-                scalar(&buf),
-                "tail byte {byte:#04x} at offset {pos}"
-            );
-        }
-    }
+    sweep_single_byte(scan_mixed_print_run, scalar, 0xE4, 7);
     // The run length must equal the buffer length, not collapse to 0.
     for len in 0..16 {
         let buf: Vec<u8> = (0..len)
@@ -87,19 +72,7 @@ fn scan_string_body_matches_scalar() {
             .position(|&b| matches!(b, 0x07 | 0x18 | 0x1A | 0x1B))
             .unwrap_or(buf.len())
     }
-    // Same single-offending-byte sweep as `scan_printable_run_matches_scalar`.
-    for value in 0u16..=255 {
-        let byte = value as u8;
-        for pos in 0..16 {
-            let mut buf = [b'x'; 16];
-            buf[pos] = byte;
-            assert_eq!(
-                scan_string_body(&buf),
-                scalar(&buf),
-                "byte {byte:#04x} at offset {pos}"
-            );
-        }
-    }
+    sweep_single_byte(scan_string_body, scalar, b'x', 16);
     for len in 0..8 {
         let buf = vec![0xE4u8; len];
         assert_eq!(scan_string_body(&buf), scalar(&buf), "all-body len {len}");
@@ -121,17 +94,13 @@ fn csi_param_chunked_advance_matches_per_byte_dispatch() {
     seq.extend_from_slice(b"\x1b[3\x0812m"); // BS executes inside CsiParam
     seq.extend_from_slice(b"\x1b[99\x18z"); // CAN cancels; `z` prints
 
-    let mut per_byte = LogSink::default();
-    let mut parser = Parser::new();
-    for &b in &seq {
-        parser.advance_byte(&mut per_byte, b);
-    }
+    let per_byte = parse_per_byte(&seq);
     for split in 0..=seq.len() {
         let mut bulk = LogSink::default();
         let mut parser = Parser::new();
         parser.advance(&mut bulk, &seq[..split]);
         parser.advance(&mut bulk, &seq[split..]);
-        assert_eq!(bulk.events, per_byte.events, "split at {split}");
+        assert_eq!(bulk.events, per_byte, "split at {split}");
     }
 }
 
@@ -148,12 +117,5 @@ fn osc_body_bulk_path_matches_per_byte_dispatch() {
     seq.extend_from_slice(&body);
     seq.push(0x07);
 
-    let mut bulk = LogSink::default();
-    Parser::new().advance(&mut bulk, &seq);
-    let mut per_byte = LogSink::default();
-    let mut parser = Parser::new();
-    for &b in &seq {
-        parser.advance_byte(&mut per_byte, b);
-    }
-    assert_eq!(bulk.events, per_byte.events);
+    assert_eq!(parse(&seq), parse_per_byte(&seq));
 }

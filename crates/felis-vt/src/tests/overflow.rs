@@ -128,18 +128,10 @@ fn string_overflow_on_per_byte_push_path() {
     // `advance_byte` drives the per-byte `push` guard, not the bulk
     // `extend` path.
     for s in &CAPPED_STRINGS {
-        let mut parser = Parser::new();
-        let mut sink = LogSink::default();
-        for &b in s.intro {
-            parser.advance_byte(&mut sink, b);
-        }
-        for _ in 0..s.limit + 8 {
-            parser.advance_byte(&mut sink, b'a');
-        }
-        for &b in s.terminator {
-            parser.advance_byte(&mut sink, b);
-        }
-        assert_truncated_dispatch(s, &sink.events);
+        let mut bytes = s.intro.to_vec();
+        bytes.extend(std::iter::repeat_n(b'a', s.limit + 8));
+        bytes.extend_from_slice(s.terminator);
+        assert_truncated_dispatch(s, &parse_per_byte(&bytes));
     }
 }
 
@@ -162,13 +154,7 @@ fn dcs_hook_ignore_set_by_intermediate_overflow_alone() {
 fn apc_normal_byte_does_not_signal_overflow() {
     assert_eq!(
         parse_per_byte(b"\x1b_X\x1b\\"),
-        vec![
-            Event::Apc(vec![b'X']),
-            Event::Esc {
-                intermediates: vec![],
-                final_byte: b'\\',
-            },
-        ]
+        vec![Event::Apc(vec![b'X']), esc(b'\\')]
     );
 }
 

@@ -22,10 +22,7 @@ fn osc_dispatch_st_terminated() {
                 body: b"2;title".to_vec(),
                 end: OscEnd::St,
             },
-            Event::Esc {
-                intermediates: vec![],
-                final_byte: b'\\',
-            },
+            esc(b'\\'),
         ]
     );
 }
@@ -34,16 +31,7 @@ fn osc_dispatch_st_terminated() {
 fn osc_ended_by_an_escape_sequence_dispatches_as_interrupted_before_it() {
     assert_eq!(
         parse(b"\x1b]2;title\x1b[1m"),
-        vec![
-            osc(b"2;title", OscEnd::Interrupted),
-            Event::Csi {
-                params: vec![1],
-                subparams: 0,
-                intermediates: vec![],
-                ignore: false,
-                final_byte: b'm',
-            },
-        ]
+        vec![osc(b"2;title", OscEnd::Interrupted), csi(&[1], &[], b'm')]
     );
     assert_eq!(
         parse(b"\x1b]2;title\x1b7"),
@@ -137,13 +125,7 @@ fn apc_dispatch_treats_0x9c_as_data_not_st() {
     let evs = parse(b"\x1b_Gf=24,a=T;hello\x9cworld\x1b\\");
     assert_eq!(
         evs,
-        vec![
-            Event::Apc(b"Gf=24,a=T;hello\x9cworld".to_vec()),
-            Event::Esc {
-                intermediates: vec![],
-                final_byte: b'\\',
-            },
-        ]
+        vec![Event::Apc(b"Gf=24,a=T;hello\x9cworld".to_vec()), esc(b'\\')]
     );
 }
 
@@ -194,15 +176,9 @@ fn apc_after_apc_resets_buffer() {
         evs,
         vec![
             Event::Apc(b"first".to_vec()),
-            Event::Esc {
-                intermediates: vec![],
-                final_byte: b'\\',
-            },
+            esc(b'\\'),
             Event::Apc(b"second".to_vec()),
-            Event::Esc {
-                intermediates: vec![],
-                final_byte: b'\\',
-            },
+            esc(b'\\'),
         ]
     );
 }

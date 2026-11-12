@@ -15,6 +15,25 @@ fn osc(body: &[u8], end: OscEnd) -> Event {
     }
 }
 
+fn csi(params: &[u16], intermediates: &[u8], final_byte: u8) -> Event {
+    Event::Csi {
+        params: params.to_vec(),
+        subparams: 0,
+        intermediates: intermediates.to_vec(),
+        ignore: false,
+        final_byte,
+    }
+}
+
+fn dcs_hook(params: &[u16], intermediates: &[u8], final_byte: u8) -> Event {
+    Event::DcsHook {
+        params: params.to_vec(),
+        intermediates: intermediates.to_vec(),
+        ignore: false,
+        final_byte,
+    }
+}
+
 const fn esc(final_byte: u8) -> Event {
     Event::Esc {
         intermediates: vec![],

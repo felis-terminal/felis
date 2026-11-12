@@ -28,62 +28,17 @@ fn bare_c1_bytes_in_ground_state_do_not_introduce_sequences() {
 }
 
 #[test]
-fn esc_dispatch_simple() {
-    let evs = parse(b"\x1bc"); // ESC c — full reset
-    assert_eq!(
-        evs,
-        vec![Event::Esc {
-            intermediates: vec![],
-            final_byte: b'c'
-        }]
-    );
-}
-
-#[test]
-fn csi_dispatch_with_params() {
-    let evs = parse(b"\x1b[1;2H"); // CUP row=1, col=2
-    assert_eq!(
-        evs,
-        vec![Event::Csi {
-            params: vec![1, 2],
-            subparams: 0,
-            intermediates: vec![],
-            ignore: false,
-            final_byte: b'H',
-        }]
-    );
-}
-
-#[test]
-fn csi_dispatch_no_params() {
-    let evs = parse(b"\x1b[H"); // CUP default
-    assert_eq!(
-        evs,
-        vec![Event::Csi {
-            params: vec![],
-            subparams: 0,
-            intermediates: vec![],
-            ignore: false,
-            final_byte: b'H',
-        }]
-    );
-}
-
-#[test]
-fn csi_single_digit_param_decodes_as_decimal() {
-    // Opens with `5`: the sibling tests open with `1`, where `'1' - '0'`
-    // and `'1' / '0'` both yield 1 and never pin the digit decode.
-    let evs = parse(b"\x1b[5H"); // CUP row=5
-    assert_eq!(
-        evs,
-        vec![Event::Csi {
-            params: vec![5],
-            subparams: 0,
-            intermediates: vec![],
-            ignore: false,
-            final_byte: b'H',
-        }]
-    );
+fn csi_dispatch_decodes_params() {
+    let cases: &[(&[u8], &[u16])] = &[
+        (b"\x1b[1;2H", &[1, 2]),
+        (b"\x1b[H", &[]),
+        // `5`, not `1`: `'1' - '0'` and `'1' / '0'` both yield 1, so a
+        // param opening with `1` never pins the digit decode.
+        (b"\x1b[5H", &[5]),
+    ];
+    for (input, params) in cases {
+        assert_eq!(parse(input), vec![csi(params, &[], b'H')], "{input:?}");
+    }
 }
 
 #[test]
@@ -108,16 +63,7 @@ fn csi_leading_colon_keeps_empty_slot_zero() {
     // `CSI : m` has no digit after the colon, so `start_empty` alone seeds
     // slot 0: the param list must be `[0]`, not empty.
     let evs = parse(b"\x1b[:m");
-    assert_eq!(
-        evs,
-        vec![Event::Csi {
-            params: vec![0],
-            subparams: 0,
-            intermediates: vec![],
-            ignore: false,
-            final_byte: b'm',
-        }]
-    );
+    assert_eq!(evs, vec![csi(&[0], &[], b'm')]);
 }
 
 #[test]
@@ -125,40 +71,13 @@ fn csi_state_is_cleared_between_sequences() {
     // A second CSI must not inherit the first's params or intermediates;
     // every other test parses a single sequence from a fresh parser.
     let evs = parse(b"\x1b[1!p\x1b[H");
-    assert_eq!(
-        evs,
-        vec![
-            Event::Csi {
-                params: vec![1],
-                subparams: 0,
-                intermediates: vec![b'!'],
-                ignore: false,
-                final_byte: b'p',
-            },
-            Event::Csi {
-                params: vec![],
-                subparams: 0,
-                intermediates: vec![],
-                ignore: false,
-                final_byte: b'H',
-            },
-        ]
-    );
+    assert_eq!(evs, vec![csi(&[1], b"!", b'p'), csi(&[], &[], b'H')]);
 }
 
 #[test]
 fn csi_dispatch_with_private_intermediate() {
     let evs = parse(b"\x1b[?25h"); // DECTCEM show cursor
-    assert_eq!(
-        evs,
-        vec![Event::Csi {
-            params: vec![25],
-            subparams: 0,
-            intermediates: vec![b'?'],
-            ignore: false,
-            final_byte: b'h',
-        }]
-    );
+    assert_eq!(evs, vec![csi(&[25], b"?", b'h')]);
 }
 
 #[test]
@@ -173,19 +92,16 @@ fn cancellation_via_can() {
 
 #[test]
 fn dcs_hook_put_unhook() {
-    let evs = parse(b"\x1bP1;2qHi\x1b\\");
-    assert!(matches!(
-        evs[0],
-        Event::DcsHook {
-            ref params,
-            ref intermediates,
-            ignore: false,
-            final_byte: b'q',
-        } if params == &[1, 2] && intermediates.is_empty()
-    ));
-    assert_eq!(evs[1], Event::DcsPut(b'H'));
-    assert_eq!(evs[2], Event::DcsPut(b'i'));
-    assert_eq!(evs[3], Event::DcsUnhook);
+    assert_eq!(
+        parse(b"\x1bP1;2qHi\x1b\\"),
+        vec![
+            dcs_hook(&[1, 2], &[], b'q'),
+            Event::DcsPut(b'H'),
+            Event::DcsPut(b'i'),
+            Event::DcsUnhook,
+            esc(b'\\'),
+        ]
+    );
 }
 
 #[test]
@@ -193,6 +109,7 @@ fn esc_dispatch_table_carries_final_byte_and_intermediates() {
     // The full event (final byte + intermediates) is the oracle: a
     // dispatcher that dropped the `#` intermediate from DECALN fails here.
     let cases: &[(&[u8], &[u8], u8, &str)] = &[
+        (b"\x1bc", b"", b'c', "RIS: ESC c"),
         (b"\x1b7", b"", b'7', "DECSC: ESC 7"),
         (b"\x1b8", b"", b'8', "DECRC: ESC 8"),
         (b"\x1bD", b"", b'D', "IND: ESC D"),
@@ -201,14 +118,13 @@ fn esc_dispatch_table_carries_final_byte_and_intermediates() {
         (b"\x1b#8", b"#", b'8', "DECALN: ESC # 8"),
     ];
     for (bytes, intermediates, final_byte, label) in cases {
-        let evs = parse(bytes);
         assert_eq!(
-            evs.last(),
-            Some(&Event::Esc {
+            parse(bytes),
+            vec![Event::Esc {
                 intermediates: intermediates.to_vec(),
                 final_byte: *final_byte,
-            }),
-            "{label}: got {evs:?}",
+            }],
+            "{label}",
         );
     }
 }
