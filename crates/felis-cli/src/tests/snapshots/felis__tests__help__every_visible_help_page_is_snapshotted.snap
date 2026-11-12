@@ -1,5 +1,5 @@
 ---
-source: crates/felis-cli/src/tests.rs
+source: crates/felis-cli/src/tests/help.rs
 expression: pages
 ---
 $ felis --help
