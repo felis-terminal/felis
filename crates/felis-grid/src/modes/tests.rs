@@ -38,3 +38,32 @@ fn private_modes_compose_in_one_dispatch() {
     assert!(!g.bracketed_paste());
     assert!(!g.focus_reporting());
 }
+
+/// REQ-902: edge-triggered, so a program spamming resets cannot flood
+/// the daemon's log.
+#[test]
+fn disabling_bracketed_paste_queues_one_edge_triggered_warning() {
+    let mut p = Parser::new();
+    let mut g = Grid::new(2, 8);
+    drive(&mut p, &mut g, b"\x1b[?2004h");
+    drop(g.take_pty_effects());
+    drive(&mut p, &mut g, b"\x1b[?2004l\x1b[?2004l");
+    let warnings = g
+        .take_pty_effects()
+        .iter()
+        .filter(|e| matches!(e, PtyEffect::BracketedPasteDisabled))
+        .count();
+    assert_eq!(warnings, 1, "edge-triggered: on→off fires once");
+    assert!(!g.bracketed_paste());
+}
+
+#[test]
+fn synchronized_output_mode_toggles_via_2026() {
+    let mut p = Parser::new();
+    let mut g = Grid::new(1, 3);
+    assert!(!g.synchronized_output());
+    drive(&mut p, &mut g, b"\x1b[?2026h");
+    assert!(g.synchronized_output());
+    drive(&mut p, &mut g, b"\x1b[?2026l");
+    assert!(!g.synchronized_output());
+}

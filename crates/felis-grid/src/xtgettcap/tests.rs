@@ -198,3 +198,95 @@ proptest! {
         );
     }
 }
+
+/// `xtgettcap_reply` echoes each cap's hex verbatim, so a reply carrying
+/// the trailing `co` proves the last byte before the limit survived.
+#[test]
+fn xtgettcap_body_exactly_at_the_dcs_buffer_limit_is_answered_intact() {
+    let mut p = Parser::new();
+    let mut g = Grid::new(24, 80);
+    // The filler is one unknown (odd-length, so un-decodable) cap.
+    let mut body = vec![b'0'; DCS_BUFFER_LIMIT - 5];
+    body.extend_from_slice(b";636f");
+    assert_eq!(body.len(), DCS_BUFFER_LIMIT);
+
+    let mut bytes = b"\x1bP+q".to_vec();
+    bytes.extend_from_slice(&body);
+    bytes.extend_from_slice(b"\x1b\\");
+    drive(&mut p, &mut g, &bytes);
+
+    let reply = responses(&mut g)
+        .into_iter()
+        .next()
+        .expect("XTGETTCAP reply");
+    assert!(
+        reply.ends_with(b";636f=3830\x1b\\"),
+        "reply lost the cap at the limit: {:?}",
+        String::from_utf8_lossy(&reply)
+    );
+}
+
+/// One byte past the limit the overflow is dropped: the query's final
+/// `f` is gone, so `636` cannot decode and the cap is answered empty.
+#[test]
+fn xtgettcap_body_one_byte_past_the_dcs_buffer_limit_drops_the_overflow() {
+    let mut p = Parser::new();
+    let mut g = Grid::new(24, 80);
+    let mut body = vec![b'0'; DCS_BUFFER_LIMIT - 4];
+    body.extend_from_slice(b";636f");
+    assert_eq!(body.len(), DCS_BUFFER_LIMIT + 1);
+
+    let mut bytes = b"\x1bP+q".to_vec();
+    bytes.extend_from_slice(&body);
+    bytes.extend_from_slice(b"\x1b\\");
+    drive(&mut p, &mut g, &bytes);
+
+    let reply = responses(&mut g)
+        .into_iter()
+        .next()
+        .expect("XTGETTCAP reply");
+    assert!(
+        reply.ends_with(b";\x1b\\"),
+        "expected the last body byte dropped, got: {:?}",
+        String::from_utf8_lossy(&reply)
+    );
+    assert!(
+        !reply.contains(&b'='),
+        "a truncated cap name must not be answered"
+    );
+}
+
+/// REQ-903: the flooding-producer shape leaves the grid untouched and
+/// the parser back in Ground.
+#[test]
+fn input_after_an_oversized_dcs_body_parses_normally() {
+    let mut p = Parser::new();
+    let mut g = Grid::new(3, 10);
+    let mut bytes = b"\x1bP+q".to_vec();
+    bytes.extend(std::iter::repeat_n(b'6', DCS_BUFFER_LIMIT * 8));
+    bytes.extend_from_slice(b"\x1b\\ok");
+    drive(&mut p, &mut g, &bytes);
+
+    assert_eq!(g.cell(0, 0).unwrap().grapheme, Grapheme::Ascii(b'o'));
+    assert_eq!(g.cell(0, 1).unwrap().grapheme, Grapheme::Ascii(b'k'));
+    assert_eq!(g.cursor().col, 2);
+    assert_eq!(g.cursor().row, 0);
+}
+
+/// The REQ-903 discard that mirrors `csi_dispatch`: without the `ignore`
+/// bail the `$ q` tail would still read as DECRQSS and answer a
+/// malformed request.
+#[test]
+fn dcs_with_overflowed_intermediates_is_dropped_without_a_reply() {
+    let mut p = Parser::new();
+    let mut g = Grid::new(3, 10);
+    // Four intermediates against `MAX_INTERMEDIATES = 3`.
+    drive(&mut p, &mut g, b"\x1bP$$$$qm\x1b\\ok");
+
+    assert!(
+        responses(&mut g).is_empty(),
+        "an overflowed DCS opener must not be answered"
+    );
+    assert_eq!(g.cell(0, 0).unwrap().grapheme, Grapheme::Ascii(b'o'));
+    assert_eq!(g.cell(0, 1).unwrap().grapheme, Grapheme::Ascii(b'k'));
+}
