@@ -1,9 +1,18 @@
 use super::*;
 
+use felis_protocol::preface::{PROTOCOL_MAJOR, PROTOCOL_MINOR, PrefaceError};
+#[cfg(unix)]
+use felis_protocol::{
+    messages::{MAX_RETARGET_DESCRIPTOR_BYTES, RetargetCarrier, RetargetLanding},
+    preface::{DaemonAccept, DaemonPreface},
+};
+#[cfg(unix)]
+use felis_transport::{Endpoint, local::Listener, preface::write_daemon_preface};
+#[cfg(unix)]
+use tokio::io::AsyncReadExt as _;
+
 #[test]
 fn is_transient_classifies_each_variant() {
-    use felis_protocol::preface::{PROTOCOL_MAJOR, PrefaceError};
-
     let io = ConnectError::Io(std::io::Error::from(std::io::ErrorKind::ConnectionRefused));
     assert!(io.is_transient(), "Io must be transient");
 
@@ -74,8 +83,8 @@ fn is_transient_classifies_each_variant() {
     );
     assert!(
         !ConnectError::MinorTooOld {
-            needs: preface::PROTOCOL_MINOR + 1,
-            effective: preface::PROTOCOL_MINOR,
+            needs: PROTOCOL_MINOR + 1,
+            effective: PROTOCOL_MINOR,
             feature: "an addition this connection predates",
         }
         .is_transient(),
@@ -133,8 +142,6 @@ async fn connect_carrier_with_retry_succeeds_after_daemon_starts_late() {
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_bounded_dial_names_the_phase_its_deadline_caught() {
-    use felis_transport::{Endpoint, local::Listener};
-
     let tmp = private_dir();
     let path = tmp.path().join("silent.sock");
     let server = Listener::bind(&Endpoint::unix(path.clone())).expect("bind");
@@ -164,10 +171,6 @@ async fn a_bounded_dial_names_the_phase_its_deadline_caught() {
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn connect_carrier_with_retry_does_not_retry_on_protocol_error() {
-    use felis_protocol::preface::DaemonAccept;
-    use felis_protocol::{MessageKind, frame::Frame};
-    use felis_transport::{Endpoint, FrameWriter, local::Listener};
-
     let tmp = private_dir();
     let path = tmp.path().join("bogus.sock");
     let server = Listener::bind(&Endpoint::unix(path.clone())).expect("bind");
@@ -176,7 +179,7 @@ async fn connect_carrier_with_retry_does_not_retry_on_protocol_error() {
         let stream = server.accept().await.expect("accept");
         let (_read, mut write) = stream.into_split();
         // Accepted so the failure under test is the frame, not the preface.
-        felis_transport::preface::write_daemon_preface(
+        write_daemon_preface(
             &mut write,
             DaemonAccept::select(ClientPreface::CURRENT).expect("served"),
         )
@@ -228,9 +231,6 @@ async fn connect_carrier_with_retry_does_not_retry_on_protocol_error() {
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn connect_refuses_a_daemon_of_another_protocol_major() {
-    use felis_protocol::preface::{DaemonPreface, PROTOCOL_MAJOR};
-    use felis_transport::{Endpoint, local::Listener, preface::write_daemon_preface};
-
     let tmp = private_dir();
     let path = tmp.path().join("skew.sock");
     let server = Listener::bind(&Endpoint::unix(path.clone())).expect("bind");
@@ -275,9 +275,6 @@ async fn connect_refuses_a_daemon_of_another_protocol_major() {
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn connect_treats_an_unknown_preface_status_as_a_refusal() {
-    use felis_protocol::preface::DaemonPreface;
-    use felis_transport::{Endpoint, local::Listener, preface::write_daemon_preface};
-
     let tmp = private_dir();
     let path = tmp.path().join("future.sock");
     let server = Listener::bind(&Endpoint::unix(path.clone())).expect("bind");
@@ -312,7 +309,7 @@ async fn connect_treats_an_unknown_preface_status_as_a_refusal() {
         } => {
             assert_eq!(status, 7);
             assert_eq!(words, [9, 9]);
-            assert_eq!(client_major, felis_protocol::PROTOCOL_MAJOR);
+            assert_eq!(client_major, PROTOCOL_MAJOR);
         }
         other => panic!("expected UnknownPrefaceStatus, got {other:?}"),
     }
@@ -328,10 +325,6 @@ async fn connect_treats_an_unknown_preface_status_as_a_refusal() {
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn connect_closes_on_an_accept_naming_an_unoffered_major() {
-    use felis_protocol::preface::{DaemonPreface, PROTOCOL_MAJOR, PROTOCOL_MINOR};
-    use felis_transport::{Endpoint, local::Listener, preface::write_daemon_preface};
-    use tokio::io::AsyncReadExt as _;
-
     let tmp = private_dir();
     let path = tmp.path().join("wrong-major.sock");
     let server = Listener::bind(&Endpoint::unix(path.clone())).expect("bind");
@@ -401,9 +394,6 @@ async fn connect_closes_on_an_accept_naming_an_unoffered_major() {
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_effective_minor_is_the_lower_of_the_two_peers() {
-    use felis_protocol::preface::{DaemonPreface, PROTOCOL_MAJOR, PROTOCOL_MINOR};
-    use felis_transport::{Endpoint, local::Listener, preface::write_daemon_preface};
-
     for (daemon_minor, want) in [
         (PROTOCOL_MINOR + 5, PROTOCOL_MINOR),
         (PROTOCOL_MINOR, PROTOCOL_MINOR),
@@ -483,12 +473,6 @@ async fn attach_by_prefix_refuses_a_prefix_no_session_id_can_start_with() {
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_refused_over_limit_request_does_not_burn_its_request_id() {
-    use felis_protocol::messages::{
-        MAX_RETARGET_DESCRIPTOR_BYTES, RetargetCarrier, RetargetLanding,
-    };
-    use felis_protocol::preface::{DaemonPreface, PROTOCOL_MAJOR};
-    use felis_transport::{Endpoint, local::Listener, preface::write_daemon_preface};
-
     let tmp = private_dir();
     let path = tmp.path().join("echo-daemon.sock");
     let server = Listener::bind(&Endpoint::unix(path.clone())).expect("bind");
@@ -502,7 +486,7 @@ async fn a_refused_over_limit_request_does_not_burn_its_request_id() {
             &mut write,
             DaemonPreface::Accept {
                 major: PROTOCOL_MAJOR,
-                minor: preface::PROTOCOL_MINOR,
+                minor: PROTOCOL_MINOR,
             },
         )
         .await

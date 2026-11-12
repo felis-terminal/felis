@@ -1,5 +1,7 @@
 use super::*;
 
+use felis_protocol::messages::PushMsg;
+
 /// A connection whose peer is a script, so a reply the daemon would
 /// never write can be put on the wire.
 fn scripted_peer(
@@ -374,8 +376,6 @@ async fn attach_against_scripted_reply<M>(reply: M) -> ConnectError
 where
     M: codec::Correlated + Send + 'static,
 {
-    use felis_transport::{FrameReader, FrameWriter};
-
     let (client_side, daemon_side) = tokio::io::duplex(64 * 1024);
     let (client_read, client_write) = tokio::io::split(client_side);
     let (daemon_read, daemon_write) = tokio::io::split(daemon_side);
@@ -440,9 +440,6 @@ async fn a_correlated_session_reply_ends_the_connection() {
 /// (REQ-114).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_misrouted_push_parked_behind_a_verb_ends_the_connection() {
-    use felis_protocol::messages::PushMsg;
-    use felis_transport::{FrameReader, FrameWriter};
-
     let (client_side, daemon_side) = tokio::io::duplex(64 * 1024);
     let (client_read, client_write) = tokio::io::split(client_side);
     let (daemon_read, daemon_write) = tokio::io::split(daemon_side);

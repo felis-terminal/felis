@@ -1,5 +1,10 @@
 use super::*;
 
+use felis_protocol::messages::{
+    RegionSource, RegionToDaemonMsg, SearchOptions, SearchSource, SearchToDaemonMsg, SendStep,
+};
+use tokio::io::AsyncReadExt as _;
+
 /// The arm whose row a post-release minor would carry: nothing
 /// declares it on the wire, and it stands in for the first real one.
 struct FutureArm;
@@ -94,8 +99,6 @@ fn an_arm_above_the_effective_minor_is_refused_locally() {
 /// than earn a reply.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_upgrade_against_a_minor_zero_daemon_is_refused_without_sending() {
-    use tokio::io::AsyncReadExt as _;
-
     let (client_side, mut daemon_side) = tokio::io::duplex(4096);
     let (read, write) = tokio::io::split(client_side);
     let mut conn = Connection::from_halves(
@@ -133,13 +136,6 @@ async fn an_upgrade_against_a_minor_zero_daemon_is_refused_without_sending() {
 /// an empty `Ops` oneof.
 #[tokio::test]
 async fn every_session_addressed_call_is_refused_unsent_on_the_previous_minor() {
-    use felis_protocol::messages::{
-        OpsToDaemonMsg, RegionSource, RegionToDaemonMsg, SearchOptions, SearchSource,
-        SearchToDaemonMsg, SendStep,
-    };
-    use felis_transport::{FrameReader, FrameWriter};
-    use tokio::io::AsyncReadExt as _;
-
     let since = OpsToDaemonMsg::Send {
         id_prefix: String::new(),
         steps: Vec::new(),

@@ -1,5 +1,8 @@
 use super::*;
 
+use felis_protocol::messages::{SearchOptions, SearchToClientMsg, SearchToDaemonMsg};
+use felis_transport::MAX_OUTSTANDING_STREAMS;
+
 #[cfg(all(unix, feature = "daemon-tests"))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn connector_round_trips_through_a_real_daemon() {
@@ -73,8 +76,6 @@ async fn await_row_containing(
 
 #[cfg(unix)]
 async fn collect_search(conn: &mut Connection, stream: StreamId) -> (usize, Result<u32, String>) {
-    use felis_protocol::messages::SearchToClientMsg;
-
     let mut items = 0usize;
     loop {
         let frame = tokio::time::timeout(Duration::from_secs(10), conn.next_frame())
@@ -119,8 +120,6 @@ async fn collect_search(conn: &mut Connection, stream: StreamId) -> (usize, Resu
 #[cfg(all(unix, feature = "daemon-tests"))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn one_connection_answers_many_verbs_while_a_stream_runs() {
-    use felis_protocol::messages::{SearchOptions, SearchToDaemonMsg};
-
     // The `read` builtin parks the shell; `sleep` is not on the
     // sanitized PATH these tests run with.
     let (_tmp, path, server) = daemon_running("printf 'needle-alpha\\n'; read _x").await;
@@ -216,9 +215,6 @@ async fn one_connection_answers_many_verbs_while_a_stream_runs() {
 #[cfg(all(unix, feature = "daemon-tests"))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn sequential_streams_free_their_slot_on_the_daemon() {
-    use felis_protocol::messages::{SearchOptions, SearchToDaemonMsg};
-    use felis_transport::MAX_OUTSTANDING_STREAMS;
-
     let (_tmp, path, server) = daemon_running("read _x").await;
 
     let mut conn = connect(&path, Offer::ops()).await.unwrap();
@@ -281,8 +277,6 @@ async fn a_window_is_refused_a_mutating_verb_without_losing_the_connection() {
 #[cfg(all(unix, feature = "daemon-tests"))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn cancelling_a_search_mid_stream_stops_it_and_leaves_the_connection_usable() {
-    use felis_protocol::messages::{SearchOptions, SearchToDaemonMsg};
-
     // Deep enough that the walk spans dozens of slices for the cancel to land between.
     let (_tmp, path, server) =
         daemon_running("i=0; while [ $i -lt 9000 ]; do echo needle-$i; i=$((i+1)); done; read _x")
@@ -351,8 +345,6 @@ async fn cancelling_a_search_mid_stream_stops_it_and_leaves_the_connection_usabl
 #[cfg(all(unix, feature = "daemon-tests"))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_huge_scrollback_search_emits_before_the_walk_completes() {
-    use felis_protocol::messages::{SearchOptions, SearchToClientMsg, SearchToDaemonMsg};
-
     let (_tmp, path, server) =
         daemon_running("i=0; while [ $i -lt 2000 ]; do echo needle-$i; i=$((i+1)); done; read _x")
             .await;

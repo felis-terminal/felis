@@ -1,11 +1,12 @@
 use super::*;
 
+use felis_protocol::messages::PushMsg;
+
 #[cfg(unix)]
 async fn await_session_exited(
     conn: &mut Connection,
     deadline: tokio::time::Instant,
 ) -> Option<(u128, Option<felis_protocol::messages::ExitStatus>)> {
-    use felis_protocol::messages::PushMsg;
     while tokio::time::Instant::now() < deadline {
         // A quiet stretch is not an answer: the deadline above is the
         // one bound, and a loaded machine running the whole suite in
@@ -118,8 +119,6 @@ async fn session_exited_carries_the_status_of_a_program_that_closed_its_pty() {
 #[cfg(all(unix, feature = "daemon-tests"))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_ops_attach_gets_channel_close_without_session_exited() {
-    use felis_protocol::messages::PushMsg;
-
     let (_tmp, path, server) = daemon_with_exiting_shell().await;
 
     let mut c = connect(&path, Offer::ops()).await.unwrap();
