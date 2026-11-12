@@ -114,9 +114,11 @@ Two helper worlds exist and **cannot share code**: they are separate compilation
   `crate::test_support`.
 - **Integration tests** keep their fixtures and helpers self-contained beside their test binaries; do not add helper
   crates.
-- **One integration binary per crate** in felis-grid, felis-vt and felis-protocol: a new test file goes in `tests/it/`
-  and gets a `mod` line in `tests/it/main.rs`, never a new `tests/<name>.rs`. Each binary relinks the crate's whole
-  dependency graph, so a binary per file made a one-line edit relink dozens (and cargo-mutants relink them per mutant).
+- **One integration binary per crate**: a new test file goes in `tests/it/` and gets a `mod` line in `tests/it/main.rs`,
+  never a new `tests/<name>.rs`. Each binary relinks the crate's whole dependency graph, so a binary per file made a
+  one-line edit relink dozens (and cargo-mutants relink them per mutant). A file-level `#![cfg(..)]` becomes a
+  `#[cfg(..)]` on its `mod` line. The exception is a test that owns process-global state: a `#[global_allocator]` (the
+  dhat and counting-allocator binaries) or a set-once global it asserts unset, which keeps its own `tests/<name>.rs`.
 
 Duplication _between_ these two worlds is expected, not a smell: a helper needed in both lives once in each. Do **not**
 add a dev-only `felis-test-*` crate to bridge them (`docs/explanation/architecture/overview.md` "Rejected workspace
