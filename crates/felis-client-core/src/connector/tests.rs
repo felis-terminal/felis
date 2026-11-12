@@ -10,6 +10,8 @@ use felis_daemon::{SessionPool, serve::DaemonCaps, serve::default_session_factor
 #[cfg(unix)]
 use tempfile::TempDir;
 
+#[cfg(all(unix, feature = "daemon-tests"))]
+use crate::test_support::{daemon_running, daemon_with_pool};
 #[cfg(unix)]
 use crate::test_support::{private_dir, serve_bound};
 #[cfg(unix)]
@@ -616,27 +618,6 @@ async fn await_row_containing(
     false
 }
 
-#[cfg(all(unix, feature = "daemon-tests"))]
-pub(super) async fn daemon_running(
-    script: &'static str,
-) -> (TempDir, PathBuf, tokio::task::JoinHandle<()>) {
-    use felis_daemon::serve::SessionFactory;
-    use felis_pty::Command;
-
-    let tmp = private_dir();
-    let path = tmp.path().join("daemon.sock");
-    let pool = Arc::new(Mutex::new(SessionPool::new()));
-    let factory: SessionFactory = Arc::new(move |_| {
-        let mut cmd = Command::new("/bin/sh");
-        cmd.args(["-c", script]);
-        cmd.env_clear();
-        cmd.env("PATH", "/bin:/usr/bin");
-        cmd
-    });
-    let server = serve_bound(&path, DaemonCaps::default(), pool, factory);
-    (tmp, path, server)
-}
-
 #[cfg(unix)]
 async fn collect_search(conn: &mut Connection, stream: StreamId) -> (usize, Result<u32, String>) {
     use felis_protocol::messages::SearchToClientMsg;
@@ -988,25 +969,7 @@ async fn a_huge_scrollback_search_emits_before_the_walk_completes() {
 #[cfg(all(unix, feature = "daemon-tests"))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn killed_client_reattaches_and_observes_prior_output() {
-    use felis_daemon::serve::SessionFactory;
-    use felis_pty::Command;
-
-    let tmp = private_dir();
-    let path = tmp.path().join("daemon.sock");
-    let pool = Arc::new(Mutex::new(SessionPool::new()));
-
-    // The `read` builtin parks the shell: a host with no FHS `/bin`
-    // resolves no `sleep` under this pinned `PATH`.
-    let factory: SessionFactory = Arc::new(|_| {
-        let mut cmd = Command::new("/bin/sh");
-        cmd.args(["-c", "printf reattach-ok; read _x"]);
-        cmd.env_clear();
-        cmd.env("PATH", "/bin:/usr/bin");
-        cmd
-    });
-
-    let server_pool = pool.clone();
-    let server = serve_bound(&path, DaemonCaps::default(), server_pool, factory);
+    let (_tmp, path, pool, server) = daemon_with_pool("printf reattach-ok; read _x");
 
     let mut a = connect(&path, Offer::window(false)).await.unwrap();
     let attach = a.create_with(SpawnArgs::default()).await.unwrap();
@@ -1056,25 +1019,7 @@ async fn killed_client_reattaches_and_observes_prior_output() {
 #[cfg(all(unix, feature = "daemon-tests"))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn destroy_session_removes_session_and_acks_existed() {
-    use felis_daemon::serve::SessionFactory;
-    use felis_pty::Command;
-
-    let tmp = private_dir();
-    let path = tmp.path().join("daemon.sock");
-    let pool = Arc::new(Mutex::new(SessionPool::new()));
-
-    // The `read` builtin parks the shell: a host with no FHS `/bin`
-    // resolves no `sleep` under this pinned `PATH`.
-    let factory: SessionFactory = Arc::new(|_| {
-        let mut cmd = Command::new("/bin/sh");
-        cmd.args(["-c", "read _x"]);
-        cmd.env_clear();
-        cmd.env("PATH", "/bin:/usr/bin");
-        cmd
-    });
-
-    let server_pool = pool.clone();
-    let server = serve_bound(&path, DaemonCaps::default(), server_pool, factory);
+    let (_tmp, path, server) = daemon_running("read _x").await;
 
     let mut a = connect(&path, Offer::ops()).await.unwrap();
     let id = a.create_with(SpawnArgs::default()).await.unwrap().id;
