@@ -114,7 +114,7 @@ rather than over the image, because a whole-screen diff is not a quiet picture, 
 closing.
 
 A felis-only latency regression seen here is bisected with the headless echo-latency probe
-(`crates/felis-daemon/tests/real_app_harness.rs`), since this suite cannot see inside the pipeline.
+(`crates/felis-daemon/tests/it/real_app_harness.rs`), since this suite cannot see inside the pipeline.
 
 ### Startup ends at the first window, not at the process exit
 

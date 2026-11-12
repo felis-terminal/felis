@@ -274,9 +274,7 @@ async fn an_exit_under_an_attached_window_is_reported_without_eof() {
     let mut rx = pool.lock().await.subscribe_events();
     spawn_daemon(&path, pool.clone(), shell_factory("sleep 30 & exit 7"));
 
-    let (read_half, write_half) = connect(&path).await.unwrap();
-    let (mut reader, mut writer) = framed(read_half, write_half).await;
-    hello_welcome(&mut reader, &mut writer, false).await;
+    let (mut reader, mut writer) = dial(&path, ConnectionMode::Window, false).await;
     let session_id = create_and_attach(&mut reader, &mut writer).await;
 
     let exited = loop {
@@ -301,9 +299,7 @@ struct Observer {
 
 impl Observer {
     async fn subscribe(path: &Path, kinds: Vec<ObserverKind>) -> Self {
-        let (read_half, write_half) = connect(path).await.unwrap();
-        let (mut reader, mut writer) = framed(read_half, write_half).await;
-        hello_welcome_as(&mut reader, &mut writer, ConnectionMode::Observer, false).await;
+        let (mut reader, mut writer) = dial(path, ConnectionMode::Observer, false).await;
         send_stream(
             &mut writer,
             &NotifyToDaemonMsg::Subscribe {
@@ -401,9 +397,7 @@ async fn a_list_run_on_an_item_already_shows_what_the_item_reports() {
     let mut observer =
         Observer::subscribe(&path, vec![ObserverKind::Lifecycle, ObserverKind::Meta]).await;
 
-    let (read_half, write_half) = connect(&path).await.unwrap();
-    let (mut reader, mut writer) = framed(read_half, write_half).await;
-    hello_welcome_as(&mut reader, &mut writer, ConnectionMode::Ops, false).await;
+    let (mut reader, mut writer) = dial(&path, ConnectionMode::Ops, false).await;
     send_request(
         &mut writer,
         &OpsToDaemonMsg::Spawn {

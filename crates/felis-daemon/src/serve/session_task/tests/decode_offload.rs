@@ -564,16 +564,13 @@ async fn a_window_evicted_during_the_decode_still_has_its_held_keystrokes_writte
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_child_exiting_during_the_decode_ends_its_wait_with_the_mark_after_the_image() {
-    let mut cmd = Command::new("/bin/sh");
-    cmd.args([
-        "-c",
+    let cmd = sh(
         &format!(
             "stty raw -echo; printf READY; read -r _go; printf '\\033_Ga=t,i=1,f=100,q=2;{}\\033\\\\\\033]133;D;7\\007'",
             base64(&png(2, 2, 10))
         ),
-    ]);
-    cmd.env_clear();
-    cmd.env("PATH", crate::fixture_path());
+        crate::test_support::fixture_path(),
+    );
     let session = Session::from_spawned(crate::SpawnedPty::spawn(cmd).expect("spawn /bin/sh"));
     let mut watcher = None;
     let run = start_with(session, |task| {
@@ -1031,28 +1028,12 @@ fn mirror(
     mirror
 }
 
-type SubscribeReply = oneshot::Receiver<Result<SubscribeOk, SubscribeRefused>>;
-
 /// A window attach as a connection sends it, whose rehydrate burst is
 /// left in the outbox.
 fn attach_window(task: &mut SessionTask) -> (SubscribeReply, mpsc::UnboundedReceiver<OutEvent>) {
-    let (tx, rx) = mpsc::unbounded_channel();
-    let (reply_tx, reply_rx) = oneshot::channel();
-    assert!(
-        task.handle_cmd(SessionCmd::Subscribe(SubscribeReq {
-            mode: ConnectionMode::Window,
-            pull_paced: false,
-            minor: felis_protocol::preface::PROTOCOL_MINOR,
-            if_exited: IfExited::Land,
-            image_regions: false,
-            carrier: AttachCarrier::Local { client_pid: None },
-            tx,
-            buffered: Arc::new(AtomicUsize::new(0)),
-            reply: reply_tx,
-        }))
-        .is_none()
-    );
-    (reply_rx, rx)
+    let (req, rx, reply) = subscribe_req(ConnectionMode::Window, false, IfExited::Land);
+    assert!(task.handle_cmd(SessionCmd::Subscribe(req)).is_none());
+    (reply, rx)
 }
 
 /// A late window and its id once its attach was admitted.
