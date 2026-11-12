@@ -65,21 +65,13 @@ fn the_held_cell_bytes_match_the_budgeted_worst_case() {
 fn line_feed_at_bottom_scrolls_into_scrollback() {
     let mut p = Parser::new();
     let mut g = Grid::new(2, 4);
+    assert!(g.scrollback().is_empty());
     drive(&mut p, &mut g, b"row1\r\nrow2\r\nrow3");
+    assert!(!g.scrollback().is_empty());
     assert_eq!(g.cursor().row, 1);
     assert_eq!(g.cell(0, 0).unwrap().grapheme, Grapheme::Ascii(b'r'));
     assert_eq!(g.cell(0, 3).unwrap().grapheme, Grapheme::Ascii(b'2'));
     assert_eq!(g.cell(1, 3).unwrap().grapheme, Grapheme::Ascii(b'3'));
-    assert_eq!(g.scrollback().len(), 1);
-}
-
-#[test]
-fn scrollback_is_empty_reflects_pushed_rows() {
-    let mut p = Parser::new();
-    let mut g = Grid::new(2, 4);
-    assert!(g.scrollback().is_empty());
-    drive(&mut p, &mut g, b"a\r\nb\r\nc");
-    assert!(!g.scrollback().is_empty());
     assert_eq!(g.scrollback().len(), 1);
 }
 
@@ -530,10 +522,10 @@ fn assert_ring_consistent(g: &Grid) {
 
 fn surface_text(g: &Grid) -> (Vec<String>, Vec<String>) {
     let live = (0..g.screen.rows)
-        .map(|r| row_text_trim(g.row_content(r).unwrap(), &ClusterTable::default()))
+        .map(|r| row_text_trim(g.row_content(r).unwrap(), g.cluster_table()))
         .collect();
     let sb = (0..g.scrollback().len())
-        .map(|i| row_text_trim(g.scrollback().row(i).unwrap(), &ClusterTable::default()))
+        .map(|i| row_text_trim(g.scrollback().row(i).unwrap(), g.cluster_table()))
         .collect();
     (live, sb)
 }

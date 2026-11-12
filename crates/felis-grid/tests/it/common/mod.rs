@@ -4,9 +4,11 @@
 use std::fmt::Write as _;
 
 use felis_grid::{
-    AttrFlags, Attributes, Color, Grapheme, Grid, PtyEffect, ScrollOp, row_text_trim,
+    AttrFlags, Attributes, Color, Grapheme, Grid, PtyEffect, ScrollOp, UnderlineStyle,
+    row_text_trim,
 };
 use felis_vt::Parser;
+use proptest::prelude::*;
 
 pub(crate) fn drive(rows: u16, cols: u16, bytes: &[u8]) -> Grid {
     let mut g = Grid::new(rows, cols);
@@ -115,13 +117,12 @@ pub(crate) fn cell_char(grid: &Grid, r: u16, c: u16) -> char {
 pub(crate) fn write_cells(out: &mut String, grid: &Grid) {
     writeln!(out, "grid {}x{}:", grid.rows(), grid.cols()).unwrap();
     for r in 0..grid.rows() {
-        out.push('|');
-        for c in 0..grid.cols() {
-            out.push(cell_char(grid, r, c));
-        }
-        out.push('|');
-        out.push('\n');
+        writeln!(out, "|{}|", row_chars(grid, r)).unwrap();
     }
+}
+
+pub(crate) fn row_chars(grid: &Grid, r: u16) -> String {
+    (0..grid.cols()).map(|c| cell_char(grid, r, c)).collect()
 }
 
 pub(crate) fn styled_cell_lines(grid: &Grid) -> Vec<String> {
@@ -178,5 +179,88 @@ fn spell(c: char) -> String {
         format!("\\u{{{:x}}}", u32::from(c))
     } else {
         c.into()
+    }
+}
+
+pub(crate) fn arb_color() -> impl Strategy<Value = Color> {
+    prop_oneof![
+        Just(Color::Default),
+        any::<u8>().prop_map(Color::Indexed),
+        any::<(u8, u8, u8)>().prop_map(|(r, g, b)| Color::Rgb(r, g, b)),
+    ]
+}
+
+pub(crate) fn arb_underline_style() -> impl Strategy<Value = UnderlineStyle> {
+    prop::sample::select(vec![
+        UnderlineStyle::Single,
+        UnderlineStyle::Double,
+        UnderlineStyle::Curly,
+        UnderlineStyle::Dotted,
+        UnderlineStyle::Dashed,
+    ])
+}
+
+pub(crate) fn arb_attributes() -> impl Strategy<Value = Attributes> {
+    (
+        arb_color(),
+        arb_color(),
+        arb_color(),
+        any::<u16>(),
+        arb_underline_style(),
+    )
+        .prop_map(
+            |(fg, bg, underline_color, bits, underline_style)| Attributes {
+                fg,
+                bg,
+                underline_color,
+                flags: AttrFlags::from_bits_truncate(bits),
+                underline_style,
+            },
+        )
+}
+
+/// Independent of `felis_protocol::base64`, which production uses, so a
+/// round trip checks the production codec against a second one.
+pub(crate) fn b64_encode(bytes: &[u8], padded: bool) -> String {
+    const A: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::new();
+    for chunk in bytes.chunks(3) {
+        let n = chunk
+            .iter()
+            .enumerate()
+            .fold(0u32, |n, (i, &b)| n | u32::from(b) << (16 - 8 * i));
+        for i in 0..=chunk.len() {
+            out.push(char::from(A[(n >> (18 - 6 * i) & 63) as usize]));
+        }
+        if padded {
+            for _ in chunk.len()..3 {
+                out.push('=');
+            }
+        }
+    }
+    out
+}
+
+pub(crate) fn write_sizing_rows(out: &mut String, grid: &Grid, spacer: char, sized_spacer: char) {
+    for r in 0..grid.rows() {
+        let mut text = String::new();
+        let mut sizings = String::new();
+        for c in 0..grid.cols() {
+            text.push(match grid.cell(r, c).unwrap().grapheme {
+                Grapheme::Empty => ' ',
+                Grapheme::Spacer => spacer,
+                Grapheme::SizedSpacer => sized_spacer,
+                Grapheme::Ascii(b) => b as char,
+                Grapheme::Char(ch) => ch,
+                Grapheme::Cluster(id) => grid
+                    .cluster_str(id)
+                    .and_then(|s| s.chars().next())
+                    .unwrap_or(' '),
+            });
+            sizings.push(grid.cell_sizing_handle(r, c).map_or('.', |h| {
+                char::from_digit(u32::from(h.get()), 16).unwrap_or('?')
+            }));
+        }
+        writeln!(out, "row {r}: {text:?} sizings={sizings:?}").unwrap();
     }
 }

@@ -34,65 +34,48 @@ fn reset_after_extended_returns_to_default() {
 }
 
 #[test]
-fn sgr_4_no_subparam_is_single_underline() {
-    let mut a = Attributes::default();
-    a.apply_sgr(&[4], NO_SUB);
-    assert!(a.flags.contains(AttrFlags::UNDERLINE));
-    assert_eq!(a.underline_style, UnderlineStyle::Single);
-}
-
-#[test]
-fn sgr_4_followed_by_semicolon_3_is_underline_plus_italic() {
-    // Without sub-param awareness `\e[4;3m` would collapse to "curly
-    // underline".
-    let mut a = Attributes::default();
-    a.apply_sgr(&[4, 3], NO_SUB);
-    assert!(a.flags.contains(AttrFlags::UNDERLINE));
-    assert!(a.flags.contains(AttrFlags::ITALIC));
-    assert_eq!(a.underline_style, UnderlineStyle::Single);
-}
-
-#[test]
-fn sgr_4_colon_2_is_double_underline() {
-    let mut a = Attributes::default();
-    a.apply_sgr(&[4, 2], sub_at(&[1]));
-    assert!(a.flags.contains(AttrFlags::UNDERLINE));
-    assert_eq!(a.underline_style, UnderlineStyle::Double);
-}
-
-#[test]
-fn sgr_4_colon_3_is_curly_underline() {
-    let mut a = Attributes::default();
-    a.apply_sgr(&[4, 3], sub_at(&[1]));
-    assert!(a.flags.contains(AttrFlags::UNDERLINE));
-    assert_eq!(a.underline_style, UnderlineStyle::Curly);
-    assert!(!a.flags.contains(AttrFlags::ITALIC));
-}
-
-#[test]
-fn sgr_4_colon_4_is_dotted_and_5_is_dashed() {
-    let mut a = Attributes::default();
-    a.apply_sgr(&[4, 4], sub_at(&[1]));
-    assert_eq!(a.underline_style, UnderlineStyle::Dotted);
-    let mut a = Attributes::default();
-    a.apply_sgr(&[4, 5], sub_at(&[1]));
-    assert_eq!(a.underline_style, UnderlineStyle::Dashed);
-}
-
-#[test]
-fn sgr_4_colon_0_clears_underline() {
-    let mut a = Attributes::default();
-    a.apply_sgr(&[4, 0], sub_at(&[1]));
-    assert!(!a.flags.contains(AttrFlags::UNDERLINE));
-    assert_eq!(a.underline_style, UnderlineStyle::Single);
-}
-
-#[test]
-fn sgr_21_is_double_underline_legacy_form() {
-    let mut a = Attributes::default();
-    a.apply_sgr(&[21], NO_SUB);
-    assert!(a.flags.contains(AttrFlags::UNDERLINE));
-    assert_eq!(a.underline_style, UnderlineStyle::Double);
+fn underline_sgr_forms_set_the_flag_and_style() {
+    let u = AttrFlags::UNDERLINE;
+    for (case, params, sub, flags, style) in [
+        ("4", &[4][..], NO_SUB, u, UnderlineStyle::Single),
+        (
+            "4;3 is underline plus italic, not curly",
+            &[4, 3],
+            NO_SUB,
+            u | AttrFlags::ITALIC,
+            UnderlineStyle::Single,
+        ),
+        (
+            "4:0 clears",
+            &[4, 0],
+            sub_at(&[1]),
+            AttrFlags::empty(),
+            UnderlineStyle::Single,
+        ),
+        ("4:2", &[4, 2], sub_at(&[1]), u, UnderlineStyle::Double),
+        ("4:3", &[4, 3], sub_at(&[1]), u, UnderlineStyle::Curly),
+        ("4:4", &[4, 4], sub_at(&[1]), u, UnderlineStyle::Dotted),
+        ("4:5", &[4, 5], sub_at(&[1]), u, UnderlineStyle::Dashed),
+        (
+            "unknown 4:99 falls back to single",
+            &[4, 99],
+            sub_at(&[1]),
+            u,
+            UnderlineStyle::Single,
+        ),
+        (
+            "21 is the legacy double form",
+            &[21],
+            NO_SUB,
+            u,
+            UnderlineStyle::Double,
+        ),
+    ] {
+        let mut a = Attributes::default();
+        a.apply_sgr(params, sub);
+        assert_eq!(a.flags, flags, "{case}");
+        assert_eq!(a.underline_style, style, "{case}");
+    }
 }
 
 #[test]
@@ -111,16 +94,6 @@ fn sgr_59_resets_underline_color() {
     a.apply_sgr(&[58, 5, 9], NO_SUB);
     a.apply_sgr(&[59], NO_SUB);
     assert_eq!(a.underline_color, Color::Default);
-}
-
-#[test]
-fn sgr_4_followed_by_unknown_subparam_keeps_underline_on() {
-    // Forward-compat: an unknown style keeps underline lit and falls
-    // back to single.
-    let mut a = Attributes::default();
-    a.apply_sgr(&[4, 99], sub_at(&[1]));
-    assert!(a.flags.contains(AttrFlags::UNDERLINE));
-    assert_eq!(a.underline_style, UnderlineStyle::Single);
 }
 
 #[test]

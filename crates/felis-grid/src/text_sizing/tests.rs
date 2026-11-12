@@ -1,5 +1,5 @@
 use crate::kitty_text_sizing::{HAlign, VAlign};
-use crate::test_support::drive;
+use crate::test_support::{cluster_at, drive, drive_new};
 use crate::*;
 use felis_vt::Parser;
 
@@ -245,9 +245,7 @@ fn row_sized_cells_lists_columns_in_order_with_resolved_sizing() {
 /// (sizing is not carried into scrollback yet).
 #[test]
 fn cell_sizing_at_viewport_maps_live_and_scrollback_band() {
-    let mut p = Parser::new();
-    let mut g = Grid::new(2, 4);
-    drive(&mut p, &mut g, b"row1\r\nrow2\r\nrow3\r\nrow4");
+    let mut g = drive_new(2, 4, b"row1\r\nrow2\r\nrow3\r\nrow4");
     assert_eq!(g.scrollback().len(), 2);
     let s = sized(2, 0);
     let h = g.install_sizing(s).unwrap();
@@ -264,9 +262,7 @@ fn cell_sizing_at_viewport_maps_live_and_scrollback_band() {
 /// Same composed-view mapping as `cell_sizing_at_viewport`.
 #[test]
 fn viewport_row_sized_cells_map_live_and_scrollback_band() {
-    let mut p = Parser::new();
-    let mut g = Grid::new(2, 4);
-    drive(&mut p, &mut g, b"row1\r\nrow2\r\nrow3\r\nrow4");
+    let mut g = drive_new(2, 4, b"row1\r\nrow2\r\nrow3\r\nrow4");
     let s = sized(2, 0);
     let h = g.install_sizing(s).unwrap();
     g.set_cell_sizing(0, 2, Some(h));
@@ -353,41 +349,27 @@ fn clear_foreign_sized_run_with_orphan_handle_clears_only_that_cell() {
 
 #[test]
 fn sized_bidi_override_with_no_owner_takes_no_column() {
-    let mut p = Parser::new();
-    let mut g = Grid::new(1, 8);
-    drive(&mut p, &mut g, "\x1b]66;;\u{202E}\x1b\\A".as_bytes());
-    let Grapheme::Cluster(id) = g.cell(0, 0).unwrap().grapheme else {
-        panic!("cell 0,0 should hold the A with the override folded in");
-    };
-    assert_eq!(g.cluster_str(id), Some("A\u{202E}"));
+    let g = drive_new(1, 8, "\x1b]66;;\u{202E}\x1b\\A".as_bytes());
+    assert_eq!(cluster_at(&g, 0, 0), Some("A\u{202E}"));
     assert_eq!(g.cursor().col, 1);
 }
 
 #[test]
 fn combining_mark_in_a_scaled_run_does_not_move_the_cursor() {
-    let mut p = Parser::new();
-    let mut g = Grid::new(2, 8);
-    drive(&mut p, &mut g, "\x1b]66;s=2;e\u{0301}\x07".as_bytes());
+    let g = drive_new(2, 8, "\x1b]66;s=2;e\u{0301}\x07".as_bytes());
     assert_eq!(g.cursor().col, 2);
 }
 
 #[test]
 fn a_leading_bidi_override_in_a_sized_run_takes_no_column() {
-    let mut p = Parser::new();
-    let mut g = Grid::new(1, 2);
-    drive(&mut p, &mut g, "\x1b]66;;\u{202E}AB\x07".as_bytes());
-    let Grapheme::Cluster(id) = g.cell(0, 0).unwrap().grapheme else {
-        panic!("cell 0,0 should hold the A with the override folded in");
-    };
-    assert_eq!(g.cluster_str(id), Some("A\u{202E}"));
+    let g = drive_new(1, 2, "\x1b]66;;\u{202E}AB\x07".as_bytes());
+    assert_eq!(cluster_at(&g, 0, 0), Some("A\u{202E}"));
     assert_eq!(g.cell(0, 1).unwrap().grapheme, Grapheme::Ascii(b'B'));
 }
 
 #[test]
 fn a_sized_run_wider_than_the_grid_places_each_character() {
-    let mut p = Parser::new();
-    let mut g = Grid::new(1, 2);
-    drive(&mut p, &mut g, "\x1b]66;;\u{2764}\u{FE0F}A\x07".as_bytes());
+    let g = drive_new(1, 2, "\x1b]66;;\u{2764}\u{FE0F}A\x07".as_bytes());
     assert_eq!(g.scrollback().len(), 1);
     assert_eq!(g.cell(0, 0).unwrap().grapheme, Grapheme::Ascii(b'A'));
     assert_eq!(g.cursor().col, 1);
@@ -412,9 +394,7 @@ fn printing_a_run_over_a_sized_block_erases_it_whole() {
             "\x1b]66;s=2;A\x07\x1b[2;1H字字".as_bytes(),
         ),
     ] {
-        let mut p = Parser::new();
-        let mut g = Grid::new(4, 10);
-        drive(&mut p, &mut g, bytes);
+        let g = drive_new(4, 10, bytes);
         assert!(
             (0..4).all(|r| g.row_sized_cells(r).is_empty()),
             "{case}: no cell keeps the block's handle"
@@ -425,26 +405,13 @@ fn printing_a_run_over_a_sized_block_erases_it_whole() {
 /// After one OSC 66 run, text printed past it still lands normally.
 #[test]
 fn text_after_a_sized_block_prints_beside_it() {
-    let mut p = Parser::new();
-    let mut g = Grid::new(4, 10);
-    drive(&mut p, &mut g, "\x1b]66;s=2;A\x07xy字".as_bytes());
+    let g = drive_new(4, 10, "\x1b]66;s=2;A\x07xy字".as_bytes());
     assert_eq!(g.row_sized_cells(0).len(), 2);
     assert_eq!(g.row_sized_cells(1).len(), 2);
     assert_eq!(g.screen.cell(0, 2).unwrap().grapheme, Grapheme::Ascii(b'x'));
     assert_eq!(g.screen.cell(0, 3).unwrap().grapheme, Grapheme::Ascii(b'y'));
     assert_eq!(g.screen.cell(0, 4).unwrap().grapheme, Grapheme::Char('字'));
     assert_eq!(g.screen.cell(0, 5).unwrap().grapheme, Grapheme::Spacer);
-}
-
-/// Text that starts right after a sized block does not touch it: the
-/// block keeps its cells and the text lands beside it.
-#[test]
-fn text_right_after_a_sized_block_leaves_it_alone() {
-    let mut p = Parser::new();
-    let mut g = Grid::new(4, 10);
-    drive(&mut p, &mut g, b"\x1b]66;s=2;A\x07xyz");
-    assert_eq!(g.row_sized_cells(0).len(), 2);
-    assert_eq!(g.screen.cell(0, 2).unwrap().grapheme, Grapheme::Ascii(b'x'));
 }
 
 /// Every live cell carrying a sizing handle belongs to a block that is
@@ -627,9 +594,7 @@ fn a_selective_erase_keeps_a_protected_block_whole() {
 
 #[test]
 fn a_full_screen_scroll_moves_a_multi_row_block_whole() {
-    let mut p = Parser::new();
-    let mut g = Grid::new(4, 10);
-    drive(&mut p, &mut g, b"\x1b]66;s=2;A\x07\x1b[T");
+    let g = drive_new(4, 10, b"\x1b]66;s=2;A\x07\x1b[T");
     assert_blocks_whole(&g, "SD");
     assert_eq!(primary(&g), Some((1, 0)));
 }
@@ -638,9 +603,7 @@ fn a_full_screen_scroll_moves_a_multi_row_block_whole() {
 /// shifts like any wide character.
 #[test]
 fn ich_still_shifts_a_single_row_sized_run() {
-    let mut p = Parser::new();
-    let mut g = Grid::new(4, 10);
-    drive(&mut p, &mut g, b"\x1b]66;w=2;A\x07\x1b[1;1H\x1b[@");
+    let g = drive_new(4, 10, b"\x1b]66;w=2;A\x07\x1b[1;1H\x1b[@");
     assert_blocks_whole(&g, "ICH");
     assert_eq!(primary(&g), Some((0, 1)));
 }
@@ -707,9 +670,7 @@ fn a_scroll_into_history_keeps_the_departing_part_of_a_block() {
 
 #[test]
 fn a_scroll_on_the_alternate_screen_erases_a_cut_block() {
-    let mut p = Parser::new();
-    let mut g = Grid::new(4, 10);
-    drive(&mut p, &mut g, b"\x1b[?1049h\x1b]66;s=2;A\x07\x1b[S");
+    let g = drive_new(4, 10, b"\x1b[?1049h\x1b]66;s=2;A\x07\x1b[S");
     assert_blocks_whole(&g, "alternate SU");
     assert_eq!(primary(&g), None);
 }
@@ -828,9 +789,7 @@ fn a_write_over_a_blocks_lower_row_erases_it_whole() {
 /// print to mistake for a sized character.
 #[test]
 fn an_irm_print_before_a_sized_run_shifts_it_whole() {
-    let mut p = Parser::new();
-    let mut g = Grid::new(4, 10);
-    drive(&mut p, &mut g, b"\x1b]66;w=2;A\x07\x1b[4h\x1b[1;1Hx");
+    let g = drive_new(4, 10, b"\x1b]66;w=2;A\x07\x1b[4h\x1b[1;1Hx");
     assert_blocks_whole(&g, "IRM print");
     assert_eq!(primary(&g), Some((0, 1)));
     assert_eq!(g.screen.cell(0, 0).unwrap().grapheme, Grapheme::Ascii(b'x'));
@@ -853,9 +812,7 @@ fn blocks(g: &Grid) -> Vec<(u16, u16, u16, u16)> {
 }
 
 fn run(rows: u16, cols: u16, bytes: &str) -> Grid {
-    let mut p = Parser::new();
-    let mut g = Grid::new(rows, cols);
-    drive(&mut p, &mut g, bytes.as_bytes());
+    let g = drive_new(rows, cols, bytes.as_bytes());
     assert_blocks_whole(&g, bytes);
     g
 }
@@ -1034,10 +991,7 @@ fn a_row_of_lower_rows_falls_back_to_the_right_edge() {
 #[test]
 fn a_cluster_at_the_edge_is_placed_once() {
     let g = run(2, 4, "\x1b[1;4H\x1b]66;;e\u{301}\x07");
-    let Grapheme::Cluster(id) = g.screen.cell(0, 3).unwrap().grapheme else {
-        panic!("e and its accent should share one cell");
-    };
-    assert_eq!(g.cluster_str(id), Some("e\u{301}"));
+    assert_eq!(cluster_at(&g, 0, 3), Some("e\u{301}"));
     let g = run(2, 4, "\x1b[1;4H\x1b]66;;\u{2764}\u{FE0F}\x07");
     assert_eq!(blocks(&g), [(1, 0, 1, 2)]);
 }
@@ -1047,13 +1001,6 @@ fn a_leading_mark_in_a_sized_run_is_dropped() {
     let g = run(1, 4, "\x1b]66;;\u{301}A\x07");
     assert_eq!(g.screen.cell(0, 0).unwrap().grapheme, Grapheme::Ascii(b'A'));
     assert_eq!(g.cursor().col, 1);
-}
-
-fn cluster_at(g: &Grid, row: u16, col: u16) -> Option<&str> {
-    match g.screen.cell(row, col)?.grapheme {
-        Grapheme::Cluster(id) => g.cluster_str(id),
-        _ => None,
-    }
 }
 
 #[test]

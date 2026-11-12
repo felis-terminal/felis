@@ -9,7 +9,8 @@ use felis_vt::Parser;
 
 use crate::common;
 use common::{
-    cell_char, drive, scroll_ops, styled_cell_lines, write_cells, write_cursor, write_pen,
+    drive, drive_with, row_chars, scroll_ops, styled_cell_lines, write_cells, write_cursor,
+    write_pen,
 };
 
 fn render(grid: &Grid) -> String {
@@ -110,23 +111,9 @@ fn ed_1_clears_from_start_of_screen_to_cursor() {
 }
 
 #[test]
-fn ed_3_clears_scrollback_only_and_leaves_screen_intact() {
+fn ed_3_drops_scrollback_rows() {
     // esctest `test_ED_3`: the visible screen stays untouched, only
     // history drops.
-    let after_ed3 = drive(3, 6, b"AAAAAABBBBBBCCCCCC\x1b[3J");
-    insta::assert_snapshot!(render(&after_ed3), @r"
-    cursor: row=2 col=5 visible=1 pending_wrap=1
-    pen: fg=default bg=default flags=-
-    grid 3x6:
-    |AAAAAA|
-    |BBBBBB|
-    |CCCCCC|
-    attrs: (all default)
-    ");
-}
-
-#[test]
-fn ed_3_drops_scrollback_rows() {
     let g = drive(2, 3, b"AAA\r\nBBB\r\nCCC\r\nDDD\r\nEEE\x1b[3J");
     assert_eq!(g.scrollback().len(), 0);
     insta::assert_snapshot!(render(&g), @r"
@@ -204,25 +191,20 @@ fn alternate_screen_leave_restores_primary_exactly() {
     ");
 }
 
-fn row_text(g: &Grid, r: u16) -> String {
-    (0..g.cols()).map(|c| cell_char(g, r, c)).collect()
-}
-
 #[test]
 fn alternate_screen_resize_trims_the_alt_and_rewraps_the_primary() {
-    use felis_vt::Parser;
     let mut g = Grid::new(3, 8);
     let mut p = Parser::new();
-    p.advance(&mut g, b"primary-row");
-    p.advance(&mut g, b"\x1b[?1049h");
-    p.advance(&mut g, b"alt-row");
+    drive_with(&mut p, &mut g, b"primary-row");
+    drive_with(&mut p, &mut g, b"\x1b[?1049h");
+    drive_with(&mut p, &mut g, b"alt-row");
     g.resize(3, 5);
     assert!(g.on_alternate_screen());
-    assert_eq!(row_text(&g, 0), "alt-r");
-    p.advance(&mut g, b"\x1b[?1049l");
-    assert_eq!(row_text(&g, 0), "prima");
-    assert_eq!(row_text(&g, 1), "ry-ro");
-    assert_eq!(row_text(&g, 2), "w....");
+    assert_eq!(row_chars(&g, 0), "alt-r");
+    drive_with(&mut p, &mut g, b"\x1b[?1049l");
+    assert_eq!(row_chars(&g, 0), "prima");
+    assert_eq!(row_chars(&g, 1), "ry-ro");
+    assert_eq!(row_chars(&g, 2), "w....");
 }
 
 #[test]
@@ -259,9 +241,18 @@ fn overline_and_underline_color_through_the_parser() {
     assert_eq!(attrs.underline_color, Color::Rgb(10, 20, 30));
 }
 
+fn assert_shifted_run_at_cols_3_to_8(g: &Grid) {
+    for c in 3..=8u16 {
+        assert_eq!(
+            g.cell(1, c).unwrap().grapheme,
+            Grapheme::Ascii(b'X'),
+            "train body at col {c}",
+        );
+    }
+}
+
 #[test]
-fn curses_sliding_object_leaves_no_trailing_glyph() {
-    // Regression for the `sl` / `asciiquarium` frame-trail bug.
+fn overprinting_a_shifted_run_blanks_its_previous_tail_cell() {
     let mut p = Parser::new();
     let mut g = Grid::new(3, 12);
     p.advance(&mut g, b"\x1b[2;5HXXXXXX");
@@ -273,17 +264,11 @@ fn curses_sliding_object_leaves_no_trailing_glyph() {
         "trailing cell carried frame-1 glyph: {:?}",
         trail.grapheme,
     );
-    for c in 3..=8u16 {
-        assert_eq!(
-            g.cell(1, c).unwrap().grapheme,
-            Grapheme::Ascii(b'X'),
-            "train body at col {c}",
-        );
-    }
+    assert_shifted_run_at_cols_3_to_8(&g);
 }
 
 #[test]
-fn curses_sliding_object_via_dch_leaves_no_trailing_glyph() {
+fn dch_vacates_the_rightmost_cell_of_a_shifted_run() {
     // `sl` emits `\x1b[<row>;1H\x1b[1P` per frame.
     let mut p = Parser::new();
     let mut g = Grid::new(3, 12);
@@ -295,13 +280,7 @@ fn curses_sliding_object_via_dch_leaves_no_trailing_glyph() {
         "DCH-vacated rightmost cell should be Empty, got {:?}",
         trail.grapheme,
     );
-    for c in 3..=8u16 {
-        assert_eq!(
-            g.cell(1, c).unwrap().grapheme,
-            Grapheme::Ascii(b'X'),
-            "train body at col {c}",
-        );
-    }
+    assert_shifted_run_at_cols_3_to_8(&g);
     for c in 0..=2u16 {
         let cell = g.cell(1, c).unwrap();
         assert!(
@@ -313,7 +292,7 @@ fn curses_sliding_object_via_dch_leaves_no_trailing_glyph() {
 }
 
 #[test]
-fn curses_sliding_object_via_ech_leaves_no_trailing_glyph() {
+fn ech_blanks_the_tail_cell_before_the_run_is_redrawn() {
     let mut p = Parser::new();
     let mut g = Grid::new(3, 12);
     p.advance(&mut g, b"\x1b[2;5HXXXXXX");
@@ -324,13 +303,7 @@ fn curses_sliding_object_via_ech_leaves_no_trailing_glyph() {
         "ECH'd trailing cell should be Empty, got {:?}",
         trail.grapheme,
     );
-    for c in 3..=8u16 {
-        assert_eq!(
-            g.cell(1, c).unwrap().grapheme,
-            Grapheme::Ascii(b'X'),
-            "train body at col {c}",
-        );
-    }
+    assert_shifted_run_at_cols_3_to_8(&g);
 }
 
 #[test]

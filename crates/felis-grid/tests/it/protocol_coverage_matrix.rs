@@ -212,7 +212,7 @@ const PROBES: &[Probe] = &[
         sequence: b"\x1b[5X",
     },
     Probe {
-        name: "DCH — `CSI 1 P` (regression: sl trail)",
+        name: "DCH — `CSI 1 P`",
         sequence: b"\x1b[1P",
     },
     Probe {

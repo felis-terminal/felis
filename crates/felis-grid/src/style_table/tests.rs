@@ -3,38 +3,8 @@ use std::collections::HashSet;
 use proptest::prelude::*;
 
 use super::{PenKey, StyleId, StyleTable};
-use crate::{AttrFlags, Attributes, Color, UnderlineStyle};
-
-fn arb_color() -> impl Strategy<Value = Color> {
-    prop_oneof![
-        Just(Color::Default),
-        (0u8..=255).prop_map(Color::Indexed),
-        (0u8..=255, 0u8..=255, 0u8..=255).prop_map(|(r, g, b)| Color::Rgb(r, g, b)),
-    ]
-}
-
-fn arb_attrs() -> impl Strategy<Value = Attributes> {
-    (
-        arb_color(),
-        arb_color(),
-        arb_color(),
-        0u16..=0b0111_1111_1111,
-        0u8..=4,
-    )
-        .prop_map(|(fg, bg, uc, bits, us)| Attributes {
-            fg,
-            bg,
-            underline_color: uc,
-            flags: AttrFlags::from_bits_truncate(bits),
-            underline_style: match us {
-                0 => UnderlineStyle::Single,
-                1 => UnderlineStyle::Double,
-                2 => UnderlineStyle::Curly,
-                3 => UnderlineStyle::Dotted,
-                _ => UnderlineStyle::Dashed,
-            },
-        })
-}
+use crate::test_support::arb_attrs;
+use crate::{AttrFlags, Attributes, Color};
 
 #[test]
 fn default_pen_is_id_zero() {

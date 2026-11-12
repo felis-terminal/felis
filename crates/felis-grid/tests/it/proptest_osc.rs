@@ -20,7 +20,7 @@ fn osc(code: &[u8], payload: &[u8]) -> Vec<u8> {
     out
 }
 
-fn drive(grid: &mut Grid, bytes: &[u8]) {
+fn drive_fresh_parser(grid: &mut Grid, bytes: &[u8]) {
     let mut p = Parser::new();
     p.advance(grid, bytes);
 }
@@ -51,9 +51,9 @@ proptest! {
         prop_assume!(has_non_terminator_control_byte(&payload));
         let code: &[u8] = if use_osc_0 { b"0" } else { b"2" };
         let mut g = Grid::new(1, 1);
-        drive(&mut g, &osc(b"2", prior.as_bytes()));
+        drive_fresh_parser(&mut g, &osc(b"2", prior.as_bytes()));
         prop_assert_eq!(g.title(), Some(prior.as_str()));
-        drive(&mut g, &osc(code, &payload));
+        drive_fresh_parser(&mut g, &osc(code, &payload));
         prop_assert_eq!(g.title(), Some(prior.as_str()));
     }
 
@@ -67,9 +67,9 @@ proptest! {
     ) {
         prop_assume!(has_non_terminator_control_byte(&payload));
         let mut g = Grid::new(1, 1);
-        drive(&mut g, &osc(b"7", prior.as_bytes()));
+        drive_fresh_parser(&mut g, &osc(b"7", prior.as_bytes()));
         prop_assert_eq!(g.cwd(), Some(prior.as_str()));
-        drive(&mut g, &osc(b"7", &payload));
+        drive_fresh_parser(&mut g, &osc(b"7", &payload));
         prop_assert_eq!(g.cwd(), Some(prior.as_str()));
     }
 
@@ -79,7 +79,7 @@ proptest! {
         payload in proptest::collection::vec(any::<u8>(), 0..64),
     ) {
         let mut g = Grid::new(2, 8);
-        drive(&mut g, &osc(&code, &payload));
+        drive_fresh_parser(&mut g, &osc(&code, &payload));
         prop_assert!(g.rows() == 2 && g.cols() == 8);
     }
 
@@ -88,7 +88,7 @@ proptest! {
         text in "[\\x20-\\x7E]{1,32}",
     ) {
         let mut g = Grid::new(1, 1);
-        drive(&mut g, &osc(b"2", text.as_bytes()));
+        drive_fresh_parser(&mut g, &osc(b"2", text.as_bytes()));
         prop_assert_eq!(g.title(), Some(text.as_str()));
     }
 
@@ -101,7 +101,7 @@ proptest! {
     ) {
         let code: &[u8] = if use_osc_0 { b"0" } else { b"2" };
         let mut g = Grid::new(1, 1);
-        drive(&mut g, &osc(code, text.as_bytes()));
+        drive_fresh_parser(&mut g, &osc(code, text.as_bytes()));
         prop_assert_eq!(g.title(), Some(text.as_str()));
     }
 
@@ -110,7 +110,7 @@ proptest! {
         text in "\\PC{1,32}",
     ) {
         let mut g = Grid::new(1, 1);
-        drive(&mut g, &osc(b"7", text.as_bytes()));
+        drive_fresh_parser(&mut g, &osc(b"7", text.as_bytes()));
         prop_assert_eq!(g.cwd(), Some(text.as_str()));
     }
 
@@ -124,8 +124,8 @@ proptest! {
         payload.push(b';');
         payload.extend_from_slice(&uri);
         let mut g = Grid::new(2, 8);
-        drive(&mut g, &osc(b"8", &payload));
-        drive(&mut g, b"x");
+        drive_fresh_parser(&mut g, &osc(b"8", &payload));
+        drive_fresh_parser(&mut g, b"x");
         prop_assert!(g.rows() == 2 && g.cols() == 8);
     }
 
@@ -142,7 +142,7 @@ proptest! {
         bytes.push(0x07);
         bytes.extend(std::iter::repeat_n(b'X', usize::from(inside)));
         bytes.extend_from_slice(b"\x1b]8;;\x07Y");
-        drive(&mut g, &bytes);
+        drive_fresh_parser(&mut g, &bytes);
         let id = g.cell(0, 0).expect("cell 0").link;
         prop_assert!(id.is_some(), "uri {uri} did not install a link");
         for c in 1..inside {
@@ -166,7 +166,7 @@ proptest! {
         bytes.extend_from_slice(uri.as_bytes());
         bytes.push(0x07);
         bytes.push(b'X');
-        drive(&mut g, &bytes);
+        drive_fresh_parser(&mut g, &bytes);
         let id = g.cell(0, 0).expect("cell 0").link;
         prop_assert!(id.is_some(), "uri {uri:?} did not install a link");
         let entry = g.hyperlink(id.unwrap()).expect("link table entry");
@@ -185,8 +185,8 @@ proptest! {
         let mut payload = Vec::new();
         payload.push(b';');
         payload.extend_from_slice(&uri);
-        drive(&mut g, &osc(b"8", &payload));
-        drive(&mut g, b"x");
+        drive_fresh_parser(&mut g, &osc(b"8", &payload));
+        drive_fresh_parser(&mut g, b"x");
         prop_assert_eq!(g.cell(0, 0).unwrap().link, None);
     }
 

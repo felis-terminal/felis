@@ -55,17 +55,6 @@ fn redundant_alt_screen_leave_does_not_push_an_event() {
 }
 
 #[test]
-fn synchronized_output_mode_toggles_via_2026() {
-    let mut p = Parser::new();
-    let mut g = Grid::new(1, 3);
-    assert!(!g.synchronized_output());
-    drive(&mut p, &mut g, b"\x1b[?2026h");
-    assert!(g.synchronized_output());
-    drive(&mut p, &mut g, b"\x1b[?2026l");
-    assert!(!g.synchronized_output());
-}
-
-#[test]
 fn mark_range_matches_per_row_mark() {
     for rows in [1usize, 7, 64, 65, 130] {
         for start in 0..rows {

@@ -123,12 +123,23 @@ impl ScreenBuffer {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::test_support::drive;
+    use felis_protocol::kitty_graphics::placeholder::diacritic_for;
     use felis_vt::Parser;
 
+    use super::*;
+    use crate::test_support::drive;
+
+    /// The sentinel plus diacritic ranks in (row, col, msb) order.
+    fn cell_bytes(diacritic_ranks: &[u32]) -> String {
+        let mut s = String::from('\u{10eeee}');
+        for &r in diacritic_ranks {
+            s.push(diacritic_for(Rank::new(r).unwrap()));
+        }
+        s
+    }
+
     #[test]
-    pub(crate) fn id_comes_from_fg_and_column_auto_increments_across_a_run() {
+    fn id_comes_from_fg_and_column_auto_increments_across_a_run() {
         let mut g = Grid::new(1, 8);
         let mut p = Parser::new();
         drive(
@@ -163,26 +174,15 @@ mod tests {
     }
 
     #[test]
-    pub(crate) fn non_placeholder_cells_yield_nothing() {
+    fn non_placeholder_cells_yield_nothing() {
         let mut g = Grid::new(1, 8);
         let mut p = Parser::new();
         drive(&mut p, &mut g, b"plain text");
         assert_eq!(g.placeholder_cells(), Vec::<PlaceholderCell>::new());
     }
 
-    use felis_protocol::kitty_graphics::placeholder::diacritic_for;
-
-    /// The sentinel plus diacritic ranks in (row, col, msb) order.
-    pub(crate) fn cell_bytes(diacritic_ranks: &[u32]) -> String {
-        let mut s = String::from('\u{10eeee}');
-        for &r in diacritic_ranks {
-            s.push(diacritic_for(Rank::new(r).unwrap()));
-        }
-        s
-    }
-
     #[test]
-    pub(crate) fn third_diacritic_supplies_the_high_byte_of_the_id() {
+    fn third_diacritic_supplies_the_high_byte_of_the_id() {
         let mut g = Grid::new(1, 4);
         let mut p = Parser::new();
         let mut bytes = String::from("\u{1b}[38;2;0;0;5m");
@@ -194,7 +194,7 @@ mod tests {
     }
 
     #[test]
-    pub(crate) fn explicit_row_is_used_and_inherited_across_the_run() {
+    fn explicit_row_is_used_and_inherited_across_the_run() {
         let mut g = Grid::new(1, 4);
         let mut p = Parser::new();
         let mut bytes = String::from("\u{1b}[38;2;0;0;9m");
@@ -208,7 +208,7 @@ mod tests {
     }
 
     #[test]
-    pub(crate) fn an_id_change_breaks_the_run_and_resets_the_tile_column() {
+    fn an_id_change_breaks_the_run_and_resets_the_tile_column() {
         let mut g = Grid::new(1, 6);
         let mut p = Parser::new();
         let mut bytes = String::from("\u{1b}[38;2;0;0;5m\u{10eeee}");
@@ -294,7 +294,7 @@ mod tests {
     }
 
     #[test]
-    pub(crate) fn no_id_and_no_run_skips_the_cell() {
+    fn no_id_and_no_run_skips_the_cell() {
         let mut g = Grid::new(1, 4);
         let mut p = Parser::new();
         let mut bytes = String::from('\u{10eeee}');
@@ -306,7 +306,7 @@ mod tests {
     /// The trailing cell keeps the id from the persisting pen, but its
     /// tile column restarts.
     #[test]
-    pub(crate) fn a_gap_cell_resets_the_run_so_tile_column_restarts() {
+    fn a_gap_cell_resets_the_run_so_tile_column_restarts() {
         let mut g = Grid::new(1, 6);
         let mut p = Parser::new();
         let mut bytes = String::from("\u{1b}[38;2;0;0;5m\u{10eeee}");

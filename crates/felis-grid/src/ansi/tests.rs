@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::search::row_text;
+use crate::test_support::arb_attrs;
 use crate::{Cell, Color, Grapheme, HyperlinkEntry, UnderlineStyle};
 use std::num::NonZeroU32;
 
@@ -779,33 +780,12 @@ fn viewport_mode_row_snapshot() {
 
 use proptest::prelude::*;
 
-fn arb_color() -> impl Strategy<Value = Color> {
-    prop_oneof![
-        Just(Color::Default),
-        any::<u8>().prop_map(Color::Indexed),
-        (any::<u8>(), any::<u8>(), any::<u8>()).prop_map(|(r, g, b)| Color::Rgb(r, g, b)),
-    ]
-}
-
-fn arb_attrs() -> impl Strategy<Value = Attributes> {
-    (any::<u16>(), arb_color(), arb_color(), arb_color(), 0u8..5).prop_map(
-        |(bits, fg, bg, uc, ul)| Attributes {
-            // PROTECTED / ISO_PROTECTED are not SGR; `row_ansi` never
-            // emits them.
-            flags: AttrFlags::from_bits_truncate(bits)
-                & !(AttrFlags::PROTECTED | AttrFlags::ISO_PROTECTED),
-            fg,
-            bg,
-            underline_color: uc,
-            underline_style: match ul {
-                0 => UnderlineStyle::Single,
-                1 => UnderlineStyle::Double,
-                2 => UnderlineStyle::Curly,
-                3 => UnderlineStyle::Dotted,
-                _ => UnderlineStyle::Dashed,
-            },
-        },
-    )
+fn arb_sgr_attrs() -> impl Strategy<Value = Attributes> {
+    // PROTECTED / ISO_PROTECTED are not SGR; `row_ansi` never emits them.
+    arb_attrs().prop_map(|mut attrs| {
+        attrs.flags &= !(AttrFlags::PROTECTED | AttrFlags::ISO_PROTECTED);
+        attrs
+    })
 }
 
 fn arb_grapheme() -> impl Strategy<Value = Grapheme> {
@@ -818,7 +798,7 @@ fn arb_grapheme() -> impl Strategy<Value = Grapheme> {
 }
 
 fn arb_glyph_and_pen() -> impl Strategy<Value = (Grapheme, Attributes)> {
-    (arb_grapheme(), arb_attrs())
+    (arb_grapheme(), arb_sgr_attrs())
 }
 
 fn build_row(pairs: &[(Grapheme, Attributes)]) -> (Vec<Cell>, StyleTable) {

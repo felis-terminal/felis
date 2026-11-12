@@ -45,31 +45,174 @@ fn sgr_pixels_encoding_reports_the_pixel_pair_not_the_cell() {
 }
 
 #[test]
-fn sgr_left_release_uses_lowercase_m_with_button_zero() {
-    // xterm SGR: press `\e[<0;X;YM`, release `\e[<0;X;Ym`; the same
-    // button code, only the trailing letter changes.
-    let e = ev(
-        Some(MouseButton::Left),
-        MouseAction::Release,
-        InputMods::empty(),
-        10,
-        5,
-    );
-    let bytes = encode_mouse(e, MouseProtocol::ButtonEvents, MouseEncoding::Sgr).unwrap();
-    assert_eq!(bytes, b"\x1b[<0;10;5m");
-}
-
-#[test]
-fn sgr_wheel_up_with_ctrl_carries_wheel_bit_and_ctrl_bit() {
-    let e = ev(
-        Some(MouseButton::WheelUp),
-        MouseAction::Press,
-        InputMods::CTRL,
-        40,
-        12,
-    );
-    let bytes = encode_mouse(e, MouseProtocol::ButtonEvents, MouseEncoding::Sgr).unwrap();
-    assert_eq!(bytes, b"\x1b[<80;40;12M");
+fn mouse_events_encode_per_protocol_and_encoding() {
+    use MouseAction::{Drag, Motion, Press, Release};
+    use MouseButton::{Button9, Button11, Left, WheelUp};
+    use MouseEncoding::{Default as X10, Sgr};
+    use MouseProtocol::{AnyMotion, ButtonAndDrag, ButtonEvents};
+    let none = InputMods::empty();
+    for (case, button, action, mods, (x, y), protocol, encoding, expected) in [
+        (
+            "SGR release keeps the button code and ends in m",
+            Some(Left),
+            Release,
+            none,
+            (10, 5),
+            ButtonEvents,
+            Sgr,
+            Some(&b"\x1b[<0;10;5m"[..]),
+        ),
+        (
+            "SGR wheel up with Ctrl carries both bits",
+            Some(WheelUp),
+            Press,
+            InputMods::CTRL,
+            (40, 12),
+            ButtonEvents,
+            Sgr,
+            Some(b"\x1b[<80;40;12M"),
+        ),
+        (
+            "Shift, Alt and Ctrl bits compose",
+            Some(Left),
+            Press,
+            InputMods::SHIFT | InputMods::ALT | InputMods::CTRL,
+            (10, 5),
+            ButtonEvents,
+            Sgr,
+            Some(b"\x1b[<28;10;5M"),
+        ),
+        (
+            "a drag needs ?1002 or ?1003",
+            Some(Left),
+            Drag,
+            none,
+            (10, 5),
+            ButtonEvents,
+            Sgr,
+            None,
+        ),
+        (
+            "a drag under ?1002 sets the motion bit",
+            Some(Left),
+            Drag,
+            none,
+            (10, 5),
+            ButtonAndDrag,
+            Sgr,
+            Some(b"\x1b[<32;10;5M"),
+        ),
+        (
+            "motion is dropped under ?1000",
+            None,
+            Motion,
+            none,
+            (1, 1),
+            ButtonEvents,
+            Sgr,
+            None,
+        ),
+        (
+            "motion is dropped under ?1002",
+            None,
+            Motion,
+            none,
+            (1, 1),
+            ButtonAndDrag,
+            Sgr,
+            None,
+        ),
+        (
+            "motion under ?1003 sets the motion bit and no button",
+            None,
+            Motion,
+            none,
+            (7, 3),
+            AnyMotion,
+            Sgr,
+            Some(b"\x1b[<32;7;3M"),
+        ),
+        (
+            "a high button is 128 plus its offset",
+            Some(Button9),
+            Press,
+            none,
+            (10, 5),
+            ButtonEvents,
+            Sgr,
+            Some(b"\x1b[<129;10;5M"),
+        ),
+        // The X10 release overload applies only to regular buttons (cb < 64).
+        (
+            "a wheel release keeps its code",
+            Some(WheelUp),
+            Release,
+            none,
+            (10, 5),
+            ButtonEvents,
+            Sgr,
+            Some(b"\x1b[<64;10;5m"),
+        ),
+        (
+            "Button11 release keeps the low bits it already has",
+            Some(Button11),
+            Release,
+            none,
+            (10, 5),
+            ButtonEvents,
+            Sgr,
+            Some(b"\x1b[<131;10;5m"),
+        ),
+        (
+            "Shift+Left release strips only the overload bits",
+            Some(Left),
+            Release,
+            InputMods::SHIFT,
+            (10, 5),
+            ButtonEvents,
+            Sgr,
+            Some(b"\x1b[<4;10;5m"),
+        ),
+        (
+            "X10 press is the classic three-byte form",
+            Some(Left),
+            Press,
+            none,
+            (1, 1),
+            ButtonEvents,
+            X10,
+            Some(b"\x1b[M \x21\x21"),
+        ),
+        // Saturating rather than overflowing keeps a stray legacy
+        // producer from tearing down the daemon.
+        (
+            "X10 coordinates past 223 saturate at 0xff",
+            Some(Left),
+            Press,
+            none,
+            (500, 500),
+            ButtonEvents,
+            X10,
+            Some(b"\x1b[M \xff\xff"),
+        ),
+        (
+            "X10 release overloads the button code to 3",
+            Some(Left),
+            Release,
+            none,
+            (1, 1),
+            ButtonEvents,
+            X10,
+            Some(b"\x1b[M\x23\x21\x21"),
+        ),
+    ] {
+        let e = ev(button, action, mods, x, y);
+        assert_eq!(
+            encode_mouse(e, protocol, encoding).as_deref(),
+            expected,
+            "{case}"
+        );
+    }
 }
 
 /// xterm wheel button numbers 64/65/66/67: the contract
@@ -87,103 +230,6 @@ fn wheel_buttons_encode_as_xterm_64_through_67() {
         let bytes = encode_mouse(e, MouseProtocol::ButtonEvents, MouseEncoding::Sgr).unwrap();
         assert_eq!(bytes, format!("\x1b[<{code};1;1M").into_bytes());
     }
-}
-
-#[test]
-fn sgr_drag_under_button_only_protocol_drops() {
-    let e = ev(
-        Some(MouseButton::Left),
-        MouseAction::Drag,
-        InputMods::empty(),
-        10,
-        5,
-    );
-    assert!(
-        encode_mouse(e, MouseProtocol::ButtonEvents, MouseEncoding::Sgr).is_none(),
-        "drag must require ?1002 or ?1003"
-    );
-}
-
-#[test]
-fn sgr_drag_under_button_and_drag_protocol_encodes_with_motion_bit() {
-    let e = ev(
-        Some(MouseButton::Left),
-        MouseAction::Drag,
-        InputMods::empty(),
-        10,
-        5,
-    );
-    let bytes = encode_mouse(e, MouseProtocol::ButtonAndDrag, MouseEncoding::Sgr).unwrap();
-    assert_eq!(bytes, b"\x1b[<32;10;5M");
-}
-
-#[test]
-fn sgr_motion_drops_under_button_only_or_drag_protocol() {
-    let e = ev(None, MouseAction::Motion, InputMods::empty(), 1, 1);
-    assert!(encode_mouse(e, MouseProtocol::ButtonEvents, MouseEncoding::Sgr).is_none());
-    assert!(encode_mouse(e, MouseProtocol::ButtonAndDrag, MouseEncoding::Sgr).is_none());
-}
-
-#[test]
-fn sgr_motion_under_any_motion_encodes_with_motion_bit_and_no_button() {
-    let e = ev(None, MouseAction::Motion, InputMods::empty(), 7, 3);
-    let bytes = encode_mouse(e, MouseProtocol::AnyMotion, MouseEncoding::Sgr).unwrap();
-    assert_eq!(bytes, b"\x1b[<32;7;3M");
-}
-
-#[test]
-fn x10_default_press_encodes_classic_three_byte_form() {
-    let e = ev(
-        Some(MouseButton::Left),
-        MouseAction::Press,
-        InputMods::empty(),
-        1,
-        1,
-    );
-    let bytes = encode_mouse(e, MouseProtocol::ButtonEvents, MouseEncoding::Default).unwrap();
-    assert_eq!(bytes, b"\x1b[M \x21\x21");
-}
-
-#[test]
-fn x10_default_clamps_oversized_coordinates_to_0xff() {
-    // Past column 223 the legacy form runs out of byte room; saturate so
-    // a stray legacy producer cannot tear down the daemon.
-    let e = ev(
-        Some(MouseButton::Left),
-        MouseAction::Press,
-        InputMods::empty(),
-        500,
-        500,
-    );
-    let bytes = encode_mouse(e, MouseProtocol::ButtonEvents, MouseEncoding::Default).unwrap();
-    assert_eq!(bytes, b"\x1b[M \xff\xff");
-}
-
-#[test]
-fn x10_left_release_uses_low_bit_overload() {
-    // X10 sends button code 3 (low bits 11) for any regular release.
-    let e = ev(
-        Some(MouseButton::Left),
-        MouseAction::Release,
-        InputMods::empty(),
-        1,
-        1,
-    );
-    let bytes = encode_mouse(e, MouseProtocol::ButtonEvents, MouseEncoding::Default).unwrap();
-    assert_eq!(bytes, b"\x1b[M\x23\x21\x21");
-}
-
-#[test]
-fn shift_alt_ctrl_modifier_bits_compose() {
-    let e = ev(
-        Some(MouseButton::Left),
-        MouseAction::Press,
-        InputMods::SHIFT | InputMods::ALT | InputMods::CTRL,
-        10,
-        5,
-    );
-    let bytes = encode_mouse(e, MouseProtocol::ButtonEvents, MouseEncoding::Sgr).unwrap();
-    assert_eq!(bytes, b"\x1b[<28;10;5M");
 }
 
 #[test]
@@ -275,66 +321,6 @@ fn mouse_legacy_encodings_1005_1015_are_tolerated() {
     assert_eq!(g.mouse_encoding(), MouseEncoding::Default);
     assert_eq!(g.mouse_protocol(), MouseProtocol::Off);
     assert!(responses(&mut g).is_empty(), "neither mode draws a reply");
-}
-
-/// Distinguishes the base 128 and the per-button offset from a single
-/// shared constant.
-#[test]
-fn sgr_high_button_press_encodes_128_plus_button_offset() {
-    let e = ev(
-        Some(MouseButton::Button9),
-        MouseAction::Press,
-        InputMods::empty(),
-        10,
-        5,
-    );
-    let bytes = encode_mouse(e, MouseProtocol::ButtonEvents, MouseEncoding::Sgr).unwrap();
-    assert_eq!(bytes, b"\x1b[<129;10;5M");
-}
-
-/// The X10 release-overload applies only to regular buttons (`cb <
-/// 64`), so wheel-up release stays 64, not 67.
-#[test]
-fn sgr_wheel_release_keeps_wheel_code_without_overload() {
-    let e = ev(
-        Some(MouseButton::WheelUp),
-        MouseAction::Release,
-        InputMods::empty(),
-        10,
-        5,
-    );
-    let bytes = encode_mouse(e, MouseProtocol::ButtonEvents, MouseEncoding::Sgr).unwrap();
-    assert_eq!(bytes, b"\x1b[<64;10;5m");
-}
-
-/// `Button11` (code 131, low bits already 11) must keep all its bits:
-/// pins both `&&` operands in the strip guard.
-#[test]
-fn sgr_high_button_release_keeps_low_bits() {
-    let e = ev(
-        Some(MouseButton::Button11),
-        MouseAction::Release,
-        InputMods::empty(),
-        10,
-        5,
-    );
-    let bytes = encode_mouse(e, MouseProtocol::ButtonEvents, MouseEncoding::Sgr).unwrap();
-    assert_eq!(bytes, b"\x1b[<131;10;5m");
-}
-
-/// left+SHIFT release → code 7, stripped to 4: pins `cb & 0b11 == 0b11`
-/// (an `|` there would skip the strip).
-#[test]
-fn sgr_shifted_release_strips_only_the_overload_bits() {
-    let e = ev(
-        Some(MouseButton::Left),
-        MouseAction::Release,
-        InputMods::SHIFT,
-        10,
-        5,
-    );
-    let bytes = encode_mouse(e, MouseProtocol::ButtonEvents, MouseEncoding::Sgr).unwrap();
-    assert_eq!(bytes, b"\x1b[<4;10;5m");
 }
 
 /// The daemon reserves `MAX_MOUSE_REPORT_BYTES` per mouse event before

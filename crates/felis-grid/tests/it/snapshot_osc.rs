@@ -164,32 +164,10 @@ fn malformed_osc_payload_keeps_state_at_default() {
 }
 
 fn render_sizings(grid: &Grid) -> String {
-    use felis_grid::Grapheme;
-
     let mut out = String::new();
     writeln!(out, "registry: {} entries", grid.sizing_count()).unwrap();
     writeln!(out, "sized cells: {}", grid.sized_cell_count()).unwrap();
-    for r in 0..grid.rows() {
-        let mut text = String::new();
-        let mut sizings = String::new();
-        for c in 0..grid.cols() {
-            let cell = grid.cell(r, c).copied().unwrap_or_default();
-            let ch = match cell.grapheme {
-                Grapheme::Ascii(b) => b as char,
-                Grapheme::Char(ch) => ch,
-                Grapheme::Cluster(id) => grid
-                    .cluster_str(id)
-                    .and_then(|s| s.chars().next())
-                    .unwrap_or(' '),
-                Grapheme::Empty | Grapheme::Spacer | Grapheme::SizedSpacer => ' ',
-            };
-            text.push(ch);
-            sizings.push(grid.cell_sizing_handle(r, c).map_or('.', |h| {
-                char::from_digit(u32::from(h.get()), 16).unwrap_or('?')
-            }));
-        }
-        writeln!(out, "row {r}: {text:?} sizings={sizings:?}").unwrap();
-    }
+    common::write_sizing_rows(&mut out, grid, ' ', ' ');
     out
 }
 
