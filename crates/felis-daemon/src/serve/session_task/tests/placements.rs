@@ -242,20 +242,9 @@ async fn animation_advances_with_no_subscriber_attached() {
     // is `Instant`-based.
     tokio::time::sleep(Duration::from_millis(300)).await;
 
-    let (tx, mut rx) = mpsc::unbounded_channel();
-    let (reply_tx, reply_rx) = oneshot::channel();
+    let (req, mut rx, reply_rx) = subscribe_req(ConnectionMode::Window, false, IfExited::Land);
     cmd_tx
-        .send(SessionCmd::Subscribe(SubscribeReq {
-            mode: ConnectionMode::Window,
-            pull_paced: false,
-            minor: felis_protocol::preface::PROTOCOL_MINOR,
-            if_exited: IfExited::Land,
-            image_regions: false,
-            carrier: AttachCarrier::Local { client_pid: None },
-            tx,
-            buffered: Arc::new(AtomicUsize::new(0)),
-            reply: reply_tx,
-        }))
+        .send(SessionCmd::Subscribe(req))
         .await
         .map_err(|_| ())
         .expect("session task accepts the subscribe");

@@ -89,15 +89,22 @@ fn attach_sub_as(
     attach_sub_if_exited(task, mode, pull_paced, IfExited::Land)
 }
 
-fn attach_sub_if_exited(
-    task: &mut SessionTask,
+type SubscribeReply = oneshot::Receiver<Result<SubscribeOk, SubscribeRefused>>;
+
+/// A local subscribe at this build's minor, with the outbox and reply
+/// ends its connection would hold.
+fn subscribe_req(
     mode: ConnectionMode,
     pull_paced: bool,
     if_exited: IfExited,
-) -> (SubscriberId, mpsc::UnboundedReceiver<OutEvent>) {
-    let (tx, mut rx) = mpsc::unbounded_channel();
-    let (reply_tx, mut reply_rx) = oneshot::channel();
-    task.subscribe(SubscribeReq {
+) -> (
+    SubscribeReq,
+    mpsc::UnboundedReceiver<OutEvent>,
+    SubscribeReply,
+) {
+    let (tx, rx) = mpsc::unbounded_channel();
+    let (reply_tx, reply_rx) = oneshot::channel();
+    let req = SubscribeReq {
         mode,
         pull_paced,
         minor: felis_protocol::preface::PROTOCOL_MINOR,
@@ -107,36 +114,42 @@ fn attach_sub_if_exited(
         tx,
         buffered: Arc::new(AtomicUsize::new(0)),
         reply: reply_tx,
-    });
-    let ok = reply_rx
+    };
+    (req, rx, reply_rx)
+}
+
+/// Admitted at once, its rehydrate burst left in the outbox.
+fn subscribe_admitted(
+    task: &mut SessionTask,
+    mode: ConnectionMode,
+    pull_paced: bool,
+    if_exited: IfExited,
+) -> (SubscriberId, mpsc::UnboundedReceiver<OutEvent>) {
+    let (req, rx, mut reply) = subscribe_req(mode, pull_paced, if_exited);
+    task.subscribe(req);
+    let ok = reply
         .try_recv()
         .expect("subscribe reply")
         .expect("the subscribe was admitted");
+    (ok.sub, rx)
+}
+
+fn attach_sub_if_exited(
+    task: &mut SessionTask,
+    mode: ConnectionMode,
+    pull_paced: bool,
+    if_exited: IfExited,
+) -> (SubscriberId, mpsc::UnboundedReceiver<OutEvent>) {
+    let (sub, mut rx) = subscribe_admitted(task, mode, pull_paced, if_exited);
     while !matches!(
         rx.try_recv().expect("rehydrate event"),
         OutEvent::Grid(GridMsg::RehydrateEnd)
     ) {}
-    (ok.sub, rx)
+    (sub, rx)
 }
 
 fn attach_burst(task: &mut SessionTask, mode: ConnectionMode) -> Vec<OutEvent> {
-    let (tx, mut rx) = mpsc::unbounded_channel();
-    let (reply_tx, mut reply_rx) = oneshot::channel();
-    task.subscribe(SubscribeReq {
-        mode,
-        pull_paced: false,
-        minor: felis_protocol::preface::PROTOCOL_MINOR,
-        if_exited: IfExited::Land,
-        image_regions: false,
-        carrier: AttachCarrier::Local { client_pid: None },
-        tx,
-        buffered: Arc::new(AtomicUsize::new(0)),
-        reply: reply_tx,
-    });
-    reply_rx
-        .try_recv()
-        .expect("subscribe reply")
-        .expect("the subscribe was admitted");
+    let (_, mut rx) = subscribe_admitted(task, mode, false, IfExited::Land);
     let mut burst = Vec::new();
     loop {
         let ev = rx.try_recv().expect("rehydrate event");

@@ -1028,28 +1028,12 @@ fn mirror(
     mirror
 }
 
-type SubscribeReply = oneshot::Receiver<Result<SubscribeOk, SubscribeRefused>>;
-
 /// A window attach as a connection sends it, whose rehydrate burst is
 /// left in the outbox.
 fn attach_window(task: &mut SessionTask) -> (SubscribeReply, mpsc::UnboundedReceiver<OutEvent>) {
-    let (tx, rx) = mpsc::unbounded_channel();
-    let (reply_tx, reply_rx) = oneshot::channel();
-    assert!(
-        task.handle_cmd(SessionCmd::Subscribe(SubscribeReq {
-            mode: ConnectionMode::Window,
-            pull_paced: false,
-            minor: felis_protocol::preface::PROTOCOL_MINOR,
-            if_exited: IfExited::Land,
-            image_regions: false,
-            carrier: AttachCarrier::Local { client_pid: None },
-            tx,
-            buffered: Arc::new(AtomicUsize::new(0)),
-            reply: reply_tx,
-        }))
-        .is_none()
-    );
-    (reply_rx, rx)
+    let (req, rx, reply) = subscribe_req(ConnectionMode::Window, false, IfExited::Land);
+    assert!(task.handle_cmd(SessionCmd::Subscribe(req)).is_none());
+    (reply, rx)
 }
 
 /// A late window and its id once its attach was admitted.
