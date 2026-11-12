@@ -41,40 +41,43 @@ fn pinned_explicit_fallback(
     stack
 }
 
-#[test]
-fn explicit_fallback_with_empty_features_opts_out() {
-    let primary_features = vec!["calt".to_owned(), "ss01".to_owned()];
-    let stack = pinned_explicit_fallback(&primary_features, "Noto Color Emoji", Some(Vec::new()));
-    assert_eq!(stack.features_at(0), primary_features.as_slice());
-    let empty: &[String] = &[];
-    assert_eq!(
-        stack.features_at(1),
-        empty,
-        "explicit empty features is an opt-out, not an inherit"
-    );
-}
+/// A case name, the primary's features, the fallback family, its
+/// declared features and the features it ends up with.
+type Case<'a> = (
+    &'a str,
+    &'a [String],
+    &'a str,
+    Option<Vec<String>>,
+    &'a [String],
+);
 
 #[test]
-fn explicit_fallback_without_features_inherits_primary() {
-    let primary_features = vec!["calt".to_owned(), "ss01".to_owned()];
-    let stack = pinned_explicit_fallback(&primary_features, "Noto Color Emoji", None);
-    assert_eq!(
-        stack.features_at(1),
-        primary_features.as_slice(),
-        "an omitted features list inherits, it does not opt out"
-    );
-}
-
-#[test]
-fn explicit_fallback_with_features_overrides_primary() {
-    let override_features = vec!["palt".to_owned(), "trad".to_owned()];
-    let stack = pinned_explicit_fallback(
-        &["calt".to_owned()],
-        PINNED_CJK_FAMILY,
-        Some(override_features.clone()),
-    );
-    assert_eq!(stack.features_at(0), &["calt".to_owned()]);
-    assert_eq!(stack.features_at(1), override_features.as_slice());
+fn explicit_fallback_features_opt_out_when_empty_inherit_when_omitted_and_override_when_set() {
+    let calt_ss01 = ["calt", "ss01"].map(str::to_owned);
+    let calt = ["calt".to_owned()];
+    let palt_trad = ["palt", "trad"].map(str::to_owned);
+    let cases: [Case<'_>; 3] = [
+        (
+            "empty",
+            &calt_ss01,
+            "Noto Color Emoji",
+            Some(Vec::new()),
+            &[],
+        ),
+        ("omitted", &calt_ss01, "Noto Color Emoji", None, &calt_ss01),
+        (
+            "set",
+            &calt,
+            PINNED_CJK_FAMILY,
+            Some(palt_trad.to_vec()),
+            &palt_trad,
+        ),
+    ];
+    for (case, primary_features, family, features, expected) in cases {
+        let stack = pinned_explicit_fallback(primary_features, family, features);
+        assert_eq!(stack.features_at(0), primary_features, "{case}: primary");
+        assert_eq!(stack.features_at(1), expected, "{case}: fallback");
+    }
 }
 
 /// Feature lists follow the face `font_at` picks; a style with no

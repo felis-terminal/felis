@@ -15,7 +15,7 @@ fn the_default_monospace_face_loads_with_nonzero_metrics() {
 }
 
 #[test]
-fn rasterizes_capital_a() {
+fn an_ascii_glyph_through_the_shape_cache_is_a_non_blank_bitmap() {
     let font = font();
     let mut cache = ShapeCache::default();
     let bitmap = cache.get_or_insert(&font, 'A', 16);
@@ -39,7 +39,7 @@ fn mask_glyph_rasterizes_as_coverage() {
 }
 
 /// A color-face glyph (⏸ U+23F8) rasterizes as `Rgba`, not collapsed
-/// to a mask (the ⏸/⏺ solid-square regression).
+/// to a mask.
 #[test]
 fn color_emoji_rasterizes_as_rgba_not_a_mask() {
     let db = pinned_dir_set();
@@ -53,7 +53,7 @@ fn color_emoji_rasterizes_as_rgba_not_a_mask() {
 }
 
 #[test]
-fn cache_returns_stable_results() {
+fn a_repeated_cache_lookup_returns_the_same_bitmap_and_one_entry() {
     let font = font();
     let mut cache = ShapeCache::default();
     let first = cache.get_or_insert(&font, 'X', 16).clone();
@@ -145,9 +145,8 @@ fn blank_bitmaps_count_against_the_byte_cap() {
     );
 }
 
-/// Distinct `SizingKey` values produce distinct cache entries.
 #[test]
-fn sizing_key_prevents_collisions() {
+fn distinct_sizing_keys_take_distinct_cache_entries() {
     let font = font();
     let mut cache = ShapeCache::default();
     cache.get_or_insert(&font, 'A', 16);
@@ -177,7 +176,7 @@ fn default_sizing_wrapper_shares_an_entry_with_explicit_default() {
 }
 
 #[test]
-fn space_is_blank() {
+fn a_space_glyph_caches_as_a_blank_bitmap() {
     let font = font();
     let mut cache = ShapeCache::default();
     let bitmap = cache.get_or_insert(&font, ' ', 16);

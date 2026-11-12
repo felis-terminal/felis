@@ -66,7 +66,7 @@ fn a_mark_the_face_does_not_map_shapes_as_a_zero_advance_notdef() {
 /// A `CBDT` face's empty `glyf` entries are no outline; a text face's
 /// glyphs are.
 #[test]
-fn only_an_inked_outline_counts_as_one() {
+fn has_outline_counts_only_an_inked_outline() {
     let emoji = pinned_arc("NotoColorEmoji.ttf");
     let mut mapped = 0;
     for (cp, _) in emoji.face.charmap().unicodes() {
