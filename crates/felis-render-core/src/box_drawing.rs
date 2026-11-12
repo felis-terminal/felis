@@ -1425,7 +1425,7 @@ mod tests {
     }
 
     /// Each arc reaches the same cell-edge pixels as its square
-    /// counterpart (the lazygit-corner regression) and not the other two.
+    /// counterpart and not the other two.
     #[test]
     fn arc_corners_meet_cell_edges_on_their_named_sides() {
         let cases: &[(char, [bool; 4])] = &[
